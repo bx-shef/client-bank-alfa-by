@@ -21,6 +21,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "vue-tsc --noEmit",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
     "screenshot": "node scripts/screenshot.mjs",
     "postinstall": "nuxt prepare"
   },
@@ -44,5 +45,8 @@
     "vitest": "^4.1.8",
     "vue-tsc": "^3.3.3"
   },
-  "packageManager": "pnpm@10.33.0"
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  }
 }

@@ -5,6 +5,7 @@ export default defineNuxtConfig({
     '@vueuse/nuxt'
   ],
 
+  // Off: keeps the agent-driven dev sessions (and SSG output) free of devtools noise.
   devtools: { enabled: false },
 
   css: ['~/assets/css/main.css'],
@@ -18,6 +19,9 @@ export default defineNuxtConfig({
   },
 
   // Static site generation (SSG): the public page is a plain landing, no server.
+  // Only `/` exists today, so the generate crawler covers everything and no
+  // `nitro.prerender.routes` is needed. Add it when isolated, unlinked routes
+  // appear (e.g. a Bitrix24 `/install` or widget page) so they get prerendered.
   compatibilityDate: '2025-01-15',
 
   eslint: {

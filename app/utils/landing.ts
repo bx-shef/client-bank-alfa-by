@@ -1,3 +1,12 @@
+/** Single source of truth for the landing copy — used by both app.vue (SEO/head)
+ * and index.vue (visible hero), so the title/description can't drift apart. */
+export const LANDING_TITLE = 'Клиент-банк Альфа-Банк Беларусь'
+export const LANDING_DESCRIPTION
+  = 'Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.'
+
+/** Year the project started — left edge of the footer copyright range. */
+export const START_YEAR = 2026
+
 /** A single selling point shown on the landing page. */
 export interface LandingFeature {
   title: string

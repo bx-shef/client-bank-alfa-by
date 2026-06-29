@@ -9,7 +9,10 @@
 
   /* Raw landing markup (h1/p) isn't wrapped in b24ui components, so it would
      otherwise inherit the browser-default black text — invisible on the dark
-     surface. Set an explicit base background/foreground per theme. */
+     surface. Drive the base background/foreground from b24ui's theme-aware
+     tokens, with explicit per-theme hex fallbacks (verified by screenshots) for
+     when a token is absent. Real UI should lean on b24ui components/tokens
+     rather than these page-level base rules. */
   :root, .light {
     color-scheme: light;
   }
@@ -19,13 +22,13 @@
   }
 
   body {
-    background-color: #f1f3f5;
-    color: #111418;
+    background-color: var(--air-theme-bg-color, #f1f3f5);
+    color: var(--b24ui-color-text-primary, #111418);
   }
 
   .dark body {
-    background-color: #0b1020;
-    color: #e6e9ef;
+    background-color: var(--air-theme-bg-color, #0b1020);
+    color: var(--b24ui-color-text-primary, #e6e9ef);
   }
 }
 

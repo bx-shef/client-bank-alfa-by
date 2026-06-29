@@ -11,7 +11,7 @@
 import { createServer } from 'node:http'
 import { readFile, mkdir, stat, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, extname, normalize } from 'node:path'
+import { join, extname, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 
@@ -64,6 +64,13 @@ function startServer() {
     try {
       const urlPath = decodeURIComponent((req.url || '/').split('?')[0])
       let filePath = join(PUBLIC_DIR, normalize(urlPath))
+      // Defence-in-depth: never serve outside PUBLIC_DIR even if the path
+      // contains `../` traversal (the server is local-only, but keep it tight).
+      if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + sep)) {
+        res.writeHead(403)
+        res.end('Forbidden')
+        return
+      }
       if ((await stat(filePath).catch(() => null))?.isDirectory()) {
         filePath = join(filePath, 'index.html')
       }
@@ -75,8 +82,15 @@ function startServer() {
       res.end('Not found')
     }
   })
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }))
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address()
+      if (!addr || typeof addr === 'string') {
+        reject(new Error('Could not determine server port'))
+        return
+      }
+      resolve({ server, port: addr.port })
+    })
   })
 }
 
@@ -93,7 +107,7 @@ async function run() {
         const page = await context.newPage()
         for (const vp of VIEWPORTS) {
           await page.setViewportSize({ width: vp.width, height: vp.height })
-          await page.goto(`http://127.0.0.1:${port}${route}`, { waitUntil: 'networkidle' })
+          await page.goto(`http://127.0.0.1:${port}${route}`, { waitUntil: 'networkidle', timeout: 15_000 })
           const slug = route === '/' ? 'index' : route.replace(/\W+/g, '-').replace(/^-|-$/g, '')
           const file = join(OUT_DIR, `${slug}.${vp.name}.${theme}.png`)
           await page.screenshot({ path: file, fullPage: true })

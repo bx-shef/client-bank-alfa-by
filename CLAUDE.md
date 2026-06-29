@@ -29,7 +29,10 @@ pnpm test         # Vitest (оба проекта; быстрый прогон n
 pnpm generate     # сборка статики (nuxt generate, SSG) — то же гоняет CI
 ```
 
-Перед пушем прогоняй `pnpm lint && pnpm typecheck && pnpm test` — это же гоняет CI.
+Перед пушем прогоняй `pnpm check` (= `lint` + `typecheck` + `test`) или запусти
+готовый скрипт: `bash scripts/check-app.sh` (Linux/macOS) / `pwsh scripts/check-app.ps1`
+(Windows) — он сразу отдаёт итог. Те же проверки гоняет CI (порядок шагов не важен —
+они независимы).
 
 ## Архитектура (текущий каркас)
 
@@ -47,7 +50,7 @@ UI — в компонентах. Это та же раскладка, что в
 
 ## Настройка репозитория
 
-- `В main не пушим — только через PR.` Защита `main` (ruleset `protect-main`) и CI как
+- **В main не пушим — только через PR.** Защита `main` (ruleset `protect-main`) и CI как
   required-check настраиваются владельцем репо по [`docs/REPO_SETUP_CHECKLIST.md`](docs/REPO_SETUP_CHECKLIST.md).
 - `.github/workflows/ci.yml` — job `ci` (lint → test → typecheck → generate). Имя `ci` — то,
   что включается в required status checks ruleset'а.
@@ -70,16 +73,19 @@ UI — в компонентах. Это та же раскладка, что в
 [`reporting-kit/`](reporting-kit/) (карточка интеграции —
 [`docs/REPORTING_KIT.md`](docs/REPORTING_KIT.md)). Держим как есть для синхронизации
 с источником; у него **свои конвенции и свой CI**, поэтому он **не линтуется**
-нашими проверками (исключён из ESLint и `.dockerignore`). Навыки `/report-status`,
+нашими проверками: исключён из ESLint и `tests/mdReviewStamp.test.ts`, добавлен в
+`.dockerignore` (чтобы не попадал в Docker-образ). Навыки `/report-status`,
 `/report-digest`, `/report-questions` и `tg-send.sh` — внутри бандла. Telegram
 пока не заведён (нужен `.env` с токеном, локально, см. README кита).
 
 ## Конвенции
 
 - Комментарии и JSDoc — на английском; пользовательский текст и README — на русском.
-- Чистые функции — в `app/utils/*` (данные/константы — в `app/config/*`), покрываем тестами;
-  реактивную логику — в `app/composables/*`, UI — в компонентах.
+- Чистые функции — в `app/utils/*`, покрываем тестами; реактивную логику — в
+  `app/composables/*`, UI — в компонентах. Каталоги `app/config/*` (данные/константы)
+  и `app/composables/*` появятся по мере роста проекта (сейчас в каркасе их ещё нет).
 - Данные из API рендерим только через `{{ }}` (auto-escape) — никакого `v-html` с внешними данными.
 - Штамп ревью: каждый `.md`-документ в корне и `docs/` несёт строку `> Last reviewed: YYYY-MM-DD`
   блок-цитатой сразу под заголовком H1. Ключ `Last reviewed` всегда на английском (технический
-  маркер). Дату бампим только при содержательном изменении.
+  маркер). Дату бампим только при содержательном изменении. Наличие штампа во всех отслеживаемых
+  `.md` (кроме вендорного `reporting-kit/`) проверяет `tests/mdReviewStamp.test.ts`.

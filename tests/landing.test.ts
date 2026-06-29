@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LANDING_FEATURES, copyrightYears } from '../app/utils/landing'
+import { LANDING_FEATURES, copyrightYears } from '~/utils/landing'
 
 describe('copyrightYears', () => {
   it('shows a single year when start === current', () => {

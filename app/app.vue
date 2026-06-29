@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { LANDING_TITLE, LANDING_DESCRIPTION } from '~/utils/landing'
+
 // b24ui colorMode persists the choice under this @vueuse/core key; the inline
 // theme-init script below reads it to set the class before paint. Keep in sync
 // with b24ui's `colorModeStorageKey` default.
 const COLOR_MODE_STORAGE_KEY = 'vueuse-color-scheme'
 
-const title = 'Клиент-банк Альфа-Банк Беларусь'
-const description = 'Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.'
+const title = LANDING_TITLE
+const description = LANDING_DESCRIPTION
 
 useHead({
   htmlAttrs: { lang: 'ru' },
