@@ -17,6 +17,12 @@ concurrency:
 permissions:
   contents: read
 
+# CI never takes screenshots, so don't let the `playwright` devDependency pull a
+# browser during install. Visual verification uses the pre-installed Chromium in
+# the dev/web environment (see docs/VISUAL_VERIFICATION.md).
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
 jobs:
   ci:
     name: ci

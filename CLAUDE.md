@@ -56,6 +56,24 @@ UI — в компонентах. Это та же раскладка, что в
 - `.claude/` — SessionStart-хук (`hooks/session-start.sh`): в веб-сессиях Claude Code ставит
   зависимости и гоняет `nuxt prepare`, чтобы lint/typecheck/test/build работали с первого хода.
 
+## Визуальная верификация (Definition of Done)
+
+> **ВАЖНО:** после любой правки UI/CSS/вёрстки снять скриншот результата и
+> посмотреть на пиксели **до** того, как считать задачу выполненной — не доверять
+> «собралось без ошибок». `pnpm generate && pnpm screenshot` → смотреть
+> `screenshots/` (mobile/desktop × light/dark). Детали и чек-лист —
+> [`docs/VISUAL_VERIFICATION.md`](docs/VISUAL_VERIFICATION.md).
+
+## Отчётность (reporting-kit)
+
+Вендорный бандл для работы с AI-агентом и отчётов в Telegram — в
+[`reporting-kit/`](reporting-kit/) (карточка интеграции —
+[`docs/REPORTING_KIT.md`](docs/REPORTING_KIT.md)). Держим как есть для синхронизации
+с источником; у него **свои конвенции и свой CI**, поэтому он **не линтуется**
+нашими проверками (исключён из ESLint и `.dockerignore`). Навыки `/report-status`,
+`/report-digest`, `/report-questions` и `tg-send.sh` — внутри бандла. Telegram
+пока не заведён (нужен `.env` с токеном, локально, см. README кита).
+
 ## Конвенции
 
 - Комментарии и JSDoc — на английском; пользовательский текст и README — на русском.

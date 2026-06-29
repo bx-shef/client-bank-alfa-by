@@ -8,3 +8,7 @@ node_modules
 dist
 *.log
 .DS_Store
+
+# Vendored reporting/agent bundle — docs & scripts, not part of the web build
+reporting-kit
+screenshots

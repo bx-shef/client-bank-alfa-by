@@ -6,6 +6,27 @@
     font-family: 'Rubik', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     scroll-behavior: smooth;
   }
+
+  /* Raw landing markup (h1/p) isn't wrapped in b24ui components, so it would
+     otherwise inherit the browser-default black text — invisible on the dark
+     surface. Set an explicit base background/foreground per theme. */
+  :root, .light {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: #f1f3f5;
+    color: #111418;
+  }
+
+  .dark body {
+    background-color: #0b1020;
+    color: #e6e9ef;
+  }
 }
 
 @theme static {
