@@ -61,6 +61,9 @@ git push origin :main
 Чтобы Dependabot мог открывать PR: **Settings → Actions → General → Workflow
 permissions** → ☑ **Allow GitHub Actions to create and approve pull requests**.
 
+> Как работать с Dependabot день в день (разбор `dependabot.yml`, обработка PR,
+> группировка, игноры, авто-мерж, SHA-pinning) — в [`DEPENDABOT.md`](./DEPENDABOT.md).
+
 ## 4. Проверка
 
 После настройки жизненный цикл изменения:
