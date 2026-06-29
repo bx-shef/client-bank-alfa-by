@@ -34,6 +34,25 @@ updates:
         patterns:
           - "*"
 
-  # NOTE: no `docker` ecosystem yet — this is a config-only scaffold with no
-  # Dockerfile. Add a `package-ecosystem: docker` block (mirroring the example
-  # in currency-converter) once deploy artifacts land.
+  # --- Base Docker image ----------------------------------------------------
+  # Ready-to-enable template: there is no Dockerfile yet (config-only scaffold),
+  # so this block is commented out — Dependabot's docker ecosystem would have
+  # nothing to scan. UNCOMMENT it the moment a Dockerfile lands with the deploy
+  # artifacts; no other change is needed.
+  # - package-ecosystem: docker
+  #   directory: /
+  #   schedule:
+  #     interval: weekly
+  #     day: monday
+  #   # One grouped PR for all image bumps (today only node; forward-proof if a
+  #   # second base image is ever added).
+  #   groups:
+  #     docker:
+  #       patterns:
+  #         - "*"
+  #   # Node 25+ removed corepack from the official images (`RUN corepack enable`
+  #   # → exit 127). Stay on the 22 LTS line; major bumps are done manually with
+  #   # the corepack fix in place. Minor/patch of node:22-alpine still flow through.
+  #   ignore:
+  #     - dependency-name: "node"
+  #       update-types: ["version-update:semver-major"]
