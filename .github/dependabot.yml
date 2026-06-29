@@ -1,0 +1,58 @@
+version: 2
+updates:
+  # --- Application dependencies (npm / pnpm) --------------------------------
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    groups:
+      # Framework and its modules must move in lockstep — one PR.
+      nuxt:
+        patterns:
+          - "nuxt"
+          - "@nuxt/*"
+      # The whole Bitrix24 vendor scope — one PR.
+      b24:
+        patterns:
+          - "@bitrix24/*"
+      # All dev dependencies — one PR.
+      dev-deps:
+        dependency-type: development
+
+  # --- GitHub Actions versions in CI ----------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # One grouped PR for all action bumps instead of one PR per action.
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # --- Base Docker image ----------------------------------------------------
+  # Ready-to-enable template: there is no Dockerfile yet (config-only scaffold),
+  # so this block is commented out — Dependabot's docker ecosystem would have
+  # nothing to scan. UNCOMMENT it the moment a Dockerfile lands with the deploy
+  # artifacts; no other change is needed.
+  # - package-ecosystem: docker
+  #   directory: /
+  #   schedule:
+  #     interval: weekly
+  #     day: monday
+  #   # One grouped PR for all image bumps (today only node; forward-proof if a
+  #   # second base image is ever added).
+  #   groups:
+  #     docker:
+  #       patterns:
+  #         - "*"
+  #   # Node 25+ removed corepack from the official images (`RUN corepack enable`
+  #   # → exit 127). Stay on the 22 LTS line; major bumps are done manually with
+  #   # the corepack fix in place. Minor/patch of node:22-alpine still flow through.
+  #   ignore:
+  #     - dependency-name: "node"
+  #       update-types: ["version-update:semver-major"]

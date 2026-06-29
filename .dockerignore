@@ -1,0 +1,14 @@
+node_modules
+.git
+.nuxt
+.output
+.env
+.env.*
+!.env.example
+dist
+*.log
+.DS_Store
+
+# Vendored reporting/agent bundle — docs & scripts, not part of the web build
+reporting-kit
+screenshots

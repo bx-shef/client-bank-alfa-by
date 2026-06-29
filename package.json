@@ -1,0 +1,52 @@
+{
+  "name": "client-bank-alfa-by",
+  "type": "module",
+  "private": true,
+  "description": "Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь (Nuxt SSG)",
+  "license": "MIT",
+  "author": "ИП Шевчик И. С.",
+  "homepage": "https://github.com/bx-shef/client-bank-alfa-by#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bx-shef/client-bank-alfa-by.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bx-shef/client-bank-alfa-by/issues"
+  },
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "screenshot": "node scripts/screenshot.mjs",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@bitrix24/b24icons-vue": "^2.0.7",
+    "@bitrix24/b24ui-nuxt": "^2.9.0",
+    "@vueuse/core": "^14.3.0",
+    "@vueuse/nuxt": "^14.3.0",
+    "nuxt": "^4.4.7",
+    "tailwindcss": "^4.2.4"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.15.2",
+    "@nuxt/test-utils": "^4.0.3",
+    "@types/node": "^25.6.0",
+    "@vue/test-utils": "^2.4.11",
+    "eslint": "^10.4.1",
+    "happy-dom": "^20.10.1",
+    "playwright": "^1.61.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "vue-tsc": "^3.3.3"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  }
+}
