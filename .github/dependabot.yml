@@ -1,0 +1,39 @@
+version: 2
+updates:
+  # --- Application dependencies (npm / pnpm) --------------------------------
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    groups:
+      # Framework and its modules must move in lockstep — one PR.
+      nuxt:
+        patterns:
+          - "nuxt"
+          - "@nuxt/*"
+      # The whole Bitrix24 vendor scope — one PR.
+      b24:
+        patterns:
+          - "@bitrix24/*"
+      # All dev dependencies — one PR.
+      dev-deps:
+        dependency-type: development
+
+  # --- GitHub Actions versions in CI ----------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # One grouped PR for all action bumps instead of one PR per action.
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # NOTE: no `docker` ecosystem yet — this is a config-only scaffold with no
+  # Dockerfile. Add a `package-ecosystem: docker` block (mirroring the example
+  # in currency-converter) once deploy artifacts land.

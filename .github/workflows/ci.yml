@@ -1,0 +1,56 @@
+name: ci
+
+# Runs on every PR into main and on pushes to main. The job name `ci` is the
+# required status check referenced by the `protect-main` ruleset
+# (see docs/REPO_SETUP_CHECKLIST.md). Deploy artifacts (Dockerfile / GHCR push)
+# are intentionally not here yet — they arrive with the real app code.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-24.04
+    # The `nuxt` Vitest project boots a Nuxt runtime on top of lint/typecheck/generate.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # Version is read from the "packageManager" field in package.json.
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare Nuxt
+        run: pnpm exec nuxi prepare
+        # Generates .nuxt/eslint.config.mjs and .nuxt/tsconfig.json that the
+        # lint / typecheck steps depend on.
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build (nuxt generate)
+        run: pnpm generate
