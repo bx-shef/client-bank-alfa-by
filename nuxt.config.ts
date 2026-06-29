@@ -19,10 +19,17 @@ export default defineNuxtConfig({
   },
 
   // Static site generation (SSG): the public page is a plain landing, no server.
-  // Only `/` exists today, so the generate crawler covers everything and no
-  // `nitro.prerender.routes` is needed. Add it when isolated, unlinked routes
-  // appear (e.g. a Bitrix24 `/install` or widget page) so they get prerendered.
   compatibilityDate: '2025-01-15',
+
+  // `/app` (the in-portal statement view) isn't linked from the landing, so the
+  // generate crawler would skip it — list it explicitly. More routes (/install,
+  // widget) get added here as the Bitrix24 integration lands.
+  nitro: {
+    prerender: {
+      crawlLinks: true,
+      routes: ['/app']
+    }
+  },
 
   eslint: {
     config: {
