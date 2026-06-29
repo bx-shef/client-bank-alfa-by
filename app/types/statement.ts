@@ -49,4 +49,7 @@ export interface Statement {
   providerId: BankProviderId
   account: string
   items: StatementItem[]
+  /** Opaque cursor to fetch the next page, if the provider paginates. Absent =
+   * no more pages. Pass back via `StatementQuery.cursor`. */
+  nextCursor?: string
 }

@@ -37,7 +37,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 
 ## Архитектура
 
-- `app/app.vue` — корень: `useHead`/SEO/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
+- `app/app.vue` — **корень Nuxt** (не страница): `useHead`/SEO/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
@@ -45,7 +45,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
-  - `app/types/statement.ts` — модель выписки (`StatementItem`/`Statement`, `OperationDirection`).
+  - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
+    `OperationDirection`, `BankProviderId`).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
   - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата.
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
@@ -89,9 +90,9 @@ UI — в компонентах. Это та же раскладка, что в
 ## Конвенции
 
 - Комментарии и JSDoc — на английском; пользовательский текст и README — на русском.
-- Чистые функции — в `app/utils/*`, покрываем тестами; реактивную логику — в
-  `app/composables/*`, UI — в компонентах. Каталоги `app/config/*` (данные/константы)
-  и `app/composables/*` появятся по мере роста проекта (сейчас в каркасе их ещё нет).
+- Чистые функции — в `app/utils/*`, данные/константы — в `app/config/*` (уже есть:
+  `banks.ts`), типы — в `app/types/*`; всё покрываем тестами. Реактивную логику — в
+  `app/composables/*` (появится по мере роста), UI — в компонентах/страницах.
 - Данные из API рендерим только через `{{ }}` (auto-escape) — никакого `v-html` с внешними данными.
 - Штамп ревью: каждый `.md`-документ в корне и `docs/` несёт строку `> Last reviewed: YYYY-MM-DD`
   блок-цитатой сразу под заголовком H1. Ключ `Last reviewed` всегда на английском (технический

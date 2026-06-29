@@ -43,6 +43,10 @@ describe('splitByDirection', () => {
     expect(credits.map(i => i.docId)).toEqual(['a', 'c'])
     expect(debits.map(i => i.docId)).toEqual(['b'])
   })
+
+  it('returns empty buckets for an empty array', () => {
+    expect(splitByDirection([])).toEqual({ credits: [], debits: [] })
+  })
 })
 
 describe('shouldNotifyChat', () => {
@@ -53,6 +57,18 @@ describe('shouldNotifyChat', () => {
 
   it('can opt debits in via directions rule', () => {
     expect(shouldNotifyChat(makeItem({ direction: 'debit' }), { directions: ['credit', 'debit'] })).toBe(true)
+  })
+
+  it('respects a debit-only directions rule', () => {
+    expect(shouldNotifyChat(makeItem({ direction: 'debit' }), { directions: ['debit'] })).toBe(true)
+    expect(shouldNotifyChat(makeItem({ direction: 'credit' }), { directions: ['debit'] })).toBe(false)
+  })
+
+  it('applies account and purpose exclusions independently in one ruleset', () => {
+    const rules = { excludeAccounts: ['BY-SILENT'], excludePurposePatterns: ['между своими'] }
+    expect(shouldNotifyChat(makeItem({ account: 'BY-SILENT' }), rules)).toBe(false)
+    expect(shouldNotifyChat(makeItem({ purpose: 'Перевод между своими счетами' }), rules)).toBe(false)
+    expect(shouldNotifyChat(makeItem(), rules)).toBe(true)
   })
 
   it('silences excluded accounts (trim-insensitive)', () => {

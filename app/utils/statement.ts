@@ -4,7 +4,11 @@ import type { OperationDirection, StatementItem } from '~/types/statement'
 // the chat-notification filter. No I/O; fully unit-tested and reusable by the
 // backend poller.
 
-/** Map a raw bank operation type to our direction. Alfa uses `C`redit / `D`ebit. */
+/**
+ * Map Alfa's raw operation type to our direction (`C`redit / everything else =
+ * `debit`). Alfa-specific; other providers (Prior, manual) supply their own
+ * mapping. Unknown/empty values fall back to `debit` by design.
+ */
 export function directionFromOperType(operType: string | undefined): OperationDirection {
   return (operType ?? '').trim().toUpperCase() === 'C' ? 'credit' : 'debit'
 }
@@ -32,7 +36,8 @@ export function splitByDirection(items: readonly StatementItem[]): {
 
 /** Rules controlling which operations are announced to the chat. */
 export interface ChatNotifyRules {
-  /** Directions to announce. Default: only `credit` (приходы). */
+  /** Directions to announce. Default: only `credit` (приходы). An empty array
+   * suppresses all notifications. */
   directions?: OperationDirection[]
   /** Our own account numbers to stay silent about. */
   excludeAccounts?: string[]

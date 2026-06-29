@@ -6,13 +6,20 @@ import type { StatementItem } from '~/types/statement'
 
 // In-portal statement view. Uses demo data for now; the live Alfa integration
 // (backend) replaces MOCK_STATEMENT with a real Statement of the same shape.
+// TODO(stage 2): replace MOCK_STATEMENT with a reactive Statement from the
+// backend (SSG + client-side useFetch). Then wrap the split below in computed().
 const statement = MOCK_STATEMENT
 const { credits, debits } = splitByDirection(statement.items)
 
 const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-function total(items: StatementItem[]): string {
-  return money.format(items.reduce((sum, i) => sum + i.amount, 0))
+// Section total label carries the currency (from the operations, not hard-coded
+// BYN). Mock statements are single-currency; a mixed-currency account would need
+// per-currency grouping — deferred until real data lands.
+function totalLabel(items: StatementItem[]): string {
+  const sum = items.reduce((acc, i) => acc + i.amount, 0)
+  const currency = items[0]?.currency ?? 'BYN'
+  return `${money.format(sum)} ${currency}`
 }
 
 const date = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -21,8 +28,8 @@ function fmtDate(iso: string): string {
 }
 
 const sections = computed(() => [
-  { key: 'credit', title: 'Приходы', items: credits, accent: 'text-emerald-600 dark:text-emerald-400' },
-  { key: 'debit', title: 'Расходы', items: debits, accent: 'text-rose-600 dark:text-rose-400' }
+  { key: 'credit', title: 'Приходы', items: credits, total: totalLabel(credits), accent: 'text-emerald-600 dark:text-emerald-400' },
+  { key: 'debit', title: 'Расходы', items: debits, total: totalLabel(debits), accent: 'text-rose-600 dark:text-rose-400' }
 ])
 </script>
 
@@ -54,7 +61,7 @@ const sections = computed(() => [
           class="font-mono text-sm font-semibold"
           :class="section.accent"
         >
-          {{ total(section.items) }} BYN
+          {{ section.total }}
         </span>
       </div>
 

@@ -4,8 +4,11 @@ import {
   ACTIVITY_ORIGIN,
   CRM_OWNER_TYPE_COMPANY,
   activityOriginToken,
+  buildActivityDescription,
   buildActivityTitle,
-  buildTodoActivity
+  buildTodoActivity,
+  formatIsoDate,
+  formatMoney
 } from '~/utils/activity'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
@@ -23,6 +26,23 @@ function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   }
 }
 
+describe('formatMoney', () => {
+  it('formats with two fraction digits', () => {
+    expect(formatMoney(1840)).toBe(formatMoney(1840.0))
+    expect(formatMoney(320.5)).toContain('320')
+    expect(formatMoney(320.5)).toMatch(/50$/)
+  })
+})
+
+describe('formatIsoDate', () => {
+  it('renders the date prefix as DD.MM.YYYY without timezone math', () => {
+    expect(formatIsoDate('2026-06-26T00:00:00.000Z')).toBe('26.06.2026')
+  })
+  it('returns the input unchanged when it is not an ISO date', () => {
+    expect(formatIsoDate('not-a-date')).toBe('not-a-date')
+  })
+})
+
 describe('activityOriginToken', () => {
   it('embeds origin + account|docId for dedup search', () => {
     expect(activityOriginToken(makeItem())).toBe(`[${ACTIVITY_ORIGIN}:BY80ALFA30121122220090270000|100231]`)
@@ -30,27 +50,54 @@ describe('activityOriginToken', () => {
 })
 
 describe('buildActivityTitle', () => {
-  it('uses "Приход … от" for credits', () => {
-    expect(buildActivityTitle(makeItem({ direction: 'credit' }))).toBe('Приход 1840 BYN от ООО «Ромашка»')
+  it('uses "Приход … от" for credits with formatted amount', () => {
+    expect(buildActivityTitle(makeItem({ direction: 'credit' })))
+      .toBe(`Приход ${formatMoney(1840)} BYN от ООО «Ромашка»`)
   })
   it('uses "Расход … на" for debits', () => {
-    expect(buildActivityTitle(makeItem({ direction: 'debit' }))).toBe('Расход 1840 BYN на ООО «Ромашка»')
+    expect(buildActivityTitle(makeItem({ direction: 'debit' })))
+      .toBe(`Расход ${formatMoney(1840)} BYN на ООО «Ромашка»`)
+  })
+})
+
+describe('buildActivityDescription', () => {
+  it('keeps blank separator lines between blocks', () => {
+    const text = buildActivityDescription(makeItem())
+    expect(text).toContain('\n\n') // blocks are separated, not collapsed
+  })
+  it('includes purpose, formatted amount, counterparty fields and the dedup token', () => {
+    const text = buildActivityDescription(makeItem())
+    expect(text).toContain('Оплата по счёту №541')
+    expect(text).toContain(`Приход: ${formatMoney(1840)} BYN`)
+    expect(text).toContain('УНП: 191234567')
+    expect(text).toContain('р/сч: BY24X')
+    expect(text).toContain(activityOriginToken(makeItem()))
+  })
+  it('shows the document number when present, plain form when absent', () => {
+    expect(buildActivityDescription(makeItem({ docNum: '541' }))).toContain('Документ: #541 от 26.06.2026')
+    const noDoc = buildActivityDescription(makeItem({ docNum: undefined }))
+    expect(noDoc).toContain('Документ от 26.06.2026')
+    expect(noDoc).not.toContain('#')
+  })
+  it('omits the bank line when the counterparty has no bank', () => {
+    const cp = { name: 'X', unp: '1', account: 'BY24X' }
+    expect(buildActivityDescription(makeItem({ counterparty: cp }))).not.toContain('Банк:')
   })
 })
 
 describe('buildTodoActivity', () => {
-  it('binds to the company and carries the required deadline', () => {
-    const params = buildTodoActivity(makeItem(), { id: 77, assignedById: 5 })
+  it('binds to the company and carries acceptDate as the required deadline', () => {
+    const params = buildTodoActivity(makeItem({ operDate: '2026-07-01T00:00:00.000Z' }), { id: 77, assignedById: 5 })
     expect(params.ownerTypeId).toBe(CRM_OWNER_TYPE_COMPANY)
     expect(params.ownerId).toBe(77)
+    // deadline is the acceptance date, never operDate.
     expect(params.deadline).toBe('2026-06-26T00:00:00.000Z')
     expect(params.responsibleId).toBe(5)
     expect(params.title).toContain('Приход')
-    expect(params.description).toContain(activityOriginToken(makeItem()))
   })
 
-  it('omits responsibleId when the company has no assignee', () => {
-    const params = buildTodoActivity(makeItem(), { id: 77 })
-    expect(params.responsibleId).toBeUndefined()
+  it('omits responsibleId when the company has no (or zero) assignee', () => {
+    expect(buildTodoActivity(makeItem(), { id: 77 }).responsibleId).toBeUndefined()
+    expect(buildTodoActivity(makeItem(), { id: 77, assignedById: 0 }).responsibleId).toBeUndefined()
   })
 })

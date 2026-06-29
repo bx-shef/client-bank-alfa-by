@@ -25,6 +25,10 @@ export interface StatementQuery {
   /** ISO date (inclusive). Defaults are the provider's responsibility. */
   dateFrom?: string
   dateTo?: string
+  /** Opaque pagination cursor from a previous `Statement.nextCursor`. Optional
+   * now (mock returns everything); lets providers page large statements without
+   * breaking the contract later. */
+  cursor?: string
 }
 
 /**

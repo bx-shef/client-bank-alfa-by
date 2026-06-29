@@ -6,11 +6,26 @@ import { dedupKey } from '~/utils/statement'
 // normalized statement item + the resolved CRM company, returns the params
 // object. The actual REST call lives in the engine layer.
 
-/** CRM owner type id for a Company (used as the activity owner). */
+/** CRM owner type id for a Company. Standard Bitrix24 entityTypeId: Lead=1,
+ * Deal=2, Contact=3, Company=4. */
 export const CRM_OWNER_TYPE_COMPANY = 4
 
 /** Marker prefix embedded in the activity for traceability and our own dedup. */
 export const ACTIVITY_ORIGIN = 'ShefClientBankAlfaBy'
+
+const moneyFormat = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/** Format an amount as a human-readable money string, e.g. `1 840,00`. */
+export function formatMoney(amount: number): string {
+  return moneyFormat.format(amount)
+}
+
+/** Format the date part of an ISO 8601 string as `DD.MM.YYYY` (deterministic,
+ * TZ-free — operates on the date prefix, not a Date object). */
+export function formatIsoDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : iso
+}
 
 /** The minimal CRM company shape the builder needs. */
 export interface CrmCompanyRef {
@@ -32,41 +47,54 @@ export interface TodoActivityParams {
 
 /**
  * Stable marker for one operation, e.g. `[ShefClientBankAlfaBy:BY..|123]`.
- * Embedded in the description so duplicate activities can be detected by search
- * (the todo API has no native ORIGINATOR_ID/ORIGIN_ID dedup fields).
+ * Embedded in the description so duplicate activities can be detected by a
+ * plain substring search (the todo API has no native ORIGINATOR_ID/ORIGIN_ID
+ * dedup fields). The `|` separator is intentional; search is `includes`, not regex.
  */
 export function activityOriginToken(item: Pick<StatementItem, 'account' | 'docId'>): string {
   return `[${ACTIVITY_ORIGIN}:${dedupKey(item)}]`
 }
 
-/** One-line activity title, e.g. "Приход 1 200.00 BYN от ООО Ромашка". */
+/** One-line activity title, e.g. "Приход 1 840,00 BYN от ООО Ромашка". */
 export function buildActivityTitle(item: StatementItem): string {
   const verb = item.direction === 'credit' ? 'Приход' : 'Расход'
   const prep = item.direction === 'credit' ? 'от' : 'на'
-  return `${verb} ${item.amount} ${item.currency} ${prep} ${item.counterparty.name}`.trim()
+  return `${verb} ${formatMoney(item.amount)} ${item.currency} ${prep} ${item.counterparty.name}`.trim()
 }
 
-/** Readable multi-line activity description (plain text) with the dedup marker. */
+/** Readable multi-line activity description (plain text) with the dedup marker.
+ * `null` entries are omitted; `''` entries are kept as blank separator lines. */
 export function buildActivityDescription(item: StatementItem): string {
   const cp = item.counterparty
-  return [
+  const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
+  const doc = item.docNum
+    ? `Документ: #${item.docNum} от ${formatIsoDate(item.acceptDate)}`
+    : `Документ от ${formatIsoDate(item.acceptDate)}`
+
+  const lines: Array<string | null> = [
     item.purpose,
     '',
-    `${item.direction === 'credit' ? 'Приход' : 'Расход'}: ${item.amount} ${item.currency}`,
-    item.docNum ? `Документ: #${item.docNum} от ${item.acceptDate}` : `Документ от ${item.acceptDate}`,
+    `${kind}: ${formatMoney(item.amount)} ${item.currency}`,
+    doc,
     '',
     `Контрагент: ${cp.name}`,
     `УНП: ${cp.unp}`,
     `р/сч: ${cp.account}`,
-    cp.bank ? `Банк: ${cp.bank}` : '',
+    cp.bank ? `Банк: ${cp.bank}` : null,
     '',
     activityOriginToken(item)
-  ].filter(line => line !== '').join('\n')
+  ]
+  return lines.filter((line): line is string => line !== null).join('\n')
 }
 
 /**
  * Build the `crm.activity.todo.add` params for a statement item bound to a CRM
- * company. `deadline` is the operation's acceptance date (the API requires it).
+ * company. `deadline` is the operation's acceptance date.
+ *
+ * NB: `deadline` must be a TZ-aware ISO 8601 datetime in the portal's timezone
+ * (Belarus = UTC+3). A bare UTC midnight (`…T00:00:00.000Z`) can render as the
+ * previous day in the portal — the normalizer/engine is responsible for passing
+ * a portal-local value. Verified against a live portal at stage 4 (see issues).
  */
 export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef): TodoActivityParams {
   return {
