@@ -50,7 +50,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
   - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата.
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
+  - `app/utils/alfaOauth.ts` — OAuth 2.0 Альфы (Authorization Code + refresh): URL/тела запросов, парсинг.
+  - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
+
+  Ссылки на доку Альфы и используемые методы/параметры — [`docs/ALFA_API.md`](docs/ALFA_API.md).
 - `tests/*.test.ts` — Vitest (node) на чистые утилиты.
 - `tests/nuxt/**/*.test.ts` — Vitest (проект `nuxt`) на компоненты/страницы (`mountSuspended`).
 
