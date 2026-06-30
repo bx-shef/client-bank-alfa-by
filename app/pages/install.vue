@@ -22,7 +22,6 @@ const caption = ref('Инициализация…')
 
 interface InitData {
   appInfo?: { ID?: number, CODE?: string, VERSION?: string }
-  profile?: { ID?: number, NAME?: string, LAST_NAME?: string, ADMIN?: boolean }
   scope?: string[]
 }
 const initData = ref<InitData>({})
@@ -85,10 +84,11 @@ async function runInstall() {
     caption.value = 'Запрос данных портала…'
     await $b24.parent.setTitle('Установка приложения')
 
+    // Read-only diagnostics: app metadata + granted scopes. We don't fetch the
+    // user profile — it isn't shown and would only park PII in reactive state.
     const response = await $b24.actions.v2.batch.make({
       calls: {
         appInfo: { method: 'app.info' },
-        profile: { method: 'profile' },
         scope: { method: 'scope' }
       }
     })

@@ -46,7 +46,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   без `clear`-layout (вне портала), без `B24App`.
 - `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных. Layout
   `clear`, на `onMounted` зовёт `useB24().init()` (вне фрейма — no-op), внутри портала ставит
-  заголовок и `fitWindow`.
+  заголовок и `fitWindow` (best-effort, в try/catch — сбой не блокирует страницу).
 - `app/pages/settings.vue` — in-portal настройки (ключ, выбор чата, правила фильтра чата) + живой
   предпросмотр; форма в `<ClientOnly>`, настройки в localStorage (демо, ключ API не сохраняется),
   реальное хранение — backend. Layout `clear` + `useB24().init()`. Роут `/settings` — в `nitro.prerender.routes`.

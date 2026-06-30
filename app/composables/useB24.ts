@@ -59,7 +59,8 @@ export const useB24 = () => {
     return get()?.getTargetOrigin() || '?'
   }
 
-  /** Scopes the install handler reports; see `app/config/b24.ts`. */
+  /** The scopes this app needs, for the install diagnostics panel (not an OAuth
+   *  request — grants come from the app registration). See `app/config/b24.ts`. */
   function getRequiredRights(): string[] {
     return [...B24_REQUIRED_SCOPES]
   }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { B24_REQUIRED_SCOPES } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
-  it('requests crm, im, user_brief and placement', () => {
+  it('lists crm, im, user_brief and placement', () => {
     expect([...B24_REQUIRED_SCOPES]).toEqual(['crm', 'im', 'user_brief', 'placement'])
   })
 

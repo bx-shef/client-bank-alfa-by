@@ -5,6 +5,12 @@ import type { useB24 } from '~/composables/useB24'
 export interface MockB24Options {
   /** Whether a B24 frame is present (default true). `false` = standalone mode. */
   isInit?: () => boolean
+  /** Stable spy for `$b24.installFinish()` (so a test can assert it was called). */
+  installFinish?: ReturnType<typeof vi.fn>
+  /** Stable spy for `$b24.parent.setTitle()`. */
+  setTitle?: ReturnType<typeof vi.fn>
+  /** Lets a test make `$b24.actions.v2.batch.make()` reject (error/retry path). */
+  batchMake?: ReturnType<typeof vi.fn>
 }
 
 /**
@@ -18,9 +24,9 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
   // Minimal B24Frame fake — only what install.vue / the in-portal pages touch.
   const frame = {
     auth: { getAuthData: () => ({ domain: 'example.bitrix24.by' }) },
-    parent: { setTitle: vi.fn(async () => {}), fitWindow: vi.fn(async () => {}) },
-    actions: { v2: { batch: { make: vi.fn(async () => ({ getData: () => ({}) })) } } },
-    installFinish: vi.fn(async () => {})
+    parent: { setTitle: opts.setTitle ?? vi.fn(async () => {}), fitWindow: vi.fn(async () => {}) },
+    actions: { v2: { batch: { make: opts.batchMake ?? vi.fn(async () => ({ getData: () => ({}) })) } } },
+    installFinish: opts.installFinish ?? vi.fn(async () => {})
   } as unknown as B24Frame
   return {
     init: vi.fn(async () => ok),
