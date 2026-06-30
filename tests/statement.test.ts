@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StatementItem } from '~/types/statement'
-import { dedupKey, directionFromOperType, shouldNotifyChat, splitByDirection } from '~/utils/statement'
+import { dedupKey, directionFromOperType, parseRuleLines, shouldNotifyChat, splitByDirection } from '~/utils/statement'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   return {
@@ -46,6 +46,18 @@ describe('splitByDirection', () => {
 
   it('returns empty buckets for an empty array', () => {
     expect(splitByDirection([])).toEqual({ credits: [], debits: [] })
+  })
+})
+
+describe('parseRuleLines', () => {
+  it('splits lines, trims, drops blanks and duplicates', () => {
+    expect(parseRuleLines(' BY1 \n\nBY2\nBY1\n   \n')).toEqual(['BY1', 'BY2'])
+  })
+  it('handles Windows CRLF line endings', () => {
+    expect(parseRuleLines('BY1\r\nBY2\r\n')).toEqual(['BY1', 'BY2'])
+  })
+  it('returns an empty array for empty/whitespace input', () => {
+    expect(parseRuleLines('   \n  ')).toEqual([])
   })
 })
 

@@ -45,6 +45,17 @@ export interface ChatNotifyRules {
   excludePurposePatterns?: string[]
 }
 
+/** Split a textarea value into a clean list: one item per line, trimmed, no
+ * blanks or duplicates. Used to edit `excludeAccounts`/`excludePurposePatterns`. */
+export function parseRuleLines(text: string): string[] {
+  const seen = new Set<string>()
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line) seen.add(line)
+  }
+  return [...seen]
+}
+
 const DEFAULT_DIRECTIONS: OperationDirection[] = ['credit']
 
 /**
