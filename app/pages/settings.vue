@@ -10,9 +10,9 @@ import { useB24 } from '~/composables/useB24'
 // In-portal page: `clear` layout wraps it in <B24App> for iframe theming.
 definePageMeta({ layout: 'clear' })
 
-// In-portal settings (demo, client-side persistence). Wires the chat-notify
-// filter (pure logic in utils/statement.ts) with a live preview. Real API-key /
-// chat storage moves server-side with the backend/SDK.
+// Demo, client-side persistence. Wires the chat-notify filter (pure logic in
+// utils/statement.ts) with a live preview. Real key/chat storage moves
+// server-side with the backend (app.option, #16).
 const { settings, rules } = useChatRules()
 
 const b24 = useB24()
@@ -28,10 +28,26 @@ onMounted(async () => {
   }
 })
 
-// Textareas edit line-lists; mirror to settings via parseRuleLines (one-way:
-// textarea → settings, no reverse watcher, so no feedback loop). useChatRules()
-// loads localStorage synchronously in setup (before this onMounted), so the
-// textareas seed from the already-loaded settings.
+// Chat options for B24Select ({ label, value }). No empty-string item — B24Select
+// reserves '' for the placeholder/cleared state (it throws on an empty value).
+const chatItems = computed(() => MOCK_CHATS.map(c => ({ label: c.title, value: c.id })))
+
+// Direction toggles as switches (get/set over the directions array).
+function directionModel(d: OperationDirection) {
+  return computed<boolean>({
+    get: () => settings.value.directions.includes(d),
+    set: (on) => {
+      const set = new Set(settings.value.directions)
+      if (on) set.add(d)
+      else set.delete(d)
+      settings.value.directions = [...set]
+    }
+  })
+}
+const notifyCredit = directionModel('credit')
+const notifyDebit = directionModel('debit')
+
+// Textareas edit line-lists; mirror to settings via parseRuleLines (one-way).
 const accountsText = ref('')
 const patternsText = ref('')
 onMounted(() => {
@@ -41,139 +57,164 @@ onMounted(() => {
 watch(accountsText, v => (settings.value.excludeAccounts = parseRuleLines(v)))
 watch(patternsText, v => (settings.value.excludePurposePatterns = parseRuleLines(v)))
 
-const directions: { value: OperationDirection, label: string }[] = [
-  { value: 'credit', label: 'Приходы' },
-  { value: 'debit', label: 'Расходы' }
-]
-const hasDirection = (d: OperationDirection) => settings.value.directions.includes(d)
-function toggleDirection(d: OperationDirection) {
-  const set = new Set(settings.value.directions)
-  if (set.has(d)) set.delete(d)
-  else set.add(d)
-  settings.value.directions = [...set]
-}
-
 // Live preview: which mock operations would be announced to the chat.
 const preview = computed(() =>
   MOCK_STATEMENT.items.map(item => ({ item, notify: shouldNotifyChat(item, rules.value) }))
 )
+const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
 </script>
 
 <template>
-  <main class="mx-auto max-w-3xl px-4 py-8">
+  <main class="mx-auto max-w-5xl px-4 py-6">
     <h1 class="text-2xl font-semibold">
       Настройки
     </h1>
-    <p class="mt-1 text-sm text-(--b24ui-color-text-secondary)">
-      Демо: настройки фильтра/чата хранятся локально в браузере. Ключ API не сохраняется (вводится
-      на сессию); реальные ключ и чат подключаются на сервере.
-    </p>
 
     <ClientOnly>
-      <div class="mt-6 space-y-6">
-        <label class="block">
-          <span class="text-sm font-medium">Ключ API клиент-банка (по «моей компании»)</span>
-          <input
-            v-model="settings.apiKey"
-            type="password"
-            autocomplete="off"
-            aria-label="Ключ API клиент-банка"
-            placeholder="введите ключ API (не сохраняется)"
-            class="mt-1 w-full rounded-lg border border-(--b24ui-color-design-tinted-na-stroke) bg-transparent px-3 py-2 text-sm"
-          >
-        </label>
-
-        <label class="block">
-          <span class="text-sm font-medium">Чат для уведомлений</span>
-          <select
-            v-model="settings.chatId"
-            aria-label="Чат для уведомлений"
-            class="mt-1 w-full rounded-lg border border-(--b24ui-color-design-tinted-na-stroke) bg-transparent px-3 py-2 text-sm"
-          >
-            <option value="">
-              — не выбран —
-            </option>
-            <option
-              v-for="chat in MOCK_CHATS"
-              :key="chat.id"
-              :value="chat.id"
-            >
-              {{ chat.title }}
-            </option>
-          </select>
-        </label>
-
-        <fieldset>
-          <legend class="text-sm font-medium">
-            Что отправлять в чат
-          </legend>
-          <div class="mt-2 flex gap-4">
-            <label
-              v-for="d in directions"
-              :key="d.value"
-              class="flex items-center gap-2 text-sm"
-            >
-              <input
-                type="checkbox"
-                :checked="hasDirection(d.value)"
-                @change="toggleDirection(d.value)"
-              >
-              {{ d.label }}
-            </label>
-          </div>
-        </fieldset>
-
-        <label class="block">
-          <span class="text-sm font-medium">Не показывать по р/счёту (по одному в строке)</span>
-          <textarea
-            v-model="accountsText"
-            rows="3"
-            aria-label="Не показывать по р/счёту"
-            placeholder="BY00..."
-            class="mt-1 w-full rounded-lg border border-(--b24ui-color-design-tinted-na-stroke) bg-transparent px-3 py-2 font-mono text-xs"
-          />
-        </label>
-
-        <label class="block">
-          <span class="text-sm font-medium">Не показывать по теме платежа (подстроки, по одной в строке)</span>
-          <textarea
-            v-model="patternsText"
-            rows="3"
-            aria-label="Не показывать по теме платежа"
-            placeholder="между своими счетами"
-            class="mt-1 w-full rounded-lg border border-(--b24ui-color-design-tinted-na-stroke) bg-transparent px-3 py-2 text-xs"
-          />
-        </label>
-      </div>
-
-      <section class="mt-8">
-        <h2 class="text-lg font-medium">
-          Предпросмотр (на демо-выписке)
-        </h2>
-        <p class="mt-1 text-sm text-(--b24ui-color-text-secondary)">
-          Что попадёт в чат при текущих правилах:
-        </p>
-        <ul
-          data-testid="preview-list"
-          class="mt-3 space-y-1"
+      <div class="mt-6 grid gap-6 lg:grid-cols-[1fr_320px] lg:items-start">
+        <!-- Form: three grouped sections. -->
+        <B24Form
+          :state="settings"
+          class="space-y-6"
         >
-          <li
-            v-for="row in preview"
-            :key="row.item.docId"
-            class="flex items-center justify-between rounded-lg border border-(--b24ui-color-design-tinted-na-stroke) px-3 py-2 text-sm"
-          >
-            <span>{{ row.item.counterparty.name }} · {{ row.item.purpose }}</span>
-            <span
-              class="ml-3 shrink-0 rounded-md px-2 py-0.5 text-xs font-medium"
-              :class="row.notify
-                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
-                : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-500/15 dark:text-zinc-400'"
+          <B24Card>
+            <template #header>
+              <h2 class="font-semibold">
+                Подключение банка
+              </h2>
+            </template>
+            <B24FormField
+              label="Ключ API клиент-банка"
+              description="По вашей компании. Не сохраняется — вводится на сессию."
             >
-              {{ row.notify ? '→ в чат' : 'скрыто' }}
-            </span>
-          </li>
-        </ul>
-      </section>
+              <B24Input
+                v-model="settings.apiKey"
+                type="password"
+                autocomplete="off"
+                placeholder="Введите ключ API"
+                class="w-full"
+                data-testid="api-key"
+              />
+            </B24FormField>
+          </B24Card>
+
+          <B24Card>
+            <template #header>
+              <h2 class="font-semibold">
+                Уведомления в чат
+              </h2>
+            </template>
+            <div class="space-y-4">
+              <B24FormField label="Чат для уведомлений">
+                <B24Select
+                  v-model="settings.chatId"
+                  :items="chatItems"
+                  placeholder="Выберите чат"
+                  class="w-full"
+                  data-testid="chat-select"
+                />
+              </B24FormField>
+
+              <B24Switch
+                v-model="notifyCredit"
+                label="Приходы"
+                description="когда деньги пришли на счёт"
+                data-testid="notify-credit"
+              />
+              <B24Switch
+                v-model="notifyDebit"
+                label="Расходы"
+                description="списания со счёта"
+                data-testid="notify-debit"
+              />
+            </div>
+          </B24Card>
+
+          <B24Card>
+            <template #header>
+              <h2 class="font-semibold">
+                Исключения
+              </h2>
+            </template>
+            <div class="space-y-4">
+              <B24FormField
+                label="Не уведомлять по счетам"
+                description="По одному номеру счёта в строке."
+              >
+                <B24Textarea
+                  v-model="accountsText"
+                  :rows="3"
+                  autoresize
+                  placeholder="BY00..."
+                  class="w-full font-mono text-xs"
+                  data-testid="exclude-accounts"
+                />
+              </B24FormField>
+              <B24FormField
+                label="Не уведомлять по теме платежа"
+                description="Подстроки, по одной в строке. Напр.: между своими счетами."
+              >
+                <B24Textarea
+                  v-model="patternsText"
+                  :rows="3"
+                  autoresize
+                  placeholder="между своими счетами"
+                  class="w-full text-xs"
+                  data-testid="exclude-patterns"
+                />
+              </B24FormField>
+            </div>
+          </B24Card>
+
+          <p class="text-xs text-(--ui-color-base-3)">
+            Настройки сохраняются автоматически.
+          </p>
+        </B24Form>
+
+        <!-- Live preview: the main feedback of the settings. -->
+        <B24Card class="lg:sticky lg:top-4">
+          <template #header>
+            <h2 class="font-semibold">
+              Что попадёт в чат
+            </h2>
+          </template>
+
+          <p
+            class="mb-3 text-sm text-(--ui-color-base-3)"
+            data-testid="preview-summary"
+          >
+            В чат попадёт {{ notifyCount }} из {{ preview.length }} операций
+          </p>
+
+          <B24Alert
+            v-if="notifyCount === 0"
+            color="air-primary-warning"
+            variant="soft"
+            description="При текущих правилах в чат ничего не попадёт."
+          />
+
+          <ul
+            v-else
+            data-testid="preview-list"
+            class="space-y-2"
+          >
+            <li
+              v-for="row in preview"
+              :key="row.item.docId"
+              class="flex items-center justify-between gap-3 text-sm"
+            >
+              <span class="truncate">{{ row.item.counterparty.name }}</span>
+              <B24Badge
+                :label="row.notify ? '→ в чат' : 'скрыто'"
+                :color="row.notify ? 'air-primary-success' : 'air-secondary'"
+                variant="soft"
+                size="sm"
+                class="shrink-0"
+              />
+            </li>
+          </ul>
+        </B24Card>
+      </div>
     </ClientOnly>
   </main>
 </template>

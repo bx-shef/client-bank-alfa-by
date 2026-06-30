@@ -7,27 +7,20 @@ import { splitByDirection } from '~/utils/statement'
 const { credits, debits } = splitByDirection(MOCK_STATEMENT.items)
 
 describe('app statement page', () => {
-  it('renders the heading, account and demo notice', async () => {
+  it('renders the account, demo notice and tabs with counts', async () => {
     const wrapper = await mountSuspended(AppPage)
     const text = wrapper.text()
-    expect(text).toContain('Выписка по счёту')
     expect(text).toContain(MOCK_STATEMENT.account)
     expect(text).toContain('Демо-данные')
+    expect(text).toContain(`Приходы (${credits.length})`)
+    expect(text).toContain(`Расходы (${debits.length})`)
   })
 
-  it('renders one card per operation, split into Приходы / Расходы', async () => {
+  it('shows the active (Приходы) tab operations with the currency in the total', async () => {
     const wrapper = await mountSuspended(AppPage)
     const text = wrapper.text()
-    expect(wrapper.findAll('li')).toHaveLength(MOCK_STATEMENT.items.length)
-    expect(text).toContain(`Приходы`)
-    expect(text).toContain(`Расходы`)
-    // Section counts reflect the split.
-    expect(text).toContain(`(${credits.length})`)
-    expect(text).toContain(`(${debits.length})`)
-  })
-
-  it('shows the currency in totals (not hard-coded)', async () => {
-    const wrapper = await mountSuspended(AppPage)
-    expect(wrapper.text()).toContain(MOCK_STATEMENT.items[0]!.currency)
+    // Credits are the default active tab — their counterparties must be visible.
+    for (const c of credits) expect(text).toContain(c.counterparty.name)
+    expect(text).toContain(MOCK_STATEMENT.items[0]!.currency)
   })
 })
