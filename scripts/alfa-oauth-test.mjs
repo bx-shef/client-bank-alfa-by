@@ -146,10 +146,17 @@ function buildAuthorizeUrl() {
 }
 
 function openBrowser(url) {
+  // The authorize URL contains "&", which cmd.exe treats as a command
+  // separator — quote the whole URL and pass it verbatim so `start` gets it
+  // as one argument. On macOS/Linux argv is passed as-is, no quoting needed.
   const cmd = platform === 'win32' ? 'cmd' : platform === 'darwin' ? 'open' : 'xdg-open'
-  const cmdArgs = platform === 'win32' ? ['/c', 'start', '', url] : [url]
+  const cmdArgs = platform === 'win32' ? ['/c', 'start', '""', `"${url}"`] : [url]
   try {
-    const child = spawn(cmd, cmdArgs, { stdio: 'ignore', detached: true })
+    const child = spawn(cmd, cmdArgs, {
+      stdio: 'ignore',
+      detached: true,
+      windowsVerbatimArguments: platform === 'win32'
+    })
     child.on('error', () => {})
     child.unref()
   } catch { /* opening a browser is best-effort */ }
