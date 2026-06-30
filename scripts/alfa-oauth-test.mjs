@@ -32,9 +32,33 @@
 //     node scripts/alfa-oauth-test.mjs --client-id xxx --client-secret yyy --refresh REFRESH_TOKEN
 
 import { request } from 'node:https'
+import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 import { spawn } from 'node:child_process'
 import { stdin as input, stdout as output, platform } from 'node:process'
+
+// --- minimal .env loader (no deps) -----------------------------------------
+// Node does not read .env automatically. Load KEY=VALUE pairs from .env.local
+// then .env in the cwd, without overriding values already set in the real
+// environment or on the command line.
+function loadDotEnv() {
+  for (const file of ['.env.local', '.env']) {
+    let text
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch { continue }
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
+      if (!m) continue
+      let val = m[2]
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith('\'') && val.endsWith('\''))) {
+        val = val.slice(1, -1)
+      }
+      if (process.env[m[1]] === undefined) process.env[m[1]] = val
+    }
+  }
+}
+loadDotEnv()
 
 // --- tiny arg parser -------------------------------------------------------
 function parseArgs(argv) {
