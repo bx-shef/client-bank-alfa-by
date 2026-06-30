@@ -82,3 +82,114 @@
 
 > Печатные формы (`/statement/{format}` pdf/xlsx/…), аресты, брони, SWIFT, реестр — **пока не
 > используем**; подключим по мере необходимости.
+
+## Пример вызовов (проверено на sandbox, 2026-06-30)
+
+Полный поток **OAuth (Authorization Code) → `/accounts/` → выписка → refresh** прогнан
+вживую на песочнике `developerhub.alfabank.by:8273` тестовыми `client_id/secret`.
+Все значения ниже — маскированы. `base = https://developerhub.alfabank.by:8273`.
+
+> Перепроверить вживую: `pnpm oauth:test` (скрипт `scripts/alfa-oauth-test.mjs`,
+> без зависимостей, Node ≥ 18). Это **песочничный** инструмент: конфиг берётся из
+> `.env.sandbox` — скопируй шаблон `.env.sandbox.example` → `.env.sandbox` и впиши
+> `ALFA_CLIENT_SECRET` (файл в `.gitignore`). Скрипт в баннере явно помечает режим
+> `● SANDBOX`/`● NON-SANDBOX`. Токены и номера счетов в консоли маскируются; в дамп
+> `alfa-demo-output.json` (gitignore) токены пишутся **замаскированными** (полные —
+> только под `--full`). Флаги: `--env <file>`, `--from-year/--to-year`, `--account`,
+> `--code`, `--refresh`, `--url-only`, `--full`.
+>
+> ⚠ По умолчанию опрашиваются **все годы 2000…2029** по каждому счёту с паузой 700 мс —
+> это несколько минут. Для быстрой проверки сузь период: `pnpm oauth:test --from-year 2024 --to-year 2024`.
+
+### 1. Authorize (браузер)
+
+```http
+GET {base}/authorize?response_type=code&client_id={clientId}
+    &redirect_uri={redirectUri}&scope=accounts&state={state}
+```
+
+Пользователь логинится у Альфы и подтверждает доступ → редирект на
+`{redirectUri}?code=1c00f727-…&state={state}`. `state` сверяем (CSRF), `code` короткоживущий.
+
+### 2. Обмен `code` → токены
+
+```http
+POST {base}/token
+Authorization: Basic base64(clientId:clientSecret)
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code={code}&redirect_uri={redirectUri}
+```
+```jsonc
+// HTTP 200
+{
+  "access_token":  "ibHZMkuo…",   // ~89 симв.
+  "refresh_token": "J0k+lQXu…",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "accounts"             // выдаётся ровно запрошенный scope
+}
+```
+
+### 3. Счета — `GET /accounts/`
+
+```http
+GET {base}/partner/1.2.0/accounts/
+Authorization: Bearer {access_token}
+```
+```jsonc
+// HTTP 200 → { "accounts": [ … ] }; на sandbox вернулось 5 счетов:
+{ "number": "BY…0000", "currIso": "BYN", "amount": 15000,     "type": "Текущий (расчетный)", "actualBalanceDate": "2018-02-07T12:30:42.190" }
+{ "number": "BY…0000", "currIso": "USD", "amount": 57800.17,  "type": "Текущий (расчетный)", "isArrested": true }
+{ "number": "BY…0000", "currIso": "BYN", "amount": 648540.76, "type": "Текущий (расчетный)", "isArrested": true }
+// (поля type/isCard/isArrested/isReserved/isOverdraft/actualBalanceDate)
+```
+
+### 4. Выписка — `GET /accounts/statement`
+
+```http
+GET {base}/partner/1.2.0/accounts/statement?number={acc}
+    &dateFrom=01.01.2024&dateTo=31.12.2024&transactions=0&pageNo=0&pageRowCount=0
+Authorization: Bearer {access_token}
+```
+```jsonc
+// HTTP 200 → { page:[…], statistics:[…], errors:[…] }
+{
+  "page": [
+    {
+      "number": "BY…0000", "operType": "C",            // C = приход / D = расход
+      "amount": 150, "currIso": "BYN",
+      "purpose": "ОПЛАТА ЗА ТОВАРЫ СОГЛАСНО ДОГОВОРУ…",
+      "corrName": "ИНДИВИДУАЛЬНЫЙ ПРЕДПРИНИ…", "corrNumber": "BY…0000",
+      "docId": "…", "docNum": "…",
+      "operDate": "13.01.2024", "acceptDate": "2024-01-13T14:00:00.000"
+    }
+  ],
+  "errors": []   // ВАЖНО: errored-ответ может прийти с пустым page — проверять errors[]
+}
+```
+
+Нормализуем ответ в `StatementItem` через `normalizeAlfaStatement()` (см.
+`app/utils/alfaStatement.ts`); ошибки по счёту — `alfaStatementErrors()`.
+
+### 5. Refresh
+
+```http
+POST {base}/token
+Authorization: Basic base64(clientId:clientSecret)
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token={refresh_token}
+```
+```jsonc
+// HTTP 200 → новый access_token + refresh_token (expires_in: 3600)
+```
+
+### Замечания по sandbox
+
+- **Песочница отдаёт фиксированные данные, игнорируя `dateFrom/dateTo` и номер счёта** —
+  одна и та же выписка на каждый год. Фильтр по периоду проверяется только на проде.
+- **Часть тестовых счетов отвечает `HTTP 500`** на `/statement` (серверная сторона
+  песочницы) — транспорт должен это переживать и не считать ошибку за «нет операций».
+- Лимит **~100 запросов/мин** на API (пилот; по данным на 2026-06-30, уточняй в договоре /
+  на developerhub) — при массовом опросе нужна пауза/троттлинг.
