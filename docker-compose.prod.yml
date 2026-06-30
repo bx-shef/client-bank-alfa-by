@@ -1,4 +1,4 @@
-# Продакшн — разместить на сервере в /home/bitrix/client-bank-alfa-by/
+# Продакшн — разместить на сервере в /home/bitrix/bank-import/
 # Требует:
 #   - docker network proxy-net (создаётся nginx-proxy setup —
 #     см. currency-converter/docker-compose.nginxproxy.yml);
@@ -18,6 +18,9 @@ services:
       VIRTUAL_HOST: ${DOMAIN}
       VIRTUAL_PORT: 8080
       LETSENCRYPT_HOST: ${DOMAIN}
+      # Per-vhost ACME contact email; overrides acme-companion's global
+      # DEFAULT_EMAIL. Empty is allowed (cert issued without an account email).
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
