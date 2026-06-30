@@ -56,10 +56,15 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
 
 Развёртывание:
 
-1. Положить `docker-compose.prod.yml` в `/home/bitrix/client-bank-alfa-by/`, задать `.env` с `DOMAIN`
-   (см. `.env.example`).
-2. `docker compose -f docker-compose.prod.yml up -d` — поднимет только app-контейнер (GHCR-образ);
-   обновления подтянет хостовый Watchtower.
+1. Положить `docker-compose.prod.yml` в `/home/bitrix/bank-import/`, задать `.env` с `DOMAIN` и
+   (опц.) `LETSENCRYPT_EMAIL` (см. `.env.example`). DNS A-запись `DOMAIN` должна указывать на сервер
+   **до** подъёма, иначе acme-companion не выпустит TLS.
+2. `docker compose -f docker-compose.prod.yml up -d` (или `make prod-up`) — поднимет только
+   app-контейнер (GHCR-образ); обновления подтянет хостовый Watchtower.
+
+Обёртки в `Makefile`: `make prod-up` / `make prod-pull` / `make prod-redeploy` (обновить сейчас,
+без ожидания Watchtower) / `make logs` / `make ps`. Локальная проверка образа — `make build-local`
+(раздаёт на `:8081`).
 
 Локальная проверка образа: `docker compose up --build` (раздаёт на `:8081` — порт уведён с `:80`,
 чтобы не конфликтовать с локальным `currency-converter`).
@@ -70,5 +75,6 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
 |---|---|
 | `NUXT_PUBLIC_AUTHOR_NAME` / `NUXT_PUBLIC_AUTHOR_URL` | автор в подвале лендинга (иначе дефолт из `nuxt.config.ts`) |
 | `DOMAIN` | домен прод-образа (`VIRTUAL_HOST`/`LETSENCRYPT_HOST` для nginx-proxy) |
+| `LETSENCRYPT_EMAIL` | контакт для TLS-сертификата (acme-companion); необязателен |
 
 В CI автор берётся из `vars.NUXT_PUBLIC_AUTHOR_*` (repo variables), не из секретов — это не секреты.
