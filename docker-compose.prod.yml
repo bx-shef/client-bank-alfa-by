@@ -1,5 +1,11 @@
 # Продакшн — разместить на сервере в /home/bitrix/client-bank-alfa-by/
-# Требует: docker network proxy-net (создаётся nginx-proxy setup — см. docker-compose.nginxproxy.yml)
+# Требует:
+#   - docker network proxy-net (создаётся nginx-proxy setup —
+#     см. currency-converter/docker-compose.nginxproxy.yml);
+#   - запущенный Watchtower на хосте (тоже из currency-converter) — он один на
+#     сервер и сам подхватит этот контейнер по метке watchtower.enable ниже.
+# Свой Watchtower здесь НЕ поднимаем: второй экземпляр конфликтует по
+# container_name и плодит двойные перезапуски (см. docs/DEPLOY.md).
 
 services:
   app:
@@ -22,22 +28,9 @@ services:
     networks:
       - proxy-net
     labels:
+      # Picked up by the single host-wide Watchtower (deployed once with
+      # currency-converter, runs with --label-enable).
       - "com.centurylinklabs.watchtower.enable=true"
-
-  watchtower:
-    # Pinned tag: floating `latest` would let a compromised upstream image
-    # self-upgrade via the docker.sock mount and root the host.
-    image: containrrr/watchtower:1.7.1
-    container_name: watchtower
-    environment:
-      - DOCKER_API_VERSION=1.47
-    volumes:
-      # docker.sock is intentionally read-write — Watchtower has to stop/start
-      # containers to update them. Mitigation: image pinned above; only
-      # containers carrying the label below are touched (--label-enable).
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 300 --cleanup --label-enable
-    restart: unless-stopped
 
 networks:
   proxy-net:

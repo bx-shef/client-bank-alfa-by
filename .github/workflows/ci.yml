@@ -20,7 +20,9 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel only superseded PR runs; never abort an in-flight `main` deploy
+  # mid-push to GHCR.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

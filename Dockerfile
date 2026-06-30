@@ -5,10 +5,11 @@ RUN corepack enable
 
 FROM base AS deps
 WORKDIR /app
-COPY package.json ./
-# Copy lock file when available for reproducible installs
-COPY pnpm-lock.yaml* ./
-RUN pnpm install --ignore-scripts
+COPY package.json pnpm-lock.yaml ./
+# --frozen-lockfile: install exactly the committed lockfile (reproducible image,
+# same as CI). --ignore-scripts: skip postinstall (`nuxt prepare`) — `nuxt
+# generate` runs prepare itself in the builder stage.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 FROM deps AS builder
 WORKDIR /app

@@ -35,19 +35,34 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
   и ловят Mixed-Content внутри HTTPS-iframe Б24).
 - `error_page 405 =200 $uri` — Б24 открывает in-portal-страницы POST'ом; статик-хендлер nginx
   отдал бы `405`, поэтому переотдаём ту же пререндеренную HTML (серверной логики на запрос нет).
-- CSP: `frame-ancestors`/`connect-src` разрешают облачные домены Б24 (`*.bitrix24.*`) и backend
+- CSP: `frame-ancestors`/`connect-src` разрешают облачные домены Б24 (раздельные wildcard по TLD —
+  `*.bitrix24.ru`, `*.bitrix24.by`, `*.bitrix24.com` и др.; CSP не поддерживает двойной `*.bitrix24.*`) и backend
   (`bank-import.bx-shef.by`). **Self-hosted порталы** на своём домене добавляют origin в оба списка вручную.
 
 ## Прод (на сервере)
 
-1. Общий reverse-proxy (`nginx-proxy` + `acme-companion`, docker-сеть `proxy-net`) ставится на
-   сервере **один раз** — канонический compose в `currency-converter/docker-compose.nginxproxy.yml`
-   (здесь не дублируем, чтобы не плодить два инстанса proxy).
-2. Положить `docker-compose.prod.yml` в `/home/bitrix/client-bank-alfa-by/`, задать `.env` с `DOMAIN`
-   (см. `.env.example`).
-3. `docker compose -f docker-compose.prod.yml up -d` — поднимет контейнер (GHCR-образ) и Watchtower.
+На сервере уже крутится `currency-converter` по той же схеме, поэтому **общая инфраструктура
+ставится один раз** и переиспользуется:
 
-Локальная проверка образа: `docker compose up --build` (раздаёт на `:80`).
+1. **Reverse-proxy** (`nginx-proxy` + `acme-companion`, docker-сеть `proxy-net`) — канонический
+   compose в `currency-converter/docker-compose.nginxproxy.yml`. Здесь не дублируем.
+2. **Watchtower** — один на хост (тоже из `currency-converter`, запущен с `--label-enable`). Он сам
+   подхватит наш контейнер по метке `com.centurylinklabs.watchtower.enable=true`. Поэтому в нашем
+   `docker-compose.prod.yml` своего `watchtower` **нет** — второй экземпляр конфликтует по
+   `container_name: watchtower` и плодит двойные перезапуски.
+3. **GHCR-пакет должен быть публичным** (`ghcr.io/bx-shef/client-bank-alfa-by`) — тогда ни серверу,
+   ни Watchtower не нужен `docker login`. Если пакет приватный — перед `up -d` сделать
+   `docker login ghcr.io` (PAT с `read:packages`) и настроить креды Watchtower.
+
+Развёртывание:
+
+1. Положить `docker-compose.prod.yml` в `/home/bitrix/client-bank-alfa-by/`, задать `.env` с `DOMAIN`
+   (см. `.env.example`).
+2. `docker compose -f docker-compose.prod.yml up -d` — поднимет только app-контейнер (GHCR-образ);
+   обновления подтянет хостовый Watchtower.
+
+Локальная проверка образа: `docker compose up --build` (раздаёт на `:8081` — порт уведён с `:80`,
+чтобы не конфликтовать с локальным `currency-converter`).
 
 ## Build-args (необязательные)
 
