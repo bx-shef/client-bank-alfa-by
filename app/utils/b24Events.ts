@@ -37,18 +37,27 @@ export const B24_EVENT_UNINSTALL = 'ONAPPUNINSTALL'
 /** Verdict of the event-broker authenticity gate (see appTokenVerdict). */
 export type B24AppTokenVerdict = 'accept' | 'forbidden' | 'unconfigured'
 
+/** Keys that must never be written through bracket paths — they would let an
+ * attacker poison `Object.prototype` via the untrusted webhook body. */
+const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 /**
  * Restore a nested object from B24's PHP bracket-encoded webhook body, e.g.
  * `event=ONAPPINSTALL&auth[member_id]=abc&data[VERSION]=1` →
  * `{ event: 'ONAPPINSTALL', auth: { member_id: 'abc' }, data: { VERSION: '1' } }`.
  * All leaf values are strings (form-encoding carries no types). Pure string→object,
  * so it stays portable; the backend feeds the result to `routeB24Event`.
+ *
+ * The body is untrusted (the webhook URL is public; application_token is verified
+ * only after parsing), so keys touching `__proto__`/`constructor`/`prototype` are
+ * dropped to prevent prototype pollution.
  */
 export function parseBracketForm(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of new URLSearchParams(raw)) {
     // "data[bot][id]" -> ["data", "bot", "id"]
     const path = key.replace(/\]/g, '').split('[')
+    if (path.some(seg => POLLUTING_KEYS.has(seg))) continue
     let node: Record<string, unknown> = out
     for (let i = 0; i < path.length; i++) {
       const seg = path[i] as string
@@ -139,7 +148,11 @@ function parseEventAuth(payload: unknown): B24EventAuth {
   if (!auth || typeof auth !== 'object') {
     throw new Error('B24 event: missing auth block')
   }
-  if (!auth.domain || !auth.member_id || !auth.application_token) {
+  // Require non-empty strings: a bracket-parsed body could put an object on a
+  // field (`auth[domain][x]=1`), which a bare truthiness check would let through.
+  if (typeof auth.domain !== 'string' || !auth.domain
+    || typeof auth.member_id !== 'string' || !auth.member_id
+    || typeof auth.application_token !== 'string' || !auth.application_token) {
     throw new Error('B24 event: auth is missing domain/member_id/application_token')
   }
   return auth
@@ -171,7 +184,9 @@ export function parseUninstallEvent(payload: unknown): B24UninstallEvent {
 }
 
 /** Whether the install is fully finished (`INSTALLED === 'Y'`). Events fire only
- * after `installFinish`, so this is `Y` in practice — kept for an explicit gate. */
+ * after `installFinish`, so this is `Y` in practice. Not wired into
+ * `routeB24Event` — it's an optional gate the backend may apply (e.g. skip a
+ * half-installed portal) before acting on the credentials. */
 export function isInstallComplete(data: B24InstallEventData): boolean {
   return data.INSTALLED === undefined || data.INSTALLED === 'Y'
 }
@@ -205,16 +220,20 @@ export function extractPortalCredentials(event: B24InstallEvent): PortalCredenti
   }
 }
 
-/** Loopback / private / link-local IPv4 ranges that a portal-supplied
- * `client_endpoint` must never resolve to (SSRF guard). */
-const PRIVATE_IPV4 = /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/
+/** Loopback / "this network" / private / link-local IPv4 ranges that a
+ * portal-supplied `client_endpoint` must never resolve to (SSRF guard).
+ * `0.` (0.0.0.0/8) is reserved and on many OSes routes to loopback. */
+const PRIVATE_IPV4 = /^(0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/
 
 /**
  * Whether `client_endpoint` (which arrives inside the event's auth, attacker-
  * influenceable) is safe to POST REST calls to: HTTPS only, and not pointing at
- * a loopback/private/link-local host. The backend calls this before using the
- * endpoint (bx-synapse's callPortal does the same). DNS-rebinding still needs a
- * runtime check — this guards the obvious literals.
+ * a loopback/private/link-local host. Covers IPv4 (incl. octal/decimal forms,
+ * normalized by WHATWG `URL`) and IPv6 — loopback `::1`/unspecified `::`, ULA
+ * `fc00::/7`, link-local `fe80::/10`, and IPv4-mapped `::ffff:a.b.c.d` (the
+ * embedded IPv4 is re-checked). The backend calls this before using the endpoint
+ * (bx-synapse's callPortal does the same). DNS-rebinding still needs a runtime
+ * check — this guards the literal forms.
  */
 export function isSafeClientEndpoint(endpoint: string | undefined): boolean {
   if (!endpoint || !/^https:\/\//i.test(endpoint)) return false
@@ -224,8 +243,18 @@ export function isSafeClientEndpoint(endpoint: string | undefined): boolean {
   } catch {
     return false
   }
-  if (host === 'localhost' || host === '::1' || host === '[::1]') return false
-  return !PRIVATE_IPV4.test(host)
+  // WHATWG URL keeps IPv6 hosts bracketed (`[::1]`) — strip for matching.
+  const h = (host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host).toLowerCase()
+  if (h === 'localhost') return false
+
+  if (h.includes(':')) {
+    if (h === '::1' || h === '::') return false
+    if (h.startsWith('::ffff:')) return false // IPv4-mapped IPv6 (URL folds the IPv4 into hex)
+    if (/^f[cd][0-9a-f]{2}:/.test(h)) return false // fc00::/7 (unique local)
+    if (/^fe[89ab][0-9a-f]:/.test(h)) return false // fe80::/10 (link-local)
+    return true
+  }
+  return !PRIVATE_IPV4.test(h)
 }
 
 /**

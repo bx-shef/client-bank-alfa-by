@@ -9,6 +9,7 @@ import {
   isSafeClientEndpoint,
   parseBracketForm,
   parseInstallEvent,
+  parseUninstallEvent,
   routeB24Event,
   safeEqual,
   shouldPurgeData,
@@ -68,6 +69,19 @@ describe('parseBracketForm', () => {
     expect(event.auth.application_token).toBe('tok')
     expect(event.data.VERSION).toBe('2')
   })
+
+  it('returns an empty object for an empty body', () => {
+    expect(parseBracketForm('')).toEqual({})
+  })
+
+  it('does not pollute Object.prototype via __proto__/constructor/prototype keys', () => {
+    parseBracketForm('__proto__[polluted]=yes')
+    parseBracketForm('auth[__proto__][polluted]=yes')
+    parseBracketForm('constructor[prototype][polluted]=yes')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(({} as any).polluted).toBeUndefined()
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
 })
 
 describe('eventCode', () => {
@@ -86,6 +100,7 @@ describe('safeEqual / verifyApplicationToken', () => {
     expect(safeEqual('abc', 'abc')).toBe(true)
     expect(safeEqual('abc', 'abd')).toBe(false)
     expect(safeEqual('abc', 'ab')).toBe(false)
+    expect(safeEqual('', '')).toBe(true)
   })
   it('verifyApplicationToken needs both sides non-empty', () => {
     expect(verifyApplicationToken(APP_TOKEN, APP_TOKEN)).toBe(true)
@@ -115,6 +130,9 @@ describe('appTokenVerdict', () => {
     expect(appTokenVerdict({ isInstall: false, incoming: 'env', envToken: 'env', storedToken: 'db' })).toBe('accept')
     expect(appTokenVerdict({ isInstall: false, incoming: 'db', envToken: 'env', storedToken: 'db' })).toBe('forbidden')
   })
+  it('ignores storedToken on install (bootstrap accepts any non-empty token)', () => {
+    expect(appTokenVerdict({ isInstall: true, incoming: 'whatever', storedToken: 'db' })).toBe('accept')
+  })
 })
 
 describe('parseInstallEvent', () => {
@@ -133,6 +151,32 @@ describe('parseInstallEvent', () => {
   it('throws when data.VERSION is missing', () => {
     expect(() => parseInstallEvent({ ...installPayload, data: { LANGUAGE_ID: 'ru' } }))
       .toThrow(/missing data.VERSION/)
+  })
+})
+
+describe('parseUninstallEvent', () => {
+  it('parses a valid ONAPPUNINSTALL payload', () => {
+    const event = parseUninstallEvent(uninstallPayload)
+    expect(event.auth.member_id).toBe('a223c6b3710f85df22e9377d6c4f7553')
+    expect(event.data.CLEAN).toBe(1)
+  })
+  it('throws on the wrong event code', () => {
+    expect(() => parseUninstallEvent(installPayload)).toThrow(/expected ONAPPUNINSTALL/)
+  })
+  it('throws when auth fields are missing', () => {
+    expect(() => parseUninstallEvent({ event: 'ONAPPUNINSTALL', auth: { domain: 'd' } }))
+      .toThrow(/member_id\/application_token/)
+  })
+  it('rejects an object injected on a string auth field', () => {
+    const injected = parseBracketForm('event=ONAPPUNINSTALL&auth[domain][x]=1&auth[member_id]=m&auth[application_token]=t')
+    expect(() => parseUninstallEvent(injected)).toThrow(/auth is missing/)
+  })
+  it('defaults data to {} when absent', () => {
+    const event = parseUninstallEvent({
+      event: 'ONAPPUNINSTALL',
+      auth: { domain: 'd', member_id: 'm', application_token: 't' }
+    })
+    expect(event.data).toEqual({})
   })
 })
 
@@ -187,16 +231,33 @@ describe('isSafeClientEndpoint', () => {
     expect(isSafeClientEndpoint('http://some-domain.bitrix24.ru/rest/')).toBe(false)
     expect(isSafeClientEndpoint('https://localhost/rest/')).toBe(false)
     expect(isSafeClientEndpoint('https://127.0.0.1/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://0.0.0.0/rest/')).toBe(false)
     expect(isSafeClientEndpoint('https://10.0.0.5/rest/')).toBe(false)
     expect(isSafeClientEndpoint('https://192.168.1.1/rest/')).toBe(false)
     expect(isSafeClientEndpoint('https://169.254.1.1/rest/')).toBe(false)
     expect(isSafeClientEndpoint('https://172.16.0.1/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://172.31.255.255/rest/')).toBe(false)
     expect(isSafeClientEndpoint(undefined)).toBe(false)
     expect(isSafeClientEndpoint('not a url')).toBe(false)
   })
+  it('rejects IPv6 loopback, ULA, link-local and IPv4-mapped private', () => {
+    expect(isSafeClientEndpoint('https://[::1]/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://[::]/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://[fc00::1]/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://[fd12:3456::1]/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://[fe80::1]/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://[::ffff:127.0.0.1]/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://[::ffff:10.0.0.1]/rest/')).toBe(false)
+  })
+  it('blocks IPv4 written in octal/decimal forms (normalized by URL)', () => {
+    expect(isSafeClientEndpoint('https://0177.0.0.1/rest/')).toBe(false)
+    expect(isSafeClientEndpoint('https://2130706433/rest/')).toBe(false)
+  })
   it('allows public IPs outside the private ranges', () => {
     expect(isSafeClientEndpoint('https://172.15.0.1/rest/')).toBe(true)
+    expect(isSafeClientEndpoint('https://172.32.0.1/rest/')).toBe(true)
     expect(isSafeClientEndpoint('https://8.8.8.8/rest/')).toBe(true)
+    expect(isSafeClientEndpoint('https://[2606:4700::1111]/rest/')).toBe(true)
   })
 })
 
@@ -243,6 +304,12 @@ describe('routeB24Event', () => {
   it('returns unsupported for events we do not subscribe to', () => {
     expect(routeB24Event({ event: 'ONCRMDEALADD', auth: { application_token: 'x' } }))
       .toEqual({ kind: 'unsupported', code: 'ONCRMDEALADD' })
+  })
+
+  it('returns unsupported (empty code) for a null/garbage payload', () => {
+    expect(routeB24Event(null)).toEqual({ kind: 'unsupported', code: '' })
+    expect(routeB24Event(undefined)).toEqual({ kind: 'unsupported', code: '' })
+    expect(routeB24Event('garbage')).toEqual({ kind: 'unsupported', code: '' })
   })
 
   it('exposes the canonical event-code constants', () => {
