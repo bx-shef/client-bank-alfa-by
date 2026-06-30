@@ -134,6 +134,40 @@ docker network connect proxy-net <имя-контейнера-прокси>
 docker inspect <имя-прокси> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
 ```
 
+## Если репозиторий приватный
+
+При приватном репо анонимный `curl` к `raw.githubusercontent.com` и `docker pull` без логина не
+сработают — нужен GitHub PAT (`read:packages` для образа; для файлов — также `repo`/`contents:read`).
+
+**1. Файлы `compose`/`Makefile`** — `git clone` с токеном или копия вручную:
+```bash
+git clone https://<PAT>@github.com/bx-shef/client-bank-alfa-by.git /home/bitrix/bank-import
+# или со своей машины: scp docker-compose.prod.yml Makefile bitrix@<SERVER>:/home/bitrix/bank-import/
+```
+
+**2. Логин в GHCR на сервере** (чтобы тянуть образ):
+```bash
+echo <PAT> | docker login ghcr.io -u <github-user> --password-stdin
+make prod-up
+```
+Креды сохранятся в `/home/bitrix/.docker/config.json` (если на хосте нет credential-helper'а).
+
+**3. Watchtower** должен уметь тянуть приватный образ — примонтируй ему этот docker-config
+(перезапусти контейнер с доп. volume):
+```bash
+docker rm -f watchtower
+docker run -d --name watchtower --restart unless-stopped \
+  -e DOCKER_API_VERSION=1.47 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /home/bitrix/.docker/config.json:/config.json:ro \
+  containrrr/watchtower:1.7.1 --interval 300 --cleanup --label-enable
+```
+
+> **Проще — сделать GHCR-пакет публичным**, оставив сам репозиторий приватным: видимость пакета
+> настраивается отдельно (`github.com/orgs/bx-shef/packages` → пакет → Package settings → Change
+> visibility → Public). Тогда ни логин, ни монтирование кредов не нужны — приватным остаётся только
+> исходный код, а тянуть образ можно анонимно.
+
 ## Build-args (необязательные)
 
 | Arg / env | Назначение |
