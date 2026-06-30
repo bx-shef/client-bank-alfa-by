@@ -59,8 +59,12 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
 1. Положить `docker-compose.prod.yml` в `/home/bitrix/bank-import/`, задать `.env` с `DOMAIN` и
    (опц.) `LETSENCRYPT_EMAIL` (см. `.env.example`). DNS A-запись `DOMAIN` должна указывать на сервер
    **до** подъёма, иначе acme-companion не выпустит TLS.
-2. `docker compose -f docker-compose.prod.yml up -d` — поднимет только app-контейнер (GHCR-образ);
-   обновления подтянет хостовый Watchtower.
+2. `docker compose -f docker-compose.prod.yml up -d` (или `make prod-up`) — поднимет только
+   app-контейнер (GHCR-образ); обновления подтянет хостовый Watchtower.
+
+Обёртки в `Makefile`: `make prod-up` / `make prod-pull` / `make prod-redeploy` (обновить сейчас,
+без ожидания Watchtower) / `make logs` / `make ps`. Локальная проверка образа — `make build-local`
+(раздаёт на `:8081`).
 
 Локальная проверка образа: `docker compose up --build` (раздаёт на `:8081` — порт уведён с `:80`,
 чтобы не конфликтовать с локальным `currency-converter`).
