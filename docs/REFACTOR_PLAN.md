@@ -1,6 +1,6 @@
 # План рефакторинга «Клиент-банк Альфа-Банк Беларусь»
 
-> Last reviewed: 2026-06-29
+> Last reviewed: 2026-06-30
 
 Перенос и переписывание legacy-приложения (серверный PHP-апп Bitrix24) на новый стек.
 Документ — живой план; обновляется по мере прохождения этапов.
@@ -67,8 +67,8 @@
 ## API Альфы (подтверждено по свагеру + доке «Авторизация»)
 
 - **OAuth 2.0:** flow **Authorization Code** (предпочт.) + refresh; `/authorize` и `/token` на
-  `…:8273`. `①` `/authorize?response_type=code&scope=accounts&redirect_uri=…&state=…` →
-  `②` `POST /token grant_type=authorization_code&code&redirect_uri&client_id&client_secret` →
+  `…:8273`. `(1)` `/authorize?response_type=code&scope=accounts&redirect_uri=…&state=…` →
+  `(2)` `POST /token grant_type=authorization_code&code&redirect_uri&client_id&client_secret` →
   `{access_token, refresh_token, expires_in=3600}`; refresh `grant_type=refresh_token` (refresh ~10 ч).
   redirect_uri обязан **точно совпадать** с зарегистрированным. Код короткоживущий — менять сразу.
 - **Выписка:** `GET /partner/1.2.0/accounts/statement` с `Authorization: Bearer`. Параметры:
@@ -84,6 +84,23 @@ Sandbox/prod Альфы **недоступны из облачной среды 
 на `:8273`, но банк **сбрасывает TLS-рукопожатие** (гео/IP-ограничение). Поэтому **живые** вызовы
 OAuth и выписки тестируются **только с BY-доступного сервера** (`bank-import.bx-shef.by`). Здесь
 проверяется лишь чистое ядро (юнит-тесты на моках) — что и сделано.
+
+## Этап транспорта Альфы — обязательное (свод ревью)
+
+Чистое ядро готово; при реализации HTTP-транспорта/хранилища на BY-сервере учесть
+(вынесено в отдельный issue):
+
+- **Секреты:** `client_secret` только из env (не в логи/URL/ошибки/трейсы); `code`
+  одноразовый — обменивать сразу, не кэшировать/не логировать.
+- **Токены:** `refresh_token` — зашифрованно (не plaintext на ФС, как в legacy);
+  хранить `{access, refresh, expiresIn, issuedAtMs=Date.now()}` по `portalId`/«моей компании»;
+  `access` обновлять по `isAccessTokenExpired`. Проверить, требует ли Альфа `redirect_uri` в refresh.
+- **State:** генерировать `crypto.randomBytes`, хранить в httpOnly-сессии, сверять timing-safe, одноразово.
+- **Ответ выписки:** проверять `errors[]` (не трактовать errored пустой `page` как «нет операций»);
+  при необходимости моделировать `statistics[]`.
+- **Мультисчёт:** `number[]` до 50 за запрос → `groupBy(account)` при раздельной обработке.
+- **Rate-limit 100/мин:** throttle/backoff в cron-опросе (этап 5).
+- **Лог:** санитизировать `error_description` от Альфы (CRLF/длина) перед записью.
 
 ## Дедуп универсального дела
 

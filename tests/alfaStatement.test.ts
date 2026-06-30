@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alfaDateToIso, normalizeAlfaRow, normalizeAlfaStatement } from '~/utils/alfaStatement'
+import { alfaDateToIso, alfaStatementErrors, normalizeAlfaRow, normalizeAlfaStatement } from '~/utils/alfaStatement'
 import type { AlfaStatementRow } from '~/utils/alfaStatement'
 
 function row(over: Partial<AlfaStatementRow> = {}): AlfaStatementRow {
@@ -65,6 +65,31 @@ describe('normalizeAlfaRow', () => {
     expect(item.docNum).toBeUndefined()
     expect(item.counterparty.bank).toBeUndefined()
     expect(item.operDate).toBeUndefined()
+  })
+
+  it('parses a numeric string amount and falls back to 0 on garbage (no NaN)', () => {
+    expect(normalizeAlfaRow(row({ amount: '1234.56' as unknown as number })).amount).toBe(1234.56)
+    expect(normalizeAlfaRow(row({ amount: 'not_a_number' as unknown as number })).amount).toBe(0)
+  })
+
+  it('trims whitespace in string fields', () => {
+    const item = normalizeAlfaRow(row({ number: '  BY80ACC  ', purpose: ' pay ', corrName: ' ООО ', corrUnp: ' 19 ' }))
+    expect(item.account).toBe('BY80ACC')
+    expect(item.purpose).toBe('pay')
+    expect(item.counterparty.name).toBe('ООО')
+    expect(item.counterparty.unp).toBe('19')
+  })
+
+  it('maps an unknown operType to debit (end-to-end through normalizeAlfaRow)', () => {
+    expect(normalizeAlfaRow(row({ operType: 'X' })).direction).toBe('debit')
+  })
+})
+
+describe('alfaStatementErrors', () => {
+  it('returns the errors array, or empty when absent', () => {
+    expect(alfaStatementErrors({ errors: [{ number: 'BY1', message: 'нет счёта' }] }))
+      .toEqual([{ number: 'BY1', message: 'нет счёта' }])
+    expect(alfaStatementErrors({ page: [] })).toEqual([])
   })
 })
 

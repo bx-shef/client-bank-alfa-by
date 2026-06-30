@@ -24,11 +24,28 @@ describe('buildAuthorizeUrl', () => {
     expect(url.searchParams.get('redirect_uri')).toBe(config.redirectUri)
     expect(url.searchParams.get('state')).toBe('st8')
   })
+  it('uses a custom scope when provided', () => {
+    const url = new URL(buildAuthorizeUrl({ ...config, scope: 'accounts profile' }, 's'))
+    expect(url.searchParams.get('scope')).toBe('accounts profile')
+  })
+  it('throws on empty baseUrl (would yield a relative URL)', () => {
+    expect(() => buildAuthorizeUrl({ ...config, baseUrl: '' }, 's')).toThrow(/baseUrl is required/)
+  })
 })
 
 describe('parseOAuthCallback', () => {
   it('returns the code when state matches', () => {
     expect(parseOAuthCallback({ code: 'abc', state: 's1' }, 's1')).toEqual({ code: 'abc' })
+  })
+  it('handles array-valued query params (Nuxt useRoute().query)', () => {
+    expect(parseOAuthCallback({ code: ['abc'], state: ['s1'] }, 's1')).toEqual({ code: 'abc' })
+  })
+  it('throws when state is absent', () => {
+    expect(() => parseOAuthCallback({ code: 'abc' }, 's1')).toThrow(/state mismatch/i)
+  })
+  it('includes error_description in the thrown message', () => {
+    expect(() => parseOAuthCallback({ error: 'access_denied', error_description: 'user said no', state: 's1' }, 's1'))
+      .toThrow(/access_denied — user said no/)
   })
   it('throws on state mismatch (CSRF guard)', () => {
     expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/state mismatch/i)
@@ -55,6 +72,8 @@ describe('token request bodies', () => {
     expect(body.get('grant_type')).toBe('refresh_token')
     expect(body.get('refresh_token')).toBe('RT')
     expect(body.get('client_secret')).toBe('SECRET')
+    // refresh body must NOT carry redirect_uri (per RFC 6749 §6)
+    expect(body.has('redirect_uri')).toBe(false)
   })
 })
 
@@ -71,7 +90,10 @@ describe('parseTokenResponse', () => {
     expect(() => parseTokenResponse({ error: 'invalid_grant', error_description: 'bad code' }))
       .toThrow(/invalid_grant — bad code/)
   })
-  it('throws when tokens are missing', () => {
+  it('throws when access_token is missing (refresh present)', () => {
+    expect(() => parseTokenResponse({ refresh_token: 'r' })).toThrow(/missing access_token\/refresh_token/)
+  })
+  it('throws when refresh_token is missing (access present)', () => {
     expect(() => parseTokenResponse({ access_token: 'a' })).toThrow(/missing access_token\/refresh_token/)
   })
 })
@@ -84,5 +106,15 @@ describe('isAccessTokenExpired', () => {
   it('is true within the skew window before expiry', () => {
     // expires at issued + 3_600_000; skew 60_000 → expired from issued + 3_540_000
     expect(isAccessTokenExpired(issued, 3600, issued + 3_540_000)).toBe(true)
+  })
+  it('is true exactly at the skew boundary (>=)', () => {
+    expect(isAccessTokenExpired(issued, 3600, issued + 3_600_000 - 60_000)).toBe(true)
+  })
+  it('is false one ms before the skew boundary', () => {
+    expect(isAccessTokenExpired(issued, 3600, issued + 3_600_000 - 60_000 - 1)).toBe(false)
+  })
+  it('with skew=0 is true exactly at expiry and after', () => {
+    expect(isAccessTokenExpired(issued, 3600, issued + 3_600_000, 0)).toBe(true)
+    expect(isAccessTokenExpired(issued, 3600, issued + 3_600_001, 0)).toBe(true)
   })
 })
