@@ -73,6 +73,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/utils/clientBankText.ts` — парсер текстовой выписки client-bank (CP1251, `***** ^Type=`)
     для провайдеров `prior-by`/`manual`. ⚠️ Портированный пример, рефакторинг — issue #19.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
+  - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
+    `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт
+    подлинности `application_token` (`appTokenVerdict`, fail-closed, constant-time),
+    маршрутизация `routeB24Event`, SSRF-гуард `isSafeClientEndpoint`, маппинг кредов
+    портала `extractPortalCredentials`. Учёт авторизации/события/брокер — карточка
+    [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md) (модель по backend `bx-synapse`).
 
   Ссылки на доку Альфы — [`docs/ALFA_API.md`](docs/ALFA_API.md); по Приорбанку/текстовой выписке —
   [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
@@ -102,6 +108,10 @@ UI — в компонентах. Это та же раскладка, что в
 - **Вызовы B24 для данных/настроек — server-side REST по OAuth-токену (backend), не через фрейм** (см.
   «Хранение настроек» в [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)). Фрейм-SDK тут — только установка
   и UI-хром (`setTitle`/`fitWindow`).
+- **Серверные события — отдельный механизм** (не фрейм-`/install`): исходящие вебхуки Б24
+  `ONAPPINSTALL`/`ONAPPUNINSTALL` на backend дают `application_token` (подпись событий) и OAuth-креды
+  портала. Доменное ядро (разбор, вердикт токена, маршрутизация) — `app/utils/b24Events.ts`; контракт и
+  модель учёта авторизации — [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md).
 - Тесты: чистый `tests/b24.test.ts` (скоупы); `tests/nuxt/install.nuxt.test.ts` (standalone-редирект)
   через типизированный мок `tests/nuxt/helpers/mockB24.ts` (`makeMockB24`, `ReturnType<typeof useB24>`
   ловит дрейф). Реальный install-flow в портале автотестами не покрыть — проверяется вручную.
