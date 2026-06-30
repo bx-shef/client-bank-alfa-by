@@ -35,3 +35,23 @@ COPY --from=builder /app/.output/public /usr/share/nginx/html
 COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]
+
+# --- Backend (separate service): Node server with the B24 webhook endpoint
+# (/api/b24/events) + portal token store. Built from the SAME codebase via
+# `nuxt build` (node-server preset), so it reuses the domain core. The static
+# landing above is unaffected. See docs/B24_EVENTS.md / docs/DEPLOY.md.
+FROM deps AS builder-server
+WORKDIR /app
+COPY . .
+ARG NUXT_PUBLIC_SITE_URL
+ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
+RUN pnpm build
+
+FROM node:22-alpine AS backend
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+# Nitro's node-server output is self-contained (deps bundled) — copy only .output.
+COPY --from=builder-server /app/.output ./.output
+EXPOSE 3000
+CMD ["node", ".output/server/index.mjs"]

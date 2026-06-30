@@ -3,14 +3,16 @@
 > Last reviewed: 2026-06-30
 
 Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.
-Статическое приложение (SSG), без серверной части. Публичная страница — лендинг.
+Публичная страница — лендинг (SSG). Появилась серверная часть (Nitro): эндпоинт
+вебхуков Bitrix24 (`/api/b24/events`) + хранилище токенов портала.
 
 > **Статус:** рефакторинг legacy-приложения (план — [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)).
-> Этот репозиторий — **frontend**: публичный лендинг (SSG) + B24-iframe-UI. Серверная часть
-> (OAuth Альфы, опрос, запись дел/чата, MCP) — отдельный backend-сервис (см. план). Сейчас
-> заложено доменное ядро (типы выписки, абстракция банк-провайдеров, чистые утилиты, билдер
-> универсального дела) и демо-страница просмотра выписки на mock-данных; реальная интеграция
-> Альфы подключается backend'ом. Эталон стека — соседний `currency-converter`.
+> Репозиторий: **frontend** (публичный лендинг SSG + B24-iframe-UI) **и backend** (Nitro-сервис:
+> приём событий установки/удаления Б24, учёт авторизации портала; дальше — OAuth Альфы, опрос,
+> запись дел/чата, MCP). Заложено доменное ядро (типы выписки, абстракция банк-провайдеров, чистые
+> утилиты, билдер дела, разбор/маршрутизация событий Б24) и демо-страница на mock-данных; backend
+> событий Б24 реализован (этап 3, слайс), реальная интеграция Альфы — далее. Деплой: статика лендинга
+> за nginx + отдельный backend-сервис с Postgres (как `bx-synapse`). Эталон стека — `currency-converter`.
 
 ## Стек
 
@@ -79,6 +81,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     маршрутизация `routeB24Event`, SSRF-гуард `isSafeClientEndpoint`, маппинг кредов
     портала `extractPortalCredentials`. Учёт авторизации/события/брокер — карточка
     [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md) (модель по backend `bx-synapse`).
+- **Backend (Nitro, `server/`):** серверная часть в том же приложении (как `bx-synapse`).
+  - `server/api/b24/events.post.ts` — эндпоинт вебхуков Б24: `readRawBody` → `parseBracketForm`
+    → `processB24Event`; на установке пишет токены, на удалении (`CLEAN=1`) стирает портал.
+  - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` (DI side-effects):
+    вердикт `application_token` → HTTP 200/400/403/503 (fail-closed). Покрыт тестами.
+  - `server/utils/tokenStore.ts` — хранилище токенов портала над инъектируемым `QueryFn`
+    (`save`/`get`/`getApplicationToken`/`delete`, write-once `application_token`). Тесты на fake-query.
+  - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
+  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
+    `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом;
+    статический лендинг не затрагивает. Деплой/контракт — [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md),
+    [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
   Ссылки на доку Альфы — [`docs/ALFA_API.md`](docs/ALFA_API.md); по Приорбанку/текстовой выписке —
   [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
@@ -109,8 +124,9 @@ UI — в компонентах. Это та же раскладка, что в
   «Хранение настроек» в [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)). Фрейм-SDK тут — только установка
   и UI-хром (`setTitle`/`fitWindow`).
 - **Серверные события — отдельный механизм** (не фрейм-`/install`): исходящие вебхуки Б24
-  `ONAPPINSTALL`/`ONAPPUNINSTALL` на backend дают `application_token` (подпись событий) и OAuth-креды
-  портала. Доменное ядро (разбор, вердикт токена, маршрутизация) — `app/utils/b24Events.ts`; контракт и
+  `ONAPPINSTALL`/`ONAPPUNINSTALL` на backend (`server/api/b24/events.post.ts`) дают `application_token`
+  (подпись событий) и OAuth-креды портала; токены пишутся в Postgres (`server/utils/tokenStore.ts`).
+  Доменное ядро (разбор, вердикт токена, маршрутизация) — `app/utils/b24Events.ts`; контракт и
   модель учёта авторизации — [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md).
 - Тесты: чистый `tests/b24.test.ts` (скоупы); `tests/nuxt/install.nuxt.test.ts` (standalone-редирект)
   через типизированный мок `tests/nuxt/helpers/mockB24.ts` (`makeMockB24`, `ReturnType<typeof useB24>`
@@ -149,11 +165,13 @@ UI — в компонентах. Это та же раскладка, что в
   `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
   `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
   домены Б24 (iframe-встройка `/app`,`/settings`) и backend (`bank-import.bx-shef.by`).
-- `docker-compose.yml` — локальная сборка; `docker-compose.prod.yml` — прод (GHCR-образ + Watchtower
-  за nginx-proxy). Общий reverse-proxy (`nginx-proxy` + `acme-companion`, сеть `proxy-net`) ставится
-  на сервере один раз — см. `currency-converter/docker-compose.nginxproxy.yml`, не дублируем здесь.
-- **Backend** (OAuth Альфы, опрос, запись дел/чата) — отдельный сервис за тем же nginx-proxy; пока
-  не реализован (этапы 3–6 плана).
+- `docker-compose.yml` — локальная сборка: `app` (статика лендинга, nginx), `backend` (node-сервер,
+  эндпоинт вебхуков Б24) и `db` (Postgres). `docker-compose.prod.yml` — прод лендинга (GHCR-образ +
+  Watchtower за nginx-proxy). Общий reverse-proxy (`nginx-proxy` + `acme-companion`, сеть `proxy-net`)
+  ставится на сервере один раз — см. `currency-converter/docker-compose.nginxproxy.yml`, не дублируем здесь.
+- **Backend** — `Dockerfile` target `backend` (`nuxt build`, node-сервер). Приём событий Б24 и хранилище
+  токенов **реализованы** (этап 3, слайс; #35); OAuth Альфы/опрос/дела/чат — далее (этапы 4–6). Env и
+  запуск — `.env.example`, [`docs/DEPLOY.md`](docs/DEPLOY.md), [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md).
 
 ## Отчётность (reporting-kit)
 
