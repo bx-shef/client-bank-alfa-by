@@ -11,29 +11,49 @@ import { deleteToken, getApplicationToken, saveToken } from '../../utils/tokenSt
 import type { PortalToken } from '../../utils/tokenStore'
 
 /** Map the event's portal credentials to a stored token row. `expiresAt` is
- * stamped from receipt time (now) + the token TTL — not from parse time. */
+ * stamped from receipt time (now) + the token TTL — not from parse time.
+ * `expiresIn` is coerced to a number (it arrives as a string from the
+ * form-encoded body); a missing value defaults to 3600s, but an explicit `0`
+ * is honoured (treated as "already expired", not "use default"). */
 function toPortalToken(c: PortalCredentials): PortalToken {
+  const ttl = c.expiresIn === undefined ? 3600 : Number(c.expiresIn)
   return {
     memberId: c.memberId,
     domain: c.domain,
     accessToken: c.accessToken ?? '',
     refreshToken: c.refreshToken ?? '',
-    expiresAt: Date.now() + (c.expiresIn ?? 3600) * 1000,
+    expiresAt: Date.now() + (Number.isFinite(ttl) ? ttl : 3600) * 1000,
     applicationToken: c.applicationToken
   }
 }
 
 export default defineEventHandler(async (event) => {
-  const raw = (await readRawBody(event)) || ''
-  const payload = parseBracketForm(raw)
+  const envToken = process.env.B24_APPLICATION_TOKEN?.trim() || ''
+  try {
+    const raw = (await readRawBody(event)) || ''
+    const payload = parseBracketForm(raw)
 
-  const result = await processB24Event(payload, {
-    envToken: process.env.B24_APPLICATION_TOKEN?.trim() || '',
-    loadStoredToken: memberId => getApplicationToken(dbQuery, memberId),
-    saveCredentials: async creds => saveToken(dbQuery, toPortalToken(creds)),
-    deletePortal: memberId => deleteToken(dbQuery, memberId)
-  })
+    const result = await processB24Event(payload, {
+      envToken,
+      loadStoredToken: memberId => getApplicationToken(dbQuery, memberId),
+      saveCredentials: async creds => saveToken(dbQuery, toPortalToken(creds)),
+      deletePortal: memberId => deleteToken(dbQuery, memberId)
+    })
 
-  setResponseStatus(event, result.status)
-  return result.body
+    // Surface TOFU: an install accepted without a configured env token means any
+    // caller could have bootstrapped trust. Loud in logs so prod misconfig is caught.
+    if (!envToken && result.status === 200 && result.body.event === 'ONAPPINSTALL') {
+      console.warn('[b24 events] ONAPPINSTALL accepted in bootstrap mode — set B24_APPLICATION_TOKEN in prod')
+    }
+
+    setResponseStatus(event, result.status)
+    return result.body
+  } catch (err) {
+    // DB down / decrypt failure / unexpected: log server-side (no secrets — the
+    // message may carry a memberId but never a token) and return a neutral body.
+    // Nitro would otherwise put err.message in the response even in production.
+    console.error('[b24 events] handler error:', (err as Error)?.message)
+    setResponseStatus(event, 500)
+    return { error: 'internal error' }
+  }
 })

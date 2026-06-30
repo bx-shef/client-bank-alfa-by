@@ -26,7 +26,12 @@ let pool: Pool | undefined
 /** The shared pg pool. Throws if `DATABASE_URL` is unset — the backend needs a DB. */
 export function getPool(): Pool {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set')
-  if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 })
+  if (!pool) {
+    pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 })
+    // Without an `error` listener, an error on an idle client (e.g. the DB drops
+    // the connection) crashes the whole Node process. Log and keep serving.
+    pool.on('error', err => console.error('[pg] idle client error:', err.message))
+  }
   return pool
 }
 

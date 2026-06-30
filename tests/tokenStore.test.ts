@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { SCHEMA_SQL } from '../server/db/client'
 import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
 import {
   deleteToken,
@@ -93,4 +94,18 @@ describe('deleteToken', () => {
 // Sanity: the env key really decodes to 32 bytes for these tests.
 it('test env key is 32 bytes', () => {
   expect(Buffer.from(process.env.B24_TOKEN_ENC_KEY!, 'hex').length).toBe(32)
+})
+
+// Guard the one drift the fake-query tests can't catch: the SCHEMA_SQL columns
+// must cover every column the store's queries read/write. A live DB would error
+// on a mismatch; this catches it offline.
+describe('SCHEMA_SQL ↔ queries', () => {
+  it('defines every column the store uses', () => {
+    for (const col of ['member_id', 'domain', 'access_token', 'refresh_token_enc', 'expires_at', 'application_token']) {
+      expect(SCHEMA_SQL).toContain(col)
+    }
+  })
+  it('keys the table by member_id (PRIMARY KEY for the upsert ON CONFLICT)', () => {
+    expect(SCHEMA_SQL).toMatch(/member_id\s+TEXT PRIMARY KEY/)
+  })
 })

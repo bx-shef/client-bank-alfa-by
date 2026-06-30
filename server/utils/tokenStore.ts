@@ -3,7 +3,8 @@
 // encrypted at rest (AES-256-GCM); the application_token is stored in clear (it
 // only authenticates webhooks) and write-once — the first install sets it, later
 // events must not overwrite it. Mirrors the bx-synapse token store; see
-// docs/B24_EVENTS.md. SQL schema: server/db/migrations/001_portal_tokens.sql.
+// docs/B24_EVENTS.md. SQL schema: `SCHEMA_SQL` in server/db/client.ts (applied
+// idempotently on boot by server/plugins/migrate.ts).
 
 import { decryptSecret, encryptSecret } from './secretCrypto'
 

@@ -26,8 +26,9 @@ services:
       target: backend
     environment:
       DATABASE_URL: postgres://app:app@db:5432/app
-      # application_token of the registered B24 app. Required in prod (without it
-      # the first install is trusted on faith — TOFU). See docs/B24_EVENTS.md.
+      # application_token of the registered B24 app. REQUIRED IN PROD — without it
+      # the first install is trusted on faith (TOFU); the backend logs a WARNING
+      # when it bootstraps. Left optional (`:-`) only for local/dev. See docs/B24_EVENTS.md.
       B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:-}
       # 32-byte key (hex/base64) encrypting portal refresh tokens at rest.
       # Required — no default, so secrets are never encrypted with a known key.
@@ -40,6 +41,9 @@ services:
     restart: unless-stopped
 
   # Postgres: per-portal OAuth token store (table portal_tokens, auto-created on boot).
+  # `db` exposes no host port — reachable only on the compose network. The default
+  # app/app credentials are for local dev; the prod compose MUST set a strong
+  # POSTGRES_PASSWORD (require it via `:?`, like B24_TOKEN_ENC_KEY).
   db:
     image: postgres:16-alpine
     environment:

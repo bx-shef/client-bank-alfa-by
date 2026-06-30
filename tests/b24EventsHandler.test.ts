@@ -61,6 +61,24 @@ describe('processB24Event — install', () => {
     const res = await processB24Event(bad, makeDeps())
     expect(res.status).toBe(400)
   })
+
+  it('rejects an install with an empty token (probe) without persisting', async () => {
+    const empty = { ...install, auth: { ...install.auth, application_token: '' } }
+    const deps = makeDeps()
+    const res = await processB24Event(empty, deps)
+    // Empty token → parse fails (auth incomplete) → 400; never persisted.
+    expect(res.status).toBe(400)
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+
+  it('never echoes a token in the 403 body', async () => {
+    const deps = makeDeps({ envToken: 'secret-env-token' })
+    const res = await processB24Event(install, deps)
+    expect(res.status).toBe(403)
+    const body = JSON.stringify(res.body)
+    expect(body).not.toContain('secret-env-token')
+    expect(body).not.toContain(APP_TOKEN)
+  })
 })
 
 describe('processB24Event — uninstall', () => {
@@ -80,10 +98,19 @@ describe('processB24Event — uninstall', () => {
     expect(deps.deletePortal).not.toHaveBeenCalled()
   })
 
-  it('returns 503 (fail-closed) when no stored or env token', async () => {
+  it('returns 503 (fail-closed) when no stored or env token, without purging', async () => {
     const deps = makeDeps()
     const res = await processB24Event(uninstall, deps)
     expect(res.status).toBe(503)
+    expect(deps.deletePortal).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 on a malformed uninstall (missing member_id)', async () => {
+    const bad = { event: 'ONAPPUNINSTALL', data: { CLEAN: 1 }, auth: { domain: 'd' } }
+    const deps = makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
+    const res = await processB24Event(bad, deps)
+    expect(res.status).toBe(400)
     expect(deps.deletePortal).not.toHaveBeenCalled()
   })
 

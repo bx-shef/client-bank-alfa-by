@@ -29,17 +29,11 @@ RUN pnpm generate
 # so the served CSP needs no `script-src 'unsafe-inline'`. Writes in place.
 RUN node scripts/csp-hashes.mjs .output/public nginx.conf nginx.conf
 
-# nginx-unprivileged runs as the non-root `nginx` user and listens on :8080.
-FROM nginxinc/nginx-unprivileged:1.31-alpine AS runner
-COPY --from=builder /app/.output/public /usr/share/nginx/html
-COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 8080
-CMD ["nginx", "-g", "daemon off;"]
-
 # --- Backend (separate service): Node server with the B24 webhook endpoint
 # (/api/b24/events) + portal token store. Built from the SAME codebase via
 # `nuxt build` (node-server preset), so it reuses the domain core. The static
-# landing above is unaffected. See docs/B24_EVENTS.md / docs/DEPLOY.md.
+# landing below is unaffected. Built only with `--target backend` (docker-compose);
+# NOT the default stage — see the `runner` note. See docs/B24_EVENTS.md / docs/DEPLOY.md.
 FROM deps AS builder-server
 WORKDIR /app
 COPY . .
@@ -55,3 +49,13 @@ ENV PORT=3000
 COPY --from=builder-server /app/.output ./.output
 EXPOSE 3000
 CMD ["node", ".output/server/index.mjs"]
+
+# nginx-unprivileged runs as the non-root `nginx` user and listens on :8080.
+# MUST stay the LAST stage: it is the default `docker build` target, so the GHCR
+# deploy (.github/workflows/ci.yml, no explicit --target) publishes the LANDING
+# image, not the backend. CI also pins `target: runner` for clarity.
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS runner
+COPY --from=builder /app/.output/public /usr/share/nginx/html
+COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 8080
+CMD ["nginx", "-g", "daemon off;"]
