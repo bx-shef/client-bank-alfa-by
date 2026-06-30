@@ -59,9 +59,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
   - `app/utils/alfaOauth.ts` — OAuth 2.0 Альфы (Authorization Code + refresh): URL/тела запросов, парсинг.
   - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`.
+  - `app/utils/clientBankText.ts` — парсер текстовой выписки client-bank (CP1251, `***** ^Type=`)
+    для провайдеров `prior-by`/`manual`. ⚠️ Портированный пример, рефакторинг — issue #19.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
 
-  Ссылки на доку Альфы и используемые методы/параметры — [`docs/ALFA_API.md`](docs/ALFA_API.md).
+  Ссылки на доку Альфы — [`docs/ALFA_API.md`](docs/ALFA_API.md); по Приорбанку/текстовой выписке —
+  [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
+- **Скрипты разведки (dev, не часть SSG):**
+  - `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) — живой прогон OAuth/выписки Альфы по
+    `.env.sandbox` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
+  - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор текстовой выписки
+    через канонический `clientBankText.ts` (Node ≥ 22, нативный TS-стриппинг).
+  - `scripts/lib/*.mjs` — переиспользуемые чистые помощники скриптов (`demo-utils`, `env`), покрыты тестами.
 - `tests/*.test.ts` — Vitest (node) на чистые утилиты.
 - `tests/nuxt/**/*.test.ts` — Vitest (проект `nuxt`) на компоненты/страницы (`mountSuspended`).
 
