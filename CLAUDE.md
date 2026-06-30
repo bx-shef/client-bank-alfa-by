@@ -43,6 +43,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
 - `app/pages/index.vue` — публичная страница лендинга (hero + преимущества + подвал).
 - `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных.
+- `app/pages/settings.vue` — in-portal настройки (ключ, выбор чата, правила фильтра чата) + живой
+  предпросмотр; настройки хранятся локально (демо), реальное хранение — backend.
+- `app/composables/useChatRules.ts` — реактивные настройки (localStorage) + `ChatNotifyRules`.
+- `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
   - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
