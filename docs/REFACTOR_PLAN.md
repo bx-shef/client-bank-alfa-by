@@ -1,6 +1,6 @@
 # План рефакторинга «Клиент-банк Альфа-Банк Беларусь»
 
-> Last reviewed: 2026-06-29
+> Last reviewed: 2026-06-30
 
 Перенос и переписывание legacy-приложения (серверный PHP-апп Bitrix24) на новый стек.
 Документ — живой план; обновляется по мере прохождения этапов.
@@ -53,13 +53,70 @@
    универсального дела (`crm.activity.todo.add`), демо-страница просмотра выписки на mock-данных. Тесты.
 2. **B24 dual-mode + SDK.** `@bitrix24/b24jssdk`, layout `clear`, `/install`, страница в портале;
    настройки (ключ Альфы по «моей компании», выбор чата, правила фильтра).
-3. **Backend PoC: OAuth Альфы + выписка** (после получения `client_id/secret/redirect_uri`).
+3. **Backend PoC: OAuth Альфы + выписка.** Чистое ядро (сборка `/authorize`, обмен/обновление
+   токена, парсинг callback, нормализация выписки) — **готово и покрыто тестами**
+   (`app/utils/alfaOauth.ts`, `app/utils/alfaStatement.ts`). Транспорт (HTTP-вызовы) и живой
+   прогон — на BY-сервере (см. «Ограничение сети»).
 4. **Поиск компании по корр-счёту + запись универсального дела** (перенос на todo-API).
 5. **Cron-опрос** (разделение приход/расход; фильтры по р/счёту и теме платежа).
 6. **Сообщения в чат** (выбор чата в настройках; не показывать по правилам).
 7. **Docker + деплой** (GHCR + Watchtower + nginx, как `currency-converter`).
 8. **MCP-сервер** по выписке.
 9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
+
+## API Альфы (подтверждено по свагеру + доке «Авторизация»)
+
+> Ссылки на доку Альфы + карточка используемых методов/параметров — [`ALFA_API.md`](./ALFA_API.md).
+
+- **OAuth 2.0:** flow **Authorization Code** (предпочт.) + refresh; `/authorize` и `/token` на
+  `…:8273`. `(1)` `/authorize?response_type=code&scope=accounts&redirect_uri=…&state=…` →
+  `(2)` `POST /token grant_type=authorization_code&code&redirect_uri&client_id&client_secret` →
+  `{access_token, refresh_token, expires_in=3600}`; refresh `grant_type=refresh_token` (refresh ~10 ч).
+  redirect_uri обязан **точно совпадать** с зарегистрированным. Код короткоживущий — менять сразу.
+- **Выписка:** `GET /partner/1.2.0/accounts/statement` с `Authorization: Bearer`. Параметры:
+  `number[]` (до 50), `dateFrom/dateTo` (**DD.MM.YYYY**), `transactions` (1=приход, 2=расход, 0=все),
+  `pageNo/pageRowCount` (0=все), `amountFrom/To`, `transactionType`, `cacheKey`. Ответ — `page[]`
+  (модель операции: `operType` D/C, `corr*`, `amount/currIso`, `purpose`, `docId/docNum`,
+  `acceptDate/operDate`) + `statistics[]` + `errors[]`.
+- Хосты: sandbox `developerhub.alfabank.by:8273`, prod `ibapi2.alfabank.by:8273`. Лимит 100/мин (пилот).
+
+## Ограничение сети (важно)
+
+Sandbox/prod Альфы **недоступны из облачной среды агента**: прокси устанавливает CONNECT-туннель
+на `:8273`, но банк **сбрасывает TLS-рукопожатие** (гео/IP-ограничение). Поэтому **живые** вызовы
+OAuth и выписки тестируются **только с BY-доступного сервера** (`bank-import.bx-shef.by`). Здесь
+проверяется лишь чистое ядро (юнит-тесты на моках) — что и сделано.
+
+## Хранение настроек и вызовы B24 (решение)
+
+- **Настройки — в `app.option`** (настройки приложения Б24, привязаны к приложению на портале),
+  не в localStorage. Как в legacy: ключ Альфы по «моей компании» (`MC_CL_BNK_API_<myCompanyId>`);
+  настройки чата/фильтра (`chatId`, `directions`, исключения) — JSON-строкой под отдельным ключом.
+  Значения опций — строки (сложное через `JSON.stringify`). `app.option.set` требует
+  **admin/app-контекст** (наш app-токен установки — ок) и **не работает в batch**.
+- **Вызовы B24 — server-side REST по сохранённому OAuth-токену** (тот же токен, что для опроса
+  Альфы), а **не** через родительский фрейм iframe (`BX24.callMethod`): фреймовые методы ненадёжны.
+- **Поток:** iframe-UI → наш backend (API) → B24 REST (`app.option.*`, `crm.*`) + Альфа. Фронт не
+  дергает фрейм-методы для чтения/записи настроек.
+- Текущий `localStorage` в `app/pages/settings.vue` — временная **демо**-заглушка; переносится на
+  `app.option` через backend (issue #16).
+
+## Этап транспорта Альфы — обязательное (свод ревью)
+
+Чистое ядро готово; при реализации HTTP-транспорта/хранилища на BY-сервере учесть
+(вынесено в отдельный issue):
+
+- **Секреты:** `client_secret` только из env (не в логи/URL/ошибки/трейсы); `code`
+  одноразовый — обменивать сразу, не кэшировать/не логировать.
+- **Токены:** `refresh_token` — зашифрованно (не plaintext на ФС, как в legacy);
+  хранить `{access, refresh, expiresIn, issuedAtMs=Date.now()}` по `portalId`/«моей компании»;
+  `access` обновлять по `isAccessTokenExpired`. Проверить, требует ли Альфа `redirect_uri` в refresh.
+- **State:** генерировать `crypto.randomBytes`, хранить в httpOnly-сессии, сверять timing-safe, одноразово.
+- **Ответ выписки:** проверять `errors[]` (не трактовать errored пустой `page` как «нет операций»);
+  при необходимости моделировать `statistics[]`.
+- **Мультисчёт:** `number[]` до 50 за запрос → `groupBy(account)` при раздельной обработке.
+- **Rate-limit 100/мин:** throttle/backoff в cron-опросе (этап 5).
+- **Лог:** санитизировать `error_description` от Альфы (CRLF/длина) перед записью.
 
 ## Дедуп универсального дела
 
@@ -72,6 +129,9 @@ fulltext-поиска по описанию, поэтому предпочтит
 
 ## Ожидается от владельца
 
-- **Доступы Альфы** (приложение уже зарегистрировано на developerhub): `client_id`,
-  `client_secret`, `redirect_uri`, и Swagger «Авторизация» + «Accounts/statement» — ожидаются 2026-06-30.
-- 2026-06-30 — продолжение на **тестовом портале Bitrix24**.
+- **Доступы Альфы (sandbox) получены:** `client_id`, `client_secret`, `redirect_uri`
+  (`https://bank-import.bx-shef.by/oauth-alfabank-by/`) + свагеры. Секреты — только в env
+  сервера, не в репозитории.
+- **Живой прогон OAuth + выписки — на BY-сервере** (из облака недоступно, см. «Ограничение сети»).
+- 2026-06-30 — продолжение на **тестовом портале Bitrix24**. Обезличенный пример выписки — по желанию
+  (свагер уже даёт модель).

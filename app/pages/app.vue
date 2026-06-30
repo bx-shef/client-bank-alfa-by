@@ -36,9 +36,17 @@ const sections = computed(() => [
 <template>
   <main class="mx-auto max-w-(--ui-container) px-4 py-8">
     <header class="mb-6">
-      <h1 class="text-2xl font-semibold">
-        Выписка по счёту
-      </h1>
+      <div class="flex items-baseline justify-between gap-4">
+        <h1 class="text-2xl font-semibold">
+          Выписка по счёту
+        </h1>
+        <NuxtLink
+          to="/settings"
+          class="shrink-0 text-sm underline"
+        >
+          Настройки
+        </NuxtLink>
+      </div>
       <p class="mt-1 font-mono text-sm text-(--b24ui-color-text-secondary)">
         {{ statement.account }}
       </p>
