@@ -1,44 +1,27 @@
+import type { ClientBankParsed, ClientBankSection } from '~/types/clientBankText'
+
 // ⚠️ PORTED EXAMPLE — REQUIRES REFACTOR (tracked in issue #19). DO NOT treat
 // this as the final shape of the `manual` / `prior-by` provider.
 //
 // Parser for the legacy Belarusian client-bank text export (`***** ^Type=`,
-// kin to `1CClientBankExchange`). Ported almost verbatim from the sibling
-// `aidapioneer-tech/client-bank` app (`composables/useParser.ts`) so its
-// behavior stays auditable against the live importer. Known rough edges to be
-// addressed during the rewrite:
+// kin to `1CClientBankExchange`). The SAME text format is produced by Приорбанк
+// exports and by hand-uploaded statements, so it backs BOTH the `prior-by` and
+// `manual` providers (see app/config/banks.ts) — it is a *format* parser, not a
+// bank client. Ported almost verbatim from the sibling `aidapioneer-tech/client-bank`
+// app (`composables/useParser.ts`) so its behavior stays auditable against the
+// live importer. Known rough edges, all deferred to the #19 rewrite:
 //   - section routing via three hand-maintained key dictionaries (header /
 //     item / footer) — brittle, bank-specific, hard to extend;
-//   - the `wtf` catch-all bucket where unrouted keys land — including the `I3`
-//     currency marker AND `DocID`, which is NOT captured per row (last write
-//     wins) even though it is the `account|docId` idempotency key #19 needs;
+//   - the `unrouted` catch-all bucket where unknown keys land — including the
+//     `I3` currency marker AND `DocID`, which is NOT captured per row (last
+//     write wins) even though it is the `account|docId` idempotency key #19 needs;
 //   - no normalization to `StatementItem` yet (mapping lives in issue #19);
+//   - no input-size limit (DoS guard) — the live app caps it in the UI; the
+//     refactor must add one here (#19);
 //   - the caller is responsible for decoding CP1251 → string before calling
 //     (the source files are windows-1251, NOT utf-8).
 // Until then it is covered by characterization tests against the anonymized
 // fixtures in `tests/fixtures/client-bank/`.
-
-/** One operation row: raw `^Key=Value^` pairs as parsed (values are strings). */
-export type ClientBankRow = Record<string, string>
-
-/** A `[IN_PARAM]` / `[OUT_PARAM]` section split into logical sub-sections. */
-export interface ClientBankSection {
-  /** Statement header fields (period, opening balance, …). */
-  header: ClientBankRow
-  /** Operation rows, in file order. A new `DocDate` opens a new row. */
-  items: ClientBankRow[]
-  /** Footer fields (closing balance, bank name, …). */
-  footer: ClientBankRow
-  /** Keys not routed to a known sub-section (incl. the `I3` currency marker). */
-  wtf: ClientBankRow
-}
-
-/** Full parse result of a client-bank text export. */
-export interface ClientBankParsed {
-  /** File-header fields from the `***** ^Type=…^ ^Acc=…^ - Title` line. */
-  GENERAL: { TYPE: string, ACC: string, TITLE: string }
-  IN_PARAM: ClientBankSection
-  OUT_PARAM: ClientBankSection
-}
 
 const FILE_HEADER = '***** ^Type='
 
@@ -64,7 +47,16 @@ const ITEM_KEYS = new Set([
 ])
 
 function emptySection(): ClientBankSection {
-  return { header: {}, items: [], footer: {}, wtf: {} }
+  return { header: {}, items: [], footer: {}, unrouted: {} }
+}
+
+/** Split a `^Key=Value^`-derived line into [key, value] on the FIRST `=` only,
+ * so values that themselves contain `=` (e.g. a payment purpose) are preserved. */
+function splitKeyValue(line: string): [string, string] {
+  const cleaned = line.replaceAll('^', '')
+  const eq = cleaned.indexOf('=')
+  if (eq < 0) return [cleaned.trim(), '']
+  return [cleaned.slice(0, eq).trim(), cleaned.slice(eq + 1).trim()]
 }
 
 /**
@@ -74,8 +66,8 @@ function emptySection(): ClientBankSection {
  * windows-1251; decode with `iconv`/`TextDecoder('windows-1251')` first).
  * Throws on an unrecognized file (missing `***** ^Type=` header).
  *
- * NOTE (refactor, #19): faithful port — routing rules and the `wtf` bucket are
- * intentionally kept as-is so behavior matches the live importer.
+ * NOTE (refactor, #19): faithful port — routing rules and the `unrouted` bucket
+ * are intentionally kept as-is so behavior matches the live importer.
  */
 export function parseClientBankText(content: string): ClientBankParsed {
   if (content.substring(0, FILE_HEADER.length) !== FILE_HEADER) {
@@ -100,11 +92,12 @@ export function parseClientBankText(content: string): ClientBankParsed {
       const parts = line.split('^').filter(Boolean)
       result.GENERAL.TYPE = (parts[1] ?? '').split('=')[1] ?? ''
       result.GENERAL.ACC = (parts[3] ?? '').split('=')[1] ?? ''
+      // The title may itself contain `-`; keep everything after the first one.
       let titleParts = (parts[4] ?? '').split('-')
       if (titleParts.length < 2) {
         titleParts = (parts[6] ?? '').split('-')
       }
-      result.GENERAL.TITLE = (titleParts[1] ?? '').trim()
+      result.GENERAL.TITLE = titleParts.slice(1).join('-').trim()
       continue
     }
 
@@ -121,8 +114,7 @@ export function parseClientBankText(content: string): ClientBankParsed {
     }
 
     if (firstChar === '^' && curSection) {
-      const [rawKey = '', rawValue = ''] = line.replaceAll('^', '').split('=').map(s => s.trim())
-      const key = rawKey
+      const [key, rawValue] = splitKeyValue(line)
       let value = rawValue
       // Alias some keys into a second field, mirroring the live importer.
       let aliasKey: string | null = null
@@ -136,21 +128,16 @@ export function parseClientBankText(content: string): ClientBankParsed {
         curSection.footer[key] = value
         if (aliasKey) curSection.footer[aliasKey] = value
       } else if (ITEM_KEYS.has(key)) {
-        if (key === 'DocDate' || key === 'DateIn' || key === 'DateOut') {
+        if (key === 'DocDate') {
           // Normalize the date separator: `28/09/2023` -> `28.09.2023`.
           value = value.replaceAll('/', '.')
-          if (key === 'DocDate') {
-            itemIndex += 1
-            aliasKey = 'OpDate'
-          }
+          itemIndex += 1
+          // Seed OpDate from DocDate; an explicit `^OpDate=…^` line overrides it.
+          aliasKey = 'OpDate'
         } else if (key === 'DocTime') {
           aliasKey = 'OpTime'
         } else if (key === 'UNNRec') {
           aliasKey = 'KorUNP'
-        } else if (key === 'CrIn') {
-          aliasKey = 'RestIn'
-        } else if (key === 'CrOut') {
-          aliasKey = 'RestOut'
         }
         if (itemIndex < 0) {
           // An item key before the first `DocDate` — skip (matches the source,
@@ -161,7 +148,7 @@ export function parseClientBankText(content: string): ClientBankParsed {
         row[key] = value
         if (aliasKey) row[aliasKey] = value
       } else {
-        curSection.wtf[key] = value
+        curSection.unrouted[key] = value
       }
     }
   }

@@ -1,0 +1,4 @@
+# Client-bank statement fixtures are windows-1251 (CP1251), NOT utf-8.
+# Mark them binary so git never applies EOL/encoding conversion that would
+# corrupt the bytes (the parser tests decode them with TextDecoder('windows-1251')).
+tests/fixtures/client-bank/*.txt binary
