@@ -89,6 +89,11 @@
 вживую на песочнике `developerhub.alfabank.by:8273` тестовыми `client_id/secret`.
 Все значения ниже — маскированы. `base = https://developerhub.alfabank.by:8273`.
 
+> Перепроверить вживую: `pnpm oauth:test` (скрипт `scripts/alfa-oauth-test.mjs`,
+> без зависимостей, Node ≥ 18). Конфиг — из `.env` (см. `.env.example`); токены и номера
+> счетов в консоли маскируются, полный ответ пишется в `alfa-demo-output.json` (gitignore).
+> Флаги: `--from-year/--to-year`, `--account`, `--code`, `--refresh`, `--url-only`, `--full`.
+
 ### 1. Authorize (браузер)
 
 ```http
