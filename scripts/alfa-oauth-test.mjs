@@ -321,6 +321,8 @@ async function getStatements(accessToken, accounts) {
   for (const number of numbers) {
     log(`\n${C.bold}account ${maskNumber(number)}${C.reset}`)
     let total = 0
+    let bodyShown = false // print a non-2xx body only once per account
+    let consec5xx = 0 // bail out of the year loop if a account keeps 5xx-ing
     for (let y = cfg.fromYear; y <= cfg.toYear; y++) {
       let res
       try {
@@ -331,16 +333,29 @@ async function getStatements(accessToken, accounts) {
       }
       out.push({ account: number, year: y, ...res })
       if (res.errors.length) {
+        consec5xx = 0
         warn(`  ${y}: HTTP ${res.status}, ${res.errors.length} error(s): ${res.errors.map(e => trunc(e.message || JSON.stringify(e), 80)).join('; ')}`)
       } else if (res.page.length) {
+        consec5xx = 0
         total += res.page.length
         const sample = res.page[0]
         log(`  ${y}: ${res.page.length} op(s)  ${C.dim}e.g.${C.reset} ${sample.operType ?? '?'} ${sample.amount ?? '?'} ${sample.currIso ?? ''} `
           + `← ${trunc(sample.corrName, 24) ?? ''} (${maskNumber(sample.corrNumber)}) "${trunc(sample.purpose, 40)}"`)
       } else if (res.status >= 200 && res.status < 300) {
+        consec5xx = 0
         log(`  ${C.dim}${y}: 0 ops${C.reset}`)
       } else {
-        warn(`  ${y}: HTTP ${res.status}`)
+        // non-2xx without a structured errors[] — surface the body once so a
+        // 500 is diagnosable (full body is also saved to the output file).
+        const detail = bodyShown
+          ? ''
+          : ' — ' + (typeof res.raw === 'string' ? trunc(res.raw, 200) : trunc(JSON.stringify(res.raw), 200))
+        bodyShown = true
+        warn(`  ${y}: HTTP ${res.status}${detail}`)
+        if (res.status >= 500 && ++consec5xx >= 3) {
+          warn(`  skipping years ${y + 1}…${cfg.toYear} for this account (repeated HTTP ${res.status})`)
+          break
+        }
       }
       if (cfg.delayMs > 0) await sleep(cfg.delayMs)
     }
