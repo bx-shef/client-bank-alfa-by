@@ -91,6 +91,9 @@ jobs:
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
+          # Landing image (nginx static). `target` is pinned so a future Dockerfile
+          # stage added after `runner` can't silently become the published image.
+          target: runner
           push: false
           cache-from: type=gha
 
@@ -133,6 +136,9 @@ jobs:
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
+          # Publish the landing image (nginx static). Backend has its own deploy
+          # path (docker-compose / future workflow), not this GHCR `:latest`.
+          target: runner
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

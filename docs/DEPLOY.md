@@ -1,11 +1,23 @@
-# Деплой фронтенда (лендинг + B24-iframe-UI)
+# Деплой (фронтенд-лендинг + backend B24)
 
 > Last reviewed: 2026-06-30
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
-Backend (OAuth Альфы, опрос, запись дел/чата) — отдельный сервис за тем же proxy, здесь не
-рассматривается (этапы 3–6 — [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md)).
+
+Backend (приём событий Б24 + хранилище токенов; дальше — OAuth Альфы, опрос, дела/чат) —
+**отдельный docker-сервис** того же репозитория (`Dockerfile` target `backend`, `nuxt build`)
+за тем же proxy, рядом — Postgres. Контракт и env — [`B24_EVENTS.md`](B24_EVENTS.md).
+
+## Backend + база (docker-compose)
+
+`docker compose up` (локально) поднимает три сервиса: `app` (статика лендинга, nginx, `:8081`),
+`backend` (node-сервер, эндпоинт `/api/b24/events`, `:3210→3000`) и `db` (Postgres, том `pgdata`).
+Перед стартом — `.env` (шаблон `.env.example`): `B24_TOKEN_ENC_KEY` (обязателен, `openssl rand -hex 32`),
+`B24_APPLICATION_TOKEN` (обязателен в проде). Схема `portal_tokens` создаётся на старте backend
+(`server/plugins/migrate.ts`). На проде backend выносится за nginx-proxy на свой
+домен/путь, адрес обработчика события портала — `https://<домен-backend>/api/b24/events`.
+Полноценный прод-compose backend+db добавляется при выкатке (по аналогии с `docker-compose.prod.yml` лендинга).
 
 ## Конвейер CI/CD (`.github/workflows/ci.yml`)
 

@@ -1,4 +1,5 @@
 services:
+  # Static landing + in-portal iframe UI (nginx). Unchanged by the backend.
   app:
     build:
       context: .
@@ -16,3 +17,47 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Backend (Node): Bitrix24 webhook endpoint /api/b24/events + portal token store.
+  # The B24 event handler URL during install points here (e.g. behind nginx-proxy).
+  backend:
+    build:
+      context: .
+      target: backend
+    environment:
+      DATABASE_URL: postgres://app:app@db:5432/app
+      # application_token of the registered B24 app. REQUIRED IN PROD — without it
+      # the first install is trusted on faith (TOFU); the backend logs a WARNING
+      # when it bootstraps. Left optional (`:-`) only for local/dev. See docs/B24_EVENTS.md.
+      B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:-}
+      # 32-byte key (hex/base64) encrypting portal refresh tokens at rest.
+      # Required — no default, so secrets are never encrypted with a known key.
+      B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+    ports:
+      - "3210:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Postgres: per-portal OAuth token store (table portal_tokens, auto-created on boot).
+  # `db` exposes no host port — reachable only on the compose network. The default
+  # app/app credentials are for local dev; the prod compose MUST set a strong
+  # POSTGRES_PASSWORD (require it via `:?`, like B24_TOKEN_ENC_KEY).
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
