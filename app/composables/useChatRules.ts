@@ -21,9 +21,20 @@ export function defaultSettings(): AppSettings {
   return { apiKey: '', chatId: '', directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
 }
 
-// Module-level singleton so settings are shared across pages within the session.
+// Module-level singleton so settings are shared across pages. Safe here because
+// the app is SSG (one prerender pass, no per-request isolation needed); the load
+// is guarded to the client. Tests must reset it (settings.value = defaultSettings()
+// + localStorage.clear()) in beforeEach.
 const settings = ref<AppSettings>(defaultSettings())
 let initialized = false
+
+/** Persisted subset — the API key is NEVER written to localStorage (it would be
+ * exposed to any script/DevTools); it stays in memory for the demo session only.
+ * The real key lives server-side (backend stage). */
+function persistable(s: AppSettings) {
+  const { apiKey: _apiKey, ...rest } = s
+  return rest
+}
 
 export function useChatRules() {
   if (import.meta.client && !initialized) {
@@ -36,7 +47,7 @@ export function useChatRules() {
     }
     watch(settings, (value) => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable(value)))
       } catch {
         // Storage unavailable (private mode / quota) — keep working in memory.
       }

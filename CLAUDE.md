@@ -44,15 +44,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/pages/index.vue` — публичная страница лендинга (hero + преимущества + подвал).
 - `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных.
 - `app/pages/settings.vue` — in-portal настройки (ключ, выбор чата, правила фильтра чата) + живой
-  предпросмотр; настройки хранятся локально (демо), реальное хранение — backend.
-- `app/composables/useChatRules.ts` — реактивные настройки (localStorage) + `ChatNotifyRules`.
+  предпросмотр; форма в `<ClientOnly>`, настройки в localStorage (демо, ключ API не сохраняется),
+  реальное хранение — backend. Роут `/settings` добавлен в `nitro.prerender.routes` (`nuxt.config.ts`).
+- `app/composables/useChatRules.ts` — реактивные настройки (localStorage, без `apiKey`); производит
+  `rules: ChatNotifyRules` (из `app/utils/statement.ts`).
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
   - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
     `OperationDirection`, `BankProviderId`).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
-  - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата.
+  - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
+    `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
   - `app/utils/alfaOauth.ts` — OAuth 2.0 Альфы (Authorization Code + refresh): URL/тела запросов, парсинг.
   - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`.

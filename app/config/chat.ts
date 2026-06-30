@@ -3,6 +3,7 @@
 // the UI is wired against this mock so the selection flow can be built/tested.
 export interface ChatTarget {
   id: string
+  /** Display name; in real integration comes from the portal (language-dependent). */
   title: string
 }
 
