@@ -54,20 +54,85 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
    ни Watchtower не нужен `docker login`. Если пакет приватный — перед `up -d` сделать
    `docker login ghcr.io` (PAT с `read:packages`) и настроить креды Watchtower.
 
-Развёртывание:
+### Развёртывание (минимальный набор)
 
-1. Положить `docker-compose.prod.yml` в `/home/bitrix/bank-import/`, задать `.env` с `DOMAIN` и
-   (опц.) `LETSENCRYPT_EMAIL` (см. `.env.example`). DNS A-запись `DOMAIN` должна указывать на сервер
-   **до** подъёма, иначе acme-companion не выпустит TLS.
-2. `docker compose -f docker-compose.prod.yml up -d` (или `make prod-up`) — поднимет только
-   app-контейнер (GHCR-образ); обновления подтянет хостовый Watchtower.
+На сервере в рантайме нужны только **два файла из репо + `.env`** (исходник и `.git` не нужны —
+образ самодостаточный в GHCR). Репозиторий публичный, поэтому тянем файлы напрямую:
 
-Обёртки в `Makefile`: `make prod-up` / `make prod-pull` / `make prod-redeploy` (обновить сейчас,
-без ожидания Watchtower) / `make logs` / `make ps`. Локальная проверка образа — `make build-local`
-(раздаёт на `:8081`).
+```bash
+mkdir -p /home/bitrix/bank-import && cd /home/bitrix/bank-import
 
-Локальная проверка образа: `docker compose up --build` (раздаёт на `:8081` — порт уведён с `:80`,
-чтобы не конфликтовать с локальным `currency-converter`).
+# 1. два файла из репо
+curl -fsSL -O https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/docker-compose.prod.yml
+curl -fsSL -O https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/Makefile
+
+# 2. .env (DNS A-запись DOMAIN должна указывать на сервер ДО подъёма — иначе acme не выпустит TLS)
+cat > .env <<'EOF'
+DOMAIN=bank-import.bx-shef.by
+LETSENCRYPT_EMAIL=you@example.com
+EOF
+
+# 3. поднять (образ тянется из GHCR; обновления подхватит хостовый Watchtower)
+make prod-up
+```
+
+Итого в папке — только `docker-compose.prod.yml`, `Makefile`, `.env`. Обновить эти два файла
+позже — повторить `curl` из шага 1 (в минимальном варианте `git pull` недоступен; образ обновляется
+через Watchtower независимо от папки).
+
+Обёртки `Makefile`: `make prod-up` / `make prod-pull` / `make prod-redeploy` (обновить образ сейчас,
+без ожидания Watchtower) / `make logs` / `make ps`.
+
+> Альтернатива: `git clone` репозитория в папку — тогда обновление `compose`/`Makefile` одним
+> `git pull`, ценой лишних файлов (~400 КБ). На рантайм не влияет.
+
+Локальная проверка образа (в клоне репо): `make build-local` = `docker compose up --build` —
+раздаёт на `:8081` (порт уведён с `:80`, чтобы не конфликтовать с локальным `currency-converter`).
+
+## Если nginx-proxy / Watchtower ещё не стоят
+
+Реверс-прокси и Watchtower — общая инфраструктура хоста, ставится **один раз** (обычно вместе с
+`currency-converter`). Сначала проверь, что уже есть:
+
+```bash
+docker network ls | grep proxy-net
+docker ps --format '{{.Names}}\t{{.Image}}' | grep -E 'nginx-proxy|acme-companion|watchtower'
+```
+
+**Нет сети `proxy-net`:**
+```bash
+docker network create proxy-net
+```
+
+**Нет nginx-proxy + acme-companion** (TLS Let's Encrypt). Канонический compose —
+`currency-converter/docker-compose.nginxproxy.yml`. Если репозиторий `currency-converter` на сервере:
+```bash
+cd /path/to/currency-converter
+echo "LETSENCRYPT_EMAIL=you@example.com" > .env.prod   # контакт для сертификатов
+docker compose -f docker-compose.nginxproxy.yml --env-file .env.prod up -d
+```
+`nginx-proxy` и `acme-companion` поднимутся в сети `proxy-net` и будут обслуживать все сайты хоста
+по их `VIRTUAL_HOST` (наш — `DOMAIN`).
+
+**Нет Watchtower** (автообновление образов). Один на хост, с `--label-enable`:
+```bash
+docker run -d --name watchtower --restart unless-stopped \
+  -e DOCKER_API_VERSION=1.47 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower:1.7.1 --interval 300 --cleanup --label-enable
+```
+Он обновит наш контейнер по метке `com.centurylinklabs.watchtower.enable=true`. Без Watchtower
+деплой работает — обновления катятся вручную: `make prod-redeploy`.
+
+**Прокси уже есть, но в другой docker-сети** (наш контейнер на `proxy-net`, а прокси — нет; тогда
+сайт снаружи не открывается, хотя оба контейнера `Up`). Подключить прокси к нашей сети:
+```bash
+docker network connect proxy-net <имя-контейнера-прокси>
+```
+или переключить `external`-сеть в `docker-compose.prod.yml` на ту, где живёт прокси. Проверить сети:
+```bash
+docker inspect <имя-прокси> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+```
 
 ## Build-args (необязательные)
 
