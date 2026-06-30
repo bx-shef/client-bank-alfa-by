@@ -1,13 +1,15 @@
 # client-bank-alfa-by
 
-> Last reviewed: 2026-06-29
+> Last reviewed: 2026-06-30
 
 Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.
 Статическое приложение (Nuxt 4, SSG); публичная страница — лендинг.
 
-> **Статус:** инициализация репозитория. Сейчас здесь каркас (Nuxt 4 + конфиги +
-> страница-заглушка лендинга) и обвязка репозитория (CI, Dependabot, SessionStart-хук
-> для Claude Code на вебе). Боевой код придёт позже и заменит содержимое `app/`.
+> **Статус:** рефакторинг legacy-приложения (план — [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)).
+> Здесь **frontend**: публичный лендинг (SSG) + B24-iframe-UI (просмотр выписки/настройки на
+> демо-данных) + доменное ядро (типы/утилиты/билдер дел, покрыто тестами). Сборка/деплой статики
+> готовы (Docker + GHCR + Watchtower, см. [`docs/DEPLOY.md`](docs/DEPLOY.md)). Серверная часть
+> (OAuth Альфы, опрос, запись дел/чата, MCP) — отдельный backend-сервис, пока не реализован.
 
 ## Требования
 
@@ -32,6 +34,12 @@ pnpm generate        # сборка статики (SSG) → .output/public
   (ruleset `protect-main`) — в [`docs/REPO_SETUP_CHECKLIST.md`](docs/REPO_SETUP_CHECKLIST.md).
 - Перед пушем прогоняй `pnpm lint && pnpm typecheck && pnpm test` — это же гоняет CI.
 - Инструкции для AI-агентов и детали архитектуры — в [`CLAUDE.md`](./CLAUDE.md).
+
+## Деплой
+
+Статика собирается в Docker-образ (`nginxinc/nginx-unprivileged`) и публикуется в GHCR; на сервере
+её подхватывает Watchtower за общим nginx-proxy (TLS — Let's Encrypt). Конвейер CI/CD и шаги на
+сервере — в [`docs/DEPLOY.md`](docs/DEPLOY.md). Локальная проверка образа: `docker compose up --build`.
 
 ## Лицензия
 

@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        NUXT_PUBLIC_AUTHOR_NAME: ${NUXT_PUBLIC_AUTHOR_NAME:-}
+        NUXT_PUBLIC_AUTHOR_URL: ${NUXT_PUBLIC_AUTHOR_URL:-}
+    ports:
+      - "80:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

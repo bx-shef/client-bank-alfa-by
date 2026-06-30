@@ -13,19 +13,19 @@ export interface LandingFeature {
   description: string
 }
 
-/** Static content for the landing hero. Replace when the real app lands. */
+/** Static content for the landing hero — the app's value props. */
 export const LANDING_FEATURES: readonly LandingFeature[] = [
   {
-    title: 'Выписка из клиент-банка',
-    description: 'Получение выписки из клиент-банка Альфа-Банк Беларусь.'
+    title: 'Выписка без ручного экспорта',
+    description: 'Регулярно получаем выписку из клиент-банка Альфа-Банк Беларусь по защищённому доступу — без выгрузки файлов вручную.'
   },
   {
-    title: 'Интеграция с Bitrix24',
-    description: 'Работа внутри портала Bitrix24.'
+    title: 'Платежи прямо в CRM',
+    description: 'Каждый платёж попадает в таймлайн компании как дело Bitrix24, а контрагент находится по расчётному счёту автоматически.'
   },
   {
-    title: 'Автоматизация',
-    description: 'Регулярная выгрузка операций без ручного экспорта.'
+    title: 'Уведомления в чат',
+    description: 'Приходы и расходы — с фильтрами по счёту и назначению — приходят сообщением в выбранный чат портала.'
   }
 ]
 

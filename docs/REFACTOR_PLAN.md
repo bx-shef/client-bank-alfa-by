@@ -60,7 +60,10 @@
 4. **Поиск компании по корр-счёту + запись универсального дела** (перенос на todo-API).
 5. **Cron-опрос** (разделение приход/расход; фильтры по р/счёту и теме платежа).
 6. **Сообщения в чат** (выбор чата в настройках; не показывать по правилам).
-7. **Docker + деплой** (GHCR + Watchtower + nginx, как `currency-converter`).
+7. **Docker + деплой.** [✓ фронтенд] Лендинг + B24-iframe-UI как статика за nginx
+   (GHCR + Watchtower + nginx-proxy, как `currency-converter`) — `Dockerfile`, `nginx.conf`
+   (CSP без `unsafe-inline` через `scripts/csp-hashes.mjs`), compose-файлы, CI `docker-build`/`deploy`.
+   Детали — [`DEPLOY.md`](DEPLOY.md). Деплой **backend**-сервиса — по мере его появления (этапы 3–6).
 8. **MCP-сервер** по выписке.
 9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
 
