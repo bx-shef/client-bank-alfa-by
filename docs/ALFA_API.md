@@ -90,9 +90,12 @@
 Все значения ниже — маскированы. `base = https://developerhub.alfabank.by:8273`.
 
 > Перепроверить вживую: `pnpm oauth:test` (скрипт `scripts/alfa-oauth-test.mjs`,
-> без зависимостей, Node ≥ 18). Конфиг — из `.env` (см. `.env.example`); токены и номера
-> счетов в консоли маскируются, полный ответ пишется в `alfa-demo-output.json` (gitignore).
-> Флаги: `--from-year/--to-year`, `--account`, `--code`, `--refresh`, `--url-only`, `--full`.
+> без зависимостей, Node ≥ 18). Это **песочничный** инструмент: конфиг берётся из
+> `.env.sandbox` — скопируй шаблон `.env.sandbox.example` → `.env.sandbox` и впиши
+> `ALFA_CLIENT_SECRET` (файл в `.gitignore`). Скрипт в баннере явно помечает режим
+> `● SANDBOX`/`● NON-SANDBOX`. Токены и номера счетов в консоли маскируются, полный
+> ответ пишется в `alfa-demo-output.json` (gitignore). Флаги: `--env <file>`,
+> `--from-year/--to-year`, `--account`, `--code`, `--refresh`, `--url-only`, `--full`.
 
 ### 1. Authorize (браузер)
 

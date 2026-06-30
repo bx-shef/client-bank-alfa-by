@@ -14,16 +14,19 @@
 // `alfa-demo-output.json` (gitignored) so you can inspect the real data locally.
 // Pass `--full` to also print everything unmasked to the console.
 //
-// Secrets are never hard-coded. Config comes from .env (auto-loaded) / env / flags:
-//   ALFA_BASE_URL       (default https://developerhub.alfabank.by:8273; prod ibapi2.alfabank.by:8273)
+// This is a SANDBOX tool. Config is auto-loaded from `.env.sandbox` (preferred),
+// then `.env.local`, then `.env` — copy `.env.sandbox.example` → `.env.sandbox`
+// and fill in the secret. Override the file with `--env <path>`. Secrets are
+// never hard-coded; real env vars and flags win over the file.
+//   ALFA_BASE_URL       (default https://developerhub.alfabank.by:8273 — sandbox)
 //   ALFA_CLIENT_ID      / --client-id
 //   ALFA_CLIENT_SECRET  / --client-secret
 //   ALFA_REDIRECT_URI   / --redirect-uri  (must match the one registered for the app)
 //   ALFA_SCOPE          / --scope         (default "accounts")
 //   ALFA_API_PREFIX     / --api-prefix    (default "/partner/1.2.0")
 //
-// Flags: --from-year 2000 --to-year 2029 --account <number> --delay-ms 700
-//        --code <authCode> (skip browser) --refresh <token> (refresh only)
+// Flags: --env <file> --from-year 2000 --to-year 2029 --account <number>
+//        --delay-ms 700 --code <authCode> (skip browser) --refresh <token>
 //        --url-only (just print the authorize URL) --full (no masking)
 
 import { request } from 'node:https'
@@ -31,29 +34,6 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 import { spawn } from 'node:child_process'
 import { stdin as input, stdout as output, platform } from 'node:process'
-
-// --- minimal .env loader (no deps) -----------------------------------------
-// Node does not read .env automatically. Load KEY=VALUE pairs from .env.local
-// then .env in the cwd, without overriding values already set in the real
-// environment or on the command line.
-function loadDotEnv() {
-  for (const file of ['.env.local', '.env']) {
-    let text
-    try {
-      text = readFileSync(file, 'utf8')
-    } catch { continue }
-    for (const line of text.split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
-      if (!m) continue
-      let val = m[2]
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith('\'') && val.endsWith('\''))) {
-        val = val.slice(1, -1)
-      }
-      if (process.env[m[1]] === undefined) process.env[m[1]] = val
-    }
-  }
-}
-loadDotEnv()
 
 // --- tiny arg parser -------------------------------------------------------
 function parseArgs(argv) {
@@ -74,6 +54,34 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2))
+
+// --- minimal .env loader (no deps) -----------------------------------------
+// Node does not read .env automatically. Sandbox-first: load the first file
+// that exists from `--env <file>` (if given) else `.env.sandbox`, `.env.local`,
+// `.env`. Values already set in the real environment / on the CLI are NOT
+// overridden. Returns the file that was loaded (for the startup banner).
+function loadDotEnv() {
+  const candidates = args['env'] ? [String(args['env'])] : ['.env.sandbox', '.env.local', '.env']
+  for (const file of candidates) {
+    let text
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch { continue }
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
+      if (!m) continue
+      let val = m[2]
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith('\'') && val.endsWith('\''))) {
+        val = val.slice(1, -1)
+      }
+      if (process.env[m[1]] === undefined) process.env[m[1]] = val
+    }
+    return file
+  }
+  return null
+}
+
+const envFile = loadDotEnv()
 
 const cfg = {
   base: (args['base'] || process.env.ALFA_BASE_URL || 'https://developerhub.alfabank.by:8273').replace(/\/+$/, ''),
@@ -392,10 +400,14 @@ function saveOutput(data) {
 
 // --- main ------------------------------------------------------------------
 async function main() {
+  const isSandbox = /developerhub\.alfabank\.by/.test(cfg.base)
   log(`${C.bold}Alfa-Bank BY — Open API end-to-end demo${C.reset}`)
+  log(`${C.dim}env file:${C.reset} ${envFile ?? '(none — using process env / flags)'}   `
+    + `${isSandbox ? `${C.yellow}● SANDBOX${C.reset}` : `${C.red}● NON-SANDBOX${C.reset} (${cfg.base})`}`)
   log(`${C.dim}client_id:${C.reset} ${cfg.clientId}`)
   log(`${C.dim}redirect_uri:${C.reset} ${cfg.redirectUri}`)
   log(`${C.dim}scope:${C.reset} ${cfg.scope}   ${C.dim}masking:${C.reset} ${cfg.full ? 'OFF (--full)' : 'ON'}`)
+  if (!cfg.clientSecret) warn('ALFA_CLIENT_SECRET is empty — set it in .env.sandbox (token exchange will fail)')
 
   if (args['url-only']) {
     head('Authorize URL')
