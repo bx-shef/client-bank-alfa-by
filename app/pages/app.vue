@@ -11,6 +11,9 @@ import { useImportStatus } from '~/composables/useImportStatus'
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
 definePageMeta({ layout: 'clear' })
 
+// Document title for standalone; in the portal parent.setTitle sets the iframe chrome.
+useHead({ title: 'Выписка по счёту — Клиент-банк Альфа-Банк Беларусь' })
+
 const statement = MOCK_STATEMENT
 const { credits, debits } = splitByDirection(statement.items)
 
@@ -49,6 +52,12 @@ onMounted(async () => {
 
 <template>
   <main class="mx-auto max-w-(--ui-container) px-4 py-6">
+    <!-- Heading kept for a11y/standalone; the portal shows it as iframe chrome
+         (parent.setTitle), so it's visually hidden to keep the screen calm. -->
+    <h1 class="sr-only">
+      Выписка по счёту
+    </h1>
+
     <ImportStatusBanner
       :status="status"
       class="mb-5"

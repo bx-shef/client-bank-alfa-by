@@ -24,6 +24,7 @@ export interface ImportRunSummary {
   chatNotified: number
   /** Human-readable errors from the last run (empty when clean). */
   errors: string[]
-  /** ISO timestamp of the next scheduled sync, if known. */
+  /** ISO timestamp of the next scheduled sync, if known. Reserved for a future
+   *  "next sync in …" hint — not rendered yet (backend poller, #5). */
   nextSyncAt?: string | null
 }

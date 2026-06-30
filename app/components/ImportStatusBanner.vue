@@ -4,7 +4,7 @@ import CheckIcon from '@bitrix24/b24icons-vue/main/CheckIcon'
 import RefreshIcon from '@bitrix24/b24icons-vue/outline/RefreshIcon'
 import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 import type { ImportRunSummary } from '~/types/importStatus'
-import { formatRelativeTime, importStateMeta } from '~/utils/importStatus'
+import { formatRelativeTime, importStateMeta, pluralRu } from '~/utils/importStatus'
 
 // Trust bar: one glance tells "alive / when updated / what reached people".
 // Colour = instant verdict. Presentational — the page owns the data.
@@ -41,20 +41,12 @@ const absoluteTime = computed(() =>
     : ''
 )
 
-// "+N новых операций" / "Новых операций нет".
-const operationsLine = computed(() =>
-  props.status.operations > 0
-    ? `+${props.status.operations} ${pluralOps(props.status.operations)}`
-    : 'Новых операций нет'
-)
-function pluralOps(n: number): string {
-  const last = n % 10
-  const tens = n % 100
-  if (tens > 10 && tens < 20) return 'новых операций'
-  if (last === 1) return 'новая операция'
-  if (last > 1 && last < 5) return 'новых операции'
-  return 'новых операций'
-}
+// "+N новых операций" / "Новых операций нет". Reuses the tested pluralRu helper.
+const operationsLine = computed(() => {
+  const n = props.status.operations
+  if (n <= 0) return 'Новых операций нет'
+  return `+${n} ${pluralRu(n, ['новая операция', 'новые операции', 'новых операций'])}`
+})
 
 // "Записано в CRM · N уведомления в чат" — confirms the chain reached the end.
 const chainLine = computed(() => {
@@ -70,10 +62,15 @@ const chainLine = computed(() => {
     :icon="icon"
     :color="meta.color"
     variant="soft"
-    :title="title"
+    role="status"
+    aria-live="polite"
   >
+    <!-- Relative time is the headline; exact time on hover (tooltip). -->
+    <template #title>
+      <span :title="absoluteTime">{{ title }}</span>
+    </template>
     <template #description>
-      <span :title="absoluteTime">{{ operationsLine }}</span>
+      <span>{{ operationsLine }}</span>
       <span v-if="chainLine"> · {{ chainLine }}</span>
       <template v-if="status.state === 'error' && status.errors.length">
         <br>

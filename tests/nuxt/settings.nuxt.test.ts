@@ -69,6 +69,31 @@ describe('settings page', () => {
     expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('в чат ничего не попадёт')
   })
+
+  // Drive the real UI controls (not just the singleton) so the component wiring
+  // — directionModel get/set on B24Switch, the textarea→settings watch — is covered.
+  it('toggling the "Приходы" switch off hides the credit (UI wiring)', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    // B24Switch forwards data-testid onto its SwitchRoot (role=switch button).
+    const sw = wrapper.find('[data-testid="notify-credit"]')
+    expect(sw.exists()).toBe(true)
+    // Credit is the only default-on direction, so switching it off hides
+    // everything — which proves the switch → directionModel → preview wiring.
+    await sw.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('в чат ничего не попадёт')
+  })
+
+  it('typing an exclude pattern hides the matching credit (UI wiring)', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    // B24Textarea forwards data-testid onto the <textarea> itself.
+    const textarea = wrapper.find('textarea[data-testid="exclude-patterns"]')
+    expect(textarea.exists()).toBe(true)
+    await textarea.setValue(MOCK_STATEMENT.items[creditIdx]!.purpose)
+    await nextTick()
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
+  })
 })
 
 describe('defaultSettings', () => {

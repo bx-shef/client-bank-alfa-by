@@ -70,6 +70,14 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
       Настройки
     </h1>
 
+    <B24Alert
+      color="air-primary-warning"
+      variant="soft"
+      title="Демо-режим"
+      description="Настройки хранятся локально в браузере, ключ API не сохраняется. Реальное хранение — на сервере."
+      class="mt-3"
+    />
+
     <ClientOnly>
       <div class="mt-6 grid gap-6 lg:grid-cols-[1fr_320px] lg:items-start">
         <!-- Form: three grouped sections. -->

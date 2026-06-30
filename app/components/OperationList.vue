@@ -3,14 +3,14 @@ import EmptyMessageIcon from '@bitrix24/b24icons-vue/outline/EmptyMessageIcon'
 import type { StatementItem } from '~/types/statement'
 
 // One section of the statement (credits or debits). Card per operation; a calm
-// empty state and skeletons for loading. The amount is the only coloured accent.
+// empty state. The amount is the only coloured accent. (Skeleton/loading lands
+// with the live statement fetch — #5.)
 const props = defineProps<{
   items: StatementItem[]
   /** Tailwind colour classes for the amount (the single accent per card). */
   accent: string
   /** Total line for the section (already formatted, e.g. "2 160,50 BYN"). */
   total: string
-  loading?: boolean
 }>()
 
 const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -31,21 +31,9 @@ const hasItems = computed(() => props.items.length > 0)
       {{ total }}
     </p>
 
-    <!-- Loading: same-height skeleton cards, no center spinner. -->
-    <div
-      v-if="loading"
-      class="space-y-3"
-    >
-      <B24Skeleton
-        v-for="n in 3"
-        :key="n"
-        class="h-20 w-full rounded-lg"
-      />
-    </div>
-
     <!-- Empty: calm, not alarming. -->
     <div
-      v-else-if="!hasItems"
+      v-if="!hasItems"
       class="flex flex-col items-center gap-2 py-10 text-center"
     >
       <EmptyMessageIcon class="size-8 text-(--ui-color-base-4)" />
