@@ -20,6 +20,10 @@ ARG NUXT_PUBLIC_AUTHOR_NAME
 ENV NUXT_PUBLIC_AUTHOR_NAME=$NUXT_PUBLIC_AUTHOR_NAME
 ARG NUXT_PUBLIC_AUTHOR_URL
 ENV NUXT_PUBLIC_AUTHOR_URL=$NUXT_PUBLIC_AUTHOR_URL
+# Public URL the app is served from — used by the Bitrix24 install handler to
+# build absolute placement URLs (needed once placement.bind lands). Optional now.
+ARG NUXT_PUBLIC_SITE_URL
+ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
 RUN pnpm generate
 # Inject per-build sha256 CSP hashes for Nuxt's inline scripts into nginx.conf,
 # so the served CSP needs no `script-src 'unsafe-inline'`. Writes in place.

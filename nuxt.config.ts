@@ -2,6 +2,7 @@ export default defineNuxtConfig({
   modules: [
     '@nuxt/eslint',
     '@bitrix24/b24ui-nuxt',
+    '@bitrix24/b24jssdk-nuxt',
     '@vueuse/nuxt'
   ],
 
@@ -14,20 +15,23 @@ export default defineNuxtConfig({
     public: {
       // Author shown in the landing footer. Override via NUXT_PUBLIC_AUTHOR_*.
       authorName: 'bx-shef',
-      authorUrl: 'https://bx-shef.by'
+      authorUrl: 'https://bx-shef.by',
+      // Public URL the app is served from. Used by the Bitrix24 install handler
+      // to build absolute placement handler URLs once placement.bind lands.
+      // Set via NUXT_PUBLIC_SITE_URL at build time (Dockerfile/CI).
+      siteUrl: ''
     }
   },
 
   // Static site generation (SSG): the public page is a plain landing, no server.
   compatibilityDate: '2025-01-15',
 
-  // `/app` (the in-portal statement view) isn't linked from the landing, so the
-  // generate crawler would skip it — list it explicitly. More routes (/install,
-  // widget) get added here as the Bitrix24 integration lands.
+  // In-portal pages aren't linked from the landing, so the generate crawler would
+  // skip them — list them explicitly. `/install` is the Bitrix24 install handler.
   nitro: {
     prerender: {
       crawlLinks: true,
-      routes: ['/app', '/settings']
+      routes: ['/app', '/settings', '/install']
     }
   },
 
