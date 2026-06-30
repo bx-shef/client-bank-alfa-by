@@ -30,7 +30,7 @@
 //        --url-only (just print the authorize URL) --full (no masking)
 
 import { request } from 'node:https'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -38,43 +38,20 @@ import { stdin as input, stdout as output, platform } from 'node:process'
 // Pure, unit-tested helpers (tests/demoUtils.test.ts). Keeping the standalone
 // script free of a build step, so these are plain ESM.
 import {
-  parseArgs, parseDotEnvLine, trunc, extractRedirect, redactTokenSet, isHttpUrl,
+  parseArgs, trunc, extractRedirect, redactTokenSet, isHttpUrl,
   maskToken as maskTokenPure, maskNumber as maskNumberPure
 } from './lib/demo-utils.mjs'
+import { loadDotEnv } from './lib/env.mjs'
 
 const args = parseArgs(process.argv.slice(2))
 
-// --- minimal .env loader (no deps) -----------------------------------------
-// Node does not read .env automatically. Sandbox-first: load the first file
-// that exists from `--env <file>` (if given) else `.env.sandbox`, `.env.local`,
-// `.env`. Values already set in the real environment / on the CLI are NOT
-// overridden. Returns the file that was loaded (for the startup banner).
-function loadDotEnv() {
-  const explicit = args['env'] ? String(args['env']) : null
-  const candidates = explicit ? [explicit] : ['.env.sandbox', '.env.local', '.env']
-  for (const file of candidates) {
-    let text
-    try {
-      text = readFileSync(file, 'utf8')
-    } catch (e) {
-      // A file named explicitly via --env that can't be read is a hard error;
-      // the implicit fallbacks are allowed to be absent.
-      if (explicit) {
-        console.error(`cannot read --env file "${file}": ${e.message}`)
-        process.exit(1)
-      }
-      continue
-    }
-    for (const line of text.split(/\r?\n/)) {
-      const kv = parseDotEnvLine(line)
-      if (kv && process.env[kv[0]] === undefined) process.env[kv[0]] = kv[1]
-    }
-    return file
-  }
-  return null
-}
-
-const envFile = loadDotEnv()
+// Sandbox-first env: an explicit --env file (hard error if unreadable), else
+// the implicit .env.sandbox → .env.local → .env fallbacks (missing = skipped).
+const explicitEnv = args['env'] ? String(args['env']) : null
+const envFile = loadDotEnv(
+  explicitEnv ? [explicitEnv] : ['.env.sandbox', '.env.local', '.env'],
+  { explicit: Boolean(explicitEnv) }
+)
 
 const cfg = {
   base: (args['base'] || process.env.ALFA_BASE_URL || 'https://developerhub.alfabank.by:8273').replace(/\/+$/, ''),
