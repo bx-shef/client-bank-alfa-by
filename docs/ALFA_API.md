@@ -34,14 +34,17 @@
 | (3) Token | `POST {base}/token` | `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret` |
 | (4) Refresh | `POST {base}/token` | `grant_type=refresh_token`, `refresh_token`, `client_id`, `client_secret` |
 
-- Ответ токена: `access_token`, `token_type=Bearer`, `expires_in=3600` (1 ч), `refresh_token` (~10 ч).
-- `redirect_uri` обязан **точно совпадать** с зарегистрированным в приложении
-  (`https://bank-import.bx-shef.by/oauth-alfabank-by/`).
+- Ответ токена: `access_token`, `token_type` (default `Bearer`), `expires_in=3600` (1 ч, в коде —
+  дефолт `parseTokenResponse`), `refresh_token`. TTL refresh — `ALFA_REFRESH_TOKEN_TTL_SEC` ≈ 36000 с
+  (~10 ч; по доке/свагеру Альфы, уточнить на живом прогоне).
+- `redirect_uri` обязан **точно совпадать** с зарегистрированным в приложении; берётся из env
+  (`ALFA_REDIRECT_URI`, см. `.env.example`), а не хардкодится в коде/доке.
 - `client_secret` — только в env сервера (никогда в репозиторий/логи/URL).
 
 ### 2. Счета и выписка
 
-Все вызовы — с заголовком `Authorization: Bearer {access_token}`, scope `accounts`.
+Все вызовы — с заголовком `Authorization: Bearer {access_token}`, scope `accounts`, на тот же
+базовый хост `{base}` (`…:8273`), что и OAuth (sandbox/prod — см. блок-цитату выше).
 
 | Метод | Назначение | Используем |
 |---|---|---|
@@ -52,17 +55,18 @@
 
 | Параметр | Значение |
 |---|---|
-| `number` | номера счетов (массив, до 50) |
+| `number` | номера счетов — несколько query-параметров `number=…` (до 50) |
 | `dateFrom` / `dateTo` | период, формат **DD.MM.YYYY** |
 | `transactions` | `1` = приход (кредит), `2` = расход (дебет), `0` = все |
-| `pageNo` / `pageRowCount` | пагинация (`0` = все) |
+| `pageNo` / `pageRowCount` | пагинация; `0` = «все» (нестандартная семантика Альфы) |
 | `amountFrom` / `amountTo`, `transactionType`, `cacheKey` | опционально (фильтры/кэш) |
 
 **Ответ** — `page[]` (операции) + `statistics[]` (остатки/обороты) + `errors[]` (ошибки по счёту).
 Из модели операции берём: `operType` (C/D → приход/расход), `amount`/`currIso`, `purpose`,
 `corrName/corrUnp/corrNumber/corrBic/corrBank` (контрагент → поиск компании по корр-счёту),
-`docId/docNum`, `acceptDate`/`operDate`. `errors[]` обязательно проверяем (не считать errored
-пустой `page` за «нет операций»).
+`docId/docNum`, `operCodeName`, и даты: `acceptDate` — **timestamp** `2023-01-13T14:00:00.000`
+(local, без TZ-суффикса), `operDate` — **дата** `DD.MM.YYYY`. `errors[]` обязательно проверяем
+(не считать errored пустой `page` за «нет операций»).
 
 > Печатные формы (`/statement/{format}` pdf/xlsx/…), аресты, брони, SWIFT, реестр — **пока не
 > используем**; подключим по мере необходимости.

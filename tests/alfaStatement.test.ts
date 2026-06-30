@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alfaDateToIso, alfaStatementErrors, normalizeAlfaRow, normalizeAlfaStatement } from '~/utils/alfaStatement'
+import { ALFA_TRANSACTIONS, alfaDateToIso, alfaStatementErrors, normalizeAlfaRow, normalizeAlfaStatement } from '~/utils/alfaStatement'
 import type { AlfaStatementRow } from '~/utils/alfaStatement'
 
 function row(over: Partial<AlfaStatementRow> = {}): AlfaStatementRow {
@@ -82,6 +82,12 @@ describe('normalizeAlfaRow', () => {
 
   it('maps an unknown operType to debit (end-to-end through normalizeAlfaRow)', () => {
     expect(normalizeAlfaRow(row({ operType: 'X' })).direction).toBe('debit')
+  })
+})
+
+describe('ALFA_TRANSACTIONS', () => {
+  it('matches the documented Alfa values (0=all, 1=credit, 2=debit)', () => {
+    expect(ALFA_TRANSACTIONS).toEqual({ all: 0, credit: 1, debit: 2 })
   })
 })
 

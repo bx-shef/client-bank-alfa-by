@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ALFA_REFRESH_TOKEN_TTL_SEC,
   buildAuthorizeUrl,
   buildRefreshBody,
   buildTokenExchangeBody,
@@ -71,6 +72,7 @@ describe('token request bodies', () => {
     const body = buildRefreshBody(config, 'RT', 'SECRET')
     expect(body.get('grant_type')).toBe('refresh_token')
     expect(body.get('refresh_token')).toBe('RT')
+    expect(body.get('client_id')).toBe('CID')
     expect(body.get('client_secret')).toBe('SECRET')
     // refresh body must NOT carry redirect_uri (per RFC 6749 §6)
     expect(body.has('redirect_uri')).toBe(false)
@@ -116,5 +118,11 @@ describe('isAccessTokenExpired', () => {
   it('with skew=0 is true exactly at expiry and after', () => {
     expect(isAccessTokenExpired(issued, 3600, issued + 3_600_000, 0)).toBe(true)
     expect(isAccessTokenExpired(issued, 3600, issued + 3_600_001, 0)).toBe(true)
+  })
+})
+
+describe('ALFA_REFRESH_TOKEN_TTL_SEC', () => {
+  it('matches the documented ~10h value', () => {
+    expect(ALFA_REFRESH_TOKEN_TTL_SEC).toBe(36_000)
   })
 })
