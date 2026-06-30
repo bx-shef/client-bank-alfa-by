@@ -3,12 +3,12 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { nextTick } from 'vue'
 import type { VueWrapper } from '@vue/test-utils'
 import SettingsPage from '~/pages/settings.vue'
-import { MOCK_CHATS } from '~/config/chat'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { defaultSettings, useChatRules } from '~/composables/useChatRules'
 
 // useChatRules() is a module-level singleton — reset it (and storage) between
-// tests so order can't leak state.
+// tests so order can't leak state. The preview reacts to this same singleton, so
+// we drive the filter through it rather than through b24ui component internals.
 beforeEach(() => {
   useChatRules().settings.value = defaultSettings()
   if (typeof localStorage !== 'undefined') localStorage.clear()
@@ -16,16 +16,20 @@ beforeEach(() => {
 
 const creditIdx = MOCK_STATEMENT.items.findIndex(i => i.direction === 'credit')
 const debitIdx = MOCK_STATEMENT.items.findIndex(i => i.direction === 'debit')
+const creditCount = MOCK_STATEMENT.items.filter(i => i.direction === 'credit').length
 
 function previewRows(wrapper: VueWrapper) {
   return wrapper.findAll('[data-testid="preview-list"] li')
 }
 
 describe('settings page', () => {
-  it('renders the heading, chat options and one preview row per operation', async () => {
+  it('renders the heading, the grouped sections and one preview row per operation', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    expect(wrapper.text()).toContain('Настройки')
-    for (const chat of MOCK_CHATS) expect(wrapper.text()).toContain(chat.title)
+    const text = wrapper.text()
+    expect(text).toContain('Настройки')
+    expect(text).toContain('Подключение банка')
+    expect(text).toContain('Уведомления в чат')
+    expect(text).toContain('Исключения')
     expect(previewRows(wrapper)).toHaveLength(MOCK_STATEMENT.items.length)
   })
 
@@ -36,17 +40,57 @@ describe('settings page', () => {
     expect(rows[debitIdx]!.text()).toContain('скрыто')
   })
 
-  it('unchecking "Приходы" hides the credit in the preview', async () => {
+  it('summary counts how many operations reach the chat', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    // first checkbox is "Приходы" (credit)
-    await wrapper.findAll('input[type="checkbox"]')[0]!.trigger('change')
+    expect(wrapper.find('[data-testid="preview-summary"]').text())
+      .toContain(`В чат попадёт ${creditCount} из ${MOCK_STATEMENT.items.length}`)
+  })
+
+  it('disabling "Приходы" hides the credit in the preview', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    useChatRules().settings.value.directions = ['debit']
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })
 
-  it('excluding the account hides matching credits in the preview', async () => {
+  it('excluding a purpose pattern hides the matching credit (selective)', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    await wrapper.find('textarea[placeholder="BY00..."]').setValue(MOCK_STATEMENT.items[creditIdx]!.account)
+    // Exclude only the first credit's purpose — the other credit stays announced,
+    // so the list still renders (not the "everything hidden" warning).
+    useChatRules().settings.value.excludePurposePatterns = [MOCK_STATEMENT.items[creditIdx]!.purpose]
+    await nextTick()
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
+  })
+
+  it('warns (and drops the list) when the rules hide everything', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    useChatRules().settings.value.directions = []
+    await nextTick()
+    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('в чат ничего не попадёт')
+  })
+
+  // Drive the real UI controls (not just the singleton) so the component wiring
+  // — directionModel get/set on B24Switch, the textarea→settings watch — is covered.
+  it('toggling the "Приходы" switch off hides the credit (UI wiring)', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    // B24Switch forwards data-testid onto its SwitchRoot (role=switch button).
+    const sw = wrapper.find('[data-testid="notify-credit"]')
+    expect(sw.exists()).toBe(true)
+    // Credit is the only default-on direction, so switching it off hides
+    // everything — which proves the switch → directionModel → preview wiring.
+    await sw.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('в чат ничего не попадёт')
+  })
+
+  it('typing an exclude pattern hides the matching credit (UI wiring)', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    // B24Textarea forwards data-testid onto the <textarea> itself.
+    const textarea = wrapper.find('textarea[data-testid="exclude-patterns"]')
+    expect(textarea.exists()).toBe(true)
+    await textarea.setValue(MOCK_STATEMENT.items[creditIdx]!.purpose)
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })

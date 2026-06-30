@@ -46,12 +46,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
 - `app/pages/index.vue` — публичная страница лендинга (hero + преимущества + подвал). Standalone,
   без `clear`-layout (вне портала), без `B24App`.
-- `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных. Layout
-  `clear`, на `onMounted` зовёт `useB24().init()` (вне фрейма — no-op), внутри портала ставит
-  заголовок и `fitWindow` (best-effort, в try/catch — сбой не блокирует страницу).
-- `app/pages/settings.vue` — in-portal настройки (ключ, выбор чата, правила фильтра чата) + живой
-  предпросмотр; форма в `<ClientOnly>`, настройки в localStorage (демо, ключ API не сохраняется),
-  реальное хранение — backend. Layout `clear` + `useB24().init()`. Роут `/settings` — в `nitro.prerender.routes`.
+- `app/pages/app.vue` — in-portal просмотр выписки на **b24ui**: полоса статуса импорта
+  (`ImportStatusBanner`) первым элементом, `B24Tabs` «Приходы»/«Расходы» (счётчики в заголовке),
+  итог секции + `OperationList`. Демо-данные. Layout `clear`, `useB24().init()` (вне фрейма — no-op),
+  в портале — `setTitle`/`fitWindow` (best-effort, try/catch).
+- `app/pages/settings.vue` — in-portal настройки на **b24ui**: `B24Form` из трёх `B24Card`-секций
+  (подключение банка `B24Input`; уведомления — `B24Select` чата + `B24Switch` приходы/расходы;
+  исключения — `B24Textarea`) + живой предпросмотр (sticky `B24Card` «что попадёт в чат», `B24Badge`).
+  Автосейв в localStorage (демо, ключ API не сохраняется), реальное хранение — backend (#16). Layout
+  `clear` + `useB24().init()`. Роут `/settings` — в `nitro.prerender.routes`.
 - `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `installFinish`
   (+ диагностика портала); вне фрейма — редирект на `/`. `placement.bind` **пока не делаем** —
   плейсменты добиваем на тестовом портале (см. план).
@@ -61,6 +64,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
 - `app/composables/useChatRules.ts` — реактивные настройки (localStorage, без `apiKey`); производит
   `rules: ChatNotifyRules` (из `app/utils/statement.ts`).
+- `app/components/ImportStatusBanner.vue` — полоса статуса импорта (`B24Alert`, цвет = состояние:
+  ok/running/error); «Обновлено N минут назад», «+N операций», «Записано в CRM · N в чат», при ошибке —
+  действие «Проверить настройки». `app/components/OperationList.vue` — секция операций
+  (`B24Card` на операцию, пустое состояние, `B24Skeleton` под загрузку).
+- `app/types/importStatus.ts` + `app/utils/importStatus.ts` (relative-time RU `formatRelativeTime`,
+  `pluralRu`, `importStateMeta`) + `app/composables/useImportStatus.ts` — модель и презентация статуса
+  импорта; mock на клиенте до backend-опроса (#5), форма ответа = будущий `GET /import/status`.
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
