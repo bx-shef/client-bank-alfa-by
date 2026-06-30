@@ -9,10 +9,10 @@
 //      (default 2000…2029, `transactions=0` = all operations)
 //   4. refresh_token                   → a fresh access_token
 //
-// Logging is masked by default: tokens, account numbers and UNP/corr accounts
-// are redacted in the console. The FULL, unmasked responses are written to
-// `alfa-demo-output.json` (gitignored) so you can inspect the real data locally.
-// Pass `--full` to also print everything unmasked to the console.
+// Masked by default: tokens and account numbers are redacted in the console,
+// and tokens are redacted in the `alfa-demo-output.json` dump (gitignored) too.
+// Statement/account data is written in full so you can inspect it locally.
+// Pass `--full` to disable masking everywhere (keeps live tokens in the file).
 //
 // This is a SANDBOX tool. Config is auto-loaded from `.env.sandbox` (preferred),
 // then `.env.local`, then `.env` — copy `.env.sandbox.example` → `.env.sandbox`
@@ -33,25 +33,14 @@ import { request } from 'node:https'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { stdin as input, stdout as output, platform } from 'node:process'
-
-// --- tiny arg parser -------------------------------------------------------
-function parseArgs(argv) {
-  const out = {}
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (!a.startsWith('--')) continue
-    const key = a.slice(2)
-    const next = argv[i + 1]
-    if (next === undefined || next.startsWith('--')) {
-      out[key] = true
-    } else {
-      out[key] = next
-      i++
-    }
-  }
-  return out
-}
+// Pure, unit-tested helpers (tests/demoUtils.test.ts). Keeping the standalone
+// script free of a build step, so these are plain ESM.
+import {
+  parseArgs, parseDotEnvLine, trunc, extractRedirect, redactTokenSet, isHttpUrl,
+  maskToken as maskTokenPure, maskNumber as maskNumberPure
+} from './lib/demo-utils.mjs'
 
 const args = parseArgs(process.argv.slice(2))
 
@@ -61,20 +50,24 @@ const args = parseArgs(process.argv.slice(2))
 // `.env`. Values already set in the real environment / on the CLI are NOT
 // overridden. Returns the file that was loaded (for the startup banner).
 function loadDotEnv() {
-  const candidates = args['env'] ? [String(args['env'])] : ['.env.sandbox', '.env.local', '.env']
+  const explicit = args['env'] ? String(args['env']) : null
+  const candidates = explicit ? [explicit] : ['.env.sandbox', '.env.local', '.env']
   for (const file of candidates) {
     let text
     try {
       text = readFileSync(file, 'utf8')
-    } catch { continue }
-    for (const line of text.split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
-      if (!m) continue
-      let val = m[2]
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith('\'') && val.endsWith('\''))) {
-        val = val.slice(1, -1)
+    } catch (e) {
+      // A file named explicitly via --env that can't be read is a hard error;
+      // the implicit fallbacks are allowed to be absent.
+      if (explicit) {
+        console.error(`cannot read --env file "${file}": ${e.message}`)
+        process.exit(1)
       }
-      if (process.env[m[1]] === undefined) process.env[m[1]] = val
+      continue
+    }
+    for (const line of text.split(/\r?\n/)) {
+      const kv = parseDotEnvLine(line)
+      if (kv && process.env[kv[0]] === undefined) process.env[kv[0]] = kv[1]
     }
     return file
   }
@@ -90,7 +83,7 @@ const cfg = {
   redirectUri: args['redirect-uri'] || process.env.ALFA_REDIRECT_URI || 'https://www.client.example.com',
   scope: args['scope'] || process.env.ALFA_SCOPE || 'accounts',
   apiPrefix: (args['api-prefix'] || process.env.ALFA_API_PREFIX || '/partner/1.2.0').replace(/\/+$/, ''),
-  state: args['state'] || 'alfa-oauth-test',
+  state: args['state'] || `s-${randomUUID()}`,
   fromYear: Number(args['from-year'] || 2000),
   toYear: Number(args['to-year'] || 2029),
   onlyAccount: args['account'] ? String(args['account']) : '',
@@ -115,20 +108,12 @@ function die(msg) {
 
 if (!cfg.clientId) die('client_id is required (--client-id or ALFA_CLIENT_ID)')
 
-// --- masking (console only; full data goes to the output file) -------------
+// --- masking (console only) ------------------------------------------------
 // client_id / redirect_uri are not secrets (they appear in the browser URL),
-// so only tokens and account/UNP numbers are redacted here.
-function maskToken(t) {
-  if (cfg.full || !t) return t
-  const s = String(t)
-  return `${s.slice(0, 8)}…[${s.length} chars]`
-}
-function maskNumber(n) {
-  if (cfg.full || !n) return n
-  const s = String(n)
-  return s.length <= 4 ? '****' : `****${s.slice(-4)}`
-}
-const trunc = (s, n = 70) => (s && String(s).length > n ? String(s).slice(0, n) + '…' : s)
+// so only tokens and account numbers are redacted. Pure implementations (with
+// tests) live in ./lib/demo-utils.mjs; these just bind the cfg.full flag.
+const maskToken = t => maskTokenPure(t, cfg.full)
+const maskNumber = n => maskNumberPure(n, cfg.full)
 
 // --- HTTP ------------------------------------------------------------------
 function httpRequest(urlStr, { method = 'GET', headers = {}, body } = {}) {
@@ -197,6 +182,11 @@ async function apiGet(path, accessToken, query) {
 }
 
 // --- OAuth helpers ---------------------------------------------------------
+// NOTE: this mirrors the canonical contract in app/utils/alfaOauth.ts (authorize
+// URL, token/refresh bodies). Keep the two in sync by hand when the Alfa OAuth
+// shape changes. One known difference: this script sends client credentials via
+// HTTP Basic auth (see tokenAuthHeader), while alfaOauth.ts puts them in the
+// form body — both are RFC 6749 §2.3.1; reconcile before the backend ships.
 function buildAuthorizeUrl() {
   const q = new URLSearchParams({
     response_type: 'code',
@@ -209,6 +199,13 @@ function buildAuthorizeUrl() {
 }
 
 function openBrowser(url) {
+  // Guard: only ever hand a clean http(s) URL to the shell. Refuses anything
+  // odd in cfg.base/scope so it can't break out of the `start "" "..."` quoting
+  // on Windows (windowsVerbatimArguments passes the string through unescaped).
+  if (!isHttpUrl(url)) {
+    warn('not opening the browser: authorize URL is not a plain http(s) URL — open it manually')
+    return
+  }
   // cmd.exe treats "&" in the URL as a command separator — quote it and pass
   // verbatim so `start` gets the whole URL as one argument.
   const cmd = platform === 'win32' ? 'cmd' : platform === 'darwin' ? 'open' : 'xdg-open'
@@ -222,21 +219,6 @@ function openBrowser(url) {
     child.on('error', () => {})
     child.unref()
   } catch { /* best-effort */ }
-}
-
-function extractCode(raw) {
-  const s = String(raw).trim()
-  if (!s) return null
-  if (s.includes('code=') || s.startsWith('http')) {
-    try {
-      const u = new URL(s, 'https://placeholder.local')
-      const st = u.searchParams.get('state')
-      if (st && st !== cfg.state) warn(`state mismatch (sent "${cfg.state}", got "${st}")`)
-      const code = u.searchParams.get('code')
-      if (code) return code
-    } catch { /* fall through */ }
-  }
-  return s
 }
 
 // --- steps -----------------------------------------------------------------
@@ -341,16 +323,13 @@ async function getStatements(accessToken, accounts) {
       }
       out.push({ account: number, year: y, ...res })
       if (res.errors.length) {
-        consec5xx = 0
         warn(`  ${y}: HTTP ${res.status}, ${res.errors.length} error(s): ${res.errors.map(e => trunc(e.message || JSON.stringify(e), 80)).join('; ')}`)
       } else if (res.page.length) {
-        consec5xx = 0
         total += res.page.length
         const sample = res.page[0]
         log(`  ${y}: ${res.page.length} op(s)  ${C.dim}e.g.${C.reset} ${sample.operType ?? '?'} ${sample.amount ?? '?'} ${sample.currIso ?? ''} `
-          + `← ${trunc(sample.corrName, 24) ?? ''} (${maskNumber(sample.corrNumber)}) "${trunc(sample.purpose, 40)}"`)
+          + `← ${trunc(sample.corrName, 24) ?? ''} (${maskNumber(sample.corrNumber) ?? ''}) "${trunc(sample.purpose, 40) ?? ''}"`)
       } else if (res.status >= 200 && res.status < 300) {
-        consec5xx = 0
         log(`  ${C.dim}${y}: 0 ops${C.reset}`)
       } else {
         // non-2xx without a structured errors[] — surface the body once so a
@@ -360,10 +339,17 @@ async function getStatements(accessToken, accounts) {
           : ' — ' + (typeof res.raw === 'string' ? trunc(res.raw, 200) : trunc(JSON.stringify(res.raw), 200))
         bodyShown = true
         warn(`  ${y}: HTTP ${res.status}${detail}`)
-        if (res.status >= 500 && ++consec5xx >= 3) {
+      }
+      // Bail out of the year loop after repeated server errors (5xx) — counts
+      // any 5xx, including a 5xx that also carries an errors[] payload; resets
+      // on any non-5xx response so transient failures don't trip it.
+      if (res.status >= 500) {
+        if (++consec5xx >= 3) {
           warn(`  skipping years ${y + 1}…${cfg.toYear} for this account (repeated HTTP ${res.status})`)
           break
         }
+      } else {
+        consec5xx = 0
       }
       if (cfg.delayMs > 0) await sleep(cfg.delayMs)
     }
@@ -392,7 +378,7 @@ function saveOutput(data) {
   const file = 'alfa-demo-output.json'
   try {
     writeFileSync(file, JSON.stringify(data, null, 2))
-    ok(`full unmasked data written to ${file} (gitignored)`)
+    ok(`data written to ${file} (gitignored)${cfg.full ? ' — with live tokens (--full)' : ' — tokens redacted'}`)
   } catch (e) {
     warn(`could not write ${file}: ${e.message}`)
   }
@@ -437,7 +423,11 @@ async function main() {
     const rl = createInterface({ input, output })
     const pasted = await rl.question(`\n${C.bold}Paste the redirected URL (or just the code):${C.reset} `)
     rl.close()
-    code = extractCode(pasted)
+    const parsed = extractRedirect(pasted)
+    if (parsed.state && parsed.state !== cfg.state) {
+      warn(`state mismatch (sent "${cfg.state}", got "${parsed.state}")`)
+    }
+    code = parsed.code
   }
   if (!code) die('no authorization code provided')
 
@@ -457,8 +447,10 @@ async function main() {
     redirectUri: cfg.redirectUri,
     requestedScope: cfg.scope,
     grantedScope: tokens.scope,
-    tokenExchange: tokens,
-    refresh: refreshed,
+    // Tokens are redacted in the persisted file by default — pass --full to keep
+    // them (the file is gitignored, but it should not carry live tokens casually).
+    tokenExchange: cfg.full ? tokens : redactTokenSet(tokens),
+    refresh: cfg.full ? refreshed : redactTokenSet(refreshed),
     accounts: accountsRaw,
     statements
   })
