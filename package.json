@@ -23,7 +23,6 @@
     "typecheck": "vue-tsc --noEmit",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "screenshot": "node scripts/screenshot.mjs",
-    "oauth:test": "node scripts/alfa-oauth-test.mjs",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
