@@ -17,6 +17,7 @@
 - **Nuxt 4** (статическая генерация, `nuxt generate`)
 - **Vue 3** — `<script setup lang="ts">`
 - **TypeScript** (строгий), **Tailwind CSS v4**, **Bitrix24 UI** (`b24ui`)
+- **Bitrix24 JS SDK** (`@bitrix24/b24jssdk` + `-nuxt`) — встройка в портал (dual-mode, `/install`)
 - **Vitest** — два проекта: `unit` (node, чистые функции) и `nuxt`
   (`@nuxt/test-utils` + happy-dom, composables и компоненты)
 
@@ -41,11 +42,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
-- `app/pages/index.vue` — публичная страница лендинга (hero + преимущества + подвал).
-- `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных.
+- `app/pages/index.vue` — публичная страница лендинга (hero + преимущества + подвал). Standalone,
+  без `clear`-layout (вне портала), без `B24App`.
+- `app/pages/app.vue` — in-portal просмотр выписки (приходы/расходы); пока на mock-данных. Layout
+  `clear`, на `onMounted` зовёт `useB24().init()` (вне фрейма — no-op), внутри портала ставит
+  заголовок и `fitWindow`.
 - `app/pages/settings.vue` — in-portal настройки (ключ, выбор чата, правила фильтра чата) + живой
   предпросмотр; форма в `<ClientOnly>`, настройки в localStorage (демо, ключ API не сохраняется),
-  реальное хранение — backend. Роут `/settings` добавлен в `nitro.prerender.routes` (`nuxt.config.ts`).
+  реальное хранение — backend. Layout `clear` + `useB24().init()`. Роут `/settings` — в `nitro.prerender.routes`.
+- `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `installFinish`
+  (+ диагностика портала); вне фрейма — редирект на `/`. `placement.bind` **пока не делаем** —
+  плейсменты добиваем на тестовом портале (см. план).
+- `app/layouts/clear.vue` — минимальный layout под in-portal-страницы (`<B24App>` для тем/тостов в iframe).
+- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `im`, `user_brief`, `placement`).
+- `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
+  когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
 - `app/composables/useChatRules.ts` — реактивные настройки (localStorage, без `apiKey`); производит
   `rules: ChatNotifyRules` (из `app/utils/statement.ts`).
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
@@ -76,6 +87,25 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 
 Чистую логику выносим в `app/utils/*` и покрываем тестами; реактивную — в `app/composables/*`,
 UI — в компонентах. Это та же раскладка, что в `currency-converter` — держим её при развитии.
+
+## Встройка в Bitrix24 (этап 2)
+
+Приложение работает в двух режимах: standalone (публичный лендинг `/`) и как iframe-приложение
+внутри портала (`/app`, `/settings`, `/install`). SDK — `@bitrix24/b24jssdk` (+ `-nuxt`).
+
+- `useB24().init()` молча no-op вне фрейма (нет `window.name`) — поэтому in-portal-страницы рендерятся
+  и как обычные URL, и внутри портала без отдельной ветки.
+- `/install` сейчас делает только `init → installFinish` + диагностику. **`placement.bind` не вызываем** —
+  как именно приложение встроено в портал (плейсменты/хендлер) зависит от регистрации приложения;
+  финализируем на тестовом портале. `NUXT_PUBLIC_SITE_URL` (build-arg) понадобится тогда для абсолютных
+  URL хендлеров; сейчас опционален.
+- **Вызовы B24 для данных/настроек — server-side REST по OAuth-токену (backend), не через фрейм** (см.
+  «Хранение настроек» в [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)). Фрейм-SDK тут — только установка
+  и UI-хром (`setTitle`/`fitWindow`).
+- Тесты: чистый `tests/b24.test.ts` (скоупы); `tests/nuxt/install.nuxt.test.ts` (standalone-редирект)
+  через типизированный мок `tests/nuxt/helpers/mockB24.ts` (`makeMockB24`, `ReturnType<typeof useB24>`
+  ловит дрейф). Реальный install-flow в портале автотестами не покрыть — проверяется вручную.
+- CSP в `nginx.conf` уже разрешает облачные домены Б24 (`frame-ancestors`/`connect-src`).
 
 ## Настройка репозитория
 

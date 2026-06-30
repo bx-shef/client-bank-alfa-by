@@ -1,8 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { splitByDirection } from '~/utils/statement'
 import type { StatementItem } from '~/types/statement'
+import { useB24 } from '~/composables/useB24'
+
+// In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
+// work inside the iframe; standalone (direct URL) it just renders the same UI.
+definePageMeta({ layout: 'clear' })
+
+const b24 = useB24()
+onMounted(async () => {
+  await b24.init()
+  if (!b24.isInit()) return
+  try {
+    const $b24 = b24.getOrThrow()
+    await $b24.parent.setTitle('Выписка по счёту')
+    await $b24.parent.fitWindow()
+  } catch (e) {
+    // Best-effort portal chrome; never block the page on it.
+    if (import.meta.dev) console.warn('[app] B24 parent calls failed', e)
+  }
+})
 
 // In-portal statement view. Uses demo data for now; the live Alfa integration
 // (backend) replaces MOCK_STATEMENT with a real Statement of the same shape.
