@@ -30,3 +30,4 @@ logs
 # Visual-verification output (see docs/VISUAL_VERIFICATION.md) — never commit:
 # screenshots of a real portal can leak CRM data, domains, tokens.
 screenshots
+
