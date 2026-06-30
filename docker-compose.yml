@@ -1,0 +1,18 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        NUXT_PUBLIC_AUTHOR_NAME: ${NUXT_PUBLIC_AUTHOR_NAME:-}
+        NUXT_PUBLIC_AUTHOR_URL: ${NUXT_PUBLIC_AUTHOR_URL:-}
+    # Host port 8081 (not 80) so this can run alongside currency-converter's local
+    # compose on the same dev machine. Prod uses `expose` behind nginx-proxy (no clash).
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

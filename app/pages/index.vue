@@ -39,7 +39,7 @@ const years = copyrightYears(START_YEAR, new Date().getFullYear())
         :href="authorUrl"
         class="underline"
         target="_blank"
-        rel="noopener"
+        rel="noopener noreferrer"
       >{{ authorName }}</a>
     </footer>
   </main>

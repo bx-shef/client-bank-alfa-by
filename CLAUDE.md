@@ -81,10 +81,12 @@ UI — в компонентах. Это та же раскладка, что в
 
 - **В main не пушим — только через PR.** Защита `main` (ruleset `protect-main`) и CI как
   required-check настраиваются владельцем репо по [`docs/REPO_SETUP_CHECKLIST.md`](docs/REPO_SETUP_CHECKLIST.md).
-- `.github/workflows/ci.yml` — job `ci` (lint → test → typecheck → generate). Имя `ci` — то,
-  что включается в required status checks ruleset'а.
-- `.github/dependabot.yml` — обновления `npm` и `github-actions`. Блок `docker` добавляем,
-  когда появятся деплой-артефакты (Dockerfile).
+- `.github/workflows/ci.yml` — пайплайн `CI/CD`: job `ci` (lint → test → typecheck → generate),
+  `docker-build` (валидирует сборку образа на каждом PR, без push) и `deploy` (push в GHCR на
+  `main`, gate по зелёному `ci`). Имя `ci` — то, что включается в required status checks ruleset'а.
+  Сторонние actions запинены на commit SHA (issue #2; SHA обновляет Dependabot по комментарию `# vX.Y.Z`).
+- `.github/dependabot.yml` — обновления `npm`, `github-actions` и `docker` (база `node` / `nginx-unprivileged`;
+  major `node` игнорируется — 25+ убрал corepack).
 - `.claude/` — SessionStart-хук (`hooks/session-start.sh`): в веб-сессиях Claude Code ставит
   зависимости и гоняет `nuxt prepare`, чтобы lint/typecheck/test/build работали с первого хода.
 
@@ -95,6 +97,23 @@ UI — в компонентах. Это та же раскладка, что в
 > «собралось без ошибок». `pnpm generate && pnpm screenshot` → смотреть
 > `screenshots/` (mobile/desktop × light/dark). Детали и чек-лист —
 > [`docs/VISUAL_VERIFICATION.md`](docs/VISUAL_VERIFICATION.md).
+
+## Деплой
+
+Фронтенд (лендинг + B24-iframe-UI) деплоится как статика за nginx — по той же схеме, что
+`currency-converter`: **GHCR + Watchtower за общим nginx-proxy**. Подробности — [`docs/DEPLOY.md`](docs/DEPLOY.md).
+
+- Прод-образ — `nginxinc/nginx-unprivileged` (non-root, слушает `:8080`), статика из `nuxt generate`.
+- CSP отдаётся **без** `script-src 'unsafe-inline'`: два inline-скрипта Nuxt (`theme-init` в `app.vue`
+  и `window.__NUXT__.config` с меняющимся `buildId`) разрешаются по sha256-хэшам, которые
+  `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
+  `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
+  домены Б24 (iframe-встройка `/app`,`/settings`) и backend (`bank-import.bx-shef.by`).
+- `docker-compose.yml` — локальная сборка; `docker-compose.prod.yml` — прод (GHCR-образ + Watchtower
+  за nginx-proxy). Общий reverse-proxy (`nginx-proxy` + `acme-companion`, сеть `proxy-net`) ставится
+  на сервере один раз — см. `currency-converter/docker-compose.nginxproxy.yml`, не дублируем здесь.
+- **Backend** (OAuth Альфы, опрос, запись дел/чата) — отдельный сервис за тем же nginx-proxy; пока
+  не реализован (этапы 3–6 плана).
 
 ## Отчётность (reporting-kit)
 

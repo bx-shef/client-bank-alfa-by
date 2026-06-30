@@ -1,0 +1,37 @@
+# Продакшн — разместить на сервере в /home/bitrix/client-bank-alfa-by/
+# Требует:
+#   - docker network proxy-net (создаётся nginx-proxy setup —
+#     см. currency-converter/docker-compose.nginxproxy.yml);
+#   - запущенный Watchtower на хосте (тоже из currency-converter) — он один на
+#     сервер и сам подхватит этот контейнер по метке watchtower.enable ниже.
+# Свой Watchtower здесь НЕ поднимаем: второй экземпляр конфликтует по
+# container_name и плодит двойные перезапуски (см. docs/DEPLOY.md).
+
+services:
+  app:
+    image: ghcr.io/bx-shef/client-bank-alfa-by:latest
+    container_name: client-bank-alfa-by
+    # 8080: the image runs nginx unprivileged (non-root) on 8080.
+    expose:
+      - "8080"
+    environment:
+      VIRTUAL_HOST: ${DOMAIN}
+      VIRTUAL_PORT: 8080
+      LETSENCRYPT_HOST: ${DOMAIN}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - proxy-net
+    labels:
+      # Picked up by the single host-wide Watchtower (deployed once with
+      # currency-converter, runs with --label-enable).
+      - "com.centurylinklabs.watchtower.enable=true"
+
+networks:
+  proxy-net:
+    external: true
