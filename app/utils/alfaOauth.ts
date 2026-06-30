@@ -23,6 +23,11 @@ export interface AlfaOAuthConfig {
 
 const DEFAULT_SCOPE = 'accounts'
 
+/** Refresh-token lifetime per Alfa docs (~10 h). Not returned by the token
+ * response — kept here so the documented value is greppable and verifiable;
+ * confirm against the sandbox on the live run. */
+export const ALFA_REFRESH_TOKEN_TTL_SEC = 36_000
+
 /**
  * Build the authorization URL the user is redirected to. `state` is an opaque
  * anti-CSRF value the caller generates and later verifies on the callback.

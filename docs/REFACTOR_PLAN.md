@@ -66,6 +66,8 @@
 
 ## API Альфы (подтверждено по свагеру + доке «Авторизация»)
 
+> Ссылки на доку Альфы + карточка используемых методов/параметров — [`ALFA_API.md`](./ALFA_API.md).
+
 - **OAuth 2.0:** flow **Authorization Code** (предпочт.) + refresh; `/authorize` и `/token` на
   `…:8273`. `(1)` `/authorize?response_type=code&scope=accounts&redirect_uri=…&state=…` →
   `(2)` `POST /token grant_type=authorization_code&code&redirect_uri&client_id&client_secret` →
