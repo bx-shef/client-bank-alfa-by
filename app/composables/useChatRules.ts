@@ -2,9 +2,11 @@ import { computed, ref, watch } from 'vue'
 import type { ChatNotifyRules } from '~/utils/statement'
 import type { OperationDirection } from '~/types/statement'
 
-// Reactive app settings persisted to localStorage (client-side, demo). The real
-// API key + chat target live server-side once the backend/SDK lands; here we
-// wire the UI and the chat-notify filter (pure logic in utils/statement.ts).
+// Reactive app settings persisted to localStorage (client-side, DEMO ONLY).
+// Real persistence is Bitrix24 `app.option` via the backend REST (server-side
+// OAuth token), not localStorage and not iframe frame-methods — see
+// docs/REFACTOR_PLAN.md "Хранение настроек" and issue #16. Here we just wire the
+// UI and the chat-notify filter (pure logic in utils/statement.ts).
 const STORAGE_KEY = 'cb_settings_v1'
 
 export interface AppSettings {
