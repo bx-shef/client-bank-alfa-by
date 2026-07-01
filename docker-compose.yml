@@ -36,6 +36,8 @@ services:
       # App OAuth creds — refresh portal access token for server-side REST (optional locally).
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
+      # Redis DSN for the BullMQ pipeline (events → fetch → parse queues).
+      REDIS_URL: redis://redis:6379
     ports:
       - "3210:3000"
     healthcheck:
@@ -68,5 +70,19 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Redis — backing store for the BullMQ pipeline (events/fetch/parse queues).
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  redisdata:
