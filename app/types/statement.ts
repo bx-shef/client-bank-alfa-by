@@ -53,3 +53,46 @@ export interface Statement {
    * no more pages. Pass back via `StatementQuery.cursor`. */
   nextCursor?: string
 }
+
+// --- Unified statement interface -------------------------------------------
+// The whole point of the domain core: every bank (Alfa online, Prior СПР, manual
+// upload) is fetched differently but produces the SAME output — a StatementItem[].
+// So the app is provider-agnostic. The interface is:
+//
+//   вход  (StatementQuery):  банк + счёт + диапазон дат
+//   процесс:                 получить выписку у провайдера и разобрать её
+//   выход (StatementItem[]): по операции — приход/расход, счёт+имя+УНП контрагента,
+//                            сумма, валюта, дата операции, назначение платежа, docId (дедуп)
+//
+// A test feeds a provider's raw response (a fixture) into the provider's
+// `StatementNormalizer` and asserts the resulting StatementItem[] — the exact
+// data the app consumes. The fetch (I/O, per-provider) is verified separately.
+
+/** Input of a statement request: which provider, which account, which date range.
+ * Credentials/tokens are resolved separately (config + token store), not here. */
+export interface StatementQuery {
+  providerId: BankProviderId
+  /** Our account number (or the provider's account id). */
+  account: string
+  /** Inclusive date range, ISO `YYYY-MM-DD`. */
+  dateFrom: string
+  dateTo: string
+  /** Opaque pagination cursor from a previous `Statement.nextCursor`. */
+  cursor?: string
+}
+
+/** Context a normalizer needs beyond the raw response: our own account and its
+ * currency, for providers whose rows don't repeat them (e.g. Prior). Alfa rows
+ * carry both, so it ignores this. */
+export interface NormalizeContext {
+  account: string
+  currency?: string
+}
+
+/**
+ * The unified contract every provider satisfies: a pure function from a
+ * provider's raw statement response to normalized `StatementItem[]`. The INPUT
+ * type differs per provider; the OUTPUT is identical — that identity is what
+ * makes the app provider-agnostic and lets one test shape cover every bank.
+ */
+export type StatementNormalizer<TRaw = unknown> = (raw: TRaw, ctx: NormalizeContext) => StatementItem[]

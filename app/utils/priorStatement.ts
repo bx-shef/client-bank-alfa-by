@@ -7,7 +7,7 @@
 // The counterparty is the OTHER side of the operation: the payer (`debtor`) on an
 // incoming credit (приход), the payee (`creditor`) on an outgoing debit (расход).
 
-import type { OperationDirection, StatementItem, StatementParty } from '~/types/statement'
+import type { NormalizeContext, OperationDirection, StatementItem, StatementNormalizer, StatementParty } from '~/types/statement'
 
 /** A party (debtor/creditor) as Priorbank returns it. */
 export interface PriorTxParty {
@@ -42,12 +42,10 @@ export interface PriorTransaction {
   creditorAgent?: PriorTxAgent
 }
 
-/** Our own account the transactions belong to. `currency` fills in when a
- * transaction omits it (Priorbank drops it when equal to the account currency). */
-export interface PriorAccountContext {
-  account: string
-  currency?: string
-}
+/** Our own account the transactions belong to — the shared `NormalizeContext`.
+ * `currency` fills in when a transaction omits it (Priorbank drops it when equal
+ * to the account currency). */
+export type PriorAccountContext = NormalizeContext
 
 /** Пull the УНП/tax id out of a party's org/private identification. Priorbank
  * prefixes it (`INN191167894`); we keep the digits (BY УНП is 9 digits). Falls
@@ -114,3 +112,7 @@ export function normalizePriorTransactionList(
   const account = ctx.account || response?.data?.accountId || ''
   return txs.map(tx => normalizePriorTransaction(tx, { ...ctx, account }))
 }
+
+/** Prior's implementation of the unified `StatementNormalizer` contract
+ * (`raw, ctx → StatementItem[]`). See app/types/statement.ts. */
+export const normalizePrior: StatementNormalizer<PriorTransactionListResponse> = normalizePriorTransactionList

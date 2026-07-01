@@ -84,13 +84,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
   - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
-    `OperationDirection`, `BankProviderId`).
+    `OperationDirection`, `BankProviderId`) + **единый интерфейс**: `StatementQuery` (вход:
+    банк/счёт/диапазон), `StatementNormalizer` (`raw,ctx → StatementItem[]`) — один выход на все
+    банки (см. REFACTOR_PLAN «Единый интерфейс выписки»).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
   - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
     `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
   - `app/utils/alfaOauth.ts` — OAuth 2.0 Альфы (Authorization Code + refresh): URL/тела запросов, парсинг.
-  - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`.
+  - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`
+    (`normalizeAlfa` — контракт `StatementNormalizer`).
+  - `app/utils/priorStatement.ts` — нормализация операции Приорбанка (Open Banking СПР) в `StatementItem`
+    (`normalizePrior`); подтверждено на живом sandbox — см. [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
   - `app/utils/clientBankText.ts` — парсер текстовой выписки client-bank (CP1251, `***** ^Type=`)
     для провайдеров `prior-by`/`manual`. ⚠️ Портированный пример, рефакторинг — issue #19.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.

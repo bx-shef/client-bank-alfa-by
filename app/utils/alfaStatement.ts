@@ -1,4 +1,4 @@
-import type { StatementItem } from '~/types/statement'
+import type { StatementItem, StatementNormalizer } from '~/types/statement'
 import { directionFromOperType } from '~/utils/statement'
 
 // Maps Alfa-Bank's `/accounts/statement` response (partner.accounts 1.2.0) onto
@@ -90,6 +90,11 @@ export function normalizeAlfaRow(row: AlfaStatementRow): StatementItem {
 export function normalizeAlfaStatement(raw: AlfaStatementResponse): StatementItem[] {
   return (raw.page ?? []).map(normalizeAlfaRow)
 }
+
+/** Alfa's implementation of the unified `StatementNormalizer` contract
+ * (`raw, ctx → StatementItem[]`). `ctx` is unused — Alfa rows carry their own
+ * account/currency. See app/types/statement.ts. */
+export const normalizeAlfa: StatementNormalizer<AlfaStatementResponse> = raw => normalizeAlfaStatement(raw)
 
 /** Per-account errors from a statement response (empty when none). The transport
  * should check this and not treat an errored empty page as "no operations". */

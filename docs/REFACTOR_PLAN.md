@@ -46,6 +46,23 @@
 пререндерится, живые данные подтягиваются на клиенте при гидратации. CORS backend настраивается
 под облачные домены Б24.
 
+### Единый интерфейс выписки (контракт для всех банков и тестов)
+
+Каждый банк получается по-своему, но отдаёт **одинаковый выход** — `StatementItem[]`. Это и делает
+приложение банк-независимым, и даёт один вид теста на всех (`app/types/statement.ts`):
+
+- **вход** — `StatementQuery`: `providerId` (банк) + `account` (счёт) + `dateFrom/dateTo` (диапазон);
+- **процесс** — получить выписку у провайдера и разобрать (`fetch` — I/O, per-provider; тестируется отдельно);
+- **выход** — `StatementItem[]`, контракт нормализатора `StatementNormalizer = (raw, ctx) => StatementItem[]`.
+  Поля, которые нужны приложению: `direction` (приход/расход), `counterparty.account`/`.name`/`.unp`
+  (счёт+имя+УНП контрагента — для сопоставления компании в CRM), `amount`, `currency`, `acceptDate`/`operDate`
+  (дата операции), `purpose` (назначение), `docId` (идемпотентность/дедуп), `account` (наш счёт).
+
+Реализации: `normalizeAlfa` (`alfaStatement.ts`), `normalizePrior` (`priorStatement.ts`); ручной
+импорт (`clientBankText.ts`) приводится к тому же выходу — #19. **Тест** = raw-ответ провайдера
+(fixture) → нормализатор → проверка `StatementItem[]` (`tests/statementInterface.test.ts`,
+`tests/alfaStatement.test.ts`, `tests/priorStatement.test.ts`).
+
 ## Дорожная карта (по PR, «от малого к сложному»)
 
 1. **[✓ этап 1] Доменное ядро + первый UI-срез (mock).** Типы выписки, абстракция
