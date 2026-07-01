@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LANDING_TITLE, LANDING_DESCRIPTION } from '~/utils/landing'
+import { LANDING_TITLE, LANDING_DESCRIPTION, ogImageUrl } from '~/utils/landing'
 
 // b24ui colorMode persists the choice under this @vueuse/core key; the inline
 // theme-init script below reads it to set the class before paint. Keep in sync
@@ -8,6 +8,10 @@ const COLOR_MODE_STORAGE_KEY = 'vueuse-color-scheme'
 
 const title = LANDING_TITLE
 const description = LANDING_DESCRIPTION
+
+// og:image should be absolute for scrapers; siteUrl is set via NUXT_PUBLIC_SITE_URL
+// in prod (empty in dev → a relative /og.png, which is fine for local preview).
+const ogImage = ogImageUrl(useRuntimeConfig().public.siteUrl || '')
 
 useHead({
   htmlAttrs: { lang: 'ru' },
@@ -35,7 +39,16 @@ useSeoMeta({
   description,
   ogTitle: title,
   ogDescription: description,
-  ogType: 'website'
+  ogType: 'website',
+  ogImage,
+  ogImageWidth: 1200,
+  ogImageHeight: 630,
+  ogImageType: 'image/png',
+  ogImageAlt: title,
+  twitterCard: 'summary_large_image',
+  twitterTitle: title,
+  twitterDescription: description,
+  twitterImage: ogImage
 })
 </script>
 

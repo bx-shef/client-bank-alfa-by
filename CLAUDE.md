@@ -2,9 +2,10 @@
 
 > Last reviewed: 2026-07-01
 
-Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.
-Публичная страница — лендинг (SSG). Появилась серверная часть (Nitro): эндпоинт
-вебхуков Bitrix24 (`/api/b24/events`) + хранилище токенов портала.
+Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
+Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
+выписки. Публичная страница — лендинг (SSG). Появилась серверная часть (Nitro):
+эндпоинт вебхуков Bitrix24 (`/api/b24/events`) + хранилище токенов портала.
 
 > **Статус:** рефакторинг legacy-приложения (план — [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)).
 > Репозиторий: **frontend** (публичный лендинг SSG + B24-iframe-UI) **и backend** (Nitro-сервис:
@@ -40,7 +41,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 
 ## Архитектура
 
-- `app/app.vue` — **корень Nuxt** (не страница): `useHead`/SEO/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
+- `app/app.vue` — **корень Nuxt** (не страница): `useHead`/SEO (вкл. `og:image`/`twitter:card` →
+  `public/og.png`, абсолютный URL из `siteUrl` в проде)/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
@@ -183,6 +185,10 @@ UI — в компонентах. Это та же раскладка, что в
 > «собралось без ошибок». `pnpm generate && pnpm screenshot` → смотреть
 > `screenshots/` (mobile/desktop × light/dark). Детали и чек-лист —
 > [`docs/VISUAL_VERIFICATION.md`](docs/VISUAL_VERIFICATION.md).
+
+OG-картинка (`public/og.png`, 1200×630) генерируется из HTML-шаблона через
+пред-установленный Chromium — `pnpm og` (`scripts/make-og.mjs`); коммитим как
+статику. Перегенерировать при смене заголовка/брендинга.
 
 ## Деплой
 
