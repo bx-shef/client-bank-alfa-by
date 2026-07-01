@@ -36,6 +36,7 @@
 //   PRIOR_ACCOUNT_ID     / --account   (skip listing, query one account)
 // Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --code <code>
 //        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only
+//        --verbose (dump the /register request + full response for debugging)
 
 import { request } from 'node:https'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -238,8 +239,11 @@ async function oidcDiscovery(tokenA) {
   log(`${C.dim}HTTP ${res.status}${C.reset}`)
   if (res.json) log(JSON.stringify(res.json, null, 2))
   else log(trunc(res.text, 600))
-  // The token endpoint value is the JWT `aud` for the authorize request.
-  const aud = res.json && (res.json.token_endpoint || (res.json.issuer && `${res.json.issuer}/oauth2/token`))
+  // JWT `aud` for the authorize `request` = the issuer (per the bank's examples
+  // this is https://api.priorbank.by:9544/oauth2/token, note the :9544 auth
+  // server, distinct from the :9344 API-gateway token_endpoint). Fall back to
+  // token_endpoint, then the gateway default.
+  const aud = res.json && (res.json.issuer || res.json.token_endpoint)
   return aud || `${cfg.base}${AUTH}/oauth2/token`
 }
 
@@ -254,6 +258,10 @@ async function dcrRegister(tokenA, jwks) {
     scope: 'accounts openid',
     ...(jwks ? { jwks } : {})
   }
+  if (args['verbose']) {
+    log(`${C.dim}→ POST ${cfg.base}${DCR}/register${C.reset}`)
+    log(JSON.stringify(body, null, 2))
+  }
   const res = await httpRequest(`${cfg.base}${DCR}/register`, {
     method: 'POST',
     headers: {
@@ -265,6 +273,10 @@ async function dcrRegister(tokenA, jwks) {
     body: JSON.stringify(body)
   })
   log(`${C.dim}HTTP ${res.status}${C.reset}`)
+  if (args['verbose']) {
+    log(`${C.dim}← headers:${C.reset} ${JSON.stringify(res.headers)}`)
+    log(`${C.dim}← body:${C.reset} ${res.text}`)
+  }
   if (res.status >= 200 && res.status < 300 && res.json) {
     ok('business app registered')
     log(`  client_id:     ${res.json.client_id}`)
