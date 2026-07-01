@@ -35,7 +35,7 @@
 //   PRIOR_KID            (JWK key id; must match the `kid` published in `jwks`)
 //   PRIOR_ACCOUNT_ID     / --account   (skip listing, query one account)
 // Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --expires <YYYY-MM-DD> --code <code>
-//        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only
+//        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only --all
 //        --verbose (dump the /register request + full response for debugging)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
 
@@ -414,7 +414,8 @@ async function listAccounts(tokenB) {
   const accounts = (d && (d.account || d.accounts)) || (Array.isArray(d) ? d : [])
   ok(`${accounts.length} account(s)`)
   for (const a of accounts) {
-    log(`  • id ${a.accountId ?? a.AccountId ?? '?'}  ${maskNumber(a.iban ?? a.identification ?? a.number)}  ${a.currency ?? a.currIso ?? ''}`)
+    const iban = a.accountDetails?.identification ?? a.iban ?? a.identification ?? a.number
+    log(`  • id ${a.accountId ?? a.AccountId ?? '?'}  ${maskNumber(iban)}  ${a.currency ?? a.currIso ?? ''}  ${a.accountSubType ?? ''}`)
   }
   return { raw: res.json, accounts }
 }
@@ -570,13 +571,22 @@ async function main() {
   const tokens = await exchangeCode(code)
   if (!tokens) process.exit(1)
 
-  const ids = cfg.accountId
+  let ids = cfg.accountId
     ? [cfg.accountId]
     : (await listAccounts(tokens.access_token)).accounts
         .map(a => a.accountId || a.AccountId).filter(Boolean)
+  // Sandbox throttles hard — don't fan out over all accounts by default (that
+  // trips HTTP 429). One account is enough to validate; --all does every one.
+  if (!cfg.accountId && !args['all'] && ids.length > 1) {
+    warn(`processing only the first account (${ids[0]}) to avoid the sandbox rate limit — use --account <id> or --all`)
+    ids = ids.slice(0, 1)
+  }
   head('Statements (async create + poll)')
   const statements = []
-  for (const id of ids) statements.push(await fetchStatement(tokens.access_token, id))
+  for (const id of ids) {
+    statements.push(await fetchStatement(tokens.access_token, id))
+    if (cfg.delayMs > 0 && ids.length > 1) await sleep(cfg.delayMs)
+  }
 
   head('Save')
   saveOutput({
