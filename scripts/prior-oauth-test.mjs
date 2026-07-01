@@ -37,6 +37,7 @@
 // Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --code <code>
 //        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only
 //        --verbose (dump the /register request + full response for debugging)
+//        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
 
 import { request } from 'node:https'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -247,30 +248,53 @@ async function oidcDiscovery(tokenA) {
   return aud || `${cfg.base}${AUTH}/oauth2/token`
 }
 
-async function dcrRegister(tokenA, jwks) {
+async function dcrRegister(tokenA, jwks, pem) {
   head('DCR — POST /register (create business app, token A)')
-  const body = {
+  // Registration metadata (RFC 7591 + OB fields). Sent either as JSON or, with
+  // --register-jwt, as a signed JWT (application/jwt) — the OB DCR profile often
+  // requires a signed request; a JSON body then triggers a generic 500.
+  const meta = {
     client_name: args['app-name'] ? String(args['app-name']) : 'OB-client-bank-alfa-by',
     redirect_uris: [cfg.redirectUri],
     grant_types: ['client_credentials', 'authorization_code', 'refresh_token'],
     response_types: ['code'],
     token_endpoint_auth_method: 'client_secret_basic',
     scope: 'accounts openid',
+    application_type: 'web',
+    id_token_signed_response_alg: 'RS256',
+    request_object_signing_alg: 'RS256',
     ...(jwks ? { jwks } : {})
   }
+
+  let contentType = 'application/json'
+  let payload = JSON.stringify(meta)
+  if (args['register-jwt']) {
+    if (!pem) die('--register-jwt needs PRIOR_PRIVATE_KEY (run --gen-key)')
+    payload = signJwt({
+      ...meta,
+      iss: meta.client_name,
+      sub: meta.client_name,
+      aud: cfg.base,
+      iat: nowSec(),
+      exp: nowSec() + 300,
+      jti: `${randomUUID()}`
+    }, pem)
+    contentType = 'application/jwt'
+  }
+
   if (args['verbose']) {
-    log(`${C.dim}→ POST ${cfg.base}${DCR}/register${C.reset}`)
-    log(JSON.stringify(body, null, 2))
+    log(`${C.dim}→ POST ${cfg.base}${DCR}/register  (Content-Type: ${contentType})${C.reset}`)
+    log(args['register-jwt'] ? `${C.dim}signed JWT payload:${C.reset}\n${JSON.stringify(meta, null, 2)}` : JSON.stringify(meta, null, 2))
   }
   const res = await httpRequest(`${cfg.base}${DCR}/register`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${tokenA}`,
-      'Content-Type': 'application/json',
+      'Content-Type': contentType,
       'Accept': 'application/json',
-      'Content-Length': Buffer.byteLength(JSON.stringify(body))
+      'Content-Length': Buffer.byteLength(payload)
     },
-    body: JSON.stringify(body)
+    body: payload
   })
   log(`${C.dim}HTTP ${res.status}${C.reset}`)
   if (args['verbose']) {
@@ -473,7 +497,7 @@ async function main() {
     const pem = loadPrivateKey()
     const jwks = pem ? { keys: [publicJwk(pem)] } : null
     if (!jwks) warn('no PRIOR_PRIVATE_KEY — registering without jwks (authorization_code/private_key_jwt will need it)')
-    await dcrRegister(tokenA, jwks)
+    await dcrRegister(tokenA, jwks, pem)
     return
   }
 
