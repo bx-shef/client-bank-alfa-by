@@ -93,6 +93,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
   - `app/utils/alfaOauth.ts` — OAuth 2.0 Альфы (Authorization Code + refresh): URL/тела запросов, парсинг.
+  - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
+    `buildPriorAuthorizeUrl`/claims/тела токенов/`buildConsentRequest`/`buildResourceRequestBody` + парсеры
+    `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`). Без `node:crypto` —
+    подпись `request`-JWT и транспорт у вызывающего (браузеро-безопасно, аналог `alfaOauth.ts`). Три имени,
+    совпадающие с Альфой, несут префикс `Prior` (Nuxt авто-импортит `app/utils/**` в один неймспейс).
   - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`
     (`normalizeAlfa` — контракт `StatementNormalizer`).
   - `app/utils/priorStatement.ts` — нормализация операции Приорбанка (Open Banking СПР) в `StatementItem`
@@ -142,7 +147,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
   - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор текстовой выписки
     через канонический `clientBankText.ts` (Node ≥ 22, нативный TS-стриппинг).
-  - `scripts/lib/*.mjs` — переиспользуемые чистые помощники скриптов (`demo-utils`, `env`), покрыты тестами.
+  - `scripts/lib/*.mjs` — общая обвязка обоих банк-скриптов (одинаковые запуск/проверка/вывод):
+    `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
+    `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser`).
 - `tests/*.test.ts` — Vitest (node) на чистые утилиты.
 - `tests/nuxt/**/*.test.ts` — Vitest (проект `nuxt`) на компоненты/страницы (`mountSuspended`).
 
