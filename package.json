@@ -24,6 +24,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "screenshot": "node scripts/screenshot.mjs",
     "oauth:test": "node scripts/alfa-oauth-test.mjs",
+    "prior:test": "node scripts/prior-oauth-test.mjs",
     "parse:statement": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/parse-statement.ts",
     "postinstall": "nuxt prepare"
   },

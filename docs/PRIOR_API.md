@@ -108,6 +108,30 @@ Postman-коллекция — на devportal.
 > (пара RSA-ключей, без mTLS-возни). Способ аутентификации приложения — **отдельный слой** от
 > транспортного TLS: на проде BY-крипто TLS (СКЗИ) обязателен при любом из этих методов.
 
+### Скрипт живой проверки sandbox: `pnpm prior:test`
+
+`scripts/prior-oauth-test.mjs` — самодостаточный (без npm-зависимостей, ESM, как
+`alfa-oauth-test.mjs`) прогон **sandbox** по контракту выше. Конфиг — `.env.priorbank`
+(шаблон `.env.priorbank.example`); токены/счета маскируются, вывод — в `prior-demo-output.json`
+(gitignored). Режимы:
+
+```bash
+pnpm prior:test --gen-key      # RSA-пара + jwks для регистрации приложения (kid ← PRIOR_KID)
+pnpm prior:test --oidc         # token A → /oidcdiscovery (issuer, token endpoint = aud)
+pnpm prior:test --dcr          # token A (тех-приложение) → POST /register → бизнес-app client_id/secret
+pnpm prior:test                # consent → authorize (подписанный request-JWT) → code → выписка
+pnpm prior:test --url-only     # только собрать и показать authorize-URL (без сети)
+pnpm prior:test --revoke <t>   # отзыв токена
+```
+
+Поток по умолчанию: token Б (`scope=accounts`) → `POST /accountConsents` → печатает
+authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_KEY`) → входишь тестовым
+пользователем (`testspr_le`/`testspr_pi`) → вставляешь redirect с `code` → обмен на токен B →
+`GET /accounts` → асинхронные `POST`/`GET /accounts/{id}/statements`. ⚠️ Форму тела
+create-statement и точную схему `GET /accounts` **сверить по Postman-коллекции** на живом
+прогоне (помечено в скрипте). Живой запуск — только с **BY-доступного сервера** (sandbox
+`:9344` из облака недоступен).
+
 ### СКЗИ (средство криптозащиты) — только для прода
 
 Требование СПР 6.02: TLS с сервером авторизации Приорбанка на проде должен идти на **белорусских
