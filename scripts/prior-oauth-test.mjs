@@ -421,18 +421,14 @@ async function listAccounts(tokenB) {
   return { raw: res.json, accounts }
 }
 
-// Statement window default: last 30 days if --from/--to not given.
-const isoDateTime = (dt) => {
-  if (!dt) return undefined
-  return dt.includes('T') ? dt : `${dt}T00:00:00.000Z`
-}
-
 async function fetchStatement(tokenB, accountId) {
   log(`\n${C.bold}account ${accountId}${C.reset}`)
   // Create the statement (async). Body per the Open-banking swagger:
-  // { data: { statement: { fromBookingDate, toBookingDate } } } (ISO datetimes).
-  const from = isoDateTime(cfg.from) || `${new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)}T00:00:00.000Z`
-  const to = isoDateTime(cfg.to) || `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`
+  // { data: { statement: { fromBookingDate, toBookingDate } } }. NB the fields
+  // must be plain `yyyy-MM-dd` (date only) — the swagger example showed a full
+  // ISO datetime, but the server validates date-only.
+  const from = cfg.from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+  const to = cfg.to || new Date().toISOString().slice(0, 10)
   const createBody = { data: { statement: { fromBookingDate: from, toBookingDate: to } } }
   const created = await obRequest(`${OB}/accounts/${accountId}/statements`, {
     method: 'POST', accessToken: tokenB, json: createBody
