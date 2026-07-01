@@ -29,19 +29,20 @@
 //        --delay-ms 700 --code <authCode> (skip browser) --refresh <token>
 //        --url-only (just print the authorize URL) --full (no masking)
 
-import { request } from 'node:https'
 import { writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
-import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { stdin as input, stdout as output, platform } from 'node:process'
+import { stdin as input, stdout as output } from 'node:process'
 // Pure, unit-tested helpers (tests/demoUtils.test.ts). Keeping the standalone
 // script free of a build step, so these are plain ESM.
 import {
-  parseArgs, trunc, extractRedirect, redactTokenSet, isHttpUrl,
+  parseArgs, trunc, extractRedirect, redactTokenSet,
   maskToken as maskTokenPure, maskNumber as maskNumberPure
 } from './lib/demo-utils.mjs'
 import { loadDotEnv } from './lib/env.mjs'
+// Console + HTTP plumbing shared with prior-oauth-test.mjs (scripts/lib).
+import { C, log, ok, warn, err, head, die, openBrowser } from './lib/cli.mjs'
+import { httpRequest } from './lib/http.mjs'
 
 const args = parseArgs(process.argv.slice(2))
 
@@ -68,21 +69,6 @@ const cfg = {
   full: Boolean(args['full'])
 }
 
-const C = {
-  reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
-  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m', cyan: '\x1b[36m'
-}
-const log = (...a) => console.log(...a)
-const ok = s => log(`${C.green}✓${C.reset} ${s}`)
-const warn = s => log(`${C.yellow}!${C.reset} ${s}`)
-const err = s => log(`${C.red}✗${C.reset} ${s}`)
-const head = s => log(`\n${C.bold}${C.cyan}── ${s} ──${C.reset}`)
-
-function die(msg) {
-  err(msg)
-  process.exit(1)
-}
-
 if (!cfg.clientId) die('client_id is required (--client-id or ALFA_CLIENT_ID)')
 
 // --- masking (console only) ------------------------------------------------
@@ -91,40 +77,6 @@ if (!cfg.clientId) die('client_id is required (--client-id or ALFA_CLIENT_ID)')
 // tests) live in ./lib/demo-utils.mjs; these just bind the cfg.full flag.
 const maskToken = t => maskTokenPure(t, cfg.full)
 const maskNumber = n => maskNumberPure(n, cfg.full)
-
-// --- HTTP ------------------------------------------------------------------
-function httpRequest(urlStr, { method = 'GET', headers = {}, body } = {}) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlStr)
-    const req = request(
-      {
-        hostname: url.hostname,
-        port: url.port || 443,
-        path: url.pathname + url.search,
-        method,
-        headers
-        // Honour the standard CA env vars (NODE_EXTRA_CA_CERTS) — never disable
-        // verification here; a cert failure is a real finding to report.
-      },
-      (res) => {
-        const chunks = []
-        res.on('data', c => chunks.push(c))
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8')
-          let json
-          try {
-            json = JSON.parse(text)
-          } catch { /* not json */ }
-          resolve({ status: res.statusCode, headers: res.headers, text, json })
-        })
-      }
-    )
-    req.on('error', reject)
-    req.setTimeout(40000, () => req.destroy(new Error('request timed out after 40s')))
-    if (body) req.write(body)
-    req.end()
-  })
-}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -173,29 +125,6 @@ function buildAuthorizeUrl() {
     state: cfg.state
   })
   return `${cfg.base}/authorize?${q.toString()}`
-}
-
-function openBrowser(url) {
-  // Guard: only ever hand a clean http(s) URL to the shell. Refuses anything
-  // odd in cfg.base/scope so it can't break out of the `start "" "..."` quoting
-  // on Windows (windowsVerbatimArguments passes the string through unescaped).
-  if (!isHttpUrl(url)) {
-    warn('not opening the browser: authorize URL is not a plain http(s) URL — open it manually')
-    return
-  }
-  // cmd.exe treats "&" in the URL as a command separator — quote it and pass
-  // verbatim so `start` gets the whole URL as one argument.
-  const cmd = platform === 'win32' ? 'cmd' : platform === 'darwin' ? 'open' : 'xdg-open'
-  const cmdArgs = platform === 'win32' ? ['/c', 'start', '""', `"${url}"`] : [url]
-  try {
-    const child = spawn(cmd, cmdArgs, {
-      stdio: 'ignore',
-      detached: true,
-      windowsVerbatimArguments: platform === 'win32'
-    })
-    child.on('error', () => {})
-    child.unref()
-  } catch { /* best-effort */ }
 }
 
 // --- steps -----------------------------------------------------------------

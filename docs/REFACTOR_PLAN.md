@@ -103,9 +103,11 @@
 9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
    [~ Prior] Open Banking СПР **проверен на sandbox живьём**; нормализатор `normalizePrior`
    (`app/utils/priorStatement.ts`) **готов и покрыт тестами**; live-recon — `scripts/prior-oauth-test.mjs`.
-   **Осталось:** вынести OAuth/DCR/consent-ядро в `app/utils/priorOauth.ts` (сейчас в скрипте) под тесты —
-   отдельный слайс, аналог этапа 3 Альфы; прод-СКЗИ — #41. Ручной импорт (`manual`): нормализация
-   `clientBankText.ts` в `StatementItem` — #19.
+   OAuth/DCR/consent-ядро **вынесено** в чистый `app/utils/priorOauth.ts` (URL/тела/claims + парсеры,
+   без `node:crypto` — подпись/транспорт у вызывающего, аналог `alfaOauth.ts`), под тестами
+   `tests/priorOauth.test.ts`; скрипт — тонкий потребитель (canonical-контракт синхронно, как у Альфы).
+   **Осталось:** прод-СКЗИ — #41; серверный движок Приора (backend) на базе `priorOauth.ts` — далее.
+   Ручной импорт (`manual`): нормализация `clientBankText.ts` в `StatementItem` — #19.
 
 ## API Альфы (подтверждено по свагеру + доке «Авторизация»)
 
