@@ -59,10 +59,11 @@
   (счёт+имя+УНП контрагента — для сопоставления компании в CRM), `amount`, `currency`, `acceptDate`/`operDate`
   (дата операции), `purpose` (назначение), `docId` (идемпотентность/дедуп), `account` (наш счёт).
 
-Реализации: `normalizeAlfa` (`alfaStatement.ts`), `normalizePrior` (`priorStatement.ts`); ручной
-импорт (`clientBankText.ts`) приводится к тому же выходу — #19. **Тест** = raw-ответ провайдера
+Реализации: `normalizeAlfa` (`alfaStatement.ts`), `normalizePrior` (`priorStatement.ts`), ручной
+импорт `normalizeClientBank` (`clientBankStatement.ts`, поверх парсера `clientBankText.ts`) — все три
+дают один выход; осталось по `manual` — UI-загрузка файла (#19). **Тест** = raw-ответ провайдера
 (fixture) → нормализатор → проверка `StatementItem[]` (`tests/statementInterface.test.ts`,
-`tests/alfaStatement.test.ts`, `tests/priorStatement.test.ts`).
+`tests/alfaStatement.test.ts`, `tests/priorStatement.test.ts`, `tests/clientBankStatement.test.ts`).
 
 ## Дорожная карта (по PR, «от малого к сложному»)
 

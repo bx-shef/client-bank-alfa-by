@@ -120,7 +120,39 @@ describe('normalizeClientBank — behavior', () => {
     expect(op.currency).toBe('USD')
   })
 
+  it('foreign debit takes the account-currency …Q amount, never the BYN equivalent', () => {
+    // Db=1000 (BYN equiv) but DebQ=500 (USD) — the reported amount must be 500 USD.
+    const op = normalizeClientBankRow({ Db: '1000.00', DebQ: '500.00', I2: 'USD', DocID: 'x' }, 'A', 'BYN')
+    expect(op.direction).toBe('debit')
+    expect(op.amount).toBe(500)
+    expect(op.currency).toBe('USD')
+  })
+
+  it('foreign row without a …Q field yields 0, not a mislabeled BYN value', () => {
+    const op = normalizeClientBankRow({ Cre: '100.50', I2: 'USD', DocID: 'x' }, 'A', 'BYN')
+    expect(op.amount).toBe(0)
+    expect(op.currency).toBe('USD')
+  })
+
+  it('strips a non-digit УНП prefix (e.g. УНП191234567 → 191234567)', () => {
+    expect(normalizeClientBankRow({ Cre: '1', UNNRec: 'УНП191234567', DocID: 'x' }, 'A', 'BYN').counterparty.unp).toBe('191234567')
+  })
+
+  it('empty DocID yields an empty docId (dedup key collapses — handled on backend)', () => {
+    expect(normalizeClientBankRow({ Cre: '1' }, 'A', 'BYN').docId).toBe('')
+  })
+
   it('never emits NaN for a malformed amount', () => {
     expect(normalizeClientBankRow({ Db: 'not-a-number', DocID: 'x' }, 'A', 'BYN').amount).toBe(0)
+  })
+
+  it('an empty statement (no OUT_PARAM rows) normalizes to []', () => {
+    const parsed = parseClientBankText('***** ^Type=400^ ^Acc=BY00^  -  T\n[OUT_PARAM]')
+    expect(normalizeClientBank(parsed, { account: '' })).toEqual([])
+  })
+
+  it('undetermined currency (non-BY account, no marker/ctx) stays empty — UI blocks import', () => {
+    const parsed = parseClientBankText('***** ^Type=400^ ^Acc=LT12^  -  T\n[OUT_PARAM]\n^DocDate=01.01.2024^\n^Cre=5.00^\n^DocID=z^')
+    expect(normalizeClientBank(parsed, { account: '' })[0]!.currency).toBe('')
   })
 })

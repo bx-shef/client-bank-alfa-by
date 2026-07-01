@@ -60,17 +60,21 @@ export function detectStatementCurrency(parsed: ClientBankParsed, ctxCurrency?: 
     ?? (parsed.GENERAL.ACC.toUpperCase().startsWith('BY') ? 'BYN' : '')
 }
 
-/** Debit/credit field chains. For a FOREIGN-currency statement the `…Q` field
- * holds the account-currency (foreign) amount and the plain field the BYN
- * equivalent, so we prefer `…Q` there; for a national (BYN) statement the plain
- * field IS the amount (the `…Q` field is usually absent). Direction is always
- * read from the plain fields (the `…Q` side can be 0 on a revaluation row).
- * NOTE (#19): the foreign vs BYN-equivalent choice is confirmed only against the
- * synthetic CNY fixture — recheck on real foreign statements. */
+// Debit/credit field chains. A FOREIGN-currency statement carries BOTH the
+// account-currency (foreign) amount in the `…Q` field AND the BYN equivalent in
+// the plain field — so the foreign amount is taken STRICTLY from `…Q` (never a
+// fallback to the plain field, which would mislabel a BYN value with the foreign
+// currency). A national (BYN) statement has the amount in the plain field, with
+// `…Q` a rare fallback. Direction is always read from the plain fields (the `…Q`
+// side can be 0 on a revaluation row).
+// NOTE (#19): this foreign-vs-national split is confirmed only against the
+// synthetic CNY fixture — recheck on real foreign statements. If a foreign row
+// ever ships without a `…Q` field the amount is 0 here (under-reported, but the
+// currency stays truthful) rather than a mislabeled BYN equivalent.
 const DEBIT_PLAIN = ['Db', 'Deb', 'DebQ'] as const
 const CREDIT_PLAIN = ['Cre', 'Credit', 'CreQ'] as const
-const DEBIT_FOREIGN = ['DebQ', 'Db', 'Deb'] as const
-const CREDIT_FOREIGN = ['CreQ', 'Cre', 'Credit'] as const
+const DEBIT_FOREIGN = ['DebQ'] as const
+const CREDIT_FOREIGN = ['CreQ'] as const
 
 /**
  * Map one parsed operation row to a StatementItem. `account` is our own account
@@ -93,6 +97,9 @@ export function normalizeClientBankRow(row: ClientBankRow, account: string, stat
   // source importer.
   const purpose = `${row.Nazn ?? ''}${row.Nazn2 ?? ''}`.trim()
 
+  // `bank` (counterparty bank NAME) is intentionally unset: the client-bank text
+  // format carries only the counterparty bank BIC (`Cod`), not its name — unlike
+  // Alfa/Prior, whose APIs return the name.
   const counterparty: StatementParty = {
     name: (row.KorName ?? '').trim(),
     unp: digitsOnly(row.KorUNP ?? row.UNNRec ?? ''),
