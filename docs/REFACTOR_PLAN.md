@@ -122,7 +122,10 @@
    поднимает `app`+`backend`+`db` на **одном домене** — nginx `app` проксирует `/api/*` в backend
    (вебхук B24 на `https://<DOMAIN>/api/b24/events`, без CORS). Детали — [`DEPLOY.md`](DEPLOY.md).
 8. **MCP-сервер** по выписке.
-9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
+9. **Приорбанк + ручная загрузка выписок** (два новых источника рядом, поверх абстракции
+   `BankProvider`). Приорбанк — онлайн (Open Banking СПР); **ручная загрузка** — пользователь
+   заливает стандартный файл выписки, он идёт в очередь `file-parse` → разбор/нормализация →
+   `crm-sync` (тот же путь, что и онлайн-выборка, без опроса банка).
    [~ Prior] Open Banking СПР **проверен на sandbox живьём**; нормализатор `normalizePrior`
    (`app/utils/priorStatement.ts`) **готов и покрыт тестами**; live-recon — `scripts/prior-oauth-test.mjs`.
    OAuth/DCR/consent-ядро **вынесено** в чистый `app/utils/priorOauth.ts` (URL/тела/claims + парсеры,
