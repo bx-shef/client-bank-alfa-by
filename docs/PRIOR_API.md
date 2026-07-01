@@ -13,14 +13,19 @@
 Это *формат*, а не банковский клиент, поэтому он обслуживает оба провайдера —
 `prior-by` и `manual` (см. `app/config/banks.ts`).
 
-- **Парсер:** `app/utils/clientBankText.ts` → `parseClientBankText(text)` возвращает
+- **Парсер (формат):** `app/utils/clientBankText.ts` → `parseClientBankText(text)` возвращает
   секции `GENERAL` / `IN_PARAM` / `OUT_PARAM` (`header` / `items` / `footer` / `unrouted`).
-  Вход — уже декодированная строка (CP1251 → utf-8 декодируем заранее).
-  ⚠️ Это **портированный пример**, требует рефакторинга — см. **issue #19** (нет нормализации
-  в `StatementItem`, `unrouted`-корзина, `DocID` не пишется по строкам, нет лимита размера).
+  Вход — уже декодированная строка (CP1251 → utf-8 декодируем заранее). `DocID`/`Cod` (BIC)
+  теперь пишутся по строкам. Остаточный рефактор (словари ключей, лимит размера) — **issue #19**.
+- **Нормализация:** `app/utils/clientBankStatement.ts` → `normalizeClientBank(parsed, ctx)` →
+  `StatementItem[]` (контракт `StatementNormalizer`): приход/расход (плюсовой дебет → расход),
+  валюта (нац/инвалюта: маркеры `I3`/`I1`/`I2`, иначе `BY…`-счёт → `BYN`), контрагент (имя/УНП/счёт/BIC),
+  `Nazn`+`Nazn2` → назначение, `account|docId`-дедуп. Для инвалюты сумма берётся в валюте счёта
+  (поле `…Q`) — правило подтверждено на образце CNY, проверить на реальных инвалютных выписках (#19).
 - **Образцы:** `tests/fixtures/client-bank/demo-prior-byn.txt` (рубли),
   `demo-prior-cny.txt` (валюта) — обезличенные, CP1251 (`.gitattributes` → `binary`).
-- **Тесты:** `tests/clientBankText.test.ts` (characterization-тесты против образцов).
+- **Тесты:** `tests/clientBankText.test.ts` (парсер) + `tests/clientBankStatement.test.ts` (нормализация)
+  против образцов.
 
 ### Скрипт просмотра: `pnpm parse:statement`
 
@@ -199,8 +204,9 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
   **вынесено** в чистый `app/utils/priorOauth.ts` (URL/тела/claims + парсеры, без `node:crypto`; аналог
   `alfaOauth.ts`) под `tests/priorOauth.test.ts`; `scripts/prior-oauth-test.mjs` — тонкий потребитель.
   Осталось — серверный движок опроса (backend) поверх `priorOauth.ts` и прод-СКЗИ (issue #41).
-- **`manual` (путь №1)** — парсер текстового формата `clientBankText.ts` есть, но в общий
-  `StatementItem` пока **не нормализован** — задача **#19**.
+- **`manual` (путь №1)** — нормализация **сделана**: `normalizeClientBank` в
+  `app/utils/clientBankStatement.ts` (текст `***** ^Type=` → `StatementItem`), покрыта тестами
+  на образцах. Осталось — UI-загрузка файла и остаточный рефактор парсера (**#19**).
 
 > **Дедуп/идемпотентность:** ключ операции — `account|docId`, где для Приорбанка `docId = transactionId`.
 > Дедуп корректен, пока Приорбанк отдаёт **стабильный и уникальный** `transactionId` в разрезе счёта

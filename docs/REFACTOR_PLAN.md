@@ -59,10 +59,11 @@
   (счёт+имя+УНП контрагента — для сопоставления компании в CRM), `amount`, `currency`, `acceptDate`/`operDate`
   (дата операции), `purpose` (назначение), `docId` (идемпотентность/дедуп), `account` (наш счёт).
 
-Реализации: `normalizeAlfa` (`alfaStatement.ts`), `normalizePrior` (`priorStatement.ts`); ручной
-импорт (`clientBankText.ts`) приводится к тому же выходу — #19. **Тест** = raw-ответ провайдера
+Реализации: `normalizeAlfa` (`alfaStatement.ts`), `normalizePrior` (`priorStatement.ts`), ручной
+импорт `normalizeClientBank` (`clientBankStatement.ts`, поверх парсера `clientBankText.ts`) — все три
+дают один выход; осталось по `manual` — UI-загрузка файла (#19). **Тест** = raw-ответ провайдера
 (fixture) → нормализатор → проверка `StatementItem[]` (`tests/statementInterface.test.ts`,
-`tests/alfaStatement.test.ts`, `tests/priorStatement.test.ts`).
+`tests/alfaStatement.test.ts`, `tests/priorStatement.test.ts`, `tests/clientBankStatement.test.ts`).
 
 ## Дорожная карта (по PR, «от малого к сложному»)
 
@@ -107,7 +108,9 @@
    без `node:crypto` — подпись/транспорт у вызывающего, аналог `alfaOauth.ts`), под тестами
    `tests/priorOauth.test.ts`; скрипт — тонкий потребитель (canonical-контракт синхронно, как у Альфы).
    **Осталось:** прод-СКЗИ — #41; серверный движок Приора (backend) на базе `priorOauth.ts` — далее.
-   Ручной импорт (`manual`): нормализация `clientBankText.ts` в `StatementItem` — #19.
+   Ручной импорт (`manual`): нормализация выписки в `StatementItem` **сделана** —
+   `app/utils/clientBankStatement.ts` (`normalizeClientBank`), покрыта тестами на образцах
+   (BYN `Type=400`, CNY `Type=600`); осталось — UI-загрузка файла + остаточный рефактор парсера (#19).
 
 ## API Альфы (подтверждено по свагеру + доке «Авторизация»)
 
