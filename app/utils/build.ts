@@ -14,3 +14,19 @@ export function commitUrl(sha: string | undefined | null): string {
   const s = (sha ?? '').trim()
   return s ? `${REPO_URL}/commit/${s}` : REPO_URL
 }
+
+/** Health/liveness payload for the backend `/api/health` endpoint. `commit` is
+ * the running build (same SHA as the footer), `time` the moment of the request. */
+export interface HealthInfo {
+  status: 'ok'
+  time: string
+  commit: string
+  commitUrl: string
+}
+
+/** Build the health payload from the build SHA and current time (pure/testable).
+ * Falls back to 'dev' when no SHA was injected (local/dev builds). */
+export function healthInfo(commitSha: string | undefined | null, nowIso: string): HealthInfo {
+  const commit = (commitSha ?? '').trim() || 'dev'
+  return { status: 'ok', time: nowIso, commit, commitUrl: commitUrl(commitSha) }
+}

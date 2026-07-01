@@ -114,6 +114,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - **Backend (Nitro, `server/`):** серверная часть в том же приложении (как `bx-synapse`).
   - `server/api/b24/events.post.ts` — эндпоинт вебхуков Б24: `readRawBody` → `parseBracketForm`
     → `processB24Event`; на установке пишет токены, на удалении (`CLEAN=1`) стирает портал.
+  - `server/api/health.get.ts` — публичный liveness-эндпоинт `GET /api/health` →
+    `{ status, time, commit, commitUrl }` (коммит = `NUXT_PUBLIC_COMMIT_SHA`, как в подвале).
+    Без секретов; на нём же построен docker `healthcheck` backend'а. Чистый билдер —
+    `healthInfo` в `app/utils/build.ts` (покрыт тестами).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` (DI side-effects):
     вердикт `application_token` → HTTP 200/400/403/503 (fail-closed). Покрыт тестами.
   - `server/utils/tokenStore.ts` — хранилище токенов портала над инъектируемым `QueryFn`
