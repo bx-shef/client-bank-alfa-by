@@ -62,9 +62,13 @@ services:
       # for a just-installed portal, required for long-lived operation).
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
-      # Redis DSN for the BullMQ pipeline (events → fetch → parse queues). Reached
+      # Redis DSN for the BullMQ pipeline (events → fetch → parse → crm-sync). Reached
       # only on the isolated `queuenet`; no auth needed inside the private network.
       REDIS_URL: redis://redis:6379
+      # Cron poll interval (minutes) and load-demo size. DEMO_LOAD_N>0 enqueues that
+      # many synthetic fetch jobs each tick so you can watch the pipeline (0 = off).
+      CRON_INTERVAL_MIN: ${CRON_INTERVAL_MIN:-5}
+      DEMO_LOAD_N: ${DEMO_LOAD_N:-0}
     # Liveness: hit the public /api/health endpoint (busybox wget ships in alpine).
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:

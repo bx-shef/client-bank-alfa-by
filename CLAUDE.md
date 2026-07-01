@@ -130,13 +130,24 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
-  - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование:** `server/queue/topology.ts`
-    (чистые контракты: имена очередей `b24-events`/`bank-fetch`/`file-parse`, payload'ы `EventJob`/
-    `FetchJob`/`ParseJob`, идемпотентные `*JobId` для дедупа ретраев — покрыто тестами),
-    `server/queue/connection.ts` (ленивый `getQueue(name)` над ioredis, гуард по `REDIS_URL`; к Redis
-    не подключается на импорте). **Фаза 1 — фундамент** (сервис `redis` в compose на изолированной
-    сети `queuenet`); продюсеры (событие→follow-up, крон→fetch, загрузка файла→parse) и воркер-контейнер
-    добавляются со стадиями 4–6 (см. REFACTOR_PLAN).
+  - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`):
+    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`,
+      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`), идемпотентные `*JobId` (дедуп ретраев). Тесты.
+    - `connection.ts` — ленивый `getQueue(name)`; передаёт BullMQ **опции** (парсит `REDIS_URL`), а не
+      ioredis-инстанс — нет прямой зависимости от ioredis и связки версий. Гуард `queueEnabled()`.
+    - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).
+    - `handlers.ts` — **чистые обработчики с DI** (тесты): fetch/parse → нормализованный батч в `crm-sync`;
+      `crm-sync` дедупит (`account|docId`), делит приход/расход, на операцию: поиск компании →
+      универсальное дело → чат. Транспорты (Альфа/Приор/парсер/REST) — заглушки до стадий 3–6.
+    - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`); `cron.ts` — план опроса
+      (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`).
+    - `server/plugins/queue.ts` — на старте backend поднимает воркеры **в процессе** и (если
+      `DEMO_LOAD_N>0`) крон каждые `CRON_INTERVAL_MIN` кладёт синтетические fetch-джобы (демо потока).
+      Масштаб-аут (отдельный воркер-контейнер) — следующий шаг (см. REFACTOR_PLAN).
+    - **Наблюдаемость сейчас:** `server/api/queues.get.ts` (`GET /api/queues` — счётчики по очередям,
+      guard `B24_APPLICATION_TOKEN`, nginx `deny all`) + `scripts/queue-stats.sh`. Телеметрия в
+      Grafana (Prometheus-экспортёр BullMQ / bull-board) — зафиксированное намерение, отдельный этап.
+    Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`

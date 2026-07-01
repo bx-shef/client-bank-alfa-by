@@ -9,6 +9,7 @@ import { dbQuery } from '../../db/client'
 import { processB24Event } from '../../utils/b24EventsHandler'
 import { deleteToken, getApplicationToken, saveToken } from '../../utils/tokenStore'
 import type { PortalToken } from '../../utils/tokenStore'
+import { enqueueEvent } from '../../queue/producers'
 
 /** Map the event's portal credentials to a stored token row. `expiresAt` is
  * stamped from receipt time (now) + the token TTL — not from parse time.
@@ -48,6 +49,26 @@ export default defineEventHandler(async (event) => {
       // caller could have bootstrapped trust. Loud in logs so prod misconfig is caught.
       if (!envToken) {
         console.warn('[b24 events] ONAPPINSTALL accepted in bootstrap mode — set B24_APPLICATION_TOKEN in prod')
+      }
+    }
+
+    // Fan the verified event onto the b24-events queue for async follow-up. The
+    // token save above stays the authoritative synchronous step; this is best-effort
+    // (no-op without Redis) and never changes the HTTP result the portal sees.
+    if (result.status === 200 && (result.body.event === 'ONAPPINSTALL' || result.body.event === 'ONAPPUNINSTALL')) {
+      const auth = (payload as { auth?: { member_id?: string, domain?: string }, ts?: string }).auth
+      const memberId = String(result.body.memberId || auth?.member_id || '')
+      if (memberId) {
+        try {
+          await enqueueEvent({
+            memberId,
+            domain: String(auth?.domain || ''),
+            kind: result.body.event as 'ONAPPINSTALL' | 'ONAPPUNINSTALL',
+            ts: String((payload as { ts?: unknown }).ts ?? '')
+          })
+        } catch (err) {
+          console.error('[b24 events] enqueue failed:', (err as Error)?.message)
+        }
       }
     }
 
