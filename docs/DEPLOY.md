@@ -89,7 +89,7 @@ cat > .env <<'EOF'
 DOMAIN=bank-import.bx-shef.by
 LETSENCRYPT_EMAIL=you@example.com
 # backend + Postgres (обязательны в проде):
-POSTGRES_PASSWORD=<сильный пароль>
+POSTGRES_PASSWORD=<openssl rand -hex 24>   # URL-safe: без @ : / ? # (уходит в DSN как есть)
 B24_TOKEN_ENC_KEY=<openssl rand -hex 32>
 B24_APPLICATION_TOKEN=<application_token приложения из B24>
 EOF

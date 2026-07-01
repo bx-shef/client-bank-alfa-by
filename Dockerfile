@@ -39,6 +39,13 @@ WORKDIR /app
 COPY . .
 ARG NUXT_PUBLIC_SITE_URL
 ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
+# Declared (same as the static `builder` stage) so the CI deploy can pass the same
+# build-args to both matrix targets without an "unused ARG" warning; the Nitro
+# server would use them if it ever rendered the author footer.
+ARG NUXT_PUBLIC_AUTHOR_NAME
+ENV NUXT_PUBLIC_AUTHOR_NAME=$NUXT_PUBLIC_AUTHOR_NAME
+ARG NUXT_PUBLIC_AUTHOR_URL
+ENV NUXT_PUBLIC_AUTHOR_URL=$NUXT_PUBLIC_AUTHOR_URL
 RUN pnpm build
 
 FROM node:22-alpine AS backend

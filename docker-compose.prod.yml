@@ -38,6 +38,8 @@ services:
       - proxy-net   # fronted by the external nginx-proxy
       - internal    # to reach `backend` for the /api/ proxy_pass
     depends_on:
+      # best-effort ordering; nginx.conf resolves `backend` lazily and returns 502
+      # if it's briefly down, so app never fails to start on backend readiness.
       - backend
     labels:
       # Picked up by the single host-wide Watchtower (deployed once with
@@ -61,7 +63,8 @@ services:
       db:
         condition: service_healthy
     networks:
-      - internal
+      - internal   # reached by app's /api proxy + outbound to B24/Alfa
+      - dbnet       # to reach Postgres
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -81,7 +84,7 @@ services:
       retries: 10
     restart: unless-stopped
     networks:
-      - internal
+      - dbnet
 
 volumes:
   pgdata:
@@ -89,5 +92,11 @@ volumes:
 networks:
   proxy-net:
     external: true
+  # app ↔ backend, and the backend's outbound to Bitrix24/Alfa (so NOT internal).
   internal:
     driver: bridge
+  # backend ↔ Postgres only. `internal: true` — no outbound: the DB is fully
+  # isolated (can't be reached from outside and can't initiate egress).
+  dbnet:
+    driver: bridge
+    internal: true
