@@ -1,0 +1,62 @@
+// Cron planning + a self-contained load demo — pure functions (no Redis/timers),
+// so they're unit-testable. The plugin (server/plugins/queue.ts) wires them to a
+// real interval and the producers.
+//
+// Real polling (stage 5): planFetches() turns the installed portals + their
+// accounts into one fetch job per account. Until accounts are stored it yields
+// nothing — so the DEMO path below is what actually exercises the pipeline now:
+// each tick enqueues N synthetic fetch jobs whose handler emits demo operations,
+// so you can watch load flow bank-fetch → crm-sync via GET /api/queues.
+
+import type { BankProviderId, StatementItem } from '../../app/types/statement'
+import type { FetchJob } from './topology'
+
+/** Interval in ms from a minutes setting (clamped to a sane floor of 1 min). */
+export function cronIntervalMs(minutes: number): number {
+  const m = Number.isFinite(minutes) && minutes > 0 ? minutes : 5
+  return Math.max(1, m) * 60_000
+}
+
+/** Real cron plan: one fetch job per (portal, account) for the given window.
+ *  Empty until accounts are configured (stage 5). Pure. */
+export function planFetches(
+  accountsByPortal: { memberId: string, providerId: BankProviderId, accounts: string[] }[],
+  dateFrom: string,
+  dateTo: string
+): FetchJob[] {
+  return accountsByPortal.flatMap(p =>
+    p.accounts.map(account => ({ memberId: p.memberId, providerId: p.providerId, account, dateFrom, dateTo }))
+  )
+}
+
+/** Marks an account as belonging to the load demo (handler emits synthetic ops). */
+export const DEMO_ACCOUNT_PREFIX = 'DEMO-'
+
+/** Build N synthetic fetch jobs for the load demo, all for `today`. */
+export function buildDemoFetchJobs(memberId: string, n: number, today: string): FetchJob[] {
+  const count = Math.max(0, Math.floor(n))
+  return Array.from({ length: count }, (_, i) => ({
+    memberId,
+    providerId: 'manual' as BankProviderId,
+    account: `${DEMO_ACCOUNT_PREFIX}${i + 1}`,
+    dateFrom: today,
+    dateTo: today
+  }))
+}
+
+/** Synthetic operations for a demo fetch job — a couple of ops so the batch flows
+ *  on to crm-sync. Deterministic (docId from the account) so retries dedupe. */
+export function demoItems(job: FetchJob): StatementItem[] {
+  if (!job.account.startsWith(DEMO_ACCOUNT_PREFIX)) return []
+  const mk = (n: number, direction: 'credit' | 'debit'): StatementItem => ({
+    account: job.account,
+    docId: `${job.account}-${n}`,
+    direction,
+    amount: 100 * n,
+    currency: 'BYN',
+    purpose: `Демо-операция ${n}`,
+    counterparty: { name: `Демо-контрагент ${n}`, unp: `10000000${n}`, account: `BY00DEMO${n}` },
+    acceptDate: `${job.dateFrom}T00:00:00.000Z`
+  })
+  return [mk(1, 'credit'), mk(2, 'debit')]
+}

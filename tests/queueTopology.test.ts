@@ -4,9 +4,12 @@ import {
   Q_EVENTS,
   Q_FETCH,
   Q_PARSE,
+  Q_CRM,
+  crmSyncJobId,
   eventJobId,
   fetchJobId,
   parseJobId,
+  type CrmSyncJob,
   type EventJob,
   type FetchJob,
   type ParseJob
@@ -14,9 +17,9 @@ import {
 import { redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
-  it('are the three pipeline queues, unique', () => {
-    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE])
-    expect(new Set(QUEUE_NAMES).size).toBe(3)
+  it('are the four pipeline queues, unique', () => {
+    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM])
+    expect(new Set(QUEUE_NAMES).size).toBe(4)
   })
 })
 
@@ -44,6 +47,11 @@ describe('job ids (idempotency)', () => {
     expect(parseJobId(pj)).toBe('parse:M1:h1')
     // fileRef is not part of the id — the same content (hash) dedups regardless of ref.
     expect(parseJobId(pj)).toBe(parseJobId({ ...pj, fileRef: 'other' }))
+  })
+  it('crm-sync id is memberId + batchId (items do not affect it)', () => {
+    const base: CrmSyncJob = { memberId: 'M1', providerId: 'alfa-by', source: 'fetch', batchId: 'b1', items: [] }
+    expect(crmSyncJobId(base)).toBe('crm:M1:b1')
+    expect(crmSyncJobId(base)).toBe(crmSyncJobId({ ...base, items: [{} as never] }))
   })
 })
 
