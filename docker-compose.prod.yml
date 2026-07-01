@@ -58,6 +58,10 @@ services:
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
       # application_token of the registered B24 app — event signature. Required in prod.
       B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:?set B24_APPLICATION_TOKEN}
+      # App OAuth creds — refresh portal access token for server-side REST (optional
+      # for a just-installed portal, required for long-lived operation).
+      B24_CLIENT_ID: ${B24_CLIENT_ID:-}
+      B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
     restart: unless-stopped
     depends_on:
       db:
