@@ -204,9 +204,17 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
   **вынесено** в чистый `app/utils/priorOauth.ts` (URL/тела/claims + парсеры, без `node:crypto`; аналог
   `alfaOauth.ts`) под `tests/priorOauth.test.ts`; `scripts/prior-oauth-test.mjs` — тонкий потребитель.
   Осталось — серверный движок опроса (backend) поверх `priorOauth.ts` и прод-СКЗИ (issue #41).
-- **`manual` (путь №1)** — нормализация **сделана**: `normalizeClientBank` в
-  `app/utils/clientBankStatement.ts` (текст `***** ^Type=` → `StatementItem`), покрыта тестами
-  на образцах. Осталось — UI-загрузка файла и остаточный рефактор парсера (**#19**).
+- **`manual` (путь №1)** — нормализация **сделана** для **двух форматов** (диспетчер
+  `app/utils/manualImport.ts` → `detectManualFormat`/`normalizeManualStatement`):
+  1. **`***** ^Type=`** (Приор/Альфа-выгрузка) — `normalizeClientBank` (`clientBankStatement.ts`).
+     Проверено и на реальных `Type=4`-файлах: BYN-дефолт для старых 13-значных BY-счетов и фолбэк
+     ключа дедупа `Num|DocDate`, когда в выгрузке нет `DocID` (**#19**).
+  2. **`1CClientBankExchange`** (обмен 1С «Клиент-банк», версии 1.01–1.03) — `normalizeOneC`
+     (`oneCExchange.ts` парсер + `oneCStatement.ts` нормализатор): направление по «наш счёт =
+     плательщик/получатель», валюта из кода счёта (RU 20-знач `810`→RUB и т.п. / BY→BYN), дедуп
+     `Номер|Дата`. Универсальный бухгалтерский формат 1С (РФ+РБ) — **#21**. Обезличенный образец —
+     `tests/fixtures/1c-exchange/demo-1c.txt`.
+  Осталось — UI-загрузка файла и остаточный рефактор парсера `***** ^Type=` (**#19**).
 
 > **Дедуп/идемпотентность:** ключ операции — `account|docId`, где для Приорбанка `docId = transactionId`.
 > Дедуп корректен, пока Приорбанк отдаёт **стабильный и уникальный** `transactionId` в разрезе счёта

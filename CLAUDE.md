@@ -108,7 +108,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/utils/clientBankStatement.ts` — нормализация разобранной текстовой выписки в `StatementItem`
     (`normalizeClientBank` — контракт `StatementNormalizer`; приход/расход, валюта нац/инвалюта,
     контрагент, `account|docId`-дедуп). Провайдер `manual` (и файловый путь `prior-by`) — issue #19.
-    Проверено на образцах `tests/fixtures/client-bank/` (BYN `Type=400`, CNY `Type=600`).
+    Проверено на образцах `tests/fixtures/client-bank/` (BYN `Type=400`, CNY `Type=600`) и на реальных
+    `Type=4`-выгрузках: BYN-дефолт для старых 13-значных BY-счетов (`isBelarusianAccount`) + фолбэк
+    ключа дедупа `Num|DocDate`, когда `DocID` отсутствует (`rowDocId`).
+  - `app/utils/oneCExchange.ts` + `app/utils/oneCStatement.ts` — формат обмена 1С «Клиент-банк»
+    (`1CClientBankExchange`, версии 1.01–1.03): парсер секций (`parseOneCExchange`) + нормализатор
+    (`normalizeOneC` — контракт `StatementNormalizer`; направление по «наш счёт = плательщик/получатель»,
+    валюта из кода счёта RU/BY, дедуп `Номер|Дата`). Второй `manual`-формат — issue #21.
+  - `app/utils/manualImport.ts` — точка входа ручной загрузки: детект формата (`detectManualFormat`)
+    → парсер+нормализатор (`normalizeManualStatement`: `1CClientBankExchange` или `***** ^Type=`).
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
   - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
     `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт

@@ -2,3 +2,6 @@
 # Mark them binary so git never applies EOL/encoding conversion that would
 # corrupt the bytes (the parser tests decode them with TextDecoder('windows-1251')).
 tests/fixtures/client-bank/*.txt binary
+
+# 1C exchange fixtures are CP1251 too (see above).
+tests/fixtures/1c-exchange/*.txt binary

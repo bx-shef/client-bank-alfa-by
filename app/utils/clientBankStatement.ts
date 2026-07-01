@@ -45,9 +45,22 @@ const ALPHA3 = /^[A-Z]{3}$/
 const digitsOnly = (s: string): string => s.replace(/\D/g, '')
 
 /**
+ * Whether a Belarusian own-account (so its statement defaults to `BYN` when no
+ * currency marker is present). Covers BOTH the IBAN form (`BY…`) and the legacy
+ * 13-digit numeric form (e.g. `3013212016013`) that real Альфа/Приор `Type=4`
+ * exports still use — the IBAN-only check missed those, leaving every operation
+ * without a currency (issue #19). A Russian 20-digit account (`40702810…`) does
+ * not match, so the 1C-exchange path is unaffected.
+ */
+export function isBelarusianAccount(account: string): boolean {
+  const acc = account.trim()
+  return acc.toUpperCase().startsWith('BY') || /^\d{13}$/.test(acc)
+}
+
+/**
  * Currency of the whole statement (national vs foreign): explicit alpha-3 markers
  * win (`I3` file-level, then header `I1`), then the caller-supplied `ctx.currency`,
- * then a `BY…` own-account defaults to `BYN`. `''` if undetermined — the caller
+ * then a Belarusian own-account defaults to `BYN`. `''` if undetermined — the caller
  * (UI) must block the import then, per issue #19. A per-row `I2` marker can still
  * override this for a single row (see normalizeClientBankRow).
  */
@@ -57,7 +70,22 @@ export function detectStatementCurrency(parsed: ClientBankParsed, ctxCurrency?: 
   return marker(out.unrouted.I3)
     ?? marker(out.header.I1)
     ?? marker(ctxCurrency)
-    ?? (parsed.GENERAL.ACC.toUpperCase().startsWith('BY') ? 'BYN' : '')
+    ?? (isBelarusianAccount(parsed.GENERAL.ACC) ? 'BYN' : '')
+}
+
+/**
+ * Stable per-operation id for the dedup key `account|docId`. Prefers the explicit
+ * `DocID`; when the export omits it (real `Type=4` files do — every row would
+ * otherwise collapse to `account|`, breaking dedup, issue #19) falls back to the
+ * document-number + date identity (`Num|DocDate`), mirroring how the 1C exchange
+ * format itself identifies a document ("account + type + date + number").
+ */
+export function rowDocId(row: ClientBankRow): string {
+  const explicit = (row.DocID ?? '').trim()
+  if (explicit) return explicit
+  const num = (row.Num ?? '').trim()
+  const date = (row.DocDate ?? '').trim()
+  return num || date ? `${num}|${date}` : ''
 }
 
 // Debit/credit field chains. A FOREIGN-currency statement carries BOTH the
@@ -112,7 +140,7 @@ export function normalizeClientBankRow(row: ClientBankRow, account: string, stat
 
   return {
     account,
-    docId: (row.DocID ?? '').trim(),
+    docId: rowDocId(row),
     ...(row.Num ? { docNum: row.Num.trim() } : {}),
     direction,
     amount,

@@ -3,6 +3,7 @@ import type { StatementItem, StatementNormalizer } from '~/types/statement'
 import { normalizeAlfa } from '~/utils/alfaStatement'
 import { normalizePrior } from '~/utils/priorStatement'
 import { normalizeClientBank } from '~/utils/clientBankStatement'
+import { normalizeOneC } from '~/utils/oneCStatement'
 
 // The unified statement interface (see app/types/statement.ts): every bank is
 // fetched differently but its normalizer produces the SAME StatementItem[] — the
@@ -80,6 +81,20 @@ const providers: Array<{ id: string, normalize: StatementNormalizer, raw: unknow
           Nazn: 'Оплата по счёту №1', DocID: 'M1', OpDate: '28.09.2023 10:00:00'
         }]
       }
+    }
+  },
+  {
+    id: 'manual-1c',
+    normalize: normalizeOneC as StatementNormalizer,
+    raw: {
+      header: { РасчСчет: '40702810900000000001' },
+      accounts: [],
+      documents: [{
+        Вид: 'Платежное поручение', Номер: '4', Дата: '25.01.2018', Сумма: '1840.50',
+        ПлательщикСчет: '40702810900000000001', ДатаСписано: '25.01.2018',
+        ПолучательСчет: '40702810900000000999', ПолучательИНН: '7712345678',
+        Получатель1: 'ООО Ромашка', НазначениеПлатежа: 'Оплата по счёту №1'
+      }]
     }
   }
 ]
