@@ -14,7 +14,7 @@ import {
   type FetchJob,
   type ParseJob
 } from '../server/queue/topology'
-import { redisUrl } from '../server/queue/connection'
+import { connectionOptions, redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
   it('are the four pipeline queues, unique', () => {
@@ -68,5 +68,31 @@ describe('redisUrl guard', () => {
   it('returns the trimmed DSN when set', () => {
     process.env.REDIS_URL = '  redis://redis:6379  '
     expect(redisUrl()).toBe('redis://redis:6379')
+  })
+})
+
+describe('connectionOptions', () => {
+  const saved = process.env.REDIS_URL
+  afterEach(() => {
+    if (saved === undefined) delete process.env.REDIS_URL
+    else process.env.REDIS_URL = saved
+  })
+  it('parses host/port and always sets maxRetriesPerRequest: null (BullMQ)', () => {
+    process.env.REDIS_URL = 'redis://redis:6379'
+    expect(connectionOptions()).toEqual({ host: 'redis', port: 6379, maxRetriesPerRequest: null })
+  })
+  it('defaults the port to 6379 when the URL omits it', () => {
+    process.env.REDIS_URL = 'redis://cache'
+    expect(connectionOptions()).toMatchObject({ host: 'cache', port: 6379 })
+  })
+  it('parses credentials and db index', () => {
+    process.env.REDIS_URL = 'redis://user:p%40ss@host:6380/2'
+    expect(connectionOptions()).toEqual({
+      host: 'host', port: 6380, username: 'user', password: 'p@ss', db: 2, maxRetriesPerRequest: null
+    })
+  })
+  it('enables TLS for rediss://', () => {
+    process.env.REDIS_URL = 'rediss://host:6379'
+    expect(connectionOptions()).toMatchObject({ tls: {} })
   })
 })

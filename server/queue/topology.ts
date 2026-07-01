@@ -53,7 +53,12 @@ export interface ParseJob {
 }
 
 /** Analyse normalized operations and act in Bitrix24. `batchId` (the producing
- *  fetch window / file hash) makes the job idempotent — the same batch dedups. */
+ *  fetch window / file hash) makes the job idempotent — the same batch dedups.
+ *
+ *  KNOWN LIMITATION (stages 4–5): `items` is carried inline in the Redis payload.
+ *  Fine for the demo (a couple of ops), but a large statement/file could bloat
+ *  Redis and the worker↔Redis transfer. Before real fetch/parse lands, switch to a
+ *  referenced payload (batchId + fetch items from Postgres) or chunk the batch. */
 export interface CrmSyncJob {
   memberId: string
   providerId: BankProviderId
@@ -61,7 +66,7 @@ export interface CrmSyncJob {
   source: 'fetch' | 'parse'
   /** Stable id of the producing batch (fetch window or file hash). */
   batchId: string
-  /** Normalized operations to analyse and write into CRM. */
+  /** Normalized operations to analyse and write into CRM (see limitation above). */
   items: StatementItem[]
 }
 

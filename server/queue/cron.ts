@@ -32,13 +32,16 @@ export function planFetches(
 /** Marks an account as belonging to the load demo (handler emits synthetic ops). */
 export const DEMO_ACCOUNT_PREFIX = 'DEMO-'
 
-/** Build N synthetic fetch jobs for the load demo, all for `today`. */
-export function buildDemoFetchJobs(memberId: string, n: number, today: string): FetchJob[] {
+/** Build N synthetic fetch jobs for the load demo. `tick` (a per-tick token, e.g.
+ *  a timestamp) is folded into the account so each tick produces fresh jobIds —
+ *  otherwise the deterministic jobId would dedupe repeated ticks into a no-op and
+ *  the demo would only run once. Real polling uses planFetches() (stable ids). */
+export function buildDemoFetchJobs(memberId: string, n: number, today: string, tick: string): FetchJob[] {
   const count = Math.max(0, Math.floor(n))
   return Array.from({ length: count }, (_, i) => ({
     memberId,
     providerId: 'manual' as BankProviderId,
-    account: `${DEMO_ACCOUNT_PREFIX}${i + 1}`,
+    account: `${DEMO_ACCOUNT_PREFIX}${tick}-${i + 1}`,
     dateFrom: today,
     dateTo: today
   }))

@@ -39,6 +39,8 @@ export function startWorkers(deps: HandlerDeps): Worker[] {
   const connection = connectionOptions()
   return [
     new Worker<EventJob>(Q_EVENTS, async job => handleEventJob(job.data, deps), { connection }),
+    // TODO stage 5: once fetchStatement hits the real Alfa API (100 req/min), add a
+    // limiter here — new Worker(..., { connection, limiter: { max: 100, duration: 60_000 } }).
     new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection }),
     new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection }),
     new Worker<CrmSyncJob>(Q_CRM, async job => handleCrmSyncJob(job.data, deps), { connection })

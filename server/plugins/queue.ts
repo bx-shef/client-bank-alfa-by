@@ -7,7 +7,7 @@
 // (a dedicated worker container running startWorkers()) is the next infra step —
 // see docs/REFACTOR_PLAN.md.
 
-import { queueEnabled } from '../queue/connection'
+import { closeQueues, queueEnabled } from '../queue/connection'
 import { liveHandlerDeps, startWorkers } from '../queue/worker'
 import { enqueueFetch } from '../queue/producers'
 import { buildDemoFetchJobs, cronIntervalMs } from '../queue/cron'
@@ -25,8 +25,11 @@ export default defineNitroPlugin((nitroApp) => {
   if (demoN > 0) {
     const tick = async () => {
       try {
-        const today = new Date().toISOString().slice(0, 10)
-        const jobs = buildDemoFetchJobs('demo-portal', demoN, today)
+        const now = new Date()
+        const today = now.toISOString().slice(0, 10)
+        // Unique per-tick token so each tick enqueues fresh jobIds (otherwise the
+        // deterministic id dedupes ticks within a day into a single no-op run).
+        const jobs = buildDemoFetchJobs('demo-portal', demoN, today, String(now.getTime()))
         for (const job of jobs) await enqueueFetch(job)
         console.info('[queue] demo load: enqueued %d fetch jobs (every %d min)', jobs.length, intervalMin)
       } catch (err) {
@@ -40,5 +43,6 @@ export default defineNitroPlugin((nitroApp) => {
   nitroApp.hooks.hook('close', async () => {
     if (timer) clearInterval(timer)
     await Promise.all(workers.map(w => w.close()))
+    await closeQueues()
   })
 })

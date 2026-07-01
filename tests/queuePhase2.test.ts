@@ -104,12 +104,17 @@ describe('cron helpers', () => {
     expect(jobs.map(j => j.account)).toEqual(['A1', 'A2'])
   })
   it('buildDemoFetchJobs makes N demo jobs, demoItems emits ops only for demo accounts', () => {
-    const jobs = buildDemoFetchJobs('demo-portal', 3, '2026-07-01')
+    const jobs = buildDemoFetchJobs('demo-portal', 3, '2026-07-01', 't1')
     expect(jobs).toHaveLength(3)
     expect(jobs[0]!.account.startsWith(DEMO_ACCOUNT_PREFIX)).toBe(true)
     expect(demoItems(jobs[0]!)).toHaveLength(2)
     // a non-demo account yields nothing (real transport is stage 3/5)
     expect(demoItems({ ...jobs[0]!, account: 'BY-real' })).toEqual([])
+  })
+  it('different ticks produce distinct accounts (so each tick enqueues fresh jobs)', () => {
+    const a = buildDemoFetchJobs('demo-portal', 2, '2026-07-01', 't1')
+    const b = buildDemoFetchJobs('demo-portal', 2, '2026-07-01', 't2')
+    expect(a.map(j => j.account)).not.toEqual(b.map(j => j.account))
   })
 })
 

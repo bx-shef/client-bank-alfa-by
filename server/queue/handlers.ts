@@ -77,8 +77,11 @@ export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
 ): Promise<{ processed: number, credits: number, debits: number }> {
-  // Dedupe within the batch (account|docId) so a redelivered/overlapping window
-  // doesn't write the same operation twice.
+  // Dedupe WITHIN this batch (account|docId). NB: this does NOT protect against
+  // at-least-once redelivery of the whole job (worker crash/retry after partial
+  // writes) — that needs a PERSISTENT {dedupKey→activityId} store consulted
+  // read-before-write in findCompany/writeActivity. That store is a BLOCKING
+  // requirement for stage 4 (issue #9), before writeActivity stops being a no-op.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
     const key = dedupKey(it)

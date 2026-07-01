@@ -40,12 +40,29 @@ export function connectionOptions(): ConnectionOptions {
   }
 }
 
+// Sensible defaults for every queue: retry transient failures with exponential
+// backoff, and cap retained jobs so completed/failed don't grow Redis unbounded
+// (BullMQ keeps them all by default). Producers can still override per job.
+const DEFAULT_JOB_OPTIONS = {
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 5_000 },
+  removeOnComplete: { count: 1_000 },
+  removeOnFail: { count: 5_000 }
+}
+
 /** Lazily create (and cache) a BullMQ Queue by name. Throws if REDIS_URL is unset. */
 export function getQueue(name: QueueName): Queue {
   let q = queues.get(name)
   if (!q) {
-    q = new Queue(name, { connection: connectionOptions() })
+    q = new Queue(name, { connection: connectionOptions(), defaultJobOptions: DEFAULT_JOB_OPTIONS })
     queues.set(name, q)
   }
   return q
+}
+
+/** Close all cached Queue connections (graceful shutdown symmetry with workers). */
+export async function closeQueues(): Promise<void> {
+  const open = [...queues.values()]
+  queues.clear()
+  await Promise.all(open.map(q => q.close()))
 }
