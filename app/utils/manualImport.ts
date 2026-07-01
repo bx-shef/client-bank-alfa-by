@@ -4,6 +4,9 @@
 // to a string (files are CP1251; decode first). Two formats today (issue #19/#21):
 //   - `1CClientBankExchange` — the 1C accounting exchange format;
 //   - `***** ^Type=` — the client-bank text export (Приорбанк / Альфа `Type=4`).
+//
+// ⚠️ The underlying parsers have no input-size guard (issue #19): a real file
+// upload path (UI/backend) MUST cap the file size before calling this.
 
 import type { NormalizeContext, StatementItem } from '~/types/statement'
 import { isOneCExchange, parseOneCExchange } from '~/utils/oneCExchange'

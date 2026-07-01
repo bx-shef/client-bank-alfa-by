@@ -83,6 +83,10 @@ describe('currencyFromAccount', () => {
     expect(currencyFromAccount('BY79ALFA30130000000000000000')).toBe('BYN')
     expect(currencyFromAccount('LT121000011101001000')).toBeUndefined()
   })
+
+  it('a 20-digit account with an unknown currency code → undefined', () => {
+    expect(currencyFromAccount('40702999900000000001')).toBeUndefined() // 999 not mapped
+  })
 })
 
 describe('normalizeOneC', () => {
@@ -119,6 +123,25 @@ describe('normalizeOneC', () => {
     const doc0 = parseOneCExchange(ONE_C).documents[0]!
     const asPayee = normalizeOneCDocument(doc0, '40702810900000000999', 'RUB')
     expect(asPayee.direction).toBe('credit') // now WE are the payee on doc 0
+  })
+
+  it('falls back to ДатаСписано/ДатаПоступило when our account matches neither side', () => {
+    const other = 'OTHER-ACCOUNT'
+    // Only ДатаСписано present → расход; only ДатаПоступило → приход.
+    expect(normalizeOneCDocument({ Номер: '1', Дата: '01.01.2018', ДатаСписано: '01.01.2018' }, other, 'RUB').direction).toBe('debit')
+    expect(normalizeOneCDocument({ Номер: '1', Дата: '01.01.2018', ДатаПоступило: '01.01.2018' }, other, 'RUB').direction).toBe('credit')
+    // Both present → списание wins; no signal at all → default расход.
+    expect(normalizeOneCDocument({ Номер: '1', Дата: '01.01.2018', ДатаСписано: '01.01.2018', ДатаПоступило: '01.01.2018' }, other, 'RUB').direction).toBe('debit')
+    expect(normalizeOneCDocument({ Номер: '1', Дата: '01.01.2018' }, other, 'RUB').direction).toBe('debit')
+  })
+
+  it('a document with no Номер/Дата yields an empty docId, not "|"', () => {
+    expect(normalizeOneCDocument({ Сумма: '1.00' }, 'A', 'RUB').docId).toBe('')
+  })
+
+  it('an empty 1C file (no documents) normalizes to []', () => {
+    const empty = '1CClientBankExchange\r\nВерсияФормата=1.02\r\nСекцияРасчСчет\r\nРасчСчет=40702810900000000001\r\nКонецРасчСчет\r\nКонецФайла'
+    expect(normalizeOneC(parseOneCExchange(empty), { account: '' })).toEqual([])
   })
 })
 

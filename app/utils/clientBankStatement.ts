@@ -51,6 +51,11 @@ const digitsOnly = (s: string): string => s.replace(/\D/g, '')
  * exports still use — the IBAN-only check missed those, leaving every operation
  * without a currency (issue #19). A Russian 20-digit account (`40702810…`) does
  * not match, so the 1C-exchange path is unaffected.
+ *
+ * HEURISTIC, not a validator: the bare 13-digit test is a loose net (a foreign
+ * 13-digit account would be misclassified `BYN`). Acceptable because it only fires
+ * as a currency FALLBACK — when the statement carries no explicit currency marker
+ * — inside our Belarus-focused `manual`/`prior-by` path.
  */
 export function isBelarusianAccount(account: string): boolean {
   const acc = account.trim()

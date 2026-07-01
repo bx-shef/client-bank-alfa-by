@@ -3,6 +3,10 @@
 // clientBankText.ts. Normalization to StatementItem[] lives in oneCStatement.ts
 // (`normalizeOneC`). Issue #21.
 //
+// ⚠️ No input-size / document-count limit here (same gap as clientBankText.ts,
+// issue #19): the caller (UI upload / backend) MUST cap the file size before
+// parsing a user-supplied file — add that guard before wiring the manual upload.
+//
 // The caller decodes the file to a string first (the files are CP1251 —
 // `Кодировка=Windows`; some emitters use UTF-8/DOS). Structure:
 //   1CClientBankExchange            ← required first-line marker

@@ -33,6 +33,7 @@ export function currencyFromAccount(account: string): string | undefined {
   const acc = account.trim()
   if (/^\d{20}$/.test(acc)) {
     const code = acc.slice(5, 8)
+    // Numeric keys (lint `quote-props: as-needed`); the string `code` lookup coerces fine.
     const map: Record<string, string> = { 810: 'RUB', 643: 'RUB', 840: 'USD', 978: 'EUR', 156: 'CNY', 933: 'BYN' }
     if (map[code]) return map[code]
   }
@@ -59,6 +60,12 @@ export function normalizeOneCDocument(doc: OneCRecord, account: string, currency
   const payeeAcc = pick(doc, 'ПолучательСчет', 'ПолучательРасчСчет')
   const acc = account.trim()
 
+  // Direction priority: our account as payer/payee is the strongest signal; then
+  // the presence of ДатаСписано (posted-out → расход) over ДатаПоступило
+  // (posted-in → приход) — a document carrying BOTH prefers списание; and when no
+  // signal at all is present the direction defaults to `debit` (расход), matching
+  // the client-bank-text default. NOTE (#21): a marker-less document is a best-effort
+  // guess — recheck against real multi-account 1C exports before wiring the UI.
   let direction: OperationDirection
   if (acc && payerAcc === acc) direction = 'debit'
   else if (acc && payeeAcc === acc) direction = 'credit'
@@ -84,7 +91,9 @@ export function normalizeOneCDocument(doc: OneCRecord, account: string, currency
   return {
     account,
     // No unique id in the format — "account + type + date + number" identity.
-    docId: `${num}|${docDate}`,
+    // Empty when both Номер and Дата are missing (avoids a bogus "|" that would
+    // collide across id-less documents), mirroring rowDocId in clientBankStatement.
+    docId: num || docDate ? `${num}|${docDate}` : '',
     ...(num ? { docNum: num } : {}),
     direction,
     amount: money(pick(doc, 'Сумма')),
