@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
+import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
 
@@ -10,7 +11,7 @@ const b24Instance = useB24()
 const isUseB24 = computed<boolean>(() => b24Instance.isInit())
 const requiredScopes = b24Instance.getRequiredRights()
 
-useHead({ title: 'Установка — Клиент-банк Альфа-Банк Беларусь' })
+useHead({ title: pageTitle('Установка') })
 
 const progressColor = ref<'air-primary' | 'air-primary-success' | 'air-primary-warning' | 'air-primary-alert'>('air-primary')
 const progressValue = ref<null | number>(null)
@@ -30,13 +31,19 @@ const diagnostics = computed(() => {
   const granted = initData.value.scope ?? []
   const missing = requiredScopes.filter(s => !granted.includes(s))
   let domain = ''
+  let memberId = ''
   if (isUseB24.value) {
     const auth = b24Instance.getOrThrow().auth.getAuthData()
-    domain = auth === false ? '' : auth.domain
+    if (auth !== false) {
+      domain = auth.domain
+      memberId = auth.member_id || ''
+    }
   }
   return {
     mode: isUseB24.value ? 'B24 frame' : 'Standalone (mock)',
     domain,
+    // Shown so operators can copy it for the server-side check (scripts/check-app-option.sh).
+    memberId,
     targetOrigin: isUseB24.value ? b24Instance.targetOrigin() : '—',
     appInfo: initData.value.appInfo,
     granted,
@@ -116,7 +123,7 @@ onMounted(runInstall)
   <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
     <div class="flex w-full max-w-2xl flex-col items-center gap-4">
       <h1 class="text-center text-2xl font-bold text-(--ui-color-base-1)">
-        Клиент-банк Альфа-Банк Беларусь
+        {{ LANDING_TITLE }}
       </h1>
 
       <B24Progress
@@ -164,6 +171,8 @@ onMounted(runInstall)
               <span>{{ diagnostics.mode }}</span>
               <span class="text-(--ui-color-base-3)">Домен:</span>
               <span>{{ diagnostics.domain || '—' }}</span>
+              <span class="text-(--ui-color-base-3)">member_id:</span>
+              <span class="break-all">{{ diagnostics.memberId || '—' }}</span>
               <span class="text-(--ui-color-base-3)">targetOrigin:</span>
               <span class="break-all">{{ diagnostics.targetOrigin }}</span>
               <template v-if="diagnostics.appInfo">

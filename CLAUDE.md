@@ -1,10 +1,11 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-06-30
+> Last reviewed: 2026-07-01
 
-Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.
-Публичная страница — лендинг (SSG). Появилась серверная часть (Nitro): эндпоинт
-вебхуков Bitrix24 (`/api/b24/events`) + хранилище токенов портала.
+Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
+Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
+выписки. Публичная страница — лендинг (SSG). Появилась серверная часть (Nitro):
+эндпоинт вебхуков Bitrix24 (`/api/b24/events`) + хранилище токенов портала.
 
 > **Статус:** рефакторинг legacy-приложения (план — [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)).
 > Репозиторий: **frontend** (публичный лендинг SSG + B24-iframe-UI) **и backend** (Nitro-сервис:
@@ -40,7 +41,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 
 ## Архитектура
 
-- `app/app.vue` — **корень Nuxt** (не страница): `useHead`/SEO/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
+- `app/app.vue` — **корень Nuxt** (не страница): `useHead`/SEO (вкл. `og:image`/`twitter:card` →
+  `public/og.png`, абсолютный URL из `siteUrl` в проде)/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
@@ -71,6 +73,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/types/importStatus.ts` + `app/utils/importStatus.ts` (relative-time RU `formatRelativeTime`,
   `pluralRu`, `importStateMeta`) + `app/composables/useImportStatus.ts` — модель и презентация статуса
   импорта; mock на клиенте до backend-опроса (#5), форма ответа = будущий `GET /import/status`.
+- `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
+  `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
+  `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
+- `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: берёт из фрейма
+  **access-токен + домен** и шлёт их в `/api/settings` (GET/POST) заголовками
+  `Authorization: Bearer` + `X-B24-Domain`; backend этим токеном пишет/читает `app.option`. Вне
+  портала инертна (токена нет). member_id UI не доверяет — изоляция на стороне B24 (токен скоуплен к порталу).
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
@@ -101,6 +110,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
+    `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
+    `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
+    (refresh при истечении), `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
+    с DI — изоляция по `memberId`, используется серверной проверкой), `server/utils/settingsHandler.ts`
+    (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
+    UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)
+    **аутентифицируются фрейм-токеном** (`Authorization: Bearer` + `X-B24-Domain`) — B24 скоупит
+    токен к порталу вызывающего, `member_id` не доверяется, чужой `app.option` недостижим. **Серверная
+    проверка** `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option`
+    по сохранённому токену без фрейма — для `scripts/check-app-option.sh`; наружу не открыта, nginx `deny all`).
   - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом.
     В проде — **один домен**: nginx `app` проксирует `/api/*` в `backend:3000` (вебхук B24 на
     `https://<DOMAIN>/api/b24/events`, без CORS); CI пушит два образа (matrix `runner`+`backend`),
@@ -167,6 +187,10 @@ UI — в компонентах. Это та же раскладка, что в
 > «собралось без ошибок». `pnpm generate && pnpm screenshot` → смотреть
 > `screenshots/` (mobile/desktop × light/dark). Детали и чек-лист —
 > [`docs/VISUAL_VERIFICATION.md`](docs/VISUAL_VERIFICATION.md).
+
+OG-картинка (`public/og.png`, 1200×630) генерируется из HTML-шаблона через
+пред-установленный Chromium — `pnpm og` (`scripts/make-og.mjs`); коммитим как
+статику. Перегенерировать при смене заголовка/брендинга.
 
 ## Деплой
 

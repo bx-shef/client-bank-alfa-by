@@ -40,10 +40,15 @@ export default defineEventHandler(async (event) => {
       deletePortal: memberId => deleteToken(dbQuery, memberId)
     })
 
-    // Surface TOFU: an install accepted without a configured env token means any
-    // caller could have bootstrapped trust. Loud in logs so prod misconfig is caught.
-    if (!envToken && result.status === 200 && result.body.event === 'ONAPPINSTALL') {
-      console.warn('[b24 events] ONAPPINSTALL accepted in bootstrap mode — set B24_APPLICATION_TOKEN in prod')
+    if (result.status === 200 && result.body.event === 'ONAPPINSTALL') {
+      // member_id is a non-secret routing id (see docs/B24_EVENTS.md); log it so an
+      // operator can copy it for the server-side check (scripts/check-app-option.sh).
+      console.info('[b24 events] ONAPPINSTALL member_id=%s', result.body.memberId)
+      // Surface TOFU: an install accepted without a configured env token means any
+      // caller could have bootstrapped trust. Loud in logs so prod misconfig is caught.
+      if (!envToken) {
+        console.warn('[b24 events] ONAPPINSTALL accepted in bootstrap mode — set B24_APPLICATION_TOKEN in prod')
+      }
     }
 
     setResponseStatus(event, result.status)

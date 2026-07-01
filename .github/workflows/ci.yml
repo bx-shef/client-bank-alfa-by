@@ -156,5 +156,6 @@ jobs:
             NUXT_PUBLIC_AUTHOR_NAME=${{ vars.NUXT_PUBLIC_AUTHOR_NAME }}
             NUXT_PUBLIC_AUTHOR_URL=${{ vars.NUXT_PUBLIC_AUTHOR_URL }}
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL }}
+            NUXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}

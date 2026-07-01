@@ -44,7 +44,7 @@ export interface BankProvider {
 /** Registry of known providers. `implemented` gates UI without code branches. */
 export const BANK_PROVIDERS: readonly BankProviderMeta[] = [
   { id: 'alfa-by', title: 'Альфа-Банк Беларусь', auth: 'oauth', canPoll: true, implemented: false },
-  { id: 'prior-by', title: 'Приорбанк', auth: 'oauth', canPoll: true, implemented: false },
+  { id: 'prior-by', title: 'Приорбанк Беларусь', auth: 'oauth', canPoll: true, implemented: false },
   { id: 'manual', title: 'Ручная загрузка выписки', auth: 'manual', canPoll: false, implemented: false }
 ]
 
