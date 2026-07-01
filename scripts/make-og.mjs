@@ -46,9 +46,9 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   .foot { font-size: 30px; color: #94a3b8; margin-top: auto; }
 </style></head><body>
   <div class="card">
-    <div class="eyebrow">Bitrix24 · Беларусь</div>
+    <div class="eyebrow">Bitrix24</div>
     <div class="title">Импорт выписки<br>из клиент-банка</div>
-    <div class="banks">Альфа-Банк · Приорбанк · ручной импорт</div>
+    <div class="banks">Альфа-Банк Беларусь · любая стандартная выписка</div>
     <div class="foot">Платежи в CRM · уведомления в чат</div>
   </div>
 </body></html>`

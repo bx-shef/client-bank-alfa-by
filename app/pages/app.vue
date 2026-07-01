@@ -13,7 +13,7 @@ import { useAppSettings } from '~/composables/useAppSettings'
 definePageMeta({ layout: 'clear' })
 
 // Document title for standalone; in the portal parent.setTitle sets the iframe chrome.
-useHead({ title: 'Выписка по счёту — Импорт выписки из клиент-банка (Беларусь)' })
+useHead({ title: 'Выписка по счёту — Импорт выписки из клиент-банка' })
 
 const statement = MOCK_STATEMENT
 const { credits, debits } = splitByDirection(statement.items)
