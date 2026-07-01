@@ -74,9 +74,10 @@
 7. **Docker + деплой.** [✓ фронтенд] Лендинг + B24-iframe-UI как статика за nginx
    (GHCR + Watchtower + nginx-proxy, как `currency-converter`) — `Dockerfile` (target `runner`),
    `nginx.conf` (CSP без `unsafe-inline` через `scripts/csp-hashes.mjs`), compose-файлы, CI
-   `docker-build`/`deploy`. [~ backend] Появился `Dockerfile` target `backend` (node-сервер) +
-   `db` (Postgres) в `docker-compose.yml` — локальный запуск для теста; **прод-compose backend+db
-   и GHCR-пайплайн backend-образа** — отдельный долг (#35). Детали — [`DEPLOY.md`](DEPLOY.md).
+   `docker-build`/`deploy`. [✓ backend в проде] `Dockerfile` target `backend` (node-сервер) + `db`
+   (Postgres); CI собирает/пушит **два** образа (matrix `runner`+`backend`) в GHCR; прод-compose
+   поднимает `app`+`backend`+`db` на **одном домене** — nginx `app` проксирует `/api/*` в backend
+   (вебхук B24 на `https://<DOMAIN>/api/b24/events`, без CORS). Детали — [`DEPLOY.md`](DEPLOY.md).
 8. **MCP-сервер** по выписке.
 9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
 

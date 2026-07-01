@@ -101,9 +101,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
-  - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом;
-    статический лендинг не затрагивает. Деплой/контракт — [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md),
-    [`docs/DEPLOY.md`](docs/DEPLOY.md).
+  - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом.
+    В проде — **один домен**: nginx `app` проксирует `/api/*` в `backend:3000` (вебхук B24 на
+    `https://<DOMAIN>/api/b24/events`, без CORS); CI пушит два образа (matrix `runner`+`backend`),
+    `docker-compose.prod.yml` поднимает `app`+`backend`+`db`. Деплой/контракт —
+    [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md), [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
   Ссылки на доку Альфы — [`docs/ALFA_API.md`](docs/ALFA_API.md); по Приорбанку/текстовой выписке —
   [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
@@ -174,11 +176,12 @@ UI — в компонентах. Это та же раскладка, что в
   и `window.__NUXT__.config` с меняющимся `buildId`) разрешаются по sha256-хэшам, которые
   `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
   `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
-  домены Б24 (iframe-встройка `/app`,`/settings`) и backend (`bank-import.bx-shef.by`).
+  домены Б24 (iframe-встройка `/app`,`/settings`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
 - `docker-compose.yml` — локальная сборка: `app` (статика лендинга, nginx), `backend` (node-сервер,
-  эндпоинт вебхуков Б24) и `db` (Postgres). `docker-compose.prod.yml` — прод лендинга (GHCR-образ +
-  Watchtower за nginx-proxy). Общий reverse-proxy (`nginx-proxy` + `acme-companion`, сеть `proxy-net`)
-  ставится на сервере один раз — см. `currency-converter/docker-compose.nginxproxy.yml`, не дублируем здесь.
+  эндпоинт вебхуков Б24) и `db` (Postgres). `docker-compose.prod.yml` — прод `app`+`backend`+`db`
+  (GHCR-образы + Watchtower за nginx-proxy); один домен — nginx `app` проксирует `/api/*` в backend.
+  Общий reverse-proxy (`nginx-proxy` + `acme-companion`, сеть `proxy-net`) ставится на сервере один
+  раз — см. `currency-converter/docker-compose.nginxproxy.yml`, не дублируем здесь.
 - **Backend** — `Dockerfile` target `backend` (`nuxt build`, node-сервер). Приём событий Б24 и хранилище
   токенов **реализованы** (этап 3, слайс; #35); OAuth Альфы/опрос/дела/чат — далее (этапы 4–6). Env и
   запуск — `.env.example`, [`docs/DEPLOY.md`](docs/DEPLOY.md), [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md).
