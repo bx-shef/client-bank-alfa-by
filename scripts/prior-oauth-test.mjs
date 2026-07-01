@@ -253,17 +253,18 @@ async function dcrRegister(tokenA, jwks, pem) {
   // Registration metadata (RFC 7591 + OB fields). Sent either as JSON or, with
   // --register-jwt, as a signed JWT (application/jwt) — the OB DCR profile often
   // requires a signed request; a JSON body then triggers a generic 500.
+  // Shape per the DCR swagger (DynamicRegistrationReq): only `redirect_uris` is
+  // required. Two fields that a generic 500 hid: `token_endpoint_auth_method` is
+  // an ARRAY, and `jwks` is a STRING (a serialized JWK Set) — not an object.
   const meta = {
     client_name: args['app-name'] ? String(args['app-name']) : 'OB-client-bank-alfa-by',
     redirect_uris: [cfg.redirectUri],
-    grant_types: ['client_credentials', 'authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    token_endpoint_auth_method: 'client_secret_basic',
-    scope: 'accounts openid',
+    response_types: ['code', 'code id_token'],
+    grant_types: ['authorization_code', 'client_credentials', 'refresh_token'],
     application_type: 'web',
     id_token_signed_response_alg: 'RS256',
-    request_object_signing_alg: 'RS256',
-    ...(jwks ? { jwks } : {})
+    token_endpoint_auth_method: ['client_secret_basic'],
+    ...(jwks ? { jwks: JSON.stringify(jwks) } : {})
   }
 
   let contentType = 'application/json'
