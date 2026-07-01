@@ -4,32 +4,20 @@
 //
 // The PNG is a committed static asset (served by nginx, referenced by og:image in
 // app.vue). Regenerate + commit when you edit the template below. Issue #4.
-import { mkdir, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { resolveChromium } from './lib/chromium.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const OUT = join(ROOT, 'public', 'og.png')
 const WIDTH = 1200
 const HEIGHT = 630
 
-// Resolve the pre-installed Chromium build (survives playwright version bumps);
-// returns undefined so playwright falls back to its own resolution otherwise.
-async function resolveChromium() {
-  const base = process.env.PLAYWRIGHT_BROWSERS_PATH
-  if (!base || !existsSync(base)) return undefined
-  const builds = (await readdir(base))
-    .filter(name => /^chromium-\d+$/.test(name))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))
-  for (const build of builds) {
-    const bin = join(base, build, 'chrome-linux', 'chrome')
-    if (existsSync(bin)) return bin
-  }
-  return undefined
-}
-
+// NB: the card text below is intentionally standalone — it is NOT derived from
+// app/utils/landing.ts (the explicit line break and shorter subtitle are tuned
+// for the 1200×630 card). Re-sync by hand when the landing title/branding changes.
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   * { margin: 0; box-sizing: border-box; }
   body { width: ${WIDTH}px; height: ${HEIGHT}px; }
@@ -58,7 +46,7 @@ try {
   await mkdir(join(ROOT, 'public'), { recursive: true })
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 })
   await page.setContent(html, { waitUntil: 'networkidle' })
-  await page.screenshot({ path: OUT, clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } })
+  await page.screenshot({ path: OUT, type: 'png', clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } })
   console.log(`✓ ${OUT.replace(ROOT, '.')} (${WIDTH}×${HEIGHT})`)
 } finally {
   await browser.close()

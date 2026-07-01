@@ -7,13 +7,14 @@ import type { StatementItem } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
 import { useAppSettings } from '~/composables/useAppSettings'
+import { pageTitle } from '~/utils/landing'
 
 // In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
 definePageMeta({ layout: 'clear' })
 
 // Document title for standalone; in the portal parent.setTitle sets the iframe chrome.
-useHead({ title: 'Выписка по счёту — Импорт выписки из клиент-банка' })
+useHead({ title: pageTitle('Выписка по счёту') })
 
 const statement = MOCK_STATEMENT
 const { credits, debits } = splitByDirection(statement.items)

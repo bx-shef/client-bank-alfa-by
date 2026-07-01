@@ -4,6 +4,18 @@ export const LANDING_TITLE = 'Импорт выписки из клиент-ба
 export const LANDING_DESCRIPTION
   = 'Выписка из Альфа-Банка Беларусь в Bitrix24 онлайн — из любой страны. Или загрузите любую стандартную выписку вручную.'
 
+/** Browser-tab title for an in-portal page: "<section> — <app name>". Keeps the
+ * brand suffix in one place so per-page `useHead` titles can't drift. */
+export function pageTitle(section: string): string {
+  return `${section} — ${LANDING_TITLE}`
+}
+
+/** URL for the OG share image: absolute when siteUrl is set (prod), relative
+ * `/og.png` otherwise (dev preview). Pure so the branch is unit-testable. */
+export function ogImageUrl(siteUrl: string): string {
+  return `${(siteUrl || '').replace(/\/$/, '')}/og.png`
+}
+
 /** Year the project started — left edge of the footer copyright range. */
 export const START_YEAR = 2026
 

@@ -6,12 +6,13 @@ import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { parseRuleLines, shouldNotifyChat } from '~/utils/statement'
 import type { OperationDirection } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
+import { pageTitle } from '~/utils/landing'
 
 // In-portal page: `clear` layout wraps it in <B24App> for iframe theming.
 definePageMeta({ layout: 'clear' })
 
 // Document title for standalone; in the portal parent.setTitle sets the iframe chrome.
-useHead({ title: 'Настройки — Импорт выписки из клиент-банка' })
+useHead({ title: pageTitle('Настройки') })
 
 // Demo, client-side persistence. Wires the chat-notify filter (pure logic in
 // utils/statement.ts) with a live preview. Real key/chat storage moves

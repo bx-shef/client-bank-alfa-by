@@ -9,11 +9,11 @@
 // The browser is the pre-installed Chromium in this environment
 // (PLAYWRIGHT_BROWSERS_PATH); no `playwright install` is needed here.
 import { createServer } from 'node:http'
-import { readFile, mkdir, stat, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { readFile, mkdir, stat } from 'node:fs/promises'
 import { join, extname, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { resolveChromium } from './lib/chromium.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PUBLIC_DIR = join(ROOT, '.output', 'public')
@@ -30,23 +30,6 @@ const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
   '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2'
-}
-
-// The npm `playwright` version may not match the Chromium build pre-installed
-// in this environment, so point it at the existing full Chromium build instead
-// of triggering a download. Resolved dynamically — survives playwright bumps.
-// Returns undefined when no pre-installed build is found (let playwright resolve).
-async function resolveChromium() {
-  const base = process.env.PLAYWRIGHT_BROWSERS_PATH
-  if (!base || !existsSync(base)) return undefined
-  const builds = (await readdir(base))
-    .filter(name => /^chromium-\d+$/.test(name))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))
-  for (const build of builds) {
-    const bin = join(base, build, 'chrome-linux', 'chrome')
-    if (existsSync(bin)) return bin
-  }
-  return undefined
 }
 
 async function ensurePublic() {

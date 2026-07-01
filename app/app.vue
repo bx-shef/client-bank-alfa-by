@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LANDING_TITLE, LANDING_DESCRIPTION } from '~/utils/landing'
+import { LANDING_TITLE, LANDING_DESCRIPTION, ogImageUrl } from '~/utils/landing'
 
 // b24ui colorMode persists the choice under this @vueuse/core key; the inline
 // theme-init script below reads it to set the class before paint. Keep in sync
@@ -11,8 +11,7 @@ const description = LANDING_DESCRIPTION
 
 // og:image should be absolute for scrapers; siteUrl is set via NUXT_PUBLIC_SITE_URL
 // in prod (empty in dev → a relative /og.png, which is fine for local preview).
-const siteUrl = (useRuntimeConfig().public.siteUrl || '').replace(/\/$/, '')
-const ogImage = `${siteUrl}/og.png`
+const ogImage = ogImageUrl(useRuntimeConfig().public.siteUrl || '')
 
 useHead({
   htmlAttrs: { lang: 'ru' },
