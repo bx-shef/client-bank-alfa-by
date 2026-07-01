@@ -166,7 +166,11 @@ async function postToken(form, { id, secret }) {
 
 async function obRequest(path, { method = 'GET', accessToken, json } = {}) {
   const body = json ? JSON.stringify(json) : undefined
-  return httpRequest(`${cfg.base}${path}`, {
+  if (args['verbose']) {
+    log(`${C.dim}→ ${method} ${cfg.base}${path}${C.reset}`)
+    if (body) log(body)
+  }
+  const res = await httpRequest(`${cfg.base}${path}`, {
     method,
     headers: {
       'Authorization': `Bearer ${accessToken}`,
@@ -177,6 +181,8 @@ async function obRequest(path, { method = 'GET', accessToken, json } = {}) {
     },
     body
   })
+  if (args['verbose']) log(`${C.dim}← ${res.status}: ${trunc(res.text, 1200)}${C.reset}`)
+  return res
 }
 
 // --- JWT (RS256) -----------------------------------------------------------
