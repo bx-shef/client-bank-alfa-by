@@ -22,8 +22,8 @@
 |---|---|---|---|---|
 | `b24-events` | `Q_EVENTS` | `EventJob` (`memberId`, `domain`, `kind`, `ts`) | вебхук `POST /api/b24/events` | follow-up после проверенного события; на `ONAPPUNINSTALL` — очистка портала |
 | `bank-fetch` | `Q_FETCH` | `FetchJob` (`memberId`, `providerId`, `account`, `dateFrom/To`) | крон (`planFetches`) / демо-нагрузка | тянет окно выписки у банка (Альфа/Приор) → нормализует → кладёт батч в `crm-sync` |
-| `file-parse` | `Q_PARSE` | `ParseJob` (`memberId`, `providerId`, `fileRef`, `fileHash`) | загрузка файла (UI/backend) | разбирает файл ручной загрузки → нормализует → кладёт батч в `crm-sync` |
-| `crm-sync` | `Q_CRM` | `CrmSyncJob` (`memberId`, `source`, `batchId`, `items`) | обработчики `bank-fetch` / `file-parse` | дедуп в батче → на операцию: поиск компании → универсальное дело → чат |
+| `file-parse` | `Q_PARSE` | `ParseJob` (`memberId`, `providerId`, `fileRef`, `fileHash`) | загрузка файла (UI/backend — **продюсера ещё нет**, ждёт UI ручной загрузки, #19/#21) | разбирает файл ручной загрузки → нормализует → кладёт батч в `crm-sync` |
+| `crm-sync` | `Q_CRM` | `CrmSyncJob` (`memberId`, `providerId`, `source`, `batchId`, `items`) | обработчики `bank-fetch` / `file-parse` (только если операций > 0) | дедуп в батче → на операцию: поиск компании → универсальное дело → чат |
 
 `bank-fetch` и `file-parse` — два входа с разных источников (онлайн-банк и файл), оба дают
 нормализованный `StatementItem[]` и **сходятся в `crm-sync`** — общий «анализ + запись в CRM».
@@ -72,7 +72,7 @@ flowchart LR
 - **At-least-once.** Доставка «хотя бы раз», поэтому `crm-sync` дедупит **внутри батча** по
   `account|docId`. Но это **не** защищает от повторной доставки *всего* джоба (падение воркера
   после частичной записи) — нужен **персистентный стор** `{account|docId → activityId}`,
-  сверяемый read-before-write. Это **блокер стадии 4** — [issue #9](../../issues/9); пока он не
+  сверяемый read-before-write. Это **блокер стадии 4** — [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9); пока он не
   готов, `writeActivity` остаётся заглушкой.
 - **Чистые обработчики с DI.** [`handlers.ts`](../server/queue/handlers.ts) — вся логика
   (`handleFetchJob`/`handleParseJob`/`handleCrmSyncJob`/`handleEventJob`) принимает `HandlerDeps`
@@ -119,12 +119,12 @@ flowchart LR
 | Переменная | Назначение |
 |---|---|
 | `REDIS_URL` | Подключение к Redis; без неё очереди выключены (`queueEnabled()` = false, продюсеры no-op) |
-| `CRON_INTERVAL_MIN` | Период тика крона (мин); частота опроса банков регулируется приложением — [issue #54](../../issues/54) |
+| `CRON_INTERVAL_MIN` | Период тика крона (мин); частота опроса банков регулируется приложением — [issue #54](https://github.com/bx-shef/client-bank-alfa-by/issues/54) |
 | `DEMO_LOAD_N` | Сколько синтетических fetch-джобов класть за тик (демо-поток); `0` = выключено |
 | `B24_APPLICATION_TOKEN` | Guard эндпоинта `GET /api/queues` (и служебных проверок) |
 
 ## Смежное
 
-- [issue #54](../../issues/54) — частота опроса банков (редкая, управляется приложением) + кнопка «Опросить сейчас».
-- [issue #9](../../issues/9) — персистентный стор дедупа (блокер реальной записи в `crm-sync`).
+- [issue #54](https://github.com/bx-shef/client-bank-alfa-by/issues/54) — частота опроса банков (редкая, управляется приложением) + кнопка «Опросить сейчас».
+- [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9) — персистентный стор дедупа (блокер реальной записи в `crm-sync`).
 - [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) — стадии 4–6 наполняют транспорты обработчиков реальной логикой.
