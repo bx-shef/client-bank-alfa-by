@@ -36,6 +36,7 @@
 //   PRIOR_ACCOUNT_ID     / --account   (skip listing, query one account)
 // Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --expires <YYYY-MM-DD> --code <code>
 //        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only --all
+//        --access-token <tokenB> (skip browser: list accounts + statements only)
 //        --verbose (dump the /register request + full response for debugging)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
 
@@ -420,19 +421,26 @@ async function listAccounts(tokenB) {
   return { raw: res.json, accounts }
 }
 
+// Statement window default: last 30 days if --from/--to not given.
+const isoDateTime = (dt) => {
+  if (!dt) return undefined
+  return dt.includes('T') ? dt : `${dt}T00:00:00.000Z`
+}
+
 async function fetchStatement(tokenB, accountId) {
   log(`\n${C.bold}account ${accountId}${C.reset}`)
-  // Create the statement (async). TO CONFIRM: request body from the Account API;
-  // sending a date window if provided.
-  const createBody = (cfg.from || cfg.to)
-    ? { data: { fromDateTime: cfg.from || undefined, toDateTime: cfg.to || undefined } }
-    : undefined
+  // Create the statement (async). Body per the Open-banking swagger:
+  // { data: { statement: { fromBookingDate, toBookingDate } } } (ISO datetimes).
+  const from = isoDateTime(cfg.from) || `${new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)}T00:00:00.000Z`
+  const to = isoDateTime(cfg.to) || `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`
+  const createBody = { data: { statement: { fromBookingDate: from, toBookingDate: to } } }
   const created = await obRequest(`${OB}/accounts/${accountId}/statements`, {
     method: 'POST', accessToken: tokenB, json: createBody
   })
   log(`  ${C.dim}create: HTTP ${created.status}${C.reset}`)
-  const cd = created.json && created.json.data ? created.json.data : created.json
-  const statementId = cd && (cd.statementId || cd.StatementId || cd.id)
+  // 201: { data: { statement: { statementId, accountId } } }
+  const st = created.json?.data?.statement || created.json?.data || created.json
+  const statementId = st && (st.statementId || st.StatementId || st.id)
   if (!statementId) {
     err('  no statementId returned')
     log('  ' + (created.json ? trunc(JSON.stringify(created.json), 400) : trunc(created.text, 400)))
@@ -451,6 +459,27 @@ async function fetchStatement(tokenB, accountId) {
   }
   warn(`  statement not ready after ${cfg.poll} polls — re-run GET later`)
   return { accountId, statementId, pending: true }
+}
+
+// List accounts, then create + poll a statement for each (one by default —
+// sandbox throttles a fan-out to 429). Reused by the full flow and by
+// --access-token (skip straight here with an existing token B).
+async function runStatements(accessToken) {
+  let ids = cfg.accountId
+    ? [cfg.accountId]
+    : (await listAccounts(accessToken)).accounts
+        .map(a => a.accountId || a.AccountId).filter(Boolean)
+  if (!cfg.accountId && !args['all'] && ids.length > 1) {
+    warn(`processing only the first account (${ids[0]}) to avoid the sandbox rate limit — use --account <id> or --all`)
+    ids = ids.slice(0, 1)
+  }
+  head('Statements (async create + poll)')
+  const statements = []
+  for (const id of ids) {
+    statements.push(await fetchStatement(accessToken, id))
+    if (cfg.delayMs > 0 && ids.length > 1) await sleep(cfg.delayMs)
+  }
+  return statements
 }
 
 async function revoke(token) {
@@ -529,6 +558,15 @@ async function main() {
     return
   }
 
+  // --access-token: skip the browser flow and reuse an existing token B (valid
+  // ~1h) to iterate on accounts/statements without re-authorizing each time.
+  if (args['access-token']) {
+    head('Using provided access token — straight to accounts/statements')
+    const statements = await runStatements(String(args['access-token']))
+    saveOutput({ generatedAt: new Date().toISOString(), base: cfg.base, statements })
+    return
+  }
+
   // Default flow (business app): consent → authorize → code → statement.
   if (!cfg.clientId || !cfg.clientSecret) die('business app creds required (PRIOR_CLIENT_ID / PRIOR_CLIENT_SECRET) — run --dcr first')
   const pem = loadPrivateKey()
@@ -571,22 +609,7 @@ async function main() {
   const tokens = await exchangeCode(code)
   if (!tokens) process.exit(1)
 
-  let ids = cfg.accountId
-    ? [cfg.accountId]
-    : (await listAccounts(tokens.access_token)).accounts
-        .map(a => a.accountId || a.AccountId).filter(Boolean)
-  // Sandbox throttles hard — don't fan out over all accounts by default (that
-  // trips HTTP 429). One account is enough to validate; --all does every one.
-  if (!cfg.accountId && !args['all'] && ids.length > 1) {
-    warn(`processing only the first account (${ids[0]}) to avoid the sandbox rate limit — use --account <id> or --all`)
-    ids = ids.slice(0, 1)
-  }
-  head('Statements (async create + poll)')
-  const statements = []
-  for (const id of ids) {
-    statements.push(await fetchStatement(tokens.access_token, id))
-    if (cfg.delayMs > 0 && ids.length > 1) await sleep(cfg.delayMs)
-  }
+  const statements = await runStatements(tokens.access_token)
 
   head('Save')
   saveOutput({
