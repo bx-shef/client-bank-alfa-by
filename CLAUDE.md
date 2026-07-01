@@ -162,8 +162,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `DEMO_LOAD_N>0`) крон каждые `CRON_INTERVAL_MIN` кладёт синтетические fetch-джобы (демо потока).
       Масштаб-аут (отдельный воркер-контейнер) — следующий шаг (см. REFACTOR_PLAN).
     - **Наблюдаемость сейчас:** `server/api/queues.get.ts` (`GET /api/queues` — счётчики по очередям,
-      guard `B24_APPLICATION_TOKEN`, nginx `deny all`) + `scripts/queue-stats.sh`. Телеметрия в
-      Grafana (Prometheus-экспортёр BullMQ / bull-board) — зафиксированное намерение, отдельный этап.
+      guard `B24_APPLICATION_TOKEN`, nginx `deny all`) + `scripts/queue-stats.sh`. **Живой график** —
+      страница `/queues` (`app/pages/queues.vue`) → компонент `app/components/QueueMonitor.vue` на
+      **ECharts** (Apache-2.0, бесплатно, динамический импорт), чистая логика ряда —
+      `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот `/api/queues` без истории);
+      сейчас демо-данные. Телеметрия в Grafana (Prometheus-экспортёр BullMQ / bull-board) — далее.
+      Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
