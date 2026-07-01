@@ -32,7 +32,8 @@ export interface PriorTransaction {
   bookingDateTime?: string
   valueDate?: string
   transactionDetails?: string
-  amount?: number
+  /** Open Banking JSON may deliver the amount as a number or a string. */
+  amount?: number | string
   currency?: string
   debtor?: PriorTxParty
   debtorAccount?: PriorTxAccount
@@ -48,8 +49,10 @@ export interface PriorTransaction {
 export type PriorAccountContext = NormalizeContext
 
 /** Пull the УНП/tax id out of a party's org/private identification. Priorbank
- * prefixes it (`INN191167894`); we keep the digits (BY УНП is 9 digits). Falls
- * back to the raw string if there are none. */
+ * prefixes it (`INN191167894`); we keep the digits (BY УНП is 9 digits — length
+ * is not validated here, a foreign counterparty may differ). Falls back to the
+ * raw string if there are no digits. Reads `organisationIdentification` first,
+ * then `privateIdentification` (physical-person counterparty). */
 function extractUnp(party?: PriorTxParty): string {
   const raw = party?.organisationIdentification?.[0]?.identification
     ?? party?.privateIdentification?.[0]?.identification
@@ -77,12 +80,16 @@ export function normalizePriorTransaction(tx: PriorTransaction, ctx: PriorAccoun
     ...(agent?.identification ? { bic: agent.identification } : {})
   }
 
+  // Coerce amount defensively: an Open Banking JSON may deliver it as a string;
+  // never let NaN leak into downstream arithmetic (same guard as alfaStatement).
+  const rawAmount = typeof tx.amount === 'number' ? tx.amount : Number(tx.amount ?? 0)
+
   return {
     account: ctx.account,
     docId: tx.transactionId ?? '',
     ...(tx.number ? { docNum: tx.number } : {}),
     direction,
-    amount: tx.amount ?? 0,
+    amount: Number.isFinite(rawAmount) ? rawAmount : 0,
     currency: tx.currency ?? ctx.currency ?? '',
     purpose: tx.transactionDetails ?? '',
     counterparty,

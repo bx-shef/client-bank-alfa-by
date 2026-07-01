@@ -59,18 +59,22 @@ export interface Statement {
 // upload) is fetched differently but produces the SAME output — a StatementItem[].
 // So the app is provider-agnostic. The interface is:
 //
-//   вход  (StatementQuery):  банк + счёт + диапазон дат
-//   процесс:                 получить выписку у провайдера и разобрать её
+//   вход  (StatementFetchQuery):  банк + счёт + диапазон дат
+//   процесс:                      получить выписку у провайдера и разобрать её
 //   выход (StatementItem[]): по операции — приход/расход, счёт+имя+УНП контрагента,
 //                            сумма, валюта, дата операции, назначение платежа, docId (дедуп)
 //
-// A test feeds a provider's raw response (a fixture) into the provider's
-// `StatementNormalizer` and asserts the resulting StatementItem[] — the exact
-// data the app consumes. The fetch (I/O, per-provider) is verified separately.
+// A test feeds a provider's raw response into the provider's `StatementNormalizer`
+// and asserts the resulting StatementItem[] — the exact data the app consumes.
+// The fetch (I/O, per-provider) is verified separately.
 
-/** Input of a statement request: which provider, which account, which date range.
- * Credentials/tokens are resolved separately (config + token store), not here. */
-export interface StatementQuery {
+/**
+ * Per-account statement request: which provider, which account, which date range.
+ * Credentials/tokens are resolved separately (config + token store), not here.
+ * The batch, BankProvider-level query over several accounts is a distinct type —
+ * `StatementQuery` in `app/config/banks.ts` (consumed by `BankProvider.getStatement`).
+ */
+export interface StatementFetchQuery {
   providerId: BankProviderId
   /** Our account number (or the provider's account id). */
   account: string

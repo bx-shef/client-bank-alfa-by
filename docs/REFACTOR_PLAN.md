@@ -51,7 +51,8 @@
 Каждый банк получается по-своему, но отдаёт **одинаковый выход** — `StatementItem[]`. Это и делает
 приложение банк-независимым, и даёт один вид теста на всех (`app/types/statement.ts`):
 
-- **вход** — `StatementQuery`: `providerId` (банк) + `account` (счёт) + `dateFrom/dateTo` (диапазон);
+- **вход** — `StatementFetchQuery`: `providerId` (банк) + `account` (счёт) + `dateFrom/dateTo` (диапазон);
+  per-account; батч-запрос по нескольким счетам (`BankProvider.getStatement`) — `StatementQuery` в `banks.ts`;
 - **процесс** — получить выписку у провайдера и разобрать (`fetch` — I/O, per-provider; тестируется отдельно);
 - **выход** — `StatementItem[]`, контракт нормализатора `StatementNormalizer = (raw, ctx) => StatementItem[]`.
   Поля, которые нужны приложению: `direction` (приход/расход), `counterparty.account`/`.name`/`.unp`
@@ -100,6 +101,11 @@
    (вебхук B24 на `https://<DOMAIN>/api/b24/events`, без CORS). Детали — [`DEPLOY.md`](DEPLOY.md).
 8. **MCP-сервер** по выписке.
 9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
+   [~ Prior] Open Banking СПР **проверен на sandbox живьём**; нормализатор `normalizePrior`
+   (`app/utils/priorStatement.ts`) **готов и покрыт тестами**; live-recon — `scripts/prior-oauth-test.mjs`.
+   **Осталось:** вынести OAuth/DCR/consent-ядро в `app/utils/priorOauth.ts` (сейчас в скрипте) под тесты —
+   отдельный слайс, аналог этапа 3 Альфы; прод-СКЗИ — #41. Ручной импорт (`manual`): нормализация
+   `clientBankText.ts` в `StatementItem` — #19.
 
 ## API Альфы (подтверждено по свагеру + доке «Авторизация»)
 

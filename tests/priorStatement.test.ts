@@ -98,6 +98,29 @@ describe('normalizePriorTransaction — edge cases', () => {
     expect(item.counterparty.unp).toBe('N/A')
     expect(item.amount).toBe(0)
   })
+  it('reads the УНП from privateIdentification (physical-person counterparty)', () => {
+    const item = normalizePriorTransaction(
+      { creditDebitIndicator: 'Credit', debtor: { name: 'ИП Иванов', privateIdentification: [{ identification: 'ID3012345678' }] } },
+      { account: 'A' }
+    )
+    expect(item.counterparty.unp).toBe('3012345678')
+  })
+  it('yields an empty УНП when there is no identification at all', () => {
+    const item = normalizePriorTransaction(
+      { creditDebitIndicator: 'Credit', debtor: { name: 'X' } },
+      { account: 'A' }
+    )
+    expect(item.counterparty.unp).toBe('')
+  })
+  it('coerces a string amount and guards against NaN', () => {
+    // Open Banking JSON may send the amount as a string.
+    expect(normalizePriorTransaction({ amount: '1234.56' }, { account: 'A' }).amount).toBe(1234.56)
+    expect(normalizePriorTransaction({ amount: 'oops' }, { account: 'A' }).amount).toBe(0)
+  })
+  it('empty transactionId collapses to an empty docId (dedup caveat)', () => {
+    // Documented limitation: no transactionId → docId '' → weak dedup key.
+    expect(normalizePriorTransaction({ creditDebitIndicator: 'Credit' }, { account: 'A' }).docId).toBe('')
+  })
 })
 
 describe('normalizePriorTransactionList', () => {

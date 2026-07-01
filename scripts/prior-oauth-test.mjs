@@ -38,7 +38,9 @@
 //        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only --all
 //        --access-token <tokenB> (skip browser: list accounts + statements only)
 //        --transactions (fetch the transaction list instead of the statement summary)
-//        --verbose (dump the /register request + full response for debugging)
+//        --verbose (dump requests + full responses for debugging — SANDBOX only;
+//                   it prints the signed JWT and raw bodies, do not paste real-
+//                   portal output into a ticket/chat)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
 
 import { request } from 'node:https'

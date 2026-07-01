@@ -23,8 +23,10 @@ function assertAppFields(item: StatementItem) {
   expect(typeof item.counterparty.unp).toBe('string')
 }
 
-// Each provider's normalizer, typed as the shared contract — this assignment
-// itself is a compile-time proof of conformance.
+// Compile-time conformance is proven where the normalizers are declared:
+// `export const normalizeAlfa: StatementNormalizer<…>` / `normalizePrior: …`.
+// Here we collect them into one heterogeneous list (hence the `as` to the
+// unknown-raw form) to assert their RUNTIME output is identical across banks.
 const providers: Array<{ id: string, normalize: StatementNormalizer, raw: unknown }> = [
   {
     id: 'alfa-by',

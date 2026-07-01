@@ -84,9 +84,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
   - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
-    `OperationDirection`, `BankProviderId`) + **единый интерфейс**: `StatementQuery` (вход:
-    банк/счёт/диапазон), `StatementNormalizer` (`raw,ctx → StatementItem[]`) — один выход на все
-    банки (см. REFACTOR_PLAN «Единый интерфейс выписки»).
+    `OperationDirection`, `BankProviderId`) + **единый интерфейс**: `StatementFetchQuery` (вход:
+    банк/счёт/диапазон; батч-`StatementQuery` для `BankProvider` — в `banks.ts`),
+    `StatementNormalizer` (`raw,ctx → StatementItem[]`) — один выход на все банки (см. REFACTOR_PLAN
+    «Единый интерфейс выписки»).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
   - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
     `parseRuleLines` (textarea → массив правил).

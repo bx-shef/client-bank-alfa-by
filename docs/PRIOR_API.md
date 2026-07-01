@@ -190,6 +190,18 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
 
 ## Связь с архитектурой
 
-`prior-by` и `manual` — провайдеры из абстракции `BankProvider` (`app/config/banks.ts`),
-оба пока `implemented: false`. Путь №1 даёт парсинг формата; путь №2 (когда будут доступы) —
-автоматическое получение выписки. Нормализация обоих в общий `StatementItem` — задача #19.
+`prior-by` и `manual` — провайдеры из абстракции `BankProvider` (`app/config/banks.ts`).
+Единый контракт разбора — `StatementNormalizer` (raw → `StatementItem[]`, см.
+[`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) «Единый интерфейс выписки»):
+
+- **`prior-by` (путь №2)** — нормализация **сделана**: `normalizePrior` в `app/utils/priorStatement.ts`
+  (операция Open Banking → `StatementItem`), покрыта тестами по живому sandbox-образцу. Осталось —
+  транспорт/OAuth-ядро (`app/utils/priorOauth.ts`, сейчас логика в `scripts/prior-oauth-test.mjs`) и
+  прод-СКЗИ (issue #41).
+- **`manual` (путь №1)** — парсер текстового формата `clientBankText.ts` есть, но в общий
+  `StatementItem` пока **не нормализован** — задача **#19**.
+
+> **Дедуп/идемпотентность:** ключ операции — `account|docId`, где для Приорбанка `docId = transactionId`.
+> Дедуп корректен, пока Приорбанк отдаёт **стабильный и уникальный** `transactionId` в разрезе счёта
+> (подтвердить на проде; при переиздании id банком возможны дубли/потери). Для Альфы `docId` — учётный
+> номер документа. При отсутствии `transactionId` ключ схлопывается в `account|` — контроль на backend.
