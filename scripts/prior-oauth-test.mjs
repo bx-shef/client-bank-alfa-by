@@ -263,7 +263,7 @@ async function dcrRegister(tokenA, jwks, pem) {
   // required. Two fields that a generic 500 hid: `token_endpoint_auth_method` is
   // an ARRAY, and `jwks` is a STRING (a serialized JWK Set) — not an object.
   const meta = {
-    client_name: args['app-name'] ? String(args['app-name']) : 'OB-client-bank-alfa-by',
+    client_name: args['app-name'] ? String(args['app-name']) : 'Импорт выписки в Bitrix24 (bx-shef)',
     redirect_uris: [cfg.redirectUri],
     response_types: ['code', 'code id_token'],
     grant_types: ['authorization_code', 'client_credentials', 'refresh_token'],
