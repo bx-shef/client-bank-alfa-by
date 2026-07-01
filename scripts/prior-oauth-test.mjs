@@ -429,6 +429,10 @@ async function fetchStatement(tokenB, accountId) {
   // ISO datetime, but the server validates date-only.
   const from = cfg.from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
   const to = cfg.to || new Date().toISOString().slice(0, 10)
+  // Priorbank caps a statement at a 3-month window (BY.NBRB.Field.InvalidDate).
+  if ((new Date(to) - new Date(from)) / 864e5 > 93) {
+    warn(`  window ${from}…${to} exceeds 3 months — Priorbank will reject it; narrow --from/--to`)
+  }
   const createBody = { data: { statement: { fromBookingDate: from, toBookingDate: to } } }
   const created = await obRequest(`${OB}/accounts/${accountId}/statements`, {
     method: 'POST', accessToken: tokenB, json: createBody
