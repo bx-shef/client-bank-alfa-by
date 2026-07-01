@@ -102,8 +102,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`normalizeAlfa` — контракт `StatementNormalizer`).
   - `app/utils/priorStatement.ts` — нормализация операции Приорбанка (Open Banking СПР) в `StatementItem`
     (`normalizePrior`); подтверждено на живом sandbox — см. [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
-  - `app/utils/clientBankText.ts` — парсер текстовой выписки client-bank (CP1251, `***** ^Type=`)
-    для провайдеров `prior-by`/`manual`. ⚠️ Портированный пример, рефакторинг — issue #19.
+  - `app/utils/clientBankText.ts` — парсер **формата** текстовой выписки client-bank (CP1251,
+    `***** ^Type=`) → секции/строки; для провайдеров `prior-by`/`manual`. Портированный пример,
+    остаточный рефактор (словари ключей/DoS-гард) — issue #19.
+  - `app/utils/clientBankStatement.ts` — нормализация разобранной текстовой выписки в `StatementItem`
+    (`normalizeClientBank` — контракт `StatementNormalizer`; приход/расход, валюта нац/инвалюта,
+    контрагент, `account|docId`-дедуп). Провайдер `manual` (и файловый путь `prior-by`) — issue #19.
+    Проверено на образцах `tests/fixtures/client-bank/` (BYN `Type=400`, CNY `Type=600`).
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
   - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
     `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт

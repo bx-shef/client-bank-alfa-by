@@ -30,12 +30,12 @@ describe('parseClientBankText — BYN statement (Type=400, no I3 marker)', () =>
     expect(row.OpDate).toBe('28.09.2023 10:19:04')
   })
 
-  // Known rough edge (#19): `DocID` is NOT in the item-key dictionary, so it is
-  // not captured per-row — it lands in the shared `unrouted` bucket (last write
-  // wins). The refactor must capture it per row; it is the `account|docId` key.
-  it('does NOT capture DocID per row (lands in unrouted — refactor target)', () => {
-    expect(parsed.OUT_PARAM.items[0]!.DocID).toBeUndefined()
-    expect(parsed.OUT_PARAM.unrouted.DocID).toBe('100000001')
+  // #19 fix: `DocID` (the `account|docId` idempotency key) and `Cod` (counterparty
+  // bank BIC) are now captured per-row, not dropped into `unrouted`.
+  it('captures DocID and Cod (BIC) per row', () => {
+    expect(parsed.OUT_PARAM.items[0]!.DocID).toBe('100000001')
+    expect(parsed.OUT_PARAM.items[0]!.Cod).toBe('PJCBBY2X')
+    expect(parsed.OUT_PARAM.unrouted.DocID).toBeUndefined()
   })
 
   it('aliases UNNRec into KorUNP on the row', () => {
@@ -94,10 +94,11 @@ describe('parseClientBankText — foreign-currency statement (Type=600, I3=CNY)'
     expect(parsed.OUT_PARAM.footer.RestOut).toBe('225818.18')
   })
 
-  // With two operations sharing the same DocDate, `unrouted.DocID` keeps only the
-  // LAST one — characterizes the rough edge the #19 normalizer must fix.
-  it('unrouted.DocID keeps only the last operation’s id (last write wins)', () => {
-    expect(parsed.OUT_PARAM.unrouted.DocID).toBe('100000003')
+  // #19 fix: each of the two operations keeps its own DocID (no more last-write-wins).
+  it('captures each operation’s own DocID per row', () => {
+    expect(parsed.OUT_PARAM.items[0]!.DocID).toBe('100000002')
+    expect(parsed.OUT_PARAM.items[1]!.DocID).toBe('100000003')
+    expect(parsed.OUT_PARAM.unrouted.DocID).toBeUndefined()
   })
 })
 

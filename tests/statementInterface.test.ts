@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { StatementItem, StatementNormalizer } from '~/types/statement'
 import { normalizeAlfa } from '~/utils/alfaStatement'
 import { normalizePrior } from '~/utils/priorStatement'
+import { normalizeClientBank } from '~/utils/clientBankStatement'
 
 // The unified statement interface (see app/types/statement.ts): every bank is
 // fetched differently but its normalizer produces the SAME StatementItem[] — the
@@ -61,6 +62,22 @@ const providers: Array<{ id: string, normalize: StatementNormalizer, raw: unknow
           debtor: { name: 'Счет 3012000041012', organisationIdentification: [{ identification: 'INN191167894' }] },
           debtorAccount: { identification: '3012000041012' },
           debtorAgent: { identification: 'PJCBBY2X', name: '«Приорбанк» ОАО' }
+        }]
+      }
+    }
+  },
+  {
+    id: 'manual',
+    normalize: normalizeClientBank as StatementNormalizer,
+    raw: {
+      GENERAL: { TYPE: '400', ACC: 'BY10ALFA30120000000000000933', TITLE: 'T' },
+      IN_PARAM: { header: {}, items: [], footer: {}, unrouted: {} },
+      OUT_PARAM: {
+        header: {}, footer: {}, unrouted: {},
+        items: [{
+          DocDate: '28.09.2023', Num: '1', Opr: '6', Acc: 'BY20PJCB30120000000000000933',
+          Db: '1840.50', UNNRec: '191167894', KorUNP: '191167894', KorName: 'ООО Ромашка',
+          Nazn: 'Оплата по счёту №1', DocID: 'M1', OpDate: '28.09.2023 10:00:00'
         }]
       }
     }

@@ -9,19 +9,20 @@ import type { ClientBankParsed, ClientBankSection } from '~/types/clientBankText
 // `manual` providers (see app/config/banks.ts) — it is a *format* parser, not a
 // bank client. Ported almost verbatim from the sibling `aidapioneer-tech/client-bank`
 // app (`composables/useParser.ts`) so its behavior stays auditable against the
-// live importer. Known rough edges, all deferred to the #19 rewrite:
+// live importer. Normalization to `StatementItem[]` now lives in the sibling
+// `app/utils/clientBankStatement.ts` (`normalizeClientBank`, the `manual` /
+// `prior-by` provider — issue #19); this file stays a pure *format* parser.
+// Remaining rough edges (deferred to the #19 rewrite):
 //   - section routing via three hand-maintained key dictionaries (header /
 //     item / footer) — brittle, bank-specific, hard to extend;
-//   - the `unrouted` catch-all bucket where unknown keys land — including the
-//     `I3` currency marker AND `DocID`, which is NOT captured per row (last
-//     write wins) even though it is the `account|docId` idempotency key #19 needs;
-//   - no normalization to `StatementItem` yet (mapping lives in issue #19);
-//   - no input-size limit (DoS guard) — the live app caps it in the UI; the
-//     refactor must add one here (#19);
+//   - the `unrouted` catch-all bucket where unknown keys land (e.g. the `I3`
+//     currency marker, which the normalizer reads back);
+//   - no input-size limit (DoS guard) — the live app caps it in the UI and the
+//     `scripts/parse-statement.ts` CLI caps bytes; the refactor should add one here;
 //   - the caller is responsible for decoding CP1251 → string before calling
 //     (the source files are windows-1251, NOT utf-8).
-// Until then it is covered by characterization tests against the anonymized
-// fixtures in `tests/fixtures/client-bank/`.
+// It is covered by characterization tests against the anonymized fixtures in
+// `tests/fixtures/client-bank/`.
 
 const FILE_HEADER = '***** ^Type='
 
@@ -38,11 +39,13 @@ const FOOTER_KEYS = new Set([
   'RestOutQ', 'CrOut', 'OutCre', 'DebOut'
 ])
 
-/** Keys that belong to an operation row. `DocDate` also opens a new row. */
+/** Keys that belong to an operation row. `DocDate` also opens a new row.
+ * `DocID` (the `account|docId` idempotency key) and `Cod` (counterparty bank
+ * BIC) are captured per-row — they are always emitted after their `DocDate`. */
 const ITEM_KEYS = new Set([
-  'DocDate', 'DocTime', 'Num', 'Opr', 'PaymCode', 'Code', 'Acc',
+  'DocDate', 'DocTime', 'Num', 'Opr', 'PaymCode', 'Code', 'Cod', 'Acc',
   'DebQ', 'CreQ', 'Deb', 'Cre', 'I2', 'Amount', 'Rate',
-  'KorUNP', 'UNNRec', 'KorName', 'Nazn', 'Nazn2', 'OpDate',
+  'KorUNP', 'UNNRec', 'KorName', 'Nazn', 'Nazn2', 'OpDate', 'DocID',
   'Credit', 'Db', 'OutRate'
 ])
 
