@@ -441,7 +441,12 @@ async function fetchAsync(tokenB, accountId, kind) {
   if ((new Date(to) - new Date(from)) / 864e5 > 93) {
     warn(`  window ${from}…${to} exceeds 3 months — Priorbank will reject it; narrow --from/--to`)
   }
-  const createBody = { data: { [key]: { fromBookingDate: from, toBookingDate: to } } }
+  // Date formats differ by endpoint (both confirmed live): statements want a
+  // bare `yyyy-MM-dd`, transactions want a full ISO datetime with the +03:00
+  // (Belarus) offset — `YYYY-MM-DDThh:mm:ss±hh:mm`.
+  const fromBookingDate = kind === 'transactions' ? `${from}T00:00:00+03:00` : from
+  const toBookingDate = kind === 'transactions' ? `${to}T23:59:59+03:00` : to
+  const createBody = { data: { [key]: { fromBookingDate, toBookingDate } } }
   const created = await obRequest(`${OB}/accounts/${accountId}/${kind}`, {
     method: 'POST', accessToken: tokenB, json: createBody
   })
