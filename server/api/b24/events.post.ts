@@ -45,10 +45,12 @@ export default defineEventHandler(async (event) => {
       // member_id is a non-secret routing id (see docs/B24_EVENTS.md); log it so an
       // operator can copy it for the server-side check (scripts/check-app-option.sh).
       console.info('[b24 events] ONAPPINSTALL member_id=%s', result.body.memberId)
-      // Surface TOFU: an install accepted without a configured env token means any
-      // caller could have bootstrapped trust. Loud in logs so prod misconfig is caught.
+      // Multi-tenant model: application_token is delivered per portal in this event
+      // and stored write-once; later events verify against the stored value. So a
+      // bootstrap install (no shared env token) is the normal, expected path — not
+      // a misconfiguration. (A single env token can't match N portals' tokens.)
       if (!envToken) {
-        console.warn('[b24 events] ONAPPINSTALL accepted in bootstrap mode — set B24_APPLICATION_TOKEN in prod')
+        console.info('[b24 events] ONAPPINSTALL bootstrapped — application_token stored for this portal')
       }
     }
 
