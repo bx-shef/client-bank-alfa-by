@@ -1,8 +1,8 @@
 /** Single source of truth for the landing copy — used by both app.vue (SEO/head)
  * and index.vue (visible hero), so the title/description can't drift apart. */
-export const LANDING_TITLE = 'Клиент-банк Альфа-Банк Беларусь'
+export const LANDING_TITLE = 'Импорт выписки из клиент-банка'
 export const LANDING_DESCRIPTION
-  = 'Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.'
+  = 'Выписка из клиент-банка в Bitrix24: Альфа-Банк, Приорбанк или ручной импорт.'
 
 /** Year the project started — left edge of the footer copyright range. */
 export const START_YEAR = 2026
@@ -17,7 +17,7 @@ export interface LandingFeature {
 export const LANDING_FEATURES: readonly LandingFeature[] = [
   {
     title: 'Выписка без ручного экспорта',
-    description: 'Регулярно получаем выписку из клиент-банка Альфа-Банк Беларусь по защищённому доступу — без выгрузки файлов вручную.'
+    description: 'Регулярно получаем выписку из Альфа-Банка или Приорбанка по защищённому доступу — без выгрузки файлов вручную. Нет онлайн-доступа — загружаем файл вручную.'
   },
   {
     title: 'Платежи прямо в CRM',

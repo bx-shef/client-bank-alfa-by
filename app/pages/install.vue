@@ -10,7 +10,7 @@ const b24Instance = useB24()
 const isUseB24 = computed<boolean>(() => b24Instance.isInit())
 const requiredScopes = b24Instance.getRequiredRights()
 
-useHead({ title: 'Установка — Клиент-банк Альфа-Банк Беларусь' })
+useHead({ title: 'Установка — Импорт выписки из клиент-банка' })
 
 const progressColor = ref<'air-primary' | 'air-primary-success' | 'air-primary-warning' | 'air-primary-alert'>('air-primary')
 const progressValue = ref<null | number>(null)
@@ -122,7 +122,7 @@ onMounted(runInstall)
   <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
     <div class="flex w-full max-w-2xl flex-col items-center gap-4">
       <h1 class="text-center text-2xl font-bold text-(--ui-color-base-1)">
-        Клиент-банк Альфа-Банк Беларусь
+        Импорт выписки из клиент-банка
       </h1>
 
       <B24Progress
