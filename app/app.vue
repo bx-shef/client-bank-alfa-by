@@ -9,6 +9,11 @@ const COLOR_MODE_STORAGE_KEY = 'vueuse-color-scheme'
 const title = LANDING_TITLE
 const description = LANDING_DESCRIPTION
 
+// og:image should be absolute for scrapers; siteUrl is set via NUXT_PUBLIC_SITE_URL
+// in prod (empty in dev → a relative /og.png, which is fine for local preview).
+const siteUrl = (useRuntimeConfig().public.siteUrl || '').replace(/\/$/, '')
+const ogImage = `${siteUrl}/og.png`
+
 useHead({
   htmlAttrs: { lang: 'ru' },
   meta: [
@@ -35,7 +40,16 @@ useSeoMeta({
   description,
   ogTitle: title,
   ogDescription: description,
-  ogType: 'website'
+  ogType: 'website',
+  ogImage,
+  ogImageWidth: 1200,
+  ogImageHeight: 630,
+  ogImageType: 'image/png',
+  ogImageAlt: title,
+  twitterCard: 'summary_large_image',
+  twitterTitle: title,
+  twitterDescription: description,
+  twitterImage: ogImage
 })
 </script>
 

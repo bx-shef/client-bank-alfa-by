@@ -1,6 +1,6 @@
 /** Single source of truth for the landing copy — used by both app.vue (SEO/head)
  * and index.vue (visible hero), so the title/description can't drift apart. */
-export const LANDING_TITLE = 'Импорт выписки из клиент-банка'
+export const LANDING_TITLE = 'Импорт выписки из клиент-банка (Беларусь)'
 export const LANDING_DESCRIPTION
   = 'Выписка из клиент-банка в Bitrix24: Альфа-Банк, Приорбанк или ручной импорт.'
 

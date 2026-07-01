@@ -10,6 +10,9 @@ import { useB24 } from '~/composables/useB24'
 // In-portal page: `clear` layout wraps it in <B24App> for iframe theming.
 definePageMeta({ layout: 'clear' })
 
+// Document title for standalone; in the portal parent.setTitle sets the iframe chrome.
+useHead({ title: 'Настройки — Импорт выписки из клиент-банка (Беларусь)' })
+
 // Demo, client-side persistence. Wires the chat-notify filter (pure logic in
 // utils/statement.ts) with a live preview. Real key/chat storage moves
 // server-side with the backend (app.option, #16).
