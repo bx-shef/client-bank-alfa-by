@@ -14,27 +14,13 @@ const props = defineProps<{ items: StatementItem[] }>()
 const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const groupFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })
 const dateTimeFmt = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+// Day key in the SAME (local) timezone as the group label, so the key and the
+// rendered date can't drift across a UTC midnight (`en-CA` → `YYYY-MM-DD`).
+const dayKeyFmt = new Intl.DateTimeFormat('en-CA')
 
-function dayKey(iso: string): string {
-  return iso.slice(0, 10) // YYYY-MM-DD
-}
-function fmtGroup(iso: string): string {
+function fmt(iso: string, f: Intl.DateTimeFormat): string {
   const t = Date.parse(iso)
-  return Number.isNaN(t) ? iso : groupFmt.format(t)
-}
-function fmtDateTime(iso: string): string {
-  const t = Date.parse(iso)
-  return Number.isNaN(t) ? iso : dateTimeFmt.format(t)
-}
-
-/** Direction presentation: icon, tint classes, and the signed amount. */
-function meta(item: StatementItem) {
-  const credit = item.direction === 'credit'
-  return {
-    icon: credit ? ArrowTopSIcon : ArrowDownSIcon,
-    tile: credit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
-    amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`
-  }
+  return Number.isNaN(t) ? iso : f.format(t)
 }
 
 /** Requisites shown when a row is expanded (empty fields dropped). */
@@ -45,21 +31,39 @@ function requisites(item: StatementItem) {
     { label: 'УНП', description: item.counterparty.unp, orientation: 'horizontal' as const },
     { label: 'Банк корреспондента', description: item.counterparty.bank, orientation: 'horizontal' as const },
     { label: 'Наш счёт', description: item.account, orientation: 'horizontal' as const },
-    { label: 'Дата операции', description: fmtDateTime(item.acceptDate), orientation: 'horizontal' as const },
+    { label: 'Дата операции', description: fmt(item.acceptDate, dateTimeFmt), orientation: 'horizontal' as const },
     { label: '№ документа', description: item.docNum || item.docId, orientation: 'horizontal' as const },
     { label: 'Код операции', description: item.operCodeName, orientation: 'horizontal' as const },
     { label: 'Назначение', description: item.purpose, orientation: 'horizontal' as const }
   ].filter(r => r.description)
 }
 
-/** Items grouped by day, newest first. */
+/** One display row — direction presentation computed once (not per template use). */
+function toRow(item: StatementItem) {
+  const credit = item.direction === 'credit'
+  return {
+    key: `${item.account}|${item.docId}`, // dedup convention: docId unique per account
+    icon: credit ? ArrowTopSIcon : ArrowDownSIcon,
+    tint: credit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
+    amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
+    name: item.counterparty.name,
+    purpose: item.purpose,
+    requisites: requisites(item)
+  }
+}
+
+/** Items grouped by day (local tz), newest first; each row precomputed. */
 const groups = computed(() => {
   const byDay = new Map<string, StatementItem[]>()
   for (const item of [...props.items].sort((a, b) => b.acceptDate.localeCompare(a.acceptDate))) {
-    const key = dayKey(item.acceptDate)
+    const key = fmt(item.acceptDate, dayKeyFmt)
     ;(byDay.get(key) ?? byDay.set(key, []).get(key)!).push(item)
   }
-  return [...byDay.entries()].map(([key, items]) => ({ key, label: fmtGroup(items[0]!.acceptDate), items }))
+  return [...byDay.entries()].map(([key, items]) => ({
+    key,
+    label: fmt(items[0]!.acceptDate, groupFmt),
+    rows: items.map(toRow)
+  }))
 })
 
 const hasItems = computed(() => props.items.length > 0)
@@ -91,40 +95,41 @@ const hasItems = computed(() => props.items.length > 0)
       </p>
 
       <B24Collapsible
-        v-for="item in group.items"
-        :key="item.docId"
+        v-for="row in group.rows"
+        :key="row.key"
         class="border-b border-(--ui-color-design-tinted-na-stroke) last:border-b-0"
       >
         <!-- Row (trigger) -->
         <div class="flex w-full cursor-pointer items-center gap-3 py-3 text-left transition-colors hover:bg-(--ui-color-design-tinted-na-bg)">
           <span
             class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--ui-color-design-tinted-na-bg)"
-            :class="meta(item).tile"
+            :class="row.tint"
           >
             <component
-              :is="meta(item).icon"
+              :is="row.icon"
               class="size-4"
+              aria-hidden="true"
             />
           </span>
           <div class="min-w-0 flex-1">
             <p class="truncate font-semibold">
-              {{ item.counterparty.name }}
+              {{ row.name }}
             </p>
             <p class="truncate text-xs text-(--ui-color-base-3)">
-              {{ item.purpose }}
+              {{ row.purpose }}
             </p>
           </div>
           <span
             class="shrink-0 font-semibold tabular-nums"
-            :class="meta(item).tile"
+            :class="row.tint"
           >
-            {{ meta(item).amount }}
+            {{ row.amount }}
           </span>
         </div>
 
         <template #content>
           <B24DescriptionList
-            :items="requisites(item)"
+            :items="row.requisites"
             size="sm"
             class="pb-3 pl-12"
           />

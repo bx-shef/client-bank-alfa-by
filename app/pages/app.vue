@@ -30,6 +30,13 @@ const shown = computed(() =>
   filter.value === 'all' ? statement.items : statement.items.filter(i => i.direction === filter.value)
 )
 
+// Section totals (kept from the previous design — a quick "сколько пришло/ушло").
+const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const currency = computed(() => statement.items[0]?.currency ?? 'BYN')
+const sum = (items: typeof statement.items) => items.reduce((acc, i) => acc + i.amount, 0)
+const creditTotal = computed(() => `+${money.format(sum(credits))} ${currency.value}`)
+const debitTotal = computed(() => `−${money.format(sum(debits))} ${currency.value}`)
+
 // Pagination (renders only when it overflows a page).
 const perPage = 10
 const page = ref(1)
@@ -111,10 +118,18 @@ onMounted(async () => {
           :key="c.value"
           :label="c.label"
           :color="filter === c.value ? 'air-primary' : 'air-tertiary-no-accent'"
+          :aria-pressed="filter === c.value"
           size="sm"
           @click="setFilter(c.value)"
         />
       </div>
+
+      <!-- Section totals (a quick sum without opening each operation). -->
+      <p class="mt-3 text-sm tabular-nums">
+        <span class="text-emerald-600 dark:text-emerald-400">Приходы {{ creditTotal }}</span>
+        <span class="mx-2 text-(--ui-color-base-4)">·</span>
+        <span class="text-rose-600 dark:text-rose-400">Расходы {{ debitTotal }}</span>
+      </p>
 
       <!-- Column header -->
       <div class="mt-4 flex items-center justify-between border-b border-(--ui-color-design-tinted-na-stroke) pb-2 text-xs text-(--ui-color-base-3)">
@@ -124,6 +139,8 @@ onMounted(async () => {
 
       <OperationList :items="paged" />
 
+      <!-- Pagination shows only when operations overflow a page — with the current
+           demo data (few ops) it stays hidden; visible once the bank is connected. -->
       <B24Pagination
         v-if="shown.length > perPage"
         v-model:page="page"
