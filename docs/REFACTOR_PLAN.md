@@ -89,8 +89,11 @@
    **Авторизация портала + события Б24** (`ONAPPINSTALL`/`ONAPPUNINSTALL`, `application_token`):
    доменное ядро **готово и покрыто тестами** (`app/utils/b24Events.ts`, `app/types/b24Events.ts`) —
    разбор wire-формата, fail-closed вердикт токена, маршрутизация, SSRF-гуард, маппинг кредов портала.
-   Транспорт (эндпоинт вебхуков, хранилище токенов с шифрованием refresh, refresh-цикл) — на backend (#35).
-   Контракт и модель (по эталону `bx-synapse`) — [`B24_EVENTS.md`](B24_EVENTS.md). См. #12 (безопасность Альфы).
+   Транспорт **готов и покрыт тестами**: эндпоинт вебхуков `POST /api/b24/events`, хранилище токенов
+   портала с шифрованием refresh (AES-256-GCM), миграции БД (`server/api/b24/events.post.ts`,
+   `server/utils/tokenStore.ts`, `server/plugins/migrate.ts`). Осталось — refresh-цикл access-токена и
+   боевые REST-вызовы к порталу при опросе (#35). Контракт и модель (по эталону `bx-synapse`) —
+   [`B24_EVENTS.md`](B24_EVENTS.md). См. #12 (безопасность Альфы).
    **Очереди (BullMQ + Redis)** — **Фаза 1 + 2 готовы**: сервис `redis` (сеть `queuenet`),
    контракты (`topology.ts`), продюсеры (`producers.ts`), чистые обработчики (`handlers.ts`,
    с DI — тесты), воркеры in-process + крон с **демо-нагрузкой** (`worker.ts`/`cron.ts`/

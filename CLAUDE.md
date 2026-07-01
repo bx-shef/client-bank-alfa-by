@@ -263,6 +263,9 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 `/report-digest`, `/report-questions` и `tg-send.sh` — внутри бандла. Telegram
 пока не заведён (нужен `.env` с токеном, локально, см. README кита).
 
+Канонический **срез состояния проекта** (цель/шаги/сделано/дальше/блокеры) — [`docs/project-map.md`](docs/project-map.md);
+на него опираются `/report-status` и `/report-questions`. Держим синхронно с `REFACTOR_PLAN.md`.
+
 ## Конвенции
 
 - Комментарии и JSDoc — на английском; пользовательский текст и README — на русском.
