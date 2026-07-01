@@ -15,7 +15,18 @@ export async function callRest(
   method: string,
   params: Record<string, unknown> = {}
 ): Promise<Record<string, unknown>> {
-  return await $fetch(restUrl(host, method), {
+  // $fetch's route-typed overloads try to match a request URL against Nitro's
+  // generated internal route table. With a dynamic (non-literal) URL that matching
+  // recurses over every route and overflows the checker (TS2321) as the table grows.
+  // This is a plain external POST to a portal host, so cast $fetch to a simple
+  // signature to opt out of route inference (runtime behaviour is unchanged). The
+  // reference stays inside the function so importing this module (e.g. for restUrl
+  // in unit tests) doesn't touch the Nitro-only $fetch global.
+  const fetchJson = $fetch as unknown as (
+    url: string,
+    opts: { method: string, body: Record<string, unknown> }
+  ) => Promise<Record<string, unknown>>
+  return await fetchJson(restUrl(host, method), {
     method: 'POST',
     body: { ...params, auth: accessToken }
   })
