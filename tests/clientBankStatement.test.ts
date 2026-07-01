@@ -5,9 +5,11 @@ import { parseClientBankText } from '~/utils/clientBankText'
 import {
   clientBankDateToIso,
   detectStatementCurrency,
+  isBelarusianAccount,
   normalizeClientBank,
   normalizeClientBankRow,
-  normalizeClientBankStatement
+  normalizeClientBankStatement,
+  rowDocId
 } from '~/utils/clientBankStatement'
 
 // Manual-upload provider (#19): parse a client-bank text export → normalize to
@@ -154,5 +156,40 @@ describe('normalizeClientBank — behavior', () => {
   it('undetermined currency (non-BY account, no marker/ctx) stays empty — UI blocks import', () => {
     const parsed = parseClientBankText('***** ^Type=400^ ^Acc=LT12^  -  T\n[OUT_PARAM]\n^DocDate=01.01.2024^\n^Cre=5.00^\n^DocID=z^')
     expect(normalizeClientBank(parsed, { account: '' })[0]!.currency).toBe('')
+  })
+})
+
+// Real-file gaps surfaced by user-provided Type=4 exports (issue #19): legacy
+// 13-digit BY accounts, and rows with no DocID at all.
+describe('real-file robustness', () => {
+  it('isBelarusianAccount: IBAN and legacy 13-digit, not RU 20-digit', () => {
+    expect(isBelarusianAccount('BY79ALFA30132522540010270000')).toBe(true)
+    expect(isBelarusianAccount('3013212016013')).toBe(true) // legacy BY (13 digits)
+    expect(isBelarusianAccount('40702810902520000706')).toBe(false) // RU 20-digit
+    expect(isBelarusianAccount('LT121000011101001000')).toBe(false)
+  })
+
+  it('legacy 13-digit BY account defaults the statement to BYN (was empty before)', () => {
+    const parsed = parseClientBankText('***** ^Type=4^ ^Acc=3013212016013^  -  T\n[OUT_PARAM]\n^DocDate=02.11.2016^\n^Num=134^\n^Db=750.00^\n^Credit=0.00^')
+    const items = normalizeClientBank(parsed, { account: '' })
+    expect(items[0]!.currency).toBe('BYN')
+  })
+
+  it('rowDocId falls back to Num|DocDate when DocID is absent (Type=4 files)', () => {
+    expect(rowDocId({ DocID: 'D1', Num: '134', DocDate: '02.11.2016' })).toBe('D1')
+    expect(rowDocId({ Num: '134', DocDate: '02.11.2016' })).toBe('134|02.11.2016')
+    expect(rowDocId({})).toBe('')
+  })
+
+  it('a Type=4 statement with no DocID yields distinct dedup ids per operation', () => {
+    const parsed = parseClientBankText(
+      '***** ^Type=4^ ^Acc=BY79ALFA30130000000000000000^  -  T\n[OUT_PARAM]\n'
+      + '^DocDate=29.03.2018^\n^Num=134^\n^Db=390.22^\n^Credit=0.00^\n^KorName=A^\n'
+      + '^DocDate=29.03.2018^\n^Num=136^\n^Db=0.00^\n^Credit=1288.00^\n^KorName=B^'
+    )
+    const items = normalizeClientBank(parsed, { account: '' })
+    expect(items.map(i => i.docId)).toEqual(['134|29.03.2018', '136|29.03.2018'])
+    expect(items[0]!.direction).toBe('debit')
+    expect(items[1]!.direction).toBe('credit') // Credit>0 → приход
   })
 })
