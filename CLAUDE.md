@@ -130,6 +130,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование:** `server/queue/topology.ts`
+    (чистые контракты: имена очередей `b24-events`/`bank-fetch`/`file-parse`, payload'ы `EventJob`/
+    `FetchJob`/`ParseJob`, идемпотентные `*JobId` для дедупа ретраев — покрыто тестами),
+    `server/queue/connection.ts` (ленивый `getQueue(name)` над ioredis, гуард по `REDIS_URL`; к Redis
+    не подключается на импорте). **Фаза 1 — фундамент** (сервис `redis` в compose на изолированной
+    сети `queuenet`); продюсеры (событие→follow-up, крон→fetch, загрузка файла→parse) и воркер-контейнер
+    добавляются со стадиями 4–6 (см. REFACTOR_PLAN).
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`

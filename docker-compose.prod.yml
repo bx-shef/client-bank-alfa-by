@@ -62,6 +62,9 @@ services:
       # for a just-installed portal, required for long-lived operation).
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
+      # Redis DSN for the BullMQ pipeline (events → fetch → parse queues). Reached
+      # only on the isolated `queuenet`; no auth needed inside the private network.
+      REDIS_URL: redis://redis:6379
     # Liveness: hit the public /api/health endpoint (busybox wget ships in alpine).
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:
@@ -77,8 +80,27 @@ services:
     networks:
       - internal   # reached by app's /api proxy + outbound to B24/Alfa
       - dbnet       # to reach Postgres
+      - queuenet    # to reach Redis (BullMQ)
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+
+  # Redis — backing store for the BullMQ pipeline. Only on `queuenet` (internal:
+  # true): no host port, no egress, reachable solely by backend/worker. Durable
+  # (appendonly) so queued jobs survive a restart.
+  redis:
+    image: redis:7-alpine
+    container_name: client-bank-alfa-by-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - queuenet
 
   db:
     image: postgres:16-alpine
@@ -100,6 +122,7 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
 
 networks:
   proxy-net:
@@ -110,5 +133,10 @@ networks:
   # backend ↔ Postgres only. `internal: true` — no outbound: the DB is fully
   # isolated (can't be reached from outside and can't initiate egress).
   dbnet:
+    driver: bridge
+    internal: true
+  # backend/worker ↔ Redis only. `internal: true` — Redis has no host port and
+  # no egress; it never leaves this private network. Other stacks can't see it.
+  queuenet:
     driver: bridge
     internal: true
