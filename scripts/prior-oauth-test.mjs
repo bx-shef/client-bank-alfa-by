@@ -37,6 +37,7 @@
 // Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --expires <YYYY-MM-DD> --code <code>
 //        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only --all
 //        --access-token <tokenB> (skip browser: list accounts + statements only)
+//        --transactions (fetch the transaction list instead of the statement summary)
 //        --verbose (dump the /register request + full response for debugging)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
 
@@ -422,44 +423,50 @@ async function listAccounts(tokenB) {
   return { raw: res.json, accounts }
 }
 
-async function fetchStatement(tokenB, accountId) {
-  log(`\n${C.bold}account ${accountId}${C.reset}`)
-  // Create the statement (async). Body per the Open-banking swagger:
-  // { data: { statement: { fromBookingDate, toBookingDate } } }. NB the fields
-  // must be plain `yyyy-MM-dd` (date only) — the swagger example showed a full
-  // ISO datetime, but the server validates date-only.
+/**
+ * Create + poll a statement or transaction list for one account (both are the
+ * same async pattern, differing only in the resource name and the id field):
+ *  - statements:   body { data: { statement:   { fromBookingDate, toBookingDate } } } → data.statement.statementId
+ *  - transactions: body { data: { transaction: { fromBookingDate, toBookingDate } } } → data.transaction.transactionListId
+ * Transactions carry full per-operation detail (amount, creditDebitIndicator,
+ * debtor/creditor, accounts, purpose) — richer than a statement's summary.
+ * Dates are `yyyy-MM-dd` (date only), window ≤ 3 months.
+ */
+async function fetchAsync(tokenB, accountId, kind) {
+  const key = kind === 'transactions' ? 'transaction' : 'statement'
+  const idKey = kind === 'transactions' ? 'transactionListId' : 'statementId'
+  log(`\n${C.bold}account ${accountId} — ${kind}${C.reset}`)
   const from = cfg.from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
   const to = cfg.to || new Date().toISOString().slice(0, 10)
-  // Priorbank caps a statement at a 3-month window (BY.NBRB.Field.InvalidDate).
   if ((new Date(to) - new Date(from)) / 864e5 > 93) {
     warn(`  window ${from}…${to} exceeds 3 months — Priorbank will reject it; narrow --from/--to`)
   }
-  const createBody = { data: { statement: { fromBookingDate: from, toBookingDate: to } } }
-  const created = await obRequest(`${OB}/accounts/${accountId}/statements`, {
+  const createBody = { data: { [key]: { fromBookingDate: from, toBookingDate: to } } }
+  const created = await obRequest(`${OB}/accounts/${accountId}/${kind}`, {
     method: 'POST', accessToken: tokenB, json: createBody
   })
   log(`  ${C.dim}create: HTTP ${created.status}${C.reset}`)
-  // 201: { data: { statement: { statementId, accountId } } }
-  const st = created.json?.data?.statement || created.json?.data || created.json
-  const statementId = st && (st.statementId || st.StatementId || st.id)
-  if (!statementId) {
-    err('  no statementId returned')
+  const node = created.json?.data?.[key] || created.json?.data || created.json
+  const resourceId = node && (node[idKey] || node.id)
+  if (!resourceId) {
+    err(`  no ${idKey} returned`)
     log('  ' + (created.json ? trunc(JSON.stringify(created.json), 400) : trunc(created.text, 400)))
-    return { accountId, error: created.json ?? created.text }
+    return { accountId, kind, error: created.json ?? created.text }
   }
-  // Poll until ready (NotCreated error clears when the statement is built).
+  // Poll until ready (NotCreated error clears when the resource is built).
   for (let i = 1; i <= cfg.poll; i++) {
     await sleep(cfg.delayMs)
-    const got = await obRequest(`${OB}/accounts/${accountId}/statements/${statementId}`, { accessToken: tokenB })
+    const got = await obRequest(`${OB}/accounts/${accountId}/${kind}/${resourceId}`, { accessToken: tokenB })
     const notReady = got.json && JSON.stringify(got.json).includes('NotCreated')
     if (got.status >= 200 && got.status < 300 && !notReady) {
-      ok(`  statement ready (poll ${i}/${cfg.poll})`)
-      return { accountId, statementId, statement: got.json ?? got.text }
+      const items = got.json?.data?.[key]?.transaction ?? got.json?.data?.transaction ?? []
+      ok(`  ${kind} ready (poll ${i}/${cfg.poll}) — ${Array.isArray(items) ? items.length : '?'} transaction(s)`)
+      return { accountId, kind, [idKey]: resourceId, [key]: got.json ?? got.text }
     }
     log(`  ${C.dim}poll ${i}/${cfg.poll}: HTTP ${got.status}${notReady ? ' (not ready yet)' : ''}${C.reset}`)
   }
-  warn(`  statement not ready after ${cfg.poll} polls — re-run GET later`)
-  return { accountId, statementId, pending: true }
+  warn(`  ${kind} not ready after ${cfg.poll} polls — re-run GET later`)
+  return { accountId, kind, [idKey]: resourceId, pending: true }
 }
 
 // List accounts, then create + poll a statement for each (one by default —
@@ -474,13 +481,14 @@ async function runStatements(accessToken) {
     warn(`processing only the first account (${ids[0]}) to avoid the sandbox rate limit — use --account <id> or --all`)
     ids = ids.slice(0, 1)
   }
-  head('Statements (async create + poll)')
-  const statements = []
+  const kind = args['transactions'] ? 'transactions' : 'statements'
+  head(`${kind} (async create + poll)`)
+  const out = []
   for (const id of ids) {
-    statements.push(await fetchStatement(accessToken, id))
+    out.push(await fetchAsync(accessToken, id, kind))
     if (cfg.delayMs > 0 && ids.length > 1) await sleep(cfg.delayMs)
   }
-  return statements
+  return out
 }
 
 async function revoke(token) {
