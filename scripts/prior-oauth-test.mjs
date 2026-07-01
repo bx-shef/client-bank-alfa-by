@@ -34,7 +34,7 @@
 //   PRIOR_PRIVATE_KEY    (path to PEM, signs the authorize `request` JWT)
 //   PRIOR_KID            (JWK key id; must match the `kid` published in `jwks`)
 //   PRIOR_ACCOUNT_ID     / --account   (skip listing, query one account)
-// Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --code <code>
+// Flags: --env <file> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --expires <YYYY-MM-DD> --code <code>
 //        --consent <intentId> --poll 8 --delay-ms 1500 --full --url-only
 //        --verbose (dump the /register request + full response for debugging)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
@@ -71,6 +71,9 @@ const cfg = {
   accountId: args['account'] ? String(args['account']) : (process.env.PRIOR_ACCOUNT_ID || ''),
   from: args['from'] ? String(args['from']) : '',
   to: args['to'] ? String(args['to']) : '',
+  // Consent expiry (must be in the FUTURE) — distinct from the statement window
+  // (transactionFrom/To, which may be in the past). Default: today + 90 days.
+  expires: args['expires'] ? String(args['expires']) : new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10),
   poll: Number(args['poll'] || 8),
   delayMs: Number(args['delay-ms'] || 1500),
   state: args['state'] || `s-${randomUUID()}`,
@@ -327,7 +330,7 @@ async function createConsent(tokenB) {
   head('Consent — POST /accountConsents (token Б)')
   const data = {
     permissions: CONSENT_PERMISSIONS,
-    ...(cfg.to ? { expirationDate: cfg.to } : {}),
+    expirationDate: cfg.expires, // future — consent validity, not the statement window
     ...(cfg.from ? { transactionFromDate: cfg.from } : {}),
     ...(cfg.to ? { transactionToDate: cfg.to } : {})
   }
