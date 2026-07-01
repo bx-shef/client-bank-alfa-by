@@ -152,6 +152,9 @@ function basicAuth(id, secret) {
 // POST to the token endpoint with client_secret_basic (sandbox auth method).
 async function postToken(form, { id, secret }) {
   const body = new URLSearchParams(form).toString()
+  // Safe to log: grant_type/scope/code live in the body; the client secret is in
+  // the Basic auth header (never logged).
+  if (args['verbose']) log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${body}]  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
   return httpRequest(`${cfg.base}${AUTH}/oauth2/token`, {
     method: 'POST',
     headers: {
