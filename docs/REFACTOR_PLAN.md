@@ -46,6 +46,24 @@
 пререндерится, живые данные подтягиваются на клиенте при гидратации. CORS backend настраивается
 под облачные домены Б24.
 
+### Единый интерфейс выписки (контракт для всех банков и тестов)
+
+Каждый банк получается по-своему, но отдаёт **одинаковый выход** — `StatementItem[]`. Это и делает
+приложение банк-независимым, и даёт один вид теста на всех (`app/types/statement.ts`):
+
+- **вход** — `StatementFetchQuery`: `providerId` (банк) + `account` (счёт) + `dateFrom/dateTo` (диапазон);
+  per-account; батч-запрос по нескольким счетам (`BankProvider.getStatement`) — `StatementQuery` в `banks.ts`;
+- **процесс** — получить выписку у провайдера и разобрать (`fetch` — I/O, per-provider; тестируется отдельно);
+- **выход** — `StatementItem[]`, контракт нормализатора `StatementNormalizer = (raw, ctx) => StatementItem[]`.
+  Поля, которые нужны приложению: `direction` (приход/расход), `counterparty.account`/`.name`/`.unp`
+  (счёт+имя+УНП контрагента — для сопоставления компании в CRM), `amount`, `currency`, `acceptDate`/`operDate`
+  (дата операции), `purpose` (назначение), `docId` (идемпотентность/дедуп), `account` (наш счёт).
+
+Реализации: `normalizeAlfa` (`alfaStatement.ts`), `normalizePrior` (`priorStatement.ts`); ручной
+импорт (`clientBankText.ts`) приводится к тому же выходу — #19. **Тест** = raw-ответ провайдера
+(fixture) → нормализатор → проверка `StatementItem[]` (`tests/statementInterface.test.ts`,
+`tests/alfaStatement.test.ts`, `tests/priorStatement.test.ts`).
+
 ## Дорожная карта (по PR, «от малого к сложному»)
 
 1. **[✓ этап 1] Доменное ядро + первый UI-срез (mock).** Типы выписки, абстракция
@@ -83,6 +101,11 @@
    (вебхук B24 на `https://<DOMAIN>/api/b24/events`, без CORS). Детали — [`DEPLOY.md`](DEPLOY.md).
 8. **MCP-сервер** по выписке.
 9. **Prior-банк + ручной импорт** (новые реализации `BankProvider`).
+   [~ Prior] Open Banking СПР **проверен на sandbox живьём**; нормализатор `normalizePrior`
+   (`app/utils/priorStatement.ts`) **готов и покрыт тестами**; live-recon — `scripts/prior-oauth-test.mjs`.
+   **Осталось:** вынести OAuth/DCR/consent-ядро в `app/utils/priorOauth.ts` (сейчас в скрипте) под тесты —
+   отдельный слайс, аналог этапа 3 Альфы; прод-СКЗИ — #41. Ручной импорт (`manual`): нормализация
+   `clientBankText.ts` в `StatementItem` — #19.
 
 ## API Альфы (подтверждено по свагеру + доке «Авторизация»)
 

@@ -84,13 +84,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
   - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
-    `OperationDirection`, `BankProviderId`).
+    `OperationDirection`, `BankProviderId`) + **единый интерфейс**: `StatementFetchQuery` (вход:
+    банк/счёт/диапазон; батч-`StatementQuery` для `BankProvider` — в `banks.ts`),
+    `StatementNormalizer` (`raw,ctx → StatementItem[]`) — один выход на все банки (см. REFACTOR_PLAN
+    «Единый интерфейс выписки»).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
   - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
     `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
   - `app/utils/alfaOauth.ts` — OAuth 2.0 Альфы (Authorization Code + refresh): URL/тела запросов, парсинг.
-  - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`.
+  - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`
+    (`normalizeAlfa` — контракт `StatementNormalizer`).
+  - `app/utils/priorStatement.ts` — нормализация операции Приорбанка (Open Banking СПР) в `StatementItem`
+    (`normalizePrior`); подтверждено на живом sandbox — см. [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
   - `app/utils/clientBankText.ts` — парсер текстовой выписки client-bank (CP1251, `***** ^Type=`)
     для провайдеров `prior-by`/`manual`. ⚠️ Портированный пример, рефакторинг — issue #19.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
@@ -132,6 +138,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - **Скрипты разведки (dev, не часть SSG):**
   - `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) — живой прогон OAuth/выписки Альфы по
     `.env.sandbox` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
+  - `scripts/prior-oauth-test.mjs` (`pnpm prior:test`) — живой прогон Open Banking (СПР) Приорбанка
+    по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
   - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор текстовой выписки
     через канонический `clientBankText.ts` (Node ≥ 22, нативный TS-стриппинг).
   - `scripts/lib/*.mjs` — переиспользуемые чистые помощники скриптов (`demo-utils`, `env`), покрыты тестами.
