@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import SettingsIcon from '@bitrix24/b24icons-vue/outline/SettingsIcon'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { splitByDirection } from '~/utils/statement'
-import type { StatementItem } from '~/types/statement'
+import type { OperationDirection } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
 import { useAppSettings } from '~/composables/useAppSettings'
@@ -13,26 +13,34 @@ import { pageTitle } from '~/utils/landing'
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
 definePageMeta({ layout: 'clear' })
 
-// Document title for standalone; in the portal parent.setTitle sets the iframe chrome.
 useHead({ title: pageTitle('Выписка по счёту') })
 
 const statement = MOCK_STATEMENT
 const { credits, debits } = splitByDirection(statement.items)
 
-const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-function totalLabel(items: StatementItem[]): string {
-  const sum = items.reduce((acc, i) => acc + i.amount, 0)
-  const currency = items[0]?.currency ?? 'BYN'
-  return `${money.format(sum)} ${currency}`
+// Filter chips (labels keep the "(N)" counts). Default "all" shows everything.
+type Filter = 'all' | OperationDirection
+const filter = ref<Filter>('all')
+const chips = computed(() => [
+  { value: 'all' as Filter, label: `Все (${statement.items.length})` },
+  { value: 'credit' as Filter, label: `Приходы (${credits.length})` },
+  { value: 'debit' as Filter, label: `Расходы (${debits.length})` }
+])
+const shown = computed(() =>
+  filter.value === 'all' ? statement.items : statement.items.filter(i => i.direction === filter.value)
+)
+
+// Pagination (renders only when it overflows a page).
+const perPage = 10
+const page = ref(1)
+const paged = computed(() => shown.value.slice((page.value - 1) * perPage, page.value * perPage))
+function setFilter(f: Filter) {
+  filter.value = f
+  page.value = 1
 }
 
-const creditAccent = 'text-emerald-600 dark:text-emerald-400'
-const debitAccent = 'text-rose-600 dark:text-rose-400'
-
-const tabs = computed(() => [
-  { label: `Приходы (${credits.length})`, slot: 'credit' as const },
-  { label: `Расходы (${debits.length})`, slot: 'debit' as const }
-])
+// Settings slideover (primary entry; /settings route is the fallback).
+const settingsOpen = ref(false)
 
 // Import status (demo until the backend poller, #5). Client fetches on mount.
 const { status, refresh } = useImportStatus()
@@ -58,8 +66,6 @@ onMounted(async () => {
 
 <template>
   <main class="mx-auto max-w-(--ui-container) px-4 py-6">
-    <!-- Heading kept for a11y/standalone; the portal shows it as iframe chrome
-         (parent.setTitle), so it's visually hidden to keep the screen calm. -->
     <h1 class="sr-only">
       Выписка по счёту
     </h1>
@@ -70,17 +76,15 @@ onMounted(async () => {
     />
 
     <header class="mb-5 flex items-start justify-between gap-4">
-      <div>
-        <p class="font-mono text-sm text-(--ui-color-base-3)">
-          {{ statement.account }}
-        </p>
-      </div>
+      <p class="font-mono text-sm text-(--ui-color-base-3)">
+        {{ statement.account }}
+      </p>
       <B24Button
         :icon="SettingsIcon"
         color="air-tertiary-no-accent"
         size="sm"
-        to="/settings"
         aria-label="Настройки"
+        @click="settingsOpen = true"
       />
     </header>
 
@@ -92,25 +96,42 @@ onMounted(async () => {
       class="mb-5"
     />
 
-    <B24Tabs
-      :items="tabs"
-      color="air-primary"
-    >
-      <template #credit>
-        <OperationList
-          :items="credits"
-          :accent="creditAccent"
-          :total="totalLabel(credits)"
-        />
+    <!-- Operations, styled like the "Последние операции" view. -->
+    <B24Card>
+      <template #header>
+        <h2 class="font-semibold">
+          Последние операции
+        </h2>
       </template>
-      <template #debit>
-        <OperationList
-          :items="debits"
-          :accent="debitAccent"
-          :total="totalLabel(debits)"
+
+      <!-- Filter chips -->
+      <div class="flex flex-wrap gap-2">
+        <B24Button
+          v-for="c in chips"
+          :key="c.value"
+          :label="c.label"
+          :color="filter === c.value ? 'air-primary' : 'air-tertiary-no-accent'"
+          size="sm"
+          @click="setFilter(c.value)"
         />
-      </template>
-    </B24Tabs>
+      </div>
+
+      <!-- Column header -->
+      <div class="mt-4 flex items-center justify-between border-b border-(--ui-color-design-tinted-na-stroke) pb-2 text-xs text-(--ui-color-base-3)">
+        <span>Операция</span>
+        <span>Сумма</span>
+      </div>
+
+      <OperationList :items="paged" />
+
+      <B24Pagination
+        v-if="shown.length > perPage"
+        v-model:page="page"
+        :total="shown.length"
+        :items-per-page="perPage"
+        class="mt-4 justify-center"
+      />
+    </B24Card>
 
     <!-- App-level test setting (app.option). Skeleton check that the server can
          persist a per-portal value; visible only inside a portal. -->
@@ -162,5 +183,19 @@ onMounted(async () => {
     </B24Card>
 
     <BuildFooter />
+
+    <!-- Settings slideover (primary entry; /settings route stays as fallback). -->
+    <B24Slideover
+      v-model:open="settingsOpen"
+      title="Настройки"
+      description="Уведомления в чат, исключения. Демо: хранится локально."
+      side="right"
+    >
+      <template #body>
+        <ClientOnly>
+          <SettingsForm />
+        </ClientOnly>
+      </template>
+    </B24Slideover>
   </main>
 </template>
