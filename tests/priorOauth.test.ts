@@ -153,6 +153,12 @@ describe('window limit', () => {
     expect(isWindowWithinLimit('2026-06-30', '2026-06-01')).toBe(false)
     expect(isWindowWithinLimit('not-a-date', '2026-06-30')).toBe(false)
   })
+
+  it('is inclusive exactly at PRIOR_MAX_WINDOW_DAYS and rejects one day past it', () => {
+    // 2026-06-01 → 2026-09-02 is exactly 93 days (PRIOR_MAX_WINDOW_DAYS); +1 day is over.
+    expect(isWindowWithinLimit('2026-06-01', '2026-09-02')).toBe(true)
+    expect(isWindowWithinLimit('2026-06-01', '2026-09-03')).toBe(false)
+  })
 })
 
 describe('token response parsing', () => {
@@ -170,6 +176,10 @@ describe('token response parsing', () => {
   it('throws on an OAuth error payload and on a missing access token', () => {
     expect(() => parsePriorTokenResponse({ error: 'invalid_grant', error_description: 'bad code' })).toThrow(/invalid_grant/)
     expect(() => parsePriorTokenResponse({})).toThrow(/missing access_token/)
+  })
+
+  it('error without a description does not append " — undefined"', () => {
+    expect(() => parsePriorTokenResponse({ error: 'invalid_client' })).toThrow(/Priorbank OAuth error: invalid_client$/)
   })
 })
 
@@ -203,6 +213,12 @@ describe('response extraction', () => {
     expect(rows[1]!.accountId).toBe('a2')
     expect(rows[1]!.currency).toBe('USD')
     expect(rows[1]!.identification).toBe('3012...')
+  })
+
+  it('extractAccounts tolerates a bare array (no data envelope)', () => {
+    const rows = extractAccounts([{ accountId: 'a1', currency: 'BYN' }])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.accountId).toBe('a1')
   })
 
   it('extractAccounts returns [] on an empty/odd shape', () => {

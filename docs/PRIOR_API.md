@@ -195,9 +195,10 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
 [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) «Единый интерфейс выписки»):
 
 - **`prior-by` (путь №2)** — нормализация **сделана**: `normalizePrior` в `app/utils/priorStatement.ts`
-  (операция Open Banking → `StatementItem`), покрыта тестами по живому sandbox-образцу. Осталось —
-  транспорт/OAuth-ядро (`app/utils/priorOauth.ts`, сейчас логика в `scripts/prior-oauth-test.mjs`) и
-  прод-СКЗИ (issue #41).
+  (операция Open Banking → `StatementItem`), покрыта тестами по живому sandbox-образцу. OAuth/DCR/consent-ядро
+  **вынесено** в чистый `app/utils/priorOauth.ts` (URL/тела/claims + парсеры, без `node:crypto`; аналог
+  `alfaOauth.ts`) под `tests/priorOauth.test.ts`; `scripts/prior-oauth-test.mjs` — тонкий потребитель.
+  Осталось — серверный движок опроса (backend) поверх `priorOauth.ts` и прод-СКЗИ (issue #41).
 - **`manual` (путь №1)** — парсер текстового формата `clientBankText.ts` есть, но в общий
   `StatementItem` пока **не нормализован** — задача **#19**.
 

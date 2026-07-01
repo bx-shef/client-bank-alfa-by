@@ -33,10 +33,6 @@ export const CONSENT_PERMISSIONS = [
 /** A resource kind — the two async list endpoints share one create+poll shape. */
 export type PriorResourceKind = 'statements' | 'transactions'
 
-/** Days in a consent's default validity window (bank cap on the statement span
- * is 3 months; the consent itself we keep valid ~90 days). */
-export const PRIOR_CONSENT_DEFAULT_DAYS = 90
-
 /** Max statement/transaction window Priorbank accepts, in days (≈ 3 months). */
 export const PRIOR_MAX_WINDOW_DAYS = 93
 
