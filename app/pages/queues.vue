@@ -1,14 +1,19 @@
 <script setup lang="ts">
-// Ops-страница: живой график длины очередей BullMQ (QueueMonitor + ECharts).
+// Ops page: a live chart of BullMQ queue lengths (QueueMonitor + ECharts).
 //
-// Источник в проде — GET /api/queues (server-only: guard B24_APPLICATION_TOKEN +
-// nginx `deny all`, из браузера портала недостижим). Поэтому здесь по умолчанию —
-// ДЕМО-генератор (эволюционирующий снапшот), как и остальной UI на mock-данных до
-// backend. Реальное подключение — заменить `demoFetcher` на fetch('/api/queues')
-// из операторской среды. См. docs/QUEUES.md.
+// In prod the source is GET /api/queues (server-only: B24_APPLICATION_TOKEN guard +
+// nginx `deny all`, unreachable from a portal browser). So this page defaults to a
+// DEMO generator (an evolving snapshot), like the rest of the UI on mock data until
+// backend. A real hookup must go through an AUTHENTICATED path (proxy / internal
+// build), NOT a direct browser fetch of /api/queues — see docs/QUEUES.md and #57
+// follow-up. This is an internal ops view: `noindex` so it is not crawled on the
+// public SSG domain.
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 
-useHead({ title: 'Очереди — монитор' })
+useHead({
+  title: 'Очереди — монитор',
+  meta: [{ name: 'robots', content: 'noindex, nofollow' }]
+})
 
 // Демо-состояние: у каждой очереди дрейфующие счётчики, чтобы график «жил».
 const state: Record<string, QueueCounts> = {}

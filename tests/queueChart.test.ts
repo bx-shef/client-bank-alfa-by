@@ -55,6 +55,12 @@ describe('appendSnapshot', () => {
     expect(s['crm-sync']).toEqual([[3, 3], [4, 4], [5, 5]]) // last 3 only
   })
 
+  it('ignores an unknown queue in the snapshot (only QUEUE_META queues are plotted)', () => {
+    const next = appendSnapshot(emptySeries(), snap({ 'some-future-queue': { waiting: 99 } }), 1000, 60)
+    expect(Object.keys(next).sort()).toEqual(QUEUE_META.map(q => q.name).sort())
+    expect(next['some-future-queue']).toBeUndefined()
+  })
+
   it('ignores a duplicate timestamp at the tail (double poll)', () => {
     let s = appendSnapshot(emptySeries(), snap({ 'crm-sync': { waiting: 1 } }), 1000, 60)
     s = appendSnapshot(s, snap({ 'crm-sync': { waiting: 9 } }), 1000, 60) // same ts

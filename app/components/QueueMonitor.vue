@@ -1,13 +1,17 @@
 <script setup lang="ts">
 /**
- * QueueMonitor — живой график длины (backlog) очередей BullMQ на Vue 3 + ECharts.
+ * QueueMonitor — a live line chart of BullMQ queue lengths (backlog) on Vue 3 + ECharts.
  *
- * Порт примера shef.rabbitmq:statistic (оригинал — коммерческий amCharts4) на
- * бесплатную ECharts (Apache-2.0). Под нашу реальность: источник — снапшот
- * GET /api/queues (без истории/rate'ов), поэтому временной ряд строим на клиенте —
- * каждый опрос добавляет точку `[время, backlog]` в скользящее окно (см.
- * app/utils/queueChart.ts, docs/QUEUES.md). ECharts грузится динамически (только на
- * этой странице, вне лендинг-бандла) в onMounted — клиентский рендер.
+ * Ported from the shef.rabbitmq:statistic example (the original used the commercial
+ * amCharts4) to the free ECharts (Apache-2.0). Adapted to our reality: the source is
+ * the GET /api/queues snapshot (no history/rates), so the time-series is built on the
+ * client — each poll appends one `[time, backlog]` point to a sliding window (see
+ * app/utils/queueChart.ts, docs/QUEUES.md). ECharts is dynamically imported in
+ * onMounted (client-only render, kept out of the landing bundle).
+ *
+ * NOTE: on a fetch error the poll loop STOPS (does not auto-recover) — the operator
+ * resumes it with the ▶ button. `hidden` (legend row state) and ECharts' own series
+ * visibility are toggled together in toggleLine(); keep both in sync if refactored.
  */
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount } from 'vue'
 import type { ECharts } from 'echarts'
