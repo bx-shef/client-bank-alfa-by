@@ -127,10 +127,34 @@ pnpm prior:test --revoke <t>   # отзыв токена
 Поток по умолчанию: token Б (`scope=accounts`) → `POST /accountConsents` → печатает
 authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_KEY`) → входишь тестовым
 пользователем (`testspr_le`/`testspr_pi`) → вставляешь redirect с `code` → обмен на токен B →
-`GET /accounts` → асинхронные `POST`/`GET /accounts/{id}/statements`. ⚠️ Форму тела
-create-statement и точную схему `GET /accounts` **сверить по Postman-коллекции** на живом
-прогоне (помечено в скрипте). Живой запуск — только с **BY-доступного сервера** (sandbox
-`:9344` из облака недоступен).
+`GET /accounts` → асинхронные `POST`/`GET /accounts/{id}/statements`. Живой запуск — только с
+**BY-доступного сервера** (sandbox `:9344` из облака недоступен). Флаги для итераций:
+`--access-token <tokenB>` (пропустить браузер), `--account <id>`, `--all`, `--from/--to`,
+`--expires`, `--verbose`.
+
+### Подтверждено на живом прогоне sandbox (2026-07-01)
+
+Весь поток пройден end-to-end по свагерам DCR и Open-banking. Нюансы, которые дал живой прогон
+(учтены в скрипте):
+
+- **DCR `POST /register`** (`application/json`): `jwks` передаётся **строкой** (сериализованный JWK
+  Set), `token_endpoint_auth_method` — **массив**; обязателен только `redirect_uris`. Имя приложения
+  (`client_name`) — свободный текст (кириллица/пробелы ок), но **уникальное** (дубль → `409`). Обновления
+  имени по API нет (только `GET /register/{clientId}`) — смена имени = перерегистрация.
+- **`aud` в `request`-JWT** = `issuer` из `/oidcdiscovery` = `https://api.priorbank.by:9544/oauth2/token`
+  (порт **9544**, не 9344).
+- **Согласие `POST /accountConsents`**: `data.expirationDate` — **срок действия согласия, в будущем**
+  (не окно выписки); окно — `transactionFromDate/ToDate` (может быть в прошлом).
+- **Выписка `POST /accounts/{id}/statements`**: тело `{ data: { statement: { fromBookingDate,
+  toBookingDate } } }`, даты в формате **`yyyy-MM-dd`** (без времени), окно **≤ 3 месяцев** (иначе
+  `BY.NBRB.Field.InvalidDate`). Ответ `201` → `data.statement.statementId` → опрос
+  `GET …/statements/{statementId}` (200 = готова). Sandbox **жёстко троттлит** (`429`) — по одному счёту.
+- **Ответ выписки**: `data.statement` c `openingAvailableBalance`/`closingAvailableBalance`
+  (`creditDebitIndicator`, `currency`, `amount`) + `transaction[]` + `links`/`meta` (пагинация).
+  Элемент транзакции (`StatementInfoTransaction`): `creditDebitIndicator` (Credit=приход/Debit=расход),
+  `amount`/`currency`/`equivalentAmount`, `transactionDetails` (назначение), `transactionId`, `number`,
+  `bookingDateTime`/`valueDate`, `debtor`/`creditor` (`name`), `debtorAccount`/`creditorAccount.identification`
+  (IBAN), `debtorAgent`/`creditorAgent.identification` (BIC) — прямой маппинг в наш `StatementItem`.
 
 ### СКЗИ (средство криптозащиты) — только для прода
 

@@ -403,7 +403,8 @@ async function exchangeCode(code) {
 
 async function listAccounts(tokenB) {
   head('Accounts — GET /accounts (token B)')
-  // TO CONFIRM: exact path/shape from the Account API / Postman collection.
+  // Response: data.account[] with accountId, currency, accountSubType,
+  // accountDetails.identification (IBAN). Confirmed live (see docs/PRIOR_API.md).
   const res = await obRequest(`${OB}/accounts`, { accessToken: tokenB })
   log(`${C.dim}HTTP ${res.status}  ${cfg.base}${OB}/accounts${C.reset}`)
   if (res.status < 200 || res.status >= 300) {
