@@ -73,13 +73,17 @@ jobs:
 
   docker-build:
     name: docker-build
-    # Validate the production image builds on every PR. Catches Dockerfile /
-    # base-image breakage (e.g. corepack removed in a future node major) before
-    # it can reach main and the GHCR deploy. No registry push. Runs on Dependabot
-    # PRs too — that is exactly where a node bump would surface.
+    # Validate BOTH production images build on every PR: the nginx static landing
+    # (`runner`) and the Nitro node backend (`backend`). Catches Dockerfile /
+    # base-image breakage before it reaches main and the GHCR deploy. No push.
+    # Runs on Dependabot PRs too — that is exactly where a node bump would surface.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+
+    strategy:
+      matrix:
+        target: [runner, backend]
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -91,17 +95,17 @@ jobs:
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
-          # Landing image (nginx static). `target` is pinned so a future Dockerfile
-          # stage added after `runner` can't silently become the published image.
-          target: runner
+          target: ${{ matrix.target }}
           push: false
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ matrix.target }}
 
   deploy:
     name: Build & Push to GHCR
     needs: ci
-    # Gate the deploy on CI: a red CI blocks the image from ever reaching GHCR /
-    # Watchtower. Only the main branch deploys.
+    # Gate the deploy on CI: a red CI blocks images from ever reaching GHCR /
+    # Watchtower. Only the main branch deploys. Publishes two images:
+    #   runner  → ghcr.io/<repo>           (nginx static landing + B24-iframe UI)
+    #   backend → ghcr.io/<repo>-backend   (Nitro node: B24 webhooks + token store)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -109,6 +113,14 @@ jobs:
     permissions:
       contents: read
       packages: write  # required to push to ghcr.io
+
+    strategy:
+      matrix:
+        include:
+          - target: runner
+            suffix: ''
+          - target: backend
+            suffix: '-backend'
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -127,7 +139,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
           tags: |
             type=raw,value=latest
             type=sha,prefix=sha-
@@ -136,9 +148,7 @@ jobs:
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
-          # Publish the landing image (nginx static). Backend has its own deploy
-          # path (docker-compose / future workflow), not this GHCR `:latest`.
-          target: runner
+          target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -146,5 +156,5 @@ jobs:
             NUXT_PUBLIC_AUTHOR_NAME=${{ vars.NUXT_PUBLIC_AUTHOR_NAME }}
             NUXT_PUBLIC_AUTHOR_URL=${{ vars.NUXT_PUBLIC_AUTHOR_URL }}
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

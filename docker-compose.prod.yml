@@ -3,9 +3,15 @@
 #   - docker network proxy-net (создаётся nginx-proxy setup —
 #     см. currency-converter/docker-compose.nginxproxy.yml);
 #   - запущенный Watchtower на хосте (тоже из currency-converter) — он один на
-#     сервер и сам подхватит этот контейнер по метке watchtower.enable ниже.
+#     сервер и сам подхватит контейнеры по метке watchtower.enable ниже.
+#   - .env с DOMAIN, LETSENCRYPT_EMAIL, POSTGRES_PASSWORD, B24_TOKEN_ENC_KEY,
+#     B24_APPLICATION_TOKEN (см. .env.example).
 # Свой Watchtower здесь НЕ поднимаем: второй экземпляр конфликтует по
 # container_name и плодит двойные перезапуски (см. docs/DEPLOY.md).
+#
+# Один домен, две роли: nginx `app` отдаёт статику лендинга/UI и проксирует
+# /api/* в `backend` (Nitro) — поэтому вебхук B24 живёт на https://<DOMAIN>/api/b24/events
+# без CORS. Наружу (nginx-proxy) смотрит только `app`; backend и db — во внутренней сети.
 
 services:
   app:
@@ -29,12 +35,59 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - proxy-net
+      - proxy-net   # fronted by the external nginx-proxy
+      - internal    # to reach `backend` for the /api/ proxy_pass
+    depends_on:
+      - backend
     labels:
       # Picked up by the single host-wide Watchtower (deployed once with
       # currency-converter, runs with --label-enable).
       - "com.centurylinklabs.watchtower.enable=true"
 
+  backend:
+    image: ghcr.io/bx-shef/client-bank-alfa-by-backend:latest
+    container_name: client-bank-alfa-by-backend
+    # No host port and NOT on proxy-net — reached only via app's /api/ proxy_pass.
+    expose:
+      - "3000"
+    environment:
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
+      # AES-256-GCM key for portal refresh tokens at rest. Required — no default.
+      B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      # application_token of the registered B24 app — event signature. Required in prod.
+      B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:?set B24_APPLICATION_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  db:
+    image: postgres:16-alpine
+    container_name: client-bank-alfa-by-db
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+
 networks:
   proxy-net:
     external: true
+  internal:
+    driver: bridge
