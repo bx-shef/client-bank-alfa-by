@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-06-30
+> Last reviewed: 2026-07-01
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -98,8 +98,11 @@ EOF
 make prod-up
 ```
 
-После подъёма адрес обработчика событий приложения в B24 — `https://<DOMAIN>/api/b24/events`
-(тот же домен, проксируется nginx в backend). Итого в папке — только `docker-compose.prod.yml`,
+URL приёма событий приложения — `https://<DOMAIN>/api/b24/events` (тот же домен, проксируется
+nginx в backend). Он указывается **один раз** — в форме регистрации приложения (обработчик
+`ONAPPINSTALL`/`ONAPPUNINSTALL`), это же ваш домен из `NUXT_PUBLIC_SITE_URL`. Per-portal вручную
+ничего вводить не нужно; прочие обработчики (`event.bind`) приложение регистрирует само при установке
+(URL строится из env). Итого в папке — только `docker-compose.prod.yml`,
 `Makefile`, `.env`. Обновить эти два файла
 позже — повторить `curl` из шага 1 (в минимальном варианте `git pull` недоступен; образ обновляется
 через Watchtower независимо от папки).
