@@ -10,15 +10,16 @@ export interface B24OAuthConfig {
   clientSecret: string
 }
 
-/** Build the refresh-token GET URL. Params are URL-encoded. */
-export function buildRefreshUrl(cfg: B24OAuthConfig, refreshToken: string): string {
-  const p = new URLSearchParams({
+/** Build the refresh-token request body (form-urlencoded). Creds go in the POST
+ * body, NOT the URL — a query string would leak client_secret/refresh_token into
+ * access logs (same rule as app/utils/alfaOauth.ts and docs/B24_EVENTS.md). */
+export function buildRefreshBody(cfg: B24OAuthConfig, refreshToken: string): string {
+  return new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: cfg.clientId,
     client_secret: cfg.clientSecret,
     refresh_token: refreshToken
-  })
-  return `${B24_OAUTH_TOKEN_URL}?${p.toString()}`
+  }).toString()
 }
 
 export interface B24RefreshResult {

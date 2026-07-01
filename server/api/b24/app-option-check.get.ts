@@ -4,16 +4,9 @@
 // script (scripts/check-app-option.sh). Guarded by B24_APPLICATION_TOKEN via the
 // `X-Check-Token` header (or `?token=`), constant-time compared. Not for the UI.
 
-import { timingSafeEqual } from 'node:crypto'
+import { safeEqual } from '../../../app/utils/b24Events'
 import { PortalNotInstalledError, readAppSetting } from '../../utils/appSettings'
 import { liveAppSettingsDeps } from '../../utils/liveDeps'
-
-function safeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a)
-  const bb = Buffer.from(b)
-  if (ba.length !== bb.length) return false
-  return timingSafeEqual(ba, bb)
-}
 
 export default defineEventHandler(async (event) => {
   const expected = process.env.B24_APPLICATION_TOKEN?.trim() || ''

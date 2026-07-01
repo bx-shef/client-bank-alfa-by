@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { B24_OAUTH_TOKEN_URL, buildRefreshUrl, hostFromEndpoint, parseRefreshResponse } from '../server/utils/b24Oauth'
+import { buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from '../server/utils/b24Oauth'
 import { needsRefresh } from '../server/utils/ensureAccessToken'
 import type { PortalToken } from '../server/utils/tokenStore'
 
-describe('buildRefreshUrl', () => {
-  it('builds a refresh_token grant URL with encoded params', () => {
-    const url = buildRefreshUrl({ clientId: 'cid', clientSecret: 's/e+t' }, 'r t')
-    expect(url.startsWith(`${B24_OAUTH_TOKEN_URL}?`)).toBe(true)
-    expect(url).toContain('grant_type=refresh_token')
-    expect(url).toContain('client_id=cid')
-    expect(url).toContain('client_secret=s%2Fe%2Bt')
-    expect(url).toContain('refresh_token=r+t')
+describe('buildRefreshBody', () => {
+  it('builds a form-urlencoded refresh_token body with encoded params (creds not in a URL)', () => {
+    const body = buildRefreshBody({ clientId: 'cid', clientSecret: 's/e+t' }, 'r t')
+    expect(body).toContain('grant_type=refresh_token')
+    expect(body).toContain('client_id=cid')
+    expect(body).toContain('client_secret=s%2Fe%2Bt')
+    expect(body).toContain('refresh_token=r+t')
+    expect(body.startsWith('http')).toBe(false)
   })
 })
 

@@ -4,7 +4,7 @@
 // freshly-installed token is valid ~1h, enough for the skeleton test right after
 // install; add the creds for long-lived operation.
 
-import { buildRefreshUrl, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
+import { B24_OAUTH_TOKEN_URL, buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
 import { saveToken } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
 
@@ -24,7 +24,11 @@ export async function ensureAccessToken(query: QueryFn, token: PortalToken): Pro
     return token
   }
 
-  const json = await $fetch(buildRefreshUrl({ clientId, clientSecret }, token.refreshToken))
+  const json = await $fetch(B24_OAUTH_TOKEN_URL, {
+    method: 'POST',
+    body: buildRefreshBody({ clientId, clientSecret }, token.refreshToken),
+    headers: { 'content-type': 'application/x-www-form-urlencoded' }
+  })
   const r = parseRefreshResponse(json)
   const updated: PortalToken = {
     ...token,

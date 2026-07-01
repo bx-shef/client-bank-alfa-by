@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   APP_SETTING_KEY,
   PortalNotInstalledError,
+  pickAppOption,
   readAppSetting,
   writeAppSetting,
   type AppSettingsDeps
@@ -74,5 +75,20 @@ describe('appSettings', () => {
 
   it('uses the app.option key', () => {
     expect(APP_SETTING_KEY).toBe('cb_test_setting')
+  })
+})
+
+describe('pickAppOption', () => {
+  it('returns the string value for a set key', () => {
+    expect(pickAppOption({ result: { cb_test_setting: 'v' } }, 'cb_test_setting')).toBe('v')
+  })
+  it('coerces non-string values to string', () => {
+    expect(pickAppOption({ result: { n: 42 } }, 'n')).toBe('42')
+  })
+  it('returns null for an unset key, empty result, or missing result', () => {
+    expect(pickAppOption({ result: {} }, 'cb_test_setting')).toBeNull()
+    expect(pickAppOption({}, 'cb_test_setting')).toBeNull()
+    expect(pickAppOption(undefined, 'cb_test_setting')).toBeNull()
+    expect(pickAppOption({ result: { cb_test_setting: null } }, 'cb_test_setting')).toBeNull()
   })
 })

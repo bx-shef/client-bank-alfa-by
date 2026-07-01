@@ -9,6 +9,13 @@ import type { PortalToken } from './tokenStore'
 /** The single app.option key this skeleton reads/writes. */
 export const APP_SETTING_KEY = 'cb_test_setting'
 
+/** Pull one option value out of an app.option.get result; null when unset. */
+export function pickAppOption(restResult: Record<string, unknown> | undefined, key: string): string | null {
+  const options = (restResult?.result ?? {}) as Record<string, unknown>
+  const value = options[key]
+  return value === undefined || value === null ? null : String(value)
+}
+
 export interface AppSettingsDeps {
   /** Load the stored token for a portal, or null if not installed. */
   loadToken: (memberId: string) => Promise<PortalToken | null>
@@ -35,9 +42,7 @@ export async function readAppSetting(
   if (!token) throw new PortalNotInstalledError(memberId)
   const fresh = await deps.ensureFresh(token)
   const res = await deps.callRest(fresh.domain, fresh.accessToken, 'app.option.get', {})
-  const options = (res?.result ?? {}) as Record<string, unknown>
-  const value = options[key]
-  return value === undefined || value === null ? null : String(value)
+  return pickAppOption(res, key)
 }
 
 /** Write the app-level setting for a portal. */

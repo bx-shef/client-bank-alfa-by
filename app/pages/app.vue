@@ -121,7 +121,7 @@ onMounted(async () => {
       </template>
 
       <p
-        v-if="!appSettings.memberId.value"
+        v-if="!appSettings.enabled.value"
         class="text-sm text-(--ui-color-base-3)"
       >
         Доступно внутри портала Bitrix24 — значение хранится в настройках приложения (`app.option`).
@@ -149,7 +149,7 @@ onMounted(async () => {
         </div>
         <p class="text-xs text-(--ui-color-base-3)">
           Сохранено на портале: <b>{{ appSettings.savedValue.value ?? '—' }}</b>
-          · портал <span class="font-mono">{{ appSettings.memberId.value }}</span>
+          · <span class="font-mono">{{ appSettings.domain.value }}</span>
         </p>
         <p
           v-if="appSettings.error.value"

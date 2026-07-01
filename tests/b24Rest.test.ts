@@ -8,4 +8,10 @@ describe('restUrl', () => {
   it('strips a scheme and any path if a full endpoint is passed', () => {
     expect(restUrl('https://p.bitrix24.by/rest/', 'app.option.set')).toBe('https://p.bitrix24.by/rest/app.option.set')
   })
+  it('normalises http to https and drops a trailing path', () => {
+    expect(restUrl('http://p.bitrix24.by/rest', 'app.info')).toBe('https://p.bitrix24.by/rest/app.info')
+  })
+  it('keeps only the host from a bare host with a path', () => {
+    expect(restUrl('p.bitrix24.by/foo/bar', 'scope')).toBe('https://p.bitrix24.by/rest/scope')
+  })
 })

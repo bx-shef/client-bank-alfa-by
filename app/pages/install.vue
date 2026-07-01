@@ -30,13 +30,19 @@ const diagnostics = computed(() => {
   const granted = initData.value.scope ?? []
   const missing = requiredScopes.filter(s => !granted.includes(s))
   let domain = ''
+  let memberId = ''
   if (isUseB24.value) {
     const auth = b24Instance.getOrThrow().auth.getAuthData()
-    domain = auth === false ? '' : auth.domain
+    if (auth !== false) {
+      domain = auth.domain
+      memberId = auth.member_id || ''
+    }
   }
   return {
     mode: isUseB24.value ? 'B24 frame' : 'Standalone (mock)',
     domain,
+    // Shown so operators can copy it for the server-side check (scripts/check-app-option.sh).
+    memberId,
     targetOrigin: isUseB24.value ? b24Instance.targetOrigin() : '—',
     appInfo: initData.value.appInfo,
     granted,
@@ -164,6 +170,8 @@ onMounted(runInstall)
               <span>{{ diagnostics.mode }}</span>
               <span class="text-(--ui-color-base-3)">Домен:</span>
               <span>{{ diagnostics.domain || '—' }}</span>
+              <span class="text-(--ui-color-base-3)">member_id:</span>
+              <span class="break-all">{{ diagnostics.memberId || '—' }}</span>
               <span class="text-(--ui-color-base-3)">targetOrigin:</span>
               <span class="break-all">{{ diagnostics.targetOrigin }}</span>
               <template v-if="diagnostics.appInfo">

@@ -74,8 +74,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
   `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
   `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
-- `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: `member_id` из фрейма →
-  `/api/settings` (GET/POST) → backend пишет/читает `app.option`. Вне портала инертна.
+- `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: берёт из фрейма
+  **access-токен + домен** и шлёт их в `/api/settings` (GET/POST) заголовками
+  `Authorization: Bearer` + `X-B24-Domain`; backend этим токеном пишет/читает `app.option`. Вне
+  портала инертна (токена нет). member_id UI не доверяет — изоляция на стороне B24 (токен скоуплен к порталу).
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
@@ -110,11 +112,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
     (refresh при истечении), `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
-    с DI — изоляция по `memberId`), `server/utils/liveDeps.ts` (проводка). Роуты `server/api/settings.get.ts`
-    / `settings.post.ts` (UI-поле на `/app` через `useAppSettings`), и **серверная проверка**
-    `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option` без
-    фрейма — для `scripts/check-app-option.sh`). ⚠️ Скелет: `memberId` в UI-роутах пока доверяется
-    (hardening — верификация фрейм-токена, см. комментарий в `settings.get.ts`).
+    с DI — изоляция по `memberId`, используется серверной проверкой), `server/utils/settingsHandler.ts`
+    (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
+    UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)
+    **аутентифицируются фрейм-токеном** (`Authorization: Bearer` + `X-B24-Domain`) — B24 скоупит
+    токен к порталу вызывающего, `member_id` не доверяется, чужой `app.option` недостижим. **Серверная
+    проверка** `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option`
+    по сохранённому токену без фрейма — для `scripts/check-app-option.sh`; наружу не открыта, nginx `deny all`).
   - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом.
     В проде — **один домен**: nginx `app` проксирует `/api/*` в `backend:3000` (вебхук B24 на
     `https://<DOMAIN>/api/b24/events`, без CORS); CI пушит два образа (matrix `runner`+`backend`),
