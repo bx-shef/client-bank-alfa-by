@@ -19,7 +19,10 @@ export default defineNuxtConfig({
       // Public URL the app is served from. Used by the Bitrix24 install handler
       // to build absolute placement handler URLs once placement.bind lands.
       // Set via NUXT_PUBLIC_SITE_URL at build time (Dockerfile/CI).
-      siteUrl: ''
+      siteUrl: '',
+      // Git commit the build came from — shown in the footer as a link to the
+      // exact commit. CI passes ${{ github.sha }}; empty in dev.
+      commitSha: ''
     }
   },
 

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-06-30
+> Last reviewed: 2026-07-01
 
 Приложение для получения выписки из клиент-банка Альфа-Банк Беларусь.
 Публичная страница — лендинг (SSG). Появилась серверная часть (Nitro): эндпоинт
@@ -71,6 +71,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/types/importStatus.ts` + `app/utils/importStatus.ts` (relative-time RU `formatRelativeTime`,
   `pluralRu`, `importStateMeta`) + `app/composables/useImportStatus.ts` — модель и презентация статуса
   импорта; mock на клиенте до backend-опроса (#5), форма ответа = будущий `GET /import/status`.
+- `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
+  `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
+  `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
+- `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: `member_id` из фрейма →
+  `/api/settings` (GET/POST) → backend пишет/читает `app.option`. Вне портала инертна.
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
@@ -101,6 +106,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
+    `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
+    `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
+    (refresh при истечении), `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
+    с DI — изоляция по `memberId`), `server/utils/liveDeps.ts` (проводка). Роуты `server/api/settings.get.ts`
+    / `settings.post.ts` (UI-поле на `/app` через `useAppSettings`), и **серверная проверка**
+    `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option` без
+    фрейма — для `scripts/check-app-option.sh`). ⚠️ Скелет: `memberId` в UI-роутах пока доверяется
+    (hardening — верификация фрейм-токена, см. комментарий в `settings.get.ts`).
   - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом.
     В проде — **один домен**: nginx `app` проксирует `/api/*` в `backend:3000` (вебхук B24 на
     `https://<DOMAIN>/api/b24/events`, без CORS); CI пушит два образа (matrix `runner`+`backend`),

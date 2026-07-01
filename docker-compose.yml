@@ -33,6 +33,9 @@ services:
       # 32-byte key (hex/base64) encrypting portal refresh tokens at rest.
       # Required — no default, so secrets are never encrypted with a known key.
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      # App OAuth creds — refresh portal access token for server-side REST (optional locally).
+      B24_CLIENT_ID: ${B24_CLIENT_ID:-}
+      B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
     ports:
       - "3210:3000"
     depends_on:

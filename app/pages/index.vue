@@ -1,10 +1,7 @@
 <script setup lang="ts">
-import { LANDING_FEATURES, LANDING_TITLE, LANDING_DESCRIPTION, START_YEAR, copyrightYears } from '~/utils/landing'
-
-const { public: { authorName, authorUrl } } = useRuntimeConfig()
+import { LANDING_FEATURES, LANDING_TITLE, LANDING_DESCRIPTION } from '~/utils/landing'
 
 const features = LANDING_FEATURES
-const years = copyrightYears(START_YEAR, new Date().getFullYear())
 </script>
 
 <template>
@@ -33,14 +30,6 @@ const years = copyrightYears(START_YEAR, new Date().getFullYear())
       </ul>
     </section>
 
-    <footer class="mt-16 text-center text-sm text-(--b24ui-color-text-secondary)">
-      © {{ years }}
-      <a
-        :href="authorUrl"
-        class="underline"
-        target="_blank"
-        rel="noopener noreferrer"
-      >{{ authorName }}</a>
-    </footer>
+    <BuildFooter />
   </main>
 </template>

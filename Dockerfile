@@ -24,6 +24,9 @@ ENV NUXT_PUBLIC_AUTHOR_URL=$NUXT_PUBLIC_AUTHOR_URL
 # build absolute placement URLs (needed once placement.bind lands). Optional now.
 ARG NUXT_PUBLIC_SITE_URL
 ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
+# Git commit of this build — footer links to it. CI passes ${{ github.sha }}.
+ARG NUXT_PUBLIC_COMMIT_SHA
+ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 RUN pnpm generate
 # Inject per-build sha256 CSP hashes for Nuxt's inline scripts into nginx.conf,
 # so the served CSP needs no `script-src 'unsafe-inline'`. Writes in place.
@@ -46,6 +49,8 @@ ARG NUXT_PUBLIC_AUTHOR_NAME
 ENV NUXT_PUBLIC_AUTHOR_NAME=$NUXT_PUBLIC_AUTHOR_NAME
 ARG NUXT_PUBLIC_AUTHOR_URL
 ENV NUXT_PUBLIC_AUTHOR_URL=$NUXT_PUBLIC_AUTHOR_URL
+ARG NUXT_PUBLIC_COMMIT_SHA
+ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 RUN pnpm build
 
 FROM node:22-alpine AS backend
