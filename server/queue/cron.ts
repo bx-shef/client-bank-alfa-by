@@ -32,6 +32,12 @@ export function planFetches(
 /** Marks an account as belonging to the load demo (handler emits synthetic ops). */
 export const DEMO_ACCOUNT_PREFIX = 'DEMO-'
 
+/** True for a synthetic load-demo account. The live CRM transports gate on this so
+ *  the demo load never writes to a real portal's CRM. */
+export function isDemoAccount(account: string): boolean {
+  return account.startsWith(DEMO_ACCOUNT_PREFIX)
+}
+
 /** Build N synthetic fetch jobs for the load demo. `tick` (a per-tick token, e.g.
  *  a timestamp) is folded into the account so each tick produces fresh jobIds —
  *  otherwise the deterministic jobId would dedupe repeated ticks into a no-op and
@@ -50,7 +56,7 @@ export function buildDemoFetchJobs(memberId: string, n: number, today: string, t
 /** Synthetic operations for a demo fetch job — a couple of ops so the batch flows
  *  on to crm-sync. Deterministic (docId from the account) so retries dedupe. */
 export function demoItems(job: FetchJob): StatementItem[] {
-  if (!job.account.startsWith(DEMO_ACCOUNT_PREFIX)) return []
+  if (!isDemoAccount(job.account)) return []
   const mk = (n: number, direction: 'credit' | 'debit'): StatementItem => ({
     account: job.account,
     docId: `${job.account}-${n}`,

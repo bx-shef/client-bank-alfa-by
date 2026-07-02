@@ -129,6 +129,12 @@ export async function handleCrmSyncJob(
       unmatched++
       continue
     }
+    // NB (write→remember not atomic): if the worker dies AFTER writeActivity created
+    // the B24 activity but BEFORE rememberActivity persists, a job redelivery would
+    // re-create the activity (getActivityId still null). This narrow window is the
+    // right trade — reserving the key BEFORE writing would instead risk a permanent
+    // loss if writeActivity then failed. A B24-side guard (search the timeline for
+    // the embedded origin token before writing) would close it — follow-up.
     await deps.rememberActivity(job.memberId, key, activityId)
     await deps.notifyChat(item, job.memberId)
     created++

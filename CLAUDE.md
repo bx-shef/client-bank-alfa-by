@@ -198,8 +198,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `created/skipped/unmatched`. CRM-депсы берут `memberId` явно (депсы строятся один раз).
       Транспорты (Альфа/Приор/парсер/REST-запись) — заглушки до стадий 3–6; стор дедупа уже живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
-      refresh и пишет `saveToken`); `cron.ts` — план опроса
-      (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`).
+      refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
+      `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`
+      (`makePortalRestCall`: `getToken`+`ensureAccessToken`+`callRest`), с **гейтом демо-счётов**
+      (`isDemoAccount` — демо-нагрузка не пишет в реальный портал) и skip без токена портала.
+      `cron.ts` — план опроса (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`,
+      `isDemoAccount`).
     - `server/plugins/queue.ts` — на старте backend поднимает воркеры **в процессе** и (если
       `DEMO_LOAD_N>0`) крон каждые `CRON_INTERVAL_MIN` кладёт синтетические fetch-джобы (демо потока).
       Масштаб-аут (отдельный воркер-контейнер) — следующий шаг (см. REFACTOR_PLAN).
@@ -218,8 +222,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту контрагента** (DI над
     `RestCall`, тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) →
-    id реквизитов → `crm.requisite.list` (`ENTITY_TYPE_ID=4`) → id компании. Готово к проводке в
-    `crm-sync` `findCompany` (стадия 4, вместе с `writeActivity` и стором дедупа #9). Ничего не пишет.
+    id реквизитов → `crm.requisite.list` (`ENTITY_TYPE_ID=4`) → id компании. Проведено в `crm-sync`
+    `findCompany`. `null` ⇒ операция `unmatched`, дело не пишется.
+  - `server/utils/portalRest.ts` — `makePortalRestCall(memberId, deps)`: связывает `RestCall` с порталом
+    (загрузка токена → `ensureAccessToken` → `callRest` с домен+access). DI, тесты; `null` без токена.
+  - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
+    `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
