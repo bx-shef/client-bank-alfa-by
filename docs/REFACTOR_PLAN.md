@@ -111,10 +111,10 @@
    **Статус — стадия 4 в основном готова:** стор дедупа (`activityDedupStore.ts`, always-purge),
    поиск компании (`companyLookup.ts`), read-before-write в `handleCrmSyncJob` и **живые транспорты**
    `findCompany`→`findCompanyByAccount` / `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`)
-   по per-portal `RestCall` (`makePortalRestCall`), с гейтом демо-счётов (`isDemoAccount`) — **готовы,
-   покрыты тестами**. Осталось: проверка на живом портале (#90), TZ-aware `deadline` (UTC+3, #10) и
-   обработка `unmatched`-операций (#91); перед реальным объёмом — rate-limit REST на `crm-sync` (TODO в
-   `worker.ts`).
+   по per-portal `RestCall` (`makePortalRestCall`), с гейтом демо-счётов (`isDemoAccount`) и TZ-aware
+   `deadline` (UTC+3, `toPortalDeadline`, #10) — **готовы, покрыты тестами**. Осталось: проверка на живом
+   портале (#90) и обработка `unmatched`-операций (#91); перед реальным объёмом — rate-limit REST на
+   `crm-sync` (TODO в `worker.ts`).
    Плюс на очередях выставлены `attempts`/`backoff`/`removeOnComplete/Fail` (см. `connection.ts`).
 5. **Cron-опрос через очередь.** Планировщик кладёт в `bank-fetch` job на портал/счёт (fan-out по
    `portal_tokens`); воркеры (масштабируются репликами) тянут выписку, соблюдая rate-limit Альфы
