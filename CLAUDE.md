@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-01
+> Last reviewed: 2026-07-02
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -64,11 +64,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   хранение — backend (#16).
 - `app/pages/settings.vue` — тонкая страница-fallback (прямая ссылка): заголовок + `B24Alert` +
   `<SettingsForm/>`. Layout `clear` + `useB24().init()`. Роут `/settings` — в `nitro.prerender.routes`.
-- `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `installFinish`
-  (+ диагностика портала); вне фрейма — редирект на `/`. `placement.bind` **пока не делаем** —
+- `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `event.bind`
+  (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
+  установка доставляет `application_token`) → `installFinish` (+ диагностика портала, блок «События»);
+  вне фрейма — редирект на `/`. Билдер батча привязок — чистый `app/utils/b24EventBind.ts`
+  (идемпотентен: пропуск верных, перепривязка устаревших). Требует `NUXT_PUBLIC_SITE_URL` в проде
+  (иначе откажется биндить относительный URL — ошибка с retry). `placement.bind` **пока не делаем** —
   плейсменты добиваем на тестовом портале (см. план).
 - `app/layouts/clear.vue` — минимальный layout под in-portal-страницы (`<B24App>` для тем/тостов в iframe).
-- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `im`, `user_brief`, `placement`).
+- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `im`, `user_brief`,
+  `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
 - `app/composables/useChatRules.ts` — реактивные настройки (localStorage, без `apiKey`); производит
@@ -211,10 +216,12 @@ UI — в компонентах. Это та же раскладка, что в
 
 - `useB24().init()` молча no-op вне фрейма (нет `window.name`) — поэтому in-portal-страницы рендерятся
   и как обычные URL, и внутри портала без отдельной ветки.
-- `/install` сейчас делает только `init → installFinish` + диагностику. **`placement.bind` не вызываем** —
-  как именно приложение встроено в портал (плейсменты/хендлер) зависит от регистрации приложения;
-  финализируем на тестовом портале. `NUXT_PUBLIC_SITE_URL` (build-arg) понадобится тогда для абсолютных
-  URL хендлеров; сейчас опционален.
+- `/install` делает `init → event.bind (ONAPPINSTALL/ONAPPUNINSTALL) → installFinish` + диагностику.
+  Привязка событий — до `installFinish`, чтобы текущая установка доставила `application_token`
+  на backend `/api/b24/events`. **`placement.bind` не вызываем** — как именно приложение встроено
+  (плейсменты) зависит от регистрации; финализируем на тестовом портале. `NUXT_PUBLIC_SITE_URL`
+  (build-arg) в проде **обязателен** — из него строится абсолютный URL хендлера событий (без него
+  `/install` откажется биндить относительный URL и покажет ошибку с retry).
 - **Вызовы B24 для данных/настроек — server-side REST по OAuth-токену (backend), не через фрейм** (см.
   «Хранение настроек» в [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)). Фрейм-SDK тут — только установка
   и UI-хром (`setTitle`/`fitWindow`).
@@ -223,8 +230,10 @@ UI — в компонентах. Это та же раскладка, что в
   (подпись событий) и OAuth-креды портала; токены пишутся в Postgres (`server/utils/tokenStore.ts`).
   Доменное ядро (разбор, вердикт токена, маршрутизация) — `app/utils/b24Events.ts`; контракт и
   модель учёта авторизации — [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md).
-- Тесты: чистый `tests/b24.test.ts` (скоупы); `tests/nuxt/install.nuxt.test.ts` (standalone-редирект)
-  через типизированный мок `tests/nuxt/helpers/mockB24.ts` (`makeMockB24`, `ReturnType<typeof useB24>`
+- Тесты: чистый `tests/b24.test.ts` (скоупы) + `tests/b24EventBind.test.ts` (билдер привязок —
+  свежая установка/идемпотентность/перепривязка/чужие события/регистр); `tests/nuxt/install.nuxt.test.ts`
+  (standalone-редирект + `event.bind` двух событий на `…/api/b24/events` до `installFinish`) через
+  типизированный мок `tests/nuxt/helpers/mockB24.ts` (`makeMockB24`, `ReturnType<typeof useB24>`
   ловит дрейф). Реальный install-flow в портале автотестами не покрыть — проверяется вручную.
 - CSP в `nginx.conf` уже разрешает облачные домены Б24 (`frame-ancestors`/`connect-src`).
 
