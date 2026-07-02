@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { parseClientBankText } from '~/utils/clientBankText'
+import { MAX_CLIENT_BANK_CHARS, parseClientBankText } from '~/utils/clientBankText'
 
 // Characterization tests for the ported client-bank text parser (see #19).
 // Fixtures are windows-1251 — decode them the way a real caller must.
@@ -165,5 +165,15 @@ describe('parseClientBankText — behavior', () => {
     )
     expect(parsed.OUT_PARAM.items).toHaveLength(1)
     expect(parsed.OUT_PARAM.items[0]!.Num).toBe('1')
+  })
+
+  it('rejects an oversized input before parsing (DoS guard, #19)', () => {
+    const big = '***** ^Type=400^ ^Acc=BY00^  -  T\n[OUT_PARAM]\n' + 'x'.repeat(50)
+    // Tiny explicit cap → throws with a size message, never builds the line array.
+    expect(() => parseClientBankText(big, 16)).toThrow(/too large/)
+    // A valid statement under the cap still parses.
+    expect(() => parseClientBankText(big, 10_000)).not.toThrow()
+    // The default cap is a large, sane number (~20 MB).
+    expect(MAX_CLIENT_BANK_CHARS).toBeGreaterThan(1_000_000)
   })
 })

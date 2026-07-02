@@ -5,8 +5,9 @@
 //   - `1CClientBankExchange` — the 1C accounting exchange format;
 //   - `***** ^Type=` — the client-bank text export (Приорбанк / Альфа `Type=4`).
 //
-// ⚠️ The underlying parsers have no input-size guard (issue #19): a real file
-// upload path (UI/backend) MUST cap the file size before calling this.
+// The client-bank parser now caps its decoded input (`MAX_CLIENT_BANK_CHARS`,
+// DoS guard #19); a real file-upload path (UI/backend) should ALSO cap the raw
+// file size before decoding, rather than rely on this single line of defense.
 
 import type { NormalizeContext, StatementItem } from '~/types/statement'
 import { isOneCExchange, parseOneCExchange } from '~/utils/oneCExchange'

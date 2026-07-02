@@ -63,6 +63,25 @@ export function isBelarusianAccount(account: string): boolean {
 }
 
 /**
+ * ISO 4217 numeric currency code → alpha code. The `Type=3`/`Type=5` «за день»
+ * exports carry the account currency as a numeric `CurrCode` (e.g. `933`), not an
+ * alpha marker. Pure lookup — building block for issue #73. NOT yet wired into
+ * `detectStatementCurrency`: making foreign «за день» statements resolve to their
+ * real currency also needs the amount-field handling (those rows have no separate
+ * `…Q` field), which must be confirmed against a real foreign «за день» sample.
+ */
+const NUMERIC_CURRENCY: Readonly<Record<string, string>> = {
+  933: 'BYN', 840: 'USD', 978: 'EUR', 643: 'RUB', 156: 'CNY',
+  985: 'PLN', 826: 'GBP', 980: 'UAH', 398: 'KZT', 756: 'CHF', 392: 'JPY'
+}
+
+/** Map an ISO 4217 numeric currency code (`"933"`) to its alpha code (`"BYN"`),
+ * or `undefined` for empty/unknown input. See `NUMERIC_CURRENCY` (issue #73). */
+export function currencyFromNumericCode(code: string | undefined): string | undefined {
+  return code ? NUMERIC_CURRENCY[code.trim()] : undefined
+}
+
+/**
  * Currency of the whole statement (national vs foreign): explicit alpha-3 markers
  * win (`I3` file-level, then header `I1`), then the caller-supplied `ctx.currency`,
  * then a Belarusian own-account defaults to `BYN`. `''` if undetermined — the caller
