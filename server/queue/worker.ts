@@ -61,7 +61,13 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return writeActivityViaRest(item, companyId, call)
     },
-    notifyChat: async () => {}, // TODO stage 6: im.message.add by chat rules
+    // TODO stage 6 (live wiring): read the portal's chat target (DIALOG_ID) + chat
+    // rules from settings, apply shouldNotifyChat(item, rules), and post via
+    // notifyChatViaRest(item, dialogId, call) — the message builder + REST wrapper
+    // (server/utils/chatNotifyWrite.ts, app/utils/chatMessage.ts) are ready + tested.
+    // Blocked on real settings storage (#16): no chat target is persisted yet, so
+    // wiring now would just skip every time. Gate demo accounts as elsewhere.
+    notifyChat: async () => {},
     // Persistent dedup store (#9) — read-before-write guard, wired to Postgres.
     getActivityId: (memberId, key) => getActivityId(dbQuery, memberId, key),
     rememberActivity: async (memberId, key, activityId) => {

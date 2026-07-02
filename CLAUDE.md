@@ -229,6 +229,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (загрузка токена → `ensureAccessToken` → `callRest` с домен+access). DI, тесты; `null` без токена.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
+  - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
+    `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add` →
+    `extractMessageId`). **Ядро стадии 6** (чат-уведомления), покрыто тестами. Фильтр «что в чат» —
+    `shouldNotifyChat` (в `statement.ts`). Проводка `notifyChat` ждёт хранения настроек (#16: dialog id
+    + правила из `app.option`) — до этого заглушка.
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
