@@ -13,8 +13,8 @@ import {
 
 describe('parseArgs', () => {
   it('parses value flags and boolean flags', () => {
-    expect(parseArgs(['--env', '.env.sandbox', '--full', '--from-year', '2024']))
-      .toEqual({ 'env': '.env.sandbox', 'full': true, 'from-year': '2024' })
+    expect(parseArgs(['--env', '.env.alfabankby', '--full', '--from-year', '2024']))
+      .toEqual({ 'env': '.env.alfabankby', 'full': true, 'from-year': '2024' })
   })
   it('treats a flag followed by another flag as boolean', () => {
     expect(parseArgs(['--url-only', '--account', '123'])).toEqual({ 'url-only': true, 'account': '123' })

@@ -14,8 +14,8 @@
 // Statement/account data is written in full so you can inspect it locally.
 // Pass `--full` to disable masking everywhere (keeps live tokens in the file).
 //
-// This is a SANDBOX tool. Config is auto-loaded from `.env.sandbox` (preferred),
-// then `.env.local`, then `.env` — copy `.env.sandbox.example` → `.env.sandbox`
+// This is a SANDBOX tool. Config is auto-loaded from `.env.alfabankby` (preferred),
+// then `.env.local`, then `.env` — copy `.env.alfabankby.example` → `.env.alfabankby`
 // and fill in the secret. Override the file with `--env <path>`. Secrets are
 // never hard-coded; real env vars and flags win over the file.
 //   ALFA_BASE_URL       (default https://developerhub.alfabank.by:8273 — sandbox)
@@ -47,10 +47,10 @@ import { httpRequest } from './lib/http.mjs'
 const args = parseArgs(process.argv.slice(2))
 
 // Sandbox-first env: an explicit --env file (hard error if unreadable), else
-// the implicit .env.sandbox → .env.local → .env fallbacks (missing = skipped).
+// the implicit .env.alfabankby → .env.local → .env fallbacks (missing = skipped).
 const explicitEnv = args['env'] ? String(args['env']) : null
 const envFile = loadDotEnv(
-  explicitEnv ? [explicitEnv] : ['.env.sandbox', '.env.local', '.env'],
+  explicitEnv ? [explicitEnv] : ['.env.alfabankby', '.env.local', '.env'],
   { explicit: Boolean(explicitEnv) }
 )
 
@@ -300,7 +300,7 @@ async function main() {
   log(`${C.dim}client_id:${C.reset} ${cfg.clientId}`)
   log(`${C.dim}redirect_uri:${C.reset} ${cfg.redirectUri}`)
   log(`${C.dim}scope:${C.reset} ${cfg.scope}   ${C.dim}masking:${C.reset} ${cfg.full ? 'OFF (--full)' : 'ON'}`)
-  if (!cfg.clientSecret) warn('ALFA_CLIENT_SECRET is empty — set it in .env.sandbox (token exchange will fail)')
+  if (!cfg.clientSecret) warn('ALFA_CLIENT_SECRET is empty — set it in .env.alfabankby (token exchange will fail)')
 
   if (args['url-only']) {
     head('Authorize URL')

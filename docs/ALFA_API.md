@@ -99,7 +99,7 @@
 
 > Перепроверить вживую: `pnpm oauth:test` (скрипт `scripts/alfa-oauth-test.mjs`,
 > без зависимостей, Node ≥ 18). Это **песочничный** инструмент: конфиг берётся из
-> `.env.sandbox` — скопируй шаблон `.env.sandbox.example` → `.env.sandbox` и впиши
+> `.env.alfabankby` — скопируй шаблон `.env.alfabankby.example` → `.env.alfabankby` и впиши
 > `ALFA_CLIENT_SECRET` (файл в `.gitignore`). Скрипт в баннере явно помечает режим
 > `● SANDBOX`/`● NON-SANDBOX`. Токены и номера счетов в консоли маскируются; в дамп
 > `alfa-demo-output.json` (gitignore) токены пишутся **замаскированными** (полные —
