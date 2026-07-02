@@ -121,6 +121,9 @@
    (100/мин), нормализуют, разделяют приход/расход, применяют фильтры по р/счёту и теме платежа.
    Статус последнего импорта — в БД (питает `GET /import/status`).
 6. **Сообщения в чат** (выбор чата в настройках; не показывать по правилам) — из воркера после записи в CRM.
+   **Ядро готово:** `buildChatMessage` (`chatMessage.ts`, BB-текст + нейтрализация внешних полей) +
+   `notifyChatViaRest` (`chatNotifyWrite.ts`, `im.message.add`) + фильтр `shouldNotifyChat`. Осталась
+   проводка `notifyChat` вместе с хранением настроек (#16: dialog id + правила); нюансы — в worker TODO.
 7. **Docker + деплой.** [✓ фронтенд] Лендинг + B24-iframe-UI как статика за nginx
    (GHCR + Watchtower + nginx-proxy, как `currency-converter`) — `Dockerfile` (target `runner`),
    `nginx.conf` (CSP без `unsafe-inline` через `scripts/csp-hashes.mjs`), compose-файлы, CI
