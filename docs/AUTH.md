@@ -39,10 +39,10 @@
 
 | Слой | Файл | Что делает |
 |---|---|---|
-| Чистое ядро | `server/utils/session.ts` | `resolveAuthConfig`/`checkCredentials` (constant-time), `signSession`/`verifySession` (HMAC-SHA256, base64url), имена `SESSION_COOKIE`/`CSRF_HEADER`. Покрыто `tests/session.test.ts` |
-| Логин | `server/api/auth/login.post.ts` | 503 если нет пароля; CSRF-заголовок; 401 на неверные; ставит подписанную cookie |
-| Выход | `server/api/auth/logout.post.ts` | чистит cookie (CSRF-заголовок) |
-| Статус | `server/api/auth/session.get.ts` | `{ configured, authenticated, user? }` для гварда |
+| Чистое ядро | `server/utils/session.ts` | `resolveAuthConfig`/`checkCredentials` (constant-time), `signSession`/`verifySession` (HMAC-SHA256, base64url), имена `SESSION_COOKIE`/`CSRF_HEADER`, **статус-матрикс роутов** `decideLogin`/`decideLogout`/`sessionStatus` (тестируется без сервера). Покрыто `tests/session.test.ts` |
+| Логин | `server/api/auth/login.post.ts` | тонкий I/O → `decideLogin`: 503 если нет пароля; 403 без CSRF-заголовка; 400 на битое тело; 401 на неверные; иначе ставит подписанную cookie |
+| Выход | `server/api/auth/logout.post.ts` | тонкий I/O → `decideLogout` (403 без CSRF-заголовка, иначе чистит cookie) |
+| Статус | `server/api/auth/session.get.ts` | тонкий I/O → `sessionStatus` → `{ configured, authenticated, user? }` для гварда |
 | Клиент | `app/composables/useAuth.ts` | `login`/`logout`/`fetchSession` (шлёт CSRF-заголовок на мутациях) |
 | Форма | `app/pages/login.vue` | публичная страница входа (`noindex`), редирект только на относительный путь |
 | Гвард | `app/middleware/auth.ts` | клиентский редирект на `/login` (см. оговорку про API-защиту) |

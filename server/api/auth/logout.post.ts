@@ -1,13 +1,15 @@
 // POST /api/auth/logout — clear the operator session cookie. Requires the CSRF
-// header (same reason as login). Always succeeds (idempotent).
+// header (same reason as login); the status matrix is the pure `decideLogout`.
+// Idempotent (always succeeds when the header is present).
 
-import { CSRF_HEADER, SESSION_COOKIE } from '../../utils/session'
+import { CSRF_HEADER, SESSION_COOKIE, decideLogout } from '../../utils/session'
 
 export default defineEventHandler((event) => {
-  if (!getHeader(event, CSRF_HEADER)) {
-    setResponseStatus(event, 403)
-    return { error: 'missing csrf header' }
+  const decision = decideLogout(Boolean(getHeader(event, CSRF_HEADER)))
+  if (decision.status === 200) {
+    deleteCookie(event, SESSION_COOKIE, { path: '/' })
+    return decision.body
   }
-  deleteCookie(event, SESSION_COOKIE, { path: '/' })
-  return { ok: true }
+  setResponseStatus(event, decision.status)
+  return decision.body
 })

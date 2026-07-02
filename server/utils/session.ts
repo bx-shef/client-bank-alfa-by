@@ -132,3 +132,67 @@ export const SESSION_COOKIE = 'cba_sess'
 /** CSRF header required on state-changing auth calls (custom header ⇒ needs CORS
  * preflight cross-site, so it can't be forged by a plain form POST). */
 export const CSRF_HEADER = 'x-cba-auth'
+
+// --- Pure route decisions --------------------------------------------------
+// The /api/auth/* handlers do only the h3 I/O (read header/body/cookie, then
+// setCookie/setResponseStatus); the status matrix lives here so it is unit-
+// testable without a server (same thin-route pattern as settingsHandler.ts).
+
+/** Outcome of a login attempt: a status + JSON body, plus the cookie to set on
+ * success. `creds: null` (from the handler) means an unparseable body → 400. */
+export type LoginDecision
+  = | { status: 503 | 403 | 400 | 401, body: { error: string } }
+    | { status: 200, body: { ok: true, user: string, exp: number }, cookie: { name: string, value: string, maxAgeSec: number } }
+
+/**
+ * Decide the POST /api/auth/login outcome. Order: not configured → 503; missing
+ * CSRF header → 403; unparseable body (`creds === null`) → 400; bad credentials →
+ * 401; else 200 with the signed session cookie (value + max-age in seconds).
+ * The config/CSRF checks run before the body check, so the handler may read the
+ * body unconditionally without changing the 503/403 precedence.
+ */
+export function decideLogin(
+  cfg: AuthConfig,
+  hasCsrf: boolean,
+  creds: { user: string, password: string } | null,
+  nowMs: number
+): LoginDecision {
+  if (!isAuthConfigured(cfg)) return { status: 503, body: { error: 'auth not configured' } }
+  if (!hasCsrf) return { status: 403, body: { error: 'missing csrf header' } }
+  if (!creds) return { status: 400, body: { error: 'invalid body' } }
+  if (!checkCredentials(creds.user, creds.password, cfg)) return { status: 401, body: { error: 'invalid credentials' } }
+  const exp = nowMs + cfg.ttlMs
+  return {
+    status: 200,
+    body: { ok: true, user: cfg.user, exp },
+    cookie: { name: SESSION_COOKIE, value: signSession({ sub: cfg.user, exp }, cfg.secret), maxAgeSec: Math.floor(cfg.ttlMs / 1000) }
+  }
+}
+
+/** Outcome of a logout attempt (403 without the CSRF header, else 200). */
+export type LogoutDecision = { status: 200, body: { ok: true } } | { status: 403, body: { error: string } }
+
+/** Decide the POST /api/auth/logout outcome — requires the CSRF header (403
+ * otherwise); always succeeds and idempotently clears the cookie on 200. */
+export function decideLogout(hasCsrf: boolean): LogoutDecision {
+  return hasCsrf ? { status: 200, body: { ok: true } } : { status: 403, body: { error: 'missing csrf header' } }
+}
+
+/** GET /api/auth/session response for the client guard. */
+export interface SessionStatus {
+  /** Login is configured (a password is set). `false` ⇒ gated pages are open. */
+  configured: boolean
+  authenticated: boolean
+  user?: string
+}
+
+/** Session status for GET /api/auth/session (the client guard). `configured:false`
+ * ⇒ login disabled (gated pages open). Reads only the signed cookie value. */
+export function sessionStatus(cfg: AuthConfig, cookieValue: string | undefined, nowMs: number): SessionStatus {
+  const payload = verifySession(cookieValue, cfg.secret, nowMs)
+  return {
+    configured: isAuthConfigured(cfg),
+    authenticated: Boolean(payload),
+    ...(payload ? { user: payload.sub } : {})
+  }
+}

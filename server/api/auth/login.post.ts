@@ -1,9 +1,11 @@
 // POST /api/auth/login { user, password } — operator login (see docs/AUTH.md).
-// 503 if no password is configured; 401 on bad credentials; on success sets the
-// signed HttpOnly session cookie. Requires the CSRF header (a custom header can't
-// be set by a cross-site form POST without a CORS preflight).
+// Thin handler: reads the CSRF header, reads the body only once auth is configured
+// and the CSRF header is present, then delegates the status matrix to the pure
+// `decideLogin` (503/403/400/401/200) and sets the signed HttpOnly session cookie
+// on success. The CSRF header can't be set by a cross-site form POST without a
+// CORS preflight.
 
-import { CSRF_HEADER, SESSION_COOKIE, checkCredentials, isAuthConfigured, resolveAuthConfig, signSession } from '../../utils/session'
+import { CSRF_HEADER, decideLogin, isAuthConfigured, resolveAuthConfig } from '../../utils/session'
 
 function isSecure(event: Parameters<typeof getHeader>[0]): boolean {
   const proto = (getHeader(event, 'x-forwarded-proto') || getRequestProtocol(event) || '').split(',')[0]!.trim()
@@ -12,35 +14,31 @@ function isSecure(event: Parameters<typeof getHeader>[0]): boolean {
 
 export default defineEventHandler(async (event) => {
   const cfg = resolveAuthConfig(process.env)
-  if (!isAuthConfigured(cfg)) {
-    setResponseStatus(event, 503)
-    return { error: 'auth not configured' }
+  const hasCsrf = Boolean(getHeader(event, CSRF_HEADER))
+  // Only touch the request body once the cheap gates pass — an unconfigured or
+  // CSRF-less caller must not be able to force body parsing. `creds` stays null
+  // otherwise, and decideLogin returns 503/403 before it ever checks creds.
+  let creds: { user: string, password: string } | null = null
+  if (isAuthConfigured(cfg) && hasCsrf) {
+    try {
+      const body = (await readBody(event)) as { user?: unknown, password?: unknown } | null
+      creds = { user: String(body?.user ?? ''), password: String(body?.password ?? '') }
+    } catch {
+      creds = null // unparseable → decideLogin maps to 400
+    }
   }
-  if (!getHeader(event, CSRF_HEADER)) {
-    setResponseStatus(event, 403)
-    return { error: 'missing csrf header' }
+
+  const decision = decideLogin(cfg, hasCsrf, creds, Date.now())
+  if (decision.status === 200) {
+    setCookie(event, decision.cookie.name, decision.cookie.value, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isSecure(event),
+      path: '/',
+      maxAge: decision.cookie.maxAgeSec
+    })
+    return decision.body
   }
-  let user: string
-  let password: string
-  try {
-    const body = (await readBody(event)) as { user?: unknown, password?: unknown } | null
-    user = String(body?.user ?? '')
-    password = String(body?.password ?? '')
-  } catch {
-    setResponseStatus(event, 400)
-    return { error: 'invalid body' }
-  }
-  if (!checkCredentials(user, password, cfg)) {
-    setResponseStatus(event, 401)
-    return { error: 'invalid credentials' }
-  }
-  const exp = Date.now() + cfg.ttlMs
-  setCookie(event, SESSION_COOKIE, signSession({ sub: cfg.user, exp }, cfg.secret), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecure(event),
-    path: '/',
-    maxAge: Math.floor(cfg.ttlMs / 1000)
-  })
-  return { ok: true, user: cfg.user, exp }
+  setResponseStatus(event, decision.status)
+  return decision.body
 })

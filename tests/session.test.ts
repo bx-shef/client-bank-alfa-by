@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   authStartupWarning,
   checkCredentials,
+  decideLogin,
+  decideLogout,
   isAuthConfigured,
   operatorAllowed,
   resolveAuthConfig,
+  sessionStatus,
   signSession,
   verifySession
 } from '../server/utils/session'
@@ -115,6 +118,66 @@ describe('authStartupWarning', () => {
   it('never leaks the password or secret in the warning text', () => {
     const w = authStartupWarning({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 's3cret-pw' })
     expect(w).not.toMatch(/s3cret-pw/)
+  })
+})
+
+// The /api/auth/* route status matrix (the handlers only do the h3 I/O), #65.
+describe('decideLogin', () => {
+  const cfg = resolveAuthConfig({ PUBLIC_PAGE_BASIC_AUTH_USER: 'operator', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })
+  const none = resolveAuthConfig({})
+  const now = 1_700_000_000_000
+  const ok = { user: 'operator', password: 'pw' }
+
+  it('503 when auth is not configured — even before the body/CSRF checks', () => {
+    expect(decideLogin(none, true, ok, now).status).toBe(503)
+    expect(decideLogin(none, false, null, now).status).toBe(503) // config check wins
+  })
+  it('403 when the CSRF header is missing — even with an unparseable body', () => {
+    expect(decideLogin(cfg, false, ok, now).status).toBe(403)
+    expect(decideLogin(cfg, false, null, now).status).toBe(403) // CSRF check wins over 400
+  })
+  it('400 on an unparseable body (creds null), after config+CSRF pass', () => {
+    expect(decideLogin(cfg, true, null, now).status).toBe(400)
+  })
+  it('401 on wrong credentials', () => {
+    expect(decideLogin(cfg, true, { user: 'operator', password: 'nope' }, now).status).toBe(401)
+    expect(decideLogin(cfg, true, { user: 'x', password: 'pw' }, now).status).toBe(401)
+  })
+  it('200 with a verifiable session cookie on correct credentials', () => {
+    const d = decideLogin(cfg, true, ok, now)
+    expect(d.status).toBe(200)
+    if (d.status !== 200) throw new Error('unreachable')
+    expect(d.body).toEqual({ ok: true, user: 'operator', exp: now + cfg.ttlMs })
+    expect(d.cookie.name).toBe('cba_sess')
+    expect(d.cookie.maxAgeSec).toBe(Math.floor(cfg.ttlMs / 1000))
+    // The cookie is a valid signed session for this secret.
+    expect(verifySession(d.cookie.value, cfg.secret, now)).toEqual({ sub: 'operator', exp: now + cfg.ttlMs })
+  })
+})
+
+describe('decideLogout', () => {
+  it('403 without the CSRF header, 200 with it', () => {
+    expect(decideLogout(false)).toEqual({ status: 403, body: { error: 'missing csrf header' } })
+    expect(decideLogout(true)).toEqual({ status: 200, body: { ok: true } })
+  })
+})
+
+describe('sessionStatus', () => {
+  const cfg = resolveAuthConfig({ PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })
+  const now = 1_700_000_000_000
+
+  it('authenticated with a valid cookie (includes user)', () => {
+    const cookie = signSession({ sub: 'operator', exp: now + 1000 }, cfg.secret)
+    expect(sessionStatus(cfg, cookie, now)).toEqual({ configured: true, authenticated: true, user: 'operator' })
+  })
+  it('configured but not authenticated on a missing/invalid/expired cookie (no user key)', () => {
+    expect(sessionStatus(cfg, undefined, now)).toEqual({ configured: true, authenticated: false })
+    expect(sessionStatus(cfg, 'garbage', now)).toEqual({ configured: true, authenticated: false })
+    const expired = signSession({ sub: 'operator', exp: now - 1 }, cfg.secret)
+    expect(sessionStatus(cfg, expired, now)).toEqual({ configured: true, authenticated: false })
+  })
+  it('reports configured:false when no password is set (gated pages open)', () => {
+    expect(sessionStatus(resolveAuthConfig({}), undefined, now)).toEqual({ configured: false, authenticated: false })
   })
 })
 
