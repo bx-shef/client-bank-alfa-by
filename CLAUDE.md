@@ -253,6 +253,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `.env.alfabankby` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
   - `scripts/prior-oauth-test.mjs` (`pnpm prior:test`) — живой прогон Open Banking (СПР) Приорбанка
     по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
+  - **Оба банк-скрипта импортят чистые OAuth-ядра напрямую** (`alfaOauth.ts`/`priorOauth.ts`) —
+    инлайн-копий билдеров URL/тел/claims больше нет, дрейф невозможен by construction (#45; раньше
+    так возник баг auth Альфы #26). Node стрипает `.ts`-типы на лету (`--experimental-strip-types`
+    в `oauth:test`/`prior:test`; ядра без импортов, лоадер не нужен). RS256-подпись и `node:crypto` —
+    у Приора локально. Реальный путь скриптов теперь покрыт тестами ядер (`tests/{alfa,prior}Oauth.test.ts`).
   - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор ручной выписки через
     канонический диспетчер `manualImport.ts` (оба формата: client-bank `***** ^Type=` и
     `1CClientBankExchange`) → печатает единый `StatementItem[]` (+ секционный вид для текстового

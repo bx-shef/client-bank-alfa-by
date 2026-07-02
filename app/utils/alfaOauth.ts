@@ -79,8 +79,8 @@ export function parseOAuthCallback(
 /** Form body for exchanging an authorization `code` for tokens. Caller POSTs it
  * to `${baseUrl}/token`. Client credentials go in the BODY (client_id +
  * client_secret) — the canonical method per Alfa's documented example (#26);
- * the recon script scripts/alfa-oauth-test.mjs is aligned to the same. The
- * returned body contains `client_secret` — never log it. */
+ * the recon script scripts/alfa-oauth-test.mjs imports this builder directly, so
+ * it can't drift (#45). The returned body contains `client_secret` — never log it. */
 export function buildTokenExchangeBody(
   config: Pick<AlfaOAuthConfig, 'clientId' | 'redirectUri'>,
   code: string,
