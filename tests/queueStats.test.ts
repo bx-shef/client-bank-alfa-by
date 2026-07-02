@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readQueueCounts } from '../server/queue/stats'
+import { checkQueueToken, readQueueCounts } from '../server/queue/stats'
 import { QUEUE_NAMES } from '../server/queue/topology'
+
+describe('checkQueueToken (header-only diagnostics guard)', () => {
+  it('accepts only the exact expected token', () => {
+    expect(checkQueueToken('secret', 'secret')).toBe(true)
+    expect(checkQueueToken('secret', 'nope')).toBe(false)
+    expect(checkQueueToken('secret', 'secre')).toBe(false)
+  })
+  it('denies when the expected token is empty (fail-closed)', () => {
+    expect(checkQueueToken('', '')).toBe(false)
+    expect(checkQueueToken('', 'anything')).toBe(false)
+  })
+})
 
 describe('readQueueCounts', () => {
   it('returns { enabled: false } and no queues when the bus is off', async () => {

@@ -5,13 +5,12 @@
 // uses the header. nginx also denies it publicly. The operator/browser path is the
 // session-gated GET /api/ops/queues. Deeper telemetry (Prometheus/Grafana) — #78.
 
-import { safeEqual } from '../../app/utils/b24Events'
-import { readQueueCounts } from '../queue/stats'
+import { checkQueueToken, readQueueCounts } from '../queue/stats'
 
 export default defineEventHandler(async (event) => {
   const expected = process.env.B24_APPLICATION_TOKEN?.trim() || ''
   const provided = (getHeader(event, 'x-check-token') || '').trim()
-  if (!expected || !safeEqual(provided, expected)) {
+  if (!checkQueueToken(expected, provided)) {
     setResponseStatus(event, 403)
     return { error: 'forbidden' }
   }

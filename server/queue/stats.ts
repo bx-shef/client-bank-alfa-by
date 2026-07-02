@@ -4,14 +4,27 @@
 // GET /api/ops/queues (operator session, the /queues monitor). DI over the queue
 // accessors so it is unit-testable without Redis.
 
+import { safeEqual } from '../../app/utils/b24Events'
 import { getQueue, queueEnabled } from './connection'
 import { QUEUE_NAMES, type QueueName } from './topology'
 
+// Server-side snapshot type. Mirrors the client `QueuesSnapshot` in
+// app/utils/queueChart.ts (structurally compatible; the page bridges via
+// `$fetch<QueuesSnapshot>`). Kept decoupled here (no reach into app/utils).
 export interface QueuesSnapshot {
   /** false when the queue bus is off (no REDIS_URL) — the monitor shows a note. */
   enabled: boolean
   /** Per-queue job counts, keyed by queue name. Empty when disabled. */
   queues: Record<string, unknown>
+}
+
+/**
+ * Constant-time check of the diagnostics token for GET /api/queues. Header-only
+ * (`X-Check-Token`) — no `?token=` fallback (a token in a URL leaks into access
+ * logs / browser history). Empty expected token ⇒ always denied (fail-closed).
+ */
+export function checkQueueToken(expected: string, provided: string): boolean {
+  return expected.length > 0 && safeEqual(provided, expected)
 }
 
 /**
