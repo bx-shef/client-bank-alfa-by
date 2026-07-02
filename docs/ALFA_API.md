@@ -1,6 +1,6 @@
 # API Альфа-Банка Беларусь — справка
 
-> Last reviewed: 2026-06-30
+> Last reviewed: 2026-07-02
 
 Краткая карточка: что используем из Open API Альфа-Банка и с какими параметрами.
 Реализация контракта — `app/utils/alfaOauth.ts` (OAuth) и `app/utils/alfaStatement.ts`
@@ -36,6 +36,14 @@
 | (2) Callback | `→ {redirect_uri}?code=…&state=…` | проверяем `state` (CSRF), `code` короткоживущий — меняем сразу |
 | (3) Token | `POST {base}/token` | `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret` |
 | (4) Refresh | `POST {base}/token` | `grant_type=refresh_token`, `refresh_token`, `client_id`, `client_secret` |
+
+> **Аутентификация токен-эндпоинта — канон: креды в теле запроса** (`client_id` +
+> `client_secret` в `application/x-www-form-urlencoded`), как в примере документации
+> Альфы и в `app/utils/alfaOauth.ts`. Скрипт `scripts/alfa-oauth-test.mjs` приведён к
+> тому же способу (#26). На **sandbox** прошёл и вариант HTTP Basic (`Authorization:
+> Basic base64(id:secret)`) — т.е. песочница принимает оба; на **прод** способ
+> подтвердить у Альфы (`api@alfa-bank.by`) на BY-прогоне. `client_secret` —
+> только в теле, никогда в URL/логах.
 
 - Ответ токена: `access_token`, `token_type` (default `Bearer`), `expires_in=3600` (1 ч, в коде —
   дефолт `parseTokenResponse`), `refresh_token`. TTL refresh — `ALFA_REFRESH_TOKEN_TTL_SEC` ≈ 36000 с
@@ -115,10 +123,9 @@ GET {base}/authorize?response_type=code&client_id={clientId}
 
 ```http
 POST {base}/token
-Authorization: Basic base64(clientId:clientSecret)
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=authorization_code&code={code}&redirect_uri={redirectUri}
+grant_type=authorization_code&code={code}&redirect_uri={redirectUri}&client_id={clientId}&client_secret={clientSecret}
 ```
 ```jsonc
 // HTTP 200
@@ -176,10 +183,9 @@ Authorization: Bearer {access_token}
 
 ```http
 POST {base}/token
-Authorization: Basic base64(clientId:clientSecret)
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=refresh_token&refresh_token={refresh_token}
+grant_type=refresh_token&refresh_token={refresh_token}&client_id={clientId}&client_secret={clientSecret}
 ```
 ```jsonc
 // HTTP 200 → новый access_token + refresh_token (expires_in: 3600)

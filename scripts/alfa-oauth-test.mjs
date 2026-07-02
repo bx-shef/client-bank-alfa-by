@@ -80,18 +80,19 @@ const maskNumber = n => maskNumberPure(n, cfg.full)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-function tokenAuthHeader() {
-  // RFC 6749 §2.3.1 — client credentials as HTTP Basic auth. Never logged.
-  return 'Basic ' + Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64')
-}
-
 async function postToken(form) {
-  const body = new URLSearchParams(form).toString()
+  // Client credentials go in the FORM BODY (client_id + client_secret) — the
+  // canonical method per Alfa's own docs and app/utils/alfaOauth.ts (#26). Not
+  // logged. Merged with the grant params so every /token call carries the creds.
+  const body = new URLSearchParams({
+    ...form,
+    client_id: cfg.clientId,
+    client_secret: cfg.clientSecret
+  }).toString()
   return httpRequest(`${cfg.base}/token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': tokenAuthHeader(),
       'Accept': 'application/json',
       'Content-Length': Buffer.byteLength(body)
     },
@@ -113,9 +114,9 @@ async function apiGet(path, accessToken, query) {
 // --- OAuth helpers ---------------------------------------------------------
 // NOTE: this mirrors the canonical contract in app/utils/alfaOauth.ts (authorize
 // URL, token/refresh bodies). Keep the two in sync by hand when the Alfa OAuth
-// shape changes. One known difference: this script sends client credentials via
-// HTTP Basic auth (see tokenAuthHeader), while alfaOauth.ts puts them in the
-// form body — both are RFC 6749 §2.3.1; reconcile before the backend ships.
+// shape changes. Client-auth method is now aligned (#26): both send client_id +
+// client_secret in the FORM BODY, matching Alfa's documented example. (Sandbox
+// also accepted HTTP Basic — confirm the prod method with Alfa on the BY run.)
 function buildAuthorizeUrl() {
   const q = new URLSearchParams({
     response_type: 'code',
