@@ -125,7 +125,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`normalizePrior`); подтверждено на живом sandbox — см. [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
   - `app/utils/clientBankText.ts` — парсер **формата** текстовой выписки client-bank (CP1251,
     `***** ^Type=`) → секции/строки; для провайдеров `prior-by`/`manual`. Портированный пример,
-    остаточный рефактор (словари ключей/DoS-гард) — issue #19.
+    вход ограничен по размеру (`MAX_CLIENT_BANK_CHARS`, DoS-гард #19); остаточный рефактор
+    (словари ключей) — issue #19.
   - `app/utils/clientBankStatement.ts` — нормализация разобранной текстовой выписки в `StatementItem`
     (`normalizeClientBank` — контракт `StatementNormalizer`; приход/расход, валюта нац/инвалюта,
     контрагент, `account|docId`-дедуп). Провайдер `manual` (и файловый путь `prior-by`) — issue #19.

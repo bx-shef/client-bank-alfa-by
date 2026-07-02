@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { isOneCExchange, parseOneCExchange } from '~/utils/oneCExchange'
+import { MAX_ONEC_EXCHANGE_CHARS, isOneCExchange, parseOneCExchange } from '~/utils/oneCExchange'
 import { currencyFromAccount, normalizeOneC, normalizeOneCDocument } from '~/utils/oneCStatement'
 import { detectManualFormat, normalizeManualStatement } from '~/utils/manualImport'
 
@@ -67,6 +67,13 @@ describe('parseOneCExchange', () => {
 
   it('keeps "=" inside a value (splits on the first "=" only)', () => {
     expect(parsed.documents[0]!['НазначениеПлатежа']).toBe('Оплата по счёту №1 = аванс')
+  })
+
+  it('rejects an oversized input before parsing (DoS guard, #19)', () => {
+    // Guard is `>` (boundary length === maxChars is allowed), throws before splitting.
+    expect(() => parseOneCExchange(ONE_C, ONE_C.length - 1)).toThrow(/too large/)
+    expect(() => parseOneCExchange(ONE_C, ONE_C.length)).not.toThrow()
+    expect(MAX_ONEC_EXCHANGE_CHARS).toBeGreaterThan(1_000_000)
   })
 
   it('throws on a non-1C file and sniffs the marker', () => {

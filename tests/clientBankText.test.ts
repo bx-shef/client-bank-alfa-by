@@ -168,11 +168,12 @@ describe('parseClientBankText — behavior', () => {
   })
 
   it('rejects an oversized input before parsing (DoS guard, #19)', () => {
-    const big = '***** ^Type=400^ ^Acc=BY00^  -  T\n[OUT_PARAM]\n' + 'x'.repeat(50)
+    const valid = '***** ^Type=400^ ^Acc=BY00^  -  T\n[OUT_PARAM]\n^DocDate=01.01.2024^'
     // Tiny explicit cap → throws with a size message, never builds the line array.
-    expect(() => parseClientBankText(big, 16)).toThrow(/too large/)
-    // A valid statement under the cap still parses.
-    expect(() => parseClientBankText(big, 10_000)).not.toThrow()
+    expect(() => parseClientBankText(valid, 16)).toThrow(/too large/)
+    // Boundary: length === maxChars is allowed (guard is `>`, not `>=`).
+    expect(() => parseClientBankText(valid, valid.length)).not.toThrow()
+    expect(() => parseClientBankText(valid, valid.length - 1)).toThrow(/too large/)
     // The default cap is a large, sane number (~20 MB).
     expect(MAX_CLIENT_BANK_CHARS).toBeGreaterThan(1_000_000)
   })
