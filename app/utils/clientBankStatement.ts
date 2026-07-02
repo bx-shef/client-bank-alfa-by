@@ -86,12 +86,23 @@ export function detectStatementCurrency(parsed: ClientBankParsed, ctxCurrency?: 
  * format itself identifies a document ("account + type + date + number").
  */
 export function rowDocId(row: ClientBankRow): string {
-  const explicit = (row.DocID ?? '').trim()
+  // Prefer a truly unique per-operation id: `DocID` (classic exports) or
+  // `OperationID` (the Type=4 "за период" Alfa export). Only when neither is
+  // present fall back to `Num|DocDate` — `Num` is NOT unique across different
+  // operations in Type 4 (two payments can share a Num), so the fallback alone
+  // caused dedup collisions that dropped real operations (issue #73).
+  const explicit = firstOf(row, ['DocID', 'OperationID'])
   if (explicit) return explicit
   const num = (row.Num ?? '').trim()
   const date = (row.DocDate ?? '').trim()
   return num || date ? `${num}|${date}` : ''
 }
+
+/** SWIFT/BIC shape: 6 letters (bank + country) + 2 alnum (location) + optional
+ * 3 alnum (branch). Guards the `Code` alias below — some exports reuse `Code`
+ * for a non-BIC value (e.g. a numeric currency code), which must not be taken
+ * as a BIC (issue #75). */
+const BIC_RE = /^[A-Za-z]{6}[A-Za-z0-9]{2}(?:[A-Za-z0-9]{3})?$/
 
 // Debit/credit field chains. A FOREIGN-currency statement carries BOTH the
 // account-currency (foreign) amount in the `…Q` field AND the BYN equivalent in
@@ -131,13 +142,17 @@ export function normalizeClientBankRow(row: ClientBankRow, account: string, stat
   const purpose = `${row.Nazn ?? ''}${row.Nazn2 ?? ''}`.trim()
 
   // `bank` (counterparty bank NAME) is intentionally unset: the client-bank text
-  // format carries only the counterparty bank BIC (`Cod`), not its name — unlike
-  // Alfa/Prior, whose APIs return the name.
+  // format carries only the counterparty bank BIC (`Cod`, or `Code` in the Type=4
+  // export), not its name — unlike Alfa/Prior, whose APIs return the name. Only a
+  // BIC-shaped token is accepted: `Code` is overloaded (e.g. `Code=156`, a numeric
+  // currency code on Type=600 rows) and must not leak in as a bank id (#75).
+  const bicCandidate = firstOf(row, ['Cod', 'Code'])
+  const bic = BIC_RE.test(bicCandidate) ? bicCandidate : ''
   const counterparty: StatementParty = {
     name: (row.KorName ?? '').trim(),
     unp: digitsOnly(row.KorUNP ?? row.UNNRec ?? ''),
     account: (row.Acc ?? '').trim(),
-    ...(row.Cod ? { bic: row.Cod.trim() } : {})
+    ...(bic ? { bic } : {})
   }
 
   const acceptDate = clientBankDateToIso(row.OpDate)

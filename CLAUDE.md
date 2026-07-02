@@ -130,8 +130,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`normalizeClientBank` — контракт `StatementNormalizer`; приход/расход, валюта нац/инвалюта,
     контрагент, `account|docId`-дедуп). Провайдер `manual` (и файловый путь `prior-by`) — issue #19.
     Проверено на образцах `tests/fixtures/client-bank/` (BYN `Type=400`, CNY `Type=600`) и на реальных
-    `Type=4`-выгрузках: BYN-дефолт для старых 13-значных BY-счетов (`isBelarusianAccount`) + фолбэк
-    ключа дедупа `Num|DocDate`, когда `DocID` отсутствует (`rowDocId`).
+    выгрузках двух форматов: `Type=3` «за день» (`demo-type3-vpsk`) и `Type=4` «за период»
+    (`demo-type4-alfa`). Ключ дедупа (`rowDocId`): `DocID` → `OperationID` (уникальный id в `Type=4`,
+    где `Num` повторяется — иначе коллизия/потеря операции, #73) → фолбэк `Num|DocDate`. BYN-дефолт
+    для старых 13-значных BY-счетов (`isBelarusianAccount`); BIC контрагента из `Cod`/`Code` — только
+    BIC-образный токен (`Code` бывает и числовым кодом валюты).
   - `app/utils/oneCExchange.ts` + `app/utils/oneCStatement.ts` — формат обмена 1С «Клиент-банк»
     (`1CClientBankExchange`, версии 1.01–1.03): парсер секций (`parseOneCExchange`) + нормализатор
     (`normalizeOneC` — контракт `StatementNormalizer`; направление по «наш счёт = плательщик/получатель»,
