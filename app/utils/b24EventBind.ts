@@ -31,6 +31,15 @@ export interface EventBindPlan {
 }
 
 /**
+ * Whether a handler URL is safe to bind: absolute http(s) with a host. A relative
+ * or empty URL (e.g. `NUXT_PUBLIC_SITE_URL` missing in prod) would register a dead
+ * binding B24 could never reach, so the install script refuses it.
+ */
+export function isBindableHandlerUrl(url: string): boolean {
+  return /^https?:\/\/\S+$/i.test(url)
+}
+
+/**
  * @param existing bindings from `event.get` (this app only)
  * @param events   events we want bound (case-insensitive; normalised to upper-case)
  * @param handlerUrl absolute URL of the backend events endpoint

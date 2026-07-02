@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildEventBindCalls, type EventBinding } from '../app/utils/b24EventBind'
+import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '../app/utils/b24EventBind'
 
 const EVENTS = ['ONAPPINSTALL', 'ONAPPUNINSTALL'] as const
 const URL = 'https://bank-import.bx-shef.by/api/b24/events'
@@ -54,5 +54,19 @@ describe('buildEventBindCalls', () => {
     expect(bind).toEqual([
       { method: 'event.bind', params: { event: 'ONAPPUNINSTALL', handler: URL } }
     ])
+  })
+})
+
+describe('isBindableHandlerUrl', () => {
+  it('accepts absolute http(s) URLs', () => {
+    expect(isBindableHandlerUrl(URL)).toBe(true)
+    expect(isBindableHandlerUrl('http://localhost:3000/api/b24/events')).toBe(true)
+  })
+
+  it('rejects empty and relative URLs (the NUXT_PUBLIC_SITE_URL-missing case)', () => {
+    // appUrl empty in prod → handler is just the relative path.
+    expect(isBindableHandlerUrl('')).toBe(false)
+    expect(isBindableHandlerUrl('/api/b24/events')).toBe(false)
+    expect(isBindableHandlerUrl('bank-import.bx-shef.by/api/b24/events')).toBe(false)
   })
 })

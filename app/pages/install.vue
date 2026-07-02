@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { B24_BOUND_EVENTS, B24_EVENT_HANDLER_PATH } from '~/config/b24'
-import { buildEventBindCalls, type EventBinding } from '~/utils/b24EventBind'
+import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
@@ -91,7 +91,7 @@ async function bindEvents(): Promise<void> {
 
   // A relative/empty handler URL would register a dead binding B24 could never
   // reach. Refuse rather than ship a broken portal (needs NUXT_PUBLIC_SITE_URL).
-  if (!appUrl || !/^https?:\/\//i.test(eventHandlerUrl.value)) {
+  if (!isBindableHandlerUrl(eventHandlerUrl.value)) {
     throw new Error(`Обработчик событий не абсолютный (${eventHandlerUrl.value || 'пусто'}). Задайте NUXT_PUBLIC_SITE_URL при сборке.`)
   }
 
@@ -227,7 +227,7 @@ onMounted(runInstall)
               <span class="break-all">{{ diagnostics.memberId || '—' }}</span>
               <span class="text-(--ui-color-base-3)">targetOrigin:</span>
               <span class="break-all">{{ diagnostics.targetOrigin }}</span>
-              <span class="text-(--ui-color-base-3)">Событий обработчик:</span>
+              <span class="text-(--ui-color-base-3)">Обработчик событий:</span>
               <span class="break-all">{{ diagnostics.eventHandler }}</span>
               <template v-if="diagnostics.appInfo">
                 <span class="text-(--ui-color-base-3)">App:</span>
