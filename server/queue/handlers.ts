@@ -23,22 +23,29 @@ export interface HandlerDeps {
   writeActivity: (item: StatementItem, companyId: string | null) => Promise<void>
   /** Post a chat message about one operation, if the rules allow (stage 6). */
   notifyChat: (item: StatementItem) => Promise<void>
-  /** Remove a portal's data on uninstall-with-purge. */
+  /** Register a portal on ONAPPINSTALL — decrypt the refresh blob, upsert the token row. */
+  savePortal: (job: EventJob) => Promise<void>
+  /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges). */
   deletePortal: (memberId: string) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
 }
 
-/** Follow-up after a verified B24 event (token save already happened synchronously
- *  in the webhook). Install: hook for seeding an initial fetch later. Uninstall:
- *  belt-and-suspenders cleanup. */
-export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<{ kind: string, cleaned: boolean }> {
+/** Apply a verified B24 event to the store — the consumer is the SINGLE writer
+ *  (the webhook only verifies + enqueues). Uninstall removes everything for the
+ *  portal (always). Install registers it (persists credentials). */
+export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<{ kind: string, cleaned: boolean, registered: boolean }> {
   if (job.kind === 'ONAPPUNINSTALL') {
     await deps.deletePortal(job.memberId)
-    return { kind: job.kind, cleaned: true }
+    return { kind: job.kind, cleaned: true, registered: false }
   }
-  // ONAPPINSTALL: nothing to seed yet (no accounts configured) — stage 4/5 hook.
-  return { kind: job.kind, cleaned: false }
+  // ONAPPINSTALL: register the portal. `credentials` is always present for a
+  // register job built by the webhook; guard defensively for a malformed job.
+  if (job.credentials) {
+    await deps.savePortal(job)
+    return { kind: job.kind, cleaned: false, registered: true }
+  }
+  return { kind: job.kind, cleaned: false, registered: false }
 }
 
 /** Fetch a statement window, then hand the normalized batch to crm-sync. */

@@ -147,13 +147,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md) (модель по backend `bx-synapse`).
 - **Backend (Nitro, `server/`):** серверная часть в том же приложении (как `bx-synapse`).
   - `server/api/b24/events.post.ts` — эндпоинт вебхуков Б24: `readRawBody` → `parseBracketForm`
-    → `processB24Event`; на установке пишет токены, на удалении (`CLEAN=1`) стирает портал.
+    → `processB24Event` (**только верификация, без записи в БД**) → кладёт пакет в очередь `b24-events`
+    (register/unregister; refresh шифруется перед Redis). **Консьюмер — единственный писатель.** Очередь
+    обязательна: не удалось положить (Redis нет/упал) → **503**, чтобы Б24 повторил (без потери события).
   - `server/api/health.get.ts` — публичный liveness-эндпоинт `GET /api/health` →
     `{ status, time, commit, commitUrl }` (коммит = `NUXT_PUBLIC_COMMIT_SHA`, как в подвале).
     Без секретов; на нём же построен docker `healthcheck` backend'а. Чистый билдер —
     `healthInfo` в `app/utils/build.ts` (покрыт тестами).
-  - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` (DI side-effects):
-    вердикт `application_token` → HTTP 200/400/403/503 (fail-closed). Покрыт тестами.
+  - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
+    (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
+    `unregister`); ничего не пишет. Роут кладёт `action` в очередь, консьюмер применяет. **Удаление
+    приложения всегда стирает всё** для портала (флаг `CLEAN` не смотрим). Покрыт тестами.
   - `server/utils/tokenStore.ts` — хранилище токенов портала над инъектируемым `QueryFn`
     (`save`/`get`/`getApplicationToken`/`delete`, write-once `application_token`). Тесты на fake-query.
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
@@ -171,10 +175,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     - `connection.ts` — ленивый `getQueue(name)`; передаёт BullMQ **опции** (парсит `REDIS_URL`), а не
       ioredis-инстанс — нет прямой зависимости от ioredis и связки версий. Гуард `queueEnabled()`.
     - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).
-    - `handlers.ts` — **чистые обработчики с DI** (тесты): fetch/parse → нормализованный батч в `crm-sync`;
-      `crm-sync` дедупит (`account|docId`), делит приход/расход, на операцию: поиск компании →
-      универсальное дело → чат. Транспорты (Альфа/Приор/парсер/REST) — заглушки до стадий 3–6.
-    - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`); `cron.ts` — план опроса
+    - `handlers.ts` — **чистые обработчики с DI** (тесты): `handleEventJob` регистрирует
+      (`savePortal`, ONAPPINSTALL) / удаляет (`deletePortal`, ONAPPUNINSTALL — всегда) портал;
+      fetch/parse → нормализованный батч в `crm-sync`; `crm-sync` дедупит (`account|docId`), делит
+      приход/расход, на операцию: поиск компании → универсальное дело → чат. Транспорты (Альфа/Приор/парсер/REST) — заглушки до стадий 3–6.
+    - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
+      refresh и пишет `saveToken`); `cron.ts` — план опроса
       (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`).
     - `server/plugins/queue.ts` — на старте backend поднимает воркеры **в процессе** и (если
       `DEMO_LOAD_N>0`) крон каждые `CRON_INTERVAL_MIN` кладёт синтетические fetch-джобы (демо потока).

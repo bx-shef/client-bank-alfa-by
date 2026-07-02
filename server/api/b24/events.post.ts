@@ -1,30 +1,37 @@
 // Bitrix24 outgoing-event webhook endpoint: POST /api/b24/events.
-// Reads the raw (form-urlencoded, PHP-bracket) body, routes it through the pure
-// handler, and persists/removes the portal's tokens via the DB store. Verifies
-// every call by application_token (fail-closed) — see docs/B24_EVENTS.md.
+// Reads the raw (form-urlencoded, PHP-bracket) body, VERIFIES it (fail-closed by
+// application_token), and enqueues the store mutation — it never writes the DB
+// itself. The b24-events consumer is the single writer: it registers the portal
+// (ONAPPINSTALL) or removes everything for it (ONAPPUNINSTALL). See docs/B24_EVENTS.md.
+//
+// Because persistence is async, the queue is REQUIRED: if we can't enqueue (Redis
+// down / not configured) we return 503 so Bitrix24 retries — no silent data loss.
 
 import type { PortalCredentials } from '../../../app/types/b24Events'
 import { parseBracketForm } from '../../../app/utils/b24Events'
 import { dbQuery } from '../../db/client'
 import { processB24Event } from '../../utils/b24EventsHandler'
-import { deleteToken, getApplicationToken, saveToken } from '../../utils/tokenStore'
-import type { PortalToken } from '../../utils/tokenStore'
+import { getApplicationToken } from '../../utils/tokenStore'
+import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent } from '../../queue/producers'
+import type { EventJob } from '../../queue/topology'
 
-/** Map the event's portal credentials to a stored token row. `expiresAt` is
- * stamped from receipt time (now) + the token TTL — not from parse time.
- * `expiresIn` is coerced to a number (it arrives as a string from the
- * form-encoded body); a missing value defaults to 3600s, but an explicit `0`
- * is honoured (treated as "already expired", not "use default"). */
-function toPortalToken(c: PortalCredentials): PortalToken {
-  const ttl = c.expiresIn === undefined ? 3600 : Number(c.expiresIn)
+/** Build the register EventJob, encrypting the refresh token so it never travels
+ *  through Redis in clear. `expiresAt` is stamped from receipt time + the TTL
+ *  (`expires_in` arrives as a string; missing → 3600s, explicit 0 honoured). */
+function registerJob(creds: PortalCredentials): EventJob {
+  const ttl = creds.expiresIn === undefined ? 3600 : Number(creds.expiresIn)
   return {
-    memberId: c.memberId,
-    domain: c.domain,
-    accessToken: c.accessToken ?? '',
-    refreshToken: c.refreshToken ?? '',
-    expiresAt: Date.now() + (Number.isFinite(ttl) ? ttl : 3600) * 1000,
-    applicationToken: c.applicationToken
+    memberId: creds.memberId,
+    domain: creds.domain,
+    kind: 'ONAPPINSTALL',
+    ts: '',
+    credentials: {
+      accessToken: creds.accessToken ?? '',
+      refreshTokenEnc: encryptSecret(creds.refreshToken ?? ''),
+      expiresAt: Date.now() + (Number.isFinite(ttl) ? ttl : 3600) * 1000,
+      applicationToken: creds.applicationToken
+    }
   }
 }
 
@@ -33,55 +40,39 @@ export default defineEventHandler(async (event) => {
   try {
     const raw = (await readRawBody(event)) || ''
     const payload = parseBracketForm(raw)
+    const ts = String((payload as { ts?: unknown }).ts ?? '')
 
+    // Verify only (reads the stored token to authenticate an uninstall) — no writes.
     const result = await processB24Event(payload, {
       envToken,
-      loadStoredToken: memberId => getApplicationToken(dbQuery, memberId),
-      saveCredentials: async creds => saveToken(dbQuery, toPortalToken(creds)),
-      deletePortal: memberId => deleteToken(dbQuery, memberId)
+      loadStoredToken: memberId => getApplicationToken(dbQuery, memberId)
     })
 
-    if (result.status === 200 && result.body.event === 'ONAPPINSTALL') {
-      // member_id is a non-secret routing id (see docs/B24_EVENTS.md); log it so an
-      // operator can copy it for the server-side check (scripts/check-app-option.sh).
-      console.info('[b24 events] ONAPPINSTALL member_id=%s', result.body.memberId)
-      // Multi-tenant model: application_token is delivered per portal in this event
-      // and stored write-once; later events verify against the stored value. So a
-      // bootstrap install (no shared env token) is the normal, expected path — not
-      // a misconfiguration. (A single env token can't match N portals' tokens.)
-      if (!envToken) {
-        console.info('[b24 events] ONAPPINSTALL bootstrapped — application_token stored for this portal')
-      }
-    }
+    if (result.status === 200 && result.action) {
+      const domain = String((payload as { auth?: { domain?: string } }).auth?.domain || '')
+      const job: EventJob = result.action.type === 'register'
+        ? { ...registerJob(result.action.credentials), domain, ts }
+        : { memberId: result.action.memberId, domain, kind: 'ONAPPUNINSTALL', ts }
 
-    // Fan the verified event onto the b24-events queue for async follow-up. The
-    // token save above stays the authoritative synchronous step; this is best-effort
-    // (no-op without Redis) and never changes the HTTP result the portal sees.
-    if (result.status === 200 && (result.body.event === 'ONAPPINSTALL' || result.body.event === 'ONAPPUNINSTALL')) {
-      const auth = (payload as { auth?: { member_id?: string, domain?: string }, ts?: string }).auth
-      const memberId = String(result.body.memberId || auth?.member_id || '')
-      if (memberId) {
-        try {
-          await enqueueEvent({
-            memberId,
-            domain: String(auth?.domain || ''),
-            kind: result.body.event as 'ONAPPINSTALL' | 'ONAPPUNINSTALL',
-            ts: String((payload as { ts?: unknown }).ts ?? '')
-          })
-        } catch (err) {
-          console.error('[b24 events] enqueue failed:', (err as Error)?.message)
-        }
+      // The consumer is the single writer — persistence is async. If the queue can't
+      // take the job, fail closed with 503 so Bitrix retries (never lose the event).
+      const enqueued = await enqueueEvent(job)
+      if (!enqueued) {
+        console.error('[b24 events] queue unavailable — cannot persist %s member_id=%s', job.kind, job.memberId)
+        setResponseStatus(event, 503)
+        return { error: 'queue unavailable, retry later' }
       }
+      console.info('[b24 events] %s member_id=%s enqueued', job.kind, job.memberId)
     }
 
     setResponseStatus(event, result.status)
     return result.body
   } catch (err) {
-    // DB down / decrypt failure / unexpected: log server-side (no secrets — the
-    // message may carry a memberId but never a token) and return a neutral body.
-    // Nitro would otherwise put err.message in the response even in production.
+    // Enqueue threw (Redis down) / malformed / unexpected: log server-side (no
+    // secrets — the message may carry a memberId but never a token) and return 503
+    // so Bitrix retries. Nitro would otherwise leak err.message into the response.
     console.error('[b24 events] handler error:', (err as Error)?.message)
-    setResponseStatus(event, 500)
-    return { error: 'internal error' }
+    setResponseStatus(event, 503)
+    return { error: 'internal error, retry later' }
   }
 })

@@ -48,10 +48,13 @@
   `/install` биндит `ONAPPINSTALL`/`ONAPPUNINSTALL` (`event.bind`) до `installFinish`. **Проверено
   вживую**: приложение зарегистрировано и установлено на двух порталах — токены легли в `portal_tokens`
   с разными per-portal `application_token` (мультитенант-bootstrap работает).
-- **Backend (Nitro, слайс)**: эндпоинт вебхуков `POST /api/b24/events` (install/uninstall,
-  fail-closed вердикт `application_token`), хранилище токенов портала в Postgres (refresh шифруется
-  AES-256-GCM), настройка уровня приложения через `app.option` по фрейм-токену, health-эндпоинт
-  `GET /api/health`, валидация env на старте (`envCheck`).
+- **Backend (Nitro, слайс)**: эндпоинт вебхуков `POST /api/b24/events` — **верифицирует и кладёт
+  пакет в очередь `b24-events`, сам в БД не пишет**; консьюмер регистрирует/удаляет портал (единственный
+  писатель). Fail-closed вердикт `application_token`; хранилище токенов портала в Postgres (refresh
+  шифруется AES-256-GCM, в т.ч. в пакете очереди); настройка уровня приложения через `app.option` по
+  фрейм-токену; health-эндпоинт `GET /api/health`; валидация env на старте (`envCheck`).
+  **Политика удаления:** любой `ONAPPUNINSTALL` стирает всё, что связано с приложением на портале
+  (флаг «очистить данные» не смотрим). **Приём событий требует Redis** (нет очереди → эндпоинт 503 → Б24 повторит).
 - **Шина очередей (BullMQ + Redis), фундамент (Фаза 1)**: контракты очередей `server/queue/topology.ts`
   (имена очередей `b24-events`/`bank-fetch`/`file-parse`, payload'ы, идемпотентные `jobId`) +
   `server/queue/connection.ts` (ленивый `getQueue`, гуард `REDIS_URL`); Redis в изолированной сети
