@@ -4,7 +4,7 @@ import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
 } from '../server/queue/handlers'
 import {
-  DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoItems, planFetches
+  DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoItems, isDemoAccount, planFetches
 } from '../server/queue/cron'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 
@@ -194,6 +194,12 @@ describe('cron helpers', () => {
       [{ memberId: 'M', providerId: 'alfa-by', accounts: ['A1', 'A2'] }], '2026-07-01', '2026-07-02'
     )
     expect(jobs.map(j => j.account)).toEqual(['A1', 'A2'])
+  })
+  it('isDemoAccount flags only DEMO- accounts (the live CRM gate)', () => {
+    expect(isDemoAccount('DEMO-t1-1')).toBe(true)
+    expect(isDemoAccount(`${DEMO_ACCOUNT_PREFIX}x`)).toBe(true)
+    expect(isDemoAccount('BY13REAL')).toBe(false)
+    expect(isDemoAccount('')).toBe(false)
   })
   it('buildDemoFetchJobs makes N demo jobs, demoItems emits ops only for demo accounts', () => {
     const jobs = buildDemoFetchJobs('demo-portal', 3, '2026-07-01', 't1')

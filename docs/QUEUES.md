@@ -74,8 +74,9 @@ flowchart LR
   частичной записи), поэтому есть **персистентный стор** `{account|docId → activityId}`
   ([issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9), `activityDedupStore.ts`),
   сверяемый **read-before-write**: `handleCrmSyncJob` через `getActivityId` пропускает уже
-  записанные операции, а после записи зовёт `rememberActivity`. Стор и проводка **готовы**;
-  сам `writeActivity` пока заглушка — до подключения REST-транспорта записи в CRM (стадия 4).
+  записанные операции, а после записи зовёт `rememberActivity`. Транспорт записи **живой**:
+  `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`, с
+  гейтом демо-счётов (`isDemoAccount`) — демо-нагрузка в реальный портал не пишет.
 - **Чистые обработчики с DI.** [`handlers.ts`](../server/queue/handlers.ts) — вся логика
   (`handleFetchJob`/`handleParseJob`/`handleCrmSyncJob`/`handleEventJob`) принимает `HandlerDeps`
   (сайд-эффекты инъектируются), поэтому оркестрация покрыта тестами с фейками. Реальные

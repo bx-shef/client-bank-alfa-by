@@ -94,7 +94,7 @@ export function buildActivityDescription(item: StatementItem): string {
  * NB: `deadline` must be a TZ-aware ISO 8601 datetime in the portal's timezone
  * (Belarus = UTC+3). A bare UTC midnight (`…T00:00:00.000Z`) can render as the
  * previous day in the portal — the normalizer/engine is responsible for passing
- * a portal-local value. Verified against a live portal at stage 4 (see issues).
+ * a portal-local value. TO BE VERIFIED on a live portal; TZ fix tracked in #10.
  */
 export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef): TodoActivityParams {
   return {

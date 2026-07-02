@@ -108,12 +108,13 @@
    пройдёт повторно. Нужен **персистентный `{dedupKey→activityId}`** (issue #9), сверяемый
    **до записи** (read-before-write), иначе рестарт воркера задвоит дела. Это разные вещи:
    (а) дедуп постановки по `jobId` — уже есть; (б) дедуп записи в CRM при редоставке — нужен здесь.
-   **Статус:** стор дедупа (`activityDedupStore.ts`, таблица `activity_dedup`, always-purge),
-   поиск компании (`companyLookup.ts`) и **read-before-write-проводка в `handleCrmSyncJob`**
-   (`getActivityId`→skip / `findCompany`→`writeActivity`→`rememberActivity`→`notifyChat`, счётчики
-   `created/skipped/unmatched`) — **готовы и покрыты тестами**. Остаток стадии 4 — оживить транспорты
-   `findCompany`/`writeActivity` (per-portal `RestCall` → `findCompanyByAccount` + `buildTodoActivity`
-   → `crm.activity.todo.add`), с гейтом демо-счётов, чтобы демо-нагрузка не писала в реальный портал.
+   **Статус — стадия 4 в основном готова:** стор дедупа (`activityDedupStore.ts`, always-purge),
+   поиск компании (`companyLookup.ts`), read-before-write в `handleCrmSyncJob` и **живые транспорты**
+   `findCompany`→`findCompanyByAccount` / `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`)
+   по per-portal `RestCall` (`makePortalRestCall`), с гейтом демо-счётов (`isDemoAccount`) — **готовы,
+   покрыты тестами**. Осталось: проверка на живом портале (#90), TZ-aware `deadline` (UTC+3, #10) и
+   обработка `unmatched`-операций (#91); перед реальным объёмом — rate-limit REST на `crm-sync` (TODO в
+   `worker.ts`).
    Плюс на очередях выставлены `attempts`/`backoff`/`removeOnComplete/Fail` (см. `connection.ts`).
 5. **Cron-опрос через очередь.** Планировщик кладёт в `bank-fetch` job на портал/счёт (fan-out по
    `portal_tokens`); воркеры (масштабируются репликами) тянут выписку, соблюдая rate-limit Альфы

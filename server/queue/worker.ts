@@ -2,21 +2,34 @@
 // Started once on server boot by server/plugins/queue.ts (only when REDIS_URL is
 // set). For horizontal scale-out the same startWorkers() can run in a dedicated
 // worker container (documented in docs/REFACTOR_PLAN.md) — the handlers don't care
-// where they run. The transport deps below are stubs until stages 3–6 fill them in.
+// where they run. CRM-sync transports (findCompany/writeActivity + dedup) are LIVE;
+// the bank fetch/parse transports are still stubs until stages 3/5 fill them in.
 
 import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
 import { Q_CRM, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
-import { demoItems } from './cron'
+import { demoItems, isDemoAccount } from './cron'
 import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
 } from './handlers'
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
-import { deleteToken, saveToken } from '../utils/tokenStore'
+import { deleteToken, getToken, saveToken } from '../utils/tokenStore'
 import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/activityDedupStore'
 import { decryptSecret } from '../utils/secretCrypto'
+import { callRest } from '../utils/b24Rest'
+import { ensureAccessToken } from '../utils/ensureAccessToken'
+import { makePortalRestCall, type PortalRestDeps } from '../utils/portalRest'
+import { findCompanyByAccount } from '../utils/companyLookup'
+import { writeActivityViaRest } from '../utils/crmActivityWrite'
+
+/** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
+const portalRestDeps: PortalRestDeps = {
+  loadToken: memberId => getToken(dbQuery, memberId),
+  ensureFresh: token => ensureAccessToken(dbQuery, token),
+  callRest
+}
 
 /** Live side-effects for the handlers. Transports are stubs for now (return the
  *  demo batch / nothing) with TODOs pointing at the stage that fills them in. */
@@ -26,16 +39,28 @@ export function liveHandlerDeps(): HandlerDeps {
     // for DEMO- accounts (the load demo), and nothing for real accounts.
     fetchStatement: async job => demoItems(job),
     parseFile: async () => [], // TODO #19: wire clientBank parser → StatementItem[]
-    // TODO stage 4 (live wiring): bind a per-portal RestCall (ensureAccessToken +
-    // callRest for `memberId`) and delegate to findCompanyByAccount(
-    // item.counterparty.account) from server/utils/companyLookup.ts (ready + tested).
-    // Must GATE demo accounts (item.account starts with DEMO_ACCOUNT_PREFIX) so the
-    // load demo never writes to a real portal's CRM.
-    findCompany: async () => null,
-    // TODO stage 4 (live wiring): build crm.activity.todo.add params via
-    // app/utils/activity.ts buildTodoActivity and POST via the per-portal RestCall;
-    // return the new activity id (for rememberActivity) or null when skipped.
-    writeActivity: async () => null,
+    // Find the CRM company by the counterparty's settlement account. Demo accounts
+    // are GATED (never touch a real portal's REST); an unknown portal (no token)
+    // yields null → the op is counted unmatched and nothing is written.
+    // TODO stage 5 (before real volume flows): (1) add a REST rate limiter on the
+    // crm-sync worker (findCompany ~2 calls + writeActivity 1 call per op, no batching
+    // → will hit B24 QUERY_LIMIT_EXCEEDED); (2) bind the per-portal RestCall ONCE per
+    // job instead of per-op (findCompany + writeActivity each re-load+refresh today).
+    findCompany: async (item, memberId) => {
+      if (isDemoAccount(item.account)) return null
+      const call = await makePortalRestCall(memberId, portalRestDeps)
+      if (!call) return null
+      return findCompanyByAccount(item.counterparty.account, call)
+    },
+    // Write the universal activity (crm.activity.todo.add) attached to the matched
+    // company; returns the new activity id (for rememberActivity) or null when
+    // skipped (demo account / no company → no owner / unknown portal).
+    writeActivity: async (item, companyId, memberId) => {
+      if (isDemoAccount(item.account) || !companyId) return null
+      const call = await makePortalRestCall(memberId, portalRestDeps)
+      if (!call) return null
+      return writeActivityViaRest(item, companyId, call)
+    },
     notifyChat: async () => {}, // TODO stage 6: im.message.add by chat rules
     // Persistent dedup store (#9) — read-before-write guard, wired to Postgres.
     getActivityId: (memberId, key) => getActivityId(dbQuery, memberId, key),
