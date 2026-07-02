@@ -15,18 +15,45 @@ function item(docId: string, direction: 'credit' | 'debit' = 'credit'): Statemen
   }
 }
 
-/** Recording fake deps; fetchStatement/parseFile return the given batch. */
-function fakeDeps(batch: StatementItem[] = []): { deps: HandlerDeps, calls: Record<string, unknown[]> } {
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [] }
+/** Options to shape the fake CRM-side behaviour for a test. */
+interface FakeOpts {
+  batch?: StatementItem[]
+  /** company id returned by findCompany (default 'CO'); null = unmatched. */
+  company?: string | null
+  /** dedup keys already written (getActivityId returns a stored id for these). */
+  alreadyWritten?: Set<string>
+}
+
+/** Recording fake deps; fetchStatement/parseFile return the given batch. By default
+ *  findCompany matches a company and writeActivity mints a sequential activity id. */
+function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, calls: Record<string, unknown[]> } {
+  const o: FakeOpts = Array.isArray(opts) ? { batch: opts } : opts
+  const batch = o.batch ?? []
+  const company = o.company === undefined ? 'CO' : o.company
+  const written = new Map<string, string>() // dedupKey → activityId (persistent dedup)
+  for (const k of o.alreadyWritten ?? []) written.set(k, `pre-${k}`)
+  let nextId = 1
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [] }
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
     parseFile: async () => batch,
-    findCompany: async () => null,
-    writeActivity: async (it, companyId) => {
-      calls.activity.push([it.docId, companyId])
+    findCompany: async (it, memberId) => {
+      calls.find.push([it.docId, memberId])
+      return company
     },
-    notifyChat: async (it) => {
-      calls.chat.push(it.docId)
+    writeActivity: async (it, companyId, memberId) => {
+      if (!companyId) return null // no company → no owner → nothing written
+      const id = `act-${nextId++}`
+      calls.activity.push([it.docId, companyId, memberId, id])
+      return id
+    },
+    notifyChat: async (it, memberId) => {
+      calls.chat.push([it.docId, memberId])
+    },
+    getActivityId: async (_memberId, key) => written.get(key) ?? null,
+    rememberActivity: async (_memberId, key, activityId) => {
+      written.set(key, activityId)
+      calls.remember.push([key, activityId])
     },
     savePortal: async (job) => {
       calls.save.push(job.memberId)
@@ -90,16 +117,68 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
 })
 
 describe('handleCrmSyncJob', () => {
-  it('dedupes within the batch (account|docId) and acts per unique op', async () => {
+  const job = (items: StatementItem[]): CrmSyncJob => ({
+    memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items
+  })
+
+  it('dedupes within the batch and writes+remembers+notifies per unique op', async () => {
     const { deps, calls } = fakeDeps()
-    const job: CrmSyncJob = {
-      memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b',
-      items: [item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')] // d1 duplicated
-    }
-    const r = await handleCrmSyncJob(job, deps)
-    expect(r).toEqual({ processed: 2, credits: 1, debits: 1 })
-    expect(calls.activity).toHaveLength(2)
-    expect(calls.chat).toEqual(['d1', 'd2'])
+    const r = await handleCrmSyncJob(
+      job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
+      deps
+    )
+    expect(r).toEqual({ processed: 2, created: 2, skipped: 0, unmatched: 0, credits: 1, debits: 1 })
+    expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
+    expect(calls.remember).toEqual([['A|d1', 'act-1'], ['A|d2', 'act-2']])
+    // All three CRM ops receive the portal memberId ('M').
+    expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
+    expect(calls.chat).toEqual([['d1', 'M'], ['d2', 'M']])
+  })
+
+  it('is idempotent across job redelivery (real round-trip through the store)', async () => {
+    const { deps, calls } = fakeDeps() // the fake persists remembered keys across calls
+    const j = job([item('d1'), item('d2')])
+    const first = await handleCrmSyncJob(j, deps)
+    expect(first).toMatchObject({ created: 2, skipped: 0, unmatched: 0 })
+    // Redeliver the SAME job: everything is now remembered → all skipped, no side effects.
+    const second = await handleCrmSyncJob(j, deps)
+    expect(second).toEqual({ processed: 2, created: 0, skipped: 2, unmatched: 0, credits: 2, debits: 0 })
+    expect(calls.activity).toHaveLength(2) // still just the first run's two writes
+    expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
+    expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
+  })
+
+  it('skips ops already written (persistent dedup) — no re-write, no re-notify', async () => {
+    const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
+    const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
+    expect(r).toEqual({ processed: 2, created: 1, skipped: 1, unmatched: 0, credits: 2, debits: 0 })
+    // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
+    expect(calls.find).toEqual([['d2', 'M']])
+    expect(calls.chat).toEqual([['d2', 'M']])
+    expect(calls.remember).toEqual([['A|d2', 'act-1']])
+  })
+
+  it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
+    const { deps, calls } = fakeDeps({ company: null })
+    const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
+    expect(r).toEqual({ processed: 2, created: 0, skipped: 0, unmatched: 2, credits: 2, debits: 0 })
+    expect(calls.activity).toEqual([]) // nothing written
+    expect(calls.remember).toEqual([]) // so nothing remembered → retried on redelivery
+    expect(calls.chat).toEqual([])
+  })
+
+  it('handles a mixed batch: one skipped, one new, one unmatched (counters do not leak)', async () => {
+    // d1 pre-written (skip); d2 matches a company (create); d3 has no company (unmatched).
+    const { deps, calls } = fakeDeps({
+      alreadyWritten: new Set(['A|d1']),
+      company: null // default no-match…
+    })
+    // …but let d2 match: override findCompany to match only d2.
+    deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
+    const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
+    expect(r).toEqual({ processed: 3, created: 1, skipped: 1, unmatched: 1, credits: 2, debits: 1 })
+    expect(calls.remember).toEqual([['A|d2', 'act-1']])
+    expect(calls.chat).toEqual([['d2', 'M']])
   })
 })
 

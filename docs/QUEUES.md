@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-07-01
+> Last reviewed: 2026-07-02
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -70,10 +70,12 @@ flowchart LR
   `parseJobId`/`crmSyncJobId`) — BullMQ давит естественные ретраи: то же окно выписки / тот же
   файл (`fileHash`) / тот же батч (`batchId`) не создаёт дубликат джоба.
 - **At-least-once.** Доставка «хотя бы раз», поэтому `crm-sync` дедупит **внутри батча** по
-  `account|docId`. Но это **не** защищает от повторной доставки *всего* джоба (падение воркера
-  после частичной записи) — нужен **персистентный стор** `{account|docId → activityId}`,
-  сверяемый read-before-write. Это **блокер стадии 4** — [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9); пока он не
-  готов, `writeActivity` остаётся заглушкой.
+  `account|docId`. Этого мало против повторной доставки *всего* джоба (падение воркера после
+  частичной записи), поэтому есть **персистентный стор** `{account|docId → activityId}`
+  ([issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9), `activityDedupStore.ts`),
+  сверяемый **read-before-write**: `handleCrmSyncJob` через `getActivityId` пропускает уже
+  записанные операции, а после записи зовёт `rememberActivity`. Стор и проводка **готовы**;
+  сам `writeActivity` пока заглушка — до подключения REST-транспорта записи в CRM (стадия 4).
 - **Чистые обработчики с DI.** [`handlers.ts`](../server/queue/handlers.ts) — вся логика
   (`handleFetchJob`/`handleParseJob`/`handleCrmSyncJob`/`handleEventJob`) принимает `HandlerDeps`
   (сайд-эффекты инъектируются), поэтому оркестрация покрыта тестами с фейками. Реальные

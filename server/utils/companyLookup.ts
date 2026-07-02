@@ -58,8 +58,10 @@ export function requisiteFilter(requisiteIds: string[]): Record<string, unknown>
 /**
  * Find the CRM company id for a counterparty account, or `null` if none matches.
  * Returns the FIRST matching company (ambiguous multi-company matches are rare and
- * out of scope — the activity still gets written unattached when null). Never
- * throws for "not found"; a transport error from `call` propagates to the caller.
+ * out of scope). A `null` result means no company matched — crm-sync then counts
+ * the operation `unmatched` and writes nothing (a todo needs an owner), retrying on
+ * a later poll once a company exists. Never throws for "not found"; a transport
+ * error from `call` propagates to the caller.
  */
 export async function findCompanyByAccount(account: string, call: RestCall): Promise<string | null> {
   const acc = normalizeAccount(account)

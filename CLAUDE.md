@@ -192,8 +192,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).
     - `handlers.ts` — **чистые обработчики с DI** (тесты): `handleEventJob` регистрирует
       (`savePortal`, ONAPPINSTALL) / удаляет (`deletePortal`, ONAPPUNINSTALL — всегда) портал;
-      fetch/parse → нормализованный батч в `crm-sync`; `crm-sync` дедупит (`account|docId`), делит
-      приход/расход, на операцию: поиск компании → универсальное дело → чат. Транспорты (Альфа/Приор/парсер/REST) — заглушки до стадий 3–6.
+      fetch/parse → нормализованный батч в `crm-sync`; `crm-sync` дедупит in-batch (`account|docId`),
+      затем **read-before-write** по персистентному стору (#9): `getActivityId`→skip уже записанных,
+      иначе `findCompany`→`writeActivity` (возвращает id дела)→`rememberActivity`→`notifyChat`; счётчики
+      `created/skipped/unmatched`. CRM-депсы берут `memberId` явно (депсы строятся один раз).
+      Транспорты (Альфа/Приор/парсер/REST-запись) — заглушки до стадий 3–6; стор дедупа уже живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`); `cron.ts` — план опроса
       (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`).
