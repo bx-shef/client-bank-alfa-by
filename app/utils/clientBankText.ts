@@ -44,7 +44,7 @@ const FOOTER_KEYS = new Set([
  * Alfa export uses `OperationID`, unique per operation) — and `Cod`/`Code`
  * (counterparty bank BIC) are captured per-row, emitted after their `DocDate`. */
 const ITEM_KEYS = new Set([
-  'DocDate', 'DocTime', 'DateTime', 'Num', 'Opr', 'PaymCode', 'Code', 'Cod', 'Acc',
+  'DocDate', 'DocTime', 'Num', 'Opr', 'PaymCode', 'Code', 'Cod', 'Acc',
   'DebQ', 'CreQ', 'Deb', 'Cre', 'I2', 'Amount', 'Rate',
   'KorUNP', 'UNNRec', 'KorName', 'Nazn', 'Nazn2', 'OpDate', 'DocID', 'OperationID',
   'Credit', 'Db', 'OutRate'

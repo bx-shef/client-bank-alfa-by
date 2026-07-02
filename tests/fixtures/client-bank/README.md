@@ -12,8 +12,8 @@
 |---|---|---|
 | `demo-prior-byn.txt` | `Type=400`, BYN | рублёвый счёт, одна операция; **поля `I3` нет** (валюта определяется дефолтом BYN по `BY…`-счёту) |
 | `demo-prior-cny.txt` | `Type=600`, CNY | валютный счёт, несколько операций; явный маркер валюты `I3=CNY` |
-| `demo-type3-vpsk.txt` | `Type=3` «за день» | реальный формат выгрузки (VpskExport): `NDoc`/`UNNRec`/`CurrCode`; дедуп по `Num\|DocDate`, приход/расход |
-| `demo-type4-alfa.txt` | `Type=4` «за период» | реальный формат: `OperationID` (уникальный id), две операции с одинаковым `Num` → **дедуп по `OperationID`** (issue #73) |
+| `demo-type3-vpsk.txt` | `Type=3` «за день» | реальный формат выгрузки (VpskExport): контрагент `KorName`/`UNNRec`, дедуп по `Num\|DocDate`, приход/расход. Часть полей формата (`NDoc`, `CurrCode`) в `unrouted` — см. #19 |
+| `demo-type4-alfa.txt` | `Type=4` «за период» | реальный формат: `OperationID` (уникальный id), две операции с одинаковым `Num` → **дедуп по `OperationID`** (issue #73); BIC контрагента в `Code` |
 
 ## Важно
 
