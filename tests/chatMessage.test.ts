@@ -52,4 +52,21 @@ describe('buildChatMessage', () => {
   it('renders a debit headline with "Расход … на"', () => {
     expect(buildChatMessage(makeItem({ direction: 'debit' }))).toContain('[b]Расход')
   })
+
+  it('neutralizes BB-code injected via external fields (purpose / counterparty name)', () => {
+    const msg = buildChatMessage(makeItem({
+      purpose: '[url=https://evil.example]войдите[/url]',
+      counterparty: { name: 'ООО [b]Ромашка[/b]', unp: '1', account: 'BY[1]' }
+    }))
+    // No raw BB-code brackets survive from external text — replaced with full-width.
+    expect(msg).not.toContain('[url=')
+    expect(msg).not.toContain('[/url]')
+    expect(msg).toContain('［url=https://evil.example］войдите［/url］')
+    // The counterparty name's injected [b] is neutralized inside the headline…
+    expect(msg).toContain('ООО ［b］Ромашка［/b］')
+    expect(msg).toContain('Счёт: BY［1］')
+    // …but OUR own structural bold tag around the headline is intact.
+    expect(msg.startsWith('[b]')).toBe(true)
+    expect(msg).toContain('[/b]\n')
+  })
 })

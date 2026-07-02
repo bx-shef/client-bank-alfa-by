@@ -230,10 +230,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
-    `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add` →
-    `extractMessageId`). **Ядро стадии 6** (чат-уведомления), покрыто тестами. Фильтр «что в чат» —
-    `shouldNotifyChat` (в `statement.ts`). Проводка `notifyChat` ждёт хранения настроек (#16: dialog id
-    + правила из `app.option`) — до этого заглушка.
+    `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
+    `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
+    **Безопасность:** назначение/контрагент из выписки контролирует плательщик, поэтому внешние поля
+    прогоняются через `neutralizeBb` (BB-скобки → полноширинные) — иначе `[url=…]`/упоминания/кнопки
+    попали бы в чат. Фильтр «что в чат» — `shouldNotifyChat` (в `statement.ts`). Проводка `notifyChat`
+    ждёт хранения настроек (#16: dialog id + правила из `app.option`; see worker TODO про 3 нюанса) —
+    до этого заглушка.
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`

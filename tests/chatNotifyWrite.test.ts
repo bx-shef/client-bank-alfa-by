@@ -19,11 +19,15 @@ describe('extractMessageId', () => {
     expect(extractMessageId({ result: 34239 })).toBe('34239')
     expect(extractMessageId({ result: '77' })).toBe('77')
   })
-  it('returns null for an error / empty / object result', () => {
+  it('returns null for an error / empty / object / falsy-scalar result', () => {
     expect(extractMessageId({ error: 'MESSAGE_EMPTY' })).toBeNull()
     expect(extractMessageId({ result: '' })).toBeNull()
     expect(extractMessageId({ result: { id: 1 } })).toBeNull() // im.message.add returns a scalar id
     expect(extractMessageId({})).toBeNull()
+    // Only a positive integer is a real message id — falsy scalars are not "success".
+    expect(extractMessageId({ result: 0 })).toBeNull()
+    expect(extractMessageId({ result: false })).toBeNull()
+    expect(extractMessageId({ result: -3 })).toBeNull()
   })
 })
 
@@ -39,6 +43,7 @@ describe('notifyChatViaRest', () => {
     expect(calls[0]!.method).toBe(CHAT_MESSAGE_METHOD)
     expect(calls[0]!.params.DIALOG_ID).toBe('chat2941')
     expect(String(calls[0]!.params.MESSAGE)).toContain('[b]Приход')
+    expect(calls[0]!.params.URL_PREVIEW).toBe('N') // don't expand payer-controlled URLs
   })
 
   it('returns null when the API responds without an id', async () => {

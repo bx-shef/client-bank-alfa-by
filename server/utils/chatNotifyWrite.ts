@@ -11,11 +11,14 @@ import type { RestCall } from './companyLookup'
 /** REST method that posts a message to a Bitrix24 chat. */
 export const CHAT_MESSAGE_METHOD = 'im.message.add'
 
-/** Pull the created message id (a number) out of the REST response (`{result:ID}`),
- *  as a string, or null on an error/empty/malformed body. */
+/** Pull the created message id out of the REST response (`{result:ID}`) as a
+ *  string, or null on an error/empty/malformed body. `im.message.add` returns a
+ *  positive integer message id on success, so we accept only that — a falsy scalar
+ *  (`0`/`false`/`''`) or an object/array is treated as "no id". */
 export function extractMessageId(resp: Record<string, unknown>): string | null {
   const id = resp?.result
-  return id !== undefined && id !== null && `${id}` !== '' && typeof id !== 'object' ? `${id}` : null
+  const n = typeof id === 'number' ? id : typeof id === 'string' ? Number(id) : NaN
+  return Number.isInteger(n) && n > 0 ? `${n}` : null
 }
 
 /**
@@ -25,6 +28,12 @@ export function extractMessageId(resp: Record<string, unknown>): string | null {
  * from `call` propagates (BullMQ then retries the job).
  */
 export async function notifyChatViaRest(item: StatementItem, dialogId: string, call: RestCall): Promise<string | null> {
-  const resp = await call(CHAT_MESSAGE_METHOD, { DIALOG_ID: dialogId, MESSAGE: buildChatMessage(item) })
+  // URL_PREVIEW=N: the message carries external (payer-controlled) text — don't let
+  // a pasted URL expand into a rich preview card in the operator chat.
+  const resp = await call(CHAT_MESSAGE_METHOD, {
+    DIALOG_ID: dialogId,
+    MESSAGE: buildChatMessage(item),
+    URL_PREVIEW: 'N'
+  })
   return extractMessageId(resp)
 }
