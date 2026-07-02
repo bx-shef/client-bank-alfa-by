@@ -25,7 +25,14 @@ export function liveHandlerDeps(): HandlerDeps {
     // for DEMO- accounts (the load demo), and nothing for real accounts.
     fetchStatement: async job => demoItems(job),
     parseFile: async () => [], // TODO #19: wire clientBank parser → StatementItem[]
-    findCompany: async () => null, // TODO stage 4: crm.requisite.bankdetail lookup
+    // TODO stage 4: bind a per-portal RestCall (ensureAccessToken + callRest for the
+    // job's memberId) and delegate to findCompanyByAccount(item.counterparty.account)
+    // from server/utils/companyLookup.ts — the pure lookup core is ready + tested.
+    // NB: findCompany/writeActivity/notifyChat are portal-blind today ((item) => …);
+    // the job's memberId lives on CrmSyncJob, not StatementItem, so wiring first
+    // needs a HandlerDeps contract change to thread memberId (or the job) into these
+    // three — deps are built once in startWorkers(), not per-job.
+    findCompany: async () => null,
     writeActivity: async () => {}, // TODO stage 4: crm.activity.todo.add
     notifyChat: async () => {}, // TODO stage 6: im.message.add by chat rules
     // Register a portal: decrypt the refresh blob carried in the job (never plain
