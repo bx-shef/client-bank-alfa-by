@@ -4,14 +4,12 @@
 // Source is GET /api/ops/queues — gated by the OPERATOR SESSION cookie, so a
 // logged-in employee's browser can read it (unlike /api/queues, which needs the
 // B24_APPLICATION_TOKEN and is nginx-denied). `?demo=1` swaps in a client-side
-// generator for a no-backend preview (screenshots / local dev). Internal ops view:
-// `noindex` so it is not crawled on the public SSG domain. See docs/QUEUES.md, AUTH.md.
+// generator for a no-backend preview (screenshots / local dev). `clear` layout →
+// b24ui theming + dark; <AuthGate> keeps protected chrome from flashing before the
+// auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 
-// Employee/ops area — gated by the operator login (client redirect to /login when
-// a password is configured and there is no session; real protection is the
-// session-checked /api/ops/queues endpoint). See docs/AUTH.md.
-definePageMeta({ middleware: 'auth' })
+definePageMeta({ layout: 'clear', middleware: 'auth' })
 
 useHead({
   title: 'Очереди — монитор',
@@ -60,33 +58,26 @@ function demoFetcher(): Promise<QueuesSnapshot> {
 </script>
 
 <template>
-  <main class="q-page">
-    <header class="q-head">
-      <h1 class="q-h1">
-        Монитор очередей обработки
-      </h1>
-      <p class="q-sub">
-        Живой график длины очередей (backlog = ждут + в работе). Источник —
-        <code>GET /api/ops/queues</code> (по сессии оператора); <code>?demo=1</code> —
-        превью на синтетических данных. Подробнее — <code>docs/QUEUES.md</code>.
-      </p>
-    </header>
+  <AuthGate>
+    <main class="mx-auto max-w-5xl px-4 py-8">
+      <header class="mb-5">
+        <h1 class="text-2xl font-bold text-(--ui-color-base-1)">
+          Монитор очередей обработки
+        </h1>
+        <p class="mt-1 text-sm text-(--ui-color-base-3)">
+          Живой график длины очередей (backlog = ждут + в работе). Источник —
+          <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5">GET /api/ops/queues</code>
+          (по сессии оператора); <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5">?demo=1</code>
+          — превью на синтетических данных. Подробнее — <code>docs/QUEUES.md</code>.
+        </p>
+      </header>
 
-    <ClientOnly>
       <QueueMonitor
         :fetcher="fetcher"
         title="Очереди обработки"
         :interval-sec="5"
         :max-points="60"
       />
-    </ClientOnly>
-  </main>
+    </main>
+  </AuthGate>
 </template>
-
-<style scoped>
-.q-page { max-width: 1080px; margin: 0 auto; padding: 24px 16px; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #111827; }
-.q-head { margin-bottom: 16px; }
-.q-h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; }
-.q-sub { margin: 0; color: #6b7280; font-size: 14px; }
-.q-sub code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
-</style>
