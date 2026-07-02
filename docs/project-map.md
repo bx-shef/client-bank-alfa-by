@@ -45,10 +45,13 @@
 - **OAuth-ядра** банков (чистые, без транспорта/подписи): Альфа (`alfaOauth.ts`), Приорбанк
   (`priorOauth.ts` — OAuth/DCR/consent). Live-скрипты разведки для обоих банков (единая обвязка).
 - **Встройка в Bitrix24**: `useB24` (dual-mode), страницы `/app`, `/settings`, `/install`; лендинг `/`.
+  `/install` биндит `ONAPPINSTALL`/`ONAPPUNINSTALL` (`event.bind`) до `installFinish`. **Проверено
+  вживую**: приложение зарегистрировано и установлено на двух порталах — токены легли в `portal_tokens`
+  с разными per-portal `application_token` (мультитенант-bootstrap работает).
 - **Backend (Nitro, слайс)**: эндпоинт вебхуков `POST /api/b24/events` (install/uninstall,
   fail-closed вердикт `application_token`), хранилище токенов портала в Postgres (refresh шифруется
   AES-256-GCM), настройка уровня приложения через `app.option` по фрейм-токену, health-эндпоинт
-  `GET /api/health`.
+  `GET /api/health`, валидация env на старте (`envCheck`).
 - **Шина очередей (BullMQ + Redis), фундамент (Фаза 1)**: контракты очередей `server/queue/topology.ts`
   (имена очередей `b24-events`/`bank-fetch`/`file-parse`, payload'ы, идемпотентные `jobId`) +
   `server/queue/connection.ts` (ленивый `getQueue`, гуард `REDIS_URL`); Redis в изолированной сети
@@ -91,8 +94,9 @@
   **проде** у Альфы на BY-прогоне.
 - **Ручная загрузка**: до включения в UI — внутренний лимит размера в парсере и проверка инвалютного
   правила суммы на реальных выписках (issue #19).
-- **Точная встройка в портал** (`placement.bind`/`event.bind`, `NUXT_PUBLIC_SITE_URL`) — добить на
-  тестовом портале.
+- **`placement.bind`** (точная точка встройки в интерфейс портала) — добить на тестовом портале.
+  Приём событий, установка и `NUXT_PUBLIC_SITE_URL` уже проверены вживую на двух порталах —
+  остаётся только выбор плейсментов.
 
 ## Что после запуска
 
