@@ -15,3 +15,19 @@
  * from the iframe — see docs/REFACTOR_PLAN.md "Хранение настроек и вызовы B24".
  */
 export const B24_REQUIRED_SCOPES = ['crm', 'im', 'user_brief', 'placement'] as const
+
+/**
+ * Backend path that receives Bitrix24 server events. Same origin as the app (the
+ * prod nginx proxies `/api/*` to the backend), so the absolute handler URL is
+ * `${siteUrl}${B24_EVENT_HANDLER_PATH}` — see server/api/b24/events.post.ts.
+ */
+export const B24_EVENT_HANDLER_PATH = '/api/b24/events'
+
+/**
+ * Server events the install script binds so the backend learns the portal:
+ * `ONAPPINSTALL` delivers the `application_token` + OAuth creds (stored write-once),
+ * `ONAPPUNINSTALL` lets the backend purge the portal on removal. For a local app
+ * these are registered from the install script via `event.bind` (per B24 docs) —
+ * there is no separate handler-URL field in the local-app card.
+ */
+export const B24_BOUND_EVENTS = ['ONAPPINSTALL', 'ONAPPUNINSTALL'] as const

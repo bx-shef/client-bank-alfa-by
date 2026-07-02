@@ -5,7 +5,11 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 const replaceSpy = vi.hoisted(() => vi.fn())
 const finishSpy = vi.hoisted(() => vi.fn(async () => {}))
 const titleSpy = vi.hoisted(() => vi.fn(async () => {}))
-const batchSpy = vi.hoisted(() => vi.fn(async () => ({ getData: () => ({ scope: ['crm'] }) })))
+const batchSpy = vi.hoisted(() => vi.fn(async () => ({
+  isSuccess: true,
+  getData: () => ({ scope: ['crm'], eventList: [] }),
+  getErrorMessages: () => []
+})))
 const state = vi.hoisted(() => ({ inFrame: false }))
 
 vi.mock('vue-router', async (orig) => {
@@ -62,6 +66,22 @@ describe('install.vue — inside a B24 frame', () => {
     expect(titleSpy).toHaveBeenCalled()
     expect(finishSpy).toHaveBeenCalled()
     expect(replaceSpy).not.toHaveBeenCalled()
+  })
+
+  it('binds ONAPPINSTALL/ONAPPUNINSTALL to the backend endpoint before finishing', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    // Find the batch call that carries the event.bind calls.
+    type BatchArg = { calls?: { method: string, params: Record<string, unknown> }[] }
+    const bindArg = batchSpy.mock.calls
+      .map(call => (call as unknown[])[0] as BatchArg)
+      .find(arg => Array.isArray(arg.calls) && arg.calls.some(c => c.method === 'event.bind'))
+    expect(bindArg).toBeTruthy()
+    const bound = bindArg!.calls!.filter(c => c.method === 'event.bind')
+    expect(bound.map(c => c.params.event)).toEqual(['ONAPPINSTALL', 'ONAPPUNINSTALL'])
+    for (const c of bound) expect(String(c.params.handler)).toMatch(/\/api\/b24\/events$/)
+    // Binding happens before installFinish.
+    expect(finishSpy).toHaveBeenCalled()
   })
 
   it('shows a retryable error when a batch call rejects', async () => {

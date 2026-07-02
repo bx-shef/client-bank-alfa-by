@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
+import { B24_BOUND_EVENTS, B24_EVENT_HANDLER_PATH } from '~/config/b24'
+import { buildEventBindCalls, type EventBinding } from '~/utils/b24EventBind'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
@@ -10,6 +12,19 @@ const router = useRouter()
 const b24Instance = useB24()
 const isUseB24 = computed<boolean>(() => b24Instance.isInit())
 const requiredScopes = b24Instance.getRequiredRights()
+
+// Public URL the app is served from. In prod it comes from NUXT_PUBLIC_SITE_URL
+// (build-arg); in dev it isn't known ahead of time, so derive it from the install
+// URL by stripping the trailing `/install`. The backend events endpoint is same
+// origin (`/api/*` proxied to backend), so the handler URL is appUrl + the path.
+const stripTrailing = (u: string) => u.replace(/\/+$/, '')
+const config = useRuntimeConfig()
+const configuredSiteUrl = stripTrailing((config.public.siteUrl as string) || '')
+const isDev = import.meta.env.DEV
+const appUrl = isDev && typeof window !== 'undefined'
+  ? stripTrailing(`${window.location.origin}${window.location.pathname.replace(/\/install\/?$/, '')}`)
+  : configuredSiteUrl
+const eventHandlerUrl = computed(() => `${appUrl}${B24_EVENT_HANDLER_PATH}`)
 
 useHead({ title: pageTitle('Установка') })
 
@@ -24,6 +39,7 @@ const caption = ref('Инициализация…')
 interface InitData {
   appInfo?: { ID?: number, CODE?: string, VERSION?: string }
   scope?: string[]
+  eventList?: EventBinding[]
 }
 const initData = ref<InitData>({})
 
@@ -45,9 +61,13 @@ const diagnostics = computed(() => {
     // Shown so operators can copy it for the server-side check (scripts/check-app-option.sh).
     memberId,
     targetOrigin: isUseB24.value ? b24Instance.targetOrigin() : '—',
+    // Backend events handler the install script binds — surfaced so a misconfigured
+    // (empty / relative) URL is obvious on the diagnostics panel.
+    eventHandler: isUseB24.value ? (eventHandlerUrl.value || '—') : '—',
     appInfo: initData.value.appInfo,
     granted,
-    missing
+    missing,
+    events: initData.value.eventList ?? []
   }
 })
 
@@ -60,6 +80,33 @@ async function waitForB24(timeoutMs = 10000): Promise<boolean> {
     await sleep(100)
   }
   return isUseB24.value
+}
+
+/** Binds the server-event handlers (ONAPPINSTALL/ONAPPUNINSTALL) to the backend
+ *  endpoint. Must run BEFORE installFinish so the current install's ONAPPINSTALL
+ *  (which carries the application_token + OAuth creds) is delivered. Idempotent:
+ *  re-installs skip already-correct bindings and re-point stale ones. */
+async function bindEvents(): Promise<void> {
+  const $b24 = b24Instance.getOrThrow()
+
+  // A relative/empty handler URL would register a dead binding B24 could never
+  // reach. Refuse rather than ship a broken portal (needs NUXT_PUBLIC_SITE_URL).
+  if (!appUrl || !/^https?:\/\//i.test(eventHandlerUrl.value)) {
+    throw new Error(`Обработчик событий не абсолютный (${eventHandlerUrl.value || 'пусто'}). Задайте NUXT_PUBLIC_SITE_URL при сборке.`)
+  }
+
+  const existing = initData.value.eventList ?? []
+  const { unbind, bind } = buildEventBindCalls(existing, B24_BOUND_EVENTS, eventHandlerUrl.value)
+
+  // Best-effort cleanup of stale bindings — a missing one is fine, don't halt.
+  if (unbind.length) await $b24.actions.v2.batch.make({ calls: unbind, options: { isHaltOnError: false } })
+
+  // Bind the missing events. This is the whole point of the handler, so a failure
+  // is fatal (surfaced as a retryable error) — a half-bound app never learns the token.
+  if (bind.length) {
+    const res = await $b24.actions.v2.batch.make({ calls: bind })
+    if (!res.isSuccess) throw new Error(`event.bind не удался: ${res.getErrorMessages().join('; ')}`)
+  }
 }
 
 /** Runs the install flow. Surfaces failures as a retryable error state instead
@@ -96,10 +143,15 @@ async function runInstall() {
     const response = await $b24.actions.v2.batch.make({
       calls: {
         appInfo: { method: 'app.info' },
-        scope: { method: 'scope' }
+        scope: { method: 'scope' },
+        eventList: { method: 'event.get' }
       }
     })
     initData.value = response.getData() as InitData
+
+    // Register the backend event handlers before finishing — see bindEvents().
+    caption.value = 'Регистрация обработчика событий…'
+    await bindEvents()
 
     caption.value = 'Завершение установки…'
     progressColor.value = 'air-primary-success'
@@ -175,6 +227,8 @@ onMounted(runInstall)
               <span class="break-all">{{ diagnostics.memberId || '—' }}</span>
               <span class="text-(--ui-color-base-3)">targetOrigin:</span>
               <span class="break-all">{{ diagnostics.targetOrigin }}</span>
+              <span class="text-(--ui-color-base-3)">Событий обработчик:</span>
+              <span class="break-all">{{ diagnostics.eventHandler }}</span>
               <template v-if="diagnostics.appInfo">
                 <span class="text-(--ui-color-base-3)">App:</span>
                 <span>{{ diagnostics.appInfo.CODE }} (id {{ diagnostics.appInfo.ID }}, v{{ diagnostics.appInfo.VERSION }})</span>
@@ -204,6 +258,28 @@ onMounted(runInstall)
                   size="sm"
                 />
               </div>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <span class="text-(--ui-color-base-3)">События:</span>
+              <div
+                v-if="diagnostics.events.length === 0"
+                class="italic text-(--ui-color-base-3)"
+              >
+                нет привязок
+              </div>
+              <ul
+                v-else
+                class="m-0 flex list-none flex-col gap-1 p-0"
+              >
+                <li
+                  v-for="(e, i) in diagnostics.events"
+                  :key="i"
+                  class="break-all"
+                >
+                  <strong>{{ e.event }}</strong> → {{ e.handler }}
+                </li>
+              </ul>
             </div>
           </div>
         </template>
