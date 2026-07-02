@@ -98,10 +98,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   лендинг и B24-встройку не закрывает) — [`docs/AUTH.md`](docs/AUTH.md). Чистое ядро `server/utils/session.ts`
   (`resolveAuthConfig`/`checkCredentials` constant-time, `signSession`/`verifySession` — HMAC-подпись cookie;
   статус-матрикс роутов `decideLogin`/`decideLogout`/`sessionStatus` — тонкие `server/api/auth/*` только I/O,
-  тестируются без сервера; тесты). Роуты `server/api/auth/login|logout|session`. Клиент — `app/composables/useAuth.ts`, форма
-  `app/pages/login.vue` (публичная, `noindex`), гвард `app/middleware/auth.ts` (клиентский редирект;
-  реальная защита — на API). Cookie `cba_sess` HttpOnly/SameSite=Lax/Secure, CSRF-заголовок `X-CBA-Auth`.
-  Пароль пуст ⇒ вход выключен. Модель портирована из `postroyka/purchase-ai-chat`. B24 silent-сессия — далее.
+  тестируются без сервера; тесты). Роуты `server/api/auth/login|logout|session`. Клиент — `app/composables/useAuth.ts`,
+  форма `app/pages/login.vue` на **b24ui** (`B24Card`/`B24Input`/`B24Button`/`B24Alert`, layout `clear` → тёмная тема),
+  публичная `noindex`. Гвард `app/middleware/auth.ts` (клиентский редирект; реальная защита — на API), а
+  `app/components/AuthGate.vue` прячет контент служебных страниц за «Проверка доступа…» до подтверждения сессии
+  (SSG-статику красит колор-мод, поэтому иначе защищённый контент мелькал бы до редиректа). Cookie `cba_sess`
+  HttpOnly/SameSite=Lax/Secure, CSRF-заголовок `X-CBA-Auth`. Пароль пуст ⇒ вход выключен. Модель портирована
+  из `postroyka/purchase-ai-chat`. B24 silent-сессия — далее.
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**

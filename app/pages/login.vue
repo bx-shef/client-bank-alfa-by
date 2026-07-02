@@ -1,8 +1,13 @@
 <script setup lang="ts">
 // Operator login page (public, outside Bitrix24). Posts credentials to
 // /api/auth/login; on success the server sets a signed HttpOnly session cookie and
-// we return to `?redirect=` (default /queues). Ported from the Procure AI auth
-// model (postroyka/purchase-ai-chat). See docs/AUTH.md.
+// we return to `?redirect=` (default /queues). On b24ui so it themes with the rest
+// (light/dark). Ported from the Procure AI auth model. See docs/AUTH.md.
+import LockMIcon from '@bitrix24/b24icons-vue/outline/LockMIcon'
+
+// `clear` layout wraps the page in <B24App> → b24ui components + colorMode (dark) work.
+definePageMeta({ layout: 'clear' })
+
 const route = useRoute()
 const { login } = useAuth()
 
@@ -40,71 +45,62 @@ async function submit() {
 </script>
 
 <template>
-  <main class="lg-page">
-    <form
-      class="lg-card"
-      @submit.prevent="submit"
-    >
-      <h1 class="lg-title">
-        Вход для сотрудников
-      </h1>
-      <p class="lg-sub">
-        Импорт выписки из клиент-банка
-      </p>
+  <main class="flex min-h-screen items-center justify-center px-4 py-10">
+    <B24Card class="w-full max-w-sm">
+      <template #header>
+        <div class="flex items-center gap-3">
+          <span class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-(--ui-color-design-tinted-na-bg) text-(--ui-color-base-3)">
+            <LockMIcon class="size-5" />
+          </span>
+          <div>
+            <h1 class="font-semibold">
+              Вход для сотрудников
+            </h1>
+            <p class="text-sm text-(--ui-color-base-3)">
+              Импорт выписки из клиент-банка
+            </p>
+          </div>
+        </div>
+      </template>
 
-      <label class="lg-label">
-        Логин
-        <input
-          v-model="user"
-          class="lg-input"
-          type="text"
-          autocomplete="username"
-          name="username"
-        >
-      </label>
-      <label class="lg-label">
-        Пароль
-        <input
-          v-model="password"
-          class="lg-input"
-          type="password"
-          autocomplete="current-password"
-          name="password"
-          required
-        >
-      </label>
-
-      <p
-        v-if="error"
-        class="lg-error"
+      <form
+        class="flex flex-col gap-4"
+        @submit.prevent="submit"
       >
-        {{ error }}
-      </p>
+        <B24FormField label="Логин">
+          <B24Input
+            v-model="user"
+            autocomplete="username"
+            name="username"
+            class="w-full"
+          />
+        </B24FormField>
+        <B24FormField label="Пароль">
+          <B24Input
+            v-model="password"
+            type="password"
+            autocomplete="current-password"
+            name="password"
+            required
+            class="w-full"
+          />
+        </B24FormField>
 
-      <button
-        class="lg-btn"
-        type="submit"
-        :disabled="busy"
-      >
-        {{ busy ? 'Вход…' : 'Войти' }}
-      </button>
-    </form>
+        <B24Alert
+          v-if="error"
+          color="air-primary-alert"
+          variant="soft"
+          :title="error"
+        />
+
+        <B24Button
+          type="submit"
+          color="air-primary"
+          block
+          :loading="busy"
+          :label="busy ? 'Вход…' : 'Войти'"
+        />
+      </form>
+    </B24Card>
   </main>
 </template>
-
-<style scoped>
-.lg-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
-  background: #f3f4f6; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #111827; }
-.lg-card { width: 100%; max-width: 360px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-  padding: 28px 24px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; gap: 14px; }
-.lg-title { margin: 0; font-size: 20px; font-weight: 700; }
-.lg-sub { margin: -8px 0 6px; color: #6b7280; font-size: 14px; }
-.lg-label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; color: #374151; }
-.lg-input { padding: 9px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; }
-.lg-input:focus { outline: 2px solid #2563eb; outline-offset: 0; border-color: #2563eb; }
-.lg-error { margin: 0; padding: 8px 12px; border-radius: 8px; background: #fef2f2; color: #b91c1c; font-size: 14px; }
-.lg-btn { margin-top: 4px; padding: 10px 12px; border: 0; border-radius: 8px; background: #2563eb; color: #fff;
-  font-size: 15px; font-weight: 600; cursor: pointer; }
-.lg-btn:disabled { opacity: 0.6; cursor: default; }
-.lg-btn:not(:disabled):hover { background: #1d4ed8; }
-</style>

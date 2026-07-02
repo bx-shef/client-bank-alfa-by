@@ -1,20 +1,20 @@
 <script setup lang="ts">
 /**
- * QueueMonitor — a live line chart of BullMQ queue lengths (backlog) on Vue 3 + ECharts.
+ * QueueMonitor — a live line chart of BullMQ queue lengths (backlog) on Vue 3 + ECharts,
+ * chromed with b24ui (B24Card/B24Button/B24Select) so it themes light/dark like the app.
  *
- * Ported from the shef.rabbitmq:statistic example (the original used the commercial
- * amCharts4) to the free ECharts (Apache-2.0). Adapted to our reality: the source is
- * the GET /api/queues snapshot (no history/rates), so the time-series is built on the
- * client — each poll appends one `[time, backlog]` point to a sliding window (see
- * app/utils/queueChart.ts, docs/QUEUES.md). ECharts is dynamically imported in
- * onMounted (client-only render, kept out of the landing bundle).
+ * Source is the GET /api/ops/queues snapshot (no history/rates), so the time-series is
+ * built on the client — each poll appends one `[time, backlog]` point to a sliding window
+ * (app/utils/queueChart.ts). ECharts is dynamically imported and TREE-SHAKEN (echarts/core
+ * + Line/Grid/Tooltip/Legend/Canvas) in onMounted (client-only). Axis/grid colours follow
+ * the current theme (`.dark` class), re-applied when the theme toggles.
  *
- * NOTE: on a fetch error the poll loop STOPS (does not auto-recover) — the operator
- * resumes it with the ▶ button. `hidden` (legend row state) and ECharts' own series
- * visibility are toggled together in toggleLine(); keep both in sync if refactored.
+ * NOTE: on a fetch error the poll loop STOPS (does not auto-recover) — resume with ▶.
  */
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount } from 'vue'
 import type { ECharts } from 'echarts/core'
+import PlayLIcon from '@bitrix24/b24icons-vue/outline/PlayLIcon'
+import PauseLIcon from '@bitrix24/b24icons-vue/outline/PauseLIcon'
 import {
   QUEUE_META,
   appendSnapshot,
@@ -27,7 +27,7 @@ import {
 } from '~/utils/queueChart'
 
 const props = withDefaults(defineProps<{
-  /** Загрузчик снапшота очередей (например, GET /api/queues или демо-генератор). */
+  /** Загрузчик снапшота очередей (например, GET /api/ops/queues или демо-генератор). */
   fetcher: () => Promise<QueuesSnapshot>
   title?: string
   /** Интервал опроса, сек. */
@@ -42,17 +42,15 @@ const props = withDefaults(defineProps<{
   autoStart: true
 })
 
-const INTERVALS = [2, 5, 10, 30]
+const INTERVAL_ITEMS = [2, 5, 10, 30].map(v => ({ label: `каждые ${v} сек`, value: v }))
 
 const chartEl = ref<HTMLElement | null>(null)
 const chart = shallowRef<ECharts | null>(null)
-// ECharts loaded lazily (client-only) and TREE-SHAKEN: echarts/core + only the
-// pieces we use (LineChart, Grid/Tooltip/Legend components, Canvas renderer). Keeps
-// the /queues chunk small and out of the SSG landing bundle. `graphic` (area
-// gradient) comes from core — see onMounted.
+// ECharts loaded lazily (client-only) and TREE-SHAKEN — see onMounted.
 let echartsCore: typeof import('echarts/core') | null = null
 let timer: ReturnType<typeof setTimeout> | null = null
 let ro: ResizeObserver | null = null
+let themeObserver: MutationObserver | null = null
 
 const interval = ref(props.intervalSec)
 const isReload = ref(props.autoStart)
@@ -67,7 +65,16 @@ const fmt = (v: number): string => nf.format(v)
 
 const enabled = ref(true)
 
+/** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
+function themeColors() {
+  const dark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  return dark
+    ? { axis: '#9aa4b2', split: 'rgba(255,255,255,0.10)' }
+    : { axis: '#6b7280', split: 'rgba(0,0,0,0.10)' }
+}
+
 function baseOption() {
+  const c = themeColors()
   return {
     animation: true,
     animationDurationUpdate: 200,
@@ -76,10 +83,11 @@ function baseOption() {
     legend: { show: false, selected: {} as Record<string, boolean> },
     xAxis: {
       type: 'time' as const,
-      axisLabel: { hideOverlap: true, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}' } },
-      splitLine: { show: true, lineStyle: { opacity: 0.25 } }
+      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}' } },
+      axisLine: { lineStyle: { color: c.split } },
+      splitLine: { show: true, lineStyle: { color: c.split } }
     },
-    yAxis: { type: 'value' as const, min: 0, minInterval: 1, axisLabel: { inside: true }, splitLine: { lineStyle: { opacity: 0.25 } } },
+    yAxis: { type: 'value' as const, min: 0, minInterval: 1, axisLabel: { inside: true, color: c.axis }, splitLine: { lineStyle: { color: c.split } } },
     series: [] as unknown[]
   }
 }
@@ -164,8 +172,8 @@ function toggleReload() {
   if (isReload.value) stop()
   else start()
 }
-function changeInterval(v: number) {
-  interval.value = v
+function changeInterval(v: unknown) {
+  interval.value = Number(v)
   if (isReload.value) start()
 }
 function toggleLine(row: QueueLegendRow) {
@@ -189,6 +197,9 @@ onMounted(async () => {
   redraw()
   ro = new ResizeObserver(() => chart.value?.resize())
   ro.observe(chartEl.value)
+  // Re-theme the canvas when the OS/user toggles light↔dark (`.dark` on <html>).
+  themeObserver = new MutationObserver(() => redraw())
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
   await tick()
   if (props.autoStart) start()
 })
@@ -196,114 +207,90 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopTimer()
   ro?.disconnect()
+  themeObserver?.disconnect()
   chart.value?.dispose()
 })
 </script>
 
 <template>
-  <div class="qm-card">
-    <div class="qm-header">
-      <h3 class="qm-title">
-        {{ title }} — в очередях {{ fmt(total) }}
-      </h3>
-      <div class="qm-actions">
-        <button
-          class="qm-btn"
-          type="button"
-          @click="toggleReload"
-        >
-          {{ isReload ? '⏸ пауза' : '▶ запуск' }}
-        </button>
-        <select
-          class="qm-select"
-          :value="interval"
-          @change="changeInterval(Number(($event.target as HTMLSelectElement).value))"
-        >
-          <option
-            v-for="v in INTERVALS"
-            :key="v"
-            :value="v"
-          >
-            каждые {{ v }} сек
-          </option>
-        </select>
+  <B24Card>
+    <template #header>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <h3 class="font-semibold">
+          {{ title }} — в очередях {{ fmt(total) }}
+        </h3>
+        <div class="flex items-center gap-2">
+          <B24Button
+            :icon="isReload ? PauseLIcon : PlayLIcon"
+            :label="isReload ? 'Пауза' : 'Запуск'"
+            color="air-tertiary-no-accent"
+            size="sm"
+            @click="toggleReload"
+          />
+          <B24Select
+            :model-value="interval"
+            :items="INTERVAL_ITEMS"
+            size="sm"
+            class="w-40"
+            @update:model-value="changeInterval"
+          />
+        </div>
       </div>
-    </div>
+    </template>
 
-    <div
+    <B24Alert
       v-if="!enabled"
-      class="qm-note"
-    >
-      Очереди выключены (нет <code>REDIS_URL</code>).
-    </div>
-    <div
+      color="air-primary-warning"
+      variant="soft"
+      title="Очереди выключены"
+      description="Не задан REDIS_URL — приём работает синхронным фолбэком, но пайплайн/крон не запущены."
+      class="mb-3"
+    />
+    <B24Alert
       v-if="error"
-      class="qm-error"
-    >
-      {{ error }}
-    </div>
+      color="air-primary-alert"
+      variant="soft"
+      :title="error"
+      class="mb-3"
+    />
 
-    <div class="qm-body">
+    <div class="flex flex-wrap gap-3">
       <div
         ref="chartEl"
-        class="qm-chart"
+        class="min-h-80 min-w-[320px] flex-[1_1_60%]"
       />
 
-      <div class="qm-legend">
-        <div class="qm-legend-row qm-legend-head">
-          <span class="qm-col-name">Очередь</span>
-          <span class="qm-col-val">ждут</span>
-          <span class="qm-col-val">работа</span>
-          <span class="qm-col-val">готово</span>
-          <span class="qm-col-val">ошибки</span>
+      <div class="flex-[1_1_30%] min-w-[280px]">
+        <div class="grid grid-cols-[minmax(0,1fr)_repeat(4,2.5rem)] gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) pb-1.5 text-[11px] font-semibold text-(--ui-color-base-3)">
+          <span>Очередь</span>
+          <span class="text-center">ждут</span>
+          <span class="text-center">работа</span>
+          <span class="text-center">готово</span>
+          <span class="text-center">ошибки</span>
         </div>
-        <div
+        <button
           v-for="row in legendView"
           :key="row.name"
-          class="qm-legend-row"
-          :class="{ hidden: hidden[row.name] }"
+          type="button"
+          class="grid w-full grid-cols-[minmax(0,1fr)_repeat(4,2.5rem)] items-center gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) py-1.5 text-left text-sm tabular-nums transition-opacity last:border-b-0 hover:opacity-80"
+          :class="{ 'opacity-40': hidden[row.name] }"
+          @click="toggleLine(row)"
         >
-          <span
-            class="qm-col-name"
-            @click="toggleLine(row)"
-          >
+          <span class="flex items-center gap-2 truncate">
             <i
-              class="qm-dot"
+              class="size-2.5 shrink-0 rounded-full"
               :style="{ background: row.color }"
             />{{ row.label }}
           </span>
-          <span class="qm-col-val">{{ fmt(row.waiting) }}</span>
-          <span class="qm-col-val">{{ fmt(row.active) }}</span>
-          <span class="qm-col-val">{{ fmt(row.completed) }}</span>
+          <span class="text-center">{{ fmt(row.waiting) }}</span>
+          <span class="text-center">{{ fmt(row.active) }}</span>
+          <span class="text-center">{{ fmt(row.completed) }}</span>
           <span
-            class="qm-col-val"
-            :class="{ 'qm-fail': row.failed > 0 }"
+            class="text-center"
+            :class="row.failed > 0 ? 'font-semibold text-(--ui-color-accent-main-alert)' : ''"
           >{{ fmt(row.failed) }}</span>
-        </div>
+        </button>
       </div>
     </div>
-  </div>
+  </B24Card>
 </template>
-
-<style scoped>
-.qm-card { border: 1px solid #e5e7eb; border-radius: 10px; background: #fff; font-size: 14px; color: #111827; }
-.qm-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #eee; }
-.qm-title { margin: 0; font-size: 16px; font-weight: 600; }
-.qm-actions { display: flex; gap: 8px; }
-.qm-btn, .qm-select { padding: 4px 10px; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; cursor: pointer; }
-.qm-note { margin: 8px 16px; padding: 8px 12px; border-radius: 6px; background: #fffbeb; color: #92400e; }
-.qm-error { margin: 8px 16px; padding: 8px 12px; border-radius: 6px; background: #fef2f2; color: #b91c1c; }
-.qm-body { display: flex; gap: 8px; padding: 12px; flex-wrap: wrap; }
-.qm-chart { flex: 1 1 60%; min-width: 320px; min-height: 320px; }
-.qm-legend { flex: 1 1 30%; min-width: 280px; }
-.qm-legend-row { display: flex; align-items: center; padding: 6px 4px; border-bottom: 1px solid #f0f0f0; }
-.qm-legend-head { font-weight: 600; color: #6b7280; }
-.qm-legend-head .qm-col-val { font-size: 12px; }
-.qm-legend-row.hidden { opacity: 0.4; }
-.qm-col-name { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.qm-legend-head .qm-col-name { cursor: default; }
-.qm-col-name:hover { color: #2563eb; }
-.qm-col-val { flex: 0 0 56px; text-align: center; }
-.qm-fail { color: #b91c1c; font-weight: 600; }
-.qm-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
-</style>
