@@ -49,6 +49,10 @@ const chart = shallowRef<ECharts | null>(null)
 // ECharts loaded lazily (client-only) and TREE-SHAKEN — see onMounted.
 let echartsCore: typeof import('echarts/core') | null = null
 let timer: ReturnType<typeof setTimeout> | null = null
+// Generation token for the poll loop: start()/stop() bump it so a chain that was
+// mid-`await tick()` when the interval changed won't reschedule itself — otherwise
+// two loops could run in parallel and double the poll rate.
+let pollGen = 0
 let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
 
@@ -59,11 +63,30 @@ const total = ref(0)
 const rows = ref<QueueLegendRow[]>([])
 const hidden = ref<Record<string, boolean>>({})
 const series = ref<SeriesPoints>(emptySeries())
+// Right edge of the sliding time window (latest poll time); the X axis follows it
+// so the chart scrolls left as new points arrive. Null until the first tick.
+const lastTickAt = ref<number | null>(null)
+// When polling started — the window grows from here until it reaches the full span,
+// then slides. Keeps the chart looking full on fresh load instead of bunched right.
+const startedAt = ref<number | null>(null)
 
 const nf = new Intl.NumberFormat('ru')
 const fmt = (v: number): string => nf.format(v)
 
 const enabled = ref(true)
+
+/** The [min, max] time window the X axis should show right now — a fixed span
+ *  ending at the latest poll, so dates slide left continuously. Early on (before a
+ *  full span has elapsed) the left edge is pinned to `startedAt`, so the window
+ *  grows to fill the axis rather than leaving the data bunched at the right. */
+function axisWindow(): { min: number, max: number } {
+  const max = lastTickAt.value ?? Date.now()
+  const spanStart = max - props.maxPoints * interval.value * 1000
+  const grown = startedAt.value != null ? Math.max(spanStart, startedAt.value) : spanStart
+  // Keep the window at least one interval wide so the first tick (startedAt === max)
+  // doesn't collapse the axis to zero width.
+  return { min: Math.min(grown, max - interval.value * 1000), max }
+}
 
 /** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
 function themeColors() {
@@ -83,6 +106,8 @@ function baseOption() {
     legend: { show: false, selected: {} as Record<string, boolean> },
     xAxis: {
       type: 'time' as const,
+      // Fixed sliding window (not data-extent auto-fit) so the axis scrolls smoothly.
+      ...axisWindow(),
       axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}' } },
       axisLine: { lineStyle: { color: c.split } },
       splitLine: { show: true, lineStyle: { color: c.split } }
@@ -106,10 +131,11 @@ function buildSeries(meta: typeof QUEUE_META[number]) {
     emphasis: { focus: 'series' as const },
     data: series.value[meta.name] ?? []
   }
-  // Area fill under the "main" queue (crm-sync) — analog of the example's isMain.
-  if (meta.main && echartsCore) {
+  // Soft gradient area fill under EVERY series (the "main" queue a touch stronger),
+  // kept low-opacity so 4 overlapping fills stay readable, not muddy.
+  if (echartsCore) {
     s.areaStyle = {
-      opacity: 0.2,
+      opacity: meta.main ? 0.14 : 0.08,
       color: new echartsCore.graphic.LinearGradient(0, 0, 0, 1, [
         { offset: 0, color: meta.color },
         { offset: 1, color: 'rgba(0,0,0,0)' }
@@ -136,11 +162,18 @@ async function tick() {
     const snapshot = await props.fetcher()
     error.value = ''
     enabled.value = snapshot.enabled !== false
-    series.value = appendSnapshot(series.value, snapshot, Date.now(), props.maxPoints)
+    const now = Date.now()
+    lastTickAt.value = now
+    if (startedAt.value == null) startedAt.value = now
+    series.value = appendSnapshot(series.value, snapshot, now, props.maxPoints)
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
-    // Update only the series data (ECharts diffs + animates the change).
-    chart.value?.setOption({ series: QUEUE_META.map(m => ({ id: m.name, data: series.value[m.name] })) })
+    // Advance the sliding window (X axis follows `now`) and update the series data
+    // (ECharts diffs + animates the change), so dates scroll left each poll.
+    chart.value?.setOption({
+      xAxis: axisWindow(),
+      series: QUEUE_META.map(m => ({ id: m.name, data: series.value[m.name] }))
+    })
   } catch (e) {
     error.value = (e as Error)?.message || 'Ошибка загрузки'
     stop()
@@ -154,18 +187,23 @@ function stopTimer() {
   }
 }
 function scheduleNext() {
+  const gen = pollGen
   timer = setTimeout(async () => {
     await tick()
-    if (isReload.value) scheduleNext()
+    // Only the current generation reschedules — a chain superseded by start()/stop()
+    // (e.g. an interval change during an in-flight fetch) dies here.
+    if (isReload.value && gen === pollGen) scheduleNext()
   }, interval.value * 1000)
 }
 function start() {
   isReload.value = true
+  pollGen++
   stopTimer()
   scheduleNext()
 }
 function stop() {
   isReload.value = false
+  pollGen++
   stopTimer()
 }
 function toggleReload() {
