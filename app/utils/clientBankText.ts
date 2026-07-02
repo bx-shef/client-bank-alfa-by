@@ -64,16 +64,29 @@ function splitKeyValue(line: string): [string, string] {
 }
 
 /**
+ * Hard cap on the decoded input size — a defense-in-depth DoS guard the parser
+ * lacked (issue #19). A real statement is far smaller; refuse anything larger
+ * rather than build a huge line array. The UI/backend upload path should ALSO
+ * cap the raw file before decoding (`scripts/parse-statement.ts` already does),
+ * but the core must not trust its caller. ~20 MB of decoded text.
+ */
+export const MAX_CLIENT_BANK_CHARS = 20_000_000
+
+/**
  * Parse a client-bank text export into structured sections.
  *
  * The input MUST already be a decoded string (the source files are
  * windows-1251; decode with `iconv`/`TextDecoder('windows-1251')` first).
- * Throws on an unrecognized file (missing `***** ^Type=` header).
+ * Throws on an oversized input (`maxChars`, DoS guard #19) or an unrecognized
+ * file (missing `***** ^Type=` header).
  *
  * NOTE (refactor, #19): faithful port — routing rules and the `unrouted` bucket
  * are intentionally kept as-is so behavior matches the live importer.
  */
-export function parseClientBankText(content: string): ClientBankParsed {
+export function parseClientBankText(content: string, maxChars = MAX_CLIENT_BANK_CHARS): ClientBankParsed {
+  if (content.length > maxChars) {
+    throw new Error(`client-bank input too large: ${content.length} chars > ${maxChars}`)
+  }
   if (content.substring(0, FILE_HEADER.length) !== FILE_HEADER) {
     throw new Error('Unexpected file format')
   }

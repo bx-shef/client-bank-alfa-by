@@ -3,9 +3,10 @@
 // clientBankText.ts. Normalization to StatementItem[] lives in oneCStatement.ts
 // (`normalizeOneC`). Issue #21.
 //
-// ⚠️ No input-size / document-count limit here (same gap as clientBankText.ts,
-// issue #19): the caller (UI upload / backend) MUST cap the file size before
-// parsing a user-supplied file — add that guard before wiring the manual upload.
+// Input size is capped (`MAX_ONEC_EXCHANGE_CHARS`, DoS guard #19), like
+// clientBankText.ts. There is still no explicit per-document COUNT limit (bounded
+// only by the input size); the caller (UI upload / backend) should also cap the
+// raw file size before decoding, rather than rely on this single guard.
 //
 // The caller decodes the file to a string first (the files are CP1251 —
 // `Кодировка=Windows`; some emitters use UTF-8/DOS). Structure:
@@ -27,16 +28,25 @@ function splitKeyValue(line: string): [string, string] | null {
   return [line.slice(0, eq).trim(), line.slice(eq + 1).trim()]
 }
 
+/** Hard cap on the decoded input size — the same defense-in-depth DoS guard the
+ * client-bank text parser has (issue #19), so both manual-upload parsers refuse
+ * an oversized input before building the line array. ~20 MB of decoded text. */
+export const MAX_ONEC_EXCHANGE_CHARS = 20_000_000
+
 /**
  * Parse a `1CClientBankExchange` document into its header, account-balance
- * sections, and payment documents. Throws if the first line is not the
- * `1CClientBankExchange` marker (so a caller can sniff the format by catching).
+ * sections, and payment documents. Throws on an oversized input (`maxChars`, DoS
+ * guard #19) or if the first line is not the `1CClientBankExchange` marker (so a
+ * caller can sniff the format by catching).
  *
  * A `СекцияДокумент=<вид>` line opens a document whose type is kept under the
  * synthetic key `Вид`; `КонецДокумента` closes it. `СекцияРасчСчет`/`КонецРасчСчет`
  * bracket a balance section. Keys before the first section land in `header`.
  */
-export function parseOneCExchange(content: string): OneCExchange {
+export function parseOneCExchange(content: string, maxChars = MAX_ONEC_EXCHANGE_CHARS): OneCExchange {
+  if (content.length > maxChars) {
+    throw new Error(`1CClientBankExchange input too large: ${content.length} chars > ${maxChars}`)
+  }
   const lines = content.split(/\r?\n/)
   if ((lines[0] ?? '').trim() !== MARKER) {
     throw new Error('Not a 1CClientBankExchange file')

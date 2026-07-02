@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { parseClientBankText } from '~/utils/clientBankText'
 import {
   clientBankDateToIso,
+  currencyFromNumericCode,
   detectStatementCurrency,
   isBelarusianAccount,
   normalizeClientBank,
@@ -252,6 +253,22 @@ describe('real client-bank formats (Type 3 / Type 4 fixtures)', () => {
     // CrIn 1000 − ΣDb 300 + ΣCredit 500 = CrOut 1200.
     const net = items.reduce((s, i) => s + (i.direction === 'credit' ? i.amount : -i.amount), 0)
     expect(1000 + net).toBeCloseTo(1200, 2)
+  })
+})
+
+describe('currencyFromNumericCode (ISO 4217 numeric → alpha, #73 building block)', () => {
+  it('maps known numeric codes', () => {
+    expect(currencyFromNumericCode('933')).toBe('BYN')
+    expect(currencyFromNumericCode('840')).toBe('USD')
+    expect(currencyFromNumericCode('978')).toBe('EUR')
+    expect(currencyFromNumericCode('643')).toBe('RUB')
+    expect(currencyFromNumericCode('156')).toBe('CNY')
+    expect(currencyFromNumericCode(' 933 ')).toBe('BYN') // trims
+  })
+  it('returns undefined for unknown/empty/undefined input', () => {
+    expect(currencyFromNumericCode('000')).toBeUndefined()
+    expect(currencyFromNumericCode('')).toBeUndefined()
+    expect(currencyFromNumericCode(undefined)).toBeUndefined()
   })
 })
 
