@@ -57,6 +57,12 @@ FROM node:22-alpine AS backend
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
+# Nitro resolves `runtimeConfig.public.commitSha` from env at RUNTIME (unlike the
+# static frontend, which bakes it into __NUXT__.config at generate time). So the
+# final backend image must carry NUXT_PUBLIC_COMMIT_SHA, or /api/health + the footer
+# fall back to 'dev' (#76). The build-arg already reaches this target from CI.
+ARG NUXT_PUBLIC_COMMIT_SHA
+ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 # Nitro's node-server output is self-contained (deps bundled) — copy only .output.
 COPY --from=builder-server /app/.output ./.output
 EXPOSE 3000
