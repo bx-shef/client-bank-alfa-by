@@ -5,6 +5,7 @@ import {
   decideLogin,
   decideLogout,
   isAuthConfigured,
+  operatorAllowed,
   resolveAuthConfig,
   sessionStatus,
   signSession,
@@ -177,5 +178,31 @@ describe('sessionStatus', () => {
   })
   it('reports configured:false when no password is set (gated pages open)', () => {
     expect(sessionStatus(resolveAuthConfig({}), undefined, now)).toEqual({ configured: false, authenticated: false })
+  })
+})
+
+describe('operatorAllowed (server gate for /api/ops/*)', () => {
+  const now = 1_000_000
+  const configured = resolveAuthConfig({ PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw', SESSION_SECRET: 'K' })
+  const open = resolveAuthConfig({}) // no password → zone open
+
+  it('allows any request when auth is NOT configured (zone open)', () => {
+    expect(operatorAllowed(open, undefined, now)).toBe(true)
+    expect(operatorAllowed(open, 'anything', now)).toBe(true)
+  })
+
+  it('allows a valid, unexpired session cookie when configured', () => {
+    const cookie = signSession({ sub: 'operator', exp: now + 10_000 }, configured.secret)
+    expect(operatorAllowed(configured, cookie, now)).toBe(true)
+  })
+
+  it('denies a missing / forged / expired cookie when configured', () => {
+    expect(operatorAllowed(configured, undefined, now)).toBe(false)
+    expect(operatorAllowed(configured, 'not.a.valid.cookie', now)).toBe(false)
+    const expired = signSession({ sub: 'operator', exp: now - 1 }, configured.secret)
+    expect(operatorAllowed(configured, expired, now)).toBe(false)
+    // signed with a different secret → signature mismatch
+    const wrong = signSession({ sub: 'operator', exp: now + 10_000 }, 'OTHER')
+    expect(operatorAllowed(configured, wrong, now)).toBe(false)
   })
 })

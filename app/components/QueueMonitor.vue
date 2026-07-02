@@ -14,7 +14,7 @@
  * visibility are toggled together in toggleLine(); keep both in sync if refactored.
  */
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount } from 'vue'
-import type { ECharts } from 'echarts'
+import type { ECharts } from 'echarts/core'
 import {
   QUEUE_META,
   appendSnapshot,
@@ -46,8 +46,11 @@ const INTERVALS = [2, 5, 10, 30]
 
 const chartEl = ref<HTMLElement | null>(null)
 const chart = shallowRef<ECharts | null>(null)
-// ECharts loaded lazily (client-only); kept out of the SSG landing bundle.
-let echarts: typeof import('echarts') | null = null
+// ECharts loaded lazily (client-only) and TREE-SHAKEN: echarts/core + only the
+// pieces we use (LineChart, Grid/Tooltip/Legend components, Canvas renderer). Keeps
+// the /queues chunk small and out of the SSG landing bundle. `graphic` (area
+// gradient) comes from core — see onMounted.
+let echartsCore: typeof import('echarts/core') | null = null
 let timer: ReturnType<typeof setTimeout> | null = null
 let ro: ResizeObserver | null = null
 
@@ -96,10 +99,10 @@ function buildSeries(meta: typeof QUEUE_META[number]) {
     data: series.value[meta.name] ?? []
   }
   // Area fill under the "main" queue (crm-sync) — analog of the example's isMain.
-  if (meta.main && echarts) {
+  if (meta.main && echartsCore) {
     s.areaStyle = {
       opacity: 0.2,
-      color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+      color: new echartsCore.graphic.LinearGradient(0, 0, 0, 1, [
         { offset: 0, color: meta.color },
         { offset: 1, color: 'rgba(0,0,0,0)' }
       ])
@@ -173,9 +176,16 @@ function toggleLine(row: QueueLegendRow) {
 const legendView = computed<QueueLegendRow[]>(() => rows.value.length ? rows.value : legendRows({ enabled: true, queues: {} }))
 
 onMounted(async () => {
-  echarts = await import('echarts')
+  const [core, charts, components, renderers] = await Promise.all([
+    import('echarts/core'),
+    import('echarts/charts'),
+    import('echarts/components'),
+    import('echarts/renderers')
+  ])
+  core.use([charts.LineChart, components.GridComponent, components.TooltipComponent, components.LegendComponent, renderers.CanvasRenderer])
+  echartsCore = core
   if (!chartEl.value) return
-  chart.value = echarts.init(chartEl.value)
+  chart.value = core.init(chartEl.value)
   redraw()
   ro = new ResizeObserver(() => chart.value?.resize())
   ro.observe(chartEl.value)
