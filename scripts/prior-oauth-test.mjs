@@ -55,6 +55,18 @@ import { loadDotEnv } from './lib/env.mjs'
 // Console + HTTP plumbing shared with alfa-oauth-test.mjs (scripts/lib).
 import { C, log, ok, warn, err, head, die, openBrowser } from './lib/cli.mjs'
 import { httpRequest } from './lib/http.mjs'
+// The pure Open Banking (СПР) core (app/utils/priorOauth.ts) — imported DIRECTLY,
+// not copied, so every URL/body/claim-set this script sends can't drift from the
+// canonical, unit-tested contract the backend engine uses (#45). Node strips the
+// .ts types at runtime (see --experimental-strip-types in `prior:test`). The RS256
+// signing + node:crypto transport stay here; the core is browser-safe/pure.
+import {
+  PRIOR_API_PREFIXES,
+  buildBasicAuthHeader, buildClientCredentialsBody, buildCodeExchangeBody,
+  buildConsentRequest, buildAuthorizeRequestClaims, buildPriorAuthorizeUrl,
+  buildResourceRequestBody, isWindowWithinLimit, buildRegistrationMetadata,
+  extractIntentId, extractResourceId, extractAccounts
+} from '../app/utils/priorOauth.ts'
 
 const args = parseArgs(process.argv.slice(2))
 
@@ -85,24 +97,8 @@ const cfg = {
   full: Boolean(args['full'])
 }
 
-// NOTE: the pure OAuth/consent core — the prefixes, permission set, and the
-// URL/body/claims builders below — is mirrored in app/utils/priorOauth.ts (the
-// canonical, unit-tested contract the backend engine will use). This script
-// keeps its own inline copies to stay standalone (no build step, node:crypto
-// signing lives here); keep the two in sync by hand when the СПР shape changes.
-
-// API bases (СПР), per the official guide.
-const AUTH = '/open-banking-authorize/v1.0'
-const DCR = '/open-banking-dcr/v1.0'
-const OB = '/open-banking/v1.0'
-
-// Consent permissions we need — statements + transactions (income & outcome).
-const CONSENT_PERMISSIONS = [
-  'ReadAccountsBasic', 'ReadAccountsDetail', 'ReadBalances',
-  'ReadStatementsBasic', 'ReadStatementsDetail',
-  'ReadTransactionsBasic', 'ReadTransactionsDetail',
-  'ReadTransactionsCredits', 'ReadTransactionsDebits'
-]
+// API path prefixes (СПР) — from the core, per the official guide.
+const { AUTH, DCR, OB } = PRIOR_API_PREFIXES
 
 const maskToken = t => maskTokenPure(t, cfg.full)
 const maskNumber = n => maskNumberPure(n, cfg.full)
@@ -112,14 +108,14 @@ const nowSec = () => Math.floor(Date.now() / 1000)
 // --- HTTP ------------------------------------------------------------------
 // httpRequest lives in scripts/lib/http.mjs (shared, never disables TLS verify).
 // Sandbox is plain TLS; prod (:9345) is BY-crypto via the СКЗИ gateway, out of
-// this script's scope (issue #41).
-function basicAuth(id, secret) {
-  return 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64')
-}
+// this script's scope (issue #41). The Basic auth header comes from the core
+// (buildBasicAuthHeader).
 
 // POST to the token endpoint with client_secret_basic (sandbox auth method).
-async function postToken(form, { id, secret }) {
-  const body = new URLSearchParams(form).toString()
+// `bodyParams` is a URLSearchParams built by the core (buildClientCredentialsBody
+// / buildCodeExchangeBody) — posted verbatim so the wire format matches priorOauth.ts.
+async function postToken(bodyParams, { id, secret }) {
+  const body = bodyParams.toString()
   // Safe to log: grant_type/scope/code live in the body; the client secret is in
   // the Basic auth header (never logged).
   if (args['verbose']) log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${body}]  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
@@ -127,7 +123,7 @@ async function postToken(form, { id, secret }) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': basicAuth(id, secret),
+      'Authorization': buildBasicAuthHeader(id, secret),
       'Accept': 'application/json',
       'Content-Length': Buffer.byteLength(body)
     },
@@ -184,7 +180,7 @@ function publicJwk(privateKeyPem) {
 // --- steps -----------------------------------------------------------------
 // Token A / Б — client_credentials with the given scope.
 async function clientCredentials(scope, { id, secret, label }) {
-  const r = await postToken({ grant_type: 'client_credentials', scope }, { id, secret })
+  const r = await postToken(buildClientCredentialsBody(scope), { id, secret })
   if (r.status >= 200 && r.status < 300 && r.json && r.json.access_token) {
     ok(`${label}: HTTP ${r.status}, token ${maskToken(r.json.access_token)}, scope "${r.json.scope}", expires ${r.json.expires_in}s`)
     return r.json.access_token
@@ -212,22 +208,16 @@ async function oidcDiscovery(tokenA) {
 
 async function dcrRegister(tokenA, jwks, pem) {
   head('DCR — POST /register (create business app, token A)')
-  // Registration metadata (RFC 7591 + OB fields). Sent either as JSON or, with
-  // --register-jwt, as a signed JWT (application/jwt) — the OB DCR profile often
-  // requires a signed request; a JSON body then triggers a generic 500.
-  // Shape per the DCR swagger (DynamicRegistrationReq): only `redirect_uris` is
-  // required. Two fields that a generic 500 hid: `token_endpoint_auth_method` is
-  // an ARRAY, and `jwks` is a STRING (a serialized JWK Set) — not an object.
-  const meta = {
-    client_name: args['app-name'] ? String(args['app-name']) : 'Импорт выписки в Bitrix24 (bx-shef)',
-    redirect_uris: [cfg.redirectUri],
-    response_types: ['code', 'code id_token'],
-    grant_types: ['authorization_code', 'client_credentials', 'refresh_token'],
-    application_type: 'web',
-    id_token_signed_response_alg: 'RS256',
-    token_endpoint_auth_method: ['client_secret_basic'],
-    ...(jwks ? { jwks: JSON.stringify(jwks) } : {})
-  }
+  // Registration metadata (RFC 7591 + OB fields) — from the core
+  // (buildRegistrationMetadata: token_endpoint_auth_method as an ARRAY, jwks as a
+  // serialized STRING; only redirect_uris is required). Sent either as JSON or,
+  // with --register-jwt, as a signed JWT (application/jwt) — the OB DCR profile
+  // often requires a signed request; a JSON body then triggers a generic 500.
+  const meta = buildRegistrationMetadata({
+    clientName: args['app-name'] ? String(args['app-name']) : 'Импорт выписки в Bitrix24 (bx-shef)',
+    redirectUri: cfg.redirectUri,
+    jwks
+  })
 
   let contentType = 'application/json'
   let payload = JSON.stringify(meta)
@@ -278,18 +268,18 @@ async function dcrRegister(tokenA, jwks, pem) {
 
 async function createConsent(tokenB) {
   head('Consent — POST /accountConsents (token Б)')
-  const data = {
-    permissions: CONSENT_PERMISSIONS,
-    expirationDate: cfg.expires, // future — consent validity, not the statement window
-    ...(cfg.from ? { transactionFromDate: cfg.from } : {}),
-    ...(cfg.to ? { transactionToDate: cfg.to } : {})
-  }
-  const res = await obRequest(`${OB}/accountConsents`, { method: 'POST', accessToken: tokenB, json: { data } })
+  // Consent body (permissions default to CONSENT_PERMISSIONS) + `{ data: … }`
+  // envelope — from the core. expirationDate is FUTURE (consent validity), the
+  // transaction window may be in the past.
+  const body = buildConsentRequest({
+    expirationDate: cfg.expires,
+    transactionFromDate: cfg.from || undefined,
+    transactionToDate: cfg.to || undefined
+  })
+  const res = await obRequest(`${OB}/accountConsents`, { method: 'POST', accessToken: tokenB, json: body })
   log(`${C.dim}HTTP ${res.status}${C.reset}`)
-  // The intent id lives under data.consentId / data.accountConsentId /
-  // openbanking_intent_id depending on the revision — accept any.
-  const d = res.json && res.json.data ? res.json.data : res.json
-  const intentId = d && (d.consentId || d.accountConsentId || d.openbanking_intent_id || d.ConsentId)
+  // The intent id field name varies by revision — extractIntentId accepts any.
+  const intentId = extractIntentId(res.json)
   if (res.status >= 200 && res.status < 300 && intentId) {
     ok(`consent created — intent ${intentId}`)
     return String(intentId)
@@ -300,41 +290,32 @@ async function createConsent(tokenB) {
 }
 
 function buildAuthorizeUrl(intentId, aud, privateKeyPem) {
-  const nonce = `n-${randomUUID()}`
-  const claim = { value: intentId, essential: true }
-  const requestJwt = signJwt({
-    client_id: cfg.clientId,
-    sub: cfg.clientId,
-    response_type: 'code',
-    nonce,
-    redirect_uri: cfg.redirectUri,
-    scope: 'openid accounts',
-    aud: [aud],
-    claims: {
-      userinfo: { openbanking_intent_id: claim },
-      id_token: { openbanking_intent_id: claim }
-    },
-    iss: cfg.clientId,
-    exp: nowSec() + 600,
-    iat: nowSec(),
-    jti: `${randomUUID()}`
-  }, privateKeyPem)
-  const q = new URLSearchParams({
-    response_type: 'code',
-    client_id: cfg.clientId,
-    redirect_uri: cfg.redirectUri,
-    scope: 'openid accounts',
-    prompt: 'login',
+  // Claim-set + authorize URL come from the core; only the RS256 signing stays
+  // local (node:crypto). The core binds openbanking_intent_id and applies the
+  // AUTH prefix + /oauth2/authorize.
+  const claims = buildAuthorizeRequestClaims({
+    clientId: cfg.clientId,
+    redirectUri: cfg.redirectUri,
+    intentId,
+    aud,
+    nonce: `n-${randomUUID()}`,
     state: cfg.state,
-    request: requestJwt
+    nowSec: nowSec(),
+    jti: `${randomUUID()}`
   })
-  return `${cfg.base}${AUTH}/oauth2/authorize?${q.toString()}`
+  const requestJwt = signJwt(claims, privateKeyPem)
+  return buildPriorAuthorizeUrl(cfg.base, {
+    clientId: cfg.clientId,
+    redirectUri: cfg.redirectUri,
+    state: cfg.state,
+    requestJwt
+  })
 }
 
 async function exchangeCode(code) {
   head('Exchange authorization_code → token B')
   const r = await postToken(
-    { grant_type: 'authorization_code', code, redirect_uri: cfg.redirectUri },
+    buildCodeExchangeBody(code, cfg.redirectUri),
     { id: cfg.clientId, secret: cfg.clientSecret }
   )
   log(`${C.dim}HTTP ${r.status}${C.reset}`)
@@ -361,12 +342,12 @@ async function listAccounts(tokenB) {
     log(res.json ? JSON.stringify(res.json, null, 2) : trunc(res.text, 600))
     return { raw: res.json ?? res.text, accounts: [] }
   }
-  const d = res.json && res.json.data ? res.json.data : res.json
-  const accounts = (d && (d.account || d.accounts)) || (Array.isArray(d) ? d : [])
+  // Account list normalized by the core (tolerates data.account/accounts, casing,
+  // IBAN under accountDetails.identification).
+  const accounts = extractAccounts(res.json)
   ok(`${accounts.length} account(s)`)
   for (const a of accounts) {
-    const iban = a.accountDetails?.identification ?? a.iban ?? a.identification ?? a.number
-    log(`  • id ${a.accountId ?? a.AccountId ?? '?'}  ${maskNumber(iban)}  ${a.currency ?? a.currIso ?? ''}  ${a.accountSubType ?? ''}`)
+    log(`  • id ${a.accountId || '?'}  ${maskNumber(a.identification)}  ${a.currency ?? ''}  ${a.accountSubType ?? ''}`)
   }
   return { raw: res.json, accounts }
 }
@@ -386,21 +367,17 @@ async function fetchAsync(tokenB, accountId, kind) {
   log(`\n${C.bold}account ${accountId} — ${kind}${C.reset}`)
   const from = cfg.from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
   const to = cfg.to || new Date().toISOString().slice(0, 10)
-  if ((new Date(to) - new Date(from)) / 864e5 > 93) {
+  if (!isWindowWithinLimit(from, to)) {
     warn(`  window ${from}…${to} exceeds 3 months — Priorbank will reject it; narrow --from/--to`)
   }
-  // Date formats differ by endpoint (both confirmed live): statements want a
-  // bare `yyyy-MM-dd`, transactions want a full ISO datetime with the +03:00
-  // (Belarus) offset — `YYYY-MM-DDThh:mm:ss±hh:mm`.
-  const fromBookingDate = kind === 'transactions' ? `${from}T00:00:00+03:00` : from
-  const toBookingDate = kind === 'transactions' ? `${to}T23:59:59+03:00` : to
-  const createBody = { data: { [key]: { fromBookingDate, toBookingDate } } }
+  // Create body — from the core (date formats differ by endpoint: statements a
+  // bare `yyyy-MM-dd`, transactions a full ISO datetime with the +03:00 offset).
+  const createBody = buildResourceRequestBody(kind, from, to)
   const created = await obRequest(`${OB}/accounts/${accountId}/${kind}`, {
     method: 'POST', accessToken: tokenB, json: createBody
   })
   log(`  ${C.dim}create: HTTP ${created.status}${C.reset}`)
-  const node = created.json?.data?.[key] || created.json?.data || created.json
-  const resourceId = node && (node[idKey] || node.id)
+  const resourceId = extractResourceId(kind, created.json)
   if (!resourceId) {
     err(`  no ${idKey} returned`)
     log('  ' + (created.json ? trunc(JSON.stringify(created.json), 400) : trunc(created.text, 400)))
@@ -429,7 +406,7 @@ async function runStatements(accessToken) {
   let ids = cfg.accountId
     ? [cfg.accountId]
     : (await listAccounts(accessToken)).accounts
-        .map(a => a.accountId || a.AccountId).filter(Boolean)
+        .map(a => a.accountId).filter(Boolean)
   if (!cfg.accountId && !args['all'] && ids.length > 1) {
     warn(`processing only the first account (${ids[0]}) to avoid the sandbox rate limit — use --account <id> or --all`)
     ids = ids.slice(0, 1)
@@ -451,7 +428,7 @@ async function revoke(token) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': basicAuth(cfg.clientId, cfg.clientSecret),
+      'Authorization': buildBasicAuthHeader(cfg.clientId, cfg.clientSecret),
       'Content-Length': Buffer.byteLength(body)
     },
     body

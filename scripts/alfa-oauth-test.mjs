@@ -43,6 +43,13 @@ import { loadDotEnv } from './lib/env.mjs'
 // Console + HTTP plumbing shared with prior-oauth-test.mjs (scripts/lib).
 import { C, log, ok, warn, err, head, die, openBrowser } from './lib/cli.mjs'
 import { httpRequest } from './lib/http.mjs'
+// The pure OAuth core (app/utils/alfaOauth.ts) — imported DIRECTLY, not copied,
+// so the authorize URL + token/refresh bodies this script actually sends can't
+// drift from the canonical, unit-tested contract the backend engine uses (#45).
+// Node strips the .ts types at runtime (see --experimental-strip-types in the
+// `oauth:test` script in package.json). The core has no imports of its own, so
+// no loader/alias is needed.
+import { buildAuthorizeUrl, buildTokenExchangeBody, buildRefreshBody } from '../app/utils/alfaOauth.ts'
 
 const args = parseArgs(process.argv.slice(2))
 
@@ -80,15 +87,12 @@ const maskNumber = n => maskNumberPure(n, cfg.full)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-async function postToken(form) {
-  // Client credentials go in the FORM BODY (client_id + client_secret) — the
-  // canonical method per Alfa's own docs and app/utils/alfaOauth.ts (#26). Not
-  // logged. Merged with the grant params so every /token call carries the creds.
-  const body = new URLSearchParams({
-    ...form,
-    client_id: cfg.clientId,
-    client_secret: cfg.clientSecret
-  }).toString()
+async function postToken(bodyParams) {
+  // `bodyParams` is a URLSearchParams already built by the core (it carries
+  // client_id + client_secret in the FORM BODY — Alfa's canonical method, #26 —
+  // and is never logged). Posting it verbatim keeps the wire format identical to
+  // app/utils/alfaOauth.ts.
+  const body = bodyParams.toString()
   return httpRequest(`${cfg.base}/token`, {
     method: 'POST',
     headers: {
@@ -112,28 +116,19 @@ async function apiGet(path, accessToken, query) {
 }
 
 // --- OAuth helpers ---------------------------------------------------------
-// NOTE: this mirrors the canonical contract in app/utils/alfaOauth.ts (authorize
-// URL, token/refresh bodies). Keep the two in sync by hand when the Alfa OAuth
-// shape changes. Client-auth method is now aligned (#26): both send client_id +
-// client_secret in the FORM BODY, matching Alfa's documented example. (Sandbox
-// also accepted HTTP Basic — confirm the prod method with Alfa on the BY run.)
-function buildAuthorizeUrl() {
-  const q = new URLSearchParams({
-    response_type: 'code',
-    client_id: cfg.clientId,
-    redirect_uri: cfg.redirectUri,
-    scope: cfg.scope,
-    state: cfg.state
-  })
-  return `${cfg.base}/authorize?${q.toString()}`
-}
+// The authorize URL and token/refresh bodies come straight from the core
+// (app/utils/alfaOauth.ts) — bind cfg here so the call sites stay terse. Client
+// auth = client_id + client_secret in the FORM BODY (#26; sandbox also accepted
+// HTTP Basic — confirm the prod method with Alfa on the BY run).
+const authorizeUrl = () =>
+  buildAuthorizeUrl({ baseUrl: cfg.base, clientId: cfg.clientId, redirectUri: cfg.redirectUri, scope: cfg.scope }, cfg.state)
 
 // --- steps -----------------------------------------------------------------
 async function preflight() {
   head('Preflight: gateway reachability')
   log(`${C.dim}base:${C.reset} ${cfg.base}`)
   try {
-    const r = await postToken({})
+    const r = await postToken(new URLSearchParams()) // empty body → expected OAuth error, just probes reachability
     if (r.json && r.json.error) {
       ok(`/token is live — ${r.status} OAuth error "${r.json.error}" (expected for an empty request)`)
     } else {
@@ -151,7 +146,7 @@ async function preflight() {
 
 async function exchangeCode(code) {
   head('Step 1: exchange authorization_code → tokens')
-  const r = await postToken({ grant_type: 'authorization_code', code, redirect_uri: cfg.redirectUri })
+  const r = await postToken(buildTokenExchangeBody({ clientId: cfg.clientId, redirectUri: cfg.redirectUri }, code, cfg.clientSecret))
   log(`${C.dim}HTTP ${r.status}${C.reset}`)
   if (r.status >= 200 && r.status < 300 && r.json && r.json.access_token) {
     log(`  access_token:  ${maskToken(r.json.access_token)}`)
@@ -267,7 +262,7 @@ async function getStatements(accessToken, accounts) {
 
 async function refresh(refreshToken) {
   head('Step 4: refresh_token → new access_token')
-  const r = await postToken({ grant_type: 'refresh_token', refresh_token: refreshToken })
+  const r = await postToken(buildRefreshBody({ clientId: cfg.clientId }, refreshToken, cfg.clientSecret))
   log(`${C.dim}HTTP ${r.status}${C.reset}`)
   if (r.status >= 200 && r.status < 300 && r.json && r.json.access_token) {
     log(`  new access_token:  ${maskToken(r.json.access_token)}`)
@@ -304,7 +299,7 @@ async function main() {
 
   if (args['url-only']) {
     head('Authorize URL')
-    log(buildAuthorizeUrl())
+    log(authorizeUrl())
     return
   }
   if (args['refresh']) {
@@ -323,7 +318,7 @@ async function main() {
   let code = args['code'] ? String(args['code']) : null
   if (!code) {
     head('Authorize: open this URL, log in, approve')
-    const url = buildAuthorizeUrl()
+    const url = authorizeUrl()
     log(url)
     openBrowser(url)
     log(`${C.dim}(opening your browser…)${C.reset}`)
