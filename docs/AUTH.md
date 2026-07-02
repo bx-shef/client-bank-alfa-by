@@ -60,8 +60,17 @@
   порт backend замаплен — там заголовок можно подделать, это только для локальной разработки).
 - **CSRF**: мутации (`login`/`logout`) требуют кастомный заголовок `X-CBA-Auth` — его
   нельзя выставить кросс-сайтовой формой без CORS-preflight (CORS-заголовки нигде не
-  выставляются); плюс `SameSite=Lax`. Брутфорс-защиты (rate-limit) на `/api/auth/login`
-  пока нет — вынесено в follow-up (nginx `limit_req`).
+  выставляются); плюс `SameSite=Lax`.
+- **Брутфорс (rate-limit)**: `nginx.conf` дросселирует `POST /api/auth/login` — зона
+  `limit_req_zone … zone=login rate=10r/m` по IP клиента, в `location = /api/auth/login`
+  применяется `limit_req zone=login burst=5 nodelay` (лишнее → **429**). `burst=5 nodelay`
+  прощает пару быстрых опечаток оператора, дальше держит ~10/мин на IP — онлайн-подбор
+  общего пароля непрактичен. IP клиента восстанавливается из `X-Forwarded-For` (`real_ip`
+  с доверенными приватными диапазонами — иначе все операторы делили бы один бакет прокси).
+  Проверка (dev/stage): `for i in $(seq 1 20); do curl -s -o /dev/null -w "%{http_code}\n"
+  -X POST https://<домен>/api/auth/login -H 'X-CBA-Auth: 1' -H 'Content-Type: application/json'
+  -d '{"user":"x","password":"y"}'; done` → первые ответы 401, дальше 429. Внутриприложенного
+  lockout нет — защита на nginx (backend наружу не публикуется).
 - **Открытый редирект**: `?redirect=` пропускается только как относительный путь —
   чистый гвард `safeRedirect` (`app/utils/loginRedirect.ts`, покрыт тестами) отвергает
   `//host` **и** backslash-обход `/\host` (WHATWG нормализует `\`→`/`), не полагаясь на
