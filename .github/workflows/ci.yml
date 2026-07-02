@@ -17,6 +17,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Manual redeploy: re-run the pipeline on `main` (build + push to GHCR) so a
+  # changed repo variable/secret (e.g. NUXT_PUBLIC_SITE_URL) is re-baked without a
+  # code commit. Deploy still only pushes on the `main` ref (the deploy job's `if`).
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -103,10 +107,11 @@ jobs:
     name: Build & Push to GHCR
     needs: ci
     # Gate the deploy on CI: a red CI blocks images from ever reaching GHCR /
-    # Watchtower. Only the main branch deploys. Publishes two images:
+    # Watchtower. Only the main branch deploys (via a push or a manual
+    # workflow_dispatch redeploy). Publishes two images:
     #   runner  → ghcr.io/<repo>           (nginx static landing + B24-iframe UI)
     #   backend → ghcr.io/<repo>-backend   (Nitro node: B24 webhooks + token store)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
