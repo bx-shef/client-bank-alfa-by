@@ -10,6 +10,10 @@
 // public SSG domain.
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 
+// Employee/ops area — gated by the operator login (client redirect to /login when
+// a password is configured and there is no session; see docs/AUTH.md).
+definePageMeta({ middleware: 'auth' })
+
 useHead({
   title: 'Очереди — монитор',
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]

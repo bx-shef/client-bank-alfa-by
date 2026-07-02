@@ -88,6 +88,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   **access-токен + домен** и шлёт их в `/api/settings` (GET/POST) заголовками
   `Authorization: Bearer` + `X-B24-Domain`; backend этим токеном пишет/читает `app.option`. Вне
   портала инертна (токена нет). member_id UI не доверяет — изоляция на стороне B24 (токен скоуплен к порталу).
+- **Авторизация оператора** (вход для сотрудников в служебную зону — `/queues`, дальше страницы импорта;
+  лендинг и B24-встройку не закрывает) — [`docs/AUTH.md`](docs/AUTH.md). Чистое ядро `server/utils/session.ts`
+  (`resolveAuthConfig`/`checkCredentials` constant-time, `signSession`/`verifySession` — HMAC-подпись cookie;
+  тесты). Роуты `server/api/auth/login|logout|session`. Клиент — `app/composables/useAuth.ts`, форма
+  `app/pages/login.vue` (публичная, `noindex`), гвард `app/middleware/auth.ts` (клиентский редирект;
+  реальная защита — на API). Cookie `cba_sess` HttpOnly/SameSite=Lax/Secure, CSRF-заголовок `X-CBA-Auth`.
+  Пароль пуст ⇒ вход выключен. Модель портирована из `postroyka/purchase-ai-chat`. B24 silent-сессия — далее.
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**

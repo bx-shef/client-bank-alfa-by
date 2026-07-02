@@ -53,6 +53,9 @@
   (имена очередей `b24-events`/`bank-fetch`/`file-parse`, payload'ы, идемпотентные `jobId`) +
   `server/queue/connection.ts` (ленивый `getQueue`, гуард `REDIS_URL`); Redis в изолированной сети
   `queuenet`. Продюсеры и воркер-контейнер — далее (Фаза 2).
+- **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
+  гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
+  `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`.
 - **Деплой**: фронтенд и backend собираются в Docker-образы (GHCR + Watchtower за nginx-proxy),
   один домен, nginx проксирует `/api/*` в backend; CI (lint/test/typecheck/generate + сборка образов).
 
