@@ -15,7 +15,7 @@ import {
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
 import { deleteToken, saveToken } from '../utils/tokenStore'
-import { deleteDedupForPortal } from '../utils/activityDedupStore'
+import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/activityDedupStore'
 import { decryptSecret } from '../utils/secretCrypto'
 
 /** Live side-effects for the handlers. Transports are stubs for now (return the
@@ -26,16 +26,22 @@ export function liveHandlerDeps(): HandlerDeps {
     // for DEMO- accounts (the load demo), and nothing for real accounts.
     fetchStatement: async job => demoItems(job),
     parseFile: async () => [], // TODO #19: wire clientBank parser → StatementItem[]
-    // TODO stage 4: bind a per-portal RestCall (ensureAccessToken + callRest for the
-    // job's memberId) and delegate to findCompanyByAccount(item.counterparty.account)
-    // from server/utils/companyLookup.ts — the pure lookup core is ready + tested.
-    // NB: findCompany/writeActivity/notifyChat are portal-blind today ((item) => …);
-    // the job's memberId lives on CrmSyncJob, not StatementItem, so wiring first
-    // needs a HandlerDeps contract change to thread memberId (or the job) into these
-    // three — deps are built once in startWorkers(), not per-job.
+    // TODO stage 4 (live wiring): bind a per-portal RestCall (ensureAccessToken +
+    // callRest for `memberId`) and delegate to findCompanyByAccount(
+    // item.counterparty.account) from server/utils/companyLookup.ts (ready + tested).
+    // Must GATE demo accounts (item.account starts with DEMO_ACCOUNT_PREFIX) so the
+    // load demo never writes to a real portal's CRM.
     findCompany: async () => null,
-    writeActivity: async () => {}, // TODO stage 4: crm.activity.todo.add
+    // TODO stage 4 (live wiring): build crm.activity.todo.add params via
+    // app/utils/activity.ts buildTodoActivity and POST via the per-portal RestCall;
+    // return the new activity id (for rememberActivity) or null when skipped.
+    writeActivity: async () => null,
     notifyChat: async () => {}, // TODO stage 6: im.message.add by chat rules
+    // Persistent dedup store (#9) — read-before-write guard, wired to Postgres.
+    getActivityId: (memberId, key) => getActivityId(dbQuery, memberId, key),
+    rememberActivity: async (memberId, key, activityId) => {
+      await rememberActivity(dbQuery, memberId, key, activityId)
+    },
     // Register a portal: decrypt the refresh blob carried in the job (never plain
     // in Redis) and upsert the token row (write-once application_token in saveToken).
     // No DATABASE_URL guard: if the DB is missing/down, saveToken throws → BullMQ

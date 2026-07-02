@@ -108,9 +108,12 @@
    пройдёт повторно. Нужен **персистентный `{dedupKey→activityId}`** (issue #9), сверяемый
    **до записи** (read-before-write), иначе рестарт воркера задвоит дела. Это разные вещи:
    (а) дедуп постановки по `jobId` — уже есть; (б) дедуп записи в CRM при редоставке — нужен здесь.
-   **Статус:** стор готов — `server/utils/activityDedupStore.ts` (таблица `activity_dedup`, always-purge
-   при удалении портала); осталась проводка read-before-write вокруг `writeActivity` + поиск компании
-   (`companyLookup.ts` тоже готов) — это и есть остаток стадии 4.
+   **Статус:** стор дедупа (`activityDedupStore.ts`, таблица `activity_dedup`, always-purge),
+   поиск компании (`companyLookup.ts`) и **read-before-write-проводка в `handleCrmSyncJob`**
+   (`getActivityId`→skip / `findCompany`→`writeActivity`→`rememberActivity`→`notifyChat`, счётчики
+   `created/skipped/unmatched`) — **готовы и покрыты тестами**. Остаток стадии 4 — оживить транспорты
+   `findCompany`/`writeActivity` (per-portal `RestCall` → `findCompanyByAccount` + `buildTodoActivity`
+   → `crm.activity.todo.add`), с гейтом демо-счётов, чтобы демо-нагрузка не писала в реальный портал.
    Плюс на очередях выставлены `attempts`/`backoff`/`removeOnComplete/Fail` (см. `connection.ts`).
 5. **Cron-опрос через очередь.** Планировщик кладёт в `bank-fetch` job на портал/счёт (fan-out по
    `portal_tokens`); воркеры (масштабируются репликами) тянут выписку, соблюдая rate-limit Альфы

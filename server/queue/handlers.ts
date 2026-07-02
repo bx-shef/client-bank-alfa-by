@@ -3,26 +3,36 @@
 // transports (bank fetch, file parse, B24 REST) are wired in worker.ts and land
 // with stages 3–6. Handlers return a small summary (useful for logs/metrics).
 //
-// Flow:  bank-fetch ─┐                       ┌─ find company (corr-account)
-//                    ├─► crm-sync ─ analyse ─┼─ write universal activity
-//        file-parse ─┘   (dedup, split)      └─ notify chat (by rules)
+// Flow:  bank-fetch ─┐                       ┌─ skip if already written (#9 store)
+//                    ├─► crm-sync ─ analyse ─┼─ else: find company (corr-account)
+//        file-parse ─┘   (dedup, split)      ├─ write activity + remember its id
+//                                            └─ notify chat (by rules)
 
 import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, splitByDirection } from '../../app/utils/statement'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
-/** Side-effects the handlers need, injected so the logic stays pure/testable. */
+/** Side-effects the handlers need, injected so the logic stays pure/testable.
+ *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's
+ *  `memberId` explicitly — deps are built once in startWorkers(), not per-job, so
+ *  the portal context rides on the call, not the closure. */
 export interface HandlerDeps {
   /** Pull a statement window from the bank (Alfa/Prior transport — stage 3/5). */
   fetchStatement: (job: FetchJob) => Promise<StatementItem[]>
   /** Parse an uploaded client-bank file into operations (manual import — #19). */
   parseFile: (job: ParseJob) => Promise<StatementItem[]>
-  /** Look up a CRM company id by the counterparty's settlement account (stage 4). */
-  findCompany: (item: StatementItem) => Promise<string | null>
-  /** Write a universal activity for one operation (stage 4). */
-  writeActivity: (item: StatementItem, companyId: string | null) => Promise<void>
+  /** Look up a CRM company id by the counterparty's settlement account. */
+  findCompany: (item: StatementItem, memberId: string) => Promise<string | null>
+  /** Write a universal activity for one operation. Returns the created activity id
+   *  (to remember for dedup), or `null` if nothing was written (e.g. no company
+   *  matched, so there's no owner for a todo). */
+  writeActivity: (item: StatementItem, companyId: string | null, memberId: string) => Promise<string | null>
   /** Post a chat message about one operation, if the rules allow (stage 6). */
-  notifyChat: (item: StatementItem) => Promise<void>
+  notifyChat: (item: StatementItem, memberId: string) => Promise<void>
+  /** Persistent dedup: the activity id already written for this op, or null (#9). */
+  getActivityId: (memberId: string, dedupKey: string) => Promise<string | null>
+  /** Persistent dedup: record the activity id written for this op (#9). */
+  rememberActivity: (memberId: string, dedupKey: string, activityId: string) => Promise<void>
   /** Register a portal on ONAPPINSTALL — decrypt the refresh blob, upsert the token row. */
   savePortal: (job: EventJob) => Promise<void>
   /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges). */
@@ -79,17 +89,21 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 }
 
 /** Analyse a normalized batch and act in Bitrix24: dedupe within the batch, then
- *  per operation find the company, write the activity, and notify chat. */
+ *  per operation apply read-before-write — skip ops already written (persistent
+ *  dedup, survives job redelivery), else find the company, write the activity,
+ *  remember it, and notify chat.
+ *
+ *  Counters: `processed` = unique ops in the batch; `skipped` = already written in
+ *  a prior (redelivered) run; `created` = new activities written + remembered;
+ *  `unmatched` = new ops where nothing was written (e.g. no company → no owner).
+ *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
+ *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
+ */
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, credits: number, debits: number }> {
-  // Dedupe WITHIN this batch (account|docId). NB: this does NOT protect against
-  // at-least-once redelivery of the whole job (worker crash/retry after partial
-  // writes) — that needs the PERSISTENT {dedupKey→activityId} store (issue #9,
-  // server/utils/activityDedupStore.ts) consulted read-before-write around
-  // writeActivity. Stage-4 wiring adds getActivityId/rememberActivity to
-  // HandlerDeps and calls them here, before writeActivity stops being a no-op.
+): Promise<{ processed: number, created: number, skipped: number, unmatched: number, credits: number, debits: number }> {
+  // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
     const key = dedupKey(it)
@@ -98,12 +112,28 @@ export async function handleCrmSyncJob(
     return true
   })
 
+  let created = 0
+  let skipped = 0
+  let unmatched = 0
   for (const item of unique) {
-    const companyId = await deps.findCompany(item)
-    await deps.writeActivity(item, companyId)
-    await deps.notifyChat(item)
+    const key = dedupKey(item)
+    // Persistent dedup (#9): if this op already produced an activity in a prior
+    // run of the (redelivered) job, don't create a second one.
+    if (await deps.getActivityId(job.memberId, key)) {
+      skipped++
+      continue
+    }
+    const companyId = await deps.findCompany(item, job.memberId)
+    const activityId = await deps.writeActivity(item, companyId, job.memberId)
+    if (!activityId) {
+      unmatched++
+      continue
+    }
+    await deps.rememberActivity(job.memberId, key, activityId)
+    await deps.notifyChat(item, job.memberId)
+    created++
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, skipped, unmatched, credits: credits.length, debits: debits.length }
 }
