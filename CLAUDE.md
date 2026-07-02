@@ -170,13 +170,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     приложения всегда стирает всё** для портала (флаг `CLEAN` не смотрим). Покрыт тестами.
   - `server/utils/tokenStore.ts` — хранилище токенов портала над инъектируемым `QueryFn`
     (`save`/`get`/`getApplicationToken`/`delete`, write-once `application_token`). Тесты на fake-query.
+  - `server/utils/activityDedupStore.ts` — персистентный стор дедупа дел `{dedupKey→activityId}`
+    (issue #9, таблица `activity_dedup`, скоуп по `member_id`): `getActivityId`/`rememberActivity`
+    (write-once, `ON CONFLICT DO NOTHING`)/`deleteDedupForPortal`. Над `QueryFn`, тесты на fake-query.
+    Переживает рестарт воркера и повторную доставку джобы (in-batch `Set` — нет). Проводка
+    read-before-write вокруг `writeActivity` — стадия 4; удаление приложения чистит и его (always-purge).
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/utils/envCheck.ts` (+ плагин `server/plugins/envCheck.ts`) — валидация env на старте
     (чистая `checkBackendEnv`, тесты): `B24_TOKEN_ENC_KEY` есть и декодируется в 32 байта; `DATABASE_URL`
     задан; `B24_APPLICATION_TOKEN` не плейсхолдер (`CHANGE_ME` и т.п. → реальный токен не совпадёт → 403);
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
-  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема `portal_tokens`;
+  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `activity_dedup`);
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):

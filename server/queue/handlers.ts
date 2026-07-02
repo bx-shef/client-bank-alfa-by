@@ -86,9 +86,10 @@ export async function handleCrmSyncJob(
 ): Promise<{ processed: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId). NB: this does NOT protect against
   // at-least-once redelivery of the whole job (worker crash/retry after partial
-  // writes) — that needs a PERSISTENT {dedupKey→activityId} store consulted
-  // read-before-write in findCompany/writeActivity. That store is a BLOCKING
-  // requirement for stage 4 (issue #9), before writeActivity stops being a no-op.
+  // writes) — that needs the PERSISTENT {dedupKey→activityId} store (issue #9,
+  // server/utils/activityDedupStore.ts) consulted read-before-write around
+  // writeActivity. Stage-4 wiring adds getActivityId/rememberActivity to
+  // HandlerDeps and calls them here, before writeActivity stops being a no-op.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
     const key = dedupKey(it)

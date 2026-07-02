@@ -15,6 +15,7 @@ import {
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
 import { deleteToken, saveToken } from '../utils/tokenStore'
+import { deleteDedupForPortal } from '../utils/activityDedupStore'
 import { decryptSecret } from '../utils/secretCrypto'
 
 /** Live side-effects for the handlers. Transports are stubs for now (return the
@@ -53,7 +54,11 @@ export function liveHandlerDeps(): HandlerDeps {
         applicationToken: c.applicationToken
       })
     },
-    deletePortal: async memberId => deleteToken(dbQuery, memberId),
+    // Uninstall always erases EVERYTHING for the portal: token row + dedup map.
+    deletePortal: async (memberId) => {
+      await deleteToken(dbQuery, memberId)
+      await deleteDedupForPortal(dbQuery, memberId)
+    },
     enqueueCrmSync
   }
 }
