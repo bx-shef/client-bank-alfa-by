@@ -90,15 +90,17 @@ flowchart LR
 
 ## Наблюдаемость (источник для визуализации)
 
-- **`GET /api/queues`** ([`server/api/queues.get.ts`](../server/api/queues.get.ts)) — по каждой из
-  четырёх очередей счётчики `getJobCounts()`:
-  `{ waiting, active, completed, failed, delayed, paused }`.
-  Это и есть данные для графика: опрашивать раз в несколько секунд, рисовать по времени.
-  Guard — `B24_APPLICATION_TOKEN` (заголовок `X-Check-Token` или `?token=`, constant-time);
-  снаружи закрыт (nginx `deny all`).
-- **`scripts/queue-stats.sh`** — тот же срез из консоли.
-- Глубокая телеметрия (Prometheus-экспортёр BullMQ / bull-board / Grafana) — зафиксированное
-  намерение, отдельный этап.
+Чтение счётчиков — общий [`server/queue/stats.ts`](../server/queue/stats.ts) (`readQueueCounts`,
+DI, покрыт тестами); по каждой из четырёх очередей `getJobCounts()` →
+`{ waiting, active, completed, failed, delayed, paused }`. Два эндпоинта с разными guard'ами:
+
+- **`GET /api/queues`** ([`server/api/queues.get.ts`](../server/api/queues.get.ts)) — для консоли/диагностики.
+  Guard — `B24_APPLICATION_TOKEN` **только заголовком** `X-Check-Token` (constant-time); `?token=` убран
+  (утекал бы в логи/историю). Снаружи закрыт (nginx `deny all`). Из консоли — `scripts/queue-stats.sh`.
+- **`GET /api/ops/queues`** ([`server/api/ops/queues.get.ts`](../server/api/ops/queues.get.ts)) — **путь
+  для браузера оператора**: guard по **сессии** (`operatorAllowed`, cookie `cba_sess`; когда пароль не
+  задан — зона открыта, как и клиентский гвард). Именно его опрашивает страница `/queues`.
+- Глубокая телеметрия (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78.
 
 Пример ответа:
 
@@ -121,16 +123,17 @@ flowchart LR
 Apache-2.0, бесплатна — без вотермарок и лицензионных ограничений). Компонент —
 [`app/components/QueueMonitor.vue`](../app/components/QueueMonitor.vue); чистая логика
 временного ряда (скользящее окно, дедуп точек, легенда) — [`app/utils/queueChart.ts`](../app/utils/queueChart.ts)
-(покрыта тестами). ECharts грузится динамически только на этой странице (вне лендинг-бандла).
+(покрыта тестами). ECharts грузится динамически и **tree-shaken** (`echarts/core` +
+Line/Grid/Tooltip/Legend/Canvas) только на этой странице (вне лендинг-бандла). Страница за
+`middleware: auth`, `noindex`.
 
 - **X** — время, **Y** — backlog очереди; каждая очередь = линия (у `crm-sync` — заливка);
   на конце линии — текущее значение; справа — таблица `ждут / работа / готово / ошибки`
   (клик по строке скрывает/показывает линию); кнопка пауза + выбор интервала опроса.
-- Ряд строится **на клиенте**: `GET /api/queues` отдаёт только текущий снапшот (без истории),
+- Ряд строится **на клиенте**: `GET /api/ops/queues` отдаёт только текущий снапшот (без истории),
   поэтому каждый опрос добавляет точку и сдвигает окно (эффект бегущей ленты).
-- Сейчас страница на **демо-данных** (генератор в `queues.vue`) — `/api/queues` server-only
-  (guard + nginx `deny all`), из браузера портала недостижим; в операторской среде заменить
-  `demoFetcher` на реальный `fetch('/api/queues')` с токеном. Глубокая телеметрия (Grafana) — далее.
+- Источник — реальный `GET /api/ops/queues` (по сессии оператора). Флаг **`?demo=1`** переключает на
+  клиентский генератор (превью без backend — для скриншотов/дев). Глубокая телеметрия (Grafana) — #78.
 
 Порт выполнен по внешнему примеру `shef.rabbitmq:statistic` (оригинал — коммерческий amCharts4),
 переведён на бесплатную ECharts.

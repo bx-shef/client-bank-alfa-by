@@ -1,17 +1,16 @@
 <script setup lang="ts">
 // Ops page: a live chart of BullMQ queue lengths (QueueMonitor + ECharts).
 //
-// In prod the source is GET /api/queues (server-only: B24_APPLICATION_TOKEN guard +
-// nginx `deny all`, unreachable from a portal browser). So this page defaults to a
-// DEMO generator (an evolving snapshot), like the rest of the UI on mock data until
-// backend. A real hookup must go through an AUTHENTICATED path (proxy / internal
-// build), NOT a direct browser fetch of /api/queues — see docs/QUEUES.md and #57
-// follow-up. This is an internal ops view: `noindex` so it is not crawled on the
-// public SSG domain.
+// Source is GET /api/ops/queues — gated by the OPERATOR SESSION cookie, so a
+// logged-in employee's browser can read it (unlike /api/queues, which needs the
+// B24_APPLICATION_TOKEN and is nginx-denied). `?demo=1` swaps in a client-side
+// generator for a no-backend preview (screenshots / local dev). Internal ops view:
+// `noindex` so it is not crawled on the public SSG domain. See docs/QUEUES.md, AUTH.md.
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 
 // Employee/ops area — gated by the operator login (client redirect to /login when
-// a password is configured and there is no session; see docs/AUTH.md).
+// a password is configured and there is no session; real protection is the
+// session-checked /api/ops/queues endpoint). See docs/AUTH.md.
 definePageMeta({ middleware: 'auth' })
 
 useHead({
@@ -19,14 +18,33 @@ useHead({
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 
+// `?demo=1` → client-side generator (no-backend preview / screenshots). Decided at
+// FETCH time from the real browser URL — a prerendered page's `useRoute().query`
+// isn't populated during setup/hydration, and the fetcher only runs client-side
+// (QueueMonitor's onMounted), so `window` is always available here.
+function isDemo(): boolean {
+  return import.meta.client && new URLSearchParams(window.location.search).has('demo')
+}
+
+/** Chosen source: demo generator with `?demo=1`, else the session-gated endpoint
+ *  (same-origin → the cba_sess cookie is sent). */
+function fetcher(): Promise<QueuesSnapshot> {
+  return isDemo() ? demoFetcher() : liveFetcher()
+}
+
+/** Real source: session-gated endpoint. */
+function liveFetcher(): Promise<QueuesSnapshot> {
+  return $fetch<QueuesSnapshot>('/api/ops/queues')
+}
+
 // Демо-состояние: у каждой очереди дрейфующие счётчики, чтобы график «жил».
 const state: Record<string, QueueCounts> = {}
 for (const q of QUEUE_META) state[q.name] = { waiting: 2, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 }
 
 const rnd = (n: number) => Math.floor(Math.random() * (n + 1))
 
-/** Демо-загрузчик: продвигает счётчики (waiting дрейфует, часть уходит в active →
- * completed, изредка failed) и возвращает снапшот той же формы, что GET /api/queues. */
+/** Демо-загрузчик (только `?demo=1`): продвигает счётчики (waiting дрейфует, часть
+ * уходит в active → completed, изредка failed), форма как у GET /api/ops/queues. */
 function demoFetcher(): Promise<QueuesSnapshot> {
   for (const q of QUEUE_META) {
     const s = state[q.name]!
@@ -48,18 +66,20 @@ function demoFetcher(): Promise<QueuesSnapshot> {
         Монитор очередей обработки
       </h1>
       <p class="q-sub">
-        Живой график длины очередей (backlog = ждут + в работе). Данные —
-        <strong>демо</strong>; в проде источник — <code>GET /api/queues</code>
-        (server-only). Подробнее — <code>docs/QUEUES.md</code>.
+        Живой график длины очередей (backlog = ждут + в работе). Источник —
+        <code>GET /api/ops/queues</code> (по сессии оператора); <code>?demo=1</code> —
+        превью на синтетических данных. Подробнее — <code>docs/QUEUES.md</code>.
       </p>
     </header>
 
-    <QueueMonitor
-      :fetcher="demoFetcher"
-      title="Очереди (демо)"
-      :interval-sec="2"
-      :max-points="60"
-    />
+    <ClientOnly>
+      <QueueMonitor
+        :fetcher="fetcher"
+        title="Очереди обработки"
+        :interval-sec="5"
+        :max-points="60"
+      />
+    </ClientOnly>
   </main>
 </template>
 
