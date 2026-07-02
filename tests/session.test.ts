@@ -131,8 +131,9 @@ describe('decideLogin', () => {
     expect(decideLogin(none, true, ok, now).status).toBe(503)
     expect(decideLogin(none, false, null, now).status).toBe(503) // config check wins
   })
-  it('403 when the CSRF header is missing', () => {
+  it('403 when the CSRF header is missing — even with an unparseable body', () => {
     expect(decideLogin(cfg, false, ok, now).status).toBe(403)
+    expect(decideLogin(cfg, false, null, now).status).toBe(403) // CSRF check wins over 400
   })
   it('400 on an unparseable body (creds null), after config+CSRF pass', () => {
     expect(decideLogin(cfg, true, null, now).status).toBe(400)

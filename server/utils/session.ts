@@ -158,15 +158,26 @@ export function decideLogin(
   }
 }
 
+/** Outcome of a logout attempt (403 without the CSRF header, else 200). */
+export type LogoutDecision = { status: 200, body: { ok: true } } | { status: 403, body: { error: string } }
+
 /** Decide the POST /api/auth/logout outcome — requires the CSRF header (403
  * otherwise); always succeeds and idempotently clears the cookie on 200. */
-export function decideLogout(hasCsrf: boolean): { status: 200, body: { ok: true } } | { status: 403, body: { error: string } } {
+export function decideLogout(hasCsrf: boolean): LogoutDecision {
   return hasCsrf ? { status: 200, body: { ok: true } } : { status: 403, body: { error: 'missing csrf header' } }
+}
+
+/** GET /api/auth/session response for the client guard. */
+export interface SessionStatus {
+  /** Login is configured (a password is set). `false` ⇒ gated pages are open. */
+  configured: boolean
+  authenticated: boolean
+  user?: string
 }
 
 /** Session status for GET /api/auth/session (the client guard). `configured:false`
  * ⇒ login disabled (gated pages open). Reads only the signed cookie value. */
-export function sessionStatus(cfg: AuthConfig, cookieValue: string | undefined, nowMs: number): { configured: boolean, authenticated: boolean, user?: string } {
+export function sessionStatus(cfg: AuthConfig, cookieValue: string | undefined, nowMs: number): SessionStatus {
   const payload = verifySession(cookieValue, cfg.secret, nowMs)
   return {
     configured: isAuthConfigured(cfg),
