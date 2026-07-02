@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { processB24Event } from '../server/utils/b24EventsHandler'
-import type { B24EventDeps } from '../server/utils/b24EventsHandler'
+import { handleEventRequest, processB24Event } from '../server/utils/b24EventsHandler'
+import type { B24EventDeps, B24RequestDeps } from '../server/utils/b24EventsHandler'
 
 const APP_TOKEN = '51856fefc120afa4b628cc82d3935cce'
 
@@ -124,5 +124,106 @@ describe('processB24Event — other', () => {
   it('acknowledges unsubscribed events with 200 and no action', async () => {
     const res = await processB24Event({ event: 'ONCRMDEALADD', auth: {} }, makeDeps())
     expect(res).toEqual({ status: 200, body: { ok: true, ignored: 'ONCRMDEALADD' } })
+  })
+})
+
+const NOW = 1_000_000
+function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
+  return {
+    envToken: '',
+    loadStoredToken: vi.fn(async () => APP_TOKEN),
+    enqueue: vi.fn(async () => true),
+    saveCredentials: vi.fn(async () => {}),
+    deletePortal: vi.fn(async () => {}),
+    encrypt: vi.fn((s: string) => `enc(${s})`),
+    now: () => NOW,
+    ...over
+  }
+}
+
+describe('handleEventRequest — primary (enqueue) path', () => {
+  it('enqueues a register job (refresh ENCRYPTED, access clear) and does NOT write synchronously', async () => {
+    const deps = makeReqDeps()
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('queued')
+    expect(res.status).toBe(200)
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job).toMatchObject({ memberId: 'm1', kind: 'ONAPPINSTALL' })
+    // refresh is encrypted in the job; access token stays clear.
+    expect(job.credentials.refreshTokenEnc).toBe('enc(R)')
+    expect(job.credentials.accessToken).toBe('A')
+    expect(deps.encrypt).toHaveBeenCalledWith('R')
+    // expiresAt stamped from injected now + 3600s.
+    expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
+  })
+
+  it('enqueues an unregister job (no credentials) on uninstall', async () => {
+    const deps = makeReqDeps()
+    const res = await handleEventRequest(uninstall, deps)
+    expect(res.outcome).toBe('queued')
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job).toMatchObject({ memberId: 'm1', kind: 'ONAPPUNINSTALL' })
+    expect(job.credentials).toBeUndefined()
+    expect(deps.deletePortal).not.toHaveBeenCalled()
+  })
+
+  it('does nothing (outcome none) and never enqueues on a denied event', async () => {
+    const deps = makeReqDeps({ envToken: 'different' })
+    const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(403)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+})
+
+describe('handleEventRequest — synchronous fallback (queue unavailable)', () => {
+  it('writes credentials synchronously when the queue is disabled (enqueue → false)', async () => {
+    const deps = makeReqDeps({ enqueue: vi.fn(async () => false) })
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(res.status).toBe(200)
+    // saveToken encrypts internally → pass RAW refresh here (not the enc blob).
+    expect(deps.saveCredentials).toHaveBeenCalledWith(expect.objectContaining({
+      memberId: 'm1', accessToken: 'A', refreshToken: 'R', applicationToken: APP_TOKEN, expiresAt: NOW + 3600 * 1000
+    }))
+  })
+
+  it('writes synchronously when enqueue THROWS (Redis down)', async () => {
+    const boom = vi.fn(async () => Promise.reject(new Error('ECONNREFUSED')))
+    const deps = makeReqDeps({ enqueue: boom })
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.saveCredentials).toHaveBeenCalled()
+  })
+
+  it('deletes the portal synchronously on uninstall when the queue is disabled', async () => {
+    const deps = makeReqDeps({ enqueue: vi.fn(async () => false) })
+    const res = await handleEventRequest(uninstall, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.deletePortal).toHaveBeenCalledWith('m1')
+  })
+})
+
+describe('handleEventRequest — expiresAt/TTL coercion', () => {
+  const enc = (s: string) => s
+  async function jobFor(expires_in: unknown) {
+    const deps = makeReqDeps({ encrypt: enc })
+    const payload = { ...install, auth: { ...install.auth, expires_in } }
+    await handleEventRequest(payload, deps)
+    return (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+  }
+  it('defaults a missing expires_in to 3600s', async () => {
+    const job = await jobFor(undefined)
+    expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
+  })
+  it('honours an explicit 0 (already expired)', async () => {
+    const job = await jobFor(0)
+    expect(job.credentials.expiresAt).toBe(NOW)
+  })
+  it('falls back to 3600s for a non-finite value', async () => {
+    const job = await jobFor('abc')
+    expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
   })
 })

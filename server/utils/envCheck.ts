@@ -69,5 +69,12 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — refresh access-токена и настройка app.option работать не будут (приём событий и запись токена — будут).')
   }
 
+  // --- Redis: without it the queue is off and event persistence degrades to the
+  //     synchronous fallback in the webhook (no async pipeline: no follow-up jobs,
+  //     no cron fan-out). Not fatal (installs still persist), so: warning. ---
+  if (!(env.REDIS_URL ?? '').trim()) {
+    warnings.push('REDIS_URL не задан — очередь выключена; приём событий деградирует до синхронной записи в webhook (без асинхронного пайплайна — воркеры/крон не работают).')
+  }
+
   return { errors, warnings }
 }

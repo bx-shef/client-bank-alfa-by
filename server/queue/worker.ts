@@ -30,8 +30,12 @@ export function liveHandlerDeps(): HandlerDeps {
     notifyChat: async () => {}, // TODO stage 6: im.message.add by chat rules
     // Register a portal: decrypt the refresh blob carried in the job (never plain
     // in Redis) and upsert the token row (write-once application_token in saveToken).
+    // No DATABASE_URL guard: if the DB is missing/down, saveToken throws → BullMQ
+    // retries and, on exhaustion, keeps the job in the failed set (never a silent
+    // no-op that would ack a never-persisted install). `envCheck` errors on a
+    // missing DATABASE_URL at boot.
     savePortal: async (job) => {
-      if (!process.env.DATABASE_URL || !job.credentials) return
+      if (!job.credentials) return
       const c = job.credentials
       await saveToken(dbQuery, {
         memberId: job.memberId,
@@ -42,9 +46,7 @@ export function liveHandlerDeps(): HandlerDeps {
         applicationToken: c.applicationToken
       })
     },
-    deletePortal: async (memberId) => {
-      if (process.env.DATABASE_URL) await deleteToken(dbQuery, memberId)
-    },
+    deletePortal: async memberId => deleteToken(dbQuery, memberId),
     enqueueCrmSync
   }
 }

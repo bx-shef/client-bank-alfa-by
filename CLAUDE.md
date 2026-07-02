@@ -142,14 +142,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
     `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт
     подлинности `application_token` (`appTokenVerdict`, fail-closed, constant-time),
-    маршрутизация `routeB24Event`, SSRF-гуард `isSafeClientEndpoint`, маппинг кредов
-    портала `extractPortalCredentials`. Учёт авторизации/события/брокер — карточка
-    [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md) (модель по backend `bx-synapse`).
+    SSRF-гуард `isSafeClientEndpoint`, маппинг кредов портала `extractPortalCredentials`.
+    Верификация+решение для реального события — в backend (`processB24Event`). Учёт авторизации/
+    события/брокер — карточка [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md) (модель по backend `bx-synapse`).
 - **Backend (Nitro, `server/`):** серверная часть в том же приложении (как `bx-synapse`).
   - `server/api/b24/events.post.ts` — эндпоинт вебхуков Б24: `readRawBody` → `parseBracketForm`
-    → `processB24Event` (**только верификация, без записи в БД**) → кладёт пакет в очередь `b24-events`
-    (register/unregister; refresh шифруется перед Redis). **Консьюмер — единственный писатель.** Очередь
-    обязательна: не удалось положить (Redis нет/упал) → **503**, чтобы Б24 повторил (без потери события).
+    → `handleEventRequest` (верификация без записи в БД) → кладёт пакет в очередь `b24-events`
+    (register/unregister; refresh шифруется перед Redis). **Консьюмер — единственный писатель.**
+    Онлайн-события Б24 **не ретраятся** — поэтому если очередь недоступна (Redis нет/упал), роут пишет
+    в БД **синхронным фолбэком** (тот же токен-стор), чтобы установка/удаление не потерялись.
   - `server/api/health.get.ts` — публичный liveness-эндпоинт `GET /api/health` →
     `{ status, time, commit, commitUrl }` (коммит = `NUXT_PUBLIC_COMMIT_SHA`, как в подвале).
     Без секретов; на нём же построен docker `healthcheck` backend'а. Чистый билдер —

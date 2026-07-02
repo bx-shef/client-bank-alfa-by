@@ -1,8 +1,13 @@
-// Pure orchestration for one incoming B24 event POST, over injected side effects
-// (token store reads/writes). Decides the HTTP outcome using the domain core
-// from app/utils/b24Events; the Nitro route (server/api/b24/events.post.ts) wires
-// the real deps (pg + crypto) and reads the request body. Kept dependency-free so
-// it is fully unit-testable with fakes. See docs/B24_EVENTS.md.
+// Orchestration for one incoming B24 event POST, over injected side effects. Two
+// layers, both fully unit-testable with fakes:
+//   processB24Event  — PURE verify + decide (reads only) → an `action`.
+//   handleEventRequest — apply the action: enqueue it (primary; consumer is the
+//                        single writer), and — because B24 does NOT resend online
+//                        events (see docs/B24_EVENTS.md) — write the store
+//                        SYNCHRONOUSLY as a fallback when the queue is unavailable,
+//                        so an install/uninstall is never lost.
+// The Nitro route (server/api/b24/events.post.ts) wires the real deps (pg, crypto,
+// queue) and reads the request body. See docs/B24_EVENTS.md.
 
 import type { PortalCredentials } from '../../app/types/b24Events'
 import {
@@ -14,6 +19,8 @@ import {
   parseInstallEvent,
   parseUninstallEvent
 } from '../../app/utils/b24Events'
+import type { EventJob } from '../queue/topology'
+import type { PortalToken } from './tokenStore'
 
 /**
  * Reads the handler needs — verification only. The handler NEVER writes the store
@@ -99,4 +106,96 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
 
   // An event we don't subscribe to — acknowledge so B24 stops retrying.
   return { status: 200, body: { ok: true, ignored: code } }
+}
+
+/** Deps for {@link handleEventRequest}: verification reads + the enqueue primary
+ *  path + the synchronous fallback writers used only when the queue is unavailable. */
+export interface B24RequestDeps extends B24EventDeps {
+  /** Enqueue the mutation (primary). Returns false when the queue is disabled (no Redis). */
+  enqueue: (job: EventJob) => Promise<boolean>
+  /** Fallback: persist a portal synchronously (queue unavailable). saveToken encrypts refresh. */
+  saveCredentials: (token: PortalToken) => Promise<void>
+  /** Fallback: remove a portal synchronously (queue unavailable). */
+  deletePortal: (memberId: string) => Promise<void>
+  /** AES-GCM encrypt for the refresh token carried in the queued job (never plain in Redis). */
+  encrypt: (plain: string) => string
+  /** Current epoch ms — injected so tests are deterministic. */
+  now: () => number
+}
+
+/** How the mutation was applied. */
+export type B24Outcome = 'queued' | 'sync-fallback' | 'none'
+
+export interface B24RequestResult extends B24EventResult {
+  outcome: B24Outcome
+}
+
+/** ms until the access token expires, stamped from receipt time + TTL. `expires_in`
+ *  arrives as a string; missing → 3600s; explicit 0 honoured; non-finite → 3600s. */
+function expiresAtFrom(expiresIn: string | number | undefined, now: number): number {
+  const ttl = expiresIn === undefined ? 3600 : Number(expiresIn)
+  return now + (Number.isFinite(ttl) ? ttl : 3600) * 1000
+}
+
+function domainOf(payload: unknown): string {
+  return String((payload as { auth?: { domain?: string } })?.auth?.domain || '')
+}
+function tsOf(payload: unknown): string {
+  return String((payload as { ts?: unknown })?.ts ?? '')
+}
+
+/**
+ * Verify the event, then APPLY its mutation: enqueue it (primary — the consumer is
+ * the single writer) and fall back to a synchronous store write when the queue is
+ * unavailable (B24 does not resend online events, so a dropped enqueue would lose
+ * the install forever). Returns the HTTP result plus how it was applied.
+ */
+export async function handleEventRequest(payload: unknown, deps: B24RequestDeps): Promise<B24RequestResult> {
+  const result = await processB24Event(payload, { envToken: deps.envToken, loadStoredToken: deps.loadStoredToken })
+  if (result.status !== 200 || !result.action) return { ...result, outcome: 'none' }
+
+  const action = result.action
+  const domain = domainOf(payload)
+  const ts = tsOf(payload)
+  const expiresAt = action.type === 'register' ? expiresAtFrom(action.credentials.expiresIn, deps.now()) : 0
+
+  const job: EventJob = action.type === 'register'
+    ? {
+        memberId: action.memberId,
+        domain,
+        kind: 'ONAPPINSTALL',
+        ts,
+        credentials: {
+          accessToken: action.credentials.accessToken ?? '',
+          refreshTokenEnc: deps.encrypt(action.credentials.refreshToken ?? ''),
+          expiresAt,
+          applicationToken: action.credentials.applicationToken
+        }
+      }
+    : { memberId: action.memberId, domain, kind: 'ONAPPUNINSTALL', ts }
+
+  // Primary: enqueue. A thrown enqueue (Redis down) is treated the same as a
+  // disabled queue — fall through to the synchronous write.
+  let queued = false
+  try {
+    queued = await deps.enqueue(job)
+  } catch {
+    // Redis threw — leave queued=false and fall through to the synchronous write.
+  }
+  if (queued) return { ...result, outcome: 'queued' }
+
+  // Fallback (queue unavailable): write synchronously so the non-resent event isn't lost.
+  if (action.type === 'register') {
+    await deps.saveCredentials({
+      memberId: action.memberId,
+      domain: action.credentials.domain,
+      accessToken: action.credentials.accessToken ?? '',
+      refreshToken: action.credentials.refreshToken ?? '',
+      expiresAt,
+      applicationToken: action.credentials.applicationToken
+    })
+  } else {
+    await deps.deletePortal(action.memberId)
+  }
+  return { ...result, outcome: 'sync-fallback' }
 }
