@@ -43,7 +43,7 @@ describe('writeActivityViaRest', () => {
     expect(calls[0]!.params).toMatchObject({
       ownerTypeId: CRM_OWNER_TYPE_COMPANY,
       ownerId: 42,
-      deadline: '2026-07-01T00:00:00.000Z'
+      deadline: '2026-07-01T00:00:00+03:00' // re-stamped into portal TZ (#10)
     })
     expect(calls[0]!.params.title).toContain('Приход')
   })

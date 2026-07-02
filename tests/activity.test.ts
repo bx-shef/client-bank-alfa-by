@@ -8,7 +8,8 @@ import {
   buildActivityTitle,
   buildTodoActivity,
   formatIsoDate,
-  formatMoney
+  formatMoney,
+  toPortalDeadline
 } from '~/utils/activity'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
@@ -85,13 +86,32 @@ describe('buildActivityDescription', () => {
   })
 })
 
+describe('toPortalDeadline', () => {
+  it('re-stamps a bare UTC midnight to the portal offset (+03:00), same calendar day', () => {
+    expect(toPortalDeadline('2026-07-01T00:00:00.000Z')).toBe('2026-07-01T00:00:00+03:00')
+  })
+  it('stamps a bare date at portal-local start of day', () => {
+    expect(toPortalDeadline('2026-07-01')).toBe('2026-07-01T00:00:00+03:00')
+  })
+  it('keeps a naive local datetime and appends the offset', () => {
+    expect(toPortalDeadline('2026-07-01T12:30:00')).toBe('2026-07-01T12:30:00+03:00')
+  })
+  it('pads an HH:MM time to HH:MM:SS', () => {
+    expect(toPortalDeadline('2026-07-01T09:05')).toBe('2026-07-01T09:05:00+03:00')
+  })
+  it('passes an unrecognized value through unchanged', () => {
+    expect(toPortalDeadline('')).toBe('')
+    expect(toPortalDeadline('not-a-date')).toBe('not-a-date')
+  })
+})
+
 describe('buildTodoActivity', () => {
   it('binds to the company and carries acceptDate as the required deadline', () => {
     const params = buildTodoActivity(makeItem({ operDate: '2026-07-01T00:00:00.000Z' }), { id: 77, assignedById: 5 })
     expect(params.ownerTypeId).toBe(CRM_OWNER_TYPE_COMPANY)
     expect(params.ownerId).toBe(77)
-    // deadline is the acceptance date, never operDate.
-    expect(params.deadline).toBe('2026-06-26T00:00:00.000Z')
+    // deadline is the acceptance date (never operDate), re-stamped into portal TZ (#10).
+    expect(params.deadline).toBe('2026-06-26T00:00:00+03:00')
     expect(params.responsibleId).toBe(5)
     expect(params.title).toContain('Приход')
   })
