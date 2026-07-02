@@ -6,9 +6,14 @@
 import { Pool } from 'pg'
 import type { QueryFn } from '../utils/tokenStore'
 
-/** Schema for the token store. `CREATE TABLE IF NOT EXISTS` — safe to run on
+/** Schema for the backend tables. `CREATE TABLE IF NOT EXISTS` — safe to run on
  * every boot (see server/plugins/migrate.ts). `application_token` defaults to ''
- * so the write-once `COALESCE(NULLIF(...))` upsert works on a fresh row. */
+ * so the write-once `COALESCE(NULLIF(...))` upsert works on a fresh row.
+ *
+ * `activity_dedup` is the persistent {dedupKey → activityId} map (issue #9) that
+ * lets crm-sync skip re-creating an activity for an operation already written —
+ * survives worker restarts and at-least-once job redelivery, unlike the in-batch
+ * Set. Keyed per portal (member_id): two portals may import the same account. */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS portal_tokens (
   member_id          TEXT PRIMARY KEY,
@@ -18,6 +23,14 @@ CREATE TABLE IF NOT EXISTS portal_tokens (
   expires_at         BIGINT NOT NULL,
   application_token  TEXT NOT NULL DEFAULT '',
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS activity_dedup (
+  member_id    TEXT NOT NULL,
+  dedup_key    TEXT NOT NULL,
+  activity_id  TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (member_id, dedup_key)
 );
 `
 
