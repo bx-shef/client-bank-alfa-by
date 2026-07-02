@@ -31,17 +31,20 @@ export function die(msg) {
 
 /**
  * Best-effort: open a URL in the user's default browser. Refuses anything that
- * is not a plain http(s) URL so a malformed value can't break out of the
+ * is not a plain http(s) URL, and passes the NORMALIZED `URL.href` (not the raw
+ * string) to the opener: WHATWG parsing percent-encodes an embedded `"` (→ `%22`)
+ * and control chars, so a value like `https://x/a"&calc` can't break out of the
  * `start "" "…"` quoting on Windows (windowsVerbatimArguments passes the string
- * through unescaped, so cmd.exe's "&" separator is neutralised by the quotes).
+ * through unescaped) and inject a cmd.exe command separator. #45.
  */
 export function openBrowser(url) {
   if (!isHttpUrl(url)) {
     warn('not opening the browser: URL is not a plain http(s) URL — open it manually')
     return
   }
+  const safe = new URL(url).href // percent-encodes " and control chars (see above)
   const cmd = platform === 'win32' ? 'cmd' : platform === 'darwin' ? 'open' : 'xdg-open'
-  const cmdArgs = platform === 'win32' ? ['/c', 'start', '""', `"${url}"`] : [url]
+  const cmdArgs = platform === 'win32' ? ['/c', 'start', '""', `"${safe}"`] : [safe]
   try {
     const child = spawn(cmd, cmdArgs, {
       stdio: 'ignore',
