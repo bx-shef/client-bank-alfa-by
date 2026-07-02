@@ -10,9 +10,7 @@ import {
   parseBracketForm,
   parseInstallEvent,
   parseUninstallEvent,
-  routeB24Event,
   safeEqual,
-  shouldPurgeData,
   verifyApplicationToken
 } from '~/utils/b24Events'
 
@@ -209,17 +207,11 @@ describe('extractPortalCredentials', () => {
   })
 })
 
-describe('isInstallComplete / shouldPurgeData', () => {
+describe('isInstallComplete', () => {
   it('treats INSTALLED=Y (or absent) as complete', () => {
     expect(isInstallComplete({ VERSION: '1', LANGUAGE_ID: 'ru', INSTALLED: 'Y' })).toBe(true)
     expect(isInstallComplete({ VERSION: '1', LANGUAGE_ID: 'ru' })).toBe(true)
     expect(isInstallComplete({ VERSION: '1', LANGUAGE_ID: 'ru', INSTALLED: 'N' })).toBe(false)
-  })
-  it('purges only when CLEAN is 1 or "1"', () => {
-    expect(shouldPurgeData({ LANGUAGE_ID: 'ru', CLEAN: 1 })).toBe(true)
-    expect(shouldPurgeData({ LANGUAGE_ID: 'ru', CLEAN: '1' })).toBe(true)
-    expect(shouldPurgeData({ LANGUAGE_ID: 'ru', CLEAN: 0 })).toBe(false)
-    expect(shouldPurgeData({ LANGUAGE_ID: 'ru', CLEAN: '0' })).toBe(false)
   })
 })
 
@@ -261,57 +253,7 @@ describe('isSafeClientEndpoint', () => {
   })
 })
 
-describe('routeB24Event', () => {
-  it('routes a valid install to a persist decision', () => {
-    const decision = routeB24Event(installPayload)
-    expect(decision.kind).toBe('install')
-    if (decision.kind === 'install') {
-      expect(decision.credentials.applicationToken).toBe(APP_TOKEN)
-    }
-  })
-
-  it('rejects an install with an empty token (probe)', () => {
-    const bad = { ...installPayload, auth: { ...installPayload.auth, application_token: '' } }
-    expect(() => routeB24Event(bad)).toThrow(/auth is missing|rejected/)
-  })
-
-  it('enforces the env token on install', () => {
-    expect(() => routeB24Event(installPayload, { envToken: 'different' }))
-      .toThrow(/ONAPPINSTALL: application_token rejected \(forbidden\)/)
-    expect(routeB24Event(installPayload, { envToken: APP_TOKEN }).kind).toBe('install')
-  })
-
-  it('routes a verified uninstall to a purge decision', () => {
-    const decision = routeB24Event(uninstallPayload, { storedToken: APP_TOKEN })
-    expect(decision).toMatchObject({ kind: 'uninstall', purge: true, memberId: uninstallPayload.auth.member_id })
-  })
-
-  it('keeps data when uninstall CLEAN is 0', () => {
-    const keep = { ...uninstallPayload, data: { LANGUAGE_ID: 'ru', CLEAN: 0 } }
-    const decision = routeB24Event(keep, { storedToken: APP_TOKEN })
-    expect(decision).toMatchObject({ kind: 'uninstall', purge: false })
-  })
-
-  it('throws on an uninstall with no stored token (unconfigured, fail-closed)', () => {
-    expect(() => routeB24Event(uninstallPayload)).toThrow(/rejected \(unconfigured\)/)
-  })
-
-  it('throws on an uninstall with a mismatched token (forbidden)', () => {
-    expect(() => routeB24Event(uninstallPayload, { storedToken: 'forged' }))
-      .toThrow(/rejected \(forbidden\)/)
-  })
-
-  it('returns unsupported for events we do not subscribe to', () => {
-    expect(routeB24Event({ event: 'ONCRMDEALADD', auth: { application_token: 'x' } }))
-      .toEqual({ kind: 'unsupported', code: 'ONCRMDEALADD' })
-  })
-
-  it('returns unsupported (empty code) for a null/garbage payload', () => {
-    expect(routeB24Event(null)).toEqual({ kind: 'unsupported', code: '' })
-    expect(routeB24Event(undefined)).toEqual({ kind: 'unsupported', code: '' })
-    expect(routeB24Event('garbage')).toEqual({ kind: 'unsupported', code: '' })
-  })
-
+describe('event-code constants', () => {
   it('exposes the canonical event-code constants', () => {
     expect(B24_EVENT_INSTALL).toBe('ONAPPINSTALL')
     expect(B24_EVENT_UNINSTALL).toBe('ONAPPUNINSTALL')

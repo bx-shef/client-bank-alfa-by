@@ -21,7 +21,6 @@
 import type {
   B24Event,
   B24EventAuth,
-  B24EventDecision,
   B24InstallEvent,
   B24InstallEventData,
   B24UninstallEvent,
@@ -191,12 +190,6 @@ export function isInstallComplete(data: B24InstallEventData): boolean {
   return data.INSTALLED === undefined || data.INSTALLED === 'Y'
 }
 
-/** Whether the user asked to wipe the app's data on uninstall (`CLEAN == 1`).
- * Accepts the numeric `1` or the string `"1"` the form encoding produces. */
-export function shouldPurgeData(data: B24UninstallEventData): boolean {
-  return data.CLEAN === 1 || data.CLEAN === '1'
-}
-
 /**
  * Map an install event's auth block to the credentials the backend persists,
  * keyed by `memberId`. `issuedAtMs` is intentionally not set here — the engine
@@ -257,51 +250,8 @@ export function isSafeClientEndpoint(endpoint: string | undefined): boolean {
   return !PRIVATE_IPV4.test(h)
 }
 
-/**
- * Pure routing + authenticity gate for one incoming B24 event POST. The backend
- * parses the request body (`parseBracketForm`), looks up the stored
- * application_token for the portal (by `member_id`), then calls this to learn
- * what to do:
- *
- *  - `install`   → persist `decision.credentials` (write-once application_token;
- *                  install carries OAuth data the engine validates separately).
- *  - `uninstall` → purge the portal iff `decision.purge`; gated on a token match,
- *                  the only authenticity signal here (no OAuth data is sent).
- *  - `unsupported` → an event we don't subscribe to; ignore (return 200).
- *
- * `opts.envToken` / `opts.storedToken` feed `appTokenVerdict`. Throws on a
- * non-`accept` verdict — a forged/stale/unconfigured call must not wipe data.
- * Backends needing distinct HTTP codes (403 vs 503) can call `appTokenVerdict`
- * directly instead of relying on the thrown message.
- */
-export function routeB24Event(
-  payload: unknown,
-  opts: { envToken?: string, storedToken?: string } = {}
-): B24EventDecision {
-  const code = eventCode(payload)
-
-  if (code === B24_EVENT_INSTALL) {
-    const event = parseInstallEvent(payload)
-    const verdict = appTokenVerdict({ isInstall: true, incoming: event.auth.application_token, envToken: opts.envToken })
-    if (verdict !== 'accept') {
-      throw new Error(`B24 ONAPPINSTALL: application_token rejected (${verdict})`)
-    }
-    return { kind: 'install', event, credentials: extractPortalCredentials(event) }
-  }
-
-  if (code === B24_EVENT_UNINSTALL) {
-    const event = parseUninstallEvent(payload)
-    const verdict = appTokenVerdict({
-      isInstall: false,
-      incoming: event.auth.application_token,
-      envToken: opts.envToken,
-      storedToken: opts.storedToken
-    })
-    if (verdict !== 'accept') {
-      throw new Error(`B24 ONAPPUNINSTALL: application_token rejected (${verdict})`)
-    }
-    return { kind: 'uninstall', event, memberId: event.auth.member_id, purge: shouldPurgeData(event.data) }
-  }
-
-  return { kind: 'unsupported', code }
-}
+// NOTE: routing + authenticity for a real incoming event lives in the backend
+// handler `server/utils/b24EventsHandler.ts` (`processB24Event`), which returns an
+// `action` the route enqueues. An earlier pure `routeB24Event` router was removed —
+// it duplicated that logic and encoded the old CLEAN-conditional purge, which the
+// always-purge policy overturned (see docs/B24_EVENTS.md).

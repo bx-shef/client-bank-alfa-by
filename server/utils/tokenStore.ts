@@ -88,7 +88,8 @@ export async function getApplicationToken(query: QueryFn, memberId: string): Pro
   return rows[0] ? String(rows[0].application_token || '') : ''
 }
 
-/** Delete a portal's row (on ONAPPUNINSTALL with CLEAN=1). Idempotent. */
+/** Delete a portal's row on ONAPPUNINSTALL (uninstall always purges — a removed
+ * app keeps no data; the CLEAN flag is not consulted). Idempotent. */
 export async function deleteToken(query: QueryFn, memberId: string): Promise<void> {
   await query(`DELETE FROM portal_tokens WHERE member_id = $1`, [memberId])
 }

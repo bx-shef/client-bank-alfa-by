@@ -5,6 +5,7 @@ import { checkBackendEnv } from '../server/utils/envCheck'
 const GOOD: NodeJS.ProcessEnv = {
   B24_TOKEN_ENC_KEY: 'a'.repeat(64), // 64 hex chars → 32 bytes
   DATABASE_URL: 'postgres://app:pw@db:5432/app',
+  REDIS_URL: 'redis://redis:6379',
   B24_CLIENT_ID: 'local.abc',
   B24_CLIENT_SECRET: 'shh',
   B24_APPLICATION_TOKEN: ''
@@ -55,5 +56,11 @@ describe('checkBackendEnv', () => {
     const r = checkBackendEnv({ ...GOOD, B24_CLIENT_ID: '', B24_CLIENT_SECRET: '' })
     expect(r.errors).toEqual([])
     expect(r.warnings.some(w => w.includes('B24_CLIENT_ID'))).toBe(true)
+  })
+
+  it('warns (not errors) when REDIS_URL is missing — queue off, sync fallback', () => {
+    const r = checkBackendEnv({ ...GOOD, REDIS_URL: '' })
+    expect(r.errors).toEqual([])
+    expect(r.warnings.some(w => w.includes('REDIS_URL'))).toBe(true)
   })
 })

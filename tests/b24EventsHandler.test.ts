@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { processB24Event } from '../server/utils/b24EventsHandler'
-import type { B24EventDeps } from '../server/utils/b24EventsHandler'
+import { handleEventRequest, processB24Event } from '../server/utils/b24EventsHandler'
+import type { B24EventDeps, B24RequestDeps } from '../server/utils/b24EventsHandler'
 
 const APP_TOKEN = '51856fefc120afa4b628cc82d3935cce'
 
+// The handler now VERIFIES only (reads), never writes — deps are reads only.
 function makeDeps(over: Partial<B24EventDeps> = {}): B24EventDeps {
   return {
     envToken: '',
     loadStoredToken: vi.fn(async () => ''),
-    saveCredentials: vi.fn(async () => {}),
-    deletePortal: vi.fn(async () => {}),
     ...over
   }
 }
@@ -34,46 +33,46 @@ const uninstall = {
 }
 
 describe('processB24Event — install', () => {
-  it('persists credentials and returns 200 (bootstrap, no env token)', async () => {
-    const deps = makeDeps()
-    const res = await processB24Event(install, deps)
+  it('returns 200 with a register action carrying the credentials (bootstrap, no env token)', async () => {
+    const res = await processB24Event(install, makeDeps())
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({ ok: true, event: 'ONAPPINSTALL', memberId: 'm1' })
-    expect(deps.saveCredentials).toHaveBeenCalledWith(expect.objectContaining({
-      memberId: 'm1', applicationToken: APP_TOKEN, accessToken: 'A', refreshToken: 'R'
-    }))
+    expect(res.action).toMatchObject({
+      type: 'register',
+      memberId: 'm1',
+      credentials: expect.objectContaining({ memberId: 'm1', applicationToken: APP_TOKEN, accessToken: 'A', refreshToken: 'R' })
+    })
   })
 
   it('accepts install when the env token matches', async () => {
-    const deps = makeDeps({ envToken: APP_TOKEN })
-    expect((await processB24Event(install, deps)).status).toBe(200)
+    const res = await processB24Event(install, makeDeps({ envToken: APP_TOKEN }))
+    expect(res.status).toBe(200)
+    expect(res.action?.type).toBe('register')
   })
 
-  it('returns 403 and does not persist when the env token mismatches', async () => {
-    const deps = makeDeps({ envToken: 'different' })
-    const res = await processB24Event(install, deps)
+  it('returns 403 with no action when the env token mismatches', async () => {
+    const res = await processB24Event(install, makeDeps({ envToken: 'different' }))
     expect(res.status).toBe(403)
-    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    expect(res.action).toBeUndefined()
   })
 
   it('returns 400 on a malformed install', async () => {
     const bad = { event: 'ONAPPINSTALL', data: {}, auth: { domain: 'd' } }
     const res = await processB24Event(bad, makeDeps())
     expect(res.status).toBe(400)
+    expect(res.action).toBeUndefined()
   })
 
-  it('rejects an install with an empty token (probe) without persisting', async () => {
+  it('rejects an install with an empty token (probe) with no action', async () => {
     const empty = { ...install, auth: { ...install.auth, application_token: '' } }
-    const deps = makeDeps()
-    const res = await processB24Event(empty, deps)
-    // Empty token → parse fails (auth incomplete) → 400; never persisted.
+    const res = await processB24Event(empty, makeDeps())
+    // Empty token → parse fails (auth incomplete) → 400; no action.
     expect(res.status).toBe(400)
-    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    expect(res.action).toBeUndefined()
   })
 
   it('never echoes a token in the 403 body', async () => {
-    const deps = makeDeps({ envToken: 'secret-env-token' })
-    const res = await processB24Event(install, deps)
+    const res = await processB24Event(install, makeDeps({ envToken: 'secret-env-token' }))
     expect(res.status).toBe(403)
     const body = JSON.stringify(res.body)
     expect(body).not.toContain('secret-env-token')
@@ -81,57 +80,150 @@ describe('processB24Event — install', () => {
   })
 })
 
-describe('processB24Event — uninstall', () => {
-  it('purges and returns 200 when the stored token matches and CLEAN=1', async () => {
-    const deps = makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
-    const res = await processB24Event(uninstall, deps)
+describe('processB24Event — uninstall (always unregisters)', () => {
+  it('returns an unregister action when the stored token matches', async () => {
+    const res = await processB24Event(uninstall, makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) }))
     expect(res.status).toBe(200)
-    expect(res.body).toMatchObject({ ok: true, purged: true })
-    expect(deps.deletePortal).toHaveBeenCalledWith('m1')
+    expect(res.action).toEqual({ type: 'unregister', memberId: 'm1' })
   })
 
-  it('does not purge when CLEAN=0', async () => {
-    const deps = makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
+  it('unregisters even when CLEAN=0 (policy: a removed app keeps no data)', async () => {
     const keep = { ...uninstall, data: { LANGUAGE_ID: 'ru', CLEAN: 0 } }
-    const res = await processB24Event(keep, deps)
-    expect(res.body).toMatchObject({ purged: false })
-    expect(deps.deletePortal).not.toHaveBeenCalled()
+    const res = await processB24Event(keep, makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) }))
+    expect(res.status).toBe(200)
+    expect(res.action).toEqual({ type: 'unregister', memberId: 'm1' })
   })
 
-  it('returns 503 (fail-closed) when no stored or env token, without purging', async () => {
-    const deps = makeDeps()
-    const res = await processB24Event(uninstall, deps)
+  it('returns 503 (fail-closed) with no action when no stored or env token', async () => {
+    const res = await processB24Event(uninstall, makeDeps())
     expect(res.status).toBe(503)
-    expect(deps.deletePortal).not.toHaveBeenCalled()
-    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    expect(res.action).toBeUndefined()
   })
 
-  it('returns 400 on a malformed uninstall (missing member_id)', async () => {
+  it('returns 400 on a malformed uninstall (missing member_id), no action', async () => {
     const bad = { event: 'ONAPPUNINSTALL', data: { CLEAN: 1 }, auth: { domain: 'd' } }
-    const deps = makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
-    const res = await processB24Event(bad, deps)
+    const res = await processB24Event(bad, makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) }))
     expect(res.status).toBe(400)
-    expect(deps.deletePortal).not.toHaveBeenCalled()
+    expect(res.action).toBeUndefined()
   })
 
-  it('returns 403 when the stored token mismatches', async () => {
-    const deps = makeDeps({ loadStoredToken: vi.fn(async () => 'other') })
-    const res = await processB24Event(uninstall, deps)
+  it('returns 403 with no action when the stored token mismatches', async () => {
+    const res = await processB24Event(uninstall, makeDeps({ loadStoredToken: vi.fn(async () => 'other') }))
     expect(res.status).toBe(403)
-    expect(deps.deletePortal).not.toHaveBeenCalled()
+    expect(res.action).toBeUndefined()
   })
 
   it('accepts via env token even when the portal is unknown', async () => {
-    const deps = makeDeps({ envToken: APP_TOKEN })
-    const res = await processB24Event(uninstall, deps)
+    const res = await processB24Event(uninstall, makeDeps({ envToken: APP_TOKEN }))
     expect(res.status).toBe(200)
-    expect(deps.deletePortal).toHaveBeenCalledWith('m1')
+    expect(res.action).toEqual({ type: 'unregister', memberId: 'm1' })
   })
 })
 
 describe('processB24Event — other', () => {
-  it('acknowledges unsubscribed events with 200', async () => {
+  it('acknowledges unsubscribed events with 200 and no action', async () => {
     const res = await processB24Event({ event: 'ONCRMDEALADD', auth: {} }, makeDeps())
     expect(res).toEqual({ status: 200, body: { ok: true, ignored: 'ONCRMDEALADD' } })
+  })
+})
+
+const NOW = 1_000_000
+function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
+  return {
+    envToken: '',
+    loadStoredToken: vi.fn(async () => APP_TOKEN),
+    enqueue: vi.fn(async () => true),
+    saveCredentials: vi.fn(async () => {}),
+    deletePortal: vi.fn(async () => {}),
+    encrypt: vi.fn((s: string) => `enc(${s})`),
+    now: () => NOW,
+    ...over
+  }
+}
+
+describe('handleEventRequest — primary (enqueue) path', () => {
+  it('enqueues a register job (refresh ENCRYPTED, access clear) and does NOT write synchronously', async () => {
+    const deps = makeReqDeps()
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('queued')
+    expect(res.status).toBe(200)
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job).toMatchObject({ memberId: 'm1', kind: 'ONAPPINSTALL' })
+    // refresh is encrypted in the job; access token stays clear.
+    expect(job.credentials.refreshTokenEnc).toBe('enc(R)')
+    expect(job.credentials.accessToken).toBe('A')
+    expect(deps.encrypt).toHaveBeenCalledWith('R')
+    // expiresAt stamped from injected now + 3600s.
+    expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
+  })
+
+  it('enqueues an unregister job (no credentials) on uninstall', async () => {
+    const deps = makeReqDeps()
+    const res = await handleEventRequest(uninstall, deps)
+    expect(res.outcome).toBe('queued')
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job).toMatchObject({ memberId: 'm1', kind: 'ONAPPUNINSTALL' })
+    expect(job.credentials).toBeUndefined()
+    expect(deps.deletePortal).not.toHaveBeenCalled()
+  })
+
+  it('does nothing (outcome none) and never enqueues on a denied event', async () => {
+    const deps = makeReqDeps({ envToken: 'different' })
+    const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(403)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+})
+
+describe('handleEventRequest — synchronous fallback (queue unavailable)', () => {
+  it('writes credentials synchronously when the queue is disabled (enqueue → false)', async () => {
+    const deps = makeReqDeps({ enqueue: vi.fn(async () => false) })
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(res.status).toBe(200)
+    // saveToken encrypts internally → pass RAW refresh here (not the enc blob).
+    expect(deps.saveCredentials).toHaveBeenCalledWith(expect.objectContaining({
+      memberId: 'm1', accessToken: 'A', refreshToken: 'R', applicationToken: APP_TOKEN, expiresAt: NOW + 3600 * 1000
+    }))
+  })
+
+  it('writes synchronously when enqueue THROWS (Redis down)', async () => {
+    const boom = vi.fn(async () => Promise.reject(new Error('ECONNREFUSED')))
+    const deps = makeReqDeps({ enqueue: boom })
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.saveCredentials).toHaveBeenCalled()
+  })
+
+  it('deletes the portal synchronously on uninstall when the queue is disabled', async () => {
+    const deps = makeReqDeps({ enqueue: vi.fn(async () => false) })
+    const res = await handleEventRequest(uninstall, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.deletePortal).toHaveBeenCalledWith('m1')
+  })
+})
+
+describe('handleEventRequest — expiresAt/TTL coercion', () => {
+  const enc = (s: string) => s
+  async function jobFor(expires_in: unknown) {
+    const deps = makeReqDeps({ encrypt: enc })
+    const payload = { ...install, auth: { ...install.auth, expires_in } }
+    await handleEventRequest(payload, deps)
+    return (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+  }
+  it('defaults a missing expires_in to 3600s', async () => {
+    const job = await jobFor(undefined)
+    expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
+  })
+  it('honours an explicit 0 (already expired)', async () => {
+    const job = await jobFor(0)
+    expect(job.credentials.expiresAt).toBe(NOW)
+  })
+  it('falls back to 3600s for a non-finite value', async () => {
+    const job = await jobFor('abc')
+    expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
   })
 })

@@ -17,7 +17,7 @@ function item(docId: string, direction: 'credit' | 'debit' = 'credit'): Statemen
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. */
 function fakeDeps(batch: StatementItem[] = []): { deps: HandlerDeps, calls: Record<string, unknown[]> } {
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [] }
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
     parseFile: async () => batch,
@@ -27,6 +27,9 @@ function fakeDeps(batch: StatementItem[] = []): { deps: HandlerDeps, calls: Reco
     },
     notifyChat: async (it) => {
       calls.chat.push(it.docId)
+    },
+    savePortal: async (job) => {
+      calls.save.push(job.memberId)
     },
     deletePortal: async (m) => {
       calls.del.push(m)
@@ -39,18 +42,28 @@ function fakeDeps(batch: StatementItem[] = []): { deps: HandlerDeps, calls: Reco
   return { deps, calls }
 }
 
+const CREDS = { accessToken: 'A', refreshTokenEnc: 'ENC', expiresAt: 1, applicationToken: 'T' }
+
 describe('handleEventJob', () => {
-  it('deletes portal data on uninstall', async () => {
+  it('deletes portal data on uninstall (always)', async () => {
     const { deps, calls } = fakeDeps()
     const r = await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPUNINSTALL', ts: '1' }, deps)
-    expect(r).toEqual({ kind: 'ONAPPUNINSTALL', cleaned: true })
+    expect(r).toEqual({ kind: 'ONAPPUNINSTALL', cleaned: true, registered: false })
     expect(calls.del).toEqual(['M'])
+    expect(calls.save).toEqual([])
   })
-  it('does not clean on install', async () => {
+  it('registers the portal on install (persists credentials)', async () => {
+    const { deps, calls } = fakeDeps()
+    const r = await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPINSTALL', ts: '1', credentials: CREDS }, deps)
+    expect(r).toEqual({ kind: 'ONAPPINSTALL', cleaned: false, registered: true })
+    expect(calls.save).toEqual(['M'])
+    expect(calls.del).toEqual([])
+  })
+  it('does not register an install job missing credentials', async () => {
     const { deps, calls } = fakeDeps()
     const r = await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPINSTALL', ts: '1' }, deps)
-    expect(r.cleaned).toBe(false)
-    expect(calls.del).toEqual([])
+    expect(r.registered).toBe(false)
+    expect(calls.save).toEqual([])
   })
 })
 

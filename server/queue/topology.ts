@@ -23,13 +23,31 @@ export const Q_CRM = 'crm-sync'
 export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM] as const
 export type QueueName = typeof QUEUE_NAMES[number]
 
-/** Follow-up work after a verified B24 event (token save stays synchronous). */
+/** Portal credentials to persist on register (ONAPPINSTALL). `refreshTokenEnc` is
+ *  the AES-GCM blob (secretCrypto) — the refresh token is NEVER carried in clear
+ *  through Redis. The webhook endpoint encrypts it; the consumer decrypts + stores. */
+export interface EventJobCredentials {
+  accessToken: string
+  refreshTokenEnc: string
+  /** Absolute epoch ms when the access token expires (stamped at receipt). */
+  expiresAt: number
+  applicationToken: string
+}
+
+/**
+ * A verified B24 event to APPLY to the store. The webhook endpoint only verifies
+ * and enqueues (it never writes the DB); the consumer registers or unregisters the
+ * portal. `credentials` is present on ONAPPINSTALL (what to persist), absent on
+ * ONAPPUNINSTALL (which always removes everything for the portal).
+ */
 export interface EventJob {
   memberId: string
   domain: string
   kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL'
   /** Event timestamp from B24 (deduplicates redelivery of the same event). */
   ts: string
+  /** Present on ONAPPINSTALL — the portal credentials the consumer persists. */
+  credentials?: EventJobCredentials
 }
 
 /** Pull one statement window for a portal/account (the cron fans these out). */

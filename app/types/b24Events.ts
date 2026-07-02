@@ -84,13 +84,3 @@ export interface PortalCredentials {
   expiresIn?: number
   scope?: string
 }
-
-/**
- * Outcome of routing one incoming event POST (see utils/b24Events.routeB24Event).
- * The pure router decides *what* should happen; the backend performs the I/O
- * (persist credentials / purge the portal / ignore).
- */
-export type B24EventDecision
-  = | { kind: 'install', event: B24InstallEvent, credentials: PortalCredentials }
-    | { kind: 'uninstall', event: B24UninstallEvent, memberId: string, purge: boolean }
-    | { kind: 'unsupported', code: string }
