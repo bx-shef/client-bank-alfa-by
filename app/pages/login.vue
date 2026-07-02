@@ -5,7 +5,7 @@
 // (light/dark). Ported from the Procure AI auth model. See docs/AUTH.md.
 import LockMIcon from '@bitrix24/b24icons-vue/outline/LockMIcon'
 
-// `clear` layout wraps the page in <B24App> → b24ui components + colorMode (dark) work.
+// `clear` layout wraps the page in <B24App> → b24ui components + colorMode (light/dark) work.
 definePageMeta({ layout: 'clear' })
 
 const route = useRoute()

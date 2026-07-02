@@ -31,9 +31,14 @@ onMounted(async () => {
     <slot v-if="state === 'ok'" />
     <div
       v-else-if="state === 'checking'"
+      role="status"
+      aria-live="polite"
       class="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-(--ui-color-base-3)"
     >
-      <LoaderWaitIcon class="size-8" />
+      <LoaderWaitIcon
+        class="size-8"
+        aria-hidden="true"
+      />
       <p class="text-sm">
         Проверка доступа…
       </p>

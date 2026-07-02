@@ -72,7 +72,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (идемпотентен: пропуск верных, перепривязка устаревших). Требует `NUXT_PUBLIC_SITE_URL` в проде
   (иначе откажется биндить относительный URL — ошибка с retry). `placement.bind` **пока не делаем** —
   плейсменты добиваем на тестовом портале (см. план).
-- `app/layouts/clear.vue` — минимальный layout под in-portal-страницы (`<B24App>` для тем/тостов в iframe).
+- `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
+  (`/install`, `/app`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
 - `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `im`, `user_brief`,
   `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
@@ -99,7 +100,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`resolveAuthConfig`/`checkCredentials` constant-time, `signSession`/`verifySession` — HMAC-подпись cookie;
   статус-матрикс роутов `decideLogin`/`decideLogout`/`sessionStatus` — тонкие `server/api/auth/*` только I/O,
   тестируются без сервера; тесты). Роуты `server/api/auth/login|logout|session`. Клиент — `app/composables/useAuth.ts`,
-  форма `app/pages/login.vue` на **b24ui** (`B24Card`/`B24Input`/`B24Button`/`B24Alert`, layout `clear` → тёмная тема),
+  форма `app/pages/login.vue` на **b24ui** (`B24Card`/`B24Input`/`B24Button`/`B24Alert`, layout `clear` → light/dark),
   публичная `noindex`. Гвард `app/middleware/auth.ts` (клиентский редирект; реальная защита — на API), а
   `app/components/AuthGate.vue` прячет контент служебных страниц за «Проверка доступа…» до подтверждения сессии
   (SSG-статику красит колор-мод, поэтому иначе защищённый контент мелькал бы до редиректа). Cookie `cba_sess`
@@ -199,9 +200,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **только заголовком** `X-Check-Token` (без `?token=` в логах), nginx `deny all`, для консоли
       (`scripts/queue-stats.sh`); `GET /api/ops/queues` (`server/api/ops/queues.get.ts`) — по **сессии
       оператора** (`operatorAllowed`), это путь для браузера. **Живой график** — страница `/queues`
-      (`app/pages/queues.vue`, за `middleware: auth`) → `app/components/QueueMonitor.vue` на **ECharts**
-      (Apache-2.0, tree-shaken: `echarts/core` + Line/Grid/Tooltip/Legend/Canvas, динамический импорт),
-      чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
+      (`app/pages/queues.vue`, за `middleware: auth` + обёртка `AuthGate`, layout `clear`) →
+      `app/components/QueueMonitor.vue` в хроме **b24ui** (`B24Card`/`B24Button`/`B24Select`, иконки
+      `@bitrix24/b24icons-vue`) на **ECharts** (Apache-2.0, tree-shaken: `echarts/core` +
+      Line/Grid/Tooltip/Legend/Canvas, динамический импорт; оси/сетка перекрашиваются под light/dark по
+      классу `.dark`), чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
       из `/api/ops/queues`; `?demo=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
       (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78. Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).

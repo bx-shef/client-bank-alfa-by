@@ -272,6 +272,7 @@ onBeforeUnmount(() => {
           v-for="row in legendView"
           :key="row.name"
           type="button"
+          :aria-pressed="!hidden[row.name]"
           class="grid w-full grid-cols-[minmax(0,1fr)_repeat(4,2.5rem)] items-center gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) py-1.5 text-left text-sm tabular-nums transition-opacity last:border-b-0 hover:opacity-80"
           :class="{ 'opacity-40': hidden[row.name] }"
           @click="toggleLine(row)"
