@@ -38,6 +38,10 @@ services:
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       # Redis DSN for the BullMQ pipeline (events → fetch → parse → crm-sync).
       REDIS_URL: redis://redis:6379
+      # Operator login for the service zone (empty PASS ⇒ open; see docs/AUTH.md).
+      PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
+      PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
       # Cron poll interval (min) + load-demo size (DEMO_LOAD_N>0 enqueues synthetic
       # fetch jobs each tick so you can watch the pipeline; 0 = off).
       CRON_INTERVAL_MIN: ${CRON_INTERVAL_MIN:-5}

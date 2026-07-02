@@ -69,6 +69,12 @@ services:
       # Redis DSN for the BullMQ pipeline (events → fetch → parse → crm-sync). Reached
       # only on the isolated `queuenet`; no auth needed inside the private network.
       REDIS_URL: redis://redis:6379
+      # Operator login for the service zone (/queues …). Empty PASS ⇒ zone OPEN (no
+      # login). Set PASS to close it; SESSION_SECRET is the independent HMAC signing
+      # key (required in prod, must NOT be derived from the password). See docs/AUTH.md.
+      PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
+      PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
       # Cron poll interval (minutes) and load-demo size. DEMO_LOAD_N>0 enqueues that
       # many synthetic fetch jobs each tick so you can watch the pipeline (0 = off).
       CRON_INTERVAL_MIN: ${CRON_INTERVAL_MIN:-5}
