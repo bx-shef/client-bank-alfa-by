@@ -1,0 +1,55 @@
+***** ^Type=4^ ^Acc=BY34ALFA30122H10700010270000^  -  Vypiska po schetu za period
+[IN_PARAM]
+^DateBegin=12.02.2026^
+^DateEnd=12.02.2026^
+^Name=OOO TEST KLIENT^
+^UNN=100000001^
+^Version=1^
+[OUT_PARAM]
+^Time=15.06.2026, 12.55^
+^Header1=BY34ALFA30122H10700010270000^
+^Header5=OOO TEST KLIENT^
+^DateBegin=12.02.2026^
+^DateEnd=12.02.2026^
+^DateIn=12.02.2026^
+^RestIn=1000.00^
+^DocDate=12.02.2026^
+^Num=362^
+^Code=ALFABY2X^
+^Acc=BY70ALFA30132788650010270000^
+^OperationID=OPID000000000001^
+^Db=140.18^
+^Credit=0.00^
+^KorUNP=200000001^
+^KorName=OOO ROMASHKA^
+^Nazn=OTHR 122601 oplata po dogovoru^
+^OpDate=12.02.2026^
+^DateTime=13:48:46^
+^DocDate=12.02.2026^
+^Num=362^
+^Code=ALFABY2X^
+^Acc=BY80ALFA30132000000010270000^
+^OperationID=OPID000000000002^
+^Db=57.05^
+^Credit=0.00^
+^KorUNP=200000002^
+^KorName=GLAVNOE UPRAVLENIE^
+^Nazn=TAXS 190102 nalog^
+^OpDate=12.02.2026^
+^DateTime=13:42:02^
+^DocDate=12.02.2026^
+^Num=480^
+^Code=ALFABY2X^
+^Acc=BY99XYZA00000000000001234567^
+^OperationID=OPID000000000003^
+^Db=100.00^
+^Credit=0.00^
+^KorUNP=200000003^
+^KorName=ZAO BANK^
+^Nazn=OTHR komissiya banka^
+^OpDate=12.02.2026^
+^DateTime=12:00:25^
+^DB=297.23^
+^CR=0.00^
+^RestOut=702.77^
+###################################################

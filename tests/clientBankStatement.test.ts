@@ -175,10 +175,26 @@ describe('real-file robustness', () => {
     expect(items[0]!.currency).toBe('BYN')
   })
 
-  it('rowDocId falls back to Num|DocDate when DocID is absent (Type=4 files)', () => {
+  it('rowDocId prefers a unique id (DocID, then OperationID) over the Num|DocDate fallback (#73)', () => {
     expect(rowDocId({ DocID: 'D1', Num: '134', DocDate: '02.11.2016' })).toBe('D1')
+    // Type=4 "за период" export carries OperationID (unique), not DocID.
+    expect(rowDocId({ OperationID: 'OPID1', Num: '362', DocDate: '14.05.2026' })).toBe('OPID1')
+    expect(rowDocId({ DocID: 'D1', OperationID: 'OPID1' })).toBe('D1') // DocID still wins
     expect(rowDocId({ Num: '134', DocDate: '02.11.2016' })).toBe('134|02.11.2016')
     expect(rowDocId({})).toBe('')
+  })
+
+  it('Type=4: two operations sharing a Num get distinct dedup ids via OperationID (#73 — no data loss)', () => {
+    // Regression for the real defect: `Num` repeats across different operations
+    // in the Type=4 export; without OperationID both collapsed to one dedup key.
+    const parsed = parseClientBankText(
+      '***** ^Type=4^ ^Acc=BY34ALFA30122H10700010270000^  -  T\n[OUT_PARAM]\n'
+      + '^DocDate=14.05.2026^\n^Num=362^\n^Acc=BY70ALFA30132788650010270000^\n^OperationID=OPID1^\n^Db=140.18^\n^Credit=0.00^\n^KorName=A^\n'
+      + '^DocDate=14.05.2026^\n^Num=362^\n^Acc=BY80ALFA30132000000010270000^\n^OperationID=OPID2^\n^Db=57.05^\n^Credit=0.00^\n^KorName=B^'
+    )
+    const items = normalizeClientBank(parsed, { account: '' })
+    expect(items.map(i => i.docId)).toEqual(['OPID1', 'OPID2'])
+    expect(new Set(items.map(i => i.docId)).size).toBe(2) // no collision → no dropped op
   })
 
   it('a Type=4 statement with no DocID yields distinct dedup ids per operation', () => {
@@ -191,5 +207,43 @@ describe('real-file robustness', () => {
     expect(items.map(i => i.docId)).toEqual(['134|29.03.2018', '136|29.03.2018'])
     expect(items[0]!.direction).toBe('debit')
     expect(items[1]!.direction).toBe('credit') // Credit>0 → приход
+  })
+})
+
+// Real-format fixtures (anonymized) from live aida exports — the CURRENT bank
+// formats: Type=3 "за день" (VpskExport) and Type=4 "за период" (#73).
+describe('real client-bank formats (Type 3 / Type 4 fixtures)', () => {
+  it('Type=4 "за период": OperationID dedup, counterparty account/УНП/BIC, balance reconciles', () => {
+    const items = normalizeClientBank(parseClientBankText(loadFixture('demo-type4-alfa.txt')), { account: '' })
+    expect(items).toHaveLength(3)
+    // Unique dedup ids from OperationID even though two rows share Num=362.
+    expect(items.map(i => i.docId)).toEqual(['OPID000000000001', 'OPID000000000002', 'OPID000000000003'])
+    // Our own account is parsed from the file header (ends 0270000).
+    expect(items[0]!.account).toBe('BY34ALFA30122H10700010270000')
+    // Counterparty fields come from the right keys.
+    expect(items[0]!.counterparty.account).toBe('BY70ALFA30132788650010270000')
+    expect(items[0]!.counterparty.unp).toBe('200000001')
+    expect(items[0]!.counterparty.bic).toBe('ALFABY2X') // BIC from `Code` in Type=4
+    // Amounts + direction (all debits here); total matches RestIn − RestOut.
+    expect(items.every(i => i.direction === 'debit')).toBe(true)
+    const total = items.reduce((s, i) => s + i.amount, 0)
+    expect(total).toBeCloseTo(1000.0 - 702.77, 2) // 297.23
+  })
+
+  it('Type=3 "за день": Num|DocDate dedup, приход/расход split, balance reconciles', () => {
+    const items = normalizeClientBank(parseClientBankText(loadFixture('demo-type3-vpsk.txt')), { account: '' })
+    expect(items).toHaveLength(2)
+    // No OperationID/DocID in Type=3 → Num|DocDate identity (unique within a day).
+    expect(items.map(i => i.docId)).toEqual(['101|08.01.2026', '102|08.01.2026'])
+    expect(items[0]!.direction).toBe('debit') // Db>0
+    expect(items[0]!.amount).toBeCloseTo(300, 2)
+    expect(items[0]!.counterparty.account).toBe('BY24TESTAB00000000000000001234')
+    expect(items[0]!.counterparty.unp).toBe('192220456')
+    expect(items[1]!.direction).toBe('credit') // Credit>0 → приход
+    expect(items[1]!.amount).toBeCloseTo(500, 2)
+    expect(items.every(i => i.currency === 'BYN')).toBe(true)
+    // CrIn 1000 − ΣDb 300 + ΣCredit 500 = CrOut 1200.
+    const net = items.reduce((s, i) => s + (i.direction === 'credit' ? i.amount : -i.amount), 0)
+    expect(1000 + net).toBeCloseTo(1200, 2)
   })
 })
