@@ -202,7 +202,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
 - **Скрипты разведки (dev, не часть SSG):**
   - `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) — живой прогон OAuth/выписки Альфы по
-    `.env.sandbox` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
+    `.env.alfabankby` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
   - `scripts/prior-oauth-test.mjs` (`pnpm prior:test`) — живой прогон Open Banking (СПР) Приорбанка
     по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
   - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор ручной выписки через
