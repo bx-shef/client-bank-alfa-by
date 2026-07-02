@@ -35,23 +35,32 @@ describe('job ids (idempotency)', () => {
     expect(fetchJobId(fetchJob)).not.toBe(fetchJobId({ ...fetchJob, account: 'BY99' }))
     expect(fetchJobId(fetchJob)).not.toBe(fetchJobId({ ...fetchJob, dateTo: '2026-08-01' }))
   })
-  it('encode parts so a value with a colon cannot collide across fields', () => {
-    const a = fetchJobId({ ...fetchJob, account: 'a:b', dateFrom: 'c' })
-    const b = fetchJobId({ ...fetchJob, account: 'a', dateFrom: 'b:c' })
+  it('encode parts so a value with the separator cannot collide across fields', () => {
+    const a = fetchJobId({ ...fetchJob, account: 'a|b', dateFrom: 'c' })
+    const b = fetchJobId({ ...fetchJob, account: 'a', dateFrom: 'b|c' })
     expect(a).not.toBe(b)
   })
   it('event/parse ids carry their kind prefix and key fields', () => {
     const ev: EventJob = { memberId: 'M1', domain: 'p.bitrix24.by', kind: 'ONAPPINSTALL', ts: '123' }
-    expect(eventJobId(ev)).toBe('evt:M1:ONAPPINSTALL:123')
+    expect(eventJobId(ev)).toBe('evt|M1|ONAPPINSTALL|123')
     const pj: ParseJob = { memberId: 'M1', providerId: 'manual', fileRef: 'k', fileHash: 'h1' }
-    expect(parseJobId(pj)).toBe('parse:M1:h1')
+    expect(parseJobId(pj)).toBe('parse|M1|h1')
     // fileRef is not part of the id — the same content (hash) dedups regardless of ref.
     expect(parseJobId(pj)).toBe(parseJobId({ ...pj, fileRef: 'other' }))
   })
   it('crm-sync id is memberId + batchId (items do not affect it)', () => {
     const base: CrmSyncJob = { memberId: 'M1', providerId: 'alfa-by', source: 'fetch', batchId: 'b1', items: [] }
-    expect(crmSyncJobId(base)).toBe('crm:M1:b1')
+    expect(crmSyncJobId(base)).toBe('crm|M1|b1')
     expect(crmSyncJobId(base)).toBe(crmSyncJobId({ ...base, items: [{} as never] }))
+  })
+  it('never contain ":" — BullMQ forbids it in a custom job id', () => {
+    // Real portal member_ids/domains, and values that themselves contain a colon.
+    const ev: EventJob = { memberId: '2dc4fbbc1aec6851af75358df76d53e9', domain: 'x.bitrix24.ru', kind: 'ONAPPINSTALL', ts: '1' }
+    const pj: ParseJob = { memberId: 'M:1', providerId: 'manual', fileRef: 'r', fileHash: 'h:2' }
+    const cj: CrmSyncJob = { memberId: 'M1', providerId: 'alfa-by', source: 'fetch', batchId: 'b:3', items: [] }
+    for (const id of [eventJobId(ev), fetchJobId(fetchJob), parseJobId(pj), crmSyncJobId(cj)]) {
+      expect(id).not.toContain(':')
+    }
   })
 })
 

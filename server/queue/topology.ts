@@ -70,9 +70,15 @@ export interface CrmSyncJob {
   items: StatementItem[]
 }
 
-/** Colon-join id parts, encoding each so a value containing ':' can't collide. */
+// Separator for job-id parts. BullMQ FORBIDS ':' in a custom job id (it namespaces
+// its Redis keys with ':', so a custom id containing ':' throws "Custom Id cannot
+// contain :"). We join with '|', which encodeURIComponent escapes (%7C) — so no
+// encoded part can contain a literal '|', keeping ids collision-free AND BullMQ-safe.
+const ID_SEP = '|'
+
+/** Join id parts, encoding each so a value containing the separator can't collide. */
 function joinId(parts: (string | number)[]): string {
-  return parts.map(p => encodeURIComponent(String(p))).join(':')
+  return parts.map(p => encodeURIComponent(String(p))).join(ID_SEP)
 }
 
 export function eventJobId(job: EventJob): string {
