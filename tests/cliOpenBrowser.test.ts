@@ -37,4 +37,15 @@ describe('openBrowser URL gate (scripts/lib/cli.mjs, #45)', () => {
     openBrowser('http://localhost:3000/oauth-callback')
     expect(spawnMock).toHaveBeenCalledTimes(1)
   })
+
+  it('passes the normalized href — an embedded quote is percent-encoded, never raw (cmd.exe injection, #45)', () => {
+    // A `"` in the URL must not survive into the spawn args: on Windows it would
+    // break out of the `start "" "<url>"` quoting and inject `& calc & ...`.
+    openBrowser('https://x.com/a"&calc.exe&"b')
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    const args = spawnMock.mock.calls[0]![1] as string[]
+    const joined = args.join(' ')
+    expect(joined).not.toContain('a"') // the raw `a"…` injection sequence is gone
+    expect(joined).toContain('%22') // the quote is percent-encoded instead
+  })
 })
