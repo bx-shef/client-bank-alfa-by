@@ -190,13 +190,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     - `server/plugins/queue.ts` — на старте backend поднимает воркеры **в процессе** и (если
       `DEMO_LOAD_N>0`) крон каждые `CRON_INTERVAL_MIN` кладёт синтетические fetch-джобы (демо потока).
       Масштаб-аут (отдельный воркер-контейнер) — следующий шаг (см. REFACTOR_PLAN).
-    - **Наблюдаемость сейчас:** `server/api/queues.get.ts` (`GET /api/queues` — счётчики по очередям,
-      guard `B24_APPLICATION_TOKEN`, nginx `deny all`) + `scripts/queue-stats.sh`. **Живой график** —
-      страница `/queues` (`app/pages/queues.vue`) → компонент `app/components/QueueMonitor.vue` на
-      **ECharts** (Apache-2.0, бесплатно, динамический импорт), чистая логика ряда —
-      `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот `/api/queues` без истории);
-      сейчас демо-данные. Телеметрия в Grafana (Prometheus-экспортёр BullMQ / bull-board) — далее.
-      Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
+    - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
+      DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
+      **только заголовком** `X-Check-Token` (без `?token=` в логах), nginx `deny all`, для консоли
+      (`scripts/queue-stats.sh`); `GET /api/ops/queues` (`server/api/ops/queues.get.ts`) — по **сессии
+      оператора** (`operatorAllowed`), это путь для браузера. **Живой график** — страница `/queues`
+      (`app/pages/queues.vue`, за `middleware: auth`) → `app/components/QueueMonitor.vue` на **ECharts**
+      (Apache-2.0, tree-shaken: `echarts/core` + Line/Grid/Tooltip/Legend/Canvas, динамический импорт),
+      чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
+      из `/api/ops/queues`; `?demo=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
+      (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78. Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),

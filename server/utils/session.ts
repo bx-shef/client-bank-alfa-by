@@ -116,6 +116,17 @@ export function authStartupWarning(env: Record<string, string | undefined>): str
   return null
 }
 
+/**
+ * Whether a request may access the operator zone. Open when auth is not configured
+ * (no password — matches the client route guard), otherwise requires a valid signed
+ * session cookie. Pure; data endpoints (e.g. /api/ops/queues) call this to enforce
+ * the session server-side (the SSG page guard is only a UX redirect).
+ */
+export function operatorAllowed(cfg: AuthConfig, cookie: string | undefined, nowMs: number): boolean {
+  if (!isAuthConfigured(cfg)) return true
+  return verifySession(cookie, cfg.secret, nowMs) !== null
+}
+
 /** Cookie name for the operator session. */
 export const SESSION_COOKIE = 'cba_sess'
 /** CSRF header required on state-changing auth calls (custom header ⇒ needs CORS
