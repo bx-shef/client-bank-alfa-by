@@ -201,12 +201,14 @@ onMounted(async () => {
 
     <BuildFooter />
 
-    <!-- Settings slideover (primary entry; /settings route stays as fallback). -->
+    <!-- Settings slideover (primary entry; /settings route stays as fallback).
+         Opens from the bottom (a "bottom sheet") — comfortable in a narrow B24
+         iframe / on mobile, where a right-side panel is cramped. -->
     <B24Slideover
       v-model:open="settingsOpen"
       title="Настройки"
       description="Уведомления в чат, исключения. Демо: хранится локально."
-      side="right"
+      side="bottom"
     >
       <template #body>
         <ClientOnly>
