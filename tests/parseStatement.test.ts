@@ -76,6 +76,18 @@ describe('formatItems (unified normalized StatementItem[] view)', () => {
     expect(row).not.toMatch(/\d{10,}/)
   })
 
+  it('renders a credit row with the ↑ arrow and a + sign', () => {
+    const row = formatItems([mkItem({ direction: 'credit', amount: 100 })]).find(l => l.startsWith('  •'))!
+    expect(row).toContain('↑+100.00')
+  })
+
+  it('prefers operDate over acceptDate for the row date', () => {
+    const row = formatItems([mkItem({ operDate: '2024-02-03T00:00:00.000', acceptDate: '2023-09-28T00:00:00.000' })])
+      .find(l => l.startsWith('  •'))!
+    expect(row).toContain('2024-02-03')
+    expect(row).not.toContain('2023-09-28')
+  })
+
   it('separates currencies and caps the sample rows', () => {
     const many = Array.from({ length: 10 }, (_, i) =>
       mkItem({ docId: `d${i}`, currency: i % 2 ? 'USD' : 'BYN' }))

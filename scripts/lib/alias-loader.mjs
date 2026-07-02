@@ -5,6 +5,9 @@
 // so only value imports need this. Preloaded via `node --import`.
 //
 // `~/x` → <repo>/app/x (with a `.ts` extension appended when none is given).
+//
+// Requires Node >= 22.15 (synchronous `module.registerHooks`). Dev-only, not part
+// of the SSG/prod build; CI and containers run current 22.x, so this is safe.
 
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
