@@ -16,12 +16,7 @@ const password = ref('')
 const error = ref('')
 const busy = ref(false)
 
-const redirect = computed(() => {
-  const r = route.query.redirect
-  const path = typeof r === 'string' ? r : '/queues'
-  // Only allow same-site relative paths (no protocol-relative //host, no absolute URL).
-  return path.startsWith('/') && !path.startsWith('//') ? path : '/queues'
-})
+const redirect = computed(() => safeRedirect(route.query.redirect))
 
 async function submit() {
   if (busy.value) return

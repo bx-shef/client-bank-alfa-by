@@ -96,6 +96,26 @@ export function verifySession(value: string | undefined, secret: string, nowMs: 
   return payload
 }
 
+/**
+ * Non-secret startup diagnostic for the operator gate. Returns a warning string
+ * when the current env is risky, or `null` when fine. Pure (takes an env bag):
+ *  - production with no password ⇒ the whole operator zone is silently open;
+ *  - a configured password but no explicit SESSION_SECRET ⇒ the HMAC key is
+ *    derived from the password, so a leaked cookie enables an offline attack on
+ *    the actual password. Callers log the result; secrets are never included.
+ */
+export function authStartupWarning(env: Record<string, string | undefined>): string | null {
+  const isProd = env.NODE_ENV === 'production'
+  const cfg = resolveAuthConfig(env)
+  if (isProd && !isAuthConfigured(cfg)) {
+    return 'operator zone is OPEN — PUBLIC_PAGE_BASIC_AUTH_PASS is not set in production'
+  }
+  if (isProd && isAuthConfigured(cfg) && !(env.SESSION_SECRET || '').trim()) {
+    return 'SESSION_SECRET is not set — signing key is derived from the password; set an independent SESSION_SECRET in production'
+  }
+  return null
+}
+
 /** Cookie name for the operator session. */
 export const SESSION_COOKIE = 'cba_sess'
 /** CSRF header required on state-changing auth calls (custom header ⇒ needs CORS

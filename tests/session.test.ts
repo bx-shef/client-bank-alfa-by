@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  authStartupWarning,
   checkCredentials,
   isAuthConfigured,
   resolveAuthConfig,
@@ -71,5 +72,47 @@ describe('signSession / verifySession', () => {
     expect(verifySession(signSession({ sub: 'x', exp: now + 1 }, secret), '', now)).toBeNull() // empty secret
     expect(verifySession('garbage', secret, now)).toBeNull()
     expect(verifySession(undefined, secret, now)).toBeNull()
+  })
+
+  it('treats exp exactly equal to now as expired (boundary is <=)', () => {
+    expect(verifySession(signSession({ sub: 'operator', exp: now }, secret), secret, now)).toBeNull()
+    expect(verifySession(signSession({ sub: 'operator', exp: now + 1 }, secret), secret, now))
+      .toEqual({ sub: 'operator', exp: now + 1 })
+  })
+
+  it('rejects a well-signed payload with a missing or non-numeric exp', () => {
+    // Sign a body that parses as JSON but lacks a numeric `exp`.
+    const bad = { sub: 'operator', exp: 'soon' } as unknown as { sub: string, exp: number }
+    expect(verifySession(signSession(bad, secret), secret, now)).toBeNull()
+    const noExp = { sub: 'operator' } as unknown as { sub: string, exp: number }
+    expect(verifySession(signSession(noExp, secret), secret, now)).toBeNull()
+  })
+})
+
+describe('authStartupWarning', () => {
+  it('is silent outside production regardless of config', () => {
+    expect(authStartupWarning({})).toBeNull()
+    expect(authStartupWarning({ NODE_ENV: 'development' })).toBeNull()
+    expect(authStartupWarning({ NODE_ENV: 'test', PUBLIC_PAGE_BASIC_AUTH_PASS: 'p' })).toBeNull()
+  })
+
+  it('warns in production when no password is set (zone open)', () => {
+    const w = authStartupWarning({ NODE_ENV: 'production' })
+    expect(w).toMatch(/OPEN/)
+    expect(w).toMatch(/PUBLIC_PAGE_BASIC_AUTH_PASS/)
+  })
+
+  it('warns in production when the signing secret is derived from the password', () => {
+    const w = authStartupWarning({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'p' })
+    expect(w).toMatch(/SESSION_SECRET/)
+  })
+
+  it('is silent in production when both password and an explicit secret are set', () => {
+    expect(authStartupWarning({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'p', SESSION_SECRET: 'K' })).toBeNull()
+  })
+
+  it('never leaks the password or secret in the warning text', () => {
+    const w = authStartupWarning({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 's3cret-pw' })
+    expect(w).not.toMatch(/s3cret-pw/)
   })
 })
