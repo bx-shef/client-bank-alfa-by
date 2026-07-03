@@ -1,6 +1,6 @@
 // Nitro startup plugin: start the BullMQ workers in-process and, if a load demo
-// is enabled, run the cron tick that enqueues synthetic fetch jobs every
-// CRON_INTERVAL_MIN. No-op without REDIS_URL (SSG/dev without Redis).
+// is enabled (DEMO_LOAD_N>0), run a tick every DEMO_TICK_SEC seconds that enqueues
+// synthetic fetch jobs. No-op without REDIS_URL (SSG/dev without Redis).
 //
 // In-process workers are the Phase-2 demo: one backend instance both serves the
 // API and drains the queues, so `GET /api/queues` shows load moving. Scale-out

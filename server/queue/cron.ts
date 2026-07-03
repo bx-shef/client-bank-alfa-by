@@ -11,7 +11,10 @@
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { FetchJob } from './topology'
 
-/** Interval in ms from a minutes setting (clamped to a sane floor of 1 min). */
+/** Interval in ms from a minutes setting (clamped to a sane floor of 1 min).
+ *  Reserved for REAL polling (stage 5) — `CRON_INTERVAL_MIN`; the load demo now uses
+ *  `demoTickMs` (seconds). No live caller yet (planFetches has no timer until
+ *  accounts are stored); kept + tested so stage 5 wires straight in. */
 export function cronIntervalMs(minutes: number): number {
   const m = Number.isFinite(minutes) && minutes > 0 ? minutes : 5
   return Math.max(1, m) * 60_000
