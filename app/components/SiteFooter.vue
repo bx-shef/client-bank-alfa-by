@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shortSha } from '~/utils/build'
+import { shortSha, commitUrl } from '~/utils/build'
 
 // Реквизиты ИП. Ссылки на реквизиты/политику ведут на основной сайт
 // offer.bx-shef.by (у этого лендинга нет своих /legal, /privacy).
@@ -25,6 +25,7 @@ const tools: ToolLink[] = [
 ]
 
 const sha = computed(() => shortSha(commitSha as string))
+const shaHref = computed(() => commitUrl(commitSha as string))
 </script>
 
 <template>
@@ -51,7 +52,12 @@ const sha = computed(() => shortSha(commitSha as string))
         rel="noopener noreferrer"
         class="hover:text-white hover:underline"
       >Политика конфиденциальности</a>
-      <span class="font-mono text-white/30">build {{ sha || 'dev' }}</span>
+      <a
+        :href="shaHref"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="font-mono text-white/30 hover:text-white hover:underline"
+      >сборка {{ sha || 'dev' }}</a>
     </div>
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
       <span class="uppercase tracking-[0.14em] text-white/30 font-mono text-[10px]">Бесплатные инструменты</span>
