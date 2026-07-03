@@ -31,13 +31,9 @@ async function submit() {
     await login(user.value, password.value)
     await navigateTo(redirect.value)
   } catch (e) {
-    const status = (e as { statusCode?: number, response?: { status?: number } })?.statusCode
-      ?? (e as { response?: { status?: number } })?.response?.status
-    error.value = status === 503
-      ? 'Вход не настроен на сервере (нет пароля).'
-      : status === 401
-        ? 'Неверный логин или пароль.'
-        : 'Не удалось войти — попробуйте позже.'
+    // Status → message mapping is pure and unit-tested in app/utils/loginError.ts
+    // (harness-safe, #84); auto-imported by Nuxt.
+    error.value = loginErrorMessage(e)
   } finally {
     busy.value = false
   }

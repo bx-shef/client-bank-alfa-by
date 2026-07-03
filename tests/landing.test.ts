@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LANDING_FEATURES, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
 
 describe('copyrightYears', () => {
   it('shows a single year when start === current', () => {
@@ -41,5 +41,39 @@ describe('LANDING_FEATURES', () => {
       expect(feature.title.trim()).not.toBe('')
       expect(feature.description.trim()).not.toBe('')
     }
+  })
+})
+
+describe('LANDING_STEPS', () => {
+  it('numbers the steps 01..03 with filled title/text', () => {
+    expect(LANDING_STEPS.map(s => s.step)).toEqual(['01', '02', '03'])
+    for (const s of LANDING_STEPS) {
+      expect(s.title.trim()).not.toBe('')
+      expect(s.text.trim()).not.toBe('')
+    }
+  })
+})
+
+describe('pain → result copy', () => {
+  it('has both a before and after line', () => {
+    expect(LANDING_PAIN_RESULT.before.trim()).not.toBe('')
+    expect(LANDING_PAIN_RESULT.after.trim()).not.toBe('')
+  })
+
+  it('has non-empty integrators copy', () => {
+    expect(LANDING_INTEGRATORS.trim()).not.toBe('')
+    expect(LANDING_INTEGRATORS).toContain('коннектор')
+  })
+
+  it('lists the supported banks/formats', () => {
+    expect(LANDING_FORMATS.length).toBeGreaterThan(0)
+    expect(LANDING_FORMATS).toContain('Альфа-Банк Беларусь')
+    expect(LANDING_FORMATS).toContain('Приорбанк')
+    for (const f of LANDING_FORMATS) expect(f.trim()).not.toBe('')
+  })
+
+  it('points the marketplace link to the shef.bankimport listing over https', () => {
+    expect(LANDING_MARKET_URL).toMatch(/^https:\/\//)
+    expect(LANDING_MARKET_URL).toContain('shef.bankimport')
   })
 })

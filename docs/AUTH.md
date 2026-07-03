@@ -15,7 +15,7 @@
 - **Реальная защита — на стороне API**: статический HTML пререндерится и публичен,
   поэтому клиентский `middleware` — это UX-редирект. `/queues` берёт реальные данные из
   **`GET /api/ops/queues`**, который проверяет сессию `cba_sess` (`operatorAllowed`) — вот
-  где настоящая защита; `?demo=1` — превью на синтетике. Отдельный `/api/queues` (токен
+  где настоящая защита; `?preview=1` — превью на синтетике в браузере (очереди не опрашивает). Отдельный `/api/queues` (токен
   `B24_APPLICATION_TOKEN` только заголовком, не сессия, + nginx `deny all`) — для консольной
   диагностики. Правило на будущее: любые реальные данные служебных страниц отдаёт эндпоинт,
   проверяющий сессию `cba_sess`, — полагаться на клиентский `middleware` нельзя.
@@ -45,6 +45,7 @@
 | Статус | `server/api/auth/session.get.ts` | тонкий I/O → `sessionStatus` → `{ configured, authenticated, user? }` для гварда |
 | Клиент | `app/composables/useAuth.ts` | `login`/`logout`/`fetchSession` (шлёт CSRF-заголовок на мутациях) |
 | Форма | `app/pages/login.vue` | публичная страница входа (`noindex`) на **b24ui** (layout `clear` → `<B24App>`, темизуется light/dark), редирект только на относительный путь |
+| Ошибки | `app/utils/loginError.ts` | чистый маппинг статуса ответа → сообщение (503/401/прочее, обе формы ошибки — `statusCode` и `response.status`); `login.vue` зовёт в `catch`. Покрыто `tests/loginError.test.ts` (#84) |
 | Гвард | `app/middleware/auth.ts` | клиентский редирект на `/login` (см. оговорку про API-защиту) |
 | Анти-мигание | `app/components/AuthGate.vue` | client-only обёртка тела служебной страницы: пока идёт `fetchSession`, показывает нейтральное «Проверка доступа…» и раскрывает слот **только** после подтверждения сессии. SSG-HTML публичен, а `middleware`-редирект срабатывает уже **после** отрисовки — без гейта защищённый хром мелькнул бы до редиректа. Fail-open при недоступном backend (как middleware); реальная защита — на API |
 
@@ -59,8 +60,17 @@
   порт backend замаплен — там заголовок можно подделать, это только для локальной разработки).
 - **CSRF**: мутации (`login`/`logout`) требуют кастомный заголовок `X-CBA-Auth` — его
   нельзя выставить кросс-сайтовой формой без CORS-preflight (CORS-заголовки нигде не
-  выставляются); плюс `SameSite=Lax`. Брутфорс-защиты (rate-limit) на `/api/auth/login`
-  пока нет — вынесено в follow-up (nginx `limit_req`).
+  выставляются); плюс `SameSite=Lax`.
+- **Брутфорс (rate-limit)**: `nginx.conf` дросселирует `POST /api/auth/login` — зона
+  `limit_req_zone … zone=login rate=10r/m` по IP клиента, в `location = /api/auth/login`
+  применяется `limit_req zone=login burst=5 nodelay` (лишнее → **429**). `burst=5 nodelay`
+  прощает пару быстрых опечаток оператора, дальше держит ~10/мин на IP — онлайн-подбор
+  общего пароля непрактичен. IP клиента восстанавливается из `X-Forwarded-For` (`real_ip`
+  с доверенными приватными диапазонами — иначе все операторы делили бы один бакет прокси).
+  Проверка (dev/stage): `for i in $(seq 1 20); do curl -s -o /dev/null -w "%{http_code}\n"
+  -X POST https://<домен>/api/auth/login -H 'X-CBA-Auth: 1' -H 'Content-Type: application/json'
+  -d '{"user":"x","password":"y"}'; done` → первые ответы 401, дальше 429. Внутриприложенного
+  lockout нет — защита на nginx (backend наружу не публикуется).
 - **Открытый редирект**: `?redirect=` пропускается только как относительный путь —
   чистый гвард `safeRedirect` (`app/utils/loginRedirect.ts`, покрыт тестами) отвергает
   `//host` **и** backslash-обход `/\host` (WHATWG нормализует `\`→`/`), не полагаясь на

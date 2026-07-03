@@ -75,10 +75,14 @@ services:
       PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
       PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
-      # Cron poll interval (minutes) and load-demo size. DEMO_LOAD_N>0 enqueues that
-      # many synthetic fetch jobs each tick so you can watch the pipeline (0 = off).
+      # Cron poll interval (minutes) for real polling. Load demo: DEMO_LOAD_N>0
+      # enqueues that many synthetic fetch jobs every DEMO_TICK_SEC seconds, with a
+      # DEMO_DELAY_MS per-job pause (demo accounts only) so the /queues chart shows a
+      # visible backlog. 0 = off. See docs/QUEUES.md.
       CRON_INTERVAL_MIN: ${CRON_INTERVAL_MIN:-5}
       DEMO_LOAD_N: ${DEMO_LOAD_N:-0}
+      DEMO_TICK_SEC: ${DEMO_TICK_SEC:-5}
+      DEMO_DELAY_MS: ${DEMO_DELAY_MS:-600}
     # Liveness: hit the public /api/health endpoint (busybox wget ships in alpine).
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:

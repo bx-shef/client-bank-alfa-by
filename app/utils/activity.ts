@@ -27,6 +27,34 @@ export function formatIsoDate(iso: string): string {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : iso
 }
 
+/** Bitrix24 portal timezone offset — Belarus is UTC+3 (no DST). */
+export const PORTAL_TZ_OFFSET = '+03:00'
+
+/**
+ * Re-stamp an operation's `acceptDate` as a TZ-aware `deadline` in the portal's
+ * timezone (UTC+3), so `crm.activity.todo.add` renders the correct calendar day.
+ *
+ * Bank operations are day-granular and their source dates are Belarus wall-clock
+ * (client-bank/1C emit naive `YYYY-MM-DD[THH:MM:SS]`; Alfa a naive `…THH:MM:SS.mmm`;
+ * Prior a `…+03:00`; demo/mock a bare UTC midnight). We take the wall-clock date (and
+ * time, if present) from the prefix and attach `+03:00` — deterministic, no Date
+ * object. A bare UTC value like `…T00:00:00.000Z` would otherwise be interpreted as
+ * an instant that can render on a different day in the portal. Unknown formats pass
+ * through unchanged.
+ *
+ * NB: any offset the source already carries is intentionally DISCARDED and replaced
+ * with `+03:00` — correct only because every current normalizer emits Belarus-local
+ * wall-clock (Prior's `bookingDateTime` is already `+03:00` in observed data). If a
+ * source ever emits a non-`+03:00`/non-midnight-`Z` offset, normalize it to a true
+ * instant at the source instead, or this could shift the rendered day (see #10/#90).
+ */
+export function toPortalDeadline(acceptDate: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?))?/.exec(acceptDate)
+  if (!m) return acceptDate
+  const time = m[2] ? (m[2].length === 5 ? `${m[2]}:00` : m[2]) : '00:00:00'
+  return `${m[1]}T${time}${PORTAL_TZ_OFFSET}`
+}
+
 /** The minimal CRM company shape the builder needs. */
 export interface CrmCompanyRef {
   id: number
@@ -91,16 +119,15 @@ export function buildActivityDescription(item: StatementItem): string {
  * Build the `crm.activity.todo.add` params for a statement item bound to a CRM
  * company. `deadline` is the operation's acceptance date.
  *
- * NB: `deadline` must be a TZ-aware ISO 8601 datetime in the portal's timezone
- * (Belarus = UTC+3). A bare UTC midnight (`…T00:00:00.000Z`) can render as the
- * previous day in the portal — the normalizer/engine is responsible for passing
- * a portal-local value. TO BE VERIFIED on a live portal; TZ fix tracked in #10.
+ * `deadline` is re-stamped into the portal's timezone (UTC+3) via `toPortalDeadline`
+ * so the activity renders on the operation's correct calendar day (a bare UTC value
+ * could otherwise shift a day). Still TO BE VERIFIED on a live portal (#90).
  */
 export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef): TodoActivityParams {
   return {
     ownerTypeId: CRM_OWNER_TYPE_COMPANY,
     ownerId: company.id,
-    deadline: item.acceptDate,
+    deadline: toPortalDeadline(item.acceptDate),
     title: buildActivityTitle(item),
     description: buildActivityDescription(item),
     ...(company.assignedById ? { responsibleId: company.assignedById } : {})

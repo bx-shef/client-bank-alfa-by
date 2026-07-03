@@ -11,7 +11,7 @@ describe('index landing page', () => {
 
   it('renders one card per feature (guards against an empty v-for)', async () => {
     const wrapper = await mountSuspended(IndexPage)
-    const cards = wrapper.findAll('li')
+    const cards = wrapper.findAll('[data-testid="feature-card"]')
     expect(cards).toHaveLength(LANDING_FEATURES.length)
     // Every feature's title must actually appear in its card.
     for (const feature of LANDING_FEATURES) {
@@ -19,11 +19,11 @@ describe('index landing page', () => {
     }
   })
 
-  it('renders a footer author link with a non-empty href', async () => {
+  it('hero CTA links to the request form anchor (#brief)', async () => {
     const wrapper = await mountSuspended(IndexPage)
-    const link = wrapper.find('footer a')
-    expect(link.exists()).toBe(true)
-    expect(link.attributes('href')).toBeTruthy()
-    expect(link.text().trim()).not.toBe('')
+    // The form section carries id="brief"; the CTA must scroll there.
+    expect(wrapper.find('#brief').exists()).toBe(true)
+    const hrefs = wrapper.findAll('a').map(a => a.attributes('href'))
+    expect(hrefs).toContain('#brief')
   })
 })

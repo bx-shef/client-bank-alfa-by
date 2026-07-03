@@ -4,7 +4,7 @@ import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
 } from '../server/queue/handlers'
 import {
-  DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoItems, isDemoAccount, planFetches
+  DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches
 } from '../server/queue/cron'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 
@@ -187,6 +187,19 @@ describe('cron helpers', () => {
     expect(cronIntervalMs(2)).toBe(120_000)
     expect(cronIntervalMs(0)).toBe(300_000)
     expect(cronIntervalMs(Number.NaN)).toBe(300_000)
+  })
+  it('demoTickMs is seconds-based, floored to 1s, default 5s', () => {
+    expect(demoTickMs(3)).toBe(3_000)
+    expect(demoTickMs(0)).toBe(5_000) // bad → default 5s
+    expect(demoTickMs(Number.NaN)).toBe(5_000)
+    expect(demoTickMs(0.4)).toBe(1_000) // floor to 1s
+  })
+  it('demoDelayMs clamps to [0,5000], default 600', () => {
+    expect(demoDelayMs(600)).toBe(600)
+    expect(demoDelayMs(0)).toBe(0) // 0 disables the pause
+    expect(demoDelayMs(-100)).toBe(0)
+    expect(demoDelayMs(99_999)).toBe(5_000)
+    expect(demoDelayMs(Number.NaN)).toBe(600)
   })
   it('planFetches yields one job per (portal, account); empty when no accounts', () => {
     expect(planFetches([], '2026-07-01', '2026-07-01')).toEqual([])

@@ -9,7 +9,7 @@ import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
 import { Q_CRM, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
-import { demoItems, isDemoAccount } from './cron'
+import { demoDelayMs, demoItems, isDemoAccount } from './cron'
 import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
 } from './handlers'
@@ -31,13 +31,26 @@ const portalRestDeps: PortalRestDeps = {
   callRest
 }
 
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+/** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
+ *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
+ *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
+const DEMO_DELAY = demoDelayMs(Number(process.env.DEMO_DELAY_MS ?? 600))
+const demoPause = (account: string): Promise<void> =>
+  isDemoAccount(account) && DEMO_DELAY > 0 ? delay(DEMO_DELAY) : Promise.resolve()
+
 /** Live side-effects for the handlers. Transports are stubs for now (return the
  *  demo batch / nothing) with TODOs pointing at the stage that fills them in. */
 export function liveHandlerDeps(): HandlerDeps {
   return {
     // TODO stage 3/5: real Alfa/Prior transport. For now emits synthetic ops only
-    // for DEMO- accounts (the load demo), and nothing for real accounts.
-    fetchStatement: async job => demoItems(job),
+    // for DEMO- accounts (the load demo), and nothing for real accounts. The demo
+    // pause makes bank-fetch show a visible backlog (real accounts: no pause, []).
+    fetchStatement: async (job) => {
+      await demoPause(job.account)
+      return demoItems(job)
+    },
     parseFile: async () => [], // TODO #19: wire clientBank parser → StatementItem[]
     // Find the CRM company by the counterparty's settlement account. Demo accounts
     // are GATED (never touch a real portal's REST); an unknown portal (no token)
@@ -47,7 +60,11 @@ export function liveHandlerDeps(): HandlerDeps {
     // → will hit B24 QUERY_LIMIT_EXCEEDED); (2) bind the per-portal RestCall ONCE per
     // job instead of per-op (findCompany + writeActivity each re-load+refresh today).
     findCompany: async (item, memberId) => {
-      if (isDemoAccount(item.account)) return null
+      // Demo ops: pause (so crm-sync shows a backlog too) then skip — never REST.
+      if (isDemoAccount(item.account)) {
+        await demoPause(item.account)
+        return null
+      }
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return null
       return findCompanyByAccount(item.counterparty.account, call)
@@ -61,7 +78,20 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return writeActivityViaRest(item, companyId, call)
     },
-    notifyChat: async () => {}, // TODO stage 6: im.message.add by chat rules
+    // TODO stage 6 (live wiring): post via notifyChatViaRest(item, dialogId, call) —
+    // the message builder + REST wrapper (chatNotifyWrite.ts, chatMessage.ts) are
+    // ready + tested. Blocked on real settings storage (#16): no chat target is
+    // persisted yet, so wiring now would just skip every time. Gate demo accounts.
+    // Before wiring, settle three points (review findings) so the contract lands once:
+    //  1) resolve {dialogId, rules} ONCE per job in handleCrmSyncJob and thread them in
+    //     (a HandlerDeps change) — else every op does a fresh readAppSetting REST call;
+    //  2) decide whether chat fires for UNMATCHED income too — today notifyChat is only
+    //     reached after a company matched, so payments from unknown counterparties are
+    //     never announced (shouldNotifyChat defaults to announcing credits regardless);
+    //  3) a live chat error must NOT fail the job after rememberActivity (the op would
+    //     then be skipped on retry → message lost) — swallow/log, or track chat-sent
+    //     separately from activity-remembered.
+    notifyChat: async () => {},
     // Persistent dedup store (#9) — read-before-write guard, wired to Postgres.
     getActivityId: (memberId, key) => getActivityId(dbQuery, memberId, key),
     rememberActivity: async (memberId, key, activityId) => {
