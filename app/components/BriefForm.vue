@@ -13,8 +13,11 @@ const src = computed(() => buildB24FormSrc(
   config.public.b24FormSecret as string
 ))
 
-// b24:form:submit is relayed from the iframe document via postMessage.
+// b24:form:submit is relayed from the iframe document via postMessage. The
+// iframe (/b24-form.html) is same-origin, so reject any other origin — otherwise
+// an unrelated frame could spoof the `brief_submit` analytics goal.
 function onFrameMessage(e: MessageEvent) {
+  if (e.origin !== window.location.origin) return
   if (e.data !== 'b24:form:submit') return
   const id = Number(config.public.metrikaId)
   if (!id) return

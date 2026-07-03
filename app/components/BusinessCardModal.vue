@@ -27,16 +27,24 @@ const card = {
 const contactSaved = ref(false)
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 
+// Focus is moved into the dialog on open and restored to the trigger on close.
+const closeButton = ref<HTMLButtonElement | null>(null)
+let lastFocused: HTMLElement | null = null
+
 watch(() => props.open, (isOpen) => {
   if (!import.meta.client) return
   if (isOpen) {
+    lastFocused = document.activeElement as HTMLElement | null
     document.addEventListener('keydown', handleKey)
     document.body.style.overflow = 'hidden'
+    nextTick(() => closeButton.value?.focus())
   } else {
     document.removeEventListener('keydown', handleKey)
     document.body.style.overflow = ''
+    lastFocused?.focus?.()
+    lastFocused = null
   }
-})
+}, { immediate: true })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKey)
@@ -53,19 +61,18 @@ function onBackdropClick(e: MouseEvent) {
 }
 
 function downloadVCard() {
-  const vcf = [
-    'BEGIN:VCARD',
-    'VERSION:3.0',
-    `FN:${card.name}`,
-    'N:Шевчик;Игорь;Сергеевич;;',
-    `ORG:${card.org}`,
-    `TITLE:${card.role}`,
-    `TEL;TYPE=CELL:${card.phoneTel}`,
-    `EMAIL:${card.email}`,
-    'URL:https://offer.bx-shef.by',
-    `NOTE:Импорт выписки клиент-банка в Bitrix24. ${card.unp}.`,
-    'END:VCARD'
-  ].join('\r\n')
+  const vcf = buildVCard({
+    fullName: card.name,
+    lastName: 'Шевчик',
+    firstName: 'Игорь',
+    middleName: 'Сергеевич',
+    org: card.org,
+    title: card.role,
+    phoneTel: card.phoneTel,
+    email: card.email,
+    url: 'https://offer.bx-shef.by',
+    note: `Импорт выписки клиент-банка в Bitrix24. ${card.unp}.`
+  })
 
   const blob = new Blob([vcf], { type: 'text/vcard;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -100,9 +107,13 @@ function downloadVCard() {
       >
         <div
           data-testid="business-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="business-card-name"
           class="relative w-full max-w-[520px] rounded-3xl border border-(--b24ui-color-design-tinted-na-stroke) bg-(--b24ui-color-bg-content-primary) p-8 shadow-2xl"
         >
           <button
+            ref="closeButton"
             type="button"
             class="absolute right-4 top-4 flex size-8 items-center justify-center rounded-xl text-(--b24ui-color-text-secondary) transition-colors hover:bg-(--b24ui-color-bg-content-secondary)"
             aria-label="Закрыть"
@@ -121,7 +132,10 @@ function downloadVCard() {
               loading="lazy"
             >
             <div>
-              <h2 class="text-xl font-semibold">
+              <h2
+                id="business-card-name"
+                class="text-xl font-semibold"
+              >
                 {{ card.name }}
               </h2>
               <p class="mt-1 max-w-[280px] text-sm text-(--b24ui-color-text-secondary)">
