@@ -46,6 +46,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
+- **Как создавать новые страницы в нужном виде** (лендинг vs in-portal, темы, анимация, форма, a11y,
+  процесс) — [`docs/PAGE_GUIDE.md`](docs/PAGE_GUIDE.md). Родственный дизайн-гайд основного сайта — в репо
+  `bx-shef/Lp` (`docs/LANDING_GUIDE.md`).
 - `app/pages/index.vue` — публичный лендинг (маркетинговый, по issue #110): hero+CTA (фото+граф+
   `PartnerBadge`), боль→результат, «Как это работает» (3 шага), «Почему мы» (4 карточки, glow),
   блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`. Тексты — из `app/utils/landing.ts`.
