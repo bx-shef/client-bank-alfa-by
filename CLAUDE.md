@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-02
+> Last reviewed: 2026-07-03
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -46,8 +46,20 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
-- `app/pages/index.vue` — публичная страница лендинга (hero + преимущества + подвал). Standalone,
-  без `clear`-layout (вне портала), без `B24App`.
+- `app/pages/index.vue` — публичная страница лендинга (маркетинговая, по issue #110): hero+CTA,
+  боль→результат, «Как это работает» (3 шага), «Почему мы» (4 карточки), блок интеграторам, форма
+  заявки (`BriefForm`), кнопка «Визитка» (`BusinessCardModal`) и подвал. Тексты — из `app/utils/landing.ts`.
+  Standalone, без `clear`-layout (вне портала), без `B24App`. CTA скроллит к `#brief`; цели Метрики
+  через `useMetrikaGoal`.
+- `app/components/BriefForm.vue` — встроенная CRM-форма Bitrix24. Форма живёт в отдельном
+  same-origin документе `public/b24-form.html` (iframe), который nginx отдаёт со **своим**
+  form-scoped CSP (`location = /b24-form.html`) — официальный B24-загрузчик (inline + cdn-скрипт)
+  работает, а строгий CSP страницы не ослабляется. URL iframe строит чистый `app/utils/b24Form.ts`
+  (`buildB24FormSrc` — allowlist хостов Б24 + валидация id/secret, тесты); пустой конфиг ⇒ слот-плейсхолдер.
+  Событие `b24:form:submit` iframe ретранслирует через `postMessage` → цель Метрики `brief_submit`.
+- `app/components/BusinessCardModal.vue` — визитка (тема-aware, b24ui-токены): фото, контакты,
+  «Назначить созвон» (`booking.ts`), vCard-скачивание, «Реквизиты» — внешней ссылкой. `app/utils/booking.ts` —
+  общая ссылка онлайн-записи Б24. `app/composables/useMetrikaGoal.ts` — обёртка `ym reachGoal` (no-op без Метрики).
 - `app/pages/app.vue` — in-portal просмотр выписки на **b24ui** (по образцу B24-списка «Последние
   операции»): полоса статуса (`ImportStatusBanner`), карточка «Последние операции» с чип-фильтром
   Все/Приходы/Расходы (счётчики в подписи), шапкой колонок «Операция/Сумма», `OperationList` и
@@ -108,7 +120,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   HttpOnly/SameSite=Lax/Secure, CSRF-заголовок `X-CBA-Auth`. Пароль пуст ⇒ вход выключен. Модель портирована
   из `postroyka/purchase-ai-chat`. B24 silent-сессия — далее.
 - `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
-- `app/utils/landing.ts` — чистая логика лендинга (`LANDING_*`, `copyrightYears`), покрыта тестами.
+- `app/utils/landing.ts` — тексты и чистая логика лендинга (`LANDING_TITLE/DESCRIPTION`,
+  `LANDING_PAIN_RESULT`, `LANDING_STEPS`, `LANDING_FEATURES`, `LANDING_INTEGRATORS`, `copyrightYears`),
+  покрыта тестами. Единый источник контента (issue #110) — из него же берёт SEO `app.vue`.
 - **Доменное ядро (чистое, переносимо в backend, покрыто тестами):**
   - `app/types/statement.ts` — модель выписки (`Statement`/`StatementItem`/`StatementParty`,
     `OperationDirection`, `BankProviderId`) + **единый интерфейс**: `StatementFetchQuery` (вход:
@@ -346,6 +360,10 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
   `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
   домены Б24 (iframe-встройка `/app`,`/settings`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
+  Лендинг несёт **Яндекс.Метрику** (инлайн-счётчик из `nuxt.config.ts`, `NUXT_PUBLIC_METRIKA_ID`;
+  его sha256 подхватывает `csp-hashes.mjs`, CSP разрешает `mc.yandex.ru` в script/img/connect/frame-src)
+  и **встроенную CRM-форму Б24** (iframe на `public/b24-form.html` со своим form-scoped CSP —
+  `location = /b24-form.html`; `NUXT_PUBLIC_B24_FORM_*`, пустые → слот).
   `POST /api/auth/login` дросселируется `limit_req` (зона `login`, ~10r/m по IP клиента через
   `real_ip` из `X-Forwarded-For`, `burst=5 nodelay` → 429) — антибрутфорс общего пароля оператора (#64, см. `docs/AUTH.md`).
 - `docker-compose.yml` — локальная сборка: `app` (статика лендинга, nginx), `backend` (node-сервер,

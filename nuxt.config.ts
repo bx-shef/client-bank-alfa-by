@@ -1,3 +1,15 @@
+// Только цифры — защита от случайной опечатки или компрометации ENV в CI.
+const metrikaId = (process.env.NUXT_PUBLIC_METRIKA_ID || '109399587').replace(/\D/g, '')
+if (!metrikaId) {
+  console.warn('[nuxt.config] NUXT_PUBLIC_METRIKA_ID после фильтрации пустой — счётчик Яндекс.Метрики не будет вставлен')
+}
+
+// Inline-сниппет Яндекс.Метрики. Код счётчика обязан присутствовать прямо в
+// разметке (иначе валидатор установки его не находит, а на SSG ssr-детект не
+// срабатывает). ID подставляется на этапе сборки. Хэш этого inline-скрипта
+// подхватывает scripts/csp-hashes.mjs из собранного HTML — CSP остаётся строгим.
+const metrikaSnippet = `(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};m[i].l=1*new Date();for(var j=0;j<e.scripts.length;j++){if(e.scripts[j].src===r){return;}}k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})(window,document,'script','https://mc.yandex.ru/metrika/tag.js?id=${metrikaId}','ym');ym(${metrikaId},'init',{ssr:true,webvisor:true,clickmap:true,accurateTrackBounce:true,trackLinks:true});`
+
 export default defineNuxtConfig({
   modules: [
     '@nuxt/eslint',
@@ -8,6 +20,16 @@ export default defineNuxtConfig({
 
   // Off: keeps the agent-driven dev sessions (and SSG output) free of devtools noise.
   devtools: { enabled: false },
+
+  app: {
+    head: {
+      // Инлайн-счётчик Метрики (см. metrikaSnippet выше) + noscript-пиксель.
+      script: metrikaId ? [{ innerHTML: metrikaSnippet }] : [],
+      noscript: metrikaId
+        ? [{ innerHTML: `<div><img src="https://mc.yandex.ru/watch/${metrikaId}" style="position:absolute;left:-9999px;" alt="" /></div>` }]
+        : []
+    }
+  },
 
   css: ['~/assets/css/main.css'],
 
@@ -22,7 +44,15 @@ export default defineNuxtConfig({
       siteUrl: '',
       // Git commit the build came from — shown in the footer as a link to the
       // exact commit. CI passes ${{ github.sha }}; empty in dev.
-      commitSha: ''
+      commitSha: '',
+      // Яндекс.Метрика — id счётчика (только цифры, отфильтрован выше).
+      metrikaId,
+      // Битрикс24 CRM веб-форма (embed) — публичные идентификаторы, не секреты.
+      // По умолчанию вшита форма Игоря Шевчика (портал b37817748). Смена — через
+      // ENV без перебилда; пустые значения → на лендинге показывается слот.
+      b24FormId: process.env.NUXT_PUBLIC_B24_FORM_ID || '1',
+      b24FormSecret: process.env.NUXT_PUBLIC_B24_FORM_SECRET || '3c735r',
+      b24FormScriptUrl: process.env.NUXT_PUBLIC_B24_FORM_SCRIPT_URL || 'https://cdn-ru.bitrix24.by/b37817748/crm/form/loader_1.js'
     }
   },
 
