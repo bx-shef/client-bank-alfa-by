@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import ArrowRightLIcon from '@bitrix24/b24icons-vue/outline/ArrowRightLIcon'
-import ContactDetailsIcon from '@bitrix24/b24icons-vue/outline/ContactDetailsIcon'
 import {
-  LANDING_TITLE,
   LANDING_DESCRIPTION,
   LANDING_HERO_NOTE,
   LANDING_PAIN_RESULT,
@@ -12,162 +10,224 @@ import {
 } from '~/utils/landing'
 import { B24_BOOKING_URL } from '~/utils/booking'
 
+definePageMeta({ layout: 'landing' })
+
+useCardGlow()
 const { reachGoal } = useMetrikaGoal()
 
 const steps = LANDING_STEPS
 const features = LANDING_FEATURES
 
-const cardOpen = ref(false)
+// Банки и форматы — «tech-строка» под hero (как «Работает с моделями» на Lp).
+const formats = ['Альфа-Банк Беларусь', 'Приорбанк', 'клиент-банк', '1С']
 </script>
 
 <template>
-  <main class="mx-auto flex min-h-screen max-w-(--ui-container) flex-col px-6 py-16">
+  <div>
     <!-- HERO -->
-    <section class="flex flex-col items-center pt-8 text-center sm:pt-16">
-      <h1 class="max-w-3xl text-3xl font-semibold sm:text-5xl">
-        {{ LANDING_TITLE }}
-      </h1>
-      <p class="mt-5 max-w-2xl text-base text-(--b24ui-color-text-secondary) sm:text-lg">
-        {{ LANDING_DESCRIPTION }}
-      </p>
+    <section
+      id="hero"
+      class="hero-fade-in relative overflow-hidden px-[22px] lg:px-8 pt-[64px] sm:pt-[96px] pb-[64px] sm:pb-[96px]"
+    >
+      <HeroGraph />
+      <div class="relative z-10 max-w-[1080px] mx-auto">
+        <div class="flex flex-col lg:flex-row lg:items-center gap-10 lg:gap-12">
+          <!-- Фото — первое на мобильном, правая колонка на desktop -->
+          <div class="shrink-0 flex justify-start lg:justify-end order-first lg:order-last">
+            <img
+              src="/igor.jpg"
+              alt="Игорь Шевчик"
+              width="240"
+              height="240"
+              class="size-40 sm:size-48 lg:size-56 rounded-full object-cover border-2 border-[rgb(var(--color-accent-primary-ch)/0.45)] shadow-[0_0_64px_rgba(0,212,255,0.20)]"
+              loading="eager"
+            >
+          </div>
 
-      <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
-        <B24Button
-          label="Оставить заявку на установку"
-          href="#brief"
-          size="lg"
-          color="air-primary"
-          @click="reachGoal('cta_hero')"
-        >
-          <template #trailing>
-            <ArrowRightLIcon class="size-5" />
-          </template>
-        </B24Button>
-        <B24Button
-          label="Назначить созвон"
-          :to="B24_BOOKING_URL"
-          target="_blank"
-          size="lg"
-          color="air-secondary-no-accent"
-          @click="reachGoal('booking_click')"
-        />
+          <!-- Текст -->
+          <div class="flex flex-col items-start gap-5 flex-1 lg:max-w-[640px]">
+            <PartnerBadge />
+
+            <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.06] tracking-tight text-white">
+              Импорт выписки клиент-банка в <span class="text-[rgb(var(--color-accent-primary-ch))]">Bitrix24</span>
+            </h1>
+
+            <p class="text-base sm:text-lg max-w-[600px] text-white/70 leading-relaxed">
+              {{ LANDING_DESCRIPTION }}
+            </p>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <B24Button
+                label="Оставить заявку на установку"
+                href="#brief"
+                :external="true"
+                :no-rel="true"
+                color="air-primary"
+                size="xl"
+                @click="reachGoal('cta_hero')"
+              >
+                <template #trailing>
+                  <ArrowRightLIcon class="size-5" />
+                </template>
+              </B24Button>
+              <B24Button
+                label="Назначить созвон"
+                :to="B24_BOOKING_URL"
+                target="_blank"
+                color="air-secondary-no-accent"
+                size="xl"
+                @click="reachGoal('booking_click')"
+              />
+            </div>
+
+            <p class="text-sm text-white/50">
+              {{ LANDING_HERO_NOTE }}
+            </p>
+          </div>
+        </div>
+
+        <!-- Банки/форматы -->
+        <div class="mt-12 sm:mt-16 flex flex-col items-start gap-3">
+          <div class="text-xs uppercase tracking-[0.18em] text-white/40 font-mono">
+            Банки и форматы
+          </div>
+          <div class="flex flex-wrap items-center justify-start gap-x-6 sm:gap-x-8 gap-y-2 text-white/60">
+            <template
+              v-for="(f, i) in formats"
+              :key="f"
+            >
+              <span class="font-mono text-sm tracking-tight">{{ f }}</span>
+              <span
+                v-if="i < formats.length - 1"
+                class="size-1 rounded-full bg-white/20"
+              />
+            </template>
+          </div>
+        </div>
       </div>
-      <p class="mt-4 text-sm text-(--b24ui-color-text-secondary) opacity-80">
-        {{ LANDING_HERO_NOTE }}
-      </p>
     </section>
 
     <!-- БОЛЬ → РЕЗУЛЬТАТ -->
-    <section class="mt-24 grid gap-5 sm:grid-cols-2">
-      <div class="rounded-2xl border border-(--b24ui-color-design-tinted-na-stroke) p-7">
-        <div class="text-xs font-medium uppercase tracking-wider text-(--b24ui-color-text-secondary)">
-          Было
+    <section class="px-[22px] lg:px-8 py-[56px] sm:py-[72px]">
+      <div class="max-w-[1080px] mx-auto grid gap-5 md:grid-cols-2">
+        <div class="rounded-2xl border border-white/10 bg-white/[0.03] p-7">
+          <div class="text-xs uppercase tracking-[0.14em] font-mono text-white/45 mb-3">
+            Было
+          </div>
+          <p class="text-base sm:text-lg text-white/80 leading-relaxed">
+            {{ LANDING_PAIN_RESULT.before }}
+          </p>
         </div>
-        <p class="mt-3 text-base sm:text-lg">
-          {{ LANDING_PAIN_RESULT.before }}
-        </p>
-      </div>
-      <div class="rounded-2xl border border-(--b24ui-color-accent-main-primary) bg-(--b24ui-color-bg-content-secondary) p-7">
-        <div class="text-xs font-medium uppercase tracking-wider text-(--b24ui-color-accent-main-primary)">
-          Стало
+        <div
+          data-glow-card
+          class="rounded-2xl border border-[rgb(var(--color-accent-success-ch)/0.3)] bg-[rgb(var(--color-accent-success-ch)/0.05)] p-7"
+        >
+          <div class="text-xs uppercase tracking-[0.14em] font-mono text-[rgb(var(--color-accent-success-ch))] mb-3">
+            Стало
+          </div>
+          <p class="text-base sm:text-lg text-white/90 leading-relaxed">
+            {{ LANDING_PAIN_RESULT.after }}
+          </p>
         </div>
-        <p class="mt-3 text-base sm:text-lg">
-          {{ LANDING_PAIN_RESULT.after }}
-        </p>
       </div>
     </section>
 
     <!-- КАК ЭТО РАБОТАЕТ -->
-    <section class="mt-24">
-      <h2 class="text-2xl font-semibold sm:text-3xl">
-        Как это работает
-      </h2>
-      <ol class="mt-8 grid gap-5 sm:grid-cols-3">
-        <li
-          v-for="s in steps"
-          :key="s.step"
-          class="rounded-2xl border border-(--b24ui-color-design-tinted-na-stroke) p-6"
-        >
-          <div class="font-mono text-2xl font-semibold text-(--b24ui-color-accent-main-primary)">
-            {{ s.step }}
+    <section class="px-[22px] lg:px-8 py-[56px] sm:py-[72px]">
+      <div class="max-w-[1080px] mx-auto">
+        <div class="max-w-[720px] mb-12 sm:mb-14">
+          <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+            Как это работает
+          </h2>
+          <p class="text-lg text-white/65">
+            Три шага — от выписки банка до закрытой оплаты в CRM.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
+          <div
+            v-for="s in steps"
+            :key="s.step"
+            data-glow-card
+            class="rounded-2xl border border-white/10 bg-white/[0.03] p-6 hover:border-white/25 transition-colors"
+          >
+            <div class="text-3xl font-bold font-mono text-[rgb(var(--color-accent-primary-ch))] mb-3 leading-none">
+              {{ s.step }}
+            </div>
+            <div class="font-bold text-lg text-white mb-2">
+              {{ s.title }}
+            </div>
+            <div class="text-sm text-white/60 leading-relaxed">
+              {{ s.text }}
+            </div>
           </div>
-          <h3 class="mt-3 text-lg font-medium">
-            {{ s.title }}
-          </h3>
-          <p class="mt-2 text-sm text-(--b24ui-color-text-secondary)">
-            {{ s.text }}
-          </p>
-        </li>
-      </ol>
-    </section>
-
-    <!-- ПОЧЕМУ МЫ -->
-    <section class="mt-24">
-      <h2 class="text-2xl font-semibold sm:text-3xl">
-        Почему мы
-      </h2>
-      <ul class="mt-8 grid gap-5 sm:grid-cols-2">
-        <li
-          v-for="feature in features"
-          :key="feature.title"
-          data-testid="feature-card"
-          class="rounded-2xl border border-(--b24ui-color-design-tinted-na-stroke) p-6"
-        >
-          <h3 class="text-lg font-medium">
-            {{ feature.title }}
-          </h3>
-          <p class="mt-2 text-sm text-(--b24ui-color-text-secondary)">
-            {{ feature.description }}
-          </p>
-        </li>
-      </ul>
-    </section>
-
-    <!-- ИНТЕГРАТОРАМ -->
-    <section class="mt-24">
-      <div class="rounded-3xl border border-(--b24ui-color-design-tinted-na-stroke) bg-(--b24ui-color-bg-content-secondary) p-8 sm:p-10">
-        <h2 class="text-2xl font-semibold sm:text-3xl">
-          Интеграторам Bitrix24
-        </h2>
-        <p class="mt-4 max-w-3xl text-base text-(--b24ui-color-text-secondary) sm:text-lg">
-          {{ LANDING_INTEGRATORS }}
-        </p>
+        </div>
       </div>
     </section>
 
-    <!-- ФОРМА ЗАЯВКИ -->
+    <!-- ПОЧЕМУ МЫ -->
+    <section class="px-[22px] lg:px-8 py-[56px] sm:py-[72px]">
+      <div class="max-w-[1080px] mx-auto">
+        <div class="max-w-[720px] mb-12 sm:mb-14">
+          <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+            Почему мы
+          </h2>
+          <p class="text-lg text-white/65">
+            Импорт выписки — бесплатный крючок; авторазнесение оплат — то, за чем приходят.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div
+            v-for="feature in features"
+            :key="feature.title"
+            data-testid="feature-card"
+            data-glow-card
+            class="rounded-2xl border border-white/10 bg-white/[0.03] p-6 hover:border-white/25 transition-colors"
+          >
+            <h3 class="text-xl font-bold text-white leading-tight mb-2">
+              {{ feature.title }}
+            </h3>
+            <p class="text-sm sm:text-base text-white/65 leading-relaxed">
+              {{ feature.description }}
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ИНТЕГРАТОРАМ -->
+    <section class="px-[22px] lg:px-8 py-[56px] sm:py-[72px]">
+      <div class="max-w-[1080px] mx-auto">
+        <div class="rounded-3xl border border-white/10 bg-gradient-to-br from-[rgb(var(--color-accent-partner-ch)/0.15)] to-[rgb(var(--color-accent-special-ch)/0.08)] p-8 sm:p-10">
+          <h2 class="text-2xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+            Интеграторам Bitrix24
+          </h2>
+          <p class="text-base sm:text-lg text-white/75 max-w-3xl leading-relaxed">
+            {{ LANDING_INTEGRATORS }}
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ФОРМА -->
     <section
       id="brief"
-      class="mt-24 scroll-mt-8"
+      class="px-[22px] lg:px-8 py-[56px] sm:py-[80px]"
     >
-      <div class="mx-auto max-w-3xl">
-        <h2 class="text-center text-2xl font-semibold sm:text-3xl">
-          Оставить заявку на установку
-        </h2>
-        <p class="mt-3 text-center text-base text-(--b24ui-color-text-secondary)">
-          Ответим в течение рабочего дня.
-        </p>
-        <div class="mt-8">
+      <div class="max-w-[900px] mx-auto">
+        <div class="rounded-3xl border border-white/10 bg-gradient-to-br from-[rgb(var(--color-accent-partner-ch)/0.15)] to-[rgb(var(--color-accent-special-ch)/0.08)] py-8 sm:p-12">
+          <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-3 px-8 sm:px-0">
+            Оставить заявку на установку
+          </h2>
+          <p class="text-lg text-white/70 mb-8 px-8 sm:px-0">
+            Ответим в течение рабочего дня.
+          </p>
           <BriefForm />
         </div>
       </div>
     </section>
 
-    <!-- ВИЗИТКА -->
-    <div class="mt-16 flex justify-center">
-      <B24Button
-        label="Визитка"
-        :icon="ContactDetailsIcon"
-        color="air-tertiary-no-accent"
-        @click="cardOpen = true"
-      />
-    </div>
-
-    <BuildFooter />
-
-    <BusinessCardModal
-      :open="cardOpen"
-      @close="cardOpen = false"
-    />
-  </main>
+    <MobileBriefCta />
+  </div>
 </template>

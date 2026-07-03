@@ -46,20 +46,30 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
-- `app/pages/index.vue` — публичная страница лендинга (маркетинговая, по issue #110): hero+CTA,
-  боль→результат, «Как это работает» (3 шага), «Почему мы» (4 карточки), блок интеграторам, форма
-  заявки (`BriefForm`), кнопка «Визитка» (`BusinessCardModal`) и подвал. Тексты — из `app/utils/landing.ts`.
-  Standalone, без `clear`-layout (вне портала), без `B24App`. CTA скроллит к `#brief`; цели Метрики
-  через `useMetrikaGoal`.
+- `app/pages/index.vue` — публичный лендинг (маркетинговый, по issue #110): hero+CTA (фото+граф+
+  `PartnerBadge`), боль→результат, «Как это работает» (3 шага), «Почему мы» (4 карточки, glow),
+  блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`. Тексты — из `app/utils/landing.ts`.
+  CTA скроллит к `#brief`; цели Метрики через `useMetrikaGoal`; glow за курсором — `useCardGlow`.
+- **Визуальная оболочка лендинга портирована с `offer.bx-shef.by` (репо `bx-shef/Lp`)** —
+  тёмная брендовая тема (vibecode-палитра, #030022 + радиальное сияние, self-hosted шрифты Rubik/
+  Roboto Mono). Живёт в отдельном **layout `landing`** (`app/layouts/landing.vue`: `B24Header` с
+  `AppLogo`+навигацией, `B24Footer` с `SiteFooter`+GitHub, `BusinessCardModal`), который вешается
+  только на `/` (`definePageMeta({ layout: 'landing' })`) — **in-portal страницы (`/app`,`/settings`,
+  `/login`,`/queues`) не трогает**, у них своя light/dark-auto тема. Dark форсится только для лендинга
+  через `htmlAttrs data-force-dark` (учитывает `theme-init` в `app.vue`) + класс `.landing-shell` в
+  `main.css` (фон/токены скоуплены на этот класс). `HeroGraph.vue` — canvas-граф фона hero (уважает
+  `prefers-reduced-motion`, пауза вне видимости, троттлинг 30fps).
+- `app/components/BusinessCardModal.vue` — визитка (тёмная, vibecode): фото, **QR (десктоп + мобильный
+  hold-to-reveal «отпечаток»)**, контакты, «Назначить созвон» (`booking.ts`) + копия ссылки
+  (`clipboard.ts`), vCard (`buildVCard` из `app/utils/vcard.ts`), «Реквизиты» — внешней ссылкой.
+  `app/composables/useMetrikaGoal.ts` — обёртка `ym reachGoal` (no-op без Метрики).
 - `app/components/BriefForm.vue` — встроенная CRM-форма Bitrix24. Форма живёт в отдельном
   same-origin документе `public/b24-form.html` (iframe), который nginx отдаёт со **своим**
   form-scoped CSP (`location = /b24-form.html`) — официальный B24-загрузчик (inline + cdn-скрипт)
   работает, а строгий CSP страницы не ослабляется. URL iframe строит чистый `app/utils/b24Form.ts`
   (`buildB24FormSrc` — allowlist хостов Б24 + валидация id/secret, тесты); пустой конфиг ⇒ слот-плейсхолдер.
   Событие `b24:form:submit` iframe ретранслирует через `postMessage` → цель Метрики `brief_submit`.
-- `app/components/BusinessCardModal.vue` — визитка (тема-aware, b24ui-токены): фото, контакты,
-  «Назначить созвон» (`booking.ts`), vCard-скачивание, «Реквизиты» — внешней ссылкой. `app/utils/booking.ts` —
-  общая ссылка онлайн-записи Б24. `app/composables/useMetrikaGoal.ts` — обёртка `ym reachGoal` (no-op без Метрики).
+  Контейнер тёмный (под брендовую оболочку лендинга); `app/utils/booking.ts` — общая ссылка онлайн-записи Б24.
 - `app/pages/app.vue` — in-portal просмотр выписки на **b24ui** (по образцу B24-списка «Последние
   операции»): полоса статуса (`ImportStatusBanner`), карточка «Последние операции» с чип-фильтром
   Все/Приходы/Расходы (счётчики в подписи), шапкой колонок «Операция/Сумма», `OperationList` и
