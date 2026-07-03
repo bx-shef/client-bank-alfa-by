@@ -4,6 +4,13 @@ import GitHubIcon from '@bitrix24/b24icons-vue/social/GitHubIcon'
 import Bitrix24Icon from '@bitrix24/b24icons-vue/common-service/Bitrix24Icon'
 import ContactDetailsIcon from '@bitrix24/b24icons-vue/outline/ContactDetailsIcon'
 import ReceiptIcon from '@bitrix24/b24icons-vue/outline/ReceiptIcon'
+import OpenBookIcon from '@bitrix24/b24icons-vue/main/OpenBookIcon'
+import ThemeIcon from '@bitrix24/b24icons-vue/outline/ThemeIcon'
+import CodeIcon from '@bitrix24/b24icons-vue/common-service/CodeIcon'
+import AppsIcon from '@bitrix24/b24icons-vue/solid/AppsIcon'
+import DeveloperResourcesIcon from '@bitrix24/b24icons-vue/solid/DeveloperResourcesIcon'
+import LogInIcon from '@bitrix24/b24icons-vue/outline/LogInIcon'
+import { LANDING_MARKET_URL } from '~/utils/landing'
 
 // Public-landing chrome ported from offer.bx-shef.by (bx-shef Lp): dark branded
 // header + footer + business card. Scoped to this layout so the in-portal pages
@@ -13,10 +20,32 @@ const cardOpen = ref(false)
 const navItems = [
   [
     {
+      label: 'В Маркете Bitrix24',
+      icon: Bitrix24Icon,
+      to: LANDING_MARKET_URL,
+      target: '_blank'
+    },
+    {
       label: 'Реквизиты',
       icon: ReceiptIcon,
       to: 'https://offer.bx-shef.by/legal',
       target: '_blank'
+    },
+    {
+      label: 'Документация',
+      icon: OpenBookIcon,
+      children: [
+        { label: 'b24ui', icon: ThemeIcon, to: 'https://bitrix24.github.io/b24ui/', target: '_blank' },
+        { label: 'b24jssdk', icon: CodeIcon, to: 'https://bitrix24.github.io/b24jssdk/', target: '_blank' },
+        { label: 'b24icons', icon: AppsIcon, to: 'https://bitrix24.github.io/b24icons/', target: '_blank' },
+        { label: 'REST API', icon: DeveloperResourcesIcon, to: 'https://apidocs.bitrix24.ru/', target: '_blank' }
+      ]
+    },
+    {
+      // Служебная зона операторов (вход для сотрудников → /queues и т.д.).
+      label: 'Операторам',
+      icon: LogInIcon,
+      to: '/login'
     }
   ]
 ]

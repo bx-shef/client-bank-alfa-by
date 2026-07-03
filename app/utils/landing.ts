@@ -8,6 +8,9 @@ export const LANDING_DESCRIPTION
 /** Small print under the hero CTA. */
 export const LANDING_HERO_NOTE = 'Само приложение — бесплатное, есть в Маркете Bitrix24.'
 
+/** Marketplace listing of the free app (import-only hook). */
+export const LANDING_MARKET_URL = 'https://www.bitrix24.ru/apps/app/shef.bankimport/'
+
 /** Browser-tab title for an in-portal page: "<section> — <app name>". Keeps the
  * brand suffix in one place so per-page `useHead` titles can't drift. */
 export function pageTitle(section: string): string {

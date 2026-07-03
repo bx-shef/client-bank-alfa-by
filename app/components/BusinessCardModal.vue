@@ -43,7 +43,8 @@ const card = {
   phoneTel: '+375297360126',
   email: 'offer@bx-shef.by',
   telegram: '@bxshefby',
-  site: 'offer.bx-shef.by',
+  // QR/сайт визитки ведут на этот лендинг (продукт), реквизиты/почта — на общий ИП.
+  site: 'bank-import.bx-shef.by',
   // «Реквизиты просто ссылкой» — на страницу с полными реквизитами.
   requisitesUrl: 'https://offer.bx-shef.by/legal',
   // Ссылка онлайн-записи Б24 — общий модуль (используется и в hero).
@@ -261,7 +262,7 @@ function triggerDownload(blob: Blob, filename: string) {
                 <img
                   v-if="qrScanUrl"
                   :src="qrScanUrl"
-                  alt="QR-код offer.bx-shef.by"
+                  :alt="`QR-код ${card.site}`"
                   class="size-[240px] block"
                 >
                 <div
@@ -297,7 +298,7 @@ function triggerDownload(blob: Blob, filename: string) {
                   <img
                     v-if="qrDataUrl"
                     :src="qrDataUrl"
-                    alt="QR-код offer.bx-shef.by"
+                    :alt="`QR-код ${card.site}`"
                     class="size-[120px] block"
                   >
                   <div

@@ -7,7 +7,8 @@ import {
   LANDING_STEPS,
   LANDING_FEATURES,
   LANDING_INTEGRATORS,
-  LANDING_FORMATS
+  LANDING_FORMATS,
+  LANDING_MARKET_URL
 } from '~/utils/landing'
 import { B24_BOOKING_URL } from '~/utils/booking'
 
@@ -77,6 +78,14 @@ const formats = LANDING_FORMATS
                 color="air-secondary-no-accent"
                 size="xl"
                 @click="reachGoal('booking_click')"
+              />
+              <B24Button
+                label="Открыть в Маркете Bitrix24"
+                :to="LANDING_MARKET_URL"
+                target="_blank"
+                color="air-tertiary-no-accent"
+                size="xl"
+                @click="reachGoal('market_click')"
               />
             </div>
 

@@ -57,8 +57,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   только на `/` (`definePageMeta({ layout: 'landing' })`) — **in-portal страницы (`/app`,`/settings`,
   `/login`,`/queues`) не трогает**, у них своя light/dark-auto тема. Dark форсится только для лендинга
   через `htmlAttrs data-force-dark` (учитывает `theme-init` в `app.vue`) + класс `.landing-shell` в
-  `main.css` (фон/токены скоуплены на этот класс). `HeroGraph.vue` — canvas-граф фона hero (уважает
-  `prefers-reduced-motion`, пауза вне видимости, троттлинг 30fps).
+  `main.css` (фон/токены скоуплены на этот класс). `HeroGraph.vue` — canvas-анимация фона hero:
+  внешние узлы (банки/выписка/CRM-сущности) шлют **импульсы в центральный хаб Bitrix24** (спицы +
+  бегущие точки с хвостом + кольца-волны на приходе); хаб пришпилен к центру тяжести, внешние узлы —
+  лёгкая физика (гравитация к хабу, взаимное отталкивание, репеллер зоны фото). Уважает
+  `prefers-reduced-motion` (статичный кадр), пауза вне видимости/при скрытой вкладке, троттлинг 30fps.
 - `app/components/BusinessCardModal.vue` — визитка (тёмная, vibecode): фото, **QR (десктоп + мобильный
   hold-to-reveal «отпечаток»)**, контакты, «Назначить созвон» (`booking.ts`) + копия ссылки
   (`clipboard.ts`), vCard (`buildVCard` из `app/utils/vcard.ts`), «Реквизиты» — внешней ссылкой.
