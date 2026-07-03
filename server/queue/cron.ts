@@ -17,6 +17,23 @@ export function cronIntervalMs(minutes: number): number {
   return Math.max(1, m) * 60_000
 }
 
+/** Demo enqueue cadence in ms — SECONDS-based (unlike real polling's minutes), so
+ *  the load demo produces a steady, visible stream. Default 5s, floored to 1s so it
+ *  never busy-loops. */
+export function demoTickMs(sec: number): number {
+  const s = Number.isFinite(sec) && sec > 0 ? Math.floor(sec) : 5
+  return Math.max(1, s) * 1000
+}
+
+/** Artificial per-job processing delay (ms) for the load demo, so the queues show a
+ *  visible backlog on the chart instead of draining to ~0 instantly. Clamped to
+ *  [0, 5000]; default 600. Applied ONLY to demo accounts (isDemoAccount) — real jobs
+ *  are never slowed. `0` disables the delay (jobs drain instantly again). */
+export function demoDelayMs(ms: number): number {
+  const n = Number.isFinite(ms) ? Math.floor(ms) : 600
+  return Math.min(5000, Math.max(0, n))
+}
+
 /** Real cron plan: one fetch job per (portal, account) for the given window.
  *  Empty until accounts are configured (stage 5). Pure. */
 export function planFetches(
