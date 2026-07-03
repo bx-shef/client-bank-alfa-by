@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Форма заявки</title>
+<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent}</style>
+</head>
+<body>
+<!--
+  Dedicated host document for the Bitrix24 CRM web-form embed.
+
+  Loaded in an iframe by app/components/BriefForm.vue with a query string:
+    /b24-form.html?script=<loader url>&form=inline/<id>/<secret>
+
+  Kept as a separate same-origin file so nginx can serve it with a form-scoped
+  CSP (allowing the B24 loader + its inline bootstrap) while the rest of the site
+  keeps its strict hash-based CSP. The guards below repeat the checks in
+  app/utils/b24Form.ts — never trust the query params blindly.
+-->
+<script>
+(function () {
+  var ID_RE = /^[a-zA-Z0-9_-]+$/
+  var ALLOWED = ['.bitrix24.com', '.bitrix24.by', '.bitrix24.ru', '.bitrix24.kz', '.bitrix24.tech']
+
+  function isAllowedHost(rawUrl) {
+    try {
+      var u = new URL(rawUrl)
+      if (u.protocol !== 'https:') return false
+      return ALLOWED.some(function (s) { return u.hostname.endsWith(s) })
+    } catch (e) { return false }
+  }
+
+  var qs = new URLSearchParams(location.search)
+  var scriptUrl = qs.get('script') || ''
+  var form = qs.get('form') || '' // inline/<id>/<secret>
+  var parts = form.split('/')
+
+  if (!isAllowedHost(scriptUrl) || parts.length !== 3 || parts[0] !== 'inline'
+      || !ID_RE.test(parts[1]) || !ID_RE.test(parts[2])) {
+    return
+  }
+
+  // Official Bitrix24 embed: a marker <script data-b24-form> followed by an
+  // async loader inserted before it; the loader renders the form at the marker.
+  var marker = document.createElement('script')
+  marker.setAttribute('data-b24-form', form)
+  marker.setAttribute('data-skip-moving', 'true')
+  document.body.appendChild(marker)
+
+  var s = document.createElement('script')
+  s.async = true
+  s.src = scriptUrl + '?' + (Date.now() / 180000 | 0)
+  marker.parentNode.insertBefore(s, marker)
+
+  // b24:form:submit fires inside this document; events don't cross frames, so
+  // relay to the parent, which fires the Metrika goal.
+  document.addEventListener('b24:form:submit', function () {
+    window.parent.postMessage('b24:form:submit', '*')
+  })
+})()
+</script>
+</body>
+</html>

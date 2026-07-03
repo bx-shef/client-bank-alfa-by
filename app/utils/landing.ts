@@ -1,8 +1,12 @@
 /** Single source of truth for the landing copy — used by both app.vue (SEO/head)
- * and index.vue (visible hero), so the title/description can't drift apart. */
-export const LANDING_TITLE = 'Импорт выписки из клиент-банка'
+ * and index.vue (visible hero), so the title/description can't drift apart.
+ * Content follows issue #110 (marketing brief) verbatim. */
+export const LANDING_TITLE = 'Импорт выписки клиент-банка в Bitrix24'
 export const LANDING_DESCRIPTION
-  = 'Выписка из Альфа-Банка Беларусь в Bitrix24 онлайн — из любой страны. Или загрузите любую стандартную выписку вручную.'
+  = 'Выписка Альфа-Банка Беларусь и Приорбанка попадает в CRM автоматически. Оплаты сами закрывают сделки, счета и заказы — на вашем сервере, код в вашем git. Облако и коробка.'
+
+/** Small print under the hero CTA. */
+export const LANDING_HERO_NOTE = 'Само приложение — бесплатное, есть в Маркете Bitrix24.'
 
 /** Browser-tab title for an in-portal page: "<section> — <app name>". Keeps the
  * brand suffix in one place so per-page `useHead` titles can't drift. */
@@ -19,27 +23,71 @@ export function ogImageUrl(siteUrl: string): string {
 /** Year the project started — left edge of the footer copyright range. */
 export const START_YEAR = 2026
 
-/** A single selling point shown on the landing page. */
+/** «Боль → результат» pair (section 2). */
+export interface PainResult {
+  before: string
+  after: string
+}
+
+export const LANDING_PAIN_RESULT: PainResult = {
+  before: 'бухгалтер вручную переносит платёжки из клиент-банка и сверяет, кто оплатил.',
+  after: 'выписка загружается сама, платёж находит свою сделку/счёт/заказ, отмечает оплату — и ответственный менеджер сразу видит это в чате.'
+}
+
+/** A numbered step in «Как это работает» (section 3). */
+export interface LandingStep {
+  step: string
+  title: string
+  text: string
+}
+
+export const LANDING_STEPS: readonly LandingStep[] = [
+  {
+    step: '01',
+    title: 'Забираем выписку',
+    text: 'Онлайн из Альфа/Приора (портал может быть в любой стране) или файлом любой стандартной выгрузки (клиент-банк, 1С).'
+  },
+  {
+    step: '02',
+    title: 'Находим контрагента',
+    text: 'По расчётному счёту автоматически подтягивается компания в CRM.'
+  },
+  {
+    step: '03',
+    title: 'Разносим оплату',
+    text: 'Платёж закрывает сделку / счёт / заказ и уведомляет ответственного менеджера в чат.'
+  }
+]
+
+/** A single selling point shown on the landing page («Почему мы», section 4). */
 export interface LandingFeature {
   title: string
   description: string
 }
 
-/** Static content for the landing hero — the app's value props. */
+/** Static content for the landing — the app's value props (4 cards). */
 export const LANDING_FEATURES: readonly LandingFeature[] = [
   {
-    title: 'Выписка без ручного экспорта',
-    description: 'Забираем выписку из Альфа-Банка Беларусь по защищённому онлайн-доступу — портал Bitrix24 может быть в любой стране. Нет онлайна — загружаем любую стандартную выписку файлом.'
+    title: 'Авторазнесение оплат',
+    description: 'Не просто импорт — оплаты сами двигают сделки и закрывают счета. Это и есть автоматизация, за которой приходят.'
   },
   {
-    title: 'Платежи прямо в CRM',
-    description: 'Каждый платёж попадает в таймлайн компании как дело Bitrix24, а контрагент находится по расчётному счёту автоматически.'
+    title: 'На вашем сервере, код в вашем git',
+    description: 'Данные и токены не уходят вендору. Полный контроль — важно для финансов и для РФ-компаний с бизнесом в РБ.'
   },
   {
-    title: 'Уведомления в чат',
-    description: 'Приходы и расходы — с фильтрами по счёту и назначению — приходят сообщением в выбранный чат портала.'
+    title: 'Белорусские банки и форматы',
+    description: 'Альфа-Банк Беларусь, Приорбанк, стандартные выгрузки — то, чего нет в типовых решениях Маркета.'
+  },
+  {
+    title: 'Облако и коробка',
+    description: 'Работаем с любой редакцией Bitrix24, дорабатываем под ваши процессы.'
   }
 ]
+
+/** «Интеграторам Bitrix24» block (section 5). */
+export const LANDING_INTEGRATORS
+  = 'Забирайте бесплатный коннектор РБ-банков в свой арсенал: ставьте клиентам, а автоматизацию разнесения оплат делайте по нашей инструкции или отдавайте нам.'
 
 /**
  * Render a copyright span: a single year, or a `start–current` range when the

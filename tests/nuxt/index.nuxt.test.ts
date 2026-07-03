@@ -11,7 +11,7 @@ describe('index landing page', () => {
 
   it('renders one card per feature (guards against an empty v-for)', async () => {
     const wrapper = await mountSuspended(IndexPage)
-    const cards = wrapper.findAll('li')
+    const cards = wrapper.findAll('[data-testid="feature-card"]')
     expect(cards).toHaveLength(LANDING_FEATURES.length)
     // Every feature's title must actually appear in its card.
     for (const feature of LANDING_FEATURES) {

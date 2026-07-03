@@ -35,9 +35,9 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
 </style></head><body>
   <div class="card">
     <div class="eyebrow">Bitrix24</div>
-    <div class="title">Импорт выписки<br>из клиент-банка</div>
-    <div class="banks">Альфа-Банк Беларусь · любая стандартная выписка</div>
-    <div class="foot">Платежи в CRM · уведомления в чат</div>
+    <div class="title">Импорт выписки<br>клиент-банка в Bitrix24</div>
+    <div class="banks">Альфа-Банк Беларусь · Приорбанк · клиент-банк / 1С</div>
+    <div class="foot">Оплаты сами закрывают сделки, счета и заказы</div>
   </div>
 </body></html>`
 
