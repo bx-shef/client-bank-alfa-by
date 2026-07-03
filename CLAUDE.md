@@ -204,9 +204,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (`makePortalRestCall`: `getToken`+`ensureAccessToken`+`callRest`), с **гейтом демо-счётов**
       (`isDemoAccount` — демо-нагрузка не пишет в реальный портал) и skip без токена портала.
       `cron.ts` — план опроса (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`,
-      `isDemoAccount`).
+      `isDemoAccount`; каденция `demoTickMs` — секунды, пауза обработки `demoDelayMs` — чтобы очереди
+      были видимы на графике). Для демо-счётов в `worker.ts` `fetchStatement`/`findCompany` держат
+      `DEMO_DELAY_MS`-паузу (реальные джобы не тормозятся) → на графике виден backlog.
     - `server/plugins/queue.ts` — на старте backend поднимает воркеры **в процессе** и (если
-      `DEMO_LOAD_N>0`) крон каждые `CRON_INTERVAL_MIN` кладёт синтетические fetch-джобы (демо потока).
+      `DEMO_LOAD_N>0`) крон каждые `DEMO_TICK_SEC` секунд кладёт синтетические fetch-джобы (демо потока).
       Масштаб-аут (отдельный воркер-контейнер) — следующий шаг (см. REFACTOR_PLAN).
     - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
       DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
