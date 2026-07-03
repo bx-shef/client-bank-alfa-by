@@ -10,11 +10,13 @@
 // `clear` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
+import { pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
+// Tab title from the single source (pageTitle → "<section> — <app name>").
 useHead({
-  title: 'Очереди — монитор',
+  title: pageTitle('Очереди'),
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 

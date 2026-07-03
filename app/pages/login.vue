@@ -4,6 +4,7 @@
 // we return to `?redirect=` (default /queues). On b24ui so it themes with the rest
 // (light/dark). Ported from the Procure AI auth model. See docs/AUTH.md.
 import LockMIcon from '@bitrix24/b24icons-vue/outline/LockMIcon'
+import { pageTitle } from '~/utils/landing'
 
 // `clear` layout wraps the page in <B24App> → b24ui components + colorMode (light/dark) work.
 definePageMeta({ layout: 'clear' })
@@ -11,8 +12,9 @@ definePageMeta({ layout: 'clear' })
 const route = useRoute()
 const { login } = useAuth()
 
+// Tab title from the single source (pageTitle → "<section> — <app name>").
 useHead({
-  title: 'Вход — импорт выписки',
+  title: pageTitle('Вход'),
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 
@@ -77,17 +79,21 @@ async function submit() {
             type="password"
             autocomplete="current-password"
             name="password"
+            autofocus
             required
             class="w-full"
           />
         </B24FormField>
 
-        <B24Alert
-          v-if="error"
-          color="air-primary-alert"
-          variant="soft"
-          :title="error"
-        />
+        <!-- aria-live region: a screen reader announces the login error when it appears. -->
+        <div aria-live="assertive">
+          <B24Alert
+            v-if="error"
+            color="air-primary-alert"
+            variant="soft"
+            :title="error"
+          />
+        </div>
 
         <B24Button
           type="submit"

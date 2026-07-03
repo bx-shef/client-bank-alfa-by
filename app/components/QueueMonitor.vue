@@ -284,17 +284,24 @@ onBeforeUnmount(() => {
       description="Не задан REDIS_URL — приём работает синхронным фолбэком, но пайплайн/крон не запущены."
       class="mb-3"
     />
-    <B24Alert
-      v-if="error"
-      color="air-primary-alert"
-      variant="soft"
-      :title="error"
-      class="mb-3"
-    />
+    <!-- aria-live region: a screen reader announces a fetch error when it appears. -->
+    <div aria-live="polite">
+      <B24Alert
+        v-if="error"
+        color="air-primary-alert"
+        variant="soft"
+        :title="error"
+        class="mb-3"
+      />
+    </div>
 
     <div class="flex flex-wrap gap-3">
+      <!-- Canvas chart has no accessible text; expose the current total as a label
+           (the legend table below carries the per-queue detail). -->
       <div
         ref="chartEl"
+        role="img"
+        :aria-label="`График длины очередей обработки, всего в очередях: ${total}`"
         class="min-h-80 min-w-[320px] flex-[1_1_60%]"
       />
 
