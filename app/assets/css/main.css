@@ -1,10 +1,26 @@
 @import "tailwindcss" theme(static);
 @import "@bitrix24/b24ui-nuxt";
 
+/**
+ * Шрифты — self-hosted (без вызовов Google Fonts CDN): убирает render-blocking
+ * зависимость, не утекает IP пользователя, работает даже если Google заблокирован.
+ */
+@import "@fontsource/rubik/400.css";
+@import "@fontsource/rubik/500.css";
+@import "@fontsource/rubik/600.css";
+@import "@fontsource/rubik/700.css";
+@import "@fontsource/rubik/800.css";
+@import "@fontsource/roboto-mono/400.css";
+@import "@fontsource/roboto-mono/500.css";
+@import "@fontsource/roboto-mono/600.css";
+
 @layer base {
   html {
     font-family: 'Rubik', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     scroll-behavior: smooth;
+  }
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   /* Raw landing markup (h1/p) isn't wrapped in b24ui components, so it would
@@ -30,6 +46,89 @@
     background-color: var(--air-theme-bg-color, #0b1020);
     color: var(--b24ui-color-text-primary, #e6e9ef);
   }
+
+  /**
+   * Брендовые токены палитры (vibecode.bitrix24.tech), общие для лендинга и
+   * визитки. Объявлены на :root — это лишь CSS-переменные, in-portal страницы
+   * (/app, /settings, /login) их не используют, поэтому глобально безопасно.
+   */
+  :root {
+    --color-bg-body-primary-ch: 3 0 34;        /* #030022 */
+    --color-bg-body-secondary-ch: 10 6 52;     /* #0a0634 */
+    --color-accent-primary-ch: 0 212 255;      /* #00d4ff cyan */
+    --color-accent-partner-ch: 0 68 228;       /* #0044e4 brand-blue */
+    --color-accent-success-ch: 52 232 187;     /* #34e8bb */
+    --color-accent-warning-ch: 255 187 0;      /* #ffbb00 */
+    --color-accent-alert-ch: 239 90 1;         /* #ef5a01 */
+    --color-accent-special-ch: 188 74 255;     /* #bc4aff */
+    --color-base-0-ch: 255 255 255;
+    --color-base-3-ch: 179 179 179;
+    --color-base-5-ch: 128 128 128;
+    --color-base-7-ch: 77 77 77;
+    --color-base-9-ch: 26 26 26;
+  }
+
+  /**
+   * Тёмная брендовая оболочка ТОЛЬКО для публичного лендинга (layout `landing`).
+   * Фон — два слоя радиального сияния поверх глубокого синего (#030022), как на
+   * offer.bx-shef.by. Ключуется на `html[data-force-dark]` (флаг форс-дарка
+   * запечён в SSR-HTML лендинга layout-ом), поэтому брендовый фон присутствует
+   * уже в первом кадре SSR (без сдвига после гидрации) и не трогает body
+   * in-portal страниц (у них флага нет). `.landing-shell` также несёт `dark`,
+   * чтобы b24ui-хром (Header/Footer/кнопки) внутри читал тёмные air-токены.
+   */
+  html[data-force-dark] {
+    --air-theme-bg-color: rgb(var(--color-bg-body-primary-ch));
+  }
+  html[data-force-dark] body {
+    background-color: rgb(var(--color-bg-body-primary-ch));
+    background-image:
+      radial-gradient(900px circle at 50% -10%, rgba(0, 212, 255, 0.10), transparent 60%),
+      radial-gradient(700px circle at 90% 30%, rgba(188, 74, 255, 0.06), transparent 65%);
+    background-attachment: fixed;
+    color: rgb(var(--color-base-0-ch) / 0.92);
+  }
+  .landing-shell {
+    min-height: 100vh;
+  }
+
+  /* Якоря не уходят под фиксированный B24Header */
+  html[data-force-dark] section[id],
+  html[data-force-dark] div[id] {
+    scroll-margin-top: 96px;
+  }
+
+  /* Hero fade-in — мягкое появление как на vibecode */
+  .hero-fade-in {
+    opacity: 0;
+    animation: hero-fade-in 0.6s ease-out 0.05s forwards;
+  }
+  @keyframes hero-fade-in {
+    to { opacity: 1; }
+  }
+
+  /* Glow за курсором (см. composables/useCardGlow). Координаты прокидывает JS. */
+  [data-glow-card] {
+    position: relative;
+    isolation: isolate;
+  }
+  [data-glow-card]::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 2;
+    background: radial-gradient(
+      300px circle at var(--glow-x, -200px) var(--glow-y, -200px),
+      rgba(0, 212, 255, 0.14),
+      transparent 70%
+    );
+    mix-blend-mode: plus-lighter;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  [data-glow-card]:hover::after { opacity: 1; }
 }
 
 @theme static {

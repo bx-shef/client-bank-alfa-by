@@ -29,7 +29,11 @@ useHead({
       key: 'theme-init',
       tagPosition: 'head',
       tagPriority: 'critical',
-      innerHTML: `(function(){try{var s=localStorage.getItem("${COLOR_MODE_STORAGE_KEY}")||"auto";if(s==="auto"){s=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}var d=s!=="light";var c=document.documentElement.classList;c.toggle("dark",d);c.toggle("light",!d);}catch(e){}})();`
+      // The public landing (layout `landing`) forces dark via htmlAttrs
+      // `data-force-dark`; honor it here so this early script doesn't repaint it
+      // to the OS theme on first paint. In-portal pages don't set the flag and
+      // keep their light/dark-auto behavior.
+      innerHTML: `(function(){try{var el=document.documentElement,c=el.classList;if(el.getAttribute("data-force-dark")==="true"){c.add("dark");c.remove("light");return;}var s=localStorage.getItem("${COLOR_MODE_STORAGE_KEY}")||"auto";if(s==="auto"){s=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}var d=s!=="light";c.toggle("dark",d);c.toggle("light",!d);}catch(e){}})();`
     }
   ]
 })

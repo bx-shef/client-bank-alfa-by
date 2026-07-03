@@ -30,11 +30,11 @@ onUnmounted(() => window.removeEventListener('message', onFrameMessage))
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-2xl border border-(--b24ui-color-design-tinted-na-stroke) bg-(--b24ui-color-bg-content-primary)">
+  <div class="overflow-hidden rounded-2xl border border-white/10 bg-black/30 backdrop-blur-sm">
     <iframe
       v-if="src"
       :src="src"
-      class="min-h-[760px] w-full border-0 sm:min-h-[620px]"
+      class="min-h-[760px] w-full border-0 rounded-2xl sm:min-h-[620px]"
       title="Форма заявки на установку"
       loading="lazy"
     />
@@ -43,7 +43,7 @@ onUnmounted(() => window.removeEventListener('message', onFrameMessage))
       v-else
       class="flex min-h-[280px] items-center justify-center p-6 text-center"
     >
-      <p class="text-sm text-(--b24ui-color-text-secondary)">
+      <p class="text-sm text-white/50">
         Слот под CRM-форму Bitrix24 — задайте переменные
         <code class="font-mono">NUXT_PUBLIC_B24_FORM_*</code>, чтобы встроить форму.
       </p>

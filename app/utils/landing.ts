@@ -89,6 +89,14 @@ export const LANDING_FEATURES: readonly LandingFeature[] = [
 export const LANDING_INTEGRATORS
   = 'Забирайте бесплатный коннектор РБ-банков в свой арсенал: ставьте клиентам, а автоматизацию разнесения оплат делайте по нашей инструкции или отдавайте нам.'
 
+/** Banks/formats chips shown under the hero. */
+export const LANDING_FORMATS: readonly string[] = [
+  'Альфа-Банк Беларусь',
+  'Приорбанк',
+  'клиент-банк',
+  '1С'
+]
+
 /**
  * Render a copyright span: a single year, or a `start–current` range when the
  * project has been running for more than one calendar year.
