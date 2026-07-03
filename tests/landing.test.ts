@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
 
 describe('copyrightYears', () => {
   it('shows a single year when start === current', () => {
@@ -70,5 +70,10 @@ describe('pain → result copy', () => {
     expect(LANDING_FORMATS).toContain('Альфа-Банк Беларусь')
     expect(LANDING_FORMATS).toContain('Приорбанк')
     for (const f of LANDING_FORMATS) expect(f.trim()).not.toBe('')
+  })
+
+  it('points the marketplace link to the shef.bankimport listing over https', () => {
+    expect(LANDING_MARKET_URL).toMatch(/^https:\/\//)
+    expect(LANDING_MARKET_URL).toContain('shef.bankimport')
   })
 })

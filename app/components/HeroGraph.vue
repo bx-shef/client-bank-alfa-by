@@ -99,6 +99,35 @@ let outerIdx: number[] = [] // indices of non-hub nodes
 let pulses: Pulse[] = []
 let rings: Ring[] = []
 
+// Pre-baked node glow sprites (one per tier). The glow is a static radial
+// gradient — baking it once into an offscreen canvas and drawImage-ing it each
+// frame avoids ~330 createRadialGradient calls/sec (perf on weak mobiles).
+let glowSprites: Record<Tier, HTMLCanvasElement> | null = null
+
+function buildGlowSprites() {
+  const make = (glow: number, glowA: number): HTMLCanvasElement => {
+    const s = document.createElement('canvas')
+    const size = Math.ceil(glow * 2)
+    s.width = s.height = size
+    const g = s.getContext('2d')
+    if (g) {
+      const grd = g.createRadialGradient(glow, glow, 0, glow, glow, glow)
+      grd.addColorStop(0, `rgba(0, 212, 255, ${glowA})`)
+      grd.addColorStop(1, 'rgba(0, 212, 255, 0)')
+      g.fillStyle = grd
+      g.beginPath()
+      g.arc(glow, glow, glow, 0, Math.PI * 2)
+      g.fill()
+    }
+    return s
+  }
+  glowSprites = {
+    1: make(TIERS[1].glow, TIERS[1].glowA),
+    2: make(TIERS[2].glow, TIERS[2].glowA),
+    3: make(TIERS[3].glow, TIERS[3].glowA)
+  }
+}
+
 function init() {
   if (!canvas.value) return
   resize()
@@ -159,8 +188,10 @@ function tick(dt: number) {
     nextPerturb = now + PERTURB_MIN_MS + Math.random() * PERTURB_JITTER_MS
   }
 
-  const photoX = w > 900 ? Math.max(0, (w - 1080) / 2) + PHOTO_CONTAINER_OFFSET_X : -9999
-  const photoY = h * PHOTO_RELATIVE_Y
+  // Photo repel zone. Desktop: photo in the right column of the max-w-[1080px]
+  // container. Mobile: photo is top-left (order-first, justify-start, size-44).
+  const photoX = w > 900 ? Math.max(0, (w - 1080) / 2) + PHOTO_CONTAINER_OFFSET_X : w * 0.28
+  const photoY = w > 900 ? h * PHOTO_RELATIVE_Y : h * 0.20
 
   // Outer-node forces: gravity toward hub, mutual repulsion, photo repulsion.
   for (let a = 0; a < outerIdx.length; a++) {
@@ -286,16 +317,11 @@ function draw() {
     ctx.fill()
   }
 
-  // Nodes — glow + core + label (hub is brightest).
+  // Nodes — glow (pre-baked sprite) + core + label (hub is brightest).
   for (const n of nodes) {
     const t = TIERS[n.tier]
-    const grd = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, t.glow)
-    grd.addColorStop(0, `rgba(${CH}, ${t.glowA})`)
-    grd.addColorStop(1, `rgba(${CH}, 0)`)
-    ctx.beginPath()
-    ctx.arc(n.x, n.y, t.glow, 0, Math.PI * 2)
-    ctx.fillStyle = grd
-    ctx.fill()
+    const sprite = glowSprites?.[n.tier]
+    if (sprite) ctx.drawImage(sprite, n.x - t.glow, n.y - t.glow)
 
     ctx.beginPath()
     ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2)
@@ -355,6 +381,7 @@ onMounted(() => {
   ctx = c
   motionMql = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null
   prefersReduced = motionMql?.matches ?? false
+  buildGlowSprites()
   init()
   draw()
 
