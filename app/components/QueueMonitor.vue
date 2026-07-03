@@ -61,8 +61,9 @@ const chart = shallowRef<ECharts | null>(null)
 let echartsCore: typeof import('echarts/core') | null = null
 let timer: ReturnType<typeof setTimeout> | null = null
 // Generation token for the poll loop: start()/stop() bump it so a chain that was
-// mid-`await tick()` when the interval changed won't reschedule itself — otherwise
-// two loops could run in parallel and double the poll rate.
+// mid-`await tick()` when the range changed (or the component unmounted) won't
+// reschedule itself — otherwise two loops could run in parallel (double poll rate)
+// or a poll could outlive the component and hit a disposed chart.
 let pollGen = 0
 let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
@@ -88,15 +89,16 @@ function rangeMs(): number {
   return range.value * 60_000
 }
 /** Poll/step interval in ms — derived from the range so ~maxPoints points fill the
- *  window (memory bounded). Clamped so we never poll faster than MIN_STEP_MS. */
+ *  window (memory bounded). Clamped so we never poll faster than MIN_STEP_MS; the
+ *  `max(1, …)` on the divisor guards a maxPoints=0 misconfig (else Infinity → dead timer). */
 function stepMs(): number {
-  return Math.max(MIN_STEP_MS, Math.round(rangeMs() / props.maxPoints))
+  return Math.max(MIN_STEP_MS, Math.round(rangeMs() / Math.max(1, props.maxPoints)))
 }
 
 /** The [min, max] time window the X axis shows now — a FIXED-width span ending at the
- *  latest poll. Both edges advance by one step each tick, so the axis (start date
- *  included) slides continuously right-to-left. Empty history just fills in from the
- *  right over time. */
+ *  latest poll. Both edges advance each tick, so the window (with its time/date labels)
+ *  slides right-to-left; at coarse ranges the shift is one step at a time. Empty
+ *  history just fills in from the right over time. */
 function axisWindow(): { min: number, max: number } {
   const max = lastTickAt.value ?? Date.now()
   return { min: max - rangeMs(), max }
@@ -115,6 +117,9 @@ function baseOption() {
   return {
     animation: true,
     animationDurationUpdate: 200,
+    // Nudge overlapping end-labels apart (all queues share y=0 in the idle state →
+    // four "0" would stack on the right edge otherwise).
+    labelLayout: { moveOverlap: 'shiftY' as const },
     grid: { left: 8, right: 40, top: 16, bottom: 24, containLabel: true },
     tooltip: { trigger: 'axis' as const, valueFormatter: (v: number) => fmt(v) },
     legend: { show: false, selected: {} as Record<string, boolean> },
@@ -122,7 +127,8 @@ function baseOption() {
       type: 'time' as const,
       // Fixed sliding window (not data-extent auto-fit) so the axis scrolls smoothly.
       ...axisWindow(),
-      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}' } },
+      // `day` level → a window crossing midnight (up to the 4h range) shows the date.
+      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}', day: '{dd}.{MM}' } },
       axisLine: { lineStyle: { color: c.split } },
       splitLine: { show: true, lineStyle: { color: c.split } }
     },
@@ -265,7 +271,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  stopTimer()
+  // stop() (not just stopTimer()) bumps pollGen + clears isReload, so a tick that is
+  // mid-fetch at unmount won't reschedule itself onto the disposed chart.
+  stop()
   ro?.disconnect()
   themeObserver?.disconnect()
   chart.value?.dispose()

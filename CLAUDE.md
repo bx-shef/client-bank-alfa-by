@@ -250,7 +250,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `@bitrix24/b24icons-vue`) на **ECharts** (Apache-2.0, tree-shaken: `echarts/core` +
       Line/Grid/Tooltip/Legend/Canvas, динамический импорт; оси/сетка перекрашиваются под light/dark по
       классу `.dark`), чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
-      из `/api/ops/queues`; `?demo=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
+      из `/api/ops/queues`; `?preview=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
       (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78. Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту контрагента** (DI над
