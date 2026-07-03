@@ -24,7 +24,7 @@ const tools: ToolLink[] = [
   { id: 'bbcode', label: 'BBCode ↔ Markdown', href: 'https://bx-shef.github.io/app-convert-bbocode-md/' }
 ]
 
-const sha = shortSha(commitSha as string)
+const sha = computed(() => shortSha(commitSha as string))
 </script>
 
 <template>

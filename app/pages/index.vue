@@ -6,7 +6,8 @@ import {
   LANDING_PAIN_RESULT,
   LANDING_STEPS,
   LANDING_FEATURES,
-  LANDING_INTEGRATORS
+  LANDING_INTEGRATORS,
+  LANDING_FORMATS
 } from '~/utils/landing'
 import { B24_BOOKING_URL } from '~/utils/booking'
 
@@ -17,9 +18,8 @@ const { reachGoal } = useMetrikaGoal()
 
 const steps = LANDING_STEPS
 const features = LANDING_FEATURES
-
 // Банки и форматы — «tech-строка» под hero (как «Работает с моделями» на Lp).
-const formats = ['Альфа-Банк Беларусь', 'Приорбанк', 'клиент-банк', '1С']
+const formats = LANDING_FORMATS
 </script>
 
 <template>
@@ -27,7 +27,7 @@ const formats = ['Альфа-Банк Беларусь', 'Приорбанк', '
     <!-- HERO -->
     <section
       id="hero"
-      class="hero-fade-in relative overflow-hidden px-[22px] lg:px-8 pt-[64px] sm:pt-[96px] pb-[64px] sm:pb-[96px]"
+      class="hero-fade-in relative overflow-hidden px-[22px] lg:px-8 pt-[80px] sm:pt-[120px] pb-[64px] sm:pb-[96px]"
     >
       <HeroGraph />
       <div class="relative z-10 max-w-[1080px] mx-auto">
@@ -39,20 +39,20 @@ const formats = ['Альфа-Банк Беларусь', 'Приорбанк', '
               alt="Игорь Шевчик"
               width="240"
               height="240"
-              class="size-40 sm:size-48 lg:size-56 rounded-full object-cover border-2 border-[rgb(var(--color-accent-primary-ch)/0.45)] shadow-[0_0_64px_rgba(0,212,255,0.20)]"
+              class="size-44 sm:size-52 lg:size-60 rounded-full object-cover border-2 border-[rgb(var(--color-accent-primary-ch)/0.45)] shadow-[0_0_64px_rgba(0,212,255,0.20)]"
               loading="eager"
             >
           </div>
 
           <!-- Текст -->
-          <div class="flex flex-col items-start gap-5 flex-1 lg:max-w-[640px]">
+          <div class="flex flex-col items-start gap-5 flex-1 lg:max-w-[620px]">
             <PartnerBadge />
 
-            <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.06] tracking-tight text-white">
+            <h1 class="text-4xl sm:text-6xl lg:text-7xl font-bold leading-[1.05] tracking-tight text-white">
               Импорт выписки клиент-банка в <span class="text-[rgb(var(--color-accent-primary-ch))]">Bitrix24</span>
             </h1>
 
-            <p class="text-base sm:text-lg max-w-[600px] text-white/70 leading-relaxed">
+            <p class="text-lg sm:text-xl max-w-[560px] text-white/70 leading-relaxed">
               {{ LANDING_DESCRIPTION }}
             </p>
 

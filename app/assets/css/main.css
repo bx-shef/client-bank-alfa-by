@@ -71,13 +71,16 @@
   /**
    * Тёмная брендовая оболочка ТОЛЬКО для публичного лендинга (layout `landing`).
    * Фон — два слоя радиального сияния поверх глубокого синего (#030022), как на
-   * offer.bx-shef.by. Скоуплено на `.landing-shell`, поэтому фон/цвет body
-   * in-portal страниц не меняется. `.landing-shell` также несёт класс `dark`,
+   * offer.bx-shef.by. Ключуется на `html[data-force-dark]` (флаг форс-дарка
+   * запечён в SSR-HTML лендинга layout-ом), поэтому брендовый фон присутствует
+   * уже в первом кадре SSR (без сдвига после гидрации) и не трогает body
+   * in-portal страниц (у них флага нет). `.landing-shell` также несёт `dark`,
    * чтобы b24ui-хром (Header/Footer/кнопки) внутри читал тёмные air-токены.
    */
-  .landing-shell {
-    min-height: 100vh;
+  html[data-force-dark] {
     --air-theme-bg-color: rgb(var(--color-bg-body-primary-ch));
+  }
+  html[data-force-dark] body {
     background-color: rgb(var(--color-bg-body-primary-ch));
     background-image:
       radial-gradient(900px circle at 50% -10%, rgba(0, 212, 255, 0.10), transparent 60%),
@@ -85,10 +88,13 @@
     background-attachment: fixed;
     color: rgb(var(--color-base-0-ch) / 0.92);
   }
+  .landing-shell {
+    min-height: 100vh;
+  }
 
   /* Якоря не уходят под фиксированный B24Header */
-  .landing-shell section[id],
-  .landing-shell div[id] {
+  html[data-force-dark] section[id],
+  html[data-force-dark] div[id] {
     scroll-margin-top: 96px;
   }
 

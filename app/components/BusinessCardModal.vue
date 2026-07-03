@@ -28,6 +28,11 @@ let qrRevealed = false
 
 const { reachGoal } = useMetrikaGoal()
 
+// Focus management for the modal dialog: move focus into the card on open,
+// trap Tab inside it, and restore focus to the trigger on close (a11y).
+const cardEl = ref<HTMLElement | null>(null)
+let lastFocused: HTMLElement | null = null
+
 // Публичные реквизиты ИП — намеренно хардкодены, это публичная визитка.
 const card = {
   name: 'Игорь Шевчик',
@@ -72,11 +77,17 @@ onMounted(async () => {
 watch(() => props.open, (isOpen) => {
   if (!import.meta.client) return
   if (isOpen) {
+    lastFocused = document.activeElement as HTMLElement | null
     document.addEventListener('keydown', handleKey)
     document.body.style.overflow = 'hidden'
+    // Focus the first focusable in the dialog after it renders.
+    nextTick(() => focusables()[0]?.focus())
   } else {
     document.removeEventListener('keydown', handleKey)
     document.body.style.overflow = ''
+    // Restore focus to the element that opened the modal.
+    lastFocused?.focus?.()
+    lastFocused = null
     // Сброс при закрытии: иначе если закрыть, удерживая QR, при следующем
     // открытии overlay покажется сразу (pointerup уже не придёт — DOM снят).
     showQr.value = false
@@ -91,8 +102,36 @@ onUnmounted(() => {
   if (copyTimer) clearTimeout(copyTimer)
 })
 
+// All focusable elements currently inside the card (excludes disabled/hidden).
+function focusables(): HTMLElement[] {
+  if (!cardEl.value) return []
+  return Array.from(
+    cardEl.value.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
+    )
+  ).filter(el => el.offsetParent !== null)
+}
+
 function handleKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
+  if (e.key === 'Escape') {
+    emit('close')
+    return
+  }
+  // Focus trap: keep Tab cycling inside the dialog.
+  if (e.key === 'Tab') {
+    const items = focusables()
+    if (!items.length) return
+    const first = items[0]!
+    const last = items[items.length - 1]!
+    const active = document.activeElement
+    if (e.shiftKey && active === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
 }
 
 // Hold-to-reveal QR: pointer capture удерживает событие на кнопке, даже если
@@ -185,7 +224,11 @@ function triggerDownload(blob: Blob, filename: string) {
           enter-to-class="opacity-100 scale-100 translate-y-0"
         >
           <div
+            ref="cardEl"
             data-testid="business-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="business-card-name"
             class="relative w-full max-w-[680px] rounded-3xl overflow-hidden shadow-2xl"
             style="background: linear-gradient(135deg, rgba(15,22,36,0.98) 0%, rgba(10,18,30,0.98) 100%); border: 1px solid rgba(255,255,255,0.1);"
           >
@@ -281,7 +324,10 @@ function triggerDownload(blob: Blob, filename: string) {
               <div class="flex flex-col justify-center gap-6 px-8 pt-5 pb-10 sm:py-12 flex-1 min-w-0">
                 <!-- Name & title -->
                 <div>
-                  <h2 class="text-2xl font-bold text-white tracking-tight leading-tight">
+                  <h2
+                    id="business-card-name"
+                    class="text-2xl font-bold text-white tracking-tight leading-tight"
+                  >
                     {{ card.name }}
                   </h2>
                   <p class="mt-1 text-sm text-white/50 leading-snug max-w-[240px]">

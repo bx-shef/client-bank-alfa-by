@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
 
 describe('copyrightYears', () => {
   it('shows a single year when start === current', () => {
@@ -63,5 +63,12 @@ describe('pain → result copy', () => {
   it('has non-empty integrators copy', () => {
     expect(LANDING_INTEGRATORS.trim()).not.toBe('')
     expect(LANDING_INTEGRATORS).toContain('коннектор')
+  })
+
+  it('lists the supported banks/formats', () => {
+    expect(LANDING_FORMATS.length).toBeGreaterThan(0)
+    expect(LANDING_FORMATS).toContain('Альфа-Банк Беларусь')
+    expect(LANDING_FORMATS).toContain('Приорбанк')
+    for (const f of LANDING_FORMATS) expect(f.trim()).not.toBe('')
   })
 })
