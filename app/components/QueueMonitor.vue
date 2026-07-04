@@ -17,7 +17,7 @@ import PlayLIcon from '@bitrix24/b24icons-vue/outline/PlayLIcon'
 import PauseLIcon from '@bitrix24/b24icons-vue/outline/PauseLIcon'
 import {
   QUEUE_META,
-  appendSnapshot,
+  bucketSnapshot,
   seedSeries,
   emptySeries,
   legendRows,
@@ -32,36 +32,26 @@ const props = withDefaults(defineProps<{
   /** Загрузчик снапшота очередей (например, GET /api/ops/queues или демо-генератор). */
   fetcher: () => Promise<QueuesSnapshot>
   title?: string
-  /** Видимый диапазон времени, мин (по умолчанию 10). */
+  /** Видимый диапазон времени, мин (по умолчанию 10). Дискрет и частота опроса
+   *  выводятся из него автоматически (см. windowPlan). */
   rangeMin?: number
-  /** Частота опроса, сек (шаг точек = частота). Реже опрос → крупнее шаг → заметнее
-   *  «течение» графика; чаще → плотнее детализация. По умолчанию 5 с. */
-  pollSec?: number
-  /** Потолок числа точек в окне (память). Если диапазон/частота дают больше — шаг
-   *  укрупняется так, чтобы точек было не больше этого (окно всё равно = диапазон). */
+  /** Потолок числа точек — страховка (дискрет и так держит ~10–14). */
   maxPoints?: number
   autoStart?: boolean
 }>(), {
   title: 'Очереди обработки',
   rangeMin: 10,
-  pollSec: 5,
   maxPoints: 400,
   autoStart: true
 })
 
-/** Выбор видимого диапазона (мин). Ширина окна времени. */
+/** Выбор видимого диапазона (мин). Единственный регулятор — дискрет и частота опроса
+ *  подбираются автоматически под диапазон (windowPlan). */
 const RANGE_ITEMS = [
+  { label: '2 минуты', value: 2 },
   { label: '10 минут', value: 10 },
   { label: '30 минут', value: 30 },
-  { label: '1 час', value: 60 },
-  { label: '2 часа', value: 120 },
   { label: '4 часа', value: 240 }
-]
-/** Частота опроса (сек) — независимый от диапазона регулятор плотности/скорости точек. */
-const POLL_ITEMS = [
-  { label: '2 сек', value: 2 },
-  { label: '5 сек', value: 5 },
-  { label: '15 сек', value: 15 }
 ]
 /** Narrow (phone) breakpoint — Tailwind `sm`. On phones we show HALF the selected time
  *  span so the axis isn't cramped (fewer, more legible points/labels). */
@@ -97,7 +87,6 @@ const MIN_PAINT_PX = 0.25
 let seeded = false
 
 const range = ref(props.rangeMin) // minutes (selected window width)
-const poll = ref(props.pollSec) // seconds (selected poll cadence)
 const isNarrow = ref(false) // phone viewport → show half the span
 const isReload = ref(props.autoStart)
 const error = ref('')
@@ -115,7 +104,7 @@ const enabled = ref(true)
 // Called imperatively from tick()/baseOption()/scheduleNext(); NOT reactive/computed,
 // so don't reference it from the template (it won't update there).
 function plan() {
-  return windowPlan(range.value, poll.value, isNarrow.value, props.maxPoints)
+  return windowPlan(range.value, isNarrow.value, props.maxPoints)
 }
 
 /** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
@@ -223,25 +212,26 @@ async function tick() {
     error.value = ''
     enabled.value = snapshot.enabled !== false
     const now = Date.now()
-    // First tick backfills a full window (flat at the current backlog) so the chart is
-    // full from frame one and slides; later ticks append one point + trim the oldest.
+    // First tick backfills a full window of buckets (flat at the current backlog) so the
+    // chart is full from frame one and slides; later ticks fold the reading into the
+    // current time bucket (latest value = current depth) — bucketSnapshot.
     const p = plan()
-    // Keep 2 extra points beyond the window: the seed/newest points would otherwise land
+    // Keep 2 extra buckets beyond the window: the seed/newest points would otherwise land
     // exactly on the edges and slide INSIDE, leaving a triangular gap at the left (and the
-    // line ending short). Overshooting by ~2 steps makes the line span past both edges so
-    // ECharts clips it flush to the plot box. Cheap (+2 of ≤402 points).
+    // line ending short). Overshooting by ~2 buckets makes the line span past both edges so
+    // ECharts clips it flush to the plot box. Cheap (+2 of ~12 points).
     const cap = p.pointCount + 2
     if (!seeded) {
-      series.value = seedSeries(snapshot, now, p.stepMs, cap)
+      series.value = seedSeries(snapshot, now, p.bucketMs, cap)
       seeded = true
     } else {
-      series.value = appendSnapshot(series.value, snapshot, now, cap)
+      series.value = bucketSnapshot(series.value, snapshot, now, p.bucketMs, cap)
     }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
-    // Push the new point(s) with NO animation (animation:false) — the point appears at
-    // its own timestamp on the right and never morphs. The rAF loop owns the x-axis
-    // slide. Merge (not notMerge) keeps the area fills/gradients from redraw().
+    // Push the updated bucket(s) with NO animation (animation:false) — settled points
+    // never morph (only the live tip tracks the current reading). The rAF loop owns the
+    // x-axis slide. Merge (not notMerge) keeps the fills/gradients.
     chart.value?.setOption({
       series: QUEUE_META.map(m => ({ id: m.name, data: series.value[m.name] }))
     })
@@ -292,7 +282,7 @@ function scheduleNext() {
     // Only the current generation reschedules — a chain superseded by start()/stop()
     // (e.g. a range change during an in-flight fetch) dies here.
     if (isReload.value && gen === pollGen) scheduleNext()
-  }, plan().stepMs)
+  }, plan().pollMs)
 }
 function start() {
   isReload.value = true
@@ -346,12 +336,6 @@ function changeRange(v: unknown) {
   const n = Number(v)
   if (!Number.isFinite(n)) return
   range.value = n
-  reseed()
-}
-function changePoll(v: unknown) {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return
-  poll.value = n
   reseed()
 }
 /** Phone breakpoint crossed → the visible span halves/doubles → re-seed the new window. */
@@ -426,14 +410,6 @@ onBeforeUnmount(() => {
             color="air-tertiary-no-accent"
             size="sm"
             @click="toggleReload"
-          />
-          <B24Select
-            :model-value="poll"
-            :items="POLL_ITEMS"
-            size="sm"
-            class="w-28"
-            aria-label="Частота опроса очередей"
-            @update:model-value="changePoll"
           />
           <B24Select
             :model-value="range"

@@ -83,7 +83,6 @@ function previewFetcher(): Promise<QueuesSnapshot> {
         :fetcher="fetcher"
         title="Очереди обработки"
         :range-min="10"
-        :poll-sec="5"
         :max-points="400"
       />
     </main>
