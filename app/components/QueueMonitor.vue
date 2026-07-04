@@ -30,19 +30,30 @@ const props = withDefaults(defineProps<{
   /** Загрузчик снапшота очередей (например, GET /api/ops/queues или демо-генератор). */
   fetcher: () => Promise<QueuesSnapshot>
   title?: string
-  /** Интервал опроса, сек. */
-  intervalSec?: number
-  /** Сколько точек держать в окне (ширина «бегущей ленты»). */
+  /** Видимый диапазон времени, мин (по умолчанию 10). */
+  rangeMin?: number
+  /** Максимум точек в окне — потолок памяти. Шаг опроса выводится из диапазона:
+   *  step = range / maxPoints (не чаще MIN_STEP_MS). Так память ограничена
+   *  независимо от диапазона (4 ч не копит тысячи точек). */
   maxPoints?: number
   autoStart?: boolean
 }>(), {
   title: 'Очереди обработки',
-  intervalSec: 5,
-  maxPoints: 60,
+  rangeMin: 10,
+  maxPoints: 240,
   autoStart: true
 })
 
-const INTERVAL_ITEMS = [2, 5, 10, 30].map(v => ({ label: `каждые ${v} сек`, value: v }))
+/** Выбор видимого диапазона (мин). Шаг опроса подстраивается под диапазон. */
+const RANGE_ITEMS = [
+  { label: '10 минут', value: 10 },
+  { label: '30 минут', value: 30 },
+  { label: '1 час', value: 60 },
+  { label: '2 часа', value: 120 },
+  { label: '4 часа', value: 240 }
+]
+/** Никогда не опрашивать чаще, чем раз в 2 с (даже на самом узком диапазоне). */
+const MIN_STEP_MS = 2000
 
 const chartEl = ref<HTMLElement | null>(null)
 const chart = shallowRef<ECharts | null>(null)
@@ -50,13 +61,14 @@ const chart = shallowRef<ECharts | null>(null)
 let echartsCore: typeof import('echarts/core') | null = null
 let timer: ReturnType<typeof setTimeout> | null = null
 // Generation token for the poll loop: start()/stop() bump it so a chain that was
-// mid-`await tick()` when the interval changed won't reschedule itself — otherwise
-// two loops could run in parallel and double the poll rate.
+// mid-`await tick()` when the range changed (or the component unmounted) won't
+// reschedule itself — otherwise two loops could run in parallel (double poll rate)
+// or a poll could outlive the component and hit a disposed chart.
 let pollGen = 0
 let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
 
-const interval = ref(props.intervalSec)
+const range = ref(props.rangeMin) // minutes
 const isReload = ref(props.autoStart)
 const error = ref('')
 const total = ref(0)
@@ -66,26 +78,30 @@ const series = ref<SeriesPoints>(emptySeries())
 // Right edge of the sliding time window (latest poll time); the X axis follows it
 // so the chart scrolls left as new points arrive. Null until the first tick.
 const lastTickAt = ref<number | null>(null)
-// When polling started — the window grows from here until it reaches the full span,
-// then slides. Keeps the chart looking full on fresh load instead of bunched right.
-const startedAt = ref<number | null>(null)
 
 const nf = new Intl.NumberFormat('ru')
 const fmt = (v: number): string => nf.format(v)
 
 const enabled = ref(true)
 
-/** The [min, max] time window the X axis should show right now — a fixed span
- *  ending at the latest poll, so dates slide left continuously. Early on (before a
- *  full span has elapsed) the left edge is pinned to `startedAt`, so the window
- *  grows to fill the axis rather than leaving the data bunched at the right. */
+/** Visible window width in ms (the selected range). */
+function rangeMs(): number {
+  return range.value * 60_000
+}
+/** Poll/step interval in ms — derived from the range so ~maxPoints points fill the
+ *  window (memory bounded). Clamped so we never poll faster than MIN_STEP_MS; the
+ *  `max(1, …)` on the divisor guards a maxPoints=0 misconfig (else Infinity → dead timer). */
+function stepMs(): number {
+  return Math.max(MIN_STEP_MS, Math.round(rangeMs() / Math.max(1, props.maxPoints)))
+}
+
+/** The [min, max] time window the X axis shows now — a FIXED-width span ending at the
+ *  latest poll. Both edges advance each tick, so the window (with its time/date labels)
+ *  slides right-to-left; at coarse ranges the shift is one step at a time. Empty
+ *  history just fills in from the right over time. */
 function axisWindow(): { min: number, max: number } {
   const max = lastTickAt.value ?? Date.now()
-  const spanStart = max - props.maxPoints * interval.value * 1000
-  const grown = startedAt.value != null ? Math.max(spanStart, startedAt.value) : spanStart
-  // Keep the window at least one interval wide so the first tick (startedAt === max)
-  // doesn't collapse the axis to zero width.
-  return { min: Math.min(grown, max - interval.value * 1000), max }
+  return { min: max - rangeMs(), max }
 }
 
 /** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
@@ -101,6 +117,9 @@ function baseOption() {
   return {
     animation: true,
     animationDurationUpdate: 200,
+    // Nudge overlapping end-labels apart (all queues share y=0 in the idle state →
+    // four "0" would stack on the right edge otherwise).
+    labelLayout: { moveOverlap: 'shiftY' as const },
     grid: { left: 8, right: 40, top: 16, bottom: 24, containLabel: true },
     tooltip: { trigger: 'axis' as const, valueFormatter: (v: number) => fmt(v) },
     legend: { show: false, selected: {} as Record<string, boolean> },
@@ -108,7 +127,8 @@ function baseOption() {
       type: 'time' as const,
       // Fixed sliding window (not data-extent auto-fit) so the axis scrolls smoothly.
       ...axisWindow(),
-      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}' } },
+      // `day` level → a window crossing midnight (up to the 4h range) shows the date.
+      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}', day: '{dd}.{MM}' } },
       axisLine: { lineStyle: { color: c.split } },
       splitLine: { show: true, lineStyle: { color: c.split } }
     },
@@ -131,18 +151,25 @@ function buildSeries(meta: typeof QUEUE_META[number]) {
     emphasis: { focus: 'series' as const },
     data: series.value[meta.name] ?? []
   }
-  // Soft gradient area fill under EVERY series (the "main" queue a touch stronger),
-  // kept low-opacity so 4 overlapping fills stay readable, not muddy.
+  // Area fill under EVERY series with a HORIZONTAL gradient (0,0 → 1,0): left (older)
+  // more opaque, right (newest) transparent — a comet-tail as the chart flows
+  // right→left. Uniform top-to-bottom (no vertical fade). Low alpha so 4 overlapping
+  // fills stay readable. Fades to the SAME hue at 0 alpha (`+00`) so no dark muddying.
   if (echartsCore) {
+    const leftAlpha = meta.main ? 0.34 : 0.20
     s.areaStyle = {
-      opacity: meta.main ? 0.14 : 0.08,
-      color: new echartsCore.graphic.LinearGradient(0, 0, 0, 1, [
-        { offset: 0, color: meta.color },
-        { offset: 1, color: 'rgba(0,0,0,0)' }
+      color: new echartsCore.graphic.LinearGradient(0, 0, 1, 0, [
+        { offset: 0, color: `${meta.color}${alphaHex(leftAlpha)}` },
+        { offset: 1, color: `${meta.color}00` }
       ])
     }
   }
   return s
+}
+
+/** Two-digit hex alpha (0..1 → '00'..'ff') for an 8-digit hex colour. */
+function alphaHex(a: number): string {
+  return Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0')
 }
 
 function redraw() {
@@ -164,7 +191,6 @@ async function tick() {
     enabled.value = snapshot.enabled !== false
     const now = Date.now()
     lastTickAt.value = now
-    if (startedAt.value == null) startedAt.value = now
     series.value = appendSnapshot(series.value, snapshot, now, props.maxPoints)
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
@@ -191,9 +217,9 @@ function scheduleNext() {
   timer = setTimeout(async () => {
     await tick()
     // Only the current generation reschedules — a chain superseded by start()/stop()
-    // (e.g. an interval change during an in-flight fetch) dies here.
+    // (e.g. a range change during an in-flight fetch) dies here.
     if (isReload.value && gen === pollGen) scheduleNext()
-  }, interval.value * 1000)
+  }, stepMs())
 }
 function start() {
   isReload.value = true
@@ -210,8 +236,10 @@ function toggleReload() {
   if (isReload.value) stop()
   else start()
 }
-function changeInterval(v: unknown) {
-  interval.value = Number(v)
+function changeRange(v: unknown) {
+  range.value = Number(v)
+  // Re-render the axis window immediately (new span) even while paused.
+  chart.value?.setOption({ xAxis: axisWindow() })
   if (isReload.value) start()
 }
 function toggleLine(row: QueueLegendRow) {
@@ -243,7 +271,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  stopTimer()
+  // stop() (not just stopTimer()) bumps pollGen + clears isReload, so a tick that is
+  // mid-fetch at unmount won't reschedule itself onto the disposed chart.
+  stop()
   ro?.disconnect()
   themeObserver?.disconnect()
   chart.value?.dispose()
@@ -266,11 +296,12 @@ onBeforeUnmount(() => {
             @click="toggleReload"
           />
           <B24Select
-            :model-value="interval"
-            :items="INTERVAL_ITEMS"
+            :model-value="range"
+            :items="RANGE_ITEMS"
             size="sm"
-            class="w-40"
-            @update:model-value="changeInterval"
+            class="w-36"
+            aria-label="Диапазон времени графика"
+            @update:model-value="changeRange"
           />
         </div>
       </div>

@@ -82,8 +82,8 @@ function previewFetcher(): Promise<QueuesSnapshot> {
       <QueueMonitor
         :fetcher="fetcher"
         title="Очереди обработки"
-        :interval-sec="5"
-        :max-points="60"
+        :range-min="10"
+        :max-points="240"
       />
     </main>
   </AuthGate>
