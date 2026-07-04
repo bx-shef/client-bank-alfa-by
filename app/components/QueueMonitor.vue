@@ -18,6 +18,7 @@ import PauseLIcon from '@bitrix24/b24icons-vue/outline/PauseLIcon'
 import {
   QUEUE_META,
   appendSnapshot,
+  seedSeries,
   emptySeries,
   legendRows,
   totalBacklog,
@@ -67,6 +68,10 @@ let timer: ReturnType<typeof setTimeout> | null = null
 let pollGen = 0
 let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
+// The first successful tick BACKFILLS a full window (seedSeries) so the chart starts
+// full and immediately slides — no "grow from empty / clamped first date". Afterwards
+// each tick appends one point. Reset to false on a range change to re-seed the new span.
+let seeded = false
 
 const range = ref(props.rangeMin) // minutes
 const isReload = ref(props.autoStart)
@@ -75,9 +80,6 @@ const total = ref(0)
 const rows = ref<QueueLegendRow[]>([])
 const hidden = ref<Record<string, boolean>>({})
 const series = ref<SeriesPoints>(emptySeries())
-// Right edge of the sliding time window (latest poll time); the X axis follows it
-// so the chart scrolls left as new points arrive. Null until the first tick.
-const lastTickAt = ref<number | null>(null)
 
 const nf = new Intl.NumberFormat('ru')
 const fmt = (v: number): string => nf.format(v)
@@ -95,13 +97,13 @@ function stepMs(): number {
   return Math.max(MIN_STEP_MS, Math.round(rangeMs() / Math.max(1, props.maxPoints)))
 }
 
-/** The [min, max] time window the X axis shows now — a FIXED-width span ending at the
- *  latest poll. Both edges advance each tick, so the window (with its time/date labels)
- *  slides right-to-left; at coarse ranges the shift is one step at a time. Empty
- *  history just fills in from the right over time. */
-function axisWindow(): { min: number, max: number } {
-  const max = lastTickAt.value ?? Date.now()
-  return { min: max - rangeMs(), max }
+/** Update-animation duration (ms). Matching it to the poll step makes the axis GLIDE
+ *  the whole way from one position to the next — a continuous right-to-left conveyor —
+ *  instead of a short hop then a freeze (the old jerky 200ms). Floored so it stays
+ *  visible, capped so a very wide range doesn't run a minutes-long tween (CPU); at the
+ *  typical 10–30 min ranges the step is a few seconds, so motion is fully continuous. */
+function updateDurationMs(): number {
+  return Math.min(5000, Math.max(600, stepMs()))
 }
 
 /** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
@@ -116,7 +118,11 @@ function baseOption() {
   const c = themeColors()
   return {
     animation: true,
-    animationDurationUpdate: 200,
+    // Continuous conveyor: the axis extent shifts by exactly one step each tick and
+    // ECharts tweens to it LINEARLY over ~one step — so the graph flows smoothly
+    // right-to-left instead of snapping. See updateDurationMs().
+    animationDurationUpdate: updateDurationMs(),
+    animationEasingUpdate: 'linear' as const,
     // Nudge overlapping end-labels apart (all queues share y=0 in the idle state →
     // four "0" would stack on the right edge otherwise).
     labelLayout: { moveOverlap: 'shiftY' as const },
@@ -125,8 +131,11 @@ function baseOption() {
     legend: { show: false, selected: {} as Record<string, boolean> },
     xAxis: {
       type: 'time' as const,
-      // Fixed sliding window (not data-extent auto-fit) so the axis scrolls smoothly.
-      ...axisWindow(),
+      // EXACT data extent (dataMin/dataMax), not ECharts' "nice"-rounded bounds — so the
+      // window shifts by precisely one step per tick (no snap to round minutes) and the
+      // update animation carries the whole line + axis labels smoothly leftward.
+      min: 'dataMin' as const,
+      max: 'dataMax' as const,
       // `day` level → a window crossing midnight (up to the 4h range) shows the date.
       axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}', day: '{dd}.{MM}' } },
       axisLine: { lineStyle: { color: c.split } },
@@ -190,14 +199,20 @@ async function tick() {
     error.value = ''
     enabled.value = snapshot.enabled !== false
     const now = Date.now()
-    lastTickAt.value = now
-    series.value = appendSnapshot(series.value, snapshot, now, props.maxPoints)
+    // First tick backfills a full window (flat at the current backlog) so the chart is
+    // full from frame one and slides; later ticks append one point + trim the oldest.
+    if (!seeded) {
+      series.value = seedSeries(snapshot, now, stepMs(), props.maxPoints)
+      seeded = true
+    } else {
+      series.value = appendSnapshot(series.value, snapshot, now, props.maxPoints)
+    }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
-    // Advance the sliding window (X axis follows `now`) and update the series data
-    // (ECharts diffs + animates the change), so dates scroll left each poll.
+    // Only the data changes; the axis extent (dataMin/dataMax) follows it and ECharts
+    // tweens the whole line + labels leftward — the conveyor. Merge (not notMerge) keeps
+    // the area fills/gradients from redraw() so they don't rebuild every tick.
     chart.value?.setOption({
-      xAxis: axisWindow(),
       series: QUEUE_META.map(m => ({ id: m.name, data: series.value[m.name] }))
     })
   } catch (e) {
@@ -231,16 +246,42 @@ function stop() {
   isReload.value = false
   pollGen++
   stopTimer()
+  // Re-seed on the next resume: after a pause (or a fetch error), the retained window
+  // is stale — resuming would append across the pause gap and, with dataMin/dataMax,
+  // stretch the axis past the selected range and draw a straight bridge over the gap.
+  // Dropping `seeded` makes the resume rebuild a fresh full window at current backlog.
+  seeded = false
 }
 function toggleReload() {
   if (isReload.value) stop()
   else start()
 }
+/** Pause the poll+animation loop while the tab is hidden (the linear tween is now
+ *  near-continuous — no point burning CPU/fetches off-screen), and resume on return.
+ *  Keeps `isReload` (the ▶/⏸ state) untouched; drops `seeded` so the return re-seeds a
+ *  fresh window rather than bridging the hidden gap (same reasoning as stop()). */
+function onVisibility() {
+  if (typeof document === 'undefined') return
+  if (document.hidden) {
+    pollGen++
+    stopTimer()
+    seeded = false
+  } else if (isReload.value) {
+    pollGen++
+    stopTimer()
+    scheduleNext()
+  }
+}
 function changeRange(v: unknown) {
   range.value = Number(v)
-  // Re-render the axis window immediately (new span) even while paused.
-  chart.value?.setOption({ xAxis: axisWindow() })
+  // New span → new step → re-seed a fresh full window and re-apply the matching
+  // update-animation duration (redraw rebuilds baseOption with updateDurationMs()).
+  seeded = false
+  redraw()
+  // Repaint immediately (even while paused) instead of waiting up to a full step;
+  // if running, start() schedules the ongoing loop.
   if (isReload.value) start()
+  void tick()
 }
 function toggleLine(row: QueueLegendRow) {
   hidden.value = { ...hidden.value, [row.name]: !hidden.value[row.name] }
@@ -266,6 +307,7 @@ onMounted(async () => {
   // Re-theme the canvas when the OS/user toggles light↔dark (`.dark` on <html>).
   themeObserver = new MutationObserver(() => redraw())
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+  document.addEventListener('visibilitychange', onVisibility)
   await tick()
   if (props.autoStart) start()
 })
@@ -276,7 +318,12 @@ onBeforeUnmount(() => {
   stop()
   ro?.disconnect()
   themeObserver?.disconnect()
+  document.removeEventListener('visibilitychange', onVisibility)
   chart.value?.dispose()
+  // Null the ref AFTER dispose so a tick still mid-fetch (e.g. changeRange's `void
+  // tick()`) resolving post-unmount hits `chart.value?.setOption` as a no-op instead
+  // of calling into a disposed ECharts instance.
+  chart.value = null
 })
 </script>
 

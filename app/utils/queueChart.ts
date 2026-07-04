@@ -61,6 +61,34 @@ export function emptySeries(): SeriesPoints {
 }
 
 /**
+ * Backfill a FULL window from a single snapshot, so the chart starts full and slides
+ * immediately (no "grow from empty / clamped first date"). Produces `count` points
+ * per queue at the snapshot's current backlog, timestamps `nowMs-(count-1)*stepMs …
+ * nowMs`. The endpoint gives only a current snapshot (no history), so the seeded past
+ * is a flat line at the current value — real data then flows in from the right. Pure.
+ */
+export function seedSeries(
+  snapshot: QueuesSnapshot,
+  nowMs: number,
+  stepMs: number,
+  count: number
+): SeriesPoints {
+  // Guard non-finite inputs too: Math.floor(NaN)=NaN and Math.max(1,NaN)=NaN, which
+  // would slip past a bare clamp and yield empty/NaN windows. A NaN can reach here via
+  // the component (Number('') on a bad range select → NaN step). Fall back to 1.
+  const n = Math.max(1, Math.floor(Number.isFinite(count) ? count : 1))
+  const step = Math.max(1, Math.floor(Number.isFinite(stepMs) ? stepMs : 1))
+  const out: SeriesPoints = {}
+  for (const q of QUEUE_META) {
+    const value = backlog(snapshot.queues?.[q.name])
+    const points: Array<[number, number]> = []
+    for (let i = n - 1; i >= 0; i--) points.push([nowMs - i * step, value])
+    out[q.name] = points
+  }
+  return out
+}
+
+/**
  * Append one snapshot as a new point (`[tsMs, backlog]`) to every queue's window,
  * trimming to `maxPoints` (drops the oldest on the left — the running-tape effect).
  * Pure: returns a NEW SeriesPoints, does not mutate `prev`. A point with a
