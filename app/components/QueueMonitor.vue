@@ -505,7 +505,7 @@ onBeforeUnmount(() => {
              plots), the last two are running totals — the part that reads as "processed". -->
         <p class="mt-2 text-[11px] leading-snug text-(--ui-color-base-4)">
           «Ждут» и «в работе» — сейчас (их сумма = высота линии). «Готово» и «ошибки» —
-          всего с запуска сервиса, накопительно.
+          счётчики уже обработанных задач, а не текущая очередь.
         </p>
       </div>
     </div>
