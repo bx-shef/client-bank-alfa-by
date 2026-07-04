@@ -114,6 +114,55 @@ export function appendSnapshot(
   return next
 }
 
+/** The derived plan for the sliding window: visible span, point spacing, how many
+ *  points fill it, and the update-animation duration. All numbers, all finite. */
+export interface WindowPlan {
+  /** Visible time span in ms (already halved on a phone). */
+  windowMs: number
+  /** Spacing between points = effective poll cadence in ms (memory-floored). */
+  stepMs: number
+  /** Points that fill the window — seed size and trim cap (≥2, ≤ maxPoints). */
+  pointCount: number
+  /** ECharts update-animation duration in ms. */
+  durationMs: number
+}
+
+/** The slowest an update tween runs. Matching the tween to the step gives a continuous
+ *  right-to-left glide at short (narrow-range) steps — the smooth conveyor. But a wide
+ *  range's step is tens of seconds over ~maxPoints vertices; tweening that whole span
+ *  every tick would repaint thousands of vertices every frame forever (CPU). Capping at
+ *  5 s makes wide ranges PAINT-then-REST (a short glide, then idle until the next tick)
+ *  while narrow ranges (step ≤ 5 s) still glide continuously. */
+const MAX_ANIM_MS = 5000
+
+/**
+ * Derive the sliding-window plan from the operator's choices. Pure (no DOM/refs) so it
+ * is unit-testable and the component just consumes it.
+ *
+ * - `stepMs` is the SELECTED poll cadence, but floored so the full window fits within
+ *   `maxPoints` (memory ceiling) — at wide ranges the step coarsens and the poll knob
+ *   effectively no-ops (you can't hold 2 s resolution across 4 h without huge memory).
+ * - On a phone the span is halved (narrower axis, fewer/legible points).
+ * - Non-finite / non-positive inputs fall back to sane defaults (never NaN/Infinity).
+ */
+export function windowPlan(
+  rangeMin: number,
+  pollSec: number,
+  isNarrow: boolean,
+  maxPoints: number
+): WindowPlan {
+  const cap = Math.max(1, Math.floor(Number.isFinite(maxPoints) ? maxPoints : 1))
+  const rangeM = Number.isFinite(rangeMin) && rangeMin > 0 ? rangeMin : 10
+  const pollS = Number.isFinite(pollSec) && pollSec > 0 ? pollSec : 5
+  const windowMs = rangeM * 60_000 * (isNarrow ? 0.5 : 1)
+  const wanted = Math.max(1000, Math.round(pollS * 1000))
+  const memFloor = Math.ceil(windowMs / cap)
+  const stepMs = Math.max(wanted, memFloor)
+  const pointCount = Math.max(2, Math.round(windowMs / stepMs))
+  const durationMs = Math.min(MAX_ANIM_MS, stepMs)
+  return { windowMs, stepMs, pointCount, durationMs }
+}
+
 /** One legend-table row: current counters for a queue (0 when absent/disabled). */
 export interface QueueLegendRow {
   name: string
