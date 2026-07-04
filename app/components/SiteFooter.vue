@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { shortSha, commitUrl } from '~/utils/build'
+import { shortSha, commitUrl, REPO_URL } from '~/utils/build'
+
+// Уведомления о сторонних open-source компонентах (Apache-2.0 ECharts NOTICE,
+// OFL-шрифты и пр.) — обязательная атрибуция, см. THIRD_PARTY_NOTICES.md.
+const licensesUrl = `${REPO_URL}/blob/main/THIRD_PARTY_NOTICES.md`
 
 // Реквизиты ИП. Ссылки на реквизиты/политику ведут на основной сайт
 // offer.bx-shef.by (у этого лендинга нет своих /legal, /privacy).
@@ -52,6 +56,12 @@ const shaHref = computed(() => commitUrl(commitSha as string))
         rel="noopener noreferrer"
         class="hover:text-white hover:underline"
       >Политика конфиденциальности</a>
+      <a
+        :href="licensesUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="hover:text-white hover:underline"
+      >Открытый код</a>
       <a
         :href="shaHref"
         target="_blank"
