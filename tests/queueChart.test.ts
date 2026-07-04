@@ -54,10 +54,10 @@ describe('bucketSnapshot', () => {
     expect(prev['bank-fetch']).toEqual([]) // prev untouched
   })
 
-  it('same bucket: advances the live point to now, keeps the running MAX (no Y drop)', () => {
+  it('same bucket: advances the live point to the LATEST reading (tracks current depth)', () => {
     let s = bucketSnapshot(emptySeries(), snap({ 'crm-sync': { waiting: 5 } }), 1100, bucket, 60)
     s = bucketSnapshot(s, snap({ 'crm-sync': { waiting: 2 } }), 1400, bucket, 60) // same bucket (floor 1), lower
-    expect(s['crm-sync']).toEqual([[1400, 5]]) // one point, ts advanced, value = max(5,2)
+    expect(s['crm-sync']).toEqual([[1400, 2]]) // one point, ts advanced, value = latest (2, not max)
     s = bucketSnapshot(s, snap({ 'crm-sync': { waiting: 9 } }), 1700, bucket, 60) // same bucket, higher
     expect(s['crm-sync']).toEqual([[1700, 9]])
   })

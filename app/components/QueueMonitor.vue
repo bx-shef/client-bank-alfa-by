@@ -214,7 +214,7 @@ async function tick() {
     const now = Date.now()
     // First tick backfills a full window of buckets (flat at the current backlog) so the
     // chart is full from frame one and slides; later ticks fold the reading into the
-    // current time bucket (running max) — bucketSnapshot.
+    // current time bucket (latest value = current depth) — bucketSnapshot.
     const p = plan()
     // Keep 2 extra buckets beyond the window: the seed/newest points would otherwise land
     // exactly on the edges and slide INSIDE, leaving a triangular gap at the left (and the
@@ -229,8 +229,9 @@ async function tick() {
     }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
-    // Push the updated bucket(s) with NO animation (animation:false) — points never morph.
-    // The rAF loop owns the x-axis slide. Merge (not notMerge) keeps the fills/gradients.
+    // Push the updated bucket(s) with NO animation (animation:false) — settled points
+    // never morph (only the live tip tracks the current reading). The rAF loop owns the
+    // x-axis slide. Merge (not notMerge) keeps the fills/gradients.
     chart.value?.setOption({
       series: QUEUE_META.map(m => ({ id: m.name, data: series.value[m.name] }))
     })

@@ -90,11 +90,16 @@ export function seedSeries(
 
 /**
  * Fold one poll snapshot into the current TIME BUCKET of every queue's window (not one
- * point per poll — one point per `bucketMs` interval). The live (rightmost) bucket keeps
- * a running MAX and tracks `tsMs`; when `tsMs` crosses into a new bucket a fresh point
- * starts, freezing the previous one. Older buckets never change → they slide left without
- * ever moving in Y. Aggregating by max surfaces the peak backlog in each interval (an
- * average would hide short spikes). Pure: returns a NEW SeriesPoints. Trims to `cap`.
+ * point per poll — one point per `bucketMs` interval). The live (rightmost) bucket shows
+ * the LATEST reading and tracks `tsMs`; when `tsMs` crosses into a new bucket a fresh
+ * point starts, freezing the previous one. SETTLED (non-last) points never change → they
+ * slide left without ever moving in Y; only the live tip tracks the current depth.
+ *
+ * Backlog is an instantaneous LEVEL (a gauge), so the point is the latest reading — a
+ * faithful depth trace. (A running max would turn the line into an upper envelope: a
+ * 2 s spike would inflate the whole bucket and freeze it high, and the leading edge would
+ * ratchet up then snap down each bucket — a sawtooth. LAST avoids both and keeps
+ * consecutive buckets continuous.) Pure: returns a NEW SeriesPoints. Trims to `cap`.
  *
  * A point's bucket is derived from its own timestamp (`floor(ts/bucketMs)`), so no extra
  * per-point state is needed: the live point's ts is always inside its bucket.
@@ -115,8 +120,8 @@ export function bucketSnapshot(
     const last = points[points.length - 1]
     const value = backlog(snapshot.queues?.[q.name])
     if (last && Math.floor(last[0] / bucket) === b) {
-      // Same bucket: advance the live point to now, keep the running max.
-      points[points.length - 1] = [tsMs, Math.max(last[1], value)]
+      // Same bucket: advance the live point to the latest reading (current depth).
+      points[points.length - 1] = [tsMs, value]
     } else {
       points.push([tsMs, value])
     }
