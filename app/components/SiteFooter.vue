@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { shortSha, commitUrl, REPO_URL } from '~/utils/build'
+import { shortSha, commitUrl } from '~/utils/build'
 
 // Уведомления о сторонних open-source компонентах (Apache-2.0 ECharts NOTICE,
-// OFL-шрифты и пр.) — обязательная атрибуция, см. THIRD_PARTY_NOTICES.md.
-const licensesUrl = `${REPO_URL}/blob/main/THIRD_PARTY_NOTICES.md`
+// OFL-шрифты, BSD zrender и пр.) — обязательная атрибуция. Файл отдаётся САМИМ
+// сайтом (public/ → бандл), чтобы уведомление ехало вместе с артефактом (Apache §4 /
+// OFL требуют, чтобы лицензия сопровождала код и шрифты), а не только ссылкой на GitHub.
+const licensesUrl = '/THIRD_PARTY_NOTICES.txt'
 
 // Реквизиты ИП. Ссылки на реквизиты/политику ведут на основной сайт
 // offer.bx-shef.by (у этого лендинга нет своих /legal, /privacy).
