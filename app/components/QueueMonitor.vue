@@ -81,11 +81,16 @@ let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
 let mql: MediaQueryList | null = null
 // requestAnimationFrame handle + last-painted timestamp for the axis-slide loop.
-// The slide is throttled to ~30fps (paint every FRAME_MS) — smooth enough, far cheaper
-// than 60fps setOption. 0 = not running.
+// 0 = not running.
 let rafId = 0
 let lastFrameAt = 0
-const FRAME_MS = 33
+// Repaint only once the axis has advanced ~¼px since the last paint (a sub-pixel step is
+// AA-smooth), floored at ~30fps so a narrow range stays fluid. This paces the redraw to
+// the ACTUAL motion: a 10-min window creeps <2px/s so it needs only a few fps; a 4-h
+// window barely moves so it rests between paints — far cheaper than a flat 30fps that
+// redraws ~1600 vertices forever regardless of how little the axis moved.
+const MIN_FRAME_MS = 33
+const MIN_PAINT_PX = 0.25
 // The first successful tick BACKFILLS a full window (seedSeries) so the chart starts
 // full and immediately slides — no "grow from empty / clamped first date". Afterwards
 // each tick appends one point. Reset to false on a range change to re-seed the new span.
@@ -221,11 +226,16 @@ async function tick() {
     // First tick backfills a full window (flat at the current backlog) so the chart is
     // full from frame one and slides; later ticks append one point + trim the oldest.
     const p = plan()
+    // Keep 2 extra points beyond the window: the seed/newest points would otherwise land
+    // exactly on the edges and slide INSIDE, leaving a triangular gap at the left (and the
+    // line ending short). Overshooting by ~2 steps makes the line span past both edges so
+    // ECharts clips it flush to the plot box. Cheap (+2 of ≤402 points).
+    const cap = p.pointCount + 2
     if (!seeded) {
-      series.value = seedSeries(snapshot, now, p.stepMs, p.pointCount)
+      series.value = seedSeries(snapshot, now, p.stepMs, cap)
       seeded = true
     } else {
-      series.value = appendSnapshot(series.value, snapshot, now, p.pointCount)
+      series.value = appendSnapshot(series.value, snapshot, now, cap)
     }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
@@ -255,7 +265,12 @@ function renderFrame() {
   rafId = 0
   if (!isReload.value || !chart.value) return
   const now = Date.now()
-  if (now - lastFrameAt >= FRAME_MS) {
+  // Paint interval = time for the axis to travel MIN_PAINT_PX, floored at MIN_FRAME_MS.
+  // ms-per-px = windowMs / chart width; wide windows → long interval (rest), narrow →
+  // short (fluid). getWidth() is the canvas width (plot area is a bit less — close enough).
+  const widthPx = Math.max(1, chart.value.getWidth())
+  const interval = Math.max(MIN_FRAME_MS, (plan().windowMs / widthPx) * MIN_PAINT_PX)
+  if (now - lastFrameAt >= interval) {
     lastFrameAt = now
     chart.value.setOption({ xAxis: currentWindow(now) })
   }
