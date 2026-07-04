@@ -80,6 +80,17 @@ let pollGen = 0
 let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
 let mql: MediaQueryList | null = null
+// requestAnimationFrame handle + last-painted timestamp for the axis-slide loop.
+// 0 = not running.
+let rafId = 0
+let lastFrameAt = 0
+// Repaint only once the axis has advanced ~¼px since the last paint (a sub-pixel step is
+// AA-smooth), floored at ~30fps so a narrow range stays fluid. This paces the redraw to
+// the ACTUAL motion: a 10-min window creeps <2px/s so it needs only a few fps; a 4-h
+// window barely moves so it rests between paints — far cheaper than a flat 30fps that
+// redraws ~1600 vertices forever regardless of how little the axis moved.
+const MIN_FRAME_MS = 33
+const MIN_PAINT_PX = 0.25
 // The first successful tick BACKFILLS a full window (seedSeries) so the chart starts
 // full and immediately slides — no "grow from empty / clamped first date". Afterwards
 // each tick appends one point. Reset to false on a range change to re-seed the new span.
@@ -115,15 +126,23 @@ function themeColors() {
     : { axis: '#6b7280', split: 'rgba(0,0,0,0.10)' }
 }
 
+/** The [min, max] wall-clock window shown now: [now − span, now]. The rAF loop pushes
+ *  this every frame, so the axis slides continuously right-to-left while each plotted
+ *  point keeps its own (timestamp, value) — the point's Y never moves, it only scrolls
+ *  left. `atMs` lets callers pass a shared frame timestamp. */
+function currentWindow(atMs: number): { min: number, max: number } {
+  return { min: atMs - plan().windowMs, max: atMs }
+}
+
 function baseOption() {
   const c = themeColors()
   return {
-    animation: true,
-    // Continuous conveyor: the axis extent shifts by one step each tick and ECharts
-    // tweens to it LINEARLY. At narrow ranges the duration == step → a seamless glide;
-    // at wide ranges it's capped so the chart paints then rests (see windowPlan).
-    animationDurationUpdate: plan().durationMs,
-    animationEasingUpdate: 'linear' as const,
+    // NO update animation. Motion is a rAF axis-slide (see renderFrame), NOT an ECharts
+    // data tween — a data tween interpolates points BY INDEX, so when the window shifts
+    // (drop oldest, append newest) every point morphs toward its neighbour's value and
+    // the whole line jumps in Y. With animation off, a plotted point holds its Y and the
+    // moving axis just carries it leftward. Initial draw is instant (seed fills the window).
+    animation: false as const,
     // Nudge overlapping end-labels apart (all queues share y=0 in the idle state →
     // four "0" would stack on the right edge otherwise).
     labelLayout: { moveOverlap: 'shiftY' as const },
@@ -132,14 +151,13 @@ function baseOption() {
     legend: { show: false, selected: {} as Record<string, boolean> },
     xAxis: {
       type: 'time' as const,
-      // EXACT data extent (dataMin/dataMax), not ECharts' "nice"-rounded bounds — so the
-      // window shifts by precisely one step per tick (no snap to round minutes) and the
-      // update animation carries the whole line + axis labels smoothly leftward.
-      min: 'dataMin' as const,
-      max: 'dataMax' as const,
+      // Explicit numeric [now-span, now] window (not data extent) — the rAF loop advances
+      // both edges every frame for a smooth continuous slide, independent of when data
+      // points actually arrive.
+      ...currentWindow(Date.now()),
       // Keep ticks ≥1 min apart so labels stay minute-level even on the narrow
-      // (phone, half-span) window — otherwise the exact dataMin/dataMax extent lands
-      // ticks on half-minute marks and ECharts drops to a noisy `HH:mm:ss` format.
+      // (phone, half-span) window — otherwise ticks can land on half-minute marks and
+      // ECharts drops to a noisy `HH:mm:ss` format.
       minInterval: 60_000,
       // `day` level → a window crossing midnight (up to the 4h range) shows the date.
       // `second` still maps to HH:mm (no seconds) as a belt-and-suspenders fallback.
@@ -208,17 +226,22 @@ async function tick() {
     // First tick backfills a full window (flat at the current backlog) so the chart is
     // full from frame one and slides; later ticks append one point + trim the oldest.
     const p = plan()
+    // Keep 2 extra points beyond the window: the seed/newest points would otherwise land
+    // exactly on the edges and slide INSIDE, leaving a triangular gap at the left (and the
+    // line ending short). Overshooting by ~2 steps makes the line span past both edges so
+    // ECharts clips it flush to the plot box. Cheap (+2 of ≤402 points).
+    const cap = p.pointCount + 2
     if (!seeded) {
-      series.value = seedSeries(snapshot, now, p.stepMs, p.pointCount)
+      series.value = seedSeries(snapshot, now, p.stepMs, cap)
       seeded = true
     } else {
-      series.value = appendSnapshot(series.value, snapshot, now, p.pointCount)
+      series.value = appendSnapshot(series.value, snapshot, now, cap)
     }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
-    // Only the data changes; the axis extent (dataMin/dataMax) follows it and ECharts
-    // tweens the whole line + labels leftward — the conveyor. Merge (not notMerge) keeps
-    // the area fills/gradients from redraw() so they don't rebuild every tick.
+    // Push the new point(s) with NO animation (animation:false) — the point appears at
+    // its own timestamp on the right and never morphs. The rAF loop owns the x-axis
+    // slide. Merge (not notMerge) keeps the area fills/gradients from redraw().
     chart.value?.setOption({
       series: QUEUE_META.map(m => ({ id: m.name, data: series.value[m.name] }))
     })
@@ -232,6 +255,34 @@ function stopTimer() {
   if (timer) {
     clearTimeout(timer)
     timer = null
+  }
+}
+/** The rAF axis-slide: every ~FRAME_MS push a fresh [now-span, now] window so the chart
+ *  scrolls smoothly left. Runs only while playing (isReload); rAF also self-pauses when
+ *  the tab is hidden. Reads the live `plan().windowMs`, so range/poll/breakpoint changes
+ *  take effect on the next frame with no restart. */
+function renderFrame() {
+  rafId = 0
+  if (!isReload.value || !chart.value) return
+  const now = Date.now()
+  // Paint interval = time for the axis to travel MIN_PAINT_PX, floored at MIN_FRAME_MS.
+  // ms-per-px = windowMs / chart width; wide windows → long interval (rest), narrow →
+  // short (fluid). getWidth() is the canvas width (plot area is a bit less — close enough).
+  const widthPx = Math.max(1, chart.value.getWidth())
+  const interval = Math.max(MIN_FRAME_MS, (plan().windowMs / widthPx) * MIN_PAINT_PX)
+  if (now - lastFrameAt >= interval) {
+    lastFrameAt = now
+    chart.value.setOption({ xAxis: currentWindow(now) })
+  }
+  rafId = requestAnimationFrame(renderFrame)
+}
+function startRaf() {
+  if (!rafId && typeof requestAnimationFrame !== 'undefined') rafId = requestAnimationFrame(renderFrame)
+}
+function stopRaf() {
+  if (rafId) {
+    cancelAnimationFrame(rafId)
+    rafId = 0
   }
 }
 function scheduleNext() {
@@ -248,41 +299,43 @@ function start() {
   pollGen++
   stopTimer()
   scheduleNext()
+  startRaf()
 }
 function stop() {
   isReload.value = false
   pollGen++
   stopTimer()
-  // Re-seed on the next resume: after a pause (or a fetch error), the retained window
-  // is stale — resuming would append across the pause gap and, with dataMin/dataMax,
-  // stretch the axis past the selected range and draw a straight bridge over the gap.
-  // Dropping `seeded` makes the resume rebuild a fresh full window at current backlog.
+  stopRaf() // freeze the slide for inspection while paused
+  // Re-seed on the next resume: after a pause (or a fetch error) the retained window is
+  // stale — resuming would append across the pause gap and draw a straight bridge over
+  // it. Dropping `seeded` makes the resume rebuild a fresh full window at current backlog.
   seeded = false
 }
 function toggleReload() {
   if (isReload.value) stop()
   else start()
 }
-/** Pause the poll+animation loop while the tab is hidden (the linear tween is now
- *  near-continuous — no point burning CPU/fetches off-screen), and resume on return.
- *  Keeps `isReload` (the ▶/⏸ state) untouched; drops `seeded` so the return re-seeds a
- *  fresh window rather than bridging the hidden gap (same reasoning as stop()). */
+/** Pause polling + the axis-slide while the tab is hidden (no point burning CPU/fetches
+ *  off-screen), and resume on return. Keeps `isReload` (the ▶/⏸ state) untouched; drops
+ *  `seeded` so the return re-seeds a fresh window rather than bridging the hidden gap. */
 function onVisibility() {
   if (typeof document === 'undefined') return
   if (document.hidden) {
     pollGen++
     stopTimer()
+    stopRaf()
     seeded = false
   } else if (isReload.value) {
     pollGen++
     stopTimer()
     scheduleNext()
+    startRaf()
   }
 }
 /** Re-seed a fresh full window after any span/step change (range, poll cadence, or the
- *  phone/desktop breakpoint). redraw() rebuilds baseOption so the new updateDurationMs()
- *  (and axis) take effect; a repaint fires immediately so the change shows even while
- *  paused; if running, start() reschedules the loop at the new step. */
+ *  phone/desktop breakpoint). redraw() rebuilds baseOption (new axis span); a repaint
+ *  fires immediately so the change shows even while paused; if running, start()
+ *  reschedules the poll loop + slide at the new step. */
 function reseed() {
   seeded = false
   redraw()
