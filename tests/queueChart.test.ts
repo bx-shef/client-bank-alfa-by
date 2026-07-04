@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   QUEUE_META,
   appendSnapshot,
+  seedSeries,
   backlog,
   emptySeries,
   legendRows,
@@ -71,6 +72,34 @@ describe('appendSnapshot', () => {
     let s = appendSnapshot(emptySeries(), snap({ 'crm-sync': { waiting: 1 } }), 1, 0)
     s = appendSnapshot(s, snap({ 'crm-sync': { waiting: 2 } }), 2, 0)
     expect(s['crm-sync']).toEqual([[2, 2]])
+  })
+})
+
+describe('seedSeries', () => {
+  it('backfills a full window (count points) per queue, flat at current backlog', () => {
+    const s = seedSeries(snap({ 'crm-sync': { waiting: 2, active: 1 } }), 1000, 10, 3)
+    expect(Object.keys(s).sort()).toEqual(QUEUE_META.map(q => q.name).sort())
+    // count=3, step=10, now=1000 → timestamps 980, 990, 1000; value = backlog = 3
+    expect(s['crm-sync']).toEqual([[980, 3], [990, 3], [1000, 3]])
+    expect(s['b24-events']).toEqual([[980, 0], [990, 0], [1000, 0]]) // absent → 0
+  })
+
+  it('ends exactly at nowMs so the seam with the first appended point is continuous', () => {
+    const s = seedSeries(snap({ 'crm-sync': { waiting: 4 } }), 5000, 100, 5)
+    const pts = s['crm-sync']!
+    expect(pts[pts.length - 1]![0]).toBe(5000)
+    expect(pts.length).toBe(5)
+  })
+
+  it('clamps count and step to at least 1 (never empty / zero-width)', () => {
+    const s = seedSeries(snap({ 'crm-sync': { waiting: 1 } }), 1000, 0, 0)
+    expect(s['crm-sync']).toEqual([[1000, 1]]) // one point at now
+  })
+
+  it('an appended point continues the seeded window one step to the right', () => {
+    const seeded = seedSeries(snap({ 'crm-sync': { waiting: 1 } }), 1000, 10, 3)
+    const next = appendSnapshot(seeded, snap({ 'crm-sync': { waiting: 2 } }), 1010, 3)
+    expect(next['crm-sync']).toEqual([[990, 1], [1000, 1], [1010, 2]]) // slid one step, cap 3
   })
 })
 
