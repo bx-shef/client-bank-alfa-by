@@ -401,7 +401,7 @@ onBeforeUnmount(() => {
     <template #header>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h3 class="font-semibold">
-          {{ title }} — в очередях {{ fmt(total) }}
+          {{ title }} — сейчас в очереди {{ fmt(total) }}
         </h3>
         <div class="flex flex-wrap items-center gap-2">
           <B24Button
@@ -451,6 +451,13 @@ onBeforeUnmount(() => {
       На телефоне показана половина выбранного окна.
     </p>
 
+    <!-- Explain the metric up front: the exact misread is "these look like counts of
+         processed items". The line is the CURRENT queue length, not throughput. -->
+    <p class="mb-3 text-xs text-(--ui-color-base-3)">
+      Высота линии — сколько задач <strong>сейчас</strong> в очереди (ждут + в работе),
+      а не сколько уже обработано. Чем выше, тем больше скопилось необработанного.
+    </p>
+
     <!-- Chart spans the FULL card width (wider is easier to read a live trend); the
          legend table sits below it rather than stealing horizontal room. -->
     <div class="flex flex-col gap-4">
@@ -459,15 +466,15 @@ onBeforeUnmount(() => {
       <div
         ref="chartEl"
         role="img"
-        :aria-label="`График длины очередей обработки, всего в очередях: ${total}`"
+        :aria-label="`График длины очередей: сколько задач сейчас ждут и в работе. Всего в очереди: ${total}`"
         class="h-80 w-full sm:h-96"
       />
 
       <div class="w-full max-w-2xl">
-        <div class="grid grid-cols-[minmax(0,1fr)_repeat(4,2.5rem)] gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) pb-1.5 text-[11px] font-semibold text-(--ui-color-base-3)">
+        <div class="grid grid-cols-[minmax(0,1fr)_repeat(4,3rem)] gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) pb-1.5 text-[11px] font-semibold text-(--ui-color-base-3)">
           <span>Очередь</span>
           <span class="text-center">ждут</span>
-          <span class="text-center">работа</span>
+          <span class="text-center">в работе</span>
           <span class="text-center">готово</span>
           <span class="text-center">ошибки</span>
         </div>
@@ -476,7 +483,7 @@ onBeforeUnmount(() => {
           :key="row.name"
           type="button"
           :aria-pressed="!hidden[row.name]"
-          class="grid w-full grid-cols-[minmax(0,1fr)_repeat(4,2.5rem)] items-center gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) py-1.5 text-left text-sm tabular-nums transition-opacity last:border-b-0 hover:opacity-80"
+          class="grid w-full grid-cols-[minmax(0,1fr)_repeat(4,3rem)] items-center gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) py-1.5 text-left text-sm tabular-nums transition-opacity last:border-b-0 hover:opacity-80"
           :class="{ 'opacity-40': hidden[row.name] }"
           @click="toggleLine(row)"
         >
@@ -494,6 +501,12 @@ onBeforeUnmount(() => {
             :class="row.failed > 0 ? 'font-semibold text-(--ui-color-accent-main-alert)' : ''"
           >{{ fmt(row.failed) }}</span>
         </button>
+        <!-- Disambiguate the columns: the first two are the live snapshot (what the chart
+             plots), the last two are running totals — the part that reads as "processed". -->
+        <p class="mt-2 text-[11px] leading-snug text-(--ui-color-base-4)">
+          «Ждут» и «в работе» — сейчас (их сумма = высота линии). «Готово» и «ошибки» —
+          всего с запуска сервиса, накопительно.
+        </p>
       </div>
     </div>
   </B24Card>
