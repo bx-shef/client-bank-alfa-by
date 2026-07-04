@@ -22,6 +22,7 @@ import {
   emptySeries,
   legendRows,
   totalBacklog,
+  windowPlan,
   type QueueLegendRow,
   type QueuesSnapshot,
   type SeriesPoints
@@ -44,7 +45,7 @@ const props = withDefaults(defineProps<{
   title: 'Очереди обработки',
   rangeMin: 10,
   pollSec: 5,
-  maxPoints: 1000,
+  maxPoints: 400,
   autoStart: true
 })
 
@@ -99,30 +100,11 @@ const fmt = (v: number): string => nf.format(v)
 
 const enabled = ref(true)
 
-/** Visible window width in ms. On a phone we halve the selected span so the narrow
- *  axis isn't cramped (user request; see NARROW_QUERY). */
-function rangeMs(): number {
-  return range.value * 60_000 * (isNarrow.value ? 0.5 : 1)
-}
-/** Poll/step interval in ms. It's the SELECTED poll cadence, but bumped up if the
- *  range/cadence combo would exceed `maxPoints` (memory ceiling) — so the full window
- *  is always shown, just with a coarser step when it otherwise wouldn't fit. */
-function stepMs(): number {
-  const wanted = Math.max(1000, Math.round(poll.value * 1000))
-  const memFloor = Math.ceil(rangeMs() / Math.max(1, props.maxPoints))
-  return Math.max(wanted, memFloor)
-}
-/** How many points fill the current window (seed size + trim cap). ≥2, ≤ maxPoints. */
-function pointCount(): number {
-  return Math.max(2, Math.round(rangeMs() / stepMs()))
-}
-
-/** Update-animation duration (ms). Matching it to the poll step makes the axis GLIDE
- *  the whole way from one position to the next — a continuous right-to-left conveyor —
- *  instead of a short hop then a freeze. Floored so it stays visible; capped at 15s
- *  (the slowest poll) so a wide range's coarse step doesn't run an endless tween. */
-function updateDurationMs(): number {
-  return Math.min(15_000, Math.max(600, stepMs()))
+// Derived window plan (span/step/pointCount/anim-duration). Pure — see queueChart.ts.
+// Called imperatively from tick()/baseOption()/scheduleNext(); NOT reactive/computed,
+// so don't reference it from the template (it won't update there).
+function plan() {
+  return windowPlan(range.value, poll.value, isNarrow.value, props.maxPoints)
 }
 
 /** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
@@ -137,10 +119,10 @@ function baseOption() {
   const c = themeColors()
   return {
     animation: true,
-    // Continuous conveyor: the axis extent shifts by exactly one step each tick and
-    // ECharts tweens to it LINEARLY over ~one step — so the graph flows smoothly
-    // right-to-left instead of snapping. See updateDurationMs().
-    animationDurationUpdate: updateDurationMs(),
+    // Continuous conveyor: the axis extent shifts by one step each tick and ECharts
+    // tweens to it LINEARLY. At narrow ranges the duration == step → a seamless glide;
+    // at wide ranges it's capped so the chart paints then rests (see windowPlan).
+    animationDurationUpdate: plan().durationMs,
     animationEasingUpdate: 'linear' as const,
     // Nudge overlapping end-labels apart (all queues share y=0 in the idle state →
     // four "0" would stack on the right edge otherwise).
@@ -155,8 +137,13 @@ function baseOption() {
       // update animation carries the whole line + axis labels smoothly leftward.
       min: 'dataMin' as const,
       max: 'dataMax' as const,
+      // Keep ticks ≥1 min apart so labels stay minute-level even on the narrow
+      // (phone, half-span) window — otherwise the exact dataMin/dataMax extent lands
+      // ticks on half-minute marks and ECharts drops to a noisy `HH:mm:ss` format.
+      minInterval: 60_000,
       // `day` level → a window crossing midnight (up to the 4h range) shows the date.
-      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}:{ss}', minute: '{HH}:{mm}', hour: '{HH}:{mm}', day: '{dd}.{MM}' } },
+      // `second` still maps to HH:mm (no seconds) as a belt-and-suspenders fallback.
+      axisLabel: { hideOverlap: true, color: c.axis, formatter: { second: '{HH}:{mm}', minute: '{HH}:{mm}', hour: '{HH}:{mm}', day: '{dd}.{MM}' } },
       axisLine: { lineStyle: { color: c.split } },
       splitLine: { show: true, lineStyle: { color: c.split } }
     },
@@ -220,11 +207,12 @@ async function tick() {
     const now = Date.now()
     // First tick backfills a full window (flat at the current backlog) so the chart is
     // full from frame one and slides; later ticks append one point + trim the oldest.
+    const p = plan()
     if (!seeded) {
-      series.value = seedSeries(snapshot, now, stepMs(), pointCount())
+      series.value = seedSeries(snapshot, now, p.stepMs, p.pointCount)
       seeded = true
     } else {
-      series.value = appendSnapshot(series.value, snapshot, now, pointCount())
+      series.value = appendSnapshot(series.value, snapshot, now, p.pointCount)
     }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
@@ -253,7 +241,7 @@ function scheduleNext() {
     // Only the current generation reschedules — a chain superseded by start()/stop()
     // (e.g. a range change during an in-flight fetch) dies here.
     if (isReload.value && gen === pollGen) scheduleNext()
-  }, stepMs())
+  }, plan().stepMs)
 }
 function start() {
   isReload.value = true
@@ -424,6 +412,15 @@ onBeforeUnmount(() => {
         class="mb-3"
       />
     </div>
+
+    <!-- Honest hint: on a phone we show half the selected span (the axis reads ~5 min
+         while the selector says «10 минут») so the narrow axis isn't cramped. -->
+    <p
+      v-if="isNarrow"
+      class="mb-2 text-[11px] text-(--ui-color-base-4)"
+    >
+      На телефоне показана половина выбранного окна.
+    </p>
 
     <!-- Chart spans the FULL card width (wider is easier to read a live trend); the
          legend table sits below it rather than stealing horizontal room. -->

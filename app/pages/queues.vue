@@ -84,6 +84,7 @@ function previewFetcher(): Promise<QueuesSnapshot> {
         title="Очереди обработки"
         :range-min="10"
         :poll-sec="5"
+        :max-points="400"
       />
     </main>
   </AuthGate>
