@@ -64,7 +64,7 @@ function previewFetcher(): Promise<QueuesSnapshot> {
 
 <template>
   <AuthGate>
-    <main class="mx-auto max-w-5xl px-4 py-8">
+    <main class="mx-auto max-w-6xl px-4 py-8">
       <header class="mb-5">
         <h1 class="text-2xl font-bold text-(--ui-color-base-1)">
           Монитор очередей обработки
@@ -83,7 +83,7 @@ function previewFetcher(): Promise<QueuesSnapshot> {
         :fetcher="fetcher"
         title="Очереди обработки"
         :range-min="10"
-        :max-points="240"
+        :poll-sec="5"
       />
     </main>
   </AuthGate>

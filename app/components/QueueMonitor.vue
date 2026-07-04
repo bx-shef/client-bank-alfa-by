@@ -33,19 +33,22 @@ const props = withDefaults(defineProps<{
   title?: string
   /** Видимый диапазон времени, мин (по умолчанию 10). */
   rangeMin?: number
-  /** Максимум точек в окне — потолок памяти. Шаг опроса выводится из диапазона:
-   *  step = range / maxPoints (не чаще MIN_STEP_MS). Так память ограничена
-   *  независимо от диапазона (4 ч не копит тысячи точек). */
+  /** Частота опроса, сек (шаг точек = частота). Реже опрос → крупнее шаг → заметнее
+   *  «течение» графика; чаще → плотнее детализация. По умолчанию 5 с. */
+  pollSec?: number
+  /** Потолок числа точек в окне (память). Если диапазон/частота дают больше — шаг
+   *  укрупняется так, чтобы точек было не больше этого (окно всё равно = диапазон). */
   maxPoints?: number
   autoStart?: boolean
 }>(), {
   title: 'Очереди обработки',
   rangeMin: 10,
-  maxPoints: 240,
+  pollSec: 5,
+  maxPoints: 1000,
   autoStart: true
 })
 
-/** Выбор видимого диапазона (мин). Шаг опроса подстраивается под диапазон. */
+/** Выбор видимого диапазона (мин). Ширина окна времени. */
 const RANGE_ITEMS = [
   { label: '10 минут', value: 10 },
   { label: '30 минут', value: 30 },
@@ -53,8 +56,15 @@ const RANGE_ITEMS = [
   { label: '2 часа', value: 120 },
   { label: '4 часа', value: 240 }
 ]
-/** Никогда не опрашивать чаще, чем раз в 2 с (даже на самом узком диапазоне). */
-const MIN_STEP_MS = 2000
+/** Частота опроса (сек) — независимый от диапазона регулятор плотности/скорости точек. */
+const POLL_ITEMS = [
+  { label: '2 сек', value: 2 },
+  { label: '5 сек', value: 5 },
+  { label: '15 сек', value: 15 }
+]
+/** Narrow (phone) breakpoint — Tailwind `sm`. On phones we show HALF the selected time
+ *  span so the axis isn't cramped (fewer, more legible points/labels). */
+const NARROW_QUERY = '(max-width: 639px)'
 
 const chartEl = ref<HTMLElement | null>(null)
 const chart = shallowRef<ECharts | null>(null)
@@ -68,12 +78,15 @@ let timer: ReturnType<typeof setTimeout> | null = null
 let pollGen = 0
 let ro: ResizeObserver | null = null
 let themeObserver: MutationObserver | null = null
+let mql: MediaQueryList | null = null
 // The first successful tick BACKFILLS a full window (seedSeries) so the chart starts
 // full and immediately slides — no "grow from empty / clamped first date". Afterwards
 // each tick appends one point. Reset to false on a range change to re-seed the new span.
 let seeded = false
 
-const range = ref(props.rangeMin) // minutes
+const range = ref(props.rangeMin) // minutes (selected window width)
+const poll = ref(props.pollSec) // seconds (selected poll cadence)
+const isNarrow = ref(false) // phone viewport → show half the span
 const isReload = ref(props.autoStart)
 const error = ref('')
 const total = ref(0)
@@ -86,24 +99,30 @@ const fmt = (v: number): string => nf.format(v)
 
 const enabled = ref(true)
 
-/** Visible window width in ms (the selected range). */
+/** Visible window width in ms. On a phone we halve the selected span so the narrow
+ *  axis isn't cramped (user request; see NARROW_QUERY). */
 function rangeMs(): number {
-  return range.value * 60_000
+  return range.value * 60_000 * (isNarrow.value ? 0.5 : 1)
 }
-/** Poll/step interval in ms — derived from the range so ~maxPoints points fill the
- *  window (memory bounded). Clamped so we never poll faster than MIN_STEP_MS; the
- *  `max(1, …)` on the divisor guards a maxPoints=0 misconfig (else Infinity → dead timer). */
+/** Poll/step interval in ms. It's the SELECTED poll cadence, but bumped up if the
+ *  range/cadence combo would exceed `maxPoints` (memory ceiling) — so the full window
+ *  is always shown, just with a coarser step when it otherwise wouldn't fit. */
 function stepMs(): number {
-  return Math.max(MIN_STEP_MS, Math.round(rangeMs() / Math.max(1, props.maxPoints)))
+  const wanted = Math.max(1000, Math.round(poll.value * 1000))
+  const memFloor = Math.ceil(rangeMs() / Math.max(1, props.maxPoints))
+  return Math.max(wanted, memFloor)
+}
+/** How many points fill the current window (seed size + trim cap). ≥2, ≤ maxPoints. */
+function pointCount(): number {
+  return Math.max(2, Math.round(rangeMs() / stepMs()))
 }
 
 /** Update-animation duration (ms). Matching it to the poll step makes the axis GLIDE
  *  the whole way from one position to the next — a continuous right-to-left conveyor —
- *  instead of a short hop then a freeze (the old jerky 200ms). Floored so it stays
- *  visible, capped so a very wide range doesn't run a minutes-long tween (CPU); at the
- *  typical 10–30 min ranges the step is a few seconds, so motion is fully continuous. */
+ *  instead of a short hop then a freeze. Floored so it stays visible; capped at 15s
+ *  (the slowest poll) so a wide range's coarse step doesn't run an endless tween. */
 function updateDurationMs(): number {
-  return Math.min(5000, Math.max(600, stepMs()))
+  return Math.min(15_000, Math.max(600, stepMs()))
 }
 
 /** Axis/grid colours for the current theme (ECharts draws on canvas — CSS vars don't apply). */
@@ -202,10 +221,10 @@ async function tick() {
     // First tick backfills a full window (flat at the current backlog) so the chart is
     // full from frame one and slides; later ticks append one point + trim the oldest.
     if (!seeded) {
-      series.value = seedSeries(snapshot, now, stepMs(), props.maxPoints)
+      series.value = seedSeries(snapshot, now, stepMs(), pointCount())
       seeded = true
     } else {
-      series.value = appendSnapshot(series.value, snapshot, now, props.maxPoints)
+      series.value = appendSnapshot(series.value, snapshot, now, pointCount())
     }
     rows.value = legendRows(snapshot)
     total.value = totalBacklog(snapshot)
@@ -272,16 +291,33 @@ function onVisibility() {
     scheduleNext()
   }
 }
-function changeRange(v: unknown) {
-  range.value = Number(v)
-  // New span → new step → re-seed a fresh full window and re-apply the matching
-  // update-animation duration (redraw rebuilds baseOption with updateDurationMs()).
+/** Re-seed a fresh full window after any span/step change (range, poll cadence, or the
+ *  phone/desktop breakpoint). redraw() rebuilds baseOption so the new updateDurationMs()
+ *  (and axis) take effect; a repaint fires immediately so the change shows even while
+ *  paused; if running, start() reschedules the loop at the new step. */
+function reseed() {
   seeded = false
   redraw()
-  // Repaint immediately (even while paused) instead of waiting up to a full step;
-  // if running, start() schedules the ongoing loop.
   if (isReload.value) start()
   void tick()
+}
+function changeRange(v: unknown) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return
+  range.value = n
+  reseed()
+}
+function changePoll(v: unknown) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return
+  poll.value = n
+  reseed()
+}
+/** Phone breakpoint crossed → the visible span halves/doubles → re-seed the new window. */
+function onNarrowChange(e: MediaQueryListEvent | MediaQueryList) {
+  if (e.matches === isNarrow.value) return
+  isNarrow.value = e.matches
+  reseed()
 }
 function toggleLine(row: QueueLegendRow) {
   hidden.value = { ...hidden.value, [row.name]: !hidden.value[row.name] }
@@ -300,6 +336,13 @@ onMounted(async () => {
   core.use([charts.LineChart, components.GridComponent, components.TooltipComponent, components.LegendComponent, renderers.CanvasRenderer])
   echartsCore = core
   if (!chartEl.value) return
+  // Phone breakpoint: set the initial state BEFORE the first seed so the window is
+  // already halved on load (not seeded full then re-seeded). matchMedia is client-only.
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    mql = window.matchMedia(NARROW_QUERY)
+    isNarrow.value = mql.matches
+    mql.addEventListener('change', onNarrowChange)
+  }
   chart.value = core.init(chartEl.value)
   redraw()
   ro = new ResizeObserver(() => chart.value?.resize())
@@ -318,6 +361,7 @@ onBeforeUnmount(() => {
   stop()
   ro?.disconnect()
   themeObserver?.disconnect()
+  mql?.removeEventListener('change', onNarrowChange)
   document.removeEventListener('visibilitychange', onVisibility)
   chart.value?.dispose()
   // Null the ref AFTER dispose so a tick still mid-fetch (e.g. changeRange's `void
@@ -334,7 +378,7 @@ onBeforeUnmount(() => {
         <h3 class="font-semibold">
           {{ title }} — в очередях {{ fmt(total) }}
         </h3>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <B24Button
             :icon="isReload ? PauseLIcon : PlayLIcon"
             :label="isReload ? 'Пауза' : 'Запуск'"
@@ -343,10 +387,18 @@ onBeforeUnmount(() => {
             @click="toggleReload"
           />
           <B24Select
+            :model-value="poll"
+            :items="POLL_ITEMS"
+            size="sm"
+            class="w-28"
+            aria-label="Частота опроса очередей"
+            @update:model-value="changePoll"
+          />
+          <B24Select
             :model-value="range"
             :items="RANGE_ITEMS"
             size="sm"
-            class="w-36"
+            class="w-32"
             aria-label="Диапазон времени графика"
             @update:model-value="changeRange"
           />
@@ -373,17 +425,19 @@ onBeforeUnmount(() => {
       />
     </div>
 
-    <div class="flex flex-wrap gap-3">
+    <!-- Chart spans the FULL card width (wider is easier to read a live trend); the
+         legend table sits below it rather than stealing horizontal room. -->
+    <div class="flex flex-col gap-4">
       <!-- Canvas chart has no accessible text; expose the current total as a label
            (the legend table below carries the per-queue detail). -->
       <div
         ref="chartEl"
         role="img"
         :aria-label="`График длины очередей обработки, всего в очередях: ${total}`"
-        class="min-h-80 min-w-[320px] flex-[1_1_60%]"
+        class="h-80 w-full sm:h-96"
       />
 
-      <div class="flex-[1_1_30%] min-w-[280px]">
+      <div class="w-full max-w-2xl">
         <div class="grid grid-cols-[minmax(0,1fr)_repeat(4,2.5rem)] gap-x-1.5 border-b border-(--ui-color-design-tinted-na-stroke) pb-1.5 text-[11px] font-semibold text-(--ui-color-base-3)">
           <span>Очередь</span>
           <span class="text-center">ждут</span>
