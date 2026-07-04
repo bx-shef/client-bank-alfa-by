@@ -96,6 +96,20 @@ describe('seedSeries', () => {
     expect(s['crm-sync']).toEqual([[1000, 1]]) // one point at now
   })
 
+  it('non-finite count/step still yields real points (never empty / NaN timestamps)', () => {
+    // A bad range select → Number('') = NaN can reach here; Math.max(1, NaN) = NaN
+    // would slip past a bare clamp → empty windows / NaN x-values. Must fall back to 1.
+    expect(seedSeries(snap({ 'crm-sync': { waiting: 1 } }), 1000, 10, Number.NaN)['crm-sync'])
+      .toEqual([[1000, 1]])
+    expect(seedSeries(snap({ 'crm-sync': { waiting: 1 } }), 1000, Number.NaN, 3)['crm-sync'])
+      .toEqual([[998, 1], [999, 1], [1000, 1]]) // step NaN → falls back to 1, no NaN ts
+  })
+
+  it('tolerates a snapshot with no queues field (all-zero windows, no throw)', () => {
+    const s = seedSeries({ enabled: false } as QueuesSnapshot, 1000, 10, 2)
+    expect(s['crm-sync']).toEqual([[990, 0], [1000, 0]])
+  })
+
   it('an appended point continues the seeded window one step to the right', () => {
     const seeded = seedSeries(snap({ 'crm-sync': { waiting: 1 } }), 1000, 10, 3)
     const next = appendSnapshot(seeded, snap({ 'crm-sync': { waiting: 2 } }), 1010, 3)

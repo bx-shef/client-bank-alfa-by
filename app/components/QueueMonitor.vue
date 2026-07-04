@@ -246,10 +246,31 @@ function stop() {
   isReload.value = false
   pollGen++
   stopTimer()
+  // Re-seed on the next resume: after a pause (or a fetch error), the retained window
+  // is stale — resuming would append across the pause gap and, with dataMin/dataMax,
+  // stretch the axis past the selected range and draw a straight bridge over the gap.
+  // Dropping `seeded` makes the resume rebuild a fresh full window at current backlog.
+  seeded = false
 }
 function toggleReload() {
   if (isReload.value) stop()
   else start()
+}
+/** Pause the poll+animation loop while the tab is hidden (the linear tween is now
+ *  near-continuous — no point burning CPU/fetches off-screen), and resume on return.
+ *  Keeps `isReload` (the ▶/⏸ state) untouched; drops `seeded` so the return re-seeds a
+ *  fresh window rather than bridging the hidden gap (same reasoning as stop()). */
+function onVisibility() {
+  if (typeof document === 'undefined') return
+  if (document.hidden) {
+    pollGen++
+    stopTimer()
+    seeded = false
+  } else if (isReload.value) {
+    pollGen++
+    stopTimer()
+    scheduleNext()
+  }
 }
 function changeRange(v: unknown) {
   range.value = Number(v)
@@ -286,6 +307,7 @@ onMounted(async () => {
   // Re-theme the canvas when the OS/user toggles light↔dark (`.dark` on <html>).
   themeObserver = new MutationObserver(() => redraw())
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+  document.addEventListener('visibilitychange', onVisibility)
   await tick()
   if (props.autoStart) start()
 })
@@ -296,7 +318,12 @@ onBeforeUnmount(() => {
   stop()
   ro?.disconnect()
   themeObserver?.disconnect()
+  document.removeEventListener('visibilitychange', onVisibility)
   chart.value?.dispose()
+  // Null the ref AFTER dispose so a tick still mid-fetch (e.g. changeRange's `void
+  // tick()`) resolving post-unmount hits `chart.value?.setOption` as a no-op instead
+  // of calling into a disposed ECharts instance.
+  chart.value = null
 })
 </script>
 

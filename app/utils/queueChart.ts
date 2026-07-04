@@ -73,8 +73,11 @@ export function seedSeries(
   stepMs: number,
   count: number
 ): SeriesPoints {
-  const n = Math.max(1, Math.floor(count))
-  const step = Math.max(1, Math.floor(stepMs))
+  // Guard non-finite inputs too: Math.floor(NaN)=NaN and Math.max(1,NaN)=NaN, which
+  // would slip past a bare clamp and yield empty/NaN windows. A NaN can reach here via
+  // the component (Number('') on a bad range select → NaN step). Fall back to 1.
+  const n = Math.max(1, Math.floor(Number.isFinite(count) ? count : 1))
+  const step = Math.max(1, Math.floor(Number.isFinite(stepMs) ? stepMs : 1))
   const out: SeriesPoints = {}
   for (const q of QUEUE_META) {
     const value = backlog(snapshot.queues?.[q.name])
