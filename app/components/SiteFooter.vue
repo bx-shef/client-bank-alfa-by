@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { shortSha, commitUrl } from '~/utils/build'
 
+// Уведомления о сторонних open-source компонентах (Apache-2.0 ECharts NOTICE,
+// OFL-шрифты, BSD zrender и пр.) — обязательная атрибуция. Файл отдаётся САМИМ
+// сайтом (public/ → бандл), чтобы уведомление ехало вместе с артефактом (Apache §4 /
+// OFL требуют, чтобы лицензия сопровождала код и шрифты), а не только ссылкой на GitHub.
+const licensesUrl = '/THIRD_PARTY_NOTICES.txt'
+
 // Реквизиты ИП. Ссылки на реквизиты/политику ведут на основной сайт
 // offer.bx-shef.by (у этого лендинга нет своих /legal, /privacy).
 const { public: { commitSha } } = useRuntimeConfig()
@@ -52,6 +58,12 @@ const shaHref = computed(() => commitUrl(commitSha as string))
         rel="noopener noreferrer"
         class="hover:text-white hover:underline"
       >Политика конфиденциальности</a>
+      <a
+        :href="licensesUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="hover:text-white hover:underline"
+      >Открытый код</a>
       <a
         :href="shaHref"
         target="_blank"
