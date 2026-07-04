@@ -70,7 +70,8 @@ function previewFetcher(): Promise<QueuesSnapshot> {
           Монитор очередей обработки
         </h1>
         <p class="mt-1 text-sm text-(--ui-color-base-3)">
-          Живой график длины очередей (backlog = ждут + в работе). Источник —
+          Сколько задач сейчас в очереди на каждом этапе (ждут и в обработке), а не сколько
+          уже обработано. Источник —
           <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5">GET /api/ops/queues</code>
           (по сессии оператора). Флаг
           <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5">?preview=1</code>
