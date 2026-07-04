@@ -115,7 +115,8 @@ export function appendSnapshot(
 }
 
 /** The derived plan for the sliding window: visible span, point spacing, how many
- *  points fill it, and the update-animation duration. All numbers, all finite. */
+ *  points fill it. All numbers, all finite. (Motion is a rAF axis-slide in the
+ *  component, not an ECharts tween, so there's no animation duration here.) */
 export interface WindowPlan {
   /** Visible time span in ms (already halved on a phone). */
   windowMs: number
@@ -123,17 +124,7 @@ export interface WindowPlan {
   stepMs: number
   /** Points that fill the window — seed size and trim cap (≥2, ≤ maxPoints). */
   pointCount: number
-  /** ECharts update-animation duration in ms. */
-  durationMs: number
 }
-
-/** The slowest an update tween runs. Matching the tween to the step gives a continuous
- *  right-to-left glide at short (narrow-range) steps — the smooth conveyor. But a wide
- *  range's step is tens of seconds over ~maxPoints vertices; tweening that whole span
- *  every tick would repaint thousands of vertices every frame forever (CPU). Capping at
- *  5 s makes wide ranges PAINT-then-REST (a short glide, then idle until the next tick)
- *  while narrow ranges (step ≤ 5 s) still glide continuously. */
-const MAX_ANIM_MS = 5000
 
 /**
  * Derive the sliding-window plan from the operator's choices. Pure (no DOM/refs) so it
@@ -159,8 +150,7 @@ export function windowPlan(
   const memFloor = Math.ceil(windowMs / cap)
   const stepMs = Math.max(wanted, memFloor)
   const pointCount = Math.max(2, Math.round(windowMs / stepMs))
-  const durationMs = Math.min(MAX_ANIM_MS, stepMs)
-  return { windowMs, stepMs, pointCount, durationMs }
+  return { windowMs, stepMs, pointCount }
 }
 
 /** One legend-table row: current counters for a queue (0 when absent/disabled). */

@@ -119,16 +119,16 @@ describe('seedSeries', () => {
 })
 
 describe('windowPlan', () => {
-  it('default (10min, 5s, desktop, cap 400): step=poll, ~120 points, cont. glide', () => {
+  it('default (10min, 5s, desktop, cap 400): step=poll, ~120 points', () => {
     expect(windowPlan(10, 5, false, 400)).toEqual({
-      windowMs: 600_000, stepMs: 5000, pointCount: 120, durationMs: 5000
+      windowMs: 600_000, stepMs: 5000, pointCount: 120
     })
   })
 
   it('memory floor bites at wide range: 4h/2s caps points, coarsens step (poll no-ops)', () => {
     // 14.4M ms / 400 cap → floor 36000 ms wins over the 2s wanted; points pinned to 400.
     expect(windowPlan(240, 2, false, 400)).toEqual({
-      windowMs: 14_400_000, stepMs: 36_000, pointCount: 400, durationMs: 5000
+      windowMs: 14_400_000, stepMs: 36_000, pointCount: 400
     })
   })
 
@@ -137,26 +137,20 @@ describe('windowPlan', () => {
     const phone = windowPlan(10, 5, true, 400)
     expect(phone.windowMs).toBe(desktop.windowMs / 2)
     expect(phone.pointCount).toBe(desktop.pointCount / 2) // 120 → 60
-    expect(phone).toMatchObject({ windowMs: 300_000, stepMs: 5000, pointCount: 60 })
+    expect(phone).toEqual({ windowMs: 300_000, stepMs: 5000, pointCount: 60 })
   })
 
   it('phone + wide range still respects the point cap', () => {
     // 7.2M ms / 400 → floor 18000 ms.
     expect(windowPlan(240, 2, true, 400)).toEqual({
-      windowMs: 7_200_000, stepMs: 18_000, pointCount: 400, durationMs: 5000
+      windowMs: 7_200_000, stepMs: 18_000, pointCount: 400
     })
   })
 
-  it('slow poll: 15s step, capped 5s glide (paint-then-rest), ~40 points at 10min', () => {
+  it('slow poll: 15s step, ~40 points at 10min', () => {
     expect(windowPlan(10, 15, false, 400)).toEqual({
-      windowMs: 600_000, stepMs: 15_000, pointCount: 40, durationMs: 5000
+      windowMs: 600_000, stepMs: 15_000, pointCount: 40
     })
-  })
-
-  it('durationMs never exceeds the 5s cap regardless of step', () => {
-    for (const [r, p] of [[10, 2], [30, 5], [60, 15], [240, 2]] as const) {
-      expect(windowPlan(r, p, false, 400).durationMs).toBeLessThanOrEqual(5000)
-    }
   })
 
   it('sub-second poll is floored to 1s (never a runaway fetch loop)', () => {
@@ -169,7 +163,6 @@ describe('windowPlan', () => {
     expect(Number.isFinite(p.windowMs)).toBe(true)
     expect(Number.isFinite(p.stepMs)).toBe(true)
     expect(p.pointCount).toBeGreaterThanOrEqual(2)
-    expect(p.durationMs).toBeLessThanOrEqual(5000)
   })
 
   it('pointCount never overshoots the cap at a boundary combo', () => {
