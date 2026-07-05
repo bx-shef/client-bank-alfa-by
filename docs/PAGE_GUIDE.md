@@ -80,6 +80,23 @@ definePageMeta({ layout: 'clear' })
   него не ведёт ссылка с главной (иначе SSG-краулер его пропустит).
 - Служебные страницы (оператор) прячем за `middleware: auth` + `AuthGate`.
 
+> **Официальные AI-ресурсы b24ui и b24jssdk — сверяться перед вёрсткой in-portal-страниц.**
+> Разработчики b24ui ведут гайд для агентов, набор навыков и `llms.txt`-индексы:
+> - [`bitrix24/b24ui/AGENTS.md`](https://github.com/bitrix24/b24ui/blob/main/AGENTS.md) — конвенции
+>   компонентов, **семантические цвет-токены** (`text-default` и т.п., НЕ сырые Tailwind-палитры),
+>   `useComponentProps()` для тем-осознанных дефолтов, паттерны форм/размеров, чек-лист компонента;
+> - [`bitrix24/b24ui/skills/`](https://github.com/bitrix24/b24ui/tree/main/skills) — трекаемые
+>   agent-скиллы по работе с b24ui;
+> - [b24ui `llms.txt`](https://bitrix24.github.io/b24ui/llms.txt) — LLM-индекс: 125+ компонентов,
+>   composables, темизация/CSS-переменные, i18n, интеграции;
+> - [b24jssdk `llms.txt`](https://bitrix24.github.io/b24jssdk/llms.txt) — LLM-индекс SDK встройки:
+>   `B24Frame` (iframe-приложения), `callV2/callBatch`, `fetchList`, вебхуки/OAuth, примеры.
+>
+> Это первоисточник по «как правильно» на b24ui/b24jssdk. Наш `PAGE_GUIDE` — как оно ложится на
+> **это** приложение (layout `clear`, темы, `useB24`, авторизация); по самим компонентам/токенам и
+> API SDK — сверяемся с `AGENTS.md`/`skills`/`llms.txt`. Точные сигнатуры REST-методов — через
+> MCP `b24-dev-mcp`.
+
 ## 3. Анимация фона (`HeroGraph`) — обязательные правила
 
 Красиво, но не грузит браузер. Любая canvas-анимация обязана:
