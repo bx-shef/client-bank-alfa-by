@@ -1,17 +1,18 @@
 // Pure recognition of entity identifiers from a payment purpose (назначение),
-// per docs/PROCESSING.md §4 «Распознавание из назначения». A configurable set of
-// trigger phrases each maps the NUMBER that follows it to a kind of entity
-// identifier. No I/O: the id→entity lookup (invoice by number/id, deal, order,
-// payment, smart-process element, or a document-generator bridge) is the REST
-// slice; this module only extracts (phrase → identifier) so it unit-tests on
-// plain strings. Phrases come from per-portal settings — the module is
-// config-driven and ships no hard-coded Russian phrases.
+// per docs/PROCESSING.md §4. Recognition is MATRIX-driven (not "phrase + number"):
+// each matrix is a mask where `d` = a digit and every other character is a literal
+// (letters / `-` / `/` / …), e.g. `dddd`, `СЧ-dddd`, `BOPC-ddd/dd`. A matrix is
+// bound to an `IdentifierKind` (→ which entity field to look up, §4). Homoglyphs
+// (`ВОРС`↔`BOPC` look identical) are folded to a chosen alphabet before matching.
+// No I/O: the id→entity lookup is the REST slice; this module only extracts
+// (mask → identifier) so it unit-tests on plain strings. Matrices come from
+// per-portal settings — the module ships no hard-coded numbers or prefixes.
 
 /**
- * What an extracted number identifies (§4). The lookup uses this to pick the
- * right REST search — e.g. an invoice by its number vs by its id, or a deal by a
- * per-direction custom field. `document-number` is a bridge: find the generated
- * document, then follow its `entityTypeId`/`entityId` to the real entity.
+ * What an extracted identifier is (§4). The lookup uses this to pick the right
+ * REST search — an invoice by number vs by id, a deal by a per-direction field,
+ * etc. `document-number` is a bridge: find the generated document, then follow
+ * its `entityTypeId`/`entityId` to the real entity.
  */
 export type IdentifierKind
   = | 'invoice-number' | 'invoice-id'
@@ -21,76 +22,107 @@ export type IdentifierKind
     | 'smart-id' | 'smart-field'
     | 'document-number'
 
+/** Which alphabet homoglyphs are folded to before matching (§4). */
+export type Alphabet = 'cyrillic' | 'latin'
+
 /**
- * One recognition rule: any of `phrases` (matched case-insensitively) directly
- * preceding a number marks that number as an identifier of `kind`. Phrases are
- * supplied from the per-portal «карта сопоставления» (§4).
+ * One recognition matrix: `mask` describes the identifier's format — lowercase
+ * `d` is a digit placeholder, every other char is a literal. Bound to `kind`.
+ * `note` is a human explanation shown in settings. Masks come from the per-portal
+ * «карта сопоставления» (§4). A literal Latin lowercase `d` cannot be used (it is
+ * always the digit placeholder) — spell prefixes with uppercase / other letters.
  */
-export interface RecognitionRule {
-  phrases: string[]
+export interface MatchMatrix {
+  mask: string
   kind: IdentifierKind
+  note?: string
 }
 
-/** A recognized identifier: its kind and the extracted value (kept as a string —
- *  leading zeros / composite forms like `123/45` must survive). */
+/** A recognized identifier: its kind and the extracted value (a string — leading
+ *  zeros / composite forms like `123/45` survive; value is in the folded alphabet). */
 export interface RecognizedId {
   kind: IdentifierKind
   value: string
 }
 
-/** Escape a phrase for safe embedding in a RegExp (phrases are arbitrary text). */
+/** Escape a literal for safe embedding in a RegExp. */
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-// Left word boundary: the phrase must not start INSIDE another word. Cyrillic is
-// invisible to `\b` (ASCII-only in JS), so we use a Unicode lookbehind — "счёт"
-// then does NOT match inside "расчёту" (very common in RU/BY purposes).
-const WORD_START = '(?<!\\p{L})'
-// Between the phrase and the number: optional separators (space, colon, №, #,
-// dot, dash). The class holds no letters, so a letter right after the phrase
-// blocks the match: "счёт-фактура 12" yields nothing, and so do declined forms
-// ("счёту 55") — configure the exact form/variants as phrases (§4). No ё/е or
-// case folding beyond the RegExp `i` flag: the phrase must match as written.
-const SEPARATORS = '[\\s:№#.\\-]*'
-// The identifier itself: digits, optionally grouped with `/` or `-` (e.g. 123/45).
-const TOKEN = '(\\d+(?:[/-]\\d+)*)'
+// Visually-identical Cyrillic↔Latin letter pairs (upper and lower). Numbers/codes
+// are often typed in either alphabet — "ВОРС" (Cyr) and "BOPC" (Lat) look the same.
+const CYR_LAT: ReadonlyArray<readonly [string, string]> = [
+  ['А', 'A'], ['В', 'B'], ['Е', 'E'], ['К', 'K'], ['М', 'M'], ['Н', 'H'],
+  ['О', 'O'], ['Р', 'P'], ['С', 'C'], ['Т', 'T'], ['У', 'Y'], ['Х', 'X'],
+  ['а', 'a'], ['е', 'e'], ['о', 'o'], ['р', 'p'], ['с', 'c'], ['у', 'y'], ['х', 'x']
+]
+const TO_LATIN = new Map(CYR_LAT.map(([c, l]) => [c, l]))
+const TO_CYRILLIC = new Map(CYR_LAT.map(([c, l]) => [l, c]))
 
-/** Upper bound on the purpose length we scan — DoS guard, matches the parser
- *  convention (cf. `MAX_CLIENT_BANK_CHARS`). Real purposes are far shorter. */
+/** Fold homoglyphs of `text` to the chosen alphabet so a code written in either
+ *  Cyrillic or Latin compares equal. Non-homoglyph chars pass through unchanged. */
+export function foldHomoglyphs(text: string, alphabet: Alphabet): string {
+  const m = alphabet === 'latin' ? TO_LATIN : TO_CYRILLIC
+  let out = ''
+  for (const ch of text) out += m.get(ch) ?? ch
+  return out
+}
+
+// A match must not sit INSIDE a longer alphanumeric token (so bare `dddd` does not
+// grab "1234" out of "12345", and a prefixed mask does not match a fragment).
+const ALNUM = '0-9A-Za-zА-Яа-яЁё'
+const BOUND_L = `(?<![${ALNUM}])`
+const BOUND_R = `(?![${ALNUM}])`
+
+/** Compile a (already homoglyph-folded) mask into a RegExp body: `d` → a digit,
+ *  everything else → an escaped literal. */
+function maskToPattern(foldedMask: string): string {
+  let p = ''
+  for (const ch of foldedMask) p += ch === 'd' ? '\\d' : escapeRegExp(ch)
+  return p
+}
+
+/** Upper bound on the purpose length we scan — DoS guard (cf. `MAX_CLIENT_BANK_CHARS`). */
 export const MAX_PURPOSE_CHARS = 10_000
-/** Reject absurdly long extracted values — real ids/numbers are short; a huge
- *  digit run is noise (and would lose precision if later coerced to a number). */
+/** Reject absurdly long extracted values — real ids/numbers are short. */
 export const MAX_ID_CHARS = 64
 
 /**
- * Extract every identifier recognized in `purpose` under `rules`. Order is:
- * by rule, then by phrase (as listed in the rule), then by in-string position
- * within that phrase. Duplicates (same kind AND value) are dropped. Returns an
- * empty array when nothing matches (caller falls back to §2/§5 "нет
- * идентификатора"). Never throws for malformed input.
+ * Extract every identifier recognized in `purpose` by `matrices`, folding both the
+ * purpose and each mask to `alphabet` (default `cyrillic`) first. Order: by matrix,
+ * then by in-string position. Duplicates (same kind AND value) are dropped. Returns
+ * an empty array when nothing matches (caller falls back to §2/§5 "нет
+ * идентификатора"). Never throws for malformed input or a bad mask.
  */
-export function recognizeIdentifiers(
+export function recognizeByMatrices(
   purpose: string,
-  rules: readonly RecognitionRule[]
+  matrices: readonly MatchMatrix[],
+  alphabet: Alphabet = 'cyrillic'
 ): RecognizedId[] {
-  // DoS guard: scan at most MAX_PURPOSE_CHARS (bank/attacker-controlled text).
-  const hay = purpose.length > MAX_PURPOSE_CHARS ? purpose.slice(0, MAX_PURPOSE_CHARS) : purpose
+  const hay = foldHomoglyphs(
+    purpose.length > MAX_PURPOSE_CHARS ? purpose.slice(0, MAX_PURPOSE_CHARS) : purpose,
+    alphabet
+  )
   const out: RecognizedId[] = []
   const seen = new Set<string>()
-  for (const rule of rules) {
-    for (const phrase of rule.phrases) {
-      const p = phrase.trim()
-      if (!p) continue
-      const re = new RegExp(WORD_START + escapeRegExp(p) + SEPARATORS + TOKEN, 'giu')
-      for (const m of hay.matchAll(re)) {
-        const value = m[1]!
-        if (value.length > MAX_ID_CHARS) continue
-        const key = `${rule.kind}|${value}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        out.push({ kind: rule.kind, value })
-      }
+  for (const matrix of matrices) {
+    const mask = matrix.mask.trim()
+    if (!mask) continue
+    const body = maskToPattern(foldHomoglyphs(mask, alphabet))
+    let re: RegExp
+    try {
+      re = new RegExp(BOUND_L + '(' + body + ')' + BOUND_R, 'giu')
+    } catch {
+      continue // a mask that somehow compiles to invalid regex is skipped, not thrown
+    }
+    for (const m of hay.matchAll(re)) {
+      const value = m[1]!
+      if (value.length > MAX_ID_CHARS) continue
+      const key = `${matrix.kind}|${value}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ kind: matrix.kind, value })
     }
   }
   return out

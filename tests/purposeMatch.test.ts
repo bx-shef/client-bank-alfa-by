@@ -1,113 +1,95 @@
 import { describe, expect, it } from 'vitest'
-import type { RecognitionRule } from '~/utils/purposeMatch'
-import { recognizeIdentifiers } from '~/utils/purposeMatch'
+import type { MatchMatrix } from '~/utils/purposeMatch'
+import { foldHomoglyphs, recognizeByMatrices } from '~/utils/purposeMatch'
 
-// Pure identifier recognition from a payment purpose (#109, PROCESSING.md §4).
-// The engine is config-driven — these tests supply their own phrase rules (real
-// per-portal phrases arrive with live statements). Covers: extraction after a
-// phrase, separator variants, case-insensitivity, multiple rules/matches, the
-// "letters must not intervene" guard, composite numbers, and dedup.
+// Pure matrix-based identifier recognition from a payment purpose (#109, §4).
+// Masks are config (real prefixes arrive with live statements) — tests supply
+// their own. Covers: digit masks, word-boundary, literal prefixes, composite
+// numbers, homoglyph folding (Cyrillic↔Latin), no-space-inside, case, dedup.
 
-const invoiceRule: RecognitionRule = { phrases: ['счёт', 'инвойс'], kind: 'invoice-number' }
-const dealRule: RecognitionRule = { phrases: ['сделка', 'заказ'], kind: 'deal-id' }
+const invNum = (mask: string): MatchMatrix => ({ mask, kind: 'invoice-number' })
 
-describe('recognizeIdentifiers', () => {
-  it('extracts the number that follows a trigger phrase', () => {
-    expect(recognizeIdentifiers('Оплата по счёт 123', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '123' }])
+describe('foldHomoglyphs', () => {
+  it('folds Cyrillic look-alikes to Latin and back', () => {
+    expect(foldHomoglyphs('ВОРС', 'latin')).toBe('BOPC')
+    expect(foldHomoglyphs('BOPC', 'cyrillic')).toBe('ВОРС')
+  })
+  it('leaves non-homoglyph characters and digits untouched', () => {
+    expect(foldHomoglyphs('Ч-1234', 'latin')).toBe('Ч-1234') // Ч has no Latin twin
+    expect(foldHomoglyphs('123/45', 'cyrillic')).toBe('123/45')
+  })
+})
+
+describe('recognizeByMatrices', () => {
+  it('extracts a bare digit mask', () => {
+    expect(recognizeByMatrices('Оплата 2001 за услуги', [invNum('dddd')]))
+      .toEqual([{ kind: 'invoice-number', value: '2001' }])
   })
 
-  it('tolerates separators between phrase and number (: № # . -, spaces)', () => {
-    for (const sep of [' № ', ': ', ' #', '. ', ' - ', '№']) {
-      expect(recognizeIdentifiers(`счёт${sep}77 за услуги`, [invoiceRule]))
-        .toEqual([{ kind: 'invoice-number', value: '77' }])
-    }
+  it('does NOT grab a fragment of a longer number (word boundary)', () => {
+    expect(recognizeByMatrices('перевод 12345', [invNum('dddd')])).toEqual([])
   })
 
-  it('is case-insensitive (incl. Cyrillic)', () => {
-    expect(recognizeIdentifiers('СЧЁТ 45', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '45' }])
+  it('matches a literal-prefixed mask (СЧ-dddd)', () => {
+    expect(recognizeByMatrices('счёт СЧ-1234 за март', [invNum('СЧ-dddd')]))
+      .toEqual([{ kind: 'invoice-number', value: 'СЧ-1234' }])
   })
 
-  it('applies several rules and returns all matches', () => {
-    const res = recognizeIdentifiers('Оплата по счёт 10 к заказ 20', [invoiceRule, dealRule])
+  it('keeps composite numbers (BOPC-ddd/dd)', () => {
+    expect(recognizeByMatrices('оплата BOPC-123/45', [invNum('BOPC-ddd/dd')], 'latin'))
+      .toEqual([{ kind: 'invoice-number', value: 'BOPC-123/45' }])
+  })
+
+  it('folds homoglyphs: Latin mask matches a Cyrillic-typed code (alphabet=latin)', () => {
+    // purpose typed in Cyrillic «ВОРС-123», mask in Latin «BOPC-ddd»
+    expect(recognizeByMatrices('оплата ВОРС-123', [invNum('BOPC-ddd')], 'latin'))
+      .toEqual([{ kind: 'invoice-number', value: 'BOPC-123' }])
+  })
+
+  it('folds homoglyphs the other way (alphabet=cyrillic)', () => {
+    expect(recognizeByMatrices('оплата BOPC-123', [invNum('BOPC-ddd')], 'cyrillic'))
+      .toEqual([{ kind: 'invoice-number', value: 'ВОРС-123' }])
+  })
+
+  it('requires the exact literals — a space instead of the dash does not match', () => {
+    expect(recognizeByMatrices('счёт СЧ 1234', [invNum('СЧ-dddd')])).toEqual([])
+  })
+
+  it('is case-insensitive', () => {
+    expect(recognizeByMatrices('оплата сч-1234', [invNum('СЧ-dddd')]))
+      .toEqual([{ kind: 'invoice-number', value: 'сч-1234' }])
+  })
+
+  it('applies several matrices and returns all, in matrix then position order', () => {
+    const res = recognizeByMatrices('счёт СЧ-1 и заказ 6001', [
+      invNum('СЧ-d'),
+      { mask: 'dddd', kind: 'order-number' }
+    ])
     expect(res).toEqual([
-      { kind: 'invoice-number', value: '10' },
-      { kind: 'deal-id', value: '20' }
+      { kind: 'invoice-number', value: 'СЧ-1' },
+      { kind: 'order-number', value: '6001' }
     ])
   })
 
-  it('does NOT grab a number when letters intervene (счёт-фактура 12)', () => {
-    expect(recognizeIdentifiers('счёт-фактура 12', [invoiceRule])).toEqual([])
-  })
-
-  it('does NOT match the phrase inside a longer word (левая граница слова)', () => {
-    // «расчёту» contains «счёт» as a substring — must not trigger.
-    expect(recognizeIdentifiers('Оплата согласно расчёту 100', [invoiceRule])).toEqual([])
-    expect(recognizeIdentifiers('расчётный счётчик 5', [invoiceRule])).toEqual([])
-  })
-
-  it('still matches a standalone phrase after a word (по счёт 100)', () => {
-    expect(recognizeIdentifiers('оплата по счёт 100', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '100' }])
-  })
-
-  it('matches when the number directly adjoins the phrase (no separator)', () => {
-    expect(recognizeIdentifiers('счёт77 оплата', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '77' }])
-  })
-
-  it('does NOT normalize ё/е — phrase must match the configured spelling', () => {
-    expect(recognizeIdentifiers('оплата по счет 5', [invoiceRule])).toEqual([])
-  })
-
-  it('dedups across different phrases of one rule pointing at the same value', () => {
-    const rule: RecognitionRule = { phrases: ['счёт', 'инвойс'], kind: 'invoice-number' }
-    expect(recognizeIdentifiers('счёт 5 инвойс 5', [rule]))
-      .toEqual([{ kind: 'invoice-number', value: '5' }])
-  })
-
-  it('skips an absurdly long value (> MAX_ID_CHARS)', () => {
-    const huge = '9'.repeat(80)
-    expect(recognizeIdentifiers(`счёт ${huge}`, [invoiceRule])).toEqual([])
-  })
-
-  it('keeps composite numbers as a single value (123/45, 2024-7)', () => {
-    expect(recognizeIdentifiers('инвойс 123/45', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '123/45' }])
-    expect(recognizeIdentifiers('инвойс 2024-7', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '2024-7' }])
-  })
-
-  it('preserves leading zeros (value stays a string)', () => {
-    expect(recognizeIdentifiers('счёт 007', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '007' }])
-  })
-
-  it('dedups the same kind+value, keeps distinct values', () => {
-    expect(recognizeIdentifiers('счёт 5 и ещё счёт 5', [invoiceRule]))
-      .toEqual([{ kind: 'invoice-number', value: '5' }])
-    expect(recognizeIdentifiers('счёт 5, счёт 6', [invoiceRule]))
+  it('dedups same kind+value, keeps distinct values', () => {
+    expect(recognizeByMatrices('счёт 2001, ещё 2001', [invNum('dddd')]))
+      .toEqual([{ kind: 'invoice-number', value: '2001' }])
+    expect(recognizeByMatrices('2001 и 2002', [invNum('dddd')]))
       .toEqual([
-        { kind: 'invoice-number', value: '5' },
-        { kind: 'invoice-number', value: '6' }
+        { kind: 'invoice-number', value: '2001' },
+        { kind: 'invoice-number', value: '2002' }
       ])
   })
 
-  it('returns [] when no phrase matches or no number follows', () => {
-    expect(recognizeIdentifiers('оплата без номера', [invoiceRule])).toEqual([])
-    expect(recognizeIdentifiers('счёт за услуги', [invoiceRule])).toEqual([])
-    expect(recognizeIdentifiers('123 без фразы', [invoiceRule])).toEqual([])
+  it('returns [] for no match, empty mask, or empty matrix list', () => {
+    expect(recognizeByMatrices('без номера', [invNum('СЧ-dddd')])).toEqual([])
+    expect(recognizeByMatrices('счёт 1', [invNum('   ')])).toEqual([])
+    expect(recognizeByMatrices('счёт 1', [])).toEqual([])
   })
 
-  it('ignores empty/blank phrases and empty rule sets', () => {
-    expect(recognizeIdentifiers('счёт 1', [{ phrases: ['', '  '], kind: 'invoice-id' }])).toEqual([])
-    expect(recognizeIdentifiers('счёт 1', [])).toEqual([])
-  })
-
-  it('treats a regex-special phrase literally (no injection)', () => {
-    const rule: RecognitionRule = { phrases: ['счёт (осн.)'], kind: 'invoice-number' }
-    expect(recognizeIdentifiers('счёт (осн.) 88', [rule]))
-      .toEqual([{ kind: 'invoice-number', value: '88' }])
+  it('skips an absurdly long value (> MAX_ID_CHARS) without throwing', () => {
+    const huge = 'd'.repeat(80)
+    const text = `счёт ${'9'.repeat(80)}`
+    expect(recognizeByMatrices(text, [invNum(huge)])).toEqual([])
   })
 })
