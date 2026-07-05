@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-03
+> Last reviewed: 2026-07-05
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -12,8 +12,10 @@
 > приём событий установки/удаления Б24, учёт авторизации портала; дальше — OAuth Альфы, опрос,
 > запись дел/чата, MCP). Заложено доменное ядро (типы выписки, абстракция банк-провайдеров, чистые
 > утилиты, билдер дела, разбор/маршрутизация событий Б24) и демо-страница на mock-данных; backend
-> событий Б24 реализован (этап 3, слайс), реальная интеграция Альфы — далее. Деплой: статика лендинга
-> за nginx + отдельный backend-сервис с Postgres (как `bx-synapse`). Эталон стека — `currency-converter`.
+> событий Б24 реализован (этап 3, слайс), реальная интеграция Альфы — далее. **Целевая спецификация
+> обработки платежей** (подбор компании/инвойса/сделки, распределение, оповещения, ошибки) —
+> [`docs/PROCESSING.md`](docs/PROCESSING.md). Деплой: статика лендинга за nginx + отдельный
+> backend-сервис с Postgres (как `bx-synapse`). Эталон стека — `currency-converter`.
 
 ## Стек
 
@@ -46,6 +48,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
+- **Как создавать новые страницы в нужном виде** (лендинг vs in-portal, темы, анимация, форма, a11y,
+  процесс) — [`docs/PAGE_GUIDE.md`](docs/PAGE_GUIDE.md). Родственный дизайн-гайд основного сайта — в репо
+  `bx-shef/Lp` (`docs/LANDING_GUIDE.md`).
 - `app/pages/index.vue` — публичный лендинг (маркетинговый, по issue #110): hero+CTA (фото+граф+
   `PartnerBadge`), боль→результат, «Как это работает» (3 шага), «Почему мы» (4 карточки, glow),
   блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`. Тексты — из `app/utils/landing.ts`.
@@ -247,7 +252,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `@bitrix24/b24icons-vue`) на **ECharts** (Apache-2.0, tree-shaken: `echarts/core` +
       Line/Grid/Tooltip/Legend/Canvas, динамический импорт; оси/сетка перекрашиваются под light/dark по
       классу `.dark`), чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
-      из `/api/ops/queues`; `?demo=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
+      из `/api/ops/queues`; `?preview=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
       (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78. Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту контрагента** (DI над

@@ -10,11 +10,13 @@
 // `clear` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
+import { pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
+// Tab title from the single source (pageTitle → "<section> — <app name>").
 useHead({
-  title: 'Очереди — монитор',
+  title: pageTitle('Очереди'),
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 
@@ -62,13 +64,14 @@ function previewFetcher(): Promise<QueuesSnapshot> {
 
 <template>
   <AuthGate>
-    <main class="mx-auto max-w-5xl px-4 py-8">
+    <main class="mx-auto max-w-6xl px-4 py-8">
       <header class="mb-5">
         <h1 class="text-2xl font-bold text-(--ui-color-base-1)">
           Монитор очередей обработки
         </h1>
         <p class="mt-1 text-sm text-(--ui-color-base-3)">
-          Живой график длины очередей (backlog = ждут + в работе). Источник —
+          Сколько задач сейчас в очереди на каждом этапе (ждут и в обработке), а не сколько
+          уже обработано. Источник —
           <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5">GET /api/ops/queues</code>
           (по сессии оператора). Флаг
           <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5">?preview=1</code>
@@ -80,8 +83,8 @@ function previewFetcher(): Promise<QueuesSnapshot> {
       <QueueMonitor
         :fetcher="fetcher"
         title="Очереди обработки"
-        :interval-sec="5"
-        :max-points="60"
+        :range-min="10"
+        :max-points="400"
       />
     </main>
   </AuthGate>

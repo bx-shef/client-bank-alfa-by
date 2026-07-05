@@ -1,0 +1,88 @@
+THIRD-PARTY NOTICES — сторонние компоненты и их лицензии
+=========================================================
+
+Это приложение (лендинг SSG + Bitrix24-iframe-UI + backend Nitro) распространяется
+вместе со сторонними компонентами с открытым исходным кодом. Ниже — обязательные
+уведомления об авторских правах и лицензиях. Само приложение — под лицензией MIT
+(© 2026 Igor Shevchik).
+
+Полные тексты крупных лицензий отдаются вместе с сайтом:
+  - Apache License 2.0 — /licenses/apache-2.0.txt
+  - SIL Open Font License 1.1 — /licenses/ofl-1.1.txt
+  - BSD 3-Clause (zrender) — /licenses/bsd-3-clause-zrender.txt
+Полный список зависимостей с лицензиями воспроизводится командой
+`pnpm licenses list --prod`; текст лицензии каждого пакета — в его каталоге
+node_modules/<пакет>/LICENSE.
+
+
+APACHE LICENSE 2.0
+------------------
+Полный текст: /licenses/apache-2.0.txt
+
+Apache ECharts несёт файл NOTICE — Apache-2.0 §4(d) обязывает его воспроизвести.
+Воспроизводим дословно:
+
+    Apache ECharts
+    Copyright 2017-2026 The Apache Software Foundation
+
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
+
+Другие компоненты под Apache-2.0 (без собственного NOTICE), попадающие в бандл:
+  - @internationalized/date, @internationalized/number — © Adobe (через Bitrix24 UI)
+  - fuse.js — © Kiro Risk (через Bitrix24 UI)
+  - colortranslator — © Sergio Marín (через Bitrix24 UI)
+  - @swc/helpers — © SWC contributors
+
+
+BSD 3-CLAUSE LICENSE
+--------------------
+Полный текст: /licenses/bsd-3-clause-zrender.txt
+
+  - zrender — движок отрисовки ECharts (попадает в бандл через echarts):
+    Copyright (c) 2017, Baidu Inc. All rights reserved.
+    (BSD-3-Clause требует сохранить копирайт, список условий и дисклеймер —
+    воспроизведены в /licenses/bsd-3-clause-zrender.txt.)
+
+
+SIL OPEN FONT LICENSE 1.1 (OFL-1.1)
+-----------------------------------
+Полный текст: /licenses/ofl-1.1.txt
+
+Лендинг использует self-hosted шрифты, поэтому файлы шрифтов распространяются
+вместе с сайтом:
+  - Rubik — Copyright 2015 The Rubik Project Authors
+    (https://github.com/googlefonts/rubik)
+  - Roboto Mono — Copyright 2015 The Roboto Mono Project Authors
+    (https://github.com/googlefonts/robotomono)
+
+Поставляются через пакеты @fontsource/*. По OFL шрифты нельзя продавать отдельно и
+нельзя использовать зарезервированные имена шрифтов для модифицированных версий.
+
+
+MIT LICENSE
+-----------
+Требуется сохранить копирайт и текст разрешения (текст — в node_modules/<пакет>/LICENSE).
+Значимые компоненты в бандле/образе:
+  - Vue — © Yuxi (Evan) You и контрибьюторы Vue
+  - Nuxt — © Nuxt contributors
+  - Tailwind CSS — © Tailwind Labs, Inc.
+  - @vueuse/core — © VueUse contributors
+  - Bitrix24 UI (@bitrix24/b24ui-nuxt), b24icons-vue, @bitrix24/b24jssdk(-nuxt)
+    — © 2024 Bitrix24
+  - qrcode — © Ryan Day
+  - BullMQ — © Taskforce.sh Inc.  (backend)
+  - node-postgres (pg), ioredis — © соответствующие авторы  (backend)
+
+
+ПРОЧИЕ ПЕРМИССИВНЫЕ ЛИЦЕНЗИИ
+---------------------------
+Часть транзитивных зависимостей — под другими пермиссивными лицензиями
+(BSD-2-Clause, ISC, 0BSD, BlueOak-1.0.0, CC0-1.0; двойные MIT OR CC0-1.0 и
+BSD-3-Clause OR GPL-2.0 — берём пермиссивную сторону). Копилефт-лицензий
+(GPL/LGPL/AGPL/MPL) в распространяемых артефактах нет.
+
+Примечание для мейнтейнеров: в `pnpm licenses list --prod` встречаются MPL-2.0
+(lightningcss) и GPL-часть двойного node-forge / Apache-NOTICE bare-path — все
+они **только сборочные** (tailwind/nitro-тулинг) и в браузерный бандл или
+backend-рантайм не попадают, поэтому обязательств по ним нет.
