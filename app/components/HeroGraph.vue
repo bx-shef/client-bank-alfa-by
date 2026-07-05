@@ -9,6 +9,18 @@
 // canvas draw is throttled to ~30fps. The whole loop is paused when the tab is
 // hidden, the canvas is offscreen (IntersectionObserver), or the user prefers
 // reduced motion (then a single static frame is drawn).
+//
+// Parametrised so different pages can theme it: `rgb` sets the accent colour
+// channel (default primary cyan; /partners passes a violet palette), and
+// `photo=false` disables the photo-repel zone on pages without a hero portrait.
+const props = withDefaults(defineProps<{
+  rgb?: string
+  photo?: boolean
+}>(), {
+  rgb: '0, 212, 255',
+  photo: true
+})
+
 const canvas = ref<HTMLCanvasElement | null>(null)
 let animId = 0
 let resizeRaf = 0
@@ -112,8 +124,8 @@ function buildGlowSprites() {
     const g = s.getContext('2d')
     if (g) {
       const grd = g.createRadialGradient(glow, glow, 0, glow, glow, glow)
-      grd.addColorStop(0, `rgba(0, 212, 255, ${glowA})`)
-      grd.addColorStop(1, 'rgba(0, 212, 255, 0)')
+      grd.addColorStop(0, `rgba(${props.rgb}, ${glowA})`)
+      grd.addColorStop(1, `rgba(${props.rgb}, 0)`)
       g.fillStyle = grd
       g.beginPath()
       g.arc(glow, glow, glow, 0, Math.PI * 2)
@@ -201,13 +213,15 @@ function tick(dt: number) {
     na.vx += (Math.random() - 0.5) * NOISE
     na.vy += (Math.random() - 0.5) * NOISE
 
-    const pdx = na.x - photoX
-    const pdy = na.y - photoY
-    const pdist = Math.sqrt(pdx * pdx + pdy * pdy) + 0.01
-    if (pdist < PHOTO_REPEL_R) {
-      const pf = Math.pow((PHOTO_REPEL_R - pdist) / PHOTO_REPEL_R, 2) * 5
-      na.vx += (pdx / pdist) * pf
-      na.vy += (pdy / pdist) * pf
+    if (props.photo) {
+      const pdx = na.x - photoX
+      const pdy = na.y - photoY
+      const pdist = Math.sqrt(pdx * pdx + pdy * pdy) + 0.01
+      if (pdist < PHOTO_REPEL_R) {
+        const pf = Math.pow((PHOTO_REPEL_R - pdist) / PHOTO_REPEL_R, 2) * 5
+        na.vx += (pdx / pdist) * pf
+        na.vy += (pdy / pdist) * pf
+      }
     }
 
     for (let b = a + 1; b < outerIdx.length; b++) {
@@ -271,7 +285,7 @@ function tick(dt: number) {
 
 function draw() {
   ctx.clearRect(0, 0, w, h)
-  const CH = '0, 212, 255'
+  const CH = props.rgb
   if (!hub) return
 
   // Spokes — faint lines from each outer node to the hub.
