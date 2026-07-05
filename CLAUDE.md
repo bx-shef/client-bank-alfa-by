@@ -358,7 +358,9 @@ UI — в компонентах. Это та же раскладка, что в
   `/install` откажется биндить относительный URL и покажет ошибку с retry).
 - **Вызовы B24 для данных/настроек — server-side REST по OAuth-токену (backend), не через фрейм** (см.
   «Хранение настроек» в [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md)). Фрейм-SDK тут — только установка
-  и UI-хром (`setTitle`/`fitWindow`).
+  и UI-хром (`setTitle`/`fitWindow`). **Учёт всех REST-вызовов** (метод, поколение/версия, scope,
+  транспорт фрейм/сервер, файл-владелец, батч) — [`docs/REST_METHODS.md`](docs/REST_METHODS.md); правим
+  при добавлении/замене метода (для точечной миграции при депрекейте).
 - **Серверные события — отдельный механизм** (не фрейм-`/install`): исходящие вебхуки Б24
   `ONAPPINSTALL`/`ONAPPUNINSTALL` на backend (`server/api/b24/events.post.ts`) дают `application_token`
   (подпись событий) и OAuth-креды портала; токены пишутся в Postgres (`server/utils/tokenStore.ts`).
