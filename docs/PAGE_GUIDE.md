@@ -141,9 +141,11 @@ definePageMeta({ layout: 'clear' })
 - `CustomDevCard` — **на in-portal-странице приложения** (`/app`): предложение доработки
   актуально и внутри портала. Оборачиваем в `<div class="mx-auto mt-8 w-full max-w-[520px]">`
   над подвалом (`BuildFooter`). На лендинг **не** дублируем — там своя форма заявки `BriefForm`.
-- Карточка Маркета Bitrix24 (в `currency-converter` — `AppInBitrixCard`) — на лендинге,
-  **скрыта в iframe** (в портале приложение уже стоит). В этом репо пока **не заведена** —
-  тексты под согласование (черновик и статус — `project-map.md` → «Что дальше»).
+- `AppInBitrixCard` — карточка «Приложение для Bitrix24» на **лендинге** (после «Почему мы»):
+  ссылка на листинг Маркета `shef.bankimport` + мобильный QR. Тексты — `LANDING_MARKET_PROMO`,
+  url — `LANDING_MARKET_URL`, своя цель клика `market_card_click` (не сливается с целью hero).
+  Лендинг standalone → карточку в iframe **не** прячем (в отличие от `currency-converter`, где `/`
+  dual-mode). Копия текстов — в `POSITIONING.md` («Карточка "Приложение для Bitrix24"»).
 
 > **Требование к обёртке:** карточка-контейнер должна быть `relative overflow-hidden`,
 > иначе QR-оверлей `HoldRevealQr` (`absolute inset-0`) схлопнется не на неё. Не оборачивать
