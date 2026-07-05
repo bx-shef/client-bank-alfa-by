@@ -20,6 +20,11 @@ export interface RemoteSearchPage<T> {
   total?: number
   /** Explicit "more pages exist" flag; overrides `total` when present. */
   hasMore?: boolean
+  /** Raw offset to request for the NEXT page. Give this when the source filters or
+   *  transforms rows (so kept-item count ≠ rows consumed) — the paginator then
+   *  advances by rows the server consumed, not by accumulated items. Omit for
+   *  simple sources where offset == items loaded so far. */
+  nextOffset?: number
 }
 
 /** Transport the composable drives: given a query and an offset (how many rows

@@ -74,6 +74,25 @@ describe('useRemoteSearch', () => {
     expect(api.hasMore.value).toBe(false)
   })
 
+  it('advances by the page-reported nextOffset (not item count) when filtering drops rows', async () => {
+    // Server filters read-only rows: page 1 keeps 2 items but consumed 5 raw rows.
+    // The paginator must request offset 5 next (rows consumed), not offset 2 (items).
+    const calls: number[] = []
+    const fetcher = vi.fn(async (_q: string, offset: number) => {
+      calls.push(offset)
+      if (offset === 0) return { items: [row('1'), row('2')], hasMore: true, nextOffset: 5 }
+      return { items: [row('3')], hasMore: false } // page from raw offset 5
+    })
+    await mountHarness(fetcher)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(api.items.value.map(r => r.value)).toEqual(['1', '2'])
+
+    await api.loadMore()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(calls).toEqual([0, 5]) // advanced by nextOffset=5, NOT items.length=2
+    expect(api.items.value.map(r => r.value)).toEqual(['1', '2', '3'])
+  })
+
   it('drops a stale response when a newer query supersedes it', async () => {
     // First query resolves slowly; second resolves fast. Only the second wins.
     const deferred: Array<() => void> = []

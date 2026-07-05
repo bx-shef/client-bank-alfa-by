@@ -73,6 +73,9 @@ export function useRemoteSearch<T>(options: UseRemoteSearchOptions<T>): UseRemot
   // in-flight fetch when possible so the backend isn't queried needlessly.
   let runToken = 0
   let inFlight: AbortController | null = null
+  // Offset to request for the NEXT page. Advanced by the server's `nextOffset` when
+  // given (sources that filter rows), else by accumulated item count.
+  let nextCursor = 0
 
   async function run(term: string, offset: number): Promise<void> {
     // Gate: too-short terms never hit the network — clear to an empty list.
@@ -82,6 +85,7 @@ export function useRemoteSearch<T>(options: UseRemoteSearchOptions<T>): UseRemot
       runToken++
       items.value = []
       more.value = false
+      nextCursor = 0
       loading.value = false
       error.value = null
       return
@@ -102,6 +106,9 @@ export function useRemoteSearch<T>(options: UseRemoteSearchOptions<T>): UseRemot
       more.value = offset > 0 && items.value.length === before
         ? false
         : resolveHasMore(items.value.length, page)
+      // Advance the cursor by the server's reported next offset (rows consumed) when
+      // provided; else fall back to item count (simple offset == items sources).
+      nextCursor = typeof page.nextOffset === 'number' ? page.nextOffset : items.value.length
     } catch (e) {
       if (token !== runToken) return // stale error — ignore
       if ((e as Error)?.name === 'AbortError') return
@@ -117,7 +124,7 @@ export function useRemoteSearch<T>(options: UseRemoteSearchOptions<T>): UseRemot
 
   async function loadMore(): Promise<void> {
     if (loading.value || !more.value) return
-    await run(normalized.value, items.value.length)
+    await run(normalized.value, nextCursor)
   }
 
   async function refresh(): Promise<void> {
