@@ -41,6 +41,37 @@ describe('recognizeIdentifiers', () => {
     expect(recognizeIdentifiers('счёт-фактура 12', [invoiceRule])).toEqual([])
   })
 
+  it('does NOT match the phrase inside a longer word (левая граница слова)', () => {
+    // «расчёту» contains «счёт» as a substring — must not trigger.
+    expect(recognizeIdentifiers('Оплата согласно расчёту 100', [invoiceRule])).toEqual([])
+    expect(recognizeIdentifiers('расчётный счётчик 5', [invoiceRule])).toEqual([])
+  })
+
+  it('still matches a standalone phrase after a word (по счёт 100)', () => {
+    expect(recognizeIdentifiers('оплата по счёт 100', [invoiceRule]))
+      .toEqual([{ kind: 'invoice-number', value: '100' }])
+  })
+
+  it('matches when the number directly adjoins the phrase (no separator)', () => {
+    expect(recognizeIdentifiers('счёт77 оплата', [invoiceRule]))
+      .toEqual([{ kind: 'invoice-number', value: '77' }])
+  })
+
+  it('does NOT normalize ё/е — phrase must match the configured spelling', () => {
+    expect(recognizeIdentifiers('оплата по счет 5', [invoiceRule])).toEqual([])
+  })
+
+  it('dedups across different phrases of one rule pointing at the same value', () => {
+    const rule: RecognitionRule = { phrases: ['счёт', 'инвойс'], kind: 'invoice-number' }
+    expect(recognizeIdentifiers('счёт 5 инвойс 5', [rule]))
+      .toEqual([{ kind: 'invoice-number', value: '5' }])
+  })
+
+  it('skips an absurdly long value (> MAX_ID_CHARS)', () => {
+    const huge = '9'.repeat(80)
+    expect(recognizeIdentifiers(`счёт ${huge}`, [invoiceRule])).toEqual([])
+  })
+
   it('keeps composite numbers as a single value (123/45, 2024-7)', () => {
     expect(recognizeIdentifiers('инвойс 123/45', [invoiceRule]))
       .toEqual([{ kind: 'invoice-number', value: '123/45' }])
