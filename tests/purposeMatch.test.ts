@@ -92,4 +92,39 @@ describe('recognizeByMatrices', () => {
     const text = `счёт ${'9'.repeat(80)}`
     expect(recognizeByMatrices(text, [invNum(huge)])).toEqual([])
   })
+
+  it('accepts a value of exactly MAX_ID_CHARS (64) — no off-by-one', () => {
+    const mask = 'd'.repeat(64)
+    const text = `счёт ${'9'.repeat(64)} конец`
+    expect(recognizeByMatrices(text, [invNum(mask)]))
+      .toEqual([{ kind: 'invoice-number', value: '9'.repeat(64) }])
+  })
+
+  it('folds LOWERCASE homoglyphs too (ворс, not just ВОРС)', () => {
+    expect(foldHomoglyphs('ворс', 'latin')).toBe('bopc')
+    expect(recognizeByMatrices('оплата ворс-123', [invNum('BOPC-ddd')], 'latin'))
+      .toEqual([{ kind: 'invoice-number', value: 'bopc-123' }])
+  })
+
+  it('folds a MIXED-alphabet token (ВOРC → BOPC under latin)', () => {
+    // В,Р cyrillic + O,C latin — one visual "BOPC"
+    expect(recognizeByMatrices('оплата ВOРC-9', [invNum('BOPC-d')], 'latin'))
+      .toEqual([{ kind: 'invoice-number', value: 'BOPC-9' }])
+  })
+
+  it('treats uppercase D in a mask as a literal (case-insensitive match)', () => {
+    expect(recognizeByMatrices('код D-1234', [invNum('D-dddd')]))
+      .toEqual([{ kind: 'invoice-number', value: 'D-1234' }])
+    expect(recognizeByMatrices('код d-1234', [invNum('D-dddd')]))
+      .toEqual([{ kind: 'invoice-number', value: 'd-1234' }])
+  })
+
+  it('does not grab a number after a Belarusian letter (Ўў/Іі in the boundary)', () => {
+    expect(recognizeByMatrices('плацёж№ў2001', [invNum('dddd')])).toEqual([])
+    expect(recognizeByMatrices('код і2002', [invNum('dddd')])).toEqual([])
+  })
+
+  it('skips an over-long mask (> MAX_MASK_CHARS) without throwing', () => {
+    expect(recognizeByMatrices('счёт 1', [invNum('d'.repeat(200))])).toEqual([])
+  })
 })

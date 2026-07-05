@@ -38,8 +38,10 @@ export interface MatchMatrix {
   note?: string
 }
 
-/** A recognized identifier: its kind and the extracted value (a string — leading
- *  zeros / composite forms like `123/45` survive; value is in the folded alphabet). */
+/** A recognized identifier: its kind and the extracted value — the WHOLE matched
+ *  fragment, INCLUDING the mask's literal prefix (e.g. `СЧ-1234`, not `1234`) and
+ *  in the folded alphabet. The REST lookup decides whether the entity field holds
+ *  the number with the prefix or without (§4; often `accountNumber` IS `СЧ-1`). */
 export interface RecognizedId {
   kind: IdentifierKind
   value: string
@@ -50,28 +52,36 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-// Visually-identical Cyrillic↔Latin letter pairs (upper and lower). Numbers/codes
-// are often typed in either alphabet — "ВОРС" (Cyr) and "BOPC" (Lat) look the same.
+// Visually-identical Cyrillic↔Latin letter pairs (uppercase canon). Numbers/codes
+// are typed in either alphabet — "ВОРС" (Cyr) and "BOPC" (Lat) look the same. Case
+// is handled programmatically in `foldHomoglyphs`, so only uppercase pairs live
+// here (a lowercase-only table would silently miss "ворс" — #152 review).
 const CYR_LAT: ReadonlyArray<readonly [string, string]> = [
   ['А', 'A'], ['В', 'B'], ['Е', 'E'], ['К', 'K'], ['М', 'M'], ['Н', 'H'],
-  ['О', 'O'], ['Р', 'P'], ['С', 'C'], ['Т', 'T'], ['У', 'Y'], ['Х', 'X'],
-  ['а', 'a'], ['е', 'e'], ['о', 'o'], ['р', 'p'], ['с', 'c'], ['у', 'y'], ['х', 'x']
+  ['О', 'O'], ['Р', 'P'], ['С', 'C'], ['Т', 'T'], ['У', 'Y'], ['Х', 'X']
 ]
 const TO_LATIN = new Map(CYR_LAT.map(([c, l]) => [c, l]))
 const TO_CYRILLIC = new Map(CYR_LAT.map(([c, l]) => [l, c]))
 
 /** Fold homoglyphs of `text` to the chosen alphabet so a code written in either
- *  Cyrillic or Latin compares equal. Non-homoglyph chars pass through unchanged. */
+ *  Cyrillic or Latin compares equal — case-insensitively (table is uppercase; the
+ *  source char's case is preserved). Non-homoglyph chars pass through unchanged. */
 export function foldHomoglyphs(text: string, alphabet: Alphabet): string {
   const m = alphabet === 'latin' ? TO_LATIN : TO_CYRILLIC
   let out = ''
-  for (const ch of text) out += m.get(ch) ?? ch
+  for (const ch of text) {
+    const upper = ch.toUpperCase()
+    const mapped = m.get(upper)
+    if (mapped === undefined) out += ch
+    else out += ch === upper ? mapped : mapped.toLowerCase()
+  }
   return out
 }
 
 // A match must not sit INSIDE a longer alphanumeric token (so bare `dddd` does not
-// grab "1234" out of "12345", and a prefixed mask does not match a fragment).
-const ALNUM = '0-9A-Za-zА-Яа-яЁё'
+// grab "1234" out of "12345", and a prefixed mask does not match a fragment). The
+// class includes Belarusian `Іі`/`Ўў` (Alfa-Bank BY) beyond А-Я/а-я/Ёё.
+const ALNUM = '0-9A-Za-zА-Яа-яЁёІіЎў'
 const BOUND_L = `(?<![${ALNUM}])`
 const BOUND_R = `(?![${ALNUM}])`
 
@@ -87,6 +97,10 @@ function maskToPattern(foldedMask: string): string {
 export const MAX_PURPOSE_CHARS = 10_000
 /** Reject absurdly long extracted values — real ids/numbers are short. */
 export const MAX_ID_CHARS = 64
+/** Skip an over-long mask (defense-in-depth: masks come from portal settings). */
+export const MAX_MASK_CHARS = 128
+/** Scan at most this many matrices per call (semi-trusted settings source). */
+export const MAX_MATRICES = 200
 
 /**
  * Extract every identifier recognized in `purpose` by `matrices`, folding both the
@@ -106,9 +120,9 @@ export function recognizeByMatrices(
   )
   const out: RecognizedId[] = []
   const seen = new Set<string>()
-  for (const matrix of matrices) {
+  for (const matrix of matrices.slice(0, MAX_MATRICES)) {
     const mask = matrix.mask.trim()
-    if (!mask) continue
+    if (!mask || mask.length > MAX_MASK_CHARS) continue
     const body = maskToPattern(foldHomoglyphs(mask, alphabet))
     let re: RegExp
     try {
