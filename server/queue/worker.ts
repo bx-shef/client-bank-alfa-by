@@ -24,7 +24,7 @@ import { makePortalRestCall, type PortalRestDeps } from '../utils/portalRest'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
-import { readAppSetting } from '../utils/appSettings'
+import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
@@ -87,20 +87,26 @@ export function liveHandlerDeps(): HandlerDeps {
     getChatSettings: async (memberId) => {
       try {
         return parsePortalSettings(await readAppSetting(portalRestDeps, memberId, SETTINGS_KEY)).chat
-      } catch {
-        return null
+      } catch (e) {
+        // Portal genuinely not installed (e.g. demo memberId with no token) → no chat.
+        if (e instanceof PortalNotInstalledError) return null
+        // A TRANSIENT error (REST/refresh) must NOT silently disable chat for the whole
+        // batch: rethrow to fail the job BEFORE any activity is written (this runs before
+        // the loop) → clean retry recovers both the writes and the announcements.
+        throw e
       }
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
-    // no portal token → skip. A transport error is swallowed+logged, NOT propagated —
-    // the activity is already written+remembered, so failing the job would skip the op
-    // on retry and lose the record (нюанс 3).
+    // no portal token → skip. The WHOLE body is guarded (incl. makePortalRestCall's token
+    // load + OAuth refresh) — a chat failure is swallowed+logged, NEVER propagated: the
+    // activity is already written+remembered, so failing the job would skip the op on
+    // retry and lose the record (нюанс 3).
     notifyChat: async (item, dialogId, memberId) => {
       if (isDemoAccount(item.account)) return
-      const call = await makePortalRestCall(memberId, portalRestDeps)
-      if (!call) return
       try {
+        const call = await makePortalRestCall(memberId, portalRestDeps)
+        if (!call) return
         await notifyChatViaRest(item, dialogId, call)
       } catch (e) {
         console.error('chat notify failed', memberId, (e as Error)?.message)

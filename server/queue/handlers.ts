@@ -32,7 +32,9 @@ export interface HandlerDeps {
    *  unset/unavailable. Resolved ONCE per crm-sync job, not per operation. */
   getChatSettings: (memberId: string) => Promise<ChatSettings | null>
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
-   *  (target set + rules) is made by the handler; this is pure transport. */
+   *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
+   *  throw — it runs AFTER the activity is written+remembered, so a propagated error
+   *  would fail the job, skip the op on retry, and lose the record. Swallow+log. */
   notifyChat: (item: StatementItem, dialogId: string, memberId: string) => Promise<void>
   /** Persistent dedup: the activity id already written for this op, or null (#9). */
   getActivityId: (memberId: string, dedupKey: string) => Promise<string | null>
