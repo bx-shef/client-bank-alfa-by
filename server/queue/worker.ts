@@ -23,6 +23,9 @@ import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { makePortalRestCall, type PortalRestDeps } from '../utils/portalRest'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
+import { notifyChatViaRest } from '../utils/chatNotifyWrite'
+import { readAppSetting } from '../utils/appSettings'
+import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
 const portalRestDeps: PortalRestDeps = {
@@ -78,20 +81,31 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return writeActivityViaRest(item, companyId, call)
     },
-    // TODO stage 6 (live wiring): post via notifyChatViaRest(item, dialogId, call) —
-    // the message builder + REST wrapper (chatNotifyWrite.ts, chatMessage.ts) are
-    // ready + tested. Blocked on real settings storage (#16): no chat target is
-    // persisted yet, so wiring now would just skip every time. Gate demo accounts.
-    // Before wiring, settle three points (review findings) so the contract lands once:
-    //  1) resolve {dialogId, rules} ONCE per job in handleCrmSyncJob and thread them in
-    //     (a HandlerDeps change) — else every op does a fresh readAppSetting REST call;
-    //  2) decide whether chat fires for UNMATCHED income too — today notifyChat is only
-    //     reached after a company matched, so payments from unknown counterparties are
-    //     never announced (shouldNotifyChat defaults to announcing credits regardless);
-    //  3) a live chat error must NOT fail the job after rememberActivity (the op would
-    //     then be skipped on retry → message lost) — swallow/log, or track chat-sent
-    //     separately from activity-remembered.
-    notifyChat: async () => {},
+    // Read the portal's chat settings (target + rules) from app.option ONCE per job
+    // (#16). portalRestDeps already satisfies AppSettingsDeps (loadToken/ensureFresh/
+    // callRest). Any error (portal not installed / REST) → null → announcements skip.
+    getChatSettings: async (memberId) => {
+      try {
+        return parsePortalSettings(await readAppSetting(portalRestDeps, memberId, SETTINGS_KEY)).chat
+      } catch {
+        return null
+      }
+    },
+    // Post the announcement via im.message.add. The decision (target + rules) was made
+    // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
+    // no portal token → skip. A transport error is swallowed+logged, NOT propagated —
+    // the activity is already written+remembered, so failing the job would skip the op
+    // on retry and lose the record (нюанс 3).
+    notifyChat: async (item, dialogId, memberId) => {
+      if (isDemoAccount(item.account)) return
+      const call = await makePortalRestCall(memberId, portalRestDeps)
+      if (!call) return
+      try {
+        await notifyChatViaRest(item, dialogId, call)
+      } catch (e) {
+        console.error('chat notify failed', memberId, (e as Error)?.message)
+      }
+    },
     // Persistent dedup store (#9) — read-before-write guard, wired to Postgres.
     getActivityId: (memberId, key) => getActivityId(dbQuery, memberId, key),
     rememberActivity: async (memberId, key, activityId) => {

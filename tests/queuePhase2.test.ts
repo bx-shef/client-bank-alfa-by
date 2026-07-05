@@ -7,6 +7,7 @@ import {
   DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches
 } from '../server/queue/cron'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
+import type { ChatSettings } from '../app/utils/settings'
 
 function item(docId: string, direction: 'credit' | 'debit' = 'credit'): StatementItem {
   return {
@@ -22,6 +23,8 @@ interface FakeOpts {
   company?: string | null
   /** dedup keys already written (getActivityId returns a stored id for these). */
   alreadyWritten?: Set<string>
+  /** chat settings getChatSettings returns; default announces both directions. */
+  chat?: ChatSettings | null
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -33,7 +36,12 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const written = new Map<string, string>() // dedupKey → activityId (persistent dedup)
   for (const k of o.alreadyWritten ?? []) written.set(k, `pre-${k}`)
   let nextId = 1
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [] }
+  // default chat: a target set + both directions → every created op is announced
+  // (keeps pre-gating chat assertions valid; gating is exercised by its own tests).
+  const chat = o.chat === undefined
+    ? { dialogId: 'chat1', rules: { directions: ['credit', 'debit'] as const } }
+    : o.chat
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], chatSettings: [] }
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
     parseFile: async () => batch,
@@ -47,7 +55,11 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.activity.push([it.docId, companyId, memberId, id])
       return id
     },
-    notifyChat: async (it, memberId) => {
+    getChatSettings: async (memberId) => {
+      calls.chatSettings.push(memberId)
+      return chat
+    },
+    notifyChat: async (it, _dialogId, memberId) => {
       calls.chat.push([it.docId, memberId])
     },
     getActivityId: async (_memberId, key) => written.get(key) ?? null,
@@ -179,6 +191,42 @@ describe('handleCrmSyncJob', () => {
     expect(r).toEqual({ processed: 3, created: 1, skipped: 1, unmatched: 1, credits: 2, debits: 1 })
     expect(calls.remember).toEqual([['A|d2', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
+  })
+
+  it('resolves chat settings ONCE per job, not per operation (#16 нюанс 1)', async () => {
+    const { deps, calls } = fakeDeps()
+    await handleCrmSyncJob(job([item('d1'), item('d2'), item('d3')]), deps)
+    expect(calls.chatSettings).toEqual(['M']) // one read for the whole batch
+  })
+
+  it('no announcement when no chat target is set (empty dialogId)', async () => {
+    const { deps, calls } = fakeDeps({ chat: { dialogId: '', rules: { directions: ['credit'] } } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    expect(r).toMatchObject({ created: 1 })
+    expect(calls.chat).toEqual([]) // written, but not announced
+  })
+
+  it('no announcement when chat settings are null (unavailable)', async () => {
+    const { deps, calls } = fakeDeps({ chat: null })
+    await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    expect(calls.chat).toEqual([])
+  })
+
+  it('rules gate the announcement: direction / excluded account / excluded purpose', async () => {
+    // directions: credits only → a created DEBIT is written but not announced.
+    const dir = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'] } } })
+    await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'debit')]), dir.deps)
+    expect(dir.calls.chat).toEqual([['d1', 'M']])
+
+    // excluded account (item.account = 'A') → silenced.
+    const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
+    await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
+    expect(acc.calls.chat).toEqual([])
+
+    // excluded purpose substring (item.purpose = 'p') → silenced.
+    const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
+    await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
+    expect(pur.calls.chat).toEqual([])
   })
 })
 
