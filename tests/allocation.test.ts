@@ -13,8 +13,9 @@ import {
 // Pure allocation core (#109). Criterion: auto-allocate only when exactly one
 // distinct target matches BOTH amount and currency; everything else → manual /
 // none. Covers happy path, partial/group (amount mismatch), currency mismatch,
-// invoice↔deal-payment same-target collapse, identical-dupe min-id tie-break,
-// several distinct → manual, and the idempotent fact key.
+// invoice↔deal-payment same-deal collapse, cross-kind id collision (must stay
+// distinct), identical-dupe min-id tie-break, several distinct → manual, and
+// the idempotent fact key.
 
 function inv(over: Partial<AllocationCandidate> = {}): AllocationCandidate {
   return { kind: 'invoice', id: '1', amount: 100, currency: 'BYN', ...over }
@@ -59,6 +60,11 @@ describe('isEligible', () => {
     expect(isEligible(p, inv({ amount: 99 }))).toBe(false) // partial
     expect(isEligible(p, inv({ currency: 'RUB' }))).toBe(false) // currency
   })
+  it('matches an exact zero/negative amount (сторно/возврат) — direction is out of scope', () => {
+    expect(isEligible(payment({ amount: 0 }), inv({ amount: 0 }))).toBe(true)
+    expect(isEligible(payment({ amount: -100 }), inv({ amount: -100 }))).toBe(true)
+    expect(isEligible(payment({ amount: -100 }), inv({ amount: 100 }))).toBe(false)
+  })
 })
 
 describe('resolveAllocation', () => {
@@ -71,31 +77,51 @@ describe('resolveAllocation', () => {
     expect(resolveAllocation(payment({ candidates: [target] }))).toEqual({ action: 'allocate', target })
   })
 
-  it('partial payment (amount differs) → manual no-exact-match', () => {
-    const d = resolveAllocation(payment({ amount: 100, candidates: [inv({ amount: 150 })] }))
-    expect(d).toMatchObject({ action: 'manual', reason: 'no-exact-match' })
+  it('picks the single eligible one out of a mixed set (ineligible ones ignored)', () => {
+    const target = inv({ id: '1', amount: 100 })
+    const wrongAmount = inv({ id: '2', amount: 999 })
+    const wrongCurrency = inv({ id: '3', currency: 'RUB' })
+    const d = resolveAllocation(payment({ candidates: [target, wrongAmount, wrongCurrency] }))
+    expect(d).toEqual({ action: 'allocate', target })
   })
 
-  it('currency mismatch only → manual no-exact-match', () => {
-    const d = resolveAllocation(payment({ candidates: [inv({ currency: 'RUB' })] }))
-    expect(d).toMatchObject({ action: 'manual', reason: 'no-exact-match' })
+  it('partial payment (amount differs) → manual no-exact-match, keeps all candidates', () => {
+    const c = inv({ amount: 150 })
+    expect(resolveAllocation(payment({ amount: 100, candidates: [c] })))
+      .toEqual({ action: 'manual', reason: 'no-exact-match', candidates: [c] })
   })
 
-  it('invoice + its own deal-payment (same deal) → allocate the invoice', () => {
+  it('currency mismatch only → manual no-exact-match, keeps all candidates', () => {
+    const c = inv({ currency: 'RUB' })
+    expect(resolveAllocation(payment({ candidates: [c] })))
+      .toEqual({ action: 'manual', reason: 'no-exact-match', candidates: [c] })
+  })
+
+  it('invoice + a deal-payment of the SAME deal → allocate the invoice', () => {
     const invoice = inv({ id: '7', dealId: '55' })
-    const dealPayment = pay({ id: '55' }) // deal-payment id == invoice.dealId
+    const dealPayment = pay({ id: 'P9', dealId: '55' }) // own record id P9, same deal 55
     const d = resolveAllocation(payment({ candidates: [invoice, dealPayment] }))
     expect(d).toEqual({ action: 'allocate', target: invoice })
   })
 
-  it('identical duplicate invoices (same amount/currency) → allocate min id', () => {
+  it('invoice + unrelated deal-payment that merely shares a numeric id → manual (not merged)', () => {
+    const invoice = inv({ id: '7', dealId: '55' })
+    const unrelated = pay({ id: '7', dealId: '88' }) // same numeric id, different deal
+    const d = resolveAllocation(payment({ candidates: [invoice, unrelated] }))
+    expect(d).toMatchObject({ action: 'manual', reason: 'multiple-candidates' })
+    if (d.action === 'manual') expect(d.candidates).toHaveLength(2)
+  })
+
+  it('same-amount duplicates of one kind collapse to min id (owner heuristic kind|currency|amount)', () => {
+    // NB: this is the deliberate §2 heuristic — two rows with equal kind|currency|
+    // amount are treated as ONE target, min id wins. Not a technical-dup guard.
     const d = resolveAllocation(payment({ candidates: [inv({ id: '10' }), inv({ id: '9' })] }))
     expect(d).toEqual({ action: 'allocate', target: inv({ id: '9' }) })
   })
 
   it('two distinct targets (invoice + unrelated deal-payment) → manual multiple-candidates', () => {
     const invoice = inv({ id: '7', dealId: '55' })
-    const other = pay({ id: '99' }) // unrelated deal, not covered by the invoice
+    const other = pay({ id: '99', dealId: '88' }) // unrelated deal, not covered by the invoice
     const d = resolveAllocation(payment({ candidates: [invoice, other] }))
     expect(d).toMatchObject({ action: 'manual', reason: 'multiple-candidates' })
     if (d.action === 'manual') expect(d.candidates).toHaveLength(2)
@@ -103,12 +129,12 @@ describe('resolveAllocation', () => {
 })
 
 describe('collapseSameTarget', () => {
-  it('drops a deal-payment covered by an invoice, keeps distinct ones', () => {
+  it('drops a deal-payment whose deal an invoice covers, keeps distinct ones', () => {
     const invoice = inv({ id: '7', dealId: '55' })
-    const covered = pay({ id: '55' })
-    const distinctPay = pay({ id: '80' })
+    const covered = pay({ id: 'P1', dealId: '55' })
+    const distinctPay = pay({ id: 'P2', dealId: '80' })
     const kept = collapseSameTarget([invoice, covered, distinctPay])
-    expect(kept.map(c => c.id).sort()).toEqual(['7', '80'])
+    expect(kept.map(c => c.id).sort()).toEqual(['7', 'P2'])
   })
 })
 
@@ -126,5 +152,12 @@ describe('allocationFactKey', () => {
       .not.toBe(allocationFactKey(base, { kind: 'deal-payment', id: '7' }))
     expect(allocationFactKey(base, { kind: 'invoice', id: '7' }))
       .not.toBe(allocationFactKey(base, { kind: 'invoice', id: '8' }))
+  })
+  it('differs by payment (same target, different account/docId)', () => {
+    const target = { kind: 'invoice', id: '7' } as const
+    expect(allocationFactKey({ account: 'A', docId: '1' }, target))
+      .not.toBe(allocationFactKey({ account: 'A', docId: '2' }, target))
+    expect(allocationFactKey({ account: 'A', docId: '1' }, target))
+      .not.toBe(allocationFactKey({ account: 'B', docId: '1' }, target))
   })
 })

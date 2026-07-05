@@ -17,14 +17,19 @@ export type AllocationTargetKind = 'invoice' | 'deal-payment'
  *  companies. `amount`/`currency` are the entity's own; matching is exact. */
 export interface AllocationCandidate {
   kind: AllocationTargetKind
-  /** CRM id of the entity (invoice id or deal-payment id), as a string. */
+  /** Own CRM id: the invoice id, or the deal-payment RECORD id. Used for the
+   *  allocation action (`payment.pay` / stage move) and the idempotency fact
+   *  key — NOT the deal id (that is `dealId`). Two entities of different `kind`
+   *  have independent id spaces, so a numeric collision here is not a match. */
   id: string
   /** Entity amount (positive). Compared to the payment in exact minor units. */
   amount: number
   /** ISO currency code of the entity, e.g. `BYN`. */
   currency: string
-  /** For an invoice: the deal it belongs to (`parentId`). Lets us recognise an
-   *  invoice and a deal payment as ONE target in two representations. */
+  /** Parent deal id — for BOTH kinds: an invoice's `parentId`, or the deal a
+   *  payment belongs to. Lets an invoice and a deal payment of the SAME deal be
+   *  recognised as ONE target (invoice preferred). Matching is by `dealId`, never
+   *  by the record `id`. */
   dealId?: string
 }
 
@@ -68,36 +73,43 @@ export function isEligible(payment: AllocationInput, c: AllocationCandidate): bo
     && toMinorUnits(payment.amount) === toMinorUnits(c.amount)
 }
 
+/** Duplicate key of one candidate: `kind|currency|minorAmount`. `kind` is part
+ *  of the key on purpose — an invoice and a deal payment with the same numeric
+ *  id are DIFFERENT entities (independent id spaces) and must not collapse. */
+function dupeKeyOf(c: AllocationCandidate): string {
+  return `${c.kind}|${c.currency.trim().toUpperCase()}|${toMinorUnits(c.amount)}`
+}
+
 /**
  * Collapse candidates that are really the SAME target seen twice:
- *  1. An invoice and a deal payment where the invoice's `dealId` equals the
- *     deal-payment id — two representations of one deal's payment → keep the
+ *  1. An invoice and a deal payment of the SAME deal (`invoice.dealId ===
+ *     payment.dealId`) — two representations of one deal's payment → keep the
  *     INVOICE (preferred per §2), drop the payment.
- *  2. Full duplicates of one entity (same kind|currency|amount) → keep the
- *     smallest id (stable tie-break).
- * The result is the list of DISTINCT targets left to choose between.
+ *  2. A literal repeat of one entity (same `kind`+`id`) → keep the first.
+ *  3. Full duplicates of one target (same `kind|currency|amount`) → keep the
+ *     smallest id (stable tie-break, §2).
+ * The result is the list of DISTINCT targets left to choose between. Note the
+ * collapse never crosses `kind`, so an invoice and an unrelated deal payment
+ * that merely share a numeric id stay DISTINCT (→ manual), not silently merged.
  */
 export function collapseSameTarget(candidates: readonly AllocationCandidate[]): AllocationCandidate[] {
-  // Deal ids that an eligible invoice already covers — their deal-payments fold in.
+  // Deals already covered by an invoice — their deal-payments are the same target.
   const invoiceDealIds = new Set(
     candidates.filter(c => c.kind === 'invoice' && c.dealId).map(c => c.dealId as string)
   )
   const kept: AllocationCandidate[] = []
-  const seen = new Set<string>()
   for (const c of candidates) {
-    // A deal payment whose deal is covered by an invoice is the same target → skip.
-    if (c.kind === 'deal-payment' && invoiceDealIds.has(c.id)) continue
-    // Full duplicates: identical kind|currency|amount → keep only the smallest id.
-    const dupeKey = `${c.kind}|${c.currency.trim().toUpperCase()}|${toMinorUnits(c.amount)}`
-    const prevIdx = kept.findIndex(k => `${k.kind}|${k.currency.trim().toUpperCase()}|${toMinorUnits(k.amount)}` === dupeKey)
+    // A deal payment whose deal an invoice already covers → same target, skip it.
+    if (c.kind === 'deal-payment' && c.dealId && invoiceDealIds.has(c.dealId)) continue
+    // A literal repeat of the same entity (same kind + id) → already kept.
+    if (kept.some(k => k.kind === c.kind && k.id === c.id)) continue
+    // Full duplicates of one target: same kind|currency|amount → keep min id.
+    const prevIdx = kept.findIndex(k => dupeKeyOf(k) === dupeKeyOf(c))
     if (prevIdx >= 0) {
       if (compareIds(c.id, kept[prevIdx]!.id) < 0) kept[prevIdx] = c
       continue
     }
-    if (!seen.has(c.id)) {
-      seen.add(c.id)
-      kept.push(c)
-    }
+    kept.push(c)
   }
   return kept
 }
