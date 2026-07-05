@@ -10,12 +10,14 @@ import {
   toMinorUnits
 } from '~/utils/allocation'
 
-// Pure allocation core (#109). Criterion: auto-allocate only when exactly one
-// distinct target matches BOTH amount and currency; everything else → manual /
-// none. Covers happy path, partial/group (amount mismatch), currency mismatch,
-// invoice↔deal-payment same-deal collapse, cross-kind id collision (must stay
-// distinct), identical-dupe min-id tie-break, several distinct → manual, and
-// the idempotent fact key.
+// Pure allocation core (#109). Eligible = amount AND currency match exactly.
+// Allocate to the smallest-id exact match; when several distinct targets match,
+// still allocate (min id) but flag `ambiguous` for a chat heads-up. `manual` only
+// for partial/group (amount ≠) or currency mismatch; `none` when no candidates.
+// Covers happy path, mixed eligible/ineligible, partial, currency mismatch,
+// invoice↔deal-payment same-deal collapse (invoice preferred), cross-kind id
+// collision (stay distinct → ambiguous), several distinct → min-id+ambiguous,
+// and the idempotent fact key.
 
 function inv(over: Partial<AllocationCandidate> = {}): AllocationCandidate {
   return { kind: 'invoice', id: '1', amount: 100, currency: 'BYN', ...over }
@@ -72,9 +74,10 @@ describe('resolveAllocation', () => {
     expect(resolveAllocation(payment())).toEqual({ action: 'none', reason: 'no-candidates' })
   })
 
-  it('exactly one exact match → allocate it', () => {
+  it('exactly one exact match → allocate it, not ambiguous', () => {
     const target = inv({ id: '42' })
-    expect(resolveAllocation(payment({ candidates: [target] }))).toEqual({ action: 'allocate', target })
+    expect(resolveAllocation(payment({ candidates: [target] })))
+      .toEqual({ action: 'allocate', target, ambiguous: false, alternatives: [] })
   })
 
   it('picks the single eligible one out of a mixed set (ineligible ones ignored)', () => {
@@ -82,7 +85,7 @@ describe('resolveAllocation', () => {
     const wrongAmount = inv({ id: '2', amount: 999 })
     const wrongCurrency = inv({ id: '3', currency: 'RUB' })
     const d = resolveAllocation(payment({ candidates: [target, wrongAmount, wrongCurrency] }))
-    expect(d).toEqual({ action: 'allocate', target })
+    expect(d).toEqual({ action: 'allocate', target, ambiguous: false, alternatives: [] })
   })
 
   it('partial payment (amount differs) → manual no-exact-match, keeps all candidates', () => {
@@ -97,34 +100,40 @@ describe('resolveAllocation', () => {
       .toEqual({ action: 'manual', reason: 'no-exact-match', candidates: [c] })
   })
 
-  it('invoice + a deal-payment of the SAME deal → allocate the invoice', () => {
+  it('invoice + a deal-payment of the SAME deal → allocate the invoice, not ambiguous', () => {
     const invoice = inv({ id: '7', dealId: '55' })
     const dealPayment = pay({ id: 'P9', dealId: '55' }) // own record id P9, same deal 55
     const d = resolveAllocation(payment({ candidates: [invoice, dealPayment] }))
-    expect(d).toEqual({ action: 'allocate', target: invoice })
+    expect(d).toEqual({ action: 'allocate', target: invoice, ambiguous: false, alternatives: [] })
   })
 
-  it('invoice + unrelated deal-payment that merely shares a numeric id → manual (not merged)', () => {
+  it('two different invoices of the same amount → allocate min id, ambiguous (chat heads-up)', () => {
+    const nine = inv({ id: '9' })
+    const ten = inv({ id: '10' })
+    const d = resolveAllocation(payment({ candidates: [ten, nine] }))
+    expect(d).toEqual({ action: 'allocate', target: nine, ambiguous: true, alternatives: [ten] })
+  })
+
+  it('invoice + unrelated deal-payment sharing a numeric id → distinct, allocate min id, ambiguous', () => {
     const invoice = inv({ id: '7', dealId: '55' })
     const unrelated = pay({ id: '7', dealId: '88' }) // same numeric id, different deal
     const d = resolveAllocation(payment({ candidates: [invoice, unrelated] }))
-    expect(d).toMatchObject({ action: 'manual', reason: 'multiple-candidates' })
-    if (d.action === 'manual') expect(d.candidates).toHaveLength(2)
+    expect(d).toMatchObject({ action: 'allocate', ambiguous: true })
+    if (d.action === 'allocate') {
+      expect([d.target, ...d.alternatives]).toHaveLength(2) // both kept, none merged
+    }
   })
 
-  it('same-amount duplicates of one kind collapse to min id (owner heuristic kind|currency|amount)', () => {
-    // NB: this is the deliberate §2 heuristic — two rows with equal kind|currency|
-    // amount are treated as ONE target, min id wins. Not a technical-dup guard.
-    const d = resolveAllocation(payment({ candidates: [inv({ id: '10' }), inv({ id: '9' })] }))
-    expect(d).toEqual({ action: 'allocate', target: inv({ id: '9' }) })
-  })
-
-  it('two distinct targets (invoice + unrelated deal-payment) → manual multiple-candidates', () => {
+  it('invoice + unrelated deal-payment (distinct deals) → allocate min id, ambiguous', () => {
     const invoice = inv({ id: '7', dealId: '55' })
     const other = pay({ id: '99', dealId: '88' }) // unrelated deal, not covered by the invoice
     const d = resolveAllocation(payment({ candidates: [invoice, other] }))
-    expect(d).toMatchObject({ action: 'manual', reason: 'multiple-candidates' })
-    if (d.action === 'manual') expect(d.candidates).toHaveLength(2)
+    expect(d).toEqual({ action: 'allocate', target: invoice, ambiguous: true, alternatives: [other] })
+  })
+
+  it('literal duplicate of one entity (same kind+id) collapses → single, not ambiguous', () => {
+    const d = resolveAllocation(payment({ candidates: [inv({ id: '5' }), inv({ id: '5' })] }))
+    expect(d).toEqual({ action: 'allocate', target: inv({ id: '5' }), ambiguous: false, alternatives: [] })
   })
 })
 

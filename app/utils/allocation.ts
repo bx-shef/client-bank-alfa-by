@@ -1,13 +1,15 @@
 import type { StatementItem } from '~/types/statement'
 import { dedupKey } from '~/utils/statement'
 
-// Pure allocation core (#109): decide whether an incoming payment unambiguously
-// closes exactly one CRM target — a Smart Invoice or a deal payment — under the
-// owner's free-tier criterion "ровно 1 кандидат, где сходятся и сумма, и валюта"
-// (see docs/PROCESSING.md §2 «Что выбираем»). No I/O: the caller supplies the
-// candidates already FILTERED BY COMPANY (my company + the counterparty company,
-// Stage C/D), and this module never looks anything up by an arbitrary id — so it
-// can never touch a target outside the resolved companies. Fully unit-tested.
+// Pure allocation core (#109): decide how an incoming payment closes a CRM target
+// — a Smart Invoice or a deal payment — under the owner's rules (see docs/
+// PROCESSING.md §2 «Что выбираем»). Eligible = amount AND currency match exactly.
+// When several match, allocate to the SMALLEST id and flag `ambiguous` so the
+// caller posts a heads-up to the chat. No I/O: the caller supplies the candidates
+// already FILTERED BY COMPANY (my company + the counterparty company) AND BY STAGE
+// (negative/lost-stage invoices and negative-stage deals are excluded before they
+// reach here — Stage C/D), and this module never looks anything up by an arbitrary
+// id — so it can never touch a target outside the resolved set. Fully unit-tested.
 
 /** The kind of CRM entity a payment can be allocated to. `order` is not a target
  *  of its own — it is only a way to FIND a deal payment (see PROCESSING.md §2). */
@@ -41,18 +43,17 @@ export interface AllocationInput {
 }
 
 /** The decision. Discriminated by `action`:
- *  - `allocate` — exactly one eligible target; mark it paid / fire the trigger.
+ *  - `allocate` — at least one exact target; mark the smallest-id one paid / fire
+ *    the trigger. `ambiguous` is true when MORE than one distinct target matched
+ *    (owner rule: still auto-allocate to the smallest id, but the caller must post
+ *    a heads-up to the chat); `alternatives` are the passed-over targets.
  *  - `none` — no candidates at all for the companies; record a plain дело.
- *  - `manual` — candidates exist but not an unambiguous single match (partial /
- *    group payment, currency/amount mismatch, or several distinct targets) →
- *    «очередь ручного разбора» + notify. `reason` explains which. */
+ *  - `manual` — candidates exist but none match the amount exactly (partial /
+ *    group payment, or currency mismatch) → «очередь ручного разбора» + notify. */
 export type AllocationDecision
-  = | { action: 'allocate', target: AllocationCandidate }
+  = | { action: 'allocate', target: AllocationCandidate, ambiguous: boolean, alternatives: AllocationCandidate[] }
     | { action: 'none', reason: 'no-candidates' }
-    | { action: 'manual', reason: ManualReason, candidates: AllocationCandidate[] }
-
-/** Why a payment could not be auto-allocated. */
-export type ManualReason = 'no-exact-match' | 'multiple-candidates'
+    | { action: 'manual', reason: 'no-exact-match', candidates: AllocationCandidate[] }
 
 /** Convert a money amount to integer minor units for exact comparison — floats
  *  like `0.1 + 0.2` never compare equal, so round to the nearest cent. */
@@ -66,31 +67,24 @@ export function sameCurrency(a: string, b: string): boolean {
 }
 
 /** A candidate is eligible only when BOTH its currency AND its amount match the
- *  payment exactly (owner's free-tier criterion). Partial/group payments — where
- *  the amount differs — are excluded here and surface as `manual` downstream. */
+ *  payment exactly (owner's criterion). Partial/group payments — where the amount
+ *  differs — are excluded here and surface as `manual` downstream. */
 export function isEligible(payment: AllocationInput, c: AllocationCandidate): boolean {
   return sameCurrency(payment.currency, c.currency)
     && toMinorUnits(payment.amount) === toMinorUnits(c.amount)
 }
 
-/** Duplicate key of one candidate: `kind|currency|minorAmount`. `kind` is part
- *  of the key on purpose — an invoice and a deal payment with the same numeric
- *  id are DIFFERENT entities (independent id spaces) and must not collapse. */
-function dupeKeyOf(c: AllocationCandidate): string {
-  return `${c.kind}|${c.currency.trim().toUpperCase()}|${toMinorUnits(c.amount)}`
-}
-
 /**
- * Collapse candidates that are really the SAME target seen twice:
+ * Reduce candidates to DISTINCT targets, collapsing only what is provably ONE
+ * target seen twice — NOT genuinely different entities:
  *  1. An invoice and a deal payment of the SAME deal (`invoice.dealId ===
  *     payment.dealId`) — two representations of one deal's payment → keep the
  *     INVOICE (preferred per §2), drop the payment.
  *  2. A literal repeat of one entity (same `kind`+`id`) → keep the first.
- *  3. Full duplicates of one target (same `kind|currency|amount`) → keep the
- *     smallest id (stable tie-break, §2).
- * The result is the list of DISTINCT targets left to choose between. Note the
- * collapse never crosses `kind`, so an invoice and an unrelated deal payment
- * that merely share a numeric id stay DISTINCT (→ manual), not silently merged.
+ * Two DIFFERENT entities of the same amount (e.g. two open invoices of 100 BYN)
+ * stay distinct on purpose: the owner's rule is to still auto-allocate (smallest
+ * id, in `resolveAllocation`) but flag it `ambiguous` so the chat is notified —
+ * silently merging them would hide that ambiguity.
  */
 export function collapseSameTarget(candidates: readonly AllocationCandidate[]): AllocationCandidate[] {
   // Deals already covered by an invoice — their deal-payments are the same target.
@@ -103,19 +97,13 @@ export function collapseSameTarget(candidates: readonly AllocationCandidate[]): 
     if (c.kind === 'deal-payment' && c.dealId && invoiceDealIds.has(c.dealId)) continue
     // A literal repeat of the same entity (same kind + id) → already kept.
     if (kept.some(k => k.kind === c.kind && k.id === c.id)) continue
-    // Full duplicates of one target: same kind|currency|amount → keep min id.
-    const prevIdx = kept.findIndex(k => dupeKeyOf(k) === dupeKeyOf(c))
-    if (prevIdx >= 0) {
-      if (compareIds(c.id, kept[prevIdx]!.id) < 0) kept[prevIdx] = c
-      continue
-    }
     kept.push(c)
   }
   return kept
 }
 
 /** Compare CRM ids numerically when both are numeric, else lexicographically —
- *  so `id 9` sorts before `id 10` (min-id tie-break must be numeric-aware). */
+ *  so `id 9` sorts before `id 10` (smallest-id pick must be numeric-aware). */
 export function compareIds(a: string, b: string): number {
   const na = Number(a)
   const nb = Number(b)
@@ -125,8 +113,10 @@ export function compareIds(a: string, b: string): number {
 
 /**
  * Decide how to allocate one payment against its (company-scoped) candidates.
- * Conservative default (#109): auto-allocate ONLY when exactly one distinct
- * target matches both amount and currency; anything ambiguous goes to manual.
+ * Owner rules (#109): allocate to the SMALLEST-id exact match. `none` when there
+ * is nothing to allocate to; `manual` only when candidates exist but none match
+ * the amount exactly (partial/group). When more than one distinct target matches,
+ * still allocate (smallest id) but set `ambiguous` so the caller notifies the chat.
  */
 export function resolveAllocation(input: AllocationInput): AllocationDecision {
   const eligible = input.candidates.filter(c => isEligible(input, c))
@@ -137,9 +127,10 @@ export function resolveAllocation(input: AllocationInput): AllocationDecision {
       ? { action: 'none', reason: 'no-candidates' }
       : { action: 'manual', reason: 'no-exact-match', candidates: [...input.candidates] }
   }
-  const distinct = collapseSameTarget(eligible)
-  if (distinct.length === 1) return { action: 'allocate', target: distinct[0]! }
-  return { action: 'manual', reason: 'multiple-candidates', candidates: distinct }
+  // Smallest id wins; extra distinct targets make it ambiguous (chat heads-up).
+  const ranked = [...collapseSameTarget(eligible)].sort((a, b) => compareIds(a.id, b.id))
+  const [target, ...alternatives] = ranked
+  return { action: 'allocate', target: target!, ambiguous: alternatives.length > 0, alternatives }
 }
 
 /**

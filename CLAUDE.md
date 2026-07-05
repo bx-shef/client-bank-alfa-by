@@ -152,11 +152,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
   - `app/utils/allocation.ts` — **чистое ядро разнесения оплат** (#109, спека — `docs/PROCESSING.md` §2):
-    `resolveAllocation` над кандидатами, уже отфильтрованными по компаниям (Этап C/D), решает
-    `allocate` / `manual` (очередь ручного разбора) / `none` по критерию владельца **ровно 1 кандидат,
-    где сходятся и сумма (точно, в минорных единицах), и валюта**; `collapseSameTarget` (инвойс поверх
-    оплаты той же сделки по `parentId`; полные дубли → минимальный ID), `allocationFactKey` (идемпотентный
-    ключ факта «платёж→сущность»). Без I/O; REST-поиск инвойса/оплаты и проводка в `crm-sync` — следующий слайс.
+    `resolveAllocation` над кандидатами, уже отфильтрованными по компаниям **и по стадии** (инвойсы/сделки
+    с отрицательной стадией исключены; Этап C/D), решает по критерию владельца (совпали **сумма** — точно,
+    в минорных единицах — **и валюта**): нет точного совпадения → `manual` (очередь ручного разбора); одно →
+    `allocate`; несколько → `allocate` на **минимальный ID** с флагом `ambiguous` (вызывающий шлёт
+    оповещение в чат). `collapseSameTarget` схлопывает только заведомо одну цель (инвойс поверх оплаты той
+    же сделки по `parentId`; буквальный повтор `kind`+`id`) — разные сущности одной суммы остаются
+    раздельными (→ `ambiguous`). `allocationFactKey` — идемпотентный ключ факта «платёж→сущность». Без I/O;
+    REST-поиск инвойса/оплаты (+ фильтр стадии) и проводка в `crm-sync` — следующий слайс.
   - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
     `buildPriorAuthorizeUrl`/claims/тела токенов/`buildConsentRequest`/`buildResourceRequestBody` + парсеры
     `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`). Без `node:crypto` —
