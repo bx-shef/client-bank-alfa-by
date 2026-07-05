@@ -212,9 +212,20 @@ const formats = LANDING_FORMATS
           <h2 class="text-2xl sm:text-4xl font-bold tracking-tight text-white mb-4">
             Интеграторам Bitrix24
           </h2>
-          <p class="text-base sm:text-lg text-white/75 max-w-3xl leading-relaxed">
+          <p class="text-base sm:text-lg text-white/75 max-w-3xl leading-relaxed mb-6">
             {{ LANDING_INTEGRATORS }}
           </p>
+          <B24Button
+            label="Условия для партнёров"
+            to="/partners"
+            color="air-secondary-no-accent"
+            size="lg"
+            @click="reachGoal('partners_open')"
+          >
+            <template #trailing>
+              <ArrowRightLIcon class="size-5" />
+            </template>
+          </B24Button>
         </div>
       </div>
     </section>

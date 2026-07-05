@@ -26,4 +26,11 @@ describe('index landing page', () => {
     const hrefs = wrapper.findAll('a').map(a => a.attributes('href'))
     expect(hrefs).toContain('#brief')
   })
+
+  it('integrators block links to the partners page (/partners)', async () => {
+    const wrapper = await mountSuspended(IndexPage)
+    // Guards against silently dropping/renaming the partners entry point.
+    const hrefs = wrapper.findAll('a').map(a => a.attributes('href'))
+    expect(hrefs).toContain('/partners')
+  })
 })
