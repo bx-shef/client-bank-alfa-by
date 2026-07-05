@@ -10,6 +10,8 @@ import CodeIcon from '@bitrix24/b24icons-vue/common-service/CodeIcon'
 import AppsIcon from '@bitrix24/b24icons-vue/solid/AppsIcon'
 import DeveloperResourcesIcon from '@bitrix24/b24icons-vue/solid/DeveloperResourcesIcon'
 import LogInIcon from '@bitrix24/b24icons-vue/outline/LogInIcon'
+import HomeIcon from '@bitrix24/b24icons-vue/outline/HomeIcon'
+import HandshakeIcon from '@bitrix24/b24icons-vue/outline/HandshakeIcon'
 import { LANDING_MARKET_URL } from '~/utils/landing'
 
 // Public-landing chrome ported from offer.bx-shef.by (bx-shef Lp): dark branded
@@ -17,18 +19,25 @@ import { LANDING_MARKET_URL } from '~/utils/landing'
 // (/app, /settings, /login, /queues) keep their own light/dark-auto theme.
 const cardOpen = ref(false)
 
+// Порядок: сначала аудитории сайта (Клиентам/Партнёрам — внутренние страницы,
+// дают переключаться между двумя частями лендинга), затем где взять продукт
+// (Маркет), затем справка (Документация/Реквизиты), служебный вход — последним.
 const navItems = [
   [
+    {
+      label: 'Клиентам',
+      icon: HomeIcon,
+      to: '/'
+    },
+    {
+      label: 'Партнёрам',
+      icon: HandshakeIcon,
+      to: '/partners'
+    },
     {
       label: 'В Маркете Bitrix24',
       icon: Bitrix24Icon,
       to: LANDING_MARKET_URL,
-      target: '_blank'
-    },
-    {
-      label: 'Реквизиты',
-      icon: ReceiptIcon,
-      to: 'https://offer.bx-shef.by/legal',
       target: '_blank'
     },
     {
@@ -40,6 +49,12 @@ const navItems = [
         { label: 'b24icons', icon: AppsIcon, to: 'https://bitrix24.github.io/b24icons/', target: '_blank' },
         { label: 'REST API', icon: DeveloperResourcesIcon, to: 'https://apidocs.bitrix24.ru/', target: '_blank' }
       ]
+    },
+    {
+      label: 'Реквизиты',
+      icon: ReceiptIcon,
+      to: 'https://offer.bx-shef.by/legal',
+      target: '_blank'
     },
     {
       // Служебная зона операторов (вход для сотрудников → /queues и т.д.).

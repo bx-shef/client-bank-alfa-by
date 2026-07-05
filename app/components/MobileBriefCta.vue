@@ -2,6 +2,18 @@
 // Sticky-CTA для мобильных: главный призыв «Оставить заявку» всегда под пальцем.
 // Появляется, когда hero ушёл из вида, и прячется, когда форма на экране
 // (иначе кнопка перекрывала бы саму форму, к которой ведёт).
+// Параметризован, чтобы работать и на лендинге (#brief), и на /partners
+// (#partner-brief) — обе страницы дают hero элементу id="hero".
+const props = withDefaults(defineProps<{
+  briefId?: string
+  label?: string
+  goal?: string
+}>(), {
+  briefId: 'brief',
+  label: 'Оставить заявку на установку',
+  goal: 'sticky_cta_click'
+})
+
 const show = ref(false)
 const { reachGoal } = useMetrikaGoal()
 
@@ -19,7 +31,7 @@ onMounted(() => {
   if (typeof IntersectionObserver === 'undefined') return
 
   const hero = document.getElementById('hero')
-  const brief = document.getElementById('brief')
+  const brief = document.getElementById(props.briefId)
 
   if (hero) {
     heroObs = new IntersectionObserver((entries) => {
@@ -60,12 +72,12 @@ onUnmounted(() => {
       class="sm:hidden fixed inset-x-0 bottom-0 z-40 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-black/85 via-black/65 to-transparent"
     >
       <a
-        href="#brief"
+        :href="`#${props.briefId}`"
         class="flex items-center justify-center gap-2 w-full h-14 rounded-xl text-base font-semibold transition-all duration-200 active:brightness-95"
         style="background: rgb(var(--color-accent-primary-ch)); color: #0a1220; box-shadow: 0 0 28px rgb(var(--color-accent-primary-ch)/0.35);"
-        @click="reachGoal('sticky_cta_click')"
+        @click="reachGoal(props.goal)"
       >
-        Оставить заявку на установку
+        {{ props.label }}
       </a>
     </div>
   </Transition>
