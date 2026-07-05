@@ -9,7 +9,8 @@
 //                                            └─ notify chat (by rules)
 
 import type { StatementItem } from '../../app/types/statement'
-import { dedupKey, splitByDirection } from '../../app/utils/statement'
+import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
+import type { ChatSettings } from '../../app/utils/settings'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
@@ -27,8 +28,14 @@ export interface HandlerDeps {
    *  (to remember for dedup), or `null` if nothing was written (e.g. no company
    *  matched, so there's no owner for a todo). */
   writeActivity: (item: StatementItem, companyId: string | null, memberId: string) => Promise<string | null>
-  /** Post a chat message about one operation, if the rules allow (stage 6). */
-  notifyChat: (item: StatementItem, memberId: string) => Promise<void>
+  /** Read the portal's chat settings (target + rules) from app.option, or null when
+   *  unset/unavailable. Resolved ONCE per crm-sync job, not per operation. */
+  getChatSettings: (memberId: string) => Promise<ChatSettings | null>
+  /** Post a chat message about one operation to `dialogId` (stage 6). The decision
+   *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
+   *  throw — it runs AFTER the activity is written+remembered, so a propagated error
+   *  would fail the job, skip the op on retry, and lose the record. Swallow+log. */
+  notifyChat: (item: StatementItem, dialogId: string, memberId: string) => Promise<void>
   /** Persistent dedup: the activity id already written for this op, or null (#9). */
   getActivityId: (memberId: string, dedupKey: string) => Promise<string | null>
   /** Persistent dedup: record the activity id written for this op (#9). */
@@ -112,6 +119,10 @@ export async function handleCrmSyncJob(
     return true
   })
 
+  // Resolve chat settings ONCE per job (not per op) — else every operation would do a
+  // fresh app.option REST read. null ⇒ no target/unavailable ⇒ announcements skipped.
+  const chat = await deps.getChatSettings(job.memberId)
+
   let created = 0
   let skipped = 0
   let unmatched = 0
@@ -136,7 +147,14 @@ export async function handleCrmSyncJob(
     // loss if writeActivity then failed. A B24-side guard (search the timeline for
     // the embedded origin token before writing) would close it — follow-up.
     await deps.rememberActivity(job.memberId, key, activityId)
-    await deps.notifyChat(item, job.memberId)
+    // Announce only if a chat target is set AND the rules allow this op (direction /
+    // excluded account / excluded purpose). Unmatched ops are NOT announced — notify
+    // sits after rememberActivity, so a redelivery can't re-post (chat has no separate
+    // dedup yet). notifyChat swallows transport errors so a chat failure never fails
+    // the job after the activity was written+remembered.
+    if (chat?.dialogId && shouldNotifyChat(item, chat.rules)) {
+      await deps.notifyChat(item, chat.dialogId, job.memberId)
+    }
     created++
   }
 
