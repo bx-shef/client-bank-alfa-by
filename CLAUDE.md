@@ -21,8 +21,16 @@
 
 - **Nuxt 4** (статическая генерация, `nuxt generate`)
 - **Vue 3** — `<script setup lang="ts">`
-- **TypeScript** (строгий), **Tailwind CSS v4**, **Bitrix24 UI** (`b24ui`)
-- **Bitrix24 JS SDK** (`@bitrix24/b24jssdk` + `-nuxt`) — встройка в портал (dual-mode, `/install`)
+- **TypeScript** (строгий), **Tailwind CSS v4**, **Bitrix24 UI** (`b24ui`) —
+  первоисточник по «как правильно» на b24ui: официальные AI-ресурсы
+  [`bitrix24/b24ui/AGENTS.md`](https://github.com/bitrix24/b24ui/blob/main/AGENTS.md)
+  (семантические цвет-токены, `useComponentProps()`, чек-лист компонента),
+  [`bitrix24/b24ui/skills/`](https://github.com/bitrix24/b24ui/tree/main/skills) и
+  [`llms.txt`](https://bitrix24.github.io/b24ui/llms.txt) (LLM-индекс компонентов/composables/тем);
+  наш [`docs/PAGE_GUIDE.md`](docs/PAGE_GUIDE.md) — как это ложится на приложение.
+- **Bitrix24 JS SDK** (`@bitrix24/b24jssdk` + `-nuxt`) — встройка в портал (dual-mode, `/install`);
+  первоисточник по SDK — [`llms.txt`](https://bitrix24.github.io/b24jssdk/llms.txt) (LLM-индекс:
+  `B24Frame`, `callV2/callBatch`, `fetchList`, вебхуки/OAuth, примеры). Точные REST-сигнатуры — MCP `b24-dev-mcp`.
 - **Vitest** — два проекта: `unit` (node, чистые функции) и `nuxt`
   (`@nuxt/test-utils` + happy-dom, composables и компоненты)
 
