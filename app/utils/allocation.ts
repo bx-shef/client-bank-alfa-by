@@ -11,9 +11,11 @@ import { dedupKey } from '~/utils/statement'
 // reach here — Stage C/D), and this module never looks anything up by an arbitrary
 // id — so it can never touch a target outside the resolved set. Fully unit-tested.
 
-/** The kind of CRM entity a payment can be allocated to. `order` is not a target
- *  of its own — it is only a way to FIND a deal payment (see PROCESSING.md §2). */
-export type AllocationTargetKind = 'invoice' | 'deal-payment'
+/** The kind of CRM entity a payment can be allocated to (PROCESSING.md §2):
+ *  a Smart Invoice, a deal payment, a deal with no payments (trigger only), or a
+ *  smart-process element (trigger only). An `order` and a generated document are
+ *  NOT targets of their own — they are only ways to FIND one of these. */
+export type AllocationTargetKind = 'invoice' | 'deal-payment' | 'deal' | 'smart-process'
 
 /** A candidate entity a payment might close, already scoped to the resolved
  *  companies. `amount`/`currency` are the entity's own; matching is exact. */

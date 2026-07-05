@@ -187,6 +187,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     сепараторы `:№#.-`, составные `123/45`, буквы между фразой и числом не пропускает, дедуп). `IdentifierKind`
     — таксономия §4 (инвойс номер/id, сделка id/поле, заказ, оплата, смарт-процесс, номер документа генерации).
     Без хардкода фраз (приходят из настроек портала) и без I/O; сам lookup id→сущность — REST-слайс.
+  - `app/utils/identifierDispatch.ts` — **чистый роутинг `IdentifierKind → цель+стратегия поиска`** (#109,
+    между распознаванием §4 и REST-lookup): исчерпывающая таблица `IDENTIFIER_ROUTES`
+    (`Record<IdentifierKind, IdentifierRoute>` — новый вид не скомпилируется без маршрута) → `targetKind`
+    (`AllocationTargetKind` или `null` для моста-документа) + `LookupStrategy` (`by-id`/`by-number`/
+    `by-config-field`/`via-order`/`via-payment`/`via-document`) + `needsConfiguredField` (поле из карты
+    сопоставления — только `deal-field`/`smart-field`). Без I/O и без хардкода имён полей; сам REST-поиск
+    и поле из настроек — REST-слайс. `AllocationTargetKind` расширен до `invoice|deal-payment|deal|smart-process`.
   - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
     `buildPriorAuthorizeUrl`/claims/тела токенов/`buildConsentRequest`/`buildResourceRequestBody` + парсеры
     `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`). Без `node:crypto` —
