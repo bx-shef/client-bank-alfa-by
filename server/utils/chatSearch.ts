@@ -24,16 +24,22 @@ export interface ChatOption {
   label: string
 }
 
-/** A page of chat options plus whether more pages exist (for the picker). */
+/** A page of chat options plus whether more pages exist (for the picker).
+ *  `nextOffset` is the RAW server offset to request for the next page — the client
+ *  must advance by rows the SERVER consumed, not by kept items, or filtered rows
+ *  (`send:false`) desync the offset and hide later chats. Present only when `hasMore`. */
 export interface ChatSearchPage {
   items: ChatOption[]
   hasMore: boolean
+  nextOffset?: number
 }
 
 /** Min chars before a non-empty query searches (im.search.chat.list requires ≥3). */
 export const CHAT_SEARCH_MIN = 3
-/** Page size for both methods (im.search.chat.list caps at 50). */
+/** Page size for the paginated search (im.search.chat.list caps at 50). */
 export const CHAT_SEARCH_LIMIT = 20
+/** Page size for the default recent list (single page — see searchChats). */
+export const CHAT_RECENT_LIMIT = 50
 
 /** Build a chat DIALOG_ID (`chat<id>`) from a numeric id, or null if not a positive
  *  integer (defends against malformed rows — a bad id must not become a target). */
@@ -60,10 +66,14 @@ export function normalizeChatSearch(resp: Record<string, unknown>, offset: numbe
     const label = String(row.name ?? '').trim()
     if (value && label) items.push({ value, label })
   }
-  // More pages: `next` (next offset) when present, else offset+count < total.
+  // More pages: `next` (server's next offset) when present, else offset+rows < total.
+  // NB use rows.length (RAW rows the server returned), not items.length — the next
+  // offset must skip everything the server already yielded, including filtered rows.
   const total = Number(resp.total)
+  const serverNext = Number(resp.next)
   const hasMore = resp.next != null || (Number.isFinite(total) && offset + rows.length < total)
-  return { items, hasMore }
+  const nextOffset = Number.isFinite(serverNext) ? serverNext : offset + rows.length
+  return hasMore ? { items, hasMore, nextOffset } : { items, hasMore }
 }
 
 /** Normalize an im.recent.list response (result.items) into a page of group chats.
@@ -105,7 +115,12 @@ export async function searchChats(
     assertOk(resp, 'im.search.chat.list')
     return normalizeChatSearch(resp, off)
   }
-  const resp = await call('im.recent.list', { SKIP_DIALOG: 'Y', OFFSET: off, LIMIT: limit })
+  // Empty/short query → recent group chats as the default list. im.recent.list is
+  // cursor-based (LAST_MESSAGE_DATE); its OFFSET honouring is unverified on a live
+  // portal, so we serve a SINGLE larger page (no load-more) rather than risk a
+  // stuck "load more" that refetches page 0. Typing ≥3 chars switches to the
+  // paginated im.search.chat.list. (Follow-up: real OFFSET/date paging once verified.)
+  const resp = await call('im.recent.list', { SKIP_DIALOG: 'Y', OFFSET: 0, LIMIT: CHAT_RECENT_LIMIT })
   assertOk(resp, 'im.recent.list')
-  return normalizeRecentChats(resp)
+  return { items: normalizeRecentChats(resp).items, hasMore: false }
 }
