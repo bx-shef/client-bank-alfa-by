@@ -1,27 +1,25 @@
 import { describe, expect, it } from 'vitest'
+import type { AllocationTargetKind } from '~/utils/allocation'
 import type { IdentifierKind } from '~/utils/purposeMatch'
+import type { LookupStrategy } from '~/utils/identifierDispatch'
 import { IDENTIFIER_ROUTES, routeIdentifier } from '~/utils/identifierDispatch'
 
 // Pure dispatch table (#109): every recognized IdentifierKind (§4) routes to an
 // allocation target and a lookup strategy. No I/O — just the routing decision.
+// Taxonomy is NOT duplicated here — kinds are read back from the table itself
+// (the Record<IdentifierKind, …> type already forces the table to be exhaustive;
+// deriving the test list means it can never drift into a stale third copy).
+const ALL_KINDS = Object.keys(IDENTIFIER_ROUTES) as IdentifierKind[]
 
-// The full taxonomy from purposeMatch.ts §4, kept here so the "exhaustive" test
-// fails loudly if IdentifierKind grows without a matching route.
-const ALL_KINDS: IdentifierKind[] = [
-  'invoice-number', 'invoice-id',
-  'deal-id', 'deal-field',
-  'order-id', 'order-number',
-  'payment-id', 'payment-number',
-  'smart-id', 'smart-field',
-  'document-number'
-]
+// Single source of truth for the valid target set — `satisfies` keeps it in sync
+// with AllocationTargetKind at compile time (a new kind must be added here).
+const VALID_TARGETS = { 'invoice': true, 'deal-payment': true, 'deal': true, 'smart-process': true } satisfies Record<AllocationTargetKind, true>
+const VALID_STRATEGIES: LookupStrategy[] = ['by-id', 'by-number', 'by-config-field', 'via-order', 'via-payment', 'via-document']
 
 describe('IDENTIFIER_ROUTES', () => {
-  it('routes every IdentifierKind (exhaustive, no extras)', () => {
-    expect(Object.keys(IDENTIFIER_ROUTES).sort()).toEqual([...ALL_KINDS].sort())
-    for (const kind of ALL_KINDS) {
-      expect(IDENTIFIER_ROUTES[kind], `route for ${kind}`).toBeDefined()
-    }
+  it('has a route for every kind (11) and no undefined entries', () => {
+    expect(ALL_KINDS).toHaveLength(11)
+    for (const kind of ALL_KINDS) expect(IDENTIFIER_ROUTES[kind], `route for ${kind}`).toBeDefined()
   })
 
   it('invoice identifiers → invoice target', () => {
@@ -30,21 +28,20 @@ describe('IDENTIFIER_ROUTES', () => {
   })
 
   it('deal identifiers → deal target; custom field needs config', () => {
-    expect(routeIdentifier('deal-id')).toMatchObject({ targetKind: 'deal', strategy: 'by-id', needsConfiguredField: false })
-    expect(routeIdentifier('deal-field')).toMatchObject({ targetKind: 'deal', strategy: 'by-config-field', needsConfiguredField: true })
+    expect(routeIdentifier('deal-id')).toEqual({ targetKind: 'deal', strategy: 'by-id', needsConfiguredField: false })
+    expect(routeIdentifier('deal-field')).toEqual({ targetKind: 'deal', strategy: 'by-config-field', needsConfiguredField: true })
   })
 
-  it('order/payment identifiers → deal-payment target', () => {
-    for (const k of ['order-id', 'order-number', 'payment-id', 'payment-number'] as const) {
-      expect(routeIdentifier(k).targetKind, k).toBe('deal-payment')
-    }
-    expect(routeIdentifier('order-number').strategy).toBe('via-order')
-    expect(routeIdentifier('payment-id').strategy).toBe('via-payment')
+  it('order/payment identifiers → deal-payment target (each strategy explicit)', () => {
+    expect(routeIdentifier('order-id')).toEqual({ targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false })
+    expect(routeIdentifier('order-number')).toEqual({ targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false })
+    expect(routeIdentifier('payment-id')).toEqual({ targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false })
+    expect(routeIdentifier('payment-number')).toEqual({ targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false })
   })
 
   it('smart-process identifiers → smart-process target; custom field needs config', () => {
-    expect(routeIdentifier('smart-id')).toMatchObject({ targetKind: 'smart-process', needsConfiguredField: false })
-    expect(routeIdentifier('smart-field')).toMatchObject({ targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true })
+    expect(routeIdentifier('smart-id')).toEqual({ targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: false })
+    expect(routeIdentifier('smart-field')).toEqual({ targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true })
   })
 
   it('document-number is a bridge — no fixed target, via-document', () => {
@@ -56,11 +53,13 @@ describe('IDENTIFIER_ROUTES', () => {
     expect(needConfig.sort()).toEqual(['deal-field', 'smart-field'])
   })
 
-  it('every non-bridge route yields a valid AllocationTargetKind', () => {
-    const valid = new Set(['invoice', 'deal-payment', 'deal', 'smart-process'])
+  it('every route uses a known strategy and a valid (or null) target', () => {
     for (const kind of ALL_KINDS) {
-      const t = IDENTIFIER_ROUTES[kind].targetKind
-      if (t !== null) expect(valid.has(t), `${kind} → ${t}`).toBe(true)
+      const route = IDENTIFIER_ROUTES[kind]
+      expect(VALID_STRATEGIES, `strategy of ${kind}`).toContain(route.strategy)
+      if (route.targetKind !== null) {
+        expect(Object.hasOwn(VALID_TARGETS, route.targetKind), `${kind} → ${route.targetKind}`).toBe(true)
+      }
     }
   })
 })

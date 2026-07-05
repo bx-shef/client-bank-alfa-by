@@ -18,6 +18,14 @@ export type LookupStrategy
     | 'via-payment' // value identifies a payment record directly
     | 'via-document' // value is a generated-document number → bridge to its linked entity
 
+// NB (§2): a `deal` / `smart-process` target reached by `by-id` / `by-config-field`
+// is an UNCONDITIONAL trigger target — the wiring slice fires its trigger directly
+// and does NOT run it through the amount-based `resolveAllocation` (that core is
+// only for search-found `invoice` / `deal-payment`, where many same-amount
+// candidates are possible). Also: a `by-id` result MUST be re-checked against the
+// resolved companies + stage before acting — the value comes from the payer-
+// controlled purpose, so a direct id lookup without that check would be an IDOR.
+
 /** The dispatch decision for one identifier kind. */
 export interface IdentifierRoute {
   /** The allocation target this identifier resolves to. `null` for the document
