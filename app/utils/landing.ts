@@ -11,6 +11,16 @@ export const LANDING_HERO_NOTE = 'Само приложение — беспла
 /** Marketplace listing of the free app (import-only hook). */
 export const LANDING_MARKET_URL = 'https://www.bitrix24.ru/apps/app/shef.bankimport/'
 
+/** Copy for the «Приложение для Bitrix24» promo card (→ <AppInBitrixCard>). Agreed
+ * with the owner and mirrored in docs/POSITIONING.md. The card links to the free
+ * Marketplace listing (LANDING_MARKET_URL) and carries a mobile QR of it. */
+export const LANDING_MARKET_PROMO = {
+  eyebrow: 'Приложение для Bitrix24',
+  title: 'Импорт выписки прямо в Bitrix24',
+  text: 'Выписка из клиент-банка попадает в CRM автоматически: контрагент, оплата, стадии сделки, уведомления — не выходя из портала.',
+  cta: 'Открыть в Маркете Bitrix24'
+} as const
+
 /** Browser-tab title for an in-portal page: "<section> — <app name>". Keeps the
  * brand suffix in one place so per-page `useHead` titles can't drift. */
 export function pageTitle(section: string): string {

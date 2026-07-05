@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_MARKET_PROMO, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
 
 describe('copyrightYears', () => {
   it('shows a single year when start === current', () => {
@@ -75,5 +75,24 @@ describe('pain → result copy', () => {
   it('points the marketplace link to the shef.bankimport listing over https', () => {
     expect(LANDING_MARKET_URL).toMatch(/^https:\/\//)
     expect(LANDING_MARKET_URL).toContain('shef.bankimport')
+  })
+})
+
+describe('LANDING_MARKET_PROMO', () => {
+  it('carries non-empty copy for every slot of the <AppInBitrixCard> card', () => {
+    for (const key of ['eyebrow', 'title', 'text', 'cta'] as const) {
+      expect(LANDING_MARKET_PROMO[key].trim().length).toBeGreaterThan(0)
+    }
+  })
+
+  it('matches the copy agreed in docs/POSITIONING.md', () => {
+    // Guard against silent drift from the owner-agreed wording (mirrored in the doc).
+    expect(LANDING_MARKET_PROMO.eyebrow).toBe('Приложение для Bitrix24')
+    expect(LANDING_MARKET_PROMO.title).toBe('Импорт выписки прямо в Bitrix24')
+    expect(LANDING_MARKET_PROMO.cta).toBe('Открыть в Маркете Bitrix24')
+    // The body is the longest, most drift-prone string — assert it verbatim too.
+    expect(LANDING_MARKET_PROMO.text).toBe(
+      'Выписка из клиент-банка попадает в CRM автоматически: контрагент, оплата, стадии сделки, уведомления — не выходя из портала.'
+    )
   })
 })
