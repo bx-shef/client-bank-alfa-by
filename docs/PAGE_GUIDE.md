@@ -119,7 +119,7 @@ definePageMeta({ layout: 'clear' })
 
 ## 6. Промо-блоки (cross-sell) — общие компоненты экосистемы
 
-Два переносимых компонента для промо/cross-sell; синхронны между `currency-converter`,
+Три переносимых компонента для промо/cross-sell; синхронны между `currency-converter`,
 `Lp` и этим репо — правим в **одном** месте (эталон — `currency-converter`) и копируем
 1:1, без локальных правок:
 
@@ -135,6 +135,13 @@ definePageMeta({ layout: 'clear' })
   (одинаковы по экосистеме), пропсами наружу — только имена целей Метрики. Внутри —
   `HoldRevealQr` (QR на сайт). `B24Card variant="filled-copilot"` (радиальный copilot-градиент),
   CTA `air-boost` → бриф `offer.bx-shef.by/#brief`.
+- **`app/components/AppInBitrixCard.vue`** — карточка «Приложение для Bitrix24» (cyan,
+  light/dark-auto): ссылка на листинг Маркета + мобильный `HoldRevealQr` (QR листинга).
+  Контент — **через пропсы** (`eyebrow`/`title`/`text`/`ctaLabel`/`url`, опц. `qrCaption`/
+  `qrHint`). Цвет CTA — проп `ctaColor` (дефолт `air-primary`; на лендинге, где рядом платный
+  primary, передаём подчинённый `air-secondary-no-accent`). Цели — `clickGoal` (дефолт
+  `market_click`; на лендинге, где hero уже занял `market_click`, передаём `market_card_click`)
+  и `qrRevealGoal` (`market_qr_reveal`). Без зависимостей от `site.ts` — переносима как есть.
 
 **Где показываем:**
 

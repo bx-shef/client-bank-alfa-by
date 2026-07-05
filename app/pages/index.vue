@@ -207,8 +207,11 @@ const formats = LANDING_FORMATS
     </section>
 
     <!-- ПРИЛОЖЕНИЕ В МАРКЕТЕ — бесплатная точка входа (self-install): ссылка на
-         листинг Маркета + мобильный QR. Идёт после «Почему мы» (там обещано
-         «бесплатное приложение»). Тексты — LANDING_MARKET_PROMO (docs/POSITIONING.md). -->
+         листинг Маркета + мобильный QR. Вторичный путь: CTA намеренно ослаблен до
+         `air-secondary-no-accent`, чтобы не конкурировать по весу с платным
+         primary «Оставить заявку» (стратегия «платный-first»; так же ослаблена
+         дублирующая ссылка на Маркет в hero). Тексты — LANDING_MARKET_PROMO
+         (docs/POSITIONING.md). -->
     <section class="px-[22px] lg:px-8 pt-[8px] pb-[56px] sm:pb-[72px]">
       <div class="max-w-[600px] mx-auto">
         <AppInBitrixCard
@@ -217,6 +220,7 @@ const formats = LANDING_FORMATS
           :text="LANDING_MARKET_PROMO.text"
           :cta-label="LANDING_MARKET_PROMO.cta"
           :url="LANDING_MARKET_URL"
+          cta-color="air-secondary-no-accent"
           click-goal="market_card_click"
         />
       </div>

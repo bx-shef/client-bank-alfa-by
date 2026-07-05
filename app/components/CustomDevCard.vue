@@ -9,7 +9,10 @@ import { useMetrikaGoal } from '~/composables/useMetrikaGoal'
 // shared <HoldRevealQr> for the mobile QR (→ the site, no #hash). `relative
 // overflow-hidden` on the card lets the QR overlay fill it.
 withDefaults(defineProps<{
+  /** Metrika goal fired on CTA click (default `custom_dev_click`). Override only
+   *  if a repo tracks the custom-dev CTA under a different goal name. */
   clickGoal?: string
+  /** Metrika goal fired once when the mobile QR is revealed (default `custom_dev_qr_reveal`). */
   qrRevealGoal?: string
 }>(), {
   clickGoal: 'custom_dev_click',
