@@ -181,6 +181,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     же сделки по `parentId`; буквальный повтор `kind`+`id`) — разные сущности одной суммы остаются
     раздельными (→ `ambiguous`). `allocationFactKey` — идемпотентный ключ факта «платёж→сущность». Без I/O;
     REST-поиск инвойса/оплаты (+ фильтр стадии) и проводка в `crm-sync` — следующий слайс.
+  - `app/utils/purposeMatch.ts` — **чистое распознавание идентификатора из назначения платежа** (#109,
+    спека — `docs/PROCESSING.md` §4): config-driven `recognizeIdentifiers(purpose, rules)` — по правилам
+    «фраза → тип идентификатора» (`RecognitionRule`) извлекает номер за фразой (регистронезависимо,
+    сепараторы `:№#.-`, составные `123/45`, буквы между фразой и числом не пропускает, дедуп). `IdentifierKind`
+    — таксономия §4 (инвойс номер/id, сделка id/поле, заказ, оплата, смарт-процесс, номер документа генерации).
+    Без хардкода фраз (приходят из настроек портала) и без I/O; сам lookup id→сущность — REST-слайс.
   - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
     `buildPriorAuthorizeUrl`/claims/тела токенов/`buildConsentRequest`/`buildResourceRequestBody` + парсеры
     `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`). Без `node:crypto` —
