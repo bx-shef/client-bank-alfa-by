@@ -39,6 +39,10 @@ const model = PARTNERS_MODEL
       id="hero"
       class="hero-fade-in relative overflow-hidden px-[22px] lg:px-8 pt-[80px] sm:pt-[120px] pb-[48px] sm:pb-[64px]"
     >
+      <HeroGraph
+        rgb="201, 130, 255"
+        :photo="false"
+      />
       <div class="relative z-10 max-w-[1080px] mx-auto flex flex-col items-start gap-5">
         <div class="text-xs uppercase tracking-[0.18em] text-white/40 font-mono">
           Партнёрам
