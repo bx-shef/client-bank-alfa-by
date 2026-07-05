@@ -142,6 +142,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     вшиты (одинаковы по экосистеме), пропсами наружу только имена целей Метрики. Показывается **на
     in-portal-странице приложения** (`app/pages/app.vue`, над `BuildFooter`, `max-w-[520px]`) —
     предложение доработки актуально и внутри портала; на лендинге не дублируем (там своя `BriefForm`).
+  - `app/components/AppInBitrixCard.vue` — карточка «Приложение для Bitrix24» (cyan, light/dark-auto):
+    ссылка на листинг Маркета + мобильный `HoldRevealQr` (QR листинга). Контент — **через пропсы**
+    (`eyebrow`/`title`/`text`/`ctaLabel`/`url` + опц. цели/подписи QR; `clickGoal` по умолчанию
+    `market_click`). На лендинге (`app/pages/index.vue`, после «Почему мы») тексты — из
+    `LANDING_MARKET_PROMO`, url — `LANDING_MARKET_URL` (`shef.bankimport`), своя цель клика
+    `market_card_click` (чтобы не сливаться с целью кнопки hero). Лендинг standalone → карточку в
+    iframe не прячем (в отличие от `currency-converter`, где `/` dual-mode).
 - `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: берёт из фрейма
   **access-токен + домен** и шлёт их в `/api/settings` (GET/POST) заголовками
   `Authorization: Bearer` + `X-B24-Domain`; backend этим токеном пишет/читает `app.option`. Вне
