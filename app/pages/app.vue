@@ -199,6 +199,12 @@ onMounted(async () => {
       </div>
     </B24Card>
 
+    <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
+         партнёр Bitrix24). Только на внутренних страницах приложения (не на лендинге). -->
+    <div class="mx-auto mt-8 w-full max-w-[520px]">
+      <CustomDevCard />
+    </div>
+
     <BuildFooter />
 
     <!-- Settings slideover (primary entry; /settings route stays as fallback).
