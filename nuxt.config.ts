@@ -8,7 +8,15 @@ if (!metrikaId) {
 // разметке (иначе валидатор установки его не находит, а на SSG ssr-детект не
 // срабатывает). ID подставляется на этапе сборки. Хэш этого inline-скрипта
 // подхватывает scripts/csp-hashes.mjs из собранного HTML — CSP остаётся строгим.
-const metrikaSnippet = `(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};m[i].l=1*new Date();for(var j=0;j<e.scripts.length;j++){if(e.scripts[j].src===r){return;}}k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})(window,document,'script','https://mc.yandex.ru/metrika/tag.js?id=${metrikaId}','ym');ym(${metrikaId},'init',{ssr:true,webvisor:true,clickmap:true,accurateTrackBounce:true,trackLinks:true});`
+//
+// Self-silence внутри iframe (`window.self !== window.top`): in-portal-страницы
+// (`/app`,`/settings`,`/install`, layout `clear`) открываются внутри портала Б24,
+// и Метрика там НЕ инициализируется — иначе webvisor писал бы session-replay CRM
+// клиента, а цели (`reachGoal`) пачкали бы аналитику лендинга портальным трафиком.
+// `ym` тогда не определён → `useMetrikaGoal().reachGoal()` сам становится no-op.
+// Тот же приём, что в `currency-converter` (там — в `public/metrika.js`). На
+// standalone-листинге Маркета (self===top) счётчик грузится как обычно.
+const metrikaSnippet = `if(window.self===window.top){(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};m[i].l=1*new Date();for(var j=0;j<e.scripts.length;j++){if(e.scripts[j].src===r){return;}}k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})(window,document,'script','https://mc.yandex.ru/metrika/tag.js?id=${metrikaId}','ym');ym(${metrikaId},'init',{ssr:true,webvisor:true,clickmap:true,accurateTrackBounce:true,trackLinks:true});}`
 
 export default defineNuxtConfig({
   modules: [

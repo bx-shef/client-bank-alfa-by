@@ -121,6 +121,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
   `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
   `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
+- **Промо-компоненты (cross-sell), общие по экосистеме** — переносимы 1:1 из `currency-converter`
+  (правим в одном месте, копируем без правок; каталог в `docs/PAGE_GUIDE.md` §6):
+  - `app/components/HoldRevealQr.vue` — мобильная кнопка-«отпечаток» с QR (hold-to-reveal): кладётся
+    внутрь карточки `relative overflow-hidden`, удержание накрывает её QR-оверлеем. Десктоп не видит
+    (`sm:hidden`) и не грузит `qrcode` (динамический импорт только на удержании). Пропсы `url`/`goal`/
+    `caption`/`hint`/`dark`/`orientation` (`row` — промо-карточки / `stack` — визитка). Акцент —
+    бренд-токен `--color-accent-primary-ch`.
+  - `app/components/CustomDevCard.vue` — премиальная copilot-карточка «Нужна доработка под ваш
+    процесс?» (ИП Шевчик, партнёр): `B24Card variant="filled-copilot"`, CTA `air-boost` → бриф
+    `offer.bx-shef.by/#brief`, внутри `HoldRevealQr` (QR на сайт). Самодостаточна — тексты/ссылки
+    вшиты (одинаковы по экосистеме), пропсами наружу только имена целей Метрики. Показывается **на
+    in-portal-странице приложения** (`app/pages/app.vue`, над `BuildFooter`, `max-w-[520px]`) —
+    предложение доработки актуально и внутри портала; на лендинге не дублируем (там своя `BriefForm`).
 - `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: берёт из фрейма
   **access-токен + домен** и шлёт их в `/api/settings` (GET/POST) заголовками
   `Authorization: Bearer` + `X-B24-Domain`; backend этим токеном пишет/читает `app.option`. Вне
@@ -396,6 +409,11 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   его sha256 подхватывает `csp-hashes.mjs`, CSP разрешает `mc.yandex.ru` в script/img/connect/frame-src)
   и **встроенную CRM-форму Б24** (iframe на `public/b24-form.html` со своим form-scoped CSP —
   `location = /b24-form.html`; `NUXT_PUBLIC_B24_FORM_*`, пустые → слот).
+  Метрика-сниппет **самозаглушается в iframe** (`window.self !== window.top`): in-portal-страницы
+  (`/app`,`/settings`,`/install`) внутри портала Б24 Метрику **не** инициализируют — иначе webvisor
+  писал бы session-replay CRM клиента, а цели пачкали бы аналитику лендинга портальным трафиком
+  (`ym` тогда не определён → `useMetrikaGoal` no-op). Тот же приём, что в `currency-converter`
+  (там — в `public/metrika.js`).
   `POST /api/auth/login` дросселируется `limit_req` (зона `login`, ~10r/m по IP клиента через
   `real_ip` из `X-Forwarded-For`, `burst=5 nodelay` → 429) — антибрутфорс общего пароля оператора (#64, см. `docs/AUTH.md`).
 - `docker-compose.yml` — локальная сборка: `app` (статика лендинга, nginx), `backend` (node-сервер,
