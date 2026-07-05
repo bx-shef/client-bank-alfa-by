@@ -355,12 +355,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     канонический диспетчер `manualImport.ts` (оба формата: client-bank `***** ^Type=` и
     `1CClientBankExchange`) → печатает единый `StatementItem[]` (+ секционный вид для текстового
     формата). Node ≥ 22, нативный TS-стриппинг; `~/`-алиасы резолвит `scripts/lib/alias-loader.mjs`.
-  - `scripts/fuzz-allocation.ts` (`pnpm fuzz:allocation [seed] [N]`) — **фузз-прогон алгоритма разнесения**
-    (#109): прогоняет N случайных платежей против синтетической «CRM» через **реальные** чистые ядра
-    (`recognizeByMatrices` → `routeIdentifier` → `resolveAllocation`) + mock-проводку по `PROCESSING.md` §2,
-    сводит **логическую модель исходов** (распределение по 12 категориям + «просадки» — где авторазнесение
-    должно было сработать, но не сработало). Детерминированно (seeded PRNG), воспроизводимо — регресс-сигнал
-    сборки алгоритма. Dev-only (не часть SSG); mock-CRM синтетический.
+  - `scripts/fuzz-allocation.ts` (`pnpm fuzz:allocation [seed] [N]`) — **исследовательский фузз-прогон
+    алгоритма разнесения** (#109): прогоняет N случайных платежей против синтетической «CRM» через
+    **реальные** чистые ядра (`recognizeByMatrices` → `routeIdentifier` → `resolveAllocation`) +
+    mock-проводку по `PROCESSING.md` §2, сводит **логическую модель исходов** (распределение по 11
+    категориям + «просадки»). Детерминированно (seeded PRNG). Dev-only, охват демонстрационный (5 из 11
+    `IdentifierKind`, один id на назначение); mock `classify()` — **черновик** будущей `crm-sync`-проводки,
+    свериться при её появлении (#109). **CI-gate композиции** ядер — не скрипт, а `tests/allocationPipeline.test.ts`.
   - `scripts/lib/*.mjs` — общая обвязка обоих банк-скриптов (одинаковые запуск/проверка/вывод):
     `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
     `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser` — URL-гейт

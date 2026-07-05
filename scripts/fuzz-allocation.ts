@@ -3,9 +3,15 @@
 // CRM through the REAL pure cores (recognizeByMatrices → routeIdentifier →
 // resolveAllocation) + a mock wiring that follows docs/PROCESSING.md §2, then
 // aggregates a LOGICAL MODEL of outcomes: the distribution (peaks/spikes) and a
-// focused breakdown of all "не внесения" (non-applications), including LEAKS —
-// cases where a valid allocation existed but was not applied. Deterministic:
-// seeded PRNG, so a re-run reproduces the same numbers (regression signal).
+// focused breakdown of all non-applications, including LEAKS — cases where a valid
+// allocation existed but was not applied. Deterministic: seeded PRNG, so a re-run
+// reproduces the same numbers. This is an EXPLORATORY report, not the CI gate —
+// the machine-checked composition test lives in tests/allocationPipeline.test.ts.
+//
+// SCOPE: the mock `classify()` is a DRAFT of the future crm-sync wiring; when real
+// REST wiring lands (#109 next slice) it MUST be reconciled with (or replaced by)
+// this. Coverage is illustrative, not exhaustive — the generator exercises 5 of the
+// 11 IdentifierKind, one identifier per purpose (no invoice+deal-payment merge).
 //
 // Run: pnpm fuzz:allocation [seed] [N]   (Node ≥ 22, native TS strip + ~ alias)
 
@@ -34,17 +40,16 @@ const chance = (p: number) => rnd() < p
 
 // ─────────────────────── logical model: outcome categories ───────────────────────
 const APPLIED = new Set<Category>([
-  'allocate', 'allocate-ambiguous', 'fallback-payment', 'trigger-deal', 'trigger-smart', 'trigger-document'
+  'allocate', 'allocate-ambiguous', 'trigger-deal', 'trigger-smart', 'trigger-document'
 ])
 type Category
-  = | 'allocate' | 'allocate-ambiguous' | 'fallback-payment'
+  = | 'allocate' | 'allocate-ambiguous'
     | 'trigger-deal' | 'trigger-smart' | 'trigger-document'
     | 'manual-no-exact' | 'no-candidates' | 'no-identifier'
     | 'client-not-found' | 'my-company-not-found' | 'idor-rejected'
 const RU: Record<Category, string> = {
   'allocate': 'разнесено (точно)',
   'allocate-ambiguous': 'разнесено (мин.ID + чат)',
-  'fallback-payment': 'разнесено (инвойс→оплата)',
   'trigger-deal': 'триггер по сделке',
   'trigger-smart': 'триггер по смарт-процессу',
   'trigger-document': 'триггер через документ',
@@ -70,14 +75,14 @@ interface Pay { order: string, amount: number, currency: string, companyId: stri
 interface Deal { id: string, companyId: string, stage: number }
 
 const invoices: Inv[] = Array.from({ length: 40 }, (_, i) => ({
-  id: `INV-${100 + i}`, // внутренний id инвойса ≠ его человеческий «номер»
+  id: `INV-${100 + i}`, // the invoice's internal id ≠ its human "number"
   number: `СЧ-${2000 + i}`,
   amount: pick([100, 250, 500, 1000, 60.5, 777]),
   currency: pick(CURRENCIES),
   companyId: chance(0.9) ? CLIENT_CO : OTHER_CO,
   stage: chance(0.15) ? -1 : 1
 }))
-// пара РАЗНЫХ инвойсов (разный id) с одним номером и суммой → «неоднозначность»
+// two DIFFERENT invoices (distinct id) sharing one number and amount → ambiguity
 invoices[0] = { id: 'INV-100', number: 'СЧ-2000', amount: 250, currency: 'BYN', companyId: CLIENT_CO, stage: 1 }
 invoices[1] = { id: 'INV-101', number: 'СЧ-2000', amount: 250, currency: 'BYN', companyId: CLIENT_CO, stage: 1 }
 const payments: Pay[] = Array.from({ length: 20 }, (_, i) => ({
@@ -133,6 +138,10 @@ function classify(p: Payment): Category {
       if (!inScope(d.companyId)) return 'idor-rejected'
       return 'trigger-document'
     }
+    // NB: §2 reads "invoice not found → then search deal payments" (sequential);
+    // here both branches collect into one searchCandidates[] and rely on
+    // collapseSameTarget. Equivalent for the generator (one id kind per purpose);
+    // a purpose carrying two DIFFERENT id kinds would diverge — out of scope here.
     if (route.targetKind === 'invoice') {
       searchCandidates.push(...invoices
         .filter(i => i.number === id.value && inScope(i.companyId) && live(i.stage))
@@ -225,8 +234,8 @@ function genPayment(): Gen {
     const d = deals.find(x => x.id === doc.dealId)
     expectedApply = !!d && inScope(d.companyId) && live(d.stage)
   } else if (mode === 'bad-separator' && liveInv.length) {
-    // номер записан с ПРОБЕЛОМ вместо дефиса — матрица «СЧ-dddd» не поймает (leak
-    // «гибкость разделителей», follow-up #109): существует, но не распознан.
+    // number written with a SPACE instead of the dash — mask «СЧ-dddd» won't catch
+    // it (known leak «separator flexibility», follow-up #109): exists but unrecognized.
     const inv = pick(liveInv)
     setInv(inv, `оплата ${inv.number.replace('-', ' ')}`, inv.amount, inv.currency, true)
   }
