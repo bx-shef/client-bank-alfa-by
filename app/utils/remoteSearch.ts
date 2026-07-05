@@ -7,12 +7,19 @@
 // This pattern repeats across the app (pick a chat, a company, a deal, an
 // invoice, a user), so the decisions live here once, under test.
 
-/** One page of results from a remote source: the rows plus the grand total
- *  (so we know whether more pages exist). `total` may exceed `items.length`. */
+/** One page of results from a remote source. "More pages exist?" can be signalled
+ *  two ways so the contract fits both API styles:
+ *  - `total` — grand total across all pages (e.g. `im.search.chat.list` returns it);
+ *    more exist while `loaded < total`;
+ *  - `hasMore` — an explicit flag (for cursor/next-token APIs with no grand total).
+ *  If `hasMore` is given it wins; else `total` is used; if neither, there is no
+ *  next page. `items` alone (no total/hasMore) ⇒ a single, complete page. */
 export interface RemoteSearchPage<T> {
   items: T[]
-  /** Total matches on the server for this query (across all pages). */
-  total: number
+  /** Total matches on the server for this query (across all pages), if known. */
+  total?: number
+  /** Explicit "more pages exist" flag; overrides `total` when present. */
+  hasMore?: boolean
 }
 
 /** Transport the composable drives: given a query and an offset (how many rows
@@ -62,7 +69,18 @@ export function mergePages<T>(existing: T[], incoming: T[], keyOf: (x: T) => str
   return merged
 }
 
-/** Are there more results to load beyond what's already loaded? */
+/** Are there more results to load beyond what's already loaded, by total count? */
 export function hasMoreResults(loaded: number, total: number): boolean {
   return loaded < total
+}
+
+/**
+ * Resolve "are there more pages?" from a page's signals (see RemoteSearchPage):
+ * explicit `hasMore` wins, else `total` (loaded < total), else false. Used by the
+ * composable so both count-based and cursor-based sources work through one path.
+ */
+export function resolveHasMore(loaded: number, page: { total?: number, hasMore?: boolean }): boolean {
+  if (typeof page.hasMore === 'boolean') return page.hasMore
+  if (typeof page.total === 'number') return hasMoreResults(loaded, page.total)
+  return false
 }

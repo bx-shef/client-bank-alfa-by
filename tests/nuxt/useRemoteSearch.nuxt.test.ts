@@ -108,4 +108,46 @@ describe('useRemoteSearch', () => {
     expect(api.items.value).toEqual([])
     expect(api.loading.value).toBe(false)
   })
+
+  it('refresh() recovers after an error', async () => {
+    let fail = true
+    const fetcher = vi.fn(async () => {
+      if (fail) throw new Error('boom')
+      return { items: [row('ok')], total: 1 }
+    })
+    await mountHarness(fetcher)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(api.error.value).toBe('boom')
+
+    fail = false
+    await api.refresh()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(api.error.value).toBeNull()
+    expect(api.items.value.map(r => r.value)).toEqual(['ok'])
+  })
+
+  it('loadMore is a no-op once hasMore is false', async () => {
+    const fetcher = vi.fn(async () => ({ items: [row('1')], total: 1 })) // loaded == total
+    await mountHarness(fetcher)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(api.hasMore.value).toBe(false)
+    const calls = fetcher.mock.calls.length
+    await api.loadMore()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(fetcher.mock.calls.length).toBe(calls) // no extra fetch
+  })
+
+  it('stops paginating when a load-more page adds nothing new (inflated total)', async () => {
+    // Server claims total=9 but the second page returns only already-seen rows.
+    const pages: Record<number, Row[]> = { 0: [row('1'), row('2')], 2: [row('1'), row('2')] }
+    const fetcher = vi.fn(async (_q: string, offset: number) => ({ items: pages[offset] ?? [], total: 9 }))
+    await mountHarness(fetcher)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(api.hasMore.value).toBe(true) // 2 of 9
+
+    await api.loadMore()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(api.items.value.map(r => r.value)).toEqual(['1', '2']) // nothing new merged
+    expect(api.hasMore.value).toBe(false) // no-progress guard stopped it
+  })
 })

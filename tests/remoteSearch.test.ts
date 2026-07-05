@@ -3,7 +3,8 @@ import {
   hasMoreResults,
   isQueryReady,
   mergePages,
-  normalizeSearchTerm
+  normalizeSearchTerm,
+  resolveHasMore
 } from '~/utils/remoteSearch'
 
 describe('normalizeSearchTerm', () => {
@@ -59,5 +60,21 @@ describe('hasMoreResults', () => {
     expect(hasMoreResults(42, 42)).toBe(false)
     expect(hasMoreResults(50, 42)).toBe(false) // over-count is safe
     expect(hasMoreResults(0, 0)).toBe(false)
+  })
+})
+
+describe('resolveHasMore', () => {
+  it('explicit hasMore wins over total', () => {
+    expect(resolveHasMore(1, { hasMore: true, total: 1 })).toBe(true)
+    expect(resolveHasMore(0, { hasMore: false, total: 99 })).toBe(false)
+  })
+
+  it('falls back to total when hasMore absent', () => {
+    expect(resolveHasMore(2, { total: 5 })).toBe(true)
+    expect(resolveHasMore(5, { total: 5 })).toBe(false)
+  })
+
+  it('no signal at all ⇒ no next page (single complete page)', () => {
+    expect(resolveHasMore(3, {})).toBe(false)
   })
 })
