@@ -114,6 +114,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
   + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
   Роут `/settings` — в `nitro.prerender.routes`.
+- `app/pages/import.vue` — страница `/import` **ручной загрузки выписки** (P4, слайс 1): когда нет
+  онлайн-подключения к банку — перетащить файл(ы), приложение разбирает их **в браузере**
+  (детерминированно, без backend/AI) и показывает предпросмотр операций. Layout `clear` +
+  `useB24().init()` (в портале `setTitle`/`fitWindow`). Вход — кнопка «Загрузить выписку» в шапке
+  `/app`. Роут `/import` — в `nitro.prerender.routes`. UI — `StatementUpload.vue`; чистое ядро —
+  `app/utils/importUpload.ts` (`validateUploadFile` — расширение+размер `MAX_UPLOAD_BYTES` 2 МБ,
+  `decodeAndParse` — windows-1251 декод → `normalizeManualStatement`, `processUploadBatch` — усечение
+  по `MAX_UPLOAD_FILES` + изоляция разбора каждого файла + `defer`-yield, `dedupItems` по `account|docId`).
+  Компонент: дропзона, список результатов по файлам (успех — бейдж «разобрано: N», ошибка — переносимый
+  текст), сводка, предпросмотр `OperationList`, `role=status aria-live`. **Запись в CRM** (file-parse →
+  crm-sync) — следующий слайс. Тесты — `tests/importUpload.test.ts` (реальные фикстуры) +
+  `tests/nuxt/statementUpload.nuxt.test.ts` (рендер/проводка).
 - `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `event.bind`
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
   установка доставляет `application_token`) → `installFinish` (+ диагностика портала, блок «События»);
