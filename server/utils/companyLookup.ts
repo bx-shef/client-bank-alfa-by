@@ -10,6 +10,11 @@
 // Belarusian portals often keep the account in RQ_IIK (ИИК) rather than RQ_ACC_NUM,
 // so step 1 falls back to RQ_IIK when RQ_ACC_NUM yields nothing. Everything here is
 // pure over an injected `call(method, params)` so it unit-tests without the network.
+//
+// Two entry points share steps 1–2: `findCompanyByAccount` (the counterparty by
+// their account) and `findMyCompanyByAccount` (OUR company by OUR account — Этап C,
+// same resolution + an `isMyCompany='Y'` filter). «My company» is a Company with
+// `isMyCompany='Y'` (confirmed live), not a separate entity.
 
 /** CRM entity type id for a Company (Lead=1, Deal=2, Contact=3, Company=4). */
 export const CRM_ENTITY_TYPE_COMPANY = 4
@@ -55,23 +60,41 @@ export function requisiteFilter(requisiteIds: string[]): Record<string, unknown>
   return { filter: { ID: requisiteIds, ENTITY_TYPE_ID: CRM_ENTITY_TYPE_COMPANY }, select: ['ENTITY_ID'] }
 }
 
+/** `crm.item.list` params to keep only the «my company» rows among `companyIds`.
+ *  `isMyCompany='Y'` is the flag that marks a Company as one of our own (Этап C). */
+export function myCompanyFilter(companyIds: string[]): Record<string, unknown> {
+  return { entityTypeId: CRM_ENTITY_TYPE_COMPANY, filter: { id: companyIds, isMyCompany: 'Y' }, select: ['id'] }
+}
+
+/** Pull the `id`s out of a `crm.item.list` response (`{result:{items:[{id}]}}`),
+ *  tolerating a missing/!array `items`. Distinct from `extractEntityIds`, which
+ *  reads the upper-cased `ENTITY_ID` of the requisite/bank-detail list methods. */
+export function extractItemIds(resp: Record<string, unknown>): string[] {
+  const items = (resp?.result as Record<string, unknown> | undefined)?.items
+  if (!Array.isArray(items)) return []
+  const ids: string[] = []
+  for (const row of items) {
+    const id = (row as Record<string, unknown>)?.id
+    if (id !== undefined && id !== null && `${id}` !== '') ids.push(`${id}`)
+  }
+  return ids
+}
+
 /**
- * Find the CRM company id for a counterparty account, or `null` if none matches.
- * Returns the FIRST matching company. NB (confirmed live): `RQ_ACC_NUM` is NOT
- * unique — the same settlement account can sit on several companies' bank details,
- * so multiple matches are a real (if uncommon) case; picking the first is the
- * accepted default (see docs/PROCESSING.md §4). Orphan bank details of a DELETED
- * company still turn up at step 1, but step 2 (`crm.requisite.list` filtered by
- * `ENTITY_TYPE_ID=4`) returns nothing for their now-parentless requisite — CONFIRMED
- * LIVE — so a dead company can't be resolved (the account just reads as unmatched).
- * A `null` result means no company matched — crm-sync then counts
- * the operation `unmatched` and writes nothing (a todo needs an owner), retrying on
- * a later poll once a company exists. Never throws for "not found"; a transport
- * error from `call` propagates to the caller.
+ * Resolve the CRM company ids that own a settlement account (steps 1–2, shared by
+ * both entry points): bank detail (`RQ_ACC_NUM`→`RQ_IIK` fallback) → requisite →
+ * company. Returns EVERY matching company id (usually one; `RQ_ACC_NUM` is NOT
+ * unique — confirmed live — so several companies on one account is a real case).
+ * Empty array = no company. A transport error from `call` propagates.
+ *
+ * Orphan bank details of a DELETED company still turn up at step 1, but step 2
+ * (`crm.requisite.list` filtered by `ENTITY_TYPE_ID=4`) returns nothing for their
+ * now-parentless requisite — CONFIRMED LIVE — so a dead company is never resolved
+ * (through EITHER entry point); the account simply reads as no-company.
  */
-export async function findCompanyByAccount(account: string, call: RestCall): Promise<string | null> {
+export async function resolveCompanyIdsByAccount(account: string, call: RestCall): Promise<string[]> {
   const acc = normalizeAccount(account)
-  if (!acc) return null
+  if (!acc) return []
 
   let requisiteIds: string[] = []
   for (const field of ACCOUNT_FIELDS) {
@@ -79,9 +102,44 @@ export async function findCompanyByAccount(account: string, call: RestCall): Pro
     requisiteIds = extractEntityIds(resp)
     if (requisiteIds.length) break
   }
-  if (!requisiteIds.length) return null
+  if (!requisiteIds.length) return []
 
   const companies = await call('crm.requisite.list', requisiteFilter(requisiteIds))
-  const companyIds = extractEntityIds(companies)
+  return extractEntityIds(companies)
+}
+
+/**
+ * Find the CRM company id for a counterparty account, or `null` if none matches.
+ * Returns the FIRST matching company (`RQ_ACC_NUM` not unique — see
+ * `resolveCompanyIdsByAccount`; picking the first is the accepted default,
+ * docs/PROCESSING.md §4). A `null` result means no company matched — crm-sync then
+ * counts the operation `unmatched` and writes nothing (a todo needs an owner),
+ * retrying on a later poll once a company exists. Never throws for "not found"; a
+ * transport error from `call` propagates to the caller.
+ */
+export async function findCompanyByAccount(account: string, call: RestCall): Promise<string | null> {
+  const companyIds = await resolveCompanyIdsByAccount(account, call)
   return companyIds[0] ?? null
+}
+
+/**
+ * Find MY company (`isMyCompany='Y'`) for OUR settlement account — Этап C
+ * (docs/PROCESSING.md §2): resolve the companies that own the account, then keep
+ * only the one flagged as ours. Returns the first my-company id, or `null` when the
+ * account resolves to no company or to only client companies (not ours) — the
+ * caller treats a `null` here as «моя компания не найдена» → error chat (§5).
+ * Skips the extra REST call when step 1–2 found nothing. Transport errors propagate.
+ *
+ * NB (open, docs/PROCESSING.md §8): if OUR account somehow resolves to more than one
+ * `isMyCompany` company, we currently take the first SILENTLY — the cost of a wrong
+ * "my company" (it sets the owner / where the deal is written) is higher than for a
+ * counterparty, so the crm-sync wiring should decide whether to escalate that to the
+ * error chat. Also, "our account" is near-constant per portal — the wiring should
+ * cache this lookup rather than re-run 3 REST calls for every operation in a batch.
+ */
+export async function findMyCompanyByAccount(account: string, call: RestCall): Promise<string | null> {
+  const companyIds = await resolveCompanyIdsByAccount(account, call)
+  if (!companyIds.length) return null
+  const mine = await call('crm.item.list', myCompanyFilter(companyIds))
+  return extractItemIds(mine)[0] ?? null
 }

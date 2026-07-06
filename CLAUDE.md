@@ -339,10 +339,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       из `/api/ops/queues`; `?preview=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
       (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78. Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
-  - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту контрагента** (DI над
-    `RestCall`, тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) →
-    id реквизитов → `crm.requisite.list` (`ENTITY_TYPE_ID=4`) → id компании. Проведено в `crm-sync`
-    `findCompany`. `null` ⇒ операция `unmatched`, дело не пишется.
+  - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту** (DI над `RestCall`,
+    тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) → id реквизитов →
+    `crm.requisite.list` (`ENTITY_TYPE_ID=4`) → id компании (шаги 1-2 вынесены в `resolveCompanyIdsByAccount`).
+    `findCompanyByAccount` — компания контрагента (первая; `RQ_ACC_NUM` не уникален). `findMyCompanyByAccount`
+    — **моя компания по нашему счёту** (§2 Этап C): те же шаги + фильтр `crm.item.list` `isMyCompany='Y'`
+    (подтверждён вживую). Проведено в `crm-sync` `findCompany`. `null` ⇒ `unmatched` (клиент) / «моя компания
+    не найдена» → чат ошибок (§5).
   - `server/utils/portalRest.ts` — `makePortalRestCall(memberId, deps)`: связывает `RestCall` с порталом
     (загрузка токена → `ensureAccessToken` → `callRest` с домен+access). DI, тесты; `null` без токена.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
@@ -367,8 +370,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `DT31_11:D` = `SEMANTICS='F'`. ⚠ **fail-open**: пустое множество = «ничего не отрицательно» (неотличимо
       от битого запроса) — на проводке в `crm-sync` алертить, если для известной категории пусто.
     Осталось: lookup остальных целей (сделка/оплата/смарт-процесс/мост-документ — стадии сделки через
-    `DYNAMIC_…`-форму, свой builder), поиск моей компании, проводка в `crm-sync` (там же связать
-    `stageLoader`→`invoiceLookup`, с fail-open-алертом), хранение матриц/карты в настройках.
+    `DYNAMIC_…`-форму, свой builder), проводка в `crm-sync` (там же связать `stageLoader`→`invoiceLookup`,
+    с fail-open-алертом), хранение матриц/карты в настройках. Поиск моей компании — **готов**
+    (`findMyCompanyByAccount`, см. буллет `companyLookup.ts`).
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
