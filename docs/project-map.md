@@ -135,10 +135,11 @@
   `allocationFactStore.ts` (таблица `allocation_fact`, `allocated`/`reverted`, write-once per `member_id`)
   + чистый **lookup смарт-счёта** `invoiceLookup.ts` (`crm.item.list` `entityTypeId=31` по номеру+компании,
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
-  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`) + **поиск моей компании** по нашему счёту
-  `findMyCompanyByAccount` (счёт → компания с `isMyCompany='Y'`, §2 Этап C). **Имена полей и стадий подтверждены
-  на живом портале** (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; «Не оплачен»
-  `DT31_11:D` = `SEMANTICS='F'`; `isMyCompany='Y'`). Осталось: lookup остальных целей (сделка/оплата/
+  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс И сделка** — `SMART_INVOICE_STAGE_<cat>`
+  и `DEAL_STAGE`/`DEAL_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
+  компания с `isMyCompany='Y'`, §2 Этап C). **Имена полей и стадий подтверждены на живом портале**
+  (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
+  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`). Осталось: lookup остальных целей (сделка/оплата/
   смарт-процесс/мост-документ), проводка в `crm-sync`, хранение матриц/карты в настройках.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
