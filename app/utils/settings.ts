@@ -28,15 +28,21 @@ const MAX_ITEM_LEN = 256
 export interface ChatSettings {
   /** B24 dialog id (e.g. "chat2941"). Empty ⇒ no target ⇒ notifications off. */
   dialogId: string
+  /** Chat display name, cached at selection time — a UI convenience so the picker
+   *  shows the name (not a raw id) on reload. Optional; the worker ignores it and
+   *  needs only `dialogId`. May go stale if the chat is renamed (self-heals on re-pick). */
+  title?: string
   /** Filter rules (directions / excluded accounts / excluded purpose patterns). */
   rules: ChatNotifyRules
 }
 
-/** A bare chat target (dialog id only). Used for the error chat, which has no
- *  per-operation rules — every processing error goes there (business tone, app-name
- *  prefix; см. docs/PROCESSING.md §5). Empty ⇒ error reporting off. */
+/** A bare chat target (dialog id + optional cached title). Used for the error chat,
+ *  which has no per-operation rules — every processing error goes there (business
+ *  tone, app-name prefix; см. docs/PROCESSING.md §5). Empty ⇒ error reporting off. */
 export interface ChatTarget {
   dialogId: string
+  /** Cached display name (UI convenience; see ChatSettings.title). */
+  title?: string
 }
 
 /** The full settings blob stored under one `app.option` key. */
@@ -102,21 +108,28 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
   const rulesRaw = (chatRaw.rules ?? {}) as Record<string, unknown>
   const errorRaw = (obj.errorChat ?? {}) as Record<string, unknown>
   return {
-    chat: {
+    chat: withTitle(chatRaw.title, {
       dialogId: cleanDialogId(chatRaw.dialogId),
       rules: {
         directions: cleanDirections(rulesRaw.directions),
         excludeAccounts: cleanList(rulesRaw.excludeAccounts),
         excludePurposePatterns: cleanList(rulesRaw.excludePurposePatterns)
       }
-    },
-    errorChat: { dialogId: cleanDialogId(errorRaw.dialogId) }
+    }),
+    errorChat: withTitle(errorRaw.title, { dialogId: cleanDialogId(errorRaw.dialogId) })
   }
 }
 
 /** Coerce a dialog id: trimmed, length-clamped string, else empty (non-string ⇒ off). */
 function cleanDialogId(v: unknown): string {
   return typeof v === 'string' ? v.trim().slice(0, MAX_DIALOG_ID_LEN) : ''
+}
+
+/** Attach a cleaned `title` to a target only when non-empty — keeps the shape
+ *  minimal (no `title` key when unset), so defaults/round-trips stay clean. */
+function withTitle<T extends object>(raw: unknown, target: T): T {
+  const title = typeof raw === 'string' ? raw.trim().slice(0, MAX_ITEM_LEN) : ''
+  return title ? { ...target, title } : target
 }
 
 /** Serialize settings to the JSON string stored in `app.option`. */

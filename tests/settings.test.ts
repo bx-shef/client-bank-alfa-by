@@ -61,6 +61,21 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings('{"chat":{"dialogId":"chat1"}}').errorChat).toEqual({ dialogId: '' })
   })
 
+  it('title: cached name kept when present, absent otherwise (UI convenience, optional)', () => {
+    const p = parsePortalSettings('{"chat":{"dialogId":"chat5","title":"  Отдел продаж "},"errorChat":{"dialogId":"chat9","title":"Ошибки"}}')
+    expect(p.chat.title).toBe('Отдел продаж') // trimmed
+    expect(p.errorChat.title).toBe('Ошибки')
+    // no title key when unset or non-string (keeps the shape minimal)
+    expect('title' in parsePortalSettings('{"chat":{"dialogId":"chat5"}}').chat).toBe(false)
+    expect('title' in parsePortalSettings('{"chat":{"dialogId":"chat5","title":42}}').chat).toBe(false)
+    expect('title' in parsePortalSettings('{"chat":{"dialogId":"chat5","title":"   "}}').chat).toBe(false) // blank → dropped
+  })
+
+  it('title: clamped to 256 chars', () => {
+    const long = 'z'.repeat(400)
+    expect(parsePortalSettings(JSON.stringify({ chat: { dialogId: 'chat5', title: long } })).chat.title!.length).toBe(256)
+  })
+
   it('directions: invalid entries dropped, order normalized; missing → [credit]', () => {
     expect(parsePortalSettings('{"chat":{"rules":{"directions":["debit","credit","xxx"]}}}').chat.rules.directions)
       .toEqual(['credit', 'debit']) // valid-only, canonical order

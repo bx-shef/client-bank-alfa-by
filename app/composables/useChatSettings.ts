@@ -51,10 +51,12 @@ function create() {
     return { items: res.items, hasMore: res.hasMore, nextOffset: res.nextOffset }
   }
 
-  /** Resolve a saved dialog id to a {value,label} for the picker: prefer the name
-   *  from the recent list, else fall back to the id itself (still selectable). */
-  function seedOption(dialogId: string, recent: ChatOption[]): ChatOption | undefined {
+  /** Resolve a saved dialog id to a {value,label} for the picker: prefer the cached
+   *  title (stored at pick time), else the name from the recent list, else the id
+   *  itself (still selectable). */
+  function seedOption(dialogId: string, title: string | undefined, recent: ChatOption[]): ChatOption | undefined {
     if (!dialogId) return undefined
+    if (title) return { value: dialogId, label: title }
     return recent.find(c => c.value === dialogId) ?? { value: dialogId, label: dialogId }
   }
 
@@ -76,8 +78,8 @@ function create() {
       try {
         recent = (await chatFetcher('', 0)).items
       } catch { /* leave recent empty → id fallback */ }
-      notifyOption.value = seedOption(settings.chat.dialogId, recent)
-      errorOption.value = seedOption(settings.errorChat.dialogId, recent)
+      notifyOption.value = seedOption(settings.chat.dialogId, settings.chat.title, recent)
+      errorOption.value = seedOption(settings.errorChat.dialogId, settings.errorChat.title, recent)
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось загрузить настройки')
     } finally {

@@ -35,4 +35,22 @@ describe('AsyncSearchSelect', () => {
     expect(wrapper.text()).toContain('АО Ромашка')
     expect(fetcher).not.toHaveBeenCalled()
   })
+
+  it('emits update:selectedOption with the resolved row on selection change', async () => {
+    const fetcher = vi.fn(async () => ({ items: [], total: 0 }))
+    const wrapper = await mountSuspended(AsyncSearchSelect, {
+      // seed the option so it's resolvable in displayItems without a fetch
+      props: { fetcher, selectedOption: { value: 'chat7', label: 'Бухгалтерия' } }
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    await wrapper.setProps({ modelValue: 'chat7' }) // user picks the seeded chat
+    await vi.advanceTimersByTimeAsync(10)
+    const events = wrapper.emitted('update:selectedOption')
+    expect(events?.at(-1)?.[0]).toEqual({ value: 'chat7', label: 'Бухгалтерия' })
+
+    await wrapper.setProps({ modelValue: undefined }) // cleared
+    await vi.advanceTimersByTimeAsync(10)
+    expect(wrapper.emitted('update:selectedOption')?.at(-1)?.[0]).toBeUndefined()
+  })
 })
