@@ -4,7 +4,10 @@ import {
   CRM_ENTITY_TYPE_COMPANY,
   bankDetailFilter,
   extractEntityIds,
+  extractItemIds,
   findCompanyByAccount,
+  findMyCompanyByAccount,
+  myCompanyFilter,
   normalizeAccount,
   requisiteFilter,
   type RestCall
@@ -133,5 +136,60 @@ describe('findCompanyByAccount', () => {
     })
     await findCompanyByAccount(' AC C1 ', call)
     expect((calls[0]!.params.filter as Record<string, unknown>).RQ_ACC_NUM).toBe('ACC1')
+  })
+})
+
+describe('myCompanyFilter', () => {
+  it('filters companies by id IN-list AND isMyCompany=Y', () => {
+    expect(myCompanyFilter(['5', '7'])).toEqual({
+      entityTypeId: CRM_ENTITY_TYPE_COMPANY,
+      filter: { id: ['5', '7'], isMyCompany: 'Y' },
+      select: ['id']
+    })
+  })
+})
+
+describe('extractItemIds', () => {
+  it('pulls result.items[].id and tolerates a missing/!array shape', () => {
+    expect(extractItemIds({ result: { items: [{ id: 5 }, { id: 7 }] } })).toEqual(['5', '7'])
+    expect(extractItemIds({})).toEqual([])
+    expect(extractItemIds({ result: {} })).toEqual([])
+    expect(extractItemIds({ result: { items: 'x' } })).toEqual([])
+    expect(extractItemIds({ result: { items: [{ id: '' }] } })).toEqual([])
+  })
+})
+
+describe('findMyCompanyByAccount', () => {
+  it('resolves OUR company (isMyCompany=Y) for our account', async () => {
+    const { call, calls } = fakeCall({
+      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11' }] }),
+      'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '89' }] }),
+      'crm.item.list': () => ({ result: { items: [{ id: '89' }] } })
+    })
+    expect(await findMyCompanyByAccount('OUR-ACC', call)).toBe('89')
+    // The my-company filter is the 3rd call, over the resolved company ids.
+    expect(calls[2]!.method).toBe('crm.item.list')
+    expect(calls[2]!.params).toEqual(myCompanyFilter(['89']))
+  })
+
+  it('returns null when the account resolves only to client (not-my) companies', async () => {
+    const { call } = fakeCall({
+      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11' }] }),
+      'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '42' }] }),
+      'crm.item.list': () => ({ result: { items: [] } }) // isMyCompany=Y filter excluded it
+    })
+    expect(await findMyCompanyByAccount('CLIENT-ACC', call)).toBeNull()
+  })
+
+  it('returns null and skips the my-company query when no company owns the account', async () => {
+    const { call, calls } = fakeCall({ 'crm.requisite.bankdetail.list': () => ({ result: [] }) })
+    expect(await findMyCompanyByAccount('NOPE', call)).toBeNull()
+    expect(calls.some(c => c.method === 'crm.item.list')).toBe(false)
+  })
+
+  it('returns null for an empty account without calling REST', async () => {
+    const { call, calls } = fakeCall({})
+    expect(await findMyCompanyByAccount('   ', call)).toBeNull()
+    expect(calls).toHaveLength(0)
   })
 })

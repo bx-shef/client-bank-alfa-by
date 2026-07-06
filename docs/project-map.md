@@ -135,10 +135,11 @@
   `allocationFactStore.ts` (таблица `allocation_fact`, `allocated`/`reverted`, write-once per `member_id`)
   + чистый **lookup смарт-счёта** `invoiceLookup.ts` (`crm.item.list` `entityTypeId=31` по номеру+компании,
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
-  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage` для `invoiceLookup`). **Имена полей и стадий
-  подтверждены на живом портале** (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`;
-  «Не оплачен» `DT31_11:D` = `SEMANTICS='F'`). Осталось: lookup остальных целей (сделка/оплата/
-  смарт-процесс/мост-документ), поиск **моей** компании, проводка в `crm-sync`, хранение матриц/карты в настройках.
+  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`) + **поиск моей компании** по нашему счёту
+  `findMyCompanyByAccount` (счёт → компания с `isMyCompany='Y'`, §2 Этап C). **Имена полей и стадий подтверждены
+  на живом портале** (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; «Не оплачен»
+  `DT31_11:D` = `SEMANTICS='F'`; `isMyCompany='Y'`). Осталось: lookup остальных целей (сделка/оплата/
+  смарт-процесс/мост-документ), проводка в `crm-sync`, хранение матриц/карты в настройках.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`
@@ -189,11 +190,12 @@
   (чистые ядра #109 уже готовы, см. «Что сделано»): по `LookupStrategy` реальный поиск сущности
   (`by-id`/`by-number` + **обязательная повторная проверка компании+стадии**, `by-config-field` с
   валидацией имени поля, `via-order`/`via-payment`, мост `via-document` через
-  `crm.documentgenerator.document.list`); поиск **моей** компании по нашему счёту; проводка в `crm-sync`
+  `crm.documentgenerator.document.list`); проводка в `crm-sync`
   (инвойс/оплата → amount-ядро → `payment.pay`/триггер; сделка/смарт-процесс → безусловный триггер;
   `ambiguous`/«некуда разнести»/ошибки → чат); стор факта разнесения (`разнесён/откат`, `member_id`) —
   **готов** (`allocationFactStore.ts`), lookup смарт-счёта — **готов** (`invoiceLookup.ts`), loader стадий —
-  **готов** (`stageLoader.ts`), осталось подключить их в проводку; **карта сопоставления** «направление/
+  **готов** (`stageLoader.ts`), поиск моей компании — **готов** (`findMyCompanyByAccount`), осталось подключить
+  их в проводку; **карта сопоставления** «направление/
   смарт-процесс → поле-номера» в настройках. Нужен **чат-бот
   приложения** (оповещения + ошибки указанному пользователю). Открытые пункты — трекер #109.
 
