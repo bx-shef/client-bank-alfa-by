@@ -181,10 +181,38 @@ describe('findMyCompanyByAccount', () => {
     expect(await findMyCompanyByAccount('CLIENT-ACC', call)).toBeNull()
   })
 
+  it('picks my company among SEVERAL resolved companies (shared account)', async () => {
+    const { call, calls } = fakeCall({
+      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11' }, { ENTITY_ID: '12' }] }),
+      'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '42' }, { ENTITY_ID: '89' }] }),
+      'crm.item.list': () => ({ result: { items: [{ id: '89' }] } }) // only 89 is ours
+    })
+    expect(await findMyCompanyByAccount('SHARED', call)).toBe('89')
+    expect(calls[2]!.params).toEqual(myCompanyFilter(['42', '89'])) // whole set goes to the filter
+  })
+
   it('returns null and skips the my-company query when no company owns the account', async () => {
     const { call, calls } = fakeCall({ 'crm.requisite.bankdetail.list': () => ({ result: [] }) })
     expect(await findMyCompanyByAccount('NOPE', call)).toBeNull()
     expect(calls.some(c => c.method === 'crm.item.list')).toBe(false)
+  })
+
+  it('propagates a REST error thrown by the my-company (crm.item.list) call', async () => {
+    const call: RestCall = async (method) => {
+      if (method === 'crm.requisite.bankdetail.list') return { result: [{ ENTITY_ID: '11' }] }
+      if (method === 'crm.requisite.list') return { result: [{ ENTITY_ID: '89' }] }
+      throw new Error('QUERY_LIMIT_EXCEEDED')
+    }
+    await expect(findMyCompanyByAccount('OUR-ACC', call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
+
+  it('an error-SHAPED my-company body (no result) reads as «not mine» → null', async () => {
+    const { call } = fakeCall({
+      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11' }] }),
+      'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '89' }] }),
+      'crm.item.list': () => ({ error: 'insufficient_scope', error_description: 'need crm' })
+    })
+    expect(await findMyCompanyByAccount('OUR-ACC', call)).toBeNull()
   })
 
   it('returns null for an empty account without calling REST', async () => {

@@ -81,10 +81,16 @@ export function extractItemIds(resp: Record<string, unknown>): string[] {
 }
 
 /**
- * Resolve the CRM company ids that own a settlement account (steps 1–2): bank
- * detail (`RQ_ACC_NUM`→`RQ_IIK` fallback) → requisite → company. Returns EVERY
- * matching company id (usually one; `RQ_ACC_NUM` is not unique — confirmed live).
+ * Resolve the CRM company ids that own a settlement account (steps 1–2, shared by
+ * both entry points): bank detail (`RQ_ACC_NUM`→`RQ_IIK` fallback) → requisite →
+ * company. Returns EVERY matching company id (usually one; `RQ_ACC_NUM` is NOT
+ * unique — confirmed live — so several companies on one account is a real case).
  * Empty array = no company. A transport error from `call` propagates.
+ *
+ * Orphan bank details of a DELETED company still turn up at step 1, but step 2
+ * (`crm.requisite.list` filtered by `ENTITY_TYPE_ID=4`) returns nothing for their
+ * now-parentless requisite — CONFIRMED LIVE — so a dead company is never resolved
+ * (through EITHER entry point); the account simply reads as no-company.
  */
 export async function resolveCompanyIdsByAccount(account: string, call: RestCall): Promise<string[]> {
   const acc = normalizeAccount(account)
@@ -104,17 +110,12 @@ export async function resolveCompanyIdsByAccount(account: string, call: RestCall
 
 /**
  * Find the CRM company id for a counterparty account, or `null` if none matches.
- * Returns the FIRST matching company. NB (confirmed live): `RQ_ACC_NUM` is NOT
- * unique — the same settlement account can sit on several companies' bank details,
- * so multiple matches are a real (if uncommon) case; picking the first is the
- * accepted default (see docs/PROCESSING.md §4). Orphan bank details of a DELETED
- * company still turn up at step 1, but step 2 (`crm.requisite.list` filtered by
- * `ENTITY_TYPE_ID=4`) returns nothing for their now-parentless requisite — CONFIRMED
- * LIVE — so a dead company can't be resolved (the account just reads as unmatched).
- * A `null` result means no company matched — crm-sync then counts
- * the operation `unmatched` and writes nothing (a todo needs an owner), retrying on
- * a later poll once a company exists. Never throws for "not found"; a transport
- * error from `call` propagates to the caller.
+ * Returns the FIRST matching company (`RQ_ACC_NUM` not unique — see
+ * `resolveCompanyIdsByAccount`; picking the first is the accepted default,
+ * docs/PROCESSING.md §4). A `null` result means no company matched — crm-sync then
+ * counts the operation `unmatched` and writes nothing (a todo needs an owner),
+ * retrying on a later poll once a company exists. Never throws for "not found"; a
+ * transport error from `call` propagates to the caller.
  */
 export async function findCompanyByAccount(account: string, call: RestCall): Promise<string | null> {
   const companyIds = await resolveCompanyIdsByAccount(account, call)
@@ -128,6 +129,13 @@ export async function findCompanyByAccount(account: string, call: RestCall): Pro
  * account resolves to no company or to only client companies (not ours) — the
  * caller treats a `null` here as «моя компания не найдена» → error chat (§5).
  * Skips the extra REST call when step 1–2 found nothing. Transport errors propagate.
+ *
+ * NB (open, docs/PROCESSING.md §8): if OUR account somehow resolves to more than one
+ * `isMyCompany` company, we currently take the first SILENTLY — the cost of a wrong
+ * "my company" (it sets the owner / where the deal is written) is higher than for a
+ * counterparty, so the crm-sync wiring should decide whether to escalate that to the
+ * error chat. Also, "our account" is near-constant per portal — the wiring should
+ * cache this lookup rather than re-run 3 REST calls for every operation in a batch.
  */
 export async function findMyCompanyByAccount(account: string, call: RestCall): Promise<string | null> {
   const companyIds = await resolveCompanyIdsByAccount(account, call)
