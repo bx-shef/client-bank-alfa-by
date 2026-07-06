@@ -39,6 +39,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `crm.requisite.bankdetail.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Поиск реквизитов по счёту контрагента (`RQ_ACC_NUM`→`RQ_IIK`). |
 | `crm.requisite.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Реквизит → компания (`ENTITY_TYPE_ID=4`). |
 | `crm.item.list` | classic | `crm` | `server/utils/invoiceLookup.ts` | да | актуален | Поиск смарт-счёта (`entityTypeId=31`) по номеру+компании для разнесения оплаты (#109). Поля подтверждены на живом портале: `accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`. |
+| `crm.status.list` | classic | `crm` | `server/utils/stageLoader.ts` | да | актуален | Справочник стадий → множество «отрицательных» (`SEMANTICS='F'`) для фильтра `invoiceLookup` (#109). `ENTITY_ID=SMART_INVOICE_STAGE_<catId>`; поля `STATUS_ID`/`SEMANTICS` подтверждены вживую («Не оплачен» `DT31_11:D`). |
 | `crm.activity.todo.add` | classic | `crm` | `server/utils/crmActivityWrite.ts` | да | актуален | Запись универсального дела по операции (стадия 4). |
 | `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts` | да | актуален | Отправка уведомления об операции в чат (стадия 6). |
 | `im.search.chat.list` | im | `im` | `server/utils/chatSearch.ts` | **нет** | актуален | Поиск чата по названию/участникам для пикера (`FIND`≥3, `LIMIT`≤50, `OFFSET`; отдаёт `total`/`next`). |
@@ -52,7 +53,6 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 
 | Метод | Поколение | Scope | Назначение |
 |-------|-----------|-------|------------|
-| `crm.status.list` | classic | `crm` | Справочник стадий (счёта/сделки) → фильтр «отрицательных» стадий по `SEMANTICS='F'` (на живом портале «Не оплачен» `DT31_11:D`). Из него `invoiceLookup` строит предикат `isNegativeStage`; сейчас предикат инъектируется, loader — следующий слайс #109. |
 | `crm.item.payment.list` | classic | `crm` | Оплаты объекта CRM (цель `deal-payment` в #109). Ответ — массив в `result` (не `result.payments`). |
 | `crm.item.payment.pay` | classic | `crm` | Пометить оплату «Оплачено» (проводка оплаты по сделке). Параметр только `id`. |
 | `crm.item.payment.add` (+`.product.add`) | classic | `crm` | Создать оплату + привязать товарную позицию (задаёт сумму). Используются в seed-скрипте для реальной оплаты сделки. |
