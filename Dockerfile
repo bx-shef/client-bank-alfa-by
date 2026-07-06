@@ -75,5 +75,13 @@ CMD ["node", ".output/server/index.mjs"]
 FROM nginxinc/nginx-unprivileged:1.31-alpine AS runner
 COPY --from=builder /app/.output/public /usr/share/nginx/html
 COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
+# Shared backend-proxy directives, included by both /api/ locations (#100).
+# `include snippets/proxy-backend.conf;` resolves relative to the nginx prefix (/etc/nginx).
+COPY --from=builder /app/snippets/proxy-backend.conf /etc/nginx/snippets/proxy-backend.conf
+# Validate the FINAL config (CSP hashes already substituted in the builder stage)
+# at build time, so a syntax error fails the image build / PR docker-build instead
+# of surfacing only at deploy (#99). `proxy_pass $backend_upstream` + resolver defer
+# DNS to request time, so `nginx -t` needs no running backend.
+RUN nginx -t
 EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]
