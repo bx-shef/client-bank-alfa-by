@@ -21,9 +21,13 @@
 // (Новый, open). «My company» = a Company (entityTypeId=4) with `isMyCompany=Y`;
 // invoice `mycompanyId`/`companyId` are `crm_company` refs. Requisite presets
 // 1=Организация, 3=ИП, 5=Физ.лицо. Bank account lives in the bank-detail
-// `RQ_ACC_NUM` — the PRIMARY key server/utils/companyLookup.ts searches by. (The
-// Belarus `RQ_IIK` fallback is not seeded: this RU-locale portal rejects that
-// field with an IBAN-checksum error; the fallback stays covered by unit tests.)
+// `RQ_ACC_NUM` — the PRIMARY key server/utils/companyLookup.ts searches by, and it
+// is NOT unique (the same расчётный счёт may sit on many companies — confirmed live).
+// The Belarus `RQ_IIK` fallback is NOT seeded: `RQ_IIK` rejects a 28-char BY IBAN
+// («Array» validation error, even with a valid checksum / a COUNTRY_ID=4 preset —
+// values ≤20 chars pass), so the account goes in `RQ_ACC_NUM`; the IIK fallback stays
+// covered by unit tests. Deals carry a REAL paid payment (crm.item.payment), not just
+// a linked invoice — the #109 `deal-payment` target.
 
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
@@ -190,21 +194,50 @@ async function ensureCategory(entityTypeId, name) {
   return created?.category?.id
 }
 
+/** Give a deal a REAL, paid «оплата» (a Bitrix payment object — the #109
+ *  `deal-payment` target), not just a linked invoice. Flow confirmed live:
+ *  add a product row → crm.item.payment.add → link the row (sets the sum) → pay.
+ *  Idempotent: skips if the deal already has a paid payment. */
+async function ensureDealPayment(dealId, productId, amount) {
+  const list = await rest('crm.item.payment.list', { entityId: dealId, entityTypeId: 2 })
+  const payments = Array.isArray(list) ? list : (list?.payments || [])
+  if (payments.some(p => p.paid === 'Y')) {
+    log(`    ${C.dim}·${C.reset} оплата сделки уже есть (пропуск)`)
+    return
+  }
+  const rowsResp = await rest('crm.item.productrow.list', { filter: { '=ownerType': 'D', '=ownerId': dealId }, select: ['id'] })
+  let rowId = rowsResp?.productRows?.[0]?.id
+  if (!rowId) {
+    const pr = await rest('crm.item.productrow.add', { fields: { ownerType: 'D', ownerId: dealId, productId, price: amount, quantity: 1 } })
+    rowId = pr?.productRow?.id
+  }
+  const payId = await rest('crm.item.payment.add', { entityId: dealId, entityTypeId: 2 })
+  await rest('crm.item.payment.product.add', { paymentId: payId, rowId, quantity: 1 })
+  await rest('crm.item.payment.pay', { id: payId })
+  log(`    ${C.dim}·${C.reset} оплата сделки создана и проведена (${amount})`)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Purge (cleanup): delete every CBATEST-tagged fixture.
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function purge() {
   head('Purge — удаляю все CBATEST-фикстуры')
-  // ORDER MATTERS. Requisites + bank details FIRST, while their parent companies
-  // still exist — Bitrix grants delete access through the parent. Deleting the
-  // company first orphans them BEYOND REST reach (requisite/bankdetail delete then
-  // returns «Access denied» forever, and the zombie bank detail keeps poisoning
-  // RQ_ACC_NUM lookups). Deleting a requisite cascades its bank details.
+  // ORDER MATTERS — confirmed live: bank detail → requisite → company, all while
+  // the parent COMPANY still exists (Bitrix grants delete access through it).
+  // Deleting the company first orphans requisites/bank details BEYOND REST reach:
+  // `get`/`delete` then return «Access denied» forever, yet the zombie bank detail
+  // keeps turning up in RQ_ACC_NUM search. `crm.requisite.delete` already cascades
+  // its bank details, but we delete the bank details explicitly first so the safe
+  // order holds even if the cascade ever changes.
   const reqs = await rest('crm.requisite.list', { filter: { '%XML_ID': TAG + '_' }, select: ['ID'] })
   for (const r of reqs || []) {
+    const banks = await rest('crm.requisite.bankdetail.list', { filter: { ENTITY_ID: r.ID }, select: ['ID'] })
+    for (const b of banks || []) {
+      await rest('crm.requisite.bankdetail.delete', { id: b.ID }).catch(e => warn(String(e.message)))
+    }
     await rest('crm.requisite.delete', { id: r.ID }).catch(e => warn(String(e.message)))
-    log(`  ${C.red}−${C.reset} requisite id=${r.ID} (+ bank details)`)
+    log(`  ${C.red}−${C.reset} requisite id=${r.ID} (+ ${(banks || []).length} bank details)`)
   }
   // Now the items: invoices (31), deals (2), companies (4), smart-process elements.
   // `%title` is a SUBSTRING match, so re-check the prefix in JS before deleting —
@@ -215,8 +248,25 @@ async function purge() {
   for (const et of itemEntityTypes) {
     const found = await rest('crm.item.list', { entityTypeId: et, filter: { '%title': T }, select: ['id', 'title'] })
     for (const it of (found?.items || []).filter(i => String(i.title || '').startsWith(T))) {
-      await rest('crm.item.delete', { entityTypeId: et, id: it.id })
-      log(`  ${C.red}−${C.reset} item et=${et} id=${it.id}`)
+      // A deal with active payments can't be deleted («У заказа есть активные
+      // оплаты») — remove its payments first. A PAID payment can't be deleted
+      // either without first cancelling it, and cancelling needs the `sale` scope
+      // (this webhook is `crm`-only → `insufficient_scope`). So an UNPAID payment
+      // is removed here; a PAID one blocks deal deletion — we warn and skip rather
+      // than crash. Grant the webhook `sale` scope (or delete the deal in the UI)
+      // to fully purge such deals.
+      if (et === 2) {
+        const pl = await rest('crm.item.payment.list', { entityId: it.id, entityTypeId: 2 })
+        for (const p of (Array.isArray(pl) ? pl : pl?.payments || [])) {
+          await rest('crm.item.payment.delete', { id: p.id }).catch(() => {})
+        }
+      }
+      try {
+        await rest('crm.item.delete', { entityTypeId: et, id: it.id })
+        log(`  ${C.red}−${C.reset} item et=${et} id=${it.id}`)
+      } catch (e) {
+        warn(`item et=${et} id=${it.id} не удалён: ${e.message}`)
+      }
     }
   }
   // Deal directions (crm.category on system type 2) are NOT cascaded by anything —
@@ -302,7 +352,9 @@ async function seed() {
   created.dealOpt = await ensureItem(2, 'DEAL_OPT', {
     title: T + 'Сделка Опт', categoryId: dealOpt, opportunity: 1200, currencyId: 'BYN', companyId: created.clientAlfa
   }, { label: 'Сделка Опт (направление Опт)' })
-  // A paid invoice linked to the deal (parentId2 = deal) → «оплата сделки» proxy.
+  // A REAL paid payment on the deal (the #109 `deal-payment` target)…
+  await ensureDealPayment(created.dealOpt, created.prodInternal, 1200)
+  // …plus a paid invoice linked to the same deal (parentId2) — the invoice target.
   created.dealOptInvoice = await ensureItem(31, 'INV_DEAL_OPT', {
     title: T + 'Счёт по сделке Опт', accountNumber: 'СЧ-1200', categoryId: INV_CAT, stageId: 'DT31_11:P',
     companyId: created.clientAlfa, mycompanyId: created.my1, opportunity: 1200, currencyId: 'BYN', parentId2: created.dealOpt
