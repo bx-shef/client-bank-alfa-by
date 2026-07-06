@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { watchDebounced } from '@vueuse/core'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
@@ -9,13 +10,17 @@ import type { OperationDirection } from '~/types/statement'
 
 // Chat-notification settings form + live preview. One component for two entry
 // points: the slideover on /app and the full page /settings. Persistence is
-// server-side (app.option via the frame token — see useChatSettings). Gated on
-// admin: a non-admin portal user sees a warning instead of the form.
+// server-side (app.option via the frame token — see useChatSettings), autosaved on
+// change. Gated on admin: a non-admin portal user sees a warning instead of the
+// form. Content is withheld until the admin check resolves (no fail-open flash).
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
-const { settings, enabled, saving, loaded, error, notifyOption, errorOption, chatFetcher } = cs
+const { settings, enabled, saving, savedOk, loaded, error, notifyOption, errorOption, chatFetcher } = cs
 
-// In the portal but NOT an admin ⇒ block the form (show a warning only).
+// Gate state: `adminChecked` flips only after init resolves + checkAdmin runs, so
+// the form is never rendered to an unverified (possibly non-admin) user.
+const adminChecked = ref(false)
+const autosaveReady = ref(false)
 const blocked = computed(() => inPortal.value && !isAdmin.value)
 
 // Exclusion textareas edit line-lists; mirror to settings via parseRuleLines.
@@ -27,14 +32,32 @@ function syncTextareas() {
 }
 watch(accountsText, v => (settings.chat.rules.excludeAccounts = parseRuleLines(v)))
 watch(patternsText, v => (settings.chat.rules.excludePurposePatterns = parseRuleLines(v)))
-// Re-fill the textareas from settings once they've loaded from the backend.
-watch(loaded, ok => ok && syncTextareas())
 
 onMounted(async () => {
-  useB24().init() // idempotent; no-op outside the frame
+  // Await init AND a tick: useB24 flips its ready flag on nextTick after the frame
+  // handshake, so isInit() lags an un-awaited init(). Without this the gate reads
+  // "not in portal" and fails open (form shown to a non-admin) on a cold load.
+  await useB24().init()
+  await nextTick()
   checkAdmin()
+  adminChecked.value = true
+  if (blocked.value) return // non-admin: don't load or expose the form
   if (!loaded.value) await cs.load()
   syncTextareas()
+  autosaveReady.value = true // enable autosave only AFTER load populates settings
+})
+
+// Autosave (debounced) to the backend on any change — no explicit Save, no lost
+// edits when the slideover is dismissed. Guarded so the load-time populate and the
+// standalone (no-portal) preview don't trigger writes.
+watchDebounced(settings, () => {
+  if (autosaveReady.value && enabled.value) cs.save()
+}, { debounce: 800, deep: true })
+
+// Flush a final save on teardown (e.g. slideover dismissed inside the debounce
+// window) so the last edit isn't lost. Idempotent write; no-op without frame auth.
+onBeforeUnmount(() => {
+  if (autosaveReady.value && enabled.value) cs.save()
 })
 
 // Direction toggles as switches (get/set over the notify rules array).
@@ -60,15 +83,33 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
 </script>
 
 <template>
+  <!-- Withhold everything until the admin check resolves (no fail-open flash). -->
+  <p
+    v-if="!adminChecked"
+    class="text-sm text-(--ui-color-base-3)"
+    data-testid="checking"
+  >
+    Проверка доступа…
+  </p>
+
   <!-- Non-admin in the portal: warning only, no settings. -->
   <B24Alert
-    v-if="blocked"
+    v-else-if="blocked"
     color="air-primary-warning"
     variant="soft"
     title="Настройки доступны только администратору"
     description="Обратитесь к администратору портала Bitrix24 — изменять параметры импорта и уведомлений может только он."
     data-testid="admin-gate"
   />
+
+  <!-- In portal, settings still loading. -->
+  <p
+    v-else-if="enabled && !loaded"
+    class="text-sm text-(--ui-color-base-3)"
+    data-testid="loading"
+  >
+    Загрузка настроек…
+  </p>
 
   <div
     v-else
@@ -177,21 +218,28 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
         </div>
       </B24Card>
 
-      <div class="flex items-center gap-3">
-        <B24Button
-          label="Сохранить"
-          color="air-primary"
-          :loading="saving"
-          :disabled="!enabled || saving"
-          data-testid="save"
-          @click="cs.save()"
-        />
-        <span
-          v-if="error"
-          class="text-xs text-(--ui-color-accent-main-alert)"
-          data-testid="save-error"
-        >{{ error }}</span>
-      </div>
+      <!-- Autosave status (no explicit Save button). Announced to screen readers. -->
+      <p
+        v-if="enabled"
+        class="text-xs"
+        :class="error ? 'text-(--ui-color-accent-main-alert)' : 'text-(--ui-color-base-3)'"
+        role="status"
+        aria-live="polite"
+        data-testid="save-status"
+      >
+        <template v-if="saving">
+          Сохранение…
+        </template>
+        <template v-else-if="error">
+          {{ error }}
+        </template>
+        <template v-else-if="savedOk">
+          Сохранено ✓
+        </template>
+        <template v-else>
+          Изменения сохраняются автоматически.
+        </template>
+      </p>
     </B24Form>
 
     <!-- Live preview: the main feedback of the settings. -->
@@ -204,6 +252,7 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
 
       <p
         class="mb-3 text-sm text-(--ui-color-base-3)"
+        aria-live="polite"
         data-testid="preview-summary"
       >
         В чат попадёт {{ notifyCount }} из {{ preview.length }} операций

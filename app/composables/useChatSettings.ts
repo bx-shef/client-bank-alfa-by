@@ -1,5 +1,5 @@
 import { reactive, ref } from 'vue'
-import { useB24 } from '~/composables/useB24'
+import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { defaultPortalSettings, type PortalSettings } from '~/utils/settings'
 import type { RemoteSearchPage } from '~/utils/remoteSearch'
 
@@ -16,6 +16,9 @@ type ChatOption = { value: string, label: string }
 
 // Module-level singleton: the slideover (/app) and the full page (/settings) render
 // the same <SettingsForm/> and must share one settings state (and not double-load).
+// Safe as a module singleton only because these pages are CLIENT-ONLY (SSG generate,
+// layout `clear`, gated on frame auth) — it never runs during SSR, so there's no
+// cross-request state leak. Do NOT reuse this pattern on an SSR route.
 let instance: ReturnType<typeof create> | null = null
 
 export function useChatSettings() {
@@ -27,6 +30,7 @@ function create() {
   const enabled = ref(false)
   const loading = ref(false)
   const saving = ref(false)
+  const savedOk = ref(false) // last save succeeded (cleared when a new save starts)
   const loaded = ref(false)
   const error = ref('')
   // Seed labels for the pickers so the saved chat shows its name (not a raw id)
@@ -34,30 +38,13 @@ function create() {
   const notifyOption = ref<ChatOption | undefined>()
   const errorOption = ref<ChatOption | undefined>()
 
-  /** Frame auth (access token + domain), or null outside a portal. */
-  function frameAuth(): { token: string, domain: string } | null {
-    const b24 = useB24()
-    if (!b24.isInit()) return null
-    try {
-      const auth = b24.getOrThrow().auth.getAuthData()
-      if (auth === false || !auth.access_token || !auth.domain) return null
-      return { token: auth.access_token, domain: auth.domain }
-    } catch {
-      return null
-    }
-  }
-
-  function authHeaders(a: { token: string, domain: string }) {
-    return { 'authorization': `Bearer ${a.token}`, 'x-b24-domain': a.domain }
-  }
-
   /** Search transport for the chat pickers (AsyncSearchSelect fetcher). Hits the
    *  backend proxy with the frame token; inert (empty) outside the portal. */
   async function chatFetcher(query: string, offset: number, signal?: AbortSignal): Promise<RemoteSearchPage<ChatOption>> {
     const a = frameAuth()
     if (!a) return { items: [], hasMore: false }
     const res = await $fetch<{ items: ChatOption[], hasMore: boolean, nextOffset?: number }>('/api/chat-search', {
-      headers: authHeaders(a),
+      headers: frameAuthHeaders(a),
       params: { q: query, offset },
       signal
     })
@@ -81,7 +68,7 @@ function create() {
     loading.value = true
     error.value = ''
     try {
-      const res = await $fetch<PortalSettings>('/api/chat-settings', { headers: authHeaders(a) })
+      const res = await $fetch<PortalSettings>('/api/chat-settings', { headers: frameAuthHeaders(a) })
       Object.assign(settings, res)
       // Best-effort label seeding from recent chats (one extra call, settings page
       // is cold path). A failure here must not break loading the settings.
@@ -92,7 +79,7 @@ function create() {
       notifyOption.value = seedOption(settings.chat.dialogId, recent)
       errorOption.value = seedOption(settings.errorChat.dialogId, recent)
     } catch (e) {
-      error.value = readError(e, 'Не удалось загрузить настройки')
+      error.value = frameFetchError(e, 'Не удалось загрузить настройки')
     } finally {
       loading.value = false
       loaded.value = true
@@ -103,20 +90,17 @@ function create() {
     const a = frameAuth()
     if (!a) return
     saving.value = true
+    savedOk.value = false
     error.value = ''
     try {
-      await $fetch('/api/chat-settings', { method: 'POST', headers: authHeaders(a), body: settings })
+      await $fetch('/api/chat-settings', { method: 'POST', headers: frameAuthHeaders(a), body: settings })
+      savedOk.value = true
     } catch (e) {
-      error.value = readError(e, 'Не удалось сохранить настройки')
+      error.value = frameFetchError(e, 'Не удалось сохранить настройки')
     } finally {
       saving.value = false
     }
   }
 
-  return { settings, enabled, loading, saving, loaded, error, notifyOption, errorOption, chatFetcher, load, save }
-}
-
-function readError(e: unknown, fallback: string): string {
-  const data = (e as { data?: { error?: string } })?.data
-  return data?.error ? `${fallback}: ${data.error}` : fallback
+  return { settings, enabled, loading, saving, savedOk, loaded, error, notifyOption, errorOption, chatFetcher, load, save }
 }

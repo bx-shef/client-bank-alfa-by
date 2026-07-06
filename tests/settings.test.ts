@@ -83,4 +83,17 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings('{"chat":{"dialogId":"  chat9 "}}').chat.dialogId).toBe('chat9')
     expect(parsePortalSettings('{"chat":{"dialogId":123}}').chat.dialogId).toBe('')
   })
+
+  it('clamps oversized input (defense-in-depth)', () => {
+    const longId = 'chat' + 'x'.repeat(500)
+    expect(parsePortalSettings(JSON.stringify({ chat: { dialogId: longId } })).chat.dialogId.length).toBe(64)
+    // 1000 unique exclusion entries → capped at 500
+    const many = Array.from({ length: 1000 }, (_, i) => `acc${i}`)
+    const r = parsePortalSettings(JSON.stringify({ chat: { rules: { excludeAccounts: many } } })).chat.rules
+    expect(r.excludeAccounts!.length).toBe(500)
+    // each entry length-capped at 256
+    const longEntry = 'y'.repeat(400)
+    const r2 = parsePortalSettings(JSON.stringify({ chat: { rules: { excludePurposePatterns: [longEntry] } } })).chat.rules
+    expect(r2.excludePurposePatterns![0]!.length).toBe(256)
+  })
 })
