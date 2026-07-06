@@ -15,22 +15,23 @@ export interface HandlerResult {
   body: Record<string, unknown>
 }
 
-/** GET: read the app-level setting using the caller's frame token + domain. */
-export async function handleReadSetting(io: SettingsIO, accessToken: string, domain: string): Promise<HandlerResult> {
+/** GET: read an `app.option` value by key using the caller's frame token + domain.
+ *  `key` defaults to the test setting; the chat-settings route passes SETTINGS_KEY. */
+export async function handleReadSetting(io: SettingsIO, accessToken: string, domain: string, key: string = APP_SETTING_KEY): Promise<HandlerResult> {
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   try {
     const res = await io.callRest(domain, accessToken, 'app.option.get', {})
-    return { status: 200, body: { value: pickAppOption(res, APP_SETTING_KEY) } }
+    return { status: 200, body: { value: pickAppOption(res, key) } }
   } catch {
     return { status: 502, body: { error: 'upstream error' } }
   }
 }
 
-/** POST: write the app-level setting using the caller's frame token + domain. */
-export async function handleWriteSetting(io: SettingsIO, accessToken: string, domain: string, value: string): Promise<HandlerResult> {
+/** POST: write an `app.option` value by key using the caller's frame token + domain. */
+export async function handleWriteSetting(io: SettingsIO, accessToken: string, domain: string, value: string, key: string = APP_SETTING_KEY): Promise<HandlerResult> {
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   try {
-    await io.callRest(domain, accessToken, 'app.option.set', { options: { [APP_SETTING_KEY]: value } })
+    await io.callRest(domain, accessToken, 'app.option.set', { options: { [key]: value } })
     return { status: 200, body: { ok: true } }
   } catch {
     return { status: 502, body: { error: 'upstream error' } }

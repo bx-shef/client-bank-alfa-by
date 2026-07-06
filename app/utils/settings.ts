@@ -17,6 +17,13 @@ import type { ChatNotifyRules } from '~/utils/statement'
 
 const VALID_DIRECTIONS: readonly OperationDirection[] = ['credit', 'debit']
 
+// Size caps (defense-in-depth): app.option is admin-writable, but we still never
+// store unbounded values. A dialog id is short ("chat2941"); exclusion lists are
+// human-maintained. Over-long/over-large input is clamped, not rejected.
+const MAX_DIALOG_ID_LEN = 64
+const MAX_LIST_ITEMS = 500
+const MAX_ITEM_LEN = 256
+
 /** Chat-notification settings: where to announce + which operations. */
 export interface ChatSettings {
   /** B24 dialog id (e.g. "chat2941"). Empty ⇒ no target ⇒ notifications off. */
@@ -25,9 +32,20 @@ export interface ChatSettings {
   rules: ChatNotifyRules
 }
 
+/** A bare chat target (dialog id only). Used for the error chat, which has no
+ *  per-operation rules — every processing error goes there (business tone, app-name
+ *  prefix; см. docs/PROCESSING.md §5). Empty ⇒ error reporting off. */
+export interface ChatTarget {
+  dialogId: string
+}
+
 /** The full settings blob stored under one `app.option` key. */
 export interface PortalSettings {
+  /** Notification chat (target + filter rules). */
   chat: ChatSettings
+  /** Error chat — where the app reports processing failures (separate from the
+   *  notification chat; см. PROCESSING.md §5, чат ошибок а не пользователь). */
+  errorChat: ChatTarget
 }
 
 /** The single `app.option` key holding the JSON settings blob (versioned name). */
@@ -38,16 +56,18 @@ export function defaultChatSettings(): ChatSettings {
 }
 
 export function defaultPortalSettings(): PortalSettings {
-  return { chat: defaultChatSettings() }
+  return { chat: defaultChatSettings(), errorChat: { dialogId: '' } }
 }
 
-/** Trim, drop blanks, dedupe — for the exclusion lists (unknown input). */
+/** Trim, drop blanks, dedupe, and clamp size — for the exclusion lists (unknown
+ *  input). Each entry is capped in length; the list is capped in count. */
 function cleanList(v: unknown): string[] {
   if (!Array.isArray(v)) return []
   const seen = new Set<string>()
   for (const raw of v) {
-    const s = String(raw).trim()
+    const s = String(raw).trim().slice(0, MAX_ITEM_LEN)
     if (s) seen.add(s)
+    if (seen.size >= MAX_LIST_ITEMS) break
   }
   return [...seen]
 }
@@ -80,16 +100,23 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
   }
   const chatRaw = (obj.chat ?? {}) as Record<string, unknown>
   const rulesRaw = (chatRaw.rules ?? {}) as Record<string, unknown>
+  const errorRaw = (obj.errorChat ?? {}) as Record<string, unknown>
   return {
     chat: {
-      dialogId: typeof chatRaw.dialogId === 'string' ? chatRaw.dialogId.trim() : '',
+      dialogId: cleanDialogId(chatRaw.dialogId),
       rules: {
         directions: cleanDirections(rulesRaw.directions),
         excludeAccounts: cleanList(rulesRaw.excludeAccounts),
         excludePurposePatterns: cleanList(rulesRaw.excludePurposePatterns)
       }
-    }
+    },
+    errorChat: { dialogId: cleanDialogId(errorRaw.dialogId) }
   }
+}
+
+/** Coerce a dialog id: trimmed, length-clamped string, else empty (non-string ⇒ off). */
+function cleanDialogId(v: unknown): string {
+  return typeof v === 'string' ? v.trim().slice(0, MAX_DIALOG_ID_LEN) : ''
 }
 
 /** Serialize settings to the JSON string stored in `app.option`. */

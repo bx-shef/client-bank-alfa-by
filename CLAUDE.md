@@ -96,13 +96,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   Итоги приходов/расходов — компактной строкой над списком. Интерактив (раскрытие строки,
   слайдер настроек) автотестами не покрыт — проверяется вручную в портале; `B24Pagination` видна
   только на реальных данных (демо-операций мало).
-- `app/components/SettingsForm.vue` — форма настроек (подключение банка `B24Input`; уведомления —
-  `B24Select` чата + `B24Switch` приходы/расходы; исключения — `B24Textarea`) + живой предпросмотр
-  («что попадёт в чат», `B24Badge`). Один компонент для двух точек входа: слайдер на `/app` и
-  полная страница `/settings`. Автосейв в localStorage (демо, ключ API не сохраняется), реальное
-  хранение — backend (#16).
-- `app/pages/settings.vue` — тонкая страница-fallback (прямая ссылка): заголовок + `B24Alert` +
-  `<SettingsForm/>`. Layout `clear` + `useB24().init()`. Роут `/settings` — в `nitro.prerender.routes`.
+- `app/components/SettingsForm.vue` — форма настроек чата (#16 PR-C): два пикера чатов на
+  **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
+  поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
+  предпросмотр («что попадёт в чат», `B24Badge`). Один компонент для двух точек входа: слайдер на
+  `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
+  кнопка «Сохранить». **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`): в портале не-админу —
+  предупреждение вместо формы; вне фрейма — предпросмотр (persistence инертна).
+- `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
+  + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
+  Роут `/settings` — в `nitro.prerender.routes`.
 - `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `event.bind`
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
   установка доставляет `application_token`) → `installFinish` (+ диагностика портала, блок «События»);
@@ -116,8 +119,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
-- `app/composables/useChatRules.ts` — реактивные настройки (localStorage, без `apiKey`); производит
-  `rules: ChatNotifyRules` (из `app/utils/statement.ts`).
+- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдер `/app` и страница
+  `/settings` делят состояние): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
+  фрейм-токену + `chatFetcher` (транспорт для `AsyncSearchSelect`, ходит в `/api/chat-search`) +
+  сид-метки выбранных чатов из недавних. Вне фрейма инертна (defaults, persistence — no-op).
+- `app/composables/useIsAdmin.ts` — `check()` → `$b24.auth.isAdmin` (синхронно, из `IS_ADMIN`
+  init-handshake); `inPortal`/`isAdmin` для гейта формы (в портале не-админ → предупреждение).
 - `app/components/ImportStatusBanner.vue` — полоса статуса импорта (`B24Alert`, цвет = состояние:
   ok/running/error); «Обновлено N минут назад», «+N операций», «Записано в CRM · N в чат», при ошибке —
   действие «Проверить настройки». `app/components/OperationList.vue` — список операций строками
@@ -165,7 +172,6 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (SSG-статику красит колор-мод, поэтому иначе защищённый контент мелькал бы до редиректа). Cookie `cba_sess`
   HttpOnly/SameSite=Lax/Secure, CSRF-заголовок `X-CBA-Auth`. Пароль пуст ⇒ вход выключен. Модель портирована
   из `postroyka/purchase-ai-chat`. B24 silent-сессия — далее.
-- `app/config/chat.ts` — заглушка списка чатов (`MOCK_CHATS`) до подключения B24 SDK.
 - `app/utils/landing.ts` — тексты и чистая логика лендинга (`LANDING_TITLE/DESCRIPTION`,
   `LANDING_PAIN_RESULT`, `LANDING_STEPS`, `LANDING_FEATURES`, `LANDING_INTEGRATORS`, `copyrightYears`),
   покрыта тестами. Единый источник контента (issue #110) — из него же берёт SEO `app.vue`.
@@ -346,6 +352,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     токен к порталу вызывающего, `member_id` не доверяется, чужой `app.option` недостижим. **Серверная
     проверка** `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option`
     по сохранённому токену без фрейма — для `scripts/check-app-option.sh`; наружу не открыта, nginx `deny all`).
+    `settingsHandler` параметризован ключом `app.option` (дефолт — тест-ключ; чат-настройки — `SETTINGS_KEY`).
+  - **Настройки чата (#16 PR-C) — фрейм-токеном под `SETTINGS_KEY`:** `server/api/chat-settings.get.ts`/
+    `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок**),
+    нормализуя через `parsePortalSettings` (никогда не пишем мусор); воркер читает тот же ключ/форму.
+    Поиск чатов для пикера — `server/utils/chatSearch.ts` (чистое ядро над `RestCall`: `im.search.chat.list`
+    для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
+    `nextOffset`-курсор) + роут `server/api/chat-search.get.ts` (фрейм-токен). UI-пикер — `AsyncSearchSelect`
+    (+ `useRemoteSearch`/`app/utils/remoteSearch.ts`: дебаунс, гонка, курсор-пагинация, «Показать ещё»).
   - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом.
     В проде — **один домен**: nginx `app` проксирует `/api/*` в `backend:3000` (вебхук B24 на
     `https://<DOMAIN>/api/b24/events`, без CORS); CI пушит два образа (matrix `runner`+`backend`),
