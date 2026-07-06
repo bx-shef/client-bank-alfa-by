@@ -13,7 +13,12 @@ import type { QueryFn } from '../utils/tokenStore'
  * `activity_dedup` is the persistent {dedupKey → activityId} map (issue #9) that
  * lets crm-sync skip re-creating an activity for an operation already written —
  * survives worker restarts and at-least-once job redelivery, unlike the in-batch
- * Set. Keyed per portal (member_id): two portals may import the same account. */
+ * Set. Keyed per portal (member_id): two portals may import the same account.
+ *
+ * `allocation_fact` is the persistent «платёж → сущность» allocation record (#109):
+ * a payment is recorded as `allocated` against a target and can be flipped to
+ * `reverted` on сторно — idempotent (write-once per key), survives reimport, scoped
+ * per portal. Distinct from `activity_dedup` (op-level) — see server/utils/allocationFactStore.ts. */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS portal_tokens (
   member_id          TEXT PRIMARY KEY,
@@ -31,6 +36,17 @@ CREATE TABLE IF NOT EXISTS activity_dedup (
   activity_id  TEXT NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (member_id, dedup_key)
+);
+
+CREATE TABLE IF NOT EXISTS allocation_fact (
+  member_id    TEXT NOT NULL,
+  fact_key     TEXT NOT NULL,
+  target_kind  TEXT NOT NULL,
+  target_id    TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'allocated',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (member_id, fact_key)
 );
 `
 

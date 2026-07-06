@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-05
+> Last reviewed: 2026-07-06
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -265,8 +265,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     задан; `B24_APPLICATION_TOKEN` не плейсхолдер (`CHANGE_ME` и т.п. → реальный токен не совпадёт → 403);
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
-  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `activity_dedup`);
-    `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `activity_dedup`,
+    `allocation_fact`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
     - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`,
@@ -314,6 +314,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (загрузка токена → `ensureAccessToken` → `callRest` с домен+access). DI, тесты; `null` без токена.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
+  - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
+    - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
+      {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
+      компании** (IDOR-скоуп), отбрасывает отрицательные стадии (предикат от вызывающего) → массив
+      `AllocationCandidate` (сумма=`opportunity`, валюта=`currencyId`). **Имена полей подтверждены на
+      живом портале**: `accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`.
+    - `server/utils/allocationFactStore.ts` — персистентный **стор факта разнесения** «платёж→сущность»
+      над `QueryFn` (таблица `allocation_fact`, скоуп по `member_id`): `getAllocationFact`/`recordAllocation`
+      (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
+      трётся)/`deleteFactsForPortal`. Отличается от `activity_dedup` (op-level): фиксирует цель разнесения и
+      допускает откат. Удаление приложения чистит и его. Тесты на fake-query.
+    Осталось: loader стадий (`crm.status.list SEMANTICS='F'`), lookup остальных целей, поиск моей компании,
+    проводка в `crm-sync`, хранение матриц/карты в настройках.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
