@@ -80,6 +80,16 @@ describe('handleWriteSetting', () => {
     expect(byHost['a.bitrix24.by']?.[APP_SETTING_KEY]).toBe('v')
   })
 
+  it('writes/reads under a custom key (chat settings use SETTINGS_KEY)', async () => {
+    const { io, byHost } = makeIO()
+    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', '{"chat":1}', 'cb_settings_v1')
+    expect(byHost['a.bitrix24.by']?.['cb_settings_v1']).toBe('{"chat":1}')
+    expect(byHost['a.bitrix24.by']?.[APP_SETTING_KEY]).toBeUndefined() // separate key untouched
+    expect((await handleReadSetting(io, 'AT', 'a.bitrix24.by', 'cb_settings_v1')).body.value).toBe('{"chat":1}')
+    // default key still reads its own (empty) slot
+    expect((await handleReadSetting(io, 'AT', 'a.bitrix24.by')).body.value).toBeNull()
+  })
+
   it('502 when the REST call throws', async () => {
     const io: SettingsIO = {
       callRest: async () => {

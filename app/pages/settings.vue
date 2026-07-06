@@ -29,17 +29,17 @@ onMounted(async () => {
     <h1 class="text-2xl font-semibold">
       Настройки
     </h1>
-
-    <B24Alert
-      color="air-primary-warning"
-      variant="soft"
-      title="Демо-режим"
-      description="Настройки хранятся локально в браузере, ключ API не сохраняется. Реальное хранение — на сервере."
-      class="mt-3"
-    />
+    <p class="mt-2 text-sm text-(--ui-color-base-3)">
+      Куда слать уведомления и ошибки импорта, и по каким операциям. Сохраняются в вашем портале Bitrix24.
+    </p>
 
     <ClientOnly>
       <SettingsForm class="mt-6" />
     </ClientOnly>
+
+    <!-- Cross-sell: custom development offer (same card as on /app). -->
+    <div class="mt-8 max-w-[520px]">
+      <CustomDevCard />
+    </div>
   </main>
 </template>

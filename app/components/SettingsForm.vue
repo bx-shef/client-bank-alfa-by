@@ -1,80 +1,90 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useChatRules } from '~/composables/useChatRules'
-import { MOCK_CHATS } from '~/config/chat'
+import { useB24 } from '~/composables/useB24'
+import { useIsAdmin } from '~/composables/useIsAdmin'
+import { useChatSettings } from '~/composables/useChatSettings'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { parseRuleLines, shouldNotifyChat } from '~/utils/statement'
 import type { OperationDirection } from '~/types/statement'
 
-// The chat-notify settings form + live preview. Extracted from the /settings page
-// so the same UI renders both as a full page (direct link / fallback) and inside
-// the slideover opened from /app. Demo, client-side persistence (localStorage);
-// real key/chat storage moves server-side with the backend (app.option, #16).
-const { settings, rules } = useChatRules()
+// Chat-notification settings form + live preview. One component for two entry
+// points: the slideover on /app and the full page /settings. Persistence is
+// server-side (app.option via the frame token — see useChatSettings). Gated on
+// admin: a non-admin portal user sees a warning instead of the form.
+const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
+const cs = useChatSettings()
+const { settings, enabled, saving, loaded, error, notifyOption, errorOption, chatFetcher } = cs
 
-// Chat options for B24Select ({ label, value }). No empty-string item — B24Select
-// reserves '' for the placeholder/cleared state (it throws on an empty value).
-const chatItems = computed(() => MOCK_CHATS.map(c => ({ label: c.title, value: c.id })))
+// In the portal but NOT an admin ⇒ block the form (show a warning only).
+const blocked = computed(() => inPortal.value && !isAdmin.value)
 
-// Direction toggles as switches (get/set over the directions array).
+// Exclusion textareas edit line-lists; mirror to settings via parseRuleLines.
+const accountsText = ref('')
+const patternsText = ref('')
+function syncTextareas() {
+  accountsText.value = (settings.chat.rules.excludeAccounts ?? []).join('\n')
+  patternsText.value = (settings.chat.rules.excludePurposePatterns ?? []).join('\n')
+}
+watch(accountsText, v => (settings.chat.rules.excludeAccounts = parseRuleLines(v)))
+watch(patternsText, v => (settings.chat.rules.excludePurposePatterns = parseRuleLines(v)))
+// Re-fill the textareas from settings once they've loaded from the backend.
+watch(loaded, ok => ok && syncTextareas())
+
+onMounted(async () => {
+  useB24().init() // idempotent; no-op outside the frame
+  checkAdmin()
+  if (!loaded.value) await cs.load()
+  syncTextareas()
+})
+
+// Direction toggles as switches (get/set over the notify rules array).
 function directionModel(d: OperationDirection) {
   return computed<boolean>({
-    get: () => settings.value.directions.includes(d),
+    get: () => (settings.chat.rules.directions ?? []).includes(d),
     set: (on) => {
-      const set = new Set(settings.value.directions)
+      const set = new Set(settings.chat.rules.directions ?? [])
       if (on) set.add(d)
       else set.delete(d)
-      settings.value.directions = [...set]
+      settings.chat.rules.directions = [...set]
     }
   })
 }
 const notifyCredit = directionModel('credit')
 const notifyDebit = directionModel('debit')
 
-// Textareas edit line-lists; mirror to settings via parseRuleLines (one-way).
-const accountsText = ref('')
-const patternsText = ref('')
-onMounted(() => {
-  accountsText.value = settings.value.excludeAccounts.join('\n')
-  patternsText.value = settings.value.excludePurposePatterns.join('\n')
-})
-watch(accountsText, v => (settings.value.excludeAccounts = parseRuleLines(v)))
-watch(patternsText, v => (settings.value.excludePurposePatterns = parseRuleLines(v)))
-
-// Live preview: which mock operations would be announced to the chat.
+// Live preview: which mock operations would be announced to the notification chat.
 const preview = computed(() =>
-  MOCK_STATEMENT.items.map(item => ({ item, notify: shouldNotifyChat(item, rules.value) }))
+  MOCK_STATEMENT.items.map(item => ({ item, notify: shouldNotifyChat(item, settings.chat.rules) }))
 )
 const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
 </script>
 
 <template>
-  <div class="grid gap-6 lg:grid-cols-[1fr_320px] lg:items-start">
-    <!-- Form: three grouped sections. -->
+  <!-- Non-admin in the portal: warning only, no settings. -->
+  <B24Alert
+    v-if="blocked"
+    color="air-primary-warning"
+    variant="soft"
+    title="Настройки доступны только администратору"
+    description="Обратитесь к администратору портала Bitrix24 — изменять параметры импорта и уведомлений может только он."
+    data-testid="admin-gate"
+  />
+
+  <div
+    v-else
+    class="grid gap-6 lg:grid-cols-[1fr_320px] lg:items-start"
+  >
     <B24Form
       :state="settings"
       class="space-y-6"
     >
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Подключение банка
-          </h2>
-        </template>
-        <B24FormField
-          label="Ключ API клиент-банка"
-          description="По вашей компании. Не сохраняется — вводится на сессию."
-        >
-          <B24Input
-            v-model="settings.apiKey"
-            type="password"
-            autocomplete="off"
-            placeholder="Введите ключ API"
-            class="w-full"
-            data-testid="api-key"
-          />
-        </B24FormField>
-      </B24Card>
+      <B24Alert
+        v-if="!enabled"
+        color="air-primary"
+        variant="soft"
+        description="Настройки сохраняются внутри портала Bitrix24. Здесь — предпросмотр."
+        class="mb-2"
+      />
 
       <B24Card>
         <template #header>
@@ -83,13 +93,16 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
           </h2>
         </template>
         <div class="space-y-4">
-          <B24FormField label="Чат для уведомлений">
-            <B24Select
-              v-model="settings.chatId"
-              :items="chatItems"
-              placeholder="Выберите чат"
-              class="w-full"
-              data-testid="chat-select"
+          <B24FormField
+            label="Чат для уведомлений"
+            description="Куда слать сообщения о новых операциях."
+          >
+            <AsyncSearchSelect
+              v-model="settings.chat.dialogId"
+              :fetcher="chatFetcher"
+              :selected-option="notifyOption"
+              placeholder="Начните вводить название чата"
+              data-testid="notify-chat"
             />
           </B24FormField>
 
@@ -106,6 +119,26 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
             data-testid="notify-debit"
           />
         </div>
+      </B24Card>
+
+      <B24Card>
+        <template #header>
+          <h2 class="font-semibold">
+            Чат для ошибок
+          </h2>
+        </template>
+        <B24FormField
+          label="Чат ошибок импорта"
+          description="Сюда приложение пишет о сбоях обработки — деловым тоном, с пометкой, что рапортует «Импорт выписки из клиент-банка». Отдельно от чата уведомлений."
+        >
+          <AsyncSearchSelect
+            v-model="settings.errorChat.dialogId"
+            :fetcher="chatFetcher"
+            :selected-option="errorOption"
+            placeholder="Начните вводить название чата"
+            data-testid="error-chat"
+          />
+        </B24FormField>
       </B24Card>
 
       <B24Card>
@@ -144,9 +177,21 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
         </div>
       </B24Card>
 
-      <p class="text-xs text-(--ui-color-base-3)">
-        Настройки сохраняются автоматически.
-      </p>
+      <div class="flex items-center gap-3">
+        <B24Button
+          label="Сохранить"
+          color="air-primary"
+          :loading="saving"
+          :disabled="!enabled || saving"
+          data-testid="save"
+          @click="cs.save()"
+        />
+        <span
+          v-if="error"
+          class="text-xs text-(--ui-color-accent-main-alert)"
+          data-testid="save-error"
+        >{{ error }}</span>
+      </div>
     </B24Form>
 
     <!-- Live preview: the main feedback of the settings. -->

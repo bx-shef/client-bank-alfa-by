@@ -15,7 +15,7 @@ describe('defaults', () => {
     expect(defaultChatSettings()).toEqual({
       dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
     })
-    expect(defaultPortalSettings()).toEqual({ chat: defaultChatSettings() })
+    expect(defaultPortalSettings()).toEqual({ chat: defaultChatSettings(), errorChat: { dialogId: '' } })
   })
 
   it('storage key is versioned', () => {
@@ -41,7 +41,8 @@ describe('parsePortalSettings — defensive', () => {
       chat: {
         dialogId: 'chat2941',
         rules: { directions: ['credit', 'debit'] as const, excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'] }
-      }
+      },
+      errorChat: { dialogId: 'chat77' }
     }
     expect(parsePortalSettings(serializePortalSettings(s))).toEqual(s)
   })
@@ -49,8 +50,15 @@ describe('parsePortalSettings — defensive', () => {
   it('missing fields fill from defaults', () => {
     expect(parsePortalSettings('{}')).toEqual(defaultPortalSettings())
     expect(parsePortalSettings('{"chat":{"dialogId":"chat7"}}')).toEqual({
-      chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } }
+      chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } },
+      errorChat: { dialogId: '' }
     })
+  })
+
+  it('errorChat: parsed defensively (trimmed; missing/non-string → empty)', () => {
+    expect(parsePortalSettings('{"errorChat":{"dialogId":"  chat5 "}}').errorChat.dialogId).toBe('chat5')
+    expect(parsePortalSettings('{"errorChat":{"dialogId":42}}').errorChat.dialogId).toBe('')
+    expect(parsePortalSettings('{"chat":{"dialogId":"chat1"}}').errorChat).toEqual({ dialogId: '' })
   })
 
   it('directions: invalid entries dropped, order normalized; missing → [credit]', () => {

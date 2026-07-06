@@ -5,6 +5,8 @@ import type { useB24 } from '~/composables/useB24'
 export interface MockB24Options {
   /** Whether a B24 frame is present (default true). `false` = standalone mode. */
   isInit?: () => boolean
+  /** Whether the current portal user is an admin (`$b24.auth.isAdmin`, default true). */
+  isAdmin?: boolean
   /** Stable spy for `$b24.installFinish()` (so a test can assert it was called). */
   installFinish?: ReturnType<typeof vi.fn>
   /** Stable spy for `$b24.parent.setTitle()`. */
@@ -23,7 +25,7 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
   const ok = { isSuccess: true } as unknown as Result
   // Minimal B24Frame fake — only what install.vue / the in-portal pages touch.
   const frame = {
-    auth: { getAuthData: () => ({ domain: 'example.bitrix24.by' }) },
+    auth: { getAuthData: () => ({ domain: 'example.bitrix24.by' }), isAdmin: opts.isAdmin ?? true },
     parent: { setTitle: opts.setTitle ?? vi.fn(async () => {}), fitWindow: vi.fn(async () => {}) },
     actions: { v2: { batch: { make: opts.batchMake ?? vi.fn(async () => ({ getData: () => ({}) })) } } },
     installFinish: opts.installFinish ?? vi.fn(async () => {})

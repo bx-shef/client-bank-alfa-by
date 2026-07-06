@@ -4,13 +4,16 @@ import { nextTick } from 'vue'
 import type { VueWrapper } from '@vue/test-utils'
 import SettingsPage from '~/pages/settings.vue'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
-import { defaultSettings, useChatRules } from '~/composables/useChatRules'
+import { useChatSettings } from '~/composables/useChatSettings'
+import { defaultPortalSettings } from '~/utils/settings'
 
-// useChatRules() is a module-level singleton — reset it (and storage) between
-// tests so order can't leak state. The preview reacts to this same singleton, so
-// we drive the filter through it rather than through b24ui component internals.
+// useChatSettings() is a module-level singleton — reset it between tests so order
+// can't leak state. The preview reacts to the same singleton, so we drive the
+// filter through it rather than through b24ui component internals. Outside the
+// frame (test env: no window.name) the form is not admin-blocked and renders in
+// preview mode (persistence is inert).
 beforeEach(() => {
-  useChatRules().settings.value = defaultSettings()
+  Object.assign(useChatSettings().settings, defaultPortalSettings())
   if (typeof localStorage !== 'undefined') localStorage.clear()
 })
 
@@ -27,10 +30,15 @@ describe('settings page', () => {
     const wrapper = await mountSuspended(SettingsPage)
     const text = wrapper.text()
     expect(text).toContain('Настройки')
-    expect(text).toContain('Подключение банка')
     expect(text).toContain('Уведомления в чат')
+    expect(text).toContain('Чат для ошибок')
     expect(text).toContain('Исключения')
     expect(previewRows(wrapper)).toHaveLength(MOCK_STATEMENT.items.length)
+  })
+
+  it('renders the custom-development cross-sell card', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    expect(wrapper.text()).toContain('Нужна доработка под ваш процесс?')
   })
 
   it('by default announces credits and hides debits', async () => {
@@ -48,23 +56,21 @@ describe('settings page', () => {
 
   it('disabling "Приходы" hides the credit in the preview', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    useChatRules().settings.value.directions = ['debit']
+    useChatSettings().settings.chat.rules.directions = ['debit']
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })
 
   it('excluding a purpose pattern hides the matching credit (selective)', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    // Exclude only the first credit's purpose — the other credit stays announced,
-    // so the list still renders (not the "everything hidden" warning).
-    useChatRules().settings.value.excludePurposePatterns = [MOCK_STATEMENT.items[creditIdx]!.purpose]
+    useChatSettings().settings.chat.rules.excludePurposePatterns = [MOCK_STATEMENT.items[creditIdx]!.purpose]
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })
 
   it('warns (and drops the list) when the rules hide everything', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    useChatRules().settings.value.directions = []
+    useChatSettings().settings.chat.rules.directions = []
     await nextTick()
     expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('в чат ничего не попадёт')
@@ -74,11 +80,8 @@ describe('settings page', () => {
   // — directionModel get/set on B24Switch, the textarea→settings watch — is covered.
   it('toggling the "Приходы" switch off hides the credit (UI wiring)', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    // B24Switch forwards data-testid onto its SwitchRoot (role=switch button).
     const sw = wrapper.find('[data-testid="notify-credit"]')
     expect(sw.exists()).toBe(true)
-    // Credit is the only default-on direction, so switching it off hides
-    // everything — which proves the switch → directionModel → preview wiring.
     await sw.trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
@@ -87,19 +90,10 @@ describe('settings page', () => {
 
   it('typing an exclude pattern hides the matching credit (UI wiring)', async () => {
     const wrapper = await mountSuspended(SettingsPage)
-    // B24Textarea forwards data-testid onto the <textarea> itself.
     const textarea = wrapper.find('textarea[data-testid="exclude-patterns"]')
     expect(textarea.exists()).toBe(true)
     await textarea.setValue(MOCK_STATEMENT.items[creditIdx]!.purpose)
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
-  })
-})
-
-describe('defaultSettings', () => {
-  it('announces only credits and starts empty', () => {
-    expect(defaultSettings()).toEqual({
-      apiKey: '', chatId: '', directions: ['credit'], excludeAccounts: [], excludePurposePatterns: []
-    })
   })
 })
