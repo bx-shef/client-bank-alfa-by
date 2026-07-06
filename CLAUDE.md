@@ -104,6 +104,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
   **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`, default-closed до проверки): в портале не-админу —
   предупреждение вместо формы; вне фрейма — предпросмотр (persistence инертна).
+- `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
+  в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
+  мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
+  статус по каждому файлу (разобрано N / ошибка) + объединённый предпросмотр через `OperationList`.
+  Ссылка «Загрузить выписку» — в шапке `/app`. **Слайс 2 (запись в CRM: `file-parse`→`crm-sync`)** —
+  далее (нужен живой портал). Разбор покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест
+  + визуальная проверка (свет/тёмная, оба формата).
 - `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
   + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
   Роут `/settings` — в `nitro.prerender.routes`.
@@ -241,6 +248,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     валюта из кода счёта RU/BY, дедуп `Номер|Дата`). Второй `manual`-формат — issue #21.
   - `app/utils/manualImport.ts` — точка входа ручной загрузки: детект формата (`detectManualFormat`)
     → парсер+нормализатор (`normalizeManualStatement`: `1CClientBankExchange` или `***** ^Type=`).
+  - `app/utils/importUpload.ts` — чистое ядро UI ручной загрузки (P4): `validateUploadFile`
+    (расширение/размер), `decodeAndParse` (windows-1251 `TextDecoder` → `normalizeManualStatement`;
+    работает в браузере и node — тесты на реальных фикстурах), `dedupItems` (`account|docId` по
+    нескольким файлам), `uploadErrorMessage`. Без DOM.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
   - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
     `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт
