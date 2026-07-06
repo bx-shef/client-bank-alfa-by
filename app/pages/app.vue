@@ -83,16 +83,24 @@ onMounted(async () => {
     />
 
     <header class="mb-5 flex items-start justify-between gap-4">
-      <p class="font-mono text-sm text-(--ui-color-base-3)">
+      <p class="min-w-0 truncate font-mono text-sm text-(--ui-color-base-3)">
         {{ statement.account }}
       </p>
-      <B24Button
-        :icon="SettingsIcon"
-        color="air-tertiary-no-accent"
-        size="sm"
-        aria-label="Настройки"
-        @click="settingsOpen = true"
-      />
+      <div class="flex shrink-0 items-center gap-2">
+        <B24Button
+          label="Загрузить выписку"
+          color="air-secondary-no-accent"
+          size="sm"
+          to="/import"
+        />
+        <B24Button
+          :icon="SettingsIcon"
+          color="air-tertiary-no-accent"
+          size="sm"
+          aria-label="Настройки"
+          @click="settingsOpen = true"
+        />
+      </div>
     </header>
 
     <B24Alert

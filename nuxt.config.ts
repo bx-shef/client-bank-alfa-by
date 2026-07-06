@@ -72,7 +72,7 @@ export default defineNuxtConfig({
   nitro: {
     prerender: {
       crawlLinks: true,
-      routes: ['/app', '/settings', '/install', '/queues', '/login', '/partners']
+      routes: ['/app', '/settings', '/install', '/import', '/queues', '/login', '/partners']
     }
   },
 
