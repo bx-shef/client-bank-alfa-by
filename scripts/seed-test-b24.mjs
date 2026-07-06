@@ -28,6 +28,7 @@
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
 import { C, die, head, log, ok, warn } from './lib/cli.mjs'
+import { pickFreeEntityTypeId, validateTestWebhook } from './lib/b24-seed-utils.mjs'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config / CLI
@@ -37,8 +38,8 @@ const args = process.argv.slice(2)
 const MODE = args.includes('--purge') ? 'purge' : args.includes('--list') ? 'list' : 'seed'
 
 loadDotEnv(['.env.b24test'], { explicit: false })
-const WEBHOOK = (process.env.B24_TEST_WEBHOOK || '').trim().replace(/\/?$/, '/')
-if (!WEBHOOK || !/^https:\/\/.+\/rest\/\d+\/[^/]+\/$/.test(WEBHOOK)) {
+const WEBHOOK = validateTestWebhook(process.env.B24_TEST_WEBHOOK)
+if (!WEBHOOK) {
   die('B24_TEST_WEBHOOK is missing or malformed. Put it in .env.b24test as\n'
     + '  B24_TEST_WEBHOOK=https://<portal>.bitrix24.ru/rest/<user>/<token>/\n'
     + '(git-ignored — never commit a real token).')
@@ -74,7 +75,10 @@ async function rest(method, params = {}, { tries = 4 } = {}) {
       throw new Error(`${method}: ${j.error} ${j.error_description || ''}`.trim())
     }
     if (res.status && res.status >= 400) throw new Error(`${method}: HTTP ${res.status} ${res.text.slice(0, 200)}`)
-    return j?.result
+    // A 2xx with an unparseable body (proxy page, truncated response) must fail
+    // loudly — otherwise `undefined` reads as "not found" and we'd create a dup.
+    if (!j) throw new Error(`${method}: non-JSON response (HTTP ${res.status}) ${res.text.slice(0, 120)}`)
+    return j.result
   }
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -125,17 +129,22 @@ async function ensureRequisiteWithBank(companyId, xmlIdSuffix, { presetId, name,
       }
     })
   }
-  // Check by parent requisite (not XML_ID): a bank detail's XML_ID can survive on
-  // an old/deleted requisite and wrongly short-circuit creation on this one.
+  // Match the bank detail by parent requisite (not XML_ID): a bank detail's XML_ID
+  // can survive on an old/deleted requisite and wrongly short-circuit this one.
+  // Update-in-place if it exists, so re-running with a changed account/currency
+  // actually propagates (like ensureItem) instead of silently keeping the old row.
+  const bankFields = {
+    COUNTRY_ID: 4, NAME: bank || 'Тест-банк', RQ_BANK_NAME: bank || 'Тест-банк',
+    RQ_ACC_NUM: account, RQ_BIC: bic || '', RQ_ACC_CURRENCY: currency || 'BYN', ACTIVE: 'Y', XML_ID: bankXml
+  }
   const existBank = await rest('crm.requisite.bankdetail.list', { filter: { ENTITY_ID: rqId }, select: ['ID'] })
-  if (!existBank?.[0]?.ID) {
-    await rest('crm.requisite.bankdetail.add', {
-      fields: {
-        ENTITY_ID: rqId, COUNTRY_ID: 4, NAME: bank || 'Тест-банк',
-        RQ_BANK_NAME: bank || 'Тест-банк', RQ_ACC_NUM: account,
-        RQ_BIC: bic || '', RQ_ACC_CURRENCY: currency || 'BYN', ACTIVE: 'Y', XML_ID: bankXml
-      }
-    })
+  const bankId = existBank?.[0]?.ID
+  if (bankId) {
+    await rest('crm.requisite.bankdetail.update', { id: bankId, fields: bankFields })
+    log(`    ${C.dim}·${C.reset} реквизит+счёт ${account} (обновлён)`)
+  } else {
+    await rest('crm.requisite.bankdetail.add', { fields: { ENTITY_ID: rqId, ...bankFields } })
+    log(`    ${C.dim}·${C.reset} реквизит+счёт ${account} (создан)`)
   }
   return rqId
 }
@@ -165,9 +174,7 @@ async function ensureSmartType(title, flags) {
     log(`  ${C.dim}=${C.reset} СП «${title}» (entityTypeId ${hit.entityTypeId}, exists)`)
     return hit.entityTypeId
   }
-  const used = new Set(types.map(t => Number(t.entityTypeId)))
-  let etid = 1030
-  while (used.has(etid)) etid += 2
+  const etid = pickFreeEntityTypeId(types.map(t => t.entityTypeId))
   const created = await rest('crm.type.add', { fields: { title, entityTypeId: etid, ...flags } })
   const id = created?.type?.entityTypeId || etid
   ok(`СП «${title}» (entityTypeId ${id}, created)`)
@@ -200,15 +207,25 @@ async function purge() {
     log(`  ${C.red}−${C.reset} requisite id=${r.ID} (+ bank details)`)
   }
   // Now the items: invoices (31), deals (2), companies (4), smart-process elements.
+  // `%title` is a SUBSTRING match, so re-check the prefix in JS before deleting —
+  // never touch a record that merely contains "[TEST] " somewhere in its name.
   const typeList = await rest('crm.type.list', { select: ['id', 'entityTypeId', 'title'] })
   const smartTypes = (typeList?.types || []).filter(t => (t.title || '').startsWith(T))
   const itemEntityTypes = [31, 2, 4, ...smartTypes.map(t => Number(t.entityTypeId))]
   for (const et of itemEntityTypes) {
     const found = await rest('crm.item.list', { entityTypeId: et, filter: { '%title': T }, select: ['id', 'title'] })
-    for (const it of found?.items || []) {
+    for (const it of (found?.items || []).filter(i => String(i.title || '').startsWith(T))) {
       await rest('crm.item.delete', { entityTypeId: et, id: it.id })
       log(`  ${C.red}−${C.reset} item et=${et} id=${it.id}`)
     }
+  }
+  // Deal directions (crm.category on system type 2) are NOT cascaded by anything —
+  // delete our tagged pipelines explicitly. Smart-process categories DO go away
+  // with their type (crm.type.delete below), so only entityTypeId=2 needs this.
+  const dealCats = await rest('crm.category.list', { entityTypeId: 2 })
+  for (const c of (dealCats?.categories || []).filter(c => String(c.name || '').startsWith(T))) {
+    await rest('crm.category.delete', { entityTypeId: 2, id: c.id }).catch(e => warn(String(e.message)))
+    log(`  ${C.red}−${C.reset} воронка сделок id=${c.id} «${c.name}»`)
   }
   for (const t of smartTypes) {
     // crm.type.delete needs the type `id` (7, 9…), NOT the entityTypeId (1030…).
@@ -332,7 +349,9 @@ async function listExisting() {
   const smart = (types?.types || []).filter(t => (t.title || '').startsWith(T))
   for (const et of [4, 31, 2, ...smart.map(t => Number(t.entityTypeId))]) {
     const found = await rest('crm.item.list', { entityTypeId: et, filter: { '%title': T }, select: ['id', 'title'] })
-    const items = found?.items || []
+    // `%title` is a substring match — keep only true "[TEST] " prefixes (same
+    // guard purge uses, so --list mirrors exactly what --purge would remove).
+    const items = (found?.items || []).filter(i => String(i.title || '').startsWith(T))
     log(`${C.cyan}entityTypeId ${et}${C.reset}: ${items.length} шт.`)
     for (const it of items) log(`  · id ${it.id} «${it.title}»`)
   }
@@ -354,12 +373,11 @@ async function main() {
     await purge()
     return
   }
-  const created = await seed()
+  await seed()
   head('Готово')
   ok(`Создано/обновлено фикстур, REST-вызовов: ${CALLS}.`)
   log(`${C.dim}Смотреть в портале: CRM → Компании/Счета/Сделки/Смарт-процессы, фильтр по «[TEST]».${C.reset}`)
   log(`${C.dim}Очистить: pnpm seed:b24 --purge${C.reset}`)
-  void created
 }
 
 main().catch(e => die(e.stack || String(e)))
