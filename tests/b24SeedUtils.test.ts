@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error — plain .mjs dev-script helper, no d.ts
-import { pickFreeEntityTypeId, validateTestWebhook } from '../scripts/lib/b24-seed-utils.mjs'
+import { extractPayments, pickFreeEntityTypeId, validateTestWebhook } from '../scripts/lib/b24-seed-utils.mjs'
 
 // Pure helpers for scripts/seed-test-b24.mjs — the two bits with real logic.
 
@@ -23,6 +23,21 @@ describe('validateTestWebhook', () => {
   it('rejects empty / undefined input', () => {
     expect(validateTestWebhook('')).toBeNull()
     expect(validateTestWebhook(undefined)).toBeNull()
+  })
+})
+
+describe('extractPayments', () => {
+  it('returns a bare array result as-is (the real crm.item.payment.list shape)', () => {
+    expect(extractPayments([{ id: 1, paid: 'Y' }])).toEqual([{ id: 1, paid: 'Y' }])
+  })
+  it('unwraps a { payments: [...] } shape', () => {
+    expect(extractPayments({ payments: [{ id: 2 }] })).toEqual([{ id: 2 }])
+  })
+  it('returns [] for null / non-array / missing key', () => {
+    expect(extractPayments(null)).toEqual([])
+    expect(extractPayments(undefined)).toEqual([])
+    expect(extractPayments({})).toEqual([])
+    expect(extractPayments({ payments: 'x' })).toEqual([])
   })
 })
 

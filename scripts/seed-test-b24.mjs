@@ -32,7 +32,7 @@
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
 import { C, die, head, log, ok, warn } from './lib/cli.mjs'
-import { pickFreeEntityTypeId, validateTestWebhook } from './lib/b24-seed-utils.mjs'
+import { extractPayments, pickFreeEntityTypeId, validateTestWebhook } from './lib/b24-seed-utils.mjs'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config / CLI
@@ -197,24 +197,32 @@ async function ensureCategory(entityTypeId, name) {
 /** Give a deal a REAL, paid «оплата» (a Bitrix payment object — the #109
  *  `deal-payment` target), not just a linked invoice. Flow confirmed live:
  *  add a product row → crm.item.payment.add → link the row (sets the sum) → pay.
- *  Idempotent: skips if the deal already has a paid payment. */
+ *  Idempotent even across a partial failure: reuses ANY existing payment on the
+ *  deal (paying it if still unpaid) rather than adding a second one. */
 async function ensureDealPayment(dealId, productId, amount) {
-  const list = await rest('crm.item.payment.list', { entityId: dealId, entityTypeId: 2 })
-  const payments = Array.isArray(list) ? list : (list?.payments || [])
-  if (payments.some(p => p.paid === 'Y')) {
+  const payments = extractPayments(await rest('crm.item.payment.list', { entityId: dealId, entityTypeId: 2 }))
+  const existing = payments[0]
+  if (existing?.paid === 'Y') {
     log(`    ${C.dim}·${C.reset} оплата сделки уже есть (пропуск)`)
     return
   }
-  const rowsResp = await rest('crm.item.productrow.list', { filter: { '=ownerType': 'D', '=ownerId': dealId }, select: ['id'] })
-  let rowId = rowsResp?.productRows?.[0]?.id
+  // Reuse the product row for THIS product if present, else add one.
+  const rowsResp = await rest('crm.item.productrow.list', { filter: { '=ownerType': 'D', '=ownerId': dealId }, select: ['id', 'productId'] })
+  let rowId = (rowsResp?.productRows || []).find(r => String(r.productId) === String(productId))?.id
   if (!rowId) {
     const pr = await rest('crm.item.productrow.add', { fields: { ownerType: 'D', ownerId: dealId, productId, price: amount, quantity: 1 } })
     rowId = pr?.productRow?.id
   }
-  const payId = await rest('crm.item.payment.add', { entityId: dealId, entityTypeId: 2 })
-  await rest('crm.item.payment.product.add', { paymentId: payId, rowId, quantity: 1 })
+  // Reuse an existing (unpaid) payment left by an earlier interrupted run.
+  let payId = existing?.id
+  if (payId) {
+    log(`    ${C.dim}·${C.reset} доплачиваю существующую оплату сделки`)
+  } else {
+    payId = await rest('crm.item.payment.add', { entityId: dealId, entityTypeId: 2 })
+    await rest('crm.item.payment.product.add', { paymentId: payId, rowId, quantity: 1 })
+  }
   await rest('crm.item.payment.pay', { id: payId })
-  log(`    ${C.dim}·${C.reset} оплата сделки создана и проведена (${amount})`)
+  log(`    ${C.dim}·${C.reset} оплата сделки проведена (${amount})`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,8 +265,8 @@ async function purge() {
       // to fully purge such deals.
       if (et === 2) {
         const pl = await rest('crm.item.payment.list', { entityId: it.id, entityTypeId: 2 })
-        for (const p of (Array.isArray(pl) ? pl : pl?.payments || [])) {
-          await rest('crm.item.payment.delete', { id: p.id }).catch(() => {})
+        for (const p of extractPayments(pl)) {
+          await rest('crm.item.payment.delete', { id: p.id }).catch(e => warn(`payment ${p.id}: ${e.message}`))
         }
       }
       try {

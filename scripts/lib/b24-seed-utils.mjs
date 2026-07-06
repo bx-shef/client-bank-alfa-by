@@ -15,6 +15,19 @@ export function validateTestWebhook(raw) {
 }
 
 /**
+ * Pull the payments array out of a `crm.item.payment.list` result. That method
+ * returns the array directly in `result` (what `rest()` hands back), but tolerate
+ * a `{payments:[…]}` wrapper too. Non-array / missing → `[]`.
+ * @param {unknown} result  the value `rest('crm.item.payment.list', …)` returned
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function extractPayments(result) {
+  if (Array.isArray(result)) return result
+  const wrapped = result && typeof result === 'object' ? result.payments : undefined
+  return Array.isArray(wrapped) ? wrapped : []
+}
+
+/**
  * Pick the first free CRM entityTypeId for a new smart process. Bitrix reserves
  * even ids from 1030 up for custom dynamic types, so we step by 2 from `start`
  * and skip anything already taken.
