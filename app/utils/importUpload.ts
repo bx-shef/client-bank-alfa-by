@@ -12,9 +12,10 @@ import { normalizeManualStatement } from '~/utils/manualImport'
 import { dedupKey } from '~/utils/statement'
 import type { StatementItem } from '~/types/statement'
 
-/** Max accepted file size — statement text exports are small (KBs); cap well above
- *  a real file but far below anything that would freeze the browser. */
-export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+/** Max accepted file size — statement text exports are small (KBs, rarely a couple
+ *  hundred KB); cap well above a real file but far below anything that would freeze
+ *  the browser during the synchronous windows-1251 decode + parse. */
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 /** Max files per drop (mirrors the sibling upload UI's batch cap). */
 export const MAX_UPLOAD_FILES = 10
 /** Accepted extensions — both supported formats are plain text. */
@@ -28,6 +29,51 @@ export interface UploadItemResult {
   items: StatementItem[]
   /** Human message on failure. */
   error?: string
+}
+
+/** Minimal file shape the batch processor needs — the browser `File` satisfies it
+ *  structurally, and tests can pass plain objects (no DOM). */
+export interface UploadFileLike {
+  name: string
+  size: number
+  arrayBuffer: () => Promise<ArrayBuffer | Uint8Array>
+}
+
+/** Result of processing a drop: per-file outcomes + how many files were dropped for
+ *  exceeding {@link MAX_UPLOAD_FILES} (so the UI can surface it, not truncate silently). */
+export interface UploadBatchResult {
+  results: UploadItemResult[]
+  /** Count of files beyond the cap that were NOT processed (0 when within cap). */
+  truncated: number
+}
+
+/** Process a dropped/picked batch: cap the count, validate + decode + parse each file
+ *  in isolation (one bad file never sinks the rest), and report how many were dropped
+ *  for exceeding the cap. Pure except for the injected per-file reads; `defer` yields
+ *  to the event loop between files so a big batch doesn't freeze the tab (default no-op
+ *  keeps tests synchronous/deterministic). */
+export async function processUploadBatch(
+  files: UploadFileLike[],
+  defer: () => Promise<void> = () => Promise.resolve()
+): Promise<UploadBatchResult> {
+  const batch = files.slice(0, MAX_UPLOAD_FILES)
+  const truncated = files.length - batch.length
+  const results: UploadItemResult[] = []
+  for (const file of batch) {
+    const invalid = validateUploadFile(file.name, file.size)
+    if (invalid) {
+      results.push({ name: file.name, ok: false, items: [], error: invalid })
+      continue
+    }
+    try {
+      const items = decodeAndParse(await file.arrayBuffer())
+      results.push({ name: file.name, ok: true, items })
+    } catch (e) {
+      results.push({ name: file.name, ok: false, items: [], error: uploadErrorMessage(e) })
+    }
+    await defer()
+  }
+  return { results, truncated }
 }
 
 /** Validate a file before decoding: extension allowlist + size cap. Returns an

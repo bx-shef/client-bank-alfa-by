@@ -83,7 +83,7 @@ onMounted(async () => {
     />
 
     <header class="mb-5 flex items-start justify-between gap-4">
-      <p class="font-mono text-sm text-(--ui-color-base-3)">
+      <p class="min-w-0 truncate font-mono text-sm text-(--ui-color-base-3)">
         {{ statement.account }}
       </p>
       <div class="flex shrink-0 items-center gap-2">

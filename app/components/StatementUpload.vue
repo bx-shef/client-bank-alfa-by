@@ -7,15 +7,14 @@ import { computed, ref } from 'vue'
 import {
   ACCEPTED_EXTENSIONS,
   MAX_UPLOAD_FILES,
-  decodeAndParse,
   dedupItems,
-  uploadErrorMessage,
-  validateUploadFile,
+  processUploadBatch,
   type UploadItemResult
 } from '~/utils/importUpload'
 import { splitByDirection } from '~/utils/statement'
 
 const results = ref<UploadItemResult[]>([])
+const truncated = ref(0)
 const dragOver = ref(false)
 const busy = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -26,25 +25,15 @@ const okCount = computed(() => results.value.filter(r => r.ok).length)
 const errCount = computed(() => results.value.filter(r => !r.ok).length)
 const totals = computed(() => splitByDirection(allItems.value))
 
+// Yield to the event loop between files so a large batch doesn't freeze the tab.
+const yieldToLoop = () => new Promise<void>(resolve => setTimeout(resolve))
+
 async function processFiles(files: File[]) {
   if (!files.length) return
   busy.value = true
-  const batch = files.slice(0, MAX_UPLOAD_FILES)
-  const out: UploadItemResult[] = []
-  for (const file of batch) {
-    const invalid = validateUploadFile(file.name, file.size)
-    if (invalid) {
-      out.push({ name: file.name, ok: false, items: [], error: invalid })
-      continue
-    }
-    try {
-      const items = decodeAndParse(await file.arrayBuffer())
-      out.push({ name: file.name, ok: true, items })
-    } catch (e) {
-      out.push({ name: file.name, ok: false, items: [], error: uploadErrorMessage(e) })
-    }
-  }
-  results.value = out
+  const batch = await processUploadBatch(files, yieldToLoop)
+  results.value = batch.results
+  truncated.value = batch.truncated
   busy.value = false
 }
 
@@ -57,6 +46,7 @@ function onInput(e: Event) {
 }
 function clearAll() {
   results.value = []
+  truncated.value = 0
   if (fileInput.value) fileInput.value.value = ''
 }
 </script>
@@ -106,64 +96,88 @@ function clearAll() {
       >
     </div>
 
-    <!-- Per-file results -->
-    <ul
-      v-if="results.length"
-      class="space-y-2"
-      data-testid="file-list"
-    >
-      <li
-        v-for="r in results"
-        :key="r.name"
-        class="flex items-center justify-between gap-3 rounded-lg border border-(--ui-color-base-4) px-3 py-2 text-sm"
-      >
-        <span class="truncate">{{ r.name }}</span>
-        <B24Badge
-          :label="r.ok ? `разобрано: ${r.items.length}` : r.error"
-          :color="r.ok ? 'air-primary-success' : 'air-primary-alert'"
-          variant="soft"
-          size="sm"
-          class="shrink-0"
-        />
-      </li>
-    </ul>
-
-    <!-- Summary + combined preview -->
-    <template v-if="allItems.length">
-      <p
-        class="text-sm text-(--ui-color-base-3)"
-        data-testid="summary"
-      >
-        Файлов: {{ okCount }}{{ errCount ? ` (ошибок: ${errCount})` : '' }} ·
-        операций: {{ allItems.length }} ·
-        приходов: {{ totals.credits.length }} · расходов: {{ totals.debits.length }}
-      </p>
-
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Предпросмотр операций
-          </h2>
-        </template>
-        <OperationList :items="allItems" />
-      </B24Card>
-
-      <B24Alert
-        color="air-primary"
-        variant="soft"
-        title="Это предпросмотр"
-        description="Операции разобраны локально в браузере. Запись в CRM (поиск компании, дела, дедуп) — следующим шагом."
-      />
-    </template>
-
-    <!-- All files failed -->
+    <!-- Too many files dropped at once -->
     <B24Alert
-      v-else-if="results.length"
+      v-if="truncated > 0"
       color="air-primary-warning"
       variant="soft"
-      title="Не удалось разобрать"
-      description="Проверьте формат файла: ожидается 1CClientBankExchange или client-bank «***** ^Type=» в кодировке windows-1251."
-      data-testid="all-failed"
+      title="Взяты не все файлы"
+      :description="`За один раз обрабатываем не больше ${MAX_UPLOAD_FILES} файлов. Остальные (${truncated}) пропущены — загрузите их отдельно.`"
+      data-testid="truncated"
     />
+
+    <!-- Results region — announced to screen readers as it fills in -->
+    <div
+      role="status"
+      aria-live="polite"
+      class="space-y-6"
+    >
+      <!-- Per-file results -->
+      <ul
+        v-if="results.length"
+        class="space-y-2"
+        data-testid="file-list"
+      >
+        <li
+          v-for="(r, i) in results"
+          :key="`${r.name}:${i}`"
+          class="flex items-start justify-between gap-3 rounded-lg border border-(--ui-color-base-4) px-3 py-2 text-sm"
+        >
+          <span class="min-w-0 flex-1 break-words">
+            {{ r.name }}
+            <span
+              v-if="!r.ok"
+              class="block text-(--ui-color-accent-main-alert)"
+            >{{ r.error }}</span>
+          </span>
+          <B24Badge
+            v-if="r.ok"
+            :label="`разобрано: ${r.items.length}`"
+            color="air-primary-success"
+            variant="soft"
+            size="sm"
+            class="mt-0.5 shrink-0"
+          />
+        </li>
+      </ul>
+
+      <!-- Summary + combined preview -->
+      <template v-if="allItems.length">
+        <p
+          class="text-sm text-(--ui-color-base-3)"
+          data-testid="summary"
+        >
+          Файлов: {{ okCount }}{{ errCount ? ` (ошибок: ${errCount})` : '' }} ·
+          операций: {{ allItems.length }} ·
+          приходов: {{ totals.credits.length }} · расходов: {{ totals.debits.length }}
+        </p>
+
+        <B24Card>
+          <template #header>
+            <h2 class="font-semibold">
+              Предпросмотр операций
+            </h2>
+          </template>
+          <OperationList :items="allItems" />
+        </B24Card>
+
+        <B24Alert
+          color="air-primary"
+          variant="soft"
+          title="Это предпросмотр"
+          description="Операции разобраны локально в браузере. Запись в CRM (поиск компании, дела, дедуп) — следующим шагом."
+        />
+      </template>
+
+      <!-- All files failed -->
+      <B24Alert
+        v-else-if="results.length"
+        color="air-primary-warning"
+        variant="soft"
+        title="Не удалось разобрать"
+        description="Проверьте формат файла: ожидается 1CClientBankExchange или client-bank «***** ^Type=» в кодировке windows-1251."
+        data-testid="all-failed"
+      />
+    </div>
   </div>
 </template>
