@@ -79,6 +79,17 @@ describe('findCompanyByAccount', () => {
     expect(fields).toEqual([...ACCOUNT_FIELDS])
   })
 
+  it('returns the FIRST company when one account maps to several (RQ_ACC_NUM not unique)', async () => {
+    // Confirmed live: the same settlement account can sit on several companies —
+    // findCompanyByAccount collects every requisite id and returns the first company.
+    const { call, calls } = fakeCall({
+      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11' }, { ENTITY_ID: '12' }] }),
+      'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '42' }, { ENTITY_ID: '43' }] })
+    })
+    expect(await findCompanyByAccount('ACC-DUP', call)).toBe('42')
+    expect(calls[1]!.params).toEqual(requisiteFilter(['11', '12']))
+  })
+
   it('returns null when no bank detail matches (no requisite query made)', async () => {
     const { call, calls } = fakeCall({ 'crm.requisite.bankdetail.list': () => ({ result: [] }) })
     expect(await findCompanyByAccount('NOPE', call)).toBeNull()

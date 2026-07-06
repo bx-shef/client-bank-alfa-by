@@ -57,8 +57,14 @@ export function requisiteFilter(requisiteIds: string[]): Record<string, unknown>
 
 /**
  * Find the CRM company id for a counterparty account, or `null` if none matches.
- * Returns the FIRST matching company (ambiguous multi-company matches are rare and
- * out of scope). A `null` result means no company matched — crm-sync then counts
+ * Returns the FIRST matching company. NB (confirmed live): `RQ_ACC_NUM` is NOT
+ * unique — the same settlement account can sit on several companies' bank details,
+ * so multiple matches are a real (if uncommon) case; picking the first is the
+ * accepted default (see docs/PROCESSING.md §4). Orphan bank details of a DELETED
+ * company still turn up at step 1, but step 2 (`crm.requisite.list` filtered by
+ * `ENTITY_TYPE_ID=4`) returns nothing for their now-parentless requisite — CONFIRMED
+ * LIVE — so a dead company can't be resolved (the account just reads as unmatched).
+ * A `null` result means no company matched — crm-sync then counts
  * the operation `unmatched` and writes nothing (a todo needs an owner), retrying on
  * a later poll once a company exists. Never throws for "not found"; a transport
  * error from `call` propagates to the caller.
