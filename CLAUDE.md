@@ -335,8 +335,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
       трётся)/`deleteFactsForPortal`. Отличается от `activity_dedup` (op-level): фиксирует цель разнесения и
       допускает откат. Удаление приложения чистит и его. Тесты на fake-query.
-    Осталось: loader стадий (`crm.status.list SEMANTICS='F'`), lookup остальных целей, поиск моей компании,
-    проводка в `crm-sync`, хранение матриц/карты в настройках.
+    - `server/utils/stageLoader.ts` — чистый **loader «отрицательных» стадий** (DI над `RestCall`, тесты):
+      `loadNegativeStages(stageEntityId, call)` — `crm.status.list` → множество `STATUS_ID` с `SEMANTICS='F'`;
+      `invoiceStageEntityId(catId)` (`SMART_INVOICE_STAGE_<catId>`); `makeIsNegativeStage(set)` строит предикат,
+      который принимает `findInvoicesByNumber` (раньше инъектировался «снаружи»); `loadInvoiceNegativeStage`
+      — loader+предикат одним вызовом. Читает **оба** формата семантики (легаси верхний `SEMANTICS='F'` — он
+      и на живом портале; и современный `EXTRA.SEMANTICS='failure'`). **Подтверждено вживую**: «Не оплачен»
+      `DT31_11:D` = `SEMANTICS='F'`. ⚠ **fail-open**: пустое множество = «ничего не отрицательно» (неотличимо
+      от битого запроса) — на проводке в `crm-sync` алертить, если для известной категории пусто.
+    Осталось: lookup остальных целей (сделка/оплата/смарт-процесс/мост-документ — стадии сделки через
+    `DYNAMIC_…`-форму, свой builder), поиск моей компании, проводка в `crm-sync` (там же связать
+    `stageLoader`→`invoiceLookup`, с fail-open-алертом), хранение матриц/карты в настройках.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
