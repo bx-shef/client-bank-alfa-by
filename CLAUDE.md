@@ -101,7 +101,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
   предпросмотр («что попадёт в чат», `B24Badge`). Один компонент для двух точек входа: слайдер на
   `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
-  кнопка «Сохранить». **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`): в портале не-админу —
+  **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
+  **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`, default-closed до проверки): в портале не-админу —
   предупреждение вместо формы; вне фрейма — предпросмотр (persistence инертна).
 - `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
   + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
