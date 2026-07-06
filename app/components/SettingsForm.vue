@@ -144,6 +144,7 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
               :selected-option="notifyOption"
               placeholder="Начните вводить название чата"
               data-testid="notify-chat"
+              @update:selected-option="o => (settings.chat.title = o?.label as string | undefined)"
             />
           </B24FormField>
 
@@ -178,6 +179,7 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
             :selected-option="errorOption"
             placeholder="Начните вводить название чата"
             data-testid="error-chat"
+            @update:selected-option="o => (settings.errorChat.title = o?.label as string | undefined)"
           />
         </B24FormField>
       </B24Card>

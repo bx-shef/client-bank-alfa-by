@@ -13,7 +13,7 @@
 // b24ui SelectMenu exposes no slot INSIDE its scroll viewport (`content-bottom`
 // is a pinned footer), so a scroll sentinel can't be anchored reliably. The
 // button is the robust equivalent; revisit if b24ui adds a viewport slot.
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRemoteSearch } from '~/composables/useRemoteSearch'
 import type { RemoteSearchFetcher } from '~/utils/remoteSearch'
 
@@ -52,6 +52,11 @@ const props = withDefaults(defineProps<{
 /** Selected value (the `valueKey` of the chosen option), or undefined. */
 const model = defineModel<string | undefined>()
 
+// Surface the chosen OPTION (not just its value) so a parent can persist its label
+// — the model only carries the valueKey, so a stored value alone can't show a name
+// on reload. Emitted when the selection resolves to a known row.
+const emit = defineEmits<{ 'update:selectedOption': [Option | undefined] }>()
+
 const { searchTerm, items, loading, error, tooShort, hasMore, loadMore, refresh } = useRemoteSearch<Option>({
   fetcher: props.fetcher,
   keyOf: item => String(item[props.valueKey]),
@@ -67,6 +72,18 @@ const displayItems = computed<Option[]>(() => {
   if (!sel) return items.value
   const v = String(sel[props.valueKey])
   return items.value.some(i => String(i[props.valueKey]) === v) ? items.value : [sel, ...items.value]
+})
+
+// Emit the resolved option on selection change: cleared → undefined; a value that
+// matches a known row → that row. An unresolvable value (set before its page loads)
+// is left alone, so a parent's already-known label isn't wiped.
+watch(model, (v) => {
+  if (v === undefined || v === '') {
+    emit('update:selectedOption', undefined)
+    return
+  }
+  const found = displayItems.value.find(i => String(i[props.valueKey]) === String(v))
+  if (found) emit('update:selectedOption', found)
 })
 
 // Lazy default list: fetch once when the menu is first opened, not on mount, so

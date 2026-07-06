@@ -122,7 +122,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдер `/app` и страница
   `/settings` делят состояние): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
   фрейм-токену + `chatFetcher` (транспорт для `AsyncSearchSelect`, ходит в `/api/chat-search`) +
-  сид-метки выбранных чатов из недавних. Вне фрейма инертна (defaults, persistence — no-op).
+  сид-метки выбранных чатов (кэш-`title` из настроек → недавние → id-фолбэк). Вне фрейма инертна
+  (defaults, persistence — no-op). `AsyncSearchSelect` эмитит `update:selected-option` (выбранная
+  строка) → форма кладёт имя в `ChatSettings.title`/`ChatTarget.title` (UI-подсказка, воркеру не нужна;
+  переживает reload без лишнего REST).
 - `app/composables/useIsAdmin.ts` — `check()` → `$b24.auth.isAdmin` (синхронно, из `IS_ADMIN`
   init-handshake); `inPortal`/`isAdmin` для гейта формы (в портале не-админ → предупреждение).
 - `app/components/ImportStatusBanner.vue` — полоса статуса импорта (`B24Alert`, цвет = состояние:
