@@ -41,6 +41,11 @@ describe('recordAllocation', () => {
   it('reports false when the fact already existed (no RETURNING row)', async () => {
     expect(await recordAllocation(vi.fn(async () => []), 'm1', 'k', 'invoice', '7')).toBe(false)
   })
+  it('does not reopen a reverted fact — ON CONFLICT keeps the row (сторно is final)', async () => {
+    // A reverted fact still occupies (member_id, fact_key), so INSERT hits the
+    // conflict and returns no row: re-allocation after сторно can't slip through.
+    expect(await recordAllocation(vi.fn(async () => []), 'm1', 'k', 'invoice', '7')).toBe(false)
+  })
 })
 
 describe('revertAllocation', () => {

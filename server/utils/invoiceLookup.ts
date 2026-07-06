@@ -31,6 +31,9 @@ export function invoiceListParams(accountNumber: string, companyId: string): Rec
   }
 }
 
+// Only the fields this slice reads are typed. `accountNumber`/`companyId`/
+// `mycompanyId` are requested in `select` as an intentional forward задел (the
+// next slice matches «my company» by `mycompanyId`) — not read yet on purpose.
 interface RawInvoice {
   id?: unknown
   stageId?: unknown
@@ -51,6 +54,11 @@ export function extractInvoiceItems(resp: Record<string, unknown>): RawInvoice[]
  * `resolveAllocation` (amount = `opportunity`, currency = `currencyId`). Rows with
  * a non-finite amount are skipped (can't be matched by amount). A transport error
  * from `call` propagates; "not found" is an empty array, never a throw.
+ *
+ * A blank `companyId` yields `[]` without a REST call — the IDOR scope must be a
+ * real company (a blank filter could otherwise widen the match). Note: no
+ * pagination (`start`) — one number within one company is expected to be a
+ * handful of rows; if that ever grows, page here before wiring into crm-sync.
  */
 export async function findInvoicesByNumber(
   accountNumber: string,
@@ -59,6 +67,7 @@ export async function findInvoicesByNumber(
 ): Promise<AllocationCandidate[]> {
   const acc = accountNumber.trim()
   if (!acc) return []
+  if (!opts.companyId.trim()) return []
   const resp = await call('crm.item.list', invoiceListParams(acc, opts.companyId))
   const out: AllocationCandidate[] = []
   for (const row of extractInvoiceItems(resp)) {
