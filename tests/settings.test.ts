@@ -76,6 +76,12 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings(JSON.stringify({ chat: { dialogId: 'chat5', title: long } })).chat.title!.length).toBe(256)
   })
 
+  it('title: dropped when there is no dialogId (a title without a chat is meaningless)', () => {
+    const p = parsePortalSettings('{"chat":{"dialogId":"","title":"Orphan"},"errorChat":{"dialogId":"","title":"X"}}')
+    expect('title' in p.chat).toBe(false)
+    expect('title' in p.errorChat).toBe(false)
+  })
+
   it('directions: invalid entries dropped, order normalized; missing → [credit]', () => {
     expect(parsePortalSettings('{"chat":{"rules":{"directions":["debit","credit","xxx"]}}}').chat.rules.directions)
       .toEqual(['credit', 'debit']) // valid-only, canonical order

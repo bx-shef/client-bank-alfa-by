@@ -53,4 +53,15 @@ describe('AsyncSearchSelect', () => {
     await vi.advanceTimersByTimeAsync(10)
     expect(wrapper.emitted('update:selectedOption')?.at(-1)?.[0]).toBeUndefined()
   })
+
+  it('does NOT emit when the value is unresolvable (protects a parent-known label)', async () => {
+    const fetcher = vi.fn(async () => ({ items: [], total: 0 }))
+    const wrapper = await mountSuspended(AsyncSearchSelect, { props: { fetcher } })
+    await vi.advanceTimersByTimeAsync(10)
+    // Set a value with no matching row in displayItems (nothing seeded, nothing fetched).
+    await wrapper.setProps({ modelValue: 'ghost' })
+    await vi.advanceTimersByTimeAsync(10)
+    // No emit for the unresolvable value → the parent's cached title stays intact.
+    expect(wrapper.emitted('update:selectedOption')).toBeUndefined()
+  })
 })

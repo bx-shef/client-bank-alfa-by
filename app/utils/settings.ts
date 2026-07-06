@@ -125,11 +125,12 @@ function cleanDialogId(v: unknown): string {
   return typeof v === 'string' ? v.trim().slice(0, MAX_DIALOG_ID_LEN) : ''
 }
 
-/** Attach a cleaned `title` to a target only when non-empty — keeps the shape
- *  minimal (no `title` key when unset), so defaults/round-trips stay clean. */
-function withTitle<T extends object>(raw: unknown, target: T): T {
+/** Attach a cleaned `title` to a target only when non-empty AND the target has a
+ *  dialog id (a title without an id is meaningless — no chat selected). Keeps the
+ *  shape minimal (no `title` key when unset), so defaults/round-trips stay clean. */
+function withTitle<T extends { dialogId: string }>(raw: unknown, target: T): T {
   const title = typeof raw === 'string' ? raw.trim().slice(0, MAX_ITEM_LEN) : ''
-  return title ? { ...target, title } : target
+  return title && target.dialogId ? { ...target, title } : target
 }
 
 /** Serialize settings to the JSON string stored in `app.option`. */
