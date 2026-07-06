@@ -18,13 +18,23 @@ export const NEGATIVE_SEMANTICS_EXTRA = 'failure'
 /**
  * Stage-directory `ENTITY_ID` for a Smart Invoice category. Confirmed live:
  * `SMART_INVOICE_STAGE_<categoryId>` (default invoice category is 11), whose
- * statuses are `DT31_<categoryId>:<code>`. NB: general smart processes / deals use
- * `DYNAMIC_<entityTypeId>_STAGE_<categoryId>` — invoices are the special-cased one.
- * TODO(#109): when the deal/smart-process stage filter lands, add a sibling builder
- * for that `DYNAMIC_…` form (this one is invoice-only) — verify its shape live too.
+ * statuses are `DT31_<categoryId>:<code>`. Deals use a DIFFERENT form — see
+ * `dealStageEntityId` (confirmed live: `DEAL_STAGE` / `DEAL_STAGE_<catId>`, NOT the
+ * `DYNAMIC_…` shape). Genuine custom smart processes use `DYNAMIC_<entityTypeId>_STAGE_<catId>`
+ * — add a builder for those when their target lookup lands (verify live too).
  */
 export function invoiceStageEntityId(categoryId: number | string): string {
   return `SMART_INVOICE_STAGE_${categoryId}`
+}
+
+/**
+ * Stage-directory `ENTITY_ID` for a DEAL category. Confirmed live: the default
+ * pipeline (category 0) is plain `DEAL_STAGE`; every other pipeline is
+ * `DEAL_STAGE_<categoryId>` (e.g. `DEAL_STAGE_5`). Negative deal stages are
+ * `LOSE`/`APOLOGY` (`SEMANTICS='F'`) — same convention as invoices.
+ */
+export function dealStageEntityId(categoryId: number | string): string {
+  return `${categoryId}` === '0' ? 'DEAL_STAGE' : `DEAL_STAGE_${categoryId}`
 }
 
 interface RawStatus {
@@ -90,5 +100,15 @@ export async function loadInvoiceNegativeStage(
   call: RestCall
 ): Promise<(stageId: string) => boolean> {
   const negative = await loadNegativeStages(invoiceStageEntityId(categoryId), call)
+  return makeIsNegativeStage(negative)
+}
+
+/** Convenience: load the negative-stage predicate for a DEAL pipeline (category)
+ *  in one call. Same fail-open caveat as `loadNegativeStages`. */
+export async function loadDealNegativeStage(
+  categoryId: number | string,
+  call: RestCall
+): Promise<(stageId: string) => boolean> {
+  const negative = await loadNegativeStages(dealStageEntityId(categoryId), call)
   return makeIsNegativeStage(negative)
 }

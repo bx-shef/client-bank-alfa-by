@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  dealStageEntityId,
   extractNegativeStageIds,
   invoiceStageEntityId,
+  loadDealNegativeStage,
   loadInvoiceNegativeStage,
   loadNegativeStages,
   makeIsNegativeStage
@@ -22,6 +24,17 @@ describe('invoiceStageEntityId', () => {
   it('builds SMART_INVOICE_STAGE_<categoryId>', () => {
     expect(invoiceStageEntityId(11)).toBe('SMART_INVOICE_STAGE_11')
     expect(invoiceStageEntityId('7')).toBe('SMART_INVOICE_STAGE_7')
+  })
+})
+
+describe('dealStageEntityId', () => {
+  it('uses plain DEAL_STAGE for the default pipeline (category 0)', () => {
+    expect(dealStageEntityId(0)).toBe('DEAL_STAGE')
+    expect(dealStageEntityId('0')).toBe('DEAL_STAGE')
+  })
+  it('uses DEAL_STAGE_<categoryId> for other pipelines', () => {
+    expect(dealStageEntityId(5)).toBe('DEAL_STAGE_5')
+    expect(dealStageEntityId('9')).toBe('DEAL_STAGE_9')
   })
 })
 
@@ -97,5 +110,28 @@ describe('loadInvoiceNegativeStage', () => {
     expect(isNeg('DT31_11:D')).toBe(true)
     expect(isNeg('DT31_11:P')).toBe(false)
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'SMART_INVOICE_STAGE_11' } })
+  })
+})
+
+describe('loadDealNegativeStage', () => {
+  const dealRows = [
+    { STATUS_ID: 'NEW', SEMANTICS: null },
+    { STATUS_ID: 'WON', SEMANTICS: 'S' },
+    { STATUS_ID: 'LOSE', SEMANTICS: 'F' },
+    { STATUS_ID: 'APOLOGY', SEMANTICS: 'F' }
+  ]
+  it('loads the predicate for the default deal pipeline (DEAL_STAGE)', async () => {
+    const call = vi.fn(async () => resp(dealRows))
+    const isNeg = await loadDealNegativeStage(0, call)
+    expect(isNeg('LOSE')).toBe(true)
+    expect(isNeg('APOLOGY')).toBe(true)
+    expect(isNeg('WON')).toBe(false)
+    expect(isNeg('NEW')).toBe(false)
+    expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DEAL_STAGE' } })
+  })
+  it('queries DEAL_STAGE_<catId> for a non-default pipeline', async () => {
+    const call = vi.fn(async () => resp(dealRows))
+    await loadDealNegativeStage(5, call)
+    expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DEAL_STAGE_5' } })
   })
 })
