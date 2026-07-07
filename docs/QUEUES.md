@@ -221,5 +221,5 @@ DI, покрыт тестами); по каждой из четырёх очер
 ## Смежное
 
 - [issue #54](https://github.com/bx-shef/client-bank-alfa-by/issues/54) — частота опроса банков (редкая, управляется приложением) + кнопка «Опросить сейчас».
-- [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9) — персистентный стор дедупа (блокер реальной записи в `crm-sync`).
+- [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9) — персистентный стор дедупа (**переходный**; целевой дедуп — origin-метка в B24, [`PROCESSING.md`](PROCESSING.md) §1).
 - [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) — стадии 4–6 наполняют транспорты обработчиков реальной логикой.
