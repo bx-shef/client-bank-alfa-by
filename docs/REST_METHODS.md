@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-06
+> Last reviewed: 2026-07-07
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -40,6 +40,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `crm.requisite.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Реквизит → компания (`ENTITY_TYPE_ID=4`). |
 | `crm.item.list` | classic | `crm` | `server/utils/{invoiceLookup,companyLookup,itemByIdLookup}.ts` | да | актуален | Поиск смарт-счёта (`entityTypeId=31`) по номеру+компании (#109); фильтр «моей» компании (`entityTypeId=4`, `isMyCompany='Y'`, Этап C); резолв цели **по id+компании** (IDOR-скоуп, `itemByIdLookup`; стратегия `by-id`: invoice-id/deal-id/smart-id). Поля подтверждены на живом портале. |
 | `crm.status.list` | classic | `crm` | `server/utils/stageLoader.ts` | да | актуален | Справочник стадий → множество «отрицательных» (`SEMANTICS='F'`/`EXTRA.SEMANTICS='failure'`) для фильтра целей (#109). `ENTITY_ID`: инвойс `SMART_INVOICE_STAGE_<catId>`, сделка `DEAL_STAGE`(воронка 0)/`DEAL_STAGE_<catId>`. Подтверждено вживую: инвойс `DT31_11:D`, сделка `LOSE`/`APOLOGY`. |
+| `crm.item.payment.list` | classic | `crm` | `server/utils/paymentLookup.ts` | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | Оплаты **известной** сделки (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (#109). Ответ — массив **прямо** в `result`; поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency` подтверждены вживую. Оплаченные (`paid='Y'`) в кандидаты не берём. Company-скоуп в самом методе не встроить (нет поля `companyId`) — предусловие: `entityId` уже проверен по компании выше. Глобальный поиск оплаты/заказа по id **и** по номеру (без сделки) — `sale.*`, scope `sale` (нет у приложения; см. #172). |
 | `crm.activity.todo.add` | classic | `crm` | `server/utils/crmActivityWrite.ts` | да | актуален | Запись универсального дела по операции (стадия 4). |
 | `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts` | да | актуален | Отправка уведомления об операции в чат (стадия 6). |
 | `im.search.chat.list` | im | `im` | `server/utils/chatSearch.ts` | **нет** | актуален | Поиск чата по названию/участникам для пикера (`FIND`≥3, `LIMIT`≤50, `OFFSET`; отдаёт `total`/`next`). |
@@ -53,8 +54,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 
 | Метод | Поколение | Scope | Назначение |
 |-------|-----------|-------|------------|
-| `crm.item.payment.list` | classic | `crm` | Оплаты объекта CRM (цель `deal-payment` в #109). Ответ — массив в `result` (не `result.payments`). |
-| `crm.item.payment.pay` | classic | `crm` | Пометить оплату «Оплачено» (проводка оплаты по сделке). Параметр только `id`. |
+| `crm.item.payment.pay` | classic | `crm` | Пометить оплату «Оплачено» (проводка оплаты по сделке, действие разнесения). Параметр только `id`. |
 | `crm.item.payment.add` (+`.product.add`) | classic | `crm` | Создать оплату + привязать товарную позицию (задаёт сумму). Используются в seed-скрипте для реальной оплаты сделки. |
 
 > **Важно про scope:** **отмена/удаление оплаченной оплаты** (`sale.payment.update PAID=N`, снятие блокировки «У заказа есть активные оплаты») требует scope **`sale`** — `crm`-only токен получает `insufficient_scope`. Учесть в правах приложения на этапе проводки оплат #109.
