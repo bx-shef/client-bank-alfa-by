@@ -53,14 +53,41 @@ describe('findCandidateById', () => {
     expect(await findCandidateById('deal', 2, '33', { companyId: '93' }, call)).not.toBeNull()
   })
 
-  it('normalizes a non-finite amount to 0 (trigger kinds ignore it)', async () => {
+  it('normalizes a non-finite amount to 0 for a trigger kind (deal/smart-process ignore amount)', async () => {
     const call = vi.fn(async () => resp([item({ opportunity: undefined, currencyId: 'BYN' })]))
     expect((await findCandidateById('smart-process', 1032, '1', { companyId: '93' }, call))?.amount).toBe(0)
+  })
+
+  it('returns null on a non-finite amount for an amount-gated kind (fail-closed, like invoiceLookup)', async () => {
+    const call = vi.fn(async () => resp([item({ opportunity: 'n/a' })]))
+    expect(await findCandidateById('invoice', 31, '33', { companyId: '93' }, call)).toBeNull()
+    expect(await findCandidateById('deal-payment', 31, '33', { companyId: '93' }, call)).toBeNull()
   })
 
   it('parses a string opportunity (the real crm.item.list shape)', async () => {
     const call = vi.fn(async () => resp([item({ opportunity: '250.0000' })]))
     expect((await findCandidateById('deal', 2, '33', { companyId: '93' }, call))?.amount).toBe(250)
+  })
+
+  it('returns null when the found item has an empty id', async () => {
+    const call = vi.fn(async () => resp([item({ id: undefined })]))
+    expect(await findCandidateById('deal', 2, '33', { companyId: '93' }, call)).toBeNull()
+  })
+
+  it('feeds an empty string to the stage predicate when stageId is missing', async () => {
+    const seen: string[] = []
+    const call = vi.fn(async () => resp([item({ stageId: undefined })]))
+    await findCandidateById('deal', 2, '33', { companyId: '93', isNegativeStage: (s) => {
+      seen.push(s)
+      return false
+    } }, call)
+    expect(seen).toEqual([''])
+  })
+
+  it('trims the id inside the REST filter, not just for the guard', async () => {
+    const call = vi.fn(async () => resp([item()]))
+    await findCandidateById('deal', 2, '  33  ', { companyId: '93' }, call)
+    expect(call.mock.calls[0]![1]).toMatchObject({ filter: { id: '33', companyId: '93' } })
   })
 
   it('trims the id and returns null for a blank id / blank company without REST', async () => {

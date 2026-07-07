@@ -372,16 +372,20 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       пустое множество = «ничего не отрицательно» (неотличимо от битого запроса) — на проводке в `crm-sync` алертить,
       если для известной категории пусто.
     - `server/utils/itemByIdLookup.ts` — чистый **резолвер цели по id** `findCandidateById(kind, entityTypeId, id,
-      {companyId, isNegativeStage?}, call)` для стратегии `by-id` (invoice-id/deal-id/smart-id/order-id/payment-id):
-      `crm.item.list` фильтром **id+companyId** (id из назначения недоверенный → IDOR-скоуп в запросе, чужая сущность
-      не вернётся) + отсев отрицательной стадии → `AllocationCandidate`. `crm.item.list`, а не `crm.item.get` (тот
-      бросает `NOT_FOUND`; список отдаёт пусто). Подтверждено вживую: стадия категорийной сделки несёт префикс
-      `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. Amount-цели (invoice/deal-payment) сверяют сумму, триггер-цели
+      {companyId, isNegativeStage?}, call)` для стратегии `by-id` — три идентификатора, у которых значение = собственный
+      id целевой сущности: `invoice-id`→инвойс, `deal-id`→сделка, `smart-id`→смарт-процесс (все — один `crm.item.list`,
+      разный `entityTypeId`). **Не** `order-id`/`payment-id` — те идут `via-order`/`via-payment` к `deal-payment`
+      (объект `crm.item.payment.*`, отдельный резолвер). Запрос фильтром **id+companyId** (id из назначения недоверенный →
+      IDOR-скоуп в запросе, чужая сущность не вернётся) + отсев отрицательной стадии → `AllocationCandidate`.
+      `crm.item.list`, а не `crm.item.get` (тот бросает `NOT_FOUND`; список отдаёт пусто). Подтверждено вживую: стадия
+      категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. Amount-цели
+      (invoice/deal-payment) сверяют сумму (нефинитная → `null`, fail-closed как в `invoiceLookup`), триггер-цели
       (deal/smart-process) её игнорируют.
-    Осталось: lookup целей по номеру (заказ/оплата) и мост-документ; кастомные смарт-процессы — стадии через
+    Осталось: lookup цели `deal-payment` (стратегии `via-order`/`via-payment` — `order-id`/`order-number`/`payment-id`/
+    `payment-number` через `crm.item.payment.*`) и мост-документ; кастомные смарт-процессы — стадии через
     `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать `stageLoader`→lookup'ы,
     с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей компании, стадии инвойса/сделки,
-    резолв по id — **готовы**.
+    резолв по id (invoice/deal/smart-process) — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
