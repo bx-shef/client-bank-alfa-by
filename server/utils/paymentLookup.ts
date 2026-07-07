@@ -9,12 +9,24 @@
 // currency, paySystemId, … }`. `id` is the payment RECORD id (→ `payment.pay`),
 // `sum`/`currency` are the payment amount, `paid` its settlement status.
 //
-// SCOPE — this resolves the deal-payment WHEN THE DEAL IS ALREADY KNOWN (e.g. a
-// `deal-id` identifier, or iterating a company's deals). It does NOT locate a
-// payment/order globally by its own number without the parent deal:
-// `crm.item.payment.list` REQUIRES `entityId`, and a portal-wide lookup by order/
-// payment number needs `sale.*` (scope `sale`, which the app does not hold yet) —
-// tracked separately. See PROCESSING.md §4 (`order-number`/`payment-number`).
+// SCOPE & IDOR — this resolves a deal-payment WHEN THE DEAL IS ALREADY KNOWN AND
+// COMPANY-SCOPED. `crm.item.payment.list` filters ONLY by `entityId` (the deal) —
+// it has no `companyId` field, so unlike `invoiceLookup`/`itemByIdLookup` the
+// company scope is NOT enforced in the query here. The CALLER MUST pass a `dealId`
+// it already validated belongs to the payer's company (a deal resolved via
+// `itemByIdLookup.findCandidateById` with `companyId`, or a company-scoped deal
+// scan). Passing a payer-controlled `dealId` unchecked would be an IDOR.
+//
+// It does NOT locate a payment/order globally by its own id OR number without the
+// parent deal: `crm.item.payment.list` REQUIRES `entityId`, and a portal-wide
+// lookup — ALL of `order-id`/`order-number`/`payment-id`/`payment-number` — needs
+// `sale.*` (scope `sale`, which the app does not hold yet) — tracked in #172.
+//
+// NB: in `identifierDispatch` a `deal-id` routes to the `deal` trigger target, not
+// to `deal-payment`. The crm-sync wiring slice branches: a resolved deal WITH a
+// matching unpaid payment → `deal-payment` (this module); otherwise a bare `deal`
+// trigger. So this module runs AFTER the deal is resolved, never with a raw
+// identifier value from the purpose.
 
 import type { AllocationCandidate } from '../../app/utils/allocation'
 import type { RestCall } from './companyLookup'
@@ -29,7 +41,9 @@ export interface DealPaymentOptions {
 }
 
 /** `crm.item.payment.list` params — payments of ONE deal. The method requires
- *  both `entityId` and `entityTypeId`; there is no cross-entity variant in `crm`. */
+ *  both `entityId` and `entityTypeId`; there is no cross-entity variant in `crm`.
+ *  No `select`: the method does not document one — it returns the full short
+ *  payment shape (`id`/`accountNumber`/`paid`/`sum`/`currency`/…) unconditionally. */
 export function paymentListParams(dealId: number, entityTypeId: number = DEAL_ENTITY_TYPE_ID): Record<string, unknown> {
   return { entityId: dealId, entityTypeId }
 }
@@ -56,7 +70,12 @@ export function extractPayments(resp: Record<string, unknown>): RawPayment[] {
  * `sum` are skipped (can't be matched by amount). A transport error from `call`
  * propagates; "no payments" is an empty array, never a throw.
  *
- * A blank / non-numeric `dealId` yields `[]` without a REST call.
+ * PRECONDITION: `dealId` MUST already be scoped to the payer's company (see the
+ * file header — no company filter is possible in `crm.item.payment.list`).
+ *
+ * A blank / non-numeric / non-positive `dealId` yields `[]` without a REST call.
+ * No pagination (`start`): a single deal's payments are expected to be a handful
+ * of rows; if that ever grows past one page, page here before wiring into crm-sync.
  */
 export async function findDealPayments(
   dealId: string,

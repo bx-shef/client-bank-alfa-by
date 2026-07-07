@@ -58,9 +58,32 @@ describe('findDealPayments', () => {
     expect((await findDealPayments('33', {}, call)).map(c => c.id)).toEqual(['5'])
   })
 
-  it('skips a payment with a non-finite sum (cannot match by amount)', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, sum: undefined })]))
+  it('skips a payment with a non-finite sum or an empty id', async () => {
+    const nonFinite = vi.fn(async () => resp([pay({ id: 3, sum: undefined })]))
+    expect(await findDealPayments('33', {}, nonFinite)).toEqual([])
+    const noId = vi.fn(async () => resp([pay({ id: undefined, sum: 1200 })]))
+    expect(await findDealPayments('33', {}, noId)).toEqual([])
+  })
+
+  it('returns every unpaid payment as its own candidate', async () => {
+    const call = vi.fn(async () => resp([
+      pay({ id: 3, sum: 1200, paid: 'N' }),
+      pay({ id: 5, sum: 300, paid: 'N' })
+    ]))
+    expect((await findDealPayments('33', {}, call)).map(c => ({ id: c.id, amount: c.amount })))
+      .toEqual([{ id: '3', amount: 1200 }, { id: '5', amount: 300 }])
+  })
+
+  it('treats paid case-insensitively (paid="y" is settled)', async () => {
+    const call = vi.fn(async () => resp([pay({ id: 3, paid: 'y' })]))
     expect(await findDealPayments('33', {}, call)).toEqual([])
+  })
+
+  it('trims the dealId — the query id and the candidate dealId are both clean', async () => {
+    const call = vi.fn(async () => resp([pay({ id: 3, sum: 1200 })]))
+    const out = await findDealPayments('  33  ', {}, call)
+    expect(call.mock.calls[0]![1]).toEqual({ entityId: 33, entityTypeId: 2 })
+    expect(out[0]!.dealId).toBe('33')
   })
 
   it('parses a string sum and defaults a missing currency to empty', async () => {

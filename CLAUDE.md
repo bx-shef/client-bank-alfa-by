@@ -390,10 +390,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (`id`=id оплаты, `amount`=`sum`, `currency`, `dealId`).
       **Подтверждено вживую** (seed-сделка с реальной оплатой): ответ — массив **прямо** в `result` (не `result.items`),
       поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency`; оплаченные (`paid='Y'`) в кандидаты не берём
-      (нечего проводить), нефинитная сумма — пропуск. Разрешает `deal-payment` **когда сделка уже известна**
-      (`deal-id` из назначения или обход сделок компании). **Глобальный** поиск оплаты/заказа по номеру без сделки
-      (`order-number`/`payment-number`) — `crm.item.payment.list` требует `entityId`, а портал-широкий поиск идёт
-      через `sale.*` (scope `sale`, которого у приложения нет) — issue #172.
+      (нечего проводить), нефинитная сумма — пропуск. Разрешает `deal-payment` **когда сделка уже известна и
+      скоуплена по компании** (сделка, резолвнутая через `itemByIdLookup` по `companyId`, или обход сделок компании);
+      сам company-скоуп в `crm.item.payment.list` не встроить (нет поля `companyId`) — предусловие на вызывающем.
+      **Глобальный** поиск оплаты/заказа по id **и** по номеру без сделки (все `order-id`/`order-number`/`payment-id`/
+      `payment-number`) — `crm.item.payment.list` требует `entityId`, а портал-широкий поиск идёт через `sale.*`
+      (scope `sale`, которого у приложения нет) — issue #172.
     Осталось: **мост-документ** (`document-number` → `crm.documentgenerator.document.list` → сущность); глобальный
     поиск оплаты/заказа по номеру (scope `sale`, #172); кастомные смарт-процессы — стадии через
     `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать `stageLoader`→lookup'ы,
