@@ -138,17 +138,27 @@ export function extractDealRows(resp: Record<string, unknown>): RawDeal[] {
  * Company-scoped deal-payment candidate pool (#109, PROCESSING.md §2). Lists the
  * payer company's OWN deals (`crm.item.list` filtered by `companyId` — the IDOR
  * scope), drops negative-stage deals, and aggregates each deal's payments via
- * `findDealPayments`. This is the IDOR-safe way to resolve `order-number`/
- * `payment-number` (match by `accountNumber` among these candidates) AND the
- * amount-matching source of §2 (match by amount+currency) — see the file header on
- * why a global `sale.*` lookup can't be company-verified.
+ * `findDealPayments`. This is the IDOR-safe SCOPE for resolving `order-number`/
+ * `payment-number` and the amount-matching source of §2 (match by amount+currency).
+ * See the file header on why a global `sale.*` lookup can't be company-verified.
  *
  * `companyId` is the resolved client company (from the account). A blank one yields
  * `[]` without any REST call. A transport error propagates.
  *
- * COST: one `crm.item.list` + one `crm.item.payment.list` per deal (N+1). Bounded by
- * the company's deal count; batch the per-deal calls before high volume in crm-sync.
- * No pagination on the deal list yet (a company's open deals are expected to be few).
+ * CALLER NOTES (tie these up when wiring into crm-sync):
+ * - `isNegativeStage` must recognise EVERY funnel: this lists deals across ALL
+ *   categories, but a `stageLoader` predicate is built per-category (`DEAL_STAGE_<cat>`,
+ *   stage ids carry a `C<cat>:` prefix). Pass a UNION of the negative stages of the
+ *   company's deal categories, else a lost deal in another funnel slips into the pool.
+ * - number-matching is NOT possible yet: `findDealPayments` does not thread the
+ *   payment `accountNumber` into `AllocationCandidate`, so only amount+currency
+ *   matching works here. Threading `accountNumber` is the remaining #172 step.
+ * - COST is N+1 (one `crm.item.list` + one `crm.item.payment.list` per deal), and
+ *   `crm.item.payment.list` CANNOT be batched (`ERROR_BATCH_METHOD_NOT_ALLOWED`) —
+ *   so bound it with rate-limit-aware concurrency (≈2 rps classic REST, §8), not a batch.
+ * - the deal list is NOT paginated: a company with many historical deals may exceed
+ *   one page and silently lose a match (→ `manual`). Page or narrow (stage/date) in
+ *   crm-sync before this runs on real volume.
  */
 export async function findCompanyDealPayments(
   companyId: string,
