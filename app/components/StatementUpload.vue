@@ -12,11 +12,17 @@ import {
   type UploadItemResult
 } from '~/utils/importUpload'
 import { splitByDirection } from '~/utils/statement'
+import { useImport } from '~/composables/useImport'
 
 const results = ref<UploadItemResult[]>([])
+// Raw files kept aligned 1:1 with `results` (same truncated batch order) so we can
+// POST the ORIGINAL bytes — the server is the single parse authority (re-parses).
+const batchFiles = ref<File[]>([])
 const truncated = ref(0)
 const dragOver = ref(false)
 const busy = ref(false)
+const submitting = ref(false)
+const submitResult = ref<{ ok: boolean, message: string } | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
 // Combined, de-duped operations across all successfully parsed files.
@@ -24,6 +30,10 @@ const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
 const okCount = computed(() => results.value.filter(r => r.ok).length)
 const errCount = computed(() => results.value.filter(r => !r.ok).length)
 const totals = computed(() => splitByDirection(allItems.value))
+// Files that parsed OK (aligned with results) — those we send to CRM.
+const okFiles = computed(() => batchFiles.value.filter((_, i) => results.value[i]?.ok))
+
+const { submitFiles } = useImport()
 
 // Yield to the event loop between files so a large batch doesn't freeze the tab.
 const yieldToLoop = () => new Promise<void>(resolve => setTimeout(resolve))
@@ -31,10 +41,20 @@ const yieldToLoop = () => new Promise<void>(resolve => setTimeout(resolve))
 async function processFiles(files: File[]) {
   if (!files.length) return
   busy.value = true
-  const batch = await processUploadBatch(files, yieldToLoop)
-  results.value = batch.results
-  truncated.value = batch.truncated
+  submitResult.value = null
+  // Pass RAW files so processUploadBatch computes `truncated` (files beyond the cap).
+  // batchFiles slices to the same cap → stays index-aligned with out.results.
+  const out = await processUploadBatch(files, yieldToLoop)
+  results.value = out.results
+  batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
+  truncated.value = out.truncated
   busy.value = false
+}
+
+async function writeToCrm() {
+  submitting.value = true
+  submitResult.value = await submitFiles(okFiles.value, allItems.value.length)
+  submitting.value = false
 }
 
 function onDrop(e: DragEvent) {
@@ -46,7 +66,9 @@ function onInput(e: Event) {
 }
 function clearAll() {
   results.value = []
+  batchFiles.value = []
   truncated.value = 0
+  submitResult.value = null
   if (fileInput.value) fileInput.value.value = ''
 }
 </script>
@@ -161,12 +183,28 @@ function clearAll() {
           <OperationList :items="allItems" />
         </B24Card>
 
-        <B24Alert
-          color="air-primary"
-          variant="soft"
-          title="Это предпросмотр"
-          description="Операции разобраны локально в браузере. Запись в CRM (поиск компании, дела, дедуп) — следующим шагом."
-        />
+        <div class="flex flex-col gap-3">
+          <div class="flex items-center gap-3">
+            <B24Button
+              label="Записать в CRM"
+              color="air-primary"
+              :loading="submitting"
+              data-testid="write-crm"
+              @click="writeToCrm()"
+            />
+            <span class="text-xs text-(--ui-color-base-3)">
+              Операции разобраны локально; по кнопке файл(ы) уходят в портал — запись идёт в фоне.
+            </span>
+          </div>
+          <B24Alert
+            v-if="submitResult"
+            :color="submitResult.ok ? 'air-primary-success' : 'air-primary-alert'"
+            variant="soft"
+            :title="submitResult.ok ? 'Отправлено' : 'Не отправлено'"
+            :description="submitResult.message"
+            data-testid="submit-result"
+          />
+        </div>
       </template>
 
       <!-- All files failed -->

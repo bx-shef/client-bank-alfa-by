@@ -5,6 +5,7 @@ import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
 import {
   deleteToken,
   getApplicationToken,
+  getMemberIdByDomain,
   getToken,
   saveToken
 } from '../server/utils/tokenStore'
@@ -79,6 +80,32 @@ describe('getApplicationToken', () => {
   })
   it('returns empty string for an unknown portal', async () => {
     expect(await getApplicationToken(vi.fn(async () => []), 'm1')).toBe('')
+  })
+})
+
+describe('getMemberIdByDomain', () => {
+  it('normalizes the domain (strips scheme/path) and passes it as a bound param', async () => {
+    const query = vi.fn(async () => [{ member_id: 'M-1' }])
+    expect(await getMemberIdByDomain(query, 'https://p.bitrix24.by/some/path')).toBe('M-1')
+    // Parameterized (no injection), normalized to the bare host.
+    expect(query.mock.calls[0]![1]).toEqual(['p.bitrix24.by'])
+  })
+
+  it('returns null for an unknown domain (app not installed → 409 upstream)', async () => {
+    expect(await getMemberIdByDomain(vi.fn(async () => []), 'ghost.bitrix24.by')).toBeNull()
+  })
+
+  it('returns null for an empty/blank domain without querying', async () => {
+    const query = vi.fn(async () => [])
+    expect(await getMemberIdByDomain(query, '')).toBeNull()
+    expect(await getMemberIdByDomain(query, '   ')).toBeNull()
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('takes the most-recent row (ORDER BY updated_at DESC) if duplicates ever exist', async () => {
+    const query = vi.fn(async () => [{ member_id: 'NEWEST' }])
+    expect(await getMemberIdByDomain(query, 'p.bitrix24.by')).toBe('NEWEST')
+    expect(query.mock.calls[0]![0]).toMatch(/ORDER BY updated_at DESC/i)
   })
 })
 

@@ -22,7 +22,7 @@
 |---|---|---|---|---|
 | `b24-events` | `Q_EVENTS` | `EventJob` (`memberId`, `domain`, `kind`, `ts`) | вебхук `POST /api/b24/events` | follow-up после проверенного события; на `ONAPPUNINSTALL` — очистка портала |
 | `bank-fetch` | `Q_FETCH` | `FetchJob` (`memberId`, `providerId`, `account`, `dateFrom/To`) | крон (`planFetches`) / демо-нагрузка | тянет окно выписки у банка (Альфа/Приор) → нормализует → кладёт батч в `crm-sync` |
-| `file-parse` | `Q_PARSE` | `ParseJob` (`memberId`, `providerId`, `fileRef`, `fileHash`) | загрузка файла (UI/backend — **продюсера ещё нет**, ждёт UI ручной загрузки, #19/#21) | разбирает файл ручной загрузки → нормализует → кладёт батч в `crm-sync` |
+| `file-parse` | `Q_PARSE` | `ParseJob` (`memberId`, `providerId`, `fileName`, `contentBase64`, `fileHash`, `userId?`) | эндпоинт `POST /api/import` (ручная загрузка) | декодирует (windows-1251) и разбирает файл → нормализует → кладёт батч в `crm-sync` |
 | `crm-sync` | `Q_CRM` | `CrmSyncJob` (`memberId`, `providerId`, `source`, `batchId`, `items`) | обработчики `bank-fetch` / `file-parse` (только если операций > 0) | дедуп в батче → на операцию: поиск компании → универсальное дело → чат |
 
 `bank-fetch` и `file-parse` — два входа с разных источников (онлайн-банк и файл), оба дают

@@ -60,14 +60,22 @@ export interface FetchJob {
   dateTo: string
 }
 
-/** Parse one uploaded client-bank file (manual import). `fileHash` dedups reuploads. */
+/** Parse one uploaded client-bank file (manual import). `fileHash` dedups reuploads.
+ *  The file rides IN the packet as base64 (`contentBase64`) — statement exports are
+ *  small (≤ MAX_UPLOAD_BYTES, 2 МБ), so we don't need a separate file store; the
+ *  worker decodes windows-1251 and parses. `userId` is the B24 user who uploaded
+ *  (attribution / logging). */
 export interface ParseJob {
   memberId: string
   providerId: BankProviderId
-  /** Storage key/reference of the uploaded file (not the bytes). */
-  fileRef: string
+  /** Original file name (logging / result display). */
+  fileName: string
+  /** File bytes (windows-1251), base64-encoded — rides in the packet, no file store. */
+  contentBase64: string
   /** Content hash — same file re-uploaded → same job id → no duplicate parse. */
   fileHash: string
+  /** B24 user id who initiated the import (attribution; resolved server-side). */
+  userId?: string
 }
 
 /** Analyse normalized operations and act in Bitrix24. `batchId` (the producing

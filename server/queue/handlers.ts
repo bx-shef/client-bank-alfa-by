@@ -137,6 +137,11 @@ export async function handleCrmSyncJob(
     const companyId = await deps.findCompany(item, job.memberId)
     const activityId = await deps.writeActivity(item, companyId, job.memberId)
     if (!activityId) {
+      // No client company matched (or write skipped) → UNMATCHED: we do NOT write
+      // anything and do NOT remember the op, so a later redelivery re-attempts once a
+      // matching company exists. This is the accepted v1 behaviour for manual import
+      // (docs/PROCESSING.md §2 Этап C.2 "Текущее состояние"): the target-spec cascade
+      // (attach to MY company / smart-process element) lands with #109.
       unmatched++
       continue
     }

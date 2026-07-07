@@ -25,7 +25,16 @@ export async function enqueueFetch(job: FetchJob): Promise<boolean> {
 
 export async function enqueueParse(job: ParseJob): Promise<boolean> {
   if (!queueEnabled()) return false
-  await getQueue(Q_PARSE).add(Q_PARSE, job, { jobId: parseJobId(job) })
+  // The parse payload carries the whole file (base64, up to ~2.7 МБ). Override the
+  // count-based default retention with a tight age-based one so retained parse jobs
+  // don't bloat Redis, AND so a FAILED file ages out quickly — otherwise the
+  // content-only jobId would make a re-upload of a previously-failed file a silent
+  // no-op (dedup against the retained failed job) instead of re-running it.
+  await getQueue(Q_PARSE).add(Q_PARSE, job, {
+    jobId: parseJobId(job),
+    removeOnComplete: { age: 3600, count: 50 },
+    removeOnFail: { age: 86400, count: 200 }
+  })
   return true
 }
 
