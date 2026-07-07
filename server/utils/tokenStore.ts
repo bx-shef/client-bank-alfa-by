@@ -88,6 +88,21 @@ export async function getApplicationToken(query: QueryFn, memberId: string): Pro
   return rows[0] ? String(rows[0].application_token || '') : ''
 }
 
+/** Resolve the portal's `member_id` by its domain (a portal has one domain ↔ one
+ * member_id). Used by the manual-import ingest to map the frame's `X-B24-Domain` to
+ * the portal we hold tokens for; `null` when the app isn't installed for that domain
+ * (⇒ no key ⇒ reject the upload). Returns the most-recent row if duplicates ever
+ * exist (domain isn't the PK). */
+export async function getMemberIdByDomain(query: QueryFn, domain: string): Promise<string | null> {
+  const d = (domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim()
+  if (!d) return null
+  const rows = await query(
+    `SELECT member_id FROM portal_tokens WHERE domain = $1 ORDER BY updated_at DESC LIMIT 1`,
+    [d]
+  )
+  return rows[0] ? String(rows[0].member_id) : null
+}
+
 /** Delete a portal's row on ONAPPUNINSTALL (uninstall always purges — a removed
  * app keeps no data; the CLEAN flag is not consulted). Idempotent. */
 export async function deleteToken(query: QueryFn, memberId: string): Promise<void> {

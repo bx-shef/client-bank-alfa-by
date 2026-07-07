@@ -25,6 +25,7 @@ import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
+import { parseManualFileBase64 } from '../utils/importIngest'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
@@ -54,7 +55,10 @@ export function liveHandlerDeps(): HandlerDeps {
       await demoPause(job.account)
       return demoItems(job)
     },
-    parseFile: async () => [], // TODO #19: wire clientBank parser → StatementItem[]
+    // Manual import: decode the windows-1251 file carried in the packet and parse it
+    // to operations (server is the single parse authority). Demo/fetch path is
+    // unaffected — parseFile only runs for file-parse jobs (real uploads).
+    parseFile: async job => parseManualFileBase64(job.contentBase64),
     // Find the CRM company by the counterparty's settlement account. Demo accounts
     // are GATED (never touch a real portal's REST); an unknown portal (no token)
     // yields null → the op is counted unmatched and nothing is written.

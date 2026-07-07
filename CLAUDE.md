@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-06
+> Last reviewed: 2026-07-07
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -108,9 +108,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
   мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
   статус по каждому файлу (разобрано N / ошибка) + объединённый предпросмотр через `OperationList`.
-  Ссылка «Загрузить выписку» — в шапке `/app`. **Слайс 2 (запись в CRM: `file-parse`→`crm-sync`)** —
-  далее (нужен живой портал). Разбор покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест
-  + визуальная проверка (свет/тёмная, оба формата).
+  Ссылка «Загрузить выписку» — в шапке `/app`. **Слайс 2 (запись в CRM) — сделан:** кнопка «Записать в
+  CRM» шлёт **сам файл** на `POST /api/import` (`useImport`, фрейм-токен) → очередь `file-parse`→`crm-sync`;
+  сервер — единственный авторитет разбора (парсит в воркере), браузерный разбор = только предпросмотр.
+  Обратная связь — fire-and-forget («принято, N операций», N из предпросмотра); фон пишет дело по операции.
+  **v1:** клиент не найден → `unmatched`, не пишем (каскад «моя компания»/смарт-процесс — #109). Разбор
+  покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест + визуальная проверка (свет/тёмная).
 - `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
   + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
   Роут `/settings` — в `nitro.prerender.routes`.
@@ -281,6 +284,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `{ status, time, commit, commitUrl }` (коммит = `NUXT_PUBLIC_COMMIT_SHA`, как в подвале).
     Без секретов; на нём же построен docker `healthcheck` backend'а. Чистый билдер —
     `healthInfo` в `app/utils/build.ts` (покрыт тестами).
+  - `server/api/import.post.ts` (+ чистое ядро `server/utils/importIngest.ts`, DI, тесты) — **приём
+    ручной загрузки выписки (P4, слайс 2)**: multipart `file` + фрейм-токен (`Bearer` + `X-B24-Domain`).
+    `handleImportUpload`: гейт файла (расширение+размер) → **проверка ключа портала** (`getMemberIdByDomain`
+    по домену; нет токена ⇒ приложение не установлено ⇒ 409, как брак пакета в воркере) → **валидация
+    фрейм-токена** (`profile` — успех доказывает принадлежность порталу, блок спуфинга `X-B24-Domain`,
+    даёт id инициатора) → кладёт файл (base64) в очередь `file-parse`; `202` fire-and-forget. Воркер
+    (`parseFile` → `parseManualFileBase64`) декодирует windows-1251 и парсит → `crm-sync`. Файл едет в
+    пакете (≤2 МБ; nginx `client_max_body_size 3m` в `snippets/proxy-backend.conf`).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
     `unregister`); ничего не пишет. Роут кладёт `action` в очередь, консьюмер применяет. **Удаление

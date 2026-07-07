@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-06
+> Last reviewed: 2026-07-07
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -44,6 +44,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts` | да | актуален | Отправка уведомления об операции в чат (стадия 6). |
 | `im.search.chat.list` | im | `im` | `server/utils/chatSearch.ts` | **нет** | актуален | Поиск чата по названию/участникам для пикера (`FIND`≥3, `LIMIT`≤50, `OFFSET`; отдаёт `total`/`next`). |
 | `im.recent.list` | im | `im` | `server/utils/chatSearch.ts` | нет | актуален | Дефолтный список пикера — последние групповые чаты (`SKIP_DIALOG=Y`, `OFFSET`/`LIMIT`). |
+| `profile` | classic | — | `server/api/import.post.ts` | нет | актуален | Валидация фрейм-токена ручного импорта: успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), + даёт id пользователя-инициатора. |
 
 > **HTTP, не REST-метод:** OAuth-токен портала обновляем на `oauth/token` (endpoint Bitrix
 > `oauth.bitrix.info/oauth/token/`, `server/utils/b24Oauth.ts`) — это не метод `callRest`, а прямой
