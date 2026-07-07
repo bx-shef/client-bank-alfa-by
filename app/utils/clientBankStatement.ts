@@ -65,10 +65,11 @@ export function isBelarusianAccount(account: string): boolean {
 /**
  * ISO 4217 numeric currency code → alpha code. The `Type=3`/`Type=5` «за день»
  * exports carry the account currency as a numeric `CurrCode` (e.g. `933`), not an
- * alpha marker. Pure lookup — building block for issue #73. NOT yet wired into
- * `detectStatementCurrency`: making foreign «за день» statements resolve to their
- * real currency also needs the amount-field handling (those rows have no separate
- * `…Q` field), which must be confirmed against a real foreign «за день» sample.
+ * alpha marker. Wired into `detectStatementCurrency` (issue #169) — a real foreign
+ * «за день» sample (RUB `CurrCode=643`) confirmed the rows DO carry a separate
+ * `…Q` field (`CreQ`/`DebQ`), so once the currency resolves foreign the existing
+ * `…Q` amount handling in `normalizeClientBankRow` takes the account-currency
+ * amount, not the BYN equivalent.
  */
 const NUMERIC_CURRENCY: Readonly<Record<string, string>> = {
   933: 'BYN', 840: 'USD', 978: 'EUR', 643: 'RUB', 156: 'CNY',
@@ -82,11 +83,16 @@ export function currencyFromNumericCode(code: string | undefined): string | unde
 }
 
 /**
- * Currency of the whole statement (national vs foreign): explicit alpha-3 markers
- * win (`I3` file-level, then header `I1`), then the caller-supplied `ctx.currency`,
- * then a Belarusian own-account defaults to `BYN`. `''` if undetermined — the caller
- * (UI) must block the import then, per issue #19. A per-row `I2` marker can still
- * override this for a single row (see normalizeClientBankRow).
+ * Currency of the whole statement (national vs foreign). Precedence:
+ * 1. explicit alpha-3 markers — `I3` file-level, then header `I1` (e.g. `Type=600`);
+ * 2. the caller-supplied `ctx.currency` (also alpha-3);
+ * 3. numeric ISO code — `CurrCode`, then a numeric `I3`/`I1` (the only marker on
+ *    foreign `Type=3`/`Type=5` «за день» exports, e.g. `643`=RUB, issue #169);
+ * 4. a Belarusian own-account defaults to `BYN`.
+ * `''` if undetermined — the caller (UI) must block the import then, per issue #19.
+ * A numeric code beats the account heuristic so a foreign «за день» statement on a
+ * `BY…` valuta account resolves to its real currency, not BYN. A per-row `I2`
+ * marker can still override this for a single row (see normalizeClientBankRow).
  */
 export function detectStatementCurrency(parsed: ClientBankParsed, ctxCurrency?: string): string {
   const out = parsed.OUT_PARAM
@@ -94,6 +100,9 @@ export function detectStatementCurrency(parsed: ClientBankParsed, ctxCurrency?: 
   return marker(out.unrouted.I3)
     ?? marker(out.header.I1)
     ?? marker(ctxCurrency)
+    ?? currencyFromNumericCode(out.header.CurrCode)
+    ?? currencyFromNumericCode(out.unrouted.I3)
+    ?? currencyFromNumericCode(out.header.I1)
     ?? (isBelarusianAccount(parsed.GENERAL.ACC) ? 'BYN' : '')
 }
 
@@ -130,9 +139,10 @@ const BIC_RE = /^[A-Za-z]{6}[A-Za-z0-9]{2}(?:[A-Za-z0-9]{3})?$/
 // currency). A national (BYN) statement has the amount in the plain field, with
 // `…Q` a rare fallback. Direction is always read from the plain fields (the `…Q`
 // side can be 0 on a revaluation row).
-// NOTE (#19): this foreign-vs-national split is confirmed only against the
-// synthetic CNY fixture — recheck on real foreign statements. If a foreign row
-// ever ships without a `…Q` field the amount is 0 here (under-reported, but the
+// NOTE (#169): the foreign-vs-national split is confirmed against a REAL foreign
+// «за день» statement (RUB `Type=5`): the row carried `CreQ`=account-currency
+// amount and `Cre`=BYN equivalent, and the `…Q` side is what we keep. If a foreign
+// row ever ships without a `…Q` field the amount is 0 here (under-reported, but the
 // currency stays truthful) rather than a mislabeled BYN equivalent.
 const DEBIT_PLAIN = ['Db', 'Deb', 'DebQ'] as const
 const CREDIT_PLAIN = ['Cre', 'Credit', 'CreQ'] as const
