@@ -406,17 +406,30 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       предусловие на вызывающем. **`findCompanyDealPayments(companyId, {includePaid?, isNegativeStage?}, call)`** —
       **company-scoped пул** кандидатов `deal-payment` (IDOR-safe путь для `order-number`/`payment-number` и источник
       amount-матчинга §2): `crm.item.list` сделки компании (фильтр `companyId`) → отсев отрицательной стадии → на
-      каждую сделку `findDealPayments` (N+1, батчить перед нагрузкой). **Сделка проксирует заказ**: `crm.item.payment.list`
+      каждую сделку `findDealPayments` (N+1; `crm.item.payment.list` **не батчится** — bounded concurrency перед
+      нагрузкой; список сделок не пагинирован — сузить/пагинировать в crm-sync). **Сделка проксирует заказ**: `crm.item.payment.list`
       по сделке отдаёт оплаты заказа (та же `sale.payment` id, `orderId` за ними) — «оплата заказа» = «оплата сделки»,
       отдельного lookup заказа нет. **Глобальный** `sale.payment.list` находит оплату по номеру, но её `sale.order` **не
       несёт связки со сделкой/компанией** (`companyId=null` у CRM-заказов) — привязать к компании плательщика нельзя,
       поэтому используем company-scoped обход (не `sale.*`). `sale`-scope есть (для сторно `payment.pay`/отмены), для
       lookup не нужен — #172.
-    Осталось: **мост-документ** (`document-number` → `crm.documentgenerator.document.list` → сущность); точный фильтр
-    `order-number`/`payment-number` по `accountNumber` в company-пуле (+ crm-sync); кастомные смарт-процессы — стадии через
-    `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать `stageLoader`→lookup'ы,
-    с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей компании, стадии инвойса/сделки,
-    резолв по id (invoice/deal/smart-process), оплаты известной сделки, company-пул оплат — **готовы**.
+    - `server/utils/documentLookup.ts` — **мост-документ** `findDocumentEntities(number, call)`: `document-number` из
+      назначения → `crm.documentgenerator.document.list` (фильтр `number`) → **массив** привязанных сущностей
+      `{entityTypeId, entityId}[]` (ответ `result.documents[]`; номер документа **не** уникален по порталу —
+      нумерация генератора per-шаблон/редактируема, поэтому список, как в `invoiceLookup`). Дальше вызывающий
+      **перебирает** и **роутит** каждый ref по `entityTypeId` (2→сделка, 31→инвойс, кастом→смарт) через
+      `itemByIdLookup` **с проверкой компании**, берёт первый прошедший — номер недоверенный, метод без
+      company-фильтра, IDOR-скоуп на вызывающем (как by-id в `identifierDispatch`, `strategy: 'via-document'`).
+      **Защитный гард**: `doc.number` сверяется с запрошенным после ответа (обратный фильтр `number` в офдоке не
+      показан — если портал тихо проигнорит фильтр, не свяжемся с чужим документом). `select` — только id-поля (не
+      `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
+      документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
+      Scope `crm` (`crm.documentgenerator.*`).
+    Осталось: точный фильтр `order-number`/`payment-number` по `accountNumber` в company-пуле; кастомные
+    смарт-процессы — стадии через `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать
+    `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей
+    компании, стадии инвойса/сделки, резолв по id (invoice/deal/smart-process), оплаты известной сделки, company-пул
+    оплат, мост-документ — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
