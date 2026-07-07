@@ -122,7 +122,7 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
   })
   it('parse uses the file hash as batchId', async () => {
     const { deps, calls } = fakeDeps([item('d1')])
-    const r = await handleParseJob({ memberId: 'M', providerId: 'manual', fileRef: 'k', fileHash: 'HASH' }, deps)
+    const r = await handleParseJob({ memberId: 'M', providerId: 'manual', fileName: 'k.txt', contentBase64: 'AAAA', fileHash: 'HASH' }, deps)
     expect(r).toEqual({ parsed: 1, chained: true })
     expect((calls.crm[0] as CrmSyncJob).batchId).toBe('HASH')
   })
