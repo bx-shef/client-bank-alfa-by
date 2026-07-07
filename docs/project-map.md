@@ -141,12 +141,14 @@
   и `DEAL_STAGE`/`DEAL_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
   компания с `isMyCompany='Y'`, §2 Этап C) + **резолвер цели по id** `itemByIdLookup.ts` (`findCandidateById` —
   `crm.item.list` фильтром id+компания = IDOR-скоуп, отсев отрицательной стадии; стратегия `by-id`:
-  invoice-id/deal-id/smart-id — не order-id/payment-id, те `via-order`/`via-payment`). **Имена полей и стадий
-  подтверждены на живом портале**
+  invoice-id/deal-id/smart-id — не order-id/payment-id, те `via-order`/`via-payment`) + **резолвер оплаты сделки**
+  `paymentLookup.ts` (`findDealPayments` — `crm.item.payment.list` по **известной** сделке → кандидаты
+  `deal-payment`; оплаченные не берём). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
-  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`). Осталось:
-  lookup цели `deal-payment` (заказ/оплата по id и по номеру через `crm.item.payment.*`) и мост-документ,
-  проводка в `crm-sync`, хранение матриц/карты в настройках.
+  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
+  массив в `result`, `id`/`paid`/`sum`/`currency`). Осталось: **глобальный** поиск оплаты/заказа по номеру без
+  сделки (scope `sale`, нет у приложения — #172); мост-документ (`document-number`); проводка в `crm-sync`;
+  хранение матриц/карты в настройках.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`

@@ -385,11 +385,20 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. Amount-цели
       (invoice/deal-payment) сверяют сумму (нефинитная → `null`, fail-closed как в `invoiceLookup`), триггер-цели
       (deal/smart-process) её игнорируют.
-    Осталось: lookup цели `deal-payment` (стратегии `via-order`/`via-payment` — `order-id`/`order-number`/`payment-id`/
-    `payment-number` через `crm.item.payment.*`) и мост-документ; кастомные смарт-процессы — стадии через
+    - `server/utils/paymentLookup.ts` — чистый **резолвер оплаты сделки** `findDealPayments(dealId, {includePaid?}, call)`
+      для цели `deal-payment` (§2, действие `payment.pay`): `crm.item.payment.list` по **известной** сделке
+      (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (`id`=id оплаты, `amount`=`sum`, `currency`, `dealId`).
+      **Подтверждено вживую** (seed-сделка с реальной оплатой): ответ — массив **прямо** в `result` (не `result.items`),
+      поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency`; оплаченные (`paid='Y'`) в кандидаты не берём
+      (нечего проводить), нефинитная сумма — пропуск. Разрешает `deal-payment` **когда сделка уже известна**
+      (`deal-id` из назначения или обход сделок компании). **Глобальный** поиск оплаты/заказа по номеру без сделки
+      (`order-number`/`payment-number`) — `crm.item.payment.list` требует `entityId`, а портал-широкий поиск идёт
+      через `sale.*` (scope `sale`, которого у приложения нет) — issue #172.
+    Осталось: **мост-документ** (`document-number` → `crm.documentgenerator.document.list` → сущность); глобальный
+    поиск оплаты/заказа по номеру (scope `sale`, #172); кастомные смарт-процессы — стадии через
     `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать `stageLoader`→lookup'ы,
     с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей компании, стадии инвойса/сделки,
-    резолв по id (invoice/deal/smart-process) — **готовы**.
+    резолв по id (invoice/deal/smart-process), оплаты известной сделки — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
