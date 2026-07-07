@@ -69,6 +69,11 @@ describe('detectStatementCurrency', () => {
     p.OUT_PARAM.header = { CurrCode: '643' }
     expect(detectStatementCurrency(p)).toBe('EUR')
   })
+  it('an unknown numeric code falls through to the BY-account BYN default', () => {
+    const p = byAcc('BY86PJCB30120000000000000933')
+    p.OUT_PARAM.header = { CurrCode: '999' } // not in NUMERIC_CURRENCY
+    expect(detectStatementCurrency(p)).toBe('BYN')
+  })
 })
 
 describe('normalizeClientBank — BYN statement (Type=400)', () => {
@@ -295,6 +300,29 @@ describe('real client-bank formats (Type 3 / Type 4 / Type 5 fixtures)', () => {
   })
 })
 
+// Foreign statements carry the account-currency amount in the `…Q` field and the
+// BYN equivalent in the plain field — the `…Q` side must win for both directions (#169).
+describe('normalizeClientBankRow — foreign amount field selection (…Q vs plain)', () => {
+  const base = { KorName: 'X', DocDate: '06.02.2026', Num: '1' }
+  it('credit: takes CreQ (account currency), not the Cre BYN equivalent', () => {
+    const op = normalizeClientBankRow({ ...base, Deb: '0.00', DebQ: '0.00', Cre: '6384.35', CreQ: '170595.00' }, 'BY00X', 'RUB')
+    expect(op.direction).toBe('credit')
+    expect(op.currency).toBe('RUB')
+    expect(op.amount).toBeCloseTo(170595.00, 2)
+  })
+  it('debit: takes DebQ (account currency), not the Deb BYN equivalent', () => {
+    const op = normalizeClientBankRow({ ...base, Deb: '6384.35', DebQ: '170595.00', Cre: '0.00', CreQ: '0.00' }, 'BY00X', 'RUB')
+    expect(op.direction).toBe('debit') // Deb>0 (direction reads the plain field)
+    expect(op.currency).toBe('RUB')
+    expect(op.amount).toBeCloseTo(170595.00, 2)
+  })
+  it('a BYN statement keeps taking the plain field', () => {
+    const op = normalizeClientBankRow({ ...base, Deb: '50.00', DebQ: '0.00', Cre: '0.00' }, 'BY00X', 'BYN')
+    expect(op.direction).toBe('debit')
+    expect(op.amount).toBeCloseTo(50, 2)
+  })
+})
+
 describe('currencyFromNumericCode (ISO 4217 numeric → alpha, #73 building block)', () => {
   it('maps known numeric codes', () => {
     expect(currencyFromNumericCode('933')).toBe('BYN')
@@ -308,6 +336,14 @@ describe('currencyFromNumericCode (ISO 4217 numeric → alpha, #73 building bloc
     expect(currencyFromNumericCode('000')).toBeUndefined()
     expect(currencyFromNumericCode('')).toBeUndefined()
     expect(currencyFromNumericCode(undefined)).toBeUndefined()
+  })
+  it('returns undefined for prototype keys (untrusted CurrCode — no inherited value)', () => {
+    // Without an own-property guard `obj["__proto__"]` yields the prototype object
+    // (truthy) — which would slip through the `??` chain as a non-string currency.
+    expect(currencyFromNumericCode('__proto__')).toBeUndefined()
+    expect(currencyFromNumericCode('constructor')).toBeUndefined()
+    expect(currencyFromNumericCode('toString')).toBeUndefined()
+    expect(currencyFromNumericCode('hasOwnProperty')).toBeUndefined()
   })
 })
 

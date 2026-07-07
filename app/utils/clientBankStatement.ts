@@ -77,9 +77,15 @@ const NUMERIC_CURRENCY: Readonly<Record<string, string>> = {
 }
 
 /** Map an ISO 4217 numeric currency code (`"933"`) to its alpha code (`"BYN"`),
- * or `undefined` for empty/unknown input. See `NUMERIC_CURRENCY` (issue #73). */
+ * or `undefined` for empty/unknown input. See `NUMERIC_CURRENCY` (issue #73).
+ * The input reaches here from an untrusted uploaded file (`CurrCode`), so the
+ * lookup is `hasOwn`-guarded: a prototype key (`"__proto__"`, `"constructor"`,
+ * `"toString"`) must yield `undefined`, not the inherited object/function that a
+ * plain `obj[key]` would return (type confusion — the value must stay a string). */
 export function currencyFromNumericCode(code: string | undefined): string | undefined {
-  return code ? NUMERIC_CURRENCY[code.trim()] : undefined
+  if (!code) return undefined
+  const key = code.trim()
+  return Object.hasOwn(NUMERIC_CURRENCY, key) ? NUMERIC_CURRENCY[key] : undefined
 }
 
 /**
