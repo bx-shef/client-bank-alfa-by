@@ -42,10 +42,11 @@ async function processFiles(files: File[]) {
   if (!files.length) return
   busy.value = true
   submitResult.value = null
-  const batch = files.slice(0, MAX_UPLOAD_FILES)
-  const out = await processUploadBatch(batch, yieldToLoop)
+  // Pass RAW files so processUploadBatch computes `truncated` (files beyond the cap).
+  // batchFiles slices to the same cap → stays index-aligned with out.results.
+  const out = await processUploadBatch(files, yieldToLoop)
   results.value = out.results
-  batchFiles.value = batch
+  batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
   truncated.value = out.truncated
   busy.value = false
 }

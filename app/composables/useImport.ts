@@ -1,4 +1,5 @@
 import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
+import { pluralRu } from '~/utils/importStatus'
 
 // Submit manually-uploaded statement files to the backend for async import
 // (POST /api/import, one request per file, RAW file — the server re-parses
@@ -28,10 +29,13 @@ export function useImport() {
         await $fetch('/api/import', { method: 'POST', headers: frameAuthHeaders(auth), body: form })
         accepted++
       } catch (e) {
-        return { ok: false, message: frameFetchError(e, `Не удалось отправить «${file.name}»`) }
+        // Note already-accepted files so the user knows a retry only resends the rest
+        // (crm-sync dedups by account|docId, so a resend is harmless anyway).
+        const tail = accepted ? ` (до этого принято: ${accepted})` : ''
+        return { ok: false, message: frameFetchError(e, `Не удалось отправить «${file.name}»${tail}`) }
       }
     }
-    const opsWord = pluralOps(opCount)
+    const opsWord = pluralRu(opCount, ['операция', 'операции', 'операций'])
     return {
       ok: true,
       message: `Принято в обработку: ${accepted} файл(ов), ${opCount} ${opsWord}. Запись в CRM идёт в фоне.`
@@ -39,12 +43,4 @@ export function useImport() {
   }
 
   return { submitFiles }
-}
-
-function pluralOps(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return 'операция'
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'операции'
-  return 'операций'
 }

@@ -126,9 +126,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `decodeAndParse` — windows-1251 декод → `normalizeManualStatement`, `processUploadBatch` — усечение
   по `MAX_UPLOAD_FILES` + изоляция разбора каждого файла + `defer`-yield, `dedupItems` по `account|docId`).
   Компонент: дропзона, список результатов по файлам (успех — бейдж «разобрано: N», ошибка — переносимый
-  текст), сводка, предпросмотр `OperationList`, `role=status aria-live`. **Запись в CRM** (file-parse →
-  crm-sync) — следующий слайс. Тесты — `tests/importUpload.test.ts` (реальные фикстуры) +
-  `tests/nuxt/statementUpload.nuxt.test.ts` (рендер/проводка).
+  текст), сводка, предпросмотр `OperationList`, `role=status aria-live`, кнопка **«Записать в CRM»**
+  (`useImport` → `POST /api/import`, слайс 2 выше). Тесты — `tests/importUpload.test.ts` (реальные
+  фикстуры) + `tests/nuxt/statementUpload.nuxt.test.ts` (рендер/проводка).
 - `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `event.bind`
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
   установка доставляет `application_token`) → `installFinish` (+ диагностика портала, блок «События»);

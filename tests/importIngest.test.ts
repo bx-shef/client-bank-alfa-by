@@ -6,6 +6,7 @@ import {
   parseManualFileBase64,
   type IngestDeps
 } from '../server/utils/importIngest'
+import { MAX_UPLOAD_BYTES } from '../app/utils/importUpload'
 import type { ParseJob } from '../server/queue/topology'
 
 function fixtureB64(rel: string): string {
@@ -52,11 +53,16 @@ describe('handleImportUpload', () => {
     expect((await handleImportUpload(deps, { ...input, domain: '' })).status).toBe(400)
   })
 
-  it('rejects a bad extension / oversize before any I/O → 400', async () => {
-    const { deps, enqueued } = fakeDeps()
+  it('rejects a bad extension / empty / oversize before any I/O → 400, no enqueue', async () => {
+    const memberIdByDomain = vi.fn()
+    const { deps, enqueued } = fakeDeps({ memberIdByDomain })
     expect((await handleImportUpload(deps, { ...input, fileName: 'scan.pdf' })).status).toBe(400)
     expect((await handleImportUpload(deps, { ...input, bytes: new Uint8Array(0) })).status).toBe(400)
+    // Oversize is checked on the RAW bytes, BEFORE base64 / portal lookup / REST.
+    const big = await handleImportUpload(deps, { ...input, bytes: new Uint8Array(MAX_UPLOAD_BYTES + 1) })
+    expect(big.status).toBe(400)
     expect(enqueued).toHaveLength(0)
+    expect(memberIdByDomain).not.toHaveBeenCalled()
   })
 
   it('rejects when the portal is not installed (no key) → 409, no enqueue', async () => {
@@ -95,6 +101,12 @@ describe('parseManualFileBase64 (real fixtures, windows-1251)', () => {
   it('parses a 1CClientBankExchange export carried as base64', () => {
     const items = parseManualFileBase64(fixtureB64('1c-exchange/demo-1c.txt'))
     expect(items.length).toBeGreaterThan(0)
+  })
+
+  it('parses a Type=4 «за период» Альфа export through the base64 round-trip (no mojibake)', () => {
+    const items = parseManualFileBase64(fixtureB64('client-bank/demo-type4-alfa.txt'))
+    expect(items.length).toBeGreaterThan(1)
+    expect(JSON.stringify(items)).not.toContain('�')
   })
 
   it('throws on an unrecognized format', () => {

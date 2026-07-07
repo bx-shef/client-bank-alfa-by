@@ -57,8 +57,14 @@ export function liveHandlerDeps(): HandlerDeps {
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
     // to operations (server is the single parse authority). Demo/fetch path is
-    // unaffected — parseFile only runs for file-parse jobs (real uploads).
-    parseFile: async job => parseManualFileBase64(job.contentBase64),
+    // unaffected — parseFile only runs for file-parse jobs (real uploads). Log the
+    // attribution (file + initiating user + portal) so the resolved userId/fileName
+    // have a real consumer, not just the payload.
+    parseFile: async (job) => {
+      const items = parseManualFileBase64(job.contentBase64)
+      console.log(`[import] parsed ${items.length} ops from "${job.fileName}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)
+      return items
+    },
     // Find the CRM company by the counterparty's settlement account. Demo accounts
     // are GATED (never touch a real portal's REST); an unknown portal (no token)
     // yields null → the op is counted unmatched and nothing is written.
