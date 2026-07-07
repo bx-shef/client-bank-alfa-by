@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DEAL_ENTITY_TYPE_ID, extractPayments, findDealPayments, paymentListParams } from '../server/utils/paymentLookup'
+import {
+  companyDealsParams,
+  DEAL_ENTITY_TYPE_ID,
+  extractDealRows,
+  extractPayments,
+  findCompanyDealPayments,
+  findDealPayments,
+  paymentListParams
+} from '../server/utils/paymentLookup'
 
 // Deal-payment resolver (#109). Field names/response shape confirmed live against a
 // seeded deal: payments sit DIRECTLY in `result` (array), each `{id, accountNumber,
@@ -107,5 +115,118 @@ describe('findDealPayments', () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     })
     await expect(findDealPayments('33', {}, call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
+})
+
+describe('companyDealsParams / extractDealRows', () => {
+  it('filters deals by companyId (IDOR scope) and selects id/stage', () => {
+    expect(companyDealsParams('93')).toEqual({
+      entityTypeId: 2,
+      filter: { companyId: '93' },
+      select: ['id', 'stageId']
+    })
+  })
+  it('reads result.items (deal list), tolerating bad shapes', () => {
+    expect(extractDealRows({ result: { items: [{ id: 33 }] } })[0]!.id).toBe(33)
+    expect(extractDealRows({ result: { items: 'x' } })).toEqual([])
+    expect(extractDealRows({})).toEqual([])
+  })
+})
+
+describe('findCompanyDealPayments', () => {
+  // Dispatch mock: crm.item.list → the company's deals, crm.item.payment.list →
+  // that deal's payments keyed by entityId.
+  const portal = (deals: unknown[], paymentsByDeal: Record<number, unknown[]>) =>
+    vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.item.list') return { result: { items: deals } }
+      if (method === 'crm.item.payment.list') return { result: paymentsByDeal[params.entityId as number] ?? [] }
+      throw new Error(`unexpected method ${method}`)
+    })
+  const pay = (over: Record<string, unknown> = {}) => ({ id: 3, accountNumber: '1/2', paid: 'N', sum: 1200, currency: 'BYN', ...over })
+
+  it('aggregates payments across the company deals, tagging each with its dealId', async () => {
+    const call = portal(
+      [{ id: 33, stageId: 'C5:NEW' }, { id: 41, stageId: 'NEW' }],
+      { 33: [pay({ id: 3, sum: 1200 })], 41: [pay({ id: 8, sum: 500 })] }
+    )
+    const out = await findCompanyDealPayments('93', {}, call)
+    expect(out).toEqual([
+      { kind: 'deal-payment', id: '3', amount: 1200, currency: 'BYN', dealId: '33' },
+      { kind: 'deal-payment', id: '8', amount: 500, currency: 'BYN', dealId: '41' }
+    ])
+    expect(call.mock.calls[0]![1]).toMatchObject({ entityTypeId: 2, filter: { companyId: '93' } })
+  })
+
+  it('flattens several payments of one deal and tolerates a deal with none', async () => {
+    const call = portal(
+      [{ id: 33, stageId: 'NEW' }, { id: 41, stageId: 'NEW' }],
+      { 33: [pay({ id: 3, sum: 1200 }), pay({ id: 4, sum: 300 })], 41: [] } // deal 41 has no payments
+    )
+    const out = await findCompanyDealPayments('93', {}, call)
+    expect(out.map(c => ({ id: c.id, dealId: c.dealId }))).toEqual([
+      { id: '3', dealId: '33' },
+      { id: '4', dealId: '33' }
+    ])
+  })
+
+  it('feeds an empty string to the stage predicate when a deal has no stageId', async () => {
+    const seen: string[] = []
+    const call = portal([{ id: 33, stageId: undefined }], { 33: [pay()] })
+    await findCompanyDealPayments('93', { isNegativeStage: (s) => {
+      seen.push(s)
+      return false
+    } }, call)
+    expect(seen).toEqual([''])
+  })
+
+  it('returns [] for a company with no deals (payment.list never called)', async () => {
+    const call = portal([], {})
+    expect(await findCompanyDealPayments('93', {}, call)).toEqual([])
+    expect(call.mock.calls.every(c => c[0] === 'crm.item.list')).toBe(true)
+  })
+
+  it('skips a negative-stage deal WITHOUT listing its payments', async () => {
+    const call = portal(
+      [{ id: 33, stageId: 'C5:LOSE' }, { id: 41, stageId: 'NEW' }],
+      { 33: [pay({ id: 3 })], 41: [pay({ id: 8, sum: 500 })] }
+    )
+    const isNegativeStage = (s: string) => s === 'C5:LOSE'
+    const out = await findCompanyDealPayments('93', { isNegativeStage }, call)
+    expect(out.map(c => c.dealId)).toEqual(['41'])
+    // payment.list called only for deal 41, never for the lost deal 33
+    const paymentCalls = call.mock.calls.filter(c => c[0] === 'crm.item.payment.list')
+    expect(paymentCalls.map(c => (c[1] as { entityId: number }).entityId)).toEqual([41])
+  })
+
+  it('passes includePaid through to each deal', async () => {
+    const call = portal([{ id: 33, stageId: 'NEW' }], { 33: [pay({ id: 3, paid: 'Y', sum: 1200 })] })
+    expect(await findCompanyDealPayments('93', {}, call)).toEqual([]) // paid dropped
+    expect(await findCompanyDealPayments('93', { includePaid: true }, call)).toHaveLength(1)
+  })
+
+  it('skips a deal row with an empty id', async () => {
+    const call = portal([{ id: undefined, stageId: 'NEW' }], {})
+    expect(await findCompanyDealPayments('93', {}, call)).toEqual([])
+  })
+
+  it('returns [] without a REST call for a blank companyId', async () => {
+    const call = portal([{ id: 33, stageId: 'NEW' }], { 33: [pay()] })
+    expect(await findCompanyDealPayments('  ', {}, call)).toEqual([])
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('propagates a REST error from the deal list', async () => {
+    const call = vi.fn(async () => {
+      throw new Error('ACCESS_DENIED')
+    })
+    await expect(findCompanyDealPayments('93', {}, call)).rejects.toThrow('ACCESS_DENIED')
+  })
+
+  it('propagates a REST error thrown by a per-deal payment.list (N+1 inner call)', async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === 'crm.item.list') return { result: { items: [{ id: 33, stageId: 'NEW' }] } }
+      throw new Error('QUERY_LIMIT_EXCEEDED') // crm.item.payment.list fails
+    })
+    await expect(findCompanyDealPayments('93', {}, call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
   })
 })
