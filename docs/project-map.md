@@ -137,10 +137,12 @@
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
   → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс И сделка** — `SMART_INVOICE_STAGE_<cat>`
   и `DEAL_STAGE`/`DEAL_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
-  компания с `isMyCompany='Y'`, §2 Этап C). **Имена полей и стадий подтверждены на живом портале**
+  компания с `isMyCompany='Y'`, §2 Этап C) + **резолвер цели по id** `itemByIdLookup.ts` (`findCandidateById` —
+  `crm.item.list` фильтром id+компания = IDOR-скоуп, отсев отрицательной стадии; для invoice-id/deal-id/smart-id/
+  order-id/payment-id). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
-  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`). Осталось: lookup остальных целей (сделка/оплата/
-  смарт-процесс/мост-документ), проводка в `crm-sync`, хранение матриц/карты в настройках.
+  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`). Осталось:
+  lookup целей по номеру (заказ/оплата) и мост-документ, проводка в `crm-sync`, хранение матриц/карты в настройках.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`
