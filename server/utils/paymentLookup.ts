@@ -17,10 +17,15 @@
 // `itemByIdLookup.findCandidateById` with `companyId`, or a company-scoped deal
 // scan). Passing a payer-controlled `dealId` unchecked would be an IDOR.
 //
-// It does NOT locate a payment/order globally by its own id OR number without the
-// parent deal: `crm.item.payment.list` REQUIRES `entityId`, and a portal-wide
-// lookup — ALL of `order-id`/`order-number`/`payment-id`/`payment-number` — needs
-// `sale.*` (scope `sale`, which the app does not hold yet) — tracked in #172.
+// A DEAL PROXIES ITS ORDER: `crm.item.payment.list(entityId=deal)` returns the
+// order's payments (confirmed live — the same `id` as `sale.payment`, one `orderId`
+// behind them). So "order payment" and "deal payment" are the same object; there is
+// no separate order lookup. `order-number`/`payment-number` from a purpose (#172)
+// resolve the IDOR-safe way via `findCompanyDealPayments` below: scan the payer
+// company's OWN deals and match among their payments. A global `sale.payment.list`
+// would find a payment by number, but its `sale.order` carries no deal/company
+// binding (`companyId` is null for CRM-created orders), so it can't be tied back to
+// the payer's company — the company-scoped scan is what keeps it IDOR-safe.
 //
 // NB: in `identifierDispatch` a `deal-id` routes to the `deal` trigger target, not
 // to `deal-payment`. The crm-sync wiring slice branches: a resolved deal WITH a
@@ -96,6 +101,71 @@ export async function findDealPayments(
     const paymentId = p.id === undefined || p.id === null ? '' : String(p.id)
     if (!paymentId) continue
     out.push({ kind: 'deal-payment', id: paymentId, amount, currency: String(p.currency ?? ''), dealId: id })
+  }
+  return out
+}
+
+export interface CompanyDealPaymentOptions {
+  /** Passed through to `findDealPayments` — include settled payments. */
+  includePaid?: boolean
+  /** Drop deals in a negative/lost stage before listing their payments (built by
+   *  `stageLoader`). Omitted → every deal of the company is scanned. */
+  isNegativeStage?: (stageId: string) => boolean
+}
+
+/** `crm.item.list` params — a company's OWN deals (the IDOR scope). Filtering by
+ *  `companyId` in the query is what keeps another company's deals/payments out. */
+export function companyDealsParams(companyId: string): Record<string, unknown> {
+  return {
+    entityTypeId: DEAL_ENTITY_TYPE_ID,
+    filter: { companyId },
+    select: ['id', 'stageId']
+  }
+}
+
+interface RawDeal {
+  id?: unknown
+  stageId?: unknown
+}
+
+/** Pull the deal rows out of a `crm.item.list` response (`result.items`). */
+export function extractDealRows(resp: Record<string, unknown>): RawDeal[] {
+  const items = (resp?.result as Record<string, unknown> | undefined)?.items
+  return Array.isArray(items) ? (items as RawDeal[]) : []
+}
+
+/**
+ * Company-scoped deal-payment candidate pool (#109, PROCESSING.md §2). Lists the
+ * payer company's OWN deals (`crm.item.list` filtered by `companyId` — the IDOR
+ * scope), drops negative-stage deals, and aggregates each deal's payments via
+ * `findDealPayments`. This is the IDOR-safe way to resolve `order-number`/
+ * `payment-number` (match by `accountNumber` among these candidates) AND the
+ * amount-matching source of §2 (match by amount+currency) — see the file header on
+ * why a global `sale.*` lookup can't be company-verified.
+ *
+ * `companyId` is the resolved client company (from the account). A blank one yields
+ * `[]` without any REST call. A transport error propagates.
+ *
+ * COST: one `crm.item.list` + one `crm.item.payment.list` per deal (N+1). Bounded by
+ * the company's deal count; batch the per-deal calls before high volume in crm-sync.
+ * No pagination on the deal list yet (a company's open deals are expected to be few).
+ */
+export async function findCompanyDealPayments(
+  companyId: string,
+  opts: CompanyDealPaymentOptions,
+  call: RestCall
+): Promise<AllocationCandidate[]> {
+  const cid = String(companyId).trim()
+  if (!cid) return []
+
+  const resp = await call('crm.item.list', companyDealsParams(cid))
+  const out: AllocationCandidate[] = []
+  for (const deal of extractDealRows(resp)) {
+    const stageId = deal.stageId === undefined || deal.stageId === null ? '' : String(deal.stageId)
+    if (opts.isNegativeStage?.(stageId)) continue
+    const dealId = deal.id === undefined || deal.id === null ? '' : String(deal.id)
+    if (!dealId) continue
+    out.push(...await findDealPayments(dealId, { includePaid: opts.includePaid }, call))
   }
   return out
 }

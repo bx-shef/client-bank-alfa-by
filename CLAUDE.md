@@ -402,16 +402,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **Подтверждено вживую** (seed-сделка с реальной оплатой): ответ — массив **прямо** в `result` (не `result.items`),
       поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency`; оплаченные (`paid='Y'`) в кандидаты не берём
       (нечего проводить), нефинитная сумма — пропуск. Разрешает `deal-payment` **когда сделка уже известна и
-      скоуплена по компании** (сделка, резолвнутая через `itemByIdLookup` по `companyId`, или обход сделок компании);
-      сам company-скоуп в `crm.item.payment.list` не встроить (нет поля `companyId`) — предусловие на вызывающем.
-      **Глобальный** поиск оплаты/заказа по id **и** по номеру без сделки (все `order-id`/`order-number`/`payment-id`/
-      `payment-number`) — `crm.item.payment.list` требует `entityId`, а портал-широкий поиск идёт через `sale.*`
-      (scope `sale`, которого у приложения нет) — issue #172.
-    Осталось: **мост-документ** (`document-number` → `crm.documentgenerator.document.list` → сущность); глобальный
-    поиск оплаты/заказа по номеру (scope `sale`, #172); кастомные смарт-процессы — стадии через
+      скоуплена по компании**; сам company-скоуп в `crm.item.payment.list` не встроить (нет поля `companyId`) —
+      предусловие на вызывающем. **`findCompanyDealPayments(companyId, {includePaid?, isNegativeStage?}, call)`** —
+      **company-scoped пул** кандидатов `deal-payment` (IDOR-safe путь для `order-number`/`payment-number` и источник
+      amount-матчинга §2): `crm.item.list` сделки компании (фильтр `companyId`) → отсев отрицательной стадии → на
+      каждую сделку `findDealPayments` (N+1, батчить перед нагрузкой). **Сделка проксирует заказ**: `crm.item.payment.list`
+      по сделке отдаёт оплаты заказа (та же `sale.payment` id, `orderId` за ними) — «оплата заказа» = «оплата сделки»,
+      отдельного lookup заказа нет. **Глобальный** `sale.payment.list` находит оплату по номеру, но её `sale.order` **не
+      несёт связки со сделкой/компанией** (`companyId=null` у CRM-заказов) — привязать к компании плательщика нельзя,
+      поэтому используем company-scoped обход (не `sale.*`). `sale`-scope есть (для сторно `payment.pay`/отмены), для
+      lookup не нужен — #172.
+    Осталось: **мост-документ** (`document-number` → `crm.documentgenerator.document.list` → сущность); точный фильтр
+    `order-number`/`payment-number` по `accountNumber` в company-пуле (+ crm-sync); кастомные смарт-процессы — стадии через
     `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать `stageLoader`→lookup'ы,
     с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей компании, стадии инвойса/сделки,
-    резолв по id (invoice/deal/smart-process), оплаты известной сделки — **готовы**.
+    резолв по id (invoice/deal/smart-process), оплаты известной сделки, company-пул оплат — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.

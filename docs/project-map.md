@@ -146,9 +146,10 @@
   `deal-payment`; оплаченные не берём). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
   `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
-  массив в `result`, `id`/`paid`/`sum`/`currency`). Осталось: **глобальный** поиск оплаты/заказа по id и по номеру
-  без сделки (все `order-*`/`payment-*` — scope `sale`, нет у приложения — #172); мост-документ (`document-number`);
-  проводка в `crm-sync`; хранение матриц/карты в настройках.
+  массив в `result`, `id`/`paid`/`sum`/`currency`) + **company-пул оплат** `findCompanyDealPayments` (сделки компании →
+  их оплаты; IDOR-safe путь для `order-number`/`payment-number`, «сделка проксирует заказ»). Осталось: точный фильтр
+  `order-number`/`payment-number` по `accountNumber` в пуле; мост-документ (`document-number`); проводка в `crm-sync`;
+  хранение матриц/карты в настройках.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`
