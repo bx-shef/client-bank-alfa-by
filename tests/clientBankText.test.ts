@@ -143,6 +143,15 @@ describe('parseClientBankText — behavior', () => {
     expect(parsed.GENERAL.TITLE).toBe('Выписка - с приложениями')
   })
 
+  it('routes CurrCode to the header even when it appears in a row region (#169)', () => {
+    const parsed = parseClientBankText(
+      '***** ^Type=5^ ^Acc=BY00^  -  T\n[OUT_PARAM]\n^DocDate=01.01.2024^\n^CurrCode=643^\n^Num=1^'
+    )
+    expect(parsed.OUT_PARAM.header.CurrCode).toBe('643')
+    expect(parsed.OUT_PARAM.unrouted.CurrCode).toBeUndefined()
+    expect(parsed.OUT_PARAM.items[0]!.CurrCode).toBeUndefined()
+  })
+
   it('routes DateIn to the header without slash-normalization', () => {
     const parsed = parseClientBankText(
       '***** ^Type=400^ ^Acc=BY00^  -  T\n[OUT_PARAM]\n^DateIn=28/09/2023^\n^DocDate=01.01.2024^\n^Num=1^'

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-06
+> Last reviewed: 2026-07-07
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -249,11 +249,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`normalizeClientBank` — контракт `StatementNormalizer`; приход/расход, валюта нац/инвалюта,
     контрагент, `account|docId`-дедуп). Провайдер `manual` (и файловый путь `prior-by`) — issue #19.
     Проверено на образцах `tests/fixtures/client-bank/` (BYN `Type=400`, CNY `Type=600`) и на реальных
-    выгрузках двух форматов: `Type=3` «за день» (`demo-type3-vpsk`) и `Type=4` «за период»
-    (`demo-type4-alfa`). Ключ дедупа (`rowDocId`): `DocID` → `OperationID` (уникальный id в `Type=4`,
-    где `Num` повторяется — иначе коллизия/потеря операции, #73) → фолбэк `Num|DocDate`. BYN-дефолт
-    для старых 13-значных BY-счетов (`isBelarusianAccount`); BIC контрагента из `Cod`/`Code` — только
-    BIC-образный токен (`Code` бывает и числовым кодом валюты).
+    выгрузках трёх форматов: `Type=3` «за день» (`demo-type3-vpsk`), `Type=4` «за период»
+    (`demo-type4-alfa`) и валютный `Type=5` «за день» (`demo-type5-vpsk`). Ключ дедупа (`rowDocId`):
+    `DocID` → `OperationID` (уникальный id в `Type=4`, где `Num` повторяется — иначе коллизия/потеря
+    операции, #73) → фолбэк `Num|DocDate`. **Валюта** (`detectStatementCurrency`): альфа-маркер `I3`/`I1`
+    → `ctx.currency` → числовой ISO `CurrCode`/`I3`/`I1` (`643`=RUB, `933`=BYN — единственный маркер на
+    валютных «за день» выписках, #169) → BYN-дефолт для BY-счёта. Для инвалютной операции сумма берётся
+    из `…Q`-поля (`CreQ`/`DebQ`, в валюте счёта), а не из BYN-эквивалента `Cre`/`Deb` (подтверждено на
+    реальной RUB-выписке `Type=5`, #169). BIC контрагента из `Cod`/`Code` — только BIC-образный токен
+    (`Code` бывает и числовым кодом валюты).
   - `app/utils/oneCExchange.ts` + `app/utils/oneCStatement.ts` — формат обмена 1С «Клиент-банк»
     (`1CClientBankExchange`, версии 1.01–1.03): парсер секций (`parseOneCExchange`) + нормализатор
     (`normalizeOneC` — контракт `StatementNormalizer`; направление по «наш счёт = плательщик/получатель»,

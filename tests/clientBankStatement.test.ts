@@ -45,6 +45,35 @@ describe('detectStatementCurrency', () => {
     expect(detectStatementCurrency(byAcc('LT12...'), 'EUR')).toBe('EUR')
     expect(detectStatementCurrency(byAcc('LT12...'))).toBe('')
   })
+  it('numeric CurrCode resolves a foreign «за день» statement, beating the BY-account BYN default (#169)', () => {
+    const p = byAcc('BY86MMBN30120000000000000643') // BY valuta account
+    p.OUT_PARAM.header = { CurrCode: '643' }
+    expect(detectStatementCurrency(p)).toBe('RUB') // not BYN
+  })
+  it('numeric CurrCode=933 still yields BYN (Type=3 unchanged)', () => {
+    const p = byAcc('BY86PJCB30120000000000000933')
+    p.OUT_PARAM.header = { CurrCode: '933' }
+    expect(detectStatementCurrency(p)).toBe('BYN')
+  })
+  it('falls back to a numeric I3/I1 when CurrCode is absent (#169)', () => {
+    const p3 = byAcc('BY86...')
+    p3.OUT_PARAM.unrouted = { I3: '643' }
+    expect(detectStatementCurrency(p3)).toBe('RUB')
+    const p1 = byAcc('BY86...')
+    p1.OUT_PARAM.header = { I1: '840' }
+    expect(detectStatementCurrency(p1)).toBe('USD')
+  })
+  it('an alpha marker still wins over a numeric one', () => {
+    const p = byAcc('BY86...')
+    p.OUT_PARAM.unrouted = { I3: 'EUR' }
+    p.OUT_PARAM.header = { CurrCode: '643' }
+    expect(detectStatementCurrency(p)).toBe('EUR')
+  })
+  it('an unknown numeric code falls through to the BY-account BYN default', () => {
+    const p = byAcc('BY86PJCB30120000000000000933')
+    p.OUT_PARAM.header = { CurrCode: '999' } // not in NUMERIC_CURRENCY
+    expect(detectStatementCurrency(p)).toBe('BYN')
+  })
 })
 
 describe('normalizeClientBank — BYN statement (Type=400)', () => {
@@ -212,8 +241,9 @@ describe('real-file robustness', () => {
 })
 
 // Real-format fixtures (anonymized) from live aida exports — the CURRENT bank
-// formats: Type=3 "за день" (VpskExport) and Type=4 "за период" (#73).
-describe('real client-bank formats (Type 3 / Type 4 fixtures)', () => {
+// formats: Type=3 "за день" (VpskExport), Type=4 "за период" (#73) and the foreign
+// Type=5 valuta "за день" (#169).
+describe('real client-bank formats (Type 3 / Type 4 / Type 5 fixtures)', () => {
   it('Type=4 "за период": OperationID dedup, counterparty account/УНП/BIC, balance reconciles', () => {
     const items = normalizeClientBank(parseClientBankText(loadFixture('demo-type4-alfa.txt')), { account: '' })
     expect(items).toHaveLength(3)
@@ -254,6 +284,43 @@ describe('real client-bank formats (Type 3 / Type 4 fixtures)', () => {
     const net = items.reduce((s, i) => s + (i.direction === 'credit' ? i.amount : -i.amount), 0)
     expect(1000 + net).toBeCloseTo(1200, 2)
   })
+
+  it('Type=5 valuta "за день": numeric CurrCode → foreign currency, amount from the …Q field not the BYN equivalent (#169)', () => {
+    const items = normalizeClientBank(parseClientBankText(loadFixture('demo-type5-vpsk.txt')), { account: '' })
+    expect(items).toHaveLength(1)
+    const op = items[0]!
+    // Currency from numeric CurrCode=643, NOT the BY-account BYN default.
+    expect(op.currency).toBe('RUB')
+    expect(op.direction).toBe('credit') // Cre>0 → приход
+    // Account-currency amount from CreQ (170595.00), NOT the 6384.35 BYN equivalent (Cre).
+    expect(op.amount).toBeCloseTo(170595.00, 2)
+    expect(op.account).toBe('BY86DEMO30120000000000000643')
+    expect(op.counterparty.account).toBe('40702810000000000000')
+    expect(op.docId).toBe('180|06.02.2026') // no DocID/OperationID → Num|DocDate
+  })
+})
+
+// Foreign statements carry the account-currency amount in the `…Q` field and the
+// BYN equivalent in the plain field — the `…Q` side must win for both directions (#169).
+describe('normalizeClientBankRow — foreign amount field selection (…Q vs plain)', () => {
+  const base = { KorName: 'X', DocDate: '06.02.2026', Num: '1' }
+  it('credit: takes CreQ (account currency), not the Cre BYN equivalent', () => {
+    const op = normalizeClientBankRow({ ...base, Deb: '0.00', DebQ: '0.00', Cre: '6384.35', CreQ: '170595.00' }, 'BY00X', 'RUB')
+    expect(op.direction).toBe('credit')
+    expect(op.currency).toBe('RUB')
+    expect(op.amount).toBeCloseTo(170595.00, 2)
+  })
+  it('debit: takes DebQ (account currency), not the Deb BYN equivalent', () => {
+    const op = normalizeClientBankRow({ ...base, Deb: '6384.35', DebQ: '170595.00', Cre: '0.00', CreQ: '0.00' }, 'BY00X', 'RUB')
+    expect(op.direction).toBe('debit') // Deb>0 (direction reads the plain field)
+    expect(op.currency).toBe('RUB')
+    expect(op.amount).toBeCloseTo(170595.00, 2)
+  })
+  it('a BYN statement keeps taking the plain field', () => {
+    const op = normalizeClientBankRow({ ...base, Deb: '50.00', DebQ: '0.00', Cre: '0.00' }, 'BY00X', 'BYN')
+    expect(op.direction).toBe('debit')
+    expect(op.amount).toBeCloseTo(50, 2)
+  })
 })
 
 describe('currencyFromNumericCode (ISO 4217 numeric → alpha, #73 building block)', () => {
@@ -269,6 +336,14 @@ describe('currencyFromNumericCode (ISO 4217 numeric → alpha, #73 building bloc
     expect(currencyFromNumericCode('000')).toBeUndefined()
     expect(currencyFromNumericCode('')).toBeUndefined()
     expect(currencyFromNumericCode(undefined)).toBeUndefined()
+  })
+  it('returns undefined for prototype keys (untrusted CurrCode — no inherited value)', () => {
+    // Without an own-property guard `obj["__proto__"]` yields the prototype object
+    // (truthy) — which would slip through the `??` chain as a non-string currency.
+    expect(currencyFromNumericCode('__proto__')).toBeUndefined()
+    expect(currencyFromNumericCode('constructor')).toBeUndefined()
+    expect(currencyFromNumericCode('toString')).toBeUndefined()
+    expect(currencyFromNumericCode('hasOwnProperty')).toBeUndefined()
   })
 })
 

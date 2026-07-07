@@ -26,11 +26,16 @@ import type { ClientBankParsed, ClientBankSection } from '~/types/clientBankText
 
 const FILE_HEADER = '***** ^Type='
 
-/** Keys that belong to the statement header (period, opening balance, …). */
+/** Keys that belong to the statement header (period, opening balance, …).
+ * `CurrCode` is the numeric ISO 4217 account currency (`643`=RUB, `933`=BYN) —
+ * the ONLY currency marker on foreign `Type=3`/`Type=5` «за день» exports; it is
+ * captured here (was previously `unrouted`) so `detectStatementCurrency` can read
+ * it (issue #169). Routed as a header key: it appears once per statement in the
+ * account currency, so a later same-value occurrence in a row region is harmless. */
 const HEADER_KEYS = new Set([
   'Time', 'Header1', 'Header2', 'Header3', 'Header4', 'Header5',
   'DateBegin', 'DateEnd', 'DateIn', 'RestIn', 'CrIn', 'CrInQ', 'RestInQ',
-  'InCre', 'InCreQ', 'AcPa', 'AcPa1', 'I1', 'I1str', 'UNN'
+  'InCre', 'InCreQ', 'AcPa', 'AcPa1', 'I1', 'I1str', 'UNN', 'CurrCode'
 ])
 
 /** Keys that belong to the statement footer (closing balance, turnovers, …). */
