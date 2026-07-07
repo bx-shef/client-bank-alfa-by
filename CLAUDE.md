@@ -413,13 +413,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       несёт связки со сделкой/компанией** (`companyId=null` у CRM-заказов) — привязать к компании плательщика нельзя,
       поэтому используем company-scoped обход (не `sale.*`). `sale`-scope есть (для сторно `payment.pay`/отмены), для
       lookup не нужен — #172.
-    - `server/utils/documentLookup.ts` — **мост-документ** `findDocumentEntity(number, call)`: `document-number` из
-      назначения → `crm.documentgenerator.document.list` (фильтр `number`) → привязанная сущность `{entityTypeId,
-      entityId}` (один документ = одна сущность; ответ `result.documents[]`). Дальше вызывающий **роутит** ref по
-      `entityTypeId` (2→сделка, 31→инвойс, кастом→смарт) через `itemByIdLookup` **с проверкой компании** — номер
-      недоверенный, метод без company-фильтра, поэтому IDOR-скоуп на вызывающем (как by-id в `identifierDispatch`).
-      Поля (`number`/`entityTypeId`/`entityId`) — **из офдоки**, вживую не подтверждено (в seed 0 документов) —
-      сверить casing на реальном документе. Scope `crm` (`crm.documentgenerator.*`).
+    - `server/utils/documentLookup.ts` — **мост-документ** `findDocumentEntities(number, call)`: `document-number` из
+      назначения → `crm.documentgenerator.document.list` (фильтр `number`) → **массив** привязанных сущностей
+      `{entityTypeId, entityId}[]` (ответ `result.documents[]`; номер документа **не** уникален по порталу —
+      нумерация генератора per-шаблон/редактируема, поэтому список, как в `invoiceLookup`). Дальше вызывающий
+      **перебирает** и **роутит** каждый ref по `entityTypeId` (2→сделка, 31→инвойс, кастом→смарт) через
+      `itemByIdLookup` **с проверкой компании**, берёт первый прошедший — номер недоверенный, метод без
+      company-фильтра, IDOR-скоуп на вызывающем (как by-id в `identifierDispatch`, `strategy: 'via-document'`).
+      **Защитный гард**: `doc.number` сверяется с запрошенным после ответа (обратный фильтр `number` в офдоке не
+      показан — если портал тихо проигнорит фильтр, не свяжемся с чужим документом). `select` — только id-поля (не
+      `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
+      документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
+      Scope `crm` (`crm.documentgenerator.*`).
     Осталось: точный фильтр `order-number`/`payment-number` по `accountNumber` в company-пуле; кастомные
     смарт-процессы — стадии через `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать
     `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей

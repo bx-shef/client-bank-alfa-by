@@ -148,8 +148,9 @@
   `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
   массив в `result`, `id`/`paid`/`sum`/`currency`) + **company-пул оплат** `findCompanyDealPayments` (сделки компании →
   их оплаты; IDOR-safe путь для `order-number`/`payment-number`, «сделка проксирует заказ») + **мост-документ**
-  `documentLookup.ts` (`document-number` → `crm.documentgenerator.document.list` → привязанная сущность
-  `{entityTypeId, entityId}`; поля из офдоки, вживую не подтверждено — в seed 0 документов). Осталось: точный фильтр
+  `documentLookup.ts` (`document-number` → `crm.documentgenerator.document.list` → **массив** привязанных сущностей
+  `{entityTypeId, entityId}[]` + гард по `number`; вызывающий перебирает и рескоупит по компании; поля из офдоки,
+  вживую не подтверждено — в seed 0 документов, live-verify — гейт wiring-PR). Осталось: точный фильтр
   `order-number`/`payment-number` по `accountNumber` в пуле; роутинг ref моста через `itemByIdLookup` (company-скоуп);
   проводка в `crm-sync`; хранение матриц/карты в настройках.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
