@@ -8,6 +8,12 @@
 // Only the strategies confirmed live are dispatched today; the rest return
 // `unsupported` with a reason (portal-specific entityTypeId/field or a live-verify
 // gate), so the caller can log coverage without silently dropping the intent.
+//
+// The `switch (intent.kind)` below covers every `IdentifierKind`. NB: `server/**` is
+// currently outside the `vue-tsc` typecheck (#187), so a missing case would NOT be a
+// compile error here — exhaustiveness is instead enforced by a test that runs every
+// kind through this function (tests/intentResolver.test.ts). Once #187 lands the
+// compiler will gate it too and the test becomes belt-and-suspenders.
 
 import type { RecognitionIntent } from '../../app/utils/recognitionIntent'
 import type { IdentifierKind } from '../../app/utils/purposeMatch'
@@ -46,13 +52,15 @@ export interface IntentResolution {
   reason?: string
 }
 
-/** entityTypeId for the `by-id` kinds whose target type is a fixed, live-confirmed
- *  constant. `smart-id` is absent on purpose: a custom smart process's entityTypeId
- *  is portal-specific (comes from the mapping config, not a constant) — handled as
- *  `unsupported` until the config slice lands. */
-const BY_ID_ENTITY_TYPE: Partial<Record<IdentifierKind, number>> = {
-  'invoice-id': SMART_INVOICE_ENTITY_TYPE_ID,
-  'deal-id': DEAL_ENTITY_TYPE_ID
+/** Target kind + entityTypeId for the `by-id` kinds whose target type is a fixed,
+ *  live-confirmed constant. Kept locally (not read from `route.targetKind`) so the
+ *  dispatch needs no non-null assertion and doesn't hinge on another module staying
+ *  non-null. `smart-id` is absent on purpose: a custom smart process's entityTypeId is
+ *  portal-specific (from the mapping config, not a constant) — handled as `unsupported`
+ *  until the config slice lands. */
+const BY_ID_TARGET: Record<'invoice-id' | 'deal-id', { targetKind: AllocationTargetKind, entityTypeId: number }> = {
+  'invoice-id': { targetKind: 'invoice', entityTypeId: SMART_INVOICE_ENTITY_TYPE_ID },
+  'deal-id': { targetKind: 'deal', entityTypeId: DEAL_ENTITY_TYPE_ID }
 }
 
 const unsupported = (intent: RecognitionIntent, reason: string): IntentResolution =>
@@ -84,8 +92,7 @@ export async function resolveIntentCandidates(
     case 'deal-id': {
       // The recognized value IS the entity's own id; resolve it directly, scoped to
       // the company (the id comes from the payer-controlled purpose → IDOR re-check).
-      const entityTypeId = BY_ID_ENTITY_TYPE[intent.kind]!
-      const targetKind = intent.route.targetKind! // non-null for these kinds (invoice/deal)
+      const { targetKind, entityTypeId } = BY_ID_TARGET[intent.kind]
       const found = await deps.findCandidateById(targetKind, entityTypeId, intent.value, opts, call)
       return { ...base, status: 'resolved', candidates: found ? [found] : [] }
     }

@@ -441,12 +441,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       капстоуна): по распознанному `RecognitionIntent` (§4) вызывает нужный резолвер сущности и отдаёт `IntentResolution`
       (`status: 'resolved'|'unsupported'`, `candidates`, `reason`). Резолверы **инъектируются** (чистый роутинг тестируется
       без сети). Диспатчатся подтверждённые вживую стратегии: `invoice-number`→`findInvoicesByNumber`, `invoice-id`/`deal-id`→
-      `findCandidateById` (фикс `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`
+      `findCandidateById` (фиксированный `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`
       (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных стадий). Остальные — `unsupported` с `reason`
       (не роняем интент молча): `smart-id`/`deal-field`/`smart-field` (нужен `entityTypeId`/поле из «карты сопоставления»),
       `order-id`/`order-number` (#172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
-      Свитч по `kind` — exhaustive (новый вид не соберётся). Company-резолюция/загрузка стадий/проводка кандидатов —
-      **воркер-слайс** (там же решение идемпотентности #184).
+      Свитч по `kind` покрывает все виды; т.к. `server/**` пока вне `vue-tsc` (#187), исчерпываемость держит **тест**
+      (гоняет каждый `IdentifierKind` через диспетчер), а не компилятор. Company-резолюция/загрузка стадий/проводка
+      кандидатов — **воркер-слайс** (там же решение идемпотентности #184).
     Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **воркер-слайс
     проводки в `crm-sync`** — связать resolve-компании→`stageLoader`→`resolveIntentCandidates`→`resolveAllocation`→
     запись факта/дела, с идемпотентностью (#184) и fail-open-алертом (пока `onRecognized` только логирует намерение).

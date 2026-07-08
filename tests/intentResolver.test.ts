@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { routeIdentifier } from '~/utils/identifierDispatch'
+import { IDENTIFIER_ROUTES, routeIdentifier } from '~/utils/identifierDispatch'
 import type { IdentifierKind } from '~/utils/purposeMatch'
 import type { AllocationCandidate } from '~/utils/allocation'
 import type { IntentResolverDeps } from '../server/utils/intentResolver'
@@ -51,6 +51,13 @@ describe('resolveIntentCandidates — supported strategies', () => {
     expect(deps.findCandidateById).toHaveBeenCalledWith('deal', 2, '55', { companyId: '93', isNegativeStage: ctx.isNegativeStage }, call)
   })
 
+  it('invoice-number passes ALL found candidates through unchanged (no dedup/slice)', async () => {
+    const many = [inv({ id: '7' }), inv({ id: '8' }), inv({ id: '9' })]
+    const deps = fakeDeps({ invoices: many })
+    const r = await resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), ctx, call, deps)
+    expect(r.candidates).toEqual(many) // the dispatcher is a passthrough; ambiguity is resolveAllocation's job
+  })
+
   it('payment-number → company pool then exact accountNumber filter', async () => {
     const pool = [pay({ id: 'A', accountNumber: '1/1' }), pay({ id: 'B', accountNumber: '1/2' })]
     const deps = fakeDeps({ pool })
@@ -60,13 +67,27 @@ describe('resolveIntentCandidates — supported strategies', () => {
     expect(deps.findCompanyDealPayments).toHaveBeenCalledWith('93', { isNegativeStage: ctx.isNegativeStage }, call)
   })
 
-  it('propagates a REST error thrown by a resolver', async () => {
-    const deps = fakeDeps()
-    deps.findInvoicesByNumber = vi.fn(async () => {
+  it('payment-number with no accountNumber match → resolved with [] (not unsupported)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' })] })
+    const r = await resolveIntentCandidates(intent('payment-number', '9/9'), ctx, call, deps)
+    expect(r).toEqual({ kind: 'payment-number', value: '9/9', status: 'resolved', candidates: [] })
+  })
+
+  it('propagates a REST error from every resolved path (invoice-number / by-id / payment-number)', async () => {
+    const boom = () => vi.fn(async () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     })
-    await expect(resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), ctx, call, deps))
-      .rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+    const invDeps = fakeDeps()
+    invDeps.findInvoicesByNumber = boom()
+    await expect(resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), ctx, call, invDeps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+
+    const idDeps = fakeDeps()
+    idDeps.findCandidateById = boom()
+    await expect(resolveIntentCandidates(intent('deal-id', '55'), ctx, call, idDeps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+
+    const payDeps = fakeDeps()
+    payDeps.findCompanyDealPayments = boom()
+    await expect(resolveIntentCandidates(intent('payment-number', '1/1'), ctx, call, payDeps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
   })
 })
 
@@ -87,9 +108,37 @@ describe('resolveIntentCandidates — not-yet-dispatchable kinds', () => {
 })
 
 describe('resolveIntentCandidates — context threading', () => {
-  it('passes an undefined isNegativeStage through unchanged (no stage predicate)', async () => {
-    const deps = fakeDeps({ invoices: [] })
-    await resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), { companyId: '93' }, call, deps)
+  it('passes an undefined isNegativeStage through unchanged on every resolved path', async () => {
+    const deps = fakeDeps()
+    const noStage = { companyId: '93' }
+    await resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), noStage, call, deps)
+    await resolveIntentCandidates(intent('deal-id', '55'), noStage, call, deps)
+    await resolveIntentCandidates(intent('payment-number', '1/1'), noStage, call, deps)
     expect(deps.findInvoicesByNumber).toHaveBeenCalledWith('СЧ-1', { companyId: '93', isNegativeStage: undefined }, call)
+    expect(deps.findCandidateById).toHaveBeenCalledWith('deal', 2, '55', { companyId: '93', isNegativeStage: undefined }, call)
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledWith('93', { isNegativeStage: undefined }, call)
+  })
+})
+
+describe('resolveIntentCandidates — exhaustiveness & route alignment', () => {
+  const allKinds = Object.keys(IDENTIFIER_ROUTES) as IdentifierKind[]
+
+  it('handles EVERY IdentifierKind (a missing switch case → undefined resolution, caught here)', async () => {
+    // server/** is outside vue-tsc (#187), so this test — not the compiler — is what
+    // guarantees the switch stays exhaustive as new kinds are added.
+    const deps = fakeDeps({ invoices: [inv()], byId: inv(), pool: [pay()] })
+    for (const kind of allKinds) {
+      const r = await resolveIntentCandidates(intent(kind, 'X'), ctx, call, deps)
+      expect(r, `kind "${kind}" is unhandled by the switch`).toBeDefined()
+      expect(['resolved', 'unsupported']).toContain(r.status)
+      expect(r.kind).toBe(kind)
+    }
+  })
+
+  it('the dispatched kinds carry the strategy the route table declares (layers stay aligned)', () => {
+    expect(routeIdentifier('invoice-number').strategy).toBe('by-number')
+    expect(routeIdentifier('invoice-id').strategy).toBe('by-id')
+    expect(routeIdentifier('deal-id').strategy).toBe('by-id')
+    expect(routeIdentifier('payment-number').strategy).toBe('via-payment')
   })
 })
