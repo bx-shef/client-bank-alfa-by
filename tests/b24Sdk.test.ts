@@ -61,6 +61,12 @@ describe('oauthParamsFromToken', () => {
     expect(p.expiresIn).toBe(0)
     expect(p.scope).toBe('')
   })
+
+  it('trims the domain (no stray whitespace leaks into domain or clientEndpoint URL)', () => {
+    const p = oauthParamsFromToken(token({ domain: '  acme.bitrix24.com  ' }), { nowMs: 0 })
+    expect(p.domain).toBe('acme.bitrix24.com')
+    expect(p.clientEndpoint).toBe('https://acme.bitrix24.com/rest/')
+  })
 })
 
 describe('tokenFromOAuthParams', () => {
@@ -96,6 +102,13 @@ describe('makeSdkRestCall', () => {
   it('returns {} when getData is null/undefined (tolerant)', async () => {
     const { client } = fakeClient(ajax({ getData: () => null }))
     expect(await makeSdkRestCall(client)('x')).toEqual({})
+  })
+
+  it('passes getData through verbatim — does NOT validate the envelope shape', async () => {
+    // Documents the contract: the adapter is a thin transport, not a validator. Whatever
+    // the SDK hands back (even without a `result` key) reaches the lookup unchanged.
+    const { client } = fakeClient(ajax({ getData: () => ({ foo: 1 }) }))
+    expect(await makeSdkRestCall(client)('x')).toEqual({ foo: 1 })
   })
 
   it('throws the SDK error messages on failure (so the job fails → clean retry)', async () => {

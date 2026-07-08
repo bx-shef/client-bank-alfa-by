@@ -48,8 +48,8 @@ try {
   ok(`got ${items.length} invoice(s); envelope has .result → matches our RestCall shape`)
 
   head('2) batch — two lists in one request')
-  const batch = await b24.actions.v2.call.batchMake({
-    requests: [
+  const batch = await b24.actions.v2.batch.make({
+    calls: [
       { method: 'crm.item.list', params: { entityTypeId: 2, start: 0 } }, // deals
       { method: 'user.current', params: {} }
     ]

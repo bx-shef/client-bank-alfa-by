@@ -14,9 +14,15 @@
 // mapping/adapter logic unit-tests without loading the SDK, and nothing here runs SDK
 // code until the wiring site (worker / dev script) supplies a real client factory.
 
-import type { B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth } from '@bitrix24/b24jssdk'
+import type { B24OAuth, B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth } from '@bitrix24/b24jssdk'
 import type { RestCall } from './companyLookup'
 import type { PortalToken } from './tokenStore'
+
+// Type-drift guard (compile-time, zero runtime): the real `B24OAuth` must expose the
+// `actions` and `setCallbackRefreshAuth` members this adapter's structural `OAuthCallClient`
+// relies on. If a `@bitrix24/b24jssdk` minor/patch (Dependabot) renames/removes either,
+// `typecheck:server` fails here — instead of only surfacing on the live smoke-test.
+type _SdkShapeGuard = Pick<B24OAuth, 'actions' | 'setCallbackRefreshAuth'>
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
 const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
@@ -106,7 +112,11 @@ export interface SdkPortalDeps {
 /** Build a `RestCall` bound to one portal, backed by a per-portal `B24OAuth` instance
  *  (its own rate-limiter bucket) with refresh-persistence wired. `null` when the portal
  *  has no stored token — same contract as `makePortalRestCall`, so it's a drop-in swap
- *  for the crm-sync transport once verified on a live portal. */
+ *  for the crm-sync transport once verified on a live portal.
+ *  NB: unlike `makePortalRestCall` (which calls `ensureFresh` PROACTIVELY before the
+ *  first call), the SDK refreshes REACTIVELY — on the first `expired_token`/401 it
+ *  refreshes and retries, costing one extra round-trip on the first call after expiry.
+ *  Fine (the SDK handles it transparently), just not a pre-emptive refresh. */
 export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
   const token = await deps.loadToken(memberId)
   if (!token) return null
