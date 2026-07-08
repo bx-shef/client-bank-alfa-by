@@ -457,11 +457,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `order-id`/`order-number` (#172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
-      (гоняет каждый `IdentifierKind` через диспетчер). **Встроен в `crm-sync` (слайс 3):** `resolveIntents`-обёртка
-      воркера зовёт `resolveIntentCandidates` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`;
-      пока log/count без записи. Загрузка отрицательных стадий (`isNegativeStage`) и запись разнесения — следующий
-      под-слайс (там же идемпотентность #184).
-    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
+      (гоняет каждый `IdentifierKind` через диспетчер). **Батч-резолвер `resolveIntentsForOp(intents, ctx, call, deps)`**
+      резолвит все интенты одной операции, **тянет пул оплат один раз** (`findCompanyDealPayments` company-scoped и не
+      зависит от значения → не сканируем компанию на каждый `payment-number`, #191); общий `resolvePaymentNumber`-хелпер
+      у одиночного и батч-путей (нет дрейфа). **Встроен в `crm-sync` (слайс 3):** `resolveIntents`-обёртка воркера зовёт
+      `resolveIntentsForOp` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`; пока log/count без
+      записи. Загрузка отрицательных стадий (`isNegativeStage`) и запись разнесения — следующий под-слайс (там же
+      идемпотентность #184).
+    Осталось: **rate-limit/bounded-concurrency воркера + bind-`RestCall`-once на джобу + пагинация пула оплат** —
+    остаток #191 (пул оплат раз-на-op уже сделан; глобальный лимит нужен до реального опроса портала);
+    `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
     под-слайс проводки в `crm-sync`** — подключить `stageLoader` (отсев отрицательных стадий в `resolveIntents`) →
     `resolveAllocation` → запись факта/дела, с идемпотентностью (#184) и fail-open-алертом (сейчас `resolveIntents`
     только логирует кандидатов).
