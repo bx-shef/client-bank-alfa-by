@@ -81,8 +81,9 @@ export function liveHandlerDeps(): HandlerDeps {
     // yields null → the op is counted unmatched and nothing is written.
     // TODO stage 5 / #191 (before real volume flows): (1) add a REST rate limiter on the
     // crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
-    // lookups — a payment-number is a company-wide scan — + writeActivity 1 call per op, no
-    // batching → will hit B24 QUERY_LIMIT_EXCEEDED); (2) bind the per-portal RestCall ONCE
+    // lookups — the payment-number pool is now ONE company scan per op (#192), but it's still
+    // an unbatched, unpaginated scan — + writeActivity 1 call per op, no batching → will hit
+    // B24 QUERY_LIMIT_EXCEEDED under real volume); (2) bind the per-portal RestCall ONCE
     // per job instead of per-op (findCompany + resolveIntents + writeActivity each
     // re-load+refresh today).
     findCompany: async (item, memberId) => {
@@ -137,10 +138,11 @@ export function liveHandlerDeps(): HandlerDeps {
     // slice 3 — wiring the slice-2 dispatcher), scoped to the matched company. LOG/COUNT
     // only — nothing is written. No portal token → []. `isNegativeStage` is NOT loaded yet
     // (next sub-slice): candidates may include negative-stage entities — acceptable while
-    // nothing is written off them. N+1 REST per op with a recognized id (the handler caps
-    // the intent count; a payment-number is itself a company-wide scan) — see the
-    // rate-limit TODO above / #191. A REST error propagates (handler fails the job → clean
-    // retry), like findCompany.
+    // nothing is written off them. REST per op with a recognized id: the handler caps the
+    // intent count, and the payment-number pool is fetched once per op (#192, not per value)
+    // — but the pool scan itself is still unbatched/unpaginated; global rate-limit + bind-
+    // RestCall-once remain (see the TODO above / #191). A REST error propagates (handler
+    // fails the job → clean retry), like findCompany.
     resolveIntents: async (intents, companyId, memberId) => {
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return []

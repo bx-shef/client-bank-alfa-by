@@ -154,6 +154,17 @@ describe('resolveIntentsForOp — batch, pool fetched once (#191)', () => {
     expect(out.map(r => r.candidates.map(c => c.id))).toEqual([['A'], ['B']]) // each filtered by its own value
   })
 
+  it('filters each payment-number against the SHARED pool — a miss yields resolved []', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' })] }) // only 1/1 in the pool
+    const out = await resolveIntentsForOp(
+      [intent('payment-number', '1/1'), intent('payment-number', '9/9')], ctx, call, deps
+    )
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1)
+    expect(out.map(r => [r.status, r.candidates.map(c => c.id)])).toEqual([
+      ['resolved', ['A']], ['resolved', []] // hit vs miss, both resolved (not unsupported)
+    ])
+  })
+
   it('does NOT fetch the pool when no payment-number intent is present', async () => {
     const deps = fakeDeps({ invoices: [inv({ id: '7' })] })
     const out = await resolveIntentsForOp([intent('invoice-number', 'СЧ-1'), intent('deal-id', '5')], ctx, call, deps)

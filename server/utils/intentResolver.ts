@@ -9,6 +9,10 @@
 // `unsupported` with a reason (portal-specific entityTypeId/field or a live-verify
 // gate), so the caller can log coverage without silently dropping the intent.
 //
+// `resolveIntentCandidates` handles ONE intent. Callers processing a whole operation
+// should use the batch `resolveIntentsForOp` (bottom): it fetches the value-independent
+// payment-number pool AT MOST ONCE per op instead of once per value (#192/#191).
+//
 // The `switch (intent.kind)` below covers every `IdentifierKind` — exhaustive by
 // construction (no `default`, every case returns): a new kind added without a case
 // makes this function fall off the end and fails the server typecheck with TS2366
