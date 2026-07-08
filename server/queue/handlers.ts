@@ -10,7 +10,8 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
-import type { ChatSettings } from '../../app/utils/settings'
+import type { PortalSettings } from '../../app/utils/settings'
+import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
@@ -28,9 +29,15 @@ export interface HandlerDeps {
    *  (to remember for dedup), or `null` if nothing was written (e.g. no company
    *  matched, so there's no owner for a todo). */
   writeActivity: (item: StatementItem, companyId: string | null, memberId: string) => Promise<string | null>
-  /** Read the portal's chat settings (target + rules) from app.option, or null when
-   *  unset/unavailable. Resolved ONCE per crm-sync job, not per operation. */
-  getChatSettings: (memberId: string) => Promise<ChatSettings | null>
+  /** Read the portal's full settings blob (chat target + rules + recognition matrices)
+   *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
+   *  not per operation — one app.option read feeds both the chat and recognition steps. */
+  getPortalSettings: (memberId: string) => Promise<PortalSettings | null>
+  /** Observe the identifiers recognized in one operation's purpose + where they'd
+   *  route (§4 → #109 lookup). LOG-ONLY this slice: the REST lookup/allocation is a
+   *  later crm-sync slice, so this only records the intent for visibility. Called only
+   *  for ops with ≥1 recognized identifier. MUST NOT throw (pure observation). */
+  onRecognized: (item: StatementItem, intents: RecognitionIntent[], memberId: string) => void
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
    *  throw — it runs AFTER the activity is written+remembered, so a propagated error
@@ -102,14 +109,16 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *
  *  Counters: `processed` = unique ops in the batch; `skipped` = already written in
  *  a prior (redelivered) run; `created` = new activities written + remembered;
- *  `unmatched` = new ops where nothing was written (e.g. no company → no owner).
+ *  `unmatched` = new ops where nothing was written (e.g. no company → no owner);
+ *  `recognized` = unique ops where ≥1 identifier was recognized in the purpose (§4,
+ *  log-only this slice — does not yet drive allocation).
  *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, skipped: number, unmatched: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, skipped: number, unmatched: number, recognized: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -119,14 +128,36 @@ export async function handleCrmSyncJob(
     return true
   })
 
-  // Resolve chat settings ONCE per job (not per op) — else every operation would do a
-  // fresh app.option REST read. null ⇒ no target/unavailable ⇒ announcements skipped.
-  const chat = await deps.getChatSettings(job.memberId)
+  // Resolve the portal settings ONCE per job (not per op) — else every operation would
+  // do a fresh app.option REST read. One read feeds both chat (target + rules) and
+  // recognition (matrices). null ⇒ unavailable/not installed ⇒ chat + recognition off.
+  const settings = await deps.getPortalSettings(job.memberId)
+  const chat = settings?.chat ?? null
+  const recognition = settings?.recognition ?? null
 
   let created = 0
   let skipped = 0
   let unmatched = 0
+  let recognized = 0
   for (const item of unique) {
+    // Recognition intent (§4, #109): recognize identifiers in the purpose by the
+    // portal's matrices and route each. LOG-ONLY this slice — no REST lookup / no
+    // allocation yet. Runs for every unique op (pure + cheap) so recognition coverage
+    // is observable before the lookup slice drives writes off it. Independent of the
+    // dedup skip below: the intent is about the operation, not whether we wrote a todo.
+    // TODO (#184, next lookup slice): when onRecognized grows into a real REST lookup
+    // (invoice/deal/payment by the recognized id) it becomes NON-free per call. Then
+    // this must NOT stay unconditional before the dedup skip — either move it after the
+    // getActivityId skip, or make it idempotent via allocationFactStore (getAllocationFact
+    // before searching), so a redelivered/overlapping-window job doesn't re-query B24
+    // (same concern as the findCompany rate-limit TODO in worker.ts).
+    if (recognition) {
+      const intents = recognizePurposeIntents(item.purpose, recognition)
+      if (intents.length > 0) {
+        recognized++
+        deps.onRecognized(item, intents, job.memberId)
+      }
+    }
     const key = dedupKey(item)
     // Persistent dedup (#9): if this op already produced an activity in a prior
     // run of the (redelivered) job, don't create a second one.
@@ -164,5 +195,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, skipped, unmatched, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, skipped, unmatched, recognized, credits: credits.length, debits: debits.length }
 }

@@ -7,11 +7,12 @@ import {
   DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches
 } from '../server/queue/cron'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
-import type { ChatSettings } from '../app/utils/settings'
+import type { ChatSettings, PortalSettings, RecognitionSettings } from '../app/utils/settings'
+import type { RecognitionIntent } from '../app/utils/recognitionIntent'
 
-function item(docId: string, direction: 'credit' | 'debit' = 'credit'): StatementItem {
+function item(docId: string, direction: 'credit' | 'debit' = 'credit', purpose = 'p'): StatementItem {
   return {
-    account: 'A', docId, direction, amount: 10, currency: 'BYN', purpose: 'p',
+    account: 'A', docId, direction, amount: 10, currency: 'BYN', purpose,
     counterparty: { name: 'C', unp: '1', account: 'BY1' }, acceptDate: '2026-07-01T00:00:00.000Z'
   }
 }
@@ -23,8 +24,11 @@ interface FakeOpts {
   company?: string | null
   /** dedup keys already written (getActivityId returns a stored id for these). */
   alreadyWritten?: Set<string>
-  /** chat settings getChatSettings returns; default announces both directions. */
+  /** chat settings; default announces both directions. null ⇒ getPortalSettings
+   *  returns null (settings unavailable — chat AND recognition off). */
   chat?: ChatSettings | null
+  /** recognition settings; default = no matrices (recognition off). */
+  recognition?: RecognitionSettings
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -41,7 +45,10 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const chat = o.chat === undefined
     ? { dialogId: 'chat1', rules: { directions: ['credit', 'debit'] as const } }
     : o.chat
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], chatSettings: [] }
+  const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
+  // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
+  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat: { dialogId: '' }, recognition }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [] }
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
     parseFile: async () => batch,
@@ -55,9 +62,12 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.activity.push([it.docId, companyId, memberId, id])
       return id
     },
-    getChatSettings: async (memberId) => {
-      calls.chatSettings.push(memberId)
-      return chat
+    getPortalSettings: async (memberId) => {
+      calls.settings.push(memberId)
+      return settings
+    },
+    onRecognized: (it, intents: RecognitionIntent[], memberId) => {
+      calls.recognized.push([it.docId, intents.map(i => `${i.kind}:${i.value}:${i.route.strategy}`), memberId])
     },
     notifyChat: async (it, _dialogId, memberId) => {
       calls.chat.push([it.docId, memberId])
@@ -139,7 +149,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, skipped: 0, unmatched: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, skipped: 0, unmatched: 0, recognized: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     expect(calls.remember).toEqual([['A|d1', 'act-1'], ['A|d2', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
@@ -154,7 +164,7 @@ describe('handleCrmSyncJob', () => {
     expect(first).toMatchObject({ created: 2, skipped: 0, unmatched: 0 })
     // Redeliver the SAME job: everything is now remembered → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, skipped: 2, unmatched: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, skipped: 2, unmatched: 0, recognized: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -163,7 +173,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (persistent dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, skipped: 1, unmatched: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, skipped: 1, unmatched: 0, recognized: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -173,7 +183,7 @@ describe('handleCrmSyncJob', () => {
   it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, skipped: 0, unmatched: 2, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 0, skipped: 0, unmatched: 2, recognized: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written
     expect(calls.remember).toEqual([]) // so nothing remembered → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -188,15 +198,15 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, skipped: 1, unmatched: 1, credits: 2, debits: 1 })
+    expect(r).toEqual({ processed: 3, created: 1, skipped: 1, unmatched: 1, recognized: 0, credits: 2, debits: 1 })
     expect(calls.remember).toEqual([['A|d2', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
 
-  it('resolves chat settings ONCE per job, not per operation (#16 нюанс 1)', async () => {
+  it('resolves portal settings ONCE per job, not per operation (#16 нюанс 1)', async () => {
     const { deps, calls } = fakeDeps()
     await handleCrmSyncJob(job([item('d1'), item('d2'), item('d3')]), deps)
-    expect(calls.chatSettings).toEqual(['M']) // one read for the whole batch
+    expect(calls.settings).toEqual(['M']) // one read feeds chat + recognition for the batch
   })
 
   it('no announcement when no chat target is set (empty dialogId)', async () => {
@@ -227,6 +237,71 @@ describe('handleCrmSyncJob', () => {
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
     await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
     expect(pur.calls.chat).toEqual([])
+  })
+
+  // Recognition intent slice (§4, #109): recognize identifiers in the purpose by the
+  // portal's matrices and route each. LOG-ONLY — does not change created/unmatched.
+  const invoiceMatrix: RecognitionSettings = {
+    alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }]
+  }
+
+  it('recognizes an identifier and reports its routed intent (log-only)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.recognized).toBe(1)
+    expect(r).toMatchObject({ created: 1, unmatched: 0 }) // recognition does not alter the write path
+    expect(calls.recognized).toEqual([['d1', ['invoice-number:СЧ-1234:by-number'], 'M']])
+  })
+
+  it('does not recognize when no matrix matches → recognized 0, no intent reported', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'просто перевод без номера')]), deps)
+    expect(r.recognized).toBe(0)
+    expect(calls.recognized).toEqual([])
+  })
+
+  it('recognition off (no matrices) → never calls onRecognized', async () => {
+    const { deps, calls } = fakeDeps() // default recognition = empty matrices
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.recognized).toBe(0)
+    expect(calls.recognized).toEqual([])
+  })
+
+  it('settings unavailable (null) → recognition off too', async () => {
+    const { deps, calls } = fakeDeps({ chat: null })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.recognized).toBe(0)
+    expect(calls.recognized).toEqual([])
+  })
+
+  it('counts recognized per OPERATION, not per identifier (≥2 matches → recognized 1, one report)', async () => {
+    const twoKinds: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: {},
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }, { mask: 'Д-dd', kind: 'deal-id' }]
+    }
+    const { deps, calls } = fakeDeps({ recognition: twoKinds })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-1234 по сделке Д-77')]), deps)
+    expect(r.recognized).toBe(1) // one op, though two identifiers matched
+    expect(calls.recognized).toHaveLength(1) // onRecognized fired ONCE with both intents
+    expect((calls.recognized[0] as unknown[])[1]).toEqual([
+      'invoice-number:СЧ-1234:by-number', 'deal-id:Д-77:by-id'
+    ])
+  })
+
+  it('recognizes an unmatched op too (recognition is independent of company match)', async () => {
+    const { deps } = fakeDeps({ recognition: invoiceMatrix, company: null })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-1234')]), deps)
+    expect(r).toMatchObject({ unmatched: 1, created: 0, recognized: 1 })
+  })
+
+  it('reports intent for every unique op with a match, independent of the dedup skip', async () => {
+    // d1 already written (skip path) — recognition still runs on it (it's about the op).
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, alreadyWritten: new Set(['A|d1']) })
+    const r = await handleCrmSyncJob(job([
+      item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002')
+    ]), deps)
+    expect(r).toMatchObject({ skipped: 1, created: 1, recognized: 2 })
+    expect(calls.recognized.map(c => (c as unknown[])[0])).toEqual(['d1', 'd2'])
   })
 })
 

@@ -37,6 +37,10 @@ const portalRestDeps: PortalRestDeps = {
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+/** Strip control chars (incl. CR/LF) before interpolating an untrusted field into a
+ *  log line — blocks log-injection / forged log lines. Length-clamped as a DoS guard. */
+const logSafe = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 128)
+
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
  *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
@@ -91,20 +95,33 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return writeActivityViaRest(item, companyId, call)
     },
-    // Read the portal's chat settings (target + rules) from app.option ONCE per job
-    // (#16). portalRestDeps already satisfies AppSettingsDeps (loadToken/ensureFresh/
-    // callRest). Any error (portal not installed / REST) → null → announcements skip.
-    getChatSettings: async (memberId) => {
+    // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
+    // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
+    // recognition steps. portalRestDeps already satisfies AppSettingsDeps (loadToken/
+    // ensureFresh/callRest). Any error (portal not installed / REST) → null → chat +
+    // recognition off.
+    getPortalSettings: async (memberId) => {
       try {
-        return parsePortalSettings(await readAppSetting(portalRestDeps, memberId, SETTINGS_KEY)).chat
+        return parsePortalSettings(await readAppSetting(portalRestDeps, memberId, SETTINGS_KEY))
       } catch (e) {
-        // Portal genuinely not installed (e.g. demo memberId with no token) → no chat.
+        // Portal genuinely not installed (e.g. demo memberId with no token) → no settings.
         if (e instanceof PortalNotInstalledError) return null
-        // A TRANSIENT error (REST/refresh) must NOT silently disable chat for the whole
-        // batch: rethrow to fail the job BEFORE any activity is written (this runs before
-        // the loop) → clean retry recovers both the writes and the announcements.
+        // A TRANSIENT error (REST/refresh) must NOT silently disable chat/recognition for
+        // the whole batch: rethrow to fail the job BEFORE any activity is written (this
+        // runs before the loop) → clean retry recovers both the writes and announcements.
         throw e
       }
+    },
+    // Recognition intent (§4, #109) — LOG-ONLY this slice: record what was recognized in
+    // the purpose and where each identifier would route, so coverage is observable on the
+    // real portal before the lookup slice drives allocation. No REST, never throws.
+    // account/docId come from the parsed statement (a manual-import file is operator-
+    // supplied, not payer-controlled, but still untrusted) → strip control chars so a
+    // crafted value can't inject fake log lines. Recognized `value` is already safe
+    // (digits+mask literals, MAX_ID_CHARS-clamped).
+    onRecognized: (item, intents, memberId) => {
+      const summary = intents.map(i => `${i.kind}=${i.value}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
+      console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);

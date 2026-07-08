@@ -328,10 +328,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     - `handlers.ts` — **чистые обработчики с DI** (тесты): `handleEventJob` регистрирует
       (`savePortal`, ONAPPINSTALL) / удаляет (`deletePortal`, ONAPPUNINSTALL — всегда) портал;
       fetch/parse → нормализованный батч в `crm-sync`; `crm-sync` дедупит in-batch (`account|docId`),
-      затем **read-before-write** по персистентному стору (#9): `getActivityId`→skip уже записанных,
-      иначе `findCompany`→`writeActivity` (возвращает id дела)→`rememberActivity`→`notifyChat`; счётчики
-      `created/skipped/unmatched`. CRM-депсы берут `memberId` явно (депсы строятся один раз).
-      Транспорты (Альфа/Приор/парсер/REST-запись) — заглушки до стадий 3–6; стор дедупа уже живой.
+      читает `PortalSettings` **один раз на джобу** (`getPortalSettings` — один app.option-чтение кормит и
+      чат, и распознавание), затем **read-before-write** по персистентному стору (#9): `getActivityId`→skip
+      уже записанных, иначе `findCompany`→`writeActivity` (возвращает id дела)→`rememberActivity`→`notifyChat`;
+      счётчики `created/skipped/unmatched/recognized`. **Распознавание намерения (#109, §4, слайс 1 капстоуна):**
+      на каждую уникальную операцию — `recognizePurposeIntents` (чистый композит `recognizeByMatrices`→
+      `routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала → `onRecognized` **логирует
+      намерение** (что распознано + куда роутится). Пока **только лог** (без REST-lookup и записи разнесения);
+      живая нить через весь конвейер распознавания до проводки. CRM-депсы берут `memberId` явно (депсы строятся
+      один раз). Транспорты (Альфа/Приор/парсер/REST-запись) — заглушки до стадий 3–6; стор дедупа уже живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
       `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`
@@ -432,11 +437,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
       документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
       Scope `crm` (`crm.documentgenerator.*`).
-    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); проводка в
-    `crm-sync` (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом).
+    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **дальнейшие
+    слайсы проводки в `crm-sync`** — после распознавания намерения (слайс 1, готов) связать `stageLoader`→lookup'ы→
+    роутинг моста→`resolveAllocation`→запись факта/дела, с fail-open-алертом (пока `onRecognized` только логирует).
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber`, **хранение
-    матриц/карты в настройках** — **готовы**.
+    матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1: recognize→route→лог) — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
