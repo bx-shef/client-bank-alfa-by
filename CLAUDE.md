@@ -433,10 +433,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
       Scope `crm` (`crm.documentgenerator.*`).
     Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); проводка в
-    `crm-sync` (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в
-    настройках.
+    `crm-sync` (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом).
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
-    известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber` — **готовы**.
+    известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber`, **хранение
+    матриц/карты в настройках** — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
@@ -458,8 +458,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     по сохранённому токену без фрейма — для `scripts/check-app-option.sh`; наружу не открыта, nginx `deny all`).
     `settingsHandler` параметризован ключом `app.option` (дефолт — тест-ключ; чат-настройки — `SETTINGS_KEY`).
   - **Настройки чата (#16 PR-C) — фрейм-токеном под `SETTINGS_KEY`:** `server/api/chat-settings.get.ts`/
-    `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок**),
-    нормализуя через `parsePortalSettings` (никогда не пишем мусор); воркер читает тот же ключ/форму.
+    `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок** +
+    **`recognition`** — матрицы/алфавит/карта полей §4), нормализуя через `parsePortalSettings` (никогда не
+    пишем мусор); воркер читает тот же ключ/форму. Чистое ядро схемы — `app/utils/settings.ts`
+    (`PortalSettings`/`RecognitionSettings`, `parsePortalSettings` — защитный коэрс любого поля к дефолту,
+    не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по DoS-капам
+    `purposeMatch`). `recognition` предназначен для `recognizeByMatrices` (§4) — сама проводка (матрицы/
+    алфавит из настроек → распознавание) делается на этапе `crm-sync` (см. «Осталось» выше).
     Поиск чатов для пикера — `server/utils/chatSearch.ts` (чистое ядро над `RestCall`: `im.search.chat.list`
     для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
     `nextOffset`-курсор) + роут `server/api/chat-search.get.ts` (фрейм-токен). UI-пикер — `AsyncSearchSelect`

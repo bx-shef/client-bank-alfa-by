@@ -152,8 +152,10 @@
   `{entityTypeId, entityId}[]` + гард по `number`; вызывающий перебирает и рескоупит по компании; поля из офдоки,
   вживую не подтверждено — в seed 0 документов, live-verify — гейт wiring-PR) + **фильтр по номеру оплаты**
   `filterByAccountNumber` (`payment-number` → кандидат по `accountNumber` в company-пуле; оплата несёт свой
-  `accountNumber` `<заказ>/<seq>`). Осталось: `order-number`-матчинг (связь заказ↔оплата, live-verify — #172);
-  роутинг ref моста через `itemByIdLookup` (company-скоуп); проводка в `crm-sync`; хранение матриц/карты в настройках.
+  `accountNumber` `<заказ>/<seq>`) + **хранение матриц/карты в настройках** (`settings.ts` `RecognitionSettings`:
+  алфавит + матрицы + карта полей `deal-field`/`smart-field`, защитный коэрс, растёт без миграции ключа `app.option`).
+  Осталось: `order-number`-матчинг (связь заказ↔оплата, live-verify — #172); роутинг ref моста через
+  `itemByIdLookup` (company-скоуп); проводка в `crm-sync`.
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`
