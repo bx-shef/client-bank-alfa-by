@@ -153,9 +153,13 @@
   вживую не подтверждено — в seed 0 документов, live-verify — гейт wiring-PR) + **фильтр по номеру оплаты**
   `filterByAccountNumber` (`payment-number` → кандидат по `accountNumber` в company-пуле; оплата несёт свой
   `accountNumber` `<заказ>/<seq>`) + **хранение матриц/карты в настройках** (`settings.ts` `RecognitionSettings`:
-  алфавит + матрицы + карта полей `deal-field`/`smart-field`, защитный коэрс, растёт без миграции ключа `app.option`).
+  алфавит + матрицы + карта полей `deal-field`/`smart-field`, защитный коэрс, растёт без миграции ключа `app.option`) +
+  **распознавание намерения в `crm-sync`** (слайс 1 капстоуна: `recognitionIntent.ts` composes `recognizeByMatrices`→
+  `routeIdentifier`; `crm-sync` читает `PortalSettings` раз на джобу, на каждую операцию распознаёт по матрицам портала
+  и **логирует намерение** через `onRecognized` — счётчик `recognized`; пока только лог, без REST-lookup/записи).
   Осталось: `order-number`-матчинг (связь заказ↔оплата, live-verify — #172); роутинг ref моста через
-  `itemByIdLookup` (company-скоуп); проводка в `crm-sync`.
+  `itemByIdLookup` (company-скоуп); **дальнейшие слайсы проводки в `crm-sync`** (lookup→стадии→`resolveAllocation`→
+  запись факта/дела, fail-open-алерт).
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`
