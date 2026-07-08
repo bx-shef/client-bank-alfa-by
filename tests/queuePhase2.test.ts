@@ -9,6 +9,7 @@ import {
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
+import type { IntentResolution } from '../server/utils/intentResolver'
 
 function item(docId: string, direction: 'credit' | 'debit' = 'credit', purpose = 'p'): StatementItem {
   return {
@@ -29,6 +30,8 @@ interface FakeOpts {
   chat?: ChatSettings | null
   /** recognition settings; default = no matrices (recognition off). */
   recognition?: RecognitionSettings
+  /** what resolveIntents returns (one resolution per intent); default []. */
+  resolve?: IntentResolution[]
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -48,7 +51,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat: { dialogId: '' }, recognition }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [] }
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
     parseFile: async () => batch,
@@ -68,6 +71,13 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     },
     onRecognized: (it, intents: RecognitionIntent[], memberId) => {
       calls.recognized.push([it.docId, intents.map(i => `${i.kind}:${i.value}:${i.route.strategy}`), memberId])
+    },
+    resolveIntents: async (intents, companyId, memberId) => {
+      calls.resolve.push([companyId, intents.map(i => i.kind), memberId])
+      return o.resolve ?? []
+    },
+    onResolved: (it, resolutions, memberId) => {
+      calls.resolvedLog.push([it.docId, resolutions.map(r => `${r.kind}:${r.status}:${r.candidates.length}`), memberId])
     },
     notifyChat: async (it, _dialogId, memberId) => {
       calls.chat.push([it.docId, memberId])
@@ -149,7 +159,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, skipped: 0, unmatched: 0, recognized: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     expect(calls.remember).toEqual([['A|d1', 'act-1'], ['A|d2', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
@@ -164,7 +174,7 @@ describe('handleCrmSyncJob', () => {
     expect(first).toMatchObject({ created: 2, skipped: 0, unmatched: 0 })
     // Redeliver the SAME job: everything is now remembered → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, skipped: 2, unmatched: 0, recognized: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -173,7 +183,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (persistent dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, skipped: 1, unmatched: 0, recognized: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -183,7 +193,7 @@ describe('handleCrmSyncJob', () => {
   it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, skipped: 0, unmatched: 2, recognized: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written
     expect(calls.remember).toEqual([]) // so nothing remembered → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -198,7 +208,7 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, skipped: 1, unmatched: 1, recognized: 0, credits: 2, debits: 1 })
+    expect(r).toEqual({ processed: 3, created: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, credits: 2, debits: 1 })
     expect(calls.remember).toEqual([['A|d2', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
@@ -302,6 +312,50 @@ describe('handleCrmSyncJob', () => {
     ]), deps)
     expect(r).toMatchObject({ skipped: 1, created: 1, recognized: 2 })
     expect(calls.recognized.map(c => (c as unknown[])[0])).toEqual(['d1', 'd2'])
+  })
+
+  // Intent RESOLUTION slice (§4 → #109 lookup wired into crm-sync). LOG/COUNT only —
+  // no allocation written. Gated behind the dedup skip + a matched company.
+  const hit: IntentResolution[] = [
+    { kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved', candidates: [{ kind: 'invoice', id: '7', amount: 100, currency: 'BYN' }] }
+  ]
+
+  it('resolves recognized intents for a matched op (scoped to the company) and counts a hit', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ recognized: 1, resolved: 1, created: 1 })
+    expect(calls.resolve).toEqual([['CO', ['invoice-number'], 'M']]) // companyId + intent kinds
+    expect(calls.resolvedLog).toEqual([['d1', ['invoice-number:resolved:1'], 'M']])
+  })
+
+  it('does not increment resolved when no candidate is found (resolution ran, empty)', async () => {
+    const empty: IntentResolution[] = [{ kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved', candidates: [] }]
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: empty })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ recognized: 1, resolved: 0 })
+    expect(calls.resolve).toHaveLength(1) // still attempted
+    expect(calls.resolvedLog).toHaveLength(1)
+  })
+
+  it('does NOT resolve an unmatched op (no company → no IDOR scope)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, company: null })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ recognized: 1, resolved: 0, unmatched: 1 })
+    expect(calls.resolve).toEqual([]) // never called without a company
+  })
+
+  it('does NOT resolve an op skipped by persistent dedup (no re-query on redelivery)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, alreadyWritten: new Set(['A|d1']) })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ recognized: 1, resolved: 0, skipped: 1 })
+    expect(calls.resolve).toEqual([]) // skipped before findCompany/resolveIntents
+  })
+
+  it('does not resolve when recognition found nothing (no intents → no lookup)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'без номера')]), deps)
+    expect(r).toMatchObject({ recognized: 0, resolved: 0, created: 1 })
+    expect(calls.resolve).toEqual([])
   })
 })
 

@@ -331,12 +331,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       читает `PortalSettings` **один раз на джобу** (`getPortalSettings` — один app.option-чтение кормит и
       чат, и распознавание), затем **read-before-write** по персистентному стору (#9): `getActivityId`→skip
       уже записанных, иначе `findCompany`→`writeActivity` (возвращает id дела)→`rememberActivity`→`notifyChat`;
-      счётчики `created/skipped/unmatched/recognized`. **Распознавание намерения (#109, §4, слайс 1 капстоуна):**
-      на каждую уникальную операцию — `recognizePurposeIntents` (чистый композит `recognizeByMatrices`→
+      счётчики `created/skipped/unmatched/recognized/resolved`. **Распознавание намерения (#109, §4, слайс 1
+      капстоуна):** на каждую уникальную операцию — `recognizePurposeIntents` (чистый композит `recognizeByMatrices`→
       `routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала → `onRecognized` **логирует
-      намерение** (что распознано + куда роутится). Пока **только лог** (без REST-lookup и записи разнесения);
-      живая нить через весь конвейер распознавания до проводки. CRM-депсы берут `memberId` явно (депсы строятся
-      один раз). Транспорты (Альфа/Приор/парсер/REST-запись) — заглушки до стадий 3–6; стор дедупа уже живой.
+      намерение** (пред-скип, для покрытия). **Резолюция намерения в кандидаты (§4 lookup, слайс 3):** для
+      операции с найденной компанией и распознанным id — `resolveIntents` (воркерная обёртка над
+      `resolveIntentCandidates`) находит кандидатов на разнесение → `onResolved` **логирует**, счётчик `resolved`.
+      **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и только при совпавшей компании (IDOR-скоуп);
+      **пока log/count — без записи разнесения**; отсев отрицательных стадий (`isNegativeStage`) — следующий
+      под-слайс (кандидаты ещё не фильтруются по стадии — ок, ничего не пишется). CRM-депсы берут `memberId` явно
+      (депсы строятся один раз). Транспорты банков (Альфа/Приор/парсер) — заглушки до стадий 3–6; стор дедупа живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
       `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`
@@ -453,15 +457,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `order-id`/`order-number` (#172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
-      (гоняет каждый `IdentifierKind` через диспетчер). Company-резолюция/загрузка стадий/проводка кандидатов —
-      **воркер-слайс** (там же решение идемпотентности #184).
-    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **воркер-слайс
-    проводки в `crm-sync`** — связать resolve-компании→`stageLoader`→`resolveIntentCandidates`→`resolveAllocation`→
-    запись факта/дела, с идемпотентностью (#184) и fail-open-алертом (пока `onRecognized` только логирует намерение).
+      (гоняет каждый `IdentifierKind` через диспетчер). **Встроен в `crm-sync` (слайс 3):** `resolveIntents`-обёртка
+      воркера зовёт `resolveIntentCandidates` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`;
+      пока log/count без записи. Загрузка отрицательных стадий (`isNegativeStage`) и запись разнесения — следующий
+      под-слайс (там же идемпотентность #184).
+    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
+    под-слайс проводки в `crm-sync`** — подключить `stageLoader` (отсев отрицательных стадий в `resolveIntents`) →
+    `resolveAllocation` → запись факта/дела, с идемпотентностью (#184) и fail-open-алертом (сейчас `resolveIntents`
+    только логирует кандидатов).
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber`, **хранение
     матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1), **диспетчер intent→кандидаты**
-    (слайс 2: `intentResolver.ts`) — **готовы**.
+    (слайс 2: `intentResolver.ts`), **резолюция намерения в кандидаты в `crm-sync`** (слайс 3: `resolveIntents`/
+    `onResolved`, log/count) — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.

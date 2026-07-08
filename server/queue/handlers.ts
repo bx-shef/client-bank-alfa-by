@@ -12,6 +12,7 @@ import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
+import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
@@ -38,6 +39,16 @@ export interface HandlerDeps {
    *  later crm-sync slice, so this only records the intent for visibility. Called only
    *  for ops with ≥1 recognized identifier. MUST NOT throw (pure observation). */
   onRecognized: (item: StatementItem, intents: RecognitionIntent[], memberId: string) => void
+  /** Resolve recognized intents to allocation candidates via the entity lookups,
+   *  scoped to the payer `companyId` (IDOR). Called only for a matched-company op with
+   *  ≥1 recognized identifier (§4 → #109 lookup slice). LOG/COUNT only this slice — the
+   *  candidates are NOT yet written as an allocation. Returns one resolution per intent.
+   *  A REST error propagates (fail the job → clean retry), like findCompany. */
+  resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string) => Promise<IntentResolution[]>
+  /** Observe the candidates each recognized intent resolved to (log-only, for coverage
+   *  on real traffic before allocation is wired). Called once per resolved op. MUST NOT
+   *  throw (pure observation). */
+  onResolved: (item: StatementItem, resolutions: IntentResolution[], memberId: string) => void
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
    *  throw — it runs AFTER the activity is written+remembered, so a propagated error
@@ -110,15 +121,16 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  Counters: `processed` = unique ops in the batch; `skipped` = already written in
  *  a prior (redelivered) run; `created` = new activities written + remembered;
  *  `unmatched` = new ops where nothing was written (e.g. no company → no owner);
- *  `recognized` = unique ops where ≥1 identifier was recognized in the purpose (§4,
- *  log-only this slice — does not yet drive allocation).
+ *  `recognized` = unique ops where ≥1 identifier was recognized in the purpose (§4);
+ *  `resolved` = matched-company ops where ≥1 recognized intent found ≥1 allocation
+ *  candidate (§4 lookup — log/count only, does not yet write an allocation).
  *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, skipped: number, unmatched: number, recognized: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, skipped: number, unmatched: number, recognized: number, resolved: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -139,24 +151,17 @@ export async function handleCrmSyncJob(
   let skipped = 0
   let unmatched = 0
   let recognized = 0
+  let resolved = 0
   for (const item of unique) {
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
-    // portal's matrices and route each. LOG-ONLY this slice — no REST lookup / no
-    // allocation yet. Runs for every unique op (pure + cheap) so recognition coverage
-    // is observable before the lookup slice drives writes off it. Independent of the
-    // dedup skip below: the intent is about the operation, not whether we wrote a todo.
-    // TODO (#184, next lookup slice): when onRecognized grows into a real REST lookup
-    // (invoice/deal/payment by the recognized id) it becomes NON-free per call. Then
-    // this must NOT stay unconditional before the dedup skip — either move it after the
-    // getActivityId skip, or make it idempotent via allocationFactStore (getAllocationFact
-    // before searching), so a redelivered/overlapping-window job doesn't re-query B24
-    // (same concern as the findCompany rate-limit TODO in worker.ts).
-    if (recognition) {
-      const intents = recognizePurposeIntents(item.purpose, recognition)
-      if (intents.length > 0) {
-        recognized++
-        deps.onRecognized(item, intents, job.memberId)
-      }
+    // portal's matrices and route each. Pure + cheap → run for every unique op (even
+    // ones skipped below) so recognition COVERAGE is observable; the intent is about the
+    // operation, not whether we wrote a todo. The REST RESOLUTION of these intents is
+    // gated further down (behind the dedup skip + a matched company).
+    const intents = recognition ? recognizePurposeIntents(item.purpose, recognition) : []
+    if (intents.length > 0) {
+      recognized++
+      deps.onRecognized(item, intents, job.memberId)
     }
     const key = dedupKey(item)
     // Persistent dedup (#9): if this op already produced an activity in a prior
@@ -166,6 +171,19 @@ export async function handleCrmSyncJob(
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
+    // Intent resolution (§4 → #109 lookup, slice 2 wired here): resolve the recognized
+    // identifiers to allocation candidates via the entity lookups, scoped to the matched
+    // company. LOG/COUNT only — no allocation is written yet. GATED behind the dedup skip
+    // (a redelivered op is already `continue`d above, so no re-query) and a matched
+    // company (no company ⇒ no IDOR scope ⇒ nothing to look up). Stage filtering is the
+    // next sub-slice: candidates here are NOT stage-filtered, which is fine because
+    // nothing is written off them. NB: this adds REST calls on matched ops with a
+    // recognized id — see the rate-limit / bind-RestCall-once TODO in worker.ts.
+    if (companyId && intents.length > 0) {
+      const resolutions = await deps.resolveIntents(intents, companyId, job.memberId)
+      if (resolutions.some(r => r.candidates.length > 0)) resolved++
+      deps.onResolved(item, resolutions, job.memberId)
+    }
     const activityId = await deps.writeActivity(item, companyId, job.memberId)
     if (!activityId) {
       // No client company matched (or write skipped) → UNMATCHED: we do NOT write
@@ -195,5 +213,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, skipped, unmatched, recognized, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, skipped, unmatched, recognized, resolved, credits: credits.length, debits: debits.length }
 }

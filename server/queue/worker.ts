@@ -26,7 +26,14 @@ import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
+import { findInvoicesByNumber } from '../utils/invoiceLookup'
+import { findCandidateById } from '../utils/itemByIdLookup'
+import { findCompanyDealPayments } from '../utils/paymentLookup'
+import { resolveIntentCandidates, type IntentResolution, type IntentResolverDeps } from '../utils/intentResolver'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
+
+/** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
+const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCompanyDealPayments }
 
 /** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
 const portalRestDeps: PortalRestDeps = {
@@ -122,6 +129,28 @@ export function liveHandlerDeps(): HandlerDeps {
     onRecognized: (item, intents, memberId) => {
       const summary = intents.map(i => `${i.kind}=${i.value}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
       console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
+    },
+    // Resolve recognized intents to allocation candidates via the entity lookups (#109
+    // slice 2), scoped to the matched company. LOG/COUNT only — nothing is written. No
+    // portal token → []. `isNegativeStage` is NOT loaded yet (next sub-slice): candidates
+    // may include negative-stage entities — acceptable while nothing is written off them.
+    // N+1 REST per op with a recognized id — see the rate-limit TODO above (findCompany).
+    // A REST error propagates (handler fails the job → clean retry), like findCompany.
+    resolveIntents: async (intents, companyId, memberId) => {
+      const call = await makePortalRestCall(memberId, portalRestDeps)
+      if (!call) return []
+      const ctx = { companyId }
+      const out: IntentResolution[] = []
+      for (const intent of intents) {
+        out.push(await resolveIntentCandidates(intent, ctx, call, intentResolverDeps))
+      }
+      return out
+    },
+    // Observe what each intent resolved to (log-only coverage). account/docId sanitized
+    // (logSafe) like onRecognized; value/kind/status are safe internal data.
+    onResolved: (item, resolutions, memberId) => {
+      const summary = resolutions.map(r => `${r.kind}=${r.value}:${r.status}(${r.candidates.length})`).join(', ')
+      console.log(`[resolve] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
