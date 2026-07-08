@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-07
+> Last reviewed: 2026-07-08
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -137,15 +137,15 @@
   `allocationFactStore.ts` (таблица `allocation_fact`, `allocated`/`reverted`, write-once per `member_id`)
   + чистый **lookup смарт-счёта** `invoiceLookup.ts` (`crm.item.list` `entityTypeId=31` по номеру+компании,
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
-  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс И сделка** — `SMART_INVOICE_STAGE_<cat>`
-  и `DEAL_STAGE`/`DEAL_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
+  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс, сделка И смарт-процесс** —
+  `SMART_INVOICE_STAGE_<cat>`, `DEAL_STAGE`/`DEAL_STAGE_<cat>`, `DYNAMIC_<etid>_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
   компания с `isMyCompany='Y'`, §2 Этап C) + **резолвер цели по id** `itemByIdLookup.ts` (`findCandidateById` —
   `crm.item.list` фильтром id+компания = IDOR-скоуп, отсев отрицательной стадии; стратегия `by-id`:
   invoice-id/deal-id/smart-id — не order-id/payment-id, те `via-order`/`via-payment`) + **резолвер оплаты сделки**
   `paymentLookup.ts` (`findDealPayments` — `crm.item.payment.list` по **известной** сделке → кандидаты
   `deal-payment`; оплаченные не берём). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
-  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
+  `LOSE`/`APOLOGY`, смарт-процесс `DT1032_67:FAIL` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
   массив в `result`, `id`/`paid`/`sum`/`currency`) + **company-пул оплат** `findCompanyDealPayments` (сделки компании →
   их оплаты; IDOR-safe путь для `order-number`/`payment-number`, «сделка проксирует заказ») + **мост-документ**
   `documentLookup.ts` (`document-number` → `crm.documentgenerator.document.list` → **массив** привязанных сущностей

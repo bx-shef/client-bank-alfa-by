@@ -20,8 +20,7 @@ export const NEGATIVE_SEMANTICS_EXTRA = 'failure'
  * `SMART_INVOICE_STAGE_<categoryId>` (default invoice category is 11), whose
  * statuses are `DT31_<categoryId>:<code>`. Deals use a DIFFERENT form — see
  * `dealStageEntityId` (confirmed live: `DEAL_STAGE` / `DEAL_STAGE_<catId>`, NOT the
- * `DYNAMIC_…` shape). Genuine custom smart processes use `DYNAMIC_<entityTypeId>_STAGE_<catId>`
- * — add a builder for those when their target lookup lands (verify live too).
+ * `DYNAMIC_…` shape). Custom smart processes use `smartProcessStageEntityId`.
  */
 export function invoiceStageEntityId(categoryId: number | string): string {
   return `SMART_INVOICE_STAGE_${categoryId}`
@@ -35,6 +34,18 @@ export function invoiceStageEntityId(categoryId: number | string): string {
  */
 export function dealStageEntityId(categoryId: number | string): string {
   return `${categoryId}` === '0' ? 'DEAL_STAGE' : `DEAL_STAGE_${categoryId}`
+}
+
+/**
+ * Stage-directory `ENTITY_ID` for a custom SMART PROCESS category. Confirmed live:
+ * `DYNAMIC_<entityTypeId>_STAGE_<categoryId>` (statuses `DT<entityTypeId>_<categoryId>:<code>`,
+ * negative stage `…:FAIL` with `SEMANTICS='F'`). Unlike deals, there is NO bare form
+ * for the default pipeline — even a smart process «без направлений» has a real
+ * default category id (its own, not `0`), so ALWAYS pass the actual `categoryId`
+ * (from the item's `categoryId` / `crm.category.list`), never assume `0`.
+ */
+export function smartProcessStageEntityId(entityTypeId: number | string, categoryId: number | string): string {
+  return `DYNAMIC_${entityTypeId}_STAGE_${categoryId}`
 }
 
 interface RawStatus {
@@ -110,5 +121,17 @@ export async function loadDealNegativeStage(
   call: RestCall
 ): Promise<(stageId: string) => boolean> {
   const negative = await loadNegativeStages(dealStageEntityId(categoryId), call)
+  return makeIsNegativeStage(negative)
+}
+
+/** Convenience: load the negative-stage predicate for a custom SMART PROCESS
+ *  category (`entityTypeId` + `categoryId`) in one call. Same fail-open caveat as
+ *  `loadNegativeStages`. */
+export async function loadSmartProcessNegativeStage(
+  entityTypeId: number | string,
+  categoryId: number | string,
+  call: RestCall
+): Promise<(stageId: string) => boolean> {
+  const negative = await loadNegativeStages(smartProcessStageEntityId(entityTypeId, categoryId), call)
   return makeIsNegativeStage(negative)
 }
