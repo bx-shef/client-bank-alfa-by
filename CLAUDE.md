@@ -487,7 +487,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
-    (refresh при истечении), `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
+    (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
+    pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
+    N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; DI + тесты),
+    `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
     с DI — изоляция по `memberId`, используется серверной проверкой), `server/utils/settingsHandler.ts`
     (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
     UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)

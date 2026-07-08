@@ -56,7 +56,15 @@ let pool: Pool | undefined
 export function getPool(): Pool {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set')
   if (!pool) {
-    pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 })
+    // `max` gives headroom now that a token refresh holds a connection across the B24
+    // OAuth POST (see server/utils/dbLock.ts). `connectionTimeoutMillis` makes callers
+    // fail fast (retryable) instead of blocking forever if the pool is momentarily
+    // drained by concurrent refreshes — so one slow portal can't silently stall all DB work.
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: 10,
+      connectionTimeoutMillis: 10_000
+    })
     // Without an `error` listener, an error on an idle client (e.g. the DB drops
     // the connection) crashes the whole Node process. Log and keep serving.
     pool.on('error', err => console.error('[pg] idle client error:', err.message))
