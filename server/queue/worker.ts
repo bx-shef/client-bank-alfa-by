@@ -171,15 +171,21 @@ export function liveHandlerDeps(): HandlerDeps {
   }
 }
 
-/** Start one worker per queue. Returns them so the plugin can close on shutdown. */
-export function startWorkers(deps: HandlerDeps): Worker[] {
+/** Start one worker per queue. Returns them so the plugin can close on shutdown.
+ *  `concurrency` (default 1 = unchanged) applies to the throughput queues
+ *  (fetch/parse/crm-sync). Events stay at 1 — install/uninstall for one portal must
+ *  not process out of order. Scale-out = run this in N replicas (see runtime.ts). */
+export function startWorkers(deps: HandlerDeps, opts: { concurrency?: number } = {}): Worker[] {
   const connection = connectionOptions()
+  const concurrency = Math.max(1, opts.concurrency ?? 1)
   return [
     new Worker<EventJob>(Q_EVENTS, async job => handleEventJob(job.data, deps), { connection }),
     // TODO stage 5: once fetchStatement hits the real Alfa API (100 req/min), add a
     // limiter here — new Worker(..., { connection, limiter: { max: 100, duration: 60_000 } }).
-    new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection }),
-    new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection }),
-    new Worker<CrmSyncJob>(Q_CRM, async job => handleCrmSyncJob(job.data, deps), { connection })
+    // NB: with concurrency>1 on crm-sync, add a per-portal REST limiter first, or a
+    // big batch will hit B24 QUERY_LIMIT — batch (callBatch) is the real lever (docs/QUEUES.md).
+    new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection, concurrency }),
+    new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
+    new Worker<CrmSyncJob>(Q_CRM, async job => handleCrmSyncJob(job.data, deps), { connection, concurrency })
   ]
 }
