@@ -79,10 +79,12 @@ export function liveHandlerDeps(): HandlerDeps {
     // Find the CRM company by the counterparty's settlement account. Demo accounts
     // are GATED (never touch a real portal's REST); an unknown portal (no token)
     // yields null → the op is counted unmatched and nothing is written.
-    // TODO stage 5 (before real volume flows): (1) add a REST rate limiter on the
-    // crm-sync worker (findCompany ~2 calls + writeActivity 1 call per op, no batching
-    // → will hit B24 QUERY_LIMIT_EXCEEDED); (2) bind the per-portal RestCall ONCE per
-    // job instead of per-op (findCompany + writeActivity each re-load+refresh today).
+    // TODO stage 5 / #191 (before real volume flows): (1) add a REST rate limiter on the
+    // crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
+    // lookups — a payment-number is a company-wide scan — + writeActivity 1 call per op, no
+    // batching → will hit B24 QUERY_LIMIT_EXCEEDED); (2) bind the per-portal RestCall ONCE
+    // per job instead of per-op (findCompany + resolveIntents + writeActivity each
+    // re-load+refresh today).
     findCompany: async (item, memberId) => {
       // Demo ops: pause (so crm-sync shows a backlog too) then skip — never REST.
       if (isDemoAccount(item.account)) {
@@ -124,18 +126,21 @@ export function liveHandlerDeps(): HandlerDeps {
     // real portal before the lookup slice drives allocation. No REST, never throws.
     // account/docId come from the parsed statement (a manual-import file is operator-
     // supplied, not payer-controlled, but still untrusted) → strip control chars so a
-    // crafted value can't inject fake log lines. Recognized `value` is already safe
-    // (digits+mask literals, MAX_ID_CHARS-clamped).
+    // crafted value can't inject fake log lines. The recognized `value` is normally safe
+    // (digits+mask literals, MAX_ID_CHARS-clamped) but the mask literals come from
+    // app.option (admin-writable, not control-char filtered) → logSafe it too.
     onRecognized: (item, intents, memberId) => {
-      const summary = intents.map(i => `${i.kind}=${i.value}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
+      const summary = intents.map(i => `${i.kind}=${logSafe(i.value)}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
       console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Resolve recognized intents to allocation candidates via the entity lookups (#109
-    // slice 2), scoped to the matched company. LOG/COUNT only — nothing is written. No
-    // portal token → []. `isNegativeStage` is NOT loaded yet (next sub-slice): candidates
-    // may include negative-stage entities — acceptable while nothing is written off them.
-    // N+1 REST per op with a recognized id — see the rate-limit TODO above (findCompany).
-    // A REST error propagates (handler fails the job → clean retry), like findCompany.
+    // slice 3 — wiring the slice-2 dispatcher), scoped to the matched company. LOG/COUNT
+    // only — nothing is written. No portal token → []. `isNegativeStage` is NOT loaded yet
+    // (next sub-slice): candidates may include negative-stage entities — acceptable while
+    // nothing is written off them. N+1 REST per op with a recognized id (the handler caps
+    // the intent count; a payment-number is itself a company-wide scan) — see the
+    // rate-limit TODO above / #191. A REST error propagates (handler fails the job → clean
+    // retry), like findCompany.
     resolveIntents: async (intents, companyId, memberId) => {
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return []
@@ -146,10 +151,10 @@ export function liveHandlerDeps(): HandlerDeps {
       }
       return out
     },
-    // Observe what each intent resolved to (log-only coverage). account/docId sanitized
-    // (logSafe) like onRecognized; value/kind/status are safe internal data.
+    // Observe what each intent resolved to (log-only coverage). account/docId + value
+    // sanitized (logSafe) like onRecognized; kind/status are safe internal data.
     onResolved: (item, resolutions, memberId) => {
-      const summary = resolutions.map(r => `${r.kind}=${r.value}:${r.status}(${r.candidates.length})`).join(', ')
+      const summary = resolutions.map(r => `${r.kind}=${logSafe(r.value)}:${r.status}(${r.candidates.length})`).join(', ')
       console.log(`[resolve] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made

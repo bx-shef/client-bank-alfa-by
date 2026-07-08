@@ -15,6 +15,14 @@ import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
+/** Cap on how many recognized intents of ONE operation are sent to the REST resolver
+ *  (#191). The payment purpose is payer-controlled, and recognition dedupes only by
+ *  (kind,value) — a crafted purpose could yield many matches, each a REST lookup (a
+ *  `payment-number` even triggers a company-wide scan). A legit purpose references a
+ *  handful of ids at most, so 10 is generous; excess is dropped from resolution (the
+ *  `recognized` metric still counts the op). Deeper rate-limiting is tracked in #191. */
+const MAX_RESOLVED_INTENTS_PER_OP = 10
+
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
  *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's
  *  `memberId` explicitly — deps are built once in startWorkers(), not per-job, so
@@ -46,8 +54,9 @@ export interface HandlerDeps {
    *  A REST error propagates (fail the job → clean retry), like findCompany. */
   resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string) => Promise<IntentResolution[]>
   /** Observe the candidates each recognized intent resolved to (log-only, for coverage
-   *  on real traffic before allocation is wired). Called once per resolved op. MUST NOT
-   *  throw (pure observation). */
+   *  on real traffic before allocation is wired). Called once per matched-company op with
+   *  ≥1 recognized intent — whether or not any candidate was found (so it fires even when
+   *  the `resolved` counter does not). MUST NOT throw (pure observation). */
   onResolved: (item: StatementItem, resolutions: IntentResolution[], memberId: string) => void
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
@@ -171,16 +180,19 @@ export async function handleCrmSyncJob(
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
-    // Intent resolution (§4 → #109 lookup, slice 2 wired here): resolve the recognized
-    // identifiers to allocation candidates via the entity lookups, scoped to the matched
-    // company. LOG/COUNT only — no allocation is written yet. GATED behind the dedup skip
-    // (a redelivered op is already `continue`d above, so no re-query) and a matched
-    // company (no company ⇒ no IDOR scope ⇒ nothing to look up). Stage filtering is the
-    // next sub-slice: candidates here are NOT stage-filtered, which is fine because
-    // nothing is written off them. NB: this adds REST calls on matched ops with a
-    // recognized id — see the rate-limit / bind-RestCall-once TODO in worker.ts.
+    // Intent resolution (§4 → #109 lookup, slice 3 — wiring the slice-2 dispatcher into
+    // the worker): resolve the recognized identifiers to allocation candidates via the
+    // entity lookups, scoped to the matched company. LOG/COUNT only — no allocation is
+    // written yet. GATED behind the dedup skip (a redelivered op is already `continue`d
+    // above, so no re-query) and a matched company (no company ⇒ no IDOR scope ⇒ nothing
+    // to look up). Stage filtering is the next sub-slice: candidates here are NOT stage-
+    // filtered, so `resolved` can be slightly optimistic vs. the eventual written count —
+    // fine because nothing is written off them yet. The purpose is payer-controlled, so
+    // the number of intents actually sent to REST is capped (MAX_RESOLVED_INTENTS_PER_OP)
+    // to bound amplification (#191); the `recognized` metric still reflects all matches.
     if (companyId && intents.length > 0) {
-      const resolutions = await deps.resolveIntents(intents, companyId, job.memberId)
+      const toResolve = intents.slice(0, MAX_RESOLVED_INTENTS_PER_OP)
+      const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId)
       if (resolutions.some(r => r.candidates.length > 0)) resolved++
       deps.onResolved(item, resolutions, job.memberId)
     }

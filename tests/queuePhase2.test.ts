@@ -357,6 +357,42 @@ describe('handleCrmSyncJob', () => {
     expect(r).toMatchObject({ recognized: 0, resolved: 0, created: 1 })
     expect(calls.resolve).toEqual([])
   })
+
+  it('counts resolved ONCE per op even when several intents (or candidates) match', async () => {
+    // two intents, only one yields a candidate → resolved += 1 (per op, not per hit).
+    const mixed: IntentResolution[] = [
+      { kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved', candidates: [{ kind: 'invoice', id: '7', amount: 100, currency: 'BYN' }, { kind: 'invoice', id: '8', amount: 100, currency: 'BYN' }] },
+      { kind: 'deal-id', value: '55', status: 'resolved', candidates: [] }
+    ]
+    const twoKinds: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: {},
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }, { mask: 'Д-dd', kind: 'deal-id' }]
+    }
+    const { deps } = fakeDeps({ recognition: twoKinds, resolve: mixed })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001 по сделке Д-55')]), deps)
+    expect(r.recognized).toBe(1)
+    expect(r.resolved).toBe(1) // one op, though two intents + two candidates
+  })
+
+  it('caps the intents sent to REST at MAX_RESOLVED_INTENTS_PER_OP (payer-controlled purpose)', async () => {
+    // mask `dd` + a purpose with >10 distinct 2-digit numbers → >10 recognized intents.
+    const twoDigit: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'dd', kind: 'deal-id' }] }
+    const purpose = Array.from({ length: 20 }, (_, i) => String(10 + i)).join(' ') // 10..29 → 20 distinct
+    const { deps, calls } = fakeDeps({ recognition: twoDigit, resolve: [] })
+    await handleCrmSyncJob(job([item('d1', 'credit', purpose)]), deps)
+    const sentKinds = (calls.resolve[0] as unknown[])[1] as string[]
+    expect(sentKinds.length).toBe(10) // capped, though 20 were recognized
+  })
+
+  it('propagates a resolveIntents error (fails the job before writeActivity)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
+    deps.resolveIntents = async () => {
+      throw new Error('QUERY_LIMIT_EXCEEDED')
+    }
+    await expect(handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+    expect(calls.activity).toEqual([]) // never reached writeActivity for this op
+    expect(calls.remember).toEqual([])
+  })
 })
 
 describe('cron helpers', () => {
