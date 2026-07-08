@@ -39,7 +39,7 @@
 ```bash
 pnpm dev          # дев-сервер
 pnpm lint         # ESLint
-pnpm typecheck    # vue-tsc --noEmit
+pnpm typecheck    # vue-tsc --noEmit (app) + vue-tsc -p .nuxt/tsconfig.server.json (server/**)
 pnpm test         # Vitest (оба проекта; быстрый прогон node: pnpm test --project unit)
 pnpm generate     # сборка статики (nuxt generate, SSG) — то же гоняет CI
 ```
@@ -451,9 +451,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных стадий). Остальные — `unsupported` с `reason`
       (не роняем интент молча): `smart-id`/`deal-field`/`smart-field` (нужен `entityTypeId`/поле из «карты сопоставления»),
       `order-id`/`order-number` (#172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
-      Свитч по `kind` покрывает все виды; т.к. `server/**` пока вне `vue-tsc` (#187), исчерпываемость держит **тест**
-      (гоняет каждый `IdentifierKind` через диспетчер), а не компилятор. Company-резолюция/загрузка стадий/проводка
-      кандидатов — **воркер-слайс** (там же решение идемпотентности #184).
+      Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
+      пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
+      (гоняет каждый `IdentifierKind` через диспетчер). Company-резолюция/загрузка стадий/проводка кандидатов —
+      **воркер-слайс** (там же решение идемпотентности #184).
     Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **воркер-слайс
     проводки в `crm-sync`** — связать resolve-компании→`stageLoader`→`resolveIntentCandidates`→`resolveAllocation`→
     запись факта/дела, с идемпотентностью (#184) и fail-open-алертом (пока `onRecognized` только логирует намерение).
