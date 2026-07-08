@@ -145,6 +145,12 @@ export async function handleCrmSyncJob(
     // allocation yet. Runs for every unique op (pure + cheap) so recognition coverage
     // is observable before the lookup slice drives writes off it. Independent of the
     // dedup skip below: the intent is about the operation, not whether we wrote a todo.
+    // TODO (#184, next lookup slice): when onRecognized grows into a real REST lookup
+    // (invoice/deal/payment by the recognized id) it becomes NON-free per call. Then
+    // this must NOT stay unconditional before the dedup skip — either move it after the
+    // getActivityId skip, or make it idempotent via allocationFactStore (getAllocationFact
+    // before searching), so a redelivered/overlapping-window job doesn't re-query B24
+    // (same concern as the findCompany rate-limit TODO in worker.ts).
     if (recognition) {
       const intents = recognizePurposeIntents(item.purpose, recognition)
       if (intents.length > 0) {

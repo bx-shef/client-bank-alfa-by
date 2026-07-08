@@ -26,6 +26,10 @@ describe('recognizePurposeIntents', () => {
     expect(recognizePurposeIntents('перевод без номера', settings([{ mask: 'dddd', kind: 'invoice-number' }]))).toEqual([])
   })
 
+  it('returns [] for an empty purpose (boundary input)', () => {
+    expect(recognizePurposeIntents('', settings([{ mask: 'dddd', kind: 'invoice-number' }]))).toEqual([])
+  })
+
   it('routes each recognized kind to its distinct strategy (id vs number vs document)', () => {
     const out = recognizePurposeIntents(
       'сделка 77 документ ДОК-5',

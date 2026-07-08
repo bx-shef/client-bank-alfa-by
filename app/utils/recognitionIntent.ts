@@ -1,4 +1,4 @@
-import type { RecognizedId } from '~/utils/purposeMatch'
+import type { IdentifierKind } from '~/utils/purposeMatch'
 import { recognizeByMatrices } from '~/utils/purposeMatch'
 import type { IdentifierRoute } from '~/utils/identifierDispatch'
 import { routeIdentifier } from '~/utils/identifierDispatch'
@@ -12,7 +12,7 @@ import type { RecognitionSettings } from '~/utils/settings'
 
 /** A recognized identifier paired with its dispatch decision (§4 → #109 lookup). */
 export interface RecognitionIntent {
-  kind: RecognizedId['kind']
+  kind: IdentifierKind
   /** The extracted value — whole matched fragment incl. any mask literal prefix. */
   value: string
   /** Where this kind resolves (target + lookup strategy), from `identifierDispatch`. */

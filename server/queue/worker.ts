@@ -37,6 +37,10 @@ const portalRestDeps: PortalRestDeps = {
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+/** Strip control chars (incl. CR/LF) before interpolating an untrusted field into a
+ *  log line — blocks log-injection / forged log lines. Length-clamped as a DoS guard. */
+const logSafe = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 128)
+
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
  *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
@@ -111,9 +115,13 @@ export function liveHandlerDeps(): HandlerDeps {
     // Recognition intent (§4, #109) — LOG-ONLY this slice: record what was recognized in
     // the purpose and where each identifier would route, so coverage is observable on the
     // real portal before the lookup slice drives allocation. No REST, never throws.
+    // account/docId come from the parsed statement (a manual-import file is operator-
+    // supplied, not payer-controlled, but still untrusted) → strip control chars so a
+    // crafted value can't inject fake log lines. Recognized `value` is already safe
+    // (digits+mask literals, MAX_ID_CHARS-clamped).
     onRecognized: (item, intents, memberId) => {
       const summary = intents.map(i => `${i.kind}=${i.value}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
-      console.log(`[recognize] portal ${memberId}, op ${item.account}|${item.docId}: ${summary}`)
+      console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);

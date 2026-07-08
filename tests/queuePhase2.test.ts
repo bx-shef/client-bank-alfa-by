@@ -274,6 +274,26 @@ describe('handleCrmSyncJob', () => {
     expect(calls.recognized).toEqual([])
   })
 
+  it('counts recognized per OPERATION, not per identifier (≥2 matches → recognized 1, one report)', async () => {
+    const twoKinds: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: {},
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }, { mask: 'Д-dd', kind: 'deal-id' }]
+    }
+    const { deps, calls } = fakeDeps({ recognition: twoKinds })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-1234 по сделке Д-77')]), deps)
+    expect(r.recognized).toBe(1) // one op, though two identifiers matched
+    expect(calls.recognized).toHaveLength(1) // onRecognized fired ONCE with both intents
+    expect((calls.recognized[0] as unknown[])[1]).toEqual([
+      'invoice-number:СЧ-1234:by-number', 'deal-id:Д-77:by-id'
+    ])
+  })
+
+  it('recognizes an unmatched op too (recognition is independent of company match)', async () => {
+    const { deps } = fakeDeps({ recognition: invoiceMatrix, company: null })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-1234')]), deps)
+    expect(r).toMatchObject({ unmatched: 1, created: 0, recognized: 1 })
+  })
+
   it('reports intent for every unique op with a match, independent of the dedup skip', async () => {
     // d1 already written (skip path) — recognition still runs on it (it's about the op).
     const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, alreadyWritten: new Set(['A|d1']) })
