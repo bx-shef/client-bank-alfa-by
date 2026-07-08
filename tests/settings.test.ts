@@ -3,6 +3,7 @@ import {
   SETTINGS_KEY,
   defaultPortalSettings,
   defaultChatSettings,
+  defaultRecognitionSettings,
   parsePortalSettings,
   serializePortalSettings
 } from '~/utils/settings'
@@ -15,7 +16,13 @@ describe('defaults', () => {
     expect(defaultChatSettings()).toEqual({
       dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
     })
-    expect(defaultPortalSettings()).toEqual({ chat: defaultChatSettings(), errorChat: { dialogId: '' } })
+    expect(defaultPortalSettings()).toEqual({
+      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings()
+    })
+  })
+
+  it('default recognition = cyrillic alphabet, no matrices, empty field map', () => {
+    expect(defaultRecognitionSettings()).toEqual({ alphabet: 'cyrillic', matrices: [], configFields: {} })
   })
 
   it('storage key is versioned', () => {
@@ -42,7 +49,12 @@ describe('parsePortalSettings — defensive', () => {
         dialogId: 'chat2941',
         rules: { directions: ['credit', 'debit'] as const, excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'] }
       },
-      errorChat: { dialogId: 'chat77' }
+      errorChat: { dialogId: 'chat77' },
+      recognition: {
+        alphabet: 'latin' as const,
+        matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' as const, note: 'счёт' }],
+        configFields: { 'deal:1': 'UF_CRM_1' }
+      }
     }
     expect(parsePortalSettings(serializePortalSettings(s))).toEqual(s)
   })
@@ -51,7 +63,8 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings('{}')).toEqual(defaultPortalSettings())
     expect(parsePortalSettings('{"chat":{"dialogId":"chat7"}}')).toEqual({
       chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } },
-      errorChat: { dialogId: '' }
+      errorChat: { dialogId: '' },
+      recognition: defaultRecognitionSettings()
     })
   })
 
@@ -116,5 +129,78 @@ describe('parsePortalSettings — defensive', () => {
     const longEntry = 'y'.repeat(400)
     const r2 = parsePortalSettings(JSON.stringify({ chat: { rules: { excludePurposePatterns: [longEntry] } } })).chat.rules
     expect(r2.excludePurposePatterns![0]!.length).toBe(256)
+  })
+})
+
+describe('parsePortalSettings — recognition (§4)', () => {
+  const rec = (recognition: unknown) => parsePortalSettings(JSON.stringify({ recognition })).recognition
+
+  it('missing / non-object recognition → default', () => {
+    expect(parsePortalSettings('{}').recognition).toEqual(defaultRecognitionSettings())
+    expect(rec(42)).toEqual(defaultRecognitionSettings())
+    expect(rec(null)).toEqual(defaultRecognitionSettings())
+  })
+
+  it('alphabet: valid kept, unknown → cyrillic', () => {
+    expect(rec({ alphabet: 'latin' }).alphabet).toBe('latin')
+    expect(rec({ alphabet: 'greek' }).alphabet).toBe('cyrillic')
+    expect(rec({ alphabet: 42 }).alphabet).toBe('cyrillic')
+  })
+
+  it('matrices: keeps well-formed (mask + known kind), optional note', () => {
+    const r = rec({ matrices: [
+      { mask: 'dddd', kind: 'invoice-number' },
+      { mask: 'СЧ-dddd', kind: 'invoice-number', note: '  счёт  ' }
+    ] })
+    expect(r.matrices).toEqual([
+      { mask: 'dddd', kind: 'invoice-number' },
+      { mask: 'СЧ-dddd', kind: 'invoice-number', note: 'счёт' }
+    ])
+  })
+
+  it('matrices: drops entries with a blank mask or an unknown kind', () => {
+    const r = rec({ matrices: [
+      { mask: '', kind: 'invoice-number' },
+      { mask: '   ', kind: 'invoice-number' },
+      { mask: 'dddd', kind: 'not-a-kind' },
+      { mask: 'dddd' },
+      'garbage',
+      { mask: 'dddd', kind: 'deal-id' }
+    ] })
+    expect(r.matrices).toEqual([{ mask: 'dddd', kind: 'deal-id' }])
+  })
+
+  it('matrices: not-an-array → []', () => {
+    expect(rec({ matrices: 'nope' }).matrices).toEqual([])
+  })
+
+  it('matrices: mask clamped and count capped', () => {
+    const longMask = 'd'.repeat(500)
+    expect(rec({ matrices: [{ mask: longMask, kind: 'invoice-number' }] }).matrices[0]!.mask.length)
+      .toBeLessThan(longMask.length)
+    const many = Array.from({ length: 300 }, () => ({ mask: 'dddd', kind: 'invoice-number' }))
+    expect(rec({ matrices: many }).matrices.length).toBeLessThanOrEqual(200)
+  })
+
+  it('configFields: coerced to string→string, blanks dropped, keys/values trimmed', () => {
+    const r = rec({ configFields: { '  deal:1  ': '  UF_CRM_1  ', 'deal:2': '', 'blank': 42, '': 'x' } })
+    expect(r.configFields).toEqual({ 'deal:1': 'UF_CRM_1' })
+  })
+
+  it('configFields: non-object → {}', () => {
+    expect(rec({ configFields: ['a', 'b'] }).configFields).toEqual({})
+    expect(rec({ configFields: 'x' }).configFields).toEqual({})
+  })
+
+  it('configFields: key/value clamped and count capped', () => {
+    const longKey = 'k'.repeat(300)
+    const longVal = 'v'.repeat(300)
+    const r = rec({ configFields: { [longKey]: longVal } })
+    const [k, v] = Object.entries(r.configFields)[0]!
+    expect(k.length).toBeLessThanOrEqual(128)
+    expect(v.length).toBeLessThanOrEqual(128)
+    const many: Record<string, string> = {}
+    for (let i = 0; i < 300; i++) many[`k${i}`] = `v${i}`
+    expect(Object.keys(rec({ configFields: many }).configFields).length).toBeLessThanOrEqual(200)
   })
 })
