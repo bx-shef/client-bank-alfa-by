@@ -30,6 +30,10 @@ describe('needsRefresh', () => {
     expect(needsRefresh(tok({ expiresAt: FAR }), NOW)).toBe(false)
     expect(needsRefresh(tok({ expiresAt: NOW - 1 }), NOW)).toBe(true) // already expired
   })
+  it('is inclusive exactly at now+skew, false one ms past (the <= boundary)', () => {
+    expect(needsRefresh(tok({ expiresAt: NOW + 60_000 }), NOW)).toBe(true) // == now + default skew
+    expect(needsRefresh(tok({ expiresAt: NOW + 60_001 }), NOW)).toBe(false) // one ms outside
+  })
 })
 
 describe('ensureAccessToken', () => {
@@ -78,12 +82,22 @@ describe('ensureAccessToken', () => {
     expect(saveToken).not.toHaveBeenCalled()
   })
 
-  it('keeps the old refresh token when the response omits a new one', async () => {
+  it('keeps the old refresh token and domain when the response omits them', async () => {
     const near = tok({ expiresAt: NEAR })
     const { deps } = make(near, { access_token: 'A2', expires_in: 3600 })
     const out = await ensureAccessToken(near, deps)
     expect(out.accessToken).toBe('A2')
     expect(out.refreshToken).toBe('R') // unchanged
+    expect(out.domain).toBe('p.bitrix24.by') // no client_endpoint → keep stored domain
+  })
+
+  it('does not resurrect a portal uninstalled while we waited for the lock', async () => {
+    // The row was deleted between the pre-lock check and the in-lock re-read.
+    const { deps, postRefresh, saveToken } = make(null)
+    const out = await ensureAccessToken(tok({ expiresAt: NEAR }), deps)
+    expect(out.accessToken).toBe('A') // returns the passed token as-is
+    expect(postRefresh).not.toHaveBeenCalled()
+    expect(saveToken).not.toHaveBeenCalled() // no upsert → no resurrection
   })
 
   it('throws on a failed refresh (e.g. dead/invalid refresh token)', async () => {

@@ -36,11 +36,23 @@ const liveDeps: RefreshDeps = {
   withLock: withAdvisoryLock,
   loadToken: getToken,
   saveToken,
-  postRefresh: body => $fetch(B24_OAUTH_TOKEN_URL, {
-    method: 'POST',
-    body,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' }
-  })
+  postRefresh: (body) => {
+    // Cast $fetch to a plain signature to opt out of Nitro route-type inference —
+    // a dynamic (non-literal) URL makes it recurse over the route table and overflow
+    // the type checker (TS2321), same guard as server/utils/b24Rest.ts callRest.
+    const fetchJson = $fetch as unknown as (
+      url: string,
+      opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
+    ) => Promise<unknown>
+    return fetchJson(B24_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      body,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      // Bound the POST so a hung OAuth call can't hold the advisory lock + pooled
+      // connection indefinitely (the whole refresh runs inside the lock).
+      timeout: 15_000
+    })
+  }
 }
 
 /**
@@ -61,16 +73,21 @@ export async function ensureAccessToken(token: PortalToken, deps: RefreshDeps = 
 
   return deps.withLock(`b24refresh:${token.memberId}`, async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed while we waited.
-    const fresh = (await deps.loadToken(q, token.memberId)) ?? token
-    if (!needsRefresh(fresh, deps.now())) return fresh
+    const stored = await deps.loadToken(q, token.memberId)
+    // Portal uninstalled between the pre-lock check and acquiring the lock → its token
+    // row was deleted. Do NOT refresh+save: saveToken upserts and would RESURRECT the
+    // deleted portal. Return the passed token as-is; the downstream REST call will fail
+    // and the job won't persist anything to a portal that no longer exists.
+    if (!stored) return token
+    if (!needsRefresh(stored, deps.now())) return stored
 
-    const r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, fresh.refreshToken)))
+    const r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
     const updated: PortalToken = {
-      ...fresh,
+      ...stored,
       accessToken: r.accessToken,
-      refreshToken: r.refreshToken || fresh.refreshToken,
+      refreshToken: r.refreshToken || stored.refreshToken,
       expiresAt: deps.now() + r.expiresIn * 1000,
-      domain: hostFromEndpoint(r.clientEndpoint) ?? fresh.domain
+      domain: hostFromEndpoint(r.clientEndpoint) ?? stored.domain
     }
     await deps.saveToken(q, updated)
     return updated
