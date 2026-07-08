@@ -171,19 +171,29 @@ export function liveHandlerDeps(): HandlerDeps {
   }
 }
 
-/** Start one worker per queue. Returns them so the plugin can close on shutdown.
- *  `concurrency` (default 1 = unchanged) applies to the throughput queues
- *  (fetch/parse/crm-sync). Events stay at 1 — install/uninstall for one portal must
- *  not process out of order. Scale-out = run this in N replicas (see runtime.ts). */
-export function startWorkers(deps: HandlerDeps, opts: { concurrency?: number } = {}): Worker[] {
+/** The `b24-events` worker (install/uninstall). MUST run on a SINGLE instance: it
+ *  stays at concurrency 1 for per-portal ordering, but that only holds within ONE
+ *  process — so the plugin runs it on the primary (cron) instance, NEVER on scaled
+ *  worker replicas (else ONAPPINSTALL/ONAPPUNINSTALL for one portal could reorder
+ *  across replicas and leave a live token after an uninstall). */
+export function startEventWorker(deps: HandlerDeps): Worker {
+  return new Worker<EventJob>(Q_EVENTS, async job => handleEventJob(job.data, deps), { connection: connectionOptions() })
+}
+
+/** The throughput workers (fetch/parse/crm-sync) — safe to run on N scaled replicas
+ *  (Redis hands each job to exactly one). `concurrency` (default 1 = unchanged)
+ *  applies to all three.
+ *  ⚠ Raising crm-sync concurrency OR running >1 replica needs (a) a per-portal REST
+ *  limiter (else a big batch hits B24 `QUERY_LIMIT` — batch/`callBatch` is the real
+ *  lever) and (b) ATOMIC dedup (origin-marker in B24, #109/PROCESSING §1): the current
+ *  read-before-write is TOCTOU under parallelism and could double-write a dela. Until
+ *  then keep crm-sync effectively serial; fetch/parse scale freely. See docs/QUEUES.md. */
+export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: number } = {}): Worker[] {
   const connection = connectionOptions()
   const concurrency = Math.max(1, opts.concurrency ?? 1)
   return [
-    new Worker<EventJob>(Q_EVENTS, async job => handleEventJob(job.data, deps), { connection }),
     // TODO stage 5: once fetchStatement hits the real Alfa API (100 req/min), add a
     // limiter here — new Worker(..., { connection, limiter: { max: 100, duration: 60_000 } }).
-    // NB: with concurrency>1 on crm-sync, add a per-portal REST limiter first, or a
-    // big batch will hit B24 QUERY_LIMIT — batch (callBatch) is the real lever (docs/QUEUES.md).
     new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection, concurrency }),
     new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
     new Worker<CrmSyncJob>(Q_CRM, async job => handleCrmSyncJob(job.data, deps), { connection, concurrency })

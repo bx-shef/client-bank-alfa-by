@@ -10,7 +10,7 @@
 
 import type { Worker } from 'bullmq'
 import { closeQueues, queueEnabled } from '../queue/connection'
-import { liveHandlerDeps, startWorkers } from '../queue/worker'
+import { liveHandlerDeps, startEventWorker, startThroughputWorkers } from '../queue/worker'
 import { enqueueFetch } from '../queue/producers'
 import { buildDemoFetchJobs, demoTickMs } from '../queue/cron'
 import { queueRuntimeConfig } from '../queue/runtime'
@@ -18,19 +18,27 @@ import { queueRuntimeConfig } from '../queue/runtime'
 export default defineNitroPlugin((nitroApp) => {
   if (!queueEnabled()) return
   const role = queueRuntimeConfig()
+  // Deps are needed by any worker (throughput OR the event worker); build once.
+  const deps = (role.workers || role.cron) ? liveHandlerDeps() : null
+  const workers: Worker[] = []
 
-  let workers: Worker[] = []
-  if (role.workers) {
-    workers = startWorkers(liveHandlerDeps(), { concurrency: role.concurrency })
-    console.info('[queue] started %d workers (concurrency=%d)', workers.length, role.concurrency)
-  } else {
-    console.info('[queue] workers disabled (QUEUE_WORKERS=0) — jobs drained by worker containers')
+  if (role.workers && deps) {
+    workers.push(...startThroughputWorkers(deps, { concurrency: role.concurrency }))
+    console.info('[queue] throughput workers started (fetch/parse/crm-sync, concurrency=%d)', role.concurrency)
+  } else if (!role.workers) {
+    // Loud: this instance won't drain fetch/parse/crm-sync. A worker container MUST be
+    // running (docker-compose.prod.yml `worker`), else webhooks/imports pile up silently
+    // (Redis is up ⇒ enqueue succeeds ⇒ no sync fallback). See docs/QUEUES.md, DEPLOY.md.
+    console.warn('[queue] QUEUE_WORKERS=0 — this instance does NOT process fetch/parse/crm-sync; a worker container MUST be running or those queues never drain')
   }
 
   let timer: ReturnType<typeof setInterval> | undefined
-  // Cron runs on exactly ONE instance (QUEUE_CRON=1). Two schedulers would enqueue
-  // duplicate fetch jobs (demo uses per-tick ids that don't dedup).
-  if (role.cron) {
+  // Cron runs on exactly ONE instance (QUEUE_CRON=1) — two schedulers would enqueue
+  // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
+  // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
+  if (role.cron && deps) {
+    workers.push(startEventWorker(deps))
+    console.info('[queue] event worker + cron scheduler started (primary instance)')
     const demoN = Number(process.env.DEMO_LOAD_N || 0)
     // Demo cadence is SECONDS (DEMO_TICK_SEC, default 5) so the queues visibly "live"
     // on the chart — real polling stays on CRON_INTERVAL_MIN (minutes), but that path
@@ -54,7 +62,7 @@ export default defineNitroPlugin((nitroApp) => {
       void tick() // fire once at boot so the demo starts immediately
     }
   } else {
-    console.info('[queue] cron disabled (QUEUE_CRON=0) — scheduler runs on the primary instance')
+    console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
   }
 
   nitroApp.hooks.hook('close', async () => {

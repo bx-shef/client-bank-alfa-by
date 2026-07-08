@@ -83,9 +83,14 @@ services:
       DEMO_LOAD_N: ${DEMO_LOAD_N:-0}
       DEMO_TICK_SEC: ${DEMO_TICK_SEC:-5}
       DEMO_DELAY_MS: ${DEMO_DELAY_MS:-600}
-      # Queue role: this container serves the API + runs the cron scheduler, but does
-      # NOT process jobs — the queues are drained by the `worker` service below (scale
-      # it for throughput). RUN_MIGRATION stays on (default) so backend owns the schema.
+      # Queue role: this container serves the API + runs the cron scheduler + the single
+      # `b24-events` worker (install/uninstall — kept on one instance for ordering), but
+      # does NOT process fetch/parse/crm-sync — those are drained by the `worker` service
+      # below (scale it for throughput). RUN_MIGRATION stays on (default) so backend owns
+      # the schema. ⚠ With QUEUE_WORKERS=0, the `worker` service MUST be up — else webhooks
+      # /imports enqueue fine (Redis is up) and then sit undrained SILENTLY. Bring the WHOLE
+      # compose up (`docker compose -f docker-compose.prod.yml up -d`), don't hand-edit only
+      # this env; verify via /queues or scripts/queue-stats.sh after deploy.
       QUEUE_WORKERS: "0"
     # Liveness: hit the public /api/health endpoint (busybox wget ships in alpine).
     # Makes `docker compose ps` show backend health at a glance.
@@ -133,13 +138,21 @@ services:
       retries: 3
       start_period: 20s
     restart: unless-stopped
-    # Scale-out knob (compose v2 with --compatibility, or `--scale worker=N`).
+    # Give an in-flight crm-sync REST job time to finish on scale-down before SIGKILL
+    # (Docker default is 10s). A killed job is re-queued anyway (at-least-once + dedup),
+    # but draining cleanly avoids needless retries.
+    stop_grace_period: 30s
+    # Scale knob. NB: plain `docker compose up` IGNORES `deploy.replicas` (Swarm/
+    # `--compatibility` only) — the real knob is `docker compose up -d --scale worker=N`.
     deploy:
       replicas: 1
     depends_on:
       db:
         condition: service_healthy
-      # Wait for backend so its migration has created the schema before workers run.
+      # Start after backend (which owns the migration). NB: `service_started` fires when
+      # backend's process starts, NOT when its async migration finished — so a worker
+      # could briefly hit a not-yet-created table; BullMQ retry (attempts:3, backoff)
+      # covers that window against the idempotent CREATE TABLE IF NOT EXISTS.
       backend:
         condition: service_started
     networks:
