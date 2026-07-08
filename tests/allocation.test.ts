@@ -168,8 +168,11 @@ describe('filterByAccountNumber', () => {
     // «1» is an order number; payments are «1/1»/«1/2» — NOT an exact match here (#172).
     expect(filterByAccountNumber(pool, '1')).toEqual([])
   })
-  it('ignores candidates without an accountNumber', () => {
-    expect(filterByAccountNumber(pool, '').length).toBe(0)
+  it('returns ALL candidates sharing the number (filter, not find)', () => {
+    const dup = [pay({ id: 'A', accountNumber: '1/2' }), pay({ id: 'B', accountNumber: '1/2' }), pay({ id: 'C', accountNumber: '1/3' })]
+    expect(filterByAccountNumber(dup, '1/2').map(c => c.id)).toEqual(['A', 'B'])
+  })
+  it('ignores candidates that carry no accountNumber', () => {
     expect(filterByAccountNumber([pay({ id: 'P3' })], 'x')).toEqual([])
   })
 })
