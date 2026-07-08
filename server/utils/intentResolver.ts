@@ -99,6 +99,7 @@ export async function resolveIntentCandidates(
     }
     case 'payment-number': {
       // Company-scoped pool of deal payments, then the exact `accountNumber` match.
+      // NB: routed `'via-payment'` but this is by-number semantics — taxonomy note #189.
       const pool = await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
       return { ...base, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
     }

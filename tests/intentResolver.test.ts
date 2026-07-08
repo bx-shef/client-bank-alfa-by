@@ -124,8 +124,9 @@ describe('resolveIntentCandidates — exhaustiveness & route alignment', () => {
   const allKinds = Object.keys(IDENTIFIER_ROUTES) as IdentifierKind[]
 
   it('handles EVERY IdentifierKind (a missing switch case → undefined resolution, caught here)', async () => {
-    // server/** is outside vue-tsc (#187), so this test — not the compiler — is what
-    // guarantees the switch stays exhaustive as new kinds are added.
+    // server/** is now covered by vue-tsc (#187 fixed), so a missing case is a compile
+    // error (TS2366). This test is belt-and-suspenders — it catches an exhaustiveness
+    // regression at test time (and without a full typecheck run).
     const deps = fakeDeps({ invoices: [inv()], byId: inv(), pool: [pay()] })
     for (const kind of allKinds) {
       const r = await resolveIntentCandidates(intent(kind, 'X'), ctx, call, deps)
