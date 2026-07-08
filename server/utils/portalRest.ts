@@ -13,7 +13,9 @@ import type { PortalToken } from './tokenStore'
 export interface PortalRestDeps {
   loadToken: (memberId: string) => Promise<PortalToken | null>
   ensureFresh: (token: PortalToken) => Promise<PortalToken>
-  callRest: (host: string, accessToken: string, method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>
+  // `params` is optional to match the real `callRest` (which defaults it) — so a
+  // PortalRestDeps also satisfies AppSettingsDeps, whose callRest has optional params.
+  callRest: (host: string, accessToken: string, method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
 /** Build a RestCall bound to the portal `memberId`, or null if it has no token. */

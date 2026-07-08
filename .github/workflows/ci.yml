@@ -60,8 +60,9 @@ jobs:
 
       - name: Prepare Nuxt
         run: pnpm exec nuxi prepare
-        # Generates .nuxt/eslint.config.mjs and .nuxt/tsconfig.json that the
-        # lint / typecheck steps depend on.
+        # Generates .nuxt/eslint.config.mjs and the tsconfigs that lint / typecheck
+        # depend on — both .nuxt/tsconfig.json (app) and .nuxt/tsconfig.server.json
+        # (server/**, checked by the second vue-tsc pass in `pnpm typecheck`).
 
       - name: Lint
         run: pnpm lint

@@ -9,11 +9,12 @@
 // `unsupported` with a reason (portal-specific entityTypeId/field or a live-verify
 // gate), so the caller can log coverage without silently dropping the intent.
 //
-// The `switch (intent.kind)` below covers every `IdentifierKind`. NB: `server/**` is
-// currently outside the `vue-tsc` typecheck (#187), so a missing case would NOT be a
-// compile error here — exhaustiveness is instead enforced by a test that runs every
-// kind through this function (tests/intentResolver.test.ts). Once #187 lands the
-// compiler will gate it too and the test becomes belt-and-suspenders.
+// The `switch (intent.kind)` below covers every `IdentifierKind` — exhaustive by
+// construction (no `default`, every case returns): a new kind added without a case
+// makes this function fall off the end and fails the server typecheck with TS2366
+// ("Function lacks ending return statement"). `server/**` is now in the typecheck
+// (`typecheck:server`, #187 fixed), so the compiler gates this; a test that runs every
+// kind through the function (tests/intentResolver.test.ts) is the belt-and-suspenders.
 
 import type { RecognitionIntent } from '../../app/utils/recognitionIntent'
 import type { IdentifierKind } from '../../app/utils/purposeMatch'
@@ -98,6 +99,7 @@ export async function resolveIntentCandidates(
     }
     case 'payment-number': {
       // Company-scoped pool of deal payments, then the exact `accountNumber` match.
+      // NB: routed `'via-payment'` but this is by-number semantics — taxonomy note #189.
       const pool = await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
       return { ...base, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
     }
