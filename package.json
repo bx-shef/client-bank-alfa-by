@@ -30,6 +30,7 @@
     "parse:statement": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/parse-statement.ts",
     "fuzz:allocation": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/fuzz-allocation.ts",
     "seed:b24": "node scripts/seed-test-b24.mjs",
+    "sdk:test": "node scripts/b24-sdk-test.mjs",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {

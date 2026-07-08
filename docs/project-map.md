@@ -166,9 +166,10 @@
   **резолюция намерения в `crm-sync`** (слайс 3: `resolveIntents`-обёртка воркера зовёт батч-`resolveIntentsForOp`
   на матч-компанию, за dedup-skip; `onResolved` логирует кандидатов, счётчик `resolved`; пока log/count без записи;
   пул оплат тянется раз на операцию, кап `MAX_RESOLVED_INTENTS_PER_OP` — против амплификации N+1, #191).
-  Осталось: **остаток #191** (rate-limit/bounded-concurrency воркера + bind-`RestCall`-once + пагинация пула +
-  батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED` — до реального опроса портала; пул-раз-на-op уже
-  сделан; дизайн зафиксирован в `docs/QUEUES.md`); `order-number`-матчинг (связь заказ↔оплата, live-verify — #172);
+  Осталось: **остаток #191** — транспорт `crm-sync` на `@bitrix24/b24jssdk` (встроенный лимитер per-instance = пер-
+  портальный rate-limit + bind-once + auto-refresh; адаптер `server/utils/b24Sdk.ts` готов и покрыт тестами, свап
+  hot-path — после смоук-теста `pnpm sdk:test` на живом портале; пул-раз-на-op уже сделан; дизайн — `docs/QUEUES.md`);
+  `order-number`-матчинг (связь заказ↔оплата, live-verify — #172);
   роутинг ref моста через `itemByIdLookup` (company-скоуп); **следующий под-слайс проводки в `crm-sync`** (подключить
   `stageLoader` в `resolveIntents` → `resolveAllocation` → запись факта/дела, идемпотентность #184, fail-open-алерт).
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),

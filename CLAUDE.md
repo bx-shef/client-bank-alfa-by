@@ -381,6 +381,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     не найдена» → чат ошибок (§5).
   - `server/utils/portalRest.ts` — `makePortalRestCall(memberId, deps)`: связывает `RestCall` с порталом
     (загрузка токена → `ensureAccessToken` → `callRest` с домен+access). DI, тесты; `null` без токена.
+  - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
+    per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
+    задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
+    на джобу даёт сразу пер-портальный лимит **и** bind-`RestCall`-once. `oauthParamsFromToken` (наш `PortalToken`→
+    `B24OAuthParams`, сверено `typecheck:server` против реальных типов SDK), `makeSdkRestCall` (unwrap `getData()` —
+    контракт `{result,…}` тот же; throw на ошибке → джоба падает, чистый retry), `buildRefreshPersist`+
+    `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (DI, drop-in для
+    `makePortalRestCall`). SDK **инъектируется** (`buildClient`) — модуль SDK не грузит, тесты чистые. Свап транспорта
+    `crm-sync` — следующий PR после смоук-теста на живом портале (`pnpm sdk:test`); детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
@@ -537,6 +546,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     категориям + «просадки»). Детерминированно (seeded PRNG). Dev-only, охват демонстрационный (5 из 11
     `IdentifierKind`, один id на назначение); mock `classify()` — **черновик** будущей `crm-sync`-проводки,
     свериться при её появлении (#109). **CI-gate композиции** ядер — не скрипт, а `tests/allocationPipeline.test.ts`.
+  - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
+    строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
+    `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Гейт перед свапом
+    транспорта `crm-sync` на SDK (см. `server/utils/b24Sdk.ts`). Dev-only, не часть SSG; токен только в git-ignored `.env.b24test`.
   - `scripts/seed-test-b24.mjs` (`pnpm seed:b24` / `--list` / `--purge`) — **идемпотентный посев тестовых
     данных в живой тестовый портал Б24** для ручной проверки #109 (стадия 4/§2 `PROCESSING.md`): смарт-
     процессы (с направлениями / без — `entityTypeId` назначается автоматически, на подтверждённом
