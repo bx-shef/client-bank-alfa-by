@@ -41,11 +41,15 @@ describe('dealStageEntityId', () => {
 })
 
 describe('smartProcessStageEntityId', () => {
-  it('builds DYNAMIC_<entityTypeId>_STAGE_<categoryId> — ALWAYS with the real category id', () => {
+  it('builds DYNAMIC_<entityTypeId>_STAGE_<categoryId> (number or string args)', () => {
     expect(smartProcessStageEntityId(1032, 67)).toBe('DYNAMIC_1032_STAGE_67')
     expect(smartProcessStageEntityId('1030', '63')).toBe('DYNAMIC_1030_STAGE_63')
-    // even a «no-directions» smart process uses its real default category id, not 0
-    expect(smartProcessStageEntityId(1030, 63)).toBe('DYNAMIC_1030_STAGE_63')
+  })
+  it('has NO bare/0 special-case, unlike dealStageEntityId — category 0 is passed through', () => {
+    // dealStageEntityId(0) → 'DEAL_STAGE'; a smart process must NOT do that (a real
+    // category id is always required — even the «no-directions» default is non-zero).
+    expect(smartProcessStageEntityId(1032, 0)).toBe('DYNAMIC_1032_STAGE_0')
+    expect(smartProcessStageEntityId(1032, '0')).toBe('DYNAMIC_1032_STAGE_0')
   })
 })
 
@@ -161,5 +165,16 @@ describe('loadSmartProcessNegativeStage', () => {
     expect(isNeg('DT1032_67:SUCCESS')).toBe(false)
     expect(isNeg('DT1032_67:NEW')).toBe(false)
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DYNAMIC_1032_STAGE_67' } })
+  })
+  it('passes BOTH entityTypeId and categoryId into the ENTITY_ID (no hard-coded value)', async () => {
+    const call = vi.fn(async () => resp([{ STATUS_ID: 'DT1030_63:FAIL', SEMANTICS: 'F' }]))
+    const isNeg = await loadSmartProcessNegativeStage(1030, 63, call)
+    expect(isNeg('DT1030_63:FAIL')).toBe(true)
+    expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DYNAMIC_1030_STAGE_63' } })
+  })
+  it('also recognises the modern EXTRA.SEMANTICS="failure" shape on a smart-process row', async () => {
+    const call = vi.fn(async () => resp([{ STATUS_ID: 'DT1032_67:FAIL', EXTRA: { SEMANTICS: 'failure' } }]))
+    const isNeg = await loadSmartProcessNegativeStage(1032, 67, call)
+    expect(isNeg('DT1032_67:FAIL')).toBe(true)
   })
 })

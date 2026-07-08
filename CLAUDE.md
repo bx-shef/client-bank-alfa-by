@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-07
+> Last reviewed: 2026-07-08
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -431,9 +431,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       Scope `crm` (`crm.documentgenerator.*`).
     Осталось: точный фильтр `order-number`/`payment-number` по `accountNumber` в company-пуле; проводка в `crm-sync`
     (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в настройках.
-    Поиск моей
-    компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты известной сделки, company-пул
-    оплат, мост-документ — **готовы**.
+    Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
+    известной сделки, company-пул оплат, мост-документ — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.

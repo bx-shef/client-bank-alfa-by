@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-07
+> Last reviewed: 2026-07-08
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -145,7 +145,7 @@
   `paymentLookup.ts` (`findDealPayments` — `crm.item.payment.list` по **известной** сделке → кандидаты
   `deal-payment`; оплаченные не берём). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
-  `LOSE`/`APOLOGY` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
+  `LOSE`/`APOLOGY`, смарт-процесс `DT1032_67:FAIL` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
   массив в `result`, `id`/`paid`/`sum`/`currency`) + **company-пул оплат** `findCompanyDealPayments` (сделки компании →
   их оплаты; IDOR-safe путь для `order-number`/`payment-number`, «сделка проксирует заказ») + **мост-документ**
   `documentLookup.ts` (`document-number` → `crm.documentgenerator.document.list` → **массив** привязанных сущностей
