@@ -32,11 +32,28 @@ const MAX_CONFIG_FIELDS = 200
 const MAX_FIELD_LEN = 128
 
 const VALID_ALPHABETS: readonly Alphabet[] = ['cyrillic', 'latin']
-const IDENTIFIER_KINDS: readonly IdentifierKind[] = [
-  'invoice-number', 'invoice-id', 'deal-id', 'deal-field', 'order-id', 'order-number',
-  'payment-id', 'payment-number', 'smart-id', 'smart-field', 'document-number'
-]
-const IDENTIFIER_KIND_SET = new Set<string>(IDENTIFIER_KINDS)
+// Runtime allow-list of identifier kinds, kept in lock-step with the `IdentifierKind`
+// union by TYPE: a `Record<IdentifierKind, true>` forces every member to appear here —
+// a new kind added to `purposeMatch` won't compile until it's listed (mirrors the
+// exhaustive `IDENTIFIER_ROUTES` table in identifierDispatch.ts). Without this a missed
+// kind would be silently dropped by `cleanRecognition` instead of failing the build.
+const IDENTIFIER_KIND_TABLE: Record<IdentifierKind, true> = {
+  'invoice-number': true, 'invoice-id': true, 'deal-id': true, 'deal-field': true,
+  'order-id': true, 'order-number': true, 'payment-id': true, 'payment-number': true,
+  'smart-id': true, 'smart-field': true, 'document-number': true
+}
+const IDENTIFIER_KIND_SET = new Set<string>(Object.keys(IDENTIFIER_KIND_TABLE))
+
+// Keys that must never be written into a plain-object map built from untrusted JSON —
+// they would shadow/pollute the prototype chain. `configFields` skips them defensively
+// (JSON.parse + string-only values already make this safe, but the guard documents the
+// invariant so a future refactor to spread/Object.assign can't quietly open a hole).
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** Coerce an unknown to a trimmed, length-clamped string (empty for non-strings). */
+function clampStr(v: unknown, max: number): string {
+  return typeof v === 'string' ? v.trim().slice(0, max) : ''
+}
 
 /** Chat-notification settings: where to announce + which operations. */
 export interface ChatSettings {
@@ -132,27 +149,31 @@ function cleanDirections(v: unknown): OperationDirection[] {
  *  config-field map coerced to string→string, blanks dropped, clamped. */
 function cleanRecognition(v: unknown): RecognitionSettings {
   const obj = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
-  const alphabet = VALID_ALPHABETS.includes(obj.alphabet as Alphabet) ? obj.alphabet as Alphabet : 'cyrillic'
+  const alphabet: Alphabet = typeof obj.alphabet === 'string' && VALID_ALPHABETS.includes(obj.alphabet as Alphabet)
+    ? obj.alphabet as Alphabet
+    : 'cyrillic'
 
+  // Bound the iteration itself (not just the accepted count): an invalid-heavy array
+  // would otherwise be scanned in full. A legit config never exceeds the cap, so
+  // slicing to it first can't drop a genuine matrix.
   const matrices: MatchMatrix[] = []
   if (Array.isArray(obj.matrices)) {
-    for (const raw of obj.matrices) {
-      if (matrices.length >= MAX_MATRICES) break
+    for (const raw of obj.matrices.slice(0, MAX_MATRICES)) {
       const m = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-      const mask = typeof m.mask === 'string' ? m.mask.trim().slice(0, MAX_MASK_CHARS) : ''
-      if (!mask || !IDENTIFIER_KIND_SET.has(m.kind as string)) continue // both required
-      const note = typeof m.note === 'string' ? m.note.trim().slice(0, MAX_NOTE_LEN) : ''
-      matrices.push({ mask, kind: m.kind as IdentifierKind, ...(note ? { note } : {}) })
+      const mask = clampStr(m.mask, MAX_MASK_CHARS)
+      const kind = typeof m.kind === 'string' && IDENTIFIER_KIND_SET.has(m.kind) ? m.kind as IdentifierKind : null
+      if (!mask || !kind) continue // both required
+      const note = clampStr(m.note, MAX_NOTE_LEN)
+      matrices.push({ mask, kind, ...(note ? { note } : {}) })
     }
   }
 
   const configFields: Record<string, string> = {}
   if (obj.configFields && typeof obj.configFields === 'object' && !Array.isArray(obj.configFields)) {
-    for (const [k, val] of Object.entries(obj.configFields as Record<string, unknown>)) {
-      if (Object.keys(configFields).length >= MAX_CONFIG_FIELDS) break
-      const key = k.trim().slice(0, MAX_FIELD_LEN)
-      const field = typeof val === 'string' ? val.trim().slice(0, MAX_FIELD_LEN) : ''
-      if (key && field) configFields[key] = field // drop blank key or non-string/blank field
+    for (const [k, val] of Object.entries(obj.configFields as Record<string, unknown>).slice(0, MAX_CONFIG_FIELDS)) {
+      const key = clampStr(k, MAX_FIELD_LEN)
+      const field = clampStr(val, MAX_FIELD_LEN)
+      if (key && field && !UNSAFE_KEYS.has(key)) configFields[key] = field // drop blank/prototype-polluting key or blank field
     }
   }
 
@@ -192,14 +213,14 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
 
 /** Coerce a dialog id: trimmed, length-clamped string, else empty (non-string ⇒ off). */
 function cleanDialogId(v: unknown): string {
-  return typeof v === 'string' ? v.trim().slice(0, MAX_DIALOG_ID_LEN) : ''
+  return clampStr(v, MAX_DIALOG_ID_LEN)
 }
 
 /** Attach a cleaned `title` to a target only when non-empty AND the target has a
  *  dialog id (a title without an id is meaningless — no chat selected). Keeps the
  *  shape minimal (no `title` key when unset), so defaults/round-trips stay clean. */
 function withTitle<T extends { dialogId: string }>(raw: unknown, target: T): T {
-  const title = typeof raw === 'string' ? raw.trim().slice(0, MAX_ITEM_LEN) : ''
+  const title = clampStr(raw, MAX_ITEM_LEN)
   return title && target.dialogId ? { ...target, title } : target
 }
 

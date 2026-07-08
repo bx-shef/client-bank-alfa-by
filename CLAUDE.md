@@ -463,7 +463,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     пишем мусор); воркер читает тот же ключ/форму. Чистое ядро схемы — `app/utils/settings.ts`
     (`PortalSettings`/`RecognitionSettings`, `parsePortalSettings` — защитный коэрс любого поля к дефолту,
     не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по DoS-капам
-    `purposeMatch`). Воркер, читая `recognition`, кормит матрицы/алфавит в `recognizeByMatrices` (§4).
+    `purposeMatch`). `recognition` предназначен для `recognizeByMatrices` (§4) — сама проводка (матрицы/
+    алфавит из настроек → распознавание) делается на этапе `crm-sync` (см. «Осталось» выше).
     Поиск чатов для пикера — `server/utils/chatSearch.ts` (чистое ядро над `RestCall`: `im.search.chat.list`
     для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
     `nextOffset`-курсор) + роут `server/api/chat-search.get.ts` (фрейм-токен). UI-пикер — `AsyncSearchSelect`

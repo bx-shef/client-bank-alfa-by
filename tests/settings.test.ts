@@ -7,6 +7,11 @@ import {
   parsePortalSettings,
   serializePortalSettings
 } from '~/utils/settings'
+import { MAX_MASK_CHARS, MAX_MATRICES } from '~/utils/purposeMatch'
+
+// Field-map caps are private to settings.ts; assert the exact documented values.
+const MAX_FIELD_LEN = 128
+const MAX_CONFIG_FIELDS = 200
 
 // Pure per-portal settings schema (chat target + notify rules) stored as a JSON
 // string in app.option. parsePortalSettings must never throw on untyped input.
@@ -158,6 +163,18 @@ describe('parsePortalSettings — recognition (§4)', () => {
     ])
   })
 
+  it('matrices: note dropped when non-string or blank (shape stays minimal)', () => {
+    const r = rec({ matrices: [
+      { mask: 'dddd', kind: 'deal-id', note: 42 },
+      { mask: 'ddd', kind: 'deal-id', note: '   ' }
+    ] })
+    expect(r.matrices).toEqual([
+      { mask: 'dddd', kind: 'deal-id' },
+      { mask: 'ddd', kind: 'deal-id' }
+    ])
+    expect(r.matrices.every(m => !('note' in m))).toBe(true)
+  })
+
   it('matrices: drops entries with a blank mask or an unknown kind', () => {
     const r = rec({ matrices: [
       { mask: '', kind: 'invoice-number' },
@@ -174,12 +191,12 @@ describe('parsePortalSettings — recognition (§4)', () => {
     expect(rec({ matrices: 'nope' }).matrices).toEqual([])
   })
 
-  it('matrices: mask clamped and count capped', () => {
-    const longMask = 'd'.repeat(500)
+  it('matrices: mask clamped and count capped to the exact limits', () => {
+    const longMask = 'd'.repeat(MAX_MASK_CHARS + 400)
     expect(rec({ matrices: [{ mask: longMask, kind: 'invoice-number' }] }).matrices[0]!.mask.length)
-      .toBeLessThan(longMask.length)
-    const many = Array.from({ length: 300 }, () => ({ mask: 'dddd', kind: 'invoice-number' }))
-    expect(rec({ matrices: many }).matrices.length).toBeLessThanOrEqual(200)
+      .toBe(MAX_MASK_CHARS)
+    const many = Array.from({ length: MAX_MATRICES + 100 }, () => ({ mask: 'dddd', kind: 'invoice-number' }))
+    expect(rec({ matrices: many }).matrices.length).toBe(MAX_MATRICES)
   })
 
   it('configFields: coerced to string→string, blanks dropped, keys/values trimmed', () => {
@@ -192,15 +209,23 @@ describe('parsePortalSettings — recognition (§4)', () => {
     expect(rec({ configFields: 'x' }).configFields).toEqual({})
   })
 
-  it('configFields: key/value clamped and count capped', () => {
-    const longKey = 'k'.repeat(300)
-    const longVal = 'v'.repeat(300)
+  it('configFields: key/value clamped and count capped to the exact limits', () => {
+    const longKey = 'k'.repeat(MAX_FIELD_LEN + 200)
+    const longVal = 'v'.repeat(MAX_FIELD_LEN + 200)
     const r = rec({ configFields: { [longKey]: longVal } })
     const [k, v] = Object.entries(r.configFields)[0]!
-    expect(k.length).toBeLessThanOrEqual(128)
-    expect(v.length).toBeLessThanOrEqual(128)
+    expect(k.length).toBe(MAX_FIELD_LEN)
+    expect(v.length).toBe(MAX_FIELD_LEN)
     const many: Record<string, string> = {}
-    for (let i = 0; i < 300; i++) many[`k${i}`] = `v${i}`
-    expect(Object.keys(rec({ configFields: many }).configFields).length).toBeLessThanOrEqual(200)
+    for (let i = 0; i < MAX_CONFIG_FIELDS + 100; i++) many[`k${i}`] = `v${i}`
+    expect(Object.keys(rec({ configFields: many }).configFields).length).toBe(MAX_CONFIG_FIELDS)
+  })
+
+  it('configFields: prototype-polluting keys are dropped, plain object stays clean', () => {
+    const r = rec({ configFields: JSON.parse('{"__proto__":"UF_X","constructor":"UF_Y","prototype":"UF_Z","deal:1":"UF_OK"}') })
+    expect(r.configFields).toEqual({ 'deal:1': 'UF_OK' })
+    // the global prototype is untouched
+    expect(({} as Record<string, unknown>).UF_X).toBeUndefined()
+    expect(Object.prototype).not.toHaveProperty('UF_X')
   })
 })
