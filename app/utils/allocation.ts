@@ -40,6 +40,13 @@ export interface AllocationCandidate {
    *  recognised as ONE target (invoice preferred). Matching is by `dealId`, never
    *  by the record `id`. */
   dealId?: string
+  /** The entity's own human number, present when the pool was gathered WITHOUT a
+   *  number filter — a deal-payment from `findCompanyDealPayments` carries its
+   *  `crm.item.payment` `accountNumber` (e.g. «1/2»). Lets a recognized
+   *  `payment-number` be matched against the pool (`filterByAccountNumber`).
+   *  Absent for candidates already found BY number (invoices via
+   *  `findInvoicesByNumber`, where the query did the matching). */
+  accountNumber?: string
 }
 
 /** Input to the decision: the payment (from the statement) plus its candidates. */
@@ -107,6 +114,27 @@ export function collapseSameTarget(candidates: readonly AllocationCandidate[]): 
     kept.push(c)
   }
   return kept
+}
+
+/**
+ * Narrow a candidate pool to those whose `accountNumber` equals `accountNumber`
+ * (exact, trimmed). For resolving a recognized `payment-number` against the
+ * company deal-payment pool (`findCompanyDealPayments`), whose candidates were
+ * gathered BY COMPANY, not by number. A blank number matches nothing (`[]`) —
+ * an empty recognized number must not sweep the whole pool.
+ *
+ * NB (`order-number`): a payment's `accountNumber` is order-prefixed («<order>/<seq>»,
+ * e.g. «1/2»), so an `order-number` does NOT match a payment here exactly — that
+ * needs the order↔payment relationship confirmed live before matching by prefix
+ * (PROCESSING.md §4, #172). This helper is for exact numbers (`payment-number`).
+ */
+export function filterByAccountNumber(
+  candidates: readonly AllocationCandidate[],
+  accountNumber: string
+): AllocationCandidate[] {
+  const n = accountNumber.trim()
+  if (!n) return []
+  return candidates.filter(c => (c.accountNumber ?? '').trim() === n)
 }
 
 /** Compare CRM ids numerically when both are numeric, else lexicographically —

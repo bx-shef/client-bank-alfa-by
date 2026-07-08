@@ -218,8 +218,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `allocate`; несколько → `allocate` на **минимальный ID** с флагом `ambiguous` (вызывающий шлёт
     оповещение в чат). `collapseSameTarget` схлопывает только заведомо одну цель (инвойс поверх оплаты той
     же сделки по `parentId`; буквальный повтор `kind`+`id`) — разные сущности одной суммы остаются
-    раздельными (→ `ambiguous`). `allocationFactKey` — идемпотентный ключ факта «платёж→сущность». Без I/O;
-    REST-поиск инвойса/оплаты (+ фильтр стадии) и проводка в `crm-sync` — следующий слайс.
+    раздельными (→ `ambiguous`). `allocationFactKey` — идемпотентный ключ факта «платёж→сущность».
+    `filterByAccountNumber(candidates, number)` — точный отбор кандидата по `accountNumber` (для распознанного
+    `payment-number` в company-пуле оплат, собранном по компании, а не по номеру; пустой номер → `[]`, не сметает
+    пул). `order-number` так не матчится: `accountNumber` оплаты имеет форму `<заказ>/<seq>` — нужен связь-нюанс,
+    подтверждённый вживую (#172). Без I/O; проводка в `crm-sync` — следующий слайс.
   - `app/utils/purposeMatch.ts` — **чистое распознавание идентификатора из назначения платежа по МАТРИЦАМ**
     (#109, спека — `docs/PROCESSING.md` §4): `recognizeByMatrices(purpose, matrices, alphabet)` — матрица
     (`MatchMatrix { mask, kind }`) описывает формат номера маской (`d`=цифра, остальное — литерал: буквы/
@@ -429,10 +432,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
       документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
       Scope `crm` (`crm.documentgenerator.*`).
-    Осталось: точный фильтр `order-number`/`payment-number` по `accountNumber` в company-пуле; проводка в `crm-sync`
-    (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в настройках.
+    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); проводка в
+    `crm-sync` (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в
+    настройках.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
-    известной сделки, company-пул оплат, мост-документ — **готовы**.
+    известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber` — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.

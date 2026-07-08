@@ -55,6 +55,7 @@ export function paymentListParams(dealId: number, entityTypeId: number = DEAL_EN
 
 interface RawPayment {
   id?: unknown
+  accountNumber?: unknown
   paid?: unknown
   sum?: unknown
   currency?: unknown
@@ -100,7 +101,18 @@ export async function findDealPayments(
     if (!Number.isFinite(amount)) continue
     const paymentId = p.id === undefined || p.id === null ? '' : String(p.id)
     if (!paymentId) continue
-    out.push({ kind: 'deal-payment', id: paymentId, amount, currency: String(p.currency ?? ''), dealId: id })
+    // The payment's own `accountNumber` («<order>/<seq>», e.g. «1/2») — carried so a
+    // recognized `payment-number` can be matched against a company-gathered pool
+    // (`filterByAccountNumber`); omitted when absent to keep the field optional.
+    const accountNumber = String(p.accountNumber ?? '').trim()
+    out.push({
+      kind: 'deal-payment',
+      id: paymentId,
+      amount,
+      currency: String(p.currency ?? ''),
+      dealId: id,
+      ...(accountNumber ? { accountNumber } : {})
+    })
   }
   return out
 }
@@ -150,9 +162,10 @@ export function extractDealRows(resp: Record<string, unknown>): RawDeal[] {
  *   categories, but a `stageLoader` predicate is built per-category (`DEAL_STAGE_<cat>`,
  *   stage ids carry a `C<cat>:` prefix). Pass a UNION of the negative stages of the
  *   company's deal categories, else a lost deal in another funnel slips into the pool.
- * - number-matching is NOT possible yet: `findDealPayments` does not thread the
- *   payment `accountNumber` into `AllocationCandidate`, so only amount+currency
- *   matching works here. Threading `accountNumber` is the remaining #172 step.
+ * - `payment-number` matching: each candidate carries its payment `accountNumber`
+ *   («<order>/<seq>»), so a recognized `payment-number` matches via
+ *   `filterByAccountNumber` (allocation.ts). `order-number` still needs the
+ *   order↔payment relationship confirmed live before matching by prefix (#172).
  * - COST is N+1 (one `crm.item.list` + one `crm.item.payment.list` per deal), and
  *   `crm.item.payment.list` CANNOT be batched (`ERROR_BATCH_METHOD_NOT_ALLOWED`) —
  *   so bound it with rate-limit-aware concurrency (≈2 rps classic REST, §8), not a batch.
