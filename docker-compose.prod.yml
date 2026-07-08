@@ -83,6 +83,15 @@ services:
       DEMO_LOAD_N: ${DEMO_LOAD_N:-0}
       DEMO_TICK_SEC: ${DEMO_TICK_SEC:-5}
       DEMO_DELAY_MS: ${DEMO_DELAY_MS:-600}
+      # Queue role: this container serves the API + runs the cron scheduler + the single
+      # `b24-events` worker (install/uninstall — kept on one instance for ordering), but
+      # does NOT process fetch/parse/crm-sync — those are drained by the `worker` service
+      # below (scale it for throughput). RUN_MIGRATION stays on (default) so backend owns
+      # the schema. ⚠ With QUEUE_WORKERS=0, the `worker` service MUST be up — else webhooks
+      # /imports enqueue fine (Redis is up) and then sit undrained SILENTLY. Bring the WHOLE
+      # compose up (`docker compose -f docker-compose.prod.yml up -d`), don't hand-edit only
+      # this env; verify via /queues or scripts/queue-stats.sh after deploy.
+      QUEUE_WORKERS: "0"
     # Liveness: hit the public /api/health endpoint (busybox wget ships in alpine).
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:
@@ -99,6 +108,57 @@ services:
       - internal   # reached by app's /api proxy + outbound to B24/Alfa
       - dbnet       # to reach Postgres
       - queuenet    # to reach Redis (BullMQ)
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Worker — drains the BullMQ queues (events/fetch/parse/crm-sync). Same image as
+  # backend, but role = worker-only: QUEUE_CRON=0 (cron runs on backend) and
+  # RUN_MIGRATION=0 (schema owned by backend). No container_name / no ports so it can
+  # be scaled: `docker compose up -d --scale worker=N` (or bump `deploy.replicas`).
+  # All replicas pull from the same Redis — each job goes to exactly one worker, so
+  # adding replicas adds throughput (see docs/QUEUES.md «Масштабирование»).
+  worker:
+    image: ghcr.io/bx-shef/client-bank-alfa-by-backend:latest
+    environment:
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
+      B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      B24_CLIENT_ID: ${B24_CLIENT_ID:-}
+      B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
+      REDIS_URL: redis://redis:6379
+      # Role: process jobs, don't schedule, don't migrate.
+      QUEUE_CRON: "0"
+      RUN_MIGRATION: "0"
+      # Per-worker parallelism for fetch/parse/crm-sync (default 1). Raise with care:
+      # crm-sync is REST-bound and B24 limits are per-portal — batch first (docs/QUEUES.md).
+      QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-1}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    # Give an in-flight crm-sync REST job time to finish on scale-down before SIGKILL
+    # (Docker default is 10s). A killed job is re-queued anyway (at-least-once + dedup),
+    # but draining cleanly avoids needless retries.
+    stop_grace_period: 30s
+    # Scale knob. NB: plain `docker compose up` IGNORES `deploy.replicas` (Swarm/
+    # `--compatibility` only) — the real knob is `docker compose up -d --scale worker=N`.
+    deploy:
+      replicas: 1
+    depends_on:
+      db:
+        condition: service_healthy
+      # Start after backend (which owns the migration). NB: `service_started` fires when
+      # backend's process starts, NOT when its async migration finished — so a worker
+      # could briefly hit a not-yet-created table; BullMQ retry (attempts:3, backoff)
+      # covers that window against the idempotent CREATE TABLE IF NOT EXISTS.
+      backend:
+        condition: service_started
+    networks:
+      - internal   # outbound to B24/Alfa for REST writes
+      - dbnet      # Postgres (token store, dedup)
+      - queuenet   # Redis (BullMQ)
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 

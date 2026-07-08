@@ -346,9 +346,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `isDemoAccount`; каденция `demoTickMs` — секунды, пауза обработки `demoDelayMs` — чтобы очереди
       были видимы на графике). Для демо-счётов в `worker.ts` `fetchStatement`/`findCompany` держат
       `DEMO_DELAY_MS`-паузу (реальные джобы не тормозятся) → на графике виден backlog.
-    - `server/plugins/queue.ts` — на старте backend поднимает воркеры **в процессе** и (если
-      `DEMO_LOAD_N>0`) крон каждые `DEMO_TICK_SEC` секунд кладёт синтетические fetch-джобы (демо потока).
-      Масштаб-аут (отдельный воркер-контейнер) — следующий шаг (см. REFACTOR_PLAN).
+    - `server/plugins/queue.ts` — на старте поднимает воркеры и/или крон **по роли** (чистый парсер
+      `server/queue/runtime.ts` `queueRuntimeConfig`: `QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`,
+      покрыт тестами). Один образ — три роли: одиночный контейнер (дефолт — всё вместе), HTTP/primary
+      (`QUEUE_WORKERS=0` — API+крон), **worker** (`QUEUE_CRON=0`+`RUN_MIGRATION=0`, масштабируется).
+      **Scale-out сделан:** `docker-compose.prod.yml` разводит роли — `backend` (HTTP+крон) + сервис
+      `worker` (обработка, `--scale worker=N`); все воркеры на одном Redis тянут из одной очереди (Redis
+      отдаёт джоб ровно одному). Крон — ровно на одном инстансе; миграцию гоняет только backend
+      (`RUN_MIGRATION`). `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
+      (события всегда 1). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
     - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
       DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
       **только заголовком** `X-Check-Token` (без `?token=` в логах), nginx `deny all`, для консоли
