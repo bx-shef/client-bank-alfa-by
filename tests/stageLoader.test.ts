@@ -6,7 +6,9 @@ import {
   loadDealNegativeStage,
   loadInvoiceNegativeStage,
   loadNegativeStages,
-  makeIsNegativeStage
+  loadSmartProcessNegativeStage,
+  makeIsNegativeStage,
+  smartProcessStageEntityId
 } from '../server/utils/stageLoader'
 
 // Stage loader (#109). Field names confirmed live (crm.status.list on a Smart
@@ -35,6 +37,15 @@ describe('dealStageEntityId', () => {
   it('uses DEAL_STAGE_<categoryId> for other pipelines', () => {
     expect(dealStageEntityId(5)).toBe('DEAL_STAGE_5')
     expect(dealStageEntityId('9')).toBe('DEAL_STAGE_9')
+  })
+})
+
+describe('smartProcessStageEntityId', () => {
+  it('builds DYNAMIC_<entityTypeId>_STAGE_<categoryId> — ALWAYS with the real category id', () => {
+    expect(smartProcessStageEntityId(1032, 67)).toBe('DYNAMIC_1032_STAGE_67')
+    expect(smartProcessStageEntityId('1030', '63')).toBe('DYNAMIC_1030_STAGE_63')
+    // even a «no-directions» smart process uses its real default category id, not 0
+    expect(smartProcessStageEntityId(1030, 63)).toBe('DYNAMIC_1030_STAGE_63')
   })
 })
 
@@ -133,5 +144,22 @@ describe('loadDealNegativeStage', () => {
     const call = vi.fn(async () => resp(dealRows))
     await loadDealNegativeStage(5, call)
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DEAL_STAGE_5' } })
+  })
+})
+
+describe('loadSmartProcessNegativeStage', () => {
+  // Confirmed live (crm.status.list DYNAMIC_1032_STAGE_67): DT1032_67:FAIL → SEMANTICS='F'.
+  const smartRows = [
+    { STATUS_ID: 'DT1032_67:NEW', SEMANTICS: null },
+    { STATUS_ID: 'DT1032_67:SUCCESS', SEMANTICS: 'S' },
+    { STATUS_ID: 'DT1032_67:FAIL', SEMANTICS: 'F' }
+  ]
+  it('loads the predicate for a smart-process category via DYNAMIC_<etid>_STAGE_<cat>', async () => {
+    const call = vi.fn(async () => resp(smartRows))
+    const isNeg = await loadSmartProcessNegativeStage(1032, 67, call)
+    expect(isNeg('DT1032_67:FAIL')).toBe(true)
+    expect(isNeg('DT1032_67:SUCCESS')).toBe(false)
+    expect(isNeg('DT1032_67:NEW')).toBe(false)
+    expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DYNAMIC_1032_STAGE_67' } })
   })
 })

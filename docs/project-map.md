@@ -137,8 +137,8 @@
   `allocationFactStore.ts` (таблица `allocation_fact`, `allocated`/`reverted`, write-once per `member_id`)
   + чистый **lookup смарт-счёта** `invoiceLookup.ts` (`crm.item.list` `entityTypeId=31` по номеру+компании,
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
-  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс И сделка** — `SMART_INVOICE_STAGE_<cat>`
-  и `DEAL_STAGE`/`DEAL_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
+  → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс, сделка И смарт-процесс** —
+  `SMART_INVOICE_STAGE_<cat>`, `DEAL_STAGE`/`DEAL_STAGE_<cat>`, `DYNAMIC_<etid>_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
   компания с `isMyCompany='Y'`, §2 Этап C) + **резолвер цели по id** `itemByIdLookup.ts` (`findCandidateById` —
   `crm.item.list` фильтром id+компания = IDOR-скоуп, отсев отрицательной стадии; стратегия `by-id`:
   invoice-id/deal-id/smart-id — не order-id/payment-id, те `via-order`/`via-payment`) + **резолвер оплаты сделки**

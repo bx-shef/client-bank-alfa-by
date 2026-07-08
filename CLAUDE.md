@@ -378,12 +378,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       допускает откат. Удаление приложения чистит и его. Тесты на fake-query.
     - `server/utils/stageLoader.ts` — чистый **loader «отрицательных» стадий** (DI над `RestCall`, тесты):
       `loadNegativeStages(stageEntityId, call)` — `crm.status.list` → множество `STATUS_ID` с `SEMANTICS='F'`;
-      билдеры `ENTITY_ID`: `invoiceStageEntityId(catId)` (`SMART_INVOICE_STAGE_<catId>`) и `dealStageEntityId(catId)`
-      (`DEAL_STAGE` для воронки 0 / `DEAL_STAGE_<catId>` — **не** `DYNAMIC_…`, подтверждено вживую); `makeIsNegativeStage(set)`
-      строит предикат, который принимает `findInvoicesByNumber` (раньше инъектировался «снаружи»);
-      `loadInvoiceNegativeStage`/`loadDealNegativeStage` — loader+предикат одним вызовом. Читает **оба** формата
-      семантики (легаси верхний `SEMANTICS='F'` — он и на живом портале; и современный `EXTRA.SEMANTICS='failure'`).
-      **Подтверждено вживую**: инвойс «Не оплачен» `DT31_11:D`; сделка `LOSE`/`APOLOGY` = `SEMANTICS='F'`. ⚠ **fail-open**:
+      билдеры `ENTITY_ID`: `invoiceStageEntityId(catId)` (`SMART_INVOICE_STAGE_<catId>`), `dealStageEntityId(catId)`
+      (`DEAL_STAGE` для воронки 0 / `DEAL_STAGE_<catId>` — **не** `DYNAMIC_…`, подтверждено вживую) и
+      `smartProcessStageEntityId(etid, catId)` (**кастомный смарт-процесс** — `DYNAMIC_<etid>_STAGE_<catId>`, стадии
+      `DT<etid>_<cat>:FAIL`=`SEMANTICS='F'`; **всегда** реальный id категории — даже СП «без направлений» имеет свою
+      дефолт-категорию, не `0`; подтверждено вживую на `DYNAMIC_1032_STAGE_67` и `DYNAMIC_1030_STAGE_63`);
+      `makeIsNegativeStage(set)` строит предикат, который принимает `findInvoicesByNumber` (раньше инъектировался
+      «снаружи»); `loadInvoiceNegativeStage`/`loadDealNegativeStage`/`loadSmartProcessNegativeStage` — loader+предикат
+      одним вызовом. Читает **оба** формата семантики (легаси верхний `SEMANTICS='F'` — он и на живом портале; и
+      современный `EXTRA.SEMANTICS='failure'`).
+      **Подтверждено вживую**: инвойс «Не оплачен» `DT31_11:D`; сделка `LOSE`/`APOLOGY`; смарт-процесс `DT1032_67:FAIL` = `SEMANTICS='F'`. ⚠ **fail-open**:
       пустое множество = «ничего не отрицательно» (неотличимо от битого запроса) — на проводке в `crm-sync` алертить,
       если для известной категории пусто.
     - `server/utils/itemByIdLookup.ts` — чистый **резолвер цели по id** `findCandidateById(kind, entityTypeId, id,
@@ -425,10 +429,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
       документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
       Scope `crm` (`crm.documentgenerator.*`).
-    Осталось: точный фильтр `order-number`/`payment-number` по `accountNumber` в company-пуле; кастомные
-    смарт-процессы — стадии через `DYNAMIC_<etid>_STAGE_<cat>`, свой builder; проводка в `crm-sync` (там же связать
-    `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в настройках. Поиск моей
-    компании, стадии инвойса/сделки, резолв по id (invoice/deal/smart-process), оплаты известной сделки, company-пул
+    Осталось: точный фильтр `order-number`/`payment-number` по `accountNumber` в company-пуле; проводка в `crm-sync`
+    (там же связать `stageLoader`→lookup'ы→роутинг моста, с fail-open-алертом); хранение матриц/карты в настройках.
+    Поиск моей
+    компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты известной сделки, company-пул
     оплат, мост-документ — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
