@@ -38,12 +38,18 @@ describe('extractPayments', () => {
 })
 
 describe('findDealPayments', () => {
-  it('maps an unpaid payment to a deal-payment candidate (id, amount=sum, currency, dealId)', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, sum: 1200, currency: 'BYN', paid: 'N' })]))
+  it('maps an unpaid payment to a deal-payment candidate (id, amount=sum, currency, dealId, accountNumber)', async () => {
+    const call = vi.fn(async () => resp([pay({ id: 3, accountNumber: '1/2', sum: 1200, currency: 'BYN', paid: 'N' })]))
     expect(await findDealPayments('33', {}, call))
-      .toEqual([{ kind: 'deal-payment', id: '3', amount: 1200, currency: 'BYN', dealId: '33' }])
+      .toEqual([{ kind: 'deal-payment', id: '3', amount: 1200, currency: 'BYN', dealId: '33', accountNumber: '1/2' }])
     expect(call.mock.calls[0]![0]).toBe('crm.item.payment.list')
     expect(call.mock.calls[0]![1]).toEqual({ entityId: 33, entityTypeId: 2 })
+  })
+
+  it('omits accountNumber when the payment has none (keeps the field optional)', async () => {
+    const call = vi.fn(async () => resp([pay({ id: 3, accountNumber: undefined })]))
+    const out = await findDealPayments('33', {}, call)
+    expect(out[0]).not.toHaveProperty('accountNumber')
   })
 
   it('skips a settled payment (paid=Y) by default', async () => {
@@ -151,8 +157,8 @@ describe('findCompanyDealPayments', () => {
     )
     const out = await findCompanyDealPayments('93', {}, call)
     expect(out).toEqual([
-      { kind: 'deal-payment', id: '3', amount: 1200, currency: 'BYN', dealId: '33' },
-      { kind: 'deal-payment', id: '8', amount: 500, currency: 'BYN', dealId: '41' }
+      { kind: 'deal-payment', id: '3', amount: 1200, currency: 'BYN', dealId: '33', accountNumber: '1/2' },
+      { kind: 'deal-payment', id: '8', amount: 500, currency: 'BYN', dealId: '41', accountNumber: '1/2' }
     ])
     expect(call.mock.calls[0]![1]).toMatchObject({ entityTypeId: 2, filter: { companyId: '93' } })
   })

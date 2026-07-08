@@ -4,6 +4,7 @@ import {
   allocationFactKey,
   collapseSameTarget,
   compareIds,
+  filterByAccountNumber,
   isEligible,
   resolveAllocation,
   sameCurrency,
@@ -144,6 +145,35 @@ describe('collapseSameTarget', () => {
     const distinctPay = pay({ id: 'P2', dealId: '80' })
     const kept = collapseSameTarget([invoice, covered, distinctPay])
     expect(kept.map(c => c.id).sort()).toEqual(['7', 'P2'])
+  })
+})
+
+describe('filterByAccountNumber', () => {
+  const pool = [
+    pay({ id: 'P1', accountNumber: '1/1' }),
+    pay({ id: 'P2', accountNumber: '1/2' }),
+    pay({ id: 'P3' }) // no accountNumber (e.g. an invoice candidate)
+  ]
+  it('keeps only candidates whose accountNumber matches exactly (payment-number)', () => {
+    expect(filterByAccountNumber(pool, '1/2').map(c => c.id)).toEqual(['P2'])
+  })
+  it('trims the requested number', () => {
+    expect(filterByAccountNumber(pool, '  1/1  ').map(c => c.id)).toEqual(['P1'])
+  })
+  it('returns [] for a blank number (never sweeps the whole pool)', () => {
+    expect(filterByAccountNumber(pool, '')).toEqual([])
+    expect(filterByAccountNumber(pool, '   ')).toEqual([])
+  })
+  it('does not match an order-number against an order-prefixed payment number', () => {
+    // «1» is an order number; payments are «1/1»/«1/2» — NOT an exact match here (#172).
+    expect(filterByAccountNumber(pool, '1')).toEqual([])
+  })
+  it('returns ALL candidates sharing the number (filter, not find)', () => {
+    const dup = [pay({ id: 'A', accountNumber: '1/2' }), pay({ id: 'B', accountNumber: '1/2' }), pay({ id: 'C', accountNumber: '1/3' })]
+    expect(filterByAccountNumber(dup, '1/2').map(c => c.id)).toEqual(['A', 'B'])
+  })
+  it('ignores candidates that carry no accountNumber', () => {
+    expect(filterByAccountNumber([pay({ id: 'P3' })], 'x')).toEqual([])
   })
 })
 
