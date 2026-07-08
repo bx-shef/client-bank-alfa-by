@@ -29,7 +29,7 @@ import { parseManualFileBase64 } from '../utils/importIngest'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
-import { resolveIntentCandidates, type IntentResolution, type IntentResolverDeps } from '../utils/intentResolver'
+import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
@@ -144,12 +144,8 @@ export function liveHandlerDeps(): HandlerDeps {
     resolveIntents: async (intents, companyId, memberId) => {
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return []
-      const ctx = { companyId }
-      const out: IntentResolution[] = []
-      for (const intent of intents) {
-        out.push(await resolveIntentCandidates(intent, ctx, call, intentResolverDeps))
-      }
-      return out
+      // Batch resolver fetches the deal-payment pool once per op (#191), not per value.
+      return resolveIntentsForOp(intents, { companyId }, call, intentResolverDeps)
     },
     // Observe what each intent resolved to (log-only coverage). account/docId + value
     // sanitized (logSafe) like onRecognized; kind/status are safe internal data.

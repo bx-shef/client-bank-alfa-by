@@ -3,7 +3,7 @@ import { IDENTIFIER_ROUTES, routeIdentifier } from '~/utils/identifierDispatch'
 import type { IdentifierKind } from '~/utils/purposeMatch'
 import type { AllocationCandidate } from '~/utils/allocation'
 import type { IntentResolverDeps } from '../server/utils/intentResolver'
-import { resolveIntentCandidates } from '../server/utils/intentResolver'
+import { resolveIntentCandidates, resolveIntentsForOp } from '../server/utils/intentResolver'
 
 // Pure dispatch recognized-intent → entity resolver (#109). Resolvers are faked, so
 // the tests assert the ROUTING decision (which resolver, which args) not the REST.
@@ -141,5 +141,49 @@ describe('resolveIntentCandidates — exhaustiveness & route alignment', () => {
     expect(routeIdentifier('invoice-id').strategy).toBe('by-id')
     expect(routeIdentifier('deal-id').strategy).toBe('by-id')
     expect(routeIdentifier('payment-number').strategy).toBe('via-payment')
+  })
+})
+
+describe('resolveIntentsForOp — batch, pool fetched once (#191)', () => {
+  it('fetches the deal-payment pool ONCE for several payment-number intents, filters each', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' }), pay({ id: 'B', accountNumber: '1/2' })] })
+    const out = await resolveIntentsForOp(
+      [intent('payment-number', '1/1'), intent('payment-number', '1/2')], ctx, call, deps
+    )
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1) // pooled, not per value
+    expect(out.map(r => r.candidates.map(c => c.id))).toEqual([['A'], ['B']]) // each filtered by its own value
+  })
+
+  it('does NOT fetch the pool when no payment-number intent is present', async () => {
+    const deps = fakeDeps({ invoices: [inv({ id: '7' })] })
+    const out = await resolveIntentsForOp([intent('invoice-number', 'СЧ-1'), intent('deal-id', '5')], ctx, call, deps)
+    expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
+    expect(out.map(r => r.kind)).toEqual(['invoice-number', 'deal-id'])
+  })
+
+  it('mixes pooled payment-number with other kinds, preserving order', async () => {
+    const deps = fakeDeps({ invoices: [inv({ id: '7' })], pool: [pay({ id: 'A', accountNumber: '1/1' })] })
+    const out = await resolveIntentsForOp(
+      [intent('invoice-number', 'СЧ-1'), intent('payment-number', '1/1'), intent('smart-id', 'X')], ctx, call, deps
+    )
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1)
+    expect(deps.findInvoicesByNumber).toHaveBeenCalledTimes(1)
+    expect(out.map(r => [r.kind, r.status, r.candidates.length])).toEqual([
+      ['invoice-number', 'resolved', 1], ['payment-number', 'resolved', 1], ['smart-id', 'unsupported', 0]
+    ])
+  })
+
+  it('propagates a REST error from the pooled lookup', async () => {
+    const deps = fakeDeps()
+    deps.findCompanyDealPayments = vi.fn(async () => {
+      throw new Error('QUERY_LIMIT_EXCEEDED')
+    })
+    await expect(resolveIntentsForOp([intent('payment-number', '1/1')], ctx, call, deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
+
+  it('returns [] for no intents (no lookups)', async () => {
+    const deps = fakeDeps()
+    expect(await resolveIntentsForOp([], ctx, call, deps)).toEqual([])
+    expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
   })
 })

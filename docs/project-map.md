@@ -163,8 +163,9 @@
   **диспетчер intent→кандидаты** (слайс 2: `intentResolver.ts` `resolveIntentCandidates` — по `RecognitionIntent`
   вызывает нужный резолвер с company-скоупом; `invoice-number`/`invoice-id`/`deal-id`/`payment-number` диспатчатся,
   остальные `unsupported` с reason; резолверы инъектируются, exhaustive-свитч по kind) +
-  **резолюция намерения в `crm-sync`** (слайс 3: `resolveIntents`-обёртка воркера зовёт `resolveIntentCandidates`
-  на матч-компанию, за dedup-skip; `onResolved` логирует кандидатов, счётчик `resolved`; пока log/count без записи).
+  **резолюция намерения в `crm-sync`** (слайс 3: `resolveIntents`-обёртка воркера зовёт батч-`resolveIntentsForOp`
+  на матч-компанию, за dedup-skip; `onResolved` логирует кандидатов, счётчик `resolved`; пока log/count без записи;
+  пул оплат тянется раз на операцию, кап `MAX_RESOLVED_INTENTS_PER_OP` — против амплификации N+1, #191).
   Осталось: `order-number`-матчинг (связь заказ↔оплата, live-verify — #172); роутинг ref моста через
   `itemByIdLookup` (company-скоуп); **следующий под-слайс проводки в `crm-sync`** (подключить `stageLoader` в
   `resolveIntents` → `resolveAllocation` → запись факта/дела, идемпотентность #184, fail-open-алерт).

@@ -67,6 +67,15 @@ const BY_ID_TARGET: Record<'invoice-id' | 'deal-id', { targetKind: AllocationTar
 const unsupported = (intent: RecognitionIntent, reason: string): IntentResolution =>
   ({ kind: intent.kind, value: intent.value, status: 'unsupported', candidates: [], reason })
 
+/** Resolve a `payment-number` intent against an already-fetched company deal-payment
+ *  pool — a pure `accountNumber` filter (no I/O). Split out so the single-intent and
+ *  batch resolvers share one definition (the pool is fetched by the caller; the batch
+ *  path fetches it ONCE per op — #191). NB: routed `'via-payment'` but by-number
+ *  semantics — taxonomy note #189. */
+function resolvePaymentNumber(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
+  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
+}
+
 /**
  * Dispatch one recognized intent to its entity resolver and return the allocation
  * candidates it finds (scoped to `ctx.companyId`, negative stages excluded). A REST
@@ -99,9 +108,8 @@ export async function resolveIntentCandidates(
     }
     case 'payment-number': {
       // Company-scoped pool of deal payments, then the exact `accountNumber` match.
-      // NB: routed `'via-payment'` but this is by-number semantics — taxonomy note #189.
       const pool = await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
-      return { ...base, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
+      return resolvePaymentNumber(intent, pool)
     }
     case 'smart-id':
     case 'deal-field':
@@ -119,4 +127,34 @@ export async function resolveIntentCandidates(
       // Document bridge needs a live-verified template+document first (#184-adjacent).
       return unsupported(intent, 'document-number: document bridge needs live-verify')
   }
+}
+
+/**
+ * Resolve ALL recognized intents of ONE operation, de-duplicating the expensive
+ * company-wide lookup (#191): the `payment-number` pool (`findCompanyDealPayments`) is
+ * company-scoped and value-independent, so it's fetched AT MOST ONCE and reused for
+ * every `payment-number` intent — instead of one full company scan per value (the
+ * amplification the security review flagged). All other kinds go through the
+ * single-intent `resolveIntentCandidates`. A REST error propagates. Order preserved.
+ */
+export async function resolveIntentsForOp(
+  intents: RecognitionIntent[],
+  ctx: IntentContext,
+  call: RestCall,
+  deps: IntentResolverDeps
+): Promise<IntentResolution[]> {
+  // Fetch the deal-payment pool once, only if some intent actually needs it.
+  const needsPool = intents.some(i => i.kind === 'payment-number')
+  const pool = needsPool
+    ? await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
+    : []
+  const out: IntentResolution[] = []
+  for (const intent of intents) {
+    out.push(
+      intent.kind === 'payment-number'
+        ? resolvePaymentNumber(intent, pool)
+        : await resolveIntentCandidates(intent, ctx, call, deps)
+    )
+  }
+  return out
 }
