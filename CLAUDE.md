@@ -437,12 +437,23 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
       документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
       Scope `crm` (`crm.documentgenerator.*`).
-    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **дальнейшие
-    слайсы проводки в `crm-sync`** — после распознавания намерения (слайс 1, готов) связать `stageLoader`→lookup'ы→
-    роутинг моста→`resolveAllocation`→запись факта/дела, с fail-open-алертом (пока `onRecognized` только логирует).
+    - `server/utils/intentResolver.ts` — **чистый диспетчер `resolveIntentCandidates(intent, ctx, call, deps)`** (слайс 2
+      капстоуна): по распознанному `RecognitionIntent` (§4) вызывает нужный резолвер сущности и отдаёт `IntentResolution`
+      (`status: 'resolved'|'unsupported'`, `candidates`, `reason`). Резолверы **инъектируются** (чистый роутинг тестируется
+      без сети). Диспатчатся подтверждённые вживую стратегии: `invoice-number`→`findInvoicesByNumber`, `invoice-id`/`deal-id`→
+      `findCandidateById` (фикс `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`
+      (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных стадий). Остальные — `unsupported` с `reason`
+      (не роняем интент молча): `smart-id`/`deal-field`/`smart-field` (нужен `entityTypeId`/поле из «карты сопоставления»),
+      `order-id`/`order-number` (#172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
+      Свитч по `kind` — exhaustive (новый вид не соберётся). Company-резолюция/загрузка стадий/проводка кандидатов —
+      **воркер-слайс** (там же решение идемпотентности #184).
+    Осталось: `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **воркер-слайс
+    проводки в `crm-sync`** — связать resolve-компании→`stageLoader`→`resolveIntentCandidates`→`resolveAllocation`→
+    запись факта/дела, с идемпотентностью (#184) и fail-open-алертом (пока `onRecognized` только логирует намерение).
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber`, **хранение
-    матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1: recognize→route→лог) — **готовы**.
+    матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1), **диспетчер intent→кандидаты**
+    (слайс 2: `intentResolver.ts`) — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
