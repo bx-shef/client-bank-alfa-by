@@ -10,7 +10,7 @@ import type { AppSettingsDeps } from './appSettings'
 export function liveAppSettingsDeps(): AppSettingsDeps {
   return {
     loadToken: memberId => getToken(dbQuery, memberId),
-    ensureFresh: token => ensureAccessToken(dbQuery, token),
+    ensureFresh: token => ensureAccessToken(token),
     callRest
   }
 }
