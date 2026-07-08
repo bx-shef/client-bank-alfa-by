@@ -159,10 +159,13 @@
   алфавит + матрицы + карта полей `deal-field`/`smart-field`, защитный коэрс, растёт без миграции ключа `app.option`) +
   **распознавание намерения в `crm-sync`** (слайс 1 капстоуна: `recognitionIntent.ts` composes `recognizeByMatrices`→
   `routeIdentifier`; `crm-sync` читает `PortalSettings` раз на джобу, на каждую операцию распознаёт по матрицам портала
-  и **логирует намерение** через `onRecognized` — счётчик `recognized`; пока только лог, без REST-lookup/записи).
+  и **логирует намерение** через `onRecognized` — счётчик `recognized`; пока только лог, без REST-lookup/записи) +
+  **диспетчер intent→кандидаты** (слайс 2: `intentResolver.ts` `resolveIntentCandidates` — по `RecognitionIntent`
+  вызывает нужный резолвер с company-скоупом; `invoice-number`/`invoice-id`/`deal-id`/`payment-number` диспатчатся,
+  остальные `unsupported` с reason; резолверы инъектируются, exhaustive-свитч по kind).
   Осталось: `order-number`-матчинг (связь заказ↔оплата, live-verify — #172); роутинг ref моста через
-  `itemByIdLookup` (company-скоуп); **дальнейшие слайсы проводки в `crm-sync`** (lookup→стадии→`resolveAllocation`→
-  запись факта/дела, fail-open-алерт).
+  `itemByIdLookup` (company-скоуп); **воркер-слайс проводки в `crm-sync`** (resolve-компании→стадии→
+  `resolveIntentCandidates`→`resolveAllocation`→запись факта/дела, идемпотентность #184, fail-open-алерт).
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
   гейтит служебную зону (пока `/queues`). Лендинг и B24-встройку не закрывает. Модель — из
   `postroyka/purchase-ai-chat`; детали — `docs/AUTH.md`. Захардено: **rate-limit** `POST /api/auth/login`
