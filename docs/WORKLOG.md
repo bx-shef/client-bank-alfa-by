@@ -43,6 +43,15 @@
 
 ## Лог проходов
 
+### 2026-07-09 — #109 решение разнесения (resolveAllocation) — log/count
+- **Сделано:** отфильтрованные по стадии кандидаты идут в чистое ядро `resolveAllocation`
+  (`server/queue/handlers.ts`): amount-цели (invoice/deal-payment) — точная сумма+валюта;
+  trigger-цели (deal/smart-process) — безусловно. Счётчики `allocatable`/`ambiguous`/`manual`
+  + лог решения (`onAllocationDecision`). Пока **без записи**. Тесты (+5): allocate/ambiguous/
+  manual/trigger/none. PR #198.
+- **Осталось:** запись факта/дела (`allocationFactStore` + `autoDistribute`-гейт + идемпотентность
+  #184 + действие в портале `payment.pay`/стадия) — за live-verify.
+
 ### 2026-07-09 — #109 отсев отрицательных стадий в резолюции намерений
 - **Проблема:** в `crm-sync` намерения резолвились в кандидатов, но кандидаты **не фильтровались по стадии** —
   разнесение могло попасть на оплаченный/«Не оплачен» инвойс или проигранную сделку.
