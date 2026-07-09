@@ -50,14 +50,18 @@ describe('BB neutralization of payer-controlled fields (crafted purpose/counterp
     expect(d).toContain('［url=http://evil］тут［/url］')
     expect(d).toContain('Документ: #5［b］41')
     expect(d).toContain('ООО ［user=1］Ромашка［/user］')
+    expect(d).toContain('УНП: 19［1］')
     expect(d).toContain('BY［24］X')
+    expect(d).toContain('Банк: Аль［b］фа')
     // ...and no RAW external BB bracket survives (the only real brackets left are OUR
     // trusted origin token). Strip that one line, then assert zero brackets remain.
     const withoutOrigin = d.replace(activityOriginToken(evil), '')
     expect(withoutOrigin).not.toMatch(/\[|\]/)
   })
   it('title neutralizes the counterparty name', () => {
-    expect(buildTodoActivity(evil, { id: 4 }).title).not.toMatch(/\[|\]/)
+    const title = buildTodoActivity(evil, { id: 4 }).title
+    expect(title).not.toMatch(/\[|\]/)
+    expect(title).toContain('от ООО ［user=1］Ромашка［/user］') // name present AND neutralized
   })
   it('the origin token (our own, trusted) keeps its real brackets in the description', () => {
     // sanity: neutralization targets external fields, not our structural marker.
