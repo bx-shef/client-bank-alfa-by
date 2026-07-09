@@ -2,8 +2,9 @@
 // Started once on server boot by server/plugins/queue.ts (only when REDIS_URL is
 // set). For horizontal scale-out the same startWorkers() can run in a dedicated
 // worker container (documented in docs/REFACTOR_PLAN.md) — the handlers don't care
-// where they run. CRM-sync transports (findCompany/writeActivity + dedup) are LIVE;
-// the bank fetch/parse transports are still stubs until stages 3/5 fill them in.
+// where they run. CRM-sync transports (findCompany/writeActivity + dedup) and the
+// file-parse transport (manual import) are LIVE; only the bank fetch transport
+// (Alfa/Prior online polling) is still a stub until stage 5 fills it in.
 
 import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
@@ -74,7 +75,9 @@ export function liveHandlerDeps(): HandlerDeps {
     // have a real consumer, not just the payload.
     parseFile: async (job) => {
       const items = parseManualFileBase64(job.contentBase64)
-      console.log(`[import] parsed ${items.length} ops from "${job.fileName}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)
+      // fileName is the operator-supplied upload name (untrusted) → logSafe it like
+      // account/docId elsewhere, so a crafted name can't inject forged log lines.
+      console.log(`[import] parsed ${items.length} ops from "${logSafe(job.fileName)}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)
       return items
     },
     // Find the CRM company by the counterparty's settlement account. Demo accounts

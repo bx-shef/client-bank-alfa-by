@@ -77,6 +77,17 @@ export async function findInvoicesByNumber(
     if (!Number.isFinite(amount)) continue
     const id = row.id === undefined || row.id === null ? '' : String(row.id)
     if (!id) continue
+    // ⚠ WRITE-SLICE PRECONDITIONS (#184, found in audit — harmless while log/count only):
+    //  1. `dealId` is NOT set on the invoice candidate (the smart-invoice→deal link field
+    //     is not in `select` / not live-confirmed), so `collapseSameTarget`'s "invoice over
+    //     the same deal's payment" merge is INERT in the live path — an invoice + a
+    //     deal-payment of the same deal read as two targets (spurious `ambiguous`). Populate
+    //     the deal link here (live-verify the field) before allocation is written.
+    //  2. The stage filter drops only NEGATIVE (`SEMANTICS='F'`) stages; an already-PAID
+    //     invoice (success stage, e.g. `DT31_11:P`) is still returned as a candidate —
+    //     unlike deal-payments, which exclude `paid:'Y'` (paymentLookup). Exclude paid/
+    //     settled invoices too before the write, else a second same-amount payment could
+    //     re-allocate onto a paid invoice.
     out.push({ kind: 'invoice', id, amount, currency: String(row.currencyId ?? '') })
   }
   return out

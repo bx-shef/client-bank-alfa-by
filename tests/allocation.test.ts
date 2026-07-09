@@ -250,6 +250,17 @@ describe('summarizeAllocation', () => {
     expect(s.decision.action).toBe('none')
   })
 
+  it('counts distinct trigger targets by kind+id (same deal from two intents → 1)', () => {
+    const dup = summarizeAllocation(pay(10, 'BYN', [
+      { kind: 'deal', id: '3', amount: 0, currency: '' }, { kind: 'deal', id: '3', amount: 0, currency: '' }
+    ]))
+    expect(dup.triggerTargets).toBe(1) // same deal, counted once
+    const distinct = summarizeAllocation(pay(10, 'BYN', [
+      { kind: 'deal', id: '3', amount: 0, currency: '' }, { kind: 'smart-process', id: '3', amount: 0, currency: '' }
+    ]))
+    expect(distinct.triggerTargets).toBe(2) // deal#3 and smart-process#3 are distinct kinds
+  })
+
   it('non-matching amount + a trigger → allocatable (trigger overrides manual)', () => {
     const s = summarizeAllocation(pay(10, 'BYN', [inv('7', 100), { kind: 'deal', id: '3', amount: 0, currency: '' }]))
     expect(s.outcome).toBe('allocatable')

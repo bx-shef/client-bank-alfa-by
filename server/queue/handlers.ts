@@ -235,9 +235,11 @@ export async function handleCrmSyncJob(
         resolved++
         // Allocation decision (§2, #109): classify the resolved candidates via the pure
         // `summarizeAllocation` (amount targets amount-matched; trigger targets fire
-        // unconditionally). DECISION-ONLY: nothing is written yet (fact-store + auto-
-        // distribute gate + idempotency #184 next). `ambiguous` is a stricter case of
-        // `allocatable`, so it bumps both counters.
+        // unconditionally). Runs for BOTH приход and расход — per PROCESSING.md §2
+        // «авто-проведение работает и для приходов, и для расходов (обе стороны)», so this
+        // is intentionally NOT direction-gated. DECISION-ONLY: nothing is written yet
+        // (fact-store + auto-distribute gate + idempotency #184 next). `ambiguous` is a
+        // stricter case of `allocatable`, so it bumps both counters.
         const summary = summarizeAllocation({ amount: item.amount, currency: item.currency, candidates })
         if (summary.outcome === 'ambiguous') {
           allocatable++

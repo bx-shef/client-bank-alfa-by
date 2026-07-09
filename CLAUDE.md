@@ -352,7 +352,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       сумме+валюте, trigger-цели безусловно). **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и
       только при совпавшей компании (IDOR-скоуп); **пока log/count — без записи разнесения** (стор факта +
       autoDistribute-гейт + идемпотентность #184 — следующий под-слайс, за live-verify). CRM-депсы берут `memberId` явно
-      (депсы строятся один раз). Транспорты банков (Альфа/Приор/парсер) — заглушки до стадий 3–6; стор дедупа живой.
+      (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
+      заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Стор дедупа живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
       `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`
