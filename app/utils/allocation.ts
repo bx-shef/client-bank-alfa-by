@@ -214,7 +214,12 @@ export interface AllocationSummary {
  */
 export function summarizeAllocation(payment: AllocationInput): AllocationSummary {
   const amountCandidates = payment.candidates.filter(c => isAmountTarget(c.kind))
-  const triggerTargets = payment.candidates.filter(c => isTriggerTarget(c.kind)).length
+  // Distinct trigger targets by kind+id — two intents can resolve to the SAME deal/
+  // smart-process (e.g. deal-id + a document bridging to it); count it once, not twice.
+  // (Amount targets are deduped by `collapseSameTarget` inside `resolveAllocation`.)
+  const triggerTargets = new Set(
+    payment.candidates.filter(c => isTriggerTarget(c.kind)).map(c => `${c.kind}:${c.id}`)
+  ).size
   const decision = resolveAllocation({ amount: payment.amount, currency: payment.currency, candidates: amountCandidates })
   let outcome: AllocationSummary['outcome']
   if (decision.action === 'allocate') {
