@@ -124,10 +124,16 @@ export function defaultPortalSettings(): PortalSettings {
 function cleanList(v: unknown): string[] {
   if (!Array.isArray(v)) return []
   const seen = new Set<string>()
-  for (const raw of v) {
+  // Bound the ITERATION (not just the accepted count): an all-blank / all-duplicate
+  // array never grows `seen`, so a `seen.size >= cap` break would scan a pathologically
+  // large input in full (#182). Slice to the cap first — same defense as `cleanRecognition`.
+  // Trade-off: with dedupe, N inputs can collapse to < N uniques, so slicing could drop
+  // uniques that sit past the cap behind many leading duplicates — but a legit exclusion
+  // list never nears MAX_LIST_ITEMS, so no genuine entry is lost. The slice also caps the
+  // output size (≤ MAX_LIST_ITEMS uniques), so no separate size break is needed.
+  for (const raw of v.slice(0, MAX_LIST_ITEMS)) {
     const s = String(raw).trim().slice(0, MAX_ITEM_LEN)
     if (s) seen.add(s)
-    if (seen.size >= MAX_LIST_ITEMS) break
   }
   return [...seen]
 }
@@ -137,11 +143,12 @@ function cleanList(v: unknown): string[] {
  *  legitimate "announce nothing" and is preserved. */
 function cleanDirections(v: unknown): OperationDirection[] {
   if (!Array.isArray(v)) return ['credit']
-  const out: OperationDirection[] = []
-  for (const d of VALID_DIRECTIONS) {
-    if (v.includes(d)) out.push(d)
-  }
-  return out
+  // Bound the scan (#182): `v.includes(d)` is O(|v|) per direction and scans an untrusted
+  // array to the end when a direction is absent. Slice to a cap and probe an O(1) Set —
+  // `directions` legitimately holds 0-2 entries, so nothing genuine is lost. Order follows
+  // VALID_DIRECTIONS (stable), same as before.
+  const set = new Set(v.slice(0, MAX_LIST_ITEMS))
+  return VALID_DIRECTIONS.filter(d => set.has(d))
 }
 
 /** Coerce the recognition section defensively: valid alphabet else default; keep
@@ -169,10 +176,20 @@ function cleanRecognition(v: unknown): RecognitionSettings {
   }
 
   const configFields: Record<string, string> = {}
-  if (obj.configFields && typeof obj.configFields === 'object' && !Array.isArray(obj.configFields)) {
-    for (const [k, val] of Object.entries(obj.configFields as Record<string, unknown>).slice(0, MAX_CONFIG_FIELDS)) {
+  const cf = obj.configFields
+  if (cf && typeof cf === 'object' && !Array.isArray(cf)) {
+    // Bound the ENUMERATION (#182): `Object.entries(untrusted).slice(...)` eagerly
+    // materializes ALL keys before the slice (O(total keys)). A lazy `for…in` with a
+    // visited-count break stops after MAX_CONFIG_FIELDS keys without materializing the rest.
+    // A visited-count break is safe here (object keys are unique — no dedupe-collapse like
+    // the #182 cleanList trap). `Object.hasOwn` skips any inherited key without counting it.
+    const rec = cf as Record<string, unknown>
+    let visited = 0
+    for (const k in rec) {
+      if (!Object.hasOwn(rec, k)) continue
+      if (visited++ >= MAX_CONFIG_FIELDS) break
       const key = clampStr(k, MAX_FIELD_LEN)
-      const field = clampStr(val, MAX_FIELD_LEN)
+      const field = clampStr(rec[k], MAX_FIELD_LEN)
       if (key && field && !UNSAFE_KEYS.has(key)) configFields[key] = field // drop blank/prototype-polluting key or blank field
     }
   }
