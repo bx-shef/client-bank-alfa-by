@@ -16,6 +16,7 @@ import { findInvoicesByNumber } from '../server/utils/invoiceLookup.ts'
 import { loadInvoiceNegativeStage } from '../server/utils/stageLoader.ts'
 import { findCompanyDealPayments } from '../server/utils/paymentLookup.ts'
 import { recognizeByMatrices } from '../app/utils/purposeMatch.ts'
+import { resolveAllocation } from '../app/utils/allocation.ts'
 
 loadDotEnv(['.env.b24test'], { explicit: false })
 const WEBHOOK = (process.env.B24_TEST_WEBHOOK ?? '').trim()
@@ -100,6 +101,29 @@ if (alfaId) {
   const pool = await findCompanyDealPayments(alfaId, {}, call)
   const has1200 = pool.some(p => Number((p as { amount?: number }).amount) === 1200)
   check('paymentLookup: company-пул оплат содержит неоплаченную 1200 BYN (сделка Опт)', has1200, JSON.stringify(pool))
+}
+
+// 6) resolveAllocation — the full READ→DECIDE chain live: real invoiceLookup candidates
+// fed into the pure decision (exactly what crm-sync does before it acts on a match).
+if (alfaId) {
+  const cands = await findInvoicesByNumber('СЧ-0001', { companyId: alfaId, isNegativeStage: isNeg }, call)
+  // СЧ-0001 is 1000 BYN → an exact-amount payment allocates to it.
+  const dExact = resolveAllocation({ amount: 1000, currency: 'BYN', candidates: cands })
+  check('resolveAllocation: платёж 1000 BYN / СЧ-0001 → allocate на invoice#' + cands[0]?.id,
+    dExact.action === 'allocate' && dExact.target.id === cands[0]?.id, JSON.stringify(dExact))
+  // A different amount → manual (no exact match) — never mis-allocated.
+  const dManual = resolveAllocation({ amount: 999, currency: 'BYN', candidates: cands })
+  check('resolveAllocation: платёж 999 BYN / СЧ-0001 → manual (сумма не совпала)', dManual.action === 'manual', dManual.action)
+  // Wrong currency → manual too (owner rule: currency must match).
+  const dCur = resolveAllocation({ amount: 1000, currency: 'USD', candidates: cands })
+  check('resolveAllocation: платёж 1000 USD / СЧ-0001 → manual (валюта не совпала)', dCur.action === 'manual', dCur.action)
+}
+// deal-payment: an exact-amount payment allocates to the unpaid deal payment (1200 BYN).
+if (alfaId) {
+  const pool = await findCompanyDealPayments(alfaId, {}, call)
+  const dPay = resolveAllocation({ amount: 1200, currency: 'BYN', candidates: pool })
+  check('resolveAllocation: платёж 1200 BYN → allocate на deal-payment (сделка Опт)',
+    dPay.action === 'allocate' && dPay.target.kind === 'deal-payment', JSON.stringify(dPay))
 }
 
 head(fail === 0 ? `Все проверки пройдены (${pass})` : `Провалено ${fail} из ${pass + fail}`)
