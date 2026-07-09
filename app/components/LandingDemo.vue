@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// Public landing DEMO: attach a statement file (or run an Alfa/Prior "sandbox"
-// sample) and instantly see WHAT the app extracts — operations, counterparties,
-// totals, and identifiers recognized in the payment purpose. Parsing is done in
-// the browser (deterministic, no backend/AI); the pure core lives in
-// app/utils/demoExtract.ts. Styling is self-contained dark (landing brand shell)
-// so it does not depend on b24ui light/dark tokens. Design is intentionally
-// rough — the owner refines copy/visuals later; the point is that it WORKS.
+// Public landing DEMO: attach a statement file and instantly see WHAT the app
+// extracts — operations, counterparties, totals, and identifiers recognized in the
+// payment purpose. Parsing is done in the browser (deterministic, no backend/AI);
+// the pure core lives in app/utils/demoExtract.ts. Styling is self-contained dark
+// (landing brand shell) so it does not depend on b24ui light/dark tokens. (The
+// online Alfa/Prior "sandbox" buttons were retired in favour of info cards in
+// index.vue — live bank OAuth is geo-blocked from the cloud anyway.)
 import { computed, ref } from 'vue'
 import ArrowTopSIcon from '@bitrix24/b24icons-vue/outline/ArrowTopSIcon'
 import ArrowDownSIcon from '@bitrix24/b24icons-vue/outline/ArrowDownSIcon'
@@ -16,7 +16,7 @@ import {
   deferToEventLoop,
   processUploadBatch
 } from '~/utils/importUpload'
-import { summarizeExtraction, demoAlfaExtraction, demoPriorExtraction, type DemoExtraction } from '~/utils/demoExtract'
+import { summarizeExtraction, type DemoExtraction } from '~/utils/demoExtract'
 import { formatMoney } from '~/utils/activity'
 import { LANDING_DEMO } from '~/utils/landing'
 import type { IdentifierKind } from '~/utils/purposeMatch'
@@ -103,23 +103,6 @@ async function runFiles(files: File[]) {
   }
 }
 
-function runAlfa() {
-  runSeq++ // supersede any in-flight file parse
-  busy.value = false
-  clearFeedback()
-  extraction.value = demoAlfaExtraction()
-  sourceLabel.value = 'Альфа-Банк Беларусь · песочница'
-  reachGoal('demo_alfa')
-}
-function runPrior() {
-  runSeq++
-  busy.value = false
-  clearFeedback()
-  extraction.value = demoPriorExtraction()
-  sourceLabel.value = 'Приорбанк · песочница'
-  reachGoal('demo_prior')
-}
-
 function onDrop(e: DragEvent) {
   dragOver.value = false
   if (busy.value) return
@@ -143,32 +126,7 @@ function reset() {
 
 <template>
   <div class="rounded-3xl border border-white/10 bg-white/[0.03] p-6 sm:p-8">
-    <!-- Source controls -->
     <div class="flex flex-col gap-5">
-      <div class="flex flex-wrap items-center gap-3">
-        <span class="text-xs uppercase tracking-[0.14em] font-mono text-white/45">
-          Источник
-        </span>
-        <button
-          type="button"
-          class="rounded-xl border border-[rgb(var(--color-accent-primary-ch)/0.4)] bg-[rgb(var(--color-accent-primary-ch)/0.08)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[rgb(var(--color-accent-primary-ch)/0.16)] disabled:opacity-50"
-          data-testid="demo-alfa"
-          :disabled="busy"
-          @click="runAlfa()"
-        >
-          Альфа-Банк · демо
-        </button>
-        <button
-          type="button"
-          class="rounded-xl border border-[rgb(var(--color-accent-primary-ch)/0.4)] bg-[rgb(var(--color-accent-primary-ch)/0.08)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[rgb(var(--color-accent-primary-ch)/0.16)] disabled:opacity-50"
-          data-testid="demo-prior"
-          :disabled="busy"
-          @click="runPrior()"
-        >
-          Приорбанк · демо
-        </button>
-      </div>
-
       <!-- Dropzone -->
       <div
         class="rounded-2xl border-2 border-dashed p-7 text-center transition-colors"
