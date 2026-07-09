@@ -8,6 +8,7 @@ import {
   ACCEPTED_EXTENSIONS,
   MAX_UPLOAD_FILES,
   dedupItems,
+  deferToEventLoop,
   processUploadBatch,
   type UploadItemResult
 } from '~/utils/importUpload'
@@ -35,16 +36,13 @@ const okFiles = computed(() => batchFiles.value.filter((_, i) => results.value[i
 
 const { submitFiles } = useImport()
 
-// Yield to the event loop between files so a large batch doesn't freeze the tab.
-const yieldToLoop = () => new Promise<void>(resolve => setTimeout(resolve))
-
 async function processFiles(files: File[]) {
   if (!files.length) return
   busy.value = true
   submitResult.value = null
   // Pass RAW files so processUploadBatch computes `truncated` (files beyond the cap).
   // batchFiles slices to the same cap → stays index-aligned with out.results.
-  const out = await processUploadBatch(files, yieldToLoop)
+  const out = await processUploadBatch(files, deferToEventLoop)
   results.value = out.results
   batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
   truncated.value = out.truncated
