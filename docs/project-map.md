@@ -150,7 +150,8 @@
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
   `LOSE`/`APOLOGY`, смарт-процесс `DT1032_67:FAIL` = `SEMANTICS='F'`; `isMyCompany='Y'`; категорийная сделка — стадия `C<cat>:…`; оплата сделки —
   массив в `result`, `id`/`paid`/`sum`/`currency`) + **company-пул оплат** `findCompanyDealPayments` (сделки компании →
-  их оплаты; IDOR-safe путь для `order-number`/`payment-number`, «сделка проксирует заказ») + **мост-документ**
+  их оплаты; IDOR-safe путь для `order-number`/`payment-number`, «сделка проксирует заказ»; **список сделок
+  пагинируется** по `start`/`total`, #191 — иначе >50 сделок молча теряли часть пула) + **мост-документ**
   `documentLookup.ts` (`document-number` → `crm.documentgenerator.document.list` → **массив** привязанных сущностей
   `{entityTypeId, entityId}[]` + гард по `number`; вызывающий перебирает и рескоупит по компании; поля из офдоки,
   вживую не подтверждено — в seed 0 документов, live-verify — гейт wiring-PR) + **фильтр по номеру оплаты**
@@ -174,7 +175,8 @@
   (PR #200: `neutralizeBb` в заголовке/описании дела CRM — сырой текст плательщика больше не может внести BB в карточку).
   Осталось: **остаток #191** — транспорт `crm-sync` на `@bitrix24/b24jssdk` (встроенный лимитер per-instance = пер-
   портальный rate-limit + bind-once + auto-refresh; адаптер `server/utils/b24Sdk.ts` готов и покрыт тестами, свап
-  hot-path — после смоук-теста `pnpm sdk:test` на живом портале; пул-раз-на-op уже сделан; дизайн — `docs/QUEUES.md`);
+  hot-path — после смоук-теста `pnpm sdk:test` на живом портале; пул-раз-на-op **и пагинация списка сделок** уже
+  сделаны; дизайн — `docs/QUEUES.md`);
   `order-number`-матчинг (связь заказ↔оплата, live-verify — #172); роутинг ref моста через `itemByIdLookup`
   (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
   log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +

@@ -478,8 +478,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       предусловие на вызывающем. **`findCompanyDealPayments(companyId, {includePaid?, isNegativeStage?}, call)`** —
       **company-scoped пул** кандидатов `deal-payment` (IDOR-safe путь для `order-number`/`payment-number` и источник
       amount-матчинга §2): `crm.item.list` сделки компании (фильтр `companyId`) → отсев отрицательной стадии → на
-      каждую сделку `findDealPayments` (N+1; `crm.item.payment.list` **не батчится** — bounded concurrency перед
-      нагрузкой; список сделок не пагинирован — сузить/пагинировать в crm-sync). **Сделка проксирует заказ**: `crm.item.payment.list`
+      каждую сделку `findDealPayments` (N+1; `crm.item.payment.list` **не батчится**, per-deal вызовы **последовательны**
+      — rate-safe by construction; bounded concurrency — за лимитером #191). **Список сделок пагинируется** (`start`/top-level
+      `total`, кап `MAX_DEAL_PAGES`; #191): у компании с >50 сделками часть пула иначе молча терялась → неверный
+      `manual`/`none`. Нет `total` → одностраничный фолбэк. **Сделка проксирует заказ**: `crm.item.payment.list`
       по сделке отдаёт оплаты заказа (та же `sale.payment` id, `orderId` за ними) — «оплата заказа» = «оплата сделки»,
       отдельного lookup заказа нет. **Глобальный** `sale.payment.list` находит оплату по номеру, но её `sale.order` **не
       несёт связки со сделкой/компанией** (`companyId=null` у CRM-заказов) — привязать к компании плательщика нельзя,
@@ -530,19 +532,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
       Смарт-процессы пока не включены (их `entityTypeId` портало-специфичен, интенты `unsupported`). DI, тесты
       (`tests/negativeStages.test.ts`).
-    Осталось: **rate-limit/bounded-concurrency воркера + bind-`RestCall`-once на джобу + пагинация пула оплат +
-    батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op уже сделан;
-    negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 + `crm.status.list`×N — учесть в
-    лимитере; глобальный лимит нужен до реального опроса портала; дизайн — `docs/QUEUES.md` «REST-бюджет проводки
-    платежей»); `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
+    Осталось: **rate-limit/bounded-concurrency воркера + bind-`RestCall`-once на джобу +
+    батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
+    списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
+    `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
+    `docs/QUEUES.md` «REST-бюджет проводки платежей»); `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
     под-слайс проводки в `crm-sync`** — **запись** разнесения (`summarizeAllocation` уже даёт решение log/count):
     стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность (#184) + действие
     в портале (`payment.pay`/стадия) — за live-verify.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
-    известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber`, **хранение
-    матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1), **диспетчер intent→кандидаты**
-    (слайс 2: `intentResolver.ts`), **резолюция намерения в кандидаты в `crm-sync`** (слайс 3: `resolveIntents`/
-    `onResolved`, log/count) — **готовы**.
+    известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
+    по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
+    **диспетчер intent→кандидаты** (слайс 2: `intentResolver.ts`), **резолюция намерения в кандидаты в `crm-sync`**
+    (слайс 3: `resolveIntents`/`onResolved`, log/count) — **готовы**.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
