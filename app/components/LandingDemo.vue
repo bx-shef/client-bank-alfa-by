@@ -214,6 +214,15 @@ function reset() {
           {{ LANDING_DEMO.hint }} Максимум {{ MAX_UPLOAD_FILES }} файлов за раз.
         </p>
       </div>
+
+      <!-- Privacy warning: think about what you upload to a public demo. -->
+      <div
+        class="flex items-start gap-2 rounded-xl border border-[rgb(var(--color-accent-alert-ch)/0.3)] bg-[rgb(var(--color-accent-alert-ch)/0.06)] px-4 py-3 text-xs text-white/70"
+        data-testid="demo-privacy"
+      >
+        <span aria-hidden="true">⚠️</span>
+        <span>{{ LANDING_DEMO.privacyWarning }}</span>
+      </div>
     </div>
 
     <!-- Live region: results / errors -->

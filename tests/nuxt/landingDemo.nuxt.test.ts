@@ -13,6 +13,8 @@ describe('LandingDemo', () => {
     expect(wrapper.find('[data-testid="demo-prior"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="demo-dropzone"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="demo-file-input"]').exists()).toBe(true)
+    // Privacy warning is always visible (think about what you upload to a public demo).
+    expect(wrapper.find('[data-testid="demo-privacy"]').exists()).toBe(true)
     // Nothing extracted yet.
     expect(wrapper.find('[data-testid="demo-summary"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="demo-operation"]').exists()).toBe(false)
