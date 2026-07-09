@@ -30,6 +30,7 @@ import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
 import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
+import { buildPortalNegativeStagePredicate } from '../utils/negativeStages'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
@@ -135,19 +136,34 @@ export function liveHandlerDeps(): HandlerDeps {
       console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Resolve recognized intents to allocation candidates via the entity lookups (#109
-    // slice 3 — wiring the slice-2 dispatcher), scoped to the matched company. LOG/COUNT
-    // only — nothing is written. No portal token → []. `isNegativeStage` is NOT loaded yet
-    // (next sub-slice): candidates may include negative-stage entities — acceptable while
-    // nothing is written off them. REST per op with a recognized id: the handler caps the
-    // intent count, and the payment-number pool is fetched once per op (#192, not per value)
-    // — but the pool scan itself is still unbatched/unpaginated; global rate-limit + bind-
-    // RestCall-once remain (see the TODO above / #191). A REST error propagates (handler
-    // fails the job → clean retry), like findCompany.
-    resolveIntents: async (intents, companyId, memberId) => {
+    // slice 3 — wiring the slice-2 dispatcher), scoped to the matched company and dropping
+    // negative-stage entities (`isNegativeStage`, loaded once per job). LOG/COUNT only —
+    // nothing is written. No portal token → []. REST per op with a recognized id: the
+    // handler caps the intent count, and the payment-number pool is fetched once per op
+    // (#192, not per value) — but the pool scan itself is still unbatched/unpaginated;
+    // global rate-limit + bind-RestCall-once remain (see the TODO above / #191). A REST
+    // error propagates (handler fails the job → clean retry), like findCompany.
+    resolveIntents: async (intents, companyId, memberId, isNegativeStage) => {
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return []
       // Batch resolver fetches the deal-payment pool once per op (#191), not per value.
-      return resolveIntentsForOp(intents, { companyId }, call, intentResolverDeps)
+      return resolveIntentsForOp(intents, { companyId, isNegativeStage }, call, intentResolverDeps)
+    },
+    // Load the portal's negative-stage predicate (union of invoice + deal fail/lost
+    // stages) so intent resolution drops paid/«Не оплачен»/lost candidates. Called at most
+    // ONCE per job by the handler. No portal token → null (resolution proceeds unfiltered).
+    // FAIL-OPEN ALERT: an empty negative set is indistinguishable from a broken query /
+    // trimmed rights — a real portal's deal funnel always has ≥1 LOSE stage, so 0 negatives
+    // across ≥1 deal funnel is warned (else we'd allocate onto a lost deal). A REST error
+    // propagates (fail the job → clean retry).
+    loadNegativeStagePredicate: async (memberId) => {
+      const call = await makePortalRestCall(memberId, portalRestDeps)
+      if (!call) return null
+      const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call)
+      if (diagnostics.deal.categories > 0 && diagnostics.deal.negativeStages === 0) {
+        console.warn(`[stage] portal ${memberId}: 0 negative deal stages across ${diagnostics.deal.categories} funnel(s) — check rights/config; nothing will be stage-excluded (fail-open)`)
+      }
+      return predicate
     },
     // Observe what each intent resolved to (log-only coverage). account/docId + value
     // sanitized (logSafe) like onRecognized; kind/status are safe internal data.
