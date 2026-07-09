@@ -16,7 +16,7 @@ import { findInvoicesByNumber } from '../server/utils/invoiceLookup.ts'
 import { loadInvoiceNegativeStage } from '../server/utils/stageLoader.ts'
 import { findCompanyDealPayments } from '../server/utils/paymentLookup.ts'
 import { recognizeByMatrices } from '../app/utils/purposeMatch.ts'
-import { resolveAllocation } from '../app/utils/allocation.ts'
+import { resolveAllocation, filterByAccountNumber } from '../app/utils/allocation.ts'
 
 loadDotEnv(['.env.b24test'], { explicit: false })
 const WEBHOOK = (process.env.B24_TEST_WEBHOOK ?? '').trim()
@@ -141,6 +141,19 @@ check('purposeMatch: распознан «СЧ-0001» из назначения 
   const minId = String(Math.min(...cands1200.map(c => Number((c as { id: string }).id))))
   check('resolveAllocation: выбран минимальный id среди равных (min-ID правило)',
     dPay.action === 'allocate' && dPay.target.id === minId, dPay.action === 'allocate' ? `target=${dPay.target.id}, min=${minId}` : dPay.action)
+
+  // 7) payment-number path — filterByAccountNumber over the SAME company pool: a
+  // recognized payment number is matched against each payment's own accountNumber
+  // (the IDOR-safe resolver path for `payment-number`). Uses a real accountNumber from
+  // the live pool so the fixture's exact value (portal-assigned) doesn't matter.
+  const accNum = (pool[0] as { accountNumber?: string })?.accountNumber
+  const byNum = filterByAccountNumber(pool, accNum ?? '')
+  check(`filterByAccountNumber: по номеру оплаты «${accNum}» из пула → найдена, и только с этим номером`,
+    !!accNum && byNum.length >= 1 && byNum.every(c => (c as { accountNumber?: string }).accountNumber === accNum), JSON.stringify(byNum))
+  // A number absent from the pool → empty (no accidental over-match).
+  check('filterByAccountNumber: несуществующий номер оплаты → пусто', filterByAccountNumber(pool, 'НЕТ-ТАКОГО/000').length === 0)
+  // Empty number → empty (never sweeps the whole pool).
+  check('filterByAccountNumber: пустой номер → пусто (не сметает пул)', filterByAccountNumber(pool, '').length === 0)
 }
 
 head(fail === 0 ? `Все проверки пройдены (${pass})` : `Провалено ${fail} из ${pass + fail}`)
