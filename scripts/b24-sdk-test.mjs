@@ -23,8 +23,9 @@ if (!WEBHOOK || !/^https:\/\/[^/]+\/rest\/\d+\/[^/]+\/?$/.test(WEBHOOK)) {
 
 const burst = process.argv.includes('--burst')
 
-// Import the real SDK only here (dev tool) — the app-side adapter (server/utils/b24Sdk.ts)
-// stays SDK-free via injection.
+// This dev tool uses B24Hook (webhook — no OAuth dance); the app-side adapter
+// (server/utils/b24Sdk.ts) uses B24OAuth (per-portal token). Both go through the same
+// b24.actions.v2.call.make → isSuccess/getData() contract mirrored in `call()` below.
 const { B24Hook, ParamsFactory, ApiVersion } = await import('@bitrix24/b24jssdk')
 
 head('b24jssdk transport smoke-test')

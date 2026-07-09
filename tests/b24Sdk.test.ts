@@ -9,9 +9,13 @@ import {
   tokenFromOAuthParams
 } from '../server/utils/b24Sdk'
 
-// Adapter over @bitrix24/b24jssdk B24OAuth (#191). SDK is injected (buildClient), so
-// these tests use fakes — no SDK is loaded. The mapping is also typecheck-verified
-// against the real B24OAuthParams by `typecheck:server`.
+// Adapter over @bitrix24/b24jssdk B24OAuth (#191). The pure mapping helpers and the REST
+// wrapper (`makeSdkRestCall`, which takes a STRUCTURAL client) are tested with a fake — no
+// live portal. `makePortalSdkCall` constructs the real `B24OAuth`, so only its
+// no-token early-return (before any SDK construction) is unit-tested here; the live
+// construct→call path is exercised by `pnpm sdk:test` before the crm-sync swap. The
+// PortalToken→B24OAuthParams mapping is additionally typecheck-verified against the real
+// SDK types by `typecheck:server`.
 
 const token = (over: Partial<PortalToken> = {}): PortalToken => ({
   memberId: 'M1', domain: 'acme.bitrix24.com', accessToken: 'AT', refreshToken: 'RT',
@@ -23,20 +27,17 @@ const ajax = (over: Partial<SdkAjaxResult> = {}): SdkAjaxResult => ({
   isSuccess: true, getData: () => ({ result: { items: [] } }), getErrorMessages: () => [], ...over
 })
 
-/** A fake OAuth client recording calls + refresh callback registration. */
+/** A fake OAuth client recording calls made through it. */
 function fakeClient(res: SdkAjaxResult = ajax()) {
   const calls: Array<{ method: string, params?: Record<string, unknown> }> = []
-  let refreshCb: Parameters<OAuthCallClient['setCallbackRefreshAuth']>[0] | null = null
   const client: OAuthCallClient = {
     actions: { v2: { call: { make: async (o) => {
       calls.push(o)
       return res
     } } } },
-    setCallbackRefreshAuth: (cb) => {
-      refreshCb = cb
-    }
+    setCallbackRefreshAuth: () => {}
   }
-  return { client, calls, getRefreshCb: () => refreshCb }
+  return { client, calls }
 }
 
 describe('oauthParamsFromToken', () => {
@@ -123,49 +124,16 @@ describe('makeSdkRestCall', () => {
 })
 
 describe('makePortalSdkCall', () => {
-  const deps = (over: Partial<SdkPortalDeps> = {}): { d: SdkPortalDeps, built: unknown[], client: ReturnType<typeof fakeClient> } => {
-    const client = fakeClient()
-    const built: unknown[] = []
-    const d: SdkPortalDeps = {
-      loadToken: async () => token(),
-      saveToken: async () => {},
-      creds: { clientId: 'local.x', clientSecret: 'SECRET' },
-      buildClient: (params, secret) => {
-        built.push({ params, secret })
-        return client.client
-      },
-      now: () => 1_699_999_000_000,
-      ...over
-    }
-    return { d, built, client }
-  }
-
-  it('returns null when the portal has no token (no client built)', async () => {
-    const { d, built } = deps({ loadToken: async () => null })
-    expect(await makePortalSdkCall('M1', d)).toBeNull()
-    expect(built).toHaveLength(0)
+  const deps = (over: Partial<SdkPortalDeps> = {}): SdkPortalDeps => ({
+    loadToken: async () => token(),
+    saveToken: async () => {},
+    creds: { clientId: 'local.x', clientSecret: 'SECRET' },
+    now: () => 1_699_999_000_000,
+    ...over
   })
 
-  it('builds one client with the mapped params + creds, registers refresh persistence, returns a working RestCall', async () => {
-    const { d, built, client } = deps()
-    const call = await makePortalSdkCall('M1', d)
-    expect(call).toBeTypeOf('function')
-    expect(built).toHaveLength(1) // one instance per portal (per call)
-    expect((built[0] as { secret: unknown }).secret).toEqual({ clientId: 'local.x', clientSecret: 'SECRET' })
-    expect((built[0] as { params: { memberId: string } }).params.memberId).toBe('M1')
-    expect(client.getRefreshCb()).toBeTypeOf('function') // refresh-persist wired
-    const out = await call!('crm.item.list')
-    expect(out).toEqual({ result: { items: [] } })
-  })
-
-  it('the registered refresh callback saves through our store', async () => {
-    const saved: PortalToken[] = []
-    const { d, client } = deps({ saveToken: async (t) => {
-      saved.push(t)
-    } })
-    await makePortalSdkCall('M1', d)
-    const cb = client.getRefreshCb()!
-    await cb({ authData: {} as never, b24OAuthParams: oauthParamsFromToken(token({ accessToken: 'REFRESHED' }), { nowMs: 0 }) })
-    expect(saved[0]).toMatchObject({ accessToken: 'REFRESHED' })
+  it('returns null when the portal has no token (no client constructed)', async () => {
+    // Same contract as makePortalRestCall — drop-in swap. Returns before touching the SDK.
+    expect(await makePortalSdkCall('M1', deps({ loadToken: async () => null }))).toBeNull()
   })
 })

@@ -191,8 +191,10 @@ flowchart LR
 - **Адаптер `server/utils/b24Sdk.ts`** — per-portal `B24OAuth` → наш `RestCall` (тот же контракт: `{result,…}`):
   `oauthParamsFromToken` (наш `PortalToken` → `B24OAuthParams`, сверено `typecheck:server` против реальных типов
   SDK), `makeSdkRestCall` (unwrap `getData()` / throw на ошибке), `buildRefreshPersist`+`setCallbackRefreshAuth`
-  (SDK сам рефрешит токен → мы сохраняем свежий в стор), `makePortalSdkCall` (DI, `null` без токена — drop-in для
-  `makePortalRestCall`). SDK **инъектируется** (`buildClient`) — модуль сам SDK не грузит, тесты чистые.
+  (SDK сам рефрешит токен → мы сохраняем свежий в стор), `makePortalSdkCall` (`null` без токена — drop-in для
+  `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import`/`new B24OAuth(...)`; чистые мапперы и
+  `makeSdkRestCall` (структурный клиент) тестируются фейком, а типизация `new B24OAuth` как `OAuthCallClient` служит
+  compile-time drift-guard'ом.
 - **Дев-смоук `pnpm sdk:test`** (`scripts/b24-sdk-test.mjs`, вебхук из `.env.b24test`) — проверить на **живом
   портале**, что SDK работает в Node и сам троттлит (`--burst` — 60 быстрых вызовов без `QUERY_LIMIT_EXCEEDED`).
 

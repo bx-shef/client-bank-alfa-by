@@ -387,8 +387,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     на джобу даёт сразу пер-портальный лимит **и** bind-`RestCall`-once. `oauthParamsFromToken` (наш `PortalToken`→
     `B24OAuthParams`, сверено `typecheck:server` против реальных типов SDK), `makeSdkRestCall` (unwrap `getData()` —
     контракт `{result,…}` тот же; throw на ошибке → джоба падает, чистый retry), `buildRefreshPersist`+
-    `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (DI, drop-in для
-    `makePortalRestCall`). SDK **инъектируется** (`buildClient`) — модуль SDK не грузит, тесты чистые. Свап транспорта
+    `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (drop-in для
+    `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import` и `new B24OAuth(...)`; чистые мапперы
+    и `makeSdkRestCall` (структурный клиент) тестируются фейком без живого портала, а типизация `new B24OAuth` как
+    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). Свап транспорта
     `crm-sync` — следующий PR после смоук-теста на живом портале (`pnpm sdk:test`); детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
