@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_MARKET_PROMO, LANDING_TITLE, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+import { existsSync } from 'node:fs'
+import { basename } from 'node:path'
+import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_MARKET_PROMO, LANDING_TITLE, LANDING_DEMO_SAMPLES, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+
+describe('LANDING_DEMO_SAMPLES (demo download samples)', () => {
+  // Drift guard: every advertised sample must actually exist in public/ (else the
+  // one-click loader 404s in production with no test failure), and its `name`
+  // (download filename) must match the url's basename.
+  it('each sample url points at a real file in public/ and name matches the url', () => {
+    expect(LANDING_DEMO_SAMPLES.length).toBeGreaterThan(0)
+    for (const s of LANDING_DEMO_SAMPLES) {
+      expect(s.url.startsWith('/samples/')).toBe(true)
+      expect(existsSync(`public${s.url}`)).toBe(true)
+      expect(s.name).toBe(basename(s.url))
+    }
+  })
+})
 
 describe('copyrightYears', () => {
   it('shows a single year when start === current', () => {

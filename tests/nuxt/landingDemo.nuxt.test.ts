@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { readFileSync } from 'node:fs'
 import LandingDemo from '~/components/LandingDemo.vue'
@@ -31,6 +31,8 @@ async function upload(wrapper: Awaited<ReturnType<typeof mountSuspended>>, file:
 }
 
 describe('LandingDemo', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
   it('renders the dropzone/privacy, and NO Alfa/Prior sandbox buttons', async () => {
     const wrapper = await mountSuspended(LandingDemo)
     expect(wrapper.find('[data-testid="demo-dropzone"]').exists()).toBe(true)
@@ -70,6 +72,21 @@ describe('LandingDemo', () => {
     await wrapper.find('[data-testid="demo-reset"]').trigger('click')
     expect(wrapper.find('[data-testid="demo-summary"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="demo-reset"]').exists()).toBe(false)
+  })
+
+  it('loads a bundled sample in one click (fetch → parse)', async () => {
+    // Stub fetch to return the same fixture bytes the /samples/ file holds.
+    const bytes = readFileSync('tests/fixtures/client-bank/demo-type4-alfa.txt')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    }))
+    const wrapper = await mountSuspended(LandingDemo)
+    await wrapper.find('[data-testid="demo-samples"] button').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="demo-summary"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="demo-operation"]').length).toBeGreaterThan(0)
   })
 
   it('shows an error when a file cannot be parsed', async () => {
