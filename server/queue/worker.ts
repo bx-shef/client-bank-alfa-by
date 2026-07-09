@@ -173,6 +173,16 @@ export function liveHandlerDeps(): HandlerDeps {
       const summary = resolutions.map(r => `${r.kind}=${logSafe(r.value)}:${r.status}(${r.candidates.length})`).join(', ')
       console.log(`[resolve] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
+    // Observe the allocation decision (§2, log/count only — nothing written yet). Target
+    // id/kind are internal (CRM ids, not payer-controlled); account/docId sanitized.
+    onAllocationDecision: (item, decision, triggerTargets, memberId) => {
+      const detail = decision.action === 'allocate'
+        ? `allocate ${decision.target.kind}#${decision.target.id}${decision.ambiguous ? ` ambiguous(+${decision.alternatives.length})` : ''}`
+        : decision.action === 'manual'
+          ? `manual(${decision.candidates.length} candidates, no exact match)`
+          : 'none'
+      console.log(`[allocate] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
+    },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
     // no portal token → skip. The WHOLE body is guarded (incl. makePortalRestCall's token
