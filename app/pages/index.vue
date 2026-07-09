@@ -203,6 +203,26 @@ const formats = LANDING_FORMATS
         <p class="mt-4 text-sm text-white/45">
           {{ LANDING_DEMO.note }}
         </p>
+
+        <!-- Обязательный посыл про кастом-доработку под клиента (на его сервере). -->
+        <div
+          data-glow-card
+          class="mt-6 rounded-2xl border border-[rgb(var(--color-accent-primary-ch)/0.25)] bg-[rgb(var(--color-accent-primary-ch)/0.05)] p-6 sm:p-7 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6"
+        >
+          <p class="text-base sm:text-lg text-white/85 leading-relaxed flex-1">
+            {{ LANDING_DEMO.customDev }}
+          </p>
+          <B24Button
+            :label="LANDING_DEMO.customDevCta"
+            href="#brief"
+            :external="true"
+            :no-rel="true"
+            color="air-primary"
+            size="lg"
+            class="shrink-0"
+            @click="reachGoal('demo_custom_dev')"
+          />
+        </div>
       </div>
     </section>
 

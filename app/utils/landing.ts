@@ -114,6 +114,12 @@ export const LANDING_DEMO = {
   note: 'Разбор идёт локально в браузере — сам файл не загружается на наши серверы. Это демонстрация: на боевом портале те же данные автоматически уходят в вашу CRM.',
   /** Dropzone hint (references the file cap in the component). */
   hint: 'Файл разбирается прямо в браузере — сам файл не загружается на сервер.',
+  /** Privacy warning shown near the dropzone: think about what you upload. */
+  privacyWarning: 'Подумайте, что загружаете: для примера хватит тестовой или обезличенной выписки. Демо показывает разобранные данные на экране — не раскрывайте лишнюю чувствительную информацию (реальные счета, суммы, контрагентов).',
+  /** Mandatory custom-dev message under the demo (owner-required). */
+  customDev: 'Это только демонстрация разбора. Реальную обработку — привязку к сделкам, стадии, уведомления и поддержку любого вашего формата — дорабатываем под ваши процессы и разворачиваем на вашем сервере: ваш git, ваш контур, как вам нужно.',
+  /** CTA label for the custom-dev message (scrolls to the brief form). */
+  customDevCta: 'Обсудить доработку',
   /** Shown when a file could not be parsed at all. */
   parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка (формат 1CClientBankExchange или «***** ^Type=», кодировка windows-1251).',
   /** Shown when a file parsed but held no operations. */
