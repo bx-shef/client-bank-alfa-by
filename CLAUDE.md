@@ -555,7 +555,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     до этого заглушка.
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
-    `server/utils/b24Rest.ts` (`callRest`/`restUrl`), `server/utils/ensureAccessToken.ts`
+    `server/utils/b24Rest.ts` (`callRest`/`restUrl`; **SSRF-гейт #149**: `isAllowedPortalHost` —
+    fail-closed allowlist хоста портала, облачные `*.bitrix24.<tld>` + self-hosted из env
+    `B24_SELFHOSTED_HOSTS`, валидатор и `restUrl` извлекают хост одинаково через `URL` — нет
+    parser-differential обхода `x.bitrix24.by@evil.com`; таймаут `REST_TIMEOUT_MS` 15с),
+    `server/utils/ensureAccessToken.ts`
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
     N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; DI + тесты),
