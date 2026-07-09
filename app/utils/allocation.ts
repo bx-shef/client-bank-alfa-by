@@ -228,6 +228,38 @@ export function summarizeAllocation(payment: AllocationInput): AllocationSummary
   return { decision, triggerTargets, outcome }
 }
 
+/** Human (RU) label per target kind, for the activity note the owner reads in CRM. */
+const TARGET_LABEL: Record<AllocationTargetKind, string> = {
+  'invoice': 'инвойс',
+  'deal-payment': 'оплата сделки',
+  'deal': 'сделка',
+  'smart-process': 'смарт-процесс'
+}
+
+/**
+ * Build a short RU note describing the allocation OUTCOME for the CRM activity the
+ * owner sees (#109). Labelled «предпросмотр» because nothing is written yet — the
+ * owner reads what the pipeline detected without it acting. Derived only from OUR
+ * resolved candidates (target kind/id are internal CRM ids, not payer text — no
+ * injection surface). Empty string for `none` (nothing worth noting).
+ */
+export function buildAllocationNote(summary: AllocationSummary): string {
+  const d = summary.decision
+  if (d.action === 'allocate') {
+    const base = `${TARGET_LABEL[d.target.kind]} #${d.target.id}`
+    return d.ambiguous
+      ? `Предпросмотр разнесения: несколько совпадений, выбран ${base} (+${d.alternatives.length}) — требуется проверка`
+      : `Предпросмотр разнесения: ${base} — точное совпадение суммы`
+  }
+  if (summary.triggerTargets > 0) {
+    return `Предпросмотр разнесения: срабатывание по цели (сделка/смарт-процесс) — ${summary.triggerTargets} шт.`
+  }
+  if (d.action === 'manual') {
+    return 'Предпросмотр разнесения: точного совпадения суммы нет — ручной разбор'
+  }
+  return ''
+}
+
 /**
  * Idempotency key for the persistent allocation fact «этот платёж → эта сущность»
  * (#109): payment dedup key + target kind + target id. Stable for the same

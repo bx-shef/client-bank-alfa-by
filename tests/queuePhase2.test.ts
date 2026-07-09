@@ -54,7 +54,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat: { dialogId: '' }, recognition }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], activityNote: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -63,10 +63,11 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.find.push([it.docId, memberId])
       return company
     },
-    writeActivity: async (it, companyId, memberId) => {
+    writeActivity: async (it, companyId, memberId, note) => {
       if (!companyId) return null // no company → no owner → nothing written
       const id = `act-${nextId++}`
       calls.activity.push([it.docId, companyId, memberId, id])
+      if (note) calls.activityNote.push([it.docId, note]) // captured only when a note is passed
       return id
     },
     getPortalSettings: async (memberId) => {
@@ -498,6 +499,19 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r).toMatchObject({ resolved: 0, allocatable: 0, manual: 0 })
     expect(calls.allocLog).toEqual([]) // no candidates → no allocation decision
+  })
+
+  it('passes the allocation preview note to writeActivity (owner sees it in CRM)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)] }) // exact match
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.activityNote).toEqual([['d1', 'Предпросмотр разнесения: инвойс #7 — точное совпадение суммы']])
+  })
+
+  it('writes the activity without a note when the op resolved nothing', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [] }) // recognized but no candidate
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.activity).toHaveLength(1) // activity still written
+    expect(calls.activityNote).toEqual([]) // but no allocation note
   })
 
   it('mixed op: exact amount match AND a trigger → allocatable once (trigger not double-counted)', async () => {

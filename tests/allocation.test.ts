@@ -3,6 +3,7 @@ import type { AllocationCandidate, AllocationInput } from '~/utils/allocation'
 import {
   ALLOCATION_TARGET_ROLE,
   allocationFactKey,
+  buildAllocationNote,
   collapseSameTarget,
   compareIds,
   filterByAccountNumber,
@@ -268,5 +269,36 @@ describe('summarizeAllocation', () => {
     ]))
     expect(s.outcome).toBe('allocatable')
     expect(s.decision).toMatchObject({ action: 'allocate', target: { kind: 'invoice', id: '7' } })
+  })
+})
+
+describe('buildAllocationNote (CRM activity preview)', () => {
+  const sum = (amount: number, currency: string, candidates: AllocationCandidate[]) =>
+    summarizeAllocation({ amount, currency, candidates })
+
+  it('exact invoice match → names the target', () => {
+    const note = buildAllocationNote(sum(10, 'BYN', [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]))
+    expect(note).toBe('Предпросмотр разнесения: инвойс #7 — точное совпадение суммы')
+  })
+  it('ambiguous → names the chosen target + count', () => {
+    const note = buildAllocationNote(sum(10, 'BYN', [
+      { kind: 'invoice', id: '9', amount: 10, currency: 'BYN' }, { kind: 'invoice', id: '5', amount: 10, currency: 'BYN' }
+    ]))
+    expect(note).toBe('Предпросмотр разнесения: несколько совпадений, выбран инвойс #5 (+1) — требуется проверка')
+  })
+  it('manual (no exact match) → ручной разбор', () => {
+    expect(buildAllocationNote(sum(10, 'BYN', [{ kind: 'invoice', id: '7', amount: 100, currency: 'BYN' }])))
+      .toBe('Предпросмотр разнесения: точного совпадения суммы нет — ручной разбор')
+  })
+  it('trigger target → срабатывание по цели', () => {
+    const note = buildAllocationNote(sum(10, 'BYN', [{ kind: 'deal', id: '3', amount: 0, currency: '' }]))
+    expect(note).toBe('Предпросмотр разнесения: срабатывание по цели (сделка/смарт-процесс) — 1 шт.')
+  })
+  it('deal-payment target uses its RU label', () => {
+    const note = buildAllocationNote(sum(10, 'BYN', [{ kind: 'deal-payment', id: '4', amount: 10, currency: 'BYN' }]))
+    expect(note).toBe('Предпросмотр разнесения: оплата сделки #4 — точное совпадение суммы')
+  })
+  it('none (no candidates) → empty note', () => {
+    expect(buildAllocationNote(sum(10, 'BYN', []))).toBe('')
   })
 })

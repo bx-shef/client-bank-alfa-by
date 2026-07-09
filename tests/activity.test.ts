@@ -84,6 +84,18 @@ describe('buildActivityDescription', () => {
     const cp = { name: 'X', unp: '1', account: 'BY24X' }
     expect(buildActivityDescription(makeItem({ counterparty: cp }))).not.toContain('Банк:')
   })
+  it('inserts the allocation note before the origin marker when provided', () => {
+    const note = 'Предпросмотр разнесения: инвойс #7 — точное совпадение суммы'
+    const text = buildActivityDescription(makeItem(), note)
+    expect(text).toContain(note)
+    // note sits before the dedup token (owner reads it inline with the operation)
+    expect(text.indexOf(note)).toBeLessThan(text.indexOf(activityOriginToken(makeItem())))
+  })
+  it('leaves the description unchanged for a blank/whitespace note', () => {
+    const base = buildActivityDescription(makeItem())
+    expect(buildActivityDescription(makeItem(), '')).toBe(base)
+    expect(buildActivityDescription(makeItem(), '   ')).toBe(base)
+  })
 })
 
 describe('toPortalDeadline', () => {

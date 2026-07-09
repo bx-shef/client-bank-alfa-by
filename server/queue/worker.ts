@@ -100,11 +100,11 @@ export function liveHandlerDeps(): HandlerDeps {
     // Write the universal activity (crm.activity.todo.add) attached to the matched
     // company; returns the new activity id (for rememberActivity) or null when
     // skipped (demo account / no company → no owner / unknown portal).
-    writeActivity: async (item, companyId, memberId) => {
+    writeActivity: async (item, companyId, memberId, note) => {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return null
-      return writeActivityViaRest(item, companyId, call)
+      return writeActivityViaRest(item, companyId, call, note)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the

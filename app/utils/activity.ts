@@ -91,13 +91,16 @@ export function buildActivityTitle(item: StatementItem): string {
 }
 
 /** Readable multi-line activity description (plain text) with the dedup marker.
- * `null` entries are omitted; `''` entries are kept as blank separator lines. */
-export function buildActivityDescription(item: StatementItem): string {
+ * `null` entries are omitted; `''` entries are kept as blank separator lines.
+ * An optional `note` (e.g. the #109 allocation preview) is inserted before the
+ * origin marker; a blank/omitted note leaves the description unchanged. */
+export function buildActivityDescription(item: StatementItem, note = ''): string {
   const cp = item.counterparty
   const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
   const doc = item.docNum
     ? `Документ: #${item.docNum} от ${formatIsoDate(item.acceptDate)}`
     : `Документ от ${formatIsoDate(item.acceptDate)}`
+  const trimmedNote = note.trim()
 
   const lines: Array<string | null> = [
     item.purpose,
@@ -110,6 +113,9 @@ export function buildActivityDescription(item: StatementItem): string {
     `р/сч: ${cp.account}`,
     cp.bank ? `Банк: ${cp.bank}` : null,
     '',
+    // Allocation preview (#109), when present — the owner sees what was detected.
+    trimmedNote ? trimmedNote : null,
+    trimmedNote ? '' : null,
     activityOriginToken(item)
   ]
   return lines.filter((line): line is string => line !== null).join('\n')
@@ -122,14 +128,17 @@ export function buildActivityDescription(item: StatementItem): string {
  * `deadline` is re-stamped into the portal's timezone (UTC+3) via `toPortalDeadline`
  * so the activity renders on the operation's correct calendar day (a bare UTC value
  * could otherwise shift a day). Still TO BE VERIFIED on a live portal (#90).
+ *
+ * `note` (optional) is appended to the description — used for the #109 allocation
+ * preview so the owner sees the pipeline's decision on the CRM activity.
  */
-export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef): TodoActivityParams {
+export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef, note = ''): TodoActivityParams {
   return {
     ownerTypeId: CRM_OWNER_TYPE_COMPANY,
     ownerId: company.id,
     deadline: toPortalDeadline(item.acceptDate),
     title: buildActivityTitle(item),
-    description: buildActivityDescription(item),
+    description: buildActivityDescription(item, note),
     ...(company.assignedById ? { responsibleId: company.assignedById } : {})
   }
 }

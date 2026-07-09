@@ -22,11 +22,12 @@ export function extractActivityId(resp: Record<string, unknown>): string | null 
 /**
  * Create the activity for `item` attached to CRM company `companyId` and return
  * its new id (to remember for dedup), or null if the API returned no id. The
- * caller guarantees a non-empty `companyId` (a todo needs an owner). A transport
+ * caller guarantees a non-empty `companyId` (a todo needs an owner). An optional
+ * `note` (the #109 allocation preview) is appended to the description. A transport
  * error from `call` propagates (BullMQ then retries the job).
  */
-export async function writeActivityViaRest(item: StatementItem, companyId: string, call: RestCall): Promise<string | null> {
-  const params = buildTodoActivity(item, { id: Number(companyId) })
+export async function writeActivityViaRest(item: StatementItem, companyId: string, call: RestCall, note = ''): Promise<string | null> {
+  const params = buildTodoActivity(item, { id: Number(companyId) }, note)
   const resp = await call(ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
   return extractActivityId(resp)
 }

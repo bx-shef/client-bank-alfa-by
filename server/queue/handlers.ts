@@ -12,7 +12,7 @@ import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
-import { summarizeAllocation, type AllocationDecision } from '../../app/utils/allocation'
+import { buildAllocationNote, summarizeAllocation, type AllocationDecision } from '../../app/utils/allocation'
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
@@ -37,8 +37,9 @@ export interface HandlerDeps {
   findCompany: (item: StatementItem, memberId: string) => Promise<string | null>
   /** Write a universal activity for one operation. Returns the created activity id
    *  (to remember for dedup), or `null` if nothing was written (e.g. no company
-   *  matched, so there's no owner for a todo). */
-  writeActivity: (item: StatementItem, companyId: string | null, memberId: string) => Promise<string | null>
+   *  matched, so there's no owner for a todo). `note` (optional) is the #109 allocation
+   *  preview appended to the activity description so the owner sees the decision in CRM. */
+  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string) => Promise<string | null>
   /** Read the portal's full settings blob (chat target + rules + recognition matrices)
    *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
    *  not per operation — one app.option read feeds both the chat and recognition steps. */
@@ -226,6 +227,9 @@ export async function handleCrmSyncJob(
     // sub-slice. The purpose is payer-controlled, so
     // the number of intents actually sent to REST is capped (MAX_RESOLVED_INTENTS_PER_OP)
     // to bound amplification (#191); the `recognized` metric still reflects all matches.
+    // #109 allocation preview note, attached to the activity below so the owner sees the
+    // pipeline's decision in CRM. Empty unless this op resolved candidates.
+    let activityNote = ''
     if (companyId && intents.length > 0) {
       const toResolve = intents.slice(0, MAX_RESOLVED_INTENTS_PER_OP)
       const isNegativeStage = await getNegativeStage()
@@ -247,11 +251,12 @@ export async function handleCrmSyncJob(
         } else if (summary.outcome === 'manual') {
           manual++
         }
+        activityNote = buildAllocationNote(summary)
         deps.onAllocationDecision(item, summary.decision, summary.triggerTargets, job.memberId)
       }
       deps.onResolved(item, resolutions, job.memberId)
     }
-    const activityId = await deps.writeActivity(item, companyId, job.memberId)
+    const activityId = await deps.writeActivity(item, companyId, job.memberId, activityNote || undefined)
     if (!activityId) {
       // No client company matched (or write skipped) → UNMATCHED: we do NOT write
       // anything and do NOT remember the op, so a later redelivery re-attempts once a
