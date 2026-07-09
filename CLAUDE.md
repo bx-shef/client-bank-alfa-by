@@ -345,7 +345,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `activity_dedup`,
-    `allocation_fact`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+    `allocation_fact`, `import_result`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
+    `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
+    **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
+    операции/дела/в-чат/ошибки) через воркер (демо-счета не пишут; best-effort — сбой статуса не роняет
+    джобу). `GET /api/import/status` по **фрейм-токену** (`Bearer`+`X-B24-Domain`, `profile`-валидация,
+    блок спуфинга домена; нет прогона → `neverSummary`) отдаёт `ImportRunSummary`. UI `useImportStatus`:
+    в портале — реальный fetch, вне фрейма — демо-mock. Счётчик `notified` в `handleCrmSyncJob` (⊆ created).
+    Удаление приложения чистит `import_result`.
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
     - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`,
