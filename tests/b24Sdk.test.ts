@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { PortalToken } from '../server/utils/tokenStore'
 import type { OAuthCallClient, SdkAjaxResult, SdkPortalDeps } from '../server/utils/b24Sdk'
 import {
@@ -10,12 +11,23 @@ import {
 } from '../server/utils/b24Sdk'
 
 // Adapter over @bitrix24/b24jssdk B24OAuth (#191). The pure mapping helpers and the REST
-// wrapper (`makeSdkRestCall`, which takes a STRUCTURAL client) are tested with a fake — no
-// live portal. `makePortalSdkCall` constructs the real `B24OAuth`, so only its
-// no-token early-return (before any SDK construction) is unit-tested here; the live
-// construct→call path is exercised by `pnpm sdk:test` before the crm-sync swap. The
-// PortalToken→B24OAuthParams mapping is additionally typecheck-verified against the real
-// SDK types by `typecheck:server`.
+// wrapper (`makeSdkRestCall`, structural client) are tested with a fake — no live portal.
+// `makePortalSdkCall` constructs the real `B24OAuth`; to cover its construct→wire path
+// without a live portal we mock the SDK module (the constructor does no I/O — only
+// axios.create — so this is safe). The PortalToken→B24OAuthParams mapping is additionally
+// typecheck-verified against the real SDK types by `typecheck:server`.
+
+// Self-contained factory (hoisted above imports) — no outer references allowed. Individual
+// tests override via `vi.mocked(B24OAuth).mockImplementation(...)` to capture wiring.
+vi.mock('@bitrix24/b24jssdk', () => ({
+  // Regular function (not arrow) so `new B24OAuth(...)` is constructable.
+  B24OAuth: vi.fn(function () {
+    return {
+      actions: { v2: { call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { items: [] } }), getErrorMessages: () => [] }) } } },
+      setCallbackRefreshAuth: () => {}
+    }
+  })
+}))
 
 const token = (over: Partial<PortalToken> = {}): PortalToken => ({
   memberId: 'M1', domain: 'acme.bitrix24.com', accessToken: 'AT', refreshToken: 'RT',
@@ -134,6 +146,47 @@ describe('makePortalSdkCall', () => {
 
   it('returns null when the portal has no token (no client constructed)', async () => {
     // Same contract as makePortalRestCall — drop-in swap. Returns before touching the SDK.
+    vi.mocked(B24OAuth).mockClear()
     expect(await makePortalSdkCall('M1', deps({ loadToken: async () => null }))).toBeNull()
+    expect(vi.mocked(B24OAuth)).not.toHaveBeenCalled()
+  })
+
+  it('constructs one B24OAuth with mapped params + creds, wires refresh-persist, returns a working RestCall', async () => {
+    const saved: PortalToken[] = []
+    const calls: Array<{ method: string }> = []
+    let registeredCb: ((a: { authData: never, b24OAuthParams: ReturnType<typeof oauthParamsFromToken> }) => Promise<void>) | null = null
+    vi.mocked(B24OAuth).mockReset()
+    // Regular function (not arrow) so `new B24OAuth(...)` returns this object.
+    vi.mocked(B24OAuth).mockImplementation((function () {
+      return {
+        actions: { v2: { call: { make: async (o: { method: string }) => {
+          calls.push(o)
+          return ajax()
+        } } } },
+        setCallbackRefreshAuth: (cb: typeof registeredCb) => {
+          registeredCb = cb
+        }
+      }
+    }) as unknown as typeof B24OAuth)
+
+    const call = await makePortalSdkCall('M1', deps({ saveToken: async (t) => {
+      saved.push(t)
+    } }))
+
+    // one instance per portal, constructed with the mapped params + our creds
+    expect(vi.mocked(B24OAuth)).toHaveBeenCalledTimes(1)
+    const [params, secret] = vi.mocked(B24OAuth).mock.calls[0]
+    expect(params).toMatchObject({ memberId: 'M1', accessToken: 'AT', clientEndpoint: 'https://acme.bitrix24.com/rest/' })
+    expect(secret).toEqual({ clientId: 'local.x', clientSecret: 'SECRET' })
+
+    // returns a working RestCall routed through the client
+    const out = await call!('crm.item.list')
+    expect(out).toEqual({ result: { items: [] } })
+    expect(calls[0]).toMatchObject({ method: 'crm.item.list' })
+
+    // refresh-persist wired: the registered callback saves the refreshed token to our store
+    expect(registeredCb).toBeTypeOf('function')
+    await registeredCb!({ authData: {} as never, b24OAuthParams: oauthParamsFromToken(token({ accessToken: 'REFRESHED' }), { nowMs: 0 }) })
+    expect(saved[0]).toMatchObject({ accessToken: 'REFRESHED', memberId: 'M1' })
   })
 })
