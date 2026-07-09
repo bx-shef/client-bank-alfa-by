@@ -135,6 +135,21 @@ describe('parsePortalSettings — defensive', () => {
     const r2 = parsePortalSettings(JSON.stringify({ chat: { rules: { excludePurposePatterns: [longEntry] } } })).chat.rules
     expect(r2.excludePurposePatterns![0]!.length).toBe(256)
   })
+
+  it('bounds iteration by slicing input, not by accepted count (#182)', () => {
+    // 500 identical entries never grow `seen`; the old `seen.size >= cap` break would have
+    // scanned the whole array. The input is now sliced to MAX_LIST_ITEMS (500) BEFORE the
+    // loop, so the unique sitting PAST the cap is never reached and is dropped — the
+    // accepted trade-off (a real exclusion list never nears 500). Pinning ['dup'] catches a
+    // regression that removes the slice (which would instead return ['dup','unique-past-cap']).
+    const input = [...Array.from({ length: 500 }, () => 'dup'), 'unique-past-cap']
+    const r = parsePortalSettings(JSON.stringify({ chat: { rules: { excludeAccounts: input } } })).chat.rules
+    expect(r.excludeAccounts).toEqual(['dup'])
+    // A huge all-blank array is bounded too (blanks are dropped → empty result, no full scan).
+    const blanks = Array.from({ length: 5000 }, () => '   ')
+    expect(parsePortalSettings(JSON.stringify({ chat: { rules: { excludeAccounts: blanks } } })).chat.rules.excludeAccounts)
+      .toEqual([])
+  })
 })
 
 describe('parsePortalSettings — recognition (§4)', () => {
@@ -189,6 +204,19 @@ describe('parsePortalSettings — recognition (§4)', () => {
 
   it('matrices: not-an-array → []', () => {
     expect(rec({ matrices: 'nope' }).matrices).toEqual([])
+  })
+
+  it('matrices: NOT deduped — same mask+kind kept twice (order = priority, intentional #182)', () => {
+    // Unlike cleanList, cleanRecognition intentionally does not dedupe matrices: a recognizer
+    // may want ordered/overlapping masks. This documents that as intended, not an oversight.
+    const r = rec({ matrices: [
+      { mask: 'dddd', kind: 'invoice-number' },
+      { mask: 'dddd', kind: 'invoice-number' }
+    ] })
+    expect(r.matrices).toEqual([
+      { mask: 'dddd', kind: 'invoice-number' },
+      { mask: 'dddd', kind: 'invoice-number' }
+    ])
   })
 
   it('matrices: mask clamped and count capped to the exact limits', () => {

@@ -124,10 +124,16 @@ export function defaultPortalSettings(): PortalSettings {
 function cleanList(v: unknown): string[] {
   if (!Array.isArray(v)) return []
   const seen = new Set<string>()
-  for (const raw of v) {
+  // Bound the ITERATION (not just the accepted count): an all-blank / all-duplicate
+  // array never grows `seen`, so a `seen.size >= cap` break would scan a pathologically
+  // large input in full (#182). Slice to the cap first — same defense as `cleanRecognition`.
+  // Trade-off: with dedupe, N inputs can collapse to < N uniques, so slicing could drop
+  // uniques that sit past the cap behind many leading duplicates — but a legit exclusion
+  // list never nears MAX_LIST_ITEMS, so no genuine entry is lost. The slice also caps the
+  // output size (≤ MAX_LIST_ITEMS uniques), so no separate size break is needed.
+  for (const raw of v.slice(0, MAX_LIST_ITEMS)) {
     const s = String(raw).trim().slice(0, MAX_ITEM_LEN)
     if (s) seen.add(s)
-    if (seen.size >= MAX_LIST_ITEMS) break
   }
   return [...seen]
 }
