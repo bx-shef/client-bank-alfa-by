@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   companyDealsParams,
   DEAL_ENTITY_TYPE_ID,
+  dealListTotal,
   extractDealRows,
   extractPayments,
   findCompanyDealPayments,
   findDealPayments,
+  MAX_DEAL_PAGES,
   paymentListParams
 } from '../server/utils/paymentLookup'
 
@@ -124,18 +126,29 @@ describe('findDealPayments', () => {
   })
 })
 
-describe('companyDealsParams / extractDealRows', () => {
-  it('filters deals by companyId (IDOR scope) and selects id/stage', () => {
+describe('companyDealsParams / extractDealRows / dealListTotal', () => {
+  it('filters deals by companyId (IDOR scope), selects id/stage, starts at offset 0', () => {
     expect(companyDealsParams('93')).toEqual({
       entityTypeId: 2,
       filter: { companyId: '93' },
-      select: ['id', 'stageId']
+      select: ['id', 'stageId'],
+      start: 0
     })
+  })
+  it('carries an explicit pagination offset', () => {
+    expect(companyDealsParams('93', 50)).toMatchObject({ start: 50, filter: { companyId: '93' } })
   })
   it('reads result.items (deal list), tolerating bad shapes', () => {
     expect(extractDealRows({ result: { items: [{ id: 33 }] } })[0]!.id).toBe(33)
     expect(extractDealRows({ result: { items: 'x' } })).toEqual([])
     expect(extractDealRows({})).toEqual([])
+  })
+  it('reads the top-level total (NaN when absent → single-page fallback)', () => {
+    expect(dealListTotal({ result: { items: [] }, total: 3 })).toBe(3)
+    expect(Number.isNaN(dealListTotal({ result: { items: [] } }))).toBe(true)
+  })
+  it('coerces a string total (B24 REST serializes numbers as strings)', () => {
+    expect(dealListTotal({ result: { items: [] }, total: '3' })).toBe(3)
   })
 })
 
@@ -234,5 +247,88 @@ describe('findCompanyDealPayments', () => {
       throw new Error('QUERY_LIMIT_EXCEEDED') // crm.item.payment.list fails
     })
     await expect(findCompanyDealPayments('93', {}, call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
+
+  // --- Pagination (#191): the deal list is single-page (max 50); a company with more
+  // deals must be paged by `start`, else the overflow pool is silently lost (→ manual).
+  // Paged dispatch mock: crm.item.list slices `allDeals` by start/pageSize and reports a
+  // top-level `total`; crm.item.payment.list keys payments by entityId.
+  const pagedPortal = (allDeals: Array<{ id: number, stageId?: string }>, paymentsByDeal: Record<number, unknown[]>, pageSize: number) =>
+    vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.item.list') {
+        const start = Number(params.start) || 0
+        return { result: { items: allDeals.slice(start, start + pageSize) }, total: allDeals.length }
+      }
+      if (method === 'crm.item.payment.list') return { result: paymentsByDeal[params.entityId as number] ?? [] }
+      throw new Error(`unexpected method ${method}`)
+    })
+
+  it('pages through deals beyond the first page and aggregates the whole pool', async () => {
+    const deals = [{ id: 33, stageId: 'NEW' }, { id: 41, stageId: 'NEW' }, { id: 52, stageId: 'NEW' }]
+    const call = pagedPortal(deals, { 33: [pay({ id: 3 })], 41: [pay({ id: 8 })], 52: [pay({ id: 9 })] }, 2)
+    const out = await findCompanyDealPayments('93', {}, call)
+    // All three deals' payments collected — the deal on page 2 (id 52) is NOT lost.
+    expect(out.map(c => c.dealId)).toEqual(['33', '41', '52'])
+    const listCalls = call.mock.calls.filter(c => c[0] === 'crm.item.list')
+    expect(listCalls.map(c => (c[1] as { start: number }).start)).toEqual([0, 2]) // two pages: start 0, 2
+  })
+
+  it('stops paging once total is collected (no extra empty page)', async () => {
+    const deals = [{ id: 33, stageId: 'NEW' }, { id: 41, stageId: 'NEW' }]
+    const call = pagedPortal(deals, { 33: [pay({ id: 3 })], 41: [pay({ id: 8 })] }, 2)
+    await findCompanyDealPayments('93', {}, call)
+    // total=2 collected on page 1 (start 0) → no second list call.
+    expect(call.mock.calls.filter(c => c[0] === 'crm.item.list')).toHaveLength(1)
+  })
+
+  it('bounds a runaway portal (total never satisfied) at MAX_DEAL_PAGES', async () => {
+    // Pathological portal: always returns a full page and an inflated total → the cap
+    // is the only thing that ends the loop.
+    const call = vi.fn(async (method: string) => {
+      if (method === 'crm.item.list') return { result: { items: [{ id: 33, stageId: 'NEW' }] }, total: 999999 }
+      return { result: [] } // no payments
+    })
+    await findCompanyDealPayments('93', {}, call)
+    expect(call.mock.calls.filter(c => c[0] === 'crm.item.list')).toHaveLength(MAX_DEAL_PAGES)
+  })
+
+  it('keeps single-page behaviour when the response carries no total (stub fallback)', async () => {
+    // The existing portal() mock returns no `total` → exactly one list call, as before.
+    const call = portal([{ id: 33, stageId: 'NEW' }], { 33: [pay({ id: 3 })] })
+    const out = await findCompanyDealPayments('93', {}, call)
+    expect(out).toHaveLength(1)
+    expect(call.mock.calls.filter(c => c[0] === 'crm.item.list')).toHaveLength(1)
+  })
+
+  it('advances past a full page of skipped negative-stage deals to reach page 2', async () => {
+    // Load-bearing: `seen`/`start` advance by RAW rows, not by kept candidates — else a
+    // whole page of lost deals advances the cursor by 0 and re-fetches page 1 forever,
+    // never reaching the real deals on page 2. (A "start += processed" refactor regresses here.)
+    const deals = [
+      { id: 11, stageId: 'C5:LOSE' }, { id: 22, stageId: 'C5:LOSE' }, // page 1: all lost → 0 candidates
+      { id: 33, stageId: 'NEW' }, { id: 44, stageId: 'NEW' } // page 2: real
+    ]
+    const call = pagedPortal(deals, { 33: [pay({ id: 3 })], 44: [pay({ id: 7 })] }, 2)
+    const out = await findCompanyDealPayments('93', { isNegativeStage: s => s === 'C5:LOSE' }, call)
+    expect(out.map(c => c.dealId)).toEqual(['33', '44']) // page-2 deals found, not lost
+    const starts = call.mock.calls.filter(c => c[0] === 'crm.item.list').map(c => (c[1] as { start: number }).start)
+    expect(starts).toEqual([0, 2]) // cursor advanced by RAW rows (2), not by the 0 kept on page 1
+  })
+
+  it('stops on an empty page even when total over-reports (server overcount)', async () => {
+    // Isolates the `rows.length === 0` break with a FINITE total: data runs out (2 deals)
+    // before the inflated total (99) is reached. Without the empty-page guard this would
+    // page to MAX_DEAL_PAGES. Distinct from the no-total fallback (that breaks on !isFinite).
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.item.list') {
+        const start = Number(params.start) || 0
+        return { result: { items: [{ id: 33, stageId: 'NEW' }, { id: 41, stageId: 'NEW' }].slice(start, start + 2) }, total: 99 }
+      }
+      if (method === 'crm.item.payment.list') return { result: [pay({ id: 3 })] }
+      throw new Error(`unexpected ${method}`)
+    })
+    await findCompanyDealPayments('93', {}, call)
+    // page 0 (start 0) → 2 deals; page 1 (start 2) → empty → break. Exactly two list calls, not 60.
+    expect(call.mock.calls.filter(c => c[0] === 'crm.item.list')).toHaveLength(2)
   })
 })

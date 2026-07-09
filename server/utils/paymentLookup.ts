@@ -126,14 +126,34 @@ export interface CompanyDealPaymentOptions {
 }
 
 /** `crm.item.list` params — a company's OWN deals (the IDOR scope). Filtering by
- *  `companyId` in the query is what keeps another company's deals/payments out. */
-export function companyDealsParams(companyId: string): Record<string, unknown> {
+ *  `companyId` in the query is what keeps another company's deals/payments out.
+ *  `start` is the pagination offset (`crm.item.list` returns 50 rows per page and a
+ *  top-level `total`; see `findCompanyDealPayments`). */
+export function companyDealsParams(companyId: string, start: number = 0): Record<string, unknown> {
   return {
     entityTypeId: DEAL_ENTITY_TYPE_ID,
     filter: { companyId },
-    select: ['id', 'stageId']
+    select: ['id', 'stageId'],
+    start
   }
 }
+
+/** Read the top-level `total` from a `crm.item.list` response (siblings of `result`,
+ *  not inside it — the universal B24 list envelope `{result:{items},total,next}`; the
+ *  same place `loadCategoryIds`/`chatSearch` read it, and B24 serializes it as a string,
+ *  hence `Number()`). Non-numeric / absent → `NaN`, which stops pagination after the
+ *  current page (single-page fallback — the pre-pagination behaviour).
+ *  NB: this is the FIRST `crm.item.list` pagination in the repo (invoiceLookup/itemByIdLookup
+ *  never read `total`); if a portal ever omitted it, the paginator would go inert (harmless
+ *  single-page, no regression) — worth a live-verify on a company seeded with >50 deals. */
+export function dealListTotal(resp: Record<string, unknown>): number {
+  return Number(resp?.total)
+}
+
+/** Hard cap on company-deal pages (50 rows each) — a runaway/DoS backstop far above
+ *  any real company's deal count (60×50 = 3000 deals). Exported so the test can pin
+ *  the bound without hard-coding the number. */
+export const MAX_DEAL_PAGES = 60
 
 interface RawDeal {
   id?: unknown
@@ -166,12 +186,24 @@ export function extractDealRows(resp: Record<string, unknown>): RawDeal[] {
  *   («<order>/<seq>»), so a recognized `payment-number` matches via
  *   `filterByAccountNumber` (allocation.ts). `order-number` still needs the
  *   order↔payment relationship confirmed live before matching by prefix (#172).
- * - COST is N+1 (one `crm.item.list` + one `crm.item.payment.list` per deal), and
- *   `crm.item.payment.list` CANNOT be batched (`ERROR_BATCH_METHOD_NOT_ALLOWED`) —
- *   so bound it with rate-limit-aware concurrency (≈2 rps classic REST, §8), not a batch.
- * - the deal list is NOT paginated: a company with many historical deals may exceed
- *   one page and silently lose a match (→ `manual`). Page or narrow (stage/date) in
- *   crm-sync before this runs on real volume.
+ * - COST is N+1 (one `crm.item.list` PER PAGE + one `crm.item.payment.list` per deal),
+ *   and `crm.item.payment.list` CANNOT be batched (`ERROR_BATCH_METHOD_NOT_ALLOWED`).
+ *   The per-deal payment calls are run SEQUENTIALLY (concurrency 1) — rate-safe by
+ *   construction; adding bounded concurrency (≈2 rps classic REST, §8) is deferred to
+ *   the worker rate-limiter slice (#191, docs/QUEUES.md «REST-бюджет проводки»).
+ *
+ * PAGINATION: `crm.item.list` returns 50 rows per page and a top-level `total`. A
+ * company with many historical deals exceeds one page, so this pages by `start` until
+ * `total` is collected (or `MAX_DEAL_PAGES` — a runaway backstop). Without paging, the
+ * overflow deals' payments would be silently dropped and an amount that lives there
+ * would wrongly fall through to `manual`/`none`. When a response carries no numeric
+ * `total` (e.g. a stub), paging stops after the first page (single-page fallback).
+ *
+ * REST BUDGET: worst case ≈ P `crm.item.list` (P ≤ `MAX_DEAL_PAGES`) + D `crm.item.payment.list`
+ * (D = non-negative-stage deals). The pool is fetched ONCE PER OP (only when an intent is a
+ * `payment-number`), but it is NOT cached across ops — a batch of same-company ops re-scans.
+ * Safe today because sequential (not bursty) + write path is log/count only; a server-side
+ * stage/date narrowing + the per-portal limiter land with the rest of #191 before real volume.
  */
 export async function findCompanyDealPayments(
   companyId: string,
@@ -181,14 +213,25 @@ export async function findCompanyDealPayments(
   const cid = String(companyId).trim()
   if (!cid) return []
 
-  const resp = await call('crm.item.list', companyDealsParams(cid))
   const out: AllocationCandidate[] = []
-  for (const deal of extractDealRows(resp)) {
-    const stageId = deal.stageId === undefined || deal.stageId === null ? '' : String(deal.stageId)
-    if (opts.isNegativeStage?.(stageId)) continue
-    const dealId = deal.id === undefined || deal.id === null ? '' : String(deal.id)
-    if (!dealId) continue
-    out.push(...await findDealPayments(dealId, { includePaid: opts.includePaid }, call))
+  let start = 0
+  let seen = 0
+  for (let page = 0; page < MAX_DEAL_PAGES; page++) {
+    const resp = await call('crm.item.list', companyDealsParams(cid, start))
+    const rows = extractDealRows(resp)
+    for (const deal of rows) {
+      const stageId = deal.stageId === undefined || deal.stageId === null ? '' : String(deal.stageId)
+      if (opts.isNegativeStage?.(stageId)) continue
+      const dealId = deal.id === undefined || deal.id === null ? '' : String(deal.id)
+      if (!dealId) continue
+      out.push(...await findDealPayments(dealId, { includePaid: opts.includePaid }, call))
+    }
+    // Advance by rows returned (a full page = 50) and stop once `total` is collected.
+    // An empty page or a non-numeric `total` ends the loop (single-page fallback).
+    seen += rows.length
+    const total = dealListTotal(resp)
+    if (rows.length === 0 || !Number.isFinite(total) || seen >= total) break
+    start += rows.length
   }
   return out
 }
