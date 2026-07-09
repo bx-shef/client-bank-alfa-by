@@ -26,8 +26,9 @@
 // The Belarus `RQ_IIK` fallback is NOT seeded: `RQ_IIK` rejects a 28-char BY IBAN
 // («Array» validation error, even with a valid checksum / a COUNTRY_ID=4 preset —
 // values ≤20 chars pass), so the account goes in `RQ_ACC_NUM`; the IIK fallback stays
-// covered by unit tests. Deals carry a REAL paid payment (crm.item.payment), not just
-// a linked invoice — the #109 `deal-payment` target.
+// covered by unit tests. Deals carry a REAL UNPAID payment (crm.item.payment) awaiting
+// money, not just a linked invoice — the #109 `deal-payment` target (the resolver offers
+// only unpaid payments; the app's action on a match is `payment.pay`).
 
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
@@ -94,8 +95,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 /** Ensure a currency exists on the portal (idempotent). Belarus statements are in
  *  BYN, but a fresh non-BY portal (UK/US/RU locale) ships without it, and
  *  `crm.item.add` rejects an unknown `currencyId` ("Currency is incorrect"). Add it
- *  once so the invoice/deal/smart-process fixtures load. LID is taken from the base
- *  currency so we don't pass a language the portal doesn't have. */
+ *  once so the invoice/deal/smart-process fixtures load. The language id is taken from
+ *  the portal's base currency (fallback: first listed currency, then `'en'`) so we
+ *  never pass a language the portal doesn't have. */
 async function ensureCurrency(code, { amount = 1 } = {}) {
   const list = await rest('crm.currency.list', {})
   if (Array.isArray(list) && list.some(c => c.CURRENCY === code)) {
@@ -106,10 +108,12 @@ async function ensureCurrency(code, { amount = 1 } = {}) {
   await rest('crm.currency.add', {
     fields: {
       CURRENCY: code, BASE: 'N', AMOUNT_CNT: 1, AMOUNT: amount, SORT: 700,
-      FORMAT_STRING: `# ${code}`, DEC_POINT: '.', THOUSANDS_SEP: ' ', DECIMALS: 2, LID: lid
+      // Localization (name/format) is NESTED under LANG per the crm.currency.add
+      // contract; top-level FORMAT_STRING/DECIMALS/… would be silently ignored.
+      LANG: { [lid]: { FULL_NAME: code, FORMAT_STRING: `# ${code}`, DEC_POINT: '.', THOUSANDS_SEP: ' ', DECIMALS: 2 } }
     }
   })
-  ok(`валюта ${code} добавлена (LID=${lid})`)
+  ok(`валюта ${code} добавлена (LANG=${lid})`)
 }
 
 /** A universal CRM item (company=4, deal=2, invoice=31, smart-process=NNNN)
@@ -231,9 +235,11 @@ async function ensureDealPayment(dealId, productId, amount) {
     return
   }
   // Drop empty/paid leftovers (e.g. a productless payment from an interrupted run)
-  // so exactly one clean unpaid target remains.
+  // so exactly one clean unpaid target remains. A failed delete is surfaced (not
+  // swallowed) — otherwise a stuck payment would silently drift past the "exactly one
+  // unpaid" invariant instead of being visible for cleanup.
   for (const p of payments) {
-    await rest('crm.item.payment.delete', { id: p.id }).catch(() => {})
+    await rest('crm.item.payment.delete', { id: p.id }).catch(e => warn(`не удалил оплату id=${p.id}: ${e.message}`))
   }
   // Reuse the product row for THIS product if present, else add one.
   const rowsResp = await rest('crm.item.productrow.list', { filter: { '=ownerType': 'D', '=ownerId': dealId }, select: ['id', 'productId'] })
@@ -392,13 +398,21 @@ async function seed() {
   created.dealOpt = await ensureItem(2, 'DEAL_OPT', {
     title: T + 'Сделка Опт', categoryId: dealOpt, opportunity: 1200, currencyId: 'BYN', companyId: created.clientAlfa
   }, { label: 'Сделка Опт (направление Опт)' })
-  // A REAL paid payment on the deal (the #109 `deal-payment` target)…
+  // A REAL UNPAID payment on the deal (the #109 `deal-payment` target)…
   await ensureDealPayment(created.dealOpt, created.prodInternal, 1200)
   // …plus a paid invoice linked to the same deal (parentId2) — the invoice target.
   created.dealOptInvoice = await ensureItem(31, 'INV_DEAL_OPT', {
     title: T + 'Счёт по сделке Опт', accountNumber: 'СЧ-1200', categoryId: INV_CAT, stageId: 'DT31_11:P',
     companyId: created.clientAlfa, mycompanyId: created.my1, opportunity: 1200, currencyId: 'BYN', parentId2: created.dealOpt
   }, { label: 'Счёт по сделке Опт (СЧ-1200, оплачен, привязан к сделке)' })
+  // A SECOND deal for the same client with its OWN unpaid 1200 BYN payment — two
+  // distinct deal-payments of equal amount in the company pool → resolveAllocation is
+  // AMBIGUOUS (auto-allocates the smallest id + flags a chat heads-up, §2). Lets the
+  // live harness exercise the ambiguous branch, not just single-target/manual.
+  created.dealOpt2 = await ensureItem(2, 'DEAL_OPT2', {
+    title: T + 'Сделка Опт-2 (коллизия суммы)', categoryId: dealOpt, opportunity: 1200, currencyId: 'BYN', companyId: created.clientAlfa
+  }, { label: 'Сделка Опт-2 (вторая неоплаченная 1200 → ambiguous)' })
+  await ensureDealPayment(created.dealOpt2, created.prodInternal, 1200)
   created.dealRetail = await ensureItem(2, 'DEAL_RETAIL', {
     title: T + 'Сделка Розница (без оплаты)', categoryId: dealRetail, opportunity: 800, currencyId: 'BYN', companyId: created.clientBeta
   }, { label: 'Сделка Розница (направление Розница, без оплаты)' })

@@ -57,6 +57,13 @@ const ACC_CLIENT_BETA = 'BY24PJCB30129000000000009002'
 const ACC_MY_1 = 'BY04ALFA30129000000000009100'
 const INV_CAT = 11
 
+// Any thrown/rejected REST error surfaces as a clean failure + exit(1), not a raw
+// stack trace mid-checklist (dev harness — keep the output legible).
+process.on('unhandledRejection', (e) => {
+  err(`Прогон упал: ${(e as { message?: string })?.message ?? String(e)}`)
+  process.exit(1)
+})
+
 head('#109 live READ verification · ' + WEBHOOK.replace(/\/rest\/\d+\/[^/]+/, '/rest/***/***'))
 
 // 1) companyLookup — client + my company by account, and the not-found path.
@@ -68,6 +75,14 @@ const myId = await findMyCompanyByAccount(ACC_MY_1, call)
 check('companyLookup: МОЯ компания по нашему счёту (isMyCompany=Y)', !!myId, `id=${myId}`)
 const none = await findCompanyByAccount('BY00NONE00000000000000000000', call)
 check('companyLookup: несуществующий счёт → null (не падает)', none === null, `→ ${none}`)
+
+// Hard precondition: the client/my-company ids gate every downstream block. If any is
+// null (e.g. the portal isn't seeded), FAIL LOUDLY instead of silently skipping the
+// dependent checks and still printing a green summary with fewer asserts.
+if (!alfaId || !betaId || !myId) {
+  err('companyLookup не вернул id — портал не засеян? Прогоните `pnpm seed:b24`. Дальнейшие проверки невозможны.')
+  process.exit(1)
+}
 
 // 2) stageLoader — negative-stage predicate for the invoice category.
 const isNeg = await loadInvoiceNegativeStage(INV_CAT, call)
@@ -96,21 +111,14 @@ const rec = recognizeByMatrices('Оплата по счету СЧ-0001 за у�
 const recJson = JSON.stringify(rec)
 check('purposeMatch: распознан «СЧ-0001» из назначения по матрице', recJson.includes('0001') && rec.length > 0, recJson)
 
-// 5) paymentLookup — the deal's unpaid payment is a deal-payment candidate.
-if (alfaId) {
-  const pool = await findCompanyDealPayments(alfaId, {}, call)
-  const has1200 = pool.some(p => Number((p as { amount?: number }).amount) === 1200)
-  check('paymentLookup: company-пул оплат содержит неоплаченную 1200 BYN (сделка Опт)', has1200, JSON.stringify(pool))
-}
-
-// 6) resolveAllocation — the full READ→DECIDE chain live: real invoiceLookup candidates
-// fed into the pure decision (exactly what crm-sync does before it acts on a match).
-if (alfaId) {
+// 5) resolveAllocation — SINGLE exact target: invoiceLookup candidate fed into the pure
+// decision (exactly what crm-sync does before it acts on a match).
+{
   const cands = await findInvoicesByNumber('СЧ-0001', { companyId: alfaId, isNegativeStage: isNeg }, call)
-  // СЧ-0001 is 1000 BYN → an exact-amount payment allocates to it.
+  // СЧ-0001 is 1000 BYN → an exact-amount payment allocates to it, unambiguously.
   const dExact = resolveAllocation({ amount: 1000, currency: 'BYN', candidates: cands })
-  check('resolveAllocation: платёж 1000 BYN / СЧ-0001 → allocate на invoice#' + cands[0]?.id,
-    dExact.action === 'allocate' && dExact.target.id === cands[0]?.id, JSON.stringify(dExact))
+  check('resolveAllocation: платёж 1000 BYN / СЧ-0001 → allocate invoice#' + cands[0]?.id + ' (один кандидат)',
+    dExact.action === 'allocate' && dExact.target.id === cands[0]?.id && dExact.ambiguous === false, JSON.stringify(dExact))
   // A different amount → manual (no exact match) — never mis-allocated.
   const dManual = resolveAllocation({ amount: 999, currency: 'BYN', candidates: cands })
   check('resolveAllocation: платёж 999 BYN / СЧ-0001 → manual (сумма не совпала)', dManual.action === 'manual', dManual.action)
@@ -118,12 +126,21 @@ if (alfaId) {
   const dCur = resolveAllocation({ amount: 1000, currency: 'USD', candidates: cands })
   check('resolveAllocation: платёж 1000 USD / СЧ-0001 → manual (валюта не совпала)', dCur.action === 'manual', dCur.action)
 }
-// deal-payment: an exact-amount payment allocates to the unpaid deal payment (1200 BYN).
-if (alfaId) {
+
+// 6) deal-payment pool + AMBIGUOUS decision — pool fetched ONCE. Сделки Опт и Опт-2
+// несут по неоплаченной оплате 1200 BYN → two distinct deal-payment targets of equal
+// amount → resolveAllocation auto-allocates the smallest id AND flags `ambiguous`.
+{
   const pool = await findCompanyDealPayments(alfaId, {}, call)
+  const cands1200 = pool.filter(p => Number((p as { amount?: number }).amount) === 1200)
+  check('paymentLookup: company-пул содержит ≥2 неоплаченные 1200 BYN (Опт + Опт-2)', cands1200.length >= 2, JSON.stringify(pool))
   const dPay = resolveAllocation({ amount: 1200, currency: 'BYN', candidates: pool })
-  check('resolveAllocation: платёж 1200 BYN → allocate на deal-payment (сделка Опт)',
-    dPay.action === 'allocate' && dPay.target.kind === 'deal-payment', JSON.stringify(dPay))
+  check('resolveAllocation: платёж 1200 BYN → allocate deal-payment + AMBIGUOUS (две цели)',
+    dPay.action === 'allocate' && dPay.target.kind === 'deal-payment' && dPay.ambiguous === true, JSON.stringify(dPay))
+  // Auto-allocated to the SMALLEST id among the equal-amount candidates (owner rule).
+  const minId = String(Math.min(...cands1200.map(c => Number((c as { id: string }).id))))
+  check('resolveAllocation: выбран минимальный id среди равных (min-ID правило)',
+    dPay.action === 'allocate' && dPay.target.id === minId, dPay.action === 'allocate' ? `target=${dPay.target.id}, min=${minId}` : dPay.action)
 }
 
 head(fail === 0 ? `Все проверки пройдены (${pass})` : `Провалено ${fail} из ${pass + fail}`)
