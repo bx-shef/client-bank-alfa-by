@@ -14,13 +14,25 @@
 // (URL parsing, not a regex) so a userinfo/port trick (`x.bitrix24.by@evil.com`) cannot
 // pass validation yet fetch a different host (no parser-differential bypass).
 
-/** Cloud Bitrix24 portal host suffixes (`<name>.bitrix24.<tld>`). Mirrors the nginx CSP
- *  `connect-src` list + `app/utils/b24Form.ts`. The LEADING DOT is load-bearing: it stops
- *  `evil-bitrix24.by` and `x.bitrix24.by.attacker.com` from matching. */
+/** Cloud Bitrix24 portal host suffixes (`<name>.bitrix24.<tld>`). Every entry is a
+ *  Bitrix-OWNED zone, so allow-listing it cannot enable SSRF (an attacker can't register
+ *  a subdomain there). The LEADING DOT is load-bearing: it stops `evil-bitrix24.by` and
+ *  `x.bitrix24.by.attacker.com` from matching. FAIL-CLOSED means an omitted zone silently
+ *  refuses a legit portal, so completeness matters (CLAUDE.md: «портал может быть в любой
+ *  стране»). Source: the official Bitrix24 DPA «Infrastructure and Sub-processors» (2025)
+ *  regional zones (com/eu/de/it/pl/fr/uk/com.tr/com.br/es/mx/co/cn/in/id/jp/vn) + the
+ *  1C-Bitrix (RU-operator) zones (ru/by/kz/ua) + `tech` (dev, as in b24Form). Keep in sync
+ *  with the nginx CSP `frame-ancestors`/`connect-src` list. */
 export const B24_CLOUD_HOST_SUFFIXES = [
-  '.bitrix24.ru', '.bitrix24.by', '.bitrix24.com', '.bitrix24.eu',
-  '.bitrix24.kz', '.bitrix24.ua', '.bitrix24.de', '.bitrix24.fr',
-  '.bitrix24.it', '.bitrix24.pl', '.bitrix24.es', '.bitrix24.com.br',
+  // 1C-Bitrix (RU operator) zones
+  '.bitrix24.ru', '.bitrix24.by', '.bitrix24.kz', '.bitrix24.ua',
+  // Bitrix24 international (DPA-listed) regional zones
+  '.bitrix24.com', '.bitrix24.eu', '.bitrix24.de', '.bitrix24.fr',
+  '.bitrix24.it', '.bitrix24.pl', '.bitrix24.es', '.bitrix24.uk',
+  '.bitrix24.com.br', '.bitrix24.com.tr', '.bitrix24.mx', '.bitrix24.co',
+  '.bitrix24.cn', '.bitrix24.in', '.bitrix24.id', '.bitrix24.jp',
+  '.bitrix24.vn',
+  // Dev/demo zone (matches app/utils/b24Form.ts)
   '.bitrix24.tech'
 ] as const
 
@@ -70,9 +82,14 @@ export function isAllowedPortalHost(host: string, selfHosted: Set<string> = new 
 
 /** REST endpoint URL for a portal host + method (`x.bitrix24.by` + `app.option.get`).
  *  Uses `portalHostname` (same extraction as the validator) so the fetched host always
- *  equals the validated host — no parser-differential SSRF. */
+ *  equals the validated host — no parser-differential SSRF. FAIL-CLOSED on an empty host:
+ *  `https:///rest/<method>` re-parses to host `<method's first label>`, a latent footgun
+ *  for any caller that skips the gate — throw instead. (`callRest` already rejects such a
+ *  host upstream, so this only hardens a hypothetical direct caller.) */
 export function restUrl(host: string, method: string): string {
-  return `https://${portalHostname(host)}/rest/${method}`
+  const h = portalHostname(host)
+  if (!h) throw new Error('b24Rest: invalid/empty portal host')
+  return `https://${h}/rest/${method}`
 }
 
 /** A human-readable message if a REST body carries a Bitrix24 error, else null.
