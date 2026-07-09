@@ -18,10 +18,12 @@ import {
 } from '~/utils/importUpload'
 import { summarizeExtraction, type DemoExtraction } from '~/utils/demoExtract'
 import { formatMoney } from '~/utils/activity'
-import { LANDING_DEMO } from '~/utils/landing'
+import { LANDING_DEMO, LANDING_DEMO_SAMPLES, type DemoSample } from '~/utils/landing'
 import type { IdentifierKind } from '~/utils/purposeMatch'
 
 const { reachGoal } = useMetrikaGoal()
+
+const samples = LANDING_DEMO_SAMPLES
 
 /** Cap rendered rows (operations AND recognized-id rows) so a crafted multi-MB
  *  upload can't freeze the tab by mounting tens of thousands of nodes; the overflow
@@ -103,6 +105,25 @@ async function runFiles(files: File[]) {
   }
 }
 
+/** One-click "try a sample": fetch a bundled example statement and run it through
+ *  the same file path. The user can also just download it (link) and drop it in. */
+async function loadSample(sample: DemoSample) {
+  if (busy.value) return
+  busy.value = true
+  clearFeedback()
+  try {
+    const res = await fetch(sample.url)
+    if (!res.ok) throw new Error('fetch failed')
+    const buf = await res.arrayBuffer()
+    reachGoal('demo_sample')
+    // runFiles owns the runSeq/busy/results lifecycle from here.
+    await runFiles([new File([buf], sample.name, { type: 'text/plain' })])
+  } catch {
+    error.value = 'Не удалось загрузить пример. Скачайте файл по ссылке и загрузите вручную.'
+    busy.value = false
+  }
+}
+
 function onDrop(e: DragEvent) {
   dragOver.value = false
   if (busy.value) return
@@ -171,6 +192,35 @@ function reset() {
         <p class="mt-3 text-xs text-white/40">
           {{ LANDING_DEMO.hint }} Максимум {{ MAX_UPLOAD_FILES }} файлов за раз.
         </p>
+      </div>
+
+      <!-- Sample statements: load in one click, or download and drop in yourself. -->
+      <div
+        class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-2 text-sm"
+        data-testid="demo-samples"
+      >
+        <span class="text-white/55">Нет своей выписки? Попробуйте на примере:</span>
+        <template
+          v-for="s in samples"
+          :key="s.url"
+        >
+          <span class="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              class="rounded-lg border border-[rgb(var(--color-accent-primary-ch)/0.4)] bg-[rgb(var(--color-accent-primary-ch)/0.08)] px-3 py-1.5 text-white transition-colors hover:bg-[rgb(var(--color-accent-primary-ch)/0.16)] disabled:opacity-50"
+              :disabled="busy"
+              @click="loadSample(s)"
+            >
+              {{ s.label }}
+            </button>
+            <a
+              :href="s.url"
+              :download="s.name"
+              class="text-xs text-white/45 underline underline-offset-2 hover:text-white/70"
+              @click="reachGoal('demo_sample_download')"
+            >скачать</a>
+          </span>
+        </template>
       </div>
 
       <!-- Privacy warning: think about what you upload to a public demo. -->

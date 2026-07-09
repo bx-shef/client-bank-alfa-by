@@ -138,16 +138,30 @@ export interface BankConnect {
 export const LANDING_BANK_CONNECT: readonly BankConnect[] = [
   {
     name: 'Альфа-Банк Беларусь',
-    tag: 'Онлайн · OAuth API',
-    text: 'Подключаем напрямую к банку: выписка по счетам тянется автоматически, без ручной выгрузки. Портал Bitrix24 может быть в любой стране.',
+    tag: 'Онлайн · автоматически',
+    text: 'Выписка по счетам приходит в Bitrix24 автоматически — без файлов и ручной выгрузки. Портал может быть в любой стране.',
     accent: 'cyan'
   },
   {
     name: 'Приорбанк',
-    tag: 'Онлайн · Open Banking (СПР)',
-    text: 'Операции приходят в CRM через Open Banking. Онлайн-подключение настраиваем при внедрении под ваши счета.',
+    tag: 'Онлайн · автоматически',
+    text: 'Операции по счетам подтягиваются в Bitrix24 автоматически через Open Banking. Приход и расход — сразу в CRM.',
     accent: 'green'
   }
+]
+
+/** Downloadable sample statements for the demo — the user grabs one and uploads it
+ *  (or loads it in one click). Served from public/samples/ (windows-1251, as-is). */
+export interface DemoSample {
+  label: string
+  url: string
+  name: string
+}
+
+export const LANDING_DEMO_SAMPLES: readonly DemoSample[] = [
+  { label: 'Альфа-Банк', url: '/samples/vypiska-alfa.txt', name: 'vypiska-alfa.txt' },
+  { label: 'Приорбанк', url: '/samples/vypiska-prior.txt', name: 'vypiska-prior.txt' },
+  { label: '1С', url: '/samples/vypiska-1c.txt', name: 'vypiska-1c.txt' }
 ]
 
 /** «Интеграторам Bitrix24» block (section 5). */

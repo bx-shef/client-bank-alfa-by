@@ -40,6 +40,10 @@ describe('LandingDemo', () => {
     // The interactive sandbox buttons were removed.
     expect(wrapper.find('[data-testid="demo-alfa"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="demo-prior"]').exists()).toBe(false)
+    // Sample statements block with at least one download link.
+    const samples = wrapper.find('[data-testid="demo-samples"]')
+    expect(samples.exists()).toBe(true)
+    expect(samples.find('a[download]').exists()).toBe(true)
     // Nothing extracted yet.
     expect(wrapper.find('[data-testid="demo-summary"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="demo-operation"]').exists()).toBe(false)
