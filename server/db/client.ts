@@ -48,6 +48,17 @@ CREATE TABLE IF NOT EXISTS allocation_fact (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (member_id, fact_key)
 );
+
+CREATE TABLE IF NOT EXISTS import_result (
+  member_id          TEXT PRIMARY KEY,
+  state              TEXT NOT NULL DEFAULT 'never',
+  last_sync_at       TIMESTAMPTZ,
+  operations         INTEGER NOT NULL DEFAULT 0,
+  activities_created INTEGER NOT NULL DEFAULT 0,
+  chat_notified      INTEGER NOT NULL DEFAULT 0,
+  errors             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 let pool: Pool | undefined

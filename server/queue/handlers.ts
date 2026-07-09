@@ -146,7 +146,8 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *
  *  Counters: `processed` = unique ops in the batch; `skipped` = already written in
  *  a prior (redelivered) run; `created` = new activities written + remembered;
- *  `unmatched` = new ops where nothing was written (e.g. no company → no owner);
+ *  `notified` = chat notifications sent (⊆ created); `unmatched` = new ops where
+ *  nothing was written (e.g. no company → no owner);
  *  `recognized` = unique ops where ≥1 identifier was recognized in the purpose (§4);
  *  `resolved` = matched-company ops where ≥1 recognized intent found ≥1 allocation
  *  candidate (§4 lookup — log/count only, does not yet write an allocation);
@@ -162,7 +163,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, notified: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -189,6 +190,7 @@ export async function handleCrmSyncJob(
   }
 
   let created = 0
+  let notified = 0
   let skipped = 0
   let unmatched = 0
   let recognized = 0
@@ -277,10 +279,11 @@ export async function handleCrmSyncJob(
     // the job after the activity was written+remembered.
     if (chat?.dialogId && shouldNotifyChat(item, chat.rules)) {
       await deps.notifyChat(item, chat.dialogId, job.memberId)
+      notified++
     }
     created++
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, notified, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, credits: credits.length, debits: debits.length }
 }

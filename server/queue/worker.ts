@@ -18,6 +18,7 @@ import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
 import { deleteToken, getToken, saveToken } from '../utils/tokenStore'
 import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/activityDedupStore'
+import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { callRest } from '../utils/b24Rest'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
@@ -229,6 +230,7 @@ export function liveHandlerDeps(): HandlerDeps {
     deletePortal: async (memberId) => {
       await deleteToken(dbQuery, memberId)
       await deleteDedupForPortal(dbQuery, memberId)
+      await deleteImportResultForPortal(dbQuery, memberId)
     },
     enqueueCrmSync
   }
@@ -259,6 +261,35 @@ export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: 
     // limiter here — new Worker(..., { connection, limiter: { max: 100, duration: 60_000 } }).
     new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection, concurrency }),
     new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
-    new Worker<CrmSyncJob>(Q_CRM, async job => handleCrmSyncJob(job.data, deps), { connection, concurrency })
+    new Worker<CrmSyncJob>(Q_CRM, async (job) => {
+      const summary = await handleCrmSyncJob(job.data, deps)
+      // Persist the run for the in-portal status card (#5) — LATEST run per portal.
+      // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
+      // already happened). Demo batches never touch the real portal's status row.
+      await persistImportResult(job.data, summary)
+      return summary
+    }, { connection, concurrency })
   ]
+}
+
+/** Save the crm-sync run summary as the portal's last import status (#5). Gated to
+ *  real (non-demo) portals; swallows errors so status bookkeeping can't fail a job. */
+async function persistImportResult(
+  job: CrmSyncJob,
+  summary: { processed: number, created: number, notified: number }
+): Promise<void> {
+  const account = job.items[0]?.account ?? ''
+  if (!account || isDemoAccount(account)) return
+  try {
+    await saveImportResult(dbQuery, job.memberId, {
+      state: 'ok',
+      lastSyncAt: new Date().toISOString(),
+      operations: summary.processed,
+      activitiesCreated: summary.created,
+      chatNotified: summary.notified,
+      errors: []
+    })
+  } catch (e) {
+    console.error('import_result save failed', job.memberId, (e as Error)?.message)
+  }
 }
