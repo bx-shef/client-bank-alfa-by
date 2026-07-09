@@ -112,6 +112,17 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings('{"chat":{"rules":{"directions":["nope"]}}}').chat.rules.directions).toEqual([])
   })
 
+  it('directions: bounded scan drops a valid value buried past the cap (#182)', () => {
+    // A legit `directions` holds 0-2 entries; the coercion slices the untrusted array before
+    // probing (O(1) Set) instead of scanning it whole per direction. A 'credit' hidden past
+    // MAX_LIST_ITEMS junk entries is dropped — accepted trade-off; pinning [] catches a
+    // regression that removes the slice (which would scan the full array and find it).
+    const buried = [...Array.from({ length: 500 }, () => 'x'), 'credit']
+    expect(parsePortalSettings(JSON.stringify({ chat: { rules: { directions: buried } } })).chat.rules.directions).toEqual([])
+    // within the cap it's still honored
+    expect(parsePortalSettings(JSON.stringify({ chat: { rules: { directions: ['credit'] } } })).chat.rules.directions).toEqual(['credit'])
+  })
+
   it('exclusion lists: coerced, trimmed, de-blanked, deduped', () => {
     const r = parsePortalSettings('{"chat":{"rules":{"excludeAccounts":[" BY1 ","BY1","",2],"excludePurposePatterns":["x","x"]}}}').chat.rules
     expect(r.excludeAccounts).toEqual(['BY1', '2'])
