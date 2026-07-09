@@ -12,8 +12,14 @@ import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
+import { resolveAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
+
+/** Target kinds matched by amount+currency (through `resolveAllocation`, §2). */
+const AMOUNT_KINDS = new Set<AllocationCandidate['kind']>(['invoice', 'deal-payment'])
+/** Target kinds fired UNCONDITIONALLY by a direct reference (do NOT amount-match, §2). */
+const TRIGGER_KINDS = new Set<AllocationCandidate['kind']>(['deal', 'smart-process'])
 
 /** Cap on how many recognized intents of ONE operation are sent to the REST resolver
  *  (#191). The payment purpose is payer-controlled, and recognition dedupes only by
@@ -68,6 +74,12 @@ export interface HandlerDeps {
    *  ≥1 recognized intent — whether or not any candidate was found (so it fires even when
    *  the `resolved` counter does not). MUST NOT throw (pure observation). */
   onResolved: (item: StatementItem, resolutions: IntentResolution[], memberId: string) => void
+  /** Observe the ALLOCATION DECISION for one op (§2, #109): the amount-matched outcome
+   *  (`resolveAllocation` over invoice/deal-payment candidates) plus how many unconditional
+   *  trigger targets (deal/smart-process) were found. LOG-ONLY this slice — no allocation is
+   *  WRITTEN yet (that lands with the fact-store + auto-distribute gate + idempotency #184).
+   *  Called once per op that resolved ≥1 candidate. MUST NOT throw (pure observation). */
+  onAllocationDecision: (item: StatementItem, decision: AllocationDecision, triggerTargets: number, memberId: string) => void
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
    *  throw — it runs AFTER the activity is written+remembered, so a propagated error
@@ -142,14 +154,20 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  `unmatched` = new ops where nothing was written (e.g. no company → no owner);
  *  `recognized` = unique ops where ≥1 identifier was recognized in the purpose (§4);
  *  `resolved` = matched-company ops where ≥1 recognized intent found ≥1 allocation
- *  candidate (§4 lookup — log/count only, does not yet write an allocation).
+ *  candidate (§4 lookup — log/count only, does not yet write an allocation);
+ *  `allocatable` = resolved ops whose candidates yield an allocation (an exact amount+
+ *  currency match on an invoice/deal-payment, OR ≥1 unconditional trigger target);
+ *  `ambiguous` = allocatable ops where >1 distinct amount target matched (auto-allocate
+ *  to the smallest id + chat heads-up); `manual` = ops with amount candidates but no
+ *  exact match and no trigger (partial/group payment → «очередь ручного разбора»).
+ *  Allocation is DECISION-ONLY here (§2 log/count) — nothing is written off it yet.
  *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, skipped: number, unmatched: number, recognized: number, resolved: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -180,6 +198,9 @@ export async function handleCrmSyncJob(
   let unmatched = 0
   let recognized = 0
   let resolved = 0
+  let allocatable = 0
+  let ambiguous = 0
+  let manual = 0
   for (const item of unique) {
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
     // portal's matrices and route each. Pure + cheap → run for every unique op (even
@@ -214,7 +235,27 @@ export async function handleCrmSyncJob(
       const toResolve = intents.slice(0, MAX_RESOLVED_INTENTS_PER_OP)
       const isNegativeStage = await getNegativeStage()
       const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId, isNegativeStage)
-      if (resolutions.some(r => r.candidates.length > 0)) resolved++
+      const candidates = resolutions.flatMap(r => r.candidates)
+      if (candidates.length > 0) {
+        resolved++
+        // Allocation decision (§2, #109): amount-matched targets (invoice/deal-payment) go
+        // through resolveAllocation (exact amount+currency); trigger targets (deal/
+        // smart-process) fire UNCONDITIONALLY by direct reference and bypass amount matching.
+        // DECISION-ONLY: nothing is written yet (fact-store + auto-distribute gate + #184 next).
+        const amountCandidates = candidates.filter(c => AMOUNT_KINDS.has(c.kind))
+        const triggerTargets = candidates.filter(c => TRIGGER_KINDS.has(c.kind)).length
+        const decision = resolveAllocation({ amount: item.amount, currency: item.currency, candidates: amountCandidates })
+        if (decision.action === 'allocate') {
+          allocatable++
+          if (decision.ambiguous) ambiguous++
+        } else if (triggerTargets > 0) {
+          // No exact amount target, but an unconditional trigger fires → still allocatable.
+          allocatable++
+        } else if (decision.action === 'manual') {
+          manual++
+        }
+        deps.onAllocationDecision(item, decision, triggerTargets, job.memberId)
+      }
       deps.onResolved(item, resolutions, job.memberId)
     }
     const activityId = await deps.writeActivity(item, companyId, job.memberId)
@@ -246,5 +287,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, skipped, unmatched, recognized, resolved, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, credits: credits.length, debits: debits.length }
 }
