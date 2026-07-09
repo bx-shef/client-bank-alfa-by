@@ -91,6 +91,27 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 // Find-or-create helpers (idempotent by XML_ID / title).
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Ensure a currency exists on the portal (idempotent). Belarus statements are in
+ *  BYN, but a fresh non-BY portal (UK/US/RU locale) ships without it, and
+ *  `crm.item.add` rejects an unknown `currencyId` ("Currency is incorrect"). Add it
+ *  once so the invoice/deal/smart-process fixtures load. LID is taken from the base
+ *  currency so we don't pass a language the portal doesn't have. */
+async function ensureCurrency(code, { amount = 1 } = {}) {
+  const list = await rest('crm.currency.list', {})
+  if (Array.isArray(list) && list.some(c => c.CURRENCY === code)) {
+    log(`  ${C.dim}=${C.reset} валюта ${code} уже есть`)
+    return
+  }
+  const lid = (Array.isArray(list) && (list.find(c => c.BASE === 'Y') || list[0])?.LID) || 'en'
+  await rest('crm.currency.add', {
+    fields: {
+      CURRENCY: code, BASE: 'N', AMOUNT_CNT: 1, AMOUNT: amount, SORT: 700,
+      FORMAT_STRING: `# ${code}`, DEC_POINT: '.', THOUSANDS_SEP: ' ', DECIMALS: 2, LID: lid
+    }
+  })
+  ok(`валюта ${code} добавлена (LID=${lid})`)
+}
+
 /** A universal CRM item (company=4, deal=2, invoice=31, smart-process=NNNN)
  *  matched by its (unique) `title`. Legacy-backed types (company/deal) reject an
  *  `xmlId` filter, so title is the portable key; the `xmlId` is still stamped on
@@ -194,17 +215,25 @@ async function ensureCategory(entityTypeId, name) {
   return created?.category?.id
 }
 
-/** Give a deal a REAL, paid «оплата» (a Bitrix payment object — the #109
- *  `deal-payment` target), not just a linked invoice. Flow confirmed live:
- *  add a product row → crm.item.payment.add → link the row (sets the sum) → pay.
- *  Idempotent even across a partial failure: reuses ANY existing payment on the
- *  deal (paying it if still unpaid) rather than adding a second one. */
+/** Give a deal a REAL «оплата» (a Bitrix payment object — the #109 `deal-payment`
+ *  target), not just a linked invoice. The target is an UNPAID payment awaiting
+ *  money: the #109 resolver only offers unpaid payments as candidates, and the
+ *  app's own action on a match is `payment.pay`. So we do NOT pay it here (and the
+ *  internal-account pay-system needs a buyer balance anyway — "Insufficient funds").
+ *  Flow confirmed live: add a product row → crm.item.payment.add → link the row
+ *  (sets the sum) → leave unpaid. Idempotent: keeps a single unpaid payment that
+ *  already carries a sum; drops empty/leftover payments before recreating. */
 async function ensureDealPayment(dealId, productId, amount) {
   const payments = extractPayments(await rest('crm.item.payment.list', { entityId: dealId, entityTypeId: 2 }))
-  const existing = payments[0]
-  if (existing?.paid === 'Y') {
-    log(`    ${C.dim}·${C.reset} оплата сделки уже есть (пропуск)`)
+  // Already have the fixture we want — one unpaid payment with a real sum.
+  if (payments.some(p => p.paid !== 'Y' && Number(p.sum) > 0)) {
+    log(`    ${C.dim}·${C.reset} неоплаченная оплата сделки уже есть (пропуск)`)
     return
+  }
+  // Drop empty/paid leftovers (e.g. a productless payment from an interrupted run)
+  // so exactly one clean unpaid target remains.
+  for (const p of payments) {
+    await rest('crm.item.payment.delete', { id: p.id }).catch(() => {})
   }
   // Reuse the product row for THIS product if present, else add one.
   const rowsResp = await rest('crm.item.productrow.list', { filter: { '=ownerType': 'D', '=ownerId': dealId }, select: ['id', 'productId'] })
@@ -213,16 +242,16 @@ async function ensureDealPayment(dealId, productId, amount) {
     const pr = await rest('crm.item.productrow.add', { fields: { ownerType: 'D', ownerId: dealId, productId, price: amount, quantity: 1 } })
     rowId = pr?.productRow?.id
   }
-  // Reuse an existing (unpaid) payment left by an earlier interrupted run.
-  let payId = existing?.id
-  if (payId) {
-    log(`    ${C.dim}·${C.reset} доплачиваю существующую оплату сделки`)
-  } else {
-    payId = await rest('crm.item.payment.add', { entityId: dealId, entityTypeId: 2 })
+  // Fresh payment → link the product row (sets the sum), leave UNPAID. Retry the link
+  // once: a just-created payment is occasionally not yet resolvable ("Payment has not been found").
+  const payId = await rest('crm.item.payment.add', { entityId: dealId, entityTypeId: 2 })
+  try {
+    await rest('crm.item.payment.product.add', { paymentId: payId, rowId, quantity: 1 })
+  } catch {
+    await sleep(1000)
     await rest('crm.item.payment.product.add', { paymentId: payId, rowId, quantity: 1 })
   }
-  await rest('crm.item.payment.pay', { id: payId })
-  log(`    ${C.dim}·${C.reset} оплата сделки проведена (${amount})`)
+  log(`    ${C.dim}·${C.reset} неоплаченная оплата сделки создана (id ${payId}, ${amount})`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,6 +333,9 @@ async function purge() {
 
 async function seed() {
   const created = {}
+
+  head('0/6 · Валюта портала (BYN для выписок Беларуси)')
+  await ensureCurrency('BYN')
 
   head('1/6 · Товары')
   created.prodInternal = await ensureProduct('PROD_IMPL', { name: T + 'Внедрение', price: 1500, currency: 'BYN' })
