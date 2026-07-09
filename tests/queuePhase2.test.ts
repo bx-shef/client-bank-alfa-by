@@ -410,12 +410,32 @@ describe('handleCrmSyncJob', () => {
     expect(calls.negStage).toEqual(['M']) // predicate loaded once, reused
   })
 
-  it('does not load the negative-stage predicate when no op resolves (lazy)', async () => {
+  it('does not load the negative-stage predicate when no op resolves (lazy, no company)', async () => {
     // no company → resolution gated off → predicate never loaded (saves the REST calls).
     const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, company: null })
     await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(calls.resolve).toEqual([])
     expect(calls.negStage).toEqual([]) // never called — nothing to filter
+  })
+
+  it('does not load the negative-stage predicate when a matched op recognizes nothing (lazy gate)', async () => {
+    // company matches but the purpose yields no intent → the `intents.length > 0` half of
+    // the gate holds it off (guards against a regression that loads on company-match alone).
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'без номера счета')]), deps)
+    expect(calls.resolve).toEqual([])
+    expect(calls.negStage).toEqual([])
+  })
+
+  it('memoizes a NULL predicate too — loaded once per job, every op unfiltered', async () => {
+    // the fragile path: a null (unavailable) result must be memoized, not re-fetched per op.
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, negativeStage: null })
+    await handleCrmSyncJob(job([
+      item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002'), item('d3', 'credit', 'счет СЧ-0003')
+    ]), deps)
+    expect(calls.resolve).toHaveLength(3)
+    expect(calls.negStage).toEqual(['M']) // loaded ONCE despite null, not per-op
+    expect((calls.resolve as unknown[][]).every(c => c[3] === 'unfiltered')).toBe(true)
   })
 
   it('resolves unfiltered when the predicate is unavailable (null → no stage filtering)', async () => {

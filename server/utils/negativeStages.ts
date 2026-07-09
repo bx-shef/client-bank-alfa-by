@@ -48,6 +48,34 @@ export interface PortalNegativeStages {
   diagnostics: NegativeStageDiagnostics
 }
 
+/** Strip a leading `C<digits>:` deal category prefix (`C5:LOSE` → `LOSE`). Deal stage
+ *  ids come categorized (`C<cat>:CODE`) or bare (`CODE`) depending on the funnel, and the
+ *  `crm.status.list` negative set may hold either form. The CATEGORIZED form (`C5:LOSE`)
+ *  is live-confirmed; the DEFAULT-funnel form that `crm.item.list` returns is NOT yet
+ *  live-verified (could be bare `LOSE` or `C0:LOSE`). Matching BOTH the raw id and its
+ *  stripped code makes the negative check robust to whichever form comes back. This is
+ *  false-negative-SAFE: `LOSE`/`APOLOGY` are semantically fixed across funnels, so a strip
+ *  only ever ADDS a match against a bare negative code — it can never drop a valid
+ *  (allocatable) candidate. Non-deal ids (invoice `DT31_…`) don't match the prefix and
+ *  pass through unchanged. Live-verify the default-funnel form before allocation is
+ *  WRITTEN off these candidates (currently log/count only). */
+export function stripDealCategoryPrefix(stageId: string): string {
+  return stageId.replace(/^C\d+:/, '')
+}
+
+/** Entity types whose negative-stage load looks BROKEN (fail-open): the entity has
+ *  funnels but ZERO negative stages were found. A real portal's funnel almost always has
+ *  at least one fail/lost stage (invoice «Не оплачен», deal `LOSE`), so this is the
+ *  tell-tale of a trimmed-rights / bad-`ENTITY_ID` query — the caller ALERTS rather than
+ *  silently allocating onto a paid/lost entity (docs/PROCESSING.md §5, stageLoader
+ *  fail-open caveat). Symmetric across invoice AND deal (both are live allocation targets). */
+export function failOpenEntities(diagnostics: NegativeStageDiagnostics): string[] {
+  const out: string[] = []
+  if (diagnostics.invoice.categories > 0 && diagnostics.invoice.negativeStages === 0) out.push('invoice')
+  if (diagnostics.deal.categories > 0 && diagnostics.deal.negativeStages === 0) out.push('deal')
+  return out
+}
+
 interface RawCategory {
   id?: unknown
 }
@@ -67,11 +95,28 @@ export function extractCategoryIds(resp: Record<string, unknown>): string[] {
   return out
 }
 
+/** Hard cap on `crm.category.list` pages (50 rows each) — a DoS/runaway backstop far
+ *  above any real portal's funnel count (40×50 = 2000 categories per entity type). */
+const MAX_CATEGORY_PAGES = 40
+
 /** List a CRM entity type's funnel (category) ids via `crm.category.list`. A transport
- *  error propagates; an unsupported entity type would surface as that error, not silently. */
+ *  error propagates; an unsupported entity type would surface as that error, not silently.
+ *  The method is SINGLE-PAGE (max 50 rows) and reports `total` — so a portal with >50
+ *  funnels is paged via `start`, else the overflow categories (and their negative stages)
+ *  would be silently dropped (fail-open). Bounded by `total` and `MAX_CATEGORY_PAGES`. */
 export async function loadCategoryIds(entityTypeId: number, call: RestCall): Promise<string[]> {
-  const resp = await call('crm.category.list', { entityTypeId })
-  return extractCategoryIds(resp)
+  const out: string[] = []
+  let start = 0
+  for (let page = 0; page < MAX_CATEGORY_PAGES; page++) {
+    const resp = await call('crm.category.list', { entityTypeId, start })
+    const ids = extractCategoryIds(resp)
+    out.push(...ids)
+    const total = Number(resp?.total)
+    // Stop when an empty page came back or we've collected everything `total` promised.
+    if (ids.length === 0 || !Number.isFinite(total) || out.length >= total) break
+    start += ids.length
+  }
+  return out
 }
 
 /**
@@ -107,8 +152,11 @@ export async function buildPortalNegativeStagePredicate(call: RestCall): Promise
   const invoice = await loadEntityNegativeStages(SMART_INVOICE_ENTITY_TYPE_ID, invoiceStageEntityId, call)
   const deal = await loadEntityNegativeStages(DEAL_ENTITY_TYPE_ID, dealStageEntityId, call)
   const union = new Set<string>([...invoice.negative, ...deal.negative])
+  const isNeg = makeIsNegativeStage(union)
   return {
-    predicate: makeIsNegativeStage(union),
+    // Match the raw stage id OR its deal-category-stripped code (see stripDealCategoryPrefix)
+    // so a default-funnel lost deal is caught whichever id form crm.item.list returns.
+    predicate: (stageId: string) => isNeg(stageId) || isNeg(stripDealCategoryPrefix(stageId)),
     diagnostics: {
       invoice: { categories: invoice.categories, negativeStages: invoice.negative.size },
       deal: { categories: deal.categories, negativeStages: deal.negative.size }

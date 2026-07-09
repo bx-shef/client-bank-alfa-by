@@ -30,7 +30,7 @@ import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
 import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
-import { buildPortalNegativeStagePredicate } from '../utils/negativeStages'
+import { buildPortalNegativeStagePredicate, failOpenEntities } from '../utils/negativeStages'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
@@ -153,15 +153,17 @@ export function liveHandlerDeps(): HandlerDeps {
     // stages) so intent resolution drops paid/«Не оплачен»/lost candidates. Called at most
     // ONCE per job by the handler. No portal token → null (resolution proceeds unfiltered).
     // FAIL-OPEN ALERT: an empty negative set is indistinguishable from a broken query /
-    // trimmed rights — a real portal's deal funnel always has ≥1 LOSE stage, so 0 negatives
-    // across ≥1 deal funnel is warned (else we'd allocate onto a lost deal). A REST error
-    // propagates (fail the job → clean retry).
+    // trimmed rights — a real portal's invoice/deal funnel always has ≥1 fail/lost stage,
+    // so 0 negatives across ≥1 funnel (invoice OR deal, symmetric) is warned (else we'd
+    // allocate onto a «Не оплачен» invoice / lost deal). A REST error propagates (fail the
+    // job → clean retry).
     loadNegativeStagePredicate: async (memberId) => {
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return null
       const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call)
-      if (diagnostics.deal.categories > 0 && diagnostics.deal.negativeStages === 0) {
-        console.warn(`[stage] portal ${memberId}: 0 negative deal stages across ${diagnostics.deal.categories} funnel(s) — check rights/config; nothing will be stage-excluded (fail-open)`)
+      const suspicious = failOpenEntities(diagnostics)
+      if (suspicious.length > 0) {
+        console.warn(`[stage] portal ${memberId}: 0 negative stages for ${suspicious.join('+')} despite ≥1 funnel — check rights/config; those entities won't be stage-excluded (fail-open)`)
       }
       return predicate
     },
