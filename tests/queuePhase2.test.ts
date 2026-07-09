@@ -234,7 +234,7 @@ describe('handleCrmSyncJob', () => {
   it('no announcement when no chat target is set (empty dialogId)', async () => {
     const { deps, calls } = fakeDeps({ chat: { dialogId: '', rules: { directions: ['credit'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
-    expect(r).toMatchObject({ created: 1 })
+    expect(r).toMatchObject({ created: 1, notified: 0 }) // written, but NOT notified (no target)
     expect(calls.chat).toEqual([]) // written, but not announced
   })
 
@@ -247,7 +247,10 @@ describe('handleCrmSyncJob', () => {
   it('rules gate the announcement: direction / excluded account / excluded purpose', async () => {
     // directions: credits only → a created DEBIT is written but not announced.
     const dir = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'] } } })
-    await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'debit')]), dir.deps)
+    const dr = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'debit')]), dir.deps)
+    // both written, ONLY the credit announced → notified (1) ≠ created (2). Pins that
+    // `notified++` lives in the notify branch, not alongside `created++`.
+    expect(dr).toMatchObject({ created: 2, notified: 1 })
     expect(dir.calls.chat).toEqual([['d1', 'M']])
 
     // excluded account (item.account = 'A') → silenced.

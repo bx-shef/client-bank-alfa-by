@@ -1,7 +1,14 @@
-import type { ImportState } from '~/types/importStatus'
+import type { ImportRunSummary, ImportState } from '~/types/importStatus'
 
 // Pure helpers for presenting the import status — Russian relative time and a
 // state→label/colour map. No I/O; unit-tested.
+
+/** The empty "never run yet" summary — SSG-stable default, the API fallback when a
+ *  portal has no recorded run, and the client empty state. Single source (client-safe,
+ *  imported by both the server handler and the UI composable). */
+export function emptyImportSummary(): ImportRunSummary {
+  return { state: 'never', lastSyncAt: null, operations: 0, activitiesCreated: 0, chatNotified: 0, errors: [] }
+}
 
 /** Russian plural pick: forms = [one, few, many] (e.g. ['минуту','минуты','минут']). */
 export function pluralRu(n: number, forms: [string, string, string]): string {

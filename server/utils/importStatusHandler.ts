@@ -5,6 +5,7 @@
 // fails), then read the stored result. DI over the side-effects → unit-testable.
 
 import type { ImportRunSummary } from '../../app/types/importStatus'
+import { emptyImportSummary } from '../../app/utils/importStatus'
 
 export interface ImportStatusDeps {
   /** Resolve the portal member_id by its domain (null ⇒ app not installed). */
@@ -14,12 +15,6 @@ export interface ImportStatusDeps {
   validateFrame: (domain: string, accessToken: string) => Promise<string>
   /** Read the stored last-run summary for the portal (null ⇒ never run yet). */
   getResult: (memberId: string) => Promise<ImportRunSummary | null>
-}
-
-/** The empty "never run yet" summary — SSG-stable default and the fallback for a portal
- *  with no recorded run. */
-export function neverSummary(): ImportRunSummary {
-  return { state: 'never', lastSyncAt: null, operations: 0, activitiesCreated: 0, chatNotified: 0, errors: [] }
 }
 
 /**
@@ -51,5 +46,5 @@ export async function handleImportStatus(
   if (!userId) return { status: 403, body: { error: 'invalid frame token' } }
 
   const result = await deps.getResult(memberId)
-  return { status: 200, body: result ?? neverSummary() }
+  return { status: 200, body: result ?? emptyImportSummary() }
 }

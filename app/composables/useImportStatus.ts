@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { ImportRunSummary } from '~/types/importStatus'
+import { emptyImportSummary } from '~/utils/importStatus'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { frameAuth, frameAuthHeaders } from '~/composables/useFrameAuth'
 
@@ -8,12 +9,8 @@ import { frameAuth, frameAuthHeaders } from '~/composables/useFrameAuth'
 // (landing / preview, no frame): falls back to a demo mock so /app looks alive outside a
 // portal. Initial value is "never" so SSG prerenders a stable empty state; the client
 // populates it on mount (no hydration mismatch).
-function emptySummary(): ImportRunSummary {
-  return { state: 'never', lastSyncAt: null, operations: 0, activitiesCreated: 0, chatNotified: 0, errors: [] }
-}
-
 export function useImportStatus() {
-  const status = ref<ImportRunSummary>(emptySummary())
+  const status = ref<ImportRunSummary>(emptyImportSummary())
   const loading = ref(false)
 
   async function refresh() {
@@ -41,7 +38,7 @@ export function useImportStatus() {
     } catch {
       // In-frame fetch error (not installed / transient) → keep the safe empty state
       // rather than crashing the status card.
-      status.value = emptySummary()
+      status.value = emptyImportSummary()
     } finally {
       loading.value = false
     }

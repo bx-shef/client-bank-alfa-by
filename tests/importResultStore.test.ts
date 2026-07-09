@@ -81,6 +81,12 @@ describe('importResultStore', () => {
     })
   })
 
+  it('drops non-string entries from a stored errors array', async () => {
+    const { query, rows } = fakeStore()
+    rows.M = { state: 'error', last_sync_at: null, operations: 0, activities_created: 0, chat_notified: 0, errors: ['ok', 123, null, 'two'] }
+    expect((await getImportResult(query, 'M'))?.errors).toEqual(['ok', 'two'])
+  })
+
   it('deletes a portal row (uninstall purge)', async () => {
     const { query } = fakeStore()
     await saveImportResult(query, 'M', run())

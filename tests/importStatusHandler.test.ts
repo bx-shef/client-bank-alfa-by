@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ImportRunSummary } from '../app/types/importStatus'
-import { handleImportStatus, neverSummary, type ImportStatusDeps } from '../server/utils/importStatusHandler'
+import { emptyImportSummary } from '../app/utils/importStatus'
+import { handleImportStatus, type ImportStatusDeps } from '../server/utils/importStatusHandler'
 
 const sample: ImportRunSummary = {
   state: 'ok', lastSyncAt: '2026-07-09T08:00:00.000Z', operations: 5,
@@ -46,7 +47,7 @@ describe('handleImportStatus', () => {
   it('200 with the never-summary when the portal has no recorded run', async () => {
     const r = await handleImportStatus(deps({ getResult: async () => null }), { accessToken: 't', domain: 'd' })
     expect(r.status).toBe(200)
-    expect(r.body).toEqual(neverSummary())
+    expect(r.body).toEqual(emptyImportSummary())
   })
 
   it('does not validate the token before resolving the portal (order: domain → token)', async () => {
