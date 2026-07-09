@@ -48,11 +48,21 @@ export interface HandlerDeps {
    *  for ops with ≥1 recognized identifier. MUST NOT throw (pure observation). */
   onRecognized: (item: StatementItem, intents: RecognitionIntent[], memberId: string) => void
   /** Resolve recognized intents to allocation candidates via the entity lookups,
-   *  scoped to the payer `companyId` (IDOR). Called only for a matched-company op with
-   *  ≥1 recognized identifier (§4 → #109 lookup slice). LOG/COUNT only this slice — the
-   *  candidates are NOT yet written as an allocation. Returns one resolution per intent.
-   *  A REST error propagates (fail the job → clean retry), like findCompany. */
-  resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string) => Promise<IntentResolution[]>
+   *  scoped to the payer `companyId` (IDOR) and dropping negative-stage entities via
+   *  `isNegativeStage` (from `loadNegativeStagePredicate`; omitted → keep every stage).
+   *  Called only for a matched-company op with ≥1 recognized identifier (§4 → #109
+   *  lookup slice). LOG/COUNT only this slice — the candidates are NOT yet written as an
+   *  allocation. Returns one resolution per intent. A REST error propagates (fail the
+   *  job → clean retry), like findCompany. */
+  resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string, isNegativeStage?: (stageId: string) => boolean) => Promise<IntentResolution[]>
+  /** Load the portal's negative-stage predicate (union of invoice + deal fail/lost
+   *  stages) so intent resolution drops candidates in a paid/«Не оплачен»/lost stage.
+   *  Called AT MOST ONCE per job (lazily, only when the first op actually resolves
+   *  intents) — the result is reused for every op. `null` ⇒ unavailable (no portal
+   *  token) ⇒ resolution proceeds without stage filtering (candidates may include
+   *  negative-stage entities — acceptable while nothing is written off them). A REST
+   *  error propagates (fail the job → clean retry). */
+  loadNegativeStagePredicate: (memberId: string) => Promise<((stageId: string) => boolean) | null>
   /** Observe the candidates each recognized intent resolved to (log-only, for coverage
    *  on real traffic before allocation is wired). Called once per matched-company op with
    *  ≥1 recognized intent — whether or not any candidate was found (so it fires even when
@@ -156,6 +166,15 @@ export async function handleCrmSyncJob(
   const chat = settings?.chat ?? null
   const recognition = settings?.recognition ?? null
 
+  // Negative-stage predicate (union of invoice + deal fail/lost stages), loaded AT MOST
+  // ONCE per job — lazily, so a batch that never resolves an intent pays nothing. Reused
+  // across ops. `undefined` = not loaded yet; `null`/predicate = loaded (memoized).
+  let negativeStage: ((stageId: string) => boolean) | null | undefined
+  const getNegativeStage = async (): Promise<((stageId: string) => boolean) | undefined> => {
+    if (negativeStage === undefined) negativeStage = await deps.loadNegativeStagePredicate(job.memberId)
+    return negativeStage ?? undefined
+  }
+
   let created = 0
   let skipped = 0
   let unmatched = 0
@@ -185,14 +204,16 @@ export async function handleCrmSyncJob(
     // entity lookups, scoped to the matched company. LOG/COUNT only — no allocation is
     // written yet. GATED behind the dedup skip (a redelivered op is already `continue`d
     // above, so no re-query) and a matched company (no company ⇒ no IDOR scope ⇒ nothing
-    // to look up). Stage filtering is the next sub-slice: candidates here are NOT stage-
-    // filtered, so `resolved` can be slightly optimistic vs. the eventual written count —
-    // fine because nothing is written off them yet. The purpose is payer-controlled, so
+    // to look up). Candidates are now stage-filtered: the negative-stage predicate (loaded
+    // once per job) drops paid/«Не оплачен»/lost entities, so `resolved` counts only
+    // allocatable candidates. Still LOG/COUNT only — the allocation write is the next
+    // sub-slice. The purpose is payer-controlled, so
     // the number of intents actually sent to REST is capped (MAX_RESOLVED_INTENTS_PER_OP)
     // to bound amplification (#191); the `recognized` metric still reflects all matches.
     if (companyId && intents.length > 0) {
       const toResolve = intents.slice(0, MAX_RESOLVED_INTENTS_PER_OP)
-      const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId)
+      const isNegativeStage = await getNegativeStage()
+      const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId, isNegativeStage)
       if (resolutions.some(r => r.candidates.length > 0)) resolved++
       deps.onResolved(item, resolutions, job.memberId)
     }

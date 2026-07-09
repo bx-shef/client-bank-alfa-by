@@ -32,6 +32,9 @@ interface FakeOpts {
   recognition?: RecognitionSettings
   /** what resolveIntents returns (one resolution per intent); default []. */
   resolve?: IntentResolution[]
+  /** negative-stage predicate returned by loadNegativeStagePredicate; default null
+   *  (unavailable → resolution proceeds unfiltered). */
+  negativeStage?: ((stageId: string) => boolean) | null
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -51,7 +54,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat: { dialogId: '' }, recognition }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [] }
+  const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
     parseFile: async () => batch,
@@ -72,9 +76,13 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     onRecognized: (it, intents: RecognitionIntent[], memberId) => {
       calls.recognized.push([it.docId, intents.map(i => `${i.kind}:${i.value}:${i.route.strategy}`), memberId])
     },
-    resolveIntents: async (intents, companyId, memberId) => {
-      calls.resolve.push([companyId, intents.map(i => i.kind), memberId])
+    resolveIntents: async (intents, companyId, memberId, isNegativeStage) => {
+      calls.resolve.push([companyId, intents.map(i => i.kind), memberId, isNegativeStage ? 'staged' : 'unfiltered'])
       return o.resolve ?? []
+    },
+    loadNegativeStagePredicate: async (memberId) => {
+      calls.negStage.push(memberId)
+      return negativeStage
     },
     onResolved: (it, resolutions, memberId) => {
       calls.resolvedLog.push([it.docId, resolutions.map(r => `${r.kind}:${r.status}:${r.candidates.length}`), memberId])
@@ -324,7 +332,7 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r).toMatchObject({ recognized: 1, resolved: 1, created: 1 })
-    expect(calls.resolve).toEqual([['CO', ['invoice-number'], 'M']]) // companyId + intent kinds
+    expect(calls.resolve).toEqual([['CO', ['invoice-number'], 'M', 'unfiltered']]) // companyId + intent kinds (no predicate → unfiltered)
     expect(calls.resolvedLog).toEqual([['d1', ['invoice-number:resolved:1'], 'M']])
   })
 
@@ -382,6 +390,59 @@ describe('handleCrmSyncJob', () => {
     await handleCrmSyncJob(job([item('d1', 'credit', purpose)]), deps)
     const sentKinds = (calls.resolve[0] as unknown[])[1] as string[]
     expect(sentKinds.length).toBe(10) // capped, though 20 were recognized
+  })
+
+  // Negative-stage filtering slice (§2, #109): the predicate (union of invoice + deal
+  // fail/lost stages) is loaded ONCE per job and threaded into resolveIntents.
+  it('threads the negative-stage predicate into resolveIntents when available', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, negativeStage: () => false })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect((calls.resolve[0] as unknown[])[3]).toBe('staged') // predicate passed through
+    expect(calls.negStage).toEqual(['M'])
+  })
+
+  it('loads the negative-stage predicate AT MOST ONCE per job (memoized across ops)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, negativeStage: () => false })
+    await handleCrmSyncJob(job([
+      item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002'), item('d3', 'credit', 'счет СЧ-0003')
+    ]), deps)
+    expect(calls.resolve).toHaveLength(3) // all three ops resolved
+    expect(calls.negStage).toEqual(['M']) // predicate loaded once, reused
+  })
+
+  it('does not load the negative-stage predicate when no op resolves (lazy, no company)', async () => {
+    // no company → resolution gated off → predicate never loaded (saves the REST calls).
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, company: null })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.resolve).toEqual([])
+    expect(calls.negStage).toEqual([]) // never called — nothing to filter
+  })
+
+  it('does not load the negative-stage predicate when a matched op recognizes nothing (lazy gate)', async () => {
+    // company matches but the purpose yields no intent → the `intents.length > 0` half of
+    // the gate holds it off (guards against a regression that loads on company-match alone).
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'без номера счета')]), deps)
+    expect(calls.resolve).toEqual([])
+    expect(calls.negStage).toEqual([])
+  })
+
+  it('memoizes a NULL predicate too — loaded once per job, every op unfiltered', async () => {
+    // the fragile path: a null (unavailable) result must be memoized, not re-fetched per op.
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, negativeStage: null })
+    await handleCrmSyncJob(job([
+      item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002'), item('d3', 'credit', 'счет СЧ-0003')
+    ]), deps)
+    expect(calls.resolve).toHaveLength(3)
+    expect(calls.negStage).toEqual(['M']) // loaded ONCE despite null, not per-op
+    expect((calls.resolve as unknown[][]).every(c => c[3] === 'unfiltered')).toBe(true)
+  })
+
+  it('resolves unfiltered when the predicate is unavailable (null → no stage filtering)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit, negativeStage: null })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect((calls.resolve[0] as unknown[])[3]).toBe('unfiltered')
+    expect(calls.negStage).toEqual(['M']) // attempted once, returned null
   })
 
   it('propagates a resolveIntents error (fails the job before writeActivity)', async () => {
