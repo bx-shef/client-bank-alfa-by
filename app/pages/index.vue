@@ -7,6 +7,7 @@ import {
   LANDING_STEPS,
   LANDING_FEATURES,
   LANDING_INTEGRATORS,
+  LANDING_DEMO,
   LANDING_FORMATS,
   LANDING_MARKET_URL,
   LANDING_MARKET_PROMO
@@ -73,10 +74,19 @@ const formats = LANDING_FORMATS
                 </template>
               </B24Button>
               <B24Button
+                label="Попробовать демо"
+                href="#demo"
+                :external="true"
+                :no-rel="true"
+                color="air-secondary-no-accent"
+                size="xl"
+                @click="reachGoal('demo_open')"
+              />
+              <B24Button
                 label="Назначить созвон"
                 :to="B24_BOOKING_URL"
                 target="_blank"
-                color="air-secondary-no-accent"
+                color="air-tertiary-no-accent"
                 size="xl"
                 @click="reachGoal('booking_click')"
               />
@@ -172,6 +182,27 @@ const formats = LANDING_FORMATS
             </div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- ДЕМО: попробуйте на своей выписке -->
+    <section
+      id="demo"
+      class="px-[22px] lg:px-8 py-[56px] sm:py-[72px]"
+    >
+      <div class="max-w-[1080px] mx-auto">
+        <div class="max-w-[720px] mb-12 sm:mb-14">
+          <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+            {{ LANDING_DEMO.title }}
+          </h2>
+          <p class="text-lg text-white/65">
+            {{ LANDING_DEMO.subtitle }}
+          </p>
+        </div>
+        <LandingDemo />
+        <p class="mt-4 text-sm text-white/45">
+          {{ LANDING_DEMO.note }}
+        </p>
       </div>
     </section>
 

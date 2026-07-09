@@ -60,9 +60,25 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   процесс) — [`docs/PAGE_GUIDE.md`](docs/PAGE_GUIDE.md). Родственный дизайн-гайд основного сайта — в репо
   `bx-shef/Lp` (`docs/LANDING_GUIDE.md`).
 - `app/pages/index.vue` — публичный лендинг (маркетинговый, по issue #110): hero+CTA (фото+граф+
-  `PartnerBadge`), боль→результат, «Как это работает» (3 шага), «Почему мы» (4 карточки, glow),
-  блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`. Тексты — из `app/utils/landing.ts`.
-  CTA скроллит к `#brief`; цели Метрики через `useMetrikaGoal`; glow за курсором — `useCardGlow`.
+  `PartnerBadge`), боль→результат, «Как это работает» (3 шага), **демо `#demo` (`LandingDemo`)**,
+  «Почему мы» (6 карточек, glow), блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`.
+  Тексты — из `app/utils/landing.ts`. CTA скроллит к `#brief`, вторичная кнопка hero — к `#demo`; цели
+  Метрики через `useMetrikaGoal`; glow за курсором — `useCardGlow`.
+- `app/components/LandingDemo.vue` + чистое ядро `app/utils/demoExtract.ts` (карта — [`docs/DEMO_LANDING.md`](docs/DEMO_LANDING.md))
+  — **демо на лендинге «Попробуйте на своей выписке»**: прикрепить файл выписки → **разбор в браузере**
+  (windows-1251, через готовое `importUpload.ts`: `processUploadBatch`/`dedupItems`/`deferToEventLoop`) →
+  панель извлечения (операции, контрагенты, суммы **по валютам** — округление в чистом слое, распознанные
+  **по матрицам** номера счетов/заказов через реальный `recognizeByMatrices`). Кнопки «песочница»
+  Альфа/Приор гоняют **реальные** `normalizeAlfa`/`normalizePrior` на sandbox-образцах (`demoAlfaResponse`/
+  `demoPriorResponse`) — живой OAuth банков гео-блокируется из облака, поэтому демонстрируем путь «ответ
+  банка → нормализованные операции» на образцах. Тёмный самодостаточный UI (не тащим b24ui-`OperationList`,
+  чтобы не смешивать light/dark-токены с брендовой оболочкой); подводка/тексты ошибок — `LANDING_DEMO` в
+  `landing.ts`, интерактивные подписи (кнопки, метки сводки, `KIND_LABEL`) пока в компоненте (черновик,
+  дошлифуется). Гонку источников снимает токен `runSeq` (медленный разбор не затирает позже выбранный
+  источник), рендер операций и распознанных строк капнут (`MAX_RENDERED_OPS`). Тесты —
+  `tests/demoExtract.test.ts` (ядро на реальных нормализаторах) +
+  `tests/nuxt/landingDemo.nuxt.test.ts` (рендер/проводка). **Follow-up:** маскировка блока результатов в
+  вебвизоре Метрики (приватность реальных выписок) — см. `DEMO_LANDING.md`.
 - **Визуальная оболочка лендинга портирована с `offer.bx-shef.by` (репо `bx-shef/Lp`)** —
   тёмная брендовая тема (vibecode-палитра, #030022 + радиальное сияние, self-hosted шрифты Rubik/
   Roboto Mono). Живёт в отдельном **layout `landing`** (`app/layouts/landing.vue`: `B24Header` с

@@ -106,6 +106,20 @@ export const LANDING_FEATURES: readonly LandingFeature[] = [
   }
 ]
 
+/** «Попробуйте сами» demo block — attach a file / run a bank sandbox sample and
+ *  see what the app extracts. Copy is intentionally simple (owner refines later). */
+export const LANDING_DEMO = {
+  title: 'Попробуйте на своей выписке',
+  subtitle: 'Прикрепите файл выписки клиент-банка — прямо в браузере покажем, что мы из неё вытащим: операции, контрагентов, суммы и распознанные номера счетов/заказов. Или запустите готовый пример от Альфы и Приора.',
+  note: 'Разбор идёт локально в браузере — сам файл не загружается на наши серверы. Это демонстрация: на боевом портале те же данные автоматически уходят в вашу CRM.',
+  /** Dropzone hint (references the file cap in the component). */
+  hint: 'Файл разбирается прямо в браузере — сам файл не загружается на сервер.',
+  /** Shown when a file could not be parsed at all. */
+  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка (формат 1CClientBankExchange или «***** ^Type=», кодировка windows-1251).',
+  /** Shown when a file parsed but held no operations. */
+  noOperations: 'В файле не найдено операций.'
+} as const
+
 /** «Интеграторам Bitrix24» block (section 5). */
 export const LANDING_INTEGRATORS
   = 'Забирайте бесплатный коннектор белорусских банков в свой арсенал: ставьте клиентам сами, а установку в контур клиента и настройку под процессы отдавайте нам — работаем субподрядом.'

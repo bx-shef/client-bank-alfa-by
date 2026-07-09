@@ -47,6 +47,13 @@ export interface UploadBatchResult {
   truncated: number
 }
 
+/** Yield to the event loop once — the browser `defer` for {@link processUploadBatch}
+ *  so a large batch doesn't freeze the tab between files. Shared by the upload UIs
+ *  (StatementUpload, LandingDemo) so the helper isn't re-declared per component. */
+export function deferToEventLoop(): Promise<void> {
+  return new Promise<void>(resolve => setTimeout(resolve))
+}
+
 /** Process a dropped/picked batch: cap the count, validate + decode + parse each file
  *  in isolation (one bad file never sinks the rest), and report how many were dropped
  *  for exceeding the cap. Pure except for the injected per-file reads; `defer` yields
