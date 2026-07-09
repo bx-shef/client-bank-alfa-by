@@ -500,6 +500,86 @@ describe('handleCrmSyncJob', () => {
     expect(calls.allocLog).toEqual([]) // no candidates → no allocation decision
   })
 
+  it('mixed op: exact amount match AND a trigger → allocatable once (trigger not double-counted)', async () => {
+    const mixed: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }, { kind: 'deal', id: '3', amount: 0, currency: '' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: mixed })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ allocatable: 1, ambiguous: 0, manual: 0 }) // NOT 2
+    expect(calls.allocLog).toEqual([['d1', 'allocate:7:one', 1, 'M']]) // triggerTargets=1 logged alongside
+  })
+
+  it('mixed op: NO amount match but a trigger fires → allocatable, manual stays 0 (trigger overrides)', async () => {
+    const mixed: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 100, currency: 'BYN' }, { kind: 'deal', id: '3', amount: 0, currency: '' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: mixed })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ allocatable: 1, manual: 0 }) // trigger wins over manual
+    expect(calls.allocLog).toEqual([['d1', 'manual', 1, 'M']]) // amount decision is manual, +1 trigger
+  })
+
+  it('currency mismatch (right amount, wrong currency) → manual', async () => {
+    const wrongCur: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'USD' }] // op is 10 BYN
+    }]
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: wrongCur })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ allocatable: 0, manual: 1 })
+    expect(calls.allocLog).toEqual([['d1', 'manual', 0, 'M']])
+  })
+
+  it('a deal-payment amount target routes through resolveAllocation (exact match)', async () => {
+    const pay: IntentResolution[] = [{
+      kind: 'payment-number', value: '1/2', status: 'resolved',
+      candidates: [{ kind: 'deal-payment', id: '4', amount: 10, currency: 'BYN', dealId: '2', accountNumber: '1/2' }]
+    }]
+    const payMatrix: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'd/d', kind: 'payment-number' }] }
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: pay })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата 1/2')]), deps)
+    expect(r).toMatchObject({ allocatable: 1, ambiguous: 0, manual: 0 })
+    expect(calls.allocLog).toEqual([['d1', 'allocate:4:one', 0, 'M']])
+  })
+
+  it('invoice + deal-payment of the SAME deal collapse to one target (not ambiguous)', async () => {
+    const same: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [
+        { kind: 'invoice', id: '7', amount: 10, currency: 'BYN', dealId: '2' },
+        { kind: 'deal-payment', id: '4', amount: 10, currency: 'BYN', dealId: '2' }
+      ]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: same })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ allocatable: 1, ambiguous: 0 }) // invoice preferred, payment collapsed
+    expect(calls.allocLog).toEqual([['d1', 'allocate:7:one', 0, 'M']])
+  })
+
+  it('accumulates allocation counters across a multi-op batch (allocate + manual + ambiguous)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
+    // per-op resolutions keyed by the recognized value (each op has a distinct number).
+    deps.resolveIntents = async (intents) => {
+      const v = intents[0]?.value
+      if (v === 'СЧ-0001') return [invAt('7', 10)] // exact → allocatable
+      if (v === 'СЧ-0002') return [invAt('7', 100)] // no exact → manual
+      return [{ // two distinct exact matches → ambiguous
+        kind: 'invoice-number', value: v!, status: 'resolved',
+        candidates: [{ kind: 'invoice', id: '9', amount: 10, currency: 'BYN' }, { kind: 'invoice', id: '5', amount: 10, currency: 'BYN' }]
+      }]
+    }
+    const r = await handleCrmSyncJob(job([
+      item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002'), item('d3', 'credit', 'счет СЧ-0003')
+    ]), deps)
+    expect(r).toMatchObject({ resolved: 3, allocatable: 2, ambiguous: 1, manual: 1 })
+    expect(calls.allocLog).toEqual([
+      ['d1', 'allocate:7:one', 0, 'M'], ['d2', 'manual', 0, 'M'], ['d3', 'allocate:5:amb', 0, 'M']
+    ])
+  })
+
   it('propagates a resolveIntents error (fails the job before writeActivity)', async () => {
     const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
     deps.resolveIntents = async () => {

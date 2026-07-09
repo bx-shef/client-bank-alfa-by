@@ -44,11 +44,15 @@
 ## Лог проходов
 
 ### 2026-07-09 — #109 решение разнесения (resolveAllocation) — log/count
-- **Сделано:** отфильтрованные по стадии кандидаты идут в чистое ядро `resolveAllocation`
-  (`server/queue/handlers.ts`): amount-цели (invoice/deal-payment) — точная сумма+валюта;
-  trigger-цели (deal/smart-process) — безусловно. Счётчики `allocatable`/`ambiguous`/`manual`
-  + лог решения (`onAllocationDecision`). Пока **без записи**. Тесты (+5): allocate/ambiguous/
-  manual/trigger/none. PR #198.
+- **Сделано:** отфильтрованные по стадии кандидаты сворачиваются чистым `summarizeAllocation`
+  (`app/utils/allocation.ts`) → исход в `crm-sync` (`server/queue/handlers.ts`): amount-цели
+  (invoice/deal-payment) — точная сумма+валюта; trigger-цели (deal/smart-process) — безусловно.
+  Счётчики `allocatable`/`ambiguous`/`manual` + лог решения (`onAllocationDecision`). Пока **без
+  записи**. PR #198.
+- **Панель ревью (5 проверяющих):** R1/R2/R3 — чисто (корректность, спека §2, безопасность).
+  R4 — +7 тестов (mixed amount+trigger, currency-mismatch, deal-payment цель, collapseSameTarget,
+  multi-op accumulation). R5 — вынес разбиение целей в **компиляторно-проверяемый** `ALLOCATION_TARGET_ROLE`
+  (ретайрит дубль `AMOUNT_GATED_KINDS`) + чистый `summarizeAllocation` (прямые юнит-тесты). Итог 944 теста.
 - **Осталось:** запись факта/дела (`allocationFactStore` + `autoDistribute`-гейт + идемпотентность
   #184 + действие в портале `payment.pay`/стадия) — за live-verify.
 

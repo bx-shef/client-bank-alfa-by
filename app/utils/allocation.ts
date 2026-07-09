@@ -22,6 +22,30 @@ import { dedupKey } from '~/utils/statement'
  *  NOT targets of their own — they are only ways to FIND one of these. */
 export type AllocationTargetKind = 'invoice' | 'deal-payment' | 'deal' | 'smart-process'
 
+/** How each target kind is decided (§2): `amount` targets (invoice / deal-payment) are
+ *  matched by exact amount+currency through `resolveAllocation`; `trigger` targets (deal /
+ *  smart-process) fire UNCONDITIONALLY by a direct reference and bypass amount matching.
+ *  SINGLE SOURCE OF TRUTH, compiler-checked: a new `AllocationTargetKind` won't compile
+ *  until it is classified here (TS2741) — so the amount/trigger split can't silently drop
+ *  a kind (unlike a bare `Set` literal). Consumed by `summarizeAllocation` here and by
+ *  `itemByIdLookup` (amount-gating a non-finite amount). */
+export const ALLOCATION_TARGET_ROLE: Record<AllocationTargetKind, 'amount' | 'trigger'> = {
+  'invoice': 'amount',
+  'deal-payment': 'amount',
+  'deal': 'trigger',
+  'smart-process': 'trigger'
+}
+
+/** True for a target matched by amount+currency (invoice / deal-payment). */
+export function isAmountTarget(kind: AllocationTargetKind): boolean {
+  return ALLOCATION_TARGET_ROLE[kind] === 'amount'
+}
+
+/** True for an unconditional trigger target (deal / smart-process). */
+export function isTriggerTarget(kind: AllocationTargetKind): boolean {
+  return ALLOCATION_TARGET_ROLE[kind] === 'trigger'
+}
+
 /** A candidate entity a payment might close, already scoped to the resolved
  *  companies. `amount`/`currency` are the entity's own; matching is exact. */
 export interface AllocationCandidate {
@@ -166,6 +190,42 @@ export function resolveAllocation(input: AllocationInput): AllocationDecision {
   const ranked = [...collapseSameTarget(eligible)].sort((a, b) => compareIds(a.id, b.id))
   const [target, ...alternatives] = ranked
   return { action: 'allocate', target: target!, ambiguous: alternatives.length > 0, alternatives }
+}
+
+/** A payment's allocation outcome for metrics/log (§2): the amount decision, how many
+ *  unconditional trigger targets fired, and a single classification label. `allocatable`
+ *  = an exact amount match OR ≥1 trigger; `ambiguous` = allocatable with >1 distinct
+ *  amount target (auto-allocate smallest id + chat heads-up); `manual` = amount candidates
+ *  but no exact match and no trigger (partial/group → «очередь ручного разбора»); `none` =
+ *  no candidates at all. `ambiguous` is a stricter case OF allocatable (a caller counting
+ *  both bumps allocatable too). */
+export interface AllocationSummary {
+  decision: AllocationDecision
+  triggerTargets: number
+  outcome: 'allocatable' | 'ambiguous' | 'manual' | 'none'
+}
+
+/**
+ * Classify one payment's candidates (§2) WITHOUT any I/O — partition amount vs trigger
+ * targets from the (already company+stage-filtered) candidate list, run `resolveAllocation`
+ * over the amount ones, and fold the amount decision + trigger presence into one `outcome`.
+ * Pure and directly unit-testable; the crm-sync handler calls this and bumps its counters,
+ * and the write slice (#184) will reuse it instead of re-deriving the split.
+ */
+export function summarizeAllocation(payment: AllocationInput): AllocationSummary {
+  const amountCandidates = payment.candidates.filter(c => isAmountTarget(c.kind))
+  const triggerTargets = payment.candidates.filter(c => isTriggerTarget(c.kind)).length
+  const decision = resolveAllocation({ amount: payment.amount, currency: payment.currency, candidates: amountCandidates })
+  let outcome: AllocationSummary['outcome']
+  if (decision.action === 'allocate') {
+    outcome = decision.ambiguous ? 'ambiguous' : 'allocatable'
+  } else if (triggerTargets > 0) {
+    // No exact amount match, but an unconditional trigger fires → still allocatable.
+    outcome = 'allocatable'
+  } else {
+    outcome = decision.action === 'manual' ? 'manual' : 'none'
+  }
+  return { decision, triggerTargets, outcome }
 }
 
 /**

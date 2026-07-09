@@ -219,6 +219,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     оповещение в чат). `collapseSameTarget` схлопывает только заведомо одну цель (инвойс поверх оплаты той
     же сделки по `parentId`; буквальный повтор `kind`+`id`) — разные сущности одной суммы остаются
     раздельными (→ `ambiguous`). `allocationFactKey` — идемпотентный ключ факта «платёж→сущность».
+    `ALLOCATION_TARGET_ROLE` (`Record<AllocationTargetKind,'amount'|'trigger'>`) — **единый
+    компиляторно-проверяемый источник** разбиения целей: amount (инвойс/оплата — через `resolveAllocation`)
+    vs trigger (сделка/смарт-процесс — безусловно, минуя сумму); новый вид не скомпилируется без
+    классификации (ретайрит дублирующий `AMOUNT_GATED_KINDS` в `itemByIdLookup`). `summarizeAllocation(payment)` —
+    чистая свёртка кандидатов в исход (`allocatable`/`ambiguous`/`manual`/`none` + decision + число trigger-целей);
+    её зовёт `crm-sync` (лог/счётчики) и переиспользует будущий слайс записи.
     `filterByAccountNumber(candidates, number)` — точный отбор кандидата по `accountNumber` (для распознанного
     `payment-number` в company-пуле оплат, собранном по компании, а не по номеру; пустой номер → `[]`, не сметает
     пул). `order-number` так не матчится: `accountNumber` оплаты имеет форму `<заказ>/<seq>` — нужен связь-нюанс,
@@ -331,15 +337,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       читает `PortalSettings` **один раз на джобу** (`getPortalSettings` — один app.option-чтение кормит и
       чат, и распознавание), затем **read-before-write** по персистентному стору (#9): `getActivityId`→skip
       уже записанных, иначе `findCompany`→`writeActivity` (возвращает id дела)→`rememberActivity`→`notifyChat`;
-      счётчики `created/skipped/unmatched/recognized/resolved`. **Распознавание намерения (#109, §4, слайс 1
-      капстоуна):** на каждую уникальную операцию — `recognizePurposeIntents` (чистый композит `recognizeByMatrices`→
-      `routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала → `onRecognized` **логирует
-      намерение** (пред-скип, для покрытия). **Резолюция намерения в кандидаты (§4 lookup, слайс 3):** для
-      операции с найденной компанией и распознанным id — `resolveIntents` (воркерная обёртка над
+      счётчики `created/skipped/unmatched/recognized/resolved/allocatable/ambiguous/manual`. **Распознавание
+      намерения (#109, §4, слайс 1 капстоуна):** на каждую уникальную операцию — `recognizePurposeIntents` (чистый
+      композит `recognizeByMatrices`→`routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала →
+      `onRecognized` **логирует намерение** (пред-скип, для покрытия). **Резолюция намерения в кандидаты (§4 lookup,
+      слайс 3):** для операции с найденной компанией и распознанным id — `resolveIntents` (воркерная обёртка над
       `resolveIntentCandidates`) находит кандидатов на разнесение → `onResolved` **логирует**, счётчик `resolved`.
-      **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и только при совпавшей компании (IDOR-скоуп);
-      **пока log/count — без записи разнесения**; отсев отрицательных стадий (`isNegativeStage`) — следующий
-      под-слайс (кандидаты ещё не фильтруются по стадии — ок, ничего не пишется). CRM-депсы берут `memberId` явно
+      **Решение разнесения (§2, слайс 4):** отфильтрованные по стадии кандидаты → `summarizeAllocation` →
+      `onAllocationDecision` **логирует** исход, счётчики `allocatable`/`ambiguous`/`manual` (amount-цели по
+      сумме+валюте, trigger-цели безусловно). **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и
+      только при совпавшей компании (IDOR-скоуп); **пока log/count — без записи разнесения** (стор факта +
+      autoDistribute-гейт + идемпотентность #184 — следующий под-слайс, за live-verify). CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорты банков (Альфа/Приор/парсер) — заглушки до стадий 3–6; стор дедупа живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
@@ -496,8 +504,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 + `crm.status.list`×N — учесть в
     лимитере; глобальный лимит нужен до реального опроса портала; дизайн — `docs/QUEUES.md` «REST-бюджет проводки
     платежей»); `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
-    под-слайс проводки в `crm-sync`** — `resolveAllocation` (кандидаты уже отфильтрованы по стадии) → запись
-    факта/дела, с идемпотентностью (#184).
+    под-слайс проводки в `crm-sync`** — **запись** разнесения (`summarizeAllocation` уже даёт решение log/count):
+    стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность (#184) + действие
+    в портале (`payment.pay`/стадия) — за live-verify.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат, мост-документ, `payment-number`-фильтр по `accountNumber`, **хранение
     матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1), **диспетчер intent→кандидаты**

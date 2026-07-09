@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { AllocationCandidate, AllocationInput } from '~/utils/allocation'
 import {
+  ALLOCATION_TARGET_ROLE,
   allocationFactKey,
   collapseSameTarget,
   compareIds,
   filterByAccountNumber,
+  isAmountTarget,
   isEligible,
+  isTriggerTarget,
   resolveAllocation,
   sameCurrency,
+  summarizeAllocation,
   toMinorUnits
 } from '~/utils/allocation'
 
@@ -198,5 +202,71 @@ describe('allocationFactKey', () => {
       .not.toBe(allocationFactKey({ account: 'A', docId: '2' }, target))
     expect(allocationFactKey({ account: 'A', docId: '1' }, target))
       .not.toBe(allocationFactKey({ account: 'B', docId: '1' }, target))
+  })
+})
+
+describe('target-kind role (single source of truth)', () => {
+  it('classifies every AllocationTargetKind as amount or trigger', () => {
+    expect(ALLOCATION_TARGET_ROLE).toEqual({
+      'invoice': 'amount', 'deal-payment': 'amount', 'deal': 'trigger', 'smart-process': 'trigger'
+    })
+  })
+  it('isAmountTarget / isTriggerTarget agree with the role', () => {
+    expect(isAmountTarget('invoice')).toBe(true)
+    expect(isAmountTarget('deal-payment')).toBe(true)
+    expect(isAmountTarget('deal')).toBe(false)
+    expect(isTriggerTarget('deal')).toBe(true)
+    expect(isTriggerTarget('smart-process')).toBe(true)
+    expect(isTriggerTarget('invoice')).toBe(false)
+  })
+})
+
+describe('summarizeAllocation', () => {
+  const inv = (id: string, amount: number, currency = 'BYN'): AllocationCandidate => ({ kind: 'invoice', id, amount, currency })
+  const pay = (amount: number, currency = 'BYN', candidates: AllocationCandidate[] = []): AllocationInput => ({ amount, currency, candidates })
+
+  it('exact amount match → allocatable (decision allocate, 0 triggers)', () => {
+    const s = summarizeAllocation(pay(10, 'BYN', [inv('7', 10)]))
+    expect(s.outcome).toBe('allocatable')
+    expect(s.triggerTargets).toBe(0)
+    expect(s.decision).toMatchObject({ action: 'allocate', target: { id: '7' }, ambiguous: false })
+  })
+
+  it('two distinct exact matches → ambiguous (smallest id)', () => {
+    const s = summarizeAllocation(pay(10, 'BYN', [inv('9', 10), inv('5', 10)]))
+    expect(s.outcome).toBe('ambiguous')
+    expect(s.decision).toMatchObject({ action: 'allocate', target: { id: '5' }, ambiguous: true })
+  })
+
+  it('amount candidates but no exact match → manual', () => {
+    expect(summarizeAllocation(pay(10, 'BYN', [inv('7', 100)])).outcome).toBe('manual')
+    expect(summarizeAllocation(pay(10, 'BYN', [inv('7', 10, 'USD')])).outcome).toBe('manual') // currency mismatch
+  })
+
+  it('trigger target only → allocatable (bypasses amount), decision none', () => {
+    const s = summarizeAllocation(pay(10, 'BYN', [{ kind: 'deal', id: '3', amount: 0, currency: '' }]))
+    expect(s.outcome).toBe('allocatable')
+    expect(s.triggerTargets).toBe(1)
+    expect(s.decision.action).toBe('none')
+  })
+
+  it('non-matching amount + a trigger → allocatable (trigger overrides manual)', () => {
+    const s = summarizeAllocation(pay(10, 'BYN', [inv('7', 100), { kind: 'deal', id: '3', amount: 0, currency: '' }]))
+    expect(s.outcome).toBe('allocatable')
+    expect(s.triggerTargets).toBe(1)
+    expect(s.decision.action).toBe('manual') // the amount decision itself is manual
+  })
+
+  it('no candidates → none', () => {
+    expect(summarizeAllocation(pay(10, 'BYN', [])).outcome).toBe('none')
+  })
+
+  it('invoice + deal-payment of the same deal collapse → allocatable, not ambiguous', () => {
+    const s = summarizeAllocation(pay(10, 'BYN', [
+      { kind: 'invoice', id: '7', amount: 10, currency: 'BYN', dealId: '2' },
+      { kind: 'deal-payment', id: '4', amount: 10, currency: 'BYN', dealId: '2' }
+    ]))
+    expect(s.outcome).toBe('allocatable')
+    expect(s.decision).toMatchObject({ action: 'allocate', target: { kind: 'invoice', id: '7' } })
   })
 })

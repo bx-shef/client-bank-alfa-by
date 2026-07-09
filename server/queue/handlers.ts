@@ -12,14 +12,9 @@ import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
-import { resolveAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
+import { summarizeAllocation, type AllocationDecision } from '../../app/utils/allocation'
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
-
-/** Target kinds matched by amount+currency (through `resolveAllocation`, §2). */
-const AMOUNT_KINDS = new Set<AllocationCandidate['kind']>(['invoice', 'deal-payment'])
-/** Target kinds fired UNCONDITIONALLY by a direct reference (do NOT amount-match, §2). */
-const TRIGGER_KINDS = new Set<AllocationCandidate['kind']>(['deal', 'smart-process'])
 
 /** Cap on how many recognized intents of ONE operation are sent to the REST resolver
  *  (#191). The payment purpose is payer-controlled, and recognition dedupes only by
@@ -238,23 +233,21 @@ export async function handleCrmSyncJob(
       const candidates = resolutions.flatMap(r => r.candidates)
       if (candidates.length > 0) {
         resolved++
-        // Allocation decision (§2, #109): amount-matched targets (invoice/deal-payment) go
-        // through resolveAllocation (exact amount+currency); trigger targets (deal/
-        // smart-process) fire UNCONDITIONALLY by direct reference and bypass amount matching.
-        // DECISION-ONLY: nothing is written yet (fact-store + auto-distribute gate + #184 next).
-        const amountCandidates = candidates.filter(c => AMOUNT_KINDS.has(c.kind))
-        const triggerTargets = candidates.filter(c => TRIGGER_KINDS.has(c.kind)).length
-        const decision = resolveAllocation({ amount: item.amount, currency: item.currency, candidates: amountCandidates })
-        if (decision.action === 'allocate') {
+        // Allocation decision (§2, #109): classify the resolved candidates via the pure
+        // `summarizeAllocation` (amount targets amount-matched; trigger targets fire
+        // unconditionally). DECISION-ONLY: nothing is written yet (fact-store + auto-
+        // distribute gate + idempotency #184 next). `ambiguous` is a stricter case of
+        // `allocatable`, so it bumps both counters.
+        const summary = summarizeAllocation({ amount: item.amount, currency: item.currency, candidates })
+        if (summary.outcome === 'ambiguous') {
           allocatable++
-          if (decision.ambiguous) ambiguous++
-        } else if (triggerTargets > 0) {
-          // No exact amount target, but an unconditional trigger fires → still allocatable.
+          ambiguous++
+        } else if (summary.outcome === 'allocatable') {
           allocatable++
-        } else if (decision.action === 'manual') {
+        } else if (summary.outcome === 'manual') {
           manual++
         }
-        deps.onAllocationDecision(item, decision, triggerTargets, job.memberId)
+        deps.onAllocationDecision(item, summary.decision, summary.triggerTargets, job.memberId)
       }
       deps.onResolved(item, resolutions, job.memberId)
     }

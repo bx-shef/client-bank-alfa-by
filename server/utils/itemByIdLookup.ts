@@ -17,7 +17,7 @@
 // `opportunity`/`currencyId`; a categorized deal's `stageId` carries the `C<cat>:`
 // prefix, e.g. `C5:LOSE`, which matches the `DEAL_STAGE_<cat>` status ids).
 
-import type { AllocationCandidate, AllocationTargetKind } from '../../app/utils/allocation'
+import { isAmountTarget, type AllocationCandidate, type AllocationTargetKind } from '../../app/utils/allocation'
 import type { RestCall } from './companyLookup'
 
 export interface ItemByIdOptions {
@@ -52,11 +52,6 @@ export function firstItem(resp: Record<string, unknown>): RawItem | undefined {
   return Array.isArray(items) ? (items[0] as RawItem | undefined) : undefined
 }
 
-/** Kinds matched by amount+currency (an unparseable amount can't match → no
- *  candidate). The trigger kinds (`deal`/`smart-process`) ignore amount, so a
- *  non-finite one is harmless there and normalizes to 0. */
-const AMOUNT_GATED_KINDS = new Set<AllocationTargetKind>(['invoice', 'deal-payment'])
-
 /**
  * Find one allocation candidate by its CRM id, scoped to `opts.companyId` and
  * excluding negative-stage entities. Returns `null` when the id doesn't exist,
@@ -89,7 +84,7 @@ export async function findCandidateById(
   if (!outId) return null
   const amount = Number(item.opportunity)
   const finite = Number.isFinite(amount)
-  if (!finite && AMOUNT_GATED_KINDS.has(kind)) return null
+  if (!finite && isAmountTarget(kind)) return null
   return {
     kind,
     id: outId,
