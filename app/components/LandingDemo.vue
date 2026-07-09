@@ -109,16 +109,19 @@ async function runFiles(files: File[]) {
  *  the same file path. The user can also just download it (link) and drop it in. */
 async function loadSample(sample: DemoSample) {
   if (busy.value) return
+  const seq = ++runSeq // claim this action so reset()/another source can supersede the fetch
   busy.value = true
   clearFeedback()
   try {
     const res = await fetch(sample.url)
     if (!res.ok) throw new Error('fetch failed')
     const buf = await res.arrayBuffer()
+    if (seq !== runSeq) return // superseded during the fetch (e.g. reset) — discard
     reachGoal('demo_sample')
     // runFiles owns the runSeq/busy/results lifecycle from here.
     await runFiles([new File([buf], sample.name, { type: 'text/plain' })])
   } catch {
+    if (seq !== runSeq) return // superseded — a newer action owns busy/state now
     error.value = 'Не удалось загрузить пример. Скачайте файл по ссылке и загрузите вручную.'
     busy.value = false
   }
