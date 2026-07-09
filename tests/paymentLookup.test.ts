@@ -147,6 +147,9 @@ describe('companyDealsParams / extractDealRows / dealListTotal', () => {
     expect(dealListTotal({ result: { items: [] }, total: 3 })).toBe(3)
     expect(Number.isNaN(dealListTotal({ result: { items: [] } }))).toBe(true)
   })
+  it('coerces a string total (B24 REST serializes numbers as strings)', () => {
+    expect(dealListTotal({ result: { items: [] }, total: '3' })).toBe(3)
+  })
 })
 
 describe('findCompanyDealPayments', () => {
@@ -295,5 +298,37 @@ describe('findCompanyDealPayments', () => {
     const out = await findCompanyDealPayments('93', {}, call)
     expect(out).toHaveLength(1)
     expect(call.mock.calls.filter(c => c[0] === 'crm.item.list')).toHaveLength(1)
+  })
+
+  it('advances past a full page of skipped negative-stage deals to reach page 2', async () => {
+    // Load-bearing: `seen`/`start` advance by RAW rows, not by kept candidates — else a
+    // whole page of lost deals advances the cursor by 0 and re-fetches page 1 forever,
+    // never reaching the real deals on page 2. (A "start += processed" refactor regresses here.)
+    const deals = [
+      { id: 11, stageId: 'C5:LOSE' }, { id: 22, stageId: 'C5:LOSE' }, // page 1: all lost → 0 candidates
+      { id: 33, stageId: 'NEW' }, { id: 44, stageId: 'NEW' } // page 2: real
+    ]
+    const call = pagedPortal(deals, { 33: [pay({ id: 3 })], 44: [pay({ id: 7 })] }, 2)
+    const out = await findCompanyDealPayments('93', { isNegativeStage: s => s === 'C5:LOSE' }, call)
+    expect(out.map(c => c.dealId)).toEqual(['33', '44']) // page-2 deals found, not lost
+    const starts = call.mock.calls.filter(c => c[0] === 'crm.item.list').map(c => (c[1] as { start: number }).start)
+    expect(starts).toEqual([0, 2]) // cursor advanced by RAW rows (2), not by the 0 kept on page 1
+  })
+
+  it('stops on an empty page even when total over-reports (server overcount)', async () => {
+    // Isolates the `rows.length === 0` break with a FINITE total: data runs out (2 deals)
+    // before the inflated total (99) is reached. Without the empty-page guard this would
+    // page to MAX_DEAL_PAGES. Distinct from the no-total fallback (that breaks on !isFinite).
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.item.list') {
+        const start = Number(params.start) || 0
+        return { result: { items: [{ id: 33, stageId: 'NEW' }, { id: 41, stageId: 'NEW' }].slice(start, start + 2) }, total: 99 }
+      }
+      if (method === 'crm.item.payment.list') return { result: [pay({ id: 3 })] }
+      throw new Error(`unexpected ${method}`)
+    })
+    await findCompanyDealPayments('93', {}, call)
+    // page 0 (start 0) → 2 deals; page 1 (start 2) → empty → break. Exactly two list calls, not 60.
+    expect(call.mock.calls.filter(c => c[0] === 'crm.item.list')).toHaveLength(2)
   })
 })

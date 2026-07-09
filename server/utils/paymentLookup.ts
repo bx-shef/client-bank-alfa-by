@@ -139,8 +139,13 @@ export function companyDealsParams(companyId: string, start: number = 0): Record
 }
 
 /** Read the top-level `total` from a `crm.item.list` response (siblings of `result`,
- *  not inside it). Non-numeric / absent → `NaN`, which stops pagination after the
- *  current page (single-page fallback — the pre-pagination behaviour). */
+ *  not inside it — the universal B24 list envelope `{result:{items},total,next}`; the
+ *  same place `loadCategoryIds`/`chatSearch` read it, and B24 serializes it as a string,
+ *  hence `Number()`). Non-numeric / absent → `NaN`, which stops pagination after the
+ *  current page (single-page fallback — the pre-pagination behaviour).
+ *  NB: this is the FIRST `crm.item.list` pagination in the repo (invoiceLookup/itemByIdLookup
+ *  never read `total`); if a portal ever omitted it, the paginator would go inert (harmless
+ *  single-page, no regression) — worth a live-verify on a company seeded with >50 deals. */
 export function dealListTotal(resp: Record<string, unknown>): number {
   return Number(resp?.total)
 }
@@ -193,6 +198,12 @@ export function extractDealRows(resp: Record<string, unknown>): RawDeal[] {
  * overflow deals' payments would be silently dropped and an amount that lives there
  * would wrongly fall through to `manual`/`none`. When a response carries no numeric
  * `total` (e.g. a stub), paging stops after the first page (single-page fallback).
+ *
+ * REST BUDGET: worst case ≈ P `crm.item.list` (P ≤ `MAX_DEAL_PAGES`) + D `crm.item.payment.list`
+ * (D = non-negative-stage deals). The pool is fetched ONCE PER OP (only when an intent is a
+ * `payment-number`), but it is NOT cached across ops — a batch of same-company ops re-scans.
+ * Safe today because sequential (not bursty) + write path is log/count only; a server-side
+ * stage/date narrowing + the per-portal limiter land with the rest of #191 before real volume.
  */
 export async function findCompanyDealPayments(
   companyId: string,
