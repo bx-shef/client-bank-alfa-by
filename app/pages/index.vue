@@ -8,6 +8,7 @@ import {
   LANDING_FEATURES,
   LANDING_INTEGRATORS,
   LANDING_DEMO,
+  LANDING_BANK_CONNECT,
   LANDING_FORMATS,
   LANDING_MARKET_URL,
   LANDING_MARKET_PROMO
@@ -23,6 +24,22 @@ const steps = LANDING_STEPS
 const features = LANDING_FEATURES
 // Банки и форматы — «tech-строка» под hero (как «Работает с моделями» на Lp).
 const formats = LANDING_FORMATS
+
+// Bank online-connection info cards (demo section). Accent → literal Tailwind class
+// strings (kept literal so the content scanner picks them up); one per BankConnect.
+const bankConnect = LANDING_BANK_CONNECT
+const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: string }> = {
+  cyan: {
+    card: 'border-[rgb(var(--color-accent-primary-ch)/0.35)] bg-gradient-to-br from-[rgb(var(--color-accent-primary-ch)/0.16)] to-transparent',
+    pill: 'text-[rgb(var(--color-accent-primary-ch))] bg-[rgb(var(--color-accent-primary-ch)/0.14)] border border-[rgb(var(--color-accent-primary-ch)/0.35)]',
+    name: 'text-[rgb(var(--color-accent-primary-ch))]'
+  },
+  green: {
+    card: 'border-[rgb(var(--color-accent-success-ch)/0.35)] bg-gradient-to-br from-[rgb(var(--color-accent-success-ch)/0.16)] to-transparent',
+    pill: 'text-[rgb(var(--color-accent-success-ch))] bg-[rgb(var(--color-accent-success-ch)/0.14)] border border-[rgb(var(--color-accent-success-ch)/0.35)]',
+    name: 'text-[rgb(var(--color-accent-success-ch))]'
+  }
+}
 </script>
 
 <template>
@@ -199,6 +216,32 @@ const formats = LANDING_FORMATS
             {{ LANDING_DEMO.subtitle }}
           </p>
         </div>
+        <!-- Онлайн-подключение к банкам — яркие инфо-блоки (вместо интерактивных песочниц). -->
+        <div class="grid gap-4 sm:grid-cols-2 mb-6">
+          <div
+            v-for="bank in bankConnect"
+            :key="bank.name"
+            data-glow-card
+            data-testid="bank-connect"
+            class="relative overflow-hidden rounded-2xl border p-6 sm:p-7 transition-colors"
+            :class="BANK_ACCENT[bank.accent].card"
+          >
+            <span
+              class="inline-block rounded-full px-3 py-1 text-xs font-mono font-medium mb-4"
+              :class="BANK_ACCENT[bank.accent].pill"
+            >{{ bank.tag }}</span>
+            <h3
+              class="text-2xl sm:text-3xl font-bold leading-tight mb-2"
+              :class="BANK_ACCENT[bank.accent].name"
+            >
+              {{ bank.name }}
+            </h3>
+            <p class="text-sm sm:text-base text-white/70 leading-relaxed">
+              {{ bank.text }}
+            </p>
+          </div>
+        </div>
+
         <LandingDemo />
         <p class="mt-4 text-sm text-white/45">
           {{ LANDING_DEMO.note }}

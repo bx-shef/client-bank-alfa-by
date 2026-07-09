@@ -110,7 +110,7 @@ export const LANDING_FEATURES: readonly LandingFeature[] = [
  *  see what the app extracts. Copy is intentionally simple (owner refines later). */
 export const LANDING_DEMO = {
   title: 'Попробуйте на своей выписке',
-  subtitle: 'Прикрепите файл выписки клиент-банка — прямо в браузере покажем, что мы из неё вытащим: операции, контрагентов, суммы и распознанные номера счетов/заказов. Или запустите готовый пример от Альфы и Приора.',
+  subtitle: 'Прикрепите файл выписки клиент-банка — прямо в браузере покажем, что мы из неё вытащим: операции, контрагентов, суммы и распознанные номера счетов/заказов.',
   note: 'Разбор идёт локально в браузере — сам файл не загружается на наши серверы. Это демонстрация: на боевом портале те же данные автоматически уходят в вашу CRM.',
   /** Dropzone hint (references the file cap in the component). */
   hint: 'Файл разбирается прямо в браузере — сам файл не загружается на сервер.',
@@ -125,6 +125,30 @@ export const LANDING_DEMO = {
   /** Shown when a file parsed but held no operations. */
   noOperations: 'В файле не найдено операций.'
 } as const
+
+/** Online bank-connection info cards shown in the demo section (replace the old
+ *  interactive sandbox buttons). Pure content — accent maps to styles in index.vue. */
+export interface BankConnect {
+  name: string
+  tag: string
+  text: string
+  accent: 'cyan' | 'green'
+}
+
+export const LANDING_BANK_CONNECT: readonly BankConnect[] = [
+  {
+    name: 'Альфа-Банк Беларусь',
+    tag: 'Онлайн · OAuth API',
+    text: 'Подключаем напрямую к банку: выписка по счетам тянется автоматически, без ручной выгрузки. Портал Bitrix24 может быть в любой стране.',
+    accent: 'cyan'
+  },
+  {
+    name: 'Приорбанк',
+    tag: 'Онлайн · Open Banking (СПР)',
+    text: 'Операции приходят в CRM через Open Banking. Онлайн-подключение настраиваем при внедрении под ваши счета.',
+    accent: 'green'
+  }
+]
 
 /** «Интеграторам Bitrix24» block (section 5). */
 export const LANDING_INTEGRATORS
