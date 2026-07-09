@@ -1,5 +1,5 @@
 import type { StatementItem } from '~/types/statement'
-import { buildActivityTitle, formatIsoDate } from '~/utils/activity'
+import { buildActivityTitle, formatIsoDate, neutralizeBb } from '~/utils/activity'
 
 // Builds the chat announcement text for one statement operation (posted to a B24
 // chat via im.message.add). Pure: takes a normalized item, returns the message
@@ -13,16 +13,10 @@ import { buildActivityTitle, formatIsoDate } from '~/utils/activity'
 // statement — i.e. they are controlled by whoever SENDS the payment, not by us.
 // im.message.add renders BB-code (and previews URLs), so an external payer could
 // inject `[url=…]`, `[user=…]` mentions, action buttons or break our `[b]` via a
-// crafted purpose. `neutralizeBb` strips BB-code brackets from every interpolated
-// external field before it reaches the message; the wrapper also sends
-// URL_PREVIEW=N. Our own structural tags (`[b]…[/b]`) are added AFTER sanitizing.
-
-/** Strip BB-code brackets from externally-sourced text so it can't inject markup
- *  into the chat message. Replaces `[`/`]` with lookalike full-width brackets so
- *  the literal content is still readable. */
-export function neutralizeBb(s: string): string {
-  return s.replace(/\[/g, '［').replace(/\]/g, '］')
-}
+// crafted purpose. `neutralizeBb` (shared from activity.ts — same guard the CRM
+// activity uses) strips BB-code brackets from every interpolated external field before
+// it reaches the message; the wrapper also sends URL_PREVIEW=N. Our own structural tags
+// (`[b]…[/b]`) are added AFTER sanitizing.
 
 /** One-line bold headline reused from the activity title, e.g.
  *  "Приход 1 840,00 BYN от ООО Ромашка". BB-neutralized (carries counterparty name). */
