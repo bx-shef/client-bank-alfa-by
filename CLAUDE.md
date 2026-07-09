@@ -73,6 +73,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `index.vue` над `LandingDemo`) — интерактивные кнопки-«песочницы» убраны (живой OAuth банков гео-
   блокируется из облака; sample-функции `demoAlfaExtraction`/`demoPriorExtraction` остаются в
   `demoExtract.ts` под юнит-тестами как доказательство нормализаторов, но к UI не подключены).
+  В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
+  синтетика): чип загружает пример в один клик (`loadSample`: fetch→File→`runFiles`) + ссылка «скачать».
   Тёмный самодостаточный UI (не тащим b24ui-`OperationList`,
   чтобы не смешивать light/dark-токены с брендовой оболочкой); подводка/тексты ошибок — `LANDING_DEMO` в
   `landing.ts`, интерактивные подписи (кнопки, метки сводки, `KIND_LABEL`) пока в компоненте (черновик,
