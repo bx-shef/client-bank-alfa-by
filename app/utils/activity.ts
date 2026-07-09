@@ -20,6 +20,22 @@ export function formatMoney(amount: number): string {
   return moneyFormat.format(amount)
 }
 
+/**
+ * Strip BB-code brackets from externally-sourced text so it can't inject markup into
+ * the CRM record. Replaces `[`/`]` with lookalike full-width brackets so the literal
+ * content stays readable. Idempotent (a second pass is a no-op).
+ *
+ * SECURITY: the payment purpose and counterparty name/account come from the bank
+ * statement — controlled by whoever SENDS the payment, not by us. The Bitrix CRM
+ * timeline can render BB-code, so a payer could inject `[url=…]`/`[user=…]`/buttons via
+ * a crafted purpose. Every external field is neutralized before it reaches the activity
+ * title/description (same guard the chat path in chatMessage.ts uses — this is its home,
+ * shared to avoid a chatMessage↔activity import cycle).
+ */
+export function neutralizeBb(s: string): string {
+  return s.replace(/\[/g, '［').replace(/\]/g, '］')
+}
+
 /** Format the date part of an ISO 8601 string as `DD.MM.YYYY` (deterministic,
  * TZ-free — operates on the date prefix, not a Date object). */
 export function formatIsoDate(iso: string): string {
@@ -95,20 +111,23 @@ export function buildActivityTitle(item: StatementItem): string {
 export function buildActivityDescription(item: StatementItem): string {
   const cp = item.counterparty
   const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
+  // Every externally-sourced field (payer-controlled) is BB-neutralized before it
+  // enters the CRM timeline description — see `neutralizeBb`. Our own labels/amounts/
+  // dates and the origin token are trusted and left as-is.
   const doc = item.docNum
-    ? `Документ: #${item.docNum} от ${formatIsoDate(item.acceptDate)}`
+    ? `Документ: #${neutralizeBb(item.docNum)} от ${formatIsoDate(item.acceptDate)}`
     : `Документ от ${formatIsoDate(item.acceptDate)}`
 
   const lines: Array<string | null> = [
-    item.purpose,
+    neutralizeBb(item.purpose),
     '',
     `${kind}: ${formatMoney(item.amount)} ${item.currency}`,
     doc,
     '',
-    `Контрагент: ${cp.name}`,
-    `УНП: ${cp.unp}`,
-    `р/сч: ${cp.account}`,
-    cp.bank ? `Банк: ${cp.bank}` : null,
+    `Контрагент: ${neutralizeBb(cp.name)}`,
+    `УНП: ${neutralizeBb(cp.unp)}`,
+    `р/сч: ${neutralizeBb(cp.account)}`,
+    cp.bank ? `Банк: ${neutralizeBb(cp.bank)}` : null,
     '',
     activityOriginToken(item)
   ]
@@ -128,7 +147,9 @@ export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef): 
     ownerTypeId: CRM_OWNER_TYPE_COMPANY,
     ownerId: company.id,
     deadline: toPortalDeadline(item.acceptDate),
-    title: buildActivityTitle(item),
+    // Title carries the counterparty name (payer-controlled) — neutralize it too
+    // (same guard the chat headline uses via buildChatHeadline).
+    title: neutralizeBb(buildActivityTitle(item)),
     description: buildActivityDescription(item),
     ...(company.assignedById ? { responsibleId: company.assignedById } : {})
   }
