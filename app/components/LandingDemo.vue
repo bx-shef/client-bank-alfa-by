@@ -71,6 +71,12 @@ const KIND_LABEL: Record<IdentifierKind, string> = {
   'document-number': 'Документ'
 }
 
+/** Tax-id label by currency: RUB → ИНН (Russian), otherwise УНП (Belarusian).
+ *  The `counterparty.unp` field is a generic tax id; only its label differs. */
+function taxIdLabel(currency: string): string {
+  return currency === 'RUB' ? 'ИНН' : 'УНП'
+}
+
 /** Reset transient state shared by all sources (keeps `busy` handling to callers). */
 function clearFeedback() {
   error.value = ''
@@ -401,7 +407,7 @@ function reset() {
                     v-if="op.counterparty.unp || op.counterparty.account"
                     class="mt-0.5 font-mono text-xs text-white/40 break-all"
                   >
-                    <span v-if="op.counterparty.unp">УНП {{ op.counterparty.unp }}</span>
+                    <span v-if="op.counterparty.unp">{{ taxIdLabel(op.currency) }} {{ op.counterparty.unp }}</span>
                     <span v-if="op.counterparty.unp && op.counterparty.account"> · </span>
                     <span v-if="op.counterparty.account">{{ op.counterparty.account }}</span>
                   </div>
