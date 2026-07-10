@@ -102,7 +102,7 @@ useHead({
           color="air-tertiary-no-accent"
           :icon="ContactDetailsIcon"
           size="sm"
-          @click="cardOpen = true"
+          @click="() => { cardOpen = true }"
         />
       </template>
       <template #body>

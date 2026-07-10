@@ -98,7 +98,7 @@ onMounted(async () => {
           color="air-tertiary-no-accent"
           size="sm"
           aria-label="Настройки"
-          @click="settingsOpen = true"
+          @click="() => { settingsOpen = true }"
         />
       </div>
     </header>
