@@ -170,24 +170,20 @@ function reset() {
           Перетащите сюда файл выписки ({{ ACCEPTED_EXTENSIONS.join(', ') }}) — или
         </p>
         <div class="mt-4 flex items-center justify-center gap-3">
-          <button
-            type="button"
-            class="rounded-xl bg-[rgb(var(--color-accent-primary-ch))] px-5 py-2.5 text-sm font-semibold text-[#001018] transition-opacity hover:opacity-90 disabled:opacity-60"
+          <B24Button
+            :label="busy ? 'Разбираем…' : 'Выбрать файл'"
+            color="air-primary"
+            :loading="busy"
             data-testid="demo-pick"
-            :disabled="busy"
             @click="fileInput?.click()"
-          >
-            {{ busy ? 'Разбираем…' : 'Выбрать файл' }}
-          </button>
-          <button
+          />
+          <B24Button
             v-if="extraction || error"
-            type="button"
-            class="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-white/80 transition-colors hover:bg-white/5"
+            label="Сбросить"
+            color="air-secondary-no-accent"
             data-testid="demo-reset"
             @click="reset()"
-          >
-            Сбросить
-          </button>
+          />
         </div>
         <input
           ref="fileInput"
@@ -214,14 +210,14 @@ function reset() {
           :key="s.url"
         >
           <span class="inline-flex items-center gap-1.5">
-            <button
-              type="button"
-              class="rounded-lg border border-[rgb(var(--color-accent-primary-ch)/0.4)] bg-[rgb(var(--color-accent-primary-ch)/0.08)] px-3 py-1.5 text-white transition-colors hover:bg-[rgb(var(--color-accent-primary-ch)/0.16)] disabled:opacity-50"
+            <B24Button
+              :label="s.label"
+              color="air-secondary-no-accent"
+              size="sm"
               :disabled="busy"
+              data-testid="demo-sample"
               @click="loadSample(s)"
-            >
-              {{ s.label }}
-            </button>
+            />
             <a
               :href="s.url"
               :download="s.name"
