@@ -381,8 +381,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **Решение разнесения (§2, слайс 4):** отфильтрованные по стадии кандидаты → `summarizeAllocation` →
       `onAllocationDecision` **логирует** исход, счётчики `allocatable`/`ambiguous`/`manual` (amount-цели по
       сумме+валюте, trigger-цели безусловно). **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и
-      только при совпавшей компании (IDOR-скоуп); **пока log/count — без записи разнесения** (стор факта +
-      autoDistribute-гейт + идемпотентность #184 — следующий под-слайс, за live-verify). CRM-депсы берут `memberId` явно
+      только при совпавшей компании (IDOR-скоуп). **Запись факта разнесения — сделана (#184):** при
+      `action==='allocate'` пишется write-once **факт** «платёж→цель» (`recordAllocation` → `allocation_fact`,
+      счётчик `allocated`, редоставка не двоит), при `ambiguous`/`manual` — уведомление в **чат ошибок**
+      (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`); удаление приложения чистит факты.
+      Остаётся follow-up: **мутация портала** (`payment.pay`/стадия) + `autoDistribute`-гейт + live-verify
+      (trigger-цели факт пока не пишут — их запись в мутационном слайсе). CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Стор дедупа живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -521,7 +525,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `resolveIntentsForOp` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`; пока log/count без
       записи. **Отсев отрицательных стадий (`isNegativeStage`) — сделан** (`negativeStages.ts`, ниже): предикат
       грузится ленивым `loadNegativeStagePredicate` ровно один раз на джобу и прокидывается в `resolveIntentsForOp`.
-      Запись разнесения (`resolveAllocation`→факт/дело, идемпотентность #184) — следующий под-слайс.
+      **Запись факта разнесения + чат ошибок — сделаны (#184):** `recordAllocation` (write-once) + `notifyError`.
+      Осталось: мутация портала (`payment.pay`/стадия) + `autoDistribute`-гейт + live-verify.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** отрицательных стадий. Namespace'ы стадий не пересекаются
@@ -541,10 +546,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
     списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
     `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
-    `docs/QUEUES.md` «REST-бюджет проводки платежей»); `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172); **следующий
-    под-слайс проводки в `crm-sync`** — **запись** разнесения (`summarizeAllocation` уже даёт решение log/count):
-    стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность (#184) + действие
-    в портале (`payment.pay`/стадия) — за live-verify.
+    `docs/QUEUES.md` «REST-бюджет проводки платежей»); `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172).
+    **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184):** `recordAllocation` (write-once
+    `allocation_fact`, счётчик `allocated`) при `allocate` + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
+    удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
+    `queuePhase2`). **Осталось (мутационный слайс):** реальное действие в портале (`payment.pay`/стадия/триггер)
+    + `autoDistribute`-гейт в настройках + запись факта trigger-целей + live-verify.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
