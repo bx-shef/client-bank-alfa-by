@@ -140,7 +140,7 @@ describe('resolveIntentCandidates — exhaustiveness & route alignment', () => {
     expect(routeIdentifier('invoice-number').strategy).toBe('by-number')
     expect(routeIdentifier('invoice-id').strategy).toBe('by-id')
     expect(routeIdentifier('deal-id').strategy).toBe('by-id')
-    expect(routeIdentifier('payment-number').strategy).toBe('via-payment')
+    expect(routeIdentifier('payment-number').strategy).toBe('by-account-number')
   })
 })
 

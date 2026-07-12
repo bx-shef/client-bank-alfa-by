@@ -74,8 +74,8 @@ const unsupported = (intent: RecognitionIntent, reason: string): IntentResolutio
 /** Resolve a `payment-number` intent against an already-fetched company deal-payment
  *  pool — a pure `accountNumber` filter (no I/O). Split out so the single-intent and
  *  batch resolvers share one definition (the pool is fetched by the caller; the batch
- *  path fetches it ONCE per op — #191). NB: routed `'via-payment'` but by-number
- *  semantics — taxonomy note #189. */
+ *  path fetches it ONCE per op — #191). Routed with the `'by-account-number'` strategy
+ *  (#189) — matches by the payment's `accountNumber`, not by its own id. */
 function resolvePaymentNumber(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
   return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
 }
