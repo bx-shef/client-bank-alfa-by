@@ -13,9 +13,10 @@ import type { IdentifierKind } from '~/utils/purposeMatch'
 export type LookupStrategy
   = | 'by-id' // the value IS the entity's own CRM id
     | 'by-number' // search the entity by its human-facing number field
+    | 'by-account-number' // search a payment by its `accountNumber` within the company's deal-payment pool (#189)
     | 'by-config-field' // search by a portal-configured field (per direction / per process)
     | 'via-order' // value identifies an order → resolve to its deal payment
-    | 'via-payment' // value identifies a payment record directly
+    | 'via-payment' // value identifies a payment record by its OWN id (payment-id)
     | 'via-document' // value is a generated-document number → bridge to its linked entity
 
 // NB (§2): a `deal` / `smart-process` target reached by `by-id` / `by-config-field`
@@ -47,7 +48,10 @@ export const IDENTIFIER_ROUTES: Record<IdentifierKind, IdentifierRoute> = {
   'order-id': { targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false },
   'order-number': { targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false },
   'payment-id': { targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false },
-  'payment-number': { targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false },
+  // Resolved by `accountNumber` within the company's deal-payment pool (intentResolver:
+  // findCompanyDealPayments + filterByAccountNumber) — by-number semantics, NOT by own id
+  // (that's `payment-id`/`via-payment`). Distinct label per #189.
+  'payment-number': { targetKind: 'deal-payment', strategy: 'by-account-number', needsConfiguredField: false },
   'smart-id': { targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: false },
   'smart-field': { targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true },
   'document-number': { targetKind: null, strategy: 'via-document', needsConfiguredField: false }

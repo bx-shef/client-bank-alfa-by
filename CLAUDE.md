@@ -268,7 +268,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     между распознаванием §4 и REST-lookup): исчерпывающая таблица `IDENTIFIER_ROUTES`
     (`Record<IdentifierKind, IdentifierRoute>` — новый вид не скомпилируется без маршрута) → `targetKind`
     (`AllocationTargetKind` или `null` для моста-документа) + `LookupStrategy` (`by-id`/`by-number`/
-    `by-config-field`/`via-order`/`via-payment`/`via-document`) + `needsConfiguredField` (поле из карты
+    `by-account-number` (payment-number, #189)/`by-config-field`/`via-order`/`via-payment`/`via-document`) +
+    `needsConfiguredField` (поле из карты
     сопоставления — только `deal-field`/`smart-field`). Без I/O и без хардкода имён полей; сам REST-поиск
     и поле из настроек — REST-слайс. `AllocationTargetKind` расширен до `invoice|deal-payment|deal|smart-process`.
   - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
