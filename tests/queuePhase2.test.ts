@@ -7,7 +7,7 @@ import {
   DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches
 } from '../server/queue/cron'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
-import type { ChatSettings, PortalSettings, RecognitionSettings } from '../app/utils/settings'
+import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
 import type { IntentResolution } from '../server/utils/intentResolver'
 
@@ -35,6 +35,10 @@ interface FakeOpts {
   /** negative-stage predicate returned by loadNegativeStagePredicate; default null
    *  (unavailable → resolution proceeds unfiltered). */
   negativeStage?: ((stageId: string) => boolean) | null
+  /** error-chat target; default { dialogId: '' } (off). Set a dialogId to enable error notices. */
+  errorChat?: ChatTarget
+  /** what recordAllocation returns (true = fresh insert, false = already existed); default true. */
+  recorded?: boolean
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -53,8 +57,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     : o.chat
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
-  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat: { dialogId: '' }, recognition }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [] }
+  const errorChat = o.errorChat ?? { dialogId: '' }
+  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -93,6 +98,13 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     },
     notifyChat: async (it, _dialogId, memberId) => {
       calls.chat.push([it.docId, memberId])
+    },
+    recordAllocation: async (it, target, memberId) => {
+      calls.allocRec.push([it.docId, target.kind, target.id, memberId])
+      return o.recorded ?? true
+    },
+    notifyError: async (it, decision, dialogId, memberId) => {
+      calls.errChat.push([it.docId, decision.action, dialogId, memberId])
     },
     getActivityId: async (_memberId, key) => written.get(key) ?? null,
     rememberActivity: async (_memberId, key, activityId) => {
@@ -171,7 +183,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     expect(calls.remember).toEqual([['A|d1', 'act-1'], ['A|d2', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
@@ -186,7 +198,7 @@ describe('handleCrmSyncJob', () => {
     expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, unmatched: 0 })
     // Redeliver the SAME job: everything is now remembered → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -195,7 +207,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (persistent dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -205,7 +217,7 @@ describe('handleCrmSyncJob', () => {
   it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written
     expect(calls.remember).toEqual([]) // so nothing remembered → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -220,7 +232,7 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, credits: 2, debits: 1 })
+    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 1 })
     expect(calls.remember).toEqual([['A|d2', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
@@ -591,6 +603,79 @@ describe('handleCrmSyncJob', () => {
     await expect(handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
     expect(calls.activity).toEqual([]) // never reached writeActivity for this op
     expect(calls.remember).toEqual([])
+  })
+
+  // Allocation WRITE slice (#184): a decided `allocate` records a write-once fact
+  // (payment→target), and an ambiguous/manual outcome posts a notice to the error chat.
+  it('records the allocation fact for a decided allocate and counts it', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)] })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // target kind + id
+  })
+
+  it('does not double-count the fact when it already existed (redelivery, write-once)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], recorded: false })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(0) // store reported "already existed"
+    expect(calls.allocRec).toHaveLength(1) // but still attempted
+  })
+
+  it('records the smallest-id target AND posts a heads-up on an ambiguous allocation', async () => {
+    const two: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '9', amount: 10, currency: 'BYN' }, { kind: 'invoice', id: '5', amount: 10, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: two, errorChat: { dialogId: 'errchat' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ ambiguous: 1, allocated: 1 })
+    expect(calls.allocRec).toEqual([['d1', 'invoice', '5', 'M']]) // smallest id recorded
+    expect(calls.errChat).toEqual([['d1', 'allocate', 'errchat', 'M']]) // ambiguous decision is action=allocate
+  })
+
+  it('posts a manual allocation notice to the error chat and records no fact', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 100)], errorChat: { dialogId: 'errchat' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r).toMatchObject({ manual: 1, allocated: 0 })
+    expect(calls.allocRec).toEqual([]) // no allocate → no fact
+    expect(calls.errChat).toEqual([['d1', 'manual', 'errchat', 'M']])
+  })
+
+  it('does not post an error notice when no error chat is configured (default off)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 100)] }) // manual outcome
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.errChat).toEqual([]) // errorChat.dialogId '' → off
+  })
+
+  it('records a clean single-target allocate WITHOUT an error notice', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], errorChat: { dialogId: 'errchat' } })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']])
+    expect(calls.errChat).toEqual([]) // clean allocate → no heads-up
+  })
+
+  it('a trigger-only allocatable op records no fact and posts no notice (v1: amount-target facts only)', async () => {
+    const dealMatrix: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }] }
+    const trig: IntentResolution[] = [{ kind: 'deal-id', value: '55', status: 'resolved', candidates: [{ kind: 'deal', id: '3', amount: 0, currency: '' }] }]
+    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: trig, errorChat: { dialogId: 'errchat' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'сделка Д-55')]), deps)
+    expect(r).toMatchObject({ allocatable: 1, allocated: 0 })
+    expect(calls.allocRec).toEqual([]) // decision.action='none' (trigger only) → no amount-fact
+    expect(calls.errChat).toEqual([]) // allocatable (not ambiguous/manual) → no notice
+  })
+
+  it('accumulates `allocated` across a batch, counting only fresh inserts (write-once)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
+    deps.resolveIntents = async () => [invAt('7', 10)] // every op → exact allocate
+    let n = 0
+    // first op inserts a fresh fact (true), second already existed (false).
+    deps.recordAllocation = async (it, target) => {
+      calls.allocRec.push([it.docId, target.kind, target.id, 'M'])
+      return n++ === 0
+    }
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002')]), deps)
+    expect(r.allocated).toBe(1) // only the fresh insert counted
+    expect(calls.allocRec).toHaveLength(2) // both attempted
   })
 })
 

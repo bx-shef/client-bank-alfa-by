@@ -45,16 +45,23 @@
   лимитер сам троттлит. Адаптер `server/utils/b24Sdk.ts` готов (#195/#197); сам свап транспорта `crm-sync`
   на SDK — отдельный шаг (см. ниже).
 
-### Текущее состояние `main` (на момент передачи)
+### Текущее состояние `main`
 
-`crm-sync` доведён до **решения разнесения БЕЗ записи**: `handlers.ts` резолвит кандидатов (стадия-скоуп),
-считает `summarizeAllocation` → `onAllocationDecision` (**LOG/COUNT only**, счётчики `allocatable`/`ambiguous`/
-`manual`), но **факт разнесения НЕ пишется** и в чат ошибок ничего не уходит. Это #196/#198 от 🏗️.
+**✅ Запись факта разнесения + чат ошибок — СДЕЛАНЫ (#184).** `crm-sync` теперь при
+`decision.action === 'allocate'` пишет **write-once факт** «платёж→цель» (`recordAllocation` →
+`allocation_fact`, счётчик `allocated`, редоставка не двоит), а при `ambiguous`/`manual` шлёт уведомление в
+**чат ошибок** (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`). Удаление приложения
+чистит факты (`deleteFactsForPortal`). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
+`queuePhase2`, вкл. write-once, ambiguous-both-paths, trigger-only gap), прогнано 5 проверяющими.
+**Осталось (мутационный слайс):** реальное действие в портале (`payment.pay`/стадия/триггер) +
+`autoDistribute`-гейт в настройках + запись факта trigger-целей + live-verify (нужен Postgres/живой портал).
 
-### СЛЕДУЮЩИЙ ШАГ (для новой сессии) — запись разнесения #184
+> Блок ниже — **исторический план #184** (как размечалась запись до её реализации). Оставлен как
+> референс; сама запись уже в `main`. Актуальный остаток — «мутационный слайс» выше.
 
-🏗️-сессия **остановлена**, коллизий нет — можно доводить запись **поверх текущего `main`** (не откатывая
-#196/#198). Точки подключения (проверены в этой сессии):
+### (Исторический план) запись разнесения #184
+
+Точки подключения (реализованы этим слайсом):
 1. **`server/queue/handlers.ts`**, блок решения (сейчас ~строка 245-254, после `summarizeAllocation`/
    `onAllocationDecision`): при `summary.decision.action === 'allocate'` вызвать новую депсу
    `recordAllocation(item, summary.decision.target, memberId)` — **write-once факт** через

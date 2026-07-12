@@ -12,7 +12,7 @@ import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
-import { summarizeAllocation, type AllocationDecision } from '../../app/utils/allocation'
+import { summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
@@ -71,10 +71,23 @@ export interface HandlerDeps {
   onResolved: (item: StatementItem, resolutions: IntentResolution[], memberId: string) => void
   /** Observe the ALLOCATION DECISION for one op (§2, #109): the amount-matched outcome
    *  (`resolveAllocation` over invoice/deal-payment candidates) plus how many unconditional
-   *  trigger targets (deal/smart-process) were found. LOG-ONLY this slice — no allocation is
-   *  WRITTEN yet (that lands with the fact-store + auto-distribute gate + idempotency #184).
+   *  trigger targets (deal/smart-process) were found. This callback only OBSERVES; the
+   *  amount-target fact is persisted by `recordAllocation` (#184, write-once). The portal
+   *  MUTATION (`payment.pay`/stage) + the `autoDistribute` gate remain a follow-up.
    *  Called once per op that resolved ≥1 candidate. MUST NOT throw (pure observation). */
   onAllocationDecision: (item: StatementItem, decision: AllocationDecision, triggerTargets: number, memberId: string) => void
+  /** Record the persistent allocation fact «этот платёж → эта сущность» (#184). Called
+   *  only for a decided `allocate` (the smallest-id amount target). Write-once per
+   *  (portal, factKey): returns true if THIS call inserted the fact, false if one already
+   *  existed (redelivery/reimport) — so the `allocated` counter is not double-bumped. v1
+   *  writes only the FACT (no `payment.pay`/stage mutation). A store error propagates
+   *  (fail the job → clean retry), like findCompany — it runs BEFORE the activity write. */
+  recordAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
+  /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
+   *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
+   *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
+   *  MUST NOT throw — like notifyChat, a chat failure must never fail the job. Swallow+log. */
+  notifyError: (item: StatementItem, decision: AllocationDecision, dialogId: string, memberId: string) => Promise<void>
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
    *  throw — it runs AFTER the activity is written+remembered, so a propagated error
@@ -156,14 +169,16 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  `ambiguous` = allocatable ops where >1 distinct amount target matched (auto-allocate
  *  to the smallest id + chat heads-up); `manual` = ops with amount candidates but no
  *  exact match and no trigger (partial/group payment → «очередь ручного разбора»).
- *  Allocation is DECISION-ONLY here (§2 log/count) — nothing is written off it yet.
+ *  `allocated` = decided `allocate` ops whose fact was FRESHLY recorded this run (#184,
+ *  write-once — a redelivery does not re-count). The FACT is persisted; the portal
+ *  MUTATION (`payment.pay`/stage) stays a follow-up behind an opt-in gate.
  *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, notified: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, notified: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -179,6 +194,9 @@ export async function handleCrmSyncJob(
   const settings = await deps.getPortalSettings(job.memberId)
   const chat = settings?.chat ?? null
   const recognition = settings?.recognition ?? null
+  // Error chat (#184, §5): ambiguous/manual allocations post a heads-up here. `dialogId`
+  // empty ⇒ not configured ⇒ error notices off (same shape as the main chat target).
+  const errorChat = settings?.errorChat ?? null
 
   // Negative-stage predicate (union of invoice + deal fail/lost stages), loaded AT MOST
   // ONCE per job — lazily, so a batch that never resolves an intent pays nothing. Reused
@@ -198,6 +216,7 @@ export async function handleCrmSyncJob(
   let allocatable = 0
   let ambiguous = 0
   let manual = 0
+  let allocated = 0
   for (const item of unique) {
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
     // portal's matrices and route each. Pure + cheap → run for every unique op (even
@@ -219,13 +238,13 @@ export async function handleCrmSyncJob(
     const companyId = await deps.findCompany(item, job.memberId)
     // Intent resolution (§4 → #109 lookup, slice 3 — wiring the slice-2 dispatcher into
     // the worker): resolve the recognized identifiers to allocation candidates via the
-    // entity lookups, scoped to the matched company. LOG/COUNT only — no allocation is
-    // written yet. GATED behind the dedup skip (a redelivered op is already `continue`d
-    // above, so no re-query) and a matched company (no company ⇒ no IDOR scope ⇒ nothing
-    // to look up). Candidates are now stage-filtered: the negative-stage predicate (loaded
-    // once per job) drops paid/«Не оплачен»/lost entities, so `resolved` counts only
-    // allocatable candidates. Still LOG/COUNT only — the allocation write is the next
-    // sub-slice. The purpose is payer-controlled, so
+    // entity lookups, scoped to the matched company. GATED behind the dedup skip (a
+    // redelivered op is already `continue`d above, so no re-query) and a matched company
+    // (no company ⇒ no IDOR scope ⇒ nothing to look up). Candidates are stage-filtered: the
+    // negative-stage predicate (loaded once per job) drops paid/«Не оплачен»/lost entities,
+    // so `resolved` counts only allocatable candidates. The decided allocation is now
+    // persisted as a write-once FACT (#184, below); the portal mutation is a follow-up. The
+    // purpose is payer-controlled, so
     // the number of intents actually sent to REST is capped (MAX_RESOLVED_INTENTS_PER_OP)
     // to bound amplification (#191); the `recognized` metric still reflects all matches.
     if (companyId && intents.length > 0) {
@@ -239,9 +258,10 @@ export async function handleCrmSyncJob(
         // `summarizeAllocation` (amount targets amount-matched; trigger targets fire
         // unconditionally). Runs for BOTH приход and расход — per PROCESSING.md §2
         // «авто-проведение работает и для приходов, и для расходов (обе стороны)», so this
-        // is intentionally NOT direction-gated. DECISION-ONLY: nothing is written yet
-        // (fact-store + auto-distribute gate + idempotency #184 next). `ambiguous` is a
-        // stricter case of `allocatable`, so it bumps both counters.
+        // is intentionally NOT direction-gated. The allocation FACT is now persisted below
+        // (#184, write-once); the portal MUTATION (`payment.pay`/stage) stays a follow-up
+        // behind an opt-in gate. `ambiguous` is a stricter case of `allocatable`, so it bumps
+        // both counters.
         const summary = summarizeAllocation({ amount: item.amount, currency: item.currency, candidates })
         if (summary.outcome === 'ambiguous') {
           allocatable++
@@ -252,6 +272,21 @@ export async function handleCrmSyncJob(
           manual++
         }
         deps.onAllocationDecision(item, summary.decision, summary.triggerTargets, job.memberId)
+        // Write slice (#184): record the persistent fact for a decided `allocate` (the
+        // smallest-id amount target), write-once so a redelivery/reimport can't double it
+        // (the `allocated` counter bumps only on a fresh insert). v1 writes ONLY the fact —
+        // no `payment.pay`/stage mutation yet (opt-in `autoDistribute` gate — follow-up).
+        // Trigger-only targets (deal/smart-process, `action !== 'allocate'`) record no fact
+        // here — they fire unconditionally and their write+idempotency is the mutation slice.
+        // Then, for an ambiguous (heads-up) or manual (no exact match) outcome, post a notice
+        // to the error chat if configured. Both already gated behind the dedup-skip + matched
+        // company (this block only runs then), so the scope is the payer (IDOR).
+        if (summary.decision.action === 'allocate') {
+          if (await deps.recordAllocation(item, summary.decision.target, job.memberId)) allocated++
+        }
+        if ((summary.outcome === 'ambiguous' || summary.outcome === 'manual') && errorChat?.dialogId) {
+          await deps.notifyError(item, summary.decision, errorChat.dialogId, job.memberId)
+        }
       }
       deps.onResolved(item, resolutions, job.memberId)
     }
@@ -285,5 +320,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, notified, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, notified, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, credits: credits.length, debits: debits.length }
 }

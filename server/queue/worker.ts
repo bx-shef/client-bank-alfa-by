@@ -26,6 +26,9 @@ import { makePortalRestCall, type PortalRestDeps } from '../utils/portalRest'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
+import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
+import { deleteFactsForPortal, recordAllocation } from '../utils/allocationFactStore'
+import { allocationFactKey } from '../../app/utils/allocation'
 import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
@@ -177,8 +180,9 @@ export function liveHandlerDeps(): HandlerDeps {
       const summary = resolutions.map(r => `${r.kind}=${logSafe(r.value)}:${r.status}(${r.candidates.length})`).join(', ')
       console.log(`[resolve] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
-    // Observe the allocation decision (§2, log/count only — nothing written yet). Target
-    // id/kind are internal (CRM ids, not payer-controlled); account/docId sanitized.
+    // Observe the allocation decision (§2). This callback only LOGS; the fact is persisted
+    // by the `recordAllocation` dep below (#184). Target id/kind are internal (CRM ids, not
+    // payer-controlled); account/docId sanitized.
     onAllocationDecision: (item, decision, triggerTargets, memberId) => {
       const detail = decision.action === 'allocate'
         ? `allocate ${decision.target.kind}#${decision.target.id}${decision.ambiguous ? ` ambiguous(+${decision.alternatives.length})` : ''}`
@@ -201,6 +205,27 @@ export function liveHandlerDeps(): HandlerDeps {
         await notifyChatViaRest(item, dialogId, call)
       } catch (e) {
         console.error('chat notify failed', memberId, (e as Error)?.message)
+      }
+    },
+    // Persist the allocation fact «платёж → сущность» (#184), write-once per (portal,
+    // factKey). Demo accounts are GATED (never touch the real store). A store error
+    // PROPAGATES (unlike notifyChat) — it runs BEFORE the activity write, so a retry is
+    // clean; the fact write must not be silently lost.
+    recordAllocation: (item, target, memberId) => {
+      if (isDemoAccount(item.account)) return Promise.resolve(false)
+      return recordAllocation(dbQuery, memberId, allocationFactKey(item, target), target.kind, target.id)
+    },
+    // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
+    // notifyChat: demo accounts gated, no token → skip, whole body swallow+logged (a chat
+    // failure must never fail the job).
+    notifyError: async (item, decision, dialogId, memberId) => {
+      if (isDemoAccount(item.account)) return
+      try {
+        const call = await makePortalRestCall(memberId, portalRestDeps)
+        if (!call) return
+        await notifyAllocationErrorViaRest(item, decision, dialogId, call)
+      } catch (e) {
+        console.error('alloc error notify failed', memberId, (e as Error)?.message)
       }
     },
     // Persistent dedup store (#9) — read-before-write guard, wired to Postgres.
@@ -226,11 +251,13 @@ export function liveHandlerDeps(): HandlerDeps {
         applicationToken: c.applicationToken
       })
     },
-    // Uninstall always erases EVERYTHING for the portal: token row + dedup map.
+    // Uninstall always erases EVERYTHING for the portal: token row + dedup map +
+    // import status + allocation facts (#184).
     deletePortal: async (memberId) => {
       await deleteToken(dbQuery, memberId)
       await deleteDedupForPortal(dbQuery, memberId)
       await deleteImportResultForPortal(dbQuery, memberId)
+      await deleteFactsForPortal(dbQuery, memberId)
     },
     enqueueCrmSync
   }
