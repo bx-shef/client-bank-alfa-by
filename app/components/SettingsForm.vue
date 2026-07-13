@@ -220,6 +220,30 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
         </div>
       </B24Card>
 
+      <B24Card>
+        <template #header>
+          <h2 class="font-semibold">
+            Авто-проведение оплат
+          </h2>
+        </template>
+        <div class="space-y-4">
+          <B24Switch
+            v-model="settings.autoDistribute"
+            label="Автоматически отмечать оплату в CRM"
+            description="Когда платёж однозначно распознан по номеру — приложение само пометит оплату сделки «оплачено»."
+            data-testid="auto-distribute"
+          />
+          <B24Alert
+            v-if="settings.autoDistribute"
+            color="air-primary-warning"
+            variant="soft"
+            title="Приложение будет изменять данные в CRM"
+            description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
+            data-testid="auto-distribute-warning"
+          />
+        </div>
+      </B24Card>
+
       <!-- Autosave status (no explicit Save button). Announced to screen readers. -->
       <p
         v-if="enabled"

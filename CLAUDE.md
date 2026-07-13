@@ -122,7 +122,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/components/SettingsForm.vue` — форма настроек чата (#16 PR-C): два пикера чатов на
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
-  предпросмотр («что попадёт в чат», `B24Badge`). Один компонент для двух точек входа: слайдер на
+  предпросмотр («что попадёт в чат», `B24Badge`) + **`B24Switch` «Авто-проведение оплат»** (`autoDistribute`,
+  §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM; default OFF).
+  Один компонент для двух точек входа: слайдер на
   `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
   **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
   **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`, default-closed до проверки): в портале не-админу —
@@ -569,7 +571,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `queuePhase2`). **Мутация портала (`deal-payment` → `crm.item.payment.pay`) за гейтом `autoDistribute` — сделана**
     (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, идемпотентный порядок mutation-before-fact,
     live-verify `pnpm mutate:test`). **Осталось (мутационный слайс):** стадия инвойса (по карте настроек) + триггеры
-    deal/smart-process (их факт пока не пишется) + UI-переключатель `autoDistribute` в форме настроек.
+    deal/smart-process (их факт пока не пишется). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),

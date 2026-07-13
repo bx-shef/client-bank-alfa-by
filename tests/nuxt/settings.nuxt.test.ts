@@ -105,4 +105,48 @@ describe('settings page', () => {
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })
+
+  // Auto-distribution gate (§2 mutation slice): the switch binds settings.autoDistribute
+  // and only shows the "will mutate CRM" warning when ON (fail-safe default off).
+  it('renders the auto-distribution section, off by default with no warning', async () => {
+    const wrapper = await mountReady()
+    expect(wrapper.text()).toContain('Авто-проведение оплат')
+    expect(wrapper.find('[data-testid="auto-distribute"]').exists()).toBe(true)
+    // The absent warning (driven by v-if="settings.autoDistribute") is what pins "off by default".
+    expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(false)
+  })
+
+  it('enabling auto-distribution reveals the CRM-mutation warning', async () => {
+    const wrapper = await mountReady()
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="auto-distribute-warning"]').text()).toContain('изменять данные в CRM')
+  })
+
+  it('disabling auto-distribution again removes the warning (v-if teardown, not v-show)', async () => {
+    const wrapper = await mountReady()
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
+    useChatSettings().settings.autoDistribute = false
+    await nextTick()
+    expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(false)
+  })
+
+  it('reflects an already-loaded autoDistribute=true on first render (initial get-binding)', async () => {
+    // Set the singleton BEFORE mount: outside the frame cs.load() is inert and does not
+    // overwrite it, so the form must paint the warning from the loaded value on first render.
+    useChatSettings().settings.autoDistribute = true
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
+  })
+
+  it('toggling the auto-distribution switch flips settings.autoDistribute (UI wiring)', async () => {
+    const wrapper = await mountReady()
+    expect(useChatSettings().settings.autoDistribute).toBe(false)
+    await wrapper.find('[data-testid="auto-distribute"]').trigger('click')
+    await nextTick()
+    expect(useChatSettings().settings.autoDistribute).toBe(true)
+  })
 })
