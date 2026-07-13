@@ -27,7 +27,8 @@ import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
-import { deleteFactsForPortal, recordAllocation } from '../utils/allocationFactStore'
+import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
+import { payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { allocationFactKey } from '../../app/utils/allocation'
 import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
@@ -214,6 +215,24 @@ export function liveHandlerDeps(): HandlerDeps {
     recordAllocation: (item, target, memberId) => {
       if (isDemoAccount(item.account)) return Promise.resolve(false)
       return recordAllocation(dbQuery, memberId, allocationFactKey(item, target), target.kind, target.id)
+    },
+    // Idempotency pre-check for the mutation slice (#109 §2): does a fact already exist
+    // for this (payment → target)? Demo accounts GATED (never touch the store). Consulted
+    // only when autoDistribute is on. A store error propagates (fail the job).
+    hasAllocationFact: async (item, target, memberId) => {
+      if (isDemoAccount(item.account)) return false
+      return (await getAllocationFact(dbQuery, memberId, allocationFactKey(item, target))) !== null
+    },
+    // Portal MUTATION for a decided allocate target (#109 §2): mark it paid
+    // (`crm.item.payment.pay`). Demo accounts GATED (never real REST); no portal token ⇒
+    // skip (applied=false). A REST error PROPAGATES (runs before the fact write, so a retry
+    // is clean). Returns whether a portal write was actually applied.
+    applyAllocation: async (item, target, memberId) => {
+      if (isDemoAccount(item.account)) return false
+      const call = await makePortalRestCall(memberId, portalRestDeps)
+      if (!call) return false
+      const res = await payAllocationViaRest(target, call)
+      return res.applied
     },
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
     // notifyChat: demo accounts gated, no token → skip, whole body swallow+logged (a chat

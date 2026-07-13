@@ -102,6 +102,11 @@ export interface PortalSettings {
   errorChat: ChatTarget
   /** Payment-purpose recognition (matrices + alphabet + config-field map, §4). */
   recognition: RecognitionSettings
+  /** Auto-distribution gate (§2 mutation slice, #109). When OFF (default) the app
+   *  only RECORDS the allocation fact — it never mutates the portal. When the operator
+   *  turns it ON, a decided `allocate` also marks the target paid
+   *  (`crm.item.payment.pay` for a deal payment). Opt-in, fail-safe default. */
+  autoDistribute: boolean
 }
 
 /** The single `app.option` key holding the JSON settings blob (versioned name). */
@@ -116,7 +121,7 @@ export function defaultRecognitionSettings(): RecognitionSettings {
 }
 
 export function defaultPortalSettings(): PortalSettings {
-  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings() }
+  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false }
 }
 
 /** Trim, drop blanks, dedupe, and clamp size — for the exclusion lists (unknown
@@ -224,7 +229,11 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
       }
     }),
     errorChat: withTitle(errorRaw.title, { dialogId: cleanDialogId(errorRaw.dialogId) }),
-    recognition: cleanRecognition(obj.recognition)
+    recognition: cleanRecognition(obj.recognition),
+    // Only a literal `true` enables auto-distribution — any other value (missing,
+    // string, 1, …) is coerced to OFF, so a corrupt/partial blob never silently
+    // arms a portal mutation (fail-safe default).
+    autoDistribute: obj.autoDistribute === true
   }
 }
 

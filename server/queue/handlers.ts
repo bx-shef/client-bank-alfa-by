@@ -83,6 +83,17 @@ export interface HandlerDeps {
    *  writes only the FACT (no `payment.pay`/stage mutation). A store error propagates
    *  (fail the job → clean retry), like findCompany — it runs BEFORE the activity write. */
   recordAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
+  /** Whether an allocation fact for this (payment → target) already exists (#109
+   *  mutation slice). Consulted ONLY when `autoDistribute` is on, BEFORE the portal
+   *  mutation, so a redelivery/reimport never re-pays a target. Any status (allocated
+   *  or reverted) counts as existing. A store error propagates (fail the job). */
+  hasAllocationFact: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
+  /** Apply the portal MUTATION that marks a decided allocate target paid (§2 mutation
+   *  slice): `crm.item.payment.pay` for a deal payment. Called ONLY when `autoDistribute`
+   *  is on and no fact existed yet. Returns whether a portal write was actually applied
+   *  (false for unsupported target kinds — invoice stage / trigger targets). Runs BEFORE
+   *  the fact is recorded, so a thrown REST error leaves no fact and the retry re-attempts. */
+  applyAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
    *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
@@ -170,15 +181,17 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  to the smallest id + chat heads-up); `manual` = ops with amount candidates but no
  *  exact match and no trigger (partial/group payment → «очередь ручного разбора»).
  *  `allocated` = decided `allocate` ops whose fact was FRESHLY recorded this run (#184,
- *  write-once — a redelivery does not re-count). The FACT is persisted; the portal
- *  MUTATION (`payment.pay`/stage) stays a follow-up behind an opt-in gate.
+ *  write-once — a redelivery does not re-count). `distributed` = ops that ALSO applied a
+ *  portal mutation this run (`crm.item.payment.pay`) — only when the `autoDistribute` gate
+ *  is on (§2 mutation slice, #109); a subset of `allocated` (unsupported target kinds
+ *  record the fact but apply nothing). Gate off ⇒ `distributed` stays 0 (fact-only).
  *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, notified: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, notified: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -197,6 +210,10 @@ export async function handleCrmSyncJob(
   // Error chat (#184, §5): ambiguous/manual allocations post a heads-up here. `dialogId`
   // empty ⇒ not configured ⇒ error notices off (same shape as the main chat target).
   const errorChat = settings?.errorChat ?? null
+  // Auto-distribution gate (§2 mutation slice, #109): OFF by default ⇒ we only RECORD the
+  // allocation fact (behaviour unchanged). ON ⇒ a decided `allocate` also marks the target
+  // paid in the portal. `settings` null (not installed) ⇒ off.
+  const autoDistribute = settings?.autoDistribute === true
 
   // Negative-stage predicate (union of invoice + deal fail/lost stages), loaded AT MOST
   // ONCE per job — lazily, so a batch that never resolves an intent pays nothing. Reused
@@ -217,6 +234,7 @@ export async function handleCrmSyncJob(
   let ambiguous = 0
   let manual = 0
   let allocated = 0
+  let distributed = 0
   for (const item of unique) {
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
     // portal's matrices and route each. Pure + cheap → run for every unique op (even
@@ -282,7 +300,25 @@ export async function handleCrmSyncJob(
         // to the error chat if configured. Both already gated behind the dedup-skip + matched
         // company (this block only runs then), so the scope is the payer (IDOR).
         if (summary.decision.action === 'allocate') {
-          if (await deps.recordAllocation(item, summary.decision.target, job.memberId)) allocated++
+          const target = summary.decision.target
+          if (autoDistribute) {
+            // Mutation slice (§2): mark the target paid, then record the fact. Order matters —
+            // the portal write runs BEFORE the fact, so a persisted fact always implies the
+            // mutation succeeded (a thrown REST error leaves no fact ⇒ clean retry). A
+            // pre-existence check skips a redelivery/reimport so it never re-pays. Unsupported
+            // target kinds (invoice stage w/o config, trigger targets) apply nothing but still
+            // record the fact (distributed not bumped).
+            if (!(await deps.hasAllocationFact(item, target, job.memberId))) {
+              const applied = await deps.applyAllocation(item, target, job.memberId)
+              if (await deps.recordAllocation(item, target, job.memberId)) {
+                allocated++
+                if (applied) distributed++
+              }
+            }
+          } else if (await deps.recordAllocation(item, target, job.memberId)) {
+            // Gate OFF ⇒ fact-only (write-once), no portal mutation. Unchanged v1 behaviour.
+            allocated++
+          }
         }
         if ((summary.outcome === 'ambiguous' || summary.outcome === 'manual') && errorChat?.dialogId) {
           await deps.notifyError(item, summary.decision, errorChat.dialogId, job.memberId)
@@ -320,5 +356,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, notified, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, notified, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, credits: credits.length, debits: debits.length }
 }

@@ -22,7 +22,7 @@ describe('defaults', () => {
       dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
     })
     expect(defaultPortalSettings()).toEqual({
-      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings()
+      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false
     })
   })
 
@@ -59,7 +59,8 @@ describe('parsePortalSettings — defensive', () => {
         alphabet: 'latin' as const,
         matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' as const, note: 'счёт' }],
         configFields: { 'deal:1': 'UF_CRM_1' }
-      }
+      },
+      autoDistribute: true
     }
     expect(parsePortalSettings(serializePortalSettings(s))).toEqual(s)
   })
@@ -69,8 +70,17 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings('{"chat":{"dialogId":"chat7"}}')).toEqual({
       chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } },
       errorChat: { dialogId: '' },
-      recognition: defaultRecognitionSettings()
+      recognition: defaultRecognitionSettings(),
+      autoDistribute: false
     })
+  })
+
+  it('autoDistribute: only literal true enables it (fail-safe default off)', () => {
+    expect(parsePortalSettings('{"autoDistribute":true}').autoDistribute).toBe(true)
+    expect(parsePortalSettings('{"autoDistribute":false}').autoDistribute).toBe(false)
+    expect(parsePortalSettings('{"autoDistribute":"true"}').autoDistribute).toBe(false) // string, not bool
+    expect(parsePortalSettings('{"autoDistribute":1}').autoDistribute).toBe(false)
+    expect(parsePortalSettings('{}').autoDistribute).toBe(false) // missing → off
   })
 
   it('errorChat: parsed defensively (trimmed; missing/non-string → empty)', () => {

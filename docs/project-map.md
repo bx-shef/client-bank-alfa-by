@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-09
+> Last reviewed: 2026-07-13
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -53,8 +53,17 @@
 **чат ошибок** (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`). Удаление приложения
 чистит факты (`deleteFactsForPortal`). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
 `queuePhase2`, вкл. write-once, ambiguous-both-paths, trigger-only gap), прогнано 5 проверяющими.
-**Осталось (мутационный слайс):** реальное действие в портале (`payment.pay`/стадия/триггер) +
-`autoDistribute`-гейт в настройках + запись факта trigger-целей + live-verify (нужен Postgres/живой портал).
+
+**✅ Мутация портала для `deal-payment` — СДЕЛАНА.** За опт-ин гейтом **`autoDistribute`** (в настройках,
+default OFF) `crm-sync` при `allocate`-цели `deal-payment` помечает оплату оплаченной: чистый билдер
+`app/utils/allocationMutation.ts` → транспорт `server/utils/allocationMutationWrite.ts` → `crm.item.payment.pay`,
+счётчик `distributed`. **Порядок идемпотентный** (`hasAllocationFact` пре-чек → мутация → write-once факт: факт
+всегда означает успешную запись, REST-ошибка бросается ДО факта → чистый ретрай). Гейт OFF ⇒ прежнее поведение
+(только факт). **Подтверждено вживую** на seed-портале (`pnpm verify:109` — 21 READ-проверка; `pnpm mutate:test`
+dry-run/`--apply`/`--revert`). Тесты `allocationMutation`/`allocationMutationWrite`/`queuePhase2` (гейт off/on,
+идемпотентность, unsupported-цель, проброс ошибки).
+**Осталось (мутационный слайс):** стадия инвойса (целевая стадия из карты настроек) + **триггеры**
+сделки/смарт-процесса и запись их факта + путь заказа `payment.add` + UI-переключатель `autoDistribute`.
 
 > Блок ниже — **исторический план #184** (как размечалась запись до её реализации). Оставлен как
 > референс; сама запись уже в `main`. Актуальный остаток — «мутационный слайс» выше.
