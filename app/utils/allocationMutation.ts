@@ -33,9 +33,12 @@ export interface AllocationMutation {
  */
 export function buildAllocationMutation(target: Pick<AllocationCandidate, 'kind' | 'id'>): AllocationMutation | null {
   if (target.kind === 'deal-payment') {
-    const num = Number(target.id)
-    if (!target.id || !Number.isFinite(num)) return null
-    return { method: 'crm.item.payment.pay', params: { id: num }, kind: 'deal-payment', id: target.id }
+    // Strict POSITIVE-INTEGER id. A payment id is always a positive CRM record id
+    // (`String(sale_order_payment.id)`), so reject anything that isn't digits-only and
+    // > 0 — blank, `abc`, ` 5 `, `4.5`, `0`, `Infinity` — rather than let `Number()`'s
+    // loose coercion emit a malformed / zero pay call («never emit a malformed pay call»).
+    if (!/^\d+$/.test(target.id) || Number(target.id) <= 0) return null
+    return { method: 'crm.item.payment.pay', params: { id: Number(target.id) }, kind: 'deal-payment', id: target.id }
   }
   // invoice (needs configured stage) / deal / smart-process (trigger slice) — no v1 mutation.
   return null

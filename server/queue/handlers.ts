@@ -72,8 +72,9 @@ export interface HandlerDeps {
   /** Observe the ALLOCATION DECISION for one op (§2, #109): the amount-matched outcome
    *  (`resolveAllocation` over invoice/deal-payment candidates) plus how many unconditional
    *  trigger targets (deal/smart-process) were found. This callback only OBSERVES; the
-   *  amount-target fact is persisted by `recordAllocation` (#184, write-once). The portal
-   *  MUTATION (`payment.pay`/stage) + the `autoDistribute` gate remain a follow-up.
+   *  amount-target fact is persisted by `recordAllocation` (#184, write-once) and — when the
+   *  `autoDistribute` gate is on — the deal-payment target is also paid via `applyAllocation`
+   *  (§2 mutation slice, below). Invoice-stage / trigger mutations remain a follow-up.
    *  Called once per op that resolved ≥1 candidate. MUST NOT throw (pure observation). */
   onAllocationDecision: (item: StatementItem, decision: AllocationDecision, triggerTargets: number, memberId: string) => void
   /** Record the persistent allocation fact «этот платёж → эта сущность» (#184). Called

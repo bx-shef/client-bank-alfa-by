@@ -224,9 +224,12 @@ export function liveHandlerDeps(): HandlerDeps {
       return (await getAllocationFact(dbQuery, memberId, allocationFactKey(item, target))) !== null
     },
     // Portal MUTATION for a decided allocate target (#109 §2): mark it paid
-    // (`crm.item.payment.pay`). Demo accounts GATED (never real REST); no portal token ⇒
-    // skip (applied=false). A REST error PROPAGATES (runs before the fact write, so a retry
-    // is clean). Returns whether a portal write was actually applied.
+    // (`crm.item.payment.pay`). Demo accounts GATED (never real REST). A REST error
+    // PROPAGATES (runs before the fact write, so a retry is clean). Returns whether a portal
+    // write was actually applied. NB: `false` conflates two harmless-but-distinct cases —
+    // an unsupported target kind (payAllocationViaRest → skipped) and a vanished portal token
+    // (`!call`, e.g. mid-batch uninstall). In the token case the caller still records the
+    // fact (no pay made); `deletePortal` later purges those facts, so it self-heals.
     applyAllocation: async (item, target, memberId) => {
       if (isDemoAccount(item.account)) return false
       const call = await makePortalRestCall(memberId, portalRestDeps)

@@ -18,8 +18,12 @@ describe('buildAllocationMutation', () => {
     expect(buildAllocationMutation(cand('smart-process', '3'))).toBeNull()
   })
 
-  it('deal-payment with blank / non-numeric id → null (never emit a malformed pay call)', () => {
+  it('deal-payment with blank / non-integer / non-positive id → null (never emit a malformed pay call)', () => {
     expect(buildAllocationMutation(cand('deal-payment', ''))).toBeNull()
     expect(buildAllocationMutation(cand('deal-payment', 'abc'))).toBeNull()
+    expect(buildAllocationMutation(cand('deal-payment', '4.5'))).toBeNull() // Number() would coerce to 4.5
+    expect(buildAllocationMutation(cand('deal-payment', ' 5 '))).toBeNull() // Number() would coerce to 5
+    expect(buildAllocationMutation(cand('deal-payment', '0'))).toBeNull() // not a real (positive) payment id
+    expect(buildAllocationMutation(cand('deal-payment', 'Infinity'))).toBeNull()
   })
 })
