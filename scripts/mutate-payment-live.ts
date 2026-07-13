@@ -79,8 +79,19 @@ if (!APPLY) {
   process.exit(0)
 }
 
-// APPLY: perform the real mutation through the SAME transport crm-sync uses.
-const res = await payAllocationViaRest(target, call)
+// APPLY: perform the real mutation through the SAME transport crm-sync uses. A REST
+// error (e.g. the seed «Internal account» pay system needs a buyer balance —
+// `BX_ERROR Insufficient funds`) is the transport's PROPAGATED throw; catch it here for a
+// legible message instead of a raw stack (in `crm-sync` this same throw fails the job → retry).
+let res
+try {
+  res = await payAllocationViaRest(target, call)
+} catch (e) {
+  err(`Портал отклонил проведение: ${(e as Error)?.message}`)
+  warn('Это ПРАВИЛЬНОЕ поведение транспорта (ошибка проброшена → в бою джоба ушла бы в ретрай, факт не пишется).')
+  warn('Оплата «Внутренний счёт» требует баланс покупателя; для банковского перевода `payment.pay` переключает флаг без баланса.')
+  process.exit(1)
+}
 if (!res.applied) {
   err(`Мутация не применилась: ${JSON.stringify(res)}`)
   process.exit(1)
