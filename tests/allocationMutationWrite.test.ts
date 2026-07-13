@@ -16,11 +16,21 @@ describe('payAllocationViaRest', () => {
     expect(seen).toEqual([['crm.item.payment.pay', { id: 7 }]])
   })
 
-  it('portal returns result:false → applied false (still counts as a made call)', async () => {
-    const call = async () => ({ result: false })
+  it('portal returns result:false → applied false (still a made call, method/kind/id set)', async () => {
+    let called = false
+    const call = async () => {
+      called = true
+      return { result: false }
+    }
     const res = await payAllocationViaRest(cand('deal-payment', '7'), call)
-    expect(res.applied).toBe(false)
-    expect(res.method).toBe('crm.item.payment.pay')
+    expect(called).toBe(true) // the REST call WAS made (distinct from unsupported/skipped)
+    expect(res).toEqual({ applied: false, method: 'crm.item.payment.pay', kind: 'deal-payment', id: '7' })
+  })
+
+  it('missing/empty result field → applied false (optional-chain tolerated)', async () => {
+    expect((await payAllocationViaRest(cand('deal-payment', '7'), async () => ({}))).applied).toBe(false)
+    // @ts-expect-error transport tolerates a malformed (undefined) envelope defensively
+    expect((await payAllocationViaRest(cand('deal-payment', '7'), async () => undefined)).applied).toBe(false)
   })
 
   it('unsupported target kind → skipped, NO REST call made', async () => {

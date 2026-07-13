@@ -751,6 +751,48 @@ describe('handleCrmSyncJob', () => {
     await expect(handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
     expect(calls.allocRec).toEqual([]) // mutation ran BEFORE the fact → nothing persisted
   })
+
+  it('autoDistribute ON, mutation applied but fact insert lost the race (recorded=false): counters stay 0', async () => {
+    // Narrow TOCTOU: hasAllocationFact saw none, applyAllocation paid, but recordAllocation
+    // reported the row already existed (a concurrent job won). Neither counter bumps even
+    // though a portal write happened — pins the `if (recordAllocation) { …; if (applied) }` nesting.
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, recorded: false })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
+    expect(r.allocated).toBe(0)
+    expect(r.distributed).toBe(0)
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M']]) // mutation still attempted
+    expect(calls.allocRec).toHaveLength(1) // record attempted, returned false
+  })
+
+  it('autoDistribute ON, mixed batch: distributed is a strict subset of allocated', async () => {
+    // d1 → deal-payment (applied true → distributed), d2 → invoice (unsupported → applied false).
+    const bothMatrices: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }, { mask: 'СЧ-dddd', kind: 'invoice-number' }]
+    }
+    const { deps, calls } = fakeDeps({ recognition: bothMatrices, autoDistribute: true })
+    // applyAllocation mirrors the real worker: only deal-payment is a supported mutation.
+    deps.applyAllocation = async (it, target, memberId) => {
+      calls.allocApply.push([it.docId, target.kind, target.id, memberId])
+      return target.kind === 'deal-payment'
+    }
+    deps.resolveIntents = async intents => (intents[0]?.kind === 'payment-number' ? [payAt('42')] : [invAt('7', 10)])
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001'), item('d2', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(2) // both facts recorded
+    expect(r.distributed).toBe(1) // only the deal-payment actually paid (subset of allocated)
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M'], ['d2', 'invoice', '7', 'M']])
+  })
+
+  it('autoDistribute ON + ambiguous deal-payment: pays the smallest-id target AND posts the heads-up', async () => {
+    const two: IntentResolution[] = [{
+      kind: 'payment-number', value: 'ОП-0001', status: 'resolved',
+      candidates: [{ kind: 'deal-payment', id: '9', amount: 10, currency: 'BYN' }, { kind: 'deal-payment', id: '5', amount: 10, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: two, autoDistribute: true, errorChat: { dialogId: 'errchat' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
+    expect(r).toMatchObject({ ambiguous: 1, allocated: 1, distributed: 1 })
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M']]) // smallest id paid
+    expect(calls.errChat).toEqual([['d1', 'allocate', 'errchat', 'M']]) // ambiguous still notifies
+  })
 })
 
 describe('cron helpers', () => {
