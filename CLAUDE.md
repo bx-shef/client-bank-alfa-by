@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-09
+> Last reviewed: 2026-07-13
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -386,8 +386,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `action==='allocate'` пишется write-once **факт** «платёж→цель» (`recordAllocation` → `allocation_fact`,
       счётчик `allocated`, редоставка не двоит), при `ambiguous`/`manual` — уведомление в **чат ошибок**
       (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`); удаление приложения чистит факты.
-      Остаётся follow-up: **мутация портала** (`payment.pay`/стадия) + `autoDistribute`-гейт + live-verify
-      (trigger-цели факт пока не пишут — их запись в мутационном слайсе). CRM-депсы берут `memberId` явно
+      **Мутация портала (§2, слайс, deal-payment) — сделана:** за опт-ин гейтом `autoDistribute` (в настройках,
+      default OFF) `allocate`-цель `deal-payment` помечается оплаченной (`applyAllocation` → `payAllocationViaRest`
+      → `crm.item.payment.pay`), счётчик `distributed`. **Порядок идемпотентный:** сперва `hasAllocationFact`
+      (пре-чек — редоставка не пере-платит), затем мутация, затем write-once факт — так факт всегда означает
+      успешную запись (REST-ошибка бросается ДО факта → чистый ретрай). Гейт OFF ⇒ поведение прежнее (только факт).
+      Живой прогон — `pnpm mutate:test` (dry-run по умолчанию, `--apply` пишет, `--revert` откат `sale.payment.update PAID=N`).
+      Остаётся follow-up: **стадия инвойса** (по карте настроек) + **триггеры** deal/smart-process (их факт пока не
+      пишется) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Стор дедупа живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -443,6 +449,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `crm-sync` — следующий PR после смоук-теста на живом портале (`pnpm sdk:test`); детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
+  - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
+    `buildAllocationMutation(target)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`
+    (числовой id; пустой/нечисловой → `null`, не шлём кривой вызов); остальные виды (`invoice` — нужна стадия из
+    настроек; `deal`/`smart-process` — триггеры) → `null` (v1-мутации нет). Без I/O; тесты. +
+    `server/utils/allocationMutationWrite.ts` — транспорт `payAllocationViaRest(target, call)`: строит мутацию,
+    зовёт метод, читает `{result:true}` → `applied`; unsupported-цель → без REST-вызова; REST-ошибка **пробрасывается**
+    (джоба ретраится). Тесты.
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
@@ -527,7 +540,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       записи. **Отсев отрицательных стадий (`isNegativeStage`) — сделан** (`negativeStages.ts`, ниже): предикат
       грузится ленивым `loadNegativeStagePredicate` ровно один раз на джобу и прокидывается в `resolveIntentsForOp`.
       **Запись факта разнесения + чат ошибок — сделаны (#184):** `recordAllocation` (write-once) + `notifyError`.
-      Осталось: мутация портала (`payment.pay`/стадия) + `autoDistribute`-гейт + live-verify.
+      **Мутация портала для `deal-payment` — сделана:** гейт `autoDistribute` (default OFF) → `crm.item.payment.pay`
+      (`allocationMutation.ts` билдер + `allocationMutationWrite.ts` транспорт, идемпотентный порядок mutation-before-fact),
+      счётчик `distributed`; подтверждено вживую (`pnpm mutate:test`). Осталось: стадия инвойса + триггеры deal/smart-process.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** отрицательных стадий. Namespace'ы стадий не пересекаются
@@ -551,8 +566,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184):** `recordAllocation` (write-once
     `allocation_fact`, счётчик `allocated`) при `allocate` + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
     удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
-    `queuePhase2`). **Осталось (мутационный слайс):** реальное действие в портале (`payment.pay`/стадия/триггер)
-    + `autoDistribute`-гейт в настройках + запись факта trigger-целей + live-verify.
+    `queuePhase2`). **Мутация портала (`deal-payment` → `crm.item.payment.pay`) за гейтом `autoDistribute` — сделана**
+    (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, идемпотентный порядок mutation-before-fact,
+    live-verify `pnpm mutate:test`). **Осталось (мутационный слайс):** стадия инвойса (по карте настроек) + триггеры
+    deal/smart-process (их факт пока не пишется) + UI-переключатель `autoDistribute` в форме настроек.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
@@ -587,11 +604,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `settingsHandler` параметризован ключом `app.option` (дефолт — тест-ключ; чат-настройки — `SETTINGS_KEY`).
   - **Настройки чата (#16 PR-C) — фрейм-токеном под `SETTINGS_KEY`:** `server/api/chat-settings.get.ts`/
     `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок** +
-    **`recognition`** — матрицы/алфавит/карта полей §4), нормализуя через `parsePortalSettings` (никогда не
-    пишем мусор); воркер читает тот же ключ/форму. Чистое ядро схемы — `app/utils/settings.ts`
-    (`PortalSettings`/`RecognitionSettings`, `parsePortalSettings` — защитный коэрс любого поля к дефолту,
-    не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по DoS-капам
-    `purposeMatch`). `recognition` предназначен для `recognizeByMatrices` (§4) — сама проводка (матрицы/
+    **`recognition`** — матрицы/алфавит/карта полей §4 + **`autoDistribute`** — гейт мутации §2), нормализуя через
+    `parsePortalSettings` (никогда не пишем мусор); воркер читает тот же ключ/форму. Чистое ядро схемы —
+    `app/utils/settings.ts` (`PortalSettings`/`RecognitionSettings`, `parsePortalSettings` — защитный коэрс любого
+    поля к дефолту, не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по
+    DoS-капам `purposeMatch`; **`autoDistribute` — только литерал `true` включает** (любое иное → OFF, fail-safe:
+    битый блоб не вооружит мутацию портала)). `recognition` предназначен для `recognizeByMatrices` (§4) — сама проводка (матрицы/
     алфавит из настроек → распознавание) делается на этапе `crm-sync` (см. «Осталось» выше).
     Поиск чатов для пикера — `server/utils/chatSearch.ts` (чистое ядро над `RestCall`: `im.search.chat.list`
     для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
@@ -626,6 +644,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     категориям + «просадки»). Детерминированно (seeded PRNG). Dev-only, охват демонстрационный (5 из 11
     `IdentifierKind`, один id на назначение); mock `classify()` — **черновик** будущей `crm-sync`-проводки,
     свериться при её появлении (#109). **CI-gate композиции** ядер — не скрипт, а `tests/allocationPipeline.test.ts`.
+  - `scripts/verify-109-live.ts` (`pnpm verify:109`) — **живой READ-прогон разнесения** против засеянного
+    тестового портала (`.env.b24test`): реальные ядра `companyLookup`/`stageLoader`/`invoiceLookup`/`paymentLookup`/
+    `purposeMatch`/`resolveAllocation` на seed-фикстурах (компания по счёту, стадии, инвойс, IDOR-скоуп, company-пул,
+    ambiguous, `filterByAccountNumber`). Только чтение; `~/`+extensionless-релятивы резолвит `alias-loader.mjs`.
+    Dev-only. Подтверждён на живом портале (21 проверка).
+  - `scripts/mutate-payment-live.ts` (`pnpm mutate:test` / `--apply` / `--revert`) — **живой прогон мутационного
+    слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
+    же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);
+    `--apply` — реально `crm.item.payment.pay` + подтверждение `PAID=Y`; `--revert` — откат `sale.payment.update PAID=N`
+    (scope `sale`), чтобы фикстура осталась переиспользуемой. Dev-only, не часть SSG.
   - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
     строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
     `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Гейт перед свапом

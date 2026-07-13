@@ -39,6 +39,12 @@ interface FakeOpts {
   errorChat?: ChatTarget
   /** what recordAllocation returns (true = fresh insert, false = already existed); default true. */
   recorded?: boolean
+  /** autoDistribute gate (§2 mutation slice); default false (fact-only). */
+  autoDistribute?: boolean
+  /** what hasAllocationFact returns (true = fact already exists → skip mutation); default false. */
+  factExists?: boolean
+  /** what applyAllocation returns (true = portal write applied); default true. */
+  applied?: boolean
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -58,8 +64,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
-  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [] }
+  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, autoDistribute: o.autoDistribute ?? false }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -102,6 +108,14 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     recordAllocation: async (it, target, memberId) => {
       calls.allocRec.push([it.docId, target.kind, target.id, memberId])
       return o.recorded ?? true
+    },
+    hasAllocationFact: async (it, target, memberId) => {
+      calls.allocHas.push([it.docId, target.kind, target.id, memberId])
+      return o.factExists ?? false
+    },
+    applyAllocation: async (it, target, memberId) => {
+      calls.allocApply.push([it.docId, target.kind, target.id, memberId])
+      return o.applied ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
@@ -183,7 +197,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     expect(calls.remember).toEqual([['A|d1', 'act-1'], ['A|d2', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
@@ -198,7 +212,7 @@ describe('handleCrmSyncJob', () => {
     expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, unmatched: 0 })
     // Redeliver the SAME job: everything is now remembered → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -207,7 +221,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (persistent dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -217,7 +231,7 @@ describe('handleCrmSyncJob', () => {
   it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written
     expect(calls.remember).toEqual([]) // so nothing remembered → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -232,7 +246,7 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, credits: 2, debits: 1 })
+    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 1 })
     expect(calls.remember).toEqual([['A|d2', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
@@ -676,6 +690,66 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002')]), deps)
     expect(r.allocated).toBe(1) // only the fresh insert counted
     expect(calls.allocRec).toHaveLength(2) // both attempted
+  })
+
+  // Mutation slice (§2, #109): the `autoDistribute` gate marks a deal-payment target paid.
+  const payMatrix: RecognitionSettings = {
+    alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }]
+  }
+  // deal-payment candidate matching the op amount (10 BYN) → exact allocate.
+  const payAt = (id: string): IntentResolution => ({
+    kind: 'payment-number', value: 'ОП-0001', status: 'resolved',
+    candidates: [{ kind: 'deal-payment', id, amount: 10, currency: 'BYN' }]
+  })
+
+  it('autoDistribute OFF (default): records the fact but performs NO portal mutation', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')] })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(r.distributed).toBe(0)
+    expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded
+    expect(calls.allocApply).toEqual([]) // no mutation
+    expect(calls.allocHas).toEqual([]) // pre-check only runs when gate is on
+  })
+
+  it('autoDistribute ON: pays the deal-payment then records the fact (distributed counted)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(r.distributed).toBe(1)
+    expect(calls.allocHas).toEqual([['d1', 'deal-payment', '42', 'M']]) // idempotency pre-check
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M']]) // portal mutation applied
+    expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded AFTER
+  })
+
+  it('autoDistribute ON but fact already exists: skips re-pay AND re-record (idempotent)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, factExists: true })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
+    expect(r.distributed).toBe(0)
+    expect(r.allocated).toBe(0)
+    expect(calls.allocHas).toEqual([['d1', 'deal-payment', '42', 'M']]) // checked
+    expect(calls.allocApply).toEqual([]) // never re-paid
+    expect(calls.allocRec).toEqual([]) // never re-recorded
+  })
+
+  it('autoDistribute ON, unsupported target (applied=false): records fact, distributed not bumped', async () => {
+    // Real worker returns applied=false for a non-deal-payment target (e.g. invoice stage
+    // w/o config); the fact is still recorded so it is not re-attempted.
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true, applied: false })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(r.distributed).toBe(0)
+    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M']]) // attempted
+    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // fact still recorded
+  })
+
+  it('autoDistribute ON, portal mutation throws: no fact recorded (clean retry)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true })
+    deps.applyAllocation = async () => {
+      throw new Error('QUERY_LIMIT_EXCEEDED')
+    }
+    await expect(handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+    expect(calls.allocRec).toEqual([]) // mutation ran BEFORE the fact → nothing persisted
   })
 })
 

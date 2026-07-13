@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-09
+> Last reviewed: 2026-07-13
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -42,6 +42,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `crm.status.list` | classic | `crm` | `server/utils/stageLoader.ts` | да | актуален | Справочник стадий → множество «отрицательных» (`SEMANTICS='F'`/`EXTRA.SEMANTICS='failure'`) для фильтра целей (#109). `ENTITY_ID`: инвойс `SMART_INVOICE_STAGE_<catId>`, сделка `DEAL_STAGE`(воронка 0)/`DEAL_STAGE_<catId>`, смарт-процесс `DYNAMIC_<etid>_STAGE_<catId>` (всегда с реальным id категории). Подтверждено вживую: инвойс `DT31_11:D`, сделка `LOSE`/`APOLOGY`, смарт-процесс `DT1032_67:FAIL`. |
 | `crm.category.list` | classic | `crm` | `server/utils/negativeStages.ts` | да | актуален | Список воронок (категорий) типа объекта (`entityTypeId`) → ids для перебора стадий (#109). Ответ `result.categories[].id`; дефолтная воронка сделок — `id:0` (`isDefault:'Y'`), валидна для `crm.status.list`. Строит **единый предикат `isNegativeStage`** на весь портал (объединение отрицательных стадий всех воронок инвойсов+сделок), раз на джобу. |
 | `crm.item.payment.list` | classic | `crm` | `server/utils/paymentLookup.ts` | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | Оплаты **известной** сделки (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (#109). Ответ — массив **прямо** в `result`; поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency` подтверждены вживую. Оплаченные (`paid='Y'`) в кандидаты не берём. Метод требует `entityId` (**известную** сделку); company-скоуп в нём не встроить (нет поля `companyId`). Резолв `order-number`/`payment-number` без известной сделки — **company-scoped обходом** `paymentLookup.findCompanyDealPayments` (сделки компании → их оплаты; «сделка проксирует заказ»), а **не** глобальным `sale.*`: `sale.order` не несёт связки со сделкой/компанией (`companyId=null`), привязать к плательщику нельзя (IDOR). `sale`-scope есть (для сторно), для lookup не нужен — остаток в #172. |
+| `crm.item.payment.pay` | classic | `crm` | `server/utils/allocationMutationWrite.ts` | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | **Мутация разнесения** (§2, #109): помечает оплату сделки «Оплачено» для цели `deal-payment`. Параметр только `id` (числовой), ответ `{result:true}`. За гейтом `autoDistribute` (default OFF); идемпотентный порядок mutation-before-fact. Подтверждён вживую (`pnpm mutate:test`). |
 | `crm.documentgenerator.document.list` | classic | `crm` | `server/utils/documentLookup.ts` | да | актуален | Мост-документ (#109): `document-number` → **массив** привязанных сущностей `{entityTypeId, entityId}[]` (фильтр `number`, ответ `result.documents[]`; номер **не** уникален по порталу → список). `select` только id-поля (не `*UrlMachine` с access-токеном). Гард: `doc.number` сверяется с запрошенным (обратный фильтр не показан в офдоке). Scope `crm` (метод под `crm.documentgenerator.*`). ⚠ поля из офдоки, **вживую не подтверждено** (в seed 0 документов); live-verify — гейт wiring-PR. Ref недоверенный → вызывающий рескоупит каждый по компании через `itemByIdLookup`. |
 | `crm.activity.todo.add` | classic | `crm` | `server/utils/crmActivityWrite.ts` | да | актуален | Запись универсального дела по операции (стадия 4). |
 | `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts` | да | актуален | Отправка уведомления об операции в чат (стадия 6). |
@@ -57,8 +58,8 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 
 | Метод | Поколение | Scope | Назначение |
 |-------|-----------|-------|------------|
-| `crm.item.payment.pay` | classic | `crm` | Пометить оплату «Оплачено» (проводка оплаты по сделке, действие разнесения). Параметр только `id`. |
 | `crm.item.payment.add` (+`.product.add`) | classic | `crm` | Создать оплату + привязать товарную позицию (задаёт сумму). Используются в seed-скрипте для реальной оплаты сделки. |
+| `sale.payment.update` `PAID=N` | classic | `sale` | **Сторно** оплаты (снятие «Оплачено»). Пока только в dev-скрипте `mutate:test --revert` (восстановление фикстуры); в рантайме приложения — при реализации отмены разнесения (§3). |
 
 > **Важно про scope:** **отмена/удаление оплаченной оплаты** (`sale.payment.update PAID=N`, снятие блокировки «У заказа есть активные оплаты») требует scope **`sale`** — `crm`-only токен получает `insufficient_scope`. Учесть в правах приложения на этапе проводки оплат #109.
 
