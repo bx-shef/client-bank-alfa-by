@@ -44,7 +44,7 @@
     "@fontsource/rubik": "^5.2.8",
     "@vueuse/core": "^14.3.0",
     "@vueuse/nuxt": "^14.3.0",
-    "bullmq": "^5.79.2",
+    "bullmq": "^5.80.2",
     "echarts": "^6.1.0",
     "nuxt": "^4.4.7",
     "pg": "^8.13.1",
