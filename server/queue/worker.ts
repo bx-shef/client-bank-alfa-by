@@ -35,12 +35,13 @@ import { parseManualFileBase64 } from '../utils/importIngest'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
+import { findOrderPaymentIds } from '../utils/saleLookup'
 import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
 import { buildPortalNegativeStagePredicate, failOpenEntities } from '../utils/negativeStages'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
-const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCompanyDealPayments }
+const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCompanyDealPayments, findOrderPaymentIds }
 
 /** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
 const portalRestDeps: PortalRestDeps = {

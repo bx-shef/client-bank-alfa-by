@@ -35,7 +35,7 @@ describe('IDENTIFIER_ROUTES', () => {
   it('order/payment identifiers → deal-payment target (each strategy explicit)', () => {
     expect(routeIdentifier('order-id')).toEqual({ targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false })
     // order-number matches the order PREFIX of a payment's accountNumber (#172), distinct from
-    // order-id (resolve the order by its own record id → sale scope, still via-order/deferred).
+    // order-id (resolve the order by its own record id via sale.payment.list → via-order, #172).
     expect(routeIdentifier('order-number')).toEqual({ targetKind: 'deal-payment', strategy: 'by-order-number', needsConfiguredField: false })
     expect(routeIdentifier('order-number').strategy).not.toBe(routeIdentifier('order-id').strategy)
     // payment-id resolves by its OWN record id within the company pool (by-payment-id, #172);

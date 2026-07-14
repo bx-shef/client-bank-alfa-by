@@ -163,7 +163,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   плейсменты добиваем на тестовом портале (см. план).
 - `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
   (`/install`, `/app`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
-- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `im`, `user_brief`,
+- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`, `user_brief`,
   `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
@@ -261,8 +261,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (форма `<заказ>/<seq>`, seq — последний сегмент → сравнение по `lastIndexOf('/')`; для `order-number`, #172):
     композит `123/45` матчит `123/45/1`, короткий `123`/«10» — нет (подтверждено вживую — order «1» → оплата «1/1»);
     пустой номер → `[]`. `filterByPaymentId(candidates, paymentId)` — отбор по **собственному id оплаты** в company-пуле
-    (для `payment-id`, #172; IDOR-safe — чужая оплата не в пуле; `sale`-скоуп не нужен). `order-id` — **не** матчится
-    (id заказа; `crm.item.payment.list` не отдаёт `orderId` — нужен `sale`-скоуп, отложен). Без I/O; проводка в `crm-sync` — следующий слайс.
+    (для `payment-id`, #172; IDOR-safe — чужая оплата не в пуле). `filterByPaymentIds(candidates, ids)` — отбор по
+    **множеству** id оплат (для `order-id`, #172: id оплат заказа из `sale.payment.list` **∩** company-пул держит IDOR;
+    пустое множество → `[]`). Без I/O; проводка в `crm-sync` — следующий слайс.
   - `app/utils/purposeMatch.ts` — **чистое распознавание идентификатора из назначения платежа по МАТРИЦАМ**
     (#109, спека — `docs/PROCESSING.md` §4): `recognizeByMatrices(purpose, matrices, alphabet)` — матрица
     (`MatchMatrix { mask, kind }`) описывает формат номера маской (`d`=цифра, остальное — литерал: буквы/
@@ -507,7 +508,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       {companyId, isNegativeStage?}, call)` для стратегии `by-id` — три идентификатора, у которых значение = собственный
       id целевой сущности: `invoice-id`→инвойс, `deal-id`→сделка, `smart-id`→смарт-процесс (все — один `crm.item.list`,
       разный `entityTypeId`). **Не** `order-id`/`payment-id` — те идут к `deal-payment` (объект `crm.item.payment.*`):
-      `payment-id` — по собственному id в company-пуле (`filterByPaymentId`, #172), `order-id` — `via-order` (отложен, `sale`-скоуп). Запрос фильтром **id+companyId** (id из назначения недоверенный →
+      `payment-id` — по собственному id в company-пуле (`filterByPaymentId`, #172), `order-id` — через `sale.payment.list`
+      (`orderId`→id оплат) ∩ company-пул (`saleLookup.findOrderPaymentIds`+`filterByPaymentIds`, `sale`-скоуп, #172). Запрос фильтром **id+companyId** (id из назначения недоверенный →
       IDOR-скоуп в запросе, чужая сущность не вернётся) + отсев отрицательной стадии → `AllocationCandidate`.
       `crm.item.list`, а не `crm.item.get` (тот бросает `NOT_FOUND`; список отдаёт пусто). Подтверждено вживую: стадия
       категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. Amount-цели
@@ -530,8 +532,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       по сделке отдаёт оплаты заказа (та же `sale.payment` id, `orderId` за ними) — «оплата заказа» = «оплата сделки»,
       отдельного lookup заказа нет. **Глобальный** `sale.payment.list` находит оплату по номеру, но её `sale.order` **не
       несёт связки со сделкой/компанией** (`companyId=null` у CRM-заказов) — привязать к компании плательщика нельзя,
-      поэтому используем company-scoped обход (не `sale.*`). `sale`-scope есть (для сторно `payment.pay`/отмены), для
-      lookup не нужен — #172.
+      поэтому для `order-number`/`payment-number`/`payment-id` используем company-scoped обход (не `sale.*`). Для
+      **`order-id`** (id заказа, которого нет в crm-оплате) — `saleLookup` ниже (`sale.payment.list` по `orderId`) с
+      обязательным **∩ company-пул** (IDOR).
+    - `server/utils/saleLookup.ts` — **`order-id`→id оплат заказа** `findOrderPaymentIds(orderId, call)` (`sale`-скоуп, #172):
+      `sale.payment.list` фильтром `orderId` → **массив id оплат** (ответ `result.payments[]`, поля `id`/`orderId` подтверждены
+      вживую; `crm.item.payment.list` `orderId` **не** отдаёт — потому `sale`). Пустой `orderId` → `[]` без REST (пустой фильтр
+      листнул бы все оплаты); гард — сверка `orderId`-эха (портал мог проигнорить фильтр). **Список глобальный, не company-scoped** —
+      вызывающий **обязан** пересечь ids с company-пулом (`filterByPaymentIds`), это и держит IDOR. DI, тесты.
     - `server/utils/documentLookup.ts` — **мост-документ** `findDocumentEntities(number, call)`: `document-number` из
       назначения → `crm.documentgenerator.document.list` (фильтр `number`) → **массив** привязанных сущностей
       `{entityTypeId, entityId}[]` (ответ `result.documents[]`; номер документа **не** уникален по порталу —
@@ -550,10 +558,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       без сети). Диспатчатся подтверждённые вживую стратегии: `invoice-number`→`findInvoicesByNumber`, `invoice-id`/`deal-id`→
       `findCandidateById` (фиксированный `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`,
       **`order-number`→`findCompanyDealPayments`+`filterByOrderNumber`** (order-префикс `<заказ>/<seq>`, #172, live-confirmed —
-      делит тот же пул с `payment-number`, фетч один раз) (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных
+      делит тот же пул с `payment-number`, фетч один раз), **`order-id`→`findOrderPaymentIds`+`filterByPaymentIds`**
+      (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул → IDOR-safe, `sale`-скоуп, #172, live-confirmed;
+      делит тот же пул) (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных
       стадий). Остальные — `unsupported` с `reason`
       (не роняем интент молча): `smart-id`/`deal-field`/`smart-field` (нужен `entityTypeId`/поле из «карты сопоставления»),
-      `order-id` (id→заказ→оплата нужен `sale`-скоуп: `crm.item.payment.list` не отдаёт `orderId`, live-confirmed, #172), `document-number` (гейт live-verify).
+      `document-number` (гейт live-verify).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
       (гоняет каждый `IdentifierKind` через диспетчер). **Батч-резолвер `resolveIntentsForOp(intents, ctx, call, deps)`**
@@ -596,9 +606,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
     `docs/QUEUES.md` «REST-бюджет проводки платежей»). **`order-number`-матчинг — сделан** (по order-префиксу
     `accountNumber` оплаты `<заказ>/<seq>`, `filterByOrderNumber`, live-confirmed #172); **`payment-id`-матчинг — сделан**
-    (по собственному id оплаты в company-пуле, `filterByPaymentId`, IDOR-safe, live-confirmed #172); **invoice-кандидат несёт `dealId`**
-    (`parentId2`) → `collapseSameTarget` больше не даёт ложный `ambiguous` (#229). Осталось из #172: **только `order-id`**
-    (нужен `sale`-скоуп — `crm.item.payment.list` не отдаёт `orderId`, live-confirmed).
+    (по собственному id оплаты в company-пуле, `filterByPaymentId`, IDOR-safe, live-confirmed #172); **`order-id`-матчинг — сделан**
+    (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул, `saleLookup.findOrderPaymentIds`+`filterByPaymentIds`,
+    IDOR-safe, `sale`-скоуп в `B24_REQUIRED_SCOPES`, live-confirmed #172); **invoice-кандидат несёт `dealId`**
+    (`parentId2`) → `collapseSameTarget` больше не даёт ложный `ambiguous` (#229). **#172 закрыт полностью** (order/payment по id и номеру).
     **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184):** `recordAllocation` (write-once
     `allocation_fact`, счётчик `allocated`) при `allocate` + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
     удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
@@ -722,18 +733,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     Скоупы вебхука (гейт того, что можно проверить руками):
     - **`crm`** — есть; хватает для всего текущего seed (компании/реквизиты/счета/сделки/смарт-процессы/
       товары) и путей #109 (поиск компании, инвойс, оплата сделки — создание/проведение, company-пул оплат).
-    - **`sale`** — **добавлен на тестовый вебхук** (владелец, #172). Пригодился для пробы: подтвердил, что
-      глобальный `sale.payment.list` находит оплату по номеру, но `sale.order` **не несёт** связки со
-      сделкой/компанией (`companyId=null`) → к плательщику не привязать (IDOR) → для lookup используем
-      company-scoped обход в `crm`, не `sale.*`. Реальная роль `sale` — **сторно** (`sale.payment.update PAID=N`,
-      отмена оплаченной оплаты; без него `--purge` пропускает такую сделку).
+    - **`sale`** — **в скоупах приложения** (`B24_REQUIRED_SCOPES`, #172) и на тестовом вебхуке. Роль в рантайме:
+      **`order-id`** — `sale.payment.list` по `orderId` даёт id оплат заказа (`crm.item.payment.list` `orderId` не отдаёт),
+      которые вызывающий пересекает с company-пулом (IDOR). `sale.order` **не несёт** связки со сделкой/компанией
+      (`companyId=null`) → сам по себе к плательщику не привязать, поэтому `sale` — только для маппинга `orderId`→оплаты,
+      а не как граница авторизации. Также `sale` нужен для **сторно** (`sale.payment.update PAID=N`, dev `--revert`/`--purge`).
     - **`documentgenerator`** — **добавлен** (владелец); под мост-документ (`crm.documentgenerator.document.list`,
       `document-number` → сущность). В seed пока 0 документов — проверка при появлении образца.
     - **`im`** — понадобится позже для уведомлений в чат (стадия 6, `im.message.add`); на текущем тестовом
       хуке не проверялось.
     Требуемые скоупы **самого приложения** (не вебхука) — `app/config/b24.ts` `B24_REQUIRED_SCOPES`
-    (`crm`, `im`, `user_brief`, `placement`); `sale`/`documentgenerator` там пока **нет** (в коде приложение
-    их ещё не вызывает — lookup идёт по `crm`); добавить в контракт при внедрении сторно/моста — `PROCESSING.md §8`.
+    (`crm`, **`sale`** (#172, `order-id`→`sale.payment.list`), `im`, `user_brief`, `placement`). ⚠ Добавление `sale`
+    **потребует ре-consent** на уже установленных порталах. `documentgenerator` там пока **нет** (мост-документ ещё
+    не в hot-path); добавить в контракт при внедрении моста — `PROCESSING.md §8`.
   - `scripts/lib/*.mjs` — общая обвязка банк- и seed-скриптов (одинаковые запуск/проверка/вывод):
     `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
     `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser` — URL-гейт

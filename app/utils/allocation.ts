@@ -174,7 +174,8 @@ export function filterByAccountNumber(
  * part «/1») is not order-numbered → no match.
  *
  * This matches the order's own NUMBER (accountNumber), NOT its record id — an `order-id`
- * would need `sale.order.list` to map id→order→payment (scope `sale`, still deferred, #172).
+ * resolves differently: `sale.payment.list` maps the order id → its payment ids, then
+ * `filterByPaymentIds` intersects them with this company pool (scope `sale`, #172, done).
  */
 export function filterByOrderNumber(
   candidates: readonly AllocationCandidate[],
@@ -205,6 +206,23 @@ export function filterByPaymentId(
   const n = paymentId.trim()
   if (!n) return []
   return candidates.filter(c => c.id.trim() === n)
+}
+
+/**
+ * Narrow a company deal-payment pool to the payments whose OWN record `id` is in
+ * `paymentIds` (a set of trimmed record ids). For resolving an `order-id` (#172): the
+ * order's payment ids come from `sale.payment.list` (global, not company-scoped), so
+ * intersecting them with the already company-scoped pool is what keeps the result
+ * IDOR-safe — only a payment of BOTH the named order AND this company survives. An empty
+ * `paymentIds` matches nothing (`[]`); blank ids in the set are ignored.
+ */
+export function filterByPaymentIds(
+  candidates: readonly AllocationCandidate[],
+  paymentIds: readonly string[]
+): AllocationCandidate[] {
+  const ids = new Set(paymentIds.map(id => id.trim()).filter(Boolean))
+  if (ids.size === 0) return []
+  return candidates.filter(c => ids.has(c.id.trim()))
 }
 
 /** Compare CRM ids numerically when both are numeric, else lexicographically —
