@@ -30,6 +30,8 @@ const MAX_ITEM_LEN = 256
 const MAX_NOTE_LEN = 256
 const MAX_CONFIG_FIELDS = 200
 const MAX_FIELD_LEN = 128
+// A CRM stage id is short (e.g. "DT31_11:P", "C5:LOSE"); clamp defensively.
+const MAX_STAGE_ID_LEN = 64
 
 const VALID_ALPHABETS: readonly Alphabet[] = ['cyrillic', 'latin']
 // Runtime allow-list of identifier kinds, kept in lock-step with the `IdentifierKind`
@@ -107,6 +109,11 @@ export interface PortalSettings {
    *  turns it ON, a decided `allocate` also marks the target paid
    *  (`crm.item.payment.pay` for a deal payment). Opt-in, fail-safe default. */
   autoDistribute: boolean
+  /** Target stage id for a PAID invoice (§2). When set AND `autoDistribute` is on, a
+   *  decided invoice allocation transitions the smart-invoice into this stage
+   *  (`crm.item.update` stageId). Empty ⇒ the invoice stage is NOT changed («не
+   *  указана → не трогаем»). A portal-specific value (e.g. `DT31_11:P`). */
+  invoicePaidStageId: string
 }
 
 /** The single `app.option` key holding the JSON settings blob (versioned name). */
@@ -121,7 +128,7 @@ export function defaultRecognitionSettings(): RecognitionSettings {
 }
 
 export function defaultPortalSettings(): PortalSettings {
-  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false }
+  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false, invoicePaidStageId: '' }
 }
 
 /** Trim, drop blanks, dedupe, and clamp size — for the exclusion lists (unknown
@@ -233,7 +240,10 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
     // Only a literal `true` enables auto-distribution — any other value (missing,
     // string, 1, …) is coerced to OFF, so a corrupt/partial blob never silently
     // arms a portal mutation (fail-safe default).
-    autoDistribute: obj.autoDistribute === true
+    autoDistribute: obj.autoDistribute === true,
+    // Paid-invoice target stage (§2): trimmed, length-clamped string; empty ⇒ don't
+    // change the invoice stage.
+    invoicePaidStageId: clampStr(obj.invoicePaidStageId, MAX_STAGE_ID_LEN)
   }
 }
 

@@ -5,7 +5,7 @@
 
 import type { RestCall } from './companyLookup'
 import type { AllocationCandidate } from '../../app/utils/allocation'
-import { buildAllocationMutation } from '../../app/utils/allocationMutation'
+import { buildAllocationMutation, type AllocationMutationOptions } from '../../app/utils/allocationMutation'
 
 /** Outcome of an allocation mutation attempt. `applied` is true only when the
  *  portal confirmed the write (`{result:true}`). `skipped` is set when the target
@@ -26,10 +26,17 @@ export interface AllocationMutationResult {
  */
 export async function payAllocationViaRest(
   target: Pick<AllocationCandidate, 'kind' | 'id'>,
-  call: RestCall
+  call: RestCall,
+  opts: AllocationMutationOptions = {}
 ): Promise<AllocationMutationResult> {
-  const mutation = buildAllocationMutation(target)
+  const mutation = buildAllocationMutation(target, opts)
   if (!mutation) return { applied: false, skipped: 'unsupported' }
   const resp = await call(mutation.method, mutation.params)
-  return { applied: resp?.result === true, method: mutation.method, kind: mutation.kind, id: mutation.id }
+  // Success shape depends on the method: payment.pay → {result:true}; item.update →
+  // {result:{item:…}}. `resultKind` (from the builder) says which to expect.
+  const result = resp?.result
+  const applied = mutation.resultKind === 'boolean'
+    ? result === true
+    : typeof result === 'object' && result !== null
+  return { applied, method: mutation.method, kind: mutation.kind, id: mutation.id }
 }

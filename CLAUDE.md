@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-13
+> Last reviewed: 2026-07-14
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -123,7 +123,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
   предпросмотр («что попадёт в чат», `B24Badge`) + **`B24Switch` «Авто-проведение оплат»** (`autoDistribute`,
-  §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM; default OFF).
+  §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM, + поле `B24Input`
+  «стадия оплаченного счёта» `invoicePaidStageId`; default OFF).
   Один компонент для двух точек входа: слайдер на
   `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
   **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
@@ -394,8 +395,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (пре-чек — редоставка не пере-платит), затем мутация, затем write-once факт — так факт всегда означает
       успешную запись (REST-ошибка бросается ДО факта → чистый ретрай). Гейт OFF ⇒ поведение прежнее (только факт).
       Живой прогон — `pnpm mutate:test` (dry-run по умолчанию, `--apply` пишет, `--revert` откат `sale.payment.update PAID=N`).
-      Остаётся follow-up: **стадия инвойса** (по карте настроек) + **триггеры** deal/smart-process (их факт пока не
-      пишется) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
+      **Стадия инвойса (§2) — сделана:** при `allocate`-цели `invoice` и заданной настройке `invoicePaidStageId`
+      смарт-счёт переводится в оплаченную стадию (`crm.item.update` stageId); пусто ⇒ стадию не трогаем. Остаётся
+      follow-up: **триггеры** deal/smart-process (их факт пока не пишется) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Стор дедупа живой.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -452,12 +454,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
-    `buildAllocationMutation(target)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`
-    (числовой id; пустой/нечисловой → `null`, не шлём кривой вызов); остальные виды (`invoice` — нужна стадия из
-    настроек; `deal`/`smart-process` — триггеры) → `null` (v1-мутации нет). Без I/O; тесты. +
-    `server/utils/allocationMutationWrite.ts` — транспорт `payAllocationViaRest(target, call)`: строит мутацию,
-    зовёт метод, читает `{result:true}` → `applied`; unsupported-цель → без REST-вызова; REST-ошибка **пробрасывается**
-    (джоба ретраится). Тесты.
+    `buildAllocationMutation(target, opts?)` — для `deal-payment` → `{method:'crm.item.payment.pay',params:{id}}`
+    (`resultKind:'boolean'`); для `invoice` при заданной `opts.invoicePaidStageId` → `{method:'crm.item.update',
+    params:{entityTypeId:31,id,fields:{stageId}}}` (`resultKind:'object'`), без стадии → `null` («не указана → не
+    трогаем»); `deal`/`smart-process` (триггеры) → `null`. Строгий положительный-целый id; без I/O; тесты. +
+    `server/utils/allocationMutationWrite.ts` — транспорт `payAllocationViaRest(target, call, opts?)`: строит мутацию,
+    зовёт метод, читает успех по `resultKind` (`{result:true}` для pay / `{result:{item}}` для update) → `applied`;
+    unsupported-цель → без REST-вызова; REST-ошибка **пробрасывается** (джоба ретраится). Тесты.
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
@@ -544,7 +547,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **Запись факта разнесения + чат ошибок — сделаны (#184):** `recordAllocation` (write-once) + `notifyError`.
       **Мутация портала для `deal-payment` — сделана:** гейт `autoDistribute` (default OFF) → `crm.item.payment.pay`
       (`allocationMutation.ts` билдер + `allocationMutationWrite.ts` транспорт, идемпотентный порядок mutation-before-fact),
-      счётчик `distributed`; подтверждено вживую (`pnpm mutate:test`). Осталось: стадия инвойса + триггеры deal/smart-process.
+      счётчик `distributed`; подтверждено вживую (`pnpm mutate:test`). **Стадия инвойса (`crm.item.update` stageId по
+      настройке `invoicePaidStageId`) — сделана.** Осталось: триггеры deal/smart-process.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** отрицательных стадий. Namespace'ы стадий не пересекаются
@@ -570,8 +574,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
     `queuePhase2`). **Мутация портала (`deal-payment` → `crm.item.payment.pay`) за гейтом `autoDistribute` — сделана**
     (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, идемпотентный порядок mutation-before-fact,
-    live-verify `pnpm mutate:test`). **Осталось (мутационный слайс):** стадия инвойса (по карте настроек) + триггеры
-    deal/smart-process (их факт пока не пишется). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
+    live-verify `pnpm mutate:test`). **Стадия инвойса (`invoice` → `crm.item.update` stageId по настройке
+    `invoicePaidStageId`) — сделана** (dry-run/live через `pnpm mutate:test --invoice <id> --stage <s>`). **Осталось
+    (мутационный слайс):** триггеры deal/smart-process (их факт пока не пишется) + `payment.add`-путь заказа.
+    UI (`autoDistribute` + поле «стадия оплаченного счёта») в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
@@ -606,7 +612,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `settingsHandler` параметризован ключом `app.option` (дефолт — тест-ключ; чат-настройки — `SETTINGS_KEY`).
   - **Настройки чата (#16 PR-C) — фрейм-токеном под `SETTINGS_KEY`:** `server/api/chat-settings.get.ts`/
     `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок** +
-    **`recognition`** — матрицы/алфавит/карта полей §4 + **`autoDistribute`** — гейт мутации §2), нормализуя через
+    **`recognition`** — матрицы/алфавит/карта полей §4 + **`autoDistribute`** — гейт мутации §2 + **`invoicePaidStageId`**
+    — стадия оплаченного счёта §2), нормализуя через
     `parsePortalSettings` (никогда не пишем мусор); воркер читает тот же ключ/форму. Чистое ядро схемы —
     `app/utils/settings.ts` (`PortalSettings`/`RecognitionSettings`, `parsePortalSettings` — защитный коэрс любого
     поля к дефолту, не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по
@@ -655,7 +662,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
     же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);
     `--apply` — реально `crm.item.payment.pay` + подтверждение `PAID=Y`; `--revert` — откат `sale.payment.update PAID=N`
-    (scope `sale`), чтобы фикстура осталась переиспользуемой. Dev-only, не часть SSG.
+    (scope `sale`). **Режим стадии инвойса** — `--invoice <id> --stage <stageId>` (тот же билдер/транспорт →
+    `crm.item.update` stageId; dry-run/`--apply`, печатает текущую и новую стадию). Dev-only, не часть SSG.
   - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
     строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
     `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Гейт перед свапом

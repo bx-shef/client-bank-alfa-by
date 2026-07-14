@@ -13,6 +13,7 @@ import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/st
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
 import { summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
+import type { AllocationMutationOptions } from '../../app/utils/allocationMutation'
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
@@ -90,11 +91,12 @@ export interface HandlerDeps {
    *  or reverted) counts as existing. A store error propagates (fail the job). */
   hasAllocationFact: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Apply the portal MUTATION that marks a decided allocate target paid (§2 mutation
-   *  slice): `crm.item.payment.pay` for a deal payment. Called ONLY when `autoDistribute`
-   *  is on and no fact existed yet. Returns whether a portal write was actually applied
-   *  (false for unsupported target kinds — invoice stage / trigger targets). Runs BEFORE
-   *  the fact is recorded, so a thrown REST error leaves no fact and the retry re-attempts. */
-  applyAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
+   *  slice): `crm.item.payment.pay` for a deal payment, or `crm.item.update` stageId for an
+   *  invoice when a paid-stage is configured (`opts.invoicePaidStageId`). Called ONLY when
+   *  `autoDistribute` is on and no fact existed yet. Returns whether a portal write was
+   *  actually applied (false for unsupported kinds / an invoice with no configured stage).
+   *  Runs BEFORE the fact is recorded, so a thrown REST error leaves no fact and retries. */
+  applyAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string, opts: AllocationMutationOptions) => Promise<boolean>
   /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
    *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
@@ -307,10 +309,11 @@ export async function handleCrmSyncJob(
             // the portal write runs BEFORE the fact, so a persisted fact always implies the
             // mutation succeeded (a thrown REST error leaves no fact ⇒ clean retry). A
             // pre-existence check skips a redelivery/reimport so it never re-pays. Unsupported
-            // target kinds (invoice stage w/o config, trigger targets) apply nothing but still
-            // record the fact (distributed not bumped).
+            // target kinds (an invoice with no configured stage, trigger targets) apply nothing
+            // but still record the fact (distributed not bumped). The invoice paid-stage comes
+            // from settings (empty ⇒ invoice stage untouched).
             if (!(await deps.hasAllocationFact(item, target, job.memberId))) {
-              const applied = await deps.applyAllocation(item, target, job.memberId)
+              const applied = await deps.applyAllocation(item, target, job.memberId, { invoicePaidStageId: settings?.invoicePaidStageId })
               if (await deps.recordAllocation(item, target, job.memberId)) {
                 allocated++
                 if (applied) distributed++

@@ -22,7 +22,7 @@ describe('defaults', () => {
       dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
     })
     expect(defaultPortalSettings()).toEqual({
-      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false
+      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false, invoicePaidStageId: ''
     })
   })
 
@@ -60,7 +60,8 @@ describe('parsePortalSettings — defensive', () => {
         matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' as const, note: 'счёт' }],
         configFields: { 'deal:1': 'UF_CRM_1' }
       },
-      autoDistribute: true
+      autoDistribute: true,
+      invoicePaidStageId: 'DT31_11:P'
     }
     expect(parsePortalSettings(serializePortalSettings(s))).toEqual(s)
   })
@@ -71,8 +72,16 @@ describe('parsePortalSettings — defensive', () => {
       chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } },
       errorChat: { dialogId: '' },
       recognition: defaultRecognitionSettings(),
-      autoDistribute: false
+      autoDistribute: false,
+      invoicePaidStageId: ''
     })
+  })
+
+  it('invoicePaidStageId: trimmed, length-clamped, empty for non-string', () => {
+    expect(parsePortalSettings('{"invoicePaidStageId":"  DT31_11:P "}').invoicePaidStageId).toBe('DT31_11:P')
+    expect(parsePortalSettings('{"invoicePaidStageId":123}').invoicePaidStageId).toBe('') // non-string → empty
+    expect(parsePortalSettings('{}').invoicePaidStageId).toBe('') // missing → empty (no stage change)
+    expect(parsePortalSettings('{"invoicePaidStageId":"' + 'x'.repeat(200) + '"}').invoicePaidStageId.length).toBe(64)
   })
 
   it('autoDistribute: only literal true enables it (fail-safe default off)', () => {

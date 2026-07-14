@@ -241,6 +241,18 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
             description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
             data-testid="auto-distribute-warning"
           />
+          <B24FormField
+            v-if="settings.autoDistribute"
+            label="Стадия оплаченного счёта"
+            description="Идентификатор стадии, в которую перевести смарт-счёт при оплате (напр. DT31_11:P). Оставьте пустым — стадию счёта менять не будем."
+          >
+            <B24Input
+              v-model="settings.invoicePaidStageId"
+              placeholder="DT31_11:P"
+              class="w-full font-mono text-xs"
+              data-testid="invoice-paid-stage"
+            />
+          </B24FormField>
         </div>
       </B24Card>
 

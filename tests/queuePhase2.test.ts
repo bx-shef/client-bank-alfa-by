@@ -10,6 +10,7 @@ import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
 import type { IntentResolution } from '../server/utils/intentResolver'
+import { payAllocationViaRest } from '../server/utils/allocationMutationWrite'
 
 function item(docId: string, direction: 'credit' | 'debit' = 'credit', purpose = 'p'): StatementItem {
   return {
@@ -41,6 +42,8 @@ interface FakeOpts {
   recorded?: boolean
   /** autoDistribute gate (§2 mutation slice); default false (fact-only). */
   autoDistribute?: boolean
+  /** configured paid-invoice stage id (§2); default '' (invoice stage not changed). */
+  invoicePaidStageId?: string
   /** what hasAllocationFact returns (true = fact already exists → skip mutation); default false. */
   factExists?: boolean
   /** what applyAllocation returns (true = portal write applied); default true. */
@@ -64,7 +67,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
-  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, autoDistribute: o.autoDistribute ?? false }
+  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, autoDistribute: o.autoDistribute ?? false, invoicePaidStageId: o.invoicePaidStageId ?? '' }
   const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
@@ -113,8 +116,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.allocHas.push([it.docId, target.kind, target.id, memberId])
       return o.factExists ?? false
     },
-    applyAllocation: async (it, target, memberId) => {
-      calls.allocApply.push([it.docId, target.kind, target.id, memberId])
+    applyAllocation: async (it, target, memberId, opts) => {
+      calls.allocApply.push([it.docId, target.kind, target.id, memberId, opts?.invoicePaidStageId ?? ''])
       return o.applied ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
@@ -718,7 +721,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(1)
     expect(calls.allocHas).toEqual([['d1', 'deal-payment', '42', 'M']]) // idempotency pre-check
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M']]) // portal mutation applied
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', '']]) // portal mutation applied
     expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded AFTER
   })
 
@@ -739,7 +742,7 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(0)
-    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M']]) // attempted
+    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', '']]) // attempted
     expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // fact still recorded
   })
 
@@ -760,7 +763,7 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(0)
     expect(r.distributed).toBe(0)
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M']]) // mutation still attempted
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', '']]) // mutation still attempted
     expect(calls.allocRec).toHaveLength(1) // record attempted, returned false
   })
 
@@ -790,8 +793,46 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: two, autoDistribute: true, errorChat: { dialogId: 'errchat' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r).toMatchObject({ ambiguous: 1, allocated: 1, distributed: 1 })
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M']]) // smallest id paid
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M', '']]) // smallest id paid
     expect(calls.errChat).toEqual([['d1', 'allocate', 'errchat', 'M']]) // ambiguous still notifies
+  })
+
+  it('autoDistribute ON + invoice target + configured stage: threads the paid-stage to applyAllocation', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true, invoicePaidStageId: 'DT31_11:P' })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(r.distributed).toBe(1)
+    // The configured stage id is passed to the mutation dep (5th element).
+    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', 'DT31_11:P']])
+  })
+
+  // End-to-end through the REAL builder+transport (payAllocationViaRest), not the fake —
+  // proves the empty-stage case actually suppresses the invoice mutation (не just threads '').
+  it('autoDistribute ON + invoice with EMPTY stage → real transport issues NO crm.item.update (distributed 0)', async () => {
+    const rest: string[] = []
+    const { deps } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true }) // invoicePaidStageId '' (default)
+    deps.applyAllocation = (_it, target, _m, opts) =>
+      payAllocationViaRest(target, async (m) => {
+        rest.push(m)
+        return { result: { item: { id: 7 } } }
+      }, opts).then(res => res.applied)
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(r.distributed).toBe(0) // empty stage → builder returns null → no REST → not applied
+    expect(rest).toEqual([]) // no crm.item.update was issued
+  })
+
+  it('autoDistribute ON + invoice WITH configured stage → real transport issues crm.item.update (distributed 1)', async () => {
+    const rest: Array<[string, Record<string, unknown>]> = []
+    const { deps } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true, invoicePaidStageId: 'DT31_11:P' })
+    deps.applyAllocation = (_it, target, _m, opts) =>
+      payAllocationViaRest(target, async (m, p) => {
+        rest.push([m, p])
+        return { result: { item: { id: 7 } } }
+      }, opts).then(res => res.applied)
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.distributed).toBe(1)
+    expect(rest).toEqual([['crm.item.update', { entityTypeId: 31, id: 7, fields: { stageId: 'DT31_11:P' } }]])
   })
 })
 

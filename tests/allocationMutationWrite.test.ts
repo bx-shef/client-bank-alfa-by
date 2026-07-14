@@ -33,6 +33,33 @@ describe('payAllocationViaRest', () => {
     expect((await payAllocationViaRest(cand('deal-payment', '7'), async () => undefined)).applied).toBe(false)
   })
 
+  it('invoice + configured stage: calls crm.item.update and reads the object result', async () => {
+    const seen: Array<[string, Record<string, unknown>]> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      seen.push([method, params])
+      return { result: { item: { id: 7, stageId: 'DT31_11:P' } } }
+    }
+    const res = await payAllocationViaRest(cand('invoice', '7'), call, { invoicePaidStageId: 'DT31_11:P' })
+    expect(res).toEqual({ applied: true, method: 'crm.item.update', kind: 'invoice', id: '7' })
+    expect(seen).toEqual([['crm.item.update', { entityTypeId: 31, id: 7, fields: { stageId: 'DT31_11:P' } }]])
+  })
+
+  it('invoice WITHOUT a configured stage → skipped, NO REST call made', async () => {
+    let called = false
+    const call = async () => {
+      called = true
+      return { result: { item: {} } }
+    }
+    const res = await payAllocationViaRest(cand('invoice', '7'), call) // no opts → no stage
+    expect(res).toEqual({ applied: false, skipped: 'unsupported' })
+    expect(called).toBe(false)
+  })
+
+  it('invoice update returning a non-object result → applied false', async () => {
+    const res = await payAllocationViaRest(cand('invoice', '7'), async () => ({ result: false }), { invoicePaidStageId: 'DT31_11:P' })
+    expect(res.applied).toBe(false)
+  })
+
   it('unsupported target kind → skipped, NO REST call made', async () => {
     let called = false
     const call = async () => {

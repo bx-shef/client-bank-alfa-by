@@ -149,4 +149,23 @@ describe('settings page', () => {
     await nextTick()
     expect(useChatSettings().settings.autoDistribute).toBe(true)
   })
+
+  it('paid-invoice-stage input appears only when auto-distribution is on', async () => {
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="invoice-paid-stage"]').exists()).toBe(false) // hidden while OFF
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="invoice-paid-stage"]').exists()).toBe(true)
+  })
+
+  it('typing a paid-invoice stage id updates settings.invoicePaidStageId (UI wiring)', async () => {
+    const wrapper = await mountReady()
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('DT31_11:P')
+    await nextTick()
+    expect(useChatSettings().settings.invoicePaidStageId).toBe('DT31_11:P')
+  })
 })
