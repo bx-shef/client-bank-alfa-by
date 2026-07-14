@@ -149,4 +149,37 @@ describe('settings page', () => {
     await nextTick()
     expect(useChatSettings().settings.autoDistribute).toBe(true)
   })
+
+  it('reflects an already-loaded stage in the input on first render (get-binding)', async () => {
+    // Set BEFORE mount: outside the frame cs.load() is inert, so the input must paint
+    // the loaded value via the computed getter (exercises the non-empty `get` path).
+    useChatSettings().settings.autoDistribute = true
+    useChatSettings().settings.allocation.invoicePaidStageId = 'DT31_11:P'
+    const wrapper = await mountReady()
+    const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
+    expect(input.exists()).toBe(true)
+    expect((input.element as HTMLInputElement).value).toBe('DT31_11:P')
+  })
+
+  it('paid-invoice-stage input appears only when auto-distribution is on', async () => {
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="invoice-paid-stage"]').exists()).toBe(false) // hidden while OFF
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="invoice-paid-stage"]').exists()).toBe(true)
+  })
+
+  it('typing a paid-invoice stage sets allocation.invoicePaidStageId; clearing removes it (UI wiring)', async () => {
+    const wrapper = await mountReady()
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('  DT31_11:P ')
+    await nextTick()
+    expect(useChatSettings().settings.allocation.invoicePaidStageId).toBe('DT31_11:P') // trimmed
+    await input.setValue('   ')
+    await nextTick()
+    expect('invoicePaidStageId' in useChatSettings().settings.allocation).toBe(false) // blank → key removed
+  })
 })

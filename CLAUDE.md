@@ -123,7 +123,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
   предпросмотр («что попадёт в чат», `B24Badge`) + **`B24Switch` «Авто-проведение оплат»** (`autoDistribute`,
-  §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM; default OFF).
+  §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM, + поле `B24Input`
+  «стадия оплаченного счёта» → `allocation.invoicePaidStageId` (пусто ⇒ стадию не трогаем); default OFF).
   Один компонент для двух точек входа: слайдер на
   `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
   **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
@@ -705,7 +706,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
     же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);
     `--apply` — реально `crm.item.payment.pay` + подтверждение `PAID=Y`; `--revert` — откат `sale.payment.update PAID=N`
-    (scope `sale`), чтобы фикстура осталась переиспользуемой. Dev-only, не часть SSG.
+    (scope `sale`), чтобы фикстура осталась переиспользуемой. **Режим стадии инвойса** — `--invoice <id> --stage <stageId>`
+    (тот же билдер/транспорт → `crm.item.update` stageId; dry-run/`--apply`, печатает текущую и новую стадию).
+    Dev-only, не часть SSG.
   - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
     строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
     `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Гейт перед свапом
