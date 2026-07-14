@@ -8,6 +8,7 @@ import {
   filterByAccountNumber,
   filterByOrderNumber,
   filterByPaymentId,
+  filterByPaymentIds,
   isAmountTarget,
   isEligible,
   isTriggerTarget,
@@ -229,6 +230,22 @@ describe('filterByPaymentId (#172)', () => {
     expect(filterByPaymentId(pool, '')).toEqual([])
     expect(filterByPaymentId(pool, '   ')).toEqual([])
     expect(filterByPaymentId(pool, '999')).toEqual([]) // foreign payment simply isn't in the pool
+  })
+})
+
+describe('filterByPaymentIds (#172, order-id intersection)', () => {
+  const pool = [pay({ id: '5', accountNumber: '1/1' }), pay({ id: '7', accountNumber: '2/1' })]
+  it('keeps only pool payments whose id is in the given set (order payments ∩ company pool)', () => {
+    expect(filterByPaymentIds(pool, ['5', '99']).map(c => c.id)).toEqual(['5']) // 99 not in pool → dropped
+    expect(filterByPaymentIds(pool, ['5', '7']).map(c => c.id)).toEqual(['5', '7'])
+  })
+  it('trims ids and ignores blanks; empty/all-blank set → []', () => {
+    expect(filterByPaymentIds(pool, [' 7 ']).map(c => c.id)).toEqual(['7'])
+    expect(filterByPaymentIds(pool, [])).toEqual([])
+    expect(filterByPaymentIds(pool, ['', '  '])).toEqual([])
+  })
+  it('order with no payment in this company → [] (IDOR-safe)', () => {
+    expect(filterByPaymentIds(pool, ['99', '100'])).toEqual([])
   })
 })
 

@@ -104,8 +104,8 @@ dry-run/`--apply`/`--revert`). Тесты `allocationMutation`/`allocationMutati
 
 **После записи** остаются (по `PROCESSING.md`, отдельными слайсами): реальная мутация портала
 (`payment.pay` для инвойса/оплаты, стадия/триггер для сделки/смарт-процесса) + `autoDistribute`-гейт в
-настройках; свап транспорта `crm-sync` на SDK (#191, адаптер готов); `order-id`/`payment-id` (нужен
-`sale`-скоуп, #172; `order-number` — **сделан**); live-verify моста-документа; чат-уведомления стадии 6 вживую.
+настройках; свап транспорта `crm-sync` на SDK (#191, адаптер готов); **#172 закрыт** (order/payment по id и номеру,
+`sale`-скоуп добавлен); live-verify моста-документа; чат-уведомления стадии 6 вживую.
 
 **Гейт #191 (транспорт SDK) — ✅ пройден вживую** на `b24-86sr2r`
 (`pnpm sdk:test --burst`: 60 вызовов/5.5с, 0 отказов, лимитер сам троттлит).
@@ -295,7 +295,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   компания с `isMyCompany='Y'`, §2 Этап C) + **резолвер цели по id** `itemByIdLookup.ts` (`findCandidateById` —
   `crm.item.list` фильтром id+компания = IDOR-скоуп, отсев отрицательной стадии; стратегия `by-id`:
   invoice-id/deal-id/smart-id — не order-id/payment-id: `payment-id` резолвится по company-пулу оплат
-  (`by-payment-id` + `filterByPaymentId`, #172), `order-id` — `via-order` (отложен, нужен `sale`-скоуп)) + **резолвер оплаты сделки**
+  (`by-payment-id` + `filterByPaymentId`, #172), `order-id` — `sale.payment.list` (orderId→оплаты) ∩ company-пул
+  (`saleLookup` + `filterByPaymentIds`, `sale`-скоуп, #172)) + **резолвер оплаты сделки**
   `paymentLookup.ts` (`findDealPayments` — `crm.item.payment.list` по **известной** сделке → кандидаты
   `deal-payment`; оплаченные не берём). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
@@ -400,7 +401,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
 - **Обработка платежей по спецификации** [`docs/PROCESSING.md`](PROCESSING.md) — **REST-слайс проводки**
   (чистые ядра #109 уже готовы, см. «Что сделано»): по `LookupStrategy` реальный поиск сущности
   (`by-id`/`by-number`/`by-account-number`/`by-order-number`/`by-payment-id` + **обязательная повторная проверка компании+стадии**,
-  `by-config-field` с валидацией имени поля, `via-order` (отложен), мост `via-document` через
+  `by-config-field` с валидацией имени поля, `via-order` (order-id → sale.payment.list ∩ пул), мост `via-document` через
   `crm.documentgenerator.document.list`); проводка в `crm-sync`
   (инвойс/оплата → amount-ядро → `payment.pay`/триггер; сделка/смарт-процесс → безусловный триггер;
   `ambiguous`/«некуда разнести»/ошибки → чат); стор факта разнесения (`разнесён/откат`, `member_id`) —

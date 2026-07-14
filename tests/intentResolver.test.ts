@@ -16,11 +16,12 @@ const pay = (over: Partial<AllocationCandidate> = {}): AllocationCandidate =>
   ({ kind: 'deal-payment', id: '1', amount: 100, currency: 'BYN', ...over })
 
 /** Fake resolvers; each records its call and returns the given fixture. */
-function fakeDeps(over: Partial<{ invoices: AllocationCandidate[], byId: AllocationCandidate | null, pool: AllocationCandidate[] }> = {}) {
+function fakeDeps(over: Partial<{ invoices: AllocationCandidate[], byId: AllocationCandidate | null, pool: AllocationCandidate[], orderPaymentIds: string[] }> = {}) {
   const deps: IntentResolverDeps = {
     findInvoicesByNumber: vi.fn(async () => over.invoices ?? []),
     findCandidateById: vi.fn(async () => over.byId ?? null),
-    findCompanyDealPayments: vi.fn(async () => over.pool ?? [])
+    findCompanyDealPayments: vi.fn(async () => over.pool ?? []),
+    findOrderPaymentIds: vi.fn(async () => over.orderPaymentIds ?? [])
   }
   return deps
 }
@@ -90,11 +91,20 @@ describe('resolveIntentCandidates — supported strategies', () => {
     expect(r).toEqual({ kind: 'order-number', value: '1', status: 'resolved', candidates: [] })
   })
 
-  it('order-id stays unsupported (needs sale scope to map id→order→payment, #172)', async () => {
-    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' })] })
+  it('order-id → sale.payment.list ids INTERSECTED with the company pool (IDOR-safe, #172)', async () => {
+    // order 1 has payments 5 (in company pool) and 99 (NOT in pool → dropped by the intersection).
+    const deps = fakeDeps({ pool: [pay({ id: '5', accountNumber: '1/1' }), pay({ id: '7', accountNumber: '3/1' })], orderPaymentIds: ['5', '99'] })
     const r = await resolveIntentCandidates(intent('order-id', '1'), ctx, call, deps)
-    expect(r.status).toBe('unsupported')
-    expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
+    expect(r.status).toBe('resolved')
+    expect(r.candidates.map(c => c.id)).toEqual(['5']) // 99 is not in the company pool → excluded
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledWith('93', { isNegativeStage: ctx.isNegativeStage }, call)
+    expect(deps.findOrderPaymentIds).toHaveBeenCalledWith('1', call)
+  })
+
+  it('order-id whose payments are all outside the company pool → resolved [] (IDOR-safe)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: '5', accountNumber: '1/1' })], orderPaymentIds: ['99'] })
+    const r = await resolveIntentCandidates(intent('order-id', '9'), ctx, call, deps)
+    expect(r).toEqual({ kind: 'order-id', value: '9', status: 'resolved', candidates: [] })
   })
 
   it('payment-id → company pool then match by the payment OWN record id (#172)', async () => {
@@ -131,7 +141,7 @@ describe('resolveIntentCandidates — supported strategies', () => {
 })
 
 describe('resolveIntentCandidates — not-yet-dispatchable kinds', () => {
-  const cases: IdentifierKind[] = ['smart-id', 'deal-field', 'smart-field', 'order-id', 'document-number']
+  const cases: IdentifierKind[] = ['smart-id', 'deal-field', 'smart-field', 'document-number']
   for (const kind of cases) {
     it(`${kind} → unsupported, no resolver called, [] candidates, reason set`, async () => {
       const deps = fakeDeps({ invoices: [inv()], byId: inv(), pool: [pay()] })
@@ -225,6 +235,24 @@ describe('resolveIntentsForOp — batch, pool fetched once (#191)', () => {
   it('fetches the pool for an order-number-only batch (no payment-number present)', async () => {
     const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' })] })
     await resolveIntentsForOp([intent('order-number', '1')], ctx, call, deps)
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1)
+  })
+
+  it('order-id shares the single pool fetch (+ its own sale call), intersected with the pool', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: '5', accountNumber: '1/1' }), pay({ id: '7', accountNumber: '2/1' })], orderPaymentIds: ['7'] })
+    const out = await resolveIntentsForOp(
+      [intent('payment-id', '5'), intent('order-id', '2')], ctx, call, deps
+    )
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1) // one pool fetch for both
+    expect(deps.findOrderPaymentIds).toHaveBeenCalledTimes(1) // order-id makes its own sale call
+    expect(out.map(r => [r.kind, r.candidates.map(c => c.id)])).toEqual([
+      ['payment-id', ['5']], ['order-id', ['7']]
+    ])
+  })
+
+  it('fetches the pool for an order-id-only batch (it needs the pool for the intersection)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: '5', accountNumber: '1/1' })], orderPaymentIds: ['5'] })
+    await resolveIntentsForOp([intent('order-id', '1')], ctx, call, deps)
     expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1)
   })
 
