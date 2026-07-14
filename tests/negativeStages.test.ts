@@ -118,6 +118,29 @@ describe('buildPortalNegativeStagePredicate', () => {
     })
   })
 
+  it('excludes a SETTLED (paid) invoice stage, but keeps a WON deal (deals load negatives only)', async () => {
+    const { call } = fakeCall({
+      categories: { 31: [{ id: 11 }], 2: [{ id: 0 }] },
+      statuses: {
+        SMART_INVOICE_STAGE_11: [
+          { STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }, // unpaid/lost
+          { STATUS_ID: 'DT31_11:P', SEMANTICS: 'S' }, // PAID — must be excluded now
+          { STATUS_ID: 'DT31_11:N' } // open — kept
+        ],
+        DEAL_STAGE: [{ STATUS_ID: 'LOSE', SEMANTICS: 'F' }, { STATUS_ID: 'WON', SEMANTICS: 'S' }]
+      }
+    })
+    const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call)
+    expect(predicate('DT31_11:D')).toBe(true) // lost invoice
+    expect(predicate('DT31_11:P')).toBe(true) // PAID invoice — now excluded (the fix)
+    expect(predicate('DT31_11:N')).toBe(false) // open invoice — still a candidate
+    expect(predicate('LOSE')).toBe(true) // lost deal
+    expect(predicate('WON')).toBe(false) // WON deal is NOT excluded (settledness handled at payment level)
+    // diagnostics count NEGATIVES only (settled must not mask a fail-open)
+    expect(diagnostics.invoice).toEqual({ categories: 1, negativeStages: 1 })
+    expect(diagnostics.deal).toEqual({ categories: 1, negativeStages: 1 })
+  })
+
   it('surfaces zero deal negatives in diagnostics (fail-open signal for the caller)', async () => {
     const { call } = fakeCall({
       categories: { 31: [{ id: 11 }], 2: [{ id: 0 }] },
@@ -172,8 +195,11 @@ describe('failOpenEntities (symmetric fail-open signal)', () => {
     expect(failOpenEntities({ invoice: { categories: 1, negativeStages: 2 }, deal: { categories: 2, negativeStages: 0 } }))
       .toEqual(['deal'])
   })
-  it('flags nothing when negatives exist, or when an entity has no funnels', () => {
+  it('flags nothing when negatives exist for both entity types', () => {
     expect(failOpenEntities({ invoice: { categories: 1, negativeStages: 1 }, deal: { categories: 1, negativeStages: 1 } })).toEqual([])
-    expect(failOpenEntities({ invoice: { categories: 0, negativeStages: 0 }, deal: { categories: 0, negativeStages: 0 } })).toEqual([])
+  })
+  it('flags an entity whose funnels could not be enumerated (categories === 0 → empty negative set is still a fail-open)', () => {
+    expect(failOpenEntities({ invoice: { categories: 0, negativeStages: 0 }, deal: { categories: 0, negativeStages: 0 } })).toEqual(['invoice', 'deal'])
+    expect(failOpenEntities({ invoice: { categories: 0, negativeStages: 0 }, deal: { categories: 2, negativeStages: 3 } })).toEqual(['invoice'])
   })
 })

@@ -486,7 +486,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `makeIsNegativeStage(set)` строит предикат, который принимает `findInvoicesByNumber` (раньше инъектировался
       «снаружи»); `loadInvoiceNegativeStage`/`loadDealNegativeStage`/`loadSmartProcessNegativeStage` — loader+предикат
       одним вызовом. Читает **оба** формата семантики (легаси верхний `SEMANTICS='F'` — он и на живом портале; и
-      современный `EXTRA.SEMANTICS='failure'`).
+      современный `EXTRA.SEMANTICS='failure'`). **`loadStageExclusions(entityId, call, {includeSettled})`** — за
+      **один** `crm.status.list` отдаёт `{negative, settled}`: `settled` = стадии **успеха/оплаты** (`SEMANTICS='S'`/
+      `EXTRA.SEMANTICS='success'`, `extractSettledStageIds`) — нужно, чтобы **оплаченный инвойс** не пере-матчился на
+      вторую оплату той же суммы (симметрично `paid:'Y'` в `paymentLookup`; подтверждено вживую: `DT31_11:P`=`'S'`,
+      сделка `WON`=`'S'`). Множества **раздельны**: предикат исключает `negative ∪ settled`, но fail-open считает
+      **только** negative.
       **Подтверждено вживую**: инвойс «Не оплачен» `DT31_11:D`; сделка `LOSE`/`APOLOGY`; смарт-процесс `DT1032_67:FAIL` = `SEMANTICS='F'`. ⚠ **fail-open**:
       пустое множество = «ничего не отрицательно» (неотличимо от битого запроса) — на проводке в `crm-sync` алертить,
       если для известной категории пусто.
@@ -557,14 +562,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). Осталось: триггеры deal/smart-process.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
-      `crm.status.list` → **объединение** отрицательных стадий. Namespace'ы стадий не пересекаются
-      (инвойс `DT31_<cat>:…`, сделка `LOSE`/`C<cat>:LOSE`; candidate.stageId ≡ STATUS_ID, подтверждено вживую) →
-      один предикат обслуживает инвойсы, сделки и company-пул оплат. `crm.category.list` **пагинируется**
-      (метод одностраничный, max 50; >50 воронок иначе молча теряются — fail-open). Диагностика по типу (число
-      воронок/отрицательных стадий) → **симметричный fail-open алерт** `failOpenEntities` (0 отрицательных стадий
-      **инвойсов ИЛИ сделок** при ≥1 воронке = битый запрос/урезанные права → воркер логирует warning; инвойс —
-      основная цель, поэтому не только сделки). Грузится **раз на джобу** (ленивo, только когда первая операция
-      реально резолвит намерение). **`stripDealCategoryPrefix`** — предикат матчит и сырой `stageId`, и без
+      `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
+      предикат исключает `negative(инвойс) ∪ settled(инвойс) ∪ negative(сделка)`: **оплаченный инвойс (`:P`,
+      `SEMANTICS='S'`) больше не кандидат** (иначе вторая оплата той же суммы молча садилась на закрытый счёт и —
+      при `autoDistribute` — пере-проводила `crm.item.update`). Сделки — только negative (WON-сделку не исключаем:
+      её namespace иной — `WON` без `DT31_`, а «оплаченность» сделки решается на уровне оплаты `paid:'Y'`).
+      Namespace'ы стадий не пересекаются (инвойс `DT31_<cat>:…`, сделка `LOSE`/`C<cat>:LOSE`; candidate.stageId ≡
+      STATUS_ID, подтверждено вживую) → один предикат обслуживает инвойсы, сделки и company-пул оплат.
+      `crm.category.list` **пагинируется** (метод одностраничный, max 50; >50 воронок иначе молча теряются — fail-open).
+      Диагностика по типу (число воронок/отрицательных стадий; settled в счётчик **не** идёт) → **fail-open алерт**
+      `failOpenEntities` (**0 отрицательных стадий** инвойсов ИЛИ сделок = битый запрос/урезанные права → воркер
+      логирует warning; **включая `categories===0`** — когда `crm.category.list` вообще не отдал воронки: пустое
+      множество исключений = «ничего не исключили», алертим независимо от числа воронок). Грузится **раз на джобу**
+      (ленивo, только когда первая операция реально резолвит намерение). **`stripDealCategoryPrefix`** — предикат матчит и сырой `stageId`, и без
       `C<cat>:`-префикса (форма stage-id дефолтной воронки сделки — `LOSE` vs `C0:LOSE` — вживую не подтверждена;
       strip false-negative-safe: только добавляет матч по фиксированным `LOSE`/`APOLOGY`, валидного кандидата не
       теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
@@ -583,7 +593,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, конверт-aware applied-детект
     (`{result:true}` vs `{result:{item}}`), идемпотентный порядок mutation-before-fact,
     live-verify `pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте). **Осталось (мутационный слайс):**
-    триггеры deal/smart-process (их факт пока не пишется). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
+    триггеры deal/smart-process (их факт пока не пишется) — **блокер #79:** `crm.automation.trigger.execute`
+    требует **контекста приложения** (webhook тестового портала его не вызовет) + предварительно
+    **зарегистрированный** `CODE` (`crm.automation.trigger.add` на установке) → live-verify только на OAuth-портале
+    (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),

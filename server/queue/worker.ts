@@ -171,7 +171,7 @@ export function liveHandlerDeps(): HandlerDeps {
       const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call)
       const suspicious = failOpenEntities(diagnostics)
       if (suspicious.length > 0) {
-        console.warn(`[stage] portal ${memberId}: 0 negative stages for ${suspicious.join('+')} despite ≥1 funnel — check rights/config; those entities won't be stage-excluded (fail-open)`)
+        console.warn(`[stage] portal ${memberId}: 0 negative stages for ${suspicious.join('+')} (no funnels enumerated, or funnels have no lost/fail stage) — check rights/config; those entities won't be stage-excluded (fail-open)`)
       }
       return predicate
     },
