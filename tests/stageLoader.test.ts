@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   dealStageEntityId,
   extractNegativeStageIds,
+  extractSettledStageIds,
   invoiceStageEntityId,
   loadDealNegativeStage,
   loadInvoiceNegativeStage,
   loadNegativeStages,
   loadSmartProcessNegativeStage,
+  loadStageExclusions,
   makeIsNegativeStage,
   smartProcessStageEntityId
 } from '../server/utils/stageLoader'
@@ -79,6 +81,36 @@ describe('extractNegativeStageIds', () => {
   })
   it('skips rows without a STATUS_ID', () => {
     expect(extractNegativeStageIds(resp([{ SEMANTICS: 'F' }, { STATUS_ID: '', SEMANTICS: 'F' }]))).toEqual(new Set())
+  })
+})
+
+describe('extractSettledStageIds', () => {
+  it('keeps only SUCCESS (paid/won) ids — legacy SEMANTICS=S and modern EXTRA.SEMANTICS=success', () => {
+    expect(extractSettledStageIds(resp(invoiceRows))).toEqual(new Set(['DT31_11:P']))
+    expect(extractSettledStageIds(resp([
+      { STATUS_ID: 'X', EXTRA: { SEMANTICS: 'success' } },
+      { STATUS_ID: 'Y', EXTRA: { SEMANTICS: 'failure' } }
+    ]))).toEqual(new Set(['X']))
+  })
+  it('returns an empty set for a missing / non-array result', () => {
+    expect(extractSettledStageIds({})).toEqual(new Set())
+  })
+})
+
+describe('loadStageExclusions', () => {
+  it('returns negatives only by default (settled empty), from ONE crm.status.list call', async () => {
+    const call = vi.fn(async () => resp(invoiceRows))
+    const { negative, settled } = await loadStageExclusions('SMART_INVOICE_STAGE_11', call)
+    expect(negative).toEqual(new Set(['DT31_11:D']))
+    expect(settled).toEqual(new Set())
+    expect(call).toHaveBeenCalledTimes(1)
+  })
+  it('also returns the settled set when includeSettled is on', async () => {
+    const call = vi.fn(async () => resp(invoiceRows))
+    const { negative, settled } = await loadStageExclusions('SMART_INVOICE_STAGE_11', call, { includeSettled: true })
+    expect(negative).toEqual(new Set(['DT31_11:D']))
+    expect(settled).toEqual(new Set(['DT31_11:P']))
+    expect(call).toHaveBeenCalledTimes(1) // both sets from the SAME response
   })
 })
 

@@ -1,6 +1,8 @@
 // Build ONE `isNegativeStage` predicate covering a whole portal's invoice AND deal
 // stages (#109, PROCESSING.md §2), so the crm-sync allocation lookups drop candidates
-// sitting in a paid/lost/failed stage. Pure over an injected `RestCall` (+ the
+// sitting in a lost/failed stage — AND a SETTLED (paid) invoice, which must not re-match
+// a second same-amount payment (the negative filter alone let a paid invoice back in;
+// mirrors paymentLookup's `paid:'Y'` drop). Pure over an injected `RestCall` (+ the
 // `stageLoader` primitives) — unit-testable without the network.
 //
 // WHY A UNION. A candidate's category isn't known until it is queried, and the
@@ -24,7 +26,7 @@ import {
 } from './paymentLookup'
 import { SMART_INVOICE_ENTITY_TYPE_ID } from './invoiceLookup'
 import {
-  dealStageEntityId, invoiceStageEntityId, loadNegativeStages, makeIsNegativeStage
+  dealStageEntityId, invoiceStageEntityId, loadStageExclusions, makeIsNegativeStage
 } from './stageLoader'
 
 /** Per-entity-type diagnostics for the fail-open alert: how many funnels the entity
@@ -43,7 +45,8 @@ export interface NegativeStageDiagnostics {
 }
 
 export interface PortalNegativeStages {
-  /** True for a stage id we must NOT allocate to (union of invoice + deal negatives). */
+  /** True for a stage id we must NOT allocate to: invoice negatives (lost/unpaid) +
+   *  invoice SETTLED (paid) + deal negatives (lost). */
   predicate: (stageId: string) => boolean
   diagnostics: NegativeStageDiagnostics
 }
@@ -63,16 +66,19 @@ export function stripDealCategoryPrefix(stageId: string): string {
   return stageId.replace(/^C\d+:/, '')
 }
 
-/** Entity types whose negative-stage load looks BROKEN (fail-open): the entity has
- *  funnels but ZERO negative stages were found. A real portal's funnel almost always has
- *  at least one fail/lost stage (invoice «Не оплачен», deal `LOSE`), so this is the
- *  tell-tale of a trimmed-rights / bad-`ENTITY_ID` query — the caller ALERTS rather than
- *  silently allocating onto a paid/lost entity (docs/PROCESSING.md §5, stageLoader
- *  fail-open caveat). Symmetric across invoice AND deal (both are live allocation targets). */
+/** Entity types whose negative-stage load looks BROKEN (fail-open): ZERO negative stages
+ *  were found. A real portal ALWAYS has at least one fail/lost stage per entity type
+ *  (invoice «Не оплачен» `DT31_…:D`, deal `LOSE`), so an empty negative set is the
+ *  tell-tale of a trimmed-rights / bad-`ENTITY_ID` query — INCLUDING the `categories === 0`
+ *  case, where `crm.category.list` itself returned nothing (couldn't even enumerate the
+ *  funnels). Both shapes mean "we excluded nothing", so the caller must ALERT rather than
+ *  silently allocating (and, with autoDistribute, PAYING) a lost/paid entity
+ *  (docs/PROCESSING.md §5, stageLoader fail-open caveat). Symmetric across invoice AND
+ *  deal (both are live allocation targets). */
 export function failOpenEntities(diagnostics: NegativeStageDiagnostics): string[] {
   const out: string[] = []
-  if (diagnostics.invoice.categories > 0 && diagnostics.invoice.negativeStages === 0) out.push('invoice')
-  if (diagnostics.deal.categories > 0 && diagnostics.deal.negativeStages === 0) out.push('deal')
+  if (diagnostics.invoice.negativeStages === 0) out.push('invoice')
+  if (diagnostics.deal.negativeStages === 0) out.push('deal')
   return out
 }
 
@@ -128,15 +134,18 @@ export async function loadCategoryIds(entityTypeId: number, call: RestCall): Pro
 export async function loadEntityNegativeStages(
   entityTypeId: number,
   stageEntityIdFor: (categoryId: string) => string,
-  call: RestCall
-): Promise<{ negative: Set<string>, categories: number }> {
+  call: RestCall,
+  opts: { includeSettled?: boolean } = {}
+): Promise<{ negative: Set<string>, settled: Set<string>, categories: number }> {
   const categoryIds = await loadCategoryIds(entityTypeId, call)
   const negative = new Set<string>()
+  const settled = new Set<string>()
   for (const categoryId of categoryIds) {
-    const set = await loadNegativeStages(stageEntityIdFor(categoryId), call)
-    for (const id of set) negative.add(id)
+    const sets = await loadStageExclusions(stageEntityIdFor(categoryId), call, opts)
+    for (const id of sets.negative) negative.add(id)
+    for (const id of sets.settled) settled.add(id)
   }
-  return { negative, categories: categoryIds.length }
+  return { negative, settled, categories: categoryIds.length }
 }
 
 /**
@@ -149,9 +158,15 @@ export async function loadEntityNegativeStages(
  * here when that slice lands (`smartProcessStageEntityId`).
  */
 export async function buildPortalNegativeStagePredicate(call: RestCall): Promise<PortalNegativeStages> {
-  const invoice = await loadEntityNegativeStages(SMART_INVOICE_ENTITY_TYPE_ID, invoiceStageEntityId, call)
+  // Invoices ALSO exclude SETTLED (paid/success) stages: a paid invoice must never
+  // re-match a second same-amount payment (mirrors paymentLookup's `paid:'Y'` drop).
+  // Deals load negatives only — a WON deal is namespaced differently (`WON`, no `DT31_…`),
+  // and a deal's settledness is handled at the payment level (`paid:'Y'`), not the stage.
+  const invoice = await loadEntityNegativeStages(SMART_INVOICE_ENTITY_TYPE_ID, invoiceStageEntityId, call, { includeSettled: true })
   const deal = await loadEntityNegativeStages(DEAL_ENTITY_TYPE_ID, dealStageEntityId, call)
-  const union = new Set<string>([...invoice.negative, ...deal.negative])
+  // Stage-id namespaces don't collide, so unioning the settled-invoice stages into the
+  // single "do-not-allocate" set only ever drops paid INVOICES — never a deal candidate.
+  const union = new Set<string>([...invoice.negative, ...invoice.settled, ...deal.negative])
   const isNeg = makeIsNegativeStage(union)
   return {
     // Match the raw stage id OR its deal-category-stripped code (see stripDealCategoryPrefix)

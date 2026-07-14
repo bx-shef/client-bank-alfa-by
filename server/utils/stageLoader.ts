@@ -14,6 +14,12 @@ import type { RestCall } from './companyLookup'
 export const NEGATIVE_SEMANTICS = 'F'
 /** Modern (`EXTRA.SEMANTICS`) value for a fail/negative stage. */
 export const NEGATIVE_SEMANTICS_EXTRA = 'failure'
+/** `crm.status` top-level SEMANTICS marking a SUCCESS (won/paid/settled) stage —
+ *  confirmed live on a Smart Invoice («Оплачен» `DT31_11:P` → `'S'`) and a deal
+ *  («Сделка успешна» `WON` → `'S'`). Same legacy/modern duality as the negative one. */
+export const SUCCESS_SEMANTICS = 'S'
+/** Modern (`EXTRA.SEMANTICS`) value for a success stage. */
+export const SUCCESS_SEMANTICS_EXTRA = 'success'
 
 /**
  * Stage-directory `ENTITY_ID` for a Smart Invoice category. Confirmed live:
@@ -60,18 +66,38 @@ function isNegativeStatus(row: RawStatus): boolean {
   return row?.SEMANTICS === NEGATIVE_SEMANTICS || row?.EXTRA?.SEMANTICS === NEGATIVE_SEMANTICS_EXTRA
 }
 
-/** Pull the STATUS_IDs with a negative SEMANTICS out of a `crm.status.list`
- *  response (tolerant of a missing/!array result and rows without the fields). */
-export function extractNegativeStageIds(resp: Record<string, unknown>): Set<string> {
+/** True if a status row is a SUCCESS (won/paid/settled) stage, on either the legacy
+ *  top-level `SEMANTICS='S'` or the modern `EXTRA.SEMANTICS='success'`. Used to drop a
+ *  SETTLED invoice from allocation candidates (a paid invoice must not re-match a second
+ *  same-amount payment — mirrors paymentLookup's `paid:'Y'` exclusion). */
+function isSuccessStatus(row: RawStatus): boolean {
+  return row?.SEMANTICS === SUCCESS_SEMANTICS || row?.EXTRA?.SEMANTICS === SUCCESS_SEMANTICS_EXTRA
+}
+
+/** Collect the STATUS_IDs whose row passes `keep` out of a `crm.status.list` response
+ *  (tolerant of a missing/!array result and rows without the fields). */
+function extractStageIds(resp: Record<string, unknown>, keep: (row: RawStatus) => boolean): Set<string> {
   const rows = resp?.result
   const out = new Set<string>()
   if (!Array.isArray(rows)) return out
   for (const row of rows as RawStatus[]) {
-    if (!isNegativeStatus(row)) continue
+    if (!keep(row)) continue
     const id = row.STATUS_ID
     if (id !== undefined && id !== null && `${id}` !== '') out.add(`${id}`)
   }
   return out
+}
+
+/** Pull the STATUS_IDs with a negative SEMANTICS out of a `crm.status.list`
+ *  response (tolerant of a missing/!array result and rows without the fields). */
+export function extractNegativeStageIds(resp: Record<string, unknown>): Set<string> {
+  return extractStageIds(resp, isNegativeStatus)
+}
+
+/** Pull the STATUS_IDs with a SUCCESS (won/paid) SEMANTICS out of a `crm.status.list`
+ *  response — a SETTLED invoice sits in one of these. */
+export function extractSettledStageIds(resp: Record<string, unknown>): Set<string> {
+  return extractStageIds(resp, isSuccessStatus)
 }
 
 /**
@@ -93,6 +119,29 @@ export async function loadNegativeStages(stageEntityId: string, call: RestCall):
     select: ['STATUS_ID', 'SEMANTICS', 'EXTRA']
   })
   return extractNegativeStageIds(resp)
+}
+
+/**
+ * Load a stage directory's NEGATIVE (fail/lost) and — when `opts.includeSettled` —
+ * SUCCESS (won/paid/settled) stage-id sets in ONE `crm.status.list` call. The two
+ * sets are kept SEPARATE on purpose: the caller unions them for the "do-not-allocate"
+ * predicate, but counts negatives ONLY for the fail-open diagnostic (a portal with a
+ * broken query has zero NEGATIVES; a settled stage must not mask that). A transport
+ * error propagates. Same fail-open caveat as `loadNegativeStages`.
+ */
+export async function loadStageExclusions(
+  stageEntityId: string,
+  call: RestCall,
+  opts: { includeSettled?: boolean } = {}
+): Promise<{ negative: Set<string>, settled: Set<string> }> {
+  const resp = await call('crm.status.list', {
+    filter: { ENTITY_ID: stageEntityId },
+    select: ['STATUS_ID', 'SEMANTICS', 'EXTRA']
+  })
+  return {
+    negative: extractNegativeStageIds(resp),
+    settled: opts.includeSettled ? extractSettledStageIds(resp) : new Set()
+  }
 }
 
 /**
