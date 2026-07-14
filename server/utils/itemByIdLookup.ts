@@ -7,8 +7,8 @@
 // Covers the `by-id` strategy of identifierDispatch (`invoice-id`→invoice,
 // `deal-id`→deal, `smart-id`→smart-process): all three are the same `crm.item.list`
 // object, differing only by `entityTypeId`. NOT for `order-id`/`payment-id` — those
-// route `via-order`/`via-payment` to a `deal-payment` (a `crm.item.payment.*`
-// object, different method/shape), resolved by a separate module.
+// resolve to a `deal-payment` (a `crm.item.payment.*` object) via the company pool
+// (`payment-id`→`by-payment-id`) or a deferred `sale`-scope path (`order-id`→`via-order`).
 //
 // Uses `crm.item.list` (not `crm.item.get`): a list returns an empty array for a
 // missing/foreign id, whereas `crm.item.get` throws NOT_FOUND — the list shape lets

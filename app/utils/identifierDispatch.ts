@@ -15,9 +15,9 @@ export type LookupStrategy
     | 'by-number' // search the entity by its human-facing number field
     | 'by-account-number' // search a payment by its `accountNumber` within the company's deal-payment pool (#189)
     | 'by-order-number' // match a payment by the order PREFIX of its `accountNumber` («<order>/<seq>», #172)
+    | 'by-payment-id' // match a payment by its OWN record id within the company's deal-payment pool (#172)
     | 'by-config-field' // search by a portal-configured field (per direction / per process)
     | 'via-order' // value identifies an order by its OWN id → resolve to its deal payment (needs sale scope)
-    | 'via-payment' // value identifies a payment record by its OWN id (payment-id)
     | 'via-document' // value is a generated-document number → bridge to its linked entity
 
 // NB (§2): a `deal` / `smart-process` target reached by `by-id` / `by-config-field`
@@ -51,10 +51,13 @@ export const IDENTIFIER_ROUTES: Record<IdentifierKind, IdentifierRoute> = {
   // company's deal-payment pool (intentResolver: findCompanyDealPayments + filterByOrderNumber,
   // #172, live-confirmed) — the order's NUMBER, not its record id (that's `order-id`/`via-order`).
   'order-number': { targetKind: 'deal-payment', strategy: 'by-order-number', needsConfiguredField: false },
-  'payment-id': { targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false },
+  // Resolved by the payment's OWN record id within the company's deal-payment pool
+  // (intentResolver: findCompanyDealPayments + filterByPaymentId, #172, live-confirmed) —
+  // IDOR-safe (pool is company-scoped), no `sale` scope. Distinct from payment-number (by accountNumber).
+  'payment-id': { targetKind: 'deal-payment', strategy: 'by-payment-id', needsConfiguredField: false },
   // Resolved by `accountNumber` within the company's deal-payment pool (intentResolver:
   // findCompanyDealPayments + filterByAccountNumber) — by-number semantics, NOT by own id
-  // (that's `payment-id`/`via-payment`). Distinct label per #189.
+  // (that's `payment-id`/`by-payment-id`). Distinct label per #189.
   'payment-number': { targetKind: 'deal-payment', strategy: 'by-account-number', needsConfiguredField: false },
   'smart-id': { targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: false },
   'smart-field': { targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true },

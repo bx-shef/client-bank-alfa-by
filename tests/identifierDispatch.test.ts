@@ -14,7 +14,7 @@ const ALL_KINDS = Object.keys(IDENTIFIER_ROUTES) as IdentifierKind[]
 // Single source of truth for the valid target set — `satisfies` keeps it in sync
 // with AllocationTargetKind at compile time (a new kind must be added here).
 const VALID_TARGETS = { 'invoice': true, 'deal-payment': true, 'deal': true, 'smart-process': true } satisfies Record<AllocationTargetKind, true>
-const VALID_STRATEGIES: LookupStrategy[] = ['by-id', 'by-number', 'by-account-number', 'by-order-number', 'by-config-field', 'via-order', 'via-payment', 'via-document']
+const VALID_STRATEGIES: LookupStrategy[] = ['by-id', 'by-number', 'by-account-number', 'by-order-number', 'by-payment-id', 'by-config-field', 'via-order', 'via-document']
 
 describe('IDENTIFIER_ROUTES', () => {
   it('has a route for every kind (11) and no undefined entries', () => {
@@ -38,9 +38,9 @@ describe('IDENTIFIER_ROUTES', () => {
     // order-id (resolve the order by its own record id → sale scope, still via-order/deferred).
     expect(routeIdentifier('order-number')).toEqual({ targetKind: 'deal-payment', strategy: 'by-order-number', needsConfiguredField: false })
     expect(routeIdentifier('order-number').strategy).not.toBe(routeIdentifier('order-id').strategy)
-    // payment-id resolves by its OWN id (via-payment); payment-number by accountNumber
-    // within the company pool (by-account-number) — distinct strategies (#189).
-    expect(routeIdentifier('payment-id')).toEqual({ targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false })
+    // payment-id resolves by its OWN record id within the company pool (by-payment-id, #172);
+    // payment-number by accountNumber (by-account-number) — distinct strategies (#189).
+    expect(routeIdentifier('payment-id')).toEqual({ targetKind: 'deal-payment', strategy: 'by-payment-id', needsConfiguredField: false })
     expect(routeIdentifier('payment-number')).toEqual({ targetKind: 'deal-payment', strategy: 'by-account-number', needsConfiguredField: false })
     expect(routeIdentifier('payment-number').strategy).not.toBe(routeIdentifier('payment-id').strategy)
   })
