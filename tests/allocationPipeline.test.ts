@@ -52,10 +52,10 @@ describe('allocation pipeline (recognize → route → resolve)', () => {
       .toMatchObject({ action: 'manual', reason: 'no-exact-match' })
   })
 
-  it('order number → deal-payment target via-order', () => {
+  it('order number → deal-payment target by-order-number (payment accountNumber prefix, #172)', () => {
     const id = recognizeOne('оплата заказа ЗАК-6001')
     expect(id).toEqual({ kind: 'order-number', value: 'ЗАК-6001' })
-    expect(routeIdentifier(id.kind)).toMatchObject({ targetKind: 'deal-payment', strategy: 'via-order' })
+    expect(routeIdentifier(id.kind)).toMatchObject({ targetKind: 'deal-payment', strategy: 'by-order-number' })
   })
 
   it('deal id → deal target, by-id (unconditional trigger — bypasses amount core)', () => {

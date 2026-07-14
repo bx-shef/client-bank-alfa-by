@@ -73,6 +73,30 @@ describe('resolveIntentCandidates — supported strategies', () => {
     expect(r).toEqual({ kind: 'payment-number', value: '9/9', status: 'resolved', candidates: [] })
   })
 
+  it('order-number → company pool then order-PREFIX filter (matches every seq of the order, #172)', async () => {
+    const pool = [
+      pay({ id: 'A', accountNumber: '1/1' }), pay({ id: 'B', accountNumber: '1/2' }), pay({ id: 'C', accountNumber: '2/1' })
+    ]
+    const deps = fakeDeps({ pool })
+    const r = await resolveIntentCandidates(intent('order-number', '1'), ctx, call, deps)
+    expect(r.status).toBe('resolved')
+    expect(r.candidates.map(c => c.id)).toEqual(['A', 'B']) // both payments of order «1», not «2/1»
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledWith('93', { isNegativeStage: ctx.isNegativeStage }, call)
+  })
+
+  it('order-number does NOT match a longer order number sharing the prefix digits (10 ≠ 1)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '10/1' })] })
+    const r = await resolveIntentCandidates(intent('order-number', '1'), ctx, call, deps)
+    expect(r).toEqual({ kind: 'order-number', value: '1', status: 'resolved', candidates: [] })
+  })
+
+  it('order-id stays unsupported (needs sale scope to map id→order→payment, #172)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' })] })
+    const r = await resolveIntentCandidates(intent('order-id', '1'), ctx, call, deps)
+    expect(r.status).toBe('unsupported')
+    expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
+  })
+
   it('propagates a REST error from every resolved path (invoice-number / by-id / payment-number)', async () => {
     const boom = () => vi.fn(async () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
@@ -92,7 +116,7 @@ describe('resolveIntentCandidates — supported strategies', () => {
 })
 
 describe('resolveIntentCandidates — not-yet-dispatchable kinds', () => {
-  const cases: IdentifierKind[] = ['smart-id', 'deal-field', 'smart-field', 'order-id', 'order-number', 'payment-id', 'document-number']
+  const cases: IdentifierKind[] = ['smart-id', 'deal-field', 'smart-field', 'order-id', 'payment-id', 'document-number']
   for (const kind of cases) {
     it(`${kind} → unsupported, no resolver called, [] candidates, reason set`, async () => {
       const deps = fakeDeps({ invoices: [inv()], byId: inv(), pool: [pay()] })
@@ -170,6 +194,23 @@ describe('resolveIntentsForOp — batch, pool fetched once (#191)', () => {
     const out = await resolveIntentsForOp([intent('invoice-number', 'СЧ-1'), intent('deal-id', '5')], ctx, call, deps)
     expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
     expect(out.map(r => r.kind)).toEqual(['invoice-number', 'deal-id'])
+  })
+
+  it('order-number and payment-number SHARE the single pool fetch (both filter it, #172/#191)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' }), pay({ id: 'B', accountNumber: '2/1' })] })
+    const out = await resolveIntentsForOp(
+      [intent('order-number', '1'), intent('payment-number', '2/1')], ctx, call, deps
+    )
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1) // one fetch feeds both
+    expect(out.map(r => [r.kind, r.candidates.map(c => c.id)])).toEqual([
+      ['order-number', ['A']], ['payment-number', ['B']]
+    ])
+  })
+
+  it('fetches the pool for an order-number-only batch (no payment-number present)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: 'A', accountNumber: '1/1' })] })
+    await resolveIntentsForOp([intent('order-number', '1')], ctx, call, deps)
+    expect(deps.findCompanyDealPayments).toHaveBeenCalledTimes(1)
   })
 
   it('mixes pooled payment-number with other kinds, preserving order', async () => {

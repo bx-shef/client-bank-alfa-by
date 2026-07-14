@@ -14,7 +14,7 @@ const ALL_KINDS = Object.keys(IDENTIFIER_ROUTES) as IdentifierKind[]
 // Single source of truth for the valid target set — `satisfies` keeps it in sync
 // with AllocationTargetKind at compile time (a new kind must be added here).
 const VALID_TARGETS = { 'invoice': true, 'deal-payment': true, 'deal': true, 'smart-process': true } satisfies Record<AllocationTargetKind, true>
-const VALID_STRATEGIES: LookupStrategy[] = ['by-id', 'by-number', 'by-account-number', 'by-config-field', 'via-order', 'via-payment', 'via-document']
+const VALID_STRATEGIES: LookupStrategy[] = ['by-id', 'by-number', 'by-account-number', 'by-order-number', 'by-config-field', 'via-order', 'via-payment', 'via-document']
 
 describe('IDENTIFIER_ROUTES', () => {
   it('has a route for every kind (11) and no undefined entries', () => {
@@ -34,7 +34,10 @@ describe('IDENTIFIER_ROUTES', () => {
 
   it('order/payment identifiers → deal-payment target (each strategy explicit)', () => {
     expect(routeIdentifier('order-id')).toEqual({ targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false })
-    expect(routeIdentifier('order-number')).toEqual({ targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false })
+    // order-number matches the order PREFIX of a payment's accountNumber (#172), distinct from
+    // order-id (resolve the order by its own record id → sale scope, still via-order/deferred).
+    expect(routeIdentifier('order-number')).toEqual({ targetKind: 'deal-payment', strategy: 'by-order-number', needsConfiguredField: false })
+    expect(routeIdentifier('order-number').strategy).not.toBe(routeIdentifier('order-id').strategy)
     // payment-id resolves by its OWN id (via-payment); payment-number by accountNumber
     // within the company pool (by-account-number) — distinct strategies (#189).
     expect(routeIdentifier('payment-id')).toEqual({ targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false })

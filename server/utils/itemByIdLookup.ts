@@ -18,6 +18,7 @@
 // prefix, e.g. `C5:LOSE`, which matches the `DEAL_STAGE_<cat>` status ids).
 
 import { isAmountTarget, type AllocationCandidate, type AllocationTargetKind } from '../../app/utils/allocation'
+import { parentDealId } from './invoiceLookup'
 import type { RestCall } from './companyLookup'
 
 export interface ItemByIdOptions {
@@ -35,7 +36,9 @@ export function itemByIdParams(entityTypeId: number, id: string, companyId: stri
   return {
     entityTypeId,
     filter: { id, companyId },
-    select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId']
+    // `parentId2` = linked deal id — only meaningful for an invoice target (its deal link,
+    // #229). Harmless in the select for deal/smart-process (they carry no self→deal link).
+    select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
   }
 }
 
@@ -44,6 +47,7 @@ interface RawItem {
   stageId?: unknown
   opportunity?: unknown
   currencyId?: unknown
+  parentId2?: unknown
 }
 
 /** Pull the single item out of a `crm.item.list` response (`result.items[0]`). */
@@ -85,10 +89,14 @@ export async function findCandidateById(
   const amount = Number(item.opportunity)
   const finite = Number.isFinite(amount)
   if (!finite && isAmountTarget(kind)) return null
+  // Only an invoice carries a self→deal link (`parentId2`, #229) — lets `collapseSameTarget`
+  // merge an `invoice-id` target with the same deal's payment. Other kinds: no dealId.
+  const dealId = kind === 'invoice' ? parentDealId(item.parentId2) : undefined
   return {
     kind,
     id: outId,
     amount: finite ? amount : 0,
-    currency: String(item.currencyId ?? '')
+    currency: String(item.currencyId ?? ''),
+    ...(dealId ? { dealId } : {})
   }
 }

@@ -246,7 +246,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     в минорных единицах — **и валюта**): нет точного совпадения → `manual` (очередь ручного разбора); одно →
     `allocate`; несколько → `allocate` на **минимальный ID** с флагом `ambiguous` (вызывающий шлёт
     оповещение в чат). `collapseSameTarget` схлопывает только заведомо одну цель (инвойс поверх оплаты той
-    же сделки по `parentId`; буквальный повтор `kind`+`id`) — разные сущности одной суммы остаются
+    же сделки по `dealId` — invoice-кандидат несёт `dealId` из `parentId2`, live-confirmed #229; буквальный
+    повтор `kind`+`id`) — разные сущности одной суммы остаются
     раздельными (→ `ambiguous`). `allocationFactKey` — идемпотентный ключ факта «платёж→сущность».
     `ALLOCATION_TARGET_ROLE` (`Record<AllocationTargetKind,'amount'|'trigger'>`) — **единый
     компиляторно-проверяемый источник** разбиения целей: amount (инвойс/оплата — через `resolveAllocation`)
@@ -256,8 +257,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     её зовёт `crm-sync` (лог/счётчики) и переиспользует будущий слайс записи.
     `filterByAccountNumber(candidates, number)` — точный отбор кандидата по `accountNumber` (для распознанного
     `payment-number` в company-пуле оплат, собранном по компании, а не по номеру; пустой номер → `[]`, не сметает
-    пул). `order-number` так не матчится: `accountNumber` оплаты имеет форму `<заказ>/<seq>` — нужен связь-нюанс,
-    подтверждённый вживую (#172). Без I/O; проводка в `crm-sync` — следующий слайс.
+    пул). `filterByOrderNumber(candidates, orderNumber)` — отбор по **order-префиксу** `accountNumber` оплаты
+    (форма `<заказ>/<seq>`; для `order-number`, #172): матчит часть **до** первого `/` (подтверждено вживую —
+    order accountNumber «1» → оплата «1/1»; «10» ≠ «1»); пустой номер → `[]`. `order-id` так **не** матчится (это
+    номер заказа, не его id — id→заказ→оплата нужен `sale`-скоуп, отложен). Без I/O; проводка в `crm-sync` — следующий слайс.
   - `app/utils/purposeMatch.ts` — **чистое распознавание идентификатора из назначения платежа по МАТРИЦАМ**
     (#109, спека — `docs/PROCESSING.md` §4): `recognizeByMatrices(purpose, matrices, alphabet)` — матрица
     (`MatchMatrix { mask, kind }`) описывает формат номера маской (`d`=цифра, остальное — литерал: буквы/
@@ -270,7 +273,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     между распознаванием §4 и REST-lookup): исчерпывающая таблица `IDENTIFIER_ROUTES`
     (`Record<IdentifierKind, IdentifierRoute>` — новый вид не скомпилируется без маршрута) → `targetKind`
     (`AllocationTargetKind` или `null` для моста-документа) + `LookupStrategy` (`by-id`/`by-number`/
-    `by-account-number` (payment-number, #189)/`by-config-field`/`via-order`/`via-payment`/`via-document`) +
+    `by-account-number` (payment-number, #189)/`by-order-number` (order-number, #172)/`by-config-field`/
+    `via-order`/`via-payment`/`via-document`) +
     `needsConfiguredField` (поле из карты
     сопоставления — только `deal-field`/`smart-field`). Без I/O и без хардкода имён полей; сам REST-поиск
     и поле из настроек — REST-слайс. `AllocationTargetKind` расширен до `invoice|deal-payment|deal|smart-process`.
@@ -469,8 +473,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
       компании** (IDOR-скоуп), отбрасывает отрицательные стадии (предикат от вызывающего) → массив
-      `AllocationCandidate` (сумма=`opportunity`, валюта=`currencyId`). **Имена полей подтверждены на
-      живом портале**: `accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`.
+      `AllocationCandidate` (сумма=`opportunity`, валюта=`currencyId`, **`dealId`=`parentId2`** — связь
+      смарт-счёт→сделка, #229, для `collapseSameTarget`; чистый хелпер `parentDealId` нормализует к
+      положительному целому). **Имена полей подтверждены на живом портале**:
+      `accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`/`parentId2` (только у сделко-связанного счёта).
     - `server/utils/allocationFactStore.ts` — персистентный **стор факта разнесения** «платёж→сущность»
       над `QueryFn` (таблица `allocation_fact`, скоуп по `member_id`): `getAllocationFact`/`recordAllocation`
       (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
@@ -540,16 +546,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       капстоуна): по распознанному `RecognitionIntent` (§4) вызывает нужный резолвер сущности и отдаёт `IntentResolution`
       (`status: 'resolved'|'unsupported'`, `candidates`, `reason`). Резолверы **инъектируются** (чистый роутинг тестируется
       без сети). Диспатчатся подтверждённые вживую стратегии: `invoice-number`→`findInvoicesByNumber`, `invoice-id`/`deal-id`→
-      `findCandidateById` (фиксированный `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`
-      (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных стадий). Остальные — `unsupported` с `reason`
+      `findCandidateById` (фиксированный `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`,
+      **`order-number`→`findCompanyDealPayments`+`filterByOrderNumber`** (order-префикс `<заказ>/<seq>`, #172, live-confirmed —
+      делит тот же пул с `payment-number`, фетч один раз) (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных
+      стадий). Остальные — `unsupported` с `reason`
       (не роняем интент молча): `smart-id`/`deal-field`/`smart-field` (нужен `entityTypeId`/поле из «карты сопоставления»),
-      `order-id`/`order-number` (#172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
+      `order-id` (id→заказ→оплата нужен `sale`-скоуп, #172), `payment-id` (резолв по own-id не подтверждён), `document-number` (гейт live-verify).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
       (гоняет каждый `IdentifierKind` через диспетчер). **Батч-резолвер `resolveIntentsForOp(intents, ctx, call, deps)`**
       резолвит все интенты одной операции, **тянет пул оплат один раз** (`findCompanyDealPayments` company-scoped и не
-      зависит от значения → не сканируем компанию на каждый `payment-number`, #191); общий `resolvePaymentNumber`-хелпер
-      у одиночного и батч-путей (нет дрейфа). **Встроен в `crm-sync` (слайс 3):** `resolveIntents`-обёртка воркера зовёт
+      зависит от значения → не сканируем компанию на каждый `payment-number`/`order-number`, #191); общий
+      `resolveFromPool`-хелпер у одиночного и батч-путей (нет дрейфа). **Встроен в `crm-sync` (слайс 3):** `resolveIntents`-обёртка воркера зовёт
       `resolveIntentsForOp` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`; пока log/count без
       записи. **Отсев отрицательных стадий (`isNegativeStage`) — сделан** (`negativeStages.ts`, ниже): предикат
       грузится ленивым `loadNegativeStagePredicate` ровно один раз на джобу и прокидывается в `resolveIntentsForOp`.
@@ -584,7 +592,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
     списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
     `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
-    `docs/QUEUES.md` «REST-бюджет проводки платежей»); `order-number`-матчинг (связь заказ↔оплата по `<заказ>/<seq>`, live-verify — #172).
+    `docs/QUEUES.md` «REST-бюджет проводки платежей»). **`order-number`-матчинг — сделан** (по order-префиксу
+    `accountNumber` оплаты `<заказ>/<seq>`, `filterByOrderNumber`, live-confirmed #172); **invoice-кандидат несёт `dealId`**
+    (`parentId2`) → `collapseSameTarget` больше не даёт ложный `ambiguous` (#229). Осталось из #172: `order-id`/`payment-id`
+    (нужен `sale`-скоуп: id→заказ/оплата→сделка).
     **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184):** `recordAllocation` (write-once
     `allocation_fact`, счётчик `allocated`) при `allocate` + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
     удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/

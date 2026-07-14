@@ -6,6 +6,7 @@ import {
   collapseSameTarget,
   compareIds,
   filterByAccountNumber,
+  filterByOrderNumber,
   isAmountTarget,
   isEligible,
   isTriggerTarget,
@@ -178,6 +179,39 @@ describe('filterByAccountNumber', () => {
   })
   it('ignores candidates that carry no accountNumber', () => {
     expect(filterByAccountNumber([pay({ id: 'P3' })], 'x')).toEqual([])
+  })
+})
+
+describe('filterByOrderNumber (#172)', () => {
+  const pool = [
+    pay({ id: 'P1', accountNumber: '1/1' }),
+    pay({ id: 'P2', accountNumber: '1/2' }),
+    pay({ id: 'P3', accountNumber: '2/1' }),
+    pay({ id: 'P4' }) // no accountNumber
+  ]
+  it('matches every payment whose order PREFIX equals the order number', () => {
+    expect(filterByOrderNumber(pool, '1').map(c => c.id)).toEqual(['P1', 'P2'])
+    expect(filterByOrderNumber(pool, '2').map(c => c.id)).toEqual(['P3'])
+  })
+  it('does NOT match a longer order sharing the leading digits (10 ≠ 1)', () => {
+    expect(filterByOrderNumber([pay({ id: 'A', accountNumber: '10/1' })], '1')).toEqual([])
+  })
+  it('matches a COMPOSITE order number that itself contains «/» (mask like BOPC-ddd/dd)', () => {
+    // order accountNumber «123/45» → payment «123/45/1»; the whole number is the prefix.
+    const pool = [pay({ id: 'A', accountNumber: '123/45/1' }), pay({ id: 'B', accountNumber: '123/46/1' })]
+    expect(filterByOrderNumber(pool, '123/45').map(c => c.id)).toEqual(['A'])
+    // a partial prefix «123» must NOT match «123/45/1» (boundary is the trailing «/»)
+    expect(filterByOrderNumber(pool, '123')).toEqual([])
+  })
+  it('trims the requested number', () => {
+    expect(filterByOrderNumber(pool, '  1 ').map(c => c.id)).toEqual(['P1', 'P2'])
+  })
+  it('returns [] for a blank number (never sweeps the pool)', () => {
+    expect(filterByOrderNumber(pool, '')).toEqual([])
+    expect(filterByOrderNumber(pool, '   ')).toEqual([])
+  })
+  it('ignores a candidate with no «/» (not order-numbered) or no accountNumber', () => {
+    expect(filterByOrderNumber([pay({ id: 'A', accountNumber: '5' }), pay({ id: 'B' })], '5')).toEqual([])
   })
 })
 

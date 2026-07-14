@@ -148,9 +148,8 @@ export function collapseSameTarget(candidates: readonly AllocationCandidate[]): 
  * an empty recognized number must not sweep the whole pool.
  *
  * NB (`order-number`): a payment's `accountNumber` is order-prefixed («<order>/<seq>»,
- * e.g. «1/2»), so an `order-number` does NOT match a payment here exactly — that
- * needs the order↔payment relationship confirmed live before matching by prefix
- * (PROCESSING.md §4, #172). This helper is for exact numbers (`payment-number`).
+ * e.g. «1/2»), so an `order-number` matches the PREFIX, not the whole number — see
+ * `filterByOrderNumber` below. This helper is for exact numbers (`payment-number`).
  */
 export function filterByAccountNumber(
   candidates: readonly AllocationCandidate[],
@@ -159,6 +158,35 @@ export function filterByAccountNumber(
   const n = accountNumber.trim()
   if (!n) return []
   return candidates.filter(c => (c.accountNumber ?? '').trim() === n)
+}
+
+/**
+ * Narrow a company deal-payment pool to the payments of order `orderNumber`. A
+ * payment's `accountNumber` is «<orderNumber>/<seq>» (live-confirmed: order accountNumber
+ * «1» → payment «1/1»), where `<seq>` is the final «/»-delimited segment. So the order
+ * number is everything BEFORE the LAST «/» — matching on `lastIndexOf('/')` (not the first
+ * «/») is correct in BOTH directions:
+ *   - a COMPOSITE order number that itself contains «/» matches — a mask like `BOPC-ddd/dd`
+ *     (the recognizer supports «/» literals) yields «123/45», matching payment «123/45/1»;
+ *   - a SHORTER number does NOT falsely match — order «123» does not own «123/45/1»
+ *     (its order part is «123/45», not «123»), and «10» does not match «1/1».
+ * Blank number → `[]` (must not sweep the pool); a candidate with no «/» (or an empty order
+ * part «/1») is not order-numbered → no match.
+ *
+ * This matches the order's own NUMBER (accountNumber), NOT its record id — an `order-id`
+ * would need `sale.order.list` to map id→order→payment (scope `sale`, still deferred, #172).
+ */
+export function filterByOrderNumber(
+  candidates: readonly AllocationCandidate[],
+  orderNumber: string
+): AllocationCandidate[] {
+  const n = orderNumber.trim()
+  if (!n) return []
+  return candidates.filter((c) => {
+    const acc = (c.accountNumber ?? '').trim()
+    const cut = acc.lastIndexOf('/') // order = everything before the final «/<seq>»
+    return cut > 0 && acc.slice(0, cut) === n
+  })
 }
 
 /** Compare CRM ids numerically when both are numeric, else lexicographically —

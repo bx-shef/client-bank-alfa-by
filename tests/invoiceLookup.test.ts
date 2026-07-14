@@ -25,7 +25,7 @@ describe('invoiceListParams', () => {
   it('selects every field the mapping and the next slice depend on', () => {
     // Guards against silently dropping opportunity/currencyId/mycompanyId from select.
     expect(invoiceListParams('СЧ-2001', '5').select)
-      .toEqual(['id', 'accountNumber', 'companyId', 'mycompanyId', 'stageId', 'opportunity', 'currencyId'])
+      .toEqual(['id', 'accountNumber', 'companyId', 'mycompanyId', 'stageId', 'opportunity', 'currencyId', 'parentId2'])
   })
 })
 
@@ -45,6 +45,22 @@ describe('findInvoicesByNumber', () => {
       .toEqual([{ kind: 'invoice', id: '7', amount: 250, currency: 'BYN' }])
     expect(call.mock.calls[0]![0]).toBe('crm.item.list')
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { accountNumber: 'СЧ-2001', companyId: '5' } })
+  })
+
+  it('populates dealId from parentId2 (deal-linked invoice, #229)', async () => {
+    const call = vi.fn(async () => resp([inv({ id: 9, opportunity: 1200, currencyId: 'BYN', parentId2: 15 })]))
+    expect(await findInvoicesByNumber('СЧ-1200', { companyId: '7' }, call))
+      .toEqual([{ kind: 'invoice', id: '9', amount: 1200, currency: 'BYN', dealId: '15' }])
+  })
+
+  it('omits dealId for a standalone invoice (parentId2 null/absent/0)', async () => {
+    const call = vi.fn(async () => resp([
+      inv({ id: 1, opportunity: 100, currencyId: 'BYN', parentId2: null }),
+      inv({ id: 2, opportunity: 100, currencyId: 'BYN' }),
+      inv({ id: 3, opportunity: 100, currencyId: 'BYN', parentId2: 0 })
+    ]))
+    const res = await findInvoicesByNumber('СЧ-1', { companyId: '5' }, call)
+    expect(res.every(c => !('dealId' in c))).toBe(true)
   })
 
   it('parses a string opportunity (the real crm.item.list shape, e.g. "250.0000")', async () => {
