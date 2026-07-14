@@ -13,6 +13,15 @@ import type { AllocationCandidate } from '~/utils/allocation'
 // An unsupported target returns `null`, so the caller records the fact but performs
 // no portal write.
 
+/** entityTypeId of the smart-invoice (live-confirmed; same as `invoiceLookup`). */
+const INVOICE_ENTITY_TYPE_ID = 31
+
+/** Config that drives target-specific mutations (from portal settings `allocation`). */
+export interface AllocationMutationOpts {
+  /** Target stage id for an INVOICE target; empty/absent ⇒ no invoice mutation. */
+  invoicePaidStageId?: string
+}
+
 /** A described portal mutation request (method + params) for one allocate target. */
 export interface AllocationMutation {
   /** REST method to call (e.g. `crm.item.payment.pay`). */
@@ -31,7 +40,10 @@ export interface AllocationMutation {
  * payment id as a number (`sale_order_payment.id`); a non-numeric/blank id yields
  * `null` (never emit a malformed pay call).
  */
-export function buildAllocationMutation(target: Pick<AllocationCandidate, 'kind' | 'id'>): AllocationMutation | null {
+export function buildAllocationMutation(
+  target: Pick<AllocationCandidate, 'kind' | 'id'>,
+  opts: AllocationMutationOpts = {}
+): AllocationMutation | null {
   if (target.kind === 'deal-payment') {
     // Strict POSITIVE-INTEGER id. A payment id is always a positive CRM record id
     // (`String(sale_order_payment.id)`), so reject anything that isn't digits-only and
@@ -40,6 +52,20 @@ export function buildAllocationMutation(target: Pick<AllocationCandidate, 'kind'
     if (!/^\d+$/.test(target.id) || Number(target.id) <= 0) return null
     return { method: 'crm.item.payment.pay', params: { id: Number(target.id) }, kind: 'deal-payment', id: target.id }
   }
-  // invoice (needs configured stage) / deal / smart-process (trigger slice) — no v1 mutation.
+  if (target.kind === 'invoice') {
+    // Move the invoice to its configured "paid" stage (карта настроек, §2). No stage
+    // configured ⇒ do NOT touch the invoice («не указана → не трогаем»). Same strict
+    // positive-integer id guard — never emit a malformed update.
+    const stageId = (opts.invoicePaidStageId ?? '').trim()
+    if (!stageId) return null
+    if (!/^\d+$/.test(target.id) || Number(target.id) <= 0) return null
+    return {
+      method: 'crm.item.update',
+      params: { entityTypeId: INVOICE_ENTITY_TYPE_ID, id: Number(target.id), fields: { stageId } },
+      kind: 'invoice',
+      id: target.id
+    }
+  }
+  // deal / smart-process — unconditional TRIGGER targets (trigger slice), no v1 pay mutation.
   return null
 }

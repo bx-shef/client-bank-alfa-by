@@ -41,6 +41,8 @@ interface FakeOpts {
   recorded?: boolean
   /** autoDistribute gate (§2 mutation slice); default false (fact-only). */
   autoDistribute?: boolean
+  /** allocation-mutation config (§2), e.g. `{ invoicePaidStageId }`; default {}. */
+  allocation?: { invoicePaidStageId?: string }
   /** what hasAllocationFact returns (true = fact already exists → skip mutation); default false. */
   factExists?: boolean
   /** what applyAllocation returns (true = portal write applied); default true. */
@@ -64,7 +66,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
-  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, autoDistribute: o.autoDistribute ?? false }
+  const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
   const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
@@ -113,8 +115,10 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.allocHas.push([it.docId, target.kind, target.id, memberId])
       return o.factExists ?? false
     },
-    applyAllocation: async (it, target, memberId) => {
-      calls.allocApply.push([it.docId, target.kind, target.id, memberId])
+    applyAllocation: async (it, target, memberId, applyOpts) => {
+      // Capture the 4th `opts` arg too — the invoice-stage mutation is driven by
+      // `opts.invoicePaidStageId` reaching this dep from `settings.allocation`.
+      calls.allocApply.push([it.docId, target.kind, target.id, memberId, applyOpts?.invoicePaidStageId])
       return o.applied ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
@@ -718,7 +722,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(1)
     expect(calls.allocHas).toEqual([['d1', 'deal-payment', '42', 'M']]) // idempotency pre-check
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M']]) // portal mutation applied
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // portal mutation applied
     expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded AFTER
   })
 
@@ -739,7 +743,7 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(0)
-    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M']]) // attempted
+    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', undefined]]) // attempted
     expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // fact still recorded
   })
 
@@ -760,7 +764,7 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(0)
     expect(r.distributed).toBe(0)
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M']]) // mutation still attempted
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // mutation still attempted
     expect(calls.allocRec).toHaveLength(1) // record attempted, returned false
   })
 
@@ -770,16 +774,35 @@ describe('handleCrmSyncJob', () => {
       alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }, { mask: 'СЧ-dddd', kind: 'invoice-number' }]
     }
     const { deps, calls } = fakeDeps({ recognition: bothMatrices, autoDistribute: true })
-    // applyAllocation mirrors the real worker: only deal-payment is a supported mutation.
-    deps.applyAllocation = async (it, target, memberId) => {
-      calls.allocApply.push([it.docId, target.kind, target.id, memberId])
+    // applyAllocation mirrors the real worker: deal-payment pays; invoice w/o a configured
+    // stage is unsupported (opts.invoicePaidStageId is undefined here → no invoice mutation).
+    deps.applyAllocation = async (it, target, memberId, applyOpts) => {
+      calls.allocApply.push([it.docId, target.kind, target.id, memberId, applyOpts?.invoicePaidStageId])
       return target.kind === 'deal-payment'
     }
     deps.resolveIntents = async intents => (intents[0]?.kind === 'payment-number' ? [payAt('42')] : [invAt('7', 10)])
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001'), item('d2', 'credit', 'счет СЧ-0001')]), deps)
     expect(r.allocated).toBe(2) // both facts recorded
     expect(r.distributed).toBe(1) // only the deal-payment actually paid (subset of allocated)
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M'], ['d2', 'invoice', '7', 'M']])
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', undefined], ['d2', 'invoice', '7', 'M', undefined]])
+  })
+
+  it('autoDistribute ON + configured invoice stage: the stage reaches applyAllocation opts and the invoice is distributed', async () => {
+    // The invoice-stage mutation is armed by settings.allocation.invoicePaidStageId — assert it
+    // threads through to applyAllocation, and that a supported invoice write bumps `distributed`.
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true,
+      allocation: { invoicePaidStageId: 'DT31_11:P' }
+    })
+    // Mirror the real worker: with a configured stage, the invoice mutation IS applied.
+    deps.applyAllocation = async (it, target, memberId, applyOpts) => {
+      calls.allocApply.push([it.docId, target.kind, target.id, memberId, applyOpts?.invoicePaidStageId])
+      return target.kind === 'invoice' && !!applyOpts?.invoicePaidStageId
+    }
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.allocated).toBe(1)
+    expect(r.distributed).toBe(1) // configured stage → invoice write applied
+    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', 'DT31_11:P']]) // stage threaded through
   })
 
   it('autoDistribute ON + ambiguous deal-payment: pays the smallest-id target AND posts the heads-up', async () => {
@@ -790,7 +813,7 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: two, autoDistribute: true, errorChat: { dialogId: 'errchat' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r).toMatchObject({ ambiguous: 1, allocated: 1, distributed: 1 })
-    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M']]) // smallest id paid
+    expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M', undefined]]) // smallest id paid
     expect(calls.errChat).toEqual([['d1', 'allocate', 'errchat', 'M']]) // ambiguous still notifies
   })
 })

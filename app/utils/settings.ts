@@ -93,6 +93,15 @@ export interface RecognitionSettings {
   configFields: Record<string, string>
 }
 
+/** Allocation-mutation config (§2/§4). Fields are the "карта настроек" that drive the
+ *  portal write for a decided allocation — empty ⇒ that write is skipped (fail-safe). */
+export interface AllocationSettings {
+  /** Target stage id a matched INVOICE (smart-invoice) is moved to when marked paid
+   *  ("указана → перевести; не указана → не трогаем", PROCESSING.md §2). Empty/absent
+   *  ⇒ the invoice stage is NOT changed. */
+  invoicePaidStageId?: string
+}
+
 /** The full settings blob stored under one `app.option` key. */
 export interface PortalSettings {
   /** Notification chat (target + filter rules). */
@@ -102,10 +111,13 @@ export interface PortalSettings {
   errorChat: ChatTarget
   /** Payment-purpose recognition (matrices + alphabet + config-field map, §4). */
   recognition: RecognitionSettings
+  /** Allocation-mutation config (target stages/triggers, §2/§4). */
+  allocation: AllocationSettings
   /** Auto-distribution gate (§2 mutation slice, #109). When OFF (default) the app
    *  only RECORDS the allocation fact — it never mutates the portal. When the operator
    *  turns it ON, a decided `allocate` also marks the target paid
-   *  (`crm.item.payment.pay` for a deal payment). Opt-in, fail-safe default. */
+   *  (`crm.item.payment.pay` for a deal payment; `crm.item.update` to the configured
+   *  paid stage `allocation.invoicePaidStageId` for an invoice). Opt-in, fail-safe default. */
   autoDistribute: boolean
 }
 
@@ -121,7 +133,15 @@ export function defaultRecognitionSettings(): RecognitionSettings {
 }
 
 export function defaultPortalSettings(): PortalSettings {
-  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false }
+  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false }
+}
+
+/** Normalise the allocation-mutation config: keep only a non-blank, length-clamped
+ *  stage id (opaque portal code, e.g. `DT31_11:P`); anything else ⇒ omitted. */
+function cleanAllocation(v: unknown): AllocationSettings {
+  const o = (v ?? {}) as Record<string, unknown>
+  const stage = typeof o.invoicePaidStageId === 'string' ? o.invoicePaidStageId.trim().slice(0, 64) : ''
+  return stage ? { invoicePaidStageId: stage } : {}
 }
 
 /** Trim, drop blanks, dedupe, and clamp size — for the exclusion lists (unknown
@@ -230,6 +250,7 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
     }),
     errorChat: withTitle(errorRaw.title, { dialogId: cleanDialogId(errorRaw.dialogId) }),
     recognition: cleanRecognition(obj.recognition),
+    allocation: cleanAllocation(obj.allocation),
     // Only a literal `true` enables auto-distribution — any other value (missing,
     // string, 1, …) is coerced to OFF, so a corrupt/partial blob never silently
     // arms a portal mutation (fail-safe default).
