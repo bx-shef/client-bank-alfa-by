@@ -45,8 +45,10 @@ describe('IDENTIFIER_ROUTES', () => {
     expect(routeIdentifier('payment-number').strategy).not.toBe(routeIdentifier('payment-id').strategy)
   })
 
-  it('smart-process identifiers → smart-process target; custom field needs config', () => {
-    expect(routeIdentifier('smart-id')).toEqual({ targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: false })
+  it('smart-process identifiers → smart-process target; both need portal-specific config', () => {
+    // smart-id needs the portal-specific entityTypeId (custom SP) even for a by-id lookup,
+    // so it carries needsConfiguredField: true like smart-field (intentResolver → unsupported).
+    expect(routeIdentifier('smart-id')).toEqual({ targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: true })
     expect(routeIdentifier('smart-field')).toEqual({ targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true })
   })
 
@@ -54,9 +56,9 @@ describe('IDENTIFIER_ROUTES', () => {
     expect(routeIdentifier('document-number')).toEqual({ targetKind: null, strategy: 'via-document', needsConfiguredField: false })
   })
 
-  it('only the two custom-field kinds need a configured field', () => {
+  it('config-needing kinds are the deal/smart custom fields plus smart-id (portal-specific entityTypeId)', () => {
     const needConfig = ALL_KINDS.filter(k => IDENTIFIER_ROUTES[k].needsConfiguredField)
-    expect(needConfig.sort()).toEqual(['deal-field', 'smart-field'])
+    expect(needConfig.sort()).toEqual(['deal-field', 'smart-field', 'smart-id'])
   })
 
   it('every route uses a known strategy and a valid (or null) target', () => {

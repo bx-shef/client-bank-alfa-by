@@ -59,7 +59,10 @@ export const IDENTIFIER_ROUTES: Record<IdentifierKind, IdentifierRoute> = {
   // findCompanyDealPayments + filterByAccountNumber) — by-number semantics, NOT by own id
   // (that's `payment-id`/`by-payment-id`). Distinct label per #189.
   'payment-number': { targetKind: 'deal-payment', strategy: 'by-account-number', needsConfiguredField: false },
-  'smart-id': { targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: false },
+  // `needsConfiguredField: true` — a smart process's `entityTypeId` is portal-specific
+  // (custom SP), so even a by-id lookup needs that configured value before it can run.
+  // Until the config slice lands, `intentResolver` routes smart-id to `unsupported`.
+  'smart-id': { targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: true },
   'smart-field': { targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true },
   'document-number': { targetKind: null, strategy: 'via-document', needsConfiguredField: false }
 }

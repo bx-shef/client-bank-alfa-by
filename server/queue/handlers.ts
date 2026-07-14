@@ -191,6 +191,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  portal mutation this run (`crm.item.payment.pay`) — only when the `autoDistribute` gate
  *  is on (§2 mutation slice, #109); a subset of `allocated` (unsupported target kinds
  *  record the fact but apply nothing). Gate off ⇒ `distributed` stays 0 (fact-only).
+ *  `credits`/`debits` = приход/расход split of the processed ops (for the status summary).
  *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
@@ -298,10 +299,12 @@ export async function handleCrmSyncJob(
         deps.onAllocationDecision(item, summary.decision, summary.triggerTargets, job.memberId)
         // Write slice (#184): record the persistent fact for a decided `allocate` (the
         // smallest-id amount target), write-once so a redelivery/reimport can't double it
-        // (the `allocated` counter bumps only on a fresh insert). v1 writes ONLY the fact —
-        // no `payment.pay`/stage mutation yet (opt-in `autoDistribute` gate — follow-up).
-        // Trigger-only targets (deal/smart-process, `action !== 'allocate'`) record no fact
-        // here — they fire unconditionally and their write+idempotency is the mutation slice.
+        // (the `allocated` counter bumps only on a fresh insert). The portal MUTATION
+        // (`payment.pay` for deal-payment / `crm.item.update` stage for invoice) is applied
+        // BEFORE the fact when the opt-in `autoDistribute` gate is on (see below); with the
+        // gate off it stays fact-only. Trigger-only targets (deal/smart-process,
+        // `action !== 'allocate'`) record no fact here — they fire unconditionally and their
+        // write+idempotency is a follow-up.
         // Then, for an ambiguous (heads-up) or manual (no exact match) outcome, post a notice
         // to the error chat if configured. Both already gated behind the dedup-skip + matched
         // company (this block only runs then), so the scope is the payer (IDOR).

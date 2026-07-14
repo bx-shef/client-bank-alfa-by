@@ -29,6 +29,7 @@ import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
 import { payAllocationViaRest } from '../utils/allocationMutationWrite'
+import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { allocationFactKey } from '../../app/utils/allocation'
 import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
@@ -225,16 +226,28 @@ export function liveHandlerDeps(): HandlerDeps {
       return (await getAllocationFact(dbQuery, memberId, allocationFactKey(item, target))) !== null
     },
     // Portal MUTATION for a decided allocate target (#109 §2): mark it paid
-    // (`crm.item.payment.pay`). Demo accounts GATED (never real REST). A REST error
-    // PROPAGATES (runs before the fact write, so a retry is clean). Returns whether a portal
-    // write was actually applied. NB: `false` conflates two harmless-but-distinct cases —
-    // an unsupported target kind (payAllocationViaRest → skipped) and a vanished portal token
-    // (`!call`, e.g. mid-batch uninstall). In the token case the caller still records the
-    // fact (no pay made); `deletePortal` later purges those facts, so it self-heals.
+    // (`crm.item.payment.pay` / invoice `crm.item.update`). Demo accounts GATED (never real
+    // REST). A REST error PROPAGATES (runs before the fact write, so a retry is clean).
+    // Returns whether a portal write was actually applied.
+    //
+    // `!call` (no portal token) has TWO distinct causes we must NOT conflate (#77 review):
+    //   - the target has NO v1 mutation anyway (trigger kind, or invoice w/o configured
+    //     stage) — `buildAllocationMutation` is `null`, so there is nothing to write and
+    //     fact-only is correct → return false (no mutation, caller records the fact);
+    //   - the target IS mutatable but the portal token is transiently unavailable (refresh
+    //     failed / mid-batch uninstall) — recording a fact now would PERMANENTLY block the
+    //     pay (`hasAllocationFact` short-circuits every retry) for a payment we never paid.
+    //     A transient failure is NOT an uninstall, so `deletePortal` won't purge it — no
+    //     self-heal. THROW instead → the job retries cleanly, no fact until the pay lands.
     applyAllocation: async (item, target, memberId, opts) => {
       if (isDemoAccount(item.account)) return false
       const call = await makePortalRestCall(memberId, portalRestDeps)
-      if (!call) return false
+      if (!call) {
+        if (buildAllocationMutation(target, opts)) {
+          throw new Error(`applyAllocation: no portal token for ${memberId} — retry (mutation pending)`)
+        }
+        return false // unsupported target: nothing to write, fact-only is correct
+      }
       const res = await payAllocationViaRest(target, call, opts)
       return res.applied
     },
