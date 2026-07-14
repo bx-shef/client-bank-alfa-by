@@ -33,7 +33,7 @@ describe('payAllocationViaRest', () => {
     expect((await payAllocationViaRest(cand('deal-payment', '7'), async () => undefined)).applied).toBe(false)
   })
 
-  it('unsupported target kind → skipped, NO REST call made', async () => {
+  it('invoice WITHOUT a configured stage → skipped, NO REST call made', async () => {
     let called = false
     const call = async () => {
       called = true
@@ -42,6 +42,28 @@ describe('payAllocationViaRest', () => {
     const res = await payAllocationViaRest(cand('invoice', '1'), call)
     expect(res).toEqual({ applied: false, skipped: 'unsupported' })
     expect(called).toBe(false)
+  })
+
+  it('invoice WITH a configured stage → crm.item.update, applied read from {item}', async () => {
+    const seen: Array<[string, Record<string, unknown>]> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      seen.push([method, params])
+      // Live-confirmed envelope: crm.item.update → {result:{item:{…}}} (NOT top-level {item}).
+      return { result: { item: { id: 7, stageId: 'DT31_11:P' } } }
+    }
+    const res = await payAllocationViaRest(cand('invoice', '7'), call, { invoicePaidStageId: 'DT31_11:P' })
+    expect(res).toEqual({ applied: true, method: 'crm.item.update', kind: 'invoice', id: '7' })
+    expect(seen).toEqual([['crm.item.update', { entityTypeId: 31, id: 7, fields: { stageId: 'DT31_11:P' } }]])
+  })
+
+  it('invoice update with a result lacking `item` → applied false (pins the negative envelope branch)', async () => {
+    const opts = { invoicePaidStageId: 'DT31_11:P' }
+    // A REST call was made (method/kind/id set), but the envelope has no result.item → NOT applied.
+    expect(await payAllocationViaRest(cand('invoice', '7'), async () => ({ result: {} }), opts)).toEqual({
+      applied: false, method: 'crm.item.update', kind: 'invoice', id: '7'
+    })
+    expect((await payAllocationViaRest(cand('invoice', '7'), async () => ({ result: false }), opts)).applied).toBe(false)
+    expect((await payAllocationViaRest(cand('invoice', '7'), async () => ({}), opts)).applied).toBe(false)
   })
 
   it('REST error propagates (job must retry)', async () => {

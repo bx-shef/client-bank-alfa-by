@@ -5,7 +5,7 @@
 
 import type { RestCall } from './companyLookup'
 import type { AllocationCandidate } from '../../app/utils/allocation'
-import { buildAllocationMutation } from '../../app/utils/allocationMutation'
+import { buildAllocationMutation, type AllocationMutationOpts } from '../../app/utils/allocationMutation'
 
 /** Outcome of an allocation mutation attempt. `applied` is true only when the
  *  portal confirmed the write (`{result:true}`). `skipped` is set when the target
@@ -26,10 +26,18 @@ export interface AllocationMutationResult {
  */
 export async function payAllocationViaRest(
   target: Pick<AllocationCandidate, 'kind' | 'id'>,
-  call: RestCall
+  call: RestCall,
+  opts: AllocationMutationOpts = {}
 ): Promise<AllocationMutationResult> {
-  const mutation = buildAllocationMutation(target)
+  const mutation = buildAllocationMutation(target, opts)
   if (!mutation) return { applied: false, skipped: 'unsupported' }
-  const resp = await call(mutation.method, mutation.params)
-  return { applied: resp?.result === true, method: mutation.method, kind: mutation.kind, id: mutation.id }
+  const resp = await call(mutation.method, mutation.params) as { result?: unknown } | null
+  // `callRest` returns the FULL B24 envelope, and success shape differs per method:
+  //   `crm.item.payment.pay` → `{result: true}`
+  //   `crm.item.update`      → `{result: {item: {…}}}`   (live-confirmed on portal)
+  // Treat a `true` result OR a `result.item` object as an applied write.
+  const result = resp?.result
+  const applied = result === true
+    || (typeof result === 'object' && result !== null && 'item' in result)
+  return { applied, method: mutation.method, kind: mutation.kind, id: mutation.id }
 }

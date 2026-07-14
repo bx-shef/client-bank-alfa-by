@@ -22,7 +22,7 @@ describe('defaults', () => {
       dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
     })
     expect(defaultPortalSettings()).toEqual({
-      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), autoDistribute: false
+      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false
     })
   })
 
@@ -60,6 +60,7 @@ describe('parsePortalSettings — defensive', () => {
         matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' as const, note: 'счёт' }],
         configFields: { 'deal:1': 'UF_CRM_1' }
       },
+      allocation: { invoicePaidStageId: 'DT31_11:P' },
       autoDistribute: true
     }
     expect(parsePortalSettings(serializePortalSettings(s))).toEqual(s)
@@ -71,6 +72,7 @@ describe('parsePortalSettings — defensive', () => {
       chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } },
       errorChat: { dialogId: '' },
       recognition: defaultRecognitionSettings(),
+      allocation: {},
       autoDistribute: false
     })
   })
@@ -81,6 +83,18 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings('{"autoDistribute":"true"}').autoDistribute).toBe(false) // string, not bool
     expect(parsePortalSettings('{"autoDistribute":1}').autoDistribute).toBe(false)
     expect(parsePortalSettings('{}').autoDistribute).toBe(false) // missing → off
+  })
+
+  it('allocation.invoicePaidStageId: kept when non-blank, trimmed/clamped, else omitted', () => {
+    expect(parsePortalSettings('{"allocation":{"invoicePaidStageId":"DT31_11:P"}}').allocation).toEqual({ invoicePaidStageId: 'DT31_11:P' })
+    expect(parsePortalSettings('{"allocation":{"invoicePaidStageId":"  DT31_11:P "}}').allocation).toEqual({ invoicePaidStageId: 'DT31_11:P' })
+    expect(parsePortalSettings('{"allocation":{"invoicePaidStageId":""}}').allocation).toEqual({}) // blank → omitted
+    expect(parsePortalSettings('{"allocation":{"invoicePaidStageId":"   "}}').allocation).toEqual({}) // whitespace → omitted
+    expect(parsePortalSettings('{"allocation":{"invoicePaidStageId":42}}').allocation).toEqual({}) // non-string → omitted
+    expect(parsePortalSettings('{"allocation":"nope"}').allocation).toEqual({}) // non-object → {}
+    expect(parsePortalSettings('{}').allocation).toEqual({}) // missing → {}
+    // over-long id is clamped to 64 chars (defense-in-depth, admin-writable blob)
+    expect(parsePortalSettings(`{"allocation":{"invoicePaidStageId":"${'x'.repeat(80)}"}}`).allocation.invoicePaidStageId).toHaveLength(64)
   })
 
   it('errorChat: parsed defensively (trimmed; missing/non-string → empty)', () => {

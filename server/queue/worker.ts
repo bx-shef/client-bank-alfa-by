@@ -230,11 +230,11 @@ export function liveHandlerDeps(): HandlerDeps {
     // an unsupported target kind (payAllocationViaRest → skipped) and a vanished portal token
     // (`!call`, e.g. mid-batch uninstall). In the token case the caller still records the
     // fact (no pay made); `deletePortal` later purges those facts, so it self-heals.
-    applyAllocation: async (item, target, memberId) => {
+    applyAllocation: async (item, target, memberId, opts) => {
       if (isDemoAccount(item.account)) return false
       const call = await makePortalRestCall(memberId, portalRestDeps)
       if (!call) return false
-      const res = await payAllocationViaRest(target, call)
+      const res = await payAllocationViaRest(target, call, opts)
       return res.applied
     },
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
