@@ -14,6 +14,10 @@ import { liveHandlerDeps, startEventWorker, startThroughputWorkers } from '../qu
 import { enqueueFetch } from '../queue/producers'
 import { buildDemoFetchJobs, demoTickMs } from '../queue/cron'
 import { queueRuntimeConfig } from '../queue/runtime'
+import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
+import { ensureAccessToken } from '../utils/ensureAccessToken'
+import { getToken } from '../utils/tokenStore'
+import { dbQuery } from '../db/client'
 
 export default defineNitroPlugin((nitroApp) => {
   if (!queueEnabled()) return
@@ -33,6 +37,7 @@ export default defineNitroPlugin((nitroApp) => {
   }
 
   let timer: ReturnType<typeof setInterval> | undefined
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined
   // Cron runs on exactly ONE instance (QUEUE_CRON=1) — two schedulers would enqueue
   // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
   // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
@@ -61,12 +66,44 @@ export default defineNitroPlugin((nitroApp) => {
       timer = setInterval(tick, tickMs)
       void tick() // fire once at boot so the demo starts immediately
     }
+
+    // Proactive OAuth keep-alive (#175): refresh_token lives ~180d; an installed-but-idle
+    // portal makes no REST calls, so the lazy refresh never fires and its token silently
+    // dies. Once a day, refresh ONLY portals within ~3d of refresh-expiry. Needs the app
+    // creds (can't refresh without them) — without them, skip loudly (lazy path warns too).
+    const hasOAuthCreds = !!(process.env.B24_CLIENT_ID?.trim() && process.env.B24_CLIENT_SECRET?.trim())
+    if (hasOAuthCreds) {
+      const keepAliveDeps = {
+        now: Date.now,
+        selectNearExpiry: (nowMs: number) => selectTokensNearExpiry(dbQuery, nowMs),
+        getToken: (memberId: string) => getToken(dbQuery, memberId),
+        ensureAccessToken: (token: Parameters<typeof ensureAccessToken>[0]) => ensureAccessToken(token),
+        log: (m: string) => console.info(m),
+        warn: (m: string) => console.warn(m)
+      }
+      const keepAliveMs = keepAliveIntervalMs(Number(process.env.TOKEN_KEEPALIVE_HOURS || 24))
+      const runKeepAlive = async () => {
+        try {
+          await runTokenKeepAlive(keepAliveDeps)
+        } catch (err) {
+          // Only a failure of the initial SELECT reaches here (per-portal failures are
+          // isolated inside runTokenKeepAlive). Never let it crash the cron instance.
+          console.error('[queue] token keep-alive run failed:', (err as Error)?.message)
+        }
+      }
+      keepAliveTimer = setInterval(runKeepAlive, keepAliveMs)
+      void runKeepAlive() // once at boot (cheap: a range scan + refresh of only near-expiry portals)
+      console.info('[queue] token keep-alive scheduled (every %d h, #175)', keepAliveMs / 3_600_000)
+    } else {
+      console.warn('[queue] token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
+    }
   } else {
     console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
   }
 
   nitroApp.hooks.hook('close', async () => {
     if (timer) clearInterval(timer)
+    if (keepAliveTimer) clearInterval(keepAliveTimer)
     await Promise.all(workers.map(w => w.close()))
     await closeQueues()
   })
