@@ -20,6 +20,7 @@
 import { loadDotEnv } from './lib/env.mjs'
 import { C, head, ok, err, warn } from './lib/cli.mjs'
 import { makePortalSdkCall } from '../server/utils/b24Sdk.ts'
+import { decryptSecret } from '../server/utils/secretCrypto.ts'
 import type { PortalToken } from '../server/utils/tokenStore.ts'
 
 loadDotEnv(['.env.b24oauth', '.env.b24test'], { explicit: false })
@@ -41,8 +42,31 @@ const clientSecret = need('B24_CLIENT_SECRET')
 const domain = need('B24_OAUTH_DOMAIN')
 const memberId = need('B24_OAUTH_MEMBER_ID')
 const accessToken = need('B24_OAUTH_ACCESS_TOKEN')
-const refreshToken = need('B24_OAUTH_REFRESH_TOKEN')
-const expiresAt = Number(process.env.B24_OAUTH_EXPIRES ?? '0') * 1000 || Date.now() + 3600_000
+
+// refresh_token: either paste the plaintext (B24_OAUTH_REFRESH_TOKEN), OR paste the
+// ENCRYPTED blob straight from the DB (`portal_tokens.refresh_token_enc`, column value)
+// as B24_OAUTH_REFRESH_TOKEN_ENC together with B24_TOKEN_ENC_KEY — we decrypt it here
+// with the same `decryptSecret` the backend uses (no manual decryption needed).
+const refreshToken = (() => {
+  const plain = (process.env.B24_OAUTH_REFRESH_TOKEN ?? '').trim()
+  if (plain) return plain
+  const enc = (process.env.B24_OAUTH_REFRESH_TOKEN_ENC ?? '').trim()
+  if (enc) {
+    try {
+      return decryptSecret(enc) // reads B24_TOKEN_ENC_KEY from env
+    } catch (e) {
+      err(`не смог расшифровать B24_OAUTH_REFRESH_TOKEN_ENC — проверь B24_TOKEN_ENC_KEY: ${(e as { message?: string })?.message ?? e}`)
+      process.exit(1)
+    }
+  }
+  err('нет refresh-токена — задай B24_OAUTH_REFRESH_TOKEN (plaintext) ИЛИ B24_OAUTH_REFRESH_TOKEN_ENC + B24_TOKEN_ENC_KEY (из БД).')
+  process.exit(1)
+})()
+
+// expires_at: accept either unix SECONDS (as documented) or the DB's MILLISECONDS value
+// (portal_tokens.expires_at is ms) — detect by magnitude. Absent → now + 1h.
+const rawExp = Number(process.env.B24_OAUTH_EXPIRES ?? '0')
+const expiresAt = rawExp > 1e12 ? rawExp : rawExp > 0 ? rawExp * 1000 : Date.now() + 3600_000
 
 process.on('unhandledRejection', (e) => {
   err(`Прогон упал: ${(e as { message?: string })?.message ?? String(e)}`)
