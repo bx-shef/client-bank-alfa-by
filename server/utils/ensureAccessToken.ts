@@ -26,7 +26,7 @@ export interface RefreshDeps {
   /** Load the portal's freshest token (on the locked connection `q`). */
   loadToken: (q: QueryFn, memberId: string) => Promise<PortalToken | null>
   /** Persist the refreshed token (on the locked connection `q`). */
-  saveToken: (q: QueryFn, token: PortalToken) => Promise<void>
+  saveToken: (q: QueryFn, token: PortalToken, eventTs?: number) => Promise<boolean>
   /** POST the refresh body to B24 OAuth and return the raw JSON. */
   postRefresh: (body: string) => Promise<unknown>
 }

@@ -348,7 +348,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `unregister`); ничего не пишет. Роут кладёт `action` в очередь, консьюмер применяет. **Удаление
     приложения всегда стирает всё** для портала (флаг `CLEAN` не смотрим). Покрыт тестами.
   - `server/utils/tokenStore.ts` — хранилище токенов портала над инъектируемым `QueryFn`
-    (`save`/`get`/`getApplicationToken`/`delete`, write-once `application_token`). Тесты на fake-query.
+    (`save`/`get`/`getApplicationToken`/`delete`, write-once `application_token`). **Гард порядка событий
+    (#77):** `saveToken`/`deleteToken` берут `eventTs` (метка времени события B24, монотонна — install
+    раньше uninstall) и таблицу-тумбстоун `portal_tombstone`: `deleteToken` пишет тумбстоун `(member_id,
+    deleted_ts)`, а `saveToken` **отказывается** писать поверх равного-или-новее тумбстоуна (возвращает
+    `false`) — так «зависший» register (ретрай install после более свежего uninstall) не воскрешает портал
+    со старыми кредами; настоящий reinstall (ts новее) проходит и чистит устаревший тумбстоун. Тесты на fake-query.
   - `server/utils/activityDedupStore.ts` — персистентный стор дедупа дел `{dedupKey→activityId}`
     (issue #9, таблица `activity_dedup`, скоуп по `member_id`): `getActivityId`/`rememberActivity`
     (write-once, `ON CONFLICT DO NOTHING`)/`deleteDedupForPortal`. Над `QueryFn`, тесты на fake-query.
@@ -360,8 +365,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     задан; `B24_APPLICATION_TOKEN` не плейсхолдер (`CHANGE_ME` и т.п. → реальный токен не совпадёт → 403);
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
-  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `activity_dedup`,
-    `allocation_fact`, `import_result`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
+    `activity_dedup`, `allocation_fact`, `import_result`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/

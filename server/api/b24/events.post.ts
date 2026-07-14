@@ -24,12 +24,15 @@ export default defineEventHandler(async (event) => {
       envToken,
       loadStoredToken: memberId => getApplicationToken(dbQuery, memberId),
       enqueue: enqueueEvent,
-      saveCredentials: token => saveToken(dbQuery, token),
+      saveCredentials: async (token, eventTs) => {
+        await saveToken(dbQuery, token, eventTs)
+      },
       // Uninstall always erases EVERYTHING for the portal (token + dedup map). B24
       // does NOT resend online events, so this sync fallback is the only chance to
       // purge when Redis is down — it must match the worker's deletePortal exactly.
-      deletePortal: async (memberId) => {
-        await deleteToken(dbQuery, memberId)
+      // `eventTs` records the ordering tombstone (#77) so a stale register can't resurrect.
+      deletePortal: async (memberId, eventTs) => {
+        await deleteToken(dbQuery, memberId, eventTs)
         await deleteDedupForPortal(dbQuery, memberId)
       },
       encrypt: encryptSecret,

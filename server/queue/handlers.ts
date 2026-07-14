@@ -114,8 +114,10 @@ export interface HandlerDeps {
   rememberActivity: (memberId: string, dedupKey: string, activityId: string) => Promise<void>
   /** Register a portal on ONAPPINSTALL — decrypt the refresh blob, upsert the token row. */
   savePortal: (job: EventJob) => Promise<void>
-  /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges). */
-  deletePortal: (memberId: string) => Promise<void>
+  /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges).
+   *  `eventTs` (B24 event timestamp) records an ordering tombstone (#77) so a stale
+   *  register can't resurrect the portal after this uninstall. */
+  deletePortal: (memberId: string, eventTs: number) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
 }
@@ -125,7 +127,7 @@ export interface HandlerDeps {
  *  portal (always). Install registers it (persists credentials). */
 export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<{ kind: string, cleaned: boolean, registered: boolean }> {
   if (job.kind === 'ONAPPUNINSTALL') {
-    await deps.deletePortal(job.memberId)
+    await deps.deletePortal(job.memberId, Number(job.ts) || 0)
     return { kind: job.kind, cleaned: true, registered: false }
   }
   // ONAPPINSTALL: register the portal. `credentials` is always present for a

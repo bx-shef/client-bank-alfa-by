@@ -132,8 +132,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     savePortal: async (job) => {
       calls.save.push(job.memberId)
     },
-    deletePortal: async (m) => {
-      calls.del.push(m)
+    deletePortal: async (m, eventTs) => {
+      calls.del.push([m, eventTs])
     },
     enqueueCrmSync: async (job) => {
       calls.crm.push(job)
@@ -150,7 +150,8 @@ describe('handleEventJob', () => {
     const { deps, calls } = fakeDeps()
     const r = await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPUNINSTALL', ts: '1' }, deps)
     expect(r).toEqual({ kind: 'ONAPPUNINSTALL', cleaned: true, registered: false })
-    expect(calls.del).toEqual(['M'])
+    // deletePortal receives the parsed event ts (Number('1')||0 = 1) for the #77 tombstone.
+    expect(calls.del).toEqual([['M', 1]])
     expect(calls.save).toEqual([])
   })
   it('registers the portal on install (persists credentials)', async () => {

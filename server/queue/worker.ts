@@ -265,6 +265,8 @@ export function liveHandlerDeps(): HandlerDeps {
     savePortal: async (job) => {
       if (!job.credentials) return
       const c = job.credentials
+      // eventTs (#77): a stale register that retries after a newer uninstall is a no-op
+      // (saveToken refuses to write over a same-or-newer tombstone).
       await saveToken(dbQuery, {
         memberId: job.memberId,
         domain: job.domain,
@@ -272,12 +274,12 @@ export function liveHandlerDeps(): HandlerDeps {
         refreshToken: c.refreshTokenEnc ? decryptSecret(c.refreshTokenEnc) : '',
         expiresAt: c.expiresAt,
         applicationToken: c.applicationToken
-      })
+      }, Number(job.ts) || 0)
     },
     // Uninstall always erases EVERYTHING for the portal: token row + dedup map +
-    // import status + allocation facts (#184).
-    deletePortal: async (memberId) => {
-      await deleteToken(dbQuery, memberId)
+    // import status + allocation facts (#184). `eventTs` records the ordering tombstone (#77).
+    deletePortal: async (memberId, eventTs) => {
+      await deleteToken(dbQuery, memberId, eventTs)
       await deleteDedupForPortal(dbQuery, memberId)
       await deleteImportResultForPortal(dbQuery, memberId)
       await deleteFactsForPortal(dbQuery, memberId)
