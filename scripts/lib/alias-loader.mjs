@@ -27,7 +27,11 @@ registerHooks({
     }
     // Extensionless relative value import (../x, ./x) → append `.ts` and resolve against
     // the importing module's directory. Leaves anything with an extension untouched.
-    if ((specifier.startsWith('./') || specifier.startsWith('../')) && !hasExt(specifier)) {
+    // BUT only for OUR source: a dependency in `node_modules` (e.g. the b24jssdk CJS deps
+    // `require('./sign')`) also uses extensionless relative imports and must resolve with
+    // Node's own algorithm (`.js`/package exports), not get a spurious `.ts` appended.
+    if ((specifier.startsWith('./') || specifier.startsWith('../')) && !hasExt(specifier)
+      && !(context.parentURL ?? '').includes('/node_modules/')) {
       const base = context.parentURL ? dirname(fileURLToPath(context.parentURL)) : process.cwd()
       return nextResolve(pathToFileURL(resolvePath(base, specifier + '.ts')).href, context)
     }

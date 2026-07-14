@@ -432,7 +432,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **Scale-out сделан:** `docker-compose.prod.yml` разводит роли — `backend` (HTTP+крон) + сервис
       `worker` (обработка, `--scale worker=N`); все воркеры на одном Redis тянут из одной очереди (Redis
       отдаёт джоб ровно одному). Крон — ровно на одном инстансе; миграцию гоняет только backend
-      (`RUN_MIGRATION`). `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
+      (`RUN_MIGRATION`). На крон-инстансе также заводится **суточный keep-alive рефреш токенов** (`runTokenKeepAlive`,
+      #175, `TOKEN_KEEPALIVE_HOURS` дефолт 24; гейт на `B24_CLIENT_ID/SECRET`) — чтобы простаивающие порталы не
+      теряли авторизацию на 180-й день (см. `tokenKeepAlive.ts` выше). `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
       (события всегда 1). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
     - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
       DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
@@ -651,6 +653,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
     N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; DI + тесты),
+    `server/utils/tokenKeepAlive.ts` (**проактивный keep-alive рефреш, #175**: `refresh_token` живёт ~180 д,
+    установленный, но **простаивающий** портал не делает REST-вызовов → ленивый рефреш не срабатывает → токен
+    молча умирает на 180-й день. Раз в сутки крон `runTokenKeepAlive` рефрешит **только** порталы у истечения:
+    `selectTokensNearExpiry` (чистый селектор по `updated_at` — его штампует `saveToken` на install/refresh, это и
+    есть «когда получена последняя пара»; порог ~3 д, кап `MAX_KEEP_ALIVE_BATCH`) → на каждый `ensureAccessToken`
+    (у простаивавшего портала access давно истёк → рефреш всегда срабатывает, и заодно ленивый лок/идемпотентность).
+    Пер-портальные ошибки (dead grant/`PAYMENT_REQUIRED`/удалён) изолированы — логируются, крон не падает. Намеренно
+    консервативно (Б24 предупреждает про авто-блок при частом рефреше): раз в сутки, батч-кап, только near-expiry.
+    Гейт на `B24_CLIENT_ID/SECRET` (без них рефреш невозможен). DI, тесты `tests/tokenKeepAlive.test.ts`),
     `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
     с DI — изоляция по `memberId`, используется серверной проверкой), `server/utils/settingsHandler.ts`
     (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
