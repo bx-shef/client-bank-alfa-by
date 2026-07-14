@@ -7,6 +7,7 @@ import {
   compareIds,
   filterByAccountNumber,
   filterByOrderNumber,
+  filterByPaymentId,
   isAmountTarget,
   isEligible,
   isTriggerTarget,
@@ -212,6 +213,22 @@ describe('filterByOrderNumber (#172)', () => {
   })
   it('ignores a candidate with no «/» (not order-numbered) or no accountNumber', () => {
     expect(filterByOrderNumber([pay({ id: 'A', accountNumber: '5' }), pay({ id: 'B' })], '5')).toEqual([])
+  })
+})
+
+describe('filterByPaymentId (#172)', () => {
+  const pool = [pay({ id: '5', accountNumber: '1/1' }), pay({ id: '7', accountNumber: '2/1' })]
+  it('matches the payment by its OWN record id (not accountNumber)', () => {
+    expect(filterByPaymentId(pool, '5').map(c => c.id)).toEqual(['5'])
+    expect(filterByPaymentId(pool, '1/1')).toEqual([]) // that is an accountNumber, not a record id
+  })
+  it('trims the requested id', () => {
+    expect(filterByPaymentId(pool, '  7 ').map(c => c.id)).toEqual(['7'])
+  })
+  it('returns [] for a blank id and for an id absent from the (company-scoped) pool', () => {
+    expect(filterByPaymentId(pool, '')).toEqual([])
+    expect(filterByPaymentId(pool, '   ')).toEqual([])
+    expect(filterByPaymentId(pool, '999')).toEqual([]) // foreign payment simply isn't in the pool
   })
 })
 

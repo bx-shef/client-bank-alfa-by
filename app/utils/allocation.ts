@@ -189,6 +189,24 @@ export function filterByOrderNumber(
   })
 }
 
+/**
+ * Narrow a company deal-payment pool to the payment whose OWN record `id` equals
+ * `paymentId` (exact, trimmed). For resolving a recognized `payment-id` against the
+ * company deal-payment pool (`findCompanyDealPayments`) — since the pool is already
+ * company-scoped, matching the untrusted id inside it is IDOR-safe (a payment of
+ * another company is simply not in the pool), and needs no `sale` scope. A blank id
+ * matches nothing (`[]`). Distinct from `filterByAccountNumber` (matches the payment's
+ * human `accountNumber`, not its record id) and `filterByOrderNumber` (order prefix).
+ */
+export function filterByPaymentId(
+  candidates: readonly AllocationCandidate[],
+  paymentId: string
+): AllocationCandidate[] {
+  const n = paymentId.trim()
+  if (!n) return []
+  return candidates.filter(c => c.id.trim() === n)
+}
+
 /** Compare CRM ids numerically when both are numeric, else lexicographically —
  *  so `id 9` sorts before `id 10` (smallest-id pick must be numeric-aware). */
 export function compareIds(a: string, b: string): number {

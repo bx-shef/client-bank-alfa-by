@@ -294,7 +294,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   `SMART_INVOICE_STAGE_<cat>`, `DEAL_STAGE`/`DEAL_STAGE_<cat>`, `DYNAMIC_<etid>_STAGE_<cat>`) + **поиск моей компании** по нашему счёту `findMyCompanyByAccount` (счёт →
   компания с `isMyCompany='Y'`, §2 Этап C) + **резолвер цели по id** `itemByIdLookup.ts` (`findCandidateById` —
   `crm.item.list` фильтром id+компания = IDOR-скоуп, отсев отрицательной стадии; стратегия `by-id`:
-  invoice-id/deal-id/smart-id — не order-id/payment-id, те `via-order`/`via-payment`) + **резолвер оплаты сделки**
+  invoice-id/deal-id/smart-id — не order-id/payment-id: `payment-id` резолвится по company-пулу оплат
+  (`by-payment-id` + `filterByPaymentId`, #172), `order-id` — `via-order` (отложен, нужен `sale`-скоуп)) + **резолвер оплаты сделки**
   `paymentLookup.ts` (`findDealPayments` — `crm.item.payment.list` по **известной** сделке → кандидаты
   `deal-payment`; оплаченные не берём). **Имена полей и стадий подтверждены на живом портале**
   (`accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`; инвойс `DT31_11:D`, сделка
@@ -398,8 +399,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   не найдена» и самолечение структуры смарт-процесса (§5). Охват «сделано» под спеку — **пересмотреть**.
 - **Обработка платежей по спецификации** [`docs/PROCESSING.md`](PROCESSING.md) — **REST-слайс проводки**
   (чистые ядра #109 уже готовы, см. «Что сделано»): по `LookupStrategy` реальный поиск сущности
-  (`by-id`/`by-number`/`by-account-number` + **обязательная повторная проверка компании+стадии**,
-  `by-config-field` с валидацией имени поля, `via-order`/`via-payment`, мост `via-document` через
+  (`by-id`/`by-number`/`by-account-number`/`by-order-number`/`by-payment-id` + **обязательная повторная проверка компании+стадии**,
+  `by-config-field` с валидацией имени поля, `via-order` (отложен), мост `via-document` через
   `crm.documentgenerator.document.list`); проводка в `crm-sync`
   (инвойс/оплата → amount-ядро → `payment.pay`/триггер; сделка/смарт-процесс → безусловный триггер;
   `ambiguous`/«некуда разнести»/ошибки → чат); стор факта разнесения (`разнесён/откат`, `member_id`) —
