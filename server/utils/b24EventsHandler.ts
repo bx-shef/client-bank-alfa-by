@@ -113,10 +113,11 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
 export interface B24RequestDeps extends B24EventDeps {
   /** Enqueue the mutation (primary). Returns false when the queue is disabled (no Redis). */
   enqueue: (job: EventJob) => Promise<boolean>
-  /** Fallback: persist a portal synchronously (queue unavailable). saveToken encrypts refresh. */
-  saveCredentials: (token: PortalToken) => Promise<void>
-  /** Fallback: remove a portal synchronously (queue unavailable). */
-  deletePortal: (memberId: string) => Promise<void>
+  /** Fallback: persist a portal synchronously (queue unavailable). saveToken encrypts refresh.
+   *  `eventTs` (B24 event timestamp) drives the ordering guard (#77). */
+  saveCredentials: (token: PortalToken, eventTs: number) => Promise<void>
+  /** Fallback: remove a portal synchronously (queue unavailable). Records the ordering tombstone (#77). */
+  deletePortal: (memberId: string, eventTs: number) => Promise<void>
   /** AES-GCM encrypt for the refresh token carried in the queued job (never plain in Redis). */
   encrypt: (plain: string) => string
   /** Current epoch ms — injected so tests are deterministic. */
@@ -185,6 +186,7 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
   if (queued) return { ...result, outcome: 'queued' }
 
   // Fallback (queue unavailable): write synchronously so the non-resent event isn't lost.
+  const eventTs = Number(ts) || 0
   if (action.type === 'register') {
     await deps.saveCredentials({
       memberId: action.memberId,
@@ -193,9 +195,9 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
       refreshToken: action.credentials.refreshToken ?? '',
       expiresAt,
       applicationToken: action.credentials.applicationToken
-    })
+    }, eventTs)
   } else {
-    await deps.deletePortal(action.memberId)
+    await deps.deletePortal(action.memberId, eventTs)
   }
   return { ...result, outcome: 'sync-fallback' }
 }

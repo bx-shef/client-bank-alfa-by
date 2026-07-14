@@ -187,7 +187,7 @@ describe('handleEventRequest — synchronous fallback (queue unavailable)', () =
     // saveToken encrypts internally → pass RAW refresh here (not the enc blob).
     expect(deps.saveCredentials).toHaveBeenCalledWith(expect.objectContaining({
       memberId: 'm1', accessToken: 'A', refreshToken: 'R', applicationToken: APP_TOKEN, expiresAt: NOW + 3600 * 1000
-    }))
+    }), 0) // eventTs 0 (fixture carries no ts) — ordering guard (#77)
   })
 
   it('writes synchronously when enqueue THROWS (Redis down)', async () => {
@@ -202,7 +202,7 @@ describe('handleEventRequest — synchronous fallback (queue unavailable)', () =
     const deps = makeReqDeps({ enqueue: vi.fn(async () => false) })
     const res = await handleEventRequest(uninstall, deps)
     expect(res.outcome).toBe('sync-fallback')
-    expect(deps.deletePortal).toHaveBeenCalledWith('m1')
+    expect(deps.deletePortal).toHaveBeenCalledWith('m1', 0) // eventTs 0 (no ts) — ordering guard (#77)
   })
 })
 
