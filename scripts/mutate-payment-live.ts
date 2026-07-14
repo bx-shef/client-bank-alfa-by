@@ -7,6 +7,7 @@
 //   pnpm mutate:test            # dry-run: print the mutation for the seed deal-payment
 //   pnpm mutate:test --apply    # actually call crm.item.payment.pay, then confirm paid
 //   pnpm mutate:test --revert   # restore: sale.payment.update PAID=N (scope sale)
+//   pnpm mutate:test --invoice <id> --stage <stageId> [--apply]  # invoice → crm.item.update stageId
 // Optional: --deal <id> (default 15 — seed «Сделка Опт» with one unpaid payment).
 
 import { loadDotEnv } from './lib/env.mjs'
@@ -28,6 +29,12 @@ const APPLY = argv.includes('--apply')
 const REVERT = argv.includes('--revert')
 const dealArg = argv[argv.indexOf('--deal') + 1]
 const DEAL_ID = argv.includes('--deal') && dealArg ? Number(dealArg) : 15
+// Invoice-stage mode: `--invoice <id> --stage <stageId>` transitions a smart-invoice
+// via the SAME builder/transport crm-sync uses (dry-run by default; --apply writes).
+const invoiceArg = argv[argv.indexOf('--invoice') + 1]
+const INVOICE_ID = argv.includes('--invoice') && invoiceArg ? invoiceArg : ''
+const stageArg = argv[argv.indexOf('--stage') + 1]
+const STAGE_ID = argv.includes('--stage') && stageArg ? stageArg : ''
 
 const call = async (method: string, params: Record<string, unknown> = {}) => {
   const res = await httpRequest(WEBHOOK + method, {
@@ -46,7 +53,50 @@ process.on('unhandledRejection', (e) => {
   process.exit(1)
 })
 
-head(`#109 mutation slice · сделка ${DEAL_ID} · ${APPLY ? 'APPLY' : REVERT ? 'REVERT' : 'DRY-RUN'} · ` + WEBHOOK.replace(/\/rest\/\d+\/[^/]+/, '/rest/***/***'))
+const MODE = APPLY ? 'APPLY' : REVERT ? 'REVERT' : 'DRY-RUN'
+const maskedHook = WEBHOOK.replace(/\/rest\/\d+\/[^/]+/, '/rest/***/***')
+
+// ── Invoice-stage mode (§2 invoice slice) ──────────────────────────────────────
+if (INVOICE_ID) {
+  head(`#109 invoice-stage · счёт ${INVOICE_ID} → «${STAGE_ID}» · ${MODE} · ${maskedHook}`)
+  if (!STAGE_ID) {
+    err('Укажите целевую стадию: --stage <stageId> (напр. DT31_11:P).')
+    process.exit(1)
+  }
+  // Show the current stage (for context / manual revert).
+  const cur = await call('crm.item.list', { entityTypeId: 31, filter: { id: INVOICE_ID }, select: ['id', 'stageId', 'accountNumber'] })
+  const item0 = ((cur.result as { items?: Array<Record<string, unknown>> } | undefined)?.items ?? [])[0]
+  console.log(`${C.dim}Текущий счёт: ${JSON.stringify(item0 ?? null)}${C.reset}`)
+  const invTarget = { kind: 'invoice' as const, id: INVOICE_ID }
+  const mutation = buildAllocationMutation(invTarget, { invoicePaidStageId: STAGE_ID })
+  if (!mutation) {
+    err('Мутация не построена (проверьте id счёта и стадию).')
+    process.exit(1)
+  }
+  ok(`Построена мутация: ${C.reset}${mutation.method}(${JSON.stringify(mutation.params)})`)
+  if (!APPLY) {
+    head('DRY-RUN — ничего не записано. Повторите с --apply, чтобы перевести стадию.')
+    process.exit(0)
+  }
+  let res
+  try {
+    res = await payAllocationViaRest(invTarget, call, { invoicePaidStageId: STAGE_ID })
+  } catch (e) {
+    err(`Портал отклонил перевод стадии: ${(e as Error)?.message}`)
+    process.exit(1)
+  }
+  if (!res.applied) {
+    err(`Мутация не применилась: ${JSON.stringify(res)}`)
+    process.exit(1)
+  }
+  const after = await call('crm.item.list', { entityTypeId: 31, filter: { id: INVOICE_ID }, select: ['id', 'stageId'] })
+  const item1 = ((after.result as { items?: Array<Record<string, unknown>> } | undefined)?.items ?? [])[0]
+  ok(`Стадия счёта ${INVOICE_ID} теперь: ${JSON.stringify(item1 ?? null)}`)
+  head(`Готово. Вернуть прежнюю стадию: pnpm mutate:test --invoice ${INVOICE_ID} --stage <прежняя> --apply`)
+  process.exit(0)
+}
+
+head(`#109 mutation slice · сделка ${DEAL_ID} · ${MODE} · ` + maskedHook)
 
 // Read the deal's payments (include paid so we see the full picture).
 const payments = await findDealPayments(DEAL_ID, { includePaid: true }, call)

@@ -75,6 +75,18 @@ function directionModel(d: OperationDirection) {
 const notifyCredit = directionModel('credit')
 const notifyDebit = directionModel('debit')
 
+// Paid-invoice stage (§2): a plain string model over the optional nested field. get
+// returns '' when unset; set trims and clears the key on blank so the saved blob stays
+// minimal (matches `cleanAllocation` on the backend — blank ⇒ no stage change).
+const invoicePaidStageModel = computed<string>({
+  get: () => settings.allocation.invoicePaidStageId ?? '',
+  set: (v) => {
+    const s = v.trim()
+    if (s) settings.allocation.invoicePaidStageId = s
+    else delete settings.allocation.invoicePaidStageId
+  }
+})
+
 // Live preview: which mock operations would be announced to the notification chat.
 const preview = computed(() =>
   MOCK_STATEMENT.items.map(item => ({ item, notify: shouldNotifyChat(item, settings.chat.rules) }))
@@ -241,6 +253,18 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
             description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
             data-testid="auto-distribute-warning"
           />
+          <B24FormField
+            v-if="settings.autoDistribute"
+            label="Стадия оплаченного счёта"
+            description="Идентификатор стадии, в которую перевести смарт-счёт при оплате (напр. DT31_11:P). Оставьте пустым — стадию счёта менять не будем."
+          >
+            <B24Input
+              v-model="invoicePaidStageModel"
+              placeholder="DT31_11:P"
+              class="w-full font-mono text-xs"
+              data-testid="invoice-paid-stage"
+            />
+          </B24FormField>
         </div>
       </B24Card>
 
