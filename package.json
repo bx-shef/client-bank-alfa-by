@@ -33,6 +33,7 @@
     "verify:109": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/verify-109-live.ts",
     "mutate:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/mutate-payment-live.ts",
     "sdk:test": "node scripts/b24-sdk-test.mjs",
+    "sdk:oauth": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/sdk-oauth-test.ts",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
