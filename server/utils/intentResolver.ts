@@ -23,7 +23,7 @@
 import type { RecognitionIntent } from '../../app/utils/recognitionIntent'
 import type { IdentifierKind } from '../../app/utils/purposeMatch'
 import type { AllocationCandidate, AllocationTargetKind } from '../../app/utils/allocation'
-import { filterByAccountNumber } from '../../app/utils/allocation'
+import { filterByAccountNumber, filterByOrderNumber } from '../../app/utils/allocation'
 import type { RestCall } from './companyLookup'
 import { SMART_INVOICE_ENTITY_TYPE_ID, type InvoiceLookupOptions } from './invoiceLookup'
 import type { ItemByIdOptions } from './itemByIdLookup'
@@ -80,6 +80,26 @@ function resolvePaymentNumber(intent: RecognitionIntent, pool: AllocationCandida
   return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
 }
 
+/** Resolve an `order-number` intent against the same company deal-payment pool — a pure
+ *  PREFIX match (a payment's `accountNumber` is «<orderNumber>/<seq>», #172, live-confirmed).
+ *  Shares the pool with `payment-number` (fetched once per op — #191). `order-id` is NOT
+ *  routed here: the payment number carries the order's NUMBER, not its record id. */
+function resolveOrderNumber(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
+  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByOrderNumber(pool, intent.value) }
+}
+
+/** Kinds resolved by filtering the company deal-payment pool (value-independent fetch). */
+function usesDealPaymentPool(kind: IdentifierKind): boolean {
+  return kind === 'payment-number' || kind === 'order-number'
+}
+
+/** Resolve a pool-based intent (payment-number exact / order-number prefix). */
+function resolveFromPool(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
+  return intent.kind === 'order-number'
+    ? resolveOrderNumber(intent, pool)
+    : resolvePaymentNumber(intent, pool)
+}
+
 /**
  * Dispatch one recognized intent to its entity resolver and return the allocation
  * candidates it finds (scoped to `ctx.companyId`, negative stages excluded). A REST
@@ -110,10 +130,12 @@ export async function resolveIntentCandidates(
       const found = await deps.findCandidateById(targetKind, entityTypeId, intent.value, opts, call)
       return { ...base, status: 'resolved', candidates: found ? [found] : [] }
     }
-    case 'payment-number': {
-      // Company-scoped pool of deal payments, then the exact `accountNumber` match.
+    case 'payment-number':
+    case 'order-number': {
+      // Company-scoped pool of deal payments, then match: `payment-number` by exact
+      // `accountNumber`, `order-number` by the «<order>/<seq>» prefix (#172, live-confirmed).
       const pool = await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
-      return resolvePaymentNumber(intent, pool)
+      return resolveFromPool(intent, pool)
     }
     case 'smart-id':
     case 'deal-field':
@@ -121,9 +143,9 @@ export async function resolveIntentCandidates(
       // Need the entityTypeId / field name from the portal's «карта сопоставления».
       return unsupported(intent, `${intent.kind}: needs configured entityTypeId/field (deal-field/smart-field slice)`)
     case 'order-id':
-    case 'order-number':
-      // order↔payment link (`<order>/<seq>`) not live-verified yet (#172).
-      return unsupported(intent, `${intent.kind}: order↔payment link not live-verified (#172)`)
+      // Resolving an order by its own record id needs `sale.order.list` (scope `sale`) to
+      // map id→order→payment — the payment number carries the order NUMBER, not its id (#172).
+      return unsupported(intent, 'order-id: id→order→payment needs sale scope (#172)')
     case 'payment-id':
       // Resolve-payment-by-own-id path not live-verified yet.
       return unsupported(intent, 'payment-id: resolve-by-id path not live-verified yet')
@@ -147,16 +169,17 @@ export async function resolveIntentsForOp(
   call: RestCall,
   deps: IntentResolverDeps
 ): Promise<IntentResolution[]> {
-  // Fetch the deal-payment pool once, only if some intent actually needs it.
-  const needsPool = intents.some(i => i.kind === 'payment-number')
+  // Fetch the deal-payment pool once, only if some intent actually needs it
+  // (payment-number OR order-number — both filter the same value-independent pool).
+  const needsPool = intents.some(i => usesDealPaymentPool(i.kind))
   const pool = needsPool
     ? await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
     : []
   const out: IntentResolution[] = []
   for (const intent of intents) {
     out.push(
-      intent.kind === 'payment-number'
-        ? resolvePaymentNumber(intent, pool)
+      usesDealPaymentPool(intent.kind)
+        ? resolveFromPool(intent, pool)
         : await resolveIntentCandidates(intent, ctx, call, deps)
     )
   }

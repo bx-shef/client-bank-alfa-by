@@ -27,8 +27,18 @@ export function invoiceListParams(accountNumber: string, companyId: string): Rec
   return {
     entityTypeId: SMART_INVOICE_ENTITY_TYPE_ID,
     filter: { accountNumber, companyId },
-    select: ['id', 'accountNumber', 'companyId', 'mycompanyId', 'stageId', 'opportunity', 'currencyId']
+    // `parentId2` = the linked DEAL id (B24 `parentId<entityTypeId>` convention, 2 = deal;
+    // live-confirmed: only the deal-linked invoice carries it, standalone invoices → null).
+    // Lets `collapseSameTarget` merge an invoice with the same deal's payment (§2, #229).
+    select: ['id', 'accountNumber', 'companyId', 'mycompanyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
   }
+}
+
+/** Normalize a raw `parentId<n>` link value to a positive-integer id string, or
+ *  `undefined` when absent/null/0/non-numeric (no linked entity). */
+export function parentDealId(raw: unknown): string | undefined {
+  const n = Number(raw)
+  return Number.isInteger(n) && n > 0 ? String(n) : undefined
 }
 
 // Only the fields this slice reads are typed. `accountNumber`/`companyId`/
@@ -39,6 +49,8 @@ interface RawInvoice {
   stageId?: unknown
   opportunity?: unknown
   currencyId?: unknown
+  /** Linked deal id (`parentId2`) — the smart-invoice→deal relationship. */
+  parentId2?: unknown
 }
 
 /** Pull the `result.items` array out of a `crm.item.list` response (tolerant). */
@@ -77,17 +89,14 @@ export async function findInvoicesByNumber(
     if (!Number.isFinite(amount)) continue
     const id = row.id === undefined || row.id === null ? '' : String(row.id)
     if (!id) continue
-    // ⚠ WRITE-SLICE PRECONDITION (#184, follow-up): `dealId` is NOT set on the invoice
-    //   candidate (the smart-invoice→deal link field is not in `select` / not live-confirmed),
-    //   so `collapseSameTarget`'s "invoice over the same deal's payment" merge is INERT in the
-    //   live path — an invoice + a deal-payment of the same deal read as two targets (spurious
-    //   `ambiguous`, and the §2 invoice-preference is not honoured). Populate the deal link here
-    //   (live-verify the field) to close it — tracked separately, needs the field name confirmed.
-    // NB: the OTHER precondition (a PAID invoice re-matching a second same-amount payment) is now
-    //   CLOSED — `buildPortalNegativeStagePredicate` loads invoices with `includeSettled:true`, so
-    //   a settled `:P` (SEMANTICS='S') stage is in the exclusion set the caller passes as
-    //   `isNegativeStage` (drop at line 75). Mirrors paymentLookup's `paid:'Y'`. Live-verified.
-    out.push({ kind: 'invoice', id, amount, currency: String(row.currencyId ?? '') })
+    // Deal link (`parentId2`, live-confirmed, #229): lets `collapseSameTarget` merge this
+    // invoice with the SAME deal's payment (one target, invoice preferred per §2) instead of
+    // reading them as two → spurious `ambiguous`. Absent for a standalone invoice (→ undefined).
+    // NB: the PAID-invoice re-match precondition is separately CLOSED — `buildPortalNegativeStagePredicate`
+    //   loads invoices with `includeSettled:true`, so a settled `:P` (SEMANTICS='S') stage is in the
+    //   exclusion set passed as `isNegativeStage` (drop at line 75). Mirrors paymentLookup's `paid:'Y'`.
+    const dealId = parentDealId(row.parentId2)
+    out.push({ kind: 'invoice', id, amount, currency: String(row.currencyId ?? ''), ...(dealId ? { dealId } : {}) })
   }
   return out
 }

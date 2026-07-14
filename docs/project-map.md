@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-13
+> Last reviewed: 2026-07-14
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -104,8 +104,8 @@ dry-run/`--apply`/`--revert`). Тесты `allocationMutation`/`allocationMutati
 
 **После записи** остаются (по `PROCESSING.md`, отдельными слайсами): реальная мутация портала
 (`payment.pay` для инвойса/оплаты, стадия/триггер для сделки/смарт-процесса) + `autoDistribute`-гейт в
-настройках; свап транспорта `crm-sync` на SDK (#191, адаптер готов); `order-number`-матчинг (#172);
-live-verify моста-документа; чат-уведомления стадии 6 вживую.
+настройках; свап транспорта `crm-sync` на SDK (#191, адаптер готов); `order-id`/`payment-id` (нужен
+`sale`-скоуп, #172; `order-number` — **сделан**); live-verify моста-документа; чат-уведомления стадии 6 вживую.
 
 **Гейт #191 (транспорт SDK) — ✅ пройден вживую** на `b24-86sr2r`
 (`pnpm sdk:test --burst`: 60 вызовов/5.5с, 0 отказов, лимитер сам троттлит).
@@ -306,7 +306,9 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   `{entityTypeId, entityId}[]` + гард по `number`; вызывающий перебирает и рескоупит по компании; поля из офдоки,
   вживую не подтверждено — в seed 0 документов, live-verify — гейт wiring-PR) + **фильтр по номеру оплаты**
   `filterByAccountNumber` (`payment-number` → кандидат по `accountNumber` в company-пуле; оплата несёт свой
-  `accountNumber` `<заказ>/<seq>`) + **хранение матриц/карты в настройках** (`settings.ts` `RecognitionSettings`:
+  `accountNumber` `<заказ>/<seq>`) + **фильтр по номеру заказа** `filterByOrderNumber` (`order-number` → оплаты
+  по order-префиксу `accountNumber`, live-confirmed #172; делит пул с `payment-number`) + **`dealId` у invoice-кандидата**
+  (`parentId2` → `collapseSameTarget` не даёт ложный `ambiguous`, #229) + **хранение матриц/карты в настройках** (`settings.ts` `RecognitionSettings`:
   алфавит + матрицы + карта полей `deal-field`/`smart-field`, защитный коэрс, растёт без миграции ключа `app.option`) +
   **распознавание намерения в `crm-sync`** (слайс 1 капстоуна: `recognitionIntent.ts` composes `recognizeByMatrices`→
   `routeIdentifier`; `crm-sync` читает `PortalSettings` раз на джобу, на каждую операцию распознаёт по матрицам портала
@@ -327,7 +329,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   портальный rate-limit + bind-once + auto-refresh; адаптер `server/utils/b24Sdk.ts` готов и покрыт тестами, свап
   hot-path — после смоук-теста `pnpm sdk:test` на живом портале; пул-раз-на-op **и пагинация списка сделок** уже
   сделаны; дизайн — `docs/QUEUES.md`);
-  `order-number`-матчинг (связь заказ↔оплата, live-verify — #172); роутинг ref моста через `itemByIdLookup`
+  роутинг ref моста через `itemByIdLookup`
   (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
   log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +
   действие в портале (`payment.pay`/стадия) + оповещение в чат ошибок — **за live-verify** (пишет реальные деньги/

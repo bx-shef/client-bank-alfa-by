@@ -14,8 +14,9 @@ export type LookupStrategy
   = | 'by-id' // the value IS the entity's own CRM id
     | 'by-number' // search the entity by its human-facing number field
     | 'by-account-number' // search a payment by its `accountNumber` within the company's deal-payment pool (#189)
+    | 'by-order-number' // match a payment by the order PREFIX of its `accountNumber` («<order>/<seq>», #172)
     | 'by-config-field' // search by a portal-configured field (per direction / per process)
-    | 'via-order' // value identifies an order → resolve to its deal payment
+    | 'via-order' // value identifies an order by its OWN id → resolve to its deal payment (needs sale scope)
     | 'via-payment' // value identifies a payment record by its OWN id (payment-id)
     | 'via-document' // value is a generated-document number → bridge to its linked entity
 
@@ -46,7 +47,10 @@ export const IDENTIFIER_ROUTES: Record<IdentifierKind, IdentifierRoute> = {
   'deal-id': { targetKind: 'deal', strategy: 'by-id', needsConfiguredField: false },
   'deal-field': { targetKind: 'deal', strategy: 'by-config-field', needsConfiguredField: true },
   'order-id': { targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false },
-  'order-number': { targetKind: 'deal-payment', strategy: 'via-order', needsConfiguredField: false },
+  // Resolved by the order PREFIX of a payment's `accountNumber` («<order>/<seq>») within the
+  // company's deal-payment pool (intentResolver: findCompanyDealPayments + filterByOrderNumber,
+  // #172, live-confirmed) — the order's NUMBER, not its record id (that's `order-id`/`via-order`).
+  'order-number': { targetKind: 'deal-payment', strategy: 'by-order-number', needsConfiguredField: false },
   'payment-id': { targetKind: 'deal-payment', strategy: 'via-payment', needsConfiguredField: false },
   // Resolved by `accountNumber` within the company's deal-payment pool (intentResolver:
   // findCompanyDealPayments + filterByAccountNumber) — by-number semantics, NOT by own id

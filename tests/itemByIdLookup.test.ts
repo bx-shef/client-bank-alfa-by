@@ -14,7 +14,7 @@ describe('itemByIdParams', () => {
     expect(itemByIdParams(2, '33', '93')).toEqual({
       entityTypeId: 2,
       filter: { id: '33', companyId: '93' },
-      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId']
+      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
     })
   })
 })
@@ -35,6 +35,18 @@ describe('findCandidateById', () => {
       .toEqual({ kind: 'deal', id: '33', amount: 1200, currency: 'BYN' })
     expect(call.mock.calls[0]![0]).toBe('crm.item.list')
     expect(call.mock.calls[0]![1]).toMatchObject({ entityTypeId: 2, filter: { id: '33', companyId: '93' } })
+  })
+
+  it('populates dealId from parentId2 for an invoice-id target (#229)', async () => {
+    const call = vi.fn(async () => resp([item({ id: 9, opportunity: 1200, currencyId: 'BYN', parentId2: 15, stageId: 'DT31_11:N' })]))
+    expect(await findCandidateById('invoice', 31, '9', { companyId: '7' }, call))
+      .toEqual({ kind: 'invoice', id: '9', amount: 1200, currency: 'BYN', dealId: '15' })
+  })
+
+  it('does NOT set dealId for a non-invoice kind (a deal is not its own parent)', async () => {
+    const call = vi.fn(async () => resp([item({ id: 33, parentId2: 99 })]))
+    const c = await findCandidateById('deal', 2, '33', { companyId: '93' }, call)
+    expect(c && 'dealId' in c).toBe(false)
   })
 
   it('returns null when the id belongs to another company (empty items — IDOR)', async () => {
