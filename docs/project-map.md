@@ -54,17 +54,21 @@
 чистит факты (`deleteFactsForPortal`). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
 `queuePhase2`, вкл. write-once, ambiguous-both-paths, trigger-only gap), прогнано 5 проверяющими.
 
-**✅ Мутация портала для `deal-payment` — СДЕЛАНА.** За опт-ин гейтом **`autoDistribute`** (в настройках,
-default OFF) `crm-sync` при `allocate`-цели `deal-payment` помечает оплату оплаченной: чистый билдер
-`app/utils/allocationMutation.ts` → транспорт `server/utils/allocationMutationWrite.ts` → `crm.item.payment.pay`,
-счётчик `distributed`. **Порядок идемпотентный** (`hasAllocationFact` пре-чек → мутация → write-once факт: факт
-всегда означает успешную запись, REST-ошибка бросается ДО факта → чистый ретрай). Гейт OFF ⇒ прежнее поведение
+**✅ Мутация портала для `deal-payment` + инвойса — СДЕЛАНА.** За опт-ин гейтом **`autoDistribute`** (в
+настройках, default OFF) `crm-sync` при `allocate`-цели помечает её проведённой: чистый билдер
+`app/utils/allocationMutation.ts` → транспорт `server/utils/allocationMutationWrite.ts` → **`deal-payment`**
+`crm.item.payment.pay`; **`invoice`** `crm.item.update` на стадию `allocation.invoicePaidStageId` из настроек
+(стадия не указана ⇒ инвойс не трогаем), счётчик `distributed`. Applied-детект конверт-aware
+(`{result:true}` vs `{result:{item}}`). **Порядок идемпотентный** (`hasAllocationFact` пре-чек → мутация →
+write-once факт: факт всегда означает успешную запись, REST-ошибка бросается ДО факта → чистый ретрай; для
+поддержанной цели недоступный токен портала бросает — ретрай без записи факта). Гейт OFF ⇒ прежнее поведение
 (только факт). **Подтверждено вживую** на seed-портале (`pnpm verify:109` — 21 READ-проверка; `pnpm mutate:test`
-dry-run/`--apply`/`--revert`). Тесты `allocationMutation`/`allocationMutationWrite`/`queuePhase2` (гейт off/on,
-идемпотентность, unsupported-цель, проброс ошибки).
-**Осталось (мутационный слайс):** стадия инвойса (целевая стадия из карты настроек) + **триггеры**
-сделки/смарт-процесса и запись их факта + путь заказа `payment.add`. UI-переключатель `autoDistribute` в
-форме настроек — **сделан** (`SettingsForm.vue`: `B24Switch` + предупреждение о записи в CRM, default OFF).
+dry-run/`--apply`/`--revert` + apply/revert стадии инвойса). Тесты
+`allocationMutation`/`allocationMutationWrite`/`queuePhase2` (гейт off/on, идемпотентность, unsupported-цель,
+проброс ошибки, стадия инвойса).
+**Осталось (мутационный слайс):** **триггеры** сделки/смарт-процесса и запись их факта (блокер #79 — нужен
+контекст приложения) + путь заказа `payment.add`. UI-переключатель `autoDistribute` в форме настроек —
+**сделан** (`SettingsForm.vue`: `B24Switch` + предупреждение о записи в CRM + поле стадии инвойса, default OFF).
 
 > Блок ниже — **исторический план #184** (как размечалась запись до её реализации). Оставлен как
 > референс; сама запись уже в `main`. Актуальный остаток — «мутационный слайс» выше.
