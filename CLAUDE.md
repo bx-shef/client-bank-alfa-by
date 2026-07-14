@@ -884,6 +884,15 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 Канонический **срез состояния проекта** (цель/шаги/сделано/дальше/блокеры) — [`docs/project-map.md`](docs/project-map.md);
 на него опираются `/report-status` и `/report-questions`. Держим синхронно с `REFACTOR_PLAN.md`.
 
+## Маркетинг и продажи
+
+Документы привлечения клиентов (не часть SSG/кода, опора для лендинга и оффера):
+[`docs/POSITIONING.md`](docs/POSITIONING.md) — позиционирование, ICP, отстройка от
+конкурентов; [`docs/MARKETPLACE_LISTING.md`](docs/MARKETPLACE_LISTING.md) — текстовки
+карточки Маркета Bitrix24; [`docs/PARTNERS.md`](docs/PARTNERS.md) — данные для
+интеграторов (субподряд); [`docs/PRICING.md`](docs/PRICING.md) — калькулятор цены
+внедрения и сопровождения (ставки, фикс-пакеты, примеры). Бэклог — issue #222.
+
 ## Конвенции
 
 - Комментарии и JSDoc — на английском; пользовательский текст и README — на русском.
