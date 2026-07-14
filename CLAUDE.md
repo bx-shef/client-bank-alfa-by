@@ -691,6 +691,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     так возник баг auth Альфы #26). Node стрипает `.ts`-типы на лету (`--experimental-strip-types`
     в `oauth:test`/`prior:test`; ядра без импортов, лоадер не нужен). RS256-подпись и `node:crypto` —
     у Приора локально. Реальный путь скриптов теперь покрыт тестами ядер (`tests/{alfa,prior}Oauth.test.ts`).
+    **Проводку `cfg→ядро`** (глюкод скрипта, а не билдеры) стережёт `tests/reconScriptsSmoke.test.ts` (#103):
+    **спавнит** каждый скрипт офлайн (`--url-only`, сеть/секреты не нужны — Приору генерит одноразовый
+    RSA-ключ во временный файл) и проверяет `exit 0` + что каждое **закреплённое** cfg-значение доехало
+    куда надо: у Альфы — `client_id`/`scope`/`redirect_uri`/`state`/`base` в URL (и ни одного `undefined`),
+    у Приора — **декод payload подписанного `request`-JWT** (`client_id`/`redirect_uri`/`openbanking_intent_id`
+    из claims). Входы закреплены флагами/spawn-env (локальный `.env.*` не переопределяет уже заданное), так
+    что чек герметичен. Скрипты нельзя `import()` в процессе Vitest (top-level `die()`→`process.exit` убьёт
+    воркер), поэтому — субпроцесс; переименование экспорта ядра или сломанный `cfg.*`-байндинг роняют
+    CI-чек, который юнит-тесты билдеров пропустят.
   - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор ручной выписки через
     канонический диспетчер `manualImport.ts` (оба формата: client-bank `***** ^Type=` и
     `1CClientBankExchange`) → печатает единый `StatementItem[]` (+ секционный вид для текстового
