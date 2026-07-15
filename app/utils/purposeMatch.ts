@@ -56,8 +56,12 @@ function escapeRegExp(s: string): string {
 // are typed in either alphabet — "ВОРС" (Cyr) and "BOPC" (Lat) look the same. Case
 // is handled programmatically in `foldHomoglyphs`, so only uppercase pairs live
 // here (a lowercase-only table would silently miss "ворс" — #152 review).
+// `І` (Belarusian, U+0406) ↔ Latin `I` is a genuine homoglyph within ALNUM and must
+// fold too (#242) — otherwise a code typed with one is not matched against the other.
+// Other Belarusian extras in ALNUM (`Ў`/`ў`, `Ё`/`ё`) have no Latin lookalike, so they
+// are intentionally absent (see tests/purposeMatch.test.ts homoglyph-coverage check).
 const CYR_LAT: ReadonlyArray<readonly [string, string]> = [
-  ['А', 'A'], ['В', 'B'], ['Е', 'E'], ['К', 'K'], ['М', 'M'], ['Н', 'H'],
+  ['А', 'A'], ['В', 'B'], ['Е', 'E'], ['І', 'I'], ['К', 'K'], ['М', 'M'], ['Н', 'H'],
   ['О', 'O'], ['Р', 'P'], ['С', 'C'], ['Т', 'T'], ['У', 'Y'], ['Х', 'X']
 ]
 const TO_LATIN = new Map(CYR_LAT.map(([c, l]) => [c, l]))

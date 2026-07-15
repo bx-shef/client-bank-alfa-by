@@ -13,7 +13,8 @@ export interface AuthConfig {
   user: string
   /** Shared operator password; empty means auth is disabled (endpoint → 503). */
   pass: string
-  /** HMAC signing secret; derived from the password when SESSION_SECRET is unset. */
+  /** HMAC signing secret. Explicit SESSION_SECRET wins; else in dev/test it is derived
+   *  from the password, and in production it is '' (fail-closed — see resolveAuthConfig). */
   secret: string
   /** Session lifetime in ms. */
   ttlMs: number
@@ -28,9 +29,15 @@ export function resolveAuthConfig(env: Record<string, string | undefined>): Auth
   const pass = (env.PUBLIC_PAGE_BASIC_AUTH_PASS || '').trim()
   const hours = Number(env.SESSION_TTL_HOURS)
   const ttlMs = (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_TTL_HOURS) * 3_600_000
-  // Derive a signing secret from the password when none is given — so a configured
-  // password alone yields a stable, non-empty secret (never sign with '').
-  const secret = (env.SESSION_SECRET || '').trim() || (pass ? `derived:${pass}` : '')
+  const explicitSecret = (env.SESSION_SECRET || '').trim()
+  // Signing key resolution (#242 P1). An explicit SESSION_SECRET always wins. Otherwise:
+  //  - in production we NEVER derive the key from the password — a leaked cookie would let
+  //    an attacker brute-force the operator password offline. No SESSION_SECRET in prod ⇒
+  //    empty secret ⇒ sessions can't be minted/verified (fail-CLOSED: the operator zone
+  //    stays locked until SESSION_SECRET is configured, never silently open);
+  //  - in dev/test we still derive from the password for convenience (stable non-empty key).
+  const isProd = env.NODE_ENV === 'production'
+  const secret = explicitSecret || (isProd ? '' : (pass ? `derived:${pass}` : ''))
   return { user, pass, secret, ttlMs }
 }
 
@@ -100,9 +107,9 @@ export function verifySession(value: string | undefined, secret: string, nowMs: 
  * Non-secret startup diagnostic for the operator gate. Returns a warning string
  * when the current env is risky, or `null` when fine. Pure (takes an env bag):
  *  - production with no password ⇒ the whole operator zone is silently open;
- *  - a configured password but no explicit SESSION_SECRET ⇒ the HMAC key is
- *    derived from the password, so a leaked cookie enables an offline attack on
- *    the actual password. Callers log the result; secrets are never included.
+ *  - a configured password but no explicit SESSION_SECRET ⇒ in production the key is
+ *    NOT derived from the password (fail-closed, #242 P1), so the operator zone is
+ *    LOCKED until SESSION_SECRET is set. Callers log the result; secrets are never included.
  */
 export function authStartupWarning(env: Record<string, string | undefined>): string | null {
   const isProd = env.NODE_ENV === 'production'
@@ -111,7 +118,7 @@ export function authStartupWarning(env: Record<string, string | undefined>): str
     return 'operator zone is OPEN — PUBLIC_PAGE_BASIC_AUTH_PASS is not set in production'
   }
   if (isProd && isAuthConfigured(cfg) && !(env.SESSION_SECRET || '').trim()) {
-    return 'SESSION_SECRET is not set — signing key is derived from the password; set an independent SESSION_SECRET in production'
+    return 'SESSION_SECRET is not set — the operator zone is LOCKED (fail-closed): the signing key is no longer derived from the password. Set an independent SESSION_SECRET in production'
   }
   return null
 }
