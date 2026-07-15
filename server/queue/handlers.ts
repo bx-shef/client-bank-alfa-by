@@ -23,7 +23,7 @@ import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
  *  `payment-number` even triggers a company-wide scan). A legit purpose references a
  *  handful of ids at most, so 10 is generous; excess is dropped from resolution (the
  *  `recognized` metric still counts the op). Deeper rate-limiting is tracked in #191. */
-const MAX_RESOLVED_INTENTS_PER_OP = 10
+export const MAX_RESOLVED_INTENTS_PER_OP = 10
 
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
  *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's

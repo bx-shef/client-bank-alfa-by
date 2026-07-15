@@ -12,7 +12,8 @@ import { Q_CRM, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 import { demoDelayMs, demoItems, isDemoAccount } from './cron'
 import {
-  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
+  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob,
+  MAX_RESOLVED_INTENTS_PER_OP, type HandlerDeps
 } from './handlers'
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
@@ -23,6 +24,7 @@ import { decryptSecret } from '../utils/secretCrypto'
 import { callRest } from '../utils/b24Rest'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { makePortalRestCall, type PortalRestDeps } from '../utils/portalRest'
+import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
@@ -52,10 +54,6 @@ const portalRestDeps: PortalRestDeps = {
 }
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
-
-/** Strip control chars (incl. CR/LF) before interpolating an untrusted field into a
- *  log line — blocks log-injection / forged log lines. Length-clamped as a DoS guard. */
-const logSafe = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 128)
 
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
@@ -144,6 +142,12 @@ export function liveHandlerDeps(): HandlerDeps {
     onRecognized: (item, intents, memberId) => {
       const summary = intents.map(i => `${i.kind}=${logSafe(i.value)}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
       console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
+      // Observability (#242): the resolver caps REST lookups at MAX_RESOLVED_INTENTS_PER_OP,
+      // so any intents beyond that are silently dropped (a payer with a purpose stuffed full
+      // of ids can't otherwise be seen). Surface the truncation so it's visible in logs.
+      if (intents.length > MAX_RESOLVED_INTENTS_PER_OP) {
+        console.warn(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${intents.length} intents, capped to ${MAX_RESOLVED_INTENTS_PER_OP} for REST lookup (${intents.length - MAX_RESOLVED_INTENTS_PER_OP} dropped)`)
+      }
     },
     // Resolve recognized intents to allocation candidates via the entity lookups (#109
     // slice 3 — wiring the slice-2 dispatcher), scoped to the matched company and dropping

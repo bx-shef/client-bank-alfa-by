@@ -61,6 +61,16 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     errors.push('DATABASE_URL не задан — хранилище токенов портала недоступно.')
   }
 
+  // --- Operator session signing key (#242 P1): in production a set operator password
+  //     with no SESSION_SECRET means the session zone is fail-closed (session.ts no
+  //     longer derives the key from the password), so operators can't sign in. Error. ---
+  const isProd = (env.NODE_ENV ?? '') === 'production'
+  const hasOpPass = !!(env.PUBLIC_PAGE_BASIC_AUTH_PASS ?? '').trim()
+  const hasSessionSecret = !!(env.SESSION_SECRET ?? '').trim()
+  if (isProd && hasOpPass && !hasSessionSecret) {
+    errors.push('SESSION_SECRET не задан в проде при заданном пароле оператора — ключ подписи cookie больше НЕ выводится из пароля (защита от офлайн-брутфорса), поэтому вход в служебную зону не работает (fail-closed). Задайте независимый ключ: openssl rand -hex 32')
+  }
+
   // --- OAuth app creds: needed for access-token refresh and app.option, but NOT
   //     for receiving events / storing the initial token. So: warning, not error. ---
   const hasClientId = !!(env.B24_CLIENT_ID ?? '').trim()

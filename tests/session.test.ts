@@ -25,11 +25,19 @@ describe('resolveAuthConfig', () => {
     expect(cfg.secret).toBe('') // no pass ⇒ no derived secret (never sign with '')
   })
 
-  it('reads user/pass, derives secret from pass when SESSION_SECRET unset', () => {
+  it('reads user/pass, derives secret from pass when SESSION_SECRET unset (dev)', () => {
     const cfg = resolveAuthConfig({ PUBLIC_PAGE_BASIC_AUTH_USER: 'admin', PUBLIC_PAGE_BASIC_AUTH_PASS: 's3cret' })
     expect(cfg.user).toBe('admin')
     expect(isAuthConfigured(cfg)).toBe(true)
     expect(cfg.secret).toBe('derived:s3cret')
+  })
+
+  it('#242 P1: in production the key is NOT derived from the password (fail-closed → empty secret)', () => {
+    const cfg = resolveAuthConfig({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 's3cret' })
+    expect(isAuthConfigured(cfg)).toBe(true) // password IS set…
+    expect(cfg.secret).toBe('') // …but no derived key: sessions can't be signed/verified
+    // explicit SESSION_SECRET still works in production
+    expect(resolveAuthConfig({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'p', SESSION_SECRET: 'K' }).secret).toBe('K')
   })
 
   it('explicit SESSION_SECRET wins; SESSION_TTL_HOURS override; invalid ttl → default', () => {
@@ -106,7 +114,7 @@ describe('authStartupWarning', () => {
     expect(w).toMatch(/PUBLIC_PAGE_BASIC_AUTH_PASS/)
   })
 
-  it('warns in production when the signing secret is derived from the password', () => {
+  it('warns in production when a password is set but SESSION_SECRET is missing (fail-closed lockout)', () => {
     const w = authStartupWarning({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'p' })
     expect(w).toMatch(/SESSION_SECRET/)
   })
@@ -204,5 +212,14 @@ describe('operatorAllowed (server gate for /api/ops/*)', () => {
     // signed with a different secret → signature mismatch
     const wrong = signSession({ sub: 'operator', exp: now + 10_000 }, 'OTHER')
     expect(operatorAllowed(configured, wrong, now)).toBe(false)
+  })
+
+  it('#242 P1: prod with a password but no SESSION_SECRET is fail-CLOSED (empty key denies all)', () => {
+    const prodNoSecret = resolveAuthConfig({ NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })
+    // even a cookie minted with the (empty) config secret is rejected — the zone is locked,
+    // never silently open, until an explicit SESSION_SECRET is provided.
+    const cookie = signSession({ sub: 'operator', exp: now + 10_000 }, prodNoSecret.secret)
+    expect(operatorAllowed(prodNoSecret, cookie, now)).toBe(false)
+    expect(operatorAllowed(prodNoSecret, undefined, now)).toBe(false)
   })
 })

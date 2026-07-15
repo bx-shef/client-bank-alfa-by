@@ -18,6 +18,18 @@ describe('foldHomoglyphs', () => {
     expect(foldHomoglyphs('Ч-1234', 'latin')).toBe('Ч-1234') // Ч has no Latin twin
     expect(foldHomoglyphs('123/45', 'cyrillic')).toBe('123/45')
   })
+  // #242: the fold table must cover every Belarusian letter in ALNUM that HAS a Latin
+  // homoglyph. `І`↔`I` was missing; `Ў`/`Ё` genuinely have no Latin twin (must stay put).
+  it('folds Belarusian І↔I (both cases), and leaves twin-less Ў/Ё alone', () => {
+    expect(foldHomoglyphs('І', 'latin')).toBe('I')
+    expect(foldHomoglyphs('і', 'latin')).toBe('i')
+    expect(foldHomoglyphs('I', 'cyrillic')).toBe('І')
+    expect(foldHomoglyphs('BOPC-І23', 'latin')).toBe('BOPC-I23')
+    // no Latin look-alike → pass through unchanged in both directions
+    for (const ch of ['Ў', 'ў', 'Ё', 'ё']) {
+      expect(foldHomoglyphs(ch, 'latin')).toBe(ch)
+    }
+  })
 })
 
 describe('recognizeByMatrices', () => {

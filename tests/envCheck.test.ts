@@ -63,4 +63,18 @@ describe('checkBackendEnv', () => {
     expect(r.errors).toEqual([])
     expect(r.warnings.some(w => w.includes('REDIS_URL'))).toBe(true)
   })
+
+  it('#242 P1: errors when prod has an operator password but no SESSION_SECRET (fail-closed lockout)', () => {
+    const r = checkBackendEnv({ ...GOOD, NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })
+    expect(r.errors.some(e => e.includes('SESSION_SECRET'))).toBe(true)
+  })
+
+  it('#242 P1: no SESSION_SECRET error when the key is set, or outside production, or no operator password', () => {
+    expect(checkBackendEnv({ ...GOOD, NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw', SESSION_SECRET: 'K' })
+      .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
+    expect(checkBackendEnv({ ...GOOD, NODE_ENV: 'development', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })
+      .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
+    expect(checkBackendEnv({ ...GOOD, NODE_ENV: 'production' })
+      .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
+  })
 })
