@@ -24,7 +24,11 @@ import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../uti
 import { decryptSecret } from '../utils/secretCrypto'
 import { callRest } from '../utils/b24Rest'
 import type { PortalRestDeps } from '../utils/portalRest'
-import { createPortalRestResolver, makeEnsureFresh } from '../utils/portalRestResolver'
+import { createPortalRestResolver, makeEnsureFresh, type PortalRestResolver } from '../utils/portalRestResolver'
+import { createPortalSdkResolver } from '../utils/portalSdkResolver'
+import { sdkPortalDeps } from '../utils/b24Sdk'
+import { queueRuntimeConfig, pickPortalResolver } from './runtime'
+import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
@@ -57,9 +61,28 @@ const portalRestDeps: PortalRestDeps = {
   callRest
 }
 
-// Bind-once per-portal RestCall (#191, lever-2): one token load/refresh per portal per
-// token-lifetime, shared across every per-op CRM call, instead of re-loading per op.
-const resolvePortalCall = createPortalRestResolver(portalRestDeps)
+// Per-portal RestCall resolver for every crm-sync REST op (#191). Two transports, picked by
+// `QUEUE_SDK_TRANSPORT` (default OFF — opt-in until the SDK path is live-gated):
+//   - callRest (DEFAULT): bind-once (#191 lever-2) + advisory-locked force-refresh + reactive
+//     expired_token retry. Refresh serialised by our lock (#35). No rate-limiter yet.
+//   - SDK (@bitrix24/b24jssdk, QUEUE_SDK_TRANSPORT=1): its per-instance RestrictionManager IS
+//     the rate-limiter (leaky-bucket + backoff on QUERY_LIMIT_EXCEEDED). Fresh client per
+//     resolution (reads the current token; reactive refresh persisted UPDATE-only via
+//     tombstone-guarded saveToken). Refresh runs OUTSIDE our advisory lock — a lost rotation
+//     race is a transient retry, not corruption (see portalSdkResolver.ts). Opt-in until
+//     validated on a live portal (`pnpm sdk:test`), then default-ON is a follow-up.
+// Both satisfy `PortalRestResolver`, so nothing downstream changes with the flag.
+const resolvePortalCall: PortalRestResolver = pickPortalResolver(
+  queueRuntimeConfig().sdkTransport,
+  () => createPortalSdkResolver(sdkPortalDeps({
+    query: dbQuery,
+    clientId: process.env.B24_CLIENT_ID ?? '',
+    clientSecret: process.env.B24_CLIENT_SECRET ?? '',
+    now: Date.now,
+    scope: B24_REQUIRED_SCOPES.join(',')
+  })),
+  () => createPortalRestResolver(portalRestDeps)
+)
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
