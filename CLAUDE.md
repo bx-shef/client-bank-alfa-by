@@ -920,10 +920,12 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   отзыва **не** переносятся в (потенциально публичный) репо задач — только ссылка.
 
 Скрипты — `scripts/feedback-triage.sh` (REST-fallback, требует `GH_WRITE_TOKEN`; токен не
-уходит в argv curl — заголовок через `-H @file`) и офлайн-валидатор `scripts/validate-docs.sh` /
-`.ps1` (9 шагов: синтаксис/shellcheck/dry-run/privacy-guard/паритет `.sh`↔`.ps1`/консистентность
-плейсхолдера/битые ссылки, без сети). Валидатор **CI-gated** через
-`tests/feedbackTriageValidate.test.ts` (спавнит `.sh`, ждёт exit 0 — как `mdReviewStamp`).
+уходит в argv curl — `-K -` из stdin; **privacy fail-closed** guard `_assert_feedback_target` —
+отказ писать в пустой/плейсхолдерный/публичный репо) и офлайн-валидатор `scripts/validate-docs.sh` /
+`.ps1` (9 шагов: синтаксис/shellcheck/**поведенческий прогон** с моком curl и негативными
+guard-кейсами/privacy-guard/паритет `.sh`↔`.ps1`/консистентность плейсхолдера/битые ссылки, без
+сети). Валидатор **CI-gated** через `tests/feedbackTriageValidate.test.ts` (спавнит `.sh`, ждёт
+exit 0 — как `mdReviewStamp`).
 Репо-координаты — через ENV (`PROJECT_REPO`/`FEEDBACK_REPO`/`GITHUB_FEEDBACK_REPO`), не
 хардкодятся.
 

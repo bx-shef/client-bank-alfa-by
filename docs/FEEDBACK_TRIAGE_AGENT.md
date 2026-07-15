@@ -250,11 +250,14 @@ issue_write {
 ### 8.2 Вариант REST (`curl`) — вынесенный скрипт
 
 Готовые функции — в **`scripts/feedback-triage.sh`** (не инлайн в markdown, чтобы линтились в CI). Свойства:
-- токен только `GH_WRITE_TOKEN` (fine-grained PAT, скоуп = целевые репо, Issues:RW); read-only ingest-токен отвергается;
-- payload пишется во временный файл `mktemp` с `umask 077` и удаляется (`trap`) — без гонок и world-readable `/tmp`;
-- каждый вызов проверяет **HTTP-код** и падает на `>=300` (не «тихий успех» при 4xx/5xx);
+- **библиотека** (`source`); строгий режим (`set -euo pipefail`) включается **только при прямом запуске**, не при source — не течёт в интерактивный шелл оператора;
+- токен только `GH_WRITE_TOKEN` (fail-closed), передаётся в curl через `--config` из stdin (`-K -`), **не через argv** — не виден в `ps`/`/proc/*/cmdline`; read-only ingest-токен для записи не годится;
+- **privacy fail-closed**: запись в feedback-репо (`comment_issue`/`close_transferred`) идёт через guard `_assert_feedback_target` — отказ, если `FEEDBACK_REPO` не задан, ещё несёт плейсхолдер `REPLACE-ME` или равен `PROJECT_REPO` (осознанный оверрайд — `FEEDBACK_ALLOW_PUBLIC=1`; live-проверка приватности — `FEEDBACK_VERIFY_PRIVATE=1`);
+- `repo`/`num` валидируются (slug-regex / `^[0-9]+$`) — defence-in-depth от path-traversal;
+- каждый вызов проверяет **HTTP-код** и падает на `>=300` (не «тихий успех» при 4xx/5xx); есть `--connect-timeout`/`--max-time`;
+- payload пишется во временный файл `mktemp` (`umask 077`) и удаляется **явно на всех путях** (без `trap RETURN` — он глобален и повторно стрелял бы из вызывающих функций под `set -u`);
 - лейблы тримятся (`.strip()`), чтобы не плодить дубли-лейблы с пробелом;
-- рассчитан на **bash** (массивы/`trap RETURN`).
+- рассчитан на **bash** (массивы, `[[ =~ ]]`): «переносимость» = между bash-средами (Linux/macOS/WSL), не POSIX sh.
 
 Использование (репозитории — через переменные `PROJECT_REPO`/`FEEDBACK_REPO`, дефолты в скрипте):
 ```bash
@@ -270,7 +273,8 @@ close_transferred "$FEEDBACK_REPO" 43
 ```
 
 ### 8.3 Валидация (без вызовов GitHub)
-Оффлайн-проверка доков и скрипта (синтаксис, shellcheck, dry-run с моком curl, наличие privacy-guard):
+Оффлайн-проверка доков и скрипта (синтаксис, shellcheck, **поведенческий прогон** с моком curl —
+реальные `_api`/guard'ы + негативные кейсы, privacy-guard, паритет `.sh`↔`.ps1`):
 - **Linux/macOS/WSL:** `bash scripts/validate-docs.sh`
 - **Windows:** `pwsh scripts/validate-docs.ps1` (шаги с bash требуют Git Bash/WSL, иначе SKIP)
 

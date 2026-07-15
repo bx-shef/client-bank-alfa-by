@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # validate-docs.sh — оффлайн-валидация доков триажа обратной связи и вынесенных скриптов.
-# Не делает НИ ОДНОГО реального вызова GitHub API. Запуск: bash scripts/validate-docs.sh
+# Не делает НИ ОДНОГО реального вызова GitHub API (curl замокан). Запуск: bash scripts/validate-docs.sh
 # Намеренно без `-e`: проверки должны продолжаться и после первого FAIL (агрегируем в $fail).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -18,30 +18,57 @@ if bash -n "$SH"; then note "OK: $SH"; else note "FAIL: синтаксис $SH";
 
 note "== 2. shellcheck (если установлен) =="
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck -x "$SH"; then note "OK: shellcheck"; else note "FAIL: shellcheck"; fail=1; fi
+  if shellcheck -x "$SH" "$0"; then note "OK: shellcheck"; else note "FAIL: shellcheck"; fail=1; fi
 else
   note "SKIP: shellcheck не найден (apt-get install shellcheck / brew install shellcheck)"
 fi
 
-note "== 3. Dry-run функций с моком curl (без сети) =="
-body=$(mktemp)
-dry=$(mktemp); trap 'rm -f "$dry" "$body"' EXIT
-{
-  sed -n '/^set -euo pipefail/,$p' "$SH"
-  # стаб сетевого слоя: перекрываем _api после определения (резолв функций — на этапе вызова),
-  # чтобы прогнать реальную сборку payload (mktemp/umask/python/strip-лейблов) без сети.
-  echo '_api() { printf "%s" "{\"html_url\":\"https://example/mock\"}"; }'
-  echo 'GH_WRITE_TOKEN=mock'
-  echo "echo '## body' > '$body'"
-  echo "create_issue 'o/r' 'T' '$body' 'bug, enhancement' >/dev/null"
-  echo "comment_issue 'o/r' 1 'c'"
-  echo "close_transferred 'o/r' 1"
-  echo 'echo DRYRUN_OK'
-} > "$dry"
-if out=$(bash "$dry" 2>&1) && printf '%s' "$out" | grep -q DRYRUN_OK; then
-  note "OK: dry-run функций"
+note "== 3. Поведенческий прогон с моком curl (без сети): happy-path + guard'ы =="
+# Мокается САМ curl (не _api): реальные _api/create_issue/comment/close прогоняются целиком
+# (очистка mktemp, разбор http-кода, отсутствие протечки trap, privacy-guard) — это ловит
+# класс багов «функция падает при прямом вызове», который мок _api пропустил бы.
+harness=$(mktemp); cap=$(mktemp); body=$(mktemp)
+trap 'rm -f "$harness" "$cap" "$body"' EXIT
+SCRIPT_ABS="$PWD/$SH"
+cat > "$harness" <<HARNESS
+CAP="$cap"; BODY="$body"; MOCK_CODE=\${MOCK_CODE:-200}
+curl() {
+  local out="" databin="" i; local -a a=("\$@")
+  for ((i=0;i<\${#a[@]};i++)); do
+    case "\${a[i]}" in
+      -o) out="\${a[i+1]}";;
+      --data-binary) databin="\${a[i+1]}";;
+    esac
+  done
+  cat >/dev/null 2>&1 || true                        # drain -K - config (token) from stdin
+  [ -n "\$out" ] && printf '{"html_url":"https://example/mock","private":true}' > "\$out"
+  [ -n "\$databin" ] && [ "\${databin:0:1}" = "@" ] && cp "\${databin:1}" "\$CAP" 2>/dev/null
+  printf '%s' "\$MOCK_CODE"
+}
+export GH_WRITE_TOKEN=mocktoken
+export PROJECT_REPO="bx-shef/client-bank-alfa-by"
+export GITHUB_FEEDBACK_REPO="bx-shef/feedback-private"
+source "$SCRIPT_ABS"
+rc=0; chk(){ if eval "\$2"; then :; else echo "SUBFAIL: \$1"; rc=1; fi; }
+false; echo "sourced-safe (shell alive)"            # source не должен включать set -e
+echo "## body" > "\$BODY"
+chk "create_issue"          'create_issue "\$PROJECT_REPO" T "\$BODY" "bug, enhancement" >/dev/null'
+chk "comment_issue"         'comment_issue "\$FEEDBACK_REPO" 43 "перенос"'
+chk "close_transferred"     'close_transferred "\$FEEDBACK_REPO" 43'
+chk "labels .strip()"       'grep -q "\"labels\": \[\"bug\", \"enhancement\"\]" "\$CAP"'
+chk "no-token → fail"       '! ( unset GH_WRITE_TOKEN; create_issue "\$PROJECT_REPO" T "\$BODY" bug >/dev/null 2>&1 )'
+chk "HTTP 404 → fail"       '! ( MOCK_CODE=404; close_transferred "\$FEEDBACK_REPO" 43 >/dev/null 2>&1 )'
+chk "public target refused" '! comment_issue "\$PROJECT_REPO" 1 ctx >/dev/null 2>&1'
+chk "placeholder refused"   '! comment_issue "$PLACEHOLDER" 1 x >/dev/null 2>&1'
+chk "bad repo → fail"       '! comment_issue "bad repo!" 1 x >/dev/null 2>&1'
+chk "bad num → fail"        '! close_transferred "\$FEEDBACK_REPO" abc >/dev/null 2>&1'
+chk "empty feedback → fail" '! ( unset FEEDBACK_REPO GITHUB_FEEDBACK_REPO; comment_issue "" 1 x >/dev/null 2>&1 )'
+[ "\$rc" -eq 0 ] && echo BEHAVIOR_OK
+HARNESS
+if out=$(bash "$harness" 2>&1) && printf '%s' "$out" | grep -q BEHAVIOR_OK; then
+  note "OK: поведенческий прогон (happy-path + 9 guard-кейсов)"
 else
-  note "FAIL: dry-run"; printf '%s\n' "$out"; fail=1
+  note "FAIL: поведенческий прогон"; printf '%s\n' "$out"; fail=1
 fi
 
 note "== 4. Блок лимитов GitHub API присутствует в доке =="
@@ -51,11 +78,13 @@ else
   note "FAIL: нет блока лимитов (REST-core/GraphQL/GITHUB_TOKEN_INGEST) в $DOC"; fail=1
 fi
 
-note "== 5. Приватность: в доках есть privacy-guard про публичный репо =="
-if grep -qiE "публичн" "$DOC" && grep -qiE "приватн" "$CHANNEL_DOC"; then
-  note "OK: privacy-guard присутствует"
+note "== 5. Privacy-guard: содержательная формулировка (не одно слово) =="
+# Якорим на конкретный блок, а не на любое вхождение «публичн» (иначе «публичные
+# комментарии» в §9 давали бы ложный OK).
+if grep -q "Privacy-guard" "$DOC" && grep -qiE "не копируй|УНП" "$DOC" && grep -qiE "приватн" "$CHANNEL_DOC"; then
+  note "OK: privacy-guard присутствует содержательно"
 else
-  note "FAIL: нет оговорки о приватности"; fail=1
+  note "FAIL: privacy-guard выродился в упоминание слова"; fail=1
 fi
 
 note "== 6. Канал сбора описан (FEEDBACK.md) =="
@@ -79,10 +108,8 @@ fi
 note "== 8. Внутренние markdown-ссылки не битые =="
 broken=""
 for src in "$DOC" "$CHANNEL_DOC"; do
-  # вытащить относительные пути из ссылок вида [текст](docs/...) и (FEEDBACK...)
   while IFS= read -r target; do
     [ -z "$target" ] && continue
-    # ссылки внутри docs/ указываются относительно каталога docs/
     if [ -f "$target" ] || [ -f "docs/$target" ]; then :; else broken="$broken $src→$target"; fi
   done < <(grep -oE '\]\(([A-Za-z0-9_./-]+\.md)\)' "$src" | sed -E 's/^\]\(//; s/\)$//')
 done
