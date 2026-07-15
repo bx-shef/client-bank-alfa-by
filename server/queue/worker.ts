@@ -20,6 +20,7 @@ import { dbQuery } from '../db/client'
 import { deleteToken, getToken, saveToken } from '../utils/tokenStore'
 import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/activityDedupStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
+import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { callRest } from '../utils/b24Rest'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
@@ -300,6 +301,7 @@ export function liveHandlerDeps(): HandlerDeps {
       await deleteDedupForPortal(dbQuery, memberId)
       await deleteImportResultForPortal(dbQuery, memberId)
       await deleteFactsForPortal(dbQuery, memberId)
+      await deleteMetricsForPortal(dbQuery, memberId)
     },
     enqueueCrmSync
   }
@@ -336,6 +338,9 @@ export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: 
       // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
       // already happened). Demo batches never touch the real portal's status row.
       await persistImportResult(job.data, summary)
+      // Accumulate LIFETIME per-portal counters for the dashboard (#78). Same
+      // best-effort/demo-gated contract — bookkeeping must never fail a job.
+      await bumpMetrics(job.data, summary)
       return summary
     }, { connection, concurrency })
   ]
@@ -360,5 +365,20 @@ async function persistImportResult(
     })
   } catch (e) {
     console.error('import_result save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
+/** Accumulate lifetime per-portal metric counters from a crm-sync run summary (#78).
+ *  Gated to real (non-demo) portals; swallows errors so metrics can't fail a job. */
+async function bumpMetrics(
+  job: CrmSyncJob,
+  summary: { processed: number, created: number, notified: number, unmatched: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number }
+): Promise<void> {
+  const account = job.items[0]?.account ?? ''
+  if (!account || isDemoAccount(account)) return
+  try {
+    await bumpCounters(dbQuery, job.memberId, metricsFromSummary(summary))
+  } catch (e) {
+    console.error('metrics bump failed', job.memberId, (e as Error)?.message)
   }
 }
