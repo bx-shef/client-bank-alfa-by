@@ -477,7 +477,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) — вместо загрузки+рефреша токена на каждую
     операцию (было ~6·N на батч из N операций). Транспорт-agnostic: свап на SDK меняет только `callRest` под
     резолвером. DI+инъектируемые часы, тесты (bind-once/ре-байнд по истечении/`null`-не-кэшируется/пер-member).
-  - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
+  - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, подключён к hot-path за флагом):**
     per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
     задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
     на джобу даёт сразу пер-портальный лимит **и** bind-`RestCall`-once. `oauthParamsFromToken` (наш `PortalToken`→
@@ -486,8 +486,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (drop-in для
     `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import` и `new B24OAuth(...)`; чистые мапперы
     и `makeSdkRestCall` (структурный клиент) тестируются фейком без живого портала, а типизация `new B24OAuth` как
-    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). Свап транспорта
-    `crm-sync` — следующий PR после смоук-теста на живом портале (`pnpm sdk:test`); детали — `docs/QUEUES.md` §REST-бюджет.
+    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). **Свап транспорта `crm-sync`
+    подключён за опт-ин флагом `USE_SDK_TRANSPORT`** (default OFF; нужны `B24_CLIENT_ID/SECRET`): воркер строит
+    резолвер `createCachingResolver(m → makePortalSdkCall(m, sdkDeps))` (SDK сам рефрешит → кэш-forever + evict, без
+    expiry-ре-байнда), `[rest-timing]` оборачивается через `withRestTiming` (следует за транспортом). Флаг OFF ⇒
+    прежний `callRest`-путь. Смоук SDK пройден вживую (`pnpm sdk:test --burst` — 60 вызовов, 0 отказов); включение
+    флага на живом портале + end-to-end `crm-sync` — за владельцем (`pnpm sdk:oauth` с OAuth-кредами). Детали —
+    `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):

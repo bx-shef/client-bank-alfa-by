@@ -201,16 +201,18 @@ flowchart LR
   `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import`/`new B24OAuth(...)`; чистые мапперы и
   `makeSdkRestCall` (структурный клиент) тестируются фейком, а типизация `new B24OAuth` как `OAuthCallClient` служит
   compile-time drift-guard'ом.
-- **Дев-смоук `pnpm sdk:test`** (`scripts/b24-sdk-test.mjs`, вебхук из `.env.b24test`) — проверить на **живом
-  портале**, что SDK работает в Node и сам троттлит (`--burst` — 60 быстрых вызовов без `QUERY_LIMIT_EXCEEDED`).
+- **Дев-смоук `pnpm sdk:test`** (`scripts/b24-sdk-test.mjs`, вебхук из `.env.b24test`) — **пройден вживую** на
+  `b24-86sr2r`: `--burst` = 60 вызовов за 5.4с, 0 отказов, 0 `QUERY_LIMIT_EXCEEDED`, лимитер сам придержал темп.
 
-**Осталось (до первого РЕАЛЬНОГО опроса портала — не демо; и до слайса записи разнесения):**
-1. **Прогнать `pnpm sdk:test` на живом портале** (гейт) — подтвердить транспорт+лимитер.
-2. **Свапнуть транспорт `crm-sync`**: `makePortalRestCall` → `makePortalSdkCall`, **один `B24OAuth` на джобу** и
-   прокинуть готовый `RestCall` в депсы (`findCompany`/`resolveIntents`/`writeActivity`/`notifyChat`) — сразу и лимит,
-   и bind-once. Для записи (`crm.activity.todo.add`) — `retryOnNetworkError:false` (иначе дубли при таймауте; у нас
-   есть dedup #9, но так чище) и увеличенный timeout.
-3. **`BatchByChunk`/`FetchList` из SDK** для объёмных выборок — вместо ручного N+1 (пул оплат, списки) и как замена
+**✅ Свап транспорта — подключён за флагом `USE_SDK_TRANSPORT` (default OFF).** Воркер строит
+`createCachingResolver(m → makePortalSdkCall(m, sdkDeps))` — один `B24OAuth` на портал (свой rate-limit-бакет),
+SDK сам рефрешит токен (кэш-forever + evict на uninstall, без expiry-ре-байнда), `[rest-timing]` следует за
+транспортом (`withRestTiming`). Флаг OFF ⇒ прежний `callRest`-путь (expiry-aware resolver) — поведение не меняется.
+**Включение на живом портале + end-to-end `crm-sync` — за владельцем** (нужны `B24_CLIENT_ID/SECRET`; `pnpm sdk:oauth`
+проверяет OAuth-путь). Пер-операционные депсы уже переиспользуют один `RestCall` (bind-once, #191 lever-2).
+
+**Осталось (остаток #191):**
+1. **`BatchByChunk`/`FetchList` из SDK** для объёмных выборок — вместо ручного N+1 (пул оплат, списки) и как замена
    ручному `callBatch`; частичное падение батча при записи — опираться на идемпотентность
    ([#184](https://github.com/bx-shef/client-bank-alfa-by/issues/184)).
 4. **Расширить хранилище токена** полями, которых нет в `PortalToken` (userId/scope/expiresIn/status) — для REST

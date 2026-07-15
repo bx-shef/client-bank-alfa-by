@@ -22,10 +22,11 @@ import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
 import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
-import { callRest } from '../utils/b24Rest'
+import { callRest, withRestTiming } from '../utils/b24Rest'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import type { PortalRestDeps } from '../utils/portalRest'
-import { createPortalRestResolver } from '../utils/portalRestResolver'
+import { createPortalRestResolver, createCachingResolver, type PortalRestResolver } from '../utils/portalRestResolver'
+import { makePortalSdkCall, type SdkPortalDeps } from '../utils/b24Sdk'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
@@ -55,9 +56,35 @@ const portalRestDeps: PortalRestDeps = {
   callRest
 }
 
+/** Build the per-portal RestCall resolver for the crm-sync worker (#191).
+ *  Default transport = hand-rolled `callRest` behind the expiry-aware bind-once resolver.
+ *  Opt-in (env `USE_SDK_TRANSPORT` truthy + OAuth creds present): the `@bitrix24/b24jssdk`
+ *  transport, whose per-instance RestrictionManager adds portal-scoped rate-limiting +
+ *  retry-backoff on QUERY_LIMIT_EXCEEDED (the remaining #191 lever). The SDK client
+ *  self-refreshes, so it uses the cache-forever resolver; `[rest-timing]` is wrapped on so
+ *  observability follows the transport. Flag OFF (default) ⇒ behaviour unchanged — the SDK
+ *  path stays dark until enabled and verified live on a portal. */
+function buildPortalResolver(): PortalRestResolver {
+  const useSdk = /^(1|true|yes|on)$/i.test(String(process.env.USE_SDK_TRANSPORT ?? '').trim())
+  const clientId = (process.env.B24_CLIENT_ID ?? '').trim()
+  const clientSecret = (process.env.B24_CLIENT_SECRET ?? '').trim()
+  if (useSdk && clientId && clientSecret) {
+    const sdkDeps: SdkPortalDeps = {
+      loadToken: memberId => getToken(dbQuery, memberId),
+      saveToken: async (t) => { await saveToken(dbQuery, t) },
+      creds: { clientId, clientSecret },
+      now: Date.now
+    }
+    console.log('[transport] crm-sync REST via @bitrix24/b24jssdk (per-portal RestrictionManager, #191)')
+    return createCachingResolver(memberId => makePortalSdkCall(memberId, sdkDeps).then(c => (c ? withRestTiming(c) : null)))
+  }
+  if (useSdk) console.warn('[transport] USE_SDK_TRANSPORT set but B24_CLIENT_ID/SECRET missing — using hand-rolled callRest')
+  return createPortalRestResolver(portalRestDeps)
+}
+
 // Bind-once per-portal RestCall (#191, lever-2): one token load/refresh per portal per
 // token-lifetime, shared across every per-op CRM call, instead of re-loading per op.
-const resolvePortalCall = createPortalRestResolver(portalRestDeps)
+const resolvePortalCall = buildPortalResolver()
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 

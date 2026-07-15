@@ -63,3 +63,26 @@ export function createPortalRestResolver(
   resolver.evict = (memberId: string) => void cache.delete(memberId)
   return resolver
 }
+
+/**
+ * A simpler bind-once resolver for a SELF-REFRESHING transport (the SDK, #191): the
+ * injected `bind` returns a `RestCall` whose underlying client renews its own token
+ * (SDK `setCallbackRefreshAuth`), so — unlike the frozen-token `callRest` path above —
+ * the cached call never goes stale and needs no expiry re-bind. Cache the resolved
+ * non-null call per member_id forever; `null` (no token) is not cached (a later install
+ * re-resolves); `evict` drops it on uninstall. Transport-agnostic + testable: `bind` is
+ * injected (worker passes `m → makePortalSdkCall(m, deps)`), so no live portal is needed.
+ */
+export function createCachingResolver(bind: (memberId: string) => Promise<RestCall | null>): PortalRestResolver {
+  const cache = new Map<string, RestCall>()
+  const resolver = (async (memberId: string) => {
+    const cached = cache.get(memberId)
+    if (cached) return cached
+    const call = await bind(memberId)
+    if (!call) return null // no token → don't cache; allow a later re-resolve
+    cache.set(memberId, call)
+    return call
+  }) as PortalRestResolver
+  resolver.evict = (memberId: string) => void cache.delete(memberId)
+  return resolver
+}

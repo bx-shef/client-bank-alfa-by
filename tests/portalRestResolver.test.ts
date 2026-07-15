@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PortalRestDeps } from '../server/utils/portalRest'
 import type { PortalToken } from '../server/utils/tokenStore'
-import { createPortalRestResolver } from '../server/utils/portalRestResolver'
+import { createCachingResolver, createPortalRestResolver } from '../server/utils/portalRestResolver'
+import type { RestCall } from '../server/utils/companyLookup'
 
 function tok(memberId: string, expiresAt: number): PortalToken {
   return { memberId, domain: `${memberId}.bitrix24.by`, accessToken: `at-${expiresAt}`, refreshToken: 'rt', expiresAt, applicationToken: '' }
@@ -112,5 +113,40 @@ describe('createPortalRestResolver (#191 bind-once)', () => {
     const call = await resolve('m1')
     await call!('crm.item.list', { a: 1 })
     expect(callRest).toHaveBeenCalledWith('m1.bitrix24.by', 'at-1000000', 'crm.item.list', { a: 1 })
+  })
+})
+
+describe('createCachingResolver (#191 SDK transport — cache-forever + evict)', () => {
+  const stubCall = (tag: string): RestCall => (async () => ({ tag })) as unknown as RestCall
+
+  it('binds once per member and reuses the cached call (no expiry re-bind)', async () => {
+    const bind = vi.fn(async (m: string) => stubCall(m))
+    const resolve = createCachingResolver(bind)
+    const a = await resolve('m1')
+    const b = await resolve('m1')
+    expect(a).toBe(b)
+    expect(bind).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not cache a null (no token) — re-resolves later', async () => {
+    const bind = vi.fn<(m: string) => Promise<RestCall | null>>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(stubCall('m1'))
+    const resolve = createCachingResolver(bind)
+    expect(await resolve('m1')).toBeNull()
+    expect(await resolve('m1')).not.toBeNull()
+    expect(bind).toHaveBeenCalledTimes(2)
+  })
+
+  it('caches members independently and evict drops one portal', async () => {
+    const bind = vi.fn(async (m: string) => stubCall(m))
+    const resolve = createCachingResolver(bind)
+    const a = await resolve('m1')
+    await resolve('m2')
+    expect(bind).toHaveBeenCalledTimes(2)
+    expect(await resolve('m1')).toBe(a) // cached
+    resolve.evict('m1')
+    await resolve('m1')
+    expect(bind).toHaveBeenCalledTimes(3) // re-bound after evict; m2 untouched
   })
 })

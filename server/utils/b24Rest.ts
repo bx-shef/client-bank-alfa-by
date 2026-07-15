@@ -136,6 +136,30 @@ function restTimingEnabled(): boolean {
   return restTimingCache
 }
 
+/** A portal-bound REST call: `(method, params) → envelope`. Same shape as `RestCall`
+ *  (companyLookup) — structural here to avoid an import cycle. */
+type TimedRestCall = (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>
+
+/** Wrap ANY portal `RestCall` with the opt-in `[rest-timing]` log (#78) — used by the SDK
+ *  transport (b24Sdk.ts), whose call doesn't flow through `callRest`'s built-in timing.
+ *  When `REST_TIMING` is off it returns the call unwrapped (zero overhead). A throw (the
+ *  SDK surfaces a B24 error as a throw) logs ok=0 before rethrowing; success logs ok=1
+ *  with the server-side `time.duration`. */
+export function withRestTiming(call: TimedRestCall): TimedRestCall {
+  if (!restTimingEnabled()) return call
+  return async (method, params) => {
+    const t0 = Date.now()
+    try {
+      const json = await call(method, params)
+      console.log(restTimingLine(method, Date.now() - t0, true, serverDurationMs(json)))
+      return json
+    } catch (e) {
+      console.log(restTimingLine(method, Date.now() - t0, false))
+      throw e
+    }
+  }
+}
+
 /** Call a REST method on the portal with an access token in the body. FAIL-CLOSED on a
  *  non-allow-listed host (#149 SSRF gate) and bounded by `REST_TIMEOUT_MS`. */
 export async function callRest(
