@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-14
+> Last reviewed: 2026-07-15
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -366,7 +366,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
-    `activity_dedup`, `allocation_fact`, `import_result`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+    `activity_dedup`, `allocation_fact`, `import_result`, `metrics_counter`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
@@ -375,6 +375,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     блок спуфинга домена; нет прогона → `neverSummary`) отдаёт `ImportRunSummary`. UI `useImportStatus`:
     в портале — реальный fetch, вне фрейма — демо-mock. Счётчик `notified` в `handleCrmSyncJob` (⊆ created).
     Удаление приложения чистит `import_result`.
+  - `server/utils/metricsStore.ts` + `server/api/import/metrics.get.ts` / `metrics-reset.post.ts` (+ чистый
+    `server/utils/metricsHandler.ts`, DI, тесты) — **долговременные счётчики портала (#78)**: воркер
+    best-effort **накапливает** пожизненные счётчики (`metrics_counter`, ключ `member_id|name`:
+    processed/created/notified/unmatched/recognized/resolved/allocated/distributed/ambiguous/manual) из сводки
+    `crm-sync` рядом с `import_result` (демо-счета не пишут; сбой метрик не роняет джобу). В отличие от
+    `import_result` (только **последний** прогон) — это **тотал за всё время**, переживает рестарт. `GET
+    /api/import/metrics` (счётчики) и `POST /api/import/metrics-reset` («сбросить») по **фрейм-токену**
+    (`profile`-валидация, member-scoped — портал видит/сбрасывает только свои). Удаление приложения чистит
+    `metrics_counter`. Форма портирована из соседнего `ai-price-import` (адаптирована под наш `QueryFn` и
+    платёжный словарь метрик).
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
     - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`,

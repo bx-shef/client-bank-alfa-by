@@ -64,6 +64,13 @@ CREATE TABLE IF NOT EXISTS import_result (
   errors             JSONB NOT NULL DEFAULT '[]'::jsonb,
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS metrics_counter (
+  member_id    TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  value        BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (member_id, name)
+);
 `
 
 let pool: Pool | undefined
