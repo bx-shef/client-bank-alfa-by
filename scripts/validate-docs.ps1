@@ -7,6 +7,7 @@ Set-Location (Join-Path $PSScriptRoot "..")
 $Doc = "docs/FEEDBACK_TRIAGE_AGENT.md"
 $ChannelDoc = "docs/FEEDBACK.md"
 $Sh = "scripts/feedback-triage.sh"
+$Placeholder = "bx-shef/REPLACE-ME-feedback-private"
 $fail = 0
 $bash = Get-Command bash -ErrorAction SilentlyContinue
 
@@ -41,9 +42,9 @@ echo DRYRUN_OK
 } else { Write-Host "SKIP: bash не найден" }
 
 Write-Host "== 4. Блок лимитов GitHub API присутствует в доке =="
-if ((Select-String -Path $Doc -Pattern "REST-core" -Quiet) -and (Select-String -Path $Doc -Pattern "GraphQL" -Quiet)) {
-  Write-Host "OK: правило лимитов описано (§7)"
-} else { Write-Host "FAIL: нет блока лимитов (REST-core/GraphQL) в $Doc"; $fail = 1 }
+if ((Select-String -Path $Doc -Pattern "REST-core" -Quiet) -and (Select-String -Path $Doc -Pattern "GraphQL" -Quiet) -and (Select-String -Path $Doc -Pattern "GITHUB_TOKEN_INGEST" -Quiet)) {
+  Write-Host "OK: правило лимитов описано (§7), ingest-токен объявлен"
+} else { Write-Host "FAIL: нет блока лимитов (REST-core/GraphQL/GITHUB_TOKEN_INGEST) в $Doc"; $fail = 1 }
 
 Write-Host "== 5. Приватность: privacy-guard про публичный репо =="
 if ((Select-String -Path $Doc -Pattern "публичн" -Quiet) -and (Select-String -Path $ChannelDoc -Pattern "приватн" -Quiet)) {
@@ -54,6 +55,32 @@ Write-Host "== 6. Канал сбора описан (FEEDBACK.md) =="
 if ((Select-String -Path $ChannelDoc -Pattern "user-feedback" -Quiet) -and (Select-String -Path $ChannelDoc -Pattern "agent-feedback" -Quiet)) {
   Write-Host "OK: оба канала описаны"
 } else { Write-Host "FAIL: в $ChannelDoc не описаны каналы"; $fail = 1 }
+
+Write-Host "== 7. Плейсхолдер приватного репо консистентен =="
+$miss = @()
+foreach ($f in @($Doc, $Sh)) {
+  if (-not (Select-String -Path $f -Pattern ([regex]::Escape($Placeholder)) -Quiet)) { $miss += $f }
+}
+if ($miss.Count -eq 0) { Write-Host "OK: плейсхолдер '$Placeholder' совпадает в доке и скрипте" }
+else { Write-Host "FAIL: плейсхолдер отсутствует/разошёлся в: $($miss -join ' ')"; $fail = 1 }
+
+Write-Host "== 8. Внутренние markdown-ссылки не битые =="
+$broken = @()
+foreach ($src in @($Doc, $ChannelDoc)) {
+  $matches = Select-String -Path $src -Pattern '\]\(([A-Za-z0-9_./-]+\.md)\)' -AllMatches
+  foreach ($m in $matches.Matches) {
+    $target = $m.Groups[1].Value
+    if (-not ((Test-Path $target) -or (Test-Path (Join-Path "docs" $target)))) { $broken += "$src->$target" }
+  }
+}
+if ($broken.Count -eq 0) { Write-Host "OK: внутренние .md-ссылки существуют" }
+else { Write-Host "FAIL: битые ссылки: $($broken -join ' ')"; $fail = 1 }
+
+Write-Host "== 9. Паритет проверок .sh/.ps1 (одинаковое число шагов) =="
+$shSteps = (Select-String -Path $Sh.Replace("feedback-triage.sh", "validate-docs.sh") -Pattern 'note "== [0-9]+\.').Count
+$psSteps = (Select-String -Path $PSCommandPath -Pattern 'Write-Host "== [0-9]+\.').Count
+if ($shSteps -eq $psSteps) { Write-Host "OK: $shSteps шагов в .sh и .ps1" }
+else { Write-Host "FAIL: паритет .sh($shSteps)/.ps1($psSteps) разошёлся"; $fail = 1 }
 
 if ($fail -eq 0) { Write-Host "== ИТОГ: OK ==" } else { Write-Host "== ИТОГ: ЕСТЬ ОШИБКИ ==" }
 exit $fail

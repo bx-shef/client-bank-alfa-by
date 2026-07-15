@@ -919,10 +919,13 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   закрывает разобранное со связкой. **Privacy-guard:** клиентские данные/файл из приватного
   отзыва **не** переносятся в (потенциально публичный) репо задач — только ссылка.
 
-Скрипты — `scripts/feedback-triage.sh` (REST-fallback, требует `GH_WRITE_TOKEN`) и
-офлайн-валидатор `scripts/validate-docs.sh` / `.ps1` (синтаксис/shellcheck/dry-run/
-privacy-guard, без сети). Репо-координаты — через ENV (`PROJECT_REPO`/`FEEDBACK_REPO`/
-`GITHUB_FEEDBACK_REPO`), не хардкодятся.
+Скрипты — `scripts/feedback-triage.sh` (REST-fallback, требует `GH_WRITE_TOKEN`; токен не
+уходит в argv curl — заголовок через `-H @file`) и офлайн-валидатор `scripts/validate-docs.sh` /
+`.ps1` (9 шагов: синтаксис/shellcheck/dry-run/privacy-guard/паритет `.sh`↔`.ps1`/консистентность
+плейсхолдера/битые ссылки, без сети). Валидатор **CI-gated** через
+`tests/feedbackTriageValidate.test.ts` (спавнит `.sh`, ждёт exit 0 — как `mdReviewStamp`).
+Репо-координаты — через ENV (`PROJECT_REPO`/`FEEDBACK_REPO`/`GITHUB_FEEDBACK_REPO`), не
+хардкодятся.
 
 ## Маркетинг и продажи
 
