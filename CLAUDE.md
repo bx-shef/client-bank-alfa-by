@@ -468,6 +468,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     не найдена» → чат ошибок (§5).
   - `server/utils/portalRest.ts` — `makePortalRestCall(memberId, deps)`: связывает `RestCall` с порталом
     (загрузка токена → `ensureAccessToken` → `callRest` с домен+access). DI, тесты; `null` без токена.
+    **Каноничный примитив bind'а** (тот же контракт миррорит SDK-путь `b24Sdk.ts`); на hot-path `crm-sync`
+    **вытеснен** резолвером ниже (bind-once), сам по себе на горячем пути больше не зовётся.
+  - `server/utils/portalRestResolver.ts` — **bind-once резолвер (#191 lever-2):** `createPortalRestResolver(deps,
+    now?, skewMs?)` мемоизирует связанный `RestCall` по `member_id` до приближения истечения токена (кэш
+    `{call, expiresAt}`, ре-байнд при `now ≥ expiresAt − skew`, `null` не кэшируется). `crm-sync`-воркер строит
+    один резолвер и переиспользует его во **всех** пер-операционных вызовах (`findCompany`/`resolveIntents`/
+    `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) — вместо загрузки+рефреша токена на каждую
+    операцию (было ~6·N на батч из N операций). Транспорт-agnostic: свап на SDK меняет только `callRest` под
+    резолвером. DI+инъектируемые часы, тесты (bind-once/ре-байнд по истечении/`null`-не-кэшируется/пер-member).
   - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
     per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
     задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
@@ -618,7 +627,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
       Смарт-процессы пока не включены (их `entityTypeId` портало-специфичен, интенты `unsupported`). DI, тесты
       (`tests/negativeStages.test.ts`).
-    Осталось: **rate-limit/bounded-concurrency воркера + bind-`RestCall`-once на джобу +
+    **bind-`RestCall`-once — сделан** (`portalRestResolver.ts`, #191 lever-2: один bind токена на портал вместо ~6·N
+    на батч). Осталось: **rate-limit/bounded-concurrency воркера +
     батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
     списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
     `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —

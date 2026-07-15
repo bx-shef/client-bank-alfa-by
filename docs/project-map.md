@@ -355,9 +355,10 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   лог, **пока без записи**; разбиение целей — компиляторно-проверяемый `ALLOCATION_TARGET_ROLE`) + **безопасность**
   (PR #200: `neutralizeBb` в заголовке/описании дела CRM — сырой текст плательщика больше не может внести BB в карточку).
   Осталось: **остаток #191** — транспорт `crm-sync` на `@bitrix24/b24jssdk` (встроенный лимитер per-instance = пер-
-  портальный rate-limit + bind-once + auto-refresh; адаптер `server/utils/b24Sdk.ts` готов и покрыт тестами, свап
-  hot-path — после смоук-теста `pnpm sdk:test` на живом портале; пул-раз-на-op **и пагинация списка сделок** уже
-  сделаны; дизайн — `docs/QUEUES.md`);
+  портальный rate-limit + auto-refresh; адаптер `server/utils/b24Sdk.ts` готов и покрыт тестами, свап
+  hot-path — после смоук-теста `pnpm sdk:test` на живом портале; **bind-once (lever-2) уже сделан** —
+  `portalRestResolver.ts`, один bind токена на портал вместо ~6·N на батч, транспорт-agnostic; пул-раз-на-op **и
+  пагинация списка сделок** уже сделаны; дизайн — `docs/QUEUES.md`);
   роутинг ref моста через `itemByIdLookup`
   (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
   log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +

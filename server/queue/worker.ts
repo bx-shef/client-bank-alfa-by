@@ -24,7 +24,8 @@ import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../uti
 import { decryptSecret } from '../utils/secretCrypto'
 import { callRest } from '../utils/b24Rest'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
-import { makePortalRestCall, type PortalRestDeps } from '../utils/portalRest'
+import type { PortalRestDeps } from '../utils/portalRest'
+import { createPortalRestResolver } from '../utils/portalRestResolver'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
@@ -53,6 +54,10 @@ const portalRestDeps: PortalRestDeps = {
   ensureFresh: token => ensureAccessToken(token),
   callRest
 }
+
+// Bind-once per-portal RestCall (#191, lever-2): one token load/refresh per portal per
+// token-lifetime, shared across every per-op CRM call, instead of re-loading per op.
+const resolvePortalCall = createPortalRestResolver(portalRestDeps)
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -89,20 +94,22 @@ export function liveHandlerDeps(): HandlerDeps {
     // Find the CRM company by the counterparty's settlement account. Demo accounts
     // are GATED (never touch a real portal's REST); an unknown portal (no token)
     // yields null → the op is counted unmatched and nothing is written.
-    // TODO stage 5 / #191 (before real volume flows): (1) add a REST rate limiter on the
-    // crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
-    // lookups — the payment-number pool is now ONE company scan per op (#192), but it's still
-    // an unbatched, unpaginated scan — + writeActivity 1 call per op, no batching → will hit
-    // B24 QUERY_LIMIT_EXCEEDED under real volume); (2) bind the per-portal RestCall ONCE
-    // per job instead of per-op (findCompany + resolveIntents + writeActivity each
-    // re-load+refresh today).
+    // #191 lever-2 DONE: the per-portal RestCall is now bound ONCE via `resolvePortalCall`
+    // (createPortalRestResolver) and reused across findCompany/resolveIntents/writeActivity/
+    // notifyChat/applyAllocation/notifyError, instead of re-loading+refreshing the token per
+    // op. TODO stage 5 / #191 lever-1 (before real volume): a REST rate limiter + batching on
+    // the crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
+    // lookups — the payment-number pool is ONE company scan per op (#192) but still unbatched/
+    // unpaginated — + writeActivity 1 call per op → will hit B24 QUERY_LIMIT_EXCEEDED under
+    // real volume). The SDK transport (b24Sdk.ts, per-portal RestrictionManager) swaps in
+    // under the same resolver — its live smoke gate is separate (docs/QUEUES.md §REST-бюджет).
     findCompany: async (item, memberId) => {
       // Demo ops: pause (so crm-sync shows a backlog too) then skip — never REST.
       if (isDemoAccount(item.account)) {
         await demoPause(item.account)
         return null
       }
-      const call = await makePortalRestCall(memberId, portalRestDeps)
+      const call = await resolvePortalCall(memberId)
       if (!call) return null
       return findCompanyByAccount(item.counterparty.account, call)
     },
@@ -111,7 +118,7 @@ export function liveHandlerDeps(): HandlerDeps {
     // skipped (demo account / no company → no owner / unknown portal).
     writeActivity: async (item, companyId, memberId) => {
       if (isDemoAccount(item.account) || !companyId) return null
-      const call = await makePortalRestCall(memberId, portalRestDeps)
+      const call = await resolvePortalCall(memberId)
       if (!call) return null
       return writeActivityViaRest(item, companyId, call)
     },
@@ -159,7 +166,7 @@ export function liveHandlerDeps(): HandlerDeps {
     // global rate-limit + bind-RestCall-once remain (see the TODO above / #191). A REST
     // error propagates (handler fails the job → clean retry), like findCompany.
     resolveIntents: async (intents, companyId, memberId, isNegativeStage) => {
-      const call = await makePortalRestCall(memberId, portalRestDeps)
+      const call = await resolvePortalCall(memberId)
       if (!call) return []
       // Batch resolver fetches the deal-payment pool once per op (#191), not per value.
       return resolveIntentsForOp(intents, { companyId, isNegativeStage }, call, intentResolverDeps)
@@ -173,7 +180,7 @@ export function liveHandlerDeps(): HandlerDeps {
     // allocate onto a «Не оплачен» invoice / lost deal). A REST error propagates (fail the
     // job → clean retry).
     loadNegativeStagePredicate: async (memberId) => {
-      const call = await makePortalRestCall(memberId, portalRestDeps)
+      const call = await resolvePortalCall(memberId)
       if (!call) return null
       const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call)
       const suspicious = failOpenEntities(diagnostics)
@@ -201,14 +208,14 @@ export function liveHandlerDeps(): HandlerDeps {
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
-    // no portal token → skip. The WHOLE body is guarded (incl. makePortalRestCall's token
+    // no portal token → skip. The WHOLE body is guarded (incl. resolvePortalCall's token
     // load + OAuth refresh) — a chat failure is swallowed+logged, NEVER propagated: the
     // activity is already written+remembered, so failing the job would skip the op on
     // retry and lose the record (нюанс 3).
     notifyChat: async (item, dialogId, memberId) => {
       if (isDemoAccount(item.account)) return
       try {
-        const call = await makePortalRestCall(memberId, portalRestDeps)
+        const call = await resolvePortalCall(memberId)
         if (!call) return
         await notifyChatViaRest(item, dialogId, call)
       } catch (e) {
@@ -246,7 +253,7 @@ export function liveHandlerDeps(): HandlerDeps {
     //     self-heal. THROW instead → the job retries cleanly, no fact until the pay lands.
     applyAllocation: async (item, target, memberId, opts) => {
       if (isDemoAccount(item.account)) return false
-      const call = await makePortalRestCall(memberId, portalRestDeps)
+      const call = await resolvePortalCall(memberId)
       if (!call) {
         if (buildAllocationMutation(target, opts)) {
           throw new Error(`applyAllocation: no portal token for ${memberId} — retry (mutation pending)`)
@@ -262,7 +269,7 @@ export function liveHandlerDeps(): HandlerDeps {
     notifyError: async (item, decision, dialogId, memberId) => {
       if (isDemoAccount(item.account)) return
       try {
-        const call = await makePortalRestCall(memberId, portalRestDeps)
+        const call = await resolvePortalCall(memberId)
         if (!call) return
         await notifyAllocationErrorViaRest(item, decision, dialogId, call)
       } catch (e) {
@@ -296,12 +303,16 @@ export function liveHandlerDeps(): HandlerDeps {
     },
     // Uninstall always erases EVERYTHING for the portal: token row + dedup map +
     // import status + allocation facts (#184). `eventTs` records the ordering tombstone (#77).
+    // Also evict the in-memory bind-once RestCall (#191) so a just-uninstalled portal's
+    // cached access token can't be reused by an in-flight job — restores the instant cutoff
+    // the per-op token re-load gave before the resolver (the DB row is gone; the cache isn't).
     deletePortal: async (memberId, eventTs) => {
       await deleteToken(dbQuery, memberId, eventTs)
       await deleteDedupForPortal(dbQuery, memberId)
       await deleteImportResultForPortal(dbQuery, memberId)
       await deleteFactsForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
+      resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync
   }
