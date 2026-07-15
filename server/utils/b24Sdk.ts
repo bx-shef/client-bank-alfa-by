@@ -87,7 +87,10 @@ export function buildRefreshPersist(save: (t: PortalToken) => Promise<void>): Ca
 /** Wrap a B24 OAuth client as our `RestCall`: run the (rate-limited, auto-retried)
  *  call and unwrap the REST envelope, or throw the SDK's error messages. Throwing (not
  *  returning an error object) keeps the contract our lookups rely on — a failed call
- *  fails the crm-sync job for a clean retry, same as the hand-rolled `callRest`. */
+ *  fails the crm-sync job for a clean retry, same as the hand-rolled `callRest`.
+ *  NB (#78): the `[rest-timing]` observability lives in `callRest` (b24Rest.ts). When this
+ *  SDK transport takes over the hot path, move the timing here (wrap this call with the
+ *  same `restTimingLine`/`serverDurationMs`) so the measurement doesn't get lost. */
 export function makeSdkRestCall(client: OAuthCallClient): RestCall {
   return async (method, params) => {
     const res = await client.actions.v2.call.make({ method, params })

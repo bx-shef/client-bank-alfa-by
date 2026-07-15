@@ -5,8 +5,40 @@ import {
   isAllowedPortalHost,
   parseSelfHostedHosts,
   portalHostname,
-  restUrl
+  restTimingLine,
+  restUrl,
+  serverDurationMs
 } from '../server/utils/b24Rest'
+
+describe('restTimingLine (#78)', () => {
+  it('formats method + rounded ms + ok flag', () => {
+    expect(restTimingLine('crm.item.list', 42.7, true)).toBe('[rest-timing] method=crm.item.list ms=43 ok=1')
+    expect(restTimingLine('crm.item.list', 100, false)).toBe('[rest-timing] method=crm.item.list ms=100 ok=0')
+  })
+  it('includes server time when provided (rounded), omits it otherwise', () => {
+    expect(restTimingLine('profile', 200, true, 55.4)).toBe('[rest-timing] method=profile ms=200 srv=55 ok=1')
+    expect(restTimingLine('profile', 200, true, undefined)).toBe('[rest-timing] method=profile ms=200 ok=1')
+    expect(restTimingLine('profile', 200, true, Number.NaN)).toBe('[rest-timing] method=profile ms=200 ok=1')
+  })
+})
+
+describe('serverDurationMs (#78)', () => {
+  it('converts B24 time.duration (seconds) to ms', () => {
+    expect(serverDurationMs({ time: { duration: 0.0554 } })).toBeCloseTo(55.4)
+  })
+  it('returns undefined when time/duration is absent or non-finite', () => {
+    expect(serverDurationMs({})).toBeUndefined()
+    expect(serverDurationMs({ time: {} })).toBeUndefined()
+    expect(serverDurationMs({ time: { duration: 'x' } })).toBeUndefined()
+    expect(serverDurationMs({ time: { duration: Infinity } })).toBeUndefined()
+    expect(serverDurationMs({ time: { duration: null } })).toBeUndefined()
+    expect(serverDurationMs({ time: 5 })).toBeUndefined() // `time` a primitive, not an object
+  })
+  it('handles duration 0 and negative (finite) values', () => {
+    expect(serverDurationMs({ time: { duration: 0 } })).toBe(0)
+    expect(serverDurationMs({ time: { duration: -0.05 } })).toBeCloseTo(-50)
+  })
+})
 
 describe('restUrl', () => {
   it('builds https://<host>/rest/<method> from a bare host', () => {

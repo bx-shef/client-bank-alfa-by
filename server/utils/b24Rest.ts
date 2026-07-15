@@ -111,6 +111,31 @@ function selfHostedHosts(): Set<string> {
   return selfHostedCache
 }
 
+/** One-line REST-timing record (#78, «measure before you throttle» for #191): the
+ *  method, total wall time, optional Bitrix server-side time (`time.duration`, lets you
+ *  split network vs portal), and ok flag. Pure — the transport formats + logs it. `method`
+ *  is a code literal (never payer/user input), so it needs no sanitization. */
+export function restTimingLine(method: string, ms: number, ok: boolean, srvMs?: number): string {
+  const srv = srvMs != null && Number.isFinite(srvMs) ? ` srv=${Math.round(srvMs)}` : ''
+  return `[rest-timing] method=${method} ms=${Math.round(ms)}${srv} ok=${ok ? 1 : 0}`
+}
+
+/** Extract Bitrix's server-side processing time (ms) from a REST envelope's `time.duration`
+ *  (seconds, float), or `undefined` when absent/non-finite. Pure. */
+export function serverDurationMs(resp: Record<string, unknown>): number | undefined {
+  const dur = (resp?.time as { duration?: unknown } | undefined)?.duration
+  return typeof dur === 'number' && Number.isFinite(dur) ? dur * 1000 : undefined
+}
+
+// REST timing is opt-in (default OFF) — it logs one line per outbound call, which is
+// noise in steady state but exactly what you want during a load test before adding the
+// #191 rate limiter. Parsed once, lazily (env is static at runtime).
+let restTimingCache: boolean | null = null
+function restTimingEnabled(): boolean {
+  if (restTimingCache === null) restTimingCache = /^(1|true|yes|on)$/i.test(String(process.env.REST_TIMING ?? '').trim())
+  return restTimingCache
+}
+
 /** Call a REST method on the portal with an access token in the body. FAIL-CLOSED on a
  *  non-allow-listed host (#149 SSRF gate) and bounded by `REST_TIMEOUT_MS`. */
 export async function callRest(
@@ -136,16 +161,28 @@ export async function callRest(
     url: string,
     opts: { method: string, body: Record<string, unknown>, timeout: number }
   ) => Promise<Record<string, unknown>>
-  const json = await fetchJson(restUrl(host, method), {
-    method: 'POST',
-    body: { ...params, auth: accessToken },
-    // Bound the outbound call — a hung/slow portal must not pin a worker or request slot.
-    timeout: REST_TIMEOUT_MS
-  })
+  // Time the call for the opt-in [rest-timing] log (#78). A transport throw (network /
+  // timeout) is logged as ok=0 before rethrowing; a 200 with a B24 {error} body logs ok=0
+  // too (the error check below turns it into a throw).
+  const timing = restTimingEnabled()
+  const t0 = timing ? Date.now() : 0
+  let json: Record<string, unknown>
+  try {
+    json = await fetchJson(restUrl(host, method), {
+      method: 'POST',
+      body: { ...params, auth: accessToken },
+      // Bound the outbound call — a hung/slow portal must not pin a worker or request slot.
+      timeout: REST_TIMEOUT_MS
+    })
+  } catch (e) {
+    if (timing) console.log(restTimingLine(method, Date.now() - t0, false))
+    throw e
+  }
   // B24 signals many failures as HTTP 200 + {error} — surface them as throws so
   // callers (company lookup, activity write, settings) don't mistake an error body
   // for an empty result and silently swallow it.
   const err = b24ErrorMessage(json)
+  if (timing) console.log(restTimingLine(method, Date.now() - t0, !err, serverDurationMs(json)))
   if (err) throw new Error(`B24 REST ${method} failed — ${err}`)
   return json
 }
