@@ -97,12 +97,16 @@ export function liveHandlerDeps(): HandlerDeps {
     // #191 lever-2 DONE: the per-portal RestCall is now bound ONCE via `resolvePortalCall`
     // (createPortalRestResolver) and reused across findCompany/resolveIntents/writeActivity/
     // notifyChat/applyAllocation/notifyError, instead of re-loading+refreshing the token per
-    // op. TODO stage 5 / #191 lever-1 (before real volume): a REST rate limiter + batching on
+    // op. The resolver also reactively force-refreshes + retries once on a server-side
+    // `expired_token` (isExpiredTokenError), keeping our advisory-lock refresh (#35).
+    // TODO stage 5 / #191 lever-1 (before real volume): a REST rate limiter + batching on
     // the crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
     // lookups — the payment-number pool is ONE company scan per op (#192) but still unbatched/
     // unpaginated — + writeActivity 1 call per op → will hit B24 QUERY_LIMIT_EXCEEDED under
-    // real volume). The SDK transport (b24Sdk.ts, per-portal RestrictionManager) swaps in
-    // under the same resolver — its live smoke gate is separate (docs/QUEUES.md §REST-бюджет).
+    // real volume). NB: swapping the transport to the SDK (b24Sdk.ts) for its built-in
+    // RestrictionManager is DEFERRED — the SDK's self-refresh bypasses our advisory lock; the
+    // rate limiter is the remaining #191 lever, not a wholesale transport swap (docs/QUEUES.md
+    // §REST-бюджет).
     findCompany: async (item, memberId) => {
       // Demo ops: pause (so crm-sync shows a backlog too) then skip — never REST.
       if (isDemoAccount(item.account)) {

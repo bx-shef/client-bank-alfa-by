@@ -490,8 +490,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (drop-in для
     `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import` и `new B24OAuth(...)`; чистые мапперы
     и `makeSdkRestCall` (структурный клиент) тестируются фейком без живого портала, а типизация `new B24OAuth` как
-    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). Свап транспорта
-    `crm-sync` — следующий PR после смоук-теста на живом портале (`pnpm sdk:test`); детали — `docs/QUEUES.md` §REST-бюджет.
+    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). **Свап транспорта `crm-sync`
+    на SDK — отложен** (адаптер держим в репо под тестами как опцию): встроенный SDK-рефреш **обходит наш
+    advisory-lock** (`ensureAccessToken`, #35) — при scale-out N воркеров гонялись бы на ротации refresh-токена
+    и портя креды портала. Поэтому из SDK **взяли не транспорт, а идею**: reactive-retry на `expired_token`
+    портирован на **наш** `callRest`-путь (`isExpiredTokenError` + `portalRestResolver` force-refresh, #191),
+    **сохранив наш лок**. Что у SDK ещё осталось ценного — встроенный per-instance rate-limiter; это остаток
+    #191 (лимитер/бэкофф на `QUERY_LIMIT_EXCEEDED`), а не свап. Детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):

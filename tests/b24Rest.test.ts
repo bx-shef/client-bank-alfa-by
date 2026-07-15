@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   B24RestError,
   b24ErrorMessage,
+  b24RestErrorFrom,
   callRest,
   isAllowedPortalHost,
   isExpiredTokenError,
@@ -205,5 +206,75 @@ describe('B24RestError + isExpiredTokenError (reactive retry)', () => {
     const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
     expect(err).toBeInstanceOf(B24RestError)
     expect(isExpiredTokenError(err)).toBe(false)
+  })
+
+  // The REAL production shape: B24 returns `expired_token` as HTTP 401, so ofetch THROWS a
+  // FetchError before the 200-body check ever runs. The thrown error carries the parsed body
+  // on `.data`. Without classifying that, `isExpiredTokenError` is always false in prod and the
+  // reactive-retry surface is dead code. Simulate a FetchError-like throw with `.data`.
+  it('classifies a THROWN non-2xx response (401 expired_token) into a typed B24RestError', async () => {
+    g.$fetch = async () => {
+      const e = new Error('[POST] "…": 401 Unauthorized') as Error & { data?: unknown, status?: number }
+      e.data = { error: 'expired_token', error_description: 'The access token provided has expired' }
+      e.status = 401
+      throw e
+    }
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(err).toBeInstanceOf(B24RestError)
+    expect((err as B24RestError).code).toBe('expired_token')
+    expect(isExpiredTokenError(err)).toBe(true)
+    expect((err as Error).message).toBe('B24 REST crm.item.list failed — expired_token: The access token provided has expired')
+  })
+
+  it('classifies a THROWN non-2xx invalid_token body too (both are expiry codes)', async () => {
+    g.$fetch = async () => {
+      const e = new Error('401') as Error & { data?: unknown }
+      e.data = { error: 'invalid_token', error_description: 'bad token' }
+      throw e
+    }
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(isExpiredTokenError(err)).toBe(true)
+  })
+
+  it('propagates a raw transport error (no B24 body) unchanged — not a B24RestError', async () => {
+    const network = new Error('fetch failed: ECONNRESET')
+    g.$fetch = async () => {
+      throw network
+    }
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(err).toBe(network) // same instance, not wrapped
+    expect(err).not.toBeInstanceOf(B24RestError)
+    expect(isExpiredTokenError(err)).toBe(false)
+  })
+
+  it('propagates a thrown non-2xx whose body is NOT a B24 error (e.g. HTML 502) unchanged', async () => {
+    const gateway = new Error('502 Bad Gateway') as Error & { data?: unknown }
+    gateway.data = '<html>Bad Gateway</html>' // string body, no {error}
+    g.$fetch = async () => {
+      throw gateway
+    }
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(err).toBe(gateway)
+    expect(err).not.toBeInstanceOf(B24RestError)
+  })
+})
+
+describe('b24RestErrorFrom (shared classifier)', () => {
+  it('builds a typed error from a {error, error_description} body', () => {
+    const e = b24RestErrorFrom('crm.item.list', { error: 'expired_token', error_description: 'expired' })
+    expect(e).toBeInstanceOf(B24RestError)
+    expect(e!.code).toBe('expired_token')
+    expect(e!.description).toBe('expired')
+    expect(e!.message).toBe('B24 REST crm.item.list failed — expired_token: expired')
+  })
+  it('uses the bare code as the message when there is no description', () => {
+    const e = b24RestErrorFrom('profile', { error: 'insufficient_scope' })
+    expect(e!.code).toBe('insufficient_scope')
+    expect(e!.description).toBe('')
+    expect(e!.message).toBe('B24 REST profile failed — insufficient_scope')
+  })
+  it('returns null for a success body (no error) so callers keep the result', () => {
+    expect(b24RestErrorFrom('x', { result: { id: 1 } })).toBeNull()
+    expect(b24RestErrorFrom('x', { error: '' })).toBeNull()
   })
 })

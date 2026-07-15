@@ -162,6 +162,20 @@ describe('createPortalRestResolver — reactive expired_token retry', () => {
     expect(ensureFresh.mock.calls.some(c => c[1]?.force)).toBe(false) // no force refresh
   })
 
+  it('propagates a RAW error (plain Error, no code) unchanged — retry is code-gated, not catch-all', async () => {
+    // A network/timeout throw is a plain Error, not a B24RestError → isExpiredTokenError is
+    // false → the resolver must NOT swallow it into a refresh loop; it propagates as-is.
+    const raw = new Error('fetch failed: ECONNRESET')
+    const ensureFresh = vi.fn(async (t: PortalToken) => t)
+    const callRest = vi.fn().mockRejectedValue(raw)
+    const deps: PortalRestDeps = { loadToken: async () => tok('m1', 1_000_000), ensureFresh: ensureFresh as PortalRestDeps['ensureFresh'], callRest: callRest as unknown as PortalRestDeps['callRest'] }
+    const resolve = createPortalRestResolver(deps, () => 0)
+    const call = await resolve('m1')
+    await expect(call!('x', {})).rejects.toBe(raw) // same instance, not wrapped/retried
+    expect(callRest).toHaveBeenCalledTimes(1)
+    expect(ensureFresh.mock.calls.some(c => c[1]?.force)).toBe(false)
+  })
+
   it('a SECOND consecutive expired_token throws (only one retry, no loop)', async () => {
     const ensureFresh = vi.fn(async (t: PortalToken) => ({ ...t, accessToken: 'AT-NEW' }))
     const callRest = vi.fn().mockRejectedValue(new B24RestError('expired_token', '', 'still expired'))
