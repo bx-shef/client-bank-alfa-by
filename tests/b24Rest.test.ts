@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  B24RestError,
   b24ErrorMessage,
   callRest,
   isAllowedPortalHost,
+  isExpiredTokenError,
   parseSelfHostedHosts,
   portalHostname,
   restTimingLine,
@@ -171,5 +173,37 @@ describe('callRest SSRF gate (#149)', () => {
       throw new Error('TRANSPORT_REACHED')
     }
     await expect(callRest('acme.bitrix24.by', 'secret', 'app.info')).rejects.toThrow('TRANSPORT_REACHED')
+  })
+})
+
+describe('B24RestError + isExpiredTokenError (reactive retry)', () => {
+  const g = globalThis as unknown as { $fetch?: unknown }
+  afterEach(() => {
+    delete g.$fetch
+  })
+
+  it('isExpiredTokenError is true only for expired_token / invalid_token codes', () => {
+    expect(isExpiredTokenError(new B24RestError('expired_token', 'x', 'm'))).toBe(true)
+    expect(isExpiredTokenError(new B24RestError('invalid_token', '', 'm'))).toBe(true)
+    expect(isExpiredTokenError(new B24RestError('QUERY_LIMIT_EXCEEDED', '', 'm'))).toBe(false)
+    expect(isExpiredTokenError(new Error('expired_token'))).toBe(false) // plain Error, no code
+    expect(isExpiredTokenError('expired_token')).toBe(false)
+  })
+
+  it('callRest throws a B24RestError carrying the error code on a 200+{error} body', async () => {
+    g.$fetch = async () => ({ error: 'expired_token', error_description: 'The access token provided has expired' })
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(err).toBeInstanceOf(B24RestError)
+    expect((err as B24RestError).code).toBe('expired_token')
+    expect(isExpiredTokenError(err)).toBe(true)
+    // message unchanged so `.message`-matching callers still work
+    expect((err as Error).message).toBe('B24 REST crm.item.list failed — expired_token: The access token provided has expired')
+  })
+
+  it('a non-auth B24 error is a B24RestError but NOT an expired-token error', async () => {
+    g.$fetch = async () => ({ error: 'QUERY_LIMIT_EXCEEDED', error_description: 'Too many requests' })
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(err).toBeInstanceOf(B24RestError)
+    expect(isExpiredTokenError(err)).toBe(false)
   })
 })

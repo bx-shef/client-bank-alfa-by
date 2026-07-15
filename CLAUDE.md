@@ -476,7 +476,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     один резолвер и переиспользует его во **всех** пер-операционных вызовах (`findCompany`/`resolveIntents`/
     `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) — вместо загрузки+рефреша токена на каждую
     операцию (было ~6·N на батч из N операций). Транспорт-agnostic: свап на SDK меняет только `callRest` под
-    резолвером. DI+инъектируемые часы, тесты (bind-once/ре-байнд по истечении/`null`-не-кэшируется/пер-member).
+    резолвером. **Реактивный ретрай (#191):** связанный `RestCall` при `expired_token`/`invalid_token`
+    (`isExpiredTokenError`, `b24Rest.ts`) форс-рефрешит токен (`ensureFresh(token, {force:true})` — тот же
+    advisory-lock, у соседнего `ai-price-import` лока нет) и повторяет **один раз**, обновляя кэш; не-auth-ошибка
+    пробрасывается, второй `expired` бросает (без цикла). DI+инъектируемые часы, тесты (bind-once/ре-байнд/
+    `null`-не-кэшируется/пер-member/реактивный ретрай/один-повтор/не-auth-проброс).
   - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
     per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
     задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
@@ -628,7 +632,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       Смарт-процессы пока не включены (их `entityTypeId` портало-специфичен, интенты `unsupported`). DI, тесты
       (`tests/negativeStages.test.ts`).
     **bind-`RestCall`-once — сделан** (`portalRestResolver.ts`, #191 lever-2: один bind токена на портал вместо ~6·N
-    на батч). Осталось: **rate-limit/bounded-concurrency воркера +
+    на батч); **реактивный ретрай `expired_token` — сделан** (типизированная `B24RestError` + `ensureFresh(force)`,
+    advisory-locked, повтор 1 раз — паттерн `ai-price-import`, но с нашим локом). **SDK-своп транспорта —
+    отложён** (#191, PR #250 закрыт): SDK-инстанс рефрешит токен мимо advisory-lock → на масштабе гонка ротации;
+    адаптер `b24Sdk.ts` остаётся под тестами, свап — после дизайна scale-safe координации рефреша. Осталось:
+    **rate-limit/bounded-concurrency воркера +
     батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
     списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
     `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
@@ -671,11 +679,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     parser-differential обхода `x.bitrix24.by@evil.com`; таймаут `REST_TIMEOUT_MS` 15с; **опц.
     `[rest-timing]`-лог (#78)** — env `REST_TIMING` (default OFF) пишет строку на исходящий вызов
     `method`/`ms`/`srv` (серверное `time.duration` Б24 → сеть vs портал)/`ok`, чистые
-    `restTimingLine`/`serverDurationMs` под тестами — «мерить до троттлинга» перед лимитером #191),
+    `restTimingLine`/`serverDurationMs` под тестами — «мерить до троттлинга» перед лимитером #191; **типизированная
+    `B24RestError`** несёт машинный `error`-код — `isExpiredTokenError` отличает `expired_token`/`invalid_token`
+    для реактивного ретрая резолвера, сообщение неизменно, `.message`-совместимо),
     `server/utils/ensureAccessToken.ts`
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
-    N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; DI + тесты),
+    N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; **`{force:true}`** —
+    рефреш и при clock-fresh токене (реактивный ретрай после раннего отказа сервера), тем же локом, refresh
+    только если stored-токен всё ещё отвергнутый (иначе берём чужой свежий — без лишней ротации); DI + тесты),
     `server/utils/tokenKeepAlive.ts` (**проактивный keep-alive рефреш, #175**: `refresh_token` живёт ~180 д,
     установленный, но **простаивающий** портал не делает REST-вызовов → ленивый рефреш не срабатывает → токен
     молча умирает на 180-й день. Раз в сутки крон `runTokenKeepAlive` рефрешит **только** порталы у истечения:

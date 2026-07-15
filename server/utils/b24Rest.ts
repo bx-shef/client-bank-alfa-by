@@ -104,6 +104,26 @@ export function b24ErrorMessage(resp: Record<string, unknown>): string | null {
   return desc ? `${err}: ${desc}` : `${err}`
 }
 
+/** Typed B24 REST error carrying the machine-readable `error` code, so callers can
+ *  distinguish `expired_token`/`invalid_token` (refresh + retry) from other failures.
+ *  Extends Error and keeps the same human message `callRest` always threw, so any
+ *  caller matching on `.message` is unaffected — only the extra `code` is new. */
+export class B24RestError extends Error {
+  constructor(readonly code: string, readonly description: string, message: string) {
+    super(message)
+    this.name = 'B24RestError'
+  }
+}
+
+/** True when a REST error means the ACCESS token was rejected server-side and the call
+ *  should be retried after a forced refresh (the token may be rejected before its computed
+ *  expiry — clock skew / early server-side invalidation). Mirrors ai-price-import's
+ *  reactive-retry classifier; here the resolver drives the retry (keeping our advisory-lock
+ *  refresh, which that repo lacks). */
+export function isExpiredTokenError(err: unknown): boolean {
+  return err instanceof B24RestError && (err.code === 'expired_token' || err.code === 'invalid_token')
+}
+
 // Self-hosted allow-list is static at runtime — parse the env once, lazily.
 let selfHostedCache: Set<string> | null = null
 function selfHostedHosts(): Set<string> {
@@ -183,6 +203,12 @@ export async function callRest(
   // for an empty result and silently swallow it.
   const err = b24ErrorMessage(json)
   if (timing) console.log(restTimingLine(method, Date.now() - t0, !err, serverDurationMs(json)))
-  if (err) throw new Error(`B24 REST ${method} failed — ${err}`)
+  if (err) {
+    // Carry the machine-readable `error` code so callers can detect `expired_token` and
+    // refresh+retry. The message is unchanged, so `.message`-matching callers are unaffected.
+    const code = json.error === undefined || json.error === null ? '' : String(json.error)
+    const desc = json.error_description === undefined || json.error_description === null ? '' : String(json.error_description)
+    throw new B24RestError(code, desc, `B24 REST ${method} failed — ${err}`)
+  }
   return json
 }

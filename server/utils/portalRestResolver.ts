@@ -26,6 +26,7 @@ import type { RestCall } from './companyLookup'
 import type { PortalRestDeps } from './portalRest'
 import type { PortalToken } from './tokenStore'
 import { needsRefresh } from './ensureAccessToken'
+import { isExpiredTokenError } from './b24Rest'
 
 /** A per-portal resolver: `(memberId) → RestCall | null`, memoised until near expiry,
  *  with `evict(memberId)` to drop a portal's cached bind (called on uninstall). */
@@ -47,6 +48,24 @@ export function createPortalRestResolver(
   skewMs?: number
 ): PortalRestResolver {
   const cache = new Map<string, { call: RestCall, token: PortalToken }>()
+
+  // A bound RestCall with a REACTIVE retry: if B24 rejects the (clock-fresh) access token
+  // — `expired_token`/`invalid_token`, e.g. early server-side invalidation the expiry check
+  // can't see — force a refresh (advisory-locked in `ensureAccessToken`, so it stays
+  // single-writer under scale-out) and retry ONCE, updating the cache so later calls use the
+  // fresh token. Non-expiry errors propagate unchanged. Only one retry (a second rejection
+  // throws) — no loop. Mirrors ai-price-import's retry-once, but keeps our advisory lock.
+  const makeCall = (memberId: string, bound: PortalToken): RestCall => async (method, params) => {
+    try {
+      return await deps.callRest(bound.domain, bound.accessToken, method, params)
+    } catch (err) {
+      if (!isExpiredTokenError(err)) throw err
+      const refreshed = await deps.ensureFresh(bound, { force: true })
+      cache.set(memberId, { call: makeCall(memberId, refreshed), token: refreshed })
+      return await deps.callRest(refreshed.domain, refreshed.accessToken, method, params)
+    }
+  }
+
   const resolver = (async (memberId: string) => {
     const cached = cache.get(memberId)
     if (cached && !needsRefresh(cached.token, now(), skewMs)) return cached.call
@@ -56,7 +75,7 @@ export function createPortalRestResolver(
       return null
     }
     const fresh = await deps.ensureFresh(token)
-    const call: RestCall = (method, params) => deps.callRest(fresh.domain, fresh.accessToken, method, params)
+    const call = makeCall(memberId, fresh)
     cache.set(memberId, { call, token: fresh })
     return call
   }) as PortalRestResolver

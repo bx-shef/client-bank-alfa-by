@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PortalRestDeps } from '../server/utils/portalRest'
 import type { PortalToken } from '../server/utils/tokenStore'
 import { createPortalRestResolver } from '../server/utils/portalRestResolver'
+import { B24RestError } from '../server/utils/b24Rest'
 
 function tok(memberId: string, expiresAt: number): PortalToken {
   return { memberId, domain: `${memberId}.bitrix24.by`, accessToken: `at-${expiresAt}`, refreshToken: 'rt', expiresAt, applicationToken: '' }
@@ -112,5 +113,62 @@ describe('createPortalRestResolver (#191 bind-once)', () => {
     const call = await resolve('m1')
     await call!('crm.item.list', { a: 1 })
     expect(callRest).toHaveBeenCalledWith('m1.bitrix24.by', 'at-1000000', 'crm.item.list', { a: 1 })
+  })
+})
+
+describe('createPortalRestResolver — reactive expired_token retry', () => {
+  it('on expired_token: force-refreshes and retries ONCE with the fresh token', async () => {
+    const rotated: PortalToken = { memberId: 'm1', domain: 'm1.bitrix24.by', accessToken: 'AT-NEW', refreshToken: 'rt', expiresAt: 2_000_000, applicationToken: '' }
+    const loadToken = vi.fn(async () => tok('m1', 1_000_000)) // access token at-1000000
+    const ensureFresh = vi.fn(async (t: PortalToken, opts?: { force?: boolean }) => (opts?.force ? rotated : t))
+    // First call rejects with expired_token; the forced-refresh retry succeeds.
+    const callRest = vi.fn()
+      .mockRejectedValueOnce(new B24RestError('expired_token', 'expired', 'B24 REST … failed'))
+      .mockResolvedValueOnce({ ok: true })
+    const deps: PortalRestDeps = { loadToken, ensureFresh: ensureFresh as PortalRestDeps['ensureFresh'], callRest: callRest as unknown as PortalRestDeps['callRest'] }
+    const resolve = createPortalRestResolver(deps, () => 0)
+    const call = await resolve('m1')
+    const out = await call!('crm.item.list', { a: 1 })
+    expect(out).toEqual({ ok: true })
+    expect(ensureFresh).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'at-1000000' }), { force: true })
+    // retry used the ROTATED token/host
+    expect(callRest).toHaveBeenLastCalledWith('m1.bitrix24.by', 'AT-NEW', 'crm.item.list', { a: 1 })
+    expect(callRest).toHaveBeenCalledTimes(2)
+  })
+
+  it('updates the cache so the NEXT call uses the refreshed token (no second refresh)', async () => {
+    const rotated: PortalToken = { memberId: 'm1', domain: 'm1.bitrix24.by', accessToken: 'AT-NEW', refreshToken: 'rt', expiresAt: 2_000_000, applicationToken: '' }
+    const ensureFresh = vi.fn(async (t: PortalToken, opts?: { force?: boolean }) => (opts?.force ? rotated : t))
+    const callRest = vi.fn()
+      .mockRejectedValueOnce(new B24RestError('expired_token', '', 'x'))
+      .mockResolvedValue({ ok: true })
+    const deps: PortalRestDeps = { loadToken: async () => tok('m1', 1_000_000), ensureFresh: ensureFresh as PortalRestDeps['ensureFresh'], callRest: callRest as unknown as PortalRestDeps['callRest'] }
+    const resolve = createPortalRestResolver(deps, () => 0)
+    await (await resolve('m1'))!('x', {}) // trigger the retry and AWAIT it fully → cache updated
+    await (await resolve('m1'))!('y', {})
+    // one forced refresh total; the cached call now carries AT-NEW
+    expect(ensureFresh.mock.calls.filter(c => c[1]?.force).length).toBe(1)
+    expect(callRest).toHaveBeenLastCalledWith('m1.bitrix24.by', 'AT-NEW', 'y', {})
+  })
+
+  it('propagates a NON-expiry error without refreshing or retrying', async () => {
+    const ensureFresh = vi.fn(async (t: PortalToken) => t)
+    const callRest = vi.fn().mockRejectedValue(new B24RestError('QUERY_LIMIT_EXCEEDED', '', 'limit'))
+    const deps: PortalRestDeps = { loadToken: async () => tok('m1', 1_000_000), ensureFresh: ensureFresh as PortalRestDeps['ensureFresh'], callRest: callRest as unknown as PortalRestDeps['callRest'] }
+    const resolve = createPortalRestResolver(deps, () => 0)
+    const call = await resolve('m1')
+    await expect(call!('x', {})).rejects.toThrow(/limit/)
+    expect(callRest).toHaveBeenCalledTimes(1) // no retry
+    expect(ensureFresh.mock.calls.some(c => c[1]?.force)).toBe(false) // no force refresh
+  })
+
+  it('a SECOND consecutive expired_token throws (only one retry, no loop)', async () => {
+    const ensureFresh = vi.fn(async (t: PortalToken) => ({ ...t, accessToken: 'AT-NEW' }))
+    const callRest = vi.fn().mockRejectedValue(new B24RestError('expired_token', '', 'still expired'))
+    const deps: PortalRestDeps = { loadToken: async () => tok('m1', 1_000_000), ensureFresh: ensureFresh as PortalRestDeps['ensureFresh'], callRest: callRest as unknown as PortalRestDeps['callRest'] }
+    const resolve = createPortalRestResolver(deps, () => 0)
+    const call = await resolve('m1')
+    await expect(call!('x', {})).rejects.toThrow(/still expired/)
+    expect(callRest).toHaveBeenCalledTimes(2) // original + one retry, then it throws
   })
 })

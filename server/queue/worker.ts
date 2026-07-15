@@ -51,7 +51,7 @@ const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandi
 /** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
 const portalRestDeps: PortalRestDeps = {
   loadToken: memberId => getToken(dbQuery, memberId),
-  ensureFresh: token => ensureAccessToken(token),
+  ensureFresh: (token, opts) => ensureAccessToken(token, undefined, opts),
   callRest
 }
 
