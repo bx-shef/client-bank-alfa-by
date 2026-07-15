@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PortalRestDeps } from '../server/utils/portalRest'
 import type { PortalToken } from '../server/utils/tokenStore'
-import { createPortalRestResolver } from '../server/utils/portalRestResolver'
+import { createPortalRestResolver, makeEnsureFresh } from '../server/utils/portalRestResolver'
+import type { ensureAccessToken } from '../server/utils/ensureAccessToken'
 import { B24RestError } from '../server/utils/b24Rest'
 
 function tok(memberId: string, expiresAt: number): PortalToken {
@@ -113,6 +114,36 @@ describe('createPortalRestResolver (#191 bind-once)', () => {
     const call = await resolve('m1')
     await call!('crm.item.list', { a: 1 })
     expect(callRest).toHaveBeenCalledWith('m1.bitrix24.by', 'at-1000000', 'crm.item.list', { a: 1 })
+  })
+})
+
+// GUARD for the single production point that keeps the reactive retry alive: the crm-sync
+// worker builds `portalRestDeps.ensureFresh` via `makeEnsureFresh()`. If that forwarding ever
+// drops `opts` (as the two non-retry sibling wirings — liveDeps / appSettings — deliberately
+// do), the resolver's force-refresh silently no-ops and the retry reuses the SAME rejected
+// token → the feature is dead with every other test still green. So pin the contract here.
+describe('makeEnsureFresh (force-forwarding contract, #191)', () => {
+  it('threads {force:true} through to the injected ensureAccessToken (3rd arg)', async () => {
+    const refresh = vi.fn(async (t: PortalToken) => t)
+    const ensureFresh = makeEnsureFresh(refresh as unknown as typeof ensureAccessToken)
+    const t = tok('m1', 1_000_000)
+    await ensureFresh(t, { force: true })
+    // middle `deps` arg left default (undefined); `{force}` reaches the 3rd param.
+    expect(refresh).toHaveBeenCalledWith(t, undefined, { force: true })
+  })
+
+  it('forwards a missing opts as undefined (the resolver\'s normal, non-retry refresh)', async () => {
+    const refresh = vi.fn(async (t: PortalToken) => t)
+    const ensureFresh = makeEnsureFresh(refresh as unknown as typeof ensureAccessToken)
+    const t = tok('m1', 1_000_000)
+    await ensureFresh(t)
+    expect(refresh).toHaveBeenCalledWith(t, undefined, undefined)
+  })
+
+  it('returns whatever the refresh resolves to (rotated token flows back)', async () => {
+    const rotated = tok('m1', 2_000_000)
+    const ensureFresh = makeEnsureFresh((async () => rotated) as unknown as typeof ensureAccessToken)
+    expect(await ensureFresh(tok('m1', 1_000_000), { force: true })).toBe(rotated)
   })
 })
 

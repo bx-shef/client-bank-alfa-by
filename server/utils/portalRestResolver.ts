@@ -25,8 +25,20 @@
 import type { RestCall } from './companyLookup'
 import type { PortalRestDeps } from './portalRest'
 import type { PortalToken } from './tokenStore'
-import { needsRefresh } from './ensureAccessToken'
+import { ensureAccessToken, needsRefresh } from './ensureAccessToken'
 import { isExpiredTokenError } from './b24Rest'
+
+/** Build the resolver's `ensureFresh` dep from an `ensureAccessToken`-shaped refresh,
+ *  THREADING the reactive `{force}` opt through (the middle `deps` arg is left at its
+ *  default). The whole expired_token retry (#191) is dead the instant `force` stops
+ *  reaching `ensureAccessToken` — and the two NON-retry sibling wirings (`liveDeps`,
+ *  `appSettings`) intentionally drop `opts`, so an "align it with the siblings" edit would
+ *  silently disarm the retry with every test still green. Hence a named, unit-tested unit
+ *  (see tests/portalRestResolver.test.ts) rather than an inline `(t) => ensureAccessToken(t)`
+ *  lambda. Defaults to the live `ensureAccessToken`; the fn is injectable for the guard test. */
+export function makeEnsureFresh(refresh: typeof ensureAccessToken = ensureAccessToken): PortalRestDeps['ensureFresh'] {
+  return (token, opts) => refresh(token, undefined, opts)
+}
 
 /** A per-portal resolver: `(memberId) → RestCall | null`, memoised until near expiry,
  *  with `evict(memberId)` to drop a portal's cached bind (called on uninstall). */

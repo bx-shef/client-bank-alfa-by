@@ -192,40 +192,41 @@ flowchart LR
   вызов (`server/utils/b24Rest.ts`), `srv` = серверное `time.duration` Б24. Включается на нагрузочный тест, чтобы
   калибровать лимитер по реальной латентности/объёму **до** его включения.
 
-**Подход — не свой лимитер, а транспорт на `@bitrix24/b24jssdk`.** У SDK есть встроенный
+**Что даёт SDK — и почему берём идею, а не инстанс.** У `@bitrix24/b24jssdk` есть встроенный
 **RestrictionManager**: leaky-bucket (дефолт 2 req/s, burst 50), адаптивная задержка и **retry-с-backoff на
-`QUERY_LIMIT_EXCEEDED` / 429 / 5xx** — включён **по умолчанию** и **per-instance**. Значит один `B24OAuth` на
-портал на джобу даёт сразу **и** пер-портальный лимит (лимиты B24 — на портал; один крупный портал не выберет
-чужой бюджет, у каждого своё ведро), **и** bind-`RestCall`-once (токен резолвится раз на джобу). Ручной BullMQ-
-лимитер/тюнинг не нужен — SDK сам держит темп.
+`QUERY_LIMIT_EXCEEDED` / 429 / 5xx** — **по умолчанию** и **per-instance** (один `B24OAuth` на портал на джобу дал бы
+пер-портальный лимит; лимиты B24 — на портал). Это ровно оставшийся lever-1. **Но** тот же `B24OAuth` рефрешит токен
+**мимо** нашего advisory-lock (`ensureAccessToken`, #35): на scale-out N воркеров гонялись бы на ротации refresh-
+токена и портили креды портала. Поэтому **транспорт целиком не свапаем** — из SDK взяли **идею**, а не инстанс:
+reactive-retry на `expired_token` уже портирован на **наш** `RestCall` (`isExpiredTokenError` + `portalRestResolver`
+force-refresh, **с сохранением лока**), а лимитер сделаем **своим** (BullMQ-лимитер / пер-портальное ведро + backoff),
+без чужого авто-рефреша.
 
-**Сделано (фундамент, ещё НЕ подключён к hot-path):**
-- **Адаптер `server/utils/b24Sdk.ts`** — per-portal `B24OAuth` → наш `RestCall` (тот же контракт: `{result,…}`):
+**Адаптер под тестами (как ОПЦИЯ, НЕ на hot-path):**
+- **`server/utils/b24Sdk.ts`** — per-portal `B24OAuth` → наш `RestCall` (тот же контракт: `{result,…}`):
   `oauthParamsFromToken` (наш `PortalToken` → `B24OAuthParams`, сверено `typecheck:server` против реальных типов
   SDK), `makeSdkRestCall` (unwrap `getData()` / throw на ошибке), `buildRefreshPersist`+`setCallbackRefreshAuth`
   (SDK сам рефрешит токен → мы сохраняем свежий в стор), `makePortalSdkCall` (`null` без токена — drop-in для
   `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import`/`new B24OAuth(...)`; чистые мапперы и
   `makeSdkRestCall` (структурный клиент) тестируются фейком, а типизация `new B24OAuth` как `OAuthCallClient` служит
-  compile-time drift-guard'ом.
+  compile-time drift-guard'ом. Держим в репо под тестами: если появится scale-safe координация рефреша (отключить
+  авто-рефреш SDK / общий межинстансный лок на ротацию), свап станет опцией «из коробки»; до этого — не подключаем.
 - **Дев-смоук `pnpm sdk:test`** (`scripts/b24-sdk-test.mjs`, вебхук из `.env.b24test`) — проверить на **живом
   портале**, что SDK работает в Node и сам троттлит (`--burst` — 60 быстрых вызовов без `QUERY_LIMIT_EXCEEDED`).
 
-**Осталось (до первого РЕАЛЬНОГО опроса портала — не демо; и до слайса записи разнесения):**
-1. **Прогнать `pnpm sdk:test` на живом портале** (гейт) — подтвердить транспорт+лимитер.
-2. **Свапнуть транспорт `crm-sync`**: `makePortalRestCall` → `makePortalSdkCall`, **один `B24OAuth` на джобу** и
-   прокинуть готовый `RestCall` в депсы (`findCompany`/`resolveIntents`/`writeActivity`/`notifyChat`) — сразу и лимит,
-   и bind-once. Для записи (`crm.activity.todo.add`) — `retryOnNetworkError:false` (иначе дубли при таймауте; у нас
-   есть dedup #9, но так чище) и увеличенный timeout.
-3. **`BatchByChunk`/`FetchList` из SDK** для объёмных выборок — вместо ручного N+1 (пул оплат, списки) и как замена
-   ручному `callBatch`; частичное падение батча при записи — опираться на идемпотентность
+**Осталось (lever-1 — до первого РЕАЛЬНОГО опроса портала, не демо):**
+1. **Свой rate-limit / bounded-concurrency + backoff на `QUERY_LIMIT_EXCEEDED`** на `crm-sync`-воркере (BullMQ-
+   лимитер или пер-портальное ведро) — глобальный лимит на портал **до** реального опроса. Калибровать по
+   `REST_TIMING`. Учесть, что `negativeStages` добавляет `crm.category.list`×2 + `crm.status.list`×N раз на джобу.
+2. **Батчинг (`callBatch` / `FetchList`-паттерн)** для объёмных выборок вместо ручного N+1 (пул оплат, списки);
+   частичное падение батча при записи — опираться на идемпотентность
    ([#184](https://github.com/bx-shef/client-bank-alfa-by/issues/184)).
-4. **Расширить хранилище токена** полями, которых нет в `PortalToken` (userId/scope/expiresIn/status) — для REST
+3. **Расширить хранилище токена** полями, которых нет в `PortalToken` (userId/scope/expiresIn/status) — для REST
    не критично (сейчас дефолтятся), но для полноты `B24OAuth`-профиля стоит сохранять из события установки.
+4. **(За гейтом)** свап транспорта на SDK — только **после** дизайна scale-safe координации рефреша (иначе авто-
+   рефреш SDK обходит наш advisory-lock). До этого адаптер остаётся тестовой опцией, а не планом.
 
-Почему не свапнули сразу: пока пайплайн **log-only** (ничего не пишется) и реального опроса нет (`fetchStatement`
-отдаёт только demo-items) — свап транспорта надо сперва проверить на живом портале (`pnpm sdk:test`: рантайм SDK +
-реальный refresh токена + троттлинг), поэтому адаптер готов и покрыт тестами, а подключение к hot-path — следующий
-PR после смоук-теста. Детали — [issue #191](https://github.com/bx-shef/client-bank-alfa-by/issues/191).
+Детали — [issue #191](https://github.com/bx-shef/client-bank-alfa-by/issues/191).
 
 > **Заметка по безопасности (issue #191).** На этом issue появился комментарий от постороннего аккаунта
 > (`author_association: NONE`) со ссылкой на zip-архив и просьбой «просканировать файлы» — это признаки

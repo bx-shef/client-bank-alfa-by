@@ -23,9 +23,8 @@ import { deleteImportResultForPortal, saveImportResult } from '../utils/importRe
 import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { callRest } from '../utils/b24Rest'
-import { ensureAccessToken } from '../utils/ensureAccessToken'
 import type { PortalRestDeps } from '../utils/portalRest'
-import { createPortalRestResolver } from '../utils/portalRestResolver'
+import { createPortalRestResolver, makeEnsureFresh } from '../utils/portalRestResolver'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
 import { writeActivityViaRest } from '../utils/crmActivityWrite'
@@ -35,7 +34,7 @@ import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../ut
 import { payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { allocationFactKey } from '../../app/utils/allocation'
-import { PortalNotInstalledError, readAppSetting } from '../utils/appSettings'
+import { readAppSettingVia } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById } from '../utils/itemByIdLookup'
@@ -48,10 +47,13 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
 const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCompanyDealPayments, findOrderPaymentIds }
 
-/** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST). */
+/** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST).
+ *  `ensureFresh` MUST thread `{force}` to `ensureAccessToken` (the reactive expired_token
+ *  retry, #191) — built via `makeEnsureFresh` so that contract is a tested unit, not an
+ *  inline lambda one edit away from silently dropping `opts`. */
 const portalRestDeps: PortalRestDeps = {
   loadToken: memberId => getToken(dbQuery, memberId),
-  ensureFresh: (token, opts) => ensureAccessToken(token, undefined, opts),
+  ensureFresh: makeEnsureFresh(),
   callRest
 }
 
@@ -128,20 +130,19 @@ export function liveHandlerDeps(): HandlerDeps {
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
-    // recognition steps. portalRestDeps already satisfies AppSettingsDeps (loadToken/
-    // ensureFresh/callRest). Any error (portal not installed / REST) → null → chat +
-    // recognition off.
+    // recognition steps. Goes through the SAME bind-once resolver as the per-op calls, so
+    // this gating read shares the reactive expired_token retry (#191): it runs FIRST and can
+    // hard-fail the whole job, so a clock-fresh-but-server-rejected token must self-heal here
+    // too (force-refresh+retry-once) instead of looping BullMQ retries until clock-expiry.
     getPortalSettings: async (memberId) => {
-      try {
-        return parsePortalSettings(await readAppSetting(portalRestDeps, memberId, SETTINGS_KEY))
-      } catch (e) {
-        // Portal genuinely not installed (e.g. demo memberId with no token) → no settings.
-        if (e instanceof PortalNotInstalledError) return null
-        // A TRANSIENT error (REST/refresh) must NOT silently disable chat/recognition for
-        // the whole batch: rethrow to fail the job BEFORE any activity is written (this
-        // runs before the loop) → clean retry recovers both the writes and announcements.
-        throw e
-      }
+      // null call = portal genuinely not installed (e.g. demo memberId with no token) → no
+      // settings (chat + recognition off), same as the old PortalNotInstalledError branch.
+      const call = await resolvePortalCall(memberId)
+      if (!call) return null
+      // A TRANSIENT error (non-auth REST) still throws out of `call` → fails the job BEFORE
+      // any activity is written (this runs before the loop) → clean retry recovers the writes
+      // and announcements. An expired_token is absorbed by the resolver's retry, not thrown.
+      return parsePortalSettings(await readAppSettingVia(call, SETTINGS_KEY))
     },
     // Recognition intent (§4, #109) — LOG-ONLY this slice: record what was recognized in
     // the purpose and where each identifier would route, so coverage is observable on the

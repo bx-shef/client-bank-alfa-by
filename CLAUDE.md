@@ -474,13 +474,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     now?, skewMs?)` мемоизирует связанный `RestCall` по `member_id` до приближения истечения токена (кэш
     `{call, expiresAt}`, ре-байнд при `now ≥ expiresAt − skew`, `null` не кэшируется). `crm-sync`-воркер строит
     один резолвер и переиспользует его во **всех** пер-операционных вызовах (`findCompany`/`resolveIntents`/
-    `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) — вместо загрузки+рефреша токена на каждую
+    `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) **и в гейт-чтении настроек на джобу**
+    (`getPortalSettings` → `readAppSettingVia`, `appSettings.ts`) — вместо загрузки+рефреша токена на каждую
     операцию (было ~6·N на батч из N операций). Транспорт-agnostic: свап на SDK меняет только `callRest` под
     резолвером. **Реактивный ретрай (#191):** связанный `RestCall` при `expired_token`/`invalid_token`
-    (`isExpiredTokenError`, `b24Rest.ts`) форс-рефрешит токен (`ensureFresh(token, {force:true})` — тот же
-    advisory-lock, у соседнего `ai-price-import` лока нет) и повторяет **один раз**, обновляя кэш; не-auth-ошибка
-    пробрасывается, второй `expired` бросает (без цикла). DI+инъектируемые часы, тесты (bind-once/ре-байнд/
-    `null`-не-кэшируется/пер-member/реактивный ретрай/один-повтор/не-auth-проброс).
+    (`isExpiredTokenError`, `b24Rest.ts` — типизируется и из **брошенного** non-2xx ответа (B24 отдаёт
+    `expired_token` как HTTP 401) через `err.data`, не только из 200-`{error}`) форс-рефрешит токен (`ensureFresh(token, {force:true})` — тот же advisory-lock, у
+    соседнего `ai-price-import` лока нет) и повторяет **один раз**, обновляя кэш; не-auth-ошибка пробрасывается,
+    второй `expired` бросает (без цикла). Пробрасывание `{force}` в `ensureAccessToken` вынесено в `makeEnsureFresh`
+    (тестируемый юнит — соседние не-retry-обвязки `liveDeps`/`appSettings` намеренно роняют `opts`, чтобы одна
+    «упрощающая» правка не разоружила ретрай молча). Гейт-чтение (`getPortalSettings`) идёт первым и валит джобу —
+    поэтому тоже через резолвер (self-heal, а не цикл BullMQ-ретраев до clock-expiry). DI+инъектируемые часы, тесты
+    (bind-once/ре-байнд/`null`-не-кэшируется/пер-member/реактивный ретрай/один-повтор/не-auth-проброс/`makeEnsureFresh`).
   - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
     per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
     задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
@@ -703,7 +708,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     консервативно (Б24 предупреждает про авто-блок при частом рефреше): раз в сутки, батч-кап, только near-expiry.
     Гейт на `B24_CLIENT_ID/SECRET` (без них рефреш невозможен). DI, тесты `tests/tokenKeepAlive.test.ts`),
     `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
-    с DI — изоляция по `memberId`, используется серверной проверкой), `server/utils/settingsHandler.ts`
+    с DI — изоляция по `memberId`, используется серверной проверкой; **`readAppSettingVia(call, key)`** — чтение
+    через **уже связанный** `RestCall` резолвера, чтобы гейт-чтение настроек в `crm-sync` делило реактивный
+    ретрай `expired_token`, а не грузило/рефрешило токен само), `server/utils/settingsHandler.ts`
     (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
     UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)
     **аутентифицируются фрейм-токеном** (`Authorization: Bearer` + `X-B24-Domain`) — B24 скоупит

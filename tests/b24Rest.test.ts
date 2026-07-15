@@ -257,6 +257,20 @@ describe('B24RestError + isExpiredTokenError (reactive retry)', () => {
     expect(err).toBe(gateway)
     expect(err).not.toBeInstanceOf(B24RestError)
   })
+
+  it('propagates a thrown non-2xx whose .data is an OBJECT but not a B24 {error} (e.g. proxy JSON) unchanged', async () => {
+    // The middle arm of the catch: `.data` passes the `typeof === 'object'` guard but
+    // `b24RestErrorFrom` returns null (no `error` field) → must fall through to `throw e` raw,
+    // NOT become a bogus B24RestError with an empty code.
+    const proxy = new Error('500') as Error & { data?: unknown }
+    proxy.data = { result: false, status: 'gateway-timeout' } // object, no `error`
+    g.$fetch = async () => {
+      throw proxy
+    }
+    const err = await callRest('acme.bitrix24.by', 'tok', 'crm.item.list').catch(e => e)
+    expect(err).toBe(proxy)
+    expect(err).not.toBeInstanceOf(B24RestError)
+  })
 })
 
 describe('b24RestErrorFrom (shared classifier)', () => {
