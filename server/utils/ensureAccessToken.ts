@@ -59,9 +59,20 @@ const liveDeps: RefreshDeps = {
  * Return a valid access token for the portal, refreshing (once, under a per-portal
  * lock) if within the skew of expiry. Persists the rotated access+refresh tokens.
  * `deps` defaults to live (advisory lock + `$fetch`); tests inject fakes.
+ *
+ * `opts.force` refreshes even when the token looks clock-fresh — for a REACTIVE retry
+ * after B24 rejected the access token before its computed expiry (clock skew / early
+ * invalidation). Still serialized by the SAME advisory lock, and inside the lock it only
+ * refreshes when the stored token is STILL the one that was rejected — if another worker
+ * already rotated it, that fresh token is returned instead (no redundant refresh, so B24's
+ * frequent-refresh auto-block risk is avoided).
  */
-export async function ensureAccessToken(token: PortalToken, deps: RefreshDeps = liveDeps): Promise<PortalToken> {
-  if (!needsRefresh(token, deps.now())) return token
+export async function ensureAccessToken(
+  token: PortalToken,
+  deps: RefreshDeps = liveDeps,
+  opts: { force?: boolean } = {}
+): Promise<PortalToken> {
+  if (!opts.force && !needsRefresh(token, deps.now())) return token
 
   const clientId = process.env.B24_CLIENT_ID?.trim()
   const clientSecret = process.env.B24_CLIENT_SECRET?.trim()
@@ -79,7 +90,11 @@ export async function ensureAccessToken(token: PortalToken, deps: RefreshDeps = 
     // deleted portal. Return the passed token as-is; the downstream REST call will fail
     // and the job won't persist anything to a portal that no longer exists.
     if (!stored) return token
-    if (!needsRefresh(stored, deps.now())) return stored
+    // Force path: refresh only if the stored access token is STILL the rejected one; if a
+    // concurrent worker already rotated it, use theirs (avoids a redundant refresh that
+    // would rotate the refresh token again). Non-force path: clock-based as before.
+    const shouldRefresh = opts.force ? stored.accessToken === token.accessToken : needsRefresh(stored, deps.now())
+    if (!shouldRefresh) return stored
 
     const r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
     const updated: PortalToken = {

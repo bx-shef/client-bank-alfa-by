@@ -12,7 +12,9 @@ import type { PortalToken } from './tokenStore'
 /** I/O the binder needs, injected for testability. */
 export interface PortalRestDeps {
   loadToken: (memberId: string) => Promise<PortalToken | null>
-  ensureFresh: (token: PortalToken) => Promise<PortalToken>
+  /** Ensure a fresh access token. `opts.force` refreshes even when clock-fresh — for a
+   *  reactive retry after B24 rejected the token before its computed expiry. */
+  ensureFresh: (token: PortalToken, opts?: { force?: boolean }) => Promise<PortalToken>
   // `params` is optional to match the real `callRest` (which defaults it) — so a
   // PortalRestDeps also satisfies AppSettingsDeps, whose callRest has optional params.
   callRest: (host: string, accessToken: string, method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

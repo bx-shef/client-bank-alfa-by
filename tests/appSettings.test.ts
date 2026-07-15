@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   APP_SETTING_KEY,
   PortalNotInstalledError,
   pickAppOption,
   readAppSetting,
+  readAppSettingVia,
   writeAppSetting,
   type AppSettingsDeps
 } from '../server/utils/appSettings'
@@ -75,6 +76,26 @@ describe('appSettings', () => {
 
   it('uses the app.option key', () => {
     expect(APP_SETTING_KEY).toBe('cb_test_setting')
+  })
+})
+
+describe('readAppSettingVia (bound RestCall — reactive-retry path, #191)', () => {
+  it('reads app.option.get through the given call and picks the key', async () => {
+    const call = vi.fn(async () => ({ result: { [APP_SETTING_KEY]: 'blob' } }))
+    expect(await readAppSettingVia(call, APP_SETTING_KEY)).toBe('blob')
+    // It uses the ALREADY-BOUND call (no token load/refresh of its own — that is the
+    // resolver's job, which is what carries the expired_token retry).
+    expect(call).toHaveBeenCalledWith('app.option.get', {})
+  })
+  it('returns null when the key is unset', async () => {
+    const call = vi.fn(async () => ({ result: {} }))
+    expect(await readAppSettingVia(call, APP_SETTING_KEY)).toBeNull()
+  })
+  it('propagates a throw from the bound call (transient error fails the job → clean retry)', async () => {
+    const call = vi.fn(async () => {
+      throw new Error('boom')
+    })
+    await expect(readAppSettingVia(call)).rejects.toThrow('boom')
   })
 })
 

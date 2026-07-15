@@ -5,9 +5,19 @@
 // portal per crm-sync job therefore gives:
 //   - per-portal rate limiting (B24 limits are per-portal — one big portal can't starve
 //     the others, because each portal has its own bucket), and
-//   - bind-`RestCall`-once (the token is resolved once for the whole job, not per op),
-// solving both remaining #191 levers together. Token refresh is automatic; the SDK's
-// `setCallbackRefreshAuth` hands us the new token so we persist it to our own store.
+//   - bind-`RestCall`-once (the token is resolved once for the whole job, not per op).
+// Token refresh is automatic; the SDK's `setCallbackRefreshAuth` hands us the new token so
+// we persist it to our own store.
+//
+// STATUS — DEFERRED, NOT wired to the hot path. The SDK's automatic refresh runs OUTSIDE our
+// per-portal advisory lock (server/utils/ensureAccessToken.ts, #35): at scale-out N workers
+// would race the refresh-token rotation and corrupt a portal's creds. So we did NOT swap the
+// transport. Instead we took the IDEA, not the instance: the reactive `expired_token` retry
+// is ported onto OUR `RestCall` (isExpiredTokenError + portalRestResolver force-refresh,
+// keeping the lock), and the remaining #191 lever (rate-limit/backoff) will be OUR OWN, not
+// the SDK's. This module stays in the repo under tests as a drift-guarded OPTION: if a
+// scale-safe refresh-coordination design lands (disable the SDK auto-refresh / a shared
+// cross-instance rotation lock), the swap becomes turnkey. Until then it is not the plan.
 //
 // This is a server-only module, so it uses the SDK the normal way: a value import and a
 // real `new B24OAuth(...)` in `makePortalSdkCall`. The pure mapping helpers
@@ -112,8 +122,10 @@ export interface SdkPortalDeps {
 
 /** Build a `RestCall` bound to one portal, backed by a per-portal `B24OAuth` instance
  *  (its own rate-limiter bucket) with refresh-persistence wired. `null` when the portal
- *  has no stored token — same contract as `makePortalRestCall`, so it's a drop-in swap
- *  for the crm-sync transport once verified on a live portal (`pnpm sdk:test`).
+ *  has no stored token — same contract as `makePortalRestCall`, so it WOULD be a drop-in
+ *  swap. It is NOT wired to the crm-sync hot path (see the module header): the swap is
+ *  DEFERRED because the SDK's auto-refresh bypasses our advisory lock. Kept as a tested,
+ *  drift-guarded option.
  *  NB: unlike `makePortalRestCall` (which calls `ensureFresh` PROACTIVELY before the
  *  first call), the SDK refreshes REACTIVELY — on the first `expired_token`/401 it
  *  refreshes and retries, costing one extra round-trip on the first call after expiry.

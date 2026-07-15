@@ -41,9 +41,11 @@
   номеру+компании с **IDOR-скоупом**, распознавание из назначения, company-пул оплат, **`resolveAllocation`**
   (allocate / manual / валюта / **ambiguous + min-id**), **payment-number** (`filterByAccountNumber`).
   **PR #210 + #212 смержены**, каждый через 5 проверяющих.
-- **Гейт транспорта #191 (SDK) пройден вживую**: `pnpm sdk:test --burst` — 60 вызовов/5.5с, 0 отказов,
-  лимитер сам троттлит. Адаптер `server/utils/b24Sdk.ts` готов (#195/#197); сам свап транспорта `crm-sync`
-  на SDK — отдельный шаг (см. ниже).
+- **Смоук SDK-транспорта (#191) пройден вживую**: `pnpm sdk:test --burst` — 60 вызовов/5.5с, 0 отказов,
+  лимитер сам троттлит. Но **свап транспорта на SDK отложён**: SDK-инстанс рефрешит токен мимо нашего
+  advisory-lock (#35) → на scale-out гонка ротации ломает креды портала. Из SDK взяли **идею** — reactive-retry
+  на `expired_token` портирован на наш `RestCall` (`portalRestResolver`, лок сохранён); остаток #191 — **свой**
+  rate-limiter, не свап. Адаптер `b24Sdk.ts` остаётся тестовой опцией (см. ниже).
 
 ### Текущее состояние `main`
 
@@ -354,11 +356,12 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   исход `allocatable`/`ambiguous`/`manual`/`none`, amount-цели по сумме+валюте, trigger-цели безусловно; счётчики +
   лог, **пока без записи**; разбиение целей — компиляторно-проверяемый `ALLOCATION_TARGET_ROLE`) + **безопасность**
   (PR #200: `neutralizeBb` в заголовке/описании дела CRM — сырой текст плательщика больше не может внести BB в карточку).
-  Осталось: **остаток #191** — транспорт `crm-sync` на `@bitrix24/b24jssdk` (встроенный лимитер per-instance = пер-
-  портальный rate-limit + auto-refresh; адаптер `server/utils/b24Sdk.ts` готов и покрыт тестами, свап
-  hot-path — после смоук-теста `pnpm sdk:test` на живом портале; **bind-once (lever-2) уже сделан** —
-  `portalRestResolver.ts`, один bind токена на портал вместо ~6·N на батч, транспорт-agnostic; пул-раз-на-op **и
-  пагинация списка сделок** уже сделаны; дизайн — `docs/QUEUES.md`);
+  Осталось: **остаток #191** — **свой** rate-limit/bounded-concurrency + backoff на `QUERY_LIMIT_EXCEEDED` +
+  батчинг на `crm-sync`-воркере (**bind-once lever-2 уже сделан** — `portalRestResolver.ts`, один bind токена на
+  портал вместо ~6·N на батч; **reactive-retry `expired_token` уже сделан** — force-refresh+retry-once с нашим
+  advisory-lock; пул-раз-на-op **и пагинация списка сделок** сделаны). **Свап транспорта на `@bitrix24/b24jssdk`
+  отложён** (его auto-refresh обходит наш лок) — адаптер `b24Sdk.ts` держим тестовой опцией до дизайна scale-safe
+  координации рефреша, а не как план; дизайн — `docs/QUEUES.md`);
   роутинг ref моста через `itemByIdLookup`
   (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
   log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +

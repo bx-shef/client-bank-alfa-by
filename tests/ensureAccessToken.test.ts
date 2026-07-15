@@ -105,4 +105,34 @@ describe('ensureAccessToken', () => {
     const { deps } = make(near, { error: 'invalid_grant' })
     await expect(ensureAccessToken(near, deps)).rejects.toThrow(/refresh failed: invalid_grant/)
   })
+
+  describe('force (reactive retry after a rejected token)', () => {
+    it('refreshes a CLOCK-FRESH token when force is set (server rejected it early)', async () => {
+      const fresh = tok({ expiresAt: FAR }) // not near expiry — non-force would no-op
+      const { deps, postRefresh, saveToken, withLock } = make(fresh)
+      const out = await ensureAccessToken(fresh, deps, { force: true })
+      expect(withLock).toHaveBeenCalledWith('b24refresh:M', expect.any(Function))
+      expect(postRefresh).toHaveBeenCalledTimes(1)
+      expect(out.accessToken).toBe('A2')
+      expect(saveToken).toHaveBeenCalledTimes(1)
+    })
+
+    it('force does NOT refresh if a concurrent worker already rotated the token (stored ≠ ours)', async () => {
+      // Inside the lock the store holds a DIFFERENT access token → someone already refreshed.
+      const winner = tok({ accessToken: 'WINNER', expiresAt: FAR })
+      const { deps, postRefresh, saveToken } = make(winner)
+      const out = await ensureAccessToken(tok({ accessToken: 'A', expiresAt: FAR }), deps, { force: true })
+      expect(out.accessToken).toBe('WINNER') // use theirs, no redundant refresh
+      expect(postRefresh).not.toHaveBeenCalled()
+      expect(saveToken).not.toHaveBeenCalled()
+    })
+
+    it('force still refuses to resurrect an uninstalled portal', async () => {
+      const { deps, postRefresh, saveToken } = make(null)
+      const out = await ensureAccessToken(tok({ expiresAt: FAR }), deps, { force: true })
+      expect(out.accessToken).toBe('A')
+      expect(postRefresh).not.toHaveBeenCalled()
+      expect(saveToken).not.toHaveBeenCalled()
+    })
+  })
 })

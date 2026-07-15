@@ -5,6 +5,7 @@
 // so two portals can never read/write each other's value.
 
 import type { PortalToken } from './tokenStore'
+import type { RestCall } from './companyLookup'
 
 /** The single app.option key this skeleton reads/writes. */
 export const APP_SETTING_KEY = 'cb_test_setting'
@@ -43,6 +44,16 @@ export async function readAppSetting(
   const fresh = await deps.ensureFresh(token)
   const res = await deps.callRest(fresh.domain, fresh.accessToken, 'app.option.get', {})
   return pickAppOption(res, key)
+}
+
+/** Read the app-level setting through an ALREADY-BOUND RestCall — the #191 resolver's
+ *  bind-once call, which self-heals a server-side `expired_token` via force-refresh+retry.
+ *  Unlike `readAppSetting` (loads+refreshes its own token, no reactive retry), this lets the
+ *  crm-sync GATING settings read — which runs first and can hard-fail the whole job — share
+ *  that retry, so a clock-fresh-but-rejected token doesn't stall the batch until clock-expiry.
+ *  The caller resolves the portal (null → not installed → no settings) and passes the call. */
+export async function readAppSettingVia(call: RestCall, key: string = APP_SETTING_KEY): Promise<string | null> {
+  return pickAppOption(await call('app.option.get', {}), key)
 }
 
 /** Write the app-level setting for a portal. */

@@ -474,9 +474,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     now?, skewMs?)` мемоизирует связанный `RestCall` по `member_id` до приближения истечения токена (кэш
     `{call, expiresAt}`, ре-байнд при `now ≥ expiresAt − skew`, `null` не кэшируется). `crm-sync`-воркер строит
     один резолвер и переиспользует его во **всех** пер-операционных вызовах (`findCompany`/`resolveIntents`/
-    `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) — вместо загрузки+рефреша токена на каждую
+    `writeActivity`/`notifyChat`/`applyAllocation`/`notifyError`) **и в гейт-чтении настроек на джобу**
+    (`getPortalSettings` → `readAppSettingVia`, `appSettings.ts`) — вместо загрузки+рефреша токена на каждую
     операцию (было ~6·N на батч из N операций). Транспорт-agnostic: свап на SDK меняет только `callRest` под
-    резолвером. DI+инъектируемые часы, тесты (bind-once/ре-байнд по истечении/`null`-не-кэшируется/пер-member).
+    резолвером. **Реактивный ретрай (#191):** связанный `RestCall` при `expired_token`/`invalid_token`
+    (`isExpiredTokenError`, `b24Rest.ts` — типизируется и из **брошенного** non-2xx ответа (B24 отдаёт
+    `expired_token` как HTTP 401) через `err.data`, не только из 200-`{error}`) форс-рефрешит токен (`ensureFresh(token, {force:true})` — тот же advisory-lock, у
+    соседнего `ai-price-import` лока нет) и повторяет **один раз**, обновляя кэш; не-auth-ошибка пробрасывается,
+    второй `expired` бросает (без цикла). Пробрасывание `{force}` в `ensureAccessToken` вынесено в `makeEnsureFresh`
+    (тестируемый юнит — соседние не-retry-обвязки `liveDeps`/`appSettings` намеренно роняют `opts`, чтобы одна
+    «упрощающая» правка не разоружила ретрай молча). Гейт-чтение (`getPortalSettings`) идёт первым и валит джобу —
+    поэтому тоже через резолвер (self-heal, а не цикл BullMQ-ретраев до clock-expiry). DI+инъектируемые часы, тесты
+    (bind-once/ре-байнд/`null`-не-кэшируется/пер-member/реактивный ретрай/один-повтор/не-auth-проброс/`makeEnsureFresh`).
   - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
     per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
     задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
@@ -486,8 +495,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (drop-in для
     `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import` и `new B24OAuth(...)`; чистые мапперы
     и `makeSdkRestCall` (структурный клиент) тестируются фейком без живого портала, а типизация `new B24OAuth` как
-    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). Свап транспорта
-    `crm-sync` — следующий PR после смоук-теста на живом портале (`pnpm sdk:test`); детали — `docs/QUEUES.md` §REST-бюджет.
+    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). **Свап транспорта `crm-sync`
+    на SDK — отложен** (адаптер держим в репо под тестами как опцию): встроенный SDK-рефреш **обходит наш
+    advisory-lock** (`ensureAccessToken`, #35) — при scale-out N воркеров гонялись бы на ротации refresh-токена
+    и портя креды портала. Поэтому из SDK **взяли не транспорт, а идею**: reactive-retry на `expired_token`
+    портирован на **наш** `callRest`-путь (`isExpiredTokenError` + `portalRestResolver` force-refresh, #191),
+    **сохранив наш лок**. Что у SDK ещё осталось ценного — встроенный per-instance rate-limiter; это остаток
+    #191 (лимитер/бэкофф на `QUERY_LIMIT_EXCEEDED`), а не свап. Детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
@@ -628,7 +642,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       Смарт-процессы пока не включены (их `entityTypeId` портало-специфичен, интенты `unsupported`). DI, тесты
       (`tests/negativeStages.test.ts`).
     **bind-`RestCall`-once — сделан** (`portalRestResolver.ts`, #191 lever-2: один bind токена на портал вместо ~6·N
-    на батч). Осталось: **rate-limit/bounded-concurrency воркера +
+    на батч); **реактивный ретрай `expired_token` — сделан** (типизированная `B24RestError` + `ensureFresh(force)`,
+    advisory-locked, повтор 1 раз — паттерн `ai-price-import`, но с нашим локом). **SDK-своп транспорта —
+    отложён** (#191, PR #250 закрыт): SDK-инстанс рефрешит токен мимо advisory-lock → на масштабе гонка ротации;
+    адаптер `b24Sdk.ts` остаётся под тестами, свап — после дизайна scale-safe координации рефреша. Осталось:
+    **rate-limit/bounded-concurrency воркера +
     батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
     списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
     `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
@@ -671,11 +689,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     parser-differential обхода `x.bitrix24.by@evil.com`; таймаут `REST_TIMEOUT_MS` 15с; **опц.
     `[rest-timing]`-лог (#78)** — env `REST_TIMING` (default OFF) пишет строку на исходящий вызов
     `method`/`ms`/`srv` (серверное `time.duration` Б24 → сеть vs портал)/`ok`, чистые
-    `restTimingLine`/`serverDurationMs` под тестами — «мерить до троттлинга» перед лимитером #191),
+    `restTimingLine`/`serverDurationMs` под тестами — «мерить до троттлинга» перед лимитером #191; **типизированная
+    `B24RestError`** несёт машинный `error`-код — `isExpiredTokenError` отличает `expired_token`/`invalid_token`
+    для реактивного ретрая резолвера, сообщение неизменно, `.message`-совместимо),
     `server/utils/ensureAccessToken.ts`
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
-    N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; DI + тесты),
+    N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; **`{force:true}`** —
+    рефреш и при clock-fresh токене (реактивный ретрай после раннего отказа сервера), тем же локом, refresh
+    только если stored-токен всё ещё отвергнутый (иначе берём чужой свежий — без лишней ротации); DI + тесты),
     `server/utils/tokenKeepAlive.ts` (**проактивный keep-alive рефреш, #175**: `refresh_token` живёт ~180 д,
     установленный, но **простаивающий** портал не делает REST-вызовов → ленивый рефреш не срабатывает → токен
     молча умирает на 180-й день. Раз в сутки крон `runTokenKeepAlive` рефрешит **только** порталы у истечения:
@@ -686,7 +708,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     консервативно (Б24 предупреждает про авто-блок при частом рефреше): раз в сутки, батч-кап, только near-expiry.
     Гейт на `B24_CLIENT_ID/SECRET` (без них рефреш невозможен). DI, тесты `tests/tokenKeepAlive.test.ts`),
     `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
-    с DI — изоляция по `memberId`, используется серверной проверкой), `server/utils/settingsHandler.ts`
+    с DI — изоляция по `memberId`, используется серверной проверкой; **`readAppSettingVia(call, key)`** — чтение
+    через **уже связанный** `RestCall` резолвера, чтобы гейт-чтение настроек в `crm-sync` делило реактивный
+    ретрай `expired_token`, а не грузило/рефрешило токен само), `server/utils/settingsHandler.ts`
     (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
     UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)
     **аутентифицируются фрейм-токеном** (`Authorization: Bearer` + `X-B24-Domain`) — B24 скоупит

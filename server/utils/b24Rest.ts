@@ -104,6 +104,40 @@ export function b24ErrorMessage(resp: Record<string, unknown>): string | null {
   return desc ? `${err}: ${desc}` : `${err}`
 }
 
+/** Typed B24 REST error carrying the machine-readable `error` code, so callers can
+ *  distinguish `expired_token`/`invalid_token` (refresh + retry) from other failures.
+ *  Extends Error and keeps the same human message `callRest` always threw, so any
+ *  caller matching on `.message` is unaffected — only the extra `code` is new. */
+export class B24RestError extends Error {
+  constructor(readonly code: string, readonly description: string, message: string) {
+    super(message)
+    this.name = 'B24RestError'
+  }
+}
+
+/** True when a REST error means the ACCESS token was rejected server-side and the call
+ *  should be retried after a forced refresh (the token may be rejected before its computed
+ *  expiry — clock skew / early server-side invalidation). Mirrors ai-price-import's
+ *  reactive-retry classifier; here the resolver drives the retry (keeping our advisory-lock
+ *  refresh, which that repo lacks). */
+export function isExpiredTokenError(err: unknown): boolean {
+  return err instanceof B24RestError && (err.code === 'expired_token' || err.code === 'invalid_token')
+}
+
+/** Build a typed `B24RestError` from a REST body if it carries a B24 `{error}`, else null.
+ *  Shared by BOTH failure paths so the `code`/message construction can't drift: a 200 body
+ *  with `{error}` (many B24 failures are HTTP 200) AND a non-2xx response whose parsed body
+ *  ofetch attaches to the thrown error's `.data` (e.g. `expired_token` arrives as HTTP 401).
+ *  The human message is the same string `callRest` has always thrown, so `.message`-matching
+ *  callers are unaffected — only the machine `code` is new. */
+export function b24RestErrorFrom(method: string, body: Record<string, unknown>): B24RestError | null {
+  const msg = b24ErrorMessage(body)
+  if (!msg) return null
+  const code = body.error === undefined || body.error === null ? '' : String(body.error)
+  const desc = body.error_description === undefined || body.error_description === null ? '' : String(body.error_description)
+  return new B24RestError(code, desc, `B24 REST ${method} failed — ${msg}`)
+}
+
 // Self-hosted allow-list is static at runtime — parse the env once, lazily.
 let selfHostedCache: Set<string> | null = null
 function selfHostedHosts(): Set<string> {
@@ -176,13 +210,25 @@ export async function callRest(
     })
   } catch (e) {
     if (timing) console.log(restTimingLine(method, Date.now() - t0, false))
+    // A non-2xx REST response makes ofetch THROW before the success-path check below ever
+    // runs — and B24 returns `expired_token` as HTTP 401, so without this the token-refresh
+    // classifier never sees it and the whole reactive-retry surface is dead code. ofetch
+    // attaches the parsed response body to `.data`; if that is a B24 `{error}` envelope,
+    // classify it into the SAME typed error the 200-path throws. Anything else (network,
+    // timeout, non-JSON body) propagates unchanged.
+    const data = (e as { data?: unknown } | null | undefined)?.data
+    if (data && typeof data === 'object') {
+      const typed = b24RestErrorFrom(method, data as Record<string, unknown>)
+      if (typed) throw typed
+    }
     throw e
   }
   // B24 signals many failures as HTTP 200 + {error} — surface them as throws so
   // callers (company lookup, activity write, settings) don't mistake an error body
-  // for an empty result and silently swallow it.
-  const err = b24ErrorMessage(json)
-  if (timing) console.log(restTimingLine(method, Date.now() - t0, !err, serverDurationMs(json)))
-  if (err) throw new Error(`B24 REST ${method} failed — ${err}`)
+  // for an empty result and silently swallow it. Typed so callers can detect
+  // `expired_token` and refresh+retry (message unchanged for `.message`-matchers).
+  const typed = b24RestErrorFrom(method, json)
+  if (timing) console.log(restTimingLine(method, Date.now() - t0, !typed, serverDurationMs(json)))
+  if (typed) throw typed
   return json
 }
