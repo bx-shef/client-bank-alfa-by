@@ -486,22 +486,22 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     «упрощающая» правка не разоружила ретрай молча). Гейт-чтение (`getPortalSettings`) идёт первым и валит джобу —
     поэтому тоже через резолвер (self-heal, а не цикл BullMQ-ретраев до clock-expiry). DI+инъектируемые часы, тесты
     (bind-once/ре-байнд/`null`-не-кэшируется/пер-member/реактивный ретрай/один-повтор/не-auth-проброс/`makeEnsureFresh`).
-  - `server/utils/b24Sdk.ts` — **адаптер транспорта на `@bitrix24/b24jssdk` (#191, ещё НЕ подключён к hot-path):**
-    per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s, адаптивная
-    задержка, retry-backoff на `QUERY_LIMIT_EXCEEDED`) **по умолчанию** и **per-instance** — один `B24OAuth` на портал
-    на джобу даёт сразу пер-портальный лимит **и** bind-`RestCall`-once. `oauthParamsFromToken` (наш `PortalToken`→
-    `B24OAuthParams`, сверено `typecheck:server` против реальных типов SDK), `makeSdkRestCall` (unwrap `getData()` —
-    контракт `{result,…}` тот же; throw на ошибке → джоба падает, чистый retry), `buildRefreshPersist`+
-    `setCallbackRefreshAuth` (SDK сам рефрешит → сохраняем свежий токен в стор), `makePortalSdkCall` (drop-in для
-    `makePortalRestCall`). Модуль **серверный** — SDK используется обычным `import` и `new B24OAuth(...)`; чистые мапперы
-    и `makeSdkRestCall` (структурный клиент) тестируются фейком без живого портала, а типизация `new B24OAuth` как
-    `OAuthCallClient` служит compile-time drift-guard'ом (`typecheck:server`). **Свап транспорта `crm-sync`
-    на SDK — отложен** (адаптер держим в репо под тестами как опцию): встроенный SDK-рефреш **обходит наш
-    advisory-lock** (`ensureAccessToken`, #35) — при scale-out N воркеров гонялись бы на ротации refresh-токена
-    и портя креды портала. Поэтому из SDK **взяли не транспорт, а идею**: reactive-retry на `expired_token`
-    портирован на **наш** `callRest`-путь (`isExpiredTokenError` + `portalRestResolver` force-refresh, #191),
-    **сохранив наш лок**. Что у SDK ещё осталось ценного — встроенный per-instance rate-limiter; это остаток
-    #191 (лимитер/бэкофф на `QUERY_LIMIT_EXCEEDED`), а не свап. Детали — `docs/QUEUES.md` §REST-бюджет.
+  - `server/utils/b24Sdk.ts` + `server/utils/portalSdkResolver.ts` — **SDK-транспорт `crm-sync` за opt-in флагом
+    `QUEUE_SDK_TRANSPORT` (default OFF, #191):** per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный
+    RestrictionManager (leaky-bucket 2 req/s, retry-backoff на `QUERY_LIMIT_EXCEEDED/429/5xx`) **по умолчанию** и
+    **per-instance** — это и есть lever-1 (пер-портальный лимитер). `oauthParamsFromToken`/`tokenFromOAuthParams`
+    (наш `PortalToken`↔`B24OAuthParams`, сверено `typecheck:server`), `makeSdkRestCall` (полный конверт `getData()`,
+    контракт `{result,…}` совпадает с `callRest`; throw → джоба падает, чистый retry), `buildRefreshPersist`+
+    `setCallbackRefreshAuth` (SDK рефрешит → сохраняем свежий), `makePortalSdkCall` (`null` без токена — drop-in),
+    `sdkPortalDeps` (проводка на живой токен-стор, persist `eventTs=0`). `createPortalSdkResolver` строит **свежий
+    клиент на каждую резолюцию** (не кэш → нет stale-token wedge; как в `ai-price-import`), `evict` — no-op.
+    Типизация `new B24OAuth` как `OAuthCallClient` — compile-time drift-guard. **Компромисс (осознанный, выбор
+    пользователя):** SDK-рефреш идёт **мимо** advisory-lock (`ensureAccessToken`, #35) — проигранная гонка ротации =
+    **транзиентный ретрай BullMQ**, не порча кредов (persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`;
+    резолюция перечитывает токен); advisory-lock остаётся на keep-alive (#175). **Default OFF** — не ослабляем дефолт
+    до живого гейта; `QUEUE_SDK_TRANSPORT=0` (дефолт) = наш `callRest`-путь (bind-once + лок + reactive-retry).
+    **Дефолт-ON — follow-up после `pnpm sdk:test` на живом портале** + пер-JOB мемоизация клиента. Детали —
+    `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
@@ -643,14 +643,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (`tests/negativeStages.test.ts`).
     **bind-`RestCall`-once — сделан** (`portalRestResolver.ts`, #191 lever-2: один bind токена на портал вместо ~6·N
     на батч); **реактивный ретрай `expired_token` — сделан** (типизированная `B24RestError` + `ensureFresh(force)`,
-    advisory-locked, повтор 1 раз — паттерн `ai-price-import`, но с нашим локом). **SDK-своп транспорта —
-    отложён** (#191, PR #250 закрыт): SDK-инстанс рефрешит токен мимо advisory-lock → на масштабе гонка ротации;
-    адаптер `b24Sdk.ts` остаётся под тестами, свап — после дизайна scale-safe координации рефреша. Осталось:
-    **rate-limit/bounded-concurrency воркера +
-    батчинг `callBatch` + retry/backoff на `QUERY_LIMIT_EXCEEDED`** — остаток #191 (пул оплат раз-на-op **и пагинация
-    списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
-    `crm.status.list`×N — учесть в лимитере; глобальный лимит нужен до реального опроса портала; дизайн —
-    `docs/QUEUES.md` «REST-бюджет проводки платежей»). **`order-number`-матчинг — сделан** (по order-префиксу
+    advisory-locked, повтор 1 раз — паттерн `ai-price-import`, но с нашим локом). **SDK-транспорт `crm-sync`
+    реализован за opt-in `QUEUE_SDK_TRANSPORT` (default OFF)** — `portalSdkResolver.ts` → `b24Sdk.ts`, встроенный
+    RestrictionManager = rate-limiter (lever-1); клиент свежий на резолюцию (как `ai-price-import`), рефреш мимо
+    advisory-lock (компромисс — выбор пользователя: проигранная гонка = транзиентный ретрай, persist — UPDATE-only-эквивалент tombstone-
+    эквивалент через tombstone-guarded `saveToken`, не порча кредов). Осталось до дефолт-ON: **живой гейт
+    `pnpm sdk:test` + прогон `crm-sync` с `QUEUE_SDK_TRANSPORT=1`** на тестовом портале, **пер-JOB мемоизация клиента**
+    (общий bucket на джобу), **батчинг `callList`**. Фолбэк (дефолт, `QUEUE_SDK_TRANSPORT=0`) — наш advisory-locked
+    `callRest`-путь (bind-once + reactive-retry). Пул оплат раз-на-op **и пагинация списка сделок** уже сделаны;
+    negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 + `crm.status.list`×N — учесть в
+    SDK-лимитере/пер-JOB-мемо; дизайн — `docs/QUEUES.md` «REST-бюджет проводки платежей». **`order-number`-матчинг — сделан** (по order-префиксу
     `accountNumber` оплаты `<заказ>/<seq>`, `filterByOrderNumber`, live-confirmed #172); **`payment-id`-матчинг — сделан**
     (по собственному id оплаты в company-пуле, `filterByPaymentId`, IDOR-safe, live-confirmed #172); **`order-id`-матчинг — сделан**
     (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул, `saleLookup.findOrderPaymentIds`+`filterByPaymentIds`,
@@ -783,8 +785,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     Dev-only, не часть SSG.
   - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
     строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
-    `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Гейт перед свапом
-    транспорта `crm-sync` на SDK (см. `server/utils/b24Sdk.ts`). Dev-only, не часть SSG; токен только в git-ignored `.env.b24test`.
+    `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Webhook-смоук
+    транспорта `crm-sync` на SDK (реализован за `QUEUE_SDK_TRANSPORT`, см. `server/utils/b24Sdk.ts`); гейт перед
+    дефолт-ON — живой прогон `crm-sync` с флагом. Dev-only, не часть SSG; токен только в git-ignored `.env.b24test`.
   - `scripts/seed-test-b24.mjs` (`pnpm seed:b24` / `--list` / `--purge`) — **идемпотентный посев тестовых
     данных в живой тестовый портал Б24** для ручной проверки #109 (стадия 4/§2 `PROCESSING.md`): смарт-
     процессы (с направлениями / без — `entityTypeId` назначается автоматически, на подтверждённом

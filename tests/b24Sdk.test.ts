@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 import { B24OAuth } from '@bitrix24/b24jssdk'
-import type { PortalToken } from '../server/utils/tokenStore'
 import type { OAuthCallClient, SdkAjaxResult, SdkPortalDeps } from '../server/utils/b24Sdk'
 import {
   buildRefreshPersist,
   makePortalSdkCall,
   makeSdkRestCall,
   oauthParamsFromToken,
+  sdkPortalDeps,
   tokenFromOAuthParams
 } from '../server/utils/b24Sdk'
+import type { PortalToken, QueryFn } from '../server/utils/tokenStore'
+import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
 
 // Adapter over @bitrix24/b24jssdk B24OAuth (#191). The pure mapping helpers and the REST
 // wrapper (`makeSdkRestCall`, structural client) are tested with a fake — no live portal.
@@ -132,6 +134,43 @@ describe('makeSdkRestCall', () => {
   it('throws a generic message when the SDK gives no error text', async () => {
     const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => [] }))
     await expect(makeSdkRestCall(client)('crm.deal.get')).rejects.toThrow('B24 REST crm.deal.get failed')
+  })
+})
+
+describe('sdkPortalDeps (live token-store wiring)', () => {
+  it('loadToken reads via getToken; saveToken persists with eventTs=0 (tombstone-guarded)', async () => {
+    process.env.B24_TOKEN_ENC_KEY = 'bb'.repeat(32)
+    const sql: Array<{ q: string, p?: unknown[] }> = []
+    // Fake pg: tombstone SELECT → empty (not blocked); getToken SELECT → one row; upsert/delete → [].
+    const query: QueryFn = async (q, p) => {
+      sql.push({ q, p })
+      if (/FROM portal_tokens WHERE member_id/i.test(q) && /SELECT member_id, domain/i.test(q)) {
+        return [{ member_id: 'M1', domain: 'acme.bitrix24.com', access_token: 'AT', refresh_token_enc: encryptSecret('RT'), expires_at: 1_700_000_000_000, application_token: 'APPTOK' }]
+      }
+      return []
+    }
+    const deps = sdkPortalDeps({ query, clientId: 'cid', clientSecret: 'sec', now: () => 123 })
+    expect(deps.creds).toEqual({ clientId: 'cid', clientSecret: 'sec' })
+
+    const loaded = await deps.loadToken('M1')
+    expect(loaded).toMatchObject({ memberId: 'M1', domain: 'acme.bitrix24.com', accessToken: 'AT' })
+    // The refresh token is stored ENCRYPTED at rest — getToken must decrypt it back so the SDK
+    // gets a usable refresh token (a silent decrypt bug would otherwise pass unnoticed).
+    expect(loaded!.refreshToken).toBe('RT')
+
+    await deps.saveToken(token({ accessToken: 'NEW', refreshToken: 'NEW_RT' }))
+    // The tombstone guard ran with eventTs=0 → any tombstone (deleted_ts >= 0) would block a
+    // resurrect; here none exists so the upsert proceeds. Prove eventTs=0 reached the store.
+    const tomb = sql.find(s => /portal_tombstone WHERE member_id = \$1 AND deleted_ts >= \$2/i.test(s.q))
+    expect(tomb?.p?.[1]).toBe(0)
+    // The persist runs the real upsert; the refresh-token bind must be ENCRYPTED (not the
+    // plaintext) and decrypt back to the token — proves the SDK-refresh → encrypted-persist
+    // chain end-to-end, not just "an INSERT ran".
+    const insert = sql.find(s => /INSERT INTO portal_tokens/i.test(s.q))
+    expect(insert).toBeTruthy()
+    const refreshEncBind = insert!.p?.[3] as string
+    expect(refreshEncBind).not.toBe('NEW_RT') // not stored in plaintext
+    expect(decryptSecret(refreshEncBind)).toBe('NEW_RT') // encrypted, round-trips
   })
 })
 
