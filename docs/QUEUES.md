@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-07-09
+> Last reviewed: 2026-07-15
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -179,6 +179,12 @@ flowchart LR
 - **Пул оплат раз на операцию** ([PR #192](https://github.com/bx-shef/client-bank-alfa-by/pull/192)) —
   `resolveIntentsForOp` тянет `findCompanyDealPayments` **один раз на операцию** и переиспользует для всех
   `payment-number` (было — скан на каждое значение). Худший случай на операцию: **≤1 пул-скан + ≤10 lookup'ов**.
+- **bind-`RestCall`-once (lever-2)** — `server/utils/portalRestResolver.ts`: токен резолвится **раз на портал**
+  за время жизни (expiry-aware кэш), а не на каждую операцию (было ~6·N на батч). Транспорт-agnostic — не ждёт
+  SDK-свапа; `evict` на удалении приложения.
+- **Инструмент замера — env `REST_TIMING`** (default OFF): `[rest-timing] method= ms= srv= ok=` на исходящий
+  вызов (`server/utils/b24Rest.ts`), `srv` = серверное `time.duration` Б24. Включается на нагрузочный тест, чтобы
+  калибровать лимитер по реальной латентности/объёму **до** его включения.
 
 **Подход — не свой лимитер, а транспорт на `@bitrix24/b24jssdk`.** У SDK есть встроенный
 **RestrictionManager**: leaky-bucket (дефолт 2 req/s, burst 50), адаптивная задержка и **retry-с-backoff на

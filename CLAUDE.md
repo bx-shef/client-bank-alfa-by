@@ -668,7 +668,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `server/utils/b24Rest.ts` (`callRest`/`restUrl`; **SSRF-гейт #149**: `isAllowedPortalHost` —
     fail-closed allowlist хоста портала, облачные `*.bitrix24.<tld>` + self-hosted из env
     `B24_SELFHOSTED_HOSTS`, валидатор и `restUrl` извлекают хост одинаково через `URL` — нет
-    parser-differential обхода `x.bitrix24.by@evil.com`; таймаут `REST_TIMEOUT_MS` 15с),
+    parser-differential обхода `x.bitrix24.by@evil.com`; таймаут `REST_TIMEOUT_MS` 15с; **опц.
+    `[rest-timing]`-лог (#78)** — env `REST_TIMING` (default OFF) пишет строку на исходящий вызов
+    `method`/`ms`/`srv` (серверное `time.duration` Б24 → сеть vs портал)/`ok`, чистые
+    `restTimingLine`/`serverDurationMs` под тестами — «мерить до троттлинга» перед лимитером #191),
     `server/utils/ensureAccessToken.ts`
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
