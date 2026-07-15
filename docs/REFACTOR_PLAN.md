@@ -1,6 +1,6 @@
 # План рефакторинга — импорт выписки из клиент-банка (Альфа-Банк Беларусь → мультибанк)
 
-> Last reviewed: 2026-07-08
+> Last reviewed: 2026-07-15
 
 Перенос и переписывание legacy-приложения (серверный PHP-апп Bitrix24) на новый стек.
 Документ — живой план; обновляется по мере прохождения этапов.
@@ -113,10 +113,12 @@
    **Статус — стадия 4 в основном готова:** стор дедупа (`activityDedupStore.ts`, always-purge),
    поиск компании (`companyLookup.ts`), read-before-write в `handleCrmSyncJob` и **живые транспорты**
    `findCompany`→`findCompanyByAccount` / `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`)
-   по per-portal `RestCall` (`makePortalRestCall`), с гейтом демо-счётов (`isDemoAccount`) и TZ-aware
+   по per-portal `RestCall` (через `resolvePortalCall` — bind-once резолвер #191, или SDK-транспорт за
+   `QUEUE_SDK_TRANSPORT`), с гейтом демо-счётов (`isDemoAccount`) и TZ-aware
    `deadline` (UTC+3, `toPortalDeadline`, #10) — **готовы, покрыты тестами**. Осталось: проверка на живом
-   портале (#90) и обработка `unmatched`-операций (#91); перед реальным объёмом — rate-limit REST на
-   `crm-sync` (TODO в `worker.ts`).
+   портале (#90) и обработка `unmatched`-операций (#91). **Rate-limit REST на `crm-sync`** — встроенный
+   RestrictionManager SDK-транспорта (за opt-in `QUEUE_SDK_TRANSPORT`, default OFF; дефолт-ON после живого
+   гейта — см. `docs/QUEUES.md` §REST-бюджет).
    Плюс на очередях выставлены `attempts`/`backoff`/`removeOnComplete/Fail` (см. `connection.ts`).
 5. **Cron-опрос через очередь.** Планировщик кладёт в `bank-fetch` job на портал/счёт (fan-out по
    `portal_tokens`); воркеры (масштабируются репликами) тянут выписку, соблюдая rate-limit Альфы
