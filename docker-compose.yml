@@ -38,6 +38,9 @@ services:
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       # Redis DSN for the BullMQ pipeline (events → fetch → parse → crm-sync).
       REDIS_URL: redis://redis:6379
+      # Activity carrier (#259 Phase B): `todo` (default) or `configurable` (B24-side dedup).
+      # Single container runs crm-sync here. OFF by default — live-verify first (pnpm activity:test).
+      ACTIVITY_TRANSPORT: ${ACTIVITY_TRANSPORT:-todo}
       # Operator login for the service zone (empty PASS ⇒ open; see docs/AUTH.md).
       PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
       PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}

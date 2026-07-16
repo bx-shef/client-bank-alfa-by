@@ -35,6 +35,7 @@
     "sdk:test": "node scripts/b24-sdk-test.mjs",
     "sdk:crm:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/sdk-crm-test.ts",
     "sdk:oauth": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/sdk-oauth-test.ts",
+    "activity:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/configurable-activity-test.ts",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
