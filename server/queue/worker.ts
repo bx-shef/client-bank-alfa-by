@@ -374,9 +374,12 @@ export function startEventWorker(deps: HandlerDeps): Worker {
  *  applies to all three.
  *  ⚠ Raising crm-sync concurrency OR running >1 replica needs (a) a per-portal REST
  *  limiter (else a big batch hits B24 `QUERY_LIMIT` — batch/`callBatch` is the real
- *  lever) and (b) ATOMIC dedup (origin-marker in B24, #109/PROCESSING §1): the current
- *  read-before-write is TOCTOU under parallelism and could double-write a dela. Until
- *  then keep crm-sync effectively serial; fetch/parse scale freely. See docs/QUEUES.md. */
+ *  lever) and (b) ATOMIC dedup. A marker-in-B24 dedup only exists for `crm.item` carriers
+ *  (originId/xmlId); the `todo` activity has NO filterable marker (#259), so its
+ *  read-before-write via `activity_dedup` stays TOCTOU under parallelism and could
+ *  double-write a dela until the carrier moves to an SP element (xmlId) — see
+ *  #109/#259/PROCESSING §1. Until then keep crm-sync effectively serial; fetch/parse
+ *  scale freely. See docs/QUEUES.md. */
 export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: number } = {}): Worker[] {
   const connection = connectionOptions()
   const concurrency = Math.max(1, opts.concurrency ?? 1)
