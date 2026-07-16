@@ -167,13 +167,27 @@ app-namespace** — фильтр по одному `ORIGIN_ID` даст **лож
 > - **Фаза A** (мутационный путь, `autoDistribute=ON`): заменить `hasAllocationFact` на чтение состояния
 >   цели — детерминированно для `deal-payment`; для инвойса **при условии**, что стадия оплаты
 >   (`invoicePaidStageId`) — settled (`SEMANTICS='S'`), иначе стор факта остаётся. Требует live-verify.
-> - **Фаза B** (носитель операции с **нашим** маркером): сменить `crm.activity.todo.add` → **настраиваемое
->   дело** `crm.activity.configurable.add` (`originId`=ключ операции, поиск `crm.activity.list
->   filter[ORIGINATOR_ID][ORIGIN_ID]` — пара обязательна, см. выше) **или** элемент смарт-процесса
->   (`xmlId`, §2/§5). Наш маркер на нашей записи снимает `activity_dedup` (и остаток
->   факта) без штамповки чужих полей. Требует live-verify на **OAuth-портале** (configurable/СП вебхуком не
->   создать — класс #79).
-> - **Пока носитель — простое `todo`-дело:** `activity_dedup` **остаётся** — у него маркера нет.
+> - **Фаза B — настраиваемое дело: СДЕЛАНА за opt-in флагом** `ACTIVITY_TRANSPORT=configurable` (default
+>   `todo`). При `configurable` crm-sync пишет `crm.activity.configurable.add` (`app/utils/configurableActivity.ts`
+>   + `server/utils/configurableActivityWrite.ts`, маркер `originatorId`+`originId`=ключ операции), а
+>   read-before-write дедуп идёт **поиском в B24** (`crm.activity.list filter[ORIGINATOR_ID][ORIGIN_ID]`,
+>   `server/utils/activityMarkerLookup.ts`) вместо `activity_dedup` (стор на этом пути не используется;
+>   `rememberActivity` — no-op, маркер пишется **атомарно** с делом → закрыт write→remember-зазор). Флаг
+>   OFF ⇒ поведение прежнее (`todo` + стор). **Гейт включения:** live-verify на **OAuth-портале**
+>   (`configurable.add` вебхуком не создать — класс #79): `pnpm activity:test --company <id> --apply`.
+> - **Фаза B — элемент смарт-процесса** (`xmlId`, §2/§5): альтернативный носитель на платном тарифе —
+>   ещё не реализован (нужен сам путь записи элемента).
+> - **Пока флаг `todo` (default):** носитель — простое дело, `activity_dedup` **остаётся** — у него маркера нет.
+>
+> **Операционные оговорки `configurable` (проверить на live-verify):**
+> - **режим на портал — фиксировать.** Стор и B24-маркер — **раздельные** слои дедупа: смена флага на
+>   работающем портале (`configurable`↔`todo`) может **задвоить** операции, записанные под другим слоем
+>   (стор пуст для дел с маркером и наоборот). Выбираем режим один раз на портал, не переключаем на лету.
+> - **поиск permission-scoped.** `crm.activity.list` отдаёт дела **с учётом прав** пользователя. Промах
+>   (напр. дело на другом ответственном, а app-пользователь не админ) даёт **дубль, не потерю** записи —
+>   безопасное направление; убедиться на live-verify, что app-пользователь видит свои дела.
+> - **+1 REST на операцию.** `getActivityId` в `configurable` — это REST-поиск на **каждую** уникальную
+>   операцию (до поиска компании), а не дешёвое чтение стора. Учитывать в REST-бюджете (#191, SDK-лимитер).
 >
 > Пока не мигрировано — держим слои согласованно (in-batch `Set` в `handleCrmSyncJob` + `activity_dedup`);
 > факт/дедуп переводятся **вместе с носителем**, иначе защита от дублей молча деградирует.

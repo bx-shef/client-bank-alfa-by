@@ -23,7 +23,7 @@
 | Ручной импорт: файл → CRM | 🧪 ~75% | код готов (приём → очередь → разбор → дело), живьём не гонялось; каскад «моя компания» — #109 |
 | Стадия 4: компания + дело + чат | 🧪 ~70% | поиск компании вживую; запись дела/чат — ядра+тесты, не гонялось |
 | Разнесение оплат #109 | 🟡 ~58% | в crm-sync: recognize→route→resolve→отсев стадий (#196)→**решение `resolveAllocation`** (#198, лог/счётчик) — decision готов; осталось **сама запись** факта/дела (live-gated) |
-| Дедуп через origin-метку в B24 | ⬜ 0% | **оптимизация, не блокер**; #259 — маркер несёт `crm.item` (`xmlId`) и **настраиваемое дело** (`originId`, `crm.activity.configurable.add`), а **простое** `todo`-дело — нет → его стор верен by design. Поэтапно: Фаза A (факт→состояние цели), Фаза B (носитель = настраиваемое дело/элемент СП, ⚠ OAuth-контекст); чужие поля не штампуем |
+| Дедуп через origin-метку в B24 | 🧪 ~45% | **Фаза B (настраиваемое дело) СДЕЛАНА за флагом** `ACTIVITY_TRANSPORT=configurable` (default `todo`): `configurable.add` с маркером `originatorId`+`originId` + дедуп поиском `crm.activity.list` (снимает `activity_dedup`), ядра+тесты; включение — после live-verify на OAuth-портале (`pnpm activity:test`). Осталось: Фаза A (факт→состояние цели), элемент СП. Чужие поля не штампуем |
 | Опрос банков (stage 5) | ⬜ ~20% | OAuth-ядра готовы; транспорт `bank-fetch` — заглушка |
 
 **~70%** = среднее по 6 функциональным блокам (без строки «дедуп через метку» — это оптимизация поверх
@@ -35,13 +35,30 @@
 ## Порядок работ (автономно)
 
 1. ✅ **#35 авто-обновление токенов** — конкуренто-безопасно (advisory-lock, DI, тесты). *(этот проход)*
-2. **Дедуп через origin-метку в B24** (#109/#259/PROCESSING §1) — Фаза A (факт разнесения → состояние цели, live-gated) + Фаза B (носитель = **настраиваемое дело** `originId` / элемент смарт-процесса `xmlId`, ⚠ OAuth-контекст); простое `todo`-дело остаётся на сторе (маркера нет). Делает crm-sync масштабируемым.
+2. **Дедуп через origin-метку в B24** (#109/#259/PROCESSING §1) — ✅ **Фаза B (настраиваемое дело) за флагом `ACTIVITY_TRANSPORT=configurable`** (ждёт live-verify на OAuth-портале); осталось Фаза A (факт разнесения → состояние цели) + элемент СП. Делает crm-sync масштабируемым (снимает `activity_dedup`).
 3. **#109 проводка разнесения** — lookup'ы (сделка/оплата/смарт-процесс) + «моя компания» + запись факта.
 4. **Опрос банков (stage 5)** — оживить `bank-fetch` поверх OAuth-ядер + per-portal лимитер/`callBatch`.
 5. ✅ **Статус-эндпоинт импорта** (#5) — реальный итог записи в карточке `/app` вместо mock (PR #204).
 6. Сквозная живая проверка (за владельцем, тестовый портал).
 
 ## Лог проходов
+
+### 2026-07-16 — #259 Фаза B: переключение `todo`→настраиваемое дело за флагом (код)
+- **Сделано:** новый носитель операции — `crm.activity.configurable.add` с маркером `originatorId`
+  (app-namespace) + `originId` (ключ операции), за opt-in флагом `ACTIVITY_TRANSPORT=configurable`
+  (default `todo` → поведение прежнее). При `configurable` read-before-write дедуп = **поиск маркера в B24**
+  (`crm.activity.list filter[ORIGINATOR_ID][ORIGIN_ID]`), стор `activity_dedup` на этом пути не нужен;
+  `rememberActivity` — no-op (маркер пишется атомарно с делом → закрыт write→remember-зазор).
+- **Файлы:** `app/utils/configurableActivity.ts` (чистый билдер layout+маркер, BB-нейтрализация внешних
+  полей), `server/utils/configurableActivityWrite.ts` (транспорт, конверт `{result:{activity:{id}}}`),
+  `server/utils/activityMarkerLookup.ts` (поиск по паре маркера, пустой маркер → без REST),
+  `activityTransport` в `runtime.ts`, проводка в `worker.ts` (mode-aware `writeActivity`/`getActivityId`/
+  `rememberActivity`). Тесты: `configurableActivity`/`configurableActivityWrite`/`activityMarkerLookup` +
+  флаг в `queueRuntime`. `.env.example`/`docker-compose*` — passthrough флага.
+- **Live-verify (гейт включения):** `pnpm activity:test --company <id> --apply` (`scripts/configurable-activity-test.ts`) —
+  на OAuth-портале, т.к. `configurable.add` вебхуком не создать (класс #79). Из облака недоступно (гео/OAuth).
+- **Дальше:** Фаза A (факт разнесения → состояние цели); элемент смарт-процесса как носитель (платный тариф);
+  кнопки §6 в layout (регистрация действий приложения); усиление ключа операции (§1).
 
 ### 2026-07-16 — уточнение #259: настраиваемое дело несёт `originId` (docs)
 - **Вопрос владельца:** есть ли у простого дела `xmlId` / другое искомое поле; чем настраиваемое отличается.

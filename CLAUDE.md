@@ -357,6 +357,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/activityDedupStore.ts` — персистентный стор дедупа дел `{dedupKey→activityId}`
     (issue #9, таблица `activity_dedup`, скоуп по `member_id`): `getActivityId`/`rememberActivity`
     (write-once, `ON CONFLICT DO NOTHING`)/`deleteDedupForPortal`. Над `QueryFn`, тесты на fake-query.
+    Используется на пути `todo` (default); при `ACTIVITY_TRANSPORT=configurable` дедуп уходит в B24-маркер
+    (см. `activityMarkerLookup.ts`), стор не читается/не пишется (#259 Фаза B).
     Переживает рестарт воркера и повторную доставку джобы (in-batch `Set` — нет). Проводка
     read-before-write вокруг `writeActivity` — стадия 4; удаление приложения чистит и его (always-purge).
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
@@ -494,6 +496,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `negativeStages` (пер-воронковые `crm.status.list` — одним батчем на тип сущности). Детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
+  - **Настраиваемое дело как носитель (#259 Фаза B) — за флагом `ACTIVITY_TRANSPORT=configurable`** (default
+    `todo`; парсер `activityTransport` в `runtime.ts`): `app/utils/configurableActivity.ts` (чистый билдер
+    `crm.activity.configurable.add` — `layout` из текст-блоков + маркер `originatorId`=app-namespace/`originId`=
+    ключ операции; внешние поля BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
+    (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп на этом пути — **поиск маркера
+    в B24** `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`;
+    пустой маркер → без REST) вместо `activity_dedup`; `rememberActivity` — no-op (маркер пишется атомарно с делом).
+    `worker.ts` выбирает носитель/дедуп по `ACTIVITY_MODE`. ⚠ `configurable.add` — **только OAuth-контекст**
+    (класс #79) → включение после live-verify (`pnpm activity:test`); флаг OFF ⇒ прежний `todo`+стор.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
     `buildAllocationMutation(target, opts)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`;
     для `invoice` — `{method:'crm.item.update',params:{entityTypeId:31,id,fields:{stageId}}}` **при заданной** стадии
@@ -787,6 +798,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`B24OAuth`, как воркер) с этими кредами (in-memory токен-стор, без pg/Redis): `profile`+`crm.item.list` (проверка
     конверта `{result,…}`) и `--force-refresh` (бэкдейтит истечение → проверяет **refresh+persist**). Креды — в
     git-ignored `.env.b24oauth` (шаблон `.env.b24oauth.example`). Dev-only, не часть SSG.
+  - `scripts/configurable-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой гейт
+    #259 Фазы B** (настраиваемое дело). Гоняет **тот же** код, что crm-sync при `ACTIVITY_TRANSPORT=configurable`:
+    `buildConfigurableActivity`→`writeConfigurableActivityViaRest`→`findActivityByMarker` по OAuth-транспорту
+    (`makePortalSdkCall`, in-memory токен-стор, креды из `.env.b24oauth`). **Dry-run по умолчанию** (печатает
+    params); `--apply` создаёт настраиваемое дело и проверяет **round-trip дедупа** (поиск маркера находит
+    созданное дело). `configurable.add` — только OAuth-контекст, вебхуком не проверить (класс #79). Dev-only.
   - `scripts/seed-test-b24.mjs` (`pnpm seed:b24` / `--list` / `--purge`) — **идемпотентный посев тестовых
     данных в живой тестовый портал Б24** для ручной проверки #109 (стадия 4/§2 `PROCESSING.md`): смарт-
     процессы (с направлениями / без — `entityTypeId` назначается автоматически, на подтверждённом
