@@ -41,10 +41,13 @@ export interface PortalToken {
  * concurrency-1 (see worker.ts), so a portal's register/unregister never overlap. The
  * only residual is a token-REFRESH `saveToken` (default `eventTs=0`, on a scaled crm-sync
  * worker) interleaving with a concurrent uninstall's `deleteToken` — a narrow window that
- * SELF-HEALS (the row carries obsolete creds and the next event/refresh sees the
- * tombstone) and is already guarded upstream by `ensureAccessToken`'s deleted-row
- * re-check. Wrap in a single guarded `INSERT … WHERE NOT EXISTS(…) … RETURNING` if that
- * residual ever matters.
+ * SELF-LIMITS: the re-inserted row carries obsolete creds (REST fails) and every later
+ * refresh-persist is tombstone-blocked, so it never re-inserts — a leaked dead row, not
+ * live-cred corruption. NB: the crm-sync refresh-persist now goes through the SDK path
+ * (`sdkPortalDeps.saveToken` → this function directly, NOT via `ensureAccessToken`), so —
+ * unlike the keep-alive cron — it has no in-lock deleted-row re-check. Close it fully with a
+ * single guarded `INSERT … WHERE NOT EXISTS(tombstone) … RETURNING` if that residual ever
+ * matters (see b24Sdk.ts `sdkPortalDeps`).
  */
 export async function saveToken(query: QueryFn, token: PortalToken, eventTs = 0): Promise<boolean> {
   const blocked = await query(

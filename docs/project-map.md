@@ -41,16 +41,16 @@
   номеру+компании с **IDOR-скоупом**, распознавание из назначения, company-пул оплат, **`resolveAllocation`**
   (allocate / manual / валюта / **ambiguous + min-id**), **payment-number** (`filterByAccountNumber`).
   **PR #210 + #212 смержены**, каждый через 5 проверяющих.
-- **SDK-транспорт `crm-sync` реализован за opt-in флагом `QUEUE_SDK_TRANSPORT` (#191, default OFF)**: `crm-sync`
-  может ходить через `@bitrix24/b24jssdk` (встроенный RestrictionManager = пер-портальный лимитер + backoff) —
-  `portalSdkResolver.ts` **мемоизирует клиента на портал на TTL** (пер-JOB: общий bucket + одна загрузка токена на
-  джобу; **пер-JOB мемоизация — ✅ сделана**). Защита от stale-token wedge — **evict-on-error** (упавший вызов дропает
-  свой клиент → следующий resolve ре-билдит сразу) + TTL-бэкстоп. Компромисс (выбор пользователя): SDK-рефреш мимо
-  advisory-lock → проигранная гонка ротации = транзиентный ретрай BullMQ, не порча кредов (persist — UPDATE-only-
-  эквивалент, tombstone-guarded). Advisory-lock — на keep-alive. **Default OFF** (наш `callRest`-путь = дефолт):
-  транспорт гейтнут вживую (`pnpm sdk:crm:test` + разбор реальной выписки), но флип **прод-дефолта ждёт** наблюдения
-  реальной `crm-sync`-джобы через SDK **в воркере** (гейт шёл мимо очереди). Ранее reactive-retry `expired_token`
-  портирован на наш `RestCall` (остаётся фолбэком).
+- **SDK-транспорт `crm-sync` — единственный, по умолчанию (#191)**: `crm-sync` ходит через `@bitrix24/b24jssdk`
+  (встроенный RestrictionManager = пер-портальный лимитер + backoff = lever-1) — `portalSdkResolver.ts` **мемоизирует
+  клиента на портал на TTL** (пер-JOB: общий bucket + одна загрузка токена на джобу = lever-2). Защита от stale-token
+  wedge — **evict-on-error** (упавший вызов дропает свой клиент → следующий resolve ре-билдит сразу) + TTL-бэкстоп.
+  Компромисс (выбор пользователя): SDK-рефреш мимо advisory-lock → проигранная гонка ротации = транзиентный ретрай
+  BullMQ, не порча кредов (persist — UPDATE-only-эквивалент, tombstone-guarded); advisory-lock остаётся на keep-alive.
+  Прежний ручной `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + reactive-retry, тип.
+  `B24RestError`) **удалён** вместе с флагом `QUEUE_SDK_TRANSPORT` — SDK покрывает и bind-once, и реактивный рефреш
+  (`isExpiredTokenError` остаётся для фрейм-роутов). `makeSdkRestCall` ре-аттачит `total`/`next` из `getTotal()`/
+  `isMore()`, иначе списковая пагинация теряла бы страницы.
 
 ### Текущее состояние `main`
 
@@ -112,7 +112,7 @@ dry-run/`--apply`/`--revert` + apply/revert стадии инвойса). Тес
    `errorChat = settings?.errorChat` уже читается один раз на джобу рядом с `chat`.
 3. **`server/queue/worker.ts`** (`liveHandlerDeps`): `recordAllocation` → `recordAllocation(dbQuery, memberId,
    allocationFactKey(item,target), target.kind, target.id)`; `notifyError` → `im.message.add` через
-   `makePortalRestCall` (пере-создать **`server/utils/allocationErrorNotify.ts`** — билдер BB-safe сообщения
+   `resolvePortalCall` (SDK-резолвер) (пере-создать **`server/utils/allocationErrorNotify.ts`** — билдер BB-safe сообщения
    + отправка; мой прежний модуль был отброшен при откате, но образец описан в git-истории ветки/логе ниже);
    `deletePortal` → добавить `deleteFactsForPortal(dbQuery, memberId)`.
 4. **Юнит-тесты обработчика** (`tests/queuePhase2.test.ts`): allocate→recordAllocation+счётчик; идемпотентность
@@ -133,14 +133,13 @@ dry-run/`--apply`/`--revert` + apply/revert стадии инвойса). Тес
 
 **После записи** остаются (по `PROCESSING.md`, отдельными слайсами): реальная мутация портала
 (`payment.pay` для инвойса/оплаты, стадия/триггер для сделки/смарт-процесса) + `autoDistribute`-гейт в
-настройках; SDK-транспорт `crm-sync` **реализован за opt-in `QUEUE_SDK_TRANSPORT` (default OFF)**, **пер-JOB
-мемоизация сделана** — до дефолт-ON остаётся наблюдение реальной `crm-sync`-джобы через SDK в воркере; **#172 закрыт** (order/payment по id и номеру,
+настройках; SDK-транспорт `crm-sync` **стал единственным (дефолт), флаг `QUEUE_SDK_TRANSPORT` и ручной
+`callRest`-резолвер удалены**, пер-JOB мемоизация + evict-on-error; **#172 закрыт** (order/payment по id и номеру,
 `sale`-скоуп добавлен); live-verify моста-документа; чат-уведомления стадии 6 вживую.
 
-**SDK-транспорт (#191) — ✅ гейтнут вживую:** webhook-смоук `pnpm sdk:test --burst` (лимитер троттлит) + **OAuth-путь
-`pnpm sdk:crm:test`** (наш `makePortalSdkCall`/`B24OAuth` на живом портале) + **разбор реальной выписки → поиск
-компаний через SDK** (весь пул REST-вызовов чисто, 0 ошибок). **Остаётся до дефолт-ON:** наблюдать реальную
-`crm-sync`-джобу через SDK **в самом воркере** (гейт гонял транспорт мимо очереди/воркера; при `DEMO_LOAD_N=0`).
+**SDK-транспорт (#191) — ✅ единственный транспорт:** дев-смоуки — webhook `pnpm sdk:test --burst` (лимитер троттлит) +
+OAuth `pnpm sdk:crm:test` (наш `makePortalSdkCall`/`B24OAuth`, `profile`+`crm.item.list`+`--force-refresh`). Ручной
+`callRest`-путь удалён вместе с флагом. **Остаётся:** батчинг `callList` для объёмных выборок (пул оплат/списки).
 
 **Лог шагов:**
 - `2026-07-09` — поставлен крон отчёта (4 мин), записан план. Старт фазы A (посев портала).
@@ -365,13 +364,12 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   исход `allocatable`/`ambiguous`/`manual`/`none`, amount-цели по сумме+валюте, trigger-цели безусловно; счётчики +
   лог, **пока без записи**; разбиение целей — компиляторно-проверяемый `ALLOCATION_TARGET_ROLE`) + **безопасность**
   (PR #200: `neutralizeBb` в заголовке/описании дела CRM — сырой текст плательщика больше не может внести BB в карточку).
-  Осталось: **остаток #191** — **SDK-транспорт реализован за opt-in `QUEUE_SDK_TRANSPORT` (default OFF)**:
+  Осталось: **остаток #191** — **SDK-транспорт — единственный, по умолчанию**:
   `portalSdkResolver.ts` → `@bitrix24/b24jssdk` (встроенный RestrictionManager = lever-1), **пер-JOB мемоизация клиента
-  сделана** (TTL-кэш + evict-on-error от stale-token wedge). Компромисс: SDK-рефреш мимо advisory-lock → транзиентный
-  ретрай, не порча (persist — UPDATE-only-эквивалент, tombstone-guarded). Осталось до дефолт-ON: **наблюдать реальную
-  `crm-sync`-джобу через SDK в воркере** (транспорт уже гейтнут `pnpm sdk:crm:test` + разбором реальной выписки) +
-  батчинг `callList`. Фолбэк (`callRest`-путь, дефолт) — **bind-once
-  lever-2** + **reactive-retry `expired_token`** + пул-раз-на-op + пагинация сделок (всё сделано); дизайн — `docs/QUEUES.md`);
+  = lever-2** (TTL-кэш + evict-on-error от stale-token wedge). Компромисс: SDK-рефреш мимо advisory-lock → транзиентный
+  ретрай, не порча (persist — UPDATE-only-эквивалент, tombstone-guarded). Прежний ручной `callRest`-резолвер (bind-once +
+  reactive-retry `expired_token`) **удалён** вместе с флагом `QUEUE_SDK_TRANSPORT`; пул-раз-на-op + пагинация сделок
+  сделаны. Осталось: **батчинг `callList`** для объёмных выборок; дизайн — `docs/QUEUES.md`);
   роутинг ref моста через `itemByIdLookup`
   (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
   log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +
