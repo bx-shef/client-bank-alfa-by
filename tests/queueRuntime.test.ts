@@ -21,8 +21,8 @@ describe('queueRuntimeConfig', () => {
   })
 
   it('SDK transport is opt-in: default OFF, QUEUE_SDK_TRANSPORT=1 turns it on', () => {
-    // Default OFF — the advisory-locked callRest resolver stays the default until the SDK
-    // path is validated on a live portal (no silent security weakening, PR #250 concern).
+    // Default OFF — flipping the prod default waits until a real crm-sync job is seen
+    // processing through the SDK in the worker (the gate exercised makePortalSdkCall directly).
     expect(queueRuntimeConfig({}).sdkTransport).toBe(false)
     expect(queueRuntimeConfig({ QUEUE_SDK_TRANSPORT: '1' }).sdkTransport).toBe(true)
     expect(queueRuntimeConfig({ QUEUE_SDK_TRANSPORT: 'on' }).sdkTransport).toBe(true)

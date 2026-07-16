@@ -493,15 +493,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (наш `PortalToken`↔`B24OAuthParams`, сверено `typecheck:server`), `makeSdkRestCall` (полный конверт `getData()`,
     контракт `{result,…}` совпадает с `callRest`; throw → джоба падает, чистый retry), `buildRefreshPersist`+
     `setCallbackRefreshAuth` (SDK рефрешит → сохраняем свежий), `makePortalSdkCall` (`null` без токена — drop-in),
-    `sdkPortalDeps` (проводка на живой токен-стор, persist `eventTs=0`). `createPortalSdkResolver` строит **свежий
-    клиент на каждую резолюцию** (не кэш → нет stale-token wedge; как в `ai-price-import`), `evict` — no-op.
+    `sdkPortalDeps` (проводка на живой токен-стор, persist `eventTs=0`). `createPortalSdkResolver(deps, now?, ttlMs?)`
+    **мемоизирует клиента на портал на короткий TTL** (`SDK_CLIENT_TTL_MS` 60с — **пер-JOB**: вся джоба делит один клиент
+    = одно rate-limiter-ведро + одна загрузка токена; TTL — предохранитель от stale-token wedge: после ротации кэш-клиент
+    залипнет максимум на TTL, дальше ре-билд читает свежий токен), `evict` дропает кэш-клиента (cutover на uninstall).
     Типизация `new B24OAuth` как `OAuthCallClient` — compile-time drift-guard. **Компромисс (осознанный, выбор
     пользователя):** SDK-рефреш идёт **мимо** advisory-lock (`ensureAccessToken`, #35) — проигранная гонка ротации =
-    **транзиентный ретрай BullMQ**, не порча кредов (persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`;
-    резолюция перечитывает токен); advisory-lock остаётся на keep-alive (#175). **Default OFF** — не ослабляем дефолт
-    до живого гейта; `QUEUE_SDK_TRANSPORT=0` (дефолт) = наш `callRest`-путь (bind-once + лок + reactive-retry).
-    **Дефолт-ON — follow-up после `pnpm sdk:crm:test` на живом портале** + пер-JOB мемоизация клиента. Детали —
-    `docs/QUEUES.md` §REST-бюджет.
+    **транзиентный ретрай BullMQ**, не порча кредов (persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`);
+    advisory-lock остаётся на keep-alive (#175). **Default OFF** — транспорт гейтнут вживую (`pnpm sdk:crm:test` + разбор
+    реальной выписки), но флип **прод-дефолта на ON ждёт** наблюдения реальной `crm-sync`-джобы через SDK **в воркере**
+    (гейт гонял `makePortalSdkCall` мимо очереди); `QUEUE_SDK_TRANSPORT=0` (дефолт) = наш `callRest`-путь (bind-once + лок
+    + reactive-retry). Детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):

@@ -15,11 +15,13 @@ export interface QueueRuntime {
   cron: boolean
   /** Per-worker concurrency for the throughput queues (fetch/parse/crm-sync). */
   concurrency: number
-  /** Use the @bitrix24/b24jssdk transport (built-in RestrictionManager rate-limiter) for
-   *  the crm-sync REST calls (#191). **Default OFF (opt-in)** — the SDK's auto-refresh runs
-   *  outside our advisory lock (#35, the PR #250 concern), so the advisory-locked `callRest`
-   *  resolver stays the default until the SDK path is validated on a live portal
-   *  (`pnpm sdk:test`). `QUEUE_SDK_TRANSPORT=1` opts a portal/instance into the SDK path. */
+  /** Use the @bitrix24/b24jssdk transport (built-in RestrictionManager rate-limiter) for the
+   *  crm-sync REST calls (#191). **Default OFF (opt-in)** — the transport is validated against a
+   *  live portal (`pnpm sdk:crm:test`), but flipping the PRODUCTION default waits until a real
+   *  crm-sync job is observed processing through the SDK in the actual BullMQ worker (the live
+   *  gate exercised `makePortalSdkCall` directly, bypassing the queue/worker path). Set
+   *  `QUEUE_SDK_TRANSPORT=1` to opt an instance in; it falls back to the advisory-locked
+   *  `callRest` resolver when off. */
   sdkTransport: boolean
 }
 
