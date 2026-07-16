@@ -1,8 +1,10 @@
 // Write a CONFIGURABLE CRM activity (crm.activity.configurable.add) for one operation
-// over a portal-bound RestCall (#259 Phase B). Pure over the injected `call` —
-// unit-testable with a fake. The params are built by the shared, tested builder in
-// app/utils/configurableActivity.ts; this module only does the REST call + result
-// extraction. Companion of crmActivityWrite.ts (the simple crm.activity.todo.add path).
+// over a portal-bound RestCall (#259). This is the SOLE activity carrier crm-sync writes:
+// unlike the old crm.activity.todo.add, a configurable activity carries an
+// ORIGINATOR_ID/ORIGIN_ID marker, so dedup lives in B24 (see activityMarkerLookup.ts) with
+// no local store. Pure over the injected `call` — unit-testable with a fake. The params are
+// built by the shared, tested builder in app/utils/configurableActivity.ts; this module only
+// does the REST call + result extraction.
 
 import type { StatementItem } from '../../app/types/statement'
 import { buildConfigurableActivity } from '../../app/utils/configurableActivity'

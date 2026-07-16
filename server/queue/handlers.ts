@@ -3,9 +3,9 @@
 // transports (bank fetch, file parse, B24 REST) are wired in worker.ts and land
 // with stages 3–6. Handlers return a small summary (useful for logs/metrics).
 //
-// Flow:  bank-fetch ─┐                       ┌─ skip if already written (#9 store)
+// Flow:  bank-fetch ─┐                       ┌─ skip if already written (B24 marker #259)
 //                    ├─► crm-sync ─ analyse ─┼─ else: find company (corr-account)
-//        file-parse ─┘   (dedup, split)      ├─ write activity + remember its id
+//        file-parse ─┘   (dedup, split)      ├─ write configurable activity (stamps marker)
 //                                            └─ notify chat (by rules)
 
 import type { StatementItem } from '../../app/types/statement'
@@ -36,9 +36,9 @@ export interface HandlerDeps {
   parseFile: (job: ParseJob) => Promise<StatementItem[]>
   /** Look up a CRM company id by the counterparty's settlement account. */
   findCompany: (item: StatementItem, memberId: string) => Promise<string | null>
-  /** Write a universal activity for one operation. Returns the created activity id
-   *  (to remember for dedup), or `null` if nothing was written (e.g. no company
-   *  matched, so there's no owner for a todo). */
+  /** Write a configurable activity for one operation (stamping the B24 dedup marker
+   *  atomically). Returns the created activity id, or `null` if nothing was written (e.g.
+   *  no company matched, so there's no owner). */
   writeActivity: (item: StatementItem, companyId: string | null, memberId: string) => Promise<string | null>
   /** Read the portal's full settings blob (chat target + rules + recognition matrices)
    *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
@@ -105,13 +105,13 @@ export interface HandlerDeps {
   notifyError: (item: StatementItem, decision: AllocationDecision, dialogId: string, memberId: string) => Promise<void>
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
-   *  throw — it runs AFTER the activity is written+remembered, so a propagated error
+   *  throw — it runs AFTER the activity (and its marker) is written, so a propagated error
    *  would fail the job, skip the op on retry, and lose the record. Swallow+log. */
   notifyChat: (item: StatementItem, dialogId: string, memberId: string) => Promise<void>
-  /** Persistent dedup: the activity id already written for this op, or null (#9). */
+  /** B24-side dedup (#259): the id of an activity already written for this op (found by its
+   *  ORIGINATOR_ID/ORIGIN_ID marker), or null. No separate "remember" step — the marker is
+   *  written atomically with the activity, so B24 itself is the dedup record. */
   getActivityId: (memberId: string, dedupKey: string) => Promise<string | null>
-  /** Persistent dedup: record the activity id written for this op (#9). */
-  rememberActivity: (memberId: string, dedupKey: string, activityId: string) => Promise<void>
   /** Register a portal on ONAPPINSTALL — decrypt the refresh blob, upsert the token row. */
   savePortal: (job: EventJob) => Promise<void>
   /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges).
@@ -170,12 +170,12 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 }
 
 /** Analyse a normalized batch and act in Bitrix24: dedupe within the batch, then
- *  per operation apply read-before-write — skip ops already written (persistent
- *  dedup, survives job redelivery), else find the company, write the activity,
- *  remember it, and notify chat.
+ *  per operation apply read-before-write — skip ops already written (their B24 marker
+ *  survives job redelivery, #259), else find the company, write the configurable activity
+ *  (which stamps the marker atomically), and notify chat.
  *
  *  Counters: `processed` = unique ops in the batch; `skipped` = already written in
- *  a prior (redelivered) run; `created` = new activities written + remembered;
+ *  a prior (redelivered) run; `created` = new activities written;
  *  `notified` = chat notifications sent (⊆ created); `unmatched` = new ops where
  *  nothing was written (e.g. no company → no owner);
  *  `recognized` = unique ops where ≥1 identifier was recognized in the purpose (§4);
@@ -192,7 +192,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  is on (§2 mutation slice, #109); a subset of `allocated` (unsupported target kinds
  *  record the fact but apply nothing). Gate off ⇒ `distributed` stays 0 (fact-only).
  *  `credits`/`debits` = приход/расход split of the processed ops (for the status summary).
- *  An unmatched op is NOT remembered, so a later redelivery re-attempts it once a
+ *  An unmatched op writes nothing (no marker), so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
 export async function handleCrmSyncJob(
@@ -254,8 +254,8 @@ export async function handleCrmSyncJob(
       deps.onRecognized(item, intents, job.memberId)
     }
     const key = dedupKey(item)
-    // Persistent dedup (#9): if this op already produced an activity in a prior
-    // run of the (redelivered) job, don't create a second one.
+    // B24-side dedup (#259): if this op already produced an activity in a prior run of the
+    // (redelivered) job, its marker is in B24 — don't create a second one.
     if (await deps.getActivityId(job.memberId, key)) {
       skipped++
       continue
@@ -345,18 +345,14 @@ export async function handleCrmSyncJob(
       unmatched++
       continue
     }
-    // NB (write→remember not atomic): if the worker dies AFTER writeActivity created
-    // the B24 activity but BEFORE rememberActivity persists, a job redelivery would
-    // re-create the activity (getActivityId still null). This narrow window is the
-    // right trade — reserving the key BEFORE writing would instead risk a permanent
-    // loss if writeActivity then failed. A B24-side guard (search the timeline for
-    // the embedded origin token before writing) would close it — follow-up.
-    await deps.rememberActivity(job.memberId, key, activityId)
+    // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE
+    // writeActivity (configurable.add), so a redelivery's getActivityId finds it — no separate
+    // remember step, and no write→remember gap to lose.
     // Announce only if a chat target is set AND the rules allow this op (direction /
     // excluded account / excluded purpose). Unmatched ops are NOT announced — notify
-    // sits after rememberActivity, so a redelivery can't re-post (chat has no separate
-    // dedup yet). notifyChat swallows transport errors so a chat failure never fails
-    // the job after the activity was written+remembered.
+    // sits after the write, so a redelivery can't re-post (chat has no separate dedup yet).
+    // notifyChat swallows transport errors so a chat failure never fails the job after the
+    // activity was written.
     if (chat?.dialogId && shouldNotifyChat(item, chat.rules)) {
       await deps.notifyChat(item, chat.dialogId, job.memberId)
       notified++

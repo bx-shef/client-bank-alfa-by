@@ -41,23 +41,3 @@ function clampConcurrency(value: string | undefined): number {
   if (!Number.isFinite(n) || n < 1) return 1
   return Math.min(MAX_CONCURRENCY, n)
 }
-
-/** Which CRM activity carrier crm-sync writes an operation as (#259 Phase B). */
-export type ActivityTransport = 'todo' | 'configurable'
-
-/**
- * Resolve the activity transport from the environment. Default `todo`
- * (crm.activity.todo.add + the persistent activity_dedup store). `ACTIVITY_TRANSPORT=configurable`
- * switches to crm.activity.configurable.add, whose ORIGINATOR_ID/ORIGIN_ID marker enables
- * B24-side dedup (crm.activity.list search) — no store needed, and the write→remember gap is
- * closed (marker written atomically with the activity).
- *
- * OFF by default because configurable.add is OAuth/app-context only (ERROR_WRONG_CONTEXT) and
- * cannot be webhook-tested — it needs a live-verify on an installed portal before flipping, the
- * same opt-in discipline as QUEUE_SDK_TRANSPORT. Only the exact token `configurable` (any case,
- * trimmed) turns it on; anything else falls back to `todo` (fail-safe: a typo can't silently
- * switch the real write path).
- */
-export function activityTransport(env: NodeJS.ProcessEnv = process.env): ActivityTransport {
-  return String(env.ACTIVITY_TRANSPORT ?? '').trim().toLowerCase() === 'configurable' ? 'configurable' : 'todo'
-}

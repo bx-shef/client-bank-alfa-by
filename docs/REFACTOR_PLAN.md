@@ -27,7 +27,7 @@
 | Хостинг backend | Тот же сервер за nginx-proxy (как деплой `currency-converter`: GHCR + Watchtower) |
 | Первый этап | OAuth Альфы + получение выписки (PoC) — после получения доступов |
 | Мультибанк | Абстракция «банк-провайдер» сразу; Альфа — первая реализация; Prior/ручной импорт — позже |
-| Дела CRM | Универсальное дело `crm.activity.todo.add` (не старый `crm.activity.add`) |
+| Дела CRM | Настраиваемое дело `crm.activity.configurable.add` (маркер `originId` для дедупа в B24, #259) |
 | Доки API | Добываем сами; точные OAuth-параметры — из зарегистрированного приложения на developerhub |
 | MCP | Позже, отдельным этапом |
 | Фоновая обработка | **BullMQ + Redis** (не Nitro tasks) — под нагрузку и масштабирование: очереди `b24-events`, `bank-fetch`, `file-parse`, `crm-sync` (анализ + запись в B24). Дедуп ретраев по детерминированному `jobId`; Redis — на изолированной сети `queuenet`. **Фаза 1** (сервис+контракты), **Фаза 2** (продюсеры, воркеры, крон+демо-нагрузка, наблюдаемость `/api/queues`) и **масштаб-аут** (роль по env `QUEUE_WORKERS`/`QUEUE_CRON`, сервис `worker` в prod-compose, `--scale worker=N`) — готовы; транспорты в обработчиках наполняются на стадиях 3–6; телеметрия в Grafana — далее. Техсправка (топология, поток, метрики, масштабирование) — [`QUEUES.md`](QUEUES.md) |
@@ -70,7 +70,7 @@
 
 1. **[✓ этап 1] Доменное ядро + первый UI-срез (mock).** Типы выписки, абстракция
    `BankProvider`, чистые утилиты (приход/расход, фильтр чата, дедуп), билдер
-   универсального дела (`crm.activity.todo.add`), демо-страница просмотра выписки на mock-данных. Тесты.
+   дела (ныне `crm.activity.configurable.add`, #259), демо-страница просмотра выписки на mock-данных. Тесты.
 2. **[~ этап 2, частично] B24 dual-mode + SDK.** Подключены `@bitrix24/b24jssdk` (+ `-nuxt`),
    `useB24` (init/no-op вне фрейма), layout `clear` (`<B24App>`), `/install` (`init → installFinish`
    + диагностика, редирект на `/` вне фрейма); `/app` и `/settings` инициализируют фрейм
@@ -103,16 +103,16 @@
    логика наполняется на стадиях 4–6 ниже. **Масштаб-аут — сделан:** роль контейнера решается env
    (`QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`, `server/queue/runtime.ts`), `docker-compose.prod.yml`
    разводит `backend` (HTTP+крон) и сервис `worker` (`--scale worker=N`); телеметрия в Grafana — далее.
-4. **Поиск компании по корр-счёту + запись универсального дела** (перенос на todo-API).
-   Воркер `crm-sync` → поиск компании → `crm.activity.todo.add`.
-   **БЛОКЕР до включения реальной записи:** очереди BullMQ — at-least-once, поэтому дедупа
-   ВНУТРИ батча (в памяти джоба, `handlers.ts`) недостаточно — при падении/ретрае воркера батч
-   пройдёт повторно. Нужен **персистентный `{dedupKey→activityId}`** (issue #9), сверяемый
-   **до записи** (read-before-write), иначе рестарт воркера задвоит дела. Это разные вещи:
-   (а) дедуп постановки по `jobId` — уже есть; (б) дедуп записи в CRM при редоставке — нужен здесь.
-   **Статус — стадия 4 в основном готова:** стор дедупа (`activityDedupStore.ts`, always-purge),
-   поиск компании (`companyLookup.ts`), read-before-write в `handleCrmSyncJob` и **живые транспорты**
-   `findCompany`→`findCompanyByAccount` / `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`)
+4. **Поиск компании по корр-счёту + запись настраиваемого дела.**
+   Воркер `crm-sync` → поиск компании → `crm.activity.configurable.add`.
+   **Дедуп записи при редоставке (at-least-once):** дедупа ВНУТРИ батча (в памяти джоба, `handlers.ts`)
+   мало — при падении/ретрае воркера батч пройдёт повторно. Идемпотентность держит **B24-маркер** (#259):
+   настраиваемое дело несёт `originatorId`+`originId`, перед записью ищем его (`crm.activity.list`) —
+   нашли → пропускаем; локального стора нет. Это разные вещи: (а) дедуп постановки по `jobId` — есть;
+   (б) дедуп записи в CRM при редоставке — маркер в B24.
+   **Статус — стадия 4 в основном готова:** поиск компании (`companyLookup.ts`), read-before-write
+   (`findActivityByMarker`) в `handleCrmSyncJob` и **живые транспорты** `findCompany`→`findCompanyByAccount` /
+   `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`)
    по per-portal `RestCall` (через `resolvePortalCall` — SDK-резолвер #191, мемоизация на портал на джобу),
    с гейтом демо-счётов (`isDemoAccount`) и TZ-aware
    `deadline` (UTC+3, `toPortalDeadline`, #10) — **готовы, покрыты тестами**. Осталось: проверка на живом
@@ -225,14 +225,15 @@ OAuth и выписки тестируются **только с BY-доступ
 - **Rate-limit 100/мин:** throttle/backoff в cron-опросе (этап 5).
 - **Лог:** санитизировать `error_description` от Альфы (CRLF/длина) перед записью.
 
-## Дедуп универсального дела
+## Дедуп дела через маркер в B24 (#259)
 
-`crm.activity.todo.add` не имеет нативных `ORIGINATOR_ID/ORIGIN_ID`. Идемпотентность держим
-сами: стабильный ключ `account|docId` + текстовый маркер в описании дела
-(`[ShefClientBankAlfaBy:<account>|<docId>]`, поиск подстрокой). У `crm.activity.list` нет
-fulltext-поиска по описанию, поэтому предпочтительно **хранилище `{dedupKey → activityId}`
-на backend**, а не скан списка дел. Это и формат `deadline` (TZ портала, UTC+3 — риск
-`WRONG_DATETIME_FORMAT`/сдвига даты) — отдельные issues, обязательны к этапу 4.
+`crm.activity.configurable.add` (**настраиваемое дело**) принимает `originatorId`+`originId`, а
+`crm.activity.list` **фильтрует** по ним — поэтому идемпотентность живёт **в самом B24**: перед
+записью ищем маркер (`ORIGINATOR_ID`+`ORIGIN_ID`, где `ORIGIN_ID`=`account|docId`), нашли →
+пропускаем. Backend-стора `{dedupKey → activityId}` больше нет (ранний `crm.activity.todo.add`
+маркера не имел, поэтому исходно держали стор — issue #9; переведено на маркер в #259). Формат
+`deadline` — TZ портала (UTC+3, `toPortalDeadline`). ⚠ `configurable.add` — только OAuth-контекст
+(класс #79), вебхуком не проверить (`pnpm activity:test`).
 
 ## Ожидается от владельца
 

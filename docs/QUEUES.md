@@ -58,7 +58,7 @@ flowchart LR
 
   QC -->|handleCrmSyncJob<br/>дедуп account+docId| WC[воркер crm-sync]
   WC --> FC[поиск компании<br/>по корр-счёту]
-  WC --> WA[универсальное дело<br/>crm.activity.todo.add]
+  WC --> WA[настраиваемое дело<br/>crm.activity.configurable.add]
   WC --> NC[сообщение в чат<br/>по правилам]
 
   OBS[GET /api/queues<br/>waiting / active / completed / failed] -. читает .-> Q
@@ -70,22 +70,16 @@ flowchart LR
   `parseJobId`/`crmSyncJobId`) — BullMQ давит естественные ретраи: то же окно выписки / тот же
   файл (`fileHash`) / тот же батч (`batchId`) не создаёт дубликат джоба.
 - **At-least-once.** Доставка «хотя бы раз», поэтому `crm-sync` дедупит **внутри батча** по
-  `account|docId`. Этого мало против повторной доставки *всего* джоба (падение воркера после
-  частичной записи), поэтому есть **персистентный стор** `{account|docId → activityId}`
-  ([issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9), `activityDedupStore.ts`),
-  сверяемый **read-before-write**: `handleCrmSyncJob` через `getActivityId` пропускает уже
-  записанные операции, а после записи зовёт `rememberActivity`. Транспорт записи **живой**:
-  `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`, с
-  гейтом демо-счётов (`isDemoAccount`) — демо-нагрузка в реальный портал не пишет.
-  - **Целевая модель (#109/#259, [`PROCESSING.md`](PROCESSING.md) §1):** идемпотентность стремимся держать
-    в B24 по **нашему** маркеру носителя. Носитель с маркером: инвойс/смарт-процесс (`xmlId`, `crm.item`)
-    или **настраиваемое дело** (`originId`, `crm.activity.configurable.add`). У **простого** `todo`-дела
-    маркера нет → пока носитель — оно, стор `activity_dedup` **верен by design**. Миграция **частичная**:
-    `allocation_fact` → состояние цели (Фаза A, ещё нет); стор дела снимается сменой носителя. **Фаза B
-    (настраиваемое дело) — СДЕЛАНА за флагом `ACTIVITY_TRANSPORT=configurable`** (default `todo`): при нём
-    `configurable.add` + дедуп поиском `crm.activity.list` вместо стора; включение — после live-verify на
-    OAuth-портале (`pnpm activity:test`, вебхуком не проверить). Чужие поля (originId/xmlId клиентских
-    сделок/инвойсов) **не штампуем** — наш маркер на нашей записи. Флаг OFF ⇒ код на сторах, как раньше.
+  `account|docId`. Против повторной доставки *всего* джоба (падение воркера после частичной записи)
+  идемпотентность живёт **в B24, не в нашей БД** (#259, [`PROCESSING.md`](PROCESSING.md) §1): `writeActivity`
+  пишет **настраиваемое дело** (`crm.activity.configurable.add`) с маркером `originatorId`+`originId`, а
+  `handleCrmSyncJob` **перед записью** ищет этот маркер (`getActivityId`→`findActivityByMarker`→
+  `crm.activity.list`) и пропускает уже записанные — стора `activity_dedup` больше нет, `rememberActivity`
+  убран (маркер атомарен с делом). Транспорт **живой** (`writeConfigurableActivityViaRest`) по per-portal
+  `RestCall`, с гейтом демо-счётов (`isDemoAccount`) — демо-нагрузка в реальный портал не пишет.
+  ⚠ `configurable.add` — только OAuth-контекст (класс #79), вебхуком не проверить → live-смоук
+  `pnpm activity:test`. Инвойс/смарт-процесс несут `xmlId` — для будущего носителя-элемента СП (§2/§5).
+  Чужие поля (`originId`/`xmlId` клиентских сделок/инвойсов) **не штампуем** — наш маркер на нашей записи.
 - **Брак пакета без ключа портала.** Воркер, взяв пакет, **первым делом** проверяет наличие токена
   портала. Нет (приложение удалено, в т.ч. посреди выгрузки) → пакет **отвергается** (убрать из очереди,
   не повторять) + лог «пакет из B24 `<домен>` не нашёл свой ключ». Это **не** ретраибл-ошибка — ключ
@@ -148,10 +142,10 @@ flowchart LR
 1. **Concurrency воркера** — `QUEUE_CONCURRENCY=N`: один воркер держит `N` джобов в параллель (дефолт `1`;
    применяется к fetch/parse/crm-sync, события — всегда 1). Самый дешёвый рычаг. ⚠ Узкое место — `crm-sync`
    (I/O к B24): поднимать concurrency/реплики для него **только после** (а) per-portal лимитера/батча
-   (`callBatch`, иначе `QUERY_LIMIT`) и (б) **атомарного дедупа** (маркер в B24 для сущностей-носителей,
-   #109/#259/PROCESSING §1; `todo`-дело остаётся на сторе — маркера нет) — текущий read-before-write под
-   параллелизмом TOCTOU и может создать дубль дела. Пока держим crm-sync
-   эффективно последовательным; **fetch/parse масштабируются свободно**.
+   (`callBatch`, иначе `QUERY_LIMIT`) и (б) **атомарности дедупа** (маркер в B24, #109/#259/PROCESSING §1):
+   read-before-write (`findActivityByMarker`→`configurable.add`) под параллелизмом — TOCTOU-окно между
+   поиском маркера и записью, два воркера могут создать дубль дела. Пока держим crm-sync эффективно
+   последовательным; **fetch/parse масштабируются свободно**.
 2. **Реплики воркер-контейнера** — `docker compose up -d --scale worker=N`. Тот же `startThroughputWorkers()`
    в нескольких контейнерах; все на одном Redis тянут из **одной** очереди — **Redis отдаёт каждый джоб ровно
    одному воркеру**, поэтому добавил реплику → больше throughput, код не меняется. (`deploy.replicas` в
@@ -343,6 +337,6 @@ DI, покрыт тестами); по каждой из четырёх очер
 ## Смежное
 
 - [issue #54](https://github.com/bx-shef/client-bank-alfa-by/issues/54) — частота опроса банков (редкая, управляется приложением) + кнопка «Опросить сейчас».
-- [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9) — персистентный стор дедупа дел (`activity_dedup`). **Верен by design для дефолтного пути `todo`** (#259: у простого дела нет искомого маркера). При `ACTIVITY_TRANSPORT=configurable` (**реализовано**, ждёт live-verify) носитель — настраиваемое дело с маркером `originId`, дедуп уходит в B24-поиск, стор не используется; элемент СП (`xmlId`) — альтернативный носитель — [`PROCESSING.md`](PROCESSING.md) §1.
+- [issue #9](https://github.com/bx-shef/client-bank-alfa-by/issues/9) — стор дедупа дел `activity_dedup` **удалён (#259)**: носитель операции — настраиваемое дело с маркером `originatorId`+`originId`, дедуп = поиск маркера в B24 (`crm.activity.list`), стора нет — [`PROCESSING.md`](PROCESSING.md) §1.
 - [issue #191](https://github.com/bx-shef/client-bank-alfa-by/issues/191) — REST-бюджет проводки #109 (rate-limit/bind-once/пагинация); что сделано/осталось — раздел «REST-бюджет проводки платежей» выше.
 - [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) — стадии 4–6 наполняют транспорты обработчиков реальной логикой.

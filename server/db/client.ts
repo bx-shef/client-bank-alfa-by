@@ -10,15 +10,14 @@ import type { QueryFn } from '../utils/tokenStore'
  * every boot (see server/plugins/migrate.ts). `application_token` defaults to ''
  * so the write-once `COALESCE(NULLIF(...))` upsert works on a fresh row.
  *
- * `activity_dedup` is the persistent {dedupKey → activityId} map (issue #9) that
- * lets crm-sync skip re-creating an activity for an operation already written —
- * survives worker restarts and at-least-once job redelivery, unlike the in-batch
- * Set. Keyed per portal (member_id): two portals may import the same account.
+ * Activity dedup is NOT a table anymore (#259): crm-sync writes a CONFIGURABLE activity
+ * carrying an ORIGINATOR_ID/ORIGIN_ID marker and searches that marker before writing, so
+ * Bitrix24 itself is the dedup record (no {dedupKey → activityId} map to keep).
  *
  * `allocation_fact` is the persistent «платёж → сущность» allocation record (#109):
  * a payment is recorded as `allocated` against a target and can be flipped to
  * `reverted` on сторно — idempotent (write-once per key), survives reimport, scoped
- * per portal. Distinct from `activity_dedup` (op-level) — see server/utils/allocationFactStore.ts. */
+ * per portal — see server/utils/allocationFactStore.ts. */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS portal_tokens (
   member_id          TEXT PRIMARY KEY,
@@ -33,14 +32,6 @@ CREATE TABLE IF NOT EXISTS portal_tokens (
 CREATE TABLE IF NOT EXISTS portal_tombstone (
   member_id   TEXT PRIMARY KEY,
   deleted_ts  BIGINT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS activity_dedup (
-  member_id    TEXT NOT NULL,
-  dedup_key    TEXT NOT NULL,
-  activity_id  TEXT NOT NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (member_id, dedup_key)
 );
 
 CREATE TABLE IF NOT EXISTS allocation_fact (

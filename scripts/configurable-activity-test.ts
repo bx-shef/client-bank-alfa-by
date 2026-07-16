@@ -1,7 +1,7 @@
-// Live smoke of the #259 Phase-B carrier: crm.activity.configurable.add + the B24-side dedup
+// Live smoke of the #259 activity carrier: crm.activity.configurable.add + the B24-side dedup
 // search (crm.activity.list filter[ORIGINATOR_ID][ORIGIN_ID]). Dev-only, not part of SSG.
 //
-// Exercises the EXACT code crm-sync runs when ACTIVITY_TRANSPORT=configurable:
+// Exercises the EXACT code crm-sync runs to write an operation:
 // `buildConfigurableActivity` → `writeConfigurableActivityViaRest` → `findActivityByMarker`,
 // over the real per-portal OAuth transport (`makePortalSdkCall`) with an in-memory token store
 // (no Postgres/Redis). configurable.add is OAuth/app-context only, so this is the live gate the
@@ -120,7 +120,7 @@ async function main() {
     process.exit(1)
   }
 
-  console.log(`\n${C.green}✓ configurable.add + B24-дедуп по маркеру работают вживую.${C.reset} Можно включать ACTIVITY_TRANSPORT=configurable.\n`)
+  console.log(`\n${C.green}✓ configurable.add + B24-дедуп по маркеру работают вживую.${C.reset}\n`)
 }
 
 main().catch((e) => {

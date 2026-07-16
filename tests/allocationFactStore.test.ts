@@ -8,7 +8,7 @@ import {
 } from '../server/utils/allocationFactStore'
 
 // Persistent allocation fact store (#109). Fake-query tests: assert SQL shape and
-// params without a DB (same pattern as activityDedupStore).
+// params without a DB (same fake-`QueryFn` pattern used across the backend stores).
 
 describe('getAllocationFact', () => {
   it('returns the stored fact for a (portal, factKey)', async () => {

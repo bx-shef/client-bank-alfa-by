@@ -130,10 +130,6 @@ services:
       # Per-worker parallelism for fetch/parse/crm-sync (default 1). Raise with care:
       # crm-sync is REST-bound and B24 limits are per-portal — batch first (docs/QUEUES.md).
       QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-1}
-      # Activity carrier (#259 Phase B): `todo` (default) or `configurable` (B24-side dedup
-      # via crm.activity.configurable.add). OFF by default — live-verify on an OAuth portal
-      # before flipping (pnpm activity:test). crm-sync runs here, so this is the deciding copy.
-      ACTIVITY_TRANSPORT: ${ACTIVITY_TRANSPORT:-todo}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s

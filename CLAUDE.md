@@ -236,11 +236,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
   - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
     `parseRuleLines` (textarea → массив правил).
-  - `app/utils/activity.ts` — билдер **универсального дела** (`crm.activity.todo.add`) + origin-маркер для дедупа.
-    **Безопасность:** внешние поля (назначение/контрагент/номер документа — контролирует плательщик)
-    прогоняются через `neutralizeBb` (BB-скобки → полноширинные) и в заголовке, и в описании дела —
-    CRM-таймлайн рендерит BB, иначе `[url=…]`/упоминания попали бы в карточку. `neutralizeBb` живёт
-    здесь (шарится в `chatMessage.ts`, чтобы не было цикла импорта activity↔chatMessage).
+  - `app/utils/activity.ts` — **общие хелперы дела**: заголовок (`buildActivityTitle`), деньги/дата
+    (`formatMoney`/`formatIsoDate`), TZ-штамп дедлайна (`toPortalDeadline`, UTC+3), тип-владелец
+    (`CRM_OWNER_TYPE_COMPANY`), app-namespace `ACTIVITY_ORIGIN`, `CrmCompanyRef`. Сам билдер носителя —
+    `configurableActivity.ts` (настраиваемое дело). **Безопасность:** внешние поля (назначение/контрагент/
+    номер документа — контролирует плательщик) прогоняются через `neutralizeBb` (BB-скобки → полноширинные)
+    — иначе `[url=…]`/упоминания попали бы в карточку. `neutralizeBb` живёт здесь (шарится в
+    `chatMessage.ts` и `configurableActivity.ts`, чтобы не было цикла импорта).
   - `app/utils/allocation.ts` — **чистое ядро разнесения оплат** (#109, спека — `docs/PROCESSING.md` §2):
     `resolveAllocation` над кандидатами, уже отфильтрованными по компаниям **и по стадии** (инвойсы/сделки
     с отрицательной стадией исключены; Этап C/D), решает по критерию владельца (совпали **сумма** — точно,
@@ -358,13 +360,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     deleted_ts)`, а `saveToken` **отказывается** писать поверх равного-или-новее тумбстоуна (возвращает
     `false`) — так «зависший» register (ретрай install после более свежего uninstall) не воскрешает портал
     со старыми кредами; настоящий reinstall (ts новее) проходит и чистит устаревший тумбстоун. Тесты на fake-query.
-  - `server/utils/activityDedupStore.ts` — персистентный стор дедупа дел `{dedupKey→activityId}`
-    (issue #9, таблица `activity_dedup`, скоуп по `member_id`): `getActivityId`/`rememberActivity`
-    (write-once, `ON CONFLICT DO NOTHING`)/`deleteDedupForPortal`. Над `QueryFn`, тесты на fake-query.
-    Используется на пути `todo` (default); при `ACTIVITY_TRANSPORT=configurable` дедуп уходит в B24-маркер
-    (см. `activityMarkerLookup.ts`), стор не читается/не пишется (#259 Фаза B).
-    Переживает рестарт воркера и повторную доставку джобы (in-batch `Set` — нет). Проводка
-    read-before-write вокруг `writeActivity` — стадия 4; удаление приложения чистит и его (always-purge).
+  - **Дедуп дел — в B24, без стора (#259).** crm-sync пишет **настраиваемое дело** с маркером
+    `originatorId`+`originId` и перед записью ищет его (`crm.activity.list`), поэтому Postgres-стора
+    `{dedupKey→activityId}` больше нет (таблица `activity_dedup`, модуль `activityDedupStore.ts` и
+    `rememberActivity` удалены). Модули носителя/поиска — ниже (`configurableActivity.ts`/
+    `configurableActivityWrite.ts`/`activityMarkerLookup.ts`). In-batch `Set` в `handleCrmSyncJob`
+    снимает дубли внутри пакета; кросс-джобовую идемпотентность держит маркер в B24.
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/utils/envCheck.ts` (+ плагин `server/plugins/envCheck.ts`) — валидация env на старте
     (чистая `checkBackendEnv`, тесты): `B24_TOKEN_ENC_KEY` есть и декодируется в 32 байта; `DATABASE_URL`
@@ -372,7 +373,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
-    `activity_dedup`, `allocation_fact`, `import_result`, `metrics_counter`); `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+    `allocation_fact`, `import_result`, `metrics_counter`; дедуп дел — маркер в B24, таблицы нет — #259);
+    `server/plugins/migrate.ts` — идемпотентная миграция на старте.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
@@ -402,8 +404,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (`savePortal`, ONAPPINSTALL) / удаляет (`deletePortal`, ONAPPUNINSTALL — всегда) портал;
       fetch/parse → нормализованный батч в `crm-sync`; `crm-sync` дедупит in-batch (`account|docId`),
       читает `PortalSettings` **один раз на джобу** (`getPortalSettings` — один app.option-чтение кормит и
-      чат, и распознавание), затем **read-before-write** по персистентному стору (#9): `getActivityId`→skip
-      уже записанных, иначе `findCompany`→`writeActivity` (возвращает id дела)→`rememberActivity`→`notifyChat`;
+      чат, и распознавание), затем **read-before-write** по B24-маркеру (#259): `getActivityId`
+      (`findActivityByMarker`)→skip уже записанных, иначе `findCompany`→`writeActivity` (настраиваемое дело,
+      маркер атомарен)→`notifyChat`;
       счётчики `created/skipped/unmatched/recognized/resolved/allocatable/ambiguous/manual`. **Распознавание
       намерения (#109, §4, слайс 1 капстоуна):** на каждую уникальную операцию — `recognizePurposeIntents` (чистый
       композит `recognizeByMatrices`→`routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала →
@@ -431,10 +434,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       Остаётся follow-up: **триггеры** deal/smart-process (их факт пока не
       пишется) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
-      заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Стор дедупа живой.
+      заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
-      `writeActivity`→`writeActivityViaRest` (`crm.activity.todo.add`) по per-portal `RestCall`
+      `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`) по per-portal `RestCall`
       (SDK-резолвер `createPortalSdkResolver`, мемоизация на портал на джобу), с **гейтом демо-счётов**
       (`isDemoAccount` — демо-нагрузка не пишет в реальный портал) и skip без токена портала.
       `cron.ts` — план опроса (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`,
@@ -498,17 +501,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`isHaltOnError`+`returnAjaxResult`), конверты per-команда в порядке (с ре-аттачем `total`/`next`), чанкинг по
     `SDK_BATCH_MAX`=50, halt-on-error (падение батча/любой команды → throw, без тихого пропуска). Проведён в
     `negativeStages` (пер-воронковые `crm.status.list` — одним батчем на тип сущности). Детали — `docs/QUEUES.md` §REST-бюджет.
-  - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
-    `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
-  - **Настраиваемое дело как носитель (#259 Фаза B) — за флагом `ACTIVITY_TRANSPORT=configurable`** (default
-    `todo`; парсер `activityTransport` в `runtime.ts`): `app/utils/configurableActivity.ts` (чистый билдер
-    `crm.activity.configurable.add` — `layout` из текст-блоков + маркер `originatorId`=app-namespace/`originId`=
-    ключ операции; внешние поля BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
-    (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп на этом пути — **поиск маркера
-    в B24** `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`;
-    пустой маркер → без REST) вместо `activity_dedup`; `rememberActivity` — no-op (маркер пишется атомарно с делом).
-    `worker.ts` выбирает носитель/дедуп по `ACTIVITY_MODE`. ⚠ `configurable.add` — **только OAuth-контекст**
-    (класс #79) → включение после live-verify (`pnpm activity:test`); флаг OFF ⇒ прежний `todo`+стор.
+  - **Настраиваемое дело — единственный носитель операции (#259):** `app/utils/configurableActivity.ts` (чистый
+    билдер `crm.activity.configurable.add` — `layout` из текст-блоков + маркер `originatorId`=app-namespace/
+    `originId`=ключ операции; внешние поля BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
+    (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп — **поиск маркера в B24**
+    `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`; пустой
+    маркер → без REST); стора нет, `rememberActivity` убран (маркер пишется атомарно с делом). Прежний
+    `crm.activity.todo.add`-путь (`crmActivityWrite.ts`) и билдер `buildTodoActivity` **удалены**. ⚠
+    `configurable.add` — **только OAuth-контекст** (класс #79) → живой смоук `pnpm activity:test` (вебхуком не проверить).
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
     `buildAllocationMutation(target, opts)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`;
     для `invoice` — `{method:'crm.item.update',params:{entityTypeId:31,id,fields:{stageId}}}` **при заданной** стадии
@@ -529,7 +529,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     - `server/utils/allocationFactStore.ts` — персистентный **стор факта разнесения** «платёж→сущность»
       над `QueryFn` (таблица `allocation_fact`, скоуп по `member_id`): `getAllocationFact`/`recordAllocation`
       (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
-      трётся)/`deleteFactsForPortal`. Отличается от `activity_dedup` (op-level): фиксирует цель разнесения и
+      трётся)/`deleteFactsForPortal`. В отличие от дедупа операции (маркер в B24): фиксирует цель разнесения и
       допускает откат. Удаление приложения чистит и его. Тесты на fake-query.
     - `server/utils/stageLoader.ts` — чистый **loader «отрицательных» стадий** (DI над `RestCall`, тесты):
       `loadNegativeStages(stageEntityId, call)` — `crm.status.list` → множество `STATUS_ID` с `SEMANTICS='F'`;
@@ -803,8 +803,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`B24OAuth`, как воркер) с этими кредами (in-memory токен-стор, без pg/Redis): `profile`+`crm.item.list` (проверка
     конверта `{result,…}`) и `--force-refresh` (бэкдейтит истечение → проверяет **refresh+persist**). Креды — в
     git-ignored `.env.b24oauth` (шаблон `.env.b24oauth.example`). Dev-only, не часть SSG.
-  - `scripts/configurable-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой гейт
-    #259 Фазы B** (настраиваемое дело). Гоняет **тот же** код, что crm-sync при `ACTIVITY_TRANSPORT=configurable`:
+  - `scripts/configurable-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой смоук
+    записи дела (#259)** (настраиваемое дело). Гоняет **тот же** код, что crm-sync:
     `buildConfigurableActivity`→`writeConfigurableActivityViaRest`→`findActivityByMarker` по OAuth-транспорту
     (`makePortalSdkCall`, in-memory токен-стор, креды из `.env.b24oauth`). **Dry-run по умолчанию** (печатает
     params); `--apply` создаёт настраиваемое дело и проверяет **round-trip дедупа** (поиск маркера находит

@@ -67,7 +67,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], remember: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApply: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -79,6 +79,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     writeActivity: async (it, companyId, memberId) => {
       if (!companyId) return null // no company → no owner → nothing written
       const id = `act-${nextId++}`
+      // configurable.add stamps the ORIGINATOR_ID/ORIGIN_ID marker atomically with the
+      // activity — model that by persisting the dedup key here (getActivityId reads it).
+      written.set(`${it.account}|${it.docId}`, id)
       calls.activity.push([it.docId, companyId, memberId, id])
       return id
     },
@@ -125,10 +128,6 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
     },
     getActivityId: async (_memberId, key) => written.get(key) ?? null,
-    rememberActivity: async (_memberId, key, activityId) => {
-      written.set(key, activityId)
-      calls.remember.push([key, activityId])
-    },
     savePortal: async (job) => {
       calls.save.push(job.memberId)
     },
@@ -204,18 +203,17 @@ describe('handleCrmSyncJob', () => {
     )
     expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
-    expect(calls.remember).toEqual([['A|d1', 'act-1'], ['A|d2', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
     expect(calls.chat).toEqual([['d1', 'M'], ['d2', 'M']])
   })
 
-  it('is idempotent across job redelivery (real round-trip through the store)', async () => {
-    const { deps, calls } = fakeDeps() // the fake persists remembered keys across calls
+  it('is idempotent across job redelivery (round-trip through the B24 marker)', async () => {
+    const { deps, calls } = fakeDeps() // the fake persists the marker across calls
     const j = job([item('d1'), item('d2')])
     const first = await handleCrmSyncJob(j, deps)
     expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, unmatched: 0 })
-    // Redeliver the SAME job: everything is now remembered → all skipped, no side effects.
+    // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
     expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
@@ -223,22 +221,21 @@ describe('handleCrmSyncJob', () => {
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
   })
 
-  it('skips ops already written (persistent dedup) — no re-write, no re-notify', async () => {
+  it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
     expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
-    expect(calls.remember).toEqual([['A|d2', 'act-1']])
+    expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
   })
 
   it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
     expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
-    expect(calls.activity).toEqual([]) // nothing written
-    expect(calls.remember).toEqual([]) // so nothing remembered → retried on redelivery
+    expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
   })
 
@@ -252,7 +249,7 @@ describe('handleCrmSyncJob', () => {
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
     expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 1 })
-    expect(calls.remember).toEqual([['A|d2', 'act-1']])
+    expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
 
@@ -621,7 +618,6 @@ describe('handleCrmSyncJob', () => {
     }
     await expect(handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
     expect(calls.activity).toEqual([]) // never reached writeActivity for this op
-    expect(calls.remember).toEqual([])
   })
 
   // Allocation WRITE slice (#184): a decided `allocate` records a write-once fact

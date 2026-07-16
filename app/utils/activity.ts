@@ -1,10 +1,10 @@
 import type { StatementItem } from '~/types/statement'
-import { dedupKey } from '~/utils/statement'
 
-// Builds the payload for the universal CRM activity (`crm.activity.todo.add`),
-// replacing the legacy `crm.activity.add` (provider) approach. Pure: takes a
-// normalized statement item + the resolved CRM company, returns the params
-// object. The actual REST call lives in the engine layer.
+// Shared, pure helpers for building a CRM activity for a statement operation: the
+// one-line title, money/date formatting, the portal-TZ deadline stamp, and the
+// owner-type / app-namespace constants. The activity CARRIER itself is built by
+// app/utils/configurableActivity.ts (crm.activity.configurable.add, #259); these
+// helpers are reused there (and neutralizeBb is shared with chatMessage.ts).
 
 /** CRM owner type id for a Company. Standard Bitrix24 entityTypeId: Lead=1,
  * Deal=2, Contact=3, Company=4. */
@@ -48,7 +48,7 @@ export const PORTAL_TZ_OFFSET = '+03:00'
 
 /**
  * Re-stamp an operation's `acceptDate` as a TZ-aware `deadline` in the portal's
- * timezone (UTC+3), so `crm.activity.todo.add` renders the correct calendar day.
+ * timezone (UTC+3), so the activity renders on the correct calendar day.
  *
  * Bank operations are day-granular and their source dates are Belarus wall-clock
  * (client-bank/1C emit naive `YYYY-MM-DD[THH:MM:SS]`; Alfa a naive `…THH:MM:SS.mmm`;
@@ -78,79 +78,9 @@ export interface CrmCompanyRef {
   assignedById?: number
 }
 
-/** Params accepted by `crm.activity.todo.add` (the fields we set). */
-export interface TodoActivityParams {
-  ownerTypeId: number
-  ownerId: number
-  /** Required by the API — ISO 8601 datetime. */
-  deadline: string
-  title: string
-  description: string
-  responsibleId?: number
-}
-
-/**
- * Stable marker for one operation, e.g. `[ShefClientBankAlfaBy:BY..|123]`.
- * Embedded in the description so duplicate activities can be detected by a
- * plain substring search (the todo API has no native ORIGINATOR_ID/ORIGIN_ID
- * dedup fields). The `|` separator is intentional; search is `includes`, not regex.
- */
-export function activityOriginToken(item: Pick<StatementItem, 'account' | 'docId'>): string {
-  return `[${ACTIVITY_ORIGIN}:${dedupKey(item)}]`
-}
-
 /** One-line activity title, e.g. "Приход 1 840,00 BYN от ООО Ромашка". */
 export function buildActivityTitle(item: StatementItem): string {
   const verb = item.direction === 'credit' ? 'Приход' : 'Расход'
   const prep = item.direction === 'credit' ? 'от' : 'на'
   return `${verb} ${formatMoney(item.amount)} ${item.currency} ${prep} ${item.counterparty.name}`.trim()
-}
-
-/** Readable multi-line activity description (plain text) with the dedup marker.
- * `null` entries are omitted; `''` entries are kept as blank separator lines. */
-export function buildActivityDescription(item: StatementItem): string {
-  const cp = item.counterparty
-  const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
-  // Every externally-sourced field (payer-controlled) is BB-neutralized before it
-  // enters the CRM timeline description — see `neutralizeBb`. Our own labels/amounts/
-  // dates and the origin token are trusted and left as-is.
-  const doc = item.docNum
-    ? `Документ: #${neutralizeBb(item.docNum)} от ${formatIsoDate(item.acceptDate)}`
-    : `Документ от ${formatIsoDate(item.acceptDate)}`
-
-  const lines: Array<string | null> = [
-    neutralizeBb(item.purpose),
-    '',
-    `${kind}: ${formatMoney(item.amount)} ${item.currency}`,
-    doc,
-    '',
-    `Контрагент: ${neutralizeBb(cp.name)}`,
-    `УНП: ${neutralizeBb(cp.unp)}`,
-    `р/сч: ${neutralizeBb(cp.account)}`,
-    cp.bank ? `Банк: ${neutralizeBb(cp.bank)}` : null,
-    '',
-    activityOriginToken(item)
-  ]
-  return lines.filter((line): line is string => line !== null).join('\n')
-}
-
-/**
- * Build the `crm.activity.todo.add` params for a statement item bound to a CRM
- * company. `deadline` is the operation's acceptance date.
- *
- * `deadline` is re-stamped into the portal's timezone (UTC+3) via `toPortalDeadline`
- * so the activity renders on the operation's correct calendar day (a bare UTC value
- * could otherwise shift a day). Still TO BE VERIFIED on a live portal (#90).
- */
-export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef): TodoActivityParams {
-  return {
-    ownerTypeId: CRM_OWNER_TYPE_COMPANY,
-    ownerId: company.id,
-    deadline: toPortalDeadline(item.acceptDate),
-    // Title carries the counterparty name (payer-controlled) — neutralize it too
-    // (same guard the chat headline uses via buildChatHeadline).
-    title: neutralizeBb(buildActivityTitle(item)),
-    description: buildActivityDescription(item),
-    ...(company.assignedById ? { responsibleId: company.assignedById } : {})
-  }
 }
