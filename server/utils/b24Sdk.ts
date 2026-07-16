@@ -34,7 +34,7 @@
 
 import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth } from '@bitrix24/b24jssdk'
-import type { RestCall } from './companyLookup'
+import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
 import { getToken, saveToken, type PortalToken, type QueryFn } from './tokenStore'
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
@@ -43,9 +43,28 @@ const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
 /** The slice of a B24 OAuth client this adapter uses — structural so tests inject a fake
  *  and the real `B24OAuth` satisfies it (checked where the client is constructed). */
 export interface OAuthCallClient {
-  actions: { v2: { call: { make: (o: { method: string, params?: Record<string, unknown> }) => Promise<SdkAjaxResult> } } }
+  actions: {
+    v2: {
+      call: { make: (o: { method: string, params?: Record<string, unknown> }) => Promise<SdkAjaxResult> }
+      batch: { make: (o: { calls: Array<[string, Record<string, unknown>]>, options?: Record<string, unknown> }) => Promise<SdkBatchResult> }
+    }
+  }
   setCallbackRefreshAuth: (cb: CallbackRefreshAuth) => void
 }
+
+/** The bits of the SDK's batch `Result` we read: overall success + the data payload.
+ *  `getData()` is typed `unknown` because the SDK's `CallBatchResult<T>` is a UNION
+ *  (array / keyed-record / simple) — with ARRAY `calls` + `returnAjaxResult:true` it is
+ *  `AjaxResult[]` at runtime, which `makeSdkBatchCall` coerces to. Typing it `unknown`
+ *  keeps the structural drift-guard (the real `B24OAuth` must still satisfy this shape). */
+export interface SdkBatchResult {
+  isSuccess: boolean
+  getErrorMessages: () => string[]
+  getData: () => unknown
+}
+
+/** Max commands per B24 batch request (hard API limit); larger fan-outs are chunked. */
+export const SDK_BATCH_MAX = 50
 
 /** The bits of the SDK's `AjaxResult` we read. NB: `getData()` returns ONLY
  *  `{ result, time }` — it DROPS the top-level `total`/`next` list-pagination siblings
@@ -118,25 +137,57 @@ export function buildRefreshPersist(save: (t: PortalToken) => Promise<void>): Ca
  *  NB (#78): the `[rest-timing]` observability lives in `callRest` (b24Rest.ts). When this
  *  SDK transport takes over the hot path, move the timing here (wrap this call with the
  *  same `restTimingLine`/`serverDurationMs`) so the measurement doesn't get lost. */
+/** Reconstruct our full REST envelope from an SDK `AjaxResult`. getData() returns a
+ *  FROZEN `{ result, time }` and DROPS the top-level `total`/`next` list-pagination
+ *  siblings that the raw `callRest` envelope carries and our list paginators read
+ *  (`paymentLookup.dealListTotal` / `negativeStages.loadCategoryIds` do `Number(resp.total)`).
+ *  Without re-attaching them, a >1-page list — a company with >50 deals, a portal with >50
+ *  funnels — is SILENTLY truncated to the first page (a lost amount → manual/none; an overflow
+ *  funnel's negative stages dropped → fail-open). Spread to unfreeze, then re-attach from the
+ *  SDK's accessors. Attaching `total` on a non-list response is harmless (consumers ignore it);
+ *  `getTotal()` returns 0 when absent, loop-equivalent to the raw `NaN`. */
+function sdkEnvelope(res: SdkAjaxResult): Record<string, unknown> {
+  const envelope = { ...(res.getData() ?? {}) } as Record<string, unknown>
+  if (envelope.total === undefined && typeof res.getTotal === 'function') envelope.total = res.getTotal()
+  if (envelope.next === undefined && typeof res.isMore === 'function' && res.isMore()) envelope.next = true
+  return envelope
+}
+
 export function makeSdkRestCall(client: OAuthCallClient): RestCall {
   return async (method, params) => {
     const res = await client.actions.v2.call.make({ method, params })
     if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || `B24 REST ${method} failed`)
-    // getData() returns a FROZEN `{ result, time }` and drops the top-level `total`/`next`
-    // list-pagination siblings. The raw `callRest` envelope carries them, and our list
-    // paginators read them at the top level (`paymentLookup.dealListTotal` /
-    // `negativeStages.loadCategoryIds` do `Number(resp.total)`). Without re-attaching them,
-    // a >1-page list — a company with >50 deals, a portal with >50 funnels — is SILENTLY
-    // truncated to the first page under the SDK transport (a lost amount falls through to
-    // manual/none; an overflow funnel's negative stages are dropped → fail-open). Spread to
-    // unfreeze, then re-attach from the SDK's accessors so both transports hand consumers the
-    // same shape (#191 review). Attaching a `total` on a non-list response is harmless — its
-    // consumers don't read it. `getTotal()` returns 0 when absent, which is loop-equivalent
-    // to the raw `NaN` (both stop paging after the already-read first page). */
-    const envelope = { ...(res.getData() ?? {}) } as Record<string, unknown>
-    if (envelope.total === undefined && typeof res.getTotal === 'function') envelope.total = res.getTotal()
-    if (envelope.next === undefined && typeof res.isMore === 'function' && res.isMore()) envelope.next = true
-    return envelope
+    return sdkEnvelope(res)
+  }
+}
+
+/** Wrap a B24 OAuth client as our `RestBatch`: run many independent commands in as few
+ *  round-trips as possible (chunked to `SDK_BATCH_MAX`) and return their envelopes IN ORDER.
+ *  HALT-ON-ERROR: if the batch fails OR any single command fails, THROW — same fail-the-job
+ *  contract as `makeSdkRestCall`, so a batched fan-out never silently drops a command (a failed
+ *  `crm.status.list` must fail the job, not shrink the negative-stage set → fail-open). The
+ *  SDK's per-instance RestrictionManager rate-limits the batch requests like single calls. */
+export function makeSdkBatchCall(client: OAuthCallClient): RestBatch {
+  return async (calls: BatchCommand[]) => {
+    const out: Record<string, unknown>[] = []
+    for (let i = 0; i < calls.length; i += SDK_BATCH_MAX) {
+      const chunk = calls.slice(i, i + SDK_BATCH_MAX)
+      const res = await client.actions.v2.batch.make({
+        calls: chunk.map(c => [c.method, c.params ?? {}] as [string, Record<string, unknown>]),
+        options: { isHaltOnError: true, returnAjaxResult: true }
+      })
+      if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || 'B24 batch failed')
+      // ARRAY calls + returnAjaxResult:true → getData() is an AjaxResult[] in input order
+      // (the SDK's union type widens to `unknown`; coerce to the array form we requested).
+      const rows = (res.getData() ?? []) as SdkAjaxResult[]
+      // A command that itself failed is not `isSuccess` even when the batch envelope is —
+      // surface it as a throw (halt-on-error semantics for the whole job).
+      for (const row of rows) {
+        if (!row.isSuccess) throw new Error(row.getErrorMessages().join('; ') || 'B24 batch command failed')
+        out.push(sdkEnvelope(row))
+      }
+    }
+    return out
   }
 }
 
@@ -158,14 +209,19 @@ export interface SdkPortalDeps {
  *  NB: the SDK refreshes REACTIVELY — on the first `expired_token`/401 it refreshes and
  *  retries, costing one extra round-trip on the first call after expiry (no pre-emptive
  *  refresh; the SDK handles it transparently). */
-export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
+export async function makePortalSdkClient(memberId: string, deps: SdkPortalDeps): Promise<OAuthCallClient | null> {
   const token = await deps.loadToken(memberId)
   if (!token) return null
   // Typing the instance as OAuthCallClient is the drift guard: the real B24OAuth must
   // still expose the `actions` / `setCallbackRefreshAuth` shape this adapter relies on.
   const client: OAuthCallClient = new B24OAuth(oauthParamsFromToken(token, { nowMs: deps.now(), scope: deps.scope }), deps.creds)
   client.setCallbackRefreshAuth(buildRefreshPersist(deps.saveToken))
-  return makeSdkRestCall(client)
+  return client
+}
+
+export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
+  const client = await makePortalSdkClient(memberId, deps)
+  return client ? makeSdkRestCall(client) : null
 }
 
 /** Live env/infra a portal-bound SDK transport needs, so the wiring lives in ONE place

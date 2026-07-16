@@ -139,7 +139,8 @@ dry-run/`--apply`/`--revert` + apply/revert стадии инвойса). Тес
 
 **SDK-транспорт (#191) — ✅ единственный транспорт:** дев-смоуки — webhook `pnpm sdk:test --burst` (лимитер троттлит) +
 OAuth `pnpm sdk:crm:test` (наш `makePortalSdkCall`/`B24OAuth`, `profile`+`crm.item.list`+`--force-refresh`). Ручной
-`callRest`-путь удалён вместе с флагом. **Остаётся:** батчинг `callList` для объёмных выборок (пул оплат/списки).
+`callRest`-путь удалён вместе с флагом. **Батчинг `callBatch` — частично:** `negativeStages` фанит пер-воронковые
+`crm.status.list` одним батчем (`RestBatch` на общем клиенте); пул оплат `crm.item.payment.list` не батчится (API-лимит).
 
 **Лог шагов:**
 - `2026-07-09` — поставлен крон отчёта (4 мин), записан план. Старт фазы A (посев портала).
@@ -369,7 +370,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   = lever-2** (TTL-кэш + evict-on-error от stale-token wedge). Компромисс: SDK-рефреш мимо advisory-lock → транзиентный
   ретрай, не порча (persist — UPDATE-only-эквивалент, tombstone-guarded). Прежний ручной `callRest`-резолвер (bind-once +
   reactive-retry `expired_token`) **удалён** вместе с флагом `QUEUE_SDK_TRANSPORT`; пул-раз-на-op + пагинация сделок
-  сделаны. Осталось: **батчинг `callList`** для объёмных выборок; дизайн — `docs/QUEUES.md`);
+  сделаны. **Батчинг `callBatch` — частично** (`negativeStages` `crm.status.list` одним батчем; пул оплат не батчится —
+  API-лимит); дизайн — `docs/QUEUES.md`);
   роутинг ref моста через `itemByIdLookup`
   (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
   log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +

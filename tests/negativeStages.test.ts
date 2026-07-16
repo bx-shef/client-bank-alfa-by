@@ -153,6 +153,42 @@ describe('buildPortalNegativeStagePredicate', () => {
     expect(diagnostics.deal).toEqual({ categories: 1, negativeStages: 0 })
   })
 
+  it('BATCHED path (#191): status.list fan-out goes through batch, same predicate/diagnostics, one batch per entity type', async () => {
+    const { call, calls } = fakeCall({
+      categories: { 31: [{ id: 11 }], 2: [{ id: 0 }, { id: 5 }] },
+      statuses: {
+        SMART_INVOICE_STAGE_11: [{ STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }, { STATUS_ID: 'DT31_11:P', SEMANTICS: 'S' }],
+        DEAL_STAGE: [{ STATUS_ID: 'LOSE', SEMANTICS: 'F' }],
+        DEAL_STAGE_5: [{ STATUS_ID: 'C5:LOSE', SEMANTICS: 'F' }]
+      }
+    })
+    // A batch that resolves each command via the SAME status map (order preserved).
+    const statuses: Record<string, Array<Record<string, unknown>>> = {
+      SMART_INVOICE_STAGE_11: [{ STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }, { STATUS_ID: 'DT31_11:P', SEMANTICS: 'S' }],
+      DEAL_STAGE: [{ STATUS_ID: 'LOSE', SEMANTICS: 'F' }],
+      DEAL_STAGE_5: [{ STATUS_ID: 'C5:LOSE', SEMANTICS: 'F' }]
+    }
+    const batchSizes: number[] = []
+    const batch = async (cmds: Array<{ method: string, params?: Record<string, unknown> }>) => {
+      batchSizes.push(cmds.length)
+      return cmds.map(c => ({ result: statuses[String((c.params!.filter as Record<string, unknown>).ENTITY_ID)] ?? [] }))
+    }
+    const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call, batch)
+    // Same result as the sequential path
+    expect(predicate('DT31_11:D')).toBe(true)
+    expect(predicate('DT31_11:P')).toBe(true) // settled invoice excluded
+    expect(predicate('LOSE')).toBe(true)
+    expect(predicate('C5:LOSE')).toBe(true)
+    expect(diagnostics).toEqual({
+      invoice: { categories: 1, negativeStages: 1 },
+      deal: { categories: 2, negativeStages: 2 }
+    })
+    // status.list did NOT go through the single-call transport — only category.list did
+    expect(calls.every(([m]) => m === 'crm.category.list')).toBe(true)
+    // one batch per entity type (invoice: 1 cmd, deal: 2 cmds)
+    expect(batchSizes).toEqual([1, 2])
+  })
+
   it('propagates a transport error', async () => {
     const call: RestCall = vi.fn(async () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')

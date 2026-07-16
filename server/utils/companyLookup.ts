@@ -30,6 +30,17 @@ export const ACCOUNT_FIELDS = ['RQ_ACC_NUM', 'RQ_IIK'] as const
  *  intended binding (`callRest` over `$fetch`) throws on HTTP 4xx, satisfying this. */
 export type RestCall = (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>
 
+/** One command in a batch: a method + its params (like a single `RestCall`). */
+export interface BatchCommand { method: string, params?: Record<string, unknown> }
+
+/** A batched REST caller bound to one portal: run many independent commands in ONE
+ *  round-trip and return their envelopes IN THE SAME ORDER as the input. Same error
+ *  CONTRACT as `RestCall` — it MUST throw/reject if the batch fails OR any single command
+ *  in it fails (halt-on-error), so a caller that would fail the job on a sequential error
+ *  fails identically on a batched one (no silent per-command miss). Used to collapse an
+ *  independent-call fan-out (e.g. per-funnel `crm.status.list`) into one request (#191). */
+export type RestBatch = (calls: BatchCommand[]) => Promise<Record<string, unknown>[]>
+
 /** Normalize an account for matching: trim and drop internal whitespace. B24
  *  stores accounts without spaces; statements sometimes group digits. */
 export function normalizeAccount(account: string): string {

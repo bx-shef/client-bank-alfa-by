@@ -487,7 +487,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     UPDATE-only-эквивалент через tombstone-guarded `saveToken`); advisory-lock остаётся на keep-alive (#175). Прежний
     ручной `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + лок + reactive-retry) **удалён** —
     SDK стал единственным транспортом. Реактивный ретрай `expired_token` теперь у самого SDK; `isExpiredTokenError`
-    (`b24Rest.ts`) остаётся для фрейм-роутов. Детали — `docs/QUEUES.md` §REST-бюджет.
+    (`b24Rest.ts`) остаётся для фрейм-роутов. **Батчинг (`callBatch`):** резолвер отдаёт `batch(memberId)` (`RestBatch`)
+    на том же мемоизированном клиенте; `makeSdkBatchCall` — массив команд → `actions.v2.batch.make`
+    (`isHaltOnError`+`returnAjaxResult`), конверты per-команда в порядке (с ре-аттачем `total`/`next`), чанкинг по
+    `SDK_BATCH_MAX`=50, halt-on-error (падение батча/любой команды → throw, без тихого пропуска). Проведён в
+    `negativeStages` (пер-воронковые `crm.status.list` — одним батчем на тип сущности). Детали — `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
@@ -634,9 +638,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + reactive-retry) **удалён** — фолбэка и
     флага `QUEUE_SDK_TRANSPORT` больше нет. Компромисс (осознанный, выбор пользователя): SDK-рефреш мимо advisory-lock
     (проигранная гонка = транзиентный ретрай, persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`, не
-    порча кредов; advisory-lock остаётся на keep-alive #175). Осталось: **батчинг `callList`**. Пул оплат раз-на-op **и
-    пагинация списка сделок** уже сделаны; negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 +
-    `crm.status.list`×N — учесть в SDK-лимитере; дизайн — `docs/QUEUES.md` «REST-бюджет проводки платежей». **`order-number`-матчинг — сделан** (по order-префиксу
+    порча кредов; advisory-lock остаётся на keep-alive #175). **Батчинг (`callBatch`) — частично сделан:**
+    `negativeStages` фанит пер-воронковые `crm.status.list` **одним батчем на тип сущности** (`RestBatch` на том же
+    мемоизированном клиенте, halt-on-error, чанкинг 50). Пул оплат раз-на-op **и пагинация списка сделок** уже сделаны;
+    осталось: `crm.item.payment.list` не батчится (`ERROR_BATCH_METHOD_NOT_ALLOWED`) — пул оплат остаётся N+1; дизайн —
+    `docs/QUEUES.md` «REST-бюджет проводки платежей». **`order-number`-матчинг — сделан** (по order-префиксу
     `accountNumber` оплаты `<заказ>/<seq>`, `filterByOrderNumber`, live-confirmed #172); **`payment-id`-матчинг — сделан**
     (по собственному id оплаты в company-пуле, `filterByPaymentId`, IDOR-safe, live-confirmed #172); **`order-id`-матчинг — сделан**
     (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул, `saleLookup.findOrderPaymentIds`+`filterByPaymentIds`,
