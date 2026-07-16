@@ -145,11 +145,18 @@ export function buildRefreshPersist(save: (t: PortalToken) => Promise<void>): Ca
  *  funnels — is SILENTLY truncated to the first page (a lost amount → manual/none; an overflow
  *  funnel's negative stages dropped → fail-open). Spread to unfreeze, then re-attach from the
  *  SDK's accessors. Attaching `total` on a non-list response is harmless (consumers ignore it);
- *  `getTotal()` returns 0 when absent, loop-equivalent to the raw `NaN`. */
-function sdkEnvelope(res: SdkAjaxResult): Record<string, unknown> {
+ *  `getTotal()` returns 0 when absent, loop-equivalent to the raw `NaN`.
+ *  `reattachNext` is CALL-PATH ONLY: on a single call `isMore()` is reliable (a non-paginated
+ *  response has no `next` key → `isMore()` false). In a BATCH the SDK synthesizes `next: 0` on
+ *  every row (abstract-processing sets `next = parseInt(result_next || '0')`), and
+ *  `AjaxResult.isMore()` returns `isNumber(0) === true` — so `isMore()` is stuck true for every
+ *  batched row. Reattaching `next` there would stamp a spurious "more pages" on single-page
+ *  batched envelopes (a future batched `*.list` consumer paginating on `resp.next` would loop),
+ *  so batch callers pass `false`. `total` has no such issue (0 both paths). */
+function sdkEnvelope(res: SdkAjaxResult, reattachNext = true): Record<string, unknown> {
   const envelope = { ...(res.getData() ?? {}) } as Record<string, unknown>
   if (envelope.total === undefined && typeof res.getTotal === 'function') envelope.total = res.getTotal()
-  if (envelope.next === undefined && typeof res.isMore === 'function' && res.isMore()) envelope.next = true
+  if (reattachNext && envelope.next === undefined && typeof res.isMore === 'function' && res.isMore()) envelope.next = true
   return envelope
 }
 
@@ -184,7 +191,7 @@ export function makeSdkBatchCall(client: OAuthCallClient): RestBatch {
       // surface it as a throw (halt-on-error semantics for the whole job).
       for (const row of rows) {
         if (!row.isSuccess) throw new Error(row.getErrorMessages().join('; ') || 'B24 batch command failed')
-        out.push(sdkEnvelope(row))
+        out.push(sdkEnvelope(row, false)) // reattachNext:false — batch rows always carry next:0 (see sdkEnvelope)
       }
     }
     return out

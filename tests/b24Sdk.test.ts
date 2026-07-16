@@ -208,10 +208,24 @@ describe('makeSdkBatchCall (#191 batched fan-out)', () => {
       ['crm.status.list', { filter: { ENTITY_ID: 'A' } }],
       ['crm.status.list', { filter: { ENTITY_ID: 'B' } }]
     ])
+    // `total` re-attached per row; `next` is NOT re-attached in the batch path even when a row's
+    // isMore() is true — batch rows always carry next:0 which the SDK's isMore() misreports.
     expect(out).toEqual([
-      { result: { items: [{ id: 0, m: 'crm.status.list' }] }, total: 10, next: true },
+      { result: { items: [{ id: 0, m: 'crm.status.list' }] }, total: 10 },
       { result: { items: [{ id: 1, m: 'crm.status.list' }] }, total: 20 }
     ])
+  })
+
+  it('does NOT stamp a spurious `next` on batched envelopes (SDK sets next:0 → isMore() true for every row)', async () => {
+    // Regression guard (5-reviewer finding): a batched AjaxResult always has a numeric `next`
+    // (0 when no more pages), and AjaxResult.isMore() returns isNumber(0)===true, so isMore() is
+    // stuck true for every batched row. The batch envelope must not carry `next` from that.
+    const { client } = fakeClient(ajax(), async o => ({
+      isSuccess: true, getErrorMessages: () => [],
+      getData: () => o.calls.map(() => ajax({ getData: () => ({ result: [] }), isMore: () => true }))
+    }))
+    const out = await makeSdkBatchCall(client)([{ method: 'crm.status.list' }])
+    expect(out[0]).not.toHaveProperty('next')
   })
 
   it('defaults missing params to {} in the array call', async () => {
