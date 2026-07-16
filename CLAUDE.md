@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-15
+> Last reviewed: 2026-07-16
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -500,7 +500,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     **транзиентный ретрай BullMQ**, не порча кредов (persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`;
     резолюция перечитывает токен); advisory-lock остаётся на keep-alive (#175). **Default OFF** — не ослабляем дефолт
     до живого гейта; `QUEUE_SDK_TRANSPORT=0` (дефолт) = наш `callRest`-путь (bind-once + лок + reactive-retry).
-    **Дефолт-ON — follow-up после `pnpm sdk:test` на живом портале** + пер-JOB мемоизация клиента. Детали —
+    **Дефолт-ON — follow-up после `pnpm sdk:crm:test` на живом портале** + пер-JOB мемоизация клиента. Детали —
     `docs/QUEUES.md` §REST-бюджет.
   - `server/utils/crmActivityWrite.ts` — чистое `writeActivityViaRest(item, companyId, call)`:
     `buildTodoActivity`→`crm.activity.todo.add`→`extractActivityId` (id дела из `{result:{id}}`). Тесты.
@@ -648,7 +648,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     RestrictionManager = rate-limiter (lever-1); клиент свежий на резолюцию (как `ai-price-import`), рефреш мимо
     advisory-lock (компромисс — выбор пользователя: проигранная гонка = транзиентный ретрай, persist — UPDATE-only-эквивалент tombstone-
     эквивалент через tombstone-guarded `saveToken`, не порча кредов). Осталось до дефолт-ON: **живой гейт
-    `pnpm sdk:test` + прогон `crm-sync` с `QUEUE_SDK_TRANSPORT=1`** на тестовом портале, **пер-JOB мемоизация клиента**
+    `pnpm sdk:crm:test` + прогон `crm-sync` с `QUEUE_SDK_TRANSPORT=1`** на тестовом портале, **пер-JOB мемоизация клиента**
     (общий bucket на джобу), **батчинг `callList`**. Фолбэк (дефолт, `QUEUE_SDK_TRANSPORT=0`) — наш advisory-locked
     `callRest`-путь (bind-once + reactive-retry). Пул оплат раз-на-op **и пагинация списка сделок** уже сделаны;
     negativeStages грузится раз на джобу, но добавляет `crm.category.list`×2 + `crm.status.list`×N — учесть в
@@ -786,8 +786,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
     строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
     `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Webhook-смоук
-    транспорта `crm-sync` на SDK (реализован за `QUEUE_SDK_TRANSPORT`, см. `server/utils/b24Sdk.ts`); гейт перед
-    дефолт-ON — живой прогон `crm-sync` с флагом. Dev-only, не часть SSG; токен только в git-ignored `.env.b24test`.
+    транспорта `crm-sync` на SDK (реализован за `QUEUE_SDK_TRANSPORT`, см. `server/utils/b24Sdk.ts`) — но использует
+    `B24Hook` (вебхук), **не** наш OAuth-путь; полноценный гейт — `sdk:crm:test` ниже. Dev-only, токен в `.env.b24test`.
+  - `scripts/extract-oauth-from-docker.sh` + `scripts/sdk-crm-test.ts` (`pnpm sdk:crm:test` / `--force-refresh`) —
+    **живой гейт OAuth-транспорта `crm-sync` перед дефолт-ON `QUEUE_SDK_TRANSPORT` (#191).** Первый (запускать **на
+    сервере** с backend-Docker) вытаскивает креды установленного портала: читает свежую строку `portal_tokens`,
+    расшифровывает refresh (`B24_TOKEN_ENC_KEY`, формат `iv:tag:ct` base64) **внутри backend-контейнера**, рефрешит на
+    `oauth.bitrix.info` и печатает блок `B24_OAUTH_*` (адаптация проверенного паттерна `ai-price-import`; **ротирует**
+    refresh — БД-строка устареет, переустанови на тесте). Второй прогоняет **наш реальный** `makePortalSdkCall`
+    (`B24OAuth`, как воркер) с этими кредами (in-memory токен-стор, без pg/Redis): `profile`+`crm.item.list` (проверка
+    конверта `{result,…}`) и `--force-refresh` (бэкдейтит истечение → проверяет **refresh+persist**). Креды — в
+    git-ignored `.env.b24oauth` (шаблон `.env.b24oauth.example`). Dev-only, не часть SSG.
   - `scripts/seed-test-b24.mjs` (`pnpm seed:b24` / `--list` / `--purge`) — **идемпотентный посев тестовых
     данных в живой тестовый портал Б24** для ручной проверки #109 (стадия 4/§2 `PROCESSING.md`): смарт-
     процессы (с направлениями / без — `entityTypeId` назначается автоматически, на подтверждённом
