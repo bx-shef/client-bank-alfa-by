@@ -107,6 +107,35 @@ describe('resolveIntentCandidates — supported strategies', () => {
     expect(r).toEqual({ kind: 'order-id', value: '9', status: 'resolved', candidates: [] })
   })
 
+  // #242: a PREFIXED mask (`ЗАК-dddd`, `BOPC-ddd/dd`) makes the recognizer return the prefix
+  // (`ЗАК-6001`), but deal-payment accountNumber/id are BARE numerics. The pooled resolvers must
+  // strip the literal prefix before matching, while still REPORTING the original recognized value.
+  it('payment-number with a PREFIXED value strips the mask prefix before the bare-accountNumber match (#242)', async () => {
+    const pool = [pay({ id: 'A', accountNumber: '6001/1' }), pay({ id: 'B', accountNumber: '6002/1' })]
+    const r = await resolveIntentCandidates(intent('payment-number', 'ЗАК-6001/1'), ctx, call, fakeDeps({ pool }))
+    expect(r.candidates.map(c => c.id)).toEqual(['A']) // «ЗАК-6001/1» → «6001/1» matches A
+    expect(r.value).toBe('ЗАК-6001/1') // original recognized value is still reported
+  })
+
+  it('order-number with a PREFIXED value strips the prefix before the order-prefix match (#242)', async () => {
+    const pool = [pay({ id: 'A', accountNumber: '6001/1' }), pay({ id: 'B', accountNumber: '6001/2' }), pay({ id: 'C', accountNumber: '7/1' })]
+    const r = await resolveIntentCandidates(intent('order-number', 'ЗАК-6001'), ctx, call, fakeDeps({ pool }))
+    expect(r.candidates.map(c => c.id)).toEqual(['A', 'B']) // «ЗАК-6001» → «6001» owns 6001/1 and 6001/2
+    expect(r.value).toBe('ЗАК-6001')
+  })
+
+  it('payment-id with a PREFIXED value strips the prefix before the bare-id match (#242)', async () => {
+    const pool = [pay({ id: '6001', accountNumber: '1/1' }), pay({ id: '6002', accountNumber: '1/2' })]
+    const r = await resolveIntentCandidates(intent('payment-id', 'PAY-6001'), ctx, call, fakeDeps({ pool }))
+    expect(r.candidates.map(c => c.id)).toEqual(['6001'])
+  })
+
+  it('order-id with a PREFIXED value strips the prefix before sale.payment.list lookup (#242)', async () => {
+    const deps = fakeDeps({ pool: [pay({ id: '5', accountNumber: '1/1' })], orderPaymentIds: ['5'] })
+    await resolveIntentCandidates(intent('order-id', 'ЗАК-1'), ctx, call, deps)
+    expect(deps.findOrderPaymentIds).toHaveBeenCalledWith('1', call) // stripped orderId sent to sale lookup
+  })
+
   it('payment-id → company pool then match by the payment OWN record id (#172)', async () => {
     const pool = [pay({ id: '5', accountNumber: '1/1' }), pay({ id: '7', accountNumber: '3/1' })]
     const deps = fakeDeps({ pool })

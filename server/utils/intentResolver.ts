@@ -23,7 +23,7 @@
 import type { RecognitionIntent } from '../../app/utils/recognitionIntent'
 import type { IdentifierKind } from '../../app/utils/purposeMatch'
 import type { AllocationCandidate, AllocationTargetKind } from '../../app/utils/allocation'
-import { filterByAccountNumber, filterByOrderNumber, filterByPaymentId, filterByPaymentIds } from '../../app/utils/allocation'
+import { filterByAccountNumber, filterByOrderNumber, filterByPaymentId, filterByPaymentIds, stripMaskLiteralPrefix } from '../../app/utils/allocation'
 import type { RestCall } from './companyLookup'
 import { SMART_INVOICE_ENTITY_TYPE_ID, type InvoiceLookupOptions } from './invoiceLookup'
 import type { ItemByIdOptions } from './itemByIdLookup'
@@ -80,7 +80,9 @@ const unsupported = (intent: RecognitionIntent, reason: string): IntentResolutio
  *  path fetches it ONCE per op — #191). Routed with the `'by-account-number'` strategy
  *  (#189) — matches by the payment's `accountNumber`, not by its own id. */
 function resolvePaymentNumber(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
-  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByAccountNumber(pool, intent.value) }
+  // Strip the mask's literal prefix so a prefixed value (`ЗАК-6001`) matches the bare-numeric
+  // deal-payment `accountNumber` (`6001/1`); the reported `value` stays the original (#242).
+  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByAccountNumber(pool, stripMaskLiteralPrefix(intent.value)) }
 }
 
 /** Resolve an `order-number` intent against the same company deal-payment pool — a pure
@@ -88,7 +90,8 @@ function resolvePaymentNumber(intent: RecognitionIntent, pool: AllocationCandida
  *  Shares the pool with `payment-number` (fetched once per op — #191). `order-id` is NOT
  *  routed here: the payment number carries the order's NUMBER, not its record id. */
 function resolveOrderNumber(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
-  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByOrderNumber(pool, intent.value) }
+  // Strip the mask prefix before the «<order>/<seq>» prefix compare (bare-numeric target, #242).
+  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByOrderNumber(pool, stripMaskLiteralPrefix(intent.value)) }
 }
 
 /** Resolve a `payment-id` intent against the company deal-payment pool — a pure match
@@ -96,7 +99,8 @@ function resolveOrderNumber(intent: RecognitionIntent, pool: AllocationCandidate
  *  company-scoped, so an untrusted id only matches a payment of THIS company. No `sale`
  *  scope needed (the crm-scope pool already carries each payment's own id). */
 function resolvePaymentId(intent: RecognitionIntent, pool: AllocationCandidate[]): IntentResolution {
-  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByPaymentId(pool, intent.value) }
+  // Strip the mask prefix before the bare-integer payment-id compare (#242).
+  return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByPaymentId(pool, stripMaskLiteralPrefix(intent.value)) }
 }
 
 /** Resolve an `order-id` intent (#172). UNLIKE the pure pool filters this needs one
@@ -110,7 +114,8 @@ async function resolveOrderId(
   call: RestCall,
   deps: IntentResolverDeps
 ): Promise<IntentResolution> {
-  const orderPaymentIds = await deps.findOrderPaymentIds(intent.value, call)
+  // Strip the mask prefix — `sale.payment.list` filters by the bare-integer orderId (#242).
+  const orderPaymentIds = await deps.findOrderPaymentIds(stripMaskLiteralPrefix(intent.value), call)
   return { kind: intent.kind, value: intent.value, status: 'resolved', candidates: filterByPaymentIds(pool, orderPaymentIds) }
 }
 

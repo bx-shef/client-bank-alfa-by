@@ -264,7 +264,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     пустой номер → `[]`. `filterByPaymentId(candidates, paymentId)` — отбор по **собственному id оплаты** в company-пуле
     (для `payment-id`, #172; IDOR-safe — чужая оплата не в пуле). `filterByPaymentIds(candidates, ids)` — отбор по
     **множеству** id оплат (для `order-id`, #172: id оплат заказа из `sale.payment.list` **∩** company-пул держит IDOR;
-    пустое множество → `[]`). Без I/O; проводка в `crm-sync` — следующий слайс.
+    пустое множество → `[]`). **`stripMaskLiteralPrefix(value)`** (#242) — снимает литеральный префикс маски
+    (`ЗАК-6001`→`6001`, `BOPC-123/45`→`123/45`): `recognizeByMatrices` отдаёт префикс целиком (верно для инвойса, чей
+    `accountNumber` = `СЧ-1`), но оплата сделки несёт **голый** `<заказ>/<seq>`/целый id — `intentResolver` стрипит
+    значение перед пуловым матчем (payment-number/order-number/payment-id/order-id), сообщая исходное `value`; на
+    invoice-путь **не** применяется. Без I/O; проводка в `crm-sync` — следующий слайс.
   - `app/utils/purposeMatch.ts` — **чистое распознавание идентификатора из назначения платежа по МАТРИЦАМ**
     (#109, спека — `docs/PROCESSING.md` §4): `recognizeByMatrices(purpose, matrices, alphabet)` — матрица
     (`MatchMatrix { mask, kind }`) описывает формат номера маской (`d`=цифра, остальное — литерал: буквы/
@@ -621,20 +625,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       Namespace'ы стадий не пересекаются (инвойс `DT31_<cat>:…`, сделка `LOSE`/`C<cat>:LOSE`; candidate.stageId ≡
       STATUS_ID, подтверждено вживую) → один предикат обслуживает инвойсы, сделки и company-пул оплат.
       `crm.category.list` **пагинируется** (метод одностраничный, max 50; >50 воронок иначе молча теряются — fail-open).
-      Диагностика по типу (число воронок/отрицательных стадий; settled в счётчик **не** идёт) → **fail-open алерт**
-      `failOpenEntities` (**0 отрицательных стадий** инвойсов ИЛИ сделок = битый запрос/урезанные права → воркер
-      логирует warning; **включая `categories===0`** — когда `crm.category.list` вообще не отдал воронки: пустое
-      множество исключений = «ничего не исключили», алертим независимо от числа воронок). Грузится **раз на джобу**
+      Диагностика по типу (число воронок/отрицательных стадий + **`emptyCategories`** — сколько отдельных воронок
+      вернули 0 негативов; settled в счётчик **не** идёт) → **fail-open алерт** `failOpenEntities` (**0 отрицательных
+      стадий** инвойсов ИЛИ сделок **ИЛИ `emptyCategories>0`** = битый запрос/урезанные права → воркер логирует warning
+      с разбивкой по типу; **гранулярность #242**: агрегат маскирует одну урезанную воронку среди многих, поэтому
+      считаем и пер-воронковые пустышки; **включая `categories===0`** — когда `crm.category.list` вообще не отдал
+      воронки: пустое множество исключений = «ничего не исключили», алертим независимо). Грузится **раз на джобу**
       (ленивo, только когда первая операция реально резолвит намерение). **`stripDealCategoryPrefix`** — предикат матчит и сырой `stageId`, и без
       `C<cat>:`-префикса (форма stage-id дефолтной воронки сделки — `LOSE` vs `C0:LOSE` — вживую не подтверждена;
       strip false-negative-safe: только добавляет матч по фиксированным `LOSE`/`APOLOGY`, валидного кандидата не
       теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
       Смарт-процессы пока не включены (их `entityTypeId` портало-специфичен, интенты `unsupported`). DI, тесты
       (`tests/negativeStages.test.ts`).
-    **bind-`RestCall`-once — сделан** (`portalRestResolver.ts`, #191 lever-2: один bind токена на портал вместо ~6·N
-    на батч). **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
-    встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента** (общий bucket + одна загрузка
-    токена на джобу) + evict-on-error/TTL, реактивный рефреш у самого SDK. Прежний ручной advisory-locked
+    **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
+    встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента = lever-2** (общий bucket +
+    одна загрузка токена на джобу вместо ~6·N на батч) + evict-on-error/TTL, реактивный рефреш у самого SDK. Прежний ручной advisory-locked
     `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + reactive-retry) **удалён** — фолбэка и
     флага `QUEUE_SDK_TRANSPORT` больше нет. Компромисс (осознанный, выбор пользователя): SDK-рефреш мимо advisory-lock
     (проигранная гонка = транзиентный ретрай, persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`, не

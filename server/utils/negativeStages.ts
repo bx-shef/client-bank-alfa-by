@@ -31,13 +31,20 @@ import {
 } from './stageLoader'
 
 /** Per-entity-type diagnostics for the fail-open alert: how many funnels the entity
- *  type has and how many negative stages were found across them. `categories > 0 &&
- *  negativeStages === 0` is the tell-tale of a broken query / trimmed rights (a real
- *  portal's deal funnel always has at least one LOSE stage) — the caller should ALERT
- *  rather than silently exclude nothing (docs/PROCESSING.md §5, stageLoader fail-open). */
+ *  type has, how many negative stages were found across them, and how many INDIVIDUAL
+ *  funnels came back with ZERO negatives. `categories > 0 && negativeStages === 0` is the
+ *  tell-tale of a broken query / trimmed rights (a real portal's deal funnel always has at
+ *  least one LOSE stage). But the aggregate `negativeStages` alone is TOO COARSE: with
+ *  several funnels, one trimmed/negative-less funnel is masked by the others' negatives
+ *  (#242 review). `emptyCategories` counts per-funnel empties so a SINGLE broken funnel
+ *  still trips the alert — the caller should ALERT rather than silently excluding nothing
+ *  (docs/PROCESSING.md §5, stageLoader fail-open). */
 export interface EntityStageDiagnostics {
   categories: number
   negativeStages: number
+  /** Number of enumerated funnels that returned ZERO negative stages (per-funnel
+   *  fail-open signal; a real funnel always has a LOSE/«Не оплачен» stage). */
+  emptyCategories: number
 }
 
 export interface NegativeStageDiagnostics {
@@ -67,19 +74,21 @@ export function stripDealCategoryPrefix(stageId: string): string {
   return stageId.replace(/^C\d+:/, '')
 }
 
-/** Entity types whose negative-stage load looks BROKEN (fail-open): ZERO negative stages
- *  were found. A real portal ALWAYS has at least one fail/lost stage per entity type
- *  (invoice «Не оплачен» `DT31_…:D`, deal `LOSE`), so an empty negative set is the
- *  tell-tale of a trimmed-rights / bad-`ENTITY_ID` query — INCLUDING the `categories === 0`
- *  case, where `crm.category.list` itself returned nothing (couldn't even enumerate the
- *  funnels). Both shapes mean "we excluded nothing", so the caller must ALERT rather than
- *  silently allocating (and, with autoDistribute, PAYING) a lost/paid entity
- *  (docs/PROCESSING.md §5, stageLoader fail-open caveat). Symmetric across invoice AND
- *  deal (both are live allocation targets). */
+/** Entity types whose negative-stage load looks BROKEN (fail-open): the aggregate had ZERO
+ *  negative stages, OR at least one enumerated funnel came back empty. A real portal ALWAYS
+ *  has a fail/lost stage per funnel (invoice «Не оплачен» `DT31_…:D`, deal `LOSE`), so either
+ *  shape is the tell-tale of trimmed rights / a bad `ENTITY_ID` query — INCLUDING the
+ *  `categories === 0` case (`crm.category.list` returned nothing → `emptyCategories` stays 0
+ *  but so does `negativeStages`, still flagged). The PER-FUNNEL `emptyCategories` check catches
+ *  the case the aggregate misses: a portal with several funnels where ONE is trimmed — its
+ *  lost deals would otherwise slip past the predicate while the alert stayed silent (#242).
+ *  The caller must ALERT rather than silently allocating (and, with autoDistribute, PAYING) a
+ *  lost/paid entity (docs/PROCESSING.md §5). Symmetric across invoice AND deal. */
 export function failOpenEntities(diagnostics: NegativeStageDiagnostics): string[] {
   const out: string[] = []
-  if (diagnostics.invoice.negativeStages === 0) out.push('invoice')
-  if (diagnostics.deal.negativeStages === 0) out.push('deal')
+  const broken = (d: EntityStageDiagnostics): boolean => d.negativeStages === 0 || d.emptyCategories > 0
+  if (broken(diagnostics.invoice)) out.push('invoice')
+  if (broken(diagnostics.deal)) out.push('deal')
   return out
 }
 
@@ -138,7 +147,7 @@ export async function loadEntityNegativeStages(
   call: RestCall,
   opts: { includeSettled?: boolean } = {},
   batch?: RestBatch | null
-): Promise<{ negative: Set<string>, settled: Set<string>, categories: number }> {
+): Promise<{ negative: Set<string>, settled: Set<string>, categories: number, emptyCategories: number }> {
   const categoryIds = await loadCategoryIds(entityTypeId, call)
   const negative = new Set<string>()
   const settled = new Set<string>()
@@ -155,11 +164,15 @@ export async function loadEntityNegativeStages(
   } else {
     for (const e of entityIds) sets.push(await loadStageExclusions(e, call, opts))
   }
+  // Count per-funnel empties for the granular fail-open signal (#242): a funnel that returned
+  // ZERO negatives is suspect on its own, even when OTHER funnels of the type have negatives.
+  let emptyCategories = 0
   for (const s of sets) {
+    if (s.negative.size === 0) emptyCategories++
     for (const id of s.negative) negative.add(id)
     for (const id of s.settled) settled.add(id)
   }
-  return { negative, settled, categories: categoryIds.length }
+  return { negative, settled, categories: categoryIds.length, emptyCategories }
 }
 
 /**
@@ -189,8 +202,8 @@ export async function buildPortalNegativeStagePredicate(call: RestCall, batch?: 
     // so a default-funnel lost deal is caught whichever id form crm.item.list returns.
     predicate: (stageId: string) => isNeg(stageId) || isNeg(stripDealCategoryPrefix(stageId)),
     diagnostics: {
-      invoice: { categories: invoice.categories, negativeStages: invoice.negative.size },
-      deal: { categories: deal.categories, negativeStages: deal.negative.size }
+      invoice: { categories: invoice.categories, negativeStages: invoice.negative.size, emptyCategories: invoice.emptyCategories },
+      deal: { categories: deal.categories, negativeStages: deal.negative.size, emptyCategories: deal.emptyCategories }
     }
   }
 }

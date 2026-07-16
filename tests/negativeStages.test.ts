@@ -80,9 +80,24 @@ describe('loadEntityNegativeStages', () => {
         SMART_INVOICE_STAGE_12: [{ STATUS_ID: 'DT31_12:D', EXTRA: { SEMANTICS: 'failure' } }]
       }
     })
-    const { negative, categories } = await loadEntityNegativeStages(31, id => `SMART_INVOICE_STAGE_${id}`, call)
+    const { negative, categories, emptyCategories } = await loadEntityNegativeStages(31, id => `SMART_INVOICE_STAGE_${id}`, call)
     expect(categories).toBe(2)
+    expect(emptyCategories).toBe(0) // both funnels have a negative stage
     expect([...negative].sort()).toEqual(['DT31_11:D', 'DT31_12:D'])
+  })
+
+  it('counts per-funnel empties (a funnel with zero negatives) for the granular fail-open signal (#242)', async () => {
+    const { call } = fakeCall({
+      categories: { 31: [{ id: 11 }, { id: 12 }] },
+      statuses: {
+        SMART_INVOICE_STAGE_11: [{ STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }], // has a negative
+        SMART_INVOICE_STAGE_12: [{ STATUS_ID: 'DT31_12:N' }] // trimmed / no negative → empty
+      }
+    })
+    const { negative, categories, emptyCategories } = await loadEntityNegativeStages(31, id => `SMART_INVOICE_STAGE_${id}`, call)
+    expect(categories).toBe(2)
+    expect(negative.size).toBe(1) // aggregate is non-zero (funnel 11's negative masks funnel 12)
+    expect(emptyCategories).toBe(1) // but funnel 12 came back empty → per-funnel signal fires
   })
 
   it('returns an empty set + zero categories when the entity has no funnels', async () => {
@@ -113,8 +128,8 @@ describe('buildPortalNegativeStagePredicate', () => {
     expect(predicate('WON')).toBe(false)
     expect(predicate('')).toBe(false)
     expect(diagnostics).toEqual({
-      invoice: { categories: 1, negativeStages: 1 },
-      deal: { categories: 2, negativeStages: 2 }
+      invoice: { categories: 1, negativeStages: 1, emptyCategories: 0 },
+      deal: { categories: 2, negativeStages: 2, emptyCategories: 0 }
     })
   })
 
@@ -137,8 +152,8 @@ describe('buildPortalNegativeStagePredicate', () => {
     expect(predicate('LOSE')).toBe(true) // lost deal
     expect(predicate('WON')).toBe(false) // WON deal is NOT excluded (settledness handled at payment level)
     // diagnostics count NEGATIVES only (settled must not mask a fail-open)
-    expect(diagnostics.invoice).toEqual({ categories: 1, negativeStages: 1 })
-    expect(diagnostics.deal).toEqual({ categories: 1, negativeStages: 1 })
+    expect(diagnostics.invoice).toEqual({ categories: 1, negativeStages: 1, emptyCategories: 0 })
+    expect(diagnostics.deal).toEqual({ categories: 1, negativeStages: 1, emptyCategories: 0 })
   })
 
   it('surfaces zero deal negatives in diagnostics (fail-open signal for the caller)', async () => {
@@ -150,7 +165,7 @@ describe('buildPortalNegativeStagePredicate', () => {
       }
     })
     const { diagnostics } = await buildPortalNegativeStagePredicate(call)
-    expect(diagnostics.deal).toEqual({ categories: 1, negativeStages: 0 })
+    expect(diagnostics.deal).toEqual({ categories: 1, negativeStages: 0, emptyCategories: 1 })
   })
 
   it('BATCHED path (#191): status.list fan-out goes through batch, same predicate/diagnostics, one batch per entity type', async () => {
@@ -180,8 +195,8 @@ describe('buildPortalNegativeStagePredicate', () => {
     expect(predicate('LOSE')).toBe(true)
     expect(predicate('C5:LOSE')).toBe(true)
     expect(diagnostics).toEqual({
-      invoice: { categories: 1, negativeStages: 1 },
-      deal: { categories: 2, negativeStages: 2 }
+      invoice: { categories: 1, negativeStages: 1, emptyCategories: 0 },
+      deal: { categories: 2, negativeStages: 2, emptyCategories: 0 }
     })
     // status.list did NOT go through the single-call transport — only category.list did
     expect(calls.every(([m]) => m === 'crm.category.list')).toBe(true)
@@ -221,21 +236,25 @@ describe('stripDealCategoryPrefix', () => {
 })
 
 describe('failOpenEntities (symmetric fail-open signal)', () => {
+  const d = (categories: number, negativeStages: number, emptyCategories = 0) => ({ categories, negativeStages, emptyCategories })
   it('flags an entity type with funnels but zero negatives — invoice AND deal', () => {
-    expect(failOpenEntities({ invoice: { categories: 1, negativeStages: 0 }, deal: { categories: 2, negativeStages: 0 } }))
-      .toEqual(['invoice', 'deal'])
+    expect(failOpenEntities({ invoice: d(1, 0), deal: d(2, 0) })).toEqual(['invoice', 'deal'])
   })
   it('flags only the broken side', () => {
-    expect(failOpenEntities({ invoice: { categories: 1, negativeStages: 0 }, deal: { categories: 2, negativeStages: 3 } }))
-      .toEqual(['invoice'])
-    expect(failOpenEntities({ invoice: { categories: 1, negativeStages: 2 }, deal: { categories: 2, negativeStages: 0 } }))
-      .toEqual(['deal'])
+    expect(failOpenEntities({ invoice: d(1, 0), deal: d(2, 3) })).toEqual(['invoice'])
+    expect(failOpenEntities({ invoice: d(1, 2), deal: d(2, 0) })).toEqual(['deal'])
   })
   it('flags nothing when negatives exist for both entity types', () => {
-    expect(failOpenEntities({ invoice: { categories: 1, negativeStages: 1 }, deal: { categories: 1, negativeStages: 1 } })).toEqual([])
+    expect(failOpenEntities({ invoice: d(1, 1), deal: d(1, 1) })).toEqual([])
   })
   it('flags an entity whose funnels could not be enumerated (categories === 0 → empty negative set is still a fail-open)', () => {
-    expect(failOpenEntities({ invoice: { categories: 0, negativeStages: 0 }, deal: { categories: 0, negativeStages: 0 } })).toEqual(['invoice', 'deal'])
-    expect(failOpenEntities({ invoice: { categories: 0, negativeStages: 0 }, deal: { categories: 2, negativeStages: 3 } })).toEqual(['invoice'])
+    expect(failOpenEntities({ invoice: d(0, 0), deal: d(0, 0) })).toEqual(['invoice', 'deal'])
+    expect(failOpenEntities({ invoice: d(0, 0), deal: d(2, 3) })).toEqual(['invoice'])
+  })
+  it('flags a type whose AGGREGATE has negatives but ONE funnel came back empty (#242 per-funnel signal)', () => {
+    // 3 deal funnels, aggregate 3 negatives, but one funnel trimmed → emptyCategories=1 must flag.
+    expect(failOpenEntities({ invoice: d(2, 2, 0), deal: d(3, 3, 1) })).toEqual(['deal'])
+    // both healthy (no empties) → nothing flagged even with many funnels
+    expect(failOpenEntities({ invoice: d(2, 2, 0), deal: d(3, 5, 0) })).toEqual([])
   })
 })
