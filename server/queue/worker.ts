@@ -193,7 +193,11 @@ export function liveHandlerDeps(): HandlerDeps {
       const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call, batch)
       const suspicious = failOpenEntities(diagnostics)
       if (suspicious.length > 0) {
-        console.warn(`[stage] portal ${memberId}: 0 negative stages for ${suspicious.join('+')} (no funnels enumerated, or funnels have no lost/fail stage) — check rights/config; those entities won't be stage-excluded (fail-open)`)
+        const detail = suspicious.map((e) => {
+          const d = e === 'invoice' ? diagnostics.invoice : diagnostics.deal
+          return `${e}(funnels=${d.categories},neg=${d.negativeStages},empty=${d.emptyCategories})`
+        }).join(' ')
+        console.warn(`[stage] portal ${memberId}: suspicious negative-stage load — ${detail} (a funnel with 0 lost/fail stages, or none enumerated) — check rights/config; those entities won't be stage-excluded (fail-open)`)
       }
       return predicate
     },
