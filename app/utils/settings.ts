@@ -100,6 +100,12 @@ export interface AllocationSettings {
    *  ("указана → перевести; не указана → не трогаем", PROCESSING.md §2). Empty/absent
    *  ⇒ the invoice stage is NOT changed. */
   invoicePaidStageId?: string
+  /** Registered automation-trigger CODE fired for TRIGGER targets (deal / smart-process)
+   *  via `crm.automation.trigger.execute` (§2). Must match `[a-z0-9.\-_]` (the API mask);
+   *  empty/absent/malformed ⇒ no trigger is fired (fail-safe). The CODE is what the app
+   *  registers at install (`crm.automation.trigger.add`, #79) and the admin hangs their
+   *  automation rule on. */
+  triggerCode?: string
 }
 
 /** The full settings blob stored under one `app.option` key. */
@@ -140,8 +146,14 @@ export function defaultPortalSettings(): PortalSettings {
  *  stage id (opaque portal code, e.g. `DT31_11:P`); anything else ⇒ omitted. */
 function cleanAllocation(v: unknown): AllocationSettings {
   const o = (v ?? {}) as Record<string, unknown>
+  const out: AllocationSettings = {}
   const stage = typeof o.invoicePaidStageId === 'string' ? o.invoicePaidStageId.trim().slice(0, 64) : ''
-  return stage ? { invoicePaidStageId: stage } : {}
+  if (stage) out.invoicePaidStageId = stage
+  // Trigger CODE: keep only a value matching the API mask `[a-z0-9.\-_]` (lower-cased first);
+  // anything else ⇒ omitted (fail-safe — a bad CODE must not arm the trigger path).
+  const rawCode = typeof o.triggerCode === 'string' ? o.triggerCode.trim().toLowerCase().slice(0, 64) : ''
+  if (rawCode && /^[a-z0-9.\-_]+$/.test(rawCode)) out.triggerCode = rawCode
+  return out
 }
 
 /** Trim, drop blanks, dedupe, and clamp size — for the exclusion lists (unknown

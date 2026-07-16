@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { payAllocationViaRest } from '../server/utils/allocationMutationWrite'
+import { executeTriggerViaRest, payAllocationViaRest } from '../server/utils/allocationMutationWrite'
 import type { AllocationCandidate } from '../app/utils/allocation'
 
 const cand = (kind: AllocationCandidate['kind'], id: string): Pick<AllocationCandidate, 'kind' | 'id'> => ({ kind, id })
@@ -71,5 +71,65 @@ describe('payAllocationViaRest', () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     }
     await expect(payAllocationViaRest(cand('deal-payment', '9'), call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
+})
+
+describe('executeTriggerViaRest', () => {
+  const opts = { triggerCode: 'money.in-1' }
+
+  it('deal: calls crm.automation.trigger.execute (OWNER_TYPE_ID=2) and reads {result:true}', async () => {
+    const seen: Array<[string, Record<string, unknown>]> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      seen.push([method, params])
+      return { result: true }
+    }
+    const res = await executeTriggerViaRest(cand('deal', '6'), call, opts)
+    expect(res).toEqual({ applied: true, method: 'crm.automation.trigger.execute', kind: 'deal', id: '6' })
+    expect(seen).toEqual([['crm.automation.trigger.execute', { CODE: 'money.in-1', OWNER_TYPE_ID: 2, OWNER_ID: 6 }]])
+  })
+
+  it('smart-process: OWNER_TYPE_ID = its entityTypeId', async () => {
+    const seen: Array<[string, Record<string, unknown>]> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      seen.push([method, params])
+      return { result: true }
+    }
+    const res = await executeTriggerViaRest({ kind: 'smart-process', id: '9', entityTypeId: 1032 }, call, opts)
+    expect(res).toEqual({ applied: true, method: 'crm.automation.trigger.execute', kind: 'smart-process', id: '9' })
+    expect(seen).toEqual([['crm.automation.trigger.execute', { CODE: 'money.in-1', OWNER_TYPE_ID: 1032, OWNER_ID: 9 }]])
+  })
+
+  it('no/invalid CODE or unsupported target → skipped, NO REST call made', async () => {
+    let called = false
+    const call = async () => {
+      called = true
+      return { result: true }
+    }
+    // missing code
+    expect(await executeTriggerViaRest(cand('deal', '6'), call)).toEqual({ applied: false, skipped: 'unsupported' })
+    // amount target is not a trigger
+    expect(await executeTriggerViaRest(cand('deal-payment', '42'), call, opts)).toEqual({ applied: false, skipped: 'unsupported' })
+    // smart-process without entityTypeId
+    expect(await executeTriggerViaRest(cand('smart-process', '9'), call, opts)).toEqual({ applied: false, skipped: 'unsupported' })
+    expect(called).toBe(false)
+  })
+
+  it('portal returns result:false → applied false (call WAS made)', async () => {
+    const res = await executeTriggerViaRest(cand('deal', '6'), async () => ({ result: false }), opts)
+    expect(res).toEqual({ applied: false, method: 'crm.automation.trigger.execute', kind: 'deal', id: '6' })
+  })
+
+  it('missing/empty/undefined result → applied false (strict === true, no envelope-unwrap)', async () => {
+    // A made call with a malformed-but-non-throwing envelope must be treated as NOT applied.
+    expect((await executeTriggerViaRest(cand('deal', '6'), async () => ({}), opts)).applied).toBe(false)
+    // @ts-expect-error transport tolerates a malformed (undefined) envelope defensively
+    expect((await executeTriggerViaRest(cand('deal', '6'), async () => undefined, opts)).applied).toBe(false)
+  })
+
+  it('REST error propagates (job must retry)', async () => {
+    const call = async () => {
+      throw new Error('Application context required')
+    }
+    await expect(executeTriggerViaRest(cand('deal', '6'), call, opts)).rejects.toThrow('Application context required')
   })
 })

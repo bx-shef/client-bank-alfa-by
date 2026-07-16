@@ -5,7 +5,12 @@
 
 import type { RestCall } from './companyLookup'
 import type { AllocationCandidate } from '../../app/utils/allocation'
-import { buildAllocationMutation, type AllocationMutationOpts } from '../../app/utils/allocationMutation'
+import {
+  buildAllocationMutation,
+  buildTriggerExecution,
+  type AllocationMutationOpts,
+  type TriggerExecutionOpts
+} from '../../app/utils/allocationMutation'
 
 /** Outcome of an allocation mutation attempt. `applied` is true only when the
  *  portal confirmed the write (`{result:true}`). `skipped` is set when the target
@@ -40,4 +45,28 @@ export async function payAllocationViaRest(
   const applied = result === true
     || (typeof result === 'object' && result !== null && 'item' in result)
   return { applied, method: mutation.method, kind: mutation.kind, id: mutation.id }
+}
+
+/**
+ * Fire the automation TRIGGER for a decided trigger target (deal / smart-process) via
+ * `crm.automation.trigger.execute` → `{result:true}`. Built by the pure `buildTriggerExecution`;
+ * when it yields `null` (no/invalid CODE, bad id, smart-process без entityTypeId, or an amount
+ * target) NOTHING is called and `{applied:false, skipped:'unsupported'}` is returned. A REST error
+ * PROPAGATES (the job fails → clean retry).
+ *
+ * BLOCKER (#79): the method needs OAuth **application context** (a webhook token gets
+ * «Application context required») and a CODE that the app REGISTERED at install
+ * (`crm.automation.trigger.add`). So this transport is not wired into the crm-sync hot path yet —
+ * it is verified by unit tests here and awaits the install-registration + OAuth-portal live-verify.
+ */
+export async function executeTriggerViaRest(
+  target: Pick<AllocationCandidate, 'kind' | 'id'> & { entityTypeId?: number },
+  call: RestCall,
+  opts: TriggerExecutionOpts = {}
+): Promise<AllocationMutationResult> {
+  const trigger = buildTriggerExecution(target, opts)
+  if (!trigger) return { applied: false, skipped: 'unsupported' }
+  const resp = await call(trigger.method, trigger.params) as { result?: unknown } | null
+  // `crm.automation.trigger.execute` → `{result:true}` on a successful fire (live-doc-confirmed).
+  return { applied: resp?.result === true, method: trigger.method, kind: trigger.kind, id: trigger.id }
 }

@@ -97,6 +97,18 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings(`{"allocation":{"invoicePaidStageId":"${'x'.repeat(80)}"}}`).allocation.invoicePaidStageId).toHaveLength(64)
   })
 
+  it('allocation.triggerCode: kept when it matches the API mask (lower-cased/trimmed), else omitted', () => {
+    expect(parsePortalSettings('{"allocation":{"triggerCode":"money.in-1"}}').allocation).toEqual({ triggerCode: 'money.in-1' })
+    expect(parsePortalSettings('{"allocation":{"triggerCode":"  Money.IN-1 "}}').allocation).toEqual({ triggerCode: 'money.in-1' }) // trimmed + lower-cased
+    expect(parsePortalSettings('{"allocation":{"triggerCode":"bad code!"}}').allocation).toEqual({}) // space + ! → mask fails → omitted
+    expect(parsePortalSettings('{"allocation":{"triggerCode":"ПлатёжПришёл"}}').allocation).toEqual({}) // non-mask chars → omitted
+    expect(parsePortalSettings('{"allocation":{"triggerCode":""}}').allocation).toEqual({}) // blank → omitted
+    expect(parsePortalSettings('{"allocation":{"triggerCode":42}}').allocation).toEqual({}) // non-string → omitted
+    // stage + code coexist
+    expect(parsePortalSettings('{"allocation":{"invoicePaidStageId":"DT31_11:P","triggerCode":"money.in"}}').allocation)
+      .toEqual({ invoicePaidStageId: 'DT31_11:P', triggerCode: 'money.in' })
+  })
+
   it('errorChat: parsed defensively (trimmed; missing/non-string → empty)', () => {
     expect(parsePortalSettings('{"errorChat":{"dialogId":"  chat5 "}}').errorChat.dialogId).toBe('chat5')
     expect(parsePortalSettings('{"errorChat":{"dialogId":42}}').errorChat.dialogId).toBe('')
