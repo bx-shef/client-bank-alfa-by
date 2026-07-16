@@ -32,7 +32,7 @@ import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
-import { payAllocationViaRest } from '../utils/allocationMutationWrite'
+import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { allocationFactKey } from '../../app/utils/allocation'
 import { readAppSettingVia } from '../utils/appSettings'
@@ -288,6 +288,29 @@ export function liveHandlerDeps(): HandlerDeps {
         throw new Error(`applyAllocation: portal did not confirm ${res.method ?? 'pay'} for ${target.kind}#${target.id} (member ${memberId}) — retry`)
       }
       return res.applied
+    },
+    // Fire the portal automation trigger for a decided trigger target (#79). BEST-EFFORT,
+    // like notifyChat — a trigger SIGNALS «деньги пришли» (the client's BP allocates), it does
+    // NOT move money, so a failure must NEVER fail the whole batch. Returns whether it actually
+    // FIRED (`{result:true}`); the handler records the write-once fact ONLY on a fire. So any
+    // failure — a transient token/limit error, or a PERMANENT config error (a `triggerCode` set
+    // but never registered via `crm.automation.trigger.add` → «...is not registered») — is
+    // swallowed+logged and leaves NO fact, so it self-heals: re-attempted on the next delivery,
+    // fires the moment the CODE is registered (no cross-batch failure storm, no permanent
+    // suppression). Demo gated; no token → skip. `crm.automation.trigger.execute` needs OAuth
+    // app-context — the resolver's SDK call provides it (a webhook gets «Application context
+    // required»). `executeTriggerViaRest` (#269) takes the CODE via `opts.triggerCode`.
+    applyTrigger: async (item, target, memberId, code) => {
+      if (isDemoAccount(item.account)) return false
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return false
+        const res = await executeTriggerViaRest(target, call, { triggerCode: code })
+        return res.applied
+      } catch (e) {
+        console.warn(`[trigger] portal ${memberId}, ${target.kind}#${target.id}: not fired — ${(e as Error)?.message}`)
+        return false
+      }
     },
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
     // notifyChat: demo accounts gated, no token → skip, whole body swallow+logged (a chat
