@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAllocationMutation } from '../app/utils/allocationMutation'
+import { buildAllocationMutation, buildTriggerExecution } from '../app/utils/allocationMutation'
 import type { AllocationCandidate } from '../app/utils/allocation'
 
 const cand = (kind: AllocationCandidate['kind'], id: string): Pick<AllocationCandidate, 'kind' | 'id'> => ({ kind, id })
@@ -54,5 +54,54 @@ describe('buildAllocationMutation', () => {
     expect(buildAllocationMutation(cand('deal-payment', ' 5 '))).toBeNull() // Number() would coerce to 5
     expect(buildAllocationMutation(cand('deal-payment', '0'))).toBeNull() // not a real (positive) payment id
     expect(buildAllocationMutation(cand('deal-payment', 'Infinity'))).toBeNull()
+  })
+})
+
+describe('buildTriggerExecution', () => {
+  const opts = { triggerCode: 'money.in-1' }
+
+  it('deal → crm.automation.trigger.execute with OWNER_TYPE_ID=2', () => {
+    expect(buildTriggerExecution(cand('deal', '6'), opts)).toEqual({
+      method: 'crm.automation.trigger.execute',
+      params: { CODE: 'money.in-1', OWNER_TYPE_ID: 2, OWNER_ID: 6 },
+      kind: 'deal',
+      id: '6'
+    })
+  })
+
+  it('smart-process → OWNER_TYPE_ID = its entityTypeId', () => {
+    expect(buildTriggerExecution({ kind: 'smart-process', id: '9', entityTypeId: 1032 }, opts)).toEqual({
+      method: 'crm.automation.trigger.execute',
+      params: { CODE: 'money.in-1', OWNER_TYPE_ID: 1032, OWNER_ID: 9 },
+      kind: 'smart-process',
+      id: '9'
+    })
+  })
+
+  it('smart-process WITHOUT a valid entityTypeId → null (can\'t guess the dynamic OWNER_TYPE_ID)', () => {
+    expect(buildTriggerExecution({ kind: 'smart-process', id: '9' }, opts)).toBeNull()
+    expect(buildTriggerExecution({ kind: 'smart-process', id: '9', entityTypeId: 0 }, opts)).toBeNull()
+    expect(buildTriggerExecution({ kind: 'smart-process', id: '9', entityTypeId: 10.5 }, opts)).toBeNull()
+  })
+
+  it('no / blank / malformed triggerCode → null (не настроен → не трогаем)', () => {
+    expect(buildTriggerExecution(cand('deal', '6'))).toBeNull() // no opts
+    expect(buildTriggerExecution(cand('deal', '6'), { triggerCode: '' })).toBeNull()
+    expect(buildTriggerExecution(cand('deal', '6'), { triggerCode: '   ' })).toBeNull()
+    expect(buildTriggerExecution(cand('deal', '6'), { triggerCode: 'Bad Code!' })).toBeNull() // space + uppercase + !
+    expect(buildTriggerExecution(cand('deal', '6'), { triggerCode: 'ПлатёжПришёл' })).toBeNull() // non-mask chars
+  })
+
+  it('blank / non-integer / non-positive owner id → null (never send a malformed OWNER_ID)', () => {
+    expect(buildTriggerExecution(cand('deal', ''), opts)).toBeNull()
+    expect(buildTriggerExecution(cand('deal', 'abc'), opts)).toBeNull()
+    expect(buildTriggerExecution(cand('deal', '4.5'), opts)).toBeNull()
+    expect(buildTriggerExecution(cand('deal', ' 5 '), opts)).toBeNull()
+    expect(buildTriggerExecution(cand('deal', '0'), opts)).toBeNull()
+  })
+
+  it('amount targets (invoice / deal-payment) → null (they go through buildAllocationMutation)', () => {
+    expect(buildTriggerExecution(cand('invoice', '7'), opts)).toBeNull()
+    expect(buildTriggerExecution(cand('deal-payment', '42'), opts)).toBeNull()
   })
 })

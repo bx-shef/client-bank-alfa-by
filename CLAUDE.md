@@ -513,11 +513,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `buildAllocationMutation(target, opts)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`;
     для `invoice` — `{method:'crm.item.update',params:{entityTypeId:31,id,fields:{stageId}}}` **при заданной** стадии
     `opts.invoicePaidStageId` (нет стадии ⇒ `null` — «не указана → не трогаем»). Оба требуют положительный целочисленный
-    id (пустой/нечисловой → `null`, не шлём кривой вызов). `deal`/`smart-process` — триггеры → `null`. Без I/O; тесты. +
+    id (пустой/нечисловой → `null`, не шлём кривой вызов). `deal`/`smart-process` — триггер-цели, у `buildAllocationMutation`
+    → `null` (их путь — отдельный триггер-билдер ниже). Без I/O; тесты. **Триггер-билдер (deal/smart-process) — добавлен:**
+    `buildTriggerExecution(target, {triggerCode})` → `{method:'crm.automation.trigger.execute',params:{CODE,OWNER_TYPE_ID,OWNER_ID}}`
+    (единственные параметры метода — сверено с офдок; доп. сумму/валюту метод НЕ принимает, триггер — просто сигнал «деньги
+    пришли»). `OWNER_TYPE_ID`: сделка=2, смарт-процесс=его `entityTypeId` (нет валидного → `null`). CODE по маске
+    `[a-z0-9.\-_]` (нет/битый → `null`, «не настроен → не трогаем»); id — положит. целое. amount-цели (invoice/deal-payment)
+    → `null`. Без I/O; тесты. +
     `server/utils/allocationMutationWrite.ts` — транспорт `payAllocationViaRest(target, call, opts)`: строит мутацию,
     зовёт метод, **конверт-aware applied-детект** (`callRest` отдаёт полный envelope: `crm.item.payment.pay` →
     `{result:true}`, `crm.item.update` → `{result:{item}}` — оба = `applied`, подтверждено вживую); unsupported-цель →
-    без REST-вызова; REST-ошибка **пробрасывается** (джоба ретраится). Тесты.
+    без REST-вызова; REST-ошибка **пробрасывается** (джоба ретраится). Тесты. **Транспорт триггера — добавлен:**
+    `executeTriggerViaRest(target, call, {triggerCode})` → `crm.automation.trigger.execute` → `{result:true}` (тем же
+    билдером; unsupported/нет CODE → без REST-вызова, ошибка пробрасывается). **В hot-path пока НЕ подключён — блокер #79**
+    (нужен OAuth-контекст приложения + регистрация CODE на установке + live-verify на реальном портале). CODE хранится в
+    настройках — `allocation.triggerCode` (маска, fail-safe).
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
@@ -625,7 +635,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (нет стадии в настройках ⇒ инвойс не трогаем)
       (`allocationMutation.ts` билдер + `allocationMutationWrite.ts` транспорт, конверт-aware applied-детект,
       идемпотентный порядок mutation-before-fact),
-      счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). Осталось: триггеры deal/smart-process.
+      счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
+      (deal/smart-process): билдер+транспорт+настройка `triggerCode` готовы** (`buildTriggerExecution`/`executeTriggerViaRest`,
+      тесты), но **в hot-path не подключены — блокер #79** (нужен OAuth-контекст + регистрация CODE на установке + live-verify).
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
@@ -671,11 +683,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     стадию `allocation.invoicePaidStageId` из настроек) за гейтом `autoDistribute` — сделана**
     (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, конверт-aware applied-детект
     (`{result:true}` vs `{result:{item}}`), идемпотентный порядок mutation-before-fact,
-    live-verify `pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте). **Осталось (мутационный слайс):**
-    триггеры deal/smart-process (их факт пока не пишется) — **блокер #79:** `crm.automation.trigger.execute`
-    требует **контекста приложения** (webhook тестового портала его не вызовет) + предварительно
-    **зарегистрированный** `CODE` (`crm.automation.trigger.add` на установке) → live-verify только на OAuth-портале
-    (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
+    live-verify `pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте). **Триггеры deal/smart-process —
+    чистый билдер `buildTriggerExecution` + транспорт `executeTriggerViaRest` + настройка `allocation.triggerCode`
+    (маска `[a-z0-9.\-_]`, fail-safe) — сделаны** (тесты); **проводка в hot-path + запись факта триггера — НЕ сделаны,
+    блокер #79:** `crm.automation.trigger.execute` требует **контекста приложения** (webhook тестового портала его не
+    вызовет) + предварительно **зарегистрированный** `CODE` (`crm.automation.trigger.add` на установке) → live-verify
+    только на OAuth-портале (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
