@@ -98,6 +98,9 @@ export async function findCandidateById(
     id: outId,
     amount: finite ? amount : 0,
     currency: String(item.currencyId ?? ''),
-    ...(dealId ? { dealId } : {})
+    ...(dealId ? { dealId } : {}),
+    // A smart-process trigger needs its entityTypeId as OWNER_TYPE_ID (#79); the caller
+    // passes it in, so thread it back onto the candidate. Deal uses the fixed OWNER_TYPE_ID=2.
+    ...(kind === 'smart-process' ? { entityTypeId } : {})
   }
 }

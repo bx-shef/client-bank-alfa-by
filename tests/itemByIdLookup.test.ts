@@ -70,6 +70,19 @@ describe('findCandidateById', () => {
     expect((await findCandidateById('smart-process', 1032, '1', { companyId: '93' }, call))?.amount).toBe(0)
   })
 
+  it('threads entityTypeId onto a smart-process candidate (needed as OWNER_TYPE_ID to fire its trigger, #79)', async () => {
+    const call = vi.fn(async () => resp([item({ id: 1, opportunity: 0, currencyId: 'BYN' })]))
+    // Without this, buildTriggerExecution → null → the smart-process trigger could never fire.
+    expect(await findCandidateById('smart-process', 1032, '1', { companyId: '93' }, call))
+      .toEqual({ kind: 'smart-process', id: '1', amount: 0, currency: 'BYN', entityTypeId: 1032 })
+  })
+
+  it('does NOT set entityTypeId for a deal (fixed OWNER_TYPE_ID=2) or amount kinds (#79)', async () => {
+    const call = vi.fn(async () => resp([item({ id: 33, opportunity: 5, currencyId: 'BYN' })]))
+    expect((await findCandidateById('deal', 2, '33', { companyId: '93' }, call).then(c => c && 'entityTypeId' in c))).toBe(false)
+    expect((await findCandidateById('invoice', 31, '33', { companyId: '93' }, call).then(c => c && 'entityTypeId' in c))).toBe(false)
+  })
+
   it('returns null on a non-finite amount for an amount-gated kind (fail-closed, like invoiceLookup)', async () => {
     const call = vi.fn(async () => resp([item({ opportunity: 'n/a' })]))
     expect(await findCandidateById('invoice', 31, '33', { companyId: '93' }, call)).toBeNull()
