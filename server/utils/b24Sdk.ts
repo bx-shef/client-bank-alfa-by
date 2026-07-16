@@ -3,12 +3,14 @@
 // rate limiter (default 2 req/s, burst 50) with adaptive delay and retry-backoff on
 // QUERY_LIMIT_EXCEEDED / 429 / 5xx, enabled by default — this per-portal bucket IS the #191
 // rate-limiter (B24 limits are per-portal; one big portal can't starve the others).
-// The caller builds this PER RESOLUTION (not a long-lived process cache, and NOT once per job
-// — so it gives up the `callRest` path's bind-once, lever-2; per-JOB memoisation for a shared
-// bucket across a job's ops is a follow-up). The client holds
+// This factory builds ONE client per call; the caller (`createPortalSdkResolver`,
+// portalSdkResolver.ts) MEMOISES it per-portal for a short TTL so a whole crm-sync job shares
+// one client (one rate-limiter bucket + one token load) — the SDK path's per-JOB memoisation
+// (done, #191), the analogue of the `callRest` path's bind-once (lever-2). The client holds
 // the refresh token in memory, so a process-lifetime cache would wedge on a stale token after
-// a peer replica / keep-alive cron rotates it (invalid_grant forever). Building fresh reads
-// the current DB token, so a rotation is observed on the next resolution. Token refresh is
+// a peer replica / keep-alive cron rotates it (invalid_grant forever); the resolver's TTL +
+// evict-on-error rebuild from the current DB token, so a rotation is observed within the
+// window (or on the next resolve after a failure). Token refresh is
 // automatic; the SDK's `setCallbackRefreshAuth` hands us the new token so we persist it
 // (via `saveToken` — tombstone-guarded, so it won't resurrect a purged portal).
 //
@@ -46,12 +48,18 @@ export interface OAuthCallClient {
   setCallbackRefreshAuth: (cb: CallbackRefreshAuth) => void
 }
 
-/** The bits of the SDK's `AjaxResult` we read. `getData()` returns the full REST
- *  envelope (`{ result, time, … }`), matching what our lookups expect from `RestCall`. */
+/** The bits of the SDK's `AjaxResult` we read. NB: `getData()` returns ONLY
+ *  `{ result, time }` — it DROPS the top-level `total`/`next` list-pagination siblings
+ *  that the raw `callRest` envelope carries. `makeSdkRestCall` re-attaches them from
+ *  `getTotal()`/`isMore()` so both transports hand list consumers the same shape (see
+ *  there). `getTotal`/`isMore` are optional so a future SDK bump that drops the (already
+ *  `@deprecated`) `getTotal()` degrades gracefully rather than failing to typecheck. */
 export interface SdkAjaxResult {
   isSuccess: boolean
   getData: () => Record<string, unknown> | null | undefined
   getErrorMessages: () => string[]
+  getTotal?: () => number
+  isMore?: () => boolean
 }
 
 /** Map our stored `PortalToken` to the SDK's `B24OAuthParams`. `nowMs` is passed in
@@ -108,7 +116,21 @@ export function makeSdkRestCall(client: OAuthCallClient): RestCall {
   return async (method, params) => {
     const res = await client.actions.v2.call.make({ method, params })
     if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || `B24 REST ${method} failed`)
-    return (res.getData() ?? {}) as Record<string, unknown>
+    // getData() returns a FROZEN `{ result, time }` and drops the top-level `total`/`next`
+    // list-pagination siblings. The raw `callRest` envelope carries them, and our list
+    // paginators read them at the top level (`paymentLookup.dealListTotal` /
+    // `negativeStages.loadCategoryIds` do `Number(resp.total)`). Without re-attaching them,
+    // a >1-page list — a company with >50 deals, a portal with >50 funnels — is SILENTLY
+    // truncated to the first page under the SDK transport (a lost amount falls through to
+    // manual/none; an overflow funnel's negative stages are dropped → fail-open). Spread to
+    // unfreeze, then re-attach from the SDK's accessors so both transports hand consumers the
+    // same shape (#191 review). Attaching a `total` on a non-list response is harmless — its
+    // consumers don't read it. `getTotal()` returns 0 when absent, which is loop-equivalent
+    // to the raw `NaN` (both stop paging after the already-read first page). */
+    const envelope = { ...(res.getData() ?? {}) } as Record<string, unknown>
+    if (envelope.total === undefined && typeof res.getTotal === 'function') envelope.total = res.getTotal()
+    if (envelope.next === undefined && typeof res.isMore === 'function' && res.isMore()) envelope.next = true
+    return envelope
   }
 }
 

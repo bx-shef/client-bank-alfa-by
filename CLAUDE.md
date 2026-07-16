@@ -495,8 +495,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `setCallbackRefreshAuth` (SDK рефрешит → сохраняем свежий), `makePortalSdkCall` (`null` без токена — drop-in),
     `sdkPortalDeps` (проводка на живой токен-стор, persist `eventTs=0`). `createPortalSdkResolver(deps, now?, ttlMs?)`
     **мемоизирует клиента на портал на короткий TTL** (`SDK_CLIENT_TTL_MS` 60с — **пер-JOB**: вся джоба делит один клиент
-    = одно rate-limiter-ведро + одна загрузка токена; TTL — предохранитель от stale-token wedge: после ротации кэш-клиент
-    залипнет максимум на TTL, дальше ре-билд читает свежий токен), `evict` дропает кэш-клиента (cutover на uninstall).
+    = одно rate-limiter-ведро + одна загрузка токена; от stale-token wedge — два клапана: **evict-on-error** (основной —
+    упавший вызов дропает свой клиент, следующая резолюция пересобирает из свежего DB-токена сразу, не дожидаясь TTL) +
+    **TTL** (бэкстоп — даже не падавший клиент пересобирается через `SDK_CLIENT_TTL_MS` 60с), `evict` дропает кэш-клиента (cutover на uninstall).
     Типизация `new B24OAuth` как `OAuthCallClient` — compile-time drift-guard. **Компромисс (осознанный, выбор
     пользователя):** SDK-рефреш идёт **мимо** advisory-lock (`ensureAccessToken`, #35) — проигранная гонка ротации =
     **транзиентный ретрай BullMQ**, не порча кредов (persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`);

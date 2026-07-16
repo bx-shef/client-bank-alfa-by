@@ -66,9 +66,10 @@ const portalRestDeps: PortalRestDeps = {
 //   - callRest (DEFAULT): bind-once (#191 lever-2) + advisory-locked force-refresh + reactive
 //     expired_token retry. Refresh serialised by our lock (#35). No rate-limiter yet.
 //   - SDK (@bitrix24/b24jssdk, QUEUE_SDK_TRANSPORT=1): its per-instance RestrictionManager IS
-//     the rate-limiter (leaky-bucket + backoff on QUERY_LIMIT_EXCEEDED). Fresh client per
-//     resolution (reads the current token; reactive refresh persisted UPDATE-only via
-//     tombstone-guarded saveToken). Refresh runs OUTSIDE our advisory lock — a lost rotation
+//     the rate-limiter (leaky-bucket + backoff on QUERY_LIMIT_EXCEEDED). Client MEMOISED per
+//     portal for a short TTL (per-JOB memoisation — one bucket + one token load per job),
+//     rebuilt from the current DB token on TTL lapse or evict-on-error; reactive refresh
+//     persisted UPDATE-only via tombstone-guarded saveToken. Refresh runs OUTSIDE our advisory lock — a lost rotation
 //     race is a transient retry, not corruption (see portalSdkResolver.ts). Opt-in until
 //     validated on a live portal (`pnpm sdk:test`), then default-ON is a follow-up.
 // Both satisfy `PortalRestResolver`, so nothing downstream changes with the flag.
@@ -128,9 +129,10 @@ export function liveHandlerDeps(): HandlerDeps {
     // the crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
     // lookups — the payment-number pool is ONE company scan per op (#192) but still unbatched/
     // unpaginated — + writeActivity 1 call per op → will hit B24 QUERY_LIMIT_EXCEEDED under
-    // real volume). NB: swapping the transport to the SDK (b24Sdk.ts) for its built-in
-    // RestrictionManager is DEFERRED — the SDK's self-refresh bypasses our advisory lock; the
-    // rate limiter is the remaining #191 lever, not a wholesale transport swap (docs/QUEUES.md
+    // real volume). NB: the SDK transport (b24Sdk.ts) with its built-in RestrictionManager IS
+    // implemented and selectable via QUEUE_SDK_TRANSPORT (default OFF, opt-in until live-gated
+    // in the worker); the SDK's self-refresh bypasses our advisory lock (accepted trade —
+    // portalSdkResolver.ts). The remaining #191 lever is `callList` batching (docs/QUEUES.md
     // §REST-бюджет).
     findCompany: async (item, memberId) => {
       // Demo ops: pause (so crm-sync shows a backlog too) then skip — never REST.
@@ -289,6 +291,18 @@ export function liveHandlerDeps(): HandlerDeps {
         return false // unsupported target: nothing to write, fact-only is correct
       }
       const res = await payAllocationViaRest(target, call, opts)
+      // THIRD failure mode (besides transport-throw and no-token, both handled above): the
+      // pay REST call WAS made but the portal did NOT confirm the write (`{result:false}` —
+      // e.g. a soft business-rule rejection), and that is NOT an `unsupported` target (which
+      // legitimately writes nothing and is fact-only). Returning false here would let the
+      // caller record the idempotency fact for a payment that was never applied →
+      // `hasAllocationFact` then PERMANENTLY blocks every retry, leaving a «разнесён» fact on
+      // an unpaid target (the exact poison the no-token branch throws to avoid). THROW so the
+      // job retries; a genuinely permanent rejection surfaces via retry exhaustion, not a
+      // silent success. (`skipped:'unsupported'` still returns false → fact-only, unchanged.)
+      if (!res.applied && res.skipped !== 'unsupported') {
+        throw new Error(`applyAllocation: portal did not confirm ${res.method ?? 'pay'} for ${target.kind}#${target.id} (member ${memberId}) — retry`)
+      }
       return res.applied
     },
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as

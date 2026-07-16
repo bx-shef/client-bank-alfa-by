@@ -126,6 +126,41 @@ describe('makeSdkRestCall', () => {
     expect(await makeSdkRestCall(client)('x')).toEqual({ foo: 1 })
   })
 
+  it('re-attaches top-level `total`/`next` from the SDK accessors (getData drops them) — #191 list pagination', async () => {
+    // getData() returns ONLY {result,time}; the raw callRest envelope carries top-level
+    // `total`/`next` that paymentLookup/negativeStages paginate on. Without re-attaching,
+    // a >1-page list is silently truncated to the first page under the SDK transport.
+    const { client } = fakeClient(ajax({
+      getData: () => ({ result: { items: [{ id: 1 }] } }),
+      getTotal: () => 120,
+      isMore: () => true
+    }))
+    const out = await makeSdkRestCall(client)('crm.item.list', { entityTypeId: 2 })
+    expect(out).toEqual({ result: { items: [{ id: 1 }] }, total: 120, next: true })
+  })
+
+  it('does not fabricate `next` when the SDK reports no more pages', async () => {
+    const { client } = fakeClient(ajax({
+      getData: () => ({ result: { items: [] } }),
+      getTotal: () => 0,
+      isMore: () => false
+    }))
+    const out = await makeSdkRestCall(client)('crm.item.list')
+    expect(out).toEqual({ result: { items: [] }, total: 0 }) // total present (0), next absent
+  })
+
+  it('leaves the envelope untouched when the SDK exposes no total/isMore (graceful degrade)', async () => {
+    // A future SDK bump could drop the @deprecated getTotal(); the optional guards must then
+    // pass the envelope through unchanged rather than break.
+    const { client } = fakeClient(ajax({ getData: () => ({ result: true }) }))
+    expect(await makeSdkRestCall(client)('crm.item.payment.pay')).toEqual({ result: true })
+  })
+
+  it('does not overwrite a `total` the envelope already carries', async () => {
+    const { client } = fakeClient(ajax({ getData: () => ({ result: { items: [] }, total: 5 }), getTotal: () => 999 }))
+    expect((await makeSdkRestCall(client)('x')).total).toBe(5)
+  })
+
   it('throws the SDK error messages on failure (so the job fails → clean retry)', async () => {
     const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => ['QUERY_LIMIT_EXCEEDED', 'slow down'] }))
     await expect(makeSdkRestCall(client)('crm.item.list')).rejects.toThrow('QUERY_LIMIT_EXCEEDED; slow down')
