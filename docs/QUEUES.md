@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-07-15
+> Last reviewed: 2026-07-16
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -214,13 +214,14 @@ advisory-lock (`ensureAccessToken`, #35). Приняли его как `ai-price
 - **`server/utils/portalSdkResolver.ts`** — `createPortalSdkResolver(deps)`: `PortalRestResolver` на SDK, **свежий
   клиент на резолюцию** (не кэш), `evict` — no-op. Свапается в `worker.ts` с `callRest`-резолвером по флагу.
 - **`QUEUE_SDK_TRANSPORT`** (`server/queue/runtime.ts`, default **OFF**) — включает SDK-путь. Default OFF: не ослабляем
-  дефолт до живого гейта. Дефолт-ON — **follow-up после `pnpm sdk:test` на живом портале**.
+  дефолт до живого гейта. Дефолт-ON — **follow-up после `pnpm sdk:crm:test` на живом портале**.
 - **Дев-смоук `pnpm sdk:test`** (`scripts/b24-sdk-test.mjs`, вебхук из `.env.b24test`) — **✅ пройден** (SDK работает
   в Node и сам троттлит: `--burst` 60 вызовов без `QUERY_LIMIT_EXCEEDED`). Это **webhook**-смоук, не прогон hot-path.
 
 **Осталось:**
-1. **Живой прогон `crm-sync` с `QUEUE_SDK_TRANSPORT=1`** на тестовом портале (webhook-смоук `pnpm sdk:test` уже
-   пройден; остаётся сам hot-path через OAuth-транспорт), затем **дефолт-ON**.
+1. **Живой гейт OAuth-транспорта** — `scripts/extract-oauth-from-docker.sh` (вытащить креды портала из backend-Docker)
+   → **`pnpm sdk:crm:test --force-refresh`** (прогоняет наш `makePortalSdkCall`/`B24OAuth` + refresh+persist на живом
+   портале; webhook-смоук `pnpm sdk:test` этого не покрывает — там `B24Hook`). Зелёный гейт → **дефолт-ON**.
 2. **Пер-JOB мемоизация SDK-клиента** (один rate-limiter-bucket на портал на джобу) — сейчас клиент строится на
    резолюцию (как в `ai-price-import`), что теряет bind-once и общий bucket через операции джобы. Нужен job-scoped шов.
 3. **Батчинг (`callBatch` / `callList`-паттерн SDK)** для объёмных выборок вместо ручного N+1 (пул оплат, списки);
