@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_CONCURRENCY, activityTransport, envFlag, queueRuntimeConfig } from '../server/queue/runtime'
+import { MAX_CONCURRENCY, envFlag, queueRuntimeConfig } from '../server/queue/runtime'
 
 describe('envFlag', () => {
   it('defaults when unset or blank', () => {
@@ -33,23 +33,5 @@ describe('queueRuntimeConfig', () => {
     expect(queueRuntimeConfig({ QUEUE_CONCURRENCY: String(MAX_CONCURRENCY + 500) }).concurrency).toBe(MAX_CONCURRENCY)
     // Non-positive / garbage / empty → floor of 1 (never 0, which BullMQ would reject).
     for (const v of ['0', '-3', 'abc', '']) expect(queueRuntimeConfig({ QUEUE_CONCURRENCY: v }).concurrency).toBe(1)
-  })
-})
-
-describe('activityTransport (#259 Phase B)', () => {
-  it('defaults to `todo` when unset/blank', () => {
-    expect(activityTransport({})).toBe('todo')
-    expect(activityTransport({ ACTIVITY_TRANSPORT: '' })).toBe('todo')
-    expect(activityTransport({ ACTIVITY_TRANSPORT: '   ' })).toBe('todo')
-  })
-  it('turns on only for the exact token `configurable` (any case, trimmed)', () => {
-    for (const v of ['configurable', 'CONFIGURABLE', ' Configurable ']) {
-      expect(activityTransport({ ACTIVITY_TRANSPORT: v })).toBe('configurable')
-    }
-  })
-  it('any other value falls back to `todo` (fail-safe: a typo cannot switch the write path)', () => {
-    for (const v of ['config', 'todo', '1', 'true', 'configurables', 'conf']) {
-      expect(activityTransport({ ACTIVITY_TRANSPORT: v })).toBe('todo')
-    }
   })
 })

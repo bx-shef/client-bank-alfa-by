@@ -18,7 +18,6 @@ import {
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
 import { deleteToken, saveToken } from '../utils/tokenStore'
-import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/activityDedupStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
 import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
@@ -27,11 +26,9 @@ import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
-import { writeActivityViaRest } from '../utils/crmActivityWrite'
 import { writeConfigurableActivityViaRest } from '../utils/configurableActivityWrite'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
-import { activityTransport } from './runtime'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
@@ -68,13 +65,6 @@ const resolvePortalCall: PortalRestResolver = createPortalSdkResolver(sdkPortalD
   now: Date.now,
   scope: B24_REQUIRED_SCOPES.join(',')
 }))
-
-// #259 Phase B: which activity carrier crm-sync writes an operation as. Default `todo`
-// (crm.activity.todo.add + the persistent activity_dedup store). `ACTIVITY_TRANSPORT=configurable`
-// writes crm.activity.configurable.add, whose ORIGINATOR_ID/ORIGIN_ID marker enables B24-side
-// dedup (crm.activity.list) — the DB store is bypassed. Resolved once at module load; OFF by
-// default (configurable.add is OAuth-only, needs a live-verify — same discipline as the SDK flag).
-const ACTIVITY_MODE = activityTransport()
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -130,18 +120,15 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return findCompanyByAccount(item.counterparty.account, call)
     },
-    // Write the operation as an activity attached to the matched company; returns the new
-    // activity id (for rememberActivity) or null when skipped (demo account / no company →
-    // no owner / unknown portal). Carrier by ACTIVITY_MODE (#259 Phase B): `configurable`
-    // → crm.activity.configurable.add (carries the ORIGINATOR_ID/ORIGIN_ID dedup marker);
-    // default `todo` → crm.activity.todo.add (dedup via the activity_dedup store).
+    // Write the operation as a CONFIGURABLE activity (crm.activity.configurable.add) attached
+    // to the matched company; returns the new activity id or null when skipped (demo account /
+    // no company → no owner / unknown portal). The activity carries the ORIGINATOR_ID/ORIGIN_ID
+    // dedup marker (#259), so idempotency lives in B24 (getActivityId searches it) — no store.
     writeActivity: async (item, companyId, memberId) => {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return ACTIVITY_MODE === 'configurable'
-        ? writeConfigurableActivityViaRest(item, companyId, call)
-        : writeActivityViaRest(item, companyId, call)
+      return writeConfigurableActivityViaRest(item, companyId, call)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
@@ -315,26 +302,16 @@ export function liveHandlerDeps(): HandlerDeps {
         console.error('alloc error notify failed', memberId, (e as Error)?.message)
       }
     },
-    // Read-before-write dedup guard. `configurable` (#259 Phase B): search Bitrix24 for our
-    // marker (ORIGINATOR_ID + ORIGIN_ID; key = ORIGIN_ID = account|docId) — B24 is the source
-    // of truth, no DB store. Default `todo`: the persistent activity_dedup store (#9).
-    // Demo/no-token → null (proceed as "not written"), same as the store path.
-    getActivityId: ACTIVITY_MODE === 'configurable'
-      ? async (memberId, key) => {
-        const call = await resolvePortalCall(memberId)
-        if (!call) return null
-        return findActivityByMarker(ACTIVITY_ORIGINATOR_ID, key, call)
-      }
-      : (memberId, key) => getActivityId(dbQuery, memberId, key),
-    // Record the written activity for dedup. `configurable`: NO-OP — the marker was written
-    // ATOMICALLY inside crm.activity.configurable.add, so B24 already holds the record
-    // (closing the write→remember gap the store path had). Default `todo`: persist to
-    // activity_dedup (#9).
-    rememberActivity: ACTIVITY_MODE === 'configurable'
-      ? () => Promise.resolve()
-      : async (memberId, key, activityId) => {
-        await rememberActivity(dbQuery, memberId, key, activityId)
-      },
+    // Read-before-write dedup guard (#259): search Bitrix24 for our marker
+    // (ORIGINATOR_ID + ORIGIN_ID; key = ORIGIN_ID = account|docId). The marker is written
+    // ATOMICALLY with the activity (configurable.add), so B24 is the source of truth — no DB
+    // store and no separate "remember" step (the write→remember gap is closed). Demo/no-token
+    // → null (proceed as "not written").
+    getActivityId: async (memberId, key) => {
+      const call = await resolvePortalCall(memberId)
+      if (!call) return null
+      return findActivityByMarker(ACTIVITY_ORIGINATOR_ID, key, call)
+    },
     // Register a portal: decrypt the refresh blob carried in the job (never plain
     // in Redis) and upsert the token row (write-once application_token in saveToken).
     // No DATABASE_URL guard: if the DB is missing/down, saveToken throws → BullMQ
@@ -355,14 +332,14 @@ export function liveHandlerDeps(): HandlerDeps {
         applicationToken: c.applicationToken
       }, Number(job.ts) || 0)
     },
-    // Uninstall always erases EVERYTHING for the portal: token row + dedup map +
-    // import status + allocation facts (#184). `eventTs` records the ordering tombstone (#77).
-    // Also evict the in-memory bind-once RestCall (#191) so a just-uninstalled portal's
-    // cached access token can't be reused by an in-flight job — restores the instant cutoff
-    // the per-op token re-load gave before the resolver (the DB row is gone; the cache isn't).
+    // Uninstall always erases EVERYTHING for the portal: token row + import status +
+    // allocation facts (#184). `eventTs` records the ordering tombstone (#77). Activity dedup
+    // now lives in B24 (the marker on the activity itself), so there's no local dedup map to
+    // purge — the client's own CRM keeps the activities. Also evict the in-memory bind-once
+    // RestCall (#191) so a just-uninstalled portal's cached access token can't be reused by an
+    // in-flight job — restores the instant cutoff (the DB row is gone; the cache isn't).
     deletePortal: async (memberId, eventTs) => {
       await deleteToken(dbQuery, memberId, eventTs)
-      await deleteDedupForPortal(dbQuery, memberId)
       await deleteImportResultForPortal(dbQuery, memberId)
       await deleteFactsForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
@@ -386,13 +363,11 @@ export function startEventWorker(deps: HandlerDeps): Worker {
  *  applies to all three.
  *  ⚠ Raising crm-sync concurrency OR running >1 replica needs (a) a per-portal REST
  *  limiter (else a big batch hits B24 `QUERY_LIMIT` — batch/`callBatch` is the real
- *  lever) and (b) ATOMIC dedup. A marker-in-B24 dedup needs a carrier holding OUR marker:
- *  an SP element / invoice (`xmlId`, crm.item) or a CONFIGURABLE activity (`originId`,
- *  crm.activity.configurable.add). The SIMPLE `todo` activity has NO such field (#259),
- *  so while the carrier is a plain todo its read-before-write via `activity_dedup` stays
- *  TOCTOU under parallelism and could double-write a dela — see #109/#259/PROCESSING §1.
- *  Until a per-portal limiter + a marker-bearing carrier land, keep crm-sync effectively
- *  serial; fetch/parse scale freely. See docs/QUEUES.md. */
+ *  lever) and (b) ATOMIC dedup. Dedup is the B24 marker (`findActivityByMarker` →
+ *  `configurable.add` stamps ORIGINATOR_ID/ORIGIN_ID atomically, #259), but the search→write
+ *  is still two calls: under parallelism two workers could both miss the marker and
+ *  double-write a dela (TOCTOU) — see #109/#259/PROCESSING §1. Until a per-portal limiter
+ *  lands, keep crm-sync effectively serial; fetch/parse scale freely. See docs/QUEUES.md. */
 export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: number } = {}): Worker[] {
   const connection = connectionOptions()
   const concurrency = Math.max(1, opts.concurrency ?? 1)

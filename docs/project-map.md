@@ -304,12 +304,12 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
 - **Стадия 4 — поиск компании + запись дела** (код + юнит-тесты; **поиск компании подтверждён на живом
   портале**, запись дела руками ещё НЕ проверена, #90): `companyLookup.ts` (по корр-счёту → `RQ_ACC_NUM`/
   `RQ_IIK` → реквизит → компания) — **прогнан вживую** (реквизиты по счёту → id компании), пресеты
-  реквизитов РБ: 1=Организация/3=ИП/5=Физлицо; `crmActivityWrite.ts` (`crm.activity.todo.add`),
-  read-before-write дедуп в `crm-sync` (персистентный стор). **#259 Фаза B за флагом
-  `ACTIVITY_TRANSPORT=configurable`:** `crm.activity.configurable.add` + дедуп поиском B24-маркера
-  (`configurableActivity.ts`/`configurableActivityWrite.ts`/`activityMarkerLookup.ts`), снимает `activity_dedup`;
-  включение — после live-verify на OAuth-портале (`pnpm activity:test`). TZ-aware `deadline` (UTC+3). Живые транспорты
-  с гейтом демо-счётов. Осталось: прогон записи дела на живом портале (#90) и обработка unmatched-операций (#91).
+  реквизитов РБ: 1=Организация/3=ИП/5=Физлицо. **Носитель операции — настраиваемое дело (#259):**
+  `crm.activity.configurable.add` + дедуп поиском B24-маркера
+  (`configurableActivity.ts`/`configurableActivityWrite.ts`/`activityMarkerLookup.ts`) — стора `activity_dedup`
+  больше нет; live-verify на OAuth-портале (`pnpm activity:test`, вебхуком не проверить). TZ-aware `deadline`
+  (UTC+3). Живые транспорты с гейтом демо-счётов. Осталось: прогон записи дела на живом портале (#90) и
+  обработка unmatched-операций (#91).
 - **Стадия 6 — сообщение в чат** (код + юнит-тесты; вживую не проверено): `buildChatMessage` (BB-текст
   операции, внешние поля обезврежены `neutralizeBb`) + `notifyChatViaRest` (`im.message.add`). Проводка
   ждёт хранения настроек (какой чат + правила) — см. «Что дальше».

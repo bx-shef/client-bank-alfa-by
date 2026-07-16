@@ -1,15 +1,16 @@
-// Builds the params for a CONFIGURABLE timeline activity (crm.activity.configurable.add),
-// the #259 Phase-B carrier that replaces the simple crm.activity.todo.add. Unlike the todo
-// activity, a configurable activity accepts an external-source marker (ORIGINATOR_ID +
-// ORIGIN_ID) that crm.activity.list can FILTER by — so idempotency/dedup lives in Bitrix24
-// (search the marker before writing) instead of our activity_dedup store. Pure: takes a
-// normalized statement item + the resolved CRM company, returns the params object; the REST
-// call + result extraction live in server/utils/configurableActivityWrite.ts.
+// Builds the params for a CONFIGURABLE timeline activity (crm.activity.configurable.add) —
+// the SOLE carrier crm-sync writes an operation as (#259), replacing the removed simple
+// crm.activity.todo.add. Unlike the todo activity, a configurable activity accepts an
+// external-source marker (ORIGINATOR_ID + ORIGIN_ID) that crm.activity.list can FILTER by — so
+// idempotency/dedup lives in Bitrix24 (search the marker before writing), with no DB store.
+// Pure: takes a normalized statement item + the resolved CRM company, returns the params
+// object; the REST call + result extraction live in server/utils/configurableActivityWrite.ts.
 //
 // The marker is OURS on OUR record (a brand-new activity we create), never a stamp on a
-// client-owned deal/invoice field — see docs/PROCESSING.md §1. It requires app (OAuth)
-// context and only the creating app can update it (crm.activity.configurable.add errors
-// ERROR_WRONG_CONTEXT / ERROR_WRONG_APPLICATION), so this path is gated behind a live-verify.
+// client-owned deal/invoice field — see docs/PROCESSING.md §1. It requires app (OAuth) context
+// and only the creating app can update it (crm.activity.configurable.add errors
+// ERROR_WRONG_CONTEXT / ERROR_WRONG_APPLICATION) → can't be webhook-tested; live-smoke it with
+// `pnpm activity:test` on an installed portal.
 
 import type { StatementItem } from '~/types/statement'
 import { dedupKey } from '~/utils/statement'
@@ -25,10 +26,9 @@ import {
  *  Scoping by our distinctive ORIGINATOR_ID namespace prevents that (docs/PROCESSING.md §1). */
 export const ACTIVITY_ORIGINATOR_ID = ACTIVITY_ORIGIN
 
-/** ORIGIN_ID = the operation key (account|docId), same key the activity_dedup store uses.
- *  Paired with ACTIVITY_ORIGINATOR_ID for the B24-side dedup search. (Strengthening this to
- *  a composite hash is the separate §1 follow-up — it "feeds the marker"; kept at parity
- *  with the current dedupKey here so the todo and configurable paths dedupe identically.) */
+/** ORIGIN_ID = the operation key (account|docId, the shared `dedupKey`). Paired with
+ *  ACTIVITY_ORIGINATOR_ID for the B24-side dedup search. (Strengthening this to a composite
+ *  hash is the separate §1 follow-up — it "feeds the marker".) */
 export function activityOriginId(item: Pick<StatementItem, 'account' | 'docId'>): string {
   return dedupKey(item)
 }
@@ -104,8 +104,7 @@ export function buildConfigurableLayout(item: StatementItem): Record<string, unk
  * Build the `crm.activity.configurable.add` params for a statement item bound to a CRM
  * company. Carries the dedup marker (originatorId + originId) so the write is idempotent
  * against a B24-side search — and, because the marker is written ATOMICALLY with the
- * activity in a single call, there is no write→remember gap (the residual TOCTOU the
- * activity_dedup store documented is closed on this path).
+ * activity in a single call, there is no separate "remember" step and no write→remember gap.
  */
 export function buildConfigurableActivity(item: StatementItem, company: CrmCompanyRef): ConfigurableActivityParams {
   return {

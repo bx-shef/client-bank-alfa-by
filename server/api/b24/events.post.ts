@@ -10,7 +10,6 @@ import { parseBracketForm } from '../../../app/utils/b24Events'
 import { dbQuery } from '../../db/client'
 import { handleEventRequest } from '../../utils/b24EventsHandler'
 import { getApplicationToken, saveToken, deleteToken } from '../../utils/tokenStore'
-import { deleteDedupForPortal } from '../../utils/activityDedupStore'
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent } from '../../queue/producers'
 
@@ -27,13 +26,12 @@ export default defineEventHandler(async (event) => {
       saveCredentials: async (token, eventTs) => {
         await saveToken(dbQuery, token, eventTs)
       },
-      // Uninstall always erases EVERYTHING for the portal (token + dedup map). B24
-      // does NOT resend online events, so this sync fallback is the only chance to
-      // purge when Redis is down — it must match the worker's deletePortal exactly.
+      // Uninstall erases the portal token. B24 does NOT resend online events, so this sync
+      // fallback is the only chance to purge when Redis is down. Activity dedup now lives in
+      // B24 (the marker on the activity), so there's no local dedup map to purge here.
       // `eventTs` records the ordering tombstone (#77) so a stale register can't resurrect.
       deletePortal: async (memberId, eventTs) => {
         await deleteToken(dbQuery, memberId, eventTs)
-        await deleteDedupForPortal(dbQuery, memberId)
       },
       encrypt: encryptSecret,
       now: () => Date.now()
