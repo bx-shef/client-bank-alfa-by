@@ -14,6 +14,7 @@ import {
   isTriggerTarget,
   resolveAllocation,
   sameCurrency,
+  stripMaskLiteralPrefix,
   summarizeAllocation,
   toMinorUnits
 } from '~/utils/allocation'
@@ -152,6 +153,23 @@ describe('collapseSameTarget', () => {
     const distinctPay = pay({ id: 'P2', dealId: '80' })
     const kept = collapseSameTarget([invoice, covered, distinctPay])
     expect(kept.map(c => c.id).sort()).toEqual(['7', 'P2'])
+  })
+})
+
+describe('stripMaskLiteralPrefix (#242 — bare-numeric deal-payment match)', () => {
+  it('drops a leading literal mask prefix, keeping the numeric body', () => {
+    expect(stripMaskLiteralPrefix('ЗАК-6001')).toBe('6001')
+    expect(stripMaskLiteralPrefix('BOPC-123/45')).toBe('123/45')
+    expect(stripMaskLiteralPrefix('СЧ-1')).toBe('1')
+    expect(stripMaskLiteralPrefix('PAY-6001')).toBe('6001')
+  })
+  it('leaves a prefix-less value unchanged (bare order/seq or id)', () => {
+    expect(stripMaskLiteralPrefix('6001/1')).toBe('6001/1')
+    expect(stripMaskLiteralPrefix('123')).toBe('123')
+  })
+  it('collapses an all-literal value to empty (→ filters treat as blank)', () => {
+    expect(stripMaskLiteralPrefix('ЗАК-')).toBe('')
+    expect(stripMaskLiteralPrefix('ABC')).toBe('')
   })
 })
 

@@ -151,6 +151,26 @@ export function collapseSameTarget(candidates: readonly AllocationCandidate[]): 
  * e.g. «1/2»), so an `order-number` matches the PREFIX, not the whole number — see
  * `filterByOrderNumber` below. This helper is for exact numbers (`payment-number`).
  */
+/**
+ * Strip a recognized identifier's leading LITERAL mask prefix so it compares against a
+ * bare-numeric deal-payment field (#242). `recognizeByMatrices` returns the WHOLE matched
+ * fragment INCLUDING the mask's literal prefix (`ЗАК-6001`, `BOPC-123/45`), which is correct
+ * for an INVOICE (its `accountNumber` literally is `СЧ-1`). But a deal-payment's `accountNumber`
+ * is the bare Bitrix `<order>/<seq>` numeric (`6001/1`) and a payment's `id` is a bare integer,
+ * so a prefixed value would NEVER match the pool — a portal that binds a prefixed mask to
+ * `order-number`/`payment-number`/`payment-id` would silently drop every payment. Drop the
+ * leading non-digit run (prefix-shape-based — the recognizer doesn't say which mask matched, but
+ * these targets are always digits/`/`). A prefix-less value (`123/45`) is unchanged; an all-
+ * literal value collapses to '' → the filters treat it as blank → `[]`. NB: apply ONLY to the
+ * pooled deal-payment kinds — NOT to the invoice path, which intentionally keeps the prefix.
+ * BOUNDARY (known non-goal): only a LEADING literal run is stripped, so a mask with an INTERIOR
+ * non-`/` literal (`dd-dddd` → `12-3456`) is left as-is and simply matches nothing — fail-safe
+ * (a miss, never a wrong allocation), since Bitrix payment numbers/ids are `[0-9/]`-only.
+ */
+export function stripMaskLiteralPrefix(value: string): string {
+  return value.replace(/^\D+/u, '')
+}
+
 export function filterByAccountNumber(
   candidates: readonly AllocationCandidate[],
   accountNumber: string
@@ -166,8 +186,9 @@ export function filterByAccountNumber(
  * «1» → payment «1/1»), where `<seq>` is the final «/»-delimited segment. So the order
  * number is everything BEFORE the LAST «/» — matching on `lastIndexOf('/')` (not the first
  * «/») is correct in BOTH directions:
- *   - a COMPOSITE order number that itself contains «/» matches — a mask like `BOPC-ddd/dd`
- *     (the recognizer supports «/» literals) yields «123/45», matching payment «123/45/1»;
+ *   - a COMPOSITE order number that itself contains «/» matches — a mask `BOPC-ddd/dd` recognizes
+ *     «BOPC-123/45», which the caller strips (`stripMaskLiteralPrefix`) to «123/45» before this
+ *     compare, matching payment «123/45/1»;
  *   - a SHORTER number does NOT falsely match — order «123» does not own «123/45/1»
  *     (its order part is «123/45», not «123»), and «10» does not match «1/1».
  * Blank number → `[]` (must not sweep the pool); a candidate with no «/» (or an empty order

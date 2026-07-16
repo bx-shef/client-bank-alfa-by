@@ -264,7 +264,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     пустой номер → `[]`. `filterByPaymentId(candidates, paymentId)` — отбор по **собственному id оплаты** в company-пуле
     (для `payment-id`, #172; IDOR-safe — чужая оплата не в пуле). `filterByPaymentIds(candidates, ids)` — отбор по
     **множеству** id оплат (для `order-id`, #172: id оплат заказа из `sale.payment.list` **∩** company-пул держит IDOR;
-    пустое множество → `[]`). Без I/O; проводка в `crm-sync` — следующий слайс.
+    пустое множество → `[]`). **`stripMaskLiteralPrefix(value)`** (#242) — снимает литеральный префикс маски
+    (`ЗАК-6001`→`6001`, `BOPC-123/45`→`123/45`): `recognizeByMatrices` отдаёт префикс целиком (верно для инвойса, чей
+    `accountNumber` = `СЧ-1`), но оплата сделки несёт **голый** `<заказ>/<seq>`/целый id — `intentResolver` стрипит
+    значение перед пуловым матчем (payment-number/order-number/payment-id/order-id), сообщая исходное `value`; на
+    invoice-путь **не** применяется. Без I/O; проводка в `crm-sync` — следующий слайс.
   - `app/utils/purposeMatch.ts` — **чистое распознавание идентификатора из назначения платежа по МАТРИЦАМ**
     (#109, спека — `docs/PROCESSING.md` §4): `recognizeByMatrices(purpose, matrices, alphabet)` — матрица
     (`MatchMatrix { mask, kind }`) описывает формат номера маской (`d`=цифра, остальное — литерал: буквы/
