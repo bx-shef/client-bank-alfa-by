@@ -293,7 +293,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   (`QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`, `server/queue/runtime.ts`); в prod-compose `backend`
   = API+крон+событийный воркер, сервис `worker` = обработка (`--scale worker=N`). Событийный воркер —
   ровно на одном инстансе (порядок install/uninstall); crm-sync масштабируется после атомарного дедупа
-  (#109/#259 — маркер в B24 у сущностей `crm.item`; у `todo`-дела маркера нет, стор верен by design).
+  (#109/#259 — маркер в B24 у `crm.item` `xmlId` и **настраиваемого дела** `originId`; у **простого** `todo`-дела
+  маркера нет, его стор верен by design).
   **Долговременные метрики (#78, частично):** воркер best-effort копит пожизненные счётчики портала
   (`metrics_counter`: processed/created/allocated/distributed/unmatched/… из сводки `crm-sync`), читаются/
   сбрасываются по фрейм-токену (`GET /api/import/metrics`, `POST /api/import/metrics-reset`, member-scoped).
