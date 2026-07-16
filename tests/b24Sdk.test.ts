@@ -219,7 +219,7 @@ describe('makePortalSdkCall', () => {
   })
 
   it('returns null when the portal has no token (no client constructed)', async () => {
-    // Same contract as makePortalRestCall — drop-in swap. Returns before touching the SDK.
+    // No stored token (uninstalled / demo) → null, returns before touching the SDK.
     vi.mocked(B24OAuth).mockClear()
     expect(await makePortalSdkCall('M1', deps({ loadToken: async () => null }))).toBeNull()
     expect(vi.mocked(B24OAuth)).not.toHaveBeenCalled()

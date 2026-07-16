@@ -28,8 +28,9 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 
 ## Серверные вызовы (backend, OAuth-токен портала)
 
-Идут через `server/utils/b24Rest.ts` `callRest(domain, accessToken, method, params)` (per-portal,
-`makePortalRestCall` подгружает+рефрешит токен). Личность — **пользователь, установивший приложение**
+Идут через `server/utils/b24Rest.ts` `callRest(domain, accessToken, method, params)` (per-portal;
+на `crm-sync` — SDK-резолвер `portalSdkResolver.ts`, на фрейм-роутах — `liveAppSettingsDeps` с
+`ensureAccessToken`). Личность — **пользователь, установивший приложение**
 (владелец сохранённого refresh-токена); это важно для методов, чувствительных к правам (см. `im.*`).
 
 | Метод | Поколение | Scope | Файл-владелец | Батч | Статус / замена | Назначение |

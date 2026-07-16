@@ -27,12 +27,20 @@
 // `invalid_grant`, its job fails, BullMQ retries, the retry re-reads the now-rotated token and
 // succeeds. The persist is tombstone-guarded `saveToken` (won't resurrect a purged portal), so
 // a lost race is a TRANSIENT retryable failure, never cred corruption. The advisory lock still
-// serialises the PROACTIVE keep-alive cron. `QUEUE_SDK_TRANSPORT=0` falls back to the
-// advisory-locked `callRest` resolver (portalRestResolver.ts) instantly.
+// serialises the PROACTIVE keep-alive cron (#175). This IS the crm-sync transport (the former
+// advisory-locked `callRest` resolver was retired once the SDK became the default).
 
 import type { RestCall } from './companyLookup'
-import type { PortalRestResolver } from './portalRestResolver'
 import { makePortalSdkCall, type SdkPortalDeps } from './b24Sdk'
+
+/** A per-portal resolver: `(memberId) → RestCall | null`, memoised for a short TTL, with
+ *  `evict(memberId)` to drop a portal's cached client (called on uninstall). This is the
+ *  crm-sync REST transport contract; the SDK resolver below is its sole implementation. */
+export interface PortalRestResolver {
+  (memberId: string): Promise<RestCall | null>
+  /** Drop a portal's cached client so the next resolve rebuilds (uninstall cutoff). */
+  evict(memberId: string): void
+}
 
 /** How long a per-portal SDK client is reused before it's rebuilt from a fresh DB token.
  *  Long enough to serve a whole crm-sync job from ONE client (shared rate-limiter bucket + one

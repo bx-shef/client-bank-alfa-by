@@ -1,5 +1,5 @@
 // Live smoke of the crm-sync SDK transport (#191, dev-only, not part of SSG). Exercises the
-// EXACT adapter the worker uses when QUEUE_SDK_TRANSPORT=1 — `makePortalSdkCall` → real
+// EXACT adapter the worker uses (the sole crm-sync transport) — `makePortalSdkCall` → real
 // `B24OAuth` → `makeSdkRestCall` (full-envelope contract) + reactive refresh + persist — but
 // with an IN-MEMORY token store (no Postgres/Redis), so it runs from a plain env block.
 //
@@ -101,7 +101,7 @@ async function main() {
     ok('без --force-refresh: рефреш не форсили (токен свежий). Добавь --force-refresh, чтобы проверить refresh+persist.')
   }
 
-  console.log(`\n${C.green}✓ SDK-транспорт на живом портале работает.${C.reset} Можно включать QUEUE_SDK_TRANSPORT=1 в прогоне crm-sync.\n`)
+  console.log(`\n${C.green}✓ SDK-транспорт на живом портале работает.${C.reset} Это дефолтный транспорт crm-sync.\n`)
 }
 
 main().catch((e) => {

@@ -15,14 +15,6 @@ export interface QueueRuntime {
   cron: boolean
   /** Per-worker concurrency for the throughput queues (fetch/parse/crm-sync). */
   concurrency: number
-  /** Use the @bitrix24/b24jssdk transport (built-in RestrictionManager rate-limiter) for the
-   *  crm-sync REST calls (#191). **Default OFF (opt-in)** — the transport is validated against a
-   *  live portal (`pnpm sdk:crm:test`), but flipping the PRODUCTION default waits until a real
-   *  crm-sync job is observed processing through the SDK in the actual BullMQ worker (the live
-   *  gate exercised `makePortalSdkCall` directly, bypassing the queue/worker path). Set
-   *  `QUEUE_SDK_TRANSPORT=1` to opt an instance in; it falls back to the advisory-locked
-   *  `callRest` resolver when off. */
-  sdkTransport: boolean
 }
 
 /** Upper bound so a typo (`QUEUE_CONCURRENCY=100000`) can't exhaust the B24 REST
@@ -40,17 +32,8 @@ export function queueRuntimeConfig(env: NodeJS.ProcessEnv = process.env): QueueR
   return {
     workers: envFlag(env.QUEUE_WORKERS, true),
     cron: envFlag(env.QUEUE_CRON, true),
-    concurrency: clampConcurrency(env.QUEUE_CONCURRENCY),
-    sdkTransport: envFlag(env.QUEUE_SDK_TRANSPORT, false)
+    concurrency: clampConcurrency(env.QUEUE_CONCURRENCY)
   }
-}
-
-/** Pick the crm-sync REST resolver by the `sdkTransport` flag, building ONLY the chosen one
- *  (the thunks are lazy — the SDK branch never constructs its deps when the flag is off, and
- *  vice versa). Extracted as a pure, generic seam so the flag→resolver selection is unit-
- *  testable (worker.ts wires it at module load, which a test can't drive). */
-export function pickPortalResolver<T>(useSdk: boolean, buildSdk: () => T, buildCallRest: () => T): T {
-  return useSdk ? buildSdk() : buildCallRest()
 }
 
 function clampConcurrency(value: string | undefined): number {

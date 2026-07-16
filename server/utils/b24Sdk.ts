@@ -14,15 +14,14 @@
 // automatic; the SDK's `setCallbackRefreshAuth` hands us the new token so we persist it
 // (via `saveToken` — tombstone-guarded, so it won't resurrect a purged portal).
 //
-// STATUS — this IS the crm-sync hot-path transport when `QUEUE_SDK_TRANSPORT` is on (see
-// server/queue/worker.ts / portalSdkResolver.ts). Trade-off vs our own `callRest` path
-// (#191): the SDK's automatic refresh runs OUTSIDE our per-portal advisory lock
-// (ensureAccessToken, #35), so at scale-out two concurrent same-portal refreshes can race the
-// refresh-token rotation. We accept it the way ai-price-import does: the persist is UPDATE-only
-// (tombstone-guarded `saveToken`) and each resolution re-reads the DB token, so a lost race is
-// a TRANSIENT job failure that BullMQ retries recover — not permanent cred corruption. The
-// advisory lock still guards the PROACTIVE keep-alive cron (#175). Flip `QUEUE_SDK_TRANSPORT`
-// off to fall back to the advisory-locked `callRest` resolver instantly.
+// STATUS — this IS the crm-sync hot-path transport (see server/queue/worker.ts /
+// portalSdkResolver.ts); the former hand-rolled `callRest` resolver was retired once the SDK
+// became the default. Trade-off (#191): the SDK's automatic refresh runs OUTSIDE our per-portal
+// advisory lock (ensureAccessToken, #35), so at scale-out two concurrent same-portal refreshes
+// can race the refresh-token rotation. We accept it the way ai-price-import does: the persist is
+// UPDATE-only (tombstone-guarded `saveToken`) and each rebuild re-reads the DB token, so a lost
+// race is a TRANSIENT job failure that BullMQ retries recover — not permanent cred corruption.
+// The advisory lock still guards the PROACTIVE keep-alive cron (#175).
 //
 // This is a server-only module, so it uses the SDK the normal way: a value import and a
 // real `new B24OAuth(...)` in `makePortalSdkCall`. The pure mapping helpers
@@ -109,6 +108,13 @@ export function buildRefreshPersist(save: (t: PortalToken) => Promise<void>): Ca
  *  call and unwrap the REST envelope, or throw the SDK's error messages. Throwing (not
  *  returning an error object) keeps the contract our lookups rely on — a failed call
  *  fails the crm-sync job for a clean retry, same as the hand-rolled `callRest`.
+ *  REACTIVE REFRESH is the SDK's, not ours: `AbstractHttp._makeRequestWithAuthRetry`
+ *  (node_modules/@bitrix24/b24jssdk .../core/http/abstract-http.mjs) catches a `401` with
+ *  code `expired_token`/`invalid_token` (its `_isAuthError`, the same predicate as our
+ *  retired `isExpiredTokenError`), calls `refreshAuth()` and replays the request ONCE —
+ *  concurrent 401s coalesce into a single in-flight refresh. So a clock-fresh-but-server-
+ *  rejected token self-heals here instead of failing the job. This behaviour is the SDK's
+ *  internal contract (verified against the pinned version); a major bump should re-verify it.
  *  NB (#78): the `[rest-timing]` observability lives in `callRest` (b24Rest.ts). When this
  *  SDK transport takes over the hot path, move the timing here (wrap this call with the
  *  same `restTimingLine`/`serverDurationMs`) so the measurement doesn't get lost. */
@@ -147,12 +153,11 @@ export interface SdkPortalDeps {
 
 /** Build a `RestCall` bound to one portal, backed by a per-portal `B24OAuth` instance
  *  (its own rate-limiter bucket) with refresh-persistence wired. `null` when the portal
- *  has no stored token — same contract as `makePortalRestCall`, so it's a drop-in swap.
- *  This IS the crm-sync transport when `QUEUE_SDK_TRANSPORT` is on (portalSdkResolver.ts).
- *  NB: unlike `makePortalRestCall` (which calls `ensureFresh` PROACTIVELY before the
- *  first call), the SDK refreshes REACTIVELY — on the first `expired_token`/401 it
- *  refreshes and retries, costing one extra round-trip on the first call after expiry.
- *  Fine (the SDK handles it transparently), just not a pre-emptive refresh. */
+ *  has no stored token (uninstalled / demo). This IS the crm-sync transport
+ *  (portalSdkResolver.ts memoises it per portal per job).
+ *  NB: the SDK refreshes REACTIVELY — on the first `expired_token`/401 it refreshes and
+ *  retries, costing one extra round-trip on the first call after expiry (no pre-emptive
+ *  refresh; the SDK handles it transparently). */
 export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
   const token = await deps.loadToken(memberId)
   if (!token) return null

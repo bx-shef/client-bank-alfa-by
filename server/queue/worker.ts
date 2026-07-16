@@ -17,17 +17,13 @@ import {
 } from './handlers'
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
-import { deleteToken, getToken, saveToken } from '../utils/tokenStore'
+import { deleteToken, saveToken } from '../utils/tokenStore'
 import { deleteDedupForPortal, getActivityId, rememberActivity } from '../utils/activityDedupStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
 import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
-import { callRest } from '../utils/b24Rest'
-import type { PortalRestDeps } from '../utils/portalRest'
-import { createPortalRestResolver, makeEnsureFresh, type PortalRestResolver } from '../utils/portalRestResolver'
-import { createPortalSdkResolver } from '../utils/portalSdkResolver'
+import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
 import { sdkPortalDeps } from '../utils/b24Sdk'
-import { queueRuntimeConfig, pickPortalResolver } from './runtime'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount } from '../utils/companyLookup'
@@ -51,39 +47,23 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
 const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCompanyDealPayments, findOrderPaymentIds }
 
-/** Portal-bound REST wiring for the CRM-sync transports (token store + refresh + REST).
- *  `ensureFresh` MUST thread `{force}` to `ensureAccessToken` (the reactive expired_token
- *  retry, #191) — built via `makeEnsureFresh` so that contract is a tested unit, not an
- *  inline lambda one edit away from silently dropping `opts`. */
-const portalRestDeps: PortalRestDeps = {
-  loadToken: memberId => getToken(dbQuery, memberId),
-  ensureFresh: makeEnsureFresh(),
-  callRest
-}
-
-// Per-portal RestCall resolver for every crm-sync REST op (#191). Two transports, picked by
-// `QUEUE_SDK_TRANSPORT` (default OFF — opt-in until the SDK path is live-gated):
-//   - callRest (DEFAULT): bind-once (#191 lever-2) + advisory-locked force-refresh + reactive
-//     expired_token retry. Refresh serialised by our lock (#35). No rate-limiter yet.
-//   - SDK (@bitrix24/b24jssdk, QUEUE_SDK_TRANSPORT=1): its per-instance RestrictionManager IS
-//     the rate-limiter (leaky-bucket + backoff on QUERY_LIMIT_EXCEEDED). Client MEMOISED per
-//     portal for a short TTL (per-JOB memoisation — one bucket + one token load per job),
-//     rebuilt from the current DB token on TTL lapse or evict-on-error; reactive refresh
-//     persisted UPDATE-only via tombstone-guarded saveToken. Refresh runs OUTSIDE our advisory lock — a lost rotation
-//     race is a transient retry, not corruption (see portalSdkResolver.ts). Opt-in until
-//     validated on a live portal (`pnpm sdk:test`), then default-ON is a follow-up.
-// Both satisfy `PortalRestResolver`, so nothing downstream changes with the flag.
-const resolvePortalCall: PortalRestResolver = pickPortalResolver(
-  queueRuntimeConfig().sdkTransport,
-  () => createPortalSdkResolver(sdkPortalDeps({
-    query: dbQuery,
-    clientId: process.env.B24_CLIENT_ID ?? '',
-    clientSecret: process.env.B24_CLIENT_SECRET ?? '',
-    now: Date.now,
-    scope: B24_REQUIRED_SCOPES.join(',')
-  })),
-  () => createPortalRestResolver(portalRestDeps)
-)
+// Per-portal RestCall resolver for every crm-sync REST op (#191). Transport is the
+// @bitrix24/b24jssdk SDK: its per-instance RestrictionManager IS the rate-limiter
+// (leaky-bucket + backoff on QUERY_LIMIT_EXCEEDED). The client is MEMOISED per portal for a
+// short TTL (per-JOB memoisation — one rate-limiter bucket + one token load per job), rebuilt
+// from the current DB token on TTL lapse or evict-on-error; refresh is reactive and persisted
+// UPDATE-only via tombstone-guarded saveToken. The SDK refreshes OUTSIDE our advisory lock — a
+// lost rotation race is a transient BullMQ retry, not corruption (see portalSdkResolver.ts);
+// the advisory lock still serialises the proactive keep-alive cron (#175). The former
+// advisory-locked `callRest` resolver (bind-once, lever-2) was retired once the SDK became the
+// default transport.
+const resolvePortalCall: PortalRestResolver = createPortalSdkResolver(sdkPortalDeps({
+  query: dbQuery,
+  clientId: process.env.B24_CLIENT_ID ?? '',
+  clientSecret: process.env.B24_CLIENT_SECRET ?? '',
+  now: Date.now,
+  scope: B24_REQUIRED_SCOPES.join(',')
+}))
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -120,20 +100,15 @@ export function liveHandlerDeps(): HandlerDeps {
     // Find the CRM company by the counterparty's settlement account. Demo accounts
     // are GATED (never touch a real portal's REST); an unknown portal (no token)
     // yields null → the op is counted unmatched and nothing is written.
-    // #191 lever-2 DONE: the per-portal RestCall is now bound ONCE via `resolvePortalCall`
-    // (createPortalRestResolver) and reused across findCompany/resolveIntents/writeActivity/
-    // notifyChat/applyAllocation/notifyError, instead of re-loading+refreshing the token per
-    // op. The resolver also reactively force-refreshes + retries once on a server-side
-    // `expired_token` (isExpiredTokenError), keeping our advisory-lock refresh (#35).
-    // TODO stage 5 / #191 lever-1 (before real volume): a REST rate limiter + batching on
-    // the crm-sync worker (findCompany ~2 calls + resolveIntents up to MAX_RESOLVED_INTENTS_PER_OP
-    // lookups — the payment-number pool is ONE company scan per op (#192) but still unbatched/
-    // unpaginated — + writeActivity 1 call per op → will hit B24 QUERY_LIMIT_EXCEEDED under
-    // real volume). NB: the SDK transport (b24Sdk.ts) with its built-in RestrictionManager IS
-    // implemented and selectable via QUEUE_SDK_TRANSPORT (default OFF, opt-in until live-gated
-    // in the worker); the SDK's self-refresh bypasses our advisory lock (accepted trade —
-    // portalSdkResolver.ts). The remaining #191 lever is `callList` batching (docs/QUEUES.md
-    // §REST-бюджет).
+    // #191 lever-2 DONE: the per-portal RestCall is resolved ONCE via `resolvePortalCall`
+    // (the SDK resolver, memoised per portal per job) and reused across findCompany/
+    // resolveIntents/writeActivity/notifyChat/applyAllocation/notifyError, instead of
+    // re-loading+refreshing the token per op. lever-1 DONE: the SDK's built-in
+    // RestrictionManager (b24Sdk.ts) is the per-portal rate-limiter (leaky-bucket + backoff on
+    // QUERY_LIMIT_EXCEEDED); the SDK also refreshes reactively on `expired_token`. The remaining
+    // #191 lever is `callList` batching (findCompany ~2 calls + resolveIntents up to
+    // MAX_RESOLVED_INTENTS_PER_OP lookups — the payment-number pool is ONE company scan per op
+    // (#192) — + writeActivity 1 call per op); see docs/QUEUES.md §REST-бюджет.
     findCompany: async (item, memberId) => {
       // Demo ops: pause (so crm-sync shows a backlog too) then skip — never REST.
       if (isDemoAccount(item.account)) {

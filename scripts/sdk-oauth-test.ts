@@ -1,8 +1,8 @@
 // Live OAuth smoke-test of the crm-sync transport adapter (#191). Exercises the REAL
 // `makePortalSdkCall` (server/utils/b24Sdk.ts) — `new B24OAuth(...)` + a REST call +
 // the refresh-persist callback — against a live portal by OAuth token, NOT a webhook.
-// This is the gate before swapping the crm-sync hot-path transport from
-// `makePortalRestCall` (hand-rolled) to the SDK. Dev-only, not part of SSG.
+// The SDK is now the crm-sync hot-path transport (the former hand-rolled callRest
+// resolver was retired); this smoke exercises it directly. Dev-only, not part of SSG.
 //
 // Reads git-ignored `.env.b24oauth` (falls back to `.env.b24test`). NEVER commit creds.
 //   B24_CLIENT_ID=local.xxxxxxxx.xxxxxxxx      # app OAuth client_id
