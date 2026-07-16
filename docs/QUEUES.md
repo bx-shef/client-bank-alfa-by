@@ -199,9 +199,11 @@ flowchart LR
 **Что даёт SDK.** У `@bitrix24/b24jssdk` встроенный **RestrictionManager**: leaky-bucket (дефолт 2 req/s, burst 50),
 адаптивная задержка и **retry-с-backoff на `QUERY_LIMIT_EXCEEDED` / 429 / 5xx** — **по умолчанию** и **per-instance**
 (лимиты B24 — на портал). Это ровно lever-1. **Компромисс:** тот же `B24OAuth` рефрешит токен **мимо** нашего
-advisory-lock (`ensureAccessToken`, #35). Приняли его как `ai-price-import`: клиент **строится заново на резолюцию**
-(не кэшируется → нет stale-token wedge), persist рефреша — **UPDATE-only-эквивалент** через tombstone-guarded `saveToken`
-(не воскрешает удалённый портал), каждая резолюция перечитывает токен из БД → проигранная гонка ротации =
+advisory-lock (`ensureAccessToken`, #35). Приняли его как `ai-price-import`: клиент **мемоизируется на портал на
+короткий TTL** (`SDK_CLIENT_TTL_MS` 60с — **пер-JOB мемоизация**: вся джоба делит один клиент = одно rate-limiter-ведро
++ одна загрузка токена), TTL — предохранитель от stale-token wedge (после ротации peer'ом/keep-alive кэш-клиент
+«залипнет» максимум на TTL, дальше ре-билд перечитывает свежий токен). persist рефреша — **UPDATE-only-эквивалент**
+через tombstone-guarded `saveToken` (не воскрешает удалённый портал) → проигранная гонка ротации =
 **транзиентный ретрай BullMQ**, а не порча кредов. Advisory-lock остаётся на проактивном keep-alive (#175).
 Наш `callRest`-путь (advisory-lock + bind-once + reactive-retry `expired_token`) — **фолбэк** при `QUEUE_SDK_TRANSPORT=0`.
 
@@ -211,20 +213,23 @@ advisory-lock (`ensureAccessToken`, #35). Приняли его как `ai-price
   `makeSdkRestCall` (полный конверт `getData()` / throw на ошибке), `buildRefreshPersist`+`setCallbackRefreshAuth`
   (SDK рефрешит → сохраняем свежий), `makePortalSdkCall` (`null` без токена — drop-in), `sdkPortalDeps` (проводка на
   живой токен-стор, persist `eventTs=0`). Типизация `new B24OAuth` как `OAuthCallClient` — compile-time drift-guard.
-- **`server/utils/portalSdkResolver.ts`** — `createPortalSdkResolver(deps)`: `PortalRestResolver` на SDK, **свежий
-  клиент на резолюцию** (не кэш), `evict` — no-op. Свапается в `worker.ts` с `callRest`-резолвером по флагу.
-- **`QUEUE_SDK_TRANSPORT`** (`server/queue/runtime.ts`, default **OFF**) — включает SDK-путь. Default OFF: не ослабляем
-  дефолт до живого гейта. Дефолт-ON — **follow-up после `pnpm sdk:crm:test` на живом портале**.
+- **`server/utils/portalSdkResolver.ts`** — `createPortalSdkResolver(deps, now?, ttlMs?)`: `PortalRestResolver` на SDK,
+  **TTL-мемоизация клиента на портал** (пер-JOB, `SDK_CLIENT_TTL_MS`), `evict` дропает кэш-клиента (cutover на uninstall).
+  Свапается в `worker.ts` с `callRest`-резолвером по флагу.
+- **`QUEUE_SDK_TRANSPORT`** (`server/queue/runtime.ts`, default **OFF**) — включает SDK-путь. Транспорт **гейтнут вживую**
+  (`pnpm sdk:crm:test` + разбор реальной выписки → поиск компаний через SDK, всё чисто), но **флип прод-дефолта на ON
+  ждёт** наблюдения реальной `crm-sync`-джобы через SDK **в самом воркере** (гейт гонял `makePortalSdkCall` напрямую,
+  минуя очередь/воркер). `QUEUE_SDK_TRANSPORT=1` включает поштучно.
 - **Дев-смоук `pnpm sdk:test`** (`scripts/b24-sdk-test.mjs`, вебхук из `.env.b24test`) — **✅ пройден** (SDK работает
   в Node и сам троттлит: `--burst` 60 вызовов без `QUERY_LIMIT_EXCEEDED`). Это **webhook**-смоук, не прогон hot-path.
 
 **Осталось:**
-1. **Живой гейт OAuth-транспорта** — `scripts/extract-oauth-from-docker.sh` (вытащить креды портала из backend-Docker)
-   → **`pnpm sdk:crm:test --force-refresh`** (прогоняет наш `makePortalSdkCall`/`B24OAuth` + refresh+persist на живом
-   портале; webhook-смоук `pnpm sdk:test` этого не покрывает — там `B24Hook`). Зелёный гейт → **дефолт-ON**.
-2. **Пер-JOB мемоизация SDK-клиента** (один rate-limiter-bucket на портал на джобу) — сейчас клиент строится на
-   резолюцию (как в `ai-price-import`), что теряет bind-once и общий bucket через операции джобы. Нужен job-scoped шов.
-3. **Батчинг (`callBatch` / `callList`-паттерн SDK)** для объёмных выборок вместо ручного N+1 (пул оплат, списки);
+1. **Флип прод-дефолта на ON** — только после наблюдения реальной `crm-sync`-джобы через SDK **в воркере** (загрузить
+   выписку с `QUEUE_SDK_TRANSPORT=1` при выключенной демо-нагрузке `DEMO_LOAD_N=0`, увидеть в логах обработку +
+   запись дела без ошибок). OAuth-транспорт сам гейтнут вживую (`pnpm sdk:crm:test` + разбор реальной выписки), но
+   гейт шёл мимо очереди/воркера — прод-дефолт этого требует. **Пер-JOB мемоизация — ✅ сделана** (`portalSdkResolver.ts`,
+   TTL-кэш клиента = общий bucket на джобу).
+2. **Батчинг (`callBatch` / `callList`-паттерн SDK)** для объёмных выборок вместо ручного N+1 (пул оплат, списки);
    частичное падение батча при записи — опираться на идемпотентность
    ([#184](https://github.com/bx-shef/client-bank-alfa-by/issues/184)).
 4. **Расширить хранилище токена** полями `B24OAuthParams` (userId/scope/expiresIn/status) — для REST не критично

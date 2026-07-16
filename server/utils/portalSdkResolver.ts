@@ -4,15 +4,23 @@
 // transport to it (the neighbouring ai-price-import repo did the same: it abandoned building
 // its own limiter and took the SDK's).
 //
-// DESIGN — a FRESH client per resolution, NOT a process-lifetime cache. A cached B24OAuth
-// holds the refresh token in memory; if a peer replica or the keep-alive cron (#175) rotates
-// it, the cached client would wedge on `invalid_grant` forever. Building fresh reads the
-// current DB token each time, so a rotation is observed on the next resolution. This mirrors
-// ai-price-import's `restResolver`. It gives up the bind-once (#191 lever-2) token-load
-// caching of the `callRest` resolver: a job re-reads the token per resolve. That is a cheap
-// indexed SELECT (NOT a refresh — the SDK refreshes reactively, in-client), and it is the
-// price of not caching creds in memory across rotations. Restoring a per-JOB shared client
-// (one rate-limiter bucket per portal per job) is a follow-up (needs a job-scoped seam).
+// DESIGN — a per-portal client MEMOISED for a short TTL, NOT rebuilt per resolution and NOT a
+// process-lifetime cache. A crm-sync job makes many per-op resolves; building a fresh client
+// each time would give each op its OWN rate-limiter bucket (so the per-portal 2 req/s limit is
+// NOT shared across the job → burst → QUERY_LIMIT_EXCEEDED under volume) and re-load the token
+// per op. Memoising the client per member_id for `ttlMs` makes a whole job share ONE client
+// (one bucket, one token load — the per-JOB memoisation). Two safety valves against the stale-
+// token wedge (a cached B24OAuth holds the refresh token in memory, so a PEER replica or the
+// keep-alive cron (#175) rotating it leaves the cached client failing `invalid_grant`):
+//   1. EVICT-ON-ERROR (primary): a failed call drops its own client, so the NEXT resolve
+//      rebuilds from the fresh DB token immediately — recovery is capped to the next retry, not
+//      the TTL. The cache is a worker-lifetime singleton that survives BullMQ retries, and the
+//      retry budget (attempts×backoff) can be SHORTER than the TTL; without evict-on-error the
+//      wedged client would be re-handed to every retry until the TTL lapsed, burning the budget.
+//   2. TTL (backstop): even a never-failing client is rebuilt after `ttlMs`, so a rotation is
+//      picked up within the window regardless.
+// A lost call is a transient BullMQ retry, never cred corruption. `evict` drops a portal
+// immediately on uninstall.
 //
 // REFRESH RACE — the SDK refreshes OUTSIDE our advisory lock (ensureAccessToken, #35). Two
 // concurrent same-portal refreshes can race the rotation: one wins, the other gets
@@ -26,16 +34,52 @@ import type { RestCall } from './companyLookup'
 import type { PortalRestResolver } from './portalRestResolver'
 import { makePortalSdkCall, type SdkPortalDeps } from './b24Sdk'
 
+/** How long a per-portal SDK client is reused before it's rebuilt from a fresh DB token.
+ *  Long enough to serve a whole crm-sync job from ONE client (shared rate-limiter bucket + one
+ *  token load); short enough that a peer/keep-alive token rotation wedges the cached client for
+ *  at most this window before a rebuild picks up the rotated token. */
+export const SDK_CLIENT_TTL_MS = 60_000
+
 /**
- * Build a `PortalRestResolver` backed by the SDK transport. Each call builds a fresh
- * per-portal `B24OAuth` (its own rate-limiter bucket + reactive refresh), or resolves `null`
- * when the portal has no stored token (uninstalled / demo). `evict` is a no-op — nothing is
- * cached, so an uninstall is observed naturally on the next resolution (loadToken → null).
+ * Build a `PortalRestResolver` backed by the SDK transport, memoising the per-portal
+ * `B24OAuth` client for `ttlMs` (per-JOB memoisation, #191). Resolves `null` for a portal with
+ * no stored token (uninstalled / demo) and never caches the `null`. `evict(memberId)` drops the
+ * cached client so an uninstall cuts over immediately. `now`/`ttlMs` are injectable for tests.
  * The `PortalRestResolver` shape matches the `callRest` resolver so the worker swaps between
  * them by an env flag with no other wiring change.
  */
-export function createPortalSdkResolver(deps: SdkPortalDeps): PortalRestResolver {
-  const resolver = (async (memberId: string): Promise<RestCall | null> => makePortalSdkCall(memberId, deps)) as PortalRestResolver
-  resolver.evict = () => {} // nothing cached — fresh client per resolution
+export function createPortalSdkResolver(
+  deps: SdkPortalDeps,
+  now: () => number = Date.now,
+  ttlMs: number = SDK_CLIENT_TTL_MS
+): PortalRestResolver {
+  const cache = new Map<string, { call: RestCall, builtAt: number }>()
+  const resolver = (async (memberId: string): Promise<RestCall | null> => {
+    const cached = cache.get(memberId)
+    if (cached && now() - cached.builtAt < ttlMs) return cached.call
+    const raw = await makePortalSdkCall(memberId, deps)
+    if (!raw) {
+      cache.delete(memberId) // no token → never cache the null (re-resolve next time)
+      return null
+    }
+    // Wrap so a FAILED call drops its (possibly stale/wedged) client — the next resolve then
+    // rebuilds from the fresh DB token immediately, instead of waiting out the TTL. The cache
+    // is a worker-lifetime singleton that survives BullMQ retries, and our retry budget
+    // (attempts×backoff) can be shorter than SDK_CLIENT_TTL_MS; without this, a client wedged
+    // by a peer/keep-alive rotation (invalid_grant) would be re-handed to every retry until the
+    // TTL lapsed, burning the whole budget before recovery (#191). The eviction is guarded to
+    // this exact client so a concurrent rebuild's newer client is never dropped.
+    const call: RestCall = async (method, params) => {
+      try {
+        return await raw(method, params)
+      } catch (e) {
+        if (cache.get(memberId)?.call === call) cache.delete(memberId)
+        throw e
+      }
+    }
+    cache.set(memberId, { call, builtAt: now() })
+    return call
+  }) as PortalRestResolver
+  resolver.evict = (memberId: string) => void cache.delete(memberId)
   return resolver
 }
