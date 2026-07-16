@@ -30,16 +30,20 @@
 // serialises the PROACTIVE keep-alive cron (#175). This IS the crm-sync transport (the former
 // advisory-locked `callRest` resolver was retired once the SDK became the default).
 
-import type { RestCall } from './companyLookup'
-import { makePortalSdkCall, type SdkPortalDeps } from './b24Sdk'
+import type { RestBatch, RestCall } from './companyLookup'
+import { makePortalSdkClient, makeSdkBatchCall, makeSdkRestCall, type SdkPortalDeps } from './b24Sdk'
 
 /** A per-portal resolver: `(memberId) → RestCall | null`, memoised for a short TTL, with
- *  `evict(memberId)` to drop a portal's cached client (called on uninstall). This is the
- *  crm-sync REST transport contract; the SDK resolver below is its sole implementation. */
+ *  `evict(memberId)` to drop a portal's cached client (called on uninstall) and `batch(memberId)`
+ *  to get a `RestBatch` bound to the SAME memoised client (shares its rate-limiter bucket +
+ *  token load). This is the crm-sync REST transport contract; the SDK resolver below is its sole
+ *  implementation. */
 export interface PortalRestResolver {
   (memberId: string): Promise<RestCall | null>
   /** Drop a portal's cached client so the next resolve rebuilds (uninstall cutoff). */
   evict(memberId: string): void
+  /** A `RestBatch` over the same memoised client, or `null` when the portal has no token. */
+  batch(memberId: string): Promise<RestBatch | null>
 }
 
 /** How long a per-portal SDK client is reused before it's rebuilt from a fresh DB token.
@@ -61,33 +65,61 @@ export function createPortalSdkResolver(
   now: () => number = Date.now,
   ttlMs: number = SDK_CLIENT_TTL_MS
 ): PortalRestResolver {
-  const cache = new Map<string, { call: RestCall, builtAt: number }>()
-  const resolver = (async (memberId: string): Promise<RestCall | null> => {
+  interface Entry { call: RestCall, batch: RestBatch, builtAt: number }
+  const cache = new Map<string, Entry>()
+
+  // Resolve (or rebuild) the cached client for a portal, returning its wrapped call+batch.
+  // Both the RestCall and the RestBatch are wrapped so a FAILED request drops its (possibly
+  // stale/wedged) client — the next resolve then rebuilds from the fresh DB token immediately,
+  // instead of waiting out the TTL. The cache is a worker-lifetime singleton that survives
+  // BullMQ retries, and our retry budget (attempts×backoff) can be shorter than
+  // SDK_CLIENT_TTL_MS; without this, a client wedged by a peer/keep-alive rotation
+  // (invalid_grant) would be re-handed to every retry until the TTL lapsed, burning the whole
+  // budget before recovery (#191). Eviction is guarded to THIS exact entry so a concurrent
+  // rebuild's newer client is never dropped. call and batch share ONE client (and its
+  // rate-limiter bucket), and either's failure evicts that shared client.
+  const ensure = async (memberId: string): Promise<Entry | null> => {
     const cached = cache.get(memberId)
-    if (cached && now() - cached.builtAt < ttlMs) return cached.call
-    const raw = await makePortalSdkCall(memberId, deps)
-    if (!raw) {
+    if (cached && now() - cached.builtAt < ttlMs) return cached
+    const client = await makePortalSdkClient(memberId, deps)
+    if (!client) {
       cache.delete(memberId) // no token → never cache the null (re-resolve next time)
       return null
     }
-    // Wrap so a FAILED call drops its (possibly stale/wedged) client — the next resolve then
-    // rebuilds from the fresh DB token immediately, instead of waiting out the TTL. The cache
-    // is a worker-lifetime singleton that survives BullMQ retries, and our retry budget
-    // (attempts×backoff) can be shorter than SDK_CLIENT_TTL_MS; without this, a client wedged
-    // by a peer/keep-alive rotation (invalid_grant) would be re-handed to every retry until the
-    // TTL lapsed, burning the whole budget before recovery (#191). The eviction is guarded to
-    // this exact client so a concurrent rebuild's newer client is never dropped.
+    const rawCall = makeSdkRestCall(client)
+    const rawBatch = makeSdkBatchCall(client)
+    const evictSelf = (): void => {
+      if (cache.get(memberId) === entry) cache.delete(memberId)
+    }
     const call: RestCall = async (method, params) => {
       try {
-        return await raw(method, params)
+        return await rawCall(method, params)
       } catch (e) {
-        if (cache.get(memberId)?.call === call) cache.delete(memberId)
+        evictSelf()
         throw e
       }
     }
-    cache.set(memberId, { call, builtAt: now() })
-    return call
+    const batch: RestBatch = async (calls) => {
+      try {
+        return await rawBatch(calls)
+      } catch (e) {
+        evictSelf()
+        throw e
+      }
+    }
+    const entry: Entry = { call, batch, builtAt: now() }
+    cache.set(memberId, entry)
+    return entry
+  }
+
+  const resolver = (async (memberId: string): Promise<RestCall | null> => {
+    const entry = await ensure(memberId)
+    return entry ? entry.call : null
   }) as PortalRestResolver
   resolver.evict = (memberId: string) => void cache.delete(memberId)
+  resolver.batch = async (memberId: string): Promise<RestBatch | null> => {
+    const entry = await ensure(memberId)
+    return entry ? entry.batch : null
+  }
   return resolver
 }

@@ -20,13 +20,14 @@
 // per category), so the caller loads this ONCE PER JOB (lazily) and reuses the predicate
 // for every operation — not once per op. See docs/QUEUES.md «REST-бюджет проводки».
 
-import type { RestCall } from './companyLookup'
+import type { RestBatch, RestCall } from './companyLookup'
 import {
   DEAL_ENTITY_TYPE_ID
 } from './paymentLookup'
 import { SMART_INVOICE_ENTITY_TYPE_ID } from './invoiceLookup'
 import {
-  dealStageEntityId, invoiceStageEntityId, loadStageExclusions, makeIsNegativeStage
+  dealStageEntityId, invoiceStageEntityId, loadStageExclusions,
+  makeIsNegativeStage, parseStageExclusions, stageStatusListParams
 } from './stageLoader'
 
 /** Per-entity-type diagnostics for the fail-open alert: how many funnels the entity
@@ -135,15 +136,28 @@ export async function loadEntityNegativeStages(
   entityTypeId: number,
   stageEntityIdFor: (categoryId: string) => string,
   call: RestCall,
-  opts: { includeSettled?: boolean } = {}
+  opts: { includeSettled?: boolean } = {},
+  batch?: RestBatch | null
 ): Promise<{ negative: Set<string>, settled: Set<string>, categories: number }> {
   const categoryIds = await loadCategoryIds(entityTypeId, call)
   const negative = new Set<string>()
   const settled = new Set<string>()
-  for (const categoryId of categoryIds) {
-    const sets = await loadStageExclusions(stageEntityIdFor(categoryId), call, opts)
-    for (const id of sets.negative) negative.add(id)
-    for (const id of sets.settled) settled.add(id)
+  const entityIds = categoryIds.map(stageEntityIdFor)
+  // BATCHED (#191): every category's `crm.status.list` is independent, so fan them out in ONE
+  // request instead of N sequential calls. Halt-on-error in the batch keeps the fail-open
+  // contract (a failed status.list throws → job retries, never a silently-shrunk negative set).
+  // Falls back to a SEQUENTIAL path (rate-safe by construction) when no batch transport is
+  // provided (tests / non-SDK callers).
+  const sets: Array<{ negative: Set<string>, settled: Set<string> }> = []
+  if (batch && entityIds.length > 0) {
+    const resps = await batch(entityIds.map(e => ({ method: 'crm.status.list', params: stageStatusListParams(e) })))
+    for (const resp of resps) sets.push(parseStageExclusions(resp, opts))
+  } else {
+    for (const e of entityIds) sets.push(await loadStageExclusions(e, call, opts))
+  }
+  for (const s of sets) {
+    for (const id of s.negative) negative.add(id)
+    for (const id of s.settled) settled.add(id)
   }
   return { negative, settled, categories: categoryIds.length }
 }
@@ -157,13 +171,15 @@ export async function loadEntityNegativeStages(
  * mapping config) and their intents are still `unsupported` in the resolver — add them
  * here when that slice lands (`smartProcessStageEntityId`).
  */
-export async function buildPortalNegativeStagePredicate(call: RestCall): Promise<PortalNegativeStages> {
+export async function buildPortalNegativeStagePredicate(call: RestCall, batch?: RestBatch | null): Promise<PortalNegativeStages> {
   // Invoices ALSO exclude SETTLED (paid/success) stages: a paid invoice must never
   // re-match a second same-amount payment (mirrors paymentLookup's `paid:'Y'` drop).
   // Deals load negatives only — a WON deal is namespaced differently (`WON`, no `DT31_…`),
   // and a deal's settledness is handled at the payment level (`paid:'Y'`), not the stage.
-  const invoice = await loadEntityNegativeStages(SMART_INVOICE_ENTITY_TYPE_ID, invoiceStageEntityId, call, { includeSettled: true })
-  const deal = await loadEntityNegativeStages(DEAL_ENTITY_TYPE_ID, dealStageEntityId, call)
+  // `batch` (when provided) collapses each entity type's per-funnel `crm.status.list` fan-out
+  // into ONE request (#191); without it, the sequential path runs (unchanged).
+  const invoice = await loadEntityNegativeStages(SMART_INVOICE_ENTITY_TYPE_ID, invoiceStageEntityId, call, { includeSettled: true }, batch)
+  const deal = await loadEntityNegativeStages(DEAL_ENTITY_TYPE_ID, dealStageEntityId, call, {}, batch)
   // Stage-id namespaces don't collide, so unioning the settled-invoice stages into the
   // single "do-not-allocate" set only ever drops paid INVOICES — never a deal candidate.
   const union = new Set<string>([...invoice.negative, ...invoice.settled, ...deal.negative])

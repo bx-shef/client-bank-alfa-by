@@ -226,10 +226,19 @@ advisory-lock (`ensureAccessToken`, #35). Приняли его как `ai-price
   `QUERY_LIMIT_EXCEEDED`); `pnpm sdk:crm:test` (`scripts/sdk-crm-test.ts`, OAuth из `.env.b24oauth`) — наш реальный
   `makePortalSdkCall`: `profile`+`crm.item.list` (конверт `{result,…}`) + `--force-refresh` (refresh+persist).
 
+**Батчинг (`callBatch`) — частично сделан.** SDK-резолвер отдаёт `batch(memberId)` (`RestBatch`) на **том же**
+мемоизированном клиенте (общее rate-limiter-ведро + одна загрузка токена), транспорт — `makeSdkBatchCall`
+(`b24Sdk.ts`): массив команд → `actions.v2.batch.make` с `isHaltOnError:true`+`returnAjaxResult:true`, конверты
+per-команда **в порядке** входа (с ре-аттачем `total`/`next`), **чанкинг по `SDK_BATCH_MAX`=50**. **Halt-on-error**:
+падение батча ИЛИ любой команды → throw (тот же контракт «джоба падает → чистый ретрай», без тихого пропуска —
+критично для fail-open negativeStages). **Проведено:** `negativeStages` фанит все пер-воронковые `crm.status.list`
+**одним батчем на тип сущности** (было N последовательных вызовов на джобу). Тесты — `b24Sdk`/`portalSdkResolver`/
+`negativeStages`.
+
 **Осталось:**
-1. **Батчинг (`callBatch` / `callList`-паттерн SDK)** для объёмных выборок вместо ручного N+1 (пул оплат, списки);
-   частичное падение батча при записи — опираться на идемпотентность
-   ([#184](https://github.com/bx-shef/client-bank-alfa-by/issues/184)).
+1. **Батчинг остального** где применимо: `crm.item.payment.list` **не батчится** (`ERROR_BATCH_METHOD_NOT_ALLOWED`) —
+   пул оплат остаётся N+1; поиск компании — 2 зависимых вызова (не батчатся). Частичное падение батча при **записи** —
+   опираться на идемпотентность ([#184](https://github.com/bx-shef/client-bank-alfa-by/issues/184)).
 2. **Расширить хранилище токена** полями `B24OAuthParams` (userId/scope/expiresIn/status) — для REST не критично
    (дефолтятся), но полнее для профиля.
 

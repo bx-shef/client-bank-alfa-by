@@ -4,8 +4,10 @@ import type { OAuthCallClient, SdkAjaxResult, SdkPortalDeps } from '../server/ut
 import {
   buildRefreshPersist,
   makePortalSdkCall,
+  makeSdkBatchCall,
   makeSdkRestCall,
   oauthParamsFromToken,
+  SDK_BATCH_MAX,
   sdkPortalDeps,
   tokenFromOAuthParams
 } from '../server/utils/b24Sdk'
@@ -41,17 +43,29 @@ const ajax = (over: Partial<SdkAjaxResult> = {}): SdkAjaxResult => ({
   isSuccess: true, getData: () => ({ result: { items: [] } }), getErrorMessages: () => [], ...over
 })
 
-/** A fake OAuth client recording calls made through it. */
-function fakeClient(res: SdkAjaxResult = ajax()) {
+/** A fake OAuth client recording calls made through it. `batchImpl` lets a test drive the
+ *  batch endpoint; by default the batch echoes one empty-result AjaxResult per command. */
+function fakeClient(
+  res: SdkAjaxResult = ajax(),
+  batchImpl?: (o: { calls: Array<[string, Record<string, unknown>]>, options?: Record<string, unknown> }) => Promise<{ isSuccess: boolean, getErrorMessages: () => string[], getData: () => unknown }>
+) {
   const calls: Array<{ method: string, params?: Record<string, unknown> }> = []
+  const batches: Array<Array<[string, Record<string, unknown>]>> = []
+  const defaultBatch = async (o: { calls: Array<[string, Record<string, unknown>]> }) => {
+    batches.push(o.calls)
+    return { isSuccess: true, getErrorMessages: () => [], getData: () => o.calls.map(() => ajax()) }
+  }
   const client: OAuthCallClient = {
-    actions: { v2: { call: { make: async (o) => {
-      calls.push(o)
-      return res
-    } } } },
+    actions: { v2: {
+      call: { make: async (o) => {
+        calls.push(o)
+        return res
+      } },
+      batch: { make: batchImpl ?? defaultBatch }
+    } },
     setCallbackRefreshAuth: () => {}
   }
-  return { client, calls }
+  return { client, calls, batches }
 }
 
 describe('oauthParamsFromToken', () => {
@@ -169,6 +183,83 @@ describe('makeSdkRestCall', () => {
   it('throws a generic message when the SDK gives no error text', async () => {
     const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => [] }))
     await expect(makeSdkRestCall(client)('crm.deal.get')).rejects.toThrow('B24 REST crm.deal.get failed')
+  })
+})
+
+describe('makeSdkBatchCall (#191 batched fan-out)', () => {
+  it('maps commands to array calls and returns per-command envelopes IN ORDER (with total/next re-attach)', async () => {
+    const seen: Array<Array<[string, Record<string, unknown>]>> = []
+    const { client } = fakeClient(ajax(), async (o) => {
+      seen.push(o.calls)
+      return {
+        isSuccess: true, getErrorMessages: () => [],
+        getData: () => o.calls.map((c, i) => ajax({
+          getData: () => ({ result: { items: [{ id: i, m: c[0] }] } }),
+          getTotal: () => (i + 1) * 10,
+          isMore: () => i === 0
+        }))
+      }
+    })
+    const out = await makeSdkBatchCall(client)([
+      { method: 'crm.status.list', params: { filter: { ENTITY_ID: 'A' } } },
+      { method: 'crm.status.list', params: { filter: { ENTITY_ID: 'B' } } }
+    ])
+    expect(seen[0]).toEqual([
+      ['crm.status.list', { filter: { ENTITY_ID: 'A' } }],
+      ['crm.status.list', { filter: { ENTITY_ID: 'B' } }]
+    ])
+    // `total` re-attached per row; `next` is NOT re-attached in the batch path even when a row's
+    // isMore() is true — batch rows always carry next:0 which the SDK's isMore() misreports.
+    expect(out).toEqual([
+      { result: { items: [{ id: 0, m: 'crm.status.list' }] }, total: 10 },
+      { result: { items: [{ id: 1, m: 'crm.status.list' }] }, total: 20 }
+    ])
+  })
+
+  it('does NOT stamp a spurious `next` on batched envelopes (SDK sets next:0 → isMore() true for every row)', async () => {
+    // Regression guard (5-reviewer finding): a batched AjaxResult always has a numeric `next`
+    // (0 when no more pages), and AjaxResult.isMore() returns isNumber(0)===true, so isMore() is
+    // stuck true for every batched row. The batch envelope must not carry `next` from that.
+    const { client } = fakeClient(ajax(), async o => ({
+      isSuccess: true, getErrorMessages: () => [],
+      getData: () => o.calls.map(() => ajax({ getData: () => ({ result: [] }), isMore: () => true }))
+    }))
+    const out = await makeSdkBatchCall(client)([{ method: 'crm.status.list' }])
+    expect(out[0]).not.toHaveProperty('next')
+  })
+
+  it('defaults missing params to {} in the array call', async () => {
+    const { client, batches } = fakeClient()
+    await makeSdkBatchCall(client)([{ method: 'x' }])
+    expect(batches[0]).toEqual([['x', {}]])
+  })
+
+  it('chunks a >SDK_BATCH_MAX fan-out into multiple batch requests, concatenated in order', async () => {
+    const seen: number[] = []
+    const { client } = fakeClient(ajax(), async (o) => {
+      seen.push(o.calls.length)
+      return { isSuccess: true, getErrorMessages: () => [], getData: () => o.calls.map(c => ajax({ getData: () => ({ id: c[1].n }) })) }
+    })
+    const calls = Array.from({ length: SDK_BATCH_MAX + 3 }, (_, n) => ({ method: 'm', params: { n } }))
+    const out = await makeSdkBatchCall(client)(calls)
+    expect(seen).toEqual([SDK_BATCH_MAX, 3]) // two chunks
+    expect(out).toHaveLength(SDK_BATCH_MAX + 3)
+    expect(out.map(r => (r as { id: number }).id)).toEqual(calls.map((_, n) => n)) // order preserved
+  })
+
+  it('throws when the batch envelope fails (job fails → clean retry)', async () => {
+    const { client } = fakeClient(ajax(), async () => ({ isSuccess: false, getErrorMessages: () => ['batch boom'], getData: () => undefined }))
+    await expect(makeSdkBatchCall(client)([{ method: 'x' }])).rejects.toThrow('batch boom')
+  })
+
+  it('throws when ANY single command fails, even if the batch envelope is ok (no silent drop)', async () => {
+    const { client } = fakeClient(ajax(), async o => ({
+      isSuccess: true, getErrorMessages: () => [],
+      getData: () => o.calls.map((_, i) => i === 1
+        ? ajax({ isSuccess: false, getErrorMessages: () => ['cmd 1 failed'] })
+        : ajax())
+    }))
+    await expect(makeSdkBatchCall(client)([{ method: 'a' }, { method: 'b' }])).rejects.toThrow('cmd 1 failed')
   })
 })
 

@@ -134,10 +134,22 @@ export async function loadStageExclusions(
   call: RestCall,
   opts: { includeSettled?: boolean } = {}
 ): Promise<{ negative: Set<string>, settled: Set<string> }> {
-  const resp = await call('crm.status.list', {
-    filter: { ENTITY_ID: stageEntityId },
-    select: ['STATUS_ID', 'SEMANTICS', 'EXTRA']
-  })
+  return parseStageExclusions(await call('crm.status.list', stageStatusListParams(stageEntityId)), opts)
+}
+
+/** The `crm.status.list` request for one stage-directory `ENTITY_ID` (a status directory
+ *  is a handful of rows — no pagination). Extracted so a batched fan-out (negativeStages)
+ *  can issue the same request for many `ENTITY_ID`s in ONE round-trip. */
+export function stageStatusListParams(stageEntityId: string): Record<string, unknown> {
+  return { filter: { ENTITY_ID: stageEntityId }, select: ['STATUS_ID', 'SEMANTICS', 'EXTRA'] }
+}
+
+/** Parse a `crm.status.list` response into the negative + (optional) settled stage-id sets
+ *  — the pure counterpart of `loadStageExclusions`'s parsing, reused by the batched path. */
+export function parseStageExclusions(
+  resp: Record<string, unknown>,
+  opts: { includeSettled?: boolean } = {}
+): { negative: Set<string>, settled: Set<string> } {
   return {
     negative: extractNegativeStageIds(resp),
     settled: opts.includeSettled ? extractSettledStageIds(resp) : new Set()

@@ -9,7 +9,10 @@ import { createPortalSdkResolver, SDK_CLIENT_TTL_MS } from '../server/utils/port
 vi.mock('@bitrix24/b24jssdk', () => ({
   B24OAuth: vi.fn(function () {
     return {
-      actions: { v2: { call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }) } } },
+      actions: { v2: {
+        call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }) },
+        batch: { make: async (o: { calls: unknown[] }) => ({ isSuccess: true, getErrorMessages: () => [], getData: () => o.calls.map(() => ({ isSuccess: true, getData: () => ({ result: { b: true } }), getErrorMessages: () => [] })) }) }
+      } },
       setCallbackRefreshAuth: () => {}
     }
   })
@@ -159,6 +162,60 @@ describe('createPortalSdkResolver (#191 SDK transport, per-JOB memoisation)', ()
     resolve.evict('M1')
     await resolve('M1')
     expect(vi.mocked(B24OAuth)).toHaveBeenCalledTimes(2) // rebuilt after evict
+  })
+
+  it('batch() shares the SAME memoised client as call() — one construction serves both (#191)', async () => {
+    // Explicit impl (with batch) — earlier tests may have left a batch-less mockImplementation.
+    vi.mocked(B24OAuth).mockReset()
+    vi.mocked(B24OAuth).mockImplementation((function () {
+      return {
+        actions: { v2: {
+          call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }) },
+          batch: { make: async (o: { calls: unknown[] }) => ({ isSuccess: true, getErrorMessages: () => [], getData: () => o.calls.map(() => ({ isSuccess: true, getData: () => ({ result: { b: true } }), getErrorMessages: () => [] })) }) }
+        } },
+        setCallbackRefreshAuth: () => {}
+      }
+    }) as unknown as typeof B24OAuth)
+    const at = 1_000_000
+    const resolve = createPortalSdkResolver(deps(), () => at)
+    const call = await resolve('M1')
+    const batch = await resolve.batch('M1')
+    expect(batch).not.toBeNull()
+    expect(await batch!([{ method: 'crm.status.list', params: {} }, { method: 'crm.status.list', params: {} }]))
+      .toEqual([{ result: { b: true } }, { result: { b: true } }]) // per-command envelopes, in order
+    expect(await call!('crm.item.list', {})).toEqual({ result: { ok: true } })
+    expect(vi.mocked(B24OAuth)).toHaveBeenCalledTimes(1) // call + batch = ONE client
+  })
+
+  it('batch() returns null for a portal with no token', async () => {
+    const loadToken = vi.fn().mockResolvedValue(null)
+    const resolve = createPortalSdkResolver(deps({ loadToken: loadToken as unknown as SdkPortalDeps['loadToken'] }), () => 0)
+    expect(await resolve.batch('ZZZ')).toBeNull()
+  })
+
+  it('a FAILED batch evicts the shared client so the next resolve rebuilds (wedge recovery)', async () => {
+    vi.mocked(B24OAuth).mockReset()
+    let n = 0
+    vi.mocked(B24OAuth).mockImplementation((function () {
+      const first = ++n === 1
+      return {
+        actions: { v2: {
+          call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }) },
+          batch: { make: async () => {
+            if (first) throw new Error('invalid_grant') // client #1 wedged on batch
+            return { isSuccess: true, getErrorMessages: () => [], getData: () => [] }
+          } }
+        } },
+        setCallbackRefreshAuth: () => {}
+      }
+    }) as unknown as typeof B24OAuth)
+    const at = 1000
+    const resolve = createPortalSdkResolver(deps(), () => at) // clock frozen → within TTL
+    const b1 = await resolve.batch('M1')
+    await expect(b1!([{ method: 'x' }])).rejects.toThrow('invalid_grant') // evicts client #1
+    const b2 = await resolve.batch('M1') // within TTL, but #1 evicted → REBUILD
+    expect(vi.mocked(B24OAuth)).toHaveBeenCalledTimes(2)
+    expect(await b2!([{ method: 'x' }])).toEqual([]) // fresh client works
   })
 
   it('caches members independently', async () => {
