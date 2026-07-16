@@ -38,6 +38,9 @@ services:
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       # Redis DSN for the BullMQ pipeline (events → fetch → parse → crm-sync).
       REDIS_URL: redis://redis:6379
+      # crm-sync REST transport (#191): 0 (default) = callRest (advisory-locked), 1 = SDK
+      # (@bitrix24/b24jssdk, built-in rate-limiter). Single container runs crm-sync here.
+      QUEUE_SDK_TRANSPORT: ${QUEUE_SDK_TRANSPORT:-0}
       # Operator login for the service zone (empty PASS ⇒ open; see docs/AUTH.md).
       PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
       PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}

@@ -92,7 +92,10 @@ services:
       # compose up (`docker compose -f docker-compose.prod.yml up -d`), don't hand-edit only
       # this env; verify via /queues or scripts/queue-stats.sh after deploy.
       QUEUE_WORKERS: "0"
-    # Liveness: hit the public /api/health endpoint (busybox wget ships in alpine).
+      # crm-sync REST transport (#191); harmless here (QUEUE_WORKERS=0 → no crm-sync on
+      # backend) but kept for parity / single-container use. The `worker` service is the
+      # one that actually processes crm-sync. 0 (default) = callRest, 1 = SDK.
+      QUEUE_SDK_TRANSPORT: ${QUEUE_SDK_TRANSPORT:-0}
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
@@ -131,6 +134,10 @@ services:
       # Per-worker parallelism for fetch/parse/crm-sync (default 1). Raise with care:
       # crm-sync is REST-bound and B24 limits are per-portal — batch first (docs/QUEUES.md).
       QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-1}
+      # crm-sync REST transport (#191): 0 (default) = our advisory-locked callRest path;
+      # 1 = @bitrix24/b24jssdk (built-in rate-limiter). Opt-in until live-gated — see
+      # docs/QUEUES.md §REST-бюджет. THIS service runs crm-sync, so set it HERE.
+      QUEUE_SDK_TRANSPORT: ${QUEUE_SDK_TRANSPORT:-0}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
