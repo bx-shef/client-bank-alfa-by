@@ -57,8 +57,8 @@ export const SDK_CLIENT_TTL_MS = 60_000
  * `B24OAuth` client for `ttlMs` (per-JOB memoisation, #191). Resolves `null` for a portal with
  * no stored token (uninstalled / demo) and never caches the `null`. `evict(memberId)` drops the
  * cached client so an uninstall cuts over immediately. `now`/`ttlMs` are injectable for tests.
- * The `PortalRestResolver` shape matches the `callRest` resolver so the worker swaps between
- * them by an env flag with no other wiring change.
+ * This is the sole crm-sync transport — the former manual `callRest` resolver and its
+ * `QUEUE_SDK_TRANSPORT` flag were removed (#191).
  */
 export function createPortalSdkResolver(
   deps: SdkPortalDeps,
