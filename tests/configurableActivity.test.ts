@@ -108,8 +108,8 @@ describe('buildConfigurableLayout', () => {
     expect(blocks.purpose.type).toBe('text')
     expect(blocks.amount.type).toBe('withTitle')
     expect(blocks.amount.properties.block.type).toBe('text')
-    // BodyDto marks `logo` required — a valid system code must be present.
-    expect(((layout.body as Record<string, unknown>).logo as { code?: string }).code).toBe('notification')
+    // BodyDto marks `logo` required — a valid system code must be present (live-confirmed).
+    expect(((layout.body as Record<string, unknown>).logo as { code?: string }).code).toBe('document')
   })
 })
 
