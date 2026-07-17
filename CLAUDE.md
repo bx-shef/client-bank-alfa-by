@@ -503,8 +503,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `SDK_BATCH_MAX`=50, halt-on-error (падение батча/любой команды → throw, без тихого пропуска). Проведён в
     `negativeStages` (пер-воронковые `crm.status.list` — одним батчем на тип сущности). Детали — `docs/QUEUES.md` §REST-бюджет.
   - **Настраиваемое дело — единственный носитель операции (#259):** `app/utils/configurableActivity.ts` (чистый
-    билдер `crm.activity.configurable.add` — `layout` из текст-блоков + маркер `originatorId`=app-namespace/
-    `originId`=ключ операции; внешние поля BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
+    билдер `crm.activity.configurable.add` — `layout` (`header` + `text`/`withTitle`-блоки `ContentBlockDto`,
+    сверено с офдокой) + маркер `originatorId`=app-namespace/`originId`=ключ операции; внешние поля
+    BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
     (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп — **поиск маркера в B24**
     `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`; пустой
     маркер → без REST); стора нет, `rememberActivity` убран (маркер пишется атомарно с делом). Прежний

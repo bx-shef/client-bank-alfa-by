@@ -24,11 +24,20 @@ function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   }
 }
 
-/** Read a body text-block's `value` from the layout DTO. */
-function blockValue(layout: Record<string, unknown>, name: string): string {
-  const blocks = ((layout.body as Record<string, unknown>).blocks) as Record<string, { properties: { value: string } }>
-  return blocks[name]!.properties.value
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function body(layout: Record<string, unknown>): Record<string, any> {
+  return (layout.body as any).blocks as Record<string, any>
 }
+/** Read a body block's displayed value: `text` → properties.value; `withTitle` → nested text value. */
+function blockValue(layout: Record<string, unknown>, name: string): string {
+  const b = body(layout)[name]!
+  return b.type === 'withTitle' ? b.properties.block.properties.value : b.properties.value
+}
+/** Read a `withTitle` block's label. */
+function blockTitle(layout: Record<string, unknown>, name: string): string {
+  return body(layout)[name]!.properties.title
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 describe('activityOriginId + ACTIVITY_ORIGINATOR_ID (the dedup marker)', () => {
   it('originId is the operation key (account|docId), at parity with dedupKey', () => {
@@ -66,28 +75,41 @@ describe('buildConfigurableActivity', () => {
 })
 
 describe('buildConfigurableLayout', () => {
-  it('renders the operation details as body text blocks', () => {
+  it('renders the operation details: purpose text + withTitle field rows', () => {
     const layout = buildConfigurableLayout(makeItem())
     expect(blockValue(layout, 'purpose')).toBe('Оплата по счёту №541')
-    // formatMoney (ru-RU) uses a non-breaking thousands separator → normalize whitespace.
-    expect(blockValue(layout, 'amount').replace(/\s/g, ' ')).toBe('Приход: 1 840,00 BYN')
-    expect(blockValue(layout, 'document')).toContain('Документ: #541 от 26.06.2026')
-    expect(blockValue(layout, 'counterparty')).toContain('Контрагент: ООО «Ромашка»')
-    expect(blockValue(layout, 'counterparty')).toContain('УНП: 191234567')
-    expect(blockValue(layout, 'counterparty')).toContain('Банк: Альфа-Банк')
+    // amount is a withTitle row: label = направление, value = сумма (non-breaking sep → normalize)
+    expect(blockTitle(layout, 'amount')).toBe('Приход')
+    expect(blockValue(layout, 'amount').replace(/\s/g, ' ')).toBe('1 840,00 BYN')
+    expect(blockTitle(layout, 'document')).toBe('Документ')
+    expect(blockValue(layout, 'document')).toBe('#541 от 26.06.2026')
+    expect(blockValue(layout, 'counterparty')).toBe('ООО «Ромашка»')
+    expect(blockValue(layout, 'unp')).toBe('191234567')
+    expect(blockValue(layout, 'account')).toBe('BY24X')
+    expect(blockValue(layout, 'bank')).toBe('Альфа-Банк')
   })
-  it('shows a расход with the right verb and sign context', () => {
+  it('shows a расход with the right verb in the header and the amount label', () => {
     const layout = buildConfigurableLayout(makeItem({ direction: 'debit', amount: 500 }))
-    expect(blockValue(layout, 'amount').replace(/\s/g, ' ')).toBe('Расход: 500,00 BYN')
+    expect(blockTitle(layout, 'amount')).toBe('Расход')
+    expect(blockValue(layout, 'amount').replace(/\s/g, ' ')).toBe('500,00 BYN')
     expect((layout.header as Record<string, unknown>).title).toContain('Расход')
   })
-  it('omits the Банк line when absent', () => {
+  it('omits the bank block when the counterparty has no bank', () => {
     const layout = buildConfigurableLayout(makeItem({ counterparty: { name: 'X', unp: '1', account: 'BY2' } }))
-    expect(blockValue(layout, 'counterparty')).not.toContain('Банк:')
+    expect(body(layout).bank).toBeUndefined()
   })
-  it('renders the document line without a number when docNum is absent', () => {
+  it('renders the document value without a number when docNum is absent', () => {
     const layout = buildConfigurableLayout(makeItem({ docNum: undefined }))
-    expect(blockValue(layout, 'document')).toBe('Документ от 26.06.2026')
+    expect(blockValue(layout, 'document')).toBe('от 26.06.2026')
+  })
+  it('uses valid ContentBlockDto types (text / withTitle wrapping text) + required body.logo', () => {
+    const layout = buildConfigurableLayout(makeItem())
+    const blocks = body(layout)
+    expect(blocks.purpose.type).toBe('text')
+    expect(blocks.amount.type).toBe('withTitle')
+    expect(blocks.amount.properties.block.type).toBe('text')
+    // BodyDto marks `logo` required — a valid system code must be present.
+    expect(((layout.body as Record<string, unknown>).logo as { code?: string }).code).toBe('notification')
   })
 })
 
@@ -97,19 +119,19 @@ describe('BB-neutralization of payer-controlled fields (configurable layout)', (
     docNum: '5[b]41',
     counterparty: { name: 'ООО [user=1]Ромашка[/user]', unp: '19[1]', account: 'BY[24]X', bank: 'Аль[b]фа' }
   })
-  it('neutralizes brackets in purpose/document/counterparty and the header title', () => {
+  it('neutralizes brackets in every payer-controlled field and the header title', () => {
     const layout = buildConfigurableLayout(evil)
     expect(blockValue(layout, 'purpose')).toBe('Оплата ［url=http://evil］тут［/url］')
     expect(blockValue(layout, 'document')).toContain('#5［b］41')
-    expect(blockValue(layout, 'counterparty')).toContain('ООО ［user=1］Ромашка［/user］')
-    expect(blockValue(layout, 'counterparty')).toContain('УНП: 19［1］')
-    expect(blockValue(layout, 'counterparty')).toContain('BY［24］X')
-    // no raw external bracket survives anywhere in the rendered blocks
-    const all = [
-      (layout.header as Record<string, unknown>).title as string,
-      blockValue(layout, 'purpose'), blockValue(layout, 'amount'),
-      blockValue(layout, 'document'), blockValue(layout, 'counterparty')
-    ].join('\n')
+    expect(blockValue(layout, 'counterparty')).toBe('ООО ［user=1］Ромашка［/user］')
+    expect(blockValue(layout, 'unp')).toBe('19［1］')
+    expect(blockValue(layout, 'account')).toBe('BY［24］X')
+    expect(blockValue(layout, 'bank')).toBe('Аль［b］фа')
+    // no raw external bracket survives anywhere in the rendered blocks (labels are our own)
+    const all = ['purpose', 'amount', 'document', 'counterparty', 'unp', 'account', 'bank']
+      .map(n => blockValue(layout, n))
+      .concat((layout.header as Record<string, unknown>).title as string)
+      .join('\n')
     expect(all).not.toMatch(/\[|\]/)
   })
 })
