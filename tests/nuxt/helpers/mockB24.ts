@@ -13,6 +13,9 @@ export interface MockB24Options {
   setTitle?: ReturnType<typeof vi.fn>
   /** Lets a test make `$b24.actions.v2.batch.make()` reject (error/retry path). */
   batchMake?: ReturnType<typeof vi.fn>
+  /** Stable spy for `$b24.actions.v2.call.make()` (single REST call, e.g. the
+   *  automation-trigger registration on install, #79). */
+  callMake?: ReturnType<typeof vi.fn>
 }
 
 /**
@@ -27,7 +30,10 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
   const frame = {
     auth: { getAuthData: () => ({ domain: 'example.bitrix24.by' }), isAdmin: opts.isAdmin ?? true },
     parent: { setTitle: opts.setTitle ?? vi.fn(async () => {}), fitWindow: vi.fn(async () => {}) },
-    actions: { v2: { batch: { make: opts.batchMake ?? vi.fn(async () => ({ getData: () => ({}) })) } } },
+    actions: { v2: {
+      batch: { make: opts.batchMake ?? vi.fn(async () => ({ getData: () => ({}) })) },
+      call: { make: opts.callMake ?? vi.fn(async () => ({ isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] })) }
+    } },
     installFinish: opts.installFinish ?? vi.fn(async () => {})
   } as unknown as B24Frame
   return {

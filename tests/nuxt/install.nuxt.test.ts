@@ -5,6 +5,11 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 const replaceSpy = vi.hoisted(() => vi.fn())
 const finishSpy = vi.hoisted(() => vi.fn(async () => {}))
 const titleSpy = vi.hoisted(() => vi.fn(async () => {}))
+const callSpy = vi.hoisted(() => vi.fn(async (_arg?: unknown) => ({
+  isSuccess: true,
+  getData: () => ({ result: true }),
+  getErrorMessages: () => [] as string[]
+})))
 const batchSpy = vi.hoisted(() => vi.fn(async (_arg?: unknown) => ({
   isSuccess: true,
   getData: () => ({ scope: ['crm'], eventList: [] as { event: string, handler: string }[] }),
@@ -24,7 +29,8 @@ vi.mock('~/composables/useB24', async () => {
       isInit: () => state.inFrame,
       installFinish: finishSpy,
       setTitle: titleSpy,
-      batchMake: batchSpy
+      batchMake: batchSpy,
+      callMake: callSpy
     })
   }
 })
@@ -39,10 +45,11 @@ const defaultBatch = async (_arg?: unknown) => ({
 
 beforeEach(() => {
   vi.useFakeTimers();
-  [replaceSpy, finishSpy, titleSpy, batchSpy].forEach(s => s.mockClear())
+  [replaceSpy, finishSpy, titleSpy, batchSpy, callSpy].forEach(s => s.mockClear())
   // mockClear keeps implementations, so restore the default (a test may have
   // installed a failure-aware mockImplementation).
   batchSpy.mockImplementation(defaultBatch)
+  callSpy.mockImplementation(async () => ({ isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] }))
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -99,6 +106,55 @@ describe('install.vue — inside a B24 frame', () => {
     const bindOrder = batchSpy.mock.invocationCallOrder[bindIndex]!
     const finishOrder = finishSpy.mock.invocationCallOrder[0]!
     expect(bindOrder).toBeLessThan(finishOrder)
+  })
+
+  it('registers the app automation trigger (crm.automation.trigger.add) before finishing (#79)', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    // A single call.make with the trigger registration was issued.
+    type CallArg = { method: string, params: Record<string, unknown> }
+    const regIndex = callSpy.mock.calls.findIndex((call) => {
+      const arg = (call as unknown[])[0] as CallArg
+      return arg?.method === 'crm.automation.trigger.add'
+    })
+    expect(regIndex).toBeGreaterThanOrEqual(0)
+    const regArg = (callSpy.mock.calls[regIndex]![0]) as CallArg
+    expect(regArg.params.CODE).toBe('cba_payment_received')
+    expect(String(regArg.params.NAME)).not.toHaveLength(0)
+    // Runs in application context before installFinish.
+    expect(finishSpy).toHaveBeenCalled()
+    const regOrder = callSpy.mock.invocationCallOrder[regIndex]!
+    expect(regOrder).toBeLessThan(finishSpy.mock.invocationCallOrder[0]!)
+  })
+
+  it('trigger registration is BEST-EFFORT: a rejected promise does not block the install', async () => {
+    // Non-admin installer / non-commercial plan → the API rejects trigger.add. The
+    // install must still finish (the token-delivering event.bind already succeeded).
+    callSpy.mockRejectedValue(new Error('Access denied! Admin permissions required'))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled() // install NOT blocked
+    expect(wrapper.text()).not.toContain('Ошибка установки')
+  })
+
+  it('trigger registration is BEST-EFFORT: a resolved FAILED Result does not block the install (realistic B24 failure)', async () => {
+    // B24 usually returns a failed Result rather than throwing — registerTrigger reads
+    // res.isSuccess=false and records the error string, never rethrows. Install still finishes.
+    callSpy.mockImplementation(async () => ({
+      isSuccess: false,
+      getData: () => ({ result: false }),
+      getErrorMessages: () => ['Access denied! Application context required']
+    }))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    // The call WAS made and returned a failed Result (not a throw); install still finishes.
+    const madeReg = callSpy.mock.calls.some((c) => {
+      const arg = (c as unknown[])[0] as { method?: string }
+      return arg?.method === 'crm.automation.trigger.add'
+    })
+    expect(madeReg).toBe(true)
+    expect(finishSpy).toHaveBeenCalled() // install NOT blocked by the failed Result
+    expect(wrapper.text()).not.toContain('Ошибка установки')
   })
 
   it('surfaces a retryable error and does NOT finish when event.bind fails', async () => {

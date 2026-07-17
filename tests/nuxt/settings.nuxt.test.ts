@@ -182,4 +182,28 @@ describe('settings page', () => {
     await nextTick()
     expect('invoicePaidStageId' in useChatSettings().settings.allocation).toBe(false) // blank → key removed
   })
+
+  it('trigger-code field appears only when auto-distribution is on and shows the canonical CODE (#79)', async () => {
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="trigger-code"]').exists()).toBe(false) // hidden while OFF
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="trigger-code"]').exists()).toBe(true)
+    // The canonical code the app registers at install is surfaced so the admin knows what to enter.
+    expect(wrapper.find('[data-testid="trigger-code-field"]').text()).toContain('cba_payment_received')
+  })
+
+  it('typing a trigger code sets allocation.triggerCode; clearing removes it (#79 UI wiring)', async () => {
+    const wrapper = await mountReady()
+    useChatSettings().settings.autoDistribute = true
+    await nextTick()
+    const input = wrapper.find('input[data-testid="trigger-code"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('  cba_payment_received ')
+    await nextTick()
+    expect(useChatSettings().settings.allocation.triggerCode).toBe('cba_payment_received') // trimmed
+    await input.setValue('   ')
+    await nextTick()
+    expect('triggerCode' in useChatSettings().settings.allocation).toBe(false) // blank → key removed
+  })
 })

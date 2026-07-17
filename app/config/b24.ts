@@ -35,3 +35,19 @@ export const B24_EVENT_HANDLER_PATH = '/api/b24/events'
  * there is no separate handler-URL field in the local-app card.
  */
 export const B24_BOUND_EVENTS = ['ONAPPINSTALL', 'ONAPPUNINSTALL'] as const
+
+/**
+ * The app's own CRM automation trigger (#79). Registered at install via
+ * `crm.automation.trigger.add` (idempotent — re-adding the same CODE just updates
+ * NAME), so a portal admin can attach it to an automation rule («деньги пришли»).
+ * When a payment is allocated to a deal/smart-process, the worker fires THIS CODE
+ * (`crm.automation.trigger.execute`) — the admin's rule then does the routing.
+ *
+ * `code` matches the API mask `[a-z0-9.\-_]`. It is the value a portal admin puts
+ * into the settings field `allocation.triggerCode` to arm firing (kept a settings
+ * value, not hard-wired, so a portal can point at its own trigger if it prefers).
+ */
+export const B24_PAYMENT_TRIGGER = {
+  code: 'cba_payment_received',
+  name: 'Импорт выписки: платёж получен'
+} as const

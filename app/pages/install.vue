@@ -2,8 +2,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
-import { B24_BOUND_EVENTS, B24_EVENT_HANDLER_PATH } from '~/config/b24'
+import { B24_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
+import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
@@ -35,6 +36,9 @@ const installError = ref('')
 // True while an install attempt is in flight — guards the Retry button.
 const isRunning = ref(false)
 const caption = ref('Инициализация…')
+// Best-effort automation-trigger registration outcome (#79): '' = not attempted,
+// 'ok' = registered, otherwise a short error string for the diagnostics panel.
+const triggerRegistered = ref('')
 
 interface InitData {
   appInfo?: { ID?: number, CODE?: string, VERSION?: string }
@@ -67,7 +71,9 @@ const diagnostics = computed(() => {
     appInfo: initData.value.appInfo,
     granted,
     missing,
-    events: initData.value.eventList ?? []
+    events: initData.value.eventList ?? [],
+    // Best-effort automation-trigger registration (#79): '' hides the row.
+    trigger: triggerRegistered.value
   }
 })
 
@@ -106,6 +112,30 @@ async function bindEvents(): Promise<void> {
   if (bind.length) {
     const res = await $b24.actions.v2.batch.make({ calls: bind })
     if (!res.isSuccess) throw new Error(`event.bind не удался: ${res.getErrorMessages().join('; ')}`)
+  }
+}
+
+/** Registers the app's «деньги пришли» automation trigger (#79) so a portal admin
+ *  can attach it to an automation rule; the worker later fires the same CODE. Runs
+ *  in the install iframe (application context — required by the method) and is
+ *  BEST-EFFORT: unlike event.bind (which delivers the token), the trigger is a
+ *  convenience for the auto-distribute feature, so a failure (non-admin installer,
+ *  non-commercial plan, `crm.automation.*` unavailable) must NOT block the install —
+ *  it is logged + surfaced in diagnostics, never thrown. `crm.automation.trigger.add`
+ *  is idempotent (re-adding the same CODE just updates NAME) and can't be batched. */
+async function registerTrigger(): Promise<void> {
+  const call = buildTriggerRegisterCall(B24_PAYMENT_TRIGGER.code, B24_PAYMENT_TRIGGER.name)
+  if (!call) return // fail-safe: never send a malformed registration
+  try {
+    const $b24 = b24Instance.getOrThrow()
+    const res = await $b24.actions.v2.call.make({ method: call.method, params: call.params })
+    triggerRegistered.value = res.isSuccess
+      ? 'ok'
+      : `ошибка: ${res.getErrorMessages().join('; ')}`
+  } catch (error: unknown) {
+    // Swallowed on purpose — the core install (token delivery) already succeeded.
+    console.warn('[install] trigger.add', error)
+    triggerRegistered.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
   }
 }
 
@@ -152,6 +182,10 @@ async function runInstall() {
     // Register the backend event handlers before finishing — see bindEvents().
     caption.value = 'Регистрация обработчика событий…'
     await bindEvents()
+
+    // Register the app's automation trigger (best-effort, never blocks — see registerTrigger()).
+    caption.value = 'Регистрация триггера автоматизации…'
+    await registerTrigger()
 
     caption.value = 'Завершение установки…'
     progressColor.value = 'air-primary-success'
@@ -229,6 +263,10 @@ onMounted(runInstall)
               <span class="break-all">{{ diagnostics.targetOrigin }}</span>
               <span class="text-(--ui-color-base-3)">Обработчик событий:</span>
               <span class="break-all">{{ diagnostics.eventHandler }}</span>
+              <template v-if="diagnostics.trigger">
+                <span class="text-(--ui-color-base-3)">Триггер автоматизации:</span>
+                <span class="break-all">{{ diagnostics.trigger }}</span>
+              </template>
               <template v-if="diagnostics.appInfo">
                 <span class="text-(--ui-color-base-3)">App:</span>
                 <span>{{ diagnostics.appInfo.CODE }} (id {{ diagnostics.appInfo.ID }}, v{{ diagnostics.appInfo.VERSION }})</span>
