@@ -58,6 +58,22 @@ export interface IntentContext {
  *  (`deal-field`, §4). The deal's entityTypeId is the fixed CRM constant (2). */
 export const DEAL_FIELD_CONFIG_KEY = 'deal-field'
 
+/** Config key for the SMART-PROCESS entityTypeId (`smart-id`/`smart-field`, §4). Unlike a
+ *  deal (fixed 2), a custom smart process's entityTypeId is portal-specific, so it must be
+ *  configured. Stored as a string in `configFields`; parsed to a positive integer. */
+export const SMART_ENTITY_CONFIG_KEY = 'smart-entity'
+/** Config key for the smart-process user-field the number lives in (`smart-field`, §4). */
+export const SMART_FIELD_CONFIG_KEY = 'smart-field'
+
+/** Parse a configured entityTypeId (`configFields` value, a string) to a positive integer,
+ *  or `null` when absent/blank/non-numeric — so a misconfigured value fails closed
+ *  (`unsupported`) instead of querying a bogus entity type. */
+export function parseConfiguredEntityTypeId(raw: string | undefined): number | null {
+  if (!raw) return null
+  const n = Number(String(raw).trim())
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
 export type IntentStatus = 'resolved' | 'unsupported'
 
 /** The outcome of dispatching one recognized intent. `candidates` is `[]` both when
@@ -203,11 +219,24 @@ export async function resolveIntentCandidates(
       const found = await deps.findCandidateByField('deal', DEAL_ENTITY_TYPE_ID, fieldName, intent.value, opts, call)
       return { ...base, status: 'resolved', candidates: found ? [found] : [] }
     }
-    case 'smart-id':
-    case 'smart-field':
-      // Need the smart process's portal-specific entityTypeId from «карта сопоставления»
-      // (the smart-process upstream slice — item 3). Deal-field above needs only a field name.
-      return unsupported(intent, `${intent.kind}: needs configured entityTypeId (smart-process slice)`)
+    case 'smart-id': {
+      // The value IS the smart-process element's own id. Unlike a deal, the smart process's
+      // entityTypeId is portal-specific → read it from config; missing/invalid ⇒ unsupported.
+      const entityTypeId = parseConfiguredEntityTypeId(ctx.configFields?.[SMART_ENTITY_CONFIG_KEY])
+      if (!entityTypeId) return unsupported(intent, 'smart-id: no configured entityTypeId (configFields["smart-entity"])')
+      const found = await deps.findCandidateById('smart-process', entityTypeId, intent.value, opts, call)
+      return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+    }
+    case 'smart-field': {
+      // Search the smart process by a CONFIGURED user-field. Needs BOTH the portal-specific
+      // entityTypeId AND the field name from «карта сопоставления»; either missing ⇒ unsupported.
+      const entityTypeId = parseConfiguredEntityTypeId(ctx.configFields?.[SMART_ENTITY_CONFIG_KEY])
+      const fieldName = ctx.configFields?.[SMART_FIELD_CONFIG_KEY]
+      if (!entityTypeId) return unsupported(intent, 'smart-field: no configured entityTypeId (configFields["smart-entity"])')
+      if (!fieldName) return unsupported(intent, 'smart-field: no configured field (configFields["smart-field"])')
+      const found = await deps.findCandidateByField('smart-process', entityTypeId, fieldName, intent.value, opts, call)
+      return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+    }
     case 'document-number':
       // Document bridge needs a live-verified template+document first (#184-adjacent).
       return unsupported(intent, 'document-number: document bridge needs live-verify')

@@ -642,9 +642,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       стадий). **`deal-field` (`by-config-field`, §4) — подключён:** имя поля берётся из `ctx.configFields['deal-field']`
       («карта сопоставления» настроек), сущность — сделка (`entityTypeId` фикс. 2), поиск `findCandidateByField`
       (`crm.item.list` фильтр `{[поле]:значение, companyId}`, IDOR-скоуп; имя поля валидируется маской `[A-Za-z][A-Za-z0-9_]*`
-      — нет инъекции ключа фильтра); нет настроенного поля ⇒ `unsupported`. Остальные — `unsupported` с `reason`
-      (не роняем интент молча): `smart-id`/`smart-field` (нужен портало-специфичный `entityTypeId` — слайс смарт-процесса),
-      `document-number` (гейт live-verify).
+      — нет инъекции ключа фильтра); нет настроенного поля ⇒ `unsupported`. **`smart-id`/`smart-field` — подключены:**
+      портало-специфичный `entityTypeId` берётся из `configFields['smart-entity']` (`parseConfiguredEntityTypeId` —
+      положит. целое, иначе fail-closed `unsupported`); `smart-id` → `findCandidateById('smart-process', <etid>, value)`,
+      `smart-field` → `findCandidateByField('smart-process', <etid>, configFields['smart-field'], value)` (нужны оба).
+      Кандидат несёт `entityTypeId` (для `OWNER_TYPE_ID` триггера, #79). Остальные — `unsupported` с `reason` (не роняем
+      интент молча): `document-number` (гейт live-verify).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
       (гоняет каждый `IdentifierKind` через диспетчер). **Батч-резолвер `resolveIntentsForOp(intents, ctx, call, deps)`**
