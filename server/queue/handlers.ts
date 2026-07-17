@@ -12,7 +12,7 @@ import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
-import { summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
+import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
 import type { AllocationMutationOpts } from '../../app/utils/allocationMutation'
 import type { IntentResolution } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
@@ -98,6 +98,16 @@ export interface HandlerDeps {
    *  targets deal/smart-process). Runs BEFORE the fact is recorded, so a thrown REST error
    *  leaves no fact and the retry re-attempts. */
   applyAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string, opts?: AllocationMutationOpts) => Promise<boolean>
+  /** Fire the portal's «деньги пришли» automation TRIGGER for a decided trigger target
+   *  (deal, #79) via `crm.automation.trigger.execute` with the configured `code`. Called ONLY
+   *  when `autoDistribute` is on, a `triggerCode` is configured, and no fact existed yet.
+   *  BEST-EFFORT — a trigger SIGNALS money arrived (it doesn't move money), so this MUST NOT
+   *  throw: a transient OR permanent-config failure (unregistered CODE, unsupported smart-
+   *  process, missing token) is swallowed and returns `false`. Returns whether the trigger
+   *  actually FIRED; the handler records the write-once fact ONLY on a fire. SINGLE-SHOT: the
+   *  dedup marker is still written this run, so a non-fire is NOT retried on a later poll
+   *  (durable trigger retry — a follow-up). */
+  applyTrigger: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<boolean>
   /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
    *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
@@ -188,9 +198,10 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  exact match and no trigger (partial/group payment → «очередь ручного разбора»).
  *  `allocated` = decided `allocate` ops whose fact was FRESHLY recorded this run (#184,
  *  write-once — a redelivery does not re-count). `distributed` = ops that ALSO applied a
- *  portal mutation this run (`crm.item.payment.pay`) — only when the `autoDistribute` gate
- *  is on (§2 mutation slice, #109); a subset of `allocated` (unsupported target kinds
- *  record the fact but apply nothing). Gate off ⇒ `distributed` stays 0 (fact-only).
+ *  portal mutation this run (`crm.item.payment.pay`/`crm.item.update`) OR fired an automation
+ *  TRIGGER (`crm.automation.trigger.execute`, deal/smart-process, #79) — only when the
+ *  `autoDistribute` gate is on (§2 mutation slice, #109); a subset of `allocated` (unsupported
+ *  amount target kinds record the fact but apply nothing). Gate off ⇒ `distributed` stays 0 (fact-only).
  *  `credits`/`debits` = приход/расход split of the processed ops (for the status summary).
  *  An unmatched op writes nothing (no marker), so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
@@ -327,6 +338,37 @@ export async function handleCrmSyncJob(
           } else if (await deps.recordAllocation(item, target, job.memberId)) {
             // Gate OFF ⇒ fact-only (write-once), no portal mutation. Unchanged v1 behaviour.
             allocated++
+          }
+        }
+        // Trigger targets (#79): a deal/smart-process candidate fires the portal's «деньги
+        // пришли» automation trigger UNCONDITIONALLY (not amount-gated) — separate from the
+        // amount `allocate` above (its `decision.target` is the amount target only). Gated on
+        // the opt-in `autoDistribute` + a configured `triggerCode`. For each DISTINCT trigger
+        // target (kind+id): the `hasAllocationFact` pre-check dedups within this run; `applyTrigger`
+        // is BEST-EFFORT (never throws — a trigger signals, it doesn't move money) and the write-once
+        // fact is recorded ONLY on a confirmed FIRE. `allocated`+`distributed` bump together on a
+        // fired trigger (an un-fired one records nothing).
+        // SINGLE-SHOT (important): the trigger is attempted ONCE — on this first processing of the
+        // op with a matched company. `writeActivity` below persists the B24 dedup marker regardless
+        // of trigger outcome, so a later redelivery/poll is `continue`d at the top gate and never
+        // re-reaches this loop. Hence a first-attempt miss (transient error swallowed by best-effort,
+        // OR a `triggerCode` set but not yet registered → `applyTrigger` returns false) is NOT
+        // retried — the fire is lost, not self-healed. This is the accepted v1 semantic (CODE is
+        // meant to be registered at install, before ops flow); durable trigger retry is a follow-up.
+        const triggerCode = settings?.allocation?.triggerCode
+        if (autoDistribute && triggerCode) {
+          const seen = new Set<string>()
+          for (const t of candidates) {
+            if (!isTriggerTarget(t.kind)) continue
+            const targetKey = `${t.kind}:${t.id}` // not the op dedupKey — distinct trigger target
+            if (seen.has(targetKey)) continue
+            seen.add(targetKey)
+            if (await deps.hasAllocationFact(item, t, job.memberId)) continue
+            const fired = await deps.applyTrigger(item, t, job.memberId, triggerCode)
+            if (fired && await deps.recordAllocation(item, t, job.memberId)) {
+              allocated++
+              distributed++
+            }
           }
         }
         if ((summary.outcome === 'ambiguous' || summary.outcome === 'manual') && errorChat?.dialogId) {

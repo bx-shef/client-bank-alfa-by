@@ -431,8 +431,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       успешную запись (REST-ошибка бросается ДО факта → чистый ретрай). Гейт OFF ⇒ поведение прежнее (только факт).
       Живой прогон — `pnpm mutate:test` (dry-run по умолчанию, `--apply` пишет, `--revert` откат `sale.payment.update PAID=N`);
       стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
-      Остаётся follow-up: **триггеры** deal/smart-process (их факт пока не
-      пишется) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
+      **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
+      фаерится `crm.automation.trigger.execute` за гейтом `autoDistribute`+`triggerCode`, write-once факт на firing).
+      Остаётся follow-up: регистрация `CODE` на установке + live-verify firing + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -525,9 +526,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `{result:true}`, `crm.item.update` → `{result:{item}}` — оба = `applied`, подтверждено вживую); unsupported-цель →
     без REST-вызова; REST-ошибка **пробрасывается** (джоба ретраится). Тесты. **Транспорт триггера — добавлен:**
     `executeTriggerViaRest(target, call, {triggerCode})` → `crm.automation.trigger.execute` → `{result:true}` (тем же
-    билдером; unsupported/нет CODE → без REST-вызова, ошибка пробрасывается). **В hot-path пока НЕ подключён — блокер #79**
-    (нужен OAuth-контекст приложения + регистрация CODE на установке + live-verify на реальном портале). CODE хранится в
-    настройках — `allocation.triggerCode` (маска, fail-safe).
+    билдером; unsupported/нет CODE → без REST-вызова, ошибка пробрасывается). **В hot-path подключён — best-effort (#79):**
+    в `crm-sync` за гейтом `autoDistribute`+`triggerCode` вызывается через OAuth-резолвер воркера (контекст приложения
+    есть); сбой (в т.ч. незарегистрированный CODE) глотается — триггер сигналит, факт пишется только на firing, само-
+    заживает. Осталось: регистрация CODE на установке (`crm.automation.trigger.add`) + live-verify на OAuth-портале.
+    CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
@@ -636,8 +639,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (`allocationMutation.ts` билдер + `allocationMutationWrite.ts` транспорт, конверт-aware applied-детект,
       идемпотентный порядок mutation-before-fact),
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
-      (deal/smart-process): билдер+транспорт+настройка `triggerCode` готовы** (`buildTriggerExecution`/`executeTriggerViaRest`,
-      тесты), но **в hot-path не подключены — блокер #79** (нужен OAuth-контекст + регистрация CODE на установке + live-verify).
+      (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
+      за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на
+      firing; сбой глотается (single-shot — промах не пере-пробуется)). Осталось: регистрация CODE на установке + live-verify на OAuth-портале.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
@@ -685,10 +689,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`{result:true}` vs `{result:{item}}`), идемпотентный порядок mutation-before-fact,
     live-verify `pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте). **Триггеры deal/smart-process —
     чистый билдер `buildTriggerExecution` + транспорт `executeTriggerViaRest` + настройка `allocation.triggerCode`
-    (маска `[a-z0-9.\-_]`, fail-safe) — сделаны** (тесты); **проводка в hot-path + запись факта триггера — НЕ сделаны,
-    блокер #79:** `crm.automation.trigger.execute` требует **контекста приложения** (webhook тестового портала его не
-    вызовет) + предварительно **зарегистрированный** `CODE` (`crm.automation.trigger.add` на установке) → live-verify
-    только на OAuth-портале (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
+    (маска `[a-z0-9.\-_]`, fail-safe) + **проводка в hot-path (best-effort) + запись факта триггера — сделаны (#79)**:
+    за гейтом `autoDistribute`+`triggerCode` распознанная trigger-цель фаерит `crm.automation.trigger.execute` через
+    OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
+    kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
+    глотается (single-shot — промах не пере-пробуется). **Осталось:** регистрация `CODE` на установке (`crm.automation.trigger.add`) + live-verify
+    firing на OAuth-портале (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
