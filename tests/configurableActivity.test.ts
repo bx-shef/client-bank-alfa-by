@@ -102,7 +102,7 @@ describe('buildConfigurableLayout', () => {
     const layout = buildConfigurableLayout(makeItem({ docNum: undefined }))
     expect(blockValue(layout, 'document')).toBe('от 26.06.2026')
   })
-  it('uses valid ContentBlockDto types (text / withTitle wrapping text) + required body.logo', () => {
+  it('uses valid ContentBlockDto types (text / withTitle wrapping text) + required body.logo + required icon', () => {
     const layout = buildConfigurableLayout(makeItem())
     const blocks = body(layout)
     expect(blocks.purpose.type).toBe('text')
@@ -110,6 +110,32 @@ describe('buildConfigurableLayout', () => {
     expect(blocks.amount.properties.block.type).toBe('text')
     // BodyDto marks `logo` required — a valid system code must be present (live-confirmed).
     expect(((layout.body as Record<string, unknown>).logo as { code?: string }).code).toBe('document')
+    // LayoutDto marks top-level `icon` required — API rejects a layout without it (live-confirmed).
+    expect((layout.icon as { code?: string }).code).toBe('sum')
+  })
+})
+
+describe('buildConfigurableLayout — empty external fields dropped (required text.value guard)', () => {
+  it('omits the УНП block for a private-individual payer (no УНП)', () => {
+    const layout = buildConfigurableLayout(makeItem({ counterparty: { name: 'Иван Иванов', unp: '', account: 'BY99X' } }))
+    expect(body(layout).unp).toBeUndefined()
+    expect(blockValue(layout, 'counterparty')).toBe('Иван Иванов')
+    expect(blockValue(layout, 'account')).toBe('BY99X')
+  })
+  it('omits the purpose block when назначение is empty (fee/interest row)', () => {
+    const layout = buildConfigurableLayout(makeItem({ purpose: '' }))
+    expect(body(layout).purpose).toBeUndefined()
+    expect(blockValue(layout, 'amount').replace(/\s/g, ' ')).toBe('1 840,00 BYN')
+  })
+  it('omits the counterparty block when the name is empty', () => {
+    const layout = buildConfigurableLayout(makeItem({ counterparty: { name: '', unp: '190', account: 'BY1' } }))
+    expect(body(layout).counterparty).toBeUndefined()
+    expect(blockValue(layout, 'unp')).toBe('190')
+  })
+  it('never emits an empty layout — amount + document survive when every external field is blank', () => {
+    const layout = buildConfigurableLayout(makeItem({ purpose: '', docNum: undefined, counterparty: { name: '', unp: '', account: '' } }))
+    expect(Object.keys(body(layout)).sort()).toEqual(['amount', 'document'])
+    expect(blockValue(layout, 'document')).toBe('от 26.06.2026')
   })
 })
 
