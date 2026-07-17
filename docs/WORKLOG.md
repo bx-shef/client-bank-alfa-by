@@ -54,7 +54,8 @@
   `trigger-register-test.ts` расширен флагом `--fire` (тот же транспорт crm-sync).
 - **Прочее CRM-ядро — LIVE-VERIFIED:** `pnpm verify:109` — 21/21 (companyLookup/стадии/invoiceLookup/IDOR/
   resolveAllocation/ambiguous/filterByAccountNumber); `pnpm sdk:crm:test` — OAuth SDK-транспорт (#191) profile+
-  18 смарт-счетов; `pnpm activity:test --company 1 --apply` — `configurable.add`+B24-дедуп round-trip (#259).
+  18 смарт-счетов; `pnpm activity:test --company 1 --apply` — `configurable.add`+B24-дедуп round-trip (#259);
+  `pnpm verify:chat` — стадия 6 чат-уведомления (`im.message.add` msgId=57, BB-нейтрализация, сообщение удалено) 6/6.
 - **IDOR-гейт СП снят:** `crm.item.fields` СП 1044 содержит `companyId` (тип `crm_company`) → company-скоуп держится.
 - **Осталось (за владельцем):** банк-креды Альфа/Приор (`.env.alfabankby`/`.env.priorbank`) для живого online-fetch —
   B24-креды их не заменяют; правило автоматизации на CODE (реакция на сигнал).
