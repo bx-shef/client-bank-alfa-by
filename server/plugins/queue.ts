@@ -28,8 +28,8 @@ export default defineNitroPlugin((nitroApp) => {
   const workers: Worker[] = []
 
   if (role.workers && deps) {
-    workers.push(...startThroughputWorkers(deps, { concurrency: role.concurrency }))
-    console.info('[queue] throughput workers started (fetch/parse/crm-sync, concurrency=%d)', role.concurrency)
+    workers.push(...startThroughputWorkers(deps, { concurrency: role.concurrency, fetchRate: role.fetchRate }))
+    console.info('[queue] throughput workers started (fetch/parse/crm-sync, concurrency=%d, fetch-rate=%d/%dms)', role.concurrency, role.fetchRate.max, role.fetchRate.duration)
   } else if (!role.workers) {
     // Loud: this instance won't drain fetch/parse/crm-sync. A worker container MUST be
     // running (docker-compose.prod.yml `worker`), else webhooks/imports pile up silently
