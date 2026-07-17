@@ -558,7 +558,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      счёта** админ указывает при подключении (`accountKey`, валидируется `isValidAccountKey` — алфанум ≤64) →
      едет в подписанном state, чтобы callback сохранил токен под ним (= `number=` для опроса). Чистое ядро
      `bankConnectStart.ts` (DI, тесты) + тонкий роут.
-   - **✅ A7b-2 (callback) — сделано** (PR #NNN): `GET /api/bank/callback` (top-level, редирект банка;
+   - **✅ A7b-2 (callback) — сделано** (PR #296): `GET /api/bank/callback` (top-level, редирект банка;
      авторизация — подписанный state, фрейм-токена нет). `bankConnectCallback.ts` (DI, тесты): **verify state
      ДО REST** (инв. 1/3) → `parseOAuthCallback` (surface ошибки банка) → `buildTokenExchangeBody`→`exchangeToken`
      (`/token`, `client_secret` в теле — **не логируется**, инв. 10)→`parseTokenResponse`→`saveBankToken` под
