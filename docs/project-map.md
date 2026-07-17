@@ -535,7 +535,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    воркеру — A9 (ниже).**
 7. **A7** connect-эндпоинты (authorize+callback, CSRF-state HMAC как `session.ts`; Приор — RS256/DCR). **Нужен A3.**
 8. **A8** rate-limiter `Q_FETCH` (Альфа 100/мин; Приор — concurrency 1).
-9. ✅ **A9 — сделано** (PR #NNN): свап заглушки → реальный `fetchStatement` в `worker.ts`
+9. ✅ **A9 — сделано** (PR #290): свап заглушки → реальный `fetchStatement` в `worker.ts`
    (demo→`demoItems`, реал+банк-токен→`fetchBankStatement`, реал без токена→`[]` инертно, Приор→A5b);
    провод `FetchJob.providerId`→`BankFetchQuery.provider`. Реальные счета в воркер ещё не поступают
    (`planFetches` без живого таймера → A10), поведение демо-нагрузки не изменилось.
