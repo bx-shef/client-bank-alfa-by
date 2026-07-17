@@ -553,9 +553,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (single-shot: промах первой попытки не пере-пробуется). Проводка `applyTrigger` в воркере вынесена в чистую фабрику
     `server/utils/applyTriggerDep.ts` (`makeApplyTrigger` — demo-гейт/нет-токена→skip/best-effort swallow + инвариант
     «полный `target` c `entityTypeId` доезжает до транспорта»), покрыта юнит-тестом (`tests/applyTriggerDep.test.ts`).
-    Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; **сама регистрация
-    подтверждена вживую** (`pnpm trigger:test --apply`, `bel.bitrix24.by`); осталось live-verify **firing**
-    (нужно правило автоматизации, вешаемое на `CODE`). CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
+    Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
+    подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `trigger.add`→`trigger.list`
+    round-trip, затем `executeTriggerViaRest`→`trigger.execute` `{result:true}` на **сделке** (OWNER_TYPE_ID=2) **и
+    смарт-процессе** (OWNER_TYPE_ID=его `entityTypeId`=1044); незарегистрированный CODE → `not registered` — валидирует
+    best-effort-глоток). Реакция правила автоматизации на CODE — за админом портала (наш код доставляет сигнал).
+    CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
@@ -675,8 +678,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
       (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
       за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на
-      firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort),
-      **подтверждена вживую** (`pnpm trigger:test --apply`, `bel.bitrix24.by`); осталось live-verify **firing** (нужно правило на CODE).
+      firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort);
+      **регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `executeTriggerViaRest`
+      → `{result:true}` на сделке OWNER_TYPE_ID=2 и смарт-процессе OWNER_TYPE_ID=1044; незарегистрированный CODE → `not registered`).
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
