@@ -43,8 +43,10 @@ export function makeApplyTrigger(deps: ApplyTriggerDeps) {
     memberId: string,
     code: string
   ): Promise<boolean> {
-    if (deps.isDemoAccount(item.account)) return false
     try {
+      // Inside the try so the best-effort contract holds even if a dep throws
+      // (isDemoAccount included) — a trigger failure must NEVER fail the batch.
+      if (deps.isDemoAccount(item.account)) return false
       const call = await deps.resolvePortalCall(memberId)
       if (!call) return false
       const res = await deps.executeTriggerViaRest(target, call, { triggerCode: code })

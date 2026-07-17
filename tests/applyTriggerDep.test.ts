@@ -50,19 +50,30 @@ describe('makeApplyTrigger', () => {
   })
 
   it('demo account → false, NO token resolve and NO transport call (never touches a real portal)', async () => {
+    const isDemo = vi.fn((_a: string) => true)
     const resolve = vi.fn(async () => fakeCall)
     const exec = vi.fn(deps().executeTriggerViaRest)
-    const applyTrigger = makeApplyTrigger(deps({ isDemoAccount: () => true, resolvePortalCall: resolve, executeTriggerViaRest: exec }))
+    const applyTrigger = makeApplyTrigger(deps({ isDemoAccount: isDemo, resolvePortalCall: resolve, executeTriggerViaRest: exec }))
     expect(await applyTrigger(item('DEMO'), deal(), 'M', 'cba_pay')).toBe(false)
+    expect(isDemo).toHaveBeenCalledWith('DEMO') // gated on the op's OWN account, not a constant
     expect(resolve).not.toHaveBeenCalled()
     expect(exec).not.toHaveBeenCalled()
   })
 
-  it('no portal token (resolve → null) → false, transport NOT called', async () => {
+  it('no portal token (resolve → null) → false, transport NOT called; resolve got the memberId', async () => {
+    const resolve = vi.fn(async () => null)
     const exec = vi.fn(deps().executeTriggerViaRest)
-    const applyTrigger = makeApplyTrigger(deps({ resolvePortalCall: async () => null, executeTriggerViaRest: exec }))
+    const applyTrigger = makeApplyTrigger(deps({ resolvePortalCall: resolve, executeTriggerViaRest: exec }))
     expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe(false)
+    expect(resolve).toHaveBeenCalledWith('M') // scoped to the portal memberId, not item.account
     expect(exec).not.toHaveBeenCalled()
+  })
+
+  it('BEST-EFFORT: a throw from isDemoAccount itself is swallowed → false (never fails the batch)', async () => {
+    const applyTrigger = makeApplyTrigger(deps({
+      isDemoAccount: () => { throw new Error('demo check blew up') }
+    }))
+    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe(false)
   })
 
   it('BEST-EFFORT: a thrown transport error is swallowed → false (never propagates, batch not failed)', async () => {
