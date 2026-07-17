@@ -5,8 +5,8 @@
 // where they run. CRM-sync transports (findCompany/writeActivity + dedup), the file-parse
 // transport (manual import) and the bank fetch transport (Alfa online GET, A9 →
 // fetchBankStatement) are LIVE; a real account with no stored bank token fetches nothing
-// (inert []), and Prior online fetch throws until A5b. The rate limiter for the live Alfa
-// call (A8) is the remaining stage-5 piece.
+// (inert []), and Prior online fetch throws until A5b. The live Alfa call is rate-limited
+// (A8) by a GLOBAL BullMQ queue limiter (fleet-wide, default 100/60s — QUEUE_FETCH_RATE_*).
 
 import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
@@ -414,16 +414,26 @@ export function startEventWorker(deps: HandlerDeps): Worker {
  *  is still two calls: under parallelism two workers could both miss the marker and
  *  double-write a dela (TOCTOU) — see #109/#259/PROCESSING §1. Until a per-portal limiter
  *  lands, keep crm-sync effectively serial; fetch/parse scale freely. See docs/QUEUES.md. */
-export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: number } = {}): Worker[] {
+export function startThroughputWorkers(
+  deps: HandlerDeps,
+  opts: { concurrency?: number, fetchRate?: { max: number, duration: number } } = {}
+): Worker[] {
   const connection = connectionOptions()
   const concurrency = Math.max(1, opts.concurrency ?? 1)
   return [
-    // TODO A8: fetchStatement now hits the real Alfa API (100 req/min) — needs a rate limiter
-    // BEFORE A10 wires the live poll timer (today only demo jobs flow, and they never hit the
-    // bank). NB: BullMQ's `limiter` is PER worker instance, but this module scales to N replicas
-    // (startThroughputWorkers) → N×100/min against Alfa's global per-OAuth-client cap. A8 must use
-    // a shared/Redis-backed limiter keyed per provider (or pin fetch to one replica). Prior: concurrency 1.
-    new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection, concurrency }),
+    // A8: the bank-fetch worker hits the real Alfa API (~100 req/min per OAuth client). BullMQ's
+    // worker `limiter` is GLOBAL across all replicas on the same queue — the counter is a Redis
+    // key (`<prefix>:<queue>:limiter`, INCR'd in Lua), NOT a per-process counter (verified against
+    // the installed bullmq 5.x source). So this ONE bucket caps live Alfa calls across the whole
+    // fleet at max/duration. Our app has a single Alfa client_id, so a global cap is the correct
+    // model (per-group/`groupKey` limiting is a BullMQ Pro-only feature). Default 100/60s (QUEUE_FETCH_RATE_*).
+    // Parse/crm-sync aren't rate-limited here (crm-sync throttles via the SDK RestrictionManager).
+    // Follow-up: reactive 429 handling via Worker.RateLimitError + rateLimit() if Alfa 429s.
+    new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), {
+      connection,
+      concurrency,
+      ...(opts.fetchRate ? { limiter: { max: opts.fetchRate.max, duration: opts.fetchRate.duration } } : {})
+    }),
     new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
     new Worker<CrmSyncJob>(Q_CRM, async (job) => {
       const summary = await handleCrmSyncJob(job.data, deps)

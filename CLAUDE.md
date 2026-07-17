@@ -73,9 +73,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `demoAlfaExtraction`/`demoPriorExtraction` в `demoExtract.ts` под юнит-тестами как доказательство
   нормализаторов; переподключение демо-песочницы — в плане, геоблок-ограничения нет — лендинг банк-креды
   не держит, живой OAuth предусмотрен на backend/из портала (транспорт `bankFetch.ts` собран + юнит-тесты,
-  A5 — Альфа GET; **подключён к воркеру (A9)** — реальный счёт с банк-токеном маршрутизируется на живой
-  транспорт; **реестр счетов (A6) + живой крон-таймер опроса (A10) готовы, но таймер default-OFF**
-  (`CRON_REAL_POLL`, инертен до подключения счетов A7 и rate-limiter A8); Приор — A5b).
+  A5 — Альфа GET; **подключён к воркеру (A9)**; **реестр счетов (A6) + крон-таймер (A10) + connect-поток с
+  UI (A7) + глобальный rate-limiter (A8) готовы** — вся машинерия опроса собрана, таймер default-OFF
+  (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); Приор — A5b).
   В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
   синтетика): чип загружает пример в один клик (`loadSample`: fetch→File→`runFiles`) + ссылка «скачать».
   Интерактивные контролы — **b24ui** (`B24Button`: «Выбрать файл»/«Сбросить»/чипы примеров, air-цвета
@@ -490,7 +490,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       **онлайн-опрос банков (`fetchStatement`) — тоже живой (A9):** демо-счёт → `demoItems`, реальный счёт →
       `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно, Приор → A5b.
-      Остаётся rate-limiter живого вызова (A8). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
+      Живой вызов Альфы ограничен **глобальным rate-limiter (A8)** на `Q_FETCH` (BullMQ `limiter`, шаренный
+      по репликам через Redis, дефолт 100/60с, `QUEUE_FETCH_RATE_*`). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
       `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`) по per-portal `RestCall`
