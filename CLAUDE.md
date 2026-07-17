@@ -537,8 +537,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `executeTriggerViaRest(target, call, {triggerCode})` → `crm.automation.trigger.execute` → `{result:true}` (тем же
     билдером; unsupported/нет CODE → без REST-вызова, ошибка пробрасывается). **В hot-path подключён — best-effort (#79):**
     в `crm-sync` за гейтом `autoDistribute`+`triggerCode` вызывается через OAuth-резолвер воркера (контекст приложения
-    есть); сбой (в т.ч. незарегистрированный CODE) глотается — триггер сигналит, факт пишется только на firing, само-
-    заживает. Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; осталось live-verify firing на OAuth-портале.
+    есть); сбой (в т.ч. незарегистрированный CODE) глотается — триггер сигналит, факт пишется только на firing
+    (single-shot: промах первой попытки не пере-пробуется). Проводка `applyTrigger` в воркере вынесена в чистую фабрику
+    `server/utils/applyTriggerDep.ts` (`makeApplyTrigger` — demo-гейт/нет-токена→skip/best-effort swallow + инвариант
+    «полный `target` c `entityTypeId` доезжает до транспорта»), покрыта юнит-тестом (`tests/applyTriggerDep.test.ts`).
+    Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; осталось live-verify firing на OAuth-портале.
     CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
