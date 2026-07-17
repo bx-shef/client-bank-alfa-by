@@ -33,6 +33,7 @@ import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
+import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { allocationFactKey } from '../../app/utils/allocation'
 import { readAppSettingVia } from '../utils/appSettings'
@@ -301,18 +302,7 @@ export function liveHandlerDeps(): HandlerDeps {
     // follow-up). Demo gated; no token → skip. `crm.automation.trigger.execute` needs OAuth
     // app-context — the resolver's SDK call provides it (a webhook gets «Application context
     // required»). `executeTriggerViaRest` (#269) takes the CODE via `opts.triggerCode`.
-    applyTrigger: async (item, target, memberId, code) => {
-      if (isDemoAccount(item.account)) return false
-      try {
-        const call = await resolvePortalCall(memberId)
-        if (!call) return false
-        const res = await executeTriggerViaRest(target, call, { triggerCode: code })
-        return res.applied
-      } catch (e) {
-        console.warn(`[trigger] portal ${memberId}, ${target.kind}#${target.id}: not fired — ${(e as Error)?.message}`)
-        return false
-      }
-    },
+    applyTrigger: makeApplyTrigger({ isDemoAccount, resolvePortalCall, executeTriggerViaRest }),
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
     // notifyChat: demo accounts gated, no token → skip, whole body swallow+logged (a chat
     // failure must never fail the job).
