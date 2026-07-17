@@ -381,8 +381,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
-    `allocation_fact`, `import_result`, `metrics_counter`; дедуп дел — маркер в B24, таблицы нет — #259);
+    `allocation_fact`, `import_result`, `metrics_counter`, `bank_tokens`; дедуп дел — маркер в B24, таблицы нет — #259);
     `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+  - `server/utils/bankTokenStore.ts` — **стор банк-OAuth токенов** (Альфа/Приор online-fetch, стадия 5; A3) над
+    инъектируемым `QueryFn`: `saveBankToken`/`getBankToken`/`listBankTokensForPortal`/`deleteBankTokensForPortal`.
+    refresh шифрован `secretCrypto` (тот же `B24_TOKEN_ENC_KEY`), access — в открытом. Ключ `(member_id, provider,
+    account_key)` — **много на портал** (счета/«моя компания»), полностью UPDATE-able (банк ротирует refresh — нет
+    write-once/тумбстоуна). `list` резилиентен (битую строку пропускает+логирует, `get` — fail-loud). Банк-apiKey
+    **никогда** в `app.option`. Чистка на ONAPPUNINSTALL (`deletePortal`). Тесты — на фейк-`QueryFn` + in-memory-модель.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/

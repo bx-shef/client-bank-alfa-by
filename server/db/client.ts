@@ -17,7 +17,11 @@ import type { QueryFn } from '../utils/tokenStore'
  * `allocation_fact` is the persistent «платёж → сущность» allocation record (#109):
  * a payment is recorded as `allocated` against a target and can be flipped to
  * `reverted` on сторно — idempotent (write-once per key), survives reimport, scoped
- * per portal — see server/utils/allocationFactStore.ts. */
+ * per portal — see server/utils/allocationFactStore.ts.
+ *
+ * `bank_tokens` holds a portal's connected BANK OAuth tokens (Alfa/Prior online fetch,
+ * stage 5): many per portal, keyed `(member_id, provider, account_key)`, refresh
+ * encrypted at rest — see server/utils/bankTokenStore.ts. Purged on ONAPPUNINSTALL. */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS portal_tokens (
   member_id          TEXT PRIMARY KEY,
@@ -61,6 +65,17 @@ CREATE TABLE IF NOT EXISTS metrics_counter (
   name         TEXT NOT NULL,
   value        BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (member_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS bank_tokens (
+  member_id          TEXT NOT NULL,
+  provider           TEXT NOT NULL,
+  account_key        TEXT NOT NULL,
+  access_token       TEXT NOT NULL DEFAULT '',
+  refresh_token_enc  TEXT NOT NULL DEFAULT '',
+  expires_at         BIGINT NOT NULL DEFAULT 0,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (member_id, provider, account_key)
 );
 `
 

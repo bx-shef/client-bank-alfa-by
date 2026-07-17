@@ -32,6 +32,7 @@ import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
+import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
@@ -348,7 +349,8 @@ export function liveHandlerDeps(): HandlerDeps {
       }, Number(job.ts) || 0)
     },
     // Uninstall always erases EVERYTHING for the portal: token row + import status +
-    // allocation facts (#184). `eventTs` records the ordering tombstone (#77). Activity dedup
+    // allocation facts (#184) + lifetime metrics + connected bank tokens (stage 5). `eventTs`
+    // records the ordering tombstone (#77). Activity dedup
     // now lives in B24 (the marker on the activity itself), so there's no local dedup map to
     // purge — the client's own CRM keeps the activities. Also evict the in-memory bind-once
     // RestCall (#191) so a just-uninstalled portal's cached access token can't be reused by an
@@ -358,6 +360,7 @@ export function liveHandlerDeps(): HandlerDeps {
       await deleteImportResultForPortal(dbQuery, memberId)
       await deleteFactsForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
+      await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync
