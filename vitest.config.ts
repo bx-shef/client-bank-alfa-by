@@ -26,7 +26,11 @@ export default defineConfig(async () => ({
           name: 'nuxt',
           include: ['tests/nuxt/**/*.test.ts'],
           // Nuxt cold start + happy-dom can exceed the 5s default on CI.
-          testTimeout: 30_000
+          testTimeout: 30_000,
+          // The `setupNuxt()` beforeAll hook (Nuxt build + env) can exceed the default 10s
+          // hookTimeout on a cold/loaded CI runner → intermittent "Hook timed out in 10000ms"
+          // (not a logic failure). Give the hook the same generous budget as tests.
+          hookTimeout: 60_000
         }
       })
     ]
