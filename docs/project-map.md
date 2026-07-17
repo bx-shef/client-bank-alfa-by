@@ -581,7 +581,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      к банку даёт top-level-навигация (A7c); (8) redirect-цель — если не выводится из `memberId`, подписывать
      (open-redirect); (9) `error_description` из callback (контролирует банк) — санитизировать (CRLF/длина)
      перед логом; (10) `client_secret` из `buildTokenExchangeBody` — никогда в лог.
-   - **✅ A7c — сделано** (PR #NNN): UI подключения банка (b24ui) на странице настроек `/settings`.
+   - **✅ A7c — сделано** (PR #297): UI подключения банка (b24ui) на странице настроек `/settings`.
      `app/components/BankConnectCard.vue` (`B24Card`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
      admin-гейт `useIsAdmin` — не-админ видит предупреждение; вне фрейма — предпросмотр) + чистый composable
      `app/composables/useBankConnect.ts` (`connect(provider, accountKey)` → POST `/api/bank/connect` фрейм-
