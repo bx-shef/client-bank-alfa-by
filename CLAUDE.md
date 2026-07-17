@@ -1040,7 +1040,9 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 ## Деплой
 
 Фронтенд (лендинг + B24-iframe-UI) деплоится как статика за nginx — по той же схеме, что
-`currency-converter`: **GHCR + Watchtower за общим nginx-proxy**. Подробности — [`docs/DEPLOY.md`](docs/DEPLOY.md).
+`currency-converter`: **GHCR + Watchtower за общим nginx-proxy**. Подробности — [`docs/DEPLOY.md`](docs/DEPLOY.md)
+(как деплоить) + [`docs/OPERATIONS.md`](docs/OPERATIONS.md) (пост-запускной runbook: health, диагностика
+очередей, откат, эскалация — #246).
 
 - Прод-образ — `nginxinc/nginx-unprivileged` (non-root, слушает `:8080`), статика из `nuxt generate`.
 - CSP отдаётся **без** `script-src 'unsafe-inline'`: два inline-скрипта Nuxt (`theme-init` в `app.vue`

@@ -5,6 +5,9 @@
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
 
+> **Эксплуатация после запуска** (health, диагностика очередей, типовые сбои, откат, эскалация) —
+> отдельный runbook [`OPERATIONS.md`](OPERATIONS.md) (#246). Здесь — только как *развернуть*.
+
 Backend (приём событий Б24 + хранилище токенов; дальше — OAuth Альфы, опрос, дела/чат) —
 **отдельный docker-сервис** того же репозитория (`Dockerfile` target `backend`, `nuxt build`)
 за тем же proxy, рядом — Postgres. Контракт и env — [`B24_EVENTS.md`](B24_EVENTS.md).
