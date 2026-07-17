@@ -45,9 +45,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 ```
 
 Перед пушем прогоняй `pnpm check` (= `lint` + `typecheck` + `test`) или запусти
-готовый скрипт: `bash scripts/check-app.sh` (Linux/macOS) / `pwsh scripts/check-app.ps1`
-(Windows) — он сразу отдаёт итог. Те же проверки гоняет CI (порядок шагов не важен —
-они независимы).
+готовый скрипт `bash scripts/check-app.sh` — он сразу отдаёт итог. Те же проверки
+гоняет CI (порядок шагов не важен — они независимы).
 
 ## Архитектура
 
@@ -1032,20 +1031,17 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 - [`docs/FEEDBACK.md`](docs/FEEDBACK.md) — **дизайн канала**: два источника отзывов —
   **сотрудник** (👍/👎 на `/app`) и **программа** (воркер `crm-sync`, когда «запуталась»:
   `unmatched`/`ambiguous`/`manual`/не-распознан-формат). Каждый отзыв → issue в **приватном**
-  репо-приёмнике (`GITHUB_FEEDBACK_REPO`, имя ещё не выбрано — плейсхолдер) **с приложенным
+  репо-приёмнике (ENV `GITHUB_FEEDBACK_REPO` — отдельный приватный репо, в код не вшит) **с приложенным
   файлом выписки** (для воспроизведения; приватность позволяет).
 - [`docs/FEEDBACK_TRIAGE_AGENT.md`](docs/FEEDBACK_TRIAGE_AGENT.md) — **роль ИИ-агента триажа**:
   группирует отзывы по корню, заводит обезличенные инженерные issue в `bx-shef/client-bank-alfa-by`,
   закрывает разобранное со связкой. **Privacy-guard:** клиентские данные/файл из приватного
   отзыва **не** переносятся в (потенциально публичный) репо задач — только ссылка.
 
-Скрипты — `scripts/feedback-triage.sh` (REST-fallback, требует `GH_WRITE_TOKEN`; токен не
-уходит в argv curl — `-K -` из stdin; **privacy fail-closed** guard `_assert_feedback_target` —
-отказ писать в пустой/плейсхолдерный/публичный репо) и офлайн-валидатор `scripts/validate-docs.sh` /
-`.ps1` (9 шагов: синтаксис/shellcheck/**поведенческий прогон** с моком curl и негативными
-guard-кейсами/privacy-guard/паритет `.sh`↔`.ps1`/консистентность плейсхолдера/битые ссылки, без
-сети). Валидатор **CI-gated** через `tests/feedbackTriageValidate.test.ts` (спавнит `.sh`, ждёт
-exit 0 — как `mdReviewStamp`).
+Запись issue (создание/комментирование/закрытие) делает сам ИИ-агент **GitHub-инструментами
+своей среды** (Claude Code / Claude-in-GitHub; MCP в проекте не настроен и не требуется,
+отдельный PAT не нужен). Прежний REST-fallback (`scripts/feedback-triage.sh` + офлайн-валидатор
+`validate-docs.sh`/`.ps1`) удалён за ненадобностью.
 Репо-координаты — через ENV (`PROJECT_REPO`/`FEEDBACK_REPO`/`GITHUB_FEEDBACK_REPO`), не
 хардкодятся.
 
