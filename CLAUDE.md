@@ -408,11 +408,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/bankConnectStart.ts` + `server/api/bank/connect.post.ts` (стадия 5; A7b-1) — **старт
     OAuth-подключения банка**: `POST /api/bank/connect` (фрейм-токен как `/api/import` → `memberIdByDomain`+
     `validateFrame` (`profile`: блок спуфинга + **гейт админа** `profile.ADMIN` — креды привязываются ко
-    всему порталу) → подписанный state с **нашим** `memberId`, не клиентским → `buildAuthorizeUrl`) отдаёт
-    `{authorizeUrl}` (фронт A7c откроет top-level). Config из env
+    всему порталу) → подписанный state с **нашим** `memberId`, не клиентским, + **номер счёта** (`accountKey`,
+    `isValidAccountKey`) → `buildAuthorizeUrl`) отдаёт `{authorizeUrl}` (фронт A7c откроет top-level).
+    **Callback A7b-2** — `server/utils/bankConnectCallback.ts` + `server/api/bank/callback.get.ts`:
+    `GET /api/bank/callback` (top-level редирект банка, авторизация = подписанный state) → **verify state ДО
+    REST** → `parseOAuthCallback`→`buildTokenExchangeBody`→обмен на `/token` (`client_secret` в теле, не
+    логируется)→`parseTokenResponse`→`saveBankToken` под `state.accountKey`. Ошибки банка не рендерятся, лог
+    через `sanitizeForLog` (CRLF/длина). 200/400/502; nginx-троттл. Config из env
     (`bankConnectConfigFromEnv`: authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/
     `_SCOPE`); провайдер не настроен → 400 (до REST), нет секрета → 503 (fail-closed), Приор → A5b;
-    `Referrer-Policy: no-referrer`. Чистое ядро (DI, тесты) + тонкий роут. Callback (A7b-2) + UI (A7c) — дальше.
+    `Referrer-Policy: no-referrer` (нет секрета → **503 на старте**, на callback → 400). Чистые ядра (DI,
+    тесты) + тонкие роуты. **UI (A7c) — дальше** (ввод/пикер счёта + top-level навигация; должен отдавать
+    номер счёта **как есть**, без нормализации — бэкенд хранит и запрашивает его дословно).
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/

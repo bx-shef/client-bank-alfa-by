@@ -25,7 +25,7 @@ function deps(over: Partial<ConnectStartDeps> = {}): ConnectStartDeps {
 
 const input = {
   accessToken: 'TKN', domain: 'p.bitrix24.by', provider: 'alfa-by' as const,
-  nonce: 'nonce123', nowMs: now
+  accountKey: 'BY13ALFA', nonce: 'nonce123', nowMs: now
 }
 
 describe('bankConnectConfigFromEnv', () => {
@@ -73,16 +73,19 @@ describe('handleBankConnectStart', () => {
     expect(url.searchParams.get('response_type')).toBe('code')
     // The state verifies and carries the resolved memberId + provider (callback can trust it).
     const state = verifyConnectState(url.searchParams.get('state')!, SECRET, now)
-    expect(state).toMatchObject({ memberId: 'MEMBER1', provider: 'alfa-by', nonce: 'nonce123' })
+    expect(state).toMatchObject({ memberId: 'MEMBER1', provider: 'alfa-by', accountKey: 'BY13ALFA', nonce: 'nonce123' })
     expect(state!.exp).toBe(now + CONNECT_STATE_TTL_MS)
     // parseOAuthCallback (the callback's verifier) accepts this exact state for a matching code.
     expect(parseOAuthCallback({ code: 'C', state: url.searchParams.get('state')! }, url.searchParams.get('state')!)).toEqual({ code: 'C' })
   })
 
-  it('400 without frame auth / provider', async () => {
+  it('400 without frame auth / provider / valid account', async () => {
     expect((await handleBankConnectStart(deps(), { ...input, accessToken: '' })).status).toBe(400)
     expect((await handleBankConnectStart(deps(), { ...input, domain: '' })).status).toBe(400)
     expect((await handleBankConnectStart(deps(), { ...input, provider: '' as 'alfa-by' })).status).toBe(400)
+    expect((await handleBankConnectStart(deps(), { ...input, accountKey: '' })).status).toBe(400)
+    expect((await handleBankConnectStart(deps(), { ...input, accountKey: 'has spaces' })).status).toBe(400)
+    expect((await handleBankConnectStart(deps(), { ...input, accountKey: 'a/b#c' })).status).toBe(400)
   })
 
   it('400 when the provider is not configured/supported (no broken URL, no REST)', async () => {
