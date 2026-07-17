@@ -511,18 +511,23 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `SDK_BATCH_MAX`=50, halt-on-error (падение батча/любой команды → throw, без тихого пропуска). Проведён в
     `negativeStages` (пер-воронковые `crm.status.list` — одним батчем на тип сущности). Детали — `docs/QUEUES.md` §REST-бюджет.
   - **Настраиваемое дело — единственный носитель операции (#259):** `app/utils/configurableActivity.ts` (чистый
-    билдер `crm.activity.configurable.add` — `layout` (`header` + `text`/`withTitle`-блоки `ContentBlockDto`,
-    сверено с офдокой) + маркер `originatorId`=app-namespace/`originId`=ключ операции; внешние поля
+    билдер `crm.activity.configurable.add` — `layout` (**required** top-level `icon`=`{code}` + `header` +
+    `body.logo` + `text`/`withTitle`-блоки `ContentBlockDto`, сверено с офдокой) + маркер
+    `originatorId`=app-namespace/`originId`=ключ операции; внешние поля
     BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
     (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп — **поиск маркера в B24**
     `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`; пустой
     маркер → без REST); стора нет, `rememberActivity` убран (маркер пишется атомарно с делом). Прежний
     `crm.activity.todo.add`-путь (`crmActivityWrite.ts`) и билдер `buildTodoActivity` **удалены**.
-    **Дедуп-поиск подтверждён вживую** (тест-портал `b24-86sr2r`: `crm.activity.list` принимает фильтр
-    `ORIGINATOR_ID`+`ORIGIN_ID`, отдаёт `[]`); `layout.body.logo='document'` — системный код из
-    `crm.timeline.logo.list` (тоже live-подтверждён). ⚠ Сама запись `configurable.add` — **только
-    OAuth-контекст** (класс #79; вживую подтверждён `ERROR_WRONG_CONTEXT` вебхуком) → живой смоук
-    `pnpm activity:test` OAuth-кредами.
+    **Подтверждено вживую end-to-end** (OAuth-портал `bel.bitrix24.by`, `pnpm activity:test --company 1 --apply`):
+    OAuth-транспорт (#191) → `configurable.add` создаёт дело → `findActivityByMarker` находит ровно его
+    (дедуп-round-trip). Системные коды: `body.logo='document'`, `icon.code='sum'` (`crm.timeline.logo.list` /
+    `crm.timeline.icon.list`). ⚠ **Live-находка (исправлена):** `LayoutDto.icon` — **обязательное** поле (без него
+    портал отвергает вызов: «Поле icon в LayoutDto должно быть заполнено»); добавлен `LAYOUT_ICON_CODE='sum'`.
+    Пустые внешние поля (физлицо без УНП, комиссия без назначения) билдер **дропает** из `blocks` (портал
+    `value:''` терпит — live-probed, но рендерит битую строку; `amount`+`document` всегда есть → layout не пуст).
+    Сама запись `configurable.add` — **только OAuth-контекст** (класс #79; `ERROR_WRONG_CONTEXT` вебхуком) →
+    смоук `pnpm activity:test` OAuth-кредами.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
     `buildAllocationMutation(target, opts)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`;
     для `invoice` — `{method:'crm.item.update',params:{entityTypeId:31,id,fields:{stageId}}}` **при заданной** стадии

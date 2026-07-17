@@ -75,13 +75,21 @@ function fieldBlock(title: string, value: string, inline = true): Record<string,
  *  ever needed. */
 const BODY_LOGO_CODE = 'document'
 
+/** A top-level `icon` code (LayoutDto marks `icon` REQUIRED — the API rejects a layout without
+ *  it: «Поле icon в LayoutDto должно быть заполнено», confirmed live on the portal). `sum` is a
+ *  built-in code from `crm.timeline.icon.list` (51 codes on the live portal) and reads as a
+ *  monetary amount — the right glyph for a statement operation. Swap for another listed code
+ *  (`wallet`/`bank-card`/`document`/…) if ever needed. */
+const LAYOUT_ICON_CODE = 'sum'
+
 /**
  * Build the configurable-activity `layout` DTO — validated against the official ContentBlockDto
- * / BodyDto structure (apidocs …/timeline/activities/configurable/structure/): a header title,
- * a body `logo` (required by BodyDto), then blocks — the purpose as a multiline `text` block and
- * each operation field as a `withTitle` (label→value) row. No footer buttons yet — the actionable
- * §6 buttons (e.g. «повторно поискать клиента») register app actions and land in a follow-up; the
- * top-level `icon` is omitted (optional). Header + logo + non-empty blocks is a valid layout.
+ * / BodyDto structure (apidocs …/timeline/activities/configurable/structure/): a required
+ * top-level `icon`, a header title, a body `logo` (required by BodyDto), then blocks — the
+ * purpose as a multiline `text` block and each operation field as a `withTitle` (label→value)
+ * row. No footer buttons yet — the actionable §6 buttons (e.g. «повторно поискать клиента»)
+ * register app actions and land in a follow-up. Icon + header + logo + non-empty blocks is a
+ * valid layout (the API rejects a missing `icon`, live-confirmed).
  *
  * SECURITY: purpose / counterparty name / account / document number come from the bank
  * statement — controlled by whoever SENDS the payment. They are BB-neutralized (same guard as
@@ -94,16 +102,28 @@ export function buildConfigurableLayout(item: StatementItem): Record<string, unk
   const doc = item.docNum
     ? `#${neutralizeBb(item.docNum)} от ${formatIsoDate(item.acceptDate)}`
     : `от ${formatIsoDate(item.acceptDate)}`
-  const blocks: Record<string, unknown> = {
-    purpose: textBlock(neutralizeBb(item.purpose), true),
-    amount: fieldBlock(kind, `${formatMoney(item.amount)} ${item.currency}`),
-    document: fieldBlock('Документ', doc),
-    counterparty: fieldBlock('Контрагент', neutralizeBb(cp.name), false),
-    unp: fieldBlock('УНП', neutralizeBb(cp.unp)),
-    account: fieldBlock('Счёт', neutralizeBb(cp.account))
-  }
-  if (cp.bank) blocks.bank = fieldBlock('Банк', neutralizeBb(cp.bank))
+  // Payer-controlled fields can be genuinely EMPTY for real inputs — a физлицо credit carries no
+  // УНП, a bank-fee/interest row no purpose, an incomplete counterparty no name/account. The
+  // portal TOLERATES an empty `text.value` (live-probed: `configurable.add` accepted a `value:''`
+  // block), but it renders as a broken label-with-no-value row, so drop each such block when its
+  // (BB-neutralized) value is empty — cleaner card, and defensive if a portal/version ever
+  // validates it stricter. `amount` and `document` are always non-empty (formatted money / a
+  // date), so `blocks` always has ≥2 entries → ERROR_EMPTY_LAYOUT unreachable.
+  const blocks: Record<string, unknown> = {}
+  const purpose = neutralizeBb(item.purpose)
+  if (purpose) blocks.purpose = textBlock(purpose, true)
+  blocks.amount = fieldBlock(kind, `${formatMoney(item.amount)} ${item.currency}`)
+  blocks.document = fieldBlock('Документ', doc)
+  const name = neutralizeBb(cp.name)
+  if (name) blocks.counterparty = fieldBlock('Контрагент', name, false)
+  const unp = neutralizeBb(cp.unp)
+  if (unp) blocks.unp = fieldBlock('УНП', unp)
+  const account = neutralizeBb(cp.account)
+  if (account) blocks.account = fieldBlock('Счёт', account)
+  const bank = cp.bank ? neutralizeBb(cp.bank) : ''
+  if (bank) blocks.bank = fieldBlock('Банк', bank)
   return {
+    icon: { code: LAYOUT_ICON_CODE },
     header: { title: neutralizeBb(buildActivityTitle(item)) },
     body: { logo: { code: BODY_LOGO_CODE }, blocks }
   }
