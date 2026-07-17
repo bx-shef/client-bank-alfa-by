@@ -3,6 +3,7 @@ import { decryptSecret } from '../server/utils/secretCrypto'
 import {
   deleteBankTokensForPortal,
   getBankToken,
+  listAllBankAccounts,
   listBankTokensForPortal,
   saveBankToken
 } from '../server/utils/bankTokenStore'
@@ -100,6 +101,28 @@ describe('listBankTokensForPortal', () => {
   it('returns [] for a portal with no connected accounts', async () => {
     const { query } = fakeQuery([])
     expect(await listBankTokensForPortal(query, 'm1')).toEqual([])
+  })
+})
+
+describe('listAllBankAccounts (A6 registry)', () => {
+  it('returns the identity triple for every row across all portals — no decryption', async () => {
+    const { query, calls } = fakeQuery([
+      { member_id: 'm1', provider: 'alfa-by', account_key: 'A1' },
+      { member_id: 'm2', provider: 'prior-by', account_key: 'P1' }
+    ])
+    const refs = await listAllBankAccounts(query)
+    expect(refs).toEqual([
+      { memberId: 'm1', provider: 'alfa-by', accountKey: 'A1' },
+      { memberId: 'm2', provider: 'prior-by', accountKey: 'P1' }
+    ])
+    // SELECTs only identity columns (no access_token/refresh_token_enc) — a corrupt refresh
+    // can't hide a healthy account from polling.
+    expect(calls[0]!.sql).toMatch(/SELECT member_id, provider, account_key FROM bank_tokens/)
+    expect(calls[0]!.sql).not.toMatch(/refresh_token_enc|access_token/)
+  })
+  it('empty store → []', async () => {
+    const { query } = fakeQuery([])
+    expect(await listAllBankAccounts(query)).toEqual([])
   })
 })
 

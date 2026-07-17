@@ -58,6 +58,12 @@ export interface FetchJob {
   /** ISO date range (inclusive) for the statement window. */
   dateFrom: string
   dateTo: string
+  /** Per-tick token (real polling, A10). Part of `fetchJobId` ONLY — the bank query
+   *  ignores it — so each poll of the same account/window is a DISTINCT job that actually
+   *  re-fetches (otherwise the deterministic id + removeOnComplete retention would dedupe
+   *  every same-day re-poll into a no-op). Re-emitting identical ops is safe: crm-sync
+   *  dedupes by the B24 activity marker. Absent for demo/manual jobs (ids unchanged). */
+  epoch?: string
 }
 
 /** Parse one uploaded client-bank file (manual import). `fileHash` dedups reuploads.
@@ -112,7 +118,9 @@ export function eventJobId(job: EventJob): string {
 }
 
 export function fetchJobId(job: FetchJob): string {
-  return joinId(['fetch', job.memberId, job.providerId, job.account, job.dateFrom, job.dateTo])
+  const base = ['fetch', job.memberId, job.providerId, job.account, job.dateFrom, job.dateTo]
+  // Append the epoch segment only when present, so existing demo/manual ids stay byte-identical.
+  return joinId(job.epoch ? [...base, job.epoch] : base)
 }
 
 export function parseJobId(job: ParseJob): string {

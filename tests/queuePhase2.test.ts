@@ -4,7 +4,8 @@ import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
 } from '../server/queue/handlers'
 import {
-  DEMO_ACCOUNT_PREFIX, buildDemoFetchJobs, cronIntervalMs, demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches
+  DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
+  demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
 } from '../server/queue/cron'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
@@ -191,6 +192,13 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
     expect(r).toEqual({ fetched: 2, chained: true })
     expect((calls.crm[0] as CrmSyncJob).batchId).toBe('ACC:2026-07-01:2026-07-31')
     expect((calls.crm[0] as CrmSyncJob).source).toBe('fetch')
+  })
+  it('folds the poll epoch into batchId so a same-window re-poll re-runs crm-sync (A10)', async () => {
+    const { deps, calls } = fakeDeps([item('d1')])
+    await handleFetchJob({ ...fetchJob, epoch: 'tick42' }, deps)
+    // Without epoch in batchId the crm-sync jobId would dedupe every same-day re-poll into a
+    // no-op — the fetch re-runs but the B24-marker dedup never fires, dropping late-posted ops.
+    expect((calls.crm[0] as CrmSyncJob).batchId).toBe('ACC:2026-07-01:2026-07-31:tick42')
   })
   it('does not chain an empty batch', async () => {
     const { deps, calls } = fakeDeps([])
@@ -1013,6 +1021,42 @@ describe('cron helpers', () => {
       [{ memberId: 'M', providerId: 'alfa-by', accounts: ['A1', 'A2'] }], '2026-07-01', '2026-07-02'
     )
     expect(jobs.map(j => j.account)).toEqual(['A1', 'A2'])
+  })
+  it('planFetches attaches epoch to every job when given (A10 per-tick re-fetch)', () => {
+    const jobs = planFetches([{ memberId: 'M', providerId: 'alfa-by', accounts: ['A1'] }], '2026-07-01', '2026-07-02', 'tick9')
+    expect(jobs[0]!.epoch).toBe('tick9')
+    // omitted → no epoch key at all (base job-id stays stable)
+    expect(planFetches([{ memberId: 'M', providerId: 'alfa-by', accounts: ['A1'] }], '2026-07-01', '2026-07-02')[0]!.epoch).toBeUndefined()
+  })
+  it('accountsForPolling groups by portal+provider, dedups, filters non-pollable + demo (A6)', () => {
+    const out = accountsForPolling([
+      { memberId: 'M1', provider: 'alfa-by', accountKey: 'A1' },
+      { memberId: 'M1', provider: 'alfa-by', accountKey: 'A1' }, // dup → collapsed
+      { memberId: 'M1', provider: 'alfa-by', accountKey: 'A2' },
+      { memberId: 'M2', provider: 'alfa-by', accountKey: 'B1' },
+      { memberId: 'M1', provider: 'prior-by', accountKey: 'P1' }, // prior → A5b, dropped
+      { memberId: 'M1', provider: 'alfa-by', accountKey: `${DEMO_ACCOUNT_PREFIX}x` } // demo → dropped
+    ])
+    expect(out).toEqual([
+      { memberId: 'M1', providerId: 'alfa-by', accounts: ['A1', 'A2'] },
+      { memberId: 'M2', providerId: 'alfa-by', accounts: ['B1'] }
+    ])
+    expect(POLLABLE_PROVIDERS.has('alfa-by')).toBe(true)
+    expect(POLLABLE_PROVIDERS.has('prior-by')).toBe(false)
+    expect(accountsForPolling([])).toEqual([])
+  })
+  it('pollWindow returns [today-lookback, today] as ISO YYYY-MM-DD', () => {
+    const now = new Date('2026-07-17T09:30:00.000Z')
+    expect(pollWindow(now, 0)).toEqual({ dateFrom: '2026-07-17', dateTo: '2026-07-17' })
+    expect(pollWindow(now, 1)).toEqual({ dateFrom: '2026-07-16', dateTo: '2026-07-17' })
+    expect(pollWindow(now, 3)).toEqual({ dateFrom: '2026-07-14', dateTo: '2026-07-17' })
+  })
+  it('pollWindow is UTC (pins the contract at a late-UTC boundary, not server-local)', () => {
+    // 23:30Z is already the NEXT day in any UTC+ server local time — a refactor to local-date
+    // slicing would return 2026-07-18 here. Lock the UTC behaviour.
+    const lateUtc = new Date('2026-07-17T23:30:00.000Z')
+    expect(pollWindow(lateUtc, 0).dateTo).toBe('2026-07-17')
+    expect(pollWindow(lateUtc, 1)).toEqual({ dateFrom: '2026-07-16', dateTo: '2026-07-17' })
   })
   it('isDemoAccount flags only DEMO- accounts (the live CRM gate)', () => {
     expect(isDemoAccount('DEMO-t1-1')).toBe(true)

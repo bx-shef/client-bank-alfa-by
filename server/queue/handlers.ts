@@ -160,12 +160,21 @@ export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<
 /** Fetch a statement window, then hand the normalized batch to crm-sync. */
 export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<{ fetched: number, chained: boolean }> {
   const items = await deps.fetchStatement(job)
+  // The crm-sync jobId derives from batchId; fold the per-tick `epoch` in (when present) so a
+  // real-poll re-fetch of the SAME window actually RE-RUNS crm-sync instead of being deduped by
+  // a retained completed job — otherwise the fetch re-runs but crm-sync (and its B24-marker
+  // dedup) never fires, so a same-day late-posted op wouldn't reach CRM until the window rolls.
+  // A retry of the same tick keeps the same epoch → still idempotent. Window-only when no epoch
+  // (manual import), so those ids are unchanged.
+  const batchId = job.epoch
+    ? `${job.account}:${job.dateFrom}:${job.dateTo}:${job.epoch}`
+    : `${job.account}:${job.dateFrom}:${job.dateTo}`
   const chained = items.length > 0
     ? await deps.enqueueCrmSync({
         memberId: job.memberId,
         providerId: job.providerId,
         source: 'fetch',
-        batchId: `${job.account}:${job.dateFrom}:${job.dateTo}`,
+        batchId,
         items
       })
     : false

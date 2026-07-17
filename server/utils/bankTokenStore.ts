@@ -105,6 +105,31 @@ export async function listBankTokensForPortal(query: QueryFn, memberId: string):
   return out
 }
 
+/** Identity of one connected bank account — NO secrets. The real poll planner (A6) only
+ *  needs which (portal, provider, account) to fetch; the worker loads+decrypts the token
+ *  itself per job (`getBankToken`/`ensureBankToken`). */
+export interface BankAccountRef {
+  memberId: string
+  provider: BankProviderId
+  accountKey: string
+}
+
+/** Enumerate EVERY connected bank account across ALL portals (A6 registry) for the real
+ *  poll planner. Identity only — no decryption, so a corrupt/undecryptable refresh_token
+ *  can't hide a healthy account from polling (the worker fails loud per-job if the token is
+ *  bad). Ordered for a stable plan. */
+export async function listAllBankAccounts(query: QueryFn): Promise<BankAccountRef[]> {
+  const rows = await query(
+    `SELECT member_id, provider, account_key FROM bank_tokens ORDER BY member_id, provider, account_key`,
+    []
+  )
+  return rows.map(r => ({
+    memberId: String(r.member_id),
+    provider: r.provider as BankProviderId,
+    accountKey: String(r.account_key)
+  }))
+}
+
 /** Delete ALL of a portal's bank tokens on ONAPPUNINSTALL (a removed app keeps no data).
  *  Idempotent. Returns the number of rows removed (for logging). */
 export async function deleteBankTokensForPortal(query: QueryFn, memberId: string): Promise<number> {

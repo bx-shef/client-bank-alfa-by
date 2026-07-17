@@ -2,14 +2,17 @@
 // so they're unit-testable. The plugin (server/plugins/queue.ts) wires them to a
 // real interval and the producers.
 //
-// Real polling (stage 5): planFetches() turns the installed portals + their
-// accounts into one fetch job per account. Until accounts are stored it yields
-// nothing — so the DEMO path below is what actually exercises the pipeline now:
-// each tick enqueues N synthetic fetch jobs whose handler emits demo operations,
-// so you can watch load flow bank-fetch → crm-sync via GET /api/queues.
+// Real polling (stage 5, A10 WIRED): accountsForPolling() + planFetches() turn the
+// connected bank accounts (A6 registry over the bank_tokens store) into one fetch job per
+// account for a rolling window; the plugin runs it every CRON_INTERVAL_MIN. It is INERT
+// until accounts are connected (A7) — an empty registry enqueues nothing. Meanwhile the
+// DEMO path below exercises the pipeline: each tick enqueues N synthetic fetch jobs whose
+// handler emits demo operations, so you can watch load flow bank-fetch → crm-sync via
+// GET /api/queues.
 
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { FetchJob } from './topology'
+import type { BankAccountRef } from '../utils/bankTokenStore'
 
 /** Interval in ms from a minutes setting (clamped to a sane floor of 1 min).
  *  Reserved for REAL polling (stage 5) — `CRON_INTERVAL_MIN`; the load demo now uses
@@ -37,16 +40,51 @@ export function demoDelayMs(ms: number): number {
   return Math.min(5000, Math.max(0, n))
 }
 
-/** Real cron plan: one fetch job per (portal, account) for the given window.
- *  Empty until accounts are configured (stage 5). Pure. */
+/** Real cron plan: one fetch job per (portal, account) for the given window. Pure. `epoch`
+ *  (a per-tick token, A10) rides on each job so a repeated poll of the same account/window is
+ *  a DISTINCT job that actually re-fetches (see FetchJob.epoch); omit it for a one-shot plan. */
 export function planFetches(
   accountsByPortal: { memberId: string, providerId: BankProviderId, accounts: string[] }[],
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  epoch?: string
 ): FetchJob[] {
   return accountsByPortal.flatMap(p =>
-    p.accounts.map(account => ({ memberId: p.memberId, providerId: p.providerId, account, dateFrom, dateTo }))
+    p.accounts.map(account => ({ memberId: p.memberId, providerId: p.providerId, account, dateFrom, dateTo, ...(epoch ? { epoch } : {}) }))
   )
+}
+
+/** Providers whose online-fetch transport is LIVE (A5/A9). Prior's async create+poll is
+ *  A5b — not yet wired — so we don't enqueue prior jobs that would only throw+retry. */
+export const POLLABLE_PROVIDERS: ReadonlySet<BankProviderId> = new Set<BankProviderId>(['alfa-by'])
+
+/** Group connected bank accounts (A6 registry) into the poll planner's shape: one entry per
+ *  (portal, provider) with its deduped account list. Filters to POLLABLE_PROVIDERS and drops
+ *  any demo account (belt-and-braces — demo accounts never reach the token store). Pure. */
+export function accountsForPolling(
+  refs: BankAccountRef[]
+): { memberId: string, providerId: BankProviderId, accounts: string[] }[] {
+  const groups = new Map<string, { memberId: string, providerId: BankProviderId, accounts: string[] }>()
+  for (const ref of refs) {
+    if (!POLLABLE_PROVIDERS.has(ref.provider)) continue
+    if (isDemoAccount(ref.accountKey)) continue
+    const key = `${ref.memberId}|${ref.provider}`
+    let g = groups.get(key)
+    if (!g) {
+      g = { memberId: ref.memberId, providerId: ref.provider, accounts: [] }
+      groups.set(key, g)
+    }
+    if (!g.accounts.includes(ref.accountKey)) g.accounts.push(ref.accountKey)
+  }
+  return [...groups.values()]
+}
+
+/** Statement window to poll: `[today − lookbackDays, today]` as ISO `YYYY-MM-DD`. A small
+ *  lookback (default 1) re-covers days where operations post late. Pure (date from `now`). */
+export function pollWindow(now: Date, lookbackDays = 1): { dateFrom: string, dateTo: string } {
+  const dateTo = now.toISOString().slice(0, 10)
+  const from = new Date(now.getTime() - Math.max(0, Math.floor(lookbackDays)) * 86_400_000)
+  return { dateFrom: from.toISOString().slice(0, 10), dateTo }
 }
 
 /** Marks an account as belonging to the load demo (handler emits synthetic ops). */
