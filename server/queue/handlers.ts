@@ -86,10 +86,18 @@ export interface HandlerDeps {
    *  (fail the job → clean retry), like findCompany — it runs BEFORE the activity write. */
   recordAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Whether an allocation fact for this (payment → target) already exists (#109
-   *  mutation slice). Consulted ONLY when `autoDistribute` is on, BEFORE the portal
-   *  mutation, so a redelivery/reimport never re-pays a target. Any status (allocated
-   *  or reverted) counts as existing. A store error propagates (fail the job). */
+   *  mutation slice). Now consulted ONLY for the TRIGGER path (deal/smart-process) —
+   *  a trigger fire is stateless, so the fact is its only dedup. The AMOUNT mutation
+   *  pre-check moved to `isTargetApplied` (reads B24 state, Фаза A). Any status
+   *  (allocated or reverted) counts as existing. A store error propagates (fail the job). */
   hasAllocationFact: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
+  /** Whether a decided AMOUNT target (deal-payment/invoice) is already applied in B24 —
+   *  the payment is `paid='Y'` / the invoice is on the configured `opts.invoicePaidStageId`
+   *  (Фаза A idempotency, replacing `hasAllocationFact` for the amount pre-check). Reading
+   *  B24 state directly closes the pay-then-crash-before-fact re-pay window. Consulted ONLY
+   *  when `autoDistribute` is on, BEFORE the mutation; false for trigger kinds (no readable
+   *  state) and whenever it can't prove applied (so the pay runs). A read error propagates. */
+  isTargetApplied: (item: StatementItem, target: AllocationCandidate, memberId: string, opts?: AllocationMutationOpts) => Promise<boolean>
   /** Apply the portal MUTATION that marks a decided allocate target paid (§2 mutation
    *  slice): `crm.item.payment.pay` for a deal payment; `crm.item.update` to the configured
    *  paid stage (`opts.invoicePaidStageId`) for an invoice. Called ONLY when `autoDistribute`
@@ -324,11 +332,20 @@ export async function handleCrmSyncJob(
           if (autoDistribute) {
             // Mutation slice (§2): mark the target paid, then record the fact. Order matters —
             // the portal write runs BEFORE the fact, so a persisted fact always implies the
-            // mutation succeeded (a thrown REST error leaves no fact ⇒ clean retry). A
-            // pre-existence check skips a redelivery/reimport so it never re-pays. Unsupported
+            // mutation succeeded (a thrown REST error leaves no fact ⇒ clean retry). The
+            // pre-check reads B24 STATE (`isTargetApplied` — payment `paid='Y'` / invoice on the
+            // paid stage, Фаза A) so a redelivery/reimport never re-pays: reading the true state
+            // also covers the pay-then-crash-before-fact window the fact left open. Unsupported
             // target kinds (invoice stage w/o config, trigger targets) apply nothing but still
             // record the fact (distributed not bumped).
-            if (!(await deps.hasAllocationFact(item, target, job.memberId))) {
+            if (await deps.isTargetApplied(item, target, job.memberId, { invoicePaidStageId: settings?.allocation?.invoicePaidStageId })) {
+              // Already applied in B24 (a prior run paid it — possibly crashing BEFORE the fact
+              // write). Do NOT re-pay, but STILL record the write-once fact so accounting/reversal
+              // keeps a durable record of the allocation (distributed NOT bumped — we applied
+              // nothing this run). recordAllocation is write-once, so the normal case (fact already
+              // present) is a no-op that bumps nothing.
+              if (await deps.recordAllocation(item, target, job.memberId)) allocated++
+            } else {
               const applied = await deps.applyAllocation(item, target, job.memberId, { invoicePaidStageId: settings?.allocation?.invoicePaidStageId })
               if (await deps.recordAllocation(item, target, job.memberId)) {
                 allocated++

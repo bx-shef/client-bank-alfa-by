@@ -43,8 +43,11 @@ interface FakeOpts {
   autoDistribute?: boolean
   /** allocation-mutation config (§2/#79), e.g. `{ invoicePaidStageId, triggerCode }`; default {}. */
   allocation?: { invoicePaidStageId?: string, triggerCode?: string }
-  /** what hasAllocationFact returns (true = fact already exists → skip mutation); default false. */
+  /** what hasAllocationFact returns (true = fact already exists → skip TRIGGER fire); default false. */
   factExists?: boolean
+  /** what isTargetApplied returns (true = amount target already paid/settled in B24 → skip
+   *  the amount mutation, Фаза A); default false. */
+  alreadyApplied?: boolean
   /** what applyAllocation returns (true = portal write applied); default true. */
   applied?: boolean
   /** what applyTrigger returns (true = trigger fired); default true (#79). */
@@ -69,7 +72,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApply: [], trigApply: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -119,6 +122,10 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     hasAllocationFact: async (it, target, memberId) => {
       calls.allocHas.push([it.docId, target.kind, target.id, memberId])
       return o.factExists ?? false
+    },
+    isTargetApplied: async (it, target, memberId, applyOpts) => {
+      calls.allocApplied.push([it.docId, target.kind, target.id, memberId, applyOpts?.invoicePaidStageId])
+      return o.alreadyApplied ?? false
     },
     applyAllocation: async (it, target, memberId, applyOpts) => {
       // Capture the 4th `opts` arg too — the invoice-stage mutation is driven by
@@ -730,7 +737,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.distributed).toBe(0)
     expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded
     expect(calls.allocApply).toEqual([]) // no mutation
-    expect(calls.allocHas).toEqual([]) // pre-check only runs when gate is on
+    expect(calls.allocApplied).toEqual([]) // amount pre-check only runs when gate is on
   })
 
   it('autoDistribute ON: pays the deal-payment then records the fact (distributed counted)', async () => {
@@ -738,19 +745,34 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(1)
-    expect(calls.allocHas).toEqual([['d1', 'deal-payment', '42', 'M']]) // idempotency pre-check
+    expect(calls.allocApplied).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // B24-state pre-check (Фаза A)
     expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // portal mutation applied
     expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded AFTER
   })
 
-  it('autoDistribute ON but fact already exists: skips re-pay AND re-record (idempotent)', async () => {
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, factExists: true })
+  it('autoDistribute ON but target already applied in B24: skips re-pay, still records the write-once fact (Фаза A reconcile)', async () => {
+    // Crash-window reconcile: a prior run paid but may have crashed before the fact. isTargetApplied
+    // reads paid=Y → skip the pay, but STILL record the write-once fact (accounting/reversal) — a
+    // fresh insert here bumps `allocated` (not `distributed`, since nothing was applied THIS run).
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, alreadyApplied: true })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
-    expect(r.distributed).toBe(0)
-    expect(r.allocated).toBe(0)
-    expect(calls.allocHas).toEqual([['d1', 'deal-payment', '42', 'M']]) // checked
+    expect(r.distributed).toBe(0) // nothing paid this run
+    expect(r.allocated).toBe(1) // fact recorded (durable audit/reversal record)
+    expect(calls.allocApplied).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // B24 state checked
     expect(calls.allocApply).toEqual([]) // never re-paid
-    expect(calls.allocRec).toEqual([]) // never re-recorded
+    expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // write-once fact recorded
+  })
+
+  it('autoDistribute ON, already applied AND fact already exists: fully idempotent (no counters bump)', async () => {
+    // Normal redelivery where the fact was already written: recordAllocation returns false → nothing
+    // double-counts, no re-pay. (The activity marker usually `continue`s this earlier; this pins the
+    // allocation-block idempotency directly.)
+    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, alreadyApplied: true, recorded: false })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
+    expect(r.allocated).toBe(0)
+    expect(r.distributed).toBe(0)
+    expect(calls.allocApply).toEqual([]) // never re-paid
+    expect(calls.allocRec).toHaveLength(1) // record attempted (write-once), returned false
   })
 
   it('autoDistribute ON, unsupported target (applied=false): records fact, distributed not bumped', async () => {
@@ -774,7 +796,7 @@ describe('handleCrmSyncJob', () => {
   })
 
   it('autoDistribute ON, mutation applied but fact insert lost the race (recorded=false): counters stay 0', async () => {
-    // Narrow TOCTOU: hasAllocationFact saw none, applyAllocation paid, but recordAllocation
+    // Narrow TOCTOU: isTargetApplied saw not-applied, applyAllocation paid, but recordAllocation
     // reported the row already existed (a concurrent job won). Neither counter bumps even
     // though a portal write happened — pins the `if (recordAllocation) { …; if (applied) }` nesting.
     const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, recorded: false })

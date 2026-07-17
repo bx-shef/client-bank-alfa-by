@@ -59,6 +59,9 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
   it('hasAllocationFact(demo) → false, no store read', async () => {
     expect(await deps.hasAllocationFact(demoItem(), decision.target, 'MEMBER-1')).toBe(false)
   })
+  it('isTargetApplied(demo) → false, no REST state read (Фаза A)', async () => {
+    expect(await deps.isTargetApplied(demoItem(), decision.target, 'MEMBER-1', {})).toBe(false)
+  })
   it('applyAllocation(demo) → false, no mutation', async () => {
     expect(await deps.applyAllocation(demoItem(), decision.target, 'MEMBER-1', {})).toBe(false)
   })
