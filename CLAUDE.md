@@ -414,7 +414,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `GET /api/bank/callback` (top-level редирект банка, авторизация = подписанный state) → **verify state ДО
     REST** → `parseOAuthCallback`→`buildTokenExchangeBody`→обмен на `/token` (`client_secret` в теле, не
     логируется)→`parseTokenResponse`→`saveBankToken` под `state.accountKey`. Ошибки банка не рендерятся, лог
-    через `sanitizeForLog` (CRLF/длина). 200/400/502; nginx-троттл. Config из env
+    через `sanitizeForLog` (CRLF/длина). 200/400/502; nginx-троттл. **UI A7c** — `app/components/
+    BankConnectCard.vue` (b24ui `B24Card`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`, admin-гейт
+    `useIsAdmin`, на `/settings`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
+    фрейм-токеном → `authorizeUrl` → `window.open` top-level; номер счёта — как есть (только trim крайних пробелов), без переформатирования/case-folding).
+    **Connect-поток A7 завершён**; живой прогон — за банк-кредами владельца. Config из env
     (`bankConnectConfigFromEnv`: authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/
     `_SCOPE`); провайдер не настроен → 400 (до REST), нет секрета → 503 (fail-closed), Приор → A5b;
     `Referrer-Policy: no-referrer` (нет секрета → **503 на старте**, на callback → 400). Чистые ядра (DI,

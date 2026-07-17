@@ -581,7 +581,15 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      к банку даёт top-level-навигация (A7c); (8) redirect-цель — если не выводится из `memberId`, подписывать
      (open-redirect); (9) `error_description` из callback (контролирует банк) — санитизировать (CRLF/длина)
      перед логом; (10) `client_secret` из `buildTokenExchangeBody` — никогда в лог.
-   - **A7c** — UI подключения банка (b24ui) на странице настроек. **Нужен A7b.**
+   - **✅ A7c — сделано** (PR #NNN): UI подключения банка (b24ui) на странице настроек `/settings`.
+     `app/components/BankConnectCard.vue` (`B24Card`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
+     admin-гейт `useIsAdmin` — не-админ видит предупреждение; вне фрейма — предпросмотр) + чистый composable
+     `app/composables/useBankConnect.ts` (`connect(provider, accountKey)` → POST `/api/bank/connect` фрейм-
+     токеном → `authorizeUrl` → **`window.open('_blank','noopener')`** top-level). Номер счёта отдаётся **как
+     есть** (без нормализации — бэкенд хранит/запрашивает дословно). Тесты (admin-гейт + composable-проводка) +
+     **визуальная верификация** (свет/тёмная, `/settings`). **Connect-поток A7 ЗАВЕРШЁН** — админ может подключить
+     счёт; для живого прогона нужны банк-креды владельца (`ALFA_OAUTH_*`) + `CRON_REAL_POLL=1` (+A8). **Follow-up
+     (записаны выше):** enum счетов вместо ручного ввода, показ per-account ошибки опроса, single-use nonce.
 8. **A8** rate-limiter `Q_FETCH` (Альфа 100/мин; Приор — concurrency 1).
 9. ✅ **A9 — сделано** (PR #290): свап заглушки → реальный `fetchStatement` в `worker.ts`
    (demo→`demoItems`, реал+банк-токен→`fetchBankStatement`, реал без токена→`[]` инертно, Приор→A5b);

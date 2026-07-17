@@ -34,6 +34,10 @@ onMounted(async () => {
     </p>
 
     <ClientOnly>
+      <BankConnectCard class="mt-6" />
+    </ClientOnly>
+
+    <ClientOnly>
       <SettingsForm class="mt-6" />
     </ClientOnly>
 
