@@ -520,7 +520,10 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    `secretCrypto`, ключ `(member_id,provider,account_key)`, `list` резилиентен) + чистка на ONAPPUNINSTALL +
    тесты. **Разблокирует A5/A7/A9.**
 4. **A6** реестр счетов на опрос (кормит `planFetches`). **Блокирует A10.**
-5. **A4** рефреш банк-токена (`ensureBankToken`, advisory-lock как `ensureAccessToken`). **Нужен A3.**
+5. ✅ **A4 — сделано** (PR #288): `ensureBankToken` (advisory-lock + перечит + `force`, ветвление Альфа/Приор —
+   Альфа creds в теле, Приор `Basic`-auth) + `bankCredsFromEnv` (`ALFA_OAUTH_*`/`PRIOR_OAUTH_*`) + envCheck half-config +
+   тесты. **Env-имена бэкенда** (`*_OAUTH_CLIENT_ID/SECRET/TOKEN_URL`) отличаются от recon-скриптовых
+   (`ALFA_CLIENT_ID`+`ALFA_BASE_URL`) — не путать; recon = dev-sandbox, бэкенд = деплой. **Разблокирует A5.**
 6. **A5** HTTP-транспорт (ядра за DI): токен→`$fetch`→`normalizeAlfa`/`normalizePrior`; тесты на
    demo-wire-фикстурах (`demoAlfaResponse`/`demoPriorResponse`). **Нужен A3+A4.**
 7. **A7** connect-эндпоинты (authorize+callback, CSRF-state HMAC как `session.ts`; Приор — RS256/DCR). **Нужен A3.**

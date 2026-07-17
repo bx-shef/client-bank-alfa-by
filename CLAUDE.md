@@ -389,6 +389,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     account_key)` — **много на портал** (счета/«моя компания»), полностью UPDATE-able (банк ротирует refresh — нет
     write-once/тумбстоуна). `list` резилиентен (битую строку пропускает+логирует, `get` — fail-loud). Банк-apiKey
     **никогда** в `app.option`. Чистка на ONAPPUNINSTALL (`deletePortal`). Тесты — на фейк-`QueryFn` + in-memory-модель.
+  - `server/utils/ensureBankToken.ts` — **конкуренто-безопасный рефреш банк-токена** (стадия 5; A4), по образцу
+    `ensureAccessToken`: near-expiry рефреш под **per-account advisory-lock** + перечит внутри лока (при N воркерах опроса
+    ровно один рефрешит — банк ротирует refresh, гонка ломает креды); `{force}` реактивный ретрай (рефреш только если
+    stored всё ещё отвергнутый). Провайдер-специфика через готовые ядра: **Альфа** — `client_id/secret` в теле; **Приор**
+    — `Authorization: Basic` (client_secret_basic), тело `grant_type+refresh_token` (`bankRefreshRequest`/`parseBankRefresh`,
+    чистые). `bankCredsFromEnv` — `ALFA_OAUTH_*`/`PRIOR_OAUTH_*` (`_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_URL`); неполные ⇒
+    `null` ⇒ токен как есть + warn (envCheck сигналит half-config на старте). Живой рефреш — за банк-кредами владельца.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/

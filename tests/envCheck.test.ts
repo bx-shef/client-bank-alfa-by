@@ -18,6 +18,17 @@ describe('checkBackendEnv', () => {
     expect(r.warnings).toEqual([])
   })
 
+  it('warns on a HALF-configured bank (some but not all OAuth creds), silent when absent or complete', () => {
+    // none set → no bank warning (feature simply off)
+    expect(checkBackendEnv(GOOD).warnings.some(w => /Банк/.test(w))).toBe(false)
+    // partial Alfa → warning naming the missing var
+    const half = checkBackendEnv({ ...GOOD, ALFA_OAUTH_CLIENT_ID: 'cid', ALFA_OAUTH_CLIENT_SECRET: 'sec' })
+    expect(half.warnings.some(w => /Банк Альфа/.test(w) && /ALFA_OAUTH_TOKEN_URL/.test(w))).toBe(true)
+    // all three → no warning
+    const full = checkBackendEnv({ ...GOOD, ALFA_OAUTH_CLIENT_ID: 'cid', ALFA_OAUTH_CLIENT_SECRET: 'sec', ALFA_OAUTH_TOKEN_URL: 'https://a/token' })
+    expect(full.warnings.some(w => /Банк Альфа/.test(w))).toBe(false)
+  })
+
   it('errors when B24_TOKEN_ENC_KEY is missing', () => {
     const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY: '' })
     expect(r.errors.some(e => e.includes('B24_TOKEN_ENC_KEY'))).toBe(true)
