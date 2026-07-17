@@ -28,12 +28,19 @@
    `commit` = сборка, которая реально крутится (тот же SHA, что в подвале лендинга) — так видно,
    что Watchtower подтянул нужный образ. Без секретов; на нём же docker `healthcheck` backend'а.
    ⚠ **`/api/health` — только liveness процесса.** Он **не** проверяет Postgres, Redis и воркеры:
-   при упавшем `db`/`redis` или зависших воркерах health остаётся **зелёным**, а приложение при этом
-   мёртво (crm-sync падает, токены не читаются). Зелёный health ≠ «всё работает» — при инциденте
-   всегда сверяй `docker compose ps` (все ли `Up`) и логи `db`/`worker`. (Обогащение health глубиной —
-   follow-up #78.)
-2. **Лендинг/статика:** `GET https://<DOMAIN>/` отдаёт 200 (nginx `app`).
-3. **Контейнеры:** `docker compose -f docker-compose.prod.yml ps` — все `Up`/`healthy`.
+   при упавшем `db`/`redis` health остаётся **зелёным**, а приложение при этом мёртво (crm-sync
+   падает, токены не читаются). Для проверки зависимостей — `/api/ready` (ниже).
+2. **Readiness backend:** `GET https://<DOMAIN>/api/ready` → `200 {ready:true, status:"ok", checks:{db, redis}}`;
+   при проблеме — `503` с `status:"down"` (Postgres недоступен — не работает ничего) или `status:"degraded"`
+   (db жив, но настроенный Redis недоступен — API и события B24 работают через синхронный фолбэк, а
+   импорт/опрос/crm-sync стоят). **Прощупывает Postgres** (`SELECT 1`) **и Redis** (`PING`, если очереди
+   включены; `redis:null` = очереди выключены, не ошибка; таймаут пинга не даёт пробе зависнуть при
+   недоступном Redis). Без секретов и без глубины очередей. Это то, что стоит вешать на аптайм-мониторинг
+   (и кандидат для docker `healthcheck` вместо liveness). `db:false` → строка «Postgres упал»;
+   `redis:false` → **«Redis недоступен»** (PING не прошёл). ⚠ Redis, живой но забитый (память/AOF), PING
+   **проходит** → `redis:true` — это `/api/ready` не ловит, см. строку «Redis деградировал» (`logs redis`).
+3. **Лендинг/статика:** `GET https://<DOMAIN>/` отдаёт 200 (nginx `app`).
+4. **Контейнеры:** `docker compose -f docker-compose.prod.yml ps` — все `Up`/`healthy`.
    `backend` unhealthy → смотреть `docker compose logs backend` (частые причины — env-валидация,
    недоступный Postgres/Redis; см. ниже).
 
@@ -118,12 +125,14 @@
 - **Диск:** тома `redisdata`/Postgres растут; `removeOnComplete/Fail` (1000/5000) капают историю
   очередей. Мониторить свободное место; при заполнении сначала чистить образы/логи, не тома.
 - **TLS:** cert выпускает/обновляет `acme-companion` (общий reverse-proxy). Алерт — истечение <7 д.
-- **Health-probe:** повесить внешний аптайм-мониторинг на `GET /api/health` (200 + свежий `time`).
+- **Health-probe:** внешний аптайм-мониторинг вешать на `GET /api/ready` (200/503, прощупывает
+  db+redis) — он ловит упавшую зависимость, в отличие от liveness `/api/health` (200 + свежий `time`).
 
 ## On-call / эскалация
 
-1. Первичная триада: `/api/health` (backend жив? — **liveness only**, см. выше) → `docker compose ps`
-   (все контейнеры `Up`/`healthy`, никто не `Restarting`?) → `scripts/queue-stats.sh` (очереди разгребаются?).
+1. Первичная триада: `/api/ready` (зависимости живы? — db+redis; `/api/health` — только liveness) →
+   `docker compose ps` (все контейнеры `Up`/`healthy`, никто не `Restarting`?) →
+   `scripts/queue-stats.sh` (очереди разгребаются?).
    **Предусловие шага 3:** диагностика очередей требует заранее заведённого `B24_APPLICATION_TOKEN`
    (консоль) или операторского логина (`/queues`) — без них оба пути недоступны именно тогда, когда нужны.
 2. Логи по сервису: `docker compose -f docker-compose.prod.yml logs <service> --tail=200`.
@@ -132,8 +141,8 @@
 
 ## Follow-up
 
-- **Обогатить `/api/health`** глубиной/насыщением очередей (дёшево, ценно для очередь-driven
-  импортёра) — привязано к телеметрии #78; сейчас health = только liveness.
+- ~~Readiness-проба (db+redis)~~ — **сделано** (`GET /api/ready`, 200/503). Дальше — глубина/насыщение
+  очередей в проб(е)/телеметрии (#78) и, при желании, переключить docker `healthcheck` с liveness на `/api/ready`.
 - ~~Лог сатурации rate-limiter'а `bank-fetch`~~ — **сделано** (крон логирует backlog ≥ порог, см. выше);
   дальше — реактивный 429 через `Worker.RateLimitError`, если Альфа начнёт отдавать 429.
 - **`DIAGNOSTICS_POLICY.md`** — кто из ролей что видит в диагностике (актуально с телеметрией #78).

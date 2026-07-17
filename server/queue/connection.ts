@@ -8,7 +8,7 @@
 
 import { Queue } from 'bullmq'
 import type { ConnectionOptions } from 'bullmq'
-import type { QueueName } from './topology'
+import { Q_EVENTS, type QueueName } from './topology'
 
 const queues = new Map<QueueName, Queue>()
 
@@ -58,6 +58,31 @@ export function getQueue(name: QueueName): Queue {
     queues.set(name, q)
   }
   return q
+}
+
+/** PING the Redis backing the queues, via a cached Queue's shared ioredis client (no new
+ *  connection beyond the queue's own). Resolves true on `PONG`; REJECTS on a `timeoutMs`
+ *  deadline. The deadline is ESSENTIAL: on an unreachable-but-configured Redis, BullMQ's
+ *  `queue.client` awaits `waitUntilReady`, which only rejects on an `end` event — with
+ *  ioredis reconnecting forever (`maxRetriesPerRequest: null`) that never fires, so an
+ *  un-bounded ping would hang the readiness probe in exactly the outage it must detect.
+ *  The readiness probe wraps the rejection to `false` → clean 503. Throws if REDIS_URL is
+ *  unset (guard with queueEnabled() first). */
+export function pingRedis(timeoutMs = 2000): Promise<boolean> {
+  const ping = (async (): Promise<boolean> => {
+    // BullMQ types `client` as IRedisClient (no `ping` on the interface), but the underlying
+    // ioredis client has it — narrow to the one method we use rather than cast to `any`.
+    const client = (await getQueue(Q_EVENTS).client) as unknown as { ping: () => Promise<string> }
+    return (await client.ping()) === 'PONG'
+  })()
+  // Swallow a late rejection if the timeout wins the race (else it's an unhandled rejection).
+  ping.catch(() => {})
+  const timeout = new Promise<never>((_, reject) => {
+    const t = setTimeout(() => reject(new Error('redis ping timeout')), timeoutMs)
+    // Don't let the deadline timer keep the event loop alive on its own.
+    if (typeof t.unref === 'function') t.unref()
+  })
+  return Promise.race([ping, timeout])
 }
 
 /** Close all cached Queue connections (graceful shutdown symmetry with workers). */
