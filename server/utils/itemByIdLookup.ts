@@ -79,7 +79,60 @@ export async function findCandidateById(
   if (!opts.companyId.trim()) return null
 
   const resp = await call('crm.item.list', itemByIdParams(entityTypeId, cleanId, opts.companyId))
-  const item = firstItem(resp)
+  return candidateFromItem(kind, entityTypeId, firstItem(resp), opts)
+}
+
+/** A CRM field name valid to use as a `crm.item.list` filter key: a standard field or a
+ *  user field (`UF_CRM_*`). Anchored to letters/digits/underscore so an admin-configured
+ *  value can never inject an operator prefix (`>`, `%`, `!`) into the filter. */
+const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_]*$/
+
+/** `crm.item.list` params to fetch one entity whose configured FIELD equals `value`,
+ *  WITHIN one company (the IDOR guard, same as `itemByIdParams`). */
+export function itemByFieldParams(entityTypeId: number, fieldName: string, value: string, companyId: string): Record<string, unknown> {
+  return {
+    entityTypeId,
+    filter: { [fieldName]: value, companyId },
+    select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
+  }
+}
+
+/**
+ * Find one allocation candidate whose CONFIGURED CRM field (`fieldName`, from the portal's
+ * «карта сопоставления») equals the recognized `value`, scoped to `opts.companyId` and
+ * excluding negative stages (the `by-config-field` strategy, `deal-field`/`smart-field`, §4).
+ * Returns `null` when the field name is malformed, the value is empty, nothing matches, or the
+ * match sits in a negative stage. Mirrors `findCandidateById`, differing only in the filter key.
+ * A transport error from `call` propagates. The value comes from the payer-controlled purpose,
+ * so the query filters by `companyId` too — IDOR: only THIS company's entity can come back.
+ */
+export async function findCandidateByField(
+  kind: AllocationTargetKind,
+  entityTypeId: number,
+  fieldName: string,
+  value: string,
+  opts: ItemByIdOptions,
+  call: RestCall
+): Promise<AllocationCandidate | null> {
+  const cleanField = String(fieldName).trim()
+  const cleanValue = String(value).trim()
+  if (!cleanField || !FIELD_NAME_RE.test(cleanField)) return null // malformed config field → no lookup
+  if (!cleanValue) return null
+  if (!opts.companyId.trim()) return null
+
+  const resp = await call('crm.item.list', itemByFieldParams(entityTypeId, cleanField, cleanValue, opts.companyId))
+  return candidateFromItem(kind, entityTypeId, firstItem(resp), opts)
+}
+
+/** Map a fetched `crm.item.list` row to an `AllocationCandidate`, applying the shared
+ *  negative-stage drop, amount fail-closed (amount kinds), invoice `dealId` (#229) and
+ *  smart-process `entityTypeId` (#79) rules. `null` item / empty id / negative stage → null. */
+function candidateFromItem(
+  kind: AllocationTargetKind,
+  entityTypeId: number,
+  item: RawItem | undefined,
+  opts: ItemByIdOptions
+): AllocationCandidate | null {
   if (!item) return null
 
   const stageId = item.stageId === undefined || item.stageId === null ? '' : String(item.stageId)

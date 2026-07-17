@@ -16,10 +16,11 @@ const pay = (over: Partial<AllocationCandidate> = {}): AllocationCandidate =>
   ({ kind: 'deal-payment', id: '1', amount: 100, currency: 'BYN', ...over })
 
 /** Fake resolvers; each records its call and returns the given fixture. */
-function fakeDeps(over: Partial<{ invoices: AllocationCandidate[], byId: AllocationCandidate | null, pool: AllocationCandidate[], orderPaymentIds: string[] }> = {}) {
+function fakeDeps(over: Partial<{ invoices: AllocationCandidate[], byId: AllocationCandidate | null, byField: AllocationCandidate | null, pool: AllocationCandidate[], orderPaymentIds: string[] }> = {}) {
   const deps: IntentResolverDeps = {
     findInvoicesByNumber: vi.fn(async () => over.invoices ?? []),
     findCandidateById: vi.fn(async () => over.byId ?? null),
+    findCandidateByField: vi.fn(async () => over.byField ?? null),
     findCompanyDealPayments: vi.fn(async () => over.pool ?? []),
     findOrderPaymentIds: vi.fn(async () => over.orderPaymentIds ?? [])
   }
@@ -170,19 +171,50 @@ describe('resolveIntentCandidates — supported strategies', () => {
 })
 
 describe('resolveIntentCandidates — not-yet-dispatchable kinds', () => {
-  const cases: IdentifierKind[] = ['smart-id', 'deal-field', 'smart-field', 'document-number']
+  const cases: IdentifierKind[] = ['smart-id', 'smart-field', 'document-number']
   for (const kind of cases) {
     it(`${kind} → unsupported, no resolver called, [] candidates, reason set`, async () => {
-      const deps = fakeDeps({ invoices: [inv()], byId: inv(), pool: [pay()] })
+      const deps = fakeDeps({ invoices: [inv()], byId: inv(), byField: inv(), pool: [pay()] })
       const r = await resolveIntentCandidates(intent(kind, 'X'), ctx, call, deps)
       expect(r.status).toBe('unsupported')
       expect(r.candidates).toEqual([])
       expect(r.reason).toBeTruthy()
       expect(deps.findInvoicesByNumber).not.toHaveBeenCalled()
       expect(deps.findCandidateById).not.toHaveBeenCalled()
+      expect(deps.findCandidateByField).not.toHaveBeenCalled()
       expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
     })
   }
+})
+
+describe('resolveIntentCandidates — deal-field (by-config-field, §4)', () => {
+  const deal = (over: Partial<AllocationCandidate> = {}): AllocationCandidate =>
+    ({ kind: 'deal', id: '77', amount: 0, currency: 'BYN', ...over })
+
+  it('with a configured field → findCandidateByField(deal, 2, field, value); found → single candidate', async () => {
+    const deps = fakeDeps({ byField: deal({ id: '77' }) })
+    const ctxCfg = { ...ctx, configFields: { 'deal-field': 'UF_CRM_PAY_NO' } }
+    const r = await resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)
+    expect(r.status).toBe('resolved')
+    expect(r.candidates).toEqual([deal({ id: '77' })])
+    expect(deps.findCandidateByField).toHaveBeenCalledWith('deal', 2, 'UF_CRM_PAY_NO', 'ЗАК-6001', { companyId: '93', isNegativeStage: ctx.isNegativeStage }, call)
+  })
+
+  it('with a configured field but no match → resolved with [] (not unsupported)', async () => {
+    const deps = fakeDeps({ byField: null })
+    const ctxCfg = { ...ctx, configFields: { 'deal-field': 'UF_CRM_PAY_NO' } }
+    const r = await resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)
+    expect(r.status).toBe('resolved')
+    expect(r.candidates).toEqual([])
+  })
+
+  it('NO configured field → unsupported, resolver NOT called (can\'t look up)', async () => {
+    const deps = fakeDeps({ byField: deal() })
+    const r = await resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctx, call, deps) // ctx has no configFields
+    expect(r.status).toBe('unsupported')
+    expect(r.reason).toBeTruthy()
+    expect(deps.findCandidateByField).not.toHaveBeenCalled()
+  })
 })
 
 describe('resolveIntentCandidates — context threading', () => {

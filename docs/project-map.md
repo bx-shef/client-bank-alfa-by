@@ -466,8 +466,10 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   `allocation.invoicePaidStageId`) + оповещение в **чат ошибок** при `ambiguous`/`manual` — всё в воркере,
   идемпотентный порядок mutation-before-fact + **триггеры** deal/smart-process (best-effort/single-shot, #79 — через
   OAuth-резолвер воркера, факт на firing). **Осталось:** live-verify firing триггера
-  на OAuth-портале + долговременный ретрай триггера + путь заказа `payment.add`; **карта сопоставления** «направление/смарт-процесс →
-  поле-номера» в настройках (для `by-config-field`); мост `via-document` — за live-verify реального шаблона.
+  на OAuth-портале + долговременный ретрай триггера + путь заказа `payment.add`. **`deal-field` (`by-config-field`) —
+  подключён** (`findCandidateByField`, поле из `configFields['deal-field']`, IDOR+маска имени поля); осталось
+  `smart-field`/`smart-id` (портало-специфичный `entityTypeId` — слайс смарт-процесса) + **UI «карты сопоставления»**
+  (матрицы/`configFields` пока только через `app.option`, формы нет); мост `via-document` — за live-verify реального шаблона.
   ⛔ **Оставшаяся запись — за live-verify:** пишет реальные деньги/сущности; форма стадии дефолтной воронки
   сделки вживую не подтверждена; sandbox/прод банков и живой портал — только у владельца. Открытые пункты — трекер #109.
 

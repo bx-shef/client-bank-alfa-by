@@ -39,7 +39,7 @@ import { allocationFactKey } from '../../app/utils/allocation'
 import { readAppSettingVia } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
-import { findCandidateById } from '../utils/itemByIdLookup'
+import { findCandidateById, findCandidateByField } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
 import { findOrderPaymentIds } from '../utils/saleLookup'
 import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
@@ -47,7 +47,7 @@ import { buildPortalNegativeStagePredicate, failOpenEntities } from '../utils/ne
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
-const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCompanyDealPayments, findOrderPaymentIds }
+const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCandidateByField, findCompanyDealPayments, findOrderPaymentIds }
 
 // Per-portal RestCall resolver for every crm-sync REST op (#191). Transport is the
 // @bitrix24/b24jssdk SDK: its per-instance RestrictionManager IS the rate-limiter
@@ -173,11 +173,12 @@ export function liveHandlerDeps(): HandlerDeps {
     // (#192, not per value) — but the pool scan itself is still unbatched/unpaginated;
     // global rate-limit + bind-RestCall-once remain (see the TODO above / #191). A REST
     // error propagates (handler fails the job → clean retry), like findCompany.
-    resolveIntents: async (intents, companyId, memberId, isNegativeStage) => {
+    resolveIntents: async (intents, companyId, memberId, isNegativeStage, configFields) => {
       const call = await resolvePortalCall(memberId)
       if (!call) return []
       // Batch resolver fetches the deal-payment pool once per op (#191), not per value.
-      return resolveIntentsForOp(intents, { companyId, isNegativeStage }, call, intentResolverDeps)
+      // configFields (portal «карта сопоставления») drives the by-config-field kinds (deal-field).
+      return resolveIntentsForOp(intents, { companyId, isNegativeStage, configFields }, call, intentResolverDeps)
     },
     // Load the portal's negative-stage predicate (union of invoice + deal fail/lost
     // stages) so intent resolution drops paid/«Не оплачен»/lost candidates. Called at most
