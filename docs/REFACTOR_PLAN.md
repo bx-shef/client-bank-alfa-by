@@ -99,8 +99,8 @@
    контракты (`topology.ts`), продюсеры (`producers.ts`), чистые обработчики (`handlers.ts`,
    с DI — тесты), воркеры (по роли env) + крон с **демо-нагрузкой** (`worker.ts`/`cron.ts`/
    `server/plugins/queue.ts`), 4-я очередь `crm-sync` (анализ→действие в B24), наблюдаемость
-   `GET /api/queues` + `scripts/queue-stats.sh`. Транспорты в обработчиках — заглушки; реальная
-   логика наполняется на стадиях 4–6 ниже. **Масштаб-аут — сделан:** роль контейнера решается env
+   `GET /api/queues` + `scripts/queue-stats.sh`. Транспорты в обработчиках — **живые** (парсер файла,
+   B24 REST crm-sync, fetch банка Альфы A9); осталось Приор async (A5b) + rate-limiter (A8). **Масштаб-аут — сделан:** роль контейнера решается env
    (`QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`, `server/queue/runtime.ts`), `docker-compose.prod.yml`
    разводит `backend` (HTTP+крон) и сервис `worker` (`--scale worker=N`); телеметрия в Grafana — далее.
 4. **Поиск компании по корр-счёту + запись настраиваемого дела.**

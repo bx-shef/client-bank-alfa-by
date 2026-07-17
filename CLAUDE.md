@@ -73,7 +73,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `demoAlfaExtraction`/`demoPriorExtraction` в `demoExtract.ts` под юнит-тестами как доказательство
   нормализаторов; переподключение демо-песочницы — в плане, геоблок-ограничения нет — лендинг банк-креды
   не держит, живой OAuth предусмотрен на backend/из портала (транспорт `bankFetch.ts` собран + юнит-тесты,
-  A5 — Альфа GET; ещё не подключён к воркеру — свап заглушки `fetchStatement` = A9; Приор — A5b).
+  A5 — Альфа GET; **подключён к воркеру (A9)** — реальный счёт с банк-токеном маршрутизируется на живой
+  транспорт (реальные счета в воркер пока не поступают — нет крон-таймера A10); Приор — A5b).
   В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
   синтетика): чип загружает пример в один клик (`loadSample`: fetch→File→`runFiles`) + ссылка «скачать».
   Интерактивные контролы — **b24ui** (`B24Button`: «Выбрать файл»/«Сбросить»/чипы примеров, air-цвета
@@ -459,7 +460,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       подтверждены вживую** (`pnpm trigger:test --apply --fire` на `bel.bitrix24.by`: round-trip + `executeTriggerViaRest`
       `{result:true}` на сделке и смарт-процессе); остаётся `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
-      заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
+      **онлайн-опрос банков (`fetchStatement`) — тоже живой (A9):** демо-счёт → `demoItems`, реальный счёт →
+      `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно, Приор → A5b.
+      Остаётся rate-limiter живого вызова (A8). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
       `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`) по per-portal `RestCall`
