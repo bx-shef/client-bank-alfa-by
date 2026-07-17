@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto'
 import { handleImportUpload, type IngestDeps } from '../utils/importIngest'
 import { bearerToken } from '../utils/settingsHandler'
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { enqueueParse } from '../queue/producers'
 import { dbQuery } from '../db/client'
@@ -19,8 +19,8 @@ function liveIngestDeps(): IngestDeps {
   return {
     validateFrame: async (domain, accessToken) => {
       // A valid token for THIS portal succeeds; a token from another portal throws
-      // (callRest surfaces B24 errors). The result carries the current user id.
-      const res = await callRest(domain, accessToken, 'profile', {})
+      // (frameRestCall surfaces B24 errors). The result carries the current user id.
+      const res = await frameRestCall(domain, accessToken, 'profile', {})
       const id = (res?.result as { ID?: unknown } | undefined)?.ID
       return id != null ? String(id) : ''
     },

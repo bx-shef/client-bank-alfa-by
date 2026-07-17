@@ -36,6 +36,7 @@ import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
 import { getToken, saveToken, type PortalToken, type QueryFn } from './tokenStore'
+import { assertPortalHost } from './b24Rest'
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
 const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
@@ -134,9 +135,9 @@ export function buildRefreshPersist(save: (t: PortalToken) => Promise<void>): Ca
  *  concurrent 401s coalesce into a single in-flight refresh. So a clock-fresh-but-server-
  *  rejected token self-heals here instead of failing the job. This behaviour is the SDK's
  *  internal contract (verified against the pinned version); a major bump should re-verify it.
- *  NB (#78): the `[rest-timing]` observability lives in `callRest` (b24Rest.ts). When this
- *  SDK transport takes over the hot path, move the timing here (wrap this call with the
- *  same `restTimingLine`/`serverDurationMs`) so the measurement doesn't get lost. */
+ *  NB (#78): the raw `callRest` carried an opt-in `[rest-timing]` line; it was retired with the
+ *  #191 migration. The SDK's RestrictionManager exposes its own timing/queue stats — hook deep
+ *  telemetry (Prometheus/bull-board, #78) into that rather than re-wrapping this call. */
 /** Reconstruct our full REST envelope from an SDK `AjaxResult`. getData() returns a
  *  FROZEN `{ result, time }` and DROPS the top-level `total`/`next` list-pagination
  *  siblings that the raw `callRest` envelope carries and our list paginators read
@@ -229,6 +230,41 @@ export async function makePortalSdkClient(memberId: string, deps: SdkPortalDeps)
 export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
   const client = await makePortalSdkClient(memberId, deps)
   return client ? makeSdkRestCall(client) : null
+}
+
+/** Build a `RestCall` from an ad-hoc FRAME token (the `X-B24-Domain` + Bearer access token a
+ *  UI iframe route presents), backed by a jssdk `B24OAuth` — so the frame-token routes go
+ *  through the SAME SDK transport (rate-limiter, envelope, error contract) as crm-sync instead
+ *  of the raw `$fetch` `callRest`.
+ *
+ *  SSRF: the domain is caller-supplied, so it is routed through `assertPortalHost` (the shared
+ *  #149 gate) BEFORE the client is built — the SDK's `clientEndpoint` (`https://<host>/rest/`)
+ *  can only be a real portal host, and the CLEAN parsed host is used (no userinfo-trick origin
+ *  swap). Throws on a disallowed host, like `callRest` did — but NOTE this throw is SYNCHRONOUS
+ *  (it happens while building the `RestCall`, before any promise is returned), whereas the raw
+ *  `callRest` rejected a promise. Every current caller invokes this inside an `async` wrapper or
+ *  a `try` (settingsHandler, the `validateFrame` closures, chat-search), so both forms are
+ *  absorbed identically; a future caller relying on `.catch()` without a `try` would miss it.
+ *
+ *  NO REFRESH: a frame access token is short-lived but FRESH (the iframe just minted it), and we
+ *  hold no refresh token for it, so `refreshToken` is empty and `expiresAt` is set ahead — the
+ *  SDK won't pre-emptively refresh, and a single call succeeds. `creds` are only structurally
+ *  required by the `B24OAuth` constructor (used solely on a refresh that never happens here). A
+ *  new client per call is fine: these are low-frequency, user-triggered UI calls. */
+export function makeFrameRestCall(
+  domain: string,
+  accessToken: string,
+  creds: B24OAuthSecret,
+  opts: { now: () => number, scope?: string }
+): RestCall {
+  const host = assertPortalHost(domain) // SSRF gate + clean hostname (throws if not allow-listed)
+  const nowMs = opts.now()
+  const token: PortalToken = {
+    memberId: '', domain: host, accessToken, refreshToken: '', applicationToken: '',
+    expiresAt: nowMs + 3_600_000
+  }
+  const client: OAuthCallClient = new B24OAuth(oauthParamsFromToken(token, { nowMs, scope: opts.scope }), creds)
+  return makeSdkRestCall(client)
 }
 
 /** Live env/infra a portal-bound SDK transport needs, so the wiring lives in ONE place

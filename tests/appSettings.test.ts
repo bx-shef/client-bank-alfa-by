@@ -1,83 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  APP_SETTING_KEY,
-  PortalNotInstalledError,
-  pickAppOption,
-  readAppSetting,
-  readAppSettingVia,
-  writeAppSetting,
-  type AppSettingsDeps
-} from '../server/utils/appSettings'
-import type { PortalToken } from '../server/utils/tokenStore'
+import { APP_SETTING_KEY, pickAppOption, readAppSettingVia } from '../server/utils/appSettings'
 
-function tok(memberId: string, domain: string): PortalToken {
-  return { memberId, domain, accessToken: `at-${memberId}`, refreshToken: 'r', expiresAt: Date.now() + 3_600_000, applicationToken: 'x' }
-}
-
-/** Fake deps backed by an in-memory per-host app.option store, recording calls. */
-function makeDeps(tokens: Record<string, PortalToken>) {
-  const byHost: Record<string, Record<string, unknown>> = {}
-  const calls: { host: string, accessToken: string, method: string, params: Record<string, unknown> }[] = []
-  const deps: AppSettingsDeps = {
-    loadToken: async m => tokens[m] ?? null,
-    ensureFresh: async t => t,
-    callRest: async (host, accessToken, method, params = {}) => {
-      calls.push({ host, accessToken, method, params })
-      byHost[host] ??= {}
-      if (method === 'app.option.set') {
-        Object.assign(byHost[host], (params.options as Record<string, unknown>) ?? {})
-        return { result: true }
-      }
-      if (method === 'app.option.get') return { result: { ...byHost[host] } }
-      return { result: {} }
-    }
-  }
-  return { deps, calls, byHost }
-}
-
-describe('appSettings', () => {
-  it('writes then reads back the value for a portal', async () => {
-    const { deps } = makeDeps({ A: tok('A', 'a.bitrix24.by') })
-    await writeAppSetting(deps, 'A', 'hello')
-    expect(await readAppSetting(deps, 'A')).toBe('hello')
-  })
-
-  it('returns null when the option is unset', async () => {
-    const { deps } = makeDeps({ A: tok('A', 'a.bitrix24.by') })
-    expect(await readAppSetting(deps, 'A')).toBeNull()
-  })
-
-  it('throws PortalNotInstalledError for an unknown portal', async () => {
-    const { deps } = makeDeps({})
-    await expect(readAppSetting(deps, 'ZZZ')).rejects.toBeInstanceOf(PortalNotInstalledError)
-    await expect(writeAppSetting(deps, 'ZZZ', 'x')).rejects.toBeInstanceOf(PortalNotInstalledError)
-  })
-
-  it('isolates portals — one portal never sees another\'s value', async () => {
-    const { deps, calls } = makeDeps({
-      A: tok('A', 'a.bitrix24.by'),
-      B: tok('B', 'b.bitrix24.by')
-    })
-    await writeAppSetting(deps, 'A', 'valueA')
-    await writeAppSetting(deps, 'B', 'valueB')
-
-    expect(await readAppSetting(deps, 'A')).toBe('valueA')
-    expect(await readAppSetting(deps, 'B')).toBe('valueB')
-
-    // Each op hit only its own portal's host with its own access token.
-    const aCalls = calls.filter(c => c.host === 'a.bitrix24.by')
-    const bCalls = calls.filter(c => c.host === 'b.bitrix24.by')
-    expect(aCalls.every(c => c.accessToken === 'at-A')).toBe(true)
-    expect(bCalls.every(c => c.accessToken === 'at-B')).toBe(true)
-    // No call for A ever touched B's host, and vice versa.
-    expect(calls.some(c => c.accessToken === 'at-A' && c.host === 'b.bitrix24.by')).toBe(false)
-    expect(calls.some(c => c.accessToken === 'at-B' && c.host === 'a.bitrix24.by')).toBe(false)
-  })
-
-  it('uses the app.option key', () => {
-    expect(APP_SETTING_KEY).toBe('cb_test_setting')
-  })
-})
+// appSettings.ts is now just the pure `app.option` read helpers over an already-bound jssdk
+// `RestCall` — the token load / refresh / write path moved to the SDK transport (b24Sdk.ts) with
+// the #191 migration, so there is no `readAppSetting`/`writeAppSetting`/`AppSettingsDeps` here to
+// test. The multi-tenant isolation those tests asserted is now structural: every `RestCall` is
+// bound to one portal's token (see b24Sdk.test.ts / settingsHandler.test.ts).
 
 describe('readAppSettingVia (bound RestCall — reactive-retry path, #191)', () => {
   it('reads app.option.get through the given call and picks the key', async () => {
@@ -91,11 +19,18 @@ describe('readAppSettingVia (bound RestCall — reactive-retry path, #191)', () 
     const call = vi.fn(async () => ({ result: {} }))
     expect(await readAppSettingVia(call, APP_SETTING_KEY)).toBeNull()
   })
+  it('defaults to APP_SETTING_KEY when no key is given', async () => {
+    const call = vi.fn(async () => ({ result: { [APP_SETTING_KEY]: 'default-key' } }))
+    expect(await readAppSettingVia(call)).toBe('default-key')
+  })
   it('propagates a throw from the bound call (transient error fails the job → clean retry)', async () => {
     const call = vi.fn(async () => {
       throw new Error('boom')
     })
     await expect(readAppSettingVia(call)).rejects.toThrow('boom')
+  })
+  it('uses the app.option key', () => {
+    expect(APP_SETTING_KEY).toBe('cb_test_setting')
   })
 })
 

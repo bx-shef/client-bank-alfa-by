@@ -5,13 +5,13 @@
 // another portal). The token is passed in a header (not a query) so it never
 // lands in access logs.
 
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken, handleReadSetting } from '../utils/settingsHandler'
 
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleReadSetting({ callRest }, token, domain)
+  const { status, body } = await handleReadSetting({ callRest: frameRestCall }, token, domain)
   setResponseStatus(event, status)
   return body
 })

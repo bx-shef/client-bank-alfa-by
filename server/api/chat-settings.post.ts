@@ -4,7 +4,7 @@
 // (defensive: coerces/clamps every field) before serialize, so a malformed or
 // hostile body can never poison the stored blob the worker later reads.
 
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken, handleWriteSetting } from '../utils/settingsHandler'
 import { SETTINGS_KEY, parsePortalSettings, serializePortalSettings } from '../../app/utils/settings'
 
@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
   }
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleWriteSetting({ callRest }, token, domain, normalized, SETTINGS_KEY)
+  const { status, body } = await handleWriteSetting({ callRest: frameRestCall }, token, domain, normalized, SETTINGS_KEY)
   setResponseStatus(event, status)
   return body
 })

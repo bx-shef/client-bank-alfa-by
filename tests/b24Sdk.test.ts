@@ -3,6 +3,7 @@ import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { OAuthCallClient, SdkAjaxResult, SdkPortalDeps } from '../server/utils/b24Sdk'
 import {
   buildRefreshPersist,
+  makeFrameRestCall,
   makePortalSdkCall,
   makeSdkBatchCall,
   makeSdkRestCall,
@@ -353,5 +354,52 @@ describe('makePortalSdkCall', () => {
     expect(registeredCb).toBeTypeOf('function')
     await registeredCb!({ authData: {} as never, b24OAuthParams: oauthParamsFromToken(token({ accessToken: 'REFRESHED' }), { nowMs: 0 }) })
     expect(saved[0]).toMatchObject({ accessToken: 'REFRESHED', memberId: 'M1' })
+  })
+})
+
+describe('makeFrameRestCall (frame-token jssdk transport + SSRF gate #149)', () => {
+  const creds = { clientId: 'cid', clientSecret: 'sec' }
+
+  it('THROWS (SSRF gate) before any client is built, for internal + userinfo-trick hosts', () => {
+    vi.mocked(B24OAuth).mockClear()
+    // The throw happens synchronously in makeFrameRestCall (assertPortalHost), before `new B24OAuth`.
+    expect(() => makeFrameRestCall('169.254.169.254', 'AT', creds, { now: () => 0 })).toThrow(/not allow-listed/)
+    expect(() => makeFrameRestCall('x.bitrix24.by@evil.com', 'AT', creds, { now: () => 0 })).toThrow(/not allow-listed/)
+    expect(() => makeFrameRestCall('', 'AT', creds, { now: () => 0 })).toThrow(/not allow-listed/)
+    expect(vi.mocked(B24OAuth)).not.toHaveBeenCalled()
+  })
+
+  it('builds one B24OAuth for an allow-listed portal (CLEAN host, empty refresh token) and returns a working RestCall', async () => {
+    const calls: Array<{ method: string }> = []
+    vi.mocked(B24OAuth).mockReset()
+    // Regular function (not arrow) so `new B24OAuth(...)` returns this object.
+    vi.mocked(B24OAuth).mockImplementation((function () {
+      return {
+        actions: { v2: { call: { make: async (o: { method: string }) => {
+          calls.push(o)
+          return { isSuccess: true, getData: () => ({ result: { ID: 42 } }), getErrorMessages: () => [] }
+        } } } },
+        setCallbackRefreshAuth: () => {}
+      }
+    }) as unknown as typeof B24OAuth)
+
+    // Mixed-case host proves the CLEAN parsed host reaches the SDK clientEndpoint.
+    const call = makeFrameRestCall('Acme.Bitrix24.COM', 'FRAME_AT', creds, { now: () => 1_000, scope: 'crm' })
+    const out = await call('profile', {})
+    expect(out).toEqual({ result: { ID: 42 } })
+    expect(calls[0]).toMatchObject({ method: 'profile' })
+
+    // constructed once, with the clean lowercased host + our creds, and NO refresh token
+    // (a frame token is fresh & unrefreshable) so the SDK never pre-emptively refreshes.
+    expect(vi.mocked(B24OAuth)).toHaveBeenCalledTimes(1)
+    const [params, secret] = vi.mocked(B24OAuth).mock.calls[0]
+    expect(params).toMatchObject({
+      domain: 'acme.bitrix24.com',
+      clientEndpoint: 'https://acme.bitrix24.com/rest/',
+      accessToken: 'FRAME_AT',
+      refreshToken: '',
+      scope: 'crm'
+    })
+    expect(secret).toEqual(creds)
   })
 })

@@ -9,8 +9,8 @@ import type { RemoteSearchPage } from '~/utils/remoteSearch'
 // there's no member_id to trust. Outside a portal frame there's no token → inert
 // (the form falls back to defaults, persistence is a no-op).
 //
-// The worker reads the SAME key/shape (readAppSetting(SETTINGS_KEY)) — writing here
-// is what turns notifications on for the pipeline.
+// The worker reads the SAME key/shape (readAppSettingVia(call, SETTINGS_KEY)) —
+// writing here is what turns notifications on for the pipeline.
 
 type ChatOption = { value: string, label: string }
 

@@ -3,7 +3,7 @@
 // + X-B24-Domain header (see settings.get.ts). Body parsing is inside try so a
 // malformed body returns the route's own {error} contract, not Nitro's default.
 
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken, handleWriteSetting } from '../utils/settingsHandler'
 
 export default defineEventHandler(async (event) => {
@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
   }
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleWriteSetting({ callRest }, token, domain, value)
+  const { status, body } = await handleWriteSetting({ callRest: frameRestCall }, token, domain, value)
   setResponseStatus(event, status)
   return body
 })

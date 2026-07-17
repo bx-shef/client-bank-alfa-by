@@ -3,16 +3,16 @@
 // frame access token (Authorization: Bearer) + X-B24-Domain, same model as
 // /api/settings (B24 scopes the token to the caller's portal). Returns the parsed,
 // defensively-normalized PortalSettings — the worker reads the SAME key/shape via
-// readAppSetting(SETTINGS_KEY), so UI and pipeline stay in sync.
+// readAppSettingVia(call, SETTINGS_KEY), so UI and pipeline stay in sync.
 
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken, handleReadSetting } from '../utils/settingsHandler'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleReadSetting({ callRest }, token, domain, SETTINGS_KEY)
+  const { status, body } = await handleReadSetting({ callRest: frameRestCall }, token, domain, SETTINGS_KEY)
   if (status !== 200) {
     setResponseStatus(event, status)
     return body

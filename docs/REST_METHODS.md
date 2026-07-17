@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-16
+> Last reviewed: 2026-07-17
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -28,10 +28,19 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 
 ## Серверные вызовы (backend, OAuth-токен портала)
 
-Идут через `server/utils/b24Rest.ts` `callRest(domain, accessToken, method, params)` (per-portal;
-на `crm-sync` — SDK-резолвер `portalSdkResolver.ts`, на фрейм-роутах — `liveAppSettingsDeps` с
-`ensureAccessToken`). Личность — **пользователь, установивший приложение**
-(владелец сохранённого refresh-токена); это важно для методов, чувствительных к правам (см. `im.*`).
+Идут **целиком через jssdk-транспорт** (`@bitrix24/b24jssdk`, `server/utils/b24Sdk.ts`) — сырой
+`$fetch`-`callRest` ретайрнут (миграция #191/«всё на jssdk»). Два входа:
+- **`crm-sync`** — per-portal `B24OAuth` из сохранённого токена (SDK-резолвер `portalSdkResolver.ts`,
+  пер-JOB мемоизация клиента = один rate-limiter-бакет + один token-load на джобу);
+- **UI-фрейм-роуты** (`settings`/`chat-settings`/`chat-search`/`import`/`import/status`/`metrics*`) —
+  `liveDeps.frameRestCall` → `makeFrameRestCall` (тот же SDK по фрейм-access-токену, за SSRF-гейтом
+  `assertPortalHost`; refresh-токена нет — фрейм-токен свежий, рефреш не нужен).
+
+`server/utils/b24Rest.ts` теперь несёт **только SSRF-гейт** (`assertPortalHost`, #149). SSRF-гейт
+`isAllowedPortalHost` (allowlist хоста), rate-limiter и реактивный ретрай `expired_token` — общие для
+обоих входов (у SDK). Личность серверных `crm-sync`-вызовов — **пользователь, установивший приложение**
+(владелец сохранённого refresh-токена); фрейм-роуты действуют личностью вызывающего оператора (его
+фрейм-токен). Права важны для `im.*` (см. ниже).
 
 | Метод | Поколение | Scope | Файл-владелец | Батч | Статус / замена | Назначение |
 |-------|-----------|-------|---------------|------|-----------------|------------|
@@ -45,7 +54,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `crm.item.payment.list` | classic | `crm` | `server/utils/paymentLookup.ts` | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | Оплаты **известной** сделки (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (#109). Ответ — массив **прямо** в `result`; поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency` подтверждены вживую. Оплаченные (`paid='Y'`) в кандидаты не берём. Метод требует `entityId` (**известную** сделку); company-скоуп в нём не встроить (нет поля `companyId`). Резолв `order-number`/`payment-number` без известной сделки — **company-scoped обходом** `paymentLookup.findCompanyDealPayments` (сделки компании → их оплаты; «сделка проксирует заказ»), а **не** глобальным `sale.*`: `sale.order` не несёт связки со сделкой/компанией (`companyId=null`), привязать к плательщику нельзя (IDOR). **`order-id`** (id заказа, которого нет в crm-оплате) — исключение: `sale.payment.list` по `orderId` даёт id оплат заказа, которые пересекаются с company-пулом (см. ниже, #172). |
 | `sale.payment.list` | classic | `sale` | `server/utils/saleLookup.ts` | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | **`order-id`→оплаты заказа** (#172): фильтр `orderId` → **массив id оплат** (`result.payments[]`, поля `id`/`orderId` подтверждены вживую — `crm.item.payment.list` `orderId` **не** отдаёт). **Список глобальный** (не company-scoped), поэтому вызывающий **обязан** пересечь ids с company-пулом (`filterByPaymentIds`) — это и держит IDOR. Пустой `orderId` → без вызова. |
 | `crm.item.payment.pay` | classic | `crm` | `server/utils/allocationMutationWrite.ts` | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | **Мутация разнесения** (§2, #109): помечает оплату сделки «Оплачено» для цели `deal-payment`. Параметр только `id` (числовой), ответ `{result:true}`. За гейтом `autoDistribute` (default OFF); идемпотентный порядок mutation-before-fact. Подтверждён вживую (`pnpm mutate:test`). |
-| `crm.item.update` | classic | `crm` | `server/utils/allocationMutationWrite.ts` (+ билдер `app/utils/allocationMutation.ts`) | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | **Мутация разнесения** (§2, #109): переводит смарт-счёт (`entityTypeId=31`) на «оплаченную» стадию `allocation.invoicePaidStageId` из настроек для цели `invoice`. Параметры `entityTypeId`/`id`/`fields.stageId`; ответ `{result:{item:{…}}}` (`callRest` не разворачивает `.result`, applied-детект различает с `{result:true}` от `payment.pay`). За гейтом `autoDistribute` (default OFF) + непустой стадии (пустая ⇒ инвойс не трогаем). Подтверждён вживую (apply/revert стадии seed-счёта). |
+| `crm.item.update` | classic | `crm` | `server/utils/allocationMutationWrite.ts` (+ билдер `app/utils/allocationMutation.ts`) | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | **Мутация разнесения** (§2, #109): переводит смарт-счёт (`entityTypeId=31`) на «оплаченную» стадию `allocation.invoicePaidStageId` из настроек для цели `invoice`. Параметры `entityTypeId`/`id`/`fields.stageId`; ответ `{result:{item:{…}}}` (транспорт отдаёт полный конверт, applied-детект различает с `{result:true}` от `payment.pay`). За гейтом `autoDistribute` (default OFF) + непустой стадии (пустая ⇒ инвойс не трогаем). Подтверждён вживую (apply/revert стадии seed-счёта). |
 | `crm.automation.trigger.execute` | classic | `crm` | `server/utils/allocationMutationWrite.ts` (+ билдер `app/utils/allocationMutation.ts`) | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | **подключён в hot-path (best-effort, #79); регистрация И firing live-verified** | **Триггер разнесения** (§2, #109): сигнал «деньги пришли» для trigger-целей `deal`/`smart-process`. Параметры **только** `CODE`+`OWNER_TYPE_ID`+`OWNER_ID` (доп. сумму/валюту метод не принимает; сверено с офдок); `OWNER_TYPE_ID`: сделка=2, смарт-процесс=его `entityTypeId`; `CODE` из `allocation.triggerCode` (маска `[a-z0-9.\-_]`). Ответ `{result:true}`. **Требует OAuth-контекста приложения** («Application context required» на webhook) + зарегистрированного `CODE` (`crm.automation.trigger.add` на установке). Проводка в hot-path — `applyTriggerDep`/`worker.ts` за гейтом `autoDistribute`+`triggerCode` (single-shot, best-effort). **Регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `{result:true}` на сделке `OWNER_TYPE_ID=2` и смарт-процессе). Осталось: реакция правила автоматизации на `CODE` — за админом портала. |
 | `crm.documentgenerator.document.list` | classic | `crm` | `server/utils/documentLookup.ts` | да | актуален | Мост-документ (#109): `document-number` → **массив** привязанных сущностей `{entityTypeId, entityId}[]` (фильтр `number`, ответ `result.documents[]`; номер **не** уникален по порталу → список). `select` только id-поля (не `*UrlMachine` с access-токеном). Гард: `doc.number` сверяется с запрошенным (обратный фильтр не показан в офдоке). Scope `crm` (метод под `crm.documentgenerator.*`). ⚠ поля из офдоки, **вживую не подтверждено** (в seed 0 документов); live-verify — гейт wiring-PR. Ref недоверенный → вызывающий рескоупит каждый по компании через `itemByIdLookup`. |
 | `crm.activity.configurable.add` | classic | `crm` | `server/utils/configurableActivityWrite.ts` (+ билдер `app/utils/configurableActivity.ts`) | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | Запись операции **настраиваемым делом** с маркером `originatorId`+`originId` (#259, стадия 4). Ответ `{result:{activity:{id}}}`. ⚠ **только OAuth-контекст** (`ERROR_WRONG_CONTEXT`, класс #79) — вебхуком не создать. |
@@ -56,8 +65,11 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + метрики `#78` + старт подключения банка `POST /api/bank/connect`): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1: креды привязываются ко всему порталу → только админ). |
 
 > **HTTP, не REST-метод:** OAuth-токен портала обновляем на `oauth/token` (endpoint Bitrix
-> `oauth.bitrix.info/oauth/token/`, `server/utils/b24Oauth.ts`) — это не метод `callRest`, а прямой
-> запрос к token endpoint. Других Bitrix-token-endpoint'ов нет.
+> `oauth.bitrix.info/oauth/token/`, `server/utils/b24Oauth.ts`) — это не REST-метод транспорта, а прямой
+> запрос к token endpoint. Он **остался на прямом `$fetch`** (не jssdk): его использует только
+> проактивный keep-alive-крон (`tokenKeepAlive.ts`→`ensureAccessToken.ts`, #175), которому нужен
+> advisory-lock сериализации рефреша — SDK его не даёт (осознанный компромисс #191). Других
+> Bitrix-token-endpoint'ов нет.
 
 ## Планируется (следующие PR)
 

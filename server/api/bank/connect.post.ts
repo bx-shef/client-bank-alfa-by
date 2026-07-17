@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto'
 import { bankConnectConfigFromEnv, handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
 import { bearerToken } from '../../utils/settingsHandler'
 import { resolveAuthConfig } from '../../utils/session'
-import { callRest } from '../../utils/b24Rest'
+import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { dbQuery } from '../../db/client'
 import type { BankProviderId } from '../../../app/types/statement'
@@ -23,7 +23,7 @@ function liveConnectDeps(): ConnectStartDeps {
     validateFrame: async (domain, accessToken) => {
       // `profile` (basic scope) proves the token works for THIS portal (else B24 throws) and
       // returns the user's id + ADMIN flag in one call — both membership and the admin gate.
-      const res = await callRest(domain, accessToken, 'profile', {})
+      const res = await frameRestCall(domain, accessToken, 'profile', {})
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },

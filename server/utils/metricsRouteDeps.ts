@@ -4,7 +4,7 @@
 // (`profile`), the same shape as import/status.get.ts's liveStatusDeps.
 
 import type { MetricsDeps } from './metricsHandler'
-import { callRest } from './b24Rest'
+import { frameRestCall } from './liveDeps'
 import { getMemberIdByDomain } from './tokenStore'
 import { readCounters, resetCounters } from './metricsStore'
 import { dbQuery } from '../db/client'
@@ -13,7 +13,7 @@ export function liveMetricsDeps(): MetricsDeps {
   return {
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),
     validateFrame: async (domain, accessToken) => {
-      const res = await callRest(domain, accessToken, 'profile', {})
+      const res = await frameRestCall(domain, accessToken, 'profile', {})
       const id = (res?.result as { ID?: unknown } | undefined)?.ID
       return id != null ? String(id) : ''
     },

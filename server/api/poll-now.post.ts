@@ -9,7 +9,7 @@
 
 import { DEFAULT_MANUAL_POLL_COOLDOWN_SEC, handlePollNow, type PollNowDeps } from '../utils/pollNow'
 import { bearerToken } from '../utils/settingsHandler'
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { listBankAccountsForPortal } from '../utils/bankTokenStore'
 import { enqueueFetch } from '../queue/producers'
@@ -27,7 +27,7 @@ function livePollNowDeps(): PollNowDeps {
     validateFrame: async (domain, accessToken) => {
       // `profile` (basic scope) proves the token works for THIS portal (else B24 throws) and
       // returns the user's ADMIN flag — both membership and the admin gate in one call.
-      const res = await callRest(domain, accessToken, 'profile', {})
+      const res = await frameRestCall(domain, accessToken, 'profile', {})
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
