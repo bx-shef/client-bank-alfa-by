@@ -48,9 +48,13 @@
   Компромисс (выбор пользователя): SDK-рефреш мимо advisory-lock → проигранная гонка ротации = транзиентный ретрай
   BullMQ, не порча кредов (persist — UPDATE-only-эквивалент, tombstone-guarded); advisory-lock остаётся на keep-alive.
   Прежний ручной `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + reactive-retry, тип.
-  `B24RestError`) **удалён** вместе с флагом `QUEUE_SDK_TRANSPORT` — SDK покрывает и bind-once, и реактивный рефреш
-  (`isExpiredTokenError` остаётся для фрейм-роутов). `makeSdkRestCall` ре-аттачит `total`/`next` из `getTotal()`/
-  `isMore()`, иначе списковая пагинация теряла бы страницы.
+  `B24RestError`) **удалён** вместе с флагом `QUEUE_SDK_TRANSPORT` — SDK покрывает и bind-once, и реактивный рефреш.
+  **Весь B24 REST — на jssdk (миграция «всё на JsSdk»):** и UI-фрейм-роуты (`settings`/`chat-settings`/`chat-search`/
+  `import`/`metrics`) переведены с сырого `$fetch`-`callRest` на `makeFrameRestCall` (тот же SDK по фрейм-токену за
+  SSRF-гейтом `assertPortalHost`); от `b24Rest.ts` остался **только** SSRF-гейт, сырые `callRest`/`restUrl`/`B24RestError`/
+  `isExpiredTokenError`/`[rest-timing]` удалены. Единственное исключение на прямом `$fetch` — keep-alive-рефреш
+  (`ensureAccessToken`/`b24Oauth`, #175): ему нужен advisory-lock, которого SDK не даёт. `makeSdkRestCall` ре-аттачит
+  `total`/`next` из `getTotal()`/`isMore()`, иначе списковая пагинация теряла бы страницы.
 
 ### Текущее состояние `main`
 
@@ -291,10 +295,11 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   писатель). Fail-closed вердикт `application_token`; хранилище токенов портала в Postgres (refresh
   шифруется AES-256-GCM, в т.ч. в пакете очереди); настройка уровня приложения через `app.option` по
   фрейм-токену; health-эндпоинт `GET /api/health`; валидация env на старте (`envCheck`).
-  **SSRF-гейт транспорта (#149):** `callRest` (`b24Rest.ts`) fail-closed по allowlist хоста портала —
+  **SSRF-гейт транспорта (#149):** `assertPortalHost` (`b24Rest.ts`) fail-closed по allowlist хоста портала —
   облачные `*.bitrix24.<tld>` (полный список зон по офиц. Bitrix24 DPA) + self-hosted из env
-  `B24_SELFHOSTED_HOSTS`; хост извлекается через `URL` (нет parser-differential обхода `…@evil.com`),
-  таймаут 15с; nginx CSP синхронизирован. Настройки чата коэрсятся `parsePortalSettings` с DoS-бондами —
+  `B24_SELFHOSTED_HOSTS`; хост извлекается через `URL` (нет parser-differential обхода `…@evil.com`) и
+  возвращается **чистым** в jssdk-`clientEndpoint`; nginx CSP синхронизирован. (Таймаут теперь — у
+  SDK-транспорта; сырой `callRest`+свой таймаут ретайрнуты миграцией «всё на jssdk».) Настройки чата коэрсятся `parsePortalSettings` с DoS-бондами —
   вся итерация недоверенного JSON ограничена срезом входа до цикла (`cleanList`/`cleanDirections`/
   `configFields`/`matrices`, #181/#182).
   **Политика удаления:** любой `ONAPPUNINSTALL` стирает всё, что связано с приложением на портале

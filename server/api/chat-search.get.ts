@@ -7,7 +7,7 @@
 // sender uses the stored portal token; a configurer≠installer mismatch is possible,
 // tracked as a follow-up: post as a registered bot / store the sender identity).
 
-import { callRest } from '../utils/b24Rest'
+import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken } from '../utils/settingsHandler'
 import { searchChats } from '../utils/chatSearch'
 import type { RestCall } from '../utils/companyLookup'
@@ -24,7 +24,7 @@ export default defineEventHandler(async (event) => {
   const offset = Number(query.offset) || 0
 
   // Bind the portal transport to the caller's frame token + domain.
-  const call: RestCall = (method, params) => callRest(domain, token, method, params)
+  const call: RestCall = (method, params) => frameRestCall(domain, token, method, params)
   try {
     const page = await searchChats(call, q, offset)
     return page

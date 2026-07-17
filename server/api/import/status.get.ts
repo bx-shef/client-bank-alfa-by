@@ -4,7 +4,7 @@
 
 import { handleImportStatus, type ImportStatusDeps } from '../../utils/importStatusHandler'
 import { bearerToken } from '../../utils/settingsHandler'
-import { callRest } from '../../utils/b24Rest'
+import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { getImportResult } from '../../utils/importResultStore'
 import { dbQuery } from '../../db/client'
@@ -13,7 +13,7 @@ function liveStatusDeps(): ImportStatusDeps {
   return {
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),
     validateFrame: async (domain, accessToken) => {
-      const res = await callRest(domain, accessToken, 'profile', {})
+      const res = await frameRestCall(domain, accessToken, 'profile', {})
       const id = (res?.result as { ID?: unknown } | undefined)?.ID
       return id != null ? String(id) : ''
     },

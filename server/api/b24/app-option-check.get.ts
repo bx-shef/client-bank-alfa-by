@@ -5,8 +5,8 @@
 // `X-Check-Token` header (or `?token=`), constant-time compared. Not for the UI.
 
 import { safeEqual } from '../../../app/utils/b24Events'
-import { PortalNotInstalledError, readAppSetting } from '../../utils/appSettings'
-import { liveAppSettingsDeps } from '../../utils/liveDeps'
+import { APP_SETTING_KEY, readAppSettingVia } from '../../utils/appSettings'
+import { livePortalSdkCall } from '../../utils/liveDeps'
 
 export default defineEventHandler(async (event) => {
   const expected = process.env.B24_APPLICATION_TOKEN?.trim() || ''
@@ -22,13 +22,15 @@ export default defineEventHandler(async (event) => {
     return { error: 'memberId required' }
   }
   try {
-    const value = await readAppSetting(liveAppSettingsDeps(), memberId)
-    return { source: 'server', memberId, key: 'cb_test_setting', value }
-  } catch (err) {
-    if (err instanceof PortalNotInstalledError) {
+    // Stored-token SDK call (acts AS the portal, not the frame caller); null → not installed.
+    const call = await livePortalSdkCall(memberId)
+    if (!call) {
       setResponseStatus(event, 404)
       return { error: 'portal not installed', memberId }
     }
+    const value = await readAppSettingVia(call, APP_SETTING_KEY)
+    return { source: 'server', memberId, key: APP_SETTING_KEY, value }
+  } catch (err) {
     console.error('[app-option-check]', (err as Error)?.message)
     setResponseStatus(event, 502)
     return { error: 'upstream error' }

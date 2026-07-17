@@ -552,8 +552,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`ensureAccessToken`, #35) — проигранная гонка ротации = **транзиентный ретрай BullMQ**, не порча кредов (persist —
     UPDATE-only-эквивалент через tombstone-guarded `saveToken`); advisory-lock остаётся на keep-alive (#175). Прежний
     ручной `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + лок + reactive-retry) **удалён** —
-    SDK стал единственным транспортом. Реактивный ретрай `expired_token` теперь у самого SDK; `isExpiredTokenError`
-    (`b24Rest.ts`) остаётся для фрейм-роутов. **Батчинг (`callBatch`):** резолвер отдаёт `batch(memberId)` (`RestBatch`)
+    SDK стал единственным транспортом. Реактивный ретрай `expired_token` теперь у самого SDK — **и для crm-sync, и для
+    UI-фрейм-роутов** (`makeFrameRestCall`, `liveDeps.frameRestCall`): сырой `callRest`/`isExpiredTokenError` из
+    `b24Rest.ts` **удалены**, от модуля остался только SSRF-гейт (`assertPortalHost`). **Батчинг (`callBatch`):** резолвер отдаёт `batch(memberId)` (`RestBatch`)
     на том же мемоизированном клиенте; `makeSdkBatchCall` — массив команд → `actions.v2.batch.make`
     (`isHaltOnError`+`returnAjaxResult`), конверты per-команда в порядке (с ре-аттачем `total`/`next`), чанкинг по
     `SDK_BATCH_MAX`=50, halt-on-error (падение батча/любой команды → throw, без тихого пропуска). Проведён в
@@ -807,15 +808,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     до этого заглушка.
   - **Настройка уровня приложения (`app.option`) — серверным REST по токену портала:**
     `server/utils/b24Oauth.ts` (refresh access-токена, `B24_CLIENT_ID/SECRET`, чистые URL/parse),
-    `server/utils/b24Rest.ts` (`callRest`/`restUrl`; **SSRF-гейт #149**: `isAllowedPortalHost` —
+    `server/utils/b24Rest.ts` (**только SSRF-гейт #149** после jssdk-миграции: `isAllowedPortalHost` —
     fail-closed allowlist хоста портала, облачные `*.bitrix24.<tld>` + self-hosted из env
-    `B24_SELFHOSTED_HOSTS`, валидатор и `restUrl` извлекают хост одинаково через `URL` — нет
-    parser-differential обхода `x.bitrix24.by@evil.com`; таймаут `REST_TIMEOUT_MS` 15с; **опц.
-    `[rest-timing]`-лог (#78)** — env `REST_TIMING` (default OFF) пишет строку на исходящий вызов
-    `method`/`ms`/`srv` (серверное `time.duration` Б24 → сеть vs портал)/`ok`, чистые
-    `restTimingLine`/`serverDurationMs` под тестами — «мерить до троттлинга» перед лимитером #191; **типизированная
-    `B24RestError`** несёт машинный `error`-код — `isExpiredTokenError` отличает `expired_token`/`invalid_token`
-    для реактивного ретрая резолвера, сообщение неизменно, `.message`-совместимо),
+    `B24_SELFHOSTED_HOSTS`; `assertPortalHost` — единая точка проверки, извлекает хост через `URL` (нет
+    parser-differential обхода `x.bitrix24.by@evil.com`) и возвращает **чистый** хост либо бросает.
+    Прежний сырой `$fetch`-`callRest`/`restUrl`/таймаут/`[rest-timing]`/`B24RestError`/`isExpiredTokenError`
+    **удалены** — весь исходящий B24 REST идёт через jssdk-транспорт `b24Sdk.ts` (crm-sync — stored-token
+    `B24OAuth`; UI-фрейм-роуты — `makeFrameRestCall`, тот же SDK за `assertPortalHost`); реактивный ретрай
+    `expired_token` и лимитер — у самого SDK),
     `server/utils/ensureAccessToken.ts`
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
@@ -831,11 +831,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     Пер-портальные ошибки (dead grant/`PAYMENT_REQUIRED`/удалён) изолированы — логируются, крон не падает. Намеренно
     консервативно (Б24 предупреждает про авто-блок при частом рефреше): раз в сутки, батч-кап, только near-expiry.
     Гейт на `B24_CLIENT_ID/SECRET` (без них рефреш невозможен). DI, тесты `tests/tokenKeepAlive.test.ts`),
-    `server/utils/appSettings.ts` (чистый `readAppSetting`/`writeAppSetting`
-    с DI — изоляция по `memberId`, используется серверной проверкой; **`readAppSettingVia(call, key)`** — чтение
-    через **уже связанный** `RestCall` резолвера, чтобы гейт-чтение настроек в `crm-sync` делило реактивный
-    ретрай `expired_token`, а не грузило/рефрешило токен само), `server/utils/settingsHandler.ts`
-    (чистый `{status,body}` для UI-роутов по фрейм-токену), `server/utils/liveDeps.ts` (проводка).
+    `server/utils/appSettings.ts` (чистые хелперы чтения `app.option`: `pickAppOption` +
+    **`readAppSettingVia(call, key)`** — чтение через **уже связанный** jssdk-`RestCall`, чтобы и гейт-чтение
+    настроек в `crm-sync`, и диагностика делили реактивный ретрай `expired_token` SDK, а не грузили/рефрешили
+    токен сами. Прежние `readAppSetting`/`writeAppSetting`/`AppSettingsDeps` (свой token-load+`callRest`) **удалены**
+    — запись `app.option` теперь через тот же jssdk-транспорт), `server/utils/settingsHandler.ts`
+    (чистый `{status,body}` для UI-роутов по фрейм-токену; `SettingsIO.callRest` — DI-порт транспорта,
+    в проде связан `frameRestCall`), `server/utils/liveDeps.ts` (проводка: `frameRestCall` — drop-in замена
+    сырого `callRest` на jssdk по фрейм-токену; `livePortalSdkCall` — stored-token SDK для серверной диагностики).
     UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)
     **аутентифицируются фрейм-токеном** (`Authorization: Bearer` + `X-B24-Domain`) — B24 скоупит
     токен к порталу вызывающего, `member_id` не доверяется, чужой `app.option` недостижим. **Серверная

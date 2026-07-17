@@ -201,9 +201,10 @@ flowchart LR
   осознанно): проигранная гонка ротации — **транзиентный ретрай BullMQ**, не порча кредов; advisory-lock остаётся на
   проактивном keep-alive (#175). Прежний ручной `callRest`-резолвер (bind-once + reactive-retry `expired_token`,
   тип. `B24RestError`) **удалён** — SDK покрывает и bind-once, и реактивный рефреш; флага `QUEUE_SDK_TRANSPORT` больше нет.
-- **Инструмент замера — env `REST_TIMING`** (default OFF): `[rest-timing] method= ms= srv= ok=` на исходящий
-  вызов (`server/utils/b24Rest.ts`), `srv` = серверное `time.duration` Б24. Включается на нагрузочный тест, чтобы
-  калибровать лимитер по реальной латентности/объёму **до** его включения.
+- **Замер латентности/объёма** после миграции «всё на jssdk» — у SDK-транспорта (RestrictionManager экспонирует
+  свои очередь/тайминги); прежний опциональный `[rest-timing]`-лог сырого `callRest` (env `REST_TIMING`) **удалён**
+  вместе с самим `callRest`. Глубокую телеметрию (Prometheus/bull-board) вешаем на статистику лимитера SDK, а не на
+  ретайрнутый транспорт (#78).
 
 **Что даёт SDK.** У `@bitrix24/b24jssdk` встроенный **RestrictionManager**: leaky-bucket (дефолт 2 req/s, burst 50),
 адаптивная задержка и **retry-с-backoff на `QUERY_LIMIT_EXCEEDED` / 429 / 5xx** — **по умолчанию** и **per-instance**

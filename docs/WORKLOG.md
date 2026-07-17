@@ -44,6 +44,33 @@
 
 ## Лог проходов
 
+### 2026-07-17 — #191 «всё на JsSdk»: весь B24 REST через один jssdk-транспорт
+- **Проблема:** `crm-sync` уже ходил через `@bitrix24/b24jssdk` (`B24OAuth`), но UI-фрейм-роуты
+  (`settings`/`chat-settings`/`chat-search`/`import`/`import/status`/`metrics`/`bank/connect`/`poll-now`) и
+  серверная диагностика `app-option-check` всё ещё использовали **сырой `$fetch`-`callRest`** в `b24Rest.ts` —
+  два разных транспорта, дубль лимитера/ретрая, ручной парсинг ошибок.
+- **Сделано:** `b24Rest.ts` ужат **до одного SSRF-гейта** (`assertPortalHost` — валидирует хост по allowlist
+  #149 и возвращает **чистый** хост либо бросает); сырые `callRest`/`restUrl`/`REST_TIMEOUT_MS`/`B24RestError`/
+  `isExpiredTokenError`/`b24RestErrorFrom`/`b24ErrorMessage`/`restTimingLine`/`serverDurationMs` **удалены**. Новый
+  `makeFrameRestCall(domain, accessToken, creds, {now, scope})` (`b24Sdk.ts`) — фрейм-`RestCall` на том же
+  `B24OAuth`, **за `assertPortalHost`** (SSRF: чистый хост в `clientEndpoint`, userinfo-трюк `…@evil.com` не
+  ретаргетит origin), с **пустым refresh-токеном** (фрейм-токен свежий, рефреш не нужен). `liveDeps.ts`:
+  `frameRestCall` (drop-in замена `callRest`) + `livePortalSdkCall` (stored-token SDK для диагностики).
+  `appSettings.ts` ужат до чистых `readAppSettingVia`/`pickAppOption` (token-load+запись `readAppSetting`/
+  `writeAppSetting`/`AppSettingsDeps` **удалены** — запись `app.option` теперь тем же SDK).
+- **Свойства сохранены (сверено по исходникам pinned SDK 2.0.0):** реактивный ретрай `expired_token`/401 — у
+  SDK (`abstract-http` `_isAuthError`), rate-limiter (RestrictionManager, пер-инстанс) — у SDK; фрейм-клиент
+  **не** рефрешит проактивно (`getAuthData()` видит `expiresAt=now+1h` → валиден); отвергнутый фрейм-токен →
+  реактивный refresh с пустым токеном → **чистый throw** → роут отдаёт 502 (как старый `callRest`), без утечки
+  секрета. Единственный B24-вызов на прямом `$fetch` — keep-alive-рефреш (`ensureAccessToken`/`b24Oauth`, #175):
+  ему нужен pg-advisory-lock сериализации, которого SDK не даёт (осознанный компромисс).
+- **Тесты:** `b24Rest.test.ts` — `assertPortalHost` (throw на не-allowlisted/пустой/userinfo, возврат чистого
+  хоста); `b24Sdk.test.ts` — `makeFrameRestCall` (SSRF-гейт бросает **до** построения клиента; happy-path строит
+  один `B24OAuth` с чистым хостом + пустым refresh); `appSettings.test.ts` — `readAppSettingVia`/`pickAppOption`.
+  `pnpm check` зелёный (1475 тестов). Живой end-to-end фрейм-пути в песочнице не прогнать (нет свежего токена —
+  бэкенд-Docker с живым порталом на деплой-сервере); транзитивно покрыт — фрейм-путь использует **тот же**
+  `makeSdkRestCall`/`B24OAuth`, что live-verified `crm-sync`-транспорт (#191).
+
 ### 2026-07-17 — Стадия 5: онлайн-опрос банков собран целиком (A5–A10, слайсами)
 - **Что сделано (каждый слайс — 5 ревьюеров + юнит-тесты, смержено):** A5 транспорт выписки Альфы
   (`bankFetch.ts`), A9 свап заглушки в воркере, A6 реестр счетов + A10 живой крон-таймер (`epoch` в
