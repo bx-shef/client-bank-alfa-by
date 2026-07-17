@@ -69,11 +69,11 @@ function fieldBlock(title: string, value: string, inline = true): Record<string,
   return { type: 'withTitle', properties: { title, block: textBlock(value), inline } }
 }
 
-/**
-/** A body `logo` code. BodyDto marks `logo` required, and the official configurable-activity
- *  examples use `notification` — a built-in system logo. If a live portal ever rejects it,
- *  swap for another system code from `crm.timeline.logo.list` (e.g. `arrow-down`/`call`). */
-const BODY_LOGO_CODE = 'notification'
+/** A body `logo` code (BodyDto marks `logo` required). `document` is a built-in system logo
+ *  (`isSystem:true`) — confirmed live via `crm.timeline.logo.list` on the test portal, and
+ *  fitting for a bank document. Swap for another system code from `crm.timeline.logo.list` if
+ *  ever needed. */
+const BODY_LOGO_CODE = 'document'
 
 /**
  * Build the configurable-activity `layout` DTO — validated against the official ContentBlockDto

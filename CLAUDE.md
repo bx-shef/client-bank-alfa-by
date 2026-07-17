@@ -517,8 +517,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп — **поиск маркера в B24**
     `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`; пустой
     маркер → без REST); стора нет, `rememberActivity` убран (маркер пишется атомарно с делом). Прежний
-    `crm.activity.todo.add`-путь (`crmActivityWrite.ts`) и билдер `buildTodoActivity` **удалены**. ⚠
-    `configurable.add` — **только OAuth-контекст** (класс #79) → живой смоук `pnpm activity:test` (вебхуком не проверить).
+    `crm.activity.todo.add`-путь (`crmActivityWrite.ts`) и билдер `buildTodoActivity` **удалены**.
+    **Дедуп-поиск подтверждён вживую** (тест-портал `b24-86sr2r`: `crm.activity.list` принимает фильтр
+    `ORIGINATOR_ID`+`ORIGIN_ID`, отдаёт `[]`); `layout.body.logo='document'` — системный код из
+    `crm.timeline.logo.list` (тоже live-подтверждён). ⚠ Сама запись `configurable.add` — **только
+    OAuth-контекст** (класс #79; вживую подтверждён `ERROR_WRONG_CONTEXT` вебхуком) → живой смоук
+    `pnpm activity:test` OAuth-кредами.
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
     `buildAllocationMutation(target, opts)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`;
     для `invoice` — `{method:'crm.item.update',params:{entityTypeId:31,id,fields:{stageId}}}` **при заданной** стадии
