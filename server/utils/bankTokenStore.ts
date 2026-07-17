@@ -85,14 +85,24 @@ export async function getBankToken(query: QueryFn, memberId: string, provider: B
 
 /** List every connected bank account of a portal (decrypting each refresh). Feeds the
  *  poll planner (which accounts to fetch) once the account registry lands. Ordered by
- *  provider+account for a stable result. */
+ *  provider+account for a stable result. RESILIENT: a single undecryptable/corrupt row is
+ *  skipped+logged (not thrown), so one tampered account can't deny polling of the healthy
+ *  ones — unlike `getBankToken` (a specific requested account fails loud). */
 export async function listBankTokensForPortal(query: QueryFn, memberId: string): Promise<BankToken[]> {
   const rows = await query(
     `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
-  return rows.map(rowToBankToken)
+  const out: BankToken[] = []
+  for (const row of rows) {
+    try {
+      out.push(rowToBankToken(row))
+    } catch (e) {
+      console.warn(`[bankTokenStore] skip corrupt row member=${memberId} provider=${String(row.provider)} account=${String(row.account_key)}: ${(e as Error)?.message}`)
+    }
+  }
+  return out
 }
 
 /** Delete ALL of a portal's bank tokens on ONAPPUNINSTALL (a removed app keeps no data).

@@ -514,10 +514,11 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
 Транспорт `fetchStatement` в воркере — **заглушка** (стадия 5); чистые OAuth/нормализатор-ядра
 (`alfaOauth`/`alfaStatement`/`priorOauth`/`priorStatement`) готовы и проверены на sandbox скриптами.
 План снятия заглушки слайсами (каждый — юнит-тесты на фейках/фикстурах, без живых банк-кредов):
-1. **A1** снять геоблок-оговорки из доков/кода (АВЕСТ/ГосСУОК Приор-прод — оставить, это крипта РБ).
+1. ✅ **A1 — сделано** (PR #282): сняты геоблок-оговорки (АВЕСТ/ГосСУОК Приор-прод оставлены).
 2. **A2** переподключить демо-песочницу лендинга (`demoAlfaExtraction`/`demoPriorExtraction` → UI).
-3. **A3** стор банк-токенов `bank_tokens` (по образцу `tokenStore`, refresh шифрован `secretCrypto`) +
-   чистка на ONAPPUNINSTALL. **Блокирует A5/A7/A9.**
+3. ✅ **A3 — сделано** (PR #286): стор `bank_tokens` (`server/utils/bankTokenStore.ts`, refresh шифрован
+   `secretCrypto`, ключ `(member_id,provider,account_key)`, `list` резилиентен) + чистка на ONAPPUNINSTALL +
+   тесты. **Разблокирует A5/A7/A9.**
 4. **A6** реестр счетов на опрос (кормит `planFetches`). **Блокирует A10.**
 5. **A4** рефреш банк-токена (`ensureBankToken`, advisory-lock как `ensureAccessToken`). **Нужен A3.**
 6. **A5** HTTP-транспорт (ядра за DI): токен→`$fetch`→`normalizeAlfa`/`normalizePrior`; тесты на

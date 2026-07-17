@@ -349,7 +349,8 @@ export function liveHandlerDeps(): HandlerDeps {
       }, Number(job.ts) || 0)
     },
     // Uninstall always erases EVERYTHING for the portal: token row + import status +
-    // allocation facts (#184). `eventTs` records the ordering tombstone (#77). Activity dedup
+    // allocation facts (#184) + lifetime metrics + connected bank tokens (stage 5). `eventTs`
+    // records the ordering tombstone (#77). Activity dedup
     // now lives in B24 (the marker on the activity itself), so there's no local dedup map to
     // purge — the client's own CRM keeps the activities. Also evict the in-memory bind-once
     // RestCall (#191) so a just-uninstalled portal's cached access token can't be reused by an
