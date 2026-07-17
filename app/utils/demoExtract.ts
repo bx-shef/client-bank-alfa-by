@@ -6,7 +6,8 @@
 // The landing demo runs client-side and holds no bank credentials, so the "sandbox"
 // demos exercise the real normalizers on representative responses instead of a
 // live fetch — proving the "bank response → normalized operations" path. The live
-// OAuth fetch runs in the backend (per-portal token), not on the landing.
+// OAuth fetch is designed to run in the backend (per-portal token), not on the
+// landing — that transport is a roadmap item (stage 5), not yet built.
 //
 // `summarizeExtraction` turns a StatementItem[] into the human "what we found"
 // summary shown on the landing (counts, totals per currency, unique counterparties,

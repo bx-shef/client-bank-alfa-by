@@ -1,6 +1,6 @@
 # API Альфа-Банка Беларусь — справка
 
-> Last reviewed: 2026-07-02
+> Last reviewed: 2026-07-17
 
 Краткая карточка: что используем из Open API Альфа-Банка и с какими параметрами.
 Реализация контракта — `app/utils/alfaOauth.ts` (OAuth) и `app/utils/alfaStatement.ts`
