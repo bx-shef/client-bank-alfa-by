@@ -54,10 +54,12 @@ export async function payAllocationViaRest(
  * target) NOTHING is called and `{applied:false, skipped:'unsupported'}` is returned. A REST error
  * PROPAGATES (the job fails → clean retry).
  *
- * BLOCKER (#79): the method needs OAuth **application context** (a webhook token gets
- * «Application context required») and a CODE that the app REGISTERED at install
- * (`crm.automation.trigger.add`). So this transport is not wired into the crm-sync hot path yet —
- * it is verified by unit tests here and awaits the install-registration + OAuth-portal live-verify.
+ * CONTEXT (#79): the method needs OAuth **application context** (a webhook token gets
+ * «Application context required») and a CODE the app REGISTERED at install
+ * (`crm.automation.trigger.add`). Both are satisfied in the crm-sync worker (per-portal OAuth
+ * resolver) — this transport IS wired into the hot path (behind the `autoDistribute`+`triggerCode`
+ * gate) and is LIVE-VERIFIED on a real portal (`pnpm trigger:test --apply --fire`: `{result:true}`
+ * on a deal (OWNER_TYPE_ID=2) and a smart-process element (OWNER_TYPE_ID=entityTypeId)).
  */
 export async function executeTriggerViaRest(
   target: Pick<AllocationCandidate, 'kind' | 'id'> & { entityTypeId?: number },

@@ -6,9 +6,18 @@
 // webhook-tested. Get OAuth creds with scripts/extract-oauth-from-docker.sh → .env.b24oauth.
 //
 // Run:  node --experimental-strip-types --disable-warning=ExperimentalWarning \
-//         --import ./scripts/lib/alias-loader.mjs scripts/trigger-register-test.ts [--apply]
+//         --import ./scripts/lib/alias-loader.mjs scripts/trigger-register-test.ts [--apply] [--fire]
 // (wired as `pnpm trigger:test`). DRY-RUN by default (prints the call, registers nothing).
 // --apply registers the CODE, then lists triggers to prove it is present (round-trip).
+// --fire (with --apply) additionally FIRES the trigger via the EXACT crm-sync transport
+//   (`executeTriggerViaRest` → crm.automation.trigger.execute) on the first deal found (and, if
+//   a smart process exists, on its first element) — proving #79 firing end-to-end. The method
+//   needs app (OAuth) context; a webhook returns «Application context required». Firing is a
+//   signal only (no money moves); a downstream automation rule reacts only if the admin attached
+//   one to the CODE — the `{result:true}` here means the SIGNAL was delivered, which is our job.
+//   ⚠ --fire fires on ARBITRARY first records (not test fixtures). Run it only on a DEV/TEST
+//   portal, OR one where CODE `cba_payment_received` has NO automation rule bound — otherwise it
+//   could trigger that rule (stage move / notification) on the first live deal + SP element.
 
 import { loadDotEnv } from './lib/env.mjs'
 import { C, head, ok, warn, err } from './lib/cli.mjs'
@@ -16,10 +25,13 @@ import { makePortalSdkCall, type SdkPortalDeps } from '../server/utils/b24Sdk.ts
 import type { PortalToken } from '../server/utils/tokenStore.ts'
 import { B24_REQUIRED_SCOPES, B24_PAYMENT_TRIGGER } from '../app/config/b24.ts'
 import { buildTriggerRegisterCall } from '../app/utils/b24TriggerRegister.ts'
+import { executeTriggerViaRest } from '../server/utils/allocationMutationWrite.ts'
+import type { AllocationCandidate } from '../app/utils/allocation.ts'
 
 loadDotEnv(['.env.b24oauth', '.env.b24test'], { explicit: false })
 
 const apply = process.argv.includes('--apply')
+const fire = process.argv.includes('--fire')
 const env = (k: string) => (process.env[k] ?? '').trim()
 const domain = env('B24_OAUTH_DOMAIN')
 const memberId = env('B24_OAUTH_MEMBER_ID')
@@ -65,6 +77,7 @@ async function main() {
   console.log(`${C.dim}call:${C.reset} ${JSON.stringify(call)}`)
 
   if (!apply) {
+    if (fire) warn('--fire без --apply игнорируется (сначала нужна регистрация). Запусти: --apply --fire.')
     warn('DRY-RUN — ничего не регистрируем. Добавь --apply, чтобы зарегистрировать CODE и проверить список.')
     return
   }
@@ -90,6 +103,60 @@ async function main() {
   }
 
   console.log(`\n${C.green}✓ Регистрация триггера автоматизации работает вживую (#79).${C.reset}`)
+
+  // 3) --fire: exercise the ACTUAL crm-sync firing path (executeTriggerViaRest → trigger.execute)
+  //    on a real deal (OWNER_TYPE_ID=2) and a smart-process element (OWNER_TYPE_ID=entityTypeId).
+  //    Tracks how many fires actually `applied` so a portal with no deal/SP can't print a false
+  //    "verified" banner — the run FAILS if nothing was fired (there was nothing to prove on).
+  if (fire) {
+    head(`crm.automation.trigger.execute (#79 firing) через executeTriggerViaRest`)
+    let fired = 0
+    const fireOn = async (target: AllocationCandidate, label: string) => {
+      const res = await executeTriggerViaRest(target, rest, { triggerCode: B24_PAYMENT_TRIGGER.code })
+      if (res.applied) {
+        fired++
+        ok(`firing ${label} OK — executeTriggerViaRest → applied=true (метод ${res.method})`)
+      } else {
+        err(`firing ${label} НЕ применился: ${JSON.stringify(res)}`)
+        process.exit(1)
+      }
+    }
+    // Deal: OWNER_TYPE_ID is the fixed CRM constant 2.
+    const deals = await rest('crm.item.list', { entityTypeId: 2, select: ['id'], start: 0 }) as { result?: { items?: Array<{ id: number }> } }
+    const dealId = deals.result?.items?.[0]?.id
+    if (dealId == null) warn('нет сделок на портале — пропускаю firing сделки')
+    else await fireOn({ kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }, `сделки #${dealId} (OWNER_TYPE_ID=2)`)
+    // Smart process: OWNER_TYPE_ID is its portal-specific entityTypeId (#79 item 3).
+    const types = await rest('crm.type.list', {}) as { result?: { types?: Array<{ entityTypeId: number }> } }
+    const spEtid = types.result?.types?.[0]?.entityTypeId
+    if (spEtid == null) {
+      warn('нет смарт-процессов — пропускаю firing смарт-процесса')
+    } else {
+      const sp = await rest('crm.item.list', { entityTypeId: spEtid, select: ['id'], start: 0 }) as { result?: { items?: Array<{ id: number }> } }
+      const spId = sp.result?.items?.[0]?.id
+      if (spId == null) warn(`нет элементов смарт-процесса ${spEtid} — пропускаю`)
+      else await fireOn({ kind: 'smart-process', id: String(spId), amount: 0, currency: 'BYN', entityTypeId: spEtid }, `смарт-процесса ${spEtid}#${spId} (OWNER_TYPE_ID=${spEtid})`)
+    }
+    // No deal AND no SP element ⇒ nothing was proven — fail loudly, don't print a green banner.
+    if (fired === 0) {
+      err('firing НЕ проверен — на портале нет ни сделки, ни элемента смарт-процесса. Засей данные (pnpm seed:b24) и повтори.')
+      process.exit(1)
+    }
+    // Negative control: a mask-valid but UNREGISTERED code must be REJECTED by the portal — this is
+    // the exact error the worker's best-effort catch swallows. executeTriggerViaRest propagates the
+    // REST error, so it must THROW here; catching proves the reject. (Registers nothing — execute only.)
+    if (dealId != null) {
+      const bogus = 'cba_unregistered_probe'
+      try {
+        await executeTriggerViaRest({ kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }, rest, { triggerCode: bogus })
+        warn(`негативный контроль: незарегистрированный CODE «${bogus}» НЕ дал ошибку — проверь вручную`)
+      } catch (e) {
+        ok(`негативный контроль OK — незарегистрированный CODE → ошибка «${(e as Error).message}» (воркер её глотает, best-effort)`)
+      }
+    }
+    console.log(`\n${C.green}✓ Firing триггера через реальный транспорт crm-sync работает вживую (#79, целей: ${fired}).${C.reset}`)
+  }
+
   console.log(`${C.dim}Дальше админ портала вешает CODE «${B24_PAYMENT_TRIGGER.code}» на правило автоматизации,`)
   console.log(`а в настройках приложения указывает его в allocation.triggerCode — тогда воркер его фаерит.${C.reset}\n`)
 }

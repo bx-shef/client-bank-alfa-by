@@ -441,9 +441,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
       **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
       фаерится `crm.automation.trigger.execute` за гейтом `autoDistribute`+`triggerCode`, write-once факт на firing).
-      Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана и **подтверждена вживую**
-      (`pnpm trigger:test --apply` на `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip); остаётся live-verify
-      **firing** (нужно правило автоматизации на `CODE`) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
+      Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
+      подтверждены вживую** (`pnpm trigger:test --apply --fire` на `bel.bitrix24.by`: round-trip + `executeTriggerViaRest`
+      `{result:true}` на сделке и смарт-процессе); остаётся `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -552,9 +552,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (single-shot: промах первой попытки не пере-пробуется). Проводка `applyTrigger` в воркере вынесена в чистую фабрику
     `server/utils/applyTriggerDep.ts` (`makeApplyTrigger` — demo-гейт/нет-токена→skip/best-effort swallow + инвариант
     «полный `target` c `entityTypeId` доезжает до транспорта»), покрыта юнит-тестом (`tests/applyTriggerDep.test.ts`).
-    Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; **сама регистрация
-    подтверждена вживую** (`pnpm trigger:test --apply`, `bel.bitrix24.by`); осталось live-verify **firing**
-    (нужно правило автоматизации, вешаемое на `CODE`). CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
+    Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
+    подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `trigger.add`→`trigger.list`
+    round-trip, затем `executeTriggerViaRest`→`trigger.execute` `{result:true}` на **сделке** (OWNER_TYPE_ID=2) **и
+    смарт-процессе** (OWNER_TYPE_ID=его `entityTypeId`=1044); незарегистрированный CODE → `not registered` — валидирует
+    best-effort-глоток). Реакция правила автоматизации на CODE — за админом портала (наш код доставляет сигнал).
+    CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
       {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
@@ -674,8 +677,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
       (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
       за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на
-      firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort),
-      **подтверждена вживую** (`pnpm trigger:test --apply`, `bel.bitrix24.by`); осталось live-verify **firing** (нужно правило на CODE).
+      firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort);
+      **регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `executeTriggerViaRest`
+      → `{result:true}` на сделке OWNER_TYPE_ID=2 и смарт-процессе OWNER_TYPE_ID=1044; незарегистрированный CODE → `not registered`).
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
@@ -730,9 +734,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
     kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
     глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`,
-    best-effort) — **сделана и подтверждена вживую** (`pnpm trigger:test --apply` на `bel.bitrix24.by`:
-    `trigger.add`→`trigger.list` round-trip). **Осталось:** live-verify **firing** на OAuth-портале — нужно правило
-    автоматизации, повешенное на `CODE` (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
+    best-effort) — **сделана; регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire` на
+    `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и
+    смарт-процессе; детали — `docs/PROCESSING.md` §2). Реакция правила автоматизации на `CODE` — за админом (наш код
+    доставляет сигнал). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),

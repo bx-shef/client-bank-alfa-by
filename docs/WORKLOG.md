@@ -43,6 +43,23 @@
 
 ## Лог проходов
 
+### 2026-07-17 — LIVE-VERIFY на реальных порталах (владелец дал креды)
+- **Контекст:** владелец передал вебхук тест-портала (`b24-86sr2r.bitrix24.com`, seed) и OAuth-креды
+  установленного приложения (`bel.bitrix24.by`) → разблокирована живая проверка CRM-стороны, которая
+  раньше была «за владельцем». Креды — только в git-ignored `.env.b24test`/`.env.b24oauth`, в репо не попали.
+- **#79 триггер — LIVE-VERIFIED (главный блокер снят):** `pnpm trigger:test --apply --fire` (`bel.bitrix24.by`):
+  `crm.automation.trigger.add`→`trigger.list` round-trip; `executeTriggerViaRest`→`crm.automation.trigger.execute`
+  `{result:true}` на **сделке** (OWNER_TYPE_ID=2) **и смарт-процессе** (OWNER_TYPE_ID=`entityTypeId`=1044);
+  незарегистрированный CODE → `Trigger ... is not registered` (валидирует best-effort-глоток). Скрипт
+  `trigger-register-test.ts` расширен флагом `--fire` (тот же транспорт crm-sync).
+- **Прочее CRM-ядро — LIVE-VERIFIED:** `pnpm verify:109` — 21/21 (companyLookup/стадии/invoiceLookup/IDOR/
+  resolveAllocation/ambiguous/filterByAccountNumber); `pnpm sdk:crm:test` — OAuth SDK-транспорт (#191) profile+
+  18 смарт-счетов; `pnpm activity:test --company 1 --apply` — `configurable.add`+B24-дедуп round-trip (#259);
+  `pnpm verify:chat` — стадия 6 чат-уведомления (`im.message.add` msgId=57, BB-нейтрализация, сообщение удалено) 6/6.
+- **IDOR-гейт СП снят:** `crm.item.fields` СП 1044 содержит `companyId` (тип `crm_company`) → company-скоуп держится.
+- **Осталось (за владельцем):** банк-креды Альфа/Приор (`.env.alfabankby`/`.env.priorbank`) для живого online-fetch —
+  B24-креды их не заменяют; правило автоматизации на CODE (реакция на сигнал).
+
 ### 2026-07-16 — #259: настраиваемое дело — единственный носитель, флаг убран (код)
 - **Контекст (владелец):** «флаги бесят, идёт разработка — просто сделай». Прод защищать не от кого →
   флаг `ACTIVITY_TRANSPORT` **убран**, настраиваемое дело стало **единственным** путём записи операции.
