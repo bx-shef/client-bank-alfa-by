@@ -524,7 +524,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    Альфа creds в теле, Приор `Basic`-auth) + `bankCredsFromEnv` (`ALFA_OAUTH_*`/`PRIOR_OAUTH_*`) + envCheck half-config +
    тесты. **Env-имена бэкенда** (`*_OAUTH_CLIENT_ID/SECRET/TOKEN_URL`) отличаются от recon-скриптовых
    (`ALFA_CLIENT_ID`+`ALFA_BASE_URL`) — не путать; recon = dev-sandbox, бэкенд = деплой. **Разблокирует A5.**
-6. ✅ **A5 — сделано** (PR #NNN): HTTP-транспорт `server/utils/bankFetch.ts` (ядра за DI):
+6. ✅ **A5 — сделано** (PR #289): HTTP-транспорт `server/utils/bankFetch.ts` (ядра за DI):
    `fetchBankStatement(query)` → `ensureBankToken`→`$fetch`→`normalizeAlfa`; тест на реальной
    demo-wire-фикстуре (`demoAlfaResponse` → `items === normalizeAlfa(...)`). **Только Альфа** (синхронный
    `GET /accounts/statement`); нет токена → `[]` (инертно), нет `ALFA_OAUTH_API_BASE`/ошибки → throw (не
