@@ -541,7 +541,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    тихий `[]`). **Приор** (async create+poll) — **A5b** (явный throw, не тихая пустышка). **Подключён к
    воркеру — A9 (ниже).**
 7. **A7** connect-эндпоинты (authorize+callback, CSRF-state HMAC как `session.ts`; Приор — RS256/DCR). **Нужен A3.**
-   - ✅ **A7a — сделано** (PR #NNN): CSRF-safe connect-state (`server/utils/bankConnectState.ts`,
+   - ✅ **A7a — сделано** (PR #294): CSRF-safe connect-state (`server/utils/bankConnectState.ts`,
      `signConnectState`/`verifyConnectState` — HMAC над `SESSION_SECRET`, привязка callback к порталу+
      провайдеру+счёту, короткий `exp`, constant-time, fail-closed без секрета; зеркало `session.ts`).
      **Доменная сепарация** (`DOMAIN_TAG` в подписи) — state НЕ верифицируется как сессионная кука и наоборот
