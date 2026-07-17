@@ -239,7 +239,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
 | 3 | Backend: приём событий + токены | 🏗️ | ✅ |
 | 3b| OAuth банков (Альфа/Приор) | 📥 | 🧪 sandbox (прод — из BY) |
 | 4 | Поиск компании + запись дела | 🏗️ | 🧪 ⚠ (поиск компании + запись дела ✅ вживую; сквозной прогон/чат — нет; спека шире: §2 «моя компания», распределение) |
-| 5 | Опрос банков (cron, фильтры) | 📥 забор/разбор · 🏗️ движок | ⬜ (транспорт-заглушка) |
+| 5 | Опрос банков (cron, фильтры) | 📥 забор/разбор · 🏗️ движок | 🏗️ (транспорт `bankFetch.ts` A5 готов+тесты; свап в воркер — A9; Приор — A5b) |
 | 6 | Оповещения: дело + чат по правилам | 🏗️ | 🧪 ядро; настройки #16 ⚠ (спека: чат-бот, получатель ошибок) |
 | 7 | Docker + деплой + CI | 🏗️ | ✅ |
 | 8 | MCP-сервер по выписке | 🏗️/📥 | ⬜ |
@@ -524,8 +524,13 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    Альфа creds в теле, Приор `Basic`-auth) + `bankCredsFromEnv` (`ALFA_OAUTH_*`/`PRIOR_OAUTH_*`) + envCheck half-config +
    тесты. **Env-имена бэкенда** (`*_OAUTH_CLIENT_ID/SECRET/TOKEN_URL`) отличаются от recon-скриптовых
    (`ALFA_CLIENT_ID`+`ALFA_BASE_URL`) — не путать; recon = dev-sandbox, бэкенд = деплой. **Разблокирует A5.**
-6. **A5** HTTP-транспорт (ядра за DI): токен→`$fetch`→`normalizeAlfa`/`normalizePrior`; тесты на
-   demo-wire-фикстурах (`demoAlfaResponse`/`demoPriorResponse`). **Нужен A3+A4.**
+6. ✅ **A5 — сделано** (PR #289): HTTP-транспорт `server/utils/bankFetch.ts` (ядра за DI):
+   `fetchBankStatement(query)` → `ensureBankToken`→`$fetch`→`normalizeAlfa`; тест на реальной
+   demo-wire-фикстуре (`demoAlfaResponse` → `items === normalizeAlfa(...)`). **Только Альфа** (синхронный
+   `GET /accounts/statement`); нет токена → `[]` (инертно), нет `ALFA_OAUTH_API_BASE`/ошибки → throw (не
+   тихий `[]`). **Приор** (async create+poll) — **A5b** (явный throw, не тихая пустышка). Транспорт **не
+   подключён к воркеру** — свап заглушки `fetchStatement` = A9 (провод: `providerId`→`provider`, сохранить
+   `isDemoAccount`-ветку, ключ `bank_tokens.account_key` = `FetchJob.account`).
 7. **A7** connect-эндпоинты (authorize+callback, CSRF-state HMAC как `session.ts`; Приор — RS256/DCR). **Нужен A3.**
 8. **A8** rate-limiter `Q_FETCH` (Альфа 100/мин; Приор — concurrency 1).
 9. **A9** свап заглушки → реальный `fetchStatement` (demo→demoItems, реал+токен→транспорт, реал без токена→[]);
