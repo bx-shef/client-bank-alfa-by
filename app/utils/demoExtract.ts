@@ -3,9 +3,11 @@
 //   1. a user-uploaded statement file (parsed in the browser — importUpload.ts),
 //   2. an Alfa-Bank "sandbox" sample run through the REAL normalizeAlfa,
 //   3. a Priorbank "sandbox" sample run through the REAL normalizePrior.
-// The live bank OAuth is geo-blocked from the cloud (BY only), so the "sandbox"
+// The landing demo runs client-side and holds no bank credentials, so the "sandbox"
 // demos exercise the real normalizers on representative responses instead of a
-// live fetch — genuinely proving the "bank response → normalized operations" path.
+// live fetch — proving the "bank response → normalized operations" path. The live
+// OAuth fetch is designed to run in the backend (per-portal token), not on the
+// landing — that transport is a roadmap item (stage 5), not yet built.
 //
 // `summarizeExtraction` turns a StatementItem[] into the human "what we found"
 // summary shown on the landing (counts, totals per currency, unique counterparties,

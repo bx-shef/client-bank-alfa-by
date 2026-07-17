@@ -70,7 +70,7 @@
   `rememberActivity`). Тесты: `configurableActivity`/`configurableActivityWrite`/`activityMarkerLookup` +
   флаг в `queueRuntime`. `.env.example`/`docker-compose*` — passthrough флага.
 - **Live-verify (гейт включения):** `pnpm activity:test --company <id> --apply` (`scripts/configurable-activity-test.ts`) —
-  на OAuth-портале, т.к. `configurable.add` вебхуком не создать (класс #79). Из облака недоступно (гео/OAuth).
+  на OAuth-портале, т.к. `configurable.add` вебхуком не создать (класс #79) — нужен OAuth-контекст приложения.
 - **Дальше:** Фаза A (факт разнесения → состояние цели); элемент смарт-процесса как носитель (платный тариф);
   кнопки §6 в layout (регистрация действий приложения); усиление ключа операции (§1).
 

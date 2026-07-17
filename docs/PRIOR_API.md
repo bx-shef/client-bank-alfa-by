@@ -1,6 +1,6 @@
 # Приорбанк — как работать с выпиской
 
-> Last reviewed: 2026-07-01
+> Last reviewed: 2026-07-17
 
 С Приорбанком есть **два пути**. Сейчас в проекте реализован первый (импорт текстовой
 выписки); второй (живой Open Banking API по СПР) пока не подключён, но контракт
@@ -132,8 +132,8 @@ pnpm prior:test --revoke <t>   # отзыв токена
 Поток по умолчанию: token Б (`scope=accounts`) → `POST /accountConsents` → печатает
 authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_KEY`) → входишь тестовым
 пользователем (`testspr_le`/`testspr_pi`) → вставляешь redirect с `code` → обмен на токен B →
-`GET /accounts` → асинхронные `POST`/`GET /accounts/{id}/statements`. Живой запуск — только с
-**BY-доступного сервера** (sandbox `:9344` из облака недоступен). Флаги для итераций:
+`GET /accounts` → асинхронные `POST`/`GET /accounts/{id}/statements`. Живой запуск — на деплой-сервере
+с кредами `.env.priorbank` (sandbox `:9344`). Флаги для итераций:
 `--access-token <tokenB>` (пропустить браузер), `--account <id>`, `--all`, `--from/--to`,
 `--expires`, `--verbose`.
 
@@ -188,8 +188,8 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
 
 > **Чего не хватает для подключения** (issue [#27](https://github.com/bx-shef/client-bank-alfa-by/issues/27),
 > [#20](https://github.com/bx-shef/client-bank-alfa-by/issues/20)): тестовые `client_id/secret`
-> тех-приложения, `redirect_uri` (наш публичный HTTPS), **сетевой доступ к `api.priorbank.by:9344`**
-> с BY-сервера (из облака агента недоступно), для прода — СКЗИ АВЕСТ + сертификат ГосСУОК.
+> тех-приложения, `redirect_uri` (наш публичный HTTPS); **для прода — СКЗИ АВЕСТ + сертификат ГосСУОК
+> на `:9345`** (крипто-требование РБ, не сетевое ограничение — sandbox `:9344` достижим с деплой-сервера).
 > Чистое ядро провайдера (сборка запросов, парсинг, нормализация) пишется и тестируется на моках
 > без доступов — как сделано для Альфы.
 

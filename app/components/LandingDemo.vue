@@ -4,8 +4,9 @@
 // payment purpose. Parsing is done in the browser (deterministic, no backend/AI);
 // the pure core lives in app/utils/demoExtract.ts. Styling is self-contained dark
 // (landing brand shell) so it does not depend on b24ui light/dark tokens. (The
-// online Alfa/Prior "sandbox" buttons were retired in favour of info cards in
-// index.vue — live bank OAuth is geo-blocked from the cloud anyway.)
+// online Alfa/Prior connect is shown as info cards in index.vue; reconnecting the
+// sample-normalizer demo buttons is planned. The landing holds no bank credentials —
+// the live OAuth fetch is designed for the backend per portal, a roadmap item.)
 import { computed, ref } from 'vue'
 import ArrowTopSIcon from '@bitrix24/b24icons-vue/outline/ArrowTopSIcon'
 import ArrowDownSIcon from '@bitrix24/b24icons-vue/outline/ArrowDownSIcon'
