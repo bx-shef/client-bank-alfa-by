@@ -2,11 +2,19 @@
 // and normalize it to StatementItem[] — the live replacement for the worker's
 // `fetchStatement` stub. Ensures the account's access token is fresh (A4 ensureBankToken)
 // before the call. Provider-specific request shape / auth live here; the raw→StatementItem[]
-// map reuses the tested pure normalizers (`normalizeAlfa`/`normalizePrior`).
+// map reuses the tested pure normalizer `normalizeAlfa` (Prior's `normalizePrior` joins at A5b).
 //
 // Alfa first (roadmap): a synchronous `GET /accounts/statement`. Prior's async create+poll
 // (`POST`/`GET /accounts/{id}/statements`) is A5b — surfaced as an explicit unsupported here,
 // NOT a silent empty, so it can't masquerade as "no operations".
+//
+// A9 wiring note (not this commit): the worker's `fetchStatement(job: FetchJob)` dep is NOT a
+// one-line `= fetchBankStatement`. A9 must (a) map the job to a BankFetchQuery — the queue
+// layer names the field `providerId`, this transport (on the token layer) names it `provider`;
+// (b) KEEP the `isDemoAccount(job.account)` branch (demoPause+demoItems) — a demo account has
+// no stored token, so routing it here would return [] and silently kill the load demo; and
+// (c) ensure the poll planner keys `bank_tokens.account_key` with the SAME value it puts in
+// `FetchJob.account` (that value is also the Alfa `number=` param), or loadToken misses → [].
 //
 // The GET carries only a short-lived Bearer (no client_secret — that lives in the A4 refresh
 // body). On failure we surface a clean top-level message (`status message`) so a plain
@@ -54,17 +62,30 @@ export function alfaStatementQuery(account: string, dateFrom: string, dateTo: st
 /** Per-provider statement API base + path from env (`<PREFIX>_OAUTH_API_BASE`; Alfa path is
  *  the partner API prefix). Returns `null` when the base isn't configured (feature off). */
 export function bankApiConfig(provider: BankProviderId): { base: string, statementPath: string } | null {
+  // Strip ALL trailing slashes from the base and force a single leading slash on the path,
+  // so a `…:8273/` base or a `partner/1.2.0` (no leading slash) env value still joins cleanly.
+  const cleanBase = (s: string) => s.replace(/\/+$/, '')
+  const asPath = (s: string) => `/${s.replace(/^\/+/, '').replace(/\/+$/, '')}`
   if (provider === 'alfa-by') {
     const base = process.env.ALFA_OAUTH_API_BASE?.trim()
     if (!base) return null
-    const prefix = (process.env.ALFA_OAUTH_API_PREFIX?.trim() || '/partner/1.2.0').replace(/\/$/, '')
-    return { base: base.replace(/\/$/, ''), statementPath: `${prefix}/accounts/statement` }
+    const prefix = asPath(process.env.ALFA_OAUTH_API_PREFIX?.trim() || '/partner/1.2.0')
+    return { base: cleanBase(base), statementPath: `${prefix}/accounts/statement` }
   }
   if (provider === 'prior-by') {
     const base = process.env.PRIOR_OAUTH_API_BASE?.trim()
-    return base ? { base: base.replace(/\/$/, ''), statementPath: '/accounts' } : null
+    return base ? { base: cleanBase(base), statementPath: '/accounts' } : null
   }
   return null
+}
+
+/** Build the transport error from a caught fetch failure (exported for testing). Keeps a
+ *  readable top-level `message` for a plain `err.message` log while `{ cause }` preserves the
+ *  chain — the offending Bearer lives only in the (deep) cause, same posture as b24Rest.ts. */
+export function bankFetchError(e: unknown): Error {
+  const status = (e as { status?: number })?.status
+  const message = (e as Error)?.message ?? 'error'
+  return new Error(`bankFetch GET failed:${status ? ` ${status}` : ''} ${message}`, { cause: e })
 }
 
 /** Injected side-effects — so the transport is unit-testable without network/DB. */
@@ -89,7 +110,7 @@ const liveDeps: BankFetchDeps = {
       return await fetchJson(url, { method: 'GET', headers: { authorization: `Bearer ${accessToken}` }, timeout: 20_000 })
     } catch (e) {
       // Clean top-level message (readable `err.message` log); `cause` preserves the chain.
-      throw new Error(`bankFetch GET failed: ${(e as { status?: number })?.status ?? ''} ${(e as Error)?.message ?? 'error'}`.trim(), { cause: e })
+      throw bankFetchError(e)
     }
   }
 }
