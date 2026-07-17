@@ -58,45 +58,54 @@ export interface ConfigurableActivityParams {
   layout: Record<string, unknown>
 }
 
-/** A single `text` layout block (the safe, always-valid block type). */
+/** A single `text` content block (ContentBlockDto `type: 'text'`). */
 function textBlock(value: string, multiline = false): Record<string, unknown> {
   return { type: 'text', properties: { value, multiline } }
 }
 
+/** A label→value row (`type: 'withTitle'` wrapping a `text` block). `title` is our trusted
+ *  label; `value` is the (BB-neutralized) field. `inline` renders label+value on one line. */
+function fieldBlock(title: string, value: string, inline = true): Record<string, unknown> {
+  return { type: 'withTitle', properties: { title, block: textBlock(value), inline } }
+}
+
 /**
- * Build the configurable-activity `layout` DTO: a header title + a body of text blocks
- * carrying the operation details. No footer buttons yet — the actionable §6 buttons
- * (e.g. «повторно поискать клиента») register app actions and land in a follow-up; the
- * icon is omitted too (valid icon codes are portal-verified). Header + body text blocks
- * are the minimal always-valid layout.
+/** A body `logo` code. BodyDto marks `logo` required, and the official configurable-activity
+ *  examples use `notification` — a built-in system logo. If a live portal ever rejects it,
+ *  swap for another system code from `crm.timeline.logo.list` (e.g. `arrow-down`/`call`). */
+const BODY_LOGO_CODE = 'notification'
+
+/**
+ * Build the configurable-activity `layout` DTO — validated against the official ContentBlockDto
+ * / BodyDto structure (apidocs …/timeline/activities/configurable/structure/): a header title,
+ * a body `logo` (required by BodyDto), then blocks — the purpose as a multiline `text` block and
+ * each operation field as a `withTitle` (label→value) row. No footer buttons yet — the actionable
+ * §6 buttons (e.g. «повторно поискать клиента») register app actions and land in a follow-up; the
+ * top-level `icon` is omitted (optional). Header + logo + non-empty blocks is a valid layout.
  *
  * SECURITY: purpose / counterparty name / account / document number come from the bank
- * statement — controlled by whoever SENDS the payment. They are BB-neutralized (same guard
- * as the todo description and chat) before entering the card, defensively: even if a
- * configurable text block renders markup, a crafted value can't inject it.
+ * statement — controlled by whoever SENDS the payment. They are BB-neutralized (same guard as
+ * the chat path) before entering the card, defensively: even if a block renders markup, a
+ * crafted value can't inject it. Our own labels/amounts/dates are trusted and left as-is.
  */
 export function buildConfigurableLayout(item: StatementItem): Record<string, unknown> {
   const cp = item.counterparty
   const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
   const doc = item.docNum
-    ? `Документ: #${neutralizeBb(item.docNum)} от ${formatIsoDate(item.acceptDate)}`
-    : `Документ от ${formatIsoDate(item.acceptDate)}`
-  const cpLines = [
-    `Контрагент: ${neutralizeBb(cp.name)}`,
-    `УНП: ${neutralizeBb(cp.unp)}`,
-    `р/сч: ${neutralizeBb(cp.account)}`,
-    ...(cp.bank ? [`Банк: ${neutralizeBb(cp.bank)}`] : [])
-  ].join('\n')
+    ? `#${neutralizeBb(item.docNum)} от ${formatIsoDate(item.acceptDate)}`
+    : `от ${formatIsoDate(item.acceptDate)}`
+  const blocks: Record<string, unknown> = {
+    purpose: textBlock(neutralizeBb(item.purpose), true),
+    amount: fieldBlock(kind, `${formatMoney(item.amount)} ${item.currency}`),
+    document: fieldBlock('Документ', doc),
+    counterparty: fieldBlock('Контрагент', neutralizeBb(cp.name), false),
+    unp: fieldBlock('УНП', neutralizeBb(cp.unp)),
+    account: fieldBlock('Счёт', neutralizeBb(cp.account))
+  }
+  if (cp.bank) blocks.bank = fieldBlock('Банк', neutralizeBb(cp.bank))
   return {
     header: { title: neutralizeBb(buildActivityTitle(item)) },
-    body: {
-      blocks: {
-        purpose: textBlock(neutralizeBb(item.purpose), true),
-        amount: textBlock(`${kind}: ${formatMoney(item.amount)} ${item.currency}`),
-        document: textBlock(doc),
-        counterparty: textBlock(cpLines, true)
-      }
-    }
+    body: { logo: { code: BODY_LOGO_CODE }, blocks }
   }
 }
 
