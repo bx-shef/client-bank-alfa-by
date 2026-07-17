@@ -541,6 +541,22 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    тихий `[]`). **Приор** (async create+poll) — **A5b** (явный throw, не тихая пустышка). **Подключён к
    воркеру — A9 (ниже).**
 7. **A7** connect-эндпоинты (authorize+callback, CSRF-state HMAC как `session.ts`; Приор — RS256/DCR). **Нужен A3.**
+   - ✅ **A7a — сделано** (PR #NNN): CSRF-safe connect-state (`server/utils/bankConnectState.ts`,
+     `signConnectState`/`verifyConnectState` — HMAC над `SESSION_SECRET`, привязка callback к порталу+
+     провайдеру+счёту, короткий `exp`, constant-time, fail-closed без секрета; зеркало `session.ts`).
+     **Доменная сепарация** (`DOMAIN_TAG` в подписи) — state НЕ верифицируется как сессионная кука и наоборот
+     (иначе не-секретный state из authorize-URL/логов банка переигрался бы в `cba_sess` → эскалация оператора).
+     Разделяемый `safeEqual` (как `session.ts`), а не форк. Тесты (вкл. кросс-протокол).
+   - **A7b** — H3-роуты authorize-redirect (admin-гейт + фрейм-токен → подписанный state → `buildAuthorizeUrl`)
+     + callback (verify state → `buildTokenExchangeBody`→обмен→`saveBankToken`). **Нужен A7a. ИНВАРИАНТЫ
+     БЕЗОПАСНОСТИ (из ревью A7a — обязательны):** (1) callback **привязывает `state.memberId` к
+     аутентифицированному вызывающему** и пишет токен только под него (подпись = целостность, не авторизация);
+     (2) `nonce` single-use — связать с серверной сессией и «погасить» на callback (стора нет в ядре);
+     (3) reject при `verifyConnectState()===null` — без fallback на неподписанный state; (4) `code` менять
+     только под `state.provider`; (5) `accountKey` из state — только подсказка, скоуп ре-валидировать из
+     consent/токена; (6) authorize-роут сам admin-гейт + CSRF (`x-cba-auth`); (7) `Referrer-Policy: no-referrer`
+     на authorize-redirect; (8) redirect-цель — если не выводится из `memberId`, подписывать (open-redirect).
+   - **A7c** — UI подключения банка (b24ui) на странице настроек. **Нужен A7b.**
 8. **A8** rate-limiter `Q_FETCH` (Альфа 100/мин; Приор — concurrency 1).
 9. ✅ **A9 — сделано** (PR #290): свап заглушки → реальный `fetchStatement` в `worker.ts`
    (demo→`demoItems`, реал+банк-токен→`fetchBankStatement`, реал без токена→`[]` инертно, Приор→A5b);
