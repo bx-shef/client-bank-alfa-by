@@ -554,9 +554,22 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      подписанный state с **нашим** `memberId` (не клиентским, инвариант 1) → `buildAuthorizeUrl`) отдаёт
      `{authorizeUrl}` (фронт открывает top-level); `Referrer-Policy: no-referrer`; провайдер не настроен →
      400 (до REST), нет секрета → 503 (fail-closed), Приор → A5b. Config из env (`bankConnectConfigFromEnv`:
-     authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/`_SCOPE`). Чистое ядро
-     `bankConnectStart.ts` (DI, тесты) + тонкий роут. **Осталось A7b-2** — callback (verify state →
-     `parseOAuthCallback`→`buildTokenExchangeBody`→обмен→`saveBankToken`) + инварианты 2-8 ниже.
+     authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/`_SCOPE`). **Номер
+     счёта** админ указывает при подключении (`accountKey`, валидируется `isValidAccountKey` — алфанум ≤64) →
+     едет в подписанном state, чтобы callback сохранил токен под ним (= `number=` для опроса). Чистое ядро
+     `bankConnectStart.ts` (DI, тесты) + тонкий роут.
+   - **✅ A7b-2 (callback) — сделано** (PR #NNN): `GET /api/bank/callback` (top-level, редирект банка;
+     авторизация — подписанный state, фрейм-токена нет). `bankConnectCallback.ts` (DI, тесты): **verify state
+     ДО REST** (инв. 1/3) → `parseOAuthCallback` (surface ошибки банка) → `buildTokenExchangeBody`→`exchangeToken`
+     (`/token`, `client_secret` в теле — **не логируется**, инв. 10)→`parseTokenResponse`→`saveBankToken` под
+     `state.accountKey`. Ошибки банка/`error_description` — **не рендерятся** на страницу, лог только через
+     `sanitizeForLog` (CRLF/длина, инв. 9). Исходы: 200 (счёт подключён) / 400 (state битый/истёк, до REST) /
+     502 (банк отклонил обмен, ничего не сохранено). nginx-троттл. **Осталось A7c** (UI на b24ui: ввод/пикер
+     счёта, кнопка → POST `/api/bank/connect` → **top-level** навигация на `authorizeUrl`; отдавать номер счёта
+     **как есть**, без нормализации; после возврата — переопросить список счетов + показывать per-account ошибку
+     опроса, чтобы опечатка в номере была видна, а не молчаливый ретрай — I1/I2 ревью A7b-2). **Follow-up:**
+     single-use `nonce` (инв. 2 — стора нет; закрывает остаточный риск «утёкший live-state → злоумышленник
+     привяжет СВОЙ счёт к чужому порталу», сейчас смягчён коротким `exp`+no-referrer), enum счетов вместо ручного ввода.
      **Нужен A7a. ИНВАРИАНТЫ
      БЕЗОПАСНОСТИ (из ревью A7a — обязательны):** (1) callback **привязывает `state.memberId` к
      аутентифицированному вызывающему** и пишет токен только под него (подпись = целостность, не авторизация);

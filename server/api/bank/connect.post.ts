@@ -35,14 +35,16 @@ function liveConnectDeps(): ConnectStartDeps {
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const body = await readBody(event).catch(() => null) as { provider?: string } | null
+  const body = await readBody(event).catch(() => null) as { provider?: string, accountKey?: string } | null
   const provider = (body?.provider || '').trim() as BankProviderId
+  const accountKey = (body?.accountKey || '').trim()
 
   setResponseHeader(event, 'Referrer-Policy', 'no-referrer')
   const { status, body: out } = await handleBankConnectStart(liveConnectDeps(), {
     accessToken: token,
     domain,
     provider,
+    accountKey,
     nonce: randomBytes(16).toString('hex'),
     nowMs: Date.now()
   })

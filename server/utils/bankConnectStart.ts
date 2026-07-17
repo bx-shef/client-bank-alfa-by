@@ -63,6 +63,10 @@ export interface ConnectStartInput {
   accessToken: string
   domain: string
   provider: BankProviderId
+  /** The bank account number the admin is connecting — carried through the signed state to the
+   *  callback, which saves the token under it (bank_tokens.account_key), so the poller fetches that
+   *  exact account (it's also the Alfa `number=` statement param). Required. */
+  accountKey: string
   /** Random per-request nonce (correlation id in the state). */
   nonce: string
   /** Now, epoch ms (for the state expiry). */
@@ -74,17 +78,26 @@ export interface ConnectStartInput {
 /** Default connect-state lifetime: 10 min (generous for the admin to complete bank consent). */
 export const CONNECT_STATE_TTL_MS = 600_000
 
+/** An account key is an alphanumeric account number / IBAN-ish token (bounded). Rejects anything
+ *  with separators/spaces so it can't smuggle content into the state or the later `number=` param. */
+export function isValidAccountKey(v: string): boolean {
+  return /^[A-Za-z0-9]{1,64}$/.test(v)
+}
+
 /**
  * Build the bank authorize URL (with a signed connect state) for the in-portal admin to open.
  * Returns 200 + `{ authorizeUrl }`, or a 4xx/5xx `{ error }`. Does NOT itself redirect — the route
  * returns the URL as JSON and the frontend navigates the top window.
  */
 export async function handleBankConnectStart(deps: ConnectStartDeps, input: ConnectStartInput): Promise<ConnectStartResult> {
-  const { accessToken, domain, provider, nonce, nowMs } = input
+  const { accessToken, domain, provider, accountKey, nonce, nowMs } = input
   if (!accessToken || !domain) {
     return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   }
   if (!provider) return { status: 400, body: { error: 'provider required' } }
+  if (!accountKey || !isValidAccountKey(accountKey)) {
+    return { status: 400, body: { error: 'a valid account number is required' } }
+  }
 
   // Provider must be configured + supported BEFORE we do any REST — a clean 400, not a broken URL.
   const config = deps.config(provider)
@@ -113,6 +126,7 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   const state: BankConnectState = {
     memberId,
     provider,
+    accountKey,
     nonce,
     exp: nowMs + (input.ttlMs ?? CONNECT_STATE_TTL_MS)
   }
