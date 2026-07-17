@@ -74,8 +74,11 @@ export interface AllocationCandidate {
   /** The entity's own `entityTypeId` — carried ONLY for a `smart-process` trigger
    *  target, where firing the automation trigger needs it as `OWNER_TYPE_ID`
    *  (`buildTriggerExecution`, #79). `deal` uses the fixed `OWNER_TYPE_ID=2`, and
-   *  amount kinds never fire a trigger, so they omit it. Without this a smart-process
-   *  trigger target could never fire (it would forever resolve to `unsupported`). */
+   *  amount kinds never fire a trigger, so they omit it. This is the transport-side
+   *  prerequisite for a smart-process trigger; the UPSTREAM resolution of a
+   *  `smart-id` to a smart-process candidate is not yet wired (`intentResolver`
+   *  returns `unsupported` — its `entityTypeId` is portal-specific), so no
+   *  smart-process trigger fires live today. Deal triggers are fully wired. */
   entityTypeId?: number
 }
 

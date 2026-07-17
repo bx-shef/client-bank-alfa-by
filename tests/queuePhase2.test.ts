@@ -858,18 +858,20 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // deduped → one fire
   })
 
-  it('autoDistribute ON + triggerCode, applyTrigger returned false (un-fired): NO fact, self-heals, job still succeeds (#79)', async () => {
+  it('autoDistribute ON + triggerCode, applyTrigger returned false (un-fired): NO fact, job still succeeds (single-shot) (#79)', async () => {
     // NB: the never-THROW guarantee lives in the worker dep (worker.ts wraps applyTrigger in
     // try/catch → false); the handler awaits applyTrigger without a catch and relies on that
-    // contract. Here we exercise the un-fired (returned-false) path: no fact, re-attempted next
-    // delivery, and the job as a whole still completes (a non-fire does not fail the batch).
+    // contract. Here we exercise the un-fired (returned-false) path: no fact is written, and the
+    // job as a whole still completes (a non-fire does not fail the batch). SINGLE-SHOT: the B24
+    // dedup marker (writeActivity) is still written this run, so this op is NOT re-attempted on a
+    // later poll — a swallowed miss is lost, not self-healed (durable retry is a follow-up).
     const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, triggerFired: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.allocated).toBe(0) // no fire → no fact
     expect(r.distributed).toBe(0)
     expect(r.created).toBe(1) // job still succeeds — an un-fired trigger does not fail the batch
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // attempted
-    expect(calls.allocRec).toEqual([]) // nothing persisted → re-attempted next delivery
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // attempted once
+    expect(calls.allocRec).toEqual([]) // no fact persisted (but the activity marker IS written → single-shot)
   })
 
   it('autoDistribute ON + triggerCode, fired but recordAllocation lost the race (recorded=false): counters stay 0 (#79)', async () => {

@@ -641,7 +641,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
       (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
       за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на
-      firing; сбой глотается, само-заживает). Осталось: регистрация CODE на установке + live-verify на OAuth-портале.
+      firing; сбой глотается (single-shot — промах не пере-пробуется)). Осталось: регистрация CODE на установке + live-verify на OAuth-портале.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
@@ -693,7 +693,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     за гейтом `autoDistribute`+`triggerCode` распознанная trigger-цель фаерит `crm.automation.trigger.execute` через
     OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
     kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
-    глотается, само-заживает. **Осталось:** регистрация `CODE` на установке (`crm.automation.trigger.add`) + live-verify
+    глотается (single-shot — промах не пере-пробуется). **Осталось:** регистрация `CODE` на установке (`crm.automation.trigger.add`) + live-verify
     firing на OAuth-портале (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
