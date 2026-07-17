@@ -38,6 +38,10 @@ onMounted(async () => {
     </ClientOnly>
 
     <ClientOnly>
+      <PollNowButton class="mt-6" />
+    </ClientOnly>
+
+    <ClientOnly>
       <SettingsForm class="mt-6" />
     </ClientOnly>
 

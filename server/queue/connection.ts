@@ -85,6 +85,20 @@ export function pingRedis(timeoutMs = 2000): Promise<boolean> {
   return Promise.race([ping, timeout])
 }
 
+/** Claim a one-shot cooldown slot for `key`, lasting `ttlSec` (Redis `SET key 1 EX ttl NX`).
+ *  Returns true when the slot was claimed (caller may proceed), false when a prior claim is still
+ *  within its TTL (cooldown active). A store-free, self-expiring, per-portal throttle — used by the
+ *  manual poll (#54) so a portal admin can't outrun the bank rate. Uses the shared queue client
+ *  (no new connection). Throws if REDIS_URL is unset — guard with queueEnabled() first. */
+export async function claimCooldownSlot(key: string, ttlSec: number): Promise<boolean> {
+  // ioredis exposes `set(key, val, 'EX', seconds, 'NX')` → 'OK' when set, null when NX fails.
+  const client = (await getQueue(Q_EVENTS).client) as unknown as {
+    set: (...args: unknown[]) => Promise<unknown>
+  }
+  const res = await client.set(`cooldown:${key}`, '1', 'EX', Math.max(1, Math.floor(ttlSec)), 'NX')
+  return res === 'OK'
+}
+
 /** Close all cached Queue connections (graceful shutdown symmetry with workers). */
 export async function closeQueues(): Promise<void> {
   const open = [...queues.values()]

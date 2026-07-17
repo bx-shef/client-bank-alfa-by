@@ -130,6 +130,20 @@ export async function listAllBankAccounts(query: QueryFn): Promise<BankAccountRe
   }))
 }
 
+/** One portal's connected bank accounts — identity only (no refresh decryption; the manual
+ *  poll (#54) only needs which accounts to fetch, not their tokens). Member-scoped. */
+export async function listBankAccountsForPortal(query: QueryFn, memberId: string): Promise<BankAccountRef[]> {
+  const rows = await query(
+    `SELECT member_id, provider, account_key FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
+    [memberId]
+  )
+  return rows.map(r => ({
+    memberId: String(r.member_id),
+    provider: r.provider as BankProviderId,
+    accountKey: String(r.account_key)
+  }))
+}
+
 /** Delete ALL of a portal's bank tokens on ONAPPUNINSTALL (a removed app keeps no data).
  *  Idempotent. Returns the number of rows removed (for logging). */
 export async function deleteBankTokensForPortal(query: QueryFn, memberId: string): Promise<number> {
