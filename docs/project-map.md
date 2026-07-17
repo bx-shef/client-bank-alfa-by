@@ -547,7 +547,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      **Доменная сепарация** (`DOMAIN_TAG` в подписи) — state НЕ верифицируется как сессионная кука и наоборот
      (иначе не-секретный state из authorize-URL/логов банка переигрался бы в `cba_sess` → эскалация оператора).
      Разделяемый `safeEqual` (как `session.ts`), а не форк. Тесты (вкл. кросс-протокол).
-   - **A7b** — H3-роуты. **✅ A7b-1 (authorize-start) — сделано** (PR #NNN): `POST /api/bank/connect`
+   - **A7b** — H3-роуты. **✅ A7b-1 (authorize-start) — сделано** (PR #295): `POST /api/bank/connect`
      (фрейм-токен как в `/api/import` → `memberIdByDomain`+`validateFrame` (`profile`: блок спуфинга
      домена + **гейт админа** по `profile.ADMIN`, базовый scope — подключение банка привязывает креды ко
      всему порталу, авторизация-на-старт т.к. callback доверяет state) →
