@@ -94,8 +94,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     onRecognized: (it, intents: RecognitionIntent[], memberId) => {
       calls.recognized.push([it.docId, intents.map(i => `${i.kind}:${i.value}:${i.route.strategy}`), memberId])
     },
-    resolveIntents: async (intents, companyId, memberId, isNegativeStage) => {
-      calls.resolve.push([companyId, intents.map(i => i.kind), memberId, isNegativeStage ? 'staged' : 'unfiltered'])
+    resolveIntents: async (intents, companyId, memberId, isNegativeStage, configFields) => {
+      calls.resolve.push([companyId, intents.map(i => i.kind), memberId, isNegativeStage ? 'staged' : 'unfiltered', configFields])
       return o.resolve ?? []
     },
     loadNegativeStagePredicate: async (memberId) => {
@@ -373,7 +373,7 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: hit })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r).toMatchObject({ recognized: 1, resolved: 1, created: 1 })
-    expect(calls.resolve).toEqual([['CO', ['invoice-number'], 'M', 'unfiltered']]) // companyId + intent kinds (no predicate → unfiltered)
+    expect(calls.resolve).toEqual([['CO', ['invoice-number'], 'M', 'unfiltered', {}]]) // companyId + intent kinds + (no predicate → unfiltered) + configFields (default {})
     expect(calls.resolvedLog).toEqual([['d1', ['invoice-number:resolved:1'], 'M']])
   })
 
@@ -440,6 +440,18 @@ describe('handleCrmSyncJob', () => {
     await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect((calls.resolve[0] as unknown[])[3]).toBe('staged') // predicate passed through
     expect(calls.negStage).toEqual(['M'])
+  })
+
+  // §4 by-config-field: the portal's configFields map must reach resolveIntents so the
+  // deal-field lookup knows which CRM field to search (handler→worker plumbing).
+  it('threads the portal configFields into resolveIntents (deal-field lookup, §4)', async () => {
+    const withField: RecognitionSettings = {
+      alphabet: 'cyrillic', matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }],
+      configFields: { 'deal-field': 'UF_CRM_PAY_NO' }
+    }
+    const { deps, calls } = fakeDeps({ recognition: withField, resolve: hit })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect((calls.resolve[0] as unknown[])[4]).toEqual({ 'deal-field': 'UF_CRM_PAY_NO' }) // forwarded verbatim
   })
 
   it('loads the negative-stage predicate AT MOST ONCE per job (memoized across ops)', async () => {

@@ -64,6 +64,13 @@ describe('findCandidateByField', () => {
     const call = vi.fn(async () => resp([]))
     expect(await findCandidateByField('deal', 2, 'UF_X', '6001', { companyId: '93' }, call)).toBeNull()
   })
+
+  it('propagates a REST error thrown by call (job must retry)', async () => {
+    const call = vi.fn(async () => {
+      throw new Error('QUERY_LIMIT_EXCEEDED')
+    })
+    await expect(findCandidateByField('deal', 2, 'UF_X', '6001', { companyId: '93' }, call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
 })
 
 describe('firstItem', () => {
