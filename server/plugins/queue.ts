@@ -12,7 +12,8 @@ import type { Worker } from 'bullmq'
 import { closeQueues, queueEnabled } from '../queue/connection'
 import { liveHandlerDeps, startEventWorker, startThroughputWorkers } from '../queue/worker'
 import { enqueueFetch } from '../queue/producers'
-import { buildDemoFetchJobs, demoTickMs } from '../queue/cron'
+import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
+import { listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
@@ -37,6 +38,7 @@ export default defineNitroPlugin((nitroApp) => {
   }
 
   let timer: ReturnType<typeof setInterval> | undefined
+  let pollTimer: ReturnType<typeof setInterval> | undefined
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined
   // Cron runs on exactly ONE instance (QUEUE_CRON=1) — two schedulers would enqueue
   // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
@@ -65,6 +67,40 @@ export default defineNitroPlugin((nitroApp) => {
       }
       timer = setInterval(tick, tickMs)
       void tick() // fire once at boot so the demo starts immediately
+    }
+
+    // Real bank polling (A10): every CRON_INTERVAL_MIN, enqueue one fetch job per connected
+    // bank account (A6 registry over the bank_tokens store) for a rolling window. INERT until
+    // accounts are connected (A7) — an empty registry enqueues nothing (silent, no per-tick
+    // noise). A fresh `epoch` per tick makes each poll a distinct job that actually re-fetches
+    // (see FetchJob.epoch) AND re-runs crm-sync (epoch folds into batchId → jobId); re-emitting
+    // identical ops is safe (crm-sync dedupes writes by the B24 marker). Prior is filtered out
+    // until A5b (POLLABLE_PROVIDERS).
+    // DEFAULT OFF (opt-in): the A8 rate limiter isn't built yet, and this timer drives the live
+    // Alfa API (100 req/min, global per-OAuth-client) with only a per-worker BullMQ limiter. So
+    // the machinery ships wired+tested but does NOT auto-run — flip CRON_REAL_POLL=1 in the same
+    // change that lands A8, so connecting the first account (A7) can't silently start unthrottled
+    // polling. Today the registry is empty anyway, so this only guards the future A7 activation.
+    if ((process.env.CRON_REAL_POLL ?? '0') === '1') {
+      const pollMs = cronIntervalMs(Number(process.env.CRON_INTERVAL_MIN || 5))
+      const lookback = Number(process.env.CRON_LOOKBACK_DAYS || 1)
+      const poll = async () => {
+        try {
+          const refs = await listAllBankAccounts(dbQuery)
+          const byPortal = accountsForPolling(refs)
+          if (byPortal.length === 0) return // no connected accounts yet — nothing to do
+          const now = new Date()
+          const { dateFrom, dateTo } = pollWindow(now, lookback)
+          const jobs = planFetches(byPortal, dateFrom, dateTo, String(now.getTime()))
+          for (const job of jobs) await enqueueFetch(job)
+          console.info('[queue] real poll: enqueued %d fetch jobs (%s..%s, every %d min)', jobs.length, dateFrom, dateTo, pollMs / 60_000)
+        } catch (err) {
+          console.error('[queue] real poll tick failed:', (err as Error)?.message)
+        }
+      }
+      pollTimer = setInterval(poll, pollMs)
+      void poll() // fire once at boot
+      console.info('[queue] real bank poll scheduled (every %d min, inert until accounts connected — A10)', pollMs / 60_000)
     }
 
     // Proactive OAuth keep-alive (#175): refresh_token lives ~180d; an installed-but-idle
@@ -103,6 +139,7 @@ export default defineNitroPlugin((nitroApp) => {
 
   nitroApp.hooks.hook('close', async () => {
     if (timer) clearInterval(timer)
+    if (pollTimer) clearInterval(pollTimer)
     if (keepAliveTimer) clearInterval(keepAliveTimer)
     await Promise.all(workers.map(w => w.close()))
     await closeQueues()

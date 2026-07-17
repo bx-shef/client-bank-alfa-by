@@ -40,6 +40,18 @@ describe('job ids (idempotency)', () => {
     const b = fetchJobId({ ...fetchJob, account: 'a', dateFrom: 'b|c' })
     expect(a).not.toBe(b)
   })
+  it('epoch: absent → id byte-identical to the pre-epoch id (demo/manual ids unchanged)', () => {
+    // The base (no-epoch) id MUST stay stable so existing demo/manual jobs keep their ids.
+    expect(fetchJobId(fetchJob)).toBe('fetch|M1|alfa-by|BY00|2026-07-01|2026-07-31')
+    expect(fetchJobId({ ...fetchJob, epoch: undefined })).toBe(fetchJobId(fetchJob))
+  })
+  it('epoch: present → distinct id per tick (so a same-window re-poll actually re-runs)', () => {
+    const t1 = fetchJobId({ ...fetchJob, epoch: '1000' })
+    const t2 = fetchJobId({ ...fetchJob, epoch: '2000' })
+    expect(t1).not.toBe(t2)
+    expect(t1).not.toBe(fetchJobId(fetchJob)) // and distinct from the base id
+    expect(t1).toBe('fetch|M1|alfa-by|BY00|2026-07-01|2026-07-31|1000')
+  })
   it('event/parse ids carry their kind prefix and key fields', () => {
     const ev: EventJob = { memberId: 'M1', domain: 'p.bitrix24.by', kind: 'ONAPPINSTALL', ts: '123' }
     expect(eventJobId(ev)).toBe('evt|M1|ONAPPINSTALL|123')
