@@ -9,10 +9,12 @@
 //     same Redis, so replicas add throughput. Redis hands each job to exactly one worker.
 
 import type { Worker } from 'bullmq'
-import { closeQueues, queueEnabled } from '../queue/connection'
+import { closeQueues, getQueue, queueEnabled } from '../queue/connection'
+import { Q_FETCH } from '../queue/topology'
 import { liveHandlerDeps, startEventWorker, startThroughputWorkers } from '../queue/worker'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
+import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
@@ -84,6 +86,13 @@ export default defineNitroPlugin((nitroApp) => {
     if ((process.env.CRON_REAL_POLL ?? '0') === '1') {
       const pollMs = cronIntervalMs(Number(process.env.CRON_INTERVAL_MIN || 5))
       const lookback = Number(process.env.CRON_LOOKBACK_DAYS || 1)
+      // A8 saturation signal: the live Alfa poll is capped by a global BullMQ limiter, so a
+      // plan that outruns the cap DEFERS fetch jobs (waiting/delayed pile-up) — invisible in
+      // the default counters. After each poll, check the bank-fetch backlog and log it
+      // EXPLICITLY when it crosses the threshold, so on-call reads "rate-limit saturation"
+      // rather than a mystery backlog (docs/OPERATIONS.md). Threshold clamped so an env typo
+      // can't silence it. Runs only here (single cron instance) → no duplicate warnings.
+      const satThreshold = clampSaturationThreshold(Number(process.env.QUEUE_FETCH_SATURATION_THRESHOLD ?? NaN))
       const poll = async () => {
         try {
           const refs = await listAllBankAccounts(dbQuery)
@@ -94,6 +103,16 @@ export default defineNitroPlugin((nitroApp) => {
           const jobs = planFetches(byPortal, dateFrom, dateTo, String(now.getTime()))
           for (const job of jobs) await enqueueFetch(job)
           console.info('[queue] real poll: enqueued %d fetch jobs (%s..%s, every %d min)', jobs.length, dateFrom, dateTo, pollMs / 60_000)
+          // Best-effort: a counts read must never break the poll (it already enqueued).
+          try {
+            const counts = await getQueue(Q_FETCH).getJobCounts('waiting', 'delayed') as FetchQueueCounts
+            const sat = fetchBacklogSaturation(counts, satThreshold)
+            if (sat.over) {
+              console.warn('[queue] bank-fetch backlog %d ≥ %d — likely A8 rate-limit saturation (jobs DEFERRED by the global limiter, not stuck); raise QUEUE_FETCH_RATE_* only if Alfa raises its cap (docs/OPERATIONS.md)', sat.backlog, satThreshold)
+            }
+          } catch (err) {
+            console.error('[queue] fetch saturation check failed:', (err as Error)?.message)
+          }
         } catch (err) {
           console.error('[queue] real poll tick failed:', (err as Error)?.message)
         }

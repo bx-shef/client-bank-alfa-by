@@ -93,7 +93,10 @@ flowchart LR
   (`liveHandlerDeps`) — **живые**: парсер файла (ручной импорт), B24 REST (crm-sync) и **fetch банка
   Альфы (A9, `fetchBankStatement`)**; реальный счёт без банк-токена → `[]` инертно, Приор → A5b. **Глобальный
   rate-limiter (A8)** на `Q_FETCH` (BullMQ `limiter`, шаренный по репликам через Redis, дефолт 100/60с,
-  `QUEUE_FETCH_RATE_*`) держит суммарный темп Альфы под её per-client cap.
+  `QUEUE_FETCH_RATE_*`) держит суммарный темп Альфы под её per-client cap. Упор в кап BullMQ **не теряет**
+  джобы — откладывает (лежат в `waiting`/`delayed`), что на графике неотличимо от бэклога; поэтому крон после
+  каждого опроса **явно логирует сатурацию**, когда backlog переходит `QUEUE_FETCH_SATURATION_THRESHOLD`
+  (дефолт 200, `server/queue/saturation.ts`) — см. `docs/OPERATIONS.md`.
 - **Демо-нагрузка.** Пока реальных счетов нет, конвейер гоняет синтетику: демо-крон каждые
   `DEMO_TICK_SEC` **секунд** кладёт `DEMO_LOAD_N` fetch-джобов (`buildDemoFetchJobs`), их обработчик
   отдаёт `demoItems` (пара операций) — видно, как нагрузка течёт `bank-fetch → crm-sync`. Чтобы очереди
