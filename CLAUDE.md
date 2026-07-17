@@ -585,7 +585,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `crm.item.list`, а не `crm.item.get` (тот бросает `NOT_FOUND`; список отдаёт пусто). Подтверждено вживую: стадия
       категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. Amount-цели
       (invoice/deal-payment) сверяют сумму (нефинитная → `null`, fail-closed как в `invoiceLookup`), триггер-цели
-      (deal/smart-process) её игнорируют.
+      (deal/smart-process) её игнорируют. **`findCandidateByField(kind, entityTypeId, fieldName, value, opts, call)`** —
+      стратегия `by-config-field` (`deal-field`, §4): тот же `crm.item.list`, но фильтр по **настроенному полю**
+      `{[fieldName]:value, companyId}` (имя поля из «карты сопоставления»; маска `[A-Za-z][A-Za-z0-9_]*` — нет инъекции
+      ключа фильтра). Общий маппинг строки-ответа в кандидата (`candidateFromItem`) — с `findCandidateById` (нет дрейфа).
     - `server/utils/paymentLookup.ts` — чистый **резолвер оплаты сделки** `findDealPayments(dealId, {includePaid?}, call)`
       для цели `deal-payment` (§2, действие `payment.pay`): `crm.item.payment.list` по **известной** сделке
       (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (`id`=id оплаты, `amount`=`sum`, `currency`, `dealId`).
@@ -632,8 +635,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       делит тот же пул с `payment-number`, фетч один раз), **`order-id`→`findOrderPaymentIds`+`filterByPaymentIds`**
       (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул → IDOR-safe, `sale`-скоуп, #172, live-confirmed;
       делит тот же пул) (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных
-      стадий). Остальные — `unsupported` с `reason`
-      (не роняем интент молча): `smart-id`/`deal-field`/`smart-field` (нужен `entityTypeId`/поле из «карты сопоставления»),
+      стадий). **`deal-field` (`by-config-field`, §4) — подключён:** имя поля берётся из `ctx.configFields['deal-field']`
+      («карта сопоставления» настроек), сущность — сделка (`entityTypeId` фикс. 2), поиск `findCandidateByField`
+      (`crm.item.list` фильтр `{[поле]:значение, companyId}`, IDOR-скоуп; имя поля валидируется маской `[A-Za-z][A-Za-z0-9_]*`
+      — нет инъекции ключа фильтра); нет настроенного поля ⇒ `unsupported`. Остальные — `unsupported` с `reason`
+      (не роняем интент молча): `smart-id`/`smart-field` (нужен портало-специфичный `entityTypeId` — слайс смарт-процесса),
       `document-number` (гейт live-verify).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест

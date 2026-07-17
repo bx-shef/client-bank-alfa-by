@@ -34,6 +34,9 @@ import { DEAL_ENTITY_TYPE_ID, type CompanyDealPaymentOptions } from './paymentLo
 export interface IntentResolverDeps {
   findInvoicesByNumber: (accountNumber: string, opts: InvoiceLookupOptions, call: RestCall) => Promise<AllocationCandidate[]>
   findCandidateById: (kind: AllocationTargetKind, entityTypeId: number, id: string, opts: ItemByIdOptions, call: RestCall) => Promise<AllocationCandidate | null>
+  /** Find a candidate whose CONFIGURED CRM field equals the recognized value
+   *  (`by-config-field`, `deal-field`, §4). Mirrors `itemByIdLookup.findCandidateByField`. */
+  findCandidateByField: (kind: AllocationTargetKind, entityTypeId: number, fieldName: string, value: string, opts: ItemByIdOptions, call: RestCall) => Promise<AllocationCandidate | null>
   findCompanyDealPayments: (companyId: string, opts: CompanyDealPaymentOptions, call: RestCall) => Promise<AllocationCandidate[]>
   /** Payment record ids of an order (via `sale.payment.list`, scope `sale`) — for
    *  `order-id`. NOT company-scoped; the resolver intersects them with the company pool. */
@@ -45,7 +48,15 @@ export interface IntentResolverDeps {
 export interface IntentContext {
   companyId: string
   isNegativeStage?: (stageId: string) => boolean
+  /** The portal's «карта сопоставления» field map (`RecognitionSettings.configFields`):
+   *  a config key → the CRM field name the number lives in. Consumed by the
+   *  `by-config-field` kinds (`deal-field` today). Absent ⇒ those kinds are `unsupported`. */
+  configFields?: Record<string, string>
 }
+
+/** Config key in `configFields` for the deal user-field the payment number lives in
+ *  (`deal-field`, §4). The deal's entityTypeId is the fixed CRM constant (2). */
+export const DEAL_FIELD_CONFIG_KEY = 'deal-field'
 
 export type IntentStatus = 'resolved' | 'unsupported'
 
@@ -183,11 +194,20 @@ export async function resolveIntentCandidates(
       const pool = await deps.findCompanyDealPayments(ctx.companyId, { isNegativeStage: ctx.isNegativeStage }, call)
       return resolveOrderId(intent, pool, call, deps)
     }
+    case 'deal-field': {
+      // Search the company's deals by a CONFIGURED user-field (from «карта сопоставления»),
+      // scoped to the company (IDOR). The deal's entityTypeId is the fixed CRM constant (2);
+      // only the field name is portal-specific. No configured field ⇒ can't look up → unsupported.
+      const fieldName = ctx.configFields?.[DEAL_FIELD_CONFIG_KEY]
+      if (!fieldName) return unsupported(intent, 'deal-field: no configured field (configFields["deal-field"])')
+      const found = await deps.findCandidateByField('deal', DEAL_ENTITY_TYPE_ID, fieldName, intent.value, opts, call)
+      return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+    }
     case 'smart-id':
-    case 'deal-field':
     case 'smart-field':
-      // Need the entityTypeId / field name from the portal's «карта сопоставления».
-      return unsupported(intent, `${intent.kind}: needs configured entityTypeId/field (deal-field/smart-field slice)`)
+      // Need the smart process's portal-specific entityTypeId from «карта сопоставления»
+      // (the smart-process upstream slice — item 3). Deal-field above needs only a field name.
+      return unsupported(intent, `${intent.kind}: needs configured entityTypeId (smart-process slice)`)
     case 'document-number':
       // Document bridge needs a live-verified template+document first (#184-adjacent).
       return unsupported(intent, 'document-number: document bridge needs live-verify')

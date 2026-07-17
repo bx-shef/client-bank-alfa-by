@@ -56,7 +56,7 @@ export interface HandlerDeps {
    *  lookup slice). LOG/COUNT only this slice — the candidates are NOT yet written as an
    *  allocation. Returns one resolution per intent. A REST error propagates (fail the
    *  job → clean retry), like findCompany. */
-  resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string, isNegativeStage?: (stageId: string) => boolean) => Promise<IntentResolution[]>
+  resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string, isNegativeStage?: (stageId: string) => boolean, configFields?: Record<string, string>) => Promise<IntentResolution[]>
   /** Load the portal's negative-stage predicate (union of invoice + deal fail/lost
    *  stages) so intent resolution drops candidates in a paid/«Не оплачен»/lost stage.
    *  Called AT MOST ONCE per job (lazily, only when the first op actually resolves
@@ -286,7 +286,7 @@ export async function handleCrmSyncJob(
     if (companyId && intents.length > 0) {
       const toResolve = intents.slice(0, MAX_RESOLVED_INTENTS_PER_OP)
       const isNegativeStage = await getNegativeStage()
-      const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId, isNegativeStage)
+      const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId, isNegativeStage, settings?.recognition?.configFields)
       const candidates = resolutions.flatMap(r => r.candidates)
       if (candidates.length > 0) {
         resolved++

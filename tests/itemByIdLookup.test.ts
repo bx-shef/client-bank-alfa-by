@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { findCandidateById, firstItem, itemByIdParams } from '../server/utils/itemByIdLookup'
+import { findCandidateByField, findCandidateById, firstItem, itemByFieldParams, itemByIdParams } from '../server/utils/itemByIdLookup'
 
 // By-id target resolver (#109). Field names confirmed live; the id is untrusted so
 // IDOR is enforced by filtering on companyId in the query.
@@ -16,6 +16,53 @@ describe('itemByIdParams', () => {
       filter: { id: '33', companyId: '93' },
       select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
     })
+  })
+})
+
+describe('itemByFieldParams', () => {
+  it('filters by the configured FIELD AND companyId (IDOR) and selects the amount/stage fields', () => {
+    expect(itemByFieldParams(2, 'UF_CRM_PAY_NO', '6001', '93')).toEqual({
+      entityTypeId: 2,
+      filter: { UF_CRM_PAY_NO: '6001', companyId: '93' },
+      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
+    })
+  })
+})
+
+describe('findCandidateByField', () => {
+  it('maps a found deal to a candidate and queries by the configured field + companyId', async () => {
+    const call = vi.fn(async () => resp([item({ id: 77, opportunity: 0, currencyId: 'BYN', stageId: 'C5:NEW' })]))
+    expect(await findCandidateByField('deal', 2, 'UF_CRM_PAY_NO', '6001', { companyId: '93' }, call))
+      .toEqual({ kind: 'deal', id: '77', amount: 0, currency: 'BYN' })
+    expect(call.mock.calls[0]![0]).toBe('crm.item.list')
+    expect(call.mock.calls[0]![1]).toMatchObject({ entityTypeId: 2, filter: { UF_CRM_PAY_NO: '6001', companyId: '93' } })
+  })
+
+  it('returns null for a malformed field name (fail-safe — no filter-key injection)', async () => {
+    const call = vi.fn(async () => resp([item()]))
+    // A leading operator / space / punctuation must NOT reach the filter key.
+    expect(await findCandidateByField('deal', 2, '>UF_X', '6001', { companyId: '93' }, call)).toBeNull()
+    expect(await findCandidateByField('deal', 2, 'UF X', '6001', { companyId: '93' }, call)).toBeNull()
+    expect(await findCandidateByField('deal', 2, '', '6001', { companyId: '93' }, call)).toBeNull()
+    expect(call).not.toHaveBeenCalled() // never queried with a bad key
+  })
+
+  it('returns null for an empty value or empty company (IDOR scope required)', async () => {
+    const call = vi.fn(async () => resp([item()]))
+    expect(await findCandidateByField('deal', 2, 'UF_X', '  ', { companyId: '93' }, call)).toBeNull()
+    expect(await findCandidateByField('deal', 2, 'UF_X', '6001', { companyId: '' }, call)).toBeNull()
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('returns null for a negative-stage match (same drop as by-id)', async () => {
+    const call = vi.fn(async () => resp([item({ stageId: 'C5:LOSE' })]))
+    const isNegativeStage = (s: string) => s === 'C5:LOSE'
+    expect(await findCandidateByField('deal', 2, 'UF_X', '6001', { companyId: '93', isNegativeStage }, call)).toBeNull()
+  })
+
+  it('returns null when no item matches the field (empty list)', async () => {
+    const call = vi.fn(async () => resp([]))
+    expect(await findCandidateByField('deal', 2, 'UF_X', '6001', { companyId: '93' }, call)).toBeNull()
   })
 })
 
