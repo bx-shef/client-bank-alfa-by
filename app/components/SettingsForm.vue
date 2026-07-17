@@ -6,6 +6,7 @@ import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { parseRuleLines, shouldNotifyChat } from '~/utils/statement'
+import { B24_PAYMENT_TRIGGER } from '~/config/b24'
 import type { OperationDirection } from '~/types/statement'
 
 // Chat-notification settings form + live preview. One component for two entry
@@ -86,6 +87,21 @@ const invoicePaidStageModel = computed<string>({
     else delete settings.allocation.invoicePaidStageId
   }
 })
+
+// Automation-trigger CODE (#79): the app registers a canonical trigger at install
+// (`B24_PAYMENT_TRIGGER`); to arm firing the admin attaches it to an automation rule
+// and puts its CODE here. Same plain-string-over-optional-field pattern as the stage;
+// blank ⇒ key removed ⇒ the worker's `autoDistribute && triggerCode` gate stays off.
+const triggerCodeModel = computed<string>({
+  get: () => settings.allocation.triggerCode ?? '',
+  set: (v) => {
+    const s = v.trim()
+    if (s) settings.allocation.triggerCode = s
+    else delete settings.allocation.triggerCode
+  }
+})
+// Surfaced in the help text so the admin knows exactly what to register/attach.
+const paymentTrigger = B24_PAYMENT_TRIGGER
 
 // Live preview: which mock operations would be announced to the notification chat.
 const preview = computed(() =>
@@ -242,7 +258,7 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
           <B24Switch
             v-model="settings.autoDistribute"
             label="Автоматически отмечать оплату в CRM"
-            description="Когда платёж однозначно распознан по номеру — приложение само пометит оплату сделки «оплачено»."
+            description="Когда платёж однозначно распознан по номеру — приложение само пометит оплату «оплачено» / переведёт счёт на оплаченную стадию, а для сделки/смарт-процесса запустит триггер автоматизации (если задан код ниже)."
             data-testid="auto-distribute"
           />
           <B24Alert
@@ -263,6 +279,25 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
               placeholder="DT31_11:P"
               class="w-full font-mono text-xs"
               data-testid="invoice-paid-stage"
+            />
+          </B24FormField>
+          <B24FormField
+            v-if="settings.autoDistribute"
+            label="Код триггера автоматизации"
+            data-testid="trigger-code-field"
+          >
+            <template #description>
+              При установке приложение зарегистрировало триггер
+              <strong>«{{ paymentTrigger.name }}»</strong>. Повесьте его на своё правило автоматизации
+              (сделки/смарт-процесса), затем впишите код <code class="font-mono">{{ paymentTrigger.code }}</code>
+              сюда — тогда при разнесении платежа на сделку приложение запустит этот триггер.
+              Оставьте пустым — триггер запускаться не будет.
+            </template>
+            <B24Input
+              v-model="triggerCodeModel"
+              :placeholder="paymentTrigger.code"
+              class="w-full font-mono text-xs"
+              data-testid="trigger-code"
             />
           </B24FormField>
         </div>

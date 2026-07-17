@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-16
+> Last reviewed: 2026-07-17
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -124,7 +124,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
   предпросмотр («что попадёт в чат», `B24Badge`) + **`B24Switch` «Авто-проведение оплат»** (`autoDistribute`,
   §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM, + поле `B24Input`
-  «стадия оплаченного счёта» → `allocation.invoicePaidStageId` (пусто ⇒ стадию не трогаем); default OFF).
+  «стадия оплаченного счёта» → `allocation.invoicePaidStageId` (пусто ⇒ стадию не трогаем) + поле `B24Input`
+  **«код триггера автоматизации»** → `allocation.triggerCode` (#79; подсказка показывает канонический
+  `B24_PAYMENT_TRIGGER.code`/`name` — что зарегистрировано на установке и как повесить на правило; пусто ⇒ триггер
+  не фаерим); default OFF).
   Один компонент для двух точек входа: слайдер на
   `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
   **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
@@ -157,15 +160,20 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   фикстуры) + `tests/nuxt/statementUpload.nuxt.test.ts` (рендер/проводка).
 - `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `event.bind`
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
-  установка доставляет `application_token`) → `installFinish` (+ диагностика портала, блок «События»);
-  вне фрейма — редирект на `/`. Билдер батча привязок — чистый `app/utils/b24EventBind.ts`
-  (идемпотентен: пропуск верных, перепривязка устаревших). Требует `NUXT_PUBLIC_SITE_URL` в проде
-  (иначе откажется биндить относительный URL — ошибка с retry). `placement.bind` **пока не делаем** —
-  плейсменты добиваем на тестовом портале (см. план).
+  установка доставляет `application_token`) → **`crm.automation.trigger.add`** (регистрация канонического
+  триггера приложения `B24_PAYMENT_TRIGGER`, #79 — best-effort, standalone не-батч) → `installFinish`
+  (+ диагностика портала, блоки «События»/«Триггер автоматизации»); вне фрейма — редирект на `/`. Билдер батча
+  привязок — чистый `app/utils/b24EventBind.ts` (идемпотентен: пропуск верных, перепривязка устаревших); билдер
+  регистрации триггера — чистый `app/utils/b24TriggerRegister.ts` (`buildTriggerRegisterCall`, маска CODE +
+  непустое имя → `null` fail-safe; метод идемпотентен и требует контекста приложения, iframe его даёт; сбой
+  установку не блокирует). Требует `NUXT_PUBLIC_SITE_URL` в проде (иначе откажется биндить относительный URL —
+  ошибка с retry). `placement.bind` **пока не делаем** — плейсменты добиваем на тестовом портале (см. план).
 - `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
   (`/install`, `/app`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
 - `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`, `user_brief`,
-  `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`).
+  `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`),
+  `B24_PAYMENT_TRIGGER` (`code`/`name` канонического триггера автоматизации «платёж получен», #79 — регистрируется
+  на установке, его же указывают в `allocation.triggerCode`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
 - `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдер `/app` и страница
@@ -433,7 +441,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
       **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
       фаерится `crm.automation.trigger.execute` за гейтом `autoDistribute`+`triggerCode`, write-once факт на firing).
-      Остаётся follow-up: регистрация `CODE` на установке + live-verify firing + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
+      Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана; остаётся live-verify firing + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -529,7 +537,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     билдером; unsupported/нет CODE → без REST-вызова, ошибка пробрасывается). **В hot-path подключён — best-effort (#79):**
     в `crm-sync` за гейтом `autoDistribute`+`triggerCode` вызывается через OAuth-резолвер воркера (контекст приложения
     есть); сбой (в т.ч. незарегистрированный CODE) глотается — триггер сигналит, факт пишется только на firing, само-
-    заживает. Осталось: регистрация CODE на установке (`crm.automation.trigger.add`) + live-verify на OAuth-портале.
+    заживает. Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; осталось live-verify firing на OAuth-портале.
     CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
   - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
     - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
@@ -641,7 +649,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
       (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
       за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на
-      firing; сбой глотается (single-shot — промах не пере-пробуется)). Осталось: регистрация CODE на установке + live-verify на OAuth-портале.
+      firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort); осталось live-verify firing на OAuth-портале.
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
       (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
@@ -693,7 +701,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     за гейтом `autoDistribute`+`triggerCode` распознанная trigger-цель фаерит `crm.automation.trigger.execute` через
     OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
     kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
-    глотается (single-shot — промах не пере-пробуется). **Осталось:** регистрация `CODE` на установке (`crm.automation.trigger.add`) + live-verify
+    глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — **сделана**. **Осталось:** live-verify
     firing на OAuth-портале (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
