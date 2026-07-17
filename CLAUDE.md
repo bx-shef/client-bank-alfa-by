@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-16
+> Last reviewed: 2026-07-17
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -801,6 +801,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `purposeMatch`/`resolveAllocation` на seed-фикстурах (компания по счёту, стадии, инвойс, IDOR-скоуп, company-пул,
     ambiguous, `filterByAccountNumber`). Только чтение; `~/`+extensionless-релятивы резолвит `alias-loader.mjs`.
     Dev-only. Подтверждён на живом портале (21 проверка).
+  - `scripts/verify-chat-live.ts` (`pnpm verify:chat`) — **живой прогон стадии 6 (чат-уведомления)** против
+    тест-портала (`.env.b24test`): реальные `buildChatMessage` → `notifyChatViaRest` → `im.message.add`; проверяет
+    непустой текст + **нейтрализацию BB плательщика** (нет живого `[url=…]`) + сумму с кодом валюты, шлёт сообщение
+    в живой чат (recent-группа или self-диалог по `profile.ID`), верифицирует возврат id и **удаляет** тестовое
+    сообщение (`im.message.delete`). Dev-only. Подтверждён вживую (6 проверок, msgId получен+удалён).
   - `scripts/mutate-payment-live.ts` (`pnpm mutate:test` / `--apply` / `--revert`) — **живой прогон мутационного
     слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
     же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);
