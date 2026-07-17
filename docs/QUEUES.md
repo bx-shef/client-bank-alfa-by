@@ -90,7 +90,8 @@ flowchart LR
   (`handleFetchJob`/`handleParseJob`/`handleCrmSyncJob`/`handleEventJob`) принимает `HandlerDeps`
   (сайд-эффекты инъектируются), поэтому оркестрация покрыта тестами с фейками. Реальные
   транспорты (fetch банка, парсер файла, B24 REST) подключаются в [`worker.ts`](../server/queue/worker.ts)
-  (`liveHandlerDeps`) и наполняются на стадиях 3–6 — сейчас это заглушки.
+  (`liveHandlerDeps`) — **живые**: парсер файла (ручной импорт), B24 REST (crm-sync) и **fetch банка
+  Альфы (A9, `fetchBankStatement`)**; реальный счёт без банк-токена → `[]` инертно, Приор → A5b, rate-limiter → A8.
 - **Демо-нагрузка.** Пока реальных счетов нет, конвейер гоняет синтетику: демо-крон каждые
   `DEMO_TICK_SEC` **секунд** кладёт `DEMO_LOAD_N` fetch-джобов (`buildDemoFetchJobs`), их обработчик
   отдаёт `demoItems` (пара операций) — видно, как нагрузка течёт `bank-fetch → crm-sync`. Чтобы очереди

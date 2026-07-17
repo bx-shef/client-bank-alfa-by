@@ -2,9 +2,11 @@
 // Started once on server boot by server/plugins/queue.ts (only when REDIS_URL is
 // set). For horizontal scale-out the same startWorkers() can run in a dedicated
 // worker container (documented in docs/REFACTOR_PLAN.md) — the handlers don't care
-// where they run. CRM-sync transports (findCompany/writeActivity + dedup) and the
-// file-parse transport (manual import) are LIVE; only the bank fetch transport
-// (Alfa/Prior online polling) is still a stub until stage 5 fills it in.
+// where they run. CRM-sync transports (findCompany/writeActivity + dedup), the file-parse
+// transport (manual import) and the bank fetch transport (Alfa online GET, A9 →
+// fetchBankStatement) are LIVE; a real account with no stored bank token fetches nothing
+// (inert []), and Prior online fetch throws until A5b. The rate limiter for the live Alfa
+// call (A8) is the remaining stage-5 piece.
 
 import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
@@ -33,6 +35,7 @@ import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
+import { fetchBankStatement } from '../utils/bankFetch'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
@@ -81,12 +84,24 @@ const demoPause = (account: string): Promise<void> =>
  *  demo batch / nothing) with TODOs pointing at the stage that fills them in. */
 export function liveHandlerDeps(): HandlerDeps {
   return {
-    // TODO stage 3/5: real Alfa/Prior transport. For now emits synthetic ops only
-    // for DEMO- accounts (the load demo), and nothing for real accounts. The demo
-    // pause makes bank-fetch show a visible backlog (real accounts: no pause, []).
+    // Bank fetch (stage 5, A9): DEMO- accounts still emit the synthetic load-demo batch
+    // (with the visible-backlog pause); real accounts go through the LIVE transport
+    // (fetchBankStatement → ensureBankToken → GET /accounts/statement → normalizeAlfa).
+    // A real account with no stored bank token returns [] inertly (not connected yet, or the
+    // planner hasn't been given creds); Prior online fetch throws until A5b wires it. The
+    // queue layer names the provider field `providerId`; the transport, `provider`.
     fetchStatement: async (job) => {
-      await demoPause(job.account)
-      return demoItems(job)
+      if (isDemoAccount(job.account)) {
+        await demoPause(job.account)
+        return demoItems(job)
+      }
+      return fetchBankStatement({
+        memberId: job.memberId,
+        provider: job.providerId,
+        account: job.account,
+        dateFrom: job.dateFrom,
+        dateTo: job.dateTo
+      })
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
     // to operations (server is the single parse authority). Demo/fetch path is
@@ -390,8 +405,11 @@ export function startThroughputWorkers(deps: HandlerDeps, opts: { concurrency?: 
   const connection = connectionOptions()
   const concurrency = Math.max(1, opts.concurrency ?? 1)
   return [
-    // TODO stage 5: once fetchStatement hits the real Alfa API (100 req/min), add a
-    // limiter here — new Worker(..., { connection, limiter: { max: 100, duration: 60_000 } }).
+    // TODO A8: fetchStatement now hits the real Alfa API (100 req/min) — needs a rate limiter
+    // BEFORE A10 wires the live poll timer (today only demo jobs flow, and they never hit the
+    // bank). NB: BullMQ's `limiter` is PER worker instance, but this module scales to N replicas
+    // (startThroughputWorkers) → N×100/min against Alfa's global per-OAuth-client cap. A8 must use
+    // a shared/Redis-backed limiter keyed per provider (or pin fetch to one replica). Prior: concurrency 1.
     new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), { connection, concurrency }),
     new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
     new Worker<CrmSyncJob>(Q_CRM, async (job) => {
