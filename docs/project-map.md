@@ -590,7 +590,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      **визуальная верификация** (свет/тёмная, `/settings`). **Connect-поток A7 ЗАВЕРШЁН** — админ может подключить
      счёт; для живого прогона нужны банк-креды владельца (`ALFA_OAUTH_*`) + `CRON_REAL_POLL=1`. **Follow-up
      (записаны выше):** enum счетов вместо ручного ввода, показ per-account ошибки опроса, single-use nonce.
-8. ✅ **A8 — сделано** (PR #NNN): **глобальный** rate-limiter `Q_FETCH` — BullMQ worker `limiter`
+8. ✅ **A8 — сделано** (PR #298): **глобальный** rate-limiter `Q_FETCH` — BullMQ worker `limiter`
    (shared across ALL реплик через Redis, не per-instance — сверено по офдок BullMQ ≥3.0), кап живых
    вызовов Альфы на весь флот. Дефолт **100/60с** = per-client cap Альфы (у приложения один Alfa
    `client_id` → один глобальный кап верен; per-group лимиты убраны в BullMQ 3.0). Настройка
