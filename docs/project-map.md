@@ -66,13 +66,15 @@
 `app/utils/allocationMutation.ts` → транспорт `server/utils/allocationMutationWrite.ts` → **`deal-payment`**
 `crm.item.payment.pay`; **`invoice`** `crm.item.update` на стадию `allocation.invoicePaidStageId` из настроек
 (стадия не указана ⇒ инвойс не трогаем), счётчик `distributed`. Applied-детект конверт-aware
-(`{result:true}` vs `{result:{item}}`). **Порядок идемпотентный** (`hasAllocationFact` пре-чек → мутация →
-write-once факт: факт всегда означает успешную запись, REST-ошибка бросается ДО факта → чистый ретрай; для
-поддержанной цели недоступный токен портала бросает — ретрай без записи факта). Гейт OFF ⇒ прежнее поведение
-(только факт). **Подтверждено вживую** на seed-портале (`pnpm verify:109` — 21 READ-проверка; `pnpm mutate:test`
-dry-run/`--apply`/`--revert` + apply/revert стадии инвойса). Тесты
-`allocationMutation`/`allocationMutationWrite`/`queuePhase2` (гейт off/on, идемпотентность, unsupported-цель,
-проброс ошибки, стадия инвойса).
+(`{result:true}` vs `{result:{item}}`). **Порядок идемпотентный (Фаза A):** пре-чек `isTargetApplied` читает
+**состояние цели в B24** (`readAllocationApplied`: deal-payment `paid='Y'` / инвойс уже на `invoicePaidStageId`),
+не `allocation_fact` → редоставка не пере-проводит (точнее факта: факт пишется ПОСЛЕ оплаты, чтение состояния
+закрывает окно ре-оплаты при крэше между) → мутация → write-once факт (для учёта/сторно; REST-ошибка бросается ДО
+факта → чистый ретрай; для поддержанной цели недоступный токен бросает — ретрай без записи факта). Гейт OFF ⇒
+прежнее поведение (только факт). **Подтверждено вживую** на seed-портале (`pnpm verify:109` — 21 READ-проверка;
+`pnpm mutate:test` + apply/revert стадии инвойса) и на `bel.bitrix24.by` (Фаза A: инвойс #39 `DT31_7:P` → своя
+стадия=true/чужая=false). Тесты `allocationMutation`/`allocationMutationWrite`/`allocationApplied`/`queuePhase2`
+(гейт off/on, идемпотентность через состояние, unsupported-цель, проброс ошибки, стадия инвойса).
 **Триггеры сделки/смарт-процесса (#79) — фундамент (#269) + проводка в hot-path + запись факта сделаны
 (best-effort, single-shot):** билдер `buildTriggerExecution` (`crm.automation.trigger.execute`:
 CODE+OWNER_TYPE_ID+OWNER_ID) + транспорт `executeTriggerViaRest` + настройка `allocation.triggerCode` (маска,

@@ -449,9 +449,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       трогаем** — «не указана → не трогаем», §2). Всё через `applyAllocation` → `payAllocationViaRest` (билдер
       `buildAllocationMutation`), счётчик `distributed`. **Applied-детект различает конверты** (`callRest` отдаёт полный
       envelope): `crm.item.payment.pay` → `{result:true}`, `crm.item.update` → `{result:{item:…}}` (подтверждено вживую).
-      **Порядок идемпотентный:** сперва `hasAllocationFact`
-      (пре-чек — редоставка не пере-проводит), затем мутация, затем write-once факт — так факт всегда означает
-      успешную запись (REST-ошибка бросается ДО факта → чистый ретрай). Гейт OFF ⇒ поведение прежнее (только факт).
+      **Порядок идемпотентный (Фаза A):** сперва `isTargetApplied` — пре-чек читает **состояние цели в B24**
+      (`readAllocationApplied`: deal-payment `paid='Y'` / инвойс уже на `invoicePaidStageId`), не `allocation_fact` —
+      редоставка не пере-проводит; чтение состояния **точнее** факта (факт пишется ПОСЛЕ оплаты → крэш между оставлял бы
+      окно ре-оплаты). Затем мутация, затем write-once факт (для учёта/сторно; триггер-путь дедупит по факту — у firing
+      нет читаемого состояния). Гейт OFF ⇒ поведение прежнее (только факт).
       Живой прогон — `pnpm mutate:test` (dry-run по умолчанию, `--apply` пишет, `--revert` откат `sale.payment.update PAID=N`);
       стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
       **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
@@ -587,7 +589,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       над `QueryFn` (таблица `allocation_fact`, скоуп по `member_id`): `getAllocationFact`/`recordAllocation`
       (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
       трётся)/`deleteFactsForPortal`. В отличие от дедупа операции (маркер в B24): фиксирует цель разнесения и
-      допускает откат. Удаление приложения чистит и его. Тесты на fake-query.
+      допускает откат. Удаление приложения чистит и его. Тесты на fake-query. **С Фазой A** пре-чек мутации
+      факт **не читает** (читает состояние цели, ниже) — стор остаётся для триггер-дедупа, счётчика, сторно.
+    - `server/utils/allocationApplied.ts` — **чистое чтение состояния цели** (Фаза A, DI над `RestCall`, тесты):
+      `readAllocationApplied(target, call, opts)` — идемпотентный пре-чек мутации разнесения по **состоянию в B24**,
+      не по `allocation_fact`: `deal-payment` → оплата `paid='Y'` (`crm.item.payment.list`, реюз `paymentListParams`/
+      `extractPayments`); `invoice` → уже на `opts.invoicePaidStageId` (`crm.item.list` 31 по id). Триггер-цели → `false`
+      (у firing нет читаемого состояния). Точнее факта (факт пишется ПОСЛЕ оплаты → чтение состояния закрывает окно
+      ре-оплаты при крэше между оплатой и фактом). Проведён в `crm-sync` как деп `isTargetApplied`. **Live-verified**
+      (`bel.bitrix24.by`: инвойс #39 `DT31_7:P` → своя стадия=true/чужая=false; чтение оплат сделки отработало).
     - `server/utils/stageLoader.ts` — чистый **loader «отрицательных» стадий** (DI над `RestCall`, тесты):
       `loadNegativeStages(stageEntityId, call)` — `crm.status.list` → множество `STATUS_ID` с `SEMANTICS='F'`;
       билдеры `ENTITY_ID`: `invoiceStageEntityId(catId)` (`SMART_INVOICE_STAGE_<catId>`), `dealStageEntityId(catId)`

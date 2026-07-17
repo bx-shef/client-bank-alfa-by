@@ -142,8 +142,8 @@ app-namespace** — фильтр по одному `ORIGIN_ID` даст **лож
 - **факт разнесения** для проведённой цели — это **состояние самого объекта**, которое мы **и так читаем**:
   для `deal-payment` — детерминированно (`payment.pay`→`paid='Y'`, `paymentLookup` его отсеивает); для
   **инвойса — только если** настроенная `allocation.invoicePaidStageId` указывает на стадию с `SEMANTICS='S'`
-  (иначе `negativeStages` её не исключит и цель пере-мутируется на редоставке). При этом условии отдельная
-  запись факта на мутационном пути **избыточна** — это и есть предмет Фазы A (ещё не сделана);
+  (иначе `negativeStages` её не исключит и цель пере-мутируется на редоставке). Именно поэтому пре-чек
+  мутации читает **состояние цели в B24** (`isTargetApplied`, а не факт) — **Фаза A (amount-путь) сделана**;
 - **чужие поля не штампуем.** `originId`/`xmlId` на **клиентской** сделке/инвойсе (строки 1–3 матрицы) клиент
   может использовать под свою интеграцию — перезапись инвазивна. Наш маркер — только на **нашей** записи
   (настраиваемое дело / элемент СП). В дефолтном `autoDistribute=OFF` (мутации нет → следа в B24 нет) снятие
@@ -159,8 +159,14 @@ app-namespace** — фильтр по одному `ORIGIN_ID` даст **лож
 > + `server/utils/activityMarkerLookup.ts`; маркер `originatorId`+`originId`, поиск `crm.activity.list`;
 > `rememberActivity` ушёл — маркер атомарен с делом). Из дедуп-сторов остался только `allocationFactStore.ts`
 > (`allocation_fact`, факт разнесения). Ключ операции пока **упрощённый** `account|docId` (`dedupKey()`).
-> - **Фаза A (ещё нет):** снять и `allocation_fact` — заменить `hasAllocationFact` на чтение состояния цели
->   (`deal-payment`: `paid='Y'`; инвойс: settled-стадия `invoicePaidStageId`). Требует live-verify.
+> - **Фаза A (amount-путь — сделана):** идемпотентность мутации разнесения читает **состояние цели в B24**, а не
+>   `allocation_fact`: `isTargetApplied` (`server/utils/allocationApplied.ts` `readAllocationApplied`) — `deal-payment`:
+>   `paid='Y'` (`crm.item.payment.list`); инвойс: уже на `invoicePaidStageId` (`crm.item.list`). Это **точнее** факта
+>   (факт пишется ПОСЛЕ оплаты → крэш между оплатой и фактом оставлял бы окно ре-оплаты — чтение состояния его
+>   закрывает). Live-verified на `bel.bitrix24.by` (инвойс #39 `DT31_7:P` → своя стадия=true, чужая=false; чтение
+>   оплат сделки отработало). `allocation_fact` **остаётся** для: триггеров (у firing нет читаемого состояния —
+>   дедуп только по факту), счётчика `allocated`, истории/сторно. Полное снятие стора блокирует триггер-путь.
+> - **Ключ операции** — усиление до составного хеша (§1) — ещё нет.
 > - **Элемент смарт-процесса** как носитель (`xmlId`, §2/§5) — альтернатива настраиваемому делу на платном
 >   тарифе (плюс кнопки §6); ещё не реализован.
 >
@@ -349,9 +355,10 @@ CRM** Б24, а не отдельная незащищённая выборка.
 > стадии инвойса** (`crm.item.update` на `allocation.invoicePaidStageId`; **не указана ⇒ инвойс не трогаем**).
 > Чистый билдер `app/utils/allocationMutation.ts` + транспорт `server/utils/allocationMutationWrite.ts`
 > (конверт-aware applied-детект: `payment.pay` → `{result:true}`, `crm.item.update` → `{result:{item}}`),
-> идемпотентный порядок **mutation-before-fact** (пре-чек `hasAllocationFact` → мутация → write-once факт;
-> REST-ошибка бросается ДО факта → чистый ретрай). Счётчик `distributed`. Подтверждено вживую
-> (`pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте).
+> идемпотентный порядок **mutation-before-fact** (пре-чек `isTargetApplied` читает состояние цели в B24 —
+> Фаза A → мутация → write-once факт; уже-применённая цель на редоставке: пропуск оплаты + запись факта для
+> учёта/сторно; REST-ошибка бросается ДО факта → чистый ретрай). Счётчик `distributed`. Подтверждено вживую
+> (`pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте; state-read Фазы A — на `bel.bitrix24.by`).
 >
 > **Триггер: билдер + транспорт + настройка готовы, проводка — нет.** Чистый `buildTriggerExecution(target,
 > {triggerCode})` (`app/utils/allocationMutation.ts`) строит `crm.automation.trigger.execute` (`CODE`+`OWNER_TYPE_ID`+

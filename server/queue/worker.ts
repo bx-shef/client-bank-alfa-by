@@ -37,6 +37,7 @@ import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../ut
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { fetchBankStatement } from '../utils/bankFetch'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
+import { readAllocationApplied } from '../utils/allocationApplied'
 import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { allocationFactKey } from '../../app/utils/allocation'
@@ -262,12 +263,24 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return Promise.resolve(false)
       return recordAllocation(dbQuery, memberId, allocationFactKey(item, target), target.kind, target.id)
     },
-    // Idempotency pre-check for the mutation slice (#109 §2): does a fact already exist
-    // for this (payment → target)? Demo accounts GATED (never touch the store). Consulted
-    // only when autoDistribute is on. A store error propagates (fail the job).
+    // Idempotency pre-check for the TRIGGER path (#79): does a fact already exist for this
+    // (payment → trigger target)? A trigger fire is stateless, so the fact is its only dedup.
+    // Demo accounts GATED (never touch the store). A store error propagates (fail the job).
     hasAllocationFact: async (item, target, memberId) => {
       if (isDemoAccount(item.account)) return false
       return (await getAllocationFact(dbQuery, memberId, allocationFactKey(item, target))) !== null
+    },
+    // Idempotency pre-check for the AMOUNT mutation (#109 §2, Фаза A): is the target already
+    // applied in B24 (payment `paid='Y'` / invoice on the configured paid stage)? Reads live
+    // B24 state via the per-portal RestCall — the source of truth, so a redelivery never
+    // re-pays (and it covers the pay-then-crash-before-fact window the fact left open). Demo
+    // accounts GATED. No token → false (can't read → don't skip; `applyAllocation`'s no-token
+    // branch then throws → clean retry). A read error propagates (fail the job).
+    isTargetApplied: async (item, target, memberId, opts) => {
+      if (isDemoAccount(item.account)) return false
+      const call = await resolvePortalCall(memberId)
+      if (!call) return false
+      return readAllocationApplied(target, call, opts)
     },
     // Portal MUTATION for a decided allocate target (#109 §2): mark it paid
     // (`crm.item.payment.pay` / invoice `crm.item.update`). Demo accounts GATED (never real
