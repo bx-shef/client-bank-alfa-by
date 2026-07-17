@@ -86,5 +86,18 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     warnings.push('REDIS_URL не задан — очередь выключена; приём событий деградирует до синхронной записи в webhook (без асинхронного пайплайна — воркеры/крон не работают).')
   }
 
+  // --- Bank online-fetch OAuth creds (stage 5): each bank needs ALL of
+  //     <PREFIX>_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL to refresh its token (bankCredsFromEnv).
+  //     A HALF-configured bank silently disables its online fetch (only a runtime warn),
+  //     so surface a partial config at boot. Absent entirely = feature off, no warning. ---
+  for (const [prefix, bank] of [['ALFA_OAUTH', 'Альфа'], ['PRIOR_OAUTH', 'Приор']] as const) {
+    const parts = [`${prefix}_CLIENT_ID`, `${prefix}_CLIENT_SECRET`, `${prefix}_TOKEN_URL`]
+    const set = parts.filter(k => !!(env[k] ?? '').trim())
+    if (set.length > 0 && set.length < parts.length) {
+      const missing = parts.filter(k => !(env[k] ?? '').trim())
+      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — онлайн-опрос ${bank} отключён (нужны все три: ${parts.join(', ')}).`)
+    }
+  }
+
   return { errors, warnings }
 }
