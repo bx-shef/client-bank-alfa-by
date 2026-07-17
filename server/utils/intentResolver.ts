@@ -49,8 +49,9 @@ export interface IntentContext {
   companyId: string
   isNegativeStage?: (stageId: string) => boolean
   /** The portal's «карта сопоставления» field map (`RecognitionSettings.configFields`):
-   *  a config key → the CRM field name the number lives in. Consumed by the
-   *  `by-config-field` kinds (`deal-field` today). Absent ⇒ those kinds are `unsupported`. */
+   *  a config key → a CRM field name OR the smart-process entityTypeId. Consumed by the
+   *  config-driven kinds: `deal-field` (field), `smart-field` (field + entityTypeId),
+   *  `smart-id` (entityTypeId). A required key absent ⇒ that kind is `unsupported`. */
   configFields?: Record<string, string>
 }
 
@@ -91,8 +92,8 @@ export interface IntentResolution {
  *  live-confirmed constant. Kept locally (not read from `route.targetKind`) so the
  *  dispatch needs no non-null assertion and doesn't hinge on another module staying
  *  non-null. `smart-id` is absent on purpose: a custom smart process's entityTypeId is
- *  portal-specific (from the mapping config, not a constant) — handled as `unsupported`
- *  until the config slice lands. */
+ *  portal-specific (from `configFields['smart-entity']`, not a constant) — its own case
+ *  reads that config value rather than this table. */
 const BY_ID_TARGET: Record<'invoice-id' | 'deal-id', { targetKind: AllocationTargetKind, entityTypeId: number }> = {
   'invoice-id': { targetKind: 'invoice', entityTypeId: SMART_INVOICE_ENTITY_TYPE_ID },
   'deal-id': { targetKind: 'deal', entityTypeId: DEAL_ENTITY_TYPE_ID }
@@ -222,6 +223,10 @@ export async function resolveIntentCandidates(
     case 'smart-id': {
       // The value IS the smart-process element's own id. Unlike a deal, the smart process's
       // entityTypeId is portal-specific → read it from config; missing/invalid ⇒ unsupported.
+      // ⚠ IDOR live-verify gate: the company scope relies on the SP having a `companyId` field
+      // (live-confirmed for deals, NOT for an arbitrary configured SP). If a given SP has no
+      // company binding, B24 may ignore the unknown filter key → scope fails open. Verify the
+      // real portal's SP carries companyId before firing its trigger (log/count safe until then).
       const entityTypeId = parseConfiguredEntityTypeId(ctx.configFields?.[SMART_ENTITY_CONFIG_KEY])
       if (!entityTypeId) return unsupported(intent, 'smart-id: no configured entityTypeId (configFields["smart-entity"])')
       const found = await deps.findCandidateById('smart-process', entityTypeId, intent.value, opts, call)

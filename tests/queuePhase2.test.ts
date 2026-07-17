@@ -127,7 +127,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       return o.applied ?? true
     },
     applyTrigger: async (it, target, memberId, code) => {
-      calls.trigApply.push([it.docId, target.kind, target.id, memberId, code])
+      // Capture entityTypeId too, so a handler-level smart-process test can prove the FULL
+      // candidate (not a stripped {kind,id}) reaches applyTrigger — the #79 OWNER_TYPE_ID wire.
+      calls.trigApply.push([it.docId, target.kind, target.id, memberId, code, target.entityTypeId])
       return o.triggerFired ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
@@ -835,8 +837,26 @@ describe('handleCrmSyncJob', () => {
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(1)
     expect(calls.allocHas).toEqual([['d1', 'deal', '77', 'M']]) // idempotency pre-check
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // fired with the CODE
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // fired with the CODE
     expect(calls.allocRec).toEqual([['d1', 'deal', '77', 'M']]) // fact recorded AFTER
+  })
+
+  it('autoDistribute ON + triggerCode: a SMART-PROCESS target reaches applyTrigger WITH its entityTypeId (#79 wire)', async () => {
+    // Pins the handler→applyTrigger join for smart-process: the full candidate (incl.
+    // entityTypeId, needed as OWNER_TYPE_ID) must reach applyTrigger, not a stripped {kind,id}.
+    const smartMatrix: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: { 'smart-entity': '1032' }, matrices: [{ mask: 'СП-dd', kind: 'smart-id' }]
+    }
+    const smartAt: IntentResolution = {
+      kind: 'smart-id', value: 'СП-90', status: 'resolved',
+      candidates: [{ kind: 'smart-process', id: '9', amount: 0, currency: 'BYN', entityTypeId: 1032 }]
+    }
+    const { deps, calls } = fakeDeps({ recognition: smartMatrix, resolve: [smartAt], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата СП-90')]), deps)
+    expect(r.distributed).toBe(1)
+    // entityTypeId 1032 is the 6th element — proves the full candidate survived to applyTrigger.
+    expect(calls.trigApply).toEqual([['d1', 'smart-process', '9', 'M', 'cbatest_pay', 1032]])
+    expect(calls.allocRec).toEqual([['d1', 'smart-process', '9', 'M']])
   })
 
   it('autoDistribute ON but NO triggerCode configured: does NOT fire the trigger (#79)', async () => {
@@ -867,7 +887,7 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: twoToSameDeal, autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.distributed).toBe(1)
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // deduped → one fire
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // deduped → one fire
   })
 
   it('autoDistribute ON + triggerCode, applyTrigger returned false (un-fired): NO fact, job still succeeds (single-shot) (#79)', async () => {
@@ -882,7 +902,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.allocated).toBe(0) // no fire → no fact
     expect(r.distributed).toBe(0)
     expect(r.created).toBe(1) // job still succeeds — an un-fired trigger does not fail the batch
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // attempted once
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // attempted once
     expect(calls.allocRec).toEqual([]) // no fact persisted (but the activity marker IS written → single-shot)
   })
 
@@ -893,7 +913,7 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.allocated).toBe(0)
     expect(r.distributed).toBe(0)
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // fired
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // fired
     expect(calls.allocRec).toHaveLength(1) // record attempted, returned false
   })
 
@@ -905,7 +925,7 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: twoDeals, autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55 Д-56')]), deps)
     expect(r.distributed).toBe(2) // distinct kind:id → the loop iterates and fires each
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay'], ['d1', 'deal', '88', 'M', 'cbatest_pay']])
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined], ['d1', 'deal', '88', 'M', 'cbatest_pay', undefined]])
     expect(calls.allocRec).toEqual([['d1', 'deal', '77', 'M'], ['d1', 'deal', '88', 'M']])
   })
 
@@ -929,7 +949,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.allocated).toBe(2) // invoice fact + deal-trigger fact
     expect(r.distributed).toBe(2) // invoice mutation applied + deal trigger fired
     expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', 'DT31_11:P']]) // amount path
-    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay']]) // trigger path
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // trigger path
     expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M'], ['d1', 'deal', '77', 'M']]) // both facts
   })
 

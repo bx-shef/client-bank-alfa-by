@@ -466,6 +466,19 @@ REST-триггер позволяет передать доп. параметр
   | `smart-field` | настраиваемое поле элемента (`UF_*`) — **на каждый смарт-процесс и направление** |
   | `document-number` | `number` документа «Генерации документов» (мост → `entityTypeId`/`entityId`) |
 
+  **Как настроить распознавание (пока — через `app.option`, UI-формы ещё нет).** Настройки лежат в
+  `app.option` под ключом `cb_settings_v1`, блок `recognition`:
+  - `matrices` — массив `{ mask, kind }` (маска: `d` = цифра, прочее — литерал; `kind` — из таблицы выше).
+    Без матриц распознавание не срабатывает **ни для чего**.
+  - `alphabet` — `cyrillic` | `latin` (сведение гомоглифов `ВОРС`↔`BOPC`).
+  - `configFields` — параметры для config-driven кайндов (ключ → значение):
+    - `"deal-field"` → имя поля сделки (`UF_CRM_*`), где лежит номер (для `deal-field`);
+    - `"smart-entity"` → **`entityTypeId` смарт-процесса строкой** (напр. `"1032"`; узнать — `crm.item.fields`/список СП),
+      нужен для `smart-id` и `smart-field`; невалидное/пустое ⇒ кайнд `unsupported` (молча, без записи);
+    - `"smart-field"` → имя поля элемента СП (`UF_*`), где лежит номер (для `smart-field`, вместе с `smart-entity`).
+
+  Пример: `{"recognition":{"alphabet":"cyrillic","matrices":[{"mask":"СЧ-dddd","kind":"invoice-number"},{"mask":"ЗАК-dddd","kind":"deal-field"}],"configFields":{"deal-field":"UF_CRM_1699999999"}}}`.
+
   Точные REST-имена полей фиксируем в [`REST_METHODS.md`](REST_METHODS.md) на REST-слайсе. Один
   идентификатор может вести к нескольким сущностям — неоднозначность разрешается по §2 (сумма+валюта,
   минимальный ID + оповещение). **Уточнение по счетам:** номер счёта (`accountNumber` смарт-счёта)

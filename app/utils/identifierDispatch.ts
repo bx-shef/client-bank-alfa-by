@@ -61,7 +61,7 @@ export const IDENTIFIER_ROUTES: Record<IdentifierKind, IdentifierRoute> = {
   'payment-number': { targetKind: 'deal-payment', strategy: 'by-account-number', needsConfiguredField: false },
   // `needsConfiguredField: true` — a smart process's `entityTypeId` is portal-specific
   // (custom SP), so even a by-id lookup needs that configured value before it can run.
-  // Until the config slice lands, `intentResolver` routes smart-id to `unsupported`.
+  // `intentResolver` reads it from `configFields['smart-entity']` (missing ⇒ `unsupported`).
   'smart-id': { targetKind: 'smart-process', strategy: 'by-id', needsConfiguredField: true },
   'smart-field': { targetKind: 'smart-process', strategy: 'by-config-field', needsConfiguredField: true },
   'document-number': { targetKind: null, strategy: 'via-document', needsConfiguredField: false }

@@ -293,9 +293,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`AllocationTargetKind` или `null` для моста-документа) + `LookupStrategy` (`by-id`/`by-number`/
     `by-account-number` (payment-number, #189)/`by-order-number` (order-number, #172)/`by-payment-id`
     (payment-id, #172)/`by-config-field`/`via-order`/`via-document`) +
-    `needsConfiguredField` (поле из карты
-    сопоставления — только `deal-field`/`smart-field`). Без I/O и без хардкода имён полей; сам REST-поиск
-    и поле из настроек — REST-слайс. `AllocationTargetKind` расширен до `invoice|deal-payment|deal|smart-process`.
+    `needsConfiguredField` (нужен параметр из карты
+    сопоставления — `deal-field`/`smart-field` (поле) и `smart-id` (entityTypeId СП)). Без I/O и без хардкода имён полей;
+    сам REST-поиск и поле из настроек — REST-слайс. `AllocationTargetKind` расширен до `invoice|deal-payment|deal|smart-process`.
   - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
     `buildPriorAuthorizeUrl`/claims/тела токенов/`buildConsentRequest`/`buildResourceRequestBody` + парсеры
     `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`). Без `node:crypto` —
@@ -687,7 +687,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `C<cat>:`-префикса (форма stage-id дефолтной воронки сделки — `LOSE` vs `C0:LOSE` — вживую не подтверждена;
       strip false-negative-safe: только добавляет матч по фиксированным `LOSE`/`APOLOGY`, валидного кандидата не
       теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
-      Смарт-процессы пока не включены (их `entityTypeId` портало-специфичен, интенты `unsupported`). DI, тесты
+      Смарт-процессы в **предикат отрицательных стадий пока не включены** (их `entityTypeId` портало-специфичен) —
+      хотя интенты `smart-id`/`smart-field` уже резолвятся (пункт 3): смарт-процесс-кандидат сейчас **не отсеивается**
+      по FAIL-стадии (follow-up — расширить `negativeStages` на СП по `configFields['smart-entity']`). DI, тесты
       (`tests/negativeStages.test.ts`).
     **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
     встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента = lever-2** (общий bucket +

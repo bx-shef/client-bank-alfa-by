@@ -367,8 +367,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   `routeIdentifier`; `crm-sync` читает `PortalSettings` раз на джобу, на каждую операцию распознаёт по матрицам портала
   и **логирует намерение** через `onRecognized` — счётчик `recognized`; пока только лог, без REST-lookup/записи) +
   **диспетчер intent→кандидаты** (слайс 2: `intentResolver.ts` `resolveIntentCandidates` — по `RecognitionIntent`
-  вызывает нужный резолвер с company-скоупом; `invoice-number`/`invoice-id`/`deal-id`/`payment-number` диспатчатся,
-  остальные `unsupported` с reason; резолверы инъектируются, exhaustive-свитч по kind) +
+  вызывает нужный резолвер с company-скоупом; диспатчатся все id/number-кинды + `deal-field`/`smart-id`/`smart-field`
+  (по `configFields`), `document-number` — `unsupported` с reason; резолверы инъектируются, exhaustive-свитч по kind) +
   **резолюция намерения в `crm-sync`** (слайс 3: `resolveIntents`-обёртка воркера зовёт батч-`resolveIntentsForOp`
   на матч-компанию, за dedup-skip; `onResolved` логирует кандидатов, счётчик `resolved`; пока log/count без записи;
   пул оплат тянется раз на операцию, кап `MAX_RESOLVED_INTENTS_PER_OP` — против амплификации N+1, #191) +
@@ -471,8 +471,13 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   (`by-config-field`/`by-id`) — подключены** (`findCandidateById`/`findCandidateByField`; deal `entityTypeId` фикс. 2,
   смарт-процесс — из `configFields['smart-entity']` через `parseConfiguredEntityTypeId`, поле — из
   `configFields['deal-field'|'smart-field']`; IDOR + маска имени поля + fail-closed на невалидном entityTypeId).
-  Осталось **UI «карты сопоставления»** (матрицы/`configFields` пока только через `app.option`, формы нет); мост
-  `via-document` — за live-verify реального шаблона.
+  ⚠ **IDOR-гейт смарт-процесса — live-verify:** company-скоуп смарт-процесса опирается на наличие у СП поля
+  `companyId` (подтверждено для сделок, для произвольного СП — нет); если у СП нет привязки к компании, B24 может
+  проигнорить фильтр → скоуп fail-open. Проверить на реальном портале до firing триггера СП. Ещё follow-up: **отсев
+  FAIL-стадий смарт-процесса** (сейчас `negativeStages` покрывает только инвойсы+сделки — СП-кандидат по стадии не
+  фильтруется). Осталось **UI «карты сопоставления»** (матрицы/`configFields` пока только через `app.option` — ключи/
+  форма блоба задокументированы в `PROCESSING.md §4`, но формы нет); мост `via-document` — за
+  live-verify реального шаблона.
   ⛔ **Оставшаяся запись — за live-verify:** пишет реальные деньги/сущности; форма стадии дефолтной воронки
   сделки вживую не подтверждена; sandbox/прод банков и живой портал — только у владельца. Открытые пункты — трекер #109.
 

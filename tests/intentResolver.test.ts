@@ -224,11 +224,30 @@ describe('resolveIntentCandidates — smart-process (config-driven entityTypeId,
     expect(deps.findCandidateByField).toHaveBeenCalledWith('smart-process', 1032, 'UF_CRM_5_PAY', 'ЗАК-9', { companyId: '93', isNegativeStage: ctx.isNegativeStage }, call)
   })
 
-  it('smart-id with NO configured entityTypeId → unsupported, resolver NOT called', async () => {
+  it('smart-id/smart-field with a configured field but no match → resolved with [] (not unsupported)', async () => {
+    const deps = fakeDeps({ byId: null, byField: null })
+    const ctxCfg = { ...ctx, configFields: { 'smart-entity': '1032', 'smart-field': 'UF_CRM_5_PAY' } }
+    const rId = await resolveIntentCandidates(intent('smart-id', '9'), ctxCfg, call, deps)
+    expect(rId).toMatchObject({ status: 'resolved', candidates: [] })
+    const rField = await resolveIntentCandidates(intent('smart-field', 'ЗАК-9'), ctxCfg, call, deps)
+    expect(rField).toMatchObject({ status: 'resolved', candidates: [] })
+  })
+
+  it('smart-id with NO configured entityTypeId → unsupported (reason set), resolver NOT called', async () => {
     const deps = fakeDeps({ byId: sp() })
     const r = await resolveIntentCandidates(intent('smart-id', '9'), ctx, call, deps) // no configFields
     expect(r.status).toBe('unsupported')
+    expect(r.reason).toBeTruthy()
     expect(deps.findCandidateById).not.toHaveBeenCalled()
+  })
+
+  it('smart-field with NO configured entityTypeId → unsupported (its own etid guard), resolver NOT called', async () => {
+    const deps = fakeDeps({ byField: sp() })
+    const ctxCfg = { ...ctx, configFields: { 'smart-field': 'UF_CRM_5_PAY' } } // field set, entityTypeId missing
+    const r = await resolveIntentCandidates(intent('smart-field', 'ЗАК-9'), ctxCfg, call, deps)
+    expect(r.status).toBe('unsupported')
+    expect(r.reason).toBeTruthy()
+    expect(deps.findCandidateByField).not.toHaveBeenCalled()
   })
 
   it('smart-id with a NON-NUMERIC configured entityTypeId → unsupported (fail-closed)', async () => {
