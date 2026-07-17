@@ -442,9 +442,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
       **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
       фаерится `crm.automation.trigger.execute` за гейтом `autoDistribute`+`triggerCode`, write-once факт на firing).
-      Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана и **подтверждена вживую**
-      (`pnpm trigger:test --apply` на `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip); остаётся live-verify
-      **firing** (нужно правило автоматизации на `CODE`) + `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
+      Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
+      подтверждены вживую** (`pnpm trigger:test --apply --fire` на `bel.bitrix24.by`: round-trip + `executeTriggerViaRest`
+      `{result:true}` на сделке и смарт-процессе); остаётся `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       заглушка осталась только у **онлайн-опроса банков** (`fetchStatement`, Альфа/Приор — стадия 5). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
@@ -735,9 +735,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
     kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
     глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`,
-    best-effort) — **сделана и подтверждена вживую** (`pnpm trigger:test --apply` на `bel.bitrix24.by`:
-    `trigger.add`→`trigger.list` round-trip). **Осталось:** live-verify **firing** на OAuth-портале — нужно правило
-    автоматизации, повешенное на `CODE` (детали — `docs/PROCESSING.md` §2). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
+    best-effort) — **сделана; регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire` на
+    `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и
+    смарт-процессе; детали — `docs/PROCESSING.md` §2). Реакция правила автоматизации на `CODE` — за админом (наш код
+    доставляет сигнал). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
     Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
     известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
     по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),

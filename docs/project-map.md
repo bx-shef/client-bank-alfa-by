@@ -475,9 +475,9 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   `autoDistribute`** (`deal-payment` → `crm.item.payment.pay`, `invoice` → `crm.item.update` на стадию
   `allocation.invoicePaidStageId`) + оповещение в **чат ошибок** при `ambiguous`/`manual` — всё в воркере,
   идемпотентный порядок mutation-before-fact + **триггеры** deal/smart-process (best-effort/single-shot, #79 — через
-  OAuth-резолвер воркера, факт на firing). Регистрация `CODE` — **live-verified** (`pnpm trigger:test --apply`,
-  `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip). **Осталось:** live-verify **firing** триггера на
-  OAuth-портале (нужно правило автоматизации на `CODE`) + долговременный ретрай триггера + путь заказа `payment.add`.
+  OAuth-резолвер воркера, факт на firing). Регистрация `CODE` **И firing** — **live-verified** (`pnpm trigger:test
+  --apply --fire`, `bel.bitrix24.by`: round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и смарт-процессе).
+  **Осталось:** долговременный ретрай триггера + путь заказа `payment.add`; реакция правила на `CODE` — за админом.
   **`deal-field`/`smart-id`/`smart-field`
   (`by-config-field`/`by-id`) — подключены** (`findCandidateById`/`findCandidateByField`; deal `entityTypeId` фикс. 2,
   смарт-процесс — из `configFields['smart-entity']` через `parseConfiguredEntityTypeId`, поле — из

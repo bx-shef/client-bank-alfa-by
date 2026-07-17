@@ -15,6 +15,9 @@
 //   needs app (OAuth) context; a webhook returns «Application context required». Firing is a
 //   signal only (no money moves); a downstream automation rule reacts only if the admin attached
 //   one to the CODE — the `{result:true}` here means the SIGNAL was delivered, which is our job.
+//   ⚠ --fire fires on ARBITRARY first records (not test fixtures). Run it only on a DEV/TEST
+//   portal, OR one where CODE `cba_payment_received` has NO automation rule bound — otherwise it
+//   could trigger that rule (stage move / notification) on the first live deal + SP element.
 
 import { loadDotEnv } from './lib/env.mjs'
 import { C, head, ok, warn, err } from './lib/cli.mjs'
@@ -74,6 +77,7 @@ async function main() {
   console.log(`${C.dim}call:${C.reset} ${JSON.stringify(call)}`)
 
   if (!apply) {
+    if (fire) warn('--fire без --apply игнорируется (сначала нужна регистрация). Запусти: --apply --fire.')
     warn('DRY-RUN — ничего не регистрируем. Добавь --apply, чтобы зарегистрировать CODE и проверить список.')
     return
   }
@@ -102,23 +106,26 @@ async function main() {
 
   // 3) --fire: exercise the ACTUAL crm-sync firing path (executeTriggerViaRest → trigger.execute)
   //    on a real deal (OWNER_TYPE_ID=2) and a smart-process element (OWNER_TYPE_ID=entityTypeId).
+  //    Tracks how many fires actually `applied` so a portal with no deal/SP can't print a false
+  //    "verified" banner — the run FAILS if nothing was fired (there was nothing to prove on).
   if (fire) {
     head(`crm.automation.trigger.execute (#79 firing) через executeTriggerViaRest`)
-    // Deal: OWNER_TYPE_ID is the fixed CRM constant 2.
-    const deals = await rest('crm.item.list', { entityTypeId: 2, select: ['id'], start: 0 }) as { result?: { items?: Array<{ id: number }> } }
-    const dealId = deals.result?.items?.[0]?.id
-    if (dealId == null) {
-      warn('нет сделок на портале — пропускаю firing сделки')
-    } else {
-      const target: AllocationCandidate = { kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }
+    let fired = 0
+    const fireOn = async (target: AllocationCandidate, label: string) => {
       const res = await executeTriggerViaRest(target, rest, { triggerCode: B24_PAYMENT_TRIGGER.code })
       if (res.applied) {
-        ok(`firing сделки #${dealId} OK — executeTriggerViaRest → applied=true (метод ${res.method})`)
+        fired++
+        ok(`firing ${label} OK — executeTriggerViaRest → applied=true (метод ${res.method})`)
       } else {
-        err(`firing сделки #${dealId} НЕ применился: ${JSON.stringify(res)}`)
+        err(`firing ${label} НЕ применился: ${JSON.stringify(res)}`)
         process.exit(1)
       }
     }
+    // Deal: OWNER_TYPE_ID is the fixed CRM constant 2.
+    const deals = await rest('crm.item.list', { entityTypeId: 2, select: ['id'], start: 0 }) as { result?: { items?: Array<{ id: number }> } }
+    const dealId = deals.result?.items?.[0]?.id
+    if (dealId == null) warn('нет сделок на портале — пропускаю firing сделки')
+    else await fireOn({ kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }, `сделки #${dealId} (OWNER_TYPE_ID=2)`)
     // Smart process: OWNER_TYPE_ID is its portal-specific entityTypeId (#79 item 3).
     const types = await rest('crm.type.list', {}) as { result?: { types?: Array<{ entityTypeId: number }> } }
     const spEtid = types.result?.types?.[0]?.entityTypeId
@@ -127,20 +134,27 @@ async function main() {
     } else {
       const sp = await rest('crm.item.list', { entityTypeId: spEtid, select: ['id'], start: 0 }) as { result?: { items?: Array<{ id: number }> } }
       const spId = sp.result?.items?.[0]?.id
-      if (spId == null) {
-        warn(`нет элементов смарт-процесса ${spEtid} — пропускаю`)
-      } else {
-        const target: AllocationCandidate = { kind: 'smart-process', id: String(spId), amount: 0, currency: 'BYN', entityTypeId: spEtid }
-        const res = await executeTriggerViaRest(target, rest, { triggerCode: B24_PAYMENT_TRIGGER.code })
-        if (res.applied) {
-          ok(`firing смарт-процесса ${spEtid}#${spId} OK — applied=true (OWNER_TYPE_ID=${spEtid})`)
-        } else {
-          err(`firing смарт-процесса НЕ применился: ${JSON.stringify(res)}`)
-          process.exit(1)
-        }
+      if (spId == null) warn(`нет элементов смарт-процесса ${spEtid} — пропускаю`)
+      else await fireOn({ kind: 'smart-process', id: String(spId), amount: 0, currency: 'BYN', entityTypeId: spEtid }, `смарт-процесса ${spEtid}#${spId} (OWNER_TYPE_ID=${spEtid})`)
+    }
+    // No deal AND no SP element ⇒ nothing was proven — fail loudly, don't print a green banner.
+    if (fired === 0) {
+      err('firing НЕ проверен — на портале нет ни сделки, ни элемента смарт-процесса. Засей данные (pnpm seed:b24) и повтори.')
+      process.exit(1)
+    }
+    // Negative control: a mask-valid but UNREGISTERED code must be REJECTED by the portal — this is
+    // the exact error the worker's best-effort catch swallows. executeTriggerViaRest propagates the
+    // REST error, so it must THROW here; catching proves the reject. (Registers nothing — execute only.)
+    if (dealId != null) {
+      const bogus = 'cba_unregistered_probe'
+      try {
+        await executeTriggerViaRest({ kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }, rest, { triggerCode: bogus })
+        warn(`негативный контроль: незарегистрированный CODE «${bogus}» НЕ дал ошибку — проверь вручную`)
+      } catch (e) {
+        ok(`негативный контроль OK — незарегистрированный CODE → ошибка «${(e as Error).message}» (воркер её глотает, best-effort)`)
       }
     }
-    console.log(`\n${C.green}✓ Firing триггера через реальный транспорт crm-sync работает вживую (#79, сделка + смарт-процесс).${C.reset}`)
+    console.log(`\n${C.green}✓ Firing триггера через реальный транспорт crm-sync работает вживую (#79, целей: ${fired}).${C.reset}`)
   }
 
   console.log(`${C.dim}Дальше админ портала вешает CODE «${B24_PAYMENT_TRIGGER.code}» на правило автоматизации,`)
