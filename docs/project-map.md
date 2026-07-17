@@ -526,7 +526,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
 3. ✅ **A3 — сделано** (PR #286): стор `bank_tokens` (`server/utils/bankTokenStore.ts`, refresh шифрован
    `secretCrypto`, ключ `(member_id,provider,account_key)`, `list` резилиентен) + чистка на ONAPPUNINSTALL +
    тесты. **Разблокирует A5/A7/A9.**
-4. ✅ **A6 — сделано** (PR #NNN): реестр счетов на опрос — `listAllBankAccounts` (все счета всех
+4. ✅ **A6 — сделано** (PR #293): реестр счетов на опрос — `listAllBankAccounts` (все счета всех
    порталов из `bank_tokens`, только identity-триплет, без расшифровки) + чистый `accountsForPolling`
    (группировка по порталу+провайдеру, дедуп, фильтр `POLLABLE_PROVIDERS`={alfa-by}, отсев демо) кормит
    `planFetches`. Тесты. **Разблокирует A10.**
@@ -546,7 +546,7 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
    (demo→`demoItems`, реал+банк-токен→`fetchBankStatement`, реал без токена→`[]` инертно, Приор→A5b);
    провод `FetchJob.providerId`→`BankFetchQuery.provider`. (На момент A9 `planFetches` был без живого
    таймера — **снято A10 ниже**; таймер default-OFF до A8.) Поведение демо-нагрузки не изменилось.
-10. ✅ **A10 — сделано** (PR #NNN): живой крон-таймер реального опроса в `server/plugins/queue.ts`
+10. ✅ **A10 — сделано** (PR #293): живой крон-таймер реального опроса в `server/plugins/queue.ts`
     (на крон-инстансе, каждые `CRON_INTERVAL_MIN`): `listAllBankAccounts`→`accountsForPolling`→`pollWindow`
     (окно `[today−CRON_LOOKBACK_DAYS, today]`)→`planFetches(…, epoch)`→`enqueueFetch`. **`epoch`** (метка
     тика в `FetchJob`, часть `fetchJobId`, банк-запрос её игнорирует) делает каждый тик отдельной джобой —
