@@ -547,15 +547,27 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
      **Доменная сепарация** (`DOMAIN_TAG` в подписи) — state НЕ верифицируется как сессионная кука и наоборот
      (иначе не-секретный state из authorize-URL/логов банка переигрался бы в `cba_sess` → эскалация оператора).
      Разделяемый `safeEqual` (как `session.ts`), а не форк. Тесты (вкл. кросс-протокол).
-   - **A7b** — H3-роуты authorize-redirect (admin-гейт + фрейм-токен → подписанный state → `buildAuthorizeUrl`)
-     + callback (verify state → `buildTokenExchangeBody`→обмен→`saveBankToken`). **Нужен A7a. ИНВАРИАНТЫ
+   - **A7b** — H3-роуты. **✅ A7b-1 (authorize-start) — сделано** (PR #295): `POST /api/bank/connect`
+     (фрейм-токен как в `/api/import` → `memberIdByDomain`+`validateFrame` (`profile`: блок спуфинга
+     домена + **гейт админа** по `profile.ADMIN`, базовый scope — подключение банка привязывает креды ко
+     всему порталу, авторизация-на-старт т.к. callback доверяет state) →
+     подписанный state с **нашим** `memberId` (не клиентским, инвариант 1) → `buildAuthorizeUrl`) отдаёт
+     `{authorizeUrl}` (фронт открывает top-level); `Referrer-Policy: no-referrer`; провайдер не настроен →
+     400 (до REST), нет секрета → 503 (fail-closed), Приор → A5b. Config из env (`bankConnectConfigFromEnv`:
+     authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/`_SCOPE`). Чистое ядро
+     `bankConnectStart.ts` (DI, тесты) + тонкий роут. **Осталось A7b-2** — callback (verify state →
+     `parseOAuthCallback`→`buildTokenExchangeBody`→обмен→`saveBankToken`) + инварианты 2-8 ниже.
+     **Нужен A7a. ИНВАРИАНТЫ
      БЕЗОПАСНОСТИ (из ревью A7a — обязательны):** (1) callback **привязывает `state.memberId` к
      аутентифицированному вызывающему** и пишет токен только под него (подпись = целостность, не авторизация);
      (2) `nonce` single-use — связать с серверной сессией и «погасить» на callback (стора нет в ядре);
      (3) reject при `verifyConnectState()===null` — без fallback на неподписанный state; (4) `code` менять
      только под `state.provider`; (5) `accountKey` из state — только подсказка, скоуп ре-валидировать из
-     consent/токена; (6) authorize-роут сам admin-гейт + CSRF (`x-cba-auth`); (7) `Referrer-Policy: no-referrer`
-     на authorize-redirect; (8) redirect-цель — если не выводится из `memberId`, подписывать (open-redirect).
+     consent/токена; (6) **admin-гейт + CSRF — СДЕЛАНО в A7b-1** (`profile.ADMIN` + фрейм-токен не реплеится
+     cross-site); (7) `Referrer-Policy: no-referrer` — **на роуте A7b-1 стоит**, но реальную защиту Referer'а
+     к банку даёт top-level-навигация (A7c); (8) redirect-цель — если не выводится из `memberId`, подписывать
+     (open-redirect); (9) `error_description` из callback (контролирует банк) — санитизировать (CRLF/длина)
+     перед логом; (10) `client_secret` из `buildTokenExchangeBody` — никогда в лог.
    - **A7c** — UI подключения банка (b24ui) на странице настроек. **Нужен A7b.**
 8. **A8** rate-limiter `Q_FETCH` (Альфа 100/мин; Приор — concurrency 1).
 9. ✅ **A9 — сделано** (PR #290): свап заглушки → реальный `fetchStatement` в `worker.ts`
