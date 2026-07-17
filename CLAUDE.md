@@ -399,6 +399,20 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     — `Authorization: Basic` (client_secret_basic), тело `grant_type+refresh_token` (`bankRefreshRequest`/`parseBankRefresh`,
     чистые). `bankCredsFromEnv` — `ALFA_OAUTH_*`/`PRIOR_OAUTH_*` (`_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_URL`); неполные ⇒
     `null` ⇒ токен как есть + warn (envCheck сигналит half-config на старте). Живой рефреш — за банк-кредами владельца.
+  - `server/utils/bankConnectState.ts` — **CSRF-safe OAuth `state` для connect-потока** (стадия 5; A7a):
+    `signConnectState`/`verifyConnectState` (HMAC-SHA256 над `SESSION_SECRET`, привязка callback к порталу+
+    провайдеру+счёту, короткий `exp`, constant-time, fail-closed; зеркало `session.ts`, разделяемый
+    `safeEqual`). **Доменная сепарация** (`DOMAIN_TAG` в подписи) — connect-state НЕ верифицируется как
+    сессионная кука `cba_sess` и наоборот (иначе не-секретный state из authorize-URL/логов банка переигрался
+    бы в сессию оператора → эскалация). Тесты (вкл. кросс-протокол).
+  - `server/utils/bankConnectStart.ts` + `server/api/bank/connect.post.ts` (стадия 5; A7b-1) — **старт
+    OAuth-подключения банка**: `POST /api/bank/connect` (фрейм-токен как `/api/import` → `memberIdByDomain`+
+    `validateFrame` (`profile`: блок спуфинга + **гейт админа** `profile.ADMIN` — креды привязываются ко
+    всему порталу) → подписанный state с **нашим** `memberId`, не клиентским → `buildAuthorizeUrl`) отдаёт
+    `{authorizeUrl}` (фронт A7c откроет top-level). Config из env
+    (`bankConnectConfigFromEnv`: authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/
+    `_SCOPE`); провайдер не настроен → 400 (до REST), нет секрета → 503 (fail-closed), Приор → A5b;
+    `Referrer-Policy: no-referrer`. Чистое ядро (DI, тесты) + тонкий роут. Callback (A7b-2) + UI (A7c) — дальше.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
