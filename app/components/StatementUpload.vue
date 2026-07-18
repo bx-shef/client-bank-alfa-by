@@ -172,6 +172,9 @@ function clearAll() {
           приходов: {{ totals.credits.length }} · расходов: {{ totals.debits.length }}
         </p>
 
+        <!-- Lively result summary (#62): count-up tiles + ECharts by-day / share charts. -->
+        <ImportStatsChart :items="allItems" />
+
         <B24Card>
           <template #header>
             <h2 class="font-semibold">
