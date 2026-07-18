@@ -346,8 +346,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `computeImportStats` (итог: число операций, приходы/расходы **по валютам**, доминирующая валюта, разбивка
     приход/расход **по дням** для доминирующей валюты); `dayBucketsForCurrency`/`operationDay`/`currencyTotal`
     (итог по выбранной/доминирующей валюте с пустым дефолтом) — хелперы для рендера. `round2` из `money.ts`,
-    нефинитная/отрицательная сумма → 0. Без DOM/ECharts — под тесты (`tests/importStats.test.ts`); анимированный
-    рендер (count-up + ECharts бары/пончик) — слайс 2.
+    нефинитная/отрицательная сумма → 0. Без DOM/ECharts — под тесты (`tests/importStats.test.ts`).
+  - `app/components/ImportStatsChart.vue` — **анимированный результат импорта для сотрудников (#62, слайс 2)**:
+    count-up плитки (операции/приходы/расходы по выбранной валюте) + ECharts **бары приход/расход по дням** +
+    **пончик** доли, на чистом `importStats`. ECharts динамически импортится и tree-shaken (Bar+Pie+Grid/Tooltip/
+    Legend+Canvas, client-only, как `QueueMonitor`); оси/пончик перекрашиваются под light/dark по классу `.dark`;
+    `prefers-reduced-motion` глушит count-up и анимацию ECharts. Приход/расход **всегда подписаны** (↑/↓ + текст) —
+    зелёный/красный в CVD-floor-band, легально только с этой вторичной кодировкой (dataviz). Селектор валют при
+    мультивалютности. Встроен в `StatementUpload.vue` над предпросмотром; визуально проверен (свет/тёмная).
   - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
     `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт
     подлинности `application_token` (`appTokenVerdict`, fail-closed, constant-time),
