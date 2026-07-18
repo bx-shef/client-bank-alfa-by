@@ -33,7 +33,7 @@
 // on the live smoke-test.
 
 import { B24OAuth, ParamsFactory } from '@bitrix24/b24jssdk'
-import type { B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
+import type { AuthData, B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
 import { getToken, saveToken, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
@@ -55,6 +55,11 @@ export interface OAuthCallClient {
    *  refresh token) sets this to hard-reject instead of POSTing an empty refresh_token to the
    *  OAuth server (see makeFrameRestCall). */
   setCustomRefreshAuth: (cb: CustomRefreshAuth) => void
+  /** Auth manager — `refreshAuth()` forces a PROACTIVE token refresh through the SDK (POST to the
+   *  OAuth server), firing the setCallbackRefreshAuth callback. Used by `sdkRefreshTransport` so the
+   *  keep-alive cron's refresh (#175) goes through the SAME jssdk transport as everything else,
+   *  while `ensureAccessToken` keeps its per-portal advisory lock (#35) around it. */
+  auth: { refreshAuth: () => Promise<AuthData | false> }
   /** Tune the built-in RestrictionManager (rate-limit + retry). We use it to turn OFF the
    *  in-client network/5xx retry on our per-portal + frame clients (#123) — see disableSdkRetry.
    *  The SDK types this async (Promise<void>); we call it fire-and-forget because the retry
@@ -315,6 +320,98 @@ export function makeFrameRestCall(
   client.setCustomRefreshAuth(() => Promise.reject(new Error(FRAME_TOKEN_REJECTED)))
   disableSdkRetry(client)
   return makeSdkRestCall(client)
+}
+
+// ── OAuth refresh transport (keep-alive cron, #175) ──────────────────────────────────────
+// Force-refresh a portal's OAuth token THROUGH the SDK (`auth.refreshAuth()`) instead of the raw
+// $fetch this module used to do — so the keep-alive refresh (#175) goes through the SAME jssdk
+// transport as everything else. It stays wired as `ensureAccessToken`'s `postRefresh`, so the
+// per-portal advisory lock + in-lock re-read + UPDATE-only persist (#35) still wrap it unchanged.
+// (This is the deliberate exception to "all crm-sync REST is reactive-refresh-only": the idle
+// keep-alive path needs the lock the SDK's own reactive refresh bypasses.)
+
+/** Race a promise against a timeout, clearing the timer on either settle path (no dangling timer on
+ *  the fast path). The SDK's refresh axios has NO timeout of its own, but the refresh runs INSIDE
+ *  `ensureAccessToken`'s advisory lock holding a pooled pg connection — a hung OAuth server must not
+ *  pin the lock. On timeout we reject (ensureAccessToken then releases the lock/connection).
+ *  KNOWN EDGE (accepted, mirrors ai-price-import): the SDK's refresh axios exposes no abort signal,
+ *  so the orphaned request is NOT cancelled. If the OAuth server was merely slow and the refresh
+ *  SUCCEEDS server-side AFTER we timed out + rolled back, it has ROTATED the refresh token (issued a
+ *  new one, invalidated the old) — but we discarded that response and kept the old (now dead) refresh
+ *  token. That does NOT self-heal: subsequent ticks/reactive refreshes reuse the dead token → the
+ *  portal's auth stays broken until a reinstall (a #35-class break, reintroduced only on this narrow
+ *  path). The old raw ofetch path aborted the request on timeout, shrinking this window; the SDK
+ *  gives us no equivalent. Accepted because it's LOW risk — the token endpoint answers well under a
+ *  second, so a >15s-yet-successful refresh is a corner case, and it's the idle keep-alive path only —
+ *  and the lock-safety is worth it. Follow-up: an operator-reauth path (cf. ai-price-import #132) or
+ *  an abortable refresh would close it. Exported for the unit test. */
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`b24 oauth refresh: no response within ${ms}ms`)), ms)
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      }
+    )
+  })
+}
+
+/** Map the SDK's refreshed params/authData → the raw `oauth/token` JSON shape our
+ *  `parseRefreshResponse` (b24Oauth.ts) consumes. `captured` (from the setCallbackRefreshAuth
+ *  callback) carries the fuller field set; `authData` (the refreshAuth return) is the fallback.
+ *  `access_token`/`refresh_token` are left UNDEFINED when neither source has them (never coerced to
+ *  '') — a malformed 200 must still fail `parseRefreshResponse`'s access_token guard and THROW,
+ *  not persist blank credentials over a live portal (fail-closed, same as the old raw path). Pure. */
+export function rawTokenFromRefresh(captured: B24OAuthParams | undefined, authData: AuthData | false): Record<string, unknown> {
+  const a = authData || undefined
+  return {
+    access_token: captured?.accessToken ?? a?.access_token,
+    refresh_token: captured?.refreshToken ?? a?.refresh_token,
+    expires_in: captured?.expiresIn ?? a?.expires_in,
+    member_id: captured?.memberId ?? a?.member_id,
+    client_endpoint: captured?.clientEndpoint
+  }
+}
+
+/** Build an `ensureAccessToken.postRefresh` backed by the SDK: given the form-encoded refresh body
+ *  (`buildRefreshBody` → `grant_type/client_id/client_secret/refresh_token`), it drives a transient
+ *  `B24OAuth.auth.refreshAuth()` and returns the raw token JSON `parseRefreshResponse` expects. The
+ *  body is parsed back (rather than changing `ensureAccessToken`'s DI contract) so the pure refresh
+ *  logic + its advisory-lock/re-read tests stay untouched. The transient client's `domain` is a
+ *  placeholder — `refreshAuth` POSTs to `serverEndpoint` (oauth.bitrix.info), never the portal host.
+ *  Bounded by `timeoutMs` (the refresh runs inside the advisory lock; see `withTimeout`). */
+export function sdkRefreshTransport(opts: { timeoutMs?: number } = {}): (body: string) => Promise<unknown> {
+  const timeoutMs = opts.timeoutMs ?? 15_000
+  return async (body) => {
+    const p = new URLSearchParams(body)
+    const oauthParams: B24OAuthParams = {
+      applicationToken: '', userId: 0, memberId: '', accessToken: '',
+      refreshToken: p.get('refresh_token') ?? '',
+      expires: 0, expiresIn: 0, scope: '',
+      domain: 'oauth.bitrix.info',
+      clientEndpoint: 'https://oauth.bitrix.info/rest/',
+      serverEndpoint: B24_SERVER_ENDPOINT,
+      status: 'L'
+    }
+    const client: OAuthCallClient = new B24OAuth(oauthParams, { clientId: p.get('client_id') ?? '', clientSecret: p.get('client_secret') ?? '' })
+    // No `disableSdkRetry` here (unlike the per-portal / frame clients): `auth.refreshAuth` POSTs
+    // via its own plain axios instance to the OAuth server, NOT through the RestrictionManager's
+    // retry loop (that wraps `actions.v2.call.make` only), so there is no in-SDK retry to disable —
+    // this is a single POST, bounded by `withTimeout` below.
+    // Capture the refreshed params (fuller than the refreshAuth return); persistence stays with
+    // ensureAccessToken (this callback only RECORDS — it must not double-write to the store).
+    let captured: B24OAuthParams | undefined
+    client.setCallbackRefreshAuth(async ({ b24OAuthParams }) => {
+      captured = b24OAuthParams
+    })
+    const authData = await withTimeout(client.auth.refreshAuth(), timeoutMs)
+    return rawTokenFromRefresh(captured, authData)
+  }
 }
 
 /** Live env/infra a portal-bound SDK transport needs, so the wiring lives in ONE place
