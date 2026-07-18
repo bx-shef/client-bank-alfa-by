@@ -31,8 +31,9 @@ export function extractConfigurableActivityId(resp: Record<string, unknown>): st
  * `companyId` (an activity needs an owner). A transport error from `call` propagates
  * (BullMQ then retries the job). ⚠ crm.activity.configurable.add is OAuth/app-context only.
  */
-export async function writeConfigurableActivityViaRest(item: StatementItem, companyId: string, call: RestCall): Promise<string | null> {
-  const params = buildConfigurableActivity(item, { id: Number(companyId) })
+export async function writeConfigurableActivityViaRest(item: StatementItem, companyId: string, call: RestCall, note?: string): Promise<string | null> {
+  // `note` — an optional reason block (e.g. the UNMATCHED-client fallback to my company, #91).
+  const params = buildConfigurableActivity(item, { id: Number(companyId) }, note)
   const resp = await call(CONFIGURABLE_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
   return extractConfigurableActivityId(resp)
 }

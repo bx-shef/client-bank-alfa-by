@@ -102,6 +102,16 @@ describe('buildConfigurableLayout', () => {
     const layout = buildConfigurableLayout(makeItem({ docNum: undefined }))
     expect(blockValue(layout, 'document')).toBe('от 26.06.2026')
   })
+  it('adds a leading reason note block when `note` is given (#91 unmatched fallback)', () => {
+    const layout = buildConfigurableLayout(makeItem(), 'Клиент не определён: …')
+    expect(blockValue(layout, 'note')).toBe('Клиент не определён: …')
+    // note is the FIRST block (object key order = render order) so it leads the card.
+    expect(Object.keys(body(layout))[0]).toBe('note')
+  })
+  it('omits the note block when `note` is absent or blank', () => {
+    expect(body(buildConfigurableLayout(makeItem()))).not.toHaveProperty('note')
+    expect(body(buildConfigurableLayout(makeItem(), '   '))).not.toHaveProperty('note')
+  })
   it('uses valid ContentBlockDto types (text / withTitle wrapping text) + required body.logo + required icon', () => {
     const layout = buildConfigurableLayout(makeItem())
     const blocks = body(layout)

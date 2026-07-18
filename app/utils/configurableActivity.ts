@@ -96,7 +96,7 @@ const LAYOUT_ICON_CODE = 'sum'
  * the chat path) before entering the card, defensively: even if a block renders markup, a
  * crafted value can't inject it. Our own labels/amounts/dates are trusted and left as-is.
  */
-export function buildConfigurableLayout(item: StatementItem): Record<string, unknown> {
+export function buildConfigurableLayout(item: StatementItem, note?: string): Record<string, unknown> {
   const cp = item.counterparty
   const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
   const doc = item.docNum
@@ -110,6 +110,10 @@ export function buildConfigurableLayout(item: StatementItem): Record<string, unk
   // validates it stricter. `amount` and `document` are always non-empty (formatted money / a
   // date), so `blocks` always has ≥2 entries → ERROR_EMPTY_LAYOUT unreachable.
   const blocks: Record<string, unknown> = {}
+  // Optional reason note FIRST (e.g. the UNMATCHED-client fallback, #91) — our trusted text, so
+  // it's not BB-neutralized here (the caller passes a fixed reason; any payer-controlled part it
+  // embeds is neutralized at the source). Object key order = render order, so note leads the card.
+  if (note && note.trim()) blocks.note = textBlock(note, true)
   const purpose = neutralizeBb(item.purpose)
   if (purpose) blocks.purpose = textBlock(purpose, true)
   blocks.amount = fieldBlock(kind, `${formatMoney(item.amount)} ${item.currency}`)
@@ -135,7 +139,7 @@ export function buildConfigurableLayout(item: StatementItem): Record<string, unk
  * against a B24-side search — and, because the marker is written ATOMICALLY with the
  * activity in a single call, there is no separate "remember" step and no write→remember gap.
  */
-export function buildConfigurableActivity(item: StatementItem, company: CrmCompanyRef): ConfigurableActivityParams {
+export function buildConfigurableActivity(item: StatementItem, company: CrmCompanyRef, note?: string): ConfigurableActivityParams {
   return {
     ownerTypeId: CRM_OWNER_TYPE_COMPANY,
     ownerId: company.id,
@@ -147,6 +151,6 @@ export function buildConfigurableActivity(item: StatementItem, company: CrmCompa
       originId: activityOriginId(item),
       ...(company.assignedById ? { responsibleId: company.assignedById } : {})
     },
-    layout: buildConfigurableLayout(item)
+    layout: buildConfigurableLayout(item, note)
   }
 }

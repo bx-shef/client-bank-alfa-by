@@ -22,7 +22,7 @@ export const METRICS = {
   processed: 'processed', // unique operations seen
   created: 'created', // CRM activities written
   notified: 'notified', // chat notifications sent
-  unmatched: 'unmatched', // no company found for the account
+  unmatched: 'unmatched', // payer company not found by account (#91: may still be recorded on my company)
   recognized: 'recognized', // ops with ≥1 recognized identifier in the purpose
   resolved: 'resolved', // ops whose intent resolved to ≥1 allocation candidate
   allocated: 'allocated', // allocation facts recorded
