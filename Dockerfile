@@ -65,6 +65,18 @@ ARG NUXT_PUBLIC_COMMIT_SHA
 ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 # Nitro's node-server output is self-contained (deps bundled) — copy only .output.
 COPY --from=builder-server /app/.output ./.output
+# OTel bootstrap (#78): loaded via NODE_OPTIONS=--import BEFORE the app so auto-instrumentation
+# can hook http/pg/ioredis at module load. Its deps must live OUTSIDE the Nitro bundle (the
+# bundler breaks OTel's require hooks), so install just this small set here. Fully INERT unless
+# OTEL_EXPORTER_OTLP_ENDPOINT is set (the file no-ops), so the default deploy is unchanged.
+COPY otel.instrument.mjs /app/otel.instrument.mjs
+COPY otel-preload-package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+# Absolute path: --import resolves relative to CWD, so an absolute path stays correct
+# regardless of where node is launched from in the container.
+# Quote the value: the ENV KEY=VALUE form treats a space as a second var separator, so the
+# `--import <path>` value MUST be quoted or Docker errors ("can't find = in <path>").
+ENV NODE_OPTIONS="--import /app/otel.instrument.mjs"
 EXPOSE 3000
 CMD ["node", ".output/server/index.mjs"]
 

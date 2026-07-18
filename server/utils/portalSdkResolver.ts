@@ -86,7 +86,7 @@ export function createPortalSdkResolver(
       cache.delete(memberId) // no token → never cache the null (re-resolve next time)
       return null
     }
-    const rawCall = makeSdkRestCall(client)
+    const rawCall = makeSdkRestCall(client, { memberId })
     const rawBatch = makeSdkBatchCall(client)
     const evictSelf = (): void => {
       if (cache.get(memberId) === entry) cache.delete(memberId)
