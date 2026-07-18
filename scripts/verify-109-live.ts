@@ -15,6 +15,9 @@ import { findCompanyByAccount, findMyCompanyByAccount } from '../server/utils/co
 import { findInvoicesByNumber } from '../server/utils/invoiceLookup.ts'
 import { loadInvoiceNegativeStage } from '../server/utils/stageLoader.ts'
 import { findCompanyDealPayments } from '../server/utils/paymentLookup.ts'
+import { findCandidateById } from '../server/utils/itemByIdLookup.ts'
+import { findDocumentEntities } from '../server/utils/documentLookup.ts'
+import { routeDocumentRef } from '../server/utils/intentResolver.ts'
 import { recognizeByMatrices } from '../app/utils/purposeMatch.ts'
 import { resolveAllocation, filterByAccountNumber } from '../app/utils/allocation.ts'
 
@@ -154,6 +157,52 @@ check('purposeMatch: распознан «СЧ-0001» из назначения 
   check('filterByAccountNumber: несуществующий номер оплаты → пусто', filterByAccountNumber(pool, 'НЕТ-ТАКОГО/000').length === 0)
   // Empty number → empty (never sweeps the whole pool).
   check('filterByAccountNumber: пустой номер → пусто (не сметает пул)', filterByAccountNumber(pool, '').length === 0)
+}
+
+// 8) via-document bridge (#109, §4) — LIVE. A document is generated from the seeded
+// template and bound to a deal; find it by number → route the bound ref → resolve the
+// entity SCOPED to the payer company (IDOR: a wrong company must not see it). This is
+// the exact chain intentResolver runs for a `document-number` intent.
+{
+  // Ensure a document exists bound to a deal in the Alfa company pool (idempotent: reuse
+  // if already present so the check is repeatable without piling up documents).
+  const pool = await findCompanyDealPayments(alfaId, {}, call)
+  const dealId = String((pool[0] as { dealId?: string })?.dealId ?? '')
+  let docNumber = ''
+  if (dealId) {
+    const listed = await call('crm.documentgenerator.document.list', { filter: { entityTypeId: 2, entityId: Number(dealId) } })
+    const docs = ((listed.result as { documents?: Array<{ number?: string }> })?.documents) ?? []
+    if (docs.length && docs[0]?.number) {
+      docNumber = String(docs[0].number)
+    } else {
+      const tpls = await call('crm.documentgenerator.template.list')
+      const tplId = Object.keys(((tpls.result as { templates?: Record<string, unknown> })?.templates) ?? {})[0]
+      if (tplId) {
+        const added = await call('crm.documentgenerator.document.add', { templateId: Number(tplId), entityTypeId: 2, entityId: Number(dealId), values: {} })
+        docNumber = String((added.result as { document?: { number?: string } })?.document?.number ?? '')
+      }
+    }
+  }
+  check('via-document: подготовлен документ на сделку из пула компании', !!docNumber, `deal=${dealId} number=${docNumber}`)
+
+  if (docNumber) {
+    const refs = await findDocumentEntities(docNumber, call)
+    const ref = refs.find(r => r.entityTypeId === '2')
+    check('documentLookup: обратный filter:{number} находит документ, ref несёт entityTypeId/entityId', !!ref && !!ref?.entityId, JSON.stringify(refs))
+    // Control: a number that doesn't exist → empty (filter is honored, not ignored).
+    check('documentLookup: несуществующий номер → пусто (фильтр не игнорируется)', (await findDocumentEntities('НЕТ-ТАКОГО-000', call)).length === 0)
+
+    const routed = ref ? routeDocumentRef(ref, undefined) : null
+    check('routeDocumentRef: entityTypeId=2 → цель deal', routed?.targetKind === 'deal' && routed?.entityTypeId === 2, JSON.stringify(routed))
+
+    if (ref && routed) {
+      const found = await findCandidateById(routed.targetKind, routed.entityTypeId, ref.entityId, { companyId: alfaId, isNegativeStage: isNeg }, call)
+      check('via-document: мост → deal-кандидат в компании плательщика', found?.kind === 'deal' && found?.id === ref.entityId, JSON.stringify(found))
+      // IDOR: the same document's deal must NOT resolve from a different company.
+      const wrong = await findCandidateById(routed.targetKind, routed.entityTypeId, ref.entityId, { companyId: betaId, isNegativeStage: isNeg }, call)
+      check('via-document: тот же документ НЕ виден из чужой компании (IDOR-скоуп)', wrong === null, JSON.stringify(wrong))
+    }
+  }
 }
 
 head(fail === 0 ? `Все проверки пройдены (${pass})` : `Провалено ${fail} из ${pass + fail}`)

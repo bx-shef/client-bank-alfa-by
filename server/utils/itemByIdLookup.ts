@@ -20,7 +20,19 @@
 
 import { isAmountTarget, type AllocationCandidate, type AllocationTargetKind } from '../../app/utils/allocation'
 import { parentDealId } from './invoiceLookup'
+import { DEAL_ENTITY_TYPE_ID } from './paymentLookup'
 import type { RestCall } from './companyLookup'
+
+/** Fields to select for a by-id/by-field lookup. `parentId2` (the linked DEAL, #229) is
+ *  meaningful for an INVOICE (its deal link) and a smart process (its parent deal), but for
+ *  a DEAL itself (entityTypeId 2) `parentId2` means "parent of entity type 2" = a parent
+ *  DEAL — a self-reference Bitrix REJECTS live ("An entity type can't be a parent/child
+ *  type to itself"). So it is selected for every entity type EXCEPT a deal (where it is a
+ *  self-reference AND unused — only an invoice candidate reads `dealId`). */
+function selectFields(entityTypeId: number): string[] {
+  const base = ['id', 'companyId', 'stageId', 'opportunity', 'currencyId']
+  return entityTypeId === DEAL_ENTITY_TYPE_ID ? base : [...base, 'parentId2']
+}
 
 export interface ItemByIdOptions {
   /** The counterparty company already resolved from the account — IDOR scope. The
@@ -37,9 +49,7 @@ export function itemByIdParams(entityTypeId: number, id: string, companyId: stri
   return {
     entityTypeId,
     filter: { id, companyId },
-    // `parentId2` = linked deal id — only meaningful for an invoice target (its deal link,
-    // #229). Harmless in the select for deal/smart-process (they carry no self→deal link).
-    select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
+    select: selectFields(entityTypeId)
   }
 }
 
@@ -93,7 +103,7 @@ export function itemByFieldParams(entityTypeId: number, fieldName: string, value
   return {
     entityTypeId,
     filter: { [fieldName]: value, companyId },
-    select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
+    select: selectFields(entityTypeId)
   }
 }
 

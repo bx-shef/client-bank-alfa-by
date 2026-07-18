@@ -3,7 +3,8 @@ import { IDENTIFIER_ROUTES, routeIdentifier } from '~/utils/identifierDispatch'
 import type { IdentifierKind } from '~/utils/purposeMatch'
 import type { AllocationCandidate } from '~/utils/allocation'
 import type { IntentResolverDeps } from '../server/utils/intentResolver'
-import { parseConfiguredEntityTypeId, resolveIntentCandidates, resolveIntentsForOp } from '../server/utils/intentResolver'
+import { parseConfiguredEntityTypeId, resolveIntentCandidates, resolveIntentsForOp, routeDocumentRef } from '../server/utils/intentResolver'
+import type { DocumentEntityRef } from '../server/utils/documentLookup'
 
 // Pure dispatch recognized-intent → entity resolver (#109). Resolvers are faked, so
 // the tests assert the ROUTING decision (which resolver, which args) not the REST.
@@ -16,13 +17,14 @@ const pay = (over: Partial<AllocationCandidate> = {}): AllocationCandidate =>
   ({ kind: 'deal-payment', id: '1', amount: 100, currency: 'BYN', ...over })
 
 /** Fake resolvers; each records its call and returns the given fixture. */
-function fakeDeps(over: Partial<{ invoices: AllocationCandidate[], byId: AllocationCandidate | null, byField: AllocationCandidate | null, pool: AllocationCandidate[], orderPaymentIds: string[] }> = {}) {
+function fakeDeps(over: Partial<{ invoices: AllocationCandidate[], byId: AllocationCandidate | null, byField: AllocationCandidate | null, pool: AllocationCandidate[], orderPaymentIds: string[], docRefs: DocumentEntityRef[] }> = {}) {
   const deps: IntentResolverDeps = {
     findInvoicesByNumber: vi.fn(async () => over.invoices ?? []),
     findCandidateById: vi.fn(async () => over.byId ?? null),
     findCandidateByField: vi.fn(async () => over.byField ?? null),
     findCompanyDealPayments: vi.fn(async () => over.pool ?? []),
-    findOrderPaymentIds: vi.fn(async () => over.orderPaymentIds ?? [])
+    findOrderPaymentIds: vi.fn(async () => over.orderPaymentIds ?? []),
+    findDocumentEntities: vi.fn(async () => over.docRefs ?? [])
   }
   return deps
 }
@@ -170,21 +172,81 @@ describe('resolveIntentCandidates — supported strategies', () => {
   })
 })
 
-describe('resolveIntentCandidates — not-yet-dispatchable kinds', () => {
-  const cases: IdentifierKind[] = ['document-number']
-  for (const kind of cases) {
-    it(`${kind} → unsupported, no resolver called, [] candidates, reason set`, async () => {
-      const deps = fakeDeps({ invoices: [inv()], byId: inv(), byField: inv(), pool: [pay()] })
-      const r = await resolveIntentCandidates(intent(kind, 'X'), ctx, call, deps)
-      expect(r.status).toBe('unsupported')
-      expect(r.candidates).toEqual([])
-      expect(r.reason).toBeTruthy()
-      expect(deps.findInvoicesByNumber).not.toHaveBeenCalled()
-      expect(deps.findCandidateById).not.toHaveBeenCalled()
-      expect(deps.findCandidateByField).not.toHaveBeenCalled()
-      expect(deps.findCompanyDealPayments).not.toHaveBeenCalled()
+describe('routeDocumentRef — entityTypeId → allocation target (via-document, §4)', () => {
+  it('deal (2) and smart-invoice (31) route to fixed CRM constants', () => {
+    expect(routeDocumentRef({ entityTypeId: '2', entityId: '15' }, undefined)).toEqual({ targetKind: 'deal', entityTypeId: 2 })
+    expect(routeDocumentRef({ entityTypeId: '31', entityId: '9' }, undefined)).toEqual({ targetKind: 'invoice', entityTypeId: 31 })
+  })
+  it('a custom entityTypeId routes to smart-process ONLY when it matches configFields["smart-entity"]', () => {
+    expect(routeDocumentRef({ entityTypeId: '1044', entityId: '3' }, { 'smart-entity': '1044' })).toEqual({ targetKind: 'smart-process', entityTypeId: 1044 })
+    // configured a DIFFERENT SP → this one is unroutable (don't cross entity types)
+    expect(routeDocumentRef({ entityTypeId: '1044', entityId: '3' }, { 'smart-entity': '1030' })).toBeNull()
+    // no smart-entity configured → an unknown type is unroutable
+    expect(routeDocumentRef({ entityTypeId: '1044', entityId: '3' }, undefined)).toBeNull()
+  })
+  it('a quote/estimate or invalid entityTypeId → null (skipped by the caller)', () => {
+    expect(routeDocumentRef({ entityTypeId: '7', entityId: '1' }, { 'smart-entity': '1044' })).toBeNull()
+    expect(routeDocumentRef({ entityTypeId: 'x', entityId: '1' }, undefined)).toBeNull()
+    expect(routeDocumentRef({ entityTypeId: '0', entityId: '1' }, undefined)).toBeNull()
+  })
+})
+
+describe('resolveIntentCandidates — document-number bridge (via-document, §4)', () => {
+  it('bridges number → deal ref → findCandidateById(deal, 2, entityId) scoped to the payer company (IDOR)', async () => {
+    const deps = fakeDeps({ docRefs: [{ entityTypeId: '2', entityId: '15' }], byId: ({ kind: 'deal', id: '15', amount: 0, currency: 'BYN', entityTypeId: 2 }) })
+    const r = await resolveIntentCandidates(intent('document-number', '1'), ctx, call, deps)
+    expect(r.status).toBe('resolved')
+    expect(r.candidates).toEqual([{ kind: 'deal', id: '15', amount: 0, currency: 'BYN', entityTypeId: 2 }])
+    expect(deps.findDocumentEntities).toHaveBeenCalledWith('1', call)
+    expect(deps.findCandidateById).toHaveBeenCalledWith('deal', 2, '15', { companyId: '93', isNegativeStage: ctx.isNegativeStage }, call)
+  })
+
+  it('does NOT strip the mask prefix — a document number is matched literally (mirrors invoice-number, not the bare-id paths)', async () => {
+    const deps = fakeDeps({ docRefs: [] })
+    await resolveIntentCandidates(intent('document-number', 'ДОК-1042'), ctx, call, deps)
+    expect(deps.findDocumentEntities).toHaveBeenCalledWith('ДОК-1042', call)
+  })
+
+  it('mixed refs: one routes+resolves to a candidate, another is dropped (null) — only the hit survives', async () => {
+    const deal = { kind: 'deal' as const, id: '15', amount: 0, currency: 'BYN', entityTypeId: 2 }
+    const deps = fakeDeps({ docRefs: [{ entityTypeId: '2', entityId: '15' }, { entityTypeId: '31', entityId: '9' }] })
+    // deal ref → hit; invoice ref → miss (null)
+    deps.findCandidateById = vi.fn(async (kind: unknown) => (kind === 'deal' ? deal : null))
+    const r = await resolveIntentCandidates(intent('document-number', '1'), ctx, call, deps)
+    expect(r).toMatchObject({ status: 'resolved', candidates: [deal] })
+    expect(deps.findCandidateById).toHaveBeenCalledTimes(2) // both refs attempted, one dropped
+  })
+
+  it('an unroutable bound entity (quote 7) is skipped — no candidate, resolver not called for it', async () => {
+    const deps = fakeDeps({ docRefs: [{ entityTypeId: '7', entityId: '1' }] })
+    const r = await resolveIntentCandidates(intent('document-number', '1'), ctx, call, deps)
+    expect(r).toMatchObject({ status: 'resolved', candidates: [] })
+    expect(deps.findCandidateById).not.toHaveBeenCalled()
+  })
+
+  it('multiple bound refs → each resolved and company-scoped; only passing ones become candidates', async () => {
+    const deps = fakeDeps({ docRefs: [{ entityTypeId: '2', entityId: '15' }, { entityTypeId: '31', entityId: '9' }] })
+    // findCandidateById returns null for both here → resolved with [] (both company-rechecked)
+    const r = await resolveIntentCandidates(intent('document-number', '1'), ctx, call, deps)
+    expect(r).toMatchObject({ status: 'resolved', candidates: [] })
+    expect(deps.findCandidateById).toHaveBeenNthCalledWith(1, 'deal', 2, '15', { companyId: '93', isNegativeStage: ctx.isNegativeStage }, call)
+    expect(deps.findCandidateById).toHaveBeenNthCalledWith(2, 'invoice', 31, '9', { companyId: '93', isNegativeStage: ctx.isNegativeStage }, call)
+  })
+
+  it('no document found ([] refs) → resolved with [] (not unsupported), no id lookup', async () => {
+    const deps = fakeDeps({ docRefs: [] })
+    const r = await resolveIntentCandidates(intent('document-number', '1'), ctx, call, deps)
+    expect(r).toMatchObject({ status: 'resolved', candidates: [] })
+    expect(deps.findCandidateById).not.toHaveBeenCalled()
+  })
+
+  it('a document REST error propagates (job retries)', async () => {
+    const deps = fakeDeps()
+    deps.findDocumentEntities = vi.fn(async () => {
+      throw new Error('QUERY_LIMIT_EXCEEDED')
     })
-  }
+    await expect(resolveIntentCandidates(intent('document-number', '1'), ctx, call, deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
 })
 
 describe('parseConfiguredEntityTypeId', () => {

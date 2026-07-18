@@ -17,15 +17,19 @@
 // entityId, { companyId })` before acting — exactly the by-id re-check that
 // `identifierDispatch` requires for a bridged document (`strategy: 'via-document'`).
 //
-// Scope `crm` (the method lives under `crm.documentgenerator.*`). Response shape and
-// field names (`number`/`entityTypeId`/`entityId`, array under `result.documents`)
-// are taken from the official docs — NOT yet live-verified: the test portal has no
-// generated document. In particular the docs only show the FORWARD filter
-// (`entityTypeId+entityId → documents`); the reverse `filter:{ number }` is unproven,
-// so we DEFENSIVELY re-check `doc.number` against the requested one (a silently
-// ignored filter would otherwise bridge to arbitrary documents). ⚠ Live-verify a real
-// template+document on the test portal is a HARD GATE for the crm-sync wiring PR that
-// consumes this (`via-document`), not for this pure slice.
+// Scope `documentgenerator` (the method lives under `crm.documentgenerator.*`; added to
+// `B24_REQUIRED_SCOPES` with the bridge wiring, #109). Response shape and field names
+// (`number`/`entityTypeId`/`entityId`, array under `result.documents`, `total` top-level)
+// are LIVE-VERIFIED on the test portal (a document generated from template #1 bound to a
+// deal): the reverse `filter:{ number }` IS honored (returns the doc; a non-existent number
+// → `[]`), so the bridge is sound. We still DEFENSIVELY re-check `doc.number` against the
+// requested one (cheap, guards a future portal that ignores the filter).
+//
+// ⚠ LIVE FINDING: the portal IGNORES `select` for this list method — the response ALWAYS
+// carries `downloadUrlMachine`/`pdfUrlMachine`/`imageUrlMachine`, whose query string holds a
+// LIVE access token. `findDocumentEntities` reads ONLY `number`/`entityTypeId`/`entityId` and
+// discards the rest, so those token URLs never flow onward — but the raw response MUST NOT be
+// logged wholesale. (`select` is kept as a hint; it is not a guarantee of field narrowing.)
 
 import type { RestCall } from './companyLookup'
 
