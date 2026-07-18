@@ -22,6 +22,7 @@ import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/st
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
+import { withSpan } from '../utils/telemetrySpan'
 
 export default defineNitroPlugin((nitroApp) => {
   if (!queueEnabled()) return
@@ -97,24 +98,28 @@ export default defineNitroPlugin((nitroApp) => {
       const satThreshold = clampSaturationThreshold(Number(process.env.QUEUE_FETCH_SATURATION_THRESHOLD ?? NaN))
       const poll = async () => {
         try {
-          const refs = await listAllBankAccounts(dbQuery)
-          const byPortal = accountsForPolling(refs)
-          if (byPortal.length === 0) return // no connected accounts yet — nothing to do
-          const now = new Date()
-          const { dateFrom, dateTo } = pollWindow(now, lookback)
-          const jobs = planFetches(byPortal, dateFrom, dateTo, String(now.getTime()))
-          for (const job of jobs) await enqueueFetch(job)
-          console.info('[queue] real poll: enqueued %d fetch jobs (%s..%s, every %d min)', jobs.length, dateFrom, dateTo, pollMs / 60_000)
-          // Best-effort: a counts read must never break the poll (it already enqueued).
-          try {
-            const counts = await getQueue(Q_FETCH).getJobCounts('waiting', 'delayed') as FetchQueueCounts
-            const sat = fetchBacklogSaturation(counts, satThreshold)
-            if (sat.over) {
-              console.warn('[queue] bank-fetch backlog %d ≥ %d — likely A8 rate-limit saturation (jobs DEFERRED by the global limiter, not stuck); raise QUEUE_FETCH_RATE_* only if Alfa raises its cap (docs/OPERATIONS.md)', sat.backlog, satThreshold)
+          // Cron root span (#78) — groups the poll's pg scan + Redis enqueues under one trace
+          // (otherwise they float as orphan child spans). No-op when telemetry off.
+          await withSpan('cron.real-poll', { 'job.queue': 'cron.real-poll' }, async () => {
+            const refs = await listAllBankAccounts(dbQuery)
+            const byPortal = accountsForPolling(refs)
+            if (byPortal.length === 0) return // no connected accounts yet — nothing to do
+            const now = new Date()
+            const { dateFrom, dateTo } = pollWindow(now, lookback)
+            const jobs = planFetches(byPortal, dateFrom, dateTo, String(now.getTime()))
+            for (const job of jobs) await enqueueFetch(job)
+            console.info('[queue] real poll: enqueued %d fetch jobs (%s..%s, every %d min)', jobs.length, dateFrom, dateTo, pollMs / 60_000)
+            // Best-effort: a counts read must never break the poll (it already enqueued).
+            try {
+              const counts = await getQueue(Q_FETCH).getJobCounts('waiting', 'delayed') as FetchQueueCounts
+              const sat = fetchBacklogSaturation(counts, satThreshold)
+              if (sat.over) {
+                console.warn('[queue] bank-fetch backlog %d ≥ %d — likely A8 rate-limit saturation (jobs DEFERRED by the global limiter, not stuck); raise QUEUE_FETCH_RATE_* only if Alfa raises its cap (docs/OPERATIONS.md)', sat.backlog, satThreshold)
+              }
+            } catch (err) {
+              console.error('[queue] fetch saturation check failed:', (err as Error)?.message)
             }
-          } catch (err) {
-            console.error('[queue] fetch saturation check failed:', (err as Error)?.message)
-          }
+          })
         } catch (err) {
           console.error('[queue] real poll tick failed:', (err as Error)?.message)
         }
@@ -141,7 +146,8 @@ export default defineNitroPlugin((nitroApp) => {
       const keepAliveMs = keepAliveIntervalMs(Number(process.env.TOKEN_KEEPALIVE_HOURS || 24))
       const runKeepAlive = async () => {
         try {
-          await runTokenKeepAlive(keepAliveDeps)
+          // Cron root span (#78) — groups the keep-alive scan + per-portal refreshes.
+          await withSpan('cron.keep-alive', { 'job.queue': 'cron.keep-alive' }, () => runTokenKeepAlive(keepAliveDeps))
         } catch (err) {
           // Only a failure of the initial SELECT reaches here (per-portal failures are
           // isolated inside runTokenKeepAlive). Never let it crash the cron instance.
@@ -169,7 +175,8 @@ export default defineNitroPlugin((nitroApp) => {
       const sweepMs = sweepIntervalMs(Number(process.env.STATEMENT_SWEEP_INTERVAL_MIN || 30))
       const runSweep = async () => {
         try {
-          await runStatementSweep(sweepDeps)
+          // Cron root span (#78) — groups the per-queue clean calls under one trace.
+          await withSpan('cron.sweep', { 'job.queue': 'cron.sweep' }, () => runStatementSweep(sweepDeps))
         } catch (err) {
           // Per-queue clean failures are isolated inside runStatementSweep; only an unexpected
           // throw reaches here. Never let it crash the cron instance.

@@ -27,6 +27,20 @@ describe('pickSafeAttributes (manual-span allowlist)', () => {
     })
   })
 
+  it('keeps the job/dep span keys added with the coverage expansion (#78: job spans + batch dep)', () => {
+    expect(pickSafeAttributes({
+      'job.queue': 'bank-fetch',
+      'job.kind': 'ONAPPINSTALL',
+      'dep.operation': 'batch',
+      'dep.op_count': 12
+    })).toEqual({
+      'job.queue': 'bank-fetch',
+      'job.kind': 'ONAPPINSTALL',
+      'dep.operation': 'batch',
+      'dep.op_count': 12
+    })
+  })
+
   it('drops non-allowlisted keys (e.g. a smuggled purpose / amount / account)', () => {
     expect(pickSafeAttributes({
       'dep.system': 'alfa',

@@ -31,6 +31,10 @@ describe('withDependencySpan', () => {
       throw err
     })).rejects.toBe(err)
   })
+  it('accepts opCount (batch dep call) without breaking the passthrough (#78)', async () => {
+    const r = await withDependencySpan({ system: 'bitrix24', operation: 'batch', opCount: 12 }, async () => 'ok')
+    expect(r).toBe('ok')
+  })
 })
 
 describe('withSpan', () => {

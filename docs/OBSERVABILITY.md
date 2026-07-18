@@ -17,11 +17,17 @@
   `otel-preload-package.json`, ставится в backend-образ). Поднимает `NodeSDK` +
   `getNodeAutoInstrumentations()` (http/pg/ioredis; `fs` выключен как шум) + OTLP trace/metric
   экспортёры. Эндпоинт/заголовки — из env.
-- **Ручные спаны** (`@opentelemetry/api`, no-op когда SDK не зарегистрирован):
-  - `withDependencySpan()` — оборачивает **каждый B24 REST-вызов** (`makeSdkRestCall`) в спан
-    `dep bitrix24 <method>` со `{system, operation, method, scope, status, error_kind, portal.hash}`;
-  - `withSpan('crm-sync', …)` — **job-спан конвейера** с исходами `{op_count, recognized, resolved,
-    allocated, ambiguous, manual, distributed, outcome, portal.hash}`.
+- **Ручные спаны** (`@opentelemetry/api`, no-op когда SDK не зарегистрирован) — **покрывают весь конвейер**:
+  - `withDependencySpan()` — **каждый исходящий B24-вызов**: одиночный `makeSdkRestCall` (`dep bitrix24 <method>`),
+    **батч `makeSdkBatchCall`** (`dep bitrix24 batch`, `dep.op_count`=число команд) и **OAuth-refresh**
+    (`sdkRefreshTransport` → `dep bitrix24 oauth.refresh`). Атрибуты `{system, operation, method, scope, status,
+    error_kind, op_count?, portal.hash}`.
+  - `withSpan('<job>', …)` — **все четыре job-воркера**: `crm-sync` (исходы `{op_count, recognized, resolved,
+    allocated, ambiguous, manual, distributed}`), `bank-fetch` (`{provider, op_count=fetched}`), `file-parse`
+    (`{provider, op_count=parsed}` — единственная стадия без авто-дочернего спана, чистый CPU), `b24-events`
+    (`{kind, portal.hash}`). Плюс **крон-корни** `cron.real-poll`/`cron.keep-alive`/`cron.sweep` — иначе их
+    pg/redis/http-спаны экспортируются сиротами без родителя.
+  - Bank-fetch HTTP (`$fetch` к Альфе) и bank-OAuth POST ловит **авто-undici** — дочерние спаны под `bank-fetch`-root.
 - **Приватность (docs/PRIVACY.md) — тройная защита финансовых ПДн:**
   1. наши спаны эмитят **только allowlist** безопасных ключей (`server/utils/telemetryAttributes.ts`
      `pickSafeAttributes`) — назначение/контрагент/счёт/сумму прикрепить физически нельзя;

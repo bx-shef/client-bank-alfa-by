@@ -28,10 +28,12 @@ export const SAFE_MANUAL_ATTR_KEYS = new Set<string>([
   'dep.scope', // B24 scope, e.g. 'crm'
   'dep.status', // 'ok' | 'error'
   'dep.error_kind', // sanitized error class, never the message body
+  'dep.op_count', // number of commands in a batch dependency call (shape, not content)
   // queue / job
-  'job.queue', // 'crm-sync' | 'file-parse' | …
+  'job.queue', // 'crm-sync' | 'file-parse' | 'bank-fetch' | 'b24-events' | cron.*
   'job.provider', // BankProviderId
-  'job.op_count', // number of operations in a batch
+  'job.kind', // event job kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL' (event type, not content)
+  'job.op_count', // number of operations in a batch / fetched / parsed count
   'job.outcome', // 'ok' | 'error'
   'job.error_kind', // sanitized error class on a job span (never the message)
   // allocation / processing OUTCOMES (counts + verdicts, never ids-from-purpose or amounts)
