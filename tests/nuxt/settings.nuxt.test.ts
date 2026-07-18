@@ -70,40 +70,45 @@ describe('settings page', () => {
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })
 
-  it('excluding a purpose pattern hides the matching credit (selective)', async () => {
+  it('excluding a purpose pattern marks the matching op as NOT imported (§2 A2)', async () => {
     const wrapper = await mountReady()
     useChatSettings().settings.chat.rules.excludePurposePatterns = [MOCK_STATEMENT.items[creditIdx]!.purpose]
     await nextTick()
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
+    // Excluded = dropped from import entirely — a distinct badge, not the chat «скрыто».
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('не импортируется')
+    expect(wrapper.find('[data-testid="preview-summary"]').text()).toContain('не импортируется')
   })
 
-  it('warns (and drops the list) when the rules hide everything', async () => {
+  it('warns when nothing reaches the chat, but still shows the operation list', async () => {
     const wrapper = await mountReady()
     useChatSettings().settings.chat.rules.directions = []
     await nextTick()
-    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
+    // Direction-silenced ops are still IMPORTED — the list stays visible (only the chat warning shows).
+    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('в чат ничего не попадёт')
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто в чате')
   })
 
   // Drive the real UI controls (not just the singleton) so the component wiring
   // — directionModel get/set on B24Switch, the textarea→settings watch — is covered.
-  it('toggling the "Приходы" switch off hides the credit (UI wiring)', async () => {
+  it('toggling the "Приходы" switch off silences the credit in chat (UI wiring)', async () => {
     const wrapper = await mountReady()
     const sw = wrapper.find('[data-testid="notify-credit"]')
     expect(sw.exists()).toBe(true)
     await sw.trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('в чат ничего не попадёт')
+    // Direction is a chat-only filter now: the op is still imported (list stays), just silenced.
+    expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(true)
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто в чате')
   })
 
-  it('typing an exclude pattern hides the matching credit (UI wiring)', async () => {
+  it('typing an exclude pattern marks the matching op NOT imported (UI wiring)', async () => {
     const wrapper = await mountReady()
     const textarea = wrapper.find('textarea[data-testid="exclude-patterns"]')
     expect(textarea.exists()).toBe(true)
     await textarea.setValue(MOCK_STATEMENT.items[creditIdx]!.purpose)
     await nextTick()
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('не импортируется')
   })
 
   // Auto-distribution gate (§2 mutation slice): the switch binds settings.autoDistribute
