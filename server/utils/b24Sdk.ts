@@ -32,8 +32,8 @@
 // `setCallbackRefreshAuth`, `typecheck:server` fails at that assignment rather than only
 // on the live smoke-test.
 
-import { B24OAuth } from '@bitrix24/b24jssdk'
-import type { B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth } from '@bitrix24/b24jssdk'
+import { B24OAuth, ParamsFactory } from '@bitrix24/b24jssdk'
+import type { B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
 import { getToken, saveToken, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
@@ -51,6 +51,16 @@ export interface OAuthCallClient {
     }
   }
   setCallbackRefreshAuth: (cb: CallbackRefreshAuth) => void
+  /** Override the OAuth refresh with a custom handler. The FRAME client (no server-side
+   *  refresh token) sets this to hard-reject instead of POSTing an empty refresh_token to the
+   *  OAuth server (see makeFrameRestCall). */
+  setCustomRefreshAuth: (cb: CustomRefreshAuth) => void
+  /** Tune the built-in RestrictionManager (rate-limit + retry). We use it to turn OFF the
+   *  in-client network/5xx retry on our per-portal + frame clients (#123) — see disableSdkRetry.
+   *  The SDK types this async (Promise<void>); we call it fire-and-forget because the retry
+   *  config is applied synchronously (RestrictionManager.setConfig assigns `#config` before its
+   *  first await), so `maxRetries`/`retryOnNetworkError` are in effect before the first call. */
+  setRestrictionManagerParams: (params: Record<string, unknown>) => void
 }
 
 /** The bits of the SDK's batch `Result` we read: overall success + the data payload.
@@ -210,13 +220,43 @@ export interface SdkPortalDeps {
   scope?: string
 }
 
+/** Error thrown when a FRAME token hits an auth error. Carries `invalid_token` so the shape
+ *  matches what B24 itself returns for a rejected token — a rejected frame token is "invalid",
+ *  not "expired, refresh me" (we hold no refresh token for it). */
+export const FRAME_TOKEN_REJECTED = 'invalid_token: frame access token cannot be refreshed'
+
+/** DISABLE the SDK's in-client retry on our per-portal + frame clients (#123, parity with
+ *  ai-price-import). Keep the default leaky-bucket throttle (drainRate 2 / burst 50 — it
+ *  PROACTIVELY prevents QUERY_LIMIT_EXCEEDED so no reactive retry is needed for rate limits; NB the
+ *  bucket is PER-INSTANCE (per memoised job client), so that guarantee holds at the default
+ *  concurrency 1 / single replica — at QUEUE_CONCURRENCY>1 or multi-replica the portal's server-side
+ *  ~2 req/s is shared across buckets, and a residual QUERY_LIMIT_EXCEEDED then escalates to a
+ *  (idempotent) BullMQ job retry instead of an in-SDK backoff),
+ *  but `maxRetries:1` (one attempt, no retry) + `retryOnNetworkError:false`: a crm-sync job
+ *  issues NON-IDEMPOTENT writes (`crm.activity.configurable.add`, and the allocation mutations),
+ *  and ANY in-SDK retry — after a client timeout OR a server 5xx, where the request may have
+ *  already COMMITTED — would silently DUPLICATE the entity (Bitrix does not enforce
+ *  originId/xmlId uniqueness, so the marker wouldn't stop a second row within one call). We let
+ *  the whole BullMQ job fail and retry instead, where our writes ARE idempotent (crm-sync
+ *  read-before-write by origin marker; the mutations pre-check applied state). Must spread the
+ *  full default params — RestrictionManager.setConfig REPLACES the config wholesale, so a partial
+ *  object would blank the rate-limit/operating-limit sections. Fire-and-forget is safe: the
+ *  config assignment is synchronous (see setRestrictionManagerParams doc above). Shared by the
+ *  crm-sync and frame clients (the frame client wants fail-fast too — one attempt → its custom
+ *  hard-reject, no retry). */
+function disableSdkRetry(client: OAuthCallClient): void {
+  client.setRestrictionManagerParams({ ...ParamsFactory.getDefault(), maxRetries: 1, retryOnNetworkError: false })
+}
+
 /** Build a `RestCall` bound to one portal, backed by a per-portal `B24OAuth` instance
  *  (its own rate-limiter bucket) with refresh-persistence wired. `null` when the portal
  *  has no stored token (uninstalled / demo). This IS the crm-sync transport
  *  (portalSdkResolver.ts memoises it per portal per job).
  *  NB: the SDK refreshes REACTIVELY — on the first `expired_token`/401 it refreshes and
  *  retries, costing one extra round-trip on the first call after expiry (no pre-emptive
- *  refresh; the SDK handles it transparently). */
+ *  refresh; the SDK handles it transparently). In-client network/5xx RETRY is disabled
+ *  (`disableSdkRetry`, #123) so a committed-but-timed-out non-idempotent create can't be
+ *  silently duplicated; the BullMQ job retry (idempotent) recovers instead. */
 export async function makePortalSdkClient(memberId: string, deps: SdkPortalDeps): Promise<OAuthCallClient | null> {
   const token = await deps.loadToken(memberId)
   if (!token) return null
@@ -224,6 +264,7 @@ export async function makePortalSdkClient(memberId: string, deps: SdkPortalDeps)
   // still expose the `actions` / `setCallbackRefreshAuth` shape this adapter relies on.
   const client: OAuthCallClient = new B24OAuth(oauthParamsFromToken(token, { nowMs: deps.now(), scope: deps.scope }), deps.creds)
   client.setCallbackRefreshAuth(buildRefreshPersist(deps.saveToken))
+  disableSdkRetry(client)
   return client
 }
 
@@ -250,7 +291,13 @@ export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): 
  *  hold no refresh token for it, so `refreshToken` is empty and `expiresAt` is set ahead — the
  *  SDK won't pre-emptively refresh, and a single call succeeds. `creds` are only structurally
  *  required by the `B24OAuth` constructor (used solely on a refresh that never happens here). A
- *  new client per call is fine: these are low-frequency, user-triggered UI calls. */
+ *  new client per call is fine: these are low-frequency, user-triggered UI calls.
+ *
+ *  REJECTED TOKEN: if the frame token is actually rejected (401 `expired_token`/`invalid_token`),
+ *  a HARD-REJECT via `setCustomRefreshAuth` throws `FRAME_TOKEN_REJECTED` immediately instead of
+ *  the SDK POSTing an empty `refresh_token` to the OAuth server (a guaranteed-failing, wasted
+ *  round-trip). #123-style retry is also disabled so it fails fast. Either way the caller's
+ *  try/catch turns it into the same error response it already returns for a bad token. */
 export function makeFrameRestCall(
   domain: string,
   accessToken: string,
@@ -264,6 +311,9 @@ export function makeFrameRestCall(
     expiresAt: nowMs + 3_600_000
   }
   const client: OAuthCallClient = new B24OAuth(oauthParamsFromToken(token, { nowMs, scope: opts.scope }), creds)
+  // A frame token has no refresh path: any auth error is a hard rejection, not "refresh me".
+  client.setCustomRefreshAuth(() => Promise.reject(new Error(FRAME_TOKEN_REJECTED)))
+  disableSdkRetry(client)
   return makeSdkRestCall(client)
 }
 
