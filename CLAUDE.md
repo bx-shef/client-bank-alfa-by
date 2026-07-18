@@ -146,7 +146,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   CRM» шлёт **сам файл** на `POST /api/import` (`useImport`, фрейм-токен) → очередь `file-parse`→`crm-sync`;
   сервер — единственный авторитет разбора (парсит в воркере), браузерный разбор = только предпросмотр.
   Обратная связь — fire-and-forget («принято, N операций», N из предпросмотра); фон пишет дело по операции.
-  **v1:** клиент не найден → `unmatched`, не пишем (каскад «моя компания»/смарт-процесс — #109). Разбор
+  Клиент не найден → **каскад «в мою компанию»** (#91): пишем дело в мою компанию (`findMyCompanyByAccount`)
+  с блоком-причиной + чат ошибок; моя компания тоже не найдена → не пишем, чат ошибок. Элемент смарт-процесса — #109. Разбор
   покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест + визуальная проверка (свет/тёмная).
 - `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
   + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
@@ -517,8 +518,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       дефолт 200, тесты; #300) — упор в лимит греп-виден в логах. Диагностика/runbook — `docs/OPERATIONS.md` (#299).
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
-      `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`) по per-portal `RestCall`
-      (SDK-резолвер `createPortalSdkResolver`, мемоизация на портал на джобу), с **гейтом демо-счётов**
+      **`findMyCompany`→`findMyCompanyByAccount`** (#91, UNMATCHED-фолбэк по нашему счёту),
+      `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`, опц. `note`-блок причины) по per-portal `RestCall`
+      (SDK-резолвер `createPortalSdkResolver`, мемоизация на портал на джобу), **`notifyUnmatched`→`notifyUnmatchedViaRest`**
+      (чат ошибок про неопознанного плательщика), с **гейтом демо-счётов**
       (`isDemoAccount` — демо-нагрузка не пишет в реальный портал) и skip без токена портала.
       `cron.ts` — план опроса (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`,
       `isDemoAccount`; каденция `demoTickMs` — секунды, пауза обработки `demoDelayMs` — чтобы очереди
@@ -553,8 +556,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `crm.requisite.list` (`ENTITY_TYPE_ID=4`) → id компании (шаги 1-2 вынесены в `resolveCompanyIdsByAccount`).
     `findCompanyByAccount` — компания контрагента (первая; `RQ_ACC_NUM` не уникален). `findMyCompanyByAccount`
     — **моя компания по нашему счёту** (§2 Этап C): те же шаги + фильтр `crm.item.list` `isMyCompany='Y'`
-    (подтверждён вживую). Проведено в `crm-sync` `findCompany`. `null` ⇒ `unmatched` (клиент) / «моя компания
-    не найдена» → чат ошибок (§5).
+    (подтверждён вживую). **Оба проведены в `crm-sync`** (#91): `findCompany` — клиент; `findMyCompany` —
+    UNMATCHED-фолбэк. Клиент `null` → пишем в мою компанию (с причиной) + чат ошибок; и моя `null` → не
+    пишем, чат ошибок (§5).
   - `server/utils/b24Sdk.ts` + `server/utils/portalSdkResolver.ts` — **SDK-транспорт `crm-sync` (#191, единственный,
     дефолт):** per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s,
     retry-backoff на `QUERY_LIMIT_EXCEEDED/429/5xx`) **по умолчанию** и **per-instance** — это и есть lever-1

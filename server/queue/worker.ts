@@ -27,8 +27,9 @@ import { createPortalSdkResolver, type PortalRestResolver } from '../utils/porta
 import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { logSafe } from '../utils/logSafe'
-import { findCompanyByAccount } from '../utils/companyLookup'
+import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeConfigurableActivityViaRest } from '../utils/configurableActivityWrite'
+import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
@@ -138,15 +139,24 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return findCompanyByAccount(item.counterparty.account, call)
     },
+    // Look up MY company by OUR account (item.account) — the UNMATCHED-client fallback owner (#91).
+    // Demo gated; no portal token → null. Uses the SAME memoised per-portal RestCall as findCompany.
+    findMyCompany: async (item, memberId) => {
+      if (isDemoAccount(item.account)) return null
+      const call = await resolvePortalCall(memberId)
+      if (!call) return null
+      return findMyCompanyByAccount(item.account, call)
+    },
     // Write the operation as a CONFIGURABLE activity (crm.activity.configurable.add) attached
     // to the matched company; returns the new activity id or null when skipped (demo account /
     // no company → no owner / unknown portal). The activity carries the ORIGINATOR_ID/ORIGIN_ID
     // dedup marker (#259), so idempotency lives in B24 (getActivityId searches it) — no store.
-    writeActivity: async (item, companyId, memberId) => {
+    // `note` prepends a reason block (UNMATCHED-client fallback to my company, #91).
+    writeActivity: async (item, companyId, memberId, note) => {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return writeConfigurableActivityViaRest(item, companyId, call)
+      return writeConfigurableActivityViaRest(item, companyId, call, note)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
@@ -344,6 +354,18 @@ export function liveHandlerDeps(): HandlerDeps {
         await notifyAllocationErrorViaRest(item, decision, dialogId, call)
       } catch (e) {
         console.error('alloc error notify failed', memberId, (e as Error)?.message)
+      }
+    },
+    // Post an UNMATCHED-client notice to the error chat (#91). Same guarantees as notifyError:
+    // demo gated, no token → skip, whole body swallow+logged (a chat failure must never fail the job).
+    notifyUnmatched: async (item, dialogId, recordedToMyCompany, memberId) => {
+      if (isDemoAccount(item.account)) return
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return
+        await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call)
+      } catch (e) {
+        console.error('unmatched notify failed', memberId, (e as Error)?.message)
       }
     },
     // Read-before-write dedup guard (#259): search Bitrix24 for our marker

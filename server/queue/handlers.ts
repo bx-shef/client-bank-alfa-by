@@ -10,6 +10,7 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
+import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
 import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
@@ -34,12 +35,16 @@ export interface HandlerDeps {
   fetchStatement: (job: FetchJob) => Promise<StatementItem[]>
   /** Parse an uploaded client-bank file into operations (manual import — #19). */
   parseFile: (job: ParseJob) => Promise<StatementItem[]>
-  /** Look up a CRM company id by the counterparty's settlement account. */
+  /** Look up a CRM company id by the counterparty's settlement account (the CLIENT/payer). */
   findCompany: (item: StatementItem, memberId: string) => Promise<string | null>
+  /** Look up MY company id by OUR settlement account (`item.account`) — the fallback owner for an
+   *  UNMATCHED-client operation (#91, §2 C.2/§5). `null` when our account isn't in the requisites. */
+  findMyCompany: (item: StatementItem, memberId: string) => Promise<string | null>
   /** Write a configurable activity for one operation (stamping the B24 dedup marker
    *  atomically). Returns the created activity id, or `null` if nothing was written (e.g.
-   *  no company matched, so there's no owner). */
-  writeActivity: (item: StatementItem, companyId: string | null, memberId: string) => Promise<string | null>
+   *  no company matched, so there's no owner). Optional `note` prepends a reason block —
+   *  used for the UNMATCHED-client fallback written to my company (#91). */
+  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string) => Promise<string | null>
   /** Read the portal's full settings blob (chat target + rules + recognition matrices)
    *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
    *  not per operation — one app.option read feeds both the chat and recognition steps. */
@@ -121,6 +126,10 @@ export interface HandlerDeps {
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
    *  MUST NOT throw — like notifyChat, a chat failure must never fail the job. Swallow+log. */
   notifyError: (item: StatementItem, decision: AllocationDecision, dialogId: string, memberId: string) => Promise<void>
+  /** Post an UNMATCHED-client notice to the error chat `dialogId` (#91, §5): the payer company
+   *  wasn't found by its account. `recordedToMyCompany` picks the wording (recorded on my company
+   *  vs not recorded at all). MUST NOT throw — like notifyError, a chat failure never fails the job. */
+  notifyUnmatched: (item: StatementItem, dialogId: string, recordedToMyCompany: boolean, memberId: string) => Promise<void>
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
    *  throw — it runs AFTER the activity (and its marker) is written, so a propagated error
@@ -414,25 +423,45 @@ export async function handleCrmSyncJob(
       }
       deps.onResolved(item, resolutions, job.memberId)
     }
-    const activityId = await deps.writeActivity(item, companyId, job.memberId)
-    if (!activityId) {
-      // No client company matched (or write skipped) → UNMATCHED: we do NOT write
-      // anything and do NOT remember the op, so a later redelivery re-attempts once a
-      // matching company exists. This is the accepted v1 behaviour for manual import
-      // (docs/PROCESSING.md §2 Этап C.2 "Текущее состояние"): the target-spec cascade
-      // (attach to MY company / smart-process element) lands with #109.
+    // Write target (PROCESSING.md §2 Этап C.2 / §5, #91). Client found → write to the client (as
+    // before). Client NOT found → UNMATCHED: fall back to MY company (found by OUR account) so the
+    // payment isn't lost, carrying a reason note; `unmatched` counts the payer being unidentified
+    // (now it can coexist with `created`). If MY company is also missing, nothing is written and
+    // the payment is reported to the error chat instead (§5). The allocation block above stays
+    // gated on the CLIENT `companyId` — we never allocate to an unknown payer's invoices.
+    let writeCompanyId = companyId
+    let note: string | undefined
+    const clientUnmatched = !companyId
+    if (clientUnmatched) {
       unmatched++
+      const myCompanyId = await deps.findMyCompany(item, job.memberId)
+      writeCompanyId = myCompanyId
+      if (myCompanyId) note = unmatchedClientNote(item)
+    }
+    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
+    if (clientUnmatched && errorChat?.dialogId) {
+      // Notify the error chat AFTER the write, so `recorded` reflects whether an activity was
+      // actually created (a thrown write fails the job BEFORE this — a retry then notifies once it
+      // succeeds — instead of claiming "записано" on a write that didn't land). Best-effort (the
+      // dep swallows transport errors). recorded=false ⇒ my company also missing → nothing written.
+      await deps.notifyUnmatched(item, errorChat.dialogId, activityId !== null, job.memberId)
+    }
+    if (!activityId) {
+      // Nothing written: no owner company at all (client AND my company missing), or a demo/no-token
+      // skip. For a real unmatched-no-my-company the payment stays un-recorded (no marker → retried
+      // next poll once requisites exist); the error-chat notice above already flagged it. For a
+      // matched-client write that returned null (demo/no token) — unchanged skip.
       continue
     }
     // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE
     // writeActivity (configurable.add), so a redelivery's getActivityId finds it — no separate
     // remember step, and no write→remember gap to lose.
     // Announce only if a chat target is set AND the rules allow this op (direction /
-    // excluded account / excluded purpose). Unmatched ops are NOT announced — notify
-    // sits after the write, so a redelivery can't re-post (chat has no separate dedup yet).
-    // notifyChat swallows transport errors so a chat failure never fails the job after the
-    // activity was written.
-    if (chat?.dialogId && shouldNotifyChat(item, chat.rules)) {
+    // excluded account / excluded purpose). Only a MATCHED-CLIENT op is announced in the normal
+    // chat — an UNMATCHED op written to my company is a problem case and was already reported to the
+    // ERROR chat above (don't double-announce). notify sits after the write, so a redelivery can't
+    // re-post (chat has no separate dedup yet); notifyChat swallows transport errors.
+    if (companyId && chat?.dialogId && shouldNotifyChat(item, chat.rules)) {
       await deps.notifyChat(item, chat.dialogId, job.memberId)
       notified++
     }

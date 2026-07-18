@@ -24,6 +24,8 @@ interface FakeOpts {
   batch?: StatementItem[]
   /** company id returned by findCompany (default 'CO'); null = unmatched. */
   company?: string | null
+  /** my-company id returned by findMyCompany (default null = my company not found either). */
+  myCompany?: string | null
   /** dedup keys already written (getActivityId returns a stored id for these). */
   alreadyWritten?: Set<string>
   /** chat settings; default announces both directions. null ⇒ getPortalSettings
@@ -73,7 +75,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -82,13 +84,18 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.find.push([it.docId, memberId])
       return company
     },
-    writeActivity: async (it, companyId, memberId) => {
+    findMyCompany: async (it, memberId) => {
+      calls.findMy.push([it.docId, memberId])
+      return o.myCompany ?? null
+    },
+    writeActivity: async (it, companyId, memberId, note) => {
       if (!companyId) return null // no company → no owner → nothing written
       const id = `act-${nextId++}`
       // configurable.add stamps the ORIGINATOR_ID/ORIGIN_ID marker atomically with the
       // activity — model that by persisting the dedup key here (getActivityId reads it).
       written.set(`${it.account}|${it.docId}`, id)
       calls.activity.push([it.docId, companyId, memberId, id])
+      calls.activityNote.push([it.docId, companyId, note ?? null]) // #91 reason-block capture
       return id
     },
     getPortalSettings: async (memberId) => {
@@ -142,6 +149,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
+    },
+    notifyUnmatched: async (it, dialogId, recordedToMyCompany, memberId) => {
+      calls.unmatchedNotify.push([it.docId, recordedToMyCompany, dialogId, memberId])
     },
     getActivityId: async (_memberId, key) => written.get(key) ?? null,
     savePortal: async (job) => {
@@ -254,12 +264,84 @@ describe('handleCrmSyncJob', () => {
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
   })
 
-  it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
+  it('counts unmatched ops (no company, no my-company) and does NOT remember or notify them', async () => {
+    // errorChat off (default) → no notice; myCompany null (default) → nothing written.
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
     expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
+    expect(calls.unmatchedNotify).toEqual([]) // error chat off → no notice
+  })
+
+  it('UNMATCHED client but MY company found → writes to my company with reason + error-chat notice (#91)', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    // Payment NOT lost: recorded (created:1) AND flagged unmatched (payer unknown).
+    expect(r).toMatchObject({ processed: 1, created: 1, unmatched: 1, notified: 0 })
+    // Written to MY company (not a client), carrying the reason note.
+    expect(calls.activity).toEqual([['d1', 'MY', 'M', 'act-1']])
+    const note = (calls.activityNote as [string, string, string | null][])[0]
+    expect(note[1]).toBe('MY')
+    expect(note[2]).toContain('Клиент не определён')
+    // Reported to the ERROR chat (recorded=true), and NOT to the normal chat.
+    expect(calls.unmatchedNotify).toEqual([['d1', true, 'err', 'M']])
+    expect(calls.chat).toEqual([])
+  })
+
+  it('UNMATCHED client AND no MY company → nothing written, error-chat notice recorded=false (§5)', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    expect(r).toMatchObject({ created: 0, unmatched: 1 })
+    expect(calls.activity).toEqual([]) // nothing written (no owner) → retried once requisites exist
+    expect(calls.unmatchedNotify).toEqual([['d1', false, 'err', 'M']])
+  })
+
+  it('matched-client op is NOT reported to the error chat as unmatched (and carries no reason note)', async () => {
+    const { deps, calls } = fakeDeps({ company: 'CO', myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1']]) // to the CLIENT, not my company
+    expect(calls.findMy).toEqual([]) // my-company lookup not even attempted when client matched
+    expect(calls.unmatchedNotify).toEqual([])
+    expect((calls.activityNote as [string, string, string | null][])[0]![2]).toBeNull() // no note on the client write
+  })
+
+  it('my-company fallback WRITE + a normal client create in ONE batch — both write, counters do not leak (#91)', async () => {
+    const { deps, calls } = fakeDeps({ myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    deps.findCompany = async it => (it.docId === 'd1' ? 'CO' : null) // d1 client found, d2 unmatched
+    const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit')]), deps)
+    expect(r).toMatchObject({ processed: 2, created: 2, unmatched: 1, notified: 1, credits: 2 })
+    expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'MY', 'M', 'act-2']])
+    expect(calls.unmatchedNotify).toEqual([['d2', true, 'err', 'M']]) // only the fallback op
+    expect(calls.chat).toEqual([['d1', 'M']]) // only the matched client op reaches the normal chat
+  })
+
+  it('redelivery of a my-company fallback op → dedup-skipped: no re-write, no re-notify, no re-lookup (#91 «не долбит REST»)', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    const j = job([item('d1', 'credit')])
+    const first = await handleCrmSyncJob(j, deps)
+    expect(first).toMatchObject({ created: 1, unmatched: 1, credits: 1 })
+    const second = await handleCrmSyncJob(j, deps) // redelivery — marker now in B24
+    expect(second).toMatchObject({ processed: 1, created: 0, skipped: 1, unmatched: 0 })
+    expect(calls.activity).toHaveLength(1) // written once, not twice
+    expect(calls.unmatchedNotify).toHaveLength(1) // notified once
+    expect(calls.findMy).toHaveLength(1) // my-company looked up once — dedup skip precedes it
+  })
+
+  it('a pre-written unmatched op is dedup-skipped BEFORE findMy / notifyUnmatched fire', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' }, alreadyWritten: new Set(['A|d1']) })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    expect(r).toMatchObject({ skipped: 1, created: 0, unmatched: 0 })
+    expect(calls.findMy).toEqual([])
+    expect(calls.unmatchedNotify).toEqual([])
+  })
+
+  it('my company found but error chat OFF → writes to my company, sends NO notice', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY' }) // errorChat default off
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
+    expect(r).toMatchObject({ created: 1, unmatched: 1 })
+    expect(calls.activity).toEqual([['d1', 'MY', 'M', 'act-1']])
+    expect(calls.unmatchedNotify).toEqual([]) // notice gated by errorChat.dialogId
   })
 
   it('handles a mixed batch: one skipped, one new, one unmatched (counters do not leak)', async () => {
