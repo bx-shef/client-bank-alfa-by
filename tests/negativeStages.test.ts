@@ -211,6 +211,51 @@ describe('buildPortalNegativeStagePredicate', () => {
     await expect(buildPortalNegativeStagePredicate(call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
   })
 
+  it('unions a configured SMART PROCESS FAIL stage (disjoint DT<etid>_ namespace) + its diagnostics', async () => {
+    const { call } = fakeCall({
+      categories: { 31: [{ id: 11 }], 2: [{ id: 0 }], 1032: [{ id: 67 }] },
+      statuses: {
+        SMART_INVOICE_STAGE_11: [{ STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }],
+        DEAL_STAGE: [{ STATUS_ID: 'LOSE', SEMANTICS: 'F' }],
+        DYNAMIC_1032_STAGE_67: [{ STATUS_ID: 'DT1032_67:FAIL', SEMANTICS: 'F' }, { STATUS_ID: 'DT1032_67:SUCCESS', SEMANTICS: 'S' }]
+      }
+    })
+    const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call, null, 1032)
+    expect(predicate('DT1032_67:FAIL')).toBe(true) // lost SP element — now excluded
+    expect(predicate('DT1032_67:SUCCESS')).toBe(false) // SP negatives only (like deals)
+    expect(predicate('DT31_11:D')).toBe(true) // invoice still works
+    expect(predicate('LOSE')).toBe(true) // deal still works
+    expect(diagnostics.smartProcess).toEqual({ categories: 1, negativeStages: 1, emptyCategories: 0 })
+  })
+
+  it('ignores a smart-entity misconfigured to the invoice/deal type (no bogus DYNAMIC_31/2 load, no spurious alert)', async () => {
+    const { call, calls } = fakeCall({
+      categories: { 31: [{ id: 11 }], 2: [{ id: 0 }] },
+      statuses: {
+        SMART_INVOICE_STAGE_11: [{ STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }],
+        DEAL_STAGE: [{ STATUS_ID: 'LOSE', SEMANTICS: 'F' }]
+      }
+    })
+    const { diagnostics } = await buildPortalNegativeStagePredicate(call, null, 31)
+    expect(diagnostics.smartProcess).toBeUndefined() // treated as not-configured-for-SP
+    // exactly two category.list calls (invoice 31 + deal 2) — no extra SP load was attempted
+    const catCalls = calls.filter(([m]) => m === 'crm.category.list')
+    expect(catCalls.map(([, p]) => p.entityTypeId).sort()).toEqual([2, 31])
+  })
+
+  it('omits smartProcess diagnostics when no entityTypeId is configured (unchanged behaviour)', async () => {
+    const { call } = fakeCall({
+      categories: { 31: [{ id: 11 }], 2: [{ id: 0 }] },
+      statuses: {
+        SMART_INVOICE_STAGE_11: [{ STATUS_ID: 'DT31_11:D', SEMANTICS: 'F' }],
+        DEAL_STAGE: [{ STATUS_ID: 'LOSE', SEMANTICS: 'F' }]
+      }
+    })
+    const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call, null, null)
+    expect(diagnostics.smartProcess).toBeUndefined()
+    expect(predicate('DT1032_67:FAIL')).toBe(false) // SP not loaded → not excluded (fail-open, unchanged)
+  })
+
   it('catches a lost DEFAULT-funnel deal whichever stage-id form comes back (C0:LOSE or LOSE)', async () => {
     const { call } = fakeCall({
       categories: { 31: [], 2: [{ id: 0 }] },
@@ -256,5 +301,13 @@ describe('failOpenEntities (symmetric fail-open signal)', () => {
     expect(failOpenEntities({ invoice: d(2, 2, 0), deal: d(3, 3, 1) })).toEqual(['deal'])
     // both healthy (no empties) → nothing flagged even with many funnels
     expect(failOpenEntities({ invoice: d(2, 2, 0), deal: d(3, 5, 0) })).toEqual([])
+  })
+  it('participates in the signal only when smartProcess is present (configured)', () => {
+    // absent smartProcess ⇒ never flagged (SP simply not loaded)
+    expect(failOpenEntities({ invoice: d(1, 1), deal: d(1, 1) })).toEqual([])
+    // present but broken (zero negatives) ⇒ flagged as 'smart-process'
+    expect(failOpenEntities({ invoice: d(1, 1), deal: d(1, 1), smartProcess: d(1, 0) })).toEqual(['smart-process'])
+    // present and healthy ⇒ not flagged
+    expect(failOpenEntities({ invoice: d(1, 1), deal: d(1, 1), smartProcess: d(1, 2) })).toEqual([])
   })
 })
