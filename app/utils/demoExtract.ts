@@ -16,6 +16,7 @@
 //
 // No DOM, no I/O — unit-tested in tests/demoExtract.test.ts.
 
+import { round2 } from '~/utils/money'
 import { normalizeAlfa, type AlfaStatementResponse } from '~/utils/alfaStatement'
 import { normalizePrior, type PriorTransactionListResponse } from '~/utils/priorStatement'
 import { splitByDirection } from '~/utils/statement'
@@ -50,11 +51,6 @@ export interface DemoCurrencyTotal {
   currency: string
   credit: number
   debit: number
-}
-
-/** Round a money amount to 2 decimal places (kopecks), avoiding float drift. */
-function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100
 }
 
 /** The full "what we found in this statement" summary shown on the landing. */

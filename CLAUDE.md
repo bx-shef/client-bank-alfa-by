@@ -339,6 +339,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     работает в браузере и node — тесты на реальных фикстурах), `dedupItems` (`account|docId` по
     нескольким файлам), `uploadErrorMessage`. Без DOM.
   - `app/utils/mockStatement.ts` — демо-данные для UI до реальной интеграции.
+  - `app/utils/money.ts` — общий `round2` (округление денег до 2 знаков после суммирования, без float-дрейфа;
+    нефинитное → 0) — единый для дисплей-агрегаторов (`demoExtract` «суммы по валютам», `importStats`), чтобы копия
+    не жила в трёх местах. Тест — `tests/money.test.ts`.
+  - `app/utils/importStats.ts` — **чистое ядро агрегации результата импорта (#62, слайс 1)**: `StatementItem[]` →
+    `computeImportStats` (итог: число операций, приходы/расходы **по валютам**, доминирующая валюта, разбивка
+    приход/расход **по дням** для доминирующей валюты); `dayBucketsForCurrency`/`operationDay`/`currencyTotal`
+    (итог по выбранной/доминирующей валюте с пустым дефолтом) — хелперы для рендера. `round2` из `money.ts`,
+    нефинитная/отрицательная сумма → 0. Без DOM/ECharts — под тесты (`tests/importStats.test.ts`); анимированный
+    рендер (count-up + ECharts бары/пончик) — слайс 2.
   - `app/types/b24Events.ts` + `app/utils/b24Events.ts` — события Б24 (`ONAPPINSTALL`/
     `ONAPPUNINSTALL`): разбор wire-формата (`parseBracketForm`, PHP-скобки), вердикт
     подлинности `application_token` (`appTokenVerdict`, fail-closed, constant-time),
