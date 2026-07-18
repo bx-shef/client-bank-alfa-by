@@ -1149,6 +1149,14 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 - **Backend** — `Dockerfile` target `backend` (`nuxt build`, node-сервер). Приём событий Б24 и хранилище
   токенов **реализованы** (этап 3, слайс; #35); OAuth Альфы/опрос/дела/чат — далее (этапы 4–6). Env и
   запуск — `.env.example`, [`docs/DEPLOY.md`](docs/DEPLOY.md), [`docs/B24_EVENTS.md`](docs/B24_EVENTS.md).
+- **Альтернативный таргет — Битрикс24 Вайбкод Black Hole** (закрытый Bitrix-Cloud VM по REST, без SSH,
+  приложение **одним Nitro-процессом на :3000**): [`docs/DEPLOY_VIBECODE.md`](docs/DEPLOY_VIBECODE.md).
+  `deploy/vibecode-deploy.sh` (идемпотентный: найти сервер по имени / создать / ждать `CONNECTED` /
+  `access-policy=PUBLIC` / deploy) + `.github/workflows/deploy-vibecode.yml` (**opt-in**: джоба идёт
+  только при repo-переменной `VIBECODE_DEPLOY==true`, основной GHCR/Watchtower-путь не трогает).
+  Один Nitro отдаёт **и лендинг, и `/api/*`** (проверено: `nuxt build`→`node .output/server/index.mjs`
+  → `/`,`/api/health`,`/import` = 200); pg/redis провижнятся на VM в `preStart`, миграции в процессе на
+  старте. ⚠ Без nginx нет hash-CSP/`limit_req` — паритет безопасности (CSP/rate-limit в Nitro) — follow-up.
 
 ## Отчётность (reporting-kit)
 
