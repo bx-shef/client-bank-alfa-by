@@ -13,9 +13,11 @@ vi.mock('@bitrix24/b24jssdk', () => ({
         call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }) },
         batch: { make: async (o: { calls: unknown[] }) => ({ isSuccess: true, getErrorMessages: () => [], getData: () => o.calls.map(() => ({ isSuccess: true, getData: () => ({ result: { b: true } }), getErrorMessages: () => [] })) }) }
       } },
-      setCallbackRefreshAuth: () => {}
+      setCallbackRefreshAuth: () => {}, setRestrictionManagerParams: () => {}
     }
-  })
+  }),
+  // Used by disableSdkRetry (#123).
+  ParamsFactory: { getDefault: () => ({ rateLimit: {}, operatingLimit: {}, adaptiveConfig: {} }) }
 }))
 
 const token = (over: Partial<PortalToken> = {}): PortalToken => ({
@@ -67,7 +69,7 @@ describe('createPortalSdkResolver (#191 SDK transport, per-JOB memoisation)', ()
           if (first) throw new Error('invalid_grant') // client #1 is wedged
           return { isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }
         } } } },
-        setCallbackRefreshAuth: () => {}
+        setCallbackRefreshAuth: () => {}, setRestrictionManagerParams: () => {}
       }
     }) as unknown as typeof B24OAuth)
     const at = 1000
@@ -91,7 +93,7 @@ describe('createPortalSdkResolver (#191 SDK transport, per-JOB memoisation)', ()
         return { isSuccess: true, getData: () => ({}), getErrorMessages: () => [] }
       }
       clients.push({ id, make })
-      return { actions: { v2: { call: { make } } }, setCallbackRefreshAuth: () => {} }
+      return { actions: { v2: { call: { make } } }, setCallbackRefreshAuth: () => {}, setRestrictionManagerParams: () => {} }
     }) as unknown as typeof B24OAuth)
     let at = 0
     const resolve = createPortalSdkResolver(deps(), () => at, 1000)
@@ -114,7 +116,7 @@ describe('createPortalSdkResolver (#191 SDK transport, per-JOB memoisation)', ()
     const constructedWith: string[] = []
     vi.mocked(B24OAuth).mockImplementation((function (params: { accessToken: string }) {
       constructedWith.push(params.accessToken)
-      return { actions: { v2: { call: { make: async () => ({ isSuccess: true, getData: () => ({}), getErrorMessages: () => [] }) } } }, setCallbackRefreshAuth: () => {} }
+      return { actions: { v2: { call: { make: async () => ({ isSuccess: true, getData: () => ({}), getErrorMessages: () => [] }) } } }, setCallbackRefreshAuth: () => {}, setRestrictionManagerParams: () => {} }
     }) as unknown as typeof B24OAuth)
     let at = 1_000_000
     let current = token({ accessToken: 'AT1' })
@@ -173,7 +175,7 @@ describe('createPortalSdkResolver (#191 SDK transport, per-JOB memoisation)', ()
           call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { ok: true } }), getErrorMessages: () => [] }) },
           batch: { make: async (o: { calls: unknown[] }) => ({ isSuccess: true, getErrorMessages: () => [], getData: () => o.calls.map(() => ({ isSuccess: true, getData: () => ({ result: { b: true } }), getErrorMessages: () => [] })) }) }
         } },
-        setCallbackRefreshAuth: () => {}
+        setCallbackRefreshAuth: () => {}, setRestrictionManagerParams: () => {}
       }
     }) as unknown as typeof B24OAuth)
     const at = 1_000_000
@@ -206,7 +208,7 @@ describe('createPortalSdkResolver (#191 SDK transport, per-JOB memoisation)', ()
             return { isSuccess: true, getErrorMessages: () => [], getData: () => [] }
           } }
         } },
-        setCallbackRefreshAuth: () => {}
+        setCallbackRefreshAuth: () => {}, setRestrictionManagerParams: () => {}
       }
     }) as unknown as typeof B24OAuth)
     const at = 1000

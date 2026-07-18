@@ -802,6 +802,20 @@ describe('handleCrmSyncJob', () => {
     expect(calls.errChat).toEqual([]) // errorChat.dialogId '' → off
   })
 
+  it('does NOT re-post the error notice on a job redelivery (notice sits after the dedup marker)', async () => {
+    // The error notice is emitted AFTER writeActivity stamps the marker (im.message.add has no
+    // dedup). A redelivered job (same op, marker already in B24) is skipped at the top gate before
+    // reaching the notice — so a job-level retry (more frequent with SDK in-client retry off, #123)
+    // can't double-post. Run the SAME job twice through the SAME deps (shared marker store).
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 100)], errorChat: { dialogId: 'errchat' } })
+    const j = job([item('d1', 'credit', 'счет СЧ-0001')])
+    await handleCrmSyncJob(j, deps) // first run: manual outcome → one notice + marker written
+    expect(calls.errChat).toEqual([['d1', 'manual', 'errchat', 'M']])
+    const r2 = await handleCrmSyncJob(j, deps) // redelivery: getActivityId finds the marker → op skipped
+    expect(r2).toMatchObject({ skipped: 1 })
+    expect(calls.errChat).toEqual([['d1', 'manual', 'errchat', 'M']]) // STILL one — not re-posted
+  })
+
   it('records a clean single-target allocate WITHOUT an error notice', async () => {
     const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], errorChat: { dialogId: 'errchat' } })
     await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)

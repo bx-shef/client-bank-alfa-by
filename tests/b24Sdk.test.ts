@@ -29,9 +29,15 @@ vi.mock('@bitrix24/b24jssdk', () => ({
   B24OAuth: vi.fn(function () {
     return {
       actions: { v2: { call: { make: async () => ({ isSuccess: true, getData: () => ({ result: { items: [] } }), getErrorMessages: () => [] }) } } },
-      setCallbackRefreshAuth: () => {}
+      setCallbackRefreshAuth: () => {},
+      setCustomRefreshAuth: () => {},
+      setRestrictionManagerParams: () => {}
     }
-  })
+  }),
+  // Used by disableSdkRetry (#123) — spread as the base config before overriding retry fields.
+  // Carries a recognizable throttle marker (`rateLimit.drainRate`) so a test can assert the spread
+  // SURVIVED (dropping `...getDefault()` would blank the throttle — setConfig replaces wholesale).
+  ParamsFactory: { getDefault: () => ({ rateLimit: { drainRate: 2, burstLimit: 50 }, operatingLimit: {}, adaptiveConfig: {} }) }
 }))
 
 const token = (over: Partial<PortalToken> = {}): PortalToken => ({
@@ -64,7 +70,9 @@ function fakeClient(
       } },
       batch: { make: batchImpl ?? defaultBatch }
     } },
-    setCallbackRefreshAuth: () => {}
+    setCallbackRefreshAuth: () => {},
+    setCustomRefreshAuth: () => {},
+    setRestrictionManagerParams: () => {}
   }
   return { client, calls, batches }
 }
@@ -317,9 +325,10 @@ describe('makePortalSdkCall', () => {
     expect(vi.mocked(B24OAuth)).not.toHaveBeenCalled()
   })
 
-  it('constructs one B24OAuth with mapped params + creds, wires refresh-persist, returns a working RestCall', async () => {
+  it('constructs one B24OAuth with mapped params + creds, wires refresh-persist, disables retry, returns a working RestCall', async () => {
     const saved: PortalToken[] = []
     const calls: Array<{ method: string }> = []
+    const restrictionParams: Array<Record<string, unknown>> = []
     let registeredCb: ((a: { authData: never, b24OAuthParams: ReturnType<typeof oauthParamsFromToken> }) => Promise<void>) | null = null
     vi.mocked(B24OAuth).mockReset()
     // Regular function (not arrow) so `new B24OAuth(...)` returns this object.
@@ -331,6 +340,10 @@ describe('makePortalSdkCall', () => {
         } } } },
         setCallbackRefreshAuth: (cb: typeof registeredCb) => {
           registeredCb = cb
+        },
+        setCustomRefreshAuth: () => {},
+        setRestrictionManagerParams: (p: Record<string, unknown>) => {
+          restrictionParams.push(p)
         }
       }
     }) as unknown as typeof B24OAuth)
@@ -344,6 +357,12 @@ describe('makePortalSdkCall', () => {
     const [params, secret] = vi.mocked(B24OAuth).mock.calls[0]
     expect(params).toMatchObject({ memberId: 'M1', accessToken: 'AT', clientEndpoint: 'https://acme.bitrix24.com/rest/' })
     expect(secret).toEqual({ clientId: 'local.x', clientSecret: 'SECRET' })
+
+    // #123: in-client retry disabled (fail fast → BullMQ job retry, which is idempotent), AND the
+    // throttle base config is preserved (spread of getDefault() survives — dropping it would blank
+    // rateLimit and unleash a QUERY_LIMIT_EXCEEDED storm; setConfig replaces the config wholesale).
+    expect(restrictionParams).toHaveLength(1)
+    expect(restrictionParams[0]).toMatchObject({ maxRetries: 1, retryOnNetworkError: false, rateLimit: { drainRate: 2 } })
 
     // returns a working RestCall routed through the client
     const out = await call!('crm.item.list')
@@ -369,8 +388,10 @@ describe('makeFrameRestCall (frame-token jssdk transport + SSRF gate #149)', () 
     expect(vi.mocked(B24OAuth)).not.toHaveBeenCalled()
   })
 
-  it('builds one B24OAuth for an allow-listed portal (CLEAN host, empty refresh token) and returns a working RestCall', async () => {
+  it('builds one B24OAuth for an allow-listed portal (CLEAN host, empty refresh token), hard-rejects refresh, disables retry, returns a working RestCall', async () => {
     const calls: Array<{ method: string }> = []
+    const restrictionParams: Array<Record<string, unknown>> = []
+    let customRefresh: (() => Promise<unknown>) | null = null
     vi.mocked(B24OAuth).mockReset()
     // Regular function (not arrow) so `new B24OAuth(...)` returns this object.
     vi.mocked(B24OAuth).mockImplementation((function () {
@@ -379,7 +400,13 @@ describe('makeFrameRestCall (frame-token jssdk transport + SSRF gate #149)', () 
           calls.push(o)
           return { isSuccess: true, getData: () => ({ result: { ID: 42 } }), getErrorMessages: () => [] }
         } } } },
-        setCallbackRefreshAuth: () => {}
+        setCallbackRefreshAuth: () => {},
+        setCustomRefreshAuth: (cb: () => Promise<unknown>) => {
+          customRefresh = cb
+        },
+        setRestrictionManagerParams: (p: Record<string, unknown>) => {
+          restrictionParams.push(p)
+        }
       }
     }) as unknown as typeof B24OAuth)
 
@@ -401,5 +428,13 @@ describe('makeFrameRestCall (frame-token jssdk transport + SSRF gate #149)', () 
       scope: 'crm'
     })
     expect(secret).toEqual(creds)
+
+    // hard-reject wired: a rejected frame token throws invalid_token, not an empty-refresh POST.
+    expect(customRefresh).toBeTypeOf('function')
+    await expect(customRefresh!()).rejects.toThrow(/invalid_token/)
+
+    // #123: in-client retry disabled on the frame client too (fail fast), throttle base preserved.
+    expect(restrictionParams).toHaveLength(1)
+    expect(restrictionParams[0]).toMatchObject({ maxRetries: 1, retryOnNetworkError: false, rateLimit: { drainRate: 2 } })
   })
 })

@@ -1,6 +1,6 @@
 # Журнал автономной работы (доведение до рабочего приложения)
 
-> Last reviewed: 2026-07-17
+> Last reviewed: 2026-07-18
 
 Живой журнал автономной сессии: **что цель, какой процент готовности рабочего приложения,
 что сделано за проход, что дальше**. Обновляется каждым PR. Сверяется с [`project-map.md`](project-map.md),
@@ -43,6 +43,38 @@
 6. Сквозная живая проверка (за владельцем, тестовый портал).
 
 ## Лог проходов
+
+### 2026-07-18 — #123 паритет с `ai-price-import`: отключён in-client ретрай SDK + hard-reject фрейм-токена
+- **Откуда:** сверка транспортного слоя с соседним репо `bx-shef/ai-price-import` (после «всё на JsSdk»). У него
+  два приёма, которых у нас не было: (1) `disableSdkRetry` (#123) и (2) hard-reject бэйр/фрейм-токена.
+- **Проблема (реальный риск дублей):** наш per-portal `B24OAuth` использовал дефолтный ретрай SDK
+  (`maxRetries:3, retryOnNetworkError:true`). crm-sync шлёт **неидемпотентные** записи (`crm.activity.configurable.add`
+  + мутации разнесения); ретрай SDK после закоммитившегося-но-таймутнувшего запроса **задвоил бы** сущность (Bitrix не
+  гарантирует уникальность маркера в пределах одного вызова — межджобовый дедуп `findActivityByMarker` внутри вызова не
+  спасает).
+- **Сделано:** `disableSdkRetry(client)` → `setRestrictionManagerParams({...ParamsFactory.getDefault(),
+  maxRetries:1, retryOnNetworkError:false})` на **обоих** клиентах (`makePortalSdkClient` + `makeFrameRestCall`). Троттл
+  (leaky-bucket 2 req/s) остаётся — он проактивно не даёт словить `QUERY_LIMIT_EXCEEDED`, — ретрай выключен: падаем всей
+  BullMQ-джобой, где записи **идемпотентны** (read-before-write по маркеру + applied-детект мутаций). Спред полного
+  `getDefault()` обязателен (setConfig заменяет конфиг целиком). Fire-and-forget безопасен: `#config` присваивается
+  синхронно (сверено по исходникам SDK 2.0.0, до первого await). **Фрейм-токен hard-reject:** `makeFrameRestCall` ставит
+  `setCustomRefreshAuth(() => reject(FRAME_TOKEN_REJECTED))` — отвергнутый фрейм-токен бросает `invalid_token` сразу,
+  без пустого `refresh_token` POST на OAuth-сервер (лишний заведомо-провальный round-trip, что отметил ревьюер #191).
+- **Идемпотентность на джоба-ретрае (найдено ревьюером):** `notifyError` (заметка в чат ошибок про `ambiguous`/`manual`,
+  `im.message.add` без дедупа) вызывался **до** записи дедуп-маркера (`writeActivity`) — на джоба-ретрае (теперь чаще из-за
+  #123) заметка ушла бы **повторно**. Исправлено: заметка теперь захватывается и **эмитится после** маркера (зеркалит уже
+  безопасный `notifyChat`) — редоставка `continue`-ится на верхнем гейте до эмита. Тест `queuePhase2.test.ts`: тот же джоб
+  дважды → заметка ровно одна. (`notifyChat` был безопасен и до этого — он уже стоял после маркера.)
+- **Тесты:** `b24Sdk.test.ts` — оба клиента: ассерт `setRestrictionManagerParams({maxRetries:1, retryOnNetworkError:false,
+  rateLimit:{drainRate:2}})` — последнее гардит **сохранение спреда** `getDefault()` (без него троттл занулился бы, а
+  `toMatchObject`-subset это проглотил бы); фрейм ещё `setCustomRefreshAuth` → `rejects invalid_token`. Мок-фабрики
+  (`b24Sdk`/`portalSdkResolver`) дополнены `ParamsFactory`+`setRestrictionManagerParams`/`setCustomRefreshAuth`. `pnpm check`
+  зелёный.
+- **Отложено (follow-up):** (1) keep-alive-рефреш соседа тоже идёт через SDK (`sdkRefreshTransport`) **внутри** #35-лока — у
+  нас keep-alive пока на сыром `$fetch` (корректно, лок сохранён); перевод — отдельным PR (нужен рефактор `RefreshDeps`).
+  (2) узкий best-effort edge (ревьюер, low): триггер-путь фаерит `crm.automation.trigger.execute` **до** записи факта — если
+  `recordAllocation` упадёт в зазоре fire→fact, ретрай пере-фаерит триггер. Гейт opt-in `autoDistribute`+`triggerCode`
+  (default OFF), single-shot best-effort; порядок fire-then-fact выбран сознательно (обратный дал бы «потерянный fire»).
 
 ### 2026-07-17 — Исключения по счёту/назначению пропускают операцию целиком (PROCESSING §2 A2)
 - **Проблема (ревизия):** аудит нашёл расхождение док↔код — PROCESSING §2 A2 обещает «исключения → НЕ

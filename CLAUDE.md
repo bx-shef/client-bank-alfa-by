@@ -562,7 +562,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/b24Sdk.ts` + `server/utils/portalSdkResolver.ts` — **SDK-транспорт `crm-sync` (#191, единственный,
     дефолт):** per-portal `B24OAuth` → наш `RestCall`. У SDK встроенный RestrictionManager (leaky-bucket 2 req/s,
     retry-backoff на `QUERY_LIMIT_EXCEEDED/429/5xx`) **по умолчанию** и **per-instance** — это и есть lever-1
-    (пер-портальный лимитер). `oauthParamsFromToken`/`tokenFromOAuthParams` (наш `PortalToken`↔`B24OAuthParams`, сверено
+    (пер-портальный лимитер). **In-client РЕТРАЙ отключён** (`disableSdkRetry` → `setRestrictionManagerParams`
+    `{...ParamsFactory.getDefault(), maxRetries:1, retryOnNetworkError:false}`, #123, паритет с `ai-price-import`):
+    троттл (leaky-bucket) остаётся — он **проактивно** не даёт словить `QUERY_LIMIT_EXCEEDED`, — но ретрай на сетевом
+    сбое/5xx выключен, т.к. crm-sync шлёт **неидемпотентные** записи (`crm.activity.configurable.add`, мутации разнесения):
+    ретрай после закоммитившегося-но-таймутнувшего запроса **задвоил бы** сущность (Bitrix не enforce-ит уникальность
+    маркера в пределах одного вызова). Падаем всей джобой → BullMQ-ретрай **идемпотентен** (read-before-write по маркеру +
+    applied-детект мутаций). `setRestrictionManagerParams` async, но конфиг присваивается синхронно (до первого await) →
+    fire-and-forget безопасен. `oauthParamsFromToken`/`tokenFromOAuthParams` (наш `PortalToken`↔`B24OAuthParams`, сверено
     `typecheck:server`), `makeSdkRestCall` (полный конверт: `getData()` отдаёт `{result,time}`, поэтому ре-аттачит
     верхнеуровневые `total`/`next` из `getTotal()`/`isMore()` — иначе списковая пагинация `paymentLookup`/
     `negativeStages` молча теряла бы страницы; throw → джоба падает, чистый retry), `buildRefreshPersist`+
@@ -842,7 +849,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     Прежний сырой `$fetch`-`callRest`/`restUrl`/таймаут/`[rest-timing]`/`B24RestError`/`isExpiredTokenError`
     **удалены** — весь исходящий B24 REST идёт через jssdk-транспорт `b24Sdk.ts` (crm-sync — stored-token
     `B24OAuth`; UI-фрейм-роуты — `makeFrameRestCall`, тот же SDK за `assertPortalHost`); реактивный ретрай
-    `expired_token` и лимитер — у самого SDK),
+    `expired_token` и лимитер — у самого SDK. Фрейм-клиент **hard-reject**-ит рефреш (`setCustomRefreshAuth` →
+    `FRAME_TOKEN_REJECTED` `invalid_token`), а не шлёт пустой `refresh_token` на OAuth-сервер (нет refresh у
+    фрейм-токена → лишний заведомо-провальный round-trip); in-client ретрай на обоих клиентах отключён (#123, выше),
     `server/utils/ensureAccessToken.ts`
     (refresh при истечении, **конкуренто-безопасно (#35)**: рефреш сериализован per-portal через
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out

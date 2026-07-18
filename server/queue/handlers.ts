@@ -309,6 +309,11 @@ export async function handleCrmSyncJob(
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
+    // Error-chat notice for an ambiguous/manual allocation, captured here but EMITTED only after
+    // the dedup marker is committed (below) — im.message.add has no dedup, so posting it before the
+    // marker would let a job-level retry re-post it. Job retries are more frequent now that the SDK
+    // in-client retry is off (#123), which is exactly why this must sit behind the marker.
+    let errorNotice: AllocationDecision | null = null
     // Intent resolution (§4 → #109 lookup, slice 3 — wiring the slice-2 dispatcher into
     // the worker): resolve the recognized identifiers to allocation candidates via the
     // entity lookups, scoped to the matched company. GATED behind the dedup skip (a
@@ -417,8 +422,10 @@ export async function handleCrmSyncJob(
             }
           }
         }
+        // Capture (don't send yet) — the notice is posted after writeActivity stamps the marker,
+        // so a redelivery is `continue`d at the top gate before it can re-post (see below).
         if ((summary.outcome === 'ambiguous' || summary.outcome === 'manual') && errorChat?.dialogId) {
-          await deps.notifyError(item, summary.decision, errorChat.dialogId, job.memberId)
+          errorNotice = summary.decision
         }
       }
       deps.onResolved(item, resolutions, job.memberId)
@@ -456,6 +463,12 @@ export async function handleCrmSyncJob(
     // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE
     // writeActivity (configurable.add), so a redelivery's getActivityId finds it — no separate
     // remember step, and no write→remember gap to lose.
+    // Error-chat notice (ambiguous/manual allocation), deferred from the allocation block so it
+    // sits AFTER the marker write: a redelivery is `continue`d at the top gate before reaching
+    // here, so it can't re-post (im.message.add has no dedup — same protection as notifyChat).
+    if (errorNotice && errorChat?.dialogId) {
+      await deps.notifyError(item, errorNotice, errorChat.dialogId, job.memberId)
+    }
     // Announce only if a chat target is set AND the rules allow this op (direction /
     // excluded account / excluded purpose). Only a MATCHED-CLIENT op is announced in the normal
     // chat — an UNMATCHED op written to my company is a problem case and was already reported to the
