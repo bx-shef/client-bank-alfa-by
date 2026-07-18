@@ -66,6 +66,18 @@ Redis — на изолированной сети `queuenet` (`internal: true`)
 Хранение/ротацию логов контейнеров задаёт хостовый docker (`json-file`) — настроить ограничение
 размера/срока на сервере (runbook — `OPERATIONS.md`).
 
+## Телеметрия (OpenTelemetry, #78)
+
+Спаны OpenTelemetry (см. [`OBSERVABILITY.md`](OBSERVABILITY.md); DEFAULT OFF) **не несут финансовых
+ПДн** — тройная защита: (1) наши ручные спаны эмитят **только allowlist** безопасных ключей
+(`server/utils/telemetryAttributes.ts` `pickSafeAttributes` — счёт/сумму/назначение/контрагента
+прикрепить нельзя, значение-объект отбрасывается); (2) **redaction-SpanProcessor** в бутстрапе
+срезает чувствительные атрибуты авто-инструментирования (`db.statement`/`url.*`/`*body*`/`*token*`/…)
+до экспорта, а `pg` идёт с `enhancedDatabaseReporting:false` (значения SQL-параметров не собираются);
+(3) member_id → необратимый `portal.hash` (SHA-256), `error_kind` — токен из `code`/`name`, **не** текст
+ошибки (`recordException` не вызывается). ⚠ Инвариант: SQL остаётся **параметризованным** — имя pg-спана
+это неотредактированный канал, и литерал в непараметризованном запросе попал бы в имя спана.
+
 ## Открытые пункты (follow-up)
 
 - **TTL «спящих» агрегатов** (#245): `import_result`/`metrics_counter`/`allocation_fact` живут до

@@ -207,8 +207,9 @@ flowchart LR
   тип. `B24RestError`) **удалён** — SDK покрывает и bind-once, и реактивный рефреш; флага `QUEUE_SDK_TRANSPORT` больше нет.
 - **Замер латентности/объёма** после миграции «всё на jssdk» — у SDK-транспорта (RestrictionManager экспонирует
   свои очередь/тайминги); прежний опциональный `[rest-timing]`-лог сырого `callRest` (env `REST_TIMING`) **удалён**
-  вместе с самим `callRest`. Глубокую телеметрию (Prometheus/bull-board) вешаем на статистику лимитера SDK, а не на
-  ретайрнутый транспорт (#78).
+  вместе с самим `callRest`. Глубокая телеметрия (#78) — **OpenTelemetry** (спаны REST/джоб + авто http/pg/ioredis),
+  а не Prometheus/bull-board; см. [`OBSERVABILITY.md`](OBSERVABILITY.md). Хук REST-латентности — `withDependencySpan`
+  в `makeSdkRestCall`.
 
 **Что даёт SDK.** У `@bitrix24/b24jssdk` встроенный **RestrictionManager**: leaky-bucket (дефолт 2 req/s, burst 50),
 адаптивная задержка и **retry-с-backoff на `QUERY_LIMIT_EXCEEDED` / 429 / 5xx** — **по умолчанию** и **per-instance**
@@ -280,7 +281,8 @@ DI, покрыт тестами); по каждой из четырёх очер
 - **`GET /api/ops/queues`** ([`server/api/ops/queues.get.ts`](../server/api/ops/queues.get.ts)) — **путь
   для браузера оператора**: guard по **сессии** (`operatorAllowed`, cookie `cba_sess`; когда пароль не
   задан — зона открыта, как и клиентский гвард). Именно его опрашивает страница `/queues`.
-- Глубокая телеметрия (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78.
+- Глубокая телеметрия — **OpenTelemetry** (#78): слайс 1 (спаны, app-side) сделан, слайс 2 (коллектор +
+  ClickHouse + Grafana) — дальше. См. [`OBSERVABILITY.md`](OBSERVABILITY.md).
 
 Пример ответа:
 
@@ -330,7 +332,7 @@ DI, покрыт тестами); по каждой из четырёх очер
 - Источник — реальный `GET /api/ops/queues` (по сессии оператора). Флаг **`?preview=1`** переключает на
   клиентский генератор: рисует синтетику в браузере и **очереди не опрашивает** (для скриншотов/дев без
   backend). Не путать с backend-нагрузкой `DEMO_LOAD_N`, которая гоняет **настоящие** очереди. Глубокая
-  телеметрия (Grafana) — #78.
+  телеметрия — OpenTelemetry, #78 (см. [`OBSERVABILITY.md`](OBSERVABILITY.md)).
 
 Идея взята с внешнего примера `shef.rabbitmq:statistic` (оригинал — коммерческий amCharts4), но
 реализация переведена на бесплатную ECharts и на собственную модель (числовая ось + rAF + бакеты).

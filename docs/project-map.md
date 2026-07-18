@@ -325,7 +325,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   (`metrics_counter`: processed/created/allocated/distributed/unmatched/… из сводки `crm-sync`), читаются/
   сбрасываются по фрейм-токену (`GET /api/import/metrics`, `POST /api/import/metrics-reset`, member-scoped).
   В отличие от снапшота глубины очередей — это тотал за всё время, переживает рестарт (форма портирована из
-  соседнего `ai-price-import`). Осталось по #78 — Prometheus-экспортёр/Grafana + `[rest-timing]` логи.
+  соседнего `ai-price-import`). #78 — **OpenTelemetry**: слайс 1 (спаны REST/джоб, app-side) сделан; осталось
+  слайс 2 (коллектор + ClickHouse + Grafana). См. `docs/OBSERVABILITY.md`.
 - **Стадия 4 — поиск компании + запись дела** (код + юнит-тесты; **поиск компании И запись дела подтверждены
   на живом портале**, #90): `companyLookup.ts` (по корр-счёту → `RQ_ACC_NUM`/
   `RQ_IIK` → реквизит → компания) — **прогнан вживую** (реквизиты по счёту → id компании), пресеты

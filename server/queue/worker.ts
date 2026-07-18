@@ -10,6 +10,8 @@
 
 import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
+import { withSpan } from '../utils/telemetrySpan'
+import { portalHash } from '../utils/telemetryAttributes'
 import { Q_CRM, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 import { demoDelayMs, demoItems, isDemoAccount } from './cron'
@@ -458,15 +460,31 @@ export function startThroughputWorkers(
     }),
     new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
     new Worker<CrmSyncJob>(Q_CRM, async (job) => {
-      const summary = await handleCrmSyncJob(job.data, deps)
-      // Persist the run for the in-portal status card (#5) — LATEST run per portal.
-      // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
-      // already happened). Demo batches never touch the real portal's status row.
-      await persistImportResult(job.data, summary)
-      // Accumulate LIFETIME per-portal counters for the dashboard (#78). Same
-      // best-effort/demo-gated contract — bookkeeping must never fail a job.
-      await bumpMetrics(job.data, summary)
-      return summary
+      // Job-level trace span (#78) — no-op unless telemetry is on. Only SAFE shape/outcome
+      // attributes (counts, provider, hashed portal); never operation content.
+      return withSpan('crm-sync', {
+        'job.queue': 'crm-sync',
+        'job.provider': job.data.providerId,
+        'job.op_count': job.data.items?.length ?? 0,
+        'portal.hash': portalHash(job.data.memberId)
+      }, async () => {
+        const summary = await handleCrmSyncJob(job.data, deps)
+        // Persist the run for the in-portal status card (#5) — LATEST run per portal.
+        // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
+        // already happened). Demo batches never touch the real portal's status row.
+        await persistImportResult(job.data, summary)
+        // Accumulate LIFETIME per-portal counters for the dashboard (#78). Same
+        // best-effort/demo-gated contract — bookkeeping must never fail a job.
+        await bumpMetrics(job.data, summary)
+        return summary
+      }, summary => ({
+        'proc.recognized': summary.recognized,
+        'proc.resolved': summary.resolved,
+        'proc.allocated': summary.allocated,
+        'proc.ambiguous': summary.ambiguous,
+        'proc.manual': summary.manual,
+        'proc.distributed': summary.distributed
+      }))
     }, { connection, concurrency })
   ]
 }

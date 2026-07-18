@@ -573,8 +573,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `@bitrix24/b24icons-vue`) на **ECharts** (Apache-2.0, tree-shaken: `echarts/core` +
       Line/Grid/Tooltip/Legend/Canvas, динамический импорт; оси/сетка перекрашиваются под light/dark по
       классу `.dark`), чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
-      из `/api/ops/queues`; `?preview=1` — превью на синтетике (для скриншотов/дев). Глубокая телеметрия
-      (Prometheus-экспортёр BullMQ / bull-board / Grafana) — issue #78. Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
+      из `/api/ops/queues`; `?preview=1` — превью на синтетике (для скриншотов/дев). Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
+    - **Глубокая телеметрия — OpenTelemetry (#78, [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md), вектор Bitrix
+      `b24-ai-starter-otel`). Слайс 1 (app-side) — сделан, DEFAULT OFF:** бутстрап `otel.instrument.mjs` грузится
+      через `NODE_OPTIONS=--import` **до** приложения (иначе авто-инструментирование не перехватит http/pg/ioredis;
+      Nitro-бандлер ломает require-хуки OTel → deps вне бандла, `otel-preload-package.json` ставится в backend-образ).
+      Без `OTEL_EXPORTER_OTLP_ENDPOINT` — no-op (поведение не меняется). Ручные спаны на `@opentelemetry/api` (no-op без
+      SDK): `withDependencySpan` оборачивает каждый B24 REST (`makeSdkRestCall`), `withSpan('crm-sync',…)` — job-конвейер
+      с исходами. **PII-защита тройная:** allowlist наших атрибутов (`telemetryAttributes.ts` `pickSafeAttributes` — счёт/
+      сумму/назначение прикрепить нельзя) + redaction-SpanProcessor авто-атрибутов (SQL/URL/токены) + `portal.hash`
+      (SHA-256) вместо member_id, `error_kind` вместо текста ошибки. Чистые ядра + тесты (`telemetryAttributes`/
+      `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Слайс 2 (коллектор + ClickHouse + Grafana как
+      opt-in `--profile telemetry`) — дальше.**
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту** (DI над `RestCall`,
     тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) → id реквизитов →
