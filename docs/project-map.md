@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-17
+> Last reviewed: 2026-07-18
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -294,7 +294,9 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   пакет в очередь `b24-events`, сам в БД не пишет**; консьюмер регистрирует/удаляет портал (единственный
   писатель). Fail-closed вердикт `application_token`; хранилище токенов портала в Postgres (refresh
   шифруется AES-256-GCM, в т.ч. в пакете очереди); настройка уровня приложения через `app.option` по
-  фрейм-токену; health-эндпоинт `GET /api/health`; валидация env на старте (`envCheck`).
+  фрейм-токену; **liveness** `GET /api/health` + **readiness** `GET /api/ready` (db+redis, `status`
+  ok/degraded/down, #301); ручной «Опросить сейчас» `POST /api/poll-now` (app-side gate + admin + кулдаун,
+  #54/#302); валидация env на старте (`envCheck`).
   **SSRF-гейт транспорта (#149):** `assertPortalHost` (`b24Rest.ts`) fail-closed по allowlist хоста портала —
   облачные `*.bitrix24.<tld>` (полный список зон по офиц. Bitrix24 DPA) + self-hosted из env
   `B24_SELFHOSTED_HOSTS`; хост извлекается через `URL` (нет parser-differential обхода `…@evil.com`) и
@@ -309,7 +311,8 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`, payload'ы, идемпотентные `jobId`), `connection.ts`
   (ленивый `getQueue`, гуард `REDIS_URL`), продюсеры, воркеры (`worker.ts` + плагин) и крон
   демо-нагрузки (`cron.ts`); Redis в изолированной сети `queuenet`. Наблюдаемость: страница `/queues`
-  (ECharts) по сессии оператора + консольный `/api/queues`. **Монитор доведён**: бакеты по времени
+  (ECharts) по сессии оператора + консольный `/api/queues`; **лог сатурации** rate-limiter'а на реальном
+  cron-опросе (`saturation.ts`, в блоке `CRON_REAL_POLL` default-OFF, #300) + пост-запускной runbook [`OPERATIONS.md`](OPERATIONS.md) (#299). **Монитор доведён**: бакеты по времени
   (диапазоны 2м/10м/30м/4ч, авто-дискрет), плавное скольжение (числовая ось + rAF, без скачков по Y),
   подписи «длина очереди ≠ сколько обработано». **Scale-out сделан:** роль контейнера по env
   (`QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`, `server/queue/runtime.ts`); в prod-compose `backend`

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-17
+> Last reviewed: 2026-07-18
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -350,10 +350,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (register/unregister; refresh шифруется перед Redis). **Консьюмер — единственный писатель.**
     Онлайн-события Б24 **не ретраятся** — поэтому если очередь недоступна (Redis нет/упал), роут пишет
     в БД **синхронным фолбэком** (тот же токен-стор), чтобы установка/удаление не потерялись.
-  - `server/api/health.get.ts` — публичный liveness-эндпоинт `GET /api/health` →
+  - `server/api/health.get.ts` — публичный **liveness**-эндпоинт `GET /api/health` →
     `{ status, time, commit, commitUrl }` (коммит = `NUXT_PUBLIC_COMMIT_SHA`, как в подвале).
     Без секретов; на нём же построен docker `healthcheck` backend'а. Чистый билдер —
-    `healthInfo` в `app/utils/build.ts` (покрыт тестами).
+    `healthInfo` в `app/utils/build.ts` (покрыт тестами). ⚠ Только liveness процесса — зелёный
+    даже при мёртвых Postgres/Redis.
+  - `server/api/ready.get.ts` (+ чистое ядро `server/utils/readiness.ts`, DI, тесты; #301) —
+    **readiness**-проба `GET /api/ready`: реально прощупывает зависимости — Postgres `SELECT 1` +
+    (если очереди включены) Redis `PING` (`pingRedis` в `connection.ts`, с таймаутом — недоступный Redis
+    не подвешивает пробу). `200 {ready:true, status:"ok", checks:{db,redis}}` либо `503` с
+    `status:"down"` (Postgres недоступен) / `status:"degraded"` (db жив, Redis недоступен — API+события
+    B24 идут через синхронный фолбэк, импорт/опрос стоят). Булевы, без секретов и глубины очередей
+    (`redis:null` = очереди выключены). Кандидат для аптайм-мониторинга/`healthcheck` (не переключён —
+    иначе restart-loop на блипе Redis).
   - `server/api/import.post.ts` (+ чистое ядро `server/utils/importIngest.ts`, DI, тесты) — **приём
     ручной загрузки выписки (P4, слайс 2)**: multipart `file` + фрейм-токен (`Bearer` + `X-B24-Domain`).
     `handleImportUpload`: гейт файла (расширение+размер) → **проверка ключа портала** (`getMemberIdByDomain`
@@ -362,6 +371,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     даёт id инициатора) → кладёт файл (base64) в очередь `file-parse`; `202` fire-and-forget. Воркер
     (`parseFile` → `parseManualFileBase64`) декодирует windows-1251 и парсит → `crm-sync`. Файл едет в
     пакете (≤2 МБ; nginx `client_max_body_size 3m` в `snippets/proxy-backend.conf`).
+  - `server/api/poll-now.post.ts` (+ чистое ядро `server/utils/pollNow.ts`, DI, тесты; #54/#302) —
+    **ручной «Опросить сейчас»**: `POST /api/poll-now` ставит fetch-джоб на каждый подключённый
+    pollable-счёт **своего** портала. Частота регулируется **app-side**, не порталом: 4 слоя — feature-gate
+    `MANUAL_POLL_ENABLED` (default OFF) + `queueEnabled`, admin-гейт (`profile.ADMIN`, блок спуфинга домена),
+    пер-портальный Redis-кулдаун `SET NX EX` (`claimCooldownSlot`, дефолт 60с, `MANUAL_POLL_COOLDOWN_SEC`;
+    claim только при наличии работы), глобальный A8-лимитер ниже по потоку. Инертно (`enqueued:0`) без счетов;
+    Приор отфильтрован (A5b). UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll` на `/settings`.
+    nginx `limit_req` на роут. `listBankAccountsForPortal` (без расшифровки refresh).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
     `unregister`); ничего не пишет. Роут кладёт `action` в очередь, консьюмер применяет. **Удаление
@@ -494,6 +511,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно, Приор → A5b.
       Живой вызов Альфы ограничен **глобальным rate-limiter (A8)** на `Q_FETCH` (BullMQ `limiter`, шаренный
       по репликам через Redis, дефолт 100/60с, `QUEUE_FETCH_RATE_*`). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
+      Упор в кап BullMQ **не теряет** джобы (откладывает в `waiting`/`delayed`, на графике неотличимо от бэклога),
+      поэтому крон после каждого реального опроса (в блоке `CRON_REAL_POLL`, default-OFF) **явно логирует сатурацию**, когда backlog (`waiting+delayed`)
+      переходит порог (чистый `server/queue/saturation.ts` `fetchBacklogSaturation`, `QUEUE_FETCH_SATURATION_THRESHOLD`
+      дефолт 200, тесты; #300) — упор в лимит греп-виден в логах. Диагностика/runbook — `docs/OPERATIONS.md` (#299).
     - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
       refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
       `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`) по per-portal `RestCall`
