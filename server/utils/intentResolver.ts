@@ -28,6 +28,7 @@ import type { RestCall } from './companyLookup'
 import { SMART_INVOICE_ENTITY_TYPE_ID, type InvoiceLookupOptions } from './invoiceLookup'
 import type { ItemByIdOptions } from './itemByIdLookup'
 import { DEAL_ENTITY_TYPE_ID, type CompanyDealPaymentOptions } from './paymentLookup'
+import type { DocumentEntityRef } from './documentLookup'
 
 /** The entity resolvers this dispatch composes — injected for pure routing tests.
  *  Signatures mirror the real `invoiceLookup`/`itemByIdLookup`/`paymentLookup`. */
@@ -41,6 +42,10 @@ export interface IntentResolverDeps {
   /** Payment record ids of an order (via `sale.payment.list`, scope `sale`) — for
    *  `order-id`. NOT company-scoped; the resolver intersects them with the company pool. */
   findOrderPaymentIds: (orderId: string, call: RestCall) => Promise<string[]>
+  /** Generated-document number → the CRM entity ref(s) it is bound to (`via-document`,
+   *  §4). Mirrors `documentLookup.findDocumentEntities`. NOT company-scoped — the
+   *  resolver re-checks each ref against the payer company via `findCandidateById`. */
+  findDocumentEntities: (documentNumber: string, call: RestCall) => Promise<DocumentEntityRef[]>
 }
 
 /** Context for one intent resolution — the resolved payer company (IDOR scope for
@@ -101,6 +106,25 @@ const BY_ID_TARGET: Record<'invoice-id' | 'deal-id', { targetKind: AllocationTar
 
 const unsupported = (intent: RecognitionIntent, reason: string): IntentResolution =>
   ({ kind: intent.kind, value: intent.value, status: 'unsupported', candidates: [], reason })
+
+/** Route one bridged document entity ref (`entityTypeId`) to the allocation target
+ *  it must be resolved as (`via-document`, §4). Deal (2) and smart-invoice (31) are
+ *  fixed CRM constants; a custom smart process's entityTypeId is portal-specific, so
+ *  it matches ONLY the configured `configFields['smart-entity']`. Any other bound type
+ *  (a quote, an estimate, an unconfigured SP) has no allocation target → `null` (the
+ *  caller skips it). The `entityTypeId` returned is the numeric one to query with. */
+export function routeDocumentRef(
+  ref: DocumentEntityRef,
+  configFields: Record<string, string> | undefined
+): { targetKind: AllocationTargetKind, entityTypeId: number } | null {
+  const etid = Number(String(ref.entityTypeId).trim())
+  if (!Number.isInteger(etid) || etid <= 0) return null
+  if (etid === DEAL_ENTITY_TYPE_ID) return { targetKind: 'deal', entityTypeId: etid }
+  if (etid === SMART_INVOICE_ENTITY_TYPE_ID) return { targetKind: 'invoice', entityTypeId: etid }
+  const smartEntity = parseConfiguredEntityTypeId(configFields?.[SMART_ENTITY_CONFIG_KEY])
+  if (smartEntity !== null && etid === smartEntity) return { targetKind: 'smart-process', entityTypeId: etid }
+  return null
+}
 
 /** Resolve a `payment-number` intent against an already-fetched company deal-payment
  *  pool — a pure `accountNumber` filter (no I/O). Split out so the single-intent and
@@ -242,9 +266,27 @@ export async function resolveIntentCandidates(
       const found = await deps.findCandidateByField('smart-process', entityTypeId, fieldName, intent.value, opts, call)
       return { ...base, status: 'resolved', candidates: found ? [found] : [] }
     }
-    case 'document-number':
-      // Document bridge needs a live-verified template+document first (#184-adjacent).
-      return unsupported(intent, 'document-number: document bridge needs live-verify')
+    case 'document-number': {
+      // Bridge: number → generated document(s) → bound entity ref(s). Route each ref by
+      // its `entityTypeId`, then resolve it by id SCOPED TO THE PAYER COMPANY (IDOR — the
+      // number is payer-controlled and the document list has no company filter). Unroutable
+      // refs (a quote/estimate, an unconfigured SP) are skipped. Live-verified on the test
+      // portal (document.list reverse `filter:{number}` honored; entityTypeId/entityId present).
+      //
+      // NB: pass the value UNSTRIPPED (mirrors the invoice-number path, NOT the bare-id
+      // paths). A document's `number` is matched LITERALLY by `filter:{number}` and the
+      // mask's literal prefix is part of that formatted number (the numerator template
+      // emits it) — stripping `ДОК-0001`→`0001` would miss the real document.
+      const refs = await deps.findDocumentEntities(intent.value, call)
+      const candidates: AllocationCandidate[] = []
+      for (const ref of refs) {
+        const routed = routeDocumentRef(ref, ctx.configFields)
+        if (!routed) continue
+        const found = await deps.findCandidateById(routed.targetKind, routed.entityTypeId, ref.entityId, opts, call)
+        if (found) candidates.push(found)
+      }
+      return { ...base, status: 'resolved', candidates }
+    }
   }
 }
 

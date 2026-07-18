@@ -50,12 +50,13 @@ import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById, findCandidateByField } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
 import { findOrderPaymentIds } from '../utils/saleLookup'
+import { findDocumentEntities } from '../utils/documentLookup'
 import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
 import { buildPortalNegativeStagePredicate, failOpenEntities } from '../utils/negativeStages'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
-const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCandidateByField, findCompanyDealPayments, findOrderPaymentIds }
+const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCandidateByField, findCompanyDealPayments, findOrderPaymentIds, findDocumentEntities }
 
 // Per-portal RestCall resolver for every crm-sync REST op (#191). Transport is the
 // @bitrix24/b24jssdk SDK: its per-instance RestrictionManager IS the rate-limiter

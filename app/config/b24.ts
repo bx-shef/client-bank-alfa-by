@@ -12,13 +12,21 @@
  *   intersected with the company-scoped crm pool, so `sale` is used only for the id→payments
  *   map, never as the authorization boundary;
  * `im` — post chat messages about incoming payments;
+ * `documentgenerator` — resolve a `document-number` from the payment purpose to the CRM
+ *   entity a generated document is bound to (`crm.documentgenerator.document.list`,
+ *   `via-document` bridge, §4). Each bridged ref is re-scoped to the payer company via
+ *   `crm.item.list` (IDOR), so `documentgenerator` is used only for the number→entity map.
+ *   Live-verified on the test portal (reverse `filter:{number}` honored);
  * `user_brief` — the diagnostics block on the install page (current user);
  * `placement` — reserved for future placement.bind (in-portal embedding).
  *
  * The live REST calls run server-side (backend) by the stored OAuth token, not
  * from the iframe — see docs/REFACTOR_PLAN.md "Хранение настроек и вызовы B24".
+ *
+ * ⚠ Adding a scope forces re-consent on already-installed portals — coordinate with
+ * the owner before shipping (`documentgenerator` added with the bridge wiring, #109).
  */
-export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'user_brief', 'placement'] as const
+export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'documentgenerator', 'user_brief', 'placement'] as const
 
 /**
  * Backend path that receives Bitrix24 server events. Same origin as the app (the

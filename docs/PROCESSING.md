@@ -304,7 +304,10 @@ app-namespace** — фильтр по одному `ORIGIN_ID` даст **лож
 «Заказ» — не отдельная цель, а способ **найти оплату сделки** (по номеру/ID заказа). **Документ модуля
 «Генерация документов»** — не цель, а **мост**: по номеру документа находим сам документ
 (`crm.documentgenerator.document.list`), а из его `entityTypeId`/`entityId` — привязанную сущность
-(инвойс/сделку/заказ/смарт-процесс), которую и разносим.
+(инвойс/сделку/заказ/смарт-процесс), которую и разносим. **ПОДКЛЮЧЁН + LIVE-VERIFIED** (#109): `intentResolver`
+резолвит `document-number` через `findDocumentEntities`→`routeDocumentRef`→`findCandidateById` **со скоупом по
+компании плательщика** (IDOR — номер недоверенный, метод без company-фильтра); обратный `filter:{number}` подтверждён
+живьём (`pnpm verify:109` #8).
 
 **Единое ядро разнесения (#109).** Проектируем **одним** ядром (чистое, DI, тесты) с абстракцией над
 целью, а не копиями. Ядро принимает **уже отфильтрованный по компаниям и стадии** кандидат (ID из Этапа
@@ -663,10 +666,11 @@ REST-триггер позволяет передать доп. параметр
   чтобы не жечь квоту (classic REST ~2 rps) на каждую операцию пачки.
 - **Права приложения на оплаты сделок (scope `sale`)** — сама **проводка** оплаты сделки
   (`crm.item.payment.pay`) идёт под scope **`crm`** и уже реализована (за гейтом `autoDistribute`). Scope
-  **`sale`** **добавлен** в `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`, `user_brief`, `placement`, #172) — он
-  нужен для **`order-id`** (`sale.payment.list` по `orderId` → id оплат заказа, которые пересекаются с
-  company-пулом; `crm.item.payment.list` `orderId` не отдаёт). ⚠ Добавление `sale` **потребует ре-consent**
-  на уже установленных порталах. Тот же scope покроет будущее **сторно** оплаты (`sale.payment.update PAID=N`,
+  **`sale`** **добавлен** в `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`, `documentgenerator`, `user_brief`,
+  `placement`, #172/#109) — он нужен для **`order-id`** (`sale.payment.list` по `orderId` → id оплат заказа, которые
+  пересекаются с company-пулом; `crm.item.payment.list` `orderId` не отдаёт). **`documentgenerator`** добавлен под
+  **мост `via-document`** (`crm.documentgenerator.document.list`, `document-number` → сущность; ПОДКЛЮЧЁН + LIVE-VERIFIED,
+  `verify:109` #8). ⚠ Добавление `sale`/`documentgenerator` **потребует ре-consent** на уже установленных порталах. Тот же scope покроет будущее **сторно** оплаты (`sale.payment.update PAID=N`,
   снятие блокировки «у заказа есть активные оплаты»; в проде путь отмены разнесения ещё не реализован — в dev
   только `mutate:test --revert`). Целевая модель факта «разнесено/откат» — состояние объекта в B24; **сейчас**
   факт хранится в `allocation_fact`, его снятие — Фаза A (§1).

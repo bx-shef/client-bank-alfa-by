@@ -10,22 +10,30 @@ const item = (over: Record<string, unknown> = {}) => ({
 })
 
 describe('itemByIdParams', () => {
-  it('filters by id AND companyId (IDOR) and selects the amount/stage fields', () => {
+  it('filters by id AND companyId (IDOR) and omits parentId2 for a DEAL (self-reference — Bitrix rejects it live)', () => {
     expect(itemByIdParams(2, '33', '93')).toEqual({
       entityTypeId: 2,
       filter: { id: '33', companyId: '93' },
-      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
+      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId']
     })
+  })
+
+  it('selects parentId2 for an INVOICE (31) — its linked deal (#229), a valid different-type parent', () => {
+    expect(itemByIdParams(31, '33', '93').select).toEqual(['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2'])
   })
 })
 
 describe('itemByFieldParams', () => {
-  it('filters by the configured FIELD AND companyId (IDOR) and selects the amount/stage fields', () => {
+  it('filters by the configured FIELD AND companyId (IDOR) and omits parentId2 for a DEAL (self-reference)', () => {
     expect(itemByFieldParams(2, 'UF_CRM_PAY_NO', '6001', '93')).toEqual({
       entityTypeId: 2,
       filter: { UF_CRM_PAY_NO: '6001', companyId: '93' },
-      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId', 'parentId2']
+      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId']
     })
+  })
+
+  it('selects parentId2 for a smart process (custom entityTypeId) — a valid different-type parent', () => {
+    expect(itemByFieldParams(1032, 'UF_CRM_5_PAY', '6001', '93').select).toContain('parentId2')
   })
 })
 

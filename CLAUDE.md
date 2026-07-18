@@ -722,7 +722,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (`orderId`→id оплат) ∩ company-пул (`saleLookup.findOrderPaymentIds`+`filterByPaymentIds`, `sale`-скоуп, #172). Запрос фильтром **id+companyId** (id из назначения недоверенный →
       IDOR-скоуп в запросе, чужая сущность не вернётся) + отсев отрицательной стадии → `AllocationCandidate`.
       `crm.item.list`, а не `crm.item.get` (тот бросает `NOT_FOUND`; список отдаёт пусто). Подтверждено вживую: стадия
-      категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. Amount-цели
+      категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. **`select` строит
+      `selectFields(entityTypeId)`: `parentId2` (ссылка на сделку, #229) выбирается для инвойса/СП, но НЕ для сделки
+      (`entityTypeId=2`) — там `parentId2`=«родитель типа 2»=сама сделка, self-reference, портал отвергает live
+      («An entity type can't be a parent/child type to itself»; #109 — вскрыто мостом via-document, `deal-id`-путь
+      раньше живьём не гонялся). Теперь `findCandidateById('deal',2,…)` подтверждён вживую (`pnpm verify:109` #8).** Amount-цели
       (invoice/deal-payment) сверяют сумму (нефинитная → `null`, fail-closed как в `invoiceLookup`), триггер-цели
       (deal/smart-process) её игнорируют. **`findCandidateByField(kind, entityTypeId, fieldName, value, opts, call)`** —
       стратегия `by-config-field` (`deal-field`, §4): тот же `crm.item.list`, но фильтр по **настроенному полю**
@@ -758,13 +762,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `{entityTypeId, entityId}[]` (ответ `result.documents[]`; номер документа **не** уникален по порталу —
       нумерация генератора per-шаблон/редактируема, поэтому список, как в `invoiceLookup`). Дальше вызывающий
       **перебирает** и **роутит** каждый ref по `entityTypeId` (2→сделка, 31→инвойс, кастом→смарт) через
-      `itemByIdLookup` **с проверкой компании**, берёт первый прошедший — номер недоверенный, метод без
+      `itemByIdLookup` **с проверкой компании**, собирает **все прошедшие** кандидаты (дальше их разводит
+      `summarizeAllocation`) — номер недоверенный, метод без
       company-фильтра, IDOR-скоуп на вызывающем (как by-id в `identifierDispatch`, `strategy: 'via-document'`).
-      **Защитный гард**: `doc.number` сверяется с запрошенным после ответа (обратный фильтр `number` в офдоке не
-      показан — если портал тихо проигнорит фильтр, не свяжемся с чужим документом). `select` — только id-поля (не
-      `*UrlMachine`, те несут живой access-токен в URL). Поля — **из офдоки**, вживую не подтверждено (в seed 0
-      документов); **live-verify реального шаблона+документа — жёсткий гейт PR с wiring `via-document` в crm-sync**.
-      Scope `crm` (`crm.documentgenerator.*`).
+      **Защитный гард**: `doc.number` сверяется с запрошенным после ответа. **LIVE-VERIFIED** (тест-портал: документ из
+      шаблона #1 на сделку): конверт `{result:{documents:[…]}}` + обратный `filter:{number}` **работает** (возвращает
+      документ; несуществующий номер → `[]`), `entityTypeId`/`entityId` присутствуют. ⚠ **Live-находка:** портал
+      **игнорирует `select`** — ответ **всегда** несёт `downloadUrlMachine`/`pdfUrlMachine` (URL с живым access-токеном);
+      `findDocumentEntities` берёт только `number`/`entityTypeId`/`entityId`, остальное отбрасывает (утечки нет), но сырой
+      ответ **нельзя логировать целиком**. Scope **`documentgenerator`** (метод под `crm.documentgenerator.*`; добавлен в
+      `B24_REQUIRED_SCOPES` вместе с wiring, #109 — потребует ре-consent).
     - `server/utils/intentResolver.ts` — **чистый диспетчер `resolveIntentCandidates(intent, ctx, call, deps)`** (слайс 2
       капстоуна): по распознанному `RecognitionIntent` (§4) вызывает нужный резолвер сущности и отдаёт `IntentResolution`
       (`status: 'resolved'|'unsupported'`, `candidates`, `reason`). Резолверы **инъектируются** (чистый роутинг тестируется
@@ -781,8 +788,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       портало-специфичный `entityTypeId` берётся из `configFields['smart-entity']` (`parseConfiguredEntityTypeId` —
       положит. целое, иначе fail-closed `unsupported`); `smart-id` → `findCandidateById('smart-process', <etid>, value)`,
       `smart-field` → `findCandidateByField('smart-process', <etid>, configFields['smart-field'], value)` (нужны оба).
-      Кандидат несёт `entityTypeId` (для `OWNER_TYPE_ID` триггера, #79). Остальные — `unsupported` с `reason` (не роняем
-      интент молча): `document-number` (гейт live-verify).
+      Кандидат несёт `entityTypeId` (для `OWNER_TYPE_ID` триггера, #79). **`document-number` — ПОДКЛЮЧЁН (мост
+      `via-document`, live-verified):** `findDocumentEntities(value)` → на каждый ref чистый `routeDocumentRef`
+      (`entityTypeId` 2→deal / 31→invoice / == `configFields['smart-entity']`→smart-process; иначе — пропуск) →
+      `findCandidateById(<kind>, <etid>, entityId, {companyId})` **со скоупом по компании плательщика** (IDOR — номер
+      недоверенный, метод без company-фильтра); первые прошедшие кандидаты. Все виды `IdentifierKind` теперь
+      диспатчатся (нет `unsupported`-веток по kind — только по отсутствию конфига у config-driven видов).
       Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
       пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
       (гоняет каждый `IdentifierKind` через диспетчер). **Батч-резолвер `resolveIntentsForOp(intents, ctx, call, deps)`**
@@ -1044,14 +1055,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       которые вызывающий пересекает с company-пулом (IDOR). `sale.order` **не несёт** связки со сделкой/компанией
       (`companyId=null`) → сам по себе к плательщику не привязать, поэтому `sale` — только для маппинга `orderId`→оплаты,
       а не как граница авторизации. Также `sale` нужен для **сторно** (`sale.payment.update PAID=N`, dev `--revert`/`--purge`).
-    - **`documentgenerator`** — **добавлен** (владелец); под мост-документ (`crm.documentgenerator.document.list`,
-      `document-number` → сущность). В seed пока 0 документов — проверка при появлении образца.
+    - **`documentgenerator`** — под мост-документ (`crm.documentgenerator.document.list`, `document-number` → сущность).
+      **LIVE-VERIFIED** (#109): сгенерирован документ из шаблона #1 на seed-сделку → обратный `filter:{number}` работает,
+      мост резолвит сущность (`pnpm verify:109` #8). **Теперь и в `B24_REQUIRED_SCOPES` приложения** (wiring в hot-path).
     - **`im`** — понадобится позже для уведомлений в чат (стадия 6, `im.message.add`); на текущем тестовом
       хуке не проверялось.
     Требуемые скоупы **самого приложения** (не вебхука) — `app/config/b24.ts` `B24_REQUIRED_SCOPES`
-    (`crm`, **`sale`** (#172, `order-id`→`sale.payment.list`), `im`, `user_brief`, `placement`). ⚠ Добавление `sale`
-    **потребует ре-consent** на уже установленных порталах. `documentgenerator` там пока **нет** (мост-документ ещё
-    не в hot-path); добавить в контракт при внедрении моста — `PROCESSING.md §8`.
+    (`crm`, **`sale`** (#172, `order-id`→`sale.payment.list`), `im`, **`documentgenerator`** (#109, `via-document` мост),
+    `user_brief`, `placement`). ⚠ Добавление `sale`/`documentgenerator` **потребует ре-consent** на уже установленных
+    порталах (мост-документ теперь в hot-path — `crm.documentgenerator.document.list` в `crm-sync`).
   - `scripts/lib/*.mjs` — общая обвязка банк- и seed-скриптов (одинаковые запуск/проверка/вывод):
     `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
     `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser` — URL-гейт
