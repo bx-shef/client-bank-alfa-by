@@ -9,7 +9,7 @@
 //                                            └─ notify chat (by rules)
 
 import type { StatementItem } from '../../app/types/statement'
-import { dedupKey, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
+import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
 import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
@@ -226,7 +226,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, notified: number, skipped: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -262,6 +262,7 @@ export async function handleCrmSyncJob(
   let created = 0
   let notified = 0
   let skipped = 0
+  let excluded = 0
   let unmatched = 0
   let recognized = 0
   let resolved = 0
@@ -271,6 +272,16 @@ export async function handleCrmSyncJob(
   let allocated = 0
   let distributed = 0
   for (const item of unique) {
+    // Exclusion gate (PROCESSING.md §2 A2): an operation whose account or purpose is
+    // excluded is skipped ENTIRELY — no recognition, no company lookup, no CRM activity, no
+    // allocation, no chat. This is a PROCESSING exclusion (from the chat rules' excludeAccounts/
+    // excludePurposePatterns), distinct from the `directions` chat-only filter below. Runs
+    // before everything else so an excluded op costs no REST. `chat?.rules` holds the lists
+    // (they're configured alongside the chat block); absent ⇒ nothing excluded.
+    if (isExcludedOperation(item, chat?.rules)) {
+      excluded++
+      continue
+    }
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
     // portal's matrices and route each. Pure + cheap → run for every unique op (even
     // ones skipped below) so recognition COVERAGE is observable; the intent is about the
@@ -429,5 +440,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, notified, skipped, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, notified, skipped, excluded, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, credits: credits.length, debits: debits.length }
 }

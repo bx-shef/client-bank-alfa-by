@@ -224,7 +224,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
@@ -235,10 +235,10 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps() // the fake persists the marker across calls
     const j = job([item('d1'), item('d2')])
     const first = await handleCrmSyncJob(j, deps)
-    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, unmatched: 0 })
+    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0 })
     // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -247,7 +247,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -257,7 +257,7 @@ describe('handleCrmSyncJob', () => {
   it('counts unmatched ops (no company) and does NOT remember or notify them', async () => {
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
   })
@@ -271,7 +271,7 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 1 })
+    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 1 })
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
@@ -295,7 +295,7 @@ describe('handleCrmSyncJob', () => {
     expect(calls.chat).toEqual([])
   })
 
-  it('rules gate the announcement: direction / excluded account / excluded purpose', async () => {
+  it('direction rule gates ONLY the announcement, not the write (расход пишется, не оповещается)', async () => {
     // directions: credits only → a created DEBIT is written but not announced.
     const dir = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'] } } })
     const dr = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'debit')]), dir.deps)
@@ -303,16 +303,39 @@ describe('handleCrmSyncJob', () => {
     // `notified++` lives in the notify branch, not alongside `created++`.
     expect(dr).toMatchObject({ created: 2, notified: 1 })
     expect(dir.calls.chat).toEqual([['d1', 'M']])
+  })
 
-    // excluded account (item.account = 'A') → silenced.
+  it('excluded account → op skipped ENTIRELY: no company lookup, no activity, no chat (PROCESSING §2 A2)', async () => {
+    // item.account = 'A' (see item()); excludeAccounts:['A'] must skip the whole op.
     const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
-    await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
-    expect(acc.calls.chat).toEqual([])
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
+    // Full shape: only `excluded` and the приход/расход split move; nothing produced.
+    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 0 })
+    expect(acc.calls.find).toEqual([]) // never even looked up the company
+    expect(acc.calls.activity).toEqual([]) // NO CRM activity written
+    expect(acc.calls.chat).toEqual([]) // NO chat
+  })
 
-    // excluded purpose substring (item.purpose = 'p') → silenced.
+  it('excluded purpose substring → op skipped entirely (no activity, counted excluded)', async () => {
+    // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
-    await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
+    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 0 })
+    expect(pur.calls.activity).toEqual([])
     expect(pur.calls.chat).toEqual([])
+  })
+
+  it('mixed batch: excluded op skipped while a non-excluded op in the SAME batch processes normally', async () => {
+    // Exclude only d1's account. d1.account='A' (excluded); override d2 to a different account.
+    const mix = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
+    const d1 = item('d1', 'credit') // account 'A' → excluded
+    const d2 = { ...item('d2', 'credit'), account: 'B' } // account 'B' → processed
+    const r = await handleCrmSyncJob(job([d1, d2]), mix.deps)
+    expect(r).toMatchObject({ processed: 2, created: 1, excluded: 1, unmatched: 0 })
+    // Only the non-excluded op reached company lookup / activity / chat.
+    expect(mix.calls.find).toEqual([['d2', 'M']])
+    expect(mix.calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
+    expect(mix.calls.chat).toEqual([['d2', 'M']])
   })
 
   // Recognition intent slice (§4, #109): recognize identifiers in the purpose by the

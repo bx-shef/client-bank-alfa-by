@@ -5,7 +5,7 @@ import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
-import { parseRuleLines, shouldNotifyChat } from '~/utils/statement'
+import { isExcludedOperation, parseRuleLines, shouldNotifyChat } from '~/utils/statement'
 import { B24_PAYMENT_TRIGGER } from '~/config/b24'
 import type { OperationDirection } from '~/types/statement'
 
@@ -103,11 +103,23 @@ const triggerCodeModel = computed<string>({
 // Surfaced in the help text so the admin knows exactly what to register/attach.
 const paymentTrigger = B24_PAYMENT_TRIGGER
 
-// Live preview: which mock operations would be announced to the notification chat.
+// Live preview: for each mock operation, whether it's announced to the chat AND whether it's
+// EXCLUDED from import entirely (PROCESSING §2 A2). Excluded ops are a different outcome from
+// direction-silenced ones (excluded = not in CRM at all; silenced = in CRM, just not announced),
+// so the preview labels them distinctly instead of a single «скрыто».
 const preview = computed(() =>
-  MOCK_STATEMENT.items.map(item => ({ item, notify: shouldNotifyChat(item, settings.chat.rules) }))
+  MOCK_STATEMENT.items.map(item => ({
+    item,
+    excluded: isExcludedOperation(item, settings.chat.rules),
+    notify: shouldNotifyChat(item, settings.chat.rules)
+  }))
 )
 const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
+const excludedCount = computed(() => preview.value.filter(r => r.excluded).length)
+const previewSummary = computed(() => {
+  const base = `В чат попадёт ${notifyCount.value} из ${preview.value.length} операций`
+  return excludedCount.value > 0 ? `${base}, ${excludedCount.value} — не импортируется` : base
+})
 </script>
 
 <template>
@@ -219,9 +231,14 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
           </h2>
         </template>
         <div class="space-y-4">
+          <p class="text-sm text-(--ui-color-base-3)">
+            Такие операции <strong>полностью пропускаются</strong>: не создаётся дело в CRM и не уходит
+            уведомление в чат. (Чтобы просто не слать в чат, но заносить в CRM — используйте
+            переключатели «Приходы/Расходы» выше.)
+          </p>
           <B24FormField
-            label="Не уведомлять по счетам"
-            description="По одному номеру счёта в строке."
+            label="Не загружать по счетам"
+            description="По одному номеру счёта в строке. Операции по этим счетам не попадут в CRM."
           >
             <B24Textarea
               v-model="accountsText"
@@ -233,8 +250,8 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
             />
           </B24FormField>
           <B24FormField
-            label="Не уведомлять по теме платежа"
-            description="Подстроки, по одной в строке. Напр.: между своими счетами."
+            label="Не загружать по теме платежа"
+            description="Подстроки, по одной в строке. Совпало — операция не попадёт в CRM. Напр.: между своими счетами."
           >
             <B24Textarea
               v-model="patternsText"
@@ -340,7 +357,7 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
         aria-live="polite"
         data-testid="preview-summary"
       >
-        В чат попадёт {{ notifyCount }} из {{ preview.length }} операций
+        {{ previewSummary }}
       </p>
 
       <B24Alert
@@ -351,7 +368,6 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
       />
 
       <ul
-        v-else
         data-testid="preview-list"
         class="space-y-2"
       >
@@ -361,9 +377,11 @@ const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
           class="flex items-center justify-between gap-3 text-sm"
         >
           <span class="truncate">{{ row.item.counterparty.name }}</span>
+          <!-- Three distinct outcomes: excluded (not imported at all) vs silenced-in-chat
+               (imported, not announced) vs announced. -->
           <B24Badge
-            :label="row.notify ? '→ в чат' : 'скрыто'"
-            :color="row.notify ? 'air-primary-success' : 'air-secondary'"
+            :label="row.excluded ? 'не импортируется' : row.notify ? '→ в чат' : 'скрыто в чате'"
+            :color="row.excluded ? 'air-primary-alert' : row.notify ? 'air-primary-success' : 'air-secondary'"
             variant="soft"
             size="sm"
             class="shrink-0"

@@ -15,6 +15,7 @@ import type { QueryFn } from './tokenStore'
 /** Canonical counter names accumulated per portal. Each is a key of the crm-sync run
  *  summary (server/queue/handlers.ts) — `metricsFromSummary` maps summary → these deltas,
  *  so a rename can't silently drift. NB: the summary also has `skipped` (redelivery noise),
+ *  `excluded` (op skipped by an exclusion rule — PROCESSING §2 A2, not produced work),
  *  `allocatable` (⊇ `ambiguous`, would double-count), and `credits`/`debits` (a приход/расход
  *  split, not a lifetime total) — those are DELIBERATELY not accumulated here. */
 export const METRICS = {

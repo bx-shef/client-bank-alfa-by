@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StatementItem } from '~/types/statement'
-import { dedupKey, directionFromOperType, parseRuleLines, shouldNotifyChat, splitByDirection } from '~/utils/statement'
+import { dedupKey, directionFromOperType, isExcludedOperation, parseRuleLines, shouldNotifyChat, splitByDirection } from '~/utils/statement'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   return {
@@ -95,5 +95,36 @@ describe('shouldNotifyChat', () => {
 
   it('ignores empty exclude patterns', () => {
     expect(shouldNotifyChat(makeItem(), { excludePurposePatterns: ['', '   '] })).toBe(true)
+  })
+})
+
+describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => {
+  it('excludes a listed account (trim-insensitive)', () => {
+    expect(isExcludedOperation(makeItem({ account: 'BY80ACC' }), { excludeAccounts: [' BY80ACC '] })).toBe(true)
+  })
+
+  it('excludes a purpose matching a pattern (case-insensitive)', () => {
+    expect(isExcludedOperation(makeItem({ purpose: 'Перевод МЕЖДУ своими счетами' }), { excludePurposePatterns: ['между своими'] })).toBe(true)
+  })
+
+  it('is NOT triggered by direction — exclusion is account/purpose only, not приход/расход', () => {
+    // A debit is not "excluded"; it's only a chat-direction matter. Excluded = skip whole op.
+    expect(isExcludedOperation(makeItem({ direction: 'debit' }), { directions: ['credit'] })).toBe(false)
+  })
+
+  it('returns false with no rules / empty patterns', () => {
+    expect(isExcludedOperation(makeItem())).toBe(false)
+    expect(isExcludedOperation(makeItem(), { excludePurposePatterns: ['', '  '] })).toBe(false)
+  })
+
+  it('a blank account rule never matches (not even a blank account) — no "exclude everything" trap', () => {
+    // Symmetric with the empty-purpose guard: a whitespace-only excludeAccounts entry is inert.
+    expect(isExcludedOperation(makeItem({ account: '' }), { excludeAccounts: [''] })).toBe(false)
+    expect(isExcludedOperation(makeItem({ account: '  ' }), { excludeAccounts: ['   '] })).toBe(false)
+  })
+
+  it('shouldNotifyChat still silences an excluded op (reuses isExcludedOperation)', () => {
+    const rules = { excludeAccounts: ['BY-SILENT'] }
+    expect(shouldNotifyChat(makeItem({ account: 'BY-SILENT' }), rules)).toBe(false)
   })
 })

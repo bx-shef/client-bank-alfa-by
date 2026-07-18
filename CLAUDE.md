@@ -124,8 +124,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   только на реальных данных (демо-операций мало).
 - `app/components/SettingsForm.vue` — форма настроек чата (#16 PR-C): два пикера чатов на
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
-  поиск через `/api/chat-search`), `B24Switch` приходы/расходы, исключения `B24Textarea` + живой
-  предпросмотр («что попадёт в чат», `B24Badge`) + **`B24Switch` «Авто-проведение оплат»** (`autoDistribute`,
+  поиск через `/api/chat-search`), `B24Switch` приходы/расходы (**фильтр только чат-оповещения**, не записи),
+  блок «Исключения» `B24Textarea` (счёт/подстрока назначения — **исключают операцию из CRM целиком**:
+  `isExcludedOperation` в `statement.ts`, гейт первым в цикле `handleCrmSyncJob`, счётчик `excluded`, PROCESSING §2 A2)
+  + живой предпросмотр («что попадёт в чат», `B24Badge`) + **`B24Switch` «Авто-проведение оплат»** (`autoDistribute`,
   §2 мутационный гейт: при ON — предупреждение `B24Alert`, что приложение будет писать в CRM, + поле `B24Input`
   «стадия оплаченного счёта» → `allocation.invoicePaidStageId` (пусто ⇒ стадию не трогаем) + поле `B24Input`
   **«код триггера автоматизации»** → `allocation.triggerCode` (#79; подсказка показывает канонический
