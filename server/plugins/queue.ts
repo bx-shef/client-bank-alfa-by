@@ -16,8 +16,9 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { listAllBankAccounts } from '../utils/bankTokenStore'
-import { queueRuntimeConfig } from '../queue/runtime'
+import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
+import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
@@ -42,6 +43,7 @@ export default defineNitroPlugin((nitroApp) => {
   let timer: ReturnType<typeof setInterval> | undefined
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined
+  let sweepTimer: ReturnType<typeof setInterval> | undefined
   // Cron runs on exactly ONE instance (QUEUE_CRON=1) — two schedulers would enqueue
   // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
   // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
@@ -152,6 +154,32 @@ export default defineNitroPlugin((nitroApp) => {
     } else {
       console.warn('[queue] token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
     }
+
+    // Wall-clock retention sweep for the statement-PII queues (#245, docs/PRIVACY.md). BullMQ's
+    // age eviction is lazy (fires only on the NEXT terminal job), so an idle portal's last
+    // statement payloads linger past their age. This periodic clean deletes them eagerly —
+    // an actual wall-clock guarantee. On by default (privacy posture); opt out via env.
+    if (envFlag(process.env.STATEMENT_SWEEP, true)) {
+      const sweepDeps = {
+        clean: (queue: SweptQueue, graceMs: number, type: 'completed' | 'failed') =>
+          getQueue(queue).clean(graceMs, 0, type),
+        log: (m: string) => console.info(m),
+        warn: (m: string) => console.warn(m)
+      }
+      const sweepMs = sweepIntervalMs(Number(process.env.STATEMENT_SWEEP_INTERVAL_MIN || 30))
+      const runSweep = async () => {
+        try {
+          await runStatementSweep(sweepDeps)
+        } catch (err) {
+          // Per-queue clean failures are isolated inside runStatementSweep; only an unexpected
+          // throw reaches here. Never let it crash the cron instance.
+          console.error('[queue] statement sweep run failed:', (err as Error)?.message)
+        }
+      }
+      sweepTimer = setInterval(runSweep, sweepMs)
+      void runSweep() // once at boot
+      console.info('[queue] statement retention sweep scheduled (every %d min, #245)', sweepMs / 60_000)
+    }
   } else {
     console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
   }
@@ -160,6 +188,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (timer) clearInterval(timer)
     if (pollTimer) clearInterval(pollTimer)
     if (keepAliveTimer) clearInterval(keepAliveTimer)
+    if (sweepTimer) clearInterval(sweepTimer)
     await Promise.all(workers.map(w => w.close()))
     await closeQueues()
   })

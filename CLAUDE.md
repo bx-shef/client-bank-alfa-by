@@ -557,7 +557,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       отдаёт джоб ровно одному). Крон — ровно на одном инстансе; миграцию гоняет только backend
       (`RUN_MIGRATION`). На крон-инстансе также заводится **суточный keep-alive рефреш токенов** (`runTokenKeepAlive`,
       #175, `TOKEN_KEEPALIVE_HOURS` дефолт 24; гейт на `B24_CLIENT_ID/SECRET`) — чтобы простаивающие порталы не
-      теряли авторизацию на 180-й день (см. `tokenKeepAlive.ts` выше). `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
+      теряли авторизацию на 180-й день (см. `tokenKeepAlive.ts` выше). Там же — **периодический sweep statement-очередей**
+      (`runStatementSweep`, `server/queue/statementSweep.ts`, #245: `STATEMENT_SWEEP` дефолт ON, `STATEMENT_SWEEP_INTERVAL_MIN`
+      дефолт 30): явный `queue.clean(grace,…)` по `file-parse`/`crm-sync` даёт удалению финансовых ПДн **гарантию по стенным
+      часам** (BullMQ-`age` ленивый — вытесняет только на следующей джобе; см. `docs/PRIVACY.md`). Чистое ядро (грейсы из
+      `STATEMENT_JOB_RETENTION`, изоляция per-queue-сбоя) — DI + тесты. `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
       (события всегда 1). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
     - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
       DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
