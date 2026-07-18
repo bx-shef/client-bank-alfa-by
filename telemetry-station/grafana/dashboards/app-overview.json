@@ -1,0 +1,99 @@
+{
+  "uid": "app-overview",
+  "title": "Apps — Overview (OTel)",
+  "tags": ["otel", "telemetry"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "type": "query",
+        "name": "service",
+        "label": "Сервис",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+        "query": "SELECT DISTINCT ServiceName FROM otel.otel_traces ORDER BY ServiceName",
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Спаны в минуту (по операции)",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time, SpanName, count() AS spans FROM otel.otel_traces WHERE $__timeFilter(Timestamp) AND has([${service:sqlstring}], ServiceName) GROUP BY time, SpanName ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Ошибки в минуту",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 40 }, "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time, count() AS errors FROM otel.otel_traces WHERE $__timeFilter(Timestamp) AND has([${service:sqlstring}], ServiceName) AND StatusCode = 'Error' GROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Латентность p95, мс (по операции)",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 5 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time, SpanName, quantile(0.95)(Duration) / 1e6 AS p95_ms FROM otel.otel_traces WHERE $__timeFilter(Timestamp) AND has([${service:sqlstring}], ServiceName) GROUP BY time, SpanName ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Топ операций по ошибкам (в окне)",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT SpanName, count() AS errors FROM otel.otel_traces WHERE $__timeFilter(Timestamp) AND has([${service:sqlstring}], ServiceName) AND StatusCode = 'Error' GROUP BY SpanName ORDER BY errors DESC LIMIT 20"
+        }
+      ]
+    }
+  ]
+}

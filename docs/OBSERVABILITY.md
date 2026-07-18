@@ -43,15 +43,24 @@
 | `OTEL_SERVICE_NAME` | Имя сервиса в трейсах (дефолт `client-bank-alfa-by-backend`) |
 | `OTEL_SERVICE_VERSION` | Версия сервиса (дефолт — `NUXT_PUBLIC_COMMIT_SHA`) |
 
-## Слайс 2 — коллектор + хранилище + Grafana (infra-side) — дальше
+## Слайс 2 — общая станция (коллектор + ClickHouse + Grafana) ✅
 
-Приёмная сторона по образцу `b24-ai-starter-otel`, но **как opt-in `--profile telemetry`** в
-`docker-compose.prod.yml` (чтобы не грузить дефолтный однодерверный деплой):
-`otel-collector-contrib` (OTLP 4317/4318, bearer-auth, batch, PII-фильтр «поясом») →
-**ClickHouse** (TTL 72ч) → **Grafana** (datasource + дашборды backlog/throughput/failed/REST-latency +
-алерты на рост очереди/failed-set). За операторской аутентификацией/внутренней сетью, наружу не смотрит.
-До этого слайса можно нацелить `OTEL_EXPORTER_OTLP_ENDPOINT` на любой внешний OTLP-приёмник — код
-приложения не меняется.
+Приёмная сторона по образцу `b24-ai-starter-otel` — **отдельный общий сервис** (свой
+`docker-compose`), а не профиль внутри приложения: под цель «много приложений в одной Grafana»
+станция стоит один раз, а все приложения (это + до N других) шлют в неё по адресу и различаются
+по `service.name`. Живёт в [`telemetry-station/`](../telemetry-station/README.md) (самодостаточно,
+выносится в свой репозиторий):
+- `otel-collector-contrib` — OTLP `:4318`/`:4317` с **bearer-auth**, batch, `transform`-процессор
+  (второй барьер PII: срезает `db.statement`/URL/…);
+- **ClickHouse** — хранилище, TTL 72ч (`create_schema:true`, схему создаёт коллектор);
+- **Grafana** `:3001` — провижининг datasource (ClickHouse-плагин) + стартовый дашборд
+  «Apps — Overview» (спаны/ошибки/p95-латентность/топ-ошибок, фильтр по `service.name`).
+- **Переносимый Node-клиент** — [`telemetry-station/clients/node/`](../telemetry-station/clients/node/README.md):
+  копируешь бутстрап + ставишь deps + 2 переменные окружения → приложение в дашбордах.
+
+Подключить это приложение: задать `OTEL_EXPORTER_OTLP_ENDPOINT` (база станции, без `/v1/traces`),
+`OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <токен>`. Бутстрап у него уже
+есть (слайс 1). **Живой прогон станции — за владельцем на сервере** (отдельный деплой, в CI не гоняется).
 
 ## Чем это дополняет «лёгкую» наблюдаемость
 
