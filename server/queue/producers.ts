@@ -10,10 +10,40 @@ import {
   type CrmSyncJob, type EventJob, type FetchJob, type ParseJob
 } from './topology'
 
+/**
+ * Retention for jobs whose payload carries STATEMENT CONTENT (financial PII, #245): the parsed
+ * file (base64, `file-parse`) or the normalized `StatementItem[]` (counterparty / account / amount /
+ * purpose, `crm-sync`). Bounded by AGE so this financial data ages OUT of Redis promptly instead of
+ * lingering under the count-based default (`DEFAULT_JOB_OPTIONS` keeps up to 1000 completed / 5000
+ * failed job payloads). Failed kept longer (a day) for debugging but still bounded. `count` is a
+ * secondary cap (Redis size) — whichever limit hits first evicts.
+ *
+ * Safe for dedup: `crm-sync` idempotency is the B24 activity marker (not a retained job), and a
+ * re-enqueued batch simply re-runs (the marker skips already-written ops). `file-parse`'s
+ * content-hash jobId means an aged-out FAILED file re-runs on re-upload rather than dedup-vanishing.
+ */
+export const STATEMENT_JOB_RETENTION = {
+  removeOnComplete: { age: 3600, count: 50 },
+  removeOnFail: { age: 86400, count: 200 }
+} as const
+
+/**
+ * Retention for `b24-events` — its ONAPPINSTALL payload carries the portal's OAuth **access token
+ * in clear** (+ an encrypted refresh blob). Once the consumer has applied the event (persisted the
+ * token), the credential-bearing payload has no reason to linger in Redis history, so remove the
+ * COMPLETED job immediately; keep FAILED bounded (a day / 200) so an install/uninstall failure is
+ * still debuggable. Idempotency is the DB write + tombstone (#77), not a retained job — safe to drop.
+ */
+export const CREDENTIAL_JOB_RETENTION = {
+  removeOnComplete: true,
+  removeOnFail: { age: 86400, count: 200 }
+} as const
+
 /** True if the job was enqueued; false if the queue is disabled (no Redis). */
 export async function enqueueEvent(job: EventJob): Promise<boolean> {
   if (!queueEnabled()) return false
-  await getQueue(Q_EVENTS).add(Q_EVENTS, job, { jobId: eventJobId(job) })
+  // Drop the credential-bearing completed payload promptly (CREDENTIAL_JOB_RETENTION, #245).
+  await getQueue(Q_EVENTS).add(Q_EVENTS, job, { jobId: eventJobId(job), ...CREDENTIAL_JOB_RETENTION })
   return true
 }
 
@@ -25,21 +55,20 @@ export async function enqueueFetch(job: FetchJob): Promise<boolean> {
 
 export async function enqueueParse(job: ParseJob): Promise<boolean> {
   if (!queueEnabled()) return false
-  // The parse payload carries the whole file (base64, up to ~2.7 МБ). Override the
-  // count-based default retention with a tight age-based one so retained parse jobs
-  // don't bloat Redis, AND so a FAILED file ages out quickly — otherwise the
-  // content-only jobId would make a re-upload of a previously-failed file a silent
-  // no-op (dedup against the retained failed job) instead of re-running it.
-  await getQueue(Q_PARSE).add(Q_PARSE, job, {
-    jobId: parseJobId(job),
-    removeOnComplete: { age: 3600, count: 50 },
-    removeOnFail: { age: 86400, count: 200 }
-  })
+  // The parse payload carries the whole file (base64, up to ~2.7 МБ) — statement content (PII).
+  // Bounded age-based retention (STATEMENT_JOB_RETENTION, #245) so it doesn't bloat Redis AND a
+  // FAILED file ages out quickly — otherwise the content-only jobId would make a re-upload of a
+  // previously-failed file a silent no-op (dedup against the retained failed job) instead of re-running.
+  await getQueue(Q_PARSE).add(Q_PARSE, job, { jobId: parseJobId(job), ...STATEMENT_JOB_RETENTION })
   return true
 }
 
 export async function enqueueCrmSync(job: CrmSyncJob): Promise<boolean> {
   if (!queueEnabled()) return false
-  await getQueue(Q_CRM).add(Q_CRM, job, { jobId: crmSyncJobId(job) })
+  // The crm-sync payload carries the normalized StatementItem[] (counterparty/account/amount/
+  // purpose) — financial PII. Age-bound its retention (#245) instead of the count-based default,
+  // so completed batches of statement data age out of Redis promptly. Dedup is the B24 marker,
+  // not a retained job, so a re-run is safe.
+  await getQueue(Q_CRM).add(Q_CRM, job, { jobId: crmSyncJobId(job), ...STATEMENT_JOB_RETENTION })
   return true
 }
