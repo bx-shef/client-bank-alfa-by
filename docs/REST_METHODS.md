@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-17
+> Last reviewed: 2026-07-18
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -65,11 +65,14 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + метрики `#78` + старт подключения банка `POST /api/bank/connect`): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1: креды привязываются ко всему порталу → только админ). |
 
 > **HTTP, не REST-метод:** OAuth-токен портала обновляем на `oauth/token` (endpoint Bitrix
-> `oauth.bitrix.info/oauth/token/`, `server/utils/b24Oauth.ts`) — это не REST-метод транспорта, а прямой
-> запрос к token endpoint. Он **остался на прямом `$fetch`** (не jssdk): его использует только
-> проактивный keep-alive-крон (`tokenKeepAlive.ts`→`ensureAccessToken.ts`, #175), которому нужен
-> advisory-lock сериализации рефреша — SDK его не даёт (осознанный компромисс #191). Других
-> Bitrix-token-endpoint'ов нет.
+> `oauth.bitrix.info/oauth/token/`) — это не REST-метод транспорта, а прямой запрос к token endpoint.
+> Теперь он тоже идёт **через jssdk** (`sdkRefreshTransport` → `B24OAuth.auth.refreshAuth`, `b24Sdk.ts`),
+> так что весь исходящий B24-трафик — один транспорт. Единственный его вызыватель — проактивный
+> keep-alive-крон (`tokenKeepAlive.ts`→`ensureAccessToken.ts`, #175); вокруг рефреша `ensureAccessToken`
+> держит per-portal **advisory-lock** (#35) — его SDK не даёт, поэтому лок остаётся на этом пути (крон
+> идемпотентно рефрешит простаивающие порталы, реактивного ретрая-подстраховки у него нет). `b24Oauth.ts`
+> оставляет только чистые `buildRefreshBody`/`parseRefreshResponse` (тело/разбор). Других
+> Bitrix-token-endpoint'ов нет; сырого `$fetch` к Bitrix в коде больше нет.
 
 ## Планируется (следующие PR)
 

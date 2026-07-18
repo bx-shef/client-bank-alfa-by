@@ -859,7 +859,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     pg advisory-lock `server/utils/dbLock.ts` + double-checked re-read внутри лока — при scale-out
     N воркеров рефрешат портал ровно один раз, не гоняясь на ротации refresh-токена; **`{force:true}`** —
     рефреш и при clock-fresh токене (реактивный ретрай после раннего отказа сервера), тем же локом, refresh
-    только если stored-токен всё ещё отвергнутый (иначе берём чужой свежий — без лишней ротации); DI + тесты),
+    только если stored-токен всё ещё отвергнутый (иначе берём чужой свежий — без лишней ротации); DI + тесты.
+    **Сам POST рефреша теперь через jssdk** — `postRefresh` = `sdkRefreshTransport` (`B24OAuth.auth.refreshAuth`,
+    `b24Sdk.ts`, bounded `withTimeout` 15с чтобы хунг-OAuth не держал лок); сырого `$fetch` к Bitrix в коде больше
+    нет. Advisory-lock (#35) остаётся ровно здесь, т.к. реактивный рефреш SDK его обходит),
     `server/utils/tokenKeepAlive.ts` (**проактивный keep-alive рефреш, #175**: `refresh_token` живёт ~180 д,
     установленный, но **простаивающий** портал не делает REST-вызовов → ленивый рефреш не срабатывает → токен
     молча умирает на 180-й день. Раз в сутки крон `runTokenKeepAlive` рефрешит **только** порталы у истечения:

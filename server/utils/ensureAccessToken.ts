@@ -7,8 +7,14 @@
 // hit the same near-expiry portal, exactly ONE refreshes (rotating the refresh token)
 // and the rest reuse the result. Without this, concurrent refreshes race on B24's
 // refresh-token rotation and permanently break the portal's stored credentials.
+//
+// TRANSPORT: the actual refresh POST goes through the jssdk (`sdkRefreshTransport` →
+// `B24OAuth.auth.refreshAuth`), so ALL outbound B24 traffic shares one transport. This is the
+// keep-alive path's only remaining use (#175) — the crm-sync hot path uses the SDK's own reactive
+// refresh. The advisory lock stays HERE because the SDK's reactive refresh bypasses it (#35).
 
-import { B24_OAUTH_TOKEN_URL, buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
+import { buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
+import { sdkRefreshTransport } from './b24Sdk'
 import { withAdvisoryLock } from './dbLock'
 import { getToken, saveToken } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
@@ -36,29 +42,15 @@ const liveDeps: RefreshDeps = {
   withLock: withAdvisoryLock,
   loadToken: getToken,
   saveToken,
-  postRefresh: (body) => {
-    // Cast $fetch to a plain signature to opt out of Nitro route-type inference —
-    // a dynamic (non-literal) URL makes it recurse over the route table and overflow
-    // the type checker (TS2321), same guard as server/utils/b24Rest.ts callRest.
-    const fetchJson = $fetch as unknown as (
-      url: string,
-      opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
-    ) => Promise<unknown>
-    return fetchJson(B24_OAUTH_TOKEN_URL, {
-      method: 'POST',
-      body,
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      // Bound the POST so a hung OAuth call can't hold the advisory lock + pooled
-      // connection indefinitely (the whole refresh runs inside the lock).
-      timeout: 15_000
-    })
-  }
+  // Refresh through the jssdk transport (`B24OAuth.auth.refreshAuth`), bounded (15s) so a hung
+  // OAuth call can't pin the advisory lock + pooled connection (the whole refresh runs in the lock).
+  postRefresh: sdkRefreshTransport({ timeoutMs: 15_000 })
 }
 
 /**
  * Return a valid access token for the portal, refreshing (once, under a per-portal
  * lock) if within the skew of expiry. Persists the rotated access+refresh tokens.
- * `deps` defaults to live (advisory lock + `$fetch`); tests inject fakes.
+ * `deps` defaults to live (advisory lock + jssdk refresh via `sdkRefreshTransport`); tests inject fakes.
  *
  * `opts.force` refreshes even when the token looks clock-fresh — for a REACTIVE retry
  * after B24 rejected the access token before its computed expiry (clock skew / early

@@ -52,9 +52,10 @@
   **Весь B24 REST — на jssdk (миграция «всё на JsSdk»):** и UI-фрейм-роуты (`settings`/`chat-settings`/`chat-search`/
   `import`/`metrics`) переведены с сырого `$fetch`-`callRest` на `makeFrameRestCall` (тот же SDK по фрейм-токену за
   SSRF-гейтом `assertPortalHost`); от `b24Rest.ts` остался **только** SSRF-гейт, сырые `callRest`/`restUrl`/`B24RestError`/
-  `isExpiredTokenError`/`[rest-timing]` удалены. Единственное исключение на прямом `$fetch` — keep-alive-рефреш
-  (`ensureAccessToken`/`b24Oauth`, #175): ему нужен advisory-lock, которого SDK не даёт. `makeSdkRestCall` ре-аттачит
-  `total`/`next` из `getTotal()`/`isMore()`, иначе списковая пагинация теряла бы страницы.
+  `isExpiredTokenError`/`[rest-timing]` удалены. **Keep-alive-рефреш (#175) тоже переведён на jssdk**
+  (`sdkRefreshTransport` → `B24OAuth.auth.refreshAuth`) — сырого `$fetch` к Bitrix в коде больше нет; при этом
+  `ensureAccessToken` держит вокруг рефреша per-portal advisory-lock (#35), которого SDK не даёт. `makeSdkRestCall`
+  ре-аттачит `total`/`next` из `getTotal()`/`isMore()`, иначе списковая пагинация теряла бы страницы.
 
 ### Текущее состояние `main`
 

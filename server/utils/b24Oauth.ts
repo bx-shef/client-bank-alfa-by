@@ -1,9 +1,9 @@
-// Bitrix24 OAuth token refresh (server-side). Pure URL/parse helpers so the
+// Bitrix24 OAuth token refresh (server-side). Pure body/parse helpers so the
 // contract is unit-testable without hitting the network. Refreshing needs the
 // APP's client_id/client_secret (env B24_CLIENT_ID / B24_CLIENT_SECRET) — the
-// stored refresh_token alone isn't enough.
-
-export const B24_OAUTH_TOKEN_URL = 'https://oauth.bitrix.info/oauth/token/'
+// stored refresh_token alone isn't enough. The actual POST goes through the jssdk
+// transport now (`sdkRefreshTransport` → `B24OAuth.auth.refreshAuth`, which targets
+// `oauth.bitrix.info`); these helpers just build the body and parse the response.
 
 export interface B24OAuthConfig {
   clientId: string

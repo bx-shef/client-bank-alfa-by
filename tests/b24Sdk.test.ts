@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { B24OAuth } from '@bitrix24/b24jssdk'
+import type { B24OAuthParams } from '@bitrix24/b24jssdk'
 import type { OAuthCallClient, SdkAjaxResult, SdkPortalDeps } from '../server/utils/b24Sdk'
 import {
   buildRefreshPersist,
@@ -8,9 +9,12 @@ import {
   makeSdkBatchCall,
   makeSdkRestCall,
   oauthParamsFromToken,
+  rawTokenFromRefresh,
   SDK_BATCH_MAX,
   sdkPortalDeps,
-  tokenFromOAuthParams
+  sdkRefreshTransport,
+  tokenFromOAuthParams,
+  withTimeout
 } from '../server/utils/b24Sdk'
 import type { PortalToken, QueryFn } from '../server/utils/tokenStore'
 import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
@@ -72,7 +76,8 @@ function fakeClient(
     } },
     setCallbackRefreshAuth: () => {},
     setCustomRefreshAuth: () => {},
-    setRestrictionManagerParams: () => {}
+    setRestrictionManagerParams: () => {},
+    auth: { refreshAuth: async () => false }
   }
   return { client, calls, batches }
 }
@@ -436,5 +441,75 @@ describe('makeFrameRestCall (frame-token jssdk transport + SSRF gate #149)', () 
     // #123: in-client retry disabled on the frame client too (fail fast), throttle base preserved.
     expect(restrictionParams).toHaveLength(1)
     expect(restrictionParams[0]).toMatchObject({ maxRetries: 1, retryOnNetworkError: false, rateLimit: { drainRate: 2 } })
+  })
+})
+
+describe('withTimeout', () => {
+  it('resolves the value on the fast path', async () => {
+    expect(await withTimeout(Promise.resolve(7), 1_000)).toBe(7)
+  })
+  it('rejects when the promise outruns the timeout', async () => {
+    await expect(withTimeout(new Promise<never>(() => {}), 10)).rejects.toThrow(/no response within 10ms/)
+  })
+})
+
+describe('rawTokenFromRefresh', () => {
+  const cap = (o: Partial<PortalToken> = {}) => oauthParamsFromToken(token(o), { nowMs: 0 })
+  const authData = { access_token: 'AD_AT', refresh_token: 'AD_RT', expires: 0, expires_in: 99, domain: 'd', member_id: 'MAD' }
+  it('prefers captured params over authData', () => {
+    const r = rawTokenFromRefresh(cap({ accessToken: 'CAP_AT', refreshToken: 'CAP_RT', memberId: 'MC' }), authData)
+    expect(r).toMatchObject({ access_token: 'CAP_AT', refresh_token: 'CAP_RT', member_id: 'MC' })
+  })
+  it('falls back to authData when captured is undefined', () => {
+    expect(rawTokenFromRefresh(undefined, authData)).toMatchObject({ access_token: 'AD_AT', refresh_token: 'AD_RT', expires_in: 99, member_id: 'MAD' })
+  })
+  it('leaves access/refresh UNDEFINED when neither source has them → parseRefreshResponse fails closed', () => {
+    const r = rawTokenFromRefresh(undefined, false)
+    expect(r.access_token).toBeUndefined()
+    expect(r.refresh_token).toBeUndefined()
+  })
+})
+
+describe('sdkRefreshTransport (keep-alive refresh via SDK, #175)', () => {
+  it('drives auth.refreshAuth with the stored refresh token + creds and returns the raw token JSON', async () => {
+    let cb: ((a: { authData: never, b24OAuthParams: B24OAuthParams }) => Promise<void>) | null = null
+    let ctor: { params: B24OAuthParams, secret: { clientId: string, clientSecret: string } } | null = null
+    vi.mocked(B24OAuth).mockReset()
+    vi.mocked(B24OAuth).mockImplementation((function (params: B24OAuthParams, secret: { clientId: string, clientSecret: string }) {
+      ctor = { params, secret }
+      return {
+        setCallbackRefreshAuth: (c: typeof cb) => { cb = c },
+        auth: { refreshAuth: async () => {
+          // The SDK fires the persist callback with the refreshed params, then returns AuthData.
+          // The SDK sets expiresIn from the fresh OAuth response (~3600), NOT from an absolute
+          // expiry — model that so rawTokenFromRefresh yields a sane expires_in for the caller.
+          const refreshed: B24OAuthParams = { ...oauthParamsFromToken(token({ accessToken: 'NEW_AT', refreshToken: 'NEW_RT', memberId: 'M1' }), { nowMs: 0 }), expiresIn: 3600 }
+          await cb!({ authData: {} as never, b24OAuthParams: refreshed })
+          return { access_token: 'NEW_AT', refresh_token: 'NEW_RT', expires: 0, expires_in: 3600, domain: 'x', member_id: 'M1' }
+        } }
+      }
+    }) as unknown as typeof B24OAuth)
+
+    const body = new URLSearchParams({ grant_type: 'refresh_token', client_id: 'cid', client_secret: 'sec', refresh_token: 'RT' }).toString()
+    const raw = await sdkRefreshTransport()(body) as Record<string, unknown>
+
+    // Built with the stored refresh token + app creds; refresh POSTs to the OAuth server
+    // (domain is a placeholder — serverEndpoint is oauth.bitrix.info).
+    expect(ctor!.params).toMatchObject({ refreshToken: 'RT', serverEndpoint: 'https://oauth.bitrix.info/rest/' })
+    expect(ctor!.secret).toEqual({ clientId: 'cid', clientSecret: 'sec' })
+    // Captured refreshed params → the raw JSON parseRefreshResponse consumes.
+    expect(raw).toMatchObject({ access_token: 'NEW_AT', refresh_token: 'NEW_RT', expires_in: 3600, member_id: 'M1' })
+  })
+
+  it('propagates a refresh failure (→ ensureAccessToken lets the job fail; lock released)', async () => {
+    vi.mocked(B24OAuth).mockReset()
+    vi.mocked(B24OAuth).mockImplementation((function () {
+      return {
+        setCallbackRefreshAuth: () => {},
+        auth: { refreshAuth: async () => { throw new Error('invalid_grant') } }
+      }
+    }) as unknown as typeof B24OAuth)
+    const body = new URLSearchParams({ client_id: 'c', client_secret: 's', refresh_token: 'DEAD' }).toString()
+    await expect(sdkRefreshTransport()(body)).rejects.toThrow('invalid_grant')
   })
 })
