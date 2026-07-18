@@ -75,7 +75,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -109,8 +109,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.resolve.push([companyId, intents.map(i => i.kind), memberId, isNegativeStage ? 'staged' : 'unfiltered', configFields])
       return o.resolve ?? []
     },
-    loadNegativeStagePredicate: async (memberId) => {
+    loadNegativeStagePredicate: async (memberId, smartEntityTypeId) => {
       calls.negStage.push(memberId)
+      calls.negStageSmart.push(smartEntityTypeId ?? null)
       return negativeStage
     },
     onResolved: (it, resolutions, memberId) => {
@@ -562,6 +563,30 @@ describe('handleCrmSyncJob', () => {
     await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect((calls.resolve[0] as unknown[])[3]).toBe('staged') // predicate passed through
     expect(calls.negStage).toEqual(['M'])
+    expect(calls.negStageSmart).toEqual([null]) // no smart-entity configured → null forwarded
+  })
+
+  // Handler→loader wiring (#109 SP negative-stage slice): the configured smart-process
+  // entityTypeId (configFields['smart-entity'], parsed) must reach loadNegativeStagePredicate
+  // so the predicate can also exclude a lost SP element. Pins the parse+forward seam.
+  it('forwards the parsed smart-entity entityTypeId into loadNegativeStagePredicate', async () => {
+    const withSmart: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: { 'smart-entity': '1032' },
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }]
+    }
+    const { deps, calls } = fakeDeps({ recognition: withSmart, resolve: hit, negativeStage: () => false })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.negStageSmart).toEqual([1032]) // parsed to a positive int and forwarded
+  })
+
+  it('forwards null when smart-entity is blank/non-numeric (fail-closed, SP not loaded)', async () => {
+    const badSmart: RecognitionSettings = {
+      alphabet: 'cyrillic', configFields: { 'smart-entity': 'abc' },
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }]
+    }
+    const { deps, calls } = fakeDeps({ recognition: badSmart, resolve: hit, negativeStage: () => false })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(calls.negStageSmart).toEqual([null])
   })
 
   // §4 by-config-field: the portal's configFields map must reach resolveIntents so the

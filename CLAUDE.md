@@ -772,9 +772,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `executeTriggerViaRest`
       → `{result:true}` на сделке OWNER_TYPE_ID=2 и смарт-процессе OWNER_TYPE_ID=1044; незарегистрированный CODE → `not registered`).
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
-      (инвойсы + сделки) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
+      (инвойсы + сделки + смарт-процесс, если настроен) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
       `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
-      предикат исключает `negative(инвойс) ∪ settled(инвойс) ∪ negative(сделка)`: **оплаченный инвойс (`:P`,
+      предикат исключает `negative(инвойс) ∪ settled(инвойс) ∪ negative(сделка) ∪ negative(СП, если настроен `smart-entity`)`: **оплаченный инвойс (`:P`,
       `SEMANTICS='S'`) больше не кандидат** (иначе вторая оплата той же суммы молча садилась на закрытый счёт и —
       при `autoDistribute` — пере-проводила `crm.item.update`). Сделки — только negative (WON-сделку не исключаем:
       её namespace иной — `WON` без `DT31_`, а «оплаченность» сделки решается на уровне оплаты `paid:'Y'`).
@@ -791,10 +791,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `C<cat>:`-префикса (форма stage-id дефолтной воронки сделки — `LOSE` vs `C0:LOSE` — вживую не подтверждена;
       strip false-negative-safe: только добавляет матч по фиксированным `LOSE`/`APOLOGY`, валидного кандидата не
       теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
-      Смарт-процессы в **предикат отрицательных стадий пока не включены** (их `entityTypeId` портало-специфичен) —
-      хотя интенты `smart-id`/`smart-field` уже резолвятся (пункт 3): смарт-процесс-кандидат сейчас **не отсеивается**
-      по FAIL-стадии (follow-up — расширить `negativeStages` на СП по `configFields['smart-entity']`). DI, тесты
-      (`tests/negativeStages.test.ts`).
+      **Смарт-процессы включены в предикат** (когда `entityTypeId` СП настроен, `configFields['smart-entity']` →
+      `parseConfiguredEntityTypeId`): `buildPortalNegativeStagePredicate(call, batch, smartEntityTypeId?)` грузит FAIL-стадии
+      СП (`DYNAMIC_<etid>_STAGE_<cat>` → `DT<etid>_<cat>:FAIL`, live-confirmed) и юнионит их — лост-элемент СП больше не
+      кандидат на разнесение; namespace `DT<etid>_…` не пересекается с инвойсом (`DT31_…`)/сделкой (`LOSE`). СП **не
+      настроен** ⇒ его стадии не грузятся (поведение прежнее, СП не отсеивается). `handlers.ts` прокидывает разобранный
+      etid в `loadNegativeStagePredicate`; `failOpenEntities` и диагностика расширены на `smartProcess` (участвует в
+      fail-open-алерте только когда настроен). DI, тесты (`tests/negativeStages.test.ts`).
     **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
     встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента = lever-2** (общий bucket +
     одна загрузка токена на джобу вместо ~6·N на батч) + evict-on-error/TTL, реактивный рефреш у самого SDK. Прежний ручной advisory-locked

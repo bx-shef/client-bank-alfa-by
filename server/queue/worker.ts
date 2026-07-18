@@ -215,18 +215,18 @@ export function liveHandlerDeps(): HandlerDeps {
     // so 0 negatives across ≥1 funnel (invoice OR deal, symmetric) is warned (else we'd
     // allocate onto a «Не оплачен» invoice / lost deal). A REST error propagates (fail the
     // job → clean retry).
-    loadNegativeStagePredicate: async (memberId) => {
+    loadNegativeStagePredicate: async (memberId, smartEntityTypeId) => {
       const call = await resolvePortalCall(memberId)
       if (!call) return null
       // Batch the per-funnel `crm.status.list` fan-out into one request (#191). The batch
       // shares the SAME memoised SDK client (rate-limiter bucket) as `call`.
       const batch = await resolvePortalCall.batch(memberId)
-      const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call, batch)
+      const { predicate, diagnostics } = await buildPortalNegativeStagePredicate(call, batch, smartEntityTypeId)
       const suspicious = failOpenEntities(diagnostics)
       if (suspicious.length > 0) {
         const detail = suspicious.map((e) => {
-          const d = e === 'invoice' ? diagnostics.invoice : diagnostics.deal
-          return `${e}(funnels=${d.categories},neg=${d.negativeStages},empty=${d.emptyCategories})`
+          const d = e === 'invoice' ? diagnostics.invoice : e === 'deal' ? diagnostics.deal : diagnostics.smartProcess
+          return `${e}(funnels=${d?.categories},neg=${d?.negativeStages},empty=${d?.emptyCategories})`
         }).join(' ')
         console.warn(`[stage] portal ${memberId}: suspicious negative-stage load — ${detail} (a funnel with 0 lost/fail stages, or none enumerated) — check rights/config; those entities won't be stage-excluded (fail-open)`)
       }

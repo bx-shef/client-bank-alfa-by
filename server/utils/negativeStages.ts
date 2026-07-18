@@ -27,7 +27,7 @@ import {
 import { SMART_INVOICE_ENTITY_TYPE_ID } from './invoiceLookup'
 import {
   dealStageEntityId, invoiceStageEntityId, loadStageExclusions,
-  makeIsNegativeStage, parseStageExclusions, stageStatusListParams
+  makeIsNegativeStage, parseStageExclusions, smartProcessStageEntityId, stageStatusListParams
 } from './stageLoader'
 
 /** Per-entity-type diagnostics for the fail-open alert: how many funnels the entity
@@ -50,6 +50,10 @@ export interface EntityStageDiagnostics {
 export interface NegativeStageDiagnostics {
   invoice: EntityStageDiagnostics
   deal: EntityStageDiagnostics
+  /** Present ONLY when a smart-process entityTypeId was configured for the portal (from
+   *  `configFields['smart-entity']`). Absent ⇒ SP not configured ⇒ its FAIL stages are not
+   *  loaded (and an SP candidate isn't stage-excluded — the same fail-open posture as before). */
+  smartProcess?: EntityStageDiagnostics
 }
 
 export interface PortalNegativeStages {
@@ -89,6 +93,9 @@ export function failOpenEntities(diagnostics: NegativeStageDiagnostics): string[
   const broken = (d: EntityStageDiagnostics): boolean => d.negativeStages === 0 || d.emptyCategories > 0
   if (broken(diagnostics.invoice)) out.push('invoice')
   if (broken(diagnostics.deal)) out.push('deal')
+  // Smart process only participates when configured (diagnostics.smartProcess present);
+  // absent ⇒ not loaded ⇒ nothing to flag (SP candidates simply aren't stage-excluded).
+  if (diagnostics.smartProcess && broken(diagnostics.smartProcess)) out.push('smart-process')
   return out
 }
 
@@ -176,15 +183,21 @@ export async function loadEntityNegativeStages(
 }
 
 /**
- * Build the portal-wide negative-stage predicate (invoices + deals) and diagnostics.
- * Loaded once per crm-sync job by the caller (lazily) and reused for every operation.
- * A transport error from any underlying call propagates (fail the job → clean retry).
+ * Build the portal-wide negative-stage predicate (invoices + deals — and a custom SMART
+ * PROCESS when its entityTypeId is configured) and diagnostics. Loaded once per crm-sync
+ * job by the caller (lazily) and reused for every operation. A transport error from any
+ * underlying call propagates (fail the job → clean retry).
  *
- * Smart processes are NOT included: their `entityTypeId` is portal-specific (from the
- * mapping config) and their intents are still `unsupported` in the resolver — add them
- * here when that slice lands (`smartProcessStageEntityId`).
+ * `smartEntityTypeId` comes from the portal's mapping config (`configFields['smart-entity']`,
+ * parsed via `parseConfiguredEntityTypeId`) — the same value the resolver uses to dispatch
+ * `smart-id`/`smart-field` intents. When present, the SP's FAIL stages
+ * (`DYNAMIC_<etid>_STAGE_<cat>` → `DT<etid>_<cat>:FAIL`, `SEMANTICS='F'`, live-confirmed)
+ * are loaded and unioned in, so a lost SP element stops being an allocation candidate.
+ * When absent (SP not configured), behaviour is exactly as before (SP not stage-excluded).
+ * SP stage ids carry their own `DT<etid>_…` namespace, disjoint from invoice `DT31_…` and
+ * deal `LOSE`/`C<cat>:LOSE`, so the combined set stays unambiguous.
  */
-export async function buildPortalNegativeStagePredicate(call: RestCall, batch?: RestBatch | null): Promise<PortalNegativeStages> {
+export async function buildPortalNegativeStagePredicate(call: RestCall, batch?: RestBatch | null, smartEntityTypeId?: number | null): Promise<PortalNegativeStages> {
   // Invoices ALSO exclude SETTLED (paid/success) stages: a paid invoice must never
   // re-match a second same-amount payment (mirrors paymentLookup's `paid:'Y'` drop).
   // Deals load negatives only — a WON deal is namespaced differently (`WON`, no `DT31_…`),
@@ -193,9 +206,21 @@ export async function buildPortalNegativeStagePredicate(call: RestCall, batch?: 
   // into ONE request (#191); without it, the sequential path runs (unchanged).
   const invoice = await loadEntityNegativeStages(SMART_INVOICE_ENTITY_TYPE_ID, invoiceStageEntityId, call, { includeSettled: true }, batch)
   const deal = await loadEntityNegativeStages(DEAL_ENTITY_TYPE_ID, dealStageEntityId, call, {}, batch)
+  // Smart process is optional — only loaded when the portal configured its entityTypeId.
+  // Load negatives only (like deals): SP settledness on the amount path is handled by the
+  // payment, and SP targets are trigger-fired, not amount-gated.
+  // GUARD: a `smart-entity` misconfigured to the invoice (31) or deal (2) type would query a
+  // bogus `DYNAMIC_<31|2>_STAGE_…` directory (empty ⇒ a spurious fail-open alert) while those
+  // entities are already covered above — treat it as «not configured for SP» instead.
+  const spConfigured = smartEntityTypeId
+    && smartEntityTypeId !== SMART_INVOICE_ENTITY_TYPE_ID
+    && smartEntityTypeId !== DEAL_ENTITY_TYPE_ID
+  const sp = spConfigured
+    ? await loadEntityNegativeStages(smartEntityTypeId as number, cat => smartProcessStageEntityId(smartEntityTypeId as number, cat), call, {}, batch)
+    : null
   // Stage-id namespaces don't collide, so unioning the settled-invoice stages into the
   // single "do-not-allocate" set only ever drops paid INVOICES — never a deal candidate.
-  const union = new Set<string>([...invoice.negative, ...invoice.settled, ...deal.negative])
+  const union = new Set<string>([...invoice.negative, ...invoice.settled, ...deal.negative, ...(sp?.negative ?? [])])
   const isNeg = makeIsNegativeStage(union)
   return {
     // Match the raw stage id OR its deal-category-stripped code (see stripDealCategoryPrefix)
@@ -203,7 +228,8 @@ export async function buildPortalNegativeStagePredicate(call: RestCall, batch?: 
     predicate: (stageId: string) => isNeg(stageId) || isNeg(stripDealCategoryPrefix(stageId)),
     diagnostics: {
       invoice: { categories: invoice.categories, negativeStages: invoice.negative.size, emptyCategories: invoice.emptyCategories },
-      deal: { categories: deal.categories, negativeStages: deal.negative.size, emptyCategories: deal.emptyCategories }
+      deal: { categories: deal.categories, negativeStages: deal.negative.size, emptyCategories: deal.emptyCategories },
+      ...(sp ? { smartProcess: { categories: sp.categories, negativeStages: sp.negative.size, emptyCategories: sp.emptyCategories } } : {})
     }
   }
 }

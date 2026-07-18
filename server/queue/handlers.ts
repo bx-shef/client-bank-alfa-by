@@ -16,6 +16,7 @@ import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils
 import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
 import type { AllocationMutationOpts } from '../../app/utils/allocationMutation'
 import type { IntentResolution } from '../utils/intentResolver'
+import { parseConfiguredEntityTypeId, SMART_ENTITY_CONFIG_KEY } from '../utils/intentResolver'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
 /** Cap on how many recognized intents of ONE operation are sent to the REST resolver
@@ -63,13 +64,14 @@ export interface HandlerDeps {
    *  job → clean retry), like findCompany. */
   resolveIntents: (intents: RecognitionIntent[], companyId: string, memberId: string, isNegativeStage?: (stageId: string) => boolean, configFields?: Record<string, string>) => Promise<IntentResolution[]>
   /** Load the portal's negative-stage predicate (union of invoice + deal fail/lost
-   *  stages) so intent resolution drops candidates in a paid/«Не оплачен»/lost stage.
+   *  stages — plus a custom smart process's FAIL stages when `smartEntityTypeId` is given)
+   *  so intent resolution drops candidates in a paid/«Не оплачен»/lost stage.
    *  Called AT MOST ONCE per job (lazily, only when the first op actually resolves
    *  intents) — the result is reused for every op. `null` ⇒ unavailable (no portal
    *  token) ⇒ resolution proceeds without stage filtering (candidates may include
    *  negative-stage entities — acceptable while nothing is written off them). A REST
    *  error propagates (fail the job → clean retry). */
-  loadNegativeStagePredicate: (memberId: string) => Promise<((stageId: string) => boolean) | null>
+  loadNegativeStagePredicate: (memberId: string, smartEntityTypeId?: number | null) => Promise<((stageId: string) => boolean) | null>
   /** Observe the candidates each recognized intent resolved to (log-only, for coverage
    *  on real traffic before allocation is wired). Called once per matched-company op with
    *  ≥1 recognized intent — whether or not any candidate was found (so it fires even when
@@ -263,8 +265,12 @@ export async function handleCrmSyncJob(
   // ONCE per job — lazily, so a batch that never resolves an intent pays nothing. Reused
   // across ops. `undefined` = not loaded yet; `null`/predicate = loaded (memoized).
   let negativeStage: ((stageId: string) => boolean) | null | undefined
+  // Configured smart-process entityTypeId (portal-specific) so the predicate can also
+  // exclude a lost SP element — same config value the resolver uses for smart-id/smart-field
+  // (§4). Absent/blank/non-numeric ⇒ null ⇒ SP not stage-loaded (unchanged behaviour).
+  const smartEntityTypeId = parseConfiguredEntityTypeId(settings?.recognition?.configFields?.[SMART_ENTITY_CONFIG_KEY])
   const getNegativeStage = async (): Promise<((stageId: string) => boolean) | undefined> => {
-    if (negativeStage === undefined) negativeStage = await deps.loadNegativeStagePredicate(job.memberId)
+    if (negativeStage === undefined) negativeStage = await deps.loadNegativeStagePredicate(job.memberId, smartEntityTypeId)
     return negativeStage ?? undefined
   }
 
