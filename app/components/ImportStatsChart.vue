@@ -20,7 +20,12 @@ import type { ECharts } from 'echarts/core'
 import { computeImportStats, dayBucketsForCurrency, currencyTotal } from '~/utils/importStats'
 import type { StatementItem } from '~/types/statement'
 
-const props = defineProps<{ items: StatementItem[] }>()
+const props = withDefaults(defineProps<{
+  items: StatementItem[]
+  /** Card heading. Defaults to the import wording; pass a neutral title where nothing was
+   *  just imported (e.g. the in-portal /app overview of demo/portal data). */
+  title?: string
+}>(), { title: 'Результат импорта' })
 
 const stats = computed(() => computeImportStats(props.items))
 const currencies = computed(() => stats.value.byCurrency.map(c => c.currency))
@@ -99,6 +104,17 @@ let disposed = false
 /** True when the app is in dark mode (`.dark` on <html>). */
 function isDark(): boolean {
   return typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+}
+
+/** True only in a real browser that can paint a canvas. Headless test DOMs (happy-dom/jsdom)
+ *  return a null 2d context, and ECharts' setOption then throws — so we skip the charts there
+ *  (the count-up tiles still render). */
+function hasCanvas2d(): boolean {
+  try {
+    return typeof document !== 'undefined' && !!document.createElement('canvas').getContext('2d')
+  } catch {
+    return false
+  }
 }
 
 // income = emerald, expense = rose — the SAME income/expense hues the app already uses in
@@ -200,6 +216,11 @@ onMounted(async () => {
   // The component may have unmounted while the dynamic import was in flight — bail before
   // creating observers, or they'd leak (onBeforeUnmount already ran with ro/themeObserver null).
   if (disposed || (!barEl.value && !donutEl.value)) return
+  // Headless test DOM: no canvas context → skip ECharts, but still populate the count-up tiles.
+  if (!hasCanvas2d()) {
+    runCountUp()
+    return
+  }
   core.use([charts.BarChart, charts.PieChart, components.GridComponent, components.TooltipComponent, components.LegendComponent, renderers.CanvasRenderer])
   if (barEl.value) barChart.value = core.init(barEl.value)
   if (donutEl.value) donutChart.value = core.init(donutEl.value)
@@ -238,7 +259,7 @@ onBeforeUnmount(() => {
     <template #header>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="font-semibold">
-          Результат импорта
+          {{ title }}
         </h2>
         <B24Select
           v-if="showSelector"
