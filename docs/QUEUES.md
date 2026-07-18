@@ -112,7 +112,10 @@ flowchart LR
     `2 × DEMO_DELAY_MS` работы, воркеры concurrency=1. Чтобы очередь не росла бесконечно, держите
     `DEMO_LOAD_N × 2 × DEMO_DELAY_MS ≤ DEMO_TICK_SEC × 1000`. Дефолты (N=3, tick=5с, delay=600мс) ≈72% —
     самоограничены; **`DEMO_LOAD_N ≥ 5`** при 5-сек тике (или `DEMO_TICK_SEC=1`) переполнит `crm-sync`.
-    В проде демо выключено (`DEMO_LOAD_N=0`), `removeOnComplete/Fail` (1000/5000) кап completed/failed.
+    В проде демо выключено (`DEMO_LOAD_N=0`), `removeOnComplete/Fail` (1000/5000) кап completed/failed;
+    **очереди с содержимым выписки** (`file-parse`/`crm-sync`) — ограниченное по **возрасту** удержание
+    (`STATEMENT_JOB_RETENTION`: complete 1 ч / fail сутки), чтобы финансовые ПДн вытекали из Redis (#245,
+    [`PRIVACY.md`](PRIVACY.md)).
   - **Демо делит in-process воркеры с боевыми джобами** (concurrency=1): реальный джоб может подождать
     *за* приостановленным демо-джобом (head-of-line). Сейчас неактуально (боевой опрос инертен до
     подключения счетов A7, в проде демо off); при сосуществовании — отдельная демо-очередь / bump concurrency.

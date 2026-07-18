@@ -405,7 +405,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
     `allocation_fact`, `import_result`, `metrics_counter`, `bank_tokens`; дедуп дел — маркер в B24, таблицы нет — #259);
-    `server/plugins/migrate.ts` — идемпотентная миграция на старте.
+    `server/plugins/migrate.ts` — идемпотентная миграция на старте. **Выписки у себя не храним** — только
+    токены/факты/агрегаты; сама выписка транзитна (payload'ы очередей с ограниченным по возрасту удержанием,
+    `STATEMENT_JOB_RETENTION`, #245). Модель хранения/чистки финансовых ПДн — [`docs/PRIVACY.md`](docs/PRIVACY.md).
   - `server/utils/bankTokenStore.ts` — **стор банк-OAuth токенов** (Альфа/Приор online-fetch, стадия 5; A3) над
     инъектируемым `QueryFn`: `saveBankToken`/`getBankToken`/`listBankTokensForPortal`/`deleteBankTokensForPortal`.
     refresh шифрован `secretCrypto` (тот же `B24_TOKEN_ENC_KEY`), access — в открытом. Ключ `(member_id, provider,

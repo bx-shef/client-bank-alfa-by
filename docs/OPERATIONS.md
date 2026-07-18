@@ -123,6 +123,8 @@
 
 ## Диск / TLS / алерты
 
+- **Приватность/retention:** выписки у себя не храним; содержимое (`file-parse`/`crm-sync` payload'ы)
+  живёт в Redis ограниченно по возрасту (`STATEMENT_JOB_RETENTION`, #245). Модель — [`PRIVACY.md`](PRIVACY.md).
 - **Диск:** тома `redisdata`/Postgres растут; `removeOnComplete/Fail` (1000/5000) капают историю
   очередей. Мониторить свободное место; при заполнении сначала чистить образы/логи, не тома.
 - **TLS:** cert выпускает/обновляет `acme-companion` (общий reverse-proxy). Алерт — истечение <7 д.
