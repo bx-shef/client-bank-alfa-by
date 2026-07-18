@@ -1,0 +1,73 @@
+# Shared telemetry station (#78, docs/OBSERVABILITY.md) — ONE deployment that every app
+# (this bank-import app + up to N others) pushes OTLP into. Distinguished in Grafana by
+# `service.name`. Stand it up ONCE (on a monitoring host); apps just set two env vars
+# (OTEL_EXPORTER_OTLP_ENDPOINT + OTEL_SERVICE_NAME) — see clients/node/README.md.
+#
+# This folder is self-contained and liftable into its own repo. Not part of the app's
+# SSG/build/CI — it deploys separately.
+#
+#   apps ──OTLP(4318, bearer)──► otel-collector ──► clickhouse (72h TTL) ──► grafana (:3001)
+#
+# ⚠ Security: put the collector's OTLP port and Grafana behind TLS / a reverse-proxy / a
+# private network for cross-host traffic — the bearer token is the auth, not transport
+# encryption. See README.md.
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector/config.yaml:/etc/otel/config.yaml:ro
+    environment:
+      OTEL_COLLECTOR_AUTH_TOKEN: ${OTEL_COLLECTOR_AUTH_TOKEN:?set OTEL_COLLECTOR_AUTH_TOKEN (openssl rand -hex 24)}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+    ports:
+      - "4318:4318" # OTLP HTTP — apps push here
+      - "4317:4317" # OTLP gRPC
+    # No healthcheck: the collector-contrib image is distroless (no shell/wget/curl), so an
+    # exec healthcheck can't run. Liveness is the health_check extension on :13133 — probe it
+    # externally (monitoring) if needed. `restart: unless-stopped` covers crashes.
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: otel
+      # Let the default user authenticate with the password (native + http).
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Consumed by the provisioned datasource (grafana/provisioning/datasources).
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000" # Grafana UI
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  clickhouse_data:
+  grafana_data:

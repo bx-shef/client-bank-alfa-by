@@ -1,0 +1,19 @@
+# Auto-provisioned ClickHouse datasource for the OTel tables the collector writes.
+# Password comes from the CLICKHOUSE_PASSWORD env var passed to the grafana container.
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    isDefault: true
+    jsonData:
+      host: clickhouse
+      port: 9000
+      protocol: native
+      username: default
+      defaultDatabase: otel
+    secureJsonData:
+      password: $CLICKHOUSE_PASSWORD
+    editable: false
