@@ -739,8 +739,13 @@ REST-триггер позволяет передать доп. параметр
 
 **Как берётся пакет** — тот же путь, что install/uninstall (переиспользуем инфраструктуру): `event.bind`
 этих событий на установке на `/api/b24/events` → webhook → **верификация `application_token`**
-(`appTokenVerdict`, fail-closed) → `action: 'reconcile-deletion'` → очередь **`b24-events`** (Redis нет →
-синхронный фолбэк). Дедуп ретрая — `jobId = member_id|event|ID|ts`.
+(`appTokenVerdict`, fail-closed, как uninstall — OAuth в пакете нет) → `action: 'reconcile-deletion'` →
+**отдельная очередь `b24-deletions`** (изоляция от критичного install/uninstall-пути `b24-events`).
+**Без синхронного фолбэка** (в отличие от install): пропущенное при недоступном Redis удаление
+восстанавливается ручной кнопкой «пересчитать» (§3), поэтому webhook не держим. Дедуп ретрая —
+`deletionJobId = del|member_id|event|ID|ts`. Классификация вида сущности (наш payment/dist-СП vs
+инвойс vs other) — **в консьюмере** (там доступен SP-конфиг портала из настроек), не на приёме;
+приём кладёт сырые `{eventCode, entityId, entityTypeId?}`.
 
 **Что в пакете** — минимум (сущность удалена): `data.FIELDS.{ID, ENTITY_TYPE_ID}` + `auth.{member_id,
 application_token, domain}` + `ts`. Нормализуем в `DeletionJob { memberId, entity:{kind,id,entityTypeId?},
@@ -775,4 +780,9 @@ ts, eventToken }`. Никаких сумм/счетов (id+тип, приват
    (идемпотентность), пересчёт «осталось» на payment-СП.
 4. UI-вкладка распределения (по образцу sync-payments) + кнопки §3, вкл. **«пересчитать»**.
 5. Пайплайн удаления: `event.bind` новых событий → `DeletionJob` → консьюмер-`reconcile` → чат ошибок.
+   **Ингест готов** (`event.bind` deletion-событий на установке; webhook верифицирует `application_token`
+   и кладёт `DeletionJob` в очередь `b24-deletions`; консьюмер `handleDeletionJob` классифицирует по
+   SP-конфигу портала и маршрутизирует по виду — DI+тесты). **Само `reconcile` (чтение/деактивация строк
+   dist-СП, пересчёт «осталось», запись в чат ошибок) — за транспортом леджера (#3):** сейчас действия
+   консьюмера логируют (без записи в портал).
 6. Ретайр `allocation_fact` (перевод идемпотентности/сторно на СП-маркер+`status`).

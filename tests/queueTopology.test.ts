@@ -5,11 +5,14 @@ import {
   Q_FETCH,
   Q_PARSE,
   Q_CRM,
+  Q_DELETIONS,
   crmSyncJobId,
+  deletionJobId,
   eventJobId,
   fetchJobId,
   parseJobId,
   type CrmSyncJob,
+  type DeletionJob,
   type EventJob,
   type FetchJob,
   type ParseJob
@@ -17,9 +20,19 @@ import {
 import { connectionOptions, redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
-  it('are the four pipeline queues, unique', () => {
-    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM])
-    expect(new Set(QUEUE_NAMES).size).toBe(4)
+  it('are the five pipeline queues, unique', () => {
+    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS])
+    expect(new Set(QUEUE_NAMES).size).toBe(5)
+  })
+})
+
+describe('deletionJobId', () => {
+  it('is member|event|id|ts so a redelivered deletion dedups', () => {
+    const job: DeletionJob = { memberId: 'M1', domain: 'd', eventCode: 'ONCRMDEALDELETE', entityId: '15', ts: '100' }
+    expect(deletionJobId(job)).toBe('del|M1|ONCRMDEALDELETE|15|100')
+    // a different entity / ts is a distinct job
+    expect(deletionJobId({ ...job, entityId: '16' })).not.toBe(deletionJobId(job))
+    expect(deletionJobId({ ...job, ts: '101' })).not.toBe(deletionJobId(job))
   })
 })
 

@@ -133,6 +133,7 @@ function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
     envToken: '',
     loadStoredToken: vi.fn(async () => APP_TOKEN),
     enqueue: vi.fn(async () => true),
+    enqueueDeletion: vi.fn(async () => true),
     saveCredentials: vi.fn(async () => {}),
     deletePortal: vi.fn(async () => {}),
     encrypt: vi.fn((s: string) => `enc(${s})`),
@@ -140,6 +141,49 @@ function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
     ...over
   }
 }
+
+const dealDelete = {
+  event: 'ONCRMDEALDELETE',
+  data: { FIELDS: { ID: '15' } },
+  auth: { domain: 'p.bitrix24.ru', member_id: 'm1', application_token: APP_TOKEN },
+  ts: '1700000000'
+}
+const dynamicDelete = {
+  event: 'ONCRMDYNAMICITEMDELETE',
+  data: { FIELDS: { ID: '39', ENTITY_TYPE_ID: '31' } },
+  auth: { domain: 'p.bitrix24.ru', member_id: 'm1', application_token: APP_TOKEN },
+  ts: '1700000001'
+}
+
+describe('processB24Event — CRM deletion (§9.2)', () => {
+  it('verified deal deletion → reconcile-deletion action with raw fields', async () => {
+    const res = await processB24Event(dealDelete, makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) }))
+    expect(res.status).toBe(200)
+    expect(res.action).toMatchObject({
+      type: 'reconcile-deletion',
+      memberId: 'm1',
+      deletion: { eventCode: 'ONCRMDEALDELETE', entityId: '15' }
+    })
+  })
+
+  it('dynamic-item deletion carries the raw entityTypeId (classification deferred to consumer)', async () => {
+    const res = await processB24Event(dynamicDelete, makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) }))
+    expect(res.action).toMatchObject({ type: 'reconcile-deletion', deletion: { entityTypeId: 31, entityId: '39' } })
+  })
+
+  it('rejects a deletion with a bad application_token (fail-closed, no action)', async () => {
+    const res = await processB24Event(dealDelete, makeDeps({ envToken: 'different', loadStoredToken: vi.fn(async () => 'different') }))
+    expect(res.status).toBe(403)
+    expect(res.action).toBeUndefined()
+  })
+
+  it('acks (no action) a verified deletion with no usable id', async () => {
+    const noId = { ...dealDelete, data: { FIELDS: {} } }
+    const res = await processB24Event(noId, makeDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) }))
+    expect(res.status).toBe(200)
+    expect(res.action).toBeUndefined()
+  })
+})
 
 describe('handleEventRequest — primary (enqueue) path', () => {
   it('enqueues a register job (refresh ENCRYPTED, access clear) and does NOT write synchronously', async () => {
@@ -166,6 +210,37 @@ describe('handleEventRequest — primary (enqueue) path', () => {
     expect(job).toMatchObject({ memberId: 'm1', kind: 'ONAPPUNINSTALL' })
     expect(job.credentials).toBeUndefined()
     expect(deps.deletePortal).not.toHaveBeenCalled()
+  })
+
+  it('enqueues a deletion job (no sync fallback) on a verified deletion event', async () => {
+    const deps = makeReqDeps()
+    const res = await handleEventRequest(dealDelete, deps)
+    expect(res.outcome).toBe('queued')
+    expect(res.status).toBe(200)
+    const job = (deps.enqueueDeletion as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job).toMatchObject({ memberId: 'm1', eventCode: 'ONCRMDEALDELETE', entityId: '15', domain: 'p.bitrix24.ru', ts: '1700000000' })
+    // deletions never take the install/uninstall sync-write path
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    expect(deps.deletePortal).not.toHaveBeenCalled()
+    expect(deps.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('deletion with queue DOWN → outcome none (recoverable via «пересчитать»), no sync fallback', async () => {
+    const deps = makeReqDeps({ enqueueDeletion: vi.fn(async () => false) })
+    const res = await handleEventRequest(dealDelete, deps)
+    expect(res.outcome).toBe('none')
+    expect(res.status).toBe(200)
+    expect(deps.deletePortal).not.toHaveBeenCalled()
+  })
+
+  it('deletion with a throwing enqueue → still ACKs (outcome none), never throws', async () => {
+    const throwingEnqueue = async (): Promise<never> => {
+      throw new Error('redis down')
+    }
+    const deps = makeReqDeps({ enqueueDeletion: vi.fn(throwingEnqueue) })
+    const res = await handleEventRequest(dealDelete, deps)
+    expect(res.outcome).toBe('none')
+    expect(res.status).toBe(200)
   })
 
   it('does nothing (outcome none) and never enqueues on a denied event', async () => {

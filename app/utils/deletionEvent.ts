@@ -65,6 +65,27 @@ function classifyDynamic(entityTypeId: number, cfg: DeletionSpConfig): DeletionE
 }
 
 /**
+ * Classify a deletion from ALREADY-EXTRACTED raw fields (event code + optional dynamic
+ * entityTypeId) against the portal's SP config, or `null` when it's not a deletion we handle / a
+ * dynamic item with an invalid entityTypeId. Shared by `parseDeletionRef` (webhook ingestion) and
+ * the queue consumer (which classifies from the enqueued `DeletionJob` once it has the SP config).
+ */
+export function classifyDeletionKind(
+  rawEventCode: string,
+  entityTypeId: number | undefined,
+  cfg: DeletionSpConfig
+): DeletionEntityKind | null {
+  const code = (rawEventCode || '').toUpperCase()
+  if (code === 'ONCRMDEALDELETE') return 'deal'
+  if (code === 'ONCRMCOMPANYDELETE') return 'company'
+  if (code === 'ONCRMDYNAMICITEMDELETE') {
+    if (!Number.isInteger(entityTypeId) || (entityTypeId as number) <= 0) return null
+    return classifyDynamic(entityTypeId as number, cfg)
+  }
+  return null // not a deletion event we bound
+}
+
+/**
  * Parse a verified deletion webhook payload into a `DeletionRef`, or `null` when it is not a
  * deletion event we handle / has no usable id. `cfg` supplies the portal's SP entityTypeIds so a
  * dynamic-item deletion is classified (invoice / our carrier / our distribution / other). Pure —
@@ -82,14 +103,11 @@ export function parseDeletionRef(payload: unknown, cfg: DeletionSpConfig = {}): 
   const id = String(rawId).trim()
   if (!/^\d+$/.test(id)) return null
 
-  if (code === 'ONCRMDEALDELETE') return { kind: 'deal', id }
-  if (code === 'ONCRMCOMPANYDELETE') return { kind: 'company', id }
-  if (code === 'ONCRMDYNAMICITEMDELETE') {
-    const entityTypeId = Number(fields.ENTITY_TYPE_ID)
-    if (!Number.isInteger(entityTypeId) || entityTypeId <= 0) return null
-    return { kind: classifyDynamic(entityTypeId, cfg), id, entityTypeId }
-  }
-  return null // not a deletion event we bound
+  const isDynamic = (code || '').toUpperCase() === 'ONCRMDYNAMICITEMDELETE'
+  const entityTypeId = isDynamic ? Number(fields.ENTITY_TYPE_ID) : undefined
+  const kind = classifyDeletionKind(code, entityTypeId, cfg)
+  if (!kind) return null
+  return isDynamic ? { kind, id, entityTypeId } : { kind, id }
 }
 
 /**

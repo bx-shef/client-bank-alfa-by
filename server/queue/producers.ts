@@ -5,9 +5,9 @@
 
 import { getQueue, queueEnabled } from './connection'
 import {
-  Q_CRM, Q_EVENTS, Q_FETCH, Q_PARSE,
-  crmSyncJobId, eventJobId, fetchJobId, parseJobId,
-  type CrmSyncJob, type EventJob, type FetchJob, type ParseJob
+  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE,
+  crmSyncJobId, deletionJobId, eventJobId, fetchJobId, parseJobId,
+  type CrmSyncJob, type DeletionJob, type EventJob, type FetchJob, type ParseJob
 } from './topology'
 
 /**
@@ -60,6 +60,14 @@ export async function enqueueParse(job: ParseJob): Promise<boolean> {
   // FAILED file ages out quickly — otherwise the content-only jobId would make a re-upload of a
   // previously-failed file a silent no-op (dedup against the retained failed job) instead of re-running.
   await getQueue(Q_PARSE).add(Q_PARSE, job, { jobId: parseJobId(job), ...STATEMENT_JOB_RETENTION })
+  return true
+}
+
+export async function enqueueDeletion(job: DeletionJob): Promise<boolean> {
+  if (!queueEnabled()) return false
+  // The deletion payload carries only an id + entityTypeId (no financial PII, §9.2), so the default
+  // retention is fine. `deletionJobId` (member|event|id|ts) dedups redelivery of the same deletion.
+  await getQueue(Q_DELETIONS).add(Q_DELETIONS, job, { jobId: deletionJobId(job) })
   return true
 }
 

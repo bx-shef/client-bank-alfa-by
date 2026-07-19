@@ -35,6 +35,7 @@ export const SAFE_MANUAL_ATTR_KEYS = new Set<string>([
   'job.kind', // event job kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL' (event type, not content)
   'job.op_count', // number of operations in a batch / fetched / parsed count
   'job.outcome', // 'ok' | 'error'
+  'job.outcome_kind', // deletion-reconcile outcome enum (reconciled-target/notified-company/… — verdict, not content)
   'job.error_kind', // sanitized error class on a job span (never the message)
   // allocation / processing OUTCOMES (counts + verdicts, never ids-from-purpose or amounts)
   'proc.recognized',

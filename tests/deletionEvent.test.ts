@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { B24_DELETION_EVENTS, SMART_INVOICE_ENTITY_TYPE_ID, isRelevantDeletion, parseDeletionRef } from '~/utils/deletionEvent'
+import { B24_DELETION_EVENTS, SMART_INVOICE_ENTITY_TYPE_ID, classifyDeletionKind, isRelevantDeletion, parseDeletionRef } from '~/utils/deletionEvent'
 
 // Pure deletion-event parser/classifier (#109 §9.2). The payload shape mirrors the live B24
 // event (data.FIELDS.{ID, ENTITY_TYPE_ID}); authenticity is the upstream application_token gate.
@@ -85,6 +85,29 @@ describe('isRelevantDeletion', () => {
       expect(isRelevantDeletion({ kind, id: '1' })).toBe(true)
     }
     expect(isRelevantDeletion({ kind: 'other', id: '1', entityTypeId: 1099 })).toBe(false)
+  })
+})
+
+describe('classifyDeletionKind (raw fields, shared by consumer)', () => {
+  const cfg = { paymentSpEtid: 1044, distributionSpEtid: 1046 }
+  it('classifies deal/company/invoice by code + etid', () => {
+    expect(classifyDeletionKind('ONCRMDEALDELETE', undefined, cfg)).toBe('deal')
+    expect(classifyDeletionKind('ONCRMCOMPANYDELETE', undefined, cfg)).toBe('company')
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', 31, cfg)).toBe('invoice')
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', 1044, cfg)).toBe('payment-carrier')
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', 1046, cfg)).toBe('distribution')
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', 1099, cfg)).toBe('other')
+  })
+  it('is case-insensitive on the code', () => {
+    expect(classifyDeletionKind('OnCrmDealDelete', undefined, cfg)).toBe('deal')
+  })
+  it('null for an unhandled code or an invalid dynamic etid', () => {
+    expect(classifyDeletionKind('ONCRMDEALUPDATE', undefined, cfg)).toBeNull()
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', 0, cfg)).toBeNull()
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', undefined, cfg)).toBeNull()
+  })
+  it('without cfg, a dynamic non-invoice item is other (fail-safe)', () => {
+    expect(classifyDeletionKind('ONCRMDYNAMICITEMDELETE', 1044, {})).toBe('other')
   })
 })
 
