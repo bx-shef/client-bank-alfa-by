@@ -777,7 +777,12 @@ ts, eventToken }`. Никаких сумм/счетов (id+тип, приват
 1. ✅ Чистое ядро `manualAllocation` (#327).
 2. Провижининг payment-СП + dist-СП (структура/поля/права) на установке/апгрейде + самолечение (§5).
 3. Транспорт леджера: запись распределения (`crm.item.add` в dist-СП + маркер), поиск маркера
-   (идемпотентность), пересчёт «осталось» на payment-СП.
+   (идемпотентность), пересчёт «осталось» на payment-СП. **Сделано + подключено в hot-path:**
+   `writeLedgerAllocation` (ensure payment-элемент по маркеру операции → строка распределения по
+   `allocationFactKey` → пересчёт «осталось») вызывается в `crm-sync` при `allocate`, за гейтом
+   `autoDistribute` И провижиненного СП (`payment-sp`/`distribution-sp` в `configFields`) —
+   **дополнительно** к `applyAllocation`, activity-дело не заменяет (carrier-exclusivity отложена).
+   Идемпотентно по маркерам, ошибка → чистый ретрай. Счётчик `ledgerWritten`.
 4. UI-вкладка распределения (по образцу sync-payments) + кнопки §3, вкл. **«пересчитать»**.
 5. Пайплайн удаления: `event.bind` новых событий → `DeletionJob` → консьюмер-`reconcile` → чат ошибок.
    **Ингест готов** (`event.bind` deletion-событий на установке; webhook верифицирует `application_token`

@@ -55,6 +55,8 @@ interface FakeOpts {
   applied?: boolean
   /** what applyTrigger returns (true = trigger fired); default true (#79). */
   triggerFired?: boolean
+  /** what writeLedger returns (true = a new distribution row was created); default true (§9.1). */
+  ledgerCreated?: boolean
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -75,7 +77,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [], ledger: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -147,6 +149,10 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       // candidate (not a stripped {kind,id}) reaches applyTrigger — the #79 OWNER_TYPE_ID wire.
       calls.trigApply.push([it.docId, target.kind, target.id, memberId, code, target.entityTypeId])
       return o.triggerFired ?? true
+    },
+    writeLedger: async (it, target, companyId, memberId, etids) => {
+      calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      return o.ledgerCreated ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
@@ -235,7 +241,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
@@ -249,7 +255,7 @@ describe('handleCrmSyncJob', () => {
     expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0 })
     // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -258,7 +264,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -269,7 +275,7 @@ describe('handleCrmSyncJob', () => {
     // errorChat off (default) → no notice; myCompany null (default) → nothing written.
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
     expect(calls.unmatchedNotify).toEqual([]) // error chat off → no notice
@@ -354,7 +360,7 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 2, debits: 1 })
+    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })
@@ -393,7 +399,7 @@ describe('handleCrmSyncJob', () => {
     const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
     // Full shape: only `excluded` and the приход/расход split move; nothing produced.
-    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(acc.calls.find).toEqual([]) // never even looked up the company
     expect(acc.calls.activity).toEqual([]) // NO CRM activity written
     expect(acc.calls.chat).toEqual([]) // NO chat
@@ -403,7 +409,7 @@ describe('handleCrmSyncJob', () => {
     // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
-    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(pur.calls.activity).toEqual([])
     expect(pur.calls.chat).toEqual([])
   })
@@ -1137,6 +1143,44 @@ describe('handleCrmSyncJob', () => {
     expect(r).toMatchObject({ ambiguous: 1, allocated: 1, distributed: 1 })
     expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M', undefined]]) // smallest id paid
     expect(calls.errChat).toEqual([['d1', 'allocate', 'errchat', 'M']]) // ambiguous still notifies
+  })
+})
+
+describe('handleCrmSyncJob — SP-ledger write at allocate (§9.1)', () => {
+  const job = (items: StatementItem[]): CrmSyncJob => ({ memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items })
+  const invMatrix: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }] }
+  // recognition WITH both SP ids provisioned in configFields → carrier = smart-process.
+  const provisioned: RecognitionSettings = { ...invMatrix, configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' } }
+  const invAt = (id: string, amount: number): IntentResolution => ({
+    kind: 'invoice-number', value: 'СЧ-0007', status: 'resolved', candidates: [{ kind: 'invoice', id, amount, currency: 'BYN' }]
+  })
+
+  it('autoDistribute ON + SP provisioned + exact match → writes the ledger (ledgerWritten bumps)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: provisioned, resolve: [invAt('7', 10)], autoDistribute: true, allocation: { invoicePaidStageId: 'DT31_11:P' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
+    expect(r.ledgerWritten).toBe(1)
+    expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]]) // company + both etids threaded
+  })
+
+  it('autoDistribute OFF → no ledger write (fact-only, unchanged)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: provisioned, resolve: [invAt('7', 10)], autoDistribute: false })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
+    expect(r.ledgerWritten).toBe(0)
+    expect(calls.ledger).toEqual([])
+  })
+
+  it('SP NOT provisioned (no configFields) → no ledger write even with autoDistribute ON', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invMatrix, resolve: [invAt('7', 10)], autoDistribute: true })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
+    expect(r.ledgerWritten).toBe(0)
+    expect(calls.ledger).toEqual([])
+  })
+
+  it('idempotent redelivery (row already existed) → writeLedger called but ledgerWritten stays 0', async () => {
+    const { deps, calls } = fakeDeps({ recognition: provisioned, resolve: [invAt('7', 10)], autoDistribute: true, ledgerCreated: false })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
+    expect(r.ledgerWritten).toBe(0) // no NEW row
+    expect(calls.ledger).toHaveLength(1) // but the (idempotent) write was still invoked
   })
 })
 

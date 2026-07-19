@@ -2,7 +2,8 @@
 // row (idempotent by marker), load a payment's active rows, and recompute its «осталось распределить».
 // DI over the injected `RestCall` — unit-testable with a fake. All wire shapes come from the shared,
 // tested builders in app/utils/distributionLedger.ts; this module only does REST + result extraction
-// + pagination. NOT wired into crm-sync yet (the hot-path connection is the next slice).
+// + pagination. Wired into crm-sync (`writeLedgerAllocation` at `allocate`, behind autoDistribute +
+// provisioned SP) and into the deletion consumer (`reconcileTargetDeletion`).
 
 import type { StatementItem } from '../../app/types/statement'
 import type { AllocationCandidate, AllocationTargetKind } from '../../app/utils/allocation'
