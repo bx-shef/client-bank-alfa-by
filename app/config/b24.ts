@@ -75,3 +75,17 @@ export const SMART_INVOICE_ENTITY_TYPE_ID = 31
  * alongside `B24_BOUND_EVENTS` (both feed the `event.bind` batch). Scope `crm`.
  */
 export const B24_DELETION_EVENTS = ['ONCRMDEALDELETE', 'ONCRMCOMPANYDELETE', 'ONCRMDYNAMICITEMDELETE'] as const
+
+/**
+ * The FULL set of server events the install script binds to the backend handler in ONE
+ * `event.bind` batch: the app lifecycle events (`B24_BOUND_EVENTS`) + the CRM deletion events
+ * (`B24_DELETION_EVENTS`, §9.2 ledger reconcile).
+ *
+ * TARIFF up/downgrade: all deletion events are bound UNCONDITIONALLY and never re-bound. On a
+ * tariff without smart processes, `ONCRMDYNAMICITEMDELETE` simply never fires (no SP elements
+ * exist) — binding it is harmless; on an upgrade it starts firing with no re-install needed. Deal
+ * and company deletions matter to allocation targets regardless of the carrier (СП vs дело). So a
+ * single unconditional bound set is the tariff-robust choice — the carrier decision (`chooseCarrier`)
+ * stays per-operation, the event subscription is static.
+ */
+export const B24_ALL_BOUND_EVENTS = [...B24_BOUND_EVENTS, ...B24_DELETION_EVENTS] as const

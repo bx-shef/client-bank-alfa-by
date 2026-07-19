@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
-import { B24_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
+import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
@@ -88,10 +88,12 @@ async function waitForB24(timeoutMs = 10000): Promise<boolean> {
   return isUseB24.value
 }
 
-/** Binds the server-event handlers (ONAPPINSTALL/ONAPPUNINSTALL) to the backend
- *  endpoint. Must run BEFORE installFinish so the current install's ONAPPINSTALL
- *  (which carries the application_token + OAuth creds) is delivered. Idempotent:
- *  re-installs skip already-correct bindings and re-point stale ones. */
+/** Binds the server-event handlers to the backend endpoint: the app lifecycle events
+ *  (ONAPPINSTALL/ONAPPUNINSTALL — ONAPPINSTALL carries the application_token + OAuth creds) AND
+ *  the CRM deletion events (§9.2 ledger reconcile) in one batch (`B24_ALL_BOUND_EVENTS`). Must run
+ *  BEFORE installFinish so the current install's ONAPPINSTALL is delivered. Idempotent: re-installs
+ *  skip already-correct bindings and re-point stale ones (so this also back-fills the deletion
+ *  bindings on a re-install of an app that predates them). */
 async function bindEvents(): Promise<void> {
   const $b24 = b24Instance.getOrThrow()
 
@@ -102,7 +104,7 @@ async function bindEvents(): Promise<void> {
   }
 
   const existing = initData.value.eventList ?? []
-  const { unbind, bind } = buildEventBindCalls(existing, B24_BOUND_EVENTS, eventHandlerUrl.value)
+  const { unbind, bind } = buildEventBindCalls(existing, B24_ALL_BOUND_EVENTS, eventHandlerUrl.value)
 
   // Best-effort cleanup of stale bindings — a missing one is fine, don't halt.
   if (unbind.length) await $b24.actions.v2.batch.make({ calls: unbind, options: { isHaltOnError: false } })
