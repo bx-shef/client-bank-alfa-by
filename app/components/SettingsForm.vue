@@ -320,6 +320,12 @@ const previewSummary = computed(() => {
         </div>
       </B24Card>
 
+      <!-- Recognition «карта сопоставления» (#109 §4): matrices + alphabet + configFields. -->
+      <RecognitionMap
+        v-model="settings.recognition"
+        :disabled="blocked"
+      />
+
       <!-- Autosave status (no explicit Save button). Announced to screen readers. -->
       <p
         v-if="enabled"
