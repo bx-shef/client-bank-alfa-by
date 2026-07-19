@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildActiveRowsListCall,
+  buildDeactivateRowCall,
   buildDistributionRowAddCall,
   buildMarkerListCall,
   buildNeedRecomputeCall,
+  buildPaymentReadCall,
+  buildRequiresRedistributionCall,
+  buildTargetRowsListCall,
   computeNeedDistribution,
   parentLinkField,
   parseLedgerRow,
+  parsePaymentTotal,
+  parseTargetRow,
   type DistributionRowInput
 } from '~/utils/distributionLedger'
 import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '~/config/distributionSp'
@@ -121,5 +127,63 @@ describe('buildNeedRecomputeCall', () => {
     expect(params.id).toBe(500)
     expect(params.useOriginalUfNames).toBe('Y')
     expect((params.fields as Record<string, unknown>)[buildUfFieldName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(70.01)
+  })
+})
+
+describe('buildTargetRowsListCall', () => {
+  it('filters active rows by target kind+id, selects parent link + source', () => {
+    const { method, params } = buildTargetRowsListCall(1046, 1044, 'invoice', '39', 50)
+    expect(method).toBe('crm.item.list')
+    expect(params.useOriginalUfNames).toBe('Y')
+    const filter = params.filter as Record<string, unknown>
+    expect(filter[buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]).toBe('invoice')
+    expect(filter[buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.targetId.postfix)]).toBe('39')
+    expect(filter[buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)]).toBe('active')
+    expect(params.select).toContain('parentId1044')
+    expect(params.start).toBe(50)
+  })
+})
+
+describe('parseTargetRow', () => {
+  it('extracts rowId, parent payment id and source', () => {
+    const item = { id: '9', parentId1044: '500', [buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.source.postfix)]: 'manual' }
+    expect(parseTargetRow(item, 1046, 1044)).toEqual({ rowId: '9', parentPaymentId: '500', source: 'manual' })
+  })
+  it('null when row or parent id is missing', () => {
+    expect(parseTargetRow({ parentId1044: '500' }, 1046, 1044)).toBeNull()
+    expect(parseTargetRow({ id: '9' }, 1046, 1044)).toBeNull()
+  })
+  it('defaults source to auto', () => {
+    expect(parseTargetRow({ id: '9', parentId1044: '5' }, 1046, 1044)?.source).toBe('auto')
+  })
+})
+
+describe('buildDeactivateRowCall', () => {
+  it('updates status → reverted (soft, history kept)', () => {
+    const { method, params } = buildDeactivateRowCall(1046, '9')
+    expect(method).toBe('crm.item.update')
+    expect(params.id).toBe(9)
+    expect(params.useOriginalUfNames).toBe('Y')
+    expect((params.fields as Record<string, unknown>)[buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)]).toBe('reverted')
+  })
+})
+
+describe('buildRequiresRedistributionCall', () => {
+  it('sets Y/N on the payment carrier', () => {
+    expect((buildRequiresRedistributionCall(1044, '500', true).params.fields as Record<string, unknown>)[buildUfFieldName(1044, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)]).toBe('Y')
+    expect((buildRequiresRedistributionCall(1044, '500', false).params.fields as Record<string, unknown>)[buildUfFieldName(1044, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)]).toBe('N')
+  })
+})
+
+describe('buildPaymentReadCall / parsePaymentTotal', () => {
+  it('reads a payment element by id (opportunity + currency)', () => {
+    const { params } = buildPaymentReadCall(1044, '500')
+    expect((params.filter as Record<string, unknown>).id).toBe(500)
+    expect(params.select).toContain('opportunity')
+  })
+  it('parses total + currency, zeroing a non-finite total', () => {
+    expect(parsePaymentTotal({ opportunity: '100.00', currencyId: 'BYN' })).toEqual({ total: 100, currency: 'BYN' })
+    expect(parsePaymentTotal({ opportunity: 'x', currencyId: 'BYN' })).toEqual({ total: 0, currency: 'BYN' })
+    expect(parsePaymentTotal(undefined)).toEqual({ total: 0, currency: '' })
   })
 })

@@ -15,6 +15,7 @@ import { portalHash } from '../utils/telemetryAttributes'
 import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, DeletionJob, EventJob, FetchJob, ParseJob } from './topology'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
+import { reconcileTargetDeletion } from '../utils/distributionLedgerWrite'
 import { livePortalSdkCall } from '../utils/liveDeps'
 import { distributionSpEtid, paymentSpEtid } from '../../app/config/distributionSp'
 import { demoDelayMs, demoItems, isDemoAccount } from './cron'
@@ -550,8 +551,10 @@ async function bumpMetrics(
  * Live deps for the deletion-reconcile consumer (§9.2). `portalInstalled` and `loadSpConfig` are
  * REAL (token check + settings read via the portal's OAuth token). The reconcile ACTIONS are
  * currently LOG-ONLY placeholders — the actual ledger REST work (list/deactivate distributions,
- * recompute «осталось», error-chat write) lands with the ledger transport slice (§9.3 #3); this
- * slice proves the ingestion→classify→route pipeline. Each stub logs a sanitized, PII-free line.
+ * recompute «осталось»). The `deal`/`invoice` TARGET branch is LIVE (deactivate rows + recompute
+ * parents); `company`/`payment-carrier` error-chat and the `distribution`-row recompute stay log-only
+ * (error-chat needs the errorChat dialog + message templates; a hard-deleted dist row carries no
+ * parent link to recompute — the manual «пересчитать» button covers it). Each stub logs a PII-free line.
  */
 export function liveDeletionDeps(): DeletionReconcileDeps {
   return {
@@ -562,19 +565,26 @@ export function liveDeletionDeps(): DeletionReconcileDeps {
       const cf = parsePortalSettings(await readAppSettingVia(call, SETTINGS_KEY)).recognition.configFields
       return { paymentSpEtid: paymentSpEtid(cf) ?? undefined, distributionSpEtid: distributionSpEtid(cf) ?? undefined }
     },
-    // TODO(ledger slice §9.3 #3): replace the log stubs below with real SP-ledger reconcile.
-    reconcileTargetDeletion: async (job, kind) => {
-      console.info('[deletion] target %s #%s (portal=%s) — reconcile pending ledger transport', kind, logSafe(job.entityId), portalHash(job.memberId))
-      return 0
+    // LIVE: a deleted deal/invoice frees the distributions pointing at it (§9.2).
+    reconcileTargetDeletion: async (job, kind, cfg) => {
+      if (!cfg.paymentSpEtid || !cfg.distributionSpEtid) return 0 // SP not provisioned → no ledger
+      const call = await livePortalSdkCall(job.memberId)
+      if (!call) return 0
+      const targetKind = kind === 'deal' ? 'deal' : 'invoice'
+      const res = await reconcileTargetDeletion(cfg.paymentSpEtid, cfg.distributionSpEtid, targetKind, job.entityId, call)
+      console.info('[deletion] target %s #%s freed=%d parents=%d manual=%d (portal=%s)', kind, logSafe(job.entityId), res.freed, res.parentsRecomputed, res.manualParents, portalHash(job.memberId))
+      return res.freed
     },
+    // TODO(next slice): error-chat notify (needs errorChat dialog + §9.2 message template).
     notifyCompanyDeleted: async (job) => {
-      console.info('[deletion] company #%s (portal=%s) — error-chat pending ledger transport', logSafe(job.entityId), portalHash(job.memberId))
+      console.info('[deletion] company #%s (portal=%s) — error-chat pending', logSafe(job.entityId), portalHash(job.memberId))
     },
     notifyCarrierDamaged: async (job) => {
-      console.info('[deletion] payment-carrier #%s (portal=%s) — error-chat pending ledger transport', logSafe(job.entityId), portalHash(job.memberId))
+      console.info('[deletion] payment-carrier #%s (portal=%s) — error-chat pending', logSafe(job.entityId), portalHash(job.memberId))
     },
+    // A hard-deleted dist row carries no parent link → can't target a recompute; manual «пересчитать» covers it.
     recomputeParent: async (job) => {
-      console.info('[deletion] distribution row #%s (portal=%s) — recompute pending ledger transport', logSafe(job.entityId), portalHash(job.memberId))
+      console.info('[deletion] distribution row #%s (portal=%s) — recompute via manual «пересчитать»', logSafe(job.entityId), portalHash(job.memberId))
     }
   }
 }

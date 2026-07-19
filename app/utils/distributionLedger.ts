@@ -144,3 +144,99 @@ export function buildNeedRecomputeCall(
     }
   }
 }
+
+/** Build the `crm.item.list` call for the ACTIVE distribution rows pointing at a given TARGET
+ *  (`targetKind` + `targetId`) — the input to a target-deletion reconcile (§9.2: a deleted deal/
+ *  invoice frees the distributions on it). Selects the parent link (so the caller knows which
+ *  payment to recompute) + source (manual vs auto → §3). `start` paginates. */
+export function buildTargetRowsListCall(
+  distributionSpEtid: number,
+  paymentSpEtid: number,
+  targetKind: AllocationTargetKind,
+  targetId: string,
+  start?: number
+): { method: string, params: Record<string, unknown> } {
+  const uf = (postfix: string) => buildUfFieldName(distributionSpEtid, postfix)
+  const params: Record<string, unknown> = {
+    entityTypeId: distributionSpEtid,
+    useOriginalUfNames: 'Y',
+    filter: {
+      [uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix)]: targetKind,
+      [uf(DISTRIBUTION_SP_FIELDS.targetId.postfix)]: targetId,
+      [uf(DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active'
+    },
+    select: ['id', parentLinkField(paymentSpEtid), uf(DISTRIBUTION_SP_FIELDS.source.postfix)]
+  }
+  if (start) params.start = start
+  return { method: 'crm.item.list', params }
+}
+
+/** One active distribution row keyed for reconcile: its own id, its parent payment element id, and
+ *  whether it was a manual allocation (drives the «требует распределения» flag on the parent, §3). */
+export interface TargetRowRef {
+  rowId: string
+  parentPaymentId: string
+  source: AllocationSource
+}
+
+/** Parse a target-row list item (from `buildTargetRowsListCall`) into a {@link TargetRowRef}, or
+ *  `null` when the row/parent id is missing. */
+export function parseTargetRow(item: Record<string, unknown>, distributionSpEtid: number, paymentSpEtid: number): TargetRowRef | null {
+  const rowId = item.id
+  const parent = item[parentLinkField(paymentSpEtid)]
+  if (rowId === undefined || rowId === null || `${rowId}` === '') return null
+  if (parent === undefined || parent === null || `${parent}` === '') return null
+  const source = String(item[buildUfFieldName(distributionSpEtid, DISTRIBUTION_SP_FIELDS.source.postfix)] ?? 'auto') === 'manual' ? 'manual' : 'auto'
+  return { rowId: `${rowId}`, parentPaymentId: `${parent}`, source }
+}
+
+/** Build the `crm.item.update` that DEACTIVATES a distribution row (`status → reverted`, history kept
+ *  — we never hard-delete, §9.2). */
+export function buildDeactivateRowCall(distributionSpEtid: number, rowId: string): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.update',
+    params: {
+      entityTypeId: distributionSpEtid,
+      id: Number(rowId),
+      useOriginalUfNames: 'Y',
+      fields: { [buildUfFieldName(distributionSpEtid, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'reverted' }
+    }
+  }
+}
+
+/** Build the `crm.item.update` that sets «требует распределения» (Y/N) on a payment carrier element
+ *  (§3: raised when a MANUAL distribution was freed by a target change/deletion). */
+export function buildRequiresRedistributionCall(
+  paymentSpEtid: number,
+  paymentElementId: string,
+  value: boolean
+): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.update',
+    params: {
+      entityTypeId: paymentSpEtid,
+      id: Number(paymentElementId),
+      useOriginalUfNames: 'Y',
+      fields: { [buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)]: value ? 'Y' : 'N' }
+    }
+  }
+}
+
+/** Build the `crm.item.list` that reads a payment carrier element by id — for its `opportunity`
+ *  (the total) + `currencyId`, needed to recompute «осталось». */
+export function buildPaymentReadCall(paymentSpEtid: number, paymentElementId: string): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.list',
+    params: {
+      entityTypeId: paymentSpEtid,
+      filter: { id: Number(paymentElementId) },
+      select: ['id', 'opportunity', 'currencyId']
+    }
+  }
+}
+
+/** Extract `{ total, currency }` from a payment-read list item. Non-finite total → 0. */
+export function parsePaymentTotal(item: Record<string, unknown> | undefined): { total: number, currency: string } {
+  const total = Number(item?.opportunity)
+  return { total: Number.isFinite(total) ? round2(total) : 0, currency: String(item?.currencyId ?? '') }
+}
