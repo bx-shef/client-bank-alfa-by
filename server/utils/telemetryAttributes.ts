@@ -44,6 +44,7 @@ export const SAFE_MANUAL_ATTR_KEYS = new Set<string>([
   'proc.ambiguous',
   'proc.manual',
   'proc.distributed',
+  'proc.ledger_written', // count of SP-ledger distribution rows written (§9.1)
   // correlation
   'portal.hash'
 ])

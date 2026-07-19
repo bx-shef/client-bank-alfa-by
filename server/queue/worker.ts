@@ -15,7 +15,7 @@ import { portalHash } from '../utils/telemetryAttributes'
 import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, DeletionJob, EventJob, FetchJob, ParseJob } from './topology'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
-import { reconcileTargetDeletion } from '../utils/distributionLedgerWrite'
+import { reconcileTargetDeletion, writeLedgerAllocation } from '../utils/distributionLedgerWrite'
 import { notifyDeletionErrorViaRest } from '../utils/deletionErrorNotify'
 import type { DeletionErrorKind } from '../../app/utils/deletionErrorMessage'
 import { livePortalSdkCall } from '../utils/liveDeps'
@@ -339,6 +339,17 @@ export function liveHandlerDeps(): HandlerDeps {
       }
       return res.applied
     },
+    // Write the decided allocation to the SP-ledger (#109 §9.1/§9.3): payment carrier element +
+    // distribution row + «осталось» recompute. Demo gated; no token → throw (the ledger write is
+    // pending, like applyAllocation's no-token branch, so the job retries rather than silently
+    // skipping). Idempotent by markers, so the retry is safe. Returns whether a NEW row was created.
+    writeLedger: async (item, target, companyId, memberId, etids) => {
+      if (isDemoAccount(item.account)) return false
+      const call = await resolvePortalCall(memberId)
+      if (!call) throw new Error(`writeLedger: no portal token for ${memberId} — retry (ledger write pending)`)
+      const res = await writeLedgerAllocation(etids.paymentSpEtid, etids.distributionSpEtid, item, target, companyId, call)
+      return res.rowCreated
+    },
     // Fire the portal automation trigger for a decided trigger target (#79). BEST-EFFORT,
     // like notifyChat — a trigger SIGNALS «деньги пришли» (the client's BP allocates), it does
     // NOT move money, so a failure must NEVER fail the whole batch. Returns whether it actually
@@ -506,7 +517,8 @@ export function startThroughputWorkers(
         'proc.allocated': summary.allocated,
         'proc.ambiguous': summary.ambiguous,
         'proc.manual': summary.manual,
-        'proc.distributed': summary.distributed
+        'proc.distributed': summary.distributed,
+        'proc.ledger_written': summary.ledgerWritten
       }))
     }, { connection, concurrency })
   ]

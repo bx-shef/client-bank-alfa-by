@@ -17,6 +17,7 @@ import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type Al
 import type { AllocationMutationOpts } from '../../app/utils/allocationMutation'
 import type { IntentResolution } from '../utils/intentResolver'
 import { parseConfiguredEntityTypeId, SMART_ENTITY_CONFIG_KEY } from '../utils/intentResolver'
+import { distributionSpEtid as readDistributionSpEtid, paymentSpEtid as readPaymentSpEtid } from '../../app/config/distributionSp'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 
 /** Cap on how many recognized intents of ONE operation are sent to the REST resolver
@@ -123,6 +124,14 @@ export interface HandlerDeps {
    *  dedup marker is still written this run, so a non-fire is NOT retried on a later poll
    *  (durable trigger retry — a follow-up). */
   applyTrigger: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<boolean>
+  /** Write the decided allocation into the SP-LEDGER (#109 §9.1/§9.3): ensure the payment carrier
+   *  element for the operation, add the distribution row for `target`, recompute «осталось». Called
+   *  ONLY when `autoDistribute` is on AND both SP entityTypeIds are provisioned (the chooseCarrier
+   *  «носитель = смарт-процесс» signal) — ADDITIVE to `applyAllocation`, does NOT replace the
+   *  activity дело (carrier-exclusivity is deferred). Idempotent by markers (redelivery no-ops).
+   *  Returns whether a NEW distribution row was created (for the counter). Optional: absent ⇒ no
+   *  ledger write (unchanged behaviour). Throws on a REST error ⇒ clean BullMQ retry. */
+  writeLedger?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
   /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
    *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
@@ -237,7 +246,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -260,6 +269,11 @@ export async function handleCrmSyncJob(
   // allocation fact (behaviour unchanged). ON ⇒ a decided `allocate` also marks the target
   // paid in the portal. `settings` null (not installed) ⇒ off.
   const autoDistribute = settings?.autoDistribute === true
+  // SP-ledger carrier (§9.1): both entityTypeIds provisioned ⇒ the payment is carried as an SP
+  // element and its allocation is written to the ledger (chooseCarrier «носитель = смарт-процесс»).
+  // Not provisioned ⇒ null ⇒ ledger write skipped (activity дело remains the record). Read once.
+  const ledgerPaymentEtid = readPaymentSpEtid(settings?.recognition?.configFields)
+  const ledgerDistributionEtid = readDistributionSpEtid(settings?.recognition?.configFields)
 
   // Negative-stage predicate (union of invoice + deal fail/lost stages), loaded AT MOST
   // ONCE per job — lazily, so a batch that never resolves an intent pays nothing. Reused
@@ -286,6 +300,7 @@ export async function handleCrmSyncJob(
   let manual = 0
   let allocated = 0
   let distributed = 0
+  let ledgerWritten = 0
   for (const item of unique) {
     // Exclusion gate (PROCESSING.md §2 A2): an operation whose account or purpose is
     // excluded is skipped ENTIRELY — no recognition, no company lookup, no CRM activity, no
@@ -396,6 +411,14 @@ export async function handleCrmSyncJob(
             // Gate OFF ⇒ fact-only (write-once), no portal mutation. Unchanged v1 behaviour.
             allocated++
           }
+          // SP-ledger write (§9.1): ADDITIONALLY, when auto-distribute is on AND both SPs are
+          // provisioned (carrier = smart-process), record the allocation in the ledger (payment
+          // carrier element + distribution row + «осталось» recompute). Idempotent by markers, so a
+          // redelivery no-ops; a REST error propagates (clean retry). companyId is non-null here (we
+          // are inside the matched-company branch). This does NOT replace the activity дело.
+          if (autoDistribute && ledgerPaymentEtid && ledgerDistributionEtid && deps.writeLedger && companyId) {
+            if (await deps.writeLedger(item, target, companyId, job.memberId, { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid })) ledgerWritten++
+          }
         }
         // Trigger targets (#79): a deal/smart-process candidate fires the portal's «деньги
         // пришли» automation trigger UNCONDITIONALLY (not amount-gated) — separate from the
@@ -488,5 +511,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, notified, skipped, excluded, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, notified, skipped, excluded, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length }
 }
