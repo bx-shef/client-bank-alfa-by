@@ -5,6 +5,8 @@ import {
   buildDistributionRowAddCall,
   buildMarkerListCall,
   buildNeedRecomputeCall,
+  buildPaymentElementAddCall,
+  buildPaymentMarkerListCall,
   buildPaymentReadCall,
   buildRequiresRedistributionCall,
   buildTargetRowsListCall,
@@ -185,5 +187,34 @@ describe('buildPaymentReadCall / parsePaymentTotal', () => {
     expect(parsePaymentTotal({ opportunity: '100.00', currencyId: 'BYN' })).toEqual({ total: 100, currency: 'BYN' })
     expect(parsePaymentTotal({ opportunity: 'x', currencyId: 'BYN' })).toEqual({ total: 0, currency: 'BYN' })
     expect(parsePaymentTotal(undefined)).toEqual({ total: 0, currency: '' })
+  })
+})
+
+describe('buildPaymentElementAddCall', () => {
+  it('creates a payment carrier: opportunity, «осталось»=full, marker, client link', () => {
+    const { method, params } = buildPaymentElementAddCall(1044, { opportunity: 100.005, currency: 'BYN', marker: 'acc|doc1', companyId: '12' })
+    expect(method).toBe('crm.item.add')
+    expect(params.entityTypeId).toBe(1044)
+    expect(params.useOriginalUfNames).toBe('Y')
+    const f = params.fields as Record<string, unknown>
+    expect(f.opportunity).toBe(100.01)
+    expect(f.currencyId).toBe('BYN')
+    expect(f.isManualOpportunity).toBe('Y')
+    expect(f.companyId).toBe(12)
+    expect(f[buildUfFieldName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(100.01) // nothing distributed yet
+    expect(f[buildUfFieldName(1044, PAYMENT_SP_FIELDS.marker.postfix)]).toBe('acc|doc1')
+  })
+  it('omits companyId when absent / invalid', () => {
+    expect((buildPaymentElementAddCall(1044, { opportunity: 1, currency: 'BYN', marker: 'm' }).params.fields as Record<string, unknown>).companyId).toBeUndefined()
+    expect((buildPaymentElementAddCall(1044, { opportunity: 1, currency: 'BYN', marker: 'm', companyId: '0' }).params.fields as Record<string, unknown>).companyId).toBeUndefined()
+  })
+})
+
+describe('buildPaymentMarkerListCall', () => {
+  it('filters by the marker UF and selects id + opportunity + currency', () => {
+    const { params } = buildPaymentMarkerListCall(1044, 'acc|doc1')
+    expect(params.useOriginalUfNames).toBe('Y')
+    expect((params.filter as Record<string, unknown>)[buildUfFieldName(1044, PAYMENT_SP_FIELDS.marker.postfix)]).toBe('acc|doc1')
+    expect(params.select).toContain('opportunity')
   })
 })

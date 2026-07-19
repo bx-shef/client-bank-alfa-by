@@ -12,6 +12,8 @@ import {
   buildDistributionRowAddCall,
   buildMarkerListCall,
   buildNeedRecomputeCall,
+  buildPaymentElementAddCall,
+  buildPaymentMarkerListCall,
   buildPaymentReadCall,
   buildRequiresRedistributionCall,
   buildTargetRowsListCall,
@@ -20,6 +22,7 @@ import {
   parsePaymentTotal,
   parseTargetRow,
   type DistributionRowInput,
+  type PaymentElementInput,
   type TargetRowRef
 } from '../../app/utils/distributionLedger'
 import type { RestCall } from './companyLookup'
@@ -67,6 +70,29 @@ export async function writeDistributionRow(input: DistributionRowInput, call: Re
   const resp = await call(addCall.method, addCall.params)
   const id = extractAddedItemId(resp)
   if (!id) throw new Error('crm.item.add returned no distribution row id')
+  return { id, created: true }
+}
+
+/** Find an existing payment CARRIER element id by its operation marker, or `null`. Empty marker →
+ *  `null` without a REST call. */
+export async function findPaymentByMarker(paymentSpEtid: number, marker: string, call: RestCall): Promise<string | null> {
+  if (!marker) return null
+  const listCall = buildPaymentMarkerListCall(paymentSpEtid, marker)
+  const resp = await call(listCall.method, listCall.params)
+  const id = extractListItems(resp)[0]?.id
+  return id !== undefined && id !== null && `${id}` !== '' ? `${id}` : null
+}
+
+/** Ensure the payment carrier element for an operation exists: return it if a row with the same
+ *  operation marker is already present (`created:false`), else `crm.item.add` and return the new id.
+ *  Idempotent write-once per operation (mirrors the activity marker, #259). */
+export async function ensurePaymentElement(paymentSpEtid: number, input: PaymentElementInput, call: RestCall): Promise<{ id: string, created: boolean }> {
+  const existing = await findPaymentByMarker(paymentSpEtid, input.marker, call)
+  if (existing) return { id: existing, created: false }
+  const addCall = buildPaymentElementAddCall(paymentSpEtid, input)
+  const resp = await call(addCall.method, addCall.params)
+  const id = extractAddedItemId(resp)
+  if (!id) throw new Error('crm.item.add returned no payment element id')
   return { id, created: true }
 }
 

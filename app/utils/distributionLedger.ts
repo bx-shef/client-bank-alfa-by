@@ -240,3 +240,49 @@ export function parsePaymentTotal(item: Record<string, unknown> | undefined): { 
   const total = Number(item?.opportunity)
   return { total: Number.isFinite(total) ? round2(total) : 0, currency: String(item?.currencyId ?? '') }
 }
+
+/** Input for creating a payment CARRIER element (the SP element that holds one incoming payment). */
+export interface PaymentElementInput {
+  /** The payment's full amount (`opportunity`). */
+  opportunity: number
+  /** ISO currency. */
+  currency: string
+  /** Operation dedup marker (`dedupKey` = account|docId) — idempotent write-once carrier per op. */
+  marker: string
+  /** CRM company id (payer), when matched — links the client (isClientEnabled). Optional. */
+  companyId?: string
+}
+
+/** Build the `crm.item.add` call that creates the payment CARRIER element. «Осталось распределить»
+ *  starts at the full amount (nothing distributed yet); the client link is set when a company matched. */
+export function buildPaymentElementAddCall(paymentSpEtid: number, input: PaymentElementInput): { method: string, params: Record<string, unknown> } {
+  const amount = round2(input.opportunity)
+  const fields: Record<string, unknown> = {
+    opportunity: amount,
+    currencyId: input.currency,
+    isManualOpportunity: 'Y',
+    [buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
+    [buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
+  }
+  // Link the payer company only when matched (a positive integer id).
+  const companyId = Number(input.companyId)
+  if (input.companyId && Number.isInteger(companyId) && companyId > 0) fields.companyId = companyId
+  return {
+    method: 'crm.item.add',
+    params: { entityTypeId: paymentSpEtid, useOriginalUfNames: 'Y', fields }
+  }
+}
+
+/** Build the `crm.item.list` that finds a payment carrier element by its operation marker (idempotency
+ *  probe — one carrier per operation). Selects id + opportunity + currency (for a later recompute). */
+export function buildPaymentMarkerListCall(paymentSpEtid: number, marker: string): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.list',
+    params: {
+      entityTypeId: paymentSpEtid,
+      useOriginalUfNames: 'Y',
+      filter: { [buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.marker.postfix)]: marker },
+      select: ['id', 'opportunity', 'currencyId']
+    }
+  }
+}
