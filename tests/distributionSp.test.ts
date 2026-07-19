@@ -9,9 +9,12 @@ import {
   PAYMENT_SP_TITLE,
   buildDistributionSpCreateCall,
   buildPaymentSpCreateCall,
+  buildSpEntityId,
+  buildUfFieldConfigCall,
   buildUfFieldName,
   distributionSpEtid,
-  paymentSpEtid
+  paymentSpEtid,
+  planMissingUserFields
 } from '~/config/distributionSp'
 
 // Pure SP-structure builders (#109 §9.1). Assert the crm.type.add shape + field codes so the
@@ -91,6 +94,44 @@ describe('SP user fields', () => {
   it('DISTRIBUTION_SP_USER_FIELDS lists every field for provisioning', () => {
     expect(DISTRIBUTION_SP_USER_FIELDS.payment).toEqual(Object.values(PAYMENT_SP_FIELDS))
     expect(DISTRIBUTION_SP_USER_FIELDS.distribution).toEqual(Object.values(DISTRIBUTION_SP_FIELDS))
+  })
+})
+
+describe('buildUfFieldConfigCall', () => {
+  it('builds a userfieldconfig.add with entityId CRM_<etid>, the full field name, type and RU label', () => {
+    const { method, params } = buildUfFieldConfigCall(1044, PAYMENT_SP_FIELDS.needDistributionsSum)
+    expect(method).toBe('userfieldconfig.add')
+    expect(params.moduleId).toBe('crm')
+    const field = params.field as Record<string, unknown>
+    expect(field.entityId).toBe('CRM_1044')
+    expect(field.fieldName).toBe('UF_CRM_1044_NEED_DISTR')
+    expect(field.userTypeId).toBe('double')
+    expect(field.editFormLabel).toEqual({ ru: 'Осталось распределить' })
+  })
+})
+
+describe('buildSpEntityId', () => {
+  it('formats the smart-process entityId as CRM_<etid>', () => {
+    expect(buildSpEntityId(1046)).toBe('CRM_1046')
+  })
+})
+
+describe('planMissingUserFields', () => {
+  const fields = Object.values(PAYMENT_SP_FIELDS)
+  it('plans an add call only for fields not already present (idempotent self-heal)', () => {
+    const existing = [buildUfFieldName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]
+    const plan = planMissingUserFields(1044, fields, existing)
+    expect(plan).toHaveLength(fields.length - 1)
+    const names = plan.map(c => (c.params.field as Record<string, unknown>).fieldName)
+    expect(names).not.toContain('UF_CRM_1044_NEED_DISTR')
+    expect(names).toContain('UF_CRM_1044_MARKER')
+  })
+  it('plans nothing when every field already exists', () => {
+    const existing = fields.map(f => buildUfFieldName(1044, f.postfix))
+    expect(planMissingUserFields(1044, fields, existing)).toEqual([])
+  })
+  it('plans all fields when none exist', () => {
+    expect(planMissingUserFields(1044, fields, [])).toHaveLength(fields.length)
   })
 })
 
