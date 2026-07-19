@@ -17,15 +17,19 @@ import {
   buildMarkerListCall,
   buildNeedRecomputeCall,
   buildPaymentElementAddCall,
+  buildPaymentListCall,
   buildPaymentMarkerListCall,
   buildPaymentReadCall,
+  buildPaymentRowsListCall,
   buildRequiresRedistributionCall,
   buildTargetRowsListCall,
   computeNeedDistribution,
   parseLedgerRow,
+  parsePaymentCarrier,
   parsePaymentTotal,
   parseTargetRow,
   type DistributionRowInput,
+  type PaymentCarrierHeader,
   type PaymentElementInput,
   type TargetRowRef
 } from '../../app/utils/distributionLedger'
@@ -277,4 +281,57 @@ export async function writeLedgerAllocation(
   const remaining = await recomputeNeedDistribution(paymentSpEtid, payment.id, distributionSpEtid, op.amount, op.currency, call)
 
   return { paymentElementId: payment.id, rowId: row.id, rowCreated: row.created, remaining }
+}
+
+/** Page cap for the portal ledger read (UI). A portal with more than this many payment carriers is
+ *  paged off — the UI shows the newest; a full audit is a separate concern. */
+export const MAX_LEDGER_PAYMENTS = 200
+
+/** One payment carrier + its distribution rows, for the «Распределение» UI. */
+export interface LedgerCard {
+  id: string
+  total: number
+  currency: string
+  requiresRedistribution: boolean
+  rows: DistributionEntry[]
+}
+
+/** List ALL distribution rows (any status) of one payment element, paginated. */
+async function loadAllRows(distributionSpEtid: number, paymentSpEtid: number, paymentElementId: string, call: RestCall): Promise<DistributionEntry[]> {
+  const rows: DistributionEntry[] = []
+  let start: number | null = 0
+  for (let page = 0; page < MAX_LEDGER_PAGES && start !== null; page++) {
+    const listCall = buildPaymentRowsListCall(distributionSpEtid, paymentSpEtid, paymentElementId, start || undefined)
+    const resp = await call(listCall.method, listCall.params)
+    for (const item of extractListItems(resp)) rows.push(parseLedgerRow(item, distributionSpEtid))
+    start = nextOffset(resp)
+  }
+  return rows
+}
+
+/**
+ * Read the portal's distribution ledger for the UI: the newest payment carrier elements (up to
+ * `MAX_LEDGER_PAYMENTS`) each with ALL their distribution rows (active + reverted, for history). Pure
+ * over the injected `call`. Errors propagate (the route maps them to 502). Ordered newest-first.
+ */
+export async function loadPortalLedger(paymentSpEtid: number, distributionSpEtid: number, call: RestCall): Promise<LedgerCard[]> {
+  const headers: PaymentCarrierHeader[] = []
+  let start: number | null = 0
+  for (let page = 0; page < MAX_LEDGER_PAGES && start !== null && headers.length < MAX_LEDGER_PAYMENTS; page++) {
+    const listCall = buildPaymentListCall(paymentSpEtid, start || undefined)
+    const resp = await call(listCall.method, listCall.params)
+    for (const item of extractListItems(resp)) {
+      const header = parsePaymentCarrier(item, paymentSpEtid)
+      if (header) headers.push(header)
+      if (headers.length >= MAX_LEDGER_PAYMENTS) break
+    }
+    start = nextOffset(resp)
+  }
+
+  const cards: LedgerCard[] = []
+  for (const header of headers) {
+    const rows = await loadAllRows(distributionSpEtid, paymentSpEtid, header.id, call)
+    cards.push({ id: header.id, total: header.total, currency: header.currency, requiresRedistribution: header.requiresRedistribution, rows })
+  }
+  return cards
 }
