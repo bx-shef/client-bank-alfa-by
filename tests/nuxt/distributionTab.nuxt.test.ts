@@ -84,4 +84,17 @@ describe('DistributionTab load', () => {
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="ledger-error"]').text()).toContain('администратор')
   })
+
+  it('«Пересчитать» → POSTs recompute then reloads, shows the count', async () => {
+    fetchMock.mockResolvedValueOnce({ provisioned: true, cards: [card] }) // initial load
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="ledger-recompute"]').exists()).toBe(true)
+    fetchMock.mockResolvedValueOnce({ ok: true, recomputed: 3 }) // recompute POST
+    fetchMock.mockResolvedValueOnce({ provisioned: true, cards: [card] }) // reload
+    await wrapper.find('[data-testid="ledger-recompute"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(fetchMock).toHaveBeenCalledWith('/api/distribution/recompute', expect.objectContaining({ method: 'POST' }))
+    expect(wrapper.find('[data-testid="ledger-recompute-msg"]').text()).toContain('3')
+  })
 })

@@ -335,3 +335,31 @@ export async function loadPortalLedger(paymentSpEtid: number, distributionSpEtid
   }
   return cards
 }
+
+/**
+ * Recompute «осталось распределить» for EVERY payment carrier of the portal (§3/§9.2 manual
+ * «пересчитать» — the recovery backstop for the deletion crash-window and any drift). Lists the
+ * carriers (paginated, capped at MAX_LEDGER_PAYMENTS) and recomputes each from its active rows.
+ * Returns how many were recomputed. Idempotent (recompute-from-state). Errors propagate (retry).
+ */
+export async function recomputeAllPayments(paymentSpEtid: number, distributionSpEtid: number, call: RestCall): Promise<number> {
+  const headers: PaymentCarrierHeader[] = []
+  let start: number | null = 0
+  for (let page = 0; page < MAX_LEDGER_PAGES && start !== null && headers.length < MAX_LEDGER_PAYMENTS; page++) {
+    const listCall = buildPaymentListCall(paymentSpEtid, start || undefined)
+    const resp = await call(listCall.method, listCall.params)
+    for (const item of extractListItems(resp)) {
+      const header = parsePaymentCarrier(item, paymentSpEtid)
+      if (header) headers.push(header)
+      if (headers.length >= MAX_LEDGER_PAYMENTS) break
+    }
+    start = nextOffset(resp)
+  }
+
+  let recomputed = 0
+  for (const header of headers) {
+    await recomputeNeedDistribution(paymentSpEtid, header.id, distributionSpEtid, header.total, header.currency, call)
+    recomputed++
+  }
+  return recomputed
+}

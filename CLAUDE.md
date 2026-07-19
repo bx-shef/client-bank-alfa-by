@@ -165,8 +165,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   с блоком-причиной + чат ошибок; моя компания тоже не найдена → не пишем, чат ошибок. Элемент смарт-процесса — #109. Разбор
   покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест + визуальная проверка (свет/тёмная).
 - `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
+  + `BankConnectCard` + `PollNowButton` + `ProvisionSpCard` (провижининг СП, #109) + **`DistributionTab`**
   + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
   Роут `/settings` — в `nitro.prerender.routes`.
+- **UI-контур распределения (#109 §9.3 #4, admin-only, за feature-gate `DISTRIBUTION_PROVISION_ENABLED`):**
+  `ProvisionSpCard` (кнопка «Настроить смарт-процессы» → `POST /api/distribution/provision`) +
+  **`DistributionTab`** (`useDistributionLedger` → `GET /api/distribution/ledger`: карточки платежей
+  `DistributionLedgerCard` на **b24ui** с суммой/«осталось»/badge overLimit+requiresRedistribution +
+  строки распределения с `targetLabel`; денежная математика — чистый `presentPaymentLedger`
+  (`app/utils/distributionView.ts`) над `distributionSummary`) + кнопка **«Пересчитать»**
+  (`POST /api/distribution/recompute` — пересчёт «осталось» всех payment-элементов, single-flight;
+  страховка §3/§9.2). Чтение/пересчёт — на сторедном OAuth-токене портала; чистые gate-хендлеры
+  (`ledgerRequest`/`recomputeRequest`, DI+тесты) зеркалят `provisionRequest`. Визуально проверено.
 - `app/pages/import.vue` — страница `/import` **ручной загрузки выписки** (P4, слайс 1): когда нет
   онлайн-подключения к банку — перетащить файл(ы), приложение разбирает их **в браузере**
   (детерминированно, без backend/AI) и показывает предпросмотр операций. Layout `clear` +

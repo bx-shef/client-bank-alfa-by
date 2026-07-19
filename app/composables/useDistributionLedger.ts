@@ -74,5 +74,28 @@ export function useDistributionLedger() {
     }
   }
 
-  return { load, syncEnabled, loading, error, enabled, loaded, provisioned, cards }
+  const recomputing = ref(false)
+  const recomputeMessage = ref('')
+
+  /** Trigger the «пересчитать» backstop (POST) then reload the ledger. Best-effort messaging. */
+  async function recompute(): Promise<void> {
+    const a = frameAuth()
+    if (!a) return
+    error.value = ''
+    recomputeMessage.value = ''
+    recomputing.value = true
+    try {
+      const res = await $fetch<{ recomputed?: number }>('/api/distribution/recompute', { method: 'POST', headers: authHeaders(a) })
+      recomputeMessage.value = `Пересчитано платежей: ${res?.recomputed ?? 0}.`
+      await load()
+    } catch (e) {
+      const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status
+      if (status === 403) error.value = 'Пересчёт доступен только администратору портала.'
+      else error.value = frameFetchError(e, 'Не удалось пересчитать')
+    } finally {
+      recomputing.value = false
+    }
+  }
+
+  return { load, recompute, syncEnabled, loading, error, enabled, loaded, provisioned, cards, recomputing, recomputeMessage }
 }
