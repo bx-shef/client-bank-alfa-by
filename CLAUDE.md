@@ -507,9 +507,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `b24-events`), без sync-фолбэка (страховка — кнопка «пересчитать»). **`deal`/`invoice` (удалена amount-цель) —
       LIVE reconcile** (`reconcileTargetDeletion`: найти active-строки dist-СП по цели → деактивировать `status→reverted`
       → пересчитать «осталось» на payment-СП → `manual`-строки: «требует распределения»=Y; идемпотентно — редоставка
-      видит `reverted`→no-op; крэш-окно между деактивацией и пересчётом закрывает кнопка «пересчитать»). `company`/
-      `payment-carrier`→чат ошибок и `distribution`-строка→пересчёт родителя — пока log-only (чат ошибок = следующий
-      слайс; у hard-deleted dist-строки нет родительской ссылки → манульный пересчёт). Тесты.
+      видит `reverted`→no-op; крэш-окно между деактивацией и пересчётом закрывает кнопка «пересчитать»). **Чат ошибок
+      (§9.2 сообщения) — LIVE** для всех трёх веток: `deal`/`invoice` (цель удалена + N освобождено), `company`
+      (потерян ответственный), `payment-carrier` (повреждена структура) — `buildDeletionErrorMessage` (BB-safe, PII-free:
+      только вид+id+счётчик) → `notifyDeletionErrorViaRest` (`im.message.add` в `errorChat.dialogId` из настроек; пусто
+      → skip; best-effort — сбой чата не роняет джобу). `distribution`-строка→пересчёт родителя — log-only (у
+      hard-deleted dist-строки нет родительской ссылки → манульный пересчёт). Тесты.
     - `connection.ts` — ленивый `getQueue(name)`; передаёт BullMQ **опции** (парсит `REDIS_URL`), а не
       ioredis-инстанс — нет прямой зависимости от ioredis и связки версий. Гуард `queueEnabled()`.
     - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).

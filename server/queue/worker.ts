@@ -16,6 +16,8 @@ import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, DeletionJob, EventJob, FetchJob, ParseJob } from './topology'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
 import { reconcileTargetDeletion } from '../utils/distributionLedgerWrite'
+import { notifyDeletionErrorViaRest } from '../utils/deletionErrorNotify'
+import type { DeletionErrorKind } from '../../app/utils/deletionErrorMessage'
 import { livePortalSdkCall } from '../utils/liveDeps'
 import { distributionSpEtid, paymentSpEtid } from '../../app/config/distributionSp'
 import { demoDelayMs, demoItems, isDemoAccount } from './cron'
@@ -556,6 +558,24 @@ async function bumpMetrics(
  * (error-chat needs the errorChat dialog + message templates; a hard-deleted dist row carries no
  * parent link to recompute — the manual «пересчитать» button covers it). Each stub logs a PII-free line.
  */
+/** Best-effort §9.2 error-chat notice for a deletion (company / carrier). Loads the portal's error
+ *  chat from settings; no error chat configured → skip. Swallows failures (a chat error must never
+ *  fail the reconcile job). PII-free: only the entity kind + id reach the message. */
+async function notifyDeletionError(job: DeletionJob, kind: DeletionErrorKind, freed?: number): Promise<void> {
+  try {
+    const call = await livePortalSdkCall(job.memberId)
+    if (!call) return
+    const dialogId = parsePortalSettings(await readAppSettingVia(call, SETTINGS_KEY)).errorChat.dialogId
+    if (!dialogId) {
+      console.info('[deletion] %s #%s (portal=%s) — no error chat, skip', kind, logSafe(job.entityId), portalHash(job.memberId))
+      return
+    }
+    await notifyDeletionErrorViaRest(kind, job.entityId, dialogId, call, freed !== undefined ? { freed } : {})
+  } catch (e) {
+    console.warn('[deletion] error-chat notify failed', kind, portalHash(job.memberId), (e as Error)?.message)
+  }
+}
+
 export function liveDeletionDeps(): DeletionReconcileDeps {
   return {
     portalInstalled: async memberId => (await getApplicationToken(dbQuery, memberId)).length > 0,
@@ -573,15 +593,15 @@ export function liveDeletionDeps(): DeletionReconcileDeps {
       const targetKind = kind === 'deal' ? 'deal' : 'invoice'
       const res = await reconcileTargetDeletion(cfg.paymentSpEtid, cfg.distributionSpEtid, targetKind, job.entityId, call)
       console.info('[deletion] target %s #%s freed=%d parents=%d manual=%d (portal=%s)', kind, logSafe(job.entityId), res.freed, res.parentsRecomputed, res.manualParents, portalHash(job.memberId))
+      // Notify the operator that a target was deleted and its distributions freed (§9.2), best-effort
+      // (a chat failure must not fail the reconcile — the ledger is already reconciled above).
+      if (res.freed > 0) await notifyDeletionError(job, targetKind, res.freed).catch(() => {})
       return res.freed
     },
-    // TODO(next slice): error-chat notify (needs errorChat dialog + §9.2 message template).
-    notifyCompanyDeleted: async (job) => {
-      console.info('[deletion] company #%s (portal=%s) — error-chat pending', logSafe(job.entityId), portalHash(job.memberId))
-    },
-    notifyCarrierDamaged: async (job) => {
-      console.info('[deletion] payment-carrier #%s (portal=%s) — error-chat pending', logSafe(job.entityId), portalHash(job.memberId))
-    },
+    // LIVE: a deleted company / damaged carrier posts a §9.2 notice to the portal's error chat
+    // (best-effort — a chat failure never fails the job; no error chat configured → skip).
+    notifyCompanyDeleted: job => notifyDeletionError(job, 'company'),
+    notifyCarrierDamaged: job => notifyDeletionError(job, 'payment-carrier'),
     // A hard-deleted dist row carries no parent link → can't target a recompute; manual «пересчитать» covers it.
     recomputeParent: async (job) => {
       console.info('[deletion] distribution row #%s (portal=%s) — recompute via manual «пересчитать»', logSafe(job.entityId), portalHash(job.memberId))
