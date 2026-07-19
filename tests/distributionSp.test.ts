@@ -13,8 +13,10 @@ import {
   buildUfFieldConfigCall,
   buildUfFieldName,
   distributionSpEtid,
+  hasSpEtids,
   paymentSpEtid,
-  planMissingUserFields
+  planMissingUserFields,
+  withSpEtids
 } from '~/config/distributionSp'
 
 // Pure SP-structure builders (#109 §9.1). Assert the crm.type.add shape + field codes so the
@@ -154,5 +156,28 @@ describe('SP entityTypeId accessors', () => {
     expect(paymentSpEtid({ [PAYMENT_SP_CONFIG_KEY]: '0' })).toBeNull()
     expect(paymentSpEtid({ [PAYMENT_SP_CONFIG_KEY]: '-5' })).toBeNull()
     expect(paymentSpEtid({ [PAYMENT_SP_CONFIG_KEY]: '10.5' })).toBeNull()
+  })
+})
+
+describe('withSpEtids / hasSpEtids', () => {
+  it('merges both ids as strings under the reserved keys, preserving other fields', () => {
+    const merged = withSpEtids({ 'smart-entity': '1030' }, 1044, 1046)
+    expect(merged['smart-entity']).toBe('1030')
+    expect(merged[PAYMENT_SP_CONFIG_KEY]).toBe('1044')
+    expect(merged[DISTRIBUTION_SP_CONFIG_KEY]).toBe('1046')
+  })
+  it('does not mutate the input map', () => {
+    const input = { a: '1' }
+    withSpEtids(input, 1, 2)
+    expect(input).toEqual({ a: '1' })
+  })
+  it('tolerates an undefined input', () => {
+    expect(withSpEtids(undefined, 5, 6)).toEqual({ [PAYMENT_SP_CONFIG_KEY]: '5', [DISTRIBUTION_SP_CONFIG_KEY]: '6' })
+  })
+  it('hasSpEtids is true only when BOTH ids are valid positive integers', () => {
+    expect(hasSpEtids(withSpEtids({}, 1044, 1046))).toBe(true)
+    expect(hasSpEtids({ [PAYMENT_SP_CONFIG_KEY]: '1044' })).toBe(false)
+    expect(hasSpEtids({})).toBe(false)
+    expect(hasSpEtids({ [PAYMENT_SP_CONFIG_KEY]: '1044', [DISTRIBUTION_SP_CONFIG_KEY]: '0' })).toBe(false)
   })
 })
