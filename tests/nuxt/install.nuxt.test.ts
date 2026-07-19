@@ -84,7 +84,7 @@ describe('install.vue — inside a B24 frame', () => {
     expect(replaceSpy).not.toHaveBeenCalled()
   })
 
-  it('binds ONAPPINSTALL/ONAPPUNINSTALL to the backend endpoint before finishing', async () => {
+  it('binds the app lifecycle AND CRM deletion events to the backend endpoint before finishing', async () => {
     await mountSuspended(InstallPage)
     await vi.advanceTimersByTimeAsync(2000)
     // Find the batch call (and its call index) that carries the event.bind calls.
@@ -96,7 +96,14 @@ describe('install.vue — inside a B24 frame', () => {
     expect(bindIndex).toBeGreaterThanOrEqual(0)
     const bindArg = (batchSpy.mock.calls[bindIndex]![0]) as BatchArg
     const bound = bindArg.calls!.filter(c => c.method === 'event.bind')
-    expect(bound.map(c => c.params.event)).toEqual(['ONAPPINSTALL', 'ONAPPUNINSTALL'])
+    // Lifecycle events (token delivery) + the three §9.2 deletion events (ledger reconcile).
+    expect(bound.map(c => c.params.event)).toEqual([
+      'ONAPPINSTALL',
+      'ONAPPUNINSTALL',
+      'ONCRMDEALDELETE',
+      'ONCRMCOMPANYDELETE',
+      'ONCRMDYNAMICITEMDELETE'
+    ])
     // Handler must be ABSOLUTE (the guard's whole point) — a relative path would
     // register a dead binding. `.+//` before the path enforces scheme+host.
     for (const c of bound) expect(String(c.params.handler)).toMatch(/^https?:\/\/.+\/api\/b24\/events$/)
