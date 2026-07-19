@@ -7,7 +7,7 @@
 // cannot attach payment purpose / amount / account to a span (docs/PRIVACY.md). Attribute
 // computation is gated behind `span.isRecording()` so the OFF path pays nothing (no hashing).
 
-import { SpanStatusCode, trace } from '@opentelemetry/api'
+import { context, SpanStatusCode, trace } from '@opentelemetry/api'
 import type { Span } from '@opentelemetry/api'
 import { pickSafeAttributes, portalHash } from './telemetryAttributes'
 
@@ -31,6 +31,8 @@ export interface DependencySpanInfo {
   scope?: string
   /** Portal member id — hashed into `portal.hash`, never emitted raw. */
   memberId?: string
+  /** Command count for a batch dependency call → `dep.op_count` (shape, not content). */
+  opCount?: number
 }
 
 /**
@@ -58,21 +60,27 @@ export async function withDependencySpan<T>(info: DependencySpanInfo, fn: () => 
       'dep.operation': info.operation,
       'dep.method': info.method ?? '',
       'dep.scope': info.scope ?? '',
-      'portal.hash': portalHash(info.memberId)
+      'portal.hash': portalHash(info.memberId),
+      ...(info.opCount !== undefined ? { 'dep.op_count': info.opCount } : {})
     })
   }
-  try {
-    const result = await fn()
-    span.setAttribute('dep.status', 'ok')
-    return result
-  } catch (e) {
-    span.setAttribute('dep.status', 'error')
-    span.setAttribute('dep.error_kind', errorKind(e))
-    span.setStatus({ code: SpanStatusCode.ERROR })
-    throw e
-  } finally {
-    span.end()
-  }
+  // Run `fn` with THIS span active in the OTel context, so any child span created inside it
+  // (auto pg/ioredis/undici, or a nested manual span) parents under it → a real trace TREE,
+  // not orphan roots. No-op when off (the no-op context manager just calls `fn`).
+  return context.with(trace.setSpan(context.active(), span), async () => {
+    try {
+      const result = await fn()
+      span.setAttribute('dep.status', 'ok')
+      return result
+    } catch (e) {
+      span.setAttribute('dep.status', 'error')
+      span.setAttribute('dep.error_kind', errorKind(e))
+      span.setStatus({ code: SpanStatusCode.ERROR })
+      throw e
+    } finally {
+      span.end()
+    }
+  })
 }
 
 /**
@@ -88,17 +96,21 @@ export async function withSpan<T>(
 ): Promise<T> {
   const span = trace.getTracer(TRACER_NAME).startSpan(name)
   if (span.isRecording()) setSafe(span, attributes)
-  try {
-    const result = await fn()
-    if (span.isRecording() && finalize) setSafe(span, finalize(result))
-    span.setAttribute('job.outcome', 'ok')
-    return result
-  } catch (e) {
-    span.setAttribute('job.outcome', 'error')
-    span.setAttribute('job.error_kind', errorKind(e))
-    span.setStatus({ code: SpanStatusCode.ERROR })
-    throw e
-  } finally {
-    span.end()
-  }
+  // Activate the span for `fn` so its child spans (auto pg/ioredis/undici + nested manual dep
+  // spans) nest under this job/cron span → one trace tree. No-op when telemetry is off.
+  return context.with(trace.setSpan(context.active(), span), async () => {
+    try {
+      const result = await fn()
+      if (span.isRecording() && finalize) setSafe(span, finalize(result))
+      span.setAttribute('job.outcome', 'ok')
+      return result
+    } catch (e) {
+      span.setAttribute('job.outcome', 'error')
+      span.setAttribute('job.error_kind', errorKind(e))
+      span.setStatus({ code: SpanStatusCode.ERROR })
+      throw e
+    } finally {
+      span.end()
+    }
+  })
 }

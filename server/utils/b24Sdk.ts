@@ -196,28 +196,33 @@ export function makeSdkRestCall(client: OAuthCallClient, opts: { memberId?: stri
  *  contract as `makeSdkRestCall`, so a batched fan-out never silently drops a command (a failed
  *  `crm.status.list` must fail the job, not shrink the negative-stage set → fail-open). The
  *  SDK's per-instance RestrictionManager rate-limits the batch requests like single calls. */
-export function makeSdkBatchCall(client: OAuthCallClient): RestBatch {
-  return async (calls: BatchCommand[]) => {
-    const out: Record<string, unknown>[] = []
-    for (let i = 0; i < calls.length; i += SDK_BATCH_MAX) {
-      const chunk = calls.slice(i, i + SDK_BATCH_MAX)
-      const res = await client.actions.v2.batch.make({
-        calls: chunk.map(c => [c.method, c.params ?? {}] as [string, Record<string, unknown>]),
-        options: { isHaltOnError: true, returnAjaxResult: true }
-      })
-      if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || 'B24 batch failed')
-      // ARRAY calls + returnAjaxResult:true → getData() is an AjaxResult[] in input order
-      // (the SDK's union type widens to `unknown`; coerce to the array form we requested).
-      const rows = (res.getData() ?? []) as SdkAjaxResult[]
-      // A command that itself failed is not `isSuccess` even when the batch envelope is —
-      // surface it as a throw (halt-on-error semantics for the whole job).
-      for (const row of rows) {
-        if (!row.isSuccess) throw new Error(row.getErrorMessages().join('; ') || 'B24 batch command failed')
-        out.push(sdkEnvelope(row, false)) // reattachNext:false — batch rows always carry next:0 (see sdkEnvelope)
+export function makeSdkBatchCall(client: OAuthCallClient, opts: { memberId?: string } = {}): RestBatch {
+  // One dependency span per logical batch (all chunks) — symmetric with the single-call path
+  // (#78); `dep.op_count` carries the command count (shape, not content). No-op when off.
+  return (calls: BatchCommand[]) => withDependencySpan(
+    { system: 'bitrix24', operation: 'batch', method: 'batch', memberId: opts.memberId, opCount: calls.length },
+    async () => {
+      const out: Record<string, unknown>[] = []
+      for (let i = 0; i < calls.length; i += SDK_BATCH_MAX) {
+        const chunk = calls.slice(i, i + SDK_BATCH_MAX)
+        const res = await client.actions.v2.batch.make({
+          calls: chunk.map(c => [c.method, c.params ?? {}] as [string, Record<string, unknown>]),
+          options: { isHaltOnError: true, returnAjaxResult: true }
+        })
+        if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || 'B24 batch failed')
+        // ARRAY calls + returnAjaxResult:true → getData() is an AjaxResult[] in input order
+        // (the SDK's union type widens to `unknown`; coerce to the array form we requested).
+        const rows = (res.getData() ?? []) as SdkAjaxResult[]
+        // A command that itself failed is not `isSuccess` even when the batch envelope is —
+        // surface it as a throw (halt-on-error semantics for the whole job).
+        for (const row of rows) {
+          if (!row.isSuccess) throw new Error(row.getErrorMessages().join('; ') || 'B24 batch command failed')
+          out.push(sdkEnvelope(row, false)) // reattachNext:false — batch rows always carry next:0 (see sdkEnvelope)
+        }
       }
+      return out
     }
-    return out
-  }
+  )
 }
 
 /** I/O the portal-bound factory needs, injected for testability. The SDK client itself is
@@ -415,7 +420,12 @@ export function sdkRefreshTransport(opts: { timeoutMs?: number } = {}): (body: s
     client.setCallbackRefreshAuth(async ({ b24OAuthParams }) => {
       captured = b24OAuthParams
     })
-    const authData = await withTimeout(client.auth.refreshAuth(), timeoutMs)
+    // Dependency span (#78): the token refresh is its own external POST — trace its latency/
+    // outcome under a named `dep bitrix24 oauth.refresh`. No memberId in the refresh body.
+    const authData = await withDependencySpan(
+      { system: 'bitrix24', operation: 'oauth.refresh', method: 'oauth.refresh' },
+      () => withTimeout(client.auth.refreshAuth(), timeoutMs)
+    )
     return rawTokenFromRefresh(captured, authData)
   }
 }

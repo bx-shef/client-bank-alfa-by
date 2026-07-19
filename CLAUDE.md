@@ -579,8 +579,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       через `NODE_OPTIONS=--import` **до** приложения (иначе авто-инструментирование не перехватит http/pg/ioredis;
       Nitro-бандлер ломает require-хуки OTel → deps вне бандла, `otel-preload-package.json` ставится в backend-образ).
       Без `OTEL_EXPORTER_OTLP_ENDPOINT` — no-op (поведение не меняется). Ручные спаны на `@opentelemetry/api` (no-op без
-      SDK): `withDependencySpan` оборачивает каждый B24 REST (`makeSdkRestCall`), `withSpan('crm-sync',…)` — job-конвейер
-      с исходами. **PII-защита тройная:** allowlist наших атрибутов (`telemetryAttributes.ts` `pickSafeAttributes` — счёт/
+      SDK). **Покрытие (полное по конвейеру):** `withDependencySpan` оборачивает **каждый исходящий B24-вызов** —
+      одиночный `makeSdkRestCall`, **батч `makeSdkBatchCall`** (`dep.op_count`=число команд) и **OAuth-refresh**
+      (`sdkRefreshTransport` → `dep bitrix24 oauth.refresh`); `withSpan('<job>',…)` — **все 4 job-воркера**
+      (`crm-sync`/`bank-fetch`/`file-parse`/`b24-events`, с исходами/счётчиками) **и крон-корни**
+      (`cron.real-poll`/`cron.keep-alive`/`cron.sweep` — иначе их pg/redis-спаны висят сиротами). Bank-fetch HTTP и
+      bank-OAuth POST ловит авто-undici (дочерние под `bank-fetch`-root). **PII-защита тройная:** allowlist наших атрибутов (`telemetryAttributes.ts` `pickSafeAttributes` — счёт/
       сумму/назначение прикрепить нельзя) + redaction-SpanProcessor авто-атрибутов (SQL/URL/токены) + `portal.hash`
       (SHA-256) вместо member_id, `error_kind` вместо текста ошибки. Чистые ядра + тесты (`telemetryAttributes`/
       `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Слайс 2 (коллектор + ClickHouse + Grafana как
@@ -1222,6 +1226,15 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   `banks.ts`), типы — в `app/types/*`; всё покрываем тестами. Реактивную логику — в
   `app/composables/*` (появится по мере роста), UI — в компонентах/страницах.
 - Данные из API рендерим только через `{{ }}` (auto-escape) — никакого `v-html` с внешними данными.
+- **Телеметрия (#78) — обязательное покрытие новых путей:** любой новый **job-воркер** очереди
+  оборачивается в `withSpan('<job>', {безопасные атрибуты}, …)` (как `crm-sync`); любая новая **обёртка-транспорт
+  зависимости, которую пишем мы** (B24 REST/батч, банк-API-клиент, OAuth-refresh) — в
+  `withDependencySpan({system, operation,…})` (сырой `$fetch`/`axios` **уже** ловит авто-undici/http — его **не**
+  оборачиваем повторно, иначе задвоение); новый **крон-тик** — в `withSpan('cron.<name>', …)`. Атрибуты спанов ставим **только** ключами из allowlist
+  `SAFE_MANUAL_ATTR_KEYS` (`telemetryAttributes.ts`) — форма/счётчики/`portal.hash`, **никогда** назначение/сумма/
+  счёт/контрагент/УНП (финансовые ПДн, `docs/PRIVACY.md`); новый безопасный ключ добавляем в allowlist явно. Ошибки
+  метим `error_kind` (класс, не текст). Всё — no-op когда телеметрия выключена (спаны `@opentelemetry/api`), так что
+  оверхеда без коллектора нет. Карта покрытия/детали — [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md).
 - Штамп ревью: каждый `.md`-документ в корне и `docs/` несёт строку `> Last reviewed: YYYY-MM-DD`
   блок-цитатой сразу под заголовком H1. Ключ `Last reviewed` всегда на английском (технический
   маркер). Дату бампим только при содержательном изменении. Наличие штампа во всех отслеживаемых

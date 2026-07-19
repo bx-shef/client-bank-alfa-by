@@ -426,7 +426,12 @@ export function liveHandlerDeps(): HandlerDeps {
  *  worker replicas (else ONAPPINSTALL/ONAPPUNINSTALL for one portal could reorder
  *  across replicas and leave a live token after an uninstall). */
 export function startEventWorker(deps: HandlerDeps): Worker {
-  return new Worker<EventJob>(Q_EVENTS, async job => handleEventJob(job.data, deps), { connection: connectionOptions() })
+  return new Worker<EventJob>(Q_EVENTS, async job => withSpan('b24-events', {
+    // Job-level trace span (#78). Safe shape only: event kind + hashed portal, never creds.
+    'job.queue': 'b24-events',
+    'job.kind': job.data.kind,
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleEventJob(job.data, deps)), { connection: connectionOptions() })
 }
 
 /** The throughput workers (fetch/parse/crm-sync) — safe to run on N scaled replicas
@@ -454,12 +459,23 @@ export function startThroughputWorkers(
     // model (per-group/`groupKey` limiting is a BullMQ Pro-only feature). Default 100/60s (QUEUE_FETCH_RATE_*).
     // Parse/crm-sync aren't rate-limited here (crm-sync throttles via the SDK RestrictionManager).
     // Follow-up: reactive 429 handling via Worker.RateLimitError + rateLimit() if Alfa 429s.
-    new Worker<FetchJob>(Q_FETCH, async job => handleFetchJob(job.data, deps), {
+    new Worker<FetchJob>(Q_FETCH, async job => withSpan('bank-fetch', {
+      // Job-level trace span (#78). Safe shape only: provider + hashed portal, never account/creds.
+      'job.queue': 'bank-fetch',
+      'job.provider': job.data.providerId,
+      'portal.hash': portalHash(job.data.memberId)
+    }, () => handleFetchJob(job.data, deps), r => ({ 'job.op_count': r.fetched })), {
       connection,
       concurrency,
       ...(opts.fetchRate ? { limiter: { max: opts.fetchRate.max, duration: opts.fetchRate.duration } } : {})
     }),
-    new Worker<ParseJob>(Q_PARSE, async job => handleParseJob(job.data, deps), { connection, concurrency }),
+    new Worker<ParseJob>(Q_PARSE, async job => withSpan('file-parse', {
+      // Job-level trace span (#78). The ONLY pipeline stage with no auto child span (pure CPU
+      // parse, no I/O) — so without this its latency/outcome is otherwise invisible.
+      'job.queue': 'file-parse',
+      'job.provider': job.data.providerId,
+      'portal.hash': portalHash(job.data.memberId)
+    }, () => handleParseJob(job.data, deps), r => ({ 'job.op_count': r.parsed })), { connection, concurrency }),
     new Worker<CrmSyncJob>(Q_CRM, async (job) => {
       // Job-level trace span (#78) — no-op unless telemetry is on. Only SAFE shape/outcome
       // attributes (counts, provider, hashed portal); never operation content.

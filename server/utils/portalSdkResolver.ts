@@ -87,7 +87,7 @@ export function createPortalSdkResolver(
       return null
     }
     const rawCall = makeSdkRestCall(client, { memberId })
-    const rawBatch = makeSdkBatchCall(client)
+    const rawBatch = makeSdkBatchCall(client, { memberId })
     const evictSelf = (): void => {
       if (cache.get(memberId) === entry) cache.delete(memberId)
     }
