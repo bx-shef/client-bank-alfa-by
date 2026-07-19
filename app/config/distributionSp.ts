@@ -176,3 +176,24 @@ export function paymentSpEtid(configFields: Record<string, string> | undefined):
 export function distributionSpEtid(configFields: Record<string, string> | undefined): number | null {
   return coerceEntityTypeId(configFields?.[DISTRIBUTION_SP_CONFIG_KEY])
 }
+
+/** Merge the two provisioned entityTypeIds INTO a `configFields` map (returns a NEW object — never
+ *  mutates the input), stored as strings under the reserved keys. Provisioning calls this after
+ *  `provisionDistributionSp` to persist the ids; the write is idempotent (same ids ⇒ same map). */
+export function withSpEtids(
+  configFields: Record<string, string> | undefined,
+  paymentEtid: number,
+  distributionEtid: number
+): Record<string, string> {
+  return {
+    ...(configFields ?? {}),
+    [PAYMENT_SP_CONFIG_KEY]: String(paymentEtid),
+    [DISTRIBUTION_SP_CONFIG_KEY]: String(distributionEtid)
+  }
+}
+
+/** Whether `configFields` already stores BOTH provisioned SP ids (positive integers) — the caller
+ *  can skip a re-provision / settings write when true. */
+export function hasSpEtids(configFields: Record<string, string> | undefined): boolean {
+  return paymentSpEtid(configFields) !== null && distributionSpEtid(configFields) !== null
+}
