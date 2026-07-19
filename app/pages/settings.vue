@@ -46,6 +46,10 @@ onMounted(async () => {
     </ClientOnly>
 
     <ClientOnly>
+      <DistributionTab class="mt-6" />
+    </ClientOnly>
+
+    <ClientOnly>
       <SettingsForm class="mt-6" />
     </ClientOnly>
 
