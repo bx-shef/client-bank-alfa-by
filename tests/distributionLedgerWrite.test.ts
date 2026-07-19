@@ -9,10 +9,13 @@ import {
   readPaymentTotal,
   reconcileTargetDeletion,
   recomputeNeedDistribution,
-  writeDistributionRow
+  writeDistributionRow,
+  writeLedgerAllocation
 } from '../server/utils/distributionLedgerWrite'
 import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { DistributionRowInput } from '../app/utils/distributionLedger'
+import type { StatementItem } from '../app/types/statement'
+import type { AllocationCandidate } from '../app/utils/allocation'
 
 const ufName = buildUfFieldName
 const srcUf = ufName(1046, DISTRIBUTION_SP_FIELDS.source.postfix)
@@ -204,5 +207,53 @@ describe('ensurePaymentElement (idempotent by operation marker)', () => {
       'crm.item.add': () => ({ result: {} })
     })
     await expect(ensurePaymentElement(1044, input, call)).rejects.toThrow(/no payment element id/)
+  })
+})
+
+const OP: StatementItem = {
+  account: 'BY00', docId: 'D1', direction: 'credit', amount: 100, currency: 'BYN',
+  date: '2026-07-01', counterparty: { name: 'X', account: 'BY99' }, purpose: 'по счёту'
+} as unknown as StatementItem
+const TARGET: AllocationCandidate = { kind: 'invoice', id: '39', amount: 100, currency: 'BYN' }
+
+describe('writeLedgerAllocation (orchestrator)', () => {
+  it('ensures the payment element, writes the row, recomputes «осталось»', async () => {
+    const { call, calls } = fakeCall({
+      // payment marker probe (etid 1044) → none first time; distribution probes → none
+      'crm.item.list': () => ({ result: { items: [] } }),
+      'crm.item.add': params => (params.entityTypeId === 1044
+        ? { result: { item: { id: 500 } } } // payment carrier
+        : { result: { item: { id: 900 } } }), // distribution row
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    const res = await writeLedgerAllocation(1044, 1046, OP, TARGET, '12', call)
+    expect(res.paymentElementId).toBe('500')
+    expect(res.rowId).toBe('900')
+    expect(res.rowCreated).toBe(true)
+    // payment carrier add carried the operation marker (account|docId) + company link
+    const payAdd = calls.find(c => c.method === 'crm.item.add' && c.params.entityTypeId === 1044)!
+    expect((payAdd.params.fields as Record<string, unknown>).companyId).toBe(12)
+    // distribution row add carried the allocation-fact marker (dedup key|kind|id)
+    const rowAdd = calls.find(c => c.method === 'crm.item.add' && c.params.entityTypeId === 1046)!
+    expect((rowAdd.params.fields as Record<string, unknown>)[ufName(1046, DISTRIBUTION_SP_FIELDS.marker.postfix)]).toBe('BY00|D1|invoice|39')
+  })
+
+  it('is idempotent — existing carrier + row are reused, nothing double-added', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': (params) => {
+        if (params.entityTypeId === 1044 && (params.filter as Record<string, unknown>)[ufName(1044, PAYMENT_SP_FIELDS.marker.postfix)]) {
+          return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } } // payment exists
+        }
+        if ((params.filter as Record<string, unknown>)?.[ufName(1046, DISTRIBUTION_SP_FIELDS.marker.postfix)]) {
+          return { result: { items: [{ id: 900 }] } } // row exists
+        }
+        return { result: { items: [{ id: 900, opportunity: '100', currencyId: 'BYN', [ufName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active' }] } } // active rows for recompute
+      },
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    const res = await writeLedgerAllocation(1044, 1046, OP, TARGET, '12', call)
+    expect(res.rowCreated).toBe(false)
+    expect(res.remaining).toBe(0) // 100 total − 100 active
+    expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
   })
 })
