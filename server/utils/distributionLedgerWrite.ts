@@ -4,7 +4,10 @@
 // tested builders in app/utils/distributionLedger.ts; this module only does REST + result extraction
 // + pagination. NOT wired into crm-sync yet (the hot-path connection is the next slice).
 
-import type { AllocationTargetKind } from '../../app/utils/allocation'
+import type { StatementItem } from '../../app/types/statement'
+import type { AllocationCandidate, AllocationTargetKind } from '../../app/utils/allocation'
+import { allocationFactKey } from '../../app/utils/allocation'
+import { dedupKey } from '../../app/utils/statement'
 import type { DistributionEntry } from '../../app/utils/manualAllocation'
 import {
   buildActiveRowsListCall,
@@ -223,4 +226,54 @@ export async function reconcileTargetDeletion(
   }
 
   return { freed: rows.length, parentsRecomputed, manualParents: manualParents.size }
+}
+
+/** Result of writing one allocation to the SP-ledger. */
+export interface LedgerAllocationResult {
+  paymentElementId: string
+  rowId: string
+  /** False when the distribution row already existed (idempotent redelivery). */
+  rowCreated: boolean
+  /** «осталось распределить» after this allocation. */
+  remaining: number
+}
+
+/**
+ * Write ONE auto-allocation to the SP-ledger (§9.1/§9.3): ensure the payment carrier element for the
+ * operation (idempotent by operation marker), add the distribution row for the decided target
+ * (idempotent by allocation-fact marker), and recompute «осталось» on the carrier. The whole thing is
+ * idempotent — a redelivered batch finds both the carrier and the row already present and recomputes
+ * to the same value. `op.amount` is the payment total; the row amount is the amount allocated to the
+ * target (for an exact-match auto-allocate that equals `op.amount`). Errors propagate (BullMQ retries).
+ */
+export async function writeLedgerAllocation(
+  paymentSpEtid: number,
+  distributionSpEtid: number,
+  op: StatementItem,
+  target: AllocationCandidate,
+  companyId: string | undefined,
+  call: RestCall
+): Promise<LedgerAllocationResult> {
+  const payment = await ensurePaymentElement(paymentSpEtid, {
+    opportunity: op.amount,
+    currency: op.currency,
+    marker: dedupKey(op),
+    companyId
+  }, call)
+
+  const row = await writeDistributionRow({
+    paymentSpEtid,
+    distributionSpEtid,
+    paymentElementId: payment.id,
+    amount: op.amount,
+    currency: op.currency,
+    targetKind: target.kind,
+    targetId: target.id,
+    source: 'auto',
+    marker: allocationFactKey(op, target)
+  }, call)
+
+  const remaining = await recomputeNeedDistribution(paymentSpEtid, payment.id, distributionSpEtid, op.amount, op.currency, call)
+
+  return { paymentElementId: payment.id, rowId: row.id, rowCreated: row.created, remaining }
 }
