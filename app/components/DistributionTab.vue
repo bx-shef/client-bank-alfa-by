@@ -9,7 +9,7 @@ import { useDistributionLedger } from '~/composables/useDistributionLedger'
 // admin here too (no fail-open flash). Outside the portal frame it's a preview. Mirrors PollNowButton /
 // ProvisionSpCard.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
-const { load, syncEnabled, loading, error, enabled, loaded, provisioned, cards } = useDistributionLedger()
+const { load, recompute, syncEnabled, loading, error, enabled, loaded, provisioned, cards, recomputing, recomputeMessage } = useDistributionLedger()
 
 const adminChecked = ref(false)
 
@@ -107,6 +107,34 @@ onMounted(async () => {
           :key="c.id"
           :card="c"
         />
+      </div>
+
+      <!-- «Пересчитать» backstop (§3/§9.2): recomputes «осталось» for every payment carrier. Shown
+           once the ledger loaded and the SPs are provisioned. -->
+      <div
+        v-if="enabled && loaded && provisioned"
+        class="flex flex-wrap items-center gap-3 pt-1"
+      >
+        <B24Button
+          :loading="recomputing"
+          :disabled="recomputing || loading"
+          :aria-busy="recomputing"
+          color="air-secondary"
+          size="sm"
+          data-testid="ledger-recompute"
+          @click="recompute"
+        >
+          Пересчитать
+        </B24Button>
+        <span
+          v-if="recomputeMessage"
+          class="text-sm text-(--ui-color-base-3)"
+          role="status"
+          aria-live="polite"
+          data-testid="ledger-recompute-msg"
+        >
+          {{ recomputeMessage }}
+        </span>
       </div>
     </div>
   </B24Card>

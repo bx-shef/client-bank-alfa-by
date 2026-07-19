@@ -775,19 +775,22 @@ ts, eventToken }`. Никаких сумм/счетов (id+тип, приват
 ### 9.3 Слайсы реализации (за живым порталом + платным тарифом)
 
 1. ✅ Чистое ядро `manualAllocation` (#327).
-2. Провижининг payment-СП + dist-СП (структура/поля/права) на установке/апгрейде + самолечение (§5).
-3. Транспорт леджера: запись распределения (`crm.item.add` в dist-СП + маркер), поиск маркера
-   (идемпотентность), пересчёт «осталось» на payment-СП. **Сделано + подключено в hot-path:**
-   `writeLedgerAllocation` (ensure payment-элемент по маркеру операции → строка распределения по
-   `allocationFactKey` → пересчёт «осталось») вызывается в `crm-sync` при `allocate`, за гейтом
-   `autoDistribute` И провижиненного СП (`payment-sp`/`distribution-sp` в `configFields`) —
-   **дополнительно** к `applyAllocation`, activity-дело не заменяет (carrier-exclusivity отложена).
-   Идемпотентно по маркерам, ошибка → чистый ретрай. Счётчик `ledgerWritten`.
-4. UI-вкладка распределения (по образцу sync-payments) + кнопки §3, вкл. **«пересчитать»**.
-5. Пайплайн удаления: `event.bind` новых событий → `DeletionJob` → консьюмер-`reconcile` → чат ошибок.
-   **Ингест готов** (`event.bind` deletion-событий на установке; webhook верифицирует `application_token`
-   и кладёт `DeletionJob` в очередь `b24-deletions`; консьюмер `handleDeletionJob` классифицирует по
-   SP-конфигу портала и маршрутизирует по виду — DI+тесты). **Само `reconcile` (чтение/деактивация строк
-   dist-СП, пересчёт «осталось», запись в чат ошибок) — за транспортом леджера (#3):** сейчас действия
-   консьюмера логируют (без записи в портал).
-6. Ретайр `allocation_fact` (перевод идемпотентности/сторно на СП-маркер+`status`).
+2. ✅ **Провижининг payment-СП + dist-СП** (структура/поля через `crm.type.add`/`userfieldconfig.add`,
+   идемпотентно + самолечение §5): транспорт `provisionDistributionSp`, оркестрация+сохранение etid
+   single-flight (`handleProvisionDistribution`), роут `POST /api/distribution/provision` за
+   feature-gate+admin, UI-кнопка «Настроить смарт-процессы» (#330–#335).
+3. ✅ **Транспорт леджера + hot-path:** `writeLedgerAllocation` (ensure payment-элемент по маркеру
+   операции → строка распределения по `allocationFactKey` → пересчёт «осталось») вызывается в `crm-sync`
+   при `allocate`, за гейтом `autoDistribute` И провижиненного СП — **дополнительно** к `applyAllocation`,
+   activity-дело не заменяет (carrier-exclusivity отложена). Идемпотентно по маркерам, ошибка → чистый
+   ретрай. Счётчик `ledgerWritten` (#337–#342).
+4. ✅ **UI-вкладка распределения** (по образцу sync-payments): презентационное ядро `presentPaymentLedger`,
+   роут чтения `GET /api/distribution/ledger`, b24ui-компонент карточек `DistributionTab`, кнопка
+   **«Пересчитать»** (`POST /api/distribution/recompute` — пересчёт «осталось» всех payment-элементов,
+   single-flight; страховка §3/§9.2) (#343–#345 + текущий).
+5. ✅ **Пайплайн удаления:** `event.bind` deletion-событий на установке → webhook верифицирует
+   `application_token` → `DeletionJob` в очередь `b24-deletions` → консьюмер `handleDeletionJob`
+   классифицирует по SP-конфигу и маршрутизирует; **`reconcile` LIVE** для удаления цели (deactivate
+   строк + пересчёт «осталось» + флаг manual) + **чат ошибок** для всех веток (#329–#339).
+6. Ретайр `allocation_fact` (перевод идемпотентности/сторно на СП-маркер+`status`) — **осталось**
+   (сейчас факт разнесения ещё пишется в Postgres параллельно СП-маркеру).

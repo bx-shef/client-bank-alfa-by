@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { loadPortalLedger } from '../server/utils/distributionLedgerWrite'
+import { loadPortalLedger, recomputeAllPayments } from '../server/utils/distributionLedgerWrite'
 import { handleLedgerRequest, type LedgerRequestDeps } from '../server/utils/ledgerRequest'
+import { handleRecomputeRequest, type RecomputeRequestDeps } from '../server/utils/recomputeRequest'
 import { buildPaymentListCall, buildPaymentRowsListCall, parsePaymentCarrier } from '../app/utils/distributionLedger'
 import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { LedgerCard } from '../server/utils/distributionLedgerWrite'
@@ -104,5 +105,47 @@ describe('handleLedgerRequest', () => {
       throw new Error('rest down')
     }
     expect((await handleLedgerRequest(deps({ loadLedger: boom }), input)).status).toBe(502)
+  })
+})
+
+describe('recomputeAllPayments', () => {
+  it('recomputes «осталось» for every payment carrier from its active rows', async () => {
+    const rowStatus = buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)
+    const { call, calls } = fakeCall({
+      'crm.item.list': (params) => {
+        if (params.entityTypeId === 1044) return { result: { items: [{ id: 1, opportunity: '100', currencyId: 'BYN' }, { id: 2, opportunity: '50', currencyId: 'BYN' }] } }
+        // active rows per payment (for recompute): payment 1 has a 30 row, payment 2 none
+        const parent = (params.filter as Record<string, unknown>).parentId1044
+        if (parent === 1) return { result: { items: [{ opportunity: '30', currencyId: 'BYN', [rowStatus]: 'active' }] } }
+        return { result: { items: [] } }
+      },
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    const n = await recomputeAllPayments(1044, 1046, call)
+    expect(n).toBe(2)
+    const updates = calls.filter(c => c.method === 'crm.item.update')
+    expect(updates.some(u => u.params.id === 1)).toBe(true) // remaining 70
+    expect(updates.some(u => u.params.id === 2)).toBe(true) // remaining 50
+  })
+})
+
+function rdeps(over: Partial<RecomputeRequestDeps> = {}): RecomputeRequestDeps {
+  return { enabled: true, memberIdByDomain: async () => 'M1', validateFrame: async () => ({ userId: '7', isAdmin: true }), recompute: async () => 5, ...over }
+}
+
+describe('handleRecomputeRequest', () => {
+  it('recomputes and returns the count for an admin', async () => {
+    const res = await handleRecomputeRequest(rdeps(), input)
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ ok: true, recomputed: 5 })
+  })
+  it('404 disabled, 403 not admin, 409 not installed', async () => {
+    expect((await handleRecomputeRequest(rdeps({ enabled: false }), input)).status).toBe(404)
+    expect((await handleRecomputeRequest(rdeps({ validateFrame: async () => ({ userId: '7', isAdmin: false }) }), input)).status).toBe(403)
+    expect((await handleRecomputeRequest(rdeps({ memberIdByDomain: async () => '' }), input)).status).toBe(409)
+  })
+  it('200 {provisioned:false} when SPs not provisioned', async () => {
+    const res = await handleRecomputeRequest(rdeps({ recompute: async () => null }), input)
+    expect(res.body).toEqual({ provisioned: false, recomputed: 0 })
   })
 })
