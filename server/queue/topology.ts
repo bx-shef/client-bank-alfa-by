@@ -18,9 +18,10 @@ export const Q_EVENTS = 'b24-events'
 export const Q_FETCH = 'bank-fetch'
 export const Q_PARSE = 'file-parse'
 export const Q_CRM = 'crm-sync'
+export const Q_DELETIONS = 'b24-deletions'
 
 /** All queue names, for wiring workers/monitoring. */
-export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM] as const
+export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS] as const
 export type QueueName = typeof QUEUE_NAMES[number]
 
 /** Portal credentials to persist on register (ONAPPINSTALL). `refreshTokenEnc` is
@@ -102,6 +103,26 @@ export interface CrmSyncJob {
   items: StatementItem[]
 }
 
+/**
+ * A verified CRM DELETION event to reconcile against the SP-ledger (#109, §9.2). The webhook
+ * verifies `application_token` and enqueues the RAW event fields; the consumer loads the portal's
+ * SP config (settings), classifies the entity kind, and reconciles (recompute «осталось» /
+ * deactivate ledger rows / error chat). Carries the minimum (id + raw entityTypeId + code) — NO
+ * amounts/accounts (privacy, §9.2). `domain` lets the consumer act as the portal.
+ */
+export interface DeletionJob {
+  memberId: string
+  domain: string
+  /** The raw B24 event code (e.g. `ONCRMDEALDELETE`) — classified by the consumer with SP config. */
+  eventCode: string
+  /** The deleted entity id (digit string, validated at ingestion). */
+  entityId: string
+  /** Raw ENTITY_TYPE_ID for a dynamic-item deletion (absent for deal/company events). */
+  entityTypeId?: number
+  /** Event timestamp from B24 (deduplicates redelivery of the same deletion). */
+  ts: string
+}
+
 // Separator for job-id parts. BullMQ FORBIDS ':' in a custom job id (it namespaces
 // its Redis keys with ':', so a custom id containing ':' throws "Custom Id cannot
 // contain :"). We join with '|', which encodeURIComponent escapes (%7C) — so no
@@ -129,4 +150,9 @@ export function parseJobId(job: ParseJob): string {
 
 export function crmSyncJobId(job: CrmSyncJob): string {
   return joinId(['crm', job.memberId, job.batchId])
+}
+
+export function deletionJobId(job: DeletionJob): string {
+  // member|event|id|ts (§9.2) — a redelivered deletion of the same entity dedups.
+  return joinId(['del', job.memberId, job.eventCode, job.entityId, job.ts])
 }

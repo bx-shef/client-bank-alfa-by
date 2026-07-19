@@ -23,7 +23,7 @@ export interface QueuesSnapshot {
   queues: Record<string, Partial<QueueCounts>>
 }
 
-/** Presentation metadata for the four queues, in display order. `crm-sync` is the
+/** Presentation metadata for the pipeline queues, in display order. `crm-sync` is the
  * "main" queue (drawn with an area fill), matching the RabbitMQ example's isMain. */
 export interface QueueMeta {
   name: string
@@ -36,7 +36,8 @@ export const QUEUE_META: readonly QueueMeta[] = [
   { name: 'b24-events', label: 'События B24', color: '#8b5cf6' },
   { name: 'bank-fetch', label: 'Опрос банка', color: '#3b82f6' },
   { name: 'file-parse', label: 'Разбор файла', color: '#f59e0b' },
-  { name: 'crm-sync', label: 'Запись в CRM', color: '#10b981', main: true }
+  { name: 'crm-sync', label: 'Запись в CRM', color: '#10b981', main: true },
+  { name: 'b24-deletions', label: 'Удаления B24', color: '#ec4899' }
 ] as const
 
 /** A finite non-negative integer from an unknown counter value (never NaN). */

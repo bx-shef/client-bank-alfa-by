@@ -498,8 +498,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     платёжный словарь метрик).
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
-    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`,
-      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`), идемпотентные `*JobId` (дедуп ретраев). Тесты.
+    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`/`b24-deletions`,
+      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`/`DeletionJob`), идемпотентные `*JobId` (дедуп ретраев).
+      **`b24-deletions`** (#109 §9.2) — CRM-события удаления (сделка/компания/смарт-элемент): webhook верифицирует
+      `application_token` и кладёт `DeletionJob` (сырые `{eventCode, entityId, entityTypeId?}`, без ПДн); консьюмер
+      `handleDeletionJob` (`server/utils/deletionReconcile.ts`, DI+тесты) классифицирует по SP-конфигу портала
+      (`classifyDeletionKind`) и маршрутизирует по виду (deal/invoice→reconcile-target, company→чат ошибок,
+      payment/dist-СП→§5/пересчёт). Воркер — на primary-инстансе (concurrency 1, порядок как у `b24-events`); само
+      `reconcile` (запись в СП/чат) за транспортом леджера (сейчас log-only). Тесты. Без sync-фолбэка (страховка — кнопка «пересчитать»). Тесты.
     - `connection.ts` — ленивый `getQueue(name)`; передаёт BullMQ **опции** (парсит `REDIS_URL`), а не
       ioredis-инстанс — нет прямой зависимости от ioredis и связки версий. Гуард `queueEnabled()`.
     - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).

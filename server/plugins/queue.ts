@@ -11,7 +11,7 @@
 import type { Worker } from 'bullmq'
 import { closeQueues, getQueue, queueEnabled } from '../queue/connection'
 import { Q_FETCH } from '../queue/topology'
-import { liveHandlerDeps, startEventWorker, startThroughputWorkers } from '../queue/worker'
+import { liveDeletionDeps, liveHandlerDeps, startDeletionWorker, startEventWorker, startThroughputWorkers } from '../queue/worker'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
@@ -50,7 +50,10 @@ export default defineNitroPlugin((nitroApp) => {
   // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
   if (role.cron && deps) {
     workers.push(startEventWorker(deps))
-    console.info('[queue] event worker + cron scheduler started (primary instance)')
+    // Deletion-reconcile worker (§9.2) rides the primary instance too — concurrency 1, per-portal
+    // ledger reconciles stay ordered even when `worker` is scaled (same rationale as the event worker).
+    workers.push(startDeletionWorker(liveDeletionDeps()))
+    console.info('[queue] event + deletion workers + cron scheduler started (primary instance)')
     const demoN = Number(process.env.DEMO_LOAD_N || 0)
     // Demo cadence is SECONDS (DEMO_TICK_SEC, default 5) so the queues visibly "live"
     // on the chart — real polling stays on CRON_INTERVAL_MIN (minutes), but that path

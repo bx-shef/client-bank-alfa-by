@@ -19,8 +19,17 @@ import {
   parseInstallEvent,
   parseUninstallEvent
 } from '../../app/utils/b24Events'
-import type { EventJob } from '../queue/topology'
+import { B24_DELETION_EVENTS } from '../../app/config/b24'
+import type { DeletionJob, EventJob } from '../queue/topology'
 import type { PortalToken } from './tokenStore'
+
+/** Raw deletion-entity fields extracted at ingestion (classification is deferred to the consumer,
+ *  which has the portal's SP config). `id` is a validated digit string. */
+export interface DeletionEntityFields {
+  eventCode: string
+  entityId: string
+  entityTypeId?: number
+}
 
 /**
  * Reads the handler needs — verification only. The handler NEVER writes the store
@@ -40,6 +49,7 @@ export interface B24EventDeps {
 export type B24EventAction
   = | { type: 'register', memberId: string, credentials: PortalCredentials }
     | { type: 'unregister', memberId: string }
+    | { type: 'reconcile-deletion', memberId: string, deletion: DeletionEntityFields }
 
 /** What the route should return: an HTTP status, a small JSON body, and (on accept)
  *  the action to enqueue. No `action` ⇒ nothing to persist (denied / ignored). */
@@ -104,6 +114,39 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     }
   }
 
+  // CRM deletion events (§9.2) — verify application_token (fail-closed, same as uninstall: no OAuth
+  // in the payload, so authenticity is the stored/env token) and hand the raw entity fields to the
+  // consumer, which classifies them with the portal's SP config and reconciles the ledger.
+  if ((B24_DELETION_EVENTS as readonly string[]).includes((code || '').toUpperCase())) {
+    const auth = (payload as { auth?: Record<string, unknown> } | null)?.auth ?? {}
+    const memberId = String(auth.member_id ?? '').trim()
+    if (!memberId) return { status: 400, body: { error: 'malformed deletion event' } }
+    const verdict = appTokenVerdict({
+      isInstall: false,
+      incoming: String(auth.application_token ?? ''),
+      envToken: deps.envToken,
+      storedToken: await deps.loadStoredToken(memberId)
+    })
+    if (verdict !== 'accept') return deny(verdict)
+
+    const fields = (payload as { data?: { FIELDS?: Record<string, unknown> } } | null)?.data?.FIELDS ?? {}
+    const rawId = fields.ID
+    // A deletion with no usable id is authentic but carries nothing to reconcile — ACK, don't enqueue.
+    if (typeof rawId !== 'string' && typeof rawId !== 'number') return { status: 200, body: { ok: true, ignored: 'deletion: no id' } }
+    const entityId = String(rawId).trim()
+    if (!/^\d+$/.test(entityId)) return { status: 200, body: { ok: true, ignored: 'deletion: bad id' } }
+    const etid = Number(fields.ENTITY_TYPE_ID)
+    return {
+      status: 200,
+      body: { ok: true, event: code, memberId },
+      action: {
+        type: 'reconcile-deletion',
+        memberId,
+        deletion: { eventCode: code, entityId, entityTypeId: Number.isInteger(etid) && etid > 0 ? etid : undefined }
+      }
+    }
+  }
+
   // An event we don't subscribe to — acknowledge so B24 stops retrying.
   return { status: 200, body: { ok: true, ignored: code } }
 }
@@ -113,6 +156,9 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
 export interface B24RequestDeps extends B24EventDeps {
   /** Enqueue the mutation (primary). Returns false when the queue is disabled (no Redis). */
   enqueue: (job: EventJob) => Promise<boolean>
+  /** Enqueue a deletion-reconcile job (§9.2). No sync fallback — a dropped deletion is recoverable
+   *  via the manual «пересчитать» button, unlike a lost install. Returns false when queue disabled. */
+  enqueueDeletion: (job: DeletionJob) => Promise<boolean>
   /** Fallback: persist a portal synchronously (queue unavailable). saveToken encrypts refresh.
    *  `eventTs` (B24 event timestamp) drives the ordering guard (#77). */
   saveCredentials: (token: PortalToken, eventTs: number) => Promise<void>
@@ -158,6 +204,28 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
   const action = result.action
   const domain = domainOf(payload)
   const ts = tsOf(payload)
+
+  // Deletion-reconcile (§9.2): enqueue only. Unlike install/uninstall there is NO synchronous
+  // fallback — a deletion dropped when Redis is down is recoverable via the manual «пересчитать»
+  // button, so we don't hold up the webhook. `none` outcome ⇒ not enqueued (queue disabled/down).
+  if (action.type === 'reconcile-deletion') {
+    const delJob: DeletionJob = {
+      memberId: action.memberId,
+      domain,
+      eventCode: action.deletion.eventCode,
+      entityId: action.deletion.entityId,
+      entityTypeId: action.deletion.entityTypeId,
+      ts
+    }
+    let enq = false
+    try {
+      enq = await deps.enqueueDeletion(delJob)
+    } catch {
+      // Redis down — no sync fallback (recoverable via «пересчитать»); ACK the webhook anyway.
+    }
+    return { ...result, outcome: enq ? 'queued' : 'none' }
+  }
+
   const expiresAt = action.type === 'register' ? expiresAtFrom(action.credentials.expiresIn, deps.now()) : 0
 
   const job: EventJob = action.type === 'register'

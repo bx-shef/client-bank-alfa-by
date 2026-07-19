@@ -12,8 +12,11 @@ import { Worker } from 'bullmq'
 import { connectionOptions } from './connection'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
-import { Q_CRM, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
-import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
+import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
+import type { CrmSyncJob, DeletionJob, EventJob, FetchJob, ParseJob } from './topology'
+import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
+import { livePortalSdkCall } from '../utils/liveDeps'
+import { distributionSpEtid, paymentSpEtid } from '../../app/config/distributionSp'
 import { demoDelayMs, demoItems, isDemoAccount } from './cron'
 import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob,
@@ -21,7 +24,7 @@ import {
 } from './handlers'
 import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
-import { deleteToken, saveToken } from '../utils/tokenStore'
+import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
 import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
@@ -541,4 +544,48 @@ async function bumpMetrics(
   } catch (e) {
     console.error('metrics bump failed', job.memberId, (e as Error)?.message)
   }
+}
+
+/**
+ * Live deps for the deletion-reconcile consumer (§9.2). `portalInstalled` and `loadSpConfig` are
+ * REAL (token check + settings read via the portal's OAuth token). The reconcile ACTIONS are
+ * currently LOG-ONLY placeholders — the actual ledger REST work (list/deactivate distributions,
+ * recompute «осталось», error-chat write) lands with the ledger transport slice (§9.3 #3); this
+ * slice proves the ingestion→classify→route pipeline. Each stub logs a sanitized, PII-free line.
+ */
+export function liveDeletionDeps(): DeletionReconcileDeps {
+  return {
+    portalInstalled: async memberId => (await getApplicationToken(dbQuery, memberId)).length > 0,
+    loadSpConfig: async (memberId) => {
+      const call = await livePortalSdkCall(memberId)
+      if (!call) return {}
+      const cf = parsePortalSettings(await readAppSettingVia(call, SETTINGS_KEY)).recognition.configFields
+      return { paymentSpEtid: paymentSpEtid(cf) ?? undefined, distributionSpEtid: distributionSpEtid(cf) ?? undefined }
+    },
+    // TODO(ledger slice §9.3 #3): replace the log stubs below with real SP-ledger reconcile.
+    reconcileTargetDeletion: async (job, kind) => {
+      console.info('[deletion] target %s #%s (portal=%s) — reconcile pending ledger transport', kind, logSafe(job.entityId), portalHash(job.memberId))
+      return 0
+    },
+    notifyCompanyDeleted: async (job) => {
+      console.info('[deletion] company #%s (portal=%s) — error-chat pending ledger transport', logSafe(job.entityId), portalHash(job.memberId))
+    },
+    notifyCarrierDamaged: async (job) => {
+      console.info('[deletion] payment-carrier #%s (portal=%s) — error-chat pending ledger transport', logSafe(job.entityId), portalHash(job.memberId))
+    },
+    recomputeParent: async (job) => {
+      console.info('[deletion] distribution row #%s (portal=%s) — recompute pending ledger transport', logSafe(job.entityId), portalHash(job.memberId))
+    }
+  }
+}
+
+/** The deletion-reconcile worker (§9.2). Runs at concurrency 1 on the PRIMARY/cron instance (like
+ *  the event worker) so per-portal ledger reconciles stay ordered even when `worker` is scaled. */
+export function startDeletionWorker(deps: DeletionReconcileDeps): Worker {
+  return new Worker<DeletionJob>(Q_DELETIONS, async job => withSpan('b24-deletions', {
+    // Job-level trace span (#78). Safe shape only: event code + hashed portal, never entity content.
+    'job.queue': 'b24-deletions',
+    'job.kind': job.data.eventCode,
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleDeletionJob(job.data, deps), r => ({ 'job.outcome_kind': r.outcome })), { connection: connectionOptions() })
 }

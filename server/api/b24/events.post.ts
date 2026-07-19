@@ -11,7 +11,7 @@ import { dbQuery } from '../../db/client'
 import { handleEventRequest } from '../../utils/b24EventsHandler'
 import { getApplicationToken, saveToken, deleteToken } from '../../utils/tokenStore'
 import { encryptSecret } from '../../utils/secretCrypto'
-import { enqueueEvent } from '../../queue/producers'
+import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
 
 export default defineEventHandler(async (event) => {
   const envToken = process.env.B24_APPLICATION_TOKEN?.trim() || ''
@@ -23,6 +23,7 @@ export default defineEventHandler(async (event) => {
       envToken,
       loadStoredToken: memberId => getApplicationToken(dbQuery, memberId),
       enqueue: enqueueEvent,
+      enqueueDeletion,
       saveCredentials: async (token, eventTs) => {
         await saveToken(dbQuery, token, eventTs)
       },
