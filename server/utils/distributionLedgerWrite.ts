@@ -4,15 +4,23 @@
 // tested builders in app/utils/distributionLedger.ts; this module only does REST + result extraction
 // + pagination. NOT wired into crm-sync yet (the hot-path connection is the next slice).
 
+import type { AllocationTargetKind } from '../../app/utils/allocation'
 import type { DistributionEntry } from '../../app/utils/manualAllocation'
 import {
   buildActiveRowsListCall,
+  buildDeactivateRowCall,
   buildDistributionRowAddCall,
   buildMarkerListCall,
   buildNeedRecomputeCall,
+  buildPaymentReadCall,
+  buildRequiresRedistributionCall,
+  buildTargetRowsListCall,
   computeNeedDistribution,
   parseLedgerRow,
-  type DistributionRowInput
+  parsePaymentTotal,
+  parseTargetRow,
+  type DistributionRowInput,
+  type TargetRowRef
 } from '../../app/utils/distributionLedger'
 import type { RestCall } from './companyLookup'
 
@@ -98,4 +106,95 @@ export async function recomputeNeedDistribution(
   const updateCall = buildNeedRecomputeCall(paymentSpEtid, paymentElementId, remaining)
   await call(updateCall.method, updateCall.params)
   return remaining
+}
+
+/** Read a payment carrier element's total (`opportunity`) + currency. `null` when the element is
+ *  gone (e.g. the whole payment was deleted) — the caller then has nothing to recompute. */
+export async function readPaymentTotal(paymentSpEtid: number, paymentElementId: string, call: RestCall): Promise<{ total: number, currency: string } | null> {
+  const readCall = buildPaymentReadCall(paymentSpEtid, paymentElementId)
+  const resp = await call(readCall.method, readCall.params)
+  const item = extractListItems(resp)[0]
+  return item ? parsePaymentTotal(item) : null
+}
+
+/** Load ALL active distribution rows pointing at a TARGET (`targetKind`+`targetId`), paginated. */
+export async function loadDistributionsByTarget(
+  distributionSpEtid: number,
+  paymentSpEtid: number,
+  targetKind: AllocationTargetKind,
+  targetId: string,
+  call: RestCall
+): Promise<TargetRowRef[]> {
+  const refs: TargetRowRef[] = []
+  let start: number | null = 0
+  for (let page = 0; page < MAX_LEDGER_PAGES && start !== null; page++) {
+    const listCall = buildTargetRowsListCall(distributionSpEtid, paymentSpEtid, targetKind, targetId, start || undefined)
+    const resp = await call(listCall.method, listCall.params)
+    for (const item of extractListItems(resp)) {
+      const ref = parseTargetRow(item, distributionSpEtid, paymentSpEtid)
+      if (ref) refs.push(ref)
+    }
+    start = nextOffset(resp)
+  }
+  return refs
+}
+
+/** Outcome of a target-deletion reconcile (§9.2): how many rows were freed + how many parent
+ *  payments were recomputed (and how many were flagged «требует распределения» for a manual free). */
+export interface TargetReconcileResult {
+  freed: number
+  parentsRecomputed: number
+  manualParents: number
+}
+
+/**
+ * Reconcile a deleted amount/trigger target (deal/invoice, §9.2): deactivate every ACTIVE
+ * distribution row pointing at it (`status → reverted`, history kept), then for each affected parent
+ * payment recompute «осталось» (freed amount returns) and, when a MANUAL row was freed, raise «требует
+ * распределения»=Y (§3; auto rows are silently cleaned, no flag). Idempotent — an already-reverted
+ * ledger yields 0 rows and recomputes to the same values. A parent whose payment element is gone (the
+ * whole payment was deleted) is skipped (nothing to recompute). Returns the counts.
+ *
+ * ⚠ Crash-window: rows are reverted BEFORE the per-parent recompute; a crash between the two means a
+ * BullMQ retry re-reads active rows (now []) and returns early WITHOUT redoing the recompute/flag for
+ * those parents. That leaves a stale «осталось» on the affected payment — recovered by the manual
+ * «пересчитать» button (§3/§9.2, the spec's backstop for exactly this), not by the retry.
+ */
+export async function reconcileTargetDeletion(
+  paymentSpEtid: number,
+  distributionSpEtid: number,
+  targetKind: AllocationTargetKind,
+  targetId: string,
+  call: RestCall
+): Promise<TargetReconcileResult> {
+  const rows = await loadDistributionsByTarget(distributionSpEtid, paymentSpEtid, targetKind, targetId, call)
+  if (rows.length === 0) return { freed: 0, parentsRecomputed: 0, manualParents: 0 }
+
+  // Deactivate every matching row first (so the recompute below sees them as freed).
+  for (const row of rows) {
+    const deact = buildDeactivateRowCall(distributionSpEtid, row.rowId)
+    await call(deact.method, deact.params)
+  }
+
+  // Group affected parents; a parent is "manual-affected" if ANY freed row on it was manual (§3).
+  const manualParents = new Set<string>()
+  const parents = new Set<string>()
+  for (const row of rows) {
+    parents.add(row.parentPaymentId)
+    if (row.source === 'manual') manualParents.add(row.parentPaymentId)
+  }
+
+  let parentsRecomputed = 0
+  for (const parentId of parents) {
+    const payment = await readPaymentTotal(paymentSpEtid, parentId, call)
+    if (!payment) continue // the whole payment element is gone — nothing to recompute
+    await recomputeNeedDistribution(paymentSpEtid, parentId, distributionSpEtid, payment.total, payment.currency, call)
+    parentsRecomputed++
+    if (manualParents.has(parentId)) {
+      const flag = buildRequiresRedistributionCall(paymentSpEtid, parentId, true)
+      await call(flag.method, flag.params)
+    }
+  }
+
+  return { freed: rows.length, parentsRecomputed, manualParents: manualParents.size }
 }

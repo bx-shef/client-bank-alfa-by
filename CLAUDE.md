@@ -503,9 +503,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **`b24-deletions`** (#109 §9.2) — CRM-события удаления (сделка/компания/смарт-элемент): webhook верифицирует
       `application_token` и кладёт `DeletionJob` (сырые `{eventCode, entityId, entityTypeId?}`, без ПДн); консьюмер
       `handleDeletionJob` (`server/utils/deletionReconcile.ts`, DI+тесты) классифицирует по SP-конфигу портала
-      (`classifyDeletionKind`) и маршрутизирует по виду (deal/invoice→reconcile-target, company→чат ошибок,
-      payment/dist-СП→§5/пересчёт). Воркер — на primary-инстансе (concurrency 1, порядок как у `b24-events`); само
-      `reconcile` (запись в СП/чат) за транспортом леджера (сейчас log-only). Тесты. Без sync-фолбэка (страховка — кнопка «пересчитать»). Тесты.
+      (`classifyDeletionKind`) и маршрутизирует по виду. Воркер — на primary-инстансе (concurrency 1, порядок как у
+      `b24-events`), без sync-фолбэка (страховка — кнопка «пересчитать»). **`deal`/`invoice` (удалена amount-цель) —
+      LIVE reconcile** (`reconcileTargetDeletion`: найти active-строки dist-СП по цели → деактивировать `status→reverted`
+      → пересчитать «осталось» на payment-СП → `manual`-строки: «требует распределения»=Y; идемпотентно — редоставка
+      видит `reverted`→no-op; крэш-окно между деактивацией и пересчётом закрывает кнопка «пересчитать»). `company`/
+      `payment-carrier`→чат ошибок и `distribution`-строка→пересчёт родителя — пока log-only (чат ошибок = следующий
+      слайс; у hard-deleted dist-строки нет родительской ссылки → манульный пересчёт). Тесты.
     - `connection.ts` — ленивый `getQueue(name)`; передаёт BullMQ **опции** (парсит `REDIS_URL`), а не
       ioredis-инстанс — нет прямой зависимости от ioredis и связки версий. Гуард `queueEnabled()`.
     - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).

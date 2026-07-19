@@ -4,11 +4,19 @@ import {
   extractListItems,
   findDistributionByMarker,
   loadActiveDistributions,
+  loadDistributionsByTarget,
+  readPaymentTotal,
+  reconcileTargetDeletion,
   recomputeNeedDistribution,
   writeDistributionRow
 } from '../server/utils/distributionLedgerWrite'
 import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { DistributionRowInput } from '../app/utils/distributionLedger'
+
+const ufName = buildUfFieldName
+const srcUf = ufName(1046, DISTRIBUTION_SP_FIELDS.source.postfix)
+const needUf = ufName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)
+const reqUf = ufName(1044, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
 
 // Ledger transport (#109 §9.1/§9.3): idempotent row write (find-by-marker) + active-rows load
 // (paginated) + «осталось» recompute. DI over a fake RestCall — no network.
@@ -103,5 +111,73 @@ describe('recomputeNeedDistribution', () => {
     const upd = calls.find(c => c.method === 'crm.item.update')!
     expect(upd.params.id).toBe(500)
     expect((upd.params.fields as Record<string, unknown>)[buildUfFieldName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(50)
+  })
+})
+
+describe('readPaymentTotal', () => {
+  it('reads opportunity + currency; null when the element is gone', async () => {
+    const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }) })
+    expect(await readPaymentTotal(1044, '500', call)).toEqual({ total: 100, currency: 'BYN' })
+    const { call: empty } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
+    expect(await readPaymentTotal(1044, '500', empty)).toBeNull()
+  })
+})
+
+describe('loadDistributionsByTarget', () => {
+  it('accumulates target rows across pages', async () => {
+    const { call } = fakeCall({
+      'crm.item.list': params => (params.start
+        ? { result: { items: [{ id: 3, parentId1044: '500', [srcUf]: 'auto' }] } }
+        : { result: { items: [{ id: 1, parentId1044: '500', [srcUf]: 'manual' }] }, next: 1 })
+    })
+    const rows = await loadDistributionsByTarget(1046, 1044, 'invoice', '39', call)
+    expect(rows).toHaveLength(2)
+  })
+})
+
+describe('reconcileTargetDeletion', () => {
+  it('no rows → nothing done', async () => {
+    const { call, calls } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
+    expect(await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)).toEqual({ freed: 0, parentsRecomputed: 0, manualParents: 0 })
+    expect(calls.some(c => c.method === 'crm.item.update')).toBe(false)
+  })
+
+  it('deactivates rows, recomputes the parent, flags manual redistribution', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': (params) => {
+        // 1st list = target rows; subsequent lists = active rows (recompute) / payment read
+        if (params.filter && (params.filter as Record<string, unknown>)[ufName(1046, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
+          return { result: { items: [{ id: 9, parentId1044: '500', [srcUf]: 'manual' }] } }
+        }
+        if ((params.filter as Record<string, unknown>).id === 500) {
+          return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } } // payment read
+        }
+        return { result: { items: [] } } // active rows after deactivation → none
+      },
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    const res = await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)
+    expect(res).toEqual({ freed: 1, parentsRecomputed: 1, manualParents: 1 })
+    const updates = calls.filter(c => c.method === 'crm.item.update')
+    // deactivate row 9, recompute «осталось» on 500, set requiresRedistribution on 500
+    expect(updates.some(u => u.params.id === 9 && (u.params.fields as Record<string, unknown>)[ufName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)] === 'reverted')).toBe(true)
+    expect(updates.some(u => u.params.id === 500 && (u.params.fields as Record<string, unknown>)[needUf] === 100)).toBe(true)
+    expect(updates.some(u => u.params.id === 500 && (u.params.fields as Record<string, unknown>)[reqUf] === 'Y')).toBe(true)
+  })
+
+  it('auto-only rows do NOT flag requiresRedistribution', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': (params) => {
+        if ((params.filter as Record<string, unknown>)?.[ufName(1046, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
+          return { result: { items: [{ id: 9, parentId1044: '500', [srcUf]: 'auto' }] } }
+        }
+        if ((params.filter as Record<string, unknown>)?.id === 500) return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }
+        return { result: { items: [] } }
+      },
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    const res = await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)
+    expect(res.manualParents).toBe(0)
+    expect(calls.filter(c => c.method === 'crm.item.update').some(u => (u.params.fields as Record<string, unknown>)[reqUf] !== undefined)).toBe(false)
   })
 })

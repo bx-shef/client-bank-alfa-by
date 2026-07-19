@@ -36,7 +36,7 @@ describe('handleDeletionJob', () => {
     const reconcileTargetDeletion = vi.fn(async () => 3)
     const res = await handleDeletionJob(job({ eventCode: 'ONCRMDEALDELETE' }), deps({ reconcileTargetDeletion }))
     expect(res).toMatchObject({ outcome: 'reconciled-target', kind: 'deal', affected: 3 })
-    expect(reconcileTargetDeletion).toHaveBeenCalledWith(expect.objectContaining({ entityId: '15' }), 'deal')
+    expect(reconcileTargetDeletion).toHaveBeenCalledWith(expect.objectContaining({ entityId: '15' }), 'deal', CFG)
   })
 
   it('invoice (dynamic, etid 31) → reconcile-target', async () => {

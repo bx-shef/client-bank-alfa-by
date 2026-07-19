@@ -24,14 +24,15 @@ export interface DeletionReconcileDeps {
   /** Load the portal's SP config (payment/distribution entityTypeIds) for classification. */
   loadSpConfig: (memberId: string) => Promise<DeletionSpConfig>
   /** Reconcile an amount/trigger TARGET deletion (deal/invoice): deactivate the distributions
-   *  pointing at it + recompute their parent payments + notify. Returns rows affected. */
-  reconcileTargetDeletion: (job: DeletionJob, kind: DeletionEntityKind) => Promise<number>
+   *  pointing at it + recompute their parent payments + notify. `cfg` carries the SP entityTypeIds
+   *  (from settings) needed to reach the ledger. Returns rows affected. */
+  reconcileTargetDeletion: (job: DeletionJob, kind: DeletionEntityKind, cfg: DeletionSpConfig) => Promise<number>
   /** A deleted company that scoped a payment — error chat (§5, responsible/scope lost). */
   notifyCompanyDeleted: (job: DeletionJob) => Promise<void>
   /** Our payment-carrier SP element was deleted — §5 structure damage → error chat. */
   notifyCarrierDamaged: (job: DeletionJob) => Promise<void>
   /** A ledger row (dist-SP child) deleted by an admin — lazily recompute its parent payment. */
-  recomputeParent: (job: DeletionJob) => Promise<void>
+  recomputeParent: (job: DeletionJob, cfg: DeletionSpConfig) => Promise<void>
 }
 
 /** What the reconcile did — for logging / telemetry / counters (no PII). */
@@ -67,7 +68,7 @@ export async function handleDeletionJob(job: DeletionJob, deps: DeletionReconcil
   switch (kind) {
     case 'deal':
     case 'invoice': {
-      const affected = await deps.reconcileTargetDeletion(job, kind)
+      const affected = await deps.reconcileTargetDeletion(job, kind, cfg)
       return { outcome: 'reconciled-target', kind, affected }
     }
     case 'company':
@@ -77,7 +78,7 @@ export async function handleDeletionJob(job: DeletionJob, deps: DeletionReconcil
       await deps.notifyCarrierDamaged(job)
       return { outcome: 'notified-carrier', kind }
     case 'distribution':
-      await deps.recomputeParent(job)
+      await deps.recomputeParent(job, cfg)
       return { outcome: 'recomputed-parent', kind }
   }
 }
