@@ -42,6 +42,10 @@ onMounted(async () => {
     </ClientOnly>
 
     <ClientOnly>
+      <ProvisionSpCard class="mt-6" />
+    </ClientOnly>
+
+    <ClientOnly>
       <SettingsForm class="mt-6" />
     </ClientOnly>
 
