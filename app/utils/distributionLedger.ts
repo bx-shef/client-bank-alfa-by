@@ -106,6 +106,66 @@ export function buildActiveRowsListCall(
   return { method: 'crm.item.list', params }
 }
 
+/** Build the `crm.item.list` for ALL distribution rows of one payment element (any status — active
+ *  AND reverted, for the UI history), by parent link. `start` paginates. Same select as the active
+ *  list (adds nothing status-specific). */
+export function buildPaymentRowsListCall(
+  distributionSpEtid: number,
+  paymentSpEtid: number,
+  paymentElementId: string,
+  start?: number
+): { method: string, params: Record<string, unknown> } {
+  const params: Record<string, unknown> = {
+    entityTypeId: distributionSpEtid,
+    useOriginalUfNames: 'Y',
+    filter: { [parentLinkField(paymentSpEtid)]: Number(paymentElementId) },
+    select: ['id', 'opportunity', 'currencyId',
+      buildUfFieldName(distributionSpEtid, DISTRIBUTION_SP_FIELDS.targetKind.postfix),
+      buildUfFieldName(distributionSpEtid, DISTRIBUTION_SP_FIELDS.targetId.postfix),
+      buildUfFieldName(distributionSpEtid, DISTRIBUTION_SP_FIELDS.source.postfix),
+      buildUfFieldName(distributionSpEtid, DISTRIBUTION_SP_FIELDS.status.postfix)]
+  }
+  if (start) params.start = start
+  return { method: 'crm.item.list', params }
+}
+
+/** Build the `crm.item.list` for ALL payment carrier elements of the portal (for the «Распределение»
+ *  UI), newest first, paginated. Selects the total + currency + our UF state fields. */
+export function buildPaymentListCall(paymentSpEtid: number, start?: number): { method: string, params: Record<string, unknown> } {
+  const params: Record<string, unknown> = {
+    entityTypeId: paymentSpEtid,
+    useOriginalUfNames: 'Y',
+    order: { id: 'desc' },
+    select: ['id', 'opportunity', 'currencyId', 'companyId',
+      buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.needDistributionsSum.postfix),
+      buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.requiresRedistribution.postfix),
+      buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.marker.postfix)]
+  }
+  if (start) params.start = start
+  return { method: 'crm.item.list', params }
+}
+
+/** Parse one payment carrier list item into a header for the UI card. */
+export interface PaymentCarrierHeader {
+  id: string
+  total: number
+  currency: string
+  requiresRedistribution: boolean
+}
+
+/** Parse a payment carrier list item (`buildPaymentListCall`) into a {@link PaymentCarrierHeader}. */
+export function parsePaymentCarrier(item: Record<string, unknown>, paymentSpEtid: number): PaymentCarrierHeader | null {
+  const id = item.id
+  if (id === undefined || id === null || `${id}` === '') return null
+  const total = Number(item.opportunity)
+  return {
+    id: `${id}`,
+    total: Number.isFinite(total) ? round2(total) : 0,
+    currency: String(item.currencyId ?? ''),
+    requiresRedistribution: String(item[buildUfFieldName(paymentSpEtid, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)] ?? '') === 'Y'
+  }
+}
+
 /** Parse one distribution ledger item (from `crm.item.list`) into a `DistributionEntry`. Reads our
  *  UF fields (by full name) + the built-in `opportunity`/`currencyId`. Non-finite amount → 0. */
 export function parseLedgerRow(item: Record<string, unknown>, distributionSpEtid: number): DistributionEntry {
