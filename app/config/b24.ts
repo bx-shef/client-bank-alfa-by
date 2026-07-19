@@ -59,3 +59,19 @@ export const B24_PAYMENT_TRIGGER = {
   code: 'cba_payment_received',
   name: 'Импорт выписки: платёж получен'
 } as const
+
+/**
+ * entityTypeId of a smart-invoice — a fixed CRM constant (`31`). Canonical home here (a plain
+ * app-layer constant) so both the server lookup (`invoiceLookup.ts`, re-exports it) and the
+ * app-layer deletion parser (`deletionEvent.ts`) share ONE definition instead of duplicating `31`.
+ */
+export const SMART_INVOICE_ENTITY_TYPE_ID = 31
+
+/**
+ * CRM deletion events we bind so the backend reconciles the SP-ledger (#109, PROCESSING.md §9.2):
+ * `ONCRMDEALDELETE` (deal), `ONCRMCOMPANYDELETE` (company), `ONCRMDYNAMICITEMDELETE` (any smart
+ * process element — our carrier/distributions SPs + smart-invoices, told apart by ENTITY_TYPE_ID).
+ * Deals/companies do NOT fire the dynamic event, so all three are needed. Bound at install
+ * alongside `B24_BOUND_EVENTS` (both feed the `event.bind` batch). Scope `crm`.
+ */
+export const B24_DELETION_EVENTS = ['ONCRMDEALDELETE', 'ONCRMCOMPANYDELETE', 'ONCRMDYNAMICITEMDELETE'] as const

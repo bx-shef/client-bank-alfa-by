@@ -10,7 +10,12 @@ import type { AllocationCandidate } from '../../app/utils/allocation'
 import type { RestCall } from './companyLookup'
 
 /** CRM entityTypeId of a Smart Invoice (счёт). */
-export const SMART_INVOICE_ENTITY_TYPE_ID = 31
+// Canonical constant lives in app/config/b24.ts (shared with the app-layer deletion parser).
+// Import for local use here (line below) AND re-export so existing server importers
+// (intentResolver/negativeStages) are unchanged — a bare `export … from` would NOT bind it locally.
+import { SMART_INVOICE_ENTITY_TYPE_ID } from '../../app/config/b24'
+
+export { SMART_INVOICE_ENTITY_TYPE_ID }
 
 export interface InvoiceLookupOptions {
   /** Restrict the search to this client company's invoices — IDOR scope: the
