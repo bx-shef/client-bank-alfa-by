@@ -37,14 +37,14 @@ export interface DeletionRef {
 /** The portal's configured SP entityTypeIds — needed to tell OUR smart processes apart from any
  *  other dynamic type when classifying an `ONCRMDYNAMICITEMDELETE`. From portal settings. */
 export interface DeletionSpConfig {
-  /** entityTypeId of our payment-carrier smart process (the element that holds the payment).
-   *  ⚠ The consumer MUST source this from the SAME setting the recognizer uses for the carrier —
-   *  `configFields['smart-entity']` (`SMART_ENTITY_CONFIG_KEY`, via `parseConfiguredEntityTypeId`),
-   *  NOT a new independent field — else deletion-reconcile and payment recognition could disagree
-   *  on which SP is the carrier. */
+  /** entityTypeId of OUR payment-carrier smart process (the element that holds the payment). This
+   *  is a type WE provision (§9), distinct from the user's `smart-entity` allocation target — the
+   *  consumer MUST resolve it through `paymentSpEtid(configFields)` (`PAYMENT_SP_CONFIG_KEY`,
+   *  `app/config/distributionSp.ts`), the single source, so carrier choice / deletion-classify /
+   *  ledger write never disagree on which SP is the carrier. */
   paymentSpEtid?: number
-  /** entityTypeId of our distributions smart process (the child ledger items). A genuinely new
-   *  concept (no existing settings key) — a new setting is warranted for it. */
+  /** entityTypeId of OUR distributions smart process (the child ledger items) — likewise resolved
+   *  through `distributionSpEtid(configFields)` (`DISTRIBUTION_SP_CONFIG_KEY`). */
   distributionSpEtid?: number
 }
 
