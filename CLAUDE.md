@@ -436,7 +436,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
-    `allocation_fact`, `import_result`, `metrics_counter`, `bank_tokens`; дедуп дел — маркер в B24, таблицы нет — #259);
+    `allocation_fact`, `import_result`, `metrics_counter`, `bank_tokens`, `portal_app_rating`; дедуп дел — маркер в B24, таблицы нет — #259);
     `server/plugins/migrate.ts` — идемпотентная миграция на старте. **Выписки у себя не храним** — только
     токены/факты/агрегаты; сама выписка транзитна (payload'ы очередей с ограниченным по возрасту удержанием,
     `STATEMENT_JOB_RETENTION`, #245). Модель хранения/чистки финансовых ПДн — [`docs/PRIVACY.md`](docs/PRIVACY.md).
@@ -976,6 +976,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
     `nextOffset`-курсор) + роут `server/api/chat-search.get.ts` (фрейм-токен). UI-пикер — `AsyncSearchSelect`
     (+ `useRemoteSearch`/`app/utils/remoteSearch.ts`: дебаунс, гонка, курсор-пагинация, «Показать ещё»).
+  - **Оценка приложения в Маркете («оцените приложение»)** — [`docs/APP_RATING.md`](docs/APP_RATING.md)
+    (порт `ai-price-import` #199/#204, домен свой). Ненавязчивый попап `AppRatingModal.vue` (на `B24Modal`,
+    `useAppRating`) на `/import`: всплывает **после успешной записи в CRM** (`ratingTrigger` в
+    `StatementUpload`), по «Оценить» открывает листинг Маркета через `frame.slider.openPath`
+    (`marketDetailPath` в `config/b24.ts`, код — `LANDING_MARKET_CODE` `shef.bankimport`, override
+    `NUXT_PUBLIC_B24_MARKET_CODE`). **Решение показа — на сервере, рядом с авторизацией** (таблица
+    `portal_app_rating`, ключ `member_id`; чистая `shouldPrompt` в `appRatingPolicy.ts` — троттл
+    `RATING_REPROMPT_DAYS`=4д по `prompted_at`, глушение до ручной проверки по `opened_at`, `reviewed`
+    терминально). Роуты `GET/POST /api/app-rating` по **фрейм-токену** (`Bearer`+`X-B24-Domain`, чистое
+    ядро `appRatingHandler.ts`, DI+тесты; `member_id` из проверенного домена). Факт отзыва Маркет по REST
+    не отдаёт → владелец подтверждает **из UI оператора** (`/queues`, карточка «Оценки приложения»,
+    `useAppRatingOps`): `GET/POST /api/ops/app-rating` (сессия оператора + CSRF `X-CBA-Auth`, чистые
+    `appRatingStatus.ts`/`appRatingOpsHandler.ts` → `markReviewed`/`clearOpened`). Стор
+    `appRatingStore.ts` (наш array-`QueryFn`); удаление приложения чистит (`deleteRatingForPortal` в
+    `deletePortal` воркера). Гифка-подсказка `public/app-rating-demo.gif` (ленивая загрузка).
   - Backend — отдельный docker-сервис (`Dockerfile` target `backend`, `nuxt build`), Postgres рядом.
     В проде — **один домен**: nginx `app` проксирует `/api/*` в `backend:3000` (вебхук B24 на
     `https://<DOMAIN>/api/b24/events`, без CORS); CI пушит два образа (matrix `runner`+`backend`),

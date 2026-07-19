@@ -61,6 +61,18 @@ export const B24_PAYMENT_TRIGGER = {
 } as const
 
 /**
+ * Build the portal-relative path to this app's Bitrix24 Market detail page. Passed to the frame
+ * SDK's `slider.openPath` so the user lands on the listing where they can leave a rating/review
+ * (the «оцените приложение» modal). The path shape is fixed by Bitrix24; `code` is the app's Market
+ * listing code (see nuxt.config `b24MarketCode`, defaulting to `LANDING_MARKET_CODE`). Returns null
+ * for an empty code (feature off).
+ */
+export function marketDetailPath(code: string): string | null {
+  const c = code.trim()
+  return c ? `/marketplace/detail/${c}/` : null
+}
+
+/**
  * entityTypeId of a smart-invoice — a fixed CRM constant (`31`). Canonical home here (a plain
  * app-layer constant) so both the server lookup (`invoiceLookup.ts`, re-exports it) and the
  * app-layer deletion parser (`deletionEvent.ts`) share ONE definition instead of duplicating `31`.
