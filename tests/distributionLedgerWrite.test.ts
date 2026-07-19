@@ -4,6 +4,7 @@ import {
   extractListItems,
   findDistributionByMarker,
   loadActiveDistributions,
+  ensurePaymentElement,
   loadDistributionsByTarget,
   readPaymentTotal,
   reconcileTargetDeletion,
@@ -179,5 +180,29 @@ describe('reconcileTargetDeletion', () => {
     const res = await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)
     expect(res.manualParents).toBe(0)
     expect(calls.filter(c => c.method === 'crm.item.update').some(u => (u.params.fields as Record<string, unknown>)[reqUf] !== undefined)).toBe(false)
+  })
+})
+
+describe('ensurePaymentElement (idempotent by operation marker)', () => {
+  const input = { opportunity: 100, currency: 'BYN', marker: 'acc|doc1', companyId: '12' }
+  it('creates the carrier when the marker is absent', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': () => ({ result: { items: [] } }),
+      'crm.item.add': () => ({ result: { item: { id: 500 } } })
+    })
+    expect(await ensurePaymentElement(1044, input, call)).toEqual({ id: '500', created: true })
+    expect(calls.some(c => c.method === 'crm.item.add')).toBe(true)
+  })
+  it('returns the existing carrier (no add) when the marker is present', async () => {
+    const { call, calls } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 77, opportunity: '100', currencyId: 'BYN' }] } }) })
+    expect(await ensurePaymentElement(1044, input, call)).toEqual({ id: '77', created: false })
+    expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
+  })
+  it('throws when add returns no id', async () => {
+    const { call } = fakeCall({
+      'crm.item.list': () => ({ result: { items: [] } }),
+      'crm.item.add': () => ({ result: {} })
+    })
+    await expect(ensurePaymentElement(1044, input, call)).rejects.toThrow(/no payment element id/)
   })
 })
