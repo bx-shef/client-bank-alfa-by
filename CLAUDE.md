@@ -134,12 +134,25 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   «стадия оплаченного счёта» → `allocation.invoicePaidStageId` (пусто ⇒ стадию не трогаем) + поле `B24Input`
   **«код триггера автоматизации»** → `allocation.triggerCode` (#79; подсказка показывает канонический
   `B24_PAYMENT_TRIGGER.code`/`name` — что зарегистрировано на установке и как повесить на правило; пусто ⇒ триггер
-  не фаерим); default OFF).
+  не фаерим); default OFF)
+  + **`RecognitionMap` «карта сопоставления»** (#109 §4: матрицы распознавания + алфавит + `configFields`
+  — форма вместо ручной правки `app.option` JSON; см. компонент ниже).
   Один компонент для двух точек входа: слайдер на
   `/app` и полная страница `/settings`. **Хранение — backend** (`app.option` через `useChatSettings`),
   **автосейв** (debounced) с индикатором «Сохранение…/Сохранено ✓» (aria-live) + flush на unmount.
   **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`, default-closed до проверки): в портале не-админу —
   предупреждение вместо формы; вне фрейма — предпросмотр (persistence инертна).
+- `app/components/RecognitionMap.vue` + чистый `app/utils/recognitionKinds.ts` — **UI «карты сопоставления»**
+  (#109 §4): редактор распознавания платежей внутри `SettingsForm` (`B24Card`/`B24Select`/`B24Input`/`B24Button`/
+  `B24Badge`). Привязан к `settings.recognition` через `defineModel` (вложенные мутации lint-чисты, автосейв — deep-watch
+  родителя): **алфавит** (кир/лат гомоглифы), **динамический список матриц** (маска `d`=цифра+литералы → **вид сущности**
+  `IdentifierKind` + note; добавить/удалить), **`configFields`** (`smart-entity` entityTypeId + `deal-field`/`smart-field`
+  имена полей, delete-on-blank), **живой предпросмотр** «тестовое назначение → распознано» на реальном `recognizeByMatrices`.
+  Заменяет ручную правку `app.option` JSON; сервер по-прежнему коэрсит/клампит (`parsePortalSettings`, DoS-капы) — форма
+  это удобство, не источник доверия. `recognitionKinds.ts` — RU-лейблы **всех** `IdentifierKind` (exhaustive
+  `Record<IdentifierKind,…>` + тест), `IDENTIFIER_KIND_ITEMS`/`ALPHABET_ITEMS`/`CONFIG_FIELD_ROWS`/`blankMatrix`. Тесты —
+  `recognitionKinds.test.ts` (exhaustive) + `nuxt/recognitionMap.nuxt.test.ts` (рендер/add-remove/предпросмотр); визуально
+  проверен (свет/тёмная, `/settings`).
 - `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
   в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
   мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
