@@ -327,8 +327,11 @@ live-verify), либо мелкая косметика (#103 CI-смоук, #189
   (`metrics_counter`: processed/created/allocated/distributed/unmatched/… из сводки `crm-sync`), читаются/
   сбрасываются по фрейм-токену (`GET /api/import/metrics`, `POST /api/import/metrics-reset`, member-scoped).
   В отличие от снапшота глубины очередей — это тотал за всё время, переживает рестарт (форма портирована из
-  соседнего `ai-price-import`). #78 — **OpenTelemetry**: слайс 1 (спаны REST/джоб, app-side) сделан; осталось
-  слайс 2 (коллектор + ClickHouse + Grafana). См. `docs/OBSERVABILITY.md`.
+  соседнего `ai-price-import`). #78 — **OpenTelemetry — оба слайса сделаны**: слайс 1 (app-side, спаны) —
+  **полное покрытие конвейера деревом трасс**: все 4 job-воркера + одиночный/батч B24 REST + OAuth-refresh +
+  крон-корни, `context.with` проводит вложенность (PII через allowlist; правило покрытия — CLAUDE.md «Конвенции»);
+  слайс 2 — общая станция `telemetry-station/` (коллектор + ClickHouse + Grafana, opt-in) + переносимый Node-клиент.
+  См. `docs/OBSERVABILITY.md`. Осталось: живой прогон станции (за владельцем).
 - **Стадия 4 — поиск компании + запись дела** (код + юнит-тесты; **поиск компании И запись дела подтверждены
   на живом портале**, #90): `companyLookup.ts` (по корр-счёту → `RQ_ACC_NUM`/
   `RQ_IIK` → реквизит → компания) — **прогнан вживую** (реквизиты по счёту → id компании), пресеты
