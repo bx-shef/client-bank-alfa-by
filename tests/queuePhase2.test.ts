@@ -1160,6 +1160,7 @@ describe('handleCrmSyncJob — SP-ledger write at allocate (§9.1)', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
     expect(r.ledgerWritten).toBe(1)
     expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]]) // company + both etids threaded
+    expect(calls.allocApply).toHaveLength(1) // ledger write must NOT suppress the gated portal mutation
   })
 
   it('autoDistribute OFF but SP provisioned → ledger IS written (dedup fact), portal mutation is NOT applied (§9.3 #6)', async () => {
