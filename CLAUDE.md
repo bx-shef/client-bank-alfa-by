@@ -1242,8 +1242,9 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 ## Обратная связь (feedback-triage)
 
 Сбор отзывов и их разбор в бэклог — портированный «feedback-triage kit», адаптированный
-под наш домен. **Статус:** **базовый канал «сотрудник» реализован** (порт из `ai-price-import`);
-**программа-канал + обогащение issue (сущность/исход/файл) + телеметрия 👍/👎 — в бэклоге.** Два дока:
+под наш домен. **Статус:** **базовый канал «сотрудник» реализован** (порт из `ai-price-import`)
+**+ телеметрия 👍/👎** (#195: счётчики `feedback_up`/`feedback_down` в `metrics_counter`, видны в
+`GET /api/import/metrics`); **программа-канал + обогащение issue (сущность/исход/файл) — в бэклоге.** Два дока:
 - **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
   `useFeedback.ts`) на `/app` под полосой статуса — 👍 шлёт сразу, 👎 сперва открывает поле
   комментария. Рендерится только когда канал включён на сервере (`GET /api/feedback {enabled}`),
@@ -1252,10 +1253,14 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   `buildFeedbackIssue` (`app/utils/feedback.ts` — **security-critical санитизация**: Trojan-Source
   strip по код-поинтам, HTML-escape комментария в `<pre><code>`, контекст в inline-code-span против
   markdown-инъекции) → `postFeedbackIssue` (`server/utils/feedbackGithub.ts`, GitHub REST, не логирует
-  токен/URL/тело) в **приватный** репо `GITHUB_FEEDBACK_REPO`. Конфиг `server/utils/feedbackConfig.ts`
-  — **fail-closed**: без `GITHUB_FEEDBACK_TOKEN`+`GITHUB_FEEDBACK_REPO` канал OFF (виджет скрыт, POST →
-  503), репо никогда не дефолтится на публичный. Тесты — `feedback`/`feedbackConfig`/`feedbackGithub`/
-  `feedbackHandler` + `nuxt/feedbackWidget`.
+  токен/URL/тело) в **приватный** репо `GITHUB_FEEDBACK_REPO`. **Телеметрия (#195):** на успешно
+  заведённом issue `feedbackHandler` best-effort бампит `FEEDBACK_METRICS.up`/`.down`
+  (`feedback_up`/`feedback_down` в `metrics_counter` — **отдельно** от summary-bound `METRICS`, т.к.
+  считаются из роута, а не из crm-sync summary; оба 👍/👎, видны в `GET /api/import/metrics`). Конфиг
+  `server/utils/feedbackConfig.ts` — **fail-closed**: без `GITHUB_FEEDBACK_TOKEN`+`GITHUB_FEEDBACK_REPO`
+  канал OFF (виджет скрыт, POST → 503), репо никогда не дефолтится на публичный. Роут дросселируется
+  nginx `limit_req` (зона import). Тесты — `feedback`/`feedbackConfig`/`feedbackGithub`/`feedbackHandler`
+  (+ метрика) + `nuxt/feedbackWidget` + `metricsStore` (feedback-счётчики).
 - [`docs/FEEDBACK.md`](docs/FEEDBACK.md) — **дизайн канала**: два источника отзывов —
   **сотрудник** (👍/👎 на `/app`, ✅ реализован) и **программа** (воркер `crm-sync`, когда «запуталась»:
   `unmatched`/`ambiguous`/`manual`/не-распознан-формат — в бэклоге). Каждый отзыв → issue в **приватном**

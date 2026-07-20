@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { QueryFn } from '../server/utils/tokenStore'
 import {
   METRICS,
+  FEEDBACK_METRICS,
   bumpCounter,
   bumpCounters,
   readCounters,
@@ -37,6 +38,24 @@ function fakeStore() {
   }
   return { query, rows }
 }
+
+describe('FEEDBACK_METRICS', () => {
+  it('is separate from the summary-bound METRICS and never overlaps their names', () => {
+    expect(FEEDBACK_METRICS).toEqual({ up: 'feedback_up', down: 'feedback_down' })
+    const summaryNames = new Set(Object.values(METRICS))
+    expect(summaryNames.has(FEEDBACK_METRICS.up)).toBe(false)
+    expect(summaryNames.has(FEEDBACK_METRICS.down)).toBe(false)
+  })
+
+  it('accumulates 👍/👎 and shows up in readCounters alongside run counters', async () => {
+    const { query } = fakeStore()
+    await bumpCounter(query, 'm1', METRICS.created, 2)
+    await bumpCounter(query, 'm1', FEEDBACK_METRICS.up, 1)
+    await bumpCounter(query, 'm1', FEEDBACK_METRICS.up, 1)
+    await bumpCounter(query, 'm1', FEEDBACK_METRICS.down, 1)
+    expect(await readCounters(query, 'm1')).toEqual({ created: 2, feedback_up: 2, feedback_down: 1 })
+  })
+})
 
 describe('bumpCounter', () => {
   it('creates then accumulates a counter (upsert)', async () => {

@@ -10,6 +10,7 @@ import { buildFeedbackIssue } from '../../app/utils/feedback'
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
+import { FEEDBACK_METRICS, bumpCounter } from '../utils/metricsStore'
 import { dbQuery } from '../db/client'
 
 function liveSubmitDeps(): FeedbackSubmitDeps {
@@ -25,7 +26,11 @@ function liveSubmitDeps(): FeedbackSubmitDeps {
     },
     // Only invoked when config is non-null (the handler gates on config first).
     postIssue: (kind, comment, context) =>
-      postFeedbackIssue(config!, buildFeedbackIssue(kind, comment, context), fetchImpl)
+      postFeedbackIssue(config!, buildFeedbackIssue(kind, comment, context), fetchImpl),
+    // Telemetry (#195): count the sent rating (both 👍/👎) into the lifetime counters that
+    // `GET /api/import/metrics` reads. Best-effort — the handler swallows a failure here.
+    recordMetric: (memberId, kind) =>
+      bumpCounter(dbQuery, memberId, kind === 'up' ? FEEDBACK_METRICS.up : FEEDBACK_METRICS.down, 1)
   }
 }
 
