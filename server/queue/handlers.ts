@@ -94,10 +94,10 @@ export interface HandlerDeps {
    *  (fail the job → clean retry), like findCompany — it runs BEFORE the activity write. */
   recordAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Whether an allocation fact for this (payment → target) already exists (#109
-   *  mutation slice). Now consulted ONLY for the TRIGGER path (deal/smart-process) —
-   *  a trigger fire is stateless, so the fact is its only dedup. The AMOUNT mutation
-   *  pre-check moved to `isTargetApplied` (reads B24 state, Фаза A). Any status
-   *  (allocated or reverted) counts as existing. A store error propagates (fail the job). */
+   *  mutation slice). NO LONGER consulted in the handler (§9.3 #6, sub-slice 2): the trigger
+   *  dedup moved to the dist-СП marker (`hasTriggerFact`); the amount mutation pre-check moved
+   *  to `isTargetApplied` (reads B24 state, Фаза A). Dep retained until the Postgres store is
+   *  removed (sub-slice 3). A store error propagates (fail the job). */
   hasAllocationFact: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Whether a decided AMOUNT target (deal-payment/invoice) is already applied in B24 —
    *  the payment is `paid='Y'` / the invoice is on the configured `opts.invoicePaidStageId`
