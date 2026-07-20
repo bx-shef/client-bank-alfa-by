@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import {
   ACCEPTED_EXTENSIONS,
   MAX_UPLOAD_FILES,
+  decodeUploadText,
   dedupItems,
   deferToEventLoop,
   processUploadBatch,
@@ -29,6 +30,11 @@ const fileInput = ref<HTMLInputElement | null>(null)
 // «оцените приложение» modal (AppRatingModal) can ask. The show decision is server-throttled; this
 // only nudges the check. Inert outside a portal.
 const ratingTrigger = ref(false)
+// Decoded text + name of the first successfully-parsed file — offered (opt-in) to the feedback
+// widget so an employee can attach the statement to a 👎 issue for reproduction (#198). Recomputed
+// on each batch; empty when nothing parsed. Decode matches the parser (windows-1251).
+const feedbackFileName = ref('')
+const feedbackFileText = ref('')
 
 // Combined, de-duped operations across all successfully parsed files.
 const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
@@ -50,6 +56,19 @@ async function processFiles(files: File[]) {
   results.value = out.results
   batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
   truncated.value = out.truncated
+  // Cache the first OK file's decoded text for the (opt-in) feedback attach (#198).
+  const firstOk = batchFiles.value.find((_, i) => out.results[i]?.ok)
+  if (firstOk) {
+    feedbackFileName.value = firstOk.name
+    try {
+      feedbackFileText.value = decodeUploadText(await firstOk.arrayBuffer())
+    } catch {
+      feedbackFileText.value = '' // can't decode → just don't offer the attach
+    }
+  } else {
+    feedbackFileName.value = ''
+    feedbackFileText.value = ''
+  }
   busy.value = false
 }
 
@@ -73,6 +92,8 @@ function clearAll() {
   batchFiles.value = []
   truncated.value = 0
   submitResult.value = null
+  feedbackFileName.value = ''
+  feedbackFileText.value = ''
   if (fileInput.value) fileInput.value.value = ''
 }
 </script>
@@ -224,6 +245,16 @@ function clearAll() {
         data-testid="all-failed"
       />
     </div>
+
+    <!-- Feedback on the PARSE result (docs/FEEDBACK.md, channel «сотрудник»): 👍/👎 + optional
+         comment; on 👎 the employee may opt in to attach the statement file to the private issue
+         (#198). Renders only when the channel is enabled server-side and something parsed. -->
+    <FeedbackWidget
+      v-if="okCount"
+      :file-name="feedbackFileName"
+      :file-text="feedbackFileText"
+      class="mt-4"
+    />
 
     <!-- «Оцените приложение» — surfaces (server-throttled) after a successful CRM write; inert
          outside a portal. -->

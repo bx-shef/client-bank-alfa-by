@@ -56,9 +56,17 @@ export interface IssuePayload { title: string, body: string, labels: string[] }
 export interface FeedbackContext {
   fileName?: unknown
   appVersion?: unknown
+  /** Raw statement text, embedded in the issue ONLY with the employee's explicit consent (#198).
+   *  PRIVACY: this is the client's financial statement (accounts/amounts/УНП) — it is rendered
+   *  ONLY because the receiving repo is PRIVATE (see the module header). Absent/empty ⇒ no block. */
+  fileContent?: unknown
 }
 
 const MAX_CONTEXT_VALUE = 300
+
+/** Cap for the embedded statement text. GitHub's issue body is limited (~65536 chars); keep the
+ *  file excerpt well under it so the rest of the body (comment + context) always fits. */
+export const MAX_FILE_EMBED = 30000
 
 /**
  * One `- **Label:** `value`` line, rendered fully INERT. Client-supplied context values (fileName is
@@ -72,6 +80,34 @@ const MAX_CONTEXT_VALUE = 300
 function contextLine(label: string, value: unknown): string | null {
   const flat = stripHostileChars(value).replace(/[\r\n\t]+/g, ' ').replace(/`/g, '').trim().slice(0, MAX_CONTEXT_VALUE)
   return flat ? `- **${label}:** \`${flat}\`` : null
+}
+
+/**
+ * Body lines for the attached statement file (#198), or `[]` when there's nothing to embed. UNLIKE
+ * `contextLine`, newlines are KEPT (it's a file — its line structure is the point), but the content
+ * is made fully INERT: strip hostile control chars (bidi/zero-width/BOM — but keep \n\r\t) so it
+ * can't Trojan-Source the issue, then `escapeHtml` so a literal `</code></pre>` inside the statement
+ * can't close the block and inject markdown/HTML, then cap to `MAX_FILE_EMBED` with a truncation
+ * marker. Wrapped in a collapsed `<details>` so a long file doesn't dominate the issue. Only ever
+ * called with a value the employee consented to attach (the receiving repo is private).
+ */
+function fileEmbedLines(value: unknown): string[] {
+  const stripped = stripHostileChars(value)
+  const trimmed = stripped.trim()
+  if (!trimmed) return []
+  const capped = stripped.length <= MAX_FILE_EMBED
+    ? stripped
+    : `${stripped.slice(0, MAX_FILE_EMBED)}\n\n[обрезано до ${MAX_FILE_EMBED} символов]`
+  return [
+    '',
+    '**Файл выписки** (приложен по согласию сотрудника):',
+    '<details><summary>Показать содержимое</summary>',
+    '',
+    '<pre><code>',
+    escapeHtml(capped),
+    '</code></pre>',
+    '</details>'
+  ]
 }
 
 /**
@@ -100,7 +136,8 @@ export function buildFeedbackIssue(kind: FeedbackKind, comment: unknown, context
     '<pre><code>',
     safe,
     '</code></pre>',
-    ...(contextLines.length ? ['', '**Контекст:**', ...contextLines] : [])
+    ...(contextLines.length ? ['', '**Контекст:**', ...contextLines] : []),
+    ...fileEmbedLines(context.fileContent)
   ].join('\n')
   return { title, body, labels: ['user-feedback', `feedback:${kind}`] }
 }

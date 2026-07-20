@@ -5,6 +5,7 @@ import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_FILES,
   decodeAndParse,
+  decodeUploadText,
   dedupItems,
   processUploadBatch,
   uploadErrorMessage,
@@ -32,6 +33,20 @@ describe('validateUploadFile', () => {
     expect(validateUploadFile('scan.pdf', 1024)).toMatch(/Неподдерживаемый тип/)
     expect(validateUploadFile('export.txt', 0)).toMatch(/Пустой/)
     expect(validateUploadFile('export.txt', MAX_UPLOAD_BYTES + 1)).toMatch(/слишком большой/)
+  })
+})
+
+describe('decodeUploadText (windows-1251, shared with the parser)', () => {
+  it('decodes cyrillic bytes correctly (same decode the parser uses, no mojibake)', () => {
+    // 0xCF 0xF0 0xE8 0xEE 0xF0 = «Приор» in windows-1251.
+    const bytes = new Uint8Array([0xcf, 0xf0, 0xe8, 0xee, 0xf0])
+    expect(decodeUploadText(bytes)).toBe('Приор')
+  })
+  it('produces the same text decodeAndParse consumes for a real fixture', () => {
+    const bytes = fixture('client-bank/demo-prior-byn.txt')
+    const text = decodeUploadText(bytes)
+    expect(text.length).toBeGreaterThan(0)
+    expect(text).not.toContain('�') // no replacement char → correct codepage
   })
 })
 

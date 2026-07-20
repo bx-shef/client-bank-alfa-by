@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFeedbackIssue, escapeHtml, MAX_COMMENT_LENGTH, normalizeKind, sanitizeComment, stripHostileChars } from '~/utils/feedback'
+import { buildFeedbackIssue, escapeHtml, MAX_COMMENT_LENGTH, MAX_FILE_EMBED, normalizeKind, sanitizeComment, stripHostileChars } from '~/utils/feedback'
 
 // Build hostile chars from code points (never type the invisible characters literally — that would
 // itself be a Trojan-Source vector, and the point of the strip is to remove exactly these).
@@ -87,5 +87,41 @@ describe('feedback — buildFeedbackIssue', () => {
   it('omits the Контекст section entirely when no context is provided', () => {
     const p = buildFeedbackIssue('up', 'ok')
     expect(p.body).not.toContain('**Контекст:**')
+  })
+})
+
+describe('feedback — file attach (#198)', () => {
+  it('embeds the statement text in a collapsed <details> block when fileContent is present', () => {
+    const p = buildFeedbackIssue('down', 'не разобралось', { fileContent: '1CClientBankExchange\nСекция' })
+    expect(p.body).toContain('**Файл выписки** (приложен по согласию сотрудника):')
+    expect(p.body).toContain('<details><summary>Показать содержимое</summary>')
+    expect(p.body).toContain('1CClientBankExchange\nСекция')
+    expect(p.body).toContain('</details>')
+  })
+
+  it('omits the file block entirely for empty / whitespace-only / absent fileContent', () => {
+    expect(buildFeedbackIssue('up', 'ok').body).not.toContain('Файл выписки')
+    expect(buildFeedbackIssue('up', 'ok', { fileContent: '   \n  ' }).body).not.toContain('Файл выписки')
+  })
+
+  it('escapes so a </code></pre> inside the file cannot break out of the block', () => {
+    const p = buildFeedbackIssue('down', 'x', { fileContent: 'до</code></pre>после' })
+    expect(p.body).toContain('до&lt;/code&gt;&lt;/pre&gt;после')
+    expect(p.body).not.toContain('до</code></pre>после')
+  })
+
+  it('caps a huge file to MAX_FILE_EMBED with a truncation marker', () => {
+    const big = 'A'.repeat(MAX_FILE_EMBED + 5000)
+    const p = buildFeedbackIssue('down', 'x', { fileContent: big })
+    expect(p.body).toContain(`[обрезано до ${MAX_FILE_EMBED} символов]`)
+    // The embedded run of A's is capped (escapeHtml doesn't touch 'A', so length is comparable).
+    expect(p.body.match(/A+/)![0].length).toBe(MAX_FILE_EMBED)
+  })
+
+  it('strips bidi/zero-width control chars from the embedded file (Trojan-Source-safe)', () => {
+    const p = buildFeedbackIssue('down', 'x', { fileContent: `стро${ZWSP}ка${BIDI}RTL` })
+    expect(p.body).toContain('строка')
+    expect(p.body).not.toContain(ZWSP)
+    expect(p.body).not.toContain(BIDI)
   })
 })

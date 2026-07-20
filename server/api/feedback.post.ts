@@ -6,7 +6,7 @@
 import { handleFeedbackSubmit, type FeedbackSubmitDeps } from '../utils/feedbackHandler'
 import { resolveFeedbackConfig } from '../utils/feedbackConfig'
 import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
-import { buildFeedbackIssue } from '../../app/utils/feedback'
+import { MAX_FILE_EMBED, buildFeedbackIssue } from '../../app/utils/feedback'
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
@@ -37,14 +37,26 @@ function liveSubmitDeps(): FeedbackSubmitDeps {
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const raw = await readBody(event).catch(() => null) as
-    { kind?: unknown, comment?: unknown, context?: { fileName?: unknown, appVersion?: unknown } } | null
+  const raw = await readBody(event).catch(() => null) as {
+    kind?: unknown
+    comment?: unknown
+    attachFile?: unknown
+    context?: { fileName?: unknown, appVersion?: unknown, fileContent?: unknown }
+  } | null
+  // File-attach (#198) is consent-gated: embed the statement text ONLY when the client set
+  // attachFile === true. Bound the accepted text server-side (defense — the builder also caps) so a
+  // crafted body can't blow up memory. The employee's consent is the privacy control; the receiving
+  // repo is private (feedbackConfig fail-closed), so client financial data is permitted there.
+  const consented = raw?.attachFile === true
+  const fileContent = consented && typeof raw?.context?.fileContent === 'string'
+    ? raw.context.fileContent.slice(0, MAX_FILE_EMBED)
+    : undefined
   const { status, body } = await handleFeedbackSubmit(liveSubmitDeps(), {
     accessToken: token,
     domain,
     kind: raw?.kind,
     comment: raw?.comment,
-    context: { fileName: raw?.context?.fileName, appVersion: raw?.context?.appVersion }
+    context: { fileName: raw?.context?.fileName, appVersion: raw?.context?.appVersion, fileContent }
   })
   if (status === 500 || status === 502) {
     // Only a real GitHub transport failure (not the 503 config-gate) — log the numeric class for
