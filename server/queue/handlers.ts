@@ -411,12 +411,14 @@ export async function handleCrmSyncJob(
             // Gate OFF ⇒ fact-only (write-once), no portal mutation. Unchanged v1 behaviour.
             allocated++
           }
-          // SP-ledger write (§9.1): ADDITIONALLY, when auto-distribute is on AND both SPs are
-          // provisioned (carrier = smart-process), record the allocation in the ledger (payment
-          // carrier element + distribution row + «осталось» recompute). Idempotent by markers, so a
-          // redelivery no-ops; a REST error propagates (clean retry). companyId is non-null here (we
-          // are inside the matched-company branch). This does NOT replace the activity дело.
-          if (autoDistribute && ledgerPaymentEtid && ledgerDistributionEtid && deps.writeLedger && companyId) {
+          // SP-ledger write (§9.1): ADDITIONALLY, when both SPs are provisioned (carrier =
+          // smart-process), record the allocation in the ledger (payment carrier element +
+          // distribution row + «осталось» recompute) — this is the DEDUP/allocation-fact record,
+          // so it runs WHENEVER the SP-ledger exists, INDEPENDENT of `autoDistribute` (which gates
+          // only the portal MUTATION — payment.pay / invoice stage — above). Idempotent by markers,
+          // so a redelivery no-ops; a REST error propagates (clean retry). companyId is non-null
+          // here (matched-company branch). This does NOT replace the activity дело.
+          if (ledgerPaymentEtid && ledgerDistributionEtid && deps.writeLedger && companyId) {
             if (await deps.writeLedger(item, target, companyId, job.memberId, { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid })) ledgerWritten++
           }
         }

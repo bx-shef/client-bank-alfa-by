@@ -1162,11 +1162,14 @@ describe('handleCrmSyncJob — SP-ledger write at allocate (§9.1)', () => {
     expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]]) // company + both etids threaded
   })
 
-  it('autoDistribute OFF → no ledger write (fact-only, unchanged)', async () => {
+  it('autoDistribute OFF but SP provisioned → ledger IS written (dedup fact), portal mutation is NOT applied (§9.3 #6)', async () => {
     const { deps, calls } = fakeDeps({ recognition: provisioned, resolve: [invAt('7', 10)], autoDistribute: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
-    expect(r.ledgerWritten).toBe(0)
-    expect(calls.ledger).toEqual([])
+    // The distribution-fact record (ledger row) is decoupled from the autoDistribute gate: it is
+    // written whenever the SP-ledger is provisioned. Only the portal mutation stays gated OFF.
+    expect(r.ledgerWritten).toBe(1)
+    expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]])
+    expect(calls.allocApply).toEqual([]) // applyAllocation (payment.pay / invoice stage) NOT called
   })
 
   it('SP NOT provisioned (no configFields) → no ledger write even with autoDistribute ON', async () => {
