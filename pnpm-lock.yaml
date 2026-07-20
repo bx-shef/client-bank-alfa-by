@@ -24,8 +24,8 @@ importers:
         specifier: ^5.2.9
         version: 5.2.9
       '@fontsource/rubik':
-        specifier: ^5.2.8
-        version: 5.2.8
+        specifier: ^5.3.0
+        version: 5.3.0
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
@@ -616,8 +616,8 @@ packages:
   '@fontsource/roboto-mono@5.2.9':
     resolution: {integrity: sha512-iIeSyrRGoM15uIWqXslW1K9UFnUYfnCFNrNoWjXE0huO1L+hM0Jst0KNLuRc7P21xPpGL0bZouzYSX0Em9eyWg==}
 
-  '@fontsource/rubik@5.2.8':
-    resolution: {integrity: sha512-PIc8QR7FqWPcYhbdRiGff56vQlKqg/ytES1YqecSq1GkgxiH4TBshrFvDEOZ9JonUF9m1qQ+qXxJj7wD5zgXEw==}
+  '@fontsource/rubik@5.3.0':
+    resolution: {integrity: sha512-Nks2mn7vlE1jZVHuVgoKU2Ejqjvd+GJzLRdraCjo1xc79oo7O6vJ8pcvSfmKPGX3/Ln7nt09XWFzPeu2jWf0xQ==}
 
   '@grpc/grpc-js@1.14.4':
     resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
@@ -5724,6 +5724,11 @@ packages:
     engines: {node: '>=20.16.0'}
     hasBin: true
 
+  srvx@0.11.22:
+    resolution: {integrity: sha512-LqZxxBDMKuMAZzFzJnDCkFOrs9MZQZr0LvHiO/SuSZVdQaXD7xQ5UWTUxheJrQPve1qk9MG2B/yttUvJxw8egQ==}
+    engines: {node: '>=20.16.0'}
+    hasBin: true
+
   stable-hash-x@0.2.0:
     resolution: {integrity: sha512-o3yWv49B/o4QZk5ZcsALc6t0+eCelPc44zZsLtCQnZPDwFpDYSWcDnrv2TtMmMbQ7uKo3J0HTURCqckw23czNQ==}
     engines: {node: '>=12.0.0'}
@@ -7076,7 +7081,7 @@ snapshots:
 
   '@fontsource/roboto-mono@5.2.9': {}
 
-  '@fontsource/rubik@5.2.8': {}
+  '@fontsource/rubik@5.3.0': {}
 
   '@grpc/grpc-js@1.14.4':
     dependencies:
@@ -11094,14 +11099,14 @@ snapshots:
   h3@2.0.1-rc.20(crossws@0.4.6(srvx@0.11.17)):
     dependencies:
       rou3: 0.8.1
-      srvx: 0.11.17
+      srvx: 0.11.22
     optionalDependencies:
       crossws: 0.4.6(srvx@0.11.17)
 
   h3@2.0.1-rc.22(crossws@0.4.6(srvx@0.11.17)):
     dependencies:
       rou3: 0.8.1
-      srvx: 0.11.17
+      srvx: 0.11.22
     optionalDependencies:
       crossws: 0.4.6(srvx@0.11.17)
 
@@ -12760,6 +12765,8 @@ snapshots:
   split2@4.2.0: {}
 
   srvx@0.11.17: {}
+
+  srvx@0.11.22: {}
 
   stable-hash-x@0.2.0: {}
 
