@@ -75,7 +75,7 @@ describe('handleFeedbackSubmit', () => {
     const up = deps()
     await handleFeedbackSubmit(up, { ...IN, kind: 'up' })
     expect(up.recordMetric).toHaveBeenCalledWith('M', 'up')
-    const down = deps({ postIssue: async () => okPost })
+    const down = deps()
     await handleFeedbackSubmit(down, { ...IN, kind: 'down' })
     expect(down.recordMetric).toHaveBeenCalledWith('M', 'down')
   })
