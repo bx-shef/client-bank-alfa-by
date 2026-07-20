@@ -6,7 +6,7 @@
 import { handleFeedbackSubmit, type FeedbackSubmitDeps } from '../utils/feedbackHandler'
 import { resolveFeedbackConfig } from '../utils/feedbackConfig'
 import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
-import { MAX_FILE_EMBED, buildFeedbackIssue } from '../../app/utils/feedback'
+import { attachedFileContent, buildFeedbackIssue } from '../../app/utils/feedback'
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
@@ -43,14 +43,12 @@ export default defineEventHandler(async (event) => {
     attachFile?: unknown
     context?: { fileName?: unknown, appVersion?: unknown, fileContent?: unknown }
   } | null
-  // File-attach (#198) is consent-gated: embed the statement text ONLY when the client set
-  // attachFile === true. Bound the accepted text server-side (defense — the builder also caps) so a
-  // crafted body can't blow up memory. The employee's consent is the privacy control; the receiving
-  // repo is private (feedbackConfig fail-closed), so client financial data is permitted there.
-  const consented = raw?.attachFile === true
-  const fileContent = consented && typeof raw?.context?.fileContent === 'string'
-    ? raw.context.fileContent.slice(0, MAX_FILE_EMBED)
-    : undefined
+  // File-attach (#198) is consent-gated by the pure `attachedFileContent`: embed the statement text
+  // ONLY when the client set attachFile === true, bounding the accepted text server-side (defense —
+  // the builder also caps) so a crafted body can't blow up memory. The employee's consent is the
+  // privacy control; the receiving repo is private (feedbackConfig fail-closed), so client financial
+  // data is permitted there.
+  const fileContent = attachedFileContent(raw?.attachFile, raw?.context?.fileContent)
   const { status, body } = await handleFeedbackSubmit(liveSubmitDeps(), {
     accessToken: token,
     domain,

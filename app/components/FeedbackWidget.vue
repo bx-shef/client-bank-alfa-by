@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useFeedback } from '~/composables/useFeedback'
 
 // Compact 👍/👎 feedback widget under an import result. Renders nothing unless the channel is enabled
@@ -23,6 +23,17 @@ onMounted(() => {
   ensureEnabled()
 })
 
+// A new file (re-parse without unmounting the widget) must NOT inherit consent/comment given for the
+// previous file — otherwise a 👎 could attach the WRONG statement under stale consent. Reset the
+// interaction state whenever the underlying statement text changes.
+watch(() => props.fileText, () => {
+  attachFile.value = false
+  open.value = false
+  comment.value = ''
+  sent.value = false
+  error.value = ''
+})
+
 async function rate(kind: 'up' | 'down'): Promise<void> {
   // 👎 → ask what went wrong before sending (a comment makes negative feedback actionable). 👍 stays
   // an instant, no-friction positive signal.
@@ -35,8 +46,9 @@ async function rate(kind: 'up' | 'down'): Promise<void> {
   error.value = ''
   try {
     // submit() returns false (without throwing) outside a portal frame — do NOT claim success.
-    // Attach the statement text only when the employee ticked the consent box AND we have it.
-    const fileContent = attachFile.value && props.fileText ? props.fileText : undefined
+    // Attach the statement ONLY on a 👎 (the consent box lives in the 👎 panel), when ticked AND we
+    // have the text — so an instant 👍 never carries a file even if the box was opened and ticked.
+    const fileContent = kind === 'down' && attachFile.value && props.fileText ? props.fileText : undefined
     const ok = await submit(kind, comment.value.trim() || undefined, { fileName: props.fileName, fileContent })
     if (ok) sent.value = true
     else error.value = 'Отзыв доступен только внутри портала Bitrix24'

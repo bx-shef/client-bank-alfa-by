@@ -64,9 +64,25 @@ export interface FeedbackContext {
 
 const MAX_CONTEXT_VALUE = 300
 
-/** Cap for the embedded statement text. GitHub's issue body is limited (~65536 chars); keep the
- *  file excerpt well under it so the rest of the body (comment + context) always fits. */
+/** Raw (pre-escape) char cap for the embedded statement text — the size a normal statement is
+ *  truncated to. Also used client- and server-side to bound what's sent/accepted. */
 export const MAX_FILE_EMBED = 30000
+
+/** Hard ceiling on the ESCAPED file block. `escapeHtml` expands `&`/`<`/`>` up to ~5×, so an
+ *  adversarial statement full of them could blow past GitHub's ~65536-char issue-body limit even
+ *  after the raw cap. Capping the escaped output keeps the whole body (comment ≤~25k escaped + this
+ *  + tags) safely under the limit, so the POST can't be rejected. Normal statements never hit it. */
+export const MAX_FILE_EMBED_ESCAPED = 35000
+
+/**
+ * Consent gate for the attached statement (#198), as a PURE, testable helper — the authoritative
+ * privacy control. Returns the (raw-capped) text to embed ONLY when the caller explicitly consented
+ * (`attachFile === true`) AND provided a string; anything else → `undefined` (no embed). Used by the
+ * route so a client sending `fileContent` without consent can never get it embedded.
+ */
+export function attachedFileContent(attachFile: unknown, fileContent: unknown, cap = MAX_FILE_EMBED): string | undefined {
+  return attachFile === true && typeof fileContent === 'string' ? fileContent.slice(0, cap) : undefined
+}
 
 /**
  * One `- **Label:** `value`` line, rendered fully INERT. Client-supplied context values (fileName is
@@ -93,18 +109,23 @@ function contextLine(label: string, value: unknown): string | null {
  */
 function fileEmbedLines(value: unknown): string[] {
   const stripped = stripHostileChars(value)
-  const trimmed = stripped.trim()
-  if (!trimmed) return []
-  const capped = stripped.length <= MAX_FILE_EMBED
+  if (!stripped.trim()) return []
+  const rawCapped = stripped.length <= MAX_FILE_EMBED
     ? stripped
     : `${stripped.slice(0, MAX_FILE_EMBED)}\n\n[обрезано до ${MAX_FILE_EMBED} символов]`
+  let content = escapeHtml(rawCapped)
+  if (content.length > MAX_FILE_EMBED_ESCAPED) {
+    // Adversarial input full of &/</> expands on escape; hard-cap the escaped block and drop any
+    // trailing partial entity (`&am…`) so the result stays inert, keeping the body under the limit.
+    content = `${content.slice(0, MAX_FILE_EMBED_ESCAPED).replace(/&[^;]*$/, '')}\n\n[обрезано]`
+  }
   return [
     '',
     '**Файл выписки** (приложен по согласию сотрудника):',
     '<details><summary>Показать содержимое</summary>',
     '',
     '<pre><code>',
-    escapeHtml(capped),
+    content,
     '</code></pre>',
     '</details>'
   ]

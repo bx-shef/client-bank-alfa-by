@@ -116,4 +116,17 @@ describe('FeedbackWidget', () => {
     await flushPromises()
     expect(mockState.submit).toHaveBeenCalledWith('down', undefined, { fileName: 'v.txt', fileContent: 'СЕКЦИЯ' })
   })
+
+  it('👍 never attaches the file even if the 👎 box was opened and consent ticked', async () => {
+    const wrapper = await mountSuspended(FeedbackWidget, { props: { fileName: 'v.txt', fileText: 'СЕКЦИЯ' } })
+    await flushPromises()
+    await wrapper.find('[data-testid="feedback-down"]').trigger('click') // open box + show checkbox
+    await nextTick()
+    await wrapper.get('[role="checkbox"]').trigger('click') // consent ticked
+    await nextTick()
+    await wrapper.find('[data-testid="feedback-up"]').trigger('click') // instant 👍
+    await flushPromises()
+    // Positive rating must carry NO file, despite the ticked consent in the still-open 👎 box.
+    expect(mockState.submit).toHaveBeenCalledWith('up', undefined, { fileName: 'v.txt', fileContent: undefined })
+  })
 })

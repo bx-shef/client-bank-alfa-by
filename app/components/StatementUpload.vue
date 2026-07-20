@@ -14,6 +14,7 @@ import {
   type UploadItemResult
 } from '~/utils/importUpload'
 import { splitByDirection } from '~/utils/statement'
+import { MAX_FILE_EMBED } from '~/utils/feedback'
 import { useImport } from '~/composables/useImport'
 
 const results = ref<UploadItemResult[]>([])
@@ -35,6 +36,8 @@ const ratingTrigger = ref(false)
 // on each batch; empty when nothing parsed. Decode matches the parser (windows-1251).
 const feedbackFileName = ref('')
 const feedbackFileText = ref('')
+// Monotonic token so a superseded batch's async decode can't clobber a newer batch's state.
+let procSeq = 0
 
 // Combined, de-duped operations across all successfully parsed files.
 const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
@@ -48,20 +51,25 @@ const { submitFiles } = useImport()
 
 async function processFiles(files: File[]) {
   if (!files.length) return
+  const seq = ++procSeq
   busy.value = true
   submitResult.value = null
   // Pass RAW files so processUploadBatch computes `truncated` (files beyond the cap).
   // batchFiles slices to the same cap → stays index-aligned with out.results.
   const out = await processUploadBatch(files, deferToEventLoop)
+  if (seq !== procSeq) return // a newer drop superseded this batch — don't clobber its state
   results.value = out.results
   batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
   truncated.value = out.truncated
-  // Cache the first OK file's decoded text for the (opt-in) feedback attach (#198).
+  // Cache the first OK file's decoded text for the (opt-in) feedback attach (#198). Cap to
+  // MAX_FILE_EMBED so only what could ever be embedded travels over the wire (not the full ≤2 МБ).
   const firstOk = batchFiles.value.find((_, i) => out.results[i]?.ok)
   if (firstOk) {
     feedbackFileName.value = firstOk.name
     try {
-      feedbackFileText.value = decodeUploadText(await firstOk.arrayBuffer())
+      const text = decodeUploadText(await firstOk.arrayBuffer())
+      if (seq !== procSeq) return // superseded during the async decode
+      feedbackFileText.value = text.slice(0, MAX_FILE_EMBED)
     } catch {
       feedbackFileText.value = '' // can't decode → just don't offer the attach
     }
