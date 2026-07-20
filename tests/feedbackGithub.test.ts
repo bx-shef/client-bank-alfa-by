@@ -31,6 +31,16 @@ describe('postFeedbackIssue', () => {
     expect(r.number).toBeUndefined()
   })
 
+  it('success with an unparseable body (json() rejects) still reports ok, no number', async () => {
+    const rejectingJson = async (): Promise<unknown> => {
+      throw new SyntaxError('Unexpected end of JSON input')
+    }
+    const fn: FeedbackFetchFn = async () => ({ status: 201, json: rejectingJson })
+    const r = await postFeedbackIssue(config, payload, fn)
+    expect(r).toEqual({ ok: true, status: 201, retryable: false })
+    expect(r.number).toBeUndefined()
+  })
+
   it('5xx / 429 are retryable; 4xx are not', async () => {
     expect((await postFeedbackIssue(config, payload, fakeFetch(503).fn)).retryable).toBe(true)
     expect((await postFeedbackIssue(config, payload, fakeFetch(429).fn)).retryable).toBe(true)

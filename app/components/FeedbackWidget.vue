@@ -25,6 +25,7 @@ async function rate(kind: 'up' | 'down'): Promise<void> {
   // an instant, no-friction positive signal.
   if (kind === 'down' && !open.value) {
     open.value = true
+    error.value = '' // don't carry a stale 👍-submit error into the freshly-opened comment box
     return
   }
   sending.value = true

@@ -52,6 +52,16 @@ describe('FeedbackWidget', () => {
     expect(wrapper.find('[data-testid="feedback-sent"]').exists()).toBe(true)
   })
 
+  it('outside a portal (submit → false) shows the portal-only notice, not a fake success', async () => {
+    mockState.submit = vi.fn(async () => false)
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="feedback-up"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="feedback-sent"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('только внутри портала')
+  })
+
   it('👎 opens the comment box first, then submits with the comment', async () => {
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="feedback-down"]').trigger('click')

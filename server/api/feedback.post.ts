@@ -41,9 +41,10 @@ export default defineEventHandler(async (event) => {
     comment: raw?.comment,
     context: { fileName: raw?.context?.fileName, appVersion: raw?.context?.appVersion }
   })
-  if (status >= 500) {
-    // Never surface GitHub's body/URL/token — only the numeric status class for ops.
-    console.warn('[feedback] submission failed with status %d', status)
+  if (status === 500 || status === 502) {
+    // Only a real GitHub transport failure (not the 503 config-gate) — log the numeric class for
+    // ops. Never surface GitHub's body/URL/token.
+    console.warn('[feedback] github submission failed with status %d', status)
   }
   setResponseStatus(event, status)
   return body
