@@ -62,8 +62,8 @@
 **✅ Запись факта разнесения + чат ошибок — СДЕЛАНЫ (#184).** `crm-sync` теперь при
 `decision.action === 'allocate'` пишет **durable-запись** «платёж→цель» — **строку dist-СП** (`writeLedger`,
 идемпотентно по маркеру, счётчик `allocated`; Postgres `allocation_fact` снят — §9.3 #6), а при `ambiguous`/`manual` шлёт уведомление в
-**чат ошибок** (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`). Удаление приложения
-чистит факты (`deleteFactsForPortal`). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
+**чат ошибок** (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`). Идемпотентность/аудит
+разнесения живут на dist-СП (маркер + `status`); Postgres-стора нет (§9.3 #6). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
 `queuePhase2`, вкл. write-once, ambiguous-both-paths, trigger-only gap), прогнано 5 проверяющими.
 
 **✅ Мутация портала для `deal-payment` + инвойса — СДЕЛАНА.** За опт-ин гейтом **`autoDistribute`** (в
@@ -362,8 +362,8 @@ MCP-сервер по выписке убран из дорожной карты
   матрицам-маскам** `d`=цифра+литералы + **нормализация гомоглифов** кир↔лат, граница токена, DoS-капы),
   `identifierDispatch.ts` (роутинг `IdentifierKind → цель + стратегия поиска`; триггер-цели `deal`/
   `smart-process` вне amount-ядра; требование повторной проверки компании+стадии для `by-id` — IDOR).
-  **REST-фундамент начат** (первый слайс, юнит-тесты): персистентный **стор факта разнесения**
-  `allocationFactStore.ts` (таблица `allocation_fact`, `allocated`/`reverted`, write-once per `member_id`)
+  **REST-фундамент** (юнит-тесты): durable-запись разнесения = **строка dist-СП** (`writeLedger`, маркер +
+  `status`; Postgres `allocationFactStore`/`allocation_fact` снят — §9.3 #6, идемпотентность на dist-СП)
   + чистый **lookup смарт-счёта** `invoiceLookup.ts` (`crm.item.list` `entityTypeId=31` по номеру+компании,
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
   → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс, сделка И смарт-процесс** —
@@ -413,8 +413,8 @@ MCP-сервер по выписке убран из дорожной карты
   сделаны. **Батчинг `callBatch` — частично** (`negativeStages` `crm.status.list` одним батчем; пул оплат не батчится —
   API-лимит); дизайн — `docs/QUEUES.md`);
   роутинг ref моста через `itemByIdLookup`
-  (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
-  log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +
+  (company-скоуп); **ЗАПИСЬ разнесения — сделана**: durable-запись = строка dist-СП (`writeLedger`, §9.3 #6;
+  Postgres-стор снят) + `autoDistribute`-гейт в настройках + идемпотентность по маркеру строки +
   действие в портале (`payment.pay`/стадия) + оповещение в чат ошибок — **за live-verify** (пишет реальные деньги/
   сущности, форма стадии дефолтной воронки сделки не подтверждена вживую — гейт перед записью).
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
@@ -490,8 +490,8 @@ MCP-сервер по выписке убран из дорожной карты
   `by-config-field` с валидацией имени поля, `via-order` (order-id → sale.payment.list ∩ пул), мост `via-document` через
   `crm.documentgenerator.document.list`); проводка в `crm-sync`
   (инвойс/оплата → amount-ядро → `payment.pay`/триггер; сделка/смарт-процесс → безусловный триггер;
-  `ambiguous`/«некуда разнести»/ошибки → чат); стор факта разнесения (`разнесён/откат`, `member_id`) —
-  **готов** (`allocationFactStore.ts`), lookup смарт-счёта — **готов** (`invoiceLookup.ts`), loader стадий —
+  `ambiguous`/«некуда разнести»/ошибки → чат); durable-запись разнесения = **строка dist-СП** (`writeLedger`,
+  маркер + `status`; Postgres `allocation_fact` снят — §9.3 #6), lookup смарт-счёта — **готов** (`invoiceLookup.ts`), loader стадий —
   **готов** (`stageLoader.ts`), поиск моей компании — **готов** (`findMyCompanyByAccount`).
   **Проводка в `crm-sync` — доведена до ЗАПИСИ:** распознавание→роутинг→резолв→**отсев отрицательных
   стадий** (#196)→**`resolveAllocation`** (#198)→**write-once факт** (#184)→**мутация портала за гейтом

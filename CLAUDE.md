@@ -912,7 +912,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (маска `[a-z0-9.\-_]`, fail-safe) + **проводка в hot-path (best-effort) + запись факта триггера — сделаны (#79)**:
     за гейтом `autoDistribute`+`triggerCode` распознанная trigger-цель фаерит `crm.automation.trigger.execute` через
     OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
-    kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
+    kind+id (within-run) + **маркер dist-СП** (`hasTriggerFact`/`writeTriggerFact`, §9.3 #6), строка+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
     глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`,
     best-effort) — **сделана; регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire` на
     `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и
