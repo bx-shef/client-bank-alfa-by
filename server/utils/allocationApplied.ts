@@ -1,12 +1,13 @@
 // Read whether a decided allocate TARGET is already in its paid/settled state in B24 — the
 // Фаза A idempotency source-of-truth for the AMOUNT mutation (#109, PROCESSING.md §1/§2).
 //
-// Replaces the `allocation_fact` pre-check (`hasAllocationFact`) for the amount mutation with
-// a direct read of B24 state. This is not just philosophy (idempotency in B24, not our DB) —
-// it is MORE correct: the fact is recorded AFTER a confirmed pay, so a crash between the pay
-// and the fact write leaves NO fact, and the old `hasAllocationFact` pre-check would then
-// RE-PAY on redelivery. `paid='Y'` / the paid invoice stage are authoritative, so a redelivery
-// reads the true state and skips.
+// Idempotency for the amount mutation is a direct read of B24 state, NOT a DB record (the
+// Postgres `allocation_fact` store is fully retired, §9.3 #6 — the durable allocation record
+// is the dist-СП row). This is not just philosophy (idempotency in B24, not our DB) — it is
+// MORE correct: the dist-СП row is written AFTER a confirmed pay, so a crash between the pay
+// and the row write leaves no row, and a DB-record pre-check would then RE-PAY on redelivery.
+// `paid='Y'` / the paid invoice stage are authoritative, so a redelivery reads the true state
+// and skips.
 //
 // Pure over an injected `RestCall` (DI, unit-testable). Only AMOUNT targets have a readable
 // applied-state; trigger targets (deal / smart-process) return false — a trigger fire is a

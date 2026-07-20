@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-19
+> Last reviewed: 2026-07-20
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -60,10 +60,10 @@
 ### Текущее состояние `main`
 
 **✅ Запись факта разнесения + чат ошибок — СДЕЛАНЫ (#184).** `crm-sync` теперь при
-`decision.action === 'allocate'` пишет **write-once факт** «платёж→цель» (`recordAllocation` →
-`allocation_fact`, счётчик `allocated`, редоставка не двоит), а при `ambiguous`/`manual` шлёт уведомление в
-**чат ошибок** (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`). Удаление приложения
-чистит факты (`deleteFactsForPortal`). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
+`decision.action === 'allocate'` пишет **durable-запись** «платёж→цель» — **строку dist-СП** (`writeLedger`,
+идемпотентно по маркеру, счётчик `allocated`; Postgres `allocation_fact` снят — §9.3 #6), а при `ambiguous`/`manual` шлёт уведомление в
+**чат ошибок** (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`). Идемпотентность/аудит
+разнесения живут на dist-СП (маркер + `status`); Postgres-стора нет (§9.3 #6). Покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
 `queuePhase2`, вкл. write-once, ambiguous-both-paths, trigger-only gap), прогнано 5 проверяющими.
 
 **✅ Мутация портала для `deal-payment` + инвойса — СДЕЛАНА.** За опт-ин гейтом **`autoDistribute`** (в
@@ -73,9 +73,9 @@
 (стадия не указана ⇒ инвойс не трогаем), счётчик `distributed`. Applied-детект конверт-aware
 (`{result:true}` vs `{result:{item}}`). **Порядок идемпотентный (Фаза A):** пре-чек `isTargetApplied` читает
 **состояние цели в B24** (`readAllocationApplied`: deal-payment `paid='Y'` / инвойс уже на `invoicePaidStageId`),
-не `allocation_fact` → редоставка не пере-проводит (точнее факта: факт пишется ПОСЛЕ оплаты, чтение состояния
-закрывает окно ре-оплаты при крэше между) → мутация → write-once факт (для учёта/сторно; REST-ошибка бросается ДО
-факта → чистый ретрай; для поддержанной цели недоступный токен бросает — ретрай без записи факта). Гейт OFF ⇒
+не Postgres → редоставка не пере-проводит (точнее факта: строка dist-СП пишется ПОСЛЕ оплаты, чтение состояния
+закрывает окно ре-оплаты при крэше между) → мутация → строка dist-СП (для учёта/сторно; REST-ошибка бросается ДО
+строки → чистый ретрай; для поддержанной цели недоступный токен бросает — ретрай без записи строки). Гейт OFF ⇒
 прежнее поведение (только факт). **Подтверждено вживую** на seed-портале (`pnpm verify:109` — 21 READ-проверка;
 `pnpm mutate:test` + apply/revert стадии инвойса) и на `bel.bitrix24.by` (Фаза A: инвойс #39 `DT31_7:P` → своя
 стадия=true/чужая=false). Тесты `allocationMutation`/`allocationMutationWrite`/`allocationApplied`/`queuePhase2`
@@ -362,8 +362,8 @@ MCP-сервер по выписке убран из дорожной карты
   матрицам-маскам** `d`=цифра+литералы + **нормализация гомоглифов** кир↔лат, граница токена, DoS-капы),
   `identifierDispatch.ts` (роутинг `IdentifierKind → цель + стратегия поиска`; триггер-цели `deal`/
   `smart-process` вне amount-ядра; требование повторной проверки компании+стадии для `by-id` — IDOR).
-  **REST-фундамент начат** (первый слайс, юнит-тесты): персистентный **стор факта разнесения**
-  `allocationFactStore.ts` (таблица `allocation_fact`, `allocated`/`reverted`, write-once per `member_id`)
+  **REST-фундамент** (юнит-тесты): durable-запись разнесения = **строка dist-СП** (`writeLedger`, маркер +
+  `status`; Postgres `allocationFactStore`/`allocation_fact` снят — §9.3 #6, идемпотентность на dist-СП)
   + чистый **lookup смарт-счёта** `invoiceLookup.ts` (`crm.item.list` `entityTypeId=31` по номеру+компании,
   фильтр отрицательной стадии, → `AllocationCandidate`) + **loader стадий** `stageLoader.ts` (`crm.status.list`
   → множество стадий `SEMANTICS='F'` → предикат `isNegativeStage`; **инвойс, сделка И смарт-процесс** —
@@ -413,8 +413,8 @@ MCP-сервер по выписке убран из дорожной карты
   сделаны. **Батчинг `callBatch` — частично** (`negativeStages` `crm.status.list` одним батчем; пул оплат не батчится —
   API-лимит); дизайн — `docs/QUEUES.md`);
   роутинг ref моста через `itemByIdLookup`
-  (company-скоуп); **последний под-слайс проводки — САМА ЗАПИСЬ разнесения** (`resolveAllocation` уже даёт решение
-  log/count): стор факта (`allocationFactStore`) + `autoDistribute`-гейт в настройках + идемпотентность #184 +
+  (company-скоуп); **ЗАПИСЬ разнесения — сделана**: durable-запись = строка dist-СП (`writeLedger`, §9.3 #6;
+  Postgres-стор снят) + `autoDistribute`-гейт в настройках + идемпотентность по маркеру строки +
   действие в портале (`payment.pay`/стадия) + оповещение в чат ошибок — **за live-verify** (пишет реальные деньги/
   сущности, форма стадии дефолтной воронки сделки не подтверждена вживую — гейт перед записью).
 - **Авторизация оператора**: публичная форма `/login` (общие креды из env, подписанная сессия-cookie),
@@ -490,8 +490,8 @@ MCP-сервер по выписке убран из дорожной карты
   `by-config-field` с валидацией имени поля, `via-order` (order-id → sale.payment.list ∩ пул), мост `via-document` через
   `crm.documentgenerator.document.list`); проводка в `crm-sync`
   (инвойс/оплата → amount-ядро → `payment.pay`/триггер; сделка/смарт-процесс → безусловный триггер;
-  `ambiguous`/«некуда разнести»/ошибки → чат); стор факта разнесения (`разнесён/откат`, `member_id`) —
-  **готов** (`allocationFactStore.ts`), lookup смарт-счёта — **готов** (`invoiceLookup.ts`), loader стадий —
+  `ambiguous`/«некуда разнести»/ошибки → чат); durable-запись разнесения = **строка dist-СП** (`writeLedger`,
+  маркер + `status`; Postgres `allocation_fact` снят — §9.3 #6), lookup смарт-счёта — **готов** (`invoiceLookup.ts`), loader стадий —
   **готов** (`stageLoader.ts`), поиск моей компании — **готов** (`findMyCompanyByAccount`).
   **Проводка в `crm-sync` — доведена до ЗАПИСИ:** распознавание→роутинг→резолв→**отсев отрицательных
   стадий** (#196)→**`resolveAllocation`** (#198)→**write-once факт** (#184)→**мутация портала за гейтом
@@ -520,15 +520,16 @@ MCP-сервер по выписке убран из дорожной карты
   сделки вживую не подтверждена; sandbox/прод банков и живой портал — только у владельца. Открытые пункты — трекер #109.
 - 🔄 **Ручное разнесение из элемента смарт-процесса — В РАБОТЕ** (спека `PROCESSING.md §3/§6/§9`). Согласованная
   модель (владелец 2026-07-19): **леджер разнесений — в портале** (payment-СП + dist-СП, «осталось распределить»
-  = поле элемента), **`allocation_fact` ретайрится**; удаление — **событийный пайплайн** (`event.bind`
+  = поле элемента), **`allocation_fact` снят** (§9.3 #6, готово); удаление — **событийный пайплайн** (`event.bind`
   `ONCRMDYNAMICITEMDELETE`/`ONCRMDEALDELETE`/`ONCRMCOMPANYDELETE` → `DeletionJob` → консьюмер-`reconcile` → чат
   ошибок), **без sweep-крона** + ручная кнопка **«пересчитать»** на вкладке. Метрики (`import_result`/
   `metrics_counter`) остаются в Postgres.
   - ✅ **Слайс 1 — чистое ядро `manualAllocation.ts` СДЕЛАН** (#327, storage-agnostic: `distributionSummary`/
     `validateAllocation`/`validatePlan`/`reconcile`; смоделировано по сиблингу `aidapioneer-tech/sync-payments`).
-  - ⬜ Осталось (за живым порталом + платным тарифом СП): провижининг payment-СП/dist-СП, транспорт леджера
-    (`crm.item.add`+маркер, пересчёт «осталось»), UI-вкладка распределения + кнопки §3, пайплайн удаления
-    (event.bind→`DeletionJob`→`reconcile`), ретайр `allocation_fact`. Детали — `PROCESSING.md §9`.
+  - ✅ **Контур §9 закрыт**: провижининг payment-СП/dist-СП, транспорт леджера (`crm.item.add`+маркер, пересчёт
+    «осталось»), UI-вкладка распределения + кнопки §3, пайплайн удаления (event.bind→`DeletionJob`→`reconcile`),
+    **ретайр `allocation_fact` (§9.3 #6, готово — стор/таблица удалены, идемпотентность на dist-СП)**. Живой прогон
+    провижининга/записи — за живым порталом + платным тарифом СП. Детали — `PROCESSING.md §9`.
 
 ## Что потом
 

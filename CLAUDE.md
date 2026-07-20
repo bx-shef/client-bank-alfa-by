@@ -446,7 +446,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
-    `allocation_fact`, `import_result`, `metrics_counter`, `bank_tokens`, `portal_app_rating`; дедуп дел — маркер в B24, таблицы нет — #259);
+    `import_result`, `metrics_counter`, `bank_tokens`, `portal_app_rating`; дедуп дел — маркер в B24, таблицы нет — #259;
+    разнесение — строка dist-СП, таблицы нет — §9.3 #6, `allocation_fact` снят + идемпотентный `DROP TABLE IF EXISTS` на старте);
     `server/plugins/migrate.ts` — идемпотентная миграция на старте. **Выписки у себя не храним** — только
     токены/факты/агрегаты; сама выписка транзитна (payload'ы очередей с ограниченным по возрасту удержанием,
     `STATEMENT_JOB_RETENTION`, #245). Модель хранения/чистки финансовых ПДн — [`docs/PRIVACY.md`](docs/PRIVACY.md).
@@ -544,7 +545,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       сумме+валюте, trigger-цели безусловно). **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и
       только при совпавшей компании (IDOR-скоуп). **Запись факта разнесения — сделана (#184; §9.3 #6):** при
       `action==='allocate'` durable-запись «платёж→цель» — **строка dist-СП** (`writeLedger`, идемпотентно по маркеру,
-      счётчик `allocated`; Postgres `allocation_fact` на amount-пути **больше не пишется**), при `ambiguous`/`manual` — уведомление в **чат ошибок**
+      счётчик `allocated`; Postgres `allocation_fact` **полностью снят** — §9.3 #6), при `ambiguous`/`manual` — уведомление в **чат ошибок**
       (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`); удаление приложения чистит факты.
       **Мутация портала (§2, слайс, deal-payment + инвойс) — сделана:** за опт-ин гейтом `autoDistribute` (в настройках,
       default OFF) `allocate`-цель помечается проведённой: `deal-payment` → `crm.item.payment.pay`; **`invoice` →
@@ -722,14 +723,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       смарт-счёт→сделка, #229, для `collapseSameTarget`; чистый хелпер `parentDealId` нормализует к
       положительному целому). **Имена полей подтверждены на живом портале**:
       `accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`/`parentId2` (только у сделко-связанного счёта).
-    - `server/utils/allocationFactStore.ts` — персистентный **стор факта разнесения** «платёж→сущность»
-      над `QueryFn` (таблица `allocation_fact`, скоуп по `member_id`): `getAllocationFact`/`recordAllocation`
-      (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
-      трётся)/`deleteFactsForPortal`. В отличие от дедупа операции (маркер в B24): фиксирует цель разнесения и
-      допускает откат. Удаление приложения чистит и его. Тесты на fake-query. **С Фазой A** пре-чек мутации
-      факт **не читает** (читает состояние цели, ниже). **§9.3 #6: write-путь стора ретайрен** — и триггер-дедуп
-      (под-слайс 2), и amount-запись/счётчик (под-слайс 3) переведены на строку/маркер dist-СП; в сторе живёт только
-      `deleteFactsForPortal` (чистка на ONAPPUNINSTALL), полное удаление модуля+таблицы — под-слайс 4.
+    - `server/utils/allocationFactStore.ts` — **УДАЛЁН (§9.3 #6, готово)**. Персистентный Postgres-стор факта
+      разнесения `allocation_fact` полностью снят: идемпотентность/аудит/сторно разнесения (amount **и** триггеры)
+      живут на строке/маркере dist-СП (`writeLedger`/`writeTriggerFact`, `status`). Модуль и таблица удалены
+      (`server/db/client.ts` — `DROP TABLE IF EXISTS allocation_fact` на старте, идемпотентно). `allocationFactKey`
+      (`app/utils/allocation.ts`) сохранён — строит маркер строки dist-СП.
     - `server/utils/allocationApplied.ts` — **чистое чтение состояния цели** (Фаза A, DI над `RestCall`, тесты):
       `readAllocationApplied(target, call, opts)` — идемпотентный пре-чек мутации разнесения по **состоянию в B24**,
       не по `allocation_fact`: `deal-payment` → оплата `paid='Y'` (`crm.item.payment.list`, реюз `paymentListParams`/
@@ -902,9 +900,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     IDOR-safe, `sale`-скоуп в `B24_REQUIRED_SCOPES`, live-confirmed #172); **invoice-кандидат несёт `dealId`**
     (`parentId2`) → `collapseSameTarget` больше не даёт ложный `ambiguous` (#229). **#172 закрыт полностью** (order/payment по id и номеру).
     **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184; §9.3 #6):** durable-запись при `allocate` —
-    **строка dist-СП** (`writeLedger`, идемпотентно по маркеру, счётчик `allocated`; Postgres `allocation_fact` на
-    amount-пути ретайрен — под-слайс 3) + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
-    удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
+    **строка dist-СП** (`writeLedger`, идемпотентно по маркеру, счётчик `allocated`; Postgres `allocation_fact`
+    **полностью снят** — §9.3 #6) + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
+    покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
     `queuePhase2`). **Мутация портала (`deal-payment` → `crm.item.payment.pay`, `invoice` → `crm.item.update` на
     стадию `allocation.invoicePaidStageId` из настроек) за гейтом `autoDistribute` — сделана**
     (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, конверт-aware applied-детект
@@ -914,7 +912,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (маска `[a-z0-9.\-_]`, fail-safe) + **проводка в hot-path (best-effort) + запись факта триггера — сделаны (#79)**:
     за гейтом `autoDistribute`+`triggerCode` распознанная trigger-цель фаерит `crm.automation.trigger.execute` через
     OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
-    kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
+    kind+id (within-run) + **маркер dist-СП** (`hasTriggerFact`/`writeTriggerFact`, §9.3 #6), строка+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
     глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`,
     best-effort) — **сделана; регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire` на
     `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и
