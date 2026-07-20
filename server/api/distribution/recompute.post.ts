@@ -1,13 +1,14 @@
 // POST /api/distribution/recompute — recompute «осталось распределить» for every payment carrier of
 // the portal (#109 §3/§9.2 «пересчитать» — the manual recovery backstop). Auth = the B24 FRAME access
-// token (Authorization: Bearer) + X-B24-Domain, admin-gated. Feature OFF unless
-// DISTRIBUTION_PROVISION_ENABLED=1. Single-flight per portal (advisory lock, same as provisioning).
+// token (Authorization: Bearer) + X-B24-Domain, admin-gated. Feature ON by default (opt OUT with
+// DISTRIBUTION_PROVISION_ENABLED=0). Single-flight per portal (advisory lock, same as provisioning).
 // Thin I/O over the pure handler (server/utils/recomputeRequest.ts); the SP writes run on the portal's
 // STORED OAuth token.
 
 import { handleRecomputeRequest, type RecomputeRequestDeps } from '../../utils/recomputeRequest'
 import { recomputeAllPayments } from '../../utils/distributionLedgerWrite'
 import { bearerToken } from '../../utils/settingsHandler'
+import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
@@ -20,7 +21,7 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
 
 function liveRecomputeDeps(): RecomputeRequestDeps {
   return {
-    enabled: process.env.DISTRIBUTION_PROVISION_ENABLED === '1',
+    enabled: distributionEnabled(),
     memberIdByDomain: async domain => (await getMemberIdByDomain(dbQuery, domain)) ?? '',
     validateFrame: async (domain, accessToken) => {
       const res = await frameRestCall(domain, accessToken, 'profile', {})

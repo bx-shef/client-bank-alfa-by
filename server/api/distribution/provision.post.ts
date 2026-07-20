@@ -1,13 +1,14 @@
 // POST /api/distribution/provision — provision (create/verify) the two distribution smart processes
 // and persist their entityTypeIds to portal settings (#109, §9.1). Auth = the B24 FRAME access token
-// (Authorization: Bearer) + X-B24-Domain, admin-gated (same model as /api/poll-now). Feature is OFF
-// unless DISTRIBUTION_PROVISION_ENABLED=1 (fail-closed) — the owner opts portals in, since it CREATES
-// smart processes on the portal. Thin I/O over the pure handler (server/utils/provisionRequest.ts).
+// (Authorization: Bearer) + X-B24-Domain, admin-gated (same model as /api/poll-now). Feature is ON by
+// default at this dev stage (opt OUT with DISTRIBUTION_PROVISION_ENABLED=0) — it CREATES smart
+// processes on the portal. Thin I/O over the pure handler (server/utils/provisionRequest.ts).
 
 import { handleProvisionRequest, type ProvisionRequestDeps } from '../../utils/provisionRequest'
 import { handleProvisionDistribution } from '../../utils/distributionProvisionHandler'
 import { provisionDistributionSp, type KnownSpIds } from '../../utils/distributionSpProvision'
 import { bearerToken } from '../../utils/settingsHandler'
+import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
@@ -19,8 +20,8 @@ import { SETTINGS_KEY, parsePortalSettings, serializePortalSettings, type Portal
 
 function liveProvisionDeps(): ProvisionRequestDeps {
   return {
-    // App-side gate: default OFF (creates smart processes — opt-in per owner).
-    enabled: process.env.DISTRIBUTION_PROVISION_ENABLED === '1',
+    // App-side gate: default ON at this dev stage (opt OUT with DISTRIBUTION_PROVISION_ENABLED=0).
+    enabled: distributionEnabled(),
     memberIdByDomain: async domain => (await getMemberIdByDomain(dbQuery, domain)) ?? '',
     validateFrame: async (domain, accessToken) => {
       // `profile` proves the token works for THIS portal (else B24 throws) + returns the ADMIN flag.
