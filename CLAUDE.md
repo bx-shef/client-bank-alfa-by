@@ -542,9 +542,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **Решение разнесения (§2, слайс 4):** отфильтрованные по стадии кандидаты → `summarizeAllocation` →
       `onAllocationDecision` **логирует** исход, счётчики `allocatable`/`ambiguous`/`manual` (amount-цели по
       сумме+валюте, trigger-цели безусловно). **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и
-      только при совпавшей компании (IDOR-скоуп). **Запись факта разнесения — сделана (#184):** при
-      `action==='allocate'` пишется write-once **факт** «платёж→цель» (`recordAllocation` → `allocation_fact`,
-      счётчик `allocated`, редоставка не двоит), при `ambiguous`/`manual` — уведомление в **чат ошибок**
+      только при совпавшей компании (IDOR-скоуп). **Запись факта разнесения — сделана (#184; §9.3 #6):** при
+      `action==='allocate'` durable-запись «платёж→цель» — **строка dist-СП** (`writeLedger`, идемпотентно по маркеру,
+      счётчик `allocated`; Postgres `allocation_fact` на amount-пути **больше не пишется**), при `ambiguous`/`manual` — уведомление в **чат ошибок**
       (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`); удаление приложения чистит факты.
       **Мутация портала (§2, слайс, deal-payment + инвойс) — сделана:** за опт-ин гейтом `autoDistribute` (в настройках,
       default OFF) `allocate`-цель помечается проведённой: `deal-payment` → `crm.item.payment.pay`; **`invoice` →
@@ -727,8 +727,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
       трётся)/`deleteFactsForPortal`. В отличие от дедупа операции (маркер в B24): фиксирует цель разнесения и
       допускает откат. Удаление приложения чистит и его. Тесты на fake-query. **С Фазой A** пре-чек мутации
-      факт **не читает** (читает состояние цели, ниже) — стор остаётся для amount-счётчика/сторно (триггер-дедуп
-      переведён на маркер dist-СП, §9.3 #6; полный ретайр стора — под-слайс 3).
+      факт **не читает** (читает состояние цели, ниже). **§9.3 #6: write-путь стора ретайрен** — и триггер-дедуп
+      (под-слайс 2), и amount-запись/счётчик (под-слайс 3) переведены на строку/маркер dist-СП; в сторе живёт только
+      `deleteFactsForPortal` (чистка на ONAPPUNINSTALL), полное удаление модуля+таблицы — под-слайс 4.
     - `server/utils/allocationApplied.ts` — **чистое чтение состояния цели** (Фаза A, DI над `RestCall`, тесты):
       `readAllocationApplied(target, call, opts)` — идемпотентный пре-чек мутации разнесения по **состоянию в B24**,
       не по `allocation_fact`: `deal-payment` → оплата `paid='Y'` (`crm.item.payment.list`, реюз `paymentListParams`/
@@ -844,7 +845,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `resolveIntentsForOp` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`; пока log/count без
       записи. **Отсев отрицательных стадий (`isNegativeStage`) — сделан** (`negativeStages.ts`, ниже): предикат
       грузится ленивым `loadNegativeStagePredicate` ровно один раз на джобу и прокидывается в `resolveIntentsForOp`.
-      **Запись факта разнесения + чат ошибок — сделаны (#184):** `recordAllocation` (write-once) + `notifyError`.
+      **Запись факта разнесения + чат ошибок — сделаны (#184; §9.3 #6):** durable-запись = строка dist-СП (`writeLedger`) + `notifyError`.
       **Мутация портала для `deal-payment` + `invoice` — сделана:** гейт `autoDistribute` (default OFF) →
       `deal-payment`: `crm.item.payment.pay`; `invoice`: `crm.item.update` на стадию `allocation.invoicePaidStageId`
       (нет стадии в настройках ⇒ инвойс не трогаем)
@@ -900,8 +901,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул, `saleLookup.findOrderPaymentIds`+`filterByPaymentIds`,
     IDOR-safe, `sale`-скоуп в `B24_REQUIRED_SCOPES`, live-confirmed #172); **invoice-кандидат несёт `dealId`**
     (`parentId2`) → `collapseSameTarget` больше не даёт ложный `ambiguous` (#229). **#172 закрыт полностью** (order/payment по id и номеру).
-    **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184):** `recordAllocation` (write-once
-    `allocation_fact`, счётчик `allocated`) при `allocate` + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
+    **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184; §9.3 #6):** durable-запись при `allocate` —
+    **строка dist-СП** (`writeLedger`, идемпотентно по маркеру, счётчик `allocated`; Postgres `allocation_fact` на
+    amount-пути ретайрен — под-слайс 3) + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
     удаление приложения чистит факты; покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
     `queuePhase2`). **Мутация портала (`deal-payment` → `crm.item.payment.pay`, `invoice` → `crm.item.update` на
     стадию `allocation.invoicePaidStageId` из настроек) за гейтом `autoDistribute` — сделана**

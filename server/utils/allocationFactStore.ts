@@ -1,5 +1,10 @@
 // Persistent «платёж → сущность» allocation record (#109, PROCESSING.md §1/§2).
 //
+// ⚠ WRITE PATH RETIRED (§9.3 #6, sub-slices 2-3): the durable allocation record is now the
+// dist-СП distribution row (`distributionLedgerWrite.ts`); `recordAllocation`/`getAllocationFact`/
+// `revertAllocation` have NO hot-path caller anymore. Only `deleteFactsForPortal` (ONAPPUNINSTALL
+// cleanup) is still wired. This module + the `allocation_fact` table are removed in sub-slice 4.
+//
 // Distinct from `activity_dedup` (op-level «wrote an activity»): this records that a
 // payment was ALLOCATED against a specific target (invoice / deal payment / deal /
 // smart-process element) and lets a сторно flip that fact to `reverted` — the row is

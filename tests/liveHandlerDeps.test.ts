@@ -53,11 +53,14 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
   it('writeActivity(demo) → null, no REST', async () => {
     expect(await deps.writeActivity(demoItem(), 'C-7', 'MEMBER-1')).toBeNull()
   })
-  it('recordAllocation(demo) → false, no store write', async () => {
-    expect(await deps.recordAllocation(demoItem(), decision.target, 'MEMBER-1')).toBe(false)
+  it('writeLedger(demo) → false, no REST (§9.3 #6 — durable record is the SP row)', async () => {
+    expect(await deps.writeLedger!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSpEtid: 1044, distributionSpEtid: 1046 })).toBe(false)
   })
-  it('hasAllocationFact(demo) → false, no store read', async () => {
-    expect(await deps.hasAllocationFact(demoItem(), decision.target, 'MEMBER-1')).toBe(false)
+  it('hasTriggerFact(demo) → false, no store read (§9.3 #6)', async () => {
+    expect(await deps.hasTriggerFact!(demoItem(), decision.target, 'MEMBER-1', { paymentSpEtid: 1044, distributionSpEtid: 1046 })).toBe(false)
+  })
+  it('writeTriggerFact(demo) → false, no REST (§9.3 #6)', async () => {
+    expect(await deps.writeTriggerFact!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSpEtid: 1044, distributionSpEtid: 1046 })).toBe(false)
   })
   it('isTargetApplied(demo) → false, no REST state read (Фаза A)', async () => {
     expect(await deps.isTargetApplied(demoItem(), decision.target, 'MEMBER-1', {})).toBe(false)

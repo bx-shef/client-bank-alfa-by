@@ -10,8 +10,8 @@
 //
 // Pure over an injected `RestCall` (DI, unit-testable). Only AMOUNT targets have a readable
 // applied-state; trigger targets (deal / smart-process) return false — a trigger fire is a
-// stateless signal with nothing to read back, so they keep the fact-based `hasAllocationFact`
-// dedup. A read error PROPAGATES (the caller fails the job → clean retry); the reader never
+// stateless signal with nothing to read back, so they dedup on the dist-СП marker
+// (`hasTriggerFact`, §9.3 #6). A read error PROPAGATES (the caller fails the job → clean retry); the reader never
 // throws on its own — it returns false whenever it cannot PROVE the target is applied, so the
 // mutation runs (fail-safe toward attempting the pay, whose own confirm-or-throw guards double-pay).
 

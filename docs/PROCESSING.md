@@ -161,15 +161,17 @@ app-namespace** — фильтр по одному `ORIGIN_ID` даст **лож
 > **Текущее состояние.** Операцию crm-sync пишет **настраиваемым делом** — дедуп в B24 (маркер), **стора
 > `activity_dedup` больше нет** (#259: `app/utils/configurableActivity.ts` + `server/utils/configurableActivityWrite.ts`
 > + `server/utils/activityMarkerLookup.ts`; маркер `originatorId`+`originId`, поиск `crm.activity.list`;
-> `rememberActivity` ушёл — маркер атомарен с делом). Из дедуп-сторов остался только `allocationFactStore.ts`
-> (`allocation_fact`, факт разнесения). Ключ операции пока **упрощённый** `account|docId` (`dedupKey()`).
+> `rememberActivity` ушёл — маркер атомарен с делом). `allocationFactStore.ts` (`allocation_fact`) **больше не
+> дедуп-источник** — §9.3 #6 перевёл идемпотентность разнесения (amount + триггеры) на строку/маркер dist-СП;
+> в сторе живёт лишь `deleteFactsForPortal` (чистка на удалении), модуль+таблица уходят в под-слайсе 4.
+> Ключ операции пока **упрощённый** `account|docId` (`dedupKey()`).
 > - **Фаза A (amount-путь — сделана):** идемпотентность мутации разнесения читает **состояние цели в B24**, а не
 >   `allocation_fact`: `isTargetApplied` (`server/utils/allocationApplied.ts` `readAllocationApplied`) — `deal-payment`:
 >   `paid='Y'` (`crm.item.payment.list`); инвойс: уже на `invoicePaidStageId` (`crm.item.list`). Это **точнее** факта
 >   (факт пишется ПОСЛЕ оплаты → крэш между оплатой и фактом оставлял бы окно ре-оплаты — чтение состояния его
 >   закрывает). Live-verified на `bel.bitrix24.by` (инвойс #39 `DT31_7:P` → своя стадия=true, чужая=false; чтение
->   оплат сделки отработало). `allocation_fact` **остаётся** для: триггеров (у firing нет читаемого состояния —
->   дедуп только по факту), счётчика `allocated`, истории/сторно. Полное снятие стора блокирует триггер-путь.
+>   оплат сделки отработало). **§9.3 #6:** идемпотентность/учёт разнесения (amount **и** триггеры) переведены на
+>   строку/маркер dist-СП — `allocation_fact` на горячем пути больше не читается/пишется (осталась чистка на удалении).
 > - **Ключ операции** — усиление до составного хеша (§1) — ещё нет.
 > - **Элемент смарт-процесса** как носитель (`xmlId`, §2/§5) — альтернатива настраиваемому делу на платном
 >   тарифе (плюс кнопки §6); ещё не реализован.
@@ -377,9 +379,10 @@ CRM** Б24, а не отдельная незащищённая выборка.
 > стадии инвойса** (`crm.item.update` на `allocation.invoicePaidStageId`; **не указана ⇒ инвойс не трогаем**).
 > Чистый билдер `app/utils/allocationMutation.ts` + транспорт `server/utils/allocationMutationWrite.ts`
 > (конверт-aware applied-детект: `payment.pay` → `{result:true}`, `crm.item.update` → `{result:{item}}`),
-> идемпотентный порядок **mutation-before-fact** (пре-чек `isTargetApplied` читает состояние цели в B24 —
-> Фаза A → мутация → write-once факт; уже-применённая цель на редоставке: пропуск оплаты + запись факта для
-> учёта/сторно; REST-ошибка бросается ДО факта → чистый ретрай). Счётчик `distributed`. Подтверждено вживую
+> идемпотентный порядок **mutation-before-row** (пре-чек `isTargetApplied` читает состояние цели в B24 —
+> Фаза A → мутация → durable-запись = **строка dist-СП** (`writeLedger`, §9.3 #6; Postgres `allocation_fact` ретайрен);
+> уже-применённая цель на редоставке: пропуск оплаты + запись строки для учёта/сторно; REST-ошибка бросается ДО
+> строки → чистый ретрай). Счётчик `distributed` (вложен под created-строку). Подтверждено вживую
 > (`pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте; state-read Фазы A — на `bel.bitrix24.by`).
 >
 > **Триггер: билдер + транспорт + настройка готовы, проводка — нет.** Чистый `buildTriggerExecution(target,
@@ -390,8 +393,8 @@ CRM** Б24, а не отдельная незащищённая выборка.
 > нет/битый ⇒ не трогаем). Всё покрыто тестами.
 > **Проводка триггера в hot-path — сделана (#79, best-effort):** в `crm-sync` за тем же гейтом `autoDistribute`
 > + заданный `triggerCode` каждая **распознанная trigger-цель** (сделка/смарт-процесс, дедуп по kind+id) проходит
-> `hasAllocationFact` (пре-чек — редоставка не пере-триггерит) → `applyTrigger` → при подтверждённом firing
-> write-once факт (`recordAllocation`, счётчики `allocated`+`distributed`). **`applyTrigger` — best-effort, как
+> `hasTriggerFact` (пре-чек по маркеру dist-СП — редоставка не пере-триггерит, §9.3 #6) → `applyTrigger` → при
+> подтверждённом firing нулевая строка dist-СП (`writeTriggerFact`, счётчики `allocated`+`distributed`). **`applyTrigger` — best-effort, как
 > `notifyChat`:** триггер **сигналит** «деньги пришли» (сам денег не двигает), поэтому его сбой **никогда не роняет
 > батч** — любая ошибка (транзиентная ИЛИ постоянная: `CODE` задан, но не зарегистрирован → «...is not registered»)
 > глотается+логируется, факт не пишется (ни storm'а падений). Транспорт `crm.automation.trigger.execute`
@@ -802,6 +805,10 @@ ts, eventToken }`. Никаких сумм/счетов (id+тип, приват
      (запись фаершего триггера **нулевой** строкой — маркер+аудит «триггер отправлен», без влияния на
      «осталось»), гейт на провижиненный СП. Без СП триггер всё равно фаерится, но дедуп — только single-shot
      (маркер дела в B24); Postgres на триггер-пути больше не читается/пишется.
-   - под-слайс 3 (осталось): снять amount-путь с `recordAllocation`/`allocation_fact` (строка СП уже пишется
-     под-слайсом 1), убрать `allocationFactStore`/`hasAllocationFact`/`recordAllocation`.
-   - под-слайс 4 (осталось): миграция БД (drop `allocation_fact`) + доки.
+   - под-слайс 3 ✅: **amount-путь** снят с Postgres — `allocate` больше НЕ пишет `recordAllocation`;
+     идемпотентность/счётчик `allocated` берутся из строки dist-СП (`writeLedger` возвращает `created`,
+     идемпотентно по маркеру); `distributed` вложен под created (строгое подмножество `allocated`). Деп
+     `hasAllocationFact`/`recordAllocation` убраны из `HandlerDeps` и воркера (мёртвы). БЕЗ СП: durable
+     per-target факта нет — op-дедуп держит маркер дела в B24. Пре-чек ре-оплаты — `isTargetApplied` (§2 Фаза A).
+   - под-слайс 4 (осталось): удалить `allocationFactStore.ts` + `deleteFactsForPortal`-вызов + миграция
+     drop таблицы `allocation_fact` (осталось только `deleteFactsForPortal` на ONAPPUNINSTALL); доки (PRIVACY/CLAUDE.md).
