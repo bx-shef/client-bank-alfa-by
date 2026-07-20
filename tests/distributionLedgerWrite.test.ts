@@ -10,7 +10,9 @@ import {
   reconcileTargetDeletion,
   recomputeNeedDistribution,
   writeDistributionRow,
-  writeLedgerAllocation
+  writeLedgerAllocation,
+  hasTriggerLedgerFact,
+  writeTriggerLedgerFact
 } from '../server/utils/distributionLedgerWrite'
 import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { DistributionRowInput } from '../app/utils/distributionLedger'
@@ -254,6 +256,51 @@ describe('writeLedgerAllocation (orchestrator)', () => {
     const res = await writeLedgerAllocation(1044, 1046, OP, TARGET, '12', call)
     expect(res.rowCreated).toBe(false)
     expect(res.remaining).toBe(0) // 100 total − 100 active
+    expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
+  })
+})
+
+const TRIGGER_TARGET: AllocationCandidate = { kind: 'deal', id: '77', amount: 0, currency: 'BYN' }
+const markerUf = ufName(1046, DISTRIBUTION_SP_FIELDS.marker.postfix)
+
+describe('hasTriggerLedgerFact (§9.3 #6 — SP-marker trigger dedup)', () => {
+  it('true when a distribution row with the trigger marker exists', async () => {
+    const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 900 }] } }) })
+    expect(await hasTriggerLedgerFact(1046, OP, TRIGGER_TARGET, call)).toBe(true)
+  })
+  it('false when no row carries the marker', async () => {
+    const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
+    expect(await hasTriggerLedgerFact(1046, OP, TRIGGER_TARGET, call)).toBe(false)
+  })
+})
+
+describe('writeTriggerLedgerFact (§9.3 #6 — zero-amount trigger marker row)', () => {
+  it('ensures the carrier, writes a ZERO-amount row (no recompute), returns created', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': () => ({ result: { items: [] } }), // carrier + row probes → none
+      'crm.item.add': params => (params.entityTypeId === 1044
+        ? { result: { item: { id: 500 } } }
+        : { result: { item: { id: 901 } } })
+    })
+    const res = await writeTriggerLedgerFact(1044, 1046, OP, TRIGGER_TARGET, '12', call)
+    expect(res.created).toBe(true)
+    // the distribution row is zero-amount (a trigger allocates nothing) and carries the fact marker
+    const rowAdd = calls.find(c => c.method === 'crm.item.add' && c.params.entityTypeId === 1046)!
+    const fields = rowAdd.params.fields as Record<string, unknown>
+    expect(fields.opportunity).toBe(0) // zero-amount accounting row → no «осталось» impact
+    expect(fields[markerUf]).toBe('BY00|D1|deal|77')
+    // NO recompute (crm.item.update) — a zero-amount row leaves «осталось» untouched
+    expect(calls.some(c => c.method === 'crm.item.update')).toBe(false)
+  })
+  it('is idempotent — an existing marker row is reused, nothing added', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': (params) => {
+        if (params.entityTypeId === 1044) return { result: { items: [{ id: 500 }] } } // carrier exists
+        return { result: { items: [{ id: 901 }] } } // row exists
+      }
+    })
+    const res = await writeTriggerLedgerFact(1044, 1046, OP, TRIGGER_TARGET, '12', call)
+    expect(res.created).toBe(false)
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
   })
 })

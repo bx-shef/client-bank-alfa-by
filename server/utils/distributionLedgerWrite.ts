@@ -283,6 +283,50 @@ export async function writeLedgerAllocation(
   return { paymentElementId: payment.id, rowId: row.id, rowCreated: row.created, remaining }
 }
 
+/** Whether a TRIGGER fire for this (payment → deal/smart-process target) is already recorded in the
+ *  SP-ledger — a distribution row with the trigger's allocation-fact marker exists (#109 §9.3 #6).
+ *  This replaces the Postgres `hasAllocationFact` dedup for the trigger path: the marker lives on the
+ *  dist-СП row, so a redelivery/retry that already fired finds it and skips. Empty marker → false. */
+export async function hasTriggerLedgerFact(distributionSpEtid: number, op: StatementItem, target: AllocationCandidate, call: RestCall): Promise<boolean> {
+  return (await findDistributionByMarker(distributionSpEtid, allocationFactKey(op, target), call)) !== null
+}
+
+/** Record a fired TRIGGER (deal/smart-process, #79) in the SP-ledger (#109 §9.3 #6): ensure the
+ *  payment carrier element for the operation, then add a ZERO-amount distribution row for the trigger
+ *  target, idempotent by the allocation-fact marker. Zero amount so it does NOT consume «осталось»
+ *  (a trigger only SIGNALS money arrived — it allocates nothing) and no recompute is needed; the row
+ *  is purely the durable dedup marker + audit record («триггер отправлен»). Returns whether a NEW row
+ *  was created (redelivery finds it and returns false). Errors propagate (clean BullMQ retry). */
+export async function writeTriggerLedgerFact(
+  paymentSpEtid: number,
+  distributionSpEtid: number,
+  op: StatementItem,
+  target: AllocationCandidate,
+  companyId: string | undefined,
+  call: RestCall
+): Promise<{ created: boolean }> {
+  const payment = await ensurePaymentElement(paymentSpEtid, {
+    opportunity: op.amount,
+    currency: op.currency,
+    marker: dedupKey(op),
+    companyId
+  }, call)
+
+  const row = await writeDistributionRow({
+    paymentSpEtid,
+    distributionSpEtid,
+    paymentElementId: payment.id,
+    amount: 0,
+    currency: op.currency,
+    targetKind: target.kind,
+    targetId: target.id,
+    source: 'auto',
+    marker: allocationFactKey(op, target)
+  }, call)
+
+  return { created: row.created }
+}
+
 /** Page cap for the portal ledger read (UI). A portal with more than this many payment carriers is
  *  paged off — the UI shows the newest; a full audit is a separate concern. */
 export const MAX_LEDGER_PAYMENTS = 200

@@ -15,7 +15,7 @@ import { portalHash } from '../utils/telemetryAttributes'
 import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
 import type { CrmSyncJob, DeletionJob, EventJob, FetchJob, ParseJob } from './topology'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
-import { reconcileTargetDeletion, writeLedgerAllocation } from '../utils/distributionLedgerWrite'
+import { hasTriggerLedgerFact, reconcileTargetDeletion, writeLedgerAllocation, writeTriggerLedgerFact } from '../utils/distributionLedgerWrite'
 import { notifyDeletionErrorViaRest } from '../utils/deletionErrorNotify'
 import type { DeletionErrorKind } from '../../app/utils/deletionErrorMessage'
 import { livePortalSdkCall } from '../utils/liveDeps'
@@ -350,6 +350,25 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) throw new Error(`writeLedger: no portal token for ${memberId} — retry (ledger write pending)`)
       const res = await writeLedgerAllocation(etids.paymentSpEtid, etids.distributionSpEtid, item, target, companyId, call)
       return res.rowCreated
+    },
+    // TRIGGER dedup pre-check on the SP-ledger marker (#109 §9.3 #6 — replaces the Postgres
+    // `hasAllocationFact` for the trigger path). Demo gated; no token → throw (like writeLedger,
+    // the check is pending → clean retry, never a false «not fired» that would double-fire).
+    hasTriggerFact: async (item, target, memberId, etids) => {
+      if (isDemoAccount(item.account)) return false
+      const call = await resolvePortalCall(memberId)
+      if (!call) throw new Error(`hasTriggerFact: no portal token for ${memberId} — retry (dedup check pending)`)
+      return hasTriggerLedgerFact(etids.distributionSpEtid, item, target, call)
+    },
+    // Record a fired TRIGGER in the SP-ledger as a zero-amount marker row (#109 §9.3 #6 — replaces
+    // the Postgres `recordAllocation` for the trigger path). Demo gated; no token → throw (the write
+    // is pending → clean retry). Idempotent by marker. Returns whether a NEW row was created.
+    writeTriggerFact: async (item, target, companyId, memberId, etids) => {
+      if (isDemoAccount(item.account)) return false
+      const call = await resolvePortalCall(memberId)
+      if (!call) throw new Error(`writeTriggerFact: no portal token for ${memberId} — retry (trigger record pending)`)
+      const res = await writeTriggerLedgerFact(etids.paymentSpEtid, etids.distributionSpEtid, item, target, companyId, call)
+      return res.created
     },
     // Fire the portal automation trigger for a decided trigger target (#79). BEST-EFFORT,
     // like notifyChat — a trigger SIGNALS «деньги пришли» (the client's BP allocates), it does
