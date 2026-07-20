@@ -40,14 +40,10 @@ interface FakeOpts {
   negativeStage?: ((stageId: string) => boolean) | null
   /** error-chat target; default { dialogId: '' } (off). Set a dialogId to enable error notices. */
   errorChat?: ChatTarget
-  /** what recordAllocation returns (true = fresh insert, false = already existed); default true. */
-  recorded?: boolean
   /** autoDistribute gate (§2 mutation slice); default false (fact-only). */
   autoDistribute?: boolean
   /** allocation-mutation config (§2/#79), e.g. `{ invoicePaidStageId, triggerCode }`; default {}. */
   allocation?: { invoicePaidStageId?: string, triggerCode?: string }
-  /** what hasAllocationFact returns (true = fact already exists → skip TRIGGER fire); default false. */
-  factExists?: boolean
   /** what isTargetApplied returns (true = amount target already paid/settled in B24 → skip
    *  the amount mutation, Фаза A); default false. */
   alreadyApplied?: boolean
@@ -81,7 +77,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [], ledger: [], trigHas: [], trigRec: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], ledger: [], trigHas: [], trigRec: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -129,14 +125,6 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     },
     notifyChat: async (it, _dialogId, memberId) => {
       calls.chat.push([it.docId, memberId])
-    },
-    recordAllocation: async (it, target, memberId) => {
-      calls.allocRec.push([it.docId, target.kind, target.id, memberId])
-      return o.recorded ?? true
-    },
-    hasAllocationFact: async (it, target, memberId) => {
-      calls.allocHas.push([it.docId, target.kind, target.id, memberId])
-      return o.factExists ?? false
     },
     isTargetApplied: async (it, target, memberId, applyOpts) => {
       calls.allocApplied.push([it.docId, target.kind, target.id, memberId, applyOpts?.invoicePaidStageId])
@@ -670,6 +658,10 @@ describe('handleCrmSyncJob', () => {
     kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
     candidates: [{ kind: 'invoice', id, amount, currency: 'BYN' }]
   })
+  // SP-provisioned invoice matrix: the durable allocation record is the dist-СП row (§9.3 #6 —
+  // Postgres allocation_fact retired), so the amount-WRITE tests below provision both SPs and
+  // assert the ledger write (`calls.ledger`) instead of the old Postgres `recordAllocation`.
+  const invoiceMatrixSp: RecognitionSettings = { ...invoiceMatrix, configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' } }
 
   it('counts an exact amount match as allocatable (allocate to that target)', async () => {
     // op amount is 10 BYN (item helper); candidate amount 10 → exact.
@@ -803,39 +795,40 @@ describe('handleCrmSyncJob', () => {
     expect(calls.activity).toEqual([]) // never reached writeActivity for this op
   })
 
-  // Allocation WRITE slice (#184): a decided `allocate` records a write-once fact
-  // (payment→target), and an ambiguous/manual outcome posts a notice to the error chat.
-  it('records the allocation fact for a decided allocate and counts it', async () => {
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)] })
+  // Allocation WRITE slice (#184, §9.3 #6): a decided `allocate` writes the durable dist-СП
+  // distribution row (the allocation fact), and an ambiguous/manual outcome posts a notice to
+  // the error chat. `allocated` counts a freshly-created row (writeLedger.created).
+  it('writes the dist-СП row for a decided allocate and counts it', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp, resolve: [invAt('7', 10)] })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r.allocated).toBe(1)
-    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // target kind + id
+    expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]]) // durable fact = SP row
   })
 
-  it('does not double-count the fact when it already existed (redelivery, write-once)', async () => {
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], recorded: false })
+  it('does not double-count when the row already existed (redelivery, idempotent by marker)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp, resolve: [invAt('7', 10)], ledgerCreated: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
-    expect(r.allocated).toBe(0) // store reported "already existed"
-    expect(calls.allocRec).toHaveLength(1) // but still attempted
+    expect(r.allocated).toBe(0) // row already present → not re-counted
+    expect(calls.ledger).toHaveLength(1) // but the (idempotent) write was still invoked
   })
 
-  it('records the smallest-id target AND posts a heads-up on an ambiguous allocation', async () => {
+  it('writes the smallest-id target AND posts a heads-up on an ambiguous allocation', async () => {
     const two: IntentResolution[] = [{
       kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
       candidates: [{ kind: 'invoice', id: '9', amount: 10, currency: 'BYN' }, { kind: 'invoice', id: '5', amount: 10, currency: 'BYN' }]
     }]
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: two, errorChat: { dialogId: 'errchat' } })
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp, resolve: two, errorChat: { dialogId: 'errchat' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r).toMatchObject({ ambiguous: 1, allocated: 1 })
-    expect(calls.allocRec).toEqual([['d1', 'invoice', '5', 'M']]) // smallest id recorded
+    expect(calls.ledger).toEqual([['d1', 'invoice', '5', 'CO', 'M', 1044, 1046]]) // smallest id written
     expect(calls.errChat).toEqual([['d1', 'allocate', 'errchat', 'M']]) // ambiguous decision is action=allocate
   })
 
-  it('posts a manual allocation notice to the error chat and records no fact', async () => {
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 100)], errorChat: { dialogId: 'errchat' } })
+  it('posts a manual allocation notice to the error chat and writes no row', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp, resolve: [invAt('7', 100)], errorChat: { dialogId: 'errchat' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r).toMatchObject({ manual: 1, allocated: 0 })
-    expect(calls.allocRec).toEqual([]) // no allocate → no fact
+    expect(calls.ledger).toEqual([]) // no allocate → no row
     expect(calls.errChat).toEqual([['d1', 'manual', 'errchat', 'M']])
   })
 
@@ -859,10 +852,10 @@ describe('handleCrmSyncJob', () => {
     expect(calls.errChat).toEqual([['d1', 'manual', 'errchat', 'M']]) // STILL one — not re-posted
   })
 
-  it('records a clean single-target allocate WITHOUT an error notice', async () => {
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], errorChat: { dialogId: 'errchat' } })
+  it('writes a clean single-target allocate WITHOUT an error notice', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp, resolve: [invAt('7', 10)], errorChat: { dialogId: 'errchat' } })
     await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
-    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']])
+    expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]])
     expect(calls.errChat).toEqual([]) // clean allocate → no heads-up
   })
 
@@ -872,22 +865,21 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: trig, errorChat: { dialogId: 'errchat' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'сделка Д-55')]), deps)
     expect(r).toMatchObject({ allocatable: 1, allocated: 0 })
-    expect(calls.allocRec).toEqual([]) // decision.action='none' (trigger only) → no amount-fact
     expect(calls.errChat).toEqual([]) // allocatable (not ambiguous/manual) → no notice
   })
 
-  it('accumulates `allocated` across a batch, counting only fresh inserts (write-once)', async () => {
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix })
+  it('accumulates `allocated` across a batch, counting only freshly-created rows (idempotent)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp })
     deps.resolveIntents = async () => [invAt('7', 10)] // every op → exact allocate
     let n = 0
-    // first op inserts a fresh fact (true), second already existed (false).
-    deps.recordAllocation = async (it, target) => {
-      calls.allocRec.push([it.docId, target.kind, target.id, 'M'])
+    // first op writes a fresh row (created:true), second finds it already present (false).
+    deps.writeLedger = async (it, target, companyId, memberId, etids) => {
+      calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
       return n++ === 0
     }
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002')]), deps)
-    expect(r.allocated).toBe(1) // only the fresh insert counted
-    expect(calls.allocRec).toHaveLength(2) // both attempted
+    expect(r.allocated).toBe(1) // only the fresh row counted
+    expect(calls.ledger).toHaveLength(2) // both attempted
   })
 
   // Mutation slice (§2, #109): the `autoDistribute` gate marks a deal-payment target paid.
@@ -899,88 +891,90 @@ describe('handleCrmSyncJob', () => {
     kind: 'payment-number', value: 'ОП-0001', status: 'resolved',
     candidates: [{ kind: 'deal-payment', id, amount: 10, currency: 'BYN' }]
   })
+  // SP-provisioned payment matrix: the durable allocation record is the dist-СП row (§9.3 #6).
+  const payMatrixSp: RecognitionSettings = { ...payMatrix, configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' } }
 
-  it('autoDistribute OFF (default): records the fact but performs NO portal mutation', async () => {
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')] })
+  it('autoDistribute OFF (default): writes the dist-СП row but performs NO portal mutation', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')] })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(0)
-    expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded
+    expect(calls.ledger).toEqual([['d1', 'deal-payment', '42', 'CO', 'M', 1044, 1046]]) // durable fact = SP row
     expect(calls.allocApply).toEqual([]) // no mutation
     expect(calls.allocApplied).toEqual([]) // amount pre-check only runs when gate is on
   })
 
-  it('autoDistribute ON: pays the deal-payment then records the fact (distributed counted)', async () => {
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true })
+  it('autoDistribute ON: pays the deal-payment then writes the row (distributed counted)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')], autoDistribute: true })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(1)
     expect(calls.allocApplied).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // B24-state pre-check (Фаза A)
     expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // portal mutation applied
-    expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // fact recorded AFTER
+    expect(calls.ledger).toEqual([['d1', 'deal-payment', '42', 'CO', 'M', 1044, 1046]]) // row written AFTER
   })
 
-  it('autoDistribute ON but target already applied in B24: skips re-pay, still records the write-once fact (Фаза A reconcile)', async () => {
-    // Crash-window reconcile: a prior run paid but may have crashed before the fact. isTargetApplied
-    // reads paid=Y → skip the pay, but STILL record the write-once fact (accounting/reversal) — a
-    // fresh insert here bumps `allocated` (not `distributed`, since nothing was applied THIS run).
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, alreadyApplied: true })
+  it('autoDistribute ON but target already applied in B24: skips re-pay, still writes the row (Фаза A reconcile)', async () => {
+    // Crash-window reconcile: a prior run paid but may have crashed before the row. isTargetApplied
+    // reads paid=Y → skip the pay, but STILL write the durable row (accounting/reversal) — a fresh
+    // row here bumps `allocated` (not `distributed`, since nothing was applied THIS run).
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')], autoDistribute: true, alreadyApplied: true })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.distributed).toBe(0) // nothing paid this run
-    expect(r.allocated).toBe(1) // fact recorded (durable audit/reversal record)
+    expect(r.allocated).toBe(1) // row written (durable audit/reversal record)
     expect(calls.allocApplied).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // B24 state checked
     expect(calls.allocApply).toEqual([]) // never re-paid
-    expect(calls.allocRec).toEqual([['d1', 'deal-payment', '42', 'M']]) // write-once fact recorded
+    expect(calls.ledger).toEqual([['d1', 'deal-payment', '42', 'CO', 'M', 1044, 1046]]) // row written
   })
 
-  it('autoDistribute ON, already applied AND fact already exists: fully idempotent (no counters bump)', async () => {
-    // Normal redelivery where the fact was already written: recordAllocation returns false → nothing
-    // double-counts, no re-pay. (The activity marker usually `continue`s this earlier; this pins the
-    // allocation-block idempotency directly.)
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, alreadyApplied: true, recorded: false })
+  it('autoDistribute ON, already applied AND row already exists: fully idempotent (no counters bump)', async () => {
+    // Normal redelivery where the row was already written: writeLedger returns created:false →
+    // nothing double-counts, no re-pay. (The activity marker usually `continue`s this earlier; this
+    // pins the allocation-block idempotency directly.)
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')], autoDistribute: true, alreadyApplied: true, ledgerCreated: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(0)
     expect(r.distributed).toBe(0)
     expect(calls.allocApply).toEqual([]) // never re-paid
-    expect(calls.allocRec).toHaveLength(1) // record attempted (write-once), returned false
+    expect(calls.ledger).toHaveLength(1) // idempotent write still invoked, returned created:false
   })
 
-  it('autoDistribute ON, unsupported target (applied=false): records fact, distributed not bumped', async () => {
+  it('autoDistribute ON, unsupported target (applied=false): writes the row, distributed not bumped', async () => {
     // Real worker returns applied=false for a non-deal-payment target (e.g. invoice stage
-    // w/o config); the fact is still recorded so it is not re-attempted.
-    const { deps, calls } = fakeDeps({ recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true, applied: false })
+    // w/o config); the durable row is still written so it is not re-attempted.
+    const { deps, calls } = fakeDeps({ recognition: invoiceMatrixSp, resolve: [invAt('7', 10)], autoDistribute: true, applied: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(0)
     expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', undefined]]) // attempted
-    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // fact still recorded
+    expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]]) // row still written
   })
 
-  it('autoDistribute ON, portal mutation throws: no fact recorded (clean retry)', async () => {
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true })
+  it('autoDistribute ON, portal mutation throws: no row written (clean retry)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')], autoDistribute: true })
     deps.applyAllocation = async () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     }
     await expect(handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
-    expect(calls.allocRec).toEqual([]) // mutation ran BEFORE the fact → nothing persisted
+    expect(calls.ledger).toEqual([]) // mutation ran BEFORE the row → nothing persisted
   })
 
-  it('autoDistribute ON, mutation applied but fact insert lost the race (recorded=false): counters stay 0', async () => {
-    // Narrow TOCTOU: isTargetApplied saw not-applied, applyAllocation paid, but recordAllocation
-    // reported the row already existed (a concurrent job won). Neither counter bumps even
-    // though a portal write happened — pins the `if (recordAllocation) { …; if (applied) }` nesting.
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: [payAt('42')], autoDistribute: true, recorded: false })
+  it('autoDistribute ON, mutation applied but row write lost the race (created=false): counters stay 0', async () => {
+    // Narrow TOCTOU: isTargetApplied saw not-applied, applyAllocation paid, but writeLedger reported
+    // the row already existed (a concurrent job won). Neither counter bumps even though a portal
+    // write happened — pins the `if (writeLedger.created) { …; if (applied) }` nesting.
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')], autoDistribute: true, ledgerCreated: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r.allocated).toBe(0)
     expect(r.distributed).toBe(0)
     expect(calls.allocApply).toEqual([['d1', 'deal-payment', '42', 'M', undefined]]) // mutation still attempted
-    expect(calls.allocRec).toHaveLength(1) // record attempted, returned false
+    expect(calls.ledger).toHaveLength(1) // write attempted, returned created:false
   })
 
   it('autoDistribute ON, mixed batch: distributed is a strict subset of allocated', async () => {
     // d1 → deal-payment (applied true → distributed), d2 → invoice (unsupported → applied false).
     const bothMatrices: RecognitionSettings = {
-      alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }, { mask: 'СЧ-dddd', kind: 'invoice-number' }]
+      alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' }, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }, { mask: 'СЧ-dddd', kind: 'invoice-number' }]
     }
     const { deps, calls } = fakeDeps({ recognition: bothMatrices, autoDistribute: true })
     // applyAllocation mirrors the real worker: deal-payment pays; invoice w/o a configured
@@ -1000,7 +994,7 @@ describe('handleCrmSyncJob', () => {
     // The invoice-stage mutation is armed by settings.allocation.invoicePaidStageId — assert it
     // threads through to applyAllocation, and that a supported invoice write bumps `distributed`.
     const { deps, calls } = fakeDeps({
-      recognition: invoiceMatrix, resolve: [invAt('7', 10)], autoDistribute: true,
+      recognition: invoiceMatrixSp, resolve: [invAt('7', 10)], autoDistribute: true,
       allocation: { invoicePaidStageId: 'DT31_11:P' }
     })
     // Mirror the real worker: with a configured stage, the invoice mutation IS applied.
@@ -1033,7 +1027,6 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigHas).toEqual([['d1', 'deal', '77', 'M', 1044, 1046]]) // SP-marker pre-check (not Postgres)
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // fired with the CODE
     expect(calls.trigRec).toEqual([['d1', 'deal', '77', 'CO', 'M', 1044, 1046]]) // SP marker row recorded AFTER
-    expect(calls.allocRec).toEqual([]) // Postgres fact NOT touched on the trigger path
   })
 
   it('autoDistribute ON + triggerCode: a SMART-PROCESS target reaches applyTrigger WITH its entityTypeId (#79 wire)', async () => {
@@ -1123,7 +1116,6 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]])
     expect(calls.trigHas).toEqual([]) // SP dedup skipped (not provisioned)
     expect(calls.trigRec).toEqual([]) // SP record skipped (not provisioned)
-    expect(calls.allocRec).toEqual([]) // Postgres NOT consulted on the trigger path
   })
 
   it('autoDistribute ON + triggerCode, two DISTINCT deals: fires the trigger for EACH (#79)', async () => {
@@ -1141,8 +1133,8 @@ describe('handleCrmSyncJob', () => {
   it('autoDistribute ON + triggerCode, ONE op resolves to BOTH an amount invoice AND a deal trigger: both fire, both counted (#79)', async () => {
     // The amount `allocate` block and the trigger block are independent: an op can carry an
     // amount target (invoice, exact-match → applyAllocation) AND a trigger target (deal →
-    // applyTrigger). The invoice records the Postgres fact (amount path, unchanged this slice);
-    // the deal records the SP-ledger marker (trigger path, §9.3 #6). Both bump.
+    // applyTrigger). The invoice writes the dist-СП distribution row (amount path); the deal
+    // writes the dist-СП marker row (trigger path). Both are SP-ledger rows now (§9.3 #6). Both bump.
     const mixMatrix: RecognitionSettings = {
       alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' },
       matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }, { mask: 'Д-dd', kind: 'deal-id' }]
@@ -1160,7 +1152,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.distributed).toBe(2) // invoice mutation applied + deal trigger fired
     expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', 'DT31_11:P']]) // amount path
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // trigger path
-    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // amount fact (Postgres, unchanged)
+    expect(calls.ledger).toEqual([['d1', 'invoice', '7', 'CO', 'M', 1044, 1046]]) // amount row (SP-ledger)
     expect(calls.trigRec).toEqual([['d1', 'deal', '77', 'CO', 'M', 1044, 1046]]) // trigger marker (SP-ledger)
   })
 
@@ -1169,7 +1161,7 @@ describe('handleCrmSyncJob', () => {
       kind: 'payment-number', value: 'ОП-0001', status: 'resolved',
       candidates: [{ kind: 'deal-payment', id: '9', amount: 10, currency: 'BYN' }, { kind: 'deal-payment', id: '5', amount: 10, currency: 'BYN' }]
     }]
-    const { deps, calls } = fakeDeps({ recognition: payMatrix, resolve: two, autoDistribute: true, errorChat: { dialogId: 'errchat' } })
+    const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: two, autoDistribute: true, errorChat: { dialogId: 'errchat' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата ОП-0001')]), deps)
     expect(r).toMatchObject({ ambiguous: 1, allocated: 1, distributed: 1 })
     expect(calls.allocApply).toEqual([['d1', 'deal-payment', '5', 'M', undefined]]) // smallest id paid
@@ -1204,11 +1196,16 @@ describe('handleCrmSyncJob — SP-ledger write at allocate (§9.1)', () => {
     expect(calls.allocApply).toEqual([]) // applyAllocation (payment.pay / invoice stage) NOT called
   })
 
-  it('SP NOT provisioned (no configFields) → no ledger write even with autoDistribute ON', async () => {
+  it('SP NOT provisioned (no configFields) → no ledger write even with autoDistribute ON; mutation still counts distributed, allocated stays 0 (§9.3 #6 no-SP path)', async () => {
     const { deps, calls } = fakeDeps({ recognition: invMatrix, resolve: [invAt('7', 10)], autoDistribute: true })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счёт СЧ-0007')]), deps)
     expect(r.ledgerWritten).toBe(0)
     expect(calls.ledger).toEqual([])
+    // No SP ⇒ no durable per-target fact: the applied mutation bumps `distributed`, but `allocated`
+    // stays 0 (op-level idempotency is the B24 activity marker). Pins the `else if (applied)` branch.
+    expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', undefined]]) // mutation applied
+    expect(r.distributed).toBe(1)
+    expect(r.allocated).toBe(0)
   })
 
   it('idempotent redelivery (row already existed) → writeLedger called but ledgerWritten stays 0', async () => {

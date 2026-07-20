@@ -25,8 +25,8 @@ export const METRICS = {
   unmatched: 'unmatched', // payer company not found by account (#91: may still be recorded on my company)
   recognized: 'recognized', // ops with ≥1 recognized identifier in the purpose
   resolved: 'resolved', // ops whose intent resolved to ≥1 allocation candidate
-  allocated: 'allocated', // allocation facts recorded
-  distributed: 'distributed', // portal mutations applied (payment.pay / invoice stage)
+  allocated: 'allocated', // dist-СП distribution rows written (§9.3 #6; 0 for portals without provisioned SPs)
+  distributed: 'distributed', // portal mutations applied (payment.pay / invoice stage) or triggers fired
   ambiguous: 'ambiguous', // allocation had >1 amount target
   manual: 'manual' // amount candidates but no exact match → manual queue
 } as const

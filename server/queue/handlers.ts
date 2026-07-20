@@ -80,25 +80,12 @@ export interface HandlerDeps {
   onResolved: (item: StatementItem, resolutions: IntentResolution[], memberId: string) => void
   /** Observe the ALLOCATION DECISION for one op (§2, #109): the amount-matched outcome
    *  (`resolveAllocation` over invoice/deal-payment candidates) plus how many unconditional
-   *  trigger targets (deal/smart-process) were found. This callback only OBSERVES; the
-   *  amount-target fact is persisted by `recordAllocation` (#184, write-once) and — when the
-   *  `autoDistribute` gate is on — the deal-payment target is also paid via `applyAllocation`
-   *  (§2 mutation slice, below). Invoice-stage / trigger mutations remain a follow-up.
+   *  trigger targets (deal/smart-process) were found. This callback only OBSERVES; the durable
+   *  allocation record is the dist-СП distribution row (`writeLedger`, §9.3 #6 — Postgres
+   *  `allocation_fact` retired) and — when the `autoDistribute` gate is on — the target is also
+   *  paid via `applyAllocation` (§2 mutation slice, below).
    *  Called once per op that resolved ≥1 candidate. MUST NOT throw (pure observation). */
   onAllocationDecision: (item: StatementItem, decision: AllocationDecision, triggerTargets: number, memberId: string) => void
-  /** Record the persistent allocation fact «этот платёж → эта сущность» (#184). Called
-   *  only for a decided `allocate` (the smallest-id amount target). Write-once per
-   *  (portal, factKey): returns true if THIS call inserted the fact, false if one already
-   *  existed (redelivery/reimport) — so the `allocated` counter is not double-bumped. v1
-   *  writes only the FACT (no `payment.pay`/stage mutation). A store error propagates
-   *  (fail the job → clean retry), like findCompany — it runs BEFORE the activity write. */
-  recordAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
-  /** Whether an allocation fact for this (payment → target) already exists (#109
-   *  mutation slice). NO LONGER consulted in the handler (§9.3 #6, sub-slice 2): the trigger
-   *  dedup moved to the dist-СП marker (`hasTriggerFact`); the amount mutation pre-check moved
-   *  to `isTargetApplied` (reads B24 state, Фаза A). Dep retained until the Postgres store is
-   *  removed (sub-slice 3). A store error propagates (fail the job). */
-  hasAllocationFact: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Whether a decided AMOUNT target (deal-payment/invoice) is already applied in B24 —
    *  the payment is `paid='Y'` / the invoice is on the configured `opts.invoicePaidStageId`
    *  (Фаза A idempotency, replacing `hasAllocationFact` for the amount pre-check). Reading
@@ -245,12 +232,16 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  `ambiguous` = allocatable ops where >1 distinct amount target matched (auto-allocate
  *  to the smallest id + chat heads-up); `manual` = ops with amount candidates but no
  *  exact match and no trigger (partial/group payment → «очередь ручного разбора»).
- *  `allocated` = decided `allocate` ops whose fact was FRESHLY recorded this run (#184,
- *  write-once — a redelivery does not re-count). `distributed` = ops that ALSO applied a
- *  portal mutation this run (`crm.item.payment.pay`/`crm.item.update`) OR fired an automation
- *  TRIGGER (`crm.automation.trigger.execute`, deal/smart-process, #79) — only when the
- *  `autoDistribute` gate is on (§2 mutation slice, #109); a subset of `allocated` (unsupported
- *  amount target kinds record the fact but apply nothing). Gate off ⇒ `distributed` stays 0 (fact-only).
+ *  `allocated` = decided `allocate`/trigger ops whose durable record — the dist-СП distribution
+ *  row — was FRESHLY written this run (§9.3 #6, idempotent by marker; Postgres `allocation_fact`
+ *  retired). A redelivery finds the row and does not re-count. Bumps ONLY when both SPs are
+ *  provisioned; WITHOUT SP there is no durable per-target fact (op-level dedup = the B24 activity
+ *  marker), so `allocated` stays 0 for that op. `distributed` = ops that ALSO applied a portal
+ *  mutation this run (`crm.item.payment.pay`/`crm.item.update`) OR fired an automation TRIGGER
+ *  (`crm.automation.trigger.execute`, deal/smart-process, #79) — only when the `autoDistribute`
+ *  gate is on (§2 mutation slice, #109). With SP provisioned it nests under a freshly-created row
+ *  ⇒ a subset of `allocated`; WITHOUT SP a mutation can apply while `allocated` stays 0, so the
+ *  subset relation holds only in the provisioned (default-ON) case. Gate off ⇒ `distributed` stays 0.
  *  `credits`/`debits` = приход/расход split of the processed ops (for the status summary).
  *  An unmatched op writes nothing (no marker), so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
@@ -396,42 +387,36 @@ export async function handleCrmSyncJob(
         // company (this block only runs then), so the scope is the payer (IDOR).
         if (summary.decision.action === 'allocate') {
           const target = summary.decision.target
-          if (autoDistribute) {
-            // Mutation slice (§2): mark the target paid, then record the fact. Order matters —
-            // the portal write runs BEFORE the fact, so a persisted fact always implies the
-            // mutation succeeded (a thrown REST error leaves no fact ⇒ clean retry). The
-            // pre-check reads B24 STATE (`isTargetApplied` — payment `paid='Y'` / invoice on the
-            // paid stage, Фаза A) so a redelivery/reimport never re-pays: reading the true state
-            // also covers the pay-then-crash-before-fact window the fact left open. Unsupported
-            // target kinds (invoice stage w/o config, trigger targets) apply nothing but still
-            // record the fact (distributed not bumped).
-            if (await deps.isTargetApplied(item, target, job.memberId, { invoicePaidStageId: settings?.allocation?.invoicePaidStageId })) {
-              // Already applied in B24 (a prior run paid it — possibly crashing BEFORE the fact
-              // write). Do NOT re-pay, but STILL record the write-once fact so accounting/reversal
-              // keeps a durable record of the allocation (distributed NOT bumped — we applied
-              // nothing this run). recordAllocation is write-once, so the normal case (fact already
-              // present) is a no-op that bumps nothing.
-              if (await deps.recordAllocation(item, target, job.memberId)) allocated++
-            } else {
-              const applied = await deps.applyAllocation(item, target, job.memberId, { invoicePaidStageId: settings?.allocation?.invoicePaidStageId })
-              if (await deps.recordAllocation(item, target, job.memberId)) {
-                allocated++
-                if (applied) distributed++
-              }
-            }
-          } else if (await deps.recordAllocation(item, target, job.memberId)) {
-            // Gate OFF ⇒ fact-only (write-once), no portal mutation. Unchanged v1 behaviour.
-            allocated++
+          const etids = ledgerPaymentEtid && ledgerDistributionEtid ? { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid } : null
+          // Portal MUTATION (§2) gated on the opt-in `autoDistribute`. The pre-check reads B24 STATE
+          // (`isTargetApplied` — payment `paid='Y'` / invoice on the configured paid stage, Фаза A)
+          // so a redelivery/reimport never re-pays (and it covers the pay-then-crash window). An
+          // unsupported target kind (invoice stage w/o config, trigger — handled below) applies
+          // nothing. Runs BEFORE the ledger row, so a thrown REST error leaves no row ⇒ clean retry.
+          let applied = false
+          if (autoDistribute && !(await deps.isTargetApplied(item, target, job.memberId, { invoicePaidStageId: settings?.allocation?.invoicePaidStageId }))) {
+            applied = await deps.applyAllocation(item, target, job.memberId, { invoicePaidStageId: settings?.allocation?.invoicePaidStageId })
           }
-          // SP-ledger write (§9.1): ADDITIONALLY, when both SPs are provisioned (carrier =
-          // smart-process), record the allocation in the ledger (payment carrier element +
-          // distribution row + «осталось» recompute) — this is the DEDUP/allocation-fact record,
-          // so it runs WHENEVER the SP-ledger exists, INDEPENDENT of `autoDistribute` (which gates
-          // only the portal MUTATION — payment.pay / invoice stage — above). Idempotent by markers,
-          // so a redelivery no-ops; a REST error propagates (clean retry). companyId is non-null
-          // here (matched-company branch). This does NOT replace the activity дело.
-          if (ledgerPaymentEtid && ledgerDistributionEtid && deps.writeLedger && companyId) {
-            if (await deps.writeLedger(item, target, companyId, job.memberId, { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid })) ledgerWritten++
+          // DURABLE allocation record = the SP-ledger distribution row (§9.3 #6 — Postgres
+          // `allocation_fact` retired). Written WHENEVER both SPs are provisioned, INDEPENDENT of
+          // `autoDistribute`. Idempotent by marker (a redelivery finds the row → `created:false` →
+          // no double-count); a REST error propagates (clean retry). `allocated` counts the fact
+          // (the row); `distributed` counts a mutation actually applied THIS run. WITHOUT SP there
+          // is no durable per-target fact — op-level idempotency is held by the B24 activity marker
+          // (`writeActivity` stamps it; a redelivery is `continue`d at the top gate). Does NOT
+          // replace the activity дело. companyId is non-null here (matched-company branch).
+          if (etids && deps.writeLedger && companyId) {
+            if (await deps.writeLedger(item, target, companyId, job.memberId, etids)) {
+              allocated++
+              ledgerWritten++
+              // `distributed` (mutation applied THIS run) nests under a freshly-created row, so it
+              // stays a strict subset of `allocated`; a redelivery (created:false) bumps neither.
+              if (applied) distributed++
+            }
+          } else if (applied) {
+            // No SP-ledger: no durable per-target fact (op-level idempotency = the B24 activity
+            // marker). The portal mutation still applied, so count it; `allocated` stays 0 here.
+            distributed++
           }
         }
         // Trigger targets (#79): a deal/smart-process candidate fires the portal's «деньги

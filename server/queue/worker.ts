@@ -42,7 +42,7 @@ import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
-import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
+import { deleteFactsForPortal } from '../utils/allocationFactStore'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -50,7 +50,6 @@ import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocation
 import { readAllocationApplied } from '../utils/allocationApplied'
 import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
-import { allocationFactKey } from '../../app/utils/allocation'
 import { readAppSettingVia } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
@@ -248,9 +247,9 @@ export function liveHandlerDeps(): HandlerDeps {
       const summary = resolutions.map(r => `${r.kind}=${logSafe(r.value)}:${r.status}(${r.candidates.length})`).join(', ')
       console.log(`[resolve] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
-    // Observe the allocation decision (§2). This callback only LOGS; the fact is persisted
-    // by the `recordAllocation` dep below (#184). Target id/kind are internal (CRM ids, not
-    // payer-controlled); account/docId sanitized.
+    // Observe the allocation decision (§2). This callback only LOGS; the durable record is the
+    // SP-ledger distribution row (`writeLedger`, §9.3 #6 — Postgres allocation_fact retired).
+    // Target id/kind are internal (CRM ids, not payer-controlled); account/docId sanitized.
     onAllocationDecision: (item, decision, triggerTargets, memberId) => {
       const detail = decision.action === 'allocate'
         ? `allocate ${decision.target.kind}#${decision.target.id}${decision.ambiguous ? ` ambiguous(+${decision.alternatives.length})` : ''}`
@@ -275,21 +274,6 @@ export function liveHandlerDeps(): HandlerDeps {
         console.error('chat notify failed', memberId, (e as Error)?.message)
       }
     },
-    // Persist the allocation fact «платёж → сущность» (#184), write-once per (portal,
-    // factKey). Demo accounts are GATED (never touch the real store). A store error
-    // PROPAGATES (unlike notifyChat) — it runs BEFORE the activity write, so a retry is
-    // clean; the fact write must not be silently lost.
-    recordAllocation: (item, target, memberId) => {
-      if (isDemoAccount(item.account)) return Promise.resolve(false)
-      return recordAllocation(dbQuery, memberId, allocationFactKey(item, target), target.kind, target.id)
-    },
-    // Idempotency pre-check for the TRIGGER path (#79): does a fact already exist for this
-    // (payment → trigger target)? A trigger fire is stateless, so the fact is its only dedup.
-    // Demo accounts GATED (never touch the store). A store error propagates (fail the job).
-    hasAllocationFact: async (item, target, memberId) => {
-      if (isDemoAccount(item.account)) return false
-      return (await getAllocationFact(dbQuery, memberId, allocationFactKey(item, target))) !== null
-    },
     // Idempotency pre-check for the AMOUNT mutation (#109 §2, Фаза A): is the target already
     // applied in B24 (payment `paid='Y'` / invoice on the configured paid stage)? Reads live
     // B24 state via the per-portal RestCall — the source of truth, so a redelivery never
@@ -310,12 +294,13 @@ export function liveHandlerDeps(): HandlerDeps {
     // `!call` (no portal token) has TWO distinct causes we must NOT conflate (#77 review):
     //   - the target has NO v1 mutation anyway (trigger kind, or invoice w/o configured
     //     stage) — `buildAllocationMutation` is `null`, so there is nothing to write and
-    //     fact-only is correct → return false (no mutation, caller records the fact);
+    //     ledger-only is correct → return false (no mutation, caller writes the SP row);
     //   - the target IS mutatable but the portal token is transiently unavailable (refresh
-    //     failed / mid-batch uninstall) — recording a fact now would PERMANENTLY block the
-    //     pay (`hasAllocationFact` short-circuits every retry) for a payment we never paid.
-    //     A transient failure is NOT an uninstall, so `deletePortal` won't purge it — no
-    //     self-heal. THROW instead → the job retries cleanly, no fact until the pay lands.
+    //     failed / mid-batch uninstall) — returning false here would let the caller write the
+    //     SP row for a payment we never paid; the row is idempotent, so a later retry finds it
+    //     (`created:false`) and never counts `distributed` for the pay. A transient failure is
+    //     NOT an uninstall, so `deletePortal` won't purge it — no self-heal. THROW instead →
+    //     the job retries cleanly, no SP row until the pay lands.
     applyAllocation: async (item, target, memberId, opts) => {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
@@ -329,12 +314,12 @@ export function liveHandlerDeps(): HandlerDeps {
       // THIRD failure mode (besides transport-throw and no-token, both handled above): the
       // pay REST call WAS made but the portal did NOT confirm the write (`{result:false}` —
       // e.g. a soft business-rule rejection), and that is NOT an `unsupported` target (which
-      // legitimately writes nothing and is fact-only). Returning false here would let the
-      // caller record the idempotency fact for a payment that was never applied →
-      // `hasAllocationFact` then PERMANENTLY blocks every retry, leaving a «разнесён» fact on
-      // an unpaid target (the exact poison the no-token branch throws to avoid). THROW so the
+      // legitimately writes nothing and is ledger-only). Returning false here would let the
+      // caller write the durable SP row for a payment that was never applied; the row is
+      // idempotent, so a retry finds it (`created:false`) and never counts `distributed` for
+      // the eventual pay (the same poison the no-token branch throws to avoid). THROW so the
       // job retries; a genuinely permanent rejection surfaces via retry exhaustion, not a
-      // silent success. (`skipped:'unsupported'` still returns false → fact-only, unchanged.)
+      // silent success. (`skipped:'unsupported'` still returns false → ledger-only, unchanged.)
       if (!res.applied && res.skipped !== 'unsupported') {
         throw new Error(`applyAllocation: portal did not confirm ${res.method ?? 'pay'} for ${target.kind}#${target.id} (member ${memberId}) — retry`)
       }
