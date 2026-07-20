@@ -14,6 +14,9 @@ export interface FeedbackSubmitDeps {
   validateFrame: (domain: string, accessToken: string) => Promise<string>
   /** File the issue in the receiving repo. Only called when `config` is non-null. */
   postIssue: (kind: 'up' | 'down', comment: unknown, context: FeedbackContext) => Promise<PostIssueResult>
+  /** Best-effort telemetry (#195): record that a rating was sent (BOTH 👍 and 👎). Called ONLY on a
+   *  successfully-filed issue; a failure here must never fail the already-created issue. Optional. */
+  recordMetric?: (memberId: string, kind: 'up' | 'down') => Promise<void>
 }
 
 export interface FeedbackSubmitInput {
@@ -61,6 +64,15 @@ export async function handleFeedbackSubmit(
   // Context (fileName/appVersion) is client-supplied and rendered inert by the builder; the
   // receiving repo is private so client data is permitted (see feedback.ts module header).
   const result = await deps.postIssue(kind, input.comment, input.context ?? {})
-  if (result.ok) return { status: 200, body: { ok: true, ...(result.number ? { number: result.number } : {}) } }
+  if (result.ok) {
+    // Telemetry (#195): count the sent rating (both 👍/👎). Best-effort — a counter write must
+    // never fail an already-created issue.
+    if (deps.recordMetric) {
+      try {
+        await deps.recordMetric(memberId, kind)
+      } catch { /* best-effort */ }
+    }
+    return { status: 200, body: { ok: true, ...(result.number ? { number: result.number } : {}) } }
+  }
   return { status: result.retryable ? 502 : 500, body: { error: 'не удалось отправить отзыв' } }
 }

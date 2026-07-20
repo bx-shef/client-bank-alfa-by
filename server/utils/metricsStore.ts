@@ -33,6 +33,18 @@ export const METRICS = {
 
 export type MetricName = typeof METRICS[keyof typeof METRICS]
 
+/** Feedback-channel counters (#192 п.4 / #195): employee 👍/👎 volume. Kept SEPARATE from the
+ *  summary-bound `METRICS` above on purpose — these are bumped by the feedback route on a submitted
+ *  rating, NOT derived from a crm-sync run summary, so adding them to `METRICS` would (a) force
+ *  `metricsFromSummary` to emit keys the summary has no field for, and (b) make the worker try to
+ *  accumulate feedback on every run. They still land in the same `metrics_counter` table (by name)
+ *  and so appear in `GET /api/import/metrics` alongside the run counters. BOTH 👍 and 👎 are counted
+ *  — the dashboard should show feedback VOLUME, not just problems. */
+export const FEEDBACK_METRICS = {
+  up: 'feedback_up', // employee feedback: 👍 sent on a result
+  down: 'feedback_down' // employee feedback: 👎 sent on a result
+} as const
+
 /** The subset of a crm-sync run summary that becomes lifetime counters. Pure — maps each
  *  METRIC name to its summary field (identity keys, but explicit so a transposed field or
  *  a dropped counter fails a unit test, not silently in production). */

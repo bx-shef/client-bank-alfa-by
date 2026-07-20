@@ -10,6 +10,7 @@ function deps(over: Partial<FeedbackSubmitDeps> = {}): FeedbackSubmitDeps {
     memberIdByDomain: async () => 'M',
     validateFrame: async () => 'user-7',
     postIssue: vi.fn(async () => okPost),
+    recordMetric: vi.fn(async () => {}),
     ...over
   }
 }
@@ -68,5 +69,30 @@ describe('handleFeedbackSubmit', () => {
     const d = deps()
     await handleFeedbackSubmit(d, { ...IN, context: { fileName: 'вписка.txt' } })
     expect(d.postIssue).toHaveBeenCalledWith('up', 'ok', { fileName: 'вписка.txt' })
+  })
+
+  it('records the metric on a filed issue (with member + kind), for both 👍 and 👎', async () => {
+    const up = deps()
+    await handleFeedbackSubmit(up, { ...IN, kind: 'up' })
+    expect(up.recordMetric).toHaveBeenCalledWith('M', 'up')
+    const down = deps()
+    await handleFeedbackSubmit(down, { ...IN, kind: 'down' })
+    expect(down.recordMetric).toHaveBeenCalledWith('M', 'down')
+  })
+
+  it('does NOT record the metric when the issue was not filed', async () => {
+    const d = deps({ postIssue: async () => ({ ok: false, status: 503, retryable: true }) })
+    const r = await handleFeedbackSubmit(d, IN)
+    expect(r.status).toBe(502)
+    expect(d.recordMetric).not.toHaveBeenCalled()
+  })
+
+  it('a throwing recordMetric does not fail the already-filed issue (best-effort)', async () => {
+    const failingMetric = async (): Promise<void> => {
+      throw new Error('db down')
+    }
+    const d = deps({ recordMetric: failingMetric })
+    const r = await handleFeedbackSubmit(d, IN)
+    expect(r).toEqual({ status: 200, body: { ok: true, number: 5 } })
   })
 })
