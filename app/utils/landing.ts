@@ -8,8 +8,12 @@ export const LANDING_DESCRIPTION
 /** Small print under the hero CTA. */
 export const LANDING_HERO_NOTE = 'Само приложение — бесплатное, есть в Маркете Bitrix24.'
 
+/** Bitrix24 Market listing code (slug) of the free app — the single source of truth reused by the
+ *  landing promo URL and the in-portal «оцените приложение» modal (marketDetailPath). */
+export const LANDING_MARKET_CODE = 'shef.bankimport'
+
 /** Marketplace listing of the free app (import-only hook). */
-export const LANDING_MARKET_URL = 'https://www.bitrix24.ru/apps/app/shef.bankimport/'
+export const LANDING_MARKET_URL = `https://www.bitrix24.ru/apps/app/${LANDING_MARKET_CODE}/`
 
 /** Copy for the «Приложение для Bitrix24» promo card (→ <AppInBitrixCard>). Agreed
  * with the owner and mirrored in docs/POSITIONING.md. The card links to the free

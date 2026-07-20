@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES } from '~/config/b24'
+import { B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, marketDetailPath } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
   it('lists crm, sale, im, documentgenerator, user_brief and placement', () => {
@@ -17,5 +17,20 @@ describe('B24_ALL_BOUND_EVENTS', () => {
   it('is the lifecycle events followed by the deletion events (§9.2), no duplicates', () => {
     expect([...B24_ALL_BOUND_EVENTS]).toEqual([...B24_BOUND_EVENTS, ...B24_DELETION_EVENTS])
     expect(new Set(B24_ALL_BOUND_EVENTS).size).toBe(B24_ALL_BOUND_EVENTS.length)
+  })
+})
+
+describe('marketDetailPath', () => {
+  it('builds the Bitrix24 Market detail path from a listing code', () => {
+    expect(marketDetailPath('shef.bankimport')).toBe('/marketplace/detail/shef.bankimport/')
+  })
+
+  it('trims surrounding whitespace before building the path', () => {
+    expect(marketDetailPath('  shef.bankimport  ')).toBe('/marketplace/detail/shef.bankimport/')
+  })
+
+  it('returns null for an empty / whitespace-only code (feature off)', () => {
+    expect(marketDetailPath('')).toBeNull()
+    expect(marketDetailPath('   ')).toBeNull()
   })
 })

@@ -25,6 +25,10 @@ const busy = ref(false)
 const submitting = ref(false)
 const submitResult = ref<{ ok: boolean, message: string } | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
+// Flips true after a successful «Записать в CRM» — the moment the user has clearly benefited, so the
+// «оцените приложение» modal (AppRatingModal) can ask. The show decision is server-throttled; this
+// only nudges the check. Inert outside a portal.
+const ratingTrigger = ref(false)
 
 // Combined, de-duped operations across all successfully parsed files.
 const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
@@ -53,6 +57,8 @@ async function writeToCrm() {
   submitting.value = true
   submitResult.value = await submitFiles(okFiles.value, allItems.value.length)
   submitting.value = false
+  // A successful CRM write is the «benefited» moment → let the rating modal ask (server-throttled).
+  if (submitResult.value?.ok) ratingTrigger.value = true
 }
 
 function onDrop(e: DragEvent) {
@@ -218,5 +224,9 @@ function clearAll() {
         data-testid="all-failed"
       />
     </div>
+
+    <!-- «Оцените приложение» — surfaces (server-throttled) after a successful CRM write; inert
+         outside a portal. -->
+    <AppRatingModal :trigger="ratingTrigger" />
   </div>
 </template>

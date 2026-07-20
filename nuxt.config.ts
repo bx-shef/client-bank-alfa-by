@@ -55,6 +55,10 @@ export default defineNuxtConfig({
       commitSha: '',
       // Яндекс.Метрика — id счётчика (только цифры, отфильтрован выше).
       metrikaId,
+      // Bitrix24 Market listing code override for the «оцените приложение» modal. Empty → the
+      // composable falls back to the app's real slug (LANDING_MARKET_CODE in landing.ts). Set
+      // NUXT_PUBLIC_B24_MARKET_CODE only to point at a different listing (e.g. a re-publish).
+      b24MarketCode: '',
       // Битрикс24 CRM веб-форма (embed) — публичные идентификаторы, не секреты.
       // По умолчанию вшита форма Игоря Шевчика (портал b37817748). Смена — через
       // ENV без перебилда; пустые значения → на лендинге показывается слот.

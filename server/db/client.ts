@@ -77,6 +77,15 @@ CREATE TABLE IF NOT EXISTS bank_tokens (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (member_id, provider, account_key)
 );
+
+CREATE TABLE IF NOT EXISTS portal_app_rating (
+  member_id   TEXT PRIMARY KEY,
+  prompted_at TIMESTAMPTZ,
+  opened_at   TIMESTAMPTZ,
+  reviewed    BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 let pool: Pool | undefined

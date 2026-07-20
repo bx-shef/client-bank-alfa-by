@@ -44,6 +44,7 @@ import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
 import { deleteFactsForPortal, getAllocationFact, recordAllocation } from '../utils/allocationFactStore'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
+import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { fetchBankStatement } from '../utils/bankFetch'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { readAllocationApplied } from '../utils/allocationApplied'
@@ -431,6 +432,7 @@ export function liveHandlerDeps(): HandlerDeps {
       await deleteFactsForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
+      await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
       resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync
