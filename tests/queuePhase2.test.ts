@@ -57,6 +57,10 @@ interface FakeOpts {
   triggerFired?: boolean
   /** what writeLedger returns (true = a new distribution row was created); default true (§9.1). */
   ledgerCreated?: boolean
+  /** what hasTriggerFact returns (true = SP-ledger marker exists → skip TRIGGER fire); default false (§9.3 #6). */
+  triggerFactExists?: boolean
+  /** what writeTriggerFact returns (true = a new trigger marker row was created); default true (§9.3 #6). */
+  triggerRowCreated?: boolean
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -77,7 +81,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [], ledger: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], allocRec: [], errChat: [], unmatchedNotify: [], allocHas: [], allocApplied: [], allocApply: [], trigApply: [], ledger: [], trigHas: [], trigRec: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -153,6 +157,14 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     writeLedger: async (it, target, companyId, memberId, etids) => {
       calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
       return o.ledgerCreated ?? true
+    },
+    hasTriggerFact: async (it, target, memberId, etids) => {
+      calls.trigHas.push([it.docId, target.kind, target.id, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      return o.triggerFactExists ?? false
+    },
+    writeTriggerFact: async (it, target, companyId, memberId, etids) => {
+      calls.trigRec.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      return o.triggerRowCreated ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
@@ -1003,29 +1015,32 @@ describe('handleCrmSyncJob', () => {
   })
 
   // Trigger slice (#79): a deal trigger target fires the portal automation trigger.
+  // SP provisioned (payment-sp/distribution-sp) → trigger dedup/record run on the SP-ledger
+  // marker (§9.3 #6): `hasTriggerFact` pre-check + `writeTriggerFact` record (Postgres retired).
   const dealMatrix: RecognitionSettings = {
-    alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }]
+    alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' }, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }]
   }
   const dealAt = (id: string): IntentResolution => ({
     kind: 'deal-id', value: 'Д-55', status: 'resolved',
     candidates: [{ kind: 'deal', id, amount: 0, currency: 'BYN' }]
   })
 
-  it('autoDistribute ON + triggerCode: fires the deal trigger, records the fact, distributed counted (#79)', async () => {
+  it('autoDistribute ON + triggerCode: fires the deal trigger, records the SP marker, distributed counted (#79/§9.3 #6)', async () => {
     const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.allocated).toBe(1)
     expect(r.distributed).toBe(1)
-    expect(calls.allocHas).toEqual([['d1', 'deal', '77', 'M']]) // idempotency pre-check
+    expect(calls.trigHas).toEqual([['d1', 'deal', '77', 'M', 1044, 1046]]) // SP-marker pre-check (not Postgres)
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // fired with the CODE
-    expect(calls.allocRec).toEqual([['d1', 'deal', '77', 'M']]) // fact recorded AFTER
+    expect(calls.trigRec).toEqual([['d1', 'deal', '77', 'CO', 'M', 1044, 1046]]) // SP marker row recorded AFTER
+    expect(calls.allocRec).toEqual([]) // Postgres fact NOT touched on the trigger path
   })
 
   it('autoDistribute ON + triggerCode: a SMART-PROCESS target reaches applyTrigger WITH its entityTypeId (#79 wire)', async () => {
     // Pins the handler→applyTrigger join for smart-process: the full candidate (incl.
     // entityTypeId, needed as OWNER_TYPE_ID) must reach applyTrigger, not a stripped {kind,id}.
     const smartMatrix: RecognitionSettings = {
-      alphabet: 'cyrillic', configFields: { 'smart-entity': '1032' }, matrices: [{ mask: 'СП-dd', kind: 'smart-id' }]
+      alphabet: 'cyrillic', configFields: { 'smart-entity': '1032', 'payment-sp': '1044', 'distribution-sp': '1046' }, matrices: [{ mask: 'СП-dd', kind: 'smart-id' }]
     }
     const smartAt: IntentResolution = {
       kind: 'smart-id', value: 'СП-90', status: 'resolved',
@@ -1036,7 +1051,7 @@ describe('handleCrmSyncJob', () => {
     expect(r.distributed).toBe(1)
     // entityTypeId 1032 is the 6th element — proves the full candidate survived to applyTrigger.
     expect(calls.trigApply).toEqual([['d1', 'smart-process', '9', 'M', 'cbatest_pay', 1032]])
-    expect(calls.allocRec).toEqual([['d1', 'smart-process', '9', 'M']])
+    expect(calls.trigRec).toEqual([['d1', 'smart-process', '9', 'CO', 'M', 1044, 1046]]) // SP marker row recorded
   })
 
   it('autoDistribute ON but NO triggerCode configured: does NOT fire the trigger (#79)', async () => {
@@ -1051,12 +1066,13 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigApply).toEqual([])
   })
 
-  it('autoDistribute ON + triggerCode, fact already exists: skips re-fire AND re-record (idempotent) (#79)', async () => {
-    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, factExists: true })
+  it('autoDistribute ON + triggerCode, SP marker already exists: skips re-fire AND re-record (idempotent) (#79/§9.3 #6)', async () => {
+    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, triggerFactExists: true })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.distributed).toBe(0)
+    expect(calls.trigHas).toEqual([['d1', 'deal', '77', 'M', 1044, 1046]]) // pre-check saw the marker
     expect(calls.trigApply).toEqual([]) // never re-fired
-    expect(calls.allocRec).toEqual([]) // never re-recorded
+    expect(calls.trigRec).toEqual([]) // never re-recorded
   })
 
   it('autoDistribute ON + triggerCode, two intents → SAME deal: fires ONCE (distinct dedup) (#79)', async () => {
@@ -1083,18 +1099,31 @@ describe('handleCrmSyncJob', () => {
     expect(r.distributed).toBe(0)
     expect(r.created).toBe(1) // job still succeeds — an un-fired trigger does not fail the batch
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // attempted once
-    expect(calls.allocRec).toEqual([]) // no fact persisted (but the activity marker IS written → single-shot)
+    expect(calls.trigRec).toEqual([]) // no SP marker persisted (but the activity marker IS written → single-shot)
   })
 
-  it('autoDistribute ON + triggerCode, fired but recordAllocation lost the race (recorded=false): counters stay 0 (#79)', async () => {
-    // TOCTOU on the trigger path: hasAllocationFact saw none, the trigger FIRED, but the write-once
-    // fact insert reported the row already existed (a concurrent job won). Neither counter bumps.
-    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, recorded: false })
+  it('autoDistribute ON + triggerCode, fired but SP marker row lost the race (created=false): counters stay 0 (#79/§9.3 #6)', async () => {
+    // TOCTOU on the trigger path: hasTriggerFact saw no marker, the trigger FIRED, but the idempotent
+    // row write reported the marker already existed (a concurrent job won). Neither counter bumps.
+    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, triggerRowCreated: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.allocated).toBe(0)
     expect(r.distributed).toBe(0)
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // fired
-    expect(calls.allocRec).toHaveLength(1) // record attempted, returned false
+    expect(calls.trigRec).toHaveLength(1) // record attempted, returned false
+  })
+
+  it('autoDistribute ON + triggerCode but SP NOT provisioned: fires (single-shot) with NO SP dedup/record (§9.3 #6)', async () => {
+    // Without both SP etids the trigger still fires (best-effort), but there is no durable SP marker
+    // to check or write — the SP deps are NOT called; cross-run dedup falls to the activity marker.
+    const noSpDeal: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }] }
+    const { deps, calls } = fakeDeps({ recognition: noSpDeal, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
+    expect(r.distributed).toBe(1) // fired + counted (fallback recorded=true)
+    expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]])
+    expect(calls.trigHas).toEqual([]) // SP dedup skipped (not provisioned)
+    expect(calls.trigRec).toEqual([]) // SP record skipped (not provisioned)
+    expect(calls.allocRec).toEqual([]) // Postgres NOT consulted on the trigger path
   })
 
   it('autoDistribute ON + triggerCode, two DISTINCT deals: fires the trigger for EACH (#79)', async () => {
@@ -1106,15 +1135,16 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55 Д-56')]), deps)
     expect(r.distributed).toBe(2) // distinct kind:id → the loop iterates and fires each
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined], ['d1', 'deal', '88', 'M', 'cbatest_pay', undefined]])
-    expect(calls.allocRec).toEqual([['d1', 'deal', '77', 'M'], ['d1', 'deal', '88', 'M']])
+    expect(calls.trigRec).toEqual([['d1', 'deal', '77', 'CO', 'M', 1044, 1046], ['d1', 'deal', '88', 'CO', 'M', 1044, 1046]])
   })
 
   it('autoDistribute ON + triggerCode, ONE op resolves to BOTH an amount invoice AND a deal trigger: both fire, both counted (#79)', async () => {
     // The amount `allocate` block and the trigger block are independent: an op can carry an
     // amount target (invoice, exact-match → applyAllocation) AND a trigger target (deal →
-    // applyTrigger). Both write a fact (distinct kinds → no fact-key collision) and both bump.
+    // applyTrigger). The invoice records the Postgres fact (amount path, unchanged this slice);
+    // the deal records the SP-ledger marker (trigger path, §9.3 #6). Both bump.
     const mixMatrix: RecognitionSettings = {
-      alphabet: 'cyrillic', configFields: {},
+      alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' },
       matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }, { mask: 'Д-dd', kind: 'deal-id' }]
     }
     const { deps, calls } = fakeDeps({
@@ -1130,7 +1160,8 @@ describe('handleCrmSyncJob', () => {
     expect(r.distributed).toBe(2) // invoice mutation applied + deal trigger fired
     expect(calls.allocApply).toEqual([['d1', 'invoice', '7', 'M', 'DT31_11:P']]) // amount path
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // trigger path
-    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M'], ['d1', 'deal', '77', 'M']]) // both facts
+    expect(calls.allocRec).toEqual([['d1', 'invoice', '7', 'M']]) // amount fact (Postgres, unchanged)
+    expect(calls.trigRec).toEqual([['d1', 'deal', '77', 'CO', 'M', 1044, 1046]]) // trigger marker (SP-ledger)
   })
 
   it('autoDistribute ON + ambiguous deal-payment: pays the smallest-id target AND posts the heads-up', async () => {

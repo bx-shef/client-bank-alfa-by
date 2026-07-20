@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-19
+> Last reviewed: 2026-07-20
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -555,8 +555,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       **Порядок идемпотентный (Фаза A):** сперва `isTargetApplied` — пре-чек читает **состояние цели в B24**
       (`readAllocationApplied`: deal-payment `paid='Y'` / инвойс уже на `invoicePaidStageId`), не `allocation_fact` —
       редоставка не пере-проводит; чтение состояния **точнее** факта (факт пишется ПОСЛЕ оплаты → крэш между оставлял бы
-      окно ре-оплаты). Затем мутация, затем write-once факт (для учёта/сторно; триггер-путь дедупит по факту — у firing
-      нет читаемого состояния). Гейт OFF ⇒ поведение прежнее (только факт).
+      окно ре-оплаты). Затем мутация, затем write-once факт (для учёта/сторно; триггер-путь дедупит по **маркеру
+      dist-СП** (§9.3 #6, `hasTriggerFact`/`writeTriggerFact`) — у firing нет читаемого состояния). Гейт OFF ⇒ поведение прежнее (только факт).
       Живой прогон — `pnpm mutate:test` (dry-run по умолчанию, `--apply` пишет, `--revert` откат `sale.payment.update PAID=N`);
       стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
       **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
@@ -727,7 +727,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       (write-once `ON CONFLICT DO NOTHING`)/`revertAllocation` (`allocated`→`reverted` на сторно, история не
       трётся)/`deleteFactsForPortal`. В отличие от дедупа операции (маркер в B24): фиксирует цель разнесения и
       допускает откат. Удаление приложения чистит и его. Тесты на fake-query. **С Фазой A** пре-чек мутации
-      факт **не читает** (читает состояние цели, ниже) — стор остаётся для триггер-дедупа, счётчика, сторно.
+      факт **не читает** (читает состояние цели, ниже) — стор остаётся для amount-счётчика/сторно (триггер-дедуп
+      переведён на маркер dist-СП, §9.3 #6; полный ретайр стора — под-слайс 3).
     - `server/utils/allocationApplied.ts` — **чистое чтение состояния цели** (Фаза A, DI над `RestCall`, тесты):
       `readAllocationApplied(target, call, opts)` — идемпотентный пре-чек мутации разнесения по **состоянию в B24**,
       не по `allocation_fact`: `deal-payment` → оплата `paid='Y'` (`crm.item.payment.list`, реюз `paymentListParams`/
@@ -851,8 +852,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       идемпотентный порядок mutation-before-fact),
       счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
       (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
-      за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id, `hasAllocationFact` пре-чек, факт+`distributed` только на
-      firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort);
+      за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id (within-run) + **маркер dist-СП** (`hasTriggerFact`/
+      `writeTriggerFact`, §9.3 #6 — Postgres на триггер-пути ретайрен), запись фаершего = нулевая строка dist-СП,
+      `distributed` только на firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort);
       **регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `executeTriggerViaRest`
       → `{result:true}` на сделке OWNER_TYPE_ID=2 и смарт-процессе OWNER_TYPE_ID=1044; незарегистрированный CODE → `not registered`).
     - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**

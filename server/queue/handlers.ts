@@ -94,10 +94,10 @@ export interface HandlerDeps {
    *  (fail the job → clean retry), like findCompany — it runs BEFORE the activity write. */
   recordAllocation: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Whether an allocation fact for this (payment → target) already exists (#109
-   *  mutation slice). Now consulted ONLY for the TRIGGER path (deal/smart-process) —
-   *  a trigger fire is stateless, so the fact is its only dedup. The AMOUNT mutation
-   *  pre-check moved to `isTargetApplied` (reads B24 state, Фаза A). Any status
-   *  (allocated or reverted) counts as existing. A store error propagates (fail the job). */
+   *  mutation slice). NO LONGER consulted in the handler (§9.3 #6, sub-slice 2): the trigger
+   *  dedup moved to the dist-СП marker (`hasTriggerFact`); the amount mutation pre-check moved
+   *  to `isTargetApplied` (reads B24 state, Фаза A). Dep retained until the Postgres store is
+   *  removed (sub-slice 3). A store error propagates (fail the job). */
   hasAllocationFact: (item: StatementItem, target: AllocationCandidate, memberId: string) => Promise<boolean>
   /** Whether a decided AMOUNT target (deal-payment/invoice) is already applied in B24 —
    *  the payment is `paid='Y'` / the invoice is on the configured `opts.invoicePaidStageId`
@@ -132,6 +132,18 @@ export interface HandlerDeps {
    *  Returns whether a NEW distribution row was created (for the counter). Optional: absent ⇒ no
    *  ledger write (unchanged behaviour). Throws on a REST error ⇒ clean BullMQ retry. */
   writeLedger?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
+  /** Whether a TRIGGER fire for this (payment → deal/smart-process target) is already recorded in the
+   *  SP-ledger — the dist-СП dedup marker exists (#109 §9.3 #6). Replaces the Postgres
+   *  `hasAllocationFact` for the trigger pre-check. Consulted ONLY when both SP entityTypeIds are
+   *  provisioned. A REST error propagates (fail the job → clean retry). Optional (absent ⇒ no SP
+   *  dedup — single-shot via the activity marker only). */
+  hasTriggerFact?: (item: StatementItem, target: AllocationCandidate, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
+  /** Record a fired TRIGGER in the SP-ledger (#109 §9.3 #6): ensure the payment carrier, add a
+   *  ZERO-amount distribution row (the durable dedup marker + audit «триггер отправлен»; no «осталось»
+   *  impact). Replaces the Postgres `recordAllocation` for the trigger path. Called ONLY on a
+   *  confirmed FIRE when both SP entityTypeIds are provisioned. Returns whether a NEW row was created
+   *  (for the counter). Optional (absent ⇒ no durable trigger record). Throws ⇒ clean BullMQ retry. */
+  writeTriggerFact?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
   /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
    *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
@@ -426,10 +438,13 @@ export async function handleCrmSyncJob(
         // пришли» automation trigger UNCONDITIONALLY (not amount-gated) — separate from the
         // amount `allocate` above (its `decision.target` is the amount target only). Gated on
         // the opt-in `autoDistribute` + a configured `triggerCode`. For each DISTINCT trigger
-        // target (kind+id): the `hasAllocationFact` pre-check dedups within this run; `applyTrigger`
-        // is BEST-EFFORT (never throws — a trigger signals, it doesn't move money) and the write-once
-        // fact is recorded ONLY on a confirmed FIRE. `allocated`+`distributed` bump together on a
-        // fired trigger (an un-fired one records nothing).
+        // target (kind+id): the `seen` Set dedups within this run; the DURABLE dedup is now the
+        // dist-СП marker (§9.3 #6 — Postgres `allocation_fact` retired): `hasTriggerFact` checks the
+        // ledger row, `writeTriggerFact` records the fire as a ZERO-amount row (marker + audit, no
+        // «осталось» impact). `applyTrigger` is BEST-EFFORT (never throws — a trigger signals, it
+        // doesn't move money). `allocated`+`distributed` bump together on a fired+recorded trigger.
+        // The SP dedup runs ONLY when both SPs are provisioned (the expected default-ON state); when
+        // they are NOT, the trigger still fires but has only the SINGLE-SHOT protection below.
         // SINGLE-SHOT (important): the trigger is attempted ONCE — on this first processing of the
         // op with a matched company. `writeActivity` below persists the B24 dedup marker regardless
         // of trigger outcome, so a later redelivery/poll is `continue`d at the top gate and never
@@ -445,9 +460,14 @@ export async function handleCrmSyncJob(
             const targetKey = `${t.kind}:${t.id}` // not the op dedupKey — distinct trigger target
             if (seen.has(targetKey)) continue
             seen.add(targetKey)
-            if (await deps.hasAllocationFact(item, t, job.memberId)) continue
+            const etids = ledgerPaymentEtid && ledgerDistributionEtid ? { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid } : null
+            if (etids && deps.hasTriggerFact && await deps.hasTriggerFact(item, t, job.memberId, etids)) continue
             const fired = await deps.applyTrigger(item, t, job.memberId, triggerCode)
-            if (fired && await deps.recordAllocation(item, t, job.memberId)) {
+            if (!fired) continue
+            // Record the fire durably in the SP-ledger (when provisioned). Absent SP ⇒ no durable
+            // record; count the fire (single-shot semantics guard against re-fire across redeliveries).
+            const recorded = etids && deps.writeTriggerFact ? await deps.writeTriggerFact(item, t, companyId, job.memberId, etids) : true
+            if (recorded) {
               allocated++
               distributed++
             }
