@@ -14,10 +14,10 @@ import type { QueryFn } from '../utils/tokenStore'
  * carrying an ORIGINATOR_ID/ORIGIN_ID marker and searches that marker before writing, so
  * Bitrix24 itself is the dedup record (no {dedupKey → activityId} map to keep).
  *
- * `allocation_fact` is the persistent «платёж → сущность» allocation record (#109):
- * a payment is recorded as `allocated` against a target and can be flipped to
- * `reverted` on сторно — idempotent (write-once per key), survives reimport, scoped
- * per portal — see server/utils/allocationFactStore.ts.
+ * `allocation_fact` was the persistent «платёж → сущность» allocation record (#109) —
+ * RETIRED (§9.3 #6): idempotency/audit/сторно now live entirely on the distributions
+ * smart-process (marker + `status` on the dist-СП row). The table is dropped on boot
+ * (`DROP TABLE IF EXISTS` below) so a previously-provisioned DB is cleaned up.
  *
  * `bank_tokens` holds a portal's connected BANK OAuth tokens (Alfa/Prior online fetch,
  * stage 5): many per portal, keyed `(member_id, provider, account_key)`, refresh
@@ -36,17 +36,6 @@ CREATE TABLE IF NOT EXISTS portal_tokens (
 CREATE TABLE IF NOT EXISTS portal_tombstone (
   member_id   TEXT PRIMARY KEY,
   deleted_ts  BIGINT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS allocation_fact (
-  member_id    TEXT NOT NULL,
-  fact_key     TEXT NOT NULL,
-  target_kind  TEXT NOT NULL,
-  target_id    TEXT NOT NULL,
-  status       TEXT NOT NULL DEFAULT 'allocated',
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (member_id, fact_key)
 );
 
 CREATE TABLE IF NOT EXISTS import_result (
@@ -86,6 +75,10 @@ CREATE TABLE IF NOT EXISTS portal_app_rating (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Retired table (§9.3 #6): allocation idempotency/audit moved to the distributions
+-- smart-process (marker + status). Idempotent DROP cleans up a previously-provisioned DB.
+DROP TABLE IF EXISTS allocation_fact;
 `
 
 let pool: Pool | undefined

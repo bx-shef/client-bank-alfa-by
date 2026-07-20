@@ -42,7 +42,6 @@ import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
-import { deleteFactsForPortal } from '../utils/allocationFactStore'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -433,7 +432,6 @@ export function liveHandlerDeps(): HandlerDeps {
     deletePortal: async (memberId, eventTs) => {
       await deleteToken(dbQuery, memberId, eventTs)
       await deleteImportResultForPortal(dbQuery, memberId)
-      await deleteFactsForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
