@@ -1242,13 +1242,25 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 ## Обратная связь (feedback-triage)
 
 Сбор отзывов и их разбор в бэклог — портированный «feedback-triage kit», адаптированный
-под наш домен. **Статус:** дизайн (сбор ещё не реализован — код кнопок/автозавода issue
-в бэклоге). Два дока:
+под наш домен. **Статус:** **базовый канал «сотрудник» реализован** (порт из `ai-price-import`);
+**программа-канал + обогащение issue (сущность/исход/файл) + телеметрия 👍/👎 — в бэклоге.** Два дока:
+- **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
+  `useFeedback.ts`) на `/app` под полосой статуса — 👍 шлёт сразу, 👎 сперва открывает поле
+  комментария. Рендерится только когда канал включён на сервере (`GET /api/feedback {enabled}`),
+  инертен вне портала. Приём — `POST /api/feedback` (фрейм-токен `Bearer`+`X-B24-Domain`, `member_id`
+  из проверенного домена, `profile`-валидация; чистый `server/utils/feedbackHandler.ts`, DI+тесты) →
+  `buildFeedbackIssue` (`app/utils/feedback.ts` — **security-critical санитизация**: Trojan-Source
+  strip по код-поинтам, HTML-escape комментария в `<pre><code>`, контекст в inline-code-span против
+  markdown-инъекции) → `postFeedbackIssue` (`server/utils/feedbackGithub.ts`, GitHub REST, не логирует
+  токен/URL/тело) в **приватный** репо `GITHUB_FEEDBACK_REPO`. Конфиг `server/utils/feedbackConfig.ts`
+  — **fail-closed**: без `GITHUB_FEEDBACK_TOKEN`+`GITHUB_FEEDBACK_REPO` канал OFF (виджет скрыт, POST →
+  503), репо никогда не дефолтится на публичный. Тесты — `feedback`/`feedbackConfig`/`feedbackGithub`/
+  `feedbackHandler` + `nuxt/feedbackWidget`.
 - [`docs/FEEDBACK.md`](docs/FEEDBACK.md) — **дизайн канала**: два источника отзывов —
-  **сотрудник** (👍/👎 на `/app`) и **программа** (воркер `crm-sync`, когда «запуталась»:
-  `unmatched`/`ambiguous`/`manual`/не-распознан-формат). Каждый отзыв → issue в **приватном**
+  **сотрудник** (👍/👎 на `/app`, ✅ реализован) и **программа** (воркер `crm-sync`, когда «запуталась»:
+  `unmatched`/`ambiguous`/`manual`/не-распознан-формат — в бэклоге). Каждый отзыв → issue в **приватном**
   репо-приёмнике (ENV `GITHUB_FEEDBACK_REPO` — отдельный приватный репо, в код не вшит) **с приложенным
-  файлом выписки** (для воспроизведения; приватность позволяет).
+  файлом выписки** (для воспроизведения; приватность позволяет — вложение файла ещё не сделано).
 - [`docs/FEEDBACK_TRIAGE_AGENT.md`](docs/FEEDBACK_TRIAGE_AGENT.md) — **роль ИИ-агента триажа**:
   группирует отзывы по корню, заводит обезличенные инженерные issue в `bx-shef/client-bank-alfa-by`,
   закрывает разобранное со связкой. **Privacy-guard:** клиентские данные/файл из приватного

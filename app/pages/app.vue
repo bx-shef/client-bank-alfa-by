@@ -75,6 +75,11 @@ onMounted(async () => {
       class="mb-5"
     />
 
+    <!-- Employee 👍/👎 on the import result (docs/FEEDBACK.md, channel «сотрудник»). Renders only
+         when the channel is configured server-side (GITHUB_FEEDBACK_*), and is inert outside a
+         portal. -->
+    <FeedbackWidget class="mb-5" />
+
     <header class="mb-5 flex items-start justify-between gap-4">
       <p class="min-w-0 truncate font-mono text-sm text-(--ui-color-base-3)">
         {{ statement.account }}
