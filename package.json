@@ -63,7 +63,7 @@
     "nuxt": "^4.4.7",
     "pg": "^8.13.1",
     "qrcode": "^1.5.4",
-    "tailwindcss": "^4.2.4"
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.15.2",
