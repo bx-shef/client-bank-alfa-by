@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useFeedback } from '~/composables/useFeedback'
 
 // Compact 👍/👎 feedback widget under an import result. Renders nothing unless the channel is enabled
@@ -7,17 +7,31 @@ import { useFeedback } from '~/composables/useFeedback'
 // first opens a comment box («что пошло не так»), then sends. Inert outside a portal (submit no-ops).
 // Optional fileName traces the issue back to a run (rendered inert server-side; the receiving repo is
 // private, so client context is permitted). See docs/FEEDBACK.md.
-const props = defineProps<{ fileName?: string }>()
+// `fileText` (the decoded statement text) enables the file-attach consent (#198): when present, the
+// 👎 box offers a checkbox to attach the raw statement to the private issue for reproduction.
+const props = defineProps<{ fileName?: string, fileText?: string }>()
 const { enabled, ensureEnabled, submit } = useFeedback()
 
 const open = ref(false) // comment box shown
 const comment = ref('')
+const attachFile = ref(false) // consent to attach the statement file (default OFF — explicit opt-in)
 const sending = ref(false)
 const sent = ref(false)
 const error = ref('')
 
 onMounted(() => {
   ensureEnabled()
+})
+
+// A new file (re-parse without unmounting the widget) must NOT inherit consent/comment given for the
+// previous file — otherwise a 👎 could attach the WRONG statement under stale consent. Reset the
+// interaction state whenever the underlying statement text changes.
+watch(() => props.fileText, () => {
+  attachFile.value = false
+  open.value = false
+  comment.value = ''
+  sent.value = false
+  error.value = ''
 })
 
 async function rate(kind: 'up' | 'down'): Promise<void> {
@@ -32,7 +46,10 @@ async function rate(kind: 'up' | 'down'): Promise<void> {
   error.value = ''
   try {
     // submit() returns false (without throwing) outside a portal frame — do NOT claim success.
-    const ok = await submit(kind, comment.value.trim() || undefined, { fileName: props.fileName })
+    // Attach the statement ONLY on a 👎 (the consent box lives in the 👎 panel), when ticked AND we
+    // have the text — so an instant 👍 never carries a file even if the box was opened and ticked.
+    const fileContent = kind === 'down' && attachFile.value && props.fileText ? props.fileText : undefined
+    const ok = await submit(kind, comment.value.trim() || undefined, { fileName: props.fileName, fileContent })
     if (ok) sent.value = true
     else error.value = 'Отзыв доступен только внутри портала Bitrix24'
   } catch {
@@ -101,6 +118,16 @@ async function rate(kind: 'up' | 'down'): Promise<void> {
           placeholder="Что пошло не так? (необязательно)"
           data-testid="feedback-comment"
           class="w-full rounded border border-(--ui-color-base-5) p-1.5 text-xs"
+        />
+        <!-- Consent to attach the raw statement file (#198). Shown only when a file is available
+             (fileText). Default OFF — the statement holds client financial data, so attaching it
+             is an explicit opt-in; it goes to a PRIVATE issue and helps reproduce a parse bug. -->
+        <B24Checkbox
+          v-if="fileText"
+          v-model="attachFile"
+          size="sm"
+          label="Приложить файл выписки к отзыву (поможет разобраться; данные видны только нам)"
+          data-testid="feedback-attach"
         />
         <div class="flex items-center gap-2">
           <B24Button

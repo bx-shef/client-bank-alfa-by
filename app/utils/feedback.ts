@@ -56,9 +56,33 @@ export interface IssuePayload { title: string, body: string, labels: string[] }
 export interface FeedbackContext {
   fileName?: unknown
   appVersion?: unknown
+  /** Raw statement text, embedded in the issue ONLY with the employee's explicit consent (#198).
+   *  PRIVACY: this is the client's financial statement (accounts/amounts/УНП) — it is rendered
+   *  ONLY because the receiving repo is PRIVATE (see the module header). Absent/empty ⇒ no block. */
+  fileContent?: unknown
 }
 
 const MAX_CONTEXT_VALUE = 300
+
+/** Raw (pre-escape) char cap for the embedded statement text — the size a normal statement is
+ *  truncated to. Also used client- and server-side to bound what's sent/accepted. */
+export const MAX_FILE_EMBED = 30000
+
+/** Hard ceiling on the ESCAPED file block. `escapeHtml` expands `&`/`<`/`>` up to ~5×, so an
+ *  adversarial statement full of them could blow past GitHub's ~65536-char issue-body limit even
+ *  after the raw cap. Capping the escaped output keeps the whole body (comment ≤~25k escaped + this
+ *  + tags) safely under the limit, so the POST can't be rejected. Normal statements never hit it. */
+export const MAX_FILE_EMBED_ESCAPED = 35000
+
+/**
+ * Consent gate for the attached statement (#198), as a PURE, testable helper — the authoritative
+ * privacy control. Returns the (raw-capped) text to embed ONLY when the caller explicitly consented
+ * (`attachFile === true`) AND provided a string; anything else → `undefined` (no embed). Used by the
+ * route so a client sending `fileContent` without consent can never get it embedded.
+ */
+export function attachedFileContent(attachFile: unknown, fileContent: unknown, cap = MAX_FILE_EMBED): string | undefined {
+  return attachFile === true && typeof fileContent === 'string' ? fileContent.slice(0, cap) : undefined
+}
 
 /**
  * One `- **Label:** `value`` line, rendered fully INERT. Client-supplied context values (fileName is
@@ -72,6 +96,39 @@ const MAX_CONTEXT_VALUE = 300
 function contextLine(label: string, value: unknown): string | null {
   const flat = stripHostileChars(value).replace(/[\r\n\t]+/g, ' ').replace(/`/g, '').trim().slice(0, MAX_CONTEXT_VALUE)
   return flat ? `- **${label}:** \`${flat}\`` : null
+}
+
+/**
+ * Body lines for the attached statement file (#198), or `[]` when there's nothing to embed. UNLIKE
+ * `contextLine`, newlines are KEPT (it's a file — its line structure is the point), but the content
+ * is made fully INERT: strip hostile control chars (bidi/zero-width/BOM — but keep \n\r\t) so it
+ * can't Trojan-Source the issue, then `escapeHtml` so a literal `</code></pre>` inside the statement
+ * can't close the block and inject markdown/HTML, then cap to `MAX_FILE_EMBED` with a truncation
+ * marker. Wrapped in a collapsed `<details>` so a long file doesn't dominate the issue. Only ever
+ * called with a value the employee consented to attach (the receiving repo is private).
+ */
+function fileEmbedLines(value: unknown): string[] {
+  const stripped = stripHostileChars(value)
+  if (!stripped.trim()) return []
+  const rawCapped = stripped.length <= MAX_FILE_EMBED
+    ? stripped
+    : `${stripped.slice(0, MAX_FILE_EMBED)}\n\n[обрезано до ${MAX_FILE_EMBED} символов]`
+  let content = escapeHtml(rawCapped)
+  if (content.length > MAX_FILE_EMBED_ESCAPED) {
+    // Adversarial input full of &/</> expands on escape; hard-cap the escaped block and drop any
+    // trailing partial entity (`&am…`) so the result stays inert, keeping the body under the limit.
+    content = `${content.slice(0, MAX_FILE_EMBED_ESCAPED).replace(/&[^;]*$/, '')}\n\n[обрезано]`
+  }
+  return [
+    '',
+    '**Файл выписки** (приложен по согласию сотрудника):',
+    '<details><summary>Показать содержимое</summary>',
+    '',
+    '<pre><code>',
+    content,
+    '</code></pre>',
+    '</details>'
+  ]
 }
 
 /**
@@ -100,7 +157,8 @@ export function buildFeedbackIssue(kind: FeedbackKind, comment: unknown, context
     '<pre><code>',
     safe,
     '</code></pre>',
-    ...(contextLines.length ? ['', '**Контекст:**', ...contextLines] : [])
+    ...(contextLines.length ? ['', '**Контекст:**', ...contextLines] : []),
+    ...fileEmbedLines(context.fileContent)
   ].join('\n')
   return { title, body, labels: ['user-feedback', `feedback:${kind}`] }
 }

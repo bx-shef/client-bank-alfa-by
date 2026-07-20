@@ -97,12 +97,17 @@ export function validateUploadFile(name: string, size: number): string | null {
   return null
 }
 
+/** Decode a windows-1251 statement buffer to text. TextDecoder is available in both the
+ *  browser and Node, so this is unit-testable on fixtures. Shared by {@link decodeAndParse}
+ *  (parse path) and the feedback file-attach (the raw statement text embedded in the issue). */
+export function decodeUploadText(buffer: ArrayBuffer | Uint8Array): string {
+  return new TextDecoder('windows-1251').decode(buffer)
+}
+
 /** Decode a windows-1251 statement buffer and parse it into operations. `account`
- *  empty ⇒ use the file's own account (the parser reads it). TextDecoder is
- *  available in both the browser and Node, so this is unit-testable on fixtures. */
+ *  empty ⇒ use the file's own account (the parser reads it). */
 export function decodeAndParse(buffer: ArrayBuffer | Uint8Array, account = ''): StatementItem[] {
-  const text = new TextDecoder('windows-1251').decode(buffer)
-  return normalizeManualStatement(text, { account })
+  return normalizeManualStatement(decodeUploadText(buffer), { account })
 }
 
 /** Short user message from a parse error (normalizeManualStatement throws a RU

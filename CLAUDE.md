@@ -1246,15 +1246,23 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 Сбор отзывов и их разбор в бэклог — портированный «feedback-triage kit», адаптированный
 под наш домен. **Статус:** **базовый канал «сотрудник» реализован** (порт из `ai-price-import`)
 **+ телеметрия 👍/👎** (#195: счётчики `feedback_up`/`feedback_down` в `metrics_counter`, видны в
-`GET /api/import/metrics`); **программа-канал + обогащение issue (сущность/исход/файл) — в бэклоге.** Два дока:
+`GET /api/import/metrics`) **+ вложение файла выписки по согласию** (#198: тумблер `B24Checkbox` в
+👎-панели на `/import` → сырой текст выписки в приватный issue `<details>`-блоком, инертен, кап
+`MAX_FILE_EMBED`); ссылка на сущность (#197) **сознательно пропущена** (импорт fire-and-forget,
+`jobId→сущность` нет); **программа-канал — в бэклоге.** Два дока:
 - **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
-  `useFeedback.ts`) на `/app` под полосой статуса — 👍 шлёт сразу, 👎 сперва открывает поле
-  комментария. Рендерится только когда канал включён на сервере (`GET /api/feedback {enabled}`),
-  инертен вне портала. Приём — `POST /api/feedback` (фрейм-токен `Bearer`+`X-B24-Domain`, `member_id`
-  из проверенного домена, `profile`-валидация; чистый `server/utils/feedbackHandler.ts`, DI+тесты) →
-  `buildFeedbackIssue` (`app/utils/feedback.ts` — **security-critical санитизация**: Trojan-Source
-  strip по код-поинтам, HTML-escape комментария в `<pre><code>`, контекст в inline-code-span против
-  markdown-инъекции) → `postFeedbackIssue` (`server/utils/feedbackGithub.ts`, GitHub REST, не логирует
+  `useFeedback.ts`) на `/app` под полосой статуса **и на `/import`** (под разбором, с файл-вложением) —
+  👍 шлёт сразу, 👎 сперва открывает поле комментария. **Файл-вложение (#198):** проп `fileText`
+  (декод выписки, `decodeUploadText` из `importUpload.ts`) включает в 👎-панели тумблер согласия
+  (`B24Checkbox`, default OFF); при галке сырой текст выписки едет в `context.fileContent` (клиент
+  ставит `attachFile:true`, сервер гейтит именно по нему). Рендерится только когда канал включён на
+  сервере (`GET /api/feedback {enabled}`), инертен вне портала. Приём — `POST /api/feedback`
+  (фрейм-токен `Bearer`+`X-B24-Domain`, `member_id` из проверенного домена, `profile`-валидация; чистый
+  `server/utils/feedbackHandler.ts`, DI+тесты) → `buildFeedbackIssue` (`app/utils/feedback.ts` —
+  **security-critical санитизация**: Trojan-Source strip по код-поинтам, HTML-escape комментария в
+  `<pre><code>`, контекст в inline-code-span против markdown-инъекции; **файл выписки** — strip
+  контролов с сохранением переносов + `escapeHtml` (нельзя закрыть `</code></pre>`) + кап
+  `MAX_FILE_EMBED`, в `<details>`-блоке) → `postFeedbackIssue` (`server/utils/feedbackGithub.ts`, GitHub REST, не логирует
   токен/URL/тело) в **приватный** репо `GITHUB_FEEDBACK_REPO`. **Телеметрия (#195):** на успешно
   заведённом issue `feedbackHandler` best-effort бампит `FEEDBACK_METRICS.up`/`.down`
   (`feedback_up`/`feedback_down` в `metrics_counter` — **отдельно** от summary-bound `METRICS`, т.к.

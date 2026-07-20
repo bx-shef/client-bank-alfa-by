@@ -7,12 +7,14 @@ import { computed, ref } from 'vue'
 import {
   ACCEPTED_EXTENSIONS,
   MAX_UPLOAD_FILES,
+  decodeUploadText,
   dedupItems,
   deferToEventLoop,
   processUploadBatch,
   type UploadItemResult
 } from '~/utils/importUpload'
 import { splitByDirection } from '~/utils/statement'
+import { MAX_FILE_EMBED } from '~/utils/feedback'
 import { useImport } from '~/composables/useImport'
 
 const results = ref<UploadItemResult[]>([])
@@ -29,6 +31,13 @@ const fileInput = ref<HTMLInputElement | null>(null)
 // «оцените приложение» modal (AppRatingModal) can ask. The show decision is server-throttled; this
 // only nudges the check. Inert outside a portal.
 const ratingTrigger = ref(false)
+// Decoded text + name of the first successfully-parsed file — offered (opt-in) to the feedback
+// widget so an employee can attach the statement to a 👎 issue for reproduction (#198). Recomputed
+// on each batch; empty when nothing parsed. Decode matches the parser (windows-1251).
+const feedbackFileName = ref('')
+const feedbackFileText = ref('')
+// Monotonic token so a superseded batch's async decode can't clobber a newer batch's state.
+let procSeq = 0
 
 // Combined, de-duped operations across all successfully parsed files.
 const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
@@ -42,14 +51,32 @@ const { submitFiles } = useImport()
 
 async function processFiles(files: File[]) {
   if (!files.length) return
+  const seq = ++procSeq
   busy.value = true
   submitResult.value = null
   // Pass RAW files so processUploadBatch computes `truncated` (files beyond the cap).
   // batchFiles slices to the same cap → stays index-aligned with out.results.
   const out = await processUploadBatch(files, deferToEventLoop)
+  if (seq !== procSeq) return // a newer drop superseded this batch — don't clobber its state
   results.value = out.results
   batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
   truncated.value = out.truncated
+  // Cache the first OK file's decoded text for the (opt-in) feedback attach (#198). Cap to
+  // MAX_FILE_EMBED so only what could ever be embedded travels over the wire (not the full ≤2 МБ).
+  const firstOk = batchFiles.value.find((_, i) => out.results[i]?.ok)
+  if (firstOk) {
+    feedbackFileName.value = firstOk.name
+    try {
+      const text = decodeUploadText(await firstOk.arrayBuffer())
+      if (seq !== procSeq) return // superseded during the async decode
+      feedbackFileText.value = text.slice(0, MAX_FILE_EMBED)
+    } catch {
+      feedbackFileText.value = '' // can't decode → just don't offer the attach
+    }
+  } else {
+    feedbackFileName.value = ''
+    feedbackFileText.value = ''
+  }
   busy.value = false
 }
 
@@ -73,6 +100,8 @@ function clearAll() {
   batchFiles.value = []
   truncated.value = 0
   submitResult.value = null
+  feedbackFileName.value = ''
+  feedbackFileText.value = ''
   if (fileInput.value) fileInput.value.value = ''
 }
 </script>
@@ -224,6 +253,16 @@ function clearAll() {
         data-testid="all-failed"
       />
     </div>
+
+    <!-- Feedback on the PARSE result (docs/FEEDBACK.md, channel «сотрудник»): 👍/👎 + optional
+         comment; on 👎 the employee may opt in to attach the statement file to the private issue
+         (#198). Renders only when the channel is enabled server-side and something parsed. -->
+    <FeedbackWidget
+      v-if="okCount"
+      :file-name="feedbackFileName"
+      :file-text="feedbackFileText"
+      class="mt-4"
+    />
 
     <!-- «Оцените приложение» — surfaces (server-throttled) after a successful CRM write; inert
          outside a portal. -->
