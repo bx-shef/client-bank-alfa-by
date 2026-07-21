@@ -9,8 +9,14 @@ import type { IssuePayload } from '../../app/utils/feedback'
 /** The subset of the fetch API this transport uses (DI seam for tests). */
 export type FeedbackFetchFn = (
   url: string,
-  init: { method: string, headers: Record<string, string>, body: string }
+  init: { method: string, headers: Record<string, string>, body: string, signal?: AbortSignal }
 ) => Promise<{ status: number, json: () => Promise<unknown> }>
+
+/** Hard timeout on the GitHub POST. Bounds the request on the crm-sync worker's completion path (the
+ *  program channel calls this synchronously before the job resolves) — a hung GitHub connection must
+ *  not hold a BullMQ slot / trip stalled-reprocessing. On timeout the fetch aborts → the catch below
+ *  reports a transient (retryable) failure, same as any network error. */
+export const FEEDBACK_HTTP_TIMEOUT_MS = 10_000
 
 export interface PostIssueResult {
   ok: boolean
@@ -33,7 +39,8 @@ export async function postFeedbackIssue(config: FeedbackConfig, payload: IssuePa
         'User-Agent': 'client-bank-alfa-feedback',
         'X-GitHub-Api-Version': '2022-11-28'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(FEEDBACK_HTTP_TIMEOUT_MS)
     })
   } catch {
     // Network error — transient, retryable. Do not include the error (may echo the URL/token).

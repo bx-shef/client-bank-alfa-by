@@ -99,6 +99,25 @@ export async function claimCooldownSlot(key: string, ttlSec: number): Promise<bo
   return res === 'OK'
 }
 
+/** Increment a counter `key` and return the new value, setting a TTL on first creation (Redis
+ *  `INCR` then `EXPIRE` when the value is 1). A self-expiring per-window counter — used by the
+ *  program feedback hourly cap (docs/FEEDBACK.md). Uses the shared queue client (no new connection).
+ *  Throws if REDIS_URL is unset — guard with queueEnabled() first. */
+export async function incrementWithTtl(key: string, ttlSec: number): Promise<number> {
+  const client = (await getQueue(Q_EVENTS).client) as unknown as {
+    incr: (k: string) => Promise<number>
+    expire: (k: string, s: number) => Promise<unknown>
+  }
+  const namespaced = `count:${key}`
+  const value = await client.incr(namespaced)
+  // EXPIRE on EVERY increment (not just the first): INCR+EXPIRE isn't atomic, so a crash right after
+  // a fresh INCR would otherwise orphan a TTL-less key forever. Refreshing the TTL each time is
+  // leak-free and harmless here — the key embeds a wall-clock bucket, so a sliding TTL just lets the
+  // (already bucket-scoped) counter self-clean ~ttl after its last use.
+  await client.expire(namespaced, Math.max(1, Math.floor(ttlSec)))
+  return value
+}
+
 /** Close all cached Queue connections (graceful shutdown symmetry with workers). */
 export async function closeQueues(): Promise<void> {
   const open = [...queues.values()]

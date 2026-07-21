@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-20
+> Last reviewed: 2026-07-21
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -1249,7 +1249,12 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 `GET /api/import/metrics`) **+ вложение файла выписки по согласию** (#198: тумблер `B24Checkbox` в
 👎-панели на `/import` → сырой текст выписки в приватный issue `<details>`-блоком, инертен, кап
 `MAX_FILE_EMBED`); ссылка на сущность (#197) **сознательно пропущена** (импорт fire-and-forget,
-`jobId→сущность` нет); **программа-канал — в бэклоге.** Два дока:
+`jobId→сущность` нет) **+ программа-канал (MVP)** — воркер `crm-sync` заводит `agent-feedback` issue,
+когда «запутался» (`unmatched`/`ambiguous`/`manual`): чистый билдер `app/utils/programFeedback.ts`
+(non-PII: только счётчики + `member_id` + sha) + гейт дедуп-по-корню + кап 10/час
+`server/utils/programFeedbackCap.ts` (Redis `SET NX`/`INCR`, DI+тесты) + хвост `fileProgramFeedback`
+в `worker.ts` (best-effort, демо-гейт, гейт на `feedbackConfig`+Redis); сигналы «формат не распознан»/
+«fail-open стадий» и сэмпл операции — follow-up. Два дока:
 - **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
   `useFeedback.ts`) на `/app` под полосой статуса **и на `/import`** (под разбором, с файл-вложением) —
   👍 шлёт сразу, 👎 сперва открывает поле комментария. **Файл-вложение (#198):** проп `fileText`

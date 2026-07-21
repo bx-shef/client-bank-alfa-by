@@ -4,8 +4,9 @@ import { postFeedbackIssue, type FeedbackFetchFn } from '../server/utils/feedbac
 const config = { token: 'secret-tok', repo: 'bx-shef/cb-feedback' }
 const payload = { title: 't', body: 'b', labels: ['user-feedback', 'feedback:up'] }
 
-function fakeFetch(status: number, json: unknown = {}): { fn: FeedbackFetchFn, calls: Array<{ url: string, init: { method: string, headers: Record<string, string>, body: string } }> } {
-  const calls: Array<{ url: string, init: { method: string, headers: Record<string, string>, body: string } }> = []
+type CapturedInit = { method: string, headers: Record<string, string>, body: string, signal?: AbortSignal }
+function fakeFetch(status: number, json: unknown = {}): { fn: FeedbackFetchFn, calls: Array<{ url: string, init: CapturedInit }> } {
+  const calls: Array<{ url: string, init: CapturedInit }> = []
   const fn: FeedbackFetchFn = async (url, init) => {
     calls.push({ url, init })
     return { status, json: async () => json }
@@ -22,6 +23,8 @@ describe('postFeedbackIssue', () => {
     expect(calls[0]!.init.method).toBe('POST')
     expect(calls[0]!.init.headers.Authorization).toBe('Bearer secret-tok')
     expect(JSON.parse(calls[0]!.init.body)).toEqual(payload)
+    // A timeout signal bounds the request (protects the crm-sync worker completion path).
+    expect(calls[0]!.init.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('success without a numeric issue number still reports ok', async () => {
