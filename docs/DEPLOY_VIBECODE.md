@@ -1,6 +1,6 @@
 # Деплой в Битрикс24 Вайбкод Black Hole (альтернативный таргет)
 
-> Last reviewed: 2026-07-18
+> Last reviewed: 2026-07-21
 
 Как выгрузить это приложение в **Битрикс24 Vibecode Black Hole** — закрытый Bitrix-Cloud VM,
 управляемый по REST (без SSH), приложение слушает `:3000` и отдаётся по HTTPS
@@ -97,6 +97,10 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
   sudo -u postgres psql -c "CREATE USER app PASSWORD 'app'; CREATE DATABASE app OWNER app;"
 ```
 
+> ⚠ **Пароль БД `'app'` — смените на случайный.** Postgres/Redis на VM слушают `127.0.0.1` (у Black Hole
+> нет публичных портов, только туннель), поэтому слабый пароль низкориск, но это defense-in-depth: сгенерируйте
+> случайный пароль, подставьте его И в `CREATE USER … PASSWORD` (PRESTART), И в `DATABASE_URL` (`APP_ENV_JSON`).
+
 ### `APP_ENV_JSON` (рантайм-env; секрет)
 
 ```json
@@ -120,6 +124,10 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
 > защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie). Диагностические
 > `/api/queues` и `/api/b24/app-option-check` **fail-closed** app-гардом (`B24_APPLICATION_TOKEN`
 > пуст ⇒ 403), их PUBLIC не открывает — а вот операторскую зону открывает.
+>
+> **Enforcement:** `deploy/vibecode-deploy.sh` теперь **fail-closed** — под `ACCESS_POLICY=PUBLIC`
+> отказывается деплоить, если в `ENV_JSON` нет непустого `PUBLIC_PAGE_BASIC_AUTH_PASS` (ловит забытый
+> секрет до выката, а не после). Рантайм дополнительно логирует предупреждение (`session.ts`).
 
 `B24_APPLICATION_TOKEN` — **пустой**: он приходит в `ONAPPINSTALL` и пишется в **БД** (per-portal,
 write-once) — `process.env` остаётся пустым, это нормально (подпись событий проверяется по

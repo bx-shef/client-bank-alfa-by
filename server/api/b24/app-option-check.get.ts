@@ -2,7 +2,7 @@
 // app-level setting for a portal using ONLY the stored token (no browser/frame),
 // proving the server can reach the portal's app.option. Used by the docker test
 // script (scripts/check-app-option.sh). Guarded by B24_APPLICATION_TOKEN via the
-// `X-Check-Token` header (or `?token=`), constant-time compared. Not for the UI.
+// `X-Check-Token` HEADER ONLY, constant-time compared. Not for the UI.
 
 import { safeEqual } from '../../../app/utils/b24Events'
 import { APP_SETTING_KEY, readAppSettingVia } from '../../utils/appSettings'
@@ -10,7 +10,10 @@ import { livePortalSdkCall } from '../../utils/liveDeps'
 
 export default defineEventHandler(async (event) => {
   const expected = process.env.B24_APPLICATION_TOKEN?.trim() || ''
-  const provided = (getHeader(event, 'x-check-token') || String(getQuery(event).token || '')).trim()
+  // Header only (no `?token=` fallback): a query-string token leaks into access/tunnel logs
+  // and browser history. Mirrors /api/queues (also header-only). The docker script already
+  // sends the `X-Check-Token` header, so this is a pure hardening with no caller change.
+  const provided = (getHeader(event, 'x-check-token') || '').trim()
   if (!expected || !safeEqual(provided, expected)) {
     setResponseStatus(event, 403)
     return { error: 'forbidden' }
