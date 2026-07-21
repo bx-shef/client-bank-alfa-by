@@ -466,6 +466,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     deleted_ts)`, а `saveToken` **отказывается** писать поверх равного-или-новее тумбстоуна (возвращает
     `false`) — так «зависший» register (ретрай install после более свежего uninstall) не воскрешает портал
     со старыми кредами; настоящий reinstall (ts новее) проходит и чистит устаревший тумбстоун. Тесты на fake-query.
+    **TTL тумбстоунов (#77):** тумбстоун нужен лишь пережить late/retried install той же деинсталляции (часы), а не
+    месяцы — иначе копилась бы строка на каждый навсегда-удалённый портал. Суточный свип (`server/utils/tombstoneSweep.ts`
+    — `resolveTombstoneDays` кламп [1,365] дефолт 30 + `sweepExpiredTombstones`, DI+тесты) сносит `portal_tombstone`
+    старше `TOMBSTONE_TTL_DAYS`; висит на том же крон-тике, что statement-свип (#245, под `cron.sweep`-спаном).
+    `deleted_ts` — в **секундах** (B24 `ts`), сверка с `EXTRACT(EPOCH FROM now())` unit-safe (мс-значение не подметётся рано).
   - **Дедуп дел — в B24, без стора (#259).** crm-sync пишет **настраиваемое дело** с маркером
     `originatorId`+`originId` и перед записью ищет его (`crm.activity.list`), поэтому Postgres-стора
     `{dedupKey→activityId}` больше нет (таблица `activity_dedup`, модуль `activityDedupStore.ts` и
