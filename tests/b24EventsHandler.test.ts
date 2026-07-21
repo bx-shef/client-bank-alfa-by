@@ -241,6 +241,32 @@ describe('handleEventRequest — primary (enqueue) path', () => {
     expect(deps.saveCredentials).not.toHaveBeenCalled()
   })
 
+  it('#162: a spoofed install is NOT persisted even on the SYNC-FALLBACK path (enqueue down)', async () => {
+    // Load-bearing: the bind must gate BOTH paths. Arm the sync fallback (enqueue → false) AND fail
+    // the bind — saveCredentials must still never run (a reorder that bound after the fallback would
+    // regress silently and every enqueue-true test would still pass).
+    const deps = makeReqDeps({
+      enqueue: vi.fn(async () => false),
+      bindInstallMember: vi.fn(async () => ({ ok: false as const, status: 403 as const }))
+    })
+    const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(403)
+    expect(res.outcome).toBe('none')
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    expect(deps.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('#162: on the sync-fallback path a bound install writes the ROTATED grant', async () => {
+    const deps = makeReqDeps({
+      enqueue: vi.fn(async () => false),
+      bindInstallMember: vi.fn(async () => ({ ok: true, grant: { accessToken: 'A2', refreshToken: 'R2', clientEndpoint: '', expiresIn: 7200 } }))
+    })
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.saveCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: 'A2', refreshToken: 'R2', expiresAt: NOW + 7200 * 1000 }), 0)
+  })
+
   it('#162: uninstall is unaffected by the bind dep (only register binds)', async () => {
     const bindInstallMember = vi.fn(async () => ({ ok: true }))
     const deps = makeReqDeps({ bindInstallMember })

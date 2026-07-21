@@ -71,12 +71,13 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     errors.push('SESSION_SECRET не задан в проде при заданном пароле оператора — ключ подписи cookie больше НЕ выводится из пароля (защита от офлайн-брутфорса), поэтому вход в служебную зону не работает (fail-closed). Задайте независимый ключ: openssl rand -hex 32')
   }
 
-  // --- OAuth app creds: needed for access-token refresh and app.option, but NOT
-  //     for receiving events / storing the initial token. So: warning, not error. ---
+  // --- OAuth app creds: needed for access-token refresh, app.option, and the install-time
+  //     member_id binding (#162). Events are still received and the token is still stored, but
+  //     WITHOUT the member_id→grant verification. So: warning, not error. ---
   const hasClientId = !!(env.B24_CLIENT_ID ?? '').trim()
   const hasClientSecret = !!(env.B24_CLIENT_SECRET ?? '').trim()
   if (!hasClientId || !hasClientSecret) {
-    warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — refresh access-токена и настройка app.option работать не будут (приём событий и запись токена — будут).')
+    warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — refresh access-токена, настройка app.option и привязка member_id на установке (#162) работать не будут (приём событий и запись токена — будут, но БЕЗ проверки member_id→грант).')
   }
 
   // --- Redis: without it the queue is off and event persistence degrades to the

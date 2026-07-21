@@ -28,7 +28,12 @@ export const INSTALL_VERIFY_TIMEOUT_MS = 15_000
 
 /** OAuth error CODES that mean the presented refresh_token is not a genuine grant ⇒ the install is
  *  forged ⇒ 403. Anything else (e.g. `wrong_client`/`invalid_client` — OUR config, or a transient
- *  upstream) is treated as "cannot verify now" ⇒ 503 (retryable, fail-closed either way). */
+ *  upstream) is treated as "cannot verify now" ⇒ 503 (retryable, fail-closed either way).
+ *
+ *  Intentionally NARROWER than ai-price-import's shared `isAuthRejection` regex: the 403↔503 split is
+ *  NOT a security boundary here — both refuse to persist the install — so an unlisted code falling to
+ *  503 (retryable) is the safe direction, and a genuinely forged grant returns `invalid_grant` anyway.
+ *  Kept as an explicit small set to avoid depending on the broader classifier for a non-boundary. */
 const GRANT_REJECTION_CODES = new Set(['invalid_grant', 'invalid_token', 'expired_token'])
 
 /** Minimal fetch surface (injected → unit-testable without the network). */
@@ -96,9 +101,11 @@ export async function verifyInstallMember(claimedMemberId: string, refreshToken:
   // returning a bare string/number) would make `'error' in <primitive>` throw, escaping the
   // fail-closed contract and 500-ing the webhook. A primitive then fails parseRefreshResponse → 503.
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  if ('error' in o) {
-    // OAuth error response: classify by the machine CODE. A bad grant ⇒ forged install → 403;
-    // our-config / transient ⇒ 503.
+  // An OAuth ERROR body (an `error` code with NO usable access_token): classify by the machine CODE —
+  // a bad grant ⇒ forged install → 403; our-config / transient ⇒ 503. Gate on the ABSENCE of an
+  // access_token (not merely the `error` key's presence) so a success body that spuriously carries
+  // `error: null`/'' alongside real tokens is not false-rejected — it falls through to parse+compare.
+  if ('error' in o && !o.access_token) {
     return { ok: false, status: GRANT_REJECTION_CODES.has(String(o.error)) ? 403 : 503 }
   }
   let parsed: B24RefreshResult
