@@ -474,16 +474,54 @@ export function startEventWorker(deps: HandlerDeps): Worker {
   }, () => handleEventJob(job.data, deps)), { connection: connectionOptions() })
 }
 
+// ── crm-sync stalled-reprocessing guard (#163, port from ai-price-import) ────────────────────
+// crm-sync idempotency is read-before-write by a B24 marker (findActivityByMarker → crm.item.list,
+// then crm.activity.configurable.add which stamps ORIGINATOR_ID/ORIGIN_ID atomically, #259). That is
+// a TOCTOU: it protects SEQUENTIAL retries (crash recovery — a committed write leaves the marker, so
+// the retry finds it) but NOT CONCURRENT reprocessing of one job. BullMQ redelivers a job to a SECOND
+// worker once the first worker's lock is deemed STALLED; if the first is still mid-`configurable.add`,
+// both find "no marker" and both write → a DUPLICATE activity (Bitrix does not enforce ORIGIN_ID
+// uniqueness within a single call). The same window applies to the allocation mutations.
+//
+// A pg advisory lock around find→write would serialize it fully, but it must HOLD a pooled connection
+// across the REST write — the pool is `max: 10` (db/client.ts), so raising crm concurrency / replicas
+// would starve it (settings reads, status/metrics writes, token loads all block). Rejected for that.
+//
+// Instead we shut the false-stall window without touching pg: BullMQ RENEWS a job's lock every
+// lockDuration/2 while the async handler runs, and crm-sync's awaits are REST I/O (they do not block
+// the event loop), so the renewal timer keeps firing — a LIVE worker only stalls if its loop is
+// blocked > lockDuration/2. Raising lockDuration well above worst-case write latency + GC jitter makes
+// a false stall of a live crm worker effectively impossible, so the second worker never runs
+// concurrently with the first → no duplicate. maxStalledCount:1 bounds a GENUINELY crashed job to one
+// recovery redelivery, which read-before-write makes safe (a committed write left the marker → the
+// redelivery finds it). Residual (accepted): a real >60s event-loop block AND an in-flight uncommitted
+// write on the same tick — vanishingly unlikely (crm-sync does no heavy CPU), and self-corrects on the
+// next retry. Effective only while crm-sync stays serial (concurrency 1); documented in docs/QUEUES.md.
+export const CRM_LOCK_DURATION_MS = 60_000
+export const CRM_STALLED_INTERVAL_MS = 60_000
+export const CRM_MAX_STALLED_COUNT = 1
+
+/** BullMQ lock options for the crm-sync worker (#163). We keep `stalledInterval === lockDuration` as a
+ *  conservative margin (the real anti-false-stall guard is BullMQ's lock-existence check, not the
+ *  interval relationship — a live worker's renewed lock is never reclaimed). Pure → unit-tested. */
+export function crmLockTuning(): { lockDuration: number, stalledInterval: number, maxStalledCount: number } {
+  return {
+    lockDuration: CRM_LOCK_DURATION_MS,
+    stalledInterval: CRM_STALLED_INTERVAL_MS,
+    maxStalledCount: CRM_MAX_STALLED_COUNT
+  }
+}
+
 /** The throughput workers (fetch/parse/crm-sync) — safe to run on N scaled replicas
- *  (Redis hands each job to exactly one). `concurrency` (default 1 = unchanged)
- *  applies to all three.
- *  ⚠ Raising crm-sync concurrency OR running >1 replica needs (a) a per-portal REST
- *  limiter (else a big batch hits B24 `QUERY_LIMIT` — batch/`callBatch` is the real
- *  lever) and (b) ATOMIC dedup. Dedup is the B24 marker (`findActivityByMarker` →
- *  `configurable.add` stamps ORIGINATOR_ID/ORIGIN_ID atomically, #259), but the search→write
- *  is still two calls: under parallelism two workers could both miss the marker and
- *  double-write a dela (TOCTOU) — see #109/#259/PROCESSING §1. Until a per-portal limiter
- *  lands, keep crm-sync effectively serial; fetch/parse scale freely. See docs/QUEUES.md. */
+ *  (Redis hands each job to exactly one). `concurrency` (default 1) applies to fetch/parse;
+ *  **crm-sync is PINNED to 1** (#163 — see its Worker below) so raising QUEUE_CONCURRENCY can't
+ *  silently make it in-process-concurrent and reintroduce the find→write TOCTOU.
+ *  ⚠ Making crm-sync concurrent OR running >1 replica needs (a) a per-portal REST limiter (else a
+ *  big batch hits B24 `QUERY_LIMIT` — batch/`callBatch` is the real lever) and (b) ATOMIC dedup.
+ *  Dedup is the B24 marker (`findActivityByMarker` → `configurable.add` stamps ORIGINATOR_ID/
+ *  ORIGIN_ID atomically, #259), but the search→write is still two calls: under parallelism two
+ *  workers could both miss the marker and double-write a dela (TOCTOU) — see #109/#259/PROCESSING §1.
+ *  fetch/parse scale freely. See docs/QUEUES.md. */
 export function startThroughputWorkers(
   deps: HandlerDeps,
   opts: { concurrency?: number, fetchRate?: { max: number, duration: number } } = {}
@@ -564,7 +602,17 @@ export function startThroughputWorkers(
         'proc.distributed': summary.distributed,
         'proc.ledger_written': summary.ledgerWritten
       }))
-    }, { connection, concurrency })
+      // #163: raise the BullMQ lock/stall window so a LIVE crm-sync worker is never falsely deemed
+      // stalled → no concurrent redelivery double-writing an activity. maxStalledCount:1 keeps BullMQ's
+      // default (one read-before-write-safe recovery of a truly crashed job) explicit. crm-sync ONLY
+      // (find→write TOCTOU); the fetch/parse workers are pure/idempotent and keep BullMQ defaults.
+      //
+      // crm-sync is PINNED to concurrency 1 regardless of QUEUE_CONCURRENCY. The lock tuning only closes
+      // the cross-worker STALLED-redelivery window; it does nothing against IN-PROCESS concurrency. Since
+      // QUEUE_CONCURRENCY is a single shared knob (fetch/parse have a real reason to scale), letting it
+      // raise crm-sync too would reintroduce the exact find→write TOCTOU this guards against. Until a
+      // per-portal REST limiter + atomic dedup land (docs/QUEUES.md), crm-sync stays serial by construction.
+    }, { connection, concurrency: 1, ...crmLockTuning() })
   ]
 }
 
