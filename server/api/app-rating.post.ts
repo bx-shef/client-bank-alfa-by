@@ -10,6 +10,8 @@ import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { markOpened, markPrompted } from '../utils/appRatingStore'
+import { withFrameRouteSpan } from '../utils/frameRouteSpan'
+import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
 
 function liveReportDeps(): AppRatingReportDeps {
@@ -25,15 +27,23 @@ function liveReportDeps(): AppRatingReportDeps {
   }
 }
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id, never the action payload.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const body = await readBody(event).catch(() => null) as { action?: unknown } | null
-  const { status, body: resBody } = await handleAppRatingReport(liveReportDeps(), {
-    accessToken: token,
-    domain,
-    action: body?.action
-  })
-  setResponseStatus(event, status)
-  return resBody
+  return withFrameRouteSpan(
+    { name: 'http.app-rating.post', method: 'POST', op: 'app-rating.report', domain },
+    async (span) => {
+      const body = await readBody(event).catch(() => null) as { action?: unknown } | null
+      const { status, body: resBody } = await handleAppRatingReport(liveReportDeps(), {
+        accessToken: token,
+        domain,
+        action: body?.action
+      })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return resBody
+    }
+  )
 })

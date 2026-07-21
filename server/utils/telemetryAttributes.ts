@@ -45,10 +45,10 @@ export const SAFE_MANUAL_ATTR_KEYS = new Set<string>([
   'proc.manual',
   'proc.distributed',
   'proc.ledger_written', // count of SP-ledger distribution rows written (§9.1)
-  // http route span (settings load/save) — verb + logical op + PII-safe outcome enum
+  // http route span (frame-token routes) — verb + logical op + PII-safe outcome enum
   'http.method', // 'GET' | 'POST'
-  'http.op', // logical name, e.g. 'settings.load' | 'settings.save'
-  'http.outcome', // 'ok' | 'no_auth' | 'auth_failed' | 'forbidden' | 'bad_request' | 'upstream_error'
+  'http.op', // logical name, e.g. 'settings.load' | 'chat-search.search' | 'import.upload'
+  'http.outcome', // ok|no_auth|auth_failed|forbidden|bad_request|conflict|throttled|unavailable|upstream_error|error
   // correlation
   'portal.hash'
 ])
@@ -124,20 +124,25 @@ export function portalHash(memberId: string | undefined | null): string {
 }
 
 /**
- * Map a settings-route HTTP status to a PII-safe `http.outcome` enum for the span. Our settings
- * routes return `{status, body}` from settingsHandler, so the outcome is derived from the status
- * (not a body inspection — the body may carry portal content). The statuses settingsHandler
- * actually produces are 200/400/403/502 (`ok`/`bad_request`/`forbidden`/`upstream_error`; missing
- * frame auth is a 400, not a 401 — it lands in `bad_request`). The 401 → `no_auth` case is kept
- * defensively for any future handler variant; anything unmapped → 'error'.
+ * Map a frame-route HTTP status to a PII-safe `http.outcome` enum for the span. Our frame routes
+ * return `{status, body}` from their handlers, so the outcome is derived from the status (not a body
+ * inspection — the body may carry portal content). Covers the statuses our handlers actually produce
+ * (200/202/400/401/403/409/429/500/502/503); anything unmapped → 'error'. Note: several handlers use
+ * 400 for missing frame auth (not 401 — that still lands in `bad_request`), 409 for "portal not
+ * authorised / not installed", and 429 for the poll-now per-portal cooldown.
  */
 export function httpOutcomeForStatus(status: number): string {
   switch (status) {
-    case 200: return 'ok'
+    case 200:
+    case 202: return 'ok'
     case 400: return 'bad_request'
     case 401: return 'no_auth'
     case 403: return 'forbidden'
+    case 409: return 'conflict'
+    case 429: return 'throttled'
+    case 500:
     case 502: return 'upstream_error'
+    case 503: return 'unavailable'
     default: return 'error'
   }
 }

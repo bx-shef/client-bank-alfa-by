@@ -125,20 +125,25 @@ describe('preload redact list parity (no drift with the canonical TS list)', () 
   })
 })
 
-describe('httpOutcomeForStatus (settings-route span outcome)', () => {
-  it('maps the statuses settingsHandler produces to PII-safe outcomes', () => {
+describe('httpOutcomeForStatus (frame-route span outcome)', () => {
+  it('maps the statuses our frame handlers produce to PII-safe outcomes', () => {
     expect(httpOutcomeForStatus(200)).toBe('ok')
+    expect(httpOutcomeForStatus(202)).toBe('ok')
     expect(httpOutcomeForStatus(400)).toBe('bad_request')
     expect(httpOutcomeForStatus(401)).toBe('no_auth')
     expect(httpOutcomeForStatus(403)).toBe('forbidden')
+    expect(httpOutcomeForStatus(409)).toBe('conflict')
+    expect(httpOutcomeForStatus(429)).toBe('throttled')
+    expect(httpOutcomeForStatus(500)).toBe('upstream_error')
     expect(httpOutcomeForStatus(502)).toBe('upstream_error')
+    expect(httpOutcomeForStatus(503)).toBe('unavailable')
   })
   it('maps any other status to a generic error outcome', () => {
-    expect(httpOutcomeForStatus(500)).toBe('error')
     expect(httpOutcomeForStatus(418)).toBe('error')
+    expect(httpOutcomeForStatus(301)).toBe('error')
   })
   it('every mapped outcome is an allowlisted attribute value shape (enum, not content)', () => {
-    for (const s of [200, 400, 401, 403, 502, 500]) {
+    for (const s of [200, 202, 400, 401, 403, 409, 500, 502, 503, 418]) {
       expect(typeof httpOutcomeForStatus(s)).toBe('string')
     }
   })
