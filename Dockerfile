@@ -77,6 +77,11 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 # Quote the value: the ENV KEY=VALUE form treats a space as a second var separator, so the
 # `--import <path>` value MUST be quoted or Docker errors ("can't find = in <path>").
 ENV NODE_OPTIONS="--import /app/otel.instrument.mjs"
+# Drop root: the node:alpine image ships an unprivileged `node` user (uid 1000). All build
+# steps above ran as root (npm install, COPY); the runtime only READS world-readable /app and
+# binds PORT 3000 (>1024, no privilege needed), so the server runs fine as `node`. Defense in
+# depth — a code-exec bug in Nitro or a dependency no longer lands with root in the container.
+USER node
 EXPOSE 3000
 CMD ["node", ".output/server/index.mjs"]
 

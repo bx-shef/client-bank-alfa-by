@@ -43,6 +43,21 @@ START_CMD="${START_CMD:-cd /opt/app && HOST=0.0.0.0 PORT=3000 node .output/serve
 PORT="${PORT:-3000}"
 ACCESS_POLICY="${ACCESS_POLICY:-PUBLIC}"
 
+# Security gate (fail-closed): under PUBLIC access there is NO network-level gate in front of the
+# single Nitro process, so the operator zone (/queues, /api/ops/*) and in-portal admin pages rely
+# ENTIRELY on the operator password. `operatorAllowed()` treats an EMPTY password as "auth disabled"
+# (fail-open, intended only for the local no-secret dev case) — shipping that to a PUBLIC server
+# exposes the operator console to anyone who knows the URL. Refuse to deploy unless a non-empty
+# `PUBLIC_PAGE_BASIC_AUTH_PASS` is present in ENV_JSON. (Reads ENV_JSON via python — the same parser
+# used to build the deploy body below — so a malformed JSON also fails here, early.)
+if [ "$ACCESS_POLICY" = "PUBLIC" ]; then
+  ENV_JSON="$ENV_JSON" python3 - <<'PY' || { echo "REFUSING to deploy: set a non-empty PUBLIC_PAGE_BASIC_AUTH_PASS in ENV_JSON (operator zone is exposed under PUBLIC access)"; exit 1; }
+import json, os, sys
+env = json.loads(os.environ.get("ENV_JSON", "{}"))
+sys.exit(0 if str(env.get("PUBLIC_PAGE_BASIC_AUTH_PASS", "")).strip() else 1)
+PY
+fi
+
 api() { curl -fsS -H "X-Api-Key: $VIBE_KEY" "$@"; }
 
 echo "==> Looking up server '$APP_NAME'"
@@ -89,6 +104,9 @@ api -X PATCH "$BASE/infra/servers/$sid/access-policy" -H 'Content-Type: applicat
   echo "    (access-policy call failed — set it MANUALLY in the cabinet; PUBLIC is required)"
 
 echo "==> Deploying"
+# SECURITY: `$body` and `$ENV_JSON` carry ALL runtime secrets (B24_CLIENT_SECRET, B24_TOKEN_ENC_KEY,
+# SESSION_SECRET, DB creds, operator password). NEVER `echo`/`cat`/`set -x` them — GitHub Actions masks
+# only exact `secrets.*` matches, so a debug dump of the assembled body would leak the whole set to logs.
 body="$(python3 - <<'PY'
 import json, os
 d = {
