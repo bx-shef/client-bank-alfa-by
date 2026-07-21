@@ -11,6 +11,7 @@
 import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
+import { makeProgramSample, type ProgramSample } from '../../app/utils/programFeedback'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
 import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
@@ -249,7 +250,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number }> {
+): Promise<{ processed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -304,6 +305,10 @@ export async function handleCrmSyncJob(
   let allocated = 0
   let distributed = 0
   let ledgerWritten = 0
+  // First confused op (unmatched/ambiguous/manual), captured redacted for the program feedback issue
+  // (docs/FEEDBACK.md channel 2). Only ONE — dedup keeps the issue to one/shape/hour. `??=` keeps the
+  // earliest confused op in iteration order.
+  let sample: ProgramSample | undefined
   for (const item of unique) {
     // Exclusion gate (PROCESSING.md §2 A2): an operation whose account or purpose is
     // excluded is skipped ENTIRELY — no recognition, no company lookup, no CRM activity, no
@@ -368,10 +373,12 @@ export async function handleCrmSyncJob(
         if (summary.outcome === 'ambiguous') {
           allocatable++
           ambiguous++
+          sample ??= makeProgramSample(item, 'ambiguous')
         } else if (summary.outcome === 'allocatable') {
           allocatable++
         } else if (summary.outcome === 'manual') {
           manual++
+          sample ??= makeProgramSample(item, 'manual')
         }
         deps.onAllocationDecision(item, summary.decision, summary.triggerTargets, job.memberId)
         // Write slice (#184): record the persistent fact for a decided `allocate` (the
@@ -477,6 +484,7 @@ export async function handleCrmSyncJob(
     const clientUnmatched = !companyId
     if (clientUnmatched) {
       unmatched++
+      sample ??= makeProgramSample(item, 'unmatched')
       const myCompanyId = await deps.findMyCompany(item, job.memberId)
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
@@ -518,5 +526,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, notified, skipped, excluded, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length }
+  return { processed: unique.length, created, notified, skipped, excluded, unmatched, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }

@@ -1,11 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildProgramFeedbackIssue,
+  makeProgramSample,
   programSignalSignature,
   summarizeConfusion,
   CONFUSION_KINDS,
   type ProgramSignal
 } from '~/utils/programFeedback'
+import type { StatementItem } from '~/types/statement'
+
+function sampleItem(over: Partial<StatementItem> = {}): StatementItem {
+  return {
+    account: 'BY00OUR',
+    docId: 'D1',
+    direction: 'credit',
+    amount: 123.45,
+    currency: 'BYN',
+    purpose: 'оплата по счёту 42',
+    counterparty: { name: 'ООО Ромашка', unp: '190000000', account: 'BY11ROMASHKA' },
+    acceptDate: '2026-07-21',
+    ...over
+  }
+}
 
 describe('summarizeConfusion', () => {
   it('normalizes counts, lists fired kinds, and totals', () => {
@@ -105,5 +121,61 @@ describe('buildProgramFeedbackIssue', () => {
     const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 1, manual: 1 } } })
     for (const k of CONFUSION_KINDS) expect(typeof k).toBe('string')
     expect(p.body.match(/^- \*\*[^:]+:\*\* \d+$/gm)?.length).toBe(3)
+  })
+})
+
+describe('program op sample', () => {
+  it('makeProgramSample extracts the redacted fields', () => {
+    const s = makeProgramSample(sampleItem(), 'unmatched')
+    expect(s).toEqual({
+      kind: 'unmatched',
+      direction: 'credit',
+      amount: 123.45,
+      currency: 'BYN',
+      purpose: 'оплата по счёту 42',
+      counterparty: 'ООО Ромашка',
+      counterpartyAccount: 'BY11ROMASHKA',
+      counterpartyUnp: '190000000'
+    })
+  })
+
+  it('confusion issue with a sample renders the op section (amount, purpose, counterparty)', () => {
+    const p = buildProgramFeedbackIssue({
+      memberId: 'm',
+      signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 }, sample: makeProgramSample(sampleItem(), 'unmatched') }
+    })
+    expect(p.body).toContain('**Пример операции**')
+    expect(p.body).toContain('Сумма:** `123.45 BYN`')
+    expect(p.body).toContain('Назначение:** `оплата по счёту 42`')
+    expect(p.body).toContain('Контрагент:** `ООО Ромашка`')
+    expect(p.body).toContain('Счёт контрагента:** `BY11ROMASHKA`')
+    expect(p.body).toContain('УНП:** `190000000`')
+  })
+
+  it('omits the sample section when no sample is present', () => {
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 } } })
+    expect(p.body).not.toContain('Пример операции')
+  })
+
+  it('renders sample fields INERT — HTML-escape, backtick-strip, newline-collapse (payer-controlled)', () => {
+    const hostile = sampleItem({
+      purpose: 'a`b\nc</code></pre>d',
+      counterparty: { name: '<script>x</script>', unp: '1', account: 'BY`1' }
+    })
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 }, sample: makeProgramSample(hostile, 'unmatched') } })
+    expect(p.body).toContain('ab c&lt;/code&gt;&lt;/pre&gt;d') // backtick stripped, newline→space, escaped
+    expect(p.body).not.toContain('a`b')
+    expect(p.body).toContain('&lt;script&gt;x&lt;/script&gt;')
+    expect(p.body).not.toContain('<script>')
+    expect(p.body).toContain('BY1') // backtick stripped from account
+  })
+
+  it('drops empty sample fields (e.g. физлицо without УНП) rather than blank lines', () => {
+    const p = buildProgramFeedbackIssue({
+      memberId: 'm',
+      signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 }, sample: makeProgramSample(sampleItem({ counterparty: { name: '', unp: '', account: '' } }), 'unmatched') }
+    })
+    expect(p.body).not.toContain('Контрагент:')
+    expect(p.body).not.toContain('УНП:')
   })
 })

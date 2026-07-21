@@ -1261,8 +1261,10 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 `server/utils/programFeedbackCap.ts` (Redis `SET NX`/`INCR`, DI+тесты). **Три сигнала — union
 `ProgramSignal`** (`confusion` счётчики / `fail-open` сущности / `format` провайдер), общий хелпер
 `fileProgramSignal` в `worker.ts` в трёх точках (crm-sync хвост / `loadNegativeStagePredicate` /
-`file-parse` catch), дедуп-сигнатура с неймспейсом по типу; сэмпл операции / вложение файла в
-программный issue — follow-up. Два дока:
+`file-parse` catch), дедуп-сигнатура с неймспейсом по типу. **`confusion` несёт редактированный сэмпл
+операции** (`makeProgramSample`, первый запутавшийся op → `signal.sample`, инертный рендер) — это ПДн,
+только в приватный репо; `fail-open`/`format` — non-PII. Вложение самого файла в программный issue —
+follow-up. Два дока:
 - **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
   `useFeedback.ts`) на `/app` под полосой статуса **и на `/import`** (под разбором, с файл-вложением) —
   👍 шлёт сразу, 👎 сперва открывает поле комментария. **Файл-вложение (#198):** проп `fileText`
