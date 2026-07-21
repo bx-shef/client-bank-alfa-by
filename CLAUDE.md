@@ -615,7 +615,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       дефолт 30): явный `queue.clean(grace,…)` по `file-parse`/`crm-sync` даёт удалению финансовых ПДн **гарантию по стенным
       часам** (BullMQ-`age` ленивый — вытесняет только на следующей джобе; см. `docs/PRIVACY.md`). Чистое ядро (грейсы из
       `STATEMENT_JOB_RETENTION`, изоляция per-queue-сбоя) — DI + тесты. `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
-      (события всегда 1). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
+      (события всегда 1). **Страховка от stalled-редоставки (#163, порт из `ai-price-import`):** `crmLockTuning()`
+      поднимает BullMQ `lockDuration`/`stalledInterval` до 60с (дефолт 30с) + `maxStalledCount:1` **только на
+      crm-sync** — живой воркер (await'ы = REST-I/O) не «протухает» ложно, поэтому второй воркер не стартует
+      параллельно и не задваивает дело сквозь TOCTOU-окно `findActivityByMarker`→`configurable.add`; реально
+      упавший джоб получает одну read-before-write-safe recovery-редоставку. Pg-advisory-лок отвергнут (держал бы
+      pooled-соединение на REST-записи, `pool max 10`). fetch/parse чисто-идемпотентны → дефолты BullMQ. **crm-sync
+      закреплён на `concurrency: 1`** (не разделяемый `QUEUE_CONCURRENCY`) — лок-тюнинг закрывает только
+      cross-worker stalled-окно, а не in-process concurrency, поэтому поднятие общего knob'а масштабирует лишь
+      fetch/parse и не возвращает TOCTOU. Чистый `crmLockTuning` + wiring-тест (`tests/throughputWorkers.test.ts`,
+      вкл. pin-проверку). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
     - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
       DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
       **только заголовком** `X-Check-Token` (без `?token=` в логах), nginx `deny all`, для консоли
