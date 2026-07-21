@@ -71,8 +71,13 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 > keep-alive-крон (`tokenKeepAlive.ts`→`ensureAccessToken.ts`, #175); вокруг рефреша `ensureAccessToken`
 > держит per-portal **advisory-lock** (#35) — его SDK не даёт, поэтому лок остаётся на этом пути (крон
 > идемпотентно рефрешит простаивающие порталы, реактивного ретрая-подстраховки у него нет). `b24Oauth.ts`
-> оставляет только чистые `buildRefreshBody`/`parseRefreshResponse` (тело/разбор). Других
-> Bitrix-token-endpoint'ов нет; сырого `$fetch` к Bitrix в коде больше нет.
+> оставляет только чистые `buildRefreshBody`/`parseRefreshResponse` (тело/разбор).
+>
+> **Одно осознанное исключение — install-verify (#162):** `verifyInstallMember.ts` (`rawOauthRefresh`)
+> делает **один сырой POST** на тот же `oauth.bitrix.info/oauth/token/` при верификации установки, т.к.
+> SDK-рефреш **выбрасывает** `member_id` из ответа, а привязка `member_id`→грант его требует. Хост
+> **фиксирован** (не из клиентского ввода → нет SSRF), секреты в теле POST (не в URL), AbortSignal-таймаут,
+> обёрнут в `withDependencySpan`. Это единственный сырой Bitrix-запрос; весь прочий B24-трафик — через jssdk.
 
 ## Планируется (следующие PR)
 

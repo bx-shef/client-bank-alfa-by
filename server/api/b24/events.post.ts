@@ -12,9 +12,20 @@ import { handleEventRequest } from '../../utils/b24EventsHandler'
 import { getApplicationToken, saveToken, deleteToken } from '../../utils/tokenStore'
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
+import { rawOauthRefresh, verifyInstallMember, type OAuthFetchFn } from '../../utils/verifyInstallMember'
 
 export default defineEventHandler(async (event) => {
   const envToken = process.env.B24_APPLICATION_TOKEN?.trim() || ''
+  // #162: bind the install member_id to the OAuth grant. Needs the app's OAuth creds to refresh; if
+  // they're unset, refresh is impossible anyway (crm-sync/keep-alive are dead too) → binding degrades
+  // off and install behaves as before (application_token-only). Fixed OAuth host → no SSRF.
+  const clientId = process.env.B24_CLIENT_ID?.trim() || ''
+  const clientSecret = process.env.B24_CLIENT_SECRET?.trim() || ''
+  const bindInstallMember = clientId && clientSecret
+    ? (memberId: string, refreshToken: string) => verifyInstallMember(memberId, refreshToken, {
+        refresh: rawOauthRefresh(globalThis.fetch as unknown as OAuthFetchFn, { clientId, clientSecret })
+      })
+    : undefined
   try {
     const raw = (await readRawBody(event)) || ''
     const payload = parseBracketForm(raw)
@@ -35,7 +46,8 @@ export default defineEventHandler(async (event) => {
         await deleteToken(dbQuery, memberId, eventTs)
       },
       encrypt: encryptSecret,
-      now: () => Date.now()
+      now: () => Date.now(),
+      bindInstallMember
     })
 
     if (result.action) {

@@ -202,6 +202,60 @@ describe('handleEventRequest — primary (enqueue) path', () => {
     expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
   })
 
+  it('#162: binds member_id, then enqueues the ROTATED grant (delivered refresh_token replaced)', async () => {
+    const bindInstallMember = vi.fn(async () => ({
+      ok: true,
+      grant: { accessToken: 'A2', refreshToken: 'R2', clientEndpoint: 'https://p.bitrix24.ru/rest/', expiresIn: 7200 }
+    }))
+    const deps = makeReqDeps({ bindInstallMember })
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('queued')
+    // bound with the DELIVERED refresh_token ('R'), before persisting anything.
+    expect(bindInstallMember).toHaveBeenCalledWith('m1', 'R')
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    // The ROTATED grant is stored — the spent delivered token ('R') must NOT be persisted.
+    expect(job.credentials.accessToken).toBe('A2')
+    expect(job.credentials.refreshTokenEnc).toBe('enc(R2)')
+    expect(deps.encrypt).toHaveBeenCalledWith('R2')
+    expect(deps.encrypt).not.toHaveBeenCalledWith('R')
+    // expiresAt uses the grant's expires_in (7200), not the delivered 3600.
+    expect(job.credentials.expiresAt).toBe(NOW + 7200 * 1000)
+  })
+
+  it('#162: a spoofed install (bind → 403) is NOT persisted (no enqueue, no sync write)', async () => {
+    const bindInstallMember = vi.fn(async () => ({ ok: false as const, status: 403 as const }))
+    const deps = makeReqDeps({ bindInstallMember })
+    const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(403)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+
+  it('#162: a transient bind failure (503) is NOT persisted (fail-closed)', async () => {
+    const deps = makeReqDeps({ bindInstallMember: vi.fn(async () => ({ ok: false as const, status: 503 as const })) })
+    const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(503)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+
+  it('#162: uninstall is unaffected by the bind dep (only register binds)', async () => {
+    const bindInstallMember = vi.fn(async () => ({ ok: true }))
+    const deps = makeReqDeps({ bindInstallMember })
+    await handleEventRequest(uninstall, deps)
+    expect(bindInstallMember).not.toHaveBeenCalled()
+  })
+
+  it('#162: with no bind dep wired (no OAuth creds) install persists unchanged (degraded)', async () => {
+    const deps = makeReqDeps() // bindInstallMember undefined
+    const res = await handleEventRequest(install, deps)
+    expect(res.outcome).toBe('queued')
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job.credentials.refreshTokenEnc).toBe('enc(R)') // delivered creds, as before
+  })
+
   it('enqueues an unregister job (no credentials) on uninstall', async () => {
     const deps = makeReqDeps()
     const res = await handleEventRequest(uninstall, deps)
