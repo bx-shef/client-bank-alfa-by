@@ -184,7 +184,9 @@ export default defineNitroPlugin((nitroApp) => {
           await withSpan('cron.sweep', { 'job.queue': 'cron.sweep' }, async () => {
             await runStatementSweep(sweepDeps)
             // Cap portal_tombstone growth (#77) — one row per permanently-removed portal would
-            // otherwise accrue forever. Isolated so a failure here can't skip the statement clean.
+            // otherwise accrue forever. Piggybacks this sweep tick (so STATEMENT_SWEEP=0 also
+            // disables it — acceptable: both default ON). Isolated so a failure here can't skip
+            // the statement clean.
             try {
               const removed = await sweepExpiredTombstones(dbQuery, tombstoneDays)
               if (removed) console.info('[retention] swept %d expired tombstone(s)', removed)
