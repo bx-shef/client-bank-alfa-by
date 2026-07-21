@@ -975,6 +975,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     проверка** `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option`
     по сохранённому токену без фрейма — для `scripts/check-app-option.sh`; наружу не открыта, nginx `deny all`).
     `settingsHandler` параметризован ключом `app.option` (дефолт — тест-ключ; чат-настройки — `SETTINGS_KEY`).
+    **Admin-гейт записи (#182, порт из `ai-price-import`):** `handleWriteSetting` — **единственный choke point**
+    записи `app.option` — перед `app.option.set` делает `verifyFrameAdmin` (один `profile`-вызов: доказывает
+    контроль портала фрейм-токеном **и** читает `profile.ADMIN` строго `=== true`); не-админ → **403**, сбой/
+    отвергнутый токен → 502 (fail-closed, запись не идёт). Гейтит **оба** роута записи (`chat-settings.post` —
+    арм `autoDistribute`/карта распознавания/чат-цели — **и** `settings.post` — тест-ключ). Клиентский `useIsAdmin`
+    (прячет форму) — **косметика**; авторитет — здесь (иначе любой пользователь портала или реплей фрейм-токена
+    взвёл бы мутации CRM). Token-only, без `member_id`/install-зависимости — install-гонка/purge не отвергают
+    валидного админа (`app.option` скоуплен фрейм-токеном). Зеркалит `profile.ADMIN`-гейт `/api/bank/connect`.
+    (⚠ `metrics-reset.post` — member-scoped обнуление счётчиков, low-harm — пока **не** гейтится, follow-up.)
   - **Настройки чата (#16 PR-C) — фрейм-токеном под `SETTINGS_KEY`:** `server/api/chat-settings.get.ts`/
     `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок** +
     **`recognition`** — матрицы/алфавит/карта полей §4 + **`autoDistribute`** — гейт мутации §2), нормализуя через
