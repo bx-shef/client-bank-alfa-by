@@ -520,7 +520,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `crm-sync` рядом с `import_result` (демо-счета не пишут; сбой метрик не роняет джобу). В отличие от
     `import_result` (только **последний** прогон) — это **тотал за всё время**, переживает рестарт. `GET
     /api/import/metrics` (счётчики) и `POST /api/import/metrics-reset` («сбросить») по **фрейм-токену**
-    (`profile`-валидация, member-scoped — портал видит/сбрасывает только свои). Удаление приложения чистит
+    (`profile`-валидация, member-scoped — портал видит/сбрасывает только свои; **сброс — admin-only**,
+    `profile.ADMIN`, #182 паритет). Удаление приложения чистит
     `metrics_counter`. Форма портирована из соседнего `ai-price-import` (адаптирована под наш `QueryFn` и
     платёжный словарь метрик).
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
@@ -1008,7 +1009,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (прячет форму) — **косметика**; авторитет — здесь (иначе любой пользователь портала или реплей фрейм-токена
     взвёл бы мутации CRM). Token-only, без `member_id`/install-зависимости — install-гонка/purge не отвергают
     валидного админа (`app.option` скоуплен фрейм-токеном). Зеркалит `profile.ADMIN`-гейт `/api/bank/connect`.
-    (⚠ `metrics-reset.post` — member-scoped обнуление счётчиков, low-harm — пока **не** гейтится, follow-up.)
+    **`metrics-reset.post` тоже admin-only (#182 паритет):** `handleMetricsReset` гейтит обнуление счётчиков на
+    `profile.ADMIN` (`validateFrame` отдаёт `{userId,isAdmin}` за один `profile`-вызов, `requireAdmin` в
+    `authMember`); не-админ → **403, без reset**. `GET /api/import/metrics` (чтение) — **не** гейтится (member-scoped
+    инфо, любой пользователь портала).
   - **Настройки чата (#16 PR-C) — фрейм-токеном под `SETTINGS_KEY`:** `server/api/chat-settings.get.ts`/
     `.post.ts` читают/пишут весь `PortalSettings`-JSON (чат уведомлений + правила + **чат ошибок** +
     **`recognition`** — матрицы/алфавит/карта полей §4 + **`autoDistribute`** — гейт мутации §2), нормализуя через

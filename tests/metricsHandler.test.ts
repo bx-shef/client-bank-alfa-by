@@ -4,7 +4,7 @@ import { handleMetrics, handleMetricsReset, type MetricsDeps } from '../server/u
 function deps(over: Partial<MetricsDeps> = {}): MetricsDeps {
   return {
     memberIdByDomain: async () => 'm1',
-    validateFrame: async () => 'user-7',
+    validateFrame: async () => ({ userId: 'user-7', isAdmin: true }),
     readCounters: async () => ({ created: 5, allocated: 2 }),
     resetCounters: async () => {},
     ...over
@@ -26,7 +26,12 @@ describe('handleMetrics (auth ladder)', () => {
   it('403 when the frame token is invalid / foreign (throws or empty user)', async () => {
     const throwing = () => Promise.reject(new Error('bad'))
     expect((await handleMetrics(deps({ validateFrame: throwing }), input)).status).toBe(403)
-    expect((await handleMetrics(deps({ validateFrame: async () => '' }), input)).status).toBe(403)
+    expect((await handleMetrics(deps({ validateFrame: async () => ({ userId: '', isAdmin: false }) }), input)).status).toBe(403)
+  })
+
+  it('GET is readable by a NON-admin portal member (read is not admin-gated)', async () => {
+    const r = await handleMetrics(deps({ validateFrame: async () => ({ userId: 'u', isAdmin: false }) }), input)
+    expect(r.status).toBe(200)
   })
 
   it('200 with the portal counters on success', async () => {
@@ -51,8 +56,16 @@ describe('handleMetricsReset', () => {
 
   it('enforces the same auth ladder (403 on a foreign token, no reset)', async () => {
     const resetCounters = vi.fn(async () => {})
-    const r = await handleMetricsReset(deps({ validateFrame: async () => '', resetCounters }), input)
+    const r = await handleMetricsReset(deps({ validateFrame: async () => ({ userId: '', isAdmin: false }), resetCounters }), input)
     expect(r.status).toBe(403)
+    expect(resetCounters).not.toHaveBeenCalled()
+  })
+
+  it('ADMIN-ONLY (#182 parity): a validated NON-admin cannot reset (403, no reset)', async () => {
+    const resetCounters = vi.fn(async () => {})
+    const r = await handleMetricsReset(deps({ validateFrame: async () => ({ userId: 'u', isAdmin: false }), resetCounters }), input)
+    expect(r.status).toBe(403)
+    expect(r.body).toMatchObject({ error: expect.stringMatching(/administrator/i) })
     expect(resetCounters).not.toHaveBeenCalled()
   })
 

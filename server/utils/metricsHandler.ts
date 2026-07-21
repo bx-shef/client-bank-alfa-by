@@ -7,20 +7,23 @@
 export interface MetricsDeps {
   /** Resolve the portal member_id by its domain (null ⇒ app not installed). */
   memberIdByDomain: (domain: string) => Promise<string | null>
-  /** Validate the frame access token for `domain` (returns the user id, or throws /
-   *  returns '' on a bad/foreign token). Proves the caller belongs to THIS portal. */
-  validateFrame: (domain: string, accessToken: string) => Promise<string>
+  /** Validate the frame access token for `domain`: returns the caller's user id (empty ⇒ bad/foreign
+   *  token) AND whether they're a portal admin (`profile.ADMIN`), or throws. One `profile` call proves
+   *  the caller belongs to THIS portal and gates the admin-only reset. */
+  validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
   /** Read all counters for the portal as a plain map. */
   readCounters: (memberId: string) => Promise<Record<string, number>>
   /** Reset (delete) all counters for the portal. */
   resetCounters: (memberId: string) => Promise<void>
 }
 
-/** Shared frame-auth prologue: resolve + validate, or an error response. Returns the
- *  member_id on success. Mirrors handleImportStatus's auth ladder (401/409/403). */
+/** Shared frame-auth prologue: resolve + validate, or an error response. Returns the member_id on
+ *  success. Mirrors handleImportStatus's auth ladder (401/409/403). With `requireAdmin`, a validated
+ *  but non-admin caller is rejected 403 (the mutating reset is admin-only, #182 parity). */
 async function authMember(
   deps: MetricsDeps,
-  input: { accessToken: string, domain: string }
+  input: { accessToken: string, domain: string },
+  opts: { requireAdmin?: boolean } = {}
 ): Promise<{ memberId: string } | { status: number, body: { error: string } }> {
   const accessToken = input.accessToken.trim()
   const domain = input.domain.trim()
@@ -29,13 +32,14 @@ async function authMember(
   const memberId = await deps.memberIdByDomain(domain)
   if (!memberId) return { status: 409, body: { error: 'portal not installed' } }
 
-  let userId: string
+  let frame: { userId: string, isAdmin: boolean }
   try {
-    userId = await deps.validateFrame(domain, accessToken)
+    frame = await deps.validateFrame(domain, accessToken)
   } catch {
     return { status: 403, body: { error: 'invalid frame token' } }
   }
-  if (!userId) return { status: 403, body: { error: 'invalid frame token' } }
+  if (!frame.userId) return { status: 403, body: { error: 'invalid frame token' } }
+  if (opts.requireAdmin && !frame.isAdmin) return { status: 403, body: { error: 'metrics reset requires a portal administrator' } }
   return { memberId }
 }
 
@@ -55,7 +59,7 @@ export async function handleMetricsReset(
   deps: MetricsDeps,
   input: { accessToken: string, domain: string }
 ): Promise<{ status: number, body: { counters: Record<string, number> } | { error: string } }> {
-  const auth = await authMember(deps, input)
+  const auth = await authMember(deps, input, { requireAdmin: true })
   if ('status' in auth) return auth
   await deps.resetCounters(auth.memberId)
   return { status: 200, body: { counters: {} } }
