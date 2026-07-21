@@ -426,6 +426,22 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
     `unregister`); ничего не пишет. Роут кладёт `action` в очередь, консьюмер применяет. **Удаление
     приложения всегда стирает всё** для портала (флаг `CLEAN` не смотрим). Покрыт тестами.
+    **Привязка `member_id` к OAuth-гранту на установке (#162, порт из `ai-price-import`):** `member_id`
+    в событии — клиентский, верифицируется лишь `application_token`'ом (app-level секрет: получает **каждая**
+    установка приложения), поэтому владелец чужого портала может подделать установку с `member_id` жертвы +
+    своим OAuth-грантом → отравить `member_id` жертвы. `handleEventRequest` перед записью `register`-действия
+    зовёт `bindInstallMember` (`server/utils/verifyInstallMember.ts`): **рефрешит присланный `refresh_token`**
+    — токен-эндпоинт отдаёт **authoritative** `member_id` гранта, он обязан совпасть с заявленным (иначе
+    поддельный грант чужого портала → **403**; `invalid_grant`/`invalid_token`/`expired_token` → 403;
+    сеть/`wrong_client`/нет `member_id` → **503**, fail-closed — установка **не** пишется). Рефреш **ротирует**
+    токен ⇒ на успехе храним **возвращённый** грант (accessToken/refreshToken/expiresIn), а не присланный
+    (он уже spent). Гейт на `B24_CLIENT_ID/SECRET` в роуте (`events.post.ts`): без них рефреш невозможен в
+    принципе (crm-sync/keep-alive тоже мертвы) ⇒ `bindInstallMember` не прокидывается, установка деградирует к
+    прежней (application_token-only). Транспорт — **осознанное исключение из «всё через jssdk»**: один сырой
+    POST на фиксированный `oauth.bitrix.info/oauth/token/` (SDK-рефреш **выбрасывает** `member_id` из ответа,
+    привязка его требует; хост фиксирован → нет SSRF, секреты в теле POST, AbortSignal-таймаут, `withDependencySpan`).
+    Работает и на sync-fallback-пути (Redis down) — bind до обеих веток. Чистое ядро (`verifyInstallMember`,
+    DI) + тесты (`tests/verifyInstallMember.test.ts` + проводка в `tests/b24EventsHandler.test.ts`).
   - `server/utils/tokenStore.ts` — хранилище токенов портала над инъектируемым `QueryFn`
     (`save`/`get`/`getApplicationToken`/`delete`, write-once `application_token`). **Гард порядка событий
     (#77):** `saveToken`/`deleteToken` берут `eventTs` (метка времени события B24, монотонна — install

@@ -22,6 +22,7 @@ import {
 import { B24_DELETION_EVENTS } from '../../app/config/b24'
 import type { DeletionJob, EventJob } from '../queue/topology'
 import type { PortalToken } from './tokenStore'
+import type { InstallMemberResult } from './verifyInstallMember'
 
 /** Raw deletion-entity fields extracted at ingestion (classification is deferred to the consumer,
  *  which has the portal's SP config). `id` is a validated digit string. */
@@ -168,6 +169,14 @@ export interface B24RequestDeps extends B24EventDeps {
   encrypt: (plain: string) => string
   /** Current epoch ms — injected so tests are deterministic. */
   now: () => number
+  /**
+   * #162: bind the client-supplied install member_id to the OAuth grant, or reject. Optional —
+   * the route wires it only when OAuth creds (B24_CLIENT_ID/SECRET) are present (without them we
+   * can't refresh at all, so binding degrades off and install behaves as before). Runs on a
+   * `register` action BEFORE enqueue/persist; on success the RETURNED grant (rotated tokens)
+   * replaces the delivered creds; on failure the install is NOT persisted (403/503).
+   */
+  bindInstallMember?: (memberId: string, refreshToken: string) => Promise<InstallMemberResult>
 }
 
 /** How the mutation was applied. */
@@ -204,6 +213,29 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
   const action = result.action
   const domain = domainOf(payload)
   const ts = tsOf(payload)
+
+  // #162: bind member_id to the OAuth grant on a first install BEFORE persisting anything. The
+  // delivered member_id is only application_token-verified (an app-level secret); refreshing the
+  // delivered refresh_token proves it belongs to the CLAIMED portal. On success we store the ROTATED
+  // grant (the delivered refresh_token is now spent); on failure we DON'T persist (403 spoof / 503
+  // can't-verify). Only when the dep is wired (OAuth creds present) — else install degrades as before.
+  if (action.type === 'register' && deps.bindInstallMember) {
+    const bound = await deps.bindInstallMember(action.memberId, action.credentials.refreshToken ?? '')
+    if (!bound.ok) {
+      return { status: bound.status ?? 403, body: { error: 'install member verification failed', memberId: action.memberId }, outcome: 'none' }
+    }
+    if (bound.grant) {
+      // Persist the RETURNED grant, not the delivered creds — the refresh rotated the token, so the
+      // delivered refresh_token is now spent. (domain/applicationToken stay as delivered; only the
+      // rotated OAuth tokens + fresh expiry change.)
+      action.credentials = {
+        ...action.credentials,
+        accessToken: bound.grant.accessToken,
+        refreshToken: bound.grant.refreshToken,
+        expiresIn: bound.grant.expiresIn
+      }
+    }
+  }
 
   // Deletion-reconcile (§9.2): enqueue only. Unlike install/uninstall there is NO synchronous
   // fallback — a deletion dropped when Redis is down is recoverable via the manual «пересчитать»
