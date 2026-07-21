@@ -275,7 +275,11 @@ describe('handleCrmSyncJob', () => {
     // errorChat off (default) → no notice; myCompany null (default) → nothing written.
     const { deps, calls } = fakeDeps({ company: null })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    // The confused-op sample (#FEEDBACK) rides on the summary — split it out so the counter check
+    // stays strict, then assert it captured the first unmatched op.
+    const { sample, ...counters } = r
+    expect(counters).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
     expect(calls.unmatchedNotify).toEqual([]) // error chat off → no notice
@@ -360,7 +364,9 @@ describe('handleCrmSyncJob', () => {
     // …but let d2 match: override findCompany to match only d2.
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
-    expect(r).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
+    const { sample, ...counters } = r // sample (d3, unmatched) split out so the counter check stays strict
+    expect(counters).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
+    expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
   })

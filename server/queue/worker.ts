@@ -12,7 +12,7 @@ import { Worker } from 'bullmq'
 import { claimCooldownSlot, connectionOptions, incrementWithTtl, queueEnabled } from './connection'
 import { resolveFeedbackConfig } from '../utils/feedbackConfig'
 import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
-import { buildProgramFeedbackIssue, programSignalSignature, summarizeConfusion, type ProgramSignal } from '../../app/utils/programFeedback'
+import { buildProgramFeedbackIssue, programSignalSignature, summarizeConfusion, type ProgramSample, type ProgramSignal } from '../../app/utils/programFeedback'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
@@ -622,15 +622,20 @@ async function fileProgramSignal(memberId: string, signal: ProgramSignal, accoun
   }
 }
 
-/** Confusion signal from a crm-sync run summary (unmatched/ambiguous/manual). */
+/** Confusion signal from a crm-sync run summary (unmatched/ambiguous/manual) + an optional redacted
+ *  sample of the first confused op (for reproduction, private repo only). */
 async function fileProgramFeedback(
   job: CrmSyncJob,
-  summary: { unmatched: number, ambiguous: number, manual: number }
+  summary: { unmatched: number, ambiguous: number, manual: number, sample?: ProgramSample }
 ): Promise<void> {
+  // The demo gate keys on the batch's first account. The redacted sample can come from ANY item, so
+  // this relies on crm-sync batches being account-homogeneous (demo load and real polls/imports are
+  // always separate jobs) — now privacy-load-bearing (a demo run must not leak a real op), not just
+  // for counting. That invariant holds by construction of the fetch/parse producers.
   const account = job.items[0]?.account ?? ''
   const { total, counts } = summarizeConfusion(summary)
   if (total === 0) return // nothing confused → no issue (skip before any config/Redis work)
-  await fileProgramSignal(job.memberId, { type: 'confusion', counts }, account)
+  await fileProgramSignal(job.memberId, { type: 'confusion', counts, sample: summary.sample }, account)
 }
 
 /**

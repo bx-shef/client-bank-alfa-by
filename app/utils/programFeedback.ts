@@ -6,12 +6,16 @@
 //   • format   — a statement file didn't parse (format not recognized).
 // A health/volume signal for the owner/triage agent, distinct from the per-portal error-chat notices.
 //
-// PRIVACY: carries ONLY non-PII — the portal member_id (routing id), the build sha, and per-signal
-// INTERNAL shape (confusion counts / entity-type names / provider id). No account / purpose / amount
-// is embedded (unlike the employee channel's opt-in file attach), so the issue is safe before triage.
-// member_id/sha/provider are HTML-escaped + backtick-stripped defensively (rendered in code spans).
+// PRIVACY: member_id (routing id), build sha and per-signal internal shape (counts / entity-type
+// names / provider id) are non-PII. A confusion signal MAY additionally carry a single redacted
+// SAMPLE of the confused operation (account/purpose/amount/counterparty) for reproduction — this IS
+// client financial data, embedded ONLY because the receiving repo is PRIVATE (docs/FEEDBACK.md; the
+// owner opts in by configuring GITHUB_FEEDBACK_*). Every field is HTML-escaped, backtick-stripped and
+// newline-collapsed so it's fully inert in the issue, and only ONE op is attached (dedup keeps it to
+// one issue/shape/hour). fail-open/format carry no sample.
 
-import { escapeHtml, type IssuePayload } from './feedback'
+import { escapeHtml, stripHostileChars, type IssuePayload } from './feedback'
+import type { StatementItem } from '../types/statement'
 
 /** The crm-sync outcomes that count as «confusion». All three are tallied in the run summary. */
 export const CONFUSION_KINDS = ['unmatched', 'ambiguous', 'manual'] as const
@@ -30,12 +34,40 @@ export interface ConfusionCounts {
   manual: number
 }
 
+/** A single redacted confused operation, for reproduction. RAW fields (the builder sanitizes on
+ *  render). Client financial data — only ever embedded in the PRIVATE receiving repo. */
+export interface ProgramSample {
+  kind: ConfusionKind
+  direction: string
+  amount: number
+  currency: string
+  purpose: string
+  counterparty: string
+  counterpartyAccount: string
+  counterpartyUnp: string
+}
+
+/** Extract a redacted sample from a confused operation (pure; no sanitization here — the builder
+ *  makes each field inert on render). `kind` records which outcome the op hit. */
+export function makeProgramSample(item: StatementItem, kind: ConfusionKind): ProgramSample {
+  return {
+    kind,
+    direction: item.direction,
+    amount: item.amount,
+    currency: item.currency,
+    purpose: item.purpose,
+    counterparty: item.counterparty?.name ?? '',
+    counterpartyAccount: item.counterparty?.account ?? '',
+    counterpartyUnp: item.counterparty?.unp ?? ''
+  }
+}
+
 /** A program «confusion» event, discriminated by `type`:
- *  - confusion: crm-sync counts (unmatched/ambiguous/manual);
+ *  - confusion: crm-sync counts (unmatched/ambiguous/manual) + an optional redacted op sample;
  *  - fail-open: entity types whose negative-stage load came back empty (invoice/deal/smart-process);
  *  - format:    a statement file didn't parse (optional provider id for context). */
 export type ProgramSignal
-  = | { type: 'confusion', counts: ConfusionCounts }
+  = | { type: 'confusion', counts: ConfusionCounts, sample?: ProgramSample }
     | { type: 'fail-open', entities: string[] }
     | { type: 'format', providerId?: string }
 
@@ -55,6 +87,33 @@ export function summarizeConfusion(summary: Partial<ConfusionCounts>): { counts:
   const kinds = CONFUSION_KINDS.filter(k => counts[k] > 0)
   const total = counts.unmatched + counts.ambiguous + counts.manual
   return { counts, kinds, total }
+}
+
+/** Body lines for a redacted op sample (client data → PRIVATE repo only), or `[]` when absent. The
+ *  sample fields (purpose, counterparty) are PAYER-CONTROLLED, so each value is made fully inert:
+ *  strip HOSTILE_CHARS (bidi/zero-width/BOM/C0 — Trojan-Source, same as the employee channel), strip
+ *  backticks (can't close the code span), collapse newlines/tabs to a space (can't forge a markdown
+ *  line), HTML-escape, cap. Amount is a typed number → rendered plain. */
+function sampleLines(sample?: ProgramSample): string[] {
+  if (!sample) return []
+  const inertValue = (v: unknown, cap: number): string =>
+    escapeHtml(stripHostileChars(v).replace(/`/g, '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, cap))
+  const line = (label: string, value: unknown): string | null => {
+    const f = inertValue(value, 200)
+    return f ? `- **${label}:** \`${f}\`` : null
+  }
+  const amount = Number.isFinite(sample.amount) ? `- **Сумма:** \`${sample.amount} ${inertValue(sample.currency, 8)}\`` : null
+  return [
+    '',
+    '**Пример операции** (данные клиента — репозиторий приватный, только для воспроизведения):',
+    line('Случай', CONFUSION_LABELS[sample.kind]),
+    line('Направление', sample.direction),
+    amount,
+    line('Назначение', sample.purpose),
+    line('Контрагент', sample.counterparty),
+    line('Счёт контрагента', sample.counterpartyAccount),
+    line('УНП', sample.counterpartyUnp)
+  ].filter((l): l is string => l !== null)
 }
 
 /** Normalize a provider id to a safe key/label fragment (enum in practice, but defensive). */
@@ -77,8 +136,9 @@ export function programSignalSignature(signal: ProgramSignal): string {
 }
 
 /** Build the { title, body, labels } for a program feedback issue. Labels always `agent-feedback` +
- *  `feedback:problem` (docs/FEEDBACK.md). Body is non-PII (member/sha/provider escaped; internal
- *  shape only — counts / entity-type names / provider id). Pure. */
+ *  `feedback:problem` (docs/FEEDBACK.md). Non-PII EXCEPT a confusion signal carrying a `sample` (a
+ *  redacted client-data op) — then the footer flags that client data IS attached (the triage agent
+ *  keys its privacy handling off that line). member/sha/provider are escaped. Pure. */
 export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?: string, signal: ProgramSignal }): IssuePayload {
   // Render inside markdown code spans → strip backticks (can't close the span) THEN cap THEN escape,
   // so we never truncate mid-HTML-entity. Values are internal (hex/sha/enum) but keep it defensive.
@@ -91,7 +151,12 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
     `- **Сборка:** \`${sha}\``,
     ''
   ]
-  const tail = ['', '_Без данных клиента (счёт/сумма/назначение не приложены). Разбор — по FEEDBACK_TRIAGE_AGENT.md._']
+  // The footer must match reality: a confusion sample embeds client PII, otherwise the body is
+  // non-PII. The triage agent reads this line to decide privacy handling — it MUST NOT lie.
+  const hasClientData = input.signal.type === 'confusion' && !!input.signal.sample
+  const tail = ['', hasClientData
+    ? '_⚠ Содержит данные клиента (репозиторий приватный) — не переносить в публичный репо. Разбор — по FEEDBACK_TRIAGE_AGENT.md._'
+    : '_Без данных клиента (счёт/сумма/назначение не приложены). Разбор — по FEEDBACK_TRIAGE_AGENT.md._']
   const finish = (title: string, middle: string[]): IssuePayload => ({
     title: title.slice(0, 120),
     body: [...head, ...middle, ...tail].join('\n'),
@@ -106,7 +171,8 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
       const total = nonNeg(counts.unmatched) + nonNeg(counts.ambiguous) + nonNeg(counts.manual)
       return finish(`Программа запуталась — портал ${member} (${total})`, [
         '**Что пошло не так на прогоне импорта:**',
-        ...CONFUSION_KINDS.filter(k => nonNeg(counts[k]) > 0).map(k => `- **${CONFUSION_LABELS[k]}:** ${nonNeg(counts[k])}`)
+        ...CONFUSION_KINDS.filter(k => nonNeg(counts[k]) > 0).map(k => `- **${CONFUSION_LABELS[k]}:** ${nonNeg(counts[k])}`),
+        ...sampleLines(input.signal.sample)
       ])
     }
     case 'fail-open': {
