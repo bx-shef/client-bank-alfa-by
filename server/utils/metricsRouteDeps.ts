@@ -13,9 +13,11 @@ export function liveMetricsDeps(): MetricsDeps {
   return {
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),
     validateFrame: async (domain, accessToken) => {
+      // One `profile` call proves the token controls THIS portal (else B24 throws) and yields the
+      // caller's id + ADMIN flag — the reset route gates on ADMIN (#182 parity).
       const res = await frameRestCall(domain, accessToken, 'profile', {})
-      const id = (res?.result as { ID?: unknown } | undefined)?.ID
-      return id != null ? String(id) : ''
+      const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
+      return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
     readCounters: memberId => readCounters(dbQuery, memberId),
     resetCounters: memberId => resetCounters(dbQuery, memberId)

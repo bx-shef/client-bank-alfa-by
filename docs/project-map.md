@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-20
+> Last reviewed: 2026-07-21
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -334,7 +334,8 @@ MCP-сервер по выписке убран из дорожной карты
   записью; стора `activity_dedup` нет — прежний `todo`-путь без маркера **удалён**).
   **Долговременные метрики (#78, частично):** воркер best-effort копит пожизненные счётчики портала
   (`metrics_counter`: processed/created/allocated/distributed/unmatched/… из сводки `crm-sync`), читаются/
-  сбрасываются по фрейм-токену (`GET /api/import/metrics`, `POST /api/import/metrics-reset`, member-scoped).
+  сбрасываются по фрейм-токену (`GET /api/import/metrics`, `POST /api/import/metrics-reset`, member-scoped;
+  сброс — **admin-only**, `profile.ADMIN`, #182).
   В отличие от снапшота глубины очередей — это тотал за всё время, переживает рестарт (форма портирована из
   соседнего `ai-price-import`). #78 — **OpenTelemetry — оба слайса сделаны**: слайс 1 (app-side, спаны) —
   **полное покрытие конвейера деревом трасс**: все 4 job-воркера + одиночный/батч B24 REST + OAuth-refresh +
