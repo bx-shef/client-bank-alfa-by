@@ -1304,7 +1304,8 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 Документы привлечения клиентов (не часть SSG/кода, опора для лендинга и оффера):
 [`docs/POSITIONING.md`](docs/POSITIONING.md) — позиционирование, ICP, отстройка от
 конкурентов; [`docs/MARKETPLACE_LISTING.md`](docs/MARKETPLACE_LISTING.md) — текстовки
-карточки Маркета Bitrix24; [`docs/PARTNERS.md`](docs/PARTNERS.md) — данные для
+карточки Маркета Bitrix24; [`docs/MARKETPLACE_SUBMISSION_CHECKLIST.md`](docs/MARKETPLACE_SUBMISSION_CHECKLIST.md) —
+пошаговый чек-лист сабмита (гейты, owner-блоки, объём v1.0); [`docs/PARTNERS.md`](docs/PARTNERS.md) — данные для
 интеграторов (субподряд); [`docs/PRICING.md`](docs/PRICING.md) — калькулятор цены
 внедрения и сопровождения (ставки, фикс-пакеты, примеры). Бэклог — issue #222.
 
