@@ -1,6 +1,6 @@
 # Наблюдаемость: OpenTelemetry (#78)
 
-> Last reviewed: 2026-07-18
+> Last reviewed: 2026-07-21
 
 Глубокая телеметрия backend'а на **OpenTelemetry** (официальный вектор Bitrix24 —
 `bitrix-tools/b24-ai-starter-otel`): трейсы + метрики (+ логи) по OTLP в коллектор →
@@ -28,6 +28,11 @@
     (`{kind, portal.hash}`). Плюс **крон-корни** `cron.real-poll`/`cron.keep-alive`/`cron.sweep` — иначе их
     pg/redis/http-спаны экспортируются сиротами без родителя.
   - Bank-fetch HTTP (`$fetch` к Альфе) и bank-OAuth POST ловит **авто-undici** — дочерние спаны под `bank-fetch`-root.
+  - `withSpan('http.<route>', …)` — **HTTP-роуты настроек** (порт #220): `chat-settings.get/post` и
+    `settings.get/post` (`{http.method, http.op, http.outcome, portal.hash}`). `http.outcome` — PII-safe enum из
+    `httpOutcomeForStatus(status)` (`ok/no_auth/auth_failed/forbidden/bad_request/upstream_error`); тело настроек
+    в спан не попадает. Клиентский pull-канал синка настроек (`useSettingsSync`, #219) телеметрией **не** покрыт
+    (браузер, best-effort no-op).
 - **Приватность (docs/PRIVACY.md) — тройная защита финансовых ПДн:**
   1. наши спаны эмитят **только allowlist** безопасных ключей (`server/utils/telemetryAttributes.ts`
      `pickSafeAttributes`) — назначение/контрагент/счёт/сумму прикрепить физически нельзя;

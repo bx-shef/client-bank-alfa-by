@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   REDACT_ATTR_KEYS,
   SAFE_MANUAL_ATTR_KEYS,
+  httpOutcomeForStatus,
   isRedactedKey,
   pickSafeAttributes,
   portalHash,
@@ -38,6 +39,18 @@ describe('pickSafeAttributes (manual-span allowlist)', () => {
       'job.kind': 'ONAPPINSTALL',
       'dep.operation': 'batch',
       'dep.op_count': 12
+    })
+  })
+
+  it('keeps the http settings-route span keys (#220 port: verb + op + outcome)', () => {
+    expect(pickSafeAttributes({
+      'http.method': 'POST',
+      'http.op': 'settings.save',
+      'http.outcome': 'forbidden'
+    })).toEqual({
+      'http.method': 'POST',
+      'http.op': 'settings.save',
+      'http.outcome': 'forbidden'
     })
   })
 
@@ -108,6 +121,25 @@ describe('preload redact list parity (no drift with the canonical TS list)', () 
   it('the preload shares the same sensitive markers', () => {
     for (const marker of ['body', 'payload', 'token', 'secret', 'password', 'authorization', 'cookie']) {
       expect(preload).toContain(`'${marker}'`)
+    }
+  })
+})
+
+describe('httpOutcomeForStatus (settings-route span outcome)', () => {
+  it('maps the statuses settingsHandler produces to PII-safe outcomes', () => {
+    expect(httpOutcomeForStatus(200)).toBe('ok')
+    expect(httpOutcomeForStatus(400)).toBe('bad_request')
+    expect(httpOutcomeForStatus(401)).toBe('no_auth')
+    expect(httpOutcomeForStatus(403)).toBe('forbidden')
+    expect(httpOutcomeForStatus(502)).toBe('upstream_error')
+  })
+  it('maps any other status to a generic error outcome', () => {
+    expect(httpOutcomeForStatus(500)).toBe('error')
+    expect(httpOutcomeForStatus(418)).toBe('error')
+  })
+  it('every mapped outcome is an allowlisted attribute value shape (enum, not content)', () => {
+    for (const s of [200, 400, 401, 403, 502, 500]) {
+      expect(typeof httpOutcomeForStatus(s)).toBe('string')
     }
   })
 })

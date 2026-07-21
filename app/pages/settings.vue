@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useB24 } from '~/composables/useB24'
+import { useChatSettings } from '~/composables/useChatSettings'
+import { useSettingsSync } from '~/composables/useSettingsSync'
 import { pageTitle } from '~/utils/landing'
 
 // In-portal page: `clear` layout wraps it in <B24App> for iframe theming.
@@ -9,6 +11,12 @@ import { pageTitle } from '~/utils/landing'
 definePageMeta({ layout: 'clear' })
 
 useHead({ title: pageTitle('Настройки') })
+
+// Live-reload when another open instance saves. MUST run SYNCHRONOUSLY in setup — after an
+// `await` the active effect scope is lost and onScopeDispose (inside subscribeReload) wouldn't
+// bind → leak. Best-effort, auto-disposed with the component scope.
+const chatSettings = useChatSettings()
+useSettingsSync().subscribeReload(() => void chatSettings.load())
 
 const b24 = useB24()
 onMounted(async () => {

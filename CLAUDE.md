@@ -213,7 +213,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   сид-метки выбранных чатов (кэш-`title` из настроек → недавние → id-фолбэк). Вне фрейма инертна
   (defaults, persistence — no-op). `AsyncSearchSelect` эмитит `update:selected-option` (выбранная
   строка) → форма кладёт имя в `ChatSettings.title`/`ChatTarget.title` (UI-подсказка, воркеру не нужна;
-  переживает reload без лишнего REST).
+  переживает reload без лишнего REST). **Кросс-инстанс sync (порт #219 из `ai-price-import`, паттерн
+  `bitrix24/b24-ai-starter`):** после успешного `save()` зовёт `useSettingsSync().notifyReload()`.
+- `app/utils/settingsSync.ts` (чистое ядро, тесты) + `app/composables/useSettingsSync.ts` — **живая
+  синхронизация настроек между открытыми инстансами**: `buildSettingsReloadEvent(moduleId)` собирает payload
+  `pull.application.event.add` с COMMAND `reload.options`; `notifyReload()` шлёт его через фрейм после сейва,
+  `subscribeReload(onReload)` подписывается на канал приложения (`B24PullClientManager`) и зовёт `onReload` при
+  сейве в другом инстансе (`/app` и `/settings` подписаны → `chatSettings.load()`). Обе стороны **best-effort,
+  никогда не бросают**: pull-сервер портала может быть недоступен → тихий no-op (наши настройки всё равно
+  автосейвятся, это лишь освежает **другие** открытые формы). `moduleId` = `b24MarketCode || LANDING_MARKET_CODE`.
+  ⚠ Семантика pull-канала портало-специфична — проверить на живом портале.
 - `app/composables/useIsAdmin.ts` — `check()` → `$b24.auth.isAdmin` (синхронно, из `IS_ADMIN`
   init-handshake); `inPortal`/`isAdmin` для гейта формы (в портале не-админ → предупреждение).
 - `app/components/ImportStatusBanner.vue` — полоса статуса импорта (`B24Alert`, цвет = состояние:
@@ -650,7 +659,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       bank-OAuth POST ловит авто-undici (дочерние под `bank-fetch`-root). **PII-защита тройная:** allowlist наших атрибутов (`telemetryAttributes.ts` `pickSafeAttributes` — счёт/
       сумму/назначение прикрепить нельзя) + redaction-SpanProcessor авто-атрибутов (SQL/URL/токены) + `portal.hash`
       (SHA-256) вместо member_id, `error_kind` вместо текста ошибки. Чистые ядра + тесты (`telemetryAttributes`/
-      `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Слайс 2 (коллектор + ClickHouse + Grafana как
+      `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Настройки-роуты в покрытии (порт #220
+      из `ai-price-import`):** все 4 роута настроек (`chat-settings.get/post`, `settings.get/post`) обёрнуты в
+      `withSpan('http.<route>', {http.method, http.op})` с `finalize` → `http.outcome` (PII-safe enum из
+      `httpOutcomeForStatus(status)`: `ok/no_auth/auth_failed/forbidden/bad_request/upstream_error`) + `portal.hash`
+      (тело настроек в спан **никогда** не попадает). Ключи `http.method`/`http.op`/`http.outcome` добавлены в
+      `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 (коллектор + ClickHouse + Grafana как
       opt-in `--profile telemetry`) — дальше.**
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту** (DI над `RestCall`,

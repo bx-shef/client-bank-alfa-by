@@ -7,6 +7,8 @@ import type { OperationDirection } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
 import { useAppSettings } from '~/composables/useAppSettings'
+import { useChatSettings } from '~/composables/useChatSettings'
+import { useSettingsSync } from '~/composables/useSettingsSync'
 import { pageTitle } from '~/utils/landing'
 
 // In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
@@ -47,6 +49,14 @@ const { status, refresh } = useImportStatus()
 
 // App-level test setting (app.option via backend) — works inside a portal.
 const appSettings = useAppSettings()
+
+// Chat settings (shared singleton with the SettingsForm slideover). Subscribe to the
+// cross-instance reload pull so a save in another open instance re-reads live. MUST run
+// SYNCHRONOUSLY in setup — after an `await` the active effect scope is lost and
+// onScopeDispose (inside subscribeReload) wouldn't bind → the pull client would leak.
+// Best-effort; no-op if the portal pull server / frame is unavailable.
+const chatSettings = useChatSettings()
+useSettingsSync().subscribeReload(() => void chatSettings.load())
 
 const b24 = useB24()
 onMounted(async () => {
