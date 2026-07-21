@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-20
+> Last reviewed: 2026-07-21
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -45,7 +45,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | Метод | Поколение | Scope | Файл-владелец | Батч | Статус / замена | Назначение |
 |-------|-----------|-------|---------------|------|-----------------|------------|
 | `app.option.get` | classic | — (app) | `server/utils/appSettings.ts`, `settingsHandler.ts` | да | актуален | Чтение настроек приложения (per-portal, per-app KV). |
-| `app.option.set` | classic | — (app) | `server/utils/appSettings.ts`, `settingsHandler.ts` | да | актуален | Запись настроек приложения (тест-ключ; чат-настройки — #16). |
+| `app.option.set` | classic | — (app) | `server/utils/appSettings.ts`, `settingsHandler.ts` | да | актуален | Запись настроек приложения (тест-ключ; чат-настройки — #16). **Admin-only (#182):** `handleWriteSetting` гейтит на `profile.ADMIN` (`verifyFrameAdmin`) до записи. |
 | `crm.requisite.bankdetail.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Поиск реквизитов по счёту контрагента (`RQ_ACC_NUM`→`RQ_IIK`). |
 | `crm.requisite.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Реквизит → компания (`ENTITY_TYPE_ID=4`). |
 | `crm.item.list` | classic | `crm` | `server/utils/{invoiceLookup,companyLookup,itemByIdLookup,paymentLookup}.ts` | да | актуален | Поиск смарт-счёта (`entityTypeId=31`) по номеру+компании (#109); фильтр «моей» компании (`entityTypeId=4`, `isMyCompany='Y'`, Этап C); резолв цели **по id+компании** (IDOR-скоуп, `itemByIdLookup`; стратегия `by-id`: invoice-id/deal-id/smart-id); **сделки компании** (`entityTypeId=2`, фильтр `companyId`) для company-пула оплат (`paymentLookup.findCompanyDealPayments`). Поля подтверждены на живом портале. |
@@ -62,7 +62,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts`, `server/utils/allocationErrorNotify.ts` | да | актуален | Уведомление об операции в чат (стадия 6); тем же методом — заметка об `ambiguous`/`manual` разнесении в чат ошибок (#184). |
 | `im.search.chat.list` | im | `im` | `server/utils/chatSearch.ts` | **нет** | актуален | Поиск чата по названию/участникам для пикера (`FIND`≥3, `LIMIT`≤50, `OFFSET`; отдаёт `total`/`next`). |
 | `im.recent.list` | im | `im` | `server/utils/chatSearch.ts` | нет | актуален | Дефолтный список пикера — последние групповые чаты (`SKIP_DIALOG=Y`, `OFFSET`/`LIMIT`). |
-| `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts`, `server/api/app-rating.get.ts`, `server/api/app-rating.post.ts`, `server/api/feedback.post.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + метрики `#78` + старт подключения банка `POST /api/bank/connect` + попап «оцените приложение» `GET/POST /api/app-rating` + канал обратной связи `POST /api/feedback`): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1: креды привязываются ко всему порталу → только админ). |
+| `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts`, `server/api/app-rating.get.ts`, `server/api/app-rating.post.ts`, `server/api/feedback.post.ts`, `server/utils/settingsHandler.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + метрики `#78` + старт подключения банка `POST /api/bank/connect` + попап «оцените приложение» `GET/POST /api/app-rating` + канал обратной связи `POST /api/feedback` + **запись настроек** `chat-settings.post`/`settings.post` через `verifyFrameAdmin`, #182): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1) **и при записи настроек** (#182: `autoDistribute`/карта распознавания/чат-цели скоуплены на весь портал → только админ). |
 
 > **HTTP, не REST-метод:** OAuth-токен портала обновляем на `oauth/token` (endpoint Bitrix
 > `oauth.bitrix.info/oauth/token/`) — это не REST-метод транспорта, а прямой запрос к token endpoint.
