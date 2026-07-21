@@ -90,13 +90,35 @@ describe('buildProgramFeedbackIssue', () => {
     expect(p.body).toContain('Без данных клиента')
   })
 
-  it('format: notes the provider + expected formats, non-PII', () => {
+  it('format WITHOUT a file: provider + expected formats, non-PII, no embed', () => {
     const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'format', providerId: 'prior-by' } })
     expect(p.labels).toEqual(labels)
     expect(p.title).toContain('формат')
     expect(p.body).toContain('Провайдер:** `prior-by`')
     expect(p.body).toContain('Разбор выписки упал') // softened: fires on any parse throw, not only format
-    expect(p.body).toContain('только по каналу «сотрудник»') // no file embedded here
+    expect(p.body).not.toContain('<details>') // no file attached
+    expect(p.body).toContain('Без данных клиента') // footer: non-PII
+  })
+
+  it('format WITH the failed file: embeds it (inert) and flags client data', () => {
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'format', providerId: 'manual', fileText: '***** ^Type=99\nмусор</code></pre>x' } })
+    expect(p.body).toContain('**Файл, который не разобрался**')
+    expect(p.body).toContain('<details><summary>Показать содержимое</summary>')
+    expect(p.body).toContain('^Type=99')
+    expect(p.body).toContain('&lt;/code&gt;&lt;/pre&gt;') // escaped — can't break the block
+    expect(p.body).not.toContain('мусор</code></pre>x')
+    expect(p.body).toContain('Содержит данные клиента') // footer flips: PII attached
+  })
+
+  it('format with a blank / all-hostile file: no embed AND the footer denies client data', () => {
+    // The `hasClientData` guard is stripHostileChars(fileText).trim(), not plain truthiness — a
+    // whitespace / zero-width-only file must produce neither an embed nor a "содержит данные" footer
+    // (else the footer would lie about attached PII that isn't actually there).
+    const ZWSP = String.fromCharCode(0x200b)
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'format', providerId: 'manual', fileText: `  ${ZWSP}\n\t` } })
+    expect(p.body).not.toContain('<details>')
+    expect(p.body).not.toContain('Файл, который не разобрался')
+    expect(p.body).toContain('Без данных клиента')
   })
 
   it('fail-open: renders entity names inert (backtick-strip + HTML-escape, code-span-safe)', () => {

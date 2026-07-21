@@ -13,6 +13,8 @@ import { claimCooldownSlot, connectionOptions, incrementWithTtl, queueEnabled } 
 import { resolveFeedbackConfig } from '../utils/feedbackConfig'
 import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
 import { buildProgramFeedbackIssue, programSignalSignature, summarizeConfusion, type ProgramSample, type ProgramSignal } from '../../app/utils/programFeedback'
+import { MAX_FILE_EMBED } from '../../app/utils/feedback'
+import { decodeUploadText } from '../../app/utils/importUpload'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
@@ -518,10 +520,17 @@ export function startThroughputWorkers(
         return await handleParseJob(job.data, deps)
       } catch (e) {
         // A parse failure = the statement format wasn't recognized (docs/FEEDBACK.md channel 2,
-        // format signal). File a best-effort program issue (fire-and-forget so the job fails fast),
-        // then RE-THROW so BullMQ retry/failure behaviour is unchanged. A file-parse job is always a
-        // real manual upload (demo uses the fetch path), so no demo gate — pass no account.
-        void fileProgramSignal(job.data.memberId, { type: 'format', providerId: job.data.providerId })
+        // format signal). Attach the RAW file that failed to parse (decoded, capped) for reproduction
+        // — it's client data, but the receiving repo is private and this IS the file to debug. Decode
+        // is best-effort (a format failure isn't a decode failure, but guard anyway). File a
+        // best-effort program issue (fire-and-forget so the job fails fast), then RE-THROW so BullMQ
+        // retry/failure is unchanged. A file-parse job is always a real manual upload (demo uses the
+        // fetch path), so no demo gate — pass no account.
+        let fileText: string | undefined
+        try {
+          fileText = decodeUploadText(Buffer.from(job.data.contentBase64, 'base64')).slice(0, MAX_FILE_EMBED)
+        } catch { /* undecodable → attach no file */ }
+        void fileProgramSignal(job.data.memberId, { type: 'format', providerId: job.data.providerId, fileText })
         throw e
       }
     }, r => ({ 'job.op_count': r.parsed })), { connection, concurrency }),

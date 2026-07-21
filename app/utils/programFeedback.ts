@@ -7,14 +7,15 @@
 // A health/volume signal for the owner/triage agent, distinct from the per-portal error-chat notices.
 //
 // PRIVACY: member_id (routing id), build sha and per-signal internal shape (counts / entity-type
-// names / provider id) are non-PII. A confusion signal MAY additionally carry a single redacted
-// SAMPLE of the confused operation (account/purpose/amount/counterparty) for reproduction — this IS
-// client financial data, embedded ONLY because the receiving repo is PRIVATE (docs/FEEDBACK.md; the
-// owner opts in by configuring GITHUB_FEEDBACK_*). Every field is HTML-escaped, backtick-stripped and
-// newline-collapsed so it's fully inert in the issue, and only ONE op is attached (dedup keeps it to
-// one issue/shape/hour). fail-open/format carry no sample.
+// names / provider id) are non-PII. Two variants ADDITIONALLY carry client financial data, embedded
+// ONLY because the receiving repo is PRIVATE (docs/FEEDBACK.md; the owner opts in by configuring
+// GITHUB_FEEDBACK_*): a `confusion` signal may carry one redacted SAMPLE of the confused op, and a
+// `format` signal carries the raw FILE that failed to parse (for reproduction). Both are rendered
+// fully inert (HOSTILE_CHARS + backtick strip, newline-collapse/HTML-escape, capped), and the footer
+// flags «содержит данные клиента» so the triage agent won't leak it to the public repo. Dedup keeps
+// each to one issue/shape/hour. fail-open carries no client data.
 
-import { escapeHtml, stripHostileChars, type IssuePayload } from './feedback'
+import { escapeHtml, fileEmbedLines, stripHostileChars, type IssuePayload } from './feedback'
 import type { StatementItem } from '../types/statement'
 
 /** The crm-sync outcomes that count as «confusion». All three are tallied in the run summary. */
@@ -65,11 +66,12 @@ export function makeProgramSample(item: StatementItem, kind: ConfusionKind): Pro
 /** A program «confusion» event, discriminated by `type`:
  *  - confusion: crm-sync counts (unmatched/ambiguous/manual) + an optional redacted op sample;
  *  - fail-open: entity types whose negative-stage load came back empty (invoice/deal/smart-process);
- *  - format:    a statement file didn't parse (optional provider id for context). */
+ *  - format:    a statement file didn't parse (provider id + the raw file text, for reproduction —
+ *               the file the worker was parsing; client data → PRIVATE repo only). */
 export type ProgramSignal
   = | { type: 'confusion', counts: ConfusionCounts, sample?: ProgramSample }
     | { type: 'fail-open', entities: string[] }
-    | { type: 'format', providerId?: string }
+    | { type: 'format', providerId?: string, fileText?: string }
 
 function nonNeg(v: unknown): number {
   const n = Math.trunc(Number(v))
@@ -151,9 +153,11 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
     `- **Сборка:** \`${sha}\``,
     ''
   ]
-  // The footer must match reality: a confusion sample embeds client PII, otherwise the body is
-  // non-PII. The triage agent reads this line to decide privacy handling — it MUST NOT lie.
-  const hasClientData = input.signal.type === 'confusion' && !!input.signal.sample
+  // The footer must match reality: a confusion sample OR a format file embeds client PII, otherwise
+  // the body is non-PII. The triage agent reads this line to decide privacy handling — it MUST NOT lie.
+  const hasClientData
+    = (input.signal.type === 'confusion' && !!input.signal.sample)
+      || (input.signal.type === 'format' && !!(input.signal.fileText && stripHostileChars(input.signal.fileText).trim()))
   const tail = ['', hasClientData
     ? '_⚠ Содержит данные клиента (репозиторий приватный) — не переносить в публичный репо. Разбор — по FEEDBACK_TRIAGE_AGENT.md._'
     : '_Без данных клиента (счёт/сумма/назначение не приложены). Разбор — по FEEDBACK_TRIAGE_AGENT.md._']
@@ -185,12 +189,13 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
       ])
     }
     case 'format': {
-      // safeProvider already yields [a-z0-9-]{≤32}; no further inert needed.
+      // safeProvider already yields [a-z0-9-]{≤32}; no further inert needed. The raw file the worker
+      // was parsing is embedded (inert, capped) via the shared file-embed — client data → private repo.
       return finish(`Не разобрана выписка (формат?) — портал ${member}`, [
         '**Разбор выписки упал** (обычно — новый / нераспознанный формат банка).',
         `- **Провайдер:** \`${safeProvider(input.signal.providerId)}\``,
         '- Ожидались форматы 1CClientBankExchange / client-bank `***** ^Type=` (windows-1251).',
-        '- Нужен образец файла для воспроизведения (файл — только по каналу «сотрудник» с согласием).'
+        ...fileEmbedLines(input.signal.fileText, '**Файл, который не разобрался** (для воспроизведения):')
       ])
     }
   }
