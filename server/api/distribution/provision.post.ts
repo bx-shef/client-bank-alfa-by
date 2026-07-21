@@ -14,7 +14,8 @@ import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { withAdvisoryLock } from '../../utils/dbLock'
 import { withSpan } from '../../utils/telemetrySpan'
-import { portalHash } from '../../utils/telemetryAttributes'
+import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
+import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
 import { SETTINGS_KEY, parsePortalSettings, serializePortalSettings, type PortalSettings } from '../../../app/utils/settings'
 
@@ -55,10 +56,18 @@ function liveProvisionDeps(): ProvisionRequestDeps {
   }
 }
 
+// Outer http-route span (телеметрия, DEFAULT OFF): latency + PII-safe outcome (incl. admin-gate
+// `forbidden`) + hashed portal id; the inner `provision-sp` span carries the compound SP op.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleProvisionRequest(liveProvisionDeps(), { accessToken: token, domain })
-  setResponseStatus(event, status)
-  return body
+  return withFrameRouteSpan(
+    { name: 'http.distribution-provision.post', method: 'POST', op: 'distribution.provision', domain },
+    async (span) => {
+      const { status, body } = await handleProvisionRequest(liveProvisionDeps(), { accessToken: token, domain })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

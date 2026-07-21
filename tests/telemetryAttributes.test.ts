@@ -133,6 +133,7 @@ describe('httpOutcomeForStatus (frame-route span outcome)', () => {
     expect(httpOutcomeForStatus(401)).toBe('no_auth')
     expect(httpOutcomeForStatus(403)).toBe('forbidden')
     expect(httpOutcomeForStatus(409)).toBe('conflict')
+    expect(httpOutcomeForStatus(429)).toBe('throttled')
     expect(httpOutcomeForStatus(500)).toBe('upstream_error')
     expect(httpOutcomeForStatus(502)).toBe('upstream_error')
     expect(httpOutcomeForStatus(503)).toBe('unavailable')

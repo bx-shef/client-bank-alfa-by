@@ -31,11 +31,12 @@
   - `withSpan('http.<route>', …)` / `withFrameRouteSpan(...)` — **все фрейм-токен HTTP-роуты** (порт #220/#221):
     роуты настроек (`chat-settings.get/post`, `settings.get/post`) + через общий хелпер `server/utils/frameRouteSpan.ts`
     остальные — `chat-search`, `app-rating.get/post`, `feedback.post`, `import.post`, `poll-now.post`,
-    `import/{status,metrics,metrics-reset}`, `bank/connect` (`{http.method, http.op, http.outcome, portal.hash}`).
-    `http.outcome` — PII-safe enum из `httpOutcomeForStatus(status)`
-    (`ok/no_auth/auth_failed/forbidden/bad_request/conflict/unavailable/upstream_error`); тело запроса/ответа
-    (настройки/чаты/выписка/отзыв) в спан не попадает. `feedback.get` (публичный булев, нет домена) не оборачивается;
-    `distribution/*` несут внутренний `ledger-read`-спан; публичный вебхук `b24/events` — на очередном спане.
+    `import/{status,metrics,metrics-reset}`, `bank/connect` и `distribution/{ledger,provision,recompute}` (у последних
+    — внешний `http.<route>`-спан поверх внутреннего бизнес-спана `ledger-read`/`provision-sp`/`ledger-recompute`)
+    (`{http.method, http.op, http.outcome, portal.hash}`). `http.outcome` — PII-safe enum из `httpOutcomeForStatus(status)`
+    (`ok/no_auth/forbidden/bad_request/conflict/throttled/unavailable/upstream_error/error`); тело запроса/ответа
+    (настройки/чаты/выписка/отзыв/URL авторизации банка) в спан не попадает. `feedback.get` (публичный булев, нет
+    домена) не оборачивается; публичный вебхук `b24/events` — на очередном спане.
     Клиентский pull-канал синка настроек (`useSettingsSync`, #219) телеметрией **не** покрыт (браузер, best-effort no-op).
 - **Приватность (docs/PRIVACY.md) — тройная защита финансовых ПДн:**
   1. наши спаны эмитят **только allowlist** безопасных ключей (`server/utils/telemetryAttributes.ts`

@@ -9,8 +9,8 @@ import { portalHash } from './telemetryAttributes'
 //
 // Usage: extract the frame domain first (sync, for portal.hash), then set `span.outcome` — either at
 // each early return inside the handler, or once from the handler's status via `httpOutcomeForStatus`.
-// `http.outcome` is a conventional PII-safe label:
-//   ok | no_auth | auth_failed | forbidden | bad_request | conflict | unavailable | upstream_error
+// `http.outcome` is a conventional PII-safe label (see httpOutcomeForStatus):
+//   ok | no_auth | forbidden | bad_request | conflict | throttled | unavailable | upstream_error | error
 
 export interface RouteSpan { outcome: string }
 

@@ -12,7 +12,8 @@ import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { withSpan } from '../../utils/telemetrySpan'
-import { portalHash } from '../../utils/telemetryAttributes'
+import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
+import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
 import { distributionSpEtid, paymentSpEtid } from '../../../app/config/distributionSp'
 import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
@@ -38,10 +39,18 @@ function liveLedgerDeps(): LedgerRequestDeps {
   }
 }
 
+// Outer http-route span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed portal id;
+// the inner `ledger-read` span carries the SP read. The ledger payload never touches a span.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleLedgerRequest(liveLedgerDeps(), { accessToken: token, domain })
-  setResponseStatus(event, status)
-  return body
+  return withFrameRouteSpan(
+    { name: 'http.distribution-ledger.get', method: 'GET', op: 'distribution.ledger', domain },
+    async (span) => {
+      const { status, body } = await handleLedgerRequest(liveLedgerDeps(), { accessToken: token, domain })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

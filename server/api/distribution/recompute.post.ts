@@ -14,7 +14,8 @@ import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { withAdvisoryLock } from '../../utils/dbLock'
 import { withSpan } from '../../utils/telemetrySpan'
-import { portalHash } from '../../utils/telemetryAttributes'
+import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
+import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
 import { distributionSpEtid, paymentSpEtid } from '../../../app/config/distributionSp'
 import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
@@ -43,10 +44,18 @@ function liveRecomputeDeps(): RecomputeRequestDeps {
   }
 }
 
+// Outer http-route span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed portal id;
+// the inner `ledger-recompute` span carries the SP writes.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleRecomputeRequest(liveRecomputeDeps(), { accessToken: token, domain })
-  setResponseStatus(event, status)
-  return body
+  return withFrameRouteSpan(
+    { name: 'http.distribution-recompute.post', method: 'POST', op: 'distribution.recompute', domain },
+    async (span) => {
+      const { status, body } = await handleRecomputeRequest(liveRecomputeDeps(), { accessToken: token, domain })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

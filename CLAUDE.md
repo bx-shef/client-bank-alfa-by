@@ -671,11 +671,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       #220/#221 из `ai-price-import`):** сначала 4 роута настроек (`chat-settings.get/post`, `settings.get/post`),
       затем **остальные фрейм-роуты** через общий хелпер `server/utils/frameRouteSpan.ts` (`withFrameRouteSpan` —
       обёртка над `withSpan` с мутабельным `span.outcome`): `chat-search`, `app-rating.get/post`, `feedback.post`,
-      `import.post`, `poll-now.post`, `import/{status,metrics,metrics-reset}`, `bank/connect`. Каждый — **один спан
+      `import.post`, `poll-now.post`, `import/{status,metrics,metrics-reset}`, `bank/connect` и
+      `distribution/{ledger,provision,recompute}` (у последних — **внешний** `http.<route>`-спан поверх внутреннего
+      бизнес-спана `ledger-read`/`provision-sp`/`ledger-recompute`). Каждый — **один спан
       на запрос** с `http.method`/`http.op` + `finalize` → `http.outcome` (PII-safe enum из `httpOutcomeForStatus`:
-      `ok/no_auth/auth_failed/forbidden/bad_request/conflict/unavailable/upstream_error`) + `portal.hash`; тело
-      запроса/ответа (настройки/чаты/выписка/отзыв) в спан **никогда** не попадает. `feedback.get` — публичный
-      булев (нет домена/ПДн), не оборачивается; `distribution/*` несут внутренний `ledger-read`-спан; вебхук
+      `ok/no_auth/forbidden/bad_request/conflict/throttled/unavailable/upstream_error/error`) + `portal.hash`; тело
+      запроса/ответа (настройки/чаты/выписка/отзыв/URL авторизации банка) в спан **никогда** не попадает. `feedback.get`
+      — публичный булев (нет домена/ПДн), не оборачивается; вебхук
       `b24/events` — на очередном спане `b24-events`. Ключи `http.method`/`http.op`/`http.outcome` — в
       `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 (коллектор + ClickHouse + Grafana как opt-in `--profile telemetry`) — дальше.**
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
@@ -1391,7 +1393,9 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   оборачивается в `withSpan('<job>', {безопасные атрибуты}, …)` (как `crm-sync`); любая новая **обёртка-транспорт
   зависимости, которую пишем мы** (B24 REST/батч, банк-API-клиент, OAuth-refresh) — в
   `withDependencySpan({system, operation,…})` (сырой `$fetch`/`axios` **уже** ловит авто-undici/http — его **не**
-  оборачиваем повторно, иначе задвоение); новый **крон-тик** — в `withSpan('cron.<name>', …)`. Атрибуты спанов ставим **только** ключами из allowlist
+  оборачиваем повторно, иначе задвоение); новый **крон-тик** — в `withSpan('cron.<name>', …)`; новый **фрейм-токен
+  HTTP-роут** — в `withFrameRouteSpan({name:'http.<route>.<verb>', method, op, domain}, …)` (`server/utils/frameRouteSpan.ts`;
+  `span.outcome` = `httpOutcomeForStatus(status)`, тело запроса/ответа в спан не кладём). Атрибуты спанов ставим **только** ключами из allowlist
   `SAFE_MANUAL_ATTR_KEYS` (`telemetryAttributes.ts`) — форма/счётчики/`portal.hash`, **никогда** назначение/сумма/
   счёт/контрагент/УНП (финансовые ПДн, `docs/PRIVACY.md`); новый безопасный ключ добавляем в allowlist явно. Ошибки
   метим `error_kind` (класс, не текст). Всё — no-op когда телеметрия выключена (спаны `@opentelemetry/api`), так что
