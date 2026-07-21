@@ -10,26 +10,35 @@
 import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken } from '../utils/settingsHandler'
 import { searchChats } from '../utils/chatSearch'
+import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import type { RestCall } from '../utils/companyLookup'
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id. The query phrase / chat payload is NEVER attached to the span.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  if (!token || !domain) {
-    setResponseStatus(event, 400)
-    return { error: 'frame auth (Bearer token + domain) required' }
-  }
-  const query = getQuery(event)
-  const q = typeof query.q === 'string' ? query.q : ''
-  const offset = Number(query.offset) || 0
+  return withFrameRouteSpan(
+    { name: 'http.chat-search.get', method: 'GET', op: 'chat-search.search', domain },
+    async (span) => {
+      if (!token || !domain) {
+        span.outcome = 'bad_request'
+        setResponseStatus(event, 400)
+        return { error: 'frame auth (Bearer token + domain) required' }
+      }
+      const query = getQuery(event)
+      const q = typeof query.q === 'string' ? query.q : ''
+      const offset = Number(query.offset) || 0
 
-  // Bind the portal transport to the caller's frame token + domain.
-  const call: RestCall = (method, params) => frameRestCall(domain, token, method, params)
-  try {
-    const page = await searchChats(call, q, offset)
-    return page
-  } catch {
-    setResponseStatus(event, 502)
-    return { error: 'upstream error' }
-  }
+      // Bind the portal transport to the caller's frame token + domain.
+      const call: RestCall = (method, params) => frameRestCall(domain, token, method, params)
+      try {
+        return await searchChats(call, q, offset)
+      } catch {
+        span.outcome = 'upstream_error'
+        setResponseStatus(event, 502)
+        return { error: 'upstream error' }
+      }
+    }
+  )
 })

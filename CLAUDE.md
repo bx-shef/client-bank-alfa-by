@@ -667,13 +667,17 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       bank-OAuth POST ловит авто-undici (дочерние под `bank-fetch`-root). **PII-защита тройная:** allowlist наших атрибутов (`telemetryAttributes.ts` `pickSafeAttributes` — счёт/
       сумму/назначение прикрепить нельзя) + redaction-SpanProcessor авто-атрибутов (SQL/URL/токены) + `portal.hash`
       (SHA-256) вместо member_id, `error_kind` вместо текста ошибки. Чистые ядра + тесты (`telemetryAttributes`/
-      `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Настройки-роуты в покрытии (порт #220
-      из `ai-price-import`):** все 4 роута настроек (`chat-settings.get/post`, `settings.get/post`) обёрнуты в
-      `withSpan('http.<route>', {http.method, http.op})` с `finalize` → `http.outcome` (PII-safe enum из
-      `httpOutcomeForStatus(status)`: `ok/no_auth/auth_failed/forbidden/bad_request/upstream_error`) + `portal.hash`
-      (тело настроек в спан **никогда** не попадает). Ключи `http.method`/`http.op`/`http.outcome` добавлены в
-      `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 (коллектор + ClickHouse + Grafana как
-      opt-in `--profile telemetry`) — дальше.**
+      `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Все фрейм-токен-роуты в покрытии (порт
+      #220/#221 из `ai-price-import`):** сначала 4 роута настроек (`chat-settings.get/post`, `settings.get/post`),
+      затем **остальные фрейм-роуты** через общий хелпер `server/utils/frameRouteSpan.ts` (`withFrameRouteSpan` —
+      обёртка над `withSpan` с мутабельным `span.outcome`): `chat-search`, `app-rating.get/post`, `feedback.post`,
+      `import.post`, `poll-now.post`, `import/{status,metrics,metrics-reset}`, `bank/connect`. Каждый — **один спан
+      на запрос** с `http.method`/`http.op` + `finalize` → `http.outcome` (PII-safe enum из `httpOutcomeForStatus`:
+      `ok/no_auth/auth_failed/forbidden/bad_request/conflict/unavailable/upstream_error`) + `portal.hash`; тело
+      запроса/ответа (настройки/чаты/выписка/отзыв) в спан **никогда** не попадает. `feedback.get` — публичный
+      булев (нет домена/ПДн), не оборачивается; `distribution/*` несут внутренний `ledger-read`-спан; вебхук
+      `b24/events` — на очередном спане `b24-events`. Ключи `http.method`/`http.op`/`http.outcome` — в
+      `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 (коллектор + ClickHouse + Grafana как opt-in `--profile telemetry`) — дальше.**
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту** (DI над `RestCall`,
     тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) → id реквизитов →

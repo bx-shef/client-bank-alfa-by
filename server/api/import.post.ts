@@ -11,6 +11,8 @@ import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { enqueueParse } from '../queue/producers'
+import { withFrameRouteSpan } from '../utils/frameRouteSpan'
+import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
 
 /** Live wiring: validate the frame token via `profile`, resolve the portal by domain,
@@ -30,23 +32,31 @@ function liveIngestDeps(): IngestDeps {
   }
 }
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id. The statement file / parsed operations are NEVER attached to the span.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
+  return withFrameRouteSpan(
+    { name: 'http.import.post', method: 'POST', op: 'import.upload', domain },
+    async (span) => {
+      const parts = await readMultipartFormData(event).catch(() => null)
+      const file = parts?.find(p => p.name === 'file' && p.filename)
+      if (!file || !file.filename) {
+        span.outcome = 'bad_request'
+        setResponseStatus(event, 400)
+        return { error: 'multipart field "file" required' }
+      }
 
-  const parts = await readMultipartFormData(event).catch(() => null)
-  const file = parts?.find(p => p.name === 'file' && p.filename)
-  if (!file || !file.filename) {
-    setResponseStatus(event, 400)
-    return { error: 'multipart field "file" required' }
-  }
-
-  const { status, body } = await handleImportUpload(liveIngestDeps(), {
-    accessToken: token,
-    domain,
-    fileName: file.filename,
-    bytes: new Uint8Array(file.data)
-  })
-  setResponseStatus(event, status)
-  return body
+      const { status, body } = await handleImportUpload(liveIngestDeps(), {
+        accessToken: token,
+        domain,
+        fileName: file.filename,
+        bytes: new Uint8Array(file.data)
+      })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

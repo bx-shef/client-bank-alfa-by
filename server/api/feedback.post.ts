@@ -11,6 +11,8 @@ import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { FEEDBACK_METRICS, bumpCounter } from '../utils/metricsStore'
+import { withFrameRouteSpan } from '../utils/frameRouteSpan'
+import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
 
 function liveSubmitDeps(): FeedbackSubmitDeps {
@@ -34,33 +36,41 @@ function liveSubmitDeps(): FeedbackSubmitDeps {
   }
 }
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id. The comment / statement text / GitHub payload are NEVER attached to the span.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const raw = await readBody(event).catch(() => null) as {
-    kind?: unknown
-    comment?: unknown
-    attachFile?: unknown
-    context?: { fileName?: unknown, appVersion?: unknown, fileContent?: unknown }
-  } | null
-  // File-attach (#198) is consent-gated by the pure `attachedFileContent`: embed the statement text
-  // ONLY when the client set attachFile === true, bounding the accepted text server-side (defense —
-  // the builder also caps) so a crafted body can't blow up memory. The employee's consent is the
-  // privacy control; the receiving repo is private (feedbackConfig fail-closed), so client financial
-  // data is permitted there.
-  const fileContent = attachedFileContent(raw?.attachFile, raw?.context?.fileContent)
-  const { status, body } = await handleFeedbackSubmit(liveSubmitDeps(), {
-    accessToken: token,
-    domain,
-    kind: raw?.kind,
-    comment: raw?.comment,
-    context: { fileName: raw?.context?.fileName, appVersion: raw?.context?.appVersion, fileContent }
-  })
-  if (status === 500 || status === 502) {
-    // Only a real GitHub transport failure (not the 503 config-gate) — log the numeric class for
-    // ops. Never surface GitHub's body/URL/token.
-    console.warn('[feedback] github submission failed with status %d', status)
-  }
-  setResponseStatus(event, status)
-  return body
+  return withFrameRouteSpan(
+    { name: 'http.feedback.post', method: 'POST', op: 'feedback.submit', domain },
+    async (span) => {
+      const raw = await readBody(event).catch(() => null) as {
+        kind?: unknown
+        comment?: unknown
+        attachFile?: unknown
+        context?: { fileName?: unknown, appVersion?: unknown, fileContent?: unknown }
+      } | null
+      // File-attach (#198) is consent-gated by the pure `attachedFileContent`: embed the statement text
+      // ONLY when the client set attachFile === true, bounding the accepted text server-side (defense —
+      // the builder also caps) so a crafted body can't blow up memory. The employee's consent is the
+      // privacy control; the receiving repo is private (feedbackConfig fail-closed), so client financial
+      // data is permitted there.
+      const fileContent = attachedFileContent(raw?.attachFile, raw?.context?.fileContent)
+      const { status, body } = await handleFeedbackSubmit(liveSubmitDeps(), {
+        accessToken: token,
+        domain,
+        kind: raw?.kind,
+        comment: raw?.comment,
+        context: { fileName: raw?.context?.fileName, appVersion: raw?.context?.appVersion, fileContent }
+      })
+      span.outcome = httpOutcomeForStatus(status)
+      if (status === 500 || status === 502) {
+        // Only a real GitHub transport failure (not the 503 config-gate) — log the numeric class for
+        // ops. Never surface GitHub's body/URL/token.
+        console.warn('[feedback] github submission failed with status %d', status)
+      }
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

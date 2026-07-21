@@ -14,6 +14,8 @@ import { bearerToken } from '../../utils/settingsHandler'
 import { resolveAuthConfig } from '../../utils/session'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
+import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
+import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
 import type { BankProviderId } from '../../../app/types/statement'
 
@@ -32,22 +34,31 @@ function liveConnectDeps(): ConnectStartDeps {
   }
 }
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome (incl. the
+// admin-gate `forbidden` / `unavailable` when a provider secret is missing) + hashed portal id.
+// The account key / authorize URL (carries a signed state) are NEVER attached to the span.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const body = await readBody(event).catch(() => null) as { provider?: string, accountKey?: string } | null
-  const provider = (body?.provider || '').trim() as BankProviderId
-  const accountKey = (body?.accountKey || '').trim()
+  return withFrameRouteSpan(
+    { name: 'http.bank-connect.post', method: 'POST', op: 'bank.connect', domain },
+    async (span) => {
+      const body = await readBody(event).catch(() => null) as { provider?: string, accountKey?: string } | null
+      const provider = (body?.provider || '').trim() as BankProviderId
+      const accountKey = (body?.accountKey || '').trim()
 
-  setResponseHeader(event, 'Referrer-Policy', 'no-referrer')
-  const { status, body: out } = await handleBankConnectStart(liveConnectDeps(), {
-    accessToken: token,
-    domain,
-    provider,
-    accountKey,
-    nonce: randomBytes(16).toString('hex'),
-    nowMs: Date.now()
-  })
-  setResponseStatus(event, status)
-  return out
+      setResponseHeader(event, 'Referrer-Policy', 'no-referrer')
+      const { status, body: out } = await handleBankConnectStart(liveConnectDeps(), {
+        accessToken: token,
+        domain,
+        provider,
+        accountKey,
+        nonce: randomBytes(16).toString('hex'),
+        nowMs: Date.now()
+      })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return out
+    }
+  )
 })

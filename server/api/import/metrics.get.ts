@@ -6,11 +6,21 @@
 import { handleMetrics } from '../../utils/metricsHandler'
 import { liveMetricsDeps } from '../../utils/metricsRouteDeps'
 import { bearerToken } from '../../utils/settingsHandler'
+import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
+import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id, never the counters payload.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleMetrics(liveMetricsDeps(), { accessToken: token, domain })
-  setResponseStatus(event, status)
-  return body
+  return withFrameRouteSpan(
+    { name: 'http.import-metrics.get', method: 'GET', op: 'metrics.load', domain },
+    async (span) => {
+      const { status, body } = await handleMetrics(liveMetricsDeps(), { accessToken: token, domain })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

@@ -7,6 +7,8 @@ import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { getImportResult } from '../../utils/importResultStore'
+import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
+import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
 
 function liveStatusDeps(): ImportStatusDeps {
@@ -21,10 +23,18 @@ function liveStatusDeps(): ImportStatusDeps {
   }
 }
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id, never the run summary.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleImportStatus(liveStatusDeps(), { accessToken: token, domain })
-  setResponseStatus(event, status)
-  return body
+  return withFrameRouteSpan(
+    { name: 'http.import-status.get', method: 'GET', op: 'import.status', domain },
+    async (span) => {
+      const { status, body } = await handleImportStatus(liveStatusDeps(), { accessToken: token, domain })
+      span.outcome = httpOutcomeForStatus(status)
+      setResponseStatus(event, status)
+      return body
+    }
+  )
 })

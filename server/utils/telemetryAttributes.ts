@@ -124,20 +124,24 @@ export function portalHash(memberId: string | undefined | null): string {
 }
 
 /**
- * Map a settings-route HTTP status to a PII-safe `http.outcome` enum for the span. Our settings
- * routes return `{status, body}` from settingsHandler, so the outcome is derived from the status
- * (not a body inspection — the body may carry portal content). The statuses settingsHandler
- * actually produces are 200/400/403/502 (`ok`/`bad_request`/`forbidden`/`upstream_error`; missing
- * frame auth is a 400, not a 401 — it lands in `bad_request`). The 401 → `no_auth` case is kept
- * defensively for any future handler variant; anything unmapped → 'error'.
+ * Map a frame-route HTTP status to a PII-safe `http.outcome` enum for the span. Our frame routes
+ * return `{status, body}` from their handlers, so the outcome is derived from the status (not a body
+ * inspection — the body may carry portal content). Covers the statuses our handlers actually produce
+ * (200/202/400/401/403/409/500/502/503); anything unmapped → 'error'. Note: several handlers use 400
+ * for missing frame auth (not 401 — that still lands in `bad_request`), and 409 for "portal not
+ * authorised / not installed".
  */
 export function httpOutcomeForStatus(status: number): string {
   switch (status) {
-    case 200: return 'ok'
+    case 200:
+    case 202: return 'ok'
     case 400: return 'bad_request'
     case 401: return 'no_auth'
     case 403: return 'forbidden'
+    case 409: return 'conflict'
+    case 500:
     case 502: return 'upstream_error'
+    case 503: return 'unavailable'
     default: return 'error'
   }
 }

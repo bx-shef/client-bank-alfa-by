@@ -9,6 +9,7 @@ import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { getRatingState } from '../utils/appRatingStore'
+import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { dbQuery } from '../db/client'
 
 function liveShowDeps(): AppRatingShowDeps {
@@ -24,14 +25,22 @@ function liveShowDeps(): AppRatingShowDeps {
   }
 }
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id, never the state payload.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  try {
-    const { body } = await handleAppRatingShow(liveShowDeps(), { accessToken: token, domain })
-    return body
-  } catch {
-    // A DB/transport failure must never break the in-portal UI — stay silent.
-    return { show: false }
-  }
+  return withFrameRouteSpan(
+    { name: 'http.app-rating.get', method: 'GET', op: 'app-rating.show', domain },
+    async (span) => {
+      try {
+        const { body } = await handleAppRatingShow(liveShowDeps(), { accessToken: token, domain })
+        return body
+      } catch {
+        // A DB/transport failure must never break the in-portal UI — stay silent.
+        span.outcome = 'upstream_error'
+        return { show: false }
+      }
+    }
+  )
 })
