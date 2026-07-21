@@ -56,16 +56,19 @@ single-container: `QUEUE_WORKERS=1`+`QUEUE_CRON=1`) — один процесс 
    Nitro отвечает на GET/HEAD. Наш смоук проверял только GET (`/`,`/import`,`/api/health`) — **POST
    B24-iframe/`/install` надо прогнать вживую** на первом деплое; если 405 — понадобится Nitro-мидлвар,
    который на POST к пререндеренному роуту отдаёт его же HTML.
-3. **CSP** — hash-based CSP (без `unsafe-inline`) и form-scoped CSP для `public/b24-form.html` ставит
-   nginx; в Nitro их нет. Перенести в `routeRules`/мидлвар.
-4. **Security-заголовки** — `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, HSTS —
-   тоже от nginx; в Nitro не выставляются.
-5. **Rate-limit** `/api/auth/login` (антибрутфорс общего пароля оператора) — был `limit_req` в nginx +
-   `real_ip` из `X-Forwarded-For`; в приложении лимита нет. Под PUBLIC один общий пароль без троттла —
-   реальная экспозиция; нужен Nitro-мидлвар или платформенный лимит.
+3. **CSP + security-заголовки + rate-limit `/api/auth/login`** — раньше их ставил только nginx; теперь
+   есть **Nitro-мидлвар** `server/middleware/securityHeaders.ts` (гейт `SECURITY_HEADERS_ENABLED=1` —
+   ставьте в `APP_ENV_JSON` под Black Hole; в основном nginx-деплое флаг НЕ ставится, мидлвар инертен).
+   Он выставляет `X-Content-Type-Options`/`Referrer-Policy`/`Permissions-Policy`/HSTS(на https)/CSP и
+   троттлит POST `/api/auth/login` (~10/мин на IP, in-memory backstop, single-process). ⚠ CSP тут
+   **слабее** nginx-овой: без хеш-пайплайна (`csp-hashes.mjs`) `script-src` использует `'unsafe-inline'`
+   вместо per-build sha256; остальные директивы (`object-src 'none'`, allowlist `connect-src`/
+   `frame-ancestors`, `base-uri 'self'`) те же. Форм-скоуп CSP для `public/b24-form.html` мидлвар не
+   различает по location — если понадобится, добить точечно.
 
-Функционально приложение поднимается (лендинг + `/api` из одного процесса — проверено), но пункты
-1–2 — **обязательны** перед боевым PUBLIC, а 3–5 — до перевода Black Hole в основной таргет.
+Функционально приложение поднимается (лендинг + `/api` из одного процесса — проверено), пункты
+1–2 — **обязательны** перед боевым PUBLIC (POST-рендер + пароль оператора), а пункт 3 закрыт мидлваром
+(`SECURITY_HEADERS_ENABLED=1`) — с оговоркой про хеш-CSP выше.
 
 ## Артефакты в репозитории
 
@@ -112,6 +115,7 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
   "B24_TOKEN_ENC_KEY": "<openssl rand -hex 32>",
   "SESSION_SECRET": "<openssl rand -hex 32>",
   "PUBLIC_PAGE_BASIC_AUTH_PASS": "<пароль оператора — ОБЯЗАТЕЛЬНО под PUBLIC>",
+  "SECURITY_HEADERS_ENABLED": "1",
   "NUXT_PUBLIC_SITE_URL": "https://app-XXXX.vibecode.bitrix24.tech",
   "B24_APPLICATION_TOKEN": ""
 }

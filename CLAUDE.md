@@ -1225,7 +1225,13 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   только при repo-переменной `VIBECODE_DEPLOY==true`, основной GHCR/Watchtower-путь не трогает).
   Один Nitro отдаёт **и лендинг, и `/api/*`** (проверено: `nuxt build`→`node .output/server/index.mjs`
   → `/`,`/api/health`,`/import` = 200); pg/redis провижнятся на VM в `preStart`, миграции в процессе на
-  старте. ⚠ Без nginx нет hash-CSP/`limit_req` — паритет безопасности (CSP/rate-limit в Nitro) — follow-up.
+  старте. **Паритет безопасности без nginx — закрыт (гейт `SECURITY_HEADERS_ENABLED=1`, ставит только
+  Black Hole):** Nitro-плагин `server/plugins/securityHeaders.ts` (хук `beforeResponse` → заголовки на
+  **всех** ответах, включая пререндеренные статические страницы, куда `server/middleware/` не достаёт) +
+  мидлвар `server/middleware/loginRateLimit.ts` (троттл POST `/api/auth/login`, ~10/мин на IP). Чистые ядра
+  `securityHeaders.ts`/`loginRateLimit.ts` (юнит-тесты); за флагом OFF (nginx-путь) — полный no-op, проверено
+  рантайм-смоуком (заголовки на `/`+`/import`+`/api`, 429 на 11-й попытке; OFF → 0 заголовков, без 429).
+  ⚠ CSP **слабее** nginx-овой (без хеш-пайплайна `script-src` с `'unsafe-inline'`; остальные директивы те же).
 
 ## Отчётность (reporting-kit)
 
