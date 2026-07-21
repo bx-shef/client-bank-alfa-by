@@ -110,7 +110,11 @@ export async function incrementWithTtl(key: string, ttlSec: number): Promise<num
   }
   const namespaced = `count:${key}`
   const value = await client.incr(namespaced)
-  if (value === 1) await client.expire(namespaced, Math.max(1, Math.floor(ttlSec)))
+  // EXPIRE on EVERY increment (not just the first): INCR+EXPIRE isn't atomic, so a crash right after
+  // a fresh INCR would otherwise orphan a TTL-less key forever. Refreshing the TTL each time is
+  // leak-free and harmless here — the key embeds a wall-clock bucket, so a sliding TTL just lets the
+  // (already bucket-scoped) counter self-clean ~ttl after its last use.
+  await client.expire(namespaced, Math.max(1, Math.floor(ttlSec)))
   return value
 }
 

@@ -56,8 +56,12 @@ export function confusionSignature(kinds: ConfusionKind[]): string {
 /** Build the { title, body, labels } for a program feedback issue. Labels `agent-feedback` +
  *  `feedback:problem` (per docs/FEEDBACK.md). Body is non-PII (member/sha escaped, counts). */
 export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?: string, counts: ConfusionCounts }): IssuePayload {
-  const member = escapeHtml(input.memberId).slice(0, 64)
-  const sha = escapeHtml(input.commitSha ?? '').slice(0, 40) || '—'
+  // Render inside markdown code spans → strip backticks (can't close the span) THEN cap THEN escape,
+  // so we never truncate mid-HTML-entity. member_id is a hex routing id and sha a git sha (neither
+  // has these chars), but keep the pipeline defensive/consistent with contextLine.
+  const inert = (v: string, cap: number): string => escapeHtml(v.replace(/`/g, '').slice(0, cap))
+  const member = inert(input.memberId, 64)
+  const sha = inert(input.commitSha ?? '', 40) || '—'
   const { counts } = input
   const lines = CONFUSION_KINDS
     .filter(k => counts[k] > 0)

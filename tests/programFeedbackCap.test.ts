@@ -54,6 +54,14 @@ describe('claimProgramFeedbackSlot', () => {
     expect(await claimProgramFeedbackSlot(d, 'm2', 'unmatched')).toEqual({ file: true })
   })
 
+  it('the hourly cap is per-portal (m1 at cap does not block m2)', async () => {
+    const d = fakeDeps()
+    for (let i = 0; i < 10; i++) await claimProgramFeedbackSlot(d, 'm1', `s${i}`, { hourlyCap: 10 })
+    expect(await claimProgramFeedbackSlot(d, 'm1', 's10', { hourlyCap: 10 })).toEqual({ file: false, reason: 'cap' })
+    // m2 shares the same fake Redis but a distinct cap key → still free.
+    expect(await claimProgramFeedbackSlot(d, 'm2', 's0', { hourlyCap: 10 })).toEqual({ file: true })
+  })
+
   it('cap resets in a new hour bucket', async () => {
     const d1 = fakeDeps(0)
     await claimProgramFeedbackSlot(d1, 'm1', 's', { hourlyCap: 1 })
