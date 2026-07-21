@@ -45,6 +45,10 @@ export const SAFE_MANUAL_ATTR_KEYS = new Set<string>([
   'proc.manual',
   'proc.distributed',
   'proc.ledger_written', // count of SP-ledger distribution rows written (§9.1)
+  // http route span (settings load/save) — verb + logical op + PII-safe outcome enum
+  'http.method', // 'GET' | 'POST'
+  'http.op', // logical name, e.g. 'settings.load' | 'settings.save'
+  'http.outcome', // 'ok' | 'no_auth' | 'auth_failed' | 'forbidden' | 'bad_request' | 'upstream_error'
   // correlation
   'portal.hash'
 ])
@@ -117,4 +121,23 @@ export function portalHash(memberId: string | undefined | null): string {
   const id = (memberId ?? '').trim()
   if (!id) return 'unknown'
   return createHash('sha256').update(id).digest('hex').slice(0, 12)
+}
+
+/**
+ * Map a settings-route HTTP status to a PII-safe `http.outcome` enum for the span. Our settings
+ * routes return `{status, body}` from settingsHandler, so the outcome is derived from the status
+ * (not a body inspection — the body may carry portal content). The statuses settingsHandler
+ * actually produces are 200/400/403/502 (`ok`/`bad_request`/`forbidden`/`upstream_error`; missing
+ * frame auth is a 400, not a 401 — it lands in `bad_request`). The 401 → `no_auth` case is kept
+ * defensively for any future handler variant; anything unmapped → 'error'.
+ */
+export function httpOutcomeForStatus(status: number): string {
+  switch (status) {
+    case 200: return 'ok'
+    case 400: return 'bad_request'
+    case 401: return 'no_auth'
+    case 403: return 'forbidden'
+    case 502: return 'upstream_error'
+    default: return 'error'
+  }
 }

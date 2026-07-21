@@ -1,5 +1,6 @@
 import { reactive, ref } from 'vue'
 import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
+import { useSettingsSync } from '~/composables/useSettingsSync'
 import { defaultPortalSettings, type PortalSettings } from '~/utils/settings'
 import type { RemoteSearchPage } from '~/utils/remoteSearch'
 
@@ -97,6 +98,9 @@ function create() {
     try {
       await $fetch('/api/chat-settings', { method: 'POST', headers: frameAuthHeaders(a), body: settings })
       savedOk.value = true
+      // Nudge other open instances (a second admin's form) to re-read — best-effort,
+      // never throws; a pull failure must not surface as a save error.
+      await useSettingsSync().notifyReload()
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось сохранить настройки')
     } finally {

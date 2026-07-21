@@ -7,11 +7,24 @@
 
 import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken, handleReadSetting } from '../utils/settingsHandler'
+import { withSpan } from '../utils/telemetrySpan'
+import { httpOutcomeForStatus, portalHash } from '../utils/telemetryAttributes'
 
+// Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome + hashed
+// portal id, never the setting body. Zero overhead when telemetry is off.
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  const { status, body } = await handleReadSetting({ callRest: frameRestCall }, token, domain)
-  setResponseStatus(event, status)
-  return body
+  let status = 200
+  return withSpan(
+    'http.settings.get',
+    { 'http.method': 'GET', 'http.op': 'settings.load' },
+    async () => {
+      const res = await handleReadSetting({ callRest: frameRestCall }, token, domain)
+      status = res.status
+      setResponseStatus(event, status)
+      return res.body
+    },
+    () => ({ 'http.outcome': httpOutcomeForStatus(status), 'portal.hash': portalHash(domain) })
+  )
 })
