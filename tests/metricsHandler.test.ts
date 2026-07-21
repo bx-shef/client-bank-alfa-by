@@ -61,6 +61,13 @@ describe('handleMetricsReset', () => {
     expect(resetCounters).not.toHaveBeenCalled()
   })
 
+  it('does not reset when the frame token throws (403, no reset)', async () => {
+    const resetCounters = vi.fn(async () => {})
+    const r = await handleMetricsReset(deps({ validateFrame: () => Promise.reject(new Error('bad')), resetCounters }), input)
+    expect(r.status).toBe(403)
+    expect(resetCounters).not.toHaveBeenCalled()
+  })
+
   it('ADMIN-ONLY (#182 parity): a validated NON-admin cannot reset (403, no reset)', async () => {
     const resetCounters = vi.fn(async () => {})
     const r = await handleMetricsReset(deps({ validateFrame: async () => ({ userId: 'u', isAdmin: false }), resetCounters }), input)
