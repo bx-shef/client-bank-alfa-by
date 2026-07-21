@@ -135,6 +135,14 @@ describe('verifyFrameAdmin', () => {
     expect((await verifyFrameAdmin(mk(undefined), 'AT', 'h')).isAdmin).toBe(false)
   })
 
+  it('undefined result envelope → ok:true / not admin → write 403 (not a 502 transport error)', async () => {
+    // A weird-but-successful profile response with no `result` is treated as non-admin (403),
+    // not a transport failure — exercises the `res?.result` nullish branch.
+    const io: SettingsIO = { callRest: async () => ({}) }
+    expect(await verifyFrameAdmin(io, 'AT', 'h')).toEqual({ ok: true, isAdmin: false })
+    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v')).status).toBe(403)
+  })
+
   it('ok:false / status 502 (fail-closed) when the profile call throws', async () => {
     const io: SettingsIO = {
       callRest: async () => {
