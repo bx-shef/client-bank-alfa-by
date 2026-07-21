@@ -1263,8 +1263,10 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 `fileProgramSignal` в `worker.ts` в трёх точках (crm-sync хвост / `loadNegativeStagePredicate` /
 `file-parse` catch), дедуп-сигнатура с неймспейсом по типу. **`confusion` несёт редактированный сэмпл
 операции** (`makeProgramSample`, первый запутавшийся op → `signal.sample`, инертный рендер) — это ПДн,
-только в приватный репо; `fail-open`/`format` — non-PII. Вложение самого файла в программный issue —
-follow-up. Два дока:
+только в приватный репо; `fail-open` — non-PII. **`format` несёт сам файл, который не разобрался**
+(file-parse-воркер декодирует `contentBase64` из джобы в `catch` → `signal.fileText`, общий рендер
+`fileEmbedLines` — инертный `<details>`-блок, кап `MAX_FILE_EMBED`) — тоже ПДн, только в приватный репо.
+Футер issue честно помечает «содержит данные клиента» (`confusion`+sample / `format`+file) vs non-PII. Два дока:
 - **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
   `useFeedback.ts`) на `/app` под полосой статуса **и на `/import`** (под разбором, с файл-вложением) —
   👍 шлёт сразу, 👎 сперва открывает поле комментария. **Файл-вложение (#198):** проп `fileText`

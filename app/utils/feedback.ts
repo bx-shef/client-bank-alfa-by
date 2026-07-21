@@ -107,7 +107,7 @@ function contextLine(label: string, value: unknown): string | null {
  * marker. Wrapped in a collapsed `<details>` so a long file doesn't dominate the issue. Only ever
  * called with a value the employee consented to attach (the receiving repo is private).
  */
-function fileEmbedLines(value: unknown): string[] {
+export function fileEmbedLines(value: unknown, caption = '**Файл выписки** (приложен по согласию сотрудника):'): string[] {
   const stripped = stripHostileChars(value)
   if (!stripped.trim()) return []
   const rawCapped = stripped.length <= MAX_FILE_EMBED
@@ -121,7 +121,7 @@ function fileEmbedLines(value: unknown): string[] {
   }
   return [
     '',
-    '**Файл выписки** (приложен по согласию сотрудника):',
+    caption,
     '<details><summary>Показать содержимое</summary>',
     '',
     '<pre><code>',
