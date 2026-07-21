@@ -110,6 +110,17 @@ describe('buildProgramFeedbackIssue', () => {
     expect(p.body).toContain('Содержит данные клиента') // footer flips: PII attached
   })
 
+  it('format with a blank / all-hostile file: no embed AND the footer denies client data', () => {
+    // The `hasClientData` guard is stripHostileChars(fileText).trim(), not plain truthiness — a
+    // whitespace / zero-width-only file must produce neither an embed nor a "содержит данные" footer
+    // (else the footer would lie about attached PII that isn't actually there).
+    const ZWSP = String.fromCharCode(0x200b)
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'format', providerId: 'manual', fileText: `  ${ZWSP}\n\t` } })
+    expect(p.body).not.toContain('<details>')
+    expect(p.body).not.toContain('Файл, который не разобрался')
+    expect(p.body).toContain('Без данных клиента')
+  })
+
   it('fail-open: renders entity names inert (backtick-strip + HTML-escape, code-span-safe)', () => {
     const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'fail-open', entities: ['<b>', 'de`al'] } })
     expect(p.body).toContain('&lt;b&gt;') // HTML-escaped
