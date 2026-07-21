@@ -609,7 +609,11 @@ async function fileProgramSignal(memberId: string, signal: ProgramSignal, accoun
   if (!config) return // channel off (no GITHUB_FEEDBACK_* → fail-closed, like the employee channel)
   if (!queueEnabled()) return // need Redis for dedup + hourly cap; without it, don't risk spamming
   try {
-    const gate = await claimProgramFeedbackSlot(programFeedbackGateDeps, memberId, programSignalSignature(signal))
+    // fail-open is a persistent config state (a funnel with no lost/fail stage trips it on EVERY
+    // run), so give it a longer dedup window (24h) — else a misconfigured portal files hourly. A
+    // confusion/format shape is a per-run/per-upload event → the default 1h window.
+    const opts = signal.type === 'fail-open' ? { dedupWindowSec: 24 * 3600 } : {}
+    const gate = await claimProgramFeedbackSlot(programFeedbackGateDeps, memberId, programSignalSignature(signal), opts)
     if (!gate.file) return // deduped or hourly cap reached
     const payload = buildProgramFeedbackIssue({ memberId, commitSha: process.env.NUXT_PUBLIC_COMMIT_SHA, signal })
     await postFeedbackIssue(config, payload, globalThis.fetch as unknown as FeedbackFetchFn)

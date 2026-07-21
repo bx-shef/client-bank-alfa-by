@@ -79,8 +79,15 @@ describe('buildProgramFeedbackIssue', () => {
     expect(p.labels).toEqual(labels)
     expect(p.title).toContain('формат')
     expect(p.body).toContain('Провайдер:** `prior-by`')
-    expect(p.body).toContain('формат не распознан')
+    expect(p.body).toContain('Разбор выписки упал') // softened: fires on any parse throw, not only format
     expect(p.body).toContain('только по каналу «сотрудник»') // no file embedded here
+  })
+
+  it('fail-open: renders entity names inert (backtick-strip + HTML-escape, code-span-safe)', () => {
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'fail-open', entities: ['<b>', 'de`al'] } })
+    expect(p.body).toContain('&lt;b&gt;') // HTML-escaped
+    expect(p.body).not.toContain('<b>')
+    expect(p.body).not.toContain('de`al') // backtick stripped so it can't close the code span
   })
 
   it('carries NO client data and dashes an absent sha', () => {

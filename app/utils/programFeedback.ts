@@ -92,29 +92,40 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
     ''
   ]
   const tail = ['', '_Без данных клиента (счёт/сумма/назначение не приложены). Разбор — по FEEDBACK_TRIAGE_AGENT.md._']
+  const finish = (title: string, middle: string[]): IssuePayload => ({
+    title: title.slice(0, 120),
+    body: [...head, ...middle, ...tail].join('\n'),
+    labels: ['agent-feedback', 'feedback:problem']
+  })
 
-  let title: string
-  let middle: string[]
-  if (input.signal.type === 'confusion') {
-    const { counts } = input.signal
-    const total = nonNeg(counts.unmatched) + nonNeg(counts.ambiguous) + nonNeg(counts.manual)
-    title = `Программа запуталась — портал ${member} (${total})`
-    middle = ['**Что пошло не так на прогоне импорта:**',
-      ...CONFUSION_KINDS.filter(k => nonNeg(counts[k]) > 0).map(k => `- **${CONFUSION_LABELS[k]}:** ${nonNeg(counts[k])}`)]
-  } else if (input.signal.type === 'fail-open') {
-    const entities = [...new Set(input.signal.entities)].sort()
-    title = `Стадии не загрузились (fail-open) — портал ${member}`
-    middle = ['**Не удалось загрузить «отрицательные» стадии для воронок:**',
-      `- **Сущности:** \`${inert(entities.join(', '), 80)}\``,
-      '- Кандидаты на этих сущностях **не** отсеиваются по стадии (можно сесть на «Не оплачен»/проигранную).',
-      '- Причина обычно — урезанные права или пустая воронка. Проверьте scope `crm` / стадии.']
-  } else {
-    const provider = inert(safeProvider(input.signal.providerId), 32)
-    title = `Не разобрана выписка (формат) — портал ${member}`
-    middle = ['**Разбор выписки упал — формат не распознан.**',
-      `- **Провайдер:** \`${provider}\``,
-      '- Ожидались форматы 1CClientBankExchange / client-bank `***** ^Type=` (windows-1251).',
-      '- Похоже на новый формат банка — нужен образец (файл — только по каналу «сотрудник» с согласием).']
+  // Switch (each case returns) → exhaustive by construction: a new ProgramSignal variant would leave
+  // a non-returning path and fail typecheck (TS2366), same guard as programSignalSignature.
+  switch (input.signal.type) {
+    case 'confusion': {
+      const { counts } = input.signal
+      const total = nonNeg(counts.unmatched) + nonNeg(counts.ambiguous) + nonNeg(counts.manual)
+      return finish(`Программа запуталась — портал ${member} (${total})`, [
+        '**Что пошло не так на прогоне импорта:**',
+        ...CONFUSION_KINDS.filter(k => nonNeg(counts[k]) > 0).map(k => `- **${CONFUSION_LABELS[k]}:** ${nonNeg(counts[k])}`)
+      ])
+    }
+    case 'fail-open': {
+      const entities = [...new Set(input.signal.entities)].sort()
+      return finish(`Стадии не загрузились (fail-open) — портал ${member}`, [
+        '**Не удалось загрузить «отрицательные» стадии для воронок:**',
+        `- **Сущности:** \`${inert(entities.join(', '), 80)}\``,
+        '- Кандидаты на этих сущностях **не** отсеиваются по стадии (можно сесть на «Не оплачен»/проигранную).',
+        '- Причина обычно — урезанные права или пустая воронка. Проверьте scope `crm` / стадии.'
+      ])
+    }
+    case 'format': {
+      // safeProvider already yields [a-z0-9-]{≤32}; no further inert needed.
+      return finish(`Не разобрана выписка (формат?) — портал ${member}`, [
+        '**Разбор выписки упал** (обычно — новый / нераспознанный формат банка).',
+        `- **Провайдер:** \`${safeProvider(input.signal.providerId)}\``,
+        '- Ожидались форматы 1CClientBankExchange / client-bank `***** ^Type=` (windows-1251).',
+        '- Нужен образец файла для воспроизведения (файл — только по каналу «сотрудник» с согласием).'
+      ])
+    }
   }
-  return { title: title.slice(0, 120), body: [...head, ...middle, ...tail].join('\n'), labels: ['agent-feedback', 'feedback:problem'] }
 }
