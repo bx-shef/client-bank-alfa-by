@@ -170,12 +170,33 @@ describe('program op sample', () => {
     expect(p.body).toContain('BY1') // backtick stripped from account
   })
 
+  it('strips Trojan-Source bidi / zero-width chars from payer-controlled sample fields', () => {
+    const ZWSP = String.fromCharCode(0x200b)
+    const RLO = String.fromCharCode(0x202e) // right-to-left override
+    const hostile = sampleItem({ purpose: `опла${ZWSP}та${RLO}X`, counterparty: { name: `ООО${RLO}`, unp: '1', account: 'BY1' } })
+    const p = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 }, sample: makeProgramSample(hostile, 'unmatched') } })
+    expect(p.body).not.toContain(ZWSP)
+    expect(p.body).not.toContain(RLO)
+    expect(p.body).toContain('оплата') // reconstituted after strip
+  })
+
+  it('footer flags client data when a sample is attached, and denies it otherwise', () => {
+    const withSample = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 }, sample: makeProgramSample(sampleItem(), 'unmatched') } })
+    expect(withSample.body).toContain('Содержит данные клиента')
+    expect(withSample.body).not.toContain('Без данных клиента')
+    const noSample = buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 } } })
+    expect(noSample.body).toContain('Без данных клиента')
+    // fail-open / format never claim client data
+    expect(buildProgramFeedbackIssue({ memberId: 'm', signal: { type: 'fail-open', entities: ['deal'] } }).body).toContain('Без данных клиента')
+  })
+
   it('drops empty sample fields (e.g. физлицо without УНП) rather than blank lines', () => {
     const p = buildProgramFeedbackIssue({
       memberId: 'm',
       signal: { type: 'confusion', counts: { unmatched: 1, ambiguous: 0, manual: 0 }, sample: makeProgramSample(sampleItem({ counterparty: { name: '', unp: '', account: '' } }), 'unmatched') }
     })
     expect(p.body).not.toContain('Контрагент:')
+    expect(p.body).not.toContain('Счёт контрагента:')
     expect(p.body).not.toContain('УНП:')
   })
 })

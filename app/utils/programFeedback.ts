@@ -14,7 +14,7 @@
 // newline-collapsed so it's fully inert in the issue, and only ONE op is attached (dedup keeps it to
 // one issue/shape/hour). fail-open/format carry no sample.
 
-import { escapeHtml, type IssuePayload } from './feedback'
+import { escapeHtml, stripHostileChars, type IssuePayload } from './feedback'
 import type { StatementItem } from '../types/statement'
 
 /** The crm-sync outcomes that count as «confusion». All three are tallied in the run summary. */
@@ -89,13 +89,15 @@ export function summarizeConfusion(summary: Partial<ConfusionCounts>): { counts:
   return { counts, kinds, total }
 }
 
-/** Body lines for a redacted op sample (client data → PRIVATE repo only), or `[]` when absent. Each
- *  value is made fully inert: strip backticks (can't close the code span), collapse newlines/tabs to
- *  a space (can't forge a new markdown line), HTML-escape, cap. Amount is a number → rendered plain. */
+/** Body lines for a redacted op sample (client data → PRIVATE repo only), or `[]` when absent. The
+ *  sample fields (purpose, counterparty) are PAYER-CONTROLLED, so each value is made fully inert:
+ *  strip HOSTILE_CHARS (bidi/zero-width/BOM/C0 — Trojan-Source, same as the employee channel), strip
+ *  backticks (can't close the code span), collapse newlines/tabs to a space (can't forge a markdown
+ *  line), HTML-escape, cap. Amount is a typed number → rendered plain. */
 function sampleLines(sample?: ProgramSample): string[] {
   if (!sample) return []
   const inertValue = (v: unknown, cap: number): string =>
-    escapeHtml(String(v ?? '').replace(/`/g, '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, cap))
+    escapeHtml(stripHostileChars(v).replace(/`/g, '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, cap))
   const line = (label: string, value: unknown): string | null => {
     const f = inertValue(value, 200)
     return f ? `- **${label}:** \`${f}\`` : null
@@ -134,8 +136,9 @@ export function programSignalSignature(signal: ProgramSignal): string {
 }
 
 /** Build the { title, body, labels } for a program feedback issue. Labels always `agent-feedback` +
- *  `feedback:problem` (docs/FEEDBACK.md). Body is non-PII (member/sha/provider escaped; internal
- *  shape only — counts / entity-type names / provider id). Pure. */
+ *  `feedback:problem` (docs/FEEDBACK.md). Non-PII EXCEPT a confusion signal carrying a `sample` (a
+ *  redacted client-data op) — then the footer flags that client data IS attached (the triage agent
+ *  keys its privacy handling off that line). member/sha/provider are escaped. Pure. */
 export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?: string, signal: ProgramSignal }): IssuePayload {
   // Render inside markdown code spans → strip backticks (can't close the span) THEN cap THEN escape,
   // so we never truncate mid-HTML-entity. Values are internal (hex/sha/enum) but keep it defensive.
@@ -148,7 +151,12 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
     `- **Сборка:** \`${sha}\``,
     ''
   ]
-  const tail = ['', '_Без данных клиента (счёт/сумма/назначение не приложены). Разбор — по FEEDBACK_TRIAGE_AGENT.md._']
+  // The footer must match reality: a confusion sample embeds client PII, otherwise the body is
+  // non-PII. The triage agent reads this line to decide privacy handling — it MUST NOT lie.
+  const hasClientData = input.signal.type === 'confusion' && !!input.signal.sample
+  const tail = ['', hasClientData
+    ? '_⚠ Содержит данные клиента (репозиторий приватный) — не переносить в публичный репо. Разбор — по FEEDBACK_TRIAGE_AGENT.md._'
+    : '_Без данных клиента (счёт/сумма/назначение не приложены). Разбор — по FEEDBACK_TRIAGE_AGENT.md._']
   const finish = (title: string, middle: string[]): IssuePayload => ({
     title: title.slice(0, 120),
     body: [...head, ...middle, ...tail].join('\n'),

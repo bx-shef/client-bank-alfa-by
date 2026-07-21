@@ -628,6 +628,10 @@ async function fileProgramFeedback(
   job: CrmSyncJob,
   summary: { unmatched: number, ambiguous: number, manual: number, sample?: ProgramSample }
 ): Promise<void> {
+  // The demo gate keys on the batch's first account. The redacted sample can come from ANY item, so
+  // this relies on crm-sync batches being account-homogeneous (demo load and real polls/imports are
+  // always separate jobs) — now privacy-load-bearing (a demo run must not leak a real op), not just
+  // for counting. That invariant holds by construction of the fetch/parse producers.
   const account = job.items[0]?.account ?? ''
   const { total, counts } = summarizeConfusion(summary)
   if (total === 0) return // nothing confused → no issue (skip before any config/Redis work)
