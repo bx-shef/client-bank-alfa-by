@@ -230,12 +230,16 @@ onMounted(async () => {
     <B24Slideover
       v-model:open="settingsOpen"
       title="Настройки"
-      description="Уведомления в чат, исключения. Демо: хранится локально."
+      description="Уведомления в чат, исключения, распознавание. Сохраняются в вашем портале Bitrix24."
       side="bottom"
     >
       <template #body>
         <ClientOnly>
-          <SettingsForm />
+          <!-- In the slideover: Save/Cancel dismiss the panel (asSlider), like a B24 slider. -->
+          <SettingsForm
+            :as-slider="true"
+            @close="settingsOpen = false"
+          />
         </ClientOnly>
       </template>
     </B24Slideover>

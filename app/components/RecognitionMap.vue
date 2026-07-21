@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // «Карта сопоставления» — UI editor for payment-purpose recognition (#109, PROCESSING.md §4).
 // Binds to the shared reactive `RecognitionSettings` (matrices + alphabet + configFields) via
-// v-model; the parent SettingsForm autosaves on deep change. Replaces hand-editing the
+// v-model; the parent SettingsForm persists on explicit Save. Replaces hand-editing the
 // `app.option` JSON. Uses b24ui (B24Card/B24Select/B24Input/B24Button/B24FormField/B24Badge).
 // The server still defensively coerces/clamps everything (parsePortalSettings, DoS caps) — this
 // form is convenience, not the source of trust.
