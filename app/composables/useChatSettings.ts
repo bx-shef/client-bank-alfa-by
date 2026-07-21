@@ -1,4 +1,4 @@
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { defaultPortalSettings, type PortalSettings } from '~/utils/settings'
@@ -38,6 +38,13 @@ function create() {
   // before the menu is opened. Resolved from the recent-chats list on load.
   const notifyOption = ref<ChatOption | undefined>()
   const errorOption = ref<ChatOption | undefined>()
+
+  // Clear the "Сохранено ✓" indicator as soon as the user edits again (explicit-save UX):
+  // otherwise the green "saved" would linger next to unsaved changes. One-way flag clear —
+  // harmless when it fires during load() (savedOk is already false then).
+  watch(settings, () => {
+    if (savedOk.value) savedOk.value = false
+  }, { deep: true })
 
   /** Search transport for the chat pickers (AsyncSearchSelect fetcher). Hits the
    *  backend proxy with the frame token; inert (empty) outside the portal. */

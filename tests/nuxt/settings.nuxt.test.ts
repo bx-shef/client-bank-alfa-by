@@ -34,14 +34,26 @@ function previewRows(wrapper: VueWrapper) {
   return wrapper.findAll('[data-testid="preview-list"] li')
 }
 
+// Settings are grouped into a B24Accordion (starter #219 UX): only «Уведомления в чат»
+// (index 0) is open on mount; reka-ui unmounts collapsed panels, so a test touching a
+// field in another section must expand it first by clicking its header trigger.
+async function openSection(wrapper: VueWrapper, label: string) {
+  const trigger = wrapper.findAll('button').find(b => b.text().trim() === label)
+  if (trigger) await trigger.trigger('click')
+  await nextTick()
+}
+
 describe('settings page', () => {
   it('renders the heading, the grouped sections and one preview row per operation', async () => {
     const wrapper = await mountReady()
     const text = wrapper.text()
     expect(text).toContain('Настройки')
+    // Accordion section labels are always rendered (headers), even while collapsed.
     expect(text).toContain('Уведомления в чат')
-    expect(text).toContain('Чат для ошибок')
     expect(text).toContain('Исключения')
+    expect(text).toContain('Авто-проведение оплат')
+    // The error-chat field lives in the open first section.
+    expect(text).toContain('Чат ошибок импорта')
     expect(previewRows(wrapper)).toHaveLength(MOCK_STATEMENT.items.length)
   })
 
@@ -104,6 +116,7 @@ describe('settings page', () => {
 
   it('typing an exclude pattern marks the matching op NOT imported (UI wiring)', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Исключения')
     const textarea = wrapper.find('textarea[data-testid="exclude-patterns"]')
     expect(textarea.exists()).toBe(true)
     await textarea.setValue(MOCK_STATEMENT.items[creditIdx]!.purpose)
@@ -116,6 +129,7 @@ describe('settings page', () => {
   it('renders the auto-distribution section, off by default with no warning', async () => {
     const wrapper = await mountReady()
     expect(wrapper.text()).toContain('Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение оплат')
     expect(wrapper.find('[data-testid="auto-distribute"]').exists()).toBe(true)
     // The absent warning (driven by v-if="settings.autoDistribute") is what pins "off by default".
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(false)
@@ -123,6 +137,7 @@ describe('settings page', () => {
 
   it('enabling auto-distribution reveals the CRM-mutation warning', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
@@ -131,6 +146,7 @@ describe('settings page', () => {
 
   it('disabling auto-distribution again removes the warning (v-if teardown, not v-show)', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
@@ -144,11 +160,13 @@ describe('settings page', () => {
     // overwrite it, so the form must paint the warning from the loaded value on first render.
     useChatSettings().settings.autoDistribute = true
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
   })
 
   it('toggling the auto-distribution switch flips settings.autoDistribute (UI wiring)', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     expect(useChatSettings().settings.autoDistribute).toBe(false)
     await wrapper.find('[data-testid="auto-distribute"]').trigger('click')
     await nextTick()
@@ -161,6 +179,7 @@ describe('settings page', () => {
     useChatSettings().settings.autoDistribute = true
     useChatSettings().settings.allocation.invoicePaidStageId = 'DT31_11:P'
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
     expect(input.exists()).toBe(true)
     expect((input.element as HTMLInputElement).value).toBe('DT31_11:P')
@@ -168,6 +187,7 @@ describe('settings page', () => {
 
   it('paid-invoice-stage input appears only when auto-distribution is on', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     expect(wrapper.find('[data-testid="invoice-paid-stage"]').exists()).toBe(false) // hidden while OFF
     useChatSettings().settings.autoDistribute = true
     await nextTick()
@@ -176,6 +196,7 @@ describe('settings page', () => {
 
   it('typing a paid-invoice stage sets allocation.invoicePaidStageId; clearing removes it (UI wiring)', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
@@ -190,6 +211,7 @@ describe('settings page', () => {
 
   it('trigger-code field appears only when auto-distribution is on and shows the canonical CODE (#79)', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     expect(wrapper.find('[data-testid="trigger-code"]').exists()).toBe(false) // hidden while OFF
     useChatSettings().settings.autoDistribute = true
     await nextTick()
@@ -200,6 +222,7 @@ describe('settings page', () => {
 
   it('typing a trigger code sets allocation.triggerCode; clearing removes it (#79 UI wiring)', async () => {
     const wrapper = await mountReady()
+    await openSection(wrapper, 'Авто-проведение оплат')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     const input = wrapper.find('input[data-testid="trigger-code"]')

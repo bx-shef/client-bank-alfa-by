@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { watchDebounced } from '@vueuse/core'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import type { AccordionItem } from '@bitrix24/b24ui-nuxt'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
@@ -9,11 +9,18 @@ import { isExcludedOperation, parseRuleLines, shouldNotifyChat } from '~/utils/s
 import { B24_PAYMENT_TRIGGER } from '~/config/b24'
 import type { OperationDirection } from '~/types/statement'
 
-// Chat-notification settings form + live preview. One component for two entry
-// points: the slideover on /app and the full page /settings. Persistence is
-// server-side (app.option via the frame token — see useChatSettings), autosaved on
-// change. Gated on admin: a non-admin portal user sees a warning instead of the
-// form. Content is withheld until the admin check resolves (no fail-open flash).
+// Chat-notification settings form + live preview. One component for two entry points:
+// the full page /settings and the dismissable slideover on /app (a slide-over panel —
+// #219's "settings as a slider" spirit, without the B24 SDK slider, which only opens
+// PORTAL paths not our own app page). Settings are grouped into a B24Accordion and
+// persisted server-side (app.option via the frame token — see useChatSettings) with an
+// EXPLICIT Save/Cancel (starter #219 pattern — no autosave). Gated on admin: a non-admin
+// portal user sees a warning instead of the form. Content is withheld until the admin
+// check resolves (no fail-open flash). When embedded in the slideover (`asSlider`),
+// Save/Cancel emit `close` so /app can dismiss the panel; as a plain page they don't.
+const props = defineProps<{ asSlider?: boolean }>()
+const emit = defineEmits<{ close: [] }>()
+
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
 const { settings, enabled, saving, savedOk, loaded, error, notifyOption, errorOption, chatFetcher } = cs
@@ -21,7 +28,6 @@ const { settings, enabled, saving, savedOk, loaded, error, notifyOption, errorOp
 // Gate state: `adminChecked` flips only after init resolves + checkAdmin runs, so
 // the form is never rendered to an unverified (possibly non-admin) user.
 const adminChecked = ref(false)
-const autosaveReady = ref(false)
 const blocked = computed(() => inPortal.value && !isAdmin.value)
 
 // Exclusion textareas edit line-lists; mirror to settings via parseRuleLines.
@@ -45,21 +51,41 @@ onMounted(async () => {
   if (blocked.value) return // non-admin: don't load or expose the form
   if (!loaded.value) await cs.load()
   syncTextareas()
-  autosaveReady.value = true // enable autosave only AFTER load populates settings
 })
 
-// Autosave (debounced) to the backend on any change — no explicit Save, no lost
-// edits when the slideover is dismissed. Guarded so the load-time populate and the
-// standalone (no-portal) preview don't trigger writes.
-watchDebounced(settings, () => {
-  if (autosaveReady.value && enabled.value) cs.save()
-}, { debounce: 800, deep: true })
+// Explicit Save (starter Save/Cancel pattern — no autosave). cs.save() persists AND
+// notifies other open instances (pull `reload.options`). On success, close the slideover
+// if embedded in one; keep the form open on error so the admin can retry.
+async function saveAndClose(): Promise<void> {
+  if (!enabled.value) return
+  await cs.save()
+  if (error.value) return
+  if (props.asSlider) emit('close')
+}
 
-// Flush a final save on teardown (e.g. slideover dismissed inside the debounce
-// window) so the last edit isn't lost. Idempotent write; no-op without frame auth.
-onBeforeUnmount(() => {
-  if (autosaveReady.value && enabled.value) cs.save()
-})
+// Cancel = discard: re-fetch the server copy and re-seed the textarea editors, then (in the
+// slideover) close. The re-fetch matters even for the slideover: it shares this SAME JS
+// instance (the singleton settings), so without a reload the unsaved edits would still be in
+// `settings` and reappear when the slideover is re-opened. Re-seeding the textareas is needed
+// because they're seeded once on mount — a bare load() would leave them showing pre-cancel
+// edits that then re-sync back into settings on the next keystroke.
+async function cancel(): Promise<void> {
+  if (enabled.value) {
+    await cs.load()
+    syncTextareas()
+  }
+  if (props.asSlider) emit('close')
+}
+
+// Accordion sections (starter B24Accordion pattern) — group the settings into
+// collapsibles. v-model keys by item INDEX (b24ui default); '0' opens «Уведомления» first.
+const openSections = ref(['0'])
+const sections = computed(() => [
+  { label: 'Уведомления в чат', slot: 'chats' },
+  { label: 'Исключения', slot: 'exclusions' },
+  { label: 'Авто-проведение оплат', slot: 'distribute' },
+  { label: 'Карта распознавания', slot: 'recognition' }
+] satisfies AccordionItem[])
 
 // Direction toggles as switches (get/set over the notify rules array).
 function directionModel(d: OperationDirection) {
@@ -167,187 +193,191 @@ const previewSummary = computed(() => {
         class="mb-2"
       />
 
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Уведомления в чат
-          </h2>
-        </template>
-        <div class="space-y-4">
-          <B24FormField
-            label="Чат для уведомлений"
-            description="Куда слать сообщения о новых операциях."
-          >
-            <AsyncSearchSelect
-              v-model="settings.chat.dialogId"
-              :fetcher="chatFetcher"
-              :selected-option="notifyOption"
-              placeholder="Начните вводить название чата"
-              data-testid="notify-chat"
-              @update:selected-option="o => (settings.chat.title = o?.label as string | undefined)"
-            />
-          </B24FormField>
-
-          <B24Switch
-            v-model="notifyCredit"
-            label="Приходы"
-            description="когда деньги пришли на счёт"
-            data-testid="notify-credit"
-          />
-          <B24Switch
-            v-model="notifyDebit"
-            label="Расходы"
-            description="списания со счёта"
-            data-testid="notify-debit"
-          />
-        </div>
-      </B24Card>
-
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Чат для ошибок
-          </h2>
-        </template>
-        <B24FormField
-          label="Чат ошибок импорта"
-          description="Сюда приложение пишет о сбоях обработки — деловым тоном, с пометкой, что рапортует «Импорт выписки из клиент-банка». Отдельно от чата уведомлений."
-        >
-          <AsyncSearchSelect
-            v-model="settings.errorChat.dialogId"
-            :fetcher="chatFetcher"
-            :selected-option="errorOption"
-            placeholder="Начните вводить название чата"
-            data-testid="error-chat"
-            @update:selected-option="o => (settings.errorChat.title = o?.label as string | undefined)"
-          />
-        </B24FormField>
-      </B24Card>
-
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Исключения
-          </h2>
-        </template>
-        <div class="space-y-4">
-          <p class="text-sm text-(--ui-color-base-3)">
-            Такие операции <strong>полностью пропускаются</strong>: не создаётся дело в CRM и не уходит
-            уведомление в чат. (Чтобы просто не слать в чат, но заносить в CRM — используйте
-            переключатели «Приходы/Расходы» выше.)
-          </p>
-          <B24FormField
-            label="Не загружать по счетам"
-            description="По одному номеру счёта в строке. Операции по этим счетам не попадут в CRM."
-          >
-            <B24Textarea
-              v-model="accountsText"
-              :rows="3"
-              autoresize
-              placeholder="BY00..."
-              class="w-full font-mono text-xs"
-              data-testid="exclude-accounts"
-            />
-          </B24FormField>
-          <B24FormField
-            label="Не загружать по теме платежа"
-            description="Подстроки, по одной в строке. Совпало — операция не попадёт в CRM. Напр.: между своими счетами."
-          >
-            <B24Textarea
-              v-model="patternsText"
-              :rows="3"
-              autoresize
-              placeholder="между своими счетами"
-              class="w-full text-xs"
-              data-testid="exclude-patterns"
-            />
-          </B24FormField>
-        </div>
-      </B24Card>
-
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Авто-проведение оплат
-          </h2>
-        </template>
-        <div class="space-y-4">
-          <B24Switch
-            v-model="settings.autoDistribute"
-            label="Автоматически отмечать оплату в CRM"
-            description="Когда платёж однозначно распознан по номеру — приложение само пометит оплату «оплачено» / переведёт счёт на оплаченную стадию, а для сделки/смарт-процесса запустит триггер автоматизации (если задан код ниже)."
-            data-testid="auto-distribute"
-          />
-          <B24Alert
-            v-if="settings.autoDistribute"
-            color="air-primary-warning"
-            variant="soft"
-            title="Приложение будет изменять данные в CRM"
-            description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
-            data-testid="auto-distribute-warning"
-          />
-          <B24FormField
-            v-if="settings.autoDistribute"
-            label="Стадия оплаченного счёта"
-            description="Идентификатор стадии, в которую перевести смарт-счёт при оплате (напр. DT31_11:P). Оставьте пустым — стадию счёта менять не будем."
-          >
-            <B24Input
-              v-model="invoicePaidStageModel"
-              placeholder="DT31_11:P"
-              class="w-full font-mono text-xs"
-              data-testid="invoice-paid-stage"
-            />
-          </B24FormField>
-          <B24FormField
-            v-if="settings.autoDistribute"
-            label="Код триггера автоматизации"
-            data-testid="trigger-code-field"
-          >
-            <template #description>
-              При установке приложение зарегистрировало триггер
-              <strong>«{{ paymentTrigger.name }}»</strong>. Повесьте его на своё правило автоматизации
-              (сделки/смарт-процесса), затем впишите код <code class="font-mono">{{ paymentTrigger.code }}</code>
-              сюда — тогда при разнесении платежа на сделку приложение запустит этот триггер.
-              Оставьте пустым — триггер запускаться не будет.
-            </template>
-            <B24Input
-              v-model="triggerCodeModel"
-              :placeholder="paymentTrigger.code"
-              class="w-full font-mono text-xs"
-              data-testid="trigger-code"
-            />
-          </B24FormField>
-        </div>
-      </B24Card>
-
-      <!-- Recognition «карта сопоставления» (#109 §4): matrices + alphabet + configFields. -->
-      <RecognitionMap
-        v-model="settings.recognition"
-        :disabled="blocked"
-      />
-
-      <!-- Autosave status (no explicit Save button). Announced to screen readers. -->
-      <p
-        v-if="enabled"
-        class="text-xs"
-        :class="error ? 'text-(--ui-color-accent-main-alert)' : 'text-(--ui-color-base-3)'"
-        role="status"
-        aria-live="polite"
-        data-testid="save-status"
+      <B24Accordion
+        v-model="openSections"
+        type="multiple"
+        :items="sections"
       >
-        <template v-if="saving">
-          Сохранение…
+        <!-- Уведомления в чат: чат уведомлений + направления + чат ошибок. -->
+        <template #chats>
+          <div class="space-y-4 pt-2">
+            <B24FormField
+              label="Чат для уведомлений"
+              description="Куда слать сообщения о новых операциях."
+            >
+              <AsyncSearchSelect
+                v-model="settings.chat.dialogId"
+                :fetcher="chatFetcher"
+                :selected-option="notifyOption"
+                placeholder="Начните вводить название чата"
+                data-testid="notify-chat"
+                @update:selected-option="o => (settings.chat.title = o?.label as string | undefined)"
+              />
+            </B24FormField>
+
+            <B24Switch
+              v-model="notifyCredit"
+              label="Приходы"
+              description="когда деньги пришли на счёт"
+              data-testid="notify-credit"
+            />
+            <B24Switch
+              v-model="notifyDebit"
+              label="Расходы"
+              description="списания со счёта"
+              data-testid="notify-debit"
+            />
+
+            <B24FormField
+              label="Чат ошибок импорта"
+              description="Сюда приложение пишет о сбоях обработки — деловым тоном, с пометкой, что рапортует «Импорт выписки из клиент-банка». Отдельно от чата уведомлений."
+            >
+              <AsyncSearchSelect
+                v-model="settings.errorChat.dialogId"
+                :fetcher="chatFetcher"
+                :selected-option="errorOption"
+                placeholder="Начните вводить название чата"
+                data-testid="error-chat"
+                @update:selected-option="o => (settings.errorChat.title = o?.label as string | undefined)"
+              />
+            </B24FormField>
+          </div>
         </template>
-        <template v-else-if="error">
-          {{ error }}
+
+        <!-- Исключения: полностью пропускаемые операции. -->
+        <template #exclusions>
+          <div class="space-y-4 pt-2">
+            <p class="text-sm text-(--ui-color-base-3)">
+              Такие операции <strong>полностью пропускаются</strong>: не создаётся дело в CRM и не уходит
+              уведомление в чат. (Чтобы просто не слать в чат, но заносить в CRM — используйте
+              переключатели «Приходы/Расходы» выше.)
+            </p>
+            <B24FormField
+              label="Не загружать по счетам"
+              description="По одному номеру счёта в строке. Операции по этим счетам не попадут в CRM."
+            >
+              <B24Textarea
+                v-model="accountsText"
+                :rows="3"
+                autoresize
+                placeholder="BY00..."
+                class="w-full font-mono text-xs"
+                data-testid="exclude-accounts"
+              />
+            </B24FormField>
+            <B24FormField
+              label="Не загружать по теме платежа"
+              description="Подстроки, по одной в строке. Совпало — операция не попадёт в CRM. Напр.: между своими счетами."
+            >
+              <B24Textarea
+                v-model="patternsText"
+                :rows="3"
+                autoresize
+                placeholder="между своими счетами"
+                class="w-full text-xs"
+                data-testid="exclude-patterns"
+              />
+            </B24FormField>
+          </div>
         </template>
-        <template v-else-if="savedOk">
-          Сохранено ✓
+
+        <!-- Авто-проведение оплат: мутационный гейт §2. -->
+        <template #distribute>
+          <div class="space-y-4 pt-2">
+            <B24Switch
+              v-model="settings.autoDistribute"
+              label="Автоматически отмечать оплату в CRM"
+              description="Когда платёж однозначно распознан по номеру — приложение само пометит оплату «оплачено» / переведёт счёт на оплаченную стадию, а для сделки/смарт-процесса запустит триггер автоматизации (если задан код ниже)."
+              data-testid="auto-distribute"
+            />
+            <B24Alert
+              v-if="settings.autoDistribute"
+              color="air-primary-warning"
+              variant="soft"
+              title="Приложение будет изменять данные в CRM"
+              description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
+              data-testid="auto-distribute-warning"
+            />
+            <B24FormField
+              v-if="settings.autoDistribute"
+              label="Стадия оплаченного счёта"
+              description="Идентификатор стадии, в которую перевести смарт-счёт при оплате (напр. DT31_11:P). Оставьте пустым — стадию счёта менять не будем."
+            >
+              <B24Input
+                v-model="invoicePaidStageModel"
+                placeholder="DT31_11:P"
+                class="w-full font-mono text-xs"
+                data-testid="invoice-paid-stage"
+              />
+            </B24FormField>
+            <B24FormField
+              v-if="settings.autoDistribute"
+              label="Код триггера автоматизации"
+              data-testid="trigger-code-field"
+            >
+              <template #description>
+                При установке приложение зарегистрировало триггер
+                <strong>«{{ paymentTrigger.name }}»</strong>. Повесьте его на своё правило автоматизации
+                (сделки/смарт-процесса), затем впишите код <code class="font-mono">{{ paymentTrigger.code }}</code>
+                сюда — тогда при разнесении платежа на сделку приложение запустит этот триггер.
+                Оставьте пустым — триггер запускаться не будет.
+              </template>
+              <B24Input
+                v-model="triggerCodeModel"
+                :placeholder="paymentTrigger.code"
+                class="w-full font-mono text-xs"
+                data-testid="trigger-code"
+              />
+            </B24FormField>
+          </div>
         </template>
-        <template v-else>
-          Изменения сохраняются автоматически.
+
+        <!-- Карта распознавания (#109 §4): matrices + alphabet + configFields. -->
+        <template #recognition>
+          <div class="pt-2">
+            <RecognitionMap
+              v-model="settings.recognition"
+              :disabled="blocked"
+            />
+          </div>
         </template>
-      </p>
+      </B24Accordion>
+
+      <!-- Explicit Save/Cancel (no autosave). Save persists + notifies other instances. -->
+      <div
+        v-if="enabled"
+        class="flex items-center gap-3"
+      >
+        <B24Button
+          color="air-primary-success"
+          :loading="saving"
+          :disabled="saving || !isAdmin"
+          :label="saving ? 'Сохранение…' : 'Сохранить'"
+          data-testid="settings-save"
+          @click="saveAndClose"
+        />
+        <B24Button
+          color="air-tertiary"
+          :disabled="saving"
+          :label="asSlider ? 'Отмена' : 'Отменить изменения'"
+          data-testid="settings-cancel"
+          @click="cancel"
+        />
+        <span
+          v-if="savedOk && !saving"
+          class="text-sm text-(--ui-color-accent-main-success)"
+          role="status"
+          aria-live="polite"
+          data-testid="save-status"
+        >Сохранено ✓</span>
+        <span
+          v-else-if="error && !saving"
+          class="text-sm text-(--ui-color-accent-main-alert)"
+          role="status"
+          aria-live="polite"
+          data-testid="save-status"
+        >{{ error }}</span>
+      </div>
     </B24Form>
 
     <!-- Live preview: the main feedback of the settings. -->
