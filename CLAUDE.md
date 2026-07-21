@@ -1252,9 +1252,11 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
 `jobId→сущность` нет) **+ программа-канал (MVP)** — воркер `crm-sync` заводит `agent-feedback` issue,
 когда «запутался» (`unmatched`/`ambiguous`/`manual`): чистый билдер `app/utils/programFeedback.ts`
 (non-PII: только счётчики + `member_id` + sha) + гейт дедуп-по-корню + кап 10/час
-`server/utils/programFeedbackCap.ts` (Redis `SET NX`/`INCR`, DI+тесты) + хвост `fileProgramFeedback`
-в `worker.ts` (best-effort, демо-гейт, гейт на `feedbackConfig`+Redis); сигналы «формат не распознан»/
-«fail-open стадий» и сэмпл операции — follow-up. Два дока:
+`server/utils/programFeedbackCap.ts` (Redis `SET NX`/`INCR`, DI+тесты). **Три сигнала — union
+`ProgramSignal`** (`confusion` счётчики / `fail-open` сущности / `format` провайдер), общий хелпер
+`fileProgramSignal` в `worker.ts` в трёх точках (crm-sync хвост / `loadNegativeStagePredicate` /
+`file-parse` catch), дедуп-сигнатура с неймспейсом по типу; сэмпл операции / вложение файла в
+программный issue — follow-up. Два дока:
 - **Базовый канал «сотрудник» (реализовано):** виджет `app/components/FeedbackWidget.vue` (+
   `useFeedback.ts`) на `/app` под полосой статуса **и на `/import`** (под разбором, с файл-вложением) —
   👍 шлёт сразу, 👎 сперва открывает поле комментария. **Файл-вложение (#198):** проп `fileText`
