@@ -9,7 +9,11 @@
 // (A8) by a GLOBAL BullMQ queue limiter (fleet-wide, default 100/60s — QUEUE_FETCH_RATE_*).
 
 import { Worker } from 'bullmq'
-import { connectionOptions } from './connection'
+import { claimCooldownSlot, connectionOptions, incrementWithTtl, queueEnabled } from './connection'
+import { resolveFeedbackConfig } from '../utils/feedbackConfig'
+import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
+import { buildProgramFeedbackIssue, confusionSignature, summarizeConfusion } from '../../app/utils/programFeedback'
+import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
 import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
@@ -62,6 +66,14 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
 const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCandidateByField, findCompanyDealPayments, findOrderPaymentIds, findDocumentEntities }
+
+/** Redis dedup + hourly-cap primitives for the program feedback channel (docs/FEEDBACK.md). Bound
+ *  to the shared queue client; only used when queueEnabled(). */
+const programFeedbackGateDeps: ProgramFeedbackGateDeps = {
+  claimDedup: (key, ttl) => claimCooldownSlot(key, ttl),
+  incrCap: (key, ttl) => incrementWithTtl(key, ttl),
+  now: Date.now
+}
 
 // Per-portal RestCall resolver for every crm-sync REST op (#191). Transport is the
 // @bitrix24/b24jssdk SDK: its per-instance RestrictionManager IS the rate-limiter
@@ -514,6 +526,9 @@ export function startThroughputWorkers(
         // Accumulate LIFETIME per-portal counters for the dashboard (#78). Same
         // best-effort/demo-gated contract — bookkeeping must never fail a job.
         await bumpMetrics(job.data, summary)
+        // Program feedback (docs/FEEDBACK.md channel 2): if the run «got confused», file a deduped,
+        // rate-capped issue in the private repo. Same best-effort/demo-gated contract.
+        await fileProgramFeedback(job.data, summary)
         return summary
       }, summary => ({
         'proc.recognized': summary.recognized,
@@ -562,6 +577,35 @@ async function bumpMetrics(
     await bumpCounters(dbQuery, job.memberId, metricsFromSummary(summary))
   } catch (e) {
     console.error('metrics bump failed', job.memberId, (e as Error)?.message)
+  }
+}
+
+/** File a «программа запуталась» feedback issue when the run had confused outcomes (unmatched/
+ *  ambiguous/manual), gated by: real (non-demo) portal, the channel being configured
+ *  (GITHUB_FEEDBACK_*), Redis available (for dedup/cap), and the dedup + hourly-cap gate. Best-effort
+ *  — a feedback failure must never fail the job. docs/FEEDBACK.md channel 2. */
+async function fileProgramFeedback(
+  job: CrmSyncJob,
+  summary: { unmatched: number, ambiguous: number, manual: number }
+): Promise<void> {
+  const account = job.items[0]?.account ?? ''
+  if (!account || isDemoAccount(account)) return
+  const { kinds, total, counts } = summarizeConfusion(summary)
+  if (total === 0) return // nothing confused → no issue
+  const config = resolveFeedbackConfig()
+  if (!config) return // channel off (no GITHUB_FEEDBACK_* → fail-closed, like the employee channel)
+  if (!queueEnabled()) return // need Redis for dedup + hourly cap; without it, don't risk spamming
+  try {
+    const gate = await claimProgramFeedbackSlot(programFeedbackGateDeps, job.memberId, confusionSignature(kinds))
+    if (!gate.file) return // deduped or hourly cap reached
+    const payload = buildProgramFeedbackIssue({
+      memberId: job.memberId,
+      commitSha: process.env.NUXT_PUBLIC_COMMIT_SHA,
+      counts
+    })
+    await postFeedbackIssue(config, payload, globalThis.fetch as unknown as FeedbackFetchFn)
+  } catch (e) {
+    console.error('program feedback failed', job.memberId, (e as Error)?.message)
   }
 }
 
