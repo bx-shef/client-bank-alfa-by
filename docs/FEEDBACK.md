@@ -75,19 +75,25 @@
 | `unmatched` | компания по счёту не найдена (нет реквизита `RQ_ACC_NUM`/`RQ_IIK`) | ✅ |
 | `ambiguous` | несколько кандидатов одной суммы — разнесение неоднозначно | ✅ |
 | `manual` | нет точного совпадения — ушло в ручную очередь | ✅ |
-| формат выписки не распознан | падает разбор `Type=X` / 1С-формат | ⏳ follow-up |
-| fail-open по стадиям | `crm.status.list` вернул пусто для известной категории | ⏳ follow-up |
+| формат выписки не распознан | падает разбор `Type=X` / 1С-формат (file-parse) | ✅ |
+| fail-open по стадиям | `crm.status.list` вернул пусто для известной воронки | ✅ |
 
-- Метка issue: `agent-feedback` + `feedback:problem`.
-- **Non-PII:** тело issue несёт **только счётчики** запутавшихся исходов + `member_id` + sha
-  сборки. Счёт/сумма/назначение/контрагент **не** прикладываются (в отличие от файла-вложения
-  сотрудника). Сэмпл операции — follow-up.
+- Метка issue: `agent-feedback` + `feedback:problem`. Три вида сигнала — **union `ProgramSignal`**
+  (`confusion` счётчики / `fail-open` список сущностей / `format` провайдер).
+- **Non-PII:** тело issue несёт **только** внутреннюю форму сигнала (счётчики / имена сущностей
+  invoice·deal·smart-process / id провайдера) + `member_id` + sha сборки. Счёт/сумма/назначение/
+  контрагент **не** прикладываются (в отличие от файла-вложения сотрудника). Сэмпл операции — follow-up.
 - **Дедуп + кап** (`server/utils/programFeedbackCap.ts`, чистое ядро над Redis, DI+тесты): дедуп по
-  «корню» = сигнатура набора запутавшихся видов (`ambiguous+manual`), не чаще 1 раза в час на портал;
+  «корню» = **сигнатура сигнала с неймспейсом по типу** (`confusion:ambiguous+manual` /
+  `failopen:deal+invoice` / `format:alfa-by` — не пересекаются), не чаще 1 раза в час на портал;
   плюс **кап 10 issue/час на портал** (Redis `INCR`-бакет), чтобы сломанный формат не завёл сотни.
-- **Гейт:** канал включён (`GITHUB_FEEDBACK_*`, fail-closed), Redis доступен (иначе не рискуем спамить),
-  портал не демо. Чистые ядра — `app/utils/programFeedback.ts` (билдер issue + сигнатура) +
-  `server/utils/programFeedbackCap.ts` (гейт); проводка — хвост `fileProgramFeedback` в `worker.ts`.
+- **Проводка (3 точки, все best-effort):** `confusion` — хвост `fileProgramFeedback` в `crm-sync`
+  (demo-гейт по счёту); `fail-open` — в `loadNegativeStagePredicate` при `failOpenEntities.length>0`
+  (fire-and-forget, только реальные порталы с токеном сюда доходят); `format` — в воркере `file-parse`
+  при падении разбора (fire-and-forget + re-throw, аплоуд всегда реальный, demo-гейт не нужен).
+- **Гейт:** канал включён (`GITHUB_FEEDBACK_*`, fail-closed), Redis доступен (иначе не рискуем спамить).
+  Общий хелпер `fileProgramSignal` в `worker.ts`; чистые ядра — `app/utils/programFeedback.ts`
+  (union-билдер issue + `programSignalSignature`) + `server/utils/programFeedbackCap.ts` (гейт).
 
 ## Формат issue-отзыва (в приватном репо)
 
@@ -149,10 +155,10 @@
    (#197) **пропущена** (импорт fire-and-forget, `jobId→сущность` нет). **Кап/дедуп
    и для сотрудника** (не только для программы) — один оператор не должен наспамить сотней issue:
    кап N/час по инициатору + дедуп по `member_id|kind` + содержимому (пока не сделан).
-3. **Канал «программа»** — ✅ **MVP готов**: из `crm-sync` заводится `agent-feedback` issue на
-   сигналах `unmatched/ambiguous/manual`; серверный дедуп по корню + кап 10/час (Redis);
-   тело **non-PII** (только счётчики + member_id + sha). **Осталось (follow-up):** сигналы
-   «не-распознан-формат» и «fail-open по стадиям»; сэмпл операции / вложение файла выписки.
+3. **Канал «программа»** — ✅ **готов**: `agent-feedback` issue на сигналах `unmatched/ambiguous/
+   manual` (crm-sync), **`format`** (падение разбора в file-parse) и **`fail-open`** (пустая загрузка
+   стадий); серверный дедуп по корню (неймспейс по типу) + кап 10/час (Redis); тело **non-PII**.
+   **Осталось (follow-up):** сэмпл операции / вложение файла выписки в программный issue.
 4. **Токены/безопасность** — **два РАЗНЫХ пути записи, не путать:**
    - **Сбор** (каналы 1–2: сервер приложения заводит issue в **приватном** репо) — бэкенду
      нужен GitHub-креденшл с правом **Issues: RW** на приватный feedback-репо: fine-grained PAT

@@ -12,7 +12,7 @@ import { Worker } from 'bullmq'
 import { claimCooldownSlot, connectionOptions, incrementWithTtl, queueEnabled } from './connection'
 import { resolveFeedbackConfig } from '../utils/feedbackConfig'
 import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
-import { buildProgramFeedbackIssue, confusionSignature, summarizeConfusion } from '../../app/utils/programFeedback'
+import { buildProgramFeedbackIssue, programSignalSignature, summarizeConfusion, type ProgramSignal } from '../../app/utils/programFeedback'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
@@ -249,6 +249,11 @@ export function liveHandlerDeps(): HandlerDeps {
           return `${e}(funnels=${d?.categories},neg=${d?.negativeStages},empty=${d?.emptyCategories})`
         }).join(' ')
         console.warn(`[stage] portal ${memberId}: suspicious negative-stage load — ${detail} (a funnel with 0 lost/fail stages, or none enumerated) — check rights/config; those entities won't be stage-excluded (fail-open)`)
+        // Program feedback (docs/FEEDBACK.md channel 2, fail-open signal). Fire-and-forget: this is
+        // the hot resolution path — don't delay the predicate on a GitHub POST (fileProgramSignal
+        // swallows internally, so the void promise never rejects). No account here, but only real
+        // portals (call non-null above) reach this point → no demo gate needed.
+        void fileProgramSignal(memberId, { type: 'fail-open', entities: suspicious })
       }
       return predicate
     },
@@ -508,7 +513,18 @@ export function startThroughputWorkers(
       'job.queue': 'file-parse',
       'job.provider': job.data.providerId,
       'portal.hash': portalHash(job.data.memberId)
-    }, () => handleParseJob(job.data, deps), r => ({ 'job.op_count': r.parsed })), { connection, concurrency }),
+    }, async () => {
+      try {
+        return await handleParseJob(job.data, deps)
+      } catch (e) {
+        // A parse failure = the statement format wasn't recognized (docs/FEEDBACK.md channel 2,
+        // format signal). File a best-effort program issue (fire-and-forget so the job fails fast),
+        // then RE-THROW so BullMQ retry/failure behaviour is unchanged. A file-parse job is always a
+        // real manual upload (demo uses the fetch path), so no demo gate — pass no account.
+        void fileProgramSignal(job.data.memberId, { type: 'format', providerId: job.data.providerId })
+        throw e
+      }
+    }, r => ({ 'job.op_count': r.parsed })), { connection, concurrency }),
     new Worker<CrmSyncJob>(Q_CRM, async (job) => {
       // Job-level trace span (#78) — no-op unless telemetry is on. Only SAFE shape/outcome
       // attributes (counts, provider, hashed portal); never operation content.
@@ -580,33 +596,41 @@ async function bumpMetrics(
   }
 }
 
-/** File a «программа запуталась» feedback issue when the run had confused outcomes (unmatched/
- *  ambiguous/manual), gated by: real (non-demo) portal, the channel being configured
- *  (GITHUB_FEEDBACK_*), Redis available (for dedup/cap), and the dedup + hourly-cap gate. Best-effort
- *  — a feedback failure must never fail the job. docs/FEEDBACK.md channel 2. */
+/** File a program feedback issue for a «confusion» signal (docs/FEEDBACK.md channel 2), gated by:
+ *  the channel being configured (GITHUB_FEEDBACK_*), Redis available (for dedup/cap), the demo/empty
+ *  gate (when an account is known), and the dedup + hourly-cap gate. Best-effort — a feedback failure
+ *  must never affect the caller. Shared by the confusion tail (crm-sync), the fail-open detector and
+ *  the parse-failure (format) path. */
+async function fileProgramSignal(memberId: string, signal: ProgramSignal, account?: string): Promise<void> {
+  // Demo/empty gate ONLY when the account is known (confusion/format). fail-open has no account but
+  // only real portals (with a stored OAuth token) reach its detector, so it needs no demo gate.
+  if (account !== undefined && (!account || isDemoAccount(account))) return
+  const config = resolveFeedbackConfig()
+  if (!config) return // channel off (no GITHUB_FEEDBACK_* → fail-closed, like the employee channel)
+  if (!queueEnabled()) return // need Redis for dedup + hourly cap; without it, don't risk spamming
+  try {
+    // fail-open is a persistent config state (a funnel with no lost/fail stage trips it on EVERY
+    // run), so give it a longer dedup window (24h) — else a misconfigured portal files hourly. A
+    // confusion/format shape is a per-run/per-upload event → the default 1h window.
+    const opts = signal.type === 'fail-open' ? { dedupWindowSec: 24 * 3600 } : {}
+    const gate = await claimProgramFeedbackSlot(programFeedbackGateDeps, memberId, programSignalSignature(signal), opts)
+    if (!gate.file) return // deduped or hourly cap reached
+    const payload = buildProgramFeedbackIssue({ memberId, commitSha: process.env.NUXT_PUBLIC_COMMIT_SHA, signal })
+    await postFeedbackIssue(config, payload, globalThis.fetch as unknown as FeedbackFetchFn)
+  } catch (e) {
+    console.error('program feedback failed', memberId, (e as Error)?.message)
+  }
+}
+
+/** Confusion signal from a crm-sync run summary (unmatched/ambiguous/manual). */
 async function fileProgramFeedback(
   job: CrmSyncJob,
   summary: { unmatched: number, ambiguous: number, manual: number }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
-  if (!account || isDemoAccount(account)) return
-  const { kinds, total, counts } = summarizeConfusion(summary)
-  if (total === 0) return // nothing confused → no issue
-  const config = resolveFeedbackConfig()
-  if (!config) return // channel off (no GITHUB_FEEDBACK_* → fail-closed, like the employee channel)
-  if (!queueEnabled()) return // need Redis for dedup + hourly cap; without it, don't risk spamming
-  try {
-    const gate = await claimProgramFeedbackSlot(programFeedbackGateDeps, job.memberId, confusionSignature(kinds))
-    if (!gate.file) return // deduped or hourly cap reached
-    const payload = buildProgramFeedbackIssue({
-      memberId: job.memberId,
-      commitSha: process.env.NUXT_PUBLIC_COMMIT_SHA,
-      counts
-    })
-    await postFeedbackIssue(config, payload, globalThis.fetch as unknown as FeedbackFetchFn)
-  } catch (e) {
-    console.error('program feedback failed', job.memberId, (e as Error)?.message)
-  }
+  const { total, counts } = summarizeConfusion(summary)
+  if (total === 0) return // nothing confused → no issue (skip before any config/Redis work)
+  await fileProgramSignal(job.memberId, { type: 'confusion', counts }, account)
 }
 
 /**
