@@ -19,6 +19,7 @@ import { listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
+import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
@@ -176,10 +177,21 @@ export default defineNitroPlugin((nitroApp) => {
         warn: (m: string) => console.warn(m)
       }
       const sweepMs = sweepIntervalMs(Number(process.env.STATEMENT_SWEEP_INTERVAL_MIN || 30))
+      const tombstoneDays = resolveTombstoneDays(process.env.TOMBSTONE_TTL_DAYS)
       const runSweep = async () => {
         try {
           // Cron root span (#78) — groups the per-queue clean calls under one trace.
-          await withSpan('cron.sweep', { 'job.queue': 'cron.sweep' }, () => runStatementSweep(sweepDeps))
+          await withSpan('cron.sweep', { 'job.queue': 'cron.sweep' }, async () => {
+            await runStatementSweep(sweepDeps)
+            // Cap portal_tombstone growth (#77) — one row per permanently-removed portal would
+            // otherwise accrue forever. Isolated so a failure here can't skip the statement clean.
+            try {
+              const removed = await sweepExpiredTombstones(dbQuery, tombstoneDays)
+              if (removed) console.info('[retention] swept %d expired tombstone(s)', removed)
+            } catch (e) {
+              console.error('[retention] tombstone sweep failed:', (e as Error)?.message)
+            }
+          })
         } catch (err) {
           // Per-queue clean failures are isolated inside runStatementSweep; only an unexpected
           // throw reaches here. Never let it crash the cron instance.
@@ -188,7 +200,7 @@ export default defineNitroPlugin((nitroApp) => {
       }
       sweepTimer = setInterval(runSweep, sweepMs)
       void runSweep() // once at boot
-      console.info('[queue] statement retention sweep scheduled (every %d min, #245)', sweepMs / 60_000)
+      console.info('[queue] statement + tombstone retention sweep scheduled (every %d min; tombstone TTL %d d, #245/#77)', sweepMs / 60_000, tombstoneDays)
     }
   } else {
     console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')

@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS portal_tokens (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Ordering-guard tombstone (#77): deleted_ts = B24 event ts in SECONDS. Only needs to outlive a
+-- late/retried install for the SAME uninstall (hours), so rows older than TOMBSTONE_TTL_DAYS (~30d,
+-- a months-old tombstone can no longer be raced) are swept — see server/utils/tombstoneSweep.ts.
 CREATE TABLE IF NOT EXISTS portal_tombstone (
   member_id   TEXT PRIMARY KEY,
   deleted_ts  BIGINT NOT NULL
