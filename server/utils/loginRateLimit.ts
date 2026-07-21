@@ -22,12 +22,20 @@ export interface RateLimiter {
 /** Create a fixed-window limiter allowing `max` hits per `windowMs` per key. The bucket map is
  *  swept lazily (a key whose window elapsed is reset on its next hit), and fully pruned whenever
  *  it grows past `maxKeys` to bound memory under IP-spray. Pure over an injected clock via the
- *  `nowMs` arg — unit-testable without real time. */
-export function createRateLimiter(opts: { windowMs: number, max: number, maxKeys?: number }): RateLimiter {
+ *  `nowMs` arg — unit-testable without real time.
+ *
+ *  `globalMax` (optional) adds a SECOND ceiling across ALL keys in the same window. The per-key
+ *  key is `X-Forwarded-For`, which is client-controlled — an attacker rotating a fake first hop
+ *  gets a fresh per-key bucket every request and would bypass the per-IP limit entirely. The
+ *  global cap catches that: a spray still hits a wall. Set it well above the per-key limit so a
+ *  handful of legit operators never trip it, but low enough to blunt distributed brute force. */
+export function createRateLimiter(opts: { windowMs: number, max: number, maxKeys?: number, globalMax?: number }): RateLimiter {
   const windowMs = Math.max(1, Math.floor(opts.windowMs))
   const max = Math.max(1, Math.floor(opts.max))
   const maxKeys = Math.max(1, Math.floor(opts.maxKeys ?? 10_000))
+  const globalMax = opts.globalMax !== undefined ? Math.max(1, Math.floor(opts.globalMax)) : undefined
   const buckets = new Map<string, { count: number, resetAt: number }>()
+  let global = { count: 0, resetAt: 0 }
 
   return {
     check(key: string, nowMs: number): RateLimitDecision {
@@ -41,16 +49,26 @@ export function createRateLimiter(opts: { windowMs: number, max: number, maxKeys
         if (buckets.size > maxKeys) buckets.clear()
       }
 
+      // Global ceiling (XFF-spoof backstop): checked FIRST and does not consume the per-key
+      // budget when it blocks. Roll the window if elapsed.
+      if (globalMax !== undefined) {
+        if (global.resetAt <= nowMs) global = { count: 0, resetAt: nowMs + windowMs }
+        if (global.count >= globalMax) {
+          return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((global.resetAt - nowMs) / 1000)) }
+        }
+      }
+
       const cur = buckets.get(key)
-      if (!cur || cur.resetAt <= nowMs) {
-        buckets.set(key, { count: 1, resetAt: nowMs + windowMs })
-        return { allowed: true, retryAfterSec: 0 }
+      const perKeyBlocked = cur && cur.resetAt > nowMs && cur.count >= max
+      if (perKeyBlocked) {
+        return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((cur!.resetAt - nowMs) / 1000)) }
       }
-      if (cur.count < max) {
-        cur.count++
-        return { allowed: true, retryAfterSec: 0 }
-      }
-      return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((cur.resetAt - nowMs) / 1000)) }
+
+      // Allowed: consume BOTH budgets.
+      if (!cur || cur.resetAt <= nowMs) buckets.set(key, { count: 1, resetAt: nowMs + windowMs })
+      else cur.count++
+      if (globalMax !== undefined) global.count++
+      return { allowed: true, retryAfterSec: 0 }
     }
   }
 }

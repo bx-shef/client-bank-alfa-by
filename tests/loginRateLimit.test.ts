@@ -34,6 +34,33 @@ describe('createRateLimiter (fixed window)', () => {
     expect(rl.check('ip', 30_000).retryAfterSec).toBe(30)
   })
 
+  it('enforces a global ceiling across DISTINCT keys (X-Forwarded-For spoof backstop)', () => {
+    // Per-key limit is high (never trips), but globalMax=3 caps total across all keys — an
+    // attacker rotating a fake XFF (unique key each hit) still hits the wall.
+    const rl = createRateLimiter({ windowMs: 60_000, max: 100, globalMax: 3 })
+    expect(rl.check('ip1', 0).allowed).toBe(true)
+    expect(rl.check('ip2', 0).allowed).toBe(true)
+    expect(rl.check('ip3', 0).allowed).toBe(true)
+    const blocked = rl.check('ip4', 0) // 4th distinct key → global cap hit
+    expect(blocked.allowed).toBe(false)
+    expect(blocked.retryAfterSec).toBe(60)
+  })
+
+  it('global ceiling resets with its own window', () => {
+    const rl = createRateLimiter({ windowMs: 60_000, max: 100, globalMax: 1 })
+    expect(rl.check('a', 0).allowed).toBe(true)
+    expect(rl.check('b', 100).allowed).toBe(false) // global cap
+    expect(rl.check('c', 60_001).allowed).toBe(true) // new global window
+  })
+
+  it('a global block does NOT consume the per-key budget', () => {
+    const rl = createRateLimiter({ windowMs: 60_000, max: 2, globalMax: 1 })
+    expect(rl.check('x', 0).allowed).toBe(true) // consumes global(1) + x(1)
+    expect(rl.check('x', 0).allowed).toBe(false) // global cap blocks; x budget NOT spent
+    // once the global window rolls, x still has 1 left (only 1 was consumed pre-block)
+    expect(rl.check('x', 60_001).allowed).toBe(true)
+  })
+
   it('prunes/clears when the key map blows past maxKeys (memory backstop)', () => {
     const rl = createRateLimiter({ windowMs: 10, max: 1, maxKeys: 2 })
     // Fill 3 keys with SHORT windows, all expired by t=100.

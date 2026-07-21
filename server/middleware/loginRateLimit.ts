@@ -10,9 +10,11 @@ import { securityHeadersEnabled } from '../utils/securityHeaders'
 import { clientIpKey, createRateLimiter } from '../utils/loginRateLimit'
 
 // One shared limiter for this process (Black Hole is single-process): ~10 attempts / minute per
-// client IP, mirroring the nginx `login` zone rate (#64). Module scope so it persists across
-// requests.
-const loginLimiter = createRateLimiter({ windowMs: 60_000, max: 10 })
+// client IP, mirroring the nginx `login` zone rate (#64). `globalMax` (60/min across ALL keys) is
+// the backstop for X-Forwarded-For spoofing — the per-key key is client-controlled, so a rotating
+// fake XFF would otherwise get a fresh bucket each request; 60/min still walls a spray while
+// leaving a handful of real operators untouched. Module scope so it persists across requests.
+const loginLimiter = createRateLimiter({ windowMs: 60_000, max: 10, globalMax: 60 })
 
 export default defineEventHandler((event) => {
   if (!securityHeadersEnabled()) return

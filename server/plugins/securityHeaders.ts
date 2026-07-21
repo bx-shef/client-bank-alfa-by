@@ -1,10 +1,12 @@
-// Nitro plugin: stamps baseline security headers on EVERY response — including PRERENDERED
-// static pages (/, /import, …), which `server/middleware/` does NOT cover (the static-asset
-// handler serves them without running request middleware, and CSP is document-scoped, so it
-// MUST reach the HTML). The `beforeResponse` hook fires for static serves too, so headers land
-// on both the landing and the API. Gated by `SECURITY_HEADERS_ENABLED` — set only by the no-nginx
-// Vibecode Black Hole deploy (docs/DEPLOY_VIBECODE.md); behind nginx the flag is unset and this is
-// a no-op (nginx owns the headers). Pure builder: server/utils/securityHeaders.ts (unit-tested).
+// Nitro plugin: stamps baseline security headers on every SUCCESS-path response — crucially
+// including PRERENDERED static pages (/, /import, …), which `server/middleware/` does NOT cover
+// (the static-asset handler serves them without running request middleware, and CSP is
+// document-scoped, so it MUST reach the HTML). The `beforeResponse` hook fires for static serves
+// too, so headers land on both the landing and the API. (Thrown errors route through onError and
+// skip this hook — a 4xx/5xx JSON error body ships without CSP; negligible, no HTML there.) Gated
+// by `SECURITY_HEADERS_ENABLED` — set only by the no-nginx Vibecode Black Hole deploy
+// (docs/DEPLOY_VIBECODE.md); behind nginx the flag is unset and this is a no-op (nginx owns the
+// headers). Pure builder: server/utils/securityHeaders.ts (unit-tested).
 
 import { buildSecurityHeaders, securityHeadersEnabled } from '../utils/securityHeaders'
 
