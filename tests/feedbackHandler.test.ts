@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleFeedbackSubmit, type FeedbackSubmitDeps } from '../server/utils/feedbackHandler'
 import type { PostIssueResult } from '../server/utils/feedbackGithub'
+import type { IssuePayload } from '../app/utils/feedback'
 
 const okPost: PostIssueResult = { ok: true, status: 201, retryable: false, number: 5 }
+const builtPayload: IssuePayload = { title: 't', body: 'ok', labels: ['user-feedback', 'feedback:up'] }
 
 function deps(over: Partial<FeedbackSubmitDeps> = {}): FeedbackSubmitDeps {
   return {
     config: { token: 'tok', repo: 'org/private' },
     memberIdByDomain: async () => 'M',
     validateFrame: async () => 'user-7',
+    buildIssue: vi.fn(() => builtPayload),
     postIssue: vi.fn(async () => okPost),
     recordMetric: vi.fn(async () => {}),
     ...over
@@ -51,24 +54,50 @@ describe('handleFeedbackSubmit', () => {
     expect((await handleFeedbackSubmit(deps({ validateFrame: async () => '' }), IN)).status).toBe(403)
   })
 
-  it('200 { ok, number } on a filed issue', async () => {
+  it('200 { ok, number } on a filed issue — builds then posts the built payload', async () => {
     const d = deps()
     const r = await handleFeedbackSubmit(d, IN)
     expect(r).toEqual({ status: 200, body: { ok: true, number: 5 } })
-    expect(d.postIssue).toHaveBeenCalledWith('up', 'ok', {})
+    expect(d.buildIssue).toHaveBeenCalledWith('up', 'ok', {})
+    expect(d.postIssue).toHaveBeenCalledWith(builtPayload)
   })
 
-  it('502 when the GitHub transport is retryable, 500 otherwise', async () => {
+  it('permanent 4xx → 500; transient with NO outbox → 502', async () => {
     const retry = await handleFeedbackSubmit(deps({ postIssue: async () => ({ ok: false, status: 503, retryable: true }) }), IN)
-    expect(retry.status).toBe(502)
+    expect(retry.status).toBe(502) // no enqueueRetry dep → falls back to the transient 502
     const hard = await handleFeedbackSubmit(deps({ postIssue: async () => ({ ok: false, status: 422, retryable: false }) }), IN)
     expect(hard.status).toBe(500)
   })
 
-  it('passes the context through to postIssue', async () => {
+  it('transient failure → 202 when handed to the durable outbox (#61)', async () => {
+    const enqueueRetry = vi.fn(async () => true)
+    const d = deps({ postIssue: async () => ({ ok: false, status: 503, retryable: true }), enqueueRetry })
+    const r = await handleFeedbackSubmit(d, IN)
+    expect(r).toEqual({ status: 202, body: { ok: true, queued: true } })
+    expect(enqueueRetry).toHaveBeenCalledWith(builtPayload, 'M', 'up')
+  })
+
+  it('transient failure → 502 when the outbox is unavailable (enqueue false / throws)', async () => {
+    const falseQueue = await handleFeedbackSubmit(deps({ postIssue: async () => ({ ok: false, status: 500, retryable: true }), enqueueRetry: async () => false }), IN)
+    expect(falseQueue.status).toBe(502)
+    const throwingQueue = async (): Promise<boolean> => {
+      throw new Error('redis down')
+    }
+    const throwQueue = await handleFeedbackSubmit(deps({ postIssue: async () => ({ ok: false, status: 500, retryable: true }), enqueueRetry: throwingQueue }), IN)
+    expect(throwQueue.status).toBe(502)
+  })
+
+  it('a permanent 4xx is NOT queued even when an outbox is present', async () => {
+    const enqueueRetry = vi.fn(async () => true)
+    const d = deps({ postIssue: async () => ({ ok: false, status: 422, retryable: false }), enqueueRetry })
+    expect((await handleFeedbackSubmit(d, IN)).status).toBe(500)
+    expect(enqueueRetry).not.toHaveBeenCalled()
+  })
+
+  it('passes the context through to buildIssue', async () => {
     const d = deps()
     await handleFeedbackSubmit(d, { ...IN, context: { fileName: 'вписка.txt' } })
-    expect(d.postIssue).toHaveBeenCalledWith('up', 'ok', { fileName: 'вписка.txt' })
+    expect(d.buildIssue).toHaveBeenCalledWith('up', 'ok', { fileName: 'вписка.txt' })
   })
 
   it('records the metric on a filed issue (with member + kind), for both 👍 and 👎', async () => {

@@ -5,9 +5,9 @@
 
 import { getQueue, queueEnabled } from './connection'
 import {
-  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE,
-  crmSyncJobId, deletionJobId, eventJobId, fetchJobId, parseJobId,
-  type CrmSyncJob, type DeletionJob, type EventJob, type FetchJob, type ParseJob
+  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE,
+  crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId,
+  type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob, type FetchJob, type ParseJob
 } from './topology'
 
 /**
@@ -68,6 +68,27 @@ export async function enqueueDeletion(job: DeletionJob): Promise<boolean> {
   // The deletion payload carries only an id + entityTypeId (no financial PII, §9.2), so the default
   // retention is fine. `deletionJobId` (member|event|id|ts) dedups redelivery of the same deletion.
   await getQueue(Q_DELETIONS).add(Q_DELETIONS, job, { jobId: deletionJobId(job) })
+  return true
+}
+
+/**
+ * Durable-retry options for the feedback outbox (#61). The route already attempted the GitHub POST
+ * ONCE synchronously and got a transient failure, so these attempts are the RETRIES: exponential
+ * backoff (30s, 60s, 120s, …, up to ~32 min) over 8 tries spans ~1 hour of GitHub flakiness. On
+ * permanent exhaustion the failed job is kept (age-bound below) for debugging. PII-bearing payload (may embed a
+ * statement excerpt) → age-bound retention like statement jobs.
+ */
+export const FEEDBACK_RETRY_OPTS = {
+  attempts: 8,
+  backoff: { type: 'exponential' as const, delay: 30_000 },
+  ...STATEMENT_JOB_RETENTION
+} as const
+
+/** Enqueue a feedback issue for durable retry after a TRANSIENT GitHub failure (#61). No-op (false)
+ *  without Redis — the caller then surfaces the original transient error to the client instead. */
+export async function enqueueFeedbackPost(job: FeedbackPostJob): Promise<boolean> {
+  if (!queueEnabled()) return false
+  await getQueue(Q_FEEDBACK).add(Q_FEEDBACK, job, { jobId: feedbackPostJobId(job), ...FEEDBACK_RETRY_OPTS })
   return true
 }
 

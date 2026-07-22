@@ -57,6 +57,11 @@
   домена, `profile`-валидация) → чистый `feedbackHandler` → `buildFeedbackIssue` (санитизация:
   Trojan-Source strip + HTML-escape в `<pre><code>`, контекст в inline-code-span) → `postFeedbackIssue`
   (GitHub REST) в приватный репо `GITHUB_FEEDBACK_REPO`.
+- **Durable outbox (#61) — ✅ реализовано.** Happy-path синхронный (201 → 200 с номером issue). При
+  **транзиентном** сбое GitHub (5xx/429/сеть) роут кладёт уже собранный issue в очередь `feedback-post`
+  (`FEEDBACK_RETRY_OPTS`: 8 попыток, backoff 30с) и отдаёт **202** — отзыв переживёт блип / закрытие
+  вкладки; воркер ретраит, на успехе бампит #195-метрику, перманентный 4xx дропает. Без Redis — фолбэк на
+  прежний 502. Auth+санитизация остаются **синхронно** в роуте (в очередь едет только санитизованный payload).
 - Метки issue: `user-feedback` + `feedback:{up|down}`.
 - 👍 (`up`) — сигнал «работает как надо»; в трекинг обычно не заводится.
 - 👎 (`down`) — кандидат на инженерный issue.

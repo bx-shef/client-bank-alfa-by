@@ -18,8 +18,9 @@ import { decodeUploadText } from '../../app/utils/importUpload'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
-import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FETCH, Q_PARSE } from './topology'
-import type { CrmSyncJob, DeletionJob, EventJob, FetchJob, ParseJob } from './topology'
+import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE } from './topology'
+import type { CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob } from './topology'
+import { handleFeedbackPostJob, type FeedbackPostJobDeps } from '../utils/feedbackPostJob'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
 import { hasTriggerLedgerFact, reconcileTargetDeletion, writeLedgerAllocation, writeTriggerLedgerFact } from '../utils/distributionLedgerWrite'
 import { notifyDeletionErrorViaRest } from '../utils/deletionErrorNotify'
@@ -35,7 +36,7 @@ import { enqueueCrmSync } from './producers'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
-import { bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
+import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
 import { sdkPortalDeps } from '../utils/b24Sdk'
@@ -614,6 +615,30 @@ export function startThroughputWorkers(
       // per-portal REST limiter + atomic dedup land (docs/QUEUES.md), crm-sync stays serial by construction.
     }, { connection, concurrency: 1, ...crmLockTuning() })
   ]
+}
+
+/** Live deps for the feedback outbox worker (#61): re-POST via the same transport as the route, and
+ *  bump the #195 metric on eventual success. If the channel is disabled (config null), a stray job
+ *  is a PERMANENT failure (dropped, no retry) — normally none are enqueued (the route 503s first). */
+export function liveFeedbackPostDeps(): FeedbackPostJobDeps {
+  const config = resolveFeedbackConfig()
+  const fetchImpl = globalThis.fetch as unknown as FeedbackFetchFn
+  return {
+    postIssue: async payload =>
+      config ? postFeedbackIssue(config, payload, fetchImpl) : { ok: false, status: 0, retryable: false },
+    recordMetric: (memberId, kind) =>
+      bumpCounter(dbQuery, memberId, kind === 'up' ? FEEDBACK_METRICS.up : FEEDBACK_METRICS.down, 1)
+  }
+}
+
+/** The feedback outbox worker (#61) — drains transiently-failed feedback issue posts, retrying with
+ *  backoff (FEEDBACK_RETRY_OPTS). External POST + idempotent-ish (contentHash dedups), so it is safe
+ *  on N scaled replicas like fetch/parse (not portal-ordered). No PII on the span (hashed portal only). */
+export function startFeedbackWorker(deps: FeedbackPostJobDeps): Worker {
+  return new Worker<FeedbackPostJob>(Q_FEEDBACK, async job => withSpan('feedback-post', {
+    'job.queue': 'feedback-post',
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleFeedbackPostJob(job.data, deps)), { connection: connectionOptions() })
 }
 
 /** Save the crm-sync run summary as the portal's last import status (#5). Gated to

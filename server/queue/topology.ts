@@ -13,15 +13,17 @@
 // the same fetch window / same file / same batch does not create a duplicate job.
 
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
+import type { IssuePayload } from '../../app/utils/feedback'
 
 export const Q_EVENTS = 'b24-events'
 export const Q_FETCH = 'bank-fetch'
 export const Q_PARSE = 'file-parse'
 export const Q_CRM = 'crm-sync'
 export const Q_DELETIONS = 'b24-deletions'
+export const Q_FEEDBACK = 'feedback-post'
 
 /** All queue names, for wiring workers/monitoring. */
-export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS] as const
+export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK] as const
 export type QueueName = typeof QUEUE_NAMES[number]
 
 /** Portal credentials to persist on register (ONAPPINSTALL). `refreshTokenEnc` is
@@ -123,6 +125,25 @@ export interface DeletionJob {
   ts: string
 }
 
+/**
+ * A feedback GitHub issue to (re)post — the DURABLE OUTBOX for the «сотрудник» channel (#61). The
+ * route builds + SANITIZES the issue synchronously (auth, Trojan-Source strip, HTML-escape — see
+ * app/utils/feedback.ts) and posts it directly; only a TRANSIENT GitHub failure (5xx/429/network)
+ * is handed to this queue so the post survives a blip / the employee closing the tab. The payload is
+ * the already-built `IssuePayload` (no raw untrusted input re-enters here) + the portal + rating kind
+ * (for the #195 metric on eventual success). `contentHash` dedups a double-submitted identical issue.
+ * NB: the receiving repo is PRIVATE (feedbackConfig fail-closed), so an attached statement excerpt
+ * in the body is permitted — but treat this payload as PII-bearing for retention (age-bound).
+ */
+export interface FeedbackPostJob {
+  memberId: string
+  kind: 'up' | 'down'
+  /** The built, sanitized GitHub issue (title/body/labels). */
+  payload: IssuePayload
+  /** Stable hash of the payload — dedups an identical re-submission. */
+  contentHash: string
+}
+
 // Separator for job-id parts. BullMQ FORBIDS ':' in a custom job id (it namespaces
 // its Redis keys with ':', so a custom id containing ':' throws "Custom Id cannot
 // contain :"). We join with '|', which encodeURIComponent escapes (%7C) — so no
@@ -155,4 +176,9 @@ export function crmSyncJobId(job: CrmSyncJob): string {
 export function deletionJobId(job: DeletionJob): string {
   // member|event|id|ts (§9.2) — a redelivered deletion of the same entity dedups.
   return joinId(['del', job.memberId, job.eventCode, job.entityId, job.ts])
+}
+
+export function feedbackPostJobId(job: FeedbackPostJob): string {
+  // member|hash (#61) — the same built issue (double-submit / redelivery) dedups to one job.
+  return joinId(['fb', job.memberId, job.contentHash])
 }

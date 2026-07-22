@@ -37,7 +37,8 @@ export const QUEUE_META: readonly QueueMeta[] = [
   { name: 'bank-fetch', label: 'Опрос банка', color: '#3b82f6' },
   { name: 'file-parse', label: 'Разбор файла', color: '#f59e0b' },
   { name: 'crm-sync', label: 'Запись в CRM', color: '#10b981', main: true },
-  { name: 'b24-deletions', label: 'Удаления B24', color: '#ec4899' }
+  { name: 'b24-deletions', label: 'Удаления B24', color: '#ec4899' },
+  { name: 'feedback-post', label: 'Отправка отзыва', color: '#14b8a6' }
 ] as const
 
 /** A finite non-negative integer from an unknown counter value (never NaN). */

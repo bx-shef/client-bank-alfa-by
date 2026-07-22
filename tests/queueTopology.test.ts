@@ -6,23 +6,34 @@ import {
   Q_PARSE,
   Q_CRM,
   Q_DELETIONS,
+  Q_FEEDBACK,
   crmSyncJobId,
   deletionJobId,
   eventJobId,
+  feedbackPostJobId,
   fetchJobId,
   parseJobId,
   type CrmSyncJob,
   type DeletionJob,
   type EventJob,
+  type FeedbackPostJob,
   type FetchJob,
   type ParseJob
 } from '../server/queue/topology'
 import { connectionOptions, redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
-  it('are the five pipeline queues, unique', () => {
-    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS])
-    expect(new Set(QUEUE_NAMES).size).toBe(5)
+  it('are the six pipeline queues, unique', () => {
+    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK])
+    expect(new Set(QUEUE_NAMES).size).toBe(6)
+  })
+})
+
+describe('feedbackPostJobId', () => {
+  it('is member|hash so a double-submitted identical issue dedups', () => {
+    const job: FeedbackPostJob = { memberId: 'M1', kind: 'up', payload: { title: 't', body: 'b', labels: [] }, contentHash: 'abc' }
+    expect(feedbackPostJobId(job)).toBe('fb|M1|abc')
+    expect(feedbackPostJobId({ ...job, contentHash: 'def' })).not.toBe(feedbackPostJobId(job))
   })
 })
 

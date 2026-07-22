@@ -3,6 +3,7 @@
 // authenticated (Bearer + X-B24-Domain, member_id from the verified domain — same model as
 // /api/app-rating). Channel-gated: no config → 503 (the widget is hidden client-side too).
 
+import { createHash } from 'node:crypto'
 import { handleFeedbackSubmit, type FeedbackSubmitDeps } from '../utils/feedbackHandler'
 import { resolveFeedbackConfig } from '../utils/feedbackConfig'
 import { postFeedbackIssue, type FeedbackFetchFn } from '../utils/feedbackGithub'
@@ -11,6 +12,7 @@ import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { FEEDBACK_METRICS, bumpCounter } from '../utils/metricsStore'
+import { enqueueFeedbackPost } from '../queue/producers'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
@@ -26,9 +28,13 @@ function liveSubmitDeps(): FeedbackSubmitDeps {
       const id = (res?.result as { ID?: unknown } | undefined)?.ID
       return id != null ? String(id) : ''
     },
-    // Only invoked when config is non-null (the handler gates on config first).
-    postIssue: (kind, comment, context) =>
-      postFeedbackIssue(config!, buildFeedbackIssue(kind, comment, context), fetchImpl),
+    // Build + sanitize the issue (called only when config is non-null — the handler gates first).
+    buildIssue: (kind, comment, context) => buildFeedbackIssue(kind, comment, context),
+    postIssue: payload => postFeedbackIssue(config!, payload, fetchImpl),
+    // Durable outbox (#61): on a transient GitHub failure, enqueue the built issue for retry with
+    // backoff. contentHash (of the built payload) dedups a double-submit. No-op (false) without Redis.
+    enqueueRetry: (payload, memberId, kind) =>
+      enqueueFeedbackPost({ memberId, kind, payload, contentHash: createHash('sha256').update(JSON.stringify(payload)).digest('hex') }),
     // Telemetry (#195): count the sent rating (both 👍/👎) into the lifetime counters that
     // `GET /api/import/metrics` reads. Best-effort — the handler swallows a failure here.
     recordMetric: (memberId, kind) =>
