@@ -74,8 +74,8 @@ export async function enqueueDeletion(job: DeletionJob): Promise<boolean> {
 /**
  * Durable-retry options for the feedback outbox (#61). The route already attempted the GitHub POST
  * ONCE synchronously and got a transient failure, so these attempts are the RETRIES: exponential
- * backoff (30s, 60s, 120s, …) over `attempts` tries spans a multi-hour GitHub outage. On permanent
- * exhaustion the failed job is kept (age-bound below) for debugging. PII-bearing payload (may embed a
+ * backoff (30s, 60s, 120s, …, up to ~32 min) over 8 tries spans ~1 hour of GitHub flakiness. On
+ * permanent exhaustion the failed job is kept (age-bound below) for debugging. PII-bearing payload (may embed a
  * statement excerpt) → age-bound retention like statement jobs.
  */
 export const FEEDBACK_RETRY_OPTS = {
