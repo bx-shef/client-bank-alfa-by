@@ -7,25 +7,39 @@ import {
   Q_CRM,
   Q_DELETIONS,
   Q_FEEDBACK,
+  Q_TRIGGER,
   crmSyncJobId,
   deletionJobId,
   eventJobId,
   feedbackPostJobId,
   fetchJobId,
   parseJobId,
+  triggerFireJobId,
   type CrmSyncJob,
   type DeletionJob,
   type EventJob,
   type FeedbackPostJob,
   type FetchJob,
-  type ParseJob
+  type ParseJob,
+  type TriggerFireJob
 } from '../server/queue/topology'
 import { connectionOptions, redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
-  it('are the six pipeline queues, unique', () => {
-    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK])
-    expect(new Set(QUEUE_NAMES).size).toBe(6)
+  it('are the seven pipeline queues, unique', () => {
+    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER])
+    expect(new Set(QUEUE_NAMES).size).toBe(7)
+  })
+})
+
+describe('triggerFireJobId', () => {
+  it('is member|opKey|kind|id — same payment→target dedups, different payment is distinct (#79)', () => {
+    const job: TriggerFireJob = { memberId: 'M1', triggerCode: 'cba_pay', targetKind: 'deal', targetId: '42', opKey: 'BY|99' }
+    expect(triggerFireJobId(job)).toBe('trg|M1|BY%7C99|deal|42')
+    // a different payment (opKey) to the same target is a DISTINCT job (each payment is its own signal)
+    expect(triggerFireJobId({ ...job, opKey: 'BY|100' })).not.toBe(triggerFireJobId(job))
+    // a different target is distinct
+    expect(triggerFireJobId({ ...job, targetId: '43' })).not.toBe(triggerFireJobId(job))
   })
 })
 

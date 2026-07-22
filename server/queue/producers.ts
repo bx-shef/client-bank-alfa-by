@@ -5,9 +5,9 @@
 
 import { getQueue, queueEnabled } from './connection'
 import {
-  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE,
-  crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId,
-  type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob, type FetchJob, type ParseJob
+  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE, Q_TRIGGER,
+  crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId, triggerFireJobId,
+  type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob, type FetchJob, type ParseJob, type TriggerFireJob
 } from './topology'
 
 /**
@@ -89,6 +89,28 @@ export const FEEDBACK_RETRY_OPTS = {
 export async function enqueueFeedbackPost(job: FeedbackPostJob): Promise<boolean> {
   if (!queueEnabled()) return false
   await getQueue(Q_FEEDBACK).add(Q_FEEDBACK, job, { jobId: feedbackPostJobId(job), ...FEEDBACK_RETRY_OPTS })
+  return true
+}
+
+/**
+ * Durable-retry options for the payment-trigger self-heal (#79). crm-sync already fired ONCE, so these
+ * are the retries: exponential backoff (60s, 120s, 240s, …) over `attempts` tries. A longer window than
+ * feedback because the common miss is a `triggerCode` set-but-not-yet-registered — the retries should
+ * span the admin registering it (~½ day at the top of the schedule). NO PII in the payload (target ids +
+ * app CODE only), so the default count-based retention is fine; failed kept a day for debugging.
+ */
+export const TRIGGER_RETRY_OPTS = {
+  attempts: 12,
+  backoff: { type: 'exponential' as const, delay: 60_000 },
+  removeOnComplete: { age: 3600, count: 100 },
+  removeOnFail: { age: 86_400, count: 200 }
+} as const
+
+/** Enqueue a payment trigger for durable retry after a missed synchronous fire (#79). No-op (false)
+ *  without Redis — the trigger then degrades to the prior single-shot behavior. */
+export async function enqueueTriggerFire(job: TriggerFireJob): Promise<boolean> {
+  if (!queueEnabled()) return false
+  await getQueue(Q_TRIGGER).add(Q_TRIGGER, job, { jobId: triggerFireJobId(job), ...TRIGGER_RETRY_OPTS })
   return true
 }
 

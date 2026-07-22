@@ -49,8 +49,11 @@ interface FakeOpts {
   alreadyApplied?: boolean
   /** what applyAllocation returns (true = portal write applied); default true. */
   applied?: boolean
-  /** what applyTrigger returns (true = trigger fired); default true (#79). */
+  /** what applyTrigger returns (true = trigger fired); default true (#79). Maps to the TriggerOutcome
+   *  union: true → 'fired', false → 'retry'. Use `triggerOutcome` to force a specific outcome. */
   triggerFired?: boolean
+  /** force applyTrigger's TriggerOutcome directly ('fired' | 'skip' | 'retry'); overrides triggerFired (#79). */
+  triggerOutcome?: 'fired' | 'skip' | 'retry'
   /** what writeLedger returns (true = a new distribution row was created); default true (§9.1). */
   ledgerCreated?: boolean
   /** what hasTriggerFact returns (true = SP-ledger marker exists → skip TRIGGER fire); default false (§9.3 #6). */
@@ -77,7 +80,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], ledger: [], trigHas: [], trigRec: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], ledger: [], trigHas: [], trigRec: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -140,7 +143,11 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       // Capture entityTypeId too, so a handler-level smart-process test can prove the FULL
       // candidate (not a stripped {kind,id}) reaches applyTrigger — the #79 OWNER_TYPE_ID wire.
       calls.trigApply.push([it.docId, target.kind, target.id, memberId, code, target.entityTypeId])
-      return o.triggerFired ?? true
+      return o.triggerOutcome ?? (o.triggerFired === false ? 'retry' : 'fired')
+    },
+    enqueueTriggerRetry: async (it, target, memberId, code) => {
+      // Durable retry (#79): the handler calls this on a 'retry' outcome. Capture for assertions.
+      calls.trigEnqueue.push([it.docId, target.kind, target.id, memberId, code, target.entityTypeId])
     },
     writeLedger: async (it, target, companyId, memberId, etids) => {
       calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
@@ -1085,20 +1092,30 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // deduped → one fire
   })
 
-  it('autoDistribute ON + triggerCode, applyTrigger returned false (un-fired): NO fact, job still succeeds (single-shot) (#79)', async () => {
-    // NB: the never-THROW guarantee lives in the worker dep (worker.ts wraps applyTrigger in
-    // try/catch → false); the handler awaits applyTrigger without a catch and relies on that
-    // contract. Here we exercise the un-fired (returned-false) path: no fact is written, and the
-    // job as a whole still completes (a non-fire does not fail the batch). SINGLE-SHOT: the B24
-    // dedup marker (writeActivity) is still written this run, so this op is NOT re-attempted on a
-    // later poll — a swallowed miss is lost, not self-healed (durable retry is a follow-up).
+  it('autoDistribute ON + triggerCode, applyTrigger "retry": NO fact, job succeeds, DURABLE RETRY enqueued (#79)', async () => {
+    // The un-fired path is now 'retry' (a transient / not-yet-registered miss). The handler writes no
+    // fact and the job still completes (a non-fire never fails the batch), but it ALSO hands the miss to
+    // the durable-retry queue so the «деньги пришли» signal self-heals with backoff instead of being lost.
     const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, triggerFired: false })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
     expect(r.allocated).toBe(0) // no fire → no fact
     expect(r.distributed).toBe(0)
     expect(r.created).toBe(1) // job still succeeds — an un-fired trigger does not fail the batch
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // attempted once
-    expect(calls.trigRec).toEqual([]) // no SP marker persisted (but the activity marker IS written → single-shot)
+    expect(calls.trigRec).toEqual([]) // no SP marker persisted (nothing fired yet)
+    expect(calls.trigEnqueue).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // durable retry enqueued
+  })
+
+  it('autoDistribute ON + triggerCode, applyTrigger "skip" (demo/malformed): NO fact, NO retry enqueued (#79)', async () => {
+    // 'skip' means a durable retry cannot help (demo account or a malformed CODE) — the handler must
+    // NOT enqueue a retry (which would burn attempts pointlessly).
+    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' }, triggerOutcome: 'skip' })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'оплата Д-55')]), deps)
+    expect(r.allocated).toBe(0)
+    expect(r.distributed).toBe(0)
+    expect(calls.trigApply).toHaveLength(1) // attempted once
+    expect(calls.trigRec).toEqual([]) // no fact
+    expect(calls.trigEnqueue).toEqual([]) // 'skip' → NOT re-queued
   })
 
   it('autoDistribute ON + triggerCode, fired but SP marker row lost the race (created=false): counters stay 0 (#79/§9.3 #6)', async () => {

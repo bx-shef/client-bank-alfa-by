@@ -14,6 +14,7 @@
 
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { IssuePayload } from '../../app/utils/feedback'
+import type { AllocationTargetKind } from '../../app/utils/allocation'
 
 export const Q_EVENTS = 'b24-events'
 export const Q_FETCH = 'bank-fetch'
@@ -21,9 +22,10 @@ export const Q_PARSE = 'file-parse'
 export const Q_CRM = 'crm-sync'
 export const Q_DELETIONS = 'b24-deletions'
 export const Q_FEEDBACK = 'feedback-post'
+export const Q_TRIGGER = 'trigger-fire'
 
 /** All queue names, for wiring workers/monitoring. */
-export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK] as const
+export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER] as const
 export type QueueName = typeof QUEUE_NAMES[number]
 
 /** Portal credentials to persist on register (ONAPPINSTALL). `refreshTokenEnc` is
@@ -144,6 +146,30 @@ export interface FeedbackPostJob {
   contentHash: string
 }
 
+/**
+ * A payment-automation TRIGGER to (re)fire — the DURABLE RETRY for the «деньги пришли» signal (#79).
+ * crm-sync fires the trigger ONCE synchronously; if that attempt misses (transient token/network/limit
+ * error, OR a `triggerCode` that is set but **not yet registered** on the portal), it enqueues this job
+ * so the signal SELF-HEALS: the worker re-fires with backoff until the portal confirms `{result:true}`
+ * (e.g. once the admin registers the CODE) or the attempts exhaust. A trigger only SIGNALS (it moves no
+ * money), so a redelivered double-fire is a benign double-signal. NO financial PII — only the target
+ * ids + the app's own CODE; `opKey` (`account|docId`) makes distinct payments to the same target
+ * distinct jobs (each payment is its own signal).
+ */
+export interface TriggerFireJob {
+  memberId: string
+  /** The app's canonical automation-trigger CODE (from settings `allocation.triggerCode`). */
+  triggerCode: string
+  /** Trigger target kind — only `deal` / `smart-process` fire triggers (amount targets don't). */
+  targetKind: AllocationTargetKind
+  /** Target entity id (positive integer string). */
+  targetId: string
+  /** Portal-specific `entityTypeId` for a smart-process target → OWNER_TYPE_ID (absent for a deal). */
+  targetEntityTypeId?: number
+  /** The producing operation's dedup key (`account|docId`) — distinguishes two payments to one target. */
+  opKey: string
+}
+
 // Separator for job-id parts. BullMQ FORBIDS ':' in a custom job id (it namespaces
 // its Redis keys with ':', so a custom id containing ':' throws "Custom Id cannot
 // contain :"). We join with '|', which encodeURIComponent escapes (%7C) — so no
@@ -181,4 +207,10 @@ export function deletionJobId(job: DeletionJob): string {
 export function feedbackPostJobId(job: FeedbackPostJob): string {
   // member|hash (#61) — the same built issue (double-submit / redelivery) dedups to one job.
   return joinId(['fb', job.memberId, job.contentHash])
+}
+
+export function triggerFireJobId(job: TriggerFireJob): string {
+  // member|opKey|kind|id (#79) — one payment→target signal; a re-enqueue of the SAME
+  // (payment, target) dedups, while a different payment to the same target is a distinct job.
+  return joinId(['trg', job.memberId, job.opKey, job.targetKind, job.targetId])
 }
