@@ -12,6 +12,7 @@ import type { Worker } from 'bullmq'
 import { closeQueues, getQueue, queueEnabled } from '../queue/connection'
 import { Q_FETCH } from '../queue/topology'
 import { liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveTriggerFireDeps, startDeletionWorker, startEventWorker, startFeedbackWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
+import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
@@ -211,6 +212,12 @@ export default defineNitroPlugin((nitroApp) => {
   } else {
     console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
   }
+
+  // Failure/error visibility (#78): without a `failed`/`error` listener an exhausted job failure or a
+  // worker-level (Redis) error is silent unless the OTel collector runs (default off). Wire greppable,
+  // PII-safe log lines onto EVERY started worker (throughput + event + deletion + feedback + trigger).
+  const obsDeps = { error: (m: string) => console.error(m), warn: (m: string) => console.warn(m) }
+  for (const w of workers) attachWorkerObservability(w, obsDeps)
 
   nitroApp.hooks.hook('close', async () => {
     if (timer) clearInterval(timer)

@@ -658,6 +658,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       cross-worker stalled-окно, а не in-process concurrency, поэтому поднятие общего knob'а масштабирует лишь
       fetch/parse и не возвращает TOCTOU. Чистый `crmLockTuning` + wiring-тест (`tests/throughputWorkers.test.ts`,
       вкл. pin-проверку). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
+    - **Видимость падений воркеров (#78):** `server/queue/workerObservability.ts` (`attachWorkerObservability`,
+      чистые `formatJobFailure`/`formatWorkerError`, тесты) навешивает на **каждый** воркер (в `queue.ts`
+      после старта) логи событий BullMQ — иначе исчерпанный ретрай джоба или ошибка уровня воркера
+      (обрыв Redis) **молча** проходят (спаны OTel — no-op без коллектора). Строки greppable и **PII-safe**
+      (очередь/попытка/текст ошибки, **без** `job.data` и сырого jobId — в fetch/crm jobId зашит номер счёта):
+      `[queue-job-failed] … FINAL` (исчерпан ретрай, `error` — на это вешать алерт) / `[queue-job-retry]`
+      (промежуточная попытка, `warn`) / `[queue-worker-error]` (уровень воркера). Runbook — `docs/OPERATIONS.md`.
     - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
       DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
       **только заголовком** `X-Check-Token` (без `?token=` в логах), nginx `deny all`, для консоли
