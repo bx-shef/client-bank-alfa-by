@@ -13,7 +13,7 @@
 в Bitrix24 идут асинхронно, переживают ретраи и масштабируются воркерами. Redis — на
 изолированной сети `queuenet` (`internal: true`, том `redisdata`), наружу не смотрит.
 
-## Шесть очередей
+## Семь очередей
 
 Контракты (имена, payload'ы, идемпотентные `jobId`) — чистые, без зависимости от Redis:
 [`server/queue/topology.ts`](../server/queue/topology.ts) (покрыто тестами).
@@ -26,6 +26,7 @@
 | `crm-sync` | `Q_CRM` | `CrmSyncJob` (`memberId`, `providerId`, `source`, `batchId`, `items`) | обработчики `bank-fetch` / `file-parse` (только если операций > 0) | дедуп в батче → на операцию: поиск компании → универсальное дело → чат |
 | `b24-deletions` | `Q_DELETIONS` | `DeletionJob` (`memberId`, `domain`, `eventCode`, `entityId`, `entityTypeId?`, `ts`) | вебхук CRM-удаления (§9.2) | классифицирует по SP-конфигу → reconcile леджера / чат ошибок (primary-инстанс, concurrency 1) |
 | `feedback-post` | `Q_FEEDBACK` | `FeedbackPostJob` (`memberId`, `kind`, `payload`, `contentHash`) | роут `POST /api/feedback` при **транзиентном** сбое GitHub (#61) | ретраит POST issue с backoff (`FEEDBACK_RETRY_OPTS`) → на успехе #195-метрика; перманентный 4xx — дроп |
+| `trigger-fire` | `Q_TRIGGER` | `TriggerFireJob` (`memberId`, `triggerCode`, `targetKind`, `targetId`, `targetEntityTypeId?`, `opKey`) | crm-sync при **промахе** синхронного фаера триггера (#79) | пере-фаерит `crm.automation.trigger.execute` с backoff (`TRIGGER_RETRY_OPTS`) до `{result:true}` (само-заживает, когда CODE зарегистрирован); `unsupported`/битый CODE — дроп |
 
 `bank-fetch` и `file-parse` — два входа с разных источников (онлайн-банк и файл), оба дают
 нормализованный `StatementItem[]` и **сходятся в `crm-sync`** — общий «анализ + запись в CRM».

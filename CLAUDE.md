@@ -548,8 +548,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     платёжный словарь метрик).
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
-    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`/`b24-deletions`/`feedback-post`,
-      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`/`DeletionJob`/`FeedbackPostJob`), идемпотентные `*JobId` (дедуп ретраев).
+    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`/`b24-deletions`/`feedback-post`/`trigger-fire`,
+      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`/`DeletionJob`/`FeedbackPostJob`/`TriggerFireJob`), идемпотентные `*JobId` (дедуп ретраев).
+      **`trigger-fire`** (#79) — durable-ретрай платёжного триггера «деньги пришли»: crm-sync фаерит один раз синхронно,
+      промах (`applyTrigger`→`retry`: транзиент / `CODE` не зарегистрирован) кладётся в очередь (`enqueueTriggerFire`,
+      `TRIGGER_RETRY_OPTS`: 12 попыток, backoff 60с), воркер `startTriggerWorker`→`handleTriggerFireJob` пере-фаерит до
+      `{result:true}` — сигнал само-заживает; `skip` (демо/битый CODE) не ретраится; без Redis → single-shot.
       **`feedback-post`** (#61) — durable outbox отзыва «сотрудник»: роут кладёт **транзиентно-упавший** issue (5xx/429/сеть),
       воркер `startFeedbackWorker`→`handleFeedbackPostJob` ретраит с backoff (`FEEDBACK_RETRY_OPTS`), N-реплико-безопасен
       (внешний POST, `contentHash` дедуп); happy-path остаётся синхронным (см. feedback ниже).
@@ -767,10 +771,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `executeTriggerViaRest(target, call, {triggerCode})` → `crm.automation.trigger.execute` → `{result:true}` (тем же
     билдером; unsupported/нет CODE → без REST-вызова, ошибка пробрасывается). **В hot-path подключён — best-effort (#79):**
     в `crm-sync` за гейтом `autoDistribute`+`triggerCode` вызывается через OAuth-резолвер воркера (контекст приложения
-    есть); сбой (в т.ч. незарегистрированный CODE) глотается — триггер сигналит, факт пишется только на firing
-    (single-shot: промах первой попытки не пере-пробуется). Проводка `applyTrigger` в воркере вынесена в чистую фабрику
-    `server/utils/applyTriggerDep.ts` (`makeApplyTrigger` — demo-гейт/нет-токена→skip/best-effort swallow + инвариант
-    «полный `target` c `entityTypeId` доезжает до транспорта»), покрыта юнит-тестом (`tests/applyTriggerDep.test.ts`).
+    есть); сбой (в т.ч. незарегистрированный CODE) глотается — триггер сигналит, факт пишется только на firing.
+    **Долговременный ретрай — СДЕЛАН (#79):** `applyTrigger` отдаёт `TriggerOutcome` (`fired`/`skip`/`retry`; demo/битый
+    CODE/unsupported→`skip`, нет-токена/транзиент/незарег-CODE→`retry`), и на `retry` хендлер кладёт задачу в durable-очередь
+    `trigger-fire` (`enqueueTriggerRetry`→`enqueueTriggerFire`), воркер `handleTriggerFireJob` пере-фаерит с backoff — сигнал
+    само-заживает (напр. когда админ регистрирует CODE). Проводка `applyTrigger` в воркере вынесена в чистую фабрику
+    `server/utils/applyTriggerDep.ts` (`makeApplyTrigger` — demo→skip / нет-токена→retry / best-effort swallow→retry + инвариант
+    «полный `target` c `entityTypeId` доезжает до транспорта»); чистый воркер — `server/utils/triggerFireJob.ts`
+    (`handleTriggerFireJob`: fired→ack, skipped→drop, иначе throw→BullMQ-ретрай). Покрыты юнит-тестами
+    (`tests/applyTriggerDep.test.ts` + `tests/triggerFireJob.test.ts` + проводка `queuePhase2`).
     Регистрация CODE на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
     подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `trigger.add`→`trigger.list`
     round-trip, затем `executeTriggerViaRest`→`trigger.execute` `{result:true}` на **сделке** (OWNER_TYPE_ID=2) **и

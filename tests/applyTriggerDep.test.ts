@@ -37,57 +37,65 @@ describe('makeApplyTrigger', () => {
     expect(opts).toEqual({ triggerCode: 'cba_pay' })
   })
 
-  it('returns the transport applied flag (fired → true)', async () => {
+  it('confirmed fire → "fired"', async () => {
     const applyTrigger = makeApplyTrigger(deps())
-    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe(true)
+    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe('fired')
   })
 
-  it('returns false when the transport reports not applied', async () => {
+  it('unsupported/malformed target (skipped) → "skip" (a retry cannot help)', async () => {
     const applyTrigger = makeApplyTrigger(deps({
       executeTriggerViaRest: async () => ({ applied: false, skipped: 'unsupported' })
     }))
-    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe(false)
+    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe('skip')
   })
 
-  it('demo account → false, NO token resolve and NO transport call (never touches a real portal)', async () => {
+  it('not applied WITHOUT skipped → "retry" (a durable retry may heal a transient miss)', async () => {
+    const applyTrigger = makeApplyTrigger(deps({
+      executeTriggerViaRest: async () => ({ applied: false })
+    }))
+    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe('retry')
+  })
+
+  it('demo account → "skip", NO token resolve and NO transport call (never touches a real portal)', async () => {
     const isDemo = vi.fn((_a: string) => true)
     const resolve = vi.fn(async () => fakeCall)
     const exec = vi.fn(deps().executeTriggerViaRest)
     const applyTrigger = makeApplyTrigger(deps({ isDemoAccount: isDemo, resolvePortalCall: resolve, executeTriggerViaRest: exec }))
-    expect(await applyTrigger(item('DEMO'), deal(), 'M', 'cba_pay')).toBe(false)
+    expect(await applyTrigger(item('DEMO'), deal(), 'M', 'cba_pay')).toBe('skip')
     expect(isDemo).toHaveBeenCalledWith('DEMO') // gated on the op's OWN account, not a constant
     expect(resolve).not.toHaveBeenCalled()
     expect(exec).not.toHaveBeenCalled()
   })
 
-  it('no portal token (resolve → null) → false, transport NOT called; resolve got the memberId', async () => {
+  it('no portal token (resolve → null) → "retry" (token pending), transport NOT called; resolve got the memberId', async () => {
     const resolve = vi.fn(async () => null)
     const exec = vi.fn(deps().executeTriggerViaRest)
     const applyTrigger = makeApplyTrigger(deps({ resolvePortalCall: resolve, executeTriggerViaRest: exec }))
-    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe(false)
+    expect(await applyTrigger(item(), deal(), 'M', 'cba_pay')).toBe('retry')
     expect(resolve).toHaveBeenCalledWith('M') // scoped to the portal memberId, not item.account
     expect(exec).not.toHaveBeenCalled()
   })
 
-  it('BEST-EFFORT: a throw from isDemoAccount itself is swallowed → false (never fails the batch)', async () => {
+  it('BEST-EFFORT: a throw from isDemoAccount itself is swallowed → "retry" (never fails the batch)', async () => {
     const applyTrigger = makeApplyTrigger(deps({
       isDemoAccount: () => { throw new Error('demo check blew up') }
     }))
-    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe(false)
+    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe('retry')
   })
 
-  it('BEST-EFFORT: a thrown transport error is swallowed → false (never propagates, batch not failed)', async () => {
+  it('BEST-EFFORT: a thrown transport error → "retry" (never propagates; the durable retry self-heals)', async () => {
     const applyTrigger = makeApplyTrigger(deps({
-      executeTriggerViaRest: async () => { throw new Error('Application context required') }
+      executeTriggerViaRest: async () => { throw new Error('trigger is not registered') }
     }))
-    // Must resolve (not reject) to false — a trigger failure must never fail the job.
-    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe(false)
+    // Must resolve (not reject) — a trigger failure must never fail the job; a not-registered CODE
+    // self-heals once the admin registers it (durable retry, #79).
+    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe('retry')
   })
 
-  it('BEST-EFFORT: a token-resolve error is also swallowed → false', async () => {
+  it('BEST-EFFORT: a token-resolve error is also swallowed → "retry"', async () => {
     const applyTrigger = makeApplyTrigger(deps({
       resolvePortalCall: async () => { throw new Error('token store down') }
     }))
-    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe(false)
+    await expect(applyTrigger(item(), deal(), 'M', 'cba_pay')).resolves.toBe('retry')
   })
 })

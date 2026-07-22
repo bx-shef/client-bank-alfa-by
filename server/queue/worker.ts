@@ -18,9 +18,10 @@ import { decodeUploadText } from '../../app/utils/importUpload'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
-import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE } from './topology'
-import type { CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob } from './topology'
+import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE, Q_TRIGGER } from './topology'
+import type { CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob, TriggerFireJob } from './topology'
 import { handleFeedbackPostJob, type FeedbackPostJobDeps } from '../utils/feedbackPostJob'
+import { handleTriggerFireJob, type TriggerFireJobDeps } from '../utils/triggerFireJob'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
 import { hasTriggerLedgerFact, reconcileTargetDeletion, writeLedgerAllocation, writeTriggerLedgerFact } from '../utils/distributionLedgerWrite'
 import { notifyDeletionErrorViaRest } from '../utils/deletionErrorNotify'
@@ -32,7 +33,8 @@ import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob,
   MAX_RESOLVED_INTENTS_PER_OP, type HandlerDeps
 } from './handlers'
-import { enqueueCrmSync } from './producers'
+import { enqueueCrmSync, enqueueTriggerFire } from './producers'
+import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
@@ -387,6 +389,25 @@ export function liveHandlerDeps(): HandlerDeps {
     // app-context — the resolver's SDK call provides it (a webhook gets «Application context
     // required»). `executeTriggerViaRest` (#269) takes the CODE via `opts.triggerCode`.
     applyTrigger: makeApplyTrigger({ isDemoAccount, resolvePortalCall, executeTriggerViaRest }),
+    // Durable retry (#79): a missed trigger fire ('retry' outcome) is handed to the trigger-fire
+    // queue so it self-heals with backoff. BEST-EFFORT — never throws (a trigger only signals). Demo
+    // gated (defensive; applyTrigger already returns 'skip' for demo). No Redis ⇒ enqueue no-ops ⇒
+    // graceful degrade to single-shot. The job carries only target ids + the app CODE (no financial PII).
+    enqueueTriggerRetry: async (item, target, memberId, code) => {
+      try {
+        if (isDemoAccount(item.account)) return
+        await enqueueTriggerFire({
+          memberId,
+          triggerCode: code,
+          targetKind: target.kind,
+          targetId: target.id,
+          ...(target.entityTypeId != null ? { targetEntityTypeId: target.entityTypeId } : {}),
+          opKey: dedupKey(item)
+        })
+      } catch (e) {
+        console.warn(`[trigger] enqueue retry failed for ${target.kind}#${target.id} — ${(e as Error)?.message}`)
+      }
+    },
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
     // notifyChat: demo accounts gated, no token → skip, whole body swallow+logged (a chat
     // failure must never fail the job).
@@ -639,6 +660,23 @@ export function startFeedbackWorker(deps: FeedbackPostJobDeps): Worker {
     'job.queue': 'feedback-post',
     'portal.hash': portalHash(job.data.memberId)
   }, () => handleFeedbackPostJob(job.data, deps)), { connection: connectionOptions() })
+}
+
+/** Live deps for the trigger-retry worker (#79): re-fire via the SAME transport as the sync path,
+ *  on the portal's stored OAuth token (the method needs app-context). No fact/metric is written here
+ *  (fire-only — the audit row is written on the synchronous fire; see triggerFireJob.ts). */
+export function liveTriggerFireDeps(): TriggerFireJobDeps {
+  return { resolvePortalCall, executeTriggerViaRest }
+}
+
+/** The trigger-retry worker (#79) — re-fires missed «деньги пришли» signals with backoff
+ *  (TRIGGER_RETRY_OPTS) so a transient / not-yet-registered miss self-heals. Idempotent signal
+ *  (jobId dedups re-enqueue), N-replica-safe (not portal-ordered). No PII on the span. */
+export function startTriggerWorker(deps: TriggerFireJobDeps): Worker {
+  return new Worker<TriggerFireJob>(Q_TRIGGER, async job => withSpan('trigger-fire', {
+    'job.queue': 'trigger-fire',
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleTriggerFireJob(job.data, deps)), { connection: connectionOptions() })
 }
 
 /** Save the crm-sync run summary as the portal's last import status (#5). Gated to

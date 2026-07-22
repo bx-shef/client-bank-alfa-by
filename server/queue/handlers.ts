@@ -20,6 +20,7 @@ import type { IntentResolution } from '../utils/intentResolver'
 import { parseConfiguredEntityTypeId, SMART_ENTITY_CONFIG_KEY } from '../utils/intentResolver'
 import { distributionSpEtid as readDistributionSpEtid, paymentSpEtid as readPaymentSpEtid } from '../../app/config/distributionSp'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
+import type { TriggerOutcome } from '../utils/applyTriggerDep'
 
 /** Cap on how many recognized intents of ONE operation are sent to the REST resolver
  *  (#191). The payment purpose is payer-controlled, and recognition dedupes only by
@@ -107,11 +108,14 @@ export interface HandlerDeps {
    *  when `autoDistribute` is on, a `triggerCode` is configured, and no fact existed yet.
    *  BEST-EFFORT — a trigger SIGNALS money arrived (it doesn't move money), so this MUST NOT
    *  throw: a transient OR permanent-config failure (unregistered CODE, unsupported smart-
-   *  process, missing token) is swallowed and returns `false`. Returns whether the trigger
-   *  actually FIRED; the handler records the write-once fact ONLY on a fire. SINGLE-SHOT: the
-   *  dedup marker is still written this run, so a non-fire is NOT retried on a later poll
-   *  (durable trigger retry — a follow-up). */
-  applyTrigger: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<boolean>
+   *  process, missing token) is swallowed. Returns a TriggerOutcome (#79): 'fired' (record the fact +
+   *  count), 'skip' (demo / malformed CODE — do nothing), or 'retry' (a transient / not-yet-registered
+   *  miss → the handler enqueues the durable retry so the signal self-heals). Never throws. */
+  applyTrigger: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<TriggerOutcome>
+  /** Enqueue a durable retry for a MISSED trigger fire (#79) so a transient / not-yet-registered miss
+   *  self-heals with backoff. BEST-EFFORT (never throws — a trigger only signals). Optional: absent /
+   *  no-op (no Redis) ⇒ the trigger degrades to the prior SINGLE-SHOT behaviour. */
+  enqueueTriggerRetry?: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<void>
   /** Write the decided allocation into the SP-LEDGER (#109 §9.1/§9.3): ensure the payment carrier
    *  element for the operation, add the distribution row for `target`, recompute «осталось». Called
    *  ONLY when `autoDistribute` is on AND both SP entityTypeIds are provisioned (the chooseCarrier
@@ -437,13 +441,14 @@ export async function handleCrmSyncJob(
         // doesn't move money). `allocated`+`distributed` bump together on a fired+recorded trigger.
         // The SP dedup runs ONLY when both SPs are provisioned (the expected default-ON state); when
         // they are NOT, the trigger still fires but has only the SINGLE-SHOT protection below.
-        // SINGLE-SHOT (important): the trigger is attempted ONCE — on this first processing of the
-        // op with a matched company. `writeActivity` below persists the B24 dedup marker regardless
-        // of trigger outcome, so a later redelivery/poll is `continue`d at the top gate and never
-        // re-reaches this loop. Hence a first-attempt miss (transient error swallowed by best-effort,
-        // OR a `triggerCode` set but not yet registered → `applyTrigger` returns false) is NOT
-        // retried — the fire is lost, not self-healed. This is the accepted v1 semantic (CODE is
-        // meant to be registered at install, before ops flow); durable trigger retry is a follow-up.
+        // The trigger is attempted ONCE synchronously here (first processing of the op with a matched
+        // company). `writeActivity` below persists the B24 dedup marker regardless of trigger outcome,
+        // so a later redelivery/poll is `continue`d at the top gate and never re-reaches this loop.
+        // DURABLE RETRY (#79): a MISSED fire (`applyTrigger` → 'retry' — transient error, OR a
+        // `triggerCode` set but not yet registered) is handed to `enqueueTriggerRetry` so the «деньги
+        // пришли» signal SELF-HEALS with backoff (e.g. once the admin registers the CODE), instead of
+        // the prior single-shot loss. 'skip' (demo / malformed CODE) neither fires nor retries. Without
+        // Redis (`enqueueTriggerRetry` absent/no-op) it gracefully degrades to the old single-shot.
         const triggerCode = settings?.allocation?.triggerCode
         if (autoDistribute && triggerCode) {
           const seen = new Set<string>()
@@ -454,8 +459,13 @@ export async function handleCrmSyncJob(
             seen.add(targetKey)
             const etids = ledgerPaymentEtid && ledgerDistributionEtid ? { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid } : null
             if (etids && deps.hasTriggerFact && await deps.hasTriggerFact(item, t, job.memberId, etids)) continue
-            const fired = await deps.applyTrigger(item, t, job.memberId, triggerCode)
-            if (!fired) continue
+            const outcome = await deps.applyTrigger(item, t, job.memberId, triggerCode)
+            if (outcome === 'retry') {
+              // Durable retry (#79) — best-effort; never fails the batch (a trigger only signals).
+              if (deps.enqueueTriggerRetry) await deps.enqueueTriggerRetry(item, t, job.memberId, triggerCode)
+              continue
+            }
+            if (outcome !== 'fired') continue // 'skip' — demo / malformed CODE
             // Record the fire durably in the SP-ledger (when provisioned). Absent SP ⇒ no durable
             // record; count the fire (single-shot semantics guard against re-fire across redeliveries).
             const recorded = etids && deps.writeTriggerFact ? await deps.writeTriggerFact(item, t, companyId, job.memberId, etids) : true
