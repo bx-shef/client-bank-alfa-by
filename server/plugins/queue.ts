@@ -11,7 +11,7 @@
 import type { Worker } from 'bullmq'
 import { closeQueues, getQueue, queueEnabled } from '../queue/connection'
 import { Q_FETCH } from '../queue/topology'
-import { liveDeletionDeps, liveHandlerDeps, startDeletionWorker, startEventWorker, startThroughputWorkers } from '../queue/worker'
+import { liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, startDeletionWorker, startEventWorker, startFeedbackWorker, startThroughputWorkers } from '../queue/worker'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
@@ -34,7 +34,9 @@ export default defineNitroPlugin((nitroApp) => {
 
   if (role.workers && deps) {
     workers.push(...startThroughputWorkers(deps, { concurrency: role.concurrency, fetchRate: role.fetchRate }))
-    console.info('[queue] throughput workers started (fetch/parse/crm-sync, concurrency=%d, fetch-rate=%d/%dms)', role.concurrency, role.fetchRate.max, role.fetchRate.duration)
+    // Feedback outbox worker (#61) — drains transiently-failed feedback issue posts (N-replica-safe).
+    workers.push(startFeedbackWorker(liveFeedbackPostDeps()))
+    console.info('[queue] throughput + feedback workers started (fetch/parse/crm-sync/feedback-post, concurrency=%d, fetch-rate=%d/%dms)', role.concurrency, role.fetchRate.max, role.fetchRate.duration)
   } else if (!role.workers) {
     // Loud: this instance won't drain fetch/parse/crm-sync. A worker container MUST be
     // running (docker-compose.prod.yml `worker`), else webhooks/imports pile up silently

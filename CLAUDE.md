@@ -548,8 +548,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     платёжный словарь метрик).
   - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
     справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
-    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`/`b24-deletions`,
-      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`/`DeletionJob`), идемпотентные `*JobId` (дедуп ретраев).
+    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`/`b24-deletions`/`feedback-post`,
+      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`/`DeletionJob`/`FeedbackPostJob`), идемпотентные `*JobId` (дедуп ретраев).
+      **`feedback-post`** (#61) — durable outbox отзыва «сотрудник»: роут кладёт **транзиентно-упавший** issue (5xx/429/сеть),
+      воркер `startFeedbackWorker`→`handleFeedbackPostJob` ретраит с backoff (`FEEDBACK_RETRY_OPTS`), N-реплико-безопасен
+      (внешний POST, `contentHash` дедуп); happy-path остаётся синхронным (см. feedback ниже).
       **`b24-deletions`** (#109 §9.2) — CRM-события удаления (сделка/компания/смарт-элемент): webhook верифицирует
       `application_token` и кладёт `DeletionJob` (сырые `{eventCode, entityId, entityTypeId?}`, без ПДн); консьюмер
       `handleDeletionJob` (`server/utils/deletionReconcile.ts`, DI+тесты) классифицирует по SP-конфигу портала
@@ -1351,14 +1354,22 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   `<pre><code>`, контекст в inline-code-span против markdown-инъекции; **файл выписки** — strip
   контролов с сохранением переносов + `escapeHtml` (нельзя закрыть `</code></pre>`) + кап
   `MAX_FILE_EMBED`, в `<details>`-блоке) → `postFeedbackIssue` (`server/utils/feedbackGithub.ts`, GitHub REST, не логирует
-  токен/URL/тело) в **приватный** репо `GITHUB_FEEDBACK_REPO`. **Телеметрия (#195):** на успешно
+  токен/URL/тело) в **приватный** репо `GITHUB_FEEDBACK_REPO`. **Durable outbox (#61):** happy-path не тронут
+  (201 GitHub → синхронный 200 с номером issue); при **транзиентном** сбое (5xx/429/сеть — раньше тупиковый 502)
+  роут кладёт **уже собранный** issue в очередь `feedback-post` (`enqueueFeedbackPost`, `FEEDBACK_RETRY_OPTS` —
+  8 попыток, экспон. backoff 30с) и отдаёт **202** (отзыв переживёт блип GitHub / закрытие вкладки); воркер
+  `handleFeedbackPostJob` ретраит (throw → BullMQ-ретрай), на успехе бампит #195-метрику, перманентный 4xx —
+  дроп; без Redis — фолбэк на прежний 502. `contentHash` (sha256 payload) дедупит двойной сабмит. Санитайзер и
+  auth — по-прежнему **синхронно** в роуте (в очередь едет только обезличенный/санитизованный payload).
+  **Телеметрия (#195):** на успешно
   заведённом issue `feedbackHandler` best-effort бампит `FEEDBACK_METRICS.up`/`.down`
   (`feedback_up`/`feedback_down` в `metrics_counter` — **отдельно** от summary-bound `METRICS`, т.к.
   считаются из роута, а не из crm-sync summary; оба 👍/👎, видны в `GET /api/import/metrics`). Конфиг
   `server/utils/feedbackConfig.ts` — **fail-closed**: без `GITHUB_FEEDBACK_TOKEN`+`GITHUB_FEEDBACK_REPO`
   канал OFF (виджет скрыт, POST → 503), репо никогда не дефолтится на публичный. Роут дросселируется
   nginx `limit_req` (зона import). Тесты — `feedback`/`feedbackConfig`/`feedbackGithub`/`feedbackHandler`
-  (+ метрика) + `nuxt/feedbackWidget` + `metricsStore` (feedback-счётчики).
+  (+ метрика + outbox 202/502/500-пути) + `feedbackPostJob` (воркер outbox) + `queueTopology` (`feedbackPostJobId`)
+  + `nuxt/feedbackWidget` + `metricsStore` (feedback-счётчики).
 - [`docs/FEEDBACK.md`](docs/FEEDBACK.md) — **дизайн канала**: два источника отзывов —
   **сотрудник** (👍/👎 на `/app`, ✅ реализован) и **программа** (воркер `crm-sync`, когда «запуталась»:
   `unmatched`/`ambiguous`/`manual`/не-распознан-формат — в бэклоге). Каждый отзыв → issue в **приватном**
