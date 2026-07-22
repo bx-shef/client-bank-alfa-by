@@ -32,6 +32,7 @@
     "seed:b24": "node scripts/seed-test-b24.mjs",
     "verify:109": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/verify-109-live.ts",
     "verify:chat": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/verify-chat-live.ts",
+    "verify:distribution": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/verify-distribution-live.ts",
     "mutate:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/mutate-payment-live.ts",
     "sdk:test": "node scripts/b24-sdk-test.mjs",
     "sdk:crm:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/sdk-crm-test.ts",

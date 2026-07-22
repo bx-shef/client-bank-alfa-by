@@ -1144,6 +1144,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     непустой текст + **нейтрализацию BB плательщика** (нет живого `[url=…]`) + сумму с кодом валюты, шлёт сообщение
     в живой чат (recent-группа или self-диалог по `profile.ID`), верифицирует возврат id и **удаляет** тестовое
     сообщение (`im.message.delete`). Dev-only. Подтверждён вживую (6 проверок, msgId получен+удалён).
+  - `scripts/verify-distribution-live.ts` (`pnpm verify:distribution` / `--oauth` / `--keep`) — **живой прогон
+    write-пути СП-леджера (#109/§9)** реальными ядрами `provisionDistributionSp`→`ensurePaymentElement`→
+    `writeDistributionRow`→`recomputeNeedDistribution`: провижин двух СП+полей, карьер-элемент (idempotent),
+    строка леджера 600 (idempotent по маркеру), пересчёт «осталось» 1000−600=400, вторая строка 400→0, полный
+    teardown (items + app-SP-типы). **Два транспорта:** default вебхук (`.env.b24test`) создаёт СП-типы+items, но
+    **не имеет прав на `userfieldconfig.*`** → провижин полей не проходит (проверено на `b24-86sr2r`:
+    `crm.type.*`/`crm.item.*` ок, `userfieldconfig.list`→insufficient_scope), поэтому вебхук-режим проверяет **только
+    создание СП-типов** и явно репортит скоуп-ограничение + сносит частичные типы; **полная** проверка — `--oauth`
+    (`.env.b24oauth`, прод-транспорт `makePortalSdkCall` с app-scope userfieldconfig; ⚠ ротирует refresh-токен, после —
+    переизвлечь creds). Dev-only.
   - `scripts/mutate-payment-live.ts` (`pnpm mutate:test` / `--apply` / `--revert`) — **живой прогон мутационного
     слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
     же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);
