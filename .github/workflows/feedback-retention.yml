@@ -1,0 +1,63 @@
+name: Feedback retention
+
+# Statement-PII retention for the PRIVATE feedback repo (#284, docs/FEEDBACK.md).
+# The receiving repo accumulates real client statements (financial PII) embedded in
+# closed feedback issues; this scheduled sweep REDACTS the statement block out of
+# issues whose `closed_at` is older than the retention window (default 30 days),
+# leaving the non-PII triage metadata. Decision logic is the unit-tested pure core
+# (app/utils/feedbackRetention.ts); the script (pnpm feedback:retention) is the shell.
+#
+# INERT WITHOUT SECRETS: if GITHUB_FEEDBACK_TOKEN / GITHUB_FEEDBACK_REPO are unset,
+# the script exits 0 (channel OFF, nothing to sweep) — so this workflow is a safe
+# no-op until the owner configures the private repo + PAT.
+#
+# The PAT must have Issues:RW on the SEPARATE private feedback repo — the built-in
+# GITHUB_TOKEN is scoped to THIS repo and cannot reach it. Store it as the
+# FEEDBACK_RETENTION_TOKEN secret (a fine-grained PAT; may be the same one the
+# backend uses for GITHUB_FEEDBACK_TOKEN). Third-party actions pinned to SHA (#2).
+
+on:
+  schedule:
+    # Daily at 03:17 UTC — off the hour so it doesn't pile onto the top-of-hour cron rush.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Write redactions (unchecked = dry-run)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: feedback-retention
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    name: sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Retention sweep
+        # Scheduled runs apply; a manual dispatch applies only when the `apply` input is checked
+        # (so an operator can dry-run first). The script self-guards: no secrets → exit 0 no-op.
+        run: pnpm feedback:retention ${{ (github.event_name == 'schedule' || inputs.apply) && '--apply' || '' }}
+        env:
+          GITHUB_FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_RETENTION_TOKEN }}
+          GITHUB_FEEDBACK_REPO: ${{ vars.GITHUB_FEEDBACK_REPO }}
+          FEEDBACK_RETENTION_DAYS: ${{ vars.FEEDBACK_RETENTION_DAYS }}
