@@ -93,11 +93,13 @@ export async function enqueueFeedbackPost(job: FeedbackPostJob): Promise<boolean
 }
 
 /**
+/**
  * Durable-retry options for the payment-trigger self-heal (#79). crm-sync already fired ONCE, so these
- * are the retries: exponential backoff (60s, 120s, 240s, …) over `attempts` tries. A longer window than
- * feedback because the common miss is a `triggerCode` set-but-not-yet-registered — the retries should
- * span the admin registering it (~½ day at the top of the schedule). NO PII in the payload (target ids +
- * app CODE only), so the default count-based retention is fine; failed kept a day for debugging.
+ * are the retries: exponential backoff `60s·2^(n-1)` over 12 attempts (11 retries) — cumulative span
+ * ~34h (top interval ~17h). A long window because the common miss is a `triggerCode`
+ * set-but-not-yet-registered, so the retries should outlast the admin registering it. The payload holds
+ * no amount/counterparty/purpose — only target ids, the app CODE, and `opKey` (`account|docId`, an
+ * account number, same as `fetchJobId`) — and is age-bound below, so it doesn't linger.
  */
 export const TRIGGER_RETRY_OPTS = {
   attempts: 12,

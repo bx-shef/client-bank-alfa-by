@@ -9,8 +9,14 @@ import type { RestCall } from './companyLookup'
 // benign double-signal. DI over the side effects (portal call + transport) → unit-testable without SDK.
 //
 // Fire-only by design: no durable SP-ledger fact / metric is written here (the audit row is written on
-// the SYNCHRONOUS fire; a retried fire is the exceptional path). The retry job's idempotent jobId dedups
-// re-enqueues; at-least-once delivery is acceptable for an idempotent signal.
+// the SYNCHRONOUS fire; a retried fire is the exceptional path — so `metrics_counter.distributed` and the
+// dist-СП ledger undercount self-healed fires). The retry job's idempotent jobId dedups re-enqueues;
+// at-least-once delivery is acceptable for an idempotent signal.
+//
+// Stale-config note: the retry re-checks NEITHER `autoDistribute` nor the current `triggerCode` — it
+// carries the CODE captured at enqueue time and keeps firing even if the admin later toggles
+// auto-distribution off or changes the code. Intended: the payment DID arrive and the fire was intended
+// at capture time; a signal that only reaches the portal late is still the correct signal.
 
 export interface TriggerFireJobDeps {
   /** Resolve the per-portal RestCall (OAuth app-context — required by the method); `null` when the

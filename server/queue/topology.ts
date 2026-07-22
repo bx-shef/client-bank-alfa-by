@@ -152,9 +152,10 @@ export interface FeedbackPostJob {
  * error, OR a `triggerCode` that is set but **not yet registered** on the portal), it enqueues this job
  * so the signal SELF-HEALS: the worker re-fires with backoff until the portal confirms `{result:true}`
  * (e.g. once the admin registers the CODE) or the attempts exhaust. A trigger only SIGNALS (it moves no
- * money), so a redelivered double-fire is a benign double-signal. NO financial PII — only the target
- * ids + the app's own CODE; `opKey` (`account|docId`) makes distinct payments to the same target
- * distinct jobs (each payment is its own signal).
+ * money), so a redelivered double-fire is a benign double-signal. Carries no amount/counterparty/purpose —
+ * only the target ids, the app's own CODE, and `opKey` (`account|docId`, which embeds an account number,
+ * as `fetchJobId` already does) — and it makes distinct payments to the same target distinct jobs (each
+ * payment is its own signal).
  */
 export interface TriggerFireJob {
   memberId: string
