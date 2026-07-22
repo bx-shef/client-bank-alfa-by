@@ -64,6 +64,11 @@ export interface FeedbackContext {
 
 const MAX_CONTEXT_VALUE = 300
 
+/** Summary label of the collapsed statement block. Exported so the retention sweeper
+ *  (feedbackRetention.ts, #284) can locate & redact the embedded statement later without
+ *  the marker drifting between the writer and the redactor. */
+export const FILE_EMBED_SUMMARY = 'Показать содержимое'
+
 /** Raw (pre-escape) char cap for the embedded statement text — the size a normal statement is
  *  truncated to. Also used client- and server-side to bound what's sent/accepted. */
 export const MAX_FILE_EMBED = 30000
@@ -122,7 +127,7 @@ export function fileEmbedLines(value: unknown, caption = '**Файл выпис�
   return [
     '',
     caption,
-    '<details><summary>Показать содержимое</summary>',
+    `<details><summary>${FILE_EMBED_SUMMARY}</summary>`,
     '',
     '<pre><code>',
     content,
