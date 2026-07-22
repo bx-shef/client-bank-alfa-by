@@ -610,7 +610,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       фаерится `crm.automation.trigger.execute` за гейтом `autoDistribute`+`triggerCode`, write-once факт на firing).
       Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
       подтверждены вживую** (`pnpm trigger:test --apply --fire` на `bel.bitrix24.by`: round-trip + `executeTriggerViaRest`
-      `{result:true}` на сделке и смарт-процессе); остаётся `payment.add`-путь заказа. CRM-депсы берут `memberId` явно
+      `{result:true}` на сделке и смарт-процессе). **`payment.add`-путь заказа — сознательно НЕ делаем** (#79,
+      решение владельца: приложение не создаёт оплаты само — слишком инвазивно, противоречит §2-цели #3; «путь
+      заказа» = только найти **существующую** оплату, что уже сделано #172; см. PROCESSING.md §2). **#79 закрыт.**
+      CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       **онлайн-опрос банков (`fetchStatement`) — тоже живой (A9):** демо-счёт → `demoItems`, реальный счёт →
       `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно, Приор → A5b.
