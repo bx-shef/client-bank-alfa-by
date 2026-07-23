@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-21
+> Last reviewed: 2026-07-23
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -1148,12 +1148,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     write-пути СП-леджера (#109/§9)** реальными ядрами `provisionDistributionSp`→`ensurePaymentElement`→
     `writeDistributionRow`→`recomputeNeedDistribution`: провижин двух СП+полей, карьер-элемент (idempotent),
     строка леджера 600 (idempotent по маркеру), пересчёт «осталось» 1000−600=400, вторая строка 400→0, полный
-    teardown (items + app-SP-типы). **Два транспорта:** default вебхук (`.env.b24test`) создаёт СП-типы+items, но
-    **не имеет прав на `userfieldconfig.*`** → провижин полей не проходит (проверено на `b24-86sr2r`:
-    `crm.type.*`/`crm.item.*` ок, `userfieldconfig.list`→insufficient_scope), поэтому вебхук-режим проверяет **только
-    создание СП-типов** и явно репортит скоуп-ограничение + сносит частичные типы; **полная** проверка — `--oauth`
-    (`.env.b24oauth`, прод-транспорт `makePortalSdkCall` с app-scope userfieldconfig; ⚠ ротирует refresh-токен, после —
-    переизвлечь creds). Dev-only.
+    teardown (items + app-SP-типы). **Пройден вживую 10/10 (#384–#386):** владелец выдал тест-вебхуку
+    (`.env.b24test`) право `userfieldconfig.*`, поэтому default вебхук-режим гоняет **весь** write-путь —
+    СП-типы **и UF-поля** + items + пересчёт (раньше упирался в `insufficient_scope` на `userfieldconfig.*`).
+    Live-находки, зашитые в ядра: UF-поля кейсятся на **TYPE id** (`CRM_<id>`), `crm.item.*` адресует их
+    **camelCase** (`ufCrm<id><Pascal>`), свой `PARENT_PAYMENT` UF вместо нативного `parentId<etid>`, сумму/валюту
+    храним в **своих** UF-полях (`double`+`PRECISION:2`; встроенные `opportunity`/`currencyId` на элемент СП не
+    пишутся). **`--oauth`** (`.env.b24oauth`, прод-транспорт `makePortalSdkCall`) — тот же прогон в проде;
+    ⚠ требует `userfieldconfig` в granted-scopes (ре-consent) + ротирует refresh-токен (после — переизвлечь creds).
+    Dev-only.
   - `scripts/mutate-payment-live.ts` (`pnpm mutate:test` / `--apply` / `--revert`) — **живой прогон мутационного
     слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
     же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);

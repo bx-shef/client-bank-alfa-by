@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-07-22
+> Last reviewed: 2026-07-23
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -275,15 +275,19 @@ MCP-сервер по выписке убран из дорожной карты
 (`event.bind`→`DeletionJob`→`reconcile`), и **полный ретайр Postgres-`allocation_fact`** (§9.3 #6 —
 идемпотентность/аудит/сторно живут целиком на dist-СП: маркер строки + `status`). В нашей БД от разнесения
 не осталось ничего — только `portal_tokens` + агрегаты UI (`import_result`/`metrics_counter`).
-**Live-verify §9 — харнесс собран (`pnpm verify:distribution`, `scripts/verify-distribution-live.ts`):** гоняет
+**Live-verify §9 — ПРОЙДЕН ВЖИВУЮ 10/10 (`pnpm verify:distribution`, `scripts/verify-distribution-live.ts`):** гоняет
 реальные ядра провижининга+леджера (`provisionDistributionSp`→`ensurePaymentElement`→`writeDistributionRow`→
-`recomputeNeedDistribution`) с полным teardown. **Находка:** тест-**вебхук** (`b24-86sr2r`) создаёт СП-**типы**
-(`crm.type.*`) и items (`crm.item.*`), но **НЕ имеет прав на `userfieldconfig.*`** (управление UF-полями СП) →
-провижин полей не проходит (`insufficient_scope`), поэтому вебхук-режим подтверждает **только создание СП-типов** и
-репортит скоуп-ограничение; **полный** write-путь проверяется прод-транспортом `--oauth` (`.env.b24oauth`,
-`makePortalSdkCall`, app-scope userfieldconfig — как в воркере) — за владельцем (ротирует refresh-токен).
-**Оставшееся — за ресурсами владельца/вне текущего мандата:** полный live-прогон §9 (`verify:distribution --oauth`
-или вебхук с правом userfieldconfig) + сквозной прогон всей цепочки (#90), Приор async (A5b), телеметрия в Grafana
+`recomputeNeedDistribution`) с полным teardown — тест-**вебхуку** (`b24-86sr2r`) владелец выдал право
+`userfieldconfig.*`, поэтому вебхук-режим теперь подтверждает **весь** write-путь: провижининг СП-типов **и
+UF-полей**, карьер-элемент (idempotent по маркеру), строки леджера, пересчёт «осталось» (600→остаток 400,
++400→0). **Ключевые live-находки (#109, слайсы #384–#386):** (1) UF-поля СП кейсятся на **TYPE id**, не
+entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует UF по **camelCase**-имени
+(`ufCrm<id><Pascal>`), фильтр по оригинальному `UF_CRM_…` возвращает пусто; (3) нет parent-child связи →
+свой `PARENT_PAYMENT` UF вместо нативного `parentId<etid>`; (4) встроенные `opportunity`/`currencyId` **не
+записываются** на элемент СП → сумму/валюту храним в **своих** UF-полях (`double` + `settings.PRECISION:2`,
+иначе копейки округляются). **Оставшееся — за ресурсами владельца/вне текущего мандата:** тот же прогон
+прод-транспортом `--oauth` (`.env.b24oauth`, `makePortalSdkCall`) — как в воркере (⚠ OAuth-путь потребует
+`userfieldconfig` в `B24_REQUIRED_SCOPES` → ре-consent) + сквозной прогон всей цепочки (#90), Приор async (A5b), телеметрия в Grafana
 (slice 2), прод-СКЗИ (#41), обратная связь клиент/ИИ (#61/#108, базовый канал «сотрудник» уже есть). Правильность
 выборок и охват по `PROCESSING.md` — на треке 📥.
 

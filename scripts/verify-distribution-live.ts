@@ -1,23 +1,27 @@
-// Live verification for the #109/§9 DISTRIBUTION LEDGER write path (dev-only, not part of SSG). The
-// §9 contour is complete in code but had never been run live (it was gated on a paid SP tier). It
-// exercises the REAL server cores end-to-end:
+// Live verification for the #109/§9 DISTRIBUTION LEDGER write path (dev-only, not part of SSG). It
+// exercises the REAL server cores end-to-end and is now VERIFIED LIVE 10/10 via the webhook:
 //   1. provisionDistributionSp  — create/self-heal the app's two SPs (payment + distribution) + fields
-//   2. ensurePaymentElement     — write-once payment CARRIER (opportunity 1000), assert idempotent
+//   2. ensurePaymentElement     — write-once payment CARRIER (total 1000), assert idempotent
 //   3. writeDistributionRow     — one ledger row (600), assert idempotent by marker
 //   4. recomputeNeedDistribution— «осталось» = 1000 − 600 = 400
 //   5. second row (400)         — «осталось» → 0
 //   6. teardown                 — delete the created items AND the app SP types (leaves no trace)
 //
+// SP LIVE-FINDINGS baked into the cores (#384–#386): UF fields key off the SP TYPE id (`CRM_<id>`/
+// `UF_CRM_<id>_…`), not the entityTypeId; `crm.item.*` addresses UF by camelCase (`ufCrm<id><Pascal>`),
+// the original name filters EMPTY; no parent-child relation → own `PARENT_PAYMENT` UF instead of the
+// native `parentId<etid>`; built-in `opportunity`/`currencyId` are NOT writable on an SP item → amount +
+// currency live in our own `double`(PRECISION:2)/`string` UF fields (else the recompute summed zeros).
+//
 // TRANSPORT (two modes):
-//   default (webhook, .env.b24test): can create SP TYPES + items, but the test webhook token LACKS the
-//     privilege for `userfieldconfig.*` (SP user-field management) → provisioning can't add the ledger
-//     fields, so the write path can't be verified this way. The run reports this SCOPE gap clearly and
-//     tears down the partial SP types. (Empirically confirmed on b24-86sr2r: `crm.type.*`/`crm.item.*`
-//     work, `userfieldconfig.list` → insufficient_scope.)
+//   default (webhook, .env.b24test): the owner granted the test webhook the `userfieldconfig.*` privilege,
+//     so the webhook now runs the FULL write path (SP types + UF fields + items + recompute) — the primary
+//     live gate. (If a webhook ever lacks the privilege, provisioning throws at the userfieldconfig step;
+//     the run reports the SCOPE gap and tears down the partial SP types.)
 //   --oauth (.env.b24oauth): the PROD transport (`makePortalSdkCall` → per-portal B24OAuth, exactly what
-//     the worker uses) has the app scopes incl. userfieldconfig → the FULL flow runs. ⚠ It refreshes the
-//     (short-lived) access token and thus ROTATES the refresh token, so `.env.b24oauth` goes stale after
-//     — re-extract with scripts/extract-oauth-from-docker.sh. Runs against the owner's real portal.
+//     the worker uses). ⚠ needs `userfieldconfig` in the app's granted scopes (re-consent) and it refreshes
+//     the (short-lived) access token → ROTATES the refresh token, so `.env.b24oauth` goes stale after —
+//     re-extract with scripts/extract-oauth-from-docker.sh. Runs against the owner's real portal.
 //
 // Run:  pnpm verify:distribution           (webhook: type-create + scope diagnosis + teardown)
 //       pnpm verify:distribution --oauth     (OAuth: full write-path verification)
