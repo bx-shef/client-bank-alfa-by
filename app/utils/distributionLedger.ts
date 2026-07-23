@@ -1,41 +1,43 @@
 // Pure builders for the distribution LEDGER in the smart processes (#109, PROCESSING.md §9.1/§9.3).
 // A committed allocation is ONE child element in the distributions SP (`crm.item.add`) linked to the
-// payment carrier element (`parentId<paymentSpEtid>`), carrying the amount (`opportunity`) + our UF
-// fields (target kind/id, source, status, dedup marker). Idempotency is the marker (find-before-add,
-// like the activity marker #259). The payment carrier's «осталось распределить» field is recomputed
-// as `total − Σ active` (via the shared `distributionSummary`). No I/O — the REST calls are the
-// transport slice (`server/utils/distributionLedgerWrite.ts`); these builders are the single source
-// of the ledger wire shape and are unit-tested. Mirrors the sync-payments child-add (parentId<sp>,
-// opportunity, currencyId, isManualOpportunity:'Y').
+// payment carrier element via our `PARENT_PAYMENT` UF field (see below), carrying the amount
+// (`opportunity`) + our UF fields (target kind/id, source, status, dedup marker). Idempotency is the
+// marker (find-before-add, like the activity marker #259). The payment carrier's «осталось
+// распределить» field is recomputed as `total − Σ active` (via the shared `distributionSummary`). No
+// I/O — the REST calls are the transport slice (`server/utils/distributionLedgerWrite.ts`); these
+// builders are the single source of the ledger wire shape and are unit-tested.
 //
 // SP IDENTITY (live-confirmed, #109): each SP is an {@link SpRef} = { entityTypeId, id }. `crm.item.*`
-// and the `parentId<entityTypeId>` link use the entityTypeId; USER FIELDS (`userfieldconfig` entityId
-// + `UF_CRM_<id>_<postfix>` names) use the TYPE id. So every builder here takes an SpRef and uses the
-// right half for each part. Provisioning + the id-based field model are verified live
-// (`pnpm verify:distribution` — SPs create, fields add, carrier/row write).
+// uses the entityTypeId; USER FIELDS use the TYPE id — and are addressed by their CAMELCASE names
+// (`ufCrm<id><Pascal(postfix)>`, `buildUfFieldNameCamel`), because filtering by the original
+// `UF_CRM_<id>_…` name returns EMPTY even with `useOriginalUfNames:'Y'` (live-confirmed — that broke the
+// marker dedup). The parent link between a distribution row and its payment carrier is OUR OWN
+// filterable UF field (`PARENT_PAYMENT`, integer = payment element id, `parentPaymentField`) — NOT the
+// native `parentId<etid>` link, which is rejected in filters because our two SPs have no configured
+// parent-child relationship. Provisioning + carrier/row write + MARKER DEDUP are verified live
+// (`pnpm verify:distribution`).
 //
-// ⚠ TWO REMAINING LIVE ISSUES surfaced once provisioning worked (were previously unreachable — the
-// original two "LIVE-VERIFY before hot-path" caveats), tracked as the next slice:
-//   (1) FILTERING by the ORIGINAL UF name (`UF_CRM_<id>_MARKER`, even with `useOriginalUfNames:'Y'`)
-//       returns EMPTY — the marker dedup probe never matches → duplicates. Filtering by the CAMELCASE
-//       name (`ufCrm<id>Marker`) DOES match (live-probed). Fix: filter by camelCase UF names.
-//   (2) `parentId<entityTypeId>` is REJECTED as a filter key (`… is not allowed in filter`). Listing a
-//       payment's child rows needs another mechanism. Fix: TBD (store the parent id in a filterable UF,
-//       or query children differently).
-// Until both land, the marker dedup + «осталось» recompute don't work end-to-end (autoDistribute is
-// default-OFF, so nothing in prod is affected).
+// ⚠ ONE REMAINING LIVE ISSUE (next slice): the built-in `opportunity`/`currencyId` fields are NOT
+// writable on a smart-process item (they stay 0 / portal-default currency regardless of
+// `isManualOpportunity` or type flags — live-confirmed), so the ledger amount doesn't persist and the
+// «осталось» recompute sees Σ=0 → remaining=total. FIX: store the row amount + currency in OUR OWN UF
+// fields (not `opportunity`) and sum from those. NB a `double` UF rounds to integer by default
+// (600.5→601), so money needs a precision setting (userfieldconfig `settings.PRECISION`) or an
+// integer-minor-units / string field. Until then, dedup works but recompute doesn't (autoDistribute
+// default-OFF → no prod impact).
 
 import type { AllocationTargetKind } from './allocation'
 import type { AllocationSource, DistributionEntry } from './manualAllocation'
 import { distributionSummary } from './manualAllocation'
 import { round2 } from './money'
-import { DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS, buildUfFieldName, type SpRef } from '~/config/distributionSp'
+import { DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS, buildUfFieldNameCamel, type SpRef } from '~/config/distributionSp'
 
-/** The parent-link field name for a child element in the distributions SP: `parentId<paymentSpEtid>`
- *  (B24 smart-process parent reference, confirmed in sync-payments — `parentId1036`). Uses the
- *  entityTypeId (the parent link is by entityTypeId, NOT the type id). */
-export function parentLinkField(paymentSpEtid: number): string {
-  return `parentId${paymentSpEtid}`
+/** The field that links a distribution row to its parent PAYMENT carrier element: our OWN filterable
+ *  UF field (`PARENT_PAYMENT`, integer = the payment element id), by its camelCase name. NOT the native
+ *  `parentId<etid>` link — our two SPs have no configured parent-child relationship, so that link
+ *  doesn't exist and is rejected in filters (live-confirmed, #109). Keyed on the DISTRIBUTIONS SP id. */
+export function parentPaymentField(distributionSp: SpRef): string {
+  return buildUfFieldNameCamel(distributionSp.id, DISTRIBUTION_SP_FIELDS.parentPayment.postfix)
 }
 
 /** Everything needed to write one distribution row. `paymentElementId` is the payment carrier SP
@@ -56,17 +58,15 @@ export interface DistributionRowInput {
  *  so the amount isn't recomputed from products (there are none — it's an accounting row). */
 export function buildDistributionRowAddCall(input: DistributionRowInput): { method: string, params: Record<string, unknown> } {
   const etid = input.distributionSp.entityTypeId
-  const uf = (postfix: string) => buildUfFieldName(input.distributionSp.id, postfix)
+  const uf = (postfix: string) => buildUfFieldNameCamel(input.distributionSp.id, postfix)
   return {
     method: 'crm.item.add',
     params: {
       entityTypeId: etid,
-      // crm.item.* defaults to camelCase UF names (useOriginalUfNames:'N'); we use the ORIGINAL
-      // `UF_CRM_<id>_<POSTFIX>` names everywhere (shared with provisioning) → force 'Y' so the
-      // write/read/filter names all agree (else the marker filter never matches → dedup breaks).
-      useOriginalUfNames: 'Y',
+      // Address UF fields by their CAMELCASE names (crm.item.* default) — filtering by the original
+      // `UF_CRM_<id>_…` name returns EMPTY (live-confirmed), so write/read/filter all use camelCase.
       fields: {
-        [parentLinkField(input.paymentSp.entityTypeId)]: Number(input.paymentElementId),
+        [parentPaymentField(input.distributionSp)]: Number(input.paymentElementId),
         opportunity: round2(input.amount),
         currencyId: input.currency,
         isManualOpportunity: 'Y',
@@ -87,8 +87,7 @@ export function buildMarkerListCall(distributionSp: SpRef, marker: string): { me
     method: 'crm.item.list',
     params: {
       entityTypeId: distributionSp.entityTypeId,
-      useOriginalUfNames: 'Y', // filter/read by the original UF names (see buildDistributionRowAddCall)
-      filter: { [buildUfFieldName(distributionSp.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]: marker },
+      filter: { [buildUfFieldNameCamel(distributionSp.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]: marker },
       select: ['id']
     }
   }
@@ -102,12 +101,11 @@ export function buildActiveRowsListCall(
   paymentElementId: string,
   start?: number
 ): { method: string, params: Record<string, unknown> } {
-  const uf = (postfix: string) => buildUfFieldName(distributionSp.id, postfix)
+  const uf = (postfix: string) => buildUfFieldNameCamel(distributionSp.id, postfix)
   const params: Record<string, unknown> = {
     entityTypeId: distributionSp.entityTypeId,
-    useOriginalUfNames: 'Y',
     filter: {
-      [parentLinkField(paymentSp.entityTypeId)]: Number(paymentElementId),
+      [parentPaymentField(distributionSp)]: Number(paymentElementId),
       [uf(DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active'
     },
     select: ['id', 'opportunity', 'currencyId',
@@ -129,11 +127,10 @@ export function buildPaymentRowsListCall(
   paymentElementId: string,
   start?: number
 ): { method: string, params: Record<string, unknown> } {
-  const uf = (postfix: string) => buildUfFieldName(distributionSp.id, postfix)
+  const uf = (postfix: string) => buildUfFieldNameCamel(distributionSp.id, postfix)
   const params: Record<string, unknown> = {
     entityTypeId: distributionSp.entityTypeId,
-    useOriginalUfNames: 'Y',
-    filter: { [parentLinkField(paymentSp.entityTypeId)]: Number(paymentElementId) },
+    filter: { [parentPaymentField(distributionSp)]: Number(paymentElementId) },
     select: ['id', 'opportunity', 'currencyId',
       uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix),
       uf(DISTRIBUTION_SP_FIELDS.targetId.postfix),
@@ -149,12 +146,11 @@ export function buildPaymentRowsListCall(
 export function buildPaymentListCall(paymentSp: SpRef, start?: number): { method: string, params: Record<string, unknown> } {
   const params: Record<string, unknown> = {
     entityTypeId: paymentSp.entityTypeId,
-    useOriginalUfNames: 'Y',
     order: { id: 'desc' },
     select: ['id', 'opportunity', 'currencyId', 'companyId',
-      buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix),
-      buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix),
-      buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]
+      buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix),
+      buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix),
+      buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]
   }
   if (start) params.start = start
   return { method: 'crm.item.list', params }
@@ -177,14 +173,14 @@ export function parsePaymentCarrier(item: Record<string, unknown>, paymentSp: Sp
     id: `${id}`,
     total: Number.isFinite(total) ? round2(total) : 0,
     currency: String(item.currencyId ?? ''),
-    requiresRedistribution: String(item[buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)] ?? '') === 'Y'
+    requiresRedistribution: String(item[buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)] ?? '') === 'Y'
   }
 }
 
 /** Parse one distribution ledger item (from `crm.item.list`) into a `DistributionEntry`. Reads our
  *  UF fields (by full name) + the built-in `opportunity`/`currencyId`. Non-finite amount → 0. */
 export function parseLedgerRow(item: Record<string, unknown>, distributionSp: SpRef): DistributionEntry {
-  const uf = (postfix: string) => item[buildUfFieldName(distributionSp.id, postfix)]
+  const uf = (postfix: string) => item[buildUfFieldNameCamel(distributionSp.id, postfix)]
   const amount = Number(item.opportunity)
   return {
     targetKind: String(uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix) ?? '') as AllocationTargetKind,
@@ -214,8 +210,7 @@ export function buildNeedRecomputeCall(
     params: {
       entityTypeId: paymentSp.entityTypeId,
       id: Number(paymentElementId),
-      useOriginalUfNames: 'Y', // write the original UF name (see buildDistributionRowAddCall)
-      fields: { [buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: round2(remaining) }
+      fields: { [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: round2(remaining) }
     }
   }
 }
@@ -231,16 +226,15 @@ export function buildTargetRowsListCall(
   targetId: string,
   start?: number
 ): { method: string, params: Record<string, unknown> } {
-  const uf = (postfix: string) => buildUfFieldName(distributionSp.id, postfix)
+  const uf = (postfix: string) => buildUfFieldNameCamel(distributionSp.id, postfix)
   const params: Record<string, unknown> = {
     entityTypeId: distributionSp.entityTypeId,
-    useOriginalUfNames: 'Y',
     filter: {
       [uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix)]: targetKind,
       [uf(DISTRIBUTION_SP_FIELDS.targetId.postfix)]: targetId,
       [uf(DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active'
     },
-    select: ['id', parentLinkField(paymentSp.entityTypeId), uf(DISTRIBUTION_SP_FIELDS.source.postfix)]
+    select: ['id', parentPaymentField(distributionSp), uf(DISTRIBUTION_SP_FIELDS.source.postfix)]
   }
   if (start) params.start = start
   return { method: 'crm.item.list', params }
@@ -256,12 +250,12 @@ export interface TargetRowRef {
 
 /** Parse a target-row list item (from `buildTargetRowsListCall`) into a {@link TargetRowRef}, or
  *  `null` when the row/parent id is missing. */
-export function parseTargetRow(item: Record<string, unknown>, distributionSp: SpRef, paymentSp: SpRef): TargetRowRef | null {
+export function parseTargetRow(item: Record<string, unknown>, distributionSp: SpRef, _paymentSp?: SpRef): TargetRowRef | null {
   const rowId = item.id
-  const parent = item[parentLinkField(paymentSp.entityTypeId)]
+  const parent = item[parentPaymentField(distributionSp)]
   if (rowId === undefined || rowId === null || `${rowId}` === '') return null
   if (parent === undefined || parent === null || `${parent}` === '') return null
-  const source = String(item[buildUfFieldName(distributionSp.id, DISTRIBUTION_SP_FIELDS.source.postfix)] ?? 'auto') === 'manual' ? 'manual' : 'auto'
+  const source = String(item[buildUfFieldNameCamel(distributionSp.id, DISTRIBUTION_SP_FIELDS.source.postfix)] ?? 'auto') === 'manual' ? 'manual' : 'auto'
   return { rowId: `${rowId}`, parentPaymentId: `${parent}`, source }
 }
 
@@ -273,8 +267,7 @@ export function buildDeactivateRowCall(distributionSp: SpRef, rowId: string): { 
     params: {
       entityTypeId: distributionSp.entityTypeId,
       id: Number(rowId),
-      useOriginalUfNames: 'Y',
-      fields: { [buildUfFieldName(distributionSp.id, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'reverted' }
+      fields: { [buildUfFieldNameCamel(distributionSp.id, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'reverted' }
     }
   }
 }
@@ -291,8 +284,7 @@ export function buildRequiresRedistributionCall(
     params: {
       entityTypeId: paymentSp.entityTypeId,
       id: Number(paymentElementId),
-      useOriginalUfNames: 'Y',
-      fields: { [buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)]: value ? 'Y' : 'N' }
+      fields: { [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)]: value ? 'Y' : 'N' }
     }
   }
 }
@@ -336,15 +328,15 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
     opportunity: amount,
     currencyId: input.currency,
     isManualOpportunity: 'Y',
-    [buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
-    [buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
+    [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
+    [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
   }
   // Link the payer company only when matched (a positive integer id).
   const companyId = Number(input.companyId)
   if (input.companyId && Number.isInteger(companyId) && companyId > 0) fields.companyId = companyId
   return {
     method: 'crm.item.add',
-    params: { entityTypeId: paymentSp.entityTypeId, useOriginalUfNames: 'Y', fields }
+    params: { entityTypeId: paymentSp.entityTypeId, fields }
   }
 }
 
@@ -355,8 +347,7 @@ export function buildPaymentMarkerListCall(paymentSp: SpRef, marker: string): { 
     method: 'crm.item.list',
     params: {
       entityTypeId: paymentSp.entityTypeId,
-      useOriginalUfNames: 'Y',
-      filter: { [buildUfFieldName(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: marker },
+      filter: { [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: marker },
       select: ['id', 'opportunity', 'currencyId']
     }
   }

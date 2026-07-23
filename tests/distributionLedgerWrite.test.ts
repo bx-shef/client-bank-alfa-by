@@ -14,15 +14,16 @@ import {
   hasTriggerLedgerFact,
   writeTriggerLedgerFact
 } from '../server/utils/distributionLedgerWrite'
-import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
+import { buildUfFieldNameCamel, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { DistributionRowInput } from '../app/utils/distributionLedger'
 import type { StatementItem } from '../app/types/statement'
 import type { AllocationCandidate } from '../app/utils/allocation'
 
 const PSP = { entityTypeId: 1044, id: 44 }
 const DSP = { entityTypeId: 1046, id: 46 }
+const parentUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.parentPayment.postfix)
 
-const ufName = buildUfFieldName
+const ufName = buildUfFieldNameCamel
 const srcUf = ufName(DSP.id, DISTRIBUTION_SP_FIELDS.source.postfix)
 const needUf = ufName(PSP.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)
 const reqUf = ufName(PSP.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
@@ -46,7 +47,7 @@ function fakeCall(handlers: Record<string, (params: Record<string, unknown>) => 
   return { call, calls }
 }
 
-const statusUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
+const statusUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
 
 describe('extractors', () => {
   it('extractAddedItemId reads result.item.id', () => {
@@ -119,7 +120,7 @@ describe('recomputeNeedDistribution', () => {
     expect(remaining).toBe(50)
     const upd = calls.find(c => c.method === 'crm.item.update')!
     expect(upd.params.id).toBe(500)
-    expect((upd.params.fields as Record<string, unknown>)[buildUfFieldName(PSP.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(50)
+    expect((upd.params.fields as Record<string, unknown>)[buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(50)
   })
 })
 
@@ -136,8 +137,8 @@ describe('loadDistributionsByTarget', () => {
   it('accumulates target rows across pages', async () => {
     const { call } = fakeCall({
       'crm.item.list': params => (params.start
-        ? { result: { items: [{ id: 3, parentId1044: '500', [srcUf]: 'auto' }] } }
-        : { result: { items: [{ id: 1, parentId1044: '500', [srcUf]: 'manual' }] }, next: 1 })
+        ? { result: { items: [{ id: 3, [parentUf]: '500', [srcUf]: 'auto' }] } }
+        : { result: { items: [{ id: 1, [parentUf]: '500', [srcUf]: 'manual' }] }, next: 1 })
     })
     const rows = await loadDistributionsByTarget(DSP, PSP, 'invoice', '39', call)
     expect(rows).toHaveLength(2)
@@ -156,7 +157,7 @@ describe('reconcileTargetDeletion', () => {
       'crm.item.list': (params) => {
         // 1st list = target rows; subsequent lists = active rows (recompute) / payment read
         if (params.filter && (params.filter as Record<string, unknown>)[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
-          return { result: { items: [{ id: 9, parentId1044: '500', [srcUf]: 'manual' }] } }
+          return { result: { items: [{ id: 9, [parentUf]: '500', [srcUf]: 'manual' }] } }
         }
         if ((params.filter as Record<string, unknown>).id === 500) {
           return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } } // payment read
@@ -178,7 +179,7 @@ describe('reconcileTargetDeletion', () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
         if ((params.filter as Record<string, unknown>)?.[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
-          return { result: { items: [{ id: 9, parentId1044: '500', [srcUf]: 'auto' }] } }
+          return { result: { items: [{ id: 9, [parentUf]: '500', [srcUf]: 'auto' }] } }
         }
         if ((params.filter as Record<string, unknown>)?.id === 500) return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }
         return { result: { items: [] } }
