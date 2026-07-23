@@ -15,13 +15,18 @@
 // (`pnpm verify:distribution` — SPs create, fields add, carrier/row write).
 //
 // ⚠ TWO REMAINING LIVE ISSUES surfaced once provisioning worked (were previously unreachable — the
-// original two "LIVE-VERIFY before hot-path" caveats), tracked as the next slice:
+// original two "LIVE-VERIFY before hot-path" caveats), tracked as the next slice (fix design below is
+// live-probed on b24-86sr2r):
 //   (1) FILTERING by the ORIGINAL UF name (`UF_CRM_<id>_MARKER`, even with `useOriginalUfNames:'Y'`)
-//       returns EMPTY — the marker dedup probe never matches → duplicates. Filtering by the CAMELCASE
-//       name (`ufCrm<id>Marker`) DOES match (live-probed). Fix: filter by camelCase UF names.
-//   (2) `parentId<entityTypeId>` is REJECTED as a filter key (`… is not allowed in filter`). Listing a
-//       payment's child rows needs another mechanism. Fix: TBD (store the parent id in a filterable UF,
-//       or query children differently).
+//       returns EMPTY — the marker dedup probe never matches → duplicates. Filtering/reading by the
+//       CAMELCASE name DOES match. FIX: use camelCase UF names throughout (drop `useOriginalUfNames`).
+//       Rule (probed): `UF_CRM_<id>_<A_B_C>` → `ufCrm<id><Pascal(A)><Pascal(B)><Pascal(C)>` — e.g.
+//       `UF_CRM_49_MARKER`→`ufCrm49Marker`, `UF_CRM_49_NEED_DISTR`→`ufCrm49NeedDistr`.
+//   (2) `parentId<entityTypeId>` is REJECTED as a filter key AND a child written with `parentId<etid>`
+//       gets NO parent field back — our two SPs have NO configured parent-child RELATIONSHIP, so the
+//       native parent link doesn't exist. FIX: don't use the native parent link — add our OWN
+//       filterable UF field on the distributions SP (e.g. `PARENT_PAYMENT`, integer = the payment
+//       carrier element id), write it on each row, and filter/select by its camelCase name.
 // Until both land, the marker dedup + «осталось» recompute don't work end-to-end (autoDistribute is
 // default-OFF, so nothing in prod is affected).
 
