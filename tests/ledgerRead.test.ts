@@ -6,11 +6,14 @@ import { buildPaymentListCall, buildPaymentRowsListCall, parsePaymentCarrier } f
 import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { LedgerCard } from '../server/utils/distributionLedgerWrite'
 
-const payMarkerUf = buildUfFieldName(1044, PAYMENT_SP_FIELDS.marker.postfix)
-const reqUf = buildUfFieldName(1044, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
-const rowStatusUf = buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)
-const rowKindUf = buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.targetKind.postfix)
-const rowIdUf = buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.targetId.postfix)
+const PSP = { entityTypeId: 1044, id: 44 }
+const DSP = { entityTypeId: 1046, id: 46 }
+
+const payMarkerUf = buildUfFieldName(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)
+const reqUf = buildUfFieldName(PSP.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
+const rowStatusUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
+const rowKindUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)
+const rowIdUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.targetId.postfix)
 
 function fakeCall(handlers: Record<string, (params: Record<string, unknown>) => Record<string, unknown>>) {
   const calls: { method: string, params: Record<string, unknown> }[] = []
@@ -25,7 +28,7 @@ function fakeCall(handlers: Record<string, (params: Record<string, unknown>) => 
 
 describe('builders', () => {
   it('buildPaymentListCall — newest-first, selects UF state + marker', () => {
-    const { params } = buildPaymentListCall(1044, 50)
+    const { params } = buildPaymentListCall(PSP, 50)
     expect(params.entityTypeId).toBe(1044)
     expect(params.useOriginalUfNames).toBe('Y')
     expect(params.order).toEqual({ id: 'desc' })
@@ -33,14 +36,14 @@ describe('builders', () => {
     expect(params.start).toBe(50)
   })
   it('buildPaymentRowsListCall — all rows of a payment (no status filter)', () => {
-    const { params } = buildPaymentRowsListCall(1046, 1044, '500')
+    const { params } = buildPaymentRowsListCall(DSP, PSP, '500')
     expect((params.filter as Record<string, unknown>).parentId1044).toBe(500)
     expect((params.filter as Record<string, unknown>)[rowStatusUf]).toBeUndefined() // NOT filtered by status
   })
   it('parsePaymentCarrier — reads total/currency/requiresRedistribution', () => {
-    expect(parsePaymentCarrier({ id: 500, opportunity: '100', currencyId: 'BYN', [reqUf]: 'Y' }, 1044))
+    expect(parsePaymentCarrier({ id: 500, opportunity: '100', currencyId: 'BYN', [reqUf]: 'Y' }, PSP))
       .toEqual({ id: '500', total: 100, currency: 'BYN', requiresRedistribution: true })
-    expect(parsePaymentCarrier({ opportunity: '1' }, 1044)).toBeNull() // no id
+    expect(parsePaymentCarrier({ opportunity: '1' }, PSP)).toBeNull() // no id
   })
 })
 
@@ -60,7 +63,7 @@ describe('loadPortalLedger', () => {
         return { result: { items: [] } }
       }
     })
-    const cards = await loadPortalLedger(1044, 1046, call)
+    const cards = await loadPortalLedger(PSP, DSP, call)
     expect(cards).toHaveLength(2)
     expect(cards[0]!.id).toBe('2') // newest first (order preserved from list)
     expect(cards[1]!.requiresRedistribution).toBe(true)
@@ -110,7 +113,7 @@ describe('handleLedgerRequest', () => {
 
 describe('recomputeAllPayments', () => {
   it('recomputes «осталось» for every payment carrier from its active rows', async () => {
-    const rowStatus = buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)
+    const rowStatus = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
         if (params.entityTypeId === 1044) return { result: { items: [{ id: 1, opportunity: '100', currencyId: 'BYN' }, { id: 2, opportunity: '50', currencyId: 'BYN' }] } }
@@ -121,7 +124,7 @@ describe('recomputeAllPayments', () => {
       },
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    const n = await recomputeAllPayments(1044, 1046, call)
+    const n = await recomputeAllPayments(PSP, DSP, call)
     expect(n).toBe(2)
     const updates = calls.filter(c => c.method === 'crm.item.update')
     expect(updates.some(u => u.params.id === 1)).toBe(true) // remaining 70

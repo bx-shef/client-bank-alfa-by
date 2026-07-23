@@ -46,6 +46,12 @@ export interface DeletionSpConfig {
   /** entityTypeId of OUR distributions smart process (the child ledger items) — likewise resolved
    *  through `distributionSpEtid(configFields)` (`DISTRIBUTION_SP_CONFIG_KEY`). */
   distributionSpEtid?: number
+  /** TYPE id of OUR payment-carrier SP — needed (with the entityTypeId) to build the full `SpRef` the
+   *  ledger reconcile requires (field names key off the type id, §9.1). Classification uses the
+   *  entityTypeIds above; the reconcile transport needs the refs. */
+  paymentSpId?: number
+  /** TYPE id of OUR distributions SP (see `paymentSpId`). */
+  distributionSpId?: number
 }
 
 /** Read `data.FIELDS` from a (bracket-parsed) deletion payload. */

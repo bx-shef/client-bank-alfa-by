@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleProvisionDistribution, type ProvisionDistributionDeps } from '../server/utils/distributionProvisionHandler'
-import { DISTRIBUTION_SP_CONFIG_KEY, PAYMENT_SP_CONFIG_KEY } from '../app/config/distributionSp'
+import { DISTRIBUTION_SP_CONFIG_KEY, DISTRIBUTION_SP_ID_CONFIG_KEY, PAYMENT_SP_CONFIG_KEY, PAYMENT_SP_ID_CONFIG_KEY } from '../app/config/distributionSp'
 import { defaultPortalSettings, type PortalSettings } from '../app/utils/settings'
 import type { KnownSpIds, ProvisionResult } from '../server/utils/distributionSpProvision'
 
@@ -37,14 +37,21 @@ function makeDeps(opts: {
   return { deps, saved }
 }
 
-const RESULT = (over: Partial<ProvisionResult> = {}): ProvisionResult => ({
-  paymentSpEtid: 1044,
-  distributionSpEtid: 1046,
-  createdPaymentSp: true,
-  createdDistributionSp: true,
-  addedFields: 8,
-  ...over
-})
+const REF = (entityTypeId: number, id: number) => ({ entityTypeId, id })
+const RESULT = (over: Partial<ProvisionResult> = {}): ProvisionResult => {
+  const payment = over.payment ?? REF(1044, 44)
+  const distribution = over.distribution ?? REF(1046, 46)
+  return {
+    payment,
+    distribution,
+    paymentSpEtid: payment.entityTypeId,
+    distributionSpEtid: distribution.entityTypeId,
+    createdPaymentSp: true,
+    createdDistributionSp: true,
+    addedFields: 8,
+    ...over
+  }
+}
 
 describe('handleProvisionDistribution', () => {
   it('provisions and stores both etids when settings are empty', async () => {
@@ -55,7 +62,7 @@ describe('handleProvisionDistribution', () => {
     const { deps, saved } = makeDeps({ initial: {}, provisionResult: RESULT(), onProvision: capture })
     const out = await handleProvisionDistribution(deps)
 
-    expect(seenKnown).toEqual({ paymentSpEtid: null, distributionSpEtid: null }) // nothing stored yet
+    expect(seenKnown).toEqual({ payment: null, distribution: null }) // nothing stored yet
     expect(out.paymentSpEtid).toBe(1044)
     expect(out.distributionSpEtid).toBe(1046)
     expect(out.storedChanged).toBe(true)
@@ -70,18 +77,18 @@ describe('handleProvisionDistribution', () => {
       seenKnown = k
     }
     const { deps } = makeDeps({
-      initial: { [PAYMENT_SP_CONFIG_KEY]: '100', [DISTRIBUTION_SP_CONFIG_KEY]: '200' },
-      provisionResult: RESULT({ paymentSpEtid: 100, distributionSpEtid: 200, createdPaymentSp: false, createdDistributionSp: false, addedFields: 0 }),
+      initial: { [PAYMENT_SP_CONFIG_KEY]: '100', [PAYMENT_SP_ID_CONFIG_KEY]: '10', [DISTRIBUTION_SP_CONFIG_KEY]: '200', [DISTRIBUTION_SP_ID_CONFIG_KEY]: '20' },
+      provisionResult: RESULT({ payment: REF(100, 10), distribution: REF(200, 20), createdPaymentSp: false, createdDistributionSp: false, addedFields: 0 }),
       onProvision: capture
     })
     const out = await handleProvisionDistribution(deps)
-    expect(seenKnown).toEqual({ paymentSpEtid: 100, distributionSpEtid: 200 })
+    expect(seenKnown).toEqual({ payment: REF(100, 10), distribution: REF(200, 20) })
     expect(out.storedChanged).toBe(false)
   })
 
   it('does NOT write settings when the resolved ids equal what is stored (idempotent)', async () => {
     const { deps, saved } = makeDeps({
-      initial: { [PAYMENT_SP_CONFIG_KEY]: '1044', [DISTRIBUTION_SP_CONFIG_KEY]: '1046' },
+      initial: { [PAYMENT_SP_CONFIG_KEY]: '1044', [PAYMENT_SP_ID_CONFIG_KEY]: '44', [DISTRIBUTION_SP_CONFIG_KEY]: '1046', [DISTRIBUTION_SP_ID_CONFIG_KEY]: '46' },
       provisionResult: RESULT({ createdPaymentSp: false, createdDistributionSp: false, addedFields: 0 })
     })
     const out = await handleProvisionDistribution(deps)

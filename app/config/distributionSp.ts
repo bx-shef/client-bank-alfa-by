@@ -15,12 +15,26 @@
 export const PAYMENT_SP_TITLE = 'Импорт выписки: платежи'
 export const DISTRIBUTION_SP_TITLE = 'Импорт выписки: распределения'
 
-/** A user field to create on an SP. B24 requires the field NAME to embed the object's
- *  entityTypeId (`UF_CRM_<entityTypeId>_<postfix>`) — assigned per portal — so we store the
- *  POSTFIX here and build the full name at provisioning time via `buildUfFieldName`. `userTypeId`
- *  is REQUIRED by `userfieldconfig.add` (a field can't be created from a name alone). */
+/** A smart process reference. B24 gives an SP TWO ids: `entityTypeId` (large, used for `crm.item.*`
+ *  and the `parentId<entityTypeId>` link) and `id` (the small ordinal from `crm.type.list`). USER
+ *  FIELDS on an SP are keyed by the `id`, NOT the entityTypeId: `userfieldconfig` `entityId` is
+ *  `CRM_<id>` and the field name is `UF_CRM_<id>_<postfix>` (live-confirmed on the test portal:
+ *  `CRM_<entityTypeId>` → "not allowed", `CRM_<id>` → works, and the id-named field round-trips
+ *  through `crm.item.*` addressed by `entityTypeId`). So every field-name/entityId builder takes the
+ *  `id`, while item calls take the `entityTypeId`. */
+export interface SpRef {
+  /** entityTypeId — for `crm.item.*` `entityTypeId` and `parentId<entityTypeId>`. */
+  entityTypeId: number
+  /** type id (crm.type.list ordinal) — for `userfieldconfig` `entityId`/field names (`CRM_<id>`). */
+  id: number
+}
+
+/** A user field to create on an SP. B24 requires the field NAME to embed the SP's type `id`
+ *  (`UF_CRM_<id>_<postfix>`) — assigned per portal — so we store the POSTFIX here and build the full
+ *  name at provisioning time via `buildUfFieldName`. `userTypeId` is REQUIRED by `userfieldconfig.add`
+ *  (a field can't be created from a name alone). */
 export interface SpUserField {
-  /** POSTFIX only; full name = `UF_CRM_<entityTypeId>_<postfix>`. */
+  /** POSTFIX only; full name = `UF_CRM_<id>_<postfix>`. */
   postfix: string
   /** B24 user-field type: `double` (number), `boolean` (Y/N), `string`, `integer`. */
   userTypeId: 'double' | 'boolean' | 'string' | 'integer'
@@ -53,30 +67,32 @@ export const DISTRIBUTION_SP_FIELDS = {
   marker: { postfix: 'MARKER', userTypeId: 'string', label: 'Маркер факта' }
 } as const satisfies Record<string, SpUserField>
 
-/** Build the full B24 user-field name for a smart-process field: `UF_CRM_<entityTypeId>_<postfix>`
- *  (the format `userfieldconfig.add` requires — the object's entityTypeId is embedded). */
-export function buildUfFieldName(entityTypeId: number, postfix: string): string {
-  return `UF_CRM_${entityTypeId}_${postfix}`
+/** Build the full B24 user-field name for a smart-process field: `UF_CRM_<id>_<postfix>` where `id`
+ *  is the SP's TYPE id (crm.type.list ordinal), NOT the entityTypeId — the format `userfieldconfig.add`
+ *  requires and that `crm.item.*` (addressed by entityTypeId) then reads/writes (live-confirmed). */
+export function buildUfFieldName(spTypeId: number, postfix: string): string {
+  return `UF_CRM_${spTypeId}_${postfix}`
 }
 
-/** Build the smart-process `entityId` a UF is created against: `CRM_<entityTypeId>` (the
- *  `userfieldconfig.add` `field.entityId` format for smart processes). */
-export function buildSpEntityId(entityTypeId: number): string {
-  return `CRM_${entityTypeId}`
+/** Build the smart-process `entityId` a UF is created against: `CRM_<id>` (the SP's TYPE id) — the
+ *  `userfieldconfig.add` `field.entityId` format for smart processes. NOT `CRM_<entityTypeId>`
+ *  (live-confirmed: the entityTypeId form is rejected with "not allowed to view custom field settings"). */
+export function buildSpEntityId(spTypeId: number): string {
+  return `CRM_${spTypeId}`
 }
 
 /** Build a `userfieldconfig.add` call that creates one user field on a smart process. The field
- *  name embeds the SP's entityTypeId (`UF_CRM_<etid>_<postfix>`) and the type is required; the RU
- *  label is set as `editFormLabel`. Idempotency is the caller's (`planMissingUserFields` skips
- *  fields that already exist — B24 rejects a duplicate fieldName). */
-export function buildUfFieldConfigCall(entityTypeId: number, field: SpUserField): { method: string, params: Record<string, unknown> } {
+ *  name + entityId embed the SP's TYPE id (`CRM_<id>` / `UF_CRM_<id>_<postfix>`) and the type is
+ *  required; the RU label is set as `editFormLabel`. Idempotency is the caller's
+ *  (`planMissingUserFields` skips fields that already exist — B24 rejects a duplicate fieldName). */
+export function buildUfFieldConfigCall(spTypeId: number, field: SpUserField): { method: string, params: Record<string, unknown> } {
   return {
     method: 'userfieldconfig.add',
     params: {
       moduleId: 'crm',
       field: {
-        entityId: buildSpEntityId(entityTypeId),
-        fieldName: buildUfFieldName(entityTypeId, field.postfix),
+        entityId: buildSpEntityId(spTypeId),
+        fieldName: buildUfFieldName(spTypeId, field.postfix),
         userTypeId: field.userTypeId,
         editFormLabel: { ru: field.label }
       }
@@ -86,17 +102,17 @@ export function buildUfFieldConfigCall(entityTypeId: number, field: SpUserField)
 
 /** Plan the `userfieldconfig.add` calls needed to bring a smart process's fields up to date:
  *  one call per field whose full name is NOT already present (`existingFieldNames`, from
- *  `userfieldconfig.list`). Idempotent — a re-run after all fields exist plans nothing, so
- *  provisioning self-heals a partially-created SP without duplicating fields. */
+ *  `userfieldconfig.list`). `spTypeId` is the SP's TYPE id (field names are keyed by it). Idempotent —
+ *  a re-run after all fields exist plans nothing, so provisioning self-heals a partially-created SP. */
 export function planMissingUserFields(
-  entityTypeId: number,
+  spTypeId: number,
   fields: readonly SpUserField[],
   existingFieldNames: readonly string[]
 ): { method: string, params: Record<string, unknown> }[] {
   const present = new Set(existingFieldNames)
   return fields
-    .filter(f => !present.has(buildUfFieldName(entityTypeId, f.postfix)))
-    .map(f => buildUfFieldConfigCall(entityTypeId, f))
+    .filter(f => !present.has(buildUfFieldName(spTypeId, f.postfix)))
+    .map(f => buildUfFieldConfigCall(spTypeId, f))
 }
 
 /** `crm.type.add` params for the PAYMENT-carrier SP. Stages OFF (§9), client + my-company ON,
@@ -158,10 +174,14 @@ export const DISTRIBUTION_SP_USER_FIELDS = {
 export const PAYMENT_SP_CONFIG_KEY = 'payment-sp'
 /** Config key holding our DISTRIBUTIONS SP's entityTypeId (in `recognition.configFields`). */
 export const DISTRIBUTION_SP_CONFIG_KEY = 'distribution-sp'
+/** Config key holding our PAYMENT-carrier SP's TYPE id (needed for `userfieldconfig`/field names). */
+export const PAYMENT_SP_ID_CONFIG_KEY = 'payment-sp-id'
+/** Config key holding our DISTRIBUTIONS SP's TYPE id (needed for `userfieldconfig`/field names). */
+export const DISTRIBUTION_SP_ID_CONFIG_KEY = 'distribution-sp-id'
 
-/** Coerce a stored config value to a positive-integer entityTypeId, or `null` when
+/** Coerce a stored config value to a positive integer, or `null` when
  *  absent/blank/non-numeric (fail-closed — a misconfigured value never matches a real type). */
-function coerceEntityTypeId(raw: string | undefined): number | null {
+function coercePositiveInt(raw: string | undefined): number | null {
   if (!raw) return null
   const n = Number(String(raw).trim())
   return Number.isInteger(n) && n > 0 ? n : null
@@ -169,31 +189,58 @@ function coerceEntityTypeId(raw: string | undefined): number | null {
 
 /** Our payment-carrier SP entityTypeId from portal config (`null` when not provisioned). */
 export function paymentSpEtid(configFields: Record<string, string> | undefined): number | null {
-  return coerceEntityTypeId(configFields?.[PAYMENT_SP_CONFIG_KEY])
+  return coercePositiveInt(configFields?.[PAYMENT_SP_CONFIG_KEY])
 }
 
 /** Our distributions SP entityTypeId from portal config (`null` when not provisioned). */
 export function distributionSpEtid(configFields: Record<string, string> | undefined): number | null {
-  return coerceEntityTypeId(configFields?.[DISTRIBUTION_SP_CONFIG_KEY])
+  return coercePositiveInt(configFields?.[DISTRIBUTION_SP_CONFIG_KEY])
 }
 
-/** Merge the two provisioned entityTypeIds INTO a `configFields` map (returns a NEW object — never
- *  mutates the input), stored as strings under the reserved keys. Provisioning calls this after
- *  `provisionDistributionSp` to persist the ids; the write is idempotent (same ids ⇒ same map). */
-export function withSpEtids(
+/** Our payment-carrier SP TYPE id from portal config (`null` when not provisioned). */
+export function paymentSpTypeId(configFields: Record<string, string> | undefined): number | null {
+  return coercePositiveInt(configFields?.[PAYMENT_SP_ID_CONFIG_KEY])
+}
+
+/** Our distributions SP TYPE id from portal config (`null` when not provisioned). */
+export function distributionSpTypeId(configFields: Record<string, string> | undefined): number | null {
+  return coercePositiveInt(configFields?.[DISTRIBUTION_SP_ID_CONFIG_KEY])
+}
+
+/** Resolve a full {@link SpRef} (entityTypeId + type id) for the PAYMENT SP, or `null` when either
+ *  part is missing (fail-closed — the ledger needs BOTH: entityTypeId for items, id for field names). */
+export function paymentSpRef(configFields: Record<string, string> | undefined): SpRef | null {
+  const entityTypeId = paymentSpEtid(configFields)
+  const id = paymentSpTypeId(configFields)
+  return entityTypeId !== null && id !== null ? { entityTypeId, id } : null
+}
+
+/** Resolve a full {@link SpRef} for the DISTRIBUTIONS SP, or `null` when either part is missing. */
+export function distributionSpRef(configFields: Record<string, string> | undefined): SpRef | null {
+  const entityTypeId = distributionSpEtid(configFields)
+  const id = distributionSpTypeId(configFields)
+  return entityTypeId !== null && id !== null ? { entityTypeId, id } : null
+}
+
+/** Merge the two provisioned SP refs (entityTypeId + type id each) INTO a `configFields` map (returns
+ *  a NEW object — never mutates the input), stored as strings under the reserved keys. Provisioning
+ *  calls this after `provisionDistributionSp` to persist the ids; idempotent (same ids ⇒ same map). */
+export function withSpProvision(
   configFields: Record<string, string> | undefined,
-  paymentEtid: number,
-  distributionEtid: number
+  payment: SpRef,
+  distribution: SpRef
 ): Record<string, string> {
   return {
     ...(configFields ?? {}),
-    [PAYMENT_SP_CONFIG_KEY]: String(paymentEtid),
-    [DISTRIBUTION_SP_CONFIG_KEY]: String(distributionEtid)
+    [PAYMENT_SP_CONFIG_KEY]: String(payment.entityTypeId),
+    [PAYMENT_SP_ID_CONFIG_KEY]: String(payment.id),
+    [DISTRIBUTION_SP_CONFIG_KEY]: String(distribution.entityTypeId),
+    [DISTRIBUTION_SP_ID_CONFIG_KEY]: String(distribution.id)
   }
 }
 
-/** Whether `configFields` already stores BOTH provisioned SP ids (positive integers) — the caller
- *  can skip a re-provision / settings write when true. */
+/** Whether `configFields` already stores BOTH provisioned SP refs COMPLETELY (entityTypeId AND type
+ *  id for each) — the caller can skip a re-provision / settings write when true. */
 export function hasSpEtids(configFields: Record<string, string> | undefined): boolean {
-  return paymentSpEtid(configFields) !== null && distributionSpEtid(configFields) !== null
+  return paymentSpRef(configFields) !== null && distributionSpRef(configFields) !== null
 }

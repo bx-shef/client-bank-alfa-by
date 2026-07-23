@@ -33,6 +33,7 @@ import {
   type PaymentElementInput,
   type TargetRowRef
 } from '../../app/utils/distributionLedger'
+import type { SpRef } from '../../app/config/distributionSp'
 import type { RestCall } from './companyLookup'
 
 /** Page-loop backstop for a payment's active rows (a payment with more than this many active
@@ -60,9 +61,9 @@ function nextOffset(resp: Record<string, unknown>): number | null {
 
 /** Find an existing distribution row id by its dedup marker, or `null`. Empty marker → `null`
  *  without a REST call (an empty filter would list every row). */
-export async function findDistributionByMarker(distributionSpEtid: number, marker: string, call: RestCall): Promise<string | null> {
+export async function findDistributionByMarker(distributionSp: SpRef, marker: string, call: RestCall): Promise<string | null> {
   if (!marker) return null
-  const listCall = buildMarkerListCall(distributionSpEtid, marker)
+  const listCall = buildMarkerListCall(distributionSp, marker)
   const resp = await call(listCall.method, listCall.params)
   const first = extractListItems(resp)[0]
   const id = first?.id
@@ -72,7 +73,7 @@ export async function findDistributionByMarker(distributionSpEtid: number, marke
 /** Write one distribution row idempotently: if a row with the same marker already exists, return it
  *  (`created:false`) without adding a duplicate; else `crm.item.add` and return the new id. */
 export async function writeDistributionRow(input: DistributionRowInput, call: RestCall): Promise<{ id: string, created: boolean }> {
-  const existing = await findDistributionByMarker(input.distributionSpEtid, input.marker, call)
+  const existing = await findDistributionByMarker(input.distributionSp, input.marker, call)
   if (existing) return { id: existing, created: false }
   const addCall = buildDistributionRowAddCall(input)
   const resp = await call(addCall.method, addCall.params)
@@ -83,9 +84,9 @@ export async function writeDistributionRow(input: DistributionRowInput, call: Re
 
 /** Find an existing payment CARRIER element id by its operation marker, or `null`. Empty marker →
  *  `null` without a REST call. */
-export async function findPaymentByMarker(paymentSpEtid: number, marker: string, call: RestCall): Promise<string | null> {
+export async function findPaymentByMarker(paymentSp: SpRef, marker: string, call: RestCall): Promise<string | null> {
   if (!marker) return null
-  const listCall = buildPaymentMarkerListCall(paymentSpEtid, marker)
+  const listCall = buildPaymentMarkerListCall(paymentSp, marker)
   const resp = await call(listCall.method, listCall.params)
   const id = extractListItems(resp)[0]?.id
   return id !== undefined && id !== null && `${id}` !== '' ? `${id}` : null
@@ -94,10 +95,10 @@ export async function findPaymentByMarker(paymentSpEtid: number, marker: string,
 /** Ensure the payment carrier element for an operation exists: return it if a row with the same
  *  operation marker is already present (`created:false`), else `crm.item.add` and return the new id.
  *  Idempotent write-once per operation (mirrors the activity marker, #259). */
-export async function ensurePaymentElement(paymentSpEtid: number, input: PaymentElementInput, call: RestCall): Promise<{ id: string, created: boolean }> {
-  const existing = await findPaymentByMarker(paymentSpEtid, input.marker, call)
+export async function ensurePaymentElement(paymentSp: SpRef, input: PaymentElementInput, call: RestCall): Promise<{ id: string, created: boolean }> {
+  const existing = await findPaymentByMarker(paymentSp, input.marker, call)
   if (existing) return { id: existing, created: false }
-  const addCall = buildPaymentElementAddCall(paymentSpEtid, input)
+  const addCall = buildPaymentElementAddCall(paymentSp, input)
   const resp = await call(addCall.method, addCall.params)
   const id = extractAddedItemId(resp)
   if (!id) throw new Error('crm.item.add returned no payment element id')
@@ -106,17 +107,17 @@ export async function ensurePaymentElement(paymentSpEtid: number, input: Payment
 
 /** Load ALL active distribution rows of a payment element (paginated), parsed to entries. */
 export async function loadActiveDistributions(
-  distributionSpEtid: number,
-  paymentSpEtid: number,
+  distributionSp: SpRef,
+  paymentSp: SpRef,
   paymentElementId: string,
   call: RestCall
 ): Promise<DistributionEntry[]> {
   const rows: DistributionEntry[] = []
   let start: number | null = 0
   for (let page = 0; page < MAX_LEDGER_PAGES && start !== null; page++) {
-    const listCall = buildActiveRowsListCall(distributionSpEtid, paymentSpEtid, paymentElementId, start || undefined)
+    const listCall = buildActiveRowsListCall(distributionSp, paymentSp, paymentElementId, start || undefined)
     const resp = await call(listCall.method, listCall.params)
-    for (const item of extractListItems(resp)) rows.push(parseLedgerRow(item, distributionSpEtid))
+    for (const item of extractListItems(resp)) rows.push(parseLedgerRow(item, distributionSp))
     start = nextOffset(resp)
   }
   return rows
@@ -128,24 +129,24 @@ export async function loadActiveDistributions(
  * ledger writes the same value.
  */
 export async function recomputeNeedDistribution(
-  paymentSpEtid: number,
+  paymentSp: SpRef,
   paymentElementId: string,
-  distributionSpEtid: number,
+  distributionSp: SpRef,
   total: number,
   currency: string,
   call: RestCall
 ): Promise<number> {
-  const rows = await loadActiveDistributions(distributionSpEtid, paymentSpEtid, paymentElementId, call)
+  const rows = await loadActiveDistributions(distributionSp, paymentSp, paymentElementId, call)
   const remaining = computeNeedDistribution(total, currency, rows)
-  const updateCall = buildNeedRecomputeCall(paymentSpEtid, paymentElementId, remaining)
+  const updateCall = buildNeedRecomputeCall(paymentSp, paymentElementId, remaining)
   await call(updateCall.method, updateCall.params)
   return remaining
 }
 
 /** Read a payment carrier element's total (`opportunity`) + currency. `null` when the element is
  *  gone (e.g. the whole payment was deleted) — the caller then has nothing to recompute. */
-export async function readPaymentTotal(paymentSpEtid: number, paymentElementId: string, call: RestCall): Promise<{ total: number, currency: string } | null> {
-  const readCall = buildPaymentReadCall(paymentSpEtid, paymentElementId)
+export async function readPaymentTotal(paymentSp: SpRef, paymentElementId: string, call: RestCall): Promise<{ total: number, currency: string } | null> {
+  const readCall = buildPaymentReadCall(paymentSp, paymentElementId)
   const resp = await call(readCall.method, readCall.params)
   const item = extractListItems(resp)[0]
   return item ? parsePaymentTotal(item) : null
@@ -153,8 +154,8 @@ export async function readPaymentTotal(paymentSpEtid: number, paymentElementId: 
 
 /** Load ALL active distribution rows pointing at a TARGET (`targetKind`+`targetId`), paginated. */
 export async function loadDistributionsByTarget(
-  distributionSpEtid: number,
-  paymentSpEtid: number,
+  distributionSp: SpRef,
+  paymentSp: SpRef,
   targetKind: AllocationTargetKind,
   targetId: string,
   call: RestCall
@@ -162,10 +163,10 @@ export async function loadDistributionsByTarget(
   const refs: TargetRowRef[] = []
   let start: number | null = 0
   for (let page = 0; page < MAX_LEDGER_PAGES && start !== null; page++) {
-    const listCall = buildTargetRowsListCall(distributionSpEtid, paymentSpEtid, targetKind, targetId, start || undefined)
+    const listCall = buildTargetRowsListCall(distributionSp, paymentSp, targetKind, targetId, start || undefined)
     const resp = await call(listCall.method, listCall.params)
     for (const item of extractListItems(resp)) {
-      const ref = parseTargetRow(item, distributionSpEtid, paymentSpEtid)
+      const ref = parseTargetRow(item, distributionSp, paymentSp)
       if (ref) refs.push(ref)
     }
     start = nextOffset(resp)
@@ -195,18 +196,18 @@ export interface TargetReconcileResult {
  * «пересчитать» button (§3/§9.2, the spec's backstop for exactly this), not by the retry.
  */
 export async function reconcileTargetDeletion(
-  paymentSpEtid: number,
-  distributionSpEtid: number,
+  paymentSp: SpRef,
+  distributionSp: SpRef,
   targetKind: AllocationTargetKind,
   targetId: string,
   call: RestCall
 ): Promise<TargetReconcileResult> {
-  const rows = await loadDistributionsByTarget(distributionSpEtid, paymentSpEtid, targetKind, targetId, call)
+  const rows = await loadDistributionsByTarget(distributionSp, paymentSp, targetKind, targetId, call)
   if (rows.length === 0) return { freed: 0, parentsRecomputed: 0, manualParents: 0 }
 
   // Deactivate every matching row first (so the recompute below sees them as freed).
   for (const row of rows) {
-    const deact = buildDeactivateRowCall(distributionSpEtid, row.rowId)
+    const deact = buildDeactivateRowCall(distributionSp, row.rowId)
     await call(deact.method, deact.params)
   }
 
@@ -220,12 +221,12 @@ export async function reconcileTargetDeletion(
 
   let parentsRecomputed = 0
   for (const parentId of parents) {
-    const payment = await readPaymentTotal(paymentSpEtid, parentId, call)
+    const payment = await readPaymentTotal(paymentSp, parentId, call)
     if (!payment) continue // the whole payment element is gone — nothing to recompute
-    await recomputeNeedDistribution(paymentSpEtid, parentId, distributionSpEtid, payment.total, payment.currency, call)
+    await recomputeNeedDistribution(paymentSp, parentId, distributionSp, payment.total, payment.currency, call)
     parentsRecomputed++
     if (manualParents.has(parentId)) {
-      const flag = buildRequiresRedistributionCall(paymentSpEtid, parentId, true)
+      const flag = buildRequiresRedistributionCall(paymentSp, parentId, true)
       await call(flag.method, flag.params)
     }
   }
@@ -252,14 +253,14 @@ export interface LedgerAllocationResult {
  * target (for an exact-match auto-allocate that equals `op.amount`). Errors propagate (BullMQ retries).
  */
 export async function writeLedgerAllocation(
-  paymentSpEtid: number,
-  distributionSpEtid: number,
+  paymentSp: SpRef,
+  distributionSp: SpRef,
   op: StatementItem,
   target: AllocationCandidate,
   companyId: string | undefined,
   call: RestCall
 ): Promise<LedgerAllocationResult> {
-  const payment = await ensurePaymentElement(paymentSpEtid, {
+  const payment = await ensurePaymentElement(paymentSp, {
     opportunity: op.amount,
     currency: op.currency,
     marker: dedupKey(op),
@@ -267,8 +268,8 @@ export async function writeLedgerAllocation(
   }, call)
 
   const row = await writeDistributionRow({
-    paymentSpEtid,
-    distributionSpEtid,
+    paymentSp,
+    distributionSp,
     paymentElementId: payment.id,
     amount: op.amount,
     currency: op.currency,
@@ -278,7 +279,7 @@ export async function writeLedgerAllocation(
     marker: allocationFactKey(op, target)
   }, call)
 
-  const remaining = await recomputeNeedDistribution(paymentSpEtid, payment.id, distributionSpEtid, op.amount, op.currency, call)
+  const remaining = await recomputeNeedDistribution(paymentSp, payment.id, distributionSp, op.amount, op.currency, call)
 
   return { paymentElementId: payment.id, rowId: row.id, rowCreated: row.created, remaining }
 }
@@ -287,8 +288,8 @@ export async function writeLedgerAllocation(
  *  SP-ledger — a distribution row with the trigger's allocation-fact marker exists (#109 §9.3 #6).
  *  This replaces the Postgres `hasAllocationFact` dedup for the trigger path: the marker lives on the
  *  dist-СП row, so a redelivery/retry that already fired finds it and skips. Empty marker → false. */
-export async function hasTriggerLedgerFact(distributionSpEtid: number, op: StatementItem, target: AllocationCandidate, call: RestCall): Promise<boolean> {
-  return (await findDistributionByMarker(distributionSpEtid, allocationFactKey(op, target), call)) !== null
+export async function hasTriggerLedgerFact(distributionSp: SpRef, op: StatementItem, target: AllocationCandidate, call: RestCall): Promise<boolean> {
+  return (await findDistributionByMarker(distributionSp, allocationFactKey(op, target), call)) !== null
 }
 
 /** Record a fired TRIGGER (deal/smart-process, #79) in the SP-ledger (#109 §9.3 #6): ensure the
@@ -298,14 +299,14 @@ export async function hasTriggerLedgerFact(distributionSpEtid: number, op: State
  *  is purely the durable dedup marker + audit record («триггер отправлен»). Returns whether a NEW row
  *  was created (redelivery finds it and returns false). Errors propagate (clean BullMQ retry). */
 export async function writeTriggerLedgerFact(
-  paymentSpEtid: number,
-  distributionSpEtid: number,
+  paymentSp: SpRef,
+  distributionSp: SpRef,
   op: StatementItem,
   target: AllocationCandidate,
   companyId: string | undefined,
   call: RestCall
 ): Promise<{ created: boolean }> {
-  const payment = await ensurePaymentElement(paymentSpEtid, {
+  const payment = await ensurePaymentElement(paymentSp, {
     opportunity: op.amount,
     currency: op.currency,
     marker: dedupKey(op),
@@ -313,8 +314,8 @@ export async function writeTriggerLedgerFact(
   }, call)
 
   const row = await writeDistributionRow({
-    paymentSpEtid,
-    distributionSpEtid,
+    paymentSp,
+    distributionSp,
     paymentElementId: payment.id,
     amount: 0,
     currency: op.currency,
@@ -341,13 +342,13 @@ export interface LedgerCard {
 }
 
 /** List ALL distribution rows (any status) of one payment element, paginated. */
-async function loadAllRows(distributionSpEtid: number, paymentSpEtid: number, paymentElementId: string, call: RestCall): Promise<DistributionEntry[]> {
+async function loadAllRows(distributionSp: SpRef, paymentSp: SpRef, paymentElementId: string, call: RestCall): Promise<DistributionEntry[]> {
   const rows: DistributionEntry[] = []
   let start: number | null = 0
   for (let page = 0; page < MAX_LEDGER_PAGES && start !== null; page++) {
-    const listCall = buildPaymentRowsListCall(distributionSpEtid, paymentSpEtid, paymentElementId, start || undefined)
+    const listCall = buildPaymentRowsListCall(distributionSp, paymentSp, paymentElementId, start || undefined)
     const resp = await call(listCall.method, listCall.params)
-    for (const item of extractListItems(resp)) rows.push(parseLedgerRow(item, distributionSpEtid))
+    for (const item of extractListItems(resp)) rows.push(parseLedgerRow(item, distributionSp))
     start = nextOffset(resp)
   }
   return rows
@@ -358,14 +359,14 @@ async function loadAllRows(distributionSpEtid: number, paymentSpEtid: number, pa
  * `MAX_LEDGER_PAYMENTS`) each with ALL their distribution rows (active + reverted, for history). Pure
  * over the injected `call`. Errors propagate (the route maps them to 502). Ordered newest-first.
  */
-export async function loadPortalLedger(paymentSpEtid: number, distributionSpEtid: number, call: RestCall): Promise<LedgerCard[]> {
+export async function loadPortalLedger(paymentSp: SpRef, distributionSp: SpRef, call: RestCall): Promise<LedgerCard[]> {
   const headers: PaymentCarrierHeader[] = []
   let start: number | null = 0
   for (let page = 0; page < MAX_LEDGER_PAGES && start !== null && headers.length < MAX_LEDGER_PAYMENTS; page++) {
-    const listCall = buildPaymentListCall(paymentSpEtid, start || undefined)
+    const listCall = buildPaymentListCall(paymentSp, start || undefined)
     const resp = await call(listCall.method, listCall.params)
     for (const item of extractListItems(resp)) {
-      const header = parsePaymentCarrier(item, paymentSpEtid)
+      const header = parsePaymentCarrier(item, paymentSp)
       if (header) headers.push(header)
       if (headers.length >= MAX_LEDGER_PAYMENTS) break
     }
@@ -374,7 +375,7 @@ export async function loadPortalLedger(paymentSpEtid: number, distributionSpEtid
 
   const cards: LedgerCard[] = []
   for (const header of headers) {
-    const rows = await loadAllRows(distributionSpEtid, paymentSpEtid, header.id, call)
+    const rows = await loadAllRows(distributionSp, paymentSp, header.id, call)
     cards.push({ id: header.id, total: header.total, currency: header.currency, requiresRedistribution: header.requiresRedistribution, rows })
   }
   return cards
@@ -386,14 +387,14 @@ export async function loadPortalLedger(paymentSpEtid: number, distributionSpEtid
  * carriers (paginated, capped at MAX_LEDGER_PAYMENTS) and recomputes each from its active rows.
  * Returns how many were recomputed. Idempotent (recompute-from-state). Errors propagate (retry).
  */
-export async function recomputeAllPayments(paymentSpEtid: number, distributionSpEtid: number, call: RestCall): Promise<number> {
+export async function recomputeAllPayments(paymentSp: SpRef, distributionSp: SpRef, call: RestCall): Promise<number> {
   const headers: PaymentCarrierHeader[] = []
   let start: number | null = 0
   for (let page = 0; page < MAX_LEDGER_PAGES && start !== null && headers.length < MAX_LEDGER_PAYMENTS; page++) {
-    const listCall = buildPaymentListCall(paymentSpEtid, start || undefined)
+    const listCall = buildPaymentListCall(paymentSp, start || undefined)
     const resp = await call(listCall.method, listCall.params)
     for (const item of extractListItems(resp)) {
-      const header = parsePaymentCarrier(item, paymentSpEtid)
+      const header = parsePaymentCarrier(item, paymentSp)
       if (header) headers.push(header)
       if (headers.length >= MAX_LEDGER_PAYMENTS) break
     }
@@ -402,7 +403,7 @@ export async function recomputeAllPayments(paymentSpEtid: number, distributionSp
 
   let recomputed = 0
   for (const header of headers) {
-    await recomputeNeedDistribution(paymentSpEtid, header.id, distributionSpEtid, header.total, header.currency, call)
+    await recomputeNeedDistribution(paymentSp, header.id, distributionSp, header.total, header.currency, call)
     recomputed++
   }
   return recomputed

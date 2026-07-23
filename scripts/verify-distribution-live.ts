@@ -180,10 +180,12 @@ async function main() {
 
   check('provision: payment SP etid', prov.paymentSpEtid > 0, `etid=${prov.paymentSpEtid}${prov.createdPaymentSp ? ' (created)' : ' (existing)'}`)
   check('provision: distribution SP etid', prov.distributionSpEtid > 0, `etid=${prov.distributionSpEtid}${prov.createdDistributionSp ? ' (created)' : ' (existing)'}`)
-  const provAgain = await provisionDistributionSp(CALL, { paymentSpEtid: prov.paymentSpEtid, distributionSpEtid: prov.distributionSpEtid })
+  const provAgain = await provisionDistributionSp(CALL, { payment: prov.payment, distribution: prov.distribution })
   check('provision: idempotent (2nd run creates no SP, adds no field)', !provAgain.createdPaymentSp && !provAgain.createdDistributionSp && provAgain.addedFields === 0, `addedFields=${provAgain.addedFields}`)
 
-  const pEtid = prov.paymentSpEtid
+  const pSp = prov.payment
+  const dSp = prov.distribution
+  const pEtid = prov.paymentSpEtid // entityTypeId, for item cleanup
   const dEtid = prov.distributionSpEtid
   const stamp = Date.now()
   const opMarker = `verify-dist|${stamp}`
@@ -191,15 +193,15 @@ async function main() {
   const TOTAL = 1000
 
   // 2) Payment carrier — write-once, idempotent.
-  const carrier = await ensurePaymentElement(pEtid, { opportunity: TOTAL, currency: CURR, marker: opMarker }, CALL)
+  const carrier = await ensurePaymentElement(pSp, { opportunity: TOTAL, currency: CURR, marker: opMarker }, CALL)
   check('carrier: created', carrier.created && Number(carrier.id) > 0, `id=${carrier.id}`)
   if (carrier.created) createdItems.push({ etid: pEtid, id: carrier.id })
-  const carrier2 = await ensurePaymentElement(pEtid, { opportunity: TOTAL, currency: CURR, marker: opMarker }, CALL)
+  const carrier2 = await ensurePaymentElement(pSp, { opportunity: TOTAL, currency: CURR, marker: opMarker }, CALL)
   check('carrier: idempotent by marker (no duplicate)', !carrier2.created && carrier2.id === carrier.id, `id=${carrier2.id}`)
 
   // 3) First ledger row (600) — idempotent by marker.
   const rowMarker1 = `${opMarker}|deal-payment|555`
-  const rowInput1 = { paymentSpEtid: pEtid, distributionSpEtid: dEtid, paymentElementId: carrier.id, amount: 600, currency: CURR, targetKind: 'deal-payment' as const, targetId: '555', source: 'auto' as const, marker: rowMarker1 }
+  const rowInput1 = { paymentSp: pSp, distributionSp: dSp, paymentElementId: carrier.id, amount: 600, currency: CURR, targetKind: 'deal-payment' as const, targetId: '555', source: 'auto' as const, marker: rowMarker1 }
   const row1 = await writeDistributionRow(rowInput1, CALL)
   check('row1: created (600)', row1.created && Number(row1.id) > 0, `id=${row1.id}`)
   if (row1.created) createdItems.push({ etid: dEtid, id: row1.id })
@@ -207,15 +209,15 @@ async function main() {
   check('row1: idempotent by marker (no duplicate)', !row1again.created && row1again.id === row1.id, `id=${row1again.id}`)
 
   // 4) Recompute «осталось» = 1000 − 600 = 400.
-  const remaining1 = await recomputeNeedDistribution(pEtid, carrier.id, dEtid, TOTAL, CURR, CALL)
+  const remaining1 = await recomputeNeedDistribution(pSp, carrier.id, dSp, TOTAL, CURR, CALL)
   check('recompute: остаток = 400 after 600', remaining1 === 400, `remaining=${remaining1}`)
 
   // 5) Second row (400) → остаток 0.
   const rowMarker2 = `${opMarker}|invoice|777`
-  const row2 = await writeDistributionRow({ paymentSpEtid: pEtid, distributionSpEtid: dEtid, paymentElementId: carrier.id, amount: 400, currency: CURR, targetKind: 'invoice', targetId: '777', source: 'auto', marker: rowMarker2 }, CALL)
+  const row2 = await writeDistributionRow({ paymentSp: pSp, distributionSp: dSp, paymentElementId: carrier.id, amount: 400, currency: CURR, targetKind: 'invoice', targetId: '777', source: 'auto', marker: rowMarker2 }, CALL)
   check('row2: created (400)', row2.created && Number(row2.id) > 0, `id=${row2.id}`)
   if (row2.created) createdItems.push({ etid: dEtid, id: row2.id })
-  const remaining2 = await recomputeNeedDistribution(pEtid, carrier.id, dEtid, TOTAL, CURR, CALL)
+  const remaining2 = await recomputeNeedDistribution(pSp, carrier.id, dSp, TOTAL, CURR, CALL)
   check('recompute: остаток = 0 after 600+400', remaining2 === 0, `remaining=${remaining2}`)
 
   await teardown()
