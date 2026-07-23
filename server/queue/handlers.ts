@@ -18,7 +18,7 @@ import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type Al
 import type { AllocationMutationOpts } from '../../app/utils/allocationMutation'
 import type { IntentResolution } from '../utils/intentResolver'
 import { parseConfiguredEntityTypeId, SMART_ENTITY_CONFIG_KEY } from '../utils/intentResolver'
-import { distributionSpEtid as readDistributionSpEtid, paymentSpEtid as readPaymentSpEtid } from '../../app/config/distributionSp'
+import { distributionSpRef as readDistributionSpRef, paymentSpRef as readPaymentSpRef, type SpRef } from '../../app/config/distributionSp'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 import type { TriggerOutcome } from '../utils/applyTriggerDep'
 
@@ -123,19 +123,19 @@ export interface HandlerDeps {
    *  activity дело (carrier-exclusivity is deferred). Idempotent by markers (redelivery no-ops).
    *  Returns whether a NEW distribution row was created (for the counter). Optional: absent ⇒ no
    *  ledger write (unchanged behaviour). Throws on a REST error ⇒ clean BullMQ retry. */
-  writeLedger?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
+  writeLedger?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSp: SpRef, distributionSp: SpRef }) => Promise<boolean>
   /** Whether a TRIGGER fire for this (payment → deal/smart-process target) is already recorded in the
    *  SP-ledger — the dist-СП dedup marker exists (#109 §9.3 #6). Replaces the Postgres
    *  `hasAllocationFact` for the trigger pre-check. Consulted ONLY when both SP entityTypeIds are
    *  provisioned. A REST error propagates (fail the job → clean retry). Optional (absent ⇒ no SP
    *  dedup — single-shot via the activity marker only). */
-  hasTriggerFact?: (item: StatementItem, target: AllocationCandidate, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
+  hasTriggerFact?: (item: StatementItem, target: AllocationCandidate, memberId: string, etids: { paymentSp: SpRef, distributionSp: SpRef }) => Promise<boolean>
   /** Record a fired TRIGGER in the SP-ledger (#109 §9.3 #6): ensure the payment carrier, add a
    *  ZERO-amount distribution row (the durable dedup marker + audit «триггер отправлен»; no «осталось»
    *  impact). Replaces the Postgres `recordAllocation` for the trigger path. Called ONLY on a
    *  confirmed FIRE when both SP entityTypeIds are provisioned. Returns whether a NEW row was created
    *  (for the counter). Optional (absent ⇒ no durable trigger record). Throws ⇒ clean BullMQ retry. */
-  writeTriggerFact?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSpEtid: number, distributionSpEtid: number }) => Promise<boolean>
+  writeTriggerFact?: (item: StatementItem, target: AllocationCandidate, companyId: string, memberId: string, etids: { paymentSp: SpRef, distributionSp: SpRef }) => Promise<boolean>
   /** Post an ALLOCATION-error notice to the error chat `dialogId` (#184, §5): an
    *  `ambiguous` allocation (heads-up) or a `manual` one (no exact match → ручной разбор).
    *  The handler decides WHEN to call (outcome + error chat set); this is pure transport.
@@ -280,8 +280,8 @@ export async function handleCrmSyncJob(
   // SP-ledger carrier (§9.1): both entityTypeIds provisioned ⇒ the payment is carried as an SP
   // element and its allocation is written to the ledger (chooseCarrier «носитель = смарт-процесс»).
   // Not provisioned ⇒ null ⇒ ledger write skipped (activity дело remains the record). Read once.
-  const ledgerPaymentEtid = readPaymentSpEtid(settings?.recognition?.configFields)
-  const ledgerDistributionEtid = readDistributionSpEtid(settings?.recognition?.configFields)
+  const ledgerPaymentRef = readPaymentSpRef(settings?.recognition?.configFields)
+  const ledgerDistributionRef = readDistributionSpRef(settings?.recognition?.configFields)
 
   // Negative-stage predicate (union of invoice + deal fail/lost stages), loaded AT MOST
   // ONCE per job — lazily, so a batch that never resolves an intent pays nothing. Reused
@@ -398,7 +398,7 @@ export async function handleCrmSyncJob(
         // company (this block only runs then), so the scope is the payer (IDOR).
         if (summary.decision.action === 'allocate') {
           const target = summary.decision.target
-          const etids = ledgerPaymentEtid && ledgerDistributionEtid ? { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid } : null
+          const etids = ledgerPaymentRef && ledgerDistributionRef ? { paymentSp: ledgerPaymentRef, distributionSp: ledgerDistributionRef } : null
           // Portal MUTATION (§2) gated on the opt-in `autoDistribute`. The pre-check reads B24 STATE
           // (`isTargetApplied` — payment `paid='Y'` / invoice on the configured paid stage, Фаза A)
           // so a redelivery/reimport never re-pays (and it covers the pay-then-crash window). An
@@ -457,7 +457,7 @@ export async function handleCrmSyncJob(
             const targetKey = `${t.kind}:${t.id}` // not the op dedupKey — distinct trigger target
             if (seen.has(targetKey)) continue
             seen.add(targetKey)
-            const etids = ledgerPaymentEtid && ledgerDistributionEtid ? { paymentSpEtid: ledgerPaymentEtid, distributionSpEtid: ledgerDistributionEtid } : null
+            const etids = ledgerPaymentRef && ledgerDistributionRef ? { paymentSp: ledgerPaymentRef, distributionSp: ledgerDistributionRef } : null
             if (etids && deps.hasTriggerFact && await deps.hasTriggerFact(item, t, job.memberId, etids)) continue
             const outcome = await deps.applyTrigger(item, t, job.memberId, triggerCode)
             if (outcome === 'retry') {

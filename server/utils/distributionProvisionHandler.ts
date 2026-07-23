@@ -20,10 +20,12 @@
 import type { PortalSettings } from '../../app/utils/settings'
 import {
   DISTRIBUTION_SP_CONFIG_KEY,
+  DISTRIBUTION_SP_ID_CONFIG_KEY,
   PAYMENT_SP_CONFIG_KEY,
-  distributionSpEtid,
-  paymentSpEtid,
-  withSpEtids
+  PAYMENT_SP_ID_CONFIG_KEY,
+  distributionSpRef,
+  paymentSpRef,
+  withSpProvision
 } from '../../app/config/distributionSp'
 import type { KnownSpIds, ProvisionResult } from './distributionSpProvision'
 
@@ -57,16 +59,18 @@ export async function handleProvisionDistribution(deps: ProvisionDistributionDep
     const settings = await deps.loadSettings()
     const configFields = settings.recognition.configFields
     const known: KnownSpIds = {
-      paymentSpEtid: paymentSpEtid(configFields),
-      distributionSpEtid: distributionSpEtid(configFields)
+      payment: paymentSpRef(configFields),
+      distribution: distributionSpRef(configFields)
     }
 
     const result = await deps.provision(known)
 
-    const merged = withSpEtids(configFields, result.paymentSpEtid, result.distributionSpEtid)
+    const merged = withSpProvision(configFields, result.payment, result.distribution)
     const storedChanged
       = merged[PAYMENT_SP_CONFIG_KEY] !== configFields[PAYMENT_SP_CONFIG_KEY]
+        || merged[PAYMENT_SP_ID_CONFIG_KEY] !== configFields[PAYMENT_SP_ID_CONFIG_KEY]
         || merged[DISTRIBUTION_SP_CONFIG_KEY] !== configFields[DISTRIBUTION_SP_CONFIG_KEY]
+        || merged[DISTRIBUTION_SP_ID_CONFIG_KEY] !== configFields[DISTRIBUTION_SP_ID_CONFIG_KEY]
 
     if (storedChanged) {
       await deps.saveSettings({

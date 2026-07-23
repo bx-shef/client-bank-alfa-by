@@ -17,7 +17,7 @@ import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
-import { distributionSpEtid, paymentSpEtid } from '../../../app/config/distributionSp'
+import { distributionSpRef, paymentSpRef } from '../../../app/config/distributionSp'
 import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
 
 function liveRecomputeDeps(): RecomputeRequestDeps {
@@ -33,13 +33,13 @@ function liveRecomputeDeps(): RecomputeRequestDeps {
       const call = await livePortalSdkCall(memberId)
       if (!call) return null
       const cf = parsePortalSettings(pickAppOption(await call('app.option.get', {}), SETTINGS_KEY)).recognition.configFields
-      const paymentEtid = paymentSpEtid(cf)
-      const distEtid = distributionSpEtid(cf)
-      if (!paymentEtid || !distEtid) return null // SPs not provisioned
+      const paymentRef = paymentSpRef(cf)
+      const distRef = distributionSpRef(cf)
+      if (!paymentRef || !distRef) return null // SPs not provisioned
       // Single-flight per portal: serialize concurrent recomputes (and vs the crm-sync/deletion writers
       // touching the same «осталось» fields) — same advisory lock family as provisioning.
       return withAdvisoryLock(`distribution-recompute:${memberId}`, () =>
-        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentEtid, distEtid, call)))
+        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)))
     }
   }
 }

@@ -16,7 +16,9 @@ import {
   hasSpEtids,
   paymentSpEtid,
   planMissingUserFields,
-  withSpEtids
+  withSpProvision,
+  PAYMENT_SP_ID_CONFIG_KEY,
+  DISTRIBUTION_SP_ID_CONFIG_KEY
 } from '~/config/distributionSp'
 
 // Pure SP-structure builders (#109 §9.1). Assert the crm.type.add shape + field codes so the
@@ -159,25 +161,33 @@ describe('SP entityTypeId accessors', () => {
   })
 })
 
-describe('withSpEtids / hasSpEtids', () => {
-  it('merges both ids as strings under the reserved keys, preserving other fields', () => {
-    const merged = withSpEtids({ 'smart-entity': '1030' }, 1044, 1046)
+describe('withSpProvision / hasSpEtids', () => {
+  const PSP = { entityTypeId: 1044, id: 44 }
+  const DSP = { entityTypeId: 1046, id: 46 }
+  it('merges both entityTypeIds AND type ids as strings under the reserved keys, preserving other fields', () => {
+    const merged = withSpProvision({ 'smart-entity': '1030' }, PSP, DSP)
     expect(merged['smart-entity']).toBe('1030')
     expect(merged[PAYMENT_SP_CONFIG_KEY]).toBe('1044')
+    expect(merged[PAYMENT_SP_ID_CONFIG_KEY]).toBe('44')
     expect(merged[DISTRIBUTION_SP_CONFIG_KEY]).toBe('1046')
+    expect(merged[DISTRIBUTION_SP_ID_CONFIG_KEY]).toBe('46')
   })
   it('does not mutate the input map', () => {
     const input = { a: '1' }
-    withSpEtids(input, 1, 2)
+    withSpProvision(input, PSP, DSP)
     expect(input).toEqual({ a: '1' })
   })
   it('tolerates an undefined input', () => {
-    expect(withSpEtids(undefined, 5, 6)).toEqual({ [PAYMENT_SP_CONFIG_KEY]: '5', [DISTRIBUTION_SP_CONFIG_KEY]: '6' })
+    expect(withSpProvision(undefined, PSP, DSP)).toEqual({
+      [PAYMENT_SP_CONFIG_KEY]: '1044', [PAYMENT_SP_ID_CONFIG_KEY]: '44',
+      [DISTRIBUTION_SP_CONFIG_KEY]: '1046', [DISTRIBUTION_SP_ID_CONFIG_KEY]: '46'
+    })
   })
-  it('hasSpEtids is true only when BOTH ids are valid positive integers', () => {
-    expect(hasSpEtids(withSpEtids({}, 1044, 1046))).toBe(true)
+  it('hasSpEtids is true only when BOTH refs are complete (entityTypeId AND type id)', () => {
+    expect(hasSpEtids(withSpProvision({}, PSP, DSP))).toBe(true)
     expect(hasSpEtids({ [PAYMENT_SP_CONFIG_KEY]: '1044' })).toBe(false)
     expect(hasSpEtids({})).toBe(false)
-    expect(hasSpEtids({ [PAYMENT_SP_CONFIG_KEY]: '1044', [DISTRIBUTION_SP_CONFIG_KEY]: '0' })).toBe(false)
+    // entityTypeIds present but type ids missing → incomplete → false
+    expect(hasSpEtids({ [PAYMENT_SP_CONFIG_KEY]: '1044', [DISTRIBUTION_SP_CONFIG_KEY]: '1046' })).toBe(false)
   })
 })

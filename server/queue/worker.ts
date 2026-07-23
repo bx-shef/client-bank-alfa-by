@@ -27,7 +27,7 @@ import { hasTriggerLedgerFact, reconcileTargetDeletion, writeLedgerAllocation, w
 import { notifyDeletionErrorViaRest } from '../utils/deletionErrorNotify'
 import type { DeletionErrorKind } from '../../app/utils/deletionErrorMessage'
 import { livePortalSdkCall } from '../utils/liveDeps'
-import { distributionSpEtid, paymentSpEtid } from '../../app/config/distributionSp'
+import { distributionSpRef, paymentSpRef } from '../../app/config/distributionSp'
 import { demoDelayMs, demoItems, isDemoAccount } from './cron'
 import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob,
@@ -354,7 +354,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`writeLedger: no portal token for ${memberId} — retry (ledger write pending)`)
-      const res = await writeLedgerAllocation(etids.paymentSpEtid, etids.distributionSpEtid, item, target, companyId, call)
+      const res = await writeLedgerAllocation(etids.paymentSp, etids.distributionSp, item, target, companyId, call)
       return res.rowCreated
     },
     // TRIGGER dedup pre-check on the SP-ledger marker (#109 §9.3 #6 — replaces the Postgres
@@ -364,7 +364,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`hasTriggerFact: no portal token for ${memberId} — retry (dedup check pending)`)
-      return hasTriggerLedgerFact(etids.distributionSpEtid, item, target, call)
+      return hasTriggerLedgerFact(etids.distributionSp, item, target, call)
     },
     // Record a fired TRIGGER in the SP-ledger as a zero-amount marker row (#109 §9.3 #6 — replaces
     // the Postgres `recordAllocation` for the trigger path). Demo gated; no token → throw (the write
@@ -373,7 +373,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`writeTriggerFact: no portal token for ${memberId} — retry (trigger record pending)`)
-      const res = await writeTriggerLedgerFact(etids.paymentSpEtid, etids.distributionSpEtid, item, target, companyId, call)
+      const res = await writeTriggerLedgerFact(etids.paymentSp, etids.distributionSp, item, target, companyId, call)
       return res.created
     },
     // Fire the portal automation trigger for a decided trigger target (#79). BEST-EFFORT,
@@ -792,15 +792,24 @@ export function liveDeletionDeps(): DeletionReconcileDeps {
       const call = await livePortalSdkCall(memberId)
       if (!call) return {}
       const cf = parsePortalSettings(await readAppSettingVia(call, SETTINGS_KEY)).recognition.configFields
-      return { paymentSpEtid: paymentSpEtid(cf) ?? undefined, distributionSpEtid: distributionSpEtid(cf) ?? undefined }
+      const p = paymentSpRef(cf)
+      const d = distributionSpRef(cf)
+      return {
+        paymentSpEtid: p?.entityTypeId, paymentSpId: p?.id,
+        distributionSpEtid: d?.entityTypeId, distributionSpId: d?.id
+      }
     },
     // LIVE: a deleted deal/invoice frees the distributions pointing at it (§9.2).
     reconcileTargetDeletion: async (job, kind, cfg) => {
-      if (!cfg.paymentSpEtid || !cfg.distributionSpEtid) return 0 // SP not provisioned → no ledger
+      // Need the FULL refs (entityTypeId + type id) for the ledger reconcile — classification used
+      // only the entityTypeIds, but the field-name/list builders key off the type id.
+      if (!cfg.paymentSpEtid || !cfg.paymentSpId || !cfg.distributionSpEtid || !cfg.distributionSpId) return 0
       const call = await livePortalSdkCall(job.memberId)
       if (!call) return 0
       const targetKind = kind === 'deal' ? 'deal' : 'invoice'
-      const res = await reconcileTargetDeletion(cfg.paymentSpEtid, cfg.distributionSpEtid, targetKind, job.entityId, call)
+      const paymentSp = { entityTypeId: cfg.paymentSpEtid, id: cfg.paymentSpId }
+      const distributionSp = { entityTypeId: cfg.distributionSpEtid, id: cfg.distributionSpId }
+      const res = await reconcileTargetDeletion(paymentSp, distributionSp, targetKind, job.entityId, call)
       console.info('[deletion] target %s #%s freed=%d parents=%d manual=%d (portal=%s)', kind, logSafe(job.entityId), res.freed, res.parentsRecomputed, res.manualParents, portalHash(job.memberId))
       // Notify the operator that a target was deleted and its distributions freed (§9.2), best-effort
       // (a chat failure must not fail the reconcile — the ledger is already reconciled above).

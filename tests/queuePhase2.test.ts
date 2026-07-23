@@ -150,15 +150,15 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.trigEnqueue.push([it.docId, target.kind, target.id, memberId, code, target.entityTypeId])
     },
     writeLedger: async (it, target, companyId, memberId, etids) => {
-      calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSp.entityTypeId, etids.distributionSp.entityTypeId])
       return o.ledgerCreated ?? true
     },
     hasTriggerFact: async (it, target, memberId, etids) => {
-      calls.trigHas.push([it.docId, target.kind, target.id, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      calls.trigHas.push([it.docId, target.kind, target.id, memberId, etids.paymentSp.entityTypeId, etids.distributionSp.entityTypeId])
       return o.triggerFactExists ?? false
     },
     writeTriggerFact: async (it, target, companyId, memberId, etids) => {
-      calls.trigRec.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      calls.trigRec.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSp.entityTypeId, etids.distributionSp.entityTypeId])
       return o.triggerRowCreated ?? true
     },
     notifyError: async (it, decision, dialogId, memberId) => {
@@ -674,7 +674,7 @@ describe('handleCrmSyncJob', () => {
   // SP-provisioned invoice matrix: the durable allocation record is the dist-СП row (§9.3 #6 —
   // Postgres allocation_fact retired), so the amount-WRITE tests below provision both SPs and
   // assert the ledger write (`calls.ledger`) instead of the old Postgres `recordAllocation`.
-  const invoiceMatrixSp: RecognitionSettings = { ...invoiceMatrix, configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' } }
+  const invoiceMatrixSp: RecognitionSettings = { ...invoiceMatrix, configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' } }
 
   it('counts an exact amount match as allocatable (allocate to that target)', async () => {
     // op amount is 10 BYN (item helper); candidate amount 10 → exact.
@@ -887,7 +887,7 @@ describe('handleCrmSyncJob', () => {
     let n = 0
     // first op writes a fresh row (created:true), second finds it already present (false).
     deps.writeLedger = async (it, target, companyId, memberId, etids) => {
-      calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSpEtid, etids.distributionSpEtid])
+      calls.ledger.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSp.entityTypeId, etids.distributionSp.entityTypeId])
       return n++ === 0
     }
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001'), item('d2', 'credit', 'счет СЧ-0002')]), deps)
@@ -905,7 +905,7 @@ describe('handleCrmSyncJob', () => {
     candidates: [{ kind: 'deal-payment', id, amount: 10, currency: 'BYN' }]
   })
   // SP-provisioned payment matrix: the durable allocation record is the dist-СП row (§9.3 #6).
-  const payMatrixSp: RecognitionSettings = { ...payMatrix, configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' } }
+  const payMatrixSp: RecognitionSettings = { ...payMatrix, configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' } }
 
   it('autoDistribute OFF (default): writes the dist-СП row but performs NO portal mutation', async () => {
     const { deps, calls } = fakeDeps({ recognition: payMatrixSp, resolve: [payAt('42')] })
@@ -987,7 +987,7 @@ describe('handleCrmSyncJob', () => {
   it('autoDistribute ON, mixed batch: distributed is a strict subset of allocated', async () => {
     // d1 → deal-payment (applied true → distributed), d2 → invoice (unsupported → applied false).
     const bothMatrices: RecognitionSettings = {
-      alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' }, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }, { mask: 'СЧ-dddd', kind: 'invoice-number' }]
+      alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }, matrices: [{ mask: 'ОП-dddd', kind: 'payment-number' }, { mask: 'СЧ-dddd', kind: 'invoice-number' }]
     }
     const { deps, calls } = fakeDeps({ recognition: bothMatrices, autoDistribute: true })
     // applyAllocation mirrors the real worker: deal-payment pays; invoice w/o a configured
@@ -1025,7 +1025,7 @@ describe('handleCrmSyncJob', () => {
   // SP provisioned (payment-sp/distribution-sp) → trigger dedup/record run on the SP-ledger
   // marker (§9.3 #6): `hasTriggerFact` pre-check + `writeTriggerFact` record (Postgres retired).
   const dealMatrix: RecognitionSettings = {
-    alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' }, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }]
+    alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }]
   }
   const dealAt = (id: string): IntentResolution => ({
     kind: 'deal-id', value: 'Д-55', status: 'resolved',
@@ -1046,7 +1046,7 @@ describe('handleCrmSyncJob', () => {
     // Pins the handler→applyTrigger join for smart-process: the full candidate (incl.
     // entityTypeId, needed as OWNER_TYPE_ID) must reach applyTrigger, not a stripped {kind,id}.
     const smartMatrix: RecognitionSettings = {
-      alphabet: 'cyrillic', configFields: { 'smart-entity': '1032', 'payment-sp': '1044', 'distribution-sp': '1046' }, matrices: [{ mask: 'СП-dd', kind: 'smart-id' }]
+      alphabet: 'cyrillic', configFields: { 'smart-entity': '1032', 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }, matrices: [{ mask: 'СП-dd', kind: 'smart-id' }]
     }
     const smartAt: IntentResolution = {
       kind: 'smart-id', value: 'СП-90', status: 'resolved',
@@ -1159,7 +1159,7 @@ describe('handleCrmSyncJob', () => {
     // applyTrigger). The invoice writes the dist-СП distribution row (amount path); the deal
     // writes the dist-СП marker row (trigger path). Both are SP-ledger rows now (§9.3 #6). Both bump.
     const mixMatrix: RecognitionSettings = {
-      alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' },
+      alphabet: 'cyrillic', configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' },
       matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }, { mask: 'Д-dd', kind: 'deal-id' }]
     }
     const { deps, calls } = fakeDeps({
@@ -1196,7 +1196,7 @@ describe('handleCrmSyncJob — SP-ledger write at allocate (§9.1)', () => {
   const job = (items: StatementItem[]): CrmSyncJob => ({ memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items })
   const invMatrix: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }] }
   // recognition WITH both SP ids provisioned in configFields → carrier = smart-process.
-  const provisioned: RecognitionSettings = { ...invMatrix, configFields: { 'payment-sp': '1044', 'distribution-sp': '1046' } }
+  const provisioned: RecognitionSettings = { ...invMatrix, configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' } }
   const invAt = (id: string, amount: number): IntentResolution => ({
     kind: 'invoice-number', value: 'СЧ-0007', status: 'resolved', candidates: [{ kind: 'invoice', id, amount, currency: 'BYN' }]
   })

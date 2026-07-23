@@ -41,9 +41,11 @@ export function shouldProvisionSp(ctx: CarrierContext): boolean {
   return ctx.smartProcessSupported && !ctx.paymentSpPresent
 }
 
-/** One smart-process type row as returned by `crm.type.list` (only the fields we read). */
+/** One smart-process type row as returned by `crm.type.list` (only the fields we read). Both ids are
+ *  read: `entityTypeId` (for `crm.item.*`) and `id` (the type id, for `userfieldconfig`/field names). */
 export interface SmartProcessTypeRow {
   entityTypeId?: unknown
+  id?: unknown
   title?: unknown
 }
 
@@ -69,6 +71,26 @@ export function findSmartProcessByTitle(resp: Record<string, unknown>, title: st
     if (String(row.title ?? '').trim() !== wanted) continue
     const etid = Number(row.entityTypeId)
     if (Number.isInteger(etid) && etid > 0) return etid
+  }
+  return null
+}
+
+/**
+ * Find OUR smart process by title and return its FULL ref (`entityTypeId` + type `id`) or `null`.
+ * Provisioning needs BOTH: entityTypeId for `crm.item.*`, id for `userfieldconfig`/UF field names
+ * (live-confirmed the field APIs key off the type id, not the entityTypeId). Both must be positive
+ * integers or the row is skipped (a type missing either id is unusable). Pure over the response.
+ */
+export function findSmartProcessRefByTitle(resp: Record<string, unknown>, title: string): { entityTypeId: number, id: number } | null {
+  const wanted = title.trim()
+  if (!wanted) return null
+  for (const row of extractSmartProcessTypes(resp)) {
+    if (String(row.title ?? '').trim() !== wanted) continue
+    const entityTypeId = Number(row.entityTypeId)
+    const id = Number(row.id)
+    if (Number.isInteger(entityTypeId) && entityTypeId > 0 && Number.isInteger(id) && id > 0) {
+      return { entityTypeId, id }
+    }
   }
   return null
 }

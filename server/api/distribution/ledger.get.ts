@@ -15,7 +15,7 @@ import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
-import { distributionSpEtid, paymentSpEtid } from '../../../app/config/distributionSp'
+import { distributionSpRef, paymentSpRef } from '../../../app/config/distributionSp'
 import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
 
 function liveLedgerDeps(): LedgerRequestDeps {
@@ -31,10 +31,10 @@ function liveLedgerDeps(): LedgerRequestDeps {
       const call = await livePortalSdkCall(memberId)
       if (!call) return null
       const cf = parsePortalSettings(pickAppOption(await call('app.option.get', {}), SETTINGS_KEY)).recognition.configFields
-      const paymentEtid = paymentSpEtid(cf)
-      const distEtid = distributionSpEtid(cf)
-      if (!paymentEtid || !distEtid) return null // SPs not provisioned → UI shows a setup prompt
-      return withSpan('ledger-read', { 'portal.hash': portalHash(memberId) }, () => loadPortalLedger(paymentEtid, distEtid, call))
+      const paymentRef = paymentSpRef(cf)
+      const distRef = distributionSpRef(cf)
+      if (!paymentRef || !distRef) return null // SPs not provisioned → UI shows a setup prompt
+      return withSpan('ledger-read', { 'portal.hash': portalHash(memberId) }, () => loadPortalLedger(paymentRef, distRef, call))
     }
   }
 }

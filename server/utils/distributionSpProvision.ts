@@ -18,15 +18,17 @@ import {
   buildPaymentSpCreateCall,
   buildSpEntityId,
   planMissingUserFields,
+  type SpRef,
   type SpUserField
 } from '../../app/config/distributionSp'
-import { extractSmartProcessTypes, findSmartProcessByTitle } from '../../app/utils/distributionCarrier'
+import { extractSmartProcessTypes, findSmartProcessRefByTitle } from '../../app/utils/distributionCarrier'
 import type { RestCall } from './companyLookup'
 
-/** Known (stored) entityTypeIds, so a re-run skips the probe/create when already provisioned. */
+/** Known (stored) SP refs, so a re-run skips the probe/create when already provisioned. BOTH the
+ *  entityTypeId AND the type id must be known to skip (the id is needed for the field probe). */
 export interface KnownSpIds {
-  paymentSpEtid?: number | null
-  distributionSpEtid?: number | null
+  payment?: SpRef | null
+  distribution?: SpRef | null
 }
 
 /** Outcome of a provisioning run — the resolved ids + what changed (for logging / storage).
@@ -35,7 +37,13 @@ export interface KnownSpIds {
  *  (passed in `known`)" AND "id was recovered by title (not yet stored)", so the flags cannot
  *  drive the persist decision — they are for logging only. */
 export interface ProvisionResult {
+  /** PAYMENT-carrier SP ref (entityTypeId + type id). */
+  payment: SpRef
+  /** DISTRIBUTIONS SP ref (entityTypeId + type id). */
+  distribution: SpRef
+  /** PAYMENT-carrier SP entityTypeId (convenience — `payment.entityTypeId`). */
   paymentSpEtid: number
+  /** DISTRIBUTIONS SP entityTypeId (convenience — `distribution.entityTypeId`). */
   distributionSpEtid: number
   /** True only when this run created the payment SP (vs known/recovered) — logging signal. */
   createdPaymentSp: boolean
@@ -60,14 +68,17 @@ function nextOffset(resp: Record<string, unknown>): number | null {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
-/** Extract the `entityTypeId` of a newly created SP from a `crm.type.add` response
- *  (`{result:{type:{entityTypeId}}}`); `null` on a malformed/empty body. */
-export function extractCreatedEntityTypeId(resp: Record<string, unknown>): number | null {
+/** Extract the FULL ref (`entityTypeId` + type `id`) of a newly created SP from a `crm.type.add`
+ *  response (`{result:{type:{entityTypeId,id}}}`); `null` on a malformed body / either id missing.
+ *  BOTH are needed downstream: entityTypeId for `crm.item.*`, id for `userfieldconfig`/field names. */
+export function extractCreatedSpRef(resp: Record<string, unknown>): SpRef | null {
   const result = resp?.result
-  const type = (result as { type?: unknown } | undefined)?.type
-  const raw = (type as { entityTypeId?: unknown } | undefined)?.entityTypeId
-  const n = Number(raw)
-  return Number.isInteger(n) && n > 0 ? n : null
+  const type = (result as { type?: unknown } | undefined)?.type as { entityTypeId?: unknown, id?: unknown } | undefined
+  const entityTypeId = Number(type?.entityTypeId)
+  const id = Number(type?.id)
+  if (!Number.isInteger(entityTypeId) || entityTypeId <= 0) return null
+  if (!Number.isInteger(id) || id <= 0) return null
+  return { entityTypeId, id }
 }
 
 /** Pull the `fieldName`s already present on an SP from a `userfieldconfig.list` response
@@ -101,11 +112,11 @@ async function listAllSmartProcessTypes(call: RestCall): Promise<Record<string, 
 
 /** List ALL existing field names on an SP across pages (`userfieldconfig.list` is paginated). A
  *  present field on page 2 would otherwise be re-planned and rejected as a duplicate. */
-async function listAllFieldNames(call: RestCall, etid: number): Promise<string[]> {
+async function listAllFieldNames(call: RestCall, spTypeId: number): Promise<string[]> {
   const names: string[] = []
   let start: number | null = 0
   for (let page = 0; page < MAX_LIST_PAGES && start !== null; page++) {
-    const params: Record<string, unknown> = { moduleId: 'crm', filter: { entityId: buildSpEntityId(etid) } }
+    const params: Record<string, unknown> = { moduleId: 'crm', filter: { entityId: buildSpEntityId(spTypeId) } }
     if (start) params.start = start
     const resp = await call(USERFIELDCONFIG_LIST_METHOD, params)
     for (const n of extractExistingFieldNames(resp)) names.push(n)
@@ -114,29 +125,30 @@ async function listAllFieldNames(call: RestCall, etid: number): Promise<string[]
   return names
 }
 
-/** Resolve an SP's entityTypeId: use the stored id if given, else find it by stable title among
- *  the (already fully paginated) types, else create it. Returns the id + whether we created it. */
+/** Resolve an SP's FULL ref (entityTypeId + type id): use the stored ref if given, else find it by
+ *  stable title among the (already fully paginated) types, else create it. Returns the ref + whether
+ *  we created it. */
 async function ensureSp(
   call: RestCall,
-  known: number | null | undefined,
+  known: SpRef | null | undefined,
   allTypes: Record<string, unknown>,
   title: string,
   createCall: { method: string, params: Record<string, unknown> }
-): Promise<{ etid: number, created: boolean }> {
-  if (known && Number.isInteger(known) && known > 0) return { etid: known, created: false }
-  const found = findSmartProcessByTitle(allTypes, title)
-  if (found) return { etid: found, created: false }
+): Promise<{ ref: SpRef, created: boolean }> {
+  if (known && known.entityTypeId > 0 && known.id > 0) return { ref: known, created: false }
+  const found = findSmartProcessRefByTitle(allTypes, title)
+  if (found) return { ref: found, created: false }
   const createdResp = await call(createCall.method, createCall.params)
-  const etid = extractCreatedEntityTypeId(createdResp)
-  if (!etid) throw new Error(`crm.type.add returned no entityTypeId for "${title}"`)
-  return { etid, created: true }
+  const ref = extractCreatedSpRef(createdResp)
+  if (!ref) throw new Error(`crm.type.add returned no entityTypeId/id for "${title}"`)
+  return { ref, created: true }
 }
 
-/** Ensure every field in `fields` exists on the SP `etid`, creating only the missing ones. Returns
- *  the number of fields added. */
-async function ensureFields(call: RestCall, etid: number, fields: readonly SpUserField[]): Promise<number> {
-  const existing = await listAllFieldNames(call, etid)
-  const toAdd = planMissingUserFields(etid, fields, existing)
+/** Ensure every field in `fields` exists on the SP, creating only the missing ones. Field probing +
+ *  creation key off the SP's TYPE id (`sp.id`), NOT the entityTypeId. Returns the number added. */
+async function ensureFields(call: RestCall, sp: SpRef, fields: readonly SpUserField[]): Promise<number> {
+  const existing = await listAllFieldNames(call, sp.id)
+  const toAdd = planMissingUserFields(sp.id, fields, existing)
   for (const addCall of toAdd) await call(addCall.method, addCall.params) // sequential — rate-safe, no batch
   return toAdd.length
 }
@@ -155,20 +167,22 @@ async function ensureFields(call: RestCall, etid: number, fields: readonly SpUse
  * persist the returned etids (see `ProvisionResult`).
  */
 export async function provisionDistributionSp(call: RestCall, known: KnownSpIds = {}): Promise<ProvisionResult> {
-  const knownPayment = known.paymentSpEtid && known.paymentSpEtid > 0
-  const knownDistribution = known.distributionSpEtid && known.distributionSpEtid > 0
-  // Probe the type list ONCE (paginated) only when at least one id is unknown — reused for both.
+  const knownPayment = !!(known.payment && known.payment.entityTypeId > 0 && known.payment.id > 0)
+  const knownDistribution = !!(known.distribution && known.distribution.entityTypeId > 0 && known.distribution.id > 0)
+  // Probe the type list ONCE (paginated) only when at least one ref is unknown — reused for both.
   const allTypes = knownPayment && knownDistribution ? { result: { types: [] } } : await listAllSmartProcessTypes(call)
 
-  const payment = await ensureSp(call, known.paymentSpEtid, allTypes, PAYMENT_SP_TITLE, buildPaymentSpCreateCall())
-  const distribution = await ensureSp(call, known.distributionSpEtid, allTypes, DISTRIBUTION_SP_TITLE, buildDistributionSpCreateCall())
+  const payment = await ensureSp(call, known.payment, allTypes, PAYMENT_SP_TITLE, buildPaymentSpCreateCall())
+  const distribution = await ensureSp(call, known.distribution, allTypes, DISTRIBUTION_SP_TITLE, buildDistributionSpCreateCall())
 
-  const addedPayment = await ensureFields(call, payment.etid, Object.values(PAYMENT_SP_FIELDS))
-  const addedDistribution = await ensureFields(call, distribution.etid, Object.values(DISTRIBUTION_SP_FIELDS))
+  const addedPayment = await ensureFields(call, payment.ref, Object.values(PAYMENT_SP_FIELDS))
+  const addedDistribution = await ensureFields(call, distribution.ref, Object.values(DISTRIBUTION_SP_FIELDS))
 
   return {
-    paymentSpEtid: payment.etid,
-    distributionSpEtid: distribution.etid,
+    payment: payment.ref,
+    distribution: distribution.ref,
+    paymentSpEtid: payment.ref.entityTypeId,
+    distributionSpEtid: distribution.ref.entityTypeId,
     createdPaymentSp: payment.created,
     createdDistributionSp: distribution.created,
     addedFields: addedPayment + addedDistribution

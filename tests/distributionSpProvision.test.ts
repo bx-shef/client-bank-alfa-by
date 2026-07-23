@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  extractCreatedEntityTypeId,
+  extractCreatedSpRef,
   extractExistingFieldNames,
   provisionDistributionSp
 } from '../server/utils/distributionSpProvision'
@@ -14,15 +14,16 @@ import {
 // Provisioning transport (#109 §9.1 slice 3): idempotent probe → create-if-absent → add missing UFs.
 // DI over a fake RestCall — no network.
 
-describe('extractCreatedEntityTypeId', () => {
-  it('reads result.type.entityTypeId', () => {
-    expect(extractCreatedEntityTypeId({ result: { type: { entityTypeId: 1044 } } })).toBe(1044)
+describe('extractCreatedSpRef', () => {
+  it('reads result.type.entityTypeId + id', () => {
+    expect(extractCreatedSpRef({ result: { type: { entityTypeId: 1044, id: 44 } } })).toEqual({ entityTypeId: 1044, id: 44 })
   })
-  it('null on malformed / non-positive', () => {
-    expect(extractCreatedEntityTypeId({ result: {} })).toBeNull()
-    expect(extractCreatedEntityTypeId({})).toBeNull()
-    expect(extractCreatedEntityTypeId({ result: { type: { entityTypeId: 0 } } })).toBeNull()
-    expect(extractCreatedEntityTypeId({ result: { type: { entityTypeId: 'x' } } })).toBeNull()
+  it('null on malformed / non-positive / either id missing', () => {
+    expect(extractCreatedSpRef({ result: {} })).toBeNull()
+    expect(extractCreatedSpRef({})).toBeNull()
+    expect(extractCreatedSpRef({ result: { type: { entityTypeId: 0, id: 44 } } })).toBeNull()
+    expect(extractCreatedSpRef({ result: { type: { entityTypeId: 1044 } } })).toBeNull() // no id
+    expect(extractCreatedSpRef({ result: { type: { entityTypeId: 1044, id: 'x' } } })).toBeNull()
   })
 })
 
@@ -53,7 +54,10 @@ describe('provisionDistributionSp', () => {
     let nextEtid = 1044
     const { call, calls } = fakeCall({
       'crm.type.list': () => ({ result: { types: [] } }),
-      'crm.type.add': () => ({ result: { type: { entityTypeId: nextEtid++ } } }),
+      'crm.type.add': () => {
+        const e = nextEtid++
+        return { result: { type: { entityTypeId: e, id: e } } }
+      },
       'userfieldconfig.list': () => ({ result: { fields: [] } }),
       'userfieldconfig.add': () => ({ result: { field: {} } })
     })
@@ -72,8 +76,8 @@ describe('provisionDistributionSp', () => {
     const distributionEtid = 1046
     const { call, calls } = fakeCall({
       'crm.type.list': () => ({ result: { types: [
-        { entityTypeId: paymentEtid, title: PAYMENT_SP_TITLE },
-        { entityTypeId: distributionEtid, title: DISTRIBUTION_SP_TITLE }
+        { entityTypeId: paymentEtid, id: paymentEtid, title: PAYMENT_SP_TITLE },
+        { entityTypeId: distributionEtid, id: distributionEtid, title: DISTRIBUTION_SP_TITLE }
       ] } }),
       'userfieldconfig.list': (params) => {
         // payment SP already has ALL its fields; distribution SP has none
@@ -99,7 +103,7 @@ describe('provisionDistributionSp', () => {
       'userfieldconfig.list': () => ({ result: { fields: [] } }),
       'userfieldconfig.add': () => ({ result: { field: {} } })
     })
-    const res = await provisionDistributionSp(call, { paymentSpEtid: 100, distributionSpEtid: 200 })
+    const res = await provisionDistributionSp(call, { payment: { entityTypeId: 100, id: 100 }, distribution: { entityTypeId: 200, id: 200 } })
     expect(res.paymentSpEtid).toBe(100)
     expect(res.distributionSpEtid).toBe(200)
     expect(res.createdPaymentSp).toBe(false)
@@ -119,7 +123,7 @@ describe('provisionDistributionSp', () => {
         return { result: { fields: fields.map(f => ({ fieldName: `UF_CRM_${etid}_${f.postfix}` })) } }
       }
     })
-    const res = await provisionDistributionSp(call, { paymentSpEtid: paymentEtid, distributionSpEtid: distributionEtid })
+    const res = await provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: distributionEtid, id: distributionEtid } })
     expect(res.addedFields).toBe(0)
   })
 
@@ -145,7 +149,7 @@ describe('provisionDistributionSp', () => {
       },
       'userfieldconfig.add': () => ({ result: { field: {} } })
     })
-    const res = await provisionDistributionSp(call, { paymentSpEtid: paymentEtid, distributionSpEtid: distributionEtid })
+    const res = await provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: distributionEtid, id: distributionEtid } })
     const addedNames = calls
       .filter(c => c.method === 'userfieldconfig.add')
       .map(c => (c.params.field as Record<string, unknown>).fieldName)
@@ -160,11 +164,11 @@ describe('provisionDistributionSp', () => {
   it('mixed known/unknown ids: skips probe for the known SP, recovers the other by title', async () => {
     const distributionEtid = 1046
     const { call, calls } = fakeCall({
-      'crm.type.list': () => ({ result: { types: [{ entityTypeId: distributionEtid, title: DISTRIBUTION_SP_TITLE }] } }),
+      'crm.type.list': () => ({ result: { types: [{ entityTypeId: distributionEtid, id: distributionEtid, title: DISTRIBUTION_SP_TITLE }] } }),
       'userfieldconfig.list': () => ({ result: { fields: [] } }),
       'userfieldconfig.add': () => ({ result: { field: {} } })
     })
-    const res = await provisionDistributionSp(call, { paymentSpEtid: 500 })
+    const res = await provisionDistributionSp(call, { payment: { entityTypeId: 500, id: 500 } })
     expect(res.paymentSpEtid).toBe(500) // known → used as-is
     expect(res.distributionSpEtid).toBe(distributionEtid) // recovered by title
     expect(res.createdPaymentSp).toBe(false)
@@ -175,11 +179,11 @@ describe('provisionDistributionSp', () => {
   it('falls back to probe/create when a known id is non-positive (0 / NaN)', async () => {
     const { call, calls } = fakeCall({
       'crm.type.list': () => ({ result: { types: [] } }),
-      'crm.type.add': () => ({ result: { type: { entityTypeId: 1044 } } }),
+      'crm.type.add': () => ({ result: { type: { entityTypeId: 1044, id: 1044 } } }),
       'userfieldconfig.list': () => ({ result: { fields: [] } }),
       'userfieldconfig.add': () => ({ result: { field: {} } })
     })
-    const res = await provisionDistributionSp(call, { paymentSpEtid: 0, distributionSpEtid: 1046 })
+    const res = await provisionDistributionSp(call, { payment: { entityTypeId: 0, id: 0 }, distribution: { entityTypeId: 1046, id: 1046 } })
     expect(res.paymentSpEtid).toBe(1044) // 0 rejected → probed/created
     expect(res.distributionSpEtid).toBe(1046)
     expect(calls.some(c => c.method === 'crm.type.list')).toBe(true) // 0 forced a probe
@@ -193,14 +197,14 @@ describe('provisionDistributionSp', () => {
         // page 0: 50 unrelated types + next; page 1: our payment SP by title
         if (!params.start) {
           typePage = 1
-          return { result: { types: [{ entityTypeId: 900, title: 'Прочее' }] }, next: 50 }
+          return { result: { types: [{ entityTypeId: 900, id: 900, title: 'Прочее' }] }, next: 50 }
         }
-        return { result: { types: [{ entityTypeId: paymentEtid, title: PAYMENT_SP_TITLE }] } }
+        return { result: { types: [{ entityTypeId: paymentEtid, id: paymentEtid, title: PAYMENT_SP_TITLE }] } }
       },
       'userfieldconfig.list': () => ({ result: { fields: [] } }),
       'userfieldconfig.add': () => ({ result: { field: {} } })
     })
-    const res = await provisionDistributionSp(call, { distributionSpEtid: 200 })
+    const res = await provisionDistributionSp(call, { distribution: { entityTypeId: 200, id: 200 } })
     expect(typePage).toBe(1)
     expect(res.paymentSpEtid).toBe(paymentEtid) // found on page 2
     expect(calls.some(c => c.method === 'crm.type.add')).toBe(false) // not duplicated
@@ -221,7 +225,7 @@ describe('provisionDistributionSp', () => {
         return { result: { fields: fields.slice(1).map(f => ({ fieldName: `UF_CRM_${etid}_${f.postfix}` })) } }
       }
     })
-    const res = await provisionDistributionSp(call, { paymentSpEtid: paymentEtid, distributionSpEtid: distributionEtid })
+    const res = await provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: distributionEtid, id: distributionEtid } })
     expect(res.addedFields).toBe(0) // all fields seen across both pages → nothing re-added
     expect(calls.some(c => c.method === 'userfieldconfig.add')).toBe(false)
   })

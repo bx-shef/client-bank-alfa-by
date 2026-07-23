@@ -19,16 +19,19 @@ import type { DistributionRowInput } from '../app/utils/distributionLedger'
 import type { StatementItem } from '../app/types/statement'
 import type { AllocationCandidate } from '../app/utils/allocation'
 
+const PSP = { entityTypeId: 1044, id: 44 }
+const DSP = { entityTypeId: 1046, id: 46 }
+
 const ufName = buildUfFieldName
-const srcUf = ufName(1046, DISTRIBUTION_SP_FIELDS.source.postfix)
-const needUf = ufName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)
-const reqUf = ufName(1044, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
+const srcUf = ufName(DSP.id, DISTRIBUTION_SP_FIELDS.source.postfix)
+const needUf = ufName(PSP.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)
+const reqUf = ufName(PSP.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
 
 // Ledger transport (#109 §9.1/§9.3): idempotent row write (find-by-marker) + active-rows load
 // (paginated) + «осталось» recompute. DI over a fake RestCall — no network.
 
 const INPUT: DistributionRowInput = {
-  paymentSpEtid: 1044, distributionSpEtid: 1046, paymentElementId: '500',
+  paymentSp: PSP, distributionSp: DSP, paymentElementId: '500',
   amount: 50, currency: 'BYN', targetKind: 'invoice', targetId: '39', source: 'auto', marker: 'M1'
 }
 
@@ -43,7 +46,7 @@ function fakeCall(handlers: Record<string, (params: Record<string, unknown>) => 
   return { call, calls }
 }
 
-const statusUf = buildUfFieldName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)
+const statusUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
 
 describe('extractors', () => {
   it('extractAddedItemId reads result.item.id', () => {
@@ -59,11 +62,11 @@ describe('extractors', () => {
 describe('findDistributionByMarker', () => {
   it('returns the first matching row id, or null', async () => {
     const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 7 }] } }) })
-    expect(await findDistributionByMarker(1046, 'M1', call)).toBe('7')
+    expect(await findDistributionByMarker(DSP, 'M1', call)).toBe('7')
   })
   it('empty marker → null without a REST call', async () => {
     const { call } = fakeCall({})
-    expect(await findDistributionByMarker(1046, '', call)).toBeNull()
+    expect(await findDistributionByMarker(DSP, '', call)).toBeNull()
     expect(call).not.toHaveBeenCalled()
   })
 })
@@ -99,7 +102,7 @@ describe('loadActiveDistributions (paginated)', () => {
         ? { result: { items: [row(3)] } }
         : { result: { items: [row(1), row(2)] }, next: 2 })
     })
-    const rows = await loadActiveDistributions(1046, 1044, '500', call)
+    const rows = await loadActiveDistributions(DSP, PSP, '500', call)
     expect(rows).toHaveLength(3)
     expect(rows.every(r => r.amount === 10)).toBe(true)
   })
@@ -112,20 +115,20 @@ describe('recomputeNeedDistribution', () => {
       'crm.item.list': () => ({ result: { items: [row('30'), row('20')] } }),
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    const remaining = await recomputeNeedDistribution(1044, '500', 1046, 100, 'BYN', call)
+    const remaining = await recomputeNeedDistribution(PSP, '500', DSP, 100, 'BYN', call)
     expect(remaining).toBe(50)
     const upd = calls.find(c => c.method === 'crm.item.update')!
     expect(upd.params.id).toBe(500)
-    expect((upd.params.fields as Record<string, unknown>)[buildUfFieldName(1044, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(50)
+    expect((upd.params.fields as Record<string, unknown>)[buildUfFieldName(PSP.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(50)
   })
 })
 
 describe('readPaymentTotal', () => {
   it('reads opportunity + currency; null when the element is gone', async () => {
     const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }) })
-    expect(await readPaymentTotal(1044, '500', call)).toEqual({ total: 100, currency: 'BYN' })
+    expect(await readPaymentTotal(PSP, '500', call)).toEqual({ total: 100, currency: 'BYN' })
     const { call: empty } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
-    expect(await readPaymentTotal(1044, '500', empty)).toBeNull()
+    expect(await readPaymentTotal(PSP, '500', empty)).toBeNull()
   })
 })
 
@@ -136,7 +139,7 @@ describe('loadDistributionsByTarget', () => {
         ? { result: { items: [{ id: 3, parentId1044: '500', [srcUf]: 'auto' }] } }
         : { result: { items: [{ id: 1, parentId1044: '500', [srcUf]: 'manual' }] }, next: 1 })
     })
-    const rows = await loadDistributionsByTarget(1046, 1044, 'invoice', '39', call)
+    const rows = await loadDistributionsByTarget(DSP, PSP, 'invoice', '39', call)
     expect(rows).toHaveLength(2)
   })
 })
@@ -144,7 +147,7 @@ describe('loadDistributionsByTarget', () => {
 describe('reconcileTargetDeletion', () => {
   it('no rows → nothing done', async () => {
     const { call, calls } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
-    expect(await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)).toEqual({ freed: 0, parentsRecomputed: 0, manualParents: 0 })
+    expect(await reconcileTargetDeletion(PSP, DSP, 'invoice', '39', call)).toEqual({ freed: 0, parentsRecomputed: 0, manualParents: 0 })
     expect(calls.some(c => c.method === 'crm.item.update')).toBe(false)
   })
 
@@ -152,7 +155,7 @@ describe('reconcileTargetDeletion', () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
         // 1st list = target rows; subsequent lists = active rows (recompute) / payment read
-        if (params.filter && (params.filter as Record<string, unknown>)[ufName(1046, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
+        if (params.filter && (params.filter as Record<string, unknown>)[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
           return { result: { items: [{ id: 9, parentId1044: '500', [srcUf]: 'manual' }] } }
         }
         if ((params.filter as Record<string, unknown>).id === 500) {
@@ -162,11 +165,11 @@ describe('reconcileTargetDeletion', () => {
       },
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    const res = await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)
+    const res = await reconcileTargetDeletion(PSP, DSP, 'invoice', '39', call)
     expect(res).toEqual({ freed: 1, parentsRecomputed: 1, manualParents: 1 })
     const updates = calls.filter(c => c.method === 'crm.item.update')
     // deactivate row 9, recompute «осталось» on 500, set requiresRedistribution on 500
-    expect(updates.some(u => u.params.id === 9 && (u.params.fields as Record<string, unknown>)[ufName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)] === 'reverted')).toBe(true)
+    expect(updates.some(u => u.params.id === 9 && (u.params.fields as Record<string, unknown>)[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)] === 'reverted')).toBe(true)
     expect(updates.some(u => u.params.id === 500 && (u.params.fields as Record<string, unknown>)[needUf] === 100)).toBe(true)
     expect(updates.some(u => u.params.id === 500 && (u.params.fields as Record<string, unknown>)[reqUf] === 'Y')).toBe(true)
   })
@@ -174,7 +177,7 @@ describe('reconcileTargetDeletion', () => {
   it('auto-only rows do NOT flag requiresRedistribution', async () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
-        if ((params.filter as Record<string, unknown>)?.[ufName(1046, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
+        if ((params.filter as Record<string, unknown>)?.[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
           return { result: { items: [{ id: 9, parentId1044: '500', [srcUf]: 'auto' }] } }
         }
         if ((params.filter as Record<string, unknown>)?.id === 500) return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }
@@ -182,7 +185,7 @@ describe('reconcileTargetDeletion', () => {
       },
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    const res = await reconcileTargetDeletion(1044, 1046, 'invoice', '39', call)
+    const res = await reconcileTargetDeletion(PSP, DSP, 'invoice', '39', call)
     expect(res.manualParents).toBe(0)
     expect(calls.filter(c => c.method === 'crm.item.update').some(u => (u.params.fields as Record<string, unknown>)[reqUf] !== undefined)).toBe(false)
   })
@@ -195,12 +198,12 @@ describe('ensurePaymentElement (idempotent by operation marker)', () => {
       'crm.item.list': () => ({ result: { items: [] } }),
       'crm.item.add': () => ({ result: { item: { id: 500 } } })
     })
-    expect(await ensurePaymentElement(1044, input, call)).toEqual({ id: '500', created: true })
+    expect(await ensurePaymentElement(PSP, input, call)).toEqual({ id: '500', created: true })
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(true)
   })
   it('returns the existing carrier (no add) when the marker is present', async () => {
     const { call, calls } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 77, opportunity: '100', currencyId: 'BYN' }] } }) })
-    expect(await ensurePaymentElement(1044, input, call)).toEqual({ id: '77', created: false })
+    expect(await ensurePaymentElement(PSP, input, call)).toEqual({ id: '77', created: false })
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
   })
   it('throws when add returns no id', async () => {
@@ -208,7 +211,7 @@ describe('ensurePaymentElement (idempotent by operation marker)', () => {
       'crm.item.list': () => ({ result: { items: [] } }),
       'crm.item.add': () => ({ result: {} })
     })
-    await expect(ensurePaymentElement(1044, input, call)).rejects.toThrow(/no payment element id/)
+    await expect(ensurePaymentElement(PSP, input, call)).rejects.toThrow(/no payment element id/)
   })
 })
 
@@ -228,7 +231,7 @@ describe('writeLedgerAllocation (orchestrator)', () => {
         : { result: { item: { id: 900 } } }), // distribution row
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    const res = await writeLedgerAllocation(1044, 1046, OP, TARGET, '12', call)
+    const res = await writeLedgerAllocation(PSP, DSP, OP, TARGET, '12', call)
     expect(res.paymentElementId).toBe('500')
     expect(res.rowId).toBe('900')
     expect(res.rowCreated).toBe(true)
@@ -237,23 +240,23 @@ describe('writeLedgerAllocation (orchestrator)', () => {
     expect((payAdd.params.fields as Record<string, unknown>).companyId).toBe(12)
     // distribution row add carried the allocation-fact marker (dedup key|kind|id)
     const rowAdd = calls.find(c => c.method === 'crm.item.add' && c.params.entityTypeId === 1046)!
-    expect((rowAdd.params.fields as Record<string, unknown>)[ufName(1046, DISTRIBUTION_SP_FIELDS.marker.postfix)]).toBe('BY00|D1|invoice|39')
+    expect((rowAdd.params.fields as Record<string, unknown>)[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]).toBe('BY00|D1|invoice|39')
   })
 
   it('is idempotent — existing carrier + row are reused, nothing double-added', async () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
-        if (params.entityTypeId === 1044 && (params.filter as Record<string, unknown>)[ufName(1044, PAYMENT_SP_FIELDS.marker.postfix)]) {
+        if (params.entityTypeId === 1044 && (params.filter as Record<string, unknown>)[ufName(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)]) {
           return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } } // payment exists
         }
-        if ((params.filter as Record<string, unknown>)?.[ufName(1046, DISTRIBUTION_SP_FIELDS.marker.postfix)]) {
+        if ((params.filter as Record<string, unknown>)?.[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]) {
           return { result: { items: [{ id: 900 }] } } // row exists
         }
-        return { result: { items: [{ id: 900, opportunity: '100', currencyId: 'BYN', [ufName(1046, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active' }] } } // active rows for recompute
+        return { result: { items: [{ id: 900, opportunity: '100', currencyId: 'BYN', [ufName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active' }] } } // active rows for recompute
       },
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    const res = await writeLedgerAllocation(1044, 1046, OP, TARGET, '12', call)
+    const res = await writeLedgerAllocation(PSP, DSP, OP, TARGET, '12', call)
     expect(res.rowCreated).toBe(false)
     expect(res.remaining).toBe(0) // 100 total − 100 active
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
@@ -261,16 +264,16 @@ describe('writeLedgerAllocation (orchestrator)', () => {
 })
 
 const TRIGGER_TARGET: AllocationCandidate = { kind: 'deal', id: '77', amount: 0, currency: 'BYN' }
-const markerUf = ufName(1046, DISTRIBUTION_SP_FIELDS.marker.postfix)
+const markerUf = ufName(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)
 
 describe('hasTriggerLedgerFact (§9.3 #6 — SP-marker trigger dedup)', () => {
   it('true when a distribution row with the trigger marker exists', async () => {
     const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 900 }] } }) })
-    expect(await hasTriggerLedgerFact(1046, OP, TRIGGER_TARGET, call)).toBe(true)
+    expect(await hasTriggerLedgerFact(DSP, OP, TRIGGER_TARGET, call)).toBe(true)
   })
   it('false when no row carries the marker', async () => {
     const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
-    expect(await hasTriggerLedgerFact(1046, OP, TRIGGER_TARGET, call)).toBe(false)
+    expect(await hasTriggerLedgerFact(DSP, OP, TRIGGER_TARGET, call)).toBe(false)
   })
 })
 
@@ -282,7 +285,7 @@ describe('writeTriggerLedgerFact (§9.3 #6 — zero-amount trigger marker row)',
         ? { result: { item: { id: 500 } } }
         : { result: { item: { id: 901 } } })
     })
-    const res = await writeTriggerLedgerFact(1044, 1046, OP, TRIGGER_TARGET, '12', call)
+    const res = await writeTriggerLedgerFact(PSP, DSP, OP, TRIGGER_TARGET, '12', call)
     expect(res.created).toBe(true)
     // the distribution row is zero-amount (a trigger allocates nothing) and carries the fact marker
     const rowAdd = calls.find(c => c.method === 'crm.item.add' && c.params.entityTypeId === 1046)!
@@ -299,7 +302,7 @@ describe('writeTriggerLedgerFact (§9.3 #6 — zero-amount trigger marker row)',
         return { result: { items: [{ id: 901 }] } } // row exists
       }
     })
-    const res = await writeTriggerLedgerFact(1044, 1046, OP, TRIGGER_TARGET, '12', call)
+    const res = await writeTriggerLedgerFact(PSP, DSP, OP, TRIGGER_TARGET, '12', call)
     expect(res.created).toBe(false)
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
   })
