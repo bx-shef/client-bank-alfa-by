@@ -40,13 +40,22 @@ export interface SpUserField {
   userTypeId: 'double' | 'boolean' | 'string' | 'integer'
   /** Human label (edit-form). */
   label: string
+  /** Optional `userfieldconfig.add` `settings`. For `double` MONEY fields we set `{ PRECISION: 2 }`:
+   *  a plain double ROUNDS to integer (600.5→601 — live-confirmed), which would corrupt kopecks; with
+   *  PRECISION:2 it stores 600.55 correctly. */
+  settings?: Record<string, unknown>
 }
 
-/** User fields on the PAYMENT-carrier SP. `opportunity` (amount) and the client/my-company links
- *  are BUILT-IN smart-process fields (from the `is*Enabled` flags) — not created here. */
+/** User fields on the PAYMENT-carrier SP. The built-in `opportunity`/`currencyId` are NOT writable on a
+ *  smart-process item (live-confirmed — they stay 0/portal-default), so we keep the payment TOTAL +
+ *  currency in our OWN fields; the client/my-company links ARE built-in (from the `is*Enabled` flags). */
 export const PAYMENT_SP_FIELDS = {
-  /** Read-only «осталось распределить» (numeric) — amount minus Σ active distributions. */
-  needDistributionsSum: { postfix: 'NEED_DISTR', userTypeId: 'double', label: 'Осталось распределить' },
+  /** The payment's full amount — our own money field (opportunity isn't writable on an SP). */
+  total: { postfix: 'TOTAL', userTypeId: 'double', label: 'Сумма платежа', settings: { PRECISION: 2 } },
+  /** ISO currency of the payment (our own field; currencyId isn't writable on an SP). */
+  currency: { postfix: 'CURRENCY', userTypeId: 'string', label: 'Валюта' },
+  /** Read-only «осталось распределить» (money) — amount minus Σ active distributions. */
+  needDistributionsSum: { postfix: 'NEED_DISTR', userTypeId: 'double', label: 'Осталось распределить', settings: { PRECISION: 2 } },
   /** «требует распределения» (Y/N) — set when a manual target changed/was deleted (§3/§9.2). */
   requiresRedistribution: { postfix: 'NEEDS_REDISTR', userTypeId: 'boolean', label: 'Требует распределения' },
   /** Dedup marker = the operation key (idempotent write-once carrier per operation). */
@@ -59,6 +68,11 @@ export const DISTRIBUTION_SP_FIELDS = {
    *  link: our two SPs have no configured parent-child relationship, so the native link doesn't exist
    *  and is rejected in filters (live-confirmed). An integer field we write + filter/select by. */
   parentPayment: { postfix: 'PARENT_PAYMENT', userTypeId: 'integer', label: 'Платёж (родитель)' },
+  /** The allocated amount — our own money field (opportunity isn't writable on an SP; §9 recompute
+   *  sums THIS, not the built-in opportunity which stays 0). */
+  amount: { postfix: 'AMOUNT', userTypeId: 'double', label: 'Сумма', settings: { PRECISION: 2 } },
+  /** ISO currency of the allocation (our own field). */
+  currency: { postfix: 'CURRENCY', userTypeId: 'string', label: 'Валюта' },
   /** Allocation target kind (`invoice`/`deal-payment`/…). */
   targetKind: { postfix: 'TARGET_KIND', userTypeId: 'string', label: 'Тип цели' },
   /** Allocation target id. */
@@ -111,7 +125,9 @@ export function buildUfFieldConfigCall(spTypeId: number, field: SpUserField): { 
         entityId: buildSpEntityId(spTypeId),
         fieldName: buildUfFieldName(spTypeId, field.postfix),
         userTypeId: field.userTypeId,
-        editFormLabel: { ru: field.label }
+        editFormLabel: { ru: field.label },
+        // Money fields (double) carry `{ PRECISION: 2 }` — a plain double rounds to integer (live-confirmed).
+        ...(field.settings ? { settings: field.settings } : {})
       }
     }
   }

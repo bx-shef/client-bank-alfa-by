@@ -149,7 +149,7 @@ export async function readPaymentTotal(paymentSp: SpRef, paymentElementId: strin
   const readCall = buildPaymentReadCall(paymentSp, paymentElementId)
   const resp = await call(readCall.method, readCall.params)
   const item = extractListItems(resp)[0]
-  return item ? parsePaymentTotal(item) : null
+  return item ? parsePaymentTotal(item, paymentSp) : null
 }
 
 /** Load ALL active distribution rows pointing at a TARGET (`targetKind`+`targetId`), paginated. */
