@@ -20,11 +20,17 @@
 // ⚠ ONE REMAINING LIVE ISSUE (next slice): the built-in `opportunity`/`currencyId` fields are NOT
 // writable on a smart-process item (they stay 0 / portal-default currency regardless of
 // `isManualOpportunity` or type flags — live-confirmed), so the ledger amount doesn't persist and the
-// «осталось» recompute sees Σ=0 → remaining=total. FIX: store the row amount + currency in OUR OWN UF
-// fields (not `opportunity`) and sum from those. NB a `double` UF rounds to integer by default
-// (600.5→601), so money needs a precision setting (userfieldconfig `settings.PRECISION`) or an
-// integer-minor-units / string field. Until then, dedup works but recompute doesn't (autoDistribute
-// default-OFF → no prod impact).
+// «осталось» recompute sees Σ=0 → remaining=total. FIX (design live-probed): store amount + currency
+// in OUR OWN UF fields on BOTH SPs and read/sum from those, NOT `opportunity`/`currencyId`:
+//   - amount: a `double` UF created with `settings: { PRECISION: 2 }` — a plain double ROUNDS to integer
+//     (600.5→601), but PRECISION:2 stores 600.55 correctly (probed). (Alternatives: `money` type stores
+//     `"600.55|USD"`; `string` is lossless — the double+precision is cleanest for summing.)
+//   - currency: a `string` UF.
+//   Payment carrier likewise needs its own TOTAL (double,PRECISION:2) + CURRENCY, and the existing
+//   `needDistributionsSum` (double) must gain PRECISION:2. Rewire buildDistributionRowAddCall /
+//   parseLedgerRow / buildPaymentElementAddCall / parsePaymentCarrier / parsePaymentTotal + the selects
+//   to the own fields. Until then, dedup works but recompute doesn't (autoDistribute default-OFF → no
+//   prod impact).
 
 import type { AllocationTargetKind } from './allocation'
 import type { AllocationSource, DistributionEntry } from './manualAllocation'
