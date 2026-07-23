@@ -12,9 +12,13 @@ const parentUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.parentPaym
 
 const payMarkerUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)
 const reqUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
+const pTotalUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.total.postfix)
+const pCurrUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.currency.postfix)
 const rowStatusUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
 const rowKindUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)
 const rowIdUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetId.postfix)
+const dAmountUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.amount.postfix)
+const dCurrUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.currency.postfix)
 
 function fakeCall(handlers: Record<string, (params: Record<string, unknown>) => Record<string, unknown>>) {
   const calls: { method: string, params: Record<string, unknown> }[] = []
@@ -41,9 +45,9 @@ describe('builders', () => {
     expect((params.filter as Record<string, unknown>)[rowStatusUf]).toBeUndefined() // NOT filtered by status
   })
   it('parsePaymentCarrier — reads total/currency/requiresRedistribution', () => {
-    expect(parsePaymentCarrier({ id: 500, opportunity: '100', currencyId: 'BYN', [reqUf]: 'Y' }, PSP))
+    expect(parsePaymentCarrier({ id: 500, [pTotalUf]: '100', [pCurrUf]: 'BYN', [reqUf]: 'Y' }, PSP))
       .toEqual({ id: '500', total: 100, currency: 'BYN', requiresRedistribution: true })
-    expect(parsePaymentCarrier({ opportunity: '1' }, PSP)).toBeNull() // no id
+    expect(parsePaymentCarrier({ [pTotalUf]: '1' }, PSP)).toBeNull() // no id
   })
 })
 
@@ -53,13 +57,13 @@ describe('loadPortalLedger', () => {
       'crm.item.list': (params) => {
         if (params.entityTypeId === 1044) {
           return { result: { items: [
-            { id: 2, opportunity: '200', currencyId: 'BYN', [reqUf]: 'N' },
-            { id: 1, opportunity: '100', currencyId: 'BYN', [reqUf]: 'Y' }
+            { id: 2, [pTotalUf]: '200', [pCurrUf]: 'BYN', [reqUf]: 'N' },
+            { id: 1, [pTotalUf]: '100', [pCurrUf]: 'BYN', [reqUf]: 'Y' }
           ] } }
         }
         // rows for a payment (any status)
         const parent = (params.filter as Record<string, unknown>)[parentUf]
-        if (parent === 1) return { result: { items: [{ id: 9, opportunity: '100', currencyId: 'BYN', [rowKindUf]: 'invoice', [rowIdUf]: '39', [rowStatusUf]: 'active' }] } }
+        if (parent === 1) return { result: { items: [{ id: 9, [dAmountUf]: '100', [dCurrUf]: 'BYN', [rowKindUf]: 'invoice', [rowIdUf]: '39', [rowStatusUf]: 'active' }] } }
         return { result: { items: [] } }
       }
     })
@@ -116,10 +120,10 @@ describe('recomputeAllPayments', () => {
     const rowStatus = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
-        if (params.entityTypeId === 1044) return { result: { items: [{ id: 1, opportunity: '100', currencyId: 'BYN' }, { id: 2, opportunity: '50', currencyId: 'BYN' }] } }
+        if (params.entityTypeId === 1044) return { result: { items: [{ id: 1, [pTotalUf]: '100', [pCurrUf]: 'BYN' }, { id: 2, [pTotalUf]: '50', [pCurrUf]: 'BYN' }] } }
         // active rows per payment (for recompute): payment 1 has a 30 row, payment 2 none
         const parent = (params.filter as Record<string, unknown>)[parentUf]
-        if (parent === 1) return { result: { items: [{ opportunity: '30', currencyId: 'BYN', [rowStatus]: 'active' }] } }
+        if (parent === 1) return { result: { items: [{ [dAmountUf]: '30', [dCurrUf]: 'BYN', [rowStatus]: 'active' }] } }
         return { result: { items: [] } }
       },
       'crm.item.update': () => ({ result: { item: {} } })

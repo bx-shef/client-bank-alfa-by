@@ -22,6 +22,10 @@ import type { AllocationCandidate } from '../app/utils/allocation'
 const PSP = { entityTypeId: 1044, id: 44 }
 const DSP = { entityTypeId: 1046, id: 46 }
 const parentUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.parentPayment.postfix)
+const dAmountUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.amount.postfix)
+const dCurrUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.currency.postfix)
+const pTotalUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.total.postfix)
+const pCurrUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.currency.postfix)
 
 const ufName = buildUfFieldNameCamel
 const srcUf = ufName(DSP.id, DISTRIBUTION_SP_FIELDS.source.postfix)
@@ -97,7 +101,7 @@ describe('writeDistributionRow (idempotent)', () => {
 
 describe('loadActiveDistributions (paginated)', () => {
   it('accumulates rows across pages', async () => {
-    const row = (id: number) => ({ id, opportunity: '10', currencyId: 'BYN', [statusUf]: 'active' })
+    const row = (id: number) => ({ id, [dAmountUf]: '10', [dCurrUf]: 'BYN', [statusUf]: 'active' })
     const { call } = fakeCall({
       'crm.item.list': params => (params.start
         ? { result: { items: [row(3)] } }
@@ -111,7 +115,7 @@ describe('loadActiveDistributions (paginated)', () => {
 
 describe('recomputeNeedDistribution', () => {
   it('computes total − Σ active and writes it onto the payment carrier', async () => {
-    const row = (amt: string) => ({ opportunity: amt, currencyId: 'BYN', [statusUf]: 'active' })
+    const row = (amt: string) => ({ [dAmountUf]: amt, [dCurrUf]: 'BYN', [statusUf]: 'active' })
     const { call, calls } = fakeCall({
       'crm.item.list': () => ({ result: { items: [row('30'), row('20')] } }),
       'crm.item.update': () => ({ result: { item: {} } })
@@ -126,7 +130,7 @@ describe('recomputeNeedDistribution', () => {
 
 describe('readPaymentTotal', () => {
   it('reads opportunity + currency; null when the element is gone', async () => {
-    const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }) })
+    const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 500, [pTotalUf]: '100', [pCurrUf]: 'BYN' }] } }) })
     expect(await readPaymentTotal(PSP, '500', call)).toEqual({ total: 100, currency: 'BYN' })
     const { call: empty } = fakeCall({ 'crm.item.list': () => ({ result: { items: [] } }) })
     expect(await readPaymentTotal(PSP, '500', empty)).toBeNull()
@@ -160,7 +164,7 @@ describe('reconcileTargetDeletion', () => {
           return { result: { items: [{ id: 9, [parentUf]: '500', [srcUf]: 'manual' }] } }
         }
         if ((params.filter as Record<string, unknown>).id === 500) {
-          return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } } // payment read
+          return { result: { items: [{ id: 500, [pTotalUf]: '100', [pCurrUf]: 'BYN' }] } } // payment read
         }
         return { result: { items: [] } } // active rows after deactivation → none
       },
@@ -181,7 +185,7 @@ describe('reconcileTargetDeletion', () => {
         if ((params.filter as Record<string, unknown>)?.[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]) {
           return { result: { items: [{ id: 9, [parentUf]: '500', [srcUf]: 'auto' }] } }
         }
-        if ((params.filter as Record<string, unknown>)?.id === 500) return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } }
+        if ((params.filter as Record<string, unknown>)?.id === 500) return { result: { items: [{ id: 500, [pTotalUf]: '100', [pCurrUf]: 'BYN' }] } }
         return { result: { items: [] } }
       },
       'crm.item.update': () => ({ result: { item: {} } })
@@ -203,7 +207,7 @@ describe('ensurePaymentElement (idempotent by operation marker)', () => {
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(true)
   })
   it('returns the existing carrier (no add) when the marker is present', async () => {
-    const { call, calls } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 77, opportunity: '100', currencyId: 'BYN' }] } }) })
+    const { call, calls } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 77, [pTotalUf]: '100', [pCurrUf]: 'BYN' }] } }) })
     expect(await ensurePaymentElement(PSP, input, call)).toEqual({ id: '77', created: false })
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
   })
@@ -248,12 +252,12 @@ describe('writeLedgerAllocation (orchestrator)', () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
         if (params.entityTypeId === 1044 && (params.filter as Record<string, unknown>)[ufName(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)]) {
-          return { result: { items: [{ id: 500, opportunity: '100', currencyId: 'BYN' }] } } // payment exists
+          return { result: { items: [{ id: 500, [pTotalUf]: '100', [pCurrUf]: 'BYN' }] } } // payment exists
         }
         if ((params.filter as Record<string, unknown>)?.[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]) {
           return { result: { items: [{ id: 900 }] } } // row exists
         }
-        return { result: { items: [{ id: 900, opportunity: '100', currencyId: 'BYN', [ufName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active' }] } } // active rows for recompute
+        return { result: { items: [{ id: 900, [dAmountUf]: '100', [dCurrUf]: 'BYN', [ufName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active' }] } } // active rows for recompute
       },
       'crm.item.update': () => ({ result: { item: {} } })
     })
@@ -291,7 +295,7 @@ describe('writeTriggerLedgerFact (§9.3 #6 — zero-amount trigger marker row)',
     // the distribution row is zero-amount (a trigger allocates nothing) and carries the fact marker
     const rowAdd = calls.find(c => c.method === 'crm.item.add' && c.params.entityTypeId === 1046)!
     const fields = rowAdd.params.fields as Record<string, unknown>
-    expect(fields.opportunity).toBe(0) // zero-amount accounting row → no «осталось» impact
+    expect(fields[dAmountUf]).toBe(0) // zero-amount accounting row → no «осталось» impact
     expect(fields[markerUf]).toBe('BY00|D1|deal|77')
     // NO recompute (crm.item.update) — a zero-amount row leaves «осталось» untouched
     expect(calls.some(c => c.method === 'crm.item.update')).toBe(false)

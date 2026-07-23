@@ -14,17 +14,14 @@
 // marker dedup). The parent link between a distribution row and its payment carrier is OUR OWN
 // filterable UF field (`PARENT_PAYMENT`, integer = payment element id, `parentPaymentField`) — NOT the
 // native `parentId<etid>` link, which is rejected in filters because our two SPs have no configured
-// parent-child relationship. Provisioning + carrier/row write + MARKER DEDUP are verified live
-// (`pnpm verify:distribution`).
+// parent-child relationship.
 //
-// ⚠ ONE REMAINING LIVE ISSUE (next slice): the built-in `opportunity`/`currencyId` fields are NOT
-// writable on a smart-process item (they stay 0 / portal-default currency regardless of
-// `isManualOpportunity` or type flags — live-confirmed), so the ledger amount doesn't persist and the
-// «осталось» recompute sees Σ=0 → remaining=total. FIX: store the row amount + currency in OUR OWN UF
-// fields (not `opportunity`) and sum from those. NB a `double` UF rounds to integer by default
-// (600.5→601), so money needs a precision setting (userfieldconfig `settings.PRECISION`) or an
-// integer-minor-units / string field. Until then, dedup works but recompute doesn't (autoDistribute
-// default-OFF → no prod impact).
+// MONEY (live-confirmed): the built-in `opportunity`/`currencyId` are NOT writable on a smart-process
+// item (they stay 0 / portal-default regardless of `isManualOpportunity`/type flags), so the ledger
+// keeps amount + currency in OUR OWN UF fields — the row's AMOUNT (double, `settings.PRECISION:2` so
+// kopecks survive — a plain double rounds to integer) + CURRENCY, and the carrier's TOTAL + CURRENCY;
+// the «осталось» recompute sums these, not `opportunity`. The full write path (create, field-add,
+// carrier/row write, marker dedup, «осталось» recompute) is verified live (`pnpm verify:distribution`).
 
 import type { AllocationTargetKind } from './allocation'
 import type { AllocationSource, DistributionEntry } from './manualAllocation'
@@ -67,9 +64,11 @@ export function buildDistributionRowAddCall(input: DistributionRowInput): { meth
       // `UF_CRM_<id>_…` name returns EMPTY (live-confirmed), so write/read/filter all use camelCase.
       fields: {
         [parentPaymentField(input.distributionSp)]: Number(input.paymentElementId),
-        opportunity: round2(input.amount),
-        currencyId: input.currency,
-        isManualOpportunity: 'Y',
+        // Amount + currency in our OWN fields — the built-in opportunity/currencyId are NOT writable
+        // on a smart-process item (live-confirmed: they stay 0 / portal-default), so the recompute
+        // sums THESE. The AMOUNT field is a double with PRECISION:2 (kopeck-safe).
+        [uf(DISTRIBUTION_SP_FIELDS.amount.postfix)]: round2(input.amount),
+        [uf(DISTRIBUTION_SP_FIELDS.currency.postfix)]: input.currency,
         [uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix)]: input.targetKind,
         [uf(DISTRIBUTION_SP_FIELDS.targetId.postfix)]: input.targetId,
         [uf(DISTRIBUTION_SP_FIELDS.source.postfix)]: input.source,
@@ -108,7 +107,9 @@ export function buildActiveRowsListCall(
       [parentPaymentField(distributionSp)]: Number(paymentElementId),
       [uf(DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active'
     },
-    select: ['id', 'opportunity', 'currencyId',
+    select: ['id',
+      uf(DISTRIBUTION_SP_FIELDS.amount.postfix),
+      uf(DISTRIBUTION_SP_FIELDS.currency.postfix),
       uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix),
       uf(DISTRIBUTION_SP_FIELDS.targetId.postfix),
       uf(DISTRIBUTION_SP_FIELDS.source.postfix),
@@ -131,7 +132,9 @@ export function buildPaymentRowsListCall(
   const params: Record<string, unknown> = {
     entityTypeId: distributionSp.entityTypeId,
     filter: { [parentPaymentField(distributionSp)]: Number(paymentElementId) },
-    select: ['id', 'opportunity', 'currencyId',
+    select: ['id',
+      uf(DISTRIBUTION_SP_FIELDS.amount.postfix),
+      uf(DISTRIBUTION_SP_FIELDS.currency.postfix),
       uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix),
       uf(DISTRIBUTION_SP_FIELDS.targetId.postfix),
       uf(DISTRIBUTION_SP_FIELDS.source.postfix),
@@ -147,7 +150,9 @@ export function buildPaymentListCall(paymentSp: SpRef, start?: number): { method
   const params: Record<string, unknown> = {
     entityTypeId: paymentSp.entityTypeId,
     order: { id: 'desc' },
-    select: ['id', 'opportunity', 'currencyId', 'companyId',
+    select: ['id', 'companyId',
+      buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.total.postfix),
+      buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.currency.postfix),
       buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix),
       buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix),
       buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]
@@ -168,12 +173,13 @@ export interface PaymentCarrierHeader {
 export function parsePaymentCarrier(item: Record<string, unknown>, paymentSp: SpRef): PaymentCarrierHeader | null {
   const id = item.id
   if (id === undefined || id === null || `${id}` === '') return null
-  const total = Number(item.opportunity)
+  const pf = (postfix: string) => item[buildUfFieldNameCamel(paymentSp.id, postfix)]
+  const total = Number(pf(PAYMENT_SP_FIELDS.total.postfix))
   return {
     id: `${id}`,
     total: Number.isFinite(total) ? round2(total) : 0,
-    currency: String(item.currencyId ?? ''),
-    requiresRedistribution: String(item[buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)] ?? '') === 'Y'
+    currency: String(pf(PAYMENT_SP_FIELDS.currency.postfix) ?? ''),
+    requiresRedistribution: String(pf(PAYMENT_SP_FIELDS.requiresRedistribution.postfix) ?? '') === 'Y'
   }
 }
 
@@ -181,12 +187,12 @@ export function parsePaymentCarrier(item: Record<string, unknown>, paymentSp: Sp
  *  UF fields (by full name) + the built-in `opportunity`/`currencyId`. Non-finite amount → 0. */
 export function parseLedgerRow(item: Record<string, unknown>, distributionSp: SpRef): DistributionEntry {
   const uf = (postfix: string) => item[buildUfFieldNameCamel(distributionSp.id, postfix)]
-  const amount = Number(item.opportunity)
+  const amount = Number(uf(DISTRIBUTION_SP_FIELDS.amount.postfix))
   return {
     targetKind: String(uf(DISTRIBUTION_SP_FIELDS.targetKind.postfix) ?? '') as AllocationTargetKind,
     targetId: String(uf(DISTRIBUTION_SP_FIELDS.targetId.postfix) ?? ''),
     amount: Number.isFinite(amount) ? round2(amount) : 0,
-    currency: String(item.currencyId ?? ''),
+    currency: String(uf(DISTRIBUTION_SP_FIELDS.currency.postfix) ?? ''),
     source: (String(uf(DISTRIBUTION_SP_FIELDS.source.postfix) ?? 'auto') === 'manual' ? 'manual' : 'auto'),
     status: (String(uf(DISTRIBUTION_SP_FIELDS.status.postfix) ?? 'active') === 'reverted' ? 'reverted' : 'active')
   }
@@ -289,23 +295,27 @@ export function buildRequiresRedistributionCall(
   }
 }
 
-/** Build the `crm.item.list` that reads a payment carrier element by id — for its `opportunity`
- *  (the total) + `currencyId`, needed to recompute «осталось». */
+/** Build the `crm.item.list` that reads a payment carrier element by id — for its total + currency
+ *  (our own UF fields, not the non-writable opportunity/currencyId), needed to recompute «осталось». */
 export function buildPaymentReadCall(paymentSp: SpRef, paymentElementId: string): { method: string, params: Record<string, unknown> } {
   return {
     method: 'crm.item.list',
     params: {
       entityTypeId: paymentSp.entityTypeId,
       filter: { id: Number(paymentElementId) },
-      select: ['id', 'opportunity', 'currencyId']
+      select: ['id',
+        buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.total.postfix),
+        buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.currency.postfix)]
     }
   }
 }
 
-/** Extract `{ total, currency }` from a payment-read list item. Non-finite total → 0. */
-export function parsePaymentTotal(item: Record<string, unknown> | undefined): { total: number, currency: string } {
-  const total = Number(item?.opportunity)
-  return { total: Number.isFinite(total) ? round2(total) : 0, currency: String(item?.currencyId ?? '') }
+/** Extract `{ total, currency }` from a payment-read list item (our own total/currency UF fields).
+ *  Non-finite total → 0. */
+export function parsePaymentTotal(item: Record<string, unknown> | undefined, paymentSp: SpRef): { total: number, currency: string } {
+  const total = Number(item?.[buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.total.postfix)])
+  const currency = String(item?.[buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.currency.postfix)] ?? '')
+  return { total: Number.isFinite(total) ? round2(total) : 0, currency }
 }
 
 /** Input for creating a payment CARRIER element (the SP element that holds one incoming payment). */
@@ -324,12 +334,14 @@ export interface PaymentElementInput {
  *  starts at the full amount (nothing distributed yet); the client link is set when a company matched. */
 export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentElementInput): { method: string, params: Record<string, unknown> } {
   const amount = round2(input.opportunity)
+  const pf = (postfix: string) => buildUfFieldNameCamel(paymentSp.id, postfix)
+  // total/currency in OUR own fields (opportunity/currencyId aren't writable on an SP); «осталось»
+  // starts at the full amount (nothing distributed yet).
   const fields: Record<string, unknown> = {
-    opportunity: amount,
-    currencyId: input.currency,
-    isManualOpportunity: 'Y',
-    [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
-    [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
+    [pf(PAYMENT_SP_FIELDS.total.postfix)]: amount,
+    [pf(PAYMENT_SP_FIELDS.currency.postfix)]: input.currency,
+    [pf(PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
+    [pf(PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
   }
   // Link the payer company only when matched (a positive integer id).
   const companyId = Number(input.companyId)
@@ -341,14 +353,16 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
 }
 
 /** Build the `crm.item.list` that finds a payment carrier element by its operation marker (idempotency
- *  probe — one carrier per operation). Selects id + opportunity + currency (for a later recompute). */
+ *  probe — one carrier per operation). Selects id + our total + currency (for a later recompute). */
 export function buildPaymentMarkerListCall(paymentSp: SpRef, marker: string): { method: string, params: Record<string, unknown> } {
   return {
     method: 'crm.item.list',
     params: {
       entityTypeId: paymentSp.entityTypeId,
       filter: { [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: marker },
-      select: ['id', 'opportunity', 'currencyId']
+      select: ['id',
+        buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.total.postfix),
+        buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.currency.postfix)]
     }
   }
 }

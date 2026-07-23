@@ -154,11 +154,13 @@ describe('provisionDistributionSp', () => {
       .filter(c => c.method === 'userfieldconfig.add')
       .map(c => (c.params.field as Record<string, unknown>).fieldName)
     expect(addedNames).toEqual([
+      `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.total.postfix}`,
+      `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.currency.postfix}`,
       `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.needDistributionsSum.postfix}`,
       `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.requiresRedistribution.postfix}`
     ])
     expect(addedNames).not.toContain(`UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.marker.postfix}`)
-    expect(res.addedFields).toBe(2)
+    expect(res.addedFields).toBe(4)
   })
 
   it('mixed known/unknown ids: skips probe for the known SP, recovers the other by title', async () => {

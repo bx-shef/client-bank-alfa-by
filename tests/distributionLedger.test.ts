@@ -22,6 +22,10 @@ import { buildUfFieldNameCamel, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from
 const PSP = { entityTypeId: 1044, id: 44 }
 const DSP = { entityTypeId: 1046, id: 46 }
 const parentUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.parentPayment.postfix)
+const dAmountUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.amount.postfix)
+const dCurrUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.currency.postfix)
+const pTotalUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.total.postfix)
+const pCurrUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.currency.postfix)
 
 // Pure ledger builders (#109 §9.1/§9.3): crm.item.add row + marker probe + active-rows list +
 // «осталось» recompute. One source of the ledger wire shape.
@@ -45,9 +49,8 @@ describe('buildDistributionRowAddCall', () => {
     expect(params.entityTypeId).toBe(1046)
     const f = params.fields as Record<string, unknown>
     expect(f[parentUf]).toBe(500) // numeric parent id
-    expect(f.opportunity).toBe(123.46) // round2
-    expect(f.currencyId).toBe('BYN')
-    expect(f.isManualOpportunity).toBe('Y')
+    expect(f[dAmountUf]).toBe(123.46) // round2
+    expect(f[dCurrUf]).toBe('BYN')
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]).toBe('invoice')
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetId.postfix)]).toBe('39')
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.source.postfix)]).toBe('auto')
@@ -83,8 +86,8 @@ describe('parseLedgerRow', () => {
   it('reads UF fields + opportunity/currency into a DistributionEntry', () => {
     const item = {
       id: '9',
-      opportunity: '50.00',
-      currencyId: 'BYN',
+      [dAmountUf]: '50.00',
+      [dCurrUf]: 'BYN',
       [buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)]: 'deal-payment',
       [buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetId.postfix)]: '77',
       [buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.source.postfix)]: 'manual',
@@ -95,7 +98,7 @@ describe('parseLedgerRow', () => {
     })
   })
   it('defaults source/status safely and zeroes a non-finite amount', () => {
-    const row = parseLedgerRow({ opportunity: 'x', currencyId: 'BYN' }, DSP)
+    const row = parseLedgerRow({ [dAmountUf]: 'x', [dCurrUf]: 'BYN' }, DSP)
     expect(row.amount).toBe(0)
     expect(row.source).toBe('auto')
     expect(row.status).toBe('active')
@@ -173,12 +176,12 @@ describe('buildPaymentReadCall / parsePaymentTotal', () => {
   it('reads a payment element by id (opportunity + currency)', () => {
     const { params } = buildPaymentReadCall(PSP, '500')
     expect((params.filter as Record<string, unknown>).id).toBe(500)
-    expect(params.select).toContain('opportunity')
+    expect(params.select).toContain(pTotalUf)
   })
   it('parses total + currency, zeroing a non-finite total', () => {
-    expect(parsePaymentTotal({ opportunity: '100.00', currencyId: 'BYN' })).toEqual({ total: 100, currency: 'BYN' })
-    expect(parsePaymentTotal({ opportunity: 'x', currencyId: 'BYN' })).toEqual({ total: 0, currency: 'BYN' })
-    expect(parsePaymentTotal(undefined)).toEqual({ total: 0, currency: '' })
+    expect(parsePaymentTotal({ [pTotalUf]: '100.00', [pCurrUf]: 'BYN' }, PSP)).toEqual({ total: 100, currency: 'BYN' })
+    expect(parsePaymentTotal({ [pTotalUf]: 'x', [pCurrUf]: 'BYN' }, PSP)).toEqual({ total: 0, currency: 'BYN' })
+    expect(parsePaymentTotal(undefined, PSP)).toEqual({ total: 0, currency: '' })
   })
 })
 
@@ -188,9 +191,8 @@ describe('buildPaymentElementAddCall', () => {
     expect(method).toBe('crm.item.add')
     expect(params.entityTypeId).toBe(1044)
     const f = params.fields as Record<string, unknown>
-    expect(f.opportunity).toBe(100.01)
-    expect(f.currencyId).toBe('BYN')
-    expect(f.isManualOpportunity).toBe('Y')
+    expect(f[pTotalUf]).toBe(100.01)
+    expect(f[pCurrUf]).toBe('BYN')
     expect(f.companyId).toBe(12)
     expect(f[buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]).toBe(100.01) // nothing distributed yet
     expect(f[buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)]).toBe('acc|doc1')
@@ -205,6 +207,6 @@ describe('buildPaymentMarkerListCall', () => {
   it('filters by the marker UF and selects id + opportunity + currency', () => {
     const { params } = buildPaymentMarkerListCall(PSP, 'acc|doc1')
     expect((params.filter as Record<string, unknown>)[buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)]).toBe('acc|doc1')
-    expect(params.select).toContain('opportunity')
+    expect(params.select).toContain(pTotalUf)
   })
 })
