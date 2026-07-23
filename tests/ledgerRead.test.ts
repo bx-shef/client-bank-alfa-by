@@ -3,17 +3,18 @@ import { loadPortalLedger, recomputeAllPayments } from '../server/utils/distribu
 import { handleLedgerRequest, type LedgerRequestDeps } from '../server/utils/ledgerRequest'
 import { handleRecomputeRequest, type RecomputeRequestDeps } from '../server/utils/recomputeRequest'
 import { buildPaymentListCall, buildPaymentRowsListCall, parsePaymentCarrier } from '../app/utils/distributionLedger'
-import { buildUfFieldName, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
+import { buildUfFieldNameCamel, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { LedgerCard } from '../server/utils/distributionLedgerWrite'
 
 const PSP = { entityTypeId: 1044, id: 44 }
 const DSP = { entityTypeId: 1046, id: 46 }
+const parentUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.parentPayment.postfix)
 
-const payMarkerUf = buildUfFieldName(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)
-const reqUf = buildUfFieldName(PSP.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
-const rowStatusUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
-const rowKindUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)
-const rowIdUf = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.targetId.postfix)
+const payMarkerUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.marker.postfix)
+const reqUf = buildUfFieldNameCamel(PSP.id, PAYMENT_SP_FIELDS.requiresRedistribution.postfix)
+const rowStatusUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
+const rowKindUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetKind.postfix)
+const rowIdUf = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.targetId.postfix)
 
 function fakeCall(handlers: Record<string, (params: Record<string, unknown>) => Record<string, unknown>>) {
   const calls: { method: string, params: Record<string, unknown> }[] = []
@@ -30,14 +31,13 @@ describe('builders', () => {
   it('buildPaymentListCall — newest-first, selects UF state + marker', () => {
     const { params } = buildPaymentListCall(PSP, 50)
     expect(params.entityTypeId).toBe(1044)
-    expect(params.useOriginalUfNames).toBe('Y')
     expect(params.order).toEqual({ id: 'desc' })
     expect(params.select).toContain(payMarkerUf)
     expect(params.start).toBe(50)
   })
   it('buildPaymentRowsListCall — all rows of a payment (no status filter)', () => {
     const { params } = buildPaymentRowsListCall(DSP, PSP, '500')
-    expect((params.filter as Record<string, unknown>).parentId1044).toBe(500)
+    expect((params.filter as Record<string, unknown>)[parentUf]).toBe(500)
     expect((params.filter as Record<string, unknown>)[rowStatusUf]).toBeUndefined() // NOT filtered by status
   })
   it('parsePaymentCarrier — reads total/currency/requiresRedistribution', () => {
@@ -58,7 +58,7 @@ describe('loadPortalLedger', () => {
           ] } }
         }
         // rows for a payment (any status)
-        const parent = (params.filter as Record<string, unknown>).parentId1044
+        const parent = (params.filter as Record<string, unknown>)[parentUf]
         if (parent === 1) return { result: { items: [{ id: 9, opportunity: '100', currencyId: 'BYN', [rowKindUf]: 'invoice', [rowIdUf]: '39', [rowStatusUf]: 'active' }] } }
         return { result: { items: [] } }
       }
@@ -113,12 +113,12 @@ describe('handleLedgerRequest', () => {
 
 describe('recomputeAllPayments', () => {
   it('recomputes «осталось» for every payment carrier from its active rows', async () => {
-    const rowStatus = buildUfFieldName(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
+    const rowStatus = buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
         if (params.entityTypeId === 1044) return { result: { items: [{ id: 1, opportunity: '100', currencyId: 'BYN' }, { id: 2, opportunity: '50', currencyId: 'BYN' }] } }
         // active rows per payment (for recompute): payment 1 has a 30 row, payment 2 none
-        const parent = (params.filter as Record<string, unknown>).parentId1044
+        const parent = (params.filter as Record<string, unknown>)[parentUf]
         if (parent === 1) return { result: { items: [{ opportunity: '30', currencyId: 'BYN', [rowStatus]: 'active' }] } }
         return { result: { items: [] } }
       },

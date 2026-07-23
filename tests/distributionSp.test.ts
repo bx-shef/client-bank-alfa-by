@@ -12,6 +12,7 @@ import {
   buildSpEntityId,
   buildUfFieldConfigCall,
   buildUfFieldName,
+  buildUfFieldNameCamel,
   distributionSpEtid,
   hasSpEtids,
   paymentSpEtid,
@@ -57,9 +58,21 @@ describe('buildDistributionSpCreateCall', () => {
 })
 
 describe('buildUfFieldName', () => {
-  it('embeds the per-portal entityTypeId as B24 requires: UF_CRM_<etid>_<postfix>', () => {
-    expect(buildUfFieldName(1044, 'NEED_DISTR')).toBe('UF_CRM_1044_NEED_DISTR')
-    expect(buildUfFieldName(1046, 'MARKER')).toBe('UF_CRM_1046_MARKER')
+  it('embeds the per-portal TYPE id as userfieldconfig.add requires: UF_CRM_<id>_<postfix>', () => {
+    expect(buildUfFieldName(44, 'NEED_DISTR')).toBe('UF_CRM_44_NEED_DISTR')
+    expect(buildUfFieldName(46, 'MARKER')).toBe('UF_CRM_46_MARKER')
+  })
+})
+
+describe('buildUfFieldNameCamel', () => {
+  // The camelCase name crm.item.* uses for read/write/FILTER (filtering by the original name returns
+  // empty — live-confirmed). Rule: ufCrm<id> + each underscore-segment of the postfix PascalCased.
+  it('PascalCases each postfix segment: ufCrm<id><Seg><Seg>', () => {
+    expect(buildUfFieldNameCamel(44, 'MARKER')).toBe('ufCrm44Marker')
+    expect(buildUfFieldNameCamel(44, 'NEED_DISTR')).toBe('ufCrm44NeedDistr')
+    expect(buildUfFieldNameCamel(46, 'TARGET_KIND')).toBe('ufCrm46TargetKind')
+    expect(buildUfFieldNameCamel(46, 'PARENT_PAYMENT')).toBe('ufCrm46ParentPayment')
+    expect(buildUfFieldNameCamel(46, 'NEEDS_REDISTR')).toBe('ufCrm46NeedsRedistr')
   })
 })
 

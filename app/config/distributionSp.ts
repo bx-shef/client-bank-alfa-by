@@ -55,6 +55,10 @@ export const PAYMENT_SP_FIELDS = {
 
 /** User fields on the DISTRIBUTIONS SP (one child = one allocation). */
 export const DISTRIBUTION_SP_FIELDS = {
+  /** The parent PAYMENT carrier element id. Our OWN filterable field — NOT the native `parentId<etid>`
+   *  link: our two SPs have no configured parent-child relationship, so the native link doesn't exist
+   *  and is rejected in filters (live-confirmed). An integer field we write + filter/select by. */
+  parentPayment: { postfix: 'PARENT_PAYMENT', userTypeId: 'integer', label: 'Платёж (родитель)' },
   /** Allocation target kind (`invoice`/`deal-payment`/…). */
   targetKind: { postfix: 'TARGET_KIND', userTypeId: 'string', label: 'Тип цели' },
   /** Allocation target id. */
@@ -72,6 +76,19 @@ export const DISTRIBUTION_SP_FIELDS = {
  *  requires and that `crm.item.*` (addressed by entityTypeId) then reads/writes (live-confirmed). */
 export function buildUfFieldName(spTypeId: number, postfix: string): string {
   return `UF_CRM_${spTypeId}_${postfix}`
+}
+
+/** The CAMELCASE B24 user-field name `crm.item.*` uses for read/write/FILTER (its default when
+ *  `useOriginalUfNames` is not 'Y'). Live-confirmed: filtering by the ORIGINAL `UF_CRM_<id>_<postfix>`
+ *  name returns EMPTY even with `useOriginalUfNames:'Y'`, but the camelCase name matches — so the ledger
+ *  addresses fields by THIS name. Rule (probed): `UF_CRM_<id>_<A_B>` → `ufCrm<id><Pascal(A)><Pascal(B)>`
+ *  (each underscore-segment of the postfix PascalCased): `MARKER`→`Marker`, `NEED_DISTR`→`NeedDistr`. */
+export function buildUfFieldNameCamel(spTypeId: number, postfix: string): string {
+  const pascal = postfix
+    .split('_')
+    .map(seg => seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase())
+    .join('')
+  return `ufCrm${spTypeId}${pascal}`
 }
 
 /** Build the smart-process `entityId` a UF is created against: `CRM_<id>` (the SP's TYPE id) — the
