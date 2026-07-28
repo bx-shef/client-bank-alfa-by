@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_SWEEP_INTERVAL_MIN,
   SWEEP_COMPLETED_GRACE_MS,
-  SWEEP_FAILED_GRACE_MS,
+  SWEEP_FETCH_FAILED_GRACE_MS, SWEEP_FAILED_GRACE_MS,
   SWEPT_QUEUES,
   runStatementSweep,
   sweepIntervalMs,
@@ -40,17 +40,26 @@ describe('grace periods derive from STATEMENT_JOB_RETENTION (same cutoff, eager)
 })
 
 describe('sweepPlan', () => {
-  it('covers both statement queues × completed+failed with the right grace', () => {
+  it('covers the statement queues × completed+failed, and the fetch queues × failed only', () => {
     const plan = sweepPlan()
     expect(plan).toEqual([
       { queue: 'file-parse', type: 'completed', graceMs: SWEEP_COMPLETED_GRACE_MS },
       { queue: 'file-parse', type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS },
       { queue: 'crm-sync', type: 'completed', graceMs: SWEEP_COMPLETED_GRACE_MS },
-      { queue: 'crm-sync', type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS }
+      { queue: 'crm-sync', type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS },
+      // Fetch queues drop completed jobs immediately (removeOnComplete: true) — only FAILED can
+      // hold a stable jobId and dedup-block an account out of the poll rotation.
+      { queue: 'bank-fetch', type: 'failed', graceMs: SWEEP_FETCH_FAILED_GRACE_MS },
+      { queue: 'bank-fetch-prior', type: 'failed', graceMs: SWEEP_FETCH_FAILED_GRACE_MS }
     ])
   })
-  it('only sweeps the two PII queues (not b24-events / bank-fetch)', () => {
-    expect([...SWEPT_QUEUES]).toEqual(['file-parse', 'crm-sync'])
+  it('sweeps the PII queues AND both fetch queues (b24-events is not swept)', () => {
+    expect([...SWEPT_QUEUES]).toEqual(['file-parse', 'crm-sync', 'bank-fetch', 'bank-fetch-prior'])
+    expect([...SWEPT_QUEUES]).not.toContain('b24-events')
+  })
+  it('never sweeps a fetch queue COMPLETED set (nothing to sweep — removed on completion)', () => {
+    const fetchPlans = sweepPlan().filter(p => p.queue.startsWith('bank-fetch'))
+    expect(fetchPlans.every(p => p.type === 'failed')).toBe(true)
   })
 })
 
@@ -76,15 +85,18 @@ describe('runStatementSweep', () => {
   it('cleans both queues × both types and sums removed counts', async () => {
     const { deps, calls } = makeDeps()
     const s = await runStatementSweep(deps)
-    expect(calls).toHaveLength(4)
-    expect(s).toEqual({ completedRemoved: 2, failedRemoved: 2, failed: 0 })
+    // 2 PII queues × (completed+failed) + 2 fetch queues × failed = 6 clean calls.
+    expect(calls).toHaveLength(6)
+    expect(s).toEqual({ completedRemoved: 2, failedRemoved: 4, failed: 0 })
   })
 
   it('passes the retention-derived grace to each clean call', async () => {
     const { deps, calls } = makeDeps()
     await runStatementSweep(deps)
     for (const c of calls) {
-      const expected = c.type === 'completed' ? SWEEP_COMPLETED_GRACE_MS : SWEEP_FAILED_GRACE_MS
+      const expected = c.type === 'completed'
+        ? SWEEP_COMPLETED_GRACE_MS
+        : (c.queue.startsWith('bank-fetch') ? SWEEP_FETCH_FAILED_GRACE_MS : SWEEP_FAILED_GRACE_MS)
       expect(c.graceMs).toBe(expected)
     }
   })
@@ -97,10 +109,10 @@ describe('runStatementSweep', () => {
       }
     })
     const s = await runStatementSweep(deps)
-    // The three surviving calls still ran; only the one throw is counted.
+    // Every surviving call still ran; only the one throw is counted.
     expect(s.failed).toBe(1)
     expect(s.completedRemoved).toBe(1) // only crm-sync completed
-    expect(s.failedRemoved).toBe(2) // both failed cleans ran
+    expect(s.failedRemoved).toBe(4) // file-parse + crm-sync + both fetch queues
     expect(warns.some(w => w.includes('file-parse/completed'))).toBe(true)
   })
 
@@ -131,7 +143,7 @@ describe('runStatementSweep', () => {
       }
     })
     const s = await runStatementSweep(deps)
-    expect(s).toEqual({ completedRemoved: 0, failedRemoved: 0, failed: 4 })
+    expect(s).toEqual({ completedRemoved: 0, failedRemoved: 0, failed: 6 })
   })
 
   it('emits a summary log line', async () => {

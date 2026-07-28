@@ -55,6 +55,29 @@ export function estimatePollCycle(
   return { requests: req, cycleMs, exceedsInterval: intervalMs > 0 && cycleMs > intervalMs }
 }
 
+/**
+ * Per-provider sweep estimate — the shape the cron must report now that each provider drains from
+ * its OWN queue and OWN limiter (they run in PARALLEL). Summing them into one serial number would
+ * charge Prior's ~10× requests against Alfa's budget and understate whichever provider is slower,
+ * which matters because that number is what tells the operator how to size CRON_LOOKBACK_DAYS.
+ *
+ * `rateFor(provider)` returns that provider's REQUEST budget per `durationMs`. Pure.
+ */
+export function estimateProviderCycles(
+  plan: readonly { providerId: string, accounts: readonly unknown[] }[],
+  rateFor: (provider: string) => { requests: number, durationMs: number },
+  intervalMs: number
+): { provider: string, accounts: number, cycle: PollCycle }[] {
+  return plan.map((p) => {
+    const rate = rateFor(p.providerId)
+    return {
+      provider: p.providerId,
+      accounts: p.accounts.length,
+      cycle: estimatePollCycle(sweepRequests(p.providerId, p.accounts.length), rate.requests, rate.durationMs, intervalMs)
+    }
+  })
+}
+
 /** Sum the per-provider sweep cost of a poll plan (the cron's grouped accounts). Pure. */
 export function planRequests(plan: readonly { providerId: string, accounts: readonly unknown[] }[]): number {
   return plan.reduce((sum, p) => sum + sweepRequests(p.providerId, p.accounts.length), 0)

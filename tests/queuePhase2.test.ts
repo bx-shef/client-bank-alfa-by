@@ -210,19 +210,37 @@ describe('handleEventJob', () => {
 
 describe('handleFetchJob / handleParseJob → crm-sync', () => {
   const fetchJob: FetchJob = { memberId: 'M', providerId: 'alfa-by', account: 'ACC', dateFrom: '2026-07-01', dateTo: '2026-07-31' }
-  it('chains a non-empty batch onto crm-sync with a stable batchId', async () => {
+  it('chains a non-empty batch onto crm-sync with a window+CONTENT batchId', async () => {
     const { deps, calls } = fakeDeps([item('d1'), item('d2')])
     const r = await handleFetchJob(fetchJob, deps)
     expect(r).toEqual({ fetched: 2, chained: true })
-    expect((calls.crm[0] as CrmSyncJob).batchId).toBe('ACC:2026-07-01:2026-07-31')
+    const batchId = (calls.crm[0] as CrmSyncJob).batchId
+    expect(batchId).toMatch(/^ACC:2026-07-01:2026-07-31:[0-9a-f]{16}$/)
     expect((calls.crm[0] as CrmSyncJob).source).toBe('fetch')
   })
-  it('folds the poll epoch into batchId so a same-window re-poll re-runs crm-sync (A10)', async () => {
-    const { deps, calls } = fakeDeps([item('d1')])
-    await handleFetchJob({ ...fetchJob, epoch: 'tick42' }, deps)
-    // Without epoch in batchId the crm-sync jobId would dedupe every same-day re-poll into a
-    // no-op — the fetch re-runs but the B24-marker dedup never fires, dropping late-posted ops.
-    expect((calls.crm[0] as CrmSyncJob).batchId).toBe('ACC:2026-07-01:2026-07-31:tick42')
+  it('SAME operations → SAME batchId (a re-poll of unchanged data is a cheap dedup no-op)', async () => {
+    const a = fakeDeps([item('d1'), item('d2')])
+    const b = fakeDeps([item('d1'), item('d2')])
+    await handleFetchJob(fetchJob, a.deps)
+    await handleFetchJob(fetchJob, b.deps)
+    expect((b.calls.crm[0] as CrmSyncJob).batchId).toBe((a.calls.crm[0] as CrmSyncJob).batchId)
+  })
+  it('NEW operation → NEW batchId, so a same-window re-poll actually reaches CRM', async () => {
+    // The window alone is constant for a whole UTC day, and crm-sync RETAINS completed jobs — so a
+    // window-only id would silently discard every re-poll (bank polled, data thrown away). The
+    // content hash is what makes a late-posted operation get through.
+    const before = fakeDeps([item('d1')])
+    const after = fakeDeps([item('d1'), item('d2')])
+    await handleFetchJob(fetchJob, before.deps)
+    await handleFetchJob(fetchJob, after.deps)
+    expect((after.calls.crm[0] as CrmSyncJob).batchId).not.toBe((before.calls.crm[0] as CrmSyncJob).batchId)
+  })
+  it('is order-independent (a bank reordering rows is not a change)', async () => {
+    const a = fakeDeps([item('d1'), item('d2')])
+    const b = fakeDeps([item('d2'), item('d1')])
+    await handleFetchJob(fetchJob, a.deps)
+    await handleFetchJob(fetchJob, b.deps)
+    expect((b.calls.crm[0] as CrmSyncJob).batchId).toBe((a.calls.crm[0] as CrmSyncJob).batchId)
   })
   it('does not chain an empty batch', async () => {
     const { deps, calls } = fakeDeps([])

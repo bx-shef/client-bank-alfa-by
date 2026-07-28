@@ -67,8 +67,14 @@ export async function enqueueEvent(job: EventJob): Promise<boolean> {
  * same privacy posture as STATEMENT_JOB_RETENTION, #245.)
  *
  * `removeOnFail` is bounded by AGE for the same reason: a failed job keeps its id, so a permanently
- * failing account would otherwise be dedup-blocked from ever being polled again. An hour lets it
- * back in (and keeps a window of failures for diagnosis) — retry, not silent abandonment.
+ * failing account would otherwise be dedup-blocked from ever being polled again.
+ *
+ * ⚠ That age alone is NOT enough, because BullMQ's age eviction is LAZY — it runs only from inside
+ * another job's `moveToFinished` on the SAME set, and a COMPLETING fetch (removeOnComplete: true)
+ * trims nothing at all. So on a queue where fetches mostly succeed, one failed job could sit on its
+ * id until another fetch happened to fail an hour later, silently dropping that account from the
+ * rotation. The wall-clock guarantee comes from the periodic sweep (`statementSweep.ts`, which
+ * includes the fetch queues for exactly this reason); this age is the cutoff that sweep applies.
  */
 export const FETCH_JOB_RETENTION = {
   removeOnComplete: true,

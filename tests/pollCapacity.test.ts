@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   estimatePollCycle,
+  estimateProviderCycles,
   formatPollCycle,
   planRequests,
   providerJobRate,
@@ -82,6 +83,43 @@ describe('planRequests', () => {
     ]
     // 10_500×1 + 20_600×10 = 216_500 bank requests for ONE sweep of the marketplace fleet.
     expect(planRequests(plan)).toBe(216_500)
+  })
+})
+
+describe('estimateProviderCycles (queues drain in PARALLEL, not serially)', () => {
+  const plan = [
+    { providerId: 'alfa-by', accounts: new Array(10_500).fill('a') },
+    { providerId: 'prior-by', accounts: new Array(20_600).fill('p') }
+  ]
+  // Each provider has its OWN queue + limiter, so each is charged against its OWN budget.
+  const rateFor = (p: string) => p === 'prior-by'
+    ? { requests: 20, durationMs: 60_000 } // a DIFFERENT budget from Alfa's
+    : { requests: 100, durationMs: 60_000 }
+
+  it('charges each provider against its own budget (not one serial total)', () => {
+    const [alfa, prior] = estimateProviderCycles(plan, rateFor, 5 * 60_000)
+    expect(alfa!.provider).toBe('alfa-by')
+    expect(alfa!.cycle.cycleMs).toBe(105 * 60_000) // 10_500 req ÷ 100/min
+    expect(prior!.provider).toBe('prior-by')
+    expect(prior!.cycle.cycleMs).toBe(10_300 * 60_000) // 206_000 req ÷ 20/min — its OWN, slower budget
+  })
+
+  it('a slow provider does not inflate the fast one (the serial-sum bug)', () => {
+    const [alfa, prior] = estimateProviderCycles(plan, rateFor, 5 * 60_000)
+    // A single summed number would report ~2165 min for BOTH; per-provider keeps Alfa honest.
+    expect(alfa!.cycle.cycleMs).toBeLessThan(prior!.cycle.cycleMs)
+    expect(alfa!.cycle.requests).toBe(10_500)
+    expect(prior!.cycle.requests).toBe(206_000)
+  })
+
+  it('flags exceedsInterval per provider (a small Alfa fleet stays quiet while Prior warns)', () => {
+    const mixed = [
+      { providerId: 'alfa-by', accounts: new Array(50).fill('a') },
+      { providerId: 'prior-by', accounts: new Array(500).fill('p') }
+    ]
+    const [alfa, prior] = estimateProviderCycles(mixed, rateFor, 5 * 60_000)
+    expect(alfa!.cycle.exceedsInterval).toBe(false)
+    expect(prior!.cycle.exceedsInterval).toBe(true)
   })
 })
 

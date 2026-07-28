@@ -10,13 +10,13 @@
 
 import type { Worker } from 'bullmq'
 import { closeQueues, getQueue, queueEnabled } from '../queue/connection'
-import { Q_FETCH } from '../queue/topology'
+import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveTriggerFireDeps, startDeletionWorker, startEventWorker, startFeedbackWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
-import { estimatePollCycle, formatPollCycle, planRequests } from '../queue/pollCapacity'
+import { estimateProviderCycles, formatPollCycle, REQUESTS_PER_ACCOUNT } from '../queue/pollCapacity'
 import { listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
@@ -135,19 +135,33 @@ export default defineNitroPlugin((nitroApp) => {
             const jobs = planFetches(byPortal, dateFrom, dateTo)
             for (const job of jobs) await enqueueFetch(job)
             // Capacity, not just count: at scale the RATE CAP sets the real cadence, not this timer.
-            const cycle = estimatePollCycle(planRequests(byPortal), role.fetchRate.max, role.fetchRate.duration, pollMs)
+            // PER PROVIDER — each drains from its own queue/limiter, in parallel, so one serial
+            // total would charge Prior's ~10× requests against Alfa's budget and misreport both.
+            const cycles = estimateProviderCycles(byPortal, provider => (
+              provider === 'prior-by'
+                // Prior's limiter is in JOBS; convert back to a REQUEST budget for the estimate.
+                ? { requests: role.priorFetchRate.max * (REQUESTS_PER_ACCOUNT['prior-by'] ?? 1), durationMs: role.priorFetchRate.duration }
+                : { requests: role.fetchRate.max, durationMs: role.fetchRate.duration }
+            ), pollMs)
             console.info('[queue] real poll: planned %d fetch jobs (%s..%s, tick %d min) — %s',
-              jobs.length, dateFrom, dateTo, pollMs / 60_000, formatPollCycle(jobs.length, cycle))
-            if (cycle.exceedsInterval) {
-              console.warn('[queue] poll sweep (%d min) is longer than the tick (%d min) — the bank rate cap sets the real statement freshness, not CRON_INTERVAL_MIN. Queue growth is bounded (stable jobIds dedupe pending accounts); raise CRON_LOOKBACK_DAYS so a slower sweep cannot miss operations (docs/OPERATIONS.md).',
-                Math.round(cycle.cycleMs / 60_000), Math.round(pollMs / 60_000))
+              jobs.length, dateFrom, dateTo, pollMs / 60_000,
+              cycles.map(c => `${c.provider}: ${formatPollCycle(c.accounts, c.cycle)}`).join(' | '))
+            for (const c of cycles) {
+              if (!c.cycle.exceedsInterval) continue
+              console.warn('[queue] %s poll sweep (%d min) is longer than the tick (%d min) — the bank rate cap sets the real statement freshness for this provider, not CRON_INTERVAL_MIN. Queue growth is bounded (stable jobIds dedupe pending accounts); raise CRON_LOOKBACK_DAYS so a slower sweep cannot miss operations (docs/OPERATIONS.md).',
+                c.provider, Math.round(c.cycle.cycleMs / 60_000), Math.round(pollMs / 60_000))
             }
             // Best-effort: a counts read must never break the poll (it already enqueued).
             try {
-              const counts = await getQueue(Q_FETCH).getJobCounts('waiting', 'delayed') as FetchQueueCounts
-              const sat = fetchBacklogSaturation(counts, satThreshold)
-              if (sat.over) {
-                console.warn('[queue] bank-fetch backlog %d ≥ %d — likely A8 rate-limit saturation (jobs DEFERRED by the global limiter, not stuck); raise QUEUE_FETCH_RATE_* only if Alfa raises its cap (docs/OPERATIONS.md)', sat.backlog, satThreshold)
+              // BOTH fetch queues — at scale the SATURATED one is usually Prior (its jobs cost ~10
+              // requests each), and sampling only `bank-fetch` would leave that backlog invisible.
+              for (const q of [Q_FETCH, Q_FETCH_PRIOR] as const) {
+                const counts = await getQueue(q).getJobCounts('waiting', 'delayed') as FetchQueueCounts
+                const sat = fetchBacklogSaturation(counts, satThreshold)
+                if (sat.over) {
+                  const knob = q === Q_FETCH_PRIOR ? 'QUEUE_PRIOR_RATE_*' : 'QUEUE_FETCH_RATE_*'
+                  console.warn('[queue] %s backlog %d ≥ %d — likely rate-limit saturation (jobs DEFERRED by that queue\'s limiter, not stuck); raise %s only if the bank raises its cap (docs/OPERATIONS.md)', q, sat.backlog, satThreshold, knob)
+                }
               }
             } catch (err) {
               console.error('[queue] fetch saturation check failed:', (err as Error)?.message)
