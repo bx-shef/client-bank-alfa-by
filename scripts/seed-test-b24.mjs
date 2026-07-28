@@ -210,6 +210,17 @@ async function ensureSmartType(title, flags) {
   return id
 }
 
+/** The portal's DEFAULT invoice pipeline id — NOT a constant: `crm.category` ids are assigned
+ *  per portal, so a hardcoded id (and the `DT31_<id>:*` stage codes derived from it) only ever
+ *  matched the portal it was written on. Read it from the portal instead, so the seed is portable
+ *  across test portals (which get replaced whenever a demo subscription lapses). */
+async function invoiceCategoryId() {
+  const list = await rest('crm.category.list', { entityTypeId: 31 })
+  const cats = list?.categories || []
+  if (!cats.length) die('crm.category.list(31) вернул пустой список воронок смарт-счетов')
+  return cats[0].id
+}
+
 /** A pipeline/direction (crm.category) for entityTypeId, found by name. */
 async function ensureCategory(entityTypeId, name) {
   const list = await rest('crm.category.list', { entityTypeId })
@@ -369,26 +380,29 @@ async function seed() {
   created.clientGamma = await ensureItem(4, 'CO_GAMMA', { title: T + 'Клиент Гамма (без реквизитов)' }, { label: 'Клиент Гамма (без реквизитов — путь UNMATCHED)' })
 
   head('4/6 · Смарт-счета (инвойсы): оплачен / открытый / просрочен')
-  const INV_CAT = 11
+  // Both the pipeline id AND the stage codes are portal-specific (`DT31_<catId>:<code>`).
+  const INV_CAT = await invoiceCategoryId()
+  const invStage = code => `DT31_${INV_CAT}:${code}`
+  log(`${C.dim}воронка смарт-счетов на этом портале: id=${INV_CAT} → стадии ${invStage('N')}…${C.reset}`)
   created.invPaid = await ensureItem(31, 'INV_PAID', {
-    title: T + 'Счёт оплачен', accountNumber: 'СЧ-0001', categoryId: INV_CAT, stageId: 'DT31_11:P',
+    title: T + 'Счёт оплачен', accountNumber: 'СЧ-0001', categoryId: INV_CAT, stageId: invStage('P'),
     companyId: created.clientAlfa, mycompanyId: created.my1, opportunity: 1000, currencyId: 'BYN'
-  }, { label: 'Счёт СЧ-0001 (оплачен, DT31_11:P)' })
+  }, { label: 'Счёт СЧ-0001 (оплачен, :P)' })
   created.invOpen = await ensureItem(31, 'INV_OPEN', {
-    title: T + 'Счёт открытый', accountNumber: 'СЧ-0002', categoryId: INV_CAT, stageId: 'DT31_11:N',
+    title: T + 'Счёт открытый', accountNumber: 'СЧ-0002', categoryId: INV_CAT, stageId: invStage('N'),
     companyId: created.clientBeta, mycompanyId: created.my1, opportunity: 750, currencyId: 'BYN'
-  }, { label: 'Счёт СЧ-0002 (открытый, DT31_11:N)' })
+  }, { label: 'Счёт СЧ-0002 (открытый, :N)' })
   created.invOverdue = await ensureItem(31, 'INV_OVERDUE', {
-    title: T + 'Счёт не оплачен', accountNumber: 'СЧ-0003', categoryId: INV_CAT, stageId: 'DT31_11:D',
+    title: T + 'Счёт не оплачен', accountNumber: 'СЧ-0003', categoryId: INV_CAT, stageId: invStage('D'),
     companyId: created.clientAlfa, mycompanyId: created.my2, opportunity: 300, currencyId: 'BYN'
-  }, { label: 'Счёт СЧ-0003 (Не оплачен DT31_11:D — SEMANTICS=F, исключается invoiceLookup)' })
+  }, { label: 'Счёт СЧ-0003 (Не оплачен :D — SEMANTICS=F, исключается invoiceLookup)' })
   // NB: Bitrix enforces a UNIQUE invoice `accountNumber` portal-wide — two invoices
   // can't share a number, so invoiceLookup(number+company) matches at most one
   // invoice. Multi-candidate ambiguity for #109 only arises ACROSS entity kinds
   // (invoice vs deal payment), not among invoices. A second open invoice for the
   // same client, with its own number, for a distinct-target allocation test:
   created.invSecond = await ensureItem(31, 'INV_SECOND', {
-    title: T + 'Счёт второй открытый', accountNumber: 'СЧ-0100', categoryId: INV_CAT, stageId: 'DT31_11:N',
+    title: T + 'Счёт второй открытый', accountNumber: 'СЧ-0100', categoryId: INV_CAT, stageId: invStage('N'),
     companyId: created.clientAlfa, mycompanyId: created.my1, opportunity: 640, currencyId: 'BYN'
   }, { label: 'Счёт СЧ-0100 (второй открытый, тот же клиент)' })
 
@@ -402,7 +416,7 @@ async function seed() {
   await ensureDealPayment(created.dealOpt, created.prodInternal, 1200)
   // …plus a paid invoice linked to the same deal (parentId2) — the invoice target.
   created.dealOptInvoice = await ensureItem(31, 'INV_DEAL_OPT', {
-    title: T + 'Счёт по сделке Опт', accountNumber: 'СЧ-1200', categoryId: INV_CAT, stageId: 'DT31_11:P',
+    title: T + 'Счёт по сделке Опт', accountNumber: 'СЧ-1200', categoryId: INV_CAT, stageId: invStage('P'),
     companyId: created.clientAlfa, mycompanyId: created.my1, opportunity: 1200, currencyId: 'BYN', parentId2: created.dealOpt
   }, { label: 'Счёт по сделке Опт (СЧ-1200, оплачен, привязан к сделке)' })
   // A SECOND deal for the same client with its OWN unpaid 1200 BYN payment — two

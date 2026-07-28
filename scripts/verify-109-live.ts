@@ -58,7 +58,17 @@ function check(name: string, cond: boolean, detail = '') {
 const ACC_CLIENT_ALFA = 'BY04ALFA30129000000000009001'
 const ACC_CLIENT_BETA = 'BY24PJCB30129000000000009002'
 const ACC_MY_1 = 'BY04ALFA30129000000000009100'
-const INV_CAT = 11
+// Read the invoice pipeline from the PORTAL — `crm.category` ids are assigned per portal, and the
+// stage codes derive from it (`DT31_<catId>:<code>`). A hardcoded id only ever matched the portal it
+// was written on, so this harness broke the moment the test portal was replaced.
+const invCats = await call('crm.category.list', { entityTypeId: 31 })
+const INV_CAT = Number(((invCats?.result as { categories?: { id: number }[] })?.categories ?? [])[0]?.id)
+if (!Number.isInteger(INV_CAT) || INV_CAT <= 0) {
+  err('crm.category.list(31) не вернул воронку смарт-счетов')
+  process.exit(1)
+}
+/** Stage id for this portal's invoice pipeline. */
+const invStage = (code: string): string => `DT31_${INV_CAT}:${code}`
 
 // Any thrown/rejected REST error surfaces as a clean failure + exit(1), not a raw
 // stack trace mid-checklist (dev harness — keep the output legible).
@@ -89,9 +99,9 @@ if (!alfaId || !betaId || !myId) {
 
 // 2) stageLoader — negative-stage predicate for the invoice category.
 const isNeg = await loadInvoiceNegativeStage(INV_CAT, call)
-check('stageLoader: DT31_11:D (Не оплачен) — отрицательная стадия', isNeg('DT31_11:D') === true)
-check('stageLoader: DT31_11:P (Оплачен) — НЕ отрицательная', isNeg('DT31_11:P') === false)
-check('stageLoader: DT31_11:N (открытый) — НЕ отрицательная', isNeg('DT31_11:N') === false)
+check(`stageLoader: ${invStage('D')} (Не оплачен) — отрицательная стадия`, isNeg(invStage('D')) === true)
+check(`stageLoader: ${invStage('P')} (Оплачен) — НЕ отрицательная`, isNeg(invStage('P')) === false)
+check(`stageLoader: ${invStage('N')} (открытый) — НЕ отрицательная`, isNeg(invStage('N')) === false)
 
 // 3) invoiceLookup — by number + company, with stage filter and IDOR scoping.
 if (alfaId) {
