@@ -53,10 +53,6 @@ export interface CallbackInput {
   nowMs: number
 }
 
-// `sanitizeForLog` moved to ./logSanitize so the connect START half can share it (no import cycle);
-// re-exported here because callers/tests already import it from this module.
-export { sanitizeForLog } from './logSanitize'
-
 const page = (title: string, msg: string): string =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
   + `<title>${title}</title><body style="font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">`

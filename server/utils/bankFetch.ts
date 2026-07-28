@@ -126,7 +126,8 @@ const liveDeps: BankFetchDeps = {
  * as `StatementItem[]`. Returns `[]` (inert) when the account has no stored token — the poll
  * planner shouldn't schedule such accounts, but a race mustn't throw. On a per-account API
  * error (Alfa `errors[]` non-empty) it THROWS so the job retries (an errored empty `page` is
- * NOT "no operations", per alfaStatement.ts). Prior online fetch is not wired yet (A5b) → throws.
+ * NOT "no operations", per alfaStatement.ts). Prior delegates to `fetchPriorStatement` (the async
+ * create+poll engine), which applies the same fail-loud posture.
  */
 export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchDeps = liveDeps): Promise<StatementItem[]> {
   const stored = await deps.loadToken(query.memberId, query.provider, query.account)

@@ -155,6 +155,15 @@ export async function ensureBankToken(
     const shouldRefresh = opts.force ? stored.accessToken === token.accessToken : needsBankRefresh(stored, deps.now())
     if (!shouldRefresh) return stored
 
+    // No refresh token to spend (Prior may omit one — the callback stores it empty rather than
+    // failing the connect). Posting `refresh_token=` would just earn a 400 on EVERY poll tick
+    // forever; skip the doomed round-trip and log an ACTIONABLE line instead. The caller's fetch
+    // then fails on the expired access token, which is the honest state: reconnect required.
+    if (!stored.refreshToken) {
+      console.warn(`[ensureBankToken] ${stored.provider} account has no refresh_token — RECONNECT REQUIRED (re-run the bank connect for this account)`)
+      return stored
+    }
+
     const { url, body, headers } = bankRefreshRequest(stored.provider, creds, stored.refreshToken)
     const r = parseBankRefresh(stored.provider, await deps.postRefresh(url, body, headers))
     const updated: BankToken = {

@@ -75,7 +75,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   не держит, живой OAuth предусмотрен на backend/из портала (транспорт `bankFetch.ts` собран + юнит-тесты,
   A5 — Альфа GET; **подключён к воркеру (A9)**; **реестр счетов (A6) + крон-таймер (A10) + connect-поток с
   UI (A7) + глобальный rate-limiter (A8) готовы** — вся машинерия опроса собрана, таймер default-OFF
-  (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); Приор — A5b).
+  (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); **Приор (A5b) — движок опроса и connect-поток
+  готовы**, но в автоопрос (`POLLABLE_PROVIDERS`) ещё не включён — сперва учёт лимита по ЗАПРОСАМ (задача
+  Приора = до 10 HTTP) и занятость воркер-слота; прод дополнительно требует BY-СКЗИ (issue #41)).
   В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
   синтетика): чип загружает пример в один клик (`loadSample`: fetch→File→`runFiles`) + ссылка «скачать».
   Интерактивные контролы — **b24ui** (`B24Button`: «Выбрать файл»/«Сбросить»/чипы примеров, air-цвета
@@ -435,7 +437,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `MANUAL_POLL_ENABLED` (default OFF) + `queueEnabled`, admin-гейт (`profile.ADMIN`, блок спуфинга домена),
     пер-портальный Redis-кулдаун `SET NX EX` (`claimCooldownSlot`, дефолт 60с, `MANUAL_POLL_COOLDOWN_SEC`;
     claim только при наличии работы), глобальный A8-лимитер ниже по потоку. Инертно (`enqueued:0`) без счетов;
-    Приор отфильтрован (A5b). UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll` на `/settings`.
+    фильтр `POLLABLE_PROVIDERS` — тот же, что у крона (сейчас только Альфа; Приор пока не автоопрашивается).
+    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll` на `/settings`.
     nginx `limit_req` на роут. `listBankAccountsForPortal` (без расшифровки refresh).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
@@ -538,7 +541,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `provider` из **проверенного** state. UI — пикер банка `B24RadioGroup` (тип сужен до подключаемых, `manual`
     выбрать нельзя); подписи/плейсхолдер/кнопка следуют выбору. Env — `PRIOR_OAUTH_*`
     (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`).
-    **Осталось:** включить `prior-by` в опрос (`POLLABLE_PROVIDERS`, слайс 3) + прод-СКЗИ (issue #41).
+    **Осталось:** включить `prior-by` в автоопрос (нужен учёт лимита A8 по ЗАПРОСАМ, а не задачам, и
+    отдельная занятость слота — задача Приора держит воркер до минут) + прод-СКЗИ (issue #41).
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
@@ -631,8 +635,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно. **Приор
       (`prior-by`) — движок опроса собран (A5b, слайс 1):** `fetchBankStatement` делегирует в чистый
       `server/utils/priorFetch.ts` (`fetchPriorStatement` — async `POST /accounts/{id}/transactions` → поллинг
-      `GET …/{id}` пока `BY.NBRB.Resource.NotCreated` → `normalizePrior`, DI-транспорт, тесты). **Инертен в рантайме
-      пока** — Приор не в `POLLABLE_PROVIDERS` и не в connect-потоке (слайсы 2-3), прод требует BY-СКЗИ (issue #41).
+      `GET …/{id}` пока `BY.NBRB.Resource.NotCreated` → `normalizePrior`, DI-транспорт, тесты). Перед create
+      резолвит **опаковый `accountId`** банка из нашего IBAN (`resolvePriorAccountId` → `GET /accounts`) — это
+      разные идентификаторы. **429/5xx на поллинге = «ещё не готово», НЕ пустая выписка** (иначе троттл тихо
+      съел бы окно операций); нераспознанное тело — тоже ошибка, а не «пусто». Движок и connect-поток готовы,
+      но в **автоопрос Приор ещё не включён** (см. `POLLABLE_PROVIDERS` — учёт лимита по запросам + занятость
+      слота); прод требует BY-СКЗИ (issue #41), sandbox `:9344` без него.
       Живой вызов Альфы ограничен **глобальным rate-limiter (A8)** на `Q_FETCH` (BullMQ `limiter`, шаренный
       по репликам через Redis, дефолт 100/60с, `QUEUE_FETCH_RATE_*`). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
       Упор в кап BullMQ **не теряет** джобы (откладывает в `waiting`/`delayed`, на графике неотличимо от бэклога),
