@@ -111,4 +111,37 @@ describe('BankConnectCard connect interaction', () => {
     expect(fakeWin.close).toHaveBeenCalled() // blank tab dropped on failure
     vi.unstubAllGlobals()
   })
+
+  it('offers both banks and sends the SELECTED provider (Prior) to the backend', async () => {
+    mockState.isInit = true
+    mockState.isAdmin = true
+    fetchMock.mockResolvedValueOnce({ authorizeUrl: 'https://prior/authorize?s=1' })
+    const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
+    vi.stubGlobal('open', vi.fn(() => fakeWin as unknown as Window))
+    vi.stubGlobal('$fetch', fetchMock) // earlier tests unstubAllGlobals(), which drops the $fetch stub
+
+    const wrapper = await mountReady()
+    // Both online-connectable banks are offered; the button follows the choice.
+    expect(wrapper.find('[data-testid="provider-picker"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Приорбанк')
+    expect(wrapper.find('[data-testid="connect-button"]').text()).toContain('Альфа-Банк') // default
+
+    // Pick Prior (b24ui RadioGroup renders reka-ui role=radio controls, one per item).
+    const radios = wrapper.findAll('[role="radio"]')
+    expect(radios).toHaveLength(2)
+    await radios[1]!.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="connect-button"]').text()).toContain('Приорбанк')
+
+    await wrapper.find('[data-testid="account-input"]').setValue('BY13PJCB')
+    await wrapper.find('[data-testid="connect-button"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The backend got prior-by (not the alfa-by default).
+    const body = (fetchMock.mock.calls[0]![1] as { body: { provider: string, accountKey: string } }).body
+    expect(body.provider).toBe('prior-by')
+    expect(body.accountKey).toBe('BY13PJCB')
+    vi.unstubAllGlobals()
+  })
 })

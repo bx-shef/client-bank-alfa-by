@@ -13,11 +13,24 @@ const now = 1_700_000_000_000
 
 const CONFIG = { baseUrl: 'https://alfa:8273', clientId: 'CID', redirectUri: 'https://app/cb', scope: 'accounts' }
 
+/** Prior's connect config (multi-step, carries secrets — A5b). */
+const PRIOR_CONFIG = {
+  baseUrl: 'https://prior:9344',
+  clientId: 'PCID',
+  clientSecret: 'PSECRET',
+  redirectUri: 'https://app/cb',
+  audience: 'https://prior:9544/oauth2/token',
+  privateKeyPem: 'PEM',
+  kid: 'k1'
+}
+
 function deps(over: Partial<ConnectStartDeps> = {}): ConnectStartDeps {
   return {
     memberIdByDomain: async () => 'MEMBER1',
     validateFrame: async () => ({ userId: 'USER9', isAdmin: true }),
     config: () => CONFIG,
+    priorConfig: () => null, // Prior unconfigured by default; the Prior tests opt in
+    buildPriorUrl: async (_c, state) => `https://prior:9344/authorize?state=${state}&request=JWT`,
     secret: SECRET,
     ...over
   }
@@ -56,9 +69,60 @@ describe('bankConnectConfigFromEnv', () => {
     process.env.ALFA_OAUTH_REDIRECT_URI = 'https://app/cb'
     expect(bankConnectConfigFromEnv('alfa-by')).toBeNull()
   })
-  it('prior-by / manual → null (Prior connect is A5b; manual has no OAuth)', () => {
+  it('prior-by / manual → null (Prior has its own config/flow; manual has no OAuth)', () => {
     expect(bankConnectConfigFromEnv('prior-by')).toBeNull()
     expect(bankConnectConfigFromEnv('manual')).toBeNull()
+  })
+})
+
+describe('handleBankConnectStart — Prior (A5b, live preamble)', () => {
+  const priorInput = { ...input, provider: 'prior-by' as const }
+
+  it('400 when Prior is not configured (no env) — same clean refusal as an unknown provider', async () => {
+    const buildPriorUrl = vi.fn(async () => 'X')
+    const r = await handleBankConnectStart(deps({ priorConfig: () => null, buildPriorUrl }), priorInput)
+    expect(r.status).toBe(400)
+    expect(buildPriorUrl).not.toHaveBeenCalled() // no bank round-trip on an unconfigured provider
+  })
+
+  it('runs the preamble and returns its authorize URL, passing the SIGNED state', async () => {
+    const buildPriorUrl = vi.fn(async (_c: unknown, state: string) => `https://prior/auth?state=${state}`)
+    const r = await handleBankConnectStart(deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl }), priorInput)
+    expect(r.status).toBe(200)
+    expect(buildPriorUrl).toHaveBeenCalledOnce()
+    // The state handed to the preamble is our signed state and verifies back to OUR memberId.
+    const state = buildPriorUrl.mock.calls[0]![1]
+    const verified = verifyConnectState(state, SECRET, now)
+    expect(verified?.memberId).toBe('MEMBER1')
+    expect(verified?.provider).toBe('prior-by')
+    expect(verified?.accountKey).toBe('BY13ALFA')
+    expect(r.body.authorizeUrl).toContain(state)
+    // Prior's config is used — the Alfa config is NOT consulted for a Prior connect.
+    expect(buildPriorUrl.mock.calls[0]![0]).toEqual(PRIOR_CONFIG)
+  })
+
+  it('502 when the bank preamble fails (well-formed request, upstream problem)', async () => {
+    const buildPriorUrl = async () => {
+      throw new Error('consent 500')
+    }
+    const r = await handleBankConnectStart(deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl }), priorInput)
+    expect(r.status).toBe(502)
+    expect(String(r.body.error)).not.toContain('consent 500') // raw bank/internal text is not surfaced
+  })
+
+  it('still enforces the admin gate and the portal check BEFORE any bank round-trip', async () => {
+    const buildPriorUrl = vi.fn(async () => 'X')
+    const notAdmin = await handleBankConnectStart(
+      deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl, validateFrame: async () => ({ userId: 'U', isAdmin: false }) }),
+      priorInput
+    )
+    expect(notAdmin.status).toBe(403)
+    const notInstalled = await handleBankConnectStart(
+      deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl, memberIdByDomain: async () => null }),
+      priorInput
+    )
+    expect(notInstalled.status).toBe(409)
+    expect(buildPriorUrl).not.toHaveBeenCalled()
   })
 })
 

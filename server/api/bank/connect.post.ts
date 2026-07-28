@@ -8,8 +8,11 @@
 // callback can trust it. No secret ⇒ 503 (fail-closed). Referrer-Policy is set defensively (the
 // response body carries a URL with a signed state; keep it out of any downstream Referer).
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
 import { bankConnectConfigFromEnv, handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
+import { buildPriorConnectUrl, priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
+import { signPriorJwt } from '../../utils/priorJwt'
 import { bearerToken } from '../../utils/settingsHandler'
 import { resolveAuthConfig } from '../../utils/session'
 import { frameRestCall } from '../../utils/liveDeps'
@@ -30,6 +33,40 @@ function liveConnectDeps(): ConnectStartDeps {
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
     config: bankConnectConfigFromEnv,
+    priorConfig: priorConnectConfigFromEnv,
+    // Prior's live preamble (A5b): token Б → consent → RS256-signed `request` JWT. Secrets
+    // (client_secret, signing key) come from the config and go ONLY into these transports —
+    // client_secret_basic puts the creds in the Authorization header, never the body/URL.
+    buildPriorUrl: (config, state, nowMs) => buildPriorConnectUrl(config, state, {
+      postToken: (url, body, creds) => {
+        const basic = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64')
+        const fetchJson = $fetch as unknown as (
+          url: string,
+          opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
+        ) => Promise<unknown>
+        return fetchJson(url, {
+          method: 'POST',
+          body,
+          headers: { 'authorization': `Basic ${basic}`, 'content-type': 'application/x-www-form-urlencoded' },
+          timeout: 15_000
+        })
+      },
+      postConsent: (url, accessToken, body) => {
+        const fetchJson = $fetch as unknown as (
+          url: string,
+          opts: { method: string, body: unknown, headers: Record<string, string>, timeout: number }
+        ) => Promise<unknown>
+        return fetchJson(url, {
+          method: 'POST',
+          body,
+          headers: { 'authorization': `Bearer ${accessToken}`, 'content-type': 'application/json' },
+          timeout: 15_000
+        })
+      },
+      signJwt: signPriorJwt,
+      nowSec: () => Math.floor(Date.now() / 1000),
+      newId: () => randomUUID()
+    }, nowMs),
     secret: resolveAuthConfig(process.env).secret
   }
 }

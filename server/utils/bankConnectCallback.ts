@@ -14,7 +14,9 @@
 //    raw error object).
 
 import { parseOAuthCallback, buildTokenExchangeBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
+import { buildCodeExchangeBody, parsePriorTokenResponse, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
+import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankToken } from './bankTokenStore'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -34,6 +36,11 @@ export interface CallbackDeps {
   /** POST the token-exchange body to `${baseUrl}/token`, returning the raw JSON. MUST NOT log the
    *  body (client_secret) or leak it on error. */
   exchangeToken: (baseUrl: string, body: URLSearchParams) => Promise<unknown>
+  /** Prior's connect config from env (null ⇒ not configured), A5b. */
+  priorConfig: () => PriorConnectConfig | null
+  /** POST Prior's code exchange with client_secret_basic (creds in the Authorization HEADER, built
+   *  by the impl — never the body), returning the raw JSON. MUST NOT log the creds. */
+  exchangePriorToken: (url: string, body: URLSearchParams, creds: { clientId: string, clientSecret: string }) => Promise<unknown>
   /** Persist the connected account's tokens (encrypts refresh). */
   saveToken: (token: BankToken) => Promise<void>
   /** Optional sanitized logger (already-safe strings only). */
@@ -83,18 +90,34 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
     return { status: 400, html: ERR_PAGE }
   }
 
-  const config = deps.config(state.provider)
-  const clientSecret = deps.clientSecret(state.provider)
-  if (!config || !clientSecret) {
+  // 3) Exchange code → tokens. Provider-specific: Alfa puts client_secret in the BODY, Prior uses
+  //    client_secret_basic (creds in the Authorization header). Neither is ever logged.
+  const isPrior = state.provider === 'prior-by'
+  const priorConfig = isPrior ? deps.priorConfig() : null
+  const config = isPrior ? null : deps.config(state.provider)
+  const clientSecret = isPrior ? '' : deps.clientSecret(state.provider)
+  if (!priorConfig && (!config || !clientSecret)) {
     deps.log?.(`[bank-connect] callback: provider ${state.provider} not configured for exchange`)
     return { status: 400, html: ERR_PAGE }
   }
 
-  // 3) Exchange code → tokens. Body carries client_secret — never logged.
-  let tokens
+  let tokens: { accessToken: string, refreshToken: string, expiresIn: number }
   try {
-    const rawTokens = await deps.exchangeToken(config.baseUrl, buildTokenExchangeBody(config, code, clientSecret))
-    tokens = parseTokenResponse(rawTokens as Record<string, unknown>)
+    if (priorConfig) {
+      const url = `${priorConfig.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`
+      const raw = await deps.exchangePriorToken(
+        url,
+        buildCodeExchangeBody(code, priorConfig.redirectUri),
+        { clientId: priorConfig.clientId, clientSecret: priorConfig.clientSecret }
+      )
+      const t = parsePriorTokenResponse(raw as never)
+      // Prior may omit refresh_token; store '' rather than undefined (the store's shape) — the
+      // account then simply can't refresh until reconnected, same as ensureBankToken's fallback.
+      tokens = { accessToken: t.accessToken, refreshToken: t.refreshToken ?? '', expiresIn: t.expiresIn }
+    } else {
+      const rawTokens = await deps.exchangeToken(config!.baseUrl, buildTokenExchangeBody(config!, code, clientSecret))
+      tokens = parseTokenResponse(rawTokens as Record<string, unknown>)
+    }
   } catch (e) {
     deps.log?.(`[bank-connect] token exchange failed: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
     return { status: 502, html: EXCHANGE_ERR_PAGE }
