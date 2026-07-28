@@ -1,6 +1,6 @@
 # Приорбанк — как работать с выпиской
 
-> Last reviewed: 2026-07-17
+> Last reviewed: 2026-07-28
 
 С Приорбанком есть **два пути**. Сейчас в проекте реализован первый (импорт текстовой
 выписки); второй (живой Open Banking API по СПР) пока не подключён, но контракт
@@ -203,7 +203,13 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
   (операция Open Banking → `StatementItem`), покрыта тестами по живому sandbox-образцу. OAuth/DCR/consent-ядро
   **вынесено** в чистый `app/utils/priorOauth.ts` (URL/тела/claims + парсеры, без `node:crypto`; аналог
   `alfaOauth.ts`) под `tests/priorOauth.test.ts`; `scripts/prior-oauth-test.mjs` — тонкий потребитель.
-  Осталось — серверный движок опроса (backend) поверх `priorOauth.ts` и прод-СКЗИ (issue #41).
+  **Серверный движок опроса — собран (A5b, слайс 1):** `server/utils/priorFetch.ts` (`fetchPriorStatement`) —
+  async `POST /accounts/{id}/transactions` → поллинг `GET …/{id}` (пока `BY.NBRB.Resource.NotCreated` → ждём и
+  повторяем, бюджет `PRIOR_POLL_MAX_ATTEMPTS`) → `normalizePrior`; чистые билдеры путей/классификатор статуса
+  (`buildPriorResourceCreatePath`/`PollPath`/`classifyPriorPoll`) в `priorOauth.ts`, DI-транспорт, юнит-тесты
+  (`tests/priorFetch.test.ts`). Проведён в `fetchBankStatement` (делегат `deps.fetchPrior`). **Инертен пока:**
+  Приор не в `POLLABLE_PROVIDERS` и не в connect-потоке (слайсы 2-3 — DCR + подписанный request-JWT + UI). Осталось —
+  connect-обвязка Приора, включение в опрос, и прод-СКЗИ (issue #41).
 - **`manual` (путь №1)** — нормализация **сделана** для **двух форматов** (диспетчер
   `app/utils/manualImport.ts` → `detectManualFormat`/`normalizeManualStatement`):
   1. **`***** ^Type=`** (Приор/Альфа-выгрузка) — `normalizeClientBank` (`clientBankStatement.ts`).

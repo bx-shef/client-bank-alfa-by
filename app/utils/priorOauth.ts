@@ -209,6 +209,53 @@ export function buildResourceRequestBody(
   return { data: { [key]: { fromBookingDate, toBookingDate } } }
 }
 
+/** The resource path prefix for a create/poll call: `<OB>/accounts/{accountId}/{kind}`.
+ *  `kind` (`statements`|`transactions`) is the trailing segment. Used for the async CREATE
+ *  (`POST`, no resource id) — the poll path appends the id (see `buildPriorResourcePollPath`). */
+export function buildPriorResourceCreatePath(kind: PriorResourceKind, accountId: string): string {
+  return `${PRIOR_API_PREFIXES.OB}/accounts/${accountId}/${kind}`
+}
+
+/** The poll path for a created resource: `<OB>/accounts/{accountId}/{kind}/{resourceId}` —
+ *  `GET`-polled until ready (200) or `BY.NBRB.Resource.NotCreated` while still generating. */
+export function buildPriorResourcePollPath(kind: PriorResourceKind, accountId: string, resourceId: string): string {
+  return `${buildPriorResourceCreatePath(kind, accountId)}/${resourceId}`
+}
+
+/** The error code Priorbank returns from the poll GET while the async resource is still being
+ *  generated — the signal to wait and poll again (NOT a hard failure). */
+export const PRIOR_RESOURCE_NOT_CREATED = 'BY.NBRB.Resource.NotCreated'
+
+/** Pull error codes out of a Priorbank response envelope, tolerant of the shapes seen across
+ *  revisions: `{ errors: [{ code }] }` / `{ Errors: [{ Code }] }` / a bare `{ code }` / `{ error }`.
+ *  Returns `[]` when there is no error node (a successful/ready response). Pure. */
+export function extractPriorErrorCodes(response: unknown): string[] {
+  if (!response || typeof response !== 'object') return []
+  const obj = response as Record<string, unknown>
+  const list = obj.errors ?? obj.Errors
+  if (Array.isArray(list)) {
+    return list
+      .map((e) => {
+        const row = (e && typeof e === 'object' ? e as Record<string, unknown> : {})
+        const code = row.code ?? row.Code ?? row.errorCode
+        return code == null ? '' : String(code)
+      })
+      .filter(Boolean)
+  }
+  const single = obj.code ?? obj.Code ?? obj.error
+  return single ? [String(single)] : []
+}
+
+/** Classify a poll response: `pending` (resource not yet generated → poll again), `ready`
+ *  (no error codes → normalize it), or `error` with the offending codes (hard failure → throw).
+ *  Pure — the caller owns the wait/retry loop and the transport. */
+export function classifyPriorPoll(response: unknown): { status: 'pending' | 'ready' } | { status: 'error', codes: string[] } {
+  const codes = extractPriorErrorCodes(response)
+  if (codes.includes(PRIOR_RESOURCE_NOT_CREATED)) return { status: 'pending' }
+  if (codes.length > 0) return { status: 'error', codes }
+  return { status: 'ready' }
+}
+
 /** Whether a `yyyy-MM-dd` window is within Priorbank's ≈3-month cap. Invalid or
  * inverted dates return `false` (treated as out of range — the caller warns). */
 export function isWindowWithinLimit(from: string, to: string): boolean {
