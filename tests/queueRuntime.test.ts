@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_FETCH_RATE_DURATION_MS, DEFAULT_FETCH_RATE_MAX, MAX_CONCURRENCY,
+  DEFAULT_FETCH_RATE_DURATION_MS, DEFAULT_PRIOR_CONCURRENCY, DEFAULT_FETCH_RATE_MAX, MAX_CONCURRENCY,
   MAX_FETCH_RATE_MAX, MIN_FETCH_RATE_DURATION_MS, envFlag, queueRuntimeConfig
 } from '../server/queue/runtime'
 
@@ -24,8 +24,27 @@ describe('queueRuntimeConfig', () => {
       workers: true,
       cron: true,
       concurrency: 1,
-      fetchRate: { max: DEFAULT_FETCH_RATE_MAX, duration: DEFAULT_FETCH_RATE_DURATION_MS }
+      fetchRate: { max: DEFAULT_FETCH_RATE_MAX, duration: DEFAULT_FETCH_RATE_DURATION_MS },
+      // Prior's limiter is in JOBS: its 100-request budget ÷ ~10 requests per job = 10 jobs/min.
+      priorFetchRate: { max: 10, duration: DEFAULT_FETCH_RATE_DURATION_MS },
+      priorConcurrency: DEFAULT_PRIOR_CONCURRENCY
     })
+  })
+
+  it('sizes the Prior limiter in JOBS from its REQUEST budget (per-request accounting)', () => {
+    // 200 requests/min ÷ ~10 per Prior job = 20 jobs/min — NOT 200, which would overspend ~10×.
+    expect(queueRuntimeConfig({ QUEUE_PRIOR_RATE_MAX: '200' }).priorFetchRate.max).toBe(20)
+    // Garbage/non-positive falls back to the default budget (never disables the cap).
+    expect(queueRuntimeConfig({ QUEUE_PRIOR_RATE_MAX: '0' }).priorFetchRate.max)
+      .toBe(queueRuntimeConfig({}).priorFetchRate.max)
+    expect(queueRuntimeConfig({ QUEUE_PRIOR_RATE_MAX: 'nope' }).priorFetchRate.max)
+      .toBe(queueRuntimeConfig({}).priorFetchRate.max)
+  })
+
+  it('Prior has its OWN concurrency knob (its jobs hold a slot for minutes)', () => {
+    expect(queueRuntimeConfig({ QUEUE_PRIOR_CONCURRENCY: '8' }).priorConcurrency).toBe(8)
+    // Independent of the shared QUEUE_CONCURRENCY.
+    expect(queueRuntimeConfig({ QUEUE_CONCURRENCY: '3' }).priorConcurrency).toBe(DEFAULT_PRIOR_CONCURRENCY)
   })
 
   it('parses QUEUE_FETCH_RATE_* and falls back to defaults on garbage/non-positive (never disables)', () => {

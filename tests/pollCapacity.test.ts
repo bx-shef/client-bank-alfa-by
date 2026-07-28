@@ -3,6 +3,7 @@ import {
   estimatePollCycle,
   formatPollCycle,
   planRequests,
+  providerJobRate,
   REQUESTS_PER_ACCOUNT,
   sweepRequests
 } from '../server/queue/pollCapacity'
@@ -51,6 +52,25 @@ describe('estimatePollCycle', () => {
     expect(estimatePollCycle(0, 100, 60_000, 1000)).toEqual({ requests: 0, cycleMs: 0, exceedsInterval: false })
     expect(estimatePollCycle(500, 0, 60_000, 1000).cycleMs).toBe(0)
     expect(estimatePollCycle(500, 100, 0, 1000).cycleMs).toBe(0)
+  })
+})
+
+describe('providerJobRate (bank REQUESTS → BullMQ JOBS)', () => {
+  it('divides the request budget by the per-job cost — Prior 100 req/min = 10 jobs/min', () => {
+    expect(providerJobRate(100, REQUESTS_PER_ACCOUNT['prior-by']!)).toBe(10)
+    // Sizing the limiter with the RAW request cap would spend ~10× the bank budget.
+    expect(providerJobRate(100, 10)).toBeLessThan(100)
+  })
+  it('a 1-request provider (Alfa) passes the budget through unchanged', () => {
+    expect(providerJobRate(100, 1)).toBe(100)
+  })
+  it('never returns 0 — a stalled queue would be a silent outage', () => {
+    expect(providerJobRate(5, 100)).toBe(1)
+    expect(providerJobRate(0, 10)).toBe(1)
+    expect(providerJobRate(-5, 10)).toBe(1)
+  })
+  it('a non-positive cost falls back to the raw budget (no divide-by-zero)', () => {
+    expect(providerJobRate(50, 0)).toBe(50)
   })
 })
 

@@ -1277,15 +1277,18 @@ describe('cron helpers', () => {
       { memberId: 'M1', provider: 'alfa-by', accountKey: 'A1' }, // dup → collapsed
       { memberId: 'M1', provider: 'alfa-by', accountKey: 'A2' },
       { memberId: 'M2', provider: 'alfa-by', accountKey: 'B1' },
-      { memberId: 'M1', provider: 'prior-by', accountKey: 'P1' }, // prior → A5b, dropped
-      { memberId: 'M1', provider: 'alfa-by', accountKey: `${DEMO_ACCOUNT_PREFIX}x` } // demo → dropped
+      { memberId: 'M1', provider: 'prior-by', accountKey: 'P1' }, // prior is pollable (own queue)
+      { memberId: 'M1', provider: 'alfa-by', accountKey: `${DEMO_ACCOUNT_PREFIX}x` }, // demo → dropped
+      { memberId: 'M1', provider: 'manual', accountKey: 'U1' } // no online fetch → dropped
     ])
     expect(out).toEqual([
       { memberId: 'M1', providerId: 'alfa-by', accounts: ['A1', 'A2'] },
-      { memberId: 'M2', providerId: 'alfa-by', accounts: ['B1'] }
+      { memberId: 'M2', providerId: 'alfa-by', accounts: ['B1'] },
+      { memberId: 'M1', providerId: 'prior-by', accounts: ['P1'] } // own portal+provider group
     ])
     expect(POLLABLE_PROVIDERS.has('alfa-by')).toBe(true)
-    expect(POLLABLE_PROVIDERS.has('prior-by')).toBe(false)
+    expect(POLLABLE_PROVIDERS.has('prior-by')).toBe(true)
+    expect(POLLABLE_PROVIDERS.has('manual')).toBe(false)
     expect(accountsForPolling([])).toEqual([])
   })
   it('pollWindow returns [today-lookback, today] as ISO YYYY-MM-DD', () => {

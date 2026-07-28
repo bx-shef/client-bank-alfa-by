@@ -35,12 +35,17 @@ export default defineNitroPlugin((nitroApp) => {
   const workers: Worker[] = []
 
   if (role.workers && deps) {
-    workers.push(...startThroughputWorkers(deps, { concurrency: role.concurrency, fetchRate: role.fetchRate }))
+    workers.push(...startThroughputWorkers(deps, {
+      concurrency: role.concurrency,
+      fetchRate: role.fetchRate,
+      priorFetchRate: role.priorFetchRate,
+      priorConcurrency: role.priorConcurrency
+    }))
     // Feedback outbox worker (#61) — drains transiently-failed feedback issue posts (N-replica-safe).
     workers.push(startFeedbackWorker(liveFeedbackPostDeps()))
     // Trigger-retry worker (#79) — re-fires missed «деньги пришли» signals with backoff (N-replica-safe).
     workers.push(startTriggerWorker(liveTriggerFireDeps()))
-    console.info('[queue] throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=%d, fetch-rate=%d/%dms)', role.concurrency, role.fetchRate.max, role.fetchRate.duration)
+    console.info('[queue] throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=%d, fetch-rate=%d/%dms; prior-fetch concurrency=%d, rate=%d jobs/%dms)', role.concurrency, role.fetchRate.max, role.fetchRate.duration, role.priorConcurrency, role.priorFetchRate.max, role.priorFetchRate.duration)
   } else if (!role.workers) {
     // Loud: this instance won't drain fetch/parse/crm-sync. A worker container MUST be
     // running (docker-compose.prod.yml `worker`), else webhooks/imports pile up silently

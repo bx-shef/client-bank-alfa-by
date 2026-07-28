@@ -5,7 +5,7 @@
 
 import { getQueue, queueEnabled } from './connection'
 import {
-  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE, Q_TRIGGER,
+  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, fetchQueueFor, Q_PARSE, Q_TRIGGER,
   crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId, triggerFireJobId,
   type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob, type FetchJob, type ParseJob, type TriggerFireJob
 } from './topology'
@@ -77,8 +77,11 @@ export const FETCH_JOB_RETENTION = {
 
 export async function enqueueFetch(job: FetchJob): Promise<boolean> {
   if (!queueEnabled()) return false
+  // Route by provider: Prior's multi-request create+poll has its own queue (own limiter + slots)
+  // so it can neither starve Alfa nor under-report its ~10× request cost (see Q_FETCH_PRIOR).
+  const queue = fetchQueueFor(job.providerId)
   // Deliberately silent on a duplicate id — that IS the backpressure (see FETCH_JOB_RETENTION).
-  await getQueue(Q_FETCH).add(Q_FETCH, job, { jobId: fetchJobId(job), ...FETCH_JOB_RETENTION })
+  await getQueue(queue).add(queue, job, { jobId: fetchJobId(job), ...FETCH_JOB_RETENTION })
   return true
 }
 

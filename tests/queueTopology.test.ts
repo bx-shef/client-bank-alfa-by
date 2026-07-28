@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   QUEUE_NAMES,
   Q_EVENTS,
-  Q_FETCH,
+  Q_FETCH, Q_FETCH_PRIOR, fetchQueueFor,
   Q_PARSE,
   Q_CRM,
   Q_DELETIONS,
@@ -26,9 +26,21 @@ import {
 import { connectionOptions, redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
-  it('are the seven pipeline queues, unique', () => {
-    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER])
-    expect(new Set(QUEUE_NAMES).size).toBe(7)
+  it('are the eight pipeline queues, unique', () => {
+    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER])
+    expect(new Set(QUEUE_NAMES).size).toBe(8)
+  })
+  it('keeps the ORIGINAL bank-fetch name (renaming would strand jobs already in Redis)', () => {
+    expect(Q_FETCH).toBe('bank-fetch')
+    expect(Q_FETCH_PRIOR).toBe('bank-fetch-prior')
+  })
+})
+
+describe('fetchQueueFor', () => {
+  it('routes Prior to its own queue and everything else to bank-fetch', () => {
+    expect(fetchQueueFor('prior-by')).toBe(Q_FETCH_PRIOR)
+    expect(fetchQueueFor('alfa-by')).toBe(Q_FETCH)
+    expect(fetchQueueFor('manual')).toBe(Q_FETCH)
   })
 })
 
@@ -153,5 +165,28 @@ describe('connectionOptions', () => {
   it('enables TLS for rediss://', () => {
     process.env.REDIS_URL = 'rediss://host:6379'
     expect(connectionOptions()).toMatchObject({ tls: {} })
+  })
+})
+
+describe('enqueueFetch routing (per-provider queues)', () => {
+  it('puts a Prior job on bank-fetch-prior and an Alfa job on bank-fetch', async () => {
+    vi.resetModules()
+    const added: { queue: string, opts: Record<string, unknown> }[] = []
+    vi.doMock('../server/queue/connection', () => ({
+      queueEnabled: () => true,
+      getQueue: (name: string) => ({
+        add: async (_n: string, _job: unknown, opts: Record<string, unknown>) => {
+          added.push({ queue: name, opts })
+        }
+      })
+    }))
+    const { enqueueFetch } = await import('../server/queue/producers')
+    await enqueueFetch({ memberId: 'M', providerId: 'prior-by', account: 'A', dateFrom: 'x', dateTo: 'y' })
+    await enqueueFetch({ memberId: 'M', providerId: 'alfa-by', account: 'A', dateFrom: 'x', dateTo: 'y' })
+    expect(added.map(a => a.queue)).toEqual(['bank-fetch-prior', 'bank-fetch'])
+    // Both keep the backpressure retention (stable id + free-on-complete).
+    expect(added.every(a => a.opts.removeOnComplete === true)).toBe(true)
+    vi.doUnmock('../server/queue/connection')
+    vi.resetModules()
   })
 })

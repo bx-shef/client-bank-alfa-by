@@ -7,6 +7,8 @@
 //   - worker container: QUEUE_CRON=0 (+ RUN_MIGRATION=0), scaled to N replicas —
 //     all pull from the same Redis, so adding replicas adds throughput.
 
+import { providerJobRate, REQUESTS_PER_ACCOUNT } from './pollCapacity'
+
 export interface QueueRuntime {
   /** Start the BullMQ workers in this instance (drain the queues). */
   workers: boolean
@@ -23,6 +25,16 @@ export interface QueueRuntime {
    *  Alfa request (token refresh is near-expiry-only + per-account locked); if Alfa counts
    *  its `/token` endpoint in the SAME bucket, lower this for headroom during refresh bursts. */
   fetchRate: { max: number, duration: number }
+  /** GLOBAL rate limit for the PRIOR bank-fetch queue, expressed in JOBS (what BullMQ counts).
+   *  Prior's async create+poll spends ~10 bank REQUESTS per job, so the job rate is derived from
+   *  the request budget by `providerJobRate` — sizing it with the raw request cap would overspend
+   *  the bank budget ~10×. Separate from `fetchRate` because it is a different queue with a
+   *  different bank and a different cost model. */
+  priorFetchRate: { max: number, duration: number }
+  /** Per-worker concurrency for the PRIOR fetch queue. Its own knob because a Prior job holds its
+   *  slot for the whole create+poll loop (up to minutes) — sharing QUEUE_CONCURRENCY with the fast
+   *  queues would either starve Prior or over-parallelize the others. */
+  priorConcurrency: number
 }
 
 /** Upper bound so a typo (`QUEUE_CONCURRENCY=100000`) can't exhaust the B24 REST
@@ -39,6 +51,14 @@ export const DEFAULT_FETCH_RATE_DURATION_MS = 60_000
 export const MAX_FETCH_RATE_MAX = 1_000
 export const MIN_FETCH_RATE_DURATION_MS = 1_000
 
+/** Prior's REQUEST budget per window (not jobs — see `providerJobRate`). Conservative by default:
+ *  the bank hard-throttles (429) per account and no published per-client cap is confirmed, so start
+ *  at Alfa's order of magnitude and raise only against a documented Prior limit. */
+export const DEFAULT_PRIOR_REQUEST_MAX = 100
+/** Default per-worker concurrency for Prior fetches — several slow create+poll jobs may sit in
+ *  their sleep windows at once without spending extra bank budget (the limiter still caps rate). */
+export const DEFAULT_PRIOR_CONCURRENCY = 4
+
 /** A boolean env flag: unset/empty → default; `0/false/no/off` (any case) → false. */
 export function envFlag(value: string | undefined, dflt: boolean): boolean {
   if (value === undefined || value.trim() === '') return dflt
@@ -54,8 +74,30 @@ export function queueRuntimeConfig(env: NodeJS.ProcessEnv = process.env): QueueR
     fetchRate: {
       max: clampFetchMax(env.QUEUE_FETCH_RATE_MAX),
       duration: clampFetchDuration(env.QUEUE_FETCH_RATE_DURATION_MS)
-    }
+    },
+    priorFetchRate: {
+      // env holds Prior's REQUEST budget; the limiter needs JOBS → divide by the per-job cost.
+      max: providerJobRate(
+        clampPriorRequestMax(env.QUEUE_PRIOR_RATE_MAX),
+        REQUESTS_PER_ACCOUNT['prior-by'] ?? 1
+      ),
+      duration: clampFetchDuration(env.QUEUE_PRIOR_RATE_DURATION_MS)
+    },
+    priorConcurrency: clampPriorConcurrency(env.QUEUE_PRIOR_CONCURRENCY)
   }
+}
+
+/** Prior REQUEST budget: same both-edges defence as the Alfa cap (a typo can't disable it). */
+function clampPriorRequestMax(value: string | undefined): number {
+  const n = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_PRIOR_REQUEST_MAX
+  return Math.min(MAX_FETCH_RATE_MAX, n)
+}
+
+function clampPriorConcurrency(value: string | undefined): number {
+  const n = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_PRIOR_CONCURRENCY
+  return Math.min(MAX_CONCURRENCY, n)
 }
 
 function clampConcurrency(value: string | undefined): number {

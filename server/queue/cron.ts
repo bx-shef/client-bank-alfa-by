@@ -57,21 +57,19 @@ export function planFetches(
 /** Providers whose online-fetch transport is LIVE **and safe to schedule automatically** (A5/A9).
  *  A provider is listed only once a poll job for it can both succeed AND fit the poller's cost
  *  model — we never enqueue jobs that would only throw+retry, or that would blow the bank budget.
- *
  *  `manual` has no online fetch by definition (file upload).
  *
- *  **Prior (`prior-by`) is deliberately NOT here yet**, even though its engine (`priorFetch.ts`)
- *  and connect flow are complete and tested. Two POLLER-level gaps must close first — both are
- *  about cost/occupancy, not correctness:
- *   1. The A8 limiter (`QUEUE_FETCH_RATE_*`) counts JOBS, and it was sized as "1 job ≈ 1 bank
- *      request" (true for Alfa's single GET). One Prior job is 1 accounts GET + 1 create POST +
- *      up to 8 polls, so the same cap would permit ~10× the intended bank traffic — into an API
- *      that hard-throttles per account.
- *   2. `bank-fetch` runs at `QUEUE_CONCURRENCY` (default 1) and a Prior job holds its slot for the
- *      whole create+poll loop (worst case minutes), so one throttled Prior account would
- *      head-of-line block every other portal's fetches, Alfa included.
- *  Until those are addressed, Prior accounts connect and store tokens but are not auto-polled. */
-export const POLLABLE_PROVIDERS: ReadonlySet<BankProviderId> = new Set<BankProviderId>(['alfa-by'])
+ *  **Prior (`prior-by`) is included** now that both poller-level gaps are closed: it has its OWN
+ *  queue (`Q_FETCH_PRIOR`) with its own Redis-backed limiter — sized in JOBS from its REQUEST
+ *  budget (`providerJobRate`, so its ~10 calls per job aren't under-counted against a cap meant
+ *  for Alfa's single GET) — and its own worker slots, so a minutes-long create+poll can no longer
+ *  head-of-line block Alfa. Enqueueing stays idempotent per (portal, account, window), so a slow
+ *  Prior sweep grows the interval between polls, never the queue.
+ *
+ *  ⚠ PRODUCTION still needs the BY-crypto TLS СКЗИ gateway for Prior's `:9345` (issue #41) — a
+ *  deployment prerequisite, not a code gate: without it the fetch fails at TLS and the job retries.
+ *  Sandbox (`:9344`) needs no СКЗИ. */
+export const POLLABLE_PROVIDERS: ReadonlySet<BankProviderId> = new Set<BankProviderId>(['alfa-by', 'prior-by'])
 
 /** Group connected bank accounts (A6 registry) into the poll planner's shape: one entry per
  *  (portal, provider) with its deduped account list. Filters to POLLABLE_PROVIDERS and drops

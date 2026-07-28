@@ -60,6 +60,25 @@ export function planRequests(plan: readonly { providerId: string, accounts: read
   return plan.reduce((sum, p) => sum + sweepRequests(p.providerId, p.accounts.length), 0)
 }
 
+/**
+ * Translate a bank's REQUEST budget into the JOB rate a BullMQ limiter can enforce.
+ *
+ * BullMQ's `limiter` counts JOBS, but banks count REQUESTS — and those differ by ~10× for Prior
+ * (its async create+poll). Sizing a Prior queue's limiter with the raw request cap would therefore
+ * let it spend ~10× the real budget. Divide instead: `jobs = requests / requestsPerAccount`.
+ *
+ * Floors at 1: a cost so high that the quotient rounds to 0 must still let ONE job through per
+ * window (a stalled queue would be a silent outage, and the job's own poll budget bounds its cost).
+ * Pure.
+ */
+export function providerJobRate(requestsPerWindow: number, requestsPerAccount: number): number {
+  const requests = Math.floor(requestsPerWindow)
+  const cost = Math.floor(requestsPerAccount)
+  if (!Number.isFinite(requests) || requests < 1) return 1
+  if (!Number.isFinite(cost) || cost < 1) return requests
+  return Math.max(1, Math.floor(requests / cost))
+}
+
 /** Human-readable capacity line for the cron log (minutes, one decimal). Pure. */
 export function formatPollCycle(accounts: number, cycle: PollCycle): string {
   const min = (cycle.cycleMs / 60_000).toFixed(1)
