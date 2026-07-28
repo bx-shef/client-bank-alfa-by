@@ -16,6 +16,7 @@ import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
+import { estimatePollCycle, formatPollCycle, planRequests } from '../queue/pollCapacity'
 import { listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
@@ -85,16 +86,21 @@ export default defineNitroPlugin((nitroApp) => {
 
     // Real bank polling (A10): every CRON_INTERVAL_MIN, enqueue one fetch job per connected
     // bank account (A6 registry over the bank_tokens store) for a rolling window. INERT until
-    // accounts are connected (A7) — an empty registry enqueues nothing (silent, no per-tick
-    // noise). A fresh `epoch` per tick makes each poll a distinct job that actually re-fetches
-    // (see FetchJob.epoch) AND re-runs crm-sync (epoch folds into batchId → jobId); re-emitting
-    // identical ops is safe (crm-sync dedupes writes by the B24 marker). Prior is filtered out
-    // until A5b (POLLABLE_PROVIDERS).
-    // DEFAULT OFF (opt-in): the A8 rate limiter isn't built yet, and this timer drives the live
-    // Alfa API (100 req/min, global per-OAuth-client) with only a per-worker BullMQ limiter. So
-    // the machinery ships wired+tested but does NOT auto-run — flip CRON_REAL_POLL=1 in the same
-    // change that lands A8, so connecting the first account (A7) can't silently start unthrottled
-    // polling. Today the registry is empty anyway, so this only guards the future A7 activation.
+    // accounts are connected (A7) — an empty registry enqueues nothing (silent, no per-tick noise).
+    //
+    // SCALE (marketplace: tens of thousands of connected accounts). The enqueue is IDEMPOTENT —
+    // no per-tick `epoch`, so the jobId is stable per (portal, account, window). That is the
+    // poller's backpressure: the banks cap requests per OAuth CLIENT (shared by all portals), so a
+    // full sweep takes `requests / rate` — much longer than one tick. A per-tick-unique id would
+    // therefore stack another full copy of every account each tick and grow Redis without bound;
+    // with a stable id a still-pending account is simply not re-added, and a completed job frees
+    // its id for the next tick (FETCH_JOB_RETENTION). Re-emitting identical ops downstream is safe
+    // (crm-sync dedupes writes by the B24 activity marker). The manual «Опросить сейчас» KEEPS its
+    // epoch on purpose — that is an explicit operator-forced refetch, already cooldown-limited.
+    // Which providers are swept is POLLABLE_PROVIDERS (cron.ts).
+    // DEFAULT OFF (opt-in): this timer drives live bank APIs (Alfa: 100 req/min, global per OAuth
+    // client), so it ships wired+tested but does NOT auto-run — flip CRON_REAL_POLL=1 deliberately,
+    // so connecting the first account (A7) can't silently start polling.
     if ((process.env.CRON_REAL_POLL ?? '0') === '1') {
       const pollMs = cronIntervalMs(Number(process.env.CRON_INTERVAL_MIN || 5))
       const lookback = Number(process.env.CRON_LOOKBACK_DAYS || 1)
@@ -115,9 +121,22 @@ export default defineNitroPlugin((nitroApp) => {
             if (byPortal.length === 0) return // no connected accounts yet — nothing to do
             const now = new Date()
             const { dateFrom, dateTo } = pollWindow(now, lookback)
-            const jobs = planFetches(byPortal, dateFrom, dateTo, String(now.getTime()))
+            // NO per-tick epoch: the jobId must stay STABLE per (portal, account, window) so this
+            // enqueue is idempotent. At marketplace scale a sweep takes far longer than a tick
+            // (the bank rate cap is shared by every portal), so a per-tick-unique id would stack a
+            // fresh copy of every account each tick and grow the queue without bound. With a stable
+            // id, re-adding an account that is still pending is a silent no-op and the completed
+            // job frees its id for the next tick — see FETCH_JOB_RETENTION.
+            const jobs = planFetches(byPortal, dateFrom, dateTo)
             for (const job of jobs) await enqueueFetch(job)
-            console.info('[queue] real poll: enqueued %d fetch jobs (%s..%s, every %d min)', jobs.length, dateFrom, dateTo, pollMs / 60_000)
+            // Capacity, not just count: at scale the RATE CAP sets the real cadence, not this timer.
+            const cycle = estimatePollCycle(planRequests(byPortal), role.fetchRate.max, role.fetchRate.duration, pollMs)
+            console.info('[queue] real poll: planned %d fetch jobs (%s..%s, tick %d min) — %s',
+              jobs.length, dateFrom, dateTo, pollMs / 60_000, formatPollCycle(jobs.length, cycle))
+            if (cycle.exceedsInterval) {
+              console.warn('[queue] poll sweep (%d min) is longer than the tick (%d min) — the bank rate cap sets the real statement freshness, not CRON_INTERVAL_MIN. Queue growth is bounded (stable jobIds dedupe pending accounts); raise CRON_LOOKBACK_DAYS so a slower sweep cannot miss operations (docs/OPERATIONS.md).',
+                Math.round(cycle.cycleMs / 60_000), Math.round(pollMs / 60_000))
+            }
             // Best-effort: a counts read must never break the poll (it already enqueued).
             try {
               const counts = await getQueue(Q_FETCH).getJobCounts('waiting', 'delayed') as FetchQueueCounts

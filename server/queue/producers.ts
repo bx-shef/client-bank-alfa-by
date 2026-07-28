@@ -47,9 +47,38 @@ export async function enqueueEvent(job: EventJob): Promise<boolean> {
   return true
 }
 
+/**
+ * Retention for `bank-fetch` — and the load-bearing half of the poller's BACKPRESSURE at
+ * marketplace scale (tens of thousands of connected accounts).
+ *
+ * The cron enqueues one job per connected account per tick, but the fleet can only drain at the
+ * bank's rate cap (Alfa: 100 req/min for ALL portals — it is per OAuth client, not per account).
+ * A full sweep of N accounts therefore takes `N / rate` minutes, which is far longer than the tick
+ * interval. With a per-tick-unique jobId that arithmetic is fatal: every tick adds another N jobs
+ * while only `rate × interval` drain, so the queue grows without bound until Redis dies.
+ *
+ * The fix is a STABLE jobId (the cron omits `epoch`) plus this retention:
+ *  - while a job for (portal, account, window) is waiting/active, re-adding the same id is a silent
+ *    no-op → a tick can never pile a second copy on an account that is still pending;
+ *  - `removeOnComplete: true` frees the id the moment it finishes → the NEXT tick re-polls it.
+ * The queue therefore self-limits to at most one job per connected account, and the effective poll
+ * cadence degrades gracefully to the drain rate instead of exploding.
+ * (Removing the completed payload promptly also keeps account numbers out of Redis history, the
+ * same privacy posture as STATEMENT_JOB_RETENTION, #245.)
+ *
+ * `removeOnFail` is bounded by AGE for the same reason: a failed job keeps its id, so a permanently
+ * failing account would otherwise be dedup-blocked from ever being polled again. An hour lets it
+ * back in (and keeps a window of failures for diagnosis) — retry, not silent abandonment.
+ */
+export const FETCH_JOB_RETENTION = {
+  removeOnComplete: true,
+  removeOnFail: { age: 3600, count: 500 }
+} as const
+
 export async function enqueueFetch(job: FetchJob): Promise<boolean> {
   if (!queueEnabled()) return false
-  await getQueue(Q_FETCH).add(Q_FETCH, job, { jobId: fetchJobId(job) })
+  // Deliberately silent on a duplicate id — that IS the backpressure (see FETCH_JOB_RETENTION).
+  await getQueue(Q_FETCH).add(Q_FETCH, job, { jobId: fetchJobId(job), ...FETCH_JOB_RETENTION })
   return true
 }
 
