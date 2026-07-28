@@ -54,8 +54,23 @@ export function planFetches(
   )
 }
 
-/** Providers whose online-fetch transport is LIVE (A5/A9). Prior's async create+poll is
- *  A5b — not yet wired — so we don't enqueue prior jobs that would only throw+retry. */
+/** Providers whose online-fetch transport is LIVE **and safe to schedule automatically** (A5/A9).
+ *  A provider is listed only once a poll job for it can both succeed AND fit the poller's cost
+ *  model — we never enqueue jobs that would only throw+retry, or that would blow the bank budget.
+ *
+ *  `manual` has no online fetch by definition (file upload).
+ *
+ *  **Prior (`prior-by`) is deliberately NOT here yet**, even though its engine (`priorFetch.ts`)
+ *  and connect flow are complete and tested. Two POLLER-level gaps must close first — both are
+ *  about cost/occupancy, not correctness:
+ *   1. The A8 limiter (`QUEUE_FETCH_RATE_*`) counts JOBS, and it was sized as "1 job ≈ 1 bank
+ *      request" (true for Alfa's single GET). One Prior job is 1 accounts GET + 1 create POST +
+ *      up to 8 polls, so the same cap would permit ~10× the intended bank traffic — into an API
+ *      that hard-throttles per account.
+ *   2. `bank-fetch` runs at `QUEUE_CONCURRENCY` (default 1) and a Prior job holds its slot for the
+ *      whole create+poll loop (worst case minutes), so one throttled Prior account would
+ *      head-of-line block every other portal's fetches, Alfa included.
+ *  Until those are addressed, Prior accounts connect and store tokens but are not auto-polled. */
 export const POLLABLE_PROVIDERS: ReadonlySet<BankProviderId> = new Set<BankProviderId>(['alfa-by'])
 
 /** Group connected bank accounts (A6 registry) into the poll planner's shape: one entry per

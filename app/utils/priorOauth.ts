@@ -246,13 +246,29 @@ export function extractPriorErrorCodes(response: unknown): string[] {
   return single ? [String(single)] : []
 }
 
-/** Classify a poll response: `pending` (resource not yet generated → poll again), `ready`
- *  (no error codes → normalize it), or `error` with the offending codes (hard failure → throw).
- *  Pure — the caller owns the wait/retry loop and the transport. */
+/** Whether a poll body looks like a READY resource envelope — i.e. it actually carries the `data`
+ *  node the normalizer reads. Used to keep an UNRECOGNIZED body (a throttle/gateway/HTML page with
+ *  no error codes) from being mistaken for "ready with zero transactions". Pure. */
+export function hasPriorDataEnvelope(response: unknown): boolean {
+  return Boolean(response && typeof response === 'object' && typeof (response as Record<string, unknown>).data === 'object' && (response as Record<string, unknown>).data !== null)
+}
+
+/**
+ * Classify a poll response body: `pending` (resource not yet generated → poll again), `ready` (a
+ * recognizable `data` envelope with no error codes → normalize it), or `error` with the offending
+ * codes / a marker for an unrecognized body.
+ *
+ * FAIL-CLOSED on an unrecognized body: a throttle (429), a gateway page or any non-envelope reply
+ * carries no error codes, and treating that as `ready` would normalize to ZERO transactions —
+ * silently reporting "no operations" for a window that actually had some (statement data loss,
+ * the exact failure `alfaStatementErrors` guards against on the Alfa side). Pure — the caller owns
+ * the HTTP status, the wait/retry loop and the transport.
+ */
 export function classifyPriorPoll(response: unknown): { status: 'pending' | 'ready' } | { status: 'error', codes: string[] } {
   const codes = extractPriorErrorCodes(response)
   if (codes.includes(PRIOR_RESOURCE_NOT_CREATED)) return { status: 'pending' }
   if (codes.length > 0) return { status: 'error', codes }
+  if (!hasPriorDataEnvelope(response)) return { status: 'error', codes: ['unrecognized-response'] }
   return { status: 'ready' }
 }
 

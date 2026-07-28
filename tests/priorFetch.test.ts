@@ -4,6 +4,8 @@ import {
   isoDateOnly,
   priorApiBaseFromEnv,
   PRIOR_POLL_MAX_ATTEMPTS,
+  isRetryablePollStatus,
+  resolvePriorAccountId,
   type PriorFetchDeps
 } from '../server/utils/priorFetch'
 import { normalizePriorTransactionList } from '../app/utils/priorStatement'
@@ -31,22 +33,35 @@ function readyResponse() {
 }
 const pendingResponse = { errors: [{ code: PRIOR_RESOURCE_NOT_CREATED, message: 'still generating' }] }
 
-function fakeDeps(over: Partial<PriorFetchDeps> & { pollSequence?: unknown[] } = {}) {
-  const calls = { postUrl: [] as string[], pollUrl: [] as string[], sleeps: [] as number[], ensured: 0 }
+/** `GET /accounts` — the bridge from our stored IBAN to Prior's opaque accountId. */
+const ACCOUNTS_RESPONSE = {
+  data: { account: [
+    { accountId: 'OPAQUE-9', accountDetails: { identification: 'ACC-1' }, currency: 'BYN' },
+    { accountId: 'OTHER-1', accountDetails: { identification: 'ZZZ-9' }, currency: 'USD' }
+  ] }
+}
+
+function fakeDeps(over: Partial<PriorFetchDeps> & { pollSequence?: unknown[], pollStatus?: number } = {}) {
+  const calls = { getUrl: [] as string[], postUrl: [] as string[], pollUrl: [] as string[], sleeps: [] as number[], ensured: 0 }
   const pollSequence = over.pollSequence ? [...over.pollSequence] : [readyResponse()]
   const deps: PriorFetchDeps = {
     ensureFresh: async (t) => {
       calls.ensured++
       return { ...t, accessToken: 'FRESH' }
     },
-    apiBase: () => 'https://prior:9544', // OB origin (the OB prefix is added by the path builder)
+    apiBase: () => 'https://prior:9344', // gateway origin (the OB prefix is added by the path builder)
+    getJson: async (url) => {
+      calls.getUrl.push(url)
+      return ACCOUNTS_RESPONSE
+    },
     postJson: async (url) => {
       calls.postUrl.push(url)
       return { data: { transaction: { transactionListId: 'RES-9' } } }
     },
     pollJson: async (url) => {
       calls.pollUrl.push(url)
-      return pollSequence.length > 1 ? pollSequence.shift() : pollSequence[0]
+      const body = pollSequence.length > 1 ? pollSequence.shift() : pollSequence[0]
+      return { status: over.pollStatus ?? 200, body }
     },
     sleep: async (ms) => { calls.sleeps.push(ms) },
     ...over
@@ -82,9 +97,17 @@ describe('fetchPriorStatement', () => {
     expect(items).toEqual(normalizePriorTransactionList(readyResponse(), { account: 'ACC-1' }))
     expect(items).toHaveLength(2)
     expect(calls.ensured).toBe(1) // refreshed before the call
-    // create posts to /accounts/{account}/transactions, poll GETs /accounts/{account}/transactions/{id}
-    expect(calls.postUrl[0]).toContain('/open-banking/v1.0/accounts/ACC-1/transactions')
-    expect(calls.pollUrl[0]).toContain('/open-banking/v1.0/accounts/ACC-1/transactions/RES-9')
+    // The URLs address the bank's OPAQUE accountId (resolved from our stored IBAN) — NOT the IBAN.
+    expect(calls.getUrl[0]).toContain('/open-banking/v1.0/accounts')
+    expect(calls.postUrl[0]).toContain('/open-banking/v1.0/accounts/OPAQUE-9/transactions')
+    expect(calls.pollUrl[0]).toContain('/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9')
+    expect(calls.postUrl[0]).not.toContain('/accounts/ACC-1/') // the IBAN is never a path id
+  })
+
+  it('normalizes against OUR stored account key, not the bank id (dedup keys stay stable)', async () => {
+    const { deps } = fakeDeps()
+    const items = await fetchPriorStatement(query, tok, deps)
+    expect(items.every(i => i.account === 'ACC-1')).toBe(true)
   })
 
   it('polls again while pending (BY.NBRB.Resource.NotCreated), then normalizes when ready', async () => {
@@ -116,10 +139,53 @@ describe('fetchPriorStatement', () => {
     await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/poll error.*InvalidDate/)
   })
 
+  it('a 429 throttle is NEVER read as an empty statement — it retries, then fails loud', async () => {
+    // The throttle body carries no Prior error codes; classifying by body alone would make this
+    // "ready with zero transactions" and silently drop a window that had operations.
+    const { deps, calls } = fakeDeps({ pollStatus: 429, pollSequence: [{ message: 'Too Many Requests' }] })
+    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/not ready after/)
+    expect(calls.pollUrl).toHaveLength(PRIOR_POLL_MAX_ATTEMPTS) // treated as pending → retried
+  })
+
+  it('an UNRECOGNIZED 200 body (no data envelope, no error codes) fails loud, not as empty', async () => {
+    const { deps } = fakeDeps({ pollSequence: [{ message: 'gateway blurb' }] })
+    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/unrecognized-response/)
+  })
+
+  it('throws when the stored account is not in the consent account list', async () => {
+    const { deps } = fakeDeps({ getJson: async () => ({ data: { account: [{ accountId: 'X', accountDetails: { identification: 'OTHER' } }] } }) })
+    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/not found in the consent/)
+  })
+
   it('throws after exhausting the poll budget (never ready)', async () => {
     const { deps, calls } = fakeDeps({ pollSequence: [pendingResponse] })
     await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/not ready after \d+ polls/)
     expect(calls.pollUrl).toHaveLength(PRIOR_POLL_MAX_ATTEMPTS)
     expect(calls.sleeps).toHaveLength(PRIOR_POLL_MAX_ATTEMPTS - 1) // no wait after the final attempt
+  })
+})
+
+describe('isRetryablePollStatus', () => {
+  it('429 and 5xx are "try again"; 2xx/other 4xx are not', () => {
+    expect(isRetryablePollStatus(429)).toBe(true)
+    expect(isRetryablePollStatus(503)).toBe(true)
+    expect(isRetryablePollStatus(500)).toBe(true)
+    expect(isRetryablePollStatus(200)).toBe(false)
+    expect(isRetryablePollStatus(404)).toBe(false)
+    expect(isRetryablePollStatus(403)).toBe(false)
+  })
+})
+
+describe('resolvePriorAccountId', () => {
+  const getJson = async (): Promise<unknown> => ACCOUNTS_RESPONSE
+  it('maps our stored IBAN to the bank accountId (case-insensitive)', async () => {
+    expect(await resolvePriorAccountId('https://p', 'ACC-1', 'T', { getJson })).toBe('OPAQUE-9')
+    expect(await resolvePriorAccountId('https://p', 'acc-1', 'T', { getJson })).toBe('OPAQUE-9')
+  })
+  it('also accepts the accountId itself (admin may have entered it directly)', async () => {
+    expect(await resolvePriorAccountId('https://p', 'OPAQUE-9', 'T', { getJson })).toBe('OPAQUE-9')
+  })
+  it('throws for an account outside the consent (never fetches someone else)', async () => {
+    await expect(resolvePriorAccountId('https://p', 'NOPE', 'T', { getJson })).rejects.toThrow(/not found in the consent/)
   })
 })

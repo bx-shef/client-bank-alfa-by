@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { handleBankConnectCallback, sanitizeForLog, type CallbackDeps } from '../server/utils/bankConnectCallback'
+import { handleBankConnectCallback, type CallbackDeps } from '../server/utils/bankConnectCallback'
+import { sanitizeForLog } from '../server/utils/logSanitize'
 import { signConnectState } from '../server/utils/bankConnectState'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
