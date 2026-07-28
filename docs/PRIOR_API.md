@@ -207,9 +207,16 @@ authorize-URL (подписывает `request`-JWT ключом `PRIOR_PRIVATE_
   async `POST /accounts/{id}/transactions` → поллинг `GET …/{id}` (пока `BY.NBRB.Resource.NotCreated` → ждём и
   повторяем, бюджет `PRIOR_POLL_MAX_ATTEMPTS`) → `normalizePrior`; чистые билдеры путей/классификатор статуса
   (`buildPriorResourceCreatePath`/`PollPath`/`classifyPriorPoll`) в `priorOauth.ts`, DI-транспорт, юнит-тесты
-  (`tests/priorFetch.test.ts`). Проведён в `fetchBankStatement` (делегат `deps.fetchPrior`). **Инертен пока:**
-  Приор не в `POLLABLE_PROVIDERS` и не в connect-потоке (слайсы 2-3 — DCR + подписанный request-JWT + UI). Осталось —
-  connect-обвязка Приора, включение в опрос, и прод-СКЗИ (issue #41).
+  (`tests/priorFetch.test.ts`). Проведён в `fetchBankStatement` (делегат `deps.fetchPrior`).
+  **Connect-поток — собран (A5b, слайсы 2a-2d):** подписчик `server/utils/priorJwt.ts` (`signPriorJwt` — RS256
+  через `node:crypto`, зеркалит `signJwt` recon-скрипта) + оркестрация `server/utils/priorConnectStart.ts`
+  (`buildPriorConnectUrl`: токен Б → `POST /accountConsents` → подписанный `request`-JWT → authorize-URL;
+  `priorConnectConfigFromEnv` fail-closed) + диспетчер по провайдеру в `bankConnectStart`/`bankConnectCallback`
+  (гейты и подписанный state — общие с Альфой; обмен кода у Приора через **`client_secret_basic`**, креды в
+  заголовке; отсутствующий `refresh_token` допускается) + пикер банка в `BankConnectCard.vue`. Env —
+  `PRIOR_OAUTH_{CLIENT_ID,CLIENT_SECRET,REDIRECT_URI,AUDIENCE,PRIVATE_KEY,KID,API_BASE}`.
+  **Осталось:** включить `prior-by` в опрос (`POLLABLE_PROVIDERS`, слайс 3), живой sandbox-прогон на кредах
+  владельца и прод-СКЗИ (issue #41).
 - **`manual` (путь №1)** — нормализация **сделана** для **двух форматов** (диспетчер
   `app/utils/manualImport.ts` → `detectManualFormat`/`normalizeManualStatement`):
   1. **`***** ^Type=`** (Приор/Альфа-выгрузка) — `normalizeClientBank` (`clientBankStatement.ts`).
