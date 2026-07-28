@@ -8,7 +8,7 @@ import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/c
 // It RETURNS that URL (or null) rather than navigating: the component must open the tab
 // SYNCHRONOUSLY inside the click gesture (a window.open after this await would be popup-blocked),
 // then point it at the URL. Outside a portal frame there is no token → inert. Frame-auth helpers
-// are shared (useFrameAuth), same as useAppSettings.
+// are shared (useFrameAuth), same as useChatSettings.
 
 export function useBankConnect() {
   const connecting = ref(false)

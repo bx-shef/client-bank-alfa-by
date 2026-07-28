@@ -4,7 +4,7 @@ import { portalHash } from './telemetryAttributes'
 // Shared manual-OTel wrapper for frame-token HTTP routes (телеметрия, DEFAULT OFF). Emits ONE span
 // per request with latency + a PII-safe outcome + hashed portal id — never the request body or any
 // business content (settings blob / chat ids / statement data / feedback text). Matches the
-// /api/settings spans. Zero overhead when telemetry is off (withSpan gates on span.isRecording();
+// /api/chat-settings spans. Zero overhead when telemetry is off (withSpan gates on span.isRecording();
 // portal.hash is computed in finalize, which runs ONLY when recording).
 //
 // Usage: extract the frame domain first (sync, for portal.hash), then set `span.outcome` — either at

@@ -1,41 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { nextTick } from 'vue'
 import AppPage from '~/pages/app.vue'
-import { MOCK_STATEMENT } from '~/utils/mockStatement'
-import { splitByDirection } from '~/utils/statement'
 
-const { credits, debits } = splitByDirection(MOCK_STATEMENT.items)
-
-describe('app statement page', () => {
-  it('renders the account, demo notice and the filter chips with counts', async () => {
+// Standalone render (no B24 frame in the test env): useB24().init() no-ops, so the page is
+// neither blocked nor nagged (setup banner is portal-only) and shows the real operations view —
+// which is EMPTY (no demo data anymore). The backend operations feed (#5) fills it later.
+describe('app statement page (no demo data)', () => {
+  it('renders the operations card and filter chips with zero counts', async () => {
     const wrapper = await mountSuspended(AppPage)
     const text = wrapper.text()
-    expect(text).toContain(MOCK_STATEMENT.account)
-    expect(text).toContain('Демо-данные')
     expect(text).toContain('Последние операции')
-    // Chip filter (replaced the old tabs): Все / Приходы / Расходы with counts.
-    expect(text).toContain(`Все (${MOCK_STATEMENT.items.length})`)
-    expect(text).toContain(`Приходы (${credits.length})`)
-    expect(text).toContain(`Расходы (${debits.length})`)
+    // Chip filter counts are all zero — there is no mock statement.
+    expect(text).toContain('Все (0)')
+    expect(text).toContain('Приходы (0)')
+    expect(text).toContain('Расходы (0)')
   })
 
-  it('defaults to "Все" — every operation is listed, with the currency', async () => {
+  it('no demo-data notice and no app-level test setting', async () => {
     const wrapper = await mountSuspended(AppPage)
     const text = wrapper.text()
-    for (const item of MOCK_STATEMENT.items) expect(text).toContain(item.counterparty.name)
-    expect(text).toContain(MOCK_STATEMENT.items[0]!.currency)
+    expect(text).not.toContain('Демо-данные')
+    expect(text).not.toContain('Тестовая настройка')
   })
 
-  it('clicking the "Расходы" chip filters the list to debits only', async () => {
+  it('links to the manual upload page', async () => {
     const wrapper = await mountSuspended(AppPage)
-    const chip = wrapper.findAll('button').find(b => b.text().includes('Расходы ('))
-    expect(chip).toBeTruthy()
-    await chip!.trigger('click')
-    await nextTick()
-    const text = wrapper.text()
-    for (const d of debits) expect(text).toContain(d.counterparty.name)
-    // Credit counterparties are filtered out of the list.
-    for (const c of credits) expect(text).not.toContain(c.counterparty.name)
+    expect(wrapper.text()).toContain('Загрузить выписку')
   })
 })

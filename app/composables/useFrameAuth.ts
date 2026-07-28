@@ -1,7 +1,7 @@
 import { useB24 } from '~/composables/useB24'
 
-// Shared Bitrix24 frame-auth for the settings composables (useAppSettings,
-// useChatSettings). One copy of a security-relevant contract — pull the access
+// Shared Bitrix24 frame-auth for the settings composables (useChatSettings,
+// useBankConnect, …). One copy of a security-relevant contract — pull the access
 // token + domain from the frame SDK and build the backend auth headers — so the
 // header names and the `auth === false` guard can't drift between callers.
 

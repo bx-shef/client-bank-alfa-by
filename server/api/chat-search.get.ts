@@ -1,7 +1,7 @@
 // GET /api/chat-search?q=<phrase>&offset=<n> — search the CALLER'S portal chats
 // for the chat picker (notification / error target). Auth = the Bitrix24 frame
 // access token (Authorization: Bearer) + portal domain (X-B24-Domain), same model
-// as /api/settings: B24 scopes that token to the caller's portal, so there's no
+// as /api/chat-settings: B24 scopes that token to the caller's portal, so there's no
 // member_id to trust and no cross-portal reach. The search therefore runs with the
 // operator's identity — see docs/REST_METHODS.md for the identity note (the async
 // sender uses the stored portal token; a configurer≠installer mismatch is possible,

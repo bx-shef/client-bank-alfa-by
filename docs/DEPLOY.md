@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-07-22
+> Last reviewed: 2026-07-28
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -33,7 +33,7 @@ Backend (приём событий Б24 + хранилище токенов; д�
   сверяются с сохранённым), поэтому одно env-значение всем порталам не подойдёт. Остаточный риск —
   **только окно установки** (TOFU), его снижают атомарный write-once токена и секретность URL вебхука.
   Пустое значение здесь — **сознательный выбор**, а не «по умолчанию».
-Также токен служит guard'ом серверных диагностик (`/api/queues`, `app-option-check`); при пустом
+Также токен служит guard'ом серверной диагностики (`/api/queues`); при пустом
 `B24_APPLICATION_TOKEN` эти эндпоинты недоступны (и без того закрыты nginx `deny all`).
 `REDIS_URL` compose проставляет сам (внутренний сервис `redis`). Схема
 `portal_tokens` создаётся на старте backend (`server/plugins/migrate.ts`). `redis` и `db` host-портов
@@ -163,7 +163,7 @@ LETSENCRYPT_EMAIL=you@example.com
 POSTGRES_PASSWORD=<openssl rand -hex 24>   # URL-safe: без @ : / ? # (уходит в DSN как есть)
 B24_TOKEN_ENC_KEY=<openssl rand -hex 32>
 # B24_APPLICATION_TOKEN оставляем пустым: токен придёт per-portal в ONAPPINSTALL и сохранится.
-# Задать (сильное случайное) стоит лишь чтобы включить серверные диагностики /api/queues и app-option-check.
+# Задать (сильное случайное) стоит лишь чтобы включить серверную диагностику /api/queues.
 EOF
 
 # 3. поднять app + backend + db + redis (образы из GHCR; обновления подхватит хостовый Watchtower)
@@ -194,23 +194,16 @@ nginx в backend). Он указывается **один раз** — в фор
 
 1. Установить приложение на **портал A** и **портал B** (событие `ONAPPINSTALL` → backend сохранит
    токены каждого портала отдельной строкой в `portal_tokens`, ключ — `member_id`).
-2. На странице приложения (`/app`) каждого портала в блоке «Тестовая настройка (уровень приложения)»
-   сохранить **разные** значения (напр. `AAA` на A, `BBB` на B). UI шлёт на backend **фрейм-токен**
-   портала (заголовки `Authorization: Bearer` + `X-B24-Domain`), а не `member_id` — B24 сам скоупит
-   токен к порталу вызывающего, так что дотянуться до чужого `app.option` из браузера нельзя.
-3. Проверить доступ **со стороны сервера** (без браузера) для каждого `member_id`:
-   ```bash
-   export B24_APPLICATION_TOKEN=<тот же, что у backend>
-   ./scripts/check-app-option.sh <MEMBER_ID_A>   # → {"value":"AAA", ...}
-   ./scripts/check-app-option.sh <MEMBER_ID_B>   # → {"value":"BBB", ...}
-   ```
-   `member_id` портала виден в диагностике `/install` (или в логах backend при установке —
-   `[b24 events] ONAPPINSTALL member_id=…`). Эндпоинт проверки (`/api/b24/app-option-check`)
-   **наружу не открыт** — nginx отдаёт `deny all`; скрипт достаёт его через
-   `docker compose exec backend` (localhost:3000 внутри контейнера) + guard-токен.
-   **Изоляция ОК**, если каждый портал возвращает своё значение и никогда — чужое.
-4. Деинсталляция (`ONAPPUNINSTALL`, `CLEAN=1`) стирает строку портала — после неё
-   `check-app-option.sh` для него отдаёт `404 portal not installed`.
+2. В настройках приложения (`/app` → шестерёнка, или `/settings`) каждого портала выбрать **разные**
+   чаты уведомлений и сохранить. UI шлёт на backend **фрейм-токен** портала (заголовки
+   `Authorization: Bearer` + `X-B24-Domain`), а не `member_id` — B24 сам скоупит токен к порталу
+   вызывающего, так что дотянуться до чужого `app.option` из браузера нельзя (настройки хранятся
+   в `app.option` под ключом `SETTINGS_KEY`, отдельным пространством на каждый портал).
+3. Открыть настройки на каждом портале заново — каждый показывает **свой** выбранный чат и никогда
+   чужой. Строки токенов в `portal_tokens` — раздельные по `member_id` (`member_id` виден в
+   диагностике `/install` или в логах backend при установке: `[b24 events] ONAPPINSTALL member_id=…`).
+4. Деинсталляция (`ONAPPUNINSTALL`) стирает строку портала и его `app.option`-настройки — после неё
+   портал начинает с чистого листа.
 
 ## Если nginx-proxy / Watchtower ещё не стоят
 

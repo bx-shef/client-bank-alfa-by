@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-23
+> Last reviewed: 2026-07-28
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -118,13 +118,15 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   Все/Приходы/Расходы (счётчики в подписи), шапкой колонок «Операция/Сумма», `OperationList` и
   `B24Pagination` (при переполнении страницы). Шестерёнка открывает **слайдовер настроек снизу**
   (`B24Slideover` `side="bottom"` с `SettingsForm` — удобно в узком iframe/на мобильном; форма отдаёт
-  `@close` по Save/Cancel → слайдовер закрывается, `#219`) — основной вход; ниже — карточка тестовой
-  настройки `app.option`.
-  Демо-данные. Layout `clear`, `useB24().init()`, в портале — `setTitle`/`fitWindow` (try/catch).
-  Итоги приходов/расходов теперь несёт карточка `ImportStatsChart` над списком (прежняя строка итогов
-  убрана, чтобы не дублировать). Интерактив (раскрытие строки,
-  слайдер настроек) автотестами не покрыт — проверяется вручную в портале; `B24Pagination` видна
-  только на реальных данных (демо-операций мало).
+  `@close` по Save/Cancel → слайдовер закрывается, `#219`) — основной вход.
+  **Без демо-данных** — список операций реальный (пока пуст, до backend-фида #5). **Баннер «не
+  настроено»** (критерий — выбран **чат уведомлений**, `chatSettings.settings.chat.dialogId` непустой):
+  внутри портала при отсутствии настройки админу (`useIsAdmin`) — предупреждение + кнопка «Открыть
+  настройки», не-админу — инфо-баннер «администратор настраивает»; операции/сводка скрыты, пока не
+  настроено. Тестовая настройка `app.option` (skeleton) **удалена**. Layout `clear`, `useB24().init()`,
+  в портале — `setTitle`/`fitWindow` (try/catch). Итоги приходов/расходов несёт карточка `ImportStatsChart`
+  над списком (показывается только при наличии операций). Интерактив (раскрытие строки, слайдер настроек,
+  баннер в портале) автотестами частично покрыт (рендер пустого standalone-вида) — портал проверяется вручную.
 - `app/components/SettingsForm.vue` — форма настроек чата (#16 PR-C): два пикера чатов на
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы (**фильтр только чат-оповещения**, не записи),
@@ -264,10 +266,6 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `LANDING_MARKET_PROMO`, url — `LANDING_MARKET_URL` (`shef.bankimport`), своя цель клика
     `market_card_click` (чтобы не сливаться с целью кнопки hero). Лендинг standalone → карточку в
     iframe не прячем (в отличие от `currency-converter`, где `/` dual-mode).
-- `app/composables/useAppSettings.ts` — тестовая настройка уровня приложения: берёт из фрейма
-  **access-токен + домен** и шлёт их в `/api/settings` (GET/POST) заголовками
-  `Authorization: Bearer` + `X-B24-Domain`; backend этим токеном пишет/читает `app.option`. Вне
-  портала инертна (токена нет). member_id UI не доверяет — изоляция на стороне B24 (токен скоуплен к порталу).
 - **Авторизация оператора** (вход для сотрудников в служебную зону — `/queues`, дальше страницы импорта;
   лендинг и B24-встройку не закрывает) — [`docs/AUTH.md`](docs/AUTH.md). Чистое ядро `server/utils/session.ts`
   (`resolveAuthConfig`/`checkCredentials` constant-time, `signSession`/`verifySession` — HMAC-подпись cookie;
@@ -1043,24 +1041,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     консервативно (Б24 предупреждает про авто-блок при частом рефреше): раз в сутки, батч-кап, только near-expiry.
     Гейт на `B24_CLIENT_ID/SECRET` (без них рефреш невозможен). DI, тесты `tests/tokenKeepAlive.test.ts`),
     `server/utils/appSettings.ts` (чистые хелперы чтения `app.option`: `pickAppOption` +
-    **`readAppSettingVia(call, key)`** — чтение через **уже связанный** jssdk-`RestCall`, чтобы и гейт-чтение
-    настроек в `crm-sync`, и диагностика делили реактивный ретрай `expired_token` SDK, а не грузили/рефрешили
-    токен сами. Прежние `readAppSetting`/`writeAppSetting`/`AppSettingsDeps` (свой token-load+`callRest`) **удалены**
-    — запись `app.option` теперь через тот же jssdk-транспорт), `server/utils/settingsHandler.ts`
+    **`readAppSettingVia(call, key)`** — чтение через **уже связанный** jssdk-`RestCall`, ключ передаётся явно
+    (`SETTINGS_KEY`), чтобы и гейт-чтение настроек в `crm-sync`, и диагностика делили реактивный ретрай
+    `expired_token` SDK, а не грузили/рефрешили токен сами. Прежние `readAppSetting`/`writeAppSetting`/
+    `AppSettingsDeps` (свой token-load+`callRest`) **удалены** — запись `app.option` теперь через тот же
+    jssdk-транспорт), `server/utils/settingsHandler.ts`
     (чистый `{status,body}` для UI-роутов по фрейм-токену; `SettingsIO.callRest` — DI-порт транспорта,
     в проде связан `frameRestCall`), `server/utils/liveDeps.ts` (проводка: `frameRestCall` — drop-in замена
-    сырого `callRest` на jssdk по фрейм-токену; `livePortalSdkCall` — stored-token SDK для серверной диагностики).
-    UI-роуты `server/api/settings.get.ts`/`settings.post.ts` (`/app` через `useAppSettings`)
-    **аутентифицируются фрейм-токеном** (`Authorization: Bearer` + `X-B24-Domain`) — B24 скоупит
-    токен к порталу вызывающего, `member_id` не доверяется, чужой `app.option` недостижим. **Серверная
-    проверка** `server/api/b24/app-option-check.get.ts` (guard `B24_APPLICATION_TOKEN`, читает `app.option`
-    по сохранённому токену без фрейма — для `scripts/check-app-option.sh`; наружу не открыта, nginx `deny all`).
-    `settingsHandler` параметризован ключом `app.option` (дефолт — тест-ключ; чат-настройки — `SETTINGS_KEY`).
+    сырого `callRest` на jssdk по фрейм-токену; `livePortalSdkCall` — stored-token SDK для серверной работы —
+    провижининг/леджер распределения, воркер).
+    `settingsHandler` параметризован ключом `app.option` (`key` обязателен; чат-настройки — `SETTINGS_KEY`).
     **Admin-гейт записи (#182, порт из `ai-price-import`):** `handleWriteSetting` — **единственный choke point**
     записи `app.option` — перед `app.option.set` делает `verifyFrameAdmin` (один `profile`-вызов: доказывает
     контроль портала фрейм-токеном **и** читает `profile.ADMIN` строго `=== true`); не-админ → **403**, сбой/
-    отвергнутый токен → 502 (fail-closed, запись не идёт). Гейтит **оба** роута записи (`chat-settings.post` —
-    арм `autoDistribute`/карта распознавания/чат-цели — **и** `settings.post` — тест-ключ). Клиентский `useIsAdmin`
+    отвергнутый токен → 502 (fail-closed, запись не идёт). Гейтит роут записи `chat-settings.post`
+    (арм `autoDistribute`/карта распознавания/чат-цели). Клиентский `useIsAdmin`
     (прячет форму) — **косметика**; авторитет — здесь (иначе любой пользователь портала или реплей фрейм-токена
     взвёл бы мутации CRM). Token-only, без `member_id`/install-зависимости — install-гонка/purge не отвергают
     валидного админа (`app.option` скоуплен фрейм-токеном). Зеркалит `profile.ADMIN`-гейт `/api/bank/connect`.

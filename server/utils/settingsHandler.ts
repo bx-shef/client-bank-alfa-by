@@ -4,7 +4,7 @@
 // member_id to trust and no way to reach another portal's data. The REST call is
 // injected (io.callRest), so this is unit-testable without the network.
 
-import { APP_SETTING_KEY, pickAppOption } from './appSettings'
+import { pickAppOption } from './appSettings'
 
 export interface SettingsIO {
   callRest: (host: string, accessToken: string, method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -16,8 +16,8 @@ export interface HandlerResult {
 }
 
 /** GET: read an `app.option` value by key using the caller's frame token + domain.
- *  `key` defaults to the test setting; the chat-settings route passes SETTINGS_KEY. */
-export async function handleReadSetting(io: SettingsIO, accessToken: string, domain: string, key: string = APP_SETTING_KEY): Promise<HandlerResult> {
+ *  `key` is explicit (the chat-settings route passes SETTINGS_KEY). */
+export async function handleReadSetting(io: SettingsIO, accessToken: string, domain: string, key: string): Promise<HandlerResult> {
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   try {
     const res = await io.callRest(domain, accessToken, 'app.option.get', {})
@@ -53,9 +53,9 @@ export async function verifyFrameAdmin(io: SettingsIO, accessToken: string, doma
  * (pay deal payments, move invoices to a paid stage, fire triggers). The in-portal client hides the
  * form from non-admins (`useIsAdmin`), but that is cosmetic — this route is the real authority, so a
  * non-admin (or anyone replaying a frame token) must be rejected HERE. Gate is at the single write
- * choke point, so every write route (chat-settings, settings) is covered and a new one can't forget it.
+ * choke point, so every write route (chat-settings) is covered and a new one can't forget it.
  */
-export async function handleWriteSetting(io: SettingsIO, accessToken: string, domain: string, value: string, key: string = APP_SETTING_KEY): Promise<HandlerResult> {
+export async function handleWriteSetting(io: SettingsIO, accessToken: string, domain: string, value: string, key: string): Promise<HandlerResult> {
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   const admin = await verifyFrameAdmin(io, accessToken, domain)
   if (!admin.ok) return { status: admin.status ?? 502, body: { error: 'upstream error' } }

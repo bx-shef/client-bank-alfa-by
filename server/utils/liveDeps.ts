@@ -4,8 +4,9 @@
 //  - `frameRestCall` — drop-in for the retired raw `callRest`: a REST method called with a
 //    FRAME access token (Authorization: Bearer + X-B24-Domain), backed by `makeFrameRestCall`
 //    (SSRF-gated jssdk client). Same signature/contract as `callRest` (throws on B24 error).
-//  - `livePortalSdkCall` — a per-portal SDK `RestCall` from the STORED token, for a server-side
-//    diagnostic that acts AS the portal (app-option-check), not as the frame caller.
+//  - `livePortalSdkCall` — a per-portal SDK `RestCall` from the STORED token, for server-side
+//    work that acts AS the portal (distribution provision/ledger/recompute, worker), not as the
+//    frame caller.
 
 import { dbQuery } from '../db/client'
 import { makeFrameRestCall, makePortalSdkCall, sdkPortalDeps } from './b24Sdk'

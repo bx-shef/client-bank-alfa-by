@@ -59,8 +59,8 @@ services:
       # application_token is delivered INSIDE ONAPPINSTALL (per portal) and stored
       # write-once; later events are verified against that stored value. So leave
       # this EMPTY for multi-tenant — the first install bootstraps trust. It's used
-      # here only as the shared guard token for the server-only diagnostics
-      # (/api/queues, /api/b24/app-option-check); set it to enable those.
+      # here only as the guard token for the server-only diagnostic
+      # (/api/queues); set it to enable that.
       B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:-}
       # App OAuth creds — refresh portal access token for server-side REST (optional
       # for a just-installed portal, required for long-lived operation).

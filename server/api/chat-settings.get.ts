@@ -1,7 +1,7 @@
 // GET /api/chat-settings — read the CALLER'S portal chat settings (notification
 // chat + rules + error chat) from app.option under SETTINGS_KEY. Auth = the B24
-// frame access token (Authorization: Bearer) + X-B24-Domain, same model as
-// /api/settings (B24 scopes the token to the caller's portal). Returns the parsed,
+// frame access token (Authorization: Bearer) + X-B24-Domain (B24 scopes the token
+// to the caller's portal, so there's no member_id to trust). Returns the parsed,
 // defensively-normalized PortalSettings — the worker reads the SAME key/shape via
 // readAppSettingVia(call, SETTINGS_KEY), so UI and pipeline stay in sync.
 
