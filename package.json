@@ -40,7 +40,8 @@
     "activity:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/configurable-activity-test.ts",
     "trigger:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/trigger-register-test.ts",
     "feedback:retention": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/feedback-retention.ts",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "loadtest:queue": "node scripts/queue-loadtest.mjs"
   },
   "dependencies": {
     "@bitrix24/b24icons-vue": "^2.0.7",
