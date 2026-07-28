@@ -101,13 +101,16 @@ describe('handleBankConnectStart — Prior (A5b, live preamble)', () => {
     expect(buildPriorUrl.mock.calls[0]![0]).toEqual(PRIOR_CONFIG)
   })
 
-  it('502 when the bank preamble fails (well-formed request, upstream problem)', async () => {
+  it('502 when the bank preamble fails (well-formed request, upstream problem) + SANITIZED log', async () => {
+    const log = vi.fn()
     const buildPriorUrl = async () => {
-      throw new Error('consent 500')
+      throw new Error('consent 500\r\ninjected')
     }
-    const r = await handleBankConnectStart(deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl }), priorInput)
+    const r = await handleBankConnectStart(deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl, log }), priorInput)
     expect(r.status).toBe(502)
     expect(String(r.body.error)).not.toContain('consent 500') // raw bank/internal text is not surfaced
+    // …but it IS logged, sanitized — otherwise the 4-step preamble would be unobservable.
+    expect(log.mock.calls.some(c => /consent 500/.test(String(c[0])) && !/\r|\n/.test(String(c[0])))).toBe(true)
   })
 
   it('still enforces the admin gate and the portal check BEFORE any bank round-trip', async () => {

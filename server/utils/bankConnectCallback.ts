@@ -16,6 +16,7 @@
 import { parseOAuthCallback, buildTokenExchangeBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { buildCodeExchangeBody, parsePriorTokenResponse, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
+import { sanitizeForLog } from './logSanitize'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankToken } from './bankTokenStore'
 import type { BankProviderId } from '../../app/types/statement'
@@ -52,10 +53,9 @@ export interface CallbackInput {
   nowMs: number
 }
 
-/** Strip CR/LF and cap length — provider-controlled text is logged only through this. */
-export function sanitizeForLog(s: string, max = 200): string {
-  return s.replace(/[\r\n]+/g, ' ').slice(0, max)
-}
+// `sanitizeForLog` moved to ./logSanitize so the connect START half can share it (no import cycle);
+// re-exported here because callers/tests already import it from this module.
+export { sanitizeForLog } from './logSanitize'
 
 const page = (title: string, msg: string): string =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`

@@ -22,6 +22,7 @@
 
 import { buildAuthorizeUrl, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { signConnectState, type BankConnectState } from './bankConnectState'
+import { sanitizeForLog } from './logSanitize'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -73,6 +74,10 @@ export interface ConnectStartDeps {
   buildPriorUrl: (config: PriorConnectConfig, state: string, nowMs: number) => Promise<string>
   /** HMAC secret for the connect state (the operator SESSION_SECRET). Empty ⇒ fail-closed. */
   secret: string
+  /** Optional sanitized logger (already-safe strings only) — mirrors the callback's. Without it a
+   *  failed Prior preamble would be completely unobservable (one opaque 502 for a rejected token Б,
+   *  a consent 4xx, a missing intent id, or a malformed signing key). */
+  log?: (msg: string) => void
 }
 
 export interface ConnectStartInput {
@@ -160,7 +165,10 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     try {
       const authorizeUrl = await deps.buildPriorUrl(priorConfig, signed, nowMs)
       return { status: 200, body: { authorizeUrl } }
-    } catch {
+    } catch (e) {
+      // Log SANITIZED (CRLF-stripped, capped) so the four preamble steps stay distinguishable in
+      // the logs — the admin still gets one opaque message (no bank-controlled text reaches them).
+      deps.log?.(`[bank-connect] prior preamble failed: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
       return { status: 502, body: { error: 'bank did not grant consent (connect preamble failed)' } }
     }
   }

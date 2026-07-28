@@ -67,7 +67,10 @@ function liveConnectDeps(): ConnectStartDeps {
       nowSec: () => Math.floor(Date.now() / 1000),
       newId: () => randomUUID()
     }, nowMs),
-    secret: resolveAuthConfig(process.env).secret
+    secret: resolveAuthConfig(process.env).secret,
+    // Sanitized already (the handler passes text through sanitizeForLog) — keeps a failed Prior
+    // preamble diagnosable instead of one opaque 502.
+    log: msg => console.info(msg)
   }
 }
 
