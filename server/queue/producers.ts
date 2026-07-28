@@ -5,7 +5,7 @@
 
 import { getQueue, queueEnabled } from './connection'
 import {
-  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE, Q_TRIGGER,
+  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, fetchQueueFor, Q_PARSE, Q_TRIGGER,
   crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId, triggerFireJobId,
   type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob, type FetchJob, type ParseJob, type TriggerFireJob
 } from './topology'
@@ -47,9 +47,47 @@ export async function enqueueEvent(job: EventJob): Promise<boolean> {
   return true
 }
 
+/**
+ * Retention for `bank-fetch` — and the load-bearing half of the poller's BACKPRESSURE at
+ * marketplace scale (tens of thousands of connected accounts).
+ *
+ * The cron enqueues one job per connected account per tick, but the fleet can only drain at the
+ * bank's rate cap (Alfa: 100 req/min for ALL portals — it is per OAuth client, not per account).
+ * A full sweep of N accounts therefore takes `N / rate` minutes, which is far longer than the tick
+ * interval. With a per-tick-unique jobId that arithmetic is fatal: every tick adds another N jobs
+ * while only `rate × interval` drain, so the queue grows without bound until Redis dies.
+ *
+ * The fix is a STABLE jobId (the cron omits `epoch`) plus this retention:
+ *  - while a job for (portal, account, window) is waiting/active, re-adding the same id is a silent
+ *    no-op → a tick can never pile a second copy on an account that is still pending;
+ *  - `removeOnComplete: true` frees the id the moment it finishes → the NEXT tick re-polls it.
+ * The queue therefore self-limits to at most one job per connected account, and the effective poll
+ * cadence degrades gracefully to the drain rate instead of exploding.
+ * (Removing the completed payload promptly also keeps account numbers out of Redis history, the
+ * same privacy posture as STATEMENT_JOB_RETENTION, #245.)
+ *
+ * `removeOnFail` is bounded by AGE for the same reason: a failed job keeps its id, so a permanently
+ * failing account would otherwise be dedup-blocked from ever being polled again.
+ *
+ * ⚠ That age alone is NOT enough, because BullMQ's age eviction is LAZY — it runs only from inside
+ * another job's `moveToFinished` on the SAME set, and a COMPLETING fetch (removeOnComplete: true)
+ * trims nothing at all. So on a queue where fetches mostly succeed, one failed job could sit on its
+ * id until another fetch happened to fail an hour later, silently dropping that account from the
+ * rotation. The wall-clock guarantee comes from the periodic sweep (`statementSweep.ts`, which
+ * includes the fetch queues for exactly this reason); this age is the cutoff that sweep applies.
+ */
+export const FETCH_JOB_RETENTION = {
+  removeOnComplete: true,
+  removeOnFail: { age: 3600, count: 500 }
+} as const
+
 export async function enqueueFetch(job: FetchJob): Promise<boolean> {
   if (!queueEnabled()) return false
-  await getQueue(Q_FETCH).add(Q_FETCH, job, { jobId: fetchJobId(job) })
+  // Route by provider: Prior's multi-request create+poll has its own queue (own limiter + slots)
+  // so it can neither starve Alfa nor under-report its ~10× request cost (see Q_FETCH_PRIOR).
+  const queue = fetchQueueFor(job.providerId)
+  // Deliberately silent on a duplicate id — that IS the backpressure (see FETCH_JOB_RETENTION).
+  await getQueue(queue).add(queue, job, { jobId: fetchJobId(job), ...FETCH_JOB_RETENTION })
   return true
 }
 

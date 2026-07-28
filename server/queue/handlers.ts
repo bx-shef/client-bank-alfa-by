@@ -8,6 +8,7 @@
 //        file-parse ─┘   (dedup, split)      ├─ write configurable activity (stamps marker)
 //                                            └─ notify chat (by rules)
 
+import { createHash } from 'node:crypto'
 import type { StatementItem } from '../../app/types/statement'
 import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
@@ -181,18 +182,38 @@ export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<
   return { kind: job.kind, cleaned: false, registered: false }
 }
 
+/**
+ * Stable content fingerprint of a fetched batch — the part of the crm-sync `batchId` that makes it
+ * change exactly when the DATA changes (see handleFetchJob). Built from each operation's dedup key
+ * plus the fields a correction could alter (amount/currency/purpose), so a re-poll that returns the
+ * same operations produces the same hash (dedupe, no wasted CRM work) while a new or amended
+ * operation produces a different one (processed). Order-independent: banks may reorder rows, and a
+ * reorder is not a change. Pure.
+ */
+export function batchContentHash(items: readonly StatementItem[]): string {
+  const lines = items.map(i => `${dedupKey(i)}|${i.amount}|${i.currency}|${i.purpose}`).sort()
+  return createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16)
+}
+
 /** Fetch a statement window, then hand the normalized batch to crm-sync. */
 export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<{ fetched: number, chained: boolean }> {
   const items = await deps.fetchStatement(job)
-  // The crm-sync jobId derives from batchId; fold the per-tick `epoch` in (when present) so a
-  // real-poll re-fetch of the SAME window actually RE-RUNS crm-sync instead of being deduped by
-  // a retained completed job — otherwise the fetch re-runs but crm-sync (and its B24-marker
-  // dedup) never fires, so a same-day late-posted op wouldn't reach CRM until the window rolls.
-  // A retry of the same tick keeps the same epoch → still idempotent. Window-only when no epoch
-  // (manual import), so those ids are unchanged.
-  const batchId = job.epoch
-    ? `${job.account}:${job.dateFrom}:${job.dateTo}:${job.epoch}`
-    : `${job.account}:${job.dateFrom}:${job.dateTo}`
+  // The crm-sync jobId derives from batchId, and crm-sync RETAINS completed jobs
+  // (STATEMENT_JOB_RETENTION) — so a batchId that repeats is silently dropped by BullMQ's
+  // duplicate-id handling. The id must therefore change exactly when the DATA changes:
+  //
+  //  - window-only (`account:from:to`) would be constant for the whole UTC day, so every re-poll
+  //    after the first would be discarded before reaching CRM — the bank polled, the budget spent,
+  //    and a late-posted operation lost until the window rolls. (This is why the cron used to fold
+  //    a per-tick `epoch` in; it no longer can — the fetch jobId must stay stable for backpressure.)
+  //  - a per-tick token would make EVERY re-poll a new crm-sync run even when nothing changed,
+  //    burning B24 REST on rediscovering already-written operations at 31k accounts.
+  //
+  // So the batch is keyed by its CONTENT: identical operations dedupe (cheap no-op), and any new
+  // or changed operation yields a new id and is processed. A retry of the same fetch re-derives
+  // the same hash → still idempotent. `epoch` (manual «Опросить сейчас») is deliberately NOT part
+  // of it: an operator-forced refetch of unchanged data need not redo the CRM work either.
+  const batchId = `${job.account}:${job.dateFrom}:${job.dateTo}:${batchContentHash(items)}`
   const chained = items.length > 0
     ? await deps.enqueueCrmSync({
         memberId: job.memberId,

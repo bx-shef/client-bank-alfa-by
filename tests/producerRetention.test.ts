@@ -17,7 +17,7 @@ vi.mock('bullmq', () => ({
   }
 }))
 
-const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION } = await import('../server/queue/producers')
+const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION } = await import('../server/queue/producers')
 
 afterEach(() => {
   adds.length = 0
@@ -56,8 +56,24 @@ describe('producer retention wiring', () => {
     expect(optsFor('b24-events')).toHaveProperty('jobId')
   })
 
-  it('bank-fetch (no statement content — our account + dates) keeps the count-based default', async () => {
+  it('bank-fetch REMOVES the completed job — that frees the stable jobId for the next sweep', async () => {
+    // Load-bearing at marketplace scale: the cron uses a STABLE jobId per (portal, account,
+    // window) so a still-pending account is never re-added (bounded queue). That only keeps
+    // polling if the id is freed on completion — otherwise every account would be polled ONCE
+    // and then dedup-blocked forever.
     await enqueueFetch({ memberId: 'M', providerId: 'manual', account: 'A', dateFrom: 'x', dateTo: 'y' })
-    expect(optsFor('bank-fetch')).not.toHaveProperty('removeOnComplete')
+    expect(optsFor('bank-fetch')).toMatchObject(FETCH_JOB_RETENTION)
+    expect(optsFor('bank-fetch')!.removeOnComplete).toBe(true)
+    expect(optsFor('bank-fetch')).toHaveProperty('jobId')
+  })
+
+  it('bank-fetch bounds FAILED by age — a failing account is retried, not abandoned forever', async () => {
+    // A failed job keeps its id, so without an age bound the stable-id dedup would permanently
+    // lock that account out of every future sweep.
+    await enqueueFetch({ memberId: 'M', providerId: 'manual', account: 'A', dateFrom: 'x', dateTo: 'y' })
+    const onFail = optsFor('bank-fetch')!.removeOnFail as { age: number, count: number }
+    expect(onFail.age).toBeGreaterThan(0)
+    expect(onFail.age).toBeLessThanOrEqual(24 * 3600)
+    expect(onFail.count).toBeGreaterThan(0)
   })
 })

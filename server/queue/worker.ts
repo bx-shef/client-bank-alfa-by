@@ -18,7 +18,7 @@ import { decodeUploadText } from '../../app/utils/importUpload'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
-import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_PARSE, Q_TRIGGER } from './topology'
+import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_TRIGGER } from './topology'
 import type { CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob, TriggerFireJob } from './topology'
 import { handleFeedbackPostJob, type FeedbackPostJobDeps } from '../utils/feedbackPostJob'
 import { handleTriggerFireJob, type TriggerFireJobDeps } from '../utils/triggerFireJob'
@@ -546,10 +546,18 @@ export function crmLockTuning(): { lockDuration: number, stalledInterval: number
  *  fetch/parse scale freely. See docs/QUEUES.md. */
 export function startThroughputWorkers(
   deps: HandlerDeps,
-  opts: { concurrency?: number, fetchRate?: { max: number, duration: number } } = {}
+  opts: {
+    concurrency?: number
+    fetchRate?: { max: number, duration: number }
+    /** Prior's own limiter (already expressed in JOBS — see providerJobRate). */
+    priorFetchRate?: { max: number, duration: number }
+    /** Prior's own slot count (its jobs are long-running; see Q_FETCH_PRIOR). */
+    priorConcurrency?: number
+  } = {}
 ): Worker[] {
   const connection = connectionOptions()
   const concurrency = Math.max(1, opts.concurrency ?? 1)
+  const priorConcurrency = Math.max(1, opts.priorConcurrency ?? concurrency)
   return [
     // A8: the bank-fetch worker hits the real Alfa API (~100 req/min per OAuth client). BullMQ's
     // worker `limiter` is GLOBAL across all replicas on the same queue — the counter is a Redis
@@ -568,6 +576,20 @@ export function startThroughputWorkers(
       connection,
       concurrency,
       ...(opts.fetchRate ? { limiter: { max: opts.fetchRate.max, duration: opts.fetchRate.duration } } : {})
+    }),
+    // Prior's fetch queue — same handler, SEPARATE queue so it gets its own Redis-backed limiter
+    // and its own slots (Q_FETCH_PRIOR): a Prior job costs ~10 bank requests and can run for
+    // minutes, so sharing Alfa's queue would both under-count its request spend and head-of-line
+    // block every other portal. Its `max` is already in JOBS (providerJobRate divided the bank's
+    // request budget by the per-job cost).
+    new Worker<FetchJob>(Q_FETCH_PRIOR, async job => withSpan('bank-fetch', {
+      'job.queue': 'bank-fetch-prior',
+      'job.provider': job.data.providerId,
+      'portal.hash': portalHash(job.data.memberId)
+    }, () => handleFetchJob(job.data, deps), r => ({ 'job.op_count': r.fetched })), {
+      connection,
+      concurrency: priorConcurrency,
+      ...(opts.priorFetchRate ? { limiter: { max: opts.priorFetchRate.max, duration: opts.priorFetchRate.duration } } : {})
     }),
     new Worker<ParseJob>(Q_PARSE, async job => withSpan('file-parse', {
       // Job-level trace span (#78). The ONLY pipeline stage with no auto child span (pure CPU

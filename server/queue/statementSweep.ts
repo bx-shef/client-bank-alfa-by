@@ -11,12 +11,28 @@
 // (mirrors tokenKeepAlive.ts / saturation.ts). Grace periods are the SAME wall-clock cutoffs
 // the lazy `STATEMENT_JOB_RETENTION.age` uses — we apply them eagerly, we don't shorten them.
 
-import { STATEMENT_JOB_RETENTION } from './producers'
-import { Q_CRM, Q_PARSE } from './topology'
+import { FETCH_JOB_RETENTION, STATEMENT_JOB_RETENTION } from './producers'
+import { Q_CRM, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE } from './topology'
 
-/** The two queues whose payloads carry financial PII (file bytes / StatementItem[]). */
-export const SWEPT_QUEUES = [Q_PARSE, Q_CRM] as const
+/** Queues swept eagerly. Two reasons, both because BullMQ's own age eviction is LAZY (it runs
+ *  only from inside another job's `moveToFinished` on the SAME set, so a quiet queue never trims):
+ *   - `file-parse` / `crm-sync` carry financial PII (file bytes / StatementItem[]) — privacy (#245);
+ *   - the FETCH queues carry no statement content, but their FAILED jobs hold the stable jobId that
+ *     the poller's backpressure depends on. A failed fetch is only re-planned once its id is freed,
+ *     and nothing else frees it: with `removeOnComplete: true` a COMPLETING fetch trims nothing, so
+ *     without this sweep one failure would silently drop that account out of the poll rotation until
+ *     another fetch happened to fail an hour later. Sweeping by wall clock makes "retry, not
+ *     abandon" actually true. */
+export const SWEPT_QUEUES = [Q_PARSE, Q_CRM, Q_FETCH, Q_FETCH_PRIOR] as const
 export type SweptQueue = typeof SWEPT_QUEUES[number]
+
+/** Queues that hold no statement content — only completed-job removal is already immediate there,
+ *  so the sweep targets their FAILED set (the one that can dedup-block an account). */
+const FETCH_QUEUES: readonly SweptQueue[] = [Q_FETCH, Q_FETCH_PRIOR]
+
+/** Grace (ms) after which a FAILED fetch job is swept — mirrors `FETCH_JOB_RETENTION.removeOnFail.age`,
+ *  applied eagerly so the account returns to the rotation on a predictable wall clock. */
+export const SWEEP_FETCH_FAILED_GRACE_MS = FETCH_JOB_RETENTION.removeOnFail.age * 1000
 
 /** Upper clamp on the sweep interval so a huge env value can't overflow `setInterval`'s
  *  2^31-1 ms ceiling (Node silently clamps the overflow to 1 ms → a tight loop). 7 days. */
@@ -47,6 +63,12 @@ export interface SweepTarget {
 export function sweepPlan(): SweepTarget[] {
   const plan: SweepTarget[] = []
   for (const queue of SWEPT_QUEUES) {
+    // Fetch queues already drop completed jobs immediately (removeOnComplete: true) — only their
+    // FAILED set needs sweeping, and on its own (shorter) grace.
+    if (FETCH_QUEUES.includes(queue)) {
+      plan.push({ queue, type: 'failed', graceMs: SWEEP_FETCH_FAILED_GRACE_MS })
+      continue
+    }
     plan.push({ queue, type: 'completed', graceMs: SWEEP_COMPLETED_GRACE_MS })
     plan.push({ queue, type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS })
   }

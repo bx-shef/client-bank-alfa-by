@@ -18,6 +18,19 @@ import type { AllocationTargetKind } from '../../app/utils/allocation'
 
 export const Q_EVENTS = 'b24-events'
 export const Q_FETCH = 'bank-fetch'
+/**
+ * Prior's bank-fetch queue — SEPARATE from `bank-fetch` because a Prior job is nothing like an
+ * Alfa one, and mixing them breaks both fairness and the rate cap:
+ *  - COST: Alfa is one GET (sub-second, 1 bank request); Prior's async create+poll is an accounts
+ *    resolve + a create + up to 8 polls (~10 requests, up to minutes). A single queue's limiter
+ *    counts JOBS, so Prior traffic would be undercounted ~10× against a cap sized for Alfa.
+ *  - FAIRNESS: `bank-fetch` runs at QUEUE_CONCURRENCY (default 1), so one slow Prior job would
+ *    head-of-line block every other portal's fetches — Alfa included.
+ * Two queues give each provider its own Redis-backed limiter and its own worker slots, so neither
+ * can starve or over-spend the other. `bank-fetch` KEEPS its name on purpose: renaming it would
+ * strand the jobs already queued in Redis at deploy time.
+ */
+export const Q_FETCH_PRIOR = 'bank-fetch-prior'
 export const Q_PARSE = 'file-parse'
 export const Q_CRM = 'crm-sync'
 export const Q_DELETIONS = 'b24-deletions'
@@ -25,7 +38,7 @@ export const Q_FEEDBACK = 'feedback-post'
 export const Q_TRIGGER = 'trigger-fire'
 
 /** All queue names, for wiring workers/monitoring. */
-export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER] as const
+export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER] as const
 export type QueueName = typeof QUEUE_NAMES[number]
 
 /** Portal credentials to persist on register (ONAPPINSTALL). `refreshTokenEnc` is
@@ -190,6 +203,14 @@ export function fetchJobId(job: FetchJob): string {
   const base = ['fetch', job.memberId, job.providerId, job.account, job.dateFrom, job.dateTo]
   // Append the epoch segment only when present, so existing demo/manual ids stay byte-identical.
   return joinId(job.epoch ? [...base, job.epoch] : base)
+}
+
+/** Which fetch queue a job belongs to — Prior's multi-request create+poll gets its own queue
+ *  (own limiter + own worker slots); everything else (Alfa, demo, manual) stays on `bank-fetch`
+ *  so its already-queued jobs are undisturbed. Pure — the single source of the routing, shared by
+ *  the producer and the workers so they can never drift onto different queues. */
+export function fetchQueueFor(providerId: BankProviderId): typeof Q_FETCH | typeof Q_FETCH_PRIOR {
+  return providerId === 'prior-by' ? Q_FETCH_PRIOR : Q_FETCH
 }
 
 export function parseJobId(job: ParseJob): string {
