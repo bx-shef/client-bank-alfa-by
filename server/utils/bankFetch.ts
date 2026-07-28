@@ -2,11 +2,12 @@
 // and normalize it to StatementItem[] — the live replacement for the worker's
 // `fetchStatement` stub. Ensures the account's access token is fresh (A4 ensureBankToken)
 // before the call. Provider-specific request shape / auth live here; the raw→StatementItem[]
-// map reuses the tested pure normalizer `normalizeAlfa` (Prior's `normalizePrior` joins at A5b).
+// map reuses the tested pure normalizers (`normalizeAlfa` / `normalizePrior`).
 //
-// Alfa first (roadmap): a synchronous `GET /accounts/statement`. Prior's async create+poll
-// (`POST`/`GET /accounts/{id}/statements`) is A5b — surfaced as an explicit unsupported here,
-// NOT a silent empty, so it can't masquerade as "no operations".
+// Alfa: a synchronous `GET /accounts/statement`. Prior (A5b): an async create+poll flow
+// (`POST`/`GET /accounts/{id}/transactions`) — delegated to `fetchPriorStatement` (priorFetch.ts),
+// which owns its own POST/poll transport. A provider with no online path fails loud (explicit
+// throw, NOT a silent empty, so it can't masquerade as "no operations").
 //
 // A9 wiring note (not this commit): the worker's `fetchStatement(job: FetchJob)` dep is NOT a
 // one-line `= fetchBankStatement`. A9 must (a) map the job to a BankFetchQuery — the queue
@@ -26,6 +27,7 @@ import { normalizeAlfa, alfaStatementErrors, type AlfaStatementResponse } from '
 import { ensureBankToken } from './ensureBankToken'
 import { getBankToken } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
+import { fetchPriorStatement } from './priorFetch'
 import { dbQuery } from '../db/client'
 
 /** The statement window to fetch, resolved from a FetchJob. */
@@ -95,12 +97,16 @@ export interface BankFetchDeps {
   apiConfig: (provider: BankProviderId) => { base: string, statementPath: string } | null
   /** GET a JSON resource with a Bearer token. Implementations must NOT leak the auth on error. */
   getJson: (url: string, accessToken: string) => Promise<unknown>
+  /** Priorbank's async create+poll engine (A5b). Injected so the delegation is unit-testable; the
+   *  live impl is `fetchPriorStatement`, which owns its own POST/poll transport. */
+  fetchPrior: (query: BankFetchQuery, stored: BankToken) => Promise<StatementItem[]>
 }
 
 const liveDeps: BankFetchDeps = {
   loadToken: (memberId, provider, account) => getBankToken(dbQuery, memberId, provider, account),
   ensureFresh: token => ensureBankToken(token),
   apiConfig: bankApiConfig,
+  fetchPrior: (query, stored) => fetchPriorStatement(query, stored),
   getJson: async (url, accessToken) => {
     const fetchJson = $fetch as unknown as (
       url: string,
@@ -140,6 +146,11 @@ export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchD
     return normalizeAlfa(raw, { account: query.account })
   }
 
-  // prior-by: async consent/create+poll flow — A5b follow-up. Fail loud (not a silent []).
-  throw new Error(`fetchBankStatement: ${query.provider} online fetch not wired yet (A5b — Prior async create+poll)`)
+  if (query.provider === 'prior-by') {
+    // Async create+poll engine (A5b) — its own POST/poll transport; token refresh happens inside.
+    return deps.fetchPrior(query, stored)
+  }
+
+  // No online-fetch path for this provider (manual import only). Fail loud (not a silent []).
+  throw new Error(`fetchBankStatement: ${query.provider} online fetch not supported`)
 }

@@ -614,7 +614,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       CRM-депсы берут `memberId` явно
       (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
       **онлайн-опрос банков (`fetchStatement`) — тоже живой (A9):** демо-счёт → `demoItems`, реальный счёт →
-      `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно, Приор → A5b.
+      `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно. **Приор
+      (`prior-by`) — движок опроса собран (A5b, слайс 1):** `fetchBankStatement` делегирует в чистый
+      `server/utils/priorFetch.ts` (`fetchPriorStatement` — async `POST /accounts/{id}/transactions` → поллинг
+      `GET …/{id}` пока `BY.NBRB.Resource.NotCreated` → `normalizePrior`, DI-транспорт, тесты). **Инертен в рантайме
+      пока** — Приор не в `POLLABLE_PROVIDERS` и не в connect-потоке (слайсы 2-3), прод требует BY-СКЗИ (issue #41).
       Живой вызов Альфы ограничен **глобальным rate-limiter (A8)** на `Q_FETCH` (BullMQ `limiter`, шаренный
       по репликам через Redis, дефолт 100/60с, `QUEUE_FETCH_RATE_*`). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
       Упор в кап BullMQ **не теряет** джобы (откладывает в `waiting`/`delayed`, на графике неотличимо от бэклога),

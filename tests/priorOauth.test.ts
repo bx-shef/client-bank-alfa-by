@@ -15,7 +15,12 @@ import {
   parsePriorTokenResponse,
   extractIntentId,
   extractResourceId,
-  extractAccounts
+  extractAccounts,
+  buildPriorResourceCreatePath,
+  buildPriorResourcePollPath,
+  extractPriorErrorCodes,
+  classifyPriorPoll,
+  PRIOR_RESOURCE_NOT_CREATED
 } from '~/utils/priorOauth'
 
 // Pure Open Banking (СПР) core — same builders/parsers the sandbox script and
@@ -224,5 +229,28 @@ describe('response extraction', () => {
   it('extractAccounts returns [] on an empty/odd shape', () => {
     expect(extractAccounts({ data: {} })).toEqual([])
     expect(extractAccounts(null)).toEqual([])
+  })
+})
+
+describe('async resource paths + poll classification (A5b)', () => {
+  it('buildPriorResourceCreatePath / PollPath under the OB prefix', () => {
+    expect(buildPriorResourceCreatePath('transactions', 'ACC-1')).toBe(`${PRIOR_API_PREFIXES.OB}/accounts/ACC-1/transactions`)
+    expect(buildPriorResourceCreatePath('statements', 'ACC-1')).toBe(`${PRIOR_API_PREFIXES.OB}/accounts/ACC-1/statements`)
+    expect(buildPriorResourcePollPath('transactions', 'ACC-1', 'R9')).toBe(`${PRIOR_API_PREFIXES.OB}/accounts/ACC-1/transactions/R9`)
+  })
+
+  it('extractPriorErrorCodes tolerates errors[] / Errors[] / bare {code} / {error}', () => {
+    expect(extractPriorErrorCodes({ errors: [{ code: 'A' }, { Code: 'B' }, { errorCode: 'C' }] })).toEqual(['A', 'B', 'C'])
+    expect(extractPriorErrorCodes({ Errors: [{ Code: 'X' }] })).toEqual(['X'])
+    expect(extractPriorErrorCodes({ code: 'Y' })).toEqual(['Y'])
+    expect(extractPriorErrorCodes({ error: 'Z' })).toEqual(['Z'])
+    expect(extractPriorErrorCodes({ data: { transaction: [] } })).toEqual([]) // ready — no error node
+    expect(extractPriorErrorCodes(null)).toEqual([])
+  })
+
+  it('classifyPriorPoll: pending (NotCreated) / ready / hard error', () => {
+    expect(classifyPriorPoll({ errors: [{ code: PRIOR_RESOURCE_NOT_CREATED }] })).toEqual({ status: 'pending' })
+    expect(classifyPriorPoll({ data: { transaction: [] } })).toEqual({ status: 'ready' })
+    expect(classifyPriorPoll({ errors: [{ code: 'BY.NBRB.Field.InvalidDate' }] })).toEqual({ status: 'error', codes: ['BY.NBRB.Field.InvalidDate'] })
   })
 })

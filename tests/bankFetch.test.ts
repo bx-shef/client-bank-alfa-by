@@ -29,6 +29,7 @@ function fakeDeps(over: Partial<BankFetchDeps> & { stored?: BankToken | null, ra
       return { ...t, accessToken: 'FRESH' }
     },
     apiConfig: () => ({ base: 'https://alfa:8273', statementPath: '/partner/1.2.0/accounts/statement' }),
+    fetchPrior: async () => [],
     getJson: async (url, accessToken) => {
       calls.getUrl.push(url)
       calls.getToken.push(accessToken)
@@ -143,10 +144,23 @@ describe('fetchBankStatement', () => {
     await expect(fetchBankStatement(query, deps)).rejects.toThrow(/API base not configured/)
   })
 
-  it('Prior online fetch is not wired yet → throws A5b (never a silent empty)', async () => {
-    const priorQ: BankFetchQuery = { ...query, provider: 'prior-by' }
-    const priorTok: BankToken = { ...tok, provider: 'prior-by' }
-    const { deps } = fakeDeps({ stored: priorTok, apiConfig: () => ({ base: 'https://prior', statementPath: '/accounts' }) })
-    await expect(fetchBankStatement(priorQ, deps)).rejects.toThrow(/A5b/)
+  it('Prior: delegates to the async create+poll engine (fetchPrior) with the query + stored token', async () => {
+    const priorQ: BankFetchQuery = { ...query, provider: 'prior-by', account: 'PRIOR-ACC' }
+    const priorTok: BankToken = { ...tok, provider: 'prior-by', accountKey: 'PRIOR-ACC' }
+    const priorItems = [{ account: 'PRIOR-ACC', docId: 't1', direction: 'credit', amount: 5, currency: 'BYN', purpose: '', counterparty: { name: 'X', unp: '', account: '' }, acceptDate: '2026-07-01' }]
+    const fetchPrior = vi.fn(async () => priorItems as never)
+    const { deps } = fakeDeps({ stored: priorTok, apiConfig: () => ({ base: 'https://prior', statementPath: '/accounts' }), fetchPrior })
+    const items = await fetchBankStatement(priorQ, deps)
+    expect(items).toEqual(priorItems)
+    expect(fetchPrior).toHaveBeenCalledOnce()
+    expect(fetchPrior.mock.calls[0]![0]).toEqual(priorQ) // the query
+    expect(fetchPrior.mock.calls[0]![1]).toEqual(priorTok) // the stored token
+  })
+
+  it('unsupported provider (no online path) → throws (never a silent empty)', async () => {
+    const manualQ: BankFetchQuery = { ...query, provider: 'manual' }
+    const manualTok: BankToken = { ...tok, provider: 'manual' }
+    const { deps } = fakeDeps({ stored: manualTok, apiConfig: () => ({ base: 'https://x', statementPath: '/y' }) })
+    await expect(fetchBankStatement(manualQ, deps)).rejects.toThrow(/online fetch not supported/)
   })
 })
