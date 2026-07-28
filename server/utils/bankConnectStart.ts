@@ -13,17 +13,26 @@
 // bank redirects to our callback (A7b-2) with `code` + `state`. Provider config
 // comes from env (bankConnectConfigFromEnv); an unconfigured/unsupported provider is rejected here
 // rather than producing a broken authorize URL.
+//
+// TWO PROVIDER SHAPES (A5b): Alfa's authorize URL is a pure string build, so the gates above are the
+// whole flow. Prior needs a LIVE preamble first (token Б → /accountConsents → RS256-signed `request`
+// JWT — see priorConnectStart.ts), injected here as `buildPriorUrl`; its failure is an upstream 502
+// (the request was well-formed), while an unconfigured provider stays a 400. The gates, the signed
+// state and the admin requirement are IDENTICAL for both — only the URL construction differs.
 
 import { buildAuthorizeUrl, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { signConnectState, type BankConnectState } from './bankConnectState'
+import { sanitizeForLog } from './logSanitize'
+import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 
 /** Non-secret authorize config for a provider, from env. `null` when the provider isn't configured
- *  (feature off) or isn't supported for online connect yet (Prior → A5b). Pure. Alfa's authorize
- *  host is DERIVED from `ALFA_OAUTH_TOKEN_URL` (strip the trailing `/token`) so we don't add another
- *  env var; `ALFA_OAUTH_REDIRECT_URI` must EXACTLY match the one registered in the Alfa app. */
+ *  (feature off) or has no plain code-flow config (Prior uses its own multi-step config —
+ *  `priorConnectConfigFromEnv`). Pure. Alfa's authorize host is DERIVED from `ALFA_OAUTH_TOKEN_URL`
+ *  (strip the trailing `/token`) so we don't add another env var; `ALFA_OAUTH_REDIRECT_URI` must
+ *  EXACTLY match the one registered in the Alfa app. */
 export function bankConnectConfigFromEnv(provider: BankProviderId): AlfaOAuthConfig | null {
-  if (provider !== 'alfa-by') return null // Prior connect is A5b; manual has no OAuth
+  if (provider !== 'alfa-by') return null // Prior has its own config/flow; manual has no OAuth
   const clientId = process.env.ALFA_OAUTH_CLIENT_ID?.trim()
   const tokenUrl = process.env.ALFA_OAUTH_TOKEN_URL?.trim()
   const redirectUri = process.env.ALFA_OAUTH_REDIRECT_URI?.trim()
@@ -53,10 +62,22 @@ export interface ConnectStartDeps {
    *  THROWING if the token isn't valid for that portal (blocks domain spoofing). One call serves
    *  both membership proof and the admin gate. */
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
-  /** Per-provider authorize config from env (null ⇒ not configured / unsupported). */
+  /** Per-provider authorize config from env (null ⇒ not configured / unsupported). Alfa only —
+   *  Prior's multi-step config is `priorConfig` below. */
   config: (provider: BankProviderId) => AlfaOAuthConfig | null
+  /** Prior's connect config from env (null ⇒ not configured). Separate from `config` because
+   *  Prior needs secrets (client_secret + signing key) for its live preamble, A5b. */
+  priorConfig: () => PriorConnectConfig | null
+  /** Run Prior's async preamble (token Б → consent → signed request JWT) and return the authorize
+   *  URL. Injected so this handler stays testable without network/crypto; throws on any step
+   *  failure (mapped to 502 — never a half-built URL). */
+  buildPriorUrl: (config: PriorConnectConfig, state: string, nowMs: number) => Promise<string>
   /** HMAC secret for the connect state (the operator SESSION_SECRET). Empty ⇒ fail-closed. */
   secret: string
+  /** Optional sanitized logger (already-safe strings only) — mirrors the callback's. Without it a
+   *  failed Prior preamble would be completely unobservable (one opaque 502 for a rejected token Б,
+   *  a consent 4xx, a missing intent id, or a malformed signing key). */
+  log?: (msg: string) => void
 }
 
 export interface ConnectStartInput {
@@ -100,8 +121,13 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   }
 
   // Provider must be configured + supported BEFORE we do any REST — a clean 400, not a broken URL.
-  const config = deps.config(provider)
-  if (!config) return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
+  // Alfa uses the plain code-flow config; Prior has its own (multi-step, carries secrets, A5b).
+  const isPrior = provider === 'prior-by'
+  const config = isPrior ? null : deps.config(provider)
+  const priorConfig = isPrior ? deps.priorConfig() : null
+  if (!config && !priorConfig) {
+    return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
+  }
 
   // No signing secret ⇒ the callback could never verify the state (fail-closed) — refuse to start.
   if (!deps.secret) return { status: 503, body: { error: 'connect unavailable (no session secret configured)' } }
@@ -131,6 +157,23 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     exp: nowMs + (input.ttlMs ?? CONNECT_STATE_TTL_MS)
   }
   const signed = signConnectState(state, deps.secret)
-  const authorizeUrl = buildAuthorizeUrl(config, signed)
+
+  // Prior: the authorize URL needs a LIVE preamble (token Б → consent → signed request JWT), so a
+  // bank-side failure is a 502 (upstream), not a 400 — the request itself was well-formed. The
+  // error text is ours (the pure core's), never the raw bank response.
+  if (priorConfig) {
+    try {
+      const authorizeUrl = await deps.buildPriorUrl(priorConfig, signed, nowMs)
+      return { status: 200, body: { authorizeUrl } }
+    } catch (e) {
+      // Log SANITIZED (CRLF-stripped, capped) so the four preamble steps stay distinguishable in
+      // the logs — the admin still gets one opaque message (no bank-controlled text reaches them).
+      deps.log?.(`[bank-connect] prior preamble failed: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
+      return { status: 502, body: { error: 'bank did not grant consent (connect preamble failed)' } }
+    }
+  }
+
+  // Alfa: a pure string build — no bank round-trip needed to start.
+  const authorizeUrl = buildAuthorizeUrl(config!, signed)
   return { status: 200, body: { authorizeUrl } }
 }

@@ -516,15 +516,29 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     REST** → `parseOAuthCallback`→`buildTokenExchangeBody`→обмен на `/token` (`client_secret` в теле, не
     логируется)→`parseTokenResponse`→`saveBankToken` под `state.accountKey`. Ошибки банка не рендерятся, лог
     через `sanitizeForLog` (CRLF/длина). 200/400/502; nginx-троттл. **UI A7c** — `app/components/
-    BankConnectCard.vue` (b24ui `B24Card`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`, admin-гейт
-    `useIsAdmin`, на `/settings`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
+    BankConnectCard.vue` (b24ui `B24Card`/`B24RadioGroup`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
+    admin-гейт `useIsAdmin`, на `/settings`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
     фрейм-токеном → `authorizeUrl` → `window.open` top-level; номер счёта — как есть (только trim крайних пробелов), без переформатирования/case-folding).
     **Connect-поток A7 завершён**; живой прогон — за банк-кредами владельца. Config из env
     (`bankConnectConfigFromEnv`: authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/
-    `_SCOPE`); провайдер не настроен → 400 (до REST), нет секрета → 503 (fail-closed), Приор → A5b;
+    `_SCOPE`); провайдер не настроен → 400 (до REST), нет секрета → 503 (fail-closed);
     `Referrer-Policy: no-referrer` (нет секрета → **503 на старте**, на callback → 400). Чистые ядра (DI,
-    тесты) + тонкие роуты. **UI (A7c) — дальше** (ввод/пикер счёта + top-level навигация; должен отдавать
-    номер счёта **как есть**, без нормализации — бэкенд хранит и запрашивает его дословно).
+    тесты) + тонкие роуты.
+    **Приор в connect-потоке (A5b, слайсы 2b-2d):** у Приора authorize требует **живой преамбулы**, которой
+    у Альфы нет — `server/utils/priorConnectStart.ts` (`buildPriorConnectUrl`: токен Б `client_credentials`
+    `scope=accounts` → `POST /accountConsents` → `openbanking_intent_id` → **RS256-подписанный `request`-JWT**
+    → authorize-URL; конфиг `priorConnectConfigFromEnv` fail-closed — нет любой части env ⇒ `null` ⇒ 400) +
+    подписчик `server/utils/priorJwt.ts` (`signPriorJwt`, `node:crypto`, зеркалит `signJwt` recon-скрипта).
+    `handleBankConnectStart` **диспатчит по провайдеру**: у Альфы — чистая сборка URL, у Приора — инъектируемая
+    преамбула (сбой банка → **502**, не 400); **гейты идентичны** (портал установлен, фрейм-токен, ADMIN,
+    подписанный state с **нашим** memberId) и идут **до** любого обращения к банку. Callback тоже диспатчит:
+    Альфа — `client_secret` в теле, Приор — **`client_secret_basic`** (креды в заголовке `Authorization`,
+    никогда в теле/URL) + свой парсер; Приор может **не вернуть** `refresh_token` → храним пустой (рефреш до
+    переподключения невозможен), а не 502. Оба банка приземляются на **один** callback и различаются по
+    `provider` из **проверенного** state. UI — пикер банка `B24RadioGroup` (тип сужен до подключаемых, `manual`
+    выбрать нельзя); подписи/плейсхолдер/кнопка следуют выбору. Env — `PRIOR_OAUTH_*`
+    (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`).
+    **Осталось:** включить `prior-by` в опрос (`POLLABLE_PROVIDERS`, слайс 3) + прод-СКЗИ (issue #41).
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/

@@ -2,10 +2,14 @@
 // (the bank redirects the admin's browser here after consent, outside the iframe). Auth is the
 // SIGNED state carried in the query — there is no frame token on a bank redirect. Thin I/O over the
 // pure handler (server/utils/bankConnectCallback.ts): verify state → exchange code → saveBankToken.
-// Renders an HTML page. This URL must EXACTLY match ALFA_OAUTH_REDIRECT_URI.
+// Renders an HTML page. This URL must EXACTLY match the redirect URI registered with each bank
+// (ALFA_OAUTH_REDIRECT_URI / PRIOR_OAUTH_REDIRECT_URI) — both providers land here and are told apart
+// by the verified state's `provider`.
 
+import { Buffer } from 'node:buffer'
 import { handleBankConnectCallback, type CallbackDeps } from '../../utils/bankConnectCallback'
 import { bankConnectConfigFromEnv } from '../../utils/bankConnectStart'
+import { priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { resolveAuthConfig } from '../../utils/session'
 import { saveBankToken } from '../../utils/bankTokenStore'
 import { dbQuery } from '../../db/client'
@@ -27,6 +31,22 @@ function liveCallbackDeps(): CallbackDeps {
         method: 'POST',
         body: body.toString(),
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        timeout: 15_000
+      })
+    },
+    priorConfig: priorConnectConfigFromEnv,
+    exchangePriorToken: async (url, body, creds) => {
+      const post = $fetch as unknown as (
+        url: string,
+        opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
+      ) => Promise<unknown>
+      // client_secret_basic: creds ride in the Authorization HEADER (never the body/URL) — do NOT
+      // log opts anywhere.
+      const basic = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64')
+      return post(url, {
+        method: 'POST',
+        body: body.toString(),
+        headers: { 'authorization': `Basic ${basic}`, 'content-type': 'application/x-www-form-urlencoded' },
         timeout: 15_000
       })
     },
