@@ -6,9 +6,6 @@
 
 import type { RestCall } from './companyLookup'
 
-/** The single app.option key this skeleton reads/writes. */
-export const APP_SETTING_KEY = 'cb_test_setting'
-
 /** Pull one option value out of an app.option.get result; null when unset. */
 export function pickAppOption(restResult: Record<string, unknown> | undefined, key: string): string | null {
   const options = (restResult?.result ?? {}) as Record<string, unknown>
@@ -20,6 +17,6 @@ export function pickAppOption(restResult: Record<string, unknown> | undefined, k
  *  (a null resolver result → not installed → no setting) and passes the SDK call; crm-sync's gating
  *  read shares that call so a server-side `expired_token` self-heals via the SDK's reactive refresh
  *  rather than stalling the batch. Returns null when the key is unset. */
-export async function readAppSettingVia(call: RestCall, key: string = APP_SETTING_KEY): Promise<string | null> {
+export async function readAppSettingVia(call: RestCall, key: string): Promise<string | null> {
   return pickAppOption(await call('app.option.get', {}), key)
 }

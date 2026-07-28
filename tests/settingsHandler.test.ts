@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { APP_SETTING_KEY } from '../server/utils/appSettings'
 import { bearerToken, handleReadSetting, handleWriteSetting, verifyFrameAdmin, type SettingsIO } from '../server/utils/settingsHandler'
+
+// The app.option key the routes read/write (chat settings). Handlers take the key explicitly.
+const KEY = 'cb_settings_v1'
+const OTHER = 'cb_other_key'
 
 /** Fake IO backed by a per-host app.option store, recording every REST call so we
  *  can assert isolation (a token only ever hits its own portal host). `admin` controls the
@@ -40,20 +43,20 @@ describe('bearerToken', () => {
 describe('handleReadSetting', () => {
   it('400 when the frame token or domain is missing (no REST call made)', async () => {
     const { io, calls } = makeIO()
-    expect((await handleReadSetting(io, '', 'a.bitrix24.by')).status).toBe(400)
-    expect((await handleReadSetting(io, 'AT', '')).status).toBe(400)
+    expect((await handleReadSetting(io, '', 'a.bitrix24.by', KEY)).status).toBe(400)
+    expect((await handleReadSetting(io, 'AT', '', KEY)).status).toBe(400)
     expect(calls).toHaveLength(0)
   })
 
   it('200 with null before anything is written', async () => {
     const { io } = makeIO()
-    expect(await handleReadSetting(io, 'AT', 'a.bitrix24.by')).toEqual({ status: 200, body: { value: null } })
+    expect(await handleReadSetting(io, 'AT', 'a.bitrix24.by', KEY)).toEqual({ status: 200, body: { value: null } })
   })
 
   it('reads back a value written for the same portal', async () => {
     const { io } = makeIO()
-    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'hello')
-    expect(await handleReadSetting(io, 'AT', 'a.bitrix24.by')).toEqual({ status: 200, body: { value: 'hello' } })
+    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'hello', KEY)
+    expect(await handleReadSetting(io, 'AT', 'a.bitrix24.by', KEY)).toEqual({ status: 200, body: { value: 'hello' } })
   })
 
   it('502 when the REST call throws', async () => {
@@ -62,7 +65,7 @@ describe('handleReadSetting', () => {
         throw new Error('network down')
       }
     }
-    const res = await handleReadSetting(io, 'AT', 'a.bitrix24.by')
+    const res = await handleReadSetting(io, 'AT', 'a.bitrix24.by', KEY)
     expect(res.status).toBe(502)
     expect(res.body.error).toBe('upstream error')
   })
@@ -71,25 +74,25 @@ describe('handleReadSetting', () => {
 describe('handleWriteSetting', () => {
   it('400 when the frame token or domain is missing', async () => {
     const { io, calls } = makeIO()
-    expect((await handleWriteSetting(io, '', 'a.bitrix24.by', 'x')).status).toBe(400)
-    expect((await handleWriteSetting(io, 'AT', '', 'x')).status).toBe(400)
+    expect((await handleWriteSetting(io, '', 'a.bitrix24.by', 'x', KEY)).status).toBe(400)
+    expect((await handleWriteSetting(io, 'AT', '', 'x', KEY)).status).toBe(400)
     expect(calls).toHaveLength(0)
   })
 
   it('200 and sets the app.option key', async () => {
     const { io, byHost } = makeIO()
-    expect(await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v')).toEqual({ status: 200, body: { ok: true } })
-    expect(byHost['a.bitrix24.by']?.[APP_SETTING_KEY]).toBe('v')
+    expect(await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY)).toEqual({ status: 200, body: { ok: true } })
+    expect(byHost['a.bitrix24.by']?.[KEY]).toBe('v')
   })
 
-  it('writes/reads under a custom key (chat settings use SETTINGS_KEY)', async () => {
+  it('writes/reads under the given key only (a separate key is untouched)', async () => {
     const { io, byHost } = makeIO()
-    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', '{"chat":1}', 'cb_settings_v1')
-    expect(byHost['a.bitrix24.by']?.['cb_settings_v1']).toBe('{"chat":1}')
-    expect(byHost['a.bitrix24.by']?.[APP_SETTING_KEY]).toBeUndefined() // separate key untouched
-    expect((await handleReadSetting(io, 'AT', 'a.bitrix24.by', 'cb_settings_v1')).body.value).toBe('{"chat":1}')
-    // default key still reads its own (empty) slot
-    expect((await handleReadSetting(io, 'AT', 'a.bitrix24.by')).body.value).toBeNull()
+    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', '{"chat":1}', KEY)
+    expect(byHost['a.bitrix24.by']?.[KEY]).toBe('{"chat":1}')
+    expect(byHost['a.bitrix24.by']?.[OTHER]).toBeUndefined() // separate key untouched
+    expect((await handleReadSetting(io, 'AT', 'a.bitrix24.by', KEY)).body.value).toBe('{"chat":1}')
+    // a different key reads its own (empty) slot
+    expect((await handleReadSetting(io, 'AT', 'a.bitrix24.by', OTHER)).body.value).toBeNull()
   })
 
   it('502 when the REST call throws', async () => {
@@ -98,27 +101,27 @@ describe('handleWriteSetting', () => {
         throw new Error('boom')
       }
     }
-    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v')).status).toBe(502)
+    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY)).status).toBe(502)
   })
 
   it('403 when the caller is NOT a portal admin — and the write never runs (#182)', async () => {
     const { io, calls, byHost } = makeIO(false) // profile.ADMIN = false
-    const res = await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', 'cb_settings_v1')
+    const res = await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY)
     expect(res.status).toBe(403)
     expect(res.body.error).toMatch(/administrator/i)
     // The gate ran a `profile` check but NO `app.option.set` — nothing was persisted.
     expect(calls.some(c => c.method === 'app.option.set')).toBe(false)
-    expect(byHost['a.bitrix24.by']?.['cb_settings_v1']).toBeUndefined()
+    expect(byHost['a.bitrix24.by']?.[KEY]).toBeUndefined()
   })
 
   it('403 when profile omits ADMIN entirely (fail-closed, not truthy-coerced)', async () => {
     const io: SettingsIO = { callRest: async () => ({ result: { ID: '7' } }) } // no ADMIN key
-    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v')).status).toBe(403)
+    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY)).status).toBe(403)
   })
 
   it('verifies admin BEFORE writing (profile precedes app.option.set)', async () => {
     const { io, calls } = makeIO(true)
-    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v')
+    await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY)
     const iProfile = calls.findIndex(c => c.method === 'profile')
     const iSet = calls.findIndex(c => c.method === 'app.option.set')
     expect(iProfile).toBeGreaterThanOrEqual(0)
@@ -140,7 +143,7 @@ describe('verifyFrameAdmin', () => {
     // not a transport failure — exercises the `res?.result` nullish branch.
     const io: SettingsIO = { callRest: async () => ({}) }
     expect(await verifyFrameAdmin(io, 'AT', 'h')).toEqual({ ok: true, isAdmin: false })
-    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v')).status).toBe(403)
+    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY)).status).toBe(403)
   })
 
   it('ok:false / status 502 (fail-closed) when the profile call throws', async () => {
@@ -159,11 +162,11 @@ describe('verifyFrameAdmin', () => {
 describe('settingsHandler isolation', () => {
   it('a portal only ever reaches its own host with its own token', async () => {
     const { io, calls } = makeIO()
-    await handleWriteSetting(io, 'tok-A', 'a.bitrix24.by', 'AAA')
-    await handleWriteSetting(io, 'tok-B', 'b.bitrix24.by', 'BBB')
+    await handleWriteSetting(io, 'tok-A', 'a.bitrix24.by', 'AAA', KEY)
+    await handleWriteSetting(io, 'tok-B', 'b.bitrix24.by', 'BBB', KEY)
 
-    expect((await handleReadSetting(io, 'tok-A', 'a.bitrix24.by')).body.value).toBe('AAA')
-    expect((await handleReadSetting(io, 'tok-B', 'b.bitrix24.by')).body.value).toBe('BBB')
+    expect((await handleReadSetting(io, 'tok-A', 'a.bitrix24.by', KEY)).body.value).toBe('AAA')
+    expect((await handleReadSetting(io, 'tok-B', 'b.bitrix24.by', KEY)).body.value).toBe('BBB')
 
     // Token A never touched host B and vice versa — the handler passes the token
     // straight to the domain the caller presented, and B24 scopes it there.

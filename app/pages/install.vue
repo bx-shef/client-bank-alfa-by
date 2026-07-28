@@ -62,7 +62,7 @@ const diagnostics = computed(() => {
   return {
     mode: isUseB24.value ? 'B24 frame' : 'Standalone (mock)',
     domain,
-    // Shown so operators can copy it for the server-side check (scripts/check-app-option.sh).
+    // Shown on the diagnostics panel so operators can identify the portal (support/logs).
     memberId,
     targetOrigin: isUseB24.value ? b24Instance.targetOrigin() : '—',
     // Backend events handler the install script binds — surfaced so a misconfigured

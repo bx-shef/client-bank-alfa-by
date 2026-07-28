@@ -1,6 +1,6 @@
 # Деплой в Битрикс24 Вайбкод Black Hole (альтернативный таргет)
 
-> Last reviewed: 2026-07-21
+> Last reviewed: 2026-07-28
 
 Как выгрузить это приложение в **Битрикс24 Vibecode Black Hole** — закрытый Bitrix-Cloud VM,
 управляемый по REST (без SSH), приложение слушает `:3000` и отдаётся по HTTPS
@@ -125,9 +125,9 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
 > считает служебную зону **открытой** (пароль пуст ⇒ вход выключен ⇒ зона распахнута), и под
 > публичным сервером `/queues`, `/api/ops/*`, `/app`, `/settings` доступны **кому угодно** по `appUrl`.
 > В основном nginx-деплое это прикрывал ещё и `deny`/сеть; в Black Hole nginx нет — единственная
-> защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie). Диагностические
-> `/api/queues` и `/api/b24/app-option-check` **fail-closed** app-гардом (`B24_APPLICATION_TOKEN`
-> пуст ⇒ 403), их PUBLIC не открывает — а вот операторскую зону открывает.
+> защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie). Диагностический
+> `/api/queues` **fail-closed** app-гардом (`B24_APPLICATION_TOKEN`
+> пуст ⇒ 403), его PUBLIC не открывает — а вот операторскую зону открывает.
 >
 > **Enforcement:** `deploy/vibecode-deploy.sh` теперь **fail-closed** — под `ACCESS_POLICY=PUBLIC`
 > отказывается деплоить, если в `ENV_JSON` нет непустого `PUBLIC_PAGE_BASIC_AUTH_PASS` (ловит забытый

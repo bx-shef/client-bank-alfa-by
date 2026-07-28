@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import ArrowLeftMIcon from '@bitrix24/b24icons-vue/outline/ArrowLeftMIcon'
 import { useB24 } from '~/composables/useB24'
 import { pageTitle } from '~/utils/landing'
 
@@ -25,6 +26,15 @@ onMounted(async () => {
 
 <template>
   <main class="mx-auto max-w-5xl px-4 py-6">
+    <!-- Back to the in-portal metrics/operations view (#219 follow-up: /import had no way back). -->
+    <B24Button
+      :icon="ArrowLeftMIcon"
+      label="К сводке операций"
+      color="air-tertiary-no-accent"
+      size="sm"
+      to="/app"
+      class="mb-4"
+    />
     <h1 class="text-2xl font-semibold">
       Загрузка выписки
     </h1>
