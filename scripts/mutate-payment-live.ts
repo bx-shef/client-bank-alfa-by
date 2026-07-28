@@ -8,7 +8,8 @@
 //   pnpm mutate:test --apply    # actually call crm.item.payment.pay, then confirm paid
 //   pnpm mutate:test --revert   # restore: sale.payment.update PAID=N (scope sale)
 //   pnpm mutate:test --invoice <id> --stage <stageId> [--apply]  # invoice → crm.item.update stageId
-// Optional: --deal <id> (default 15 — seed «Сделка Опт» with one unpaid payment).
+// Optional: --deal <id>. Without it the seeded «Сделка Опт» is FOUND BY ITS XML_ID rather than
+// assumed — item ids are per portal, so a hardcoded default only matched the portal it was written on.
 
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
@@ -28,7 +29,9 @@ const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const REVERT = argv.includes('--revert')
 const dealArg = argv[argv.indexOf('--deal') + 1]
-const DEAL_ID = argv.includes('--deal') && dealArg ? Number(dealArg) : 15
+const dealFromArg = argv.includes('--deal') && dealArg ? Number(dealArg) : 0
+/** Title the seed gives the deal that carries one unpaid payment (scripts/seed-test-b24.mjs). */
+const SEED_DEAL_TITLE = '[TEST] Сделка Опт'
 // Invoice-stage mode: `--invoice <id> --stage <stageId>` transitions a smart-invoice
 // via the SAME builder/transport crm-sync uses (dry-run by default; --apply writes).
 const invoiceArg = argv[argv.indexOf('--invoice') + 1]
@@ -96,6 +99,21 @@ if (INVOICE_ID) {
   process.exit(0)
 }
 
+/** Resolve the seeded deal: an explicit --deal wins, else find «[TEST] Сделка Опт» by TITLE.
+ *  (The seed dedupes deals by title — it sets no XML_ID on them — and `crm.item.list` rejects
+ *  XML_ID in a deal filter anyway. Item ids are per portal, so nothing may be hardcoded here.) */
+async function resolveDealId(): Promise<number> {
+  if (dealFromArg > 0) return dealFromArg
+  const res = await call('crm.deal.list', { filter: { TITLE: SEED_DEAL_TITLE }, select: ['ID'] })
+  const rows = (res?.result as { ID: string }[]) ?? []
+  if (!rows.length) {
+    warn(`Засеянная сделка «${SEED_DEAL_TITLE}» не найдена — прогоните \`pnpm seed:b24\` (или укажите --deal <id>).`)
+    process.exit(1)
+  }
+  return Number(rows[0]!.ID)
+}
+const DEAL_ID = await resolveDealId()
+
 head(`#109 mutation slice · сделка ${DEAL_ID} · ${MODE} · ` + maskedHook)
 
 // Read the deal's payments (include paid so we see the full picture).
@@ -108,8 +126,17 @@ const target = payments[0]
 console.log(`${C.dim}Цель: ${JSON.stringify(target)}${C.reset}`)
 
 if (REVERT) {
-  // Restore the fixture: mark the payment unpaid again (scope sale).
-  await call('sale.payment.update', { id: Number(target.id), fields: { paid: 'N' } })
+  // Restore the fixture: mark the payment unpaid again (scope sale). `sale.payment.update`
+  // rejects a fields-object that omits `paySystemId` ("Required fields: paySystemId"), so read
+  // the payment's current pay system and pass it back unchanged alongside the flag.
+  const cur = await call('sale.payment.list', { filter: { id: Number(target.id) }, select: ['id', 'paySystemId'] })
+  const payRow = ((cur?.result as { payments?: { paySystemId?: number | string }[] })?.payments ?? [])[0]
+  const paySystemId = Number(payRow?.paySystemId)
+  if (!Number.isFinite(paySystemId) || paySystemId <= 0) {
+    err(`Не удалось прочитать paySystemId оплаты ${target.id} — откат невозможен.`)
+    process.exit(1)
+  }
+  await call('sale.payment.update', { id: Number(target.id), fields: { paid: 'N', paySystemId } })
   const after = await findDealPayments(DEAL_ID, { includePaid: true }, call)
   ok(`Сторно выполнено — оплата ${target.id} снова НЕ оплачена (для повторного прогона).`)
   console.log(`${C.dim}${JSON.stringify(after[0])}${C.reset}`)
