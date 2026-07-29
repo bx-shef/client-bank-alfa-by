@@ -497,7 +497,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/bankTokenStore.ts` — **стор банк-OAuth токенов** (Альфа/Приор online-fetch, стадия 5; A3) над
     инъектируемым `QueryFn`: `saveBankToken`/`getBankToken`/`listBankTokensForPortal`/`deleteBankTokensForPortal`.
     refresh шифрован `secretCrypto` (тот же `B24_TOKEN_ENC_KEY`), access — в открытом. Ключ `(member_id, provider,
-    account_key)` — **много на портал** (счета/«моя компания»), полностью UPDATE-able (банк ротирует refresh — нет
+    account_key)` — **много на портал** (счета/«моя компания»; **Альфа, Приор и ручная загрузка
+    работают одновременно** — подключения накапливаются, каждый connect добавляет ещё один счёт, а не
+    заменяет предыдущий; ручной импорт `/import` — независимый путь и от онлайн-подключений не зависит),
+    полностью UPDATE-able (банк ротирует refresh — нет
     write-once/тумбстоуна). `list` резилиентен (битую строку пропускает+логирует, `get` — fail-loud). Банк-apiKey
     **никогда** в `app.option`. Чистка на ONAPPUNINSTALL (`deletePortal`). Тесты — на фейк-`QueryFn` + in-memory-модель.
   - `server/utils/ensureBankToken.ts` — **конкуренто-безопасный рефреш банк-токена** (стадия 5; A4), по образцу

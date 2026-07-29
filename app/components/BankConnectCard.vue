@@ -13,6 +13,12 @@ import { useBankConnect } from '~/composables/useBankConnect'
 //
 // Both banks are offered (A5b added Prior). A provider the server has no env config for is refused
 // there with a clean 400 ("… недоступен"), so the picker never needs to know the deployment's config.
+//
+// Connections ACCUMULATE: the bank-token store is keyed (member_id, provider, account_key), so a
+// portal can hold Alfa and Prior and several accounts of each at once — the picker connects ONE more
+// account per run, it never replaces the previous one. Manual file upload (/import) is a separate
+// path entirely and keeps working regardless. The copy below says so, because "подключить" reads
+// like a single exclusive choice otherwise.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const { start, syncEnabled, connecting, error, enabled } = useBankConnect()
 
@@ -96,6 +102,12 @@ async function onConnect() {
       <p class="text-sm text-(--ui-color-base-2)">
         Подключите счёт — приложение будет автоматически забирать выписку и заносить операции
         в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда.
+      </p>
+
+      <p class="text-sm text-(--ui-color-base-3)">
+        Подключения складываются: Альфа-Банк, Приорбанк и несколько счетов в каждом могут работать
+        одновременно — подключайте по одному счёту за раз, предыдущие остаются. Ручная загрузка
+        файла выписки доступна всегда и не зависит от онлайн-подключения.
       </p>
 
       <B24RadioGroup
