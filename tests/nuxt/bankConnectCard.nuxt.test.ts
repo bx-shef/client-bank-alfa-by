@@ -21,11 +21,29 @@ vi.mock('~/composables/useFrameAuth', () => ({
   frameFetchError: (_e: unknown, f: string) => f
 }))
 
-const fetchMock = vi.fn()
+// The card now also loads the connected-accounts list on mount (#404), so the $fetch mock must
+// route BY URL rather than by call order — an order-based mock would hand the accounts request the
+// connect response (and vice versa) depending on which fired first.
+const connectReply = { value: {} as Record<string, unknown> }
+const fetchMock = vi.fn((url: string) => {
+  if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
+  return Promise.resolve(connectReply.value)
+})
 vi.stubGlobal('$fetch', fetchMock)
 
+/** The reply /api/bank/connect should give for this test. */
+function replyConnect(reply: Record<string, unknown>) {
+  connectReply.value = reply
+}
+
+/** Calls the component made to /api/bank/connect (ignoring the accounts load). */
+function connectCalls() {
+  return fetchMock.mock.calls.filter(c => c[0] === '/api/bank/connect')
+}
+
 afterEach(() => {
-  fetchMock.mockReset()
+  fetchMock.mockClear()
+  connectReply.value = {}
   mockState.isInit = true
   mockState.isAdmin = true
 })
@@ -72,7 +90,7 @@ describe('BankConnectCard connect interaction', () => {
   it('clicking connect opens the bank tab synchronously and points it at the authorize URL', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
-    fetchMock.mockResolvedValueOnce({ authorizeUrl: 'https://alfa/authorize?s=1' })
+    replyConnect({ authorizeUrl: 'https://alfa/authorize?s=1' })
     // Fake window the component navigates after the fetch resolves.
     const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
     const openSpy = vi.fn(() => fakeWin as unknown as Window)
@@ -96,7 +114,7 @@ describe('BankConnectCard connect interaction', () => {
   it('shows an error and closes the blank tab when the backend rejects', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
-    fetchMock.mockResolvedValueOnce({ error: 'provider not available' })
+    replyConnect({ error: 'provider not available' })
     const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
     vi.stubGlobal('open', vi.fn(() => fakeWin as unknown as Window))
 
@@ -115,7 +133,7 @@ describe('BankConnectCard connect interaction', () => {
   it('offers both banks and sends the SELECTED provider (Prior) to the backend', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
-    fetchMock.mockResolvedValueOnce({ authorizeUrl: 'https://prior/authorize?s=1' })
+    replyConnect({ authorizeUrl: 'https://prior/authorize?s=1' })
     const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
     vi.stubGlobal('open', vi.fn(() => fakeWin as unknown as Window))
     vi.stubGlobal('$fetch', fetchMock) // earlier tests unstubAllGlobals(), which drops the $fetch stub
@@ -139,7 +157,7 @@ describe('BankConnectCard connect interaction', () => {
     await nextTick()
 
     // The backend got prior-by (not the alfa-by default).
-    const body = (fetchMock.mock.calls[0]![1] as { body: { provider: string, accountKey: string } }).body
+    const body = (connectCalls()[0]![1] as { body: { provider: string, accountKey: string } }).body
     expect(body.provider).toBe('prior-by')
     expect(body.accountKey).toBe('BY13PJCB')
     vi.unstubAllGlobals()

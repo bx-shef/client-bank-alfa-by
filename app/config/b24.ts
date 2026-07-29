@@ -26,7 +26,13 @@
  * ⚠ Adding a scope forces re-consent on already-installed portals — coordinate with
  * the owner before shipping (`documentgenerator` added with the bridge wiring, #109).
  */
-export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'documentgenerator', 'user_brief', 'placement'] as const
+// `userfieldconfig` — distribution smart-process provisioning creates the custom fields that carry
+// a payment's amount/currency/link (`userfieldconfig.add`). It was MISSING here while the code
+// already called those methods, so provisioning failed on every portal with an opaque
+// «provisioning failed» (#408) — the live run only worked because the test webhook had been granted
+// the scope by hand. ⚠ Adding it (like `sale`/`documentgenerator` before) requires RE-CONSENT on
+// already-installed portals.
+export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'] as const
 
 /**
  * Backend path that receives Bitrix24 server events. Same origin as the app (the

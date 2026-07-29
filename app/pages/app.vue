@@ -236,10 +236,11 @@ onMounted(async () => {
             class="mt-6 border-t border-(--ui-color-design-tinted-na-stroke) pt-4"
           >
             <p class="mb-2 text-sm text-(--ui-color-base-3)">
-              Распределение платежей — на полной странице настроек.
+              Здесь — все настройки приложения. Отдельно вынесено только распределение платежей:
+              там видно, какой платёж на какой счёт или сделку разнесён.
             </p>
             <B24Button
-              label="Все настройки"
+              label="Распределение платежей"
               color="air-secondary-no-accent"
               size="sm"
               to="/settings"

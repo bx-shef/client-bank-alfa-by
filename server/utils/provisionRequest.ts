@@ -76,7 +76,33 @@ export async function handleProvisionRequest(
         storedChanged: outcome.storedChanged
       }
     }
-  } catch {
-    return { status: 502, body: { error: 'provisioning failed' } }
+  } catch (e) {
+    // A bare «provisioning failed» left the admin with nothing to act on (#408). Classify what the
+    // portal actually said: a missing scope needs a re-install/consent, an access error needs
+    // portal rights — completely different actions, and neither is guessable from a generic 502.
+    // The RAW message is logged server-side only; the client gets a classified, secret-free text.
+    const raw = e instanceof Error ? e.message : String(e)
+    console.warn(`[provision] failed: ${raw.slice(0, 500)}`)
+    return { status: 502, body: { error: classifyProvisionError(raw) } }
   }
+}
+
+/** Map a portal/transport error to an actionable Russian message. Pure — the caller logs the raw
+ *  text; this only decides what the admin is told. Order matters: scope before access, because a
+ *  missing scope also surfaces as an access-ish error on some methods. */
+export function classifyProvisionError(raw: string): string {
+  const s = raw.toLowerCase()
+  if (s.includes('insufficient_scope') || s.includes('userfieldconfig')) {
+    return 'Приложению не выдан доступ «userfieldconfig», без него нельзя создать поля смарт-процессов. Переустановите приложение и подтвердите запрошенные права.'
+  }
+  if (s.includes('access_denied') || s.includes('access denied') || s.includes('rights')) {
+    return 'Портал отказал в правах: смарт-процессы создаёт только администратор с доступом к CRM.'
+  }
+  if (s.includes('expired_token') || s.includes('invalid_token')) {
+    return 'Истекла авторизация приложения в портале. Переустановите приложение и повторите.'
+  }
+  if (s.includes('timeout') || s.includes('econn') || s.includes('fetch failed') || s.includes('network')) {
+    return 'Портал не ответил вовремя. Повторите попытку — действие идемпотентно, дубликатов не будет.'
+  }
+  return 'Портал вернул ошибку при настройке смарт-процессов. Повторите попытку; если повторяется — пришлите этот текст в поддержку.'
 }

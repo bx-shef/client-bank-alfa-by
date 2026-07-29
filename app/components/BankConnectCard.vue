@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useBankConnect } from '~/composables/useBankConnect'
+import { BANK_LABELS } from '~/utils/bankLabels'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank, enters the account number and starts
 // the OAuth connect: POST /api/bank/connect (frame token) → the backend returns the bank authorize
@@ -29,8 +30,8 @@ const started = ref(false)
 /** The banks that have an online (OAuth) connect path. `manual` is file upload — not connectable,
  *  so the picker's type is the NARROWED union (a `manual` value can't be selected or sent). */
 const PROVIDERS = [
-  { value: 'alfa-by' as const, label: 'Альфа-Банк' },
-  { value: 'prior-by' as const, label: 'Приорбанк' }
+  { value: 'alfa-by' as const, label: BANK_LABELS['alfa-by'] },
+  { value: 'prior-by' as const, label: BANK_LABELS['prior-by'] }
 ]
 type ConnectableProvider = (typeof PROVIDERS)[number]['value']
 const provider = ref<ConnectableProvider>('alfa-by')
@@ -99,6 +100,12 @@ async function onConnect() {
     </template>
 
     <div class="space-y-4">
+      <!-- What is already bound, with a per-row disconnect (#404). Above the form on purpose:
+           the first question after a connect is «что у меня подключено?». -->
+      <ConnectedBankAccounts ref="connected" />
+
+      <hr class="border-(--ui-color-design-tinted-na-stroke)">
+
       <p class="text-sm text-(--ui-color-base-2)">
         Подключите счёт — приложение будет автоматически забирать выписку и заносить операции
         в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда.
