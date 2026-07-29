@@ -192,8 +192,10 @@ export async function deleteBankToken(query: QueryFn, memberId: string, provider
 
 /** Переименовать ключ счёта у подключения (#407): подключились без счёта → выбрали счёт.
  *  Member-scoped в обоих условиях, поэтому чужую строку не тронуть даже подделав provider/ключи.
- *  `ON CONFLICT DO NOTHING` + проверка: если под новым ключом уже есть подключение, переименование
- *  НЕ выполняется (иначе молча затёрли бы живой токен другого счёта) — вызывающий отвечает 409. */
+ *  Занятый номер НЕ перезаписывается (иначе молча затёрли бы живой токен другого счёта): сперва
+ *  проверка, а на случай гонки двух одновременных привязок — перехват нарушения первичного ключа
+ *  `(member_id, provider, account_key)`. Без него проигравший получил бы 500 вместо честного 409
+ *  (реальный сценарий — двойной клик по кнопке привязки). */
 export async function renameBankTokenAccount(
   query: QueryFn, memberId: string, provider: BankProviderId, fromKey: string, toKey: string
 ): Promise<'renamed' | 'not-found' | 'conflict'> {
@@ -202,12 +204,19 @@ export async function renameBankTokenAccount(
     [memberId, provider, toKey]
   )
   if (taken.length > 0) return 'conflict'
-  const rows = await query(
-    `UPDATE bank_tokens SET account_key = $4, updated_at = now()
-      WHERE member_id = $1 AND provider = $2 AND account_key = $3
-      RETURNING member_id`,
-    [memberId, provider, fromKey, toKey]
-  )
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await query(
+      `UPDATE bank_tokens SET account_key = $4, updated_at = now()
+        WHERE member_id = $1 AND provider = $2 AND account_key = $3
+        RETURNING member_id`,
+      [memberId, provider, fromKey, toKey]
+    )
+  } catch (e) {
+    // 23505 = unique_violation: между проверкой и UPDATE этот номер занял параллельный запрос.
+    if ((e as { code?: string })?.code === '23505') return 'conflict'
+    throw e
+  }
   return rows.length > 0 ? 'renamed' : 'not-found'
 }
 

@@ -7,6 +7,7 @@ import {
   DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
 } from '../server/queue/cron'
+import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
@@ -1339,6 +1340,16 @@ describe('cron helpers', () => {
     expect(POLLABLE_PROVIDERS.has('prior-by')).toBe(true)
     expect(POLLABLE_PROVIDERS.has('manual')).toBe(false)
     expect(accountsForPolling([])).toEqual([])
+  })
+
+  it('НЕ опрашивает подключение без выбранного счёта (#407)', () => {
+    // У банка нет такого «номера»: задача падала бы на каждом тике вечно, сжигая общий лимит
+    // запросов (у Приора одна задача ~10 запросов) и забивая лог. Ждём привязки счёта.
+    const out = accountsForPolling([
+      { memberId: 'M', provider: 'alfa-by', accountKey: provisionalAccountKey('n1') },
+      { memberId: 'M', provider: 'alfa-by', accountKey: 'BY01ALFA' }
+    ])
+    expect(out).toEqual([{ memberId: 'M', providerId: 'alfa-by', accounts: ['BY01ALFA'] }])
   })
   it('pollWindow returns [today-lookback, today] as ISO YYYY-MM-DD', () => {
     const now = new Date('2026-07-17T09:30:00.000Z')

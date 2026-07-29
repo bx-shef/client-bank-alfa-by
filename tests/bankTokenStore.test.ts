@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { decryptSecret } from '../server/utils/secretCrypto'
 import {
   deleteBankTokensForPortal,
+  renameBankTokenAccount,
   getBankToken,
   listAllBankAccounts,
   listBankTokensForPortal,
@@ -123,6 +124,65 @@ describe('listAllBankAccounts (A6 registry)', () => {
   it('empty store → []', async () => {
     const { query } = fakeQuery([])
     expect(await listAllBankAccounts(query)).toEqual([])
+  })
+})
+
+// Привязка счёта к подключению, сделанному без него (#407). Проверяем ровно то, что защищает
+// данные: member/provider-скоуп в SQL, отказ вместо затирания занятого номера, и что гонка двух
+// одновременных привязок даёт честный conflict, а не необработанное падение.
+describe('renameBankTokenAccount', () => {
+  /** Фейк с двумя ответами: первый — на проверку занятости, второй — на UPDATE…RETURNING. */
+  function twoStep(taken: Record<string, unknown>[], updated: Record<string, unknown>[]) {
+    const calls: { sql: string, params?: unknown[] }[] = []
+    let n = 0
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      calls.push({ sql, params })
+      return n++ === 0 ? taken : updated
+    })
+    return { query, calls }
+  }
+
+  it('переименовывает и скоупит запрос по порталу И провайдеру', async () => {
+    const { query, calls } = twoStep([], [{ member_id: 'm1' }])
+    expect(await renameBankTokenAccount(query, 'm1', 'alfa-by', '~pending:n1', 'BY01')).toBe('renamed')
+    const update = calls[1]!
+    expect(update.sql).toMatch(/UPDATE bank_tokens/i)
+    expect(update.sql).toMatch(/member_id = \$1 AND provider = \$2 AND account_key = \$3/i)
+    expect(update.params).toEqual(['m1', 'alfa-by', '~pending:n1', 'BY01'])
+  })
+
+  it('занятый номер → conflict, и UPDATE вообще не выполняется', async () => {
+    const { query, calls } = twoStep([{ '?column?': 1 }], [])
+    expect(await renameBankTokenAccount(query, 'm1', 'alfa-by', '~pending:n1', 'BY01')).toBe('conflict')
+    // Живой токен другого счёта не должен быть затёрт даже случайно.
+    expect(calls).toHaveLength(1)
+  })
+
+  it('нет такой строки → not-found', async () => {
+    const { query } = twoStep([], [])
+    expect(await renameBankTokenAccount(query, 'm1', 'alfa-by', '~pending:n1', 'BY01')).toBe('not-found')
+  })
+
+  it('гонка двух привязок (unique_violation) → conflict, а не падение', async () => {
+    // Между проверкой и UPDATE номер занял параллельный запрос: без перехвата 23505 проигравший
+    // получил бы 500 вместо честного 409 — реальный сценарий двойного клика.
+    let n = 0
+    const query = vi.fn(async () => {
+      if (n++ === 0) return []
+      const e = new Error('duplicate key value violates unique constraint') as Error & { code?: string }
+      e.code = '23505'
+      throw e
+    })
+    expect(await renameBankTokenAccount(query, 'm1', 'alfa-by', '~pending:n1', 'BY01')).toBe('conflict')
+  })
+
+  it('прочие ошибки БД пробрасываются — молчать о них нельзя', async () => {
+    let n = 0
+    const query = vi.fn(async () => {
+      if (n++ === 0) return []
+      throw new Error('connection lost')
+    })
+    await expect(renameBankTokenAccount(query, 'm1', 'alfa-by', '~pending:n1', 'BY01')).rejects.toThrow('connection lost')
   })
 })
 

@@ -12,6 +12,7 @@ import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { listBankAccountsForPortal } from '../utils/bankTokenStore'
 import { getImportResult } from '../utils/importResultStore'
+import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import { queueEnabled } from '../queue/connection'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
@@ -26,7 +27,11 @@ function liveDeps(): SetupStatusDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
-    countAccounts: async memberId => (await listBankAccountsForPortal(dbQuery, memberId)).length,
+    // Подключения без выбранного счёта (#407) НЕ считаются: с них ничего не забрать, а зелёная
+    // строка «банк подключён» на таком портале — ровно та ложная галочка, ради которой экран и
+    // существует.
+    countAccounts: async memberId => (await listBankAccountsForPortal(dbQuery, memberId))
+      .filter(a => !isPendingAccountKey(a.accountKey)).length,
     // BOTH conditions the cron actually needs, not just the flag: the scheduler returns early
     // without Redis (`queueEnabled`), so reporting the flag alone would show a confident green
     // «опрос включён» while nothing polls at all — the exact silent gap this screen exists to

@@ -35,6 +35,13 @@ function connectedAgo(ms: number): string {
   return formatRelativeTime(new Date(ms).toISOString(), Date.now())
 }
 
+/** Подпись строки для скринридера. Временный ключ служебный — озвучивать его бессмысленно. */
+function rowLabel(a: ConnectedBankAccount): string {
+  return isPendingAccountKey(a.accountKey)
+    ? `${providerLabel(a.provider)}, счёт не выбран`
+    : `${providerLabel(a.provider)} ${a.accountKey}`
+}
+
 async function onAssign(a: ConnectedBankAccount) {
   const key = rowKey(a)
   // Успех → строка перечитается уже с настоящим номером, черновик больше не нужен.
@@ -103,14 +110,17 @@ defineExpose({ reload: load })
           <div class="min-w-0">
             <div class="flex items-center gap-2">
               <span class="font-medium">{{ providerLabel(a.provider) }}</span>
+              <!-- Два РАЗНЫХ состояния, поэтому разные цвета и оба показываются вместе: у Приора
+                   refresh часто пуст, и раньше после привязки счёта бейдж «счёт не выбран» сменялся
+                   на «нужно переподключить» — читалось так, будто привязка что-то сломала. -->
               <B24Badge
                 v-if="isPendingAccountKey(a.accountKey)"
-                color="air-primary-warning"
+                color="air-secondary-accent"
                 size="xs"
                 label="счёт не выбран"
               />
               <B24Badge
-                v-else-if="!a.hasRefresh"
+                v-if="!a.hasRefresh"
                 color="air-primary-warning"
                 size="xs"
                 label="нужно переподключить"
@@ -161,7 +171,7 @@ defineExpose({ reload: load })
               >Отключить?</span>
               <B24Button
                 label="Да, отключить"
-                :aria-label="`Да, отключить ${providerLabel(a.provider)} ${a.accountKey}`"
+                :aria-label="`Да, отключить ${rowLabel(a)}`"
                 color="air-primary-alert"
                 size="xs"
                 :loading="removing === rowKey(a)"
@@ -178,7 +188,7 @@ defineExpose({ reload: load })
             <B24Button
               v-else
               label="Отключить"
-              :aria-label="`Отключить ${providerLabel(a.provider)} ${a.accountKey}`"
+              :aria-label="`Отключить ${rowLabel(a)}`"
               color="air-secondary-no-accent"
               size="xs"
               @click="() => { confirming = rowKey(a) }"

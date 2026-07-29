@@ -12,6 +12,7 @@
 
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { FetchJob } from './topology'
+import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import type { BankAccountRef } from '../utils/bankTokenStore'
 
 /** Interval in ms from a minutes setting (clamped to a sane floor of 1 min).
@@ -81,6 +82,10 @@ export function accountsForPolling(
   for (const ref of refs) {
     if (!POLLABLE_PROVIDERS.has(ref.provider)) continue
     if (isDemoAccount(ref.accountKey)) continue
+    // Подключение без выбранного счёта (#407) опрашивать НЕЛЬЗЯ: у банка нет такого номера, задача
+    // будет падать на каждом тике вечно — сжигая общий лимит запросов и забивая лог. У Приора это
+    // ещё и дорого (одна задача ~10 запросов). Ждём, пока админ привяжет счёт.
+    if (isPendingAccountKey(ref.accountKey)) continue
     const key = `${ref.memberId}|${ref.provider}`
     let g = groups.get(key)
     if (!g) {

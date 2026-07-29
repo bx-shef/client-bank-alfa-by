@@ -57,8 +57,9 @@ describe('ConnectedBankAccounts', () => {
     const wrapper = await mountReady()
     expect(wrapper.text()).toContain('счёт не выбран')
     expect(wrapper.find('[data-testid="pending-alfa-by"]').exists()).toBe(true)
-    // Временный ключ — служебный, показывать его пользователю нельзя.
-    expect(wrapper.text()).not.toContain(PENDING)
+    // Временный ключ служебный: его не должно быть НИ в тексте, НИ в атрибутах (aria-label
+    // раньше подставлял его в подпись кнопки, и text() этого не ловил).
+    expect(wrapper.html()).not.toContain(PENDING)
   })
 
   it('привязка отправляет ВРЕМЕННЫЙ ключ и новый номер, затем перечитывает список', async () => {
