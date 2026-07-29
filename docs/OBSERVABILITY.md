@@ -31,7 +31,7 @@
   - `withSpan('http.<route>', …)` / `withFrameRouteSpan(...)` — **все фрейм-токен HTTP-роуты** (порт #220/#221):
     роуты настроек (`chat-settings.get/post`, `settings.get/post`) + через общий хелпер `server/utils/frameRouteSpan.ts`
     остальные — `chat-search`, `app-rating.get/post`, `feedback.post`, `import.post`, `poll-now.post`,
-    `import/{status,metrics,metrics-reset}`, `bank/{connect,accounts,disconnect}` (#404) и `distribution/{ledger,provision,recompute}` (у последних
+    `import/{status,metrics,metrics-reset}`, `bank/{connect,accounts,disconnect}` (#404), `setup-status` (#409/#405) и `distribution/{ledger,provision,recompute}` (у последних
     — внешний `http.<route>`-спан поверх внутреннего бизнес-спана `ledger-read`/`provision-sp`/`ledger-recompute`)
     (`{http.method, http.op, http.outcome, portal.hash}`). `http.outcome` — PII-safe enum из `httpOutcomeForStatus(status)`
     (`ok/no_auth/forbidden/bad_request/conflict/throttled/unavailable/upstream_error/error`); тело запроса/ответа

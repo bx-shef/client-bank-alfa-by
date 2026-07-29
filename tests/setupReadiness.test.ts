@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildReadiness, isFullyReady, nextPollAt, type ReadinessSnapshot } from '~/utils/setupReadiness'
+import { buildReadiness, isFullyReady, type ReadinessSnapshot } from '~/utils/setupReadiness'
 import { parsePortalSettings } from '~/utils/settings'
 import { PAYMENT_SP_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY } from '~/config/distributionSp'
 
@@ -89,21 +89,5 @@ describe('buildReadiness', () => {
     const items = buildReadiness(snap({ settings, connectedAccounts: 1, pollEnabled: true }))
     expect(isFullyReady(items)).toBe(true)
     expect(items.every(i => i.hint === '')).toBe(true)
-  })
-})
-
-describe('nextPollAt', () => {
-  it('is last run + interval', () => {
-    expect(nextPollAt(snap({ pollEnabled: true, pollIntervalMin: 5, lastRunMs: 1_000_000 })))
-      .toBe(1_000_000 + 5 * 60_000)
-  })
-
-  it('is null when polling is off, never ran, or the interval is nonsense', () => {
-    // Without a run to anchor to we cannot know the cron's phase — inventing a time would be worse
-    // than admitting we don't know it yet.
-    expect(nextPollAt(snap({ pollEnabled: false, lastRunMs: 1_000_000 }))).toBeNull()
-    expect(nextPollAt(snap({ pollEnabled: true, lastRunMs: null }))).toBeNull()
-    expect(nextPollAt(snap({ pollEnabled: true, lastRunMs: 1, pollIntervalMin: 0 }))).toBeNull()
-    expect(nextPollAt(snap({ pollEnabled: true, lastRunMs: 1, pollIntervalMin: Number.NaN }))).toBeNull()
   })
 })

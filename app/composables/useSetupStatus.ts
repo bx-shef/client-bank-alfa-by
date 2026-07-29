@@ -24,12 +24,17 @@ const DEFAULTS: SetupStatus = {
 
 export function useSetupStatus() {
   const status = ref<SetupStatus>({ ...DEFAULTS })
+  /** Whether we are inside the portal frame (a token exists). Resolved by `load()` from OUR OWN
+   *  frameAuth rather than borrowed from useChatSettings — that one only flips its flag after ITS
+   *  load resolves, so a child mounting first would flash a false «предпросмотр» in-portal. */
+  const inFrame = ref(false)
   const loading = ref(false)
   const loaded = ref(false)
   const error = ref('')
 
   async function load(): Promise<void> {
     const a = frameAuth()
+    inFrame.value = a !== null
     if (!a) {
       status.value = { ...DEFAULTS }
       loaded.value = true
@@ -53,5 +58,5 @@ export function useSetupStatus() {
     }
   }
 
-  return { status, loading, loaded, error, load }
+  return { status, inFrame, loading, loaded, error, load }
 }

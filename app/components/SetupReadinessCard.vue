@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSetupStatus } from '~/composables/useSetupStatus'
 import { useChatSettings } from '~/composables/useChatSettings'
-import { buildReadiness, isFullyReady, nextPollAt } from '~/utils/setupReadiness'
+import { buildReadiness, isFullyReady } from '~/utils/setupReadiness'
 import { formatRelativeTime } from '~/utils/importStatus'
 
 // «Что настроено, а что нет» — the first thing in the settings (#409/#405).
@@ -19,6 +19,12 @@ import { formatRelativeTime } from '~/utils/importStatus'
 const setup = useSetupStatus()
 const chatSettings = useChatSettings()
 
+/** In-portal only. Outside the frame there is no token, so the server half is unknown — stating
+ *  «осталось: 4» there would be a confident claim about a portal we never queried. Comes from
+ *  useSetupStatus (its own frameAuth read), not from the settings singleton, whose flag only flips
+ *  after ITS load — a child mounts before its parent, so borrowing it would flash a false preview. */
+const inFrame = computed(() => setup.inFrame.value)
+
 const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
   connectedAccounts: setup.status.value.connectedAccounts,
@@ -30,27 +36,35 @@ const items = computed(() => buildReadiness({
 const ready = computed(() => isFullyReady(items.value))
 const pending = computed(() => items.value.filter(i => !i.ok).length)
 
-/** «следующий опрос ≈ через N минут» — null while polling is off or nothing has run yet. */
-const nextPoll = computed(() => {
-  const at = nextPollAt({
-    settings: chatSettings.settings,
-    connectedAccounts: setup.status.value.connectedAccounts,
-    pollEnabled: setup.status.value.pollEnabled,
-    pollIntervalMin: setup.status.value.pollIntervalMin,
-    lastRunMs: setup.status.value.lastRunMs
-  })
-  return at === null ? '' : formatRelativeTime(new Date(at).toISOString(), Date.now())
-})
+// «5 минут назад» — recomputed against a ticking clock, not a `Date.now()` frozen inside a computed
+// (a slideover left open would otherwise keep claiming «2 минуты назад» forever).
+const nowMs = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | null = null
 
 const lastRun = computed(() => {
   const ms = setup.status.value.lastRunMs
-  return ms === null ? '' : formatRelativeTime(new Date(ms).toISOString(), Date.now())
+  return ms === null ? '' : formatRelativeTime(new Date(ms).toISOString(), nowMs.value)
 })
 
-onMounted(async () => {
-  await setup.load()
-  // Settings may already be loaded by the form; load() is idempotent and cheap.
-  await chatSettings.load()
+/** Re-read the server half. Bound to window focus so returning from the bank tab (a top-level
+ *  redirect that never notifies us) doesn't leave the checklist claiming «нет подключений» about
+ *  the account the admin just connected. */
+function refresh() {
+  void setup.load()
+}
+
+onMounted(() => {
+  void setup.load()
+  // Chat settings are NOT loaded here: the parent form already loaded them, and useChatSettings.load()
+  // is NOT idempotent — a second call would re-fetch and `Object.assign` the server copy over
+  // whatever the admin has typed since, silently discarding edits.
+  clock = setInterval(() => (nowMs.value = Date.now()), 30_000)
+  if (import.meta.client) window.addEventListener('focus', refresh)
+})
+
+onBeforeUnmount(() => {
+  if (clock) clearInterval(clock)
+  if (import.meta.client) window.removeEventListener('focus', refresh)
 })
 </script>
 
@@ -62,7 +76,7 @@ onMounted(async () => {
           Готовность к работе
         </h2>
         <B24Badge
-          v-if="setup.loaded.value"
+          v-if="inFrame && setup.loaded.value"
           :color="ready ? 'air-primary-success' : 'air-primary-warning'"
           size="xs"
           :label="ready ? 'всё настроено' : `осталось: ${pending}`"
@@ -71,8 +85,16 @@ onMounted(async () => {
       </div>
     </template>
 
+    <B24Alert
+      v-if="!inFrame"
+      color="air-primary"
+      variant="soft"
+      description="Готовность видна внутри портала Bitrix24. Здесь — предпросмотр."
+      data-testid="readiness-preview"
+    />
+
     <p
-      v-if="!setup.loaded.value"
+      v-else-if="!setup.loaded.value"
       class="text-sm text-(--ui-color-base-3)"
       role="status"
       aria-live="polite"
@@ -125,15 +147,16 @@ onMounted(async () => {
 
       <!-- Schedule (#405): the question «а когда оно само сходит в банк?» had no answer anywhere. -->
       <div class="mt-4 border-t border-(--ui-color-design-tinted-na-stroke) pt-3 text-xs text-(--ui-color-base-3)">
-        <p v-if="lastRun">
-          Последний опрос: {{ lastRun }}.
-          <template v-if="nextPoll">
-            Следующий ориентировочно {{ nextPoll }}.
+        <!-- «Последний ИМПОРТ», не «опрос»: отметку ставит любой прогон crm-sync, включая ручную
+             загрузку файла — иначе портал без единого подключения читал бы «последний опрос». -->
+        <p v-if="setup.status.value.pollEnabled">
+          Опрос банка каждые {{ setup.status.value.pollIntervalMin }} мин.
+          <template v-if="lastRun">
+            Последний импорт: {{ lastRun }}.
           </template>
-        </p>
-        <p v-else-if="setup.status.value.pollEnabled">
-          Опросов ещё не было — первый пройдёт в течение
-          {{ setup.status.value.pollIntervalMin }} мин после подключения счёта.
+          <template v-else>
+            Импортов ещё не было.
+          </template>
         </p>
         <p v-else>
           Автоматический опрос выключен, выписка не забирается сама. Ручная загрузка файла работает всегда.

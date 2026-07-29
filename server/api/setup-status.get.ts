@@ -12,6 +12,7 @@ import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { listBankAccountsForPortal } from '../utils/bankTokenStore'
 import { getImportResult } from '../utils/importResultStore'
+import { queueEnabled } from '../queue/connection'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
@@ -26,8 +27,11 @@ function liveDeps(): SetupStatusDeps {
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
     countAccounts: async memberId => (await listBankAccountsForPortal(dbQuery, memberId)).length,
-    // Same gate the cron itself reads (server/plugins/queue.ts): strictly '1', default OFF.
-    pollEnabled: (process.env.CRON_REAL_POLL ?? '0') === '1',
+    // BOTH conditions the cron actually needs, not just the flag: the scheduler returns early
+    // without Redis (`queueEnabled`), so reporting the flag alone would show a confident green
+    // «опрос включён» while nothing polls at all — the exact silent gap this screen exists to
+    // expose, and the worst possible thing for it to get wrong.
+    pollEnabled: (process.env.CRON_REAL_POLL ?? '0') === '1' && queueEnabled(),
     pollIntervalMin: Number.isFinite(interval) && interval > 0 ? Math.floor(interval) : 5,
     lastRunMs: async (memberId) => {
       const run = await getImportResult(dbQuery, memberId)

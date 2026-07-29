@@ -102,13 +102,8 @@ export function isFullyReady(items: readonly ReadinessItem[]): boolean {
   return items.every(i => i.ok)
 }
 
-/**
- * When the next automatic poll is due, epoch ms — or null when polling is off or nothing ran yet
- * (we can't know the cron's phase without a run to anchor to, and inventing a time would be worse
- * than saying «после первого опроса»).
- */
-export function nextPollAt(snap: ReadinessSnapshot): number | null {
-  if (!snap.pollEnabled || snap.lastRunMs === null) return null
-  if (!Number.isFinite(snap.pollIntervalMin) || snap.pollIntervalMin <= 0) return null
-  return snap.lastRunMs + snap.pollIntervalMin * 60_000
-}
+// There is deliberately NO «next poll at» here. The obvious formula (last run + interval) is wrong
+// twice over: the cron is a bare setInterval anchored at PROCESS BOOT, so it has no relationship to
+// when a batch last reached crm-sync; and `lastRunMs` is stamped only when a run actually produced
+// operations, so a faithfully-polling quiet portal looks hours stale. Showing the period and being
+// honest that the exact moment is unknown beats a confidently wrong prediction.
