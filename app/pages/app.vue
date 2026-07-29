@@ -226,6 +226,22 @@ onMounted(async () => {
             :as-slider="true"
             @close="settingsOpen = false"
           />
+
+          <!-- Route to the FULL settings page. The slideover deliberately carries only the chat
+               settings, but bank connection / manual poll / distribution live on `/settings` — and
+               without this link that page was unreachable from the UI, so an admin could not find
+               «Подключение банка» at all (the one action the whole online import depends on). -->
+          <div class="mt-6 border-t border-(--ui-color-design-tinted-na-stroke) pt-4">
+            <p class="mb-2 text-sm text-(--ui-color-base-3)">
+              Подключение банка, ручной опрос и распределение — на полной странице настроек.
+            </p>
+            <B24Button
+              label="Все настройки"
+              color="air-secondary-no-accent"
+              size="sm"
+              to="/settings"
+            />
+          </div>
         </ClientOnly>
       </template>
     </B24Slideover>
