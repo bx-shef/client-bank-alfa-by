@@ -146,13 +146,23 @@ describe('handleBankConnectStart', () => {
     expect(parseOAuthCallback({ code: 'C', state: url.searchParams.get('state')! }, url.searchParams.get('state')!)).toEqual({ code: 'C' })
   })
 
-  it('400 without frame auth / provider / valid account', async () => {
+  it('400 without frame auth / provider / MALFORMED account', async () => {
     expect((await handleBankConnectStart(deps(), { ...input, accessToken: '' })).status).toBe(400)
     expect((await handleBankConnectStart(deps(), { ...input, domain: '' })).status).toBe(400)
     expect((await handleBankConnectStart(deps(), { ...input, provider: '' as 'alfa-by' })).status).toBe(400)
-    expect((await handleBankConnectStart(deps(), { ...input, accountKey: '' })).status).toBe(400)
+    // Непустой, но кривой — по-прежнему отказ: молча превращать мусор во временный ключ хуже.
     expect((await handleBankConnectStart(deps(), { ...input, accountKey: 'has spaces' })).status).toBe(400)
     expect((await handleBankConnectStart(deps(), { ...input, accountKey: 'a/b#c' })).status).toBe(400)
+  })
+
+  it('счёт НЕ обязателен (#407): без него подключение стартует, в state счёта нет', async () => {
+    // Порядок «сначала банк, потом счёт»: до авторизации админ не обязан помнить IBAN, а после неё
+    // счёт выбирается из того, что отдал банк. Токен приземлится под временным ключом (см. колбэк).
+    const r = await handleBankConnectStart(deps(), { ...input, accountKey: '' })
+    expect(r.status).toBe(200)
+    const url = new URL(String(r.body.authorizeUrl))
+    const state = verifyConnectState(url.searchParams.get('state'), SECRET, input.nowMs)
+    expect(state?.accountKey).toBeUndefined()
   })
 
   it('400 when the provider is not configured/supported (no broken URL, no REST)', async () => {

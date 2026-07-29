@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { handleBankConnectCallback, type CallbackDeps } from '../server/utils/bankConnectCallback'
 import { sanitizeForLog } from '../server/utils/logSanitize'
 import { signConnectState } from '../server/utils/bankConnectState'
+import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
 const SECRET = 'cb-secret'
@@ -110,12 +111,16 @@ describe('handleBankConnectCallback', () => {
     expect(r.status).toBe(400)
   })
 
-  it('400 + no exchange when a valid signed state has no accountKey (old-format state)', async () => {
+  it('state без счёта (#407) → токен сохраняется под ВРЕМЕННЫМ ключом, а не отвергается', async () => {
+    // Порядок «сначала банк, потом счёт»: подключение стартует без IBAN, и счёт выбирается уже
+    // после возврата. Уникальность временного ключа даёт nonce — два параллельных подключения
+    // одного админа иначе затёрли бы друг друга.
     const noAcct = signConnectState({ memberId: 'M1', provider: 'alfa-by', nonce: 'n1', exp: now + 600_000 } as never, SECRET)
-    const exchangeToken = vi.fn(async () => tokenJson)
-    const r = await handleBankConnectCallback({ ...deps().deps, exchangeToken }, { query: { code: 'C', state: noAcct }, nowMs: now })
-    expect(r.status).toBe(400)
-    expect(exchangeToken).not.toHaveBeenCalled()
+    const { deps: d, saved } = deps()
+    const r = await handleBankConnectCallback(d, { query: { code: 'C', state: noAcct }, nowMs: now })
+    expect(r.status).toBe(200)
+    expect(saved).toHaveLength(1)
+    expect((saved[0] as { accountKey: string }).accountKey).toBe(provisionalAccountKey('n1'))
   })
 
   it('502 + nothing saved + sanitized log when the token endpoint returns an error PAYLOAD', async () => {
