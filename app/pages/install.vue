@@ -5,6 +5,7 @@ import { useB24 } from '~/composables/useB24'
 import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
+import { installVerdict } from '~/utils/installVerdict'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
@@ -36,6 +37,8 @@ const installError = ref('')
 // True while an install attempt is in flight — guards the Retry button.
 const isRunning = ref(false)
 const caption = ref('Инициализация…')
+/** Установка дошла до installFinish — только тогда вердикт вообще имеет смысл. */
+const finished = ref(false)
 // Best-effort automation-trigger registration outcome (#79): '' = not attempted,
 // 'ok' = registered, otherwise a short error string for the diagnostics panel.
 const triggerRegistered = ref('')
@@ -76,6 +79,17 @@ const diagnostics = computed(() => {
     trigger: triggerRegistered.value
   }
 })
+
+// Вердикт установки (#410): «установилось» и «работает» — разные вещи. Раньше недовыданные права
+// рисовались бейджами внутри СВЁРНУТОЙ диагностики, то есть их никто не видел, и портал спокойно
+// жил с молча выключенными функциями (так и вскрылся #408).
+const verdict = computed(() => installVerdict({
+  finished: finished.value,
+  missingScopes: diagnostics.value.missing,
+  trigger: triggerRegistered.value
+}))
+/** Раскрывать диагностику сразу, когда есть о чём говорить. */
+const diagOpen = computed(() => (verdict.value.issues.length ? ['0'] : []))
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -194,6 +208,7 @@ async function runInstall() {
     progressValue.value = 100
     await sleep(800)
     await $b24.installFinish()
+    finished.value = true
     caption.value = 'Готово'
   } catch (error: unknown) {
     console.error('[install]', error)
@@ -247,7 +262,44 @@ onMounted(runInstall)
         {{ caption }}
       </p>
 
+      <!-- Вердикт (#410): «Готово» больше не означает «всё работает». Недовыданные права раньше
+           были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны. -->
+      <B24Alert
+        v-if="verdict.level !== 'ok' && !isRunning && !installError"
+        :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
+        variant="soft"
+        :title="verdict.title"
+        class="mt-4 w-full"
+        data-testid="install-verdict"
+      >
+        <template #description>
+          <ul class="mt-1 flex list-disc flex-col gap-2 pl-4">
+            <li
+              v-for="(issue, n) in verdict.issues"
+              :key="n"
+            >
+              {{ issue.title }}
+              <span
+                v-if="issue.action"
+                class="block opacity-80"
+              >{{ issue.action }}</span>
+            </li>
+          </ul>
+        </template>
+      </B24Alert>
+
+      <B24Alert
+        v-else-if="verdict.level === 'ok' && !isRunning && !installError"
+        color="air-primary-success"
+        variant="soft"
+        :title="verdict.title"
+        description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
+        class="mt-4 w-full"
+        data-testid="install-verdict"
+      />
+
       <B24Accordion
+        :model-value="diagOpen"
         :items="[{ label: 'Диагностика', value: 'diag', slot: 'diag' }]"
         type="multiple"
         class="mt-4 w-full"
