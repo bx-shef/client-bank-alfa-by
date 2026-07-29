@@ -92,6 +92,37 @@ services:
       # compose up (`docker compose -f docker-compose.prod.yml up -d`), don't hand-edit only
       # this env; verify via /queues or scripts/queue-stats.sh after deploy.
       QUEUE_WORKERS: "0"
+      # --- Online bank connect + polling (stage 5). MUST be declared here: compose passes
+      # ONLY the vars listed in this block, so anything merely present in `.env` never
+      # reaches the container. Missing them made /api/bank/connect answer
+      # «provider alfa-by not available» (fail-closed) no matter what the operator set.
+      # Per bank, connect needs CLIENT_ID + TOKEN_URL + REDIRECT_URI, and refresh needs
+      # CLIENT_ID + CLIENT_SECRET + TOKEN_URL. ⚠ envCheck warns at boot only about a partial
+      # REFRESH triple — a missing REDIRECT_URI boots CLEAN and then fails the connect with
+      # the same opaque «provider … not available» 400. Check it by hand.
+      # See .env.example for the values.
+      ALFA_OAUTH_CLIENT_ID: ${ALFA_OAUTH_CLIENT_ID:-}
+      ALFA_OAUTH_CLIENT_SECRET: ${ALFA_OAUTH_CLIENT_SECRET:-}
+      ALFA_OAUTH_TOKEN_URL: ${ALFA_OAUTH_TOKEN_URL:-}
+      ALFA_OAUTH_REDIRECT_URI: ${ALFA_OAUTH_REDIRECT_URI:-}
+      ALFA_OAUTH_SCOPE: ${ALFA_OAUTH_SCOPE:-accounts}
+      ALFA_OAUTH_API_BASE: ${ALFA_OAUTH_API_BASE:-}
+      ALFA_OAUTH_API_PREFIX: ${ALFA_OAUTH_API_PREFIX:-/partner/1.2.0}
+      PRIOR_OAUTH_CLIENT_ID: ${PRIOR_OAUTH_CLIENT_ID:-}
+      PRIOR_OAUTH_CLIENT_SECRET: ${PRIOR_OAUTH_CLIENT_SECRET:-}
+      PRIOR_OAUTH_TOKEN_URL: ${PRIOR_OAUTH_TOKEN_URL:-}
+      PRIOR_OAUTH_REDIRECT_URI: ${PRIOR_OAUTH_REDIRECT_URI:-}
+      PRIOR_OAUTH_AUDIENCE: ${PRIOR_OAUTH_AUDIENCE:-}
+      # ⚠ A REAL multiline PEM (quoted heredoc-style value in .env). A one-line paste with
+      # literal `\n` is never unescaped: the config looks valid, so there is no fail-closed
+      # 400 — signPriorJwt throws later and the connect answers an opaque 502 instead.
+      PRIOR_OAUTH_PRIVATE_KEY: ${PRIOR_OAUTH_PRIVATE_KEY:-}
+      PRIOR_OAUTH_KID: ${PRIOR_OAUTH_KID:-}
+      PRIOR_OAUTH_API_BASE: ${PRIOR_OAUTH_API_BASE:-}
+      # Feature gates: real cron polling (default OFF) and the admin «Опросить сейчас».
+      CRON_REAL_POLL: ${CRON_REAL_POLL:-0}
+      MANUAL_POLL_ENABLED: ${MANUAL_POLL_ENABLED:-0}
+      MANUAL_POLL_COOLDOWN_SEC: ${MANUAL_POLL_COOLDOWN_SEC:-}
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
@@ -130,6 +161,29 @@ services:
       # Per-worker parallelism for fetch/parse/crm-sync (default 1). Raise with care:
       # crm-sync is REST-bound and B24 limits are per-portal — batch first (docs/QUEUES.md).
       QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-1}
+      # Global A8 rate limiter — attached HERE (the fetch workers), so these knobs are inert
+      # unless passed to this service. The default 100/60s sits right AT Alfa's own ceiling
+      # with no headroom, so lower it here if the bank starts throttling. Prior is budgeted
+      # in REQUESTS (its job costs ~10) on its own queue, hence the separate pair.
+      QUEUE_FETCH_RATE_MAX: ${QUEUE_FETCH_RATE_MAX:-}
+      QUEUE_FETCH_RATE_DURATION_MS: ${QUEUE_FETCH_RATE_DURATION_MS:-}
+      QUEUE_PRIOR_RATE_MAX: ${QUEUE_PRIOR_RATE_MAX:-}
+      QUEUE_PRIOR_RATE_DURATION_MS: ${QUEUE_PRIOR_RATE_DURATION_MS:-}
+      QUEUE_PRIOR_CONCURRENCY: ${QUEUE_PRIOR_CONCURRENCY:-}
+      # Bank creds for the FETCH path: this service actually polls the banks
+      # (fetchBankStatement) and refreshes the stored bank token (ensureBankToken), so it
+      # needs the same client creds + hosts as backend. The connect-flow-only vars
+      # (REDIRECT_URI / AUDIENCE / private key) live on backend, which serves
+      # /api/bank/connect — the worker never builds an authorize URL.
+      ALFA_OAUTH_CLIENT_ID: ${ALFA_OAUTH_CLIENT_ID:-}
+      ALFA_OAUTH_CLIENT_SECRET: ${ALFA_OAUTH_CLIENT_SECRET:-}
+      ALFA_OAUTH_TOKEN_URL: ${ALFA_OAUTH_TOKEN_URL:-}
+      ALFA_OAUTH_API_BASE: ${ALFA_OAUTH_API_BASE:-}
+      ALFA_OAUTH_API_PREFIX: ${ALFA_OAUTH_API_PREFIX:-/partner/1.2.0}
+      PRIOR_OAUTH_CLIENT_ID: ${PRIOR_OAUTH_CLIENT_ID:-}
+      PRIOR_OAUTH_CLIENT_SECRET: ${PRIOR_OAUTH_CLIENT_SECRET:-}
+      PRIOR_OAUTH_TOKEN_URL: ${PRIOR_OAUTH_TOKEN_URL:-}
+      PRIOR_OAUTH_API_BASE: ${PRIOR_OAUTH_API_BASE:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
