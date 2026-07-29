@@ -30,8 +30,11 @@ function liveDeps(): SetupStatusDeps {
     // Подключения без выбранного счёта (#407) НЕ считаются: с них ничего не забрать, а зелёная
     // строка «банк подключён» на таком портале — ровно та ложная галочка, ради которой экран и
     // существует.
-    countAccounts: async memberId => (await listBankAccountsForPortal(dbQuery, memberId))
-      .filter(a => !isPendingAccountKey(a.accountKey)).length,
+    countAccounts: async (memberId) => {
+      const all = await listBankAccountsForPortal(dbQuery, memberId)
+      const pending = all.filter(a => isPendingAccountKey(a.accountKey)).length
+      return { connected: all.length - pending, pending }
+    },
     // BOTH conditions the cron actually needs, not just the flag: the scheduler returns early
     // without Redis (`queueEnabled`), so reporting the flag alone would show a confident green
     // «опрос включён» while nothing polls at all — the exact silent gap this screen exists to

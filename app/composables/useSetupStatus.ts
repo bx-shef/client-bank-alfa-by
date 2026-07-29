@@ -10,6 +10,8 @@ import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/c
 
 export interface SetupStatus {
   connectedAccounts: number
+  /** Подключения без выбранного счёта (#407) — их надо доводить до конца. */
+  pendingAccounts: number
   pollEnabled: boolean
   pollIntervalMin: number
   lastRunMs: number | null
@@ -17,6 +19,7 @@ export interface SetupStatus {
 
 const DEFAULTS: SetupStatus = {
   connectedAccounts: 0,
+  pendingAccounts: 0,
   pollEnabled: false,
   pollIntervalMin: 5,
   lastRunMs: null
@@ -46,6 +49,7 @@ export function useSetupStatus() {
       const res = await $fetch<Partial<SetupStatus>>('/api/setup-status', { headers: authHeaders(a) })
       status.value = {
         connectedAccounts: Number(res?.connectedAccounts) || 0,
+        pendingAccounts: Number(res?.pendingAccounts) || 0,
         pollEnabled: res?.pollEnabled === true,
         pollIntervalMin: Number(res?.pollIntervalMin) || DEFAULTS.pollIntervalMin,
         lastRunMs: typeof res?.lastRunMs === 'number' ? res.lastRunMs : null

@@ -28,6 +28,7 @@ const inFrame = computed(() => setup.inFrame.value)
 const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
   connectedAccounts: setup.status.value.connectedAccounts,
+  pendingAccounts: setup.status.value.pendingAccounts,
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
   lastRunMs: setup.status.value.lastRunMs

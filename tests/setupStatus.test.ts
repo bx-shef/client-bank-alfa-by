@@ -8,7 +8,7 @@ function deps(over: Partial<SetupStatusDeps> = {}): SetupStatusDeps {
   return {
     memberIdByDomain: async () => 'M1',
     validateFrame: async () => ({ userId: '7', isAdmin: true }),
-    countAccounts: async () => 2,
+    countAccounts: async () => ({ connected: 2, pending: 0 }),
     pollEnabled: true,
     pollIntervalMin: 5,
     lastRunMs: async () => 1_700_000_000_000,
@@ -24,6 +24,7 @@ describe('handleSetupStatus', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual({
       connectedAccounts: 2,
+      pendingAccounts: 0,
       pollEnabled: true,
       pollIntervalMin: 5,
       lastRunMs: 1_700_000_000_000
@@ -40,6 +41,15 @@ describe('handleSetupStatus', () => {
   it('reports the poll gate honestly when it is off', async () => {
     const res = await handleSetupStatus(deps({ pollEnabled: false }), input)
     expect(res.body.pollEnabled).toBe(false)
+  })
+
+  it('отдаёт счётчик незавершённых подключений отдельно (#407)', () => {
+    // Считать их «подключёнными счетами» нельзя (с них ничего не забрать), молчать о них — тоже.
+    return handleSetupStatus(deps({ countAccounts: async () => ({ connected: 1, pending: 2 }) }), input)
+      .then((res) => {
+        expect(res.body.connectedAccounts).toBe(1)
+        expect(res.body.pendingAccounts).toBe(2)
+      })
   })
 
   it('is 400 without frame auth, 409 for an unknown portal', async () => {
@@ -62,7 +72,7 @@ describe('handleSetupStatus', () => {
       validateFrame: async () => ({ userId: '9', isAdmin: false }),
       countAccounts: async () => {
         read = true
-        return 1
+        return { connected: 1, pending: 0 }
       }
     })
     expect((await handleSetupStatus(d, input)).status).toBe(403)

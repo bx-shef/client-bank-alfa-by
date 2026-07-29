@@ -17,8 +17,8 @@ export interface SetupStatusResult {
 export interface SetupStatusDeps {
   memberIdByDomain: (domain: string) => Promise<string | null>
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
-  /** How many bank accounts this portal has connected. */
-  countAccounts: (memberId: string) => Promise<number>
+  /** Счета портала: подключённые (с выбранным номером) и ожидающие выбора (#407). */
+  countAccounts: (memberId: string) => Promise<{ connected: number, pending: number }>
   /** Server gate `CRON_REAL_POLL` — automatic polling runs at all. */
   pollEnabled: boolean
   /** Cron period in minutes (`CRON_INTERVAL_MIN`). */
@@ -48,7 +48,7 @@ export async function handleSetupStatus(
   }
   if (!frame.isAdmin) return { status: 403, body: { error: 'setup status is administrator-only' } }
 
-  const [connectedAccounts, lastRunMs] = await Promise.all([
+  const [counts, lastRunMs] = await Promise.all([
     deps.countAccounts(memberId),
     deps.lastRunMs(memberId)
   ])
@@ -56,7 +56,11 @@ export async function handleSetupStatus(
   return {
     status: 200,
     body: {
-      connectedAccounts,
+      connectedAccounts: counts.connected,
+      // Подключения без выбранного счёта видны только в списке внутри карточки банка, поэтому
+      // забытое (авторизовался и закрыл вкладку) не всплывало нигде. Отдаём счётчик, чтобы экран
+      // готовности о нём напомнил — иначе это тихая дыра.
+      pendingAccounts: counts.pending,
       pollEnabled: deps.pollEnabled,
       pollIntervalMin: deps.pollIntervalMin,
       lastRunMs

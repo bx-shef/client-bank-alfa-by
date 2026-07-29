@@ -12,6 +12,7 @@ function snap(over: Partial<ReadinessSnapshot> = {}): ReadinessSnapshot {
   return {
     settings: parsePortalSettings(null),
     connectedAccounts: 0,
+    pendingAccounts: 0,
     pollEnabled: false,
     pollIntervalMin: 5,
     lastRunMs: null,
@@ -49,6 +50,20 @@ describe('buildReadiness', () => {
     expect(item(buildReadiness(snap({ connectedAccounts: 5 })), 'bank').detail).toBe('5 счетов')
     expect(item(buildReadiness(snap({ connectedAccounts: 11 })), 'bank').detail).toBe('11 счетов')
     expect(item(buildReadiness(snap({ connectedAccounts: 21 })), 'bank').detail).toBe('21 счёт')
+  })
+
+  it('подключение без выбранного счёта не считается готовым и напоминает о себе (#407)', () => {
+    // Админ авторизовался и закрыл вкладку: раньше такое подключение было видно только в списке
+    // внутри карточки банка, то есть фактически нигде.
+    const only = item(buildReadiness(snap({ connectedAccounts: 0, pendingAccounts: 1 })), 'bank')
+    expect(only.ok).toBe(false)
+    expect(only.detail).toContain('без выбранного счёта')
+    expect(only.hint).toContain('укажите номер')
+
+    // Даже при живом подключении незавершённое не даёт закрыть строку — иначе о нём забудут.
+    const mixed = item(buildReadiness(snap({ connectedAccounts: 2, pendingAccounts: 1 })), 'bank')
+    expect(mixed.ok).toBe(false)
+    expect(mixed.detail).toContain('ещё 1 без счёта')
   })
 
   it('tells a portal without a bank that manual upload still works', () => {

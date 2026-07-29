@@ -31,6 +31,8 @@ export interface ReadinessSnapshot {
   settings: PortalSettings
   /** How many bank accounts the portal has connected (online import). */
   connectedAccounts: number
+  /** Подключения, у которых счёт так и не выбран (#407). Ноль по умолчанию. */
+  pendingAccounts?: number
   /** Server-side poll gate (`CRON_REAL_POLL`) — OFF means no automatic polling at all. */
   pollEnabled: boolean
   /** Poll period in minutes (`CRON_INTERVAL_MIN`). */
@@ -59,17 +61,24 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
 
   const chatId = snap.settings.chat?.dialogId ?? ''
 
+  const pending = snap.pendingAccounts ?? 0
+
   return [
     {
       key: 'bank',
       title: 'Банк подключён',
-      ok: snap.connectedAccounts > 0,
+      // Незавершённое подключение (счёт не выбран) НЕ считается подключённым — с него ничего не
+      // забрать. Но и молчать о нём нельзя: админ авторизовался, закрыл вкладку, и такое
+      // подключение не всплывало бы нигде, кроме списка внутри карточки банка.
+      ok: snap.connectedAccounts > 0 && pending === 0,
       detail: snap.connectedAccounts > 0
-        ? `${snap.connectedAccounts} ${accountsWord(snap.connectedAccounts)}`
-        : 'нет подключений',
-      hint: snap.connectedAccounts > 0
-        ? ''
-        : 'Подключите счёт в разделе «Подключение банка». Без него работает только ручная загрузка файла выписки.'
+        ? `${snap.connectedAccounts} ${accountsWord(snap.connectedAccounts)}${pending > 0 ? `, ещё ${pending} без счёта` : ''}`
+        : (pending > 0 ? `${pending} без выбранного счёта` : 'нет подключений'),
+      hint: pending > 0
+        ? 'Есть подключение без выбранного счёта — укажите номер в разделе «Подключение банка», иначе выписка по нему не забирается.'
+        : (snap.connectedAccounts > 0
+            ? ''
+            : 'Подключите счёт в разделе «Подключение банка». Без него работает только ручная загрузка файла выписки.')
     },
     {
       key: 'chat',
