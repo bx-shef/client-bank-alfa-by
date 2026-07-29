@@ -5,7 +5,8 @@ import { useB24 } from '~/composables/useB24'
 import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
-import { installVerdict } from '~/utils/installVerdict'
+import { installVerdict, type BackendState } from '~/utils/installVerdict'
+import { checkBackendKnowsPortal } from '~/composables/useBackendInstallCheck'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
@@ -39,6 +40,8 @@ const isRunning = ref(false)
 const caption = ref('Инициализация…')
 /** Установка дошла до installFinish — только тогда вердикт вообще имеет смысл. */
 const finished = ref(false)
+/** Видит ли backend наш портал (#413). До проверки — 'unknown': молчим, а не пугаем. */
+const backendState = ref<BackendState>('unknown')
 // Best-effort automation-trigger registration outcome (#79): '' = not attempted,
 // 'ok' = registered, otherwise a short error string for the diagnostics panel.
 const triggerRegistered = ref('')
@@ -86,7 +89,8 @@ const diagnostics = computed(() => {
 const verdict = computed(() => installVerdict({
   finished: finished.value,
   missingScopes: diagnostics.value.missing,
-  trigger: triggerRegistered.value
+  trigger: triggerRegistered.value,
+  backend: backendState.value
 }))
 // Раскрытие «Диагностики». ОБЯЗАТЕЛЬНО обычный ref под v-model, а не computed под :model-value:
 // с односторонним биндингом аккордеон становится управляемым, эмит слушать некому — и панель
@@ -218,6 +222,10 @@ async function runInstall() {
     await sleep(800)
     await $b24.installFinish()
     finished.value = true
+    // Событие установки идёт мимо iframe — прямо на backend. Проверяем, что оно дошло, иначе
+    // портал «установлен», а серверная часть о нём не знает и импорт не заработает (#413).
+    caption.value = 'Проверка серверной части…'
+    backendState.value = await checkBackendKnowsPortal()
     caption.value = 'Готово'
   } catch (error: unknown) {
     console.error('[install]', error)

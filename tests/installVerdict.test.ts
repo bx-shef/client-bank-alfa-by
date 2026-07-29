@@ -52,6 +52,26 @@ describe('installVerdict', () => {
     expect(v.issues).toHaveLength(1)
   })
 
+  it('backend не увидел портал → degraded: импорт не заработает (#413)', () => {
+    // Событие установки идёт мимо iframe, поэтому «портал установлен» ничего не говорит о том,
+    // получила ли его серверная часть. Раньше это выглядело как полностью успешная установка.
+    const v = installVerdict({ ...base, backend: 'portal-missing' })
+    expect(v.level).toBe('degraded')
+    expect(v.issues[0]!.title).toContain('не получила уведомление')
+  })
+
+  it('backend недоступен → degraded, и сказано, что это не настройки портала', () => {
+    const v = installVerdict({ ...base, backend: 'down' })
+    expect(v.level).toBe('degraded')
+    expect(v.issues[0]!.action).toContain('владельца приложения')
+  })
+
+  it('backend увиден или проверить не удалось → молчим, а не пугаем', () => {
+    expect(installVerdict({ ...base, backend: 'ok' }).level).toBe('ok')
+    expect(installVerdict({ ...base, backend: 'unknown' }).level).toBe('ok')
+    expect(installVerdict(base).level).toBe('ok') // поле вообще не задано
+  })
+
   it('у каждой проблемы есть действие — иначе сообщение бесполезно', () => {
     for (const outcome of [
       { finished: false, missingScopes: [], trigger: 'ok' },
