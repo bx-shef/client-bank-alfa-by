@@ -8,6 +8,7 @@
 // in-portal iframe holds it); `member_id` is resolved server-side from the domain (never trusted
 // from the client), and `validateFrame` re-checks the token against B24 to block a spoofed domain.
 
+import { sanitizeForLog } from './logSanitize'
 import type { ProvisionDistributionOutcome } from './distributionProvisionHandler'
 
 /** Injected side effects + config for {@link handleProvisionRequest}. */
@@ -22,6 +23,9 @@ export interface ProvisionRequestDeps {
    *  OAuth token (proven app-context for `crm.type.add`/`userfieldconfig.add`), not the frame
    *  token — the frame token above serves only as the membership + admin gate. */
   provision: (memberId: string) => Promise<ProvisionDistributionOutcome>
+  /** Optional sink for the RAW portal error (never sent to the client). Injected rather than
+   *  `console.*` so this module stays pure/testable — same shape as `ConnectStartDeps.log`. */
+  log?: (message: string) => void
 }
 
 export interface ProvisionRequestResult {
@@ -76,7 +80,46 @@ export async function handleProvisionRequest(
         storedChanged: outcome.storedChanged
       }
     }
-  } catch {
-    return { status: 502, body: { error: 'provisioning failed' } }
+  } catch (e) {
+    // A bare «provisioning failed» left the admin with nothing to act on (#408). Classify what the
+    // portal actually said: a missing scope needs a re-install/consent, an access error needs
+    // portal rights — completely different actions, and neither is guessable from a generic 502.
+    // The RAW message is logged server-side only; the client gets a classified, secret-free text.
+    const raw = e instanceof Error ? e.message : String(e)
+    // Portal text is external input — CRLF-strip + cap it, like every other log of foreign text
+    // (bankConnectStart/bankConnectCallback), so it can't forge extra log lines.
+    deps.log?.(`[provision] failed: ${sanitizeForLog(raw, 500)}`)
+    return { status: 502, body: { error: classifyProvisionError(raw) } }
   }
+}
+
+/** Map a portal/transport error to an actionable Russian message. Pure — the caller logs the raw
+ *  text; this only decides what the admin is told. Order matters: scope before access, because a
+ *  missing scope also surfaces as an access-ish error on some methods. */
+export function classifyProvisionError(raw: string): string {
+  const s = raw.toLowerCase()
+  // Scope FIRST. The SDK surfaces only `getErrorMessages()`, so the machine-readable
+  // `insufficient_scope` is often absent and all we get is the human description «The request
+  // requires HIGHER PRIVILEGES than provided by the … token» — the repo's own live script matches
+  // exactly these three (scripts/verify-distribution-live.ts `isScopeError`). Dropping
+  // `higher privileges` would make this branch miss #408's most common shape, i.e. the very case
+  // it exists for. `userfieldconfig` stays narrow — paired with a denial word, not on its own,
+  // because a plain field conflict also echoes the method name and must NOT read as «reinstall».
+  if (s.includes('insufficient_scope')
+    || s.includes('higher privileges')
+    || (s.includes('userfieldconfig') && (s.includes('denied') || s.includes('scope') || s.includes('privileg')))) {
+    return 'Приложению не выдан доступ «userfieldconfig», без него нельзя создать поля смарт-процессов. Переустановите приложение и подтвердите запрошенные права.'
+  }
+  if (s.includes('access_denied') || s.includes('access denied') || s.includes('insufficient rights')) {
+    return 'Портал отказал в правах: смарт-процессы создаёт только администратор с доступом к CRM.'
+  }
+  if (s.includes('expired_token') || s.includes('invalid_token')) {
+    return 'Истекла авторизация приложения в портале. Переустановите приложение и повторите.'
+  }
+  if (s.includes('timeout') || s.includes('econn') || s.includes('fetch failed') || s.includes('network')) {
+    return 'Портал не ответил вовремя. Повторите попытку — действие идемпотентно, дубликатов не будет.'
+  }
+  // No «пришлите этот текст»: the raw message stays in the server log, the admin never sees it —
+  // promising otherwise sends them looking for something that isn't on screen.
+  return 'Портал вернул ошибку при настройке смарт-процессов. Повторите попытку; если повторяется — сообщите время попытки в поддержку, подробности есть в логе сервера.'
 }

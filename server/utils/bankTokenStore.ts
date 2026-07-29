@@ -144,6 +144,52 @@ export async function listBankAccountsForPortal(query: QueryFn, memberId: string
   }))
 }
 
+/** One connected account as the UI sees it — identity + freshness, NEVER a secret (#404).
+ *  `connectedAt` is the row's `updated_at` (set on connect AND on every refresh, so it reads
+ *  as "last known good"), `expiresAt` lets the UI say whether the access token is still fresh. */
+export interface BankAccountInfo extends BankAccountRef {
+  /** Epoch ms of the last successful connect/refresh. */
+  connectedAt: number
+  /** Epoch ms the access token expires at. */
+  expiresAt: number
+  /** Whether a refresh token is stored at all — empty means «reconnect required» (Prior may
+   *  return no refresh_token, and we store it empty rather than failing the connect). */
+  hasRefresh: boolean
+}
+
+/** One portal's connected accounts WITH freshness, for the settings UI (#404). Deliberately does
+ *  NOT decrypt: the UI must never receive token material, and a corrupt row still has to be
+ *  listable (otherwise a bad row would be invisible and thus impossible to disconnect). */
+export async function listBankAccountInfoForPortal(query: QueryFn, memberId: string): Promise<BankAccountInfo[]> {
+  const rows = await query(
+    `SELECT member_id, provider, account_key, expires_at, updated_at,
+            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> '') AS has_refresh
+       FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
+    [memberId]
+  )
+  return rows.map(r => ({
+    memberId: String(r.member_id),
+    provider: r.provider as BankProviderId,
+    accountKey: String(r.account_key),
+    // node-pg hands back a Date for TIMESTAMPTZ; String(Date) then re-parsing that human form is
+    // implementation-defined and drops milliseconds — take the Date directly when we have one.
+    connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
+    expiresAt: Number(r.expires_at),
+    hasRefresh: r.has_refresh === true
+  }))
+}
+
+/** Disconnect ONE account (#404). Member-scoped in the WHERE clause — a portal can only ever
+ *  delete its own row, even if the caller forges provider/account. Idempotent: deleting an
+ *  already-gone row returns false rather than erroring. */
+export async function deleteBankToken(query: QueryFn, memberId: string, provider: BankProviderId, accountKey: string): Promise<boolean> {
+  const rows = await query(
+    `DELETE FROM bank_tokens WHERE member_id = $1 AND provider = $2 AND account_key = $3 RETURNING member_id`,
+    [memberId, provider, accountKey]
+  )
+  return rows.length > 0
+}
+
 /** Delete ALL of a portal's bank tokens on ONAPPUNINSTALL (a removed app keeps no data).
  *  Idempotent. Returns the number of rows removed (for logging). */
 export async function deleteBankTokensForPortal(query: QueryFn, memberId: string): Promise<number> {

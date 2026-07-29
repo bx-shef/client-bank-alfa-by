@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, useTemplateRef } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useBankConnect } from '~/composables/useBankConnect'
+import { BANK_LABELS } from '~/utils/bankLabels'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank, enters the account number and starts
 // the OAuth connect: POST /api/bank/connect (frame token) → the backend returns the bank authorize
@@ -22,6 +23,11 @@ import { useBankConnect } from '~/composables/useBankConnect'
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const { start, syncEnabled, connecting, error, enabled } = useBankConnect()
 
+// The list is a child component; after a connect finishes we ask it to re-read. Without this the
+// admin returns from the bank tab to a list that still says «пока ничего не подключено» — the exact
+// complaint #404 is about, reproduced inside one session.
+const connectedList = useTemplateRef<{ reload: () => Promise<void> }>('connectedList')
+
 const adminChecked = ref(false)
 const accountKey = ref('')
 const started = ref(false)
@@ -29,8 +35,8 @@ const started = ref(false)
 /** The banks that have an online (OAuth) connect path. `manual` is file upload — not connectable,
  *  so the picker's type is the NARROWED union (a `manual` value can't be selected or sent). */
 const PROVIDERS = [
-  { value: 'alfa-by' as const, label: 'Альфа-Банк' },
-  { value: 'prior-by' as const, label: 'Приорбанк' }
+  { value: 'alfa-by' as const, label: BANK_LABELS['alfa-by'] },
+  { value: 'prior-by' as const, label: BANK_LABELS['prior-by'] }
 ]
 type ConnectableProvider = (typeof PROVIDERS)[number]['value']
 const provider = ref<ConnectableProvider>('alfa-by')
@@ -58,6 +64,9 @@ async function onConnect() {
     win.opener = null // sever the opener before navigating to the bank (anti-tabnabbing)
     win.location.href = url
     started.value = true
+    // The bank tab is top-level and never notifies us, so poll-free: refresh when the admin comes
+    // back to this tab. Once is enough — a second connect re-arms it.
+    window.addEventListener('focus', () => void connectedList.value?.reload(), { once: true })
   } else if (url && !win) {
     error.value = 'Разрешите всплывающие окна для этого сайта и повторите'
   } else {
@@ -99,6 +108,12 @@ async function onConnect() {
     </template>
 
     <div class="space-y-4">
+      <!-- What is already bound, with a per-row disconnect (#404). Above the form on purpose:
+           the first question after a connect is «что у меня подключено?». -->
+      <ConnectedBankAccounts ref="connectedList" />
+
+      <hr class="border-(--ui-color-design-tinted-na-stroke)">
+
       <p class="text-sm text-(--ui-color-base-2)">
         Подключите счёт — приложение будет автоматически забирать выписку и заносить операции
         в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда.
