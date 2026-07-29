@@ -16,6 +16,9 @@ export interface MockB24Options {
   /** Stable spy for `$b24.actions.v2.call.make()` (single REST call, e.g. the
    *  automation-trigger registration on install, #79). */
   callMake?: ReturnType<typeof vi.fn>
+  /** Права, которые приложение ЗАПРАШИВАЕТ (`getRequiredRights`). Нужны тесту вердикта установки:
+   *  «недовыданное право» вычисляется как запрошенное минус выданное порталом. */
+  requiredRights?: string[]
 }
 
 /**
@@ -43,6 +46,8 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
     set: () => ok,
     isInit: () => opts.isInit?.() ?? true,
     targetOrigin: () => 'https://example.bitrix24.by',
-    getRequiredRights: () => []
+    // Пусто по умолчанию (большинству тестов права не важны). Тест вердикта установки ЗАДАЁТ их
+    // явно: с пустым списком «недовыданных прав» не бывает, и degraded-ветка не проверялась бы.
+    getRequiredRights: () => opts.requiredRights ?? []
   }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
@@ -88,8 +88,13 @@ const verdict = computed(() => installVerdict({
   missingScopes: diagnostics.value.missing,
   trigger: triggerRegistered.value
 }))
-/** Раскрывать диагностику сразу, когда есть о чём говорить. */
-const diagOpen = computed(() => (verdict.value.issues.length ? ['0'] : []))
+// Раскрытие «Диагностики». ОБЯЗАТЕЛЬНО обычный ref под v-model, а не computed под :model-value:
+// с односторонним биндингом аккордеон становится управляемым, эмит слушать некому — и панель
+// перестаёт открываться даже кликом. Идентификатор элемента — его `value` ('diag'), а не индекс.
+const diagOpen = ref<string[]>([])
+watch(() => verdict.value.issues.length, (n) => {
+  if (n > 0) diagOpen.value = ['diag'] // есть о чём говорить — показываем сразу
+}, { immediate: true })
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -193,6 +198,10 @@ async function runInstall() {
         eventList: { method: 'event.get' }
       }
     })
+    // Батч мог отработать частично. Если `scope` не прочитан, судить о правах НЕЛЬЗЯ: пустой
+    // список выглядел бы как «портал не выдал НИ ОДНОГО права» и давал бы громкий ложный вердикт
+    // на успешной установке — ровно та ошибка, которую этот экран и должен устранять.
+    if (!response.isSuccess) throw new Error(`Не удалось прочитать данные портала: ${response.getErrorMessages().join('; ')}`)
     initData.value = response.getData() as InitData
 
     // Register the backend event handlers before finishing — see bindEvents().
@@ -263,43 +272,50 @@ onMounted(runInstall)
       </p>
 
       <!-- Вердикт (#410): «Готово» больше не означает «всё работает». Недовыданные права раньше
-           были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны. -->
-      <B24Alert
-        v-if="verdict.level !== 'ok' && !isRunning && !installError"
-        :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
-        variant="soft"
-        :title="verdict.title"
-        class="mt-4 w-full"
-        data-testid="install-verdict"
+           были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны.
+           Живая область: вердикт появляется асинхронно, и без неё скринридер о нём не сообщит. -->
+      <div
+        class="w-full"
+        role="alert"
+        aria-live="polite"
       >
-        <template #description>
-          <ul class="mt-1 flex list-disc flex-col gap-2 pl-4">
-            <li
-              v-for="(issue, n) in verdict.issues"
-              :key="n"
-            >
-              {{ issue.title }}
-              <span
-                v-if="issue.action"
-                class="block opacity-80"
-              >{{ issue.action }}</span>
-            </li>
-          </ul>
-        </template>
-      </B24Alert>
+        <B24Alert
+          v-if="isUseB24 && verdict.level !== 'ok' && !isRunning && !installError"
+          :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
+          variant="soft"
+          :title="verdict.title"
+          class="mt-4 w-full"
+          data-testid="install-verdict"
+        >
+          <template #description>
+            <ul class="mt-1 flex list-disc flex-col gap-2 pl-4">
+              <li
+                v-for="(issue, n) in verdict.issues"
+                :key="n"
+              >
+                {{ issue.title }}
+                <span
+                  v-if="issue.action"
+                  class="block opacity-80"
+                >{{ issue.action }}</span>
+              </li>
+            </ul>
+          </template>
+        </B24Alert>
 
-      <B24Alert
-        v-else-if="verdict.level === 'ok' && !isRunning && !installError"
-        color="air-primary-success"
-        variant="soft"
-        :title="verdict.title"
-        description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
-        class="mt-4 w-full"
-        data-testid="install-verdict"
-      />
+        <B24Alert
+          v-else-if="isUseB24 && verdict.level === 'ok' && !isRunning && !installError"
+          color="air-primary-success"
+          variant="soft"
+          :title="verdict.title"
+          description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
+          class="mt-4 w-full"
+          data-testid="install-verdict"
+        />
+      </div>
 
       <B24Accordion
-        :model-value="diagOpen"
+        v-model="diagOpen"
         :items="[{ label: 'Диагностика', value: 'diag', slot: 'diag' }]"
         type="multiple"
         class="mt-4 w-full"

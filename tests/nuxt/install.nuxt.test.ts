@@ -15,7 +15,7 @@ const batchSpy = vi.hoisted(() => vi.fn(async (_arg?: unknown) => ({
   getData: () => ({ scope: ['crm'], eventList: [] as { event: string, handler: string }[] }),
   getErrorMessages: () => [] as string[]
 })))
-const state = vi.hoisted(() => ({ inFrame: false }))
+const state = vi.hoisted(() => ({ inFrame: false, requiredRights: [] as string[] }))
 
 vi.mock('vue-router', async (orig) => {
   const actual = await orig<typeof import('vue-router')>()
@@ -30,7 +30,8 @@ vi.mock('~/composables/useB24', async () => {
       installFinish: finishSpy,
       setTitle: titleSpy,
       batchMake: batchSpy,
-      callMake: callSpy
+      callMake: callSpy,
+      requiredRights: state.requiredRights
     })
   }
 })
@@ -48,6 +49,7 @@ beforeEach(() => {
   [replaceSpy, finishSpy, titleSpy, batchSpy, callSpy].forEach(s => s.mockClear())
   // mockClear keeps implementations, so restore the default (a test may have
   // installed a failure-aware mockImplementation).
+  state.requiredRights = []
   batchSpy.mockImplementation(defaultBatch)
   callSpy.mockImplementation(async () => ({ isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] }))
 })
@@ -190,5 +192,46 @@ describe('install.vue — inside a B24 frame', () => {
     expect(finishSpy).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Ошибка установки')
     expect(wrapper.text()).toContain('Повторить')
+  })
+})
+
+// Вердикт установки (#410). Смысл: «Готово» больше не равно «работает». Раньше недовыданные права
+// показывались бейджами внутри СВЁРНУТОЙ диагностики — то есть не показывались.
+describe('install.vue — вердикт установки (#410)', () => {
+  beforeEach(() => {
+    state.inFrame = true
+  })
+
+  it('портал выдал не все права → degraded с перечислением и раскрытой диагностикой', async () => {
+    // Портал вернул только `crm`, а приложение просит ещё и `userfieldconfig` (#408 в чистом виде).
+    state.requiredRights = ['crm', 'userfieldconfig']
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const verdict = wrapper.find('[data-testid="install-verdict"]')
+    expect(verdict.exists()).toBe(true)
+    expect(verdict.text()).toContain('userfieldconfig')
+    expect(verdict.text()).toContain('Переустановите')
+    // Диагностика раскрывается САМА, когда есть о чём говорить: раньше проблема пряталась именно там.
+    expect(wrapper.text()).toContain('Обработчик событий')
+  })
+
+  it('все права выданы → зелёный вердикт без списка проблем', async () => {
+    state.requiredRights = ['crm']
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const verdict = wrapper.find('[data-testid="install-verdict"]')
+    expect(verdict.exists()).toBe(true)
+    expect(verdict.text()).toContain('Приложение установлено')
+    expect(verdict.text()).not.toContain('Переустановите')
+  })
+
+  it('вне портала вердикт не показывается — это не провал установки, а демо-режим', async () => {
+    state.inFrame = false
+    state.requiredRights = ['crm', 'userfieldconfig']
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(13000)
+    expect(wrapper.find('[data-testid="install-verdict"]').exists()).toBe(false)
   })
 })
