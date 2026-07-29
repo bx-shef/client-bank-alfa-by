@@ -77,10 +77,17 @@ async function cancel(): Promise<void> {
   if (props.asSlider) emit('close')
 }
 
-// Accordion sections (starter B24Accordion pattern) — group the settings into
-// collapsibles. v-model keys by item INDEX (b24ui default); '0' opens «Уведомления» first.
-const openSections = ref(['0'])
+// Accordion sections (starter B24Accordion pattern) — group the settings into collapsibles.
+// v-model keys by item INDEX (b24ui default). Open «Подключение банка» AND «Уведомления в чат»:
+// the first is what a fresh install must do (and used to be unfindable), the second is the
+// day-to-day one — leaving either collapsed is how the bank connection got lost in the first place.
+const openSections = ref(['0', '1'])
 const sections = computed(() => [
+  // Bank connection FIRST: it is the action the whole online import depends on, and it used to
+  // live only on the standalone /settings page — which nothing linked to, so an admin opening the
+  // gear simply could not find it (reported from a real deployment). It belongs where settings
+  // are actually opened.
+  { label: 'Подключение банка', slot: 'bank' },
   { label: 'Уведомления в чат', slot: 'chats' },
   { label: 'Исключения', slot: 'exclusions' },
   { label: 'Авто-проведение оплат', slot: 'distribute' },
@@ -199,6 +206,13 @@ const previewSummary = computed(() => {
         :items="sections"
       >
         <!-- Уведомления в чат: чат уведомлений + направления + чат ошибок. -->
+        <template #bank>
+          <!-- Online bank connection (Альфа / Приор) + the manual poll trigger. Both are
+               admin-only and self-gate; outside a portal frame they render an inert notice. -->
+          <BankConnectCard />
+          <PollNowButton class="mt-4" />
+        </template>
+
         <template #chats>
           <div class="space-y-4 pt-2">
             <B24FormField

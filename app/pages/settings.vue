@@ -42,14 +42,6 @@ onMounted(async () => {
     </p>
 
     <ClientOnly>
-      <BankConnectCard class="mt-6" />
-    </ClientOnly>
-
-    <ClientOnly>
-      <PollNowButton class="mt-6" />
-    </ClientOnly>
-
-    <ClientOnly>
       <ProvisionSpCard class="mt-6" />
     </ClientOnly>
 
