@@ -200,6 +200,10 @@ const previewSummary = computed(() => {
         class="mb-2"
       />
 
+      <!-- «Что настроено, а что нет» (#409/#405) — ПЕРЕД аккордеоном: собранные вместе строки
+           отвечают на «почему ничего не приходит?» раньше, чем админ начнёт открывать секции. -->
+      <SetupReadinessCard class="mb-4" />
+
       <B24Accordion
         v-model="openSections"
         type="multiple"
