@@ -25,7 +25,7 @@ vi.mock('~/composables/useFrameAuth', () => ({
 // route BY URL rather than by call order — an order-based mock would hand the accounts request the
 // connect response (and vice versa) depending on which fired first.
 const connectReply = { value: {} as Record<string, unknown> }
-const fetchMock = vi.fn((url: string) => {
+const fetchMock = vi.fn((url: string, _opts?: Record<string, unknown>) => {
   if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
   return Promise.resolve(connectReply.value)
 })

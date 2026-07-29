@@ -57,16 +57,23 @@ defineExpose({ reload: load })
       Загружаем…
     </p>
 
-    <B24Alert
-      v-else-if="error"
-      color="air-primary-alert"
-      variant="soft"
-      :description="error"
-      data-testid="accounts-error"
-    />
+    <!-- Error sits ABOVE the list, never INSTEAD of it: a failed disconnect used to collapse the
+         whole section into one alert, so the admin lost the row they were trying to retry. -->
+    <div
+      role="alert"
+      aria-live="assertive"
+    >
+      <B24Alert
+        v-if="error"
+        color="air-primary-alert"
+        variant="soft"
+        :description="error"
+        data-testid="accounts-error"
+      />
+    </div>
 
     <p
-      v-else-if="!accounts.length"
+      v-if="loaded && !accounts.length"
       class="text-sm text-(--ui-color-base-3)"
       data-testid="accounts-empty"
     >
@@ -74,7 +81,7 @@ defineExpose({ reload: load })
     </p>
 
     <ul
-      v-else
+      v-else-if="accounts.length"
       class="space-y-2"
     >
       <li
@@ -106,9 +113,14 @@ defineExpose({ reload: load })
 
           <div class="flex items-center gap-2">
             <template v-if="confirming === rowKey(a)">
-              <span class="text-xs text-(--ui-color-base-3)">Отключить?</span>
+              <span
+                class="text-xs text-(--ui-color-base-3)"
+                role="status"
+                aria-live="polite"
+              >Отключить?</span>
               <B24Button
                 label="Да, отключить"
+                :aria-label="`Да, отключить ${providerLabel(a.provider)} ${a.accountKey}`"
                 color="air-primary-alert"
                 size="xs"
                 :loading="removing === rowKey(a)"
@@ -125,6 +137,7 @@ defineExpose({ reload: load })
             <B24Button
               v-else
               label="Отключить"
+              :aria-label="`Отключить ${providerLabel(a.provider)} ${a.accountKey}`"
               color="air-secondary-no-accent"
               size="xs"
               @click="() => { confirming = rowKey(a) }"

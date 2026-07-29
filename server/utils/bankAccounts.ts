@@ -12,6 +12,7 @@
 //   3. ADMIN gate — bank credentials are portal-wide, so only an admin sees or removes them
 // Secrets NEVER leave: the list carries identity + freshness only (no access/refresh token).
 
+import { BANK_LABELS } from '../../app/utils/bankLabels'
 import type { BankAccountInfo } from './bankTokenStore'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -47,8 +48,11 @@ export interface DisconnectInput extends BankAccountsInput {
 }
 
 /** Providers a client may name. Anything else is rejected before it reaches SQL — the value is
- *  caller-controlled and is used as a lookup key, so it gets an allowlist, not a cast. */
-const KNOWN_PROVIDERS: readonly string[] = ['alfa-by', 'prior-by', 'manual']
+ *  caller-controlled and is used as a lookup key, so it gets an allowlist, not a cast. Derived from
+ *  `BANK_LABELS` (a `Record<BankProviderId, string>`) rather than hand-listed: a hand-listed copy
+ *  would silently go stale when a provider is added, and its stored rows would become undeletable
+ *  from the UI (400 «unknown provider») with nothing failing at compile time. */
+const KNOWN_PROVIDERS: readonly string[] = Object.keys(BANK_LABELS)
 
 function isKnownProvider(v: string): v is BankProviderId {
   return KNOWN_PROVIDERS.includes(v)

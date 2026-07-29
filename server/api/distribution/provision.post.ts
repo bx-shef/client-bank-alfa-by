@@ -30,6 +30,9 @@ function liveProvisionDeps(): ProvisionRequestDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
+    // Raw portal error → server log only (the client gets the classified text). Injected so the
+    // pure handler stays free of console.*.
+    log: message => console.warn(message),
     provision: async (memberId) => {
       // Run on the portal's STORED OAuth token (app context — proven for crm.type.add /
       // userfieldconfig.add / app.option.set, the same transport crm-sync mutations use). The frame

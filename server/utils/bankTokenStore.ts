@@ -171,7 +171,9 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
     accountKey: String(r.account_key),
-    connectedAt: new Date(String(r.updated_at)).getTime(),
+    // node-pg hands back a Date for TIMESTAMPTZ; String(Date) then re-parsing that human form is
+    // implementation-defined and drops milliseconds — take the Date directly when we have one.
+    connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true
   }))

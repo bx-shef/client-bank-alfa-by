@@ -5,6 +5,7 @@ import {
   type DisconnectDeps,
   type ListAccountsDeps
 } from '../server/utils/bankAccounts'
+import { classifyProvisionError } from '../server/utils/provisionRequest'
 import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 
 // Connected bank accounts (#404). The gate is the interesting part: this endpoint pair reveals and
@@ -88,6 +89,40 @@ describe('handleListBankAccounts', () => {
     const res = await handleListBankAccounts(listDeps({ list: async () => [] }), input)
     expect(res.status).toBe(200)
     expect(res.body.accounts).toEqual([])
+  })
+})
+
+describe('classifyProvisionError', () => {
+  it('recognises the SDK-shaped scope error, not just the machine code', () => {
+    // The SDK surfaces getErrorMessages() only, so the usual text is the human description with
+    // «higher privileges» and NO `insufficient_scope` — the branch must catch that shape (#408).
+    for (const raw of [
+      'insufficient_scope',
+      'The request requires higher privileges than provided by the access token',
+      'ACCESS DENIED: userfieldconfig.add'
+    ]) {
+      expect(classifyProvisionError(raw)).toContain('userfieldconfig')
+    }
+  })
+
+  it('does NOT read a plain field conflict as «reinstall the app»', () => {
+    // The method name alone must not trigger the scope advice — a duplicate fieldName also echoes
+    // `userfieldconfig`, and sending the admin to reinstall would be actively wrong.
+    const msg = classifyProvisionError('userfieldconfig: field with this name already exists')
+    expect(msg).not.toContain('Переустановите')
+  })
+
+  it('separates rights, expired auth and network from the generic case', () => {
+    expect(classifyProvisionError('ACCESS_DENIED')).toContain('администратор')
+    expect(classifyProvisionError('expired_token')).toContain('авторизация')
+    expect(classifyProvisionError('fetch failed')).toContain('не ответил вовремя')
+    expect(classifyProvisionError('some unknown portal burp')).toContain('Повторите попытку')
+  })
+
+  it('never promises the admin a message they cannot see', () => {
+    // The raw text goes to the server log only, so «пришлите этот текст» sent them hunting for
+    // something that is not on screen.
+    expect(classifyProvisionError('whatever')).not.toContain('этот текст')
   })
 })
 
