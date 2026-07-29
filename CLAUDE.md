@@ -75,9 +75,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   не держит, живой OAuth предусмотрен на backend/из портала (транспорт `bankFetch.ts` собран + юнит-тесты,
   A5 — Альфа GET; **подключён к воркеру (A9)**; **реестр счетов (A6) + крон-таймер (A10) + connect-поток с
   UI (A7) + глобальный rate-limiter (A8) готовы** — вся машинерия опроса собрана, таймер default-OFF
-  (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); **Приор (A5b) — движок опроса и connect-поток
-  готовы**, но в автоопрос (`POLLABLE_PROVIDERS`) ещё не включён — сперва учёт лимита по ЗАПРОСАМ (задача
-  Приора = до 10 HTTP) и занятость воркер-слота; прод дополнительно требует BY-СКЗИ (issue #41)).
+  (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); **Приор (A5b) — движок опроса, connect-поток и АВТООПРОС
+  готовы**: `prior-by` в `POLLABLE_PROVIDERS`, у него своя очередь `bank-fetch-prior` с бюджетом в
+  ЗАПРОСАХ (задача Приора = до 10 HTTP, `REQUESTS_PER_ACCOUNT`) и своими слотами, поэтому он не
+  блокирует Альфу и не тратит её лимит; прод дополнительно требует BY-СКЗИ (issue #41), sandbox `:9344` — нет).
   В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
   синтетика): чип загружает пример в один клик (`loadSample`: fetch→File→`runFiles`) + ссылка «скачать».
   Интерактивные контролы — **b24ui** (`B24Button`: «Выбрать файл»/«Сбросить»/чипы примеров, air-цвета
@@ -443,7 +444,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `MANUAL_POLL_ENABLED` (default OFF) + `queueEnabled`, admin-гейт (`profile.ADMIN`, блок спуфинга домена),
     пер-портальный Redis-кулдаун `SET NX EX` (`claimCooldownSlot`, дефолт 60с, `MANUAL_POLL_COOLDOWN_SEC`;
     claim только при наличии работы), глобальный A8-лимитер ниже по потоку. Инертно (`enqueued:0`) без счетов;
-    фильтр `POLLABLE_PROVIDERS` — тот же, что у крона (сейчас только Альфа; Приор пока не автоопрашивается).
+    фильтр `POLLABLE_PROVIDERS` — тот же, что у крона (Альфа **и Приор**, у каждого своя очередь и свой бюджет).
     UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll` на `/settings`.
     nginx `limit_req` на роут. `listBankAccountsForPortal` (без расшифровки refresh).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
@@ -561,8 +562,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `provider` из **проверенного** state. UI — пикер банка `B24RadioGroup` (тип сужен до подключаемых, `manual`
     выбрать нельзя); подписи/плейсхолдер/кнопка следуют выбору. Env — `PRIOR_OAUTH_*`
     (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`).
-    **Осталось:** включить `prior-by` в автоопрос (нужен учёт лимита A8 по ЗАПРОСАМ, а не задачам, и
-    отдельная занятость слота — задача Приора держит воркер до минут) + прод-СКЗИ (issue #41).
+    **Автоопрос включён**: `prior-by` в `POLLABLE_PROVIDERS`, отдельная очередь `bank-fetch-prior`
+    (`fetchQueueFor`) с бюджетом в ЗАПРОСАХ (`providerJobRate` делит лимит на стоимость задачи) и
+    собственными слотами (`QUEUE_PRIOR_CONCURRENCY`) — длинная задача Приора не держит воркер Альфы.
+    **Осталось:** прод-СКЗИ (issue #41) — без BY-крипто TLS прод-хост `:9345` недостижим; sandbox `:9344` работает.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
