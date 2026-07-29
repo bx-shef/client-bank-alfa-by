@@ -216,7 +216,7 @@ onMounted(async () => {
     <B24Slideover
       v-model:open="settingsOpen"
       title="Настройки"
-      description="Уведомления в чат, исключения, распознавание. Сохраняются в вашем портале Bitrix24."
+      description="Подключение банка, уведомления в чат, исключения, распознавание. Сохраняются в вашем портале Bitrix24."
       side="bottom"
     >
       <template #body>
@@ -227,13 +227,16 @@ onMounted(async () => {
             @close="settingsOpen = false"
           />
 
-          <!-- Route to the FULL settings page. The slideover deliberately carries only the chat
-               settings, but bank connection / manual poll / distribution live on `/settings` — and
-               without this link that page was unreachable from the UI, so an admin could not find
-               «Подключение банка» at all (the one action the whole online import depends on). -->
-          <div class="mt-6 border-t border-(--ui-color-design-tinted-na-stroke) pt-4">
+          <!-- Route to the FULL settings page. The slideover carries everything an admin needs to
+               switch the import on (bank connection included), but the distribution ledger is
+               `/settings`-only — and without this link that page was unreachable from the UI.
+               Admin-only: the copy names admin-only features. -->
+          <div
+            v-if="isAdmin"
+            class="mt-6 border-t border-(--ui-color-design-tinted-na-stroke) pt-4"
+          >
             <p class="mb-2 text-sm text-(--ui-color-base-3)">
-              Подключение банка, ручной опрос и распределение — на полной странице настроек.
+              Распределение платежей — на полной странице настроек.
             </p>
             <B24Button
               label="Все настройки"
