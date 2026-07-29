@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useBankAccounts, type ConnectedBankAccount } from '~/composables/useBankAccounts'
+import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
 
@@ -11,7 +12,10 @@ import { BANK_LABELS } from '~/utils/bankLabels'
 // Admin gate is NOT repeated here: the card that hosts this already gates on admin, and the
 // backend re-gates both routes (the client gate is convenience, the server one is authority).
 
-const { accounts, loading, loaded, removing, error, load, disconnect, rowKey } = useBankAccounts()
+const { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey } = useBankAccounts()
+
+/** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
+const drafts = ref<Record<string, string>>({})
 
 /** Which row is awaiting confirmation. Disconnect is destructive (imports stop), so it takes a
  *  deliberate second click rather than a native confirm() — the latter is blocked in some iframes. */
@@ -29,6 +33,12 @@ function providerLabel(id: ConnectedBankAccount['provider']): string {
 function connectedAgo(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return ''
   return formatRelativeTime(new Date(ms).toISOString(), Date.now())
+}
+
+async function onAssign(a: ConnectedBankAccount) {
+  const key = rowKey(a)
+  // Успех → строка перечитается уже с настоящим номером, черновик больше не нужен.
+  if (await setAccount(a, drafts.value[key] ?? '')) drafts.value[key] = ''
 }
 
 async function onDisconnect(a: ConnectedBankAccount) {
@@ -94,13 +104,44 @@ defineExpose({ reload: load })
             <div class="flex items-center gap-2">
               <span class="font-medium">{{ providerLabel(a.provider) }}</span>
               <B24Badge
-                v-if="!a.hasRefresh"
+                v-if="isPendingAccountKey(a.accountKey)"
+                color="air-primary-warning"
+                size="xs"
+                label="счёт не выбран"
+              />
+              <B24Badge
+                v-else-if="!a.hasRefresh"
                 color="air-primary-warning"
                 size="xs"
                 label="нужно переподключить"
               />
             </div>
-            <div class="truncate font-mono text-xs text-(--ui-color-base-3)">
+            <!-- Подключение без счёта (#407): строка есть, номера ещё нет — просим выбрать прямо
+                 здесь, иначе такое подключение было бы «висящим» и непонятным. -->
+            <div
+              v-if="isPendingAccountKey(a.accountKey)"
+              class="mt-1 flex flex-wrap items-center gap-2"
+              :data-testid="`pending-${a.provider}`"
+            >
+              <B24Input
+                v-model="drafts[rowKey(a)]"
+                placeholder="BY00ALFA00000000000000000000"
+                class="w-full max-w-xs font-mono text-xs"
+                :aria-label="`Номер счёта для подключения ${providerLabel(a.provider)}`"
+              />
+              <B24Button
+                label="Привязать счёт"
+                color="air-primary"
+                size="xs"
+                :loading="saving === rowKey(a)"
+                :disabled="saving === rowKey(a)"
+                @click="onAssign(a)"
+              />
+            </div>
+            <div
+              v-else
+              class="truncate font-mono text-xs text-(--ui-color-base-3)"
+            >
               {{ a.accountKey }}
             </div>
             <div

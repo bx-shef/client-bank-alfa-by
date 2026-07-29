@@ -52,11 +52,14 @@ describe('useBankConnect', () => {
     expect(connecting.value).toBe(false)
   })
 
-  it('requires an account number (no fetch when blank)', async () => {
+  it('счёт НЕ обязателен (#407): пустой — валидный старт, на сервер уходит пустая строка', async () => {
+    // Порядок «сначала банк, потом счёт»: подключаемся, а номер указываем после возврата (сервер
+    // положит подключение под временный ключ). Раньше пустой счёт был отказом ещё до запроса.
+    fetchMock.mockResolvedValueOnce({ authorizeUrl: 'https://alfa/authorize' })
     const { start, error } = useBankConnect()
-    expect(await start('alfa-by', '   ')).toBeNull()
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(error.value).toMatch(/номер счёта/i)
+    expect(await start('alfa-by', '   ')).toBe('https://alfa/authorize')
+    expect(error.value).toBe('')
+    expect((fetchMock.mock.calls[0]![1] as { body: { accountKey: string } }).body.accountKey).toBe('')
   })
 
   it('inert outside the portal frame (no token → no fetch)', async () => {

@@ -35,10 +35,9 @@ export function useBankConnect() {
       error.value = 'Подключение доступно только внутри портала Bitrix24'
       return null
     }
-    if (!accountKey.trim()) {
-      error.value = 'Укажите номер счёта'
-      return null
-    }
+    // Счёт НЕОБЯЗАТЕЛЕН (#407): подключаемся к банку, а номер выбираем уже после возврата —
+    // до авторизации админ не обязан помнить IBAN наизусть. Сервер положит такое подключение
+    // под временный ключ, и список попросит указать счёт.
     connecting.value = true
     try {
       const res = await $fetch<{ authorizeUrl?: string, error?: string }>('/api/bank/connect', {

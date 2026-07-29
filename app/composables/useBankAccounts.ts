@@ -23,6 +23,7 @@ export function useBankAccounts() {
   const accounts = ref<ConnectedBankAccount[]>([])
   const loading = ref(false)
   const removing = ref('')
+  const saving = ref('')
   const error = ref('')
   /** True once a load has resolved — lets the UI tell «пусто» apart from «ещё не спрашивали». */
   const loaded = ref(false)
@@ -79,5 +80,36 @@ export function useBankAccounts() {
     }
   }
 
-  return { accounts, loading, loaded, removing, error, load, disconnect, rowKey }
+  /** Назначить счёт подключению, сделанному без него (#407). Переименовывается только временный
+   *  ключ — сервер это и проверяет; здесь просто UI-обёртка. */
+  async function setAccount(account: Pick<ConnectedBankAccount, 'provider' | 'accountKey'>, accountKey: string): Promise<boolean> {
+    const a = frameAuth()
+    if (!a) {
+      error.value = 'Действие доступно только внутри портала Bitrix24'
+      return false
+    }
+    const value = accountKey.trim()
+    if (!value) {
+      error.value = 'Укажите номер счёта'
+      return false
+    }
+    saving.value = rowKey(account)
+    error.value = ''
+    try {
+      await $fetch('/api/bank/set-account', {
+        method: 'POST',
+        headers: authHeaders(a),
+        body: { provider: account.provider, pendingKey: account.accountKey, accountKey: value }
+      })
+      await load()
+      return true
+    } catch (e) {
+      error.value = frameFetchError(e, 'Не удалось привязать счёт')
+      return false
+    } finally {
+      saving.value = ''
+    }
+  }
+
+  return { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey }
 }
