@@ -16,6 +16,7 @@
 import { parseOAuthCallback, buildTokenExchangeBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { buildCodeExchangeBody, parsePriorTokenResponse, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
+import { provisionalAccountKey } from '../../app/utils/bankAccountKey'
 import { sanitizeForLog } from './logSanitize'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankToken } from './bankTokenStore'
@@ -73,7 +74,7 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
 
   // 1) Verify the signed state FIRST — the only auth on a bank redirect. Bad/expired ⇒ stop.
   const state = verifyConnectState(rawState, deps.secret, input.nowMs)
-  if (!state || !state.accountKey) {
+  if (!state) {
     return { status: 400, html: ERR_PAGE }
   }
 
@@ -123,7 +124,10 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
   await deps.saveToken({
     memberId: state.memberId,
     provider: state.provider,
-    accountKey: state.accountKey,
+    // Счёт мог не указываться на старте (#407) — тогда токен ложится под ВРЕМЕННЫЙ ключ, и UI
+    // покажет строку как «счёт не выбран». Уникальность даёт nonce: два параллельных подключения
+    // одного админа иначе затёрли бы друг друга.
+    accountKey: state.accountKey || provisionalAccountKey(state.nonce),
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
     expiresAt: input.nowMs + tokens.expiresIn * 1000

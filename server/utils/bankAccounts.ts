@@ -13,6 +13,7 @@
 // Secrets NEVER leave: the list carries identity + freshness only (no access/refresh token).
 
 import { BANK_LABELS } from '../../app/utils/bankLabels'
+import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import type { BankAccountInfo } from './bankTokenStore'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -37,6 +38,10 @@ export interface DisconnectDeps extends BankAccountsDeps {
   remove: (memberId: string, provider: BankProviderId, accountKey: string) => Promise<boolean>
 }
 
+export interface SetAccountDeps extends BankAccountsDeps {
+  rename: (memberId: string, provider: BankProviderId, fromKey: string, toKey: string) => Promise<'renamed' | 'not-found' | 'conflict'>
+}
+
 export interface BankAccountsInput {
   accessToken: string
   domain: string
@@ -46,6 +51,17 @@ export interface DisconnectInput extends BankAccountsInput {
   provider: string
   accountKey: string
 }
+
+export interface SetAccountInput extends BankAccountsInput {
+  provider: string
+  /** Временный ключ подключения, которому назначаем счёт. */
+  pendingKey: string
+  /** Настоящий номер счёта. */
+  accountKey: string
+}
+
+/** Тот же формат, что и на старте подключения (`isValidAccountKey`) — буквы и цифры. */
+const ACCOUNT_KEY_RE = /^[A-Za-z0-9]{1,64}$/
 
 /** Providers a client may name. Anything else is rejected before it reaches SQL — the value is
  *  caller-controlled and is used as a lookup key, so it gets an allowlist, not a cast. Derived from
@@ -100,6 +116,36 @@ export async function handleListBankAccounts(deps: ListAccountsDeps, input: Bank
       }))
     }
   }
+}
+
+/**
+ * Назначить счёт подключению, сделанному без него (#407): порядок «сначала банк, потом счёт»
+ * оставляет строку под временным ключом, и этот вызов заменяет его на настоящий номер.
+ * Переименовывать разрешено ТОЛЬКО временный ключ — иначе это была бы возможность подменить счёт
+ * у живого подключения, то есть перенаправить чужие операции на другой номер.
+ */
+export async function handleSetBankAccount(deps: SetAccountDeps, input: SetAccountInput): Promise<BankAccountsResult> {
+  const auth = await authorize(deps, input)
+  if ('error' in auth) return auth.error
+
+  const provider = input.provider?.trim() ?? ''
+  const pendingKey = input.pendingKey?.trim() ?? ''
+  const accountKey = input.accountKey?.trim() ?? ''
+  if (!provider || !pendingKey || !accountKey) {
+    return { status: 400, body: { error: 'provider, pendingKey and accountKey are required' } }
+  }
+  if (!isKnownProvider(provider)) return { status: 400, body: { error: 'unknown provider' } }
+  if (!isPendingAccountKey(pendingKey)) {
+    return { status: 400, body: { error: 'only a pending connection can be assigned an account' } }
+  }
+  if (!ACCOUNT_KEY_RE.test(accountKey)) {
+    return { status: 400, body: { error: 'a valid account number is required' } }
+  }
+
+  const res = await deps.rename(auth.memberId, provider, pendingKey, accountKey)
+  if (res === 'conflict') return { status: 409, body: { error: 'this account is already connected' } }
+  if (res === 'not-found') return { status: 404, body: { error: 'pending connection not found' } }
+  return { status: 200, body: { ok: true } }
 }
 
 /** Disconnect one account of the caller's portal. Idempotent — removing an already-gone account
