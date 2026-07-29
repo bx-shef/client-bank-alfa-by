@@ -217,8 +217,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   ошибка с retry). `placement.bind` **пока не делаем** — плейсменты добиваем на тестовом портале (см. план).
 - `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
   (`/install`, `/app`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
-- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`, `user_brief`,
-  `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`),
+- `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`,
+  `documentgenerator`, **`userfieldconfig`** (#408 — провижининг СП зовёт `userfieldconfig.add`, а scope
+  не запрашивался ⇒ на любом портале, где право не выдали руками, провижининг падал с опаковым
+  «provisioning failed»; ⚠ ре-consent), `user_brief`, `placement`), `B24_EVENT_HANDLER_PATH` (`/api/b24/events`), `B24_BOUND_EVENTS` (события для `event.bind`),
   `B24_PAYMENT_TRIGGER` (`code`/`name` канонического триггера автоматизации «платёж получен», #79 — регистрируется
   на установке, его же указывают в `allocation.triggerCode`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
@@ -529,7 +531,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     BankConnectCard.vue` (b24ui `B24Card`/`B24RadioGroup`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
     admin-гейт `useIsAdmin`, на `/settings`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
     фрейм-токеном → `authorizeUrl` → `window.open` top-level; номер счёта — как есть (только trim крайних пробелов), без переформатирования/case-folding).
-    **Connect-поток A7 завершён**; живой прогон — за банк-кредами владельца. Config из env
+    **Список подключённых счетов + отключение (#404, UX по живому прогону):** после успешного connect
+    UI не показывал ничего — ни банк, ни счёт, ни способ убрать ошибочный. Добавлены
+    `GET /api/bank/accounts` и `POST /api/bank/disconnect` (чистые хендлеры `server/utils/bankAccounts.ts`,
+    DI+тесты) — **гейт тот же, что у connect**: портал установлен → фрейм-токен доказан для ЭТОГО домена
+    (блок спуфинга `X-B24-Domain`) → `profile.ADMIN` (банк-креды портало-широкие). Стор: `listBankAccountInfoForPortal`
+    (идентификация+свежесть, **без расшифровки** — токены не покидают сервер, а битая строка всё равно
+    листается, иначе её нельзя было бы отключить) и `deleteBankToken` (member-scoped в WHERE — чужую строку
+    не удалить даже подделав provider/account; идемпотентно). UI — `ConnectedBankAccounts.vue` (внутри
+    `BankConnectCard`, над формой) + `useBankAccounts.ts`; подтверждение удаления — вторым кликом в строке
+    (не `confirm()` — тот блокируется в части iframe'ов). Лейблы банков — общий `app/utils/bankLabels.ts`.
+    **Connect-поток A7 завершён**; живой прогон — **Альфа подтверждена вживую** (authorize → callback →
+    счёт сохранён). Config из env
     (`bankConnectConfigFromEnv`: authorize-host = `ALFA_OAUTH_TOKEN_URL` минус `/token`, `ALFA_OAUTH_REDIRECT_URI`/
     `_SCOPE`); провайдер не настроен → 400 (до REST), нет секрета → 503 (fail-closed);
     `Referrer-Policy: no-referrer` (нет секрета → **503 на старте**, на callback → 400). Чистые ядра (DI,
@@ -1256,8 +1269,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       хуке не проверялось.
     Требуемые скоупы **самого приложения** (не вебхука) — `app/config/b24.ts` `B24_REQUIRED_SCOPES`
     (`crm`, **`sale`** (#172, `order-id`→`sale.payment.list`), `im`, **`documentgenerator`** (#109, `via-document` мост),
-    `user_brief`, `placement`). ⚠ Добавление `sale`/`documentgenerator` **потребует ре-consent** на уже установленных
-    порталах (мост-документ теперь в hot-path — `crm.documentgenerator.document.list` в `crm-sync`).
+    **`userfieldconfig`** (#408 — `userfieldconfig.add` при провижининге полей dist-СП), `user_brief`, `placement`).
+    ⚠ Добавление `sale`/`documentgenerator`/`userfieldconfig` **потребует ре-consent** на уже установленных
+    порталах (мост-документ теперь в hot-path — `crm.documentgenerator.document.list` в `crm-sync`;
+    без `userfieldconfig` кнопка «Настроить смарт-процессы» отказывает).
   - `scripts/lib/*.mjs` — общая обвязка банк- и seed-скриптов (одинаковые запуск/проверка/вывод):
     `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
     `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser` — URL-гейт
