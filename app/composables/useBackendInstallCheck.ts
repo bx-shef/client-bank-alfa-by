@@ -1,5 +1,5 @@
 import { frameAuth, frameAuthHeaders as authHeaders } from '~/composables/useFrameAuth'
-import type { BackendState } from '~/utils/installVerdict'
+import { mapProbeStatus, type BackendState } from '~/utils/installVerdict'
 
 // Увидела ли серверная часть наш портал (#413).
 //
@@ -8,21 +8,26 @@ import type { BackendState } from '~/utils/installVerdict'
 // или событие не дошло, портал считается установленным, а серверная часть о нём не знает: ни
 // опроса, ни записи в CRM. Снаружи это выглядит как полностью успешная установка.
 //
-// Проверяем ЧУЖИМ маршрутом намеренно: `/api/setup-status` уже отвечает 409 «portal not installed
-// (no key)» ровно тогда, когда токенов портала нет, — то есть даёт искомый ответ без нового
-// эндпоинта. 200 (и 403 «не админ») означают, что портал backend'у известен.
+// Проверяем ЧУЖИМ маршрутом намеренно: `/api/setup-status` отвечает 409 «portal not installed
+// (no key)», когда для этого домена нет строки портала, — то есть даёт нужный симптом без нового
+// эндпоинта. ⚠ 409 не равен строго «событие не дошло»: он же возникает при несовпадении домена
+// (алиас, self-hosted, смена адреса) и при подавленном тумбстоуном stale-register (#77). Поэтому
+// вердикт по нему — мягкий («пока не подтверждено»), а не приказ переустановить.
 
-/** Сколько раз перепроверить и с какой паузой. Доставка события асинхронна и идёт параллельно с
- *  `installFinish`, поэтому мгновенный приговор давал бы ложную тревогу на здоровой установке. */
-const ATTEMPTS = 3
-const DELAY_MS = 1500
+// Сколько ждать. Токен пишет НЕ роут вебхука, а фоновый воркер: событие → проверка гранта сетевым
+// OAuth-рефрешем → очередь → воркер → INSERT. Три секунды на всю эту цепочку — рулетка, и на
+// занятой очереди здоровая установка получала бы ложную тревогу. Нарастающие паузы дают ~16с при
+// почти бесплатном счастливом пути (первый же ответ 200 выходит сразу).
+const DELAYS_MS = [1000, 2000, 3000, 4000, 6000] as const
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 /** Прочитать статус один раз. Отдаёт HTTP-код или 0, если запрос вообще не дошёл. */
 async function probeOnce(headers: Record<string, string>): Promise<number> {
   try {
-    await $fetch('/api/setup-status', { headers })
+    // retry: 0 — ofetch по умолчанию сам ретраит 409/5xx, то есть удваивал бы число запросов и
+    // ломал заявленный тайминг. Повторами управляем здесь, явно.
+    await $fetch('/api/setup-status', { headers, retry: 0 })
     return 200
   } catch (e) {
     const status = (e as { status?: number, statusCode?: number })?.status
@@ -40,18 +45,12 @@ export async function checkBackendKnowsPortal(): Promise<BackendState> {
   if (!a) return 'unknown'
   const headers = authHeaders(a)
 
-  let last = 0
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-    last = await probeOnce(headers)
-    // 200 — портал известен; 403 — известен, но мы не админ (для #413 это тоже «увидел»).
-    if (last === 200 || last === 403) return 'ok'
-    if (attempt < ATTEMPTS) await sleep(DELAY_MS)
+  let state: BackendState = 'unknown'
+  for (let attempt = 0; attempt <= DELAYS_MS.length; attempt++) {
+    state = mapProbeStatus(await probeOnce(headers))
+    if (state === 'ok') return 'ok'
+    const pause = DELAYS_MS[attempt]
+    if (pause !== undefined) await sleep(pause)
   }
-
-  // 409 — роут ответил и честно сказал, что токенов портала нет: событие не дошло.
-  if (last === 409) return 'portal-missing'
-  // 0 / 5xx — сам backend недоступен: это проблема владельца приложения, не портала.
-  if (last === 0 || last >= 500) return 'down'
-  // Что-то иное (400/401/…) — судить не берёмся, лучше промолчать, чем soврать.
-  return 'unknown'
+  return state
 }

@@ -42,6 +42,10 @@ const caption = ref('Инициализация…')
 const finished = ref(false)
 /** Видит ли backend наш портал (#413). До проверки — 'unknown': молчим, а не пугаем. */
 const backendState = ref<BackendState>('unknown')
+/** Идёт проверка серверной части. Пока идёт — вердикт НЕ показываем: иначе на секунды загорелось
+ *  бы зелёное «Приложение установлено», которое потом схлопнулось бы в жёлтое. Для экрана, чья
+ *  задача — доверие к вердикту, такой кадр хуже паузы. */
+const checkingBackend = ref(false)
 // Best-effort automation-trigger registration outcome (#79): '' = not attempted,
 // 'ok' = registered, otherwise a short error string for the diagnostics panel.
 const triggerRegistered = ref('')
@@ -225,7 +229,12 @@ async function runInstall() {
     // Событие установки идёт мимо iframe — прямо на backend. Проверяем, что оно дошло, иначе
     // портал «установлен», а серверная часть о нём не знает и импорт не заработает (#413).
     caption.value = 'Проверка серверной части…'
-    backendState.value = await checkBackendKnowsPortal()
+    checkingBackend.value = true
+    try {
+      backendState.value = await checkBackendKnowsPortal()
+    } finally {
+      checkingBackend.value = false
+    }
     caption.value = 'Готово'
   } catch (error: unknown) {
     console.error('[install]', error)
@@ -288,7 +297,7 @@ onMounted(runInstall)
         aria-live="polite"
       >
         <B24Alert
-          v-if="isUseB24 && verdict.level !== 'ok' && !isRunning && !installError"
+          v-if="isUseB24 && !checkingBackend && verdict.level !== 'ok' && !isRunning && !installError"
           :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
           variant="soft"
           :title="verdict.title"
@@ -312,7 +321,7 @@ onMounted(runInstall)
         </B24Alert>
 
         <B24Alert
-          v-else-if="isUseB24 && verdict.level === 'ok' && !isRunning && !installError"
+          v-else-if="isUseB24 && !checkingBackend && verdict.level === 'ok' && !isRunning && !installError"
           color="air-primary-success"
           variant="soft"
           :title="verdict.title"

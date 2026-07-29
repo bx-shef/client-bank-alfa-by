@@ -31,6 +31,9 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
   const ok = { isSuccess: true } as unknown as Result
   // Minimal B24Frame fake — only what install.vue / the in-portal pages touch.
   const frame = {
+    // ⚠ Намеренно БЕЗ `access_token`: `frameAuth()` тогда отдаёт null, и проверка серверной части
+    // на установке (#413) выходит до `$fetch`. Добавишь токен — install.nuxt.test.ts начнёт реально
+    // ходить в сеть под фейковыми таймерами; тогда сначала замокай `$fetch` в том файле.
     auth: { getAuthData: () => ({ domain: 'example.bitrix24.by' }), isAdmin: opts.isAdmin ?? true },
     parent: { setTitle: opts.setTitle ?? vi.fn(async () => {}), fitWindow: vi.fn(async () => {}) },
     actions: { v2: {

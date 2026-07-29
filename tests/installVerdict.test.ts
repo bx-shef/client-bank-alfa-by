@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { installVerdict } from '~/utils/installVerdict'
+import { installVerdict, mapProbeStatus } from '~/utils/installVerdict'
 
 // Вердикт установки (#410). Смысл модели — развести «установилось» и «работает»: раньше портал с
 // недовыданными правами показывал «Готово», а проблема лежала в свёрнутой диагностике мелкими
@@ -52,12 +52,16 @@ describe('installVerdict', () => {
     expect(v.issues).toHaveLength(1)
   })
 
-  it('backend не увидел портал → degraded: импорт не заработает (#413)', () => {
+  it('backend не подтвердил установку → degraded, но БЕЗ приказа переустановить (#413)', () => {
     // Событие установки идёт мимо iframe, поэтому «портал установлен» ничего не говорит о том,
-    // получила ли его серверная часть. Раньше это выглядело как полностью успешная установка.
+    // получила ли его серверная часть. При этом запись делает фоновый воркер после сетевой
+    // проверки, так что задержка — норма: приказ переустановить на здоровой установке был бы
+    // хуже молчания.
     const v = installVerdict({ ...base, backend: 'portal-missing' })
     expect(v.level).toBe('degraded')
-    expect(v.issues[0]!.title).toContain('не получила уведомление')
+    expect(v.issues[0]!.title).toContain('пока не подтвердила')
+    expect(v.issues[0]!.action).not.toContain('Переустановите')
+    expect(v.issues[0]!.action).toContain('Обновите')
   })
 
   it('backend недоступен → degraded, и сказано, что это не настройки портала', () => {
@@ -82,5 +86,30 @@ describe('installVerdict', () => {
         expect(issue.action.length).toBeGreaterThan(0)
       }
     }
+  })
+})
+
+// Отображение кода зонда в состояние серверной части (#413). Свитч критичен для UX: перепутанные
+// 409/403 дали бы ложное «переустановите приложение» на здоровой установке.
+describe('mapProbeStatus', () => {
+  it('200 и 403 — портал серверной части ИЗВЕСТЕН', () => {
+    // 403 достижим только после успешного поиска портала по домену, значит портал найден.
+    expect(mapProbeStatus(200)).toBe('ok')
+    expect(mapProbeStatus(403)).toBe('ok')
+  })
+
+  it('409 — строки портала нет', () => {
+    expect(mapProbeStatus(409)).toBe('portal-missing')
+  })
+
+  it('0 и 5xx — недоступна сама серверная часть', () => {
+    expect(mapProbeStatus(0)).toBe('down')
+    expect(mapProbeStatus(500)).toBe('down')
+    expect(mapProbeStatus(502)).toBe('down')
+  })
+
+  it('прочие коды — не судим', () => {
+    expect(mapProbeStatus(400)).toBe('unknown')
+    expect(mapProbeStatus(401)).toBe('unknown')
   })
 })
