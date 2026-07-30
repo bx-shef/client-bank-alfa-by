@@ -25,9 +25,10 @@ export interface BarOptionInput {
   money: (n: number) => string
 }
 
-/** Отступ слева под подписи оси. Раньше подписи рисовались ВНУТРИ области графика
- *  (`axisLabel.inside`) и налезали на столбцы; вынесли наружу — нужно место. */
-export const BAR_GRID_LEFT = 48
+/** Отступ слева. Ширину самих подписей резервирует `containLabel: true`, поэтому большое
+ *  значение здесь СКЛАДЫВАЕТСЯ с ней и просто съедает график — на узком экране портала это заметная
+ *  доля ширины. Налезание подписей чинил не отступ, а отказ от `axisLabel.inside`. */
+export const BAR_GRID_LEFT = 8
 
 /**
  * Опции ECharts для столбчатого графика.
@@ -39,7 +40,12 @@ export const BAR_GRID_LEFT = 48
  */
 export function buildBarOption(input: BarOptionInput) {
   const { buckets, colors: c, animate, money } = input
+  /** Для ПОДСКАЗКИ: ряд уже подписан «Расходы», и знак там дал бы «−980» при названии «Расходы» —
+   *  двойное отрицание. На ОСИ так делать нельзя (см. ниже). */
   const abs = (v: number) => money(Math.abs(v))
+  /** Для ОСИ: знак обязателен. Без него шкала выглядит как «2000 / 0 / 2000» — два одинаковых
+   *  деления по разные стороны от нуля, и понять, где расход, невозможно. */
+  const signed = (v: number) => money(v)
 
   return {
     animation: animate,
@@ -59,12 +65,32 @@ export function buildBarOption(input: BarOptionInput) {
     yAxis: {
       type: 'value' as const,
       // Без `inside: true` — подписи слева от графика, а не поверх столбцов.
-      axisLabel: { color: c.axis, formatter: abs },
+      axisLabel: { color: c.axis, formatter: signed },
       splitLine: { lineStyle: { color: c.split } }
     },
     series: [
-      { id: 'income', name: 'Приходы', type: 'bar' as const, color: c.income, itemStyle: { borderRadius: [3, 3, 0, 0] }, data: buckets.map(b => b.income) },
-      { id: 'expense', name: 'Расходы', type: 'bar' as const, color: c.expense, itemStyle: { borderRadius: [0, 0, 3, 3] }, data: buckets.map(b => -b.expense) }
+      {
+        id: 'income',
+        name: 'Приходы',
+        type: 'bar' as const,
+        color: c.income,
+        itemStyle: { borderRadius: [3, 3, 0, 0] },
+        data: buckets.map(b => b.income),
+        // Нулевая линия — единственная, которую обязательно видно: весь смысл графика в том, что
+        // выше неё приход, ниже расход. Обычной сеткой (10% прозрачности) она не читается, а
+        // `axisLine.onZero` тут не помогает — у оси значений это ВЕРТИКАЛЬНАЯ линия, а нужна
+        // горизонтальная. Поэтому явная markLine (без подписи и без реакции на наведение).
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          label: { show: false },
+          lineStyle: { color: c.axis, width: 1, type: 'solid' as const },
+          data: [{ yAxis: 0 }]
+        }
+      },
+      // `b.expense === 0 ? 0 : -…` — чтобы в данные не попадал `-0`: значения он не меняет, но
+      // мусорит в отладке и сериализации.
+      { id: 'expense', name: 'Расходы', type: 'bar' as const, color: c.expense, itemStyle: { borderRadius: [0, 0, 3, 3] }, data: buckets.map(b => (b.expense === 0 ? 0 : -b.expense)) }
     ]
   }
 }
