@@ -66,10 +66,12 @@ describe('install.vue — standalone (no B24 frame)', () => {
     // Раньше страница крутила фальшивый прогресс и уводила на лендинг. Теперь объяснение
     // показывает общий `InPortalGate`, а сама установка молча не начинается: снаружи портала
     // её нельзя ни завершить, ни даже осмысленно изобразить.
-    await mountSuspended(InstallPage)
+    const wrapper = await mountSuspended(InstallPage)
     await vi.advanceTimersByTimeAsync(13000)
     expect(finishSpy).not.toHaveBeenCalled()
     expect(replaceSpy).not.toHaveBeenCalled()
+    // Утверждение со ЗНАКОМ ПЛЮС: одни «не вызвано» прошли бы и на застрявшей странице установки.
+    expect(wrapper.find('[data-testid="portal-gate-outside"]').exists()).toBe(true)
   })
 })
 

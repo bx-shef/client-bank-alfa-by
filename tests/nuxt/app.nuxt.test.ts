@@ -9,9 +9,9 @@ import AppPage from '~/pages/app.vue'
 // `window.location.search` пуст — проверено на собранной статике).
 const PREVIEW = { route: '/app?preview=1' }
 
-// Standalone render (no B24 frame in the test env): useB24().init() no-ops, so the page is
-// neither blocked nor nagged (setup banner is portal-only) and shows the real operations view —
-// which is EMPTY (no demo data anymore). The backend operations feed (#5) fills it later.
+// Рендер через preview-обход (фрейма в тестовой среде нет, гейт без обхода показал бы заглушку).
+// Баннер «не настроено» — портальный, поэтому не мешает; список операций РЕАЛЬНЫЙ и пустой
+// (демо-данных больше нет). Фид операций с backend (#5) наполнит его позже.
 describe('app statement page (no demo data)', () => {
   it('renders the operations card and filter chips with zero counts', async () => {
     const wrapper = await mountSuspended(AppPage, PREVIEW)

@@ -50,12 +50,16 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
       openPath: opts.openPath ?? vi.fn(async () => ({}))
     }
   } as unknown as B24Frame
+  const inFrame = () => opts.isInit?.() ?? true
   return {
     init: vi.fn(async () => ok),
-    get: () => frame,
+    // `get()` обязан следовать за `isInit()`: в реальном `useB24` синглтон и реактивный флаг
+    // описывают одно и то же состояние. Мок, возвращающий фрейм «снаружи», делал бы standalone-
+    // ветки непроверяемыми — а `InPortalGate` читает именно `get()` (флаг выставляется в nextTick).
+    get: () => (inFrame() ? frame : undefined),
     getOrThrow: () => frame,
     set: () => ok,
-    isInit: () => opts.isInit?.() ?? true,
+    isInit: inFrame,
     targetOrigin: () => 'https://example.bitrix24.by',
     // Пусто по умолчанию (большинству тестов права не важны). Тест вердикта установки ЗАДАЁТ их
     // явно: с пустым списком «недовыданных прав» не бывает, и degraded-ветка не проверялась бы.

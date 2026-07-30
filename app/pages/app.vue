@@ -72,9 +72,12 @@ const showSetupBanner = computed(() => inPortal.value && chatSettings.loaded.val
 
 const b24 = useB24()
 onMounted(async () => {
-  await refresh()
+  // ⚠ Порядок важен: `refresh()` авторизуется фрейм-токеном, а он доступен только ПОСЛЕ `init()`.
+  // Раньше статус запрашивался первым и всегда упирался в «нет токена» — баг маскировался
+  // демо-моком, а с его удалением (#415) полоса статуса навсегда показывала бы «не запускалась».
   await b24.init()
   if (!b24.isInit()) return
+  await refresh()
   checkAdmin()
   // Load chat settings so the setup banner reflects the real configured state.
   await chatSettings.load()
