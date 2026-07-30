@@ -30,7 +30,7 @@ function liveIngestDeps(): IngestDeps {
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),
     enqueueParse,
     hash: bytes => createHash('sha256').update(bytes).digest('hex'),
-    markQueued: (memberId, batchId, fileName) => markBatchQueued(dbQuery, memberId, batchId, fileName)
+    markQueued: (memberId, batchId, fileName, userId) => markBatchQueued(dbQuery, memberId, batchId, fileName, userId)
   }
 }
 

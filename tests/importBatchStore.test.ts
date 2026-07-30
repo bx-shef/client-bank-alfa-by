@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { QueryFn } from '../server/utils/tokenStore'
 import {
-  MAX_BATCH_IDS, deleteBatchesForPortal, getBatchResults, markBatchQueued, saveBatchError, saveBatchResult
+  MAX_BATCH_IDS, deleteBatchesForPortal, getBatchResults, markBatchQueued, saveBatchError,
+  saveBatchResult, sweepOldBatches
 } from '../server/utils/importBatchStore'
 
 // Фейковый pg над картой `member|batch → строка`: гоняет ветки SQL стора без БД.
@@ -16,23 +17,24 @@ function fakeStore() {
       return ids
         .map(id => rows.get(key(p[0], id)))
         .filter((r): r is Record<string, unknown> => Boolean(r))
+        .filter(r => r.user_id === p[2] || r.user_id === '')
     }
     if (head.startsWith('INSERT')) {
       const k = key(p[0], p[1])
       const prev = rows.get(k)
-      if (sql.includes('VALUES ($1, $2, \'queued\'')) {
+      if (sql.includes('\'queued\'')) {
         // ON CONFLICT здесь обновляет ТОЛЬКО имя файла — состояние не сбрасывается.
         rows.set(k, prev
           ? { ...prev, file_name: p[2] }
-          : { batch_id: p[1], state: 'queued', file_name: p[2], operations: 0, created: 0, notified: 0, unmatched: 0, error: '', updated_at: '2026-07-30T06:00:00.000Z' })
+          : { batch_id: p[1], user_id: p[3], state: 'queued', file_name: p[2], operations: 0, created: 0, notified: 0, unmatched: 0, error: '', updated_at: '2026-07-30T06:00:00.000Z' })
         return []
       }
       if (sql.includes('\'error\'')) {
-        rows.set(k, { ...(prev ?? { batch_id: p[1], file_name: '' }), state: 'error', error: p[2], updated_at: '2026-07-30T06:00:00.000Z' })
+        rows.set(k, { ...(prev ?? { batch_id: p[1], file_name: '', user_id: '' }), state: 'error', error: p[2], updated_at: '2026-07-30T06:00:00.000Z' })
         return []
       }
       rows.set(k, {
-        ...(prev ?? { batch_id: p[1], file_name: '' }),
+        ...(prev ?? { batch_id: p[1], file_name: '', user_id: '' }),
         state: 'ok', operations: p[2], created: p[3], notified: p[4], unmatched: p[5], error: '',
         updated_at: '2026-07-30T06:00:00.000Z'
       })
@@ -54,37 +56,67 @@ const ID = 'a'.repeat(64)
 describe('importBatchStore', () => {
   it('принятая загрузка читается как «в очереди»', async () => {
     const { query } = fakeStore()
-    await markBatchQueued(query, 'M', ID, 'v.txt')
-    const [row] = await getBatchResults(query, 'M', [ID])
+    await markBatchQueued(query, 'M', ID, 'v.txt', 'U1')
+    const [row] = await getBatchResults(query, 'M', [ID], 'U1')
     expect(row?.state).toBe('queued')
     expect(row?.fileName).toBe('v.txt')
   })
 
-  it('повторная загрузка того же файла НЕ сбрасывает готовый итог', async () => {
-    // Обработка дедуплицируется по тому же хешу, второго прогона не будет — сброс оставил бы
-    // строку висеть в «принято» навсегда.
-    const { query } = fakeStore()
-    await markBatchQueued(query, 'M', ID, 'v.txt')
-    await saveBatchResult(query, 'M', ID, { operations: 5, created: 4, notified: 3, unmatched: 1 })
-    await markBatchQueued(query, 'M', ID, 'v.txt')
-    const [row] = await getBatchResults(query, 'M', [ID])
-    expect(row?.state).toBe('ok')
-    expect(row?.created).toBe(4)
+  it('UPSERT «принято» НИКОГДА не трогает состояние строки', async () => {
+    // Утверждаем про САМ SQL, а не про поведение своего фейка: иначе тест остался бы зелёным,
+    // добавь кто-нибудь `state = 'queued'` в DO UPDATE — а это и есть та регрессия, от которой
+    // готовый итог повисал бы «в обработке» навсегда (повтор дедуплицируется, прогона не будет).
+    let sql = ''
+    await markBatchQueued(async (s) => {
+      sql = s
+      return []
+    }, 'M', ID, 'v.txt', 'U1')
+    const onConflict = sql.slice(sql.indexOf('ON CONFLICT'))
+    expect(onConflict).toMatch(/DO UPDATE SET\s+file_name = EXCLUDED\.file_name/)
+    expect(onConflict).not.toMatch(/\bstate\b/)
+    // Чужую строку подписью не перетереть: ключ — хеш файла, он совпадёт у коллеги с тем же файлом.
+    expect(onConflict).toMatch(/WHERE import_batch\.user_id = EXCLUDED\.user_id/)
   })
 
   it('провал несёт причину, а успех её стирает', async () => {
     const { query } = fakeStore()
     await saveBatchError(query, 'M', ID, 'Формат не распознан.')
-    expect((await getBatchResults(query, 'M', [ID]))[0]).toMatchObject({ state: 'error', error: 'Формат не распознан.' })
+    expect((await getBatchResults(query, 'M', [ID], 'U1'))[0]).toMatchObject({ state: 'error', error: 'Формат не распознан.' })
     await saveBatchResult(query, 'M', ID, { operations: 2, created: 2, notified: 0, unmatched: 0 })
-    expect((await getBatchResults(query, 'M', [ID]))[0]).toMatchObject({ state: 'ok', error: '' })
+    expect((await getBatchResults(query, 'M', [ID], 'U1'))[0]).toMatchObject({ state: 'ok', error: '' })
   })
 
-  it('чужой портал не читает наш итог по тому же ключу', async () => {
-    // Ключ — sha256 файла: он не секрет. Границу держит скоуп по member_id.
-    const { query } = fakeStore()
-    await markBatchQueued(query, 'M', ID, 'v.txt')
-    expect(await getBatchResults(query, 'OTHER', [ID])).toEqual([])
+  it('скоуп чтения и удаления — в самом WHERE, а не в фильтре после', async () => {
+    // Ключ — sha256 ФАЙЛА, то есть не секрет: его подберёт любой, у кого тот же файл. Границу
+    // держат member_id и user_id прямо в запросе, иначе чужие строки успели бы покинуть БД.
+    const seen: string[] = []
+    const q: QueryFn = async (sql) => {
+      seen.push(sql)
+      return []
+    }
+    await getBatchResults(q, 'M', [ID], 'U1')
+    await deleteBatchesForPortal(q, 'M')
+    expect(seen[0]).toMatch(/WHERE member_id = \$1 AND batch_id = ANY/)
+    expect(seen[0]).toMatch(/user_id = \$3 OR user_id = ''/)
+    expect(seen[1]).toMatch(/DELETE FROM import_batch WHERE member_id = \$1/)
+  })
+
+  it('свип удаляет по ВОЗРАСТУ, а не по порталу', async () => {
+    let sql = ''
+    let params: unknown[] = []
+    await sweepOldBatches(async (s, p) => {
+      sql = s
+      params = p ?? []
+      return []
+    }, 3)
+    expect(sql).toMatch(/updated_at < now\(\) - \(\$1 \|\| ' days'\)::interval/)
+    expect(params).toEqual(['3'])
+  })
+
+  it('битая строка из БД не роняет чтение', async () => {
+    const q: QueryFn = async () => [{ batch_id: ID, state: 'ЧТО-ТО', operations: 'x', updated_at: null }]
+    const [row] = await getBatchResults(q, 'M', [ID], 'U1')
+    expect(row).toMatchObject({ state: 'queued', operations: 0, fileName: '', updatedAt: null })
   })
 
   it('пустой список ключей не идёт в БД', async () => {
@@ -93,7 +125,7 @@ describe('importBatchStore', () => {
       called++
       return []
     }
-    expect(await getBatchResults(query, 'M', [])).toEqual([])
+    expect(await getBatchResults(query, 'M', [], 'U1')).toEqual([])
     expect(called).toBe(0)
   })
 
@@ -103,13 +135,13 @@ describe('importBatchStore', () => {
       seen = (params?.[1] ?? []) as unknown[]
       return []
     }
-    await getBatchResults(query, 'M', Array.from({ length: MAX_BATCH_IDS + 10 }, (_, i) => String(i)))
+    await getBatchResults(query, 'M', Array.from({ length: MAX_BATCH_IDS + 10 }, (_, i) => String(i)), 'U1')
     expect(seen).toHaveLength(MAX_BATCH_IDS)
   })
 
   it('удаление приложения стирает все загрузки портала', async () => {
     const { query, rows } = fakeStore()
-    await markBatchQueued(query, 'M', ID, 'v.txt')
+    await markBatchQueued(query, 'M', ID, 'v.txt', 'U1')
     await deleteBatchesForPortal(query, 'M')
     expect(rows.size).toBe(0)
   })

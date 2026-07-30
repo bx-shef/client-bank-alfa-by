@@ -47,7 +47,16 @@ describe('handleImportBatch', () => {
     expect(res.status).toBe(200)
     // Скоуп по порталу уходит В ЗАПРОС, а не фильтруется после — иначе чужие строки успели бы
     // покинуть БД.
-    expect(getBatches).toHaveBeenCalledWith('M1', [ID_A, ID_B])
+    // Скоуп уходит В ЗАПРОС — и по порталу, и по СОТРУДНИКУ: ключ это хеш файла, значит коллега
+    // с той же выпиской иначе прочитал бы имя файла и счётчики чужой загрузки.
+    expect(getBatches).toHaveBeenCalledWith('M1', [ID_A, ID_B], '7')
+  })
+
+  it('пустой userId от портала — тоже 403 (усечённый конверт не должен проезжать гейт)', async () => {
+    const getBatches = vi.fn(async () => [])
+    const d = deps({ validateFrame: vi.fn(async () => ''), getBatches })
+    expect((await handleImportBatch(d, input)).status).toBe(403)
+    expect(getBatches).not.toHaveBeenCalled()
   })
 
   it('без токена/домена — 400', async () => {

@@ -254,44 +254,6 @@ function clearAll() {
             :description="submitResult.message"
             data-testid="submit-result"
           />
-
-          <!-- Реальный исход обработки (#417): счётчики приходят с сервера, который и есть
-               авторитет разбора, — браузерный предпросмотр тут не при чём. -->
-          <div
-            v-if="batches.results.value.length || batches.polling.value"
-            class="rounded-md border border-(--ui-color-design-tinted-na-stroke) p-3"
-            role="status"
-            aria-live="polite"
-            data-testid="batch-results"
-          >
-            <p class="mb-2 text-sm font-semibold">
-              Результат обработки
-            </p>
-            <ul class="space-y-1 text-sm">
-              <li
-                v-for="r in batches.results.value"
-                :key="r.batchId"
-                class="flex flex-wrap items-baseline justify-between gap-2"
-              >
-                <span class="truncate">{{ r.fileName || 'файл' }}</span>
-                <span :class="r.state === 'error' ? 'text-(--ui-color-accent-main-alert)' : 'text-(--ui-color-base-3)'">
-                  {{ batchStateLabel(r) }}
-                </span>
-              </li>
-            </ul>
-            <p
-              v-if="batchSummary"
-              class="mt-2 text-sm text-(--ui-color-base-3)"
-            >
-              {{ batchSummary }}
-            </p>
-            <p
-              v-else-if="batches.polling.value"
-              class="text-sm text-(--ui-color-base-3)"
-            >
-              Обрабатываем загрузку…
-            </p>
-          </div>
         </div>
       </template>
 
@@ -304,6 +266,69 @@ function clearAll() {
         description="Проверьте формат файла: ожидается 1CClientBankExchange или client-bank «***** ^Type=» в кодировке windows-1251."
         data-testid="all-failed"
       />
+      <!-- Реальный исход обработки (#417). НЕ под гейтом предпросмотра: после перезагрузки вкладки
+           предпросмотра нет (он живёт только в памяти), а итог как раз и нужен — иначе восстановление
+           ключей из sessionStorage опрашивало бы сервер в невидимую разметку. -->
+      <B24Card
+        v-if="batches.results.value.length || batches.polling.value || batches.timedOut.value"
+        data-testid="batch-results"
+      >
+        <template #header>
+          <h2 class="font-semibold">
+            Результат обработки
+          </h2>
+        </template>
+
+        <ul class="space-y-2 text-sm">
+          <li
+            v-for="r in batches.results.value"
+            :key="r.batchId"
+            class="flex flex-wrap items-center justify-between gap-2"
+          >
+            <span class="min-w-0 flex-1 break-words">{{ r.fileName || 'файл без имени' }}</span>
+            <!-- Состояние несёт БЕЙДЖ, а не только цвет текста: иначе «ошибка» и «записано» в ч/б
+                 и для дальтоника неотличимы. -->
+            <B24Badge
+              :label="batchStateLabel(r)"
+              :color="r.state === 'error' ? 'air-primary-alert' : r.state === 'queued' ? 'air-secondary-accent' : 'air-primary-success'"
+              variant="soft"
+              size="sm"
+            />
+          </li>
+        </ul>
+
+        <p
+          v-if="batchSummary"
+          class="mt-3 text-sm text-(--ui-color-base-3)"
+        >
+          {{ batchSummary }}
+        </p>
+        <p
+          v-else-if="batches.polling.value"
+          class="mt-3 text-sm text-(--ui-color-base-3)"
+        >
+          Обрабатываем загрузку…
+        </p>
+
+        <!-- Опрос сдался по времени. Молча замереть здесь нельзя — это ровно тот молчащий импорт,
+             который #417 и чинит, только на три минуты позже. -->
+        <template v-if="batches.timedOut.value">
+          <B24Alert
+            color="air-primary-warning"
+            variant="soft"
+            title="Обработка занимает дольше обычного"
+            description="Запись в CRM продолжается в фоне — страницу можно закрыть, результат появится в делах компании. Или проверьте ещё раз."
+            class="mt-3"
+          />
+          <B24Button
+            label="Проверить ещё раз"
+            color="air-secondary-no-accent"
+            size="sm"
+            class="mt-3"
+            @click="batches.retry()"
+          />
+        </template>
+      </B24Card>
     </div>
 
     <!-- Feedback on the PARSE result (docs/FEEDBACK.md, channel «сотрудник»): 👍/👎 + optional

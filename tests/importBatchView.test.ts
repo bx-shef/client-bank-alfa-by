@@ -70,13 +70,29 @@ describe('summaryMessage', () => {
     const msg = summaryMessage([batch()])
     expect(msg).toContain('Разобрано операций: 5')
     expect(msg).toContain('записано в CRM: 4')
-    expect(msg).toContain('без компании-плательщика: 1')
+    // Текст не только называет причину, но и говорит, ГДЕ искать: дела ушли в мою компанию
+    // (каскад #91), иначе «записано 4 из 5» читается как потеря данных.
+    expect(msg).toContain('не нашли компанию по счёту плательщика')
+    expect(msg).toContain('записаны в вашу компанию')
   })
 
-  it('не поминает чат и «без компании», когда их нет', () => {
+  it('пока ВСЁ в очереди — итога нет (нули читались бы как «ничего не записалось»)', () => {
+    expect(summaryMessage([batch({ state: 'queued' }), batch({ batchId: 'b', state: 'queued' })])).toBe('')
+  })
+
+  it('склонение по числу операций без компании', () => {
+    expect(summaryMessage([batch({ unmatched: 2 })])).toContain('По 2 операций')
+    expect(summaryMessage([batch({ unmatched: 1 })])).toContain('По 1 операции')
+  })
+
+  it('провалившиеся файлы названы в сводке', () => {
+    expect(summaryMessage([batch({ state: 'error' })])).toContain('не удалось обработать: 1 файл')
+  })
+
+  it('не поминает чат и компанию-плательщика, когда их нет', () => {
     const msg = summaryMessage([batch({ notified: 0, unmatched: 0 })])
     expect(msg).not.toContain('чат')
-    expect(msg).not.toContain('без компании')
+    expect(msg).not.toContain('компанию по счёту')
   })
 
   it('пусто, когда итогов ещё нет', () => {
@@ -91,6 +107,12 @@ describe('batchStateLabel', () => {
 
   it('на провал без текста есть внятный запасной вариант', () => {
     expect(batchStateLabel(batch({ state: 'error', error: '' }))).toBe('ошибка обработки')
+  })
+
+  it('успех показывает разобранное и записанное', () => {
+    expect(batchStateLabel(batch({ operations: 5, created: 4 }))).toBe('5 операций, записано 4')
+    expect(batchStateLabel(batch({ operations: 1, created: 1 }))).toBe('1 операция, записано 1')
+    expect(batchStateLabel(batch({ operations: 2, created: 2 }))).toBe('2 операции, записано 2')
   })
 
   it('в очереди — честное «обрабатывается»', () => {

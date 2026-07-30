@@ -32,7 +32,7 @@ export interface IngestDeps {
   hash: (bytes: Uint8Array) => string
   /** Отметить загрузку принятой (#417), чтобы UI мог опросить её итог. Best-effort: сбой учёта
    *  не должен отменять уже принятый файл — тогда сотрудник потерял бы импорт из-за мелочи. */
-  markQueued?: (memberId: string, batchId: string, fileName: string) => Promise<void>
+  markQueued?: (memberId: string, batchId: string, fileName: string, userId: string) => Promise<void>
 }
 
 export interface IngestInput {
@@ -86,7 +86,7 @@ export async function handleImportUpload(deps: IngestDeps, input: IngestInput): 
   // строка «принято», которую ничто и никогда не завершит.
   if (deps.markQueued) {
     try {
-      await deps.markQueued(memberId, fileHash, fileName)
+      await deps.markQueued(memberId, fileHash, fileName, userId)
     } catch {
       // Учёт — удобство отображения, а не условие импорта.
     }

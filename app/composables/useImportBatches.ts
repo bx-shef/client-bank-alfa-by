@@ -13,7 +13,7 @@ import { POLL_INTERVAL_MS, shouldKeepPolling } from '~/utils/importBatchView'
 
 const STORAGE_KEY = 'cba.import.batches'
 
-function readStored(): string[] {
+export function readStoredBatchIds(): string[] {
   if (typeof sessionStorage === 'undefined') return []
   try {
     const raw = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]')
@@ -23,7 +23,7 @@ function readStored(): string[] {
   }
 }
 
-function writeStored(ids: string[]): void {
+export function writeStoredBatchIds(ids: string[]): void {
   if (typeof sessionStorage === 'undefined') return
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(ids))
@@ -36,8 +36,15 @@ export function useImportBatches() {
   const ids = ref<string[]>([])
   const results = ref<ImportBatchResult[]>([])
   const polling = ref(false)
+  /** Опрос прекращён по времени, а итог так и не пришёл. */
+  const timedOut = ref(false)
   let timer: ReturnType<typeof setTimeout> | undefined
   let startedAt = 0
+  // Токен запуска: `track()`/`reset()` его инкрементируют, и ответ прошлого запуска (или его
+  // продолжение) не смеет ни затереть свежие результаты, ни поставить ВТОРОЙ таймер поверх
+  // текущего — иначе хэндл активного теряется, и две цепочки опроса тикают параллельно, а
+  // `stop()` гасит только одну.
+  let runSeq = 0
 
   function stop() {
     if (timer) clearTimeout(timer)
@@ -45,7 +52,7 @@ export function useImportBatches() {
     polling.value = false
   }
 
-  async function fetchOnce(): Promise<void> {
+  async function fetchOnce(seq: number): Promise<void> {
     const auth = frameAuth()
     if (!auth || !ids.value.length) return
     try {
@@ -53,48 +60,71 @@ export function useImportBatches() {
         params: { ids: ids.value.join(',') },
         headers: frameAuthHeaders(auth)
       })
+      if (seq !== runSeq) return
       results.value = res?.batches ?? []
     } catch {
       // Транзиентный сбой опроса не должен гасить уже показанный итог — просто ждём следующий тик.
     }
   }
 
-  function tick() {
+  function tick(seq: number) {
     timer = setTimeout(async () => {
-      await fetchOnce()
-      if (shouldKeepPolling(ids.value, results.value, Date.now() - startedAt)) tick()
-      else stop()
+      await fetchOnce(seq)
+      if (seq !== runSeq) return
+      if (shouldKeepPolling(ids.value, results.value, Date.now() - startedAt)) tick(seq)
+      else finish()
     }, POLL_INTERVAL_MS)
+  }
+
+  /** Опрос окончен: либо всё завершилось, либо вышло время. */
+  function finish() {
+    timedOut.value = shouldKeepPolling(ids.value, results.value, 0)
+    stop()
+    // Ключи в хранилище держим, только пока есть чего ждать: иначе вернувшийся через несколько
+    // дней сотрудник (сессия вкладки живёт долго, а строки чистит суточный свип) запускал бы
+    // опрос по ключам, которых на сервере уже нет, и видел «обрабатываем» для давнего импорта.
+    if (!timedOut.value) writeStoredBatchIds([])
   }
 
   /** Начать следить за загрузками (после успешной отправки или при возвращении на страницу). */
   async function track(newIds: string[]) {
     if (!newIds.length) return
+    const seq = ++runSeq
     ids.value = [...new Set([...ids.value, ...newIds])]
-    writeStored(ids.value)
+    writeStoredBatchIds(ids.value)
     stop()
+    timedOut.value = false
     startedAt = Date.now()
     polling.value = true
-    await fetchOnce()
-    if (shouldKeepPolling(ids.value, results.value, 0)) tick()
-    else stop()
+    await fetchOnce(seq)
+    if (seq !== runSeq) return
+    if (shouldKeepPolling(ids.value, results.value, 0)) tick(seq)
+    else finish()
   }
 
   /** Подхватить ключи из прошлой загрузки этой вкладки (после перезагрузки страницы). */
   async function restore() {
-    const stored = readStored()
+    const stored = readStoredBatchIds()
     if (stored.length) await track(stored)
+  }
+
+  /** Проверить ещё раз после того, как опрос сдался по времени. */
+  async function retry() {
+    if (!ids.value.length) return
+    await track([...ids.value])
   }
 
   /** Забыть отслеживаемые загрузки (новая пачка файлов). */
   function reset() {
+    runSeq++
     stop()
     ids.value = []
     results.value = []
-    writeStored([])
+    timedOut.value = false
+    writeStoredBatchIds([])
   }
 
   onScopeDispose(stop)
 
-  return { ids, results, polling, track, restore, reset }
+  return { ids, results, polling, timedOut, track, restore, retry, reset }
 }

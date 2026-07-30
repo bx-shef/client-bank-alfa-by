@@ -19,7 +19,7 @@ function liveBatchDeps(): ImportBatchDeps {
       const id = (res?.result as { ID?: unknown } | undefined)?.ID
       return id != null ? String(id) : ''
     },
-    getBatches: (memberId, ids) => getBatchResults(dbQuery, memberId, ids)
+    getBatches: (memberId, ids, userId) => getBatchResults(dbQuery, memberId, ids, userId)
   }
 }
 

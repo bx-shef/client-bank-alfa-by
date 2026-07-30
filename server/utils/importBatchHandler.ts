@@ -16,7 +16,7 @@ export interface ImportBatchDeps {
   memberIdByDomain: (domain: string) => Promise<string | null>
   /** Доказывает, что токен выдан ИМЕННО этим порталом; бросает, если нет. */
   validateFrame: (domain: string, accessToken: string) => Promise<string>
-  getBatches: (memberId: string, ids: string[]) => Promise<ImportBatchResult[]>
+  getBatches: (memberId: string, ids: string[], userId: string) => Promise<ImportBatchResult[]>
 }
 
 export interface ImportBatchInput {
@@ -31,11 +31,16 @@ export interface ImportBatchResponse {
   body: Record<string, unknown>
 }
 
+/** Потолок длины сырой строки: 20 ключей по 64 символа плюс запятые с запасом. Без него список из
+ *  одного мусора никогда не упирается в кап (валидные не набираются) и мы токенизировали бы весь
+ *  query string целиком. */
+const MAX_IDS_CHARS = MAX_BATCH_IDS * 65 + 64
+
 /** Разобрать `ids` из строки запроса: непустые, без дублей, не больше капа. */
 export function parseBatchIds(raw: string): string[] {
   if (!raw) return []
   const seen = new Set<string>()
-  for (const part of raw.split(',')) {
+  for (const part of raw.slice(0, MAX_IDS_CHARS).split(',')) {
     const id = part.trim()
     // Ключ — sha256-hex; всё иное отбрасываем, чтобы в запрос не уехал произвольный текст.
     if (!/^[a-f0-9]{64}$/i.test(id)) continue
@@ -61,12 +66,16 @@ export async function handleImportBatch(
   const memberId = await deps.memberIdByDomain(domain)
   if (!memberId) return { status: 409, body: { error: 'portal not installed (no key)' } }
 
+  // Пустой `userId` — тоже отказ: живой деп возвращает '' на ответе портала без `ID`, и без этой
+  // проверки усечённый конверт проезжал бы гейт. Паритет с `importStatusHandler`.
+  let userId: string
   try {
-    await deps.validateFrame(domain, accessToken)
+    userId = await deps.validateFrame(domain, accessToken)
   } catch {
     return { status: 403, body: { error: 'invalid frame token for this portal' } }
   }
+  if (!userId) return { status: 403, body: { error: 'invalid frame token for this portal' } }
 
-  const batches = await deps.getBatches(memberId, ids)
+  const batches = await deps.getBatches(memberId, ids, userId)
   return { status: 200, body: { batches } }
 }

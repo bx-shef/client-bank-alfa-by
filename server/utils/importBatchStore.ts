@@ -23,21 +23,29 @@ function coerceState(v: unknown): ImportBatchState {
  *  не делает; кап нужен, чтобы подделанный список id не превращался в тяжёлый запрос. */
 export const MAX_BATCH_IDS = 20
 
+/** Кап длины имени файла: имя приходит из multipart, его никто не ограничивал, а мы его храним
+ *  и отдаём обратно. */
+export const MAX_FILE_NAME = 200
+
 /** Отметить загрузку принятой (пишется на постановке в очередь, до всякой обработки). */
 export async function markBatchQueued(
   query: QueryFn,
   memberId: string,
   batchId: string,
-  fileName: string
+  fileName: string,
+  userId: string
 ): Promise<void> {
   // Повторная загрузка того же файла НЕ сбрасывает уже полученный итог в «принято»: обработка
   // дедуплицируется по тому же хешу, второго прогона не будет, и сброс оставил бы строку висеть
   // в «принято» навсегда.
+  // Подпись обновляем ТОЛЬКО своей же строке: иначе коллега с тем же файлом подменял бы имя в
+  // чужой карточке (ключ — хеш файла, он у них совпадёт).
   await query(
-    `INSERT INTO import_batch (member_id, batch_id, state, file_name, updated_at)
-     VALUES ($1, $2, 'queued', $3, now())
-     ON CONFLICT (member_id, batch_id) DO UPDATE SET file_name = EXCLUDED.file_name`,
-    [memberId, batchId, fileName]
+    `INSERT INTO import_batch (member_id, batch_id, user_id, state, file_name, updated_at)
+     VALUES ($1, $2, $4, 'queued', $3, now())
+     ON CONFLICT (member_id, batch_id) DO UPDATE SET file_name = EXCLUDED.file_name
+     WHERE import_batch.user_id = EXCLUDED.user_id OR import_batch.user_id = ''`,
+    [memberId, batchId, fileName.slice(0, MAX_FILE_NAME), userId]
   )
 }
 
@@ -88,21 +96,26 @@ export async function saveBatchError(
 }
 
 /**
- * Прочитать итоги по списку ключей. **Скоуп по порталу — в самом WHERE**: ключ загрузки это
- * sha256 файла, то есть его знает всякий, у кого есть такой же файл; без member-скоупа чужой
- * портал читал бы наши счётчики по угаданному хешу.
+ * Прочитать итоги по списку ключей. **Скоуп — в самом WHERE, и по порталу, И по сотруднику**:
+ * ключ загрузки это sha256 файла, то есть его знает всякий, у кого есть такой же файл (типовой
+ * банковский шаблон, пересланная выписка). Без member-скоупа чужой портал читал бы наши счётчики
+ * по угаданному хешу; без user-скоупа — коллега по порталу читал бы имя файла и счётчики чужой
+ * загрузки. Строки без владельца (`user_id = ''` — их пишет воркер, если отметка «принято» не
+ * успела) видны всем в портале: у них некому принадлежать, а иначе итог просто пропал бы.
  */
 export async function getBatchResults(
   query: QueryFn,
   memberId: string,
-  batchIds: string[]
+  batchIds: string[],
+  userId: string
 ): Promise<ImportBatchResult[]> {
   const ids = batchIds.filter(id => typeof id === 'string' && id !== '').slice(0, MAX_BATCH_IDS)
   if (!ids.length) return []
   const rows = await query(
     `SELECT batch_id, state, file_name, operations, created, notified, unmatched, error, updated_at
-     FROM import_batch WHERE member_id = $1 AND batch_id = ANY($2::text[])`,
-    [memberId, ids]
+     FROM import_batch
+     WHERE member_id = $1 AND batch_id = ANY($2::text[]) AND (user_id = $3 OR user_id = '')`,
+    [memberId, ids, userId]
   )
   return rows.map(row => ({
     batchId: String(row.batch_id ?? ''),

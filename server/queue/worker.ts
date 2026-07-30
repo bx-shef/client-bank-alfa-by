@@ -39,6 +39,7 @@ import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
 import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
+import { isFinalAttempt } from '../utils/jobAttempt'
 import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
@@ -602,11 +603,16 @@ export function startThroughputWorkers(
     }, async () => {
       try {
         const res = await handleParseJob(job.data, deps)
-        // Разобрано НОЛЬ операций — тупик, который иначе никто не закроет: `crm-sync` в этом
-        // случае не ставится (`chained: false`), а значит итог загрузки навсегда остался бы в
-        // «принято». Для сотрудника это ровно тот же молчащий импорт, ради которого заведён #417.
-        if (!res.chained) {
+        // Два РАЗНЫХ тупика, и путать их нельзя. Оба оставляют загрузку без `crm-sync`, а значит
+        // без итога — то есть возвращают ровно тот молчащий импорт, ради которого заведён #417.
+        if (res.parsed === 0) {
+          // Файл разобран, но операций в нём нет.
           await persistBatchError(job.data, 'В файле не найдено операций — проверьте, что это выписка клиент-банка.')
+        } else if (!res.chained) {
+          // Операции есть, но очередь недоступна (Redis отвалился между разбором и передачей).
+          // Сказать здесь «не найдено операций» — прямая ложь: сотрудник пошёл бы проверять файл
+          // вместо того, чтобы повторить загрузку.
+          await persistBatchError(job.data, 'Очередь обработки недоступна — повторите загрузку позже.')
         }
         return res
       } catch (e) {
@@ -639,7 +645,18 @@ export function startThroughputWorkers(
         'job.op_count': job.data.items?.length ?? 0,
         'portal.hash': portalHash(job.data.memberId)
       }, async () => {
-        const summary = await handleCrmSyncJob(job.data, deps)
+        let summary
+        try {
+          summary = await handleCrmSyncJob(job.data, deps)
+        } catch (e) {
+          // У `crm-sync` ретраев нет (attempts не задан), поэтому первый же throw — терминальный:
+          // без этой ветки загрузка осталась бы в «принято» НАВСЕГДА, а UI обещал сотруднику
+          // результат. Помечаем провал и пробрасываем — поведение очереди не меняется.
+          if (job.data.source === 'parse') {
+            await persistBatchFailure(job.data, 'Обработка не завершилась — попробуйте загрузить файл ещё раз.')
+          }
+          throw e
+        }
         // Persist the run for the in-portal status card (#5) — LATEST run per portal.
         // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
         // already happened). Demo batches never touch the real portal's status row.
@@ -719,15 +736,22 @@ export function startTriggerWorker(deps: TriggerFireJobDeps): Worker {
 
 /** Save the crm-sync run summary as the portal's last import status (#5). Gated to
  *  real (non-demo) portals; swallows errors so status bookkeeping can't fail a job. */
-/** Последняя ли это попытка джобы (дальше BullMQ уже не переспросит). */
-function isFinalAttempt(job: { attemptsMade: number, opts?: { attempts?: number } }): boolean {
-  return job.attemptsMade + 1 >= (job.opts?.attempts ?? 1)
-}
-
 /** Пометить загрузку провалившейся (#417). Best-effort: учёт не должен ронять джобу. */
 async function persistBatchError(job: ParseJob, message: string): Promise<void> {
   try {
     await saveBatchError(dbQuery, job.memberId, job.fileHash, message)
+  } catch (e) {
+    console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
+/** Пометить провалом загрузку, чья обработка в `crm-sync` не завершилась (#417). Отдельно от
+ *  парсерной версии — здесь на входе `CrmSyncJob`, и гейт демо-счетов тот же. */
+async function persistBatchFailure(job: CrmSyncJob, message: string): Promise<void> {
+  const account = job.items[0]?.account ?? ''
+  if (account && isDemoAccount(account)) return
+  try {
+    await saveBatchError(dbQuery, job.memberId, job.batchId, message)
   } catch (e) {
     console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
   }
