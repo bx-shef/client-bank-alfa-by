@@ -76,7 +76,9 @@ export default defineNuxtConfig({
   nitro: {
     prerender: {
       crawlLinks: true,
-      routes: ['/app', '/settings', '/install', '/import', '/queues', '/login', '/partners']
+      // `/settings` больше нет: все настройки — в слайдовере на `/app`. Отдельная страница
+      // дублировала ту же форму, а из портала на неё вела одна невнятная ссылка.
+      routes: ['/app', '/install', '/import', '/queues', '/login', '/partners']
     }
   },
 

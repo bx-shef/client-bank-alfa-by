@@ -42,7 +42,7 @@ function setFilter(f: Filter) {
   page.value = 1
 }
 
-// Settings slideover (primary entry; /settings route is the fallback).
+// Слайдовер настроек — ЕДИНСТВЕННЫЙ вход: отдельной страницы /settings больше нет.
 const settingsOpen = ref(false)
 
 // Import status (demo until the backend poller, #5). Client fetches on mount.
@@ -97,6 +97,7 @@ onMounted(async () => {
     <ImportStatusBanner
       :status="status"
       class="mb-5"
+      @open-settings="() => { settingsOpen = true }"
     />
 
     <!-- Employee 👍/👎 on the import result (docs/FEEDBACK.md, channel «сотрудник»). Renders only
@@ -216,7 +217,7 @@ onMounted(async () => {
     <B24Slideover
       v-model:open="settingsOpen"
       title="Настройки"
-      description="Подключение банка, уведомления в чат, исключения, распознавание. Сохраняются в вашем портале Bitrix24."
+      description="Подключение банка, уведомления в чат, смарт-процессы, распознавание. Сохраняются в вашем портале Bitrix24."
       side="bottom"
     >
       <template #body>
@@ -226,26 +227,6 @@ onMounted(async () => {
             :as-slider="true"
             @close="settingsOpen = false"
           />
-
-          <!-- Route to the FULL settings page. The slideover carries everything an admin needs to
-               switch the import on (bank connection included), but the distribution ledger is
-               `/settings`-only — and without this link that page was unreachable from the UI.
-               Admin-only: the copy names admin-only features. -->
-          <div
-            v-if="isAdmin"
-            class="mt-6 border-t border-(--ui-color-design-tinted-na-stroke) pt-4"
-          >
-            <p class="mb-2 text-sm text-(--ui-color-base-3)">
-              Здесь — все настройки приложения. Отдельно вынесено только распределение платежей:
-              там видно, какой платёж на какой счёт или сделку разнесён.
-            </p>
-            <B24Button
-              label="Распределение платежей"
-              color="air-secondary-no-accent"
-              size="sm"
-              to="/settings"
-            />
-          </div>
         </ClientOnly>
       </template>
     </B24Slideover>

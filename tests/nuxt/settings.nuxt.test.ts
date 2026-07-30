@@ -2,15 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { nextTick } from 'vue'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
-import SettingsPage from '~/pages/settings.vue'
+import SettingsForm from '~/components/SettingsForm.vue'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { defaultPortalSettings } from '~/utils/settings'
 
-// The form withholds content until its onMounted admin-check chain (await init +
-// nextTick + checkAdmin + load) resolves — flush it so the form is rendered.
+// Монтируем САМУ форму, а не страницу: отдельной страницы настроек больше нет — единственный
+// вход это слайдовер на /app, который рендерит этот же компонент.
+// Форма придерживает содержимое до конца цепочки onMounted (init + nextTick + checkAdmin + load) —
+// прокручиваем её, чтобы форма отрисовалась.
 async function mountReady() {
-  const wrapper = await mountSuspended(SettingsPage)
+  const wrapper = await mountSuspended(SettingsForm)
   await flushPromises()
   await nextTick()
   return wrapper
@@ -43,7 +45,7 @@ async function openSection(wrapper: VueWrapper, label: string) {
   await nextTick()
 }
 
-describe('settings page', () => {
+describe('форма настроек', () => {
   it('renders the heading, the grouped sections and one preview row per operation', async () => {
     const wrapper = await mountReady()
     const text = wrapper.text()
@@ -55,11 +57,6 @@ describe('settings page', () => {
     // The error-chat field lives in the open first section.
     expect(text).toContain('Чат ошибок импорта')
     expect(previewRows(wrapper)).toHaveLength(MOCK_STATEMENT.items.length)
-  })
-
-  it('renders the custom-development cross-sell card', async () => {
-    const wrapper = await mountReady()
-    expect(wrapper.text()).toContain('Нужна доработка под ваш процесс?')
   })
 
   it('by default announces credits and hides debits', async () => {
