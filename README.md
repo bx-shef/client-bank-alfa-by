@@ -1,33 +1,71 @@
 # client-bank-alfa-by
 
-> Last reviewed: 2026-07-28
+> Last reviewed: 2026-07-30
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
 выписки. Nuxt 4 (SSG); публичная страница — лендинг.
 
-> **Статус:** рефакторинг legacy-приложения (план — [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md);
-> срез состояния — [`docs/project-map.md`](docs/project-map.md)).
-> **frontend**: публичный лендинг (SSG) + B24-iframe-UI (просмотр выписки на демо-данных, настройки —
-> через backend `app.option`) +
-> доменное ядро (типы/утилиты/нормализаторы всех провайдеров/билдер дел, покрыто тестами). **backend**
-> (Nitro, слайс): приём событий портала Б24 (`/api/b24/events`, install/uninstall), хранилище токенов
-> портала (Postgres, refresh шифруется), настройка через `app.option`, liveness `/api/health` + readiness
-> `/api/ready` (db+redis).
-> Сборка/деплой готовы для обоих (Docker + GHCR + Watchtower, см. [`docs/DEPLOY.md`](docs/DEPLOY.md)).
-> На backend уже есть: очереди (BullMQ+Redis), поиск компании и **запись операции настраиваемым делом**
-> в CRM (`crm.activity.configurable.add`, дедуп по маркеру, подтверждено вживую), разнесение оплат (#109)
-> и настройки чата (`app.option`). **Онлайн-опрос Альфы собран целиком:** транспорт (A5) + свап в воркер
-> (A9) + реестр счетов (A6) + крон-таймер (A10) + **connect-поток OAuth банков с UI** (A7) + **глобальный
-> rate-limiter** (A8, 100/60с) + **лог сатурации** + ручной «Опросить сейчас» (`/api/poll-now`, app-side
-> gate). Таймер default-OFF (`CRON_REAL_POLL`). Приор: движок опроса + connect-поток готовы (A5b), **автоопрос ещё выключен** (нужен учёт лимита A8 по запросам + занятость слота); прод — BY-СКЗИ #41. Для боевого прогона нужны **банк-креды
-> владельца** (`ALFA_OAUTH_*`). Эксплуатация — [`docs/OPERATIONS.md`](docs/OPERATIONS.md). Дальше —
-> чат-уведомления в бою и MCP.
+> **Статус:** приложение работает: ручная загрузка выписки и запись операций в CRM, разнесение
+> оплат, уведомления в чат, онлайн-подключение банков (Альфа подтверждена вживую, Приор — sandbox).
+> Актуальный срез — [`docs/project-map.md`](docs/project-map.md), что осталось —
+> [`docs/REFACTOR_PLAN.md`](docs/REFACTOR_PLAN.md), эксплуатация — [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+## Что это
+
+Выписка из банка попадает в Bitrix24 сама. Приложение забирает операции — онлайн по OAuth из
+Альфа-Банка Беларусь и Приорбанка либо из файла выписки, который бухгалтер загружает руками, —
+находит компанию-плательщика по расчётному счёту, пишет операцию делом в её карточку CRM,
+разносит оплату на счёт/сделку/заказ и сообщает о ней в чат портала.
+
+Кому: бухгалтеру (видит платежи в CRM, а не в клиент-банке), администратору портала (настраивает),
+интегратору (ставит клиентам).
+
+```
+Банк (OAuth/файл) ──▶ backend: Nitro + Postgres + Redis (очереди) ──▶ Bitrix24 (REST)
+                          ▲                                              │
+                          └──────── iframe-UI приложения ◀───────────────┘
+```
+
+## Быстрый старт
+
+**Только фронт** (лендинг, страницы приложения, компоненты) — backend не нужен:
+
+```bash
+corepack enable && pnpm install
+pnpm dev            # http://localhost:3000
+```
+
+Страницы приложения (`/app`, `/import`, `/install`) вне портала Bitrix24 закрыты заглушкой —
+открывайте их с `?preview=1`, это штатный обход для разработки и скриншотов.
+
+**Фронт + backend** (очереди, БД, API):
+
+```bash
+cp .env.example .env
+# минимум: DATABASE_URL, REDIS_URL, B24_TOKEN_ENC_KEY (openssl rand -hex 32)
+docker compose up -d db redis
+pnpm dev
+```
+
+Проверка: `curl localhost:3000/api/ready` → `{"ready":true}`.
+
+## Документация
+
+| Документ | О чём |
+|---|---|
+| [`CLAUDE.md`](./CLAUDE.md) | карта модулей и конвенции (основной справочник) |
+| [`docs/README.md`](docs/README.md) | индекс всех документов |
+| [`docs/PROCESSING.md`](docs/PROCESSING.md) | целевая логика обработки платежей |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) · [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | деплой и эксплуатация |
+| [`docs/PRIVACY.md`](docs/PRIVACY.md) | что храним и как чистим |
 
 ## Требования
 
 - **Node.js 22 LTS**
 - **pnpm** (через corepack; версия закреплена в `packageManager` в `package.json`)
+- **Docker** — для локальных Postgres и Redis (нужен только при работе с backend)
+- **Chromium** — для `pnpm screenshot` (в этом окружении предустановлен)
 
 ## Команды
 
@@ -38,6 +76,7 @@ pnpm dev             # дев-сервер
 pnpm lint            # ESLint
 pnpm typecheck       # vue-tsc: app (.nuxt/tsconfig.json) + server (.nuxt/tsconfig.server.json)
 pnpm test            # Vitest (unit + nuxt)
+pnpm check           # lint + typecheck + test одной командой (это же гоняет CI)
 pnpm generate        # сборка статики (SSG) → .output/public
 ```
 
@@ -45,7 +84,7 @@ pnpm generate        # сборка статики (SSG) → .output/public
 
 - **В `main` не пушим — только через Pull Request с зелёным CI.** Настройка защиты `main`
   (ruleset `protect-main`) — в [`docs/REPO_SETUP_CHECKLIST.md`](docs/REPO_SETUP_CHECKLIST.md).
-- Перед пушем прогоняй `pnpm lint && pnpm typecheck && pnpm test` — это же гоняет CI.
+- Перед пушем прогоняй `pnpm check` (или `bash scripts/check-app.sh`) — это же гоняет CI.
 - Инструкции для AI-агентов и детали архитектуры — в [`CLAUDE.md`](./CLAUDE.md).
 
 ## Деплой

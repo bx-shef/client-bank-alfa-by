@@ -112,8 +112,8 @@ _Новые REST-методы добавляем сюда до внедрени�
 | `app.info` | `actions.v2.batch.make` | `app/pages/install.vue` | Диагностика: метаданные приложения. |
 | `scope` | `actions.v2.batch.make` | `app/pages/install.vue` | Диагностика: выданные права. |
 | `installFinish` | SDK frame | `app/pages/install.vue` | Завершение установки. |
-| `parent.setTitle` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/settings.vue` | Заголовок окна приложения в портале. |
-| `parent.fitWindow` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/settings.vue` | Подгонка высоты iframe под контент. |
+| `parent.setTitle` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/import.vue` | Заголовок окна приложения в портале. |
+| `parent.fitWindow` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/import.vue` | Подгонка высоты iframe под контент. |
 
 > `placement.bind` пока **не** вызываем — плейсменты финализируем на тестовом портале (см.
 > `docs/REFACTOR_PLAN.md`). Когда добавим — строка сюда.

@@ -8,7 +8,7 @@
 | Контекст | Что это | Layout | Тема | Примеры |
 |----------|---------|--------|------|---------|
 | **Публичный лендинг** | маркетинговая страница `/` | `landing` | тёмная брендовая (форс-dark) | `app/pages/index.vue` |
-| **In-portal / оператор** | UI внутри iframe Bitrix24 и служебные страницы | `clear` | b24ui light/dark-auto | `/app`, `/settings`, `/install`, `/login`, `/queues` |
+| **In-portal / оператор** | UI внутри iframe Bitrix24 и служебные страницы | `clear` | b24ui light/dark-auto | `/app`, `/import`, `/install`, `/login`, `/queues` |
 
 > Родственный дизайн-гайд основного сайта — `bx-shef/Lp` → `docs/LANDING_GUIDE.md`.
 > Оболочка лендинга портирована оттуда; общий вид держим синхронно.
