@@ -22,6 +22,9 @@ export function useProvisionDistribution() {
   const provisioning = ref(false)
   const error = ref('')
   const message = ref('')
+  /** entityTypeId созданных/найденных СП — из них строятся ссылки в портал. */
+  const paymentSpEtid = ref<number | null>(null)
+  const distributionSpEtid = ref<number | null>(null)
   /** True only in the in-portal frame (a token exists). Resolve on mount via syncEnabled(). */
   const enabled = ref(false)
 
@@ -42,9 +45,11 @@ export function useProvisionDistribution() {
     provisioning.value = true
     try {
       const res = await $fetch<ProvisionResponse>('/api/distribution/provision', { method: 'POST', headers: authHeaders(a) })
-      message.value = res?.created
-        ? `Смарт-процессы созданы (платежи ${res?.paymentSpEtid}, распределения ${res?.distributionSpEtid}).`
-        : `Смарт-процессы на месте (платежи ${res?.paymentSpEtid}, распределения ${res?.distributionSpEtid}).`
+      // Голые id («платежи 1046») пользователю ничего не говорят — сами смарт-процессы отдаём
+      // ссылками (см. ProvisionSpCard), а здесь остаётся только «что произошло».
+      paymentSpEtid.value = Number(res?.paymentSpEtid) || null
+      distributionSpEtid.value = Number(res?.distributionSpEtid) || null
+      message.value = res?.created ? 'Смарт-процессы созданы.' : 'Смарт-процессы уже были на месте.'
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
       const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status
@@ -57,5 +62,5 @@ export function useProvisionDistribution() {
     }
   }
 
-  return { provision, syncEnabled, provisioning, error, message, enabled }
+  return { provision, syncEnabled, provisioning, error, message, enabled, paymentSpEtid, distributionSpEtid }
 }

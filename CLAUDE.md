@@ -123,9 +123,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`B24Slideover` `side="bottom"` с `SettingsForm` — удобно в узком iframe/на мобильном; форма отдаёт
   `@close` по Save/Cancel → слайдовер закрывается, `#219`) — основной вход. **`SettingsForm` несёт
   «Подключение банка» первой секцией** (`BankConnectCard` + `PollNowButton`), поэтому админ включает
-  онлайн-импорт прямо из портала, не уходя на `/settings` (раньше карточка жила только на
-  `/settings`, до которой из UI не было ссылки); на полной странице остаётся только распределение
-  (ссылка «Все настройки» в слайдовере — admin-only).
+  онлайн-импорт прямо из портала (раньше карточка жила только на отдельной странице, до которой из
+  UI не было ссылки). Отдельной страницы настроек больше нет — слайдовер единственный вход.
   **Без демо-данных** — список операций реальный (пока пуст, до backend-фида #5). **Баннер «не
   настроено»** (критерий — выбран **чат уведомлений**, `chatSettings.settings.chat.dialogId` непустой):
   внутри портала при отсутствии настройки админу (`useIsAdmin`) — предупреждение + кнопка «Открыть
@@ -152,7 +151,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `bitrix24/b24-ai-starter`; автосейв убран). Один компонент для двух точек входа: слайдовер на
   `/app` (проп `asSlider` → Save/Cancel эмитят `close`, панель закрывается; Cancel сперва перечитывает
   серверную копию — слайдовер делит тот же singleton `settings`, иначе несохранённые правки всплыли бы
-  при повторном открытии) и полная страница `/settings` (Cancel = откат к серверной копии). **Хранение —
+  при повторном открытии); Cancel = откат к серверной копии. **Хранение —
   backend** (`app.option` через `useChatSettings`), сейв по кнопке (индикатор «Сохранено ✓» гаснет при
   первой же правке) + `notifyReload` соседним инстансам. ⚠ SDK-слайдер (`frame.slider.openPath`) для
   своей страницы приложения **не годится** (openPath открывает только портальные пути) — потому «слайдер»
@@ -169,7 +168,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   это удобство, не источник доверия. `recognitionKinds.ts` — RU-лейблы **всех** `IdentifierKind` (exhaustive
   `Record<IdentifierKind,…>` + тест), `IDENTIFIER_KIND_ITEMS`/`ALPHABET_ITEMS`/`CONFIG_FIELD_ROWS`/`blankMatrix`. Тесты —
   `recognitionKinds.test.ts` (exhaustive) + `nuxt/recognitionMap.nuxt.test.ts` (рендер/add-remove/предпросмотр); визуально
-  проверен (свет/тёмная, `/settings`).
+  проверен (свет/тёмная, в слайдовере настроек).
 - `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
   в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
   мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
@@ -181,10 +180,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   Клиент не найден → **каскад «в мою компанию»** (#91): пишем дело в мою компанию (`findMyCompanyByAccount`)
   с блоком-причиной + чат ошибок; моя компания тоже не найдена → не пишем, чат ошибок. Элемент смарт-процесса — #109. Разбор
   покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест + визуальная проверка (свет/тёмная).
-- `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
-  + `BankConnectCard` + `PollNowButton` + `ProvisionSpCard` (провижининг СП, #109) + **`DistributionTab`**
-  + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
-  Роут `/settings` — в `nitro.prerender.routes`.
+- **Страницы `/settings` больше нет** (по требованию владельца): она дублировала ту же
+  `SettingsForm`, а из портала на неё вела одна невнятная ссылка — админ не находил ни провижининг
+  СП, ни распределение. Всё живёт в **слайдовере настроек на `/app`**: `ProvisionSpCard` +
+  `DistributionTab` — секция «Смарт-процессы и распределение». Роут убран из `nitro.prerender.routes`,
+  кнопка «Проверить настройки» в `ImportStatusBanner` теперь эмитит `openSettings` (страница
+  открывает слайдовер), а не ведёт на удалённый маршрут.
 - **UI-контур распределения (#109 §9.3 #4, admin-only, за feature-gate `DISTRIBUTION_PROVISION_ENABLED`):**
   `ProvisionSpCard` (кнопка «Настроить смарт-процессы» → `POST /api/distribution/provision`) +
   **`DistributionTab`** (`useDistributionLedger` → `GET /api/distribution/ledger`: карточки платежей

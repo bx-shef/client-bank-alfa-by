@@ -277,3 +277,10 @@ export function withSpProvision(
 export function hasSpEtids(configFields: Record<string, string> | undefined): boolean {
   return paymentSpRef(configFields) !== null && distributionSpRef(configFields) !== null
 }
+
+/** Портальный путь к списку элементов смарт-процесса (#109 §9.1 UI). Категория 0 — дефолтная
+ *  воронка; у наших служебных СП направлений нет, поэтому она всегда одна. Чистая функция: сам
+ *  переход делает вызывающий через `slider.openPath` (внутри портала) или обычной ссылкой. */
+export function smartProcessListPath(entityTypeId: number): string {
+  return `/crm/type/${entityTypeId}/list/category/0/`
+}
