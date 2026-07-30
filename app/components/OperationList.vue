@@ -100,7 +100,11 @@ const hasItems = computed(() => props.items.length > 0)
         class="border-b border-(--ui-color-design-tinted-na-stroke) last:border-b-0"
       >
         <!-- Row (trigger) -->
-        <div class="flex w-full cursor-pointer items-center gap-3 py-3 text-left transition-colors hover:bg-(--ui-color-design-tinted-na-bg)">
+        <!-- Подсветка строки — СКРУГЛЁННАЯ ВСТАВКА (-mx-2 + px-2 + rounded), а не подложка во всю
+             ширину: раньше она брала тот же токен, что и плашка даты с плиткой направления, и при
+             наведении строки «слипались» с соседями и с заголовком дня в одно пятно. Отдельный
+             hover-токен b24ui (`bg-content-secondary`) отличает наведение от статичных подложек. -->
+        <div class="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-(--ui-color-bg-content-secondary)">
           <span
             class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--ui-color-design-tinted-na-bg)"
             :class="row.tint"
