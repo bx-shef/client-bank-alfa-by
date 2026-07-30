@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-29
+> Last reviewed: 2026-07-30
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -132,7 +132,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   настроено. Тестовая настройка `app.option` (skeleton) **удалена**. Layout `clear`, `useB24().init()`,
   в портале — `setTitle`/`fitWindow` (try/catch). Итоги приходов/расходов несёт карточка `ImportStatsChart`
   над списком (показывается только при наличии операций). Интерактив (раскрытие строки, слайдер настроек,
-  баннер в портале) автотестами частично покрыт (рендер пустого standalone-вида) — портал проверяется вручную.
+  баннер в портале) автотестами частично покрыт (рендер пустого вида через preview-обход гейта, `?preview=1`) — портал проверяется вручную.
 - `app/components/SettingsForm.vue` — форма настроек чата (#16 PR-C): два пикера чатов на
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы (**фильтр только чат-оповещения**, не записи),
@@ -211,7 +211,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
   установка доставляет `application_token`) → **`crm.automation.trigger.add`** (регистрация канонического
   триггера приложения `B24_PAYMENT_TRIGGER`, #79 — best-effort, standalone не-батч) → `installFinish`
-  (+ диагностика портала, блоки «События»/«Триггер автоматизации»); вне фрейма — редирект на `/`.
+  (+ диагностика портала, блоки «События»/«Триггер автоматизации»); вне фрейма установка не запускается: `InPortalGate` показывает объяснение (#414), редиректа на лендинг больше нет.
   **Вердикт установки (#410, чистое ядро `app/utils/installVerdict.ts` + тесты):** «Готово» больше не
   равно «работает» — три исхода вместо двух: `failed` (не дошли до `installFinish`), `degraded`
   (установлено, но портал не выдал часть прав / не зарегистрировался триггер) и `ok`. Раньше
@@ -277,7 +277,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   и цветом; строка раскрывается в `B24Collapsible` → `B24DescriptionList` с реквизитами; пустое состояние).
 - `app/types/importStatus.ts` + `app/utils/importStatus.ts` (relative-time RU `formatRelativeTime`,
   `pluralRu`, `importStateMeta`) + `app/composables/useImportStatus.ts` — модель и презентация статуса
-  импорта; mock на клиенте до backend-опроса (#5), форма ответа = будущий `GET /import/status`.
+  импорта; читает реальный прогон из `GET /api/import/status` по фрейм-токену, без токена —
+  честное пустое состояние (демо-мок удалён, #415).
 - `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
   `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
   `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
@@ -422,6 +423,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     приход/расход **по дням** для доминирующей валюты); `dayBucketsForCurrency`/`operationDay`/`currencyTotal`
     (итог по выбранной/доминирующей валюте с пустым дефолтом) — хелперы для рендера. `round2` из `money.ts`,
     нефинитная/отрицательная сумма → 0. Без DOM/ECharts — под тесты (`tests/importStats.test.ts`).
+  - `app/utils/importStatsChart.ts` — **чистое построение опций столбчатого графика** (#419): расходы
+    идут в ряд со ЗНАКОМ МИНУС (ось двусторонняя, «пришло вверх / ушло вниз» читается без легенды),
+    подписи оси вынесены НАРУЖУ (`inside` убран; ширину под них резервирует `containLabel`, поэтому
+    `BAR_GRID_LEFT` мал — большой отступ складывался бы с ней и съедал график), **ось со знаком, а
+    подсказка по модулю** (в подсказке ряд уже назван «Расходы» — минус дал бы двойное отрицание; на
+    оси без знака шкала читалась бы как «2000 / 0 / 2000»), **нулевая линия явной `markLine`**
+    (`axisLine.onZero` у оси значений рисует вертикальную линию, а нужна горизонтальная). ⚠ Знак — **только отображение**: в `importStats`
+    суммы остаются положительными, иначе поехали бы итоги плиток над графиком. Вынесено из компонента
+    именно потому, что скриншотом это не проверить — график рисуется только при наличии операций
+    (тесты — `tests/importStatsChart.test.ts`).
   - `app/components/ImportStatsChart.vue` — **анимированный результат импорта для сотрудников (#62, слайс 2)**:
     count-up плитки (операции/приходы/расходы по выбранной валюте) + ECharts **бары приход/расход по дням** +
     **пончик** доли, на чистом `importStats`. ECharts динамически импортится и tree-shaken (Bar+Pie+Grid/Tooltip/
@@ -630,7 +641,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     операции/дела/в-чат/ошибки) через воркер (демо-счета не пишут; best-effort — сбой статуса не роняет
     джобу). `GET /api/import/status` по **фрейм-токену** (`Bearer`+`X-B24-Domain`, `profile`-валидация,
     блок спуфинга домена; нет прогона → `neverSummary`) отдаёт `ImportRunSummary`. UI `useImportStatus`:
-    в портале — реальный fetch, вне фрейма — демо-mock. Счётчик `notified` в `handleCrmSyncJob` (⊆ created).
+    в портале — реальный fetch, вне фрейма — пустая сводка `never` (демо-мок удалён, #415). Счётчик `notified` в `handleCrmSyncJob` (⊆ created).
     Удаление приложения чистит `import_result`.
   - `server/utils/metricsStore.ts` + `server/api/import/metrics.get.ts` / `metrics-reset.post.ts` (+ чистый
     `server/utils/metricsHandler.ts`, DI, тесты) — **долговременные счётчики портала (#78)**: воркер
@@ -1349,8 +1360,14 @@ UI — в компонентах. Это та же раскладка, что в
 Приложение работает в двух режимах: standalone (публичный лендинг `/`) и как iframe-приложение
 внутри портала (`/app`, `/settings`, `/install`). SDK — `@bitrix24/b24jssdk` (+ `-nuxt`).
 
-- `useB24().init()` молча no-op вне фрейма (нет `window.name`) — поэтому in-portal-страницы рендерятся
-  и как обычные URL, и внутри портала без отдельной ветки.
+- `useB24().init()` молча no-op вне фрейма (нет `window.name`), но сами in-portal-страницы (`/app`,
+  `/import`, `/install`) закрыты общим **`InPortalGate`** (#414): снаружи портала показывается
+  объяснение вместо неработающего интерфейса (там нет фрейм-токена — ни настроек, ни статуса, ни
+  записи в CRM). Штатный обход для разработки, скриншотов и тестов — **`?preview=1`**; флаг читается
+  ИЗ РОУТЕРА, а не из `window.location` (на гидратации пререндеренной страницы строка запроса пуста).
+  Чистое ядро решения — `app/utils/inPortalGate.ts` (`portalGateState` checking/ok/outside +
+  `isPreviewQuery`, тесты `tests/inPortalGate.test.ts` и `tests/nuxt/inPortalGate.nuxt.test.ts`).
+  ⚠ Это UX-заглушка, **не** авторизация: настоящая граница — фрейм-токен на сервере.
 - `/install` делает `init → event.bind (ONAPPINSTALL/ONAPPUNINSTALL) → installFinish` + диагностику.
   Привязка событий — до `installFinish`, чтобы текущая установка доставила `application_token`
   на backend `/api/b24/events`. **`placement.bind` не вызываем** — как именно приложение встроено

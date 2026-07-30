@@ -100,7 +100,14 @@ const hasItems = computed(() => props.items.length > 0)
         class="border-b border-(--ui-color-design-tinted-na-stroke) last:border-b-0"
       >
         <!-- Row (trigger) -->
-        <div class="flex w-full cursor-pointer items-center gap-3 py-3 text-left transition-colors hover:bg-(--ui-color-design-tinted-na-bg)">
+        <!-- Подсветка строки — СКРУГЛЁННАЯ ВСТАВКА (-mx-2 + px-2 + rounded), а не подложка во всю
+             ширину: раньше она брала тот же токен, что и плашка даты с плиткой направления, и при
+             наведении строки «слипались» с соседями и с заголовком дня в одно пятно.
+             ⚠ Светлая тема требует ОТДЕЛЬНОГО значения: базовый `bg-content-secondary` — это
+             #fbfbfb на белой карточке (#fff), то есть контраст ~1.02:1, наведение фактически не
+             видно. Сам b24ui по этой же причине переопределяет hover строк таблицы на #f6f8f9
+             (см. `.nuxt/b24ui/table.ts`) — берём то же значение, чтобы не расходиться с ним. -->
+        <div class="-mx-2 flex cursor-pointer items-center gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-(--ui-color-bg-content-secondary) light:hover:bg-[#f6f8f9]">
           <span
             class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--ui-color-design-tinted-na-bg)"
             :class="row.tint"

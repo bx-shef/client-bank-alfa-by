@@ -25,26 +25,30 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="mx-auto max-w-5xl px-4 py-6">
-    <!-- Back to the in-portal metrics/operations view (#219 follow-up: /import had no way back). -->
-    <B24Button
-      :icon="ArrowLeftMIcon"
-      label="К сводке операций"
-      color="air-tertiary-no-accent"
-      size="sm"
-      to="/app"
-      class="mb-4"
-    />
-    <h1 class="text-2xl font-semibold">
-      Загрузка выписки
-    </h1>
-    <p class="mt-2 text-sm text-(--ui-color-base-3)">
-      Когда нет онлайн-подключения к банку — загрузите файл выписки, приложение
-      разберёт операции. Поддерживаются форматы 1С и client-bank (windows-1251).
-    </p>
+  <!-- Только внутри портала (#414): снаружи нет фрейм-токена, значит запись в CRM невозможна, а
+       разбор файла в браузере без неё бессмыслен. -->
+  <InPortalGate>
+    <main class="mx-auto max-w-5xl px-4 py-6">
+      <!-- Back to the in-portal metrics/operations view (#219 follow-up: /import had no way back). -->
+      <B24Button
+        :icon="ArrowLeftMIcon"
+        label="К сводке операций"
+        color="air-tertiary-no-accent"
+        size="sm"
+        to="/app"
+        class="mb-4"
+      />
+      <h1 class="text-2xl font-semibold">
+        Загрузка выписки
+      </h1>
+      <p class="mt-2 text-sm text-(--ui-color-base-3)">
+        Когда нет онлайн-подключения к банку — загрузите файл выписки, приложение
+        разберёт операции. Поддерживаются форматы 1С и client-bank (windows-1251).
+      </p>
 
-    <ClientOnly>
-      <StatementUpload class="mt-6" />
-    </ClientOnly>
-  </main>
+      <ClientOnly>
+        <StatementUpload class="mt-6" />
+      </ClientOnly>
+    </main>
+  </InPortalGate>
 </template>

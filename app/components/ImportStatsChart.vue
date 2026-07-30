@@ -18,6 +18,7 @@
 import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import type { ECharts } from 'echarts/core'
 import { computeImportStats, dayBucketsForCurrency, currencyTotal } from '~/utils/importStats'
+import { buildBarOption } from '~/utils/importStatsChart'
 import type { StatementItem } from '~/types/statement'
 
 const props = withDefaults(defineProps<{
@@ -135,33 +136,15 @@ function seriesColors() {
 }
 
 function barOption() {
-  const c = seriesColors()
-  const anim = !reduceMotion.value
-  return {
-    animation: anim,
-    animationDuration: anim ? 700 : 0,
-    animationEasing: 'cubicOut' as const,
-    grid: { left: 8, right: 12, top: 40, bottom: 24, containLabel: true },
-    tooltip: { trigger: 'axis' as const, valueFormatter: (v: number) => money(v) },
-    // Legend ON: the two bars per day differ only by colour otherwise, so a CVD user (green↔red
-    // floor pair) needs this non-hover, non-colour identity cue (tooltip is pointer-only).
-    legend: { show: true, top: 0, data: ['Приходы', 'Расходы'], textStyle: { color: c.label } },
-    xAxis: {
-      type: 'category' as const,
-      data: buckets.value.map(b => b.date.slice(5)), // MM-DD part (drop the year for a compact axis)
-      axisLabel: { color: c.axis, hideOverlap: true },
-      axisLine: { lineStyle: { color: c.split } }
-    },
-    yAxis: {
-      type: 'value' as const,
-      axisLabel: { inside: true, color: c.axis },
-      splitLine: { lineStyle: { color: c.split } }
-    },
-    series: [
-      { id: 'income', name: 'Приходы', type: 'bar', color: c.income, itemStyle: { borderRadius: [3, 3, 0, 0] }, data: buckets.value.map(b => b.income) },
-      { id: 'expense', name: 'Расходы', type: 'bar', color: c.expense, itemStyle: { borderRadius: [3, 3, 0, 0] }, data: buckets.value.map(b => b.expense) }
-    ]
-  }
+  // Сами опции строит чистая `buildBarOption` (покрыта тестами): знак расходов, вынос подписей оси
+  // и отступ под них — вещи, которые ломаются незаметно, а скриншотом не проверяются (график
+  // рисуется только при наличии операций).
+  return buildBarOption({
+    buckets: buckets.value,
+    colors: seriesColors(),
+    animate: !reduceMotion.value,
+    money
+  })
 }
 
 function donutOption() {
