@@ -166,7 +166,7 @@ Backend принимает все вебхуки одной точкой вхо�
 | Консьюмер `b24-events` — единственный писатель: регистрация/удаление портала | `server/queue/handlers.ts` (`handleEventJob`), `server/queue/worker.ts` (`savePortal`/`deletePortal`) | **готово** |
 | Хранилище токенов портала (Postgres, шифрование refresh, write-once) | `server/utils/tokenStore.ts`, `server/utils/secretCrypto.ts`, `server/db/client.ts` | **готово** |
 | Дедуп дел через маркер в B24 (read-before-write, без стора) | `server/utils/configurableActivityWrite.ts`, `server/utils/activityMarkerLookup.ts`, `handlers.ts` (#259) | **готово** (live-запись в CRM — стадия 4) |
-| Миграция схемы (`portal_tokens`, `portal_tombstone`, `import_result`, `import_batch`, `metrics_counter`) на старте (+ `DROP` снятого `allocation_fact`, §9.3 #6) | `server/plugins/migrate.ts` | **готово** |
+| Миграция схемы (`portal_tokens`, `portal_tombstone`, `import_result`, `import_batch`, `metrics_counter`, `bank_tokens`, `portal_app_rating`) на старте (+ `DROP` снятого `allocation_fact`, §9.3 #6) | `server/plugins/migrate.ts` | **готово** |
 | Регистрация хендлеров событий (`event.bind` из установочного скрипта) | `app/pages/install.vue` + `app/utils/b24EventBind.ts` (чистый билдер, тесты) | **готово** (билдер+тесты; доставка на реальном портале — вручную) |
 | Refresh-цикл access-токена (авто-обновление, конкуренто-безопасно) | `server/utils/ensureAccessToken.ts` (+ `dbLock.ts` advisory-lock, DI, тесты) | **готово** (#35): рефреш при истечении, ротация refresh-токена персистится, сериализация per-portal под scale-out |
 | REST-вызовы к порталу (дела/чат/поиск) | `server/utils/{configurableActivityWrite,activityMarkerLookup,chatNotifyWrite,companyLookup}.ts` | **готово** (стадии 4/6, ядра+тесты; живьём — далее) |
@@ -214,8 +214,8 @@ Backend принимает все вебхуки одной точкой вхо�
 неверная длина ключа, плейсхолдер `application_token`, отсутствие `DATABASE_URL` дают внятный
 `[env] …`-лог сразу, а не падение в хендлере.
 
-Таблицы `portal_tokens`, `portal_tombstone`, `import_result` и
-`metrics_counter` создаются автоматически на старте (`server/plugins/migrate.ts`;
+Таблицы `portal_tokens`, `portal_tombstone`, `import_result`, `import_batch`, `metrics_counter`,
+`bank_tokens` и `portal_app_rating` создаются автоматически на старте (`server/plugins/migrate.ts`;
 снятый `allocation_fact` дропается идемпотентным `DROP TABLE IF EXISTS`, §9.3 #6).
 Адрес обработчика события для портала — `https://<домен-backend>/api/b24/events`.
 
@@ -228,7 +228,7 @@ Backend принимает все вебхуки одной точкой вхо�
 1. **Публичный HTTPS backend.** Б24 шлёт события на публичный URL (`localhost` из compose недоступен):
    деплой за nginx-proxy (`https://<домен>/api/b24/events`) либо туннель (`cloudflared`/`ngrok`) в dev.
 2. **Регистрация локального приложения.** Путь установки = `https://<домен>/install`, обработчик (iframe)
-   = `https://<домен>/app`, права `crm,sale,im,user_brief,placement`. Обработчик события **отдельно указывать
+   = `https://<домен>/app`, права `crm,sale,im,documentgenerator,userfieldconfig,user_brief,placement` (источник — `B24_REQUIRED_SCOPES` в `app/config/b24.ts`; **`userfieldconfig` обязателен** — без него провижининг смарт-процессов молча отказывает, #408). Обработчик события **отдельно указывать
    не нужно** — `/install` сам биндит `ONAPPINSTALL`/`ONAPPUNINSTALL` (до `installFinish`). Проверить —
    панель «Диагностика» на `/install` (блок «События») или `event.get`.
 3. **Установить** → в логах `[b24 events] ONAPPINSTALL member_id=…` + `bootstrapped`; строка в

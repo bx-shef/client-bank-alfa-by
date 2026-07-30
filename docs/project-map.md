@@ -310,7 +310,7 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
 - **OAuth-ядра** банков (чистые, без транспорта/подписи): Альфа (`alfaOauth.ts`), Приорбанк
   (`priorOauth.ts` — OAuth/DCR/consent). Live-скрипты разведки для обоих банков **импортят эти ядра
   напрямую** — инлайн-копий билдеров больше нет, дрейф скрипт↔ядро невозможен (#45).
-- **Встройка в Bitrix24**: `useB24` (dual-mode), страницы `/app`, `/settings`, `/install`; лендинг `/`.
+- **Встройка в Bitrix24**: `useB24` (dual-mode), страницы `/app`, `/import`, `/install` (закрыты `InPortalGate`); лендинг `/` и `/partners`.
   `/install` биндит `ONAPPINSTALL`/`ONAPPUNINSTALL` (`event.bind`) до `installFinish`. **Проверено
   вживую**: приложение зарегистрировано и установлено на двух порталах — токены легли в `portal_tokens`
   с разными per-portal `application_token` (мультитенант-bootstrap работает).
@@ -638,13 +638,13 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
      к банку даёт top-level-навигация (A7c); (8) redirect-цель — если не выводится из `memberId`, подписывать
      (open-redirect); (9) `error_description` из callback (контролирует банк) — санитизировать (CRLF/длина)
      перед логом; (10) `client_secret` из `buildTokenExchangeBody` — никогда в лог.
-   - **✅ A7c — сделано** (PR #297): UI подключения банка (b24ui) на странице настроек `/settings`.
+   - **✅ A7c — сделано** (PR #297): UI подключения банка (b24ui) в форме настроек (тогда — страница `/settings`, ныне слайдовер на `/app`).
      `app/components/BankConnectCard.vue` (`B24Card`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
      admin-гейт `useIsAdmin` — не-админ видит предупреждение; вне фрейма — предпросмотр) + чистый composable
      `app/composables/useBankConnect.ts` (`connect(provider, accountKey)` → POST `/api/bank/connect` фрейм-
      токеном → `authorizeUrl` → **`window.open('_blank','noopener')`** top-level). Номер счёта отдаётся **как
      есть** (без нормализации — бэкенд хранит/запрашивает дословно). Тесты (admin-гейт + composable-проводка) +
-     **визуальная верификация** (свет/тёмная, `/settings`). **Connect-поток A7 ЗАВЕРШЁН** — админ может подключить
+     **визуальная верификация** (свет/тёмная, форма настроек). **Connect-поток A7 ЗАВЕРШЁН** — админ может подключить
      счёт; для живого прогона нужны банк-креды владельца (`ALFA_OAUTH_*`) + `CRON_REAL_POLL=1`. **Follow-up
      (записаны выше):** enum счетов вместо ручного ввода, показ per-account ошибки опроса, single-use nonce.
 8. ✅ **A8 — сделано** (PR #298): **глобальный** rate-limiter `Q_FETCH` — BullMQ worker `limiter`

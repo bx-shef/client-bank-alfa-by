@@ -14,7 +14,8 @@
 > утилиты, билдер дела, разбор/маршрутизация событий Б24) и демо-страница на mock-данных; backend
 > событий Б24 реализован (этап 3, слайс), реальная интеграция Альфы — далее. **Целевая спецификация
 > обработки платежей** (подбор компании/инвойса/сделки, распределение, оповещения, ошибки) —
-> [`docs/PROCESSING.md`](docs/PROCESSING.md). Деплой: статика лендинга за nginx + отдельный
+> [`docs/PROCESSING.md`](docs/PROCESSING.md); **указатель всех документов** —
+> [`docs/README.md`](docs/README.md). Деплой: статика лендинга за nginx + отдельный
 > backend-сервис с Postgres (как `bx-synapse`). Эталон стека — `currency-converter`.
 
 ## Стек
@@ -63,6 +64,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   «Почему мы» (6 карточек, glow), блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`.
   Тексты — из `app/utils/landing.ts`. CTA скроллит к `#brief`, вторичная кнопка hero — к `#demo`; цели
   Метрики через `useMetrikaGoal`; glow за курсором — `useCardGlow`.
+- `app/pages/partners.vue` — **публичная страница «Интеграторам»** (layout `landing`, в
+  `nitro.prerender.routes`): условия субподряда для интеграторов Bitrix24 — модель работы, лестница
+  вознаграждения, деление зон ответственности. Тексты и данные — в чистом `app/utils/partners.ts`
+  (`PARTNERS_TITLE`/`PARTNERS_MODEL`/`PARTNERS_LADDER`/`PARTNERS_SPLIT`), развёрнутая версия для
+  переговоров — [`docs/PARTNERS.md`](docs/PARTNERS.md). ⚠ Публичных страниц ДВЕ (`/` и `/partners`) —
+  новая страница обязана попасть в `nitro.prerender.routes`, иначе на статике отдаст 404.
 - `app/components/LandingDemo.vue` + чистое ядро `app/utils/demoExtract.ts` (карта — [`docs/DEMO_LANDING.md`](docs/DEMO_LANDING.md))
   — **демо на лендинге «Попробуйте на своей выписке»**: прикрепить файл выписки → **разбор в браузере**
   (windows-1251, через готовое `importUpload.ts`: `processUploadBatch`/`dedupItems`/`deferToEventLoop`) →
@@ -96,8 +103,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   тёмная брендовая тема (vibecode-палитра, #030022 + радиальное сияние, self-hosted шрифты Rubik/
   Roboto Mono). Живёт в отдельном **layout `landing`** (`app/layouts/landing.vue`: `B24Header` с
   `AppLogo`+навигацией, `B24Footer` с `SiteFooter`+GitHub, `BusinessCardModal`), который вешается
-  только на `/` (`definePageMeta({ layout: 'landing' })`) — **in-portal страницы (`/app`,`/settings`,
-  `/login`,`/queues`) не трогает**, у них своя light/dark-auto тема. Dark форсится только для лендинга
+  только на `/` (`definePageMeta({ layout: 'landing' })`) — **in-portal страницы (`/app`,`/import`,
+  `/install`,`/login`,`/queues`) не трогает**, у них своя light/dark-auto тема. Dark форсится только для лендинга
   через `htmlAttrs data-force-dark` (учитывает `theme-init` в `app.vue`) + класс `.landing-shell` в
   `main.css` (фон/токены скоуплены на этот класс). `HeroGraph.vue` — canvas-анимация фона hero:
   внешние узлы (банки/выписка/CRM-сущности) шлют **импульсы в центральный хаб Bitrix24** (спицы +
@@ -146,8 +153,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   не фаерим); default OFF)
   + **`RecognitionMap` «карта сопоставления»** (#109 §4: матрицы распознавания + алфавит + `configFields`
   — форма вместо ручной правки `app.option` JSON; см. компонент ниже).
-  **Секции сгруппированы в `B24Accordion`** (Уведомления/Исключения/Авто-проведение/Карта распознавания;
-  открыта первая), под ним — **явные Save/Cancel** (`#219`, порт из `ai-price-import`, паттерн
+  Первый блок формы — **`SetupReadinessCard`** (экран готовности), под ним **`B24Accordion` из шести
+  секций** (Подключение банка / Уведомления в чат / Смарт-процессы и распределение / Исключения /
+  Авто-проведение / Карта распознавания; открыты **первые две** — свежей установке нужна первая,
+  в ежедневной работе вторая), под ним — **явные Save/Cancel** (`#219`, порт из `ai-price-import`, паттерн
   `bitrix24/b24-ai-starter`; автосейв убран). Один компонент для двух точек входа: слайдовер на
   `/app` (проп `asSlider` → Save/Cancel эмитят `close`, панель закрывается; Cancel сперва перечитывает
   серверную копию — слайдовер делит тот же singleton `settings`, иначе несохранённые правки всплыли бы
@@ -261,7 +270,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   установку не блокирует). Требует `NUXT_PUBLIC_SITE_URL` в проде (иначе откажется биндить относительный URL —
   ошибка с retry). `placement.bind` **пока не делаем** — плейсменты добиваем на тестовом портале (см. план).
 - `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
-  (`/install`, `/app`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
+  (`/install`, `/app`, `/import` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
 - `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`,
   `documentgenerator`, **`userfieldconfig`** (#408 — провижининг СП зовёт `userfieldconfig.add`, а scope
   не запрашивался ⇒ на любом портале, где право не выдали руками, провижининг падал с опаковым
@@ -270,8 +279,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   на установке, его же указывают в `allocation.triggerCode`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
-- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдер `/app` и страница
-  `/settings` делят состояние): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
+- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдовер настроек на `/app`; форма монтируется один раз, но переживает
+  закрытие панели): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
   фрейм-токену + `chatFetcher` (транспорт для `AsyncSearchSelect`, ходит в `/api/chat-search`) +
   сид-метки выбранных чатов (кэш-`title` из настроек → недавние → id-фолбэк). Вне фрейма инертна
   (defaults, persistence — no-op). `AsyncSearchSelect` эмитит `update:selected-option` (выбранная
@@ -282,7 +291,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   синхронизация настроек между открытыми инстансами**: `buildSettingsReloadEvent(moduleId)` собирает payload
   `pull.application.event.add` с COMMAND `reload.options`; `notifyReload()` шлёт его через фрейм после сейва,
   `subscribeReload(onReload)` подписывается на канал приложения (`B24PullClientManager`) и зовёт `onReload` при
-  сейве в другом инстансе (`/app` и `/settings` подписаны → `chatSettings.load()`). Обе стороны **best-effort,
+  сейве в другом инстансе (`/app` подписан → `chatSettings.load()`). Обе стороны **best-effort,
   никогда не бросают**: pull-сервер портала может быть недоступен → тихий no-op (наши настройки всё равно
   автосейвятся, это лишь освежает **другие** открытые формы). `moduleId` = `b24MarketCode || LANDING_MARKET_CODE`.
   ⚠ Семантика pull-канала портало-специфична — проверить на живом портале.
@@ -500,7 +509,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     пер-портальный Redis-кулдаун `SET NX EX` (`claimCooldownSlot`, дефолт 60с, `MANUAL_POLL_COOLDOWN_SEC`;
     claim только при наличии работы), глобальный A8-лимитер ниже по потоку. Инертно (`enqueued:0`) без счетов;
     фильтр `POLLABLE_PROVIDERS` — тот же, что у крона (Альфа **и Приор**, у каждого своя очередь и свой бюджет).
-    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll` на `/settings`.
+    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll`; живут в `SettingsForm` (слайдовер на `/app`).
     nginx `limit_req` на роут. `listBankAccountsForPortal` (без расшифровки refresh).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
@@ -585,7 +594,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     логируется)→`parseTokenResponse`→`saveBankToken` под `state.accountKey`. Ошибки банка не рендерятся, лог
     через `sanitizeForLog` (CRLF/длина). 200/400/502; nginx-троттл. **UI A7c** — `app/components/
     BankConnectCard.vue` (b24ui `B24Card`/`B24RadioGroup`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
-    admin-гейт `useIsAdmin`, на `/settings`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
+    admin-гейт `useIsAdmin`, в `SettingsForm`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
     фрейм-токеном → `authorizeUrl` → `window.open` top-level; номер счёта — как есть (только trim крайних пробелов), без переформатирования/case-folding).
     **Список подключённых счетов + отключение (#404, UX по живому прогону):** после успешного connect
     UI не показывал ничего — ни банк, ни счёт, ни способ убрать ошибочный. Добавлены
@@ -769,9 +778,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       `GET …/{id}` пока `BY.NBRB.Resource.NotCreated` → `normalizePrior`, DI-транспорт, тесты). Перед create
       резолвит **опаковый `accountId`** банка из нашего IBAN (`resolvePriorAccountId` → `GET /accounts`) — это
       разные идентификаторы. **429/5xx на поллинге = «ещё не готово», НЕ пустая выписка** (иначе троттл тихо
-      съел бы окно операций); нераспознанное тело — тоже ошибка, а не «пусто». Движок и connect-поток готовы,
-      но в **автоопрос Приор ещё не включён** (см. `POLLABLE_PROVIDERS` — учёт лимита по запросам + занятость
-      слота); прод требует BY-СКЗИ (issue #41), sandbox `:9344` без него. **Очередь Приора отдельная**
+      съел бы окно операций); нераспознанное тело — тоже ошибка, а не «пусто». Движок, connect-поток и **автоопрос**
+      готовы: `prior-by` в `POLLABLE_PROVIDERS`; прод требует BY-СКЗИ (issue #41), sandbox `:9344` без него. **Очередь Приора отдельная**
       (`bank-fetch-prior`, `fetchQueueFor`) — свой лимитер (бюджет в **запросах**, `providerJobRate`
       делит на стоимость задачи) и свои слоты (`QUEUE_PRIOR_CONCURRENCY`), поэтому Приор не блокирует
       Альфу и не тратит её бюджет; после этого `prior-by` **включён** в `POLLABLE_PROVIDERS`.
@@ -1397,7 +1405,7 @@ UI — в компонентах. Это та же раскладка, что в
 ## Встройка в Bitrix24 (этап 2)
 
 Приложение работает в двух режимах: standalone (публичный лендинг `/`) и как iframe-приложение
-внутри портала (`/app`, `/settings`, `/install`). SDK — `@bitrix24/b24jssdk` (+ `-nuxt`).
+внутри портала (`/app`, `/import`, `/install`). SDK — `@bitrix24/b24jssdk` (+ `-nuxt`).
 
 - `useB24().init()` молча no-op вне фрейма (нет `window.name`), но сами in-portal-страницы (`/app`,
   `/import`, `/install`) закрыты общим **`InPortalGate`** (#414): снаружи портала показывается
@@ -1467,13 +1475,13 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   и `window.__NUXT__.config` с меняющимся `buildId`) разрешаются по sha256-хэшам, которые
   `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
   `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
-  домены Б24 (iframe-встройка `/app`,`/settings`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
+  домены Б24 (iframe-встройка `/app`,`/import`,`/install`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
   Лендинг несёт **Яндекс.Метрику** (инлайн-счётчик из `nuxt.config.ts`, `NUXT_PUBLIC_METRIKA_ID`;
   его sha256 подхватывает `csp-hashes.mjs`, CSP разрешает `mc.yandex.ru` в script/img/connect/frame-src)
   и **встроенную CRM-форму Б24** (iframe на `public/b24-form.html` со своим form-scoped CSP —
   `location = /b24-form.html`; `NUXT_PUBLIC_B24_FORM_*`, пустые → слот).
   Метрика-сниппет **самозаглушается в iframe** (`window.self !== window.top`): in-portal-страницы
-  (`/app`,`/settings`,`/install`) внутри портала Б24 Метрику **не** инициализируют — иначе webvisor
+  (`/app`,`/import`,`/install`) внутри портала Б24 Метрику **не** инициализируют — иначе webvisor
   писал бы session-replay CRM клиента, а цели пачкали бы аналитику лендинга портальным трафиком
   (`ym` тогда не определён → `useMetrikaGoal` no-op). Тот же приём, что в `currency-converter`
   (там — в `public/metrika.js`).
