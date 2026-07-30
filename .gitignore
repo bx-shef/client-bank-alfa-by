@@ -43,3 +43,6 @@ prior-demo-output*.json
 prior_private_key.pem
 prior_jwks.json
 
+
+# Локальные артефакты dev-скриптов (тестовые выписки и т. п.) — не коммитим.
+.tmp

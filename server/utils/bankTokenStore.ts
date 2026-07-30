@@ -190,6 +190,36 @@ export async function deleteBankToken(query: QueryFn, memberId: string, provider
   return rows.length > 0
 }
 
+/** Переименовать ключ счёта у подключения (#407): подключились без счёта → выбрали счёт.
+ *  Member-scoped в обоих условиях, поэтому чужую строку не тронуть даже подделав provider/ключи.
+ *  Занятый номер НЕ перезаписывается (иначе молча затёрли бы живой токен другого счёта): сперва
+ *  проверка, а на случай гонки двух одновременных привязок — перехват нарушения первичного ключа
+ *  `(member_id, provider, account_key)`. Без него проигравший получил бы 500 вместо честного 409
+ *  (реальный сценарий — двойной клик по кнопке привязки). */
+export async function renameBankTokenAccount(
+  query: QueryFn, memberId: string, provider: BankProviderId, fromKey: string, toKey: string
+): Promise<'renamed' | 'not-found' | 'conflict'> {
+  const taken = await query(
+    `SELECT 1 FROM bank_tokens WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
+    [memberId, provider, toKey]
+  )
+  if (taken.length > 0) return 'conflict'
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await query(
+      `UPDATE bank_tokens SET account_key = $4, updated_at = now()
+        WHERE member_id = $1 AND provider = $2 AND account_key = $3
+        RETURNING member_id`,
+      [memberId, provider, fromKey, toKey]
+    )
+  } catch (e) {
+    // 23505 = unique_violation: между проверкой и UPDATE этот номер занял параллельный запрос.
+    if ((e as { code?: string })?.code === '23505') return 'conflict'
+    throw e
+  }
+  return rows.length > 0 ? 'renamed' : 'not-found'
+}
+
 /** Delete ALL of a portal's bank tokens on ONAPPUNINSTALL (a removed app keeps no data).
  *  Idempotent. Returns the number of rows removed (for logging). */
 export async function deleteBankTokensForPortal(query: QueryFn, memberId: string): Promise<number> {

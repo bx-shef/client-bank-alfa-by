@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   handleDisconnectBankAccount,
   handleListBankAccounts,
+  handleSetBankAccount,
   type DisconnectDeps,
-  type ListAccountsDeps
+  type ListAccountsDeps,
+  type SetAccountDeps
 } from '../server/utils/bankAccounts'
+import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import { classifyProvisionError } from '../server/utils/provisionRequest'
 import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 
@@ -173,6 +176,85 @@ describe('handleDisconnectBankAccount', () => {
       }
     })
     expect((await handleDisconnectBankAccount(deps, { ...input, provider: 'alfa-by', accountKey: 'A' })).status).toBe(403)
+    expect(touched).toBe(false)
+  })
+})
+
+describe('handleSetBankAccount', () => {
+  const PENDING = provisionalAccountKey('n1')
+
+  function deps(over: Partial<SetAccountDeps> = {}): SetAccountDeps {
+    return {
+      memberIdByDomain: async () => 'M1',
+      validateFrame: async () => ({ userId: '7', isAdmin: true }),
+      rename: async () => 'renamed',
+      ...over
+    }
+  }
+  const body = { ...input, provider: 'alfa-by', pendingKey: PENDING, accountKey: 'BY01ALFA0001' }
+
+  it('назначает счёт подключению, которое ждало выбора', async () => {
+    const seen: string[] = []
+    const d = deps({
+      rename: async (memberId, provider, from, to) => {
+        seen.push(`${memberId}|${provider}|${from}|${to}`)
+        return 'renamed'
+      }
+    })
+    const res = await handleSetBankAccount(d, body)
+    expect(res.status).toBe(200)
+    // memberId берётся из проверенного домена, а не из тела запроса.
+    expect(seen).toEqual([`M1|alfa-by|${PENDING}|BY01ALFA0001`])
+  })
+
+  it('НЕ даёт подменить счёт у живого подключения — только временный ключ', async () => {
+    // Иначе это был бы способ увести операции чужого счёта на другой номер.
+    let touched = false
+    const d = deps({
+      rename: async () => {
+        touched = true
+        return 'renamed'
+      }
+    })
+    const res = await handleSetBankAccount(d, { ...body, pendingKey: 'BY01ALFA9999' })
+    expect(res.status).toBe(400)
+    expect(touched).toBe(false)
+  })
+
+  it('409, если такой счёт уже подключён — не затираем живой токен', async () => {
+    const res = await handleSetBankAccount(deps({ rename: async () => 'conflict' }), body)
+    expect(res.status).toBe(409)
+  })
+
+  it('404, если ожидающего подключения нет', async () => {
+    const res = await handleSetBankAccount(deps({ rename: async () => 'not-found' }), body)
+    expect(res.status).toBe(404)
+  })
+
+  it('отвергает пустые и кривые значения до обращения к хранилищу', async () => {
+    let touched = false
+    const d = deps({
+      rename: async () => {
+        touched = true
+        return 'renamed'
+      }
+    })
+    expect((await handleSetBankAccount(d, { ...body, accountKey: '' })).status).toBe(400)
+    expect((await handleSetBankAccount(d, { ...body, accountKey: 'BY 01/ALFA' })).status).toBe(400)
+    expect((await handleSetBankAccount(d, { ...body, provider: 'evil' })).status).toBe(400)
+    expect(touched).toBe(false)
+  })
+
+  it('403 не-админу — и ничего не переименовывает', async () => {
+    let touched = false
+    const d = deps({
+      validateFrame: async () => ({ userId: '9', isAdmin: false }),
+      rename: async () => {
+        touched = true
+        return 'renamed'
+      }
+    })
+    expect((await handleSetBankAccount(d, body)).status).toBe(403)
     expect(touched).toBe(false)
   })
 })

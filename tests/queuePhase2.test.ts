@@ -7,6 +7,7 @@ import {
   DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
 } from '../server/queue/cron'
+import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
@@ -247,6 +248,37 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
     expect(await handleFetchJob(fetchJob, deps)).toEqual({ fetched: 0, chained: false })
     expect(calls.crm).toEqual([])
   })
+  it('MANUAL upload reaches the SP-ledger exactly like a bank poll (#404 follow-up check)', async () => {
+    // A manual /import upload и опрос банка сходятся в ОДНОЙ crm-sync-джобе; ничего в конвейере не
+    // ветвится по providerId. Этот тест фиксирует именно это: то же распознавание → разнесение →
+    // строка dist-СП. Иначе «ручной импорт не попадает в смарт-процесс» стало бы тихой регрессией.
+    const spCfg: RecognitionSettings = {
+      alphabet: 'cyrillic',
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }],
+      configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }
+    }
+    const resolved: IntentResolution = {
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]
+    }
+    const op = item('d1', 'credit', 'оплата по счёту СЧ-0001')
+    const { deps, calls } = fakeDeps({ batch: [op], recognition: spCfg, resolve: [resolved] })
+
+    // Пройти ВЕСЬ путь ручной загрузки: parse-джоба сама формирует crm-sync-джобу.
+    await handleParseJob(
+      { memberId: 'M', providerId: 'manual', fileName: 'vypiska.txt', contentBase64: 'AAAA', fileHash: 'HASH' },
+      deps
+    )
+    const chained = calls.crm[0] as CrmSyncJob
+    expect(chained.providerId).toBe('manual')
+    expect(chained.source).toBe('parse')
+
+    const r = await handleCrmSyncJob(chained, deps)
+    expect(r).toMatchObject({ resolved: 1, allocatable: 1, allocated: 1 })
+    // Строка в СП распределения записана — с той же целью, что и при банковском опросе.
+    expect(calls.ledger).toHaveLength(1)
+  })
+
   it('parse uses the file hash as batchId', async () => {
     const { deps, calls } = fakeDeps([item('d1')])
     const r = await handleParseJob({ memberId: 'M', providerId: 'manual', fileName: 'k.txt', contentBase64: 'AAAA', fileHash: 'HASH' }, deps)
@@ -1308,6 +1340,16 @@ describe('cron helpers', () => {
     expect(POLLABLE_PROVIDERS.has('prior-by')).toBe(true)
     expect(POLLABLE_PROVIDERS.has('manual')).toBe(false)
     expect(accountsForPolling([])).toEqual([])
+  })
+
+  it('НЕ опрашивает подключение без выбранного счёта (#407)', () => {
+    // У банка нет такого «номера»: задача падала бы на каждом тике вечно, сжигая общий лимит
+    // запросов (у Приора одна задача ~10 запросов) и забивая лог. Ждём привязки счёта.
+    const out = accountsForPolling([
+      { memberId: 'M', provider: 'alfa-by', accountKey: provisionalAccountKey('n1') },
+      { memberId: 'M', provider: 'alfa-by', accountKey: 'BY01ALFA' }
+    ])
+    expect(out).toEqual([{ memberId: 'M', providerId: 'alfa-by', accounts: ['BY01ALFA'] }])
   })
   it('pollWindow returns [today-lookback, today] as ISO YYYY-MM-DD', () => {
     const now = new Date('2026-07-17T09:30:00.000Z')

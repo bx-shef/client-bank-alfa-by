@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
+import { installVerdict, type BackendState } from '~/utils/installVerdict'
+import { checkBackendKnowsPortal } from '~/composables/useBackendInstallCheck'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
@@ -36,6 +38,14 @@ const installError = ref('')
 // True while an install attempt is in flight — guards the Retry button.
 const isRunning = ref(false)
 const caption = ref('Инициализация…')
+/** Установка дошла до installFinish — только тогда вердикт вообще имеет смысл. */
+const finished = ref(false)
+/** Видит ли backend наш портал (#413). До проверки — 'unknown': молчим, а не пугаем. */
+const backendState = ref<BackendState>('unknown')
+/** Идёт проверка серверной части. Пока идёт — вердикт НЕ показываем: иначе на секунды загорелось
+ *  бы зелёное «Приложение установлено», которое потом схлопнулось бы в жёлтое. Для экрана, чья
+ *  задача — доверие к вердикту, такой кадр хуже паузы. */
+const checkingBackend = ref(false)
 // Best-effort automation-trigger registration outcome (#79): '' = not attempted,
 // 'ok' = registered, otherwise a short error string for the diagnostics panel.
 const triggerRegistered = ref('')
@@ -76,6 +86,23 @@ const diagnostics = computed(() => {
     trigger: triggerRegistered.value
   }
 })
+
+// Вердикт установки (#410): «установилось» и «работает» — разные вещи. Раньше недовыданные права
+// рисовались бейджами внутри СВЁРНУТОЙ диагностики, то есть их никто не видел, и портал спокойно
+// жил с молча выключенными функциями (так и вскрылся #408).
+const verdict = computed(() => installVerdict({
+  finished: finished.value,
+  missingScopes: diagnostics.value.missing,
+  trigger: triggerRegistered.value,
+  backend: backendState.value
+}))
+// Раскрытие «Диагностики». ОБЯЗАТЕЛЬНО обычный ref под v-model, а не computed под :model-value:
+// с односторонним биндингом аккордеон становится управляемым, эмит слушать некому — и панель
+// перестаёт открываться даже кликом. Идентификатор элемента — его `value` ('diag'), а не индекс.
+const diagOpen = ref<string[]>([])
+watch(() => verdict.value.issues.length, (n) => {
+  if (n > 0) diagOpen.value = ['diag'] // есть о чём говорить — показываем сразу
+}, { immediate: true })
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -179,6 +206,10 @@ async function runInstall() {
         eventList: { method: 'event.get' }
       }
     })
+    // Батч мог отработать частично. Если `scope` не прочитан, судить о правах НЕЛЬЗЯ: пустой
+    // список выглядел бы как «портал не выдал НИ ОДНОГО права» и давал бы громкий ложный вердикт
+    // на успешной установке — ровно та ошибка, которую этот экран и должен устранять.
+    if (!response.isSuccess) throw new Error(`Не удалось прочитать данные портала: ${response.getErrorMessages().join('; ')}`)
     initData.value = response.getData() as InitData
 
     // Register the backend event handlers before finishing — see bindEvents().
@@ -194,6 +225,16 @@ async function runInstall() {
     progressValue.value = 100
     await sleep(800)
     await $b24.installFinish()
+    finished.value = true
+    // Событие установки идёт мимо iframe — прямо на backend. Проверяем, что оно дошло, иначе
+    // портал «установлен», а серверная часть о нём не знает и импорт не заработает (#413).
+    caption.value = 'Проверка серверной части…'
+    checkingBackend.value = true
+    try {
+      backendState.value = await checkBackendKnowsPortal()
+    } finally {
+      checkingBackend.value = false
+    }
     caption.value = 'Готово'
   } catch (error: unknown) {
     console.error('[install]', error)
@@ -247,7 +288,51 @@ onMounted(runInstall)
         {{ caption }}
       </p>
 
+      <!-- Вердикт (#410): «Готово» больше не означает «всё работает». Недовыданные права раньше
+           были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны.
+           Живая область: вердикт появляется асинхронно, и без неё скринридер о нём не сообщит. -->
+      <div
+        class="w-full"
+        role="alert"
+        aria-live="polite"
+      >
+        <B24Alert
+          v-if="isUseB24 && !checkingBackend && verdict.level !== 'ok' && !isRunning && !installError"
+          :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
+          variant="soft"
+          :title="verdict.title"
+          class="mt-4 w-full"
+          data-testid="install-verdict"
+        >
+          <template #description>
+            <ul class="mt-1 flex list-disc flex-col gap-2 pl-4">
+              <li
+                v-for="(issue, n) in verdict.issues"
+                :key="n"
+              >
+                {{ issue.title }}
+                <span
+                  v-if="issue.action"
+                  class="block opacity-80"
+                >{{ issue.action }}</span>
+              </li>
+            </ul>
+          </template>
+        </B24Alert>
+
+        <B24Alert
+          v-else-if="isUseB24 && !checkingBackend && verdict.level === 'ok' && !isRunning && !installError"
+          color="air-primary-success"
+          variant="soft"
+          :title="verdict.title"
+          description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
+          class="mt-4 w-full"
+          data-testid="install-verdict"
+        />
+      </div>
+
       <B24Accordion
+        v-model="diagOpen"
         :items="[{ label: 'Диагностика', value: 'diag', slot: 'diag' }]"
         type="multiple"
         class="mt-4 w-full"

@@ -116,7 +116,11 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   }
   if (!provider) return { status: 400, body: { error: 'provider required' } }
-  if (!accountKey || !isValidAccountKey(accountKey)) {
+  // Счёт НЕОБЯЗАТЕЛЕН (#407): до авторизации админ не обязан помнить IBAN наизусть, а после неё
+  // счёт можно выбрать из того, что отдал сам банк. Пустой ⇒ подключение уйдёт под временный ключ
+  // (см. `provisionalAccountKey`), и UI попросит выбрать счёт уже по возвращении. Непустой, но
+  // кривой — по-прежнему отказ: молча превращать мусор во временный ключ хуже явной ошибки.
+  if (accountKey && !isValidAccountKey(accountKey)) {
     return { status: 400, body: { error: 'a valid account number is required' } }
   }
 
@@ -152,7 +156,8 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   const state: BankConnectState = {
     memberId,
     provider,
-    accountKey,
+    // Пусто ⇒ в state счёта нет; колбэк положит токен под временный ключ.
+    accountKey: accountKey || undefined,
     nonce,
     exp: nowMs + (input.ttlMs ?? CONNECT_STATE_TTL_MS)
   }

@@ -143,8 +143,8 @@ async function onConnect() {
       />
 
       <B24FormField
-        label="Номер счёта"
-        :description="`Расчётный счёт (IBAN) в банке «${providerLabel}», который подключаем. Только буквы и цифры, как в банке.`"
+        label="Номер счёта (необязательно)"
+        :description="`Расчётный счёт (IBAN) в банке «${providerLabel}». Можно не заполнять — подключитесь и укажите счёт после возврата из банка, он появится в списке выше.`"
       >
         <B24Input
           v-model="accountKey"
