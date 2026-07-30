@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { MATRIX_PRESETS } from '~/utils/recognitionKinds'
 import RecognitionMap from '~/components/RecognitionMap.vue'
 import type { RecognitionSettings } from '~/utils/settings'
 
@@ -63,5 +64,20 @@ describe('RecognitionMap', () => {
     await wrapper.find('[data-testid="recognition-preview-input"]').setValue('Оплата по счёту СЧ-1042')
     const out = wrapper.find('[data-testid="recognition-preview-out"]')
     expect(out.text()).toContain('СЧ-1042')
+  })
+
+  it('«Добавить типовые» пушит пресеты В МОДЕЛЬ, подтверждает и больше не добавляет (#421)', async () => {
+    // Мутация должна дойти до родительской модели (компонент правит `defineModel`), иначе шаблоны
+    // «добавились» бы только на экране и пропали при сохранении.
+    const m = model()
+    const wrapper = await mountSuspended(RecognitionMap, { props: { modelValue: m } })
+    await wrapper.find('[data-testid="matrix-presets"]').trigger('click')
+    expect(m.matrices).toHaveLength(MATRIX_PRESETS.length)
+    expect(wrapper.findAll('[data-testid="matrix-row"]')).toHaveLength(MATRIX_PRESETS.length)
+    // Без явного подтверждения клик выглядит как «кнопка изменилась, и всё».
+    expect(wrapper.find('[data-testid="matrix-presets-added"]').exists()).toBe(true)
+    // Повторный клик не задвоил бы маски — кнопка выключена и говорит почему.
+    expect(wrapper.find('[data-testid="matrix-presets"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="matrix-presets"]').text()).toContain('уже добавлены')
   })
 })

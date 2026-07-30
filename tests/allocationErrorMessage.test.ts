@@ -59,7 +59,7 @@ describe('buildUnresolvedMessage', () => {
 
   it('называет распознанные номера и говорит, что проверять', () => {
     const msg = buildUnresolvedMessage(item(), ids)!
-    expect(msg).toContain('Не нашли, к чему привязать платёж')
+    expect(msg).toContain('Платёж не привязан')
     expect(msg).toContain('• СЧ-1234')
     expect(msg).toContain('Проверьте номер')
   })

@@ -34,8 +34,13 @@ function addMatrix() {
 }
 /** Добавить типовые шаблоны (#421) — только те, которых ещё нет: повторный клик не должен плодить
  *  одинаковые маски (они дают дубли распознавания). */
+const presetsAdded = ref(0)
 function addPresets() {
-  recognition.value.matrices.push(...missingPresets(recognition.value.matrices))
+  const rows = missingPresets(recognition.value.matrices)
+  recognition.value.matrices.push(...rows)
+  // Без явного подтверждения клик выглядит так: кнопка пропала, что-то мигнуло выше. Для экранного
+  // диктора не происходит вообще ничего.
+  presetsAdded.value = rows.length
 }
 const presetsLeft = computed(() => missingPresets(recognition.value.matrices).length)
 
@@ -163,7 +168,7 @@ const previewIds = computed<RecognizedId[]>(() =>
     </ul>
     <div class="flex flex-wrap items-center gap-2">
       <B24Button
-        color="air-secondary-accent-1"
+        color="air-tertiary-no-accent"
         size="sm"
         :disabled="disabled"
         data-testid="matrix-add"
@@ -173,17 +178,28 @@ const previewIds = computed<RecognizedId[]>(() =>
       </B24Button>
       <!-- Пустая карта = приложение не видит в назначении ни одного номера. Придумать маску с нуля,
            глядя на пустой список, невозможно — не зная ни синтаксиса, ни того, какие номера бывают. -->
+      <!-- На пустой карте это САМОЕ полезное действие, поэтому оно не тише соседнего «+ Добавить
+           матрицу»: заполнить карту с нуля вручную админ не может, не зная синтаксиса маски. -->
       <B24Button
-        v-if="presetsLeft > 0"
-        color="air-tertiary-no-accent"
+        color="air-secondary-accent-1"
         size="sm"
-        :disabled="disabled"
+        :disabled="disabled || presetsLeft === 0"
         data-testid="matrix-presets"
         @click="addPresets"
       >
-        Добавить типовые ({{ presetsLeft }})
+        {{ presetsLeft > 0 ? `Добавить типовые шаблоны (${presetsLeft})` : 'Типовые шаблоны уже добавлены' }}
       </B24Button>
     </div>
+    <p
+      v-if="presetsAdded > 0"
+      role="status"
+      aria-live="polite"
+      class="mt-2 text-xs text-(--ui-color-base-3)"
+      data-testid="matrix-presets-added"
+    >
+      Добавлено шаблонов: {{ presetsAdded }}. Проверьте их и сохраните настройки — маски можно
+      отредактировать.
+    </p>
 
     <!-- Config-field map: portal-specific field names / SP entityTypeId. -->
     <div class="mt-5 mb-2 text-sm font-medium">

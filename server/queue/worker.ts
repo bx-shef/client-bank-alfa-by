@@ -424,12 +424,12 @@ export function liveHandlerDeps(): HandlerDeps {
       }
     },
     // «Номер распознан, цель не найдена» (#421) — те же гарантии, что у notifyError.
-    notifyUnresolved: async (item, identifiers, dialogId, memberId) => {
+    notifyUnresolved: async (item, identifiers, dialogId, memberId, truncated) => {
       if (isDemoAccount(item.account)) return
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyUnresolvedViaRest(item, identifiers, dialogId, call)
+        await notifyUnresolvedViaRest(item, identifiers, dialogId, call, truncated)
       } catch (e) {
         console.error('unresolved notify failed', memberId, (e as Error)?.message)
       }

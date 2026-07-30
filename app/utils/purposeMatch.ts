@@ -27,7 +27,8 @@ export type Alphabet = 'cyrillic' | 'latin'
 
 /**
  * One recognition matrix: `mask` describes the identifier's format — lowercase
- * `d` is a digit placeholder, every other char is a literal. Bound to `kind`.
+ * `d` is a digit placeholder, `d+` = одна или больше цифр (номера растут: `СЧ-1` → `СЧ-1234`),
+ * every other char is a literal. Bound to `kind`.
  * `note` is a human explanation shown in settings. Masks come from the per-portal
  * «карта сопоставления» (§4). A literal Latin lowercase `d` cannot be used (it is
  * always the digit placeholder) — spell prefixes with uppercase / other letters.
@@ -89,11 +90,36 @@ const ALNUM = '0-9A-Za-zА-Яа-яЁёІіЎў'
 const BOUND_L = `(?<![${ALNUM}])`
 const BOUND_R = `(?![${ALNUM}])`
 
-/** Compile a (already homoglyph-folded) mask into a RegExp body: `d` → a digit,
- *  everything else → an escaped literal. */
+/**
+ * Compile a (already homoglyph-folded) mask into a RegExp body: `d` → одна цифра, `d+` → одна или
+ * больше цифр, всё остальное — экранированный литерал.
+ *
+ * Квантификатор `d+` появился в #421 и решает вполне конкретную проблему: маска фиксированной длины
+ * описывает нумерацию, которой не бывает. Нумерация Bitrix24 начинается с `СЧ-1` и растёт, поэтому
+ * `СЧ-dddd` не распознаёт ни первую тысячу счетов, ни пятизначные; а чтобы покрыть диапазон, админу
+ * пришлось бы заводить по строке на каждую длину. Ещё хуже обратная сторона: голая `dddd` (номер без
+ * префикса) цепляет ГОД и СУММУ из назначения — `2026`, `1500` — и на каждом таком ложном номере
+ * приложение сообщало бы «цель не найдена».
+ *
+ * Обратная совместимость: раньше `+` после `d` был литералом, то есть маска вида `d+` означала
+ * «цифра, затем плюс». Такой формат номера не встречается, поэтому смена значения безопасна.
+ */
 function maskToPattern(foldedMask: string): string {
   let p = ''
-  for (const ch of foldedMask) p += ch === 'd' ? '\\d' : escapeRegExp(ch)
+  const chars = [...foldedMask]
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i]!
+    if (ch === 'd') {
+      if (chars[i + 1] === '+') {
+        p += '\\d+'
+        i++
+      } else {
+        p += '\\d'
+      }
+      continue
+    }
+    p += escapeRegExp(ch)
+  }
   return p
 }
 

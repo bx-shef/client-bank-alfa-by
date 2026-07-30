@@ -166,7 +166,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   чат ошибок: чистый билдер `buildUnresolvedMessage` (`allocationErrorMessage.ts`, BB-нейтрализация —
   номер это фрагмент назначения, то есть текст плательщика) + транспорт `notifyUnresolvedViaRest`.
   Отправка идёт **после** записи маркера, как и остальные сообщения в чат ошибок (у чата дедупа нет,
-  иначе повторная доставка джобы переслала бы сообщение).
+  иначе повторная доставка джобы переслала бы сообщение). ⚠ Считается **только** `status:'resolved'`:
+  `unsupported` значит «вид не настроен», там в CRM никто ничего не искал — сообщать «подходящих
+  счетов нет» было бы ложью. Счётчик растёт **всегда**, а сообщения ограничены
+  `MAX_UNRESOLVED_NOTICES` на прогон: это состояние НАСТРОЙКИ, а не платежа (кривая маска даёт его на
+  100% операций), и выписка на сотни строк залила бы чат, который заведён ради редких случаев.
+  **Маска получила квантификатор `d+`** (`purposeMatch.ts`, #421): фиксированная длина описывает
+  нумерацию, которой не бывает — нумерация Б24 растёт от `СЧ-1`, а голая `dddd` цепляет год и сумму.
 - `app/components/RecognitionMap.vue` + чистый `app/utils/recognitionKinds.ts` — **UI «карты сопоставления»**
   (#109 §4): редактор распознавания платежей внутри `SettingsForm` (`B24Card`/`B24Select`/`B24Input`/`B24Button`/
   `B24Badge`). Привязан к `settings.recognition` через `defineModel` (вложенные мутации lint-чисты, автосейв — deep-watch
@@ -175,7 +181,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   имена полей, delete-on-blank), **живой предпросмотр** «тестовое назначение → распознано» на реальном `recognizeByMatrices`.
   Заменяет ручную правку `app.option` JSON; сервер по-прежнему коэрсит/клампит (`parsePortalSettings`, DoS-капы) — форма
   это удобство, не источник доверия. `recognitionKinds.ts` — RU-лейблы **всех** `IdentifierKind` (exhaustive
-  `Record<IdentifierKind,…>` + тест), `IDENTIFIER_KIND_ITEMS`/`ALPHABET_ITEMS`/`CONFIG_FIELD_ROWS`/`blankMatrix`. Тесты —
+  `Record<IdentifierKind,…>` + тест), `IDENTIFIER_KIND_ITEMS`/`ALPHABET_ITEMS`/`CONFIG_FIELD_ROWS`/`blankMatrix` +
+  **`MATRIX_PRESETS`/`missingPresets`** (#421 — кнопка «Добавить типовые»: маски на квантификаторе
+  `d+` (`СЧ-d+`/`d+/d+`/`ДОК-d+`), дедуп по маске, чтобы повторный клик не задваивал распознавание;
+  номер БЕЗ префикса в пресеты не входит намеренно — такая маска цепляет год и сумму из назначения). Тесты —
   `recognitionKinds.test.ts` (exhaustive) + `nuxt/recognitionMap.nuxt.test.ts` (рендер/add-remove/предпросмотр); визуально
   проверен (свет/тёмная, в слайдовере настроек).
 - `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
@@ -634,8 +643,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `app/utils/setupReadiness.ts`, composable `useSetupStatus.ts`, UI `SetupReadinessCard.vue`;
     DI+тесты, вкл. nuxt-тест проводки) — **экран готовности «что настроено, а что нет» (#409/#405)**:
     первый блок в `SettingsForm`, шесть строк (банк / чат / **чат ошибок** / **карта распознавания** / смарт-процессы / автоопрос; последние
-  две добавлены в #421 — без чата ошибок сообщения о неопознанных платежах не приходят никуда, без матриц
-  разнесение не работает вовсе) с конкретным
+    две добавлены в #421 — без чата ошибок сообщения о неопознанных платежах не приходят никуда, без матриц
+    разнесение не работает вовсе) с конкретным
     действием на каждой красной. Гейт как у `/api/bank/*` (портал установлен → фрейм-токен доказан для
     ЭТОГО домена → `profile.ADMIN`), nginx-троттл зоны `import`. Роут отдаёт **только то, чего браузер
     знать не может** (число подключённых счетов, гейт+период опроса, метка последнего прогона); настройки
@@ -676,7 +685,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/metricsStore.ts` + `server/api/import/metrics.get.ts` / `metrics-reset.post.ts` (+ чистый
     `server/utils/metricsHandler.ts`, DI, тесты) — **долговременные счётчики портала (#78)**: воркер
     best-effort **накапливает** пожизненные счётчики (`metrics_counter`, ключ `member_id|name`:
-    processed/created/notified/unmatched/recognized/resolved/allocated/distributed/ambiguous/manual) из сводки
+    processed/created/notified/unmatched/unresolved/recognized/resolved/allocated/distributed/ambiguous/manual) из сводки
     `crm-sync` рядом с `import_result` (демо-счета не пишут; сбой метрик не роняет джобу). В отличие от
     `import_result` (только **последний** прогон) — это **тотал за всё время**, переживает рестарт. `GET
     /api/import/metrics` (счётчики) и `POST /api/import/metrics-reset` («сбросить») по **фрейм-токену**
@@ -718,7 +727,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       чат, и распознавание), затем **read-before-write** по B24-маркеру (#259): `getActivityId`
       (`findActivityByMarker`)→skip уже записанных, иначе `findCompany`→`writeActivity` (настраиваемое дело,
       маркер атомарен)→`notifyChat`;
-      счётчики `created/skipped/unmatched/recognized/resolved/allocatable/ambiguous/manual`. **Распознавание
+      счётчики `created/skipped/unmatched/unresolved/recognized/resolved/allocatable/ambiguous/manual`. **Распознавание
       намерения (#109, §4, слайс 1 капстоуна):** на каждую уникальную операцию — `recognizePurposeIntents` (чистый
       композит `recognizeByMatrices`→`routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала →
       `onRecognized` **логирует намерение** (пред-скип, для покрытия). **Резолюция намерения в кандидаты (§4 lookup,

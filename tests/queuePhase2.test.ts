@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { StatementItem } from '../app/types/statement'
 import {
-  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
-} from '../server/queue/handlers'
+  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
 import {
   DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
@@ -162,8 +161,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.trigRec.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSp.entityTypeId, etids.distributionSp.entityTypeId])
       return o.triggerRowCreated ?? true
     },
-    notifyUnresolved: async (it, identifiers, dialogId, memberId) => {
-      calls.unresolvedChat.push([it.docId, identifiers, dialogId, memberId])
+    notifyUnresolved: async (it, identifiers, dialogId, memberId, truncated) => {
+      calls.unresolvedChat.push([it.docId, identifiers, dialogId, memberId, truncated])
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
@@ -537,19 +536,19 @@ describe('handleCrmSyncJob', () => {
       recognition: invoiceMatrix,
       company: 'CO',
       errorChat: { dialogId: 'err' },
-      resolve: [{ kind: 'invoice-number', status: 'resolved', candidates: [] }]
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
     })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
     expect(r.unresolved).toBe(1)
     expect(r.resolved).toBe(0)
-    expect(calls.unresolvedChat).toEqual([['d1', ['СЧ-1234'], 'err', 'M']])
+    expect(calls.unresolvedChat).toEqual([['d1', ['СЧ-1234'], 'err', 'M', false]])
   })
 
   it('без чата ошибок случай всё равно СЧИТАЕТСЯ — иначе он исчезнет и из метрик', async () => {
     const { deps, calls } = fakeDeps({
       recognition: invoiceMatrix,
       company: 'CO',
-      resolve: [{ kind: 'invoice-number', status: 'resolved', candidates: [] }]
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
     })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
     expect(r.unresolved).toBe(1)
@@ -561,11 +560,57 @@ describe('handleCrmSyncJob', () => {
       recognition: invoiceMatrix,
       company: 'CO',
       errorChat: { dialogId: 'err' },
-      resolve: [{ kind: 'invoice-number', status: 'resolved', candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }] }]
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }] }]
     })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
     expect(r.unresolved).toBe(0)
     expect(calls.unresolvedChat).toEqual([])
+  })
+
+  it('«вид не настроен» (unsupported) — НЕ «цель не найдена»', async () => {
+    // В CRM по такому номеру никто ничего не искал: сообщение «подходящих счетов нет» было бы
+    // ложью, а совет «проверьте статус документа» отправил бы бухгалтера искать несуществующую
+    // проблему вместо настройки карты.
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'unsupported', candidates: [] }]
+    })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.unresolved).toBe(0)
+    expect(calls.unresolvedChat).toEqual([])
+  })
+
+  it('не пересылает «цель не найдена» при повторной доставке джобы', async () => {
+    // Сообщение стоит ПОСЛЕ записи маркера, поэтому редоставка отсекается верхним гейтом skip —
+    // у чата собственного дедупа нет.
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
+    })
+    const j = job([item('d1', 'credit', 'Оплата по счету СЧ-1234')])
+    await handleCrmSyncJob(j, deps)
+    const second = await handleCrmSyncJob(j, deps)
+    expect(second.unresolved).toBe(0)
+    expect(calls.unresolvedChat).toHaveLength(1)
+  })
+
+  it('чат не заливается: сообщений на прогон не больше капа, а СЧЁТЧИК честен', async () => {
+    // Это состояние НАСТРОЙКИ, а не отдельного платежа: кривая маска даёт его на всех операциях,
+    // и выписка на сотни строк вылилась бы в сотни одинаковых сообщений.
+    const ops = Array.from({ length: MAX_UNRESOLVED_NOTICES + 4 }, (_, i) => item(`d${i}`, 'credit', 'Оплата по счету СЧ-1234'))
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
+    })
+    const r = await handleCrmSyncJob(job(ops), deps)
+    expect(r.unresolved).toBe(ops.length)
+    expect(calls.unresolvedChat).toHaveLength(MAX_UNRESOLVED_NOTICES)
   })
 
   it('counts recognized per OPERATION, not per identifier (≥2 matches → recognized 1, one report)', async () => {

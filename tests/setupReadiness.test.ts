@@ -124,6 +124,16 @@ describe('buildReadiness', () => {
 
     settings.recognition.matrices.push({ mask: 'СЧ-dddd', kind: 'invoice-number', note: '' })
     expect(item(buildReadiness(snap({ settings })), 'recognition').detail).toBe('2 шаблона')
+
+    // Ловушки русского счёта: 5 и 11 — «шаблонов», 22 — «шаблона».
+    const many = (n: number) => {
+      const st = withSp()
+      st.recognition.matrices = Array.from({ length: n }, () => ({ mask: 'd+', kind: 'invoice-number' as const }))
+      return item(buildReadiness(snap({ settings: st })), 'recognition').detail
+    }
+    expect(many(5)).toBe('5 шаблонов')
+    expect(many(11)).toBe('11 шаблонов')
+    expect(many(22)).toBe('22 шаблона')
   })
 
   it('is fully ready only when every line is ok', () => {

@@ -45,9 +45,10 @@ export async function notifyUnresolvedViaRest(
   item: StatementItem,
   identifiers: readonly string[],
   dialogId: string,
-  call: RestCall
+  call: RestCall,
+  truncated = false
 ): Promise<string | null> {
-  const message = buildUnresolvedMessage(item, identifiers)
+  const message = buildUnresolvedMessage(item, identifiers, truncated)
   if (!message) return null
   const resp = await call(CHAT_MESSAGE_METHOD, {
     DIALOG_ID: dialogId,

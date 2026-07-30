@@ -82,14 +82,20 @@ export function buildAllocationErrorMessage(item: StatementItem, decision: Alloc
  * `identifiers` — распознанные из назначения строки. Они ПОДКОНТРОЛЬНЫ ПЛАТЕЛЬЩИКУ (это фрагмент
  * назначения), поэтому идут через `neutralizeBb`, как и остальные внешние поля.
  */
-export function buildUnresolvedMessage(item: StatementItem, identifiers: readonly string[]): string | null {
+export function buildUnresolvedMessage(
+  item: StatementItem,
+  identifiers: readonly string[],
+  truncated = false
+): string | null {
   if (!identifiers.length) return null
   const headline = neutralizeBb(buildActivityTitle(item))
   return [
-    '[b]⚠️ Не нашли, к чему привязать платёж[/b]',
+    '[b]⚠️ Платёж не привязан: цель по распознанному номеру не найдена[/b]',
     headline,
     'В назначении распознаны номера, но подходящих счетов, сделок или заказов у этого клиента нет:',
     ...identifiers.map(id => `• ${neutralizeBb(id)}`),
+    // Проверены не все номера — молчать об этом нельзя: неполный список читается как полный.
+    ...(truncated ? ['Проверены не все распознанные номера — их в назначении слишком много.'] : []),
     'Проверьте номер в назначении и статус документа в CRM.'
   ].join('\n')
 }

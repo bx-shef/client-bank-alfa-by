@@ -140,3 +140,32 @@ describe('recognizeByMatrices', () => {
     expect(recognizeByMatrices('счёт 1', [invNum('d'.repeat(200))])).toEqual([])
   })
 })
+
+describe('квантификатор d+ (#421)', () => {
+  const m = (mask: string, kind = 'invoice-number' as const) => [{ mask, kind }]
+
+  it('покрывает номера РАЗНОЙ длины — нумерация Б24 растёт от СЧ-1', () => {
+    // Ради этого он и заведён: маска фиксированной длины описывает нумерацию, которой не бывает.
+    for (const n of ['1', '27', '1234', '150000']) {
+      expect(recognizeByMatrices(`Оплата по счету СЧ-${n}`, m('СЧ-d+'), 'cyrillic')[0]?.value)
+        .toBe(`СЧ-${n}`)
+    }
+  })
+
+  it('границы токена соблюдаются — не выкусывает фрагмент длинного числа', () => {
+    expect(recognizeByMatrices('УНП 191234567', m('d+'), 'cyrillic').map(r => r.value)).toEqual(['191234567'])
+    expect(recognizeByMatrices('счет СЧ-12АБ', m('СЧ-d+'), 'cyrillic')).toEqual([])
+  })
+
+  it('составной номер оплаты заказа любой длины', () => {
+    expect(recognizeByMatrices('оплата заказа 12/1', m('d+/d+', 'order-number')[0] ? m('d+/d+', 'order-number') : [], 'cyrillic')[0]?.value)
+      .toBe('12/1')
+    expect(recognizeByMatrices('оплата 1234/56', m('d+/d+', 'order-number'), 'cyrillic')[0]?.value).toBe('1234/56')
+  })
+
+  it('маска без квантификатора работает как раньше — ровно одна цифра на `d`', () => {
+    // Обратная совместимость: у портала уже могут быть свои маски фиксированной длины.
+    expect(recognizeByMatrices('счет СЧ-1234', m('СЧ-dddd'), 'cyrillic')[0]?.value).toBe('СЧ-1234')
+    expect(recognizeByMatrices('счет СЧ-12', m('СЧ-dddd'), 'cyrillic')).toEqual([])
+  })
+})

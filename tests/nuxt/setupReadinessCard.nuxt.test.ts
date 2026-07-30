@@ -46,6 +46,11 @@ describe('SetupReadinessCard', () => {
     expect(wrapper.find('[data-testid="readiness-chat"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="readiness-smart-process"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="readiness-poll"]').exists()).toBe(true)
+    // Новые строки (#421) должны РЕНДЕРИТЬСЯ, а не просто попасть в счётчик: иначе бейдж показал
+    // бы 6, а админ не увидел бы, чего именно не хватает.
+    expect(wrapper.find('[data-testid="readiness-error-chat"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="readiness-recognition"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Добавьте шаблоны номеров')
     // Строк стало шесть (#421 добавил чат ошибок и карту распознавания) — счётчик считает ВСЕ
     // незакрытые, иначе он обещал бы готовность раньше, чем она наступит.
     expect(wrapper.find('[data-testid="readiness-badge"]').text()).toContain('6')

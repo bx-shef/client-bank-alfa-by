@@ -31,6 +31,9 @@ import type { TriggerOutcome } from '../utils/applyTriggerDep'
  *  `recognized` metric still counts the op). Deeper rate-limiting is tracked in #191. */
 export const MAX_RESOLVED_INTENTS_PER_OP = 10
 
+/** Потолок сообщений «цель не найдена» на один прогон (#421) — см. комментарий у счётчика. */
+export const MAX_UNRESOLVED_NOTICES = 5
+
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
  *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's
  *  `memberId` explicitly — deps are built once in startWorkers(), not per-job, so
@@ -144,7 +147,7 @@ export interface HandlerDeps {
   notifyError: (item: StatementItem, decision: AllocationDecision, dialogId: string, memberId: string) => Promise<void>
   /** Сообщить в чат ошибок, что номер в назначении распознан, но цель в CRM не нашлась (#421).
    *  MUST NOT throw — как и `notifyError`, сбой чата не роняет джобу. */
-  notifyUnresolved: (item: StatementItem, identifiers: string[], dialogId: string, memberId: string) => Promise<void>
+  notifyUnresolved: (item: StatementItem, identifiers: string[], dialogId: string, memberId: string, truncated: boolean) => Promise<void>
   /** Post an UNMATCHED-client notice to the error chat `dialogId` (#91, §5): the payer company
    *  wasn't found by its account. `recordedToMyCompany` picks the wording (recorded on my company
    *  vs not recorded at all). MUST NOT throw — like notifyError, a chat failure never fails the job. */
@@ -328,6 +331,12 @@ export async function handleCrmSyncJob(
   // Номер распознан, компания найдена, а цели в CRM нет (#421). Раньше этот случай не попадал
   // никуда: сообщения строились только внутри ветки «кандидаты есть».
   let unresolved = 0
+  // Сколько сообщений «цель не найдена» позволено за ОДИН прогон. В отличие от `ambiguous`/`manual`
+  // (редких по природе) это состояние НАСТРОЙКИ: кривая маска или лишний шаблон дают его на 100%
+  // операций, и выписка на 500 строк вылилась бы в 500 одинаковых сообщений в чат, который заведён
+  // ради редких случаев «нужен человек» — его просто перестали бы читать. Счётчик `unresolved`
+  // капом НЕ ограничен: метрика обязана остаться честной.
+  let unresolvedNotices = 0
   let recognized = 0
   let resolved = 0
   let allocatable = 0
@@ -377,6 +386,7 @@ export async function handleCrmSyncJob(
     // Распознанные, но не нашедшие цели номера (#421) — отправляются ПОСЛЕ записи маркера, как и
     // `errorNotice`: иначе повторная доставка джобы переслала бы сообщение (у чата дедупа нет).
     let unresolvedIds: string[] = []
+    let truncatedIntents = false
     // Intent resolution (§4 → #109 lookup, slice 3 — wiring the slice-2 dispatcher into
     // the worker): resolve the recognized identifiers to allocation candidates via the
     // entity lookups, scoped to the matched company. GATED behind the dedup skip (a
@@ -393,13 +403,27 @@ export async function handleCrmSyncJob(
       const isNegativeStage = await getNegativeStage()
       const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId, isNegativeStage, settings?.recognition?.configFields)
       const candidates = resolutions.flatMap(r => r.candidates)
-      if (candidates.length === 0) {
+      // «Искали и не нашли» — это ТОЛЬКО резолюции со статусом `resolved`. `unsupported` значит
+      // «вид не настроен» (нет `smart-entity`/`deal-field` в карте), там в CRM никто ничего не
+      // искал: сообщать про «нет подходящих счетов» было бы прямой ложью, а совет «проверьте номер
+      // и статус документа» отправил бы бухгалтера искать несуществующую проблему вместо настройки.
+      const searched = resolutions.filter(r => r.status === 'resolved')
+      if (candidates.length === 0 && searched.length > 0) {
         // Номера в назначении распознаны, а подходящей сущности у этого клиента нет: счёт удалён,
         // номер набран с опечаткой, документ в отменённой стадии. Для бухгалтера это неотличимо от
         // нормальной обработки — дело записано, привязки нет, — и расхождение всплывает только при
         // сверке. Поэтому случай считается и уходит в чат ошибок, как остальные «нужен человек».
         unresolved++
-        if (errorChat?.dialogId) unresolvedIds = toResolve.map(i => i.value).filter(v => v !== '')
+        if (errorChat?.dialogId && unresolvedNotices < MAX_UNRESOLVED_NOTICES) {
+          // Дедуп по значению: один и тот же номер, совпавший с двумя матрицами разного вида, дал
+          // бы две одинаковые строки — в сообщении «ничего не нашли» это читается как две разные
+          // проблемы.
+          unresolvedIds = [...new Set(searched.map(r => r.value).filter(v => v !== ''))]
+          // Проверены не все распознанные номера (кап §4) — говорим об этом прямо, иначе неполный
+          // список читается как полный.
+          truncatedIntents = intents.length > toResolve.length
+          if (unresolvedIds.length > 0) unresolvedNotices++
+        }
       }
       if (candidates.length > 0) {
         resolved++
@@ -562,7 +586,7 @@ export async function handleCrmSyncJob(
       await deps.notifyError(item, errorNotice, errorChat.dialogId, job.memberId)
     }
     if (unresolvedIds.length > 0 && errorChat?.dialogId) {
-      await deps.notifyUnresolved(item, unresolvedIds, errorChat.dialogId, job.memberId)
+      await deps.notifyUnresolved(item, unresolvedIds, errorChat.dialogId, job.memberId, truncatedIntents)
     }
     // Announce only if a chat target is set AND the rules allow this op (direction /
     // excluded account / excluded purpose). Only a MATCHED-CLIENT op is announced in the normal
