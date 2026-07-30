@@ -32,10 +32,15 @@ const distributionEtid = computed(() =>
 /** Оба на месте — настраивать нечего. */
 const ready = computed(() => paymentEtid.value !== null && distributionEtid.value !== null)
 
+// Адрес строится через `slider.getUrl` — он даёт АБСОЛЮТНЫЙ адрес портала. Относительный путь
+// браузер отрезолвил бы на домен приложения (bank-import…), а не портала, и ссылка вела бы в 404.
+// Вне фрейма домен портала неизвестен, поэтому ссылок там нет вовсе (см. шаблон).
 const links = computed(() => [
   { label: 'Платежи', etid: paymentEtid.value },
   { label: 'Распределения', etid: distributionEtid.value }
-].filter((l): l is { label: string, etid: number } => l.etid !== null))
+]
+  .filter((l): l is { label: string, etid: number } => l.etid !== null)
+  .map(l => ({ ...l, href: slider.resolveUrl(smartProcessListPath(l.etid)) })))
 
 onMounted(async () => {
   await useB24().init().catch(() => {})
@@ -47,11 +52,14 @@ onMounted(async () => {
 
 /** Внутри портала открываем слайдером поверх страницы, иначе уводили бы весь iframe. Не удалось —
  *  отдаём клик браузеру: у ссылки есть настоящий href, пользователь не остаётся ни с чем. */
-async function openSp(event: MouseEvent, etid: number) {
+async function openSp(event: MouseEvent, etid: number, href: string) {
   if (!slider.inFrame()) return
   event.preventDefault()
+  // Слайдер открывает сущность ПОВЕРХ портала — обычный переход увёл бы весь iframe с настройками.
   const opened = await slider.openPath(smartProcessListPath(etid))
-  if (!opened) window.open(smartProcessListPath(etid), '_blank', 'noopener')
+  // Не получилось (устройство не поддерживает слайдер) — уводим в новую вкладку по абсолютному
+  // адресу портала, чтобы пользователь не остался ни с чем.
+  if (!opened) window.open(href, '_blank', 'noopener')
 }
 </script>
 
@@ -91,12 +99,12 @@ async function openSp(event: MouseEvent, etid: number) {
         />
         <div class="flex flex-wrap items-center gap-3 text-sm">
           <a
-            v-for="l in links"
+            v-for="l in links.filter(x => x.href)"
             :key="l.etid"
-            :href="smartProcessListPath(l.etid)"
+            :href="l.href!"
             class="underline decoration-dotted underline-offset-2"
             :data-testid="`sp-link-${l.label}`"
-            @click="openSp($event, l.etid)"
+            @click="openSp($event, l.etid, l.href!)"
           >{{ l.label }}</a>
         </div>
       </template>

@@ -142,8 +142,10 @@ describe('ProvisionSpCard — когда всё уже настроено', () =
 
     const payment = wrapper.find('[data-testid="sp-link-Платежи"]')
     const distribution = wrapper.find('[data-testid="sp-link-Распределения"]')
-    expect(payment.attributes('href')).toBe('/crm/type/1046/list/category/0/')
-    expect(distribution.attributes('href')).toBe('/crm/type/1048/list/category/0/')
+    // ⚠ Адрес ПОРТАЛА, а не приложения: относительный путь браузер отрезолвил бы на
+    // bank-import…/crm/type/… и увёл бы пользователя в 404 (живая находка владельца).
+    expect(payment.attributes('href')).toBe('https://example.bitrix24.by/crm/type/1046/list/category/0/')
+    expect(distribution.attributes('href')).toBe('https://example.bitrix24.by/crm/type/1048/list/category/0/')
   })
 
   it('пока не настроено — наоборот: кнопка есть, ссылок нет', async () => {

@@ -16,6 +16,8 @@ export interface MockB24Options {
   /** Stable spy for `$b24.actions.v2.call.make()` (single REST call, e.g. the
    *  automation-trigger registration on install, #79). */
   callMake?: ReturnType<typeof vi.fn>
+  /** Стабильный спай для `$b24.slider.openPath()`. */
+  openPath?: ReturnType<typeof vi.fn>
   /** Права, которые приложение ЗАПРАШИВАЕТ (`getRequiredRights`). Нужны тесту вердикта установки:
    *  «недовыданное право» вычисляется как запрошенное минус выданное порталом. */
   requiredRights?: string[]
@@ -40,7 +42,13 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
       batch: { make: opts.batchMake ?? vi.fn(async () => ({ getData: () => ({}) })) },
       call: { make: opts.callMake ?? vi.fn(async () => ({ isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] })) }
     } },
-    installFinish: opts.installFinish ?? vi.fn(async () => {})
+    installFinish: opts.installFinish ?? vi.fn(async () => {}),
+    // `getUrl` строит АБСОЛЮТНЫЙ адрес портала — относительный путь резолвился бы на домен
+    // приложения и вёл в 404 (живая находка). Мок повторяет это поведение, чтобы тест ловил регресс.
+    slider: {
+      getUrl: (path = '/') => new URL(path, 'https://example.bitrix24.by'),
+      openPath: opts.openPath ?? vi.fn(async () => ({}))
+    }
   } as unknown as B24Frame
   return {
     init: vi.fn(async () => ok),
