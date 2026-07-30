@@ -22,10 +22,14 @@ import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
+import { sweepOldBatches } from '../utils/importBatchStore'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
+
+/** Сколько дней храним итоги ручных загрузок (#417) — переживает вкладку, но не неделю. */
+const IMPORT_BATCH_TTL_DAYS = 3
 
 export default defineNitroPlugin((nitroApp) => {
   if (!queueEnabled()) return
@@ -235,6 +239,14 @@ export default defineNitroPlugin((nitroApp) => {
               if (removed) console.info('[retention] swept %d expired tombstone(s)', removed)
             } catch (e) {
               console.error('[retention] tombstone sweep failed:', (e as Error)?.message)
+            }
+            // Итоги ручных загрузок (#417) нужны ровно на время, пока сотрудник смотрит на экран.
+            // Держать их дольше — заводить долговременный след того, кто и что импортировал, без
+            // всякой пользы (docs/PRIVACY.md). Тот же тик, та же изоляция сбоя.
+            try {
+              await sweepOldBatches(dbQuery, IMPORT_BATCH_TTL_DAYS)
+            } catch (e) {
+              console.error('[retention] import_batch sweep failed:', (e as Error)?.message)
             }
           })
         } catch (err) {

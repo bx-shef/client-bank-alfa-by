@@ -38,6 +38,7 @@ import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
+import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
@@ -473,6 +474,7 @@ export function liveHandlerDeps(): HandlerDeps {
     deletePortal: async (memberId, eventTs) => {
       await deleteToken(dbQuery, memberId, eventTs)
       await deleteImportResultForPortal(dbQuery, memberId)
+      await deleteBatchesForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
@@ -599,7 +601,14 @@ export function startThroughputWorkers(
       'portal.hash': portalHash(job.data.memberId)
     }, async () => {
       try {
-        return await handleParseJob(job.data, deps)
+        const res = await handleParseJob(job.data, deps)
+        // Разобрано НОЛЬ операций — тупик, который иначе никто не закроет: `crm-sync` в этом
+        // случае не ставится (`chained: false`), а значит итог загрузки навсегда остался бы в
+        // «принято». Для сотрудника это ровно тот же молчащий импорт, ради которого заведён #417.
+        if (!res.chained) {
+          await persistBatchError(job.data, 'В файле не найдено операций — проверьте, что это выписка клиент-банка.')
+        }
+        return res
       } catch (e) {
         // A parse failure = the statement format wasn't recognized (docs/FEEDBACK.md channel 2,
         // format signal). Attach the RAW file that failed to parse (decoded, capped) for reproduction
@@ -613,6 +622,11 @@ export function startThroughputWorkers(
           fileText = decodeUploadText(Buffer.from(job.data.contentBase64, 'base64')).slice(0, MAX_FILE_EMBED)
         } catch { /* undecodable → attach no file */ }
         void fileProgramSignal(job.data.memberId, { type: 'format', providerId: job.data.providerId, fileText })
+        // Итог загрузки помечаем провалом ТОЛЬКО на последней попытке: показать сотруднику
+        // «не разобралось» и через минуту молча передумать — хуже, чем подождать.
+        if (isFinalAttempt(job)) {
+          await persistBatchError(job.data, 'Не удалось разобрать файл — формат выписки не распознан.')
+        }
         throw e
       }
     }, r => ({ 'job.op_count': r.parsed })), { connection, concurrency }),
@@ -630,6 +644,8 @@ export function startThroughputWorkers(
         // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
         // already happened). Demo batches never touch the real portal's status row.
         await persistImportResult(job.data, summary)
+        // Итог КОНКРЕТНОЙ загрузки (#417) — то, чего ждёт сотрудник на экране `/import`.
+        await persistBatchResult(job.data, summary)
         // Accumulate LIFETIME per-portal counters for the dashboard (#78). Same
         // best-effort/demo-gated contract — bookkeeping must never fail a job.
         await bumpMetrics(job.data, summary)
@@ -703,6 +719,42 @@ export function startTriggerWorker(deps: TriggerFireJobDeps): Worker {
 
 /** Save the crm-sync run summary as the portal's last import status (#5). Gated to
  *  real (non-demo) portals; swallows errors so status bookkeeping can't fail a job. */
+/** Последняя ли это попытка джобы (дальше BullMQ уже не переспросит). */
+function isFinalAttempt(job: { attemptsMade: number, opts?: { attempts?: number } }): boolean {
+  return job.attemptsMade + 1 >= (job.opts?.attempts ?? 1)
+}
+
+/** Пометить загрузку провалившейся (#417). Best-effort: учёт не должен ронять джобу. */
+async function persistBatchError(job: ParseJob, message: string): Promise<void> {
+  try {
+    await saveBatchError(dbQuery, job.memberId, job.fileHash, message)
+  } catch (e) {
+    console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
+/** Записать итог РУЧНОЙ загрузки (#417). Только для `source: 'parse'` — у автоопроса банка нет
+ *  сотрудника, который ждёт ответа на экране, и его прогоны учитываются в `import_result`.
+ *  Best-effort и с гейтом демо-счетов — как и остальной учёт. */
+async function persistBatchResult(
+  job: CrmSyncJob,
+  summary: { processed: number, created: number, notified: number, unmatched: number }
+): Promise<void> {
+  if (job.source !== 'parse') return
+  const account = job.items[0]?.account ?? ''
+  if (account && isDemoAccount(account)) return
+  try {
+    await saveBatchResult(dbQuery, job.memberId, job.batchId, {
+      operations: summary.processed,
+      created: summary.created,
+      notified: summary.notified,
+      unmatched: summary.unmatched
+    })
+  } catch (e) {
+    console.error('import_batch save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
 async function persistImportResult(
   job: CrmSyncJob,
   summary: { processed: number, created: number, notified: number }

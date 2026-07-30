@@ -3,7 +3,7 @@
 // them IN THE BROWSER (deterministic — no backend/AI), and preview the operations.
 // Reuses the tested parser (importUpload → manualImport) and the OperationList
 // component. Writing the parsed batch to CRM is a later slice (file-parse queue).
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   ACCEPTED_EXTENSIONS,
   MAX_UPLOAD_FILES,
@@ -15,7 +15,9 @@ import {
 } from '~/utils/importUpload'
 import { splitByDirection } from '~/utils/statement'
 import { MAX_FILE_EMBED } from '~/utils/feedback'
-import { useImport } from '~/composables/useImport'
+import { useImport, type ImportOutcome } from '~/composables/useImport'
+import { useImportBatches } from '~/composables/useImportBatches'
+import { batchStateLabel, summaryMessage } from '~/utils/importBatchView'
 
 const results = ref<UploadItemResult[]>([])
 // Raw files kept aligned 1:1 with `results` (same truncated batch order) so we can
@@ -25,7 +27,7 @@ const truncated = ref(0)
 const dragOver = ref(false)
 const busy = ref(false)
 const submitting = ref(false)
-const submitResult = ref<{ ok: boolean, message: string } | null>(null)
+const submitResult = ref<ImportOutcome | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 // Flips true after a successful «Записать в CRM» — the moment the user has clearly benefited, so the
 // «оцените приложение» modal (AppRatingModal) can ask. The show decision is server-throttled; this
@@ -48,6 +50,15 @@ const totals = computed(() => splitByDirection(allItems.value))
 const okFiles = computed(() => batchFiles.value.filter((_, i) => results.value[i]?.ok))
 
 const { submitFiles } = useImport()
+// Итог обработки КОНКРЕТНОЙ загрузки (#417): раньше страница отвечала «принято» и замолкала,
+// хотя запись в CRM идёт в фоне и её исход сотруднику как раз и нужен.
+const batches = useImportBatches()
+const batchSummary = computed(() => summaryMessage(batches.results.value))
+// Перезагрузка вкладки не должна стирать исход: обработка идёт в фоне, ключи лежат в
+// sessionStorage, поэтому вернувшийся сотрудник видит результат, а не «принято» из ниоткуда.
+onMounted(() => {
+  void batches.restore()
+})
 
 async function processFiles(files: File[]) {
   if (!files.length) return
@@ -82,8 +93,11 @@ async function processFiles(files: File[]) {
 
 async function writeToCrm() {
   submitting.value = true
+  batches.reset()
   submitResult.value = await submitFiles(okFiles.value, allItems.value.length)
   submitting.value = false
+  // Ключи есть и у частичного отказа (часть файлов приняли) — их итог всё равно доедет.
+  if (submitResult.value.batchIds.length) void batches.track(submitResult.value.batchIds)
   // A successful CRM write is the «benefited» moment → let the rating modal ask (server-throttled).
   if (submitResult.value?.ok) ratingTrigger.value = true
 }
@@ -240,6 +254,44 @@ function clearAll() {
             :description="submitResult.message"
             data-testid="submit-result"
           />
+
+          <!-- Реальный исход обработки (#417): счётчики приходят с сервера, который и есть
+               авторитет разбора, — браузерный предпросмотр тут не при чём. -->
+          <div
+            v-if="batches.results.value.length || batches.polling.value"
+            class="rounded-md border border-(--ui-color-design-tinted-na-stroke) p-3"
+            role="status"
+            aria-live="polite"
+            data-testid="batch-results"
+          >
+            <p class="mb-2 text-sm font-semibold">
+              Результат обработки
+            </p>
+            <ul class="space-y-1 text-sm">
+              <li
+                v-for="r in batches.results.value"
+                :key="r.batchId"
+                class="flex flex-wrap items-baseline justify-between gap-2"
+              >
+                <span class="truncate">{{ r.fileName || 'файл' }}</span>
+                <span :class="r.state === 'error' ? 'text-(--ui-color-accent-main-alert)' : 'text-(--ui-color-base-3)'">
+                  {{ batchStateLabel(r) }}
+                </span>
+              </li>
+            </ul>
+            <p
+              v-if="batchSummary"
+              class="mt-2 text-sm text-(--ui-color-base-3)"
+            >
+              {{ batchSummary }}
+            </p>
+            <p
+              v-else-if="batches.polling.value"
+              class="text-sm text-(--ui-color-base-3)"
+            >
+              Обрабатываем загрузку…
+            </p>
+          </div>
         </div>
       </template>
 

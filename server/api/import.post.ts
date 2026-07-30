@@ -10,6 +10,7 @@ import { handleImportUpload, type IngestDeps } from '../utils/importIngest'
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
+import { markBatchQueued } from '../utils/importBatchStore'
 import { enqueueParse } from '../queue/producers'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
@@ -28,7 +29,8 @@ function liveIngestDeps(): IngestDeps {
     },
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),
     enqueueParse,
-    hash: bytes => createHash('sha256').update(bytes).digest('hex')
+    hash: bytes => createHash('sha256').update(bytes).digest('hex'),
+    markQueued: (memberId, batchId, fileName) => markBatchQueued(dbQuery, memberId, batchId, fileName)
   }
 }
 

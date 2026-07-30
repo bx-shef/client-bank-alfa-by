@@ -30,6 +30,9 @@ export interface IngestDeps {
   enqueueParse: (job: ParseJob) => Promise<boolean>
   /** Content hash (sha256 hex) for the idempotent job id. */
   hash: (bytes: Uint8Array) => string
+  /** Отметить загрузку принятой (#417), чтобы UI мог опросить её итог. Best-effort: сбой учёта
+   *  не должен отменять уже принятый файл — тогда сотрудник потерял бы импорт из-за мелочи. */
+  markQueued?: (memberId: string, batchId: string, fileName: string) => Promise<void>
 }
 
 export interface IngestInput {
@@ -79,6 +82,15 @@ export async function handleImportUpload(deps: IngestDeps, input: IngestInput): 
   }
   const enqueued = await deps.enqueueParse(job)
   if (!enqueued) return { status: 503, body: { error: 'import queue unavailable' } }
+  // Отметка ставится ПОСЛЕ постановки в очередь: иначе при недоступной очереди осталась бы
+  // строка «принято», которую ничто и никогда не завершит.
+  if (deps.markQueued) {
+    try {
+      await deps.markQueued(memberId, fileHash, fileName)
+    } catch {
+      // Учёт — удобство отображения, а не условие импорта.
+    }
+  }
   return { status: 202, body: { accepted: true, batchId: fileHash } }
 }
 
