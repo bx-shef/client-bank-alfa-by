@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAllocationErrorMessage } from '~/utils/allocationErrorMessage'
+import { buildAllocationErrorMessage, buildUnresolvedMessage } from '~/utils/allocationErrorMessage'
 import type { AllocationDecision } from '~/utils/allocation'
 import type { StatementItem } from '~/types/statement'
 
@@ -51,5 +51,27 @@ describe('buildAllocationErrorMessage', () => {
     // The headline carries the counterparty name; a crafted name must not inject BB.
     const msg = buildAllocationErrorMessage(item({ counterparty: { name: '[url=http://evil]x[/url]', unp: '1', account: 'BY1' } }), manual)!
     expect(msg).not.toContain('[url=') // neutralized (brackets → fullwidth)
+  })
+})
+
+describe('buildUnresolvedMessage', () => {
+  const ids = ['СЧ-1234']
+
+  it('называет распознанные номера и говорит, что проверять', () => {
+    const msg = buildUnresolvedMessage(item(), ids)!
+    expect(msg).toContain('Не нашли, к чему привязать платёж')
+    expect(msg).toContain('• СЧ-1234')
+    expect(msg).toContain('Проверьте номер')
+  })
+
+  it('без распознанных номеров сообщения нет', () => {
+    // Иначе чат ошибок засыпало бы каждым платежом без номера в назначении — это норма, а не сбой.
+    expect(buildUnresolvedMessage(item(), [])).toBeNull()
+  })
+
+  it('идентификатор из назначения BB-нейтрализуется', () => {
+    // Номер — это фрагмент назначения, то есть текст ПЛАТЕЛЬЩИКА, а im.message.add рендерит BB-код.
+    const msg = buildUnresolvedMessage(item(), ['[url=http://evil]СЧ-1[/url]'])!
+    expect(msg).not.toContain('[url=')
   })
 })

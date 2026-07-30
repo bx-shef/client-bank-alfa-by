@@ -23,6 +23,7 @@ export const METRICS = {
   created: 'created', // CRM activities written
   notified: 'notified', // chat notifications sent
   unmatched: 'unmatched', // payer company not found by account (#91: may still be recorded on my company)
+  unresolved: 'unresolved', // номер в назначении распознан, но цели в CRM нет (#421)
   recognized: 'recognized', // ops with ≥1 recognized identifier in the purpose
   resolved: 'resolved', // ops whose intent resolved to ≥1 allocation candidate
   allocated: 'allocated', // dist-СП distribution rows written (§9.3 #6; 0 for portals without provisioned SPs)
@@ -56,6 +57,7 @@ export function metricsFromSummary(
     [METRICS.created]: summary.created,
     [METRICS.notified]: summary.notified,
     [METRICS.unmatched]: summary.unmatched,
+    [METRICS.unresolved]: summary.unresolved,
     [METRICS.recognized]: summary.recognized,
     [METRICS.resolved]: summary.resolved,
     [METRICS.allocated]: summary.allocated,

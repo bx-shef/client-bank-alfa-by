@@ -46,7 +46,9 @@ describe('SetupReadinessCard', () => {
     expect(wrapper.find('[data-testid="readiness-chat"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="readiness-smart-process"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="readiness-poll"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="readiness-badge"]').text()).toContain('4')
+    // Строк стало шесть (#421 добавил чат ошибок и карту распознавания) — счётчик считает ВСЕ
+    // незакрытые, иначе он обещал бы готовность раньше, чем она наступит.
+    expect(wrapper.find('[data-testid="readiness-badge"]').text()).toContain('6')
   })
 
   it('never re-loads chat settings — that would overwrite the admin\'s unsaved edits', async () => {

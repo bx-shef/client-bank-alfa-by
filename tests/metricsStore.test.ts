@@ -160,7 +160,7 @@ describe('metricsFromSummary', () => {
     for (const dropped of ['skipped', 'excluded', 'allocatable', 'credits', 'debits']) {
       expect(out).not.toHaveProperty(dropped)
     }
-    expect(Object.keys(out)).toHaveLength(10)
+    expect(Object.keys(out)).toHaveLength(11)
   })
 
   it('names line up with the METRICS vocab', () => {

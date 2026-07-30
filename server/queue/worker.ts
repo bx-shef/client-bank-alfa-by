@@ -52,7 +52,7 @@ import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
-import { notifyAllocationErrorViaRest } from '../utils/allocationErrorNotify'
+import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -421,6 +421,17 @@ export function liveHandlerDeps(): HandlerDeps {
         await notifyAllocationErrorViaRest(item, decision, dialogId, call)
       } catch (e) {
         console.error('alloc error notify failed', memberId, (e as Error)?.message)
+      }
+    },
+    // «Номер распознан, цель не найдена» (#421) — те же гарантии, что у notifyError.
+    notifyUnresolved: async (item, identifiers, dialogId, memberId) => {
+      if (isDemoAccount(item.account)) return
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return
+        await notifyUnresolvedViaRest(item, identifiers, dialogId, call)
+      } catch (e) {
+        console.error('unresolved notify failed', memberId, (e as Error)?.message)
       }
     },
     // Post an UNMATCHED-client notice to the error chat (#91). Same guarantees as notifyError:
@@ -803,7 +814,7 @@ async function persistImportResult(
  *  Gated to real (non-demo) portals; swallows errors so metrics can't fail a job. */
 async function bumpMetrics(
   job: CrmSyncJob,
-  summary: { processed: number, created: number, notified: number, unmatched: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number }
+  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
   if (!account || isDemoAccount(account)) return

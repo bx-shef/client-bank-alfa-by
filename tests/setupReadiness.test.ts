@@ -98,9 +98,39 @@ describe('buildReadiness', () => {
     expect(on.hint).toBe('')
   })
 
+  it('чат ошибок — ОТДЕЛЬНАЯ строка: без него сообщения о проблемных платежах не приходят никуда', () => {
+    const settings = withSp()
+    settings.chat.dialogId = 'chat123'
+    // Чат уведомлений выбран, а чат ошибок — нет: именно в него уходит всё, что приложение не
+    // разложило само, поэтому «зелено по чату» здесь было бы обманом.
+    const red = item(buildReadiness(snap({ settings })), 'error-chat')
+    expect(red.ok).toBe(false)
+    expect(red.hint).toContain('чат ошибок')
+
+    settings.errorChat.dialogId = 'err123'
+    expect(item(buildReadiness(snap({ settings })), 'error-chat').ok).toBe(true)
+  })
+
+  it('карта распознавания краснеет, пока нет ни одного шаблона номера', () => {
+    // Без матриц приложение не видит в назначении НИ ОДНОГО номера — дела пишутся, но ни к чему
+    // не привязываются, и снаружи это выглядит как «разнесение не работает».
+    const settings = withSp()
+    expect(item(buildReadiness(snap({ settings })), 'recognition').ok).toBe(false)
+
+    settings.recognition.matrices = [{ mask: 'dddd', kind: 'invoice-number', note: '' }]
+    const green = item(buildReadiness(snap({ settings })), 'recognition')
+    expect(green.ok).toBe(true)
+    expect(green.detail).toBe('1 шаблон')
+
+    settings.recognition.matrices.push({ mask: 'СЧ-dddd', kind: 'invoice-number', note: '' })
+    expect(item(buildReadiness(snap({ settings })), 'recognition').detail).toBe('2 шаблона')
+  })
+
   it('is fully ready only when every line is ok', () => {
     const settings = withSp()
     settings.chat.dialogId = 'chat123'
+    settings.errorChat.dialogId = 'err123'
+    settings.recognition.matrices = [{ mask: 'dddd', kind: 'invoice-number', note: '' }]
     const items = buildReadiness(snap({ settings, connectedAccounts: 1, pollEnabled: true }))
     expect(isFullyReady(items)).toBe(true)
     expect(items.every(i => i.hint === '')).toBe(true)

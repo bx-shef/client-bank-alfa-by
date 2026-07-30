@@ -69,3 +69,27 @@ export function buildAllocationErrorMessage(item: StatementItem, decision: Alloc
   // A clean single-target `allocate` (no ambiguity) or `none` needs no error notice.
   return null
 }
+
+/**
+ * Сообщение «номер распознан, но цель не найдена» (#421).
+ *
+ * Раньше этот случай молчал: сообщения в чат ошибок строились только внутри ветки «кандидаты есть»,
+ * поэтому платёж с номером счёта в назначении, которому в CRM НИЧЕГО не соответствует (счёт удалён,
+ * номер набран с опечаткой, элемент в отменённой стадии), проходил совершенно незаметно — дело
+ * записывалось, а к чему его привязать, никто так и не узнавал. Для бухгалтера это неотличимо от
+ * нормальной обработки, и расхождение всплывает только при сверке.
+ *
+ * `identifiers` — распознанные из назначения строки. Они ПОДКОНТРОЛЬНЫ ПЛАТЕЛЬЩИКУ (это фрагмент
+ * назначения), поэтому идут через `neutralizeBb`, как и остальные внешние поля.
+ */
+export function buildUnresolvedMessage(item: StatementItem, identifiers: readonly string[]): string | null {
+  if (!identifiers.length) return null
+  const headline = neutralizeBb(buildActivityTitle(item))
+  return [
+    '[b]⚠️ Не нашли, к чему привязать платёж[/b]',
+    headline,
+    'В назначении распознаны номера, но подходящих счетов, сделок или заказов у этого клиента нет:',
+    ...identifiers.map(id => `• ${neutralizeBb(id)}`),
+    'Проверьте номер в назначении и статус документа в CRM.'
+  ].join('\n')
+}

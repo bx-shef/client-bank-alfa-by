@@ -44,6 +44,36 @@ export const CONFIG_FIELD_ROWS: ReadonlyArray<{ key: string, label: string, hint
   { key: 'smart-field', label: 'Поле смарт-процесса', hint: 'Имя поля смарт-процесса (UF_CRM_…) для вида «Смарт-процесс — по настроенному полю».' }
 ]
 
+/**
+ * Типовые шаблоны номеров (#421) — то, с чего начинает почти любой портал Bitrix24.
+ *
+ * Пустая карта распознавания означает, что приложение не видит в назначении платежа НИ ОДНОГО
+ * номера: дела пишутся, но ни к чему не привязываются. При этом придумать маску с нуля, глядя на
+ * пустой список, admin не может — он не знает ни синтаксиса (`d` = цифра), ни того, какие номера
+ * вообще бывают. Кнопка «добавить типовые» превращает это в один клик и заодно показывает синтаксис
+ * на примерах.
+ *
+ * Маски соответствуют нумерации Bitrix24 по умолчанию: смарт-счёт `СЧ-1`, документ `ДОК-1`,
+ * оплата заказа `<заказ>/<порядковый>`. Голые цифры добавлены отдельной строкой: в реальных
+ * назначениях номер часто пишут без префикса.
+ */
+export const MATRIX_PRESETS: ReadonlyArray<MatchMatrix> = [
+  { mask: 'СЧ-dddd', kind: 'invoice-number', note: 'Номер смарт-счёта Bitrix24 (нумерация по умолчанию).' },
+  { mask: 'dddd', kind: 'invoice-number', note: 'Номер счёта без префикса — так его чаще всего пишут в назначении.' },
+  { mask: 'ддд/дд'.replace(/д/g, 'd'), kind: 'order-number', note: 'Номер оплаты заказа вида «заказ/порядковый».' },
+  { mask: 'ДОК-dddd', kind: 'document-number', note: 'Номер документа из генератора документов.' }
+]
+
+/**
+ * Каких пресетов ещё нет в карте (сравнение по маске, регистронезависимо). Отдельная чистая
+ * функция, потому что важно не «добавить типовые», а НЕ ЗАДВОИТЬ уже добавленные: повторный клик
+ * иначе плодил бы одинаковые маски, а они дают дубли распознавания.
+ */
+export function missingPresets(existing: readonly MatchMatrix[]): MatchMatrix[] {
+  const have = new Set(existing.map(m => m.mask.trim().toLowerCase()))
+  return MATRIX_PRESETS.filter(p => !have.has(p.mask.toLowerCase())).map(p => ({ ...p }))
+}
+
 /** A fresh blank matrix row for the editor — default «вид» is the most common (invoice number). */
 export function blankMatrix(): MatchMatrix {
   return { mask: '', kind: 'invoice-number' }

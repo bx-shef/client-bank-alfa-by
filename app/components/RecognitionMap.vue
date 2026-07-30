@@ -9,7 +9,7 @@ import { computed, ref } from 'vue'
 import type { Alphabet, IdentifierKind, RecognizedId } from '~/utils/purposeMatch'
 import { recognizeByMatrices } from '~/utils/purposeMatch'
 import type { RecognitionSettings } from '~/utils/settings'
-import { ALPHABET_ITEMS, CONFIG_FIELD_ROWS, IDENTIFIER_KIND_ITEMS, IDENTIFIER_KIND_LABELS, blankMatrix } from '~/utils/recognitionKinds'
+import { ALPHABET_ITEMS, CONFIG_FIELD_ROWS, IDENTIFIER_KIND_ITEMS, IDENTIFIER_KIND_LABELS, blankMatrix, missingPresets } from '~/utils/recognitionKinds'
 
 const recognition = defineModel<RecognitionSettings>({ required: true })
 defineProps<{ disabled?: boolean }>()
@@ -32,6 +32,13 @@ function rowKey(m: object): number {
 function addMatrix() {
   recognition.value.matrices.push(blankMatrix())
 }
+/** Добавить типовые шаблоны (#421) — только те, которых ещё нет: повторный клик не должен плодить
+ *  одинаковые маски (они дают дубли распознавания). */
+function addPresets() {
+  recognition.value.matrices.push(...missingPresets(recognition.value.matrices))
+}
+const presetsLeft = computed(() => missingPresets(recognition.value.matrices).length)
+
 function removeMatrix(index: number) {
   recognition.value.matrices.splice(index, 1)
 }
@@ -154,15 +161,29 @@ const previewIds = computed<RecognizedId[]>(() =>
         </B24Button>
       </li>
     </ul>
-    <B24Button
-      color="air-secondary-accent-1"
-      size="sm"
-      :disabled="disabled"
-      data-testid="matrix-add"
-      @click="addMatrix"
-    >
-      + Добавить матрицу
-    </B24Button>
+    <div class="flex flex-wrap items-center gap-2">
+      <B24Button
+        color="air-secondary-accent-1"
+        size="sm"
+        :disabled="disabled"
+        data-testid="matrix-add"
+        @click="addMatrix"
+      >
+        + Добавить матрицу
+      </B24Button>
+      <!-- Пустая карта = приложение не видит в назначении ни одного номера. Придумать маску с нуля,
+           глядя на пустой список, невозможно — не зная ни синтаксиса, ни того, какие номера бывают. -->
+      <B24Button
+        v-if="presetsLeft > 0"
+        color="air-tertiary-no-accent"
+        size="sm"
+        :disabled="disabled"
+        data-testid="matrix-presets"
+        @click="addPresets"
+      >
+        Добавить типовые ({{ presetsLeft }})
+      </B24Button>
+    </div>
 
     <!-- Config-field map: portal-specific field names / SP entityTypeId. -->
     <div class="mt-5 mb-2 text-sm font-medium">
