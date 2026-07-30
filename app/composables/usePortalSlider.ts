@@ -18,6 +18,22 @@ export function usePortalSlider() {
   }
 
   /**
+   * Абсолютный адрес портала для пути (`/crm/type/1046/list/category/0/` →
+   * `https://<портал>/crm/type/...`). Вне фрейма — `null`: домена портала мы не знаем, и
+   * ОТНОСИТЕЛЬНЫЙ путь браузер отрезолвил бы на наш собственный домен, уводя пользователя в 404
+   * (ровно так и вышло на живом прогоне).
+   */
+  function resolveUrl(path: string): string | null {
+    const frame = b24.get()
+    if (!frame) return null
+    try {
+      return frame.slider.getUrl(path).toString()
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Открыть путь портала в слайдере. Возвращает `false`, если открыть не удалось (нет фрейма или
    * устройство не поддерживает слайдер) — тогда вызывающий должен дать браузеру обработать ссылку
    * обычным образом, а не оставлять пользователя ни с чем.
@@ -35,5 +51,5 @@ export function usePortalSlider() {
     }
   }
 
-  return { inFrame, openPath }
+  return { inFrame, resolveUrl, openPath }
 }
