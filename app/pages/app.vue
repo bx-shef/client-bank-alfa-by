@@ -89,146 +89,150 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="mx-auto max-w-(--ui-container) px-4 py-6">
-    <h1 class="sr-only">
-      Выписка по счёту
-    </h1>
+  <!-- Страница осмысленна только внутри портала: снаружи нет фрейм-токена, а значит ни настроек,
+       ни статуса, ни записи в CRM (#414). `?preview=1` — обход для разработки и скриншотов. -->
+  <InPortalGate>
+    <main class="mx-auto max-w-(--ui-container) px-4 py-6">
+      <h1 class="sr-only">
+        Выписка по счёту
+      </h1>
 
-    <ImportStatusBanner
-      :status="status"
-      class="mb-5"
-      @open-settings="() => { settingsOpen = true }"
-    />
+      <ImportStatusBanner
+        :status="status"
+        class="mb-5"
+        @open-settings="() => { settingsOpen = true }"
+      />
 
-    <!-- Employee 👍/👎 on the import result (docs/FEEDBACK.md, channel «сотрудник»). Renders only
+      <!-- Employee 👍/👎 on the import result (docs/FEEDBACK.md, channel «сотрудник»). Renders only
          when the channel is configured server-side (GITHUB_FEEDBACK_*), and is inert outside a
          portal. -->
-    <FeedbackWidget class="mb-5" />
+      <FeedbackWidget class="mb-5" />
 
-    <header class="mb-5 flex items-center justify-end gap-2">
-      <B24Button
-        label="Загрузить выписку"
-        color="air-secondary-no-accent"
-        size="sm"
-        to="/import"
-      />
-      <B24Button
-        :icon="SettingsIcon"
-        color="air-tertiary-no-accent"
-        size="sm"
-        aria-label="Настройки"
-        @click="() => { settingsOpen = true }"
-      />
-    </header>
+      <header class="mb-5 flex items-center justify-end gap-2">
+        <B24Button
+          label="Загрузить выписку"
+          color="air-secondary-no-accent"
+          size="sm"
+          to="/import"
+        />
+        <B24Button
+          :icon="SettingsIcon"
+          color="air-tertiary-no-accent"
+          size="sm"
+          aria-label="Настройки"
+          @click="() => { settingsOpen = true }"
+        />
+      </header>
 
-    <!-- App not configured yet (no notification chat chosen). Admins get a call-to-action
+      <!-- App not configured yet (no notification chat chosen). Admins get a call-to-action
          with a shortcut to the settings; everyone else is told an admin is setting it up. -->
-    <template v-if="showSetupBanner">
-      <B24Alert
-        v-if="isAdmin"
-        color="air-primary-warning"
-        variant="soft"
-        title="Приложение не настроено"
-        description="Выберите чат для уведомлений в настройках — после этого приложение начнёт присылать операции и записывать их в CRM."
-        class="mb-5"
-      />
-      <B24Button
-        v-if="isAdmin"
-        label="Открыть настройки"
-        color="air-primary"
-        class="mb-5"
-        @click="() => { settingsOpen = true }"
-      />
-      <B24Alert
-        v-else
-        color="air-secondary-accent"
-        variant="soft"
-        title="Приложение ещё настраивается"
-        description="Администратор портала завершает настройку. Импорт выписок станет доступен после этого."
-        class="mb-5"
-      />
-    </template>
+      <template v-if="showSetupBanner">
+        <B24Alert
+          v-if="isAdmin"
+          color="air-primary-warning"
+          variant="soft"
+          title="Приложение не настроено"
+          description="Выберите чат для уведомлений в настройках — после этого приложение начнёт присылать операции и записывать их в CRM."
+          class="mb-5"
+        />
+        <B24Button
+          v-if="isAdmin"
+          label="Открыть настройки"
+          color="air-primary"
+          class="mb-5"
+          @click="() => { settingsOpen = true }"
+        />
+        <B24Alert
+          v-else
+          color="air-secondary-accent"
+          variant="soft"
+          title="Приложение ещё настраивается"
+          description="Администратор портала завершает настройку. Импорт выписок станет доступен после этого."
+          class="mb-5"
+        />
+      </template>
 
-    <!-- Real operations view (empty until the backend feed, #5). Shown once settings are
+      <!-- Real operations view (empty until the backend feed, #5). Shown once settings are
          ready and the app is configured; hidden while unconfigured (setup banner) or while
          the in-portal settings fetch is still resolving (avoids a flash either way). -->
-    <template v-else-if="settingsReady">
-      <!-- Lively import-result summary (#62): count-up tiles + by-day / share charts.
+      <template v-else-if="settingsReady">
+        <!-- Lively import-result summary (#62): count-up tiles + by-day / share charts.
            Same component as the /import preview — reused for the in-portal path. Shown
            only when there are real operations to summarize. -->
-      <ImportStatsChart
-        v-if="items.length"
-        :items="items"
-        title="Сводка по операциям"
-        class="mb-5"
-      />
-
-      <!-- Operations, styled like the "Последние операции" view. -->
-      <B24Card>
-        <template #header>
-          <h2 class="font-semibold">
-            Последние операции
-          </h2>
-        </template>
-
-        <!-- Filter chips -->
-        <div class="flex flex-wrap gap-2">
-          <B24Button
-            v-for="c in chips"
-            :key="c.value"
-            :label="c.label"
-            :color="filter === c.value ? 'air-primary' : 'air-tertiary-no-accent'"
-            :aria-pressed="filter === c.value"
-            size="sm"
-            @click="setFilter(c.value)"
-          />
-        </div>
-
-        <!-- Column header -->
-        <div class="mt-4 flex items-center justify-between border-b border-(--ui-color-design-tinted-na-stroke) pb-2 text-xs text-(--ui-color-base-3)">
-          <span>Операция</span>
-          <span>Сумма</span>
-        </div>
-
-        <OperationList :items="paged" />
-
-        <!-- Pagination shows only when operations overflow a page (real data). -->
-        <B24Pagination
-          v-if="shown.length > perPage"
-          v-model:page="page"
-          :total="shown.length"
-          :items-per-page="perPage"
-          class="mt-4 justify-center"
+        <ImportStatsChart
+          v-if="items.length"
+          :items="items"
+          title="Сводка по операциям"
+          class="mb-5"
         />
-      </B24Card>
-    </template>
 
-    <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
+        <!-- Operations, styled like the "Последние операции" view. -->
+        <B24Card>
+          <template #header>
+            <h2 class="font-semibold">
+              Последние операции
+            </h2>
+          </template>
+
+          <!-- Filter chips -->
+          <div class="flex flex-wrap gap-2">
+            <B24Button
+              v-for="c in chips"
+              :key="c.value"
+              :label="c.label"
+              :color="filter === c.value ? 'air-primary' : 'air-tertiary-no-accent'"
+              :aria-pressed="filter === c.value"
+              size="sm"
+              @click="setFilter(c.value)"
+            />
+          </div>
+
+          <!-- Column header -->
+          <div class="mt-4 flex items-center justify-between border-b border-(--ui-color-design-tinted-na-stroke) pb-2 text-xs text-(--ui-color-base-3)">
+            <span>Операция</span>
+            <span>Сумма</span>
+          </div>
+
+          <OperationList :items="paged" />
+
+          <!-- Pagination shows only when operations overflow a page (real data). -->
+          <B24Pagination
+            v-if="shown.length > perPage"
+            v-model:page="page"
+            :total="shown.length"
+            :items-per-page="perPage"
+            class="mt-4 justify-center"
+          />
+        </B24Card>
+      </template>
+
+      <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
          партнёр Bitrix24). Только на внутренних страницах приложения (не на лендинге). -->
-    <div class="mx-auto mt-8 w-full max-w-[520px]">
-      <CustomDevCard />
-    </div>
+      <div class="mx-auto mt-8 w-full max-w-[520px]">
+        <CustomDevCard />
+      </div>
 
-    <BuildFooter />
+      <BuildFooter />
 
-    <!-- Settings slideover (primary entry; /settings route stays as fallback).
+      <!-- Settings slideover (primary entry; /settings route stays as fallback).
          Opens from the bottom (a "bottom sheet") — comfortable in a narrow B24
          iframe / on mobile, where a right-side panel is cramped. -->
-    <B24Slideover
-      v-model:open="settingsOpen"
-      title="Настройки"
-      description="Подключение банка, уведомления в чат, смарт-процессы, распознавание. Сохраняются в вашем портале Bitrix24."
-      side="bottom"
-    >
-      <template #body>
-        <ClientOnly>
-          <!-- In the slideover: Save/Cancel dismiss the panel (asSlider), like a B24 slider. -->
-          <SettingsForm
-            :as-slider="true"
-            @close="settingsOpen = false"
-          />
-        </ClientOnly>
-      </template>
-    </B24Slideover>
-  </main>
+      <B24Slideover
+        v-model:open="settingsOpen"
+        title="Настройки"
+        description="Подключение банка, уведомления в чат, смарт-процессы, распознавание. Сохраняются в вашем портале Bitrix24."
+        side="bottom"
+      >
+        <template #body>
+          <ClientOnly>
+            <!-- In the slideover: Save/Cancel dismiss the panel (asSlider), like a B24 slider. -->
+            <SettingsForm
+              :as-slider="true"
+              @close="settingsOpen = false"
+            />
+          </ClientOnly>
+        </template>
+      </B24Slideover>
+    </main>
+  </InPortalGate>
 </template>

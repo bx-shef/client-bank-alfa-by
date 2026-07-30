@@ -62,12 +62,14 @@ describe('install.vue — standalone (no B24 frame)', () => {
     state.inFrame = false
   })
 
-  it('runs the mock progress and redirects to /', async () => {
+  it('НЕ устанавливает ничего и не редиректит — просто выходит (#414)', async () => {
+    // Раньше страница крутила фальшивый прогресс и уводила на лендинг. Теперь объяснение
+    // показывает общий `InPortalGate`, а сама установка молча не начинается: снаружи портала
+    // её нельзя ни завершить, ни даже осмысленно изобразить.
     await mountSuspended(InstallPage)
-    // waitForB24 polls ~10s, then ~1.5s mock delay before router.replace('/').
     await vi.advanceTimersByTimeAsync(13000)
-    expect(replaceSpy).toHaveBeenCalledWith('/')
     expect(finishSpy).not.toHaveBeenCalled()
+    expect(replaceSpy).not.toHaveBeenCalled()
   })
 })
 
