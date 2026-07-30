@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-07-28
+> Last reviewed: 2026-07-30
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -35,6 +35,11 @@ Backend (приём событий Б24 + хранилище токенов; д�
   Пустое значение здесь — **сознательный выбор**, а не «по умолчанию».
 Также токен служит guard'ом серверной диагностики (`/api/queues`); при пустом
 `B24_APPLICATION_TOKEN` эти эндпоинты недоступны (и без того закрыты nginx `deny all`).
+
+⚠ Троттлинг зоны `import` вешается **отдельным exact-match блоком на каждый роут**
+(`= /api/import`, `= /api/import/status`, `= /api/import/batch`, `= /api/import/metrics*`):
+`= /api/import` — точное совпадение и подпути **не** покрывает, поэтому забытый роут провалился бы
+в незадросселированный `location /api/`.
 `REDIS_URL` compose проставляет сам (внутренний сервис `redis`). Схема
 `portal_tokens` создаётся на старте backend (`server/plugins/migrate.ts`). `redis` и `db` host-портов
 не публикуют и сидят на изолированных сетях (`queuenet`/`dbnet`, `internal: true`) — наружу не смотрят.

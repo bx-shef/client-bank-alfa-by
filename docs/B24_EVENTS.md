@@ -1,6 +1,6 @@
 # События и авторизация Bitrix24 (установка, удаление, брокер событий)
 
-> Last reviewed: 2026-07-29
+> Last reviewed: 2026-07-30
 
 Как приложение учитывает авторизацию портала, обрабатывает установку/удаление и
 проверяет подлинность входящих событий Bitrix24. Здесь — **доменное ядро**
@@ -62,7 +62,7 @@ Backend хранит по каждому порталу запись `PortalCred
   доступа к API, только подтверждает подлинность вебхука.
 - **Удаление приложения → полная очистка (политика).** Любой легитимный `ONAPPUNINSTALL`
   стирает всё, что связано с порталом (строка `portal_tokens` **и** служебные сторы
-  `import_result`/`metrics_counter` по `member_id`; дедуп дел и разнесение живут в B24,
+  `import_result`/`import_batch`/`metrics_counter` по `member_id`; дедуп дел и разнесение живут в B24,
   локального стора нет — #259); флаг `CLEAN` не смотрим — удалили приложение, значит не
   храним по нему ничего. Очистку делают **обе** ветки `deletePortal` (консьюмер очереди и
   синхронный фолбэк роута `/api/b24/events`) — онлайн-события Б24 не ретраятся, второго шанса нет.
@@ -166,7 +166,7 @@ Backend принимает все вебхуки одной точкой вхо�
 | Консьюмер `b24-events` — единственный писатель: регистрация/удаление портала | `server/queue/handlers.ts` (`handleEventJob`), `server/queue/worker.ts` (`savePortal`/`deletePortal`) | **готово** |
 | Хранилище токенов портала (Postgres, шифрование refresh, write-once) | `server/utils/tokenStore.ts`, `server/utils/secretCrypto.ts`, `server/db/client.ts` | **готово** |
 | Дедуп дел через маркер в B24 (read-before-write, без стора) | `server/utils/configurableActivityWrite.ts`, `server/utils/activityMarkerLookup.ts`, `handlers.ts` (#259) | **готово** (live-запись в CRM — стадия 4) |
-| Миграция схемы (`portal_tokens`, `portal_tombstone`, `import_result`, `metrics_counter`) на старте (+ `DROP` снятого `allocation_fact`, §9.3 #6) | `server/plugins/migrate.ts` | **готово** |
+| Миграция схемы (`portal_tokens`, `portal_tombstone`, `import_result`, `import_batch`, `metrics_counter`) на старте (+ `DROP` снятого `allocation_fact`, §9.3 #6) | `server/plugins/migrate.ts` | **готово** |
 | Регистрация хендлеров событий (`event.bind` из установочного скрипта) | `app/pages/install.vue` + `app/utils/b24EventBind.ts` (чистый билдер, тесты) | **готово** (билдер+тесты; доставка на реальном портале — вручную) |
 | Refresh-цикл access-токена (авто-обновление, конкуренто-безопасно) | `server/utils/ensureAccessToken.ts` (+ `dbLock.ts` advisory-lock, DI, тесты) | **готово** (#35): рефреш при истечении, ротация refresh-токена персистится, сериализация per-portal под scale-out |
 | REST-вызовы к порталу (дела/чат/поиск) | `server/utils/{configurableActivityWrite,activityMarkerLookup,chatNotifyWrite,companyLookup}.ts` | **готово** (стадии 4/6, ядра+тесты; живьём — далее) |

@@ -274,7 +274,7 @@ MCP-сервер по выписке убран из дорожной карты
 (`crm.item.add`+маркер, пересчёт «осталось»), UI-вкладка распределения + «Пересчитать», пайплайн удаления
 (`event.bind`→`DeletionJob`→`reconcile`), и **полный ретайр Postgres-`allocation_fact`** (§9.3 #6 —
 идемпотентность/аудит/сторно живут целиком на dist-СП: маркер строки + `status`). В нашей БД от разнесения
-не осталось ничего — только `portal_tokens` + агрегаты UI (`import_result`/`metrics_counter`).
+не осталось ничего — только `portal_tokens` + агрегаты UI (`import_result`/`import_batch`/`metrics_counter`).
 **Live-verify §9 — ПРОЙДЕН ВЖИВУЮ 10/10 (`pnpm verify:distribution`, `scripts/verify-distribution-live.ts`):** гоняет
 реальные ядра провижининга+леджера (`provisionDistributionSp`→`ensurePaymentElement`→`writeDistributionRow`→
 `recomputeNeedDistribution`) с полным teardown — тест-**вебхуку** (`b24-86sr2r`) владелец выдал право

@@ -38,6 +38,8 @@ import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
 import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
+import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
+import { isFinalAttempt } from '../utils/jobAttempt'
 import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
@@ -473,6 +475,7 @@ export function liveHandlerDeps(): HandlerDeps {
     deletePortal: async (memberId, eventTs) => {
       await deleteToken(dbQuery, memberId, eventTs)
       await deleteImportResultForPortal(dbQuery, memberId)
+      await deleteBatchesForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
@@ -599,7 +602,19 @@ export function startThroughputWorkers(
       'portal.hash': portalHash(job.data.memberId)
     }, async () => {
       try {
-        return await handleParseJob(job.data, deps)
+        const res = await handleParseJob(job.data, deps)
+        // Два РАЗНЫХ тупика, и путать их нельзя. Оба оставляют загрузку без `crm-sync`, а значит
+        // без итога — то есть возвращают ровно тот молчащий импорт, ради которого заведён #417.
+        if (res.parsed === 0) {
+          // Файл разобран, но операций в нём нет.
+          await persistBatchError(job.data, 'В файле не найдено операций — проверьте, что это выписка клиент-банка.')
+        } else if (!res.chained) {
+          // Операции есть, но очередь недоступна (Redis отвалился между разбором и передачей).
+          // Сказать здесь «не найдено операций» — прямая ложь: сотрудник пошёл бы проверять файл
+          // вместо того, чтобы повторить загрузку.
+          await persistBatchError(job.data, 'Очередь обработки недоступна — повторите загрузку позже.')
+        }
+        return res
       } catch (e) {
         // A parse failure = the statement format wasn't recognized (docs/FEEDBACK.md channel 2,
         // format signal). Attach the RAW file that failed to parse (decoded, capped) for reproduction
@@ -613,6 +628,11 @@ export function startThroughputWorkers(
           fileText = decodeUploadText(Buffer.from(job.data.contentBase64, 'base64')).slice(0, MAX_FILE_EMBED)
         } catch { /* undecodable → attach no file */ }
         void fileProgramSignal(job.data.memberId, { type: 'format', providerId: job.data.providerId, fileText })
+        // Итог загрузки помечаем провалом ТОЛЬКО на последней попытке: показать сотруднику
+        // «не разобралось» и через минуту молча передумать — хуже, чем подождать.
+        if (isFinalAttempt(job)) {
+          await persistBatchError(job.data, 'Не удалось разобрать файл — формат выписки не распознан.')
+        }
         throw e
       }
     }, r => ({ 'job.op_count': r.parsed })), { connection, concurrency }),
@@ -625,11 +645,24 @@ export function startThroughputWorkers(
         'job.op_count': job.data.items?.length ?? 0,
         'portal.hash': portalHash(job.data.memberId)
       }, async () => {
-        const summary = await handleCrmSyncJob(job.data, deps)
+        let summary
+        try {
+          summary = await handleCrmSyncJob(job.data, deps)
+        } catch (e) {
+          // У `crm-sync` ретраев нет (attempts не задан), поэтому первый же throw — терминальный:
+          // без этой ветки загрузка осталась бы в «принято» НАВСЕГДА, а UI обещал сотруднику
+          // результат. Помечаем провал и пробрасываем — поведение очереди не меняется.
+          if (job.data.source === 'parse') {
+            await persistBatchFailure(job.data, 'Обработка не завершилась — попробуйте загрузить файл ещё раз.')
+          }
+          throw e
+        }
         // Persist the run for the in-portal status card (#5) — LATEST run per portal.
         // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
         // already happened). Demo batches never touch the real portal's status row.
         await persistImportResult(job.data, summary)
+        // Итог КОНКРЕТНОЙ загрузки (#417) — то, чего ждёт сотрудник на экране `/import`.
+        await persistBatchResult(job.data, summary)
         // Accumulate LIFETIME per-portal counters for the dashboard (#78). Same
         // best-effort/demo-gated contract — bookkeeping must never fail a job.
         await bumpMetrics(job.data, summary)
@@ -703,6 +736,49 @@ export function startTriggerWorker(deps: TriggerFireJobDeps): Worker {
 
 /** Save the crm-sync run summary as the portal's last import status (#5). Gated to
  *  real (non-demo) portals; swallows errors so status bookkeeping can't fail a job. */
+/** Пометить загрузку провалившейся (#417). Best-effort: учёт не должен ронять джобу. */
+async function persistBatchError(job: ParseJob, message: string): Promise<void> {
+  try {
+    await saveBatchError(dbQuery, job.memberId, job.fileHash, message)
+  } catch (e) {
+    console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
+/** Пометить провалом загрузку, чья обработка в `crm-sync` не завершилась (#417). Отдельно от
+ *  парсерной версии — здесь на входе `CrmSyncJob`, и гейт демо-счетов тот же. */
+async function persistBatchFailure(job: CrmSyncJob, message: string): Promise<void> {
+  const account = job.items[0]?.account ?? ''
+  if (account && isDemoAccount(account)) return
+  try {
+    await saveBatchError(dbQuery, job.memberId, job.batchId, message)
+  } catch (e) {
+    console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
+/** Записать итог РУЧНОЙ загрузки (#417). Только для `source: 'parse'` — у автоопроса банка нет
+ *  сотрудника, который ждёт ответа на экране, и его прогоны учитываются в `import_result`.
+ *  Best-effort и с гейтом демо-счетов — как и остальной учёт. */
+async function persistBatchResult(
+  job: CrmSyncJob,
+  summary: { processed: number, created: number, notified: number, unmatched: number }
+): Promise<void> {
+  if (job.source !== 'parse') return
+  const account = job.items[0]?.account ?? ''
+  if (account && isDemoAccount(account)) return
+  try {
+    await saveBatchResult(dbQuery, job.memberId, job.batchId, {
+      operations: summary.processed,
+      created: summary.created,
+      notified: summary.notified,
+      unmatched: summary.unmatched
+    })
+  } catch (e) {
+    console.error('import_batch save failed', job.memberId, (e as Error)?.message)
+  }
+}
+
 async function persistImportResult(
   job: CrmSyncJob,
   summary: { processed: number, created: number, notified: number }

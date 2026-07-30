@@ -113,4 +113,23 @@ describe('parseManualFileBase64 (real fixtures, windows-1251)', () => {
     const b64 = Buffer.from('not a statement').toString('base64')
     expect(() => parseManualFileBase64(b64)).toThrow(/Неизвестный формат/)
   })
+
+  it('отметка «принято» ставится ПОСЛЕ постановки в очередь', async () => {
+    // Иначе при недоступной очереди осталась бы строка «принято», которую ничто и никогда не
+    // завершит — сотрудник ждал бы итога вечно.
+    const markQueued = vi.fn(async () => {})
+    const { deps } = fakeDeps({ enqueueParse: async () => false, markQueued })
+    const res = await handleImportUpload(deps, input)
+    expect(res.status).toBe(503)
+    expect(markQueued).not.toHaveBeenCalled()
+  })
+
+  it('сбой учёта НЕ отменяет уже принятый файл', async () => {
+    const markQueued = vi.fn(async () => {
+      throw new Error('db down')
+    })
+    const { deps } = fakeDeps({ markQueued })
+    const res = await handleImportUpload(deps, input)
+    expect(res.status).toBe(202)
+  })
 })

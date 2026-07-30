@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-29
+> Last reviewed: 2026-07-30
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -32,7 +32,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 `$fetch`-`callRest` ретайрнут (миграция #191/«всё на jssdk»). Два входа:
 - **`crm-sync`** — per-portal `B24OAuth` из сохранённого токена (SDK-резолвер `portalSdkResolver.ts`,
   пер-JOB мемоизация клиента = один rate-limiter-бакет + один token-load на джобу);
-- **UI-фрейм-роуты** (`settings`/`chat-settings`/`chat-search`/`import`/`import/status`/`metrics*`) —
+- **UI-фрейм-роуты** (`settings`/`chat-settings`/`chat-search`/`import`/`import/status`/`import/batch`/`metrics*`) —
   `liveDeps.frameRestCall` → `makeFrameRestCall` (тот же SDK по фрейм-access-токену, за SSRF-гейтом
   `assertPortalHost`; refresh-токена нет — фрейм-токен свежий, рефреш не нужен).
 
@@ -62,7 +62,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts`, `server/utils/allocationErrorNotify.ts` | да | актуален | Уведомление об операции в чат (стадия 6); тем же методом — заметка об `ambiguous`/`manual` разнесении в чат ошибок (#184). |
 | `im.search.chat.list` | im | `im` | `server/utils/chatSearch.ts` | **нет** | актуален | Поиск чата по названию/участникам для пикера (`FIND`≥3, `LIMIT`≤50, `OFFSET`; отдаёт `total`/`next`). |
 | `im.recent.list` | im | `im` | `server/utils/chatSearch.ts` | нет | актуален | Дефолтный список пикера — последние групповые чаты (`SKIP_DIALOG=Y`, `OFFSET`/`LIMIT`). |
-| `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts`, `server/api/bank/accounts.get.ts`, `server/api/bank/disconnect.post.ts`, `server/api/bank/set-account.post.ts`, `server/api/setup-status.get.ts`, `server/api/app-rating.get.ts`, `server/api/app-rating.post.ts`, `server/api/feedback.post.ts`, `server/utils/settingsHandler.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + метрики `#78` + старт подключения банка `POST /api/bank/connect` + **список/отключение счетов** `GET /api/bank/accounts`, `POST /api/bank/disconnect` (#404, admin-only) + **экран готовности** `GET /api/setup-status` (#409/#405, admin-only) + попап «оцените приложение» `GET/POST /api/app-rating` + канал обратной связи `POST /api/feedback` + **запись настроек** `chat-settings.post` через `verifyFrameAdmin`, #182 + **сброс метрик** `metrics-reset.post` (admin-only, #182 паритет)): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1), **записи настроек** (#182: `autoDistribute`/карта распознавания/чат-цели скоуплены на весь портал → только админ) **и сброса метрик**. |
+| `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/batch.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts`, `server/api/bank/accounts.get.ts`, `server/api/bank/disconnect.post.ts`, `server/api/bank/set-account.post.ts`, `server/api/setup-status.get.ts`, `server/api/app-rating.get.ts`, `server/api/app-rating.post.ts`, `server/api/feedback.post.ts`, `server/utils/settingsHandler.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + **итоги конкретных загрузок** `GET /api/import/batch` (#417 — роут ОПРАШИВАЕТСЯ, то есть тот же вектор усиления, что у статуса; закрыт nginx-зоной `import`) + метрики `#78` + старт подключения банка `POST /api/bank/connect` + **список/отключение счетов** `GET /api/bank/accounts`, `POST /api/bank/disconnect` (#404, admin-only) + **экран готовности** `GET /api/setup-status` (#409/#405, admin-only) + попап «оцените приложение» `GET/POST /api/app-rating` + канал обратной связи `POST /api/feedback` + **запись настроек** `chat-settings.post` через `verifyFrameAdmin`, #182 + **сброс метрик** `metrics-reset.post` (admin-only, #182 паритет)): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1), **записи настроек** (#182: `autoDistribute`/карта распознавания/чат-цели скоуплены на весь портал → только админ) **и сброса метрик**. |
 
 > **HTTP, не REST-метод:** OAuth-токен портала обновляем на `oauth/token` (endpoint Bitrix
 > `oauth.bitrix.info/oauth/token/`) — это не REST-метод транспорта, а прямой запрос к token endpoint.

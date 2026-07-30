@@ -22,10 +22,14 @@ import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
+import { sweepOldBatches } from '../utils/importBatchStore'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
+
+/** Сколько дней храним итоги ручных загрузок (#417) — переживает вкладку, но не неделю. */
+const IMPORT_BATCH_TTL_DAYS = 3
 
 export default defineNitroPlugin((nitroApp) => {
   if (!queueEnabled()) return
@@ -57,6 +61,7 @@ export default defineNitroPlugin((nitroApp) => {
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined
   let sweepTimer: ReturnType<typeof setInterval> | undefined
+  let batchSweepTimer: ReturnType<typeof setInterval> | undefined
   // Cron runs on exactly ONE instance (QUEUE_CRON=1) — two schedulers would enqueue
   // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
   // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
@@ -208,6 +213,20 @@ export default defineNitroPlugin((nitroApp) => {
       console.warn('[queue] token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
     }
 
+    // Ретенция итогов ручных загрузок (#417). ВНЕ флага `STATEMENT_SWEEP`: строка несёт имя файла
+    // клиента, то есть это чистка ПДн, и ставить её в зависимость от тумблера чистки ОЧЕРЕДЕЙ
+    // значило бы, что документированный opt-out по очередям молча отключает не относящуюся к нему
+    // ретенцию, а записи копились бы бессрочно.
+    const runBatchSweep = async () => {
+      try {
+        await sweepOldBatches(dbQuery, IMPORT_BATCH_TTL_DAYS)
+      } catch (e) {
+        console.error('[retention] import_batch sweep failed:', (e as Error)?.message)
+      }
+    }
+    batchSweepTimer = setInterval(runBatchSweep, 6 * 60 * 60 * 1000)
+    void runBatchSweep()
+
     // Wall-clock retention sweep for the statement-PII queues (#245, docs/PRIVACY.md). BullMQ's
     // age eviction is lazy (fires only on the NEXT terminal job), so an idle portal's last
     // statement payloads linger past their age. This periodic clean deletes them eagerly —
@@ -262,6 +281,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (pollTimer) clearInterval(pollTimer)
     if (keepAliveTimer) clearInterval(keepAliveTimer)
     if (sweepTimer) clearInterval(sweepTimer)
+    if (batchSweepTimer) clearInterval(batchSweepTimer)
     await Promise.all(workers.map(w => w.close()))
     await closeQueues()
   })

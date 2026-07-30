@@ -23,4 +23,12 @@ describe('StatementUpload', () => {
     expect(input.attributes('accept')).toContain('.txt')
     expect(input.attributes('multiple')).toBeDefined()
   })
+
+  it('без загрузок блок «Результат обработки» не рисуется, а восстановление ключей инертно', async () => {
+    // `onMounted` поднимает ключи из sessionStorage (#417). Вне портала фрейм-токена нет, опрос
+    // не идёт, и мусор в хранилище не должен ронять монтирование.
+    sessionStorage.setItem('cba.import.batches', '{"не":"массив"}')
+    const wrapper = await mountSuspended(StatementUpload)
+    expect(wrapper.find('[data-testid="batch-results"]').exists()).toBe(false)
+  })
 })
