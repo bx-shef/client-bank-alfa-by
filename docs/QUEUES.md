@@ -22,6 +22,7 @@
 |---|---|---|---|---|
 | `b24-events` | `Q_EVENTS` | `EventJob` (`memberId`, `domain`, `kind`, `ts`) | вебхук `POST /api/b24/events` | follow-up после проверенного события; на `ONAPPUNINSTALL` — очистка портала |
 | `bank-fetch` | `Q_FETCH` | `FetchJob` (`memberId`, `providerId`, `account`, `dateFrom/To`) | крон (`planFetches`) / демо-нагрузка | тянет окно выписки у банка (Альфа/Приор) → нормализует → кладёт батч в `crm-sync` |
+| `bank-fetch-prior` | `Q_FETCH_PRIOR` | `FetchJob` (тот же) | крон (`fetchQueueFor`, provider=`prior-by`) | то же для Приора, но **своя** очередь: бюджет в ЗАПРОСАХ (задача = до 10 HTTP) и свои слоты (`QUEUE_PRIOR_CONCURRENCY`), поэтому длинный create+poll не блокирует Альфу и не тратит её лимит |
 | `file-parse` | `Q_PARSE` | `ParseJob` (`memberId`, `providerId`, `fileName`, `contentBase64`, `fileHash`, `userId?`) | эндпоинт `POST /api/import` (ручная загрузка) | декодирует (windows-1251) и разбирает файл → нормализует → кладёт батч в `crm-sync` |
 | `crm-sync` | `Q_CRM` | `CrmSyncJob` (`memberId`, `providerId`, `source`, `batchId`, `items`) | обработчики `bank-fetch` / `file-parse` (только если операций > 0) | дедуп в батче → на операцию: поиск компании → универсальное дело → чат |
 | `b24-deletions` | `Q_DELETIONS` | `DeletionJob` (`memberId`, `domain`, `eventCode`, `entityId`, `entityTypeId?`, `ts`) | вебхук CRM-удаления (§9.2) | классифицирует по SP-конфигу → reconcile леджера / чат ошибок (primary-инстанс, concurrency 1) |

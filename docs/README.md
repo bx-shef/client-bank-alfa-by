@@ -12,6 +12,7 @@
 |---|---|---|
 | [`../README.md`](../README.md) | что за продукт, быстрый старт | первым |
 | [`../CLAUDE.md`](../CLAUDE.md) | карта модулей и обязательные конвенции | перед первой правкой кода |
+| [`ONBOARDING.md`](ONBOARDING.md) | маршрут чтения кода, что можно потрогать без портала, словарь терминов | если проект видите впервые |
 | [`project-map.md`](project-map.md) | срез состояния: сделано / дальше / блокеры | «что сейчас происходит» |
 | [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) | целевая архитектура и что ещё не сделано | планирование |
 
@@ -22,7 +23,8 @@
 | [`PROCESSING.md`](PROCESSING.md) | **главный доменный документ**: подбор компании, распознавание номеров, разнесение оплат, ошибки |
 | [`QUEUES.md`](QUEUES.md) | очереди BullMQ, воркеры, масштабирование, REST-бюджет |
 | [`B24_EVENTS.md`](B24_EVENTS.md) | события портала (install/uninstall), токены, контракт вебхука |
-| [`REST_METHODS.md`](REST_METHODS.md) | учёт всех вызовов REST Bitrix24 — правится при добавлении метода |
+| [`API_ROUTES.md`](API_ROUTES.md) | **наши** входящие роуты: авторизация, коды, троттлинг |
+| [`REST_METHODS.md`](REST_METHODS.md) | учёт **исходящих** вызовов REST Bitrix24 — правится при добавлении метода |
 | [`ALFA_API.md`](ALFA_API.md) · [`PRIOR_API.md`](PRIOR_API.md) | API банков, OAuth, живые находки |
 | [`AUTH.md`](AUTH.md) | вход оператора в служебную зону (`/queues`) |
 | [`APP_RATING.md`](APP_RATING.md) | попап «оцените приложение» в Маркете |
@@ -46,6 +48,14 @@
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | телеметрия OpenTelemetry, что можно и нельзя класть в спаны |
 | [`PRIVACY.md`](PRIVACY.md) | что храним, сколько и как чистим (финансовые ПДн) |
 | [`REPO_SETUP_CHECKLIST.md`](REPO_SETUP_CHECKLIST.md) · [`DEPENDABOT.md`](DEPENDABOT.md) | защита `main`, CI, обновления зависимостей |
+
+## Другие корни документации
+
+| Где | О чём |
+|---|---|
+| [`../AGENTS.md`](../AGENTS.md) | короткий указатель для AI-агентов (ведёт в `CLAUDE.md`) |
+| [`../telemetry-station/README.md`](../telemetry-station/README.md) | приёмная станция телеметрии (коллектор + ClickHouse + Grafana), разворачивается отдельным compose |
+| `../reporting-kit/` | вендорный бандл отчётности со **своими** конвенциями и своим CI — нашими проверками не линтуется (карточка — [`REPORTING_KIT.md`](REPORTING_KIT.md)) |
 
 ## Продукт и продажи
 

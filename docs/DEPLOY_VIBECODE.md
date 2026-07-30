@@ -49,7 +49,7 @@ single-container: `QUEUE_WORKERS=1`+`QUEUE_CRON=1`) — один процесс 
 Это **гейты перед тем, как делать Black Hole основным** таргетом (не «nice-to-have»):
 
 1. **Служебная зона — закрывается только паролем оператора** (см. 🔴 выше): в Black Hole под PUBLIC
-   единственная защита `/queues`,`/api/ops/*`,`/app`,`/import` — `PUBLIC_PAGE_BASIC_AUTH_PASS`. Задать
+   единственная защита `/queues` и `/api/ops/*` — `PUBLIC_PAGE_BASIC_AUTH_PASS`. Задать
    обязательно.
 2. **POST на пререндеренные страницы может отдавать 405.** nginx специально ремапит `405→200 $uri`,
    потому что **Bitrix открывает in-portal страницы и `/install` POST-запросом**, а статический хендлер
@@ -123,7 +123,7 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
 
 > 🔴 **`PUBLIC_PAGE_BASIC_AUTH_PASS` под PUBLIC — ОБЯЗАТЕЛЕН.** Без него `operatorAllowed()`
 > считает служебную зону **открытой** (пароль пуст ⇒ вход выключен ⇒ зона распахнута), и под
-> публичным сервером `/queues`, `/api/ops/*`, `/app`, `/import` доступны **кому угодно** по `appUrl`.
+> публичным сервером `/queues` и `/api/ops/*` доступны **кому угодно** по `appUrl`.
 > В основном nginx-деплое это прикрывал ещё и `deny`/сеть; в Black Hole nginx нет — единственная
 > защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie). Диагностический
 > `/api/queues` **fail-closed** app-гардом (`B24_APPLICATION_TOKEN`
@@ -183,7 +183,7 @@ VIBE_KEY="$VIBE_KEY" APP_NAME=client-bank-alfa-by \
 приложение делает внутри, **но только если она включена**: служебную зону закрывает
 `PUBLIC_PAGE_BASIC_AUTH_PASS` (пустой ⇒ зона распахнута, см. 🔴 выше), CRM-данные — фрейм-токен/
 OAuth. То есть «PUBLIC = только сеть, не данные» **верно лишь при заданном пароле оператора** и
-работающих внутренних гардах — иначе `/queues`/`/api/ops/*`/`/app`/`/import` открыты. Задай пароль.
+работающих внутренних гардах — иначе `/queues`/`/api/ops/*` открыты. Задай пароль.
 
 ## Связка с обслуживаемым порталом
 

@@ -43,18 +43,32 @@ pnpm dev            # http://localhost:3000
 
 ```bash
 cp .env.example .env
-# минимум: DATABASE_URL, REDIS_URL, B24_TOKEN_ENC_KEY (openssl rand -hex 32)
+
+# 1. Дописать в .env три строки. Postgres и Redis поднимаются локально, поэтому адреса —
+#    localhost; ключ шифрования обязателен, без него не стартует даже compose:
+cat >> .env <<'ENV'
+DATABASE_URL=postgres://app:app@localhost:5432/app
+REDIS_URL=redis://localhost:6379
+ENV
+echo "B24_TOKEN_ENC_KEY=$(openssl rand -hex 32)" >> .env
+
+# 2. Поднять зависимости (порты открыты только на 127.0.0.1) и запустить дев-сервер:
 docker compose up -d db redis
 pnpm dev
 ```
 
-Проверка: `curl localhost:3000/api/ready` → `{"ready":true}`.
+Проверка: `curl localhost:3000/api/ready` → `{"ready":true,"status":"ok","checks":{"db":true,"redis":true}}`
+(`status:"degraded"` = жив Postgres, но не Redis; `"down"` = нет Postgres).
+
+**Что потрогать дальше** — маршрут чтения кода, разбор реального файла выписки без портала и словарь
+доменных терминов: [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
 
 ## Документация
 
 | Документ | О чём |
 |---|---|
 | [`CLAUDE.md`](./CLAUDE.md) | карта модулей и конвенции (основной справочник) |
+| [`docs/ONBOARDING.md`](docs/ONBOARDING.md) | маршрут чтения кода + словарь терминов |
 | [`docs/README.md`](docs/README.md) | индекс всех документов |
 | [`docs/PROCESSING.md`](docs/PROCESSING.md) | целевая логика обработки платежей |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) · [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | деплой и эксплуатация |

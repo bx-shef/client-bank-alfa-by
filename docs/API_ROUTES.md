@@ -1,0 +1,76 @@
+# Наши HTTP-роуты: авторизация и коды
+
+> Last reviewed: 2026-07-30
+
+Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
+[`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.
+
+Раньше эта информация была размазана: `AUTH.md` знал только `/api/auth/*`, `QUEUES.md` —
+диагностические роуты, `B24_EVENTS.md` — вебхук, а восемь роутов упоминались одним лишь путём, без
+контракта. Ошибка в гейте — это дыра, поэтому все роуты сведены в одну таблицу.
+
+## Типы авторизации
+
+| Код | Что это |
+|---|---|
+| **F** | **Фрейм-токен Bitrix24**: `Authorization: Bearer <token>` + `X-B24-Domain`. Домен → `member_id` в нашем сторе, токен проверяется вызовом `profile` к порталу. Успех доказывает, что запрос действительно из этого портала (блокирует спуфинг домена). |
+| **F+A** | То же + `profile.ADMIN === true`. Ставится там, где настройка скоуплена на **весь портал** (банк-креды, `app.option`, провижининг). |
+| **S** | Сессия оператора: cookie `cba_sess` (HttpOnly, HMAC-подпись). ⚠ Пустой `PUBLIC_PAGE_BASIC_AUTH_PASS` = «вход выключен», и `operatorAllowed` пропускает **всех**. |
+| **S+C** | Сессия + CSRF-заголовок `X-CBA-Auth`. |
+| **T** | `X-Check-Token` = `B24_APPLICATION_TOKEN`, сверка constant-time. Только заголовком — чтобы токен не оседал в логах. |
+| **AT** | `application_token` в теле события Б24, fail-closed. |
+| **ST** | Подписанный HMAC-`state` (OAuth-callback банка), проверяется **до** любого обращения к банку. |
+| **P** | Публичный. |
+
+## Таблица
+
+| Метод | Путь | Авторизация | Admin | Коды | nginx |
+|---|---|---|---|---|---|
+| POST | `/api/b24/events` | AT + `bindInstallMember` | — | 200, 400, 403, 503 | — |
+| GET | `/api/health` | P (liveness) | — | 200 | — |
+| GET | `/api/ready` | P (PG `SELECT 1` + Redis `PING`) | — | 200, 503 | `import` |
+| POST | `/api/auth/login` | P | — | 200, 400, 401, 429 | зона `login` 10r/m |
+| POST | `/api/auth/logout` | S | — | 200 | — |
+| GET | `/api/auth/session` | S | — | 200 | — |
+| GET | `/api/chat-settings` | F | нет | 200, 400, 403, 502 | — |
+| POST | `/api/chat-settings` | **F+A** | **да** | 200, 400, 403, 502 | — |
+| GET | `/api/chat-search` | F | нет | 200, 400, 502 | — |
+| GET | `/api/setup-status` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
+| POST | `/api/import` | F (multipart) | нет | 202, 400, 403, 409, 503 | `import`, `client_max_body_size 3m` |
+| GET | `/api/import/status` | F | нет | 200, 400, 403, 409 | `import` |
+| GET | `/api/import/batch?ids=` | F (+ скоуп по порталу И сотруднику в WHERE) | нет | 200, 400, 403, 409 | `import` |
+| GET | `/api/import/metrics` | F | нет | 200, 400, 403, 409 | `import` |
+| POST | `/api/import/metrics-reset` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
+| POST | `/api/poll-now` | **F+A** + гейт `MANUAL_POLL_ENABLED` + кулдаун | **да** | 200, 400, 403, 409, 429, 503 | `import` |
+| POST | `/api/bank/connect` | **F+A** | **да** | 200, 400, 403, 409, 502, 503 | `import` |
+| GET | `/api/bank/callback` | **ST** | n/a | 200, 400, 502 | `import`; алиасы `/oauth-alfabank-by/`, `/oauth-priorbank-by/` |
+| GET | `/api/bank/accounts` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
+| POST | `/api/bank/disconnect` | **F+A** (member-scoped WHERE) | **да** | 200, 400, 403, 409 | `import` |
+| POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409 | `import` |
+| GET | `/api/distribution/ledger` | **F+A** + гейт `DISTRIBUTION_PROVISION_ENABLED` | **да** | 200, 400, 403, 404, 502 | — |
+| POST | `/api/distribution/provision` | **F+A** + тот же гейт | **да** | 200, 400, 403, 404, 502 | — |
+| POST | `/api/distribution/recompute` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502 | — |
+| GET | `/api/app-rating` | F | нет | 200 (сбой → `{show:false}`), 400, 403, 409 | — |
+| POST | `/api/app-rating` | F | нет | 200, 400, 403, 409 | — |
+| GET | `/api/feedback` | P (булев `{enabled}`) | — | 200 | `import` |
+| POST | `/api/feedback` | F | нет | 200, 202 (outbox), 400, 403, 409, 502, 503 | `import` |
+| GET | `/api/queues` | **T** | — | 200, 403 | `deny all` |
+| GET | `/api/ops/queues` | S | — | 200, 401 | — |
+| GET | `/api/ops/app-rating` | S | — | 200, 401, 502 | — |
+| POST | `/api/ops/app-rating` | **S+C** | — | 200, 400, 401, 403 | — |
+
+## Сквозные значения кодов
+
+- **409** — «портал не установлен»: по домену нет ключа в сторе. Не «конфликт данных» (исключение —
+  `bank/set-account`, где 409 = номер счёта уже занят).
+- **403** — не-админ либо фрейм-токен не доказан для этого домена.
+- **502** — сбой апстрима (портал Б24, банк, GitHub).
+- **503** — fail-closed по конфигу: нет секрета, канал выключен, очереди недоступны.
+
+## Что стоит помнить при добавлении роута
+
+- **Новый роут по умолчанию попадает в незадросселированный `location /api/`.** Троттлинг вешается
+  **exact-match** блоками (`= /api/import`), и префиксный блок подпути **не** покрывает.
+- Если роут до авторизации ходит в портал (а `profile`-валидация — это именно такой вызов), он
+  усиливает нагрузку на чужой REST-лимит: такие роуты закрываются зоной `import`.
+- Роут заворачивается в `withFrameRouteSpan` (телеметрия) — тело запроса/ответа в спан не кладём.

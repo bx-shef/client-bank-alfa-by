@@ -681,7 +681,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     чистое ядро `app/utils/importBatchView.ts` (когда прекращать опрос, свод, подписи) +
     `useImportBatches` (опрос, ключи в `sessionStorage` — перезагрузка вкладки не должна стирать
     исход) + блок «Результат обработки» в `StatementUpload`. Строка **не хранит операций/назначений**
-    — только счётчики и имя файла; суточный свип чистит старше 3 дней (`docs/PRIVACY.md`), удаление
+    — только счётчики и имя файла; свип каждые 6 часов чистит старше 3 дней (`docs/PRIVACY.md`), удаление
     приложения — сразу.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
@@ -867,7 +867,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
       запроса/ответа (настройки/чаты/выписка/отзыв/URL авторизации банка) в спан **никогда** не попадает. `feedback.get`
       — публичный булев (нет домена/ПДн), не оборачивается; вебхук
       `b24/events` — на очередном спане `b24-events`. Ключи `http.method`/`http.op`/`http.outcome` — в
-      `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 (коллектор + ClickHouse + Grafana как opt-in `--profile telemetry`) — дальше.**
+      `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 — сделан:** приёмная станция (коллектор + ClickHouse + Grafana) живёт отдельным
+    compose в [`telemetry-station/`](telemetry-station/README.md) — одна станция на несколько
+    приложений, они различаются по `service.name`.
     Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту** (DI над `RestCall`,
     тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) → id реквизитов →
