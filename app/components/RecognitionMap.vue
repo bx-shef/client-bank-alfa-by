@@ -9,7 +9,7 @@ import { computed, ref } from 'vue'
 import type { Alphabet, IdentifierKind, RecognizedId } from '~/utils/purposeMatch'
 import { recognizeByMatrices } from '~/utils/purposeMatch'
 import type { RecognitionSettings } from '~/utils/settings'
-import { ALPHABET_ITEMS, CONFIG_FIELD_ROWS, IDENTIFIER_KIND_ITEMS, IDENTIFIER_KIND_LABELS, blankMatrix } from '~/utils/recognitionKinds'
+import { ALPHABET_ITEMS, CONFIG_FIELD_ROWS, IDENTIFIER_KIND_ITEMS, IDENTIFIER_KIND_LABELS, blankMatrix, missingPresets } from '~/utils/recognitionKinds'
 
 const recognition = defineModel<RecognitionSettings>({ required: true })
 defineProps<{ disabled?: boolean }>()
@@ -32,6 +32,18 @@ function rowKey(m: object): number {
 function addMatrix() {
   recognition.value.matrices.push(blankMatrix())
 }
+/** Добавить типовые шаблоны (#421) — только те, которых ещё нет: повторный клик не должен плодить
+ *  одинаковые маски (они дают дубли распознавания). */
+const presetsAdded = ref(0)
+function addPresets() {
+  const rows = missingPresets(recognition.value.matrices)
+  recognition.value.matrices.push(...rows)
+  // Без явного подтверждения клик выглядит так: кнопка пропала, что-то мигнуло выше. Для экранного
+  // диктора не происходит вообще ничего.
+  presetsAdded.value = rows.length
+}
+const presetsLeft = computed(() => missingPresets(recognition.value.matrices).length)
+
 function removeMatrix(index: number) {
   recognition.value.matrices.splice(index, 1)
 }
@@ -154,15 +166,40 @@ const previewIds = computed<RecognizedId[]>(() =>
         </B24Button>
       </li>
     </ul>
-    <B24Button
-      color="air-secondary-accent-1"
-      size="sm"
-      :disabled="disabled"
-      data-testid="matrix-add"
-      @click="addMatrix"
+    <div class="flex flex-wrap items-center gap-2">
+      <B24Button
+        color="air-tertiary-no-accent"
+        size="sm"
+        :disabled="disabled"
+        data-testid="matrix-add"
+        @click="addMatrix"
+      >
+        + Добавить матрицу
+      </B24Button>
+      <!-- Пустая карта = приложение не видит в назначении ни одного номера. Придумать маску с нуля,
+           глядя на пустой список, невозможно — не зная ни синтаксиса, ни того, какие номера бывают. -->
+      <!-- На пустой карте это САМОЕ полезное действие, поэтому оно не тише соседнего «+ Добавить
+           матрицу»: заполнить карту с нуля вручную админ не может, не зная синтаксиса маски. -->
+      <B24Button
+        color="air-secondary-accent-1"
+        size="sm"
+        :disabled="disabled || presetsLeft === 0"
+        data-testid="matrix-presets"
+        @click="addPresets"
+      >
+        {{ presetsLeft > 0 ? `Добавить типовые шаблоны (${presetsLeft})` : 'Типовые шаблоны уже добавлены' }}
+      </B24Button>
+    </div>
+    <p
+      v-if="presetsAdded > 0"
+      role="status"
+      aria-live="polite"
+      class="mt-2 text-xs text-(--ui-color-base-3)"
+      data-testid="matrix-presets-added"
     >
-      + Добавить матрицу
-    </B24Button>
+      Добавлено шаблонов: {{ presetsAdded }}. Проверьте их и сохраните настройки — маски можно
+      отредактировать.
+    </p>
 
     <!-- Config-field map: portal-specific field names / SP entityTypeId. -->
     <div class="mt-5 mb-2 text-sm font-medium">

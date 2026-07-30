@@ -8,7 +8,7 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import type { AllocationDecision } from '../../app/utils/allocation'
-import { buildAllocationErrorMessage } from '../../app/utils/allocationErrorMessage'
+import { buildAllocationErrorMessage, buildUnresolvedMessage } from '../../app/utils/allocationErrorMessage'
 import { CHAT_MESSAGE_METHOD, extractMessageId } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
@@ -29,6 +29,27 @@ export async function notifyAllocationErrorViaRest(
   if (!message) return null
   // URL_PREVIEW=N: the headline carries external (payer-controlled) text — don't let
   // a pasted URL expand into a rich preview card in the operator chat.
+  const resp = await call(CHAT_MESSAGE_METHOD, {
+    DIALOG_ID: dialogId,
+    MESSAGE: message,
+    URL_PREVIEW: 'N'
+  })
+  return extractMessageId(resp)
+}
+
+/**
+ * Сообщение «номер распознан, а цель не найдена» (#421) в чат ошибок. Тот же транспорт и тот же
+ * контракт, что у `notifyAllocationErrorViaRest`: пустой список идентификаторов ⇒ ничего не шлём.
+ */
+export async function notifyUnresolvedViaRest(
+  item: StatementItem,
+  identifiers: readonly string[],
+  dialogId: string,
+  call: RestCall,
+  truncated = false
+): Promise<string | null> {
+  const message = buildUnresolvedMessage(item, identifiers, truncated)
+  if (!message) return null
   const resp = await call(CHAT_MESSAGE_METHOD, {
     DIALOG_ID: dialogId,
     MESSAGE: message,

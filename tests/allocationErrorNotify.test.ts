@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { notifyAllocationErrorViaRest } from '../server/utils/allocationErrorNotify'
+import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../server/utils/allocationErrorNotify'
 import type { AllocationDecision } from '../app/utils/allocation'
 import type { StatementItem } from '../app/types/statement'
 
@@ -51,5 +51,39 @@ describe('notifyAllocationErrorViaRest', () => {
   it('returns null when the API returns no message id', async () => {
     const call = async () => ({ result: 0 }) // falsy id
     expect(await notifyAllocationErrorViaRest(item(), manual, 'chat9', call)).toBeNull()
+  })
+})
+
+describe('notifyUnresolvedViaRest', () => {
+  it('шлёт im.message.add с URL_PREVIEW=N в указанный чат', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push([method, params])
+      return { result: 7 }
+    }
+    expect(await notifyUnresolvedViaRest(item(), ['СЧ-1'], 'chat9', call)).toBe('7')
+    expect(calls[0]![0]).toBe('im.message.add')
+    expect(calls[0]![1]).toMatchObject({ DIALOG_ID: 'chat9', URL_PREVIEW: 'N' })
+    expect(String(calls[0]![1].MESSAGE)).toContain('СЧ-1')
+  })
+
+  it('пустой список ⇒ REST-вызова НЕТ (а не пустое сообщение в чат)', async () => {
+    let called = false
+    const call = async () => {
+      called = true
+      return { result: 1 }
+    }
+    expect(await notifyUnresolvedViaRest(item(), [], 'chat9', call)).toBeNull()
+    expect(called).toBe(false)
+  })
+
+  it('усечение списка проговаривается в тексте', async () => {
+    let message = ''
+    const call = async (_m: string, p: Record<string, unknown>) => {
+      message = String(p.MESSAGE)
+      return { result: 1 }
+    }
+    await notifyUnresolvedViaRest(item(), ['СЧ-1'], 'chat9', call, true)
+    expect(message).toContain('не все распознанные номера')
   })
 })

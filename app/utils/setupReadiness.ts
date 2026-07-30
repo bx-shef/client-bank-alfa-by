@@ -17,7 +17,7 @@ import type { PortalSettings } from '~/utils/settings'
 
 /** One checklist line. `ok` drives the icon; `hint` is what to DO when it isn't ok. */
 export interface ReadinessItem {
-  key: 'bank' | 'chat' | 'smart-process' | 'poll'
+  key: 'bank' | 'chat' | 'error-chat' | 'recognition' | 'smart-process' | 'poll'
   title: string
   ok: boolean
   /** Short state description («2 счёта», «не выбран»). */
@@ -50,6 +50,15 @@ function accountsWord(n: number): string {
   return 'счетов'
 }
 
+/** Склонение «шаблон/шаблона/шаблонов» — строка читается фразой, а не «2 шаблон». */
+function matrixWord(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'шаблон'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'шаблона'
+  return 'шаблонов'
+}
+
 /**
  * Build the readiness checklist. Order is the order an admin must act in: connect a bank (or accept
  * manual upload), pick a chat, provision smart processes, then confirm polling is on. Manual upload
@@ -60,6 +69,8 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
   const spReady = paymentSpEtid(cfg) !== null && distributionSpEtid(cfg) !== null
 
   const chatId = snap.settings.chat?.dialogId ?? ''
+  const errorChatId = snap.settings.errorChat?.dialogId ?? ''
+  const matrixCount = snap.settings.recognition?.matrices?.length ?? 0
 
   const pending = snap.pendingAccounts ?? 0
 
@@ -86,6 +97,30 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
       ok: chatId !== '',
       detail: chatId !== '' ? (snap.settings.chat?.title || 'выбран') : 'не выбран',
       hint: chatId !== '' ? '' : 'Выберите чат в разделе «Уведомления в чат» — туда приложение пишет о новых операциях.'
+    },
+    {
+      // Чат ошибок — отдельная строка, а не деталь чата уведомлений: именно в него уходит всё, что
+      // приложение НЕ смогло разложить само (не опознан плательщик, цель не найдена, неоднозначное
+      // разнесение). Не выбран — эти сообщения не пишутся никуда, и портал молча теряет ровно те
+      // случаи, которые требуют человека.
+      key: 'error-chat',
+      title: 'Чат для ошибок выбран',
+      ok: errorChatId !== '',
+      detail: errorChatId !== '' ? (snap.settings.errorChat?.title || 'выбран') : 'не выбран',
+      hint: errorChatId !== ''
+        ? ''
+        : 'Выберите чат ошибок в разделе «Уведомления в чат». Без него сообщения о неопознанных платежах и неудачном разнесении не приходят никуда.'
+    },
+    {
+      // Без матриц распознавания приложение не видит в назначении платежа НИ ОДНОГО номера, то есть
+      // разнесение по счетам/заказам не работает вовсе — дела пишутся, но ни к чему не привязываются.
+      key: 'recognition',
+      title: 'Карта распознавания заполнена',
+      ok: matrixCount > 0,
+      detail: matrixCount > 0 ? `${matrixCount} ${matrixWord(matrixCount)}` : 'нет шаблонов',
+      hint: matrixCount > 0
+        ? ''
+        : 'Добавьте шаблоны номеров в разделе «Карта распознавания» — по ним приложение находит в назначении платежа номер счёта или заказа. Есть кнопка «Добавить типовые».'
     },
     {
       key: 'smart-process',

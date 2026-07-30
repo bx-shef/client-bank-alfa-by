@@ -143,14 +143,14 @@ describe('resetCounters / deleteMetricsForPortal', () => {
 describe('metricsFromSummary', () => {
   // Distinct value per field so a transposed mapping (e.g. allocated↔distributed) fails.
   const summary = {
-    processed: 10, created: 11, notified: 12, skipped: 13, excluded: 24, unmatched: 14, recognized: 15,
+    processed: 10, created: 11, notified: 12, skipped: 13, excluded: 24, unmatched: 14, unresolved: 25, recognized: 15,
     resolved: 16, allocatable: 17, ambiguous: 18, manual: 19, allocated: 20, distributed: 21,
     credits: 22, debits: 23
   }
 
   it('maps each counter to its OWN summary field (no transposition)', () => {
     expect(metricsFromSummary(summary)).toEqual({
-      processed: 10, created: 11, notified: 12, unmatched: 14, recognized: 15,
+      processed: 10, created: 11, notified: 12, unmatched: 14, unresolved: 25, recognized: 15,
       resolved: 16, allocated: 20, distributed: 21, ambiguous: 18, manual: 19
     })
   })
@@ -160,7 +160,7 @@ describe('metricsFromSummary', () => {
     for (const dropped of ['skipped', 'excluded', 'allocatable', 'credits', 'debits']) {
       expect(out).not.toHaveProperty(dropped)
     }
-    expect(Object.keys(out)).toHaveLength(10)
+    expect(Object.keys(out)).toHaveLength(11)
   })
 
   it('names line up with the METRICS vocab', () => {
