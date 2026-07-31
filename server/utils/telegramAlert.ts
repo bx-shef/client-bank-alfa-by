@@ -87,7 +87,16 @@ export const TELEGRAM_TIMEOUT_MS = 10_000
  * cost of that guarantee is zero and it survives someone later interpolating a portal-supplied
  * string in here.
  */
-export async function sendTelegramAlert(config: TelegramConfig, text: string, fetchFn: AlertFetchFn): Promise<TelegramSendResult> {
+export async function sendTelegramAlert(
+  config: TelegramConfig,
+  text: string,
+  fetchFn: AlertFetchFn,
+  // Overridable so a test can prove the signal ACTUALLY aborts without waiting ten seconds.
+  // `AbortSignal.timeout` runs on a Node-internal timer that fake timers do not intercept, so
+  // asserting `instanceof AbortSignal` was the only alternative — and that passes with a signal
+  // that never fires, i.e. with no timeout at all.
+  timeoutMs: number = TELEGRAM_TIMEOUT_MS
+): Promise<TelegramSendResult> {
   const body = JSON.stringify({
     chat_id: config.chatId,
     text: text.slice(0, MAX_TELEGRAM_TEXT),
@@ -99,7 +108,7 @@ export async function sendTelegramAlert(config: TelegramConfig, text: string, fe
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
-      signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     })
   } catch {
     // Never include the error: it can echo the request URL, and the URL carries the token.

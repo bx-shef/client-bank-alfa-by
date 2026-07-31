@@ -38,11 +38,21 @@ describe('isServiceFailure', () => {
     'insufficient_scope: userfieldconfig',
     'PAYMENT_REQUIRED',
     'invalid_grant',
-    'expired_token',
     'ERROR_WRONG_CONTEXT',
-    'Портал не авторизован'
+    'Портал не авторизован',
+    // Банк: клиент не переподключил согласие — переподключает он, не мы.
+    'resolvePriorAccountId: account BY12 not found in the consent\'s account list',
+    'AccountConsent expired',
+    'согласие клиента истекло'
   ])('excludes the portal-side refusal %s (deterministic per tenant — not our health)', (reason) => {
     expect(isServiceFailure(reason)).toBe(false)
+  })
+
+  it('НЕ исключает голые invalid_token/expired_token — это ещё и лексика БАНКА', () => {
+    // Отказ банковского транспорта по НАШИМ кредам — наша авария на всех клиентах сразу;
+    // отфильтровать её значило бы ослепнуть ровно в самый громкий момент.
+    expect(isServiceFailure('alfa: invalid_token')).toBe(true)
+    expect(isServiceFailure('bank responded expired_token')).toBe(true)
   })
 
   it.each([

@@ -36,18 +36,29 @@ export function episodeKey(a: QueueAlert): EpisodeKey {
  */
 export const MIN_REANNOUNCE_MS = 60 * 60 * 1000
 
-/** What the caller carries between checks. Opaque to it — build it with `emptyDeliveryState()`. */
+/**
+ * What the caller carries between checks. Opaque to it — build it with `emptyDeliveryState()`.
+ *
+ * ⚠ There is deliberately NO «episodes seen last time» field, though the source port had one
+ * (`open`). Keeping it caused a real outage to go silent FOREVER: an episode that tripped, was
+ * announced, cleared, and tripped again inside the flap floor was recorded as «seen» while never
+ * having been announced the second time — and from the next check on, the «ongoing, already told»
+ * short-circuit fired before the floor was ever re-examined. The queue could then lie broken for
+ * days with a green ✅ as the last thing the operator heard.
+ *
+ * `awaitingRecovery` carries that meaning correctly and by construction: an episode is in it iff
+ * its breakage HAS been announced and its recovery has not. «Ongoing and already told» is exactly
+ * membership in that set — no second bookkeeping to fall out of sync.
+ */
 export interface DeliveryState {
-  /** Episodes observed as ongoing on the previous check. */
-  open: EpisodeKey[]
   /** When each episode was last SUCCESSFULLY announced. Bounds the flapping case. */
   announcedAtMs: Record<EpisodeKey, number>
-  /** Episodes announced as broken whose recovery has not been reported yet. */
+  /** Episodes whose breakage was announced and whose recovery has not been reported yet. */
   awaitingRecovery: EpisodeKey[]
 }
 
 export function emptyDeliveryState(): DeliveryState {
-  return { open: [], announcedAtMs: {}, awaitingRecovery: [] }
+  return { announcedAtMs: {}, awaitingRecovery: [] }
 }
 
 export interface DeliveryPlan {
@@ -83,21 +94,23 @@ export function planAlertDelivery(
   previous: DeliveryState,
   nowMs: number
 ): DeliveryPlan {
-  const wasOpen = new Set(previous.open)
   const awaiting = new Set(previous.awaitingRecovery)
   const now = new Map<EpisodeKey, QueueAlert>()
   for (const a of alerts) now.set(episodeKey(a), a)
 
   const opened: QueueAlert[] = []
   for (const [key, alert] of now) {
+    // Already announced and not yet closed → the reader knows; stay quiet however long it lasts.
+    if (awaiting.has(key)) continue
     const last = previous.announcedAtMs[key]
     // Never announced (first time, or the previous send failed) → say it now.
     if (last === undefined) {
       opened.push(alert)
       continue
     }
-    if (wasOpen.has(key)) continue // ongoing and already told
-    if (nowMs - last < MIN_REANNOUNCE_MS) continue // flapping — stay quiet
+    // Announced before and since closed. Re-announce only past the flap floor — but DO
+    // re-announce: this is the branch whose absence let a re-tripped queue lie broken for days.
+    if (nowMs - last < MIN_REANNOUNCE_MS) continue
     opened.push(alert)
   }
 
@@ -117,10 +130,14 @@ export function planAlertDelivery(
     opened,
     recovered,
     state: {
-      open: [...now.keys()],
       announcedAtMs,
-      // Recovery reported → stop awaiting it. Announcements are added by `markAnnounced`.
-      awaitingRecovery: [...awaiting].filter(k => now.has(k))
+      // ⚠ A recovered episode STAYS in `awaitingRecovery` here — it is removed by `markRecovered`,
+      // and only once its ✅ actually went out. Dropping it at planning time (what the source port
+      // did) loses the recovery notice forever on a single 429: the next tick no longer sees the
+      // episode as awaiting, so nothing is ever re-sent, and the channel is left having said
+      // «сломалось» with no closing line. That is the very failure `markAnnounced` exists to prevent
+      // on the breakage side — the two halves must be symmetric.
+      awaitingRecovery: [...awaiting]
     }
   }
 }
@@ -133,11 +150,25 @@ export function planAlertDelivery(
  */
 export function markAnnounced(state: DeliveryState, key: EpisodeKey, nowMs: number): DeliveryState {
   return {
-    open: state.open,
     announcedAtMs: { ...state.announcedAtMs, [key]: nowMs },
     awaitingRecovery: state.awaitingRecovery.includes(key)
       ? state.awaitingRecovery
       : [...state.awaitingRecovery, key]
+  }
+}
+
+/**
+ * Record that an episode's RECOVERY notice actually reached the channel.
+ *
+ * The mirror of `markAnnounced`, and needed for the same reason: until the ✅ is delivered the
+ * episode stays «awaiting», so a failed send is retried on the next check instead of leaving the
+ * channel with an unclosed «сломалось». Without this the recovery half was the one place a single
+ * 429 still lost a message for good.
+ */
+export function markRecovered(state: DeliveryState, key: EpisodeKey): DeliveryState {
+  return {
+    announcedAtMs: state.announcedAtMs,
+    awaitingRecovery: state.awaitingRecovery.filter(k => k !== key)
   }
 }
 

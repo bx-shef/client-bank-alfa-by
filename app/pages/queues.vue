@@ -9,10 +9,11 @@
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.
 // `clear` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
+import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -74,9 +75,36 @@ const RATING_META: Record<RatingState, { label: string, cls: string }> = {
 function fmtDate(ms: number | null): string {
   return ms ? new Date(ms).toLocaleDateString('ru-RU') : '—'
 }
+// Здоровье конвейера (#426). Отдельно от графика: график показывает ГЛУБИНУ (снимок), а он не
+// отличает «навалило работы» от «встало» — вердикт выносит периодическая проверка на крон-инстансе.
+// Пустой список тревог тут НЕ равен «всё хорошо»: смысл зависит от свежести проверки, поэтому вся
+// логика — в чистом `presentQueueHealth`, а страница только рисует.
+const health = shallowRef<QueueHealthView | null>(null)
+const healthFailed = ref(false)
+let healthTimer: ReturnType<typeof setInterval> | undefined
+
+async function loadHealth() {
+  if (isPreview()) return // превью очереди не опрашивает — врать про здоровье тем более не должно
+  try {
+    const payload = await $fetch<QueueHealthPayload>('/api/ops/queues')
+    health.value = presentQueueHealth(payload, Date.now())
+    healthFailed.value = false
+  } catch {
+    // Недоступный эндпоинт — тоже информация: молча оставить прошлый (возможно зелёный) вердикт
+    // значило бы показывать «всё хорошо» при мёртвом бэкенде.
+    healthFailed.value = true
+  }
+}
+
 // Best-effort — the rating card is independent of the queue chart (it drives its own fetch).
 onMounted(() => {
   void rating.load()
+  void loadHealth()
+  // Реже графика: вердикт обновляется раз в 5 минут на сервере, чаще опрашивать нечего.
+  healthTimer = setInterval(() => void loadHealth(), 60_000)
+})
+onBeforeUnmount(() => {
+  if (healthTimer) clearInterval(healthTimer)
 })
 </script>
 
@@ -97,6 +125,38 @@ onMounted(() => {
           разработки без бэкенда). Подробнее — <code>docs/QUEUES.md</code>.
         </p>
       </header>
+
+      <!-- Вердикт проверки здоровья (#426) — над графиком: график показывает глубину, а «встало
+           или разгребается» решает проверка. Тон и текст считает чистый `presentQueueHealth`. -->
+      <B24Alert
+        v-if="healthFailed"
+        color="air-primary-warning"
+        title="Не удалось получить состояние проверки здоровья"
+        description="Эндпоинт /api/ops/queues недоступен. Тревог не видно — это не значит, что их нет."
+        class="mb-4"
+        data-testid="queue-health-failed"
+      />
+      <B24Alert
+        v-else-if="health"
+        :color="HEALTH_TONE_COLOR[health.tone]"
+        :title="health.note"
+        class="mb-4"
+        data-testid="queue-health"
+      >
+        <template
+          v-if="health.alerts.length"
+          #description
+        >
+          <ul class="mt-1 flex list-disc flex-col gap-1 pl-4">
+            <li
+              v-for="(a, i) in health.alerts"
+              :key="`${a.kind}:${a.queue}:${i}`"
+            >
+              {{ a.text }}
+            </li>
+          </ul>
+        </template>
+      </B24Alert>
 
       <QueueMonitor
         :fetcher="fetcher"

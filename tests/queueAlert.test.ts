@@ -80,18 +80,41 @@ describe('evaluateQueueHealth', () => {
 })
 
 describe('per-queue stall budgets (#426 — the domain divergence from the source port)', () => {
-  it('covers every queue in the topology (a new queue cannot silently miss alerting)', () => {
-    for (const name of QUEUE_NAMES) expect(name in STALL_BUDGET_MS).toBe(true)
+  it('EVERY queue has a FINITE budget — «покрыта» не должно означать «невидима»', () => {
+    // Слабая версия этого теста проверяла лишь наличие ключа, а `null` её удовлетворял — то есть
+    // очередь могла «пройти проверку» и при этом быть полностью невидимой для правила простоя.
+    // Ровно так и случилось с `trigger-fire`: правило выключено, а при мёртвом воркере не
+    // срабатывает и правило падений (некому исчерпывать попытки) — очередь выпадала из алертинга.
+    for (const name of QUEUE_NAMES) {
+      const budget = STALL_BUDGET_MS[name]
+      expect(budget, `у очереди ${name} нет бюджета простоя`).not.toBeUndefined()
+      expect(budget, `очередь ${name} освобождена от правила простоя — она станет невидимой при мёртвом воркере`).not.toBeNull()
+      expect(budget!).toBeGreaterThan(0)
+    }
   })
 
-  it('trigger-fire is EXEMPT from the stall rule — its hours-long backoff is the design (#79)', () => {
-    // A trigger job waits in `delayed` for the portal admin to register the CODE. That wait is
-    // somebody else's action, not our outage; alerting on it would page us about working software.
-    expect(stallBudgetMs('trigger-fire')).toBeNull()
-    expect(evaluateQueueHealth([q({ queue: 'trigger-fire', pending: 2, oldestPendingAgeMs: 30 * 60 * MIN })])).toEqual([])
+  it('trigger-fire: 34-часовой backoff молчит, мёртвый воркер — нет (#79)', () => {
+    // Задача ждёт в `delayed`, пока админ портала зарегистрирует CODE: 12 попыток по 60с·2^(n-1)
+    // дают ~34 ч штатного ожидания. Бюджет обязан быть ВЫШЕ этой лестницы, но конечным.
+    const ladderMs = 60_000 * (2 ** 11 - 1)
+    expect(stallBudgetMs('trigger-fire')!).toBeGreaterThan(ladderMs)
+    expect(evaluateQueueHealth([q({ queue: 'trigger-fire', pending: 2, oldestPendingAgeMs: ladderMs })])).toEqual([])
+    const dead = evaluateQueueHealth([q({ queue: 'trigger-fire', pending: 2, oldestPendingAgeMs: 60 * 60 * MIN })])
+    expect(dead.map(a => a.kind)).toEqual(['stalled'])
   })
 
-  it('trigger-fire still reports FAILING — exhausting all 12 attempts is worth knowing', () => {
+  it('feedback-post: бюджет выше собственной лестницы ретраев (8 попыток, ~64 мин)', () => {
+    const ladderMs = 30_000 * (2 ** 7 - 1)
+    expect(stallBudgetMs('feedback-post')!).toBeGreaterThan(ladderMs)
+  })
+
+  it('граница бюджета: ровно на бюджете ещё молчим, на миллисекунду позже — тревога', () => {
+    const budget = stallBudgetMs('crm-sync')!
+    expect(evaluateQueueHealth([q({ queue: 'crm-sync', pending: 1, oldestPendingAgeMs: budget })])).toEqual([])
+    expect(evaluateQueueHealth([q({ queue: 'crm-sync', pending: 1, oldestPendingAgeMs: budget + 1 })]).map(a => a.kind)).toEqual(['stalled'])
+  })
+
+  it('trigger-fire всё равно репортит FAILING — исчерпание 12 попыток стоит знать', () => {
     const out = evaluateQueueHealth([q({ queue: 'trigger-fire', recentFailures: 5 })])
     expect(out.map(a => a.kind)).toEqual(['failing'])
   })

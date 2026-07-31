@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_TELEGRAM_TEXT, resolveTelegramConfig, sendTelegramAlert,
+  MAX_TELEGRAM_TEXT, TELEGRAM_TIMEOUT_MS, resolveTelegramConfig, sendTelegramAlert,
   telegramConfigAttempted, type AlertFetchFn, type TelegramConfig
 } from '../server/utils/telegramAlert'
 
@@ -89,18 +89,35 @@ describe('sendTelegramAlert', () => {
     for (const s of [400, 401, 403]) expect((await sendTelegramAlert(cfg, 'x', fakeFetch(s).fn)).retryable).toBe(false)
   })
 
+  it('ok is FALSE for every non-200 — a lenient `ok` would silently bury alerts', async () => {
+    // The caller marks an episode as «told» on `ok`. If `ok` were e.g. `status < 500`, a 429 would
+    // mark the alert delivered and it would never be retried — the exact loss this design prevents.
+    for (const s of [400, 401, 403, 429, 500, 503]) {
+      expect((await sendTelegramAlert(cfg, 'x', fakeFetch(s).fn)).ok, `status ${s}`).toBe(false)
+    }
+  })
+
   it('the result never carries the token', async () => {
     const r = await sendTelegramAlert(cfg, 'x', fakeFetch(403).fn)
     expect(JSON.stringify(r)).not.toContain(TOKEN)
   })
 
-  it('bounds the call with an abort signal (a hung send must not outlive the incident)', async () => {
+  it('the abort signal actually FIRES (a hung send must not outlive the incident it reports)', async () => {
+    // Asserting `instanceof AbortSignal` alone passes with a controller that never aborts — i.e.
+    // with no timeout at all. Driven at 5 ms through the injectable bound; the production value is
+    // asserted separately below.
     let signal: AbortSignal | undefined
     const fn: AlertFetchFn = async (_u, init) => {
       signal = init.signal
       return { status: 200 }
     }
-    await sendTelegramAlert(cfg, 'x', fn)
-    expect(signal).toBeInstanceOf(AbortSignal)
+    await sendTelegramAlert(cfg, 'x', fn, 5)
+    expect(signal!.aborted).toBe(false)
+    await new Promise(r => setTimeout(r, 30))
+    expect(signal!.aborted).toBe(true)
+  })
+
+  it('the default bound is the documented ten seconds', () => {
+    expect(TELEGRAM_TIMEOUT_MS).toBe(10_000)
   })
 })

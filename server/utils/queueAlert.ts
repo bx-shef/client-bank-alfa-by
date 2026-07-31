@@ -41,11 +41,13 @@ import { pluralRu } from '../../app/utils/importStatus'
  *    a sweep outgrows the tick). At marketplace scale the oldest waiting fetch is legitimately hours
  *    old. A budget still exists — a genuinely dead fetch worker must surface eventually — but it is
  *    sized for the drain rate, not for «должно быть мгновенно».
- *  - **`trigger-fire`** — durable retry with exponential backoff over 12 attempts (#79). A job sits
- *    in `delayed` for many hours ON PURPOSE: it is waiting for the portal admin to register the
- *    trigger CODE, and self-heals when they do. That wait is somebody else's action, not our
- *    outage, so the stall rule does not apply at all. The `failing` rule below still covers it —
- *    exhausting all 12 attempts IS worth knowing about.
+ *  - **`trigger-fire`** — durable retry with exponential backoff over 12 attempts (#79): the delays
+ *    sum to `60s × (2¹¹ − 1)` ≈ **34 hours** of legitimate `delayed` time, because the job is
+ *    waiting for the portal admin to register the trigger CODE and self-heals when they do. That
+ *    wait is somebody else's action, not our outage. An earlier draft exempted the queue entirely
+ *    (`null`), which was wrong in the other direction: with the rule off AND its worker dead,
+ *    nothing would ever exhaust its attempts either, so the queue became invisible to alerting
+ *    altogether. The budget is therefore finite but past the whole backoff ladder.
  *  - **`feedback-post`** — durable retry over 8 attempts (~1 hour of GitHub flakiness by design), so
  *    the budget is двукратный запас поверх этого, not 20 minutes.
  *
@@ -62,7 +64,8 @@ export const STALL_BUDGET_MS: Record<QueueName, number | null> = {
   [Q_FETCH]: 6 * 60 * 60 * 1000,
   [Q_FETCH_PRIOR]: 6 * 60 * 60 * 1000,
   [Q_FEEDBACK]: 2 * 60 * 60 * 1000,
-  [Q_TRIGGER]: null
+  // 48 h > the ~34 h backoff ladder, so normal self-healing never trips it, but a dead worker does.
+  [Q_TRIGGER]: 48 * 60 * 60 * 1000
 }
 
 /** Budget for a queue name that is not in the table — a queue added without touching this file.

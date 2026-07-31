@@ -27,10 +27,10 @@ import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
-import { evaluateQueueHealth } from '../utils/queueAlert'
-import { MAX_FAILED_SCAN, readQueueHealth } from '../utils/queueHealthRead'
+import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
 import { recordQueueHealth } from '../utils/queueAlertState'
-import { alertMessage, emptyDeliveryState, episodeKey, markAnnounced, planAlertDelivery, recoveryMessage, type DeliveryState } from '../utils/queueAlertDeliver'
+import { runQueueHealthTick } from '../utils/queueHealthTick'
+import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
 import type { QueueName } from '../queue/topology'
 
@@ -280,8 +280,12 @@ export default defineNitroPlugin((nitroApp) => {
 
     // ── Queue health check + push alerting (#426) ────────────────────────────────────────────
     // `/queues` and the `[queue-job-failed]` logs both require somebody to already be looking,
-    // which is exactly what an alert is for. This is the first channel that stucks itself.
+    // which is exactly what an alert is for. This is the first channel that knocks by itself.
     // Cron instance only: one voice, not one per scaled worker replica.
+    //
+    // The tick itself lives in `runQueueHealthTick` (server/utils/queueHealthTick.ts) so it is
+    // testable — a plugin is a startup side-effect and nothing in it can be asserted. What stays
+    // here is what belongs to a plugin: the timer, the process-wide state, and the live bindings.
     let healthRunning = false
     // What has already been said. In memory on purpose: it lives in the same process as the check,
     // and after a restart re-announcing an ongoing outage once is the RIGHT behaviour anyway — a
@@ -298,63 +302,45 @@ export default defineNitroPlugin((nitroApp) => {
       ? '[queue] alert channel: telegram'
       : '[queue] alert channel OFF — alerts go to the log and /queues only (set TELEGRAM_ALERT_BOT_TOKEN + TELEGRAM_ALERT_CHAT_ID)')
 
-    // `true` only when the message actually reached the channel.
-    const push = async (text: string): Promise<boolean> => {
-      if (!telegram) return false
-      try {
-        const r = await sendTelegramAlert(telegram, text, globalThis.fetch as unknown as AlertFetchFn)
-        // Status only — the URL carries the bot token, so nothing else from the call is loggable.
-        if (!r.ok) console.error(`[queue-alert] telegram send failed: status=${r.status}`)
-        return r.ok
-      } catch {
-        return false // alerting must never take the cron instance down
-      }
-    }
-
-    // Carries this tick's plan out of the guarded section to the sending step below.
-    let pendingPlan: ReturnType<typeof planAlertDelivery> | null = null
-
     const runHealthCheck = async () => {
-      // Ticks must not overlap: a slow Redis read would otherwise stack them up.
+      // Ticks must not overlap. ⚠ The guard is held across SENDING too, not just the read: a slow
+      // Telegram (10s per message × up to two alerts per queue) can outlast the 5-minute interval,
+      // and a second tick starting mid-send would see episodes not yet marked as announced and
+      // push the very same message again — duplicating precisely during the outage that makes the
+      // channel slow in the first place.
       if (healthRunning) return
       healthRunning = true
       try {
-        await withSpan('cron.queue-health', { 'job.queue': 'cron.queue-health' }, async () => {
-          const alerts = evaluateQueueHealth(await readQueueHealth({
-            pending: async (name: QueueName) => await getQueue(name).getJobs(['waiting', 'active', 'delayed']),
-            failed: async (name: QueueName) => await getQueue(name).getFailed(0, MAX_FAILED_SCAN - 1)
-          }, Date.now()), Date.now())
-          recordQueueHealth(alerts, Date.now())
-          for (const a of alerts) console.warn(`[queue-alert] ${a.text}`)
-          // ONE message per episode, not per check: a real outage outlives the 5-minute interval,
-          // and a channel that repeats itself twelve times an hour stops being read — which defeats
-          // the one occasion it exists for. Recovery is announced too, so «починилось» is
-          // distinguishable from «мы перестали писать».
-          const plan = planAlertDelivery(alerts, delivery, Date.now())
-          delivery = plan.state
-          pendingPlan = plan
-        })
+        const result = await withSpan('cron.queue-health', { 'job.queue': 'cron.queue-health' }, () =>
+          runQueueHealthTick(delivery, {
+            reader: {
+              pending: async (name: QueueName) => await getQueue(name).getJobs(['waiting', 'active', 'delayed']),
+              failed: async (name: QueueName) => await getQueue(name).getFailed(0, MAX_FAILED_SCAN - 1)
+            },
+            now: () => Date.now(),
+            push: async (text: string) => {
+              if (!telegram) return false
+              try {
+                const r = await sendTelegramAlert(telegram, text, globalThis.fetch as unknown as AlertFetchFn)
+                // Status only — the URL carries the bot token, so nothing else is loggable.
+                if (!r.ok) console.error(`[queue-alert] telegram send failed: status=${r.status}`)
+                return r.ok
+              } catch {
+                return false // alerting must never take the cron instance down
+              }
+            },
+            record: recordQueueHealth,
+            warn: (m: string) => console.warn(m),
+            error: (m: string) => console.error(m),
+            queuesUrl
+          }))
+        delivery = result.state
       } catch (err) {
-        // The reader isolates per-queue failures, so only a bug reaches here. Never record a
-        // verdict we did not actually reach — a stale «всё хорошо» is worse than an old timestamp.
+        // runQueueHealthTick swallows its own failures; only a bug in the bindings reaches here.
         console.error('[queue] health check failed:', (err as Error)?.message)
       } finally {
         healthRunning = false
       }
-
-      // Sending happens AFTER the flag is released and outside the guarded section. A slow Telegram
-      // must not stop the health check itself: an outgoing HTTP call hanging is correlated with the
-      // very outage being reported, and a channel that silences its own monitor during an incident
-      // is worse than no channel.
-      const plan = pendingPlan as ReturnType<typeof planAlertDelivery> | null
-      if (!plan) return
-      pendingPlan = null
-      for (const a of plan.opened) {
-        // Marked as told only when it actually went out — otherwise one 429 would bury the alert
-        // forever, since the episode is «ongoing» from the next check onwards.
-        if (await push(alertMessage(a, queuesUrl))) delivery = markAnnounced(delivery, episodeKey(a), Date.now())
-      }
-      for (const key of plan.recovered) await push(recoveryMessage(key))
     }
     healthTimer = setInterval(() => void runHealthCheck(), QUEUE_HEALTH_INTERVAL_MS)
     void runHealthCheck()

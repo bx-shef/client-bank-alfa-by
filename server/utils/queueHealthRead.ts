@@ -24,30 +24,43 @@ export interface RawFailedAt {
  * wrong setting would page us hourly, forever, about something only that client can fix.
  *
  * Same principle as the stall rule refusing to depend on portal size: an alert must describe the
- * health of the service, not the shape of its clients. Our own portal-side vocabulary (checked
- * against `docs/OPERATIONS.md` and `provisionRequest.ts`): `insufficient_scope` (a right the portal
- * never granted — e.g. `userfieldconfig` for SP provisioning), `ACCESS_DENIED`, `PAYMENT_REQUIRED`
- * (expired paid plan), `invalid_grant` / `expired_token` (the app was removed in the portal),
- * `ERROR_WRONG_CONTEXT` (an OAuth-only method reached through a webhook token).
+ * health of the service, not the shape of its clients.
  *
- * ⚠ `invalid_grant` пачкой по ВСЕМ порталам — это уже наша авария (сменили `B24_CLIENT_SECRET`), и
- * этот фильтр её скроет. Ловится не здесь, а по `stalled` на `crm-sync`: работа перестаёт уходить,
- * и очередь встаёт. Отдельный сигнал «умер токен портала» — follow-up в #426.
+ * Two vocabularies, both checked against our own code rather than guessed:
+ *  - **портал** (`provisionRequest.ts`, `docs/OPERATIONS.md`): `insufficient_scope` (a right the
+ *    portal never granted — e.g. `userfieldconfig` for SP provisioning), `ACCESS_DENIED`,
+ *    `PAYMENT_REQUIRED` (expired paid plan), `invalid_grant` (the app was removed in the portal),
+ *    `ERROR_WRONG_CONTEXT` (an OAuth-only method reached through a webhook token);
+ *  - **банк** (`priorFetch.ts`, `bankFetch.ts`): a consent that the client must re-grant, or an
+ *    account missing from the consent's list. `FETCH_JOB_RETENTION` keeps one failure per account
+ *    per hour, so three clients with a lapsed consent would otherwise hold `bank-fetch-prior` in a
+ *    permanent `failing` state — exactly the «alert about the number of misconfigured tenants»
+ *    this filter exists to prevent.
+ *
+ * ⚠ Deliberately NOT here: bare `invalid_token` / `expired_token`. Those words belong to the BANK's
+ * OAuth vocabulary as much as to Bitrix's, and a bank transport whose own credentials are refused
+ * is OUR outage — filtering it out would hide the failure of every poll at once.
+ *
+ * ⚠ Known blind spot (follow-up in #426): `invalid_grant` across ALL portals at once is our
+ * incident, not the tenants' — it means `B24_CLIENT_SECRET` was rotated. This filter hides it, and
+ * — unlike an earlier note claimed — the stall rule does NOT catch it either: those jobs fail fast,
+ * so the queue keeps draining and `oldestPendingAgeMs` stays small. It needs its own signal.
  */
 const PORTAL_SIDE_PATTERNS = [
-  // `[\s_]` — Битрикс отдаёт и `ACCESS_DENIED`, и «Access denied».
+  // Портал. `[\s_]` — Битрикс отдаёт и `ACCESS_DENIED`, и «Access denied».
   /access[\s_]*denied/i,
   /insufficient[\s_]*scope/i,
   /insufficient\s+rights/i,
   /нет\s+прав/i,
   /payment[\s_]*required/i,
   /invalid[\s_]*grant/i,
-  /expired[\s_]*token/i,
-  /invalid[\s_]*token/i,
   /error[\s_]*wrong[\s_]*context/i,
   /портал\s+не\s+авторизован/i,
   /сущность\s+crm\s+не\s+поддерживается/i,
-  /entity\s+.*not\s+supported/i
+  /entity\s+.*not\s+supported/i,
+  // Банк: согласие клиента истекло / счёт не в списке согласия — переподключает клиент, не мы.
+  /consent/i,
+  /согласи[ея]/i
 ]
 
 /**
