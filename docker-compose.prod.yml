@@ -68,6 +68,9 @@ services:
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
       # AES-256-GCM key for portal refresh tokens at rest. Required — no default.
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      # Прежний ключ — только на время ротации (docs/OPERATIONS.md). Без проброса ротация
+      # невозможна: смена ключа осиротила бы все сохранённые refresh-токены.
+      B24_TOKEN_ENC_KEY_OLD: ${B24_TOKEN_ENC_KEY_OLD:-}
       # application_token is delivered INSIDE ONAPPINSTALL (per portal) and stored
       # write-once; later events are verified against that stored value. So leave
       # this EMPTY for multi-tenant — the first install bootstraps trust. It's used
@@ -187,6 +190,9 @@ services:
     environment:
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      # Прежний ключ — только на время ротации (docs/OPERATIONS.md). Без проброса ротация
+      # невозможна: смена ключа осиротила бы все сохранённые refresh-токены.
+      B24_TOKEN_ENC_KEY_OLD: ${B24_TOKEN_ENC_KEY_OLD:-}
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       REDIS_URL: redis://redis:6379

@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
-import { decryptSecret, encryptSecret, loadEncKey } from '../server/utils/secretCrypto'
+import { decryptSecret, encryptSecret, loadEncKey, loadDecryptKeys } from '../server/utils/secretCrypto'
 
 const KEY = Buffer.alloc(32, 7) // deterministic 32-byte test key
 
@@ -47,5 +47,57 @@ describe('loadEncKey', () => {
   })
   it('throws on a wrong-length key', () => {
     expect(() => loadEncKey({ B24_TOKEN_ENC_KEY: 'abcd' } as NodeJS.ProcessEnv)).toThrow(/32 bytes/)
+  })
+})
+
+describe('ротация ключа (B24_TOKEN_ENC_KEY_OLD)', () => {
+  const NEW = Buffer.alloc(32, 7)
+  const OLD = Buffer.alloc(32, 3)
+  const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv
+
+  it('расшифровывает строку, зашифрованную ПРЕЖНИМ ключом', () => {
+    // Без этого смена ключа делала бы нечитаемыми все сохранённые refresh-токены разом —
+    // то есть каждый портал переустанавливает приложение, а банки подключаются заново.
+    const blob = encryptSecret('refresh-token', OLD)
+    const keys = loadDecryptKeys(env({
+      B24_TOKEN_ENC_KEY: NEW.toString('hex'),
+      B24_TOKEN_ENC_KEY_OLD: OLD.toString('hex')
+    }))
+    expect(keys).toHaveLength(2)
+    // Порядок важен: сначала текущий (им зашифровано большинство строк), потом прежний.
+    expect(keys[0]!.equals(NEW)).toBe(true)
+    let decoded: string | undefined
+    for (const k of keys) {
+      try {
+        decoded = decryptSecret(blob, k)
+        break
+      } catch {
+        continue
+      }
+    }
+    expect(decoded).toBe('refresh-token')
+  })
+
+  it('без прежнего ключа — только текущий', () => {
+    expect(loadDecryptKeys(env({ B24_TOKEN_ENC_KEY: NEW.toString('hex') }))).toHaveLength(1)
+  })
+
+  it('совпадающий прежний ключ не дублируется — вторая попытка тем же ключом бессмысленна', () => {
+    expect(loadDecryptKeys(env({
+      B24_TOKEN_ENC_KEY: NEW.toString('hex'),
+      B24_TOKEN_ENC_KEY_OLD: NEW.toString('hex')
+    }))).toHaveLength(1)
+  })
+
+  it('битый прежний ключ падает громко, а не глотается', () => {
+    expect(() => loadDecryptKeys(env({
+      B24_TOKEN_ENC_KEY: NEW.toString('hex'),
+      B24_TOKEN_ENC_KEY_OLD: 'короткий'
+    }))).toThrow(/B24_TOKEN_ENC_KEY_OLD/)
+  })
+
+  it('неверный ключ НЕ даёт мусорного текста — GCM проверяет тег', () => {
+    const blob = encryptSecret('secret', OLD)
+    expect(() => decryptSecret(blob, NEW)).toThrow()
   })
 })

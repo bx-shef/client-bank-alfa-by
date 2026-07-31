@@ -49,6 +49,19 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     }
   }
 
+  // --- Предыдущий ключ шифрования (ротация). Задан ⇒ должен быть валиден и ОТЛИЧАТЬСЯ:
+  // битый старый ключ убивает вторую попытку расшифровки молча, а совпадающий бесполезен и
+  // обычно означает, что ротацию начали, но новый ключ забыли поставить.
+  const oldKey = (env.B24_TOKEN_ENC_KEY_OLD ?? '').trim()
+  if (oldKey) {
+    const n = encKeyBytes(oldKey)
+    if (n !== KEY_BYTES) {
+      errors.push(`B24_TOKEN_ENC_KEY_OLD задан, но должен декодироваться в ${KEY_BYTES} байта (сейчас ${n}) — иначе токены, зашифрованные прежним ключом, не прочитаются`)
+    } else if (oldKey === key) {
+      warnings.push('B24_TOKEN_ENC_KEY_OLD совпадает с B24_TOKEN_ENC_KEY — ротация не начата, переменную можно убрать')
+    }
+  }
+
   // --- Application token: optional (per-portal bootstrap), but a placeholder
   //     value silently breaks every install (real token != placeholder → 403). ---
   const appTok = (env.B24_APPLICATION_TOKEN ?? '').trim()

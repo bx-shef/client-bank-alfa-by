@@ -25,6 +25,7 @@
 | [`B24_EVENTS.md`](B24_EVENTS.md) | события портала (install/uninstall), токены, контракт вебхука |
 | [`API_ROUTES.md`](API_ROUTES.md) | **наши** входящие роуты: авторизация, коды, троттлинг |
 | [`REST_METHODS.md`](REST_METHODS.md) | учёт **исходящих** вызовов REST Bitrix24 — правится при добавлении метода |
+| [`BACKEND_MAP.md`](BACKEND_MAP.md) | реестр серверных модулей разнесения + живые находки по полям REST |
 | [`ALFA_API.md`](ALFA_API.md) · [`PRIOR_API.md`](PRIOR_API.md) | API банков, OAuth, живые находки |
 | [`AUTH.md`](AUTH.md) | вход оператора в служебную зону (`/queues`) |
 | [`APP_RATING.md`](APP_RATING.md) | попап «оцените приложение» в Маркете |
@@ -69,6 +70,7 @@
 
 | Документ | О чём |
 |---|---|
+| [`DEV_SCRIPTS.md`](DEV_SCRIPTS.md) | дев-скрипты: разведка банков, посев портала, живые прогоны (какие **пишут** в портал) |
 | [`WORKLOG.md`](WORKLOG.md) | append-only журнал проходов (историю не переписываем) |
 | [`IDEAS.md`](IDEAS.md) | идеи, к которым возвращаемся по спросу |
 | [`REPORTING_KIT.md`](REPORTING_KIT.md) | вендорный бандл отчётности (свои конвенции, наш CI его не линтует) |
