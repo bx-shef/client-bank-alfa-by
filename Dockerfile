@@ -43,16 +43,21 @@ RUN pnpm generate
 RUN grep -oE '<meta[^>]*property="og:image"[^>]*>' .output/public/index.html \
       | grep -q 'content="https\?://' \
       || { echo 'SEO: og:image не абсолютный — превью ссылки будет пустым'; exit 1; }
+# Список страниц берётся из `.output/service-routes.txt`, который пишет тот же генератор из
+# `app/config/routes.ts` — хардкод здесь был бы третьей копией и молча не проверял бы новую страницу.
 # Атрибуты матчим независимо от порядка: unhead их не сортирует и добавляет свои data-*.
-RUN for p in app import install login queues; do \
+RUN while read -r r; do p="${r#/}"; [ -n "$p" ] || continue; \
       grep -qE '<meta[^>]*name="robots"[^>]*content="[^"]*noindex' ".output/public/$p/index.html" \
         || { echo "SEO: /$p не закрыт noindex — служебная страница уйдёт в индекс"; exit 1; }; \
       grep -q 'og:title' ".output/public/$p/index.html" \
         && { echo "SEO: /$p несёт og:title — мета лендинга протекла на служебную страницу"; exit 1; }; \
-      done; true
+      done < .output/service-routes.txt; true
 # JSON-LD должен быть РАЗБИРАЕМЫМ: битая структурированная разметка не «частично работает», её
 # просто игнорируют — и мы об этом никогда не узнаем. Проверяем разбором, а не грепом.
 RUN node -e "const fs=require('fs');const h=fs.readFileSync('.output/public/index.html','utf8');const m=h.match(/<script type=\"application\/ld\+json\"[^>]*>([\s\S]*?)<\/script>/);if(!m){console.error('SEO: на главной нет JSON-LD');process.exit(1)}const d=JSON.parse(m[1]);if(d['@type']!=='SoftwareApplication'){console.error('SEO: неожиданный @type '+d['@type']);process.exit(1)}"
+# `404.html` — цель `error_page`. Если Nuxt перестанет его эмитить (смена пресета/версии), nginx
+# уйдёт в цикл внутренних редиректов и начнёт отдавать 500 на КАЖДУЮ опечатку в адресе.
+RUN test -s .output/public/404.html || { echo 'SEO: 404.html не сгенерирован — error_page уедет в цикл'; exit 1; }
 RUN test -s .output/public/robots.txt || { echo 'SEO: robots.txt не сгенерирован'; exit 1; }
 RUN grep -q '<loc>' .output/public/sitemap.xml || { echo 'SEO: sitemap.xml пуст'; exit 1; }
 

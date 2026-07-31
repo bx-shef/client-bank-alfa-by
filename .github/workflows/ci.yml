@@ -102,17 +102,7 @@ jobs:
           context: .
           target: ${{ matrix.target }}
           push: false
-          load: ${{ matrix.target == 'runner' }}
-          tags: ci-check:${{ matrix.target }}
           cache-from: type=gha,scope=${{ matrix.target }}
-
-      # `nginx.conf` до сих пор нигде не проверялся: сборка образа его лишь КОПИРУЕТ, а опечатка
-      # всплыла бы только на старте контейнера в проде — то есть сайтом, лежащим после деплоя.
-      # Проверяем итоговый конфиг ВНУТРИ собранного образа: там он уже с подставленными CSP-хешами
-      # (`scripts/csp-hashes.mjs`), то есть ровно тот, который будет обслуживать запросы.
-      - name: Validate nginx config
-        if: matrix.target == 'runner'
-        run: docker run --rm ci-check:runner nginx -t
 
   deploy:
     name: Build & Push to GHCR

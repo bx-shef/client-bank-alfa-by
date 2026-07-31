@@ -6,14 +6,16 @@ import {
 } from '~/utils/seo'
 import { PUBLIC_ROUTES, SERVICE_ROUTES, absoluteUrl } from '~/config/routes'
 import { LANDING_META_DESCRIPTION, LANDING_TITLE } from '~/utils/landing'
+import { PARTNERS_META_DESCRIPTION } from '~/utils/partners'
+import { ldJson } from '~/composables/usePublicPageSeo'
 
 // SEO-ядро (#425). Уроки взяты из соседнего `ai-price-import` (#292/#304) — там почти каждый из
 // этих кейсов сначала уехал в прод, и только потом стал тестом.
 
 describe('siteBaseUrl', () => {
   it('нормализует до origin и срезает путь/хвостовой слеш', () => {
-    expect(siteBaseUrl('https://example.by/')).toBe('https://example.by')
-    expect(siteBaseUrl('https://example.by/some/path?x=1#frag')).toBe('https://example.by')
+    expect(siteBaseUrl(`${LANDING_SITE_URL}/`)).toBe(LANDING_SITE_URL)
+    expect(siteBaseUrl(`${LANDING_SITE_URL}/some/path?x=1#frag`)).toBe(LANDING_SITE_URL)
   })
 
   it('пустое значение → канонический адрес, а НЕ пустая строка', () => {
@@ -30,18 +32,27 @@ describe('siteBaseUrl', () => {
     // закрывал сайт целиком. Здесь значение до robots.txt не доходит вовсе — `new URL` его
     // отвергает (после вырезания перевода строки хост становится невалидным), и мы откатываемся
     // к каноническому. Проверяем не конкретный откат, а ИНВАРИАНТ: в файле нет чужих строк.
-    const evil = 'https://example.by\nDisallow: /'
+    const evil = `${LANDING_SITE_URL}\nDisallow: /`
     expect(siteBaseUrl(evil)).toBe(LANDING_SITE_URL)
     const lines = buildRobotsTxt(evil).split('\n')
     expect(lines.every(l => l === '' || /^(User-agent|Disallow|Sitemap):/.test(l))).toBe(true)
     expect(lines.filter(l => l.startsWith('Disallow:'))).toEqual(['Disallow: /api/'])
   })
 
-  it('ПОДМЕНА ХОСТА: `@` в userinfo не уводит canonical на чужой домен', () => {
-    expect(siteBaseUrl('https://bank-import.bx-shef.by@evil.test')).toBe('https://evil.test')
-    // ⚠ Здесь origin ЧЕСТНО равен evil.test — потому что это и есть настоящий хост такого URL.
-    // Смысл теста: значение не притворяется нашим доменом. Задавать базу должен деплой, а не
-    // пользовательский ввод; для canonical подстраховка — константа при пустом значении.
+  it('ПОДМЕНА ХОСТА: `@` в userinfo НЕ уводит canonical на чужой домен', () => {
+    // Разбора до `.origin` мало: у такого URL origin ЧЕСТНО равен evil.test, и значение прошло бы
+    // насквозь. Поэтому белый список из одного домена — не «нормализация», а сравнение.
+    expect(siteBaseUrl('https://bank-import.bx-shef.by@evil.test')).toBe(LANDING_SITE_URL)
+  })
+
+  it('любой ЧУЖОЙ домен откатывается к каноническому (staging не объявляет себя главным)', () => {
+    // Урок соседа #304: staging, собранный со своим NUXT_PUBLIC_SITE_URL, уводил выдачу с прода.
+    expect(siteBaseUrl('https://staging.example.by')).toBe(LANDING_SITE_URL)
+    expect(siteBaseUrl('http://localhost:3000')).toBe(LANDING_SITE_URL)
+  })
+
+  it('канонический домен принимается в любой записи (регистр, путь, порт по умолчанию)', () => {
+    expect(siteBaseUrl('HTTPS://BANK-IMPORT.BX-SHEF.BY/x?y=1#z')).toBe(LANDING_SITE_URL)
   })
 
   it('не-http схемы отвергаются (javascript:/data: в canonical — очевидная дыра)', () => {
@@ -57,41 +68,41 @@ describe('siteBaseUrl', () => {
 
 describe('canonicalUrl / ogImageUrl', () => {
   it('корень со слешем, остальное без — одна форма на весь сайт', () => {
-    expect(canonicalUrl('/', 'https://example.by')).toBe('https://example.by/')
-    expect(canonicalUrl('/partners', 'https://example.by')).toBe('https://example.by/partners')
+    expect(canonicalUrl('/', LANDING_SITE_URL)).toBe(`${LANDING_SITE_URL}/`)
+    expect(canonicalUrl('/partners', LANDING_SITE_URL)).toBe(`${LANDING_SITE_URL}/partners`)
   })
 
   it('абсолютный путь в аргументе не протаскивает чужой хост', () => {
-    expect(canonicalUrl('//evil.test/x', 'https://example.by')).toBe('https://example.by/')
-    expect(canonicalUrl('https://evil.test', 'https://example.by')).toBe('https://example.by/')
+    expect(canonicalUrl('//evil.test/x', LANDING_SITE_URL)).toBe(`${LANDING_SITE_URL}/`)
+    expect(canonicalUrl('https://evil.test', LANDING_SITE_URL)).toBe(`${LANDING_SITE_URL}/`)
   })
 
   it('og:image ВСЕГДА абсолютный — в этом весь смысл', () => {
     // Дефект-первоисточник: относительный `/og.png` в проде ⇒ превью ссылки пустое.
     for (const base of ['', undefined, null, 'мусор', 'https://example.by/']) {
-      expect(ogImageUrl(base as string | undefined)).toMatch(/^https:\/\/[^/]+\/og\.png$/)
+      expect(ogImageUrl(base as string | undefined)).toBe(`${LANDING_SITE_URL}/og.png`)
     }
   })
 })
 
 describe('buildRobotsTxt', () => {
   it('закрывает /api/ и указывает абсолютный sitemap', () => {
-    const txt = buildRobotsTxt('https://example.by')
+    const txt = buildRobotsTxt(LANDING_SITE_URL)
     expect(txt).toContain('Disallow: /api/')
-    expect(txt).toContain('Sitemap: https://example.by/sitemap.xml')
+    expect(txt).toContain(`Sitemap: ${LANDING_SITE_URL}/sitemap.xml`)
   })
 
   it('НЕ закрывает служебные страницы — они держатся на noindex, и Disallow его отключил бы', () => {
     // Пин решения, а не описание кода: «давайте на всякий случай закроем и их» ломает noindex,
     // потому что краулер не скачает страницу и не увидит мету. Сосед проходил это и откатывал.
     for (const route of SERVICE_ROUTES) {
-      expect(buildRobotsTxt('https://example.by'), route).not.toContain(`Disallow: ${route}`)
+      expect(buildRobotsTxt(LANDING_SITE_URL), route).not.toContain(`Disallow: ${route}`)
     }
     expect(DISALLOWED_PATHS).toEqual(['/api/'])
   })
 
   it('никаких директив кроме User-agent/Disallow/Sitemap', () => {
-    const lines = buildRobotsTxt('https://example.by').split('\n').filter(Boolean)
+    const lines = buildRobotsTxt(LANDING_SITE_URL).split('\n').filter(Boolean)
     expect(lines.every(l => /^(User-agent|Disallow|Sitemap):/.test(l))).toBe(true)
   })
 })
@@ -110,30 +121,30 @@ describe('isCalendarDate', () => {
 
 describe('buildSitemapXml', () => {
   it('перечисляет РОВНО публичные маршруты', () => {
-    const xml = buildSitemapXml('https://example.by')
+    const xml = buildSitemapXml(LANDING_SITE_URL)
     const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1])
-    expect(locs).toEqual(PUBLIC_ROUTES.map(r => absoluteUrl('https://example.by', r)))
+    expect(locs).toEqual(PUBLIC_ROUTES.map(r => absoluteUrl(LANDING_SITE_URL, r)))
   })
 
   it('служебных страниц в карте нет (иначе сами приглашаем их индексировать)', () => {
-    const xml = buildSitemapXml('https://example.by')
+    const xml = buildSitemapXml(LANDING_SITE_URL)
     for (const route of SERVICE_ROUTES) expect(xml, route).not.toContain(`${route}<`)
   })
 
   it('lastmod ставится только для настоящей даты; кривая — ОПУСКАЕТСЯ, а не пишется как есть', () => {
-    expect(buildSitemapXml('https://example.by', '2026-07-31')).toContain('<lastmod>2026-07-31</lastmod>')
-    expect(buildSitemapXml('https://example.by', '2026-13-45')).not.toContain('<lastmod>')
-    expect(buildSitemapXml('https://example.by', '')).not.toContain('<lastmod>')
+    expect(buildSitemapXml(LANDING_SITE_URL, '2026-07-31')).toContain('<lastmod>2026-07-31</lastmod>')
+    expect(buildSitemapXml(LANDING_SITE_URL, '2026-13-45')).not.toContain('<lastmod>')
+    expect(buildSitemapXml(LANDING_SITE_URL, '')).not.toContain('<lastmod>')
   })
 
   it('XML экранируется НА МЕСТЕ ПОДСТАНОВКИ — один сырой & делает документ невалидным целиком', () => {
     expect(xmlEscape('a&b<c>"d\'e')).toBe('a&amp;b&lt;c&gt;&quot;d&apos;e')
     // База с query до `<loc>` не доходит (origin её срезает) — фиксируем оба рубежа.
-    expect(buildSitemapXml('https://example.by/?a=1&b=2')).not.toContain('&b=')
+    expect(buildSitemapXml(`${LANDING_SITE_URL}/?a=1&b=2`)).not.toContain('&b=')
   })
 
   it('документ well-formed: есть XML-декларация, urlset и закрывающий тег', () => {
-    const xml = buildSitemapXml('https://example.by')
+    const xml = buildSitemapXml(LANDING_SITE_URL)
     expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true)
     expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
     expect(xml.trimEnd().endsWith('</urlset>')).toBe(true)
@@ -143,7 +154,7 @@ describe('buildSitemapXml', () => {
 })
 
 describe('crawlerFiles', () => {
-  it.each(['https://example.by\nDisallow: /', 'https://x.by/?a=1&b=2', 'javascript:alert(1)', '', '//evil.test'])(
+  it.each([`${LANDING_SITE_URL}\nDisallow: /`, `${LANDING_SITE_URL}/?a=1&b=2`, 'javascript:alert(1)', '', '//evil.test'])(
     'враждебная база %s не ломает НИ ОДИН из двух файлов', (base) => {
       const { robots, sitemap } = crawlerFiles(base, '2026-07-31')
       // robots: ни одной посторонней директивы, и «закрыт» ровно /api/.
@@ -161,10 +172,15 @@ describe('crawlerFiles', () => {
 })
 
 describe('тексты для выдачи', () => {
-  it('meta-description укладывается в практический предел выдачи', () => {
-    // 265-символьное `LANDING_DESCRIPTION` (текст под hero) обрезался бы на полуслове.
-    expect(LANDING_META_DESCRIPTION.length).toBeLessThanOrEqual(160)
-    expect(LANDING_META_DESCRIPTION.length).toBeGreaterThan(50)
+  it.each([
+    ['главная', LANDING_META_DESCRIPTION],
+    ['партнёры', PARTNERS_META_DESCRIPTION]
+  ])('meta-description (%s) укладывается в практический предел выдачи', (_page, text) => {
+    // Развёрнутые тексты под hero (265 и 180 символов) обрезались бы на полуслове. Проверяем ОБЕ
+    // публичные страницы: главную сократили сразу, а `/partners` осталась с длинным — ровно тот же
+    // дефект уехал бы в выдачу.
+    expect(text.length).toBeLessThanOrEqual(160)
+    expect(text.length).toBeGreaterThan(50)
   })
 
   it('og:site_name — имя издателя, а не заголовок (иначе карточка печатает фразу дважды)', () => {
@@ -174,5 +190,16 @@ describe('тексты для выдачи', () => {
 
   it('канонический адрес — https и без хвостового слеша', () => {
     expect(LANDING_SITE_URL).toMatch(/^https:\/\/[^/]+$/)
+  })
+})
+
+describe('ldJson', () => {
+  it('экранирует `<`, чтобы содержимое не могло закрыть тег <script>', () => {
+    // `JSON.stringify` не трогает ни `<`, ни `/`. Строка `</script>` в любом поле разорвала бы тег,
+    // и всё дальше браузер разобрал бы как разметку. Второй рубеж поверх экранирования unhead.
+    const out = ldJson({ name: 'x</script><img src=x onerror=alert(1)>' })
+    expect(out).not.toContain('</script')
+    expect(out).toContain('\\u003c')
+    expect(JSON.parse(out).name).toBe('x</script><img src=x onerror=alert(1)>') // JSON не испорчен
   })
 })

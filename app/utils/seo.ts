@@ -31,10 +31,20 @@ export const LANDING_SITE_URL = 'https://bank-import.bx-shef.by'
 export const LANDING_PUBLISHER = 'ИП Шевчик И. С.'
 
 /**
- * Нормализовать базовый URL до origin, либо вернуть канонический, если дали мусор.
+ * Базовый URL для canonical / og:image / sitemap — ВСЕГДА канонический домен.
  *
- * Fail-safe именно в сторону канонического: сайт с канонической ссылкой на чужой домен хуже сайта
- * без canonical вообще, а пустая база молча ломает og:image (см. урок 1 в шапке).
+ * Реализовано белым списком, а не «нормализацией до origin», и это осознанное ужесточение после
+ * ревью. Разбор до `.origin` отсекает переводы строк, path и query, но `https://наш.домен@evil.test`
+ * — это ВАЛИДНЫЙ URL, чей origin честно равен `evil.test`: такое значение прошло бы насквозь и увело
+ * canonical, og:image и `Sitemap:` на чужой домен. Документация обещала fail-safe, а код его не
+ * давал — тест это поведение лишь фиксировал.
+ *
+ * Заодно закрывается вторая проблема, которую сосед чинил отдельным заходом (#304): staging,
+ * собранный со своим `NUXT_PUBLIC_SITE_URL`, объявлял КАНОНИЧЕСКИМ себя и уводил выдачу с прода.
+ * Здесь такой сборки не существует: не совпал с каноническим — берём канонический.
+ *
+ * ⚠ Смена домена = правка `LANDING_SITE_URL`. Именно так и задумано: env отвечает за адрес
+ * РАЗВЁРТЫВАНИЯ (обработчик событий Б24, redirect_uri), но не решает, что считать каноническим.
  */
 export function siteBaseUrl(raw?: string | null): string {
   const value = (raw ?? '').trim()
@@ -43,10 +53,9 @@ export function siteBaseUrl(raw?: string | null): string {
     const url = new URL(value)
     // Только http(s): `javascript:`/`data:` в canonical — очевидная дыра, а `new URL` их принимает.
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return LANDING_SITE_URL
-    // ⚠ `.origin` — то самое место, где отсекаются `@evil.test`, query, path и переводы строк:
-    // WHATWG-парсер CR/LF/TAB не отвергает, а вырезает, поэтому защищает именно возврат origin,
-    // а не сам факт успешного разбора.
-    return url.origin
+    // Белый список из одного элемента. Сравниваем origin с origin — так `@`-трюк, порт и регистр
+    // схемы/хоста уже нормализованы парсером и подменить домен нечем.
+    return url.origin === new URL(LANDING_SITE_URL).origin ? url.origin : LANDING_SITE_URL
   } catch {
     return LANDING_SITE_URL
   }

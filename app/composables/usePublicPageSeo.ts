@@ -62,7 +62,12 @@ export function usePublicPageSeo(opts: {
     useHead({
       script: [{
         type: 'application/ld+json',
-        innerHTML: JSON.stringify({
+        // Экранируем `<` сами. Проверено: unhead 2.x и так заменяет `</script` перед вставкой, то
+        // есть это ВТОРОЙ рубеж, а не единственный. Держим его потому, что защита живёт в чужой
+        // зависимости и держится на её реализации: мажорный апгрейд или переход на другой способ
+        // вставки снимут её молча, а цена собственной гарантии — нулевая. `\u003c` — валидный
+        // JSON-эскейп, парсеры schema.org его понимают.
+        innerHTML: ldJson({
           '@context': 'https://schema.org',
           '@type': 'SoftwareApplication',
           'name': LANDING_TITLE,
@@ -80,4 +85,10 @@ export function usePublicPageSeo(opts: {
       }]
     })
   }
+}
+
+/** JSON для `<script type="application/ld+json">`: `<` экранируется, чтобы содержимое не могло
+ *  закрыть тег. Экспортируется ради теста — иначе собственную гарантию нечем зафиксировать. */
+export function ldJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c')
 }
