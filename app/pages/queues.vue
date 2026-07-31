@@ -9,7 +9,7 @@
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.
 // `clear` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
-import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
@@ -23,12 +23,22 @@ useHead({
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 
-// `?preview=1` → client-side generator (no-backend, doesn't poll). Decided at FETCH
-// time from the real browser URL — a prerendered page's `useRoute().query` isn't
-// populated during setup/hydration, and the fetcher only runs client-side
-// (QueueMonitor's onMounted), so `window` is always available here.
+// `?preview=1` → client-side generator (no-backend, doesn't poll).
+//
+// ⚠ Флаг РЕАКТИВНЫЙ и читается из роутера. Обе «очевидные» реализации на статике не работают:
+// на гидратации пререндеренной страницы `window.location.search` ЕЩЁ ПУСТ (проверено — в момент
+// `onMounted` там пусто, а через пару секунд уже `?preview=1`), и `route.query` в этот момент тоже
+// пуст. Разовая проверка при монтировании поэтому всегда давала false. У графика это не всплывало
+// только потому, что `QueueMonitor` опрашивает `fetcher()` по таймеру и рано или поздно попадает
+// в момент, когда запрос уже разобран, — то есть превью «чинилось» само, но не сразу.
+// Родственная ошибка уже ловилась в `InPortalGate` (#414, CLAUDE.md «Встройка в Bitrix24»).
+// Найдено скриншотом: карточка здоровья на статике рендерилась как «эндпоинт недоступен».
+const route = useRoute()
+const preview = computed(() => 'preview' in route.query
+  || (import.meta.client && new URLSearchParams(window.location.search).has('preview')))
+
 function isPreview(): boolean {
-  return import.meta.client && new URLSearchParams(window.location.search).has('preview')
+  return preview.value
 }
 
 /** Chosen source: preview generator with `?preview=1`, else the session-gated
@@ -84,7 +94,20 @@ const healthFailed = ref(false)
 let healthTimer: ReturnType<typeof setInterval> | undefined
 
 async function loadHealth() {
-  if (isPreview()) return // превью очереди не опрашивает — врать про здоровье тем более не должно
+  if (isPreview()) {
+    // Превью фабрикует ВСЮ страницу (счётчики очередей — тоже), поэтому и вердикт синтетический:
+    // иначе карточку нельзя было бы ни увидеть в разработке, ни снять на скриншот. Страница явно
+    // помечена как синтетика — молча пропускать этот блок было бы хуже, чем показать пример.
+    health.value = presentQueueHealth({
+      alerts: [{ kind: 'stalled', queue: 'crm-sync', text: 'очередь «crm-sync» не разгребается: 4 задачи ждут, самая старая — уже 25 мин' }],
+      alertsCheckedAt: Date.now() - 60_000
+    }, Date.now())
+    // ⚠ Обязательно снять флаг ошибки: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому
+    // первый прогон успевает сходить в сеть и упасть, а карточка ошибки в шаблоне идёт первой и
+    // перекрыла бы вердикт. Без этой строки превью-карточка не появлялась вовсе.
+    healthFailed.value = false
+    return
+  }
   try {
     const payload = await $fetch<QueueHealthPayload>('/api/ops/queues')
     health.value = presentQueueHealth(payload, Date.now())
@@ -97,6 +120,10 @@ async function loadHealth() {
 }
 
 // Best-effort — the rating card is independent of the queue chart (it drives its own fetch).
+// Запрос разбирается роутером уже ПОСЛЕ монтирования, поэтому недостаточно спросить один раз:
+// перечитываем вердикт, когда флаг превью наконец становится известен.
+watch(preview, () => void loadHealth())
+
 onMounted(() => {
   void rating.load()
   void loadHealth()
