@@ -7,6 +7,7 @@ import {
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
 } from '../server/queue/cron'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
+import { dedupKey } from '../app/utils/statement'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
@@ -60,6 +61,8 @@ interface FakeOpts {
   triggerFactExists?: boolean
   /** what writeTriggerFact returns (true = a new trigger marker row was created); default true (§9.3 #6). */
   triggerRowCreated?: boolean
+  /** make writeActivity THROW on its first call only, then succeed (C2 double-fire regression). */
+  writeActivityFailFirst?: boolean
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -80,7 +83,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], ledger: [], trigHas: [], trigRec: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -94,11 +97,16 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       return o.myCompany ?? null
     },
     writeActivity: async (it, companyId, memberId, note) => {
+      if (o.writeActivityFailFirst && calls.activityFails.length === 0) {
+        calls.activityFails.push(it.docId)
+        throw new Error('transient configurable.add failure')
+      }
       if (!companyId) return null // no company → no owner → nothing written
       const id = `act-${nextId++}`
       // configurable.add stamps the ORIGINATOR_ID/ORIGIN_ID marker atomically with the
-      // activity — model that by persisting the dedup key here (getActivityId reads it).
-      written.set(`${it.account}|${it.docId}`, id)
+      // activity — model that by persisting the REAL dedup key here (getActivityId reads it).
+      // Must be dedupKey(it), not raw `account|docId` — they diverge for a blank docId (C1).
+      written.set(dedupKey(it), id)
       calls.activity.push([it.docId, companyId, memberId, id])
       calls.activityNote.push([it.docId, companyId, note ?? null]) // #91 reason-block capture
       return id
@@ -1242,6 +1250,32 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // attempted once
     expect(calls.trigRec).toEqual([]) // no SP marker persisted (nothing fired yet)
     expect(calls.trigEnqueue).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // durable retry enqueued
+  })
+
+  it('C2: writeActivity fails → trigger NOT fired; the retry fires it exactly once (no double-fire)', async () => {
+    // The fire is deferred past the dedup-marker write. Without SPs provisioned there is no
+    // durable trigger fact, so firing BEFORE writeActivity meant: transient configurable.add
+    // failure → BullMQ retry → second fire of the client's «деньги пришли» automation.
+    const noSpMatrix: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }] }
+    const { deps, calls } = fakeDeps({
+      recognition: noSpMatrix, resolve: [dealAt('77')], autoDistribute: true,
+      allocation: { triggerCode: 'cbatest_pay' }, writeActivityFailFirst: true
+    })
+    const j = job([item('d1', 'credit', 'оплата Д-55')])
+    await expect(handleCrmSyncJob(j, deps)).rejects.toThrow('transient') // first delivery fails at writeActivity
+    expect(calls.trigApply).toEqual([]) // trigger NOT fired before the marker
+    const r = await handleCrmSyncJob(j, deps) // BullMQ redelivery — writeActivity now succeeds
+    expect(r.created).toBe(1)
+    expect(calls.trigApply).toHaveLength(1) // fired exactly once, on the delivery that landed the marker
+  })
+
+  it('C4: a zero-amount op (parse artifact) drives NO intent resolution/allocation, but the дело is still written', async () => {
+    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
+    const zero = { ...item('d1', 'credit', 'оплата Д-55'), amount: 0 }
+    const r = await handleCrmSyncJob(job([zero]), deps)
+    expect(calls.resolve).toEqual([]) // no lookup → no zero-exact-match, no trigger
+    expect(calls.trigApply).toEqual([])
+    expect(r.created).toBe(1) // the artifact is still visible to a human as an activity
   })
 
   it('autoDistribute ON + triggerCode, applyTrigger "skip" (demo/malformed): NO fact, NO retry enqueued (#79)', async () => {

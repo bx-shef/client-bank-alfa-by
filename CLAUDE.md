@@ -351,7 +351,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `StatementNormalizer` (`raw,ctx → StatementItem[]`) — один выход на все банки (см. REFACTOR_PLAN
     «Единый интерфейс выписки»).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
-  - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
+  - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`; пустой `docId` →
+    хеш-сигнатура контента, не схлопывает операции счёта — #430 C1), фильтр чата,
     `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — **общие хелперы дела**: заголовок (`buildActivityTitle`), деньги/дата
     (`formatMoney`/`formatIsoDate`), TZ-штамп дедлайна (`toPortalDeadline`, UTC+3), тип-владелец
@@ -839,7 +840,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     parser-differential обхода `x.bitrix24.by@evil.com`) и возвращает **чистый** хост либо бросает.
     Прежний сырой `$fetch`-`callRest`/`restUrl`/таймаут/`[rest-timing]`/`B24RestError`/`isExpiredTokenError`
     **удалены** — весь исходящий B24 REST идёт через jssdk-транспорт `b24Sdk.ts` (crm-sync — stored-token
-    `B24OAuth`; UI-фрейм-роуты — `makeFrameRestCall`, тот же SDK за `assertPortalHost`); реактивный ретрай
+    `B24OAuth`; UI-фрейм-роуты — `makeFrameRestCall`; SSRF-гейт `assertPortalHost` живёт в
+    `oauthParamsFromToken` и покрывает **оба** пути — stored-token и frame, #430 S1); реактивный ретрай
     `expired_token` и лимитер — у самого SDK. Фрейм-клиент **hard-reject**-ит рефреш (`setCustomRefreshAuth` →
     `FRAME_TOKEN_REJECTED` `invalid_token`), а не шлёт пустой `refresh_token` на OAuth-сервер (нет refresh у
     фрейм-токена → лишний заведомо-провальный round-trip); in-client ретрай на обоих клиентах отключён (#123, выше),

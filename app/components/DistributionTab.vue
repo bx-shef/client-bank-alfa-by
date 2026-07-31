@@ -52,7 +52,6 @@ onMounted(async () => {
       <B24Alert
         v-if="!enabled"
         color="air-primary"
-        variant="soft"
         description="Распределение показывается внутри портала Bitrix24. Здесь — предпросмотр."
         data-testid="ledger-preview-note"
       />
@@ -64,7 +63,6 @@ onMounted(async () => {
         <B24Alert
           v-if="error"
           color="air-primary-alert"
-          variant="soft"
           :description="error"
           data-testid="ledger-error"
         />
@@ -84,7 +82,6 @@ onMounted(async () => {
       <B24Alert
         v-else-if="loaded && !provisioned"
         color="air-primary"
-        variant="soft"
         description="Смарт-процессы распределения ещё не настроены. Нажмите «Настроить смарт-процессы» выше."
         data-testid="ledger-unprovisioned"
       />

@@ -63,7 +63,6 @@ const chainLine = computed(() => {
   <B24Alert
     :icon="icon"
     :color="meta.color"
-    variant="soft"
     role="status"
     aria-live="polite"
   >

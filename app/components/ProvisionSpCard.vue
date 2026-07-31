@@ -93,7 +93,6 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
       <template v-if="ready">
         <B24Alert
           color="air-primary-success"
-          variant="soft"
           description="Смарт-процессы для учёта распределения платежей настроены. Приложение хранит разнесение оплат в них."
           data-testid="provision-ready"
         />
@@ -119,7 +118,6 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
         <B24Alert
           v-if="!enabled"
           color="air-primary"
-          variant="soft"
           description="Настройка выполняется внутри портала Bitrix24. Здесь — предпросмотр."
           data-testid="provision-preview-note"
         />
@@ -143,7 +141,6 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
         <B24Alert
           v-if="error"
           color="air-primary-alert"
-          variant="soft"
           :description="error"
           data-testid="provision-error"
         />
@@ -155,7 +152,6 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
         <B24Alert
           v-if="!error && message"
           color="air-primary-success"
-          variant="soft"
           :description="message"
           data-testid="provision-message"
         />

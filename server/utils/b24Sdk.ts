@@ -100,9 +100,18 @@ export interface SdkAjaxResult {
 /** Map our stored `PortalToken` to the SDK's `B24OAuthParams`. `nowMs` is passed in
  *  (not read from the clock) so the mapping is pure/testable. Fields we don't persist
  *  are defaulted: `userId` (0 — used only for the SDK's admin-init, not REST calls),
- *  `scope` (from `opts` or empty), `status` (`'L'` local app). `expires` is seconds. */
+ *  `scope` (from `opts` or empty), `status` (`'L'` local app). `expires` is seconds.
+ *
+ *  SSRF (#149): `domain` becomes the SDK's `clientEndpoint` (`https://<host>/rest/`) — the actual
+ *  URL every REST call hits. This is the SINGLE chokepoint where that URL is built, for BOTH the
+ *  stored-token path (`makePortalSdkClient`) and the frame path (`makeFrameRestCall`), so the
+ *  allow-list gate lives here. The stored domain is written from an install event whose
+ *  `member_id`/domain are client-controlled and only later bound; validating at USE-time (where
+ *  the URL is formed) is defense-in-depth that no write path can bypass. `assertPortalHost`
+ *  returns the CLEAN parsed host (no `x.bitrix24.by@evil.com` userinfo swap) and throws on a
+ *  disallowed host. */
 export function oauthParamsFromToken(token: PortalToken, opts: { nowMs: number, scope?: string }): B24OAuthParams {
-  const domain = token.domain.trim()
+  const domain = assertPortalHost(token.domain)
   return {
     applicationToken: token.applicationToken,
     userId: 0,

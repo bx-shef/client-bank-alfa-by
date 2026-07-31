@@ -426,7 +426,6 @@ onBeforeUnmount(() => {
     <B24Alert
       v-if="!enabled"
       color="air-primary-warning"
-      variant="soft"
       title="Очереди выключены"
       description="Не задан REDIS_URL — приём работает синхронным фолбэком, но пайплайн/крон не запущены."
       class="mb-3"
@@ -436,7 +435,6 @@ onBeforeUnmount(() => {
       <B24Alert
         v-if="error"
         color="air-primary-alert"
-        variant="soft"
         :title="error"
         class="mb-3"
       />

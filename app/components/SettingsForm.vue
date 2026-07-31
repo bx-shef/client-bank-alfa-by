@@ -169,7 +169,6 @@ const previewSummary = computed(() => {
   <B24Alert
     v-else-if="blocked"
     color="air-primary-warning"
-    variant="soft"
     title="Настройки доступны только администратору"
     description="Обратитесь к администратору портала Bitrix24 — изменять параметры импорта и уведомлений может только он."
     data-testid="admin-gate"
@@ -195,7 +194,6 @@ const previewSummary = computed(() => {
       <B24Alert
         v-if="!enabled"
         color="air-primary"
-        variant="soft"
         description="Настройки сохраняются внутри портала Bitrix24. Здесь — предпросмотр."
         class="mb-2"
       />
@@ -319,7 +317,6 @@ const previewSummary = computed(() => {
             <B24Alert
               v-if="settings.autoDistribute"
               color="air-primary-warning"
-              variant="soft"
               title="Приложение будет изменять данные в CRM"
               description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
               data-testid="auto-distribute-warning"
@@ -425,7 +422,6 @@ const previewSummary = computed(() => {
       <B24Alert
         v-if="notifyCount === 0"
         color="air-primary-warning"
-        variant="soft"
         description="При текущих правилах в чат ничего не попадёт."
       />
 
@@ -444,7 +440,6 @@ const previewSummary = computed(() => {
           <B24Badge
             :label="row.excluded ? 'не импортируется' : row.notify ? '→ в чат' : 'скрыто в чате'"
             :color="row.excluded ? 'air-primary-alert' : row.notify ? 'air-primary-success' : 'air-secondary'"
-            variant="soft"
             size="sm"
             class="shrink-0"
           />

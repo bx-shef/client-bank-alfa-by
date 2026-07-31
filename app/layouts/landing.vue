@@ -127,6 +127,7 @@ useHead({
         <B24Button
           to="https://github.com/IgorShevchik"
           target="_blank"
+          rel="noopener noreferrer"
           aria-label="GitHub"
           color="air-tertiary-no-accent"
           :icon="GitHubIcon"

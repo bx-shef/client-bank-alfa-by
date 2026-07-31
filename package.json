@@ -87,5 +87,18 @@
   "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2",
+      "brace-expansion@>=5.0.0 <5.0.8": "^5.0.8",
+      "postcss@<8.5.18": "^8.5.18",
+      "tar@>=7.0.0 <7.5.21": "^7.5.21"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-mh99-v99m-4gvg"
+      ]
+    }
   }
 }

@@ -292,16 +292,16 @@ onMounted(runInstall)
 
         <!-- Вердикт (#410): «Готово» больше не означает «всё работает». Недовыданные права раньше
            были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны.
-           Живая область: вердикт появляется асинхронно, и без неё скринридер о нём не сообщит. -->
+           Живая область: вердикт появляется асинхронно, и без неё скринридер о нём не сообщит.
+           role="alert" сам по себе live (assertive) — явный aria-live="polite" ему противоречил
+           и поведение зависело от прочтения браузером (U4, #430). -->
         <div
           class="w-full"
           role="alert"
-          aria-live="polite"
         >
           <B24Alert
             v-if="isUseB24 && !checkingBackend && verdict.level !== 'ok' && !isRunning && !installError"
             :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
-            variant="soft"
             :title="verdict.title"
             class="mt-4 w-full"
             data-testid="install-verdict"
@@ -325,7 +325,6 @@ onMounted(runInstall)
           <B24Alert
             v-else-if="isUseB24 && !checkingBackend && verdict.level === 'ok' && !isRunning && !installError"
             color="air-primary-success"
-            variant="soft"
             :title="verdict.title"
             description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
             class="mt-4 w-full"
@@ -373,7 +372,6 @@ onMounted(runInstall)
                     :key="`g-${s}`"
                     :label="s"
                     color="air-primary-success"
-                    variant="soft"
                     size="sm"
                   />
                   <B24Badge
@@ -381,7 +379,6 @@ onMounted(runInstall)
                     :key="`m-${s}`"
                     :label="`${s} (нет)`"
                     color="air-primary-alert"
-                    variant="soft"
                     size="sm"
                   />
                 </div>

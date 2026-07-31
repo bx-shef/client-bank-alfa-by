@@ -57,7 +57,6 @@ onMounted(async () => {
       <B24Alert
         v-if="!enabled"
         color="air-primary"
-        variant="soft"
         description="Опрос выполняется внутри портала Bitrix24. Здесь — предпросмотр."
         data-testid="poll-preview-note"
       />
@@ -69,7 +68,6 @@ onMounted(async () => {
         <B24Alert
           v-if="error"
           color="air-primary-alert"
-          variant="soft"
           :description="error"
           data-testid="poll-error"
         />
@@ -81,7 +79,6 @@ onMounted(async () => {
         <B24Alert
           v-if="!error && message"
           color="air-primary-success"
-          variant="soft"
           :description="message"
           data-testid="poll-message"
         />

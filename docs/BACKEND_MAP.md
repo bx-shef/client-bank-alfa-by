@@ -186,6 +186,12 @@
 
 ## Статус проводки (#109)
 
+**SSRF-гейт на ОБОИХ путях (#149/#430 S1):** `assertPortalHost` вызывается в `oauthParamsFromToken`
+(`b24Sdk.ts`) — единственной точке, где строится `clientEndpoint` (`https://<host>/rest/`), поэтому
+allowlist-проверка домена покрывает и **stored-token** путь (crm-sync/keep-alive/poll/distribution —
+домен приходит из install-события, т.е. клиентский), и **frame**-путь. До #430 stored-token путь домен
+не проверял: подделанный `ONAPPINSTALL` с `domain=169.254.169.254` давал blind-SSRF из воркера.
+
 **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
 встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента = lever-2** (общий bucket +
 одна загрузка токена на джобу вместо ~6·N на батч) + evict-on-error/TTL, реактивный рефреш у самого SDK. Прежний ручной advisory-locked
