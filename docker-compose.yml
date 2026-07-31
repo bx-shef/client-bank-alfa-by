@@ -38,6 +38,11 @@ services:
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       # Redis DSN for the BullMQ pipeline (events → fetch → parse → crm-sync).
       REDIS_URL: redis://redis:6379
+      # Telegram alert channel (#426). Empty by default ⇒ channel OFF (fail-closed), alerts go to
+      # the log and /queues. Fill these in .env to exercise alerting locally — Redis is required,
+      # since the health check only runs when the queue bus is up. See docs/OPERATIONS.md.
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
       # Operator login for the service zone (empty PASS ⇒ open; see docs/AUTH.md).
       PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
       PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}

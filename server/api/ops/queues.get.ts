@@ -7,6 +7,7 @@
 
 import { SESSION_COOKIE, operatorAllowed, resolveAuthConfig } from '../../utils/session'
 import { readQueueCounts } from '../../queue/stats'
+import { queueAlertState } from '../../utils/queueAlertState'
 
 export default defineEventHandler(async (event) => {
   const cfg = resolveAuthConfig(process.env)
@@ -14,5 +15,12 @@ export default defineEventHandler(async (event) => {
     setResponseStatus(event, 401)
     return { error: 'unauthorized' }
   }
-  return readQueueCounts()
+  // Health verdict alongside the depths (#426). The snapshot alone cannot tell «навалило работы»
+  // from «встало» — that is what the periodic check on this same (cron) instance decides.
+  // `alertsCheckedAt` is returned SEPARATELY and on purpose: before the first check an empty alert
+  // list means «ещё не смотрели», not «всё хорошо», and the screen must not show one as the other.
+  // On a worker-role instance (QUEUE_CRON=0) the check never runs, so it stays null there too —
+  // correct, since nginx routes the operator zone to the primary.
+  const health = queueAlertState()
+  return { ...(await readQueueCounts()), alerts: health.alerts, alertsCheckedAt: health.checkedAtMs }
 })

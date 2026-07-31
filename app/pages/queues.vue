@@ -9,10 +9,11 @@
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.
 // `clear` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
-import { onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
+import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -22,12 +23,22 @@ useHead({
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 
-// `?preview=1` → client-side generator (no-backend, doesn't poll). Decided at FETCH
-// time from the real browser URL — a prerendered page's `useRoute().query` isn't
-// populated during setup/hydration, and the fetcher only runs client-side
-// (QueueMonitor's onMounted), so `window` is always available here.
+// `?preview=1` → client-side generator (no-backend, doesn't poll).
+//
+// ⚠ Флаг РЕАКТИВНЫЙ и читается из роутера. Обе «очевидные» реализации на статике не работают:
+// на гидратации пререндеренной страницы `window.location.search` ЕЩЁ ПУСТ (проверено — в момент
+// `onMounted` там пусто, а через пару секунд уже `?preview=1`), и `route.query` в этот момент тоже
+// пуст. Разовая проверка при монтировании поэтому всегда давала false. У графика это не всплывало
+// только потому, что `QueueMonitor` опрашивает `fetcher()` по таймеру и рано или поздно попадает
+// в момент, когда запрос уже разобран, — то есть превью «чинилось» само, но не сразу.
+// Родственная ошибка уже ловилась в `InPortalGate` (#414, CLAUDE.md «Встройка в Bitrix24»).
+// Найдено скриншотом: карточка здоровья на статике рендерилась как «эндпоинт недоступен».
+const route = useRoute()
+const preview = computed(() => 'preview' in route.query
+  || (import.meta.client && new URLSearchParams(window.location.search).has('preview')))
+
 function isPreview(): boolean {
-  return import.meta.client && new URLSearchParams(window.location.search).has('preview')
+  return preview.value
 }
 
 /** Chosen source: preview generator with `?preview=1`, else the session-gated
@@ -74,9 +85,53 @@ const RATING_META: Record<RatingState, { label: string, cls: string }> = {
 function fmtDate(ms: number | null): string {
   return ms ? new Date(ms).toLocaleDateString('ru-RU') : '—'
 }
+// Здоровье конвейера (#426). Отдельно от графика: график показывает ГЛУБИНУ (снимок), а он не
+// отличает «навалило работы» от «встало» — вердикт выносит периодическая проверка на крон-инстансе.
+// Пустой список тревог тут НЕ равен «всё хорошо»: смысл зависит от свежести проверки, поэтому вся
+// логика — в чистом `presentQueueHealth`, а страница только рисует.
+const health = shallowRef<QueueHealthView | null>(null)
+const healthFailed = ref(false)
+let healthTimer: ReturnType<typeof setInterval> | undefined
+
+async function loadHealth() {
+  if (isPreview()) {
+    // Превью фабрикует ВСЮ страницу (счётчики очередей — тоже), поэтому и вердикт синтетический:
+    // иначе карточку нельзя было бы ни увидеть в разработке, ни снять на скриншот. Страница явно
+    // помечена как синтетика — молча пропускать этот блок было бы хуже, чем показать пример.
+    health.value = presentQueueHealth({
+      alerts: [{ kind: 'stalled', queue: 'crm-sync', text: 'очередь «crm-sync» не разгребается: 4 задачи ждут, самая старая — уже 25 мин' }],
+      alertsCheckedAt: Date.now() - 60_000
+    }, Date.now())
+    // ⚠ Обязательно снять флаг ошибки: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому
+    // первый прогон успевает сходить в сеть и упасть, а карточка ошибки в шаблоне идёт первой и
+    // перекрыла бы вердикт. Без этой строки превью-карточка не появлялась вовсе.
+    healthFailed.value = false
+    return
+  }
+  try {
+    const payload = await $fetch<QueueHealthPayload>('/api/ops/queues')
+    health.value = presentQueueHealth(payload, Date.now())
+    healthFailed.value = false
+  } catch {
+    // Недоступный эндпоинт — тоже информация: молча оставить прошлый (возможно зелёный) вердикт
+    // значило бы показывать «всё хорошо» при мёртвом бэкенде.
+    healthFailed.value = true
+  }
+}
+
 // Best-effort — the rating card is independent of the queue chart (it drives its own fetch).
+// Запрос разбирается роутером уже ПОСЛЕ монтирования, поэтому недостаточно спросить один раз:
+// перечитываем вердикт, когда флаг превью наконец становится известен.
+watch(preview, () => void loadHealth())
+
 onMounted(() => {
   void rating.load()
+  void loadHealth()
+  // Реже графика: вердикт обновляется раз в 5 минут на сервере, чаще опрашивать нечего.
+  healthTimer = setInterval(() => void loadHealth(), 60_000)
+})
+onBeforeUnmount(() => {
+  if (healthTimer) clearInterval(healthTimer)
 })
 </script>
 
@@ -97,6 +152,38 @@ onMounted(() => {
           разработки без бэкенда). Подробнее — <code>docs/QUEUES.md</code>.
         </p>
       </header>
+
+      <!-- Вердикт проверки здоровья (#426) — над графиком: график показывает глубину, а «встало
+           или разгребается» решает проверка. Тон и текст считает чистый `presentQueueHealth`. -->
+      <B24Alert
+        v-if="healthFailed"
+        color="air-primary-warning"
+        title="Не удалось получить состояние проверки здоровья"
+        description="Эндпоинт /api/ops/queues недоступен. Тревог не видно — это не значит, что их нет."
+        class="mb-4"
+        data-testid="queue-health-failed"
+      />
+      <B24Alert
+        v-else-if="health"
+        :color="HEALTH_TONE_COLOR[health.tone]"
+        :title="health.note"
+        class="mb-4"
+        data-testid="queue-health"
+      >
+        <template
+          v-if="health.alerts.length"
+          #description
+        >
+          <ul class="mt-1 flex list-disc flex-col gap-1 pl-4">
+            <li
+              v-for="(a, i) in health.alerts"
+              :key="`${a.kind}:${a.queue}:${i}`"
+            >
+              {{ a.text }}
+            </li>
+          </ul>
+        </template>
+      </B24Alert>
 
       <QueueMonitor
         :fetcher="fetcher"

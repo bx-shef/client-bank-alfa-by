@@ -116,3 +116,33 @@ describe('B24_TOKEN_ENC_KEY_OLD (ротация ключа)', () => {
     expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(false)
   })
 })
+
+describe('Телеграм-канал оповещений (#426)', () => {
+  const GOOD = { B24_TOKEN_ENC_KEY: 'a'.repeat(64), DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv
+  const TOKEN = '1234567890:AAF-abcdefghijklmnopqrstuvwxyz012345'
+  const hasTg = (r: { warnings: string[] }) => r.warnings.some(w => w.includes('Телеграм'))
+
+  it('канал не задан — тишина: невыключенный канал это штатный деплой, а не ошибка', () => {
+    expect(hasTg(checkBackendEnv(GOOD))).toBe(false)
+  })
+
+  it('корректная пара — тишина', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: TOKEN, TELEGRAM_ALERT_CHAT_ID: '-100123' } as NodeJS.ProcessEnv))).toBe(false)
+  })
+
+  it('задан только токен — предупреждение: оператор думает, что за ним следят, а алерты пропадают', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: TOKEN } as NodeJS.ProcessEnv))).toBe(true)
+  })
+
+  it('задан только chat id — предупреждение', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_CHAT_ID: '-100123' } as NodeJS.ProcessEnv))).toBe(true)
+  })
+
+  it('обрезанный токен — предупреждение (опечатка ловится на старте, а не при первой аварии)', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: '123:short', TELEGRAM_ALERT_CHAT_ID: '-100123' } as NodeJS.ProcessEnv))).toBe(true)
+  })
+
+  it('это предупреждение, не ошибка — приложение поднимается и работает как раньше', () => {
+    expect(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: 'oops' } as NodeJS.ProcessEnv).errors).toEqual([])
+  })
+})
