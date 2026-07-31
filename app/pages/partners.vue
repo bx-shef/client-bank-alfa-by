@@ -3,6 +3,7 @@ import ArrowRightLIcon from '@bitrix24/b24icons-vue/outline/ArrowRightLIcon'
 import {
   PARTNERS_TITLE,
   PARTNERS_DESCRIPTION,
+  PARTNERS_META_DESCRIPTION,
   PARTNERS_MODEL,
   PARTNERS_LADDER,
   PARTNERS_SPLIT,
@@ -23,7 +24,7 @@ const { reachGoal } = useMetrikaGoal()
 usePublicPageSeo({
   route: '/partners',
   title: pageTitle(PARTNERS_TITLE),
-  description: PARTNERS_DESCRIPTION
+  description: PARTNERS_META_DESCRIPTION
 })
 
 const ladder = PARTNERS_LADDER

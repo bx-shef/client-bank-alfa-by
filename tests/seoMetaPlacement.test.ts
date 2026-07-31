@@ -13,11 +13,24 @@ import { PUBLIC_ROUTES, PRERENDER_ROUTES, SERVICE_ROUTES } from '~/config/routes
 const root = fileURLToPath(new URL('..', import.meta.url))
 const pagesDir = `${root}app/pages`
 
-/** Файлы страниц → маршруты (у нас плоская структура без вложенных папок и динамических сегментов). */
-function pageRoutes(): { route: string, file: string }[] {
-  return readdirSync(pagesDir)
-    .filter(f => f.endsWith('.vue'))
-    .map(f => ({ route: f === 'index.vue' ? '/' : `/${f.replace(/\.vue$/, '')}`, file: `${pagesDir}/${f}` }))
+/**
+ * Файлы страниц → маршруты. Обход РЕКУРСИВНЫЙ, хотя структура сейчас плоская: у соседа
+ * нерекурсивный вариант ровно так и промахнулся — вложенная страница просто не попадала в
+ * сопоставление, и «третьего не дано» проходило молча на неклассифицированной странице.
+ */
+function pageRoutes(dir = pagesDir, prefix = ''): { route: string, file: string }[] {
+  const out: { route: string, file: string }[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      out.push(...pageRoutes(`${dir}/${entry.name}`, `${prefix}/${entry.name}`))
+      continue
+    }
+    if (!entry.name.endsWith('.vue')) continue
+    const base = entry.name.replace(/\.vue$/, '')
+    const route = base === 'index' ? (prefix || '/') : `${prefix}/${base}`
+    out.push({ route, file: `${dir}/${entry.name}` })
+  }
+  return out
 }
 
 /**
@@ -114,6 +127,28 @@ describe('РЕГРЕСС #425: SEO-мета не возвращается в о�
     const code = codeOnly(readFileSync(`${root}nuxt.config.ts`, 'utf8'))
     expect(code).not.toMatch(/use(Server)?SeoMeta/)
     expect(code).not.toMatch(/og:(title|description|image)/)
+  })
+})
+
+describe('генератор краулерных файлов', () => {
+  it('ходит через crawlerFiles, а не собирает файлы двумя билдерами в обход валидации базы', () => {
+    // Иначе `robots.txt` снова станет инъектируемым, а все остальные тесты останутся зелёными:
+    // они проверяют ядро, а не то, что скрипт им пользуется.
+    const src = readFileSync(`${root}scripts/seo-files.mjs`, 'utf8')
+    expect(src).toContain('crawlerFiles')
+    expect(src).not.toContain('buildRobotsTxt')
+    expect(src).not.toContain('buildSitemapXml')
+  })
+
+  it('НЕ берёт базовый URL из окружения — иначе staging-сборка позовёт в индекс себя', () => {
+    const src = codeOnly(readFileSync(`${root}scripts/seo-files.mjs`, 'utf8'))
+    expect(src).not.toContain('NUXT_PUBLIC_SITE_URL')
+  })
+
+  it('подключён к `pnpm generate` — сгенерированная статика без robots/sitemap бесполезна', () => {
+    const pkg = JSON.parse(readFileSync(`${root}package.json`, 'utf8')) as { scripts: Record<string, string> }
+    expect(pkg.scripts.generate).toContain('seo:files')
+    expect(pkg.scripts['seo:files']).toContain('scripts/seo-files.mjs')
   })
 })
 
