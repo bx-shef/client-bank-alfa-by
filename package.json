@@ -16,7 +16,8 @@
   "scripts": {
     "dev": "nuxt dev",
     "build": "nuxt build",
-    "generate": "nuxt generate",
+    "generate": "nuxt generate && pnpm seo:files",
+    "seo:files": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/lib/alias-loader.mjs scripts/seo-files.mjs",
     "preview": "nuxt preview",
     "lint": "eslint .",
     "test": "vitest run",
