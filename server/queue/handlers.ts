@@ -386,6 +386,13 @@ export async function handleCrmSyncJob(
     // Распознанные, но не нашедшие цели номера (#421) — отправляются ПОСЛЕ записи маркера, как и
     // `errorNotice`: иначе повторная доставка джобы переслала бы сообщение (у чата дедупа нет).
     let unresolvedIds: string[] = []
+    // Trigger candidates to fire (#79 / C2 double-fire): captured here but FIRED only after
+    // `writeActivity` stamps the dedup marker (below). Firing before the marker means a transient
+    // `writeActivity` failure retries the whole job, and — with NO SP-ledger fact to dedup against —
+    // re-reaches the trigger block and fires the payer's «деньги пришли» automation a SECOND time.
+    // Deferring past the marker makes the top-gate `getActivityId` short-circuit the redelivery
+    // before it can re-fire, the same protection `errorNotice`/`unresolvedIds` already rely on.
+    let triggerCandidates: AllocationCandidate[] = []
     let truncatedIntents = false
     // Intent resolution (§4 → #109 lookup, slice 3 — wiring the slice-2 dispatcher into
     // the worker): resolve the recognized identifiers to allocation candidates via the
@@ -398,7 +405,11 @@ export async function handleCrmSyncJob(
     // purpose is payer-controlled, so
     // the number of intents actually sent to REST is capped (MAX_RESOLVED_INTENTS_PER_OP)
     // to bound amplification (#191); the `recognized` metric still reflects all matches.
-    if (companyId && intents.length > 0) {
+    // Zero-amount guard (C4): a non-positive amount is a parse artifact (Deb=Cre=0, or a foreign
+    // -currency line whose `…Q` field was missing so the amount fell to 0) — never real money. Such
+    // an op would EXACT-match a candidate whose own amount is 0 and get auto-allocated/triggered. We
+    // still write the дело below (a human sees the artifact), but drive no allocation off it.
+    if (companyId && intents.length > 0 && item.amount > 0) {
       const toResolve = intents.slice(0, MAX_RESOLVED_INTENTS_PER_OP)
       const isNegativeStage = await getNegativeStage()
       const resolutions = await deps.resolveIntents(toResolve, companyId, job.memberId, isNegativeStage, settings?.recognition?.configFields)
@@ -511,31 +522,9 @@ export async function handleCrmSyncJob(
         // пришли» signal SELF-HEALS with backoff (e.g. once the admin registers the CODE), instead of
         // the prior single-shot loss. 'skip' (demo / malformed CODE) neither fires nor retries. Without
         // Redis (`enqueueTriggerRetry` absent/no-op) it gracefully degrades to the old single-shot.
-        const triggerCode = settings?.allocation?.triggerCode
-        if (autoDistribute && triggerCode) {
-          const seen = new Set<string>()
-          for (const t of candidates) {
-            if (!isTriggerTarget(t.kind)) continue
-            const targetKey = `${t.kind}:${t.id}` // not the op dedupKey — distinct trigger target
-            if (seen.has(targetKey)) continue
-            seen.add(targetKey)
-            const etids = ledgerPaymentRef && ledgerDistributionRef ? { paymentSp: ledgerPaymentRef, distributionSp: ledgerDistributionRef } : null
-            if (etids && deps.hasTriggerFact && await deps.hasTriggerFact(item, t, job.memberId, etids)) continue
-            const outcome = await deps.applyTrigger(item, t, job.memberId, triggerCode)
-            if (outcome === 'retry') {
-              // Durable retry (#79) — best-effort; never fails the batch (a trigger only signals).
-              if (deps.enqueueTriggerRetry) await deps.enqueueTriggerRetry(item, t, job.memberId, triggerCode)
-              continue
-            }
-            if (outcome !== 'fired') continue // 'skip' — demo / malformed CODE
-            // Record the fire durably in the SP-ledger (when provisioned). Absent SP ⇒ no durable
-            // record; count the fire (single-shot semantics guard against re-fire across redeliveries).
-            const recorded = etids && deps.writeTriggerFact ? await deps.writeTriggerFact(item, t, companyId, job.memberId, etids) : true
-            if (recorded) {
-              allocated++
-              distributed++
-            }
-          }
+        // Capture the trigger candidates; the actual fire is deferred past `writeActivity` (C2).
+        if (autoDistribute && settings?.allocation?.triggerCode) {
+          triggerCandidates = candidates
         }
         // Capture (don't send yet) — the notice is posted after writeActivity stamps the marker,
         // so a redelivery is `continue`d at the top gate before it can re-post (see below).
@@ -587,6 +576,37 @@ export async function handleCrmSyncJob(
     }
     if (unresolvedIds.length > 0 && errorChat?.dialogId) {
       await deps.notifyUnresolved(item, unresolvedIds, errorChat.dialogId, job.memberId, truncatedIntents)
+    }
+    // Trigger fire (#79), DEFERRED past the marker write (C2). Now that `writeActivity` has stamped
+    // the B24 dedup marker, any job retry is `continue`d at the top gate before reaching here — so a
+    // no-SP-ledger fire can't double even if a LATER step throws. `companyId` is non-null whenever
+    // `triggerCandidates` is populated (it is only set inside the matched-company block). The SP
+    // `hasTriggerFact`/`writeTriggerFact` still dedup across redeliveries when SPs are provisioned.
+    const triggerCode = settings?.allocation?.triggerCode
+    if (companyId && triggerCode && triggerCandidates.length > 0) {
+      const seen = new Set<string>()
+      for (const t of triggerCandidates) {
+        if (!isTriggerTarget(t.kind)) continue
+        const targetKey = `${t.kind}:${t.id}` // not the op dedupKey — distinct trigger target
+        if (seen.has(targetKey)) continue
+        seen.add(targetKey)
+        const etids = ledgerPaymentRef && ledgerDistributionRef ? { paymentSp: ledgerPaymentRef, distributionSp: ledgerDistributionRef } : null
+        if (etids && deps.hasTriggerFact && await deps.hasTriggerFact(item, t, job.memberId, etids)) continue
+        const outcome = await deps.applyTrigger(item, t, job.memberId, triggerCode)
+        if (outcome === 'retry') {
+          // Durable retry (#79) — best-effort; never fails the batch (a trigger only signals).
+          if (deps.enqueueTriggerRetry) await deps.enqueueTriggerRetry(item, t, job.memberId, triggerCode)
+          continue
+        }
+        if (outcome !== 'fired') continue // 'skip' — demo / malformed CODE
+        // Record the fire durably in the SP-ledger (when provisioned). Absent SP ⇒ no durable
+        // record; count the fire (the marker above guards against re-fire across redeliveries).
+        const recorded = etids && deps.writeTriggerFact ? await deps.writeTriggerFact(item, t, companyId, job.memberId, etids) : true
+        if (recorded) {
+          allocated++
+          distributed++
+        }
+      }
     }
     // Announce only if a chat target is set AND the rules allow this op (direction /
     // excluded account / excluded purpose). Only a MATCHED-CLIENT op is announced in the normal

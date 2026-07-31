@@ -91,13 +91,34 @@ export async function enqueueFetch(job: FetchJob): Promise<boolean> {
   return true
 }
 
+/**
+ * Unstick a deterministic jobId from a FAILED corpse (C3, the 24h deadlock): BullMQ dedups `add`
+ * against ANY retained job with the same id, including one that exhausted its attempts. With
+ * `removeOnFail age 86400` a permanently-failed parse/crm-sync job blocks a RE-UPLOAD of the same
+ * file for a day — the employee has no way to retry (e.g. after the admin fixed the broken token).
+ * Removing only a FAILED job is safe: waiting/active/delayed jobs keep their dedup (that's the
+ * backpressure), and a completed job stays deduped for its retention hour (it succeeded — re-running
+ * is pointless and the B24 marker would skip everything anyway). Best-effort: `remove()` can race
+ * the sweep/eviction — a "job not found" there just means the id is already free.
+ */
+async function unstickFailed(queue: ReturnType<typeof getQueue>, jobId: string): Promise<void> {
+  try {
+    const existing = await queue.getJob(jobId)
+    if (existing && await existing.getState() === 'failed') await existing.remove()
+  } catch {
+    // Lost a race with eviction/sweep — the id is free (or will dedup); either way `add` proceeds.
+  }
+}
+
 export async function enqueueParse(job: ParseJob): Promise<boolean> {
   if (!queueEnabled()) return false
   // The parse payload carries the whole file (base64, up to ~2.7 МБ) — statement content (PII).
   // Bounded age-based retention (STATEMENT_JOB_RETENTION, #245) so it doesn't bloat Redis AND a
-  // FAILED file ages out quickly — otherwise the content-only jobId would make a re-upload of a
-  // previously-failed file a silent no-op (dedup against the retained failed job) instead of re-running.
-  await getQueue(Q_PARSE).add(Q_PARSE, job, { jobId: parseJobId(job), ...STATEMENT_JOB_RETENTION })
+  // FAILED file ages out quickly. Age alone is not enough (C3): eviction is lazy, so a failed job
+  // could still dedup-block a re-upload for up to a day — unstick it explicitly.
+  const queue = getQueue(Q_PARSE)
+  await unstickFailed(queue, parseJobId(job))
+  await queue.add(Q_PARSE, job, { jobId: parseJobId(job), ...STATEMENT_JOB_RETENTION })
   return true
 }
 
@@ -159,7 +180,10 @@ export async function enqueueCrmSync(job: CrmSyncJob): Promise<boolean> {
   // The crm-sync payload carries the normalized StatementItem[] (counterparty/account/amount/
   // purpose) — financial PII. Age-bound its retention (#245) instead of the count-based default,
   // so completed batches of statement data age out of Redis promptly. Dedup is the B24 marker,
-  // not a retained job, so a re-run is safe.
-  await getQueue(Q_CRM).add(Q_CRM, job, { jobId: crmSyncJobId(job), ...STATEMENT_JOB_RETENTION })
+  // not a retained job, so a re-run is safe. A FAILED corpse (attempts exhausted, e.g. on a broken
+  // token) is unstuck first (C3) — otherwise a re-upload of the same file dedup-vanishes for a day.
+  const queue = getQueue(Q_CRM)
+  await unstickFailed(queue, crmSyncJobId(job))
+  await queue.add(Q_CRM, job, { jobId: crmSyncJobId(job), ...STATEMENT_JOB_RETENTION })
   return true
 }

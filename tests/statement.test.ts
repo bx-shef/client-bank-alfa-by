@@ -30,6 +30,19 @@ describe('dedupKey', () => {
   it('combines account and docId', () => {
     expect(dedupKey({ account: 'BY80', docId: '42' })).toBe('BY80|42')
   })
+
+  it('falls back to a content signature when docId is blank (no account-wide collapse)', () => {
+    // Two DIFFERENT payments on the same account with no doc id must not share a key.
+    const a = makeItem({ docId: '', amount: 100, purpose: 'аренда' })
+    const b = makeItem({ docId: '', amount: 250, purpose: 'услуги' })
+    expect(dedupKey(a)).not.toBe(dedupKey(b))
+    expect(dedupKey(a)).not.toBe('BY80ALFA30121122220090270000|') // not the collapsing key
+  })
+
+  it('is idempotent for a re-run of the same blank-docId payment', () => {
+    const item = makeItem({ docId: '', amount: 100 })
+    expect(dedupKey(item)).toBe(dedupKey(makeItem({ docId: '   ', amount: 100 })))
+  })
 })
 
 describe('splitByDirection', () => {

@@ -16,9 +16,27 @@ export function directionFromOperType(operType: string | undefined): OperationDi
 /**
  * Stable idempotency key for one operation: `account|docId`. Used to avoid
  * creating duplicate CRM activities / chat messages for the same payment.
+ *
+ * ⚠ Empty `docId` is NOT collapsed to `account|`. Some providers/formats leave the document id
+ * blank (the normalizers already fall back `DocID → OperationID → Num|DocDate`, but that too can
+ * come out empty). If every blank-docId operation shared the key `account|`, the within-batch
+ * dedup and the B24 marker lookup would both treat them as ONE payment — silently dropping every
+ * operation of that account after the first. So a blank docId falls back to a content signature
+ * (amount, currency, date, direction, purpose, counterparty account) — distinct payments stay
+ * distinct while a re-run of the SAME payment still yields the SAME key (idempotency holds). Two
+ * genuinely identical same-day payments with no doc id still collapse — unavoidable when the bank
+ * gives nothing to tell them apart, and far rarer than the account-wide collapse this prevents.
  */
-export function dedupKey(item: Pick<StatementItem, 'account' | 'docId'>): string {
-  return `${item.account}|${item.docId}`
+export function dedupKey(
+  item: Pick<StatementItem, 'account' | 'docId'>
+    & Partial<Pick<StatementItem, 'amount' | 'currency' | 'acceptDate' | 'direction' | 'purpose' | 'counterparty'>>
+): string {
+  const docId = (item.docId ?? '').trim()
+  if (docId) return `${item.account}|${docId}`
+  const sig = [item.amount, item.currency, item.acceptDate, item.direction, item.purpose, item.counterparty?.account]
+    .map(v => String(v ?? '').trim())
+    .join('¦')
+  return `${item.account}|~sig:${sig}`
 }
 
 /** Split items into incoming (credit) and outgoing (debit) buckets. */
