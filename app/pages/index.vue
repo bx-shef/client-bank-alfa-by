@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import ArrowRightLIcon from '@bitrix24/b24icons-vue/outline/ArrowRightLIcon'
 import {
+  LANDING_TITLE,
+  LANDING_META_DESCRIPTION,
   LANDING_DESCRIPTION,
   LANDING_HERO_NOTE,
   LANDING_PAIN_RESULT,
@@ -16,6 +18,17 @@ import {
 import { B24_BOOKING_URL } from '~/utils/booking'
 
 definePageMeta({ layout: 'landing' })
+
+// SEO лендинга живёт ЗДЕСЬ, а не в корневом `app.vue` (#425): корень применяется и к служебным
+// страницам, и они уносили в выдачу мету главной. Полный набор (canonical, og:url, og:site_name,
+// og:locale, twitter) собирает общий композабл — половину набора легко забыть, что с `/partners`
+// и случилось.
+usePublicPageSeo({
+  route: '/',
+  title: LANDING_TITLE,
+  description: LANDING_META_DESCRIPTION,
+  softwareApplication: true
+})
 
 useCardGlow()
 const { reachGoal } = useMetrikaGoal()

@@ -8,7 +8,14 @@ import { pageTitle } from '~/utils/landing'
 // also usable standalone (parsing is client-side, no portal needed for preview).
 definePageMeta({ layout: 'clear' })
 
-useHead({ title: pageTitle('Загрузка выписки') })
+// Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
+// без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а
+// не `Disallow` в robots.txt: краулер, послушавший `Disallow`, страницу не скачает, не увидит
+// `noindex` и вполне может показать голый URL по внешней ссылке.
+useHead({
+  title: pageTitle('Загрузка выписки'),
+  meta: [{ name: 'robots', content: 'noindex, nofollow' }]
+})
 
 const b24 = useB24()
 onMounted(async () => {

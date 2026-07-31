@@ -27,7 +27,14 @@ const appUrl = isDev && typeof window !== 'undefined'
   : configuredSiteUrl
 const eventHandlerUrl = computed(() => `${appUrl}${B24_EVENT_HANDLER_PATH}`)
 
-useHead({ title: pageTitle('Установка') })
+// Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
+// без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а
+// не `Disallow` в robots.txt: краулер, послушавший `Disallow`, страницу не скачает, не увидит
+// `noindex` и вполне может показать голый URL по внешней ссылке.
+useHead({
+  title: pageTitle('Установка'),
+  meta: [{ name: 'robots', content: 'noindex, nofollow' }]
+})
 
 const progressColor = ref<'air-primary' | 'air-primary-success' | 'air-primary-warning' | 'air-primary-alert'>('air-primary')
 const progressValue = ref<null | number>(null)

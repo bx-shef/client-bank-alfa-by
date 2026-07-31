@@ -5,6 +5,17 @@ export const LANDING_TITLE = 'Импорт выписки клиент-банк�
 export const LANDING_DESCRIPTION
   = 'Выписка белорусских банков (Альфа-Банк Беларусь, Приорбанк) — онлайн из любой страны или файлом — превращается в рабочий процесс в вашем Bitrix24: контрагент, оплата, стадии, уведомления. Настраиваем под ваши регламенты и внедряем в ваш контур: ваш git, ваш сервер.'
 
+/**
+ * Описание ДЛЯ ВЫДАЧИ — короткое (#425).
+ *
+ * Отдельно от `LANDING_DESCRIPTION` намеренно: на странице под hero нужен развёрнутый абзац, а в
+ * `<meta name="description">` практический предел ~150–160 символов, и всё сверх обрезается на
+ * полуслове. Раньше в мету уходил тот же 265-символьный текст — в выдаче он выглядел оборванным.
+ * Длину стережёт тест.
+ */
+export const LANDING_META_DESCRIPTION
+  = 'Выписка Альфа-Банка Беларуси и Приорбанка в Bitrix24: контрагент, оплата, стадии и уведомления — онлайн или файлом.'
+
 /** Small print under the hero CTA. */
 export const LANDING_HERO_NOTE = 'Само приложение — бесплатное, есть в Маркете Bitrix24.'
 
@@ -31,11 +42,11 @@ export function pageTitle(section: string): string {
   return `${section} — ${LANDING_TITLE}`
 }
 
-/** URL for the OG share image: absolute when siteUrl is set (prod), relative
- * `/og.png` otherwise (dev preview). Pure so the branch is unit-testable. */
-export function ogImageUrl(siteUrl: string): string {
-  return `${(siteUrl || '').replace(/\/$/, '')}/og.png`
-}
+// ⚠ `ogImageUrl` переехал в `app/utils/seo.ts` (#425) и изменил поведение. Здесь он возвращал
+// ОТНОСИТЕЛЬНЫЙ `/og.png` при пустом `siteUrl` — «нормально для локального превью», но в проде
+// переменная сборки не доехала, и ссылку месяцами шарили без картинки: скрейперы относительные
+// пути не резолвят. Новая версия абсолютна всегда. Держать здесь одноимённую функцию нельзя ещё и
+// технически: `app/utils/**` авто-импортится в один неймспейс, и два экспорта конфликтуют.
 
 /** Year the project started — left edge of the footer copyright range. */
 export const START_YEAR = 2026

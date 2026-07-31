@@ -102,7 +102,17 @@ jobs:
           context: .
           target: ${{ matrix.target }}
           push: false
+          load: ${{ matrix.target == 'runner' }}
+          tags: ci-check:${{ matrix.target }}
           cache-from: type=gha,scope=${{ matrix.target }}
+
+      # `nginx.conf` до сих пор нигде не проверялся: сборка образа его лишь КОПИРУЕТ, а опечатка
+      # всплыла бы только на старте контейнера в проде — то есть сайтом, лежащим после деплоя.
+      # Проверяем итоговый конфиг ВНУТРИ собранного образа: там он уже с подставленными CSP-хешами
+      # (`scripts/csp-hashes.mjs`), то есть ровно тот, который будет обслуживать запросы.
+      - name: Validate nginx config
+        if: matrix.target == 'runner'
+        run: docker run --rm ci-check:runner nginx -t
 
   deploy:
     name: Build & Push to GHCR
@@ -138,6 +148,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}  # built-in, no extra secret needed
 
+      # Дата КОММИТА для <lastmod> в sitemap.xml (#425). Не `date -u`: стенные часы объявляли бы
+      # «сегодня» на каждый передеплой неизменённого коммита, а поисковики такое обесценивают.
+      - name: Commit date for sitemap lastmod
+        id: builddate
+        run: echo "date=$(git show -s --format=%cs ${{ github.sha }})" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -163,5 +179,6 @@ jobs:
             NUXT_PUBLIC_AUTHOR_URL=${{ vars.NUXT_PUBLIC_AUTHOR_URL }}
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL }}
             NUXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
+            NUXT_PUBLIC_BUILD_DATE=${{ steps.builddate.outputs.date }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}

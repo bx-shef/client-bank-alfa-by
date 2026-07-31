@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
-import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_MARKET_PROMO, LANDING_TITLE, LANDING_DEMO_SAMPLES, copyrightYears, ogImageUrl, pageTitle } from '~/utils/landing'
+import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATORS, LANDING_FORMATS, LANDING_MARKET_URL, LANDING_MARKET_PROMO, LANDING_TITLE, LANDING_DEMO_SAMPLES, copyrightYears, pageTitle } from '~/utils/landing'
 
 describe('LANDING_DEMO_SAMPLES (demo download samples)', () => {
   // Drift guard: every advertised sample must actually exist in public/ (else the
@@ -35,18 +35,6 @@ describe('copyrightYears', () => {
 describe('pageTitle', () => {
   it('appends the app name as a suffix', () => {
     expect(pageTitle('Настройки')).toBe(`Настройки — ${LANDING_TITLE}`)
-  })
-})
-
-describe('ogImageUrl', () => {
-  it('is a relative /og.png when siteUrl is empty (dev)', () => {
-    expect(ogImageUrl('')).toBe('/og.png')
-  })
-  it('builds an absolute URL when siteUrl is set (prod)', () => {
-    expect(ogImageUrl('https://bank-import.bx-shef.by')).toBe('https://bank-import.bx-shef.by/og.png')
-  })
-  it('does not double the slash when siteUrl has a trailing slash', () => {
-    expect(ogImageUrl('https://example.com/')).toBe('https://example.com/og.png')
   })
 })
 
