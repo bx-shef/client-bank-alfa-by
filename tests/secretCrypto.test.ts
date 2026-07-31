@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
-import { describe, expect, it } from 'vitest'
-import { decryptSecret, encryptSecret, loadEncKey } from '../server/utils/secretCrypto'
+import { afterEach, describe, expect, it } from 'vitest'
+import { decryptSecret, encryptSecret, loadEncKey, loadDecryptKeys } from '../server/utils/secretCrypto'
 
 const KEY = Buffer.alloc(32, 7) // deterministic 32-byte test key
 
@@ -47,5 +47,79 @@ describe('loadEncKey', () => {
   })
   it('throws on a wrong-length key', () => {
     expect(() => loadEncKey({ B24_TOKEN_ENC_KEY: 'abcd' } as NodeJS.ProcessEnv)).toThrow(/32 bytes/)
+  })
+})
+
+describe('ротация ключа (B24_TOKEN_ENC_KEY_OLD)', () => {
+  const NEW = Buffer.alloc(32, 7)
+  const OLD = Buffer.alloc(32, 3)
+  const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv
+
+  // Новая ветка живёт ВНУТРИ decryptSecret и срабатывает только БЕЗ явного ключа, поэтому тесты
+  // подменяют process.env — вызов с явным ключом её не проходит вовсе.
+  const saved = { ...process.env }
+  afterEach(() => {
+    process.env = { ...saved }
+  })
+  function withEnv(o: Record<string, string | undefined>) {
+    process.env = { ...saved, ...o } as NodeJS.ProcessEnv
+  }
+
+  it('расшифровывает строку, зашифрованную ПРЕЖНИМ ключом', () => {
+    // Без этого смена ключа делала бы нечитаемыми все сохранённые refresh-токены разом —
+    // то есть каждый портал переустанавливает приложение, а банки подключаются заново.
+    const blob = encryptSecret('refresh-token', OLD)
+    withEnv({ B24_TOKEN_ENC_KEY: NEW.toString('hex'), B24_TOKEN_ENC_KEY_OLD: OLD.toString('hex') })
+    expect(decryptSecret(blob)).toBe('refresh-token')
+  })
+
+  it('строка, зашифрованная ТЕКУЩИМ ключом, читается и при заданном прежнем', () => {
+    const blob = encryptSecret('fresh', NEW)
+    withEnv({ B24_TOKEN_ENC_KEY: NEW.toString('hex'), B24_TOKEN_ENC_KEY_OLD: OLD.toString('hex') })
+    expect(decryptSecret(blob)).toBe('fresh')
+  })
+
+  it('БИТЫЙ прежний ключ не ломает чтение текущим — иначе опечатка кладёт всю авторизацию', () => {
+    // Регрессия: `loadDecryptKeys` бросал ДО попытки расшифровки, поэтому нечитаемыми становились
+    // даже строки, зашифрованные актуальным ключом. Громкость — на envCheck, не на рантайме.
+    const blob = encryptSecret('fresh', NEW)
+    withEnv({ B24_TOKEN_ENC_KEY: NEW.toString('hex'), B24_TOKEN_ENC_KEY_OLD: 'короткий-мусор' })
+    expect(decryptSecret(blob)).toBe('fresh')
+    expect(loadDecryptKeys(env({
+      B24_TOKEN_ENC_KEY: NEW.toString('hex'),
+      B24_TOKEN_ENC_KEY_OLD: 'короткий-мусор'
+    }))).toHaveLength(1)
+  })
+
+  it('не подошёл ни один ключ — ошибка говорит о переборе, а не о последней попытке', () => {
+    const blob = encryptSecret('secret', Buffer.alloc(32, 9))
+    withEnv({ B24_TOKEN_ENC_KEY: NEW.toString('hex'), B24_TOKEN_ENC_KEY_OLD: OLD.toString('hex') })
+    expect(() => decryptSecret(blob)).toThrow(/none of the 2 keys matched/)
+  })
+
+  it('порядок попыток: сначала текущий ключ, потом прежний', () => {
+    const keys = loadDecryptKeys(env({
+      B24_TOKEN_ENC_KEY: NEW.toString('hex'),
+      B24_TOKEN_ENC_KEY_OLD: OLD.toString('hex')
+    }))
+    expect(keys).toHaveLength(2)
+    expect(keys[0]!.equals(NEW)).toBe(true)
+    expect(keys[1]!.equals(OLD)).toBe(true)
+  })
+
+  it('без прежнего ключа — только текущий', () => {
+    expect(loadDecryptKeys(env({ B24_TOKEN_ENC_KEY: NEW.toString('hex') }))).toHaveLength(1)
+  })
+
+  it('совпадающий прежний ключ не дублируется — вторая попытка тем же ключом бессмысленна', () => {
+    expect(loadDecryptKeys(env({
+      B24_TOKEN_ENC_KEY: NEW.toString('hex'),
+      B24_TOKEN_ENC_KEY_OLD: NEW.toString('hex')
+    }))).toHaveLength(1)
+  })
+
+  it('неверный ключ НЕ даёт мусорного текста — GCM проверяет тег', () => {
+    const blob = encryptSecret('secret', OLD)
+    expect(() => decryptSecret(blob, NEW)).toThrow()
   })
 })

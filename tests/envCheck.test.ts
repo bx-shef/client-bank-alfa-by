@@ -89,3 +89,30 @@ describe('checkBackendEnv', () => {
       .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
   })
 })
+
+describe('B24_TOKEN_ENC_KEY_OLD (ротация ключа)', () => {
+  const GOOD = { B24_TOKEN_ENC_KEY: 'a'.repeat(64), DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv
+
+  it('битый прежний ключ — ошибка: расшифровка молча его пропустит, это единственный громкий сигнал', () => {
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: 'a'.repeat(62) } as NodeJS.ProcessEnv)
+    expect(r.errors.some(e => e.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(true)
+  })
+
+  it('совпадающий прежний ключ — предупреждение: ротация не начата', () => {
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: 'a'.repeat(64) } as NodeJS.ProcessEnv)
+    expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(true)
+    expect(r.errors).toEqual([])
+  })
+
+  it('тот же ключ в другой записи (hex vs base64) тоже ловится — сравнение побайтовое', () => {
+    const base64Same = Buffer.from('a'.repeat(64), 'hex').toString('base64')
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: base64Same } as NodeJS.ProcessEnv)
+    expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(true)
+  })
+
+  it('валидный ОТЛИЧНЫЙ прежний ключ — тишина (штатное окно ротации)', () => {
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: 'b'.repeat(64) } as NodeJS.ProcessEnv)
+    expect(r.errors).toEqual([])
+    expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(false)
+  })
+})

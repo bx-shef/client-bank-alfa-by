@@ -12,6 +12,16 @@ import { Buffer } from 'node:buffer'
 
 const KEY_BYTES = 32
 
+/** Whether two env-encoded keys decode to the same bytes (hex vs base64 spelling included). */
+function sameKeyBytes(a: string, b: string): boolean {
+  try {
+    const decode = (v: string) => (/^[0-9a-fA-F]{64}$/.test(v) ? Buffer.from(v, 'hex') : Buffer.from(v, 'base64'))
+    return decode(a).equals(decode(b))
+  } catch {
+    return false
+  }
+}
+
 /** Obvious non-secret placeholders that must never be a live application_token. */
 const PLACEHOLDER_TOKENS = new Set([
   'change_me', 'changeme', 'change-me', 'xxx', 'placeholder', 'todo', 'your-token', 'your_token', 'secret'
@@ -46,6 +56,21 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     const n = encKeyBytes(key)
     if (n !== KEY_BYTES) {
       errors.push(`B24_TOKEN_ENC_KEY должен декодироваться в ${KEY_BYTES} байта (сейчас ${n}). Нужно 64 hex-символа или base64 32 байт: openssl rand -hex 32`)
+    }
+  }
+
+  // --- Previous encryption key (rotation). When set it must be valid AND different: a malformed
+  // one silently kills the second decryption attempt (the runtime skips it with a warning, so this
+  // log line is the only loud signal), and an identical one usually means the rotation was started
+  // but the new key was never put in. Compared BYTE-WISE, not as strings: the same key written as
+  // hex in one variable and base64 in the other is still the same key.
+  const oldKey = (env.B24_TOKEN_ENC_KEY_OLD ?? '').trim()
+  if (oldKey) {
+    const n = encKeyBytes(oldKey)
+    if (n !== KEY_BYTES) {
+      errors.push(`B24_TOKEN_ENC_KEY_OLD задан, но должен декодироваться в ${KEY_BYTES} байта (сейчас ${n}) — иначе токены, зашифрованные прежним ключом, не прочитаются`)
+    } else if (sameKeyBytes(oldKey, key)) {
+      warnings.push('B24_TOKEN_ENC_KEY_OLD совпадает с B24_TOKEN_ENC_KEY — ротация не начата, переменную можно убрать')
     }
   }
 
