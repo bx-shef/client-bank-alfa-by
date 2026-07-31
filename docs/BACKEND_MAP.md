@@ -1,6 +1,6 @@
 # Реестр серверных модулей разнесения оплат
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-07-31
 
 Карта модулей, из которых собран путь «распознали номер в назначении → нашли цель в CRM → решили,
 куда разнести → провели». **Нормативная логика** (что должно происходить и почему) — в
@@ -183,6 +183,9 @@
   настроен** ⇒ его стадии не грузятся (поведение прежнее, СП не отсеивается). `handlers.ts` прокидывает разобранный
   etid в `loadNegativeStagePredicate`; `failOpenEntities` и диагностика расширены на `smartProcess` (участвует в
   fail-open-алерте только когда настроен). DI, тесты (`tests/negativeStages.test.ts`).
+
+## Статус проводки (#109)
+
 **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
 встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента = lever-2** (общий bucket +
 одна загрузка токена на джобу вместо ~6·N на батч) + evict-on-error/TTL, реактивный рефреш у самого SDK. Прежний ручной advisory-locked
@@ -193,7 +196,7 @@
 `negativeStages` фанит пер-воронковые `crm.status.list` **одним батчем на тип сущности** (`RestBatch` на том же
 мемоизированном клиенте, halt-on-error, чанкинг 50). Пул оплат раз-на-op **и пагинация списка сделок** уже сделаны;
 осталось: `crm.item.payment.list` не батчится (`ERROR_BATCH_METHOD_NOT_ALLOWED`) — пул оплат остаётся N+1; дизайн —
-`docs/QUEUES.md` «REST-бюджет проводки платежей». **`order-number`-матчинг — сделан** (по order-префиксу
+[`QUEUES.md`](QUEUES.md) «REST-бюджет проводки платежей». **`order-number`-матчинг — сделан** (по order-префиксу
 `accountNumber` оплаты `<заказ>/<seq>`, `filterByOrderNumber`, live-confirmed #172); **`payment-id`-матчинг — сделан**
 (по собственному id оплаты в company-пуле, `filterByPaymentId`, IDOR-safe, live-confirmed #172); **`order-id`-матчинг — сделан**
 (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул, `saleLookup.findOrderPaymentIds`+`filterByPaymentIds`,
@@ -216,10 +219,15 @@ kind+id (within-run) + **маркер dist-СП** (`hasTriggerFact`/`writeTrigge
 глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`,
 best-effort) — **сделана; регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire` на
 `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и
-смарт-процессе; детали — `docs/PROCESSING.md` §2). Реакция правила автоматизации на `CODE` — за админом (наш код
+смарт-процессе; детали — [`PROCESSING.md`](PROCESSING.md) §2). Реакция правила автоматизации на `CODE` — за админом (наш код
 доставляет сигнал). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
 Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
 известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
 по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
 **диспетчер intent→кандидаты** (слайс 2: `intentResolver.ts`), **резолюция намерения в кандидаты в `crm-sync`**
 (слайс 3: `resolveIntents`/`onResolved`, log/count) — **готовы**.
+
+---
+
+Навигация: [указатель документов](README.md) · нормативная логика — [`PROCESSING.md`](PROCESSING.md) ·
+очереди и REST-бюджет — [`QUEUES.md`](QUEUES.md).

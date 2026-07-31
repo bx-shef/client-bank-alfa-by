@@ -1,6 +1,6 @@
 # Дев-скрипты: разведка, посев, живые прогоны
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-07-31
 
 Скрипты из `package.json`, которые **не** входят в сборку и нужны для работы с живыми API банков и
 тестовым порталом Bitrix24. Вынесены из `CLAUDE.md`, где занимали 130 строк справочника и мешали
@@ -24,12 +24,13 @@
 | `pnpm mutate:test` | мутация разнесения (оплата/стадия) | dry-run по умолчанию; `--apply` **пишет** |
 | `pnpm activity:test` | запись настраиваемого дела | dry-run; `--apply` **пишет** |
 | `pnpm trigger:test` | регистрация триггера автоматизации | dry-run; `--apply` **пишет** |
-| `pnpm sdk:test` / `sdk:oauth` / `sdk:crm:test` | смоуки транспорта B24 (вебхук и OAuth) | чтение; `--force-refresh` **ротирует** refresh-токен |
+| `pnpm sdk:test` / `sdk:oauth` / `sdk:crm:test` | смоуки транспорта B24 (вебхук и OAuth) | чтение; ротируют refresh: `sdk:crm:test --force-refresh`, `sdk:oauth --refresh` |
+| `scripts/extract-oauth-from-docker.sh` | вытащить OAuth-грант портала из backend-контейнера | ⚠ **ротирует refresh ЖИВОГО портала безусловно**, самим фактом запуска — только на ТЕСТОВОМ сервере; на проде портал придётся переустанавливать |
 | `pnpm seed:b24` | посев тестовых данных портала (`--list`, `--purge`) | **пишет** в тестовый портал |
 | `pnpm seed:companies` | посев компаний (мои/клиенты/подрядчики) | **пишет** в тестовый портал |
 | `pnpm make:statement` | генерация тестовой выписки под засеянные данные | создаёт файл локально |
-| `pnpm loadtest:queue` | нагрузочный прогон очередей (`LOAD_ALFA`, `LOAD_PRIOR`) | нужен Redis; грузит очереди |
-| `pnpm feedback:retention` | чистка старых отзывов (`FEEDBACK_RETENTION_DAYS`) | **удаляет** issue в приватном репо |
+| `pnpm loadtest:queue` | нагрузочный прогон очередей (`LOAD_ALFA`, `LOAD_PRIOR`) | ⚠ работает в **своём** Redis (`REDIS_PORT`, дефолт 6399) и делает `obliterate` своих очередей — **не запускать против дев/боевого Redis приложения** |
+| `pnpm feedback:retention` | ретенция отзывов: вырезает блок выписки из **закрытых** issue (`FEEDBACK_RETENTION_DAYS`, дефолт 30) | dry-run; `--apply` **редактирует** тела issue (не удаляет их), триаж-метаданные остаются |
 
 ## Подробности
 
@@ -161,3 +162,7 @@
   `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
   `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser` — URL-гейт
   `openBrowser` покрыт тестом `tests/cliOpenBrowser.test.ts`, #45).
+
+---
+
+Навигация: [указатель документов](README.md) · банки — [`ALFA_API.md`](ALFA_API.md), [`PRIOR_API.md`](PRIOR_API.md).

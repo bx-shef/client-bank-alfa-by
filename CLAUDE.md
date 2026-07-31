@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-07-31
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -892,7 +892,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     поля к дефолту, не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по
     DoS-капам `purposeMatch`; **`autoDistribute` — только литерал `true` включает** (любое иное → OFF, fail-safe:
     битый блоб не вооружит мутацию портала)). `recognition` предназначен для `recognizeByMatrices` (§4) — сама проводка (матрицы/
-    алфавит из настроек → распознавание) делается на этапе `crm-sync` (см. «Осталось» выше).
+    алфавит из настроек → распознавание) описана в [`docs/BACKEND_MAP.md`](docs/BACKEND_MAP.md).
     Поиск чатов для пикера — `server/utils/chatSearch.ts` (чистое ядро над `RestCall`: `im.search.chat.list`
     для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
     `nextOffset`-курсор) + роут `server/api/chat-search.get.ts` (фрейм-токен). UI-пикер — `AsyncSearchSelect`

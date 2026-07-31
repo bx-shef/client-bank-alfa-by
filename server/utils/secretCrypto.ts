@@ -4,13 +4,13 @@
 // Used by the token store so refresh tokens are not persisted in plaintext
 // (legacy stored them as plain files — see docs/B24_EVENTS.md).
 //
-// РОТАЦИЯ КЛЮЧА. Расшифровка принимает ВТОРОЙ, предыдущий ключ — `B24_TOKEN_ENC_KEY_OLD`.
-// Без него ротация была невозможна физически: смена `B24_TOKEN_ENC_KEY` мгновенно делает
-// нечитаемыми ВСЕ сохранённые refresh-токены, то есть каждый портал должен переустановить
-// приложение, а владелец — заново подключить банки. При этом сбой тихий: `envCheck` проверяет
-// только длину ключа, поэтому подмена выглядит успешным деплоем, а обнаруживается на первом
-// рефреше. Шифруем всегда ОСНОВНЫМ ключом, поэтому строки перешифровываются сами по мере
-// обновления токенов. Процедура и сроки — docs/OPERATIONS.md «Ротация секретов».
+// KEY ROTATION. Decryption accepts a SECOND, previous key — `B24_TOKEN_ENC_KEY_OLD`. Without it
+// rotation was physically impossible: swapping `B24_TOKEN_ENC_KEY` instantly makes EVERY stored
+// refresh token unreadable, i.e. every portal must reinstall the app and the owner must reconnect
+// the banks. The failure is silent, too — `envCheck` only validates the length, so the swap looks
+// like a successful deploy and surfaces on the first refresh. Encryption always uses the CURRENT
+// key, so rows re-encrypt themselves as tokens refresh. Procedure and timing (the window is ~180
+// days, not a month) — docs/OPERATIONS.md «Ротация секретов».
 
 import { Buffer } from 'node:buffer'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
@@ -36,22 +36,63 @@ export function loadEncKey(env: NodeJS.ProcessEnv = process.env): Buffer {
   return decodeKey(raw, 'B24_TOKEN_ENC_KEY')
 }
 
+/** Once per process, so a broken previous key doesn't warn on every single row. */
+let warnedBadOldKey = false
+
 /**
- * Ключи для РАСШИФРОВКИ, в порядке попыток: сначала текущий, затем предыдущий
- * (`B24_TOKEN_ENC_KEY_OLD`), если он задан. Пустой/совпадающий со свежим старый ключ
- * игнорируется — вторая попытка тем же ключом бессмысленна.
+ * Keys to try when DECRYPTING, in order: the current one, then the previous
+ * (`B24_TOKEN_ENC_KEY_OLD`) when set. An empty or identical previous key is dropped — retrying
+ * with the same key is pointless.
+ *
+ * ⚠ A malformed previous key does NOT break decryption: it is skipped with a warning. Fail-closed
+ * here would be strictly worse — a typo in an OPTIONAL variable would make even the rows encrypted
+ * with the CURRENT key unreadable, taking down portal and bank authorization entirely. The loud
+ * part is `envCheck` (an error in the boot log).
  */
 export function loadDecryptKeys(env: NodeJS.ProcessEnv = process.env): Buffer[] {
   const primary = loadEncKey(env)
   const old = env.B24_TOKEN_ENC_KEY_OLD?.trim()
   if (!old) return [primary]
-  const previous = decodeKey(old, 'B24_TOKEN_ENC_KEY_OLD')
+  let previous: Buffer
+  try {
+    previous = decodeKey(old, 'B24_TOKEN_ENC_KEY_OLD')
+  } catch (e) {
+    if (!warnedBadOldKey) {
+      warnedBadOldKey = true
+      console.warn(`[enc-key] B24_TOKEN_ENC_KEY_OLD ignored — ${(e as Error)?.message}. Rows encrypted with the previous key will not decrypt; the current key still works.`)
+    }
+    return [primary]
+  }
   return previous.equals(primary) ? [primary] : [primary, previous]
+}
+
+/** Parsed-key cache: `decryptSecret` runs per token row, and re-reading env + hex-decoding on every
+ *  call is pointless. Keyed by the raw env values, so changing a variable (process restart or a
+ *  test stub) invalidates it. */
+let keyCache: { envKey: string, envOld: string, keys: Buffer[] } | null = null
+
+function cachedDecryptKeys(env: NodeJS.ProcessEnv): Buffer[] {
+  const envKey = env.B24_TOKEN_ENC_KEY ?? ''
+  const envOld = env.B24_TOKEN_ENC_KEY_OLD ?? ''
+  if (keyCache && keyCache.envKey === envKey && keyCache.envOld === envOld) return keyCache.keys
+  const keys = loadDecryptKeys(env)
+  keyCache = { envKey, envOld, keys }
+  return keys
+}
+
+/** Logged once per process: a row still sitting on the previous key means the rotation window must
+ *  stay open. Silence over a full day is the owner's signal that `B24_TOKEN_ENC_KEY_OLD` can go.
+ *  No blob, no member id — this is a state signal, not an audit record. */
+let warnedPreviousKeyHit = false
+function notePreviousKeyHit(): void {
+  if (warnedPreviousKeyHit) return
+  warnedPreviousKeyHit = true
+  console.warn('[enc-key] decrypted with the PREVIOUS key — rotation still in progress, keep B24_TOKEN_ENC_KEY_OLD')
 }
 
 /** Encrypt a UTF-8 secret. Returns `iv:tag:ciphertext` (base64 parts). A fresh
  * random IV per call means the same plaintext never yields the same blob.
- * Шифруем ВСЕГДА текущим ключом — так строки постепенно уезжают со старого. */
+ * Always encrypts with the CURRENT key — that is what moves rows off the previous one. */
 export function encryptSecret(plaintext: string, key: Buffer = loadEncKey()): string {
   const iv = randomBytes(IV_BYTES)
   const cipher = createCipheriv(ALGO, key, iv)
@@ -64,9 +105,12 @@ export function encryptSecret(plaintext: string, key: Buffer = loadEncKey()): st
  * Decrypt a blob produced by `encryptSecret`. Throws on a malformed blob or a
  * failed auth tag (tampering / wrong key) — never returns garbage plaintext.
  *
- * Без явного `key` пробует по очереди текущий и предыдущий ключи (см. `loadDecryptKeys`).
- * Подбор безопасен: GCM проверяет тег аутентификации, поэтому неверный ключ даёт ошибку,
- * а не «расшифрованный» мусор.
+ * Without an explicit `key` it tries the current and previous keys in turn (see `loadDecryptKeys`).
+ * Trying keys is safe: GCM verifies the auth tag, so a wrong key raises instead of returning
+ * plausible garbage.
+ *
+ * A hit on the PREVIOUS key is logged once per process: that log line is how the owner knows the
+ * rotation is not finished yet (docs/OPERATIONS.md tells them to wait for it to stop appearing).
  */
 export function decryptSecret(blob: string, key?: Buffer): string {
   const parts = blob.split(':')
@@ -76,16 +120,23 @@ export function decryptSecret(blob: string, key?: Buffer): string {
   const tag = Buffer.from(tagB64, 'base64')
   const data = Buffer.from(dataB64, 'base64')
 
-  const keys = key ? [key] : loadDecryptKeys()
-  let lastError: unknown
-  for (const candidate of keys) {
+  const keys = key ? [key] : cachedDecryptKeys(process.env)
+  for (const [i, candidate] of keys.entries()) {
     try {
       const decipher = createDecipheriv(ALGO, candidate, iv)
       decipher.setAuthTag(tag)
-      return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')
-    } catch (e) {
-      lastError = e
+      const plain = Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')
+      if (i > 0) notePreviousKeyHit()
+      return plain
+    } catch {
+      continue
     }
   }
-  throw lastError instanceof Error ? lastError : new Error('decryptSecret: unable to decrypt')
+  // NOT the last attempt's error: that would be the PREVIOUS key's «unable to authenticate data»,
+  // which hides the fact that several keys were tried at all.
+  throw new Error(
+    keys.length > 1
+      ? `decryptSecret: none of the ${keys.length} keys matched (B24_TOKEN_ENC_KEY / _OLD)`
+      : 'decryptSecret: wrong key or corrupted data'
+  )
 }
