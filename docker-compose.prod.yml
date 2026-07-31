@@ -156,6 +156,12 @@ services:
       TOMBSTONE_TTL_DAYS: ${TOMBSTONE_TTL_DAYS:-}
       TOKEN_KEEPALIVE_HOURS: ${TOKEN_KEEPALIVE_HOURS:-}
       QUEUE_FETCH_SATURATION_THRESHOLD: ${QUEUE_FETCH_SATURATION_THRESHOLD:-}
+      # Telegram alert channel (#426, docs/OPERATIONS.md). ONLY here, not on `worker`: the queue
+      # health check runs on the cron instance (QUEUE_CRON=1), so one voice speaks for the whole
+      # pipeline. Passing them to a scaled `worker` would give N copies of every alert.
+      # Fail-closed without the pair — alerts then stay in the log and on /queues.
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
       # Telemetry (docs/OBSERVABILITY.md): no endpoint ⇒ the OTel bootstrap is a no-op.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}

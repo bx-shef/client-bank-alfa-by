@@ -27,9 +27,19 @@ import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
+import { evaluateQueueHealth } from '../utils/queueAlert'
+import { MAX_FAILED_SCAN, readQueueHealth } from '../utils/queueHealthRead'
+import { recordQueueHealth } from '../utils/queueAlertState'
+import { alertMessage, emptyDeliveryState, episodeKey, markAnnounced, planAlertDelivery, recoveryMessage, type DeliveryState } from '../utils/queueAlertDeliver'
+import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
+import type { QueueName } from '../queue/topology'
 
 /** Сколько дней храним итоги ручных загрузок (#417) — переживает вкладку, но не неделю. */
 const IMPORT_BATCH_TTL_DAYS = 3
+
+/** How often the queue health check reads the pipeline (#426). Also the resolution of every alert:
+ *  a breakage is noticed at most this late, and a recovery announced at most this late. */
+const QUEUE_HEALTH_INTERVAL_MS = 5 * 60 * 1000
 
 export default defineNitroPlugin((nitroApp) => {
   if (!queueEnabled()) return
@@ -62,6 +72,7 @@ export default defineNitroPlugin((nitroApp) => {
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined
   let sweepTimer: ReturnType<typeof setInterval> | undefined
   let batchSweepTimer: ReturnType<typeof setInterval> | undefined
+  let healthTimer: ReturnType<typeof setInterval> | undefined
   // Cron runs on exactly ONE instance (QUEUE_CRON=1) — two schedulers would enqueue
   // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
   // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
@@ -266,6 +277,88 @@ export default defineNitroPlugin((nitroApp) => {
       void runSweep() // once at boot
       console.info('[queue] statement + tombstone retention sweep scheduled (every %d min; tombstone TTL %d d, #245/#77)', sweepMs / 60_000, tombstoneDays)
     }
+
+    // ── Queue health check + push alerting (#426) ────────────────────────────────────────────
+    // `/queues` and the `[queue-job-failed]` logs both require somebody to already be looking,
+    // which is exactly what an alert is for. This is the first channel that stucks itself.
+    // Cron instance only: one voice, not one per scaled worker replica.
+    let healthRunning = false
+    // What has already been said. In memory on purpose: it lives in the same process as the check,
+    // and after a restart re-announcing an ongoing outage once is the RIGHT behaviour anyway — a
+    // backend that keeps restarting is itself worth knowing about.
+    let delivery: DeliveryState = emptyDeliveryState()
+    // Resolved once: the channel is env-driven, and an unset one is a normal deployment.
+    // Null → alerts stay in the log and on /queues, exactly as before.
+    const telegram = resolveTelegramConfig(process.env)
+    const queuesUrl = (() => {
+      const base = String(process.env.NUXT_PUBLIC_SITE_URL ?? '').trim().replace(/\/+$/, '')
+      return /^https:\/\//i.test(base) ? `${base}/queues` : null
+    })()
+    console.info(telegram
+      ? '[queue] alert channel: telegram'
+      : '[queue] alert channel OFF — alerts go to the log and /queues only (set TELEGRAM_ALERT_BOT_TOKEN + TELEGRAM_ALERT_CHAT_ID)')
+
+    // `true` only when the message actually reached the channel.
+    const push = async (text: string): Promise<boolean> => {
+      if (!telegram) return false
+      try {
+        const r = await sendTelegramAlert(telegram, text, globalThis.fetch as unknown as AlertFetchFn)
+        // Status only — the URL carries the bot token, so nothing else from the call is loggable.
+        if (!r.ok) console.error(`[queue-alert] telegram send failed: status=${r.status}`)
+        return r.ok
+      } catch {
+        return false // alerting must never take the cron instance down
+      }
+    }
+
+    // Carries this tick's plan out of the guarded section to the sending step below.
+    let pendingPlan: ReturnType<typeof planAlertDelivery> | null = null
+
+    const runHealthCheck = async () => {
+      // Ticks must not overlap: a slow Redis read would otherwise stack them up.
+      if (healthRunning) return
+      healthRunning = true
+      try {
+        await withSpan('cron.queue-health', { 'job.queue': 'cron.queue-health' }, async () => {
+          const alerts = evaluateQueueHealth(await readQueueHealth({
+            pending: async (name: QueueName) => await getQueue(name).getJobs(['waiting', 'active', 'delayed']),
+            failed: async (name: QueueName) => await getQueue(name).getFailed(0, MAX_FAILED_SCAN - 1)
+          }, Date.now()), Date.now())
+          recordQueueHealth(alerts, Date.now())
+          for (const a of alerts) console.warn(`[queue-alert] ${a.text}`)
+          // ONE message per episode, not per check: a real outage outlives the 5-minute interval,
+          // and a channel that repeats itself twelve times an hour stops being read — which defeats
+          // the one occasion it exists for. Recovery is announced too, so «починилось» is
+          // distinguishable from «мы перестали писать».
+          const plan = planAlertDelivery(alerts, delivery, Date.now())
+          delivery = plan.state
+          pendingPlan = plan
+        })
+      } catch (err) {
+        // The reader isolates per-queue failures, so only a bug reaches here. Never record a
+        // verdict we did not actually reach — a stale «всё хорошо» is worse than an old timestamp.
+        console.error('[queue] health check failed:', (err as Error)?.message)
+      } finally {
+        healthRunning = false
+      }
+
+      // Sending happens AFTER the flag is released and outside the guarded section. A slow Telegram
+      // must not stop the health check itself: an outgoing HTTP call hanging is correlated with the
+      // very outage being reported, and a channel that silences its own monitor during an incident
+      // is worse than no channel.
+      const plan = pendingPlan as ReturnType<typeof planAlertDelivery> | null
+      if (!plan) return
+      pendingPlan = null
+      for (const a of plan.opened) {
+        // Marked as told only when it actually went out — otherwise one 429 would bury the alert
+        // forever, since the episode is «ongoing» from the next check onwards.
+        if (await push(alertMessage(a, queuesUrl))) delivery = markAnnounced(delivery, episodeKey(a), Date.now())
+      }
+      for (const key of plan.recovered) await push(recoveryMessage(key))
+    }
+    healthTimer = setInterval(() => void runHealthCheck(), QUEUE_HEALTH_INTERVAL_MS)
+    void runHealthCheck()
+    console.info('[queue] health check scheduled (every %d min, #426)', QUEUE_HEALTH_INTERVAL_MS / 60_000)
   } else {
     console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
   }
@@ -282,6 +375,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (keepAliveTimer) clearInterval(keepAliveTimer)
     if (sweepTimer) clearInterval(sweepTimer)
     if (batchSweepTimer) clearInterval(batchSweepTimer)
+    if (healthTimer) clearInterval(healthTimer)
     await Promise.all(workers.map(w => w.close()))
     await closeQueues()
   })
