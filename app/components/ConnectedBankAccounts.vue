@@ -83,7 +83,6 @@ defineExpose({ reload: load })
       <B24Alert
         v-if="error"
         color="air-primary-alert"
-        variant="soft"
         :description="error"
         data-testid="accounts-error"
       />

@@ -107,7 +107,12 @@ const hasItems = computed(() => props.items.length > 0)
              #fbfbfb на белой карточке (#fff), то есть контраст ~1.02:1, наведение фактически не
              видно. Сам b24ui по этой же причине переопределяет hover строк таблицы на #f6f8f9
              (см. `.nuxt/b24ui/table.ts`) — берём то же значение, чтобы не расходиться с ним. -->
-        <div class="-mx-2 flex cursor-pointer items-center gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-(--ui-color-bg-content-secondary) light:hover:bg-[#f6f8f9]">
+        <!-- ⚠ Именно <button>, не <div>: CollapsibleTrigger рендерится as-child, то есть кликер —
+             сам этот элемент. Div не фокусируется — строка не раскрывалась с клавиатуры (U2, #430). -->
+        <button
+          type="button"
+          class="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-(--ui-color-bg-content-secondary) light:hover:bg-[#f6f8f9]"
+        >
           <span
             class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--ui-color-design-tinted-na-bg)"
             :class="row.tint"
@@ -132,7 +137,7 @@ const hasItems = computed(() => props.items.length > 0)
           >
             {{ row.amount }}
           </span>
-        </div>
+        </button>
 
         <template #content>
           <B24DescriptionList

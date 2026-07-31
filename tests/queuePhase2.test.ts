@@ -7,6 +7,7 @@ import {
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
 } from '../server/queue/cron'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
+import { dedupKey } from '../app/utils/statement'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
@@ -103,8 +104,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       if (!companyId) return null // no company → no owner → nothing written
       const id = `act-${nextId++}`
       // configurable.add stamps the ORIGINATOR_ID/ORIGIN_ID marker atomically with the
-      // activity — model that by persisting the dedup key here (getActivityId reads it).
-      written.set(`${it.account}|${it.docId}`, id)
+      // activity — model that by persisting the REAL dedup key here (getActivityId reads it).
+      // Must be dedupKey(it), not raw `account|docId` — they diverge for a blank docId (C1).
+      written.set(dedupKey(it), id)
       calls.activity.push([it.docId, companyId, memberId, id])
       calls.activityNote.push([it.docId, companyId, note ?? null]) // #91 reason-block capture
       return id

@@ -133,7 +133,6 @@ onMounted(async () => {
         <B24Alert
           v-if="isAdmin"
           color="air-primary-warning"
-          variant="soft"
           title="Приложение не настроено"
           description="Выберите чат для уведомлений в настройках — после этого приложение начнёт присылать операции и записывать их в CRM."
           class="mb-5"
@@ -148,7 +147,6 @@ onMounted(async () => {
         <B24Alert
           v-else
           color="air-secondary-accent"
-          variant="soft"
           title="Приложение ещё настраивается"
           description="Администратор портала завершает настройку. Импорт выписок станет доступен после этого."
           class="mb-5"

@@ -239,16 +239,17 @@ function reset() {
       </div>
     </div>
 
-    <!-- Live region: results / errors -->
+    <!-- Results block. NOT one giant live region (U3, #430): announcing the whole results tree
+         re-read every operation row on each change. Only the short error/summary lines are live. -->
     <div
-      role="status"
-      aria-live="polite"
       :aria-busy="busy"
       class="mt-6 space-y-5"
     >
       <!-- Parse error -->
       <div
         v-if="error"
+        role="status"
+        aria-live="polite"
         class="rounded-xl border border-[rgb(var(--color-accent-alert-ch)/0.4)] bg-[rgb(var(--color-accent-alert-ch)/0.08)] px-4 py-3 text-sm text-white/85"
         data-testid="demo-error"
       >
@@ -285,7 +286,12 @@ function reset() {
       <template v-if="extraction">
         <!-- Summary -->
         <div data-testid="demo-summary">
-          <div class="mb-3 flex flex-wrap items-baseline gap-x-2 text-sm text-white/60">
+          <!-- The one concise live line: SR hears «извлекли N операций», not the whole tree (U3). -->
+          <div
+            role="status"
+            aria-live="polite"
+            class="mb-3 flex flex-wrap items-baseline gap-x-2 text-sm text-white/60"
+          >
             <span>Извлекли из:</span>
             <span class="font-mono text-white/85 break-words">{{ sourceLabel }}</span>
           </div>

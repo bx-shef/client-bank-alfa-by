@@ -72,6 +72,7 @@ const model = PARTNERS_MODEL
             label="Назначить созвон"
             :to="B24_BOOKING_URL"
             target="_blank"
+            rel="noopener noreferrer"
             color="air-secondary-no-accent"
             size="xl"
             @click="reachGoal('partner_booking')"

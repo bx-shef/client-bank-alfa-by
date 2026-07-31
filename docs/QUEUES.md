@@ -72,9 +72,15 @@ flowchart LR
 
 - **Идемпотентность.** У каждого джоба **детерминированный `jobId`** (`eventJobId`/`fetchJobId`/
   `parseJobId`/`crmSyncJobId`) — BullMQ давит естественные ретраи: то же окно выписки / тот же
-  файл (`fileHash`) / тот же батч (`batchId`) не создаёт дубликат джоба.
+  файл (`fileHash`) / тот же батч (`batchId`) не создаёт дубликат джоба. ⚠ Дедуп по id действует
+  и против **FAILED-трупа** (BullMQ не различает) — поэтому `enqueueParse`/`enqueueCrmSync` перед
+  `add` явно **снимают** failed-джобу с тем же id (`unstickFailed`, #430 C3): повторная загрузка
+  того же файла после исчерпанных попыток (например, после починки токена) перезапускается сразу,
+  а не через сутки age-эвикции. Дедуп для waiting/active/delayed/completed не тронут (это и есть
+  бэкпрешер); `bank-fetch` не unstick-ается — у него прежняя age-механика (см. ниже).
 - **At-least-once.** Доставка «хотя бы раз», поэтому `crm-sync` дедупит **внутри батча** по
-  `account|docId`. Против повторной доставки *всего* джоба (падение воркера после частичной записи)
+  `dedupKey` (`account|docId`; пустой `docId` → контент-сигнатура, #430 C1 —
+  [`PROCESSING.md`](PROCESSING.md) §1). Против повторной доставки *всего* джоба (падение воркера после частичной записи)
   идемпотентность живёт **в B24, не в нашей БД** (#259, [`PROCESSING.md`](PROCESSING.md) §1): `writeActivity`
   пишет **настраиваемое дело** (`crm.activity.configurable.add`) с маркером `originatorId`+`originId`, а
   `handleCrmSyncJob` **перед записью** ищет этот маркер (`getActivityId`→`findActivityByMarker`→

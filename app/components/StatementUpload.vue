@@ -169,18 +169,15 @@ function clearAll() {
     <B24Alert
       v-if="truncated > 0"
       color="air-primary-warning"
-      variant="soft"
       title="Взяты не все файлы"
       :description="`За один раз обрабатываем не больше ${MAX_UPLOAD_FILES} файлов. Остальные (${truncated}) пропущены — загрузите их отдельно.`"
       data-testid="truncated"
     />
 
-    <!-- Results region — announced to screen readers as it fills in -->
-    <div
-      role="status"
-      aria-live="polite"
-      class="space-y-6"
-    >
+    <!-- Results block. NOT a live region itself (U3, #430): wrapping the whole block in
+         role=status made SR re-announce the entire file list + preview on every change and
+         nested the alerts inside a live region. Only the one-line summary below is live. -->
+    <div class="space-y-6">
       <!-- Per-file results -->
       <ul
         v-if="results.length"
@@ -203,16 +200,18 @@ function clearAll() {
             v-if="r.ok"
             :label="`разобрано: ${r.items.length}`"
             color="air-primary-success"
-            variant="soft"
             size="sm"
             class="mt-0.5 shrink-0"
           />
         </li>
       </ul>
 
-      <!-- Summary + combined preview -->
+      <!-- Summary + combined preview. The summary line is the ONE live region here — a short,
+           stable sentence a screen reader can announce without flooding (U3). -->
       <template v-if="allItems.length">
         <p
+          role="status"
+          aria-live="polite"
           class="text-sm text-(--ui-color-base-3)"
           data-testid="summary"
         >
@@ -249,7 +248,6 @@ function clearAll() {
           <B24Alert
             v-if="submitResult"
             :color="submitResult.ok ? 'air-primary-success' : 'air-primary-alert'"
-            variant="soft"
             :title="submitResult.ok ? 'Отправлено' : 'Не отправлено'"
             :description="submitResult.message"
             data-testid="submit-result"
@@ -261,7 +259,6 @@ function clearAll() {
       <B24Alert
         v-else-if="results.length"
         color="air-primary-warning"
-        variant="soft"
         title="Не удалось разобрать"
         description="Проверьте формат файла: ожидается 1CClientBankExchange или client-bank «***** ^Type=» в кодировке windows-1251."
         data-testid="all-failed"
@@ -291,7 +288,6 @@ function clearAll() {
             <B24Badge
               :label="batchStateLabel(r)"
               :color="r.state === 'error' ? 'air-primary-alert' : r.state === 'queued' ? 'air-secondary-accent' : 'air-primary-success'"
-              variant="soft"
               size="sm"
             />
           </li>
@@ -315,7 +311,6 @@ function clearAll() {
         <template v-if="batches.timedOut.value">
           <B24Alert
             color="air-primary-warning"
-            variant="soft"
             title="Обработка занимает дольше обычного"
             description="Запись в CRM продолжается в фоне — страницу можно закрыть, результат появится в делах компании. Или проверьте ещё раз."
             class="mt-3"
