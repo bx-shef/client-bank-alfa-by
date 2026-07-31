@@ -1,3 +1,8 @@
+// Маршруты — из единого источника (#425): из него же строятся sitemap.xml, robots.txt и признак
+// «закрыть от индексации». Копия списка здесь означала бы, что страница может попасть в пререндер,
+// но не в карту сайта (или наоборот), и заметить это можно только случайно.
+import { PRERENDER_ROUTES } from './app/config/routes'
+
 // Только цифры — защита от случайной опечатки или компрометации ENV в CI.
 const metrikaId = (process.env.NUXT_PUBLIC_METRIKA_ID || '109399587').replace(/\D/g, '')
 if (!metrikaId) {
@@ -73,12 +78,17 @@ export default defineNuxtConfig({
 
   // In-portal pages aren't linked from the landing, so the generate crawler would
   // skip them — list them explicitly. `/install` is the Bitrix24 install handler.
+  //
+  // Список берётся из `app/config/routes.ts` — того же модуля, из которого строятся `sitemap.xml`,
+  // `robots.txt` и признак «закрыть от индексации» (#425). Держать его здесь отдельной копией
+  // означало бы, что добавленная страница может попасть в пререндер, но не в карту сайта (или
+  // наоборот) — и заметить это можно только случайно.
   nitro: {
     prerender: {
       crawlLinks: true,
       // `/settings` больше нет: все настройки — в слайдовере на `/app`. Отдельная страница
       // дублировала ту же форму, а из портала на неё вела одна невнятная ссылка.
-      routes: ['/app', '/install', '/import', '/queues', '/login', '/partners']
+      routes: PRERENDER_ROUTES
     }
   },
 

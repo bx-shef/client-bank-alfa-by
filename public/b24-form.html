@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Файл отдаётся публично по своему URL, но это техническая оболочка iframe, а не страница —
+     в выдаче ей делать нечего (#425). ⚠ Гарды и тесты смотрят на app/pages/**, сюда они не
+     достают, поэтому тег стоит руками и убирать его нельзя. -->
+<meta name="robots" content="noindex, nofollow">
 <title>Форма заявки</title>
 <style>*{box-sizing:border-box}html,body{margin:0;padding:0;background-color:#0a0f1a}</style>
 </head>

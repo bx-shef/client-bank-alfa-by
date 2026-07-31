@@ -51,8 +51,32 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 
 ## Архитектура
 
-- `app/app.vue` — **корень Nuxt** (не страница): `useHead`/SEO (вкл. `og:image`/`twitter:card` →
-  `public/og.png`, абсолютный URL из `siteUrl` в проде)/`theme-init`, рендерит `<NuxtLayout>`/`<NuxtPage>`.
+- `app/app.vue` — **корень Nuxt** (не страница): `useHead` (lang, viewport, favicon, `theme-init`),
+  рендерит `<NuxtLayout>`/`<NuxtPage>`. ⚠ **SEO-меты здесь НЕТ и быть не должно** (#425): корень
+  применяется ко ВСЕМ страницам, включая служебные, и пока `useSeoMeta` стоял тут, `/app`, `/import`
+  и `/install` уносили в выдачу заголовок, описание и og-картинку ЛЕНДИНГА. Регресс стережёт
+  `tests/seoMetaPlacement.test.ts`.
+- **SEO лендинга (#425)** — единый контур, портирован с уроками соседнего `ai-price-import` (#292/#304):
+  - `app/config/routes.ts` — **единый источник маршрутов**: `PUBLIC_ROUTES` (индексируем, идут в
+    sitemap) vs `SERVICE_ROUTES` (`noindex`), из него же `nitro.prerender.routes`. Тест сверяет список
+    с реальными файлами `app/pages/**` — добавили страницу и не классифицировали ⇒ красный.
+  - `app/utils/seo.ts` — чистое ядро: `siteBaseUrl` (валидация через `new URL().origin`, а не
+    регуляркой — иначе перевод строки инъектит директивы в robots.txt, а `@evil.test` уводит canonical
+    на чужой домен), `canonicalUrl`, `ogImageUrl`, `buildRobotsTxt`, `buildSitemapXml`, `isCalendarDate`.
+    Базовый URL — **константа** `LANDING_SITE_URL`, а не env: у соседа переменная не доехала до
+    сборки, `og:image` уехал относительным и ссылку месяцами шарили без картинки.
+  - `app/composables/usePublicPageSeo.ts` — полный набор публичной страницы (canonical, og:url,
+    og:site_name = **издатель**, а не заголовок, og:locale, twitter) + JSON-LD `SoftwareApplication`
+    на главной. `application/ld+json` — data-блок, `script-src` к нему не применяется, хеш в CSP не нужен.
+  - `scripts/seo-files.mjs` — пишет `robots.txt`/`sitemap.xml` в статику из `pnpm generate`.
+    `<lastmod>` = дата **коммита** (`NUXT_PUBLIC_BUILD_DATE`), не стенные часы; кривая дата
+    **опускается** — неверный `lastmod` хуже отсутствующего.
+  - ⚠ **`Disallow` и `noindex` — АЛЬТЕРНАТИВЫ, а не слои.** Служебных страниц в robots.txt нет
+    намеренно: краулер, послушавший `Disallow`, страницу не скачает, `noindex` не увидит и может
+    показать голый URL. Закрыт только `/api/` — там нет HTML, который нёс бы мету.
+  - `public/b24-form.html` несёт `noindex` **руками**: он вне `app/pages`, гарды и тесты его не видят.
+  - Гарды в `Dockerfile` — на СОБРАННОМ HTML (абсолютный `og:image`, `noindex` на служебных, отсутствие
+    утечки `og:title`, разбираемый JSON-LD): тесты проверяют исходник, а баг жил в артефакте.
 - `app/app.config.ts` — нативный colorMode b24ui (`colorMode: true`, `colorModeInitialValue: 'auto'`);
   без этих top-level ключей `useColorMode()` = no-op stub.
 - `app/assets/css/main.css` — Tailwind v4 + импорт темы b24ui.
