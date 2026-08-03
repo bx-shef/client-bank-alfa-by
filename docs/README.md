@@ -1,6 +1,6 @@
 # Указатель документации
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-03
 
 Что где лежит и когда это читать. Документов много, и без такой таблицы половина из них
 недостижима: раньше на `APP_RATING.md`, `DEPENDABOT.md`, `REPORTING_KIT.md` и
@@ -64,6 +64,7 @@
 |---|---|
 | [`POSITIONING.md`](POSITIONING.md) | позиционирование, ICP, отстройка от конкурентов |
 | [`MARKETPLACE_LISTING.md`](MARKETPLACE_LISTING.md) · [`MARKETPLACE_SUBMISSION_CHECKLIST.md`](MARKETPLACE_SUBMISSION_CHECKLIST.md) | карточка Маркета и чек-лист сабмита |
+| [`MARKET_GRAPHICS.md`](MARKET_GRAPHICS.md) | тексты для **графики** карточки — задание внешнему дизайнеру |
 | [`PRICING.md`](PRICING.md) · [`PARTNERS.md`](PARTNERS.md) | цена внедрения, работа с интеграторами |
 
 ## Журналы и служебное
