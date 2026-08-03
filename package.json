@@ -24,6 +24,7 @@
     "typecheck:server": "vue-tsc -p .nuxt/tsconfig.server.json --noEmit",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "screenshot": "node scripts/screenshot.mjs",
+    "icons": "node scripts/make-icons.mjs",
     "og": "node scripts/make-og.mjs",
     "oauth:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/alfa-oauth-test.mjs",
     "prior:test": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/prior-oauth-test.mjs",
