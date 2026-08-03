@@ -64,7 +64,7 @@
     "@opentelemetry/semantic-conventions": "^1.43.0",
     "@vueuse/core": "^14.3.0",
     "@vueuse/nuxt": "^14.3.0",
-    "bullmq": "^5.80.9",
+    "bullmq": "^6.0.3",
     "echarts": "^6.1.0",
     "pg": "^8.13.1",
     "qrcode": "^1.5.4",
