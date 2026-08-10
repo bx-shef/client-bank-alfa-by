@@ -149,6 +149,32 @@ describe('ensureBankToken', () => {
     expect(out.refreshToken).toBe('OLD') // fell back to the stored one
   })
 
+  // #444: the resolved auth must reach the wire — testing only the pure bankRefreshRequest would
+  // miss a broken `deps.priorTokenAuth` wiring, which is exactly where a prod 401 would come from.
+  it('prior + private_key_jwt: the assertion reaches postRefresh, no Basic header', async () => {
+    const near = tok({ provider: 'prior-by', expiresAt: NOW + 10_000 })
+    const { deps } = fakeDeps({ stored: near })
+    const post = vi.fn(deps.postRefresh)
+    await ensureBankToken(near, {
+      ...deps,
+      postRefresh: post,
+      priorTokenAuth: () => ({ method: 'private_key_jwt', assertion: 'H.P.S' })
+    })
+    const [, body, headers] = post.mock.calls[0]!
+    expect(new URLSearchParams(body).get('client_assertion')).toBe('H.P.S')
+    expect(headers).toEqual({})
+  })
+
+  it('alfa ignores priorTokenAuth entirely (creds stay in the body)', async () => {
+    const near = tok({ provider: 'alfa-by', expiresAt: NOW + 10_000 })
+    const { deps } = fakeDeps({ stored: near })
+    const post = vi.fn(deps.postRefresh)
+    const priorTokenAuth = vi.fn(() => ({ method: 'private_key_jwt' as const, assertion: 'X' }))
+    await ensureBankToken(near, { ...deps, postRefresh: post, priorTokenAuth })
+    expect(priorTokenAuth).not.toHaveBeenCalled()
+    expect(post.mock.calls[0]![1]).not.toContain('client_assertion')
+  })
+
   it('no creds → returns the stored token as-is (cannot refresh)', async () => {
     const near = tok({ expiresAt: NOW - 1 })
     const post = vi.fn(async () => ({}))

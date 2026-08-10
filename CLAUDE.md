@@ -85,9 +85,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); **Приор (A5b) — движок опроса, connect-поток и АВТООПРОС
   готовы**: `prior-by` в `POLLABLE_PROVIDERS`, у него своя очередь `bank-fetch-prior` с бюджетом в
   ЗАПРОСАХ (задача Приора = до 10 HTTP, `REQUESTS_PER_ACCOUNT`) и своими слотами, поэтому он не
-  блокирует Альфу и не тратит её лимит; прод дополнительно требует BY-СКЗИ (issue #41) **и** прод-метод
-  аутентификации `private_key_jwt` (issue #444 — `client_secret_basic` банк принимает только в тестовой
-  среде), sandbox `:9344` — ни того, ни другого).
+  блокирует Альфу и не тратит её лимит; прод дополнительно требует BY-СКЗИ (issue #41 — **не закрыт**);
+  прод-метод аутентификации `private_key_jwt` **сделан** (#444, `PRIOR_OAUTH_AUTH_METHOD`), sandbox
+  `:9344` не требует ни того, ни другого).
   В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
   синтетика): чип загружает пример в один клик (`loadSample`: fetch→File→`runFiles`) + ссылка «скачать».
   Интерактивные контролы — **b24ui** (`B24Button`: «Выбрать файл»/«Сбросить»/чипы примеров, air-цвета
@@ -650,9 +650,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     **Автоопрос включён**: `prior-by` в `POLLABLE_PROVIDERS`, отдельная очередь `bank-fetch-prior`
     (`fetchQueueFor`) с бюджетом в ЗАПРОСАХ (`providerJobRate` делит лимит на стоимость задачи) и
     собственными слотами (`QUEUE_PRIOR_CONCURRENCY`) — длинная задача Приора не держит воркер Альфы.
-    **Осталось:** (1) прод-СКЗИ (issue #41) — без BY-крипто TLS прод-хост `:9345` недостижим (инфраструктура);
-    (2) прод-метод аутентификации (issue #444) — `private_key_jwt` вместо sandbox-only `client_secret_basic`,
-    ЧЕТЫРЕ места в коде, проверяется на sandbox без СКЗИ. Sandbox `:9344` не требует ни того, ни другого.
+    **Прод-метод аутентификации — СДЕЛАН** (#444): `private_key_jwt` вместо sandbox-only
+    `client_secret_basic`, все ЧЕТЫРЕ места аутентификации сведены к единой точке `priorTokenRequest`
+    (`app/utils/priorOauth.ts`) поверх `resolvePriorTokenAuth` (`server/utils/priorTokenAuth.ts`);
+    выбор — `PRIOR_OAUTH_AUTH_METHOD`, дефолт sandbox-метод; архитектурный тест стережёт от пятого
+    места в обход. **Осталось:** живой sandbox-прогон (`pnpm prior:test --auth-method private_key_jwt`,
+    СКЗИ не нужен) и прод-СКЗИ (issue #41 — без BY-крипто TLS прод-хост `:9345` недостижим,
+    инфраструктура). Переключение реального деплоя тянет смену `client_id` → переподключение счетов
+    (порядок — `docs/PRIOR_API.md`).
   - `server/utils/setupStatus.ts` + `server/api/setup-status.get.ts` (+ чистое ядро
     `app/utils/setupReadiness.ts`, composable `useSetupStatus.ts`, UI `SetupReadinessCard.vue`;
     DI+тесты, вкл. nuxt-тест проводки) — **экран готовности «что настроено, а что нет» (#409/#405)**:

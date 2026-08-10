@@ -42,6 +42,10 @@
 //                   it prints the signed JWT and raw bodies, do not paste real-
 //                   portal output into a ticket/chat)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
+//        --auth-method client_secret_basic|private_key_jwt  (#444; prod needs private_key_jwt —
+//                   applies to the BUSINESS app only, token A stays Basic. Affects what --dcr
+//                   registers, so register and run with the SAME value)
+//        --audience <url> (JWT `aud` for private_key_jwt; default = SANDBOX issuer, see cfg)
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
@@ -98,9 +102,15 @@ const cfg = {
   full: Boolean(args['full']),
   // Client authentication at the token endpoint (#444). `client_secret_basic` is SANDBOX-ONLY
   // per the bank's guide (p. 9 §2.2); prod needs `private_key_jwt`. Must match what DCR
-  // registered — so `--auth-method private_key_jwt` also changes what `--register` sends.
-  authMethod: parsePriorAuthMethod(args['auth-method'] || process.env.PRIOR_OAUTH_AUTH_METHOD),
-  // JWT `aud` for the client_assertion — the issuer from /oidcdiscovery (port 9544, not 9344).
+  // registered — so `--auth-method private_key_jwt` also changes what `--dcr` registers.
+  authMethod: parsePriorAuthMethod(args['auth-method'] || process.env.PRIOR_OAUTH_AUTH_METHOD, raw =>
+    warn(`--auth-method "${raw}" не распознан — используется client_secret_basic (только sandbox)`)),
+  // JWT `aud` for the client_assertion — the ISSUER from /oidcdiscovery (port 9544, not the 9344
+  // gateway). ⚠ The default below is the SANDBOX issuer: it does NOT follow `--base`, because the
+  // issuer is whatever /oidcdiscovery reports, not a transform of the gateway host. Against any
+  // other environment pass `--audience` explicitly (run `--oidc` to read the right value) —
+  // otherwise the bank rejects the assertion on an audience mismatch, which looks exactly like a
+  // wrong key.
   audience: args['audience'] || process.env.PRIOR_AUDIENCE || 'https://api.priorbank.by:9544/oauth2/token'
 }
 
@@ -115,14 +125,23 @@ const nowSec = () => Math.floor(Date.now() / 1000)
 // --- HTTP ------------------------------------------------------------------
 // httpRequest lives in scripts/lib/http.mjs (shared, never disables TLS verify).
 // Sandbox is plain TLS; prod (:9345) is BY-crypto via the СКЗИ gateway, out of
-// this script's scope (issue #41). The Basic auth header comes from the core
-// (buildBasicAuthHeader).
+// this script's scope (issue #41). Client authentication (Basic header vs signed
+// client_assertion in the body) is applied by the core `priorTokenRequest` (#444).
 
 // Resolve client authentication for one token call — mirrors the backend's
 // server/utils/priorTokenAuth.ts (same core helpers, so script and prod can't drift).
 // private_key_jwt mints a FRESH single-use assertion per call (unique jti, short exp).
-function tokenAuthFor({ id, secret }) {
-  if (cfg.authMethod !== 'private_key_jwt') return { method: 'client_secret_basic', clientId: id, clientSecret: secret }
+//
+// ⚠ `--auth-method` applies ONLY to the BUSINESS app (the DCR-registered client). The
+// TECHNOLOGICAL app — created by hand in the API Store UI and used solely to obtain token A for
+// /register — is not a DCR client at all: it has no `jwks`, so the bank cannot verify an assertion
+// for it, and the guide's own token-A example (p. 8) is plain Basic. Signing token A with the
+// business app's key would break `--dcr` in exactly the mode that needs it. Callers pass
+// `basicOnly` for that leg.
+function tokenAuthFor({ id, secret, basicOnly = false }) {
+  if (basicOnly || cfg.authMethod !== 'private_key_jwt') {
+    return { method: 'client_secret_basic', clientId: id, clientSecret: secret }
+  }
   const pem = loadPrivateKey()
   if (!pem) die('--auth-method private_key_jwt needs PRIOR_PRIVATE_KEY (run --gen-key)')
   const claims = buildClientAssertionClaims({ clientId: id, aud: cfg.audience, nowSec: nowSec(), jti: randomUUID() })
@@ -133,8 +152,8 @@ function tokenAuthFor({ id, secret }) {
 // `bodyParams` is a URLSearchParams built by the core (buildClientCredentialsBody
 // / buildCodeExchangeBody); `priorTokenRequest` applies client auth exactly as the backend does,
 // so the wire format matches priorOauth.ts.
-async function postToken(bodyParams, { id, secret }) {
-  const req = priorTokenRequest(bodyParams, tokenAuthFor({ id, secret }))
+async function postToken(bodyParams, { id, secret, basicOnly = false }) {
+  const req = priorTokenRequest(bodyParams, tokenAuthFor({ id, secret, basicOnly }))
   // Safe to log: grant_type/scope/code live in the body. Under private_key_jwt the body ALSO
   // carries the signed assertion, so log the params WITHOUT it.
   if (args['verbose']) {
@@ -202,8 +221,8 @@ function publicJwk(privateKeyPem) {
 
 // --- steps -----------------------------------------------------------------
 // Token A / Б — client_credentials with the given scope.
-async function clientCredentials(scope, { id, secret, label }) {
-  const r = await postToken(buildClientCredentialsBody(scope), { id, secret })
+async function clientCredentials(scope, { id, secret, label, basicOnly = false }) {
+  const r = await postToken(buildClientCredentialsBody(scope), { id, secret, basicOnly })
   if (r.status >= 200 && r.status < 300 && r.json && r.json.access_token) {
     ok(`${label}: HTTP ${r.status}, token ${maskToken(r.json.access_token)}, scope "${r.json.scope}", expires ${r.json.expires_in}s`)
     return r.json.access_token
@@ -504,7 +523,7 @@ async function main() {
   if (args['dcr']) {
     if (!cfg.techId || !cfg.techSecret) die('--dcr needs PRIOR_TECH_CLIENT_ID / PRIOR_TECH_CLIENT_SECRET (tech app)')
     head('Token A — client_credentials (apim:subscribe apim:app_manage)')
-    const tokenA = await clientCredentials('apim:subscribe apim:app_manage', { id: cfg.techId, secret: cfg.techSecret, label: 'token A' })
+    const tokenA = await clientCredentials('apim:subscribe apim:app_manage', { id: cfg.techId, secret: cfg.techSecret, label: 'token A', basicOnly: true })
     if (!tokenA) process.exit(1)
     if (args['oidc']) await oidcDiscovery(tokenA)
     const pem = loadPrivateKey()
@@ -517,7 +536,7 @@ async function main() {
   // --oidc only (token A → discovery).
   if (args['oidc'] && !args['dcr']) {
     if (!cfg.techId || !cfg.techSecret) die('--oidc needs the tech app creds (PRIOR_TECH_CLIENT_ID/SECRET)')
-    const tokenA = await clientCredentials('apim:subscribe apim:app_manage', { id: cfg.techId, secret: cfg.techSecret, label: 'token A' })
+    const tokenA = await clientCredentials('apim:subscribe apim:app_manage', { id: cfg.techId, secret: cfg.techSecret, label: 'token A', basicOnly: true })
     if (tokenA) await oidcDiscovery(tokenA)
     return
   }
@@ -559,7 +578,7 @@ async function main() {
   // are present, else default to the known sandbox token endpoint).
   let aud = `${cfg.base}${AUTH}/oauth2/token`
   if (!offlineUrl && cfg.techId && cfg.techSecret) {
-    const tokenA = await clientCredentials('apim:subscribe apim:app_manage', { id: cfg.techId, secret: cfg.techSecret, label: 'token A (for aud)' })
+    const tokenA = await clientCredentials('apim:subscribe apim:app_manage', { id: cfg.techId, secret: cfg.techSecret, label: 'token A (for aud)', basicOnly: true })
     if (tokenA) aud = await oidcDiscovery(tokenA)
   }
 

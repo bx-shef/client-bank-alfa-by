@@ -53,8 +53,9 @@ export function buildBasicAuthHeader(clientId: string, clientSecret: string): st
  * `self_signed_tls_client_auth`. We implement `private_key_jwt` — the only one of the three
  * needing neither mutual TLS nor an X.509 client certificate (and therefore no ГосСУОК).
  *
- * ⚠ DCR registers ONE method per application, so ALL token-endpoint calls must use the same
- * one — see `priorTokenRequest` callers (four sites, docs/PRIOR_API.md).
+ * ⚠ WE register exactly one method per application (the bank's guide allows several — p. 9 §2.2 —
+ * but a single one keeps the wire format unambiguous). So ALL token-endpoint calls must use the
+ * same one — see `priorTokenRequest` callers (four sites, docs/PRIOR_API.md).
  */
 export type PriorTokenAuthMethod = 'client_secret_basic' | 'private_key_jwt'
 
@@ -65,10 +66,22 @@ export const PRIOR_TOKEN_AUTH_METHODS: readonly PriorTokenAuthMethod[] = ['clien
  * Coerce a configured method name, defaulting to the sandbox one. Fail-SAFE rather than
  * fail-closed on purpose: an unknown/blank value keeps today's working sandbox behaviour
  * instead of silently arming a prod method the app may not be registered for.
+ *
+ * ⚠ A TYPO is not the same as «unset». Blank ⇒ the sandbox default is the intended behaviour;
+ * a non-empty value we don't recognise (`private-key-jwt`, trailing character…) means someone
+ * MEANT to configure something and it didn't take — in production that silently sends Basic to a
+ * client registered for private_key_jwt and yields opaque 401s with nothing pointing at the cause.
+ * `onUnknown` lets callers surface it (the server logs a warning, `envCheck` reports it at boot);
+ * the returned value is the safe default either way, so pure callers can ignore it.
  */
-export function parsePriorAuthMethod(raw: string | null | undefined): PriorTokenAuthMethod {
+export function parsePriorAuthMethod(
+  raw: string | null | undefined,
+  onUnknown?: (rawValue: string) => void
+): PriorTokenAuthMethod {
   const v = (raw ?? '').trim()
-  return (PRIOR_TOKEN_AUTH_METHODS as readonly string[]).includes(v) ? v as PriorTokenAuthMethod : 'client_secret_basic'
+  if ((PRIOR_TOKEN_AUTH_METHODS as readonly string[]).includes(v)) return v as PriorTokenAuthMethod
+  if (v) onUnknown?.(v)
+  return 'client_secret_basic'
 }
 
 /** RFC 7523 assertion type — the fixed `client_assertion_type` value (guide §4.1.2). */

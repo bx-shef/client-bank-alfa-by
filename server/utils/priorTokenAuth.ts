@@ -11,7 +11,7 @@
 // `private_key_jwt`. Default stays `client_secret_basic` so an unconfigured deploy keeps the
 // behaviour its DCR registration actually has.
 
-import { buildClientAssertionClaims, parsePriorAuthMethod } from '../../app/utils/priorOauth'
+import { buildClientAssertionClaims, parsePriorAuthMethod, PRIOR_TOKEN_AUTH_METHODS } from '../../app/utils/priorOauth'
 import type { PriorTokenAuth, PriorTokenAuthMethod } from '../../app/utils/priorOauth'
 
 /** Everything needed to authenticate as the client, under either method. */
@@ -37,9 +37,14 @@ export interface PriorAuthDeps {
   newId: () => string
 }
 
-/** The configured method, from `PRIOR_OAUTH_AUTH_METHOD` (unset/unknown ⇒ sandbox default). */
+/** The configured method, from `PRIOR_OAUTH_AUTH_METHOD` (unset/unknown ⇒ sandbox default).
+ *  A non-empty but unrecognised value is LOUD: silently falling back would send Basic to a client
+ *  registered for private_key_jwt, and the resulting 401s name no cause. `envCheck` reports the
+ *  same condition at boot; this covers processes that read it later. */
 export function priorAuthMethodFromEnv(): PriorTokenAuthMethod {
-  return parsePriorAuthMethod(process.env.PRIOR_OAUTH_AUTH_METHOD)
+  return parsePriorAuthMethod(process.env.PRIOR_OAUTH_AUTH_METHOD, raw =>
+    console.warn(`[env] PRIOR_OAUTH_AUTH_METHOD="${raw}" is not recognised — falling back to client_secret_basic (sandbox-only). Expected one of: ${PRIOR_TOKEN_AUTH_METHODS.join(', ')}`)
+  )
 }
 
 /**

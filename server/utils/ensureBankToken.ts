@@ -104,41 +104,55 @@ export interface BankRefreshDeps {
 }
 
 /** Resolve a provider's OAuth creds from env. Alfa: `ALFA_OAUTH_*`; Prior: `PRIOR_OAUTH_*`.
- *  Returns `null` when any part is unset — the account then can't be refreshed here. */
+ *  Returns `null` when a required part is unset — the account then can't be refreshed here.
+ *
+ *  `clientSecret` is required only for `client_secret_basic`: under `private_key_jwt` the secret
+ *  never travels (the assertion authenticates us), and the bank may not even issue one for such a
+ *  client — demanding it would disable refresh on an otherwise correct production config (#444). */
 export function bankCredsFromEnv(provider: BankProviderId): BankOAuthCreds | null {
   const prefix = provider === 'alfa-by' ? 'ALFA_OAUTH' : provider === 'prior-by' ? 'PRIOR_OAUTH' : ''
   if (!prefix) return null
   const clientId = process.env[`${prefix}_CLIENT_ID`]?.trim()
   const clientSecret = process.env[`${prefix}_CLIENT_SECRET`]?.trim()
   const tokenUrl = process.env[`${prefix}_TOKEN_URL`]?.trim()
-  if (!clientId || !clientSecret || !tokenUrl) return null
-  return { clientId, clientSecret, tokenUrl }
+  const secretOptional = provider === 'prior-by' && priorAuthMethodFromEnv() === 'private_key_jwt'
+  if (!clientId || !tokenUrl || (!clientSecret && !secretOptional)) return null
+  return { clientId, clientSecret: clientSecret ?? '', tokenUrl }
 }
 
-/** Prior's client auth from env for the refresh leg (#444). `null` when the provider isn't
- *  configured, or when private_key_jwt is selected but its key material is missing/broken —
- *  the caller then falls back to Basic, which fails loudly at the bank rather than here. */
+/**
+ * Prior's client auth from env for the refresh leg (#444).
+ *
+ * ⚠ Fail-loud on a BROKEN `private_key_jwt` config, `null` only when Prior simply isn't configured.
+ * The distinction matters: `resolvePriorTokenAuth` deliberately throws instead of degrading, and
+ * swallowing that here would re-introduce exactly what it forbids — the caller treats `null` as
+ * «no auth supplied» and falls back to `client_secret_basic`, i.e. sends the real client secret to
+ * a token endpoint whose client is registered for private_key_jwt only. The bank answers with an
+ * opaque 401 that reads like an ordinary refresh failure, so the misconfiguration hides.
+ *
+ * The refresh runs on the worker/cron process, separately from the connect routes, so a PEM missing
+ * on just that instance is a realistic deploy slip. Throwing fails the single `bank-fetch` job for
+ * that account (BullMQ isolates it) with the cause stated at the point of failure.
+ */
 export function priorRefreshAuthFromEnv(): PriorTokenAuth | null {
+  const method = priorAuthMethodFromEnv()
   const clientId = process.env.PRIOR_OAUTH_CLIENT_ID?.trim()
   const clientSecret = process.env.PRIOR_OAUTH_CLIENT_SECRET?.trim()
-  if (!clientId || !clientSecret) return null
-  try {
-    return resolvePriorTokenAuth(priorAuthMethodFromEnv(), {
-      clientId,
-      clientSecret,
-      audience: process.env.PRIOR_OAUTH_AUDIENCE?.trim() ?? '',
-      privateKeyPem: process.env.PRIOR_OAUTH_PRIVATE_KEY?.trim() ?? '',
-      kid: process.env.PRIOR_OAUTH_KID?.trim() ?? ''
-    }, {
-      signJwt: signPriorJwt,
-      nowSec: () => Math.floor(Date.now() / 1000),
-      newId: () => randomUUID()
-    })
-  } catch (e) {
-    // Misconfigured private_key_jwt (no key/kid/audience) — log the CLASS, never the material.
-    console.error('prior refresh auth unavailable:', (e as Error)?.message)
-    return null
-  }
+  // Not configured at all ⇒ nothing to authenticate with; the caller degrades as before.
+  // Under private_key_jwt the secret is irrelevant, so only the id gates this branch.
+  if (!clientId || (!clientSecret && method === 'client_secret_basic')) return null
+  // Throws when private_key_jwt lacks key/kid/audience — intentionally NOT caught (see above).
+  return resolvePriorTokenAuth(method, {
+    clientId,
+    clientSecret: clientSecret ?? '',
+    audience: process.env.PRIOR_OAUTH_AUDIENCE?.trim() ?? '',
+    privateKeyPem: process.env.PRIOR_OAUTH_PRIVATE_KEY?.trim() ?? '',
+    kid: process.env.PRIOR_OAUTH_KID?.trim() ?? ''
+  }, {
+    signJwt: signPriorJwt,
+    nowSec: () => Math.floor(Date.now() / 1000),
+    newId: () => randomUUID()
+  })
 }
 
 const liveDeps: BankRefreshDeps = {

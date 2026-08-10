@@ -39,14 +39,15 @@
 - `scripts/prior-oauth-test.mjs` (`pnpm prior:test`) — живой прогон Open Banking (СПР) Приорбанка
   по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
   **`--auth-method private_key_jwt`** (#444) переключает клиентскую аутентификацию на прод-метод:
-  подписанный `client_assertion` в теле вместо Basic-заголовка. Флаг влияет и на `--register` —
+  подписанный `client_assertion` в теле вместо Basic-заголовка. Флаг влияет и на `--dcr` (регистрацию) —
   DCR регистрирует **один** метод на приложение, поэтому регистрировать и ходить надо одинаково:
 
   ```bash
   # 1) зарегистрировать НОВОЕ приложение под прод-метод (нужен ключ: --gen-key)
-  pnpm prior:test --auth-method private_key_jwt --register
-  # 2) прогнать поток тем же методом (consent → authorize → обмен кода → выписка)
-  pnpm prior:test --auth-method private_key_jwt --full
+  pnpm prior:test --auth-method private_key_jwt --dcr
+  # 2) прогнать поток тем же методом (consent → authorize → обмен кода → выписка).
+  #    Поток идёт по умолчанию; --full лишь отключает маскировку токенов в выводе.
+  pnpm prior:test --auth-method private_key_jwt
   ```
 
   ⚠ Существующее sandbox-приложение зарегистрировано на `client_secret_basic` — переключить у него
