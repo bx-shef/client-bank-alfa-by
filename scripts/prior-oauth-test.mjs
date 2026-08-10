@@ -153,13 +153,16 @@ function tokenAuthFor({ id, secret, basicOnly = false }) {
 // / buildCodeExchangeBody); `priorTokenRequest` applies client auth exactly as the backend does,
 // so the wire format matches priorOauth.ts.
 async function postToken(bodyParams, { id, secret, basicOnly = false }) {
-  const req = priorTokenRequest(bodyParams, tokenAuthFor({ id, secret, basicOnly }))
+  const auth = tokenAuthFor({ id, secret, basicOnly })
+  const req = priorTokenRequest(bodyParams, auth)
   // Safe to log: grant_type/scope/code live in the body. Under private_key_jwt the body ALSO
-  // carries the signed assertion, so log the params WITHOUT it.
+  // carries the signed assertion, so log the params WITHOUT it. Report the EFFECTIVE method
+  // (`auth.method`), not the configured one — token A stays Basic even under --auth-method
+  // private_key_jwt, and this line is the diagnostic used while chasing a 401.
   if (args['verbose']) {
     const shown = new URLSearchParams(req.body)
     if (shown.has('client_assertion')) shown.set('client_assertion', '<signed-jwt>')
-    log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${shown}]  auth ${cfg.authMethod}  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
+    log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${shown}]  auth ${auth.method}  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
   }
   return httpRequest(`${cfg.base}${AUTH}/oauth2/token`, {
     method: 'POST',
@@ -245,7 +248,15 @@ async function oidcDiscovery(tokenA) {
   // server, distinct from the :9344 API-gateway token_endpoint). Fall back to
   // token_endpoint, then the gateway default.
   const aud = res.json && (res.json.issuer || res.json.token_endpoint)
-  return aud || `${cfg.base}${AUTH}/oauth2/token`
+  const resolved = aud || `${cfg.base}${AUTH}/oauth2/token`
+  // The `client_assertion` (private_key_jwt, #444) must carry the SAME audience — an assertion
+  // aimed at the wrong issuer is rejected in a way indistinguishable from a bad key. Adopt what
+  // discovery actually reports unless the operator pinned it explicitly with --audience.
+  if (!args['audience'] && cfg.audience !== resolved) {
+    if (args['verbose']) log(`${C.dim}client_assertion aud ← ${resolved} (из /oidcdiscovery)${C.reset}`)
+    cfg.audience = resolved
+  }
+  return resolved
 }
 
 async function dcrRegister(tokenA, jwks, pem) {
