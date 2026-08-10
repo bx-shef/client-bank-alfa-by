@@ -148,22 +148,30 @@ Open-banking API согласно СПР для разработчиков»](ht
 > допустимых в проде методов он единственный без взаимного TLS и без клиентского сертификата, то есть
 > и без ГосСУОК. Это **не предпочтение, а требование** — `client_secret_basic` в проде не примут.
 >
-> ⚠ **Код пока на `client_secret_basic` — в ЧЕТЫРЁХ местах**, `client_assertion` не реализован
-> ([#444](https://github.com/bx-shef/client-bank-alfa-by/issues/444)):
+> ✅ **`private_key_jwt` реализован** ([#444](https://github.com/bx-shef/client-bank-alfa-by/issues/444)).
+> Метод выбирается переменной **`PRIOR_OAUTH_AUTH_METHOD`** (`client_secret_basic` по умолчанию —
+> sandbox; `private_key_jwt` — прод). Неизвестное значение ⇒ откат к sandbox-методу: fail-safe,
+> чтобы не вооружить прод-метод, под который приложение может быть не зарегистрировано.
 >
-> 1. **Регистрация приложения (DCR)** — `app/utils/priorOauth.ts` (`token_endpoint_auth_method`);
-> 2. **Токен Б** (создание согласия, `client_credentials`) — `server/api/bank/connect.post.ts`,
->    шаг 1 в `server/utils/priorConnectStart.ts`;
-> 3. **Обмен `code` на токен** — `server/api/bank/callback.get.ts` / `server/utils/bankConnectCallback.ts`;
+> ⚠ **DCR регистрирует ОДИН метод на приложение**, поэтому переключать надо согласованно: env
+> сервера **и** регистрацию приложения (`pnpm prior:test --auth-method private_key_jwt --register`).
+> Рассогласование = 401 на том месте, которое забыли.
+>
+> Все места аутентификации идут через **единую точку** — чистый `priorTokenRequest`
+> (`app/utils/priorOauth.ts`) поверх `resolvePriorTokenAuth` (`server/utils/priorTokenAuth.ts`):
+>
+> 1. **Регистрация приложения (DCR)** — `buildRegistrationMetadata` (`tokenEndpointAuthMethod`);
+> 2. **Токен Б** (создание согласия, `client_credentials`) — `server/utils/priorConnectStart.ts`;
+> 3. **Обмен `code` на токен** — `server/utils/bankConnectCallback.ts`;
 > 4. **Рефреш токена** — `server/utils/ensureBankToken.ts` (`bankRefreshRequest`).
 >
-> ⚠ Пункт 2 легко пропустить (он в connect-преамбуле, а не в «токенных» модулях), но DCR регистрирует
-> **один** метод на приложение — забыть его значит сломать прод **на первом же шаге** подключения,
-> раньше, чем дойдёт очередь до исправленных мест. Сборка Basic-заголовка в пп. 2-3 продублирована
-> вручную прямо в роутах и тестами не покрыта; эталон — п. 4, где она вынесена в чистую
-> `bankRefreshRequest` и запинена тестом.
+> ⚠ Пункт 2 легко пропустить (он в connect-преамбуле, а не в «токенных» модулях) — а именно он
+> ломает прод **на первом же шаге** подключения, раньше остальных. Есть отдельный тест ровно на это.
+> В скрипте разведки то же самое касается и `/oauth2/revoke` (в backend такой ветки нет).
 >
-> Переход проверяется на sandbox, СКЗИ для этого не нужен.
+> **Что осталось:** живой прогон на sandbox (`pnpm prior:test --auth-method private_key_jwt`) —
+> СКЗИ для него не нужен. ⚠ Sandbox докажет **механику JWT**, но не идентичность прод-стека WSO2:
+> хост `:9345` недостижим до закрытия #41.
 >
 > Способ аутентификации приложения — **отдельный слой** от транспортного TLS: на проде BY-крипто TLS
 > (СКЗИ) обязателен при любом из этих методов.

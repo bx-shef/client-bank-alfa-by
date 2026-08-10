@@ -62,9 +62,10 @@ import { httpRequest } from './lib/http.mjs'
 // signing + node:crypto transport stay here; the core is browser-safe/pure.
 import {
   PRIOR_API_PREFIXES,
-  buildBasicAuthHeader, buildClientCredentialsBody, buildCodeExchangeBody,
+  buildClientCredentialsBody, buildCodeExchangeBody,
   buildConsentRequest, buildAuthorizeRequestClaims, buildPriorAuthorizeUrl,
   buildResourceRequestBody, isWindowWithinLimit, buildRegistrationMetadata,
+  buildClientAssertionClaims, priorTokenRequest, parsePriorAuthMethod,
   extractIntentId, extractResourceId, extractAccounts
 } from '../app/utils/priorOauth.ts'
 
@@ -94,7 +95,13 @@ const cfg = {
   poll: Number(args['poll'] || 8),
   delayMs: Number(args['delay-ms'] || 1500),
   state: args['state'] || `s-${randomUUID()}`,
-  full: Boolean(args['full'])
+  full: Boolean(args['full']),
+  // Client authentication at the token endpoint (#444). `client_secret_basic` is SANDBOX-ONLY
+  // per the bank's guide (p. 9 §2.2); prod needs `private_key_jwt`. Must match what DCR
+  // registered — so `--auth-method private_key_jwt` also changes what `--register` sends.
+  authMethod: parsePriorAuthMethod(args['auth-method'] || process.env.PRIOR_OAUTH_AUTH_METHOD),
+  // JWT `aud` for the client_assertion — the issuer from /oidcdiscovery (port 9544, not 9344).
+  audience: args['audience'] || process.env.PRIOR_AUDIENCE || 'https://api.priorbank.by:9544/oauth2/token'
 }
 
 // API path prefixes (СПР) — from the core, per the official guide.
@@ -111,23 +118,39 @@ const nowSec = () => Math.floor(Date.now() / 1000)
 // this script's scope (issue #41). The Basic auth header comes from the core
 // (buildBasicAuthHeader).
 
-// POST to the token endpoint with client_secret_basic (sandbox auth method).
+// Resolve client authentication for one token call — mirrors the backend's
+// server/utils/priorTokenAuth.ts (same core helpers, so script and prod can't drift).
+// private_key_jwt mints a FRESH single-use assertion per call (unique jti, short exp).
+function tokenAuthFor({ id, secret }) {
+  if (cfg.authMethod !== 'private_key_jwt') return { method: 'client_secret_basic', clientId: id, clientSecret: secret }
+  const pem = loadPrivateKey()
+  if (!pem) die('--auth-method private_key_jwt needs PRIOR_PRIVATE_KEY (run --gen-key)')
+  const claims = buildClientAssertionClaims({ clientId: id, aud: cfg.audience, nowSec: nowSec(), jti: randomUUID() })
+  return { method: 'private_key_jwt', assertion: signJwt(claims, pem) }
+}
+
+// POST to the token endpoint under the configured auth method (#444).
 // `bodyParams` is a URLSearchParams built by the core (buildClientCredentialsBody
-// / buildCodeExchangeBody) — posted verbatim so the wire format matches priorOauth.ts.
+// / buildCodeExchangeBody); `priorTokenRequest` applies client auth exactly as the backend does,
+// so the wire format matches priorOauth.ts.
 async function postToken(bodyParams, { id, secret }) {
-  const body = bodyParams.toString()
-  // Safe to log: grant_type/scope/code live in the body; the client secret is in
-  // the Basic auth header (never logged).
-  if (args['verbose']) log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${body}]  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
+  const req = priorTokenRequest(bodyParams, tokenAuthFor({ id, secret }))
+  // Safe to log: grant_type/scope/code live in the body. Under private_key_jwt the body ALSO
+  // carries the signed assertion, so log the params WITHOUT it.
+  if (args['verbose']) {
+    const shown = new URLSearchParams(req.body)
+    if (shown.has('client_assertion')) shown.set('client_assertion', '<signed-jwt>')
+    log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${shown}]  auth ${cfg.authMethod}  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
+  }
   return httpRequest(`${cfg.base}${AUTH}/oauth2/token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': buildBasicAuthHeader(id, secret),
+      ...req.headers,
       'Accept': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
+      'Content-Length': Buffer.byteLength(req.body)
     },
-    body
+    body: req.body
   })
 }
 
@@ -216,7 +239,9 @@ async function dcrRegister(tokenA, jwks, pem) {
   const meta = buildRegistrationMetadata({
     clientName: args['app-name'] ? String(args['app-name']) : 'Импорт выписки в Bitrix24 (bx-shef)',
     redirectUri: cfg.redirectUri,
-    jwks
+    jwks,
+    // Registered method MUST match what every token call sends (#444) — one method per app.
+    tokenEndpointAuthMethod: cfg.authMethod
   })
 
   let contentType = 'application/json'
@@ -423,15 +448,21 @@ async function runStatements(accessToken) {
 
 async function revoke(token) {
   head('Revoke token — POST /oauth2/revoke')
-  const body = new URLSearchParams({ token }).toString()
+  // Revoke authenticates the CLIENT too, so it follows the same method as the token endpoint
+  // (#444) — otherwise it 401s under private_key_jwt. The backend has no revoke leg; this is
+  // script-only, but kept consistent so a live run exercises the same auth everywhere.
+  const req = priorTokenRequest(
+    new URLSearchParams({ token }),
+    tokenAuthFor({ id: cfg.clientId, secret: cfg.clientSecret })
+  )
   const res = await httpRequest(`${cfg.base}${AUTH}/oauth2/revoke`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': buildBasicAuthHeader(cfg.clientId, cfg.clientSecret),
-      'Content-Length': Buffer.byteLength(body)
+      ...req.headers,
+      'Content-Length': Buffer.byteLength(req.body)
     },
-    body
+    body: req.body
   })
   log(`${C.dim}HTTP ${res.status}${C.reset}`)
   res.status >= 200 && res.status < 300 ? ok('revoked') : err(`revoke failed (HTTP ${res.status})`)

@@ -24,8 +24,11 @@ import {
   buildPriorAuthorizeUrl,
   extractIntentId,
   parsePriorTokenResponse,
+  priorTokenRequest,
   PRIOR_API_PREFIXES
 } from '../../app/utils/priorOauth'
+import type { PriorTokenAuthMethod } from '../../app/utils/priorOauth'
+import { priorAuthMethodFromEnv, resolvePriorTokenAuth } from './priorTokenAuth'
 
 /** Non-secret Prior connect config (from env) + the secrets the injected transport needs. */
 export interface PriorConnectConfig {
@@ -37,8 +40,15 @@ export interface PriorConnectConfig {
   clientSecret: string
   /** Registered redirect URI — must EXACTLY match the DCR-registered value. */
   redirectUri: string
-  /** JWT `aud` — the issuer / token endpoint from /oidcdiscovery (port 9544, not 9344). */
+  /** JWT `aud` — the issuer / token endpoint from /oidcdiscovery (port 9544, not 9344). Used by
+   *  BOTH the authorize `request` JWT and (under private_key_jwt) the `client_assertion`. */
   audience: string
+  /**
+   * Client authentication at the token endpoint. `client_secret_basic` is SANDBOX-ONLY
+   * (guide p. 9 §2.2); production needs `private_key_jwt`. Must match what DCR registered.
+   * Absent ⇒ sandbox default (#444).
+   */
+  authMethod?: PriorTokenAuthMethod
   /** RS256 private key (PEM) whose public half is registered in the app's `jwks`. */
   privateKeyPem: string
   /** Key id matching the `kid` published in `jwks`. */
@@ -56,17 +66,20 @@ export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
   const audience = process.env.PRIOR_OAUTH_AUDIENCE?.trim()
   const privateKeyPem = process.env.PRIOR_OAUTH_PRIVATE_KEY?.trim()
   const kid = process.env.PRIOR_OAUTH_KID?.trim()
+  const authMethod = priorAuthMethodFromEnv()
   if (!baseUrl || !clientId || !clientSecret || !redirectUri || !audience || !privateKeyPem || !kid) return null
   // Must be an absolute http(s) origin, else buildPriorAuthorizeUrl would emit a broken URL.
   if (!/^https?:\/\/[^/]/.test(baseUrl)) return null
-  return { baseUrl, clientId, clientSecret, redirectUri, audience, privateKeyPem, kid }
+  return { baseUrl, clientId, clientSecret, redirectUri, audience, authMethod, privateKeyPem, kid }
 }
 
 /** Injected side-effects, so the orchestration is testable without network/crypto/clock. */
 export interface PriorConnectDeps {
-  /** POST a form body to the Prior token endpoint with client_secret_basic auth; returns raw JSON.
-   *  The secret goes in the Authorization header (built by the impl), never the body. */
-  postToken: (url: string, body: string, creds: { clientId: string, clientSecret: string }) => Promise<unknown>
+  /** POST a form body to the Prior token endpoint; returns raw JSON. Client authentication is
+   *  already applied by `priorTokenRequest` — `headers` carries the Basic header under
+   *  client_secret_basic and is EMPTY under private_key_jwt (the assertion rides in `body`).
+   *  Neither the secret nor the assertion may be logged. */
+  postToken: (url: string, body: string, headers: Record<string, string>) => Promise<unknown>
   /** POST the consent JSON with the token-Б Bearer; returns raw JSON. */
   postConsent: (url: string, accessToken: string, body: unknown) => Promise<unknown>
   /** RS256-sign the authorize claim-set (server/utils/priorJwt.ts signPriorJwt). */
@@ -105,12 +118,13 @@ export async function buildPriorConnectUrl(
   const tokenUrl = `${config.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`
   const consentUrl = `${config.baseUrl}${PRIOR_API_PREFIXES.OB}/accountConsents`
 
-  // 1) token Б (client_credentials, scope=accounts) — creds travel in the Basic header.
-  const tokenRaw = await deps.postToken(
-    tokenUrl,
-    buildClientCredentialsBody(PRIOR_CONSENT_SCOPE).toString(),
-    { clientId: config.clientId, clientSecret: config.clientSecret }
-  )
+  // 1) token Б (client_credentials, scope=accounts). Client auth per the configured method —
+  // ⚠ THIS call is easy to forget when migrating (#444): it lives in the connect preamble, not in
+  // the «token» modules, yet DCR registers one method per app, so leaving it on the sandbox-only
+  // Basic breaks prod at the FIRST step — before any other site is even reached.
+  const tokenAuth = resolvePriorTokenAuth(config.authMethod ?? 'client_secret_basic', config, deps)
+  const tokenReq = priorTokenRequest(buildClientCredentialsBody(PRIOR_CONSENT_SCOPE), tokenAuth)
+  const tokenRaw = await deps.postToken(tokenUrl, tokenReq.body, tokenReq.headers)
   // parsePriorTokenResponse throws on an OAuth error payload / missing access_token.
   const tokenB = parsePriorTokenResponse(tokenRaw as never)
 

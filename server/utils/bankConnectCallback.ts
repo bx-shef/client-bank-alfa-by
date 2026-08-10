@@ -14,7 +14,8 @@
 //    raw error object).
 
 import { parseOAuthCallback, buildTokenExchangeBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
-import { buildCodeExchangeBody, parsePriorTokenResponse, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
+import { buildCodeExchangeBody, parsePriorTokenResponse, priorTokenRequest, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
+import type { PriorTokenAuth } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
 import { provisionalAccountKey } from '../../app/utils/bankAccountKey'
 import { sanitizeForLog } from './logSanitize'
@@ -40,9 +41,14 @@ export interface CallbackDeps {
   exchangeToken: (baseUrl: string, body: URLSearchParams) => Promise<unknown>
   /** Prior's connect config from env (null ⇒ not configured), A5b. */
   priorConfig: () => PriorConnectConfig | null
-  /** POST Prior's code exchange with client_secret_basic (creds in the Authorization HEADER, built
-   *  by the impl — never the body), returning the raw JSON. MUST NOT log the creds. */
-  exchangePriorToken: (url: string, body: URLSearchParams, creds: { clientId: string, clientSecret: string }) => Promise<unknown>
+  /** POST Prior's code exchange, returning the raw JSON. Client authentication is already applied
+   *  (`priorTokenRequest`, #444): under client_secret_basic `headers` carries the Authorization
+   *  header; under private_key_jwt it is empty and the signed assertion rides in `body`. MUST NOT
+   *  log either. */
+  exchangePriorToken: (url: string, body: string, headers: Record<string, string>) => Promise<unknown>
+  /** Resolve client authentication for Prior's token endpoint (signs a fresh `client_assertion`
+   *  under private_key_jwt). Injected so the handler stays testable without node:crypto. */
+  priorTokenAuth: (config: PriorConnectConfig) => PriorTokenAuth
   /** Persist the connected account's tokens (encrypts refresh). */
   saveToken: (token: BankToken) => Promise<void>
   /** Optional sanitized logger (already-safe strings only). */
@@ -102,11 +108,11 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
   try {
     if (priorConfig) {
       const url = `${priorConfig.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`
-      const raw = await deps.exchangePriorToken(
-        url,
+      const req = priorTokenRequest(
         buildCodeExchangeBody(code, priorConfig.redirectUri),
-        { clientId: priorConfig.clientId, clientSecret: priorConfig.clientSecret }
+        deps.priorTokenAuth(priorConfig)
       )
+      const raw = await deps.exchangePriorToken(url, req.body, req.headers)
       const t = parsePriorTokenResponse(raw as never)
       // Prior may omit refresh_token; store '' rather than undefined (the store's shape) — the
       // account then simply can't refresh until reconnected, same as ensureBankToken's fallback.

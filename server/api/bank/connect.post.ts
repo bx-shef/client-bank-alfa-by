@@ -9,7 +9,6 @@
 // response body carries a URL with a signed state; keep it out of any downstream Referer).
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import { Buffer } from 'node:buffer'
 import { bankConnectConfigFromEnv, handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
 import { buildPriorConnectUrl, priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { signPriorJwt } from '../../utils/priorJwt'
@@ -34,12 +33,13 @@ function liveConnectDeps(): ConnectStartDeps {
     },
     config: bankConnectConfigFromEnv,
     priorConfig: priorConnectConfigFromEnv,
-    // Prior's live preamble (A5b): token Б → consent → RS256-signed `request` JWT. Secrets
-    // (client_secret, signing key) come from the config and go ONLY into these transports —
-    // client_secret_basic puts the creds in the Authorization header, never the body/URL.
+    // Prior's live preamble (A5b): token Б → consent → RS256-signed `request` JWT. Client
+    // authentication for the token call is resolved upstream by `resolvePriorTokenAuth` +
+    // `priorTokenRequest` (#444) — this transport just sends what it is given: under
+    // client_secret_basic `headers` carries the Authorization header, under private_key_jwt the
+    // signed assertion rides in `body`. Neither is ever logged or put in the URL.
     buildPriorUrl: (config, state, nowMs) => buildPriorConnectUrl(config, state, {
-      postToken: (url, body, creds) => {
-        const basic = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64')
+      postToken: (url, body, headers) => {
         const fetchJson = $fetch as unknown as (
           url: string,
           opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
@@ -47,7 +47,7 @@ function liveConnectDeps(): ConnectStartDeps {
         return fetchJson(url, {
           method: 'POST',
           body,
-          headers: { 'authorization': `Basic ${basic}`, 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
           timeout: 15_000
         })
       },

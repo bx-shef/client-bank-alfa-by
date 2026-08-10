@@ -9,6 +9,7 @@ import {
   type BankOAuthCreds,
   type BankRefreshDeps
 } from '../server/utils/ensureBankToken'
+import { PRIOR_CLIENT_ASSERTION_TYPE } from '../app/utils/priorOauth'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
 const NOW = 1_700_000_000_000
@@ -74,6 +75,32 @@ describe('bankRefreshRequest', () => {
   })
   it('manual provider throws (no online OAuth)', () => {
     expect(() => bankRefreshRequest('manual', creds, 'R')).toThrow(/manual import only/)
+  })
+
+  // #444 — prod refresh authenticates with a signed assertion, not the sandbox-only Basic header.
+  it('prior + private_key_jwt: assertion in the BODY, no Basic header', () => {
+    const { body, headers } = bankRefreshRequest('prior-by', creds, 'R', {
+      method: 'private_key_jwt',
+      assertion: 'H.P.S'
+    })
+    const form = new URLSearchParams(body)
+    expect(form.get('grant_type')).toBe('refresh_token')
+    expect(form.get('refresh_token')).toBe('R')
+    expect(form.get('client_assertion')).toBe('H.P.S')
+    expect(form.get('client_assertion_type')).toBe(PRIOR_CLIENT_ASSERTION_TYPE)
+    expect(headers).toEqual({})
+    expect(body).not.toContain('sec') // client secret never on the wire under this method
+  })
+
+  it('prior: falls back to Basic when no auth is supplied (sandbox behaviour unchanged)', () => {
+    const { headers } = bankRefreshRequest('prior-by', creds, 'R', undefined)
+    expect(headers.authorization).toBe(`Basic ${Buffer.from('cid:sec').toString('base64')}`)
+  })
+
+  it('alfa ignores a Prior auth argument (creds stay in the body, no header)', () => {
+    const { body, headers } = bankRefreshRequest('alfa-by', creds, 'R', { method: 'private_key_jwt', assertion: 'X' })
+    expect(headers).toEqual({})
+    expect(body).not.toContain('client_assertion')
   })
 })
 
