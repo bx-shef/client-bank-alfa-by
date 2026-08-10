@@ -9,8 +9,8 @@ import { isExcludedOperation, parseRuleLines, shouldNotifyChat } from '~/utils/s
 import { B24_PAYMENT_TRIGGER } from '~/config/b24'
 import type { OperationDirection } from '~/types/statement'
 
-// Chat-notification settings form + live preview. One component for two entry points:
-// the full page /settings and the dismissable slideover on /app (a slide-over panel —
+// Форма настроек приложения + живой предпросмотр. Единственный вход — слайдовер на /app
+// (отдельной страницы /settings больше нет; она дублировала эту же форму —
 // #219's "settings as a slider" spirit, without the B24 SDK slider, which only opens
 // PORTAL paths not our own app page). Settings are grouped into a B24Accordion and
 // persisted server-side (app.option via the frame token — see useChatSettings) with an
@@ -84,11 +84,11 @@ async function cancel(): Promise<void> {
 const openSections = ref(['0', '1'])
 const sections = computed(() => [
   // Bank connection FIRST: it is the action the whole online import depends on, and it used to
-  // live only on the standalone /settings page — which nothing linked to, so an admin opening the
-  // gear simply could not find it (reported from a real deployment). It belongs where settings
-  // are actually opened.
+  // жило только на отдельной странице, на которую из портала ничего не вело, — админ просто не
+  // мог его найти (доклад с живого прогона). Место настройки — там, где настройки открывают.
   { label: 'Подключение банка', slot: 'bank' },
   { label: 'Уведомления в чат', slot: 'chats' },
+  { label: 'Смарт-процессы и распределение', slot: 'distribution' },
   { label: 'Исключения', slot: 'exclusions' },
   { label: 'Авто-проведение оплат', slot: 'distribute' },
   { label: 'Карта распознавания', slot: 'recognition' }
@@ -169,7 +169,6 @@ const previewSummary = computed(() => {
   <B24Alert
     v-else-if="blocked"
     color="air-primary-warning"
-    variant="soft"
     title="Настройки доступны только администратору"
     description="Обратитесь к администратору портала Bitrix24 — изменять параметры импорта и уведомлений может только он."
     data-testid="admin-gate"
@@ -195,7 +194,6 @@ const previewSummary = computed(() => {
       <B24Alert
         v-if="!enabled"
         color="air-primary"
-        variant="soft"
         description="Настройки сохраняются внутри портала Bitrix24. Здесь — предпросмотр."
         class="mb-2"
       />
@@ -209,6 +207,14 @@ const previewSummary = computed(() => {
         type="multiple"
         :items="sections"
       >
+        <!-- Служебные смарт-процессы + журнал распределения. Раньше жили ТОЛЬКО на отдельной
+             странице /settings, до которой из портала вела одна невнятная ссылка — админ их просто
+             не находил. Страницы больше нет: все настройки здесь. -->
+        <template #distribution>
+          <ProvisionSpCard />
+          <DistributionTab class="mt-4" />
+        </template>
+
         <!-- Уведомления в чат: чат уведомлений + направления + чат ошибок. -->
         <template #bank>
           <!-- Online bank connection (Альфа / Приор) + the manual poll trigger. Both are
@@ -311,7 +317,6 @@ const previewSummary = computed(() => {
             <B24Alert
               v-if="settings.autoDistribute"
               color="air-primary-warning"
-              variant="soft"
               title="Приложение будет изменять данные в CRM"
               description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
               data-testid="auto-distribute-warning"
@@ -417,7 +422,6 @@ const previewSummary = computed(() => {
       <B24Alert
         v-if="notifyCount === 0"
         color="air-primary-warning"
-        variant="soft"
         description="При текущих правилах в чат ничего не попадёт."
       />
 
@@ -436,7 +440,6 @@ const previewSummary = computed(() => {
           <B24Badge
             :label="row.excluded ? 'не импортируется' : row.notify ? '→ в чат' : 'скрыто в чате'"
             :color="row.excluded ? 'air-primary-alert' : row.notify ? 'air-primary-success' : 'air-secondary'"
-            variant="soft"
             size="sm"
             class="shrink-0"
           />

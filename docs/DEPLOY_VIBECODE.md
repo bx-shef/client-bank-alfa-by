@@ -1,6 +1,6 @@
 # Деплой в Битрикс24 Вайбкод Black Hole (альтернативный таргет)
 
-> Last reviewed: 2026-07-28
+> Last reviewed: 2026-07-30
 
 Как выгрузить это приложение в **Битрикс24 Vibecode Black Hole** — закрытый Bitrix-Cloud VM,
 управляемый по REST (без SSH), приложение слушает `:3000` и отдаётся по HTTPS
@@ -49,7 +49,7 @@ single-container: `QUEUE_WORKERS=1`+`QUEUE_CRON=1`) — один процесс 
 Это **гейты перед тем, как делать Black Hole основным** таргетом (не «nice-to-have»):
 
 1. **Служебная зона — закрывается только паролем оператора** (см. 🔴 выше): в Black Hole под PUBLIC
-   единственная защита `/queues`,`/api/ops/*`,`/app`,`/settings` — `PUBLIC_PAGE_BASIC_AUTH_PASS`. Задать
+   единственная защита `/queues` и `/api/ops/*` — `PUBLIC_PAGE_BASIC_AUTH_PASS`. Задать
    обязательно.
 2. **POST на пререндеренные страницы может отдавать 405.** nginx специально ремапит `405→200 $uri`,
    потому что **Bitrix открывает in-portal страницы и `/install` POST-запросом**, а статический хендлер
@@ -57,7 +57,7 @@ single-container: `QUEUE_WORKERS=1`+`QUEUE_CRON=1`) — один процесс 
    B24-iframe/`/install` надо прогнать вживую** на первом деплое; если 405 — понадобится Nitro-мидлвар,
    который на POST к пререндеренному роуту отдаёт его же HTML.
 3. **CSP + security-заголовки + rate-limit `/api/auth/login`** — раньше их ставил только nginx; теперь
-   есть **Nitro-мидлвар** `server/middleware/securityHeaders.ts` (гейт `SECURITY_HEADERS_ENABLED=1` —
+   есть **Nitro-мидлвар** `server/plugins/securityHeaders.ts` (гейт `SECURITY_HEADERS_ENABLED=1` —
    ставьте в `APP_ENV_JSON` под Black Hole; в основном nginx-деплое флаг НЕ ставится, мидлвар инертен).
    Он выставляет `X-Content-Type-Options`/`Referrer-Policy`/`Permissions-Policy`/HSTS(на https)/CSP и
    троттлит POST `/api/auth/login` (~10/мин на IP, in-memory backstop, single-process). ⚠ CSP тут
@@ -123,7 +123,7 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
 
 > 🔴 **`PUBLIC_PAGE_BASIC_AUTH_PASS` под PUBLIC — ОБЯЗАТЕЛЕН.** Без него `operatorAllowed()`
 > считает служебную зону **открытой** (пароль пуст ⇒ вход выключен ⇒ зона распахнута), и под
-> публичным сервером `/queues`, `/api/ops/*`, `/app`, `/settings` доступны **кому угодно** по `appUrl`.
+> публичным сервером `/queues` и `/api/ops/*` доступны **кому угодно** по `appUrl`.
 > В основном nginx-деплое это прикрывал ещё и `deny`/сеть; в Black Hole nginx нет — единственная
 > защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie). Диагностический
 > `/api/queues` **fail-closed** app-гардом (`B24_APPLICATION_TOKEN`
@@ -183,7 +183,7 @@ VIBE_KEY="$VIBE_KEY" APP_NAME=client-bank-alfa-by \
 приложение делает внутри, **но только если она включена**: служебную зону закрывает
 `PUBLIC_PAGE_BASIC_AUTH_PASS` (пустой ⇒ зона распахнута, см. 🔴 выше), CRM-данные — фрейм-токен/
 OAuth. То есть «PUBLIC = только сеть, не данные» **верно лишь при заданном пароле оператора** и
-работающих внутренних гардах — иначе `/queues`/`/api/ops/*`/`/app`/`/settings` открыты. Задай пароль.
+работающих внутренних гардах — иначе `/queues`/`/api/ops/*` открыты. Задай пароль.
 
 ## Связка с обслуживаемым порталом
 

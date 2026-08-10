@@ -110,6 +110,13 @@ describe('oauthParamsFromToken', () => {
     expect(p.domain).toBe('acme.bitrix24.com')
     expect(p.clientEndpoint).toBe('https://acme.bitrix24.com/rest/')
   })
+
+  it('SSRF (#149): throws on a non-portal host so a poisoned stored domain cannot form the REST URL', () => {
+    // The stored-token path (makePortalSdkClient) reaches the SDK's clientEndpoint through here;
+    // without the gate a poisoned domain would make the worker POST to an attacker host.
+    expect(() => oauthParamsFromToken(token({ domain: '169.254.169.254' }), { nowMs: 0 })).toThrow(/not allow-listed/)
+    expect(() => oauthParamsFromToken(token({ domain: 'acme.bitrix24.by@evil.com' }), { nowMs: 0 })).toThrow(/not allow-listed/)
+  })
 })
 
 describe('tokenFromOAuthParams', () => {

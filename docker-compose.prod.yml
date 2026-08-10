@@ -13,8 +13,19 @@
 # /api/* в `backend` (Nitro) — поэтому вебхук B24 живёт на https://<DOMAIN>/api/b24/events
 # без CORS. Наружу (nginx-proxy) смотрит только `app`; backend и db — во внутренней сети.
 
+# Ротация логов (docs/OPERATIONS.md «Логи и ротация»). В логи воркера попадают номера счетов,
+# поэтому окно хранения ограничено СОЗНАТЕЛЬНО: без этого блока docker пишет json-file без предела
+# — финансовые ПДн копятся бессрочно и попутно переполняют диск. При --scale worker=N лимит
+# действует на каждую реплику.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+    compress: "true"
 services:
   app:
+    logging: *default-logging
     image: ghcr.io/bx-shef/client-bank-alfa-by:latest
     container_name: client-bank-alfa-by
     # 8080: the image runs nginx unprivileged (non-root) on 8080.
@@ -47,6 +58,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   backend:
+    logging: *default-logging
     image: ghcr.io/bx-shef/client-bank-alfa-by-backend:latest
     container_name: client-bank-alfa-by-backend
     # No host port and NOT on proxy-net — reached only via app's /api/ proxy_pass.
@@ -56,6 +68,9 @@ services:
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
       # AES-256-GCM key for portal refresh tokens at rest. Required — no default.
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      # Прежний ключ — только на время ротации (docs/OPERATIONS.md). Без проброса ротация
+      # невозможна: смена ключа осиротила бы все сохранённые refresh-токены.
+      B24_TOKEN_ENC_KEY_OLD: ${B24_TOKEN_ENC_KEY_OLD:-}
       # application_token is delivered INSIDE ONAPPINSTALL (per portal) and stored
       # write-once; later events are verified against that stored value. So leave
       # this EMPTY for multi-tenant — the first install bootstraps trust. It's used
@@ -123,6 +138,34 @@ services:
       CRON_REAL_POLL: ${CRON_REAL_POLL:-0}
       MANUAL_POLL_ENABLED: ${MANUAL_POLL_ENABLED:-0}
       MANUAL_POLL_COOLDOWN_SEC: ${MANUAL_POLL_COOLDOWN_SEC:-}
+      # ⚠ Distribution contour is ON by default and CREATES smart processes in the client's CRM.
+      # Without this line the documented opt-out (`DISTRIBUTION_PROVISION_ENABLED=0` in .env) is
+      # silently ignored — compose passes ONLY what is listed here.
+      DISTRIBUTION_PROVISION_ENABLED: ${DISTRIBUTION_PROVISION_ENABLED:-}
+      # Self-hosted portals: without this the SSRF host allowlist rejects them and there is no
+      # way to fix it from .env alone.
+      B24_SELFHOSTED_HOSTS: ${B24_SELFHOSTED_HOSTS:-}
+      # Employee feedback channel (docs/FEEDBACK.md) — fail-closed without the pair, and the
+      # widget silently stays hidden, which is indistinguishable from «not configured».
+      GITHUB_FEEDBACK_TOKEN: ${GITHUB_FEEDBACK_TOKEN:-}
+      GITHUB_FEEDBACK_REPO: ${GITHUB_FEEDBACK_REPO:-}
+      # Privacy/retention knobs (docs/PRIVACY.md). Defaults are the safe ones, but the docs
+      # promise they are configurable — they are not unless declared here.
+      STATEMENT_SWEEP: ${STATEMENT_SWEEP:-}
+      STATEMENT_SWEEP_INTERVAL_MIN: ${STATEMENT_SWEEP_INTERVAL_MIN:-}
+      TOMBSTONE_TTL_DAYS: ${TOMBSTONE_TTL_DAYS:-}
+      TOKEN_KEEPALIVE_HOURS: ${TOKEN_KEEPALIVE_HOURS:-}
+      QUEUE_FETCH_SATURATION_THRESHOLD: ${QUEUE_FETCH_SATURATION_THRESHOLD:-}
+      # Telegram alert channel (#426, docs/OPERATIONS.md). ONLY here, not on `worker`: the queue
+      # health check runs on the cron instance (QUEUE_CRON=1), so one voice speaks for the whole
+      # pipeline. Passing them to a scaled `worker` would give N copies of every alert.
+      # Fail-closed without the pair — alerts then stay in the log and on /queues.
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      # Telemetry (docs/OBSERVABILITY.md): no endpoint ⇒ the OTel bootstrap is a no-op.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
@@ -148,10 +191,14 @@ services:
   # All replicas pull from the same Redis — each job goes to exactly one worker, so
   # adding replicas adds throughput (see docs/QUEUES.md «Масштабирование»).
   worker:
+    logging: *default-logging
     image: ghcr.io/bx-shef/client-bank-alfa-by-backend:latest
     environment:
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
+      # Прежний ключ — только на время ротации (docs/OPERATIONS.md). Без проброса ротация
+      # невозможна: смена ключа осиротила бы все сохранённые refresh-токены.
+      B24_TOKEN_ENC_KEY_OLD: ${B24_TOKEN_ENC_KEY_OLD:-}
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       REDIS_URL: redis://redis:6379
@@ -219,6 +266,7 @@ services:
   # true): no host port, no egress, reachable solely by backend/worker. Durable
   # (appendonly) so queued jobs survive a restart.
   redis:
+    logging: *default-logging
     image: redis:7-alpine
     container_name: client-bank-alfa-by-redis
     command: ["redis-server", "--appendonly", "yes"]
@@ -234,6 +282,7 @@ services:
       - queuenet
 
   db:
+    logging: *default-logging
     image: postgres:16-alpine
     container_name: client-bank-alfa-by-db
     environment:

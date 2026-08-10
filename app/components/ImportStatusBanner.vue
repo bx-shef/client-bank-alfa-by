@@ -9,6 +9,8 @@ import { formatRelativeTime, importStateMeta, pluralRu } from '~/utils/importSta
 // Trust bar: one glance tells "alive / when updated / what reached people".
 // Colour = instant verdict. Presentational — the page owns the data.
 const props = defineProps<{ status: ImportRunSummary }>()
+/** Настройки открываются слайдовером на странице-владельце: отдельной страницы настроек нет. */
+const emit = defineEmits<{ openSettings: [] }>()
 
 // `now` is set on mount (client) so relative time is fresh and never causes an
 // SSR/CSR hydration mismatch (server renders with now=0 → the "never" branch).
@@ -61,7 +63,6 @@ const chainLine = computed(() => {
   <B24Alert
     :icon="icon"
     :color="meta.color"
-    variant="soft"
     role="status"
     aria-live="polite"
   >
@@ -82,11 +83,12 @@ const chainLine = computed(() => {
       v-if="status.state === 'error'"
       #actions
     >
+      <!-- Отдельной страницы настроек больше нет — просим страницу открыть слайдовер. -->
       <B24Button
         label="Проверить настройки"
         color="air-primary"
         size="sm"
-        to="/settings"
+        @click="emit('openSettings')"
       />
     </template>
   </B24Alert>

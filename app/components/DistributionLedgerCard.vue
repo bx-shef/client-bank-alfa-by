@@ -27,7 +27,6 @@ const view = computed(() => presentPaymentLedger(props.card.total, props.card.cu
           <B24Badge
             :label="`осталось ${view.remainingText}`"
             :color="view.remaining > 0 ? 'air-primary-warning' : 'air-primary-success'"
-            variant="soft"
             size="sm"
             data-testid="ledger-remaining"
           />
@@ -35,7 +34,6 @@ const view = computed(() => presentPaymentLedger(props.card.total, props.card.cu
             v-if="view.overLimit"
             label="перераспределено"
             color="air-primary-alert"
-            variant="soft"
             size="sm"
             data-testid="ledger-overlimit"
           />
@@ -43,7 +41,6 @@ const view = computed(() => presentPaymentLedger(props.card.total, props.card.cu
             v-if="card.requiresRedistribution"
             label="требует распределения"
             color="air-primary-alert"
-            variant="soft"
             size="sm"
             data-testid="ledger-requires"
           />
@@ -67,7 +64,6 @@ const view = computed(() => presentPaymentLedger(props.card.total, props.card.cu
             <B24Badge
               :label="r.source === 'manual' ? 'вручную' : 'авто'"
               color="air-secondary"
-              variant="soft"
               size="xs"
             />
           </span>

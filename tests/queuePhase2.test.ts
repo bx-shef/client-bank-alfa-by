@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { StatementItem } from '../app/types/statement'
 import {
-  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps
-} from '../server/queue/handlers'
+  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
 import {
   DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
 } from '../server/queue/cron'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
+import { dedupKey } from '../app/utils/statement'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
@@ -61,6 +61,8 @@ interface FakeOpts {
   triggerFactExists?: boolean
   /** what writeTriggerFact returns (true = a new trigger marker row was created); default true (§9.3 #6). */
   triggerRowCreated?: boolean
+  /** make writeActivity THROW on its first call only, then succeed (C2 double-fire regression). */
+  writeActivityFailFirst?: boolean
 }
 
 /** Recording fake deps; fetchStatement/parseFile return the given batch. By default
@@ -81,7 +83,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], ledger: [], trigHas: [], trigRec: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -95,11 +97,16 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       return o.myCompany ?? null
     },
     writeActivity: async (it, companyId, memberId, note) => {
+      if (o.writeActivityFailFirst && calls.activityFails.length === 0) {
+        calls.activityFails.push(it.docId)
+        throw new Error('transient configurable.add failure')
+      }
       if (!companyId) return null // no company → no owner → nothing written
       const id = `act-${nextId++}`
       // configurable.add stamps the ORIGINATOR_ID/ORIGIN_ID marker atomically with the
-      // activity — model that by persisting the dedup key here (getActivityId reads it).
-      written.set(`${it.account}|${it.docId}`, id)
+      // activity — model that by persisting the REAL dedup key here (getActivityId reads it).
+      // Must be dedupKey(it), not raw `account|docId` — they diverge for a blank docId (C1).
+      written.set(dedupKey(it), id)
       calls.activity.push([it.docId, companyId, memberId, id])
       calls.activityNote.push([it.docId, companyId, note ?? null]) // #91 reason-block capture
       return id
@@ -161,6 +168,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     writeTriggerFact: async (it, target, companyId, memberId, etids) => {
       calls.trigRec.push([it.docId, target.kind, target.id, companyId, memberId, etids.paymentSp.entityTypeId, etids.distributionSp.entityTypeId])
       return o.triggerRowCreated ?? true
+    },
+    notifyUnresolved: async (it, identifiers, dialogId, memberId, truncated) => {
+      calls.unresolvedChat.push([it.docId, identifiers, dialogId, memberId, truncated])
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
@@ -298,7 +308,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
@@ -312,7 +322,7 @@ describe('handleCrmSyncJob', () => {
     expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0 })
     // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, created: 0, notified: 0, skipped: 2, excluded: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -321,7 +331,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -335,7 +345,7 @@ describe('handleCrmSyncJob', () => {
     // The confused-op sample (#FEEDBACK) rides on the summary — split it out so the counter check
     // stays strict, then assert it captured the first unmatched op.
     const { sample, ...counters } = r
-    expect(counters).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(counters).toEqual({ processed: 2, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -422,7 +432,7 @@ describe('handleCrmSyncJob', () => {
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
     const { sample, ...counters } = r // sample (d3, unmatched) split out so the counter check stays strict
-    expect(counters).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
+    expect(counters).toEqual({ processed: 3, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -462,7 +472,7 @@ describe('handleCrmSyncJob', () => {
     const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
     // Full shape: only `excluded` and the приход/расход split move; nothing produced.
-    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(acc.calls.find).toEqual([]) // never even looked up the company
     expect(acc.calls.activity).toEqual([]) // NO CRM activity written
     expect(acc.calls.chat).toEqual([]) // NO chat
@@ -472,7 +482,7 @@ describe('handleCrmSyncJob', () => {
     // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
-    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(pur.calls.activity).toEqual([])
     expect(pur.calls.chat).toEqual([])
   })
@@ -523,6 +533,92 @@ describe('handleCrmSyncJob', () => {
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
     expect(r.recognized).toBe(0)
     expect(calls.recognized).toEqual([])
+  })
+
+  // «Номер распознан, а цели в CRM нет» (#421). До этого случай МОЛЧАЛ: сообщения в чат ошибок
+  // строились только внутри ветки «кандидаты есть», поэтому платёж со счётом, которого в CRM уже
+  // нет (удалён, опечатка в номере, отменённая стадия), проходил незаметно — дело записано,
+  // привязки нет, расхождение всплывает только при сверке.
+  it('распознали номер, кандидатов нет → счётчик unresolved и сообщение в чат ошибок', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
+    })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.unresolved).toBe(1)
+    expect(r.resolved).toBe(0)
+    expect(calls.unresolvedChat).toEqual([['d1', ['СЧ-1234'], 'err', 'M', false]])
+  })
+
+  it('без чата ошибок случай всё равно СЧИТАЕТСЯ — иначе он исчезнет и из метрик', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
+    })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.unresolved).toBe(1)
+    expect(calls.unresolvedChat).toEqual([])
+  })
+
+  it('кандидаты найдены → это НЕ unresolved', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }] }]
+    })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.unresolved).toBe(0)
+    expect(calls.unresolvedChat).toEqual([])
+  })
+
+  it('«вид не настроен» (unsupported) — НЕ «цель не найдена»', async () => {
+    // В CRM по такому номеру никто ничего не искал: сообщение «подходящих счетов нет» было бы
+    // ложью, а совет «проверьте статус документа» отправил бы бухгалтера искать несуществующую
+    // проблему вместо настройки карты.
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'unsupported', candidates: [] }]
+    })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.unresolved).toBe(0)
+    expect(calls.unresolvedChat).toEqual([])
+  })
+
+  it('не пересылает «цель не найдена» при повторной доставке джобы', async () => {
+    // Сообщение стоит ПОСЛЕ записи маркера, поэтому редоставка отсекается верхним гейтом skip —
+    // у чата собственного дедупа нет.
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
+    })
+    const j = job([item('d1', 'credit', 'Оплата по счету СЧ-1234')])
+    await handleCrmSyncJob(j, deps)
+    const second = await handleCrmSyncJob(j, deps)
+    expect(second.unresolved).toBe(0)
+    expect(calls.unresolvedChat).toHaveLength(1)
+  })
+
+  it('чат не заливается: сообщений на прогон не больше капа, а СЧЁТЧИК честен', async () => {
+    // Это состояние НАСТРОЙКИ, а не отдельного платежа: кривая маска даёт его на всех операциях,
+    // и выписка на сотни строк вылилась бы в сотни одинаковых сообщений.
+    const ops = Array.from({ length: MAX_UNRESOLVED_NOTICES + 4 }, (_, i) => item(`d${i}`, 'credit', 'Оплата по счету СЧ-1234'))
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [{ kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [] }]
+    })
+    const r = await handleCrmSyncJob(job(ops), deps)
+    expect(r.unresolved).toBe(ops.length)
+    expect(calls.unresolvedChat).toHaveLength(MAX_UNRESOLVED_NOTICES)
   })
 
   it('counts recognized per OPERATION, not per identifier (≥2 matches → recognized 1, one report)', async () => {
@@ -1154,6 +1250,32 @@ describe('handleCrmSyncJob', () => {
     expect(calls.trigApply).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // attempted once
     expect(calls.trigRec).toEqual([]) // no SP marker persisted (nothing fired yet)
     expect(calls.trigEnqueue).toEqual([['d1', 'deal', '77', 'M', 'cbatest_pay', undefined]]) // durable retry enqueued
+  })
+
+  it('C2: writeActivity fails → trigger NOT fired; the retry fires it exactly once (no double-fire)', async () => {
+    // The fire is deferred past the dedup-marker write. Without SPs provisioned there is no
+    // durable trigger fact, so firing BEFORE writeActivity meant: transient configurable.add
+    // failure → BullMQ retry → second fire of the client's «деньги пришли» automation.
+    const noSpMatrix: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'Д-dd', kind: 'deal-id' }] }
+    const { deps, calls } = fakeDeps({
+      recognition: noSpMatrix, resolve: [dealAt('77')], autoDistribute: true,
+      allocation: { triggerCode: 'cbatest_pay' }, writeActivityFailFirst: true
+    })
+    const j = job([item('d1', 'credit', 'оплата Д-55')])
+    await expect(handleCrmSyncJob(j, deps)).rejects.toThrow('transient') // first delivery fails at writeActivity
+    expect(calls.trigApply).toEqual([]) // trigger NOT fired before the marker
+    const r = await handleCrmSyncJob(j, deps) // BullMQ redelivery — writeActivity now succeeds
+    expect(r.created).toBe(1)
+    expect(calls.trigApply).toHaveLength(1) // fired exactly once, on the delivery that landed the marker
+  })
+
+  it('C4: a zero-amount op (parse artifact) drives NO intent resolution/allocation, but the дело is still written', async () => {
+    const { deps, calls } = fakeDeps({ recognition: dealMatrix, resolve: [dealAt('77')], autoDistribute: true, allocation: { triggerCode: 'cbatest_pay' } })
+    const zero = { ...item('d1', 'credit', 'оплата Д-55'), amount: 0 }
+    const r = await handleCrmSyncJob(job([zero]), deps)
+    expect(calls.resolve).toEqual([]) // no lookup → no zero-exact-match, no trigger
+    expect(calls.trigApply).toEqual([])
+    expect(r.created).toBe(1) // the artifact is still visible to a human as an activity
   })
 
   it('autoDistribute ON + triggerCode, applyTrigger "skip" (demo/malformed): NO fact, NO retry enqueued (#79)', async () => {

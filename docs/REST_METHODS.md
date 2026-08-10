@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-29
+> Last reviewed: 2026-07-30
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -32,7 +32,7 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 `$fetch`-`callRest` ретайрнут (миграция #191/«всё на jssdk»). Два входа:
 - **`crm-sync`** — per-portal `B24OAuth` из сохранённого токена (SDK-резолвер `portalSdkResolver.ts`,
   пер-JOB мемоизация клиента = один rate-limiter-бакет + один token-load на джобу);
-- **UI-фрейм-роуты** (`settings`/`chat-settings`/`chat-search`/`import`/`import/status`/`metrics*`) —
+- **UI-фрейм-роуты** (`settings`/`chat-settings`/`chat-search`/`import`/`import/status`/`import/batch`/`metrics*`) —
   `liveDeps.frameRestCall` → `makeFrameRestCall` (тот же SDK по фрейм-access-токену, за SSRF-гейтом
   `assertPortalHost`; refresh-токена нет — фрейм-токен свежий, рефреш не нужен).
 
@@ -59,10 +59,10 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 | `crm.documentgenerator.document.list` | classic | `documentgenerator` | `server/utils/documentLookup.ts` → `intentResolver.ts`/`worker.ts` | да | актуален | Мост-документ (#109, **wired в hot-path**): `document-number` → **массив** привязанных сущностей `{entityTypeId, entityId}[]` (фильтр `number`, ответ `result.documents[]`; номер **не** уникален по порталу → список). Гард: `doc.number` сверяется с запрошенным. **LIVE-VERIFIED** (`pnpm verify:109` #8): обратный `filter:{number}` работает, `entityTypeId`/`entityId` присутствуют. ⚠ **Live:** портал игнорирует `select` → ответ всегда несёт `*UrlMachine` (access-токен в URL); модуль читает только id-поля, сырой ответ не логируем. Scope **`documentgenerator`** (в `B24_REQUIRED_SCOPES`). Ref недоверенный → `intentResolver` рескоупит каждый по компании через `findCandidateById` (IDOR). |
 | `crm.activity.configurable.add` | classic | `crm` | `server/utils/configurableActivityWrite.ts` (+ билдер `app/utils/configurableActivity.ts`) | нет (`ERROR_BATCH_METHOD_NOT_ALLOWED`) | актуален | Запись операции **настраиваемым делом** с маркером `originatorId`+`originId` (#259, стадия 4). Ответ `{result:{activity:{id}}}`. ⚠ **только OAuth-контекст** (`ERROR_WRONG_CONTEXT`, класс #79) — вебхуком не создать. |
 | `crm.activity.list` | classic | `crm` | `server/utils/activityMarkerLookup.ts` | да | актуален | **Read-before-write дедуп (#259):** поиск дела по маркеру `filter[ORIGINATOR_ID][ORIGIN_ID]` (пара обязательна против ложного матча), `select[ID]` — есть → операция уже внесена, пропускаем. |
-| `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts`, `server/utils/allocationErrorNotify.ts` | да | актуален | Уведомление об операции в чат (стадия 6); тем же методом — заметка об `ambiguous`/`manual` разнесении в чат ошибок (#184). |
+| `im.message.add` | im | `im` | `server/utils/chatNotifyWrite.ts`, `server/utils/allocationErrorNotify.ts` | да | актуален | Уведомление об операции в чат (стадия 6); тем же методом — заметка об `ambiguous`/`manual` разнесении и о **распознанном номере без найденной цели** (#184, #421) в чат ошибок. |
 | `im.search.chat.list` | im | `im` | `server/utils/chatSearch.ts` | **нет** | актуален | Поиск чата по названию/участникам для пикера (`FIND`≥3, `LIMIT`≤50, `OFFSET`; отдаёт `total`/`next`). |
 | `im.recent.list` | im | `im` | `server/utils/chatSearch.ts` | нет | актуален | Дефолтный список пикера — последние групповые чаты (`SKIP_DIALOG=Y`, `OFFSET`/`LIMIT`). |
-| `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts`, `server/api/bank/accounts.get.ts`, `server/api/bank/disconnect.post.ts`, `server/api/bank/set-account.post.ts`, `server/api/setup-status.get.ts`, `server/api/app-rating.get.ts`, `server/api/app-rating.post.ts`, `server/api/feedback.post.ts`, `server/utils/settingsHandler.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + метрики `#78` + старт подключения банка `POST /api/bank/connect` + **список/отключение счетов** `GET /api/bank/accounts`, `POST /api/bank/disconnect` (#404, admin-only) + **экран готовности** `GET /api/setup-status` (#409/#405, admin-only) + попап «оцените приложение» `GET/POST /api/app-rating` + канал обратной связи `POST /api/feedback` + **запись настроек** `chat-settings.post` через `verifyFrameAdmin`, #182 + **сброс метрик** `metrics-reset.post` (admin-only, #182 паритет)): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1), **записи настроек** (#182: `autoDistribute`/карта распознавания/чат-цели скоуплены на весь портал → только админ) **и сброса метрик**. |
+| `profile` | classic | — | `server/api/import.post.ts`, `server/api/import/status.get.ts`, `server/api/import/batch.get.ts`, `server/api/import/metrics.get.ts`, `server/api/import/metrics-reset.post.ts`, `server/api/bank/connect.post.ts`, `server/api/bank/accounts.get.ts`, `server/api/bank/disconnect.post.ts`, `server/api/bank/set-account.post.ts`, `server/api/setup-status.get.ts`, `server/api/app-rating.get.ts`, `server/api/app-rating.post.ts`, `server/api/feedback.post.ts`, `server/utils/settingsHandler.ts` | нет | актуален | Валидация фрейм-токена (ручной импорт + `GET /api/import/status` + **итоги конкретных загрузок** `GET /api/import/batch` (#417 — роут ОПРАШИВАЕТСЯ, то есть тот же вектор усиления, что у статуса; закрыт nginx-зоной `import`) + метрики `#78` + старт подключения банка `POST /api/bank/connect` + **список/отключение счетов** `GET /api/bank/accounts`, `POST /api/bank/disconnect` (#404, admin-only) + **экран готовности** `GET /api/setup-status` (#409/#405, admin-only) + попап «оцените приложение» `GET/POST /api/app-rating` + канал обратной связи `POST /api/feedback` + **запись настроек** `chat-settings.post` через `verifyFrameAdmin`, #182 + **сброс метрик** `metrics-reset.post` (admin-only, #182 паритет)): успех доказывает, что токен принадлежит этому порталу (иначе B24 отвергает), блокирует спуфинг `X-B24-Domain`, + даёт id пользователя-инициатора **и флаг `ADMIN`** (базовый scope) — для гейта админа при подключении банка (A7b-1), **записи настроек** (#182: `autoDistribute`/карта распознавания/чат-цели скоуплены на весь портал → только админ) **и сброса метрик**. |
 
 > **HTTP, не REST-метод:** OAuth-токен портала обновляем на `oauth/token` (endpoint Bitrix
 > `oauth.bitrix.info/oauth/token/`) — это не REST-метод транспорта, а прямой запрос к token endpoint.
@@ -112,8 +112,8 @@ _Новые REST-методы добавляем сюда до внедрени�
 | `app.info` | `actions.v2.batch.make` | `app/pages/install.vue` | Диагностика: метаданные приложения. |
 | `scope` | `actions.v2.batch.make` | `app/pages/install.vue` | Диагностика: выданные права. |
 | `installFinish` | SDK frame | `app/pages/install.vue` | Завершение установки. |
-| `parent.setTitle` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/settings.vue` | Заголовок окна приложения в портале. |
-| `parent.fitWindow` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/settings.vue` | Подгонка высоты iframe под контент. |
+| `parent.setTitle` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/import.vue` | Заголовок окна приложения в портале. |
+| `parent.fitWindow` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/import.vue` | Подгонка высоты iframe под контент. |
 
 > `placement.bind` пока **не** вызываем — плейсменты финализируем на тестовом портале (см.
 > `docs/REFACTOR_PLAN.md`). Когда добавим — строка сюда.

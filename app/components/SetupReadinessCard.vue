@@ -89,7 +89,6 @@ onBeforeUnmount(() => {
     <B24Alert
       v-if="!inFrame"
       color="air-primary"
-      variant="soft"
       description="Готовность видна внутри портала Bitrix24. Здесь — предпросмотр."
       data-testid="readiness-preview"
     />
@@ -111,7 +110,6 @@ onBeforeUnmount(() => {
         <B24Alert
           v-if="setup.error.value"
           color="air-primary-alert"
-          variant="soft"
           :description="setup.error.value"
           class="mb-3"
           data-testid="readiness-error"

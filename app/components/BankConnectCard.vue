@@ -91,7 +91,6 @@ async function onConnect() {
   <B24Alert
     v-else-if="inPortal && !isAdmin"
     color="air-primary-warning"
-    variant="soft"
     title="Подключение банка доступно только администратору"
     description="Онлайн-подключение привязывает доступ к банку ко всему порталу — начать его может только администратор Bitrix24."
     data-testid="admin-gate"
@@ -137,7 +136,6 @@ async function onConnect() {
       <B24Alert
         v-if="!enabled"
         color="air-primary"
-        variant="soft"
         description="Подключение выполняется внутри портала Bitrix24. Здесь — предпросмотр."
         data-testid="preview-note"
       />
@@ -162,7 +160,6 @@ async function onConnect() {
         <B24Alert
           v-if="error"
           color="air-primary-alert"
-          variant="soft"
           :description="error"
           data-testid="connect-error"
         />
@@ -174,7 +171,6 @@ async function onConnect() {
         <B24Alert
           v-if="!error && started"
           color="air-primary-success"
-          variant="soft"
           description="Открыли окно банка в новой вкладке. Войдите и подтвердите доступ, затем вернитесь на эту страницу."
           data-testid="connect-started"
         />

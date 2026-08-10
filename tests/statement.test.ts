@@ -30,6 +30,36 @@ describe('dedupKey', () => {
   it('combines account and docId', () => {
     expect(dedupKey({ account: 'BY80', docId: '42' })).toBe('BY80|42')
   })
+
+  it('falls back to a content signature when docId is blank (no account-wide collapse)', () => {
+    // Two DIFFERENT payments on the same account with no doc id must not share a key.
+    const a = makeItem({ docId: '', amount: 100, purpose: 'аренда' })
+    const b = makeItem({ docId: '', amount: 250, purpose: 'услуги' })
+    expect(dedupKey(a)).not.toBe(dedupKey(b))
+    expect(dedupKey(a)).not.toBe('BY80ALFA30121122220090270000|') // not the collapsing key
+  })
+
+  it('is idempotent for a re-run of the same blank-docId payment', () => {
+    const item = makeItem({ docId: '', amount: 100 })
+    expect(dedupKey(item)).toBe(dedupKey(makeItem({ docId: '   ', amount: 100 })))
+  })
+
+  it('blank-docId key is BOUNDED (hashed) — a huge payer-controlled purpose cannot overflow ORIGIN_ID', () => {
+    // The key lands in B24 ORIGIN_ID (varchar 255); raw concatenation would truncate there and the
+    // exact-match marker lookup would never find it again → duplicate activities on redelivery.
+    const long = makeItem({ docId: '', purpose: 'х'.repeat(10_000) })
+    expect(dedupKey(long).length).toBeLessThan(80)
+    expect(dedupKey(long)).toBe(dedupKey({ ...long })) // still deterministic
+  })
+
+  it('length-prefixing prevents field-splicing via payer-controlled separators', () => {
+    // Adjacent fields (purpose, counterparty.account) shifted across the boundary: a naive
+    // `join('¦')` yields the SAME string for both (purpose is payer-controlled) → same key →
+    // one of two different operations silently dropped. Length-prefixing keeps them distinct.
+    const a = makeItem({ docId: '', purpose: 'X¦Y', counterparty: { name: 'N', unp: 'U', account: 'Z' } })
+    const b = makeItem({ docId: '', purpose: 'X', counterparty: { name: 'N', unp: 'U', account: 'Y¦Z' } })
+    expect(dedupKey(a)).not.toBe(dedupKey(b))
+  })
 })
 
 describe('splitByDirection', () => {

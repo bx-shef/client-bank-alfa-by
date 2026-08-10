@@ -3,7 +3,7 @@
 // them IN THE BROWSER (deterministic — no backend/AI), and preview the operations.
 // Reuses the tested parser (importUpload → manualImport) and the OperationList
 // component. Writing the parsed batch to CRM is a later slice (file-parse queue).
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   ACCEPTED_EXTENSIONS,
   MAX_UPLOAD_FILES,
@@ -15,7 +15,9 @@ import {
 } from '~/utils/importUpload'
 import { splitByDirection } from '~/utils/statement'
 import { MAX_FILE_EMBED } from '~/utils/feedback'
-import { useImport } from '~/composables/useImport'
+import { useImport, type ImportOutcome } from '~/composables/useImport'
+import { useImportBatches } from '~/composables/useImportBatches'
+import { batchStateLabel, summaryMessage } from '~/utils/importBatchView'
 
 const results = ref<UploadItemResult[]>([])
 // Raw files kept aligned 1:1 with `results` (same truncated batch order) so we can
@@ -25,7 +27,7 @@ const truncated = ref(0)
 const dragOver = ref(false)
 const busy = ref(false)
 const submitting = ref(false)
-const submitResult = ref<{ ok: boolean, message: string } | null>(null)
+const submitResult = ref<ImportOutcome | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 // Flips true after a successful «Записать в CRM» — the moment the user has clearly benefited, so the
 // «оцените приложение» modal (AppRatingModal) can ask. The show decision is server-throttled; this
@@ -48,6 +50,15 @@ const totals = computed(() => splitByDirection(allItems.value))
 const okFiles = computed(() => batchFiles.value.filter((_, i) => results.value[i]?.ok))
 
 const { submitFiles } = useImport()
+// Итог обработки КОНКРЕТНОЙ загрузки (#417): раньше страница отвечала «принято» и замолкала,
+// хотя запись в CRM идёт в фоне и её исход сотруднику как раз и нужен.
+const batches = useImportBatches()
+const batchSummary = computed(() => summaryMessage(batches.results.value))
+// Перезагрузка вкладки не должна стирать исход: обработка идёт в фоне, ключи лежат в
+// sessionStorage, поэтому вернувшийся сотрудник видит результат, а не «принято» из ниоткуда.
+onMounted(() => {
+  void batches.restore()
+})
 
 async function processFiles(files: File[]) {
   if (!files.length) return
@@ -82,8 +93,11 @@ async function processFiles(files: File[]) {
 
 async function writeToCrm() {
   submitting.value = true
+  batches.reset()
   submitResult.value = await submitFiles(okFiles.value, allItems.value.length)
   submitting.value = false
+  // Ключи есть и у частичного отказа (часть файлов приняли) — их итог всё равно доедет.
+  if (submitResult.value.batchIds.length) void batches.track(submitResult.value.batchIds)
   // A successful CRM write is the «benefited» moment → let the rating modal ask (server-throttled).
   if (submitResult.value?.ok) ratingTrigger.value = true
 }
@@ -155,18 +169,15 @@ function clearAll() {
     <B24Alert
       v-if="truncated > 0"
       color="air-primary-warning"
-      variant="soft"
       title="Взяты не все файлы"
       :description="`За один раз обрабатываем не больше ${MAX_UPLOAD_FILES} файлов. Остальные (${truncated}) пропущены — загрузите их отдельно.`"
       data-testid="truncated"
     />
 
-    <!-- Results region — announced to screen readers as it fills in -->
-    <div
-      role="status"
-      aria-live="polite"
-      class="space-y-6"
-    >
+    <!-- Results block. NOT a live region itself (U3, #430): wrapping the whole block in
+         role=status made SR re-announce the entire file list + preview on every change and
+         nested the alerts inside a live region. Only the one-line summary below is live. -->
+    <div class="space-y-6">
       <!-- Per-file results -->
       <ul
         v-if="results.length"
@@ -189,16 +200,18 @@ function clearAll() {
             v-if="r.ok"
             :label="`разобрано: ${r.items.length}`"
             color="air-primary-success"
-            variant="soft"
             size="sm"
             class="mt-0.5 shrink-0"
           />
         </li>
       </ul>
 
-      <!-- Summary + combined preview -->
+      <!-- Summary + combined preview. The summary line is the ONE live region here — a short,
+           stable sentence a screen reader can announce without flooding (U3). -->
       <template v-if="allItems.length">
         <p
+          role="status"
+          aria-live="polite"
           class="text-sm text-(--ui-color-base-3)"
           data-testid="summary"
         >
@@ -235,7 +248,6 @@ function clearAll() {
           <B24Alert
             v-if="submitResult"
             :color="submitResult.ok ? 'air-primary-success' : 'air-primary-alert'"
-            variant="soft"
             :title="submitResult.ok ? 'Отправлено' : 'Не отправлено'"
             :description="submitResult.message"
             data-testid="submit-result"
@@ -247,11 +259,71 @@ function clearAll() {
       <B24Alert
         v-else-if="results.length"
         color="air-primary-warning"
-        variant="soft"
         title="Не удалось разобрать"
         description="Проверьте формат файла: ожидается 1CClientBankExchange или client-bank «***** ^Type=» в кодировке windows-1251."
         data-testid="all-failed"
       />
+      <!-- Реальный исход обработки (#417). НЕ под гейтом предпросмотра: после перезагрузки вкладки
+           предпросмотра нет (он живёт только в памяти), а итог как раз и нужен — иначе восстановление
+           ключей из sessionStorage опрашивало бы сервер в невидимую разметку. -->
+      <B24Card
+        v-if="batches.results.value.length || batches.polling.value || batches.timedOut.value"
+        data-testid="batch-results"
+      >
+        <template #header>
+          <h2 class="font-semibold">
+            Результат обработки
+          </h2>
+        </template>
+
+        <ul class="space-y-2 text-sm">
+          <li
+            v-for="r in batches.results.value"
+            :key="r.batchId"
+            class="flex flex-wrap items-center justify-between gap-2"
+          >
+            <span class="min-w-0 flex-1 break-words">{{ r.fileName || 'файл без имени' }}</span>
+            <!-- Состояние несёт БЕЙДЖ, а не только цвет текста: иначе «ошибка» и «записано» в ч/б
+                 и для дальтоника неотличимы. -->
+            <B24Badge
+              :label="batchStateLabel(r)"
+              :color="r.state === 'error' ? 'air-primary-alert' : r.state === 'queued' ? 'air-secondary-accent' : 'air-primary-success'"
+              size="sm"
+            />
+          </li>
+        </ul>
+
+        <p
+          v-if="batchSummary"
+          class="mt-3 text-sm text-(--ui-color-base-3)"
+        >
+          {{ batchSummary }}
+        </p>
+        <p
+          v-else-if="batches.polling.value"
+          class="mt-3 text-sm text-(--ui-color-base-3)"
+        >
+          Обрабатываем загрузку…
+        </p>
+
+        <!-- Опрос сдался по времени. Молча замереть здесь нельзя — это ровно тот молчащий импорт,
+             который #417 и чинит, только на три минуты позже. -->
+        <template v-if="batches.timedOut.value">
+          <B24Alert
+            color="air-primary-warning"
+            title="Обработка занимает дольше обычного"
+            description="Запись в CRM продолжается в фоне — страницу можно закрыть, результат появится в делах компании. Или проверьте ещё раз."
+            class="mt-3"
+          />
+          <B24Button
+            label="Проверить ещё раз"
+            color="air-secondary-no-accent"
+            size="sm"
+            class="mt-3"
+            @click="batches.retry()"
+          />
+        </template>
+      </B24Card>
     </div>
 
     <!-- Feedback on the PARSE result (docs/FEEDBACK.md, channel «сотрудник»): 👍/👎 + optional

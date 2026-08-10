@@ -9,8 +9,19 @@
 //     from ONAPPINSTALL never matches it → the verdict is 403 → install rejected.
 
 import { Buffer } from 'node:buffer'
+import { resolveTelegramConfig, telegramConfigAttempted } from './telegramAlert'
 
 const KEY_BYTES = 32
+
+/** Whether two env-encoded keys decode to the same bytes (hex vs base64 spelling included). */
+function sameKeyBytes(a: string, b: string): boolean {
+  try {
+    const decode = (v: string) => (/^[0-9a-fA-F]{64}$/.test(v) ? Buffer.from(v, 'hex') : Buffer.from(v, 'base64'))
+    return decode(a).equals(decode(b))
+  } catch {
+    return false
+  }
+}
 
 /** Obvious non-secret placeholders that must never be a live application_token. */
 const PLACEHOLDER_TOKENS = new Set([
@@ -46,6 +57,21 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     const n = encKeyBytes(key)
     if (n !== KEY_BYTES) {
       errors.push(`B24_TOKEN_ENC_KEY должен декодироваться в ${KEY_BYTES} байта (сейчас ${n}). Нужно 64 hex-символа или base64 32 байт: openssl rand -hex 32`)
+    }
+  }
+
+  // --- Previous encryption key (rotation). When set it must be valid AND different: a malformed
+  // one silently kills the second decryption attempt (the runtime skips it with a warning, so this
+  // log line is the only loud signal), and an identical one usually means the rotation was started
+  // but the new key was never put in. Compared BYTE-WISE, not as strings: the same key written as
+  // hex in one variable and base64 in the other is still the same key.
+  const oldKey = (env.B24_TOKEN_ENC_KEY_OLD ?? '').trim()
+  if (oldKey) {
+    const n = encKeyBytes(oldKey)
+    if (n !== KEY_BYTES) {
+      errors.push(`B24_TOKEN_ENC_KEY_OLD задан, но должен декодироваться в ${KEY_BYTES} байта (сейчас ${n}) — иначе токены, зашифрованные прежним ключом, не прочитаются`)
+    } else if (sameKeyBytes(oldKey, key)) {
+      warnings.push('B24_TOKEN_ENC_KEY_OLD совпадает с B24_TOKEN_ENC_KEY — ротация не начата, переменную можно убрать')
     }
   }
 
@@ -98,6 +124,18 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
       const missing = parts.filter(k => !(env[k] ?? '').trim())
       warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — онлайн-опрос ${bank} отключён (нужны все три: ${parts.join(', ')}).`)
     }
+  }
+
+  // --- Telegram alert channel (#426). Not configured = OFF, and that is a normal deployment,
+  //     so silence. But a channel that was ATTEMPTED and does not parse is the dangerous state:
+  //     the operator believes they are being watched while every alert is dropped — precisely the
+  //     failure this channel exists to prevent. Hence: warn only when they clearly meant to. ---
+  if (telegramConfigAttempted(env) && !resolveTelegramConfig(env)) {
+    const bad = [
+      (env.TELEGRAM_ALERT_BOT_TOKEN ?? '').trim() ? null : 'TELEGRAM_ALERT_BOT_TOKEN пуст',
+      (env.TELEGRAM_ALERT_CHAT_ID ?? '').trim() ? null : 'TELEGRAM_ALERT_CHAT_ID пуст'
+    ].filter(Boolean)
+    warnings.push(`Телеграм-канал оповещений задан частично или неверно (${bad.length ? bad.join('; ') : 'значения не проходят проверку формата'}) — канал ВЫКЛЮЧЕН, аварии очередей уйдут только в лог и на /queues. Токен бота: «<цифры>:<строка>», chat id: число (у группы отрицательное) или @имя_канала.`)
   }
 
   return { errors, warnings }

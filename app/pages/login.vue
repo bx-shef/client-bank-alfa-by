@@ -90,7 +90,6 @@ async function submit() {
           <B24Alert
             v-if="error"
             color="air-primary-alert"
-            variant="soft"
             :title="error"
           />
         </div>

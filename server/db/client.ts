@@ -52,6 +52,24 @@ CREATE TABLE IF NOT EXISTS import_result (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS import_batch (
+  member_id   TEXT NOT NULL,
+  batch_id    TEXT NOT NULL,
+  -- Кто загрузил. Ключ загрузки — sha256 ФАЙЛА, то есть не секрет: тот же файл даёт тот же ключ
+  -- у любого сотрудника портала. Без владельца коллега, имеющий такую же выписку, читал бы имя
+  -- файла и счётчики чужой загрузки (и перетирал бы подпись в её карточке).
+  user_id     TEXT NOT NULL DEFAULT '',
+  state       TEXT NOT NULL DEFAULT 'queued',
+  file_name   TEXT NOT NULL DEFAULT '',
+  operations  INTEGER NOT NULL DEFAULT 0,
+  created     INTEGER NOT NULL DEFAULT 0,
+  notified    INTEGER NOT NULL DEFAULT 0,
+  unmatched   INTEGER NOT NULL DEFAULT 0,
+  error       TEXT NOT NULL DEFAULT '',
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (member_id, batch_id)
+);
+
 CREATE TABLE IF NOT EXISTS metrics_counter (
   member_id    TEXT NOT NULL,
   name         TEXT NOT NULL,

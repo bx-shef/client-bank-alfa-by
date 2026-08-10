@@ -89,3 +89,60 @@ describe('checkBackendEnv', () => {
       .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
   })
 })
+
+describe('B24_TOKEN_ENC_KEY_OLD (ротация ключа)', () => {
+  const GOOD = { B24_TOKEN_ENC_KEY: 'a'.repeat(64), DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv
+
+  it('битый прежний ключ — ошибка: расшифровка молча его пропустит, это единственный громкий сигнал', () => {
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: 'a'.repeat(62) } as NodeJS.ProcessEnv)
+    expect(r.errors.some(e => e.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(true)
+  })
+
+  it('совпадающий прежний ключ — предупреждение: ротация не начата', () => {
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: 'a'.repeat(64) } as NodeJS.ProcessEnv)
+    expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(true)
+    expect(r.errors).toEqual([])
+  })
+
+  it('тот же ключ в другой записи (hex vs base64) тоже ловится — сравнение побайтовое', () => {
+    const base64Same = Buffer.from('a'.repeat(64), 'hex').toString('base64')
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: base64Same } as NodeJS.ProcessEnv)
+    expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(true)
+  })
+
+  it('валидный ОТЛИЧНЫЙ прежний ключ — тишина (штатное окно ротации)', () => {
+    const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY_OLD: 'b'.repeat(64) } as NodeJS.ProcessEnv)
+    expect(r.errors).toEqual([])
+    expect(r.warnings.some(w => w.includes('B24_TOKEN_ENC_KEY_OLD'))).toBe(false)
+  })
+})
+
+describe('Телеграм-канал оповещений (#426)', () => {
+  const GOOD = { B24_TOKEN_ENC_KEY: 'a'.repeat(64), DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv
+  const TOKEN = '1234567890:AAF-abcdefghijklmnopqrstuvwxyz012345'
+  const hasTg = (r: { warnings: string[] }) => r.warnings.some(w => w.includes('Телеграм'))
+
+  it('канал не задан — тишина: невыключенный канал это штатный деплой, а не ошибка', () => {
+    expect(hasTg(checkBackendEnv(GOOD))).toBe(false)
+  })
+
+  it('корректная пара — тишина', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: TOKEN, TELEGRAM_ALERT_CHAT_ID: '-100123' } as NodeJS.ProcessEnv))).toBe(false)
+  })
+
+  it('задан только токен — предупреждение: оператор думает, что за ним следят, а алерты пропадают', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: TOKEN } as NodeJS.ProcessEnv))).toBe(true)
+  })
+
+  it('задан только chat id — предупреждение', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_CHAT_ID: '-100123' } as NodeJS.ProcessEnv))).toBe(true)
+  })
+
+  it('обрезанный токен — предупреждение (опечатка ловится на старте, а не при первой аварии)', () => {
+    expect(hasTg(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: '123:short', TELEGRAM_ALERT_CHAT_ID: '-100123' } as NodeJS.ProcessEnv))).toBe(true)
+  })
+
+  it('это предупреждение, не ошибка — приложение поднимается и работает как раньше', () => {
+    expect(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: 'oops' } as NodeJS.ProcessEnv).errors).toEqual([])
+  })
+})

@@ -1,19 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { useImportStatus } from '~/composables/useImportStatus'
-import { MOCK_STATEMENT } from '~/utils/mockStatement'
+
+// Демо-мок статуса удалён (#415): вне портала нет фрейм-токена, а выдуманные цифры на месте
+// реального импорта — худший из возможных ответов (выглядят как работающий импорт).
 
 describe('useImportStatus', () => {
-  it('starts "never", then becomes "ok" with statement-derived counts after refresh', async () => {
+  it('без фрейм-токена остаётся пустым, а НЕ показывает выдуманный успешный прогон', async () => {
     const { status, refresh } = useImportStatus()
     expect(status.value.state).toBe('never')
-    expect(status.value.lastSyncAt).toBeNull()
 
     await refresh()
 
-    expect(status.value.state).toBe('ok')
-    expect(status.value.operations).toBe(MOCK_STATEMENT.items.length)
-    const credits = MOCK_STATEMENT.items.filter(i => i.direction === 'credit').length
-    expect(status.value.chatNotified).toBe(credits)
-    expect(status.value.lastSyncAt).not.toBeNull()
+    expect(status.value.state).toBe('never')
+    expect(status.value.operations).toBe(0)
+    expect(status.value.lastSyncAt).toBeNull()
   })
 })

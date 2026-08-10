@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-07-29
+> Last reviewed: 2026-07-31
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -14,7 +14,8 @@
 > утилиты, билдер дела, разбор/маршрутизация событий Б24) и демо-страница на mock-данных; backend
 > событий Б24 реализован (этап 3, слайс), реальная интеграция Альфы — далее. **Целевая спецификация
 > обработки платежей** (подбор компании/инвойса/сделки, распределение, оповещения, ошибки) —
-> [`docs/PROCESSING.md`](docs/PROCESSING.md). Деплой: статика лендинга за nginx + отдельный
+> [`docs/PROCESSING.md`](docs/PROCESSING.md); **указатель всех документов** —
+> [`docs/README.md`](docs/README.md). Деплой: статика лендинга за nginx + отдельный
 > backend-сервис с Postgres (как `bx-synapse`). Эталон стека — `currency-converter`.
 
 ## Стек
@@ -63,6 +64,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   «Почему мы» (6 карточек, glow), блок интеграторам, форма заявки (`BriefForm`), `MobileBriefCta`.
   Тексты — из `app/utils/landing.ts`. CTA скроллит к `#brief`, вторичная кнопка hero — к `#demo`; цели
   Метрики через `useMetrikaGoal`; glow за курсором — `useCardGlow`.
+- `app/pages/partners.vue` — **публичная страница «Интеграторам»** (layout `landing`, в
+  `nitro.prerender.routes`): условия субподряда для интеграторов Bitrix24 — модель работы, лестница
+  вознаграждения, деление зон ответственности. Тексты и данные — в чистом `app/utils/partners.ts`
+  (`PARTNERS_TITLE`/`PARTNERS_MODEL`/`PARTNERS_LADDER`/`PARTNERS_SPLIT`), развёрнутая версия для
+  переговоров — [`docs/PARTNERS.md`](docs/PARTNERS.md). ⚠ Публичных страниц ДВЕ (`/` и `/partners`) —
+  новая страница обязана попасть в `nitro.prerender.routes`, иначе на статике отдаст 404.
 - `app/components/LandingDemo.vue` + чистое ядро `app/utils/demoExtract.ts` (карта — [`docs/DEMO_LANDING.md`](docs/DEMO_LANDING.md))
   — **демо на лендинге «Попробуйте на своей выписке»**: прикрепить файл выписки → **разбор в браузере**
   (windows-1251, через готовое `importUpload.ts`: `processUploadBatch`/`dedupItems`/`deferToEventLoop`) →
@@ -96,8 +103,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   тёмная брендовая тема (vibecode-палитра, #030022 + радиальное сияние, self-hosted шрифты Rubik/
   Roboto Mono). Живёт в отдельном **layout `landing`** (`app/layouts/landing.vue`: `B24Header` с
   `AppLogo`+навигацией, `B24Footer` с `SiteFooter`+GitHub, `BusinessCardModal`), который вешается
-  только на `/` (`definePageMeta({ layout: 'landing' })`) — **in-portal страницы (`/app`,`/settings`,
-  `/login`,`/queues`) не трогает**, у них своя light/dark-auto тема. Dark форсится только для лендинга
+  только на `/` (`definePageMeta({ layout: 'landing' })`) — **in-portal страницы (`/app`,`/import`,
+  `/install`,`/login`,`/queues`) не трогает**, у них своя light/dark-auto тема. Dark форсится только для лендинга
   через `htmlAttrs data-force-dark` (учитывает `theme-init` в `app.vue`) + класс `.landing-shell` в
   `main.css` (фон/токены скоуплены на этот класс). `HeroGraph.vue` — canvas-анимация фона hero:
   внешние узлы (банки/выписка/CRM-сущности) шлют **импульсы в центральный хаб Bitrix24** (спицы +
@@ -123,9 +130,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`B24Slideover` `side="bottom"` с `SettingsForm` — удобно в узком iframe/на мобильном; форма отдаёт
   `@close` по Save/Cancel → слайдовер закрывается, `#219`) — основной вход. **`SettingsForm` несёт
   «Подключение банка» первой секцией** (`BankConnectCard` + `PollNowButton`), поэтому админ включает
-  онлайн-импорт прямо из портала, не уходя на `/settings` (раньше карточка жила только на
-  `/settings`, до которой из UI не было ссылки); на полной странице остаётся только распределение
-  (ссылка «Все настройки» в слайдовере — admin-only).
+  онлайн-импорт прямо из портала (раньше карточка жила только на отдельной странице, до которой из
+  UI не было ссылки). Отдельной страницы настроек больше нет — слайдовер единственный вход.
   **Без демо-данных** — список операций реальный (пока пуст, до backend-фида #5). **Баннер «не
   настроено»** (критерий — выбран **чат уведомлений**, `chatSettings.settings.chat.dialogId` непустой):
   внутри портала при отсутствии настройки админу (`useIsAdmin`) — предупреждение + кнопка «Открыть
@@ -133,7 +139,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   настроено. Тестовая настройка `app.option` (skeleton) **удалена**. Layout `clear`, `useB24().init()`,
   в портале — `setTitle`/`fitWindow` (try/catch). Итоги приходов/расходов несёт карточка `ImportStatsChart`
   над списком (показывается только при наличии операций). Интерактив (раскрытие строки, слайдер настроек,
-  баннер в портале) автотестами частично покрыт (рендер пустого standalone-вида) — портал проверяется вручную.
+  баннер в портале) автотестами частично покрыт (рендер пустого вида через preview-обход гейта, `?preview=1`) — портал проверяется вручную.
 - `app/components/SettingsForm.vue` — форма настроек чата (#16 PR-C): два пикера чатов на
   **`AsyncSearchSelect`** (чат уведомлений `chat.dialogId` + **чат ошибок** `errorChat.dialogId`,
   поиск через `/api/chat-search`), `B24Switch` приходы/расходы (**фильтр только чат-оповещения**, не записи),
@@ -147,18 +153,35 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   не фаерим); default OFF)
   + **`RecognitionMap` «карта сопоставления»** (#109 §4: матрицы распознавания + алфавит + `configFields`
   — форма вместо ручной правки `app.option` JSON; см. компонент ниже).
-  **Секции сгруппированы в `B24Accordion`** (Уведомления/Исключения/Авто-проведение/Карта распознавания;
-  открыта первая), под ним — **явные Save/Cancel** (`#219`, порт из `ai-price-import`, паттерн
+  Первый блок формы — **`SetupReadinessCard`** (экран готовности), под ним **`B24Accordion` из шести
+  секций** (Подключение банка / Уведомления в чат / Смарт-процессы и распределение / Исключения /
+  Авто-проведение / Карта распознавания; открыты **первые две** — свежей установке нужна первая,
+  в ежедневной работе вторая), под ним — **явные Save/Cancel** (`#219`, порт из `ai-price-import`, паттерн
   `bitrix24/b24-ai-starter`; автосейв убран). Один компонент для двух точек входа: слайдовер на
   `/app` (проп `asSlider` → Save/Cancel эмитят `close`, панель закрывается; Cancel сперва перечитывает
   серверную копию — слайдовер делит тот же singleton `settings`, иначе несохранённые правки всплыли бы
-  при повторном открытии) и полная страница `/settings` (Cancel = откат к серверной копии). **Хранение —
+  при повторном открытии); Cancel = откат к серверной копии. **Хранение —
   backend** (`app.option` через `useChatSettings`), сейв по кнопке (индикатор «Сохранено ✓» гаснет при
   первой же правке) + `notifyReload` соседним инстансам. ⚠ SDK-слайдер (`frame.slider.openPath`) для
   своей страницы приложения **не годится** (openPath открывает только портальные пути) — потому «слайдер»
   реализован нашим `B24Slideover`.
   **Гейт админа** (`useIsAdmin` → `$b24.auth.isAdmin`, default-closed до проверки): в портале не-админу —
   предупреждение вместо формы; вне фрейма — предпросмотр (persistence инертна).
+- **«Цель не найдена» больше не молчит (#421):** номер в назначении распознан, компания найдена, а
+  подходящей сущности в CRM нет (счёт удалён, опечатка в номере, документ в отменённой стадии) —
+  раньше это проходило совершенно незаметно (сообщения в чат ошибок строились **только** внутри
+  ветки «кандидаты есть»), дело записывалось без привязки, и расхождение всплывало лишь при сверке.
+  Теперь случай считается (`unresolved` в сводке `crm-sync` **и** в пожизненных метриках) и уходит в
+  чат ошибок: чистый билдер `buildUnresolvedMessage` (`allocationErrorMessage.ts`, BB-нейтрализация —
+  номер это фрагмент назначения, то есть текст плательщика) + транспорт `notifyUnresolvedViaRest`.
+  Отправка идёт **после** записи маркера, как и остальные сообщения в чат ошибок (у чата дедупа нет,
+  иначе повторная доставка джобы переслала бы сообщение). ⚠ Считается **только** `status:'resolved'`:
+  `unsupported` значит «вид не настроен», там в CRM никто ничего не искал — сообщать «подходящих
+  счетов нет» было бы ложью. Счётчик растёт **всегда**, а сообщения ограничены
+  `MAX_UNRESOLVED_NOTICES` на прогон: это состояние НАСТРОЙКИ, а не платежа (кривая маска даёт его на
+  100% операций), и выписка на сотни строк залила бы чат, который заведён ради редких случаев.
+  **Маска получила квантификатор `d+`** (`purposeMatch.ts`, #421): фиксированная длина описывает
+  нумерацию, которой не бывает — нумерация Б24 растёт от `СЧ-1`, а голая `dddd` цепляет год и сумму.
 - `app/components/RecognitionMap.vue` + чистый `app/utils/recognitionKinds.ts` — **UI «карты сопоставления»**
   (#109 §4): редактор распознавания платежей внутри `SettingsForm` (`B24Card`/`B24Select`/`B24Input`/`B24Button`/
   `B24Badge`). Привязан к `settings.recognition` через `defineModel` (вложенные мутации lint-чисты, автосейв — deep-watch
@@ -167,9 +190,12 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   имена полей, delete-on-blank), **живой предпросмотр** «тестовое назначение → распознано» на реальном `recognizeByMatrices`.
   Заменяет ручную правку `app.option` JSON; сервер по-прежнему коэрсит/клампит (`parsePortalSettings`, DoS-капы) — форма
   это удобство, не источник доверия. `recognitionKinds.ts` — RU-лейблы **всех** `IdentifierKind` (exhaustive
-  `Record<IdentifierKind,…>` + тест), `IDENTIFIER_KIND_ITEMS`/`ALPHABET_ITEMS`/`CONFIG_FIELD_ROWS`/`blankMatrix`. Тесты —
+  `Record<IdentifierKind,…>` + тест), `IDENTIFIER_KIND_ITEMS`/`ALPHABET_ITEMS`/`CONFIG_FIELD_ROWS`/`blankMatrix` +
+  **`MATRIX_PRESETS`/`missingPresets`** (#421 — кнопка «Добавить типовые»: маски на квантификаторе
+  `d+` (`СЧ-d+`/`d+/d+`/`ДОК-d+`), дедуп по маске, чтобы повторный клик не задваивал распознавание;
+  номер БЕЗ префикса в пресеты не входит намеренно — такая маска цепляет год и сумму из назначения). Тесты —
   `recognitionKinds.test.ts` (exhaustive) + `nuxt/recognitionMap.nuxt.test.ts` (рендер/add-remove/предпросмотр); визуально
-  проверен (свет/тёмная, `/settings`).
+  проверен (свет/тёмная, в слайдовере настроек).
 - `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
   в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
   мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
@@ -177,14 +203,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   Ссылка «Загрузить выписку» — в шапке `/app`. **Слайс 2 (запись в CRM) — сделан:** кнопка «Записать в
   CRM» шлёт **сам файл** на `POST /api/import` (`useImport`, фрейм-токен) → очередь `file-parse`→`crm-sync`;
   сервер — единственный авторитет разбора (парсит в воркере), браузерный разбор = только предпросмотр.
-  Обратная связь — fire-and-forget («принято, N операций», N из предпросмотра); фон пишет дело по операции.
+  Ответ — `202` («принято, N операций» из предпросмотра), дальше UI **опрашивает итог этой загрузки** (`GET /api/import/batch` по `batchId`=sha256 файла, `useImportBatches`) и показывает блок «Результат обработки» (#417); фон пишет дело по операции.
   Клиент не найден → **каскад «в мою компанию»** (#91): пишем дело в мою компанию (`findMyCompanyByAccount`)
   с блоком-причиной + чат ошибок; моя компания тоже не найдена → не пишем, чат ошибок. Элемент смарт-процесса — #109. Разбор
   покрыт тестами на реальных `tests/fixtures/*`; UI — render-тест + визуальная проверка (свет/тёмная).
-- `app/pages/settings.vue` — полная страница настроек (прямая ссылка): заголовок + `<SettingsForm/>`
-  + `BankConnectCard` + `PollNowButton` + `ProvisionSpCard` (провижининг СП, #109) + **`DistributionTab`**
-  + промо-карточка `CustomDevCard` (cross-sell, как на `/app`). Layout `clear` + `useB24().init()`.
-  Роут `/settings` — в `nitro.prerender.routes`.
+- **Страницы `/settings` больше нет** (по требованию владельца): она дублировала ту же
+  `SettingsForm`, а из портала на неё вела одна невнятная ссылка — админ не находил ни провижининг
+  СП, ни распределение. Всё живёт в **слайдовере настроек на `/app`**: `ProvisionSpCard` +
+  `DistributionTab` — секция «Смарт-процессы и распределение». Роут убран из `nitro.prerender.routes`,
+  кнопка «Проверить настройки» в `ImportStatusBanner` теперь эмитит `openSettings` (страница
+  открывает слайдовер), а не ведёт на удалённый маршрут.
 - **UI-контур распределения (#109 §9.3 #4, admin-only, за feature-gate `DISTRIBUTION_PROVISION_ENABLED`):**
   `ProvisionSpCard` (кнопка «Настроить смарт-процессы» → `POST /api/distribution/provision`) +
   **`DistributionTab`** (`useDistributionLedger` → `GET /api/distribution/ledger`: карточки платежей
@@ -210,7 +238,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
   установка доставляет `application_token`) → **`crm.automation.trigger.add`** (регистрация канонического
   триггера приложения `B24_PAYMENT_TRIGGER`, #79 — best-effort, standalone не-батч) → `installFinish`
-  (+ диагностика портала, блоки «События»/«Триггер автоматизации»); вне фрейма — редирект на `/`.
+  (+ диагностика портала, блоки «События»/«Триггер автоматизации»); вне фрейма установка не запускается: `InPortalGate` показывает объяснение (#414), редиректа на лендинг больше нет.
   **Вердикт установки (#410, чистое ядро `app/utils/installVerdict.ts` + тесты):** «Готово» больше не
   равно «работает» — три исхода вместо двух: `failed` (не дошли до `installFinish`), `degraded`
   (установлено, но портал не выдал часть прав / не зарегистрировался триггер) и `ok`. Раньше
@@ -242,7 +270,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   установку не блокирует). Требует `NUXT_PUBLIC_SITE_URL` в проде (иначе откажется биндить относительный URL —
   ошибка с retry). `placement.bind` **пока не делаем** — плейсменты добиваем на тестовом портале (см. план).
 - `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
-  (`/install`, `/app`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
+  (`/install`, `/app`, `/import` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
 - `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`,
   `documentgenerator`, **`userfieldconfig`** (#408 — провижининг СП зовёт `userfieldconfig.add`, а scope
   не запрашивался ⇒ на любом портале, где право не выдали руками, провижининг падал с опаковым
@@ -251,8 +279,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   на установке, его же указывают в `allocation.triggerCode`).
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`.
-- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдер `/app` и страница
-  `/settings` делят состояние): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
+- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдовер настроек на `/app`; форма монтируется один раз, но переживает
+  закрытие панели): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
   фрейм-токену + `chatFetcher` (транспорт для `AsyncSearchSelect`, ходит в `/api/chat-search`) +
   сид-метки выбранных чатов (кэш-`title` из настроек → недавние → id-фолбэк). Вне фрейма инертна
   (defaults, persistence — no-op). `AsyncSearchSelect` эмитит `update:selected-option` (выбранная
@@ -263,7 +291,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   синхронизация настроек между открытыми инстансами**: `buildSettingsReloadEvent(moduleId)` собирает payload
   `pull.application.event.add` с COMMAND `reload.options`; `notifyReload()` шлёт его через фрейм после сейва,
   `subscribeReload(onReload)` подписывается на канал приложения (`B24PullClientManager`) и зовёт `onReload` при
-  сейве в другом инстансе (`/app` и `/settings` подписаны → `chatSettings.load()`). Обе стороны **best-effort,
+  сейве в другом инстансе (`/app` подписан → `chatSettings.load()`). Обе стороны **best-effort,
   никогда не бросают**: pull-сервер портала может быть недоступен → тихий no-op (наши настройки всё равно
   автосейвятся, это лишь освежает **другие** открытые формы). `moduleId` = `b24MarketCode || LANDING_MARKET_CODE`.
   ⚠ Семантика pull-канала портало-специфична — проверить на живом портале.
@@ -276,7 +304,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   и цветом; строка раскрывается в `B24Collapsible` → `B24DescriptionList` с реквизитами; пустое состояние).
 - `app/types/importStatus.ts` + `app/utils/importStatus.ts` (relative-time RU `formatRelativeTime`,
   `pluralRu`, `importStateMeta`) + `app/composables/useImportStatus.ts` — модель и презентация статуса
-  импорта; mock на клиенте до backend-опроса (#5), форма ответа = будущий `GET /import/status`.
+  импорта; читает реальный прогон из `GET /api/import/status` по фрейм-токену, без токена —
+  честное пустое состояние (демо-мок удалён, #415).
 - `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
   `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
   `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
@@ -322,7 +351,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `StatementNormalizer` (`raw,ctx → StatementItem[]`) — один выход на все банки (см. REFACTOR_PLAN
     «Единый интерфейс выписки»).
   - `app/config/banks.ts` — абстракция `BankProvider` + реестр банков (Альфа/Приор/ручной импорт).
-  - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`), фильтр чата,
+  - `app/utils/statement.ts` — классификация приход/расход, дедуп (`account|docId`; пустой `docId` →
+    хеш-сигнатура контента, не схлопывает операции счёта — #430 C1), фильтр чата,
     `parseRuleLines` (textarea → массив правил).
   - `app/utils/activity.ts` — **общие хелперы дела**: заголовок (`buildActivityTitle`), деньги/дата
     (`formatMoney`/`formatIsoDate`), TZ-штамп дедлайна (`toPortalDeadline`, UTC+3), тип-владелец
@@ -421,6 +451,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     приход/расход **по дням** для доминирующей валюты); `dayBucketsForCurrency`/`operationDay`/`currencyTotal`
     (итог по выбранной/доминирующей валюте с пустым дефолтом) — хелперы для рендера. `round2` из `money.ts`,
     нефинитная/отрицательная сумма → 0. Без DOM/ECharts — под тесты (`tests/importStats.test.ts`).
+  - `app/utils/importStatsChart.ts` — **чистое построение опций столбчатого графика** (#419): расходы
+    идут в ряд со ЗНАКОМ МИНУС (ось двусторонняя, «пришло вверх / ушло вниз» читается без легенды),
+    подписи оси вынесены НАРУЖУ (`inside` убран; ширину под них резервирует `containLabel`, поэтому
+    `BAR_GRID_LEFT` мал — большой отступ складывался бы с ней и съедал график), **ось со знаком, а
+    подсказка по модулю** (в подсказке ряд уже назван «Расходы» — минус дал бы двойное отрицание; на
+    оси без знака шкала читалась бы как «2000 / 0 / 2000»), **нулевая линия явной `markLine`**
+    (`axisLine.onZero` у оси значений рисует вертикальную линию, а нужна горизонтальная). ⚠ Знак — **только отображение**: в `importStats`
+    суммы остаются положительными, иначе поехали бы итоги плиток над графиком. Вынесено из компонента
+    именно потому, что скриншотом это не проверить — график рисуется только при наличии операций
+    (тесты — `tests/importStatsChart.test.ts`).
   - `app/components/ImportStatsChart.vue` — **анимированный результат импорта для сотрудников (#62, слайс 2)**:
     count-up плитки (операции/приходы/расходы по выбранной валюте) + ECharts **бары приход/расход по дням** +
     **пончик** доли, на чистом `importStats`. ECharts динамически импортится и tree-shaken (Bar+Pie+Grid/Tooltip/
@@ -470,7 +510,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     пер-портальный Redis-кулдаун `SET NX EX` (`claimCooldownSlot`, дефолт 60с, `MANUAL_POLL_COOLDOWN_SEC`;
     claim только при наличии работы), глобальный A8-лимитер ниже по потоку. Инертно (`enqueued:0`) без счетов;
     фильтр `POLLABLE_PROVIDERS` — тот же, что у крона (Альфа **и Приор**, у каждого своя очередь и свой бюджет).
-    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll` на `/settings`.
+    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll`; живут в `SettingsForm` (слайдовер на `/app`).
     nginx `limit_req` на роут. `listBankAccountsForPortal` (без расшифровки refresh).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/
@@ -517,7 +557,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (`portal_tokens`, `portal_tombstone`,
-    `import_result`, `metrics_counter`, `bank_tokens`, `portal_app_rating`; дедуп дел — маркер в B24, таблицы нет — #259;
+    `import_result`, `import_batch` (итог конкретной ручной загрузки, #417; свип 3 дня), `metrics_counter`, `bank_tokens`, `portal_app_rating`; дедуп дел — маркер в B24, таблицы нет — #259;
     разнесение — строка dist-СП, таблицы нет — §9.3 #6, `allocation_fact` снят + идемпотентный `DROP TABLE IF EXISTS` на старте);
     `server/plugins/migrate.ts` — идемпотентная миграция на старте. **Выписки у себя не храним** — только
     токены/факты/агрегаты; сама выписка транзитна (payload'ы очередей с ограниченным по возрасту удержанием,
@@ -555,7 +595,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     логируется)→`parseTokenResponse`→`saveBankToken` под `state.accountKey`. Ошибки банка не рендерятся, лог
     через `sanitizeForLog` (CRLF/длина). 200/400/502; nginx-троттл. **UI A7c** — `app/components/
     BankConnectCard.vue` (b24ui `B24Card`/`B24RadioGroup`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
-    admin-гейт `useIsAdmin`, на `/settings`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
+    admin-гейт `useIsAdmin`, в `SettingsForm`) + composable `app/composables/useBankConnect.ts` (POST `/api/bank/connect`
     фрейм-токеном → `authorizeUrl` → `window.open` top-level; номер счёта — как есть (только trim крайних пробелов), без переформатирования/case-folding).
     **Список подключённых счетов + отключение (#404, UX по живому прогону):** после успешного connect
     UI не показывал ничего — ни банк, ни счёт, ни способ убрать ошибочный. Добавлены
@@ -612,7 +652,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/setupStatus.ts` + `server/api/setup-status.get.ts` (+ чистое ядро
     `app/utils/setupReadiness.ts`, composable `useSetupStatus.ts`, UI `SetupReadinessCard.vue`;
     DI+тесты, вкл. nuxt-тест проводки) — **экран готовности «что настроено, а что нет» (#409/#405)**:
-    первый блок в `SettingsForm`, четыре строки (банк / чат / смарт-процессы / автоопрос) с конкретным
+    первый блок в `SettingsForm`, шесть строк (банк / чат / **чат ошибок** / **карта распознавания** / смарт-процессы / автоопрос; последние
+    две добавлены в #421 — без чата ошибок сообщения о неопознанных платежах не приходят никуда, без матриц
+    разнесение не работает вовсе) с конкретным
     действием на каждой красной. Гейт как у `/api/bank/*` (портал установлен → фрейм-токен доказан для
     ЭТОГО домена → `profile.ADMIN`), nginx-троттл зоны `import`. Роут отдаёт **только то, чего браузер
     знать не может** (число подключённых счетов, гейт+период опроса, метка последнего прогона); настройки
@@ -623,18 +665,37 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     следующего опроса нет вовсе** — крон это `setInterval` от старта процесса, а `lastSyncAt` ставится
     только когда прогон дал операции, поэтому «последний прогон + интервал» врал бы дважды; показываем
     период и честную метку «последний импорт» (её ставит и ручная загрузка, отсюда именно «импорт»).
+  - `server/utils/importBatchStore.ts` + `server/api/import/batch.get.ts` (+ чистый
+    `server/utils/importBatchHandler.ts`, DI, тесты) — **итог КОНКРЕТНОЙ ручной загрузки (#417)**:
+    раньше `/import` отвечал «принято в обработку» и замолкал навсегда — запись в CRM идёт в фоне, и
+    её исход сотруднику было негде увидеть (`import_result` не годится: он один на портал и
+    перезаписывается любым прогоном, в том числе автоопросом). Таблица `import_batch`, ключ
+    `(member_id, batch_id)`, где `batch_id` = sha256 файла (его же отдаёт `POST /api/import`):
+    роут ставит `queued` после постановки в очередь (best-effort — учёт не отменяет принятый файл),
+    воркер `crm-sync` пишет итог для `source:'parse'`, воркер `file-parse` пишет провал. **Два
+    тупика закрыты явно:** разобрано НОЛЬ операций (`crm-sync` тогда не ставится вовсе — строка
+    иначе висела бы в «принято» вечно) и нераспознанный формат (помечаем провалом **только на
+    последней попытке** BullMQ — «не разобралось», а через минуту передумать, хуже, чем подождать).
+    `GET /api/import/batch?ids=…` — фрейм-токен (как у `/api/import`), **скоуп по порталу в самом
+    WHERE**: ключ это хеш ФАЙЛА, то есть не секрет — его знает всякий, у кого есть такой же файл.
+    Ключи валидируются маской sha256-hex и капятся (`MAX_BATCH_IDS`), nginx-зона `import`. UI —
+    чистое ядро `app/utils/importBatchView.ts` (когда прекращать опрос, свод, подписи) +
+    `useImportBatches` (опрос, ключи в `sessionStorage` — перезагрузка вкладки не должна стирать
+    исход) + блок «Результат обработки» в `StatementUpload`. Строка **не хранит операций/назначений**
+    — только счётчики и имя файла; свип каждые 6 часов чистит старше 3 дней (`docs/PRIVACY.md`), удаление
+    приложения — сразу.
   - `server/utils/importResultStore.ts` + `server/api/import/status.get.ts` (+ чистый
     `server/utils/importStatusHandler.ts`, DI, тесты) — **статус импорта для UI (#5)**: `crm-sync`-джоба
     **апсертит** сводку последнего прогона портала (`import_result`, один ряд на `member_id`: state/
     операции/дела/в-чат/ошибки) через воркер (демо-счета не пишут; best-effort — сбой статуса не роняет
     джобу). `GET /api/import/status` по **фрейм-токену** (`Bearer`+`X-B24-Domain`, `profile`-валидация,
     блок спуфинга домена; нет прогона → `neverSummary`) отдаёт `ImportRunSummary`. UI `useImportStatus`:
-    в портале — реальный fetch, вне фрейма — демо-mock. Счётчик `notified` в `handleCrmSyncJob` (⊆ created).
+    в портале — реальный fetch, вне фрейма — пустая сводка `never` (демо-мок удалён, #415). Счётчик `notified` в `handleCrmSyncJob` (⊆ created).
     Удаление приложения чистит `import_result`.
   - `server/utils/metricsStore.ts` + `server/api/import/metrics.get.ts` / `metrics-reset.post.ts` (+ чистый
     `server/utils/metricsHandler.ts`, DI, тесты) — **долговременные счётчики портала (#78)**: воркер
     best-effort **накапливает** пожизненные счётчики (`metrics_counter`, ключ `member_id|name`:
-    processed/created/notified/unmatched/recognized/resolved/allocated/distributed/ambiguous/manual) из сводки
+    processed/created/notified/unmatched/unresolved/recognized/resolved/allocated/distributed/ambiguous/manual) из сводки
     `crm-sync` рядом с `import_result` (демо-счета не пишут; сбой метрик не роняет джобу). В отличие от
     `import_result` (только **последний** прогон) — это **тотал за всё время**, переживает рестарт. `GET
     /api/import/metrics` (счётчики) и `POST /api/import/metrics-reset` («сбросить») по **фрейм-токену**
@@ -642,174 +703,43 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `profile.ADMIN`, #182 паритет). Удаление приложения чистит
     `metrics_counter`. Форма портирована из соседнего `ai-price-import` (адаптирована под наш `QueryFn` и
     платёжный словарь метрик).
-  - **Очереди (BullMQ + Redis) — шина под нагрузку/масштабирование** (`server/queue/`;
-    справка-обзор с диаграммой потока и метриками — [`docs/QUEUES.md`](docs/QUEUES.md)):
-    - `topology.ts` — чистые контракты: очереди `b24-events`/`bank-fetch`/`file-parse`/`crm-sync`/`b24-deletions`/`feedback-post`/`trigger-fire`,
-      payload'ы (`EventJob`/`FetchJob`/`ParseJob`/`CrmSyncJob`/`DeletionJob`/`FeedbackPostJob`/`TriggerFireJob`), идемпотентные `*JobId` (дедуп ретраев).
-      **`trigger-fire`** (#79) — durable-ретрай платёжного триггера «деньги пришли»: crm-sync фаерит один раз синхронно,
-      промах (`applyTrigger`→`retry`: транзиент / `CODE` не зарегистрирован) кладётся в очередь (`enqueueTriggerFire`,
-      `TRIGGER_RETRY_OPTS`: 12 попыток, backoff 60с), воркер `startTriggerWorker`→`handleTriggerFireJob` пере-фаерит до
-      `{result:true}` — сигнал само-заживает; `skip` (демо/битый CODE) не ретраится; без Redis → single-shot.
-      **`feedback-post`** (#61) — durable outbox отзыва «сотрудник»: роут кладёт **транзиентно-упавший** issue (5xx/429/сеть),
-      воркер `startFeedbackWorker`→`handleFeedbackPostJob` ретраит с backoff (`FEEDBACK_RETRY_OPTS`), N-реплико-безопасен
-      (внешний POST, `contentHash` дедуп); happy-path остаётся синхронным (см. feedback ниже).
-      **`b24-deletions`** (#109 §9.2) — CRM-события удаления (сделка/компания/смарт-элемент): webhook верифицирует
-      `application_token` и кладёт `DeletionJob` (сырые `{eventCode, entityId, entityTypeId?}`, без ПДн); консьюмер
-      `handleDeletionJob` (`server/utils/deletionReconcile.ts`, DI+тесты) классифицирует по SP-конфигу портала
-      (`classifyDeletionKind`) и маршрутизирует по виду. Воркер — на primary-инстансе (concurrency 1, порядок как у
-      `b24-events`), без sync-фолбэка (страховка — кнопка «пересчитать»). **`deal`/`invoice` (удалена amount-цель) —
-      LIVE reconcile** (`reconcileTargetDeletion`: найти active-строки dist-СП по цели → деактивировать `status→reverted`
-      → пересчитать «осталось» на payment-СП → `manual`-строки: «требует распределения»=Y; идемпотентно — редоставка
-      видит `reverted`→no-op; крэш-окно между деактивацией и пересчётом закрывает кнопка «пересчитать»). **Чат ошибок
-      (§9.2 сообщения) — LIVE** для всех трёх веток: `deal`/`invoice` (цель удалена + N освобождено), `company`
-      (потерян ответственный), `payment-carrier` (повреждена структура) — `buildDeletionErrorMessage` (BB-safe, PII-free:
-      только вид+id+счётчик) → `notifyDeletionErrorViaRest` (`im.message.add` в `errorChat.dialogId` из настроек; пусто
-      → skip; best-effort — сбой чата не роняет джобу). `distribution`-строка→пересчёт родителя — log-only (у
-      hard-deleted dist-строки нет родительской ссылки → манульный пересчёт). Тесты.
-    - `connection.ts` — ленивый `getQueue(name)`; передаёт BullMQ **опции** (парсит `REDIS_URL`), а не
-      ioredis-инстанс — нет прямой зависимости от ioredis и связки версий. Гуард `queueEnabled()`.
-    - `producers.ts` — `enqueueEvent/Fetch/Parse/CrmSync` (no-op без Redis).
-    - `handlers.ts` — **чистые обработчики с DI** (тесты): `handleEventJob` регистрирует
-      (`savePortal`, ONAPPINSTALL) / удаляет (`deletePortal`, ONAPPUNINSTALL — всегда) портал;
-      fetch/parse → нормализованный батч в `crm-sync`; `crm-sync` дедупит in-batch (`account|docId`),
-      читает `PortalSettings` **один раз на джобу** (`getPortalSettings` — один app.option-чтение кормит и
-      чат, и распознавание), затем **read-before-write** по B24-маркеру (#259): `getActivityId`
-      (`findActivityByMarker`)→skip уже записанных, иначе `findCompany`→`writeActivity` (настраиваемое дело,
-      маркер атомарен)→`notifyChat`;
-      счётчики `created/skipped/unmatched/recognized/resolved/allocatable/ambiguous/manual`. **Распознавание
-      намерения (#109, §4, слайс 1 капстоуна):** на каждую уникальную операцию — `recognizePurposeIntents` (чистый
-      композит `recognizeByMatrices`→`routeIdentifier`, `app/utils/recognitionIntent.ts`) по матрицам портала →
-      `onRecognized` **логирует намерение** (пред-скип, для покрытия). **Резолюция намерения в кандидаты (§4 lookup,
-      слайс 3):** для операции с найденной компанией и распознанным id — `resolveIntents` (воркерная обёртка над
-      `resolveIntentCandidates`) находит кандидатов на разнесение → `onResolved` **логирует**, счётчик `resolved`.
-      **Решение разнесения (§2, слайс 4):** отфильтрованные по стадии кандидаты → `summarizeAllocation` →
-      `onAllocationDecision` **логирует** исход, счётчики `allocatable`/`ambiguous`/`manual` (amount-цели по
-      сумме+валюте, trigger-цели безусловно). **Гейт**: после dedup-skip (redelivery не пере-запрашивает B24) и
-      только при совпавшей компании (IDOR-скоуп). **Запись факта разнесения — сделана (#184; §9.3 #6):** при
-      `action==='allocate'` durable-запись «платёж→цель» — **строка dist-СП** (`writeLedger`, идемпотентно по маркеру,
-      счётчик `allocated`; Postgres `allocation_fact` **полностью снят** — §9.3 #6), при `ambiguous`/`manual` — уведомление в **чат ошибок**
-      (`notifyError` → `im.message.add`, BB-safe `allocationErrorMessage`); удаление приложения чистит факты.
-      **Мутация портала (§2, слайс, deal-payment + инвойс) — сделана:** за опт-ин гейтом `autoDistribute` (в настройках,
-      default OFF) `allocate`-цель помечается проведённой: `deal-payment` → `crm.item.payment.pay`; **`invoice` →
-      `crm.item.update` на «оплаченную» стадию** из настроек (`allocation.invoicePaidStageId`; **не указана ⇒ инвойс не
-      трогаем** — «не указана → не трогаем», §2). Всё через `applyAllocation` → `payAllocationViaRest` (билдер
-      `buildAllocationMutation`), счётчик `distributed`. **Applied-детект различает конверты** (`callRest` отдаёт полный
-      envelope): `crm.item.payment.pay` → `{result:true}`, `crm.item.update` → `{result:{item:…}}` (подтверждено вживую).
-      **Порядок идемпотентный (Фаза A):** сперва `isTargetApplied` — пре-чек читает **состояние цели в B24**
-      (`readAllocationApplied`: deal-payment `paid='Y'` / инвойс уже на `invoicePaidStageId`), не `allocation_fact` —
-      редоставка не пере-проводит; чтение состояния **точнее** факта (факт пишется ПОСЛЕ оплаты → крэш между оставлял бы
-      окно ре-оплаты). Затем мутация, затем write-once факт (для учёта/сторно; триггер-путь дедупит по **маркеру
-      dist-СП** (§9.3 #6, `hasTriggerFact`/`writeTriggerFact`) — у firing нет читаемого состояния). Гейт OFF ⇒ поведение прежнее (только факт).
-      Живой прогон — `pnpm mutate:test` (dry-run по умолчанию, `--apply` пишет, `--revert` откат `sale.payment.update PAID=N`);
-      стадия инвойса подтверждена live apply+revert на seed-счёте (`crm.item.update` → `:P` → `:N`).
-      **Триггеры deal/smart-process — проводка + факт сделаны (best-effort, #79)** (при `allocate` trigger-цели
-      фаерится `crm.automation.trigger.execute` за гейтом `autoDistribute`+`triggerCode`, write-once факт на firing).
-      Регистрация `CODE` на установке (`crm.automation.trigger.add`, best-effort) — сделана; **регистрация И firing
-      подтверждены вживую** (`pnpm trigger:test --apply --fire` на `bel.bitrix24.by`: round-trip + `executeTriggerViaRest`
-      `{result:true}` на сделке и смарт-процессе). **`payment.add`-путь заказа — сознательно НЕ делаем** (#79,
-      решение владельца: приложение не создаёт оплаты само — слишком инвазивно, противоречит §2-цели #3; «путь
-      заказа» = только найти **существующую** оплату, что уже сделано #172; см. PROCESSING.md §2). **#79 закрыт.**
-      CRM-депсы берут `memberId` явно
-      (депсы строятся один раз). Транспорт **разбора файла (`parseFile`) — живой** (ручной импорт, слайс 2);
-      **онлайн-опрос банков (`fetchStatement`) — тоже живой (A9):** демо-счёт → `demoItems`, реальный счёт →
-      `fetchBankStatement` (Альфа GET, `providerId`→`provider`), реальный без банк-токена → `[]` инертно. **Приор
-      (`prior-by`) — движок опроса собран (A5b, слайс 1):** `fetchBankStatement` делегирует в чистый
-      `server/utils/priorFetch.ts` (`fetchPriorStatement` — async `POST /accounts/{id}/transactions` → поллинг
-      `GET …/{id}` пока `BY.NBRB.Resource.NotCreated` → `normalizePrior`, DI-транспорт, тесты). Перед create
-      резолвит **опаковый `accountId`** банка из нашего IBAN (`resolvePriorAccountId` → `GET /accounts`) — это
-      разные идентификаторы. **429/5xx на поллинге = «ещё не готово», НЕ пустая выписка** (иначе троттл тихо
-      съел бы окно операций); нераспознанное тело — тоже ошибка, а не «пусто». Движок и connect-поток готовы,
-      но в **автоопрос Приор ещё не включён** (см. `POLLABLE_PROVIDERS` — учёт лимита по запросам + занятость
-      слота); прод требует BY-СКЗИ (issue #41), sandbox `:9344` без него. **Очередь Приора отдельная**
-      (`bank-fetch-prior`, `fetchQueueFor`) — свой лимитер (бюджет в **запросах**, `providerJobRate`
-      делит на стоимость задачи) и свои слоты (`QUEUE_PRIOR_CONCURRENCY`), поэтому Приор не блокирует
-      Альфу и не тратит её бюджет; после этого `prior-by` **включён** в `POLLABLE_PROVIDERS`.
-      Живой вызов Альфы ограничен **глобальным rate-limiter (A8)** на `Q_FETCH` (BullMQ `limiter`, шаренный
-      по репликам через Redis, дефолт 100/60с, `QUEUE_FETCH_RATE_*`). Дедуп — маркер в B24 (`findActivityByMarker`), стора нет.
-      Упор в кап BullMQ **не теряет** джобы (откладывает в `waiting`/`delayed`, на графике неотличимо от бэклога),
-      поэтому крон после каждого реального опроса (в блоке `CRON_REAL_POLL`, default-OFF) **явно логирует сатурацию**, когда backlog (`waiting+delayed`)
-      переходит порог (чистый `server/queue/saturation.ts` `fetchBacklogSaturation`, `QUEUE_FETCH_SATURATION_THRESHOLD`
-      дефолт 200, тесты; #300) — упор в лимит греп-виден в логах. Диагностика/runbook — `docs/OPERATIONS.md` (#299).
-    - `worker.ts` — BullMQ-воркеры на обработчики (`liveHandlerDeps`; `savePortal` расшифровывает
-      refresh и пишет `saveToken`). CRM-sync транспорты **живые**: `findCompany`→`findCompanyByAccount`,
-      **`findMyCompany`→`findMyCompanyByAccount`** (#91, UNMATCHED-фолбэк по нашему счёту),
-      `writeActivity`→`writeConfigurableActivityViaRest` (`crm.activity.configurable.add`, опц. `note`-блок причины) по per-portal `RestCall`
-      (SDK-резолвер `createPortalSdkResolver`, мемоизация на портал на джобу), **`notifyUnmatched`→`notifyUnmatchedViaRest`**
-      (чат ошибок про неопознанного плательщика), с **гейтом демо-счётов**
-      (`isDemoAccount` — демо-нагрузка не пишет в реальный портал) и skip без токена портала.
-      `cron.ts` — план опроса (`planFetches`) + **демо-нагрузка** (`buildDemoFetchJobs`/`demoItems`,
-      `isDemoAccount`; каденция `demoTickMs` — секунды, пауза обработки `demoDelayMs` — чтобы очереди
-      были видимы на графике). Для демо-счётов в `worker.ts` `fetchStatement`/`findCompany` держат
-      `DEMO_DELAY_MS`-паузу (реальные джобы не тормозятся) → на графике виден backlog.
-    - `server/plugins/queue.ts` — на старте поднимает воркеры и/или крон **по роли** (чистый парсер
-      `server/queue/runtime.ts` `queueRuntimeConfig`: `QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`,
-      покрыт тестами). Один образ — три роли: одиночный контейнер (дефолт — всё вместе), HTTP/primary
-      (`QUEUE_WORKERS=0` — API+крон), **worker** (`QUEUE_CRON=0`+`RUN_MIGRATION=0`, масштабируется).
-      **Scale-out сделан:** `docker-compose.prod.yml` разводит роли — `backend` (HTTP+крон) + сервис
-      `worker` (обработка, `--scale worker=N`); все воркеры на одном Redis тянут из одной очереди (Redis
-      отдаёт джоб ровно одному). Крон — ровно на одном инстансе; миграцию гоняет только backend
-      (`RUN_MIGRATION`). На крон-инстансе также заводится **суточный keep-alive рефреш токенов** (`runTokenKeepAlive`,
-      #175, `TOKEN_KEEPALIVE_HOURS` дефолт 24; гейт на `B24_CLIENT_ID/SECRET`) — чтобы простаивающие порталы не
-      теряли авторизацию на 180-й день (см. `tokenKeepAlive.ts` выше). Там же — **периодический sweep statement-очередей**
-      (`runStatementSweep`, `server/queue/statementSweep.ts`, #245: `STATEMENT_SWEEP` дефолт ON, `STATEMENT_SWEEP_INTERVAL_MIN`
-      дефолт 30): явный `queue.clean(grace,…)` по `file-parse`/`crm-sync` даёт удалению финансовых ПДн **гарантию по стенным
-      часам** (BullMQ-`age` ленивый — вытесняет только на следующей джобе; см. `docs/PRIVACY.md`). Чистое ядро (грейсы из
-      `STATEMENT_JOB_RETENTION`, изоляция per-queue-сбоя) — DI + тесты. `startWorkers(deps, {concurrency})` — `QUEUE_CONCURRENCY` на fetch/parse/crm-sync
-      (события всегда 1). **Страховка от stalled-редоставки (#163, порт из `ai-price-import`):** `crmLockTuning()`
-      поднимает BullMQ `lockDuration`/`stalledInterval` до 60с (дефолт 30с) + `maxStalledCount:1` **только на
-      crm-sync** — живой воркер (await'ы = REST-I/O) не «протухает» ложно, поэтому второй воркер не стартует
-      параллельно и не задваивает дело сквозь TOCTOU-окно `findActivityByMarker`→`configurable.add`; реально
-      упавший джоб получает одну read-before-write-safe recovery-редоставку. Pg-advisory-лок отвергнут (держал бы
-      pooled-соединение на REST-записи, `pool max 10`). fetch/parse чисто-идемпотентны → дефолты BullMQ. **crm-sync
-      закреплён на `concurrency: 1`** (не разделяемый `QUEUE_CONCURRENCY`) — лок-тюнинг закрывает только
-      cross-worker stalled-окно, а не in-process concurrency, поэтому поднятие общего knob'а масштабирует лишь
-      fetch/parse и не возвращает TOCTOU. Чистый `crmLockTuning` + wiring-тест (`tests/throughputWorkers.test.ts`,
-      вкл. pin-проверку). Детали — [`docs/QUEUES.md`](docs/QUEUES.md) «Масштабирование».
-    - **Видимость падений воркеров (#78):** `server/queue/workerObservability.ts` (`attachWorkerObservability`,
-      чистые `formatJobFailure`/`formatWorkerError`, тесты) навешивает на **каждый** воркер (в `queue.ts`
-      после старта) логи событий BullMQ — иначе исчерпанный ретрай джоба или ошибка уровня воркера
-      (обрыв Redis) **молча** проходят (спаны OTel — no-op без коллектора). Строки greppable и **PII-safe**
-      (очередь/попытка/текст ошибки, **без** `job.data` и сырого jobId — в fetch/crm jobId зашит номер счёта):
-      `[queue-job-failed] … FINAL` (исчерпан ретрай, `error` — на это вешать алерт) / `[queue-job-retry]`
-      (промежуточная попытка, `warn`) / `[queue-worker-error]` (уровень воркера). Runbook — `docs/OPERATIONS.md`.
-    - **Наблюдаемость сейчас:** чтение счётчиков — общий `server/queue/stats.ts` (`readQueueCounts`,
-      DI, тесты). Два guard'а: `GET /api/queues` (`server/api/queues.get.ts`) — токен `B24_APPLICATION_TOKEN`
-      **только заголовком** `X-Check-Token` (без `?token=` в логах), nginx `deny all`, для консоли
-      (`scripts/queue-stats.sh`); `GET /api/ops/queues` (`server/api/ops/queues.get.ts`) — по **сессии
-      оператора** (`operatorAllowed`), это путь для браузера. **Живой график** — страница `/queues`
-      (`app/pages/queues.vue`, за `middleware: auth` + обёртка `AuthGate`, layout `clear`) →
-      `app/components/QueueMonitor.vue` в хроме **b24ui** (`B24Card`/`B24Button`/`B24Select`, иконки
-      `@bitrix24/b24icons-vue`) на **ECharts** (Apache-2.0, tree-shaken: `echarts/core` +
-      Line/Grid/Tooltip/Legend/Canvas, динамический импорт; оси/сетка перекрашиваются под light/dark по
-      классу `.dark`), чистая логика ряда — `app/utils/queueChart.ts` (тесты). Ряд строит клиент (снапшот без истории)
-      из `/api/ops/queues`; `?preview=1` — превью на синтетике (для скриншотов/дев). Обзор — [`docs/QUEUES.md`](docs/QUEUES.md).
-    - **Глубокая телеметрия — OpenTelemetry (#78, [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md), вектор Bitrix
-      `b24-ai-starter-otel`). Слайс 1 (app-side) — сделан, DEFAULT OFF:** бутстрап `otel.instrument.mjs` грузится
-      через `NODE_OPTIONS=--import` **до** приложения (иначе авто-инструментирование не перехватит http/pg/ioredis;
-      Nitro-бандлер ломает require-хуки OTel → deps вне бандла, `otel-preload-package.json` ставится в backend-образ).
-      Без `OTEL_EXPORTER_OTLP_ENDPOINT` — no-op (поведение не меняется). Ручные спаны на `@opentelemetry/api` (no-op без
-      SDK). **Покрытие (полное по конвейеру):** `withDependencySpan` оборачивает **каждый исходящий B24-вызов** —
-      одиночный `makeSdkRestCall`, **батч `makeSdkBatchCall`** (`dep.op_count`=число команд) и **OAuth-refresh**
-      (`sdkRefreshTransport` → `dep bitrix24 oauth.refresh`); `withSpan('<job>',…)` — **все 4 job-воркера**
-      (`crm-sync`/`bank-fetch`/`file-parse`/`b24-events`, с исходами/счётчиками) **и крон-корни**
-      (`cron.real-poll`/`cron.keep-alive`/`cron.sweep` — иначе их pg/redis-спаны висят сиротами). Bank-fetch HTTP и
-      bank-OAuth POST ловит авто-undici (дочерние под `bank-fetch`-root). **PII-защита тройная:** allowlist наших атрибутов (`telemetryAttributes.ts` `pickSafeAttributes` — счёт/
-      сумму/назначение прикрепить нельзя) + redaction-SpanProcessor авто-атрибутов (SQL/URL/токены) + `portal.hash`
-      (SHA-256) вместо member_id, `error_kind` вместо текста ошибки. Чистые ядра + тесты (`telemetryAttributes`/
-      `telemetrySpan`) + parity-тест против inline-списка бутстрапа. **Все фрейм-токен-роуты в покрытии (порт
-      #220/#221 из `ai-price-import`):** сначала 4 роута настроек (`chat-settings.get/post`, `settings.get/post`),
-      затем **остальные фрейм-роуты** через общий хелпер `server/utils/frameRouteSpan.ts` (`withFrameRouteSpan` —
-      обёртка над `withSpan` с мутабельным `span.outcome`): `chat-search`, `app-rating.get/post`, `feedback.post`,
-      `import.post`, `poll-now.post`, `import/{status,metrics,metrics-reset}`, `bank/connect` и
-      `distribution/{ledger,provision,recompute}` (у последних — **внешний** `http.<route>`-спан поверх внутреннего
-      бизнес-спана `ledger-read`/`provision-sp`/`ledger-recompute`). Каждый — **один спан
-      на запрос** с `http.method`/`http.op` + `finalize` → `http.outcome` (PII-safe enum из `httpOutcomeForStatus`:
-      `ok/no_auth/forbidden/bad_request/conflict/throttled/unavailable/upstream_error/error`) + `portal.hash`; тело
-      запроса/ответа (настройки/чаты/выписка/отзыв/URL авторизации банка) в спан **никогда** не попадает. `feedback.get`
-      — публичный булев (нет домена/ПДн), не оборачивается; вебхук
-      `b24/events` — на очередном спане `b24-events`. Ключи `http.method`/`http.op`/`http.outcome` — в
-      `SAFE_MANUAL_ATTR_KEYS`. **Слайс 2 (коллектор + ClickHouse + Grafana как opt-in `--profile telemetry`) — дальше.**
-    Redis — сервис в compose на изолированной сети `queuenet` (`internal: true`, том `redisdata`).
+  - **Очереди (BullMQ + Redis)** — шина под нагрузку и масштабирование. Полное описание (поток,
+    payload'ы, лимитеры, роли контейнеров, наблюдаемость, переменные) — [`docs/QUEUES.md`](docs/QUEUES.md).
+    Здесь только карта файлов `server/queue/`:
+    - `topology.ts` — имена очередей, payload'ы, идемпотентные `jobId`. Чистый, без Redis.
+    - `connection.ts` — ленивый `getQueue()`, гуард `queueEnabled()`.
+    - `producers.ts` — постановка задач (no-op без Redis) + удержание payload'ов (ПДн, `PRIVACY.md`).
+    - `handlers.ts` — **чистые обработчики с DI**, включая `handleCrmSyncJob` — главный конвейер
+      обработки операции (спека — [`docs/PROCESSING.md`](docs/PROCESSING.md) §2/§4).
+    - `worker.ts` — сшивка чистых ядер с живыми транспортами (B24 REST, банк, чат, БД).
+    - `cron.ts` — план опроса, демо-нагрузка; `pollCapacity.ts` — сколько счетов влезает в тик.
+    - `statementSweep.ts` — удаление payload'ов выписок по стенным часам; `saturation.ts` — лог
+      упора в лимитер; `workerObservability.ts` — greppable-логи падений; `stats.ts` — счётчики;
+      `runtime.ts` — разбор ролевых env (`QUEUE_WORKERS`/`QUEUE_CRON`/concurrency).
+    ⚠ Правило: значения дефолтов и лимитов **не дублируем здесь** — они в `QUEUES.md` §Переменные
+    окружения. Разошедшийся дубль опаснее отсутствующего описания.
+  - **Оповещения оператору (Telegram, #426)** — единственный канал, который **стучится сам** (лог и
+    `/queues` требуют, чтобы кто-то уже смотрел). Порт из соседнего `ai-price-import`, четыре чистых
+    ядра + проводка в крон-плагине: `server/utils/queueAlert.ts` (правила: `unreadable`/`stalled`/
+    `failing`; **бюджет простоя — ПО ОЧЕРЕДЯМ**, и это единственное расхождение с источником —
+    `bank-fetch*` придавлены лимитом банка, `trigger-fire` часами ждёт регистрации CODE админом, то
+    есть плоский порог сигналил бы о штатной работе), `queueHealthRead.ts` (чтение BullMQ через
+    инъектируемый reader; недоступная очередь = `unreadable`, **не нули** — иначе тотальная авария
+    выглядит здоровой; пер-портальные отказы исключены из счёта падений, иначе один криво настроенный
+    клиент пейджил бы вечно), `queueAlertDeliver.ts` (**одно сообщение на эпизод**, а не на замер;
+    переобъявление той же поломки придавлено окном (`MIN_REANNOUNCE_MS`) против мерцания; «объявлено» = реально доставлено, иначе один 429
+    хоронит алерт навсегда), `telegramAlert.ts` (транспорт; токен бота **никогда** не попадает в лог/
+    ошибку/возврат — он в URL каждого вызова; `parse_mode` не ставим — нет разметки, из которой можно
+    сбежать). Состояние последнего вердикта — `queueAlertState.ts` (в памяти крон-процесса: правила
+    без состояния, переживать рестарт нечему). ⚠ **Это не `errorChat` портала:** туда «этот платёж
+    требует человека» (адресат — бухгалтер клиента), сюда «сервис сломан» (адресат — мы); сумм/счетов/
+    назначений/контрагентов в канале нет по построению. Вердикт последней проверки отдаётся и в UI —
+    `GET /api/ops/queues` → карточка на `/queues` (чистый `app/utils/queueHealthView.ts`: «ещё не
+    проверяли» / «проверка протухла» / «всё хорошо» — три РАЗНЫХ смысла пустого списка тревог).
+    ⚠ Покрыто **только здоровье очередей**: смерть самого cron-инстанса, упавший Postgres при живом
+    Redis и пер-портальные отказы (мёртвый токен, истёкшее согласие банка) канал НЕ ловит — они за
+    `/api/ready` и `/queues`. Env — только на cron-инстансе (иначе N копий от реплик воркера);
+    порядок работы — [`OPERATIONS.md`](docs/OPERATIONS.md) «Оповещения оператору».
   - `server/utils/companyLookup.ts` — **чистое ядро поиска компании CRM по счёту** (DI над `RestCall`,
     тесты): `crm.requisite.bankdetail.list` по `RQ_ACC_NUM`→фолбэк `RQ_IIK` (ИИК Беларуси) → id реквизитов →
     `crm.requisite.list` (`ENTITY_TYPE_ID=4`) → id компании (шаги 1-2 вынесены в `resolveCompanyIdsByAccount`).
@@ -903,214 +833,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     смарт-процессе** (OWNER_TYPE_ID=его `entityTypeId`=1044); незарегистрированный CODE → `not registered` — валидирует
     best-effort-глоток). Реакция правила автоматизации на CODE — за админом портала (наш код доставляет сигнал).
     CODE хранится в настройках — `allocation.triggerCode` (маска, fail-safe).
-  - **REST-фундамент разнесения оплат (#109, первый слайс; чистое ядро + стор, DI, тесты):**
-    - `server/utils/invoiceLookup.ts` — чистый lookup смарт-счёта `findInvoicesByNumber(accountNumber,
-      {companyId, isNegativeStage?}, call)`: `crm.item.list` `entityTypeId=31`, фильтр по номеру **И
-      компании** (IDOR-скоуп), отбрасывает отрицательные стадии (предикат от вызывающего) → массив
-      `AllocationCandidate` (сумма=`opportunity`, валюта=`currencyId`, **`dealId`=`parentId2`** — связь
-      смарт-счёт→сделка, #229, для `collapseSameTarget`; чистый хелпер `parentDealId` нормализует к
-      положительному целому). **Имена полей подтверждены на живом портале**:
-      `accountNumber`/`companyId`/`mycompanyId`/`stageId`/`opportunity`/`currencyId`/`parentId2` (только у сделко-связанного счёта).
-    - `server/utils/allocationFactStore.ts` — **УДАЛЁН (§9.3 #6, готово)**. Персистентный Postgres-стор факта
-      разнесения `allocation_fact` полностью снят: идемпотентность/аудит/сторно разнесения (amount **и** триггеры)
-      живут на строке/маркере dist-СП (`writeLedger`/`writeTriggerFact`, `status`). Модуль и таблица удалены
-      (`server/db/client.ts` — `DROP TABLE IF EXISTS allocation_fact` на старте, идемпотентно). `allocationFactKey`
-      (`app/utils/allocation.ts`) сохранён — строит маркер строки dist-СП.
-    - `server/utils/allocationApplied.ts` — **чистое чтение состояния цели** (Фаза A, DI над `RestCall`, тесты):
-      `readAllocationApplied(target, call, opts)` — идемпотентный пре-чек мутации разнесения по **состоянию в B24**,
-      не по `allocation_fact`: `deal-payment` → оплата `paid='Y'` (`crm.item.payment.list`, реюз `paymentListParams`/
-      `extractPayments`); `invoice` → уже на `opts.invoicePaidStageId` (`crm.item.list` 31 по id). Триггер-цели → `false`
-      (у firing нет читаемого состояния). Точнее факта (факт пишется ПОСЛЕ оплаты → чтение состояния закрывает окно
-      ре-оплаты при крэше между оплатой и фактом). Проведён в `crm-sync` как деп `isTargetApplied`. **Live-verified**
-      (`bel.bitrix24.by`: инвойс #39 `DT31_7:P` → своя стадия=true/чужая=false; чтение оплат сделки отработало).
-    - `server/utils/stageLoader.ts` — чистый **loader «отрицательных» стадий** (DI над `RestCall`, тесты):
-      `loadNegativeStages(stageEntityId, call)` — `crm.status.list` → множество `STATUS_ID` с `SEMANTICS='F'`;
-      билдеры `ENTITY_ID`: `invoiceStageEntityId(catId)` (`SMART_INVOICE_STAGE_<catId>`), `dealStageEntityId(catId)`
-      (`DEAL_STAGE` для воронки 0 / `DEAL_STAGE_<catId>` — **не** `DYNAMIC_…`, подтверждено вживую) и
-      `smartProcessStageEntityId(etid, catId)` (**кастомный смарт-процесс** — `DYNAMIC_<etid>_STAGE_<catId>`, стадии
-      `DT<etid>_<cat>:FAIL`=`SEMANTICS='F'`; **всегда** реальный id категории — даже СП «без направлений» имеет свою
-      дефолт-категорию, не `0`; подтверждено вживую на `DYNAMIC_1032_STAGE_67` и `DYNAMIC_1030_STAGE_63`);
-      `makeIsNegativeStage(set)` строит предикат, который принимает `findInvoicesByNumber` (раньше инъектировался
-      «снаружи»); `loadInvoiceNegativeStage`/`loadDealNegativeStage`/`loadSmartProcessNegativeStage` — loader+предикат
-      одним вызовом. Читает **оба** формата семантики (легаси верхний `SEMANTICS='F'` — он и на живом портале; и
-      современный `EXTRA.SEMANTICS='failure'`). **`loadStageExclusions(entityId, call, {includeSettled})`** — за
-      **один** `crm.status.list` отдаёт `{negative, settled}`: `settled` = стадии **успеха/оплаты** (`SEMANTICS='S'`/
-      `EXTRA.SEMANTICS='success'`, `extractSettledStageIds`) — нужно, чтобы **оплаченный инвойс** не пере-матчился на
-      вторую оплату той же суммы (симметрично `paid:'Y'` в `paymentLookup`; подтверждено вживую: `DT31_11:P`=`'S'`,
-      сделка `WON`=`'S'`). Множества **раздельны**: предикат исключает `negative ∪ settled`, но fail-open считает
-      **только** negative.
-      **Подтверждено вживую**: инвойс «Не оплачен» `DT31_11:D`; сделка `LOSE`/`APOLOGY`; смарт-процесс `DT1032_67:FAIL` = `SEMANTICS='F'`. ⚠ **fail-open**:
-      пустое множество = «ничего не отрицательно» (неотличимо от битого запроса) — на проводке в `crm-sync` алертить,
-      если для известной категории пусто.
-    - `server/utils/itemByIdLookup.ts` — чистый **резолвер цели по id** `findCandidateById(kind, entityTypeId, id,
-      {companyId, isNegativeStage?}, call)` для стратегии `by-id` — три идентификатора, у которых значение = собственный
-      id целевой сущности: `invoice-id`→инвойс, `deal-id`→сделка, `smart-id`→смарт-процесс (все — один `crm.item.list`,
-      разный `entityTypeId`). **Не** `order-id`/`payment-id` — те идут к `deal-payment` (объект `crm.item.payment.*`):
-      `payment-id` — по собственному id в company-пуле (`filterByPaymentId`, #172), `order-id` — через `sale.payment.list`
-      (`orderId`→id оплат) ∩ company-пул (`saleLookup.findOrderPaymentIds`+`filterByPaymentIds`, `sale`-скоуп, #172). Запрос фильтром **id+companyId** (id из назначения недоверенный →
-      IDOR-скоуп в запросе, чужая сущность не вернётся) + отсев отрицательной стадии → `AllocationCandidate`.
-      `crm.item.list`, а не `crm.item.get` (тот бросает `NOT_FOUND`; список отдаёт пусто). Подтверждено вживую: стадия
-      категорийной сделки несёт префикс `C<cat>:` (`C5:LOSE`) — совпадает с `DEAL_STAGE_<cat>`. **`select` строит
-      `selectFields(entityTypeId)`: `parentId2` (ссылка на сделку, #229) выбирается для инвойса/СП, но НЕ для сделки
-      (`entityTypeId=2`) — там `parentId2`=«родитель типа 2»=сама сделка, self-reference, портал отвергает live
-      («An entity type can't be a parent/child type to itself»; #109 — вскрыто мостом via-document, `deal-id`-путь
-      раньше живьём не гонялся). Теперь `findCandidateById('deal',2,…)` подтверждён вживую (`pnpm verify:109` #8).** Amount-цели
-      (invoice/deal-payment) сверяют сумму (нефинитная → `null`, fail-closed как в `invoiceLookup`), триггер-цели
-      (deal/smart-process) её игнорируют. **`findCandidateByField(kind, entityTypeId, fieldName, value, opts, call)`** —
-      стратегия `by-config-field` (`deal-field`, §4): тот же `crm.item.list`, но фильтр по **настроенному полю**
-      `{[fieldName]:value, companyId}` (имя поля из «карты сопоставления»; маска `[A-Za-z][A-Za-z0-9_]*` — нет инъекции
-      ключа фильтра). Общий маппинг строки-ответа в кандидата (`candidateFromItem`) — с `findCandidateById` (нет дрейфа).
-    - `server/utils/paymentLookup.ts` — чистый **резолвер оплаты сделки** `findDealPayments(dealId, {includePaid?}, call)`
-      для цели `deal-payment` (§2, действие `payment.pay`): `crm.item.payment.list` по **известной** сделке
-      (`entityId`+`entityTypeId=2`) → кандидаты `deal-payment` (`id`=id оплаты, `amount`=`sum`, `currency`, `dealId`).
-      **Подтверждено вживую** (seed-сделка с реальной оплатой): ответ — массив **прямо** в `result` (не `result.items`),
-      поля `id`/`accountNumber`/`paid`(`Y`/`N`)/`sum`/`currency`; оплаченные (`paid='Y'`) в кандидаты не берём
-      (нечего проводить), нефинитная сумма — пропуск. Разрешает `deal-payment` **когда сделка уже известна и
-      скоуплена по компании**; сам company-скоуп в `crm.item.payment.list` не встроить (нет поля `companyId`) —
-      предусловие на вызывающем. **`findCompanyDealPayments(companyId, {includePaid?, isNegativeStage?}, call)`** —
-      **company-scoped пул** кандидатов `deal-payment` (IDOR-safe путь для `order-number`/`payment-number` и источник
-      amount-матчинга §2): `crm.item.list` сделки компании (фильтр `companyId`) → отсев отрицательной стадии → на
-      каждую сделку `findDealPayments` (N+1; `crm.item.payment.list` **не батчится**, per-deal вызовы **последовательны**
-      — rate-safe by construction; bounded concurrency — за лимитером #191). **Список сделок пагинируется** (`start`/top-level
-      `total`, кап `MAX_DEAL_PAGES`; #191): у компании с >50 сделками часть пула иначе молча терялась → неверный
-      `manual`/`none`. Нет `total` → одностраничный фолбэк. **Сделка проксирует заказ**: `crm.item.payment.list`
-      по сделке отдаёт оплаты заказа (та же `sale.payment` id, `orderId` за ними) — «оплата заказа» = «оплата сделки»,
-      отдельного lookup заказа нет. **Глобальный** `sale.payment.list` находит оплату по номеру, но её `sale.order` **не
-      несёт связки со сделкой/компанией** (`companyId=null` у CRM-заказов) — привязать к компании плательщика нельзя,
-      поэтому для `order-number`/`payment-number`/`payment-id` используем company-scoped обход (не `sale.*`). Для
-      **`order-id`** (id заказа, которого нет в crm-оплате) — `saleLookup` ниже (`sale.payment.list` по `orderId`) с
-      обязательным **∩ company-пул** (IDOR).
-    - `server/utils/saleLookup.ts` — **`order-id`→id оплат заказа** `findOrderPaymentIds(orderId, call)` (`sale`-скоуп, #172):
-      `sale.payment.list` фильтром `orderId` → **массив id оплат** (ответ `result.payments[]`, поля `id`/`orderId` подтверждены
-      вживую; `crm.item.payment.list` `orderId` **не** отдаёт — потому `sale`). Пустой `orderId` → `[]` без REST (пустой фильтр
-      листнул бы все оплаты); гард — сверка `orderId`-эха (портал мог проигнорить фильтр). **Список глобальный, не company-scoped** —
-      вызывающий **обязан** пересечь ids с company-пулом (`filterByPaymentIds`), это и держит IDOR. DI, тесты.
-    - `server/utils/documentLookup.ts` — **мост-документ** `findDocumentEntities(number, call)`: `document-number` из
-      назначения → `crm.documentgenerator.document.list` (фильтр `number`) → **массив** привязанных сущностей
-      `{entityTypeId, entityId}[]` (ответ `result.documents[]`; номер документа **не** уникален по порталу —
-      нумерация генератора per-шаблон/редактируема, поэтому список, как в `invoiceLookup`). Дальше вызывающий
-      **перебирает** и **роутит** каждый ref по `entityTypeId` (2→сделка, 31→инвойс, кастом→смарт) через
-      `itemByIdLookup` **с проверкой компании**, собирает **все прошедшие** кандидаты (дальше их разводит
-      `summarizeAllocation`) — номер недоверенный, метод без
-      company-фильтра, IDOR-скоуп на вызывающем (как by-id в `identifierDispatch`, `strategy: 'via-document'`).
-      **Защитный гард**: `doc.number` сверяется с запрошенным после ответа. **LIVE-VERIFIED** (тест-портал: документ из
-      шаблона #1 на сделку): конверт `{result:{documents:[…]}}` + обратный `filter:{number}` **работает** (возвращает
-      документ; несуществующий номер → `[]`), `entityTypeId`/`entityId` присутствуют. ⚠ **Live-находка:** портал
-      **игнорирует `select`** — ответ **всегда** несёт `downloadUrlMachine`/`pdfUrlMachine` (URL с живым access-токеном);
-      `findDocumentEntities` берёт только `number`/`entityTypeId`/`entityId`, остальное отбрасывает (утечки нет), но сырой
-      ответ **нельзя логировать целиком**. Scope **`documentgenerator`** (метод под `crm.documentgenerator.*`; добавлен в
-      `B24_REQUIRED_SCOPES` вместе с wiring, #109 — потребует ре-consent).
-    - `server/utils/intentResolver.ts` — **чистый диспетчер `resolveIntentCandidates(intent, ctx, call, deps)`** (слайс 2
-      капстоуна): по распознанному `RecognitionIntent` (§4) вызывает нужный резолвер сущности и отдаёт `IntentResolution`
-      (`status: 'resolved'|'unsupported'`, `candidates`, `reason`). Резолверы **инъектируются** (чистый роутинг тестируется
-      без сети). Диспатчатся подтверждённые вживую стратегии: `invoice-number`→`findInvoicesByNumber`, `invoice-id`/`deal-id`→
-      `findCandidateById` (фиксированный `entityTypeId` 31/2), `payment-number`→`findCompanyDealPayments`+`filterByAccountNumber`,
-      **`order-number`→`findCompanyDealPayments`+`filterByOrderNumber`** (order-префикс `<заказ>/<seq>`, #172, live-confirmed —
-      делит тот же пул с `payment-number`, фетч один раз), **`order-id`→`findOrderPaymentIds`+`filterByPaymentIds`**
-      (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул → IDOR-safe, `sale`-скоуп, #172, live-confirmed;
-      делит тот же пул) (по `ctx.companyId` — IDOR-скоуп плательщика, отсев отрицательных
-      стадий). **`deal-field` (`by-config-field`, §4) — подключён:** имя поля берётся из `ctx.configFields['deal-field']`
-      («карта сопоставления» настроек), сущность — сделка (`entityTypeId` фикс. 2), поиск `findCandidateByField`
-      (`crm.item.list` фильтр `{[поле]:значение, companyId}`, IDOR-скоуп; имя поля валидируется маской `[A-Za-z][A-Za-z0-9_]*`
-      — нет инъекции ключа фильтра); нет настроенного поля ⇒ `unsupported`. **`smart-id`/`smart-field` — подключены:**
-      портало-специфичный `entityTypeId` берётся из `configFields['smart-entity']` (`parseConfiguredEntityTypeId` —
-      положит. целое, иначе fail-closed `unsupported`); `smart-id` → `findCandidateById('smart-process', <etid>, value)`,
-      `smart-field` → `findCandidateByField('smart-process', <etid>, configFields['smart-field'], value)` (нужны оба).
-      Кандидат несёт `entityTypeId` (для `OWNER_TYPE_ID` триггера, #79). **`document-number` — ПОДКЛЮЧЁН (мост
-      `via-document`, live-verified):** `findDocumentEntities(value)` → на каждый ref чистый `routeDocumentRef`
-      (`entityTypeId` 2→deal / 31→invoice / == `configFields['smart-entity']`→smart-process; иначе — пропуск) →
-      `findCandidateById(<kind>, <etid>, entityId, {companyId})` **со скоупом по компании плательщика** (IDOR — номер
-      недоверенный, метод без company-фильтра); первые прошедшие кандидаты. Все виды `IdentifierKind` теперь
-      диспатчатся (нет `unsupported`-веток по kind — только по отсутствию конфига у config-driven видов).
-      Свитч по `kind` покрывает все виды — исчерпывающий by construction (нет `default`, каждая ветка `return`):
-      пропущенный вид роняет `typecheck:server` (TS2366; `server/**` теперь в typecheck, #187), плюс страхует тест
-      (гоняет каждый `IdentifierKind` через диспетчер). **Батч-резолвер `resolveIntentsForOp(intents, ctx, call, deps)`**
-      резолвит все интенты одной операции, **тянет пул оплат один раз** (`findCompanyDealPayments` company-scoped и не
-      зависит от значения → не сканируем компанию на каждый `payment-number`/`order-number`, #191); общий
-      `resolveFromPool`-хелпер у одиночного и батч-путей (нет дрейфа). **Встроен в `crm-sync` (слайс 3):** `resolveIntents`-обёртка воркера зовёт
-      `resolveIntentsForOp` на матч-компанию → лог кандидатов (`onResolved`), счётчик `resolved`; пока log/count без
-      записи. **Отсев отрицательных стадий (`isNegativeStage`) — сделан** (`negativeStages.ts`, ниже): предикат
-      грузится ленивым `loadNegativeStagePredicate` ровно один раз на джобу и прокидывается в `resolveIntentsForOp`.
-      **Запись факта разнесения + чат ошибок — сделаны (#184; §9.3 #6):** durable-запись = строка dist-СП (`writeLedger`) + `notifyError`.
-      **Мутация портала для `deal-payment` + `invoice` — сделана:** гейт `autoDistribute` (default OFF) →
-      `deal-payment`: `crm.item.payment.pay`; `invoice`: `crm.item.update` на стадию `allocation.invoicePaidStageId`
-      (нет стадии в настройках ⇒ инвойс не трогаем)
-      (`allocationMutation.ts` билдер + `allocationMutationWrite.ts` транспорт, конверт-aware applied-детект,
-      идемпотентный порядок mutation-before-fact),
-      счётчик `distributed`; подтверждено вживую (`pnpm mutate:test` + live apply/revert стадии инвойса). **Триггер-цели
-      (deal/smart-process): проводка в hot-path подключена — best-effort (#79)** (`buildTriggerExecution`/`executeTriggerViaRest`
-      за гейтом `autoDistribute`+`triggerCode`; дедуп по kind+id (within-run) + **маркер dist-СП** (`hasTriggerFact`/
-      `writeTriggerFact`, §9.3 #6 — Postgres на триггер-пути ретайрен), запись фаершего = нулевая строка dist-СП,
-      `distributed` только на firing; сбой глотается (single-shot — промах не пере-пробуется)). Регистрация CODE на установке — сделана (best-effort);
-      **регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire`, `bel.bitrix24.by`: `executeTriggerViaRest`
-      → `{result:true}` на сделке OWNER_TYPE_ID=2 и смарт-процессе OWNER_TYPE_ID=1044; незарегистрированный CODE → `not registered`).
-    - `server/utils/negativeStages.ts` — чистый билдер **единого предиката `isNegativeStage` на весь портал**
-      (инвойсы + сделки + смарт-процесс, если настроен) над `stageLoader`: `crm.category.list` (на тип объекта) → на каждую воронку
-      `crm.status.list` → **объединение** исключаемых стадий. **Инвойсы грузятся с `includeSettled:true`** →
-      предикат исключает `negative(инвойс) ∪ settled(инвойс) ∪ negative(сделка) ∪ negative(СП, если настроен `smart-entity`)`: **оплаченный инвойс (`:P`,
-      `SEMANTICS='S'`) больше не кандидат** (иначе вторая оплата той же суммы молча садилась на закрытый счёт и —
-      при `autoDistribute` — пере-проводила `crm.item.update`). Сделки — только negative (WON-сделку не исключаем:
-      её namespace иной — `WON` без `DT31_`, а «оплаченность» сделки решается на уровне оплаты `paid:'Y'`).
-      Namespace'ы стадий не пересекаются (инвойс `DT31_<cat>:…`, сделка `LOSE`/`C<cat>:LOSE`; candidate.stageId ≡
-      STATUS_ID, подтверждено вживую) → один предикат обслуживает инвойсы, сделки и company-пул оплат.
-      `crm.category.list` **пагинируется** (метод одностраничный, max 50; >50 воронок иначе молча теряются — fail-open).
-      Диагностика по типу (число воронок/отрицательных стадий + **`emptyCategories`** — сколько отдельных воронок
-      вернули 0 негативов; settled в счётчик **не** идёт) → **fail-open алерт** `failOpenEntities` (**0 отрицательных
-      стадий** инвойсов ИЛИ сделок **ИЛИ `emptyCategories>0`** = битый запрос/урезанные права → воркер логирует warning
-      с разбивкой по типу; **гранулярность #242**: агрегат маскирует одну урезанную воронку среди многих, поэтому
-      считаем и пер-воронковые пустышки; **включая `categories===0`** — когда `crm.category.list` вообще не отдал
-      воронки: пустое множество исключений = «ничего не исключили», алертим независимо). Грузится **раз на джобу**
-      (ленивo, только когда первая операция реально резолвит намерение). **`stripDealCategoryPrefix`** — предикат матчит и сырой `stageId`, и без
-      `C<cat>:`-префикса (форма stage-id дефолтной воронки сделки — `LOSE` vs `C0:LOSE` — вживую не подтверждена;
-      strip false-negative-safe: только добавляет матч по фиксированным `LOSE`/`APOLOGY`, валидного кандидата не
-      теряет). ⚠ **live-verify формы дефолтной воронки — гейт перед записью разнесения** (сейчас log/count).
-      **Смарт-процессы включены в предикат** (когда `entityTypeId` СП настроен, `configFields['smart-entity']` →
-      `parseConfiguredEntityTypeId`): `buildPortalNegativeStagePredicate(call, batch, smartEntityTypeId?)` грузит FAIL-стадии
-      СП (`DYNAMIC_<etid>_STAGE_<cat>` → `DT<etid>_<cat>:FAIL`, live-confirmed) и юнионит их — лост-элемент СП больше не
-      кандидат на разнесение; namespace `DT<etid>_…` не пересекается с инвойсом (`DT31_…`)/сделкой (`LOSE`). СП **не
-      настроен** ⇒ его стадии не грузятся (поведение прежнее, СП не отсеивается). `handlers.ts` прокидывает разобранный
-      etid в `loadNegativeStagePredicate`; `failOpenEntities` и диагностика расширены на `smartProcess` (участвует в
-      fail-open-алерте только когда настроен). DI, тесты (`tests/negativeStages.test.ts`).
-    **SDK-транспорт `crm-sync` — единственный, по умолчанию** (#191): `portalSdkResolver.ts`→`b24Sdk.ts`,
-    встроенный RestrictionManager = rate-limiter (lever-1), **пер-JOB мемоизация клиента = lever-2** (общий bucket +
-    одна загрузка токена на джобу вместо ~6·N на батч) + evict-on-error/TTL, реактивный рефреш у самого SDK. Прежний ручной advisory-locked
-    `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + reactive-retry) **удалён** — фолбэка и
-    флага `QUEUE_SDK_TRANSPORT` больше нет. Компромисс (осознанный, выбор пользователя): SDK-рефреш мимо advisory-lock
-    (проигранная гонка = транзиентный ретрай, persist — UPDATE-only-эквивалент через tombstone-guarded `saveToken`, не
-    порча кредов; advisory-lock остаётся на keep-alive #175). **Батчинг (`callBatch`) — частично сделан:**
-    `negativeStages` фанит пер-воронковые `crm.status.list` **одним батчем на тип сущности** (`RestBatch` на том же
-    мемоизированном клиенте, halt-on-error, чанкинг 50). Пул оплат раз-на-op **и пагинация списка сделок** уже сделаны;
-    осталось: `crm.item.payment.list` не батчится (`ERROR_BATCH_METHOD_NOT_ALLOWED`) — пул оплат остаётся N+1; дизайн —
-    `docs/QUEUES.md` «REST-бюджет проводки платежей». **`order-number`-матчинг — сделан** (по order-префиксу
-    `accountNumber` оплаты `<заказ>/<seq>`, `filterByOrderNumber`, live-confirmed #172); **`payment-id`-матчинг — сделан**
-    (по собственному id оплаты в company-пуле, `filterByPaymentId`, IDOR-safe, live-confirmed #172); **`order-id`-матчинг — сделан**
-    (`sale.payment.list` по `orderId` → id оплат заказа **∩** company-пул, `saleLookup.findOrderPaymentIds`+`filterByPaymentIds`,
-    IDOR-safe, `sale`-скоуп в `B24_REQUIRED_SCOPES`, live-confirmed #172); **invoice-кандидат несёт `dealId`**
-    (`parentId2`) → `collapseSameTarget` больше не даёт ложный `ambiguous` (#229). **#172 закрыт полностью** (order/payment по id и номеру).
-    **Запись факта разнесения + чат ошибок в `crm-sync` — сделаны (#184; §9.3 #6):** durable-запись при `allocate` —
-    **строка dist-СП** (`writeLedger`, идемпотентно по маркеру, счётчик `allocated`; Postgres `allocation_fact`
-    **полностью снят** — §9.3 #6) + `notifyError` (чат ошибок) при `ambiguous`/`manual`;
-    покрыто тестами (`allocationErrorMessage`/`allocationErrorNotify`/
-    `queuePhase2`). **Мутация портала (`deal-payment` → `crm.item.payment.pay`, `invoice` → `crm.item.update` на
-    стадию `allocation.invoicePaidStageId` из настроек) за гейтом `autoDistribute` — сделана**
-    (`allocationMutation.ts`/`allocationMutationWrite.ts`, счётчик `distributed`, конверт-aware applied-детект
-    (`{result:true}` vs `{result:{item}}`), идемпотентный порядок mutation-before-fact,
-    live-verify `pnpm mutate:test` + apply/revert стадии инвойса на seed-счёте). **Триггеры deal/smart-process —
-    чистый билдер `buildTriggerExecution` + транспорт `executeTriggerViaRest` + настройка `allocation.triggerCode`
-    (маска `[a-z0-9.\-_]`, fail-safe) + **проводка в hot-path (best-effort) + запись факта триггера — сделаны (#79)**:
-    за гейтом `autoDistribute`+`triggerCode` распознанная trigger-цель фаерит `crm.automation.trigger.execute` через
-    OAuth-резолвер воркера (контекст приложения есть — вебхуку вернулось бы «Application context required»); дедуп по
-    kind+id (within-run) + **маркер dist-СП** (`hasTriggerFact`/`writeTriggerFact`, §9.3 #6), строка+`distributed` только на firing; сбой (в т.ч. незарегистрированный `CODE`)
-    глотается (single-shot — промах не пере-пробуется). Регистрация `CODE` на установке (`crm.automation.trigger.add`,
-    best-effort) — **сделана; регистрация И firing подтверждены вживую** (`pnpm trigger:test --apply --fire` на
-    `bel.bitrix24.by`: `trigger.add`→`trigger.list` round-trip + `executeTriggerViaRest`→`{result:true}` на сделке и
-    смарт-процессе; детали — `docs/PROCESSING.md` §2). Реакция правила автоматизации на `CODE` — за админом (наш код
-    доставляет сигнал). UI-переключатель `autoDistribute` в форме настроек — **сделан**.
-    Поиск моей компании, стадии инвойса/сделки/смарт-процесса, резолв по id (invoice/deal/smart-process), оплаты
-    известной сделки, company-пул оплат (**с пагинацией списка сделок**, #191), мост-документ, `payment-number`-фильтр
-    по `accountNumber`, **хранение матриц/карты в настройках**, **распознавание намерения в `crm-sync`** (слайс 1),
-    **диспетчер intent→кандидаты** (слайс 2: `intentResolver.ts`), **резолюция намерения в кандидаты в `crm-sync`**
-    (слайс 3: `resolveIntents`/`onResolved`, log/count) — **готовы**.
+  - **Разнесение оплат: серверные модули** (#109) — реестр вынесен в
+    [`docs/BACKEND_MAP.md`](docs/BACKEND_MAP.md) (какой файл за что отвечает + живые находки по
+    полям и конвертам REST Bitrix24). Нормативная логика — [`docs/PROCESSING.md`](docs/PROCESSING.md)
+    §2 (разнесение) и §4 (распознавание). Коротко о слоях:
+    - **распознавание** — `app/utils/purposeMatch.ts` (маски) → `identifierDispatch.ts` (вид → куда
+      идти) → `recognitionIntent.ts` (композит);
+    - **поиск цели** — `server/utils/intentResolver.ts` (диспетчер) над `invoiceLookup`/
+      `paymentLookup`/`itemByIdLookup`/`saleLookup`/`documentLookup`, всё скоуплено по компании
+      плательщика (IDOR) и отфильтровано по стадиям (`negativeStages.ts`);
+    - **решение** — чистый `app/utils/allocation.ts` (`resolveAllocation`/`summarizeAllocation`);
+    - **проведение** — `allocationMutation.ts` (билдер) + `allocationMutationWrite.ts` (транспорт),
+      за опт-ин гейтом `autoDistribute`; идемпотентность — чтение состояния цели в B24
+      (`allocationApplied.ts`), а не собственный факт.
   - `app/utils/chatMessage.ts` — чистый `buildChatMessage(item)` (BB-текст операции для чата) +
     `server/utils/chatNotifyWrite.ts` — `notifyChatViaRest(item, dialogId, call)` (`im.message.add`,
     `URL_PREVIEW=N` → `extractMessageId`, id — целое >0). **Ядро стадии 6** (чат-уведомления), тесты.
@@ -1127,7 +862,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     parser-differential обхода `x.bitrix24.by@evil.com`) и возвращает **чистый** хост либо бросает.
     Прежний сырой `$fetch`-`callRest`/`restUrl`/таймаут/`[rest-timing]`/`B24RestError`/`isExpiredTokenError`
     **удалены** — весь исходящий B24 REST идёт через jssdk-транспорт `b24Sdk.ts` (crm-sync — stored-token
-    `B24OAuth`; UI-фрейм-роуты — `makeFrameRestCall`, тот же SDK за `assertPortalHost`); реактивный ретрай
+    `B24OAuth`; UI-фрейм-роуты — `makeFrameRestCall`; SSRF-гейт `assertPortalHost` живёт в
+    `oauthParamsFromToken` и покрывает **оба** пути — stored-token и frame, #430 S1); реактивный ретрай
     `expired_token` и лимитер — у самого SDK. Фрейм-клиент **hard-reject**-ит рефреш (`setCustomRefreshAuth` →
     `FRAME_TOKEN_REJECTED` `invalid_token`), а не шлёт пустой `refresh_token` на OAuth-сервер (нет refresh у
     фрейм-токена → лишний заведомо-провальный round-trip); in-client ретрай на обоих клиентах отключён (#123, выше),
@@ -1180,7 +916,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     поля к дефолту, не бросает; `recognition` растёт без миграции ключа `app.option`; матрицы/карта клампятся по
     DoS-капам `purposeMatch`; **`autoDistribute` — только литерал `true` включает** (любое иное → OFF, fail-safe:
     битый блоб не вооружит мутацию портала)). `recognition` предназначен для `recognizeByMatrices` (§4) — сама проводка (матрицы/
-    алфавит из настроек → распознавание) делается на этапе `crm-sync` (см. «Осталось» выше).
+    алфавит из настроек → распознавание) описана в [`docs/BACKEND_MAP.md`](docs/BACKEND_MAP.md).
     Поиск чатов для пикера — `server/utils/chatSearch.ts` (чистое ядро над `RestCall`: `im.search.chat.list`
     для запроса ≥3 симв., `im.recent.list` для дефолтного списка недавних групп; только куда можно писать;
     `nextOffset`-курсор) + роут `server/api/chat-search.get.ts` (фрейм-токен). UI-пикер — `AsyncSearchSelect`
@@ -1208,135 +944,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 
   Ссылки на доку Альфы — [`docs/ALFA_API.md`](docs/ALFA_API.md); по Приорбанку/текстовой выписке —
   [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
-- **Скрипты разведки (dev, не часть SSG):**
-  - `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) — живой прогон OAuth/выписки Альфы по
-    `.env.alfabankby` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
-  - `scripts/prior-oauth-test.mjs` (`pnpm prior:test`) — живой прогон Open Banking (СПР) Приорбанка
-    по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
-  - **Оба банк-скрипта импортят чистые OAuth-ядра напрямую** (`alfaOauth.ts`/`priorOauth.ts`) —
-    инлайн-копий билдеров URL/тел/claims больше нет, дрейф невозможен by construction (#45; раньше
-    так возник баг auth Альфы #26). Node стрипает `.ts`-типы на лету (`--experimental-strip-types`
-    в `oauth:test`/`prior:test`; ядра без импортов, лоадер не нужен). RS256-подпись и `node:crypto` —
-    у Приора локально. Реальный путь скриптов теперь покрыт тестами ядер (`tests/{alfa,prior}Oauth.test.ts`).
-    **Проводку `cfg→ядро`** (глюкод скрипта, а не билдеры) стережёт `tests/reconScriptsSmoke.test.ts` (#103):
-    **спавнит** каждый скрипт офлайн (`--url-only`, сеть/секреты не нужны — Приору генерит одноразовый
-    RSA-ключ во временный файл) и проверяет `exit 0` + что каждое **закреплённое** cfg-значение доехало
-    куда надо: у Альфы — `client_id`/`scope`/`redirect_uri`/`state`/`base` в URL (и ни одного `undefined`),
-    у Приора — **декод payload подписанного `request`-JWT** (`client_id`/`redirect_uri`/`openbanking_intent_id`
-    из claims). Входы закреплены флагами/spawn-env (локальный `.env.*` не переопределяет уже заданное), так
-    что чек герметичен. Скрипты нельзя `import()` в процессе Vitest (top-level `die()`→`process.exit` убьёт
-    воркер), поэтому — субпроцесс; переименование экспорта ядра или сломанный `cfg.*`-байндинг роняют
-    CI-чек, который юнит-тесты билдеров пропустят.
-  - `scripts/parse-statement.ts` (`pnpm parse:statement <файл>`) — разбор ручной выписки через
-    канонический диспетчер `manualImport.ts` (оба формата: client-bank `***** ^Type=` и
-    `1CClientBankExchange`) → печатает единый `StatementItem[]` (+ секционный вид для текстового
-    формата). Node ≥ 22, нативный TS-стриппинг; `~/`-алиасы резолвит `scripts/lib/alias-loader.mjs`.
-  - `scripts/fuzz-allocation.ts` (`pnpm fuzz:allocation [seed] [N]`) — **исследовательский фузз-прогон
-    алгоритма разнесения** (#109): прогоняет N случайных платежей против синтетической «CRM» через
-    **реальные** чистые ядра (`recognizeByMatrices` → `routeIdentifier` → `resolveAllocation`) +
-    mock-проводку по `PROCESSING.md` §2, сводит **логическую модель исходов** (распределение по 11
-    категориям + «просадки»). Детерминированно (seeded PRNG). Dev-only, охват демонстрационный (5 из 11
-    `IdentifierKind`, один id на назначение); mock `classify()` — **черновик** будущей `crm-sync`-проводки,
-    свериться при её появлении (#109). **CI-gate композиции** ядер — не скрипт, а `tests/allocationPipeline.test.ts`.
-  - `scripts/verify-109-live.ts` (`pnpm verify:109`) — **живой READ-прогон разнесения** против засеянного
-    тестового портала (`.env.b24test`): реальные ядра `companyLookup`/`stageLoader`/`invoiceLookup`/`paymentLookup`/
-    `purposeMatch`/`resolveAllocation` на seed-фикстурах (компания по счёту, стадии, инвойс, IDOR-скоуп, company-пул,
-    ambiguous, `filterByAccountNumber`). Только чтение; `~/`+extensionless-релятивы резолвит `alias-loader.mjs`.
-    Dev-only. Подтверждён на живом портале (21 проверка).
-  - `scripts/verify-chat-live.ts` (`pnpm verify:chat`) — **живой прогон стадии 6 (чат-уведомления)** против
-    тест-портала (`.env.b24test`): реальные `buildChatMessage` → `notifyChatViaRest` → `im.message.add`; проверяет
-    непустой текст + **нейтрализацию BB плательщика** (нет живого `[url=…]`) + сумму с кодом валюты, шлёт сообщение
-    в живой чат (recent-группа или self-диалог по `profile.ID`), верифицирует возврат id и **удаляет** тестовое
-    сообщение (`im.message.delete`). Dev-only. Подтверждён вживую (6 проверок, msgId получен+удалён).
-  - `scripts/verify-distribution-live.ts` (`pnpm verify:distribution` / `--oauth` / `--keep`) — **живой прогон
-    write-пути СП-леджера (#109/§9)** реальными ядрами `provisionDistributionSp`→`ensurePaymentElement`→
-    `writeDistributionRow`→`recomputeNeedDistribution`: провижин двух СП+полей, карьер-элемент (idempotent),
-    строка леджера 600 (idempotent по маркеру), пересчёт «осталось» 1000−600=400, вторая строка 400→0, полный
-    teardown (items + app-SP-типы). **Пройден вживую 10/10 (#384–#386):** владелец выдал тест-вебхуку
-    (`.env.b24test`) право `userfieldconfig.*`, поэтому default вебхук-режим гоняет **весь** write-путь —
-    СП-типы **и UF-поля** + items + пересчёт (раньше упирался в `insufficient_scope` на `userfieldconfig.*`).
-    Live-находки, зашитые в ядра: UF-поля кейсятся на **TYPE id** (`CRM_<id>`), `crm.item.*` адресует их
-    **camelCase** (`ufCrm<id><Pascal>`), свой `PARENT_PAYMENT` UF вместо нативного `parentId<etid>`, сумму/валюту
-    храним в **своих** UF-полях (`double`+`PRECISION:2`; встроенные `opportunity`/`currencyId` на элемент СП не
-    пишутся). **`--oauth`** (`.env.b24oauth`, прод-транспорт `makePortalSdkCall`) — тот же прогон в проде;
-    ⚠ требует `userfieldconfig` в granted-scopes (ре-consent) + ротирует refresh-токен (после — переизвлечь creds).
-    Dev-only.
-  - `scripts/mutate-payment-live.ts` (`pnpm mutate:test` / `--apply` / `--revert`) — **живой прогон мутационного
-    слайса** (§2): читает оплату seed-сделки, строит мутацию **тем же** чистым `buildAllocationMutation` и шлёт **тем
-    же** `payAllocationViaRest`, что и `crm-sync`. **Dry-run по умолчанию** (печатает REST-вызов, ничего не пишет);
-    `--apply` — реально `crm.item.payment.pay` + подтверждение `PAID=Y`; `--revert` — откат `sale.payment.update PAID=N`
-    (scope `sale`), чтобы фикстура осталась переиспользуемой. **Режим стадии инвойса** — `--invoice <id> --stage <stageId>`
-    (тот же билдер/транспорт → `crm.item.update` stageId; dry-run/`--apply`, печатает текущую и новую стадию).
-    Dev-only, не часть SSG.
-  - `scripts/b24-sdk-test.mjs` (`pnpm sdk:test` / `--burst`) — **дев-смоук транспорта `@bitrix24/b24jssdk`** (#191):
-    строит `B24Hook` из вебхука `.env.b24test`, делает пару REST-вызовов + батч и печатает статистику лимитера;
-    `--burst` — 60 быстрых вызовов, чтобы увидеть само-троттлинг (без `QUERY_LIMIT_EXCEEDED`). Webhook-смоук
-    транспорта `crm-sync` на SDK (`server/utils/b24Sdk.ts`) — но использует
-    `B24Hook` (вебхук), **не** наш OAuth-путь; OAuth-смоук — `sdk:crm:test` ниже. Dev-only, токен в `.env.b24test`.
-  - `scripts/extract-oauth-from-docker.sh` + `scripts/sdk-crm-test.ts` (`pnpm sdk:crm:test` / `--force-refresh`) —
-    **живой смоук OAuth-транспорта `crm-sync` на SDK (#191, теперь дефолт-транспорт).** Первый (запускать **на
-    сервере** с backend-Docker) вытаскивает креды установленного портала: читает свежую строку `portal_tokens`,
-    расшифровывает refresh (`B24_TOKEN_ENC_KEY`, формат `iv:tag:ct` base64) **внутри backend-контейнера**, рефрешит на
-    `oauth.bitrix.info` и печатает блок `B24_OAUTH_*` (адаптация проверенного паттерна `ai-price-import`; **ротирует**
-    refresh — БД-строка устареет, переустанови на тесте). Второй прогоняет **наш реальный** `makePortalSdkCall`
-    (`B24OAuth`, как воркер) с этими кредами (in-memory токен-стор, без pg/Redis): `profile`+`crm.item.list` (проверка
-    конверта `{result,…}`) и `--force-refresh` (бэкдейтит истечение → проверяет **refresh+persist**). Креды — в
-    git-ignored `.env.b24oauth` (шаблон `.env.b24oauth.example`). Dev-only, не часть SSG.
-  - `scripts/configurable-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой смоук
-    записи дела (#259)** (настраиваемое дело). Гоняет **тот же** код, что crm-sync:
-    `buildConfigurableActivity`→`writeConfigurableActivityViaRest`→`findActivityByMarker` по OAuth-транспорту
-    (`makePortalSdkCall`, in-memory токен-стор, креды из `.env.b24oauth`). **Dry-run по умолчанию** (печатает
-    params); `--apply` создаёт настраиваемое дело и проверяет **round-trip дедупа** (поиск маркера находит
-    созданное дело). `configurable.add` — только OAuth-контекст, вебхуком не проверить (класс #79). Dev-only.
-  - `scripts/trigger-register-test.ts` (`pnpm trigger:test` / `--apply`) — **живой смоук регистрации триггера
-    автоматизации (#79)**. Гоняет **тот же** билдер, что установка: `buildTriggerRegisterCall(B24_PAYMENT_TRIGGER)`
-    → `crm.automation.trigger.add` по OAuth-транспорту (`makePortalSdkCall`, креды `.env.b24oauth`). **Dry-run по
-    умолчанию** (печатает call); `--apply` регистрирует `CODE` и проверяет **round-trip** (`trigger.list` содержит
-    его). `trigger.add` — идемпотентен + OAuth-контекст + права админа, вебхуком не проверить (класс #79).
-    **Подтверждён вживую** (`bel.bitrix24.by`: CODE `cba_payment_received` зарегистрирован, в списке). Dev-only.
-  - `scripts/seed-test-b24.mjs` (`pnpm seed:b24` / `--list` / `--purge`) — **идемпотентный посев тестовых
-    данных в живой тестовый портал Б24** для ручной проверки #109 (стадия 4/§2 `PROCESSING.md`): смарт-
-    процессы (с направлениями / без — `entityTypeId` назначается автоматически, на подтверждённом
-    портале вышли `1032`/`1030`), смарт-счета (оплачен `DT31_11:P` /
-    открытый `:N` / не оплачен `:D`=SEMANTICS=F, исключается `invoiceLookup`), сделки в разных воронках
-    (сделка Опт несёт **реальную оплату** — объект `crm.item.payment`, цель `deal-payment` #109: товарная
-    позиция → `payment.add` → `payment.product.add` → `payment.pay` — плюс привязанный оплаченный счёт;
-    Розница без оплаты), товары, компании-клиенты (с реквизитами и без → путь
-    UNMATCHED), «мои компании» (`isMyCompany=Y` + наш счёт для §2 Этап C). Всё под тегом `[TEST]`/XML_ID
-    `CBATEST_`; повторный прогон обновляет, а не дублирует (восстановление при смене портала). Хук — из
-    **git-ignored** `.env.b24test` (`B24_TEST_WEBHOOK`, шаблон `.env.b24test.example`; токен не коммитим).
-    **Порядок purge важен**: банк-деталь → реквизит → компания, ПОКА компания жива — иначе Б24 осиротит
-    реквизиты без прав на удаление, и «зомби»-банк-деталь навсегда испортит поиск по счёту. **Расчётный
-    счёт `RQ_ACC_NUM` не уникален** (может быть на нескольких компаниях). **Ограничение:** удалить сделку с
-    оплаченной оплатой нельзя без scope `sale` (`crm`-only токен → `insufficient_scope`); purge такую сделку
-    пропускает с предупреждением. Подтверждено вживую: `companyLookup` (счёт→компания), поля смарт-счёта,
-    реальная оплата сделки. Dev-only, не часть SSG.
-  - **Тестовый портал Б24 и скоупы вебхука** (для ручной проверки #109; сам портал сменный —
-    восстанавливаем данные `pnpm seed:b24`). Вебхук храним **только** в git-ignored `.env.b24test`
-    (`B24_TEST_WEBHOOK`), в репозиторий он не попадает; при смене портала переписываем эту строку.
-    Скоупы вебхука (гейт того, что можно проверить руками):
-    - **`crm`** — есть; хватает для всего текущего seed (компании/реквизиты/счета/сделки/смарт-процессы/
-      товары) и путей #109 (поиск компании, инвойс, оплата сделки — создание/проведение, company-пул оплат).
-    - **`sale`** — **в скоупах приложения** (`B24_REQUIRED_SCOPES`, #172) и на тестовом вебхуке. Роль в рантайме:
-      **`order-id`** — `sale.payment.list` по `orderId` даёт id оплат заказа (`crm.item.payment.list` `orderId` не отдаёт),
-      которые вызывающий пересекает с company-пулом (IDOR). `sale.order` **не несёт** связки со сделкой/компанией
-      (`companyId=null`) → сам по себе к плательщику не привязать, поэтому `sale` — только для маппинга `orderId`→оплаты,
-      а не как граница авторизации. Также `sale` нужен для **сторно** (`sale.payment.update PAID=N`, dev `--revert`/`--purge`).
-    - **`documentgenerator`** — под мост-документ (`crm.documentgenerator.document.list`, `document-number` → сущность).
-      **LIVE-VERIFIED** (#109): сгенерирован документ из шаблона #1 на seed-сделку → обратный `filter:{number}` работает,
-      мост резолвит сущность (`pnpm verify:109` #8). **Теперь и в `B24_REQUIRED_SCOPES` приложения** (wiring в hot-path).
-    - **`im`** — понадобится позже для уведомлений в чат (стадия 6, `im.message.add`); на текущем тестовом
-      хуке не проверялось.
-    Требуемые скоупы **самого приложения** (не вебхука) — `app/config/b24.ts` `B24_REQUIRED_SCOPES`
-    (`crm`, **`sale`** (#172, `order-id`→`sale.payment.list`), `im`, **`documentgenerator`** (#109, `via-document` мост),
-    **`userfieldconfig`** (#408 — `userfieldconfig.add` при провижининге полей dist-СП), `user_brief`, `placement`).
-    ⚠ Добавление `sale`/`documentgenerator`/`userfieldconfig` **потребует ре-consent** на уже установленных
-    порталах (мост-документ теперь в hot-path — `crm.documentgenerator.document.list` в `crm-sync`;
-    без `userfieldconfig` кнопка «Настроить смарт-процессы» отказывает).
-  - `scripts/lib/*.mjs` — общая обвязка банк- и seed-скриптов (одинаковые запуск/проверка/вывод):
-    `demo-utils`/`env` (чистые, покрыты тестами), `http` (единый `httpRequest`, TLS-проверку не отключает),
-    `cli` (цвета `C`, префиксы `ok/warn/err/head`, `die`, кросс-платформенный `openBrowser` — URL-гейт
-    `openBrowser` покрыт тестом `tests/cliOpenBrowser.test.ts`, #45).
+- **Дев-скрипты** (разведка банков, посев тестового портала, живые прогоны записи) — вынесены в
+  [`docs/DEV_SCRIPTS.md`](docs/DEV_SCRIPTS.md): таблица всех команд с пометкой, какая **пишет** в
+  портал, и подробности по каждой. Креды живут в git-ignored `.env.*`, в репозиторий не попадают.
 - `tests/*.test.ts` — Vitest (node) на чистые утилиты.
 - `tests/nuxt/**/*.test.ts` — Vitest (проект `nuxt`) на компоненты/страницы (`mountSuspended`).
 
@@ -1346,10 +956,16 @@ UI — в компонентах. Это та же раскладка, что в
 ## Встройка в Bitrix24 (этап 2)
 
 Приложение работает в двух режимах: standalone (публичный лендинг `/`) и как iframe-приложение
-внутри портала (`/app`, `/settings`, `/install`). SDK — `@bitrix24/b24jssdk` (+ `-nuxt`).
+внутри портала (`/app`, `/import`, `/install`). SDK — `@bitrix24/b24jssdk` (+ `-nuxt`).
 
-- `useB24().init()` молча no-op вне фрейма (нет `window.name`) — поэтому in-portal-страницы рендерятся
-  и как обычные URL, и внутри портала без отдельной ветки.
+- `useB24().init()` молча no-op вне фрейма (нет `window.name`), но сами in-portal-страницы (`/app`,
+  `/import`, `/install`) закрыты общим **`InPortalGate`** (#414): снаружи портала показывается
+  объяснение вместо неработающего интерфейса (там нет фрейм-токена — ни настроек, ни статуса, ни
+  записи в CRM). Штатный обход для разработки, скриншотов и тестов — **`?preview=1`**; флаг читается
+  ИЗ РОУТЕРА, а не из `window.location` (на гидратации пререндеренной страницы строка запроса пуста).
+  Чистое ядро решения — `app/utils/inPortalGate.ts` (`portalGateState` checking/ok/outside +
+  `isPreviewQuery`, тесты `tests/inPortalGate.test.ts` и `tests/nuxt/inPortalGate.nuxt.test.ts`).
+  ⚠ Это UX-заглушка, **не** авторизация: настоящая граница — фрейм-токен на сервере.
 - `/install` делает `init → event.bind (ONAPPINSTALL/ONAPPUNINSTALL) → installFinish` + диагностику.
   Привязка событий — до `installFinish`, чтобы текущая установка доставила `application_token`
   на backend `/api/b24/events`. **`placement.bind` не вызываем** — как именно приложение встроено
@@ -1410,13 +1026,13 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   и `window.__NUXT__.config` с меняющимся `buildId`) разрешаются по sha256-хэшам, которые
   `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
   `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
-  домены Б24 (iframe-встройка `/app`,`/settings`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
+  домены Б24 (iframe-встройка `/app`,`/import`,`/install`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
   Лендинг несёт **Яндекс.Метрику** (инлайн-счётчик из `nuxt.config.ts`, `NUXT_PUBLIC_METRIKA_ID`;
   его sha256 подхватывает `csp-hashes.mjs`, CSP разрешает `mc.yandex.ru` в script/img/connect/frame-src)
   и **встроенную CRM-форму Б24** (iframe на `public/b24-form.html` со своим form-scoped CSP —
   `location = /b24-form.html`; `NUXT_PUBLIC_B24_FORM_*`, пустые → слот).
   Метрика-сниппет **самозаглушается в iframe** (`window.self !== window.top`): in-portal-страницы
-  (`/app`,`/settings`,`/install`) внутри портала Б24 Метрику **не** инициализируют — иначе webvisor
+  (`/app`,`/import`,`/install`) внутри портала Б24 Метрику **не** инициализируют — иначе webvisor
   писал бы session-replay CRM клиента, а цели пачкали бы аналитику лендинга портальным трафиком
   (`ym` тогда не определён → `useMetrikaGoal` no-op). Тот же приём, что в `currency-converter`
   (там — в `public/metrika.js`).

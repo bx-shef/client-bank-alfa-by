@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
@@ -11,7 +10,6 @@ import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 
 definePageMeta({ layout: 'clear' })
 
-const router = useRouter()
 const b24Instance = useB24()
 const isUseB24 = computed<boolean>(() => b24Instance.isInit())
 const requiredScopes = b24Instance.getRequiredRights()
@@ -183,13 +181,14 @@ async function runInstall() {
     const ready = await waitForB24()
 
     if (!ready) {
-      // Standalone (opened directly, not in a portal) — show a brief mock and
-      // send the visitor to the landing.
-      caption.value = 'Вне портала Bitrix24 — демо-режим'
+      // Вне портала установка невозможна в принципе. Раньше здесь крутился фальшивый прогресс и
+      // редирект на лендинг; теперь объяснение показывает общий `InPortalGate` (#414) — одна
+      // заглушка на все страницы приложения вместо трёх разных поведений. Просто выходим.
+      // Прогресс переводим в определённое состояние: иначе полоса крутилась бы вечно (видно под
+      // `?preview=1`, где тело страницы рендерится).
+      caption.value = 'Вне портала Bitrix24 — установка недоступна'
       progressColor.value = 'air-primary-warning'
-      progressValue.value = 99
-      await sleep(1500)
-      await router.replace('/')
+      progressValue.value = 100
       return
     }
 
@@ -249,166 +248,167 @@ onMounted(runInstall)
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
-    <div class="flex w-full max-w-2xl flex-col items-center gap-4">
-      <h1 class="text-center text-2xl font-bold text-(--ui-color-base-1)">
-        {{ LANDING_TITLE }}
-      </h1>
+  <!-- Установка возможна только внутри портала (#414) — снаружи страница показывает общую
+       заглушку вместо фальшивого прогресса и редиректа. -->
+  <InPortalGate>
+    <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
+      <div class="flex w-full max-w-2xl flex-col items-center gap-4">
+        <h1 class="text-center text-2xl font-bold text-(--ui-color-base-1)">
+          {{ LANDING_TITLE }}
+        </h1>
 
-      <B24Progress
-        v-model="progressValue"
-        size="xs"
-        animation="elastic"
-        :color="progressColor"
-        class="w-1/2"
-      />
-
-      <div
-        v-if="installError"
-        class="flex flex-col items-center gap-2 text-center"
-      >
-        <p class="text-sm font-medium text-(--ui-color-accent-main-alert)">
-          Ошибка установки
-        </p>
-        <p class="max-w-md break-all text-xs text-(--ui-color-base-3)">
-          {{ installError }}
-        </p>
-        <B24Button
-          label="Повторить"
-          color="air-primary"
-          size="sm"
-          :disabled="isRunning"
-          @click="runInstall"
+        <B24Progress
+          v-model="progressValue"
+          size="xs"
+          animation="elastic"
+          :color="progressColor"
+          class="w-1/2"
         />
-      </div>
-      <p
-        v-else
-        class="text-sm text-(--ui-color-base-3)"
-      >
-        {{ caption }}
-      </p>
 
-      <!-- Вердикт (#410): «Готово» больше не означает «всё работает». Недовыданные права раньше
-           были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны.
-           Живая область: вердикт появляется асинхронно, и без неё скринридер о нём не сообщит. -->
-      <div
-        class="w-full"
-        role="alert"
-        aria-live="polite"
-      >
-        <B24Alert
-          v-if="isUseB24 && !checkingBackend && verdict.level !== 'ok' && !isRunning && !installError"
-          :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
-          variant="soft"
-          :title="verdict.title"
-          class="mt-4 w-full"
-          data-testid="install-verdict"
+        <div
+          v-if="installError"
+          class="flex flex-col items-center gap-2 text-center"
         >
-          <template #description>
-            <ul class="mt-1 flex list-disc flex-col gap-2 pl-4">
-              <li
-                v-for="(issue, n) in verdict.issues"
-                :key="n"
-              >
-                {{ issue.title }}
-                <span
-                  v-if="issue.action"
-                  class="block opacity-80"
-                >{{ issue.action }}</span>
-              </li>
-            </ul>
-          </template>
-        </B24Alert>
+          <p class="text-sm font-medium text-(--ui-color-accent-main-alert)">
+            Ошибка установки
+          </p>
+          <p class="max-w-md break-all text-xs text-(--ui-color-base-3)">
+            {{ installError }}
+          </p>
+          <B24Button
+            label="Повторить"
+            color="air-primary"
+            size="sm"
+            :disabled="isRunning"
+            @click="runInstall"
+          />
+        </div>
+        <p
+          v-else
+          class="text-sm text-(--ui-color-base-3)"
+        >
+          {{ caption }}
+        </p>
 
-        <B24Alert
-          v-else-if="isUseB24 && !checkingBackend && verdict.level === 'ok' && !isRunning && !installError"
-          color="air-primary-success"
-          variant="soft"
-          :title="verdict.title"
-          description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
-          class="mt-4 w-full"
-          data-testid="install-verdict"
-        />
-      </div>
-
-      <B24Accordion
-        v-model="diagOpen"
-        :items="[{ label: 'Диагностика', value: 'diag', slot: 'diag' }]"
-        type="multiple"
-        class="mt-4 w-full"
-      >
-        <template #diag>
-          <div class="flex flex-col gap-3 p-2 font-mono text-sm">
-            <div class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
-              <span class="text-(--ui-color-base-3)">Режим:</span>
-              <span>{{ diagnostics.mode }}</span>
-              <span class="text-(--ui-color-base-3)">Домен:</span>
-              <span>{{ diagnostics.domain || '—' }}</span>
-              <span class="text-(--ui-color-base-3)">member_id:</span>
-              <span class="break-all">{{ diagnostics.memberId || '—' }}</span>
-              <span class="text-(--ui-color-base-3)">targetOrigin:</span>
-              <span class="break-all">{{ diagnostics.targetOrigin }}</span>
-              <span class="text-(--ui-color-base-3)">Обработчик событий:</span>
-              <span class="break-all">{{ diagnostics.eventHandler }}</span>
-              <template v-if="diagnostics.trigger">
-                <span class="text-(--ui-color-base-3)">Триггер автоматизации:</span>
-                <span class="break-all">{{ diagnostics.trigger }}</span>
-              </template>
-              <template v-if="diagnostics.appInfo">
-                <span class="text-(--ui-color-base-3)">App:</span>
-                <span>{{ diagnostics.appInfo.CODE }} (id {{ diagnostics.appInfo.ID }}, v{{ diagnostics.appInfo.VERSION }})</span>
-              </template>
-            </div>
-
-            <div
-              v-if="diagnostics.granted.length || diagnostics.missing.length"
-              class="flex flex-col gap-1"
-            >
-              <span class="text-(--ui-color-base-3)">Права:</span>
-              <div class="flex flex-wrap gap-1">
-                <B24Badge
-                  v-for="s in diagnostics.granted"
-                  :key="`g-${s}`"
-                  :label="s"
-                  color="air-primary-success"
-                  variant="soft"
-                  size="sm"
-                />
-                <B24Badge
-                  v-for="s in diagnostics.missing"
-                  :key="`m-${s}`"
-                  :label="`${s} (нет)`"
-                  color="air-primary-alert"
-                  variant="soft"
-                  size="sm"
-                />
-              </div>
-            </div>
-
-            <div class="flex flex-col gap-1">
-              <span class="text-(--ui-color-base-3)">События:</span>
-              <div
-                v-if="diagnostics.events.length === 0"
-                class="italic text-(--ui-color-base-3)"
-              >
-                нет привязок
-              </div>
-              <ul
-                v-else
-                class="m-0 flex list-none flex-col gap-1 p-0"
-              >
+        <!-- Вердикт (#410): «Готово» больше не означает «всё работает». Недовыданные права раньше
+           были видны только в свёрнутой диагностике мелкими бейджами — то есть не были видны.
+           Живая область: вердикт появляется асинхронно, и без неё скринридер о нём не сообщит.
+           role="alert" сам по себе live (assertive) — явный aria-live="polite" ему противоречил
+           и поведение зависело от прочтения браузером (U4, #430). -->
+        <div
+          class="w-full"
+          role="alert"
+        >
+          <B24Alert
+            v-if="isUseB24 && !checkingBackend && verdict.level !== 'ok' && !isRunning && !installError"
+            :color="verdict.level === 'failed' ? 'air-primary-alert' : 'air-primary-warning'"
+            :title="verdict.title"
+            class="mt-4 w-full"
+            data-testid="install-verdict"
+          >
+            <template #description>
+              <ul class="mt-1 flex list-disc flex-col gap-2 pl-4">
                 <li
-                  v-for="(e, i) in diagnostics.events"
-                  :key="i"
-                  class="break-all"
+                  v-for="(issue, n) in verdict.issues"
+                  :key="n"
                 >
-                  <strong>{{ e.event }}</strong> → {{ e.handler }}
+                  {{ issue.title }}
+                  <span
+                    v-if="issue.action"
+                    class="block opacity-80"
+                  >{{ issue.action }}</span>
                 </li>
               </ul>
+            </template>
+          </B24Alert>
+
+          <B24Alert
+            v-else-if="isUseB24 && !checkingBackend && verdict.level === 'ok' && !isRunning && !installError"
+            color="air-primary-success"
+            :title="verdict.title"
+            description="Все запрошенные права выданы. Дальше — настройте приложение: подключите банк и выберите чат для уведомлений."
+            class="mt-4 w-full"
+            data-testid="install-verdict"
+          />
+        </div>
+
+        <B24Accordion
+          v-model="diagOpen"
+          :items="[{ label: 'Диагностика', value: 'diag', slot: 'diag' }]"
+          type="multiple"
+          class="mt-4 w-full"
+        >
+          <template #diag>
+            <div class="flex flex-col gap-3 p-2 font-mono text-sm">
+              <div class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+                <span class="text-(--ui-color-base-3)">Режим:</span>
+                <span>{{ diagnostics.mode }}</span>
+                <span class="text-(--ui-color-base-3)">Домен:</span>
+                <span>{{ diagnostics.domain || '—' }}</span>
+                <span class="text-(--ui-color-base-3)">member_id:</span>
+                <span class="break-all">{{ diagnostics.memberId || '—' }}</span>
+                <span class="text-(--ui-color-base-3)">targetOrigin:</span>
+                <span class="break-all">{{ diagnostics.targetOrigin }}</span>
+                <span class="text-(--ui-color-base-3)">Обработчик событий:</span>
+                <span class="break-all">{{ diagnostics.eventHandler }}</span>
+                <template v-if="diagnostics.trigger">
+                  <span class="text-(--ui-color-base-3)">Триггер автоматизации:</span>
+                  <span class="break-all">{{ diagnostics.trigger }}</span>
+                </template>
+                <template v-if="diagnostics.appInfo">
+                  <span class="text-(--ui-color-base-3)">App:</span>
+                  <span>{{ diagnostics.appInfo.CODE }} (id {{ diagnostics.appInfo.ID }}, v{{ diagnostics.appInfo.VERSION }})</span>
+                </template>
+              </div>
+
+              <div
+                v-if="diagnostics.granted.length || diagnostics.missing.length"
+                class="flex flex-col gap-1"
+              >
+                <span class="text-(--ui-color-base-3)">Права:</span>
+                <div class="flex flex-wrap gap-1">
+                  <B24Badge
+                    v-for="s in diagnostics.granted"
+                    :key="`g-${s}`"
+                    :label="s"
+                    color="air-primary-success"
+                    size="sm"
+                  />
+                  <B24Badge
+                    v-for="s in diagnostics.missing"
+                    :key="`m-${s}`"
+                    :label="`${s} (нет)`"
+                    color="air-primary-alert"
+                    size="sm"
+                  />
+                </div>
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <span class="text-(--ui-color-base-3)">События:</span>
+                <div
+                  v-if="diagnostics.events.length === 0"
+                  class="italic text-(--ui-color-base-3)"
+                >
+                  нет привязок
+                </div>
+                <ul
+                  v-else
+                  class="m-0 flex list-none flex-col gap-1 p-0"
+                >
+                  <li
+                    v-for="(e, i) in diagnostics.events"
+                    :key="i"
+                    class="break-all"
+                  >
+                    <strong>{{ e.event }}</strong> → {{ e.handler }}
+                  </li>
+                </ul>
+              </div>
             </div>
-          </div>
-        </template>
-      </B24Accordion>
+          </template>
+        </B24Accordion>
+      </div>
     </div>
-  </div>
+  </InPortalGate>
 </template>

@@ -98,9 +98,49 @@ describe('buildReadiness', () => {
     expect(on.hint).toBe('')
   })
 
+  it('чат ошибок — ОТДЕЛЬНАЯ строка: без него сообщения о проблемных платежах не приходят никуда', () => {
+    const settings = withSp()
+    settings.chat.dialogId = 'chat123'
+    // Чат уведомлений выбран, а чат ошибок — нет: именно в него уходит всё, что приложение не
+    // разложило само, поэтому «зелено по чату» здесь было бы обманом.
+    const red = item(buildReadiness(snap({ settings })), 'error-chat')
+    expect(red.ok).toBe(false)
+    expect(red.hint).toContain('чат ошибок')
+
+    settings.errorChat.dialogId = 'err123'
+    expect(item(buildReadiness(snap({ settings })), 'error-chat').ok).toBe(true)
+  })
+
+  it('карта распознавания краснеет, пока нет ни одного шаблона номера', () => {
+    // Без матриц приложение не видит в назначении НИ ОДНОГО номера — дела пишутся, но ни к чему
+    // не привязываются, и снаружи это выглядит как «разнесение не работает».
+    const settings = withSp()
+    expect(item(buildReadiness(snap({ settings })), 'recognition').ok).toBe(false)
+
+    settings.recognition.matrices = [{ mask: 'dddd', kind: 'invoice-number', note: '' }]
+    const green = item(buildReadiness(snap({ settings })), 'recognition')
+    expect(green.ok).toBe(true)
+    expect(green.detail).toBe('1 шаблон')
+
+    settings.recognition.matrices.push({ mask: 'СЧ-dddd', kind: 'invoice-number', note: '' })
+    expect(item(buildReadiness(snap({ settings })), 'recognition').detail).toBe('2 шаблона')
+
+    // Ловушки русского счёта: 5 и 11 — «шаблонов», 22 — «шаблона».
+    const many = (n: number) => {
+      const st = withSp()
+      st.recognition.matrices = Array.from({ length: n }, () => ({ mask: 'd+', kind: 'invoice-number' as const }))
+      return item(buildReadiness(snap({ settings: st })), 'recognition').detail
+    }
+    expect(many(5)).toBe('5 шаблонов')
+    expect(many(11)).toBe('11 шаблонов')
+    expect(many(22)).toBe('22 шаблона')
+  })
+
   it('is fully ready only when every line is ok', () => {
     const settings = withSp()
     settings.chat.dialogId = 'chat123'
+    settings.errorChat.dialogId = 'err123'
+    settings.recognition.matrices = [{ mask: 'dddd', kind: 'invoice-number', note: '' }]
     const items = buildReadiness(snap({ settings, connectedAccounts: 1, pollEnabled: true }))
     expect(isFullyReady(items)).toBe(true)
     expect(items.every(i => i.hint === '')).toBe(true)

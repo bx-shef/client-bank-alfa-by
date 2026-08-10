@@ -11,34 +11,41 @@ import { pluralRu } from '~/utils/importStatus'
 export interface ImportOutcome {
   ok: boolean
   message: string
+  /** Ключи принятых загрузок (#417) — по ним UI опрашивает итог обработки. */
+  batchIds: string[]
 }
 
 export function useImport() {
   /** POST each file; `opCount` is the preview's operation count (for the message). */
   async function submitFiles(files: File[], opCount: number): Promise<ImportOutcome> {
-    if (!files.length) return { ok: false, message: 'Нет файлов для записи.' }
+    if (!files.length) return { ok: false, message: 'Нет файлов для записи.', batchIds: [] }
     const auth = frameAuth()
     if (!auth) {
-      return { ok: false, message: 'Запись в CRM доступна только внутри портала Bitrix24.' }
+      return { ok: false, message: 'Запись в CRM доступна только внутри портала Bitrix24.', batchIds: [] }
     }
     let accepted = 0
+    const batchIds: string[] = []
     for (const file of files) {
       const form = new FormData()
       form.append('file', file, file.name)
       try {
-        await $fetch('/api/import', { method: 'POST', headers: frameAuthHeaders(auth), body: form })
+        const res = await $fetch<{ batchId?: string }>('/api/import', { method: 'POST', headers: frameAuthHeaders(auth), body: form })
         accepted++
+        // Ключ загрузки — по нему потом опрашивается реальный исход обработки (#417).
+        if (res?.batchId) batchIds.push(res.batchId)
       } catch (e) {
         // Note already-accepted files so the user knows a retry only resends the rest
         // (crm-sync dedups by account|docId, so a resend is harmless anyway).
         const tail = accepted ? ` (до этого принято: ${accepted})` : ''
-        return { ok: false, message: frameFetchError(e, `Не удалось отправить «${file.name}»${tail}`) }
+        // Уже принятые файлы обрабатываются — их ключи отдаём, чтобы их итог всё равно доехал.
+        return { ok: false, message: frameFetchError(e, `Не удалось отправить «${file.name}»${tail}`), batchIds }
       }
     }
     const opsWord = pluralRu(opCount, ['операция', 'операции', 'операций'])
     return {
       ok: true,
-      message: `Принято в обработку: ${accepted} файл(ов), ${opCount} ${opsWord}. Запись в CRM идёт в фоне.`
+      message: `Принято в обработку: ${accepted} файл(ов), ${opCount} ${opsWord}. Ждём результат обработки…`,
+      batchIds
     }
   }
 

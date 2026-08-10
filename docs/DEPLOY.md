@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-07-28
+> Last reviewed: 2026-07-31
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -35,6 +35,11 @@ Backend (приём событий Б24 + хранилище токенов; д�
   Пустое значение здесь — **сознательный выбор**, а не «по умолчанию».
 Также токен служит guard'ом серверной диагностики (`/api/queues`); при пустом
 `B24_APPLICATION_TOKEN` эти эндпоинты недоступны (и без того закрыты nginx `deny all`).
+
+⚠ Троттлинг зоны `import` вешается **отдельным exact-match блоком на каждый роут**
+(`= /api/import`, `= /api/import/status`, `= /api/import/batch`, `= /api/import/metrics*`):
+`= /api/import` — точное совпадение и подпути **не** покрывает, поэтому забытый роут провалился бы
+в незадросселированный `location /api/`.
 `REDIS_URL` compose проставляет сам (внутренний сервис `redis`). Схема
 `portal_tokens` создаётся на старте backend (`server/plugins/migrate.ts`). `redis` и `db` host-портов
 не публикуют и сидят на изолированных сетях (`queuenet`/`dbnet`, `internal: true`) — наружу не смотрят.
@@ -55,7 +60,7 @@ Redis, не отсутствие воркера). Поэтому compose под�
 сейчас:** `B24_APPLICATION_TOKEN=… ./scripts/queue-stats.sh` (счётчики очередей из работающего
 backend; эндпоинт `/api/queues` наружу закрыт nginx, скрипт ходит внутрь контейнера). В проде после
 подключения реального опроса выставить `DEMO_LOAD_N=0`. Полноценная телеметрия — **OpenTelemetry**
-(#78, `docs/OBSERVABILITY.md`): app-side инструментирование сделано (DEFAULT OFF), коллектор+Grafana — этап 2.
+(#78, `docs/OBSERVABILITY.md`): app-side инструментирование сделано (DEFAULT OFF); приёмная станция (коллектор + ClickHouse + Grafana) собрана в [`telemetry-station/`](../telemetry-station/README.md) и разворачивается отдельно.
 
 **Один домен, три роли-контейнера (прод).** `docker-compose.prod.yml` поднимает `app` + `backend` + `worker` + `db` + `redis`.
 Наружу (за nginx-proxy) смотрит только `app`: nginx отдаёт статику лендинга/UI, а `location /api/`
@@ -106,7 +111,10 @@ backend; эндпоинт `/api/queues` наружу закрыт nginx, скр�
 > **`docker-compose.prod.yml` на сервере обновляется вручную** — Watchtower подменяет только образы, не
 > compose-файл. После изменений в compose (новые сервисы/переменные, напр. redis #48, `B24_APPLICATION_TOKEN`
 > `:?`→`:-` #53, **сервис `worker` + `QUEUE_WORKERS=0` на backend** — вводить оба **вместе**, иначе очереди
-> встанут молча) синхронизировать файл на сервере руками, иначе `docker compose up` падёт на устаревшем.
+> встанут молча; **`TELEGRAM_ALERT_*` на сервисе `backend`** #426 — их надо и добавить в `.env` на
+> сервере, и пробросить в compose, иначе переменные просто не доедут в контейнер и канал оповещений
+> молча останется выключенным) синхронизировать файл на сервере руками, иначе `docker compose up`
+> падёт на устаревшем.
 
 ## Образ
 
@@ -162,11 +170,22 @@ LETSENCRYPT_EMAIL=you@example.com
 # backend + Postgres (обязательны в проде):
 POSTGRES_PASSWORD=<openssl rand -hex 24>   # URL-safe: без @ : / ? # (уходит в DSN как есть)
 B24_TOKEN_ENC_KEY=<openssl rand -hex 32>
+# Служебная зона оператора (/queues, /api/ops/*). ⚠ ОБЯЗАТЕЛЬНО В ПРОДЕ: пустой пароль means
+# «вход выключен», и `operatorAllowed` пропускает ВСЕХ — зона окажется открыта миру
+# (nginx `deny all` стоит только на /api/queues, на /api/ops/* его нет). См. docs/AUTH.md.
+PUBLIC_PAGE_BASIC_AUTH_PASS=<openssl rand -hex 24>
+SESSION_SECRET=<openssl rand -hex 32>
+# OAuth-приложение Б24. ⚠ ОБЯЗАТЕЛЬНЫ В ПРОДЕ, хотя установка «пройдёт» и без них: без пары
+# не работают refresh access-токена, keep-alive (простаивающий портал теряет авторизацию на
+# 180-й день) и привязка member_id к гранту — авария тихая и отложенная.
+B24_CLIENT_ID=<из карточки приложения>
+B24_CLIENT_SECRET=<из карточки приложения>
 # B24_APPLICATION_TOKEN оставляем пустым: токен придёт per-portal в ONAPPINSTALL и сохранится.
 # Задать (сильное случайное) стоит лишь чтобы включить серверную диагностику /api/queues.
 EOF
 
-# 3. поднять app + backend + db + redis (образы из GHCR; обновления подхватит хостовый Watchtower)
+# 3. поднять app + backend + worker + db + redis (образы из GHCR; обновления подхватит Watchtower).
+#    ⚠ `worker` обязателен: backend идёт с QUEUE_WORKERS=0, без воркера очереди молча встанут.
 make prod-up
 ```
 
@@ -194,7 +213,7 @@ nginx в backend). Он указывается **один раз** — в фор
 
 1. Установить приложение на **портал A** и **портал B** (событие `ONAPPINSTALL` → backend сохранит
    токены каждого портала отдельной строкой в `portal_tokens`, ключ — `member_id`).
-2. В настройках приложения (`/app` → шестерёнка, или `/settings`) каждого портала выбрать **разные**
+2. В настройках приложения (`/app` → шестерёнка → слайдовер настроек) каждого портала выбрать **разные**
    чаты уведомлений и сохранить. UI шлёт на backend **фрейм-токен** портала (заголовки
    `Authorization: Bearer` + `X-B24-Domain`), а не `member_id` — B24 сам скоупит токен к порталу
    вызывающего, так что дотянуться до чужого `app.option` из браузера нельзя (настройки хранятся

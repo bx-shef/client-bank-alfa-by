@@ -500,6 +500,7 @@ function triggerDownload(blob: Blob, filename: string) {
                       color="air-tertiary-no-accent"
                       :to="card.requisitesUrl"
                       target="_blank"
+                      rel="noopener noreferrer"
                       aria-label="Реквизиты (откроется в новой вкладке)"
                       class="flex-1 justify-center"
                       @click="reachGoal('card_requisites')"
