@@ -12,9 +12,12 @@
 // without B24_CLIENT_ID/SECRET). A5 owns a DIFFERENT leg — the statement fetch+normalize
 // (`token → $fetch → normalizeAlfa/normalizePrior`), not this token refresh.
 
-import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import { buildRefreshBody, parseTokenResponse } from '../../app/utils/alfaOauth'
-import { buildPriorRefreshBody, parsePriorTokenResponse } from '../../app/utils/priorOauth'
+import { buildPriorRefreshBody, parsePriorTokenResponse, priorTokenRequest } from '../../app/utils/priorOauth'
+import type { PriorTokenAuth } from '../../app/utils/priorOauth'
+import { priorAuthMethodFromEnv, resolvePriorTokenAuth } from './priorTokenAuth'
+import { signPriorJwt } from './priorJwt'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
 import { getBankToken, saveBankToken } from './bankTokenStore'
@@ -45,17 +48,25 @@ export interface BankRefreshResult {
  * Build the provider-specific refresh request (pure): the token URL, the form body, and any
  * request headers. The two banks authenticate the token endpoint DIFFERENTLY:
  *  - Alfa carries `client_id`+`client_secret` IN THE BODY (no auth header).
- *  - Prior uses `client_secret_basic` — an `Authorization: Basic base64(id:secret)` HEADER
- *    (its DCR `token_endpoint_auth_method` is `client_secret_basic`), body is just
- *    `grant_type`+`refresh_token`. Sending it without the header → 401.
+ *  - Prior authenticates per its DCR-registered `token_endpoint_auth_method` — `client_secret_basic`
+ *    (Authorization header) in sandbox, `private_key_jwt` (signed `client_assertion` in the body)
+ *    in production (#444). `priorAuth` carries whichever the caller resolved; absent ⇒ Basic from
+ *    `creds`, preserving the previous behaviour. Sending neither → 401.
  */
-export function bankRefreshRequest(provider: BankProviderId, creds: BankOAuthCreds, refreshToken: string): { url: string, body: string, headers: Record<string, string> } {
+export function bankRefreshRequest(
+  provider: BankProviderId,
+  creds: BankOAuthCreds,
+  refreshToken: string,
+  priorAuth?: PriorTokenAuth
+): { url: string, body: string, headers: Record<string, string> } {
   if (provider === 'alfa-by') {
     return { url: creds.tokenUrl, body: buildRefreshBody({ clientId: creds.clientId }, refreshToken, creds.clientSecret).toString(), headers: {} }
   }
   if (provider === 'prior-by') {
-    const basic = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64')
-    return { url: creds.tokenUrl, body: buildPriorRefreshBody(refreshToken).toString(), headers: { authorization: `Basic ${basic}` } }
+    const auth: PriorTokenAuth = priorAuth
+      ?? { method: 'client_secret_basic', clientId: creds.clientId, clientSecret: creds.clientSecret }
+    const req = priorTokenRequest(buildPriorRefreshBody(refreshToken), auth)
+    return { url: creds.tokenUrl, body: req.body, headers: req.headers }
   }
   throw new Error(`bankRefreshRequest: provider ${provider} has no online-fetch OAuth (manual import only)`)
 }
@@ -86,18 +97,62 @@ export interface BankRefreshDeps {
   /** POST the refresh body to the token URL (with provider-specific auth headers) and
    *  return the raw JSON. */
   postRefresh: (url: string, body: string, headers: Record<string, string>) => Promise<unknown>
+  /** Resolve Prior's client authentication (signs a fresh `client_assertion` under
+   *  private_key_jwt, #444). `null`/absent ⇒ fall back to client_secret_basic from `creds` —
+   *  the sandbox behaviour. Injected so the refresh stays testable without node:crypto. */
+  priorTokenAuth?: () => PriorTokenAuth | null
 }
 
 /** Resolve a provider's OAuth creds from env. Alfa: `ALFA_OAUTH_*`; Prior: `PRIOR_OAUTH_*`.
- *  Returns `null` when any part is unset — the account then can't be refreshed here. */
+ *  Returns `null` when a required part is unset — the account then can't be refreshed here.
+ *
+ *  `clientSecret` is required only for `client_secret_basic`: under `private_key_jwt` the secret
+ *  never travels (the assertion authenticates us), and the bank may not even issue one for such a
+ *  client — demanding it would disable refresh on an otherwise correct production config (#444). */
 export function bankCredsFromEnv(provider: BankProviderId): BankOAuthCreds | null {
   const prefix = provider === 'alfa-by' ? 'ALFA_OAUTH' : provider === 'prior-by' ? 'PRIOR_OAUTH' : ''
   if (!prefix) return null
   const clientId = process.env[`${prefix}_CLIENT_ID`]?.trim()
   const clientSecret = process.env[`${prefix}_CLIENT_SECRET`]?.trim()
   const tokenUrl = process.env[`${prefix}_TOKEN_URL`]?.trim()
-  if (!clientId || !clientSecret || !tokenUrl) return null
-  return { clientId, clientSecret, tokenUrl }
+  const secretOptional = provider === 'prior-by' && priorAuthMethodFromEnv() === 'private_key_jwt'
+  if (!clientId || !tokenUrl || (!clientSecret && !secretOptional)) return null
+  return { clientId, clientSecret: clientSecret ?? '', tokenUrl }
+}
+
+/**
+ * Prior's client auth from env for the refresh leg (#444).
+ *
+ * ⚠ Fail-loud on a BROKEN `private_key_jwt` config, `null` only when Prior simply isn't configured.
+ * The distinction matters: `resolvePriorTokenAuth` deliberately throws instead of degrading, and
+ * swallowing that here would re-introduce exactly what it forbids — the caller treats `null` as
+ * «no auth supplied» and falls back to `client_secret_basic`, i.e. sends the real client secret to
+ * a token endpoint whose client is registered for private_key_jwt only. The bank answers with an
+ * opaque 401 that reads like an ordinary refresh failure, so the misconfiguration hides.
+ *
+ * The refresh runs on the worker/cron process, separately from the connect routes, so a PEM missing
+ * on just that instance is a realistic deploy slip. Throwing fails the single `bank-fetch` job for
+ * that account (BullMQ isolates it) with the cause stated at the point of failure.
+ */
+export function priorRefreshAuthFromEnv(): PriorTokenAuth | null {
+  const method = priorAuthMethodFromEnv()
+  const clientId = process.env.PRIOR_OAUTH_CLIENT_ID?.trim()
+  const clientSecret = process.env.PRIOR_OAUTH_CLIENT_SECRET?.trim()
+  // Not configured at all ⇒ nothing to authenticate with; the caller degrades as before.
+  // Under private_key_jwt the secret is irrelevant, so only the id gates this branch.
+  if (!clientId || (!clientSecret && method === 'client_secret_basic')) return null
+  // Throws when private_key_jwt lacks key/kid/audience — intentionally NOT caught (see above).
+  return resolvePriorTokenAuth(method, {
+    clientId,
+    clientSecret: clientSecret ?? '',
+    audience: process.env.PRIOR_OAUTH_AUDIENCE?.trim() ?? '',
+    privateKeyPem: process.env.PRIOR_OAUTH_PRIVATE_KEY?.trim() ?? '',
+    kid: process.env.PRIOR_OAUTH_KID?.trim() ?? ''
+  }, {
+    signJwt: signPriorJwt,
+    nowSec: () => Math.floor(Date.now() / 1000),
+    newId: () => randomUUID()
+  })
 }
 
 const liveDeps: BankRefreshDeps = {
@@ -106,6 +161,7 @@ const liveDeps: BankRefreshDeps = {
   loadToken: getBankToken,
   saveToken: saveBankToken,
   creds: bankCredsFromEnv,
+  priorTokenAuth: priorRefreshAuthFromEnv,
   postRefresh: (url, body, headers) => {
     // Cast $fetch to a plain signature (dynamic URL → opt out of Nitro route-type
     // inference; same guard as ensureAccessToken/callRest). Bounded so a hung OAuth call
@@ -164,7 +220,8 @@ export async function ensureBankToken(
       return stored
     }
 
-    const { url, body, headers } = bankRefreshRequest(stored.provider, creds, stored.refreshToken)
+    const priorAuth = stored.provider === 'prior-by' ? (deps.priorTokenAuth?.() ?? undefined) : undefined
+    const { url, body, headers } = bankRefreshRequest(stored.provider, creds, stored.refreshToken, priorAuth)
     const r = parseBankRefresh(stored.provider, await deps.postRefresh(url, body, headers))
     const updated: BankToken = {
       ...stored,

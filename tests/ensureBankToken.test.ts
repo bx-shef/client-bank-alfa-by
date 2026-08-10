@@ -9,6 +9,7 @@ import {
   type BankOAuthCreds,
   type BankRefreshDeps
 } from '../server/utils/ensureBankToken'
+import { PRIOR_CLIENT_ASSERTION_TYPE } from '../app/utils/priorOauth'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
 const NOW = 1_700_000_000_000
@@ -75,6 +76,32 @@ describe('bankRefreshRequest', () => {
   it('manual provider throws (no online OAuth)', () => {
     expect(() => bankRefreshRequest('manual', creds, 'R')).toThrow(/manual import only/)
   })
+
+  // #444 — prod refresh authenticates with a signed assertion, not the sandbox-only Basic header.
+  it('prior + private_key_jwt: assertion in the BODY, no Basic header', () => {
+    const { body, headers } = bankRefreshRequest('prior-by', creds, 'R', {
+      method: 'private_key_jwt',
+      assertion: 'H.P.S'
+    })
+    const form = new URLSearchParams(body)
+    expect(form.get('grant_type')).toBe('refresh_token')
+    expect(form.get('refresh_token')).toBe('R')
+    expect(form.get('client_assertion')).toBe('H.P.S')
+    expect(form.get('client_assertion_type')).toBe(PRIOR_CLIENT_ASSERTION_TYPE)
+    expect(headers).toEqual({})
+    expect(body).not.toContain('sec') // client secret never on the wire under this method
+  })
+
+  it('prior: falls back to Basic when no auth is supplied (sandbox behaviour unchanged)', () => {
+    const { headers } = bankRefreshRequest('prior-by', creds, 'R', undefined)
+    expect(headers.authorization).toBe(`Basic ${Buffer.from('cid:sec').toString('base64')}`)
+  })
+
+  it('alfa ignores a Prior auth argument (creds stay in the body, no header)', () => {
+    const { body, headers } = bankRefreshRequest('alfa-by', creds, 'R', { method: 'private_key_jwt', assertion: 'X' })
+    expect(headers).toEqual({})
+    expect(body).not.toContain('client_assertion')
+  })
 })
 
 describe('parseBankRefresh', () => {
@@ -120,6 +147,32 @@ describe('ensureBankToken', () => {
     const out = await ensureBankToken(near, deps)
     expect(out.accessToken).toBe('A2')
     expect(out.refreshToken).toBe('OLD') // fell back to the stored one
+  })
+
+  // #444: the resolved auth must reach the wire — testing only the pure bankRefreshRequest would
+  // miss a broken `deps.priorTokenAuth` wiring, which is exactly where a prod 401 would come from.
+  it('prior + private_key_jwt: the assertion reaches postRefresh, no Basic header', async () => {
+    const near = tok({ provider: 'prior-by', expiresAt: NOW + 10_000 })
+    const { deps } = fakeDeps({ stored: near })
+    const post = vi.fn(deps.postRefresh)
+    await ensureBankToken(near, {
+      ...deps,
+      postRefresh: post,
+      priorTokenAuth: () => ({ method: 'private_key_jwt', assertion: 'H.P.S' })
+    })
+    const [, body, headers] = post.mock.calls[0]!
+    expect(new URLSearchParams(body).get('client_assertion')).toBe('H.P.S')
+    expect(headers).toEqual({})
+  })
+
+  it('alfa ignores priorTokenAuth entirely (creds stay in the body)', async () => {
+    const near = tok({ provider: 'alfa-by', expiresAt: NOW + 10_000 })
+    const { deps } = fakeDeps({ stored: near })
+    const post = vi.fn(deps.postRefresh)
+    const priorTokenAuth = vi.fn(() => ({ method: 'private_key_jwt' as const, assertion: 'X' }))
+    await ensureBankToken(near, { ...deps, postRefresh: post, priorTokenAuth })
+    expect(priorTokenAuth).not.toHaveBeenCalled()
+    expect(post.mock.calls[0]![1]).not.toContain('client_assertion')
   })
 
   it('no creds → returns the stored token as-is (cannot refresh)', async () => {

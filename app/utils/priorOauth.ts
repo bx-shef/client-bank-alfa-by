@@ -46,8 +46,119 @@ export function buildBasicAuthHeader(clientId: string, clientSecret: string): st
   return 'Basic ' + btoa(`${clientId}:${clientSecret}`)
 }
 
+/**
+ * How the app authenticates ITSELF at the token endpoint (`token_endpoint_auth_method`).
+ * Per the bank's guide (p. 9 §2.2) `client_secret_basic`/`client_secret_post` are
+ * **sandbox-only**; production accepts `private_key_jwt`, `tls_client_auth` and
+ * `self_signed_tls_client_auth`. We implement `private_key_jwt` — the only one of the three
+ * needing neither mutual TLS nor an X.509 client certificate (and therefore no ГосСУОК).
+ *
+ * ⚠ WE register exactly one method per application (the bank's guide allows several — p. 9 §2.2 —
+ * but a single one keeps the wire format unambiguous). So ALL token-endpoint calls must use the
+ * same one — see `priorTokenRequest` callers (four sites, docs/PRIOR_API.md).
+ */
+export type PriorTokenAuthMethod = 'client_secret_basic' | 'private_key_jwt'
+
+/** Valid `token_endpoint_auth_method` values we support (for coercion + tests). */
+export const PRIOR_TOKEN_AUTH_METHODS: readonly PriorTokenAuthMethod[] = ['client_secret_basic', 'private_key_jwt']
+
+/**
+ * Coerce a configured method name, defaulting to the sandbox one. Fail-SAFE rather than
+ * fail-closed on purpose: an unknown/blank value keeps today's working sandbox behaviour
+ * instead of silently arming a prod method the app may not be registered for.
+ *
+ * ⚠ A TYPO is not the same as «unset». Blank ⇒ the sandbox default is the intended behaviour;
+ * a non-empty value we don't recognise (`private-key-jwt`, trailing character…) means someone
+ * MEANT to configure something and it didn't take — in production that silently sends Basic to a
+ * client registered for private_key_jwt and yields opaque 401s with nothing pointing at the cause.
+ * `onUnknown` lets callers surface it (the server logs a warning, `envCheck` reports it at boot);
+ * the returned value is the safe default either way, so pure callers can ignore it.
+ */
+export function parsePriorAuthMethod(
+  raw: string | null | undefined,
+  onUnknown?: (rawValue: string) => void
+): PriorTokenAuthMethod {
+  const v = (raw ?? '').trim()
+  if ((PRIOR_TOKEN_AUTH_METHODS as readonly string[]).includes(v)) return v as PriorTokenAuthMethod
+  if (v) onUnknown?.(v)
+  return 'client_secret_basic'
+}
+
+/** RFC 7523 assertion type — the fixed `client_assertion_type` value (guide §4.1.2). */
+export const PRIOR_CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+
+/** Lifetime of a `client_assertion` JWT. Short — it is single-use, minted per request. */
+export const PRIOR_ASSERTION_TTL_SEC = 300
+
+/** Inputs for the `client_assertion` JWT claim-set (private_key_jwt). */
+export interface PriorClientAssertionInput {
+  clientId: string
+  /** JWT audience — the issuer / token endpoint from `/oidcdiscovery` (port 9544). The SAME
+   *  value the authorize `request` JWT uses (`PRIOR_OAUTH_AUDIENCE`). */
+  aud: string
+  /** `Math.floor(Date.now()/1000)` — supplied by the caller (keeps this pure). */
+  nowSec: number
+  jti: string
+  /** Seconds until the JWT expires (default `PRIOR_ASSERTION_TTL_SEC`). */
+  ttlSec?: number
+}
+
+/**
+ * Claim-set for the `client_assertion` JWT (private_key_jwt, guide §4.1.2). Pure payload —
+ * the caller RS256-signs it with the key whose public half is registered in `jwks`.
+ *
+ * ⚠ NOT the same JWT as `buildAuthorizeRequestClaims`: that one is the `request` parameter of
+ * `/oauth2/authorize` and carries `openbanking_intent_id`; this one proves WHO we are at
+ * `/oauth2/token`. Both are RS256 over the same key — don't conflate them.
+ *
+ * Shape follows the bank's documented example verbatim: `aud` is an ARRAY, `iss` and `sub` are
+ * both the client id, and the client id is NOT sent as a separate body param (it rides in these
+ * claims).
+ */
+export function buildClientAssertionClaims(input: PriorClientAssertionInput): Record<string, unknown> {
+  return {
+    iss: input.clientId,
+    sub: input.clientId,
+    aud: [input.aud],
+    iat: input.nowSec,
+    exp: input.nowSec + (input.ttlSec ?? PRIOR_ASSERTION_TTL_SEC),
+    jti: input.jti
+  }
+}
+
+/** How to authenticate ONE token request — creds for Basic, or an already-signed assertion. */
+export type PriorTokenAuth
+  = | { method: 'client_secret_basic', clientId: string, clientSecret: string }
+    | { method: 'private_key_jwt', assertion: string }
+
+/**
+ * Apply the client-authentication method to a token-endpoint request: returns the final form
+ * body plus the headers it needs. `client_secret_basic` puts the creds in the Authorization
+ * HEADER (never the body); `private_key_jwt` appends `client_assertion` +
+ * `client_assertion_type` to the BODY and needs no header. The caller's `body` is not mutated.
+ *
+ * Single choke point for all four token-endpoint call sites, so the method can't drift between
+ * them (DCR registers one method per app — a mismatch is a 401 at whichever site was missed).
+ */
+export function priorTokenRequest(
+  body: URLSearchParams,
+  auth: PriorTokenAuth
+): { body: string, headers: Record<string, string> } {
+  if (auth.method === 'private_key_jwt') {
+    if (!auth.assertion) throw new Error('priorTokenRequest: private_key_jwt requires a signed client_assertion')
+    const withAssertion = new URLSearchParams(body)
+    withAssertion.set('client_assertion_type', PRIOR_CLIENT_ASSERTION_TYPE)
+    withAssertion.set('client_assertion', auth.assertion)
+    return { body: withAssertion.toString(), headers: {} }
+  }
+  return {
+    body: body.toString(),
+    headers: { authorization: buildBasicAuthHeader(auth.clientId, auth.clientSecret) }
+  }
+}
+
 /** Form body for a `client_credentials` token (token А apim-scopes, or token Б
- * scope=accounts). Credentials go in the Basic auth header, not the body. */
+ * scope=accounts). Client authentication is applied separately by `priorTokenRequest`. */
 export function buildClientCredentialsBody(scope: string): URLSearchParams {
   return new URLSearchParams({ grant_type: 'client_credentials', scope })
 }
@@ -73,12 +184,23 @@ export interface PriorRegistrationInput {
   redirectUri: string
   /** Public JWK Set `{ keys: [...] }`; serialized to a STRING in the body (see below). */
   jwks?: unknown
+  /**
+   * Client-authentication method to register. Defaults to `client_secret_basic` (sandbox).
+   * **Production requires `private_key_jwt`** — `client_secret_basic` is sandbox-only
+   * (guide p. 9 §2.2). Whatever is registered here MUST match what every token-endpoint
+   * call sends, so change it together with `PRIOR_OAUTH_AUTH_METHOD`.
+   */
+  tokenEndpointAuthMethod?: PriorTokenAuthMethod
 }
 
 /**
  * DCR `/register` body (RFC 7591 + OB fields). Two shapes a generic 500 hid on
  * the live run: `token_endpoint_auth_method` is an ARRAY, and `jwks` is a STRING
  * (a serialized JWK Set) — not an object. Only `redirect_uris` is truly required.
+ *
+ * `jwks` is required by the bank when `grant_types` contains `authorization_code` (always, for
+ * us) — and it is ALSO what `private_key_jwt` verifies the `client_assertion` against, so the
+ * same registered key serves both.
  */
 export function buildRegistrationMetadata(input: PriorRegistrationInput): Record<string, unknown> {
   return {
@@ -88,7 +210,7 @@ export function buildRegistrationMetadata(input: PriorRegistrationInput): Record
     grant_types: ['authorization_code', 'client_credentials', 'refresh_token'],
     application_type: 'web',
     id_token_signed_response_alg: 'RS256',
-    token_endpoint_auth_method: ['client_secret_basic'],
+    token_endpoint_auth_method: [input.tokenEndpointAuthMethod ?? 'client_secret_basic'],
     ...(input.jwks ? { jwks: JSON.stringify(input.jwks) } : {})
   }
 }

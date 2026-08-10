@@ -3,7 +3,9 @@ import { handleBankConnectCallback, type CallbackDeps } from '../server/utils/ba
 import { sanitizeForLog } from '../server/utils/logSanitize'
 import { signConnectState } from '../server/utils/bankConnectState'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
+import { PRIOR_CLIENT_ASSERTION_TYPE } from '../app/utils/priorOauth'
 import type { BankToken } from '../server/utils/bankTokenStore'
+import { Buffer } from 'node:buffer'
 
 const SECRET = 'cb-secret'
 const now = 1_700_000_000_000
@@ -41,6 +43,8 @@ function deps(over: Partial<CallbackDeps> & { saved?: BankToken[] } = {}) {
     exchangeToken: async () => tokenJson,
     priorConfig: () => null, // Prior unconfigured by default; the Prior tests opt in
     exchangePriorToken: async () => tokenJson,
+    // Default to the sandbox method; the private_key_jwt case overrides it.
+    priorTokenAuth: c => ({ method: 'client_secret_basic', clientId: c.clientId, clientSecret: c.clientSecret }),
     saveToken: async (t) => {
       saved.push(t)
     },
@@ -155,17 +159,38 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
     expect(exchangeToken).not.toHaveBeenCalled() // the Alfa path is NOT used for a Prior state
     expect(exchangePriorToken).toHaveBeenCalledOnce()
 
-    const [url, body, creds] = exchangePriorToken.mock.calls[0]!
+    const [url, body, headers] = exchangePriorToken.mock.calls[0]!
     expect(url).toBe('https://prior:9344/open-banking-authorize/v1.0/oauth2/token')
-    expect(body.get('grant_type')).toBe('authorization_code')
-    expect(body.get('code')).toBe('C')
-    expect(body.get('redirect_uri')).toBe(PRIOR_CONFIG.redirectUri)
-    expect(body.toString()).not.toContain('PSECRET') // secret rides in the header, not the body
-    expect(creds).toEqual({ clientId: 'PCID', clientSecret: 'PSECRET' })
+    const form = new URLSearchParams(body)
+    expect(form.get('grant_type')).toBe('authorization_code')
+    expect(form.get('code')).toBe('C')
+    expect(form.get('redirect_uri')).toBe(PRIOR_CONFIG.redirectUri)
+    expect(body).not.toContain('PSECRET') // secret rides in the header, not the body
+    expect(headers.authorization).toBe('Basic ' + Buffer.from('PCID:PSECRET').toString('base64'))
 
     // Persisted under the portal/provider/account the VERIFIED state carries.
     expect(saved).toHaveLength(1)
     expect(saved[0]).toMatchObject({ memberId: 'M1', provider: 'prior-by', accountKey: 'BY13PRIOR', accessToken: 'AT' })
+  })
+
+  it('private_key_jwt: assertion in the BODY, no Authorization header (#444)', async () => {
+    const exchangePriorToken = vi.fn(async () => tokenJson)
+    const { deps: d, saved } = deps({
+      priorConfig: () => PRIOR_CONFIG,
+      exchangePriorToken,
+      priorTokenAuth: () => ({ method: 'private_key_jwt', assertion: 'HEAD.PAY.SIG' })
+    })
+    const r = await handleBankConnectCallback(d, { query: q, nowMs: now })
+
+    expect(r.status).toBe(200)
+    const [, body, headers] = exchangePriorToken.mock.calls[0]!
+    const form = new URLSearchParams(body)
+    expect(form.get('client_assertion')).toBe('HEAD.PAY.SIG')
+    expect(form.get('client_assertion_type')).toBe(PRIOR_CLIENT_ASSERTION_TYPE)
+    expect(form.get('code')).toBe('C') // the grant params still ride along
+    expect(headers).toEqual({}) // no Basic header under private_key_jwt
+    expect(body).not.toContain('PSECRET')
+    expect(saved).toHaveLength(1)
   })
 
   it('tolerates an omitted refresh_token (Prior may not rotate one) — stores empty, still connects', async () => {

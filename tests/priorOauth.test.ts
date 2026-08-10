@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   PRIOR_API_PREFIXES,
+  PRIOR_CLIENT_ASSERTION_TYPE,
+  PRIOR_ASSERTION_TTL_SEC,
   CONSENT_PERMISSIONS,
   buildBasicAuthHeader,
+  buildClientAssertionClaims,
+  parsePriorAuthMethod,
+  priorTokenRequest,
   buildClientCredentialsBody,
   buildCodeExchangeBody,
   buildPriorRefreshBody,
@@ -58,6 +63,10 @@ describe('DCR registration metadata', () => {
     const jwks = { keys: [{ kty: 'RSA', kid: 'k1' }] }
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks })
     expect(Array.isArray(meta.token_endpoint_auth_method)).toBe(true)
+    // PINNED value, not just the shape (#444): the default is the SANDBOX-ONLY method. When this
+    // flips to private_key_jwt, this test must go red — that is the reminder to migrate ALL FOUR
+    // token-endpoint call sites, since DCR registers one method per application.
+    expect(meta.token_endpoint_auth_method).toEqual(['client_secret_basic'])
     expect(typeof meta.jwks).toBe('string')
     expect(JSON.parse(meta.jwks as string)).toEqual(jwks)
     expect(meta.redirect_uris).toEqual(['https://cb/ob'])
@@ -67,6 +76,98 @@ describe('DCR registration metadata', () => {
   it('omits jwks when none is provided', () => {
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob' })
     expect('jwks' in meta).toBe(false)
+  })
+
+  it('registers the requested auth method (prod needs private_key_jwt)', () => {
+    const meta = buildRegistrationMetadata({
+      clientName: 'App',
+      redirectUri: 'https://cb/ob',
+      tokenEndpointAuthMethod: 'private_key_jwt'
+    })
+    expect(meta.token_endpoint_auth_method).toEqual(['private_key_jwt'])
+  })
+})
+
+describe('client authentication at the token endpoint (#444)', () => {
+  describe('parsePriorAuthMethod', () => {
+    it('accepts the two supported methods', () => {
+      expect(parsePriorAuthMethod('private_key_jwt')).toBe('private_key_jwt')
+      expect(parsePriorAuthMethod('client_secret_basic')).toBe('client_secret_basic')
+      expect(parsePriorAuthMethod('  private_key_jwt  ')).toBe('private_key_jwt')
+    })
+    it('falls back to the sandbox method on blank/unknown (fail-SAFE, not fail-closed)', () => {
+      // Deliberate: an unknown value must not silently arm a prod method the app may not be
+      // registered for — keep today's working behaviour instead.
+      for (const raw of ['', '   ', undefined, null, 'tls_client_auth', 'nonsense']) {
+        expect(parsePriorAuthMethod(raw)).toBe('client_secret_basic')
+      }
+    })
+  })
+
+  describe('buildClientAssertionClaims', () => {
+    const claims = buildClientAssertionClaims({
+      clientId: 'CID', aud: 'https://api.priorbank.by:9544/oauth2/token', nowSec: 1_757_588_736, jti: 'J1'
+    })
+
+    it('matches the bank documented shape: iss=sub=client id, aud is an ARRAY', () => {
+      expect(claims.iss).toBe('CID')
+      expect(claims.sub).toBe('CID')
+      // ARRAY, per the guide's §4.1.2 example — a bare string is a different claim shape.
+      expect(claims.aud).toEqual(['https://api.priorbank.by:9544/oauth2/token'])
+      expect(claims.jti).toBe('J1')
+      expect(claims.iat).toBe(1_757_588_736)
+    })
+
+    it('is short-lived and expires strictly after it is issued', () => {
+      expect(claims.exp).toBe(1_757_588_736 + PRIOR_ASSERTION_TTL_SEC)
+      expect(claims.exp as number).toBeGreaterThan(claims.iat as number)
+      expect(PRIOR_ASSERTION_TTL_SEC).toBeLessThanOrEqual(600)
+    })
+
+    it('carries NO authorize-request claims (a distinct JWT from buildAuthorizeRequestClaims)', () => {
+      for (const k of ['response_type', 'redirect_uri', 'nonce', 'state', 'claims', 'scope', 'client_id']) {
+        expect(claims[k], k).toBeUndefined()
+      }
+    })
+
+    it('honours a custom ttl', () => {
+      const c = buildClientAssertionClaims({ clientId: 'C', aud: 'A', nowSec: 100, jti: 'J', ttlSec: 30 })
+      expect(c.exp).toBe(130)
+    })
+  })
+
+  describe('priorTokenRequest', () => {
+    const body = () => new URLSearchParams({ grant_type: 'client_credentials', scope: 'accounts' })
+
+    it('client_secret_basic: creds in the HEADER, never in the body', () => {
+      const r = priorTokenRequest(body(), { method: 'client_secret_basic', clientId: 'CID', clientSecret: 'SEC' })
+      expect(r.headers.authorization).toBe(buildBasicAuthHeader('CID', 'SEC'))
+      expect(r.body).toBe('grant_type=client_credentials&scope=accounts')
+      expect(r.body).not.toContain('SEC')
+      expect(r.body).not.toContain('client_assertion')
+    })
+
+    it('private_key_jwt: assertion in the BODY, no auth header', () => {
+      const r = priorTokenRequest(body(), { method: 'private_key_jwt', assertion: 'H.P.S' })
+      expect(r.headers).toEqual({})
+      const form = new URLSearchParams(r.body)
+      expect(form.get('client_assertion')).toBe('H.P.S')
+      expect(form.get('client_assertion_type')).toBe(PRIOR_CLIENT_ASSERTION_TYPE)
+      // The grant params survive alongside the client authentication.
+      expect(form.get('grant_type')).toBe('client_credentials')
+      expect(form.get('scope')).toBe('accounts')
+    })
+
+    it('does not mutate the caller body (it may be reused/logged)', () => {
+      const b = body()
+      priorTokenRequest(b, { method: 'private_key_jwt', assertion: 'H.P.S' })
+      expect(b.has('client_assertion')).toBe(false)
+    })
+
+    it('throws on an empty assertion rather than sending an unauthenticated request', () => {
+      expect(() => priorTokenRequest(body(), { method: 'private_key_jwt', assertion: '' }))
+        .toThrow(/client_assertion/)
+    })
   })
 })
 

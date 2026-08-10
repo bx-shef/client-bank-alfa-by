@@ -6,10 +6,12 @@
 // (ALFA_OAUTH_REDIRECT_URI / PRIOR_OAUTH_REDIRECT_URI) — both providers land here and are told apart
 // by the verified state's `provider`.
 
-import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import { handleBankConnectCallback, type CallbackDeps } from '../../utils/bankConnectCallback'
 import { bankConnectConfigFromEnv } from '../../utils/bankConnectStart'
 import { priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
+import { resolvePriorTokenAuth } from '../../utils/priorTokenAuth'
+import { signPriorJwt } from '../../utils/priorJwt'
 import { resolveAuthConfig } from '../../utils/session'
 import { saveBankToken } from '../../utils/bankTokenStore'
 import { dbQuery } from '../../db/client'
@@ -35,21 +37,26 @@ function liveCallbackDeps(): CallbackDeps {
       })
     },
     priorConfig: priorConnectConfigFromEnv,
-    exchangePriorToken: async (url, body, creds) => {
+    // Client authentication is resolved upstream (`priorTokenAuth` below → `priorTokenRequest`,
+    // #444): under client_secret_basic the creds ride in `headers`, under private_key_jwt the
+    // signed assertion rides in `body`. Do NOT log `opts` anywhere — it carries one or the other.
+    exchangePriorToken: async (url, body, headers) => {
       const post = $fetch as unknown as (
         url: string,
         opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
       ) => Promise<unknown>
-      // client_secret_basic: creds ride in the Authorization HEADER (never the body/URL) — do NOT
-      // log opts anywhere.
-      const basic = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64')
       return post(url, {
         method: 'POST',
-        body: body.toString(),
-        headers: { 'authorization': `Basic ${basic}`, 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+        headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
         timeout: 15_000
       })
     },
+    priorTokenAuth: config => resolvePriorTokenAuth(config.authMethod ?? 'client_secret_basic', config, {
+      signJwt: signPriorJwt,
+      nowSec: () => Math.floor(Date.now() / 1000),
+      newId: () => randomUUID()
+    }),
     saveToken: token => saveBankToken(dbQuery, token),
     log: msg => console.info(msg)
   }

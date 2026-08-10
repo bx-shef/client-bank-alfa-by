@@ -117,12 +117,34 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   //     <PREFIX>_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL to refresh its token (bankCredsFromEnv).
   //     A HALF-configured bank silently disables its online fetch (only a runtime warn),
   //     so surface a partial config at boot. Absent entirely = feature off, no warning. ---
+  const priorMethodRaw = (env.PRIOR_OAUTH_AUTH_METHOD ?? '').trim()
+  const priorUsesJwt = priorMethodRaw === 'private_key_jwt'
   for (const [prefix, bank] of [['ALFA_OAUTH', 'Альфа'], ['PRIOR_OAUTH', 'Приор']] as const) {
-    const parts = [`${prefix}_CLIENT_ID`, `${prefix}_CLIENT_SECRET`, `${prefix}_TOKEN_URL`]
+    // Under private_key_jwt the client secret never travels (the signed assertion authenticates
+    // us) and the bank may not issue one — so it is not part of the required set there (#444).
+    const parts = prefix === 'PRIOR_OAUTH' && priorUsesJwt
+      ? [`${prefix}_CLIENT_ID`, `${prefix}_TOKEN_URL`]
+      : [`${prefix}_CLIENT_ID`, `${prefix}_CLIENT_SECRET`, `${prefix}_TOKEN_URL`]
     const set = parts.filter(k => !!(env[k] ?? '').trim())
     if (set.length > 0 && set.length < parts.length) {
       const missing = parts.filter(k => !(env[k] ?? '').trim())
-      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — онлайн-опрос ${bank} отключён (нужны все три: ${parts.join(', ')}).`)
+      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — онлайн-опрос ${bank} отключён (нужны все: ${parts.join(', ')}).`)
+    }
+  }
+
+  // --- Prior client-auth method (#444). Two states are dangerous enough to name at boot, because
+  //     both surface only as opaque 401s from the bank, far from the cause:
+  //     1) a TYPO in the method — silently coerced to the sandbox-only Basic;
+  //     2) private_key_jwt selected but its key material incomplete — the refresh job then throws
+  //        per account, and connect answers 502, with nothing at startup hinting why. ---
+  if (priorMethodRaw && priorMethodRaw !== 'client_secret_basic' && !priorUsesJwt) {
+    warnings.push(`PRIOR_OAUTH_AUTH_METHOD="${priorMethodRaw}" не распознан — используется client_secret_basic (только для тестовой среды банка). Допустимые значения: client_secret_basic, private_key_jwt.`)
+  }
+  if (priorUsesJwt) {
+    const jwtParts = ['PRIOR_OAUTH_PRIVATE_KEY', 'PRIOR_OAUTH_KID', 'PRIOR_OAUTH_AUDIENCE']
+    const missing = jwtParts.filter(k => !(env[k] ?? '').trim())
+    if (missing.length > 0) {
+      warnings.push(`PRIOR_OAUTH_AUTH_METHOD=private_key_jwt, но нет ${missing.join('/')} — подпись client_assertion невозможна: подключение Приора вернёт 502, обновление токена будет падать по каждому счёту.`)
     }
   }
 

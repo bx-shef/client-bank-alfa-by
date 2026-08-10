@@ -7,7 +7,7 @@ import {
   type PriorConnectConfig,
   type PriorConnectDeps
 } from '../server/utils/priorConnectStart'
-import { PRIOR_API_PREFIXES } from '../app/utils/priorOauth'
+import { PRIOR_API_PREFIXES, PRIOR_CLIENT_ASSERTION_TYPE } from '../app/utils/priorOauth'
 import { Buffer } from 'node:buffer'
 
 const config: PriorConnectConfig = {
@@ -25,7 +25,7 @@ function fakeDeps(over: Partial<PriorConnectDeps> & { tokenRaw?: unknown, consen
   const calls = {
     tokenUrl: [] as string[],
     tokenBody: [] as string[],
-    tokenCreds: [] as { clientId: string, clientSecret: string }[],
+    tokenHeaders: [] as Record<string, string>[],
     consentUrl: [] as string[],
     consentToken: [] as string[],
     consentBody: [] as unknown[],
@@ -33,10 +33,10 @@ function fakeDeps(over: Partial<PriorConnectDeps> & { tokenRaw?: unknown, consen
   }
   let idCounter = 0
   const deps: PriorConnectDeps = {
-    postToken: async (url, body, creds) => {
+    postToken: async (url, body, headers) => {
       calls.tokenUrl.push(url)
       calls.tokenBody.push(body)
-      calls.tokenCreds.push(creds)
+      calls.tokenHeaders.push(headers)
       return over.tokenRaw ?? { access_token: 'TOKEN-B', token_type: 'Bearer', expires_in: 3600 }
     },
     postConsent: async (url, accessToken, body) => {
@@ -97,6 +97,7 @@ describe('priorConnectConfigFromEnv', () => {
         clientSecret: 'S',
         redirectUri: 'https://app/cb',
         audience: 'https://api.priorbank.by:9544/oauth2/token',
+        authMethod: 'client_secret_basic',
         privateKeyPem: 'PEM',
         kid: 'k1'
       })
@@ -133,12 +134,13 @@ describe('buildPriorConnectUrl', () => {
     const { deps, calls } = fakeDeps()
     const url = await buildPriorConnectUrl(config, 'SIGNED-STATE', deps, NOW_MS)
 
-    // 1) token Б: client_credentials + scope=accounts, creds passed for the Basic header (NOT the body)
+    // 1) token Б: client_credentials + scope=accounts, creds in the Basic HEADER (NOT the body)
     expect(calls.tokenUrl[0]).toBe(`${config.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`)
     expect(calls.tokenBody[0]).toContain('grant_type=client_credentials')
     expect(calls.tokenBody[0]).toContain(`scope=${PRIOR_CONSENT_SCOPE}`)
     expect(calls.tokenBody[0]).not.toContain('SECRET-1') // secret never in the body
-    expect(calls.tokenCreds[0]).toEqual({ clientId: 'CLIENT-1', clientSecret: 'SECRET-1' })
+    expect(calls.tokenHeaders[0]?.authorization)
+      .toBe('Basic ' + Buffer.from('CLIENT-1:SECRET-1').toString('base64'))
 
     // 2) consent: posted with the token-Б bearer, expiry in the future
     expect(calls.consentUrl[0]).toBe(`${config.baseUrl}${PRIOR_API_PREFIXES.OB}/accountConsents`)
@@ -165,6 +167,43 @@ describe('buildPriorConnectUrl', () => {
     expect(q.get('request')).toContain('SIGNED.')
     expect(url).not.toContain('SECRET-1') // no secret in the URL
     expect(url).not.toContain('PRIVATE KEY')
+  })
+
+  // #444: token Б is the FOURTH client_secret_basic site and the easiest to miss (it lives in the
+  // connect preamble, not the «token» modules). DCR registers ONE method per app, so leaving this
+  // call on Basic breaks prod at the FIRST step — before any other migrated site is reached.
+  it('private_key_jwt: token Б sends a signed client_assertion in the BODY, no Basic header', async () => {
+    const { deps, calls } = fakeDeps()
+    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, 'SIGNED-STATE', deps, NOW_MS)
+
+    const body = new URLSearchParams(calls.tokenBody[0]!)
+    expect(body.get('grant_type')).toBe('client_credentials')
+    expect(body.get('client_assertion_type')).toBe(PRIOR_CLIENT_ASSERTION_TYPE)
+    expect(body.get('client_assertion')).toContain('SIGNED.')
+    // No client authentication in the header, and no secret anywhere on the wire.
+    expect(calls.tokenHeaders[0]).toEqual({})
+    expect(calls.tokenBody[0]).not.toContain('SECRET-1')
+
+    // The assertion is a DISTINCT JWT from the authorize `request` one: iss=sub=client id,
+    // aud as an ARRAY, and no authorize-only claims.
+    const assertionClaims = calls.signed[0]!.payload as Record<string, unknown>
+    expect(assertionClaims.iss).toBe('CLIENT-1')
+    expect(assertionClaims.sub).toBe('CLIENT-1')
+    expect(assertionClaims.aud).toEqual([config.audience])
+    expect(assertionClaims.jti).toBeTruthy()
+    expect(assertionClaims.response_type).toBeUndefined()
+    expect(assertionClaims.claims).toBeUndefined()
+    // Signed with the registered kid — the bank verifies against the app's jwks.
+    expect(calls.signed[0]!.kid).toBe('prior-key-1')
+  })
+
+  it('private_key_jwt: each token call mints a FRESH assertion (single-use jti)', async () => {
+    const { deps, calls } = fakeDeps()
+    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, 'S1', deps, NOW_MS)
+    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, 'S2', deps, NOW_MS)
+    const first = calls.signed[0]!.payload as Record<string, unknown>
+    const third = calls.signed[2]!.payload as Record<string, unknown> // [0]=assertion, [1]=request, [2]=assertion
+    expect(first.jti).not.toBe(third.jti)
   })
 
   it('throws on an OAuth error payload from the token step (never a half-built URL)', async () => {
