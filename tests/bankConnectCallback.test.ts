@@ -21,6 +21,7 @@ const tokenJson = { access_token: 'AT', refresh_token: 'RT', token_type: 'Bearer
 /** Prior's connect config (multi-step, carries its own secrets — A5b). */
 const PRIOR_CONFIG = {
   baseUrl: 'https://prior:9344',
+  authorizeBaseUrl: 'https://prior:9344',
   clientId: 'PCID',
   clientSecret: 'PSECRET',
   redirectUri: 'https://app/cb',

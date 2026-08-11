@@ -37,6 +37,7 @@ import {
 } from '../../app/utils/priorOauth'
 import { normalizePriorTransactionList, type PriorTransactionListResponse } from '../../app/utils/priorStatement'
 import { ensureBankToken } from './ensureBankToken'
+import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankToken } from './bankTokenStore'
 import type { BankFetchQuery } from './bankFetch'
 
@@ -111,10 +112,16 @@ export async function resolvePriorAccountId(
   return match.accountId
 }
 
-/** Read the OB base from env (`PRIOR_OAUTH_API_BASE`), stripped of trailing slashes; `null` when unset. */
+/**
+ * Read the OB base from env (`PRIOR_OAUTH_API_BASE`); `null` when unset OR unusable.
+ *
+ * ⚠ This is the POLLING path — it runs on every cron tick with a live `Authorization: Bearer`,
+ * unlike the one-shot connect flow. Validating only there would leave the frequent, automated
+ * traffic on a raw value: a cutover typo (`http://` to the public bank host) would keep shipping
+ * the token in clear text with nothing to notice it. Same rules everywhere (#455).
+ */
 export function priorApiBaseFromEnv(): string | null {
-  const base = process.env.PRIOR_OAUTH_API_BASE?.trim()
-  return base ? base.replace(/\/+$/, '') : null
+  return normalizeBankApiBase(process.env.PRIOR_OAUTH_API_BASE)
 }
 
 const liveDeps: PriorFetchDeps = {

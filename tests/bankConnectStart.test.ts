@@ -16,6 +16,7 @@ const CONFIG = { baseUrl: 'https://alfa:8273', clientId: 'CID', redirectUri: 'ht
 /** Prior's connect config (multi-step, carries secrets — A5b). */
 const PRIOR_CONFIG = {
   baseUrl: 'https://prior:9344',
+  authorizeBaseUrl: 'https://prior:9344',
   clientId: 'PCID',
   clientSecret: 'PSECRET',
   redirectUri: 'https://app/cb',

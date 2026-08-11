@@ -133,7 +133,16 @@ services:
       # 400 — signPriorJwt throws later and the connect answers an opaque 502 instead.
       PRIOR_OAUTH_PRIVATE_KEY: ${PRIOR_OAUTH_PRIVATE_KEY:-}
       PRIOR_OAUTH_KID: ${PRIOR_OAUTH_KID:-}
+      # Token-endpoint client auth (#444). Default = the sandbox method; PROD requires
+      # `private_key_jwt`. Unset here ⇒ setting it in `.env` does nothing and the app keeps
+      # sending the client secret to an endpoint that refuses it (opaque 401).
+      PRIOR_OAUTH_AUTH_METHOD: ${PRIOR_OAUTH_AUTH_METHOD:-}
       PRIOR_OAUTH_API_BASE: ${PRIOR_OAUTH_API_BASE:-}
+      # Origin the ADMIN'S BROWSER opens for the bank's authorize page (#455). Defaults to
+      # API_BASE; set it only when API_BASE points at the internal crypto gateway — an
+      # internal address in the browser URL kills the connect SILENTLY (the server never
+      # makes that request, so nothing fails on our side). Must be a PUBLIC https origin.
+      PRIOR_OAUTH_AUTHORIZE_BASE: ${PRIOR_OAUTH_AUTHORIZE_BASE:-}
       # Feature gates: real cron polling (default OFF) and the admin «Опросить сейчас».
       CRON_REAL_POLL: ${CRON_REAL_POLL:-0}
       MANUAL_POLL_ENABLED: ${MANUAL_POLL_ENABLED:-0}
@@ -181,6 +190,7 @@ services:
       - internal   # reached by app's /api proxy + outbound to B24/Alfa
       - dbnet       # to reach Postgres
       - queuenet    # to reach Redis (BullMQ)
+      # - cryptonet # BY-crypto gateway (Prior prod) — uncomment with the crypto-gw service
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -219,9 +229,8 @@ services:
       QUEUE_PRIOR_CONCURRENCY: ${QUEUE_PRIOR_CONCURRENCY:-}
       # Bank creds for the FETCH path: this service actually polls the banks
       # (fetchBankStatement) and refreshes the stored bank token (ensureBankToken), so it
-      # needs the same client creds + hosts as backend. The connect-flow-only vars
-      # (REDIRECT_URI / AUDIENCE / private key) live on backend, which serves
-      # /api/bank/connect — the worker never builds an authorize URL.
+      # needs the same client creds + hosts as backend. `REDIRECT_URI` stays backend-only —
+      # the worker never builds an authorize URL.
       ALFA_OAUTH_CLIENT_ID: ${ALFA_OAUTH_CLIENT_ID:-}
       ALFA_OAUTH_CLIENT_SECRET: ${ALFA_OAUTH_CLIENT_SECRET:-}
       ALFA_OAUTH_TOKEN_URL: ${ALFA_OAUTH_TOKEN_URL:-}
@@ -231,6 +240,14 @@ services:
       PRIOR_OAUTH_CLIENT_SECRET: ${PRIOR_OAUTH_CLIENT_SECRET:-}
       PRIOR_OAUTH_TOKEN_URL: ${PRIOR_OAUTH_TOKEN_URL:-}
       PRIOR_OAUTH_API_BASE: ${PRIOR_OAUTH_API_BASE:-}
+      # ⚠ Under `private_key_jwt` (prod, #444) the REFRESH also signs a client_assertion, and the
+      # refresh runs HERE, not on backend. Without this quartet `priorRefreshAuthFromEnv` throws on
+      # every Prior poll tick — a deploy slip that only shows up hours later, when the first stored
+      # access token expires. AUTHORIZE_BASE is deliberately absent: browser-facing, backend-only.
+      PRIOR_OAUTH_AUTH_METHOD: ${PRIOR_OAUTH_AUTH_METHOD:-}
+      PRIOR_OAUTH_AUDIENCE: ${PRIOR_OAUTH_AUDIENCE:-}
+      PRIOR_OAUTH_PRIVATE_KEY: ${PRIOR_OAUTH_PRIVATE_KEY:-}
+      PRIOR_OAUTH_KID: ${PRIOR_OAUTH_KID:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -259,6 +276,7 @@ services:
       - internal   # outbound to B24/Alfa for REST writes
       - dbnet      # Postgres (token store, dedup)
       - queuenet   # Redis (BullMQ)
+      # - cryptonet # BY-crypto gateway — the worker polls Prior and refreshes its token too
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -300,6 +318,41 @@ services:
     networks:
       - dbnet
 
+  # --- BY-крипто TLS-шлюз для ПРОДА Приорбанка (#41 / #455) -------------------
+  # ЗАГОТОВКА ФОРМЫ, а не готовый к включению сервис. Продукт ещё не выбран и не куплен:
+  # ЗАО «АВЕСТ» на прямой запрос рекомендует AvTLSSrv (с настройками клиентской части),
+  # AvTunProxy найден нами самостоятельно как кандидат-HTTP-прокси; поддержка Linux/контейнера,
+  # требование к носителю ключей и лицензирование — открытые вопросы к вендору (#41,
+  # docs/PRIOR_API.md «СКЗИ»). Каталога `deploy/crypto-gateway/` в репозитории ПОКА НЕТ — его
+  # создаёт тот, кто получит дистрибутив (публичного образа вендор не даёт).
+  # Раскомментировать вместе с `cryptonet` внизу И строками `- cryptonet` в networks у
+  # backend/worker — иначе шлюз поднимется, а обратиться к нему будет некому.
+  #
+  # Зачем именно так:
+  #  - НЕТ `ports:` — порт наружу не публикуется. Иначе сосед по хосту сможет проксировать
+  #    свой трафик к банку под нашей BY-крипто identity. Backend видит шлюз по имени сервиса
+  #    внутри `cryptonet`, и этого достаточно.
+  #  - Ключевой материал (если продукт его потребует) монтируется **read-only** и лежит вне
+  #    репозитория. ⚠ Для этой задачи выпускать ОТДЕЛЬНЫЙ ключ, а не брать рабочий ключ
+  #    бухгалтера: им подписывают отчётность, а экспорт в программный контейнер снимает
+  #    аппаратную защиту.
+  #  - Наш код обращается к шлюзу обычным HTTP (`PRIOR_OAUTH_API_BASE=http://crypto-gw:1080`) —
+  #    крипто-TLS поднимает сам шлюз. ⚠ `PRIOR_OAUTH_TOKEN_URL` переставить ВМЕСТЕ с ним (это
+  #    независимая переменная), а `PRIOR_OAUTH_AUTHORIZE_BASE` ОБЯЗАН остаться публичным адресом
+  #    банка: этот URL открывает браузер администратора, и внутренний адрес там убивает
+  #    подключение молча, без ошибки на сервере. `envCheck` предупредит про оба случая.
+  #    `PRIOR_OAUTH_AUDIENCE` не трогать вообще — это claim внутри подписанного JWT, не адрес.
+  #
+  # crypto-gw:
+  #   logging: *default-logging
+  #   build: ./deploy/crypto-gateway        # Dockerfile с дистрибутивом вендора (создать)
+  #   container_name: client-bank-alfa-by-crypto-gw
+  #   volumes:
+  #     - ${PRIOR_CRYPTO_KEYS_DIR:?set PRIOR_CRYPTO_KEYS_DIR}:/keys:ro
+  #   restart: unless-stopped
+  #   networks:
+  #     - cryptonet
+
 volumes:
   pgdata:
   redisdata:
@@ -320,3 +373,8 @@ networks:
   queuenet:
     driver: bridge
     internal: true
+  # backend/worker ↔ BY-crypto TLS gateway (Приорбанк прод, #41/#455). NOT `internal`:
+  # unlike Redis, the gateway's whole job is to reach the bank, so it needs egress.
+  # It still gets its own network and NO published host port — see the service below.
+  # cryptonet:
+  #   driver: bridge

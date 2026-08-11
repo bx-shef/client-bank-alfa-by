@@ -146,3 +146,53 @@ describe('Телеграм-канал оповещений (#426)', () => {
     expect(checkBackendEnv({ ...GOOD, TELEGRAM_ALERT_BOT_TOKEN: 'oops' } as NodeJS.ProcessEnv).errors).toEqual([])
   })
 })
+
+describe('Крипто-шлюз Приора: адресация (#455)', () => {
+  const GOOD = { B24_TOKEN_ENC_KEY: 'a'.repeat(64), DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv
+  const BANK = 'https://apibel.priorbank.by:9345'
+  const GW = 'http://avtunproxy:1080'
+  const warns = (env: Record<string, string>, re: RegExp) =>
+    checkBackendEnv({ ...GOOD, ...env } as NodeJS.ProcessEnv).warnings.some(w => re.test(w))
+
+  it('ничего не задано — тишина (фича выключена)', () => {
+    expect(warns({}, /API_BASE|AUTHORIZE_BASE|РАЗНЫЕ адреса/)).toBe(false)
+  })
+
+  it('обычная конфигурация без шлюза — тишина', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token` }, /РАЗНЫЕ адреса|непригоден|авторизации/)).toBe(false)
+  })
+
+  // Главная ловушка cutover'а: переменные независимы, перевели одну — забыли вторую, и обновление
+  // токена продолжает тихо ходить на старый хост, пока импорт не встанет.
+  it('рассинхрон API_BASE и TOKEN_URL — предупреждение', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token`, PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /РАЗНЫЕ адреса/)).toBe(true)
+  })
+
+  it('совпадающий origin при разных путях — тишина', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_TOKEN_URL: `${GW}/oauth2/token`, PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /РАЗНЫЕ адреса/)).toBe(false)
+  })
+
+  it('http на ПУБЛИЧНЫЙ хост в API_BASE — предупреждение (токен ушёл бы открытым текстом)', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: 'http://apibel.priorbank.by:9345' }, /API_BASE непригоден/)).toBe(true)
+  })
+
+  // Негодный API_BASE НЕ должен вдобавок обвиняться во «внутреннем адресе»: оператор пойдёт
+  // искать шлюз, которого нет, вместо того чтобы починить схему. Одна причина — одно сообщение.
+  it.each(['http://apibel.priorbank.by:9345', 'apibel.priorbank.by', 'ftp://host'])(
+    'негодный API_BASE не даёт ЛОЖНОГО «внутренний адрес»: %s', (base) => {
+      expect(warns({ PRIOR_OAUTH_API_BASE: base }, /указывает на внутренний адрес/)).toBe(false)
+      expect(warns({ PRIOR_OAUTH_API_BASE: base }, /API_BASE непригоден/)).toBe(true)
+    })
+
+  it('внутренний адрес в AUTHORIZE_BASE — предупреждение (его открывает браузер)', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_AUTHORIZE_BASE: GW }, /AUTHORIZE_BASE непригоден/)).toBe(true)
+  })
+
+  it('внутренний API_BASE без публичного AUTHORIZE_BASE — предупреждение', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: GW }, /авторизации/)).toBe(true)
+  })
+
+  it('внутренний API_BASE + публичный AUTHORIZE_BASE — тишина (штатная схема со шлюзом)', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_AUTHORIZE_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: `${GW}/oauth2/token` }, /непригоден|авторизации|РАЗНЫЕ адреса/)).toBe(false)
+  })
+})

@@ -1,6 +1,6 @@
 # Приорбанк — как работать с выпиской
 
-> Last reviewed: 2026-08-10
+> Last reviewed: 2026-08-11
 
 С Приорбанком есть **два пути**, и оба реализованы: импорт текстовой выписки (раздел 1) и
 живой Open Banking API по СПР (раздел 2 — движок опроса, connect-поток и включение в крон
@@ -310,20 +310,33 @@ pnpm prior:test --auth-method private_key_jwt         # тот же поток �
   (продукт АВЕСТ). Разумно развернуть **отдельным сервисом** рядом с backend
   (сайдкар/на хосте) — **поддержку Linux/контейнера, требование к носителю ключей и лицензирование
   обязательно уточнить у АВЕСТ**. Прод-схема (шлюз + маршрут backend→шлюз→банк) — отдельный долг.
-- **Код к шлюзу почти готов, но «переставить env» — НЕ вся правда.** Адреса действительно вынесены:
-  `PRIOR_OAUTH_API_BASE` (`server/utils/priorFetch.ts`, `priorConnectStart.ts`) и
-  `PRIOR_OAUTH_TOKEN_URL` (`server/utils/ensureBankToken.ts`). Но у `PRIOR_OAUTH_API_BASE` **две
-  разные роли**, и они требуют разных адресов:
-  - **серверные вызовы** (токен, согласие, счета, выписка) — идут из backend, их и надо направить
-    на шлюз;
-  - **адрес страницы авторизации** (`buildPriorAuthorizeUrl`, `priorConnectStart.ts`) — эту ссылку
-    открывает **браузер администратора** top-level. Если она будет указывать на внутренний шлюз,
-    страница просто не откроется, а на сервере никакой ошибки не появится — connect-поток умрёт
-    молча.
+- **Адреса расщеплены — код к шлюзу готов** (#455). У `PRIOR_OAUTH_API_BASE` было **две роли**, и
+  они требуют разных адресов:
+  | Переменная | Кто ходит | Куда при шлюзе |
+  |---|---|---|
+  | `PRIOR_OAUTH_API_BASE` | backend: токен, согласие, счета, выписка | **на шлюз** (можно `http://` — внутренний адрес) |
+  | `PRIOR_OAUTH_AUTHORIZE_BASE` | **браузер администратора**, top-level | **на публичный хост банка** (только `https://`) |
 
-  Значит при внедрении шлюза `PRIOR_OAUTH_API_BASE` придётся **расщепить** на «серверный base» и
-  «публичный authorize-origin» (или прокинуть authorize через публично доступный маршрут).
-  Это код, а не конфиг — учесть в #41.
+  `PRIOR_OAUTH_AUTHORIZE_BASE` не задан ⇒ берётся `PRIOR_OAUTH_API_BASE` — верно, пока шлюза нет.
+  Правила адресов — чистый `app/utils/bankGatewayUrl.ts` (под тестами): `http://` разрешён **только**
+  на внутренний хост (loopback / имя docker-сервиса / приватная сеть), потому что именно так работает
+  шлюз; `http://` на публичный хост отвергается — это отправило бы токен открытым текстом. Внутренний
+  адрес в authorize-origin отвергается тоже: это ровно та ошибка, которая убивает подключение молча.
+  Заданное, но негодное значение **не подменяется** молча на API-base — конфиг просто не собирается.
+
+  Где правило реально применяется (а где нет — чтобы не считать проверку тотальной):
+  | Читатель env | Переменная | Проверка |
+  |---|---|---|
+  | `priorConnectStart.ts` (`priorConnectConfigFromEnv`) | `PRIOR_OAUTH_API_BASE` / `_AUTHORIZE_BASE` | обе, fail-closed → 400 |
+  | `priorFetch.ts` (`priorApiBaseFromEnv`) | `PRIOR_OAUTH_API_BASE` | да |
+  | `bankFetch.ts` (`bankApiConfig`) | `PRIOR_OAUTH_API_BASE`, `ALFA_OAUTH_API_BASE` | да (оба банка) |
+  | `ensureBankToken.ts` (`bankCredsFromEnv`) | `{PRIOR,ALFA}_OAUTH_TOKEN_URL` | да |
+  | `envCheck.ts` | всё вышеперечисленное | предупреждения на старте |
+
+  Вне охвата **сознательно**: `PRIOR_OAUTH_AUDIENCE` (это claim в JWT, а не сетевой адрес),
+  `ALFA_OAUTH_REDIRECT_URI`/`PRIOR_OAUTH_REDIRECT_URI` (их байт-в-байт сверяет банк — наша
+  нормализация сломала бы сверку) и authorize-хост Альфы (выводится из её `TOKEN_URL`, который уже
+  проверен).
 - ⚠ **`PRIOR_OAUTH_AUDIENCE` трогать нельзя** — это claim `aud` внутри подписанного `request`-JWT,
   который проверяет банк, а не сетевой адрес. Переставить его «за компанию» на шлюз = банк начнёт
   отвергать JWT, а симптом будет выглядеть как ошибка авторизации, не как ошибка конфигурации.
@@ -362,7 +375,9 @@ pnpm prior:test --auth-method private_key_jwt         # тот же поток �
   (гейты и подписанный state — общие с Альфой; обмен кода у Приора идёт **по настроенному методу**
   — Basic-заголовок или подписанный `client_assertion`, см. «Способы аутентификации»; отсутствующий
   `refresh_token` допускается) + пикер банка в `BankConnectCard.vue`. Env —
-  `PRIOR_OAUTH_{CLIENT_ID,CLIENT_SECRET,REDIRECT_URI,AUDIENCE,PRIVATE_KEY,KID,API_BASE,AUTH_METHOD}`.
+  `PRIOR_OAUTH_{CLIENT_ID,CLIENT_SECRET,REDIRECT_URI,AUDIENCE,PRIVATE_KEY,KID,API_BASE,AUTHORIZE_BASE,AUTH_METHOD}`
+  (`AUTHORIZE_BASE` — только при крипто-шлюзе, см. «СКЗИ» ниже; `CLIENT_SECRET` — только при
+  `client_secret_basic`).
   **Автоопрос ВКЛЮЧЁН:** `prior-by` в `POLLABLE_PROVIDERS` (`server/queue/cron.ts`). Обе причины, по
   которым он раньше был выключен, закрыты:
   (1) лимитер A8 считал ЗАДАЧИ из расчёта «1 задача ≈ 1 запрос» (верно для Альфы), а задача Приора — до

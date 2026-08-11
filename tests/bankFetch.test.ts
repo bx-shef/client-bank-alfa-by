@@ -109,6 +109,32 @@ describe('bankApiConfig', () => {
   it('manual → null', () => {
     expect(bankApiConfig('manual')).toBeNull()
   })
+
+  // ОБА банка судятся одним правилом (#455): база несёт Bearer на каждом тике опроса, поэтому
+  // опечатка в схеме должна отключать выборку, а не отправлять токен открытым текстом.
+  it.each([
+    ['alfa-by', 'ALFA_OAUTH_API_BASE'],
+    ['prior-by', 'PRIOR_OAUTH_API_BASE']
+  ] as const)('%s: http на публичный хост → null (токен не уйдёт в открытую)', (provider, key) => {
+    process.env[key] = 'http://bank.example.com:8273'
+    try {
+      expect(bankApiConfig(provider)).toBeNull()
+    } finally {
+      process.env[key] = ''
+    }
+  })
+
+  it.each([
+    ['alfa-by', 'ALFA_OAUTH_API_BASE'],
+    ['prior-by', 'PRIOR_OAUTH_API_BASE']
+  ] as const)('%s: http на ВНУТРЕННИЙ шлюз допустим', (provider, key) => {
+    process.env[key] = 'http://crypto-gw:1080'
+    try {
+      expect(bankApiConfig(provider)?.base).toBe('http://crypto-gw:1080')
+    } finally {
+      process.env[key] = ''
+    }
+  })
 })
 
 describe('fetchBankStatement', () => {

@@ -29,11 +29,23 @@ import {
 } from '../../app/utils/priorOauth'
 import type { PriorTokenAuthMethod } from '../../app/utils/priorOauth'
 import { priorAuthMethodFromEnv, resolvePriorTokenAuth } from './priorTokenAuth'
+import { normalizeAuthorizeBase, normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 
 /** Non-secret Prior connect config (from env) + the secrets the injected transport needs. */
 export interface PriorConnectConfig {
-  /** Gateway origin, e.g. `https://api.priorbank.by:9344` (no trailing slash). */
+  /**
+   * Origin the BACKEND calls: token, consent, accounts, statements. In production this points at
+   * the BY-crypto TLS gateway (#41/#455), which may legitimately be plain HTTP on an internal
+   * network — it raises the crypto TLS itself.
+   */
   baseUrl: string
+  /**
+   * Origin the ADMIN'S BROWSER opens for the bank's authorize page — always the bank's public
+   * host, never the gateway. ⚠ Pointing this at an internal gateway kills the connect flow with
+   * NO server-side error (the server never makes that request). Defaults to `baseUrl` when
+   * unset, which is correct as long as there is no gateway.
+   */
+  authorizeBaseUrl: string
   /** Business-app client id (from DCR). */
   clientId: string
   /** Business-app client secret (from DCR) — client_secret_basic. */
@@ -59,7 +71,15 @@ export interface PriorConnectConfig {
  *  fail-closed, so an unconfigured provider yields a clean 400 instead of a broken authorize URL
  *  (mirrors `bankConnectConfigFromEnv` for Alfa). */
 export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
-  const baseUrl = process.env.PRIOR_OAUTH_API_BASE?.trim().replace(/\/+$/, '')
+  const baseUrl = normalizeBankApiBase(process.env.PRIOR_OAUTH_API_BASE)
+  // Public authorize origin (#455). UNSET ⇒ fall back to the API base — today's single-origin
+  // behaviour, correct until a gateway is introduced. SET BUT INVALID ⇒ fail closed rather than
+  // quietly substitute the API base: an explicit value that didn't take is a typo someone needs to
+  // see, and silently overriding it is how a wrong deployment looks healthy.
+  const rawAuthorizeBase = process.env.PRIOR_OAUTH_AUTHORIZE_BASE?.trim()
+  const authorizeBaseUrl = rawAuthorizeBase
+    ? normalizeAuthorizeBase(rawAuthorizeBase)
+    : normalizeAuthorizeBase(baseUrl)
   const clientId = process.env.PRIOR_OAUTH_CLIENT_ID?.trim()
   const clientSecret = process.env.PRIOR_OAUTH_CLIENT_SECRET?.trim()
   const redirectUri = process.env.PRIOR_OAUTH_REDIRECT_URI?.trim()
@@ -67,10 +87,14 @@ export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
   const privateKeyPem = process.env.PRIOR_OAUTH_PRIVATE_KEY?.trim()
   const kid = process.env.PRIOR_OAUTH_KID?.trim()
   const authMethod = priorAuthMethodFromEnv()
-  if (!baseUrl || !clientId || !clientSecret || !redirectUri || !audience || !privateKeyPem || !kid) return null
-  // Must be an absolute http(s) origin, else buildPriorAuthorizeUrl would emit a broken URL.
-  if (!/^https?:\/\/[^/]/.test(baseUrl)) return null
-  return { baseUrl, clientId, clientSecret, redirectUri, audience, authMethod, privateKeyPem, kid }
+  // `clientSecret` is not required under private_key_jwt — the assertion authenticates us and the
+  // bank may not issue one (#444). `authorizeBaseUrl` is null when the API base is an internal
+  // gateway and no public origin was configured: that combination CANNOT produce a working
+  // authorize URL, so fail closed here rather than emit one the browser can't open (#455).
+  const secretRequired = authMethod === 'client_secret_basic'
+  if (!baseUrl || !authorizeBaseUrl || !clientId || !redirectUri || !audience || !privateKeyPem || !kid) return null
+  if (secretRequired && !clientSecret) return null
+  return { baseUrl, authorizeBaseUrl, clientId, clientSecret: clientSecret ?? '', redirectUri, audience, authMethod, privateKeyPem, kid }
 }
 
 /** Injected side-effects, so the orchestration is testable without network/crypto/clock. */
@@ -151,7 +175,8 @@ export async function buildPriorConnectUrl(
   const requestJwt = deps.signJwt(claims, config.privateKeyPem, config.kid)
 
   // 4) the authorize URL the admin opens top-level.
-  return buildPriorAuthorizeUrl(config.baseUrl, {
+  // ⚠ The AUTHORIZE origin, not the API base: this URL is opened by the admin's browser.
+  return buildPriorAuthorizeUrl(config.authorizeBaseUrl, {
     clientId: config.clientId,
     redirectUri: config.redirectUri,
     state,
