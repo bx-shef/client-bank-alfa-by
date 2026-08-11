@@ -300,6 +300,34 @@ services:
     networks:
       - dbnet
 
+  # --- BY-крипто TLS-шлюз для ПРОДА Приорбанка (#41 / #455) -------------------
+  # Заготовка. Раскомментировать вместе с `cryptonet` внизу, когда получите дистрибутив
+  # (AvTunProxy, ЗАО «АВЕСТ» — HTTP-прокси, шифрующий трафик по СТБ 34.101.65; есть сборка
+  # под Ubuntu Linux). Образ собирается локально: вендор публичного образа не даёт.
+  #
+  # Зачем именно так:
+  #  - НЕТ `ports:` — порт наружу не публикуется. Иначе сосед по хосту сможет проксировать
+  #    свой трафик к банку под нашей BY-крипто identity. Backend видит шлюз по имени сервиса
+  #    внутри `cryptonet`, и этого достаточно.
+  #  - Ключевой материал (если продукт его потребует) монтируется **read-only** и лежит вне
+  #    репозитория. ⚠ Для этой задачи выпускать ОТДЕЛЬНЫЙ ключ, а не брать рабочий ключ
+  #    бухгалтера: им подписывают отчётность, а экспорт в программный контейнер снимает
+  #    аппаратную защиту.
+  #  - Наш код обращается к шлюзу обычным HTTP (`PRIOR_OAUTH_API_BASE=http://crypto-gw:1080`) —
+  #    крипто-TLS поднимает сам шлюз. ⚠ `PRIOR_OAUTH_AUTHORIZE_BASE` при этом ОБЯЗАН остаться
+  #    публичным адресом банка: этот URL открывает браузер администратора, и внутренний адрес
+  #    там убивает подключение молча, без ошибки на сервере. `envCheck` предупредит.
+  #
+  # crypto-gw:
+  #   logging: *default-logging
+  #   build: ./deploy/crypto-gateway        # Dockerfile с дистрибутивом вендора
+  #   container_name: client-bank-alfa-by-crypto-gw
+  #   volumes:
+  #     - ${PRIOR_CRYPTO_KEYS_DIR:?set PRIOR_CRYPTO_KEYS_DIR}:/keys:ro
+  #   restart: unless-stopped
+  #   networks:
+  #     - cryptonet
+
 volumes:
   pgdata:
   redisdata:
@@ -320,3 +348,8 @@ networks:
   queuenet:
     driver: bridge
     internal: true
+  # backend/worker ↔ BY-crypto TLS gateway (Приорбанк прод, #41/#455). NOT `internal`:
+  # unlike Redis, the gateway's whole job is to reach the bank, so it needs egress.
+  # It still gets its own network and NO published host port — see the service below.
+  # cryptonet:
+  #   driver: bridge

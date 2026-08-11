@@ -12,6 +12,7 @@ import { Buffer } from 'node:buffer'
 
 const config: PriorConnectConfig = {
   baseUrl: 'https://api.priorbank.by:9344',
+  authorizeBaseUrl: 'https://api.priorbank.by:9344',
   clientId: 'CLIENT-1',
   clientSecret: 'SECRET-1',
   redirectUri: 'https://app.example/api/bank/callback',
@@ -93,6 +94,7 @@ describe('priorConnectConfigFromEnv', () => {
     try {
       expect(priorConnectConfigFromEnv()).toEqual({
         baseUrl: 'https://api.priorbank.by:9344',
+        authorizeBaseUrl: 'https://api.priorbank.by:9344',
         clientId: 'C',
         clientSecret: 'S',
         redirectUri: 'https://app/cb',
@@ -127,6 +129,58 @@ describe('priorConnectConfigFromEnv', () => {
       clearAll()
     }
   })
+
+  // #455 — the crypto-gateway split. The backend talks to the local gateway over plain HTTP; the
+  // admin's browser must still be sent to the bank's PUBLIC host, or the authorize page never
+  // loads and the server sees no error at all.
+  describe('crypto gateway (#455)', () => {
+    it('backend base may be the internal gateway while authorize stays on the bank', () => {
+      setAll()
+      process.env.PRIOR_OAUTH_API_BASE = 'http://avtunproxy:1080'
+      process.env.PRIOR_OAUTH_AUTHORIZE_BASE = 'https://apibel.priorbank.by:9345'
+      try {
+        const cfg = priorConnectConfigFromEnv()
+        expect(cfg?.baseUrl).toBe('http://avtunproxy:1080')
+        expect(cfg?.authorizeBaseUrl).toBe('https://apibel.priorbank.by:9345')
+      } finally {
+        process.env.PRIOR_OAUTH_AUTHORIZE_BASE = undefined
+        clearAll()
+      }
+    })
+
+    it('fail-closed when the base is internal and no public authorize origin is set', () => {
+      // Otherwise we would hand the browser `http://avtunproxy:1080/...` — unreachable for it, and
+      // silent on the server. Refusing to start is the only honest outcome.
+      setAll()
+      process.env.PRIOR_OAUTH_API_BASE = 'http://avtunproxy:1080'
+      try {
+        expect(priorConnectConfigFromEnv()).toBeNull()
+      } finally {
+        clearAll()
+      }
+    })
+
+    it('rejects an internal authorize origin even when explicitly configured', () => {
+      setAll()
+      process.env.PRIOR_OAUTH_AUTHORIZE_BASE = 'http://avtunproxy:1080'
+      try {
+        expect(priorConnectConfigFromEnv()).toBeNull()
+      } finally {
+        process.env.PRIOR_OAUTH_AUTHORIZE_BASE = undefined
+        clearAll()
+      }
+    })
+
+    it('rejects plain http to a PUBLIC host (token would cross the network in clear text)', () => {
+      setAll()
+      process.env.PRIOR_OAUTH_API_BASE = 'http://apibel.priorbank.by:9345'
+      try {
+        expect(priorConnectConfigFromEnv()).toBeNull()
+      } finally {
+        clearAll()
+      }
+    })
+  })
 })
 
 describe('buildPriorConnectUrl', () => {
@@ -159,7 +213,7 @@ describe('buildPriorConnectUrl', () => {
     expect(JSON.stringify(claims)).toContain('INTENT-9') // openbanking_intent_id claim
 
     // 4) the authorize URL carries client_id, state and the signed request JWT
-    expect(url.startsWith(`${config.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/authorize?`)).toBe(true)
+    expect(url.startsWith(`${config.authorizeBaseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/authorize?`)).toBe(true)
     const q = new URL(url).searchParams
     expect(q.get('client_id')).toBe('CLIENT-1')
     expect(q.get('state')).toBe('SIGNED-STATE')
@@ -204,6 +258,19 @@ describe('buildPriorConnectUrl', () => {
     const first = calls.signed[0]!.payload as Record<string, unknown>
     const third = calls.signed[2]!.payload as Record<string, unknown> // [0]=assertion, [1]=request, [2]=assertion
     expect(first.jti).not.toBe(third.jti)
+  })
+
+  // #455: the two origins are used for DIFFERENT things — server calls vs the browser navigation.
+  it('calls the gateway for token/consent but sends the browser to the bank', async () => {
+    const { deps, calls } = fakeDeps()
+    const url = await buildPriorConnectUrl(
+      { ...config, baseUrl: 'http://avtunproxy:1080', authorizeBaseUrl: 'https://apibel.priorbank.by:9345' },
+      'SIGNED-STATE', deps, NOW_MS
+    )
+    expect(calls.tokenUrl[0]).toContain('http://avtunproxy:1080')
+    expect(calls.consentUrl[0]).toContain('http://avtunproxy:1080')
+    expect(url.startsWith('https://apibel.priorbank.by:9345')).toBe(true)
+    expect(url).not.toContain('avtunproxy') // the internal host never reaches the browser
   })
 
   it('throws on an OAuth error payload from the token step (never a half-built URL)', async () => {

@@ -10,6 +10,7 @@
 
 import { Buffer } from 'node:buffer'
 import { resolveTelegramConfig, telegramConfigAttempted } from './telegramAlert'
+import { normalizeAuthorizeBase, normalizeBankApiBase, sameOrigin } from '../../app/utils/bankGatewayUrl'
 
 const KEY_BYTES = 32
 
@@ -146,6 +147,27 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     if (missing.length > 0) {
       warnings.push(`PRIOR_OAUTH_AUTH_METHOD=private_key_jwt, но нет ${missing.join('/')} — подпись client_assertion невозможна: подключение Приора вернёт 502, обновление токена будет падать по каждому счёту.`)
     }
+  }
+
+  // --- Crypto-gateway addressing (#455). `PRIOR_OAUTH_API_BASE` and `PRIOR_OAUTH_TOKEN_URL` are
+  //     INDEPENDENT variables and nothing ties them together: move one onto the gateway, forget the
+  //     other, and token refresh keeps quietly talking to the old host — the import then stops with
+  //     what looks like an ordinary refresh failure. Same for a base that points at an internal
+  //     gateway with no public authorize origin: the connect flow dies with NO server-side error. ---
+  const priorApiBase = (env.PRIOR_OAUTH_API_BASE ?? '').trim()
+  const priorTokenUrl = (env.PRIOR_OAUTH_TOKEN_URL ?? '').trim()
+  if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)) {
+    warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL указывают на РАЗНЫЕ адреса — при переводе Приора на крипто-шлюз надо менять обе, иначе обновление токена продолжит ходить на старый хост.')
+  }
+  if (priorApiBase && !normalizeBankApiBase(priorApiBase)) {
+    warnings.push('PRIOR_OAUTH_API_BASE непригоден: нужен https:// либо http:// на ВНУТРЕННИЙ адрес (localhost / имя docker-сервиса / приватная сеть) — так работает крипто-шлюз. http:// на публичный хост отправил бы токен открытым текстом.')
+  }
+  const priorAuthorizeBase = (env.PRIOR_OAUTH_AUTHORIZE_BASE ?? '').trim()
+  if (priorAuthorizeBase && !normalizeAuthorizeBase(priorAuthorizeBase)) {
+    warnings.push('PRIOR_OAUTH_AUTHORIZE_BASE непригоден: это публичный адрес банка, который открывает БРАУЗЕР администратора — нужен https:// и не внутренний хост.')
+  }
+  if (!priorAuthorizeBase && priorApiBase && !normalizeAuthorizeBase(priorApiBase)) {
+    warnings.push('PRIOR_OAUTH_API_BASE указывает на внутренний адрес, а PRIOR_OAUTH_AUTHORIZE_BASE не задан — подключение Приора отключено: страницу авторизации браузеру открыть будет негде.')
   }
 
   // --- Telegram alert channel (#426). Not configured = OFF, and that is a normal deployment,
