@@ -79,9 +79,11 @@ describe('priorConnectConfigFromEnv', () => {
     process.env.PRIOR_OAUTH_KID = 'k1'
   }
   function clearAll() {
-    // Assign undefined rather than `delete env[dynamicKey]` (lint: no-dynamic-delete); the config
-    // reader treats an undefined/blank value the same as an absent key.
-    for (const k of KEYS) process.env[k] = undefined
+    // Assign '' rather than `delete env[dynamicKey]` (lint: no-dynamic-delete). ⚠ NOT `undefined`:
+    // `process.env.X = undefined` stores the STRING 'undefined', which is truthy — a test written
+    // that way silently exercises «set to garbage» instead of «unset», and would pass even if the
+    // unset branch were deleted.
+    for (const k of [...KEYS, 'PRIOR_OAUTH_AUTHORIZE_BASE', 'PRIOR_OAUTH_AUTH_METHOD']) process.env[k] = ''
   }
 
   it('null when nothing is set (feature off)', () => {
@@ -130,6 +132,32 @@ describe('priorConnectConfigFromEnv', () => {
     }
   })
 
+  // #444 follow-up: under private_key_jwt the assertion authenticates us and the bank may not
+  // issue a client secret at all — demanding one would disable a correct production config.
+  it('private_key_jwt: config builds WITHOUT a client secret', () => {
+    setAll()
+    process.env.PRIOR_OAUTH_CLIENT_SECRET = ''
+    process.env.PRIOR_OAUTH_AUTH_METHOD = 'private_key_jwt'
+    try {
+      const cfg = priorConnectConfigFromEnv()
+      expect(cfg).not.toBeNull()
+      expect(cfg?.clientSecret).toBe('')
+      expect(cfg?.authMethod).toBe('private_key_jwt')
+    } finally {
+      clearAll()
+    }
+  })
+
+  it('client_secret_basic (default): a missing secret still fails closed', () => {
+    setAll()
+    process.env.PRIOR_OAUTH_CLIENT_SECRET = ''
+    try {
+      expect(priorConnectConfigFromEnv()).toBeNull()
+    } finally {
+      clearAll()
+    }
+  })
+
   // #455 — the crypto-gateway split. The backend talks to the local gateway over plain HTTP; the
   // admin's browser must still be sent to the bank's PUBLIC host, or the authorize page never
   // loads and the server sees no error at all.
@@ -143,7 +171,6 @@ describe('priorConnectConfigFromEnv', () => {
         expect(cfg?.baseUrl).toBe('http://avtunproxy:1080')
         expect(cfg?.authorizeBaseUrl).toBe('https://apibel.priorbank.by:9345')
       } finally {
-        process.env.PRIOR_OAUTH_AUTHORIZE_BASE = undefined
         clearAll()
       }
     })
@@ -166,7 +193,6 @@ describe('priorConnectConfigFromEnv', () => {
       try {
         expect(priorConnectConfigFromEnv()).toBeNull()
       } finally {
-        process.env.PRIOR_OAUTH_AUTHORIZE_BASE = undefined
         clearAll()
       }
     })

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   fetchPriorStatement,
   isoDateOnly,
@@ -187,5 +187,37 @@ describe('resolvePriorAccountId', () => {
   })
   it('throws for an account outside the consent (never fetches someone else)', async () => {
     await expect(resolvePriorAccountId('https://p', 'NOPE', 'T', { getJson })).rejects.toThrow(/not found in the consent/)
+  })
+})
+
+// #455 parity: the polling path carries a live Bearer on every cron tick, so it must apply the
+// SAME address rules as the one-shot connect flow — validating only there would leave the frequent,
+// automated traffic on a raw env value.
+describe('priorApiBaseFromEnv — address rules (#455)', () => {
+  const set = (v: string) => {
+    process.env.PRIOR_OAUTH_API_BASE = v
+  }
+  afterEach(() => {
+    process.env.PRIOR_OAUTH_API_BASE = ''
+  })
+
+  it('rejects http:// to a PUBLIC host (Bearer would cross the network in clear text)', () => {
+    set('http://api.priorbank.by:9344')
+    expect(priorApiBaseFromEnv()).toBeNull()
+  })
+
+  it('rejects a public domain that merely starts like a private range', () => {
+    set('http://10.attacker.com')
+    expect(priorApiBaseFromEnv()).toBeNull()
+  })
+
+  it('accepts http:// to the internal gateway (that is how the crypto gateway works)', () => {
+    set('http://avtunproxy:1080')
+    expect(priorApiBaseFromEnv()).toBe('http://avtunproxy:1080')
+  })
+
+  it('accepts https and strips trailing slashes', () => {
+    set('https://api.priorbank.by:9344/')
+    expect(priorApiBaseFromEnv()).toBe('https://api.priorbank.by:9344')
   })
 })

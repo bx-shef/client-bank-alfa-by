@@ -159,14 +159,19 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)) {
     warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL указывают на РАЗНЫЕ адреса — при переводе Приора на крипто-шлюз надо менять обе, иначе обновление токена продолжит ходить на старый хост.')
   }
-  if (priorApiBase && !normalizeBankApiBase(priorApiBase)) {
+  const priorApiBaseOk = !!normalizeBankApiBase(priorApiBase)
+  if (priorApiBase && !priorApiBaseOk) {
     warnings.push('PRIOR_OAUTH_API_BASE непригоден: нужен https:// либо http:// на ВНУТРЕННИЙ адрес (localhost / имя docker-сервиса / приватная сеть) — так работает крипто-шлюз. http:// на публичный хост отправил бы токен открытым текстом.')
   }
   const priorAuthorizeBase = (env.PRIOR_OAUTH_AUTHORIZE_BASE ?? '').trim()
   if (priorAuthorizeBase && !normalizeAuthorizeBase(priorAuthorizeBase)) {
     warnings.push('PRIOR_OAUTH_AUTHORIZE_BASE непригоден: это публичный адрес банка, который открывает БРАУЗЕР администратора — нужен https:// и не внутренний хост.')
   }
-  if (!priorAuthorizeBase && priorApiBase && !normalizeAuthorizeBase(priorApiBase)) {
+  // Gated on a VALID api base: a broken one already got its own (accurate) warning above, and
+  // saying «указывает на внутренний адрес» about `http://api.priorbank.by` or about garbage would
+  // send the operator looking for a gateway that isn't there. Once the base IS valid, the only way
+  // it can fail as an authorize origin is that it points inside our network — so the wording holds.
+  if (!priorAuthorizeBase && priorApiBaseOk && !normalizeAuthorizeBase(priorApiBase)) {
     warnings.push('PRIOR_OAUTH_API_BASE указывает на внутренний адрес, а PRIOR_OAUTH_AUTHORIZE_BASE не задан — подключение Приора отключено: страницу авторизации браузеру открыть будет негде.')
   }
 

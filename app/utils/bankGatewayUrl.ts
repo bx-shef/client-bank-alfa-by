@@ -1,6 +1,10 @@
 // Address rules for the BY-crypto TLS gateway in front of Priorbank prod (#455, code half of #41).
 //
-// Пure — no I/O — so the rules are unit-tested and shared by the env readers and `envCheck`.
+// Pure — no I/O — so the rules are unit-tested and shared by the env readers that build a BANK
+// BASE URL (`priorConnectConfigFromEnv`, `priorApiBaseFromEnv`, `bankApiConfig`, `bankCredsFromEnv`)
+// plus `envCheck`. Deliberately NOT applied to `*_AUDIENCE` (a JWT claim, not an address) or to the
+// `*_REDIRECT_URI` values (the bank compares those byte-for-byte — normalizing would break it).
+// The full map lives in docs/PRIOR_API.md «СКЗИ».
 //
 // WHY THIS EXISTS. `PRIOR_OAUTH_API_BASE` used to serve two roles at once:
 //   1. the origin our BACKEND calls (token, consent, accounts, statements);
@@ -9,17 +13,53 @@
 // the server side at all, because the server never made that request. The connect flow just dies
 // quietly. Hence a separate authorize origin, and the asymmetric scheme rules below.
 
-/** Hosts that can only mean «inside our own deployment», so plain HTTP to them is legitimate. */
+/** Dotted-quad IPv4 — the ONLY shape `URL.hostname` yields for a real IPv4 literal (the parser
+ *  canonicalizes decimal/octal/hex forms like `2130706433` or `0x7f000001` before we see them).
+ *  A public FQDN never has an all-numeric last label, so this also separates `10.0.0.5` from the
+ *  perfectly ordinary domain `10.attacker.com`. */
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
+
+/**
+ * Hosts that can only mean «inside our own deployment», so plain HTTP to them is legitimate.
+ *
+ * ⚠ Anchoring matters. An unanchored `/^10\./` also matches `10.attacker.com` — a normal public
+ * domain whose first label happens to be `10`, with an A record its owner fully controls. That
+ * would turn «http only to an internal host» into «http to anywhere», i.e. the Bearer token (and
+ * the client secret under client_secret_basic) in clear text. Hence: parse the host as an IPv4
+ * literal FIRST, then compare octets — never prefix-match a hostname.
+ */
 function isInternalHost(host: string): boolean {
-  const h = host.toLowerCase()
-  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]') return true
+  // A trailing dot is a legal FQDN root (`localhost.` resolves exactly like `localhost`), so strip
+  // it before any comparison — otherwise it is a one-character bypass of every check below.
+  const h = host.toLowerCase().replace(/\.$/, '')
+  if (h === 'localhost') return true
+
+  // IPv6 literals arrive bracketed and already canonicalized by the URL parser.
+  if (h.startsWith('[') && h.endsWith(']')) {
+    const v6 = h.slice(1, -1)
+    if (v6 === '::1' || v6 === '::') return true
+    // IPv4-mapped (`::ffff:7f00:1`) — the parser compresses the embedded IPv4 to hex, so the
+    // decision has to be made on the prefix rather than on a readable dotted form.
+    if (v6.startsWith('::ffff:')) return true
+    // ULA fc00::/7 and link-local fe80::/10 — private by definition.
+    if (/^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)) return true
+    return false
+  }
+
+  const m = IPV4.exec(h)
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])]
+    if (a === 127) return true // loopback /8
+    if (a === 0) return true // 0.0.0.0 — «this host»
+    if (a === 10) return true // RFC 1918
+    if (a === 192 && b === 168) return true // RFC 1918
+    if (a === 172 && b >= 16 && b <= 31) return true // RFC 1918
+    if (a === 169 && b === 254) return true // link-local
+    return false
+  }
+
   // Docker/compose service name: a single label with no dot (e.g. `avtunproxy`).
-  if (!h.includes('.') && !h.includes(':')) return true
-  // RFC 1918 / link-local — a private network address.
-  return /^10\./.test(h)
-    || /^192\.168\./.test(h)
-    || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
-    || /^169\.254\./.test(h)
+  return !h.includes('.') && !h.includes(':')
 }
 
 /**

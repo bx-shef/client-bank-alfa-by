@@ -85,7 +85,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`CRON_REAL_POLL`, инертен пока нет банк-кредов владельца); **Приор (A5b) — движок опроса, connect-поток и АВТООПРОС
   готовы**: `prior-by` в `POLLABLE_PROVIDERS`, у него своя очередь `bank-fetch-prior` с бюджетом в
   ЗАПРОСАХ (задача Приора = до 10 HTTP, `REQUESTS_PER_ACCOUNT`) и своими слотами, поэтому он не
-  блокирует Альфу и не тратит её лимит; прод дополнительно требует BY-СКЗИ (issue #41 — **не закрыт**);
+  блокирует Альфу и не тратит её лимит; прод дополнительно требует BY-СКЗИ (issue #41 — **не закрыт**,
+  но кодовая половина сделана: адреса «backend→шлюз» и «браузер→банк» расщеплены, #455,
+  `PRIOR_OAUTH_AUTHORIZE_BASE` + `app/utils/bankGatewayUrl.ts`);
   прод-метод аутентификации `private_key_jwt` **сделан** (#444, `PRIOR_OAUTH_AUTH_METHOD`), sandbox
   `:9344` не требует ни того, ни другого).
   В демо — **скачиваемые примеры выписок** (`LANDING_DEMO_SAMPLES`, файлы `public/samples/*.txt`,
@@ -646,7 +648,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     переподключения невозможен), а не 502. Оба банка приземляются на **один** callback и различаются по
     `provider` из **проверенного** state. UI — пикер банка `B24RadioGroup` (тип сужен до подключаемых, `manual`
     выбрать нельзя); подписи/плейсхолдер/кнопка следуют выбору. Env — `PRIOR_OAUTH_*`
-    (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`).
+    (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`/`_AUTHORIZE_BASE`).
     **Автоопрос включён**: `prior-by` в `POLLABLE_PROVIDERS`, отдельная очередь `bank-fetch-prior`
     (`fetchQueueFor`) с бюджетом в ЗАПРОСАХ (`providerJobRate` делит лимит на стоимость задачи) и
     собственными слотами (`QUEUE_PRIOR_CONCURRENCY`) — длинная задача Приора не держит воркер Альфы.
@@ -658,6 +660,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     СКЗИ не нужен) и прод-СКЗИ (issue #41 — без BY-крипто TLS прод-хост `:9345` недостижим,
     инфраструктура). Переключение реального деплоя тянет смену `client_id` → переподключение счетов
     (порядок — `docs/PRIOR_API.md`).
+    **Кодовая половина шлюза — СДЕЛАНА (#455):** у `PRIOR_OAUTH_API_BASE` было **две роли** —
+    origin, куда ходит backend (токен/согласие/счета/выписка), и origin, который открывает **браузер
+    администратора** (страница авторизации банка). При шлюзе это разные адреса, и совмещение
+    убивало подключение **молча**: сервер такой запрос не делает, поэтому ошибки не видит никто.
+    Роли расщеплены (`PRIOR_OAUTH_AUTHORIZE_BASE`, не задан ⇒ берётся API_BASE — верно, пока шлюза
+    нет), правила адресов — чистый `app/utils/bankGatewayUrl.ts` (под тестами): `http://` разрешён
+    **только** на внутренний хост (loopback / имя docker-сервиса / RFC1918 / ULA — так и работает
+    шлюз), на публичный — нет (ушёл бы Bearer открытым текстом); внутренний адрес в authorize
+    отвергается. ⚠ Хост парсится как IPv4-**литерал**, а не префиксом строки: `10.attacker.com` —
+    обычный публичный домен, чей A-записью владеет атакующий, и наивный `/^10\./` превратил бы
+    правило в «http куда угодно». Применяется во **всех** читателях банковской базы (оба банка:
+    `bankApiConfig`, `priorApiBaseFromEnv`, `bankCredsFromEnv` для `_TOKEN_URL`,
+    `priorConnectConfigFromEnv`) + предупреждения `envCheck` на рассинхрон `API_BASE`↔`TOKEN_URL`;
+    `_AUDIENCE` и `_REDIRECT_URI` **вне охвата сознательно** (claim в JWT / банк сверяет байт-в-байт).
+    Заготовка сервиса `crypto-gw` — в `docker-compose.prod.yml` (закомментирована; продукт не выбран).
   - `server/utils/setupStatus.ts` + `server/api/setup-status.get.ts` (+ чистое ядро
     `app/utils/setupReadiness.ts`, composable `useSetupStatus.ts`, UI `SetupReadinessCard.vue`;
     DI+тесты, вкл. nuxt-тест проводки) — **экран готовности «что настроено, а что нет» (#409/#405)**:

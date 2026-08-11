@@ -29,6 +29,7 @@ import { getBankToken } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
 import { fetchPriorStatement } from './priorFetch'
 import { dbQuery } from '../db/client'
+import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 
 /** The statement window to fetch, resolved from a FetchJob. */
 export interface BankFetchQuery {
@@ -69,14 +70,19 @@ export function bankApiConfig(provider: BankProviderId): { base: string, stateme
   const cleanBase = (s: string) => s.replace(/\/+$/, '')
   const asPath = (s: string) => `/${s.replace(/^\/+/, '').replace(/\/+$/, '')}`
   if (provider === 'alfa-by') {
-    const base = process.env.ALFA_OAUTH_API_BASE?.trim()
+    // Same rule as Prior below: this base carries the polling Bearer, so a scheme typo must fail
+    // closed rather than ship the token in clear text. Alfa has no crypto gateway of its own, but
+    // the internal-http allowance costs nothing here and keeps ONE rule for «a bank base URL».
+    const base = normalizeBankApiBase(process.env.ALFA_OAUTH_API_BASE)
     if (!base) return null
     const prefix = asPath(process.env.ALFA_OAUTH_API_PREFIX?.trim() || '/partner/1.2.0')
     return { base: cleanBase(base), statementPath: `${prefix}/accounts/statement` }
   }
   if (provider === 'prior-by') {
-    const base = process.env.PRIOR_OAUTH_API_BASE?.trim()
-    return base ? { base: cleanBase(base), statementPath: '/accounts' } : null
+    // Validated, not just trimmed (#455): this base carries the polling Bearer on every tick, so
+    // `http://` is accepted only towards an internal gateway — never to a public host.
+    const base = normalizeBankApiBase(process.env.PRIOR_OAUTH_API_BASE)
+    return base ? { base, statementPath: '/accounts' } : null
   }
   return null
 }

@@ -18,6 +18,7 @@ import { buildPriorRefreshBody, parsePriorTokenResponse, priorTokenRequest } fro
 import type { PriorTokenAuth } from '../../app/utils/priorOauth'
 import { priorAuthMethodFromEnv, resolvePriorTokenAuth } from './priorTokenAuth'
 import { signPriorJwt } from './priorJwt'
+import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
 import { getBankToken, saveBankToken } from './bankTokenStore'
@@ -114,7 +115,10 @@ export function bankCredsFromEnv(provider: BankProviderId): BankOAuthCreds | nul
   if (!prefix) return null
   const clientId = process.env[`${prefix}_CLIENT_ID`]?.trim()
   const clientSecret = process.env[`${prefix}_CLIENT_SECRET`]?.trim()
-  const tokenUrl = process.env[`${prefix}_TOKEN_URL`]?.trim()
+  // The token URL carries the refresh token — and, under client_secret_basic, the client secret
+  // itself. Validate the scheme like every other bank address (#455): `http://` only towards an
+  // internal gateway. A full URL (not just an origin) is fine — the rules look at scheme + host.
+  const tokenUrl = normalizeBankApiBase(process.env[`${prefix}_TOKEN_URL`])
   const secretOptional = provider === 'prior-by' && priorAuthMethodFromEnv() === 'private_key_jwt'
   if (!clientId || !tokenUrl || (!clientSecret && !secretOptional)) return null
   return { clientId, clientSecret: clientSecret ?? '', tokenUrl }

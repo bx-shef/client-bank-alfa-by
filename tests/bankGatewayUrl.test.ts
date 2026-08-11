@@ -30,6 +30,24 @@ describe('normalizeBankApiBase (origin the BACKEND calls)', () => {
     expect(normalizeBankApiBase(url)).toBeNull()
   })
 
+  // A public FQDN whose FIRST LABEL looks private — the bypass an unanchored `/^10\./` allows.
+  // The owner of `attacker.com` controls the A record, so this is a fully external host.
+  it.each([
+    'http://10.attacker.com',
+    'http://10.0.0.5.evil.com',
+    'http://192.168.attacker.io',
+    'http://172.20.0.3.attacker.io',
+    'http://169.254.169.254.attacker.io' // classic cloud-metadata bypass shape
+  ])('rejects a PUBLIC domain that merely starts like a private range: %s', (url) => {
+    expect(normalizeBankApiBase(url)).toBeNull()
+  })
+
+  // Wildcard DNS resolving to loopback can't be caught by a string check (DNS happens later) —
+  // pinned as a KNOWN limit, and safe here: it fails closed for the backend base.
+  it('rejects http to a wildcard-DNS host (fails closed, though the check is string-only)', () => {
+    expect(normalizeBankApiBase('http://127.0.0.1.nip.io')).toBeNull()
+  })
+
   it.each(['', '   ', undefined, null, '/relative', 'api.priorbank.by', 'ftp://host'])(
     'rejects unusable value: %s', (v) => {
       expect(normalizeBankApiBase(v)).toBeNull()
@@ -55,6 +73,25 @@ describe('normalizeAuthorizeBase (origin the BROWSER opens)', () => {
 
   it('rejects plain http even on a public host (a browser navigation must be TLS)', () => {
     expect(normalizeAuthorizeBase('http://api.priorbank.by:9344')).toBeNull()
+  })
+
+  // Obfuscated internal addresses. Each of these previously passed as «public» — exactly the
+  // failure this function exists to prevent, just spelled differently.
+  it.each([
+    'https://localhost.', // trailing dot is legal FQDN syntax and resolves identically
+    'https://avtunproxy.', // same trick on a docker service name
+    'https://127.0.0.2', // loopback is a whole /8, not one address
+    'https://0.0.0.0',
+    'https://[::ffff:127.0.0.1]', // IPv4-mapped IPv6 (parser compresses it to hex)
+    'https://[::]',
+    'https://[fc00::1]', // ULA
+    'https://[fe80::1]' // link-local
+  ])('rejects an obfuscated internal address: %s', (url) => {
+    expect(normalizeAuthorizeBase(url)).toBeNull()
+  })
+
+  it('still accepts a normal public bank host with a port', () => {
+    expect(normalizeAuthorizeBase('https://apibel.priorbank.by:9345')).toBe('https://apibel.priorbank.by:9345')
   })
 })
 
