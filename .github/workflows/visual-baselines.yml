@@ -58,6 +58,9 @@ jobs:
           rm -rf tests/visual/__screenshots__
           pnpm test:visual:update
 
+      # ⚠ `git add` строго по каталогу эталонов, НИКОГДА `git add -A`: прогон оставляет рядом
+      # `tests/visual/.artifacts/` (снимки «как получилось» + трассы), и один неосторожный `-A`
+      # уже утащил их в main мимо .gitignore — правило игнора тогда ещё жило в другой ветке.
       - name: Commit
         run: |
           git add -A tests/visual/__screenshots__
