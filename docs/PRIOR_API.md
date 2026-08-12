@@ -290,6 +290,22 @@ pnpm prior:test --auth-method private_key_jwt         # тот же поток �
   (порт **9544**, не 9344).
 - **Согласие `POST /accountConsents`**: `data.expirationDate` — **срок действия согласия, в будущем**
   (не окно выписки); окно — `transactionFromDate/ToDate` (может быть в прошлом).
+- **Ресурсный API требует ДВА заголовка, и проверяет их ДО тела** (замерено 2026-08-12): помимо
+  `x-fapi-interaction-id` каждая ЗАПИСЬ несёт **`x-idempotency-key`**, иначе
+  `400 BY.NBRB.Header.Missing`. Проверено четырьмя разными телами согласия — ответ во всех случаях
+  одинаковый, то есть по нему о теле судить нельзя вообще. Обратная сторона того же: как только
+  заголовки на месте, ошибка по телу становится точной — полный ISO в `expirationDate` даёт
+  `BY.NBRB.Field.Invalid: must match yyyy-MM-dd` с указанием `path`. В коде заголовки записи —
+  отдельная функция `priorWriteHeaders` (запись без ключа идемпотентности не собирается по типам).
+- **Диагностика по отправителю ошибки.** Компактный JSON (`{"code":"400 Bad Request",…`) отдаёт
+  ШЛЮЗ (валидация запроса), JSON с пробелами после двоеточий (`{"code": "403 Forbidden", …`) —
+  БЭКЕНД СПР. Это даёт бесплатный признак: долетел ли запрос до банковской логики или отсечён
+  раньше. Так, `GET /accounts` без согласия отвечает `BY.PRIORBANK.Request.Invalid` («нет
+  `x-accountConsentId`») — ответ бэкенда, то есть подписка на `Open-banking v1.0` в порядке, и
+  403 на соседнем `POST /accountConsents` того же API искать надо не в подписках.
+- **`scope` токена Б**: запрошенный `accounts` выдаётся как `accounts` (плюс WSO2-шный `default`),
+  `accounts consents` — принимается, а `consents`/`openid`/пустой → `invalid_scope`. То есть перебор
+  scope как объяснение отказа на согласии исчерпан.
 - **Выписка `POST /accounts/{id}/statements`**: тело `{ data: { statement: { fromBookingDate,
   toBookingDate } } }`, даты в формате **`yyyy-MM-dd`** (без времени), окно **≤ 3 месяцев** (иначе
   `BY.NBRB.Field.InvalidDate`). Ответ `201` → `data.statement.statementId` → опрос
