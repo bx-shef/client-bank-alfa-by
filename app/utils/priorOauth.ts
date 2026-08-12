@@ -45,6 +45,39 @@ export const CONSENT_PERMISSIONS = [
   'ReadTransactionsCredits', 'ReadTransactionsDebits'
 ] as const
 
+/**
+ * FAPI correlation header. The bank REQUIRES it on every Open Banking resource call and rejects
+ * the request outright without it:
+ *
+ *   400 BY.NBRB.Header.Missing — Required request header 'x-fapi-interaction-id' … is not present
+ *
+ * Measured against the sandbox, 2026-08-12. It is NOT sent on the token endpoint — only on the
+ * `/open-banking/v1.0/…` resource server (consents, accounts, statements, transactions).
+ */
+export const PRIOR_FAPI_INTERACTION_HEADER = 'x-fapi-interaction-id'
+
+/**
+ * Headers for ONE Open Banking resource request. Single choke point on purpose: the resource API
+ * is reached from four separate transports (consent in the connect preamble, plus create/list/poll
+ * in the poller), and a header that has to be remembered in four places is a header that will be
+ * missing from one of them — which is exactly how this surfaced, as an opaque 502 at connect.
+ *
+ * `interactionId` is supplied by the caller (a fresh UUID per request): this module stays
+ * browser-safe and must not reach for `node:crypto`. FAPI expects the server to echo it back, so
+ * it doubles as the correlation id to quote when asking the bank about a specific failure.
+ */
+export function priorResourceHeaders(
+  accessToken: string,
+  interactionId: string,
+  opts: { json?: boolean } = {}
+): Record<string, string> {
+  return {
+    authorization: `Bearer ${accessToken}`,
+    [PRIOR_FAPI_INTERACTION_HEADER]: interactionId,
+    ...(opts.json ? { 'content-type': 'application/json' } : {})
+  }
+}
+
 /** A resource kind — the two async list endpoints share one create+poll shape. */
 export type PriorResourceKind = 'statements' | 'transactions'
 

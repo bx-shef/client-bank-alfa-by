@@ -3,6 +3,8 @@ import {
   PRIOR_API_PREFIXES,
   PRIOR_CLIENT_ASSERTION_TYPE,
   PRIOR_ASSERTION_TTL_SEC,
+  PRIOR_FAPI_INTERACTION_HEADER,
+  priorResourceHeaders,
   CONSENT_PERMISSIONS,
   buildBasicAuthHeader,
   buildClientAssertionClaims,
@@ -353,5 +355,25 @@ describe('async resource paths + poll classification (A5b)', () => {
     expect(classifyPriorPoll({ errors: [{ code: PRIOR_RESOURCE_NOT_CREATED }] })).toEqual({ status: 'pending' })
     expect(classifyPriorPoll({ data: { transaction: [] } })).toEqual({ status: 'ready' })
     expect(classifyPriorPoll({ errors: [{ code: 'BY.NBRB.Field.InvalidDate' }] })).toEqual({ status: 'error', codes: ['BY.NBRB.Field.InvalidDate'] })
+  })
+})
+
+describe('priorResourceHeaders (#461)', () => {
+  it('carries the FAPI interaction header the bank rejects requests without', () => {
+    // 400 BY.NBRB.Header.Missing — измерено на sandbox 2026-08-12. Без него ресурсный API
+    // отказывает ещё до проверки прав, и снаружи это выглядит опаковым 502 на подключении.
+    const h = priorResourceHeaders('tok', 'id-1')
+    expect(h['x-fapi-interaction-id']).toBe('id-1')
+    expect(h.authorization).toBe('Bearer tok')
+  })
+
+  it('adds content-type only for a body-carrying request', () => {
+    expect(priorResourceHeaders('t', 'i')['content-type']).toBeUndefined()
+    expect(priorResourceHeaders('t', 'i', { json: true })['content-type']).toBe('application/json')
+  })
+
+  it('the header name is exactly what the bank asks for', () => {
+    // Регистр и дефисы — как в тексте ошибки банка; опечатка здесь не поймается ничем другим.
+    expect(PRIOR_FAPI_INTERACTION_HEADER).toBe('x-fapi-interaction-id')
   })
 })
