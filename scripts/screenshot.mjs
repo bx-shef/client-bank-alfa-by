@@ -8,12 +8,12 @@
 //
 // The browser is the pre-installed Chromium in this environment
 // (PLAYWRIGHT_BROWSERS_PATH); no `playwright install` is needed here.
-import { createServer } from 'node:http'
-import { readFile, mkdir, stat } from 'node:fs/promises'
-import { join, extname, normalize, sep } from 'node:path'
+import { mkdir, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { resolveChromium } from './lib/chromium.mjs'
+import { startStaticServer } from './lib/staticServer.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PUBLIC_DIR = join(ROOT, '.output', 'public')
@@ -26,61 +26,19 @@ const VIEWPORTS = [
 ]
 const THEMES = /** @type {const} */ (['light', 'dark'])
 
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
-  '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
-  '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2'
-}
-
 async function ensurePublic() {
   try {
     await stat(PUBLIC_DIR)
   } catch {
-    console.error('✖ .output/public not found — run `pnpm generate` first.')
+    console.error('\u2716 .output/public not found \u2014 run `pnpm generate` first.')
     process.exit(1)
   }
-}
-
-// Minimal static file server for the SSG output (no extra deps).
-function startServer() {
-  const server = createServer(async (req, res) => {
-    try {
-      const urlPath = decodeURIComponent((req.url || '/').split('?')[0])
-      let filePath = join(PUBLIC_DIR, normalize(urlPath))
-      // Defence-in-depth: never serve outside PUBLIC_DIR even if the path
-      // contains `../` traversal (the server is local-only, but keep it tight).
-      if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + sep)) {
-        res.writeHead(403)
-        res.end('Forbidden')
-        return
-      }
-      if ((await stat(filePath).catch(() => null))?.isDirectory()) {
-        filePath = join(filePath, 'index.html')
-      }
-      const body = await readFile(filePath)
-      res.writeHead(200, { 'content-type': MIME[extname(filePath)] || 'application/octet-stream' })
-      res.end(body)
-    } catch {
-      res.writeHead(404)
-      res.end('Not found')
-    }
-  })
-  return new Promise((resolve, reject) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address()
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('Could not determine server port'))
-        return
-      }
-      resolve({ server, port: addr.port })
-    })
-  })
 }
 
 async function run() {
   await ensurePublic()
   await mkdir(OUT_DIR, { recursive: true })
-  const { server, port } = await startServer()
+  const { server, port } = await startStaticServer(PUBLIC_DIR)
   const browser = await chromium.launch({ executablePath: await resolveChromium() })
 
   try {
