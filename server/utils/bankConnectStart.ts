@@ -22,7 +22,7 @@
 
 import { buildAuthorizeUrl, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { signConnectState, type BankConnectState } from './bankConnectState'
-import { sanitizeForLog } from './logSanitize'
+import { describeUpstreamError } from './logSanitize'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -173,7 +173,10 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     } catch (e) {
       // Log SANITIZED (CRLF-stripped, capped) so the four preamble steps stay distinguishable in
       // the logs — the admin still gets one opaque message (no bank-controlled text reaches them).
-      deps.log?.(`[bank-connect] prior preamble failed: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
+      // The bank's error ENVELOPE is included (`describeUpstreamError`): its status line alone is
+      // the same "400 Bad Request" for a missing FAPI header, a rejected consent field and an
+      // expired token, so without the body the log cannot tell an operator which one happened.
+      deps.log?.(`[bank-connect] prior preamble failed: ${describeUpstreamError(e)}`)
       return { status: 502, body: { error: 'bank did not grant consent (connect preamble failed)' } }
     }
   }
