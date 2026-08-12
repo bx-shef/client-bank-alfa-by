@@ -46,12 +46,17 @@ RUN grep -oE '<meta[^>]*property="og:image"[^>]*>' .output/public/index.html \
 # Список страниц берётся из `.output/service-routes.txt`, который пишет тот же генератор из
 # `app/config/routes.ts` — хардкод здесь был бы третьей копией и молча не проверял бы новую страницу.
 # Атрибуты матчим независимо от порядка: unhead их не сортирует и добавляет свои data-*.
+# `; :` в конце тела цикла — потому что последняя команда `grep -q og:title` на УСПЕШНОМ пути
+# возвращает 1 и уронила бы слой. Маскировать весь цикл (`done …; true`) нельзя: тогда пропажа
+# самого `service-routes.txt` превратила бы гард в тихий no-op — отсюда явная проверка файла.
+RUN test -s .output/service-routes.txt \
+      || { echo 'SEO: service-routes.txt не сгенерирован — гард служебных страниц не работает'; exit 1; }
 RUN while read -r r; do p="${r#/}"; [ -n "$p" ] || continue; \
       grep -qE '<meta[^>]*name="robots"[^>]*content="[^"]*noindex' ".output/public/$p/index.html" \
         || { echo "SEO: /$p не закрыт noindex — служебная страница уйдёт в индекс"; exit 1; }; \
       grep -q 'og:title' ".output/public/$p/index.html" \
         && { echo "SEO: /$p несёт og:title — мета лендинга протекла на служебную страницу"; exit 1; }; \
-      done < .output/service-routes.txt; true
+      :; done < .output/service-routes.txt
 # JSON-LD должен быть РАЗБИРАЕМЫМ: битая структурированная разметка не «частично работает», её
 # просто игнорируют — и мы об этом никогда не узнаем. Проверяем разбором, а не грепом.
 RUN node -e "const fs=require('fs');const h=fs.readFileSync('.output/public/index.html','utf8');const m=h.match(/<script type=\"application\/ld\+json\"[^>]*>([\s\S]*?)<\/script>/);if(!m){console.error('SEO: на главной нет JSON-LD');process.exit(1)}const d=JSON.parse(m[1]);if(d['@type']!=='SoftwareApplication'){console.error('SEO: неожиданный @type '+d['@type']);process.exit(1)}"
@@ -84,6 +89,8 @@ ARG NUXT_PUBLIC_AUTHOR_URL
 ENV NUXT_PUBLIC_AUTHOR_URL=$NUXT_PUBLIC_AUTHOR_URL
 ARG NUXT_PUBLIC_COMMIT_SHA
 ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
+ARG NUXT_PUBLIC_BUILD_DATE
+ENV NUXT_PUBLIC_BUILD_DATE=$NUXT_PUBLIC_BUILD_DATE
 RUN pnpm build
 
 FROM node:22-alpine AS backend
