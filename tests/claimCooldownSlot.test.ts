@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // down, 429). A wrong flag or wrong-sign mapping would silently disable the cooldown → a portal
 // admin could outrun the bank rate. Mock bullmq's Queue so no real Redis is needed (mirrors
 // tests/pingRedis.test.ts). connectionOptions() reads REDIS_URL (no real connection).
+// ⚠ Форма мока повторяет bullmq 6: сырой клиент отдаёт `getBackend()`, а не `Queue#client`.
 process.env.REDIS_URL = 'redis://localhost:6379'
 
 let setArgs: unknown[] = []
@@ -12,13 +13,15 @@ let setReturn: unknown = 'OK'
 
 vi.mock('bullmq', () => ({
   Queue: class {
-    get client(): Promise<{ set: (...args: unknown[]) => Promise<unknown> }> {
-      return Promise.resolve({
-        set: (...args: unknown[]) => {
-          setArgs = args
-          return Promise.resolve(setReturn)
-        }
-      })
+    getBackend(): { client: Promise<{ set: (...args: unknown[]) => Promise<unknown> }> } {
+      return {
+        client: Promise.resolve({
+          set: (...args: unknown[]) => {
+            setArgs = args
+            return Promise.resolve(setReturn)
+          }
+        })
+      }
     }
 
     async close(): Promise<void> {}

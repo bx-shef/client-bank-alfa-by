@@ -254,9 +254,9 @@ async function runInstall() {
 onMounted(runInstall)
 </script>
 
+<!-- Установка возможна только внутри портала (#414) — снаружи страница показывает общую
+     заглушку вместо фальшивого прогресса и редиректа. -->
 <template>
-  <!-- Установка возможна только внутри портала (#414) — снаружи страница показывает общую
-       заглушку вместо фальшивого прогресса и редиректа. -->
   <InPortalGate>
     <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
       <div class="flex w-full max-w-2xl flex-col items-center gap-4">

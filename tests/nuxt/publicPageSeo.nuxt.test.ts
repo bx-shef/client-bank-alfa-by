@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { defineComponent, h } from 'vue'
 import { injectHead } from '#imports'
+// `@unhead/vue` объявлен devDependency ровно ради этого импорта: пакет и так приезжает с Nuxt,
+// но без явной строки в package.json TypeScript его не резолвит.
+import { renderSSRHead } from '@unhead/vue/server'
 import { LANDING_PUBLISHER, LANDING_SITE_URL } from '~/utils/seo'
 
 // Композабл — самый заметный артефакт SEO-фичи (#425) и при этом единственное место, где набор
@@ -9,8 +12,9 @@ import { LANDING_PUBLISHER, LANDING_SITE_URL } from '~/utils/seo'
 // «правильно ли им воспользовались» до этого не проверял никто: можно было поменять местами
 // title и description или вовсе снести twitter-набор при зелёных тестах.
 
-/** Собранные теги — из самого unhead, а не из `document.head`: в тестовой среде DOM-плагин голову
- *  не наполняет, и проверка молча смотрела бы в пустоту. */
+/** Собранные теги — рендером самого unhead, а не из `document.head`: в тестовой среде DOM-плагин
+ *  голову не наполняет, и проверка молча смотрела бы в пустоту. Именно рендером, а не обходом
+ *  внутренних структур: `resolveTags()` убрали в Nuxt 4.5, и тест сломался бы на минорном апгрейде. */
 async function mountWithSeo(opts: Parameters<typeof usePublicPageSeo>[0]) {
   let head: ReturnType<typeof injectHead>
   const Page = defineComponent({
@@ -21,11 +25,8 @@ async function mountWithSeo(opts: Parameters<typeof usePublicPageSeo>[0]) {
     }
   })
   await mountSuspended(Page)
-  const tags = await head!.resolveTags()
-  return tags.map((t) => {
-    const attrs = Object.entries(t.props).map(([k, v]) => `${k}="${String(v)}"`).join(' ')
-    return `<${t.tag} ${attrs}>${t.innerHTML ?? ''}</${t.tag}>`
-  }).join('\n')
+  const { headTags } = await renderSSRHead(head!)
+  return headTags
 }
 
 const base = {

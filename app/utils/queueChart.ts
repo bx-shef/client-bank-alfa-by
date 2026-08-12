@@ -1,7 +1,7 @@
 // Pure data-shaping for the queue monitor chart (app/components/QueueMonitor.vue).
 // GET /api/ops/queues (the operator monitor source; same shape as /api/queues)
 // returns only a CURRENT snapshot per queue (getJobCounts: waiting/active/completed/
-// failed/delayed/paused) — no history/rates like the RabbitMQ example. So the live
+// failed/delayed) — no history/rates like the RabbitMQ example. So the live
 // time-series is built client-side: each poll appends
 // one point per queue to a sliding window. This module holds that logic (no DOM,
 // no ECharts) so it is unit-testable; the component only renders. See docs/QUEUES.md.
@@ -13,7 +13,6 @@ export interface QueueCounts {
   completed: number
   failed: number
   delayed: number
-  paused: number
 }
 
 /** The queue-counts response (GET /api/ops/queues; same shape as /api/queues).
