@@ -10,10 +10,12 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/visual',
   outputDir: './tests/visual/.artifacts',
-  // `{platform}` в имени — обязателен: растеризация шрифтов идёт через системный слой (FreeType /
-  // DirectWrite / CoreText), поэтому одинаковая сборка Chromium НЕ означает одинаковые пиксели.
-  // Без разделения по платформе `--update-snapshots` на macOS молча перезаписал бы линуксовые
-  // эталоны своим рендером — и в PR прилетела бы пачка бинарных blob'ов «ни о чём».
+  // `{platform}` в имени: растеризация шрифтов идёт через системный слой (FreeType / DirectWrite /
+  // CoreText), поэтому одинаковая сборка Chromium не гарантирует одинаковые пиксели на разных ОС.
+  // Без разделения `--update-snapshots` на macOS перезаписал бы линуксовые эталоны своим рендером,
+  // и в PR прилетела бы пачка бинарных blob'ов «ни о чём». ⚠ Linux-песочница и linux-раннер, как
+  // выяснилось, сходятся почти байт-в-байт: межплатформенное разделение здесь страховка, а не
+  // ответ на измеренную проблему — той оказалась подгрузка внешнего iframe, а не шрифты.
   snapshotPathTemplate: '{testDir}/__screenshots__/{platform}/{arg}{ext}',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
