@@ -28,13 +28,13 @@
  * TS-модуль грузится нативным strip-types Node; `~/`-алиас и безрасширенные импорты чинит
  * `scripts/lib/alias-loader.mjs` — тот же приём, что у остальных дев-скриптов проекта.
  */
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-const { crawlerFiles } = await import(pathToFileURL(join(here, '..', 'app', 'utils', 'seo.ts')).href)
+const { crawlerFiles, injectNoindex } = await import(pathToFileURL(join(here, '..', 'app', 'utils', 'seo.ts')).href)
 const { SERVICE_ROUTES } = await import(pathToFileURL(join(here, '..', 'app', 'config', 'routes.ts')).href)
 
 const [outDirArg, lastmodArg] = process.argv.slice(2)
@@ -52,5 +52,12 @@ writeFileSync(join(outDir, 'sitemap.xml'), sitemap, 'utf8')
 // завести ТРЕТЬЮ копию знания рядом с `routes.ts` и тестом: добавили страницу — тест зелёный,
 // а артефакт-гард её молча не проверяет. Файл технический, в образ не попадает.
 writeFileSync(join(outDir, '..', 'service-routes.txt'), `${SERVICE_ROUTES.join('\n')}\n`, 'utf8')
+
+// `404.html` — SPA-оболочка от `nuxt generate`: браузер дорисует `app/error.vue` при гидрации, но
+// краулер видит голый документ без мета-тегов. `noindex` вписываем в артефакт (см. `injectNoindex`).
+const notFound = join(outDir, '404.html')
+if (existsSync(notFound)) {
+  writeFileSync(notFound, injectNoindex(readFileSync(notFound, 'utf8')), 'utf8')
+}
 
 console.info('[seo] robots.txt + sitemap.xml written to %s%s', outDir, lastmod ? ` (lastmod ${lastmod})` : ' (без lastmod)')

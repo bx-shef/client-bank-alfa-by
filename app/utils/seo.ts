@@ -150,3 +150,26 @@ export function buildSitemapXml(raw?: string | null, lastmod?: string | null): s
 export function crawlerFiles(raw?: string | null, lastmod?: string | null): { robots: string, sitemap: string } {
   return { robots: buildRobotsTxt(raw), sitemap: buildSitemapXml(raw, lastmod) }
 }
+
+/** Мета-тег, закрывающий документ от индексации. Один литерал на весь проект — гарды сборки грепают
+ *  ровно его. */
+export const NOINDEX_META = '<meta name="robots" content="noindex, nofollow">'
+
+/**
+ * Вписать `noindex` в готовый HTML.
+ *
+ * Нужно ровно для `404.html`: `nuxt generate` кладёт туда SPA-оболочку, а не отрендеренный
+ * `app/error.vue`, поэтому `useHead` из компонента срабатывает **только после гидрации** — краулер,
+ * который HTML не исполняет, видит документ без единого мета-тега. Статус 404 от nginx индексацию и
+ * так запрещает, но документ доступен и по прямой ссылке (`/404.html` отдаётся `internal`, однако
+ * ссылка на него может утечь из логов/зеркал), поэтому тег ставим в сам артефакт.
+ *
+ * Идемпотентно: если тег уже есть (Nuxt научился рендерить страницу ошибки), HTML не трогаем.
+ */
+export function injectNoindex(html: string): string {
+  if (/<meta[^>]*name="robots"[^>]*>/i.test(html)) return html
+  const head = html.match(/<head[^>]*>/i)
+  if (!head) return html
+  const at = html.indexOf(head[0]) + head[0].length
+  return html.slice(0, at) + NOINDEX_META + html.slice(at)
+}

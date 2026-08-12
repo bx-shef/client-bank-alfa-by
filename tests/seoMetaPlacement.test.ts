@@ -152,6 +152,71 @@ describe('генератор краулерных файлов', () => {
   })
 })
 
+describe('codeOnly — вспомогательный стриппер этого теста', () => {
+  // Он уже один раз соврал (съел настоящую мету на `install.vue`), поэтому у него есть свои тесты:
+  // ложное падение тут дороже, чем кажется — оно учит игнорировать красный SEO-тест.
+  it('снимает строчный комментарий, даже если внутри него есть `/*`', () => {
+    expect(codeOnly("// путь `/api/*`\nconst a = 1\n")).toContain('const a = 1')
+  })
+
+  it('снимает блочный комментарий и HTML-комментарий', () => {
+    expect(codeOnly('/* og:title */const a = 1')).toBe('const a = 1')
+    expect(codeOnly('<!-- og:title -->\n<div/>')).toContain('<div/>')
+  })
+
+  it('не съедает код, идущий ПОСЛЕ комментариев', () => {
+    expect(codeOnly("// c\n/* c */\nname: 'robots'")).toContain("name: 'robots'")
+  })
+})
+
+describe('страница ошибки', () => {
+  // `app/error.vue` не лежит в `app/pages`, поэтому инвариант «публичная либо служебная» её не
+  // видит: мету туда можно занести, а `noindex` — вынести, и всё останется зелёным.
+  const code = codeOnly(readFileSync(`${root}app/error.vue`, 'utf8'))
+
+  it('несёт robots: noindex', () => {
+    expect(code).toMatch(/name:\s*'robots'[\s\S]{0,80}content:\s*'[^']*(noindex|none)/)
+  })
+
+  it('не задаёт соц-мету — это была бы копия лендинга на каждой опечатке в адресе', () => {
+    expect(code).not.toMatch(/use(Server)?SeoMeta|usePublicPageSeo/)
+    expect(code).not.toMatch(/og:(title|description|image)/)
+  })
+
+  it('noindex вписывается и в САМ артефакт `404.html`', () => {
+    // `nuxt generate` кладёт туда SPA-оболочку: `useHead` из `error.vue` отработает только после
+    // гидрации, а краулер HTML не исполняет. Поэтому тег ставит генератор — см. `injectNoindex`.
+    const src = readFileSync(`${root}scripts/seo-files.mjs`, 'utf8')
+    expect(src).toContain('injectNoindex')
+    expect(src).toContain('404.html')
+  })
+})
+
+describe('nginx: контракт SEO-поведения', () => {
+  const conf = readFileSync(`${root}nginx.conf`, 'utf8')
+
+  it('несуществующий адрес отдаёт 404, а не лендинг с кодом 200 (soft-404)', () => {
+    expect(conf).not.toMatch(/try_files[^;]*\/index\.html/)
+    expect(conf).toMatch(/try_files\s+\$uri\s+\$uri\/\s+=404/)
+  })
+
+  it('403 обрабатывается вместе с 404 — каталоги без index.html иначе отдают голый 403', () => {
+    expect(conf).toMatch(/error_page\s+403\s+404\s+\/404\.html/)
+  })
+
+  it('`200.html` закрыт `internal` — снаружи это дубль лендинга с кодом 200', () => {
+    expect(conf).toMatch(/location\s*=\s*\/200\.html\s*\{[^}]*internal/)
+  })
+})
+
+describe('nuxt.config: списком маршрутов реально пользуются', () => {
+  it('пререндер берёт PRERENDER_ROUTES, а не свой хардкод', () => {
+    // Иначе тест состава списка зелёный, а страница просто не попала в статику.
+    const code = codeOnly(readFileSync(`${root}nuxt.config.ts`, 'utf8'))
+    expect(code).toMatch(/routes:\s*(\[\s*\.\.\.)?PRERENDER_ROUTES/)
+  })
+})
+
 describe('публичные файлы вне app/pages', () => {
   it('public/b24-form.html закрыт noindex — гарды его не видят, тег стоит руками', () => {
     const html = readFileSync(`${root}public/b24-form.html`, 'utf8')

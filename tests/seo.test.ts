@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DISALLOWED_PATHS, LANDING_PUBLISHER, LANDING_SITE_URL,
   buildRobotsTxt, buildSitemapXml, canonicalUrl, crawlerFiles,
-  isCalendarDate, ogImageUrl, siteBaseUrl, xmlEscape
+  injectNoindex, isCalendarDate, NOINDEX_META, ogImageUrl, siteBaseUrl, xmlEscape
 } from '~/utils/seo'
 import { PUBLIC_ROUTES, SERVICE_ROUTES, absoluteUrl } from '~/config/routes'
 import { LANDING_META_DESCRIPTION, LANDING_TITLE } from '~/utils/landing'
@@ -201,5 +201,34 @@ describe('ldJson', () => {
     expect(out).not.toContain('</script')
     expect(out).toContain('\\u003c')
     expect(JSON.parse(out).name).toBe('x</script><img src=x onerror=alert(1)>') // JSON не испорчен
+  })
+})
+
+describe('injectNoindex — `404.html` от `nuxt generate`', () => {
+  // Оболочка SPA приходит без единого мета-тега: `useHead` из `app/error.vue` отрабатывает только
+  // после гидрации, а краулер HTML не исполняет. Тег обязан быть в самом артефакте.
+  it('вписывает тег сразу после <head>', () => {
+    const out = injectNoindex('<html><head><title>x</title></head><body></body></html>')
+    expect(out).toContain(`<head>${NOINDEX_META}<title>`)
+  })
+
+  it('идемпотентен — уже закрытый документ не трогает', () => {
+    const html = `<html><head>${NOINDEX_META}</head></html>`
+    expect(injectNoindex(html)).toBe(html)
+  })
+
+  it('не дублирует тег при ЛЮБОЙ уже существующей мете robots (в т.ч. `none`)', () => {
+    const html = '<html><head><meta name="robots" content="none"></head></html>'
+    expect(injectNoindex(html)).toBe(html)
+  })
+
+  it('без <head> возвращает документ как есть, а не рвёт разметку', () => {
+    expect(injectNoindex('<p>нет головы</p>')).toBe('<p>нет головы</p>')
+  })
+
+  it('переживает <head> с атрибутами', () => {
+    expect(injectNoindex('<head lang="ru"><title>x</title></head>')).toContain(
+      `<head lang="ru">${NOINDEX_META}`
+    )
   })
 })
