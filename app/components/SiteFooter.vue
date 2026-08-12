@@ -37,7 +37,9 @@ const shaHref = computed(() => commitUrl(commitSha as string))
 <template>
   <div class="flex flex-col gap-2 text-xs text-white/55">
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-      <span>© {{ new Date().getFullYear() }} {{ legal.short }}</span>
+      <!-- `data-testid` — якорь для маски визуальных регресс-тестов (#3): год берётся из системных
+           часов, то есть 1 января все снимки лендинга покраснели бы по календарной причине. -->
+      <span data-testid="footer-year">© {{ new Date().getFullYear() }} {{ legal.short }}</span>
       <span class="font-mono">{{ legal.unp }}</span>
       <span>{{ legal.city }}</span>
     </div>

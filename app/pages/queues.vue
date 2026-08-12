@@ -56,7 +56,20 @@ function liveFetcher(): Promise<QueuesSnapshot> {
 const state: Record<string, QueueCounts> = {}
 for (const q of QUEUE_META) state[q.name] = { waiting: 2, active: 0, completed: 0, failed: 0, delayed: 0 }
 
-const rnd = (n: number) => Math.floor(Math.random() * (n + 1))
+// ⚠ ДЕТЕРМИНИРОВАННЫЙ псевдослучайный генератор, а не `Math.random()`. Превью — это ещё и то,
+// что снимают визуальные регресс-тесты (#3): со стенным рандомом таблица очередей и заголовок
+// «сейчас в очереди N» менялись бы в каждом прогоне, то есть эталон был бы либо мигающим, либо
+// зелёным лишь потому, что расхождение укладывается в допуск. Seed фиксирован — превью выглядит
+// «живым» (счётчики дрейфуют от тика к тику), но одинаково от запуска к запуску.
+let seed = 0x2f6e2b1
+function nextRandom(): number {
+  // xorshift32 — три строки, без зависимостей, период с запасом для десятка тиков.
+  seed ^= seed << 13
+  seed ^= seed >>> 17
+  seed ^= seed << 5
+  return (seed >>> 0) / 0x1_0000_0000
+}
+const rnd = (n: number) => Math.floor(nextRandom() * (n + 1))
 
 /** Превью-загрузчик (только `?preview=1`): синтетика в браузере — двигает счётчики
  * (waiting дрейфует, часть уходит в active → completed, изредка failed), форма как у
@@ -69,7 +82,7 @@ function previewFetcher(): Promise<QueuesSnapshot> {
     s.waiting = Math.max(0, s.waiting + arrived - capacity)
     s.active = capacity
     s.completed += capacity
-    if (Math.random() < 0.06) s.failed += 1
+    if (nextRandom() < 0.06) s.failed += 1
   }
   return Promise.resolve({ enabled: true, queues: structuredClone(state) })
 }
