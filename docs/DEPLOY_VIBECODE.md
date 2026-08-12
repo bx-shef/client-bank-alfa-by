@@ -1,6 +1,6 @@
 # Деплой в Битрикс24 Вайбкод Black Hole (альтернативный таргет)
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-12
 
 Как выгрузить это приложение в **Битрикс24 Vibecode Black Hole** — закрытый Bitrix-Cloud VM,
 управляемый по REST (без SSH), приложение слушает `:3000` и отдаётся по HTTPS
@@ -198,6 +198,12 @@ redirect на `appUrl`, вебхук на `appUrl/api/b24/events` → переу
 - **Компромисс для нас**: stateful (pg+redis) → выделенный Black Hole VM (БД ставим сами, плотности
   Галактик нет); active.by-класс VPS дешевле и без вайб-биллинга; оплата — ₽ через РФ-контур, не BYN.
 - Полноценный паритет с nginx-деплоем (CSP/rate-limit) — follow-up (см. выше).
+- **SEO-обвязка (#425) сюда не доезжает, и это ожидаемо.** `robots.txt`/`sitemap.xml` пишет
+  `pnpm seo:files`, который висит на `generate`, а Black Hole собирает `pnpm build` — файлов не будет.
+  Гард soft-404 (`try_files … =404`, `error_page 403 404 /404.html`) живёт в `nginx.conf`, которого
+  здесь нет вовсе: фолбэком заведует Nitro. От дубля в выдаче страхует не robots, а `canonical` и
+  `og:url` — они прод-овые в любой сборке (база — константа `LANDING_SITE_URL`, не env). Чек-лист
+  `docs/SEO.md` к этому таргету не применяется.
 
 ## Compose-режим (запасной)
 
