@@ -78,17 +78,31 @@ jobs:
 
   docker-build:
     name: docker-build
-    # Validate BOTH production images build on every PR: the nginx static landing
-    # (`runner`) and the Nitro node backend (`backend`). Catches Dockerfile /
-    # base-image breakage before it reaches main and the GHCR deploy. No push.
+    # Validate ALL production images build on every PR: the nginx static landing
+    # (`runner`), the Nitro node backend (`backend`) and the BY-crypto gateway
+    # (`crypto-gw`). Catches Dockerfile / base-image breakage before it reaches main
+    # and the GHCR deploy. No push.
     # Runs on Dependabot PRs too — that is exactly where a node bump would surface.
+    #
+    # `crypto-gw` lives in its own context (deploy/crypto-gateway) because it shares
+    # nothing with the node image — different base, different toolchain. Its build
+    # compiles OpenSSL and nginx from source, so the FIRST run is slow (hence the
+    # timeout below); afterwards the gha cache makes it a no-op unless that directory
+    # actually changed. Its build gates are the point: they fail the PR when the BTLS
+    # patch stops applying or the CA bundle stops verifying the bank's certificate.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     strategy:
       matrix:
-        target: [runner, backend]
+        include:
+          - target: runner
+            context: .
+          - target: backend
+            context: .
+          - target: crypto-gw
+            context: deploy/crypto-gateway
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -99,22 +113,27 @@ jobs:
       - name: Build image (no push)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: .
+          context: ${{ matrix.context }}
           target: ${{ matrix.target }}
           push: false
           cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
 
   deploy:
     name: Build & Push to GHCR
     needs: ci
     # Gate the deploy on CI: a red CI blocks images from ever reaching GHCR /
     # Watchtower. Only the main branch deploys (via a push or a manual
-    # workflow_dispatch redeploy). Publishes two images:
-    #   runner  → ghcr.io/<repo>           (nginx static landing + B24-iframe UI)
-    #   backend → ghcr.io/<repo>-backend   (Nitro node: B24 webhooks + token store)
+    # workflow_dispatch redeploy). Publishes three images:
+    #   runner    → ghcr.io/<repo>             (nginx static landing + B24-iframe UI)
+    #   backend   → ghcr.io/<repo>-backend     (Nitro node: B24 webhooks + token store)
+    #   crypto-gw → ghcr.io/<repo>-crypto-gw   (BY-crypto TLS gateway to Priorbank prod)
+    # The gateway is published so the deploy server never has to compile OpenSSL —
+    # it is pulled like the other two, and the compose service is commented out until
+    # someone deliberately enables it (docker-compose.prod.yml, `crypto-gw`).
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     permissions:
       contents: read
@@ -125,8 +144,13 @@ jobs:
         include:
           - target: runner
             suffix: ''
+            context: .
           - target: backend
             suffix: '-backend'
+            context: .
+          - target: crypto-gw
+            suffix: '-crypto-gw'
+            context: deploy/crypto-gateway
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -153,7 +177,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: .
+          context: ${{ matrix.context }}
           target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}

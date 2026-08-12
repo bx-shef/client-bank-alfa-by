@@ -1,0 +1,130 @@
+# Crypto gateway (#460) — plain HTTP in, STB 34.101.65 (BTLS) out.
+#
+# Rendered by entrypoint.sh through `envsubst` with an EXPLICIT variable allowlist, so
+# nginx's own `$status`/`$upstream_status`/... survive the substitution untouched.
+#
+# ⚠ Everything here is a CLIENT-side TLS config (`proxy_ssl_*`). The gateway terminates
+# NO TLS of its own: it must never be published to the host, only attached to an
+# internal compose network. See README.md § "Граница доверия".
+
+worker_processes 1;
+daemon off;
+error_log stderr ${GW_ERROR_LOG_LEVEL};
+pid /tmp/crypto-gw.pid;
+
+events {
+    worker_connections 256;
+}
+
+http {
+    default_type application/octet-stream;
+
+    # NO $request / $uri / $args ANYWHERE IN THE LOG LINE. The resource path carries the
+    # account number (/open-banking/v1.0/accounts/<IBAN>/statements) — a financial
+    # identifier we are not entitled to scatter into log aggregation. $gw_route names
+    # which allowlisted branch handled the call, which is all the routing detail an
+    # operator actually needs.
+    log_format gw '$time_iso8601 route=$gw_route method=$request_method '
+                  'status=$status upstream=$upstream_status bytes=$body_bytes_sent '
+                  'rt=$request_time urt=$upstream_response_time';
+    access_log /dev/stdout gw;
+
+    # Sized for a background poll, not for a crowd. All traffic arrives from our own
+    # backend/worker containers, so this exists to bound damage (and to protect the
+    # bank's request budget), not to shape real load.
+    limit_req_zone $binary_remote_addr zone=gw:1m rate=${GW_RATE}r/s;
+    limit_req_status 429;
+
+    upstream bank {
+        server ${GW_UPSTREAM_HOST}:${GW_UPSTREAM_PORT};
+        # THE reason nginx was chosen over a TCP tunnel: a BIGN handshake is expensive,
+        # and one poll of one account is ~10 HTTP requests. Keeping the upstream session
+        # alive collapses those onto a single TLS handshake.
+        keepalive ${GW_KEEPALIVE};
+        keepalive_timeout 60s;
+        keepalive_requests 100;
+    }
+
+    server {
+        listen ${GW_LISTEN};
+        server_name _;
+
+        # Consent/statement request bodies are small JSON documents.
+        client_max_body_size 64k;
+        client_body_buffer_size 64k;
+
+        # ---- upstream TLS: this is the whole point of the image -------------------
+        proxy_ssl_protocols TLSv1.2;
+        # DHE FIRST, DHT SECOND, deliberately. Both are STB 34.101.65, but DHT-BIGN is
+        # key TRANSPORT — the premaster is encrypted to the server's long-term key, so a
+        # future compromise of that key decrypts recorded sessions. DHE-BIGN is
+        # ephemeral and has forward secrecy. The client's order decides which one the
+        # bank gets to pick, so it has to be ours, not the default.
+        proxy_ssl_ciphers DHE-BIGN-WITH-BELT-CTR-MAC-HBELT:DHE-BIGN-WITH-BELT-DWP-HBELT:DHT-BIGN-WITH-BELT-CTR-MAC-HBELT:DHT-BIGN-WITH-BELT-DWP-HBELT;
+
+        # Chain AND hostname in one directive. Without `proxy_ssl_verify on` the channel
+        # is encrypted but the peer is unproven, which is not what a payments path needs.
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+        proxy_ssl_trusted_certificate ${GW_CA_BUNDLE};
+        proxy_ssl_server_name on;
+        proxy_ssl_name ${GW_UPSTREAM_HOST};
+        proxy_ssl_session_reuse on;
+
+        # ---- request shaping ------------------------------------------------------
+        proxy_http_version 1.1;
+        # The Host the BANK must see. A TCP tunnel cannot do this — it would forward
+        # `Host: crypto-gw:1080` and the bank's API gateway would reject the call.
+        proxy_set_header Host ${GW_UPSTREAM_HOST};
+        # Empty Connection is required for upstream keepalive to engage at all.
+        proxy_set_header Connection "";
+        # Our internal topology is not the bank's business, and these headers would
+        # leak container names / private addresses into a third party's logs.
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+
+        proxy_connect_timeout ${GW_CONNECT_TIMEOUT};
+        proxy_send_timeout ${GW_READ_TIMEOUT};
+        proxy_read_timeout ${GW_READ_TIMEOUT};
+
+        proxy_buffering on;
+        proxy_buffers 16 32k;
+        proxy_busy_buffers_size 64k;
+
+        # ---- routes ---------------------------------------------------------------
+        # Container-local liveness. Must not touch DNS or the bank: a healthcheck that
+        # depends on the upstream turns a bank outage into a restart loop.
+        location = /healthz {
+            access_log off;
+            add_header Content-Type text/plain always;
+            return 200 "ok\n";
+        }
+
+        # POST /open-banking-authorize/v1.0/oauth2/token — client_credentials,
+        # authorization_code, refresh_token and private_key_jwt all land here.
+        location = /open-banking-authorize/v1.0/oauth2/token {
+            set $gw_route token;
+            limit_except POST { deny all; }
+            limit_req zone=gw burst=${GW_BURST} nodelay;
+            proxy_pass https://bank;
+        }
+
+        # /open-banking/v1.0/… — consents, account list, statement/transaction create
+        # (POST) and poll (GET).
+        location /open-banking/v1.0/ {
+            set $gw_route ob;
+            limit_except GET POST { deny all; }
+            limit_req zone=gw burst=${GW_BURST} nodelay;
+            proxy_pass https://bank;
+        }
+
+        # Everything else is refused HERE rather than relayed. An open relay to a bank
+        # is worth more to an attacker than anything else on this network.
+        location / {
+            set $gw_route none;
+            access_log off;
+            return 404;
+        }
+    }
+}
