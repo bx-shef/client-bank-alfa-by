@@ -31,9 +31,9 @@ concurrency:
 permissions:
   contents: read
 
-# CI never takes screenshots, so don't let the `playwright` devDependency pull a
-# browser during install. Visual verification uses the pre-installed Chromium in
-# the dev/web environment (see docs/VISUAL_VERIFICATION.md).
+# Don't let the `playwright` devDependency pull a browser during `pnpm install` — the `ci` job
+# doesn't need one. The `visual` job DOES take screenshots and installs the browser explicitly
+# (`playwright install`), which this variable does not affect: it only gates the postinstall hook.
 env:
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
@@ -103,7 +103,23 @@ jobs:
       # Браузер ставим playwright'ом, а не берём системный: эталоны привязаны к КОНКРЕТНОЙ
       # сборке Chromium, которую пинит версия пакета. Возьми мы системный — снимки разъехались бы
       # с эталонами на ровном месте, и тест выродился бы в шум, который все научились игнорировать.
+      # Браузер весит ~170 МБ и качается на КАЖДЫЙ прогон — кэш `setup-node` покрывает только
+      # pnpm-стор. Ключ по версии playwright: обновили пакет — кэш промахнулся, и это правильно,
+      # эталоны всё равно надо переснимать под новый Chromium.
+      - name: Playwright version
+        id: pw
+        run: echo "v=$(node -p "require('./package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache browser
+        id: pw-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.v }}
+
       - name: Install Chromium
+        # `--with-deps` ставит apt-зависимости, которые в кэш не попадают, поэтому шаг идёт всегда;
+        # при попадании в кэш сам браузер уже на месте и скачивание пропускается.
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Build (nuxt generate)

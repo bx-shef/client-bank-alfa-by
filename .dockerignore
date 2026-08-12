@@ -12,5 +12,8 @@ dist
 # Vendored reporting/agent bundle — docs & scripts, not part of the web build
 reporting-kit
 screenshots
+# Эталоны визуальных регресс-тестов — несколько мегабайт PNG, в образе не нужны, а в
+# build-context попадали бы на каждой сборке.
+tests
 telemetry-station
 deploy/
