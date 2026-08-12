@@ -93,6 +93,9 @@ FROM btls AS nginx-build
 
 ARG NGINX_VERSION
 ARG NGINX_SHA256
+# Needed by the gate below, which must assert the version we actually pinned rather than
+# a literal that drifts the moment OPENSSL_TAG is bumped.
+ARG OPENSSL_TAG
 ENV DEBIAN_FRONTEND=noninteractive
 
 # PCRE2 is not optional: `return`/`set` live in the rewrite module, which needs it.
@@ -143,10 +146,14 @@ RUN cd "nginx-${NGINX_VERSION}" && ./configure \
 # Gate 2 — nginx really links OUR OpenSSL. `nginx -V` reporting the version it compiled
 # against is not enough (headers and libs can disagree); check the actual DT_NEEDED
 # resolution instead.
+# The expected version is DERIVED from OPENSSL_TAG (`openssl-3.5.6` → `3.5.6`), not written
+# out. A hardcoded literal here is a gate that silently rots into a false failure on the next
+# bump — which is exactly what happened on the first bump, so it is not hypothetical.
 RUN set -eu; \
-    /opt/nginx/sbin/nginx -V 2>&1 | grep -q 'built with OpenSSL 3.3.1'; \
+    expected="${OPENSSL_TAG#openssl-}"; \
+    /opt/nginx/sbin/nginx -V 2>&1 | grep -q "built with OpenSSL ${expected}"; \
     ldd /opt/nginx/sbin/nginx | grep -E 'libssl|libcrypto' | grep -q '/opt/btls/lib'; \
-    echo 'nginx linked against the patched OpenSSL'
+    echo "nginx linked against the patched OpenSSL ${expected}"
 
 # =================================================================================
 # Stage 3 — runtime. No compiler, no git, no source.
