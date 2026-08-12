@@ -30,7 +30,10 @@ export default defineConfig(async () => ({
           // The `setupNuxt()` beforeAll hook (Nuxt build + env) can exceed the default 10s
           // hookTimeout on a cold/loaded CI runner → intermittent "Hook timed out in 10000ms"
           // (not a logic failure). Give the hook the same generous budget as tests.
-          hookTimeout: 60_000
+          hookTimeout: 60_000,
+          // Мостик `#build/fetch` → `globalThis.$fetch` (см. файл): без него подмена транспорта
+          // в тестах перестала перехватывать вызовы после Nuxt 4.5.
+          setupFiles: ['tests/nuxt/setup/fetch.ts']
         }
       })
     ]

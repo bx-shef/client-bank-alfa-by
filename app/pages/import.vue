@@ -31,9 +31,9 @@ onMounted(async () => {
 })
 </script>
 
+<!-- Только внутри портала (#414): снаружи нет фрейм-токена, значит запись в CRM невозможна, а
+     разбор файла в браузере без неё бессмыслен. -->
 <template>
-  <!-- Только внутри портала (#414): снаружи нет фрейм-токена, значит запись в CRM невозможна, а
-       разбор файла в браузере без неё бессмыслен. -->
   <InPortalGate>
     <main class="mx-auto max-w-5xl px-4 py-6">
       <!-- Back to the in-portal metrics/operations view (#219 follow-up: /import had no way back). -->

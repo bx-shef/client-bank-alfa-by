@@ -81,7 +81,7 @@ async function main() {
 
   const first = series[0]
   const last = series.at(-1)
-  const mem = /used_memory_human:(\S+)/.exec(await qAlfa.client.then(c => c.info('memory')))?.[1]
+  const mem = /used_memory_human:(\S+)/.exec(await qAlfa.getBackend().client.then(c => c.info('memory')))?.[1]
   console.log('\n--- ИТОГ ---')
   console.log(`глубина: ${first} → ${last} (×${(last / first).toFixed(2)}), Redis: ${mem}`)
   if (MODE === 'stable') {

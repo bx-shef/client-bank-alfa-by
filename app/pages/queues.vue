@@ -54,7 +54,7 @@ function liveFetcher(): Promise<QueuesSnapshot> {
 
 // Превью-состояние: у каждой очереди дрейфующие счётчики, чтобы график «жил».
 const state: Record<string, QueueCounts> = {}
-for (const q of QUEUE_META) state[q.name] = { waiting: 2, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 }
+for (const q of QUEUE_META) state[q.name] = { waiting: 2, active: 0, completed: 0, failed: 0, delayed: 0 }
 
 const rnd = (n: number) => Math.floor(Math.random() * (n + 1))
 
