@@ -156,8 +156,17 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   //     gateway with no public authorize origin: the connect flow dies with NO server-side error. ---
   const priorApiBase = (env.PRIOR_OAUTH_API_BASE ?? '').trim()
   const priorTokenUrl = (env.PRIOR_OAUTH_TOKEN_URL ?? '').trim()
-  if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)) {
-    warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL указывают на РАЗНЫЕ адреса — при переводе Приора на крипто-шлюз надо менять обе, иначе обновление токена продолжит ходить на старый хост.')
+  // ⚠ РАЗНЫЕ адреса у этих двух переменных — НЕ ошибка сама по себе: банк разносит API, и
+  // требование BY-крипто `:9345` относится к серверу авторизации (`Open-banking-authorize`), а не
+  // к ресурсному `Open-banking`. Поэтому «токен через шлюз, ресурсы на публичном хосте» —
+  // законная конфигурация, и предупреждать о ней значило бы приучать оператора игнорировать
+  // предупреждения. Опасен ПОЛОВИНЧАТЫЙ переезд: одна переменная внутрь сети, другая осталась
+  // снаружи по недосмотру. Внутренний адрес узнаём тем же способом, что и ниже: пригоден как
+  // backend-origin, но непригоден как публичный.
+  const isInternal = (v: string) => !!normalizeBankApiBase(v) && !normalizeAuthorizeBase(v)
+  if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)
+    && isInternal(priorApiBase) !== isInternal(priorTokenUrl)) {
+    warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL: одна переменная указывает внутрь сети (крипто-шлюз), вторая — наружу. Похоже на незавершённый перевод Приора на шлюз: проверьте, что через шлюз идёт именно то, что должно, а остальное осталось на публичном хосте осознанно.')
   }
   const priorApiBaseOk = !!normalizeBankApiBase(priorApiBase)
   if (priorApiBase && !priorApiBaseOk) {

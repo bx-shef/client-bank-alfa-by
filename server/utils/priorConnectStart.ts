@@ -40,6 +40,20 @@ export interface PriorConnectConfig {
    */
   baseUrl: string
   /**
+   * FULL URL of the token endpoint. Separate from `baseUrl` because the bank splits the two: the
+   * guide (p. 4) and the bank's own reply scope the BY-crypto `:9345` requirement to the
+   * **Open-banking-authorize** API — "для взаимодействия с сервером авторизации" — while the
+   * Open-banking resource API (consents, accounts, statements) is never said to move there.
+   *
+   * ⚠ This used to be derived from `baseUrl`, which silently disagreed with the REFRESH path:
+   * that one has always read `PRIOR_OAUTH_TOKEN_URL` (`priorRefreshAuthFromEnv`). While both env
+   * vars name the same origin nothing breaks — which is exactly why the divergence stayed
+   * invisible. Point the token endpoint at the gateway and leave the resource API on the bank's
+   * public host, and the two call sites would go to DIFFERENT hosts: connect fails, refresh
+   * works. Deriving it here made the variable a lie for half the code.
+   */
+  tokenUrl: string
+  /**
    * Origin the ADMIN'S BROWSER opens for the bank's authorize page — always the bank's public
    * host, never the gateway. ⚠ Pointing this at an internal gateway kills the connect flow with
    * NO server-side error (the server never makes that request). Defaults to `baseUrl` when
@@ -80,6 +94,13 @@ export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
   const authorizeBaseUrl = rawAuthorizeBase
     ? normalizeAuthorizeBase(rawAuthorizeBase)
     : normalizeAuthorizeBase(baseUrl)
+  // Token endpoint: the SAME variable the refresh path reads, so both sites agree. Set but
+  // unusable ⇒ null ⇒ config null ⇒ clean 400, rather than quietly falling back to `baseUrl`: an
+  // explicit value that didn't take is a typo someone needs to see (same rule as authorize base).
+  const rawTokenUrl = process.env.PRIOR_OAUTH_TOKEN_URL?.trim()
+  const tokenUrl = rawTokenUrl
+    ? normalizeBankApiBase(rawTokenUrl)
+    : (baseUrl ? `${baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token` : null)
   const clientId = process.env.PRIOR_OAUTH_CLIENT_ID?.trim()
   const clientSecret = process.env.PRIOR_OAUTH_CLIENT_SECRET?.trim()
   const redirectUri = process.env.PRIOR_OAUTH_REDIRECT_URI?.trim()
@@ -92,9 +113,9 @@ export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
   // gateway and no public origin was configured: that combination CANNOT produce a working
   // authorize URL, so fail closed here rather than emit one the browser can't open (#455).
   const secretRequired = authMethod === 'client_secret_basic'
-  if (!baseUrl || !authorizeBaseUrl || !clientId || !redirectUri || !audience || !privateKeyPem || !kid) return null
+  if (!baseUrl || !tokenUrl || !authorizeBaseUrl || !clientId || !redirectUri || !audience || !privateKeyPem || !kid) return null
   if (secretRequired && !clientSecret) return null
-  return { baseUrl, authorizeBaseUrl, clientId, clientSecret: clientSecret ?? '', redirectUri, audience, authMethod, privateKeyPem, kid }
+  return { baseUrl, tokenUrl, authorizeBaseUrl, clientId, clientSecret: clientSecret ?? '', redirectUri, audience, authMethod, privateKeyPem, kid }
 }
 
 /** Injected side-effects, so the orchestration is testable without network/crypto/clock. */
@@ -139,7 +160,9 @@ export async function buildPriorConnectUrl(
   deps: PriorConnectDeps,
   nowMs: number
 ): Promise<string> {
-  const tokenUrl = `${config.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`
+  // Token endpoint from config (may be a DIFFERENT origin than the resource API — see the field
+  // docs); the consent lives on the Open-banking resource API, hence `baseUrl`.
+  const tokenUrl = config.tokenUrl
   const consentUrl = `${config.baseUrl}${PRIOR_API_PREFIXES.OB}/accountConsents`
 
   // 1) token Б (client_credentials, scope=accounts). Client auth per the configured method —
