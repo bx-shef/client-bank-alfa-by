@@ -53,3 +53,19 @@ updates:
     ignore:
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+
+  # The crypto gateway lives in its own context, and a `directory` entry does NOT recurse —
+  # without this one its Debian base would never get a security bump, in the single image
+  # of the fleet that terminates TLS on a payments path.
+  # ⚠ This covers the base image ONLY. nginx, OpenSSL and the bee2evp commit are pinned in
+  # build ARGs, which Dependabot's docker updater does not read (it looks at FROM lines), so
+  # those three stay a MANUAL job — see deploy/crypto-gateway/README.md § "Пины".
+  - package-ecosystem: docker
+    directory: /deploy/crypto-gateway
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      crypto-gw:
+        patterns:
+          - "*"

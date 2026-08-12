@@ -66,8 +66,13 @@ backend; эндпоинт `/api/queues` наружу закрыт nginx, скр�
 Наружу (за nginx-proxy) смотрит только `app`: nginx отдаёт статику лендинга/UI, а `location /api/`
 проксирует в `backend:3000` по внутренней docker-сети `internal`. Поэтому **одного домена достаточно**:
 `https://<DOMAIN>/` — лендинг/UI, `https://<DOMAIN>/api/b24/events` — обработчик событий Б24
-(без CORS, тот же origin). `backend` и `db` host-портов не публикуют. Образы — два в GHCR
-(`…/client-bank-alfa-by` — nginx-статика, `…/client-bank-alfa-by-backend` — node), оба обновляет Watchtower.
+(без CORS, тот же origin). `backend` и `db` host-портов не публикуют. Образы — **три** в GHCR
+(`…/client-bank-alfa-by` — nginx-статика, `…/client-bank-alfa-by-backend` — node,
+`…/client-bank-alfa-by-crypto-gw` — BY-крипто шлюз к проду Приорбанка), все обновляет Watchtower.
+⚠ Шлюз публикуется, но сервис в compose **закомментирован** — он не поднимается, пока его не
+включат осознанно (порядок — [`deploy/crypto-gateway/README.md`](../deploy/crypto-gateway/README.md)).
+Собирается он из исходников (OpenSSL + nginx), поэтому и публикуется: на прод-сервере компилятора
+быть не должно.
 
 > **Требование к внешнему прокси (для rate-limit логина, #64).** `app` восстанавливает
 > реальный IP клиента из `X-Forwarded-For` (`real_ip`, доверяя приватным диапазонам), и на
@@ -92,8 +97,12 @@ backend; эндпоинт `/api/queues` наружу закрыт nginx, скр�
 
 | Триггер | Что бежит |
 |---|---|
-| Pull request → `main` | `ci` (lint → test → typecheck → generate) + `docker-build` (matrix `runner`+`backend`, сборка обоих образов, **без** push) |
-| Push в `main` | `ci` → `deploy` (matrix: push `runner`→`…/client-bank-alfa-by` и `backend`→`…/client-bank-alfa-by-backend`) |
+| Pull request → `main` | `ci` (lint → test → typecheck → generate) + `docker-build` (matrix `runner`+`backend`+`crypto-gw`, сборка всех трёх образов, **без** push; для `crypto-gw` дополнительно smoke-запуск контейнера) |
+| Push в `main` | `ci` → `deploy` (matrix: push `runner`→`…/client-bank-alfa-by`, `backend`→`…/client-bank-alfa-by-backend`, `crypto-gw`→`…/client-bank-alfa-by-crypto-gw`) |
+
+- Обе матрицы идут с `fail-fast: false`: `crypto-gw` тянет исходники со стороннего репозитория и
+  падает по причинам, не связанным с изменением, — он не должен отменять сборку/публикацию
+  образов самого продукта.
 
 - `deploy` гейтится по зелёному `ci` (`needs: ci`) — красный CI не пускает образы в GHCR.
 - Push в GHCR — встроенным `GITHUB_TOKEN` (`packages: write`), без отдельного секрета.
@@ -154,8 +163,10 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
    подхватит наш контейнер по метке `com.centurylinklabs.watchtower.enable=true`. Поэтому в нашем
    `docker-compose.prod.yml` своего `watchtower` **нет** — второй экземпляр конфликтует по
    `container_name: watchtower` и плодит двойные перезапуски.
-3. **GHCR-пакеты должны быть публичными** — **оба**: `ghcr.io/bx-shef/client-bank-alfa-by` (лендинг)
-   и `ghcr.io/bx-shef/client-bank-alfa-by-backend` (node). Тогда ни серверу, ни Watchtower не нужен
+3. **GHCR-пакеты должны быть публичными** — **все три**: `ghcr.io/bx-shef/client-bank-alfa-by`
+   (лендинг), `ghcr.io/bx-shef/client-bank-alfa-by-backend` (node) и
+   `ghcr.io/bx-shef/client-bank-alfa-by-crypto-gw` (крипто-шлюз; нужен, только если сервис включён —
+   иначе на приватном пакете `docker compose pull` молча не подтянет образ). Тогда ни серверу, ни Watchtower не нужен
    `docker login`. Если приватные — перед `up -d` сделать `docker login ghcr.io` (PAT с
    `read:packages`) и настроить креды Watchtower (см. «Если репозиторий приватный»).
 
