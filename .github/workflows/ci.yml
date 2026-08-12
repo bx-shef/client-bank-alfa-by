@@ -95,6 +95,13 @@ jobs:
     timeout-minutes: 45
 
     strategy:
+      # WITHOUT THIS a failure in one leg cancels the others. The gateway leg clones
+      # bee2evp from GitHub and compiles OpenSSL, so it is the leg most likely to fail
+      # for reasons that have nothing to do with the PR (network, rate limit, upstream
+      # moved). Letting that cancel the `runner`/`backend` builds would break the
+      # assumption docs/REPO_SETUP_CHECKLIST.md relies on — that an image-build failure
+      # is harmless because the other images still build.
+      fail-fast: false
       matrix:
         include:
           - target: runner
@@ -116,8 +123,47 @@ jobs:
           context: ${{ matrix.context }}
           target: ${{ matrix.target }}
           push: false
+          # READ-only on purpose. A cache written from refs/pull/N/merge is readable by
+          # that PR alone, never by another PR or by main, but it still counts against the
+          # repo-wide 10 GB budget — and a from-source OpenSSL+nginx build is several GB.
+          # Writing here would evict the main-scope caches this job actually reads from.
+          # Only the deploy job (runs on main) writes a cache anyone else can use.
           cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          # The gateway leg is also RUN below, so it has to land in the local daemon under
+          # a predictable name (buildx needs a tag to load at all).
+          load: ${{ matrix.target == 'crypto-gw' }}
+          tags: ${{ matrix.target }}:ci
+
+      # `docker build` proves the crypto stack compiles and the CA chain verifies — it does
+      # NOT prove the container starts. Everything between the two lives in entrypoint.sh:
+      # the envsubst render, `nginx -t`, the CA gates, dropping to an unprivileged user, and
+      # a healthcheck written against bash's /dev/tcp. All of that would otherwise be first
+      # executed on the deploy server, during a release.
+      # No bank is involved: GW_UPSTREAM_HOST is an IP literal (so nginx needs no DNS and
+      # `nginx -t` cannot fail on a lookup) and /healthz never touches the upstream.
+      - name: Smoke test — the gateway actually starts and answers
+        if: matrix.target == 'crypto-gw'
+        run: |
+          set -euo pipefail
+          docker run -d --name gw-smoke -p 127.0.0.1:1080:1080 \
+            -e GW_UPSTREAM_HOST=127.0.0.1 -e GW_UPSTREAM_PORT=9345 \
+            crypto-gw:ci
+          for i in $(seq 1 20); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' gw-smoke)" = healthy ] && break
+            sleep 2
+          done
+          docker logs gw-smoke
+          test "$(docker inspect -f '{{.State.Health.Status}}' gw-smoke)" = healthy
+          # The route allowlist is the gateway's only security boundary — assert it from
+          # outside, not by reading the config.
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          test "$(code http://127.0.0.1:1080/healthz)" = 200
+          test "$(code http://127.0.0.1:1080/)" = 404
+          test "$(code http://127.0.0.1:1080/open-banking-authorize/v1.0/oauth2/token)" = 403
+          test "$(code -X DELETE http://127.0.0.1:1080/open-banking/v1.0/accounts)" = 403
+          # Runs unprivileged.
+          test "$(docker exec gw-smoke id -u)" = 10001
+          docker rm -f gw-smoke
 
   deploy:
     name: Build & Push to GHCR
@@ -140,6 +186,10 @@ jobs:
       packages: write  # required to push to ghcr.io
 
     strategy:
+      # Same reason as docker-build, and it matters more here: a failed gateway build must
+      # never stop `runner`/`backend` from reaching GHCR. The gateway is an optional,
+      # switched-off component; the other two are the product.
+      fail-fast: false
       matrix:
         include:
           - target: runner
@@ -182,10 +232,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            NUXT_PUBLIC_AUTHOR_NAME=${{ vars.NUXT_PUBLIC_AUTHOR_NAME }}
-            NUXT_PUBLIC_AUTHOR_URL=${{ vars.NUXT_PUBLIC_AUTHOR_URL }}
-            NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL }}
-            NUXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
+          # Only the Nuxt images declare these. Passing them to the gateway context, which
+          # declares none, makes BuildKit warn "build-args were not consumed" on every
+          # deploy — noise that trains people to ignore the log.
+          build-args: ${{ matrix.target == 'crypto-gw' && '' || format('NUXT_PUBLIC_AUTHOR_NAME={0}
+            NUXT_PUBLIC_AUTHOR_URL={1}
+            NUXT_PUBLIC_SITE_URL={2}
+            NUXT_PUBLIC_COMMIT_SHA={3}', vars.NUXT_PUBLIC_AUTHOR_NAME, vars.NUXT_PUBLIC_AUTHOR_URL, vars.NUXT_PUBLIC_SITE_URL, github.sha) }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}

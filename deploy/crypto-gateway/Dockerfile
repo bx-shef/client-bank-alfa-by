@@ -33,7 +33,12 @@ ARG DEBIAN_IMAGE=debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c6
 # this one sha pins the whole crypto stack (engine + bee2 + the BTLS patch).
 ARG BEE2EVP_COMMIT=2ae3c71e8b24b6904367850e5963933236a1539f
 # OpenSSL tag the BTLS patch is written against — btls/patch/<tag>.patch must exist.
-ARG OPENSSL_TAG=openssl-3.3.1
+# ⚠ 3.5 is the LTS branch (supported to 2030). Do NOT drop back to 3.3.1 just because more
+# of bee2evp's own CI runs on it: 3.3 left security support on 2026-04-09 and already
+# carries CVE-2024-6119 — a crash in the peer-certificate NAME CHECK, which is exactly what
+# `proxy_ssl_verify on` + `proxy_ssl_name` make this image do on every request to the bank.
+# Verified locally with this pin: engine available, 8 BTLS suites, GosSUOK chain verifies.
+ARG OPENSSL_TAG=openssl-3.5.6
 ARG NGINX_VERSION=1.28.0
 ARG NGINX_SHA256=c6b5c6b086c0df9d3ca3ff5e084c1d0ef909e6038279c71c1c3e985f576ff76a
 
@@ -185,11 +190,20 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
 # 100% of production traffic 502s with "unable to get local issuer certificate". Only
 # an actual verify catches it. It doubles as proof that the engine can parse bign keys
 # (stock OpenSSL cannot: X509_PUBKEY_get0 decode error).
+# `-no_check_time` on purpose (same as entrypoint.sh): the reference leaf signs nothing
+# and is only a verification TARGET, so what is being asserted here is that the chain
+# links — not that the target is still valid. Without the flag every build of this image
+# would start failing on 2027-12-06 when that certificate expires, red-lighting CI on
+# unrelated PRs.
+# The cipher check is repeated here rather than trusted from the build stage: gates 1 and 2
+# ran against the FULL build tree, and what ships is a hand-picked subset of files. Only a
+# check over the copied set proves the thing that actually gets deployed still speaks BTLS.
 RUN set -eu; \
-    /opt/btls/bin/openssl verify \
+    /opt/btls/bin/openssl ciphers -v 'ALL:eNULL' | grep -q 'DHE-BIGN-WITH-BELT-CTR-MAC-HBELT'; \
+    /opt/btls/bin/openssl verify -no_check_time \
       -CAfile /etc/crypto-gw/ca/gossuok-bundle.pem \
       /etc/crypto-gw/ca/bank-leaf-reference.pem \
-    && echo 'GosSUOK bundle verifies the reference bank certificate'
+    && echo 'BTLS suites present and GosSUOK bundle verifies the reference bank certificate'
 
 # Unprivileged. The listen port is >1024 and every writable path is /tmp, so nothing
 # here wants root.
@@ -197,6 +211,11 @@ USER gw
 WORKDIR /tmp
 
 EXPOSE 1080
+# nginx signal semantics are the REVERSE of the usual convention: TERM/INT is the FAST
+# shutdown (connections dropped mid-request), QUIT is the graceful one. Docker sends TERM
+# by default, so without this line every image update or `compose restart` would cut an
+# in-flight bank request instead of letting it finish.
+STOPSIGNAL SIGQUIT
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 

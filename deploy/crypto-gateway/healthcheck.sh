@@ -15,7 +15,10 @@ PORT="${GW_LISTEN:-1080}"
 
 exec 3<>"/dev/tcp/127.0.0.1/${PORT}" || { echo "port ${PORT} closed"; exit 1; }
 printf 'GET /healthz HTTP/1.0\r\nHost: healthz\r\nConnection: close\r\n\r\n' >&3 || exit 1
-read -r status_line <&3 || { echo 'no response'; exit 1; }
+# -t: a worker that accepts the connection but never answers would otherwise leave this
+# blocked until Docker's own HEALTHCHECK --timeout kills it. Failing on our own terms gives
+# a readable message instead of a truncated one.
+read -t 4 -r status_line <&3 || { echo 'no response'; exit 1; }
 exec 3<&-
 
 case "$status_line" in

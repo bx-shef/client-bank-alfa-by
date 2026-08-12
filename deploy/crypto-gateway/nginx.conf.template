@@ -29,10 +29,32 @@ http {
                   'rt=$request_time urt=$upstream_response_time';
     access_log /dev/stdout gw;
 
+    # A deliberately constant rate-limit key — see the zone below. `map` is the only way
+    # nginx lets you hand a literal to `limit_req_zone`, which insists on a variable.
+    map $host $gw_limit_key {
+        default gw;
+    }
+
+    # Route label for the log line, derived from the URI rather than `set` inside each
+    # location. `limit_except`'s deny runs in an implicit child context, so a `set` in the
+    # parent location never executes for a rejected method — and the 403s, which are the
+    # log lines an operator most wants to identify, would come out with an empty route.
+    map $uri $gw_route {
+        default                                          none;
+        ~^/open-banking-authorize/v1\.0/oauth2/token$     token;
+        ~^/open-banking/v1\.0/                            ob;
+        /healthz                                         health;
+    }
+
     # Sized for a background poll, not for a crowd. All traffic arrives from our own
     # backend/worker containers, so this exists to bound damage (and to protect the
     # bank's request budget), not to shape real load.
-    limit_req_zone $binary_remote_addr zone=gw:1m rate=${GW_RATE}r/s;
+    # ⚠ Keyed on a CONSTANT, not on $binary_remote_addr, so the whole gateway shares ONE
+    # bucket. Per-IP would multiply the cap by the number of callers — and the deploy
+    # scales the worker (`--scale worker=N`), each replica getting its own address on
+    # cryptonet, so a "10 r/s" cap would silently become 10·N r/s toward the bank, which
+    # is the opposite of what this zone is for.
+    limit_req_zone $gw_limit_key zone=gw:1m rate=${GW_RATE}r/s;
     limit_req_status 429;
 
     upstream bank {
@@ -58,8 +80,12 @@ http {
         # DHE FIRST, DHT SECOND, deliberately. Both are STB 34.101.65, but DHT-BIGN is
         # key TRANSPORT — the premaster is encrypted to the server's long-term key, so a
         # future compromise of that key decrypts recorded sessions. DHE-BIGN is
-        # ephemeral and has forward secrecy. The client's order decides which one the
-        # bank gets to pick, so it has to be ours, not the default.
+        # ephemeral and has forward secrecy.
+        # ⚠ THIS IS A PREFERENCE, NOT A GUARANTEE. It is what we OFFER and in what order;
+        # whether the bank honours client order or enforces its own (server preference)
+        # is unknown — and the one live probe we have, run without an explicit list,
+        # came back with DHT. So the live run must log the cipher actually negotiated
+        # (#461) instead of assuming this line settled it.
         proxy_ssl_ciphers DHE-BIGN-WITH-BELT-CTR-MAC-HBELT:DHE-BIGN-WITH-BELT-DWP-HBELT:DHT-BIGN-WITH-BELT-CTR-MAC-HBELT:DHT-BIGN-WITH-BELT-DWP-HBELT;
 
         # Chain AND hostname in one directive. Without `proxy_ssl_verify on` the channel
@@ -75,7 +101,12 @@ http {
         proxy_http_version 1.1;
         # The Host the BANK must see. A TCP tunnel cannot do this — it would forward
         # `Host: crypto-gw:1080` and the bank's API gateway would reject the call.
-        proxy_set_header Host ${GW_UPSTREAM_HOST};
+        # ⚠ WITH THE PORT. Every Priorbank endpoint is on a non-standard port (9344/9345/
+        # 9544), so a direct call from Node sends `Host: apibel.priorbank.by:9345` — that
+        # is the header their API gateway has always received from us. Dropping the port
+        # here would silently change it, and if they virtual-host on host:port the result
+        # is 100% failures showing up as a bare `status=502` with no explanation.
+        proxy_set_header Host ${GW_UPSTREAM_HOST}:${GW_UPSTREAM_PORT};
         # Empty Connection is required for upstream keepalive to engage at all.
         proxy_set_header Connection "";
         # Our internal topology is not the bank's business, and these headers would
@@ -96,34 +127,43 @@ http {
         # Container-local liveness. Must not touch DNS or the bank: a healthcheck that
         # depends on the upstream turns a bank outage into a restart loop.
         location = /healthz {
+            limit_except GET { deny all; }
             access_log off;
-            add_header Content-Type text/plain always;
+            # `default_type`, not `add_header`: add_header APPENDS, so with the
+            # application/octet-stream default above the response would carry TWO
+            # Content-Type headers.
+            default_type text/plain;
             return 200 "ok\n";
         }
 
         # POST /open-banking-authorize/v1.0/oauth2/token — client_credentials,
         # authorization_code, refresh_token and private_key_jwt all land here.
         location = /open-banking-authorize/v1.0/oauth2/token {
-            set $gw_route token;
             limit_except POST { deny all; }
             limit_req zone=gw burst=${GW_BURST} nodelay;
-            proxy_pass https://bank;
+            # `$uri$is_args$args`, not a bare `proxy_pass https://bank;`. Bare form forwards
+            # the RAW request target, while the allowlist above matched the NORMALISED one —
+            # so a caller on this network could get past the location check with a path whose
+            # raw bytes still carry `../` segments for the bank's own stack to resolve
+            # differently. Sending the normalised path closes that gap.
+            proxy_pass https://bank$uri$is_args$args;
         }
 
         # /open-banking/v1.0/… — consents, account list, statement/transaction create
         # (POST) and poll (GET).
         location /open-banking/v1.0/ {
-            set $gw_route ob;
             limit_except GET POST { deny all; }
             limit_req zone=gw burst=${GW_BURST} nodelay;
-            proxy_pass https://bank;
+            # Normalised path — see the note on the token location above.
+            proxy_pass https://bank$uri$is_args$args;
         }
 
         # Everything else is refused HERE rather than relayed. An open relay to a bank
         # is worth more to an attacker than anything else on this network.
+        # LOGGED on purpose: this is the only unauthenticated entrance to the system, so
+        # somebody probing it is precisely the signal worth having. The `gw` format
+        # carries no path, so logging these costs no privacy.
         location / {
-            set $gw_route none;
-            access_log off;
             return 404;
         }
     }

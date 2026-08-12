@@ -24,7 +24,7 @@ die() { printf '[crypto-gw] FATAL: %s\n' "$*" >&2; exit 1; }
 #   request: "POST /open-banking-authorize/v1.0/oauth2/token HTTP/1.1"
 # for a statement call that path holds the account number. The same failures are already
 # visible in the access log as status=502 with route=, minus the identifier. Raise this
-# to `info` for a live run (see docs/PRIOR_RUNBOOK.md), then put it back.
+# to `info` for a live run (README.md § "Что попадает в логи"), then put it back.
 : "${GW_ERROR_LOG_LEVEL:=crit}"
 # See README § "Один поток всегда жжёт процессор". bee2 starts a permanent busy-loop
 # thread as an entropy source; niceness is what keeps it out of everyone else's way.
@@ -75,5 +75,9 @@ envsubst '${GW_LISTEN} ${GW_UPSTREAM_HOST} ${GW_UPSTREAM_PORT} ${GW_CA_BUNDLE} $
 nginx -t -c "$RENDERED" || die 'nginx отверг конфигурацию (вывод выше)'
 log "апстрим: ${GW_UPSTREAM_HOST}:${GW_UPSTREAM_PORT}; слушаю :${GW_LISTEN}; nice=${GW_NICE}"
 
-# `exec` so nginx is PID 1 and receives SIGTERM directly (graceful stop, no 10s kill).
+# `exec` so nginx is PID 1 and receives the stop signal directly instead of waiting out
+# Docker's 10s grace and being SIGKILLed. Which signal that is matters: nginx treats TERM
+# as a FAST shutdown and QUIT as the graceful one, so the Dockerfile sets
+# `STOPSIGNAL SIGQUIT` — without it a routine image update would cut an in-flight bank
+# request in half.
 exec nice -n "$GW_NICE" nginx -c "$RENDERED"

@@ -152,6 +152,17 @@ echo
 echo "  файл:   $bundle"
 echo "  sha256: $(sha256sum "$bundle" | cut -d' ' -f1)"
 echo
+# The walk above stops either at a self-signed root (chain closed) or because a link is missing
+# — and both paths reach this point printing the same "here is your file" summary. Say which one
+# happened. A truncated bundle is exactly the failure the whole gateway is built to prevent: it
+# passes every syntactic check and then 502s 100% of production requests. Without the patched
+# openssl step 5 below is skipped entirely, so this line is the ONLY warning the operator gets.
+if [[ $chain_ok -ne 1 ]]; then
+  echo "  ⚠ ЦЕПОЧКА НЕ ЗАМКНУТА: обход не дошёл до самоподписанного корня. Bundle СОБРАН ЧАСТИЧНО —"
+  echo "    в нём не хватает звена, и с ним проверка сертификата банка не пройдёт. Вероятная причина:"
+  echo "    УЦ опубликовал новый промежуточный сертификат, которого нет в списке CANDIDATES выше."
+  echo
+fi
 echo "  ⚠ Эти сертификаты НЕ читаются обычным openssl — ключи на bign (СТБ 34.101.45), стоковый"
 echo "    OpenSSL отдаёт 'X509_PUBKEY_get0: decode error'. Любая обвязка вокруг bundle (мониторинг"
 echo "    сроков, проверка ротации — #462) обязана использовать пропатченную сборку."

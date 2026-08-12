@@ -22,7 +22,10 @@
 # СПР 6.02 is a legal question for the bank, asked in writing, and it is independent of this result.
 #
 # Usage:  bash scripts/bee2evp-probe.sh [--keep] [--host HOST] [--port PORT]
-#   --keep   do not delete the build directory (subsequent runs then reuse it)
+#   --keep   suppress the reminder to clean up the build directory. The directory is NEVER
+#            deleted automatically — an OpenSSL build takes minutes and the next run reuses
+#            it. It is multi-GB and lives in $TMPDIR, so on the deploy server (which also
+#            runs Postgres and Redis) remove it by hand when you are done.
 
 set -uo pipefail
 
@@ -31,7 +34,10 @@ PORT="9345"
 KEEP=0
 CAFILE=""
 WORK="${TMPDIR:-/tmp}/bee2evp-probe"
-OPENSSL_TAG="openssl-3.3.1"
+# Keep these two in step with deploy/crypto-gateway/Dockerfile — the whole point of the probe
+# is to answer a question about the stack we actually ship.
+OPENSSL_TAG="openssl-3.5.6"
+BEE2EVP_COMMIT="2ae3c71e8b24b6904367850e5963933236a1539f"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -74,7 +80,7 @@ elif grep -qE "Cipher is (TLS|ECDHE|AES)" <<<"$base_out"; then
   exit 0
 else
   echo "⚠ Ни того, ни другого — вероятно, нет сети до банка. Дальше идти бессмысленно:"
-  grep -mE1 "connect:|socket|timeout" <<<"$base_out" || echo "$base_out" | head -3
+  grep -m1 -E "connect:|socket|timeout" <<<"$base_out" || echo "$base_out" | head -3
   exit 1
 fi
 
@@ -83,7 +89,13 @@ if [[ -x "$WORK/bee2evp/build/openssl/apps/openssl" ]]; then
   echo "уже собрано, переиспользую: $WORK"
 else
   mkdir -p "$WORK"
-  [[ -d "$WORK/bee2evp/.git" ]] || git clone -q --depth 1 https://github.com/bcrypto/bee2evp "$WORK/bee2evp"
+  # Same commit the shipped image pins (deploy/crypto-gateway/Dockerfile, BEE2EVP_COMMIT).
+  # Probing a moving HEAD would eventually answer a question about code we do not deploy.
+  if [[ ! -d "$WORK/bee2evp/.git" ]]; then
+    git clone -q https://github.com/bcrypto/bee2evp "$WORK/bee2evp"
+    git -C "$WORK/bee2evp" checkout -q "$BEE2EVP_COMMIT" || {
+      echo "не удалось перейти на коммит $BEE2EVP_COMMIT — сверьтесь с Dockerfile шлюза"; exit 1; }
+  fi
   echo "собираю (это долго — сборка OpenSSL из исходников)…"
   ( cd "$WORK/bee2evp" && bash ./scripts/build.sh -s -b "$OPENSSL_TAG" ) \
     > "$WORK/build.log" 2>&1 || { echo "СБОРКА УПАЛА, хвост лога:"; tail -20 "$WORK/build.log"; exit 1; }
