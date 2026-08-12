@@ -354,6 +354,9 @@ services:
   #
   # crypto-gw:
   #   logging: *default-logging
+  #   # Список зависимостей и грабли установки (libpcsclite1 обязателен без смарт-карт;
+  #   # libayatana-appindicator3-1 НЕ подходит — другой SONAME; xauth нужен xvfb-run) —
+  #   # docs/PRIOR_API.md, раздел «СКЗИ» → «Живой прогон с деплой-сервера».
   #   build: ./deploy/crypto-gateway        # Dockerfile с дистрибутивом вендора (создать)
   #   container_name: client-bank-alfa-by-crypto-gw
   #   volumes:
