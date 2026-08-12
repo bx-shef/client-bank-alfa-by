@@ -55,6 +55,9 @@ ossl() { LD_LIBRARY_PATH="${LIBDIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OSSL
 # `-nameopt utf8,-esc_msb` — without it OpenSSL prints Cyrillic as \D0\9A escapes, and the whole
 # point of this script is that a human can SEE which CA each file belongs to.
 name_of() { ossl x509 -in "$1" -inform "${2:-PEM}" -noout -subject -nameopt utf8,-esc_msb,sep_comma_plus_space 2>/dev/null; }
+# Just the CN. Byte-slicing a UTF-8 line (`cut -c1-90`) chops Cyrillic mid-character and prints
+# mojibake — measured on the live run. The CN is short enough to need no truncation at all.
+cn_of() { name_of "$1" "${2:-PEM}" | grep -oE 'CN *= *[^,]+' | head -1 | sed 's/CN *= *//'; }
 
 mkdir -p "$OUT" || { echo "не могу создать $OUT" >&2; exit 1; }
 
@@ -90,7 +93,7 @@ for f in "${CANDIDATES[@]}"; do
     if ossl x509 -inform DER -in "$OUT/$f" -out "$OUT/${f%.cer}.pem" 2>/dev/null \
        || ossl x509 -inform PEM -in "$OUT/$f" -out "$OUT/${f%.cer}.pem" 2>/dev/null; then
       got=$((got+1))
-      echo "ok — $(name_of "$OUT/${f%.cer}.pem" PEM | sed 's/^subject=//' | cut -c1-90)"
+      echo "ok — $(cn_of "$OUT/${f%.cer}.pem")"
     else
       echo "скачан, но это не сертификат"
     fi
@@ -120,7 +123,7 @@ if [[ -n "${want_hash:-}" ]]; then
       [[ "$(ossl x509 -in "$p" -noout -subject_hash 2>/dev/null)" == "$cur" ]] && { found="$p"; break; }
     done
     [[ -z "$found" ]] && { echo "  не нашёл сертификат с subject_hash=$cur среди скачанных"; break; }
-    echo "  + $(basename "$found") — $(name_of "$found" PEM | sed 's/^subject=//' | cut -c1-80)"
+    echo "  + $(basename "$found") — $(cn_of "$found")"
     cat "$found" >> "$bundle"
     sub="$(ossl x509 -in "$found" -noout -subject_hash)"
     iss="$(ossl x509 -in "$found" -noout -issuer_hash)"
@@ -132,25 +135,28 @@ else
   cat "$OUT"/*.pem > "$bundle" 2>/dev/null
 fi
 
-say "4. Что вошло в bundle"
-ossl crl2pkcs7 -nocrl -certfile "$bundle" 2>/dev/null | ossl pkcs7 -print_certs -noout -nameopt utf8,-esc_msb 2>/dev/null \
-  | grep -E "^subject|^issuer" | sed 's/^/  /'
-echo
-echo "  файл: $bundle"
-echo "  sha256: $(sha256sum "$bundle" | cut -d' ' -f1)"
-
-say "5. Сроки действия (когда это протухнет)"
-# The rotation trap: a bundle that silently expires stops the import with a generic TLS error.
-# Printing the horizon here is the cheapest possible early warning.
-awk 'BEGIN{c=0} /BEGIN CERT/{c++} {print > "'"$OUT"'/split-" c ".pem"}' "$bundle" 2>/dev/null
+say "4. Что вошло в bundle и до каких пор оно живёт"
+# Split and inspect each certificate SEPARATELY. `pkcs7 -print_certs` over the whole bundle prints
+# nothing here — these certificates carry bign (СТБ 34.101.45) public keys, and that print path
+# trips over them. Measured on the live bundle, not assumed.
+rm -f "$OUT"/split-*.pem
+awk -v d="$OUT" 'BEGIN{c=0} /BEGIN CERT/{c++} c>0 {print > (d "/split-" c ".pem")}' "$bundle" 2>/dev/null
 for p in "$OUT"/split-*.pem; do
   [[ -s "$p" ]] || continue
   nd="$(ossl x509 -in "$p" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
-  nm="$(name_of "$p" PEM | sed 's/^subject=//' | grep -oE 'CN *= *[^,]+' | head -1)"
-  [[ -n "$nd" ]] && echo "  до $nd — ${nm:-?}"
+  echo "  $(cn_of "$p")"
+  echo "      издатель: $(ossl x509 -in "$p" -noout -issuer -nameopt utf8,-esc_msb,sep_comma_plus_space 2>/dev/null | grep -oE 'CN *= *[^,]+' | sed 's/CN *= *//')"
+  echo "      действует до: ${nd:-?}"
 done
+echo
+echo "  файл:   $bundle"
+echo "  sha256: $(sha256sum "$bundle" | cut -d' ' -f1)"
+echo
+echo "  ⚠ Эти сертификаты НЕ читаются обычным openssl — ключи на bign (СТБ 34.101.45), стоковый"
+echo "    OpenSSL отдаёт 'X509_PUBKEY_get0: decode error'. Любая обвязка вокруг bundle (мониторинг"
+echo "    сроков, проверка ротации — #462) обязана использовать пропатченную сборку."
 
-say "6. Живая проверка"
+say "5. Живая проверка"
 if [[ $PATCHED -eq 1 && -s "$bundle" ]]; then
   out="$(timeout 40 env LD_LIBRARY_PATH="$LIBDIR" "$OSSL" s_client -connect "${HOST}:${PORT}" \
     -servername "$HOST" -CAfile "$bundle" </dev/null 2>&1)"
