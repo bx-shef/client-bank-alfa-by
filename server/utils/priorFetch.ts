@@ -16,12 +16,13 @@
 // the URL path. `resolvePriorAccountId` bridges the two via `GET /accounts` before the create call —
 // without it every request would target a nonexistent account.
 //
-// GATING: the engine is reachable only for an account with a STORED Prior token, and Prior is NOT
-// yet in the poll planner's POLLABLE_PROVIDERS (see server/queue/cron.ts for the two poller-level
-// gaps that must close first — per-request rate accounting and worker-slot occupancy). The connect
-// flow IS wired, so accounts can be connected today; prod additionally needs the BY-crypto TLS СКЗИ
-// gateway (docs/PRIOR_API.md, issue #41). Verified by unit tests against a mocked transport; a live
-// sandbox run needs the owner's Prior creds.
+// GATING: the engine is reachable only for an account with a STORED Prior token. Prior IS in the
+// poll planner's POLLABLE_PROVIDERS (server/queue/cron.ts) — both poller-level gaps that once held
+// it back are closed: rate is accounted PER REQUEST (`providerJobRate`, a Prior job costs ~10 HTTP)
+// and the long create+poll cycle occupies its own queue `bank-fetch-prior` with its own slots, so it
+// cannot starve Alfa. Whether the timer actually runs is a separate switch (`CRON_REAL_POLL`,
+// default off), and prod additionally needs the BY-crypto TLS СКЗИ (docs/PRIOR_API.md, issue #41).
+// Verified by unit tests against a mocked transport; a live sandbox run needs the owner's creds.
 
 import type { StatementItem } from '../../app/types/statement'
 import {
