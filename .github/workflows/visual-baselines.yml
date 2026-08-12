@@ -1,0 +1,68 @@
+name: Visual baselines
+
+# Переснять эталоны визуальных регресс-тестов (#3) и запушить их в ветку.
+#
+# ⚠ Зачем отдельный workflow, а не «переснять локально». Эталоны привязаны не к сборке Chromium, а
+# к КОНКРЕТНОМУ ОКРУЖЕНИЮ: рендер шрифтов у раннера и у машины разработчика отличается настолько,
+# что снятые локально снимки расходились с CI на десятки тысяч пикселей — джоба `visual` была бы
+# красной всегда, и её научились бы игнорировать. Поэтому эталоны снимает та же среда, что и
+# проверяет: раннер `ubuntu-24.04` с браузером из `playwright install`.
+#
+# Как пользоваться: Actions → Visual baselines → Run workflow → выбрать свою ветку. Коммит с
+# обновлёнными снимками прилетит в неё же; посмотрите diff глазами, прежде чем мержить.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  baselines:
+    name: baselines
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build (nuxt generate)
+        run: pnpm generate
+
+      # Каталог сносим ПЕРЕД съёмкой: `--update-snapshots` перезаписывает существующие снимки, но
+      # не удаляет осиротевшие — убрали маршрут, а мёртвый эталон остался бы в репозитории навсегда.
+      - name: Update baselines
+        run: |
+          rm -rf tests/visual/__screenshots__
+          pnpm test:visual:update
+
+      - name: Commit
+        run: |
+          git add -A tests/visual/__screenshots__
+          if git diff --cached --quiet; then
+            echo "Эталоны не изменились — коммитить нечего."
+            exit 0
+          fi
+          git status --short tests/visual/__screenshots__
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(visual): переснять эталоны в среде CI"
+          git push origin HEAD:${{ github.ref_name }}
