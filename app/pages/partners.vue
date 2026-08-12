@@ -3,6 +3,7 @@ import ArrowRightLIcon from '@bitrix24/b24icons-vue/outline/ArrowRightLIcon'
 import {
   PARTNERS_TITLE,
   PARTNERS_DESCRIPTION,
+  PARTNERS_META_DESCRIPTION,
   PARTNERS_MODEL,
   PARTNERS_LADDER,
   PARTNERS_SPLIT,
@@ -17,15 +18,13 @@ definePageMeta({ layout: 'landing' })
 useCardGlow()
 const { reachGoal } = useMetrikaGoal()
 
-// Page-specific SEO/social so shares of /partners don't fall back to the
-// home-page title/description supplied by app.vue.
-useSeoMeta({
+// Свой полный SEO-набор (#425). Раньше страница задавала только title/description, а `og:title`
+// и `og:image` доставались из корневого `app.vue` — при шаринге `/partners` превью показывало
+// текст ГЛАВНОЙ. Теперь набор один и тот же для всех публичных страниц.
+usePublicPageSeo({
+  route: '/partners',
   title: pageTitle(PARTNERS_TITLE),
-  description: PARTNERS_DESCRIPTION,
-  ogTitle: pageTitle(PARTNERS_TITLE),
-  ogDescription: PARTNERS_DESCRIPTION,
-  twitterTitle: pageTitle(PARTNERS_TITLE),
-  twitterDescription: PARTNERS_DESCRIPTION
+  description: PARTNERS_META_DESCRIPTION
 })
 
 const ladder = PARTNERS_LADDER

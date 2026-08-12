@@ -45,12 +45,12 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         # Version is read from the "packageManager" field in package.json.
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -112,7 +112,7 @@ jobs:
             context: deploy/crypto-gateway
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -203,14 +203,20 @@ jobs:
             context: deploy/crypto-gateway
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}  # built-in, no extra secret needed
+
+      # Дата КОММИТА для <lastmod> в sitemap.xml (#425). Не `date -u`: стенные часы объявляли бы
+      # «сегодня» на каждый передеплой неизменённого коммита, а поисковики такое обесценивают.
+      - name: Commit date for sitemap lastmod
+        id: builddate
+        run: echo "date=$(git show -s --format=%cs ${{ github.sha }})" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -242,5 +248,6 @@ jobs:
             NUXT_PUBLIC_AUTHOR_URL=${{ vars.NUXT_PUBLIC_AUTHOR_URL }}
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL }}
             NUXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
+            NUXT_PUBLIC_BUILD_DATE=${{ steps.builddate.outputs.date }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}

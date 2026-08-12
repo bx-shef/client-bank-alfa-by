@@ -14,7 +14,14 @@ import { pageTitle } from '~/utils/landing'
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
 definePageMeta({ layout: 'clear' })
 
-useHead({ title: pageTitle('Выписка по счёту') })
+// Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
+// без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а
+// не `Disallow` в robots.txt: краулер, послушавший `Disallow`, страницу не скачает, не увидит
+// `noindex` и вполне может показать голый URL по внешней ссылке.
+useHead({
+  title: pageTitle('Выписка по счёту'),
+  meta: [{ name: 'robots', content: 'noindex, nofollow' }]
+})
 
 // Real operations only — no demo data. The backend operations feed (#5) lands here
 // later; until then the list is empty (honest empty state, not a mock).
@@ -91,9 +98,9 @@ onMounted(async () => {
 })
 </script>
 
+<!-- Страница осмысленна только внутри портала: снаружи нет фрейм-токена, а значит ни настроек,
+     ни статуса, ни записи в CRM (#414). `?preview=1` — обход для разработки и скриншотов. -->
 <template>
-  <!-- Страница осмысленна только внутри портала: снаружи нет фрейм-токена, а значит ни настроек,
-       ни статуса, ни записи в CRM (#414). `?preview=1` — обход для разработки и скриншотов. -->
   <InPortalGate>
     <main class="mx-auto max-w-(--ui-container) px-4 py-6">
       <h1 class="sr-only">

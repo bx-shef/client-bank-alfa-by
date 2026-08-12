@@ -37,9 +37,12 @@ describe('collectHashes', () => {
     expect(collectHashes(dir)).toEqual([])
   })
 
-  it('ignores importmap blocks', () => {
+  it('ХЭШИРУЕТ importmap — CSP к нему применяется, без хеша браузер карту блокирует', () => {
+    // Раньше блок пропускался наравне с json-островками, и это была ошибка: importmap — не
+    // data-блок. В сборке он появился с Vite 8 и пока инертен, поэтому пропажа была бы незаметна
+    // ровно до того момента, когда Vite начнёт на карту опираться.
     writeFileSync(join(dir, 'index.html'), '<script type="importmap">{"imports":{}}</script>')
-    expect(collectHashes(dir)).toEqual([])
+    expect(collectHashes(dir)).toHaveLength(1)
   })
 
   it('skips empty-bodied scripts', () => {

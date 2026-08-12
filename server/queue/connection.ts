@@ -3,11 +3,14 @@
 // tests never need a running Redis. Guarded on REDIS_URL, mirroring db/client.ts.
 //
 // We pass connection *options* (parsed from REDIS_URL), not an ioredis instance,
-// so BullMQ builds the client with its own bundled ioredis — no direct ioredis
-// import and no version-coupling between our ioredis and BullMQ's.
+// so BullMQ builds the client itself — we never construct one.
+//
+// ⚠ Раньше здесь стояло «и никакой связи версий с ioredis у BullMQ» — с bullmq 6 это неверно:
+// ioredis стал ОПЦИОНАЛЬНЫМ peer-зависимостью, то есть пакет обязаны объявить мы, и версии
+// теперь связаны. Инварианта «связи нет» больше не существует, чинить её не нужно.
 
 import { Queue } from 'bullmq'
-import type { ConnectionOptions } from 'bullmq'
+import type { ConnectionOptions, RedisClient } from 'bullmq'
 import { Q_EVENTS, type QueueName } from './topology'
 
 const queues = new Map<QueueName, Queue>()
@@ -60,10 +63,29 @@ export function getQueue(name: QueueName): Queue {
   return q
 }
 
+/** Сырой Redis-клиент общей очереди — единственная точка, где мы спускаемся под абстракцию
+ *  bullmq (ping readiness-пробы, кулдаун ручного опроса, часовой кап feedback). В bullmq 6
+ *  `Queue#client` удалён: клиент отдаёт бэкенд (`getBackend()`), причём у Postgres-бэкенда его
+ *  нет вовсе — отсюда узкий тип и одно место, которое придётся править, если бэкенд сменится. */
+function redisClient(): Promise<RedisClient> {
+  // Типизировано, а НЕ через `as unknown`: `client` помечен у bullmq как Redis-специфичный
+  // «escape hatch» вне интерфейса `IQueueBackend`, то есть кандидат уехать в следующем мажоре.
+  // Каст выключил бы единственную страховку, ради которой этот хелпер и заведён: сборка осталась
+  // бы зелёной, а падало бы в проде — в readiness-пробе и в кулдауне ручного опроса.
+  //
+  // Геттер читаем ОДИН раз: у настоящего бэкенда он мемоизирован, а у тестового мока — нет,
+  // поэтому двойное чтение расходилось бы между тестом и прод-поведением.
+  const client = getQueue(Q_EVENTS).getBackend().client
+  if (!client) throw new Error('queue backend without a Redis client')
+  return client
+}
+
 /** PING the Redis backing the queues, via a cached Queue's shared ioredis client (no new
- *  connection beyond the queue's own). Resolves true on `PONG`; REJECTS on a `timeoutMs`
+ *  connection beyond the queue's own). ⚠ bullmq 6 убрал `Queue#client` — сырой клиент теперь
+ *  только через `getBackend()` (`RedisQueueBackend`); ветку с `ioredis` он же сделал
+ *  опциональной, поэтому пакет объявлен нашей прямой зависимостью. Resolves true on `PONG`; REJECTS on a `timeoutMs`
  *  deadline. The deadline is ESSENTIAL: on an unreachable-but-configured Redis, BullMQ's
- *  `queue.client` awaits `waitUntilReady`, which only rejects on an `end` event — with
+ *  backend client awaits `waitUntilReady`, which only rejects on an `end` event — with
  *  ioredis reconnecting forever (`maxRetriesPerRequest: null`) that never fires, so an
  *  un-bounded ping would hang the readiness probe in exactly the outage it must detect.
  *  The readiness probe wraps the rejection to `false` → clean 503. Throws if REDIS_URL is
@@ -72,7 +94,7 @@ export function pingRedis(timeoutMs = 2000): Promise<boolean> {
   const ping = (async (): Promise<boolean> => {
     // BullMQ types `client` as IRedisClient (no `ping` on the interface), but the underlying
     // ioredis client has it — narrow to the one method we use rather than cast to `any`.
-    const client = (await getQueue(Q_EVENTS).client) as unknown as { ping: () => Promise<string> }
+    const client = (await redisClient()) as unknown as { ping: () => Promise<string> }
     return (await client.ping()) === 'PONG'
   })()
   // Swallow a late rejection if the timeout wins the race (else it's an unhandled rejection).
@@ -92,7 +114,7 @@ export function pingRedis(timeoutMs = 2000): Promise<boolean> {
  *  (no new connection). Throws if REDIS_URL is unset — guard with queueEnabled() first. */
 export async function claimCooldownSlot(key: string, ttlSec: number): Promise<boolean> {
   // ioredis exposes `set(key, val, 'EX', seconds, 'NX')` → 'OK' when set, null when NX fails.
-  const client = (await getQueue(Q_EVENTS).client) as unknown as {
+  const client = (await redisClient()) as unknown as {
     set: (...args: unknown[]) => Promise<unknown>
   }
   const res = await client.set(`cooldown:${key}`, '1', 'EX', Math.max(1, Math.floor(ttlSec)), 'NX')
@@ -104,7 +126,7 @@ export async function claimCooldownSlot(key: string, ttlSec: number): Promise<bo
  *  program feedback hourly cap (docs/FEEDBACK.md). Uses the shared queue client (no new connection).
  *  Throws if REDIS_URL is unset — guard with queueEnabled() first. */
 export async function incrementWithTtl(key: string, ttlSec: number): Promise<number> {
-  const client = (await getQueue(Q_EVENTS).client) as unknown as {
+  const client = (await redisClient()) as unknown as {
     incr: (k: string) => Promise<number>
     expire: (k: string, s: number) => Promise<unknown>
   }

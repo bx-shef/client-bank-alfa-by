@@ -1,5 +1,7 @@
 // Shared queue observability read: per-queue BullMQ job counts (waiting/active/
-// completed/failed/delayed/paused). Used by both guarded endpoints —
+// completed/failed/delayed). ⚠ bullmq 6 убрал состояние `paused` из `getJobCounts()`: джобы
+// приостановленной очереди считаются как `waiting`, поэтому отдельного счётчика больше нет.
+// Used by both guarded endpoints —
 // GET /api/queues (B24_APPLICATION_TOKEN, console/diagnostics) and
 // GET /api/ops/queues (operator session, the /queues monitor). DI over the queue
 // accessors so it is unit-testable without Redis.

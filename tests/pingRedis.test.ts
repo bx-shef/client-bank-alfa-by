@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Test the HIGH fix (Reviewers 1 & 3): pingRedis must REJECT on a deadline when the ping
 // never resolves — otherwise /api/ready hangs in exactly the Redis outage it exists to
-// detect (BullMQ's queue.client awaits waitUntilReady, which never rejects on an unreachable
+// detect (the backend client awaits waitUntilReady, which never rejects on an unreachable
 // Redis). Mock bullmq's Queue so no real Redis is needed (mirrors throughputWorkers.test.ts).
+// ⚠ Форма мока повторяет bullmq 6: сырой клиент отдаёт `getBackend()`, а не `Queue#client`.
 // connectionOptions() reads REDIS_URL (no real connection — bullmq is mocked).
 process.env.REDIS_URL = 'redis://localhost:6379'
 
@@ -12,8 +13,8 @@ let pingImpl: () => Promise<string> = async () => 'PONG'
 
 vi.mock('bullmq', () => ({
   Queue: class {
-    get client(): Promise<{ ping: () => Promise<string> }> {
-      return Promise.resolve({ ping: () => pingImpl() })
+    getBackend(): { client: Promise<{ ping: () => Promise<string> }> } {
+      return { client: Promise.resolve({ ping: () => pingImpl() }) }
     }
 
     async close(): Promise<void> {}

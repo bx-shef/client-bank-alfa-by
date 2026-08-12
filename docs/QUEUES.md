@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-08-10
+> Last reviewed: 2026-08-12
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -381,7 +381,13 @@ per-команда **в порядке** входа (с ре-аттачем `tot
 
 Чтение счётчиков — общий [`server/queue/stats.ts`](../server/queue/stats.ts) (`readQueueCounts`,
 DI, покрыт тестами); по каждой из четырёх очередей `getJobCounts()` →
-`{ waiting, active, completed, failed, delayed, paused }`. Два эндпоинта с разными guard'ами:
+`{ waiting, active, completed, failed, delayed }`.
+
+⚠ Счётчика `paused` больше нет: bullmq 6 убрал это состояние из `getJobCounts()` — задачи
+приостановленной очереди считаются как `waiting`. Пауза видна не отдельным числом, а тем, что
+`waiting` растёт при нулевом `active`.
+
+Два эндпоинта с разными guard'ами:
 
 - **`GET /api/queues`** ([`server/api/queues.get.ts`](../server/api/queues.get.ts)) — для консоли/диагностики.
   Guard — `B24_APPLICATION_TOKEN` **только заголовком** `X-Check-Token` (constant-time); `?token=` убран
@@ -398,10 +404,10 @@ DI, покрыт тестами); по каждой из четырёх очер
 {
   "enabled": true,
   "queues": {
-    "b24-events": { "waiting": 0, "active": 0, "completed": 3, "failed": 0, "delayed": 0, "paused": 0 },
-    "bank-fetch": { "waiting": 2, "active": 1, "completed": 40, "failed": 0, "delayed": 0, "paused": 0 },
-    "file-parse": { "waiting": 0, "active": 0, "completed": 0, "failed": 0, "delayed": 0, "paused": 0 },
-    "crm-sync":   { "waiting": 5, "active": 1, "completed": 38, "failed": 1, "delayed": 0, "paused": 0 }
+    "b24-events": { "waiting": 0, "active": 0, "completed": 3, "failed": 0, "delayed": 0 },
+    "bank-fetch": { "waiting": 2, "active": 1, "completed": 40, "failed": 0, "delayed": 0 },
+    "file-parse": { "waiting": 0, "active": 0, "completed": 0, "failed": 0, "delayed": 0 },
+    "crm-sync":   { "waiting": 5, "active": 1, "completed": 38, "failed": 1, "delayed": 0 }
   }
 }
 ```

@@ -27,7 +27,14 @@ const appUrl = isDev && typeof window !== 'undefined'
   : configuredSiteUrl
 const eventHandlerUrl = computed(() => `${appUrl}${B24_EVENT_HANDLER_PATH}`)
 
-useHead({ title: pageTitle('Установка') })
+// Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
+// без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а
+// не `Disallow` в robots.txt: краулер, послушавший `Disallow`, страницу не скачает, не увидит
+// `noindex` и вполне может показать голый URL по внешней ссылке.
+useHead({
+  title: pageTitle('Установка'),
+  meta: [{ name: 'robots', content: 'noindex, nofollow' }]
+})
 
 const progressColor = ref<'air-primary' | 'air-primary-success' | 'air-primary-warning' | 'air-primary-alert'>('air-primary')
 const progressValue = ref<null | number>(null)
@@ -247,9 +254,9 @@ async function runInstall() {
 onMounted(runInstall)
 </script>
 
+<!-- Установка возможна только внутри портала (#414) — снаружи страница показывает общую
+     заглушку вместо фальшивого прогресса и редиректа. -->
 <template>
-  <!-- Установка возможна только внутри портала (#414) — снаружи страница показывает общую
-       заглушку вместо фальшивого прогресса и редиректа. -->
   <InPortalGate>
     <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
       <div class="flex w-full max-w-2xl flex-col items-center gap-4">
