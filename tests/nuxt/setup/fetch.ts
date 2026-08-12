@@ -8,22 +8,24 @@ import { vi } from 'vitest'
 // Мостик возвращает прежнюю семантику: модуль делегирует в `globalThis.$fetch`, поэтому и
 // `stubGlobal`, и подсчёт вызовов мока работают как раньше. Делегирование ленивое — на момент
 // загрузки модуля глобальная заглушка ещё не поставлена.
-type AnyFetch = ((...args: unknown[]) => unknown) & Record<string, unknown>
+//
+// ⚠ Гард проверяет `vi.isMockFunction`, а НЕ `typeof === 'function'`: в nuxt-окружении
+// `globalThis.$fetch` — всегда живая `ofetch`, поэтому проверка на функцию не срабатывала бы
+// никогда, и забытый (или сброшенный `unstubAllGlobals`) стаб уходил бы в НАСТОЯЩИЙ запрос →
+// относительный URL → отказ → компонент в ветку ошибки. Это ровно та тихая подмена смысла, из-за
+// которой тесты и сломались на апгрейде, только внесённая заново. Такое уже случалось: в
+// `bankConnectCard.nuxt.test.ts` глобалы сбрасываются посреди файла.
+type AnyFetch = (...args: unknown[]) => unknown
 
-const delegate = ((...args: unknown[]) => {
+function stubbedFetch(): AnyFetch {
   const fn = (globalThis as unknown as { $fetch?: AnyFetch }).$fetch
-  if (typeof fn !== 'function') throw new Error('$fetch не подменён в тесте (vi.stubGlobal)')
-  return fn(...args)
-}) as AnyFetch
-
-for (const key of ['raw', 'create', 'native'] as const) {
-  delegate[key] = (...args: unknown[]) => {
-    const fn = (globalThis as unknown as { $fetch?: AnyFetch }).$fetch
-    const method = fn?.[key]
-    if (typeof method !== 'function') throw new Error(`$fetch.${key} не подменён в тесте`)
-    return (method as (...a: unknown[]) => unknown)(...args)
+  if (!vi.isMockFunction(fn)) {
+    throw new Error('$fetch не подменён в тесте: поставьте vi.stubGlobal(\'$fetch\', vi.fn(…))')
   }
+  return fn as AnyFetch
 }
+
+const delegate = ((...args: unknown[]) => stubbedFetch()(...args)) as AnyFetch
 
 vi.mock('#build/fetch', () => ({ $fetch: delegate }))
 vi.mock('#build/fetch.mjs', () => ({ $fetch: delegate }))

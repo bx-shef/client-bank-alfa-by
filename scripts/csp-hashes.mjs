@@ -24,13 +24,18 @@ import { fileURLToPath } from 'node:url'
 
 export const TOKEN = '__CSP_SCRIPT_HASHES__'
 
-// Inline <script> = a script tag without a `src` attribute. The second lookahead
-// skips non-executable data blocks (e.g. Nuxt's `<script type="application/json"
-// id="__NUXT_DATA__">` island): CSP never evaluates those, so hashing them only
-// bloats the allow-list. Executable inline scripts carry no type (or text/javascript
-// / module), which this still matches.
+// Inline <script> = a script tag without a `src` attribute. The lookahead skips non-executable
+// data blocks (e.g. Nuxt's `<script type="application/json" id="__NUXT_DATA__">` island): CSP
+// never evaluates those, so hashing them only bloats the allow-list. Executable inline scripts
+// carry no type (or text/javascript / module), which this still matches.
+//
+// ⚠ `importmap` из этого исключения УБРАН (раньше пропускался вместе с json). Карта импортов —
+// не data-блок: `script-src` к ней применяется, и без хеша браузер её блокирует. Появилась она в
+// сборке вместе с Vite 8 (Nuxt 4.5) и сейчас инертна — ни один чанк `#entry` не резолвит, поэтому
+// поломки не видно. Ровно поэтому и опасно: как только Vite начнёт на неё опираться, модули
+// перестанут резолвиться на проде, а в сборке и тестах всё останется зелёным.
 export const INLINE_SCRIPT
-  = /<script(?![^>]*\bsrc=)(?![^>]*\btype=["'][^"']*(?:json|importmap)[^"']*["'])[^>]*>([\s\S]*?)<\/script>/g
+  = /<script(?![^>]*\bsrc=)(?![^>]*\btype=["'][^"']*json[^"']*["'])[^>]*>([\s\S]*?)<\/script>/g
 
 /** Recursively yields every *.html file under `dir` (pages live in subfolders:
  *  /app/index.html, /settings/index.html, …). */
