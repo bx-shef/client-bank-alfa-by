@@ -36,7 +36,8 @@ import {
   isWindowWithinLimit,
   PRIOR_API_PREFIXES,
   PRIOR_MAX_WINDOW_DAYS,
-  priorResourceHeaders
+  priorResourceHeaders,
+  priorWriteHeaders
 } from '../../app/utils/priorOauth'
 import { normalizePriorTransactionList, type PriorTransactionListResponse } from '../../app/utils/priorStatement'
 import { ensureBankToken } from './ensureBankToken'
@@ -138,7 +139,7 @@ const liveDeps: PriorFetchDeps = {
     return fetchJson(url, {
       method: 'POST',
       body,
-      headers: priorResourceHeaders(accessToken, randomUUID(), { json: true }),
+      headers: priorWriteHeaders(accessToken, randomUUID(), randomUUID()),
       timeout: 20_000
     })
   },

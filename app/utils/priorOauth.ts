@@ -57,24 +57,52 @@ export const CONSENT_PERMISSIONS = [
 export const PRIOR_FAPI_INTERACTION_HEADER = 'x-fapi-interaction-id'
 
 /**
- * Headers for ONE Open Banking resource request. Single choke point on purpose: the resource API
- * is reached from four separate transports (consent in the connect preamble, plus create/list/poll
- * in the poller), and a header that has to be remembered in four places is a header that will be
- * missing from one of them — which is exactly how this surfaced, as an opaque 502 at connect.
+ * Second mandatory header, on WRITES only. The bank rejects any resource POST without it, with the
+ * same shape as the missing FAPI header:
+ *
+ *   400 BY.NBRB.Header.Missing — Required request header 'x-idempotency-key' … is not present
+ *
+ * Measured against the sandbox, 2026-08-12 (four different consent bodies, identical rejection —
+ * so the header is checked BEFORE the body is looked at).
+ */
+export const PRIOR_IDEMPOTENCY_HEADER = 'x-idempotency-key'
+
+/**
+ * Headers for ONE Open Banking resource READ. Single choke point on purpose: the resource API is
+ * reached from four separate transports (consent in the connect preamble, plus create/list/poll in
+ * the poller), and a header that has to be remembered in four places is a header that will be
+ * missing from one of them — which is exactly how this surfaced, twice, as an opaque 502 at connect.
  *
  * `interactionId` is supplied by the caller (a fresh UUID per request): this module stays
  * browser-safe and must not reach for `node:crypto`. FAPI expects the server to echo it back, so
  * it doubles as the correlation id to quote when asking the bank about a specific failure.
  */
-export function priorResourceHeaders(
-  accessToken: string,
-  interactionId: string,
-  opts: { json?: boolean } = {}
-): Record<string, string> {
+export function priorResourceHeaders(accessToken: string, interactionId: string): Record<string, string> {
   return {
     authorization: `Bearer ${accessToken}`,
-    [PRIOR_FAPI_INTERACTION_HEADER]: interactionId,
-    ...(opts.json ? { 'content-type': 'application/json' } : {})
+    [PRIOR_FAPI_INTERACTION_HEADER]: interactionId
+  }
+}
+
+/**
+ * Headers for ONE Open Banking resource WRITE (consent creation, statement/transaction resource
+ * creation). Separate from {@link priorResourceHeaders} rather than an optional flag on it so the
+ * idempotency key cannot be forgotten at a call site: a write is unbuildable without one.
+ *
+ * A FRESH key per call preserves today's semantics exactly — every attempt creates a new resource,
+ * which is what the code did when it sent no key at all. Deriving a STABLE key from (account,
+ * window) would additionally make a retried poll collapse onto one bank-side resource; that is a
+ * behaviour change and needs a live run to confirm, so it is deliberately not done here.
+ */
+export function priorWriteHeaders(
+  accessToken: string,
+  interactionId: string,
+  idempotencyKey: string
+): Record<string, string> {
+  return {
+    ...priorResourceHeaders(accessToken, interactionId),
+    [PRIOR_IDEMPOTENCY_HEADER]: idempotencyKey,
+    'content-type': 'application/json'
   }
 }
 

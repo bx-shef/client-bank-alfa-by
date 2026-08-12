@@ -12,7 +12,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { bankConnectConfigFromEnv, handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
 import { buildPriorConnectUrl, priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { signPriorJwt } from '../../utils/priorJwt'
-import { priorResourceHeaders } from '../../../app/utils/priorOauth'
+import { priorWriteHeaders } from '../../../app/utils/priorOauth'
 import { bearerToken } from '../../utils/settingsHandler'
 import { resolveAuthConfig } from '../../utils/session'
 import { frameRestCall } from '../../utils/liveDeps'
@@ -60,7 +60,7 @@ function liveConnectDeps(): ConnectStartDeps {
         return fetchJson(url, {
           method: 'POST',
           body,
-          headers: priorResourceHeaders(accessToken, randomUUID(), { json: true }),
+          headers: priorWriteHeaders(accessToken, randomUUID(), randomUUID()),
           timeout: 15_000
         })
       },
