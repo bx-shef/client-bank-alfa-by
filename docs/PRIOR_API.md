@@ -120,7 +120,7 @@ Open-banking API согласно СПР для разработчиков»](ht
 3. **Согласие (consent).** Токен Б: `POST /oauth2/token`, `grant_type=client_credentials`,
    `scope=accounts` → `POST /open-banking/v1.0/accountConsents` с `permissions` (нужное нам:
    `ReadStatementsBasic`/`ReadStatementsDetail`, `ReadTransactionsBasic`/`Detail`/`Credits`/`Debits`,
-   `ReadAccountsBasic`/`Detail`, `ReadBalances`), `expirationDate`, `transactionFromDate/ToDate`
+   `ReadAccountsBasic`/`Detail`; ⚠ `ReadBalances` НЕ запрашиваем — остаток нигде не читается), `expirationDate`, `transactionFromDate/ToDate`
    → получаем `openbanking_intent_id`. Затем **авторизация согласия пользователем**:
    `GET|POST /oauth2/authorize`, `response_type=code`, `scope=openid accounts`, параметр
    `request` = **подписанный JWT** (с `openbanking_intent_id`) → пользователь вводит логин/пароль

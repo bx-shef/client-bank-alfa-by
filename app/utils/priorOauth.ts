@@ -22,9 +22,24 @@ export const PRIOR_API_PREFIXES = {
   OB: '/open-banking/v1.0'
 } as const
 
-/** Consent permissions we request — statements + transactions, income & outcome. */
+/**
+ * Consent permissions we request — accounts + statements + transactions, income & outcome.
+ *
+ * ⚠ THE CLIENT SEES THIS LIST on the bank's consent screen, and it is their money, so every entry
+ * has to earn its place. `ReadBalances` was dropped: we never read a balance anywhere — the import
+ * is a list of operations, and a current balance is neither shown nor stored. Asking for it bought
+ * nothing and cost trust at exactly the moment the client is deciding whether to grant access.
+ *
+ * `ReadStatements*` is KEPT even though the poller currently pulls `transactions`
+ * (`RESOURCE_KIND` in server/utils/priorFetch.ts). The two endpoints share one create+poll shape,
+ * and only the `statements` response form has been confirmed against the live bank — if
+ * `transactions` turns out to be shaped differently we fall back to `statements`. Dropping the
+ * permission would make that fallback cost a NEW consent, i.e. asking the account holder to log in
+ * and authorise a second time. Narrowing it further is only safe once `transactions` is confirmed
+ * live (issue #461).
+ */
 export const CONSENT_PERMISSIONS = [
-  'ReadAccountsBasic', 'ReadAccountsDetail', 'ReadBalances',
+  'ReadAccountsBasic', 'ReadAccountsDetail',
   'ReadStatementsBasic', 'ReadStatementsDetail',
   'ReadTransactionsBasic', 'ReadTransactionsDetail',
   'ReadTransactionsCredits', 'ReadTransactionsDebits'
