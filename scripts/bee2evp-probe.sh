@@ -29,6 +29,7 @@ set -uo pipefail
 HOST="apibel.priorbank.by"
 PORT="9345"
 KEEP=0
+CAFILE=""
 WORK="${TMPDIR:-/tmp}/bee2evp-probe"
 OPENSSL_TAG="openssl-3.3.1"
 
@@ -37,10 +38,14 @@ while [[ $# -gt 0 ]]; do
     --keep) KEEP=1 ;;
     --host) HOST="${2:?--host requires a value}"; shift ;;
     --port) PORT="${2:?--port requires a value}"; shift ;;
+    --cafile) CAFILE="${2:?--cafile requires a path}"; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
+if [[ -n "$CAFILE" && ! -r "$CAFILE" ]]; then
+  echo "--cafile: файл не читается: $CAFILE" >&2; exit 2
+fi
 
 say() { printf '\n=== %s ===\n' "$1"; }
 
@@ -116,15 +121,52 @@ fi
 echo "$suites"
 
 say "4. Рукопожатие с ${HOST}:${PORT} через bee2evp"
+verify_args=()
+[[ -n "$CAFILE" ]] && verify_args=(-CAfile "$CAFILE" -verify_return_error)
 probe_out="$(timeout 40 env LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$OSSL" s_client -connect "${HOST}:${PORT}" -servername "$HOST" </dev/null 2>&1)"
+  "$OSSL" s_client -connect "${HOST}:${PORT}" -servername "$HOST" -showcerts \
+  "${verify_args[@]}" </dev/null 2>&1)"
 echo "$probe_out" | grep -iE "Cipher is|Protocol|Verify return code|handshake has read|unknown cipher|alert" | head -8
+
+# The chain the server actually sends, plus WHERE its issuer can be fetched. Without this the
+# «which root do we need» question turns into guesswork across nces.by / avest.by / belpost /
+# nalog.gov.by — while the certificate itself names its issuer and (via the AIA extension) the URL
+# to download it from. Cheap to print, saves a round of blind downloading (#459).
+say "5. Цепочка, которую прислал сервер (кто издатель и где его взять)"
+chain="$(printf '%s\n' "$probe_out" | ossl crl2pkcs7 -nocrl -certfile /dev/stdin 2>/dev/null \
+  | ossl pkcs7 -print_certs -noout 2>/dev/null || true)"
+if [[ -n "$chain" ]]; then
+  printf '%s\n' "$chain"
+else
+  printf '%s\n' "$probe_out" | grep -E "^ *[0-9]+ s:|^ *i:|^subject=|^issuer=" | head -10
+fi
+aia="$(printf '%s\n' "$probe_out" | ossl x509 -noout -text 2>/dev/null \
+  | grep -A2 -iE "Authority Information Access|CRL Distribution" | grep -oE "URI:[^ ]+" | sort -u || true)"
+if [[ -n "$aia" ]]; then
+  echo "--- откуда качать издателя / списки отзыва ---"
+  printf '%s\n' "$aia"
+else
+  echo "(AIA/CRL в сертификате не указаны — издателя искать по имени: nces.by / avest.by)"
+fi
 
 say "ВЕРДИКТ"
 if grep -qiE "Cipher is (BDH|DHE-BIGN|DHT-BIGN)" <<<"$probe_out"; then
   echo "✅ ШИФР СОГЛАСОВАН. Открытая реализация говорит с сервером банка."
-  echo "   Дальше: проверить валидацию цепочки сертификата (корни ГосСУОК/НЦЭУ) и задать банку"
-  echo "   ПИСЬМЕННЫЙ вопрос про допустимость несертифицированного средства (см. #457)."
+  # Encryption without authentication is NOT the goal: an unverified peer means the channel is
+  # private but the counterparty is unproven. Report the two independently — conflating them is
+  # exactly how «работает» gets declared a step too early.
+  if grep -q "Verify return code: 0 (ok)" <<<"$probe_out"; then
+    echo "✅ СЕРТИФИКАТ ПРОВЕРЕН — собеседник подтверждён. Это и есть цель этапа #459."
+  elif [[ -z "$CAFILE" ]]; then
+    echo "⚠ Сертификат НЕ проверялся: корни не переданы. Канал шифруется, но собеседник"
+    echo "   не подтверждён — от подмены это не защищает. Повторите с --cafile <bundle> (#459),"
+    echo "   издателя и адрес для скачивания смотрите в разделе 5 выше."
+  else
+    echo "❌ СЕРТИФИКАТ НЕ ПРОШЁЛ ПРОВЕРКУ переданным bundle:"
+    grep -m1 "Verify return code" <<<"$probe_out"
+    echo "   Частая причина — сервер не прислал ПРОМЕЖУТОЧНЫЙ сертификат: его надо добыть"
+    echo "   отдельно (адрес — в разделе 5) и положить в bundle рядом с корнем."
+  fi
 elif grep -q "unknown cipher returned" <<<"$probe_out"; then
   echo "❌ НЕ СОГЛАСОВАН — тот же отказ, что и у обычного OpenSSL."
   echo "   Значит патч BTLS не подхватился либо банк использует набор вне реализованных."
