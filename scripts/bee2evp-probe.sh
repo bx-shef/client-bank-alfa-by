@@ -86,15 +86,28 @@ else
 fi
 
 # The build script lays OpenSSL out under the work dir; find the binary rather than hardcoding a
-# path, because the layout has changed between bee2evp revisions.
-OSSL="$(find "$WORK" -type f -name openssl -perm -u+x 2>/dev/null | grep -E '/apps/openssl$' | head -1)"
+# path, because the layout has changed between bee2evp revisions. Prefer the INSTALLED copy
+# (build/local/bin) over the in-tree one (build/openssl/apps) — only the former sits next to the
+# matching libs.
+OSSL="$(find "$WORK" -type f -name openssl -perm -u+x 2>/dev/null | grep -E '/local/bin/openssl$' | head -1)"
+[[ -n "$OSSL" ]] || OSSL="$(find "$WORK" -type f -name openssl -perm -u+x 2>/dev/null | grep -E '/apps/openssl$' | head -1)"
 if [[ -z "$OSSL" ]]; then
   echo "не нашёл собранный openssl под $WORK — смотрите $WORK/build.log"; exit 1
 fi
+
+# ⚠ WITHOUT THIS the binary silently binds the SYSTEM libssl/libcrypto and dies with
+# "version `OPENSSL_3.3.0' not found" — or, worse on a host whose system OpenSSL happens to be new
+# enough, LOADS IT and reports no BTLS suites at all. That reads as «bee2evp does not support the
+# ciphersuites» and would kill the investigation on a false negative. Measured, not theoretical.
+LIBDIR="$(dirname "$(dirname "$OSSL")")/lib"
+[[ -d "$LIBDIR" ]] || LIBDIR="$(dirname "$OSSL")"
+ossl() { LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OSSL" "$@"; }
 echo "openssl: $OSSL"
+echo "библиотеки: $LIBDIR"
+ossl version 2>&1 | head -1
 
 say "3. Есть ли шифронаборы СТБ 34.101.65 в сборке"
-suites="$("$OSSL" ciphers -v 'ALL:eNULL' 2>/dev/null | grep -iE "BIGN|BELT" || true)"
+suites="$(ossl ciphers -v 'ALL:eNULL' 2>/dev/null | grep -iE "BIGN|BELT" || true)"
 if [[ -z "$suites" ]]; then
   echo "НЕТ — сборка без BTLS-наборов. Дальше проверять нечего."
   echo "Проверьте, что build.sh применил патч из btls/patch/${OPENSSL_TAG}.patch"
@@ -103,7 +116,8 @@ fi
 echo "$suites"
 
 say "4. Рукопожатие с ${HOST}:${PORT} через bee2evp"
-probe_out="$(timeout 40 "$OSSL" s_client -connect "${HOST}:${PORT}" -servername "$HOST" </dev/null 2>&1)"
+probe_out="$(timeout 40 env LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$OSSL" s_client -connect "${HOST}:${PORT}" -servername "$HOST" </dev/null 2>&1)"
 echo "$probe_out" | grep -iE "Cipher is|Protocol|Verify return code|handshake has read|unknown cipher|alert" | head -8
 
 say "ВЕРДИКТ"
