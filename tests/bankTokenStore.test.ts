@@ -284,6 +284,24 @@ describe('bankTokenStore — behavioral (in-memory table model)', () => {
     expect(typeof got!.expiresAt).toBe('number')
   })
 
+  // Приор МОЖЕТ не вернуть refresh_token, и колбэк осознанно кладёт пустой. Раньше `saveBankToken`
+  // шифровал пустую строку в непустой блоб (`iv:tag:` с пустым шифротекстом), и признак «есть
+  // refresh» отвечал TRUE для счёта, который обновить нельзя в принципе: UI показывал «подключено»,
+  // а правда всплывала через час вставшим импортом.
+  it('пустой refresh_token сохраняется как NULL, а не как шифр пустой строки', async () => {
+    const { query, calls } = fakeQuery()
+    await saveBankToken(query, { ...token, refreshToken: '' })
+    expect(calls[0]!.params![4]).toBeNull()
+  })
+
+  it('непустой refresh_token по-прежнему шифруется', async () => {
+    const { query, calls } = fakeQuery()
+    await saveBankToken(query, token)
+    const blob = calls[0]!.params![4] as string
+    expect(typeof blob).toBe('string')
+    expect(decryptSecret(blob)).toBe('REFRESH')
+  })
+
   it('list is RESILIENT — a single corrupt row is skipped, healthy rows still returned', async () => {
     const q = memStore()
     await saveBankToken(q, token) // healthy

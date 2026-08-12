@@ -50,7 +50,14 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
        refresh_token_enc = EXCLUDED.refresh_token_enc,
        expires_at        = EXCLUDED.expires_at,
        updated_at        = now()`,
-    [token.memberId, token.provider, token.accountKey, token.accessToken, encryptSecret(token.refreshToken), token.expiresAt]
+    // ⚠ An EMPTY refresh token is stored as SQL NULL, not as an encrypted empty string. Encrypting
+    // '' yields a perfectly non-empty blob (`iv:tag:` with an empty ciphertext part), which made the
+    // `has_refresh` probe below answer TRUE for an account that has no refresh token at all. That is
+    // precisely the Prior case — the bank may return no refresh_token and the callback stores '' on
+    // purpose — so the UI showed «подключено» while the account could never be refreshed, and the
+    // truth surfaced an hour later as a stalled import. Nothing to protect in an empty secret anyway.
+    [token.memberId, token.provider, token.accountKey, token.accessToken,
+      token.refreshToken ? encryptSecret(token.refreshToken) : null, token.expiresAt]
   )
 }
 
@@ -162,8 +169,13 @@ export interface BankAccountInfo extends BankAccountRef {
  *  listable (otherwise a bad row would be invisible and thus impossible to disconnect). */
 export async function listBankAccountInfoForPortal(query: QueryFn, memberId: string): Promise<BankAccountInfo[]> {
   const rows = await query(
+    // `NOT LIKE '%:'` catches rows written BEFORE the fix above: the blob is `iv:tag:ciphertext`,
+    // so an encrypted empty secret ends with a bare colon. Without this clause every pre-existing
+    // «no refresh token» row would keep claiming it has one until the account is reconnected — and
+    // the badge exists exactly to tell the admin that reconnecting is needed.
     `SELECT member_id, provider, account_key, expires_at, updated_at,
-            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> '') AS has_refresh
+            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
+             AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
