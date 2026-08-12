@@ -305,7 +305,23 @@ pnpm prior:test --auth-method private_key_jwt         # тот же поток �
   403 на соседнем `POST /accountConsents` того же API искать надо не в подписках.
 - **`scope` токена Б**: запрошенный `accounts` выдаётся как `accounts` (плюс WSO2-шный `default`),
   `accounts consents` — принимается, а `consents`/`openid`/пустой → `invalid_scope`. То есть перебор
-  scope как объяснение отказа на согласии исчерпан.
+  scope как объяснение отказа на согласии исчерпан. Свагер `Open-banking-authorize` это
+  подтверждает: для `client_credentials` допустимы ровно `accounts` / `payments` / `apim:*`.
+- ⚠ **`BY.NBRB.Reauthenticate` НЕ несёт диагностики.** По свагеру `Open-banking v1.0` это
+  **пример** кода в схеме `Error403` — то есть штатный код ЛЮБОГО отказа авторизации на
+  `POST /accountConsents`, а не сигнал «согласие требует повторной аутентификации». Читать его как
+  указание на состояние согласия — ошибка (я её сделал): текст сообщения банк подставляет свой, а
+  сам код одинаков для всех причин отказа.
+- **Свагер `Open-banking v1.0` подтверждает наш запрос согласия целиком** (сверено 2026-08-12):
+  обязательны ровно два заголовка (`x-fapi-interaction-id`, `x-idempotency-key`; `x-fapi-auth-date`,
+  `x-fapi-customer-ipaddress`, `x-customer-useragent`, `x-api-key` — необязательные), `security` =
+  scope `accounts`, тело — `{data:{permissions[]}}`, где обязателен только `permissions`, и все
+  восемь запрашиваемых нами значений входят в enum (там же `ReadBalances`, который мы намеренно не
+  просим). Даты — `yyyy-MM-dd`. Значит при 403 на этом шаге искать дефект в запросе бессмысленно:
+  отказ — решение банка о правах регистрации, и разговор с банком нужно начинать сразу.
+- **Списка согласий нет:** `GET /accountConsents` → **405** (в свагере у пути только `POST`);
+  прочитать можно лишь конкретное — `GET /accountConsents/{accountConsentId}`. Проверить «нет ли уже
+  висящего неавторизованного согласия» снаружи, не зная его id, **невозможно**.
 - **Выписка `POST /accounts/{id}/statements`**: тело `{ data: { statement: { fromBookingDate,
   toBookingDate } } }`, даты в формате **`yyyy-MM-dd`** (без времени), окно **≤ 3 месяцев** (иначе
   `BY.NBRB.Field.InvalidDate`). Ответ `201` → `data.statement.statementId` → опрос
