@@ -461,8 +461,11 @@ onBeforeUnmount(() => {
     <div class="flex flex-col gap-4">
       <!-- Canvas chart has no accessible text; expose the current total as a label
            (the legend table below carries the per-queue detail). -->
+      <!-- `data-testid` — якорь для маски в визуальных регресс-тестах (#3): шкала времени
+           отсчитывается от текущего момента, то есть отличается в каждом прогоне. -->
       <div
         ref="chartEl"
+        data-testid="queue-chart"
         role="img"
         :aria-label="`График длины очередей: сколько задач сейчас ждут и в работе. Всего в очереди: ${total}`"
         class="h-80 w-full sm:h-96"

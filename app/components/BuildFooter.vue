@@ -23,8 +23,11 @@ const href = computed(() => commitUrl(commitSha as string))
         rel="noopener noreferrer"
       >{{ authorName }}</a>
     </span>
+    <!-- `data-testid` — якорь для маски в визуальных регресс-тестах (#3): SHA сборки отличается
+         в каждом прогоне, и без маски эталон расходился бы ВСЕГДА. -->
     <a
       :href="href"
+      data-testid="build-sha"
       class="text-xs underline opacity-70"
       target="_blank"
       rel="noopener noreferrer"

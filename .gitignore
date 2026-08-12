@@ -50,3 +50,7 @@ service-routes.txt
 
 # Пустой файл, который оставляет за собой прогон тестов проекта `nuxt`.
 .console-check.mjs
+
+# Артефакты визуальных регресс-тестов (эталоны — в tests/visual/__screenshots__, они коммитятся)
+tests/visual/.artifacts/
+playwright-report/

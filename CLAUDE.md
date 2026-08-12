@@ -1088,6 +1088,13 @@ UI — в компонентах. Это та же раскладка, что в
 > `screenshots/` (mobile/desktop × light/dark). Детали и чек-лист —
 > [`docs/VISUAL_VERIFICATION.md`](docs/VISUAL_VERIFICATION.md).
 
+**Регресс-защита в CI (#3):** джоба `visual` снимает 8 экранов × light/dark × mobile/desktop
+с собранной статики и сравнивает с эталонами `tests/visual/__screenshots__/` (коммитятся —
+в diff'е PR видно, что поменялось на экране). Ручной прогон отвечает «выглядит ли правильно»,
+джоба — «не изменилось ли то, что мы не собирались менять». Переснять после осознанной правки:
+`pnpm test:visual:update`. Детали (что маскируется и почему, что делать при красном) —
+[`docs/VISUAL_VERIFICATION.md`](docs/VISUAL_VERIFICATION.md).
+
 OG-картинка (`public/og.png`, 1200×630) генерируется из HTML-шаблона через
 пред-установленный Chromium — `pnpm og` (`scripts/make-og.mjs`); коммитим как
 статику. Перегенерировать при смене заголовка/брендинга.
