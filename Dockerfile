@@ -63,6 +63,11 @@ RUN node -e "const fs=require('fs');const h=fs.readFileSync('.output/public/inde
 # `404.html` — цель `error_page`. Если Nuxt перестанет его эмитить (смена пресета/версии), nginx
 # уйдёт в цикл внутренних редиректов и начнёт отдавать 500 на КАЖДУЮ опечатку в адресе.
 RUN test -s .output/public/404.html || { echo 'SEO: 404.html не сгенерирован — error_page уедет в цикл'; exit 1; }
+# Сам документ — SPA-оболочка (страница ошибки рисуется на клиенте), поэтому `noindex` в него
+# вписывает генератор. Пропади эта врезка — краулер получит документ вообще без мета-тегов, и
+# заметить это по зелёной сборке было бы нечем.
+RUN grep -q 'name="robots"' .output/public/404.html \
+      || { echo 'SEO: 404.html без noindex — injectNoindex не отработал'; exit 1; }
 RUN test -s .output/public/robots.txt || { echo 'SEO: robots.txt не сгенерирован'; exit 1; }
 RUN grep -q '<loc>' .output/public/sitemap.xml || { echo 'SEO: sitemap.xml пуст'; exit 1; }
 

@@ -156,7 +156,7 @@ describe('codeOnly — вспомогательный стриппер этог�
   // Он уже один раз соврал (съел настоящую мету на `install.vue`), поэтому у него есть свои тесты:
   // ложное падение тут дороже, чем кажется — оно учит игнорировать красный SEO-тест.
   it('снимает строчный комментарий, даже если внутри него есть `/*`', () => {
-    expect(codeOnly("// путь `/api/*`\nconst a = 1\n")).toContain('const a = 1')
+    expect(codeOnly('// путь `/api/*`\nconst a = 1\n')).toContain('const a = 1')
   })
 
   it('снимает блочный комментарий и HTML-комментарий', () => {
@@ -165,7 +165,7 @@ describe('codeOnly — вспомогательный стриппер этог�
   })
 
   it('не съедает код, идущий ПОСЛЕ комментариев', () => {
-    expect(codeOnly("// c\n/* c */\nname: 'robots'")).toContain("name: 'robots'")
+    expect(codeOnly('// c\n/* c */\nname: \'robots\'')).toContain('name: \'robots\'')
   })
 })
 
@@ -185,7 +185,8 @@ describe('страница ошибки', () => {
 
   it('noindex вписывается и в САМ артефакт `404.html`', () => {
     // `nuxt generate` кладёт туда SPA-оболочку: `useHead` из `error.vue` отработает только после
-    // гидрации, а краулер HTML не исполняет. Поэтому тег ставит генератор — см. `injectNoindex`.
+    // гидрации, а краулер HTML не исполняет. Пререндер `/404.html` этого НЕ чинит (проверено на
+    // сборке — тот же shell). Поэтому тег ставит генератор — см. `injectNoindex`.
     const src = readFileSync(`${root}scripts/seo-files.mjs`, 'utf8')
     expect(src).toContain('injectNoindex')
     expect(src).toContain('404.html')

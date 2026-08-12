@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { defineComponent, h } from 'vue'
-import { injectHead } from '@unhead/vue'
+import { injectHead } from '#imports'
 import { LANDING_PUBLISHER, LANDING_SITE_URL } from '~/utils/seo'
 
 // Композабл — самый заметный артефакт SEO-фичи (#425) и при этом единственное место, где набор
