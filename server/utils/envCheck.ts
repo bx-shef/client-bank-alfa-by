@@ -159,6 +159,14 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)) {
     warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL указывают на РАЗНЫЕ адреса — при переводе Приора на крипто-шлюз надо менять обе, иначе обновление токена продолжит ходить на старый хост.')
   }
+  // The nastiest shape of the same split: API_BASE set, TOKEN_URL absent. Connect and the code
+  // exchange build their URL from API_BASE and never look at TOKEN_URL, so the whole setup passes —
+  // the admin connects the account, the first statements arrive, everything is green. Only the
+  // REFRESH reads TOKEN_URL, so the failure lands an hour later, on token expiry, as a generic
+  // «cannot refresh» with no link back to the missing variable. Warn at boot, where it is cheap.
+  if (priorApiBase && !priorTokenUrl) {
+    warnings.push('PRIOR_OAUTH_API_BASE задан, а PRIOR_OAUTH_TOKEN_URL — нет. Подключение и первая выписка пройдут (они строят адрес из API_BASE), но ОБНОВЛЕНИЕ токена читает только TOKEN_URL — опрос Приора встанет через час, когда истечёт первый токен.')
+  }
   const priorApiBaseOk = !!normalizeBankApiBase(priorApiBase)
   if (priorApiBase && !priorApiBaseOk) {
     warnings.push('PRIOR_OAUTH_API_BASE непригоден: нужен https:// либо http:// на ВНУТРЕННИЙ адрес (localhost / имя docker-сервиса / приватная сеть) — так работает крипто-шлюз. http:// на публичный хост отправил бы токен открытым текстом.')

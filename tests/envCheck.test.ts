@@ -192,6 +192,20 @@ describe('Крипто-шлюз Приора: адресация (#455)', () => 
     expect(warns({ PRIOR_OAUTH_API_BASE: GW }, /авторизации/)).toBe(true)
   })
 
+  // Самая коварная форма: подключение и первая выписка проходят, а рефреш встаёт через час —
+  // отказ отложен и никак не связан по времени с забытой переменной.
+  it('API_BASE без TOKEN_URL — предупреждение про отложенный отказ рефреша', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: BANK }, /ОБНОВЛЕНИЕ токена|TOKEN_URL — нет/)).toBe(true)
+  })
+
+  it('обе заданы — про рефреш молчим', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token` }, /ОБНОВЛЕНИЕ токена/)).toBe(false)
+  })
+
+  it('TOKEN_URL без API_BASE — про рефреш молчим (не наш случай)', () => {
+    expect(warns({ PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token` }, /ОБНОВЛЕНИЕ токена/)).toBe(false)
+  })
+
   it('внутренний API_BASE + публичный AUTHORIZE_BASE — тишина (штатная схема со шлюзом)', () => {
     expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_AUTHORIZE_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: `${GW}/oauth2/token` }, /непригоден|авторизации|РАЗНЫЕ адреса/)).toBe(false)
   })
