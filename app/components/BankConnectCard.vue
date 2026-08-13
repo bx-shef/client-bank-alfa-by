@@ -4,6 +4,7 @@ import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useBankConnect } from '~/composables/useBankConnect'
 import { BANK_LABELS } from '~/utils/bankLabels'
+import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank, enters the account number and starts
 // the OAuth connect: POST /api/bank/connect (frame token) → the backend returns the bank authorize
@@ -45,7 +46,7 @@ const copied = ref(false)
 // client opens it. A client hunting for their bank password past that gets «Ссылка недействительна»,
 // which reads as a breakage rather than as an expiry. Nothing in the UI said so; now it does, so the
 // admin coordinates first and presses second.
-const LINK_TTL_MIN = 10
+const LINK_TTL_MIN = CONNECT_STATE_TTL_MIN
 
 async function copyLink() {
   if (!authorizeUrl.value) return
@@ -210,12 +211,18 @@ async function onConnect() {
         />
       </div>
 
-      <!-- Hand-over block. Shown only after a successful start, because before that there is nothing
-           to hand over. The URL sits in a read-only input as well as behind the button: the
-           Clipboard API is unavailable over plain http and can be blocked by permissions policy in
-           an iframe, and a copy button that silently does nothing is worse than no button. -->
+      <!-- Hand-over block. Shown once a link exists, because before that there is nothing to hand
+           over. The URL sits in a read-only input as well as behind the button: the Clipboard API
+           is unavailable over plain http and can be blocked by permissions policy in an iframe, and
+           a copy button that silently does nothing is worse than no button.
+           ⚠ Deliberately NOT gated on `!error`. The two failures that set `error` after a link
+           exists are «clipboard blocked» and «popup blocked» — and both are answered by handing the
+           link over manually. Hiding the field on error unmounted the very input the error text
+           tells the admin to select, leaving the page with an instruction and nothing to act on,
+           and nothing clears `error` except pressing «Подключить» again, which mints a DIFFERENT
+           link and invalidates the one already sent. -->
       <B24FormField
-        v-if="!error && started && authorizeUrl"
+        v-if="started && authorizeUrl"
         label="Ссылка для владельца счёта"
         :description="`Действует около ${LINK_TTL_MIN} минут с момента нажатия «Подключить» — отсчёт уже идёт. Если владелец счёта не готов прямо сейчас, дождитесь его и нажмите «Подключить» заново: ссылка обновится.`"
         data-testid="authorize-link-field"
