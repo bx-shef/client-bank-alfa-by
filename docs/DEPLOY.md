@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-08-13
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -68,9 +68,10 @@ backend; эндпоинт `/api/queues` наружу закрыт nginx, скр�
 `https://<DOMAIN>/` — лендинг/UI, `https://<DOMAIN>/api/b24/events` — обработчик событий Б24
 (без CORS, тот же origin). `backend` и `db` host-портов не публикуют. Образы — **три** в GHCR
 (`…/client-bank-alfa-by` — nginx-статика, `…/client-bank-alfa-by-backend` — node,
-`…/client-bank-alfa-by-crypto-gw` — BY-крипто шлюз к проду Приорбанка), все обновляет Watchtower.
+), обновляет Watchtower.
 ⚠ Шлюз публикуется, но сервис в compose **закомментирован** — он не поднимается, пока его не
-включат осознанно (порядок — [`deploy/crypto-gateway/README.md`](../deploy/crypto-gateway/README.md)).
+включат осознанно (образ и порядок — [bx-shef/bee2-tls-gateway](https://github.com/bx-shef/bee2-tls-gateway)); тег там пиним явно,
+не `latest`.
 Собирается он из исходников (OpenSSL + nginx), поэтому и публикуется: на прод-сервере компилятора
 быть не должно.
 
@@ -97,10 +98,10 @@ backend; эндпоинт `/api/queues` наружу закрыт nginx, скр�
 
 | Триггер | Что бежит |
 |---|---|
-| Pull request → `main` | `ci` (lint → test → typecheck → generate) + `docker-build` (matrix `runner`+`backend`+`crypto-gw`, сборка всех трёх образов, **без** push; для `crypto-gw` дополнительно smoke-запуск контейнера) |
-| Push в `main` | `ci` → `deploy` (matrix: push `runner`→`…/client-bank-alfa-by`, `backend`→`…/client-bank-alfa-by-backend`, `crypto-gw`→`…/client-bank-alfa-by-crypto-gw`) |
+| Pull request → `main` | `ci` (lint → test → typecheck → generate) + `docker-build` (matrix `runner`+`backend`, сборка обоих образов, **без** push) |
+| Push в `main` | `ci` → `deploy` (matrix: push `runner`→`…/client-bank-alfa-by`, `backend`→`…/client-bank-alfa-by-backend`) |
 
-- Обе матрицы идут с `fail-fast: false`: `crypto-gw` тянет исходники со стороннего репозитория и
+- Обе матрицы идут с `fail-fast: false`: сборка одного образа не должна ронять другой, и
   падает по причинам, не связанным с изменением, — он не должен отменять сборку/публикацию
   образов самого продукта.
 
@@ -165,7 +166,7 @@ HTML и подставляет в `nginx.conf` (плейсхолдер `__CSP_SC
    `container_name: watchtower` и плодит двойные перезапуски.
 3. **GHCR-пакеты должны быть публичными** — **все три**: `ghcr.io/bx-shef/client-bank-alfa-by`
    (лендинг), `ghcr.io/bx-shef/client-bank-alfa-by-backend` (node) и
-   `ghcr.io/bx-shef/client-bank-alfa-by-crypto-gw` (крипто-шлюз; нужен, только если сервис включён —
+   `ghcr.io/bx-shef/bee2-tls-gateway` (крипто-шлюз, [свой репозиторий](https://github.com/bx-shef/bee2-tls-gateway); нужен, только если сервис включён —
    иначе на приватном пакете `docker compose pull` молча не подтянет образ). Тогда ни серверу, ни Watchtower не нужен
    `docker login`. Если приватные — перед `up -d` сделать `docker login ghcr.io` (PAT с
    `read:packages`) и настроить креды Watchtower (см. «Если репозиторий приватный»).

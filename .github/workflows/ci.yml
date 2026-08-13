@@ -141,29 +141,18 @@ jobs:
 
   docker-build:
     name: docker-build
-    # Validate ALL production images build on every PR: the nginx static landing
-    # (`runner`), the Nitro node backend (`backend`) and the BY-crypto gateway
-    # (`crypto-gw`). Catches Dockerfile / base-image breakage before it reaches main
-    # and the GHCR deploy. No push.
+    # Validate both production images build on every PR: the nginx static landing
+    # (`runner`) and the Nitro node backend (`backend`). Catches Dockerfile / base-image
+    # breakage before it reaches main and the GHCR deploy. No push.
     # Runs on Dependabot PRs too — that is exactly where a node bump would surface.
-    #
-    # `crypto-gw` lives in its own context (deploy/crypto-gateway) because it shares
-    # nothing with the node image — different base, different toolchain. Its build
-    # compiles OpenSSL and nginx from source, so the FIRST run is slow (hence the
-    # timeout below); afterwards the gha cache makes it a no-op unless that directory
-    # actually changed. Its build gates are the point: they fail the PR when the BTLS
-    # patch stops applying or the CA bundle stops verifying the bank's certificate.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     strategy:
-      # WITHOUT THIS a failure in one leg cancels the others. The gateway leg clones
-      # bee2evp from GitHub and compiles OpenSSL, so it is the leg most likely to fail
-      # for reasons that have nothing to do with the PR (network, rate limit, upstream
-      # moved). Letting that cancel the `runner`/`backend` builds would break the
-      # assumption docs/REPO_SETUP_CHECKLIST.md relies on — that an image-build failure
-      # is harmless because the other images still build.
+      # WITHOUT THIS a failure in one leg cancels the other, and docs/REPO_SETUP_CHECKLIST.md
+      # relies on the opposite: an image-build failure is harmless precisely because the other
+      # image still builds.
       fail-fast: false
       matrix:
         include:
@@ -171,8 +160,6 @@ jobs:
             context: .
           - target: backend
             context: .
-          - target: crypto-gw
-            context: deploy/crypto-gateway
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,70 +175,34 @@ jobs:
           push: false
           # READ-only on purpose. A cache written from refs/pull/N/merge is readable by
           # that PR alone, never by another PR or by main, but it still counts against the
-          # repo-wide 10 GB budget — and a from-source OpenSSL+nginx build is several GB.
-          # Writing here would evict the main-scope caches this job actually reads from.
+          # repo-wide 10 GB budget. Writing here would evict the main-scope caches this job
+          # actually reads from.
           # Only the deploy job (runs on main) writes a cache anyone else can use.
           cache-from: type=gha,scope=${{ matrix.target }}
-          # The gateway leg is also RUN below, so it has to land in the local daemon under
-          # a predictable name (buildx needs a tag to load at all).
-          load: ${{ matrix.target == 'crypto-gw' }}
           tags: ${{ matrix.target }}:ci
 
-      # `docker build` proves the crypto stack compiles and the CA chain verifies — it does
-      # NOT prove the container starts. Everything between the two lives in entrypoint.sh:
-      # the envsubst render, `nginx -t`, the CA gates, dropping to an unprivileged user, and
-      # a healthcheck written against bash's /dev/tcp. All of that would otherwise be first
-      # executed on the deploy server, during a release.
-      # No bank is involved: GW_UPSTREAM_HOST is an IP literal (so nginx needs no DNS and
-      # `nginx -t` cannot fail on a lookup) and /healthz never touches the upstream.
-      - name: Smoke test — the gateway actually starts and answers
-        if: matrix.target == 'crypto-gw'
-        run: |
-          set -euo pipefail
-          docker run -d --name gw-smoke -p 127.0.0.1:1080:1080 \
-            -e GW_UPSTREAM_HOST=127.0.0.1 -e GW_UPSTREAM_PORT=9345 \
-            crypto-gw:ci
-          for i in $(seq 1 20); do
-            [ "$(docker inspect -f '{{.State.Health.Status}}' gw-smoke)" = healthy ] && break
-            sleep 2
-          done
-          docker logs gw-smoke
-          test "$(docker inspect -f '{{.State.Health.Status}}' gw-smoke)" = healthy
-          # The route allowlist is the gateway's only security boundary — assert it from
-          # outside, not by reading the config.
-          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
-          test "$(code http://127.0.0.1:1080/healthz)" = 200
-          test "$(code http://127.0.0.1:1080/)" = 404
-          test "$(code http://127.0.0.1:1080/open-banking-authorize/v1.0/oauth2/token)" = 403
-          test "$(code -X DELETE http://127.0.0.1:1080/open-banking/v1.0/accounts)" = 403
-          # Runs unprivileged.
-          test "$(docker exec gw-smoke id -u)" = 10001
-          docker rm -f gw-smoke
 
   deploy:
     name: Build & Push to GHCR
     needs: ci
     # Gate the deploy on CI: a red CI blocks images from ever reaching GHCR /
     # Watchtower. Only the main branch deploys (via a push or a manual
-    # workflow_dispatch redeploy). Publishes three images:
-    #   runner    → ghcr.io/<repo>             (nginx static landing + B24-iframe UI)
-    #   backend   → ghcr.io/<repo>-backend     (Nitro node: B24 webhooks + token store)
-    #   crypto-gw → ghcr.io/<repo>-crypto-gw   (BY-crypto TLS gateway to Priorbank prod)
-    # The gateway is published so the deploy server never has to compile OpenSSL —
-    # it is pulled like the other two, and the compose service is commented out until
-    # someone deliberately enables it (docker-compose.prod.yml, `crypto-gw`).
+    # workflow_dispatch redeploy). Publishes two images:
+    #   runner  → ghcr.io/<repo>          (nginx static landing + B24-iframe UI)
+    #   backend → ghcr.io/<repo>-backend  (Nitro node: B24 webhooks + token store)
+    # The BY-crypto TLS gateway used for Priorbank prod is a SEPARATE product now and
+    # publishes its own image — https://github.com/bx-shef/bee2-tls-gateway.
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     permissions:
       contents: read
       packages: write  # required to push to ghcr.io
 
     strategy:
-      # Same reason as docker-build, and it matters more here: a failed gateway build must
-      # never stop `runner`/`backend` from reaching GHCR. The gateway is an optional,
-      # switched-off component; the other two are the product.
+      # Same reason as docker-build: one image failing to publish must not stop the other
+      # from reaching GHCR.
       fail-fast: false
       matrix:
         include:
@@ -261,9 +212,6 @@ jobs:
           - target: backend
             suffix: '-backend'
             context: .
-          - target: crypto-gw
-            suffix: '-crypto-gw'
-            context: deploy/crypto-gateway
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -301,11 +249,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Only the Nuxt images declare these; the gateway context consumes none of them
-          # and BuildKit therefore warns "build-args were not consumed" on its leg. That is
-          # cosmetic and it stays: making the list conditional needs a multi-line value
-          # built inside an expression, and YAML folds those continuation lines into
-          # spaces — the four arguments would arrive as one mangled string.
           build-args: |
             NUXT_PUBLIC_AUTHOR_NAME=${{ vars.NUXT_PUBLIC_AUTHOR_NAME }}
             NUXT_PUBLIC_AUTHOR_URL=${{ vars.NUXT_PUBLIC_AUTHOR_URL }}

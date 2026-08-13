@@ -720,7 +720,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `bankApiConfig`, `priorApiBaseFromEnv`, `bankCredsFromEnv` для `_TOKEN_URL`,
     `priorConnectConfigFromEnv`) + предупреждения `envCheck` на рассинхрон `API_BASE`↔`TOKEN_URL`;
     `_AUDIENCE` и `_REDIRECT_URI` **вне охвата сознательно** (claim в JWT / банк сверяет байт-в-байт).
-    **Крипто-шлюз — СОБРАН (#460):** `deploy/crypto-gateway/` — образ «внутрь обычный HTTP, наружу
+    **Крипто-шлюз — СОБРАН (#460) и вынесен в отдельный репозиторий**
+    ([bx-shef/bee2-tls-gateway](https://github.com/bx-shef/bee2-tls-gateway)): образ «внутрь обычный HTTP, наружу
     TLS по СТБ 34.101.65» на **открытой** реализации (bee2evp, Apache 2.0), без проприетарного СКЗИ
     и без ключа ГосСУОК (аутентификация банка односторонняя, наша — `private_key_jwt`). nginx, а не
     TCP-туннель: туннель не переписывает `Host`, не переиспользует TLS-сессию (замерено с контролем:
@@ -730,7 +731,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     как источник энтропии (`bee2/src/core/rng/rng_timer.c`, закрытие только по `utilOnExit`);
     смягчено `nice 19` + `cpus`, крутится только master nginx. Не разворачивать на burstable-
     инстансах. Сервис в `docker-compose.prod.yml` **закомментирован** — включается осознанно
-    (порядок — `deploy/crypto-gateway/README.md`); живой прод-прогон — #461, ротация корней — #462.
+    (порядок и всё устройство — README того репозитория); живой прод-прогон — #461.
   - `server/utils/setupStatus.ts` + `server/api/setup-status.get.ts` (+ чистое ядро
     `app/utils/setupReadiness.ts`, composable `useSetupStatus.ts`, UI `SetupReadinessCard.vue`;
     DI+тесты, вкл. nuxt-тест проводки) — **экран готовности «что настроено, а что нет» (#409/#405)**:

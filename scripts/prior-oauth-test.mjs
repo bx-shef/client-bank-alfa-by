@@ -542,7 +542,7 @@ async function main() {
     // Prod over plain TLS cannot work: the bank answers with a Belarusian ciphersuite and
     // Node aborts at ServerHello. Say so before the first request instead of after it.
     warn('прод-хост без --api-base: Node не умеет СТБ 34.101.65 и оборвётся на ServerHello.')
-    warn('поднимите крипто-шлюз (deploy/crypto-gateway) и передайте --api-base http://<шлюз>:1080')
+    warn('поднимите крипто-шлюз (github.com/bx-shef/bee2-tls-gateway) и передайте --api-base http://<шлюз>:1080')
   }
 
   // --gen-key: RSA keypair + jwks for DCR registration. No network.
