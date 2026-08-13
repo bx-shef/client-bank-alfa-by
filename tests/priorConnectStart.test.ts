@@ -12,7 +12,10 @@ import { Buffer } from 'node:buffer'
 
 const config: PriorConnectConfig = {
   baseUrl: 'https://api.priorbank.by:9344',
-  tokenUrl: 'https://api.priorbank.by:9344/open-banking-authorize/v1.0/oauth2/token',
+  // ⚠ A DIFFERENT origin than `baseUrl` on purpose. Were it the value `baseUrl` derives, every
+  // assertion below would pass just as well against the old code that rebuilt the token URL from
+  // `baseUrl` — the fixture itself would hide the bug.
+  tokenUrl: 'https://sso.priorbank.by:9544/oauth2/token',
   authorizeBaseUrl: 'https://api.priorbank.by:9344',
   clientId: 'CLIENT-1',
   clientSecret: 'SECRET-1',

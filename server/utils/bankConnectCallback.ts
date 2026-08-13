@@ -14,7 +14,7 @@
 //    raw error object).
 
 import { parseOAuthCallback, buildTokenExchangeBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
-import { buildCodeExchangeBody, parsePriorTokenResponse, priorTokenRequest, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
+import { buildCodeExchangeBody, parsePriorTokenResponse, priorTokenRequest } from '../../app/utils/priorOauth'
 import type { PriorTokenAuth } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
 import { provisionalAccountKey } from '../../app/utils/bankAccountKey'
@@ -107,7 +107,13 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
   let tokens: { accessToken: string, refreshToken: string, expiresIn: number }
   try {
     if (priorConfig) {
-      const url = `${priorConfig.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`
+      // ⚠ From `tokenUrl`, NOT derived from `baseUrl`. This is the SAME endpoint the connect
+      // preamble calls (token Б) and the refresh path calls — three call sites of one URL. Deriving
+      // it here would split them again the moment the bank's authorization server and its resource
+      // API sit on different hosts (the documented production shape): step 1 would reach the
+      // gateway and succeed, step 4 would go to the public host and fail — the admin sees «банк
+      // отклонил подключение» AFTER a successful bank login, indistinguishable from a real refusal.
+      const url = priorConfig.tokenUrl
       const req = priorTokenRequest(
         buildCodeExchangeBody(code, priorConfig.redirectUri),
         deps.priorTokenAuth(priorConfig)

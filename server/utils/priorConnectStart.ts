@@ -34,9 +34,12 @@ import { normalizeAuthorizeBase, normalizeBankApiBase } from '../../app/utils/ba
 /** Non-secret Prior connect config (from env) + the secrets the injected transport needs. */
 export interface PriorConnectConfig {
   /**
-   * Origin the BACKEND calls: token, consent, accounts, statements. In production this points at
-   * the BY-crypto TLS gateway (#41/#455), which may legitimately be plain HTTP on an internal
-   * network — it raises the crypto TLS itself.
+   * Origin the BACKEND calls for the RESOURCE API — consent, accounts, statements. May legitimately
+   * be plain HTTP on an internal network when it points at the BY-crypto TLS gateway (#41/#455),
+   * which raises the crypto TLS itself.
+   *
+   * ⚠ NOT the token endpoint: that is `tokenUrl` below, and the two can be different hosts. This
+   * field is only the FALLBACK source for it when `PRIOR_OAUTH_TOKEN_URL` is unset.
    */
   baseUrl: string
   /**

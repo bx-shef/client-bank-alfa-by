@@ -21,6 +21,11 @@ const tokenJson = { access_token: 'AT', refresh_token: 'RT', token_type: 'Bearer
 /** Prior's connect config (multi-step, carries its own secrets — A5b). */
 const PRIOR_CONFIG = {
   baseUrl: 'https://prior:9344',
+  // Deliberately a DIFFERENT origin than `baseUrl`: the production shape puts the authorization
+  // server behind the crypto gateway while the resource API stays on the bank's public host. A
+  // fixture where the two coincide cannot tell a correct implementation from one that derives the
+  // token URL from `baseUrl` — which is exactly the bug this pins.
+  tokenUrl: 'http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token',
   authorizeBaseUrl: 'https://prior:9344',
   clientId: 'PCID',
   clientSecret: 'PSECRET',
@@ -161,7 +166,13 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
     expect(exchangePriorToken).toHaveBeenCalledOnce()
 
     const [url, body, headers] = exchangePriorToken.mock.calls[0]!
-    expect(url).toBe('https://prior:9344/open-banking-authorize/v1.0/oauth2/token')
+    // ⚠ The code exchange is the THIRD call site of the token endpoint (after the connect preamble
+    // and the refresh path). It must follow `tokenUrl`, not be rebuilt from `baseUrl` — otherwise a
+    // production split (authorization server behind the gateway, resource API on the public host)
+    // sends this step to the wrong host, and it fails AFTER the account holder has already logged
+    // into their bank, looking exactly like a refusal by the bank.
+    expect(url).toBe(PRIOR_CONFIG.tokenUrl)
+    expect(url).not.toContain(PRIOR_CONFIG.baseUrl)
     const form = new URLSearchParams(body)
     expect(form.get('grant_type')).toBe('authorization_code')
     expect(form.get('code')).toBe('C')
