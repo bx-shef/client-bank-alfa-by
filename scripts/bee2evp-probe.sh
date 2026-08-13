@@ -34,7 +34,7 @@ PORT="9345"
 KEEP=0
 CAFILE=""
 WORK="${TMPDIR:-/tmp}/bee2evp-probe"
-# Keep these two in step with deploy/crypto-gateway/Dockerfile — the whole point of the probe
+# Keep these two in step with the Dockerfile of https://github.com/bx-shef/bee2-tls-gateway — the whole point of the probe
 # is to answer a question about the stack we actually ship.
 OPENSSL_TAG="openssl-3.5.6"
 BEE2EVP_COMMIT="2ae3c71e8b24b6904367850e5963933236a1539f"
@@ -89,12 +89,12 @@ if [[ -x "$WORK/bee2evp/build/openssl/apps/openssl" ]]; then
   echo "уже собрано, переиспользую: $WORK"
 else
   mkdir -p "$WORK"
-  # Same commit the shipped image pins (deploy/crypto-gateway/Dockerfile, BEE2EVP_COMMIT).
+  # Same commit the shipped image pins (BEE2EVP_COMMIT in the gateway repo's Dockerfile).
   # Probing a moving HEAD would eventually answer a question about code we do not deploy.
   if [[ ! -d "$WORK/bee2evp/.git" ]]; then
     git clone -q https://github.com/bcrypto/bee2evp "$WORK/bee2evp"
     git -C "$WORK/bee2evp" checkout -q "$BEE2EVP_COMMIT" || {
-      echo "не удалось перейти на коммит $BEE2EVP_COMMIT — сверьтесь с Dockerfile шлюза"; exit 1; }
+      echo "не удалось перейти на коммит $BEE2EVP_COMMIT — сверьтесь с Dockerfile в github.com/bx-shef/bee2-tls-gateway"; exit 1; }
   fi
   echo "собираю (это долго — сборка OpenSSL из исходников)…"
   ( cd "$WORK/bee2evp" && bash ./scripts/build.sh -s -b "$OPENSSL_TAG" ) \
