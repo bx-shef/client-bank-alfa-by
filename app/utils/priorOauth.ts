@@ -22,13 +22,89 @@ export const PRIOR_API_PREFIXES = {
   OB: '/open-banking/v1.0'
 } as const
 
-/** Consent permissions we request — statements + transactions, income & outcome. */
+/**
+ * Consent permissions we request — accounts + statements + transactions, income & outcome.
+ *
+ * ⚠ THE CLIENT SEES THIS LIST on the bank's consent screen, and it is their money, so every entry
+ * has to earn its place. `ReadBalances` was dropped: we never read a balance anywhere — the import
+ * is a list of operations, and a current balance is neither shown nor stored. Asking for it bought
+ * nothing and cost trust at exactly the moment the client is deciding whether to grant access.
+ *
+ * `ReadStatements*` is KEPT even though the poller currently pulls `transactions`
+ * (`RESOURCE_KIND` in server/utils/priorFetch.ts). The two endpoints share one create+poll shape,
+ * and only the `statements` response form has been confirmed against the live bank — if
+ * `transactions` turns out to be shaped differently we fall back to `statements`. Dropping the
+ * permission would make that fallback cost a NEW consent, i.e. asking the account holder to log in
+ * and authorise a second time. Narrowing it further is only safe once `transactions` is confirmed
+ * live (issue #461).
+ */
 export const CONSENT_PERMISSIONS = [
-  'ReadAccountsBasic', 'ReadAccountsDetail', 'ReadBalances',
+  'ReadAccountsBasic', 'ReadAccountsDetail',
   'ReadStatementsBasic', 'ReadStatementsDetail',
   'ReadTransactionsBasic', 'ReadTransactionsDetail',
   'ReadTransactionsCredits', 'ReadTransactionsDebits'
 ] as const
+
+/**
+ * FAPI correlation header. The bank REQUIRES it on every Open Banking resource call and rejects
+ * the request outright without it:
+ *
+ *   400 BY.NBRB.Header.Missing — Required request header 'x-fapi-interaction-id' … is not present
+ *
+ * Measured against the sandbox, 2026-08-12. It is NOT sent on the token endpoint — only on the
+ * `/open-banking/v1.0/…` resource server (consents, accounts, statements, transactions).
+ */
+export const PRIOR_FAPI_INTERACTION_HEADER = 'x-fapi-interaction-id'
+
+/**
+ * Second mandatory header, on WRITES only. The bank rejects any resource POST without it, with the
+ * same shape as the missing FAPI header:
+ *
+ *   400 BY.NBRB.Header.Missing — Required request header 'x-idempotency-key' … is not present
+ *
+ * Measured against the sandbox, 2026-08-12 (four different consent bodies, identical rejection —
+ * so the header is checked BEFORE the body is looked at).
+ */
+export const PRIOR_IDEMPOTENCY_HEADER = 'x-idempotency-key'
+
+/**
+ * Headers for ONE Open Banking resource READ. Single choke point on purpose: the resource API is
+ * reached from four separate transports (consent in the connect preamble, plus create/list/poll in
+ * the poller), and a header that has to be remembered in four places is a header that will be
+ * missing from one of them — which is exactly how this surfaced, twice, as an opaque 502 at connect.
+ *
+ * `interactionId` is supplied by the caller (a fresh UUID per request): this module stays
+ * browser-safe and must not reach for `node:crypto`. FAPI expects the server to echo it back, so
+ * it doubles as the correlation id to quote when asking the bank about a specific failure.
+ */
+export function priorResourceHeaders(accessToken: string, interactionId: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${accessToken}`,
+    [PRIOR_FAPI_INTERACTION_HEADER]: interactionId
+  }
+}
+
+/**
+ * Headers for ONE Open Banking resource WRITE (consent creation, statement/transaction resource
+ * creation). Separate from {@link priorResourceHeaders} rather than an optional flag on it so the
+ * idempotency key cannot be forgotten at a call site: a write is unbuildable without one.
+ *
+ * A FRESH key per call preserves today's semantics exactly — every attempt creates a new resource,
+ * which is what the code did when it sent no key at all. Deriving a STABLE key from (account,
+ * window) would additionally make a retried poll collapse onto one bank-side resource; that is a
+ * behaviour change and needs a live run to confirm, so it is deliberately not done here.
+ */
+export function priorWriteHeaders(
+  accessToken: string,
+  interactionId: string,
+  idempotencyKey: string
+): Record<string, string> {
+  return {
+    ...priorResourceHeaders(accessToken, interactionId),
+    [PRIOR_IDEMPOTENCY_HEADER]: idempotencyKey,
+    'content-type': 'application/json'
+  }
+}
 
 /** A resource kind — the two async list endpoints share one create+poll shape. */
 export type PriorResourceKind = 'statements' | 'transactions'

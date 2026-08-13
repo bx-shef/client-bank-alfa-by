@@ -3,6 +3,10 @@ import {
   PRIOR_API_PREFIXES,
   PRIOR_CLIENT_ASSERTION_TYPE,
   PRIOR_ASSERTION_TTL_SEC,
+  PRIOR_FAPI_INTERACTION_HEADER,
+  priorResourceHeaders,
+  priorWriteHeaders,
+  PRIOR_IDEMPOTENCY_HEADER,
   CONSENT_PERMISSIONS,
   buildBasicAuthHeader,
   buildClientAssertionClaims,
@@ -353,5 +357,45 @@ describe('async resource paths + poll classification (A5b)', () => {
     expect(classifyPriorPoll({ errors: [{ code: PRIOR_RESOURCE_NOT_CREATED }] })).toEqual({ status: 'pending' })
     expect(classifyPriorPoll({ data: { transaction: [] } })).toEqual({ status: 'ready' })
     expect(classifyPriorPoll({ errors: [{ code: 'BY.NBRB.Field.InvalidDate' }] })).toEqual({ status: 'error', codes: ['BY.NBRB.Field.InvalidDate'] })
+  })
+})
+
+describe('priorResourceHeaders (#461)', () => {
+  it('carries the FAPI interaction header the bank rejects requests without', () => {
+    // 400 BY.NBRB.Header.Missing — измерено на sandbox 2026-08-12. Без него ресурсный API
+    // отказывает ещё до проверки прав, и снаружи это выглядит опаковым 502 на подключении.
+    const h = priorResourceHeaders('tok', 'id-1')
+    expect(h['x-fapi-interaction-id']).toBe('id-1')
+    expect(h.authorization).toBe('Bearer tok')
+  })
+
+  it('a READ carries neither content-type nor an idempotency key', () => {
+    const h = priorResourceHeaders('t', 'i')
+    expect(h['content-type']).toBeUndefined()
+    expect(h['x-idempotency-key']).toBeUndefined()
+  })
+
+  it('the header name is exactly what the bank asks for', () => {
+    // Регистр и дефисы — как в тексте ошибки банка; опечатка здесь не поймается ничем другим.
+    expect(PRIOR_FAPI_INTERACTION_HEADER).toBe('x-fapi-interaction-id')
+    expect(PRIOR_IDEMPOTENCY_HEADER).toBe('x-idempotency-key')
+  })
+})
+
+describe('priorWriteHeaders (#461)', () => {
+  it('carries BOTH mandatory headers plus the JSON content type', () => {
+    // 400 BY.NBRB.Header.Missing на x-idempotency-key — измерено на sandbox 2026-08-12: банк
+    // проверяет заголовки ДО тела (четыре разных тела дали одну и ту же ошибку).
+    const h = priorWriteHeaders('tok', 'int-1', 'idem-1')
+    expect(h.authorization).toBe('Bearer tok')
+    expect(h['x-fapi-interaction-id']).toBe('int-1')
+    expect(h['x-idempotency-key']).toBe('idem-1')
+    expect(h['content-type']).toBe('application/json')
+  })
+
+  it('is a superset of the read headers — one choke point, not two divergent copies', () => {
+    const read = priorResourceHeaders('tok', 'int-1')
+    const write = priorWriteHeaders('tok', 'int-1', 'idem-1')
+    for (const [k, v] of Object.entries(read)) expect(write[k]).toBe(v)
   })
 })

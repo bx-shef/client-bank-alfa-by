@@ -18,7 +18,7 @@ import { buildCodeExchangeBody, parsePriorTokenResponse, priorTokenRequest } fro
 import type { PriorTokenAuth } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
 import { provisionalAccountKey } from '../../app/utils/bankAccountKey'
-import { sanitizeForLog } from './logSanitize'
+import { describeUpstreamError, sanitizeForLog } from './logSanitize'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankToken } from './bankTokenStore'
 import type { BankProviderId } from '../../app/types/statement'
@@ -128,7 +128,10 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
       tokens = parseTokenResponse(rawTokens as Record<string, unknown>)
     }
   } catch (e) {
-    deps.log?.(`[bank-connect] token exchange failed: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
+    // Envelope included (`describeUpstreamError`): this step fails with the same opaque
+    // «400 Bad Request» for a wrong `aud`, a wrong `kid`, an expired code and a missing header —
+    // and it is the LAST step, after the account holder already logged into their bank.
+    deps.log?.(`[bank-connect] token exchange failed: ${describeUpstreamError(e)}`)
     return { status: 502, html: EXCHANGE_ERR_PAGE }
   }
 

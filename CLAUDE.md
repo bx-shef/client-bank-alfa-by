@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-08-13
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -454,7 +454,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     сам REST-поиск и поле из настроек — REST-слайс. `AllocationTargetKind` расширен до `invoice|deal-payment|deal|smart-process`.
   - `app/utils/priorOauth.ts` — Open Banking (СПР) Приора: чистое OAuth/DCR/consent-ядро (префиксы API,
     `buildPriorAuthorizeUrl`/claims/тела токенов/`buildConsentRequest`/`buildResourceRequestBody` + парсеры
-    `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`). Без `node:crypto` —
+    `parsePriorTokenResponse`/`extractIntentId`/`extractResourceId`/`extractAccounts`) + **заголовки
+    ресурсного API** `priorResourceHeaders`/`priorWriteHeaders` (#461: банк требует
+    `x-fapi-interaction-id` на любом вызове и `x-idempotency-key` на записи, проверяя их ДО тела;
+    запись без ключа идемпотентности не собирается по типам, а `tests/priorResourceHeadersChokePoint.test.ts`
+    стережёт, чтобы транспорт не начал собирать заголовки сам). Без `node:crypto` —
     подпись `request`-JWT и транспорт у вызывающего (браузеро-безопасно, аналог `alfaOauth.ts`). Три имени,
     совпадающие с Альфой, несут префикс `Prior` (Nuxt авто-импортит `app/utils/**` в один неймспейс).
   - `app/utils/alfaStatement.ts` — нормализация выписки Альфы (`partner.accounts 1.2.0`) в `StatementItem`

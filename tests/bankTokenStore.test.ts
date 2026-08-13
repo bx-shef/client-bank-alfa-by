@@ -284,6 +284,47 @@ describe('bankTokenStore — behavioral (in-memory table model)', () => {
     expect(typeof got!.expiresAt).toBe('number')
   })
 
+  // Приор МОЖЕТ не вернуть refresh_token, и колбэк осознанно кладёт пустой. Раньше `saveBankToken`
+  // шифровал пустую строку в непустой блоб (`iv:tag:` с пустым шифротекстом), и признак «есть
+  // refresh» отвечал TRUE для счёта, который обновить нельзя в принципе: UI показывал «подключено»,
+  // а правда всплывала через час вставшим импортом.
+  it('пустой refresh_token сохраняется как пустая строка, а не как шифр пустой строки', async () => {
+    const { query, calls } = fakeQuery()
+    await saveBankToken(query, { ...token, refreshToken: '' })
+    expect(calls[0]!.params![4]).toBe('')
+  })
+
+  // ⚠ И НЕ КАК NULL: колонка объявлена `TEXT NOT NULL DEFAULT ''`, поэтому NULL упал бы на
+  // constraint уже в колбэке — после того, как одноразовый код банка потрачен. Проверка параметра
+  // этого не видит (фейковый QueryFn примет что угодно), поэтому нужен именно round-trip.
+  it('ROUND-TRIP: счёт без refresh_token сохраняется и читается, а не падает на расшифровке', async () => {
+    const q = memStore()
+    await saveBankToken(q, { ...token, provider: 'prior-by', refreshToken: '' })
+    const got = await getBankToken(q, 'm1', 'prior-by', 'MC_7')
+    expect(got).not.toBeNull()
+    expect(got!.refreshToken).toBe('')
+    expect(got!.accessToken).toBe('ACCESS')
+  })
+
+  it('ROUND-TRIP: счёт без refresh_token не выбивает из списка соседние здоровые строки', async () => {
+    // Раньше такая строка читалась как «битая» (decryptSecret('null')) и молча выпадала из
+    // list-резилиентности — то есть счёт исчезал из UI вместо того, чтобы просить переподключения.
+    const q = memStore()
+    await saveBankToken(q, token) // alfa-by, refresh есть
+    await saveBankToken(q, { ...token, provider: 'prior-by', refreshToken: '' })
+    const list = await listBankTokensForPortal(q, 'm1')
+    expect(list).toHaveLength(2)
+    expect(list.find(t => t.provider === 'prior-by')!.refreshToken).toBe('')
+  })
+
+  it('непустой refresh_token по-прежнему шифруется', async () => {
+    const { query, calls } = fakeQuery()
+    await saveBankToken(query, token)
+    const blob = calls[0]!.params![4] as string
+    expect(typeof blob).toBe('string')
+    expect(decryptSecret(blob)).toBe('REFRESH')
+  })
+
   it('list is RESILIENT — a single corrupt row is skipped, healthy rows still returned', async () => {
     const q = memStore()
     await saveBankToken(q, token) // healthy

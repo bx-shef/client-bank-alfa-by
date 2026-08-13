@@ -95,6 +95,11 @@ services:
       # DEMO_DELAY_MS per-job pause (demo accounts only) so the /queues chart shows a
       # visible backlog. 0 = off. See docs/QUEUES.md.
       CRON_INTERVAL_MIN: ${CRON_INTERVAL_MIN:-5}
+      # За сколько дней назад просить выписку на каждом тике. Без этой строки окно всегда
+      # [вчера, сегодня] — и первый живой прогон выглядит так: клиент подтвердил согласие, а
+      # операций за прошлую неделю нет. Симптом «банк не отдаёт историю», причина — забытая
+      # переменная, которая есть в коде и в .env.example, но не доезжала до контейнера.
+      CRON_LOOKBACK_DAYS: ${CRON_LOOKBACK_DAYS:-1}
       DEMO_LOAD_N: ${DEMO_LOAD_N:-0}
       DEMO_TICK_SEC: ${DEMO_TICK_SEC:-5}
       DEMO_DELAY_MS: ${DEMO_DELAY_MS:-600}
@@ -248,6 +253,26 @@ services:
       PRIOR_OAUTH_AUDIENCE: ${PRIOR_OAUTH_AUDIENCE:-}
       PRIOR_OAUTH_PRIVATE_KEY: ${PRIOR_OAUTH_PRIVATE_KEY:-}
       PRIOR_OAUTH_KID: ${PRIOR_OAUTH_KID:-}
+      # SSRF-allowlist хоста портала. Нужен ИМЕННО ЗДЕСЬ: `assertPortalHost` вызывается на
+      # stored-token-пути SDK, а это и есть crm-sync, который крутится на воркере. Без переменной
+      # self-hosted портал подключается и настраивается (это backend), а запись в CRM отваливается —
+      # отказ в другом месте и в другое время, чем причина.
+      B24_SELFHOSTED_HOSTS: ${B24_SELFHOSTED_HOSTS:-}
+      # Канал отзывов поднимается на воркере (`startFeedbackWorker` при role.workers), и конфиг
+      # резолвится из ЕГО env. Без пары отправка возвращает «не настроено» и задача дропается —
+      # отзыв сотрудника исчезает молча, хотя виджет в портале показан.
+      GITHUB_FEEDBACK_TOKEN: ${GITHUB_FEEDBACK_TOKEN:-}
+      GITHUB_FEEDBACK_REPO: ${GITHUB_FEEDBACK_REPO:-}
+      # Телеметрия (docs/OBSERVABILITY.md). ⚠ Нужна ИМЕННО ЗДЕСЬ, а не только на backend: джоб-спаны
+      # (`crm-sync`, `bank-fetch`, `trigger-fire`) и зависимости, которые CLAUDE.md обязывает
+      # покрывать, исполняются на ВОРКЕРЕ. Образ один, бутстрап вшит через NODE_OPTIONS, но без
+      # endpoint'а в env этого контейнера SDK остаётся выключенным — и дашборд показывает приложение,
+      # которое якобы только отдаёт HTTP и ни разу не обрабатывает платёж.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      # Отдельное имя сервиса: иначе спаны воркера и backend'а сольются в один сервис, и «кто
+      # именно встал» придётся выяснять по атрибутам вместо того, чтобы видеть сразу.
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME_WORKER:-${OTEL_SERVICE_NAME:-}}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s

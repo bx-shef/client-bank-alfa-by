@@ -114,6 +114,25 @@ describe('handleBankConnectStart — Prior (A5b, live preamble)', () => {
     expect(log.mock.calls.some(c => /consent 500/.test(String(c[0])) && !/\r|\n/.test(String(c[0])))).toBe(true)
   })
 
+  // ⚠ The test above passes with either logger, because an Error WITHOUT `.data` renders the same
+  // through both. The whole point of the change is the bank's error ENVELOPE — ofetch puts the
+  // status in `.message` and the cause in `.data`, and «400 Bad Request» alone is identical for a
+  // missing header, a rejected field and an expired token. Without this case the integration point
+  // could be reverted to `sanitizeForLog(e.message)` and the suite would stay green.
+  it('logs the bank ERROR ENVELOPE, not just the status line', async () => {
+    const log = vi.fn()
+    const buildPriorUrl = async () => {
+      throw Object.assign(new Error('[POST] "https://bank/accountConsents": 400 Bad Request'), {
+        data: { errors: [{ errorCode: 'BY.NBRB.Field.Invalid', path: 'data.expirationDate' }] }
+      })
+    }
+    const r = await handleBankConnectStart(deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl, log }), priorInput)
+    expect(r.status).toBe(502)
+    // The admin still gets our own opaque text — bank-controlled strings never reach them.
+    expect(String(r.body.error)).not.toContain('BY.NBRB')
+    expect(log.mock.calls.some(c => /BY\.NBRB\.Field\.Invalid/.test(String(c[0])))).toBe(true)
+  })
+
   it('still enforces the admin gate and the portal check BEFORE any bank round-trip', async () => {
     const buildPriorUrl = vi.fn(async () => 'X')
     const notAdmin = await handleBankConnectStart(

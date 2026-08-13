@@ -24,6 +24,7 @@
 // default off), and prod additionally needs the BY-crypto TLS СКЗИ (docs/PRIOR_API.md, issue #41).
 // Verified by unit tests against a mocked transport; a live sandbox run needs the owner's creds.
 
+import { randomUUID } from 'node:crypto'
 import type { StatementItem } from '../../app/types/statement'
 import {
   buildPriorResourceCreatePath,
@@ -34,7 +35,9 @@ import {
   extractResourceId,
   isWindowWithinLimit,
   PRIOR_API_PREFIXES,
-  PRIOR_MAX_WINDOW_DAYS
+  PRIOR_MAX_WINDOW_DAYS,
+  priorResourceHeaders,
+  priorWriteHeaders
 } from '../../app/utils/priorOauth'
 import { normalizePriorTransactionList, type PriorTransactionListResponse } from '../../app/utils/priorStatement'
 import { ensureBankToken } from './ensureBankToken'
@@ -136,7 +139,7 @@ const liveDeps: PriorFetchDeps = {
     return fetchJson(url, {
       method: 'POST',
       body,
-      headers: { 'authorization': `Bearer ${accessToken}`, 'content-type': 'application/json' },
+      headers: priorWriteHeaders(accessToken, randomUUID(), randomUUID()),
       timeout: 20_000
     })
   },
@@ -145,7 +148,7 @@ const liveDeps: PriorFetchDeps = {
       url: string,
       opts: { method: string, headers: Record<string, string>, timeout: number }
     ) => Promise<unknown>
-    return fetchJson(url, { method: 'GET', headers: { authorization: `Bearer ${accessToken}` }, timeout: 20_000 })
+    return fetchJson(url, { method: 'GET', headers: priorResourceHeaders(accessToken, randomUUID()), timeout: 20_000 })
   },
   pollJson: async (url, accessToken) => {
     // `.raw` keeps BOTH the status and the parsed body: ignoreResponseError alone would hand back a
@@ -156,7 +159,7 @@ const liveDeps: PriorFetchDeps = {
     ) => Promise<{ status: number, _data: unknown }> }).raw
     const res = await fetchRaw(url, {
       method: 'GET',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: priorResourceHeaders(accessToken, randomUUID()),
       timeout: 20_000,
       ignoreResponseError: true
     })
