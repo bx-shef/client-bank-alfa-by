@@ -12,6 +12,10 @@ import { Buffer } from 'node:buffer'
 
 const config: PriorConnectConfig = {
   baseUrl: 'https://api.priorbank.by:9344',
+  // ⚠ A DIFFERENT origin than `baseUrl` on purpose. Were it the value `baseUrl` derives, every
+  // assertion below would pass just as well against the old code that rebuilt the token URL from
+  // `baseUrl` — the fixture itself would hide the bug.
+  tokenUrl: 'https://sso.priorbank.by:9544/oauth2/token',
   authorizeBaseUrl: 'https://api.priorbank.by:9344',
   clientId: 'CLIENT-1',
   clientSecret: 'SECRET-1',
@@ -83,7 +87,7 @@ describe('priorConnectConfigFromEnv', () => {
     // `process.env.X = undefined` stores the STRING 'undefined', which is truthy — a test written
     // that way silently exercises «set to garbage» instead of «unset», and would pass even if the
     // unset branch were deleted.
-    for (const k of [...KEYS, 'PRIOR_OAUTH_AUTHORIZE_BASE', 'PRIOR_OAUTH_AUTH_METHOD']) process.env[k] = ''
+    for (const k of [...KEYS, 'PRIOR_OAUTH_AUTHORIZE_BASE', 'PRIOR_OAUTH_AUTH_METHOD', 'PRIOR_OAUTH_TOKEN_URL']) process.env[k] = ''
   }
 
   it('null when nothing is set (feature off)', () => {
@@ -96,6 +100,7 @@ describe('priorConnectConfigFromEnv', () => {
     try {
       expect(priorConnectConfigFromEnv()).toEqual({
         baseUrl: 'https://api.priorbank.by:9344',
+        tokenUrl: 'https://api.priorbank.by:9344/open-banking-authorize/v1.0/oauth2/token',
         authorizeBaseUrl: 'https://api.priorbank.by:9344',
         clientId: 'C',
         clientSecret: 'S',
@@ -175,6 +180,34 @@ describe('priorConnectConfigFromEnv', () => {
       }
     })
 
+    // The token endpoint and the resource API are DIFFERENT APIs at the bank, and only the
+    // authorization server is documented as living behind BY-crypto TLS. So the token URL must be
+    // configurable on its own — and it must be the SAME variable the refresh path reads, or the
+    // two call sites of one endpoint would disagree about the host.
+    it('token endpoint follows PRIOR_OAUTH_TOKEN_URL, resource API stays on the bank', () => {
+      setAll()
+      process.env.PRIOR_OAUTH_TOKEN_URL = 'http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token'
+      try {
+        const cfg = priorConnectConfigFromEnv()
+        expect(cfg?.tokenUrl).toBe('http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token')
+        expect(cfg?.baseUrl).toBe('https://api.priorbank.by:9344')
+      } finally {
+        clearAll()
+      }
+    })
+
+    it('a SET but unusable token URL fails closed instead of falling back to the base', () => {
+      // Silently substituting the base would make a typo look like a working deployment — and the
+      // request would go to the host the operator explicitly tried to move it away from.
+      setAll()
+      process.env.PRIOR_OAUTH_TOKEN_URL = 'http://api.priorbank.by:9344/oauth2/token'
+      try {
+        expect(priorConnectConfigFromEnv()).toBeNull()
+      } finally {
+        clearAll()
+      }
+    })
+
     it('fail-closed when the base is internal and no public authorize origin is set', () => {
       // Otherwise we would hand the browser `http://avtunproxy:1080/...` — unreachable for it, and
       // silent on the server. Refusing to start is the only honest outcome.
@@ -215,7 +248,7 @@ describe('buildPriorConnectUrl', () => {
     const url = await buildPriorConnectUrl(config, 'SIGNED-STATE', deps, NOW_MS)
 
     // 1) token Б: client_credentials + scope=accounts, creds in the Basic HEADER (NOT the body)
-    expect(calls.tokenUrl[0]).toBe(`${config.baseUrl}${PRIOR_API_PREFIXES.AUTH}/oauth2/token`)
+    expect(calls.tokenUrl[0]).toBe(config.tokenUrl)
     expect(calls.tokenBody[0]).toContain('grant_type=client_credentials')
     expect(calls.tokenBody[0]).toContain(`scope=${PRIOR_CONSENT_SCOPE}`)
     expect(calls.tokenBody[0]).not.toContain('SECRET-1') // secret never in the body
@@ -290,13 +323,38 @@ describe('buildPriorConnectUrl', () => {
   it('calls the gateway for token/consent but sends the browser to the bank', async () => {
     const { deps, calls } = fakeDeps()
     const url = await buildPriorConnectUrl(
-      { ...config, baseUrl: 'http://avtunproxy:1080', authorizeBaseUrl: 'https://apibel.priorbank.by:9345' },
+      {
+        ...config,
+        baseUrl: 'http://avtunproxy:1080',
+        tokenUrl: 'http://avtunproxy:1080/open-banking-authorize/v1.0/oauth2/token',
+        authorizeBaseUrl: 'https://apibel.priorbank.by:9345'
+      },
       'SIGNED-STATE', deps, NOW_MS
     )
     expect(calls.tokenUrl[0]).toContain('http://avtunproxy:1080')
     expect(calls.consentUrl[0]).toContain('http://avtunproxy:1080')
     expect(url.startsWith('https://apibel.priorbank.by:9345')).toBe(true)
     expect(url).not.toContain('avtunproxy') // the internal host never reaches the browser
+  })
+
+  // The regression this guards: the token URL used to be DERIVED from `baseUrl`, so it could not
+  // be moved on its own — while the refresh path has always read `PRIOR_OAUTH_TOKEN_URL`. Point
+  // the two at different hosts (the documented production shape: authorization server behind the
+  // BY-crypto gateway, resource API on the bank's public host) and the old code sent the token
+  // request to the WRONG one, with refresh still going to the right one.
+  it('token and consent may go to different hosts — the token follows tokenUrl, the consent baseUrl', async () => {
+    const { deps, calls } = fakeDeps()
+    await buildPriorConnectUrl(
+      {
+        ...config,
+        baseUrl: 'https://api.priorbank.by:9344',
+        tokenUrl: 'http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token',
+        authorizeBaseUrl: 'https://apibel.priorbank.by:9345'
+      },
+      'SIGNED-STATE', deps, NOW_MS
+    )
+    expect(calls.tokenUrl[0]).toBe('http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token')
+    expect(calls.consentUrl[0]).toBe(`https://api.priorbank.by:9344${PRIOR_API_PREFIXES.OB}/accountConsents`)
   })
 
   it('throws on an OAuth error payload from the token step (never a half-built URL)', async () => {

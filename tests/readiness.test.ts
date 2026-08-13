@@ -5,27 +5,30 @@ const deps = (over: Partial<ReadinessDeps>): ReadinessDeps => ({
   checkDb: async () => true,
   redisConfigured: () => true,
   pingRedis: async () => true,
+  // Default: no gateway in use — the common deployment (Prior straight over TLS / not connected).
+  cryptoGwConfigured: () => false,
+  pingCryptoGw: async () => true,
   ...over
 })
 
 describe('evaluateReadiness', () => {
   it('ok when db + redis both up', async () => {
-    expect(await evaluateReadiness(deps({}))).toEqual({ ready: true, status: 'ok', checks: { db: true, redis: true } })
+    expect(await evaluateReadiness(deps({}))).toEqual({ ready: true, status: 'ok', checks: { db: true, redis: true, cryptoGw: null } })
   })
 
   it('down when db is down (hard gate)', async () => {
     const r = await evaluateReadiness(deps({ checkDb: async () => false }))
-    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: true } })
+    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: true, cryptoGw: null } })
   })
 
   it('degraded when db up but a configured redis is unreachable (events serve via fallback)', async () => {
     const r = await evaluateReadiness(deps({ pingRedis: async () => false }))
-    expect(r).toEqual({ ready: false, status: 'degraded', checks: { db: true, redis: false } })
+    expect(r).toEqual({ ready: false, status: 'degraded', checks: { db: true, redis: false, cryptoGw: null } })
   })
 
   it('ok with redis=null (queues off) — db alone gates', async () => {
     const r = await evaluateReadiness(deps({ redisConfigured: () => false }))
-    expect(r).toEqual({ ready: true, status: 'ok', checks: { db: true, redis: null } })
+    expect(r).toEqual({ ready: true, status: 'ok', checks: { db: true, redis: null, cryptoGw: null } })
   })
 
   it('redis not pinged when not configured', async () => {
@@ -43,7 +46,7 @@ describe('evaluateReadiness', () => {
       throw new Error('ECONNREFUSED')
     }
     const r = await evaluateReadiness(deps({ checkDb }))
-    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: true } })
+    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: true, cryptoGw: null } })
   })
 
   it('a throwing redis probe coerces to degraded', async () => {
@@ -51,17 +54,17 @@ describe('evaluateReadiness', () => {
       throw new Error('redis gone')
     }
     const r = await evaluateReadiness(deps({ pingRedis }))
-    expect(r).toEqual({ ready: false, status: 'degraded', checks: { db: true, redis: false } })
+    expect(r).toEqual({ ready: false, status: 'degraded', checks: { db: true, redis: false, cryptoGw: null } })
   })
 
   it('db-down + redis-off → down (db is the hard gate)', async () => {
     const r = await evaluateReadiness(deps({ checkDb: async () => false, redisConfigured: () => false }))
-    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: null } })
+    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: null, cryptoGw: null } })
   })
 
   it('db-down + configured-redis-down → down (db wins over degraded)', async () => {
     const r = await evaluateReadiness(deps({ checkDb: async () => false, pingRedis: async () => false }))
-    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: false } })
+    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: false, cryptoGw: null } })
   })
 
   it('both probes throw → down, and evaluateReadiness still resolves (Promise.all never rejects)', async () => {
@@ -69,6 +72,40 @@ describe('evaluateReadiness', () => {
       throw new Error('boom')
     }
     const r = await evaluateReadiness(deps({ checkDb: boom, pingRedis: boom }))
-    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: false } })
+    expect(r).toEqual({ ready: false, status: 'down', checks: { db: false, redis: false, cryptoGw: null } })
+  })
+
+  it('gateway in use and answering → reported, verdict untouched', async () => {
+    const r = await evaluateReadiness(deps({ cryptoGwConfigured: () => true }))
+    expect(r).toEqual({ ready: true, status: 'ok', checks: { db: true, redis: true, cryptoGw: true } })
+  })
+
+  it('gateway DOWN does NOT make the app unready', async () => {
+    // The whole design decision in one test: Priorbank is one bank out of several, and B24
+    // events / manual upload / Alfa keep working. A 503 here would take the app down for every
+    // uptime monitor — and restart-loop it wherever this endpoint drives a healthcheck.
+    const r = await evaluateReadiness(deps({ cryptoGwConfigured: () => true, pingCryptoGw: async () => false }))
+    expect(r).toEqual({ ready: true, status: 'ok', checks: { db: true, redis: true, cryptoGw: false } })
+  })
+
+  it('gateway probe that throws is reported false, not propagated', async () => {
+    const r = await evaluateReadiness(deps({
+      cryptoGwConfigured: () => true,
+      pingCryptoGw: async () => { throw new Error('ECONNREFUSED') }
+    }))
+    expect(r.checks.cryptoGw).toBe(false)
+    expect(r.ready).toBe(true)
+  })
+
+  it('gateway not configured → null, probe never called', async () => {
+    let called = false
+    const r = await evaluateReadiness(deps({
+      pingCryptoGw: async () => {
+        called = true
+        return true
+      }
+    }))
+    expect(r.checks.cryptoGw).toBeNull()
+    expect(called).toBe(false)
   })
 })

@@ -22,6 +22,9 @@ export interface ReadinessChecks {
   db: boolean
   /** Redis reachable (PING); null when REDIS_URL is unset (queues off — not an error). */
   redis: boolean | null
+  /** BY-crypto gateway answering its own /healthz (#460/#461); null when it is not in use.
+   *  INFORMATIONAL — deliberately excluded from `ready`/`status`, see `evaluateReadiness`. */
+  cryptoGw: boolean | null
 }
 
 /** Coarse status for consumers that want more than the `ready` boolean:
@@ -46,6 +49,10 @@ export interface ReadinessDeps {
   redisConfigured: () => boolean
   /** Resolves true when a Redis PING succeeds. Only called when redisConfigured() is true. */
   pingRedis: () => Promise<boolean>
+  /** True when Prior's traffic is routed through the crypto gateway (#460). */
+  cryptoGwConfigured: () => boolean
+  /** Resolves true when the gateway answers its own /healthz. Only called when configured. */
+  pingCryptoGw: () => Promise<boolean>
 }
 
 /** Run a probe, coercing any throw/rejection to `false` — a readiness probe reports
@@ -58,15 +65,24 @@ async function probe(fn: () => Promise<boolean>): Promise<boolean> {
   }
 }
 
-/** Evaluate readiness from the injected probes. `db` and `redis` run concurrently. */
+/** Evaluate readiness from the injected probes. All probes run concurrently. */
 export async function evaluateReadiness(deps: ReadinessDeps): Promise<ReadinessResult> {
   const configured = deps.redisConfigured()
-  const [db, redis] = await Promise.all([
+  const gwConfigured = deps.cryptoGwConfigured()
+  const [db, redis, cryptoGw] = await Promise.all([
     probe(deps.checkDb),
-    configured ? probe(deps.pingRedis) : Promise.resolve<null>(null)
+    configured ? probe(deps.pingRedis) : Promise.resolve<null>(null),
+    gwConfigured ? probe(deps.pingCryptoGw) : Promise.resolve<null>(null)
   ])
   // down: DB unreachable → nothing works. degraded: DB up but a configured Redis is down
   // → API + B24 events (sync DB fallback) still serve, imports stalled. ok: otherwise.
+  //
+  // ⚠ `cryptoGw` is REPORTED but does NOT move the verdict, on purpose. The gateway serves
+  // exactly one bank; Bitrix24 events, manual upload and Alfa keep working without it. Letting
+  // it flip `ready` would turn a Priorbank-only outage into a 503 for every uptime monitor —
+  // and, wherever this endpoint is wired to a container healthcheck, into a restart loop of a
+  // perfectly healthy backend. The field exists so an on-call responder can SEE the gateway
+  // state at the one URL they already hit; alerting on Prior belongs to the queue alerts.
   const status: ReadinessStatus = !db ? 'down' : redis === false ? 'degraded' : 'ok'
-  return { ready: status === 'ok', status, checks: { db, redis } }
+  return { ready: status === 'ok', status, checks: { db, redis, cryptoGw } }
 }

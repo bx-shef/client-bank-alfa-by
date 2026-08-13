@@ -162,10 +162,17 @@ describe('Крипто-шлюз Приора: адресация (#455)', () => 
     expect(warns({ PRIOR_OAUTH_API_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token` }, /РАЗНЫЕ адреса|непригоден|авторизации/)).toBe(false)
   })
 
-  // Главная ловушка cutover'а: переменные независимы, перевели одну — забыли вторую, и обновление
-  // токена продолжает тихо ходить на старый хост, пока импорт не встанет.
-  it('рассинхрон API_BASE и TOKEN_URL — предупреждение', () => {
-    expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token`, PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /РАЗНЫЕ адреса/)).toBe(true)
+  // Ловушка cutover'а: переменные независимы, перевели одну внутрь сети — вторая осталась снаружи
+  // по недосмотру. Предупреждаем именно про ПОЛОВИНЧАТЫЙ переезд, а не про сам факт разных адресов.
+  it('половинчатый переезд на шлюз — предупреждение', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_TOKEN_URL: `${BANK}/oauth2/token`, PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /внутрь сети/)).toBe(true)
+  })
+
+  // ⚠ Разные ПУБЛИЧНЫЕ адреса — законная конфигурация: банк разносит API, и BY-крипто требуется
+  // серверу авторизации, а не ресурсному API. Предупреждать здесь значило бы приучать оператора
+  // пролистывать предупреждения.
+  it('разные публичные хосты у токена и ресурсов — тишина', () => {
+    expect(warns({ PRIOR_OAUTH_API_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: 'https://sso.priorbank.by:9544/oauth2/token', PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /внутрь сети/)).toBe(false)
   })
 
   it('совпадающий origin при разных путях — тишина', () => {

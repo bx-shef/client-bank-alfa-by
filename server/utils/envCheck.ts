@@ -160,8 +160,18 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   //     gateway with no public authorize origin: the connect flow dies with NO server-side error. ---
   const priorApiBase = (env.PRIOR_OAUTH_API_BASE ?? '').trim()
   const priorTokenUrl = (env.PRIOR_OAUTH_TOKEN_URL ?? '').trim()
-  if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)) {
-    warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL указывают на РАЗНЫЕ адреса — при переводе Приора на крипто-шлюз надо менять обе, иначе обновление токена продолжит ходить на старый хост.')
+  // ⚠ DIFFERENT addresses here are NOT an error by themselves: the bank splits its APIs, and the
+  // BY-crypto `:9345` requirement is scoped to the authorization server (`Open-banking-authorize`),
+  // not to the resource `Open-banking`. So «token through the gateway, resources on the public
+  // host» is a legitimate production shape, and warning about it would train the operator to scroll
+  // past warnings. What IS dangerous is a HALF-DONE migration: one variable moved inside the
+  // network, the other left outside by oversight — the split then follows nobody's intent.
+  // «Internal» is recognised the same way as below: usable as a backend origin, unusable as a
+  // public one.
+  const isInternal = (v: string) => !!normalizeBankApiBase(v) && !normalizeAuthorizeBase(v)
+  if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)
+    && isInternal(priorApiBase) !== isInternal(priorTokenUrl)) {
+    warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL: одна переменная указывает внутрь сети (крипто-шлюз), вторая — наружу. Похоже на незавершённый перевод Приора на шлюз: проверьте, что через шлюз идёт именно то, что должно, а остальное осталось на публичном хосте осознанно.')
   }
   // The nastiest shape of the same split: API_BASE set, TOKEN_URL absent. Connect and the code
   // exchange build their URL from API_BASE and never look at TOKEN_URL, so the whole setup passes —

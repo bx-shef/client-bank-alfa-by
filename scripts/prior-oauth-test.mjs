@@ -27,7 +27,12 @@
 // `.env.priorbank.example` and fill in. Secrets never hard-coded; real env vars
 // and flags win over the file. Tokens/accounts are masked in the console and in
 // the `prior-demo-output.json` dump (gitignored); pass `--full` to disable.
-//   PRIOR_BASE            (default https://api.priorbank.by:9344 — sandbox)
+//   PRIOR_BASE            (default https://api.priorbank.by:9344 — sandbox). The bank's PUBLIC
+//                         address: the authorize link and the `aud` claim are built from it.
+//   PRIOR_API_BASE        / --api-base — where this script's HTTP goes. Only differs from
+//                         PRIOR_BASE behind the BY-crypto gateway, where prod is reachable as
+//                         plain HTTP internally (Node cannot speak STB 34.101.65). Example:
+//                           --base https://apibel.priorbank.by:9345 --api-base http://127.0.0.1:1080
 //   PRIOR_TECH_CLIENT_ID / PRIOR_TECH_CLIENT_SECRET   (tech app — only for --dcr)
 //   PRIOR_CLIENT_ID / PRIOR_CLIENT_SECRET             (business app)
 //   PRIOR_REDIRECT_URI   / --redirect-uri
@@ -82,7 +87,17 @@ const envFile = loadDotEnv(
 )
 
 const cfg = {
+  // PUBLIC bank address. Two things are built from it and NEITHER may ever point at a
+  // gateway: the authorize URL (a browser opens it) and the fallback `aud` claim (a value
+  // the bank compares, not a place we connect to).
   base: (args['base'] || process.env.PRIOR_BASE || 'https://api.priorbank.by:9344').replace(/\/+$/, ''),
+  // Where the script's own HTTP actually goes. Same as `base` everywhere except behind the
+  // BY-crypto gateway (#455/#460), where prod is reachable only as plain HTTP on an internal
+  // address — Node cannot speak STB 34.101.65 itself. Set it and `base` stays the bank.
+  // ⚠ Without this split the gateway address would leak into `aud` and into the authorize
+  // link, and the bank would reject the assertion in a way that looks exactly like a bad key.
+  apiBase: (args['api-base'] || process.env.PRIOR_API_BASE
+    || args['base'] || process.env.PRIOR_BASE || 'https://api.priorbank.by:9344').replace(/\/+$/, ''),
   techId: args['tech-client-id'] || process.env.PRIOR_TECH_CLIENT_ID || '',
   techSecret: args['tech-client-secret'] || process.env.PRIOR_TECH_CLIENT_SECRET || '',
   clientId: args['client-id'] || process.env.PRIOR_CLIENT_ID || '',
@@ -162,9 +177,9 @@ async function postToken(bodyParams, { id, secret, basicOnly = false }) {
   if (args['verbose']) {
     const shown = new URLSearchParams(req.body)
     if (shown.has('client_assertion')) shown.set('client_assertion', '<signed-jwt>')
-    log(`${C.dim}→ POST ${cfg.base}${AUTH}/oauth2/token  [${shown}]  auth ${auth.method}  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
+    log(`${C.dim}→ POST ${cfg.apiBase}${AUTH}/oauth2/token  [${shown}]  auth ${auth.method}  client ${id ? id.slice(0, 6) + '…' : '(none)'}${C.reset}`)
   }
-  return httpRequest(`${cfg.base}${AUTH}/oauth2/token`, {
+  return httpRequest(`${cfg.apiBase}${AUTH}/oauth2/token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -179,10 +194,10 @@ async function postToken(bodyParams, { id, secret, basicOnly = false }) {
 async function obRequest(path, { method = 'GET', accessToken, json } = {}) {
   const body = json ? JSON.stringify(json) : undefined
   if (args['verbose']) {
-    log(`${C.dim}→ ${method} ${cfg.base}${path}${C.reset}`)
+    log(`${C.dim}→ ${method} ${cfg.apiBase}${path}${C.reset}`)
     if (body) log(body)
   }
-  const res = await httpRequest(`${cfg.base}${path}`, {
+  const res = await httpRequest(`${cfg.apiBase}${path}`, {
     method,
     headers: {
       'Authorization': `Bearer ${accessToken}`,
@@ -237,7 +252,7 @@ async function clientCredentials(scope, { id, secret, label, basicOnly = false }
 
 async function oidcDiscovery(tokenA) {
   head('OIDC discovery — /oidcdiscovery (token A)')
-  const res = await httpRequest(`${cfg.base}${DCR}/oidcdiscovery`, {
+  const res = await httpRequest(`${cfg.apiBase}${DCR}/oidcdiscovery`, {
     headers: { Authorization: `Bearer ${tokenA}`, Accept: 'application/json' }
   })
   log(`${C.dim}HTTP ${res.status}${C.reset}`)
@@ -291,10 +306,10 @@ async function dcrRegister(tokenA, jwks, pem) {
   }
 
   if (args['verbose']) {
-    log(`${C.dim}→ POST ${cfg.base}${DCR}/register  (Content-Type: ${contentType})${C.reset}`)
+    log(`${C.dim}→ POST ${cfg.apiBase}${DCR}/register  (Content-Type: ${contentType})${C.reset}`)
     log(args['register-jwt'] ? `${C.dim}signed JWT payload:${C.reset}\n${JSON.stringify(meta, null, 2)}` : JSON.stringify(meta, null, 2))
   }
-  const res = await httpRequest(`${cfg.base}${DCR}/register`, {
+  const res = await httpRequest(`${cfg.apiBase}${DCR}/register`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${tokenA}`,
@@ -391,7 +406,7 @@ async function listAccounts(tokenB) {
   // Response: data.account[] with accountId, currency, accountSubType,
   // accountDetails.identification (IBAN). Confirmed live (see docs/PRIOR_API.md).
   const res = await obRequest(`${OB}/accounts`, { accessToken: tokenB })
-  log(`${C.dim}HTTP ${res.status}  ${cfg.base}${OB}/accounts${C.reset}`)
+  log(`${C.dim}HTTP ${res.status}  ${cfg.apiBase}${OB}/accounts${C.reset}`)
   if (res.status < 200 || res.status >= 300) {
     err(`accounts request failed (HTTP ${res.status})`)
     log(res.json ? JSON.stringify(res.json, null, 2) : trunc(res.text, 600))
@@ -485,7 +500,7 @@ async function revoke(token) {
     new URLSearchParams({ token }),
     tokenAuthFor({ id: cfg.clientId, secret: cfg.clientSecret })
   )
-  const res = await httpRequest(`${cfg.base}${AUTH}/oauth2/revoke`, {
+  const res = await httpRequest(`${cfg.apiBase}${AUTH}/oauth2/revoke`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -511,10 +526,24 @@ function saveOutput(data) {
 // --- main ------------------------------------------------------------------
 async function main() {
   const isSandbox = /api\.priorbank\.by:9344/.test(cfg.base)
-  log(`${C.bold}Priorbank BY — Open Banking (СПР) sandbox demo${C.reset}`)
+  const viaGateway = cfg.apiBase !== cfg.base
+  log(`${C.bold}Priorbank BY — Open Banking (СПР) demo${C.reset}`)
   log(`${C.dim}env file:${C.reset} ${envFile ?? '(none — process env / flags)'}   `
-    + `${isSandbox ? `${C.yellow}● SANDBOX${C.reset}` : `${C.red}● NON-SANDBOX${C.reset} (${cfg.base})`}`)
-  if (!isSandbox) warn('base is not the sandbox host — prod needs BY-crypto TLS via the СКЗИ gateway (issue #41)')
+    + `${isSandbox ? `${C.yellow}● SANDBOX${C.reset}` : `${C.red}● PROD${C.reset} (${cfg.base})`}`)
+  // Print both addresses whenever they differ. Which one carries which meaning is the single
+  // easiest thing to get wrong here, and getting it wrong fails as an opaque bank rejection.
+  if (viaGateway) {
+    log(`${C.dim}HTTP →${C.reset} ${cfg.apiBase}  ${C.dim}(шлюз)${C.reset}`)
+    log(`${C.dim}authorize / aud →${C.reset} ${cfg.base}  ${C.dim}(банк, публичный адрес)${C.reset}`)
+    if (/^https:/.test(cfg.apiBase)) {
+      warn('--api-base по https — это адрес шлюза, обычно он внутренний и по http. Проверьте, что не перепутали с публичным.')
+    }
+  } else if (!isSandbox) {
+    // Prod over plain TLS cannot work: the bank answers with a Belarusian ciphersuite and
+    // Node aborts at ServerHello. Say so before the first request instead of after it.
+    warn('прод-хост без --api-base: Node не умеет СТБ 34.101.65 и оборвётся на ServerHello.')
+    warn('поднимите крипто-шлюз (deploy/crypto-gateway) и передайте --api-base http://<шлюз>:1080')
+  }
 
   // --gen-key: RSA keypair + jwks for DCR registration. No network.
   if (args['gen-key']) {
