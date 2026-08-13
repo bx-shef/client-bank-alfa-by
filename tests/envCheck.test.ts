@@ -172,7 +172,7 @@ describe('Крипто-шлюз Приора: адресация (#455)', () => 
   // серверу авторизации, а не ресурсному API. Предупреждать здесь значило бы приучать оператора
   // пролистывать предупреждения.
   it('разные публичные хосты у токена и ресурсов — тишина', () => {
-    expect(warns({ PRIOR_OAUTH_API_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: 'https://apibel.priorbank.by:9345/oauth2/token', PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /внутрь сети/)).toBe(false)
+    expect(warns({ PRIOR_OAUTH_API_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: 'https://sso.priorbank.by:9544/oauth2/token', PRIOR_OAUTH_AUTHORIZE_BASE: BANK }, /внутрь сети/)).toBe(false)
   })
 
   it('совпадающий origin при разных путях — тишина', () => {

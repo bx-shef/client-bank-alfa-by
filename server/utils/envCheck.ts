@@ -156,13 +156,14 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   //     gateway with no public authorize origin: the connect flow dies with NO server-side error. ---
   const priorApiBase = (env.PRIOR_OAUTH_API_BASE ?? '').trim()
   const priorTokenUrl = (env.PRIOR_OAUTH_TOKEN_URL ?? '').trim()
-  // ⚠ РАЗНЫЕ адреса у этих двух переменных — НЕ ошибка сама по себе: банк разносит API, и
-  // требование BY-крипто `:9345` относится к серверу авторизации (`Open-banking-authorize`), а не
-  // к ресурсному `Open-banking`. Поэтому «токен через шлюз, ресурсы на публичном хосте» —
-  // законная конфигурация, и предупреждать о ней значило бы приучать оператора игнорировать
-  // предупреждения. Опасен ПОЛОВИНЧАТЫЙ переезд: одна переменная внутрь сети, другая осталась
-  // снаружи по недосмотру. Внутренний адрес узнаём тем же способом, что и ниже: пригоден как
-  // backend-origin, но непригоден как публичный.
+  // ⚠ DIFFERENT addresses here are NOT an error by themselves: the bank splits its APIs, and the
+  // BY-crypto `:9345` requirement is scoped to the authorization server (`Open-banking-authorize`),
+  // not to the resource `Open-banking`. So «token through the gateway, resources on the public
+  // host» is a legitimate production shape, and warning about it would train the operator to scroll
+  // past warnings. What IS dangerous is a HALF-DONE migration: one variable moved inside the
+  // network, the other left outside by oversight — the split then follows nobody's intent.
+  // «Internal» is recognised the same way as below: usable as a backend origin, unusable as a
+  // public one.
   const isInternal = (v: string) => !!normalizeBankApiBase(v) && !normalizeAuthorizeBase(v)
   if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)
     && isInternal(priorApiBase) !== isInternal(priorTokenUrl)) {

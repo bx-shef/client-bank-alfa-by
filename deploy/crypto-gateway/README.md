@@ -1,6 +1,6 @@
 # Крипто-шлюз до Приорбанка (BY-крипто TLS)
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-08-13
 
 Образ, который позволяет нашему backend'у ходить в боевой Open Banking Приорбанка
 ([#460](https://github.com/bx-shef/client-bank-alfa-by/issues/460)). Внутрь — обычный HTTP,
@@ -90,9 +90,15 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:1080/healthz   # 200
 
 ## Включение в проде
 
-1. Создать на сервере каталог с корнями и положить туда `gossuok-bundle.pem` и
-   `bank-leaf-reference.pem` из `deploy/crypto-gateway/ca/` (репозитория на прод-сервере нет —
-   там только `docker-compose.prod.yml`, `Makefile` и `.env`, см. [`docs/DEPLOY.md`](../../docs/DEPLOY.md)).
+1. Положить на сервер корни. Репозитория там нет — только `docker-compose.prod.yml`, `Makefile` и
+   `.env` (см. [`docs/DEPLOY.md`](../../docs/DEPLOY.md)), поэтому файлы качаем поштучно, тем же
+   способом, что и сам compose-файл:
+
+   ```bash
+   mkdir -p ~/crypto-gw-ca && cd ~/crypto-gw-ca
+   curl -fsSL -O https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/deploy/crypto-gateway/ca/gossuok-bundle.pem
+   curl -fsSL -O https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/deploy/crypto-gateway/ca/bank-leaf-reference.pem
+   ```
 2. В `.env` задать `PRIOR_GW_CA_DIR` (путь из шага 1), при необходимости `PRIOR_GW_UPSTREAM_HOST`/
    `PRIOR_GW_UPSTREAM_PORT`.
 3. В `docker-compose.prod.yml` раскомментировать: сервис `crypto-gw`, сеть `cryptonet` внизу и
@@ -120,7 +126,12 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:1080/healthz   # 200
 
    Расщепление адресов — [#455](https://github.com/bx-shef/client-bank-alfa-by/issues/455), правила в
    `app/utils/bankGatewayUrl.ts`.
-5. `docker compose -f docker-compose.prod.yml up -d`.
+5. `make prod-redeploy` (или `docker compose -f docker-compose.prod.yml up -d`).
+
+⚠ **Технический чек-лист выше — не разрешение включать.** Канал работает, но признаёт ли банк
+несертифицированную реализацию — вопрос владельческий и на момент написания открыт. Включать в
+проде только после письменного ответа банка: иначе через месяц кто-нибудь пройдёт этот список как
+инструкцию и включит шлюз, не зная, что юридическая половина не закрыта.
 
 ## Переменные
 
@@ -275,11 +286,11 @@ nginx/OpenSSL/bee2evp здесь — сборочные `ARG`. Это ручна
 
 ## Чего пока нет
 
-- **Прямого сигнала «шлюз лёг».** `/api/ready` его не проверяет, в `docs/OPERATIONS.md` его нет.
-  Косвенно авария всё же всплывёт: джобы `bank-fetch-prior` начнут падать, а классификатор
-  тревог считает сетевую ошибку «нашим сбоем», так что Telegram-канал пробьёт порог. Но сообщение
-  будет generic — без подсказки «проверь контейнер». Закрывается в
-  [#461](https://github.com/bx-shef/client-bank-alfa-by/issues/461).
+- **Активного АЛЕРТА «шлюз лёг».** Видимость появилась: `GET /api/ready` отдаёт `checks.cryptoGw`,
+  а в `docs/OPERATIONS.md` есть раздел с таблицей значений. Но это проба «по запросу» — её надо
+  пойти и посмотреть. Косвенно авария всплывёт сама: джобы `bank-fetch-prior` начнут падать, а
+  классификатор тревог считает сетевую ошибку «нашим сбоем», так что Telegram-канал пробьёт порог —
+  только сообщение будет generic, без подсказки «проверь контейнер».
 - **Общего секрета между приложением и шлюзом.** Шлюз никого не аутентифицирует, см. «Граница
   доверия». Требует правок транспортного слоя — тоже #461.
 - **Калибровки таймаутов и поведения под конкурентностью.** `15s`/`60s` и `GW_KEEPALIVE=4`

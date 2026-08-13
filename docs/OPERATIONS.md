@@ -1,6 +1,6 @@
 # Операции: пост-запускной runbook (#246)
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-08-13
 
 Как понять, что приложение живо, где смотреть диагностику, что делать при типовых сбоях,
 как откатиться и куда эскалировать. Дополняет [`DEPLOY.md`](DEPLOY.md) (как деплоить) и
@@ -331,7 +331,7 @@ Fail-closed: не заданы обе переменные ⇒ канал вык
    обращаться к нему будет некому.
 3. Адреса — по таблице выше (`API_BASE` и `TOKEN_URL` на шлюз, `AUTHORIZE_BASE` остаётся
    публичным, `AUDIENCE` не трогать), плюс `PRIOR_OAUTH_AUTH_METHOD=private_key_jwt`.
-4. `docker compose -f docker-compose.prod.yml pull && up -d`.
+4. `make prod-redeploy` (или `docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d` — `-f` нужен КАЖДОЙ команде, иначе вторая половина не выполнится).
 
 **Что должно быть в логах шлюза сразу после старта** (`docker logs client-bank-alfa-by-crypto-gw`):
 
