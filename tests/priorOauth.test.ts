@@ -16,6 +16,8 @@ import {
   buildCodeExchangeBody,
   buildPriorRefreshBody,
   buildRegistrationMetadata,
+  buildPriorClientName,
+  isSafePriorClientName,
   buildConsentRequest,
   buildAuthorizeRequestClaims,
   buildPriorAuthorizeUrl,
@@ -89,6 +91,58 @@ describe('DCR registration metadata', () => {
       tokenEndpointAuthMethod: 'private_key_jwt'
     })
     expect(meta.token_endpoint_auth_method).toEqual(['private_key_jwt'])
+  })
+
+  // The name that actually shipped: Cyrillic and spaces. `/register` answered 201, and the store
+  // side of WSO2 cannot represent it. Registering is one-way (no working PUT), so this has to fail
+  // BEFORE the request, not after.
+  it('refuses a client_name the API Store cannot represent', () => {
+    expect(() => buildRegistrationMetadata({
+      clientName: 'Импорт выписки Bitrix24 basic 0812-162429',
+      redirectUri: 'https://cb/ob'
+    })).toThrow(/client_name/)
+    expect(() => buildRegistrationMetadata({ clientName: 'has space', redirectUri: 'https://cb/ob' })).toThrow()
+    expect(() => buildRegistrationMetadata({ clientName: 'paren(s)', redirectUri: 'https://cb/ob' })).toThrow()
+    expect(() => buildRegistrationMetadata({ clientName: '', redirectUri: 'https://cb/ob' })).toThrow()
+  })
+
+  // `default_max_age` is only absent when we say nothing; 0 must reach the bank as 0, because
+  // "omit it" and "ask for no constraint" are different requests and the bank's own default is 900.
+  it('sends default_max_age only when asked, and 0 is a value, not an omission', () => {
+    const bare = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob' })
+    expect('default_max_age' in bare).toBe(false)
+    const zero = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', defaultMaxAge: 0 })
+    expect(zero.default_max_age).toBe(0)
+    const some = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', defaultMaxAge: 3600 })
+    expect(some.default_max_age).toBe(3600)
+  })
+})
+
+describe('buildPriorClientName', () => {
+  it('joins parts into a store-safe name', () => {
+    expect(buildPriorClientName(['bx-shef', 'bank-import', 'client_secret_basic', '20260813T0612']))
+      .toBe('bx-shef-bank-import-client_secret_basic-20260813T0612')
+  })
+
+  it('replaces unsafe characters instead of dropping them (dropping can collide)', () => {
+    // Two DIFFERENT inputs must not become one name — a collision is a 409 and a wasted
+    // registration, and with dropping, `a b` and `ab` would both become `ab`.
+    expect(buildPriorClientName(['a b'])).toBe('a-b')
+    expect(buildPriorClientName(['ab'])).toBe('ab')
+    expect(buildPriorClientName(['Импорт выписки', 'Bitrix24'])).toBe('Bitrix24')
+  })
+
+  it('collapses runs, trims edges, and stays inside the pattern', () => {
+    expect(buildPriorClientName(['a  b', '', '-c-'])).toBe('a-b-c')
+    expect(isSafePriorClientName(buildPriorClientName(['x!!!y']))).toBe(true)
+  })
+
+  it('caps the length (WSO2 rejects long application names)', () => {
+    expect(buildPriorClientName(['x'.repeat(200)])).toHaveLength(100)
+  })
+
+  it('throws rather than returning an empty name', () => {
+    expect(() => buildPriorClientName(['—', '  '])).toThrow(/empty/)
   })
 })
 

@@ -47,6 +47,10 @@
 //                   it prints the signed JWT and raw bodies, do not paste real-
 //                   portal output into a ticket/chat)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
+//        --app-name <name> (DCR client_name; Latin/digits/. _ - only, sanitised — see
+//                   buildPriorClientName. Default: bx-shef-bank-import-<method>-<stamp>)
+//        --max-age <sec> (DCR default_max_age; default 0 = no constraint. `--max-age=` omits the
+//                   field so the bank applies its own default, which is 900)
 //        --auth-method client_secret_basic|private_key_jwt  (#444; prod needs private_key_jwt —
 //                   applies to the BUSINESS app only, token A stays Basic. Affects what --dcr
 //                   registers, so register and run with the SAME value)
@@ -73,7 +77,7 @@ import {
   PRIOR_API_PREFIXES,
   buildClientCredentialsBody, buildCodeExchangeBody,
   buildConsentRequest, buildAuthorizeRequestClaims, buildPriorAuthorizeUrl,
-  buildResourceRequestBody, isWindowWithinLimit, buildRegistrationMetadata,
+  buildResourceRequestBody, isWindowWithinLimit, buildRegistrationMetadata, buildPriorClientName,
   buildClientAssertionClaims, priorTokenRequest, parsePriorAuthMethod,
   extractIntentId, extractResourceId, extractAccounts
 } from '../app/utils/priorOauth.ts'
@@ -281,12 +285,25 @@ async function dcrRegister(tokenA, jwks, pem) {
   // serialized STRING; only redirect_uris is required). Sent either as JSON or,
   // with --register-jwt, as a signed JWT (application/jwt) — the OB DCR profile
   // often requires a signed request; a JSON body then triggers a generic 500.
+  // ⚠ Latin, no spaces — `buildPriorClientName` enforces it and `buildRegistrationMetadata` throws
+  // otherwise. The bank runs WSO2, where this becomes the API Store Application name; a name the
+  // store cannot represent registers anyway and then misbehaves in ways that read as a permissions
+  // problem. The timestamp is for uniqueness — a repeat name is `409`, and to the SECOND, because
+  // two runs inside one minute collide.
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)
   const meta = buildRegistrationMetadata({
-    clientName: args['app-name'] ? String(args['app-name']) : 'Импорт выписки в Bitrix24 (bx-shef)',
+    clientName: args['app-name']
+      ? buildPriorClientName([String(args['app-name'])])
+      : buildPriorClientName(['bx-shef', 'bank-import', cfg.authMethod, stamp]),
     redirectUri: cfg.redirectUri,
     jwks,
     // Registered method MUST match what every token call sends (#444) — one method per app.
-    tokenEndpointAuthMethod: cfg.authMethod
+    tokenEndpointAuthMethod: cfg.authMethod,
+    // Sent EXPLICITLY, because the bank's own default is 900 (read back from a live registration,
+    // 2026-08-13) and `max_age` is the one registered field whose semantics are literally
+    // "re-authentication required" — the text of the 403 we are stuck on. `--max-age` overrides;
+    // omit the flag entirely with `--max-age=` to let the bank default it again.
+    ...(args['max-age'] === '' ? {} : { defaultMaxAge: Number(args['max-age'] ?? 0) })
   })
 
   let contentType = 'application/json'

@@ -254,12 +254,65 @@ export function buildPriorRefreshBody(refreshToken: string): URLSearchParams {
   return new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken })
 }
 
+/**
+ * Characters allowed in `client_name`.
+ *
+ * ⚠ `POST /register` accepting a name proves nothing about that name being USABLE. The bank runs
+ * WSO2 API Manager, where `client_name` becomes the **Application name** in the API Store, and the
+ * store validates it against `^[a-zA-Z0-9 ._-]*$` (`ApplicationNameRegex`). A name outside that set
+ * can register at the identity layer — tokens issue fine — while the store-side object is left
+ * mangled or unmanageable, which is indistinguishable from a permissions problem: exactly the shape
+ * of the `403 BY.NBRB.Reauthenticate` we chased for a month with `client_name` =
+ * `Импорт выписки Bitrix24 basic 0812-162429` (live registration, read back 2026-08-13).
+ *
+ * We go one character stricter than WSO2 and forbid the SPACE too: the name travels through a
+ * devportal UI, a support ticket and (with `--register-jwt`) a JWT `iss`/`sub` claim, and none of
+ * those gain anything from spaces. Latin, digits, `.`, `_`, `-`.
+ */
+export const PRIOR_CLIENT_NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/
+
+/** True when `client_name` is safe to register (see `PRIOR_CLIENT_NAME_PATTERN`). */
+export function isSafePriorClientName(name: string): boolean {
+  return PRIOR_CLIENT_NAME_PATTERN.test(name)
+}
+
+/**
+ * Join parts into a safe, unique `client_name`. Every registration needs a NEW name — a duplicate
+ * is `409 Resource Already Exists` — and `PUT /register/{id}` does not work, so a name is chosen
+ * once per registration and lives as long as the client does.
+ *
+ * Anything outside the safe set is replaced rather than dropped: silently deleting characters can
+ * collapse two distinct inputs onto one name, and a name collision here costs a re-registration.
+ * Pass the timestamp in — keeping this pure is what lets the test pin the exact output.
+ */
+export function buildPriorClientName(parts: readonly string[]): string {
+  const name = parts
+    .map(p => p.replace(/[^A-Za-z0-9._-]+/g, '-'))
+    .filter(Boolean)
+    .join('-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 100)
+  if (!isSafePriorClientName(name)) {
+    throw new Error(`client_name is empty after sanitising: ${JSON.stringify(parts)}`)
+  }
+  return name
+}
+
 /** Inputs for the DCR registration metadata. */
 export interface PriorRegistrationInput {
   clientName: string
   redirectUri: string
   /** Public JWK Set `{ keys: [...] }`; serialized to a STRING in the body (see below). */
   jwks?: unknown
+  /**
+   * OIDC `default_max_age` (seconds), RFC 7591. Omitted by us until 2026-08-13, and the bank then
+   * DEFAULTED it to 900 — read back from a live registration. That default is worth controlling:
+   * `max_age` means "re-authenticate the user if `auth_time` is older than this", and a
+   * `client_credentials` token carries no `auth_time` at all, so a server that enforces it against
+   * one can only ever answer «re-authentication required». Pass `0` to ask for no constraint.
+   */
+  defaultMaxAge?: number
   /**
    * Client-authentication method to register. Defaults to `client_secret_basic` (sandbox).
    * **Production requires `private_key_jwt`** — `client_secret_basic` is sandbox-only
@@ -279,6 +332,16 @@ export interface PriorRegistrationInput {
  * same registered key serves both.
  */
 export function buildRegistrationMetadata(input: PriorRegistrationInput): Record<string, unknown> {
+  // Fail here rather than at the bank. `/register` answers 201 for a name the API Store cannot
+  // represent, and `PUT /register/{id}` does not work — so a bad name is only fixable by
+  // re-registering, which means a new client_id and re-connecting every account already linked.
+  // A throw costs one line of output; the alternative cost a month of chasing a 403.
+  if (!isSafePriorClientName(input.clientName)) {
+    throw new Error(
+      `client_name ${JSON.stringify(input.clientName)} is outside ${PRIOR_CLIENT_NAME_PATTERN} `
+      + '— use buildPriorClientName() (Latin, digits, . _ -, no spaces)'
+    )
+  }
   return {
     client_name: input.clientName,
     redirect_uris: [input.redirectUri],
@@ -287,6 +350,7 @@ export function buildRegistrationMetadata(input: PriorRegistrationInput): Record
     application_type: 'web',
     id_token_signed_response_alg: 'RS256',
     token_endpoint_auth_method: [input.tokenEndpointAuthMethod ?? 'client_secret_basic'],
+    ...(input.defaultMaxAge === undefined ? {} : { default_max_age: input.defaultMaxAge }),
     ...(input.jwks ? { jwks: JSON.stringify(input.jwks) } : {})
   }
 }
