@@ -22,7 +22,8 @@
 
 import { buildAuthorizeUrl, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { signConnectState, type BankConnectState } from './bankConnectState'
-import { sanitizeForLog } from './logSanitize'
+import { describeUpstreamError } from './logSanitize'
+import { CONNECT_STATE_TTL_MS } from '../../app/utils/bankConnectTtl'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -96,8 +97,9 @@ export interface ConnectStartInput {
   ttlMs?: number
 }
 
-/** Default connect-state lifetime: 10 min (generous for the admin to complete bank consent). */
-export const CONNECT_STATE_TTL_MS = 600_000
+// Re-exported from the shared module so the UI can quote the SAME window without importing server
+// code — the number is user-facing copy on one side and a signature claim on the other (#461).
+export { CONNECT_STATE_TTL_MS }
 
 /** An account key is an alphanumeric account number / IBAN-ish token (bounded). Rejects anything
  *  with separators/spaces so it can't smuggle content into the state or the later `number=` param. */
@@ -173,7 +175,10 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     } catch (e) {
       // Log SANITIZED (CRLF-stripped, capped) so the four preamble steps stay distinguishable in
       // the logs — the admin still gets one opaque message (no bank-controlled text reaches them).
-      deps.log?.(`[bank-connect] prior preamble failed: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
+      // The bank's error ENVELOPE is included (`describeUpstreamError`): its status line alone is
+      // the same "400 Bad Request" for a missing FAPI header, a rejected consent field and an
+      // expired token, so without the body the log cannot tell an operator which one happened.
+      deps.log?.(`[bank-connect] prior preamble failed: ${describeUpstreamError(e)}`)
       return { status: 502, body: { error: 'bank did not grant consent (connect preamble failed)' } }
     }
   }

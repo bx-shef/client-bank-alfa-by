@@ -129,7 +129,11 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     const set = parts.filter(k => !!(env[k] ?? '').trim())
     if (set.length > 0 && set.length < parts.length) {
       const missing = parts.filter(k => !(env[k] ?? '').trim())
-      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — онлайн-опрос ${bank} отключён (нужны все: ${parts.join(', ')}).`)
+      // ⚠ НЕ «опрос отключён»: `bankCredsFromEnv` вернёт null, но `ensureBankToken` тогда отдаёт
+      // сохранённый токен как есть (с warn), и опрос идёт, пока access-токен жив. Говорить
+      // «отключён» — значит противоречить соседнему предупреждению про TOKEN_URL и заставлять
+      // оператора гадать, какое из двух верно; обновить токен действительно нельзя.
+      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — ОБНОВИТЬ токен ${bank} нечем, опрос встанет, как только истечёт текущий (нужны все: ${parts.join(', ')}).`)
     }
   }
 
@@ -158,6 +162,14 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   const priorTokenUrl = (env.PRIOR_OAUTH_TOKEN_URL ?? '').trim()
   if (priorApiBase && priorTokenUrl && !sameOrigin(priorApiBase, priorTokenUrl)) {
     warnings.push('PRIOR_OAUTH_API_BASE и PRIOR_OAUTH_TOKEN_URL указывают на РАЗНЫЕ адреса — при переводе Приора на крипто-шлюз надо менять обе, иначе обновление токена продолжит ходить на старый хост.')
+  }
+  // The nastiest shape of the same split: API_BASE set, TOKEN_URL absent. Connect and the code
+  // exchange build their URL from API_BASE and never look at TOKEN_URL, so the whole setup passes —
+  // the admin connects the account, the first statements arrive, everything is green. Only the
+  // REFRESH reads TOKEN_URL, so the failure lands an hour later, on token expiry, as a generic
+  // «cannot refresh» with no link back to the missing variable. Warn at boot, where it is cheap.
+  if (priorApiBase && !priorTokenUrl) {
+    warnings.push('PRIOR_OAUTH_API_BASE задан, а PRIOR_OAUTH_TOKEN_URL — нет. Подключение и первая выписка пройдут (они строят адрес из API_BASE), но ОБНОВЛЕНИЕ токена читает только TOKEN_URL — опрос Приора встанет через час, когда истечёт первый токен.')
   }
   const priorApiBaseOk = !!normalizeBankApiBase(priorApiBase)
   if (priorApiBase && !priorApiBaseOk) {

@@ -50,18 +50,42 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
        refresh_token_enc = EXCLUDED.refresh_token_enc,
        expires_at        = EXCLUDED.expires_at,
        updated_at        = now()`,
-    [token.memberId, token.provider, token.accountKey, token.accessToken, encryptSecret(token.refreshToken), token.expiresAt]
+    // ⚠ An EMPTY refresh token is stored as a LITERAL empty string — NOT encrypted, and NOT SQL
+    // NULL. Encrypting '' yields a perfectly non-empty blob (`iv:tag:` with an empty ciphertext
+    // part), which made the `has_refresh` probe below answer TRUE for an account that has no refresh
+    // token at all. That is precisely the Prior case — the bank may return no refresh_token and the
+    // callback stores '' on purpose — so the UI showed «подключено» while the account could never be
+    // refreshed, and the truth surfaced an hour later as a stalled import.
+    //
+    // ⚠ NULL would be the tidier spelling and is WRONG here on two counts: the column is
+    // `TEXT NOT NULL DEFAULT ''` (server/db/client.ts) so the INSERT would raise 23502 and the
+    // callback — which has no try/catch — would 500 AFTER the bank's single-use code was already
+    // spent; and `rowToBankToken` would then decrypt `String(null)` = 'null' and throw «failed to
+    // decrypt refresh» on every poll, a message that reads like a compromised key. Empty string
+    // keeps both paths honest with no schema migration (the project only ever runs
+    // CREATE TABLE IF NOT EXISTS — there is no ALTER path).
+    [token.memberId, token.provider, token.accountKey, token.accessToken,
+      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
   )
 }
 
 /** Map a DB row to a `BankToken`, decrypting the refresh blob. Throws if it can't be
  *  decrypted (wrong key / tampering) — a corrupt row must fail loud, not silently. */
 function rowToBankToken(row: Record<string, unknown>): BankToken {
-  let refreshToken: string
-  try {
-    refreshToken = decryptSecret(String(row.refresh_token_enc))
-  } catch {
-    throw new Error(`bankTokenStore: failed to decrypt refresh for memberId=${String(row.member_id)} provider=${String(row.provider)}`)
+  // ⚠ «No refresh token» is a VALID state, not a corrupt row: Prior may not issue one, and we then
+  // store a literal '' (see saveBankToken). Decrypting that would throw — turning a bank that simply
+  // withheld a refresh token into a permanent per-poll failure whose message («failed to decrypt»)
+  // points at the encryption key instead. Absent/empty is passed through as ''; `ensureBankToken`
+  // already handles it (warns, returns the token as-is, lets the caller fail honestly on an expired
+  // access token) and `has_refresh` shows the admin that reconnecting is needed.
+  const enc = row.refresh_token_enc
+  let refreshToken = ''
+  if (enc !== null && enc !== undefined && enc !== '') {
+    try {
+      refreshToken = decryptSecret(String(enc))
+    } catch {
+      throw new Error(`bankTokenStore: failed to decrypt refresh for memberId=${String(row.member_id)} provider=${String(row.provider)}`)
+    }
   }
   return {
     memberId: String(row.member_id),
@@ -162,8 +186,13 @@ export interface BankAccountInfo extends BankAccountRef {
  *  listable (otherwise a bad row would be invisible and thus impossible to disconnect). */
 export async function listBankAccountInfoForPortal(query: QueryFn, memberId: string): Promise<BankAccountInfo[]> {
   const rows = await query(
+    // `NOT LIKE '%:'` catches rows written BEFORE the fix above: the blob is `iv:tag:ciphertext`,
+    // so an encrypted empty secret ends with a bare colon. Without this clause every pre-existing
+    // «no refresh token» row would keep claiming it has one until the account is reconnected — and
+    // the badge exists exactly to tell the admin that reconnecting is needed.
     `SELECT member_id, provider, account_key, expires_at, updated_at,
-            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> '') AS has_refresh
+            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
+             AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
