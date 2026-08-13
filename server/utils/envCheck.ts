@@ -129,7 +129,11 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
     const set = parts.filter(k => !!(env[k] ?? '').trim())
     if (set.length > 0 && set.length < parts.length) {
       const missing = parts.filter(k => !(env[k] ?? '').trim())
-      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — онлайн-опрос ${bank} отключён (нужны все: ${parts.join(', ')}).`)
+      // ⚠ НЕ «опрос отключён»: `bankCredsFromEnv` вернёт null, но `ensureBankToken` тогда отдаёт
+      // сохранённый токен как есть (с warn), и опрос идёт, пока access-токен жив. Говорить
+      // «отключён» — значит противоречить соседнему предупреждению про TOKEN_URL и заставлять
+      // оператора гадать, какое из двух верно; обновить токен действительно нельзя.
+      warnings.push(`Банк ${bank}: заданы не все OAuth-креды (нет ${missing.join('/')}) — ОБНОВИТЬ токен ${bank} нечем, опрос встанет, как только истечёт текущий (нужны все: ${parts.join(', ')}).`)
     }
   }
 

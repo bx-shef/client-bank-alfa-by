@@ -263,6 +263,16 @@ services:
       # отзыв сотрудника исчезает молча, хотя виджет в портале показан.
       GITHUB_FEEDBACK_TOKEN: ${GITHUB_FEEDBACK_TOKEN:-}
       GITHUB_FEEDBACK_REPO: ${GITHUB_FEEDBACK_REPO:-}
+      # Телеметрия (docs/OBSERVABILITY.md). ⚠ Нужна ИМЕННО ЗДЕСЬ, а не только на backend: джоб-спаны
+      # (`crm-sync`, `bank-fetch`, `trigger-fire`) и зависимости, которые CLAUDE.md обязывает
+      # покрывать, исполняются на ВОРКЕРЕ. Образ один, бутстрап вшит через NODE_OPTIONS, но без
+      # endpoint'а в env этого контейнера SDK остаётся выключенным — и дашборд показывает приложение,
+      # которое якобы только отдаёт HTTP и ни разу не обрабатывает платёж.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      # Отдельное имя сервиса: иначе спаны воркера и backend'а сольются в один сервис, и «кто
+      # именно встал» придётся выяснять по атрибутам вместо того, чтобы видеть сразу.
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME_WORKER:-${OTEL_SERVICE_NAME:-}}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
