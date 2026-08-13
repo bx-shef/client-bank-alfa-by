@@ -407,7 +407,7 @@ pnpm prior:test --auth-method private_key_jwt         # тот же поток �
   | Гипотеза | Чем исключена |
   |---|---|
   | нет подписки на `Open-banking` | `GET /accounts` тем же токеном доходит до бэкенда (`BY.PRIORBANK.Request.Invalid`); отказ по подписке выглядит иначе — `900908` от шлюза |
-  | не тот `scope` | `accounts` выдаётся; `consents`/`openid`/пустой → `invalid_scope`; свагер допускает только `accounts`/`payments`/`apim:*` |
+  | не тот `scope` | перебран до конца, см. таблицу ниже — с `accounts` в любом сочетании отвечает БЭКЕНД, без него отказывает ШЛЮЗ |
   | неверное тело | свагер: обязателен только `permissions`, все восемь наших значений в enum; полный ISO в дате даёт точечный `BY.NBRB.Field.Invalid`, значит тело разбирается |
   | не хватает заголовков | оба обязательных шлём; добавление `x-fapi-auth-date`, `x-fapi-customer-ipaddress`, `x-customer-useragent` ничего не меняет |
   | метод аутентификации | воспроизведено на `private_key_jwt` и на `client_secret_basic` — двух независимых регистрациях |
@@ -418,6 +418,21 @@ pnpm prior:test --auth-method private_key_jwt         # тот же поток �
   | другой владелец приложения | у всех трёх приложений кабинета `owner` совпадает, все `APPROVED` |
   | **тип учётной записи в кабинете** | **⚠ НЕ проверялось — снаружи запроса невидимо; см. ниже** |
   | токен не доезжает / не принимается | контроль тремя вызовами (ниже) |
+
+  **Перебор `scope` на самом `POST /accountConsents` (2026-08-13) — закрывает последнюю
+  client-side переменную и попутно доказывает, что ШЛЮЗ удовлетворён полностью:**
+
+  | `scope` токена | Ответ | Кто ответил |
+  |---|---|---|
+  | `accounts` | `403 BY.NBRB.Reauthenticate` | бэкенд СПР |
+  | `accounts consents` | `403 BY.NBRB.Reauthenticate` | бэкенд СПР |
+  | `accounts payments` | `403 BY.NBRB.Reauthenticate` | бэкенд СПР |
+  | `payments` | `403 The access token does not allow you to access the requested resource` | **шлюз WSO2** |
+
+  Читается так: без `accounts` запрос отсекает шлюз, с `accounts` — в любом сочетании — шлюз
+  пропускает, и отказ выносит бэкенд. ⚠ Заодно это **опровергает свагер**: у `POST /accountConsents`
+  он объявляет `security: [{"default": []}]`, то есть scope формально не требуется, а на деле шлюз
+  требует `accounts`. Полагаться на пустой `security` в этом свагере нельзя.
 
   **Контроль на токен — три РАЗНЫХ ответа, и это решающий довод:**
 
