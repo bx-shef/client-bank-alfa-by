@@ -42,6 +42,32 @@ export interface ReadinessResult {
   checks: ReadinessChecks
 }
 
+/** Which address to probe the crypto gateway at, derived from the two INDEPENDENT Prior
+ *  addresses the app actually calls. `null` = the gateway is not in use.
+ *
+ *  Both inputs must already be through `normalizeBankApiBase`, which accepts `http://` ONLY for
+ *  an internal host — so an http address here means exactly one thing: that traffic goes through
+ *  the gateway. "In use" is derived from the addresses rather than from a separate flag, because
+ *  a flag would drift from reality and reporting reality is the whole point of the field.
+ *
+ *  ⚠ BOTH addresses are checked, and that is not belt-and-braces. The documented production shape
+ *  is the token endpoint behind the gateway with the resource API still on the bank's public host
+ *  — so looking only at the API base would report «шлюз не используется» while every token refresh
+ *  goes through it, and a responder would read the one field meant to answer «is the gateway up?»
+ *  as «not my problem», in exactly the outage it exists for.
+ *
+ *  Lives here, not inline in the route, because route bodies carry no tests in this codebase:
+ *  inlined, the check above silently reverted to API-base-only would still pass the whole suite. */
+export function gatewayProbeBase(apiBase: string | null, tokenUrl: string | null): string | null {
+  const internal = (v: string | null) => Boolean(v && v.startsWith('http://'))
+  // Probe whichever address is internal; when both are, the API base wins (arbitrary but stable —
+  // in that configuration they are the same gateway anyway). The token URL is a full endpoint
+  // (`…/token`), so it is cut back to its origin; the API base already is one.
+  if (internal(apiBase)) return apiBase
+  if (internal(tokenUrl)) return new URL(tokenUrl!).origin
+  return null
+}
+
 export interface ReadinessDeps {
   /** Resolves true when a cheap DB round-trip succeeds. MUST NOT throw — wrap I/O. */
   checkDb: () => Promise<boolean>
