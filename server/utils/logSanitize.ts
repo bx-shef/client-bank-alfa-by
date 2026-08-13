@@ -20,7 +20,7 @@ export function describeUpstreamError(e: unknown, max = 400): string {
   const err = e as { message?: unknown, data?: unknown } | null | undefined
   const message = typeof err?.message === 'string' ? err.message : 'error'
   const data = err?.data
-  if (data === undefined || data === null) return sanitizeForLog(message, max)
+  if (data === undefined || data === null) return sanitizeForLog(redactCredentials(message), max)
   let body: string
   try {
     body = typeof data === 'string' ? data : JSON.stringify(data) ?? String(data)
@@ -28,5 +28,25 @@ export function describeUpstreamError(e: unknown, max = 400): string {
     // Circular / throwing toJSON — the message alone still identifies the step.
     body = '[unserializable]'
   }
-  return sanitizeForLog(`${message} :: ${body}`, max)
+  return sanitizeForLog(redactCredentials(`${message} :: ${body}`), max)
+}
+
+/**
+ * Strip credentials an upstream may ECHO BACK at us before that text reaches the log.
+ *
+ * The reason this is not paranoia: under `private_key_jwt` our `client_assertion` — a signed,
+ * short-lived credential — travels in the request body, and OAuth servers routinely quote the
+ * offending parameter inside `error_description`. So the very error we now log can contain the
+ * credential we just sent. The call sites state plainly that neither the secret nor the assertion
+ * may be logged; a length cap does not enforce that, since the head of the string is exactly where
+ * a quoted token lands.
+ *
+ * Matches the two shapes that carry a secret: a compact JWS (three base64url segments starting with
+ * the `eyJ` of `{"`) and a `client_secret=` / `client_assertion=` form pair. Everything else is left
+ * alone — over-redacting would blunt the diagnostic this function exists for.
+ */
+function redactCredentials(s: string): string {
+  return s
+    .replace(/eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g, '[jwt]')
+    .replace(/((?:client_secret|client_assertion)=)[^&\s"']+/gi, '$1[redacted]')
 }

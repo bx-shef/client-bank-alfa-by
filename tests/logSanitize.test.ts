@@ -47,6 +47,36 @@ describe('describeUpstreamError', () => {
     expect(describeUpstreamError(err)).toBe('boom :: [unserializable]')
   })
 
+  // Под private_key_jwt подписанный client_assertion едет в теле запроса, а OAuth-серверы
+  // регулярно цитируют отвергнутый параметр в error_description — то есть ошибка, которую мы
+  // логируем, может содержать credential, который мы только что отправили.
+  it('вырезает credential, который апстрим вернул нам обратно', () => {
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJDSUQifQ.c2lnbmF0dXJl'
+    const err = Object.assign(new Error('invalid_client'), {
+      data: { error_description: `Invalid assertion: ${jwt}` }
+    })
+    const out = describeUpstreamError(err)
+    expect(out).not.toContain(jwt)
+    expect(out).toContain('[jwt]')
+    expect(out).toContain('invalid_client') // диагностика при этом сохраняется
+  })
+
+  it('вырезает секрет из form-параметра, процитированного в ответе', () => {
+    const err = Object.assign(new Error('boom'), { data: 'bad request: client_secret=S3CR3TVALUE&grant_type=x' })
+    const out = describeUpstreamError(err)
+    expect(out).not.toContain('S3CR3TVALUE')
+    expect(out).toContain('client_secret=[redacted]')
+    expect(out).toContain('grant_type=x')
+  })
+
+  it('не режет обычный текст ошибки банка', () => {
+    const err = Object.assign(new Error('[POST] "https://bank/x": 400 Bad Request'), {
+      data: { errors: [{ errorCode: 'BY.NBRB.Field.Invalid', path: 'data.expirationDate' }] }
+    })
+    expect(describeUpstreamError(err)).toContain('BY.NBRB.Field.Invalid')
+    expect(describeUpstreamError(err)).toContain('data.expirationDate')
+  })
+
   it('falls back to a generic label for a non-Error throw', () => {
     expect(describeUpstreamError('just a string')).toBe('error')
     expect(describeUpstreamError(null)).toBe('error')
