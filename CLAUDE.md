@@ -720,18 +720,14 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `bankApiConfig`, `priorApiBaseFromEnv`, `bankCredsFromEnv` для `_TOKEN_URL`,
     `priorConnectConfigFromEnv`) + предупреждения `envCheck` на рассинхрон `API_BASE`↔`TOKEN_URL`;
     `_AUDIENCE` и `_REDIRECT_URI` **вне охвата сознательно** (claim в JWT / банк сверяет байт-в-байт).
-    **Крипто-шлюз — СОБРАН (#460) и вынесен в отдельный репозиторий**
-    ([bx-shef/bee2-tls-gateway](https://github.com/bx-shef/bee2-tls-gateway)): образ «внутрь обычный HTTP, наружу
-    TLS по СТБ 34.101.65» на **открытой** реализации (bee2evp, Apache 2.0), без проприетарного СКЗИ
-    и без ключа ГосСУОК (аутентификация банка односторонняя, наша — `private_key_jwt`). nginx, а не
-    TCP-туннель: туннель не переписывает `Host`, не переиспользует TLS-сессию (замерено с контролем:
-    keepalive ВКЛ — 1 соединение на 10 запросов, ВЫКЛ — 10) и не проверяет имя в сертификате. Три
-    гейта сборки + два гейта старта + smoke-запуск в CI + `tests/cryptoGatewayConfig.test.ts`.
-    ⚠ Образ **постоянно жжёт одно ядро**: `bee2evp_init()`→`rngCreate()` поднимает вечный busy-loop
-    как источник энтропии (`bee2/src/core/rng/rng_timer.c`, закрытие только по `utilOnExit`);
-    смягчено `nice 19` + `cpus`, крутится только master nginx. Не разворачивать на burstable-
-    инстансах. Сервис в `docker-compose.prod.yml` **закомментирован** — включается осознанно
-    (порядок и всё устройство — README того репозитория); живой прод-прогон — #461.
+    **Крипто-шлюз — СОБРАН (#460) и живёт в ОТДЕЛЬНОМ репозитории**
+    [bx-shef/bee2-tls-gateway](https://github.com/bx-shef/bee2-tls-gateway): образ «внутрь обычный HTTP,
+    наружу TLS по СТБ 34.101.65» на **открытой** реализации (bee2evp, Apache 2.0), без проприетарного
+    СКЗИ и без ключа ГосСУОК. Устройство, гейты сборки/старта, замеры и проверки конфигурации — там,
+    в его README и CI; **здесь ничего из этого не проверяется**. Нам как потребителю важны два факта:
+    сервис в `docker-compose.prod.yml` **закомментирован** (включается осознанно, порядок —
+    `docs/OPERATIONS.md`), и образ **постоянно жжёт одно ядро** — не разворачивать на burstable-
+    инстансах с CPU-кредитами. Живой прод-прогон — #461, вынос релизов — #477.
   - `server/utils/setupStatus.ts` + `server/api/setup-status.get.ts` (+ чистое ядро
     `app/utils/setupReadiness.ts`, composable `useSetupStatus.ts`, UI `SetupReadinessCard.vue`;
     DI+тесты, вкл. nuxt-тест проводки) — **экран готовности «что настроено, а что нет» (#409/#405)**:
