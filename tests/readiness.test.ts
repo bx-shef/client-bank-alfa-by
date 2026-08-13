@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateReadiness, type ReadinessDeps } from '../server/utils/readiness'
+import { evaluateReadiness, gatewayProbeBase, type ReadinessDeps } from '../server/utils/readiness'
 
 const deps = (over: Partial<ReadinessDeps>): ReadinessDeps => ({
   checkDb: async () => true,
@@ -107,5 +107,42 @@ describe('evaluateReadiness', () => {
     }))
     expect(r.checks.cryptoGw).toBeNull()
     expect(called).toBe(false)
+  })
+})
+
+// Which address means «шлюз в работе». Previously inlined in `server/api/ready.get.ts`, where it
+// had no test at all: reverting it to API-base-only (the exact #455 bug) left the whole suite
+// green. These pin the reversion instead of the shape.
+describe('gatewayProbeBase — «шлюз в работе» derived from the two Prior addresses', () => {
+  const GW = 'http://crypto-gw:1080'
+  const BANK = 'https://apibel.priorbank.by:9345'
+
+  it('neither address internal → gateway not in use', () => {
+    expect(gatewayProbeBase(BANK, `${BANK}/token`)).toBeNull()
+  })
+
+  it('API base internal → probe it', () => {
+    expect(gatewayProbeBase(GW, `${BANK}/token`)).toBe(GW)
+  })
+
+  // The regression that matters: the documented production shape is the TOKEN endpoint behind the
+  // gateway while the resource API stays on the bank's public host. Looking only at the API base
+  // reports «шлюз не используется» while every token refresh goes through it.
+  it('only the token URL is internal → still in use, probed at its ORIGIN', () => {
+    expect(gatewayProbeBase(BANK, `${GW}/token`)).toBe(GW)
+  })
+
+  it('token URL is cut back to the origin, path and query dropped', () => {
+    expect(gatewayProbeBase(null, `${GW}/oauth2/token?x=1`)).toBe(GW)
+  })
+
+  it('both internal → API base wins (stable pick; same gateway either way)', () => {
+    expect(gatewayProbeBase(GW, 'http://other-gw:1080/token')).toBe(GW)
+  })
+
+  // `normalizeBankApiBase` returns null for an address it rejects (public host over http, junk).
+  // Null must read as «not through the gateway», never as a probe of `null/healthz`.
+  it('nulls → not in use', () => {
+    expect(gatewayProbeBase(null, null)).toBeNull()
   })
 })
