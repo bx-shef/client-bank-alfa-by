@@ -20,7 +20,7 @@ withDefaults(defineProps<{
   qrHint?: string
   /** b24ui color of the CTA button (default `air-primary`). Pass a subordinate
    *  color (e.g. `air-secondary-no-accent`) on landings where a paid CTA must
-   *  stay the visual primary and this free-Marketplace CTA should not compete. */
+   *  stay the visual primary and this Marketplace CTA should not compete. */
   ctaColor?: 'air-primary' | 'air-secondary-no-accent' | 'air-tertiary-no-accent'
   /** Metrika goal fired on CTA click (default `market_click`). Override per
    *  landing (e.g. `market_card_click`) when another market link already owns

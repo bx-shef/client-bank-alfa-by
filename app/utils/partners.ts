@@ -5,7 +5,7 @@
 export const PARTNERS_TITLE = 'Интеграторам Bitrix24'
 
 export const PARTNERS_DESCRIPTION
-  = 'Забирайте бесплатный коннектор белорусских банков в свой арсенал: ставьте клиентам сами, а установку в контур клиента и настройку под процессы отдавайте нам — работаем субподрядом.'
+  = 'Забирайте коннектор белорусских банков в свой арсенал: ставьте клиентам сами, а установку в контур клиента и настройку под процессы отдавайте нам — работаем субподрядом.'
 
 /**
  * Описание ДЛЯ ВЫДАЧИ — короткое (#425).
@@ -15,7 +15,7 @@ export const PARTNERS_DESCRIPTION
  * 180-символьный текст обрезался бы на полуслове. Длину стережёт тест.
  */
 export const PARTNERS_META_DESCRIPTION
-  = 'Бесплатный коннектор белорусских банков для Bitrix24: ставьте клиентам сами, внедрение и настройку берём на субподряд.'
+  = 'Коннектор белорусских банков для Bitrix24: ставьте клиентам сами, внедрение и настройку берём на субподряд.'
 
 /** Model chips shown under the hero. */
 export const PARTNERS_MODEL: readonly string[] = [
@@ -29,7 +29,8 @@ export interface PartnerLadderRow {
   level: string
   client: string
   who: string
-  paid: 'free' | 'us'
+  /** Кто получает деньги: `market` — подписка Маркета (#436), `us` — работа напрямую нам. */
+  paid: 'market' | 'us'
 }
 
 export const PARTNERS_LADDER: readonly PartnerLadderRow[] = [
@@ -37,7 +38,7 @@ export const PARTNERS_LADDER: readonly PartnerLadderRow[] = [
     level: 'Базовый',
     client: 'Импорт выписки в CRM, платежи, уведомления в чат',
     who: 'партнёр ставит из Маркета',
-    paid: 'free'
+    paid: 'market'
   },
   {
     level: 'Установка',
@@ -68,7 +69,7 @@ export interface PartnerSplit {
 export const PARTNERS_SPLIT: PartnerSplit = {
   partner: [
     'квалифицирует клиента и продаёт',
-    'ставит бесплатное приложение из Маркета',
+    'ставит приложение из Маркета',
     'базовая настройка (источник выписки, чат, реквизиты в CRM)',
     'держит отношения и договор с клиентом'
   ],
