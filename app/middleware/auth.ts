@@ -1,15 +1,19 @@
 // Route guard for the operator/employee area (e.g. /queues, later the import
 // pages). Redirects unauthenticated users to /login. Runs CLIENT-side (the site is
 // SSG — the static HTML is public; the REAL protection is that data endpoints
-// require the session cookie). When auth is not configured (no password) the area
-// is open; when the backend is unreachable we don't hard-lock the UI. See docs/AUTH.md.
+// require the session cookie). Когда логин не настроен, зона открыта ТОЛЬКО в деве — в проде
+// незаданный пароль означает недонастроенный деплой и зона закрыта. Недоступный бэкенд UI не
+// блокирует. См. docs/AUTH.md.
 
 export default defineNuxtRouteMiddleware(async (to) => {
   if (import.meta.server) return // skip during SSG prerender; enforced on the client
   const { fetchSession } = useAuth()
   try {
     const s = await fetchSession()
-    if (!s.configured) return // login disabled → open
+    if (s.open) return // логин выключен и зона открыта (дев) → пускаем
+    // Пароль не задан, но зона закрыта — это прод без настройки. На /login отправлять НЕЛЬЗЯ:
+    // там 503, и получился бы бесконечный кружок. Объяснение показывает AuthGate.
+    if (!s.configured) return
     if (!s.authenticated) {
       return navigateTo(`/login?redirect=${encodeURIComponent(to.fullPath)}`)
     }

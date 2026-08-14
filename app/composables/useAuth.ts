@@ -5,9 +5,13 @@
 // See docs/AUTH.md.
 
 export interface SessionInfo {
-  /** Login is configured (a password is set). When false, gated pages are open. */
+  /** Пароль задан. */
   configured: boolean
   authenticated: boolean
+  /** Пускать без сессии прямо сейчас. Решать надо ПО НЕМУ, а не по `!configured`: незаданный
+   *  пароль в проде означает недонастроенный деплой, и зона там закрыта — иначе покажем контент,
+   *  все запросы которого вернут 401. Зеркало `SessionStatus` в server/utils/session.ts. */
+  open: boolean
   user?: string
 }
 
