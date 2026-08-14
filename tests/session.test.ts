@@ -108,9 +108,10 @@ describe('authStartupWarning', () => {
     expect(authStartupWarning({ NODE_ENV: 'test', PUBLIC_PAGE_BASIC_AUTH_PASS: 'p' })).toBeNull()
   })
 
-  it('warns in production when no password is set (zone open)', () => {
+  it('предупреждает в проде без пароля — зона ЗАКРЫТА, а не открыта', () => {
     const w = authStartupWarning({ NODE_ENV: 'production' })
-    expect(w).toMatch(/OPEN/)
+    expect(w).toMatch(/LOCKED/)
+    expect(w).not.toMatch(/OPEN/)
     expect(w).toMatch(/PUBLIC_PAGE_BASIC_AUTH_PASS/)
   })
 
@@ -176,27 +177,42 @@ describe('sessionStatus', () => {
 
   it('authenticated with a valid cookie (includes user)', () => {
     const cookie = signSession({ sub: 'operator', exp: now + 1000 }, cfg.secret)
-    expect(sessionStatus(cfg, cookie, now)).toEqual({ configured: true, authenticated: true, user: 'operator' })
+    expect(sessionStatus(cfg, cookie, now)).toEqual({ configured: true, authenticated: true, open: false, user: 'operator' })
   })
   it('configured but not authenticated on a missing/invalid/expired cookie (no user key)', () => {
-    expect(sessionStatus(cfg, undefined, now)).toEqual({ configured: true, authenticated: false })
-    expect(sessionStatus(cfg, 'garbage', now)).toEqual({ configured: true, authenticated: false })
+    expect(sessionStatus(cfg, undefined, now)).toEqual({ configured: true, authenticated: false, open: false })
+    expect(sessionStatus(cfg, 'garbage', now)).toEqual({ configured: true, authenticated: false, open: false })
     const expired = signSession({ sub: 'operator', exp: now - 1 }, cfg.secret)
-    expect(sessionStatus(cfg, expired, now)).toEqual({ configured: true, authenticated: false })
+    expect(sessionStatus(cfg, expired, now)).toEqual({ configured: true, authenticated: false, open: false })
   })
-  it('reports configured:false when no password is set (gated pages open)', () => {
-    expect(sessionStatus(resolveAuthConfig({}), undefined, now)).toEqual({ configured: false, authenticated: false })
+  it('без пароля вне прода — open:true (зона открыта, это дев-удобство)', () => {
+    expect(sessionStatus(resolveAuthConfig({}), undefined, now))
+      .toEqual({ configured: false, authenticated: false, open: true })
+  })
+
+  it('без пароля В ПРОДЕ — open:false, иначе клиент нарисовал бы контент, чьи запросы вернут 401', () => {
+    expect(sessionStatus(resolveAuthConfig({ NODE_ENV: 'production' }), undefined, now))
+      .toEqual({ configured: false, authenticated: false, open: false })
   })
 })
 
 describe('operatorAllowed (server gate for /api/ops/*)', () => {
   const now = 1_000_000
   const configured = resolveAuthConfig({ PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw', SESSION_SECRET: 'K' })
-  const open = resolveAuthConfig({}) // no password → zone open
+  const open = resolveAuthConfig({}) // нет пароля, не прод → зона открыта
 
   it('allows any request when auth is NOT configured (zone open)', () => {
     expect(operatorAllowed(open, undefined, now)).toBe(true)
     expect(operatorAllowed(open, 'anything', now)).toBe(true)
+  })
+
+  // Регресс на реальный инцидент: прод крутился без пароля, и `/api/ops/app-rating` отдавал
+  // `member_id` ВСЕХ установленных порталов любому, кто знает адрес. «Не настроено» в проде — это
+  // недонастроенный деплой, а не разрешение.
+  it('в ПРОДЕ без пароля не пускает никого — fail-closed, а не fail-open', () => {
+    const prod = resolveAuthConfig({ NODE_ENV: 'production' })
+    expect(operatorAllowed(prod, undefined, now)).toBe(false)
+    expect(operatorAllowed(prod, 'anything', now)).toBe(false)
   })
 
   it('allows a valid, unexpired session cookie when configured', () => {

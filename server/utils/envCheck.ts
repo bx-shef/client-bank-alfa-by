@@ -94,6 +94,9 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
   const isProd = (env.NODE_ENV ?? '') === 'production'
   const hasOpPass = !!(env.PUBLIC_PAGE_BASIC_AUTH_PASS ?? '').trim()
   const hasSessionSecret = !!(env.SESSION_SECRET ?? '').trim()
+  if (isProd && !hasOpPass) {
+    errors.push('PUBLIC_PAGE_BASIC_AUTH_PASS не задан в проде — служебная зона оператора (/queues, /api/ops/*) ЗАКРЫТА (fail-closed): без пароля туда не пускают никого, включая владельца. Задайте пароль и SESSION_SECRET.')
+  }
   if (isProd && hasOpPass && !hasSessionSecret) {
     errors.push('SESSION_SECRET не задан в проде при заданном пароле оператора — ключ подписи cookie больше НЕ выводится из пароля (защита от офлайн-брутфорса), поэтому вход в служебную зону не работает (fail-closed). Задайте независимый ключ: openssl rand -hex 32')
   }

@@ -81,12 +81,27 @@ describe('checkBackendEnv', () => {
   })
 
   it('#242 P1: no SESSION_SECRET error when the key is set, or outside production, or no operator password', () => {
-    expect(checkBackendEnv({ ...GOOD, NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw', SESSION_SECRET: 'K' })
-      .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
-    expect(checkBackendEnv({ ...GOOD, NODE_ENV: 'development', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })
-      .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
-    expect(checkBackendEnv({ ...GOOD, NODE_ENV: 'production' })
-      .errors.some(e => e.includes('SESSION_SECRET'))).toBe(false)
+    // Матчим по СУТИ сообщения (`ключ подписи cookie`), а не по подстроке `SESSION_SECRET`:
+    // имя переменной упоминается и в соседней ошибке про незаданный пароль, и широкая проверка
+    // ловила бы её тоже — тест краснел бы на совершенно другом правиле.
+    const lockoutError = (env: Record<string, string | undefined>) =>
+      checkBackendEnv(env).errors.some(e => e.includes('ключ подписи cookie'))
+    expect(lockoutError({ ...GOOD, NODE_ENV: 'production', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw', SESSION_SECRET: 'K' })).toBe(false)
+    expect(lockoutError({ ...GOOD, NODE_ENV: 'development', PUBLIC_PAGE_BASIC_AUTH_PASS: 'pw' })).toBe(false)
+    expect(lockoutError({ ...GOOD, NODE_ENV: 'production' })).toBe(false)
+  })
+
+  // Инцидент на проде: бэкенд крутился без пароля оператора, зона была fail-OPEN, и наружу
+  // отдавались `member_id` всех установленных порталов. Теперь зона fail-closed, а недостающий
+  // пароль — ошибка старта, а не молчание.
+  it('в проде без пароля оператора — ошибка (зона закрыта, деплой недонастроен)', () => {
+    const r = checkBackendEnv({ ...GOOD, NODE_ENV: 'production' })
+    expect(r.errors.some(e => e.includes('PUBLIC_PAGE_BASIC_AUTH_PASS'))).toBe(true)
+  })
+
+  it('вне прода отсутствие пароля ошибкой не считается — там зона открыта осознанно', () => {
+    const r = checkBackendEnv({ ...GOOD, NODE_ENV: 'development' })
+    expect(r.errors.some(e => e.includes('PUBLIC_PAGE_BASIC_AUTH_PASS'))).toBe(false)
   })
 })
 

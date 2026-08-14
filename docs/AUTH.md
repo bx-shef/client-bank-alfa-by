@@ -1,6 +1,6 @@
 # Авторизация оператора (вход для сотрудников)
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-14
 
 Как сотрудник входит в **служебную/операторскую зону** приложения (сейчас — монитор
 очередей `/queues`, дальше — страницы импорта авто/ручного). Модель портирована из
@@ -24,12 +24,14 @@
 
 ```
 Сотрудник → /login (логин+пароль) → POST /api/auth/login
-  ├─ нет пароля в env → 503 «вход не настроен» (зона открыта, auth выключен)
+  ├─ нет пароля в env → 503 «вход не настроен» (в деве зона открыта; в ПРОДЕ закрыта)
   ├─ неверно → 401
   └─ верно → Set-Cookie: cba_sess (подписанная, HttpOnly, SameSite=Lax, Secure)
              → редирект на ?redirect= (по умолчанию /queues)
 Защищённая страница → middleware `auth` → GET /api/auth/session
-  ├─ configured:false → пускаем (auth выключен)
+  ├─ open:true → пускаем (пароля нет, но это не прод)
+  ├─ open:false и configured:false → прод без настройки: показываем «зона закрыта»,
+  │                                   НЕ редиректим на /login (там 503 → бесконечный кружок)
   ├─ authenticated:false → редирект на /login?redirect=…
   └─ authenticated:true → показываем
 Выход → POST /api/auth/logout → cookie очищается
@@ -42,7 +44,7 @@
 | Чистое ядро | `server/utils/session.ts` | `resolveAuthConfig`/`checkCredentials` (constant-time), `signSession`/`verifySession` (HMAC-SHA256, base64url), имена `SESSION_COOKIE`/`CSRF_HEADER`, **статус-матрикс роутов** `decideLogin`/`decideLogout`/`sessionStatus` (тестируется без сервера). Покрыто `tests/session.test.ts` |
 | Логин | `server/api/auth/login.post.ts` | тонкий I/O → `decideLogin`: 503 если нет пароля; 403 без CSRF-заголовка; 400 на битое тело; 401 на неверные; иначе ставит подписанную cookie |
 | Выход | `server/api/auth/logout.post.ts` | тонкий I/O → `decideLogout` (403 без CSRF-заголовка, иначе чистит cookie) |
-| Статус | `server/api/auth/session.get.ts` | тонкий I/O → `sessionStatus` → `{ configured, authenticated, user? }` для гварда |
+| Статус | `server/api/auth/session.get.ts` | тонкий I/O → `sessionStatus` → `{ configured, authenticated, open, user? }` для гварда |
 | Клиент | `app/composables/useAuth.ts` | `login`/`logout`/`fetchSession` (шлёт CSRF-заголовок на мутациях) |
 | Форма | `app/pages/login.vue` | публичная страница входа (`noindex`) на **b24ui** (layout `clear` → `<B24App>`, темизуется light/dark), редирект только на относительный путь |
 | Ошибки | `app/utils/loginError.ts` | чистый маппинг статуса ответа → сообщение (503/401/прочее, обе формы ошибки — `statusCode` и `response.status`); `login.vue` зовёт в `catch`. Покрыто `tests/loginError.test.ts` (#84) |
@@ -76,8 +78,13 @@
   `//host` **и** backslash-обход `/\host` (WHATWG нормализует `\`→`/`), не полагаясь на
   внутренности `navigateTo`/`ufo`.
 - **Креды не логируются**; пароль — только в env (`.env`, не в репозитории).
-- Пароль пустой ⇒ вход **выключен** (зона открыта) — удобно для dev, но **в проде
-  пароль обязателен**. `SESSION_SECRET` в проде тоже **обязателен и независим от пароля**:
+- Пароль пустой ⇒ вход **выключен**. В деве это означает «зона открыта» (удобство), **в проде —
+  «зона закрыта»** (fail-closed). Раньше прод вёл себя как дев, и это выстрелило: боевой бэкенд
+  крутился без пароля, а `GET /api/ops/app-rating` отдавал `member_id` **всех установленных
+  порталов** любому, кто знает адрес. «Не настроено» в проде — это недонастроенный деплой, а не
+  разрешение; решение принимает `openWhenUnconfigured` в `resolveAuthConfig`, и оно же уезжает
+  клиенту полем `open` (иначе UI рисовал бы контент, все запросы которого вернут 401).
+  **В проде пароль обязателен**. `SESSION_SECRET` в проде тоже **обязателен и независим от пароля**:
   при деривации из пароля утёкшая cookie позволяет офлайн-подбор самого пароля. **В проде
   ключ из пароля больше НЕ выводится (#242, fail-closed):** если `NODE_ENV=production`,
   пароль задан, а `SESSION_SECRET` пуст — секрет подписи пуст ⇒ сессии не подписываются и
