@@ -17,6 +17,21 @@ import { saveBankToken } from '../../utils/bankTokenStore'
 import { dbQuery } from '../../db/client'
 import type { BankProviderId } from '../../../app/types/statement'
 
+/**
+ * Patience for the code→token exchange. Deliberately far longer than our other outbound calls.
+ *
+ * This is the only step whose failure lands on a person who has ALREADY typed their internet-bank
+ * password: the code is single-use, so a timeout here means «начните заново, войдите в банк ещё
+ * раз», and the page cannot tell them apart from a real refusal. Measured against Priorbank's
+ * sandbox (2026-08-14) the `authorization_code` grant is markedly slower than `client_credentials`
+ * on the same endpoint — one live connect blew through 15s and showed «банк отклонил подключение»
+ * to an account holder who had done everything right, while the very next attempt succeeded.
+ *
+ * The cost of waiting is one held request on our side; the cost of not waiting is another trip
+ * through someone else's bank login. Not unbounded, though — a hung upstream must still end.
+ */
+const TOKEN_EXCHANGE_TIMEOUT_MS = 60_000
+
 function liveCallbackDeps(): CallbackDeps {
   return {
     secret: resolveAuthConfig(process.env).secret,
@@ -33,7 +48,7 @@ function liveCallbackDeps(): CallbackDeps {
         method: 'POST',
         body: body.toString(),
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        timeout: 15_000
+        timeout: TOKEN_EXCHANGE_TIMEOUT_MS
       })
     },
     priorConfig: priorConnectConfigFromEnv,
@@ -49,7 +64,7 @@ function liveCallbackDeps(): CallbackDeps {
         method: 'POST',
         body,
         headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
-        timeout: 15_000
+        timeout: TOKEN_EXCHANGE_TIMEOUT_MS
       })
     },
     priorTokenAuth: config => resolvePriorTokenAuth(config.authMethod ?? 'client_secret_basic', config, {

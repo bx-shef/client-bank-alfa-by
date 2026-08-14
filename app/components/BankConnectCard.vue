@@ -6,8 +6,8 @@ import { useBankConnect } from '~/composables/useBankConnect'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 
-// Online bank connect (stage 5, A7c). Admin picks the bank, enters the account number and starts
-// the OAuth connect: POST /api/bank/connect (frame token) → the backend returns the bank authorize
+// Online bank connect (stage 5, A7c). Admin picks the bank and starts the OAuth connect:
+// POST /api/bank/connect (frame token) → the backend returns the bank authorize
 // URL, which we open in a NEW TAB — opened SYNCHRONOUSLY in the click handler (a window.open after
 // the fetch await would be popup-blocked), then pointed at the URL. The bank redirects to our
 // callback (A7b-2), which saves the token. Gated on admin (connecting a bank binds credentials to
@@ -30,7 +30,6 @@ const { start, syncEnabled, connecting, error, enabled } = useBankConnect()
 const connectedList = useTemplateRef<{ reload: () => Promise<void> }>('connectedList')
 
 const adminChecked = ref(false)
-const accountKey = ref('')
 const started = ref(false)
 
 // The authorize URL is kept so the admin can HAND IT OVER. The account often belongs to a client,
@@ -73,9 +72,6 @@ const PROVIDERS = [
 type ConnectableProvider = (typeof PROVIDERS)[number]['value']
 const provider = ref<ConnectableProvider>('alfa-by')
 const providerLabel = computed(() => PROVIDERS.find(p => p.value === provider.value)?.label ?? '')
-const accountPlaceholder = computed(() =>
-  provider.value === 'prior-by' ? 'BY00PJCB00000000000000000000' : 'BY00ALFA00000000000000000000'
-)
 
 onMounted(async () => {
   await useB24().init().catch(() => {})
@@ -93,7 +89,7 @@ async function onConnect() {
   // Open the tab SYNCHRONOUSLY inside the click gesture — a window.open after the awaited fetch
   // would be blocked. We navigate it to the authorize URL once we have it (or close it on failure).
   const win = window.open('', '_blank')
-  const url = await start(provider.value, accountKey.value)
+  const url = await start(provider.value)
   if (url && win) {
     win.opener = null // sever the opener before navigating to the bank (anti-tabnabbing)
     win.location.href = url
@@ -148,9 +144,15 @@ async function onConnect() {
 
       <hr class="border-(--ui-color-design-tinted-na-stroke)">
 
+      <!-- ⚠ Порядок в тексте — «сначала банк, потом счёт», и он же порядок действий. Раньше над
+           кнопкой стояло поле «номер счёта», и это вводило в заблуждение: админ вписывал номер,
+           а банк на своей странице про счёт не спрашивал вообще — выходило, будто поле управляет
+           согласием банка, тогда как оно лишь подписывало НАШУ строку. Номер выбирается после
+           возврата, в списке выше, где он уже виден. -->
       <p class="text-sm text-(--ui-color-base-2)">
-        Подключите счёт — приложение будет автоматически забирать выписку и заносить операции
-        в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда.
+        Подключите банк — приложение будет автоматически забирать выписку и заносить операции
+        в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда
+        и укажете, какой счёт забирать, в списке выше.
       </p>
 
       <p class="text-sm text-(--ui-color-base-3)">
@@ -174,18 +176,6 @@ async function onConnect() {
         description="Подключение выполняется внутри портала Bitrix24. Здесь — предпросмотр."
         data-testid="preview-note"
       />
-
-      <B24FormField
-        label="Номер счёта (необязательно)"
-        :description="`Расчётный счёт (IBAN) в банке «${providerLabel}». Можно не заполнять — подключитесь и укажите счёт после возврата из банка, он появится в списке выше.`"
-      >
-        <B24Input
-          v-model="accountKey"
-          :placeholder="accountPlaceholder"
-          class="w-full font-mono text-xs"
-          data-testid="account-input"
-        />
-      </B24FormField>
 
       <!-- Status region: announced to screen readers on change (error = assertive, success = polite). -->
       <div

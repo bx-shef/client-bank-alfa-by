@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { handleBankConnectCallback, type CallbackDeps } from '../server/utils/bankConnectCallback'
+import { AUTO_CLOSE_SEC, handleBankConnectCallback, type CallbackDeps } from '../server/utils/bankConnectCallback'
 import { sanitizeForLog } from '../server/utils/logSanitize'
 import { signConnectState } from '../server/utils/bankConnectState'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
@@ -131,6 +131,37 @@ describe('handleBankConnectCallback', () => {
     expect(r.status).toBe(200)
     expect(saved).toHaveLength(1)
     expect((saved[0] as { accountKey: string }).accountKey).toBe(provisionalAccountKey('n1'))
+    // ⚠ И страница обязана сказать ПРАВДУ. Такое подключение намеренно не опрашивается
+    // (`isPendingAccountKey`), поэтому обещание «импорт начнётся автоматически» здесь — ложь,
+    // после которой тишина выглядит поломкой импорта, а не незаконченной настройкой.
+    expect(r.html).not.toContain('начнётся автоматически')
+    expect(r.html).toContain('выбрать счёт')
+  })
+
+  it('state СО счётом → страница обещает автоматический импорт (там он и правда будет)', async () => {
+    const { deps: d } = deps()
+    const r = await handleBankConnectCallback(d, { query: { code: 'C', state: goodState }, nowMs: now })
+    expect(r.status).toBe(200)
+    expect(r.html).toContain('начнётся автоматически')
+  })
+
+  it('каждая страница несёт крючок автозакрытия — и отменяемый, и переживающий выключенный JS', () => {
+    // Вкладка банка — тупик: работа админа продолжается в портале за ней. Проверяем ВСЕ исходы,
+    // включая отказы: раньше забыть один из них было бы незаметно, а именно страницы ошибок
+    // чаще всего и остаются висеть. `defer`+внешний файл — не деталь стиля: inline-скрипт
+    // упёрся бы в CSP `script-src 'self'`, а статичный текст держит страницу правдивой без JS.
+    const pages = [
+      handleBankConnectCallback(deps().deps, { query: { code: 'C', state: goodState }, nowMs: now }),
+      handleBankConnectCallback(deps().deps, { query: { state: 'garbage' }, nowMs: now })
+    ]
+    return Promise.all(pages).then((rendered) => {
+      for (const r of rendered) {
+        expect(r.html).toContain('id="close-hint"')
+        expect(r.html).toContain(`data-seconds="${AUTO_CLOSE_SEC}"`)
+        expect(r.html).toContain('src="/bank-callback.js"')
+        expect(r.html).toContain('Можно закрыть эту вкладку.')
+      }
+    })
   })
 
   it('502 + nothing saved + sanitized log when the token endpoint returns an error PAYLOAD', async () => {
