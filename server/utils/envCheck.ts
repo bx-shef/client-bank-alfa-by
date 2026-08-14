@@ -29,6 +29,12 @@ const PLACEHOLDER_TOKENS = new Set([
   'change_me', 'changeme', 'change-me', 'xxx', 'placeholder', 'todo', 'your-token', 'your_token', 'secret'
 ])
 
+/** Injected probes for the few checks that need more than `env`. Keeps `checkBackendEnv` pure. */
+export interface EnvProbes {
+  /** Whether the path is a readable, non-empty FILE. Wired to node:fs by the startup plugin. */
+  caBundleReadable?: (path: string) => boolean
+}
+
 export interface EnvReport {
   /** Misconfigurations that break token receipt/storage (loud console.error). */
   errors: string[]
@@ -46,7 +52,7 @@ function encKeyBytes(raw: string): number {
  * Validate the backend's environment. Returns errors + warnings; never throws
  * (so it's safe to call at boot without crash-looping the container).
  */
-export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport {
+export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: EnvProbes = {}): EnvReport {
   const errors: string[] = []
   const warnings: string[] = []
 
@@ -210,6 +216,22 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env): EnvReport
       (env.TELEGRAM_ALERT_CHAT_ID ?? '').trim() ? null : 'TELEGRAM_ALERT_CHAT_ID пуст'
     ].filter(Boolean)
     warnings.push(`Телеграм-канал оповещений задан частично или неверно (${bad.length ? bad.join('; ') : 'значения не проходят проверку формата'}) — канал ВЫКЛЮЧЕН, аварии очередей уйдут только в лог и на /queues. Токен бота: «<цифры>:<строка>», chat id: число (у группы отрицательное) или @имя_канала.`)
+  }
+
+  // --- Extra CA bundle. Node carries its OWN root list and it is NOT the host's: Alfa-Bank's
+  //     PRODUCTION endpoint chains to `AAA Certificate Services`, a root Node's bundled list does
+  //     not have. Measured 2026-08-14 — `curl` and `openssl` on the very same machine succeeded
+  //     while every call from the container died with SELF_SIGNED_CERT_IN_CHAIN. The deployment
+  //     answers that by mounting the host trust store and pointing NODE_EXTRA_CA_CERTS at it.
+  //
+  //     SET-BUT-UNREADABLE is the state worth shouting about, and it is the likely one: a bind
+  //     mount whose host path does not exist gets silently created as a DIRECTORY, and Node then
+  //     falls back to its built-ins WITHOUT failing. The symptom surfaces much later and in the
+  //     wrong place — one specific bank «просто не отвечает» — long after anyone remembers
+  //     touching a volume. Unset is NOT warned about: most deployments never need it.
+  const caBundle = (env.NODE_EXTRA_CA_CERTS ?? '').trim()
+  if (caBundle && probes.caBundleReadable && !probes.caBundleReadable(caBundle)) {
+    warnings.push(`NODE_EXTRA_CA_CERTS=${caBundle} — файл не читается или пуст. Node молча продолжит со ВСТРОЕННЫМИ корнями, и банк, чья цепочка требует хостовой корень, будет отвечать «fetch failed» (SELF_SIGNED_CERT_IN_CHAIN). Проверьте, что на хосте есть /etc/ssl/certs/ca-certificates.crt (пакет ca-certificates) или задайте HOST_CA_BUNDLE.`)
   }
 
   return { errors, warnings }

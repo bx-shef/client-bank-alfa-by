@@ -68,7 +68,20 @@ services:
     # No host port and NOT on proxy-net — reached only via app's /api/ proxy_pass.
     expose:
       - "3000"
+    volumes:
+      # Только на чтение: набор поддерживается дистрибутивом хоста, мы его не редактируем.
+      # Путь переопределяется через HOST_CA_BUNDLE, если в системе он лежит иначе.
+      - ${HOST_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/ssl/certs/host-ca-bundle.crt:ro
     environment:
+      # ⚠ Корни доверия — ХОСТОВЫЕ, а не встроенные в Node. Node возит собственный список корней, и
+      # он НЕ совпадает с системным: боевой эндпоинт Альфа-Банка выстраивает цепочку до корня
+      # `AAA Certificate Services`, которого во встроенном списке нет. Замерено 2026-08-14: с той же
+      # машины `curl` и `openssl` проходят, а из контейнера каждый вызов умирает на
+      # SELF_SIGNED_CERT_IN_CHAIN — и выглядит это как «банк не отвечает», а не как вопрос доверия.
+      # `NODE_EXTRA_CA_CERTS` ДОБАВЛЯЕТ корни к встроенным, ничего не подменяя, поэтому отсутствие
+      # файла возвращает прежнее поведение, а не ослабляет проверку. Проверку сертификата не
+      # отключаем никогда — это единственный способ отличить банк от того, кто им притворился.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/host-ca-bundle.crt
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
       # AES-256-GCM key for portal refresh tokens at rest. Required — no default.
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
@@ -212,7 +225,13 @@ services:
   worker:
     logging: *default-logging
     image: ghcr.io/bx-shef/client-bank-alfa-by-backend:latest
+    volumes:
+      # Только на чтение: набор поддерживается дистрибутивом хоста, мы его не редактируем.
+      # Путь переопределяется через HOST_CA_BUNDLE, если в системе он лежит иначе.
+      - ${HOST_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/ssl/certs/host-ca-bundle.crt:ro
     environment:
+      # Тот же хостовой набор корней, что у backend: опрос выписки ходит в те же банки.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/host-ca-bundle.crt
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/app
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}
       # Прежний ключ — только на время ротации (docs/OPERATIONS.md). Без проброса ротация

@@ -232,3 +232,39 @@ describe('Крипто-шлюз Приора: адресация (#455)', () => 
     expect(warns({ PRIOR_OAUTH_API_BASE: GW, PRIOR_OAUTH_AUTHORIZE_BASE: BANK, PRIOR_OAUTH_TOKEN_URL: `${GW}/oauth2/token` }, /непригоден|авторизации|РАЗНЫЕ адреса/)).toBe(false)
   })
 })
+
+describe('Хостовой набор корней (NODE_EXTRA_CA_CERTS)', () => {
+  // Почему это вообще проверяется. Node возит СВОЙ список корней, и он не совпадает с системным:
+  // боевой эндпоинт Альфа-Банка выстраивает цепочку до корня `AAA Certificate Services`, которого
+  // во встроенном списке нет. Замерено вживую 2026-08-14 — `curl` и `openssl` с той же машины
+  // проходили, а каждый вызов из контейнера умирал на SELF_SIGNED_CERT_IN_CHAIN. Развёртывание
+  // отвечает на это пробросом хостового набора; здесь сторожим не сам факт, а самое опасное
+  // состояние — «переменная задана, файла нет».
+  const readable = (ok: boolean) => ({ caBundleReadable: () => ok })
+
+  it('молчит, когда переменная не задана — большинству развёртываний она не нужна', () => {
+    expect(checkBackendEnv(GOOD, readable(false)).warnings).toEqual([])
+  })
+
+  it('молчит, когда файл на месте', () => {
+    const env = { ...GOOD, NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/host-ca-bundle.crt' }
+    expect(checkBackendEnv(env, readable(true)).warnings).toEqual([])
+  })
+
+  it('предупреждает, когда задана, но файла нет — Node молча уйдёт на встроенные корни', () => {
+    // Это не теоретический случай: docker при отсутствии хостового пути создаёт на его месте
+    // КАТАЛОГ, Node такой «файл» игнорирует и продолжает работать — а симптом всплывает позже
+    // и в другом месте, как «конкретный банк не отвечает».
+    const env = { ...GOOD, NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/host-ca-bundle.crt' }
+    const w = checkBackendEnv(env, readable(false)).warnings
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('NODE_EXTRA_CA_CERTS')
+    expect(w[0]).toContain('SELF_SIGNED_CERT_IN_CHAIN')
+    expect(checkBackendEnv(env, readable(false)).errors).toEqual([])
+  })
+
+  it('без пробы не гадает — чистое ядро не лезет в файловую систему само', () => {
+    const env = { ...GOOD, NODE_EXTRA_CA_CERTS: '/nope' }
+    expect(checkBackendEnv(env).warnings).toEqual([])
+  })
+})
