@@ -77,6 +77,18 @@ describe('DCR registration metadata', () => {
     expect(meta.client_name).toBe('App')
   })
 
+  it('declares request_object_signing_alg — without it authorize dies AFTER the bank login', () => {
+    const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob' })
+    // Live-measured (2026-08-14): a registration without this field passes DCR, passes
+    // client_credentials and gets `201` on /accountConsents, then bounces the account holder off
+    // /oauth2/authorize with `invalid_request_object` — i.e. the failure surfaces only after they
+    // have logged into their bank. Pinned separately from `id_token_signed_response_alg` on
+    // purpose: the two look interchangeable and are not (id_token = what the bank signs for us,
+    // request object = what we sign for the bank), and shipping only the latter is exactly the
+    // bug this pins.
+    expect(meta.request_object_signing_alg).toBe('RS256')
+  })
+
   it('omits jwks when none is provided', () => {
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob' })
     expect('jwks' in meta).toBe(false)
