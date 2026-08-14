@@ -135,7 +135,7 @@ const model = PARTNERS_MODEL
                 <td class="p-4 whitespace-nowrap">
                   <span
                     class="inline-block text-xs font-bold px-2.5 py-1 rounded-md"
-                    :class="row.paid === 'free'
+                    :class="row.paid === 'market'
                       ? 'bg-white/10 text-white/60'
                       : 'bg-[rgb(var(--color-accent-partner-ch)/0.25)] text-white/90'"
                   >{{ row.who }}</span>

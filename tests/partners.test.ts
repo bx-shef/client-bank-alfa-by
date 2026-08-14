@@ -21,10 +21,11 @@ describe('partners copy', () => {
     for (const m of PARTNERS_MODEL) expect(m.trim()).not.toBe('')
   })
 
-  it('has a sales ladder with a free entry rung and paid rungs done by us', () => {
+  it('has a sales ladder with one Market rung and paid rungs done by us', () => {
     expect(PARTNERS_LADDER.length).toBeGreaterThanOrEqual(3)
-    // Exactly one free entry point; the rest are paid work on our side.
-    expect(PARTNERS_LADDER.filter(r => r.paid === 'free').length).toBe(1)
+    // Exactly one rung paid through the Marketplace subscription (#436 — it used to be free);
+    // the rest are paid work on our side.
+    expect(PARTNERS_LADDER.filter(r => r.paid === 'market').length).toBe(1)
     expect(PARTNERS_LADDER.some(r => r.paid === 'us')).toBe(true)
     for (const r of PARTNERS_LADDER) {
       expect(r.level.trim()).not.toBe('')

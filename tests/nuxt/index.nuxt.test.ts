@@ -37,7 +37,7 @@ describe('index landing page', () => {
 
   it('renders the Marketplace promo card wired for the funnel', async () => {
     const wrapper = await mountSuspended(IndexPage)
-    // The agreed copy is on the page and the CTA links to the free-app listing.
+    // The agreed copy is on the page and the CTA links to the Marketplace listing.
     expect(wrapper.text()).toContain(LANDING_MARKET_PROMO.title)
     const hrefs = wrapper.findAll('a').map(a => a.attributes('href'))
     expect(hrefs).toContain(LANDING_MARKET_URL)
