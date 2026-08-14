@@ -277,6 +277,17 @@ export interface PriorRegistrationInput {
  * `jwks` is required by the bank when `grant_types` contains `authorization_code` (always, for
  * us) — and it is ALSO what `private_key_jwt` verifies the `client_assertion` against, so the
  * same registered key serves both.
+ *
+ * ⚠ `request_object_signing_alg` is NOT optional here, and its absence is invisible until the very
+ * last step. Registration succeeds, `client_credentials` succeeds, `POST /accountConsents` returns
+ * `201` — and then `GET /oauth2/authorize` bounces the account holder back with
+ * `error=invalid_request_object&error_description=server_error`, AFTER they have already been sent
+ * to their bank. The bank publishes exactly one accepted value (`request_object_signing_alg_values_supported: ['RS256']`,
+ * read live from `/oidcdiscovery`) but will not assume it: a client that never declared how it
+ * signs gets its signed `request` JWT refused. Registering `id_token_signed_response_alg` alone is
+ * NOT the same declaration — that one covers the id_token the bank issues to us, this one covers
+ * the request object we send to the bank, and we shipped the first without the second. Measured
+ * against the sandbox, 2026-08-14 (docs/PRIOR_API.md).
  */
 export function buildRegistrationMetadata(input: PriorRegistrationInput): Record<string, unknown> {
   return {
@@ -286,6 +297,7 @@ export function buildRegistrationMetadata(input: PriorRegistrationInput): Record
     grant_types: ['authorization_code', 'client_credentials', 'refresh_token'],
     application_type: 'web',
     id_token_signed_response_alg: 'RS256',
+    request_object_signing_alg: 'RS256',
     token_endpoint_auth_method: [input.tokenEndpointAuthMethod ?? 'client_secret_basic'],
     ...(input.jwks ? { jwks: JSON.stringify(input.jwks) } : {})
   }
@@ -326,12 +338,28 @@ export interface PriorAuthorizeClaimsInput {
   /** `Math.floor(Date.now()/1000)` — supplied by the caller (keeps this pure). */
   nowSec: number
   jti: string
-  /** Seconds until the JWT expires (default 600). */
+  /** Seconds until the JWT expires. Defaults to the SHARED connect window — see below. */
   ttlSec?: number
   scope?: string
 }
 
 const DEFAULT_AUTHORIZE_SCOPE = 'openid accounts'
+
+/**
+ * The authorize `request` JWT must expire WITH the connect link, never before it.
+ *
+ * These are two clocks over ONE human action — the account holder logging into their bank — and the
+ * shorter one silently decides everything. The two failures look nothing alike, which is what makes
+ * a mismatch expensive: our state expiring says «ссылка недействительна», while this JWT expiring
+ * comes back from the bank as `invalid_request_object`, which reads as a broken integration and
+ * sends whoever debugs it into the signature, the key and the registration instead of the clock.
+ *
+ * ⚠ Deliberately a literal rather than an import of `CONNECT_STATE_TTL_MS`. This module is imported
+ * DIRECTLY by the plain-node recon script (scripts/prior-oauth-test.mjs), where extensionless
+ * sibling imports do not resolve — its freedom from imports is a feature, not an oversight.
+ * `tests/priorOauth.test.ts` pins the two numbers together instead.
+ */
+export const AUTHORIZE_REQUEST_TTL_SEC = 900
 
 /**
  * The claim-set for the authorize `request` JWT. Pure payload only — the caller
@@ -355,7 +383,7 @@ export function buildAuthorizeRequestClaims(input: PriorAuthorizeClaimsInput): R
       id_token: { openbanking_intent_id: claim }
     },
     iat: input.nowSec,
-    exp: input.nowSec + (input.ttlSec ?? 600),
+    exp: input.nowSec + (input.ttlSec ?? AUTHORIZE_REQUEST_TTL_SEC),
     jti: input.jti
   }
 }

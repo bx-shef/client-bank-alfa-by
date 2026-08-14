@@ -54,6 +54,12 @@ export function buildAuthorizeUrl(config: AlfaOAuthConfig, state: string): strin
  * Order: an `error` payload is reported before the state check (so a genuine
  * provider error surfaces verbatim). `error_description` is provider-controlled —
  * the transport must sanitize it before writing to structured logs (CRLF/length).
+ *
+ * ⚠ The messages say «Bank», not «Alfa»: this parser is shared — BOTH providers land on one
+ * callback route and are told apart by the verified state (server/utils/bankConnectCallback.ts).
+ * Naming one bank in the text cost real debugging time on the Prior connect, where the log line
+ * `[bank-connect] callback rejected: Bank OAuth callback error: invalid_request_object` sent the
+ * reader looking at the wrong integration.
  */
 export function parseOAuthCallback(
   query: Record<string, string | string[] | undefined>,
@@ -63,15 +69,15 @@ export function parseOAuthCallback(
 
   const error = get('error')
   if (error) {
-    throw new Error(`Alfa OAuth callback error: ${error}${get('error_description') ? ` — ${get('error_description')}` : ''}`)
+    throw new Error(`Bank OAuth callback error: ${error}${get('error_description') ? ` — ${get('error_description')}` : ''}`)
   }
   const state = get('state')
   if (!state || state !== expectedState) {
-    throw new Error('Alfa OAuth callback: state mismatch (possible CSRF)')
+    throw new Error('Bank OAuth callback: state mismatch (possible CSRF)')
   }
   const code = get('code')
   if (!code) {
-    throw new Error('Alfa OAuth callback: missing authorization code')
+    throw new Error('Bank OAuth callback: missing authorization code')
   }
   return { code }
 }

@@ -24,10 +24,16 @@ export function useBankConnect() {
 
   /**
    * Kick off the connect. Returns the bank authorize URL to open, or null (with `error` set) on any
-   * failure (no frame / blank account / backend error / network). Does NOT open a window — the
-   * caller opens it synchronously in the click handler and sets its location to the returned URL.
+   * failure (no frame / backend error / network). Does NOT open a window — the caller opens it
+   * synchronously in the click handler and sets its location to the returned URL.
+   *
+   * `accountKey` is OPTIONAL and the UI no longer passes one: the number is chosen after returning
+   * from the bank, off the connected-accounts list. The parameter stays because the server contract
+   * still accepts a pre-set key, but asking for it up front was actively misleading — the admin
+   * typed a number, then authorised in an internet-bank that never asked which account was meant,
+   * so the field read as if it steered the bank's consent when it only ever labelled OUR row.
    */
-  async function start(provider: BankProviderId, accountKey: string): Promise<string | null> {
+  async function start(provider: BankProviderId, accountKey = ''): Promise<string | null> {
     const a = frameAuth()
     enabled.value = a !== null
     error.value = ''

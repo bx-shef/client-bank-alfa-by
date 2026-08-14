@@ -48,6 +48,17 @@ describe('parseOAuthCallback', () => {
     expect(() => parseOAuthCallback({ error: 'access_denied', error_description: 'user said no', state: 's1' }, 's1'))
       .toThrow(/access_denied — user said no/)
   })
+  it('names no bank in its errors — this parser serves BOTH providers', () => {
+    // Substring assertions elsewhere in this file pass on any prefix, so nothing caught the real
+    // cost of the old wording: a Priorbank connect failed with `[bank-connect] callback rejected:
+    // Alfa OAuth callback error: invalid_request_object`, and the log sent the reader off into the
+    // wrong integration for a while. Both banks land on one callback route, told apart by the
+    // verified state, so the shared parser must stay provider-neutral.
+    expect(() => parseOAuthCallback({ error: 'access_denied', state: 's1' }, 's1')).toThrow(/^Bank OAuth/)
+    expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/^Bank OAuth/)
+    expect(() => parseOAuthCallback({ state: 's1' }, 's1')).toThrow(/^Bank OAuth/)
+  })
+
   it('throws on state mismatch (CSRF guard)', () => {
     expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/state mismatch/i)
   })

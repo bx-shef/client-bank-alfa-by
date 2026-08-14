@@ -60,12 +60,61 @@ export interface CallbackInput {
   nowMs: number
 }
 
+/**
+ * Patience for the code→token exchange, in ms. Deliberately longer than our other outbound calls:
+ * this is the only step whose failure lands on a person who has ALREADY typed their internet-bank
+ * password, and the code is single-use, so a timeout here costs them another trip through that
+ * login. Measured against Priorbank's sandbox (2026-08-14) the `authorization_code` grant is
+ * markedly slower than `client_credentials` on the same endpoint — one live connect blew through
+ * 15s and showed «банк отклонил подключение» to an account holder who had done everything right,
+ * while the very next attempt succeeded.
+ *
+ * ⚠ THE NUMBER IS NOT FREE TO RAISE — it sits inside TWO proxy ceilings, and whichever fires first
+ * wins. Nearest is our own nginx (`proxy_read_timeout` on `location = /api/bank/callback`, which
+ * overrides the 30s shared default precisely because of this constant — `tests/bankRouteTimeouts.test.ts`
+ * keeps the two in step). Above that is the shared edge proxy, whose default is nginx's own 60s and
+ * which this repository does not configure. So the budget is: this constant < our nginx < 60s.
+ * Exceed the edge and the admin gets a bare `504` from a server we don't own instead of the page
+ * below — worse than the 15s we started from, because the failure stops being ours to explain.
+ *
+ * A raise past this point needs measurement, not another incident: the exchange is not yet wrapped
+ * in `withDependencySpan`, so nobody can see the real latency distribution (follow-up issue).
+ */
+export const TOKEN_EXCHANGE_TIMEOUT_MS = 45_000
+
+/** Seconds before the tab closes itself. This tab is a dead end — it exists only to carry the
+ *  bank's redirect, and the admin's work continues in the portal tab behind it. Long enough to read
+ *  one sentence, and ALWAYS cancellable: an auto-close that cannot be stopped takes the page away
+ *  from anyone who reads slowly, and the failure pages are exactly the ones worth re-reading. */
+export const AUTO_CLOSE_SEC = 5
+
+/** Static fallback text — also what the page shows when the countdown is cancelled or JS is off. */
+const CLOSE_HINT = 'Можно закрыть эту вкладку.'
+
+// The countdown lives in `public/bank-callback.js`, NOT inline: the page is served under the site's
+// CSP (`script-src 'self'`, no 'unsafe-inline'), so an inline script would need its sha256 kept in
+// step with nginx.conf by hand — a guard that silently rots the first time the text changes. An
+// external same-origin file needs none of that. Progressive enhancement: with no JS the page still
+// reads correctly, it just doesn't close itself.
 const page = (title: string, msg: string): string =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
   + `<title>${title}</title><body style="font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">`
-  + `<h1 style="font-size:1.25rem">${title}</h1><p>${msg}</p><p style="color:#666">Можно закрыть эту вкладку.</p>`
+  + `<h1 style="font-size:1.25rem">${title}</h1><p>${msg}</p>`
+  + `<p id="close-hint" style="color:#666" data-seconds="${AUTO_CLOSE_SEC}">${CLOSE_HINT}</p>`
+  + `<script src="/bank-callback.js" defer></script>`
 
-const OK_PAGE = page('Счёт подключён', 'Банковский счёт подключён к порталу. Импорт выписки начнётся автоматически.')
+// ⚠ TWO success pages, because there are two outcomes and only one of them means «готово».
+// Connecting no longer asks for an account number up front (it never steered the bank's consent),
+// so the usual landing is a bank bound to the portal with no account chosen yet — and such a
+// connection is deliberately NOT polled (`isPendingAccountKey`), because the bank has no such
+// «number» and the job would fail on every tick. Telling that admin «импорт начнётся автоматически»
+// promises something the app will not do, and the silence afterwards looks like a broken import
+// rather than an unfinished setup.
+const OK_PAGE_PENDING = page(
+  'Банк подключён',
+  'Доступ к банку получен. Осталось выбрать счёт в настройках приложения — до этого выписка не запрашивается.'
+)
+const OK_PAGE_ACCOUNT = page('Счёт подключён', 'Банковский счёт подключён к порталу. Импорт выписки начнётся автоматически.')
 const ERR_PAGE = page('Не удалось подключить', 'Ссылка недействительна или срок её действия истёк. Повторите подключение из настроек приложения.')
 const EXCHANGE_ERR_PAGE = page('Не удалось подключить', 'Банк отклонил подключение. Повторите попытку из настроек приложения.')
 
@@ -136,6 +185,7 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
   }
 
   // 4) Persist under the portal+provider+account the VERIFIED state carries.
+  const hasAccount = Boolean(state.accountKey)
   await deps.saveToken({
     memberId: state.memberId,
     provider: state.provider,
@@ -148,5 +198,5 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
     expiresAt: input.nowMs + tokens.expiresIn * 1000
   })
   deps.log?.(`[bank-connect] connected ${state.provider} account for member ${state.memberId}`)
-  return { status: 200, html: OK_PAGE }
+  return { status: 200, html: hasAccount ? OK_PAGE_ACCOUNT : OK_PAGE_PENDING }
 }

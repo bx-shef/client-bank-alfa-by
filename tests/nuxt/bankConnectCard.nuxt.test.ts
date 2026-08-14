@@ -64,13 +64,17 @@ describe('BankConnectCard admin gate', () => {
     expect(wrapper.find('[data-testid="bank-connect"]').exists()).toBe(false)
   })
 
-  it('in portal + admin → card with input + button, no warning, no preview note', async () => {
+  it('in portal + admin → card with button, no account field, no warning, no preview note', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="bank-connect"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="account-input"]').exists()).toBe(true)
+    // ⚠ The account-number field is GONE, asserted explicitly. It misled: the admin typed an
+    // IBAN and the bank's page never asked about an account, so the field looked like it steered
+    // the bank's consent when it only ever labelled our row. The account is chosen after
+    // returning, from the connected list.
+    expect(wrapper.find('[data-testid="account-input"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="connect-button"]').exists()).toBe(true)
     // In a real portal frame there IS a token → no "preview only" note.
     expect(wrapper.find('[data-testid="preview-note"]').exists()).toBe(false)
@@ -97,7 +101,6 @@ describe('BankConnectCard connect interaction', () => {
     vi.stubGlobal('open', openSpy)
 
     const wrapper = await mountReady()
-    await wrapper.find('[data-testid="account-input"]').setValue('BY13ALFA')
     await wrapper.find('[data-testid="connect-button"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -119,7 +122,6 @@ describe('BankConnectCard connect interaction', () => {
     vi.stubGlobal('open', vi.fn(() => fakeWin as unknown as Window))
 
     const wrapper = await mountReady()
-    await wrapper.find('[data-testid="account-input"]').setValue('BY13ALFA')
     await wrapper.find('[data-testid="connect-button"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -151,7 +153,6 @@ describe('BankConnectCard connect interaction', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="connect-button"]').text()).toContain('Приорбанк')
 
-    await wrapper.find('[data-testid="account-input"]').setValue('BY13PJCB')
     await wrapper.find('[data-testid="connect-button"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -159,7 +160,10 @@ describe('BankConnectCard connect interaction', () => {
     // The backend got prior-by (not the alfa-by default).
     const body = (connectCalls()[0]![1] as { body: { provider: string, accountKey: string } }).body
     expect(body.provider).toBe('prior-by')
-    expect(body.accountKey).toBe('BY13PJCB')
+    // The account number goes out EMPTY — the server lands the connection under a provisional
+    // key and the account is picked from the list, where it is already visible. The route's
+    // contract did not change.
+    expect(body.accountKey).toBe('')
     vi.unstubAllGlobals()
   })
 })

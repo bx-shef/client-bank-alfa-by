@@ -7,7 +7,7 @@
 // by the verified state's `provider`.
 
 import { randomUUID } from 'node:crypto'
-import { handleBankConnectCallback, type CallbackDeps } from '../../utils/bankConnectCallback'
+import { handleBankConnectCallback, TOKEN_EXCHANGE_TIMEOUT_MS, type CallbackDeps } from '../../utils/bankConnectCallback'
 import { bankConnectConfigFromEnv } from '../../utils/bankConnectStart'
 import { priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { resolvePriorTokenAuth } from '../../utils/priorTokenAuth'
@@ -33,7 +33,7 @@ function liveCallbackDeps(): CallbackDeps {
         method: 'POST',
         body: body.toString(),
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        timeout: 15_000
+        timeout: TOKEN_EXCHANGE_TIMEOUT_MS
       })
     },
     priorConfig: priorConnectConfigFromEnv,
@@ -49,7 +49,7 @@ function liveCallbackDeps(): CallbackDeps {
         method: 'POST',
         body,
         headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
-        timeout: 15_000
+        timeout: TOKEN_EXCHANGE_TIMEOUT_MS
       })
     },
     priorTokenAuth: config => resolvePriorTokenAuth(config.authMethod ?? 'client_secret_basic', config, {

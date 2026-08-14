@@ -87,7 +87,9 @@ export interface ConnectStartInput {
   provider: BankProviderId
   /** The bank account number the admin is connecting — carried through the signed state to the
    *  callback, which saves the token under it (bank_tokens.account_key), so the poller fetches that
-   *  exact account (it's also the Alfa `number=` statement param). Required. */
+   *  exact account (it's also the Alfa `number=` statement param). ⚠ OPTIONAL, and the UI no longer
+   *  sends one at all (#482): asking up front misled, since the number never reached the bank. An
+   *  empty value lands the connection under a provisional key, to be named from the list later. */
   accountKey: string
   /** Random per-request nonce (correlation id in the state). */
   nonce: string
