@@ -221,6 +221,14 @@ services:
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}
       B24_CLIENT_SECRET: ${B24_CLIENT_SECRET:-}
       REDIS_URL: redis://redis:6379
+      # Те же креды операторской зоны, что у backend. Воркер — тот же Nitro-образ, он поднимает
+      # HTTP на :3000 во внутренней сети, то есть `/api/ops/*` у него ТОЖЕ есть. Наружу их не
+      # проксируют (nginx ходит в `backend`), но оставлять их открытыми внутри — ровно та же
+      # ошибка «не настроено = разрешено», из-за которой утекали member_id порталов.
+      # Без этих строк воркер вдобавок ругался бы на старте на «незаданный пароль» вхолостую.
+      PUBLIC_PAGE_BASIC_AUTH_USER: ${PUBLIC_PAGE_BASIC_AUTH_USER:-operator}
+      PUBLIC_PAGE_BASIC_AUTH_PASS: ${PUBLIC_PAGE_BASIC_AUTH_PASS:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
       # Role: process jobs, don't schedule, don't migrate.
       QUEUE_CRON: "0"
       RUN_MIGRATION: "0"
