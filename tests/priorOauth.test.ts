@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { CONNECT_STATE_TTL_MS } from '../app/utils/bankConnectTtl'
 import {
   PRIOR_API_PREFIXES,
   PRIOR_CLIENT_ASSERTION_TYPE,
@@ -29,7 +30,8 @@ import {
   buildPriorResourcePollPath,
   extractPriorErrorCodes,
   classifyPriorPoll,
-  PRIOR_RESOURCE_NOT_CREATED
+  PRIOR_RESOURCE_NOT_CREATED,
+  AUTHORIZE_REQUEST_TTL_SEC
 } from '~/utils/priorOauth'
 
 // Pure Open Banking (СПР) core — same builders/parsers the sandbox script and
@@ -228,10 +230,24 @@ describe('authorize request claims + URL', () => {
     expect(Array.isArray(claims.aud)).toBe(true)
     expect(claims.aud[0]).toBe(claimsInput.aud)
     expect(claims.iat).toBe(1_700_000_000)
-    expect(claims.exp).toBe(1_700_000_000 + 600)
+    // ⚠ Не литерал: срок жизни этого JWT ОБЯЗАН совпадать со сроком жизни ссылки подключения.
+    // Это два таймера над одним человеческим действием — входом владельца счёта в свой банк, — и
+    // если разъедутся, короткий решит всё молча, причём с чужим лицом: наш state отдаёт «ссылка
+    // недействительна», а этот JWT возвращается от банка как `invalid_request_object`, то есть
+    // выглядит поломкой интеграции и уводит разбор в подпись, ключ и регистрацию.
+    expect(claims.exp).toBe(1_700_000_000 + AUTHORIZE_REQUEST_TTL_SEC)
     expect(claims.client_id).toBe('CID')
     expect(claims.iss).toBe('CID')
     expect(claims.sub).toBe('CID')
+  })
+
+  it('живёт РОВНО столько же, сколько ссылка подключения — иначе короткий таймер решает молча', () => {
+    // Два таймера над одним действием: владелец счёта входит в свой банк. Если этот JWT протухнет
+    // раньше нашего state, отказ придёт от банка как `invalid_request_object` — с лицом поломки
+    // интеграции, и разбор уедет в подпись, ключ и регистрацию вместо часов. Импортом их связать
+    // нельзя (модуль намеренно без импортов — его грузит plain-node скрипт разведки), поэтому
+    // связывает этот тест.
+    expect(AUTHORIZE_REQUEST_TTL_SEC * 1000).toBe(CONNECT_STATE_TTL_MS)
   })
 
   it('custom ttl is honoured', () => {

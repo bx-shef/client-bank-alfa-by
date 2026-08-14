@@ -338,12 +338,28 @@ export interface PriorAuthorizeClaimsInput {
   /** `Math.floor(Date.now()/1000)` — supplied by the caller (keeps this pure). */
   nowSec: number
   jti: string
-  /** Seconds until the JWT expires (default 600). */
+  /** Seconds until the JWT expires. Defaults to the SHARED connect window — see below. */
   ttlSec?: number
   scope?: string
 }
 
 const DEFAULT_AUTHORIZE_SCOPE = 'openid accounts'
+
+/**
+ * The authorize `request` JWT must expire WITH the connect link, never before it.
+ *
+ * These are two clocks over ONE human action — the account holder logging into their bank — and the
+ * shorter one silently decides everything. The two failures look nothing alike, which is what makes
+ * a mismatch expensive: our state expiring says «ссылка недействительна», while this JWT expiring
+ * comes back from the bank as `invalid_request_object`, which reads as a broken integration and
+ * sends whoever debugs it into the signature, the key and the registration instead of the clock.
+ *
+ * ⚠ Deliberately a literal rather than an import of `CONNECT_STATE_TTL_MS`. This module is imported
+ * DIRECTLY by the plain-node recon script (scripts/prior-oauth-test.mjs), where extensionless
+ * sibling imports do not resolve — its freedom from imports is a feature, not an oversight.
+ * `tests/priorOauth.test.ts` pins the two numbers together instead.
+ */
+export const AUTHORIZE_REQUEST_TTL_SEC = 900
 
 /**
  * The claim-set for the authorize `request` JWT. Pure payload only — the caller
@@ -367,7 +383,7 @@ export function buildAuthorizeRequestClaims(input: PriorAuthorizeClaimsInput): R
       id_token: { openbanking_intent_id: claim }
     },
     iat: input.nowSec,
-    exp: input.nowSec + (input.ttlSec ?? 600),
+    exp: input.nowSec + (input.ttlSec ?? AUTHORIZE_REQUEST_TTL_SEC),
     jti: input.jti
   }
 }
