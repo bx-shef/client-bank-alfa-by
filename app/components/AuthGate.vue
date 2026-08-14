@@ -10,14 +10,18 @@
 import { ref, onMounted } from 'vue'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 
-const state = ref<'checking' | 'ok' | 'denied'>('checking')
+const state = ref<'checking' | 'ok' | 'denied' | 'locked'>('checking')
 
 onMounted(async () => {
   const { fetchSession } = useAuth()
   try {
     const s = await fetchSession()
-    // Open when login isn't configured (matches the middleware), else needs a session.
-    state.value = (!s.configured || s.authenticated) ? 'ok' : 'denied'
+    if (s.authenticated || s.open) state.value = 'ok'
+    // Пароль не задан и зона не открыта — это ПРОД без настройки. Отдельное состояние, а не
+    // редирект на /login: войти там нельзя в принципе (роут отдаёт 503), и владелец крутился бы
+    // между страницей и формой, не понимая, чего от него хотят.
+    else if (!s.configured) state.value = 'locked'
+    else state.value = 'denied'
   } catch {
     // Backend unreachable (static preview / API down): don't hard-block the UI —
     // consistent with the middleware. Data endpoints still enforce the session.
@@ -41,6 +45,20 @@ onMounted(async () => {
       />
       <p class="text-sm">
         Проверка доступа…
+      </p>
+    </div>
+    <div
+      v-else-if="state === 'locked'"
+      role="status"
+      class="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
+    >
+      <h1 class="text-lg font-semibold">
+        Служебная зона закрыта
+      </h1>
+      <p class="text-sm text-(--ui-color-base-3)">
+        На сервере не задан пароль оператора (<code>PUBLIC_PAGE_BASIC_AUTH_PASS</code>) — вход
+        выключен, и данные не отдаются никому. Задайте пароль и <code>SESSION_SECRET</code> в
+        <code>.env</code>, затем пересоздайте контейнер бэкенда.
       </p>
     </div>
     <!-- denied: the auth middleware redirects to /login; render nothing here. -->

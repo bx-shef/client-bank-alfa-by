@@ -18,6 +18,11 @@ export interface AuthConfig {
   secret: string
   /** Session lifetime in ms. */
   ttlMs: number
+  /** Пускать ли в служебную зону, когда пароль НЕ задан. В деве — да (удобство: поднял и
+   *  работаешь). В проде — НЕТ: незаданный пароль там означает недонастроенный деплой, а не
+   *  «зона публичная». Раньше это был fail-OPEN, и `/api/ops/app-rating` отдавал `member_id`
+   *  всех установленных порталов любому, кто знает адрес. */
+  openWhenUnconfigured: boolean
 }
 
 const DEFAULT_USER = 'operator'
@@ -38,7 +43,7 @@ export function resolveAuthConfig(env: Record<string, string | undefined>): Auth
   //  - in dev/test we still derive from the password for convenience (stable non-empty key).
   const isProd = env.NODE_ENV === 'production'
   const secret = explicitSecret || (isProd ? '' : (pass ? `derived:${pass}` : ''))
-  return { user, pass, secret, ttlMs }
+  return { user, pass, secret, ttlMs, openWhenUnconfigured: !isProd }
 }
 
 /** Whether login is configured (a password is set). */
@@ -106,7 +111,8 @@ export function verifySession(value: string | undefined, secret: string, nowMs: 
 /**
  * Non-secret startup diagnostic for the operator gate. Returns a warning string
  * when the current env is risky, or `null` when fine. Pure (takes an env bag):
- *  - production with no password ⇒ the whole operator zone is silently open;
+ *  - production with no password ⇒ the operator zone is LOCKED (fail-closed) — nobody, including
+ *    the owner, can reach /queues or /api/ops/*;
  *  - a configured password but no explicit SESSION_SECRET ⇒ in production the key is
  *    NOT derived from the password (fail-closed, #242 P1), so the operator zone is
  *    LOCKED until SESSION_SECRET is set. Callers log the result; secrets are never included.
@@ -115,7 +121,9 @@ export function authStartupWarning(env: Record<string, string | undefined>): str
   const isProd = env.NODE_ENV === 'production'
   const cfg = resolveAuthConfig(env)
   if (isProd && !isAuthConfigured(cfg)) {
-    return 'operator zone is OPEN — PUBLIC_PAGE_BASIC_AUTH_PASS is not set in production'
+    return 'operator zone is LOCKED — PUBLIC_PAGE_BASIC_AUTH_PASS is not set in production. '
+      + 'Set it (plus SESSION_SECRET) and recreate the backend container, otherwise /queues and '
+      + '/api/ops/* stay closed'
   }
   if (isProd && isAuthConfigured(cfg) && !(env.SESSION_SECRET || '').trim()) {
     return 'SESSION_SECRET is not set — the operator zone is LOCKED (fail-closed): the signing key is no longer derived from the password. Set an independent SESSION_SECRET in production'
@@ -130,7 +138,7 @@ export function authStartupWarning(env: Record<string, string | undefined>): str
  * the session server-side (the SSG page guard is only a UX redirect).
  */
 export function operatorAllowed(cfg: AuthConfig, cookie: string | undefined, nowMs: number): boolean {
-  if (!isAuthConfigured(cfg)) return true
+  if (!isAuthConfigured(cfg)) return cfg.openWhenUnconfigured
   return verifySession(cookie, cfg.secret, nowMs) !== null
 }
 
@@ -187,19 +195,24 @@ export function decideLogout(hasCsrf: boolean): LogoutDecision {
 
 /** GET /api/auth/session response for the client guard. */
 export interface SessionStatus {
-  /** Login is configured (a password is set). `false` ⇒ gated pages are open. */
+  /** Пароль задан. */
   configured: boolean
   authenticated: boolean
+  /** Пускать без сессии прямо сейчас. Отдельное поле, а не `!configured`: пароль может быть не
+   *  задан и в деве (тогда открыто), и в проде (тогда ЗАКРЫТО — недонастроенный деплой). Клиент
+   *  обязан решать по нему, иначе покажет контент там, где все запросы всё равно вернут 401. */
+  open: boolean
   user?: string
 }
 
-/** Session status for GET /api/auth/session (the client guard). `configured:false`
- * ⇒ login disabled (gated pages open). Reads only the signed cookie value. */
+/** Session status for GET /api/auth/session (the client guard). Reads only the signed cookie. */
 export function sessionStatus(cfg: AuthConfig, cookieValue: string | undefined, nowMs: number): SessionStatus {
   const payload = verifySession(cookieValue, cfg.secret, nowMs)
+  const configured = isAuthConfigured(cfg)
   return {
-    configured: isAuthConfigured(cfg),
+    configured,
     authenticated: Boolean(payload),
+    open: !configured && cfg.openWhenUnconfigured,
     ...(payload ? { user: payload.sub } : {})
   }
 }

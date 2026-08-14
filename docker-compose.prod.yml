@@ -40,7 +40,11 @@ services:
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      # ⚠ Именно 127.0.0.1, а не localhost. nginx слушает `listen 8080;` — это ТОЛЬКО IPv4, а
+      # `localhost` в контейнере резолвится и в `::1`. Если busybox-wget сходит по IPv6 первым,
+      # проверка получит «Connection refused» при полностью живом сервере — контейнер будет
+      # висеть unhealthy сутками, и искать будут поломку, которой нет.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -182,7 +186,7 @@ services:
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
     # Makes `docker compose ps` show backend health at a glance.
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -274,7 +278,7 @@ services:
       # именно встал» придётся выяснять по атрибутам вместо того, чтобы видеть сразу.
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME_WORKER:-${OTEL_SERVICE_NAME:-}}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
