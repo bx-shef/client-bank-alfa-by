@@ -144,11 +144,11 @@ async function onConnect() {
 
       <hr class="border-(--ui-color-design-tinted-na-stroke)">
 
-      <!-- ⚠ Порядок в тексте — «сначала банк, потом счёт», и он же порядок действий. Раньше над
-           кнопкой стояло поле «номер счёта», и это вводило в заблуждение: админ вписывал номер,
-           а банк на своей странице про счёт не спрашивал вообще — выходило, будто поле управляет
-           согласием банка, тогда как оно лишь подписывало НАШУ строку. Номер выбирается после
-           возврата, в списке выше, где он уже виден. -->
+      <!-- ⚠ The copy states the order of operations, and that order is «bank first, account
+           after». An account-number field used to sit above the button, and it misled: the admin
+           typed a number, went to the bank — and the bank's page never asked about an account. The
+           field read as if it steered the bank's consent when it only ever labelled OUR row. The
+           number is picked after returning, from the list above, where it is already visible. -->
       <p class="text-sm text-(--ui-color-base-2)">
         Подключите банк — приложение будет автоматически забирать выписку и заносить операции
         в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда

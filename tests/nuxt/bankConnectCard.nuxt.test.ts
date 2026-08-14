@@ -70,10 +70,10 @@ describe('BankConnectCard admin gate', () => {
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="bank-connect"]').exists()).toBe(true)
-    // ⚠ Поля номера счёта тут БОЛЬШЕ НЕТ, и это проверяется явно. Оно вводило в заблуждение:
-    // админ вписывал IBAN, а страница банка про счёт не спрашивала — поле выглядело так, будто
-    // управляет согласием банка, хотя лишь подписывало нашу строку. Счёт выбирается после
-    // возврата, в списке подключённых.
+    // ⚠ The account-number field is GONE, asserted explicitly. It misled: the admin typed an
+    // IBAN and the bank's page never asked about an account, so the field looked like it steered
+    // the bank's consent when it only ever labelled our row. The account is chosen after
+    // returning, from the connected list.
     expect(wrapper.find('[data-testid="account-input"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="connect-button"]').exists()).toBe(true)
     // In a real portal frame there IS a token → no "preview only" note.
@@ -160,8 +160,9 @@ describe('BankConnectCard connect interaction', () => {
     // The backend got prior-by (not the alfa-by default).
     const body = (connectCalls()[0]![1] as { body: { provider: string, accountKey: string } }).body
     expect(body.provider).toBe('prior-by')
-    // Номер счёта уходит ПУСТЫМ — сервер положит подключение под временный ключ, а счёт
-    // выберут из списка, где он уже виден. Контракт роута при этом не менялся.
+    // The account number goes out EMPTY — the server lands the connection under a provisional
+    // key and the account is picked from the list, where it is already visible. The route's
+    // contract did not change.
     expect(body.accountKey).toBe('')
     vi.unstubAllGlobals()
   })

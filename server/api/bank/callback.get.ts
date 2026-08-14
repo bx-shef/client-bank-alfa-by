@@ -7,7 +7,7 @@
 // by the verified state's `provider`.
 
 import { randomUUID } from 'node:crypto'
-import { handleBankConnectCallback, type CallbackDeps } from '../../utils/bankConnectCallback'
+import { handleBankConnectCallback, TOKEN_EXCHANGE_TIMEOUT_MS, type CallbackDeps } from '../../utils/bankConnectCallback'
 import { bankConnectConfigFromEnv } from '../../utils/bankConnectStart'
 import { priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { resolvePriorTokenAuth } from '../../utils/priorTokenAuth'
@@ -16,21 +16,6 @@ import { resolveAuthConfig } from '../../utils/session'
 import { saveBankToken } from '../../utils/bankTokenStore'
 import { dbQuery } from '../../db/client'
 import type { BankProviderId } from '../../../app/types/statement'
-
-/**
- * Patience for the code→token exchange. Deliberately far longer than our other outbound calls.
- *
- * This is the only step whose failure lands on a person who has ALREADY typed their internet-bank
- * password: the code is single-use, so a timeout here means «начните заново, войдите в банк ещё
- * раз», and the page cannot tell them apart from a real refusal. Measured against Priorbank's
- * sandbox (2026-08-14) the `authorization_code` grant is markedly slower than `client_credentials`
- * on the same endpoint — one live connect blew through 15s and showed «банк отклонил подключение»
- * to an account holder who had done everything right, while the very next attempt succeeded.
- *
- * The cost of waiting is one held request on our side; the cost of not waiting is another trip
- * through someone else's bank login. Not unbounded, though — a hung upstream must still end.
- */
-const TOKEN_EXCHANGE_TIMEOUT_MS = 60_000
 
 function liveCallbackDeps(): CallbackDeps {
   return {

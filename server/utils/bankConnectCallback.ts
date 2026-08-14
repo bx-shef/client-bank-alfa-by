@@ -60,6 +60,28 @@ export interface CallbackInput {
   nowMs: number
 }
 
+/**
+ * Patience for the code→token exchange, in ms. Deliberately longer than our other outbound calls:
+ * this is the only step whose failure lands on a person who has ALREADY typed their internet-bank
+ * password, and the code is single-use, so a timeout here costs them another trip through that
+ * login. Measured against Priorbank's sandbox (2026-08-14) the `authorization_code` grant is
+ * markedly slower than `client_credentials` on the same endpoint — one live connect blew through
+ * 15s and showed «банк отклонил подключение» to an account holder who had done everything right,
+ * while the very next attempt succeeded.
+ *
+ * ⚠ THE NUMBER IS NOT FREE TO RAISE — it sits inside TWO proxy ceilings, and whichever fires first
+ * wins. Nearest is our own nginx (`proxy_read_timeout` on `location = /api/bank/callback`, which
+ * overrides the 30s shared default precisely because of this constant — `tests/bankRouteTimeouts.test.ts`
+ * keeps the two in step). Above that is the shared edge proxy, whose default is nginx's own 60s and
+ * which this repository does not configure. So the budget is: this constant < our nginx < 60s.
+ * Exceed the edge and the admin gets a bare `504` from a server we don't own instead of the page
+ * below — worse than the 15s we started from, because the failure stops being ours to explain.
+ *
+ * A raise past this point needs measurement, not another incident: the exchange is not yet wrapped
+ * in `withDependencySpan`, so nobody can see the real latency distribution (follow-up issue).
+ */
+export const TOKEN_EXCHANGE_TIMEOUT_MS = 45_000
+
 /** Seconds before the tab closes itself. This tab is a dead end — it exists only to carry the
  *  bank's redirect, and the admin's work continues in the portal tab behind it. Long enough to read
  *  one sentence, and ALWAYS cancellable: an auto-close that cannot be stopped takes the page away

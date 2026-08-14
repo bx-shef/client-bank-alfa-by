@@ -1,14 +1,21 @@
-// Автозакрытие вкладки, на которую банк вернул администратора после согласия.
-// Страницу рисует backend (server/utils/bankConnectCallback.ts); здесь — только поведение.
+// Self-closing countdown for the tab the bank redirects the account holder back to.
+// The page itself is rendered by the backend (server/utils/bankConnectCallback.ts); this file
+// carries only the behaviour.
 //
-// Почему отдельный файл, а не inline-скрипт: страница отдаётся под общим CSP сайта
-// (`script-src 'self'` без 'unsafe-inline'), поэтому inline пришлось бы разрешать по sha256 и
-// держать этот хеш в nginx.conf синхронно с текстом скрипта — гарантия того, что однажды
-// поправят одно и забудут другое, и счётчик молча перестанет работать. Тот же origin под 'self'
-// проходит без единой оговорки.
+// Why a separate file and not an inline script: the page is served under the site's CSP
+// (`script-src 'self'`, no 'unsafe-inline'), so an inline block would have to be allowed by its
+// sha256 and that hash kept in nginx.conf in step with the script's text — a guarantee that
+// someone eventually edits one and forgets the other, and the countdown quietly stops working.
+// A same-origin file is covered by 'self' with no caveat at all.
 //
-// Прогрессивное улучшение: без JS страница остаётся правдивой («можно закрыть эту вкладку»),
-// счётчик появляется только когда есть кому его крутить.
+// Progressive enhancement: with no JS the page stays truthful («можно закрыть эту вкладку») —
+// the countdown is drawn by this script, so it only ever claims what it can deliver.
+//
+// ⚠ Deployment skew is SAFE in both directions, and that is deliberate. The static image and the
+// backend image are published and pulled independently, so one can be newer than the other for a
+// few minutes. New backend + old static ⇒ this file 404s and the paragraph keeps its static text.
+// Old backend + new static ⇒ nothing references the file. Do not make the page depend on the
+// script having run.
 (function () {
   var hint = document.getElementById('close-hint')
   if (!hint) return
@@ -16,7 +23,7 @@
   var total = parseInt(hint.getAttribute('data-seconds') || '', 10)
   if (!(total > 0)) return
 
-  // Тот же текст, что в разметке: к нему возвращаемся и при отмене, и когда закрыть не дали.
+  // The markup's own text: what we restore on cancel and when close() is refused.
   var MANUAL = hint.textContent
   var left = total
   var timer = null
@@ -53,10 +60,10 @@
       render()
       return
     }
-    // Сначала возвращаем честный текст, потом пробуем закрыть: закрыть браузер разрешает только
-    // вкладку, открытую скриптом (у нас — window.open из карточки подключения). Если ссылку
-    // открыли руками, close() ничего не сделает, и на экране уже будет верная подсказка,
-    // а не застывший «закроется через 0 с».
+    // Restore the honest text FIRST, then try to close: a browser only lets a script close a tab
+    // that a script opened (ours comes from window.open in the connect card). The link is often
+    // handed to the account holder, who opens it by hand — there close() does nothing, and the
+    // page must already read correctly instead of freezing on «закроется через 0 с».
     stop()
     window.close()
   }, 1000)
