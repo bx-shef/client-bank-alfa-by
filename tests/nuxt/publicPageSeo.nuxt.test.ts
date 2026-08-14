@@ -83,7 +83,10 @@ describe('usePublicPageSeo', () => {
     expect(data['@type']).toBe('SoftwareApplication')
     expect(data.url).toBe(`${LANDING_SITE_URL}/`)
     expect(data.image).toBe(`${LANDING_SITE_URL}/og.png`)
-    expect((data.offers as Record<string, unknown>).price).toBe('0')
+    // Цены в структурированных данных быть НЕ должно (#436): приложение перешло на подписку
+    // Маркета, тариф не выбран, а неверная цена из JSON-LD уезжает прямиком в выдачу поисковика.
+    // Тест держит именно отсутствие ключа — иначе `price: '0'` вернулся бы незамеченным.
+    expect('offers' in data).toBe(false)
     expect((data.publisher as Record<string, unknown>).name).toBe(LANDING_PUBLISHER)
   })
 })

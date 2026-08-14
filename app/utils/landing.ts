@@ -17,7 +17,7 @@ export const LANDING_META_DESCRIPTION
   = 'Выписка Альфа-Банка Беларуси и Приорбанка в Bitrix24: контрагент, оплата, стадии и уведомления — онлайн или файлом.'
 
 /** Small print under the hero CTA. */
-export const LANDING_HERO_NOTE = 'Само приложение — бесплатное, есть в Маркете Bitrix24.'
+export const LANDING_HERO_NOTE = 'Приложение есть в Маркете Bitrix24 — ставится в пару кликов.'
 
 /** Bitrix24 Market listing code (slug) of the free app — the single source of truth reused by the
  *  landing promo URL and the in-portal «оцените приложение» modal (marketDetailPath). */
@@ -181,7 +181,7 @@ export const LANDING_DEMO_SAMPLES: readonly DemoSample[] = [
 
 /** «Интеграторам Bitrix24» block (section 5). */
 export const LANDING_INTEGRATORS
-  = 'Забирайте бесплатный коннектор белорусских банков в свой арсенал: ставьте клиентам сами, а установку в контур клиента и настройку под процессы отдавайте нам — работаем субподрядом.'
+  = 'Забирайте коннектор белорусских банков в свой арсенал: ставьте клиентам сами, а установку в контур клиента и настройку под процессы отдавайте нам — работаем субподрядом.'
 
 /** Banks/formats chips shown under the hero. */
 export const LANDING_FORMATS: readonly string[] = [

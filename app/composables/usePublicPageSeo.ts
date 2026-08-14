@@ -1,5 +1,5 @@
 import { LANDING_PUBLISHER, canonicalUrl, ogImageUrl } from '~/utils/seo'
-import { LANDING_MARKET_URL, LANDING_TITLE } from '~/utils/landing'
+import { LANDING_TITLE } from '~/utils/landing'
 
 /**
  * Полный SEO-набор публичной страницы (#425): title/description, canonical, OpenGraph, Twitter.
@@ -77,10 +77,14 @@ export function usePublicPageSeo(opts: {
           'applicationCategory': 'BusinessApplication',
           'operatingSystem': 'Bitrix24',
           'inLanguage': 'ru',
-          'publisher': { '@type': 'Organization', 'name': LANDING_PUBLISHER },
-          // Приложение в Маркете бесплатное — это заявлено на лендинге, и цена в карточке выдачи
-          // отвечает на первый вопрос читателя.
-          'offers': { '@type': 'Offer', 'price': '0', 'priceCurrency': 'BYN', 'url': LANDING_MARKET_URL }
+          'publisher': { '@type': 'Organization', 'name': LANDING_PUBLISHER }
+          // ⚠ `offers` НЕ объявляем (#436). Раньше здесь стоял `price: '0'` — приложение
+          // распространялось бесплатно. С переходом на подписку Маркета это утверждение стало
+          // ложным, а цена в структурированных данных попадает в выдачу поисковика: строка
+          // «Бесплатно» под ссылкой пережила бы любую правку лендинга и вводила бы в заблуждение
+          // ровно там, где читатель принимает решение. Тариф пока не выбран, поэтому корректного
+          // значения нет — а отсутствие `offers` схемой допускается, в отличие от неверной цены.
+          // Вернуть блок, когда тариф утверждён.
         })
       }]
     })
