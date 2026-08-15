@@ -52,6 +52,7 @@ import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
+import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
@@ -341,7 +342,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyChatViaRest(item, dialogId, call)
+        await notifyChatViaRest(item, dialogId, call, memberId)
       } catch (e) {
         console.error('chat notify failed', memberId, (e as Error)?.message)
       }
@@ -467,7 +468,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyAllocationErrorViaRest(item, decision, dialogId, call)
+        await notifyAllocationErrorViaRest(item, decision, dialogId, call, memberId)
       } catch (e) {
         console.error('alloc error notify failed', memberId, (e as Error)?.message)
       }
@@ -478,7 +479,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyUnresolvedViaRest(item, identifiers, dialogId, call, truncated)
+        await notifyUnresolvedViaRest(item, identifiers, dialogId, call, truncated, memberId)
       } catch (e) {
         console.error('unresolved notify failed', memberId, (e as Error)?.message)
       }
@@ -490,7 +491,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call)
+        await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call, memberId)
       } catch (e) {
         console.error('unmatched notify failed', memberId, (e as Error)?.message)
       }
@@ -539,6 +540,7 @@ export function liveHandlerDeps(): HandlerDeps {
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
+      forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync
@@ -937,7 +939,7 @@ async function notifyDeletionError(job: DeletionJob, kind: DeletionErrorKind, fr
       console.info('[deletion] %s #%s (portal=%s) — no error chat, skip', kind, logSafe(job.entityId), portalHash(job.memberId))
       return
     }
-    await notifyDeletionErrorViaRest(kind, job.entityId, dialogId, call, freed !== undefined ? { freed } : {})
+    await notifyDeletionErrorViaRest(kind, job.entityId, dialogId, call, freed !== undefined ? { freed } : {}, job.memberId)
   } catch (e) {
     console.warn('[deletion] error-chat notify failed', kind, portalHash(job.memberId), (e as Error)?.message)
   }

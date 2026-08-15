@@ -113,3 +113,27 @@ describe('mapProbeStatus', () => {
     expect(mapProbeStatus(401)).toBe('unknown')
   })
 })
+
+describe('чат-бот в вердикте установки (#496)', () => {
+  const base = { finished: true, missingScopes: [] as string[], trigger: 'ok', backend: 'ok' as const }
+
+  it('бот не зарегистрировался — говорим, но мягко: импорт от этого не страдает', () => {
+    const v = installVerdict({ ...base, bot: 'ACCESS_DENIED' })
+    expect(v.level).toBe('degraded')
+    const issue = v.issues.find(i => i.title.includes('чат-бот'))
+    expect(issue).toBeTruthy()
+    // ⚠ Не зовём переустанавливать: на бесплатном тарифе бот недоступен в принципе, и
+    // переустановка этого не изменит. Отправлять админа чинить не сломанное — хуже молчания.
+    expect(issue!.action).toContain('На работу импорта это не влияет')
+  })
+
+  it('бот зарегистрирован — вердикт чистый', () => {
+    expect(installVerdict({ ...base, bot: 'ok' }).level).toBe('ok')
+  })
+
+  it('поле не заполнено (не пробовали) — строки нет', () => {
+    const v = installVerdict({ ...base, bot: '' })
+    expect(v.issues.some(i => i.title.includes('чат-бот'))).toBe(false)
+    expect(v.level).toBe('ok')
+  })
+})

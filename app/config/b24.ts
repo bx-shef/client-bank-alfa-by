@@ -32,7 +32,7 @@
 // «provisioning failed» (#408) — the live run only worked because the test webhook had been granted
 // the scope by hand. ⚠ Adding it (like `sale`/`documentgenerator` before) requires RE-CONSENT on
 // already-installed portals.
-export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'] as const
+export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'imbot', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'] as const
 
 /**
  * Backend path that receives Bitrix24 server events. Same origin as the app (the
@@ -64,6 +64,26 @@ export const B24_BOUND_EVENTS = ['ONAPPINSTALL', 'ONAPPUNINSTALL'] as const
 export const B24_PAYMENT_TRIGGER = {
   code: 'cba_payment_received',
   name: 'Импорт выписки: платёж получен'
+} as const
+
+/**
+ * The app's chat bot (#496). Messages currently arrive from whoever owns the OAuth token, because
+ * `im.message.add` has no other mode — so «Клиент не определён, заведите реквизит» looks like a
+ * note from a colleague, and that colleague is who gets asked about it.
+ *
+ * ⚠ `code` IS AN IDENTIFIER ON THE CLIENT'S PORTAL and the idempotency key of registration. Change
+ * it later and every already-registered bot is orphaned: the new code registers fine, the old bots
+ * stay, and portals near the bot limit start failing registration. Chosen once. Do NOT «unify» it
+ * with the app slug or the Market code later, however alike they look — they are different things
+ * that merely resemble each other today.
+ *
+ * `position` shows where a person's job title would be, which is precisely the confusion we are
+ * fixing: it must read as software, not as staff.
+ */
+export const B24_CHAT_BOT = {
+  code: 'cba_statement_bot',
+  name: 'Импорт выписки',
+  position: 'Приложение Bitrix24'
 } as const
 
 /**

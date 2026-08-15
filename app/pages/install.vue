@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useB24 } from '~/composables/useB24'
-import { B24_ALL_BOUND_EVENTS, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
+import { B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
+import { buildBotRegisterCall } from '~/utils/b24BotRegister'
 import { installVerdict, type BackendState } from '~/utils/installVerdict'
 import { checkBackendKnowsPortal } from '~/composables/useBackendInstallCheck'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
@@ -54,6 +55,8 @@ const checkingBackend = ref(false)
 // Best-effort automation-trigger registration outcome (#79): '' = not attempted,
 // 'ok' = registered, otherwise a short error string for the diagnostics panel.
 const triggerRegistered = ref('')
+// Best-effort chat-bot registration outcome (#496), same shape as the trigger above.
+const botRegistered = ref('')
 
 interface InitData {
   appInfo?: { ID?: number, CODE?: string, VERSION?: string }
@@ -88,7 +91,9 @@ const diagnostics = computed(() => {
     missing,
     events: initData.value.eventList ?? [],
     // Best-effort automation-trigger registration (#79): '' hides the row.
-    trigger: triggerRegistered.value
+    trigger: triggerRegistered.value,
+    // Best-effort chat-bot registration (#496): '' hides the row.
+    bot: botRegistered.value
   }
 })
 
@@ -99,6 +104,7 @@ const verdict = computed(() => installVerdict({
   finished: finished.value,
   missingScopes: diagnostics.value.missing,
   trigger: triggerRegistered.value,
+  bot: botRegistered.value,
   backend: backendState.value
 }))
 // Раскрытие «Диагностики». ОБЯЗАТЕЛЬНО обычный ref под v-model, а не computed под :model-value:
@@ -173,6 +179,26 @@ async function registerTrigger(): Promise<void> {
   }
 }
 
+/** Register the app's chat bot (#496) so messages arrive from the APP rather than from whoever
+ *  owns the OAuth token. Best-effort, exactly like the trigger: registration is idempotent by
+ *  `code`, and a portal that cannot host a bot (paid-plan REST, bot limit, or an old grant without
+ *  the `imbot` scope) keeps getting messages the previous way — the worker falls back on its own.
+ *  A failure here must never block an install that has already delivered its tokens. */
+async function registerChatBot(): Promise<void> {
+  const call = buildBotRegisterCall(B24_CHAT_BOT)
+  if (!call) return // fail-safe: never send a malformed registration
+  try {
+    const $b24 = b24Instance.getOrThrow()
+    const res = await $b24.actions.v2.call.make({ method: call.method, params: call.params })
+    botRegistered.value = res.isSuccess
+      ? 'ok'
+      : `ошибка: ${res.getErrorMessages().join('; ')}`
+  } catch (error: unknown) {
+    console.warn('[install] imbot register', error)
+    botRegistered.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
 /** Runs the install flow. Surfaces failures as a retryable error state instead
  *  of throwing (a thrown error would leave the page stuck with no way out).
  *  placement.bind is intentionally not done here yet — the app's in-portal pages
@@ -225,6 +251,11 @@ async function runInstall() {
     // Register the app's automation trigger (best-effort, never blocks — see registerTrigger()).
     caption.value = 'Регистрация триггера автоматизации…'
     await registerTrigger()
+
+    // Чат-бот (#496) — тоже best-effort и по той же причине: сообщения от приложения приятнее,
+    // чем от случайного сотрудника, но ради них не стоит валить установку, которая уже удалась.
+    caption.value = 'Регистрация чат-бота…'
+    await registerChatBot()
 
     caption.value = 'Завершение установки…'
     progressColor.value = 'air-primary-success'

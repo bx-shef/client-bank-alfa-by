@@ -1,11 +1,12 @@
-// Post a DELETION-error notice to the portal's error chat (im.message.add) over a portal-bound
-// RestCall (#109, PROCESSING.md §9.2/§5). Pure over the injected `call` — unit-testable with a fake.
-// The message text is built by the shared, tested builder in app/utils/deletionErrorMessage.ts;
-// this module only does the REST call + result extraction, reusing chatNotifyWrite's method name +
-// id extractor. The caller guarantees a non-empty `dialogId` (skips when the portal has no error chat).
+// Post a DELETION-error notice to the portal's error chat over a portal-bound RestCall
+// (#109, PROCESSING.md §9.2/§5). Pure over the injected `call` — unit-testable with a fake. The
+// message text is built by the shared, tested builder in app/utils/deletionErrorMessage.ts; this
+// module only hands it to `postChatMessage`, which picks the route (bot first, token owner as
+// fallback — #496). The caller guarantees a non-empty `dialogId` (skips when the portal has no
+// error chat).
 
 import { buildDeletionErrorMessage, type DeletionErrorKind } from '../../app/utils/deletionErrorMessage'
-import { CHAT_MESSAGE_METHOD, extractMessageId } from './chatNotifyWrite'
+import { postChatMessage } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
 /**
@@ -19,15 +20,10 @@ export async function notifyDeletionErrorViaRest(
   id: string,
   dialogId: string,
   call: RestCall,
-  opts: { freed?: number } = {}
+  opts: { freed?: number } = {},
+  memberId?: string
 ): Promise<string | null> {
   const message = buildDeletionErrorMessage(kind, id, opts)
   if (!message) return null
-  // URL_PREVIEW=N: no rich preview cards in the operator chat (consistent with the other notices).
-  const resp = await call(CHAT_MESSAGE_METHOD, {
-    DIALOG_ID: dialogId,
-    MESSAGE: message,
-    URL_PREVIEW: 'N'
-  })
-  return extractMessageId(resp)
+  return postChatMessage(dialogId, message, call, memberId)
 }

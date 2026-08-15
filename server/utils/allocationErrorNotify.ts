@@ -1,15 +1,14 @@
-// Post an ALLOCATION-error notice for one operation to the portal's error chat
-// (im.message.add) over a portal-bound RestCall (#109, PROCESSING.md §5). Pure over
-// the injected `call` — unit-testable with a fake. The message text is built by the
-// shared, tested builder in app/utils/allocationErrorMessage.ts; this module only
-// does the REST call + result extraction, reusing chatNotifyWrite's method name +
-// id extractor. Whether a decision warrants a notice is decided by the builder (it
-// returns null for a clean allocate / none — then nothing is sent).
+// Post an ALLOCATION-error notice for one operation to the portal's error chat over a portal-bound
+// RestCall (#109, PROCESSING.md §5). Pure over the injected `call` — unit-testable with a fake. The
+// message text is built by the shared, tested builder in app/utils/allocationErrorMessage.ts; this
+// module only hands it to `postChatMessage`, which picks the route (bot first, token owner as
+// fallback — #496). Whether a decision warrants a notice is decided by the builder (it returns null
+// for a clean allocate / none — then nothing is sent).
 
 import type { StatementItem } from '../../app/types/statement'
 import type { AllocationDecision } from '../../app/utils/allocation'
 import { buildAllocationErrorMessage, buildUnresolvedMessage } from '../../app/utils/allocationErrorMessage'
-import { CHAT_MESSAGE_METHOD, extractMessageId } from './chatNotifyWrite'
+import { postChatMessage } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
 /**
@@ -23,18 +22,12 @@ export async function notifyAllocationErrorViaRest(
   item: StatementItem,
   decision: AllocationDecision,
   dialogId: string,
-  call: RestCall
+  call: RestCall,
+  memberId?: string
 ): Promise<string | null> {
   const message = buildAllocationErrorMessage(item, decision)
   if (!message) return null
-  // URL_PREVIEW=N: the headline carries external (payer-controlled) text — don't let
-  // a pasted URL expand into a rich preview card in the operator chat.
-  const resp = await call(CHAT_MESSAGE_METHOD, {
-    DIALOG_ID: dialogId,
-    MESSAGE: message,
-    URL_PREVIEW: 'N'
-  })
-  return extractMessageId(resp)
+  return postChatMessage(dialogId, message, call, memberId)
 }
 
 /**
@@ -46,14 +39,10 @@ export async function notifyUnresolvedViaRest(
   identifiers: readonly string[],
   dialogId: string,
   call: RestCall,
-  truncated = false
+  truncated = false,
+  memberId?: string
 ): Promise<string | null> {
   const message = buildUnresolvedMessage(item, identifiers, truncated)
   if (!message) return null
-  const resp = await call(CHAT_MESSAGE_METHOD, {
-    DIALOG_ID: dialogId,
-    MESSAGE: message,
-    URL_PREVIEW: 'N'
-  })
-  return extractMessageId(resp)
+  return postChatMessage(dialogId, message, call, memberId)
 }
