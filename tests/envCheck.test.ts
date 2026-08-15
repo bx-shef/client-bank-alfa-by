@@ -29,6 +29,20 @@ describe('checkBackendEnv', () => {
     expect(full.warnings.some(w => /Банк Альфа/.test(w))).toBe(false)
   })
 
+  it('предупреждает про включённый STATEMENT_DEBUG_LOG — забытый флаг иначе ничем не виден', () => {
+    // Флаг раскрывает назначения платежей в логе (docs/PRIVACY.md §Логи). Откат ручной, а признака
+    // «всё ещё включён» нет нигде: назначения просто продолжают писаться. Строка при старте — то
+    // единственное место, где это заметно раньше, чем по самому логу.
+    expect(checkBackendEnv(GOOD).warnings.some(w => /STATEMENT_DEBUG_LOG/.test(w))).toBe(false)
+    const on = checkBackendEnv({ ...GOOD, STATEMENT_DEBUG_LOG: '1' })
+    expect(on.warnings.some(w => /STATEMENT_DEBUG_LOG/.test(w) && /НАЗНАЧЕНИЯ/.test(w))).toBe(true)
+    // Любое другое значение — выключено (совпадает с `=== '1'` в воркере); иначе предупреждение
+    // орало бы на стендах, где переменная просто объявлена нулём.
+    for (const v of ['0', 'true', 'yes', '']) {
+      expect(checkBackendEnv({ ...GOOD, STATEMENT_DEBUG_LOG: v }).warnings.some(w => /STATEMENT_DEBUG_LOG/.test(w))).toBe(false)
+    }
+  })
+
   it('errors when B24_TOKEN_ENC_KEY is missing', () => {
     const r = checkBackendEnv({ ...GOOD, B24_TOKEN_ENC_KEY: '' })
     expect(r.errors.some(e => e.includes('B24_TOKEN_ENC_KEY'))).toBe(true)

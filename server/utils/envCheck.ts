@@ -123,6 +123,15 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
     warnings.push('REDIS_URL не задан — очередь выключена; приём событий деградирует до синхронной записи в webhook (без асинхронного пайплайна — воркеры/крон не работают).')
   }
 
+  // --- Диагностический флаг: раскрывает НАЗНАЧЕНИЕ ПЛАТЕЖА в логе операций. Включается на
+  //     калибровку матриц и должен выключаться обратно — но откат ручной, а признака «флаг
+  //     всё ещё включён» нигде нет: назначения просто продолжают писаться, и заметить это
+  //     можно, лишь читая сам лог, то есть уже постфактум. Одна строка при старте делает
+  //     забытый флаг видимым там, где оператор и так смотрит. ---
+  if ((env.STATEMENT_DEBUG_LOG ?? '').trim() === '1') {
+    warnings.push('STATEMENT_DEBUG_LOG=1 — НАЗНАЧЕНИЯ ПЛАТЕЖЕЙ пишутся в лог (осознанное послабление docs/PRIVACY.md §Логи на время калибровки). Выключите обратно, когда матрицы настроены.')
+  }
+
   // --- Bank online-fetch OAuth creds (stage 5): each bank needs ALL of
   //     <PREFIX>_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL to refresh its token (bankCredsFromEnv).
   //     A HALF-configured bank silently disables its online fetch (only a runtime warn),

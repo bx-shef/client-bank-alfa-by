@@ -1586,10 +1586,58 @@ describe('per-op observation (onOperation) — видимость операци
 
   it('колбэк НЕОБЯЗАТЕЛЬНЫЙ — проводка без него работает как прежде', async () => {
     // `onOperation` добавлен опциональным ровно затем, чтобы существующие сборки deps не ломались;
-    // если он однажды станет обязательным по факту (вызов без `?.`), это упадёт здесь.
+    // если он однажды станет обязательным по факту (вызов без `?.`), это упадёт здесь: rest-спред
+    // УДАЛЯЕТ ключ, поэтому прямой вызов дал бы `undefined(...)` → TypeError наружу из хендлера.
     const { deps } = fakeDeps()
     const { onOperation: _drop, ...withoutObserver } = deps
-    const r = await handleCrmSyncJob(job([item('d1')]), withoutObserver as HandlerDeps)
+    const r = await handleCrmSyncJob(job([item('d1')]), withoutObserver)
     expect(r).toMatchObject({ processed: 1, created: 1 })
+  })
+
+  it('writeActivity бросает → на упавшей доставке НЕ отчитываемся, на успешной — ровно один раз', async () => {
+    // Док колбэка говорит «сразу после writeActivity, НЕЗАВИСИМО от результата», и быстрый читатель
+    // может понять это как «в том числе на исключении». Не так: `await` бросает раньше вызова.
+    // Разница существенная — иначе лог утверждал бы, что операция обработана, а записи нет.
+    const { deps, calls } = fakeDeps({ writeActivityFailFirst: true })
+    const j = job([item('d1')])
+    await expect(handleCrmSyncJob(j, deps)).rejects.toThrow('transient')
+    expect(calls.opLog).toEqual([])
+    await handleCrmSyncJob(j, deps) // повторная доставка BullMQ
+    expect(calls.opLog).toEqual([['d1', 'client', 0, 'act-1', 'M']])
+  })
+
+  it('пакет с РАЗНЫМИ исходами — по строке на операцию, в порядке обработки', async () => {
+    // Живой пакет именно такой (в инциденте было 117 операций), а все прочие тесты блока — на одну.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY' })
+    // d2 подменяем на «клиент найден», чтобы в одном пакете сошлись все три исхода.
+    const base = deps.findCompany
+    deps.findCompany = async (it, m) => (it.docId === 'd2' ? 'CO' : base(it, m))
+    const myBase = deps.findMyCompany
+    deps.findMyCompany = async (it, m) => (it.docId === 'd3' ? null : myBase(it, m))
+    await handleCrmSyncJob(job([item('d1'), item('d2'), item('d3')]), deps)
+    expect(calls.opLog).toEqual([
+      ['d1', 'my-company', 0, 'act-1', 'M'],
+      ['d2', 'client', 0, 'act-2', 'M'],
+      ['d3', 'none', 0, null, 'M']
+    ])
+  })
+
+  it('распознанные номера считаются и на пути с найденной компанией', async () => {
+    // Единственный другой тест на `recognized` идёт по ветке «компании нет» — ветки независимы,
+    // и то, что они сочетаются, до сих пор ничем не подтверждалось.
+    const recognition: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'СЧ-d+', kind: 'invoice-number' }] }
+    const { deps, calls } = fakeDeps({ recognition })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'оплата по счёту СЧ-1234')]), deps)
+    expect(calls.opLog).toEqual([['d1', 'client', 1, 'act-1', 'M']])
+  })
+
+  it('owner и activityId РАСХОДЯТСЯ: компания найдена, а запись не состоялась', async () => {
+    // Ради этого `owner` и живёт рядом с `activityId`: «мы знаем, чья это операция, но ничего не
+    // записалось» — реальное состояние (например, токен портала потерян между поиском и записью),
+    // и лог обязан показывать его как таковое, а не как «ничьё».
+    const { deps, calls } = fakeDeps()
+    deps.writeActivity = async () => null
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.opLog).toEqual([['d1', 'client', 0, null, 'M']])
   })
 })
