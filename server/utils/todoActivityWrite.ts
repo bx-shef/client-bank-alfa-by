@@ -92,6 +92,21 @@ async function verifyMarkerOnce(
 }
 
 /**
+ * Remove an activity we created but could not make findable. Best-effort: if the delete ITSELF
+ * fails we log and let the caller surface the ORIGINAL error, because that is the one that explains
+ * what happened — and the surviving orphan is exactly what the log line warns about.
+ */
+async function deleteOrphan(id: string, call: RestCall): Promise<void> {
+  try {
+    await call(ACTIVITY_DELETE_METHOD, { id: Number(id) })
+  } catch (deleteError) {
+    console.error(
+      `[activity] could not delete the unmarked activity ${id} — a duplicate will appear on the next run: ${(deleteError as Error)?.message}`
+    )
+  }
+}
+
+/**
  * Pull the created activity id out of the `todo.add` response.
  *
  * ⚠ The shape differs from the configurable path: `todo.add` answers `{result:{id}}` (and some
@@ -137,21 +152,24 @@ export async function writeTodoActivityViaRest(
     await call(ACTIVITY_UPDATE_METHOD, { id: Number(id), fields: buildActivityMarkerUpdate(item) })
   } catch (updateError) {
     // Compensate: an unmarked activity is worse than none — it is a permanent duplicate-in-waiting.
-    // The delete is best-effort; if IT fails too we still surface the ORIGINAL error, because that
-    // is the one that explains what happened.
-    try {
-      await call(ACTIVITY_DELETE_METHOD, { id: Number(id) })
-    } catch (deleteError) {
-      console.error(
-        `[activity] marker update failed AND the orphan could not be deleted (activity ${id}) — a duplicate will appear on the next run: ${(deleteError as Error)?.message}`
-      )
-    }
+    await deleteOrphan(id, call)
     throw updateError
   }
 
   // Проверяется ПОСЛЕ успешной маркировки и только один раз на портал: см. `verifyMarkerOnce`.
-  // Сирота при провале проверки не остаётся — дело промаркировано, просто найти его не удалось;
-  // повторный прогон найдёт его по маркеру, если механизм всё-таки работает, и не задвоит.
-  if (memberId) await verifyMarkerOnce(item, memberId, call, sleep)
+  //
+  // ⚠ Провал проверки КОМПЕНСИРУЕТСЯ так же, как провал маркировки, и по той же причине. Без этого
+  // на сломанном портале каждая попытка BullMQ оставляла бы по одному ненаходимому делу: джоба
+  // падает, ретрай не находит маркер, пишет заново, снова падает. Ограниченно (числом попыток, а не
+  // числом операций) — но ноль лучше, чем «немного». А если маркер на самом деле стоял и мы просто
+  // не смогли его прочитать, удаление тоже безвредно: повторный прогон создаст дело заново.
+  if (memberId) {
+    try {
+      await verifyMarkerOnce(item, memberId, call, sleep)
+    } catch (verifyError) {
+      await deleteOrphan(id, call)
+      throw verifyError
+    }
+  }
   return id
 }
