@@ -7,6 +7,7 @@
 
 import { createHash } from 'node:crypto'
 import { handleImportUpload, type IngestDeps } from '../utils/importIngest'
+import { findMyCompanyAccounts, myCompanyGate } from '../utils/myCompanyRequisites'
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
@@ -28,6 +29,10 @@ function liveIngestDeps(): IngestDeps {
       return id != null ? String(id) : ''
     },
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),
+    // «Моя компания» с расчётным счётом (#493) — на фрейм-токене того же администратора, тремя
+    // REST-вызовами. Ошибка REST здесь НЕ блокирует загрузку: контракт депа fail-open.
+    myCompanyGate: async (domain, accessToken) =>
+      myCompanyGate(await findMyCompanyAccounts((method, params) => frameRestCall(domain, accessToken, method, params))),
     enqueueParse,
     hash: bytes => createHash('sha256').update(bytes).digest('hex'),
     markQueued: (memberId, batchId, fileName, userId) => markBatchQueued(dbQuery, memberId, batchId, fileName, userId)

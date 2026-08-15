@@ -60,10 +60,17 @@ describe('SetupReadinessCard', () => {
     // useChatSettings.load() is NOT idempotent: it ends in Object.assign(settings, serverCopy). The
     // parent form has already loaded them, so a second load here would silently discard whatever
     // the admin typed in the meantime.
+    //
+    // ⚠ Утверждаем ОТСУТСТВИЕ настроек, а не точный список запросов. Список делал тест
+    // порядко-зависимым: карточка носит виджет отзыва (#499), тот на маунте прощупывает канал —
+    // и `/api/feedback` появлялся или не появлялся в зависимости от того, успел ли предыдущий тест
+    // в этом же файле «выжечь» модульный кэш `enabled`. Запусти этот тест в одиночку — красный,
+    // хотя проверяемое им поведение не менялось.
     setupReply.value = { connectedAccounts: 1, pollEnabled: true, pollIntervalMin: 5, lastRunMs: null }
     await mountReady()
     const urls = fetchMock.mock.calls.map(c => c[0])
-    expect(urls).toEqual(['/api/setup-status'])
+    expect(urls).not.toContain('/api/chat-settings')
+    expect(urls).toContain('/api/setup-status')
   })
 
   it('outside the portal it is an explicit preview, not a confident «осталось: 4»', async () => {
@@ -101,5 +108,17 @@ describe('SetupReadinessCard', () => {
     const wrapper = await mountReady()
     expect(wrapper.text()).toContain('Последний импорт')
     expect(wrapper.text()).not.toContain('Последний опрос')
+  })
+})
+
+describe('SetupReadinessCard — «не понимаю, чего от меня хотят» (#499)', () => {
+  it('несёт виджет отзыва: это единственный экран, где застревают не на платеже, а на задаче', async () => {
+    // ⚠ Проверяем РАЗМЕТКУ, а не факт запроса к `/api/feedback`: прощупывание канала — модульный
+    // синглтон, оно срабатывает один раз на файл, и assert по нему был бы зелёным или красным в
+    // зависимости от того, какой тест выполнился раньше. Ровно та порядко-зависимость, которую
+    // пришлось чинить этажом выше.
+    setupReply.value = { connectedAccounts: 0, pollEnabled: false, pollIntervalMin: 5, lastRunMs: null }
+    const wrapper = await mountReady()
+    expect(wrapper.findComponent({ name: 'FeedbackWidget' }).exists()).toBe(true)
   })
 })

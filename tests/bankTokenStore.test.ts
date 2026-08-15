@@ -4,6 +4,7 @@ import {
   deleteBankTokensForPortal,
   renameBankTokenAccount,
   getBankToken,
+  listAllBankAccountInfo,
   listAllBankAccounts,
   listBankTokensForPortal,
   saveBankToken
@@ -149,6 +150,12 @@ describe('renameBankTokenAccount', () => {
     expect(update.sql).toMatch(/UPDATE bank_tokens/i)
     expect(update.sql).toMatch(/member_id = \$1 AND provider = \$2 AND account_key = \$3/i)
     expect(update.params).toEqual(['m1', 'alfa-by', '~pending:n1', 'BY01'])
+    // ⚠ SET-часть тоже под охраной: `updated_at = now()` здесь — регрессия #488. Эта колонка
+    // означает «когда мы последний раз держали свежую пару токенов», и по ней keep-alive решает,
+    // кого обновлять. Переименование счёта токенов не трогает, но перевело бы часы вперёд — и
+    // подключение, которому пора обновляться, тихо выпало бы из выборки до самой смерти гранта.
+    // Проверяем САМ запрос: «для единообразия» возвращённый `now()` прошёл бы прежний тест зелёным.
+    expect(update.sql).not.toMatch(/updated_at/i)
   })
 
   it('занятый номер → conflict, и UPDATE вообще не выполняется', async () => {
@@ -337,5 +344,34 @@ describe('bankTokenStore — behavioral (in-memory table model)', () => {
     const list = await listBankTokensForPortal(q, 'm1')
     warn.mockRestore()
     expect(list.map(t => t.accountKey)).toEqual(['MC_7']) // healthy kept, corrupt skipped (not thrown)
+  })
+})
+
+describe('listAllBankAccountInfo — проекция скана keep-alive', () => {
+  // ⚠ Это единственная выборка, читающая `bank_tokens` по ВСЕМ порталам вместе со свежестью.
+  // Расширение её до `SELECT *` не поймал бы ни один тест, а цена — токены в памяти крона
+  // (и однажды в чьём-нибудь логе). Форма закреплена явно.
+  it('отдаёт идентификацию + свежесть и НИ ОДНОГО секрета', async () => {
+    const query = async () => [{
+      member_id: 'M1', provider: 'alfa-by', account_key: 'BY00BANK00000000000000000001',
+      expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000), has_refresh: true,
+      // Если кто-то расширит SELECT, поля приедут сюда — и не должны появиться в результате.
+      access_token: 'SECRET', refresh_token_enc: 'SECRET'
+    }]
+    const [row] = await listAllBankAccountInfo(query)
+    expect(row).toEqual({
+      memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001',
+      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true
+    })
+    expect(JSON.stringify(row)).not.toContain('SECRET')
+  })
+
+  it('`has_refresh` не true → false, а не «похоже на правду»', async () => {
+    const query = async () => [{
+      member_id: 'M1', provider: 'prior-by', account_key: 'A',
+      expires_at: '1', updated_at: new Date(1), has_refresh: 'yes'
+    }]
+    const [row] = await listAllBankAccountInfo(query)
+    expect(row!.hasRefresh).toBe(false)
   })
 })

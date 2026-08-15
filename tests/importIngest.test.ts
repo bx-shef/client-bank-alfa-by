@@ -133,3 +133,57 @@ describe('parseManualFileBase64 (real fixtures, windows-1251)', () => {
     expect(res.status).toBe(202)
   })
 })
+
+// Гейт «моей компании» (#493) — проводка, а не чистый классификатор. Ревью нашло, что проверялся
+// только чистый `myCompanyGate`, а САМА развилка в роуте — нет: рефакторинг мог бы молча вывернуть
+// её наизнанку, и ни один тест не покраснел бы. А цена ошибки высокая в обе стороны: пропустить
+// платежи в никуда или отказать порталу, который настроен нормально.
+describe('handleImportUpload — предусловие «моя компания» (#493)', () => {
+  it('нет компании, отмеченной «моей» → 409 с объяснением и причиной', async () => {
+    const { deps, enqueued } = fakeDeps({ myCompanyGate: async () => 'no-company' })
+    const r = await handleImportUpload(deps, input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-company')
+    expect(String(r.body.error)).toContain('Моя компания')
+    expect(enqueued).toHaveLength(0) // файл не принят — обрабатывать его некуда
+  })
+
+  it('компания есть, но без расчётного счёта → своя причина (чинится на другом экране)', async () => {
+    const { deps } = fakeDeps({ myCompanyGate: async () => 'no-account' })
+    const r = await handleImportUpload(deps, input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-account')
+  })
+
+  it('всё настроено → загрузка принимается как обычно', async () => {
+    const { deps, enqueued } = fakeDeps({ myCompanyGate: async () => 'ok' })
+    expect((await handleImportUpload(deps, input)).status).toBe(202)
+    expect(enqueued).toHaveLength(1)
+  })
+
+  it('CRM не ответила → загрузка ПРОХОДИТ (fail-open): «не смогли спросить» ≠ «не настроено»', async () => {
+    const { deps, enqueued } = fakeDeps({
+      myCompanyGate: async () => {
+        throw new Error('rest down')
+      }
+    })
+    expect((await handleImportUpload(deps, input)).status).toBe(202)
+    expect(enqueued).toHaveLength(1)
+  })
+
+  it('гейт спрашивают ТОЛЬКО после проверки токена — иначе это бесплатный вызов в чужой портал', async () => {
+    let asked = false
+    const { deps } = fakeDeps({
+      validateFrame: async () => {
+        throw new Error('bad token')
+      },
+      myCompanyGate: async () => {
+        asked = true
+        return 'ok'
+      }
+    })
+    const r = await handleImportUpload(deps, input)
+    expect(r.status).toBe(403)
+    expect(asked).toBe(false)
+  })
+})

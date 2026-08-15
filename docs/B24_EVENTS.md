@@ -1,6 +1,6 @@
 # События и авторизация Bitrix24 (установка, удаление, брокер событий)
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-15
 
 Как приложение учитывает авторизацию портала, обрабатывает установку/удаление и
 проверяет подлинность входящих событий Bitrix24. Здесь — **доменное ядро**
@@ -165,11 +165,11 @@ Backend принимает все вебхуки одной точкой вхо�
 | HTTP-эндпоинт `POST /api/b24/events` — верификация + постановка пакета в очередь (без записи в БД) | `server/api/b24/events.post.ts`, `server/utils/b24EventsHandler.ts` | **готово** |
 | Консьюмер `b24-events` — единственный писатель: регистрация/удаление портала | `server/queue/handlers.ts` (`handleEventJob`), `server/queue/worker.ts` (`savePortal`/`deletePortal`) | **готово** |
 | Хранилище токенов портала (Postgres, шифрование refresh, write-once) | `server/utils/tokenStore.ts`, `server/utils/secretCrypto.ts`, `server/db/client.ts` | **готово** |
-| Дедуп дел через маркер в B24 (read-before-write, без стора) | `server/utils/configurableActivityWrite.ts`, `server/utils/activityMarkerLookup.ts`, `handlers.ts` (#259) | **готово** (live-запись в CRM — стадия 4) |
+| Дедуп дел через маркер в B24 (read-before-write, без стора) | `server/utils/todoActivityWrite.ts`, `server/utils/activityMarkerLookup.ts`, `handlers.ts` (#259/#495) | **готово** (live-запись в CRM — стадия 4) |
 | Миграция схемы (`portal_tokens`, `portal_tombstone`, `import_result`, `import_batch`, `metrics_counter`, `bank_tokens`, `portal_app_rating`) на старте (+ `DROP` снятого `allocation_fact`, §9.3 #6) | `server/plugins/migrate.ts` | **готово** |
 | Регистрация хендлеров событий (`event.bind` из установочного скрипта) | `app/pages/install.vue` + `app/utils/b24EventBind.ts` (чистый билдер, тесты) | **готово** (билдер+тесты; доставка на реальном портале — вручную) |
 | Refresh-цикл access-токена (авто-обновление, конкуренто-безопасно) | `server/utils/ensureAccessToken.ts` (+ `dbLock.ts` advisory-lock, DI, тесты) | **готово** (#35): рефреш при истечении, ротация refresh-токена персистится, сериализация per-portal под scale-out |
-| REST-вызовы к порталу (дела/чат/поиск) | `server/utils/{configurableActivityWrite,activityMarkerLookup,chatNotifyWrite,companyLookup}.ts` | **готово** (стадии 4/6, ядра+тесты; живьём — далее) |
+| REST-вызовы к порталу (дела/чат/поиск) | `server/utils/{todoActivityWrite,activityMarkerLookup,chatNotifyWrite,companyLookup}.ts` | **готово** (стадии 4/6, ядра+тесты; живьём — далее) |
 | Опрос банков (bank-fetch транспорт) | backend | этап 5 плана |
 | `installFinish` + диагностика в iframe | `app/pages/install.vue` | готово (этап 2) |
 | Вердикт установки (ok / degraded / failed) | `app/utils/installVerdict.ts` | готово (#410) |

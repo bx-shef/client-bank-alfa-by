@@ -15,6 +15,9 @@ export interface SetupStatus {
   pollEnabled: boolean
   pollIntervalMin: number
   lastRunMs: number | null
+  /** Компания «моя» с расчётным счётом (#493). `undefined` — сервер не ответил на этот вопрос
+   *  (старая сборка или отказ REST); строка тогда не рисуется вовсе. */
+  myCompany?: 'ok' | 'no-company' | 'no-account'
 }
 
 const DEFAULTS: SetupStatus = {

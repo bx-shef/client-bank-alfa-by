@@ -208,6 +208,33 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
   }))
 }
 
+/** EVERY connected account across ALL portals, with freshness — the keep-alive scan (#489).
+ *  Same projection as `listBankAccountInfoForPortal` (identity + `updated_at` + `expires_at` +
+ *  `has_refresh`), just without the member filter, and deliberately WITHOUT decryption: the scan
+ *  decides *whom* to refresh, and only the chosen rows are loaded with their secrets.
+ *
+ *  ⚠ `bank_tokens` holds one row per connected account, not per operation — this is tens of rows
+ *  on a busy install, not thousands. Selecting all of them and filtering in a pure function is
+ *  cheaper to reason about (and to test) than a per-provider `CASE` cutoff in SQL, because the
+ *  refresh lifetime differs by bank and is the thing most likely to be corrected later. */
+export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
+  const rows = await query(
+    `SELECT member_id, provider, account_key, expires_at, updated_at,
+            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
+             AND refresh_token_enc NOT LIKE '%:') AS has_refresh
+       FROM bank_tokens ORDER BY updated_at ASC`,
+    []
+  )
+  return rows.map(r => ({
+    memberId: String(r.member_id),
+    provider: r.provider as BankProviderId,
+    accountKey: String(r.account_key),
+    connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
+    expiresAt: Number(r.expires_at),
+    hasRefresh: r.has_refresh === true
+  }))
+}
+
 /** Disconnect ONE account (#404). Member-scoped in the WHERE clause — a portal can only ever
  *  delete its own row, even if the caller forges provider/account. Idempotent: deleting an
  *  already-gone row returns false rather than erroring. */
@@ -235,8 +262,16 @@ export async function renameBankTokenAccount(
   if (taken.length > 0) return 'conflict'
   let rows: Record<string, unknown>[]
   try {
+    // ⚠ `updated_at` НЕ трогаем, хотя раньше трогали. Это переименование метки, а не получение
+    // новой пары токенов: сам токен здесь не меняется ни на байт. С тех пор как `updated_at` стал
+    // часами СВЕЖЕСТИ ТОКЕНА (keep-alive #489 и бейдж состояния решают по нему), его сброс здесь
+    // означал бы вот что: админ авторизовался утром, вернулся к вкладке через семь часов и вписал
+    // номер — и десятичасовой токен, которому осталось три часа, начинает считаться
+    // свежесозданным. Обновление придёт на восьмом часу от ПЕРЕИМЕНОВАНИЯ, то есть на пятнадцатом
+    // от выдачи, когда банк давно его забыл. Ровно та ночная смерть, от которой keep-alive и
+    // написан, только заходящая с другой стороны.
     rows = await query(
-      `UPDATE bank_tokens SET account_key = $4, updated_at = now()
+      `UPDATE bank_tokens SET account_key = $4
         WHERE member_id = $1 AND provider = $2 AND account_key = $3
         RETURNING member_id`,
       [memberId, provider, fromKey, toKey]

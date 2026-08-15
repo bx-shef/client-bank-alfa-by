@@ -29,6 +29,7 @@ const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
   connectedAccounts: setup.status.value.connectedAccounts,
   pendingAccounts: setup.status.value.pendingAccounts,
+  myCompany: setup.status.value.myCompany,
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
   lastRunMs: setup.status.value.lastRunMs
@@ -160,6 +161,14 @@ onBeforeUnmount(() => {
         <p v-else>
           Автоматический опрос выключен, выписка не забирается сама. Ручная загрузка файла работает всегда.
         </p>
+
+        <!-- «Не понимаю, чего от меня хотят» (#499). Экран готовности перечисляет требования — и
+             это единственное место, где человек может застрять НЕ на платеже, а на самой
+             постановке задачи. Отзыв отсюда несёт только место: никаких данных клиента здесь нет. -->
+        <FeedbackWidget
+          place="экран готовности"
+          class="mt-3"
+        />
       </div>
     </template>
   </B24Card>

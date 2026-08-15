@@ -47,10 +47,10 @@ import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
-import { writeConfigurableActivityViaRest } from '../utils/configurableActivityWrite'
+import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
-import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
+import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
@@ -193,7 +193,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (!call) return null
       return findMyCompanyByAccount(item.account, call)
     },
-    // Write the operation as a CONFIGURABLE activity (crm.activity.configurable.add) attached
+    // Write the operation as a universal TODO activity (crm.activity.todo.add, #495) attached
     // to the matched company; returns the new activity id or null when skipped (demo account /
     // no company → no owner / unknown portal). The activity carries the ORIGINATOR_ID/ORIGIN_ID
     // dedup marker (#259), so idempotency lives in B24 (getActivityId searches it) — no store.
@@ -202,7 +202,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return writeConfigurableActivityViaRest(item, companyId, call, note)
+      return writeTodoActivityViaRest(item, companyId, call, note, memberId)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
@@ -497,7 +497,7 @@ export function liveHandlerDeps(): HandlerDeps {
     },
     // Read-before-write dedup guard (#259): search Bitrix24 for our marker
     // (ORIGINATOR_ID + ORIGIN_ID; key = ORIGIN_ID = account|docId). The marker is written
-    // ATOMICALLY with the activity (configurable.add), so B24 is the source of truth — no DB
+    // by the activity write itself (todo.add + marker update, #495), so B24 is the source of truth — no DB
     // store and no separate "remember" step (the write→remember gap is closed). Demo/no-token
     // → null (proceed as "not written").
     getActivityId: async (memberId, key) => {
@@ -561,10 +561,10 @@ export function startEventWorker(deps: HandlerDeps): Worker {
 
 // ── crm-sync stalled-reprocessing guard (#163, port from ai-price-import) ────────────────────
 // crm-sync idempotency is read-before-write by a B24 marker (findActivityByMarker → crm.item.list,
-// then crm.activity.configurable.add which stamps ORIGINATOR_ID/ORIGIN_ID atomically, #259). That is
+// then crm.activity.todo.add + the marker update that stamps ORIGINATOR_ID/ORIGIN_ID, #495). That is
 // a TOCTOU: it protects SEQUENTIAL retries (crash recovery — a committed write leaves the marker, so
 // the retry finds it) but NOT CONCURRENT reprocessing of one job. BullMQ redelivers a job to a SECOND
-// worker once the first worker's lock is deemed STALLED; if the first is still mid-`configurable.add`,
+// worker once the first worker's lock is deemed STALLED; if the first is still mid-write,
 // both find "no marker" and both write → a DUPLICATE activity (Bitrix does not enforce ORIGIN_ID
 // uniqueness within a single call). The same window applies to the allocation mutations.
 //
@@ -603,7 +603,7 @@ export function crmLockTuning(): { lockDuration: number, stalledInterval: number
  *  silently make it in-process-concurrent and reintroduce the find→write TOCTOU.
  *  ⚠ Making crm-sync concurrent OR running >1 replica needs (a) a per-portal REST limiter (else a
  *  big batch hits B24 `QUERY_LIMIT` — batch/`callBatch` is the real lever) and (b) ATOMIC dedup.
- *  Dedup is the B24 marker (`findActivityByMarker` → `configurable.add` stamps ORIGINATOR_ID/
+ *  Dedup is the B24 marker (`findActivityByMarker` → `todo.add` + update stamps ORIGINATOR_ID/
  *  ORIGIN_ID atomically, #259), but the search→write is still two calls: under parallelism two
  *  workers could both miss the marker and double-write a dela (TOCTOU) — see #109/#259/PROCESSING §1.
  *  fetch/parse scale freely. See docs/QUEUES.md. */

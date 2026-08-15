@@ -17,9 +17,11 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, REQUESTS_PER_ACCOUNT } from '../queue/pollCapacity'
-import { listAllBankAccounts } from '../utils/bankTokenStore'
+import { getBankToken, listAllBankAccountInfo, listAllBankAccounts, type BankAccountRef, type BankToken as BankTokenType } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
+import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, runBankKeepAlive } from '../utils/bankTokenKeepAlive'
+import { ensureBankToken } from '../utils/ensureBankToken'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
 import { sweepOldBatches } from '../utils/importBatchStore'
@@ -70,6 +72,7 @@ export default defineNitroPlugin((nitroApp) => {
   let timer: ReturnType<typeof setInterval> | undefined
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined
+  let bankKeepAliveTimer: ReturnType<typeof setInterval> | undefined
   let sweepTimer: ReturnType<typeof setInterval> | undefined
   let batchSweepTimer: ReturnType<typeof setInterval> | undefined
   let healthTimer: ReturnType<typeof setInterval> | undefined
@@ -224,6 +227,45 @@ export default defineNitroPlugin((nitroApp) => {
       console.warn('[queue] token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
     }
 
+    // BANK token keep-alive (#488/#489) — the twin of the block above, on a different clock and
+    // with a different cost of being wrong. Kept separate deliberately: that one is gated on
+    // Bitrix creds and measured in days, this one on BANK creds and measured in hours (Alfa's
+    // refresh lives ~10 h). Measured in production: the connection dies overnight, and the cure is
+    // the ACCOUNT OWNER logging into their internet bank — so every failure here costs a human
+    // action at the client's end.
+    //
+    // ⚠ There is deliberately no `CRON_REAL_POLL` gate. That flag exists to avoid hammering the
+    // STATEMENT api; renewing a token is not a statement read and spends none of its budget.
+    // Coupling the two is exactly what killed the connection whenever polling was paused.
+    //
+    // ⚠ Known limitation: this whole plugin does not start without Redis (`queueEnabled()` at the
+    // top), so a long Redis outage still takes connections down with it. The bank could not care
+    // less about our queue — but keep-alive lives in the cron, and the cron lives in this plugin.
+    // Moving it to a standalone timer is its own decision: it changes the role of the plugin.
+    const bankKeepAliveMs = bankKeepAliveIntervalMs(Number(process.env.BANK_KEEPALIVE_MINUTES || BANK_KEEP_ALIVE_MINUTES))
+    const bankKeepAliveDeps = {
+      now: Date.now,
+      listAccounts: () => listAllBankAccountInfo(dbQuery),
+      getToken: (ref: BankAccountRef) => getBankToken(dbQuery, ref.memberId, ref.provider, ref.accountKey),
+      // ⚠ `force` is mandatory. Without it `ensureBankToken` looks at the ACCESS token's expiry —
+      // precisely the wrong signal here: access can be minutes old while the refresh behind it is
+      // living out its last few. That is why refreshing «along the way» never saved it.
+      refresh: (token: BankTokenType) => ensureBankToken(token, undefined, { force: true }),
+      log: (m: string) => console.info(m),
+      warn: (m: string) => console.warn(m)
+    }
+    const runBankKeepAliveTick = async () => {
+      try {
+        await withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps))
+      } catch (err) {
+        // Only a failure of the account listing itself reaches here — per-account ones are isolated inside.
+        console.error('[queue] bank keep-alive run failed:', (err as Error)?.message)
+      }
+    }
+    bankKeepAliveTimer = setInterval(runBankKeepAliveTick, bankKeepAliveMs)
+    void runBankKeepAliveTick() // at boot: a connection may have idled all night while the service was down
+    console.info('[queue] bank token keep-alive scheduled (every %d min, #489)', bankKeepAliveMs / 60_000)
+
     // Ретенция итогов ручных загрузок (#417). ВНЕ флага `STATEMENT_SWEEP`: строка несёт имя файла
     // клиента, то есть это чистка ПДн, и ставить её в зависимость от тумблера чистки ОЧЕРЕДЕЙ
     // значило бы, что документированный opt-out по очередям молча отключает не относящуюся к нему
@@ -359,6 +401,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (timer) clearInterval(timer)
     if (pollTimer) clearInterval(pollTimer)
     if (keepAliveTimer) clearInterval(keepAliveTimer)
+    if (bankKeepAliveTimer) clearInterval(bankKeepAliveTimer)
     if (sweepTimer) clearInterval(sweepTimer)
     if (batchSweepTimer) clearInterval(batchSweepTimer)
     if (healthTimer) clearInterval(healthTimer)

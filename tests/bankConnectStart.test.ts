@@ -231,3 +231,51 @@ describe('handleBankConnectStart', () => {
     expect(state!.exp).toBe(now + 60_000)
   })
 })
+
+// Гейт «моей компании» (#493) на СТАРТЕ подключения. Здесь цена ошибки выше, чем при загрузке
+// файла: поток просит владельца счёта ввести пароль от интернет-банка и дать согласие на доступ к
+// деньгам компании. Потратить это на настройку, которая не может дать ни одной записи, — дорого.
+describe('handleBankConnectStart — предусловие «моя компания» (#493)', () => {
+  it('нет «моей компании» → 409, и в банк мы даже не собираемся', async () => {
+    let built = false
+    const r = await handleBankConnectStart(deps({
+      myCompanyGate: async () => 'no-company',
+      buildPriorUrl: async () => {
+        built = true
+        return 'x'
+      }
+    }), input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-company')
+    expect(built).toBe(false)
+  })
+
+  it('нет счёта в реквизитах → своя причина', async () => {
+    const r = await handleBankConnectStart(deps({ myCompanyGate: async () => 'no-account' }), input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-account')
+  })
+
+  it('CRM не ответила → подключение ПРОХОДИТ (fail-open)', async () => {
+    const r = await handleBankConnectStart(deps({
+      myCompanyGate: async () => {
+        throw new Error('rest down')
+      }
+    }), input)
+    expect(r.status).toBe(200)
+    expect(r.body.authorizeUrl).toBeTruthy()
+  })
+
+  it('не-админа отшивает admin-гейт, а не гейт компании — порядок проверок не переставлен', async () => {
+    let asked = false
+    const r = await handleBankConnectStart(deps({
+      validateFrame: async () => ({ userId: 'U', isAdmin: false }),
+      myCompanyGate: async () => {
+        asked = true
+        return 'ok'
+      }
+    }), input)
+    expect(r.status).toBe(403)
+    expect(asked).toBe(false)
+  })
+})

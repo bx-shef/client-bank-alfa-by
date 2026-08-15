@@ -4,6 +4,7 @@ import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import ConnectedBankAccounts from '~/components/ConnectedBankAccounts.vue'
 import { provisionalAccountKey } from '~/utils/bankAccountKey'
+import type { BankSideAccount } from '~/utils/bankAccountMatrix'
 
 // Список подключений (#404) + привязка счёта к подключению, сделанному без него (#407).
 // Проверяется проводка, которую чистые тесты не видят: что «висящее» подключение выглядит как
@@ -87,5 +88,141 @@ describe('ConnectedBankAccounts', () => {
     // Первый клик только спрашивает — запроса на удаление ещё нет.
     expect(wrapper.text()).toContain('Отключить?')
     expect(fetchMock.mock.calls.some(c => c[0] === '/api/bank/disconnect')).toBe(false)
+  })
+})
+
+describe('ConnectedBankAccounts — состояние подключения (#488)', () => {
+  // Прежде строка говорила только «подключён N назад», а единственное поле про сроки —
+  // `expiresAt` — описывает ACCESS-токен. Из-за этого мёртвое подключение выглядело здоровым:
+  // access свежий, refresh за ним уже не существует. Бейдж считает по ВОЗРАСТУ ПАРЫ.
+  const HOUR = 3_600_000
+  const row = (over: Record<string, unknown>) => ({
+    provider: 'alfa-by', accountKey: 'BY01ALFA0001',
+    connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true, ...over
+  })
+
+  it('в полосе обновления — «скоро обновим»', async () => {
+    listReply.value = [row({ connectedAt: Date.now() - 9 * HOUR })]
+    expect((await mountReady()).text()).toContain('скоро обновим')
+  })
+
+  it('старше срока жизни — «подключение истекло»', async () => {
+    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR })]
+    expect((await mountReady()).text()).toContain('подключение истекло')
+  })
+
+  it('без refresh-токена — «нужно переподключить», даже если подключение свежее', async () => {
+    listReply.value = [row({ hasRefresh: false })]
+    expect((await mountReady()).text()).toContain('нужно переподключить')
+  })
+
+  it('исправное подключение бейджа НЕ получает — иначе значки перестают читать', async () => {
+    listReply.value = [row({})]
+    const t = (await mountReady()).text()
+    expect(t).not.toContain('скоро обновим')
+    expect(t).not.toContain('подключение истекло')
+    expect(t).not.toContain('нужно переподключить')
+  })
+
+  it('подсказка доезжает до разметки — бейдж без объяснения бесполезен', async () => {
+    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR })]
+    const hint = (await mountReady()).find('[title]').attributes('title')
+    expect(hint).toContain('интернет-банк')
+  })
+})
+
+describe('ConnectedBankAccounts — выбор счёта из ответа банка (#494)', () => {
+  // Раньше номер счёта надо было ПЕРЕПЕЧАТАТЬ (28 знаков IBAN), и опечатка не давала никакой
+  // ошибки: опрос шёл по номеру, которого у банка нет, а операции не приземлялись. Банк сам
+  // называет свои счета — значит выбор должен быть кликом.
+  const pendingRow = {
+    provider: 'alfa-by', accountKey: PENDING,
+    connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true
+  }
+
+  async function mountWithBank(bankAccounts: BankSideAccount[]) {
+    const wrapper = await mountSuspended(ConnectedBankAccounts, { props: { bankAccounts } })
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('счета банка предлагаются кнопками рядом с ожидающим подключением', async () => {
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([{ number: 'BY11ALFA0001', currency: 'BYN', provider: 'alfa-by' }])
+    const chips = w.find('[data-testid="account-suggestions"]')
+    expect(chips.exists()).toBe(true)
+    expect(chips.text()).toContain('BY11ALFA0001')
+    expect(chips.text()).toContain('BYN')
+  })
+
+  it('клик по счёту привязывает ИМЕННО его, отправляя временный ключ', async () => {
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([{ number: 'BY11ALFA0001', provider: 'alfa-by' }])
+    await w.find('[data-testid="account-suggestions"] button').trigger('click')
+    await flushPromises()
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/set-account')
+    expect(call).toBeTruthy()
+    expect((call?.[1] as { body: Record<string, string> }).body).toMatchObject({
+      provider: 'alfa-by', pendingKey: PENDING, accountKey: 'BY11ALFA0001'
+    })
+  })
+
+  it('уже привязанный счёт повторно не предлагается — сервер ответил бы 409', async () => {
+    listReply.value = [
+      pendingRow,
+      { provider: 'alfa-by', accountKey: 'BY11ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }
+    ]
+    const w = await mountWithBank([
+      { number: 'BY11 ALFA 0001', provider: 'alfa-by' },
+      { number: 'BY11ALFA0002', provider: 'alfa-by' }
+    ])
+    const chips = w.find('[data-testid="account-suggestions"]')
+    // Сравнение нормализованное: то же подключение, записанное с пробелами, — не «ещё один счёт».
+    expect(chips.text()).not.toContain('BY11 ALFA 0001')
+    expect(chips.text()).toContain('BY11ALFA0002')
+  })
+
+  it('банк не ответил — поле ввода остаётся единственным путём, а не исчезает', async () => {
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([])
+    expect(w.find('[data-testid="account-suggestions"]').exists()).toBe(false)
+    expect(w.find('[data-testid="pending-alfa-by"] input').exists()).toBe(true)
+  })
+
+  it('счёт ЧУЖОГО банка к выбору не предлагается', async () => {
+    // Портал может держать Альфу и Приор одновременно — это штатно. Без фильтра по банку счёт
+    // Приора попал бы в подсказки альфового подключения, а клик записал бы его в `account_key`
+    // альфовой строки: конфликта нет (уникальность в пределах провайдера), зато дальше этот номер
+    // уходит БУКВАЛЬНО параметром `number=` в запрос выписки Альфы — подключение молча умирает.
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([
+      { number: 'BY11PJCB0001', provider: 'prior-by' },
+      { number: 'BY11ALFA0001', provider: 'alfa-by' }
+    ])
+    const chips = w.find('[data-testid="account-suggestions"]')
+    expect(chips.text()).not.toContain('BY11PJCB0001')
+    expect(chips.text()).toContain('BY11ALFA0001')
+  })
+
+  it('одинаковый номер у разных банков — не «уже привязан»', async () => {
+    // Ключ хранилища — (банк, счёт). Считать номер занятым без учёта банка значило бы спрятать
+    // единственный доступный счёт второго банка.
+    listReply.value = [
+      { ...pendingRow, provider: 'prior-by' },
+      { provider: 'alfa-by', accountKey: 'BY11X0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }
+    ]
+    const w = await mountWithBank([{ number: 'BY11X0001', provider: 'prior-by' }])
+    expect(w.find('[data-testid="account-suggestions"]').text()).toContain('BY11X0001')
+  })
+
+  it('строка банка без метки провайдера к выбору не предлагается — отказ в безопасную сторону', async () => {
+    // Метку ставит сервер. Если она почему-то не доехала (старый бэкенд при разъехавшемся выкате),
+    // предложить такой счёт значило бы, возможно, привязать его не к тому банку. Молчим и
+    // оставляем поле ввода — это неудобно, но не ломает подключение.
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([{ number: 'BY11ALFA0001' }])
+    expect(w.find('[data-testid="account-suggestions"]').exists()).toBe(false)
+    expect(w.find('[data-testid="pending-alfa-by"] input').exists()).toBe(true)
   })
 })

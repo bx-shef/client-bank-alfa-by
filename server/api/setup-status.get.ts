@@ -7,6 +7,7 @@
 // would create a second source of truth that can disagree with the settings form.
 
 import { handleSetupStatus, type SetupStatusDeps } from '../utils/setupStatus'
+import { findMyCompanyAccounts, myCompanyGate } from '../utils/myCompanyRequisites'
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
@@ -41,6 +42,10 @@ function liveDeps(): SetupStatusDeps {
     // expose, and the worst possible thing for it to get wrong.
     pollEnabled: (process.env.CRON_REAL_POLL ?? '0') === '1' && queueEnabled(),
     pollIntervalMin: Number.isFinite(interval) && interval > 0 ? Math.floor(interval) : 5,
+    // «Моя компания» с расчётным счётом (#493) — тем же фрейм-токеном админа. Отказ проглатывает
+    // сам хендлер: строка тогда не рисуется, а остальной экран остаётся полезным.
+    myCompany: async (domain, accessToken) =>
+      myCompanyGate(await findMyCompanyAccounts((method, params) => frameRestCall(domain, accessToken, method, params))),
     lastRunMs: async (memberId) => {
       const run = await getImportResult(dbQuery, memberId)
       if (!run?.lastSyncAt) return null

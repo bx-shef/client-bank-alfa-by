@@ -146,3 +146,42 @@ describe('buildReadiness', () => {
     expect(items.every(i => i.hint === '')).toBe(true)
   })
 })
+
+describe('строка «Моя компания» (#493)', () => {
+  // На боевом портале ноль записей при исправном транспорте держались ровно на этом, и узнать
+  // причину можно было только по счётчикам в чужой БД. Строка идёт ПЕРВОЙ — это порядок
+  // действий: без неё подключение банка проходит целиком и не создаёт ни одной записи.
+  const base = {
+    settings: parsePortalSettings(null),
+    connectedAccounts: 1,
+    pollEnabled: true,
+    pollIntervalMin: 5,
+    lastRunMs: null
+  }
+
+  it('идёт ПЕРВОЙ, раньше банка', () => {
+    const items = buildReadiness({ ...base, myCompany: 'no-company' })
+    expect(items[0]!.key).toBe('my-company')
+    expect(items[1]!.key).toBe('bank')
+  })
+
+  it('три состояния различаются подсказкой — они чинятся по-разному', () => {
+    const hint = (v: 'ok' | 'no-company' | 'no-account') =>
+      buildReadiness({ ...base, myCompany: v }).find(i => i.key === 'my-company')!
+    expect(hint('ok').ok).toBe(true)
+    expect(hint('ok').hint).toBe('')
+    expect(hint('no-company').hint).toContain('Моя компания')
+    expect(hint('no-account').hint).toContain('расчётный счёт')
+    expect(hint('no-company').hint).not.toBe(hint('no-account').hint)
+  })
+
+  it('⚠ не спросили — строки НЕТ вовсе, а не зелёная галочка', () => {
+    // Выдуманная галочка на этом экране особенно дорога: его открывают, чтобы понять, почему
+    // ничего не работает.
+    expect(buildReadiness(base).some(i => i.key === 'my-company')).toBe(false)
+  })
+
+  it('без «моей компании» экран НЕ считается готовым', () => {
+    expect(isFullyReady(buildReadiness({ ...base, myCompany: 'no-account' }))).toBe(false)
+  })
+})

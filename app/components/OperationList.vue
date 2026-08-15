@@ -4,6 +4,7 @@ import ArrowTopSIcon from '@bitrix24/b24icons-vue/outline/ArrowTopSIcon'
 import ArrowDownSIcon from '@bitrix24/b24icons-vue/outline/ArrowDownSIcon'
 import EmptyMessageIcon from '@bitrix24/b24icons-vue/outline/EmptyMessageIcon'
 import type { StatementItem } from '~/types/statement'
+import { makeProgramSample } from '~/utils/programFeedback'
 
 // Statement operations as a compact, scannable list (modelled on the Bitrix24 /
 // Alfa "Последние операции" view): rows grouped by day, a direction tile
@@ -48,7 +49,14 @@ function toRow(item: StatementItem) {
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
     name: item.counterparty.name,
     purpose: item.purpose,
-    requisites: requisites(item)
+    requisites: requisites(item),
+    // Отзыв о КОНКРЕТНОМ платеже (#499). Форму строит ТОТ ЖЕ `makeProgramSample`, что и программный
+    // канал, — не копия «такой же формы», а буквально она: правило приватности записано одно на два
+    // канала, и держать его на двух ручных литералах значит ждать, пока они разойдутся. `kind`
+    // описывает, на чём запуталась программа; у отзыва человека такого нет, поэтому оно снимается.
+    sample: (({ kind: _kind, ...rest }) => rest as Record<string, unknown>)(
+      makeProgramSample(item, 'unmatched')
+    )
   }
 }
 
@@ -145,6 +153,17 @@ const hasItems = computed(() => props.items.length > 0)
             size="sm"
             class="pb-3 pl-12"
           />
+          <!-- Отзыв живёт ВНУТРИ раскрытой строки, а не рядом с каждой (#499): сто виджетов в
+               списке — это сто раз «не нажимайте меня», а раскрытая строка означает, что человек
+               уже смотрит именно на этот платёж. Виджет сам себя не рисует, пока канал выключен на
+               сервере, поэтому на непод-ключённом портале ничего не появится. -->
+          <div class="pb-3 pl-12">
+            <FeedbackWidget
+              :operation="row.sample"
+              :subject-key="row.key"
+              place="операция"
+            />
+          </div>
         </template>
       </B24Collapsible>
     </div>

@@ -3,7 +3,7 @@ import type { StatementItem } from '~/types/statement'
 // Shared, pure helpers for building a CRM activity for a statement operation: the
 // one-line title, money/date formatting, the portal-TZ deadline stamp, and the
 // owner-type / app-namespace constants. The activity CARRIER itself is built by
-// app/utils/configurableActivity.ts (crm.activity.configurable.add, #259); these
+// app/utils/todoActivity.ts (crm.activity.todo.add, #495); these
 // helpers are reused there (and neutralizeBb is shared with chatMessage.ts).
 
 /** CRM owner type id for a Company. Standard Bitrix24 entityTypeId: Lead=1,

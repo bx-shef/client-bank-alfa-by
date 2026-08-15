@@ -17,7 +17,7 @@ import type { PortalSettings } from '~/utils/settings'
 
 /** One checklist line. `ok` drives the icon; `hint` is what to DO when it isn't ok. */
 export interface ReadinessItem {
-  key: 'bank' | 'chat' | 'error-chat' | 'recognition' | 'smart-process' | 'poll'
+  key: 'my-company' | 'bank' | 'chat' | 'error-chat' | 'recognition' | 'smart-process' | 'poll'
   title: string
   ok: boolean
   /** Short state description («2 счёта», «не выбран»). */
@@ -39,6 +39,10 @@ export interface ReadinessSnapshot {
   pollIntervalMin: number
   /** Epoch ms of the last finished import run, or null if it never ran. */
   lastRunMs: number | null
+  /** Есть ли в CRM компания «моя» с расчётным счётом (#493). `undefined` — не спрашивали
+   *  (старый сервер / проверка не прошла), и тогда строка не показывается вовсе: пустая
+   *  галочка честнее выдуманной. */
+  myCompany?: 'ok' | 'no-company' | 'no-account'
 }
 
 /** Plural «счёт/счёта/счетов» — the checklist reads as a sentence, not as «2 счет». */
@@ -75,6 +79,25 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
   const pending = snap.pendingAccounts ?? 0
 
   return [
+    // «Моя компания» идёт ПЕРВОЙ, раньше банка, и это порядок действий, а не важности: без неё
+    // подключение банка проходит целиком — с паролем от интернет-банка и согласием на доступ к
+    // деньгам — и не может создать ни одной записи. На боевом портале это дало «117 обработано,
+    // 117 не опознано, 0 создано» при полностью исправном транспорте (#493).
+    ...(snap.myCompany
+      ? [{
+          key: 'my-company' as const,
+          title: 'Моя компания в CRM',
+          ok: snap.myCompany === 'ok',
+          detail: snap.myCompany === 'ok'
+            ? 'есть, с расчётным счётом'
+            : (snap.myCompany === 'no-company' ? 'не отмечена' : 'без расчётного счёта'),
+          hint: snap.myCompany === 'ok'
+            ? ''
+            : (snap.myCompany === 'no-company'
+                ? 'Откройте карточку своей компании в CRM, включите признак «Моя компания» и добавьте в реквизиты расчётный счёт. Без этого платежам не на что приземлиться.'
+                : 'Добавьте расчётный счёт в реквизиты своей компании — ровно в том виде, в каком он приходит из банка. Приложение ищет компанию именно по номеру, и лишний пробел делает счёт другим.')
+        }]
+      : []),
     {
       key: 'bank',
       title: 'Банк подключён',

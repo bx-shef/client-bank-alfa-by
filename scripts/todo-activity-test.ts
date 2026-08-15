@@ -1,15 +1,15 @@
-// Live smoke of the #259 activity carrier: crm.activity.configurable.add + the B24-side dedup
+// Live smoke of the #495 activity carrier: crm.activity.todo.add + the B24-side dedup
 // search (crm.activity.list filter[ORIGINATOR_ID][ORIGIN_ID]). Dev-only, not part of SSG.
 //
 // Exercises the EXACT code crm-sync runs to write an operation:
-// `buildConfigurableActivity` → `writeConfigurableActivityViaRest` → `findActivityByMarker`,
+// `buildTodoActivity` → `writeTodoActivityViaRest` (add + marker-update) → `findActivityByMarker`,
 // over the real per-portal OAuth transport (`makePortalSdkCall`) with an in-memory token store
-// (no Postgres/Redis). configurable.add is OAuth/app-context only, so this is the live gate the
+// (no Postgres/Redis). todo.add is OAuth/app-context only, so this is the live gate the
 // webhook smokes can't cover. Get OAuth creds with scripts/extract-oauth-from-docker.sh →
 // .env.b24oauth (same as sdk:crm:test).
 //
 // Run:  node --experimental-strip-types --disable-warning=ExperimentalWarning \
-//         --import ./scripts/lib/alias-loader.mjs scripts/configurable-activity-test.ts \
+//         --import ./scripts/lib/alias-loader.mjs scripts/todo-activity-test.ts \
 //         --company <id> [--apply]
 // (wired as `pnpm activity:test`). DRY-RUN by default (prints the params, writes nothing).
 // --apply actually creates the activity, then searches the marker to prove the dedup round-trip.
@@ -20,8 +20,8 @@ import { makePortalSdkCall, type SdkPortalDeps } from '../server/utils/b24Sdk.ts
 import type { PortalToken } from '../server/utils/tokenStore.ts'
 import { B24_REQUIRED_SCOPES } from '../app/config/b24.ts'
 import type { StatementItem } from '../app/types/statement.ts'
-import { buildConfigurableActivity, ACTIVITY_ORIGINATOR_ID, activityOriginId } from '../app/utils/configurableActivity.ts'
-import { writeConfigurableActivityViaRest } from '../server/utils/configurableActivityWrite.ts'
+import { buildTodoActivity, ACTIVITY_ORIGINATOR_ID, activityOriginId } from '../app/utils/todoActivity.ts'
+import { writeTodoActivityViaRest } from '../server/utils/todoActivityWrite.ts'
 import { findActivityByMarker } from '../server/utils/activityMarkerLookup.ts'
 
 loadDotEnv(['.env.b24oauth', '.env.b24test'], { explicit: false })
@@ -75,8 +75,8 @@ const deps: SdkPortalDeps = {
 }
 
 async function main() {
-  head(`configurable.add (#259 Phase B) · портал ${domain} · ${apply ? 'APPLY' : 'DRY-RUN'}`)
-  const params = buildConfigurableActivity(item, { id: Number(companyId || 0) })
+  head(`todo.add (#495, дедуп #259) · портал ${domain} · ${apply ? 'APPLY' : 'DRY-RUN'}`)
+  const params = buildTodoActivity(item, { id: Number(companyId || 0) })
   const originId = activityOriginId(item)
   console.log(`${C.dim}маркер: ORIGINATOR_ID=${ACTIVITY_ORIGINATOR_ID} · ORIGIN_ID=${originId}${C.reset}`)
   console.log(`${C.dim}params:${C.reset} ${JSON.stringify(params, null, 2)}`)
@@ -103,12 +103,12 @@ async function main() {
   // 2) write (unless dedup already found it — mirrors crm-sync's read-before-write).
   let createdId = before
   if (!before) {
-    createdId = await writeConfigurableActivityViaRest(item, companyId, call)
+    createdId = await writeTodoActivityViaRest(item, companyId, call)
     if (!createdId) {
-      err('configurable.add не вернул id (проверь layout/права/OAuth-контекст)')
+      err('todo.add не вернул id (проверь права/контекст приложения)')
       process.exit(1)
     }
-    ok(`создано настраиваемое дело #${createdId} (компания ${companyId})`)
+    ok(`создано дело #${createdId} (компания ${companyId})`)
   }
 
   // 3) post-search: the marker must now find exactly our activity (dedup round-trip).
@@ -120,7 +120,7 @@ async function main() {
     process.exit(1)
   }
 
-  console.log(`\n${C.green}✓ configurable.add + B24-дедуп по маркеру работают вживую.${C.reset}\n`)
+  console.log(`\n${C.green}✓ todo.add + B24-дедуп по маркеру работают вживую.${C.reset}\n`)
 }
 
 main().catch((e) => {

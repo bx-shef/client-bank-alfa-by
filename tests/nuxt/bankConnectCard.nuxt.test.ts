@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
@@ -25,8 +25,12 @@ vi.mock('~/composables/useFrameAuth', () => ({
 // route BY URL rather than by call order — an order-based mock would hand the accounts request the
 // connect response (and vice versa) depending on which fired first.
 const connectReply = { value: {} as Record<string, unknown> }
+// Сверка счетов (#494) грузится тем же монтированием и ходит В БАНК, поэтому у неё свой ответ:
+// иначе composable молча получал бы connect-ответ и тест был бы зелёным при любом поведении.
+const matrixReply = { value: { rows: [] as unknown[], providers: [] as unknown[] } }
 const fetchMock = vi.fn((url: string, _opts?: Record<string, unknown>) => {
   if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
+  if (url === '/api/bank/matrix') return Promise.resolve(matrixReply.value)
   return Promise.resolve(connectReply.value)
 })
 vi.stubGlobal('$fetch', fetchMock)
@@ -41,9 +45,20 @@ function connectCalls() {
   return fetchMock.mock.calls.filter(c => c[0] === '/api/bank/connect')
 }
 
+// ⚠ ФАЙЛОВЫЙ, а не точечный. Часть тестов зовёт `vi.unstubAllGlobals()` (им нужен свой `window.open`),
+// и вместе с ним отваливается стаб `$fetch`. Дальше происходило худшее, что может сделать тест: он
+// оставался ЗЕЛЁНЫМ, но проверял не то. Компонент ловил любую ошибку и рисовал ОБЩЕЕ «Не удалось
+// начать подключение», assert на наличие ошибки срабатывал — а серверного текста, ради которого
+// тест написан, никто не читал, и запроса вообще не было. Чинить это после каждого
+// `unstubAllGlobals()` по месту значит ждать, пока кто-нибудь допишет тест и забудет.
+beforeEach(() => {
+  vi.stubGlobal('$fetch', fetchMock)
+})
+
 afterEach(() => {
   fetchMock.mockClear()
   connectReply.value = {}
+  matrixReply.value = { rows: [], providers: [] }
   mockState.isInit = true
   mockState.isAdmin = true
 })
@@ -126,7 +141,12 @@ describe('BankConnectCard connect interaction', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(true)
+    // ⚠ Проверяем, что дошли ДО сервера и показали ЕГО причину. Раньше здесь стоял голый
+    // «ошибка есть» — и он был зелёным ровно потому, что стаб `$fetch` отвалился этажом выше:
+    // запроса не было вовсе, компонент рисовал общее «Не удалось начать подключение», а тест
+    // рапортовал об успехе. Assert, который нельзя провалить, охраняет не код, а сам себя.
+    expect(connectCalls()).toHaveLength(1)
+    expect(wrapper.find('[data-testid="connect-error"]').text()).toContain('provider not available')
     expect(wrapper.find('[data-testid="connect-started"]').exists()).toBe(false)
     expect(fakeWin.close).toHaveBeenCalled() // blank tab dropped on failure
     vi.unstubAllGlobals()
@@ -165,5 +185,46 @@ describe('BankConnectCard connect interaction', () => {
     // contract did not change.
     expect(body.accountKey).toBe('')
     vi.unstubAllGlobals()
+  })
+})
+
+describe('BankConnectCard — сверка счетов внутри карточки (#494)', () => {
+  it('карточка сама запрашивает сверку при открытии', async () => {
+    await mountReady()
+    expect(fetchMock.mock.calls.filter(c => c[0] === '/api/bank/matrix')).toHaveLength(1)
+  })
+
+  it('блок сверки отрисован, и проблемная строка видна с обеими сторонами', async () => {
+    matrixReply.value = {
+      rows: [{
+        state: 'looks-same',
+        crm: { companyId: '7', number: 'BY11 ALFA 0001' },
+        bank: { number: 'BY11ALFA0001', provider: 'alfa-by' },
+        connected: true
+      }],
+      providers: [{ provider: 'alfa-by', count: 1, error: null }]
+    }
+    const w = await mountReady()
+    expect(w.find('[data-testid="account-matrix"]').exists()).toBe(true)
+    expect(w.find('[data-testid="matrix-row-looks-same"]').exists()).toBe(true)
+    expect(w.text()).toContain('BY11 ALFA 0001')
+  })
+
+  it('отказ банка доезжает до экрана отдельной тревогой', async () => {
+    matrixReply.value = {
+      rows: [],
+      providers: [{ provider: 'alfa-by', count: 0, error: 'банк не ответил (503)' }]
+    }
+    const w = await mountReady()
+    expect(w.find('[data-testid="matrix-provider-error-alfa-by"]').exists()).toBe(true)
+  })
+
+  it('сбой запроса сверки не роняет карточку — форма подключения остаётся рабочей', async () => {
+    fetchMock.mockImplementationOnce((url: string) => {
+      if (url === '/api/bank/matrix') return Promise.reject(new Error('boom'))
+      return Promise.resolve({ accounts: [] })
+    })
+    const w = await mountReady()
+    expect(w.find('[data-testid="bank-connect"]').exists()).toBe(true)
   })
 })

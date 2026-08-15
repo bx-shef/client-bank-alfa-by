@@ -1,8 +1,13 @@
 // B24-side dedup lookup for CRM activities (#259 Phase B): find an activity we already
 // wrote by our external-source marker (ORIGINATOR_ID + ORIGIN_ID), so crm-sync can skip a
 // re-write without the activity_dedup store. Pure over the injected `call` — unit-testable
-// with a fake. Used only on the CONFIGURABLE-activity path (crm.activity.configurable.add
-// stamps the marker; the simple todo activity has no such field — see docs/PROCESSING.md §1).
+// with a fake.
+//
+// ⚠ THE MARKER IS SEARCHABLE ON A TODO ACTIVITY, though `crm.activity.todo.add` will not ACCEPT
+// it (#495): the carrier is written first and the marker stamped by a following
+// `crm.activity.update`. Filtering by ORIGINATOR_ID/ORIGIN_ID works either way — verified live —
+// which is what makes B24, rather than a table of ours, the authority on «already written».
+// The write side and its compensating delete live in `server/utils/todoActivityWrite.ts`.
 
 import type { RestCall } from './companyLookup'
 

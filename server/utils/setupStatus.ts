@@ -25,6 +25,10 @@ export interface SetupStatusDeps {
   pollIntervalMin: number
   /** Epoch ms the last import run finished, or null if it never ran. */
   lastRunMs: (memberId: string) => Promise<number | null>
+  /** Есть ли компания «моя» с расчётным счётом (#493). Отсутствует ⇒ строку не показываем.
+   *  ⚠ Отказ REST здесь НЕ роняет весь ответ: экран готовности — самое место, где «половина
+   *  сведений» полезнее пустого экрана, а строка без данных просто не рисуется. */
+  myCompany?: (domain: string, accessToken: string) => Promise<'ok' | 'no-company' | 'no-account'>
 }
 
 export async function handleSetupStatus(
@@ -48,9 +52,10 @@ export async function handleSetupStatus(
   }
   if (!frame.isAdmin) return { status: 403, body: { error: 'setup status is administrator-only' } }
 
-  const [counts, lastRunMs] = await Promise.all([
+  const [counts, lastRunMs, myCompany] = await Promise.all([
     deps.countAccounts(memberId),
-    deps.lastRunMs(memberId)
+    deps.lastRunMs(memberId),
+    deps.myCompany?.(domain, accessToken).catch(() => undefined)
   ])
 
   return {
@@ -63,7 +68,11 @@ export async function handleSetupStatus(
       pendingAccounts: counts.pending,
       pollEnabled: deps.pollEnabled,
       pollIntervalMin: deps.pollIntervalMin,
-      lastRunMs
+      lastRunMs,
+      // Ключ появляется только когда мы действительно спросили и получили ответ: пустая галочка
+      // на экране готовности честнее выдуманной, а выдуманная тут особенно дорога — именно этот
+      // экран человек открывает, чтобы понять, почему ничего не работает.
+      ...(myCompany ? { myCompany } : {})
     }
   }
 }

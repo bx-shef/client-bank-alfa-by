@@ -116,7 +116,10 @@ onMounted(async () => {
       <!-- Employee 👍/👎 on the import result (docs/FEEDBACK.md, channel «сотрудник»). Renders only
          when the channel is configured server-side (GITHUB_FEEDBACK_*), and is inert outside a
          portal. -->
-      <FeedbackWidget class="mb-5" />
+      <FeedbackWidget
+        place="общий экран"
+        class="mb-5"
+      />
 
       <header class="mb-5 flex items-center justify-end gap-2">
         <B24Button

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useBankAccounts, type ConnectedBankAccount } from '~/composables/useBankAccounts'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
+import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMatrix'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
+import { connectionHealth, connectionHealthBadge } from '~/utils/bankTokenLifetime'
 
 // Connected bank accounts, with a per-row disconnect (#404). Lives inside BankConnectCard, above
 // the connect form, so the admin sees what is already bound BEFORE adding another account —
@@ -12,7 +14,40 @@ import { BANK_LABELS } from '~/utils/bankLabels'
 // Admin gate is NOT repeated here: the card that hosts this already gates on admin, and the
 // backend re-gates both routes (the client gate is convenience, the server one is authority).
 
+// Счета, которые отдал сам банк (#494) — из общей сверки, живущей в родительской карточке.
+// Благодаря им выбор счёта у ожидающего подключения становится КЛИКОМ, а не перепечатыванием
+// 28-значного IBAN: именно опечатка в нём на первом боевом прогоне дала «117 обработано, 0
+// создано» без единого сообщения об ошибке. Поле ввода остаётся — банк может и не ответить.
+const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), { bankAccounts: () => [] })
+// Родитель перечитывает сверку после привязки/отключения: обе половины экрана описывают одно и то
+// же, и оставить одну устаревшей — значит показать противоречие самому себе.
+const emit = defineEmits<{ changed: [] }>()
+
 const { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey } = useBankAccounts()
+
+/** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
+ *  провайдера: один и тот же номер у разных банков это разные строки хранилища. */
+const takenKeys = computed(() => new Set(
+  accounts.value
+    .filter(a => !isPendingAccountKey(a.accountKey))
+    .map(a => `${a.provider}|${normalizeForCompare(a.accountKey)}`)
+))
+
+/**
+ * Что предложить ожидающему подключению: счета ТОГО ЖЕ банка, ещё не привязанные.
+ *
+ * ⚠ Фильтр по банку обязателен. Портал может держать Альфу и Приор одновременно — это штатно, — а
+ * сверка складывает обе стороны в один список. Без фильтра счёт Приора предлагался бы к выбору для
+ * подключения Альфы, и клик по нему записал бы его в `account_key` альфовой строки. Конфликта не
+ * возникло бы: уникальность проверяется в пределах провайдера. А дальше `account_key` уходит
+ * БУКВАЛЬНО параметром `number=` в запрос выписки Альфы — то есть подключение молча перестало бы
+ * работать, и выглядело бы это как «банк ничего не отдаёт».
+ */
+function suggestionsFor(a: ConnectedBankAccount) {
+  return props.bankAccounts.filter(b =>
+    b.provider === a.provider && !takenKeys.value.has(`${a.provider}|${normalizeForCompare(b.number)}`)
+  )
+}
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
@@ -35,6 +70,13 @@ function connectedAgo(ms: number): string {
   return formatRelativeTime(new Date(ms).toISOString(), Date.now())
 }
 
+/** Бейдж состояния подключения (#488) или `null`, когда сказать нечего. Чистое ядро —
+ *  `bankTokenLifetime.ts`, ТО ЖЕ, по которому сервер решает, кого обновлять: собственное правило
+ *  в интерфейсе рисовало бы зелёное на подключении, которое сервер уже похоронил. */
+function healthBadge(a: ConnectedBankAccount) {
+  return connectionHealthBadge(connectionHealth(a, Date.now()))
+}
+
 /** Подпись строки для скринридера. Временный ключ служебный — озвучивать его бессмысленно. */
 function rowLabel(a: ConnectedBankAccount): string {
   return isPendingAccountKey(a.accountKey)
@@ -42,15 +84,18 @@ function rowLabel(a: ConnectedBankAccount): string {
     : `${providerLabel(a.provider)} ${a.accountKey}`
 }
 
-async function onAssign(a: ConnectedBankAccount) {
+async function onAssign(a: ConnectedBankAccount, value?: string) {
   const key = rowKey(a)
   // Успех → строка перечитается уже с настоящим номером, черновик больше не нужен.
-  if (await setAccount(a, drafts.value[key] ?? '')) drafts.value[key] = ''
+  if (await setAccount(a, value ?? drafts.value[key] ?? '')) {
+    drafts.value[key] = ''
+    emit('changed')
+  }
 }
 
 async function onDisconnect(a: ConnectedBankAccount) {
   confirming.value = ''
-  await disconnect(a)
+  if (await disconnect(a)) emit('changed')
 }
 
 defineExpose({ reload: load })
@@ -118,11 +163,17 @@ defineExpose({ reload: load })
                 size="xs"
                 label="счёт не выбран"
               />
+              <!-- Состояние подключения (#488). Считается по ВОЗРАСТУ ПАРЫ, а не по `expiresAt`:
+                   тот описывает access-токен, и именно поэтому мёртвое подключение раньше
+                   выглядело здоровым — access свежий, а refresh за ним уже не существует.
+                   `ok` бейджа не даёт намеренно: значок на каждой исправной строке приучает их
+                   не читать, а «подключён N назад» строчкой ниже и так всё говорит. -->
               <B24Badge
-                v-if="!a.hasRefresh"
-                color="air-primary-warning"
+                v-if="healthBadge(a)"
+                :color="healthBadge(a)!.color"
                 size="xs"
-                label="нужно переподключить"
+                :label="healthBadge(a)!.label"
+                :title="healthBadge(a)!.hint"
               />
             </div>
             <!-- Подключение без счёта (#407): строка есть, номера ещё нет — просим выбрать прямо
@@ -132,6 +183,27 @@ defineExpose({ reload: load })
               class="mt-1 flex flex-wrap items-center gap-2"
               :data-testid="`pending-${a.provider}`"
             >
+              <!-- Счета, которые назвал сам банк (#494): один клик вместо перепечатывания IBAN.
+                   Показываем ТОЛЬКО когда банк ответил — иначе остаётся поле ниже. -->
+              <div
+                v-if="suggestionsFor(a).length"
+                class="flex w-full flex-wrap items-center gap-2"
+                data-testid="account-suggestions"
+              >
+                <span class="text-xs text-(--ui-color-base-3)">Банк отдал:</span>
+                <B24Button
+                  v-for="s in suggestionsFor(a)"
+                  :key="s.number"
+                  :label="s.currency ? `${s.number} · ${s.currency}` : s.number"
+                  :aria-label="`Выбрать счёт ${s.number}`"
+                  color="air-secondary-accent"
+                  size="xs"
+                  class="font-mono"
+                  :loading="saving === rowKey(a)"
+                  :disabled="saving === rowKey(a)"
+                  @click="onAssign(a, s.number)"
+                />
+              </div>
               <B24Input
                 v-model="drafts[rowKey(a)]"
                 placeholder="BY00ALFA00000000000000000000"

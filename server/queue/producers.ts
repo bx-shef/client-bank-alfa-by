@@ -92,19 +92,62 @@ export async function enqueueFetch(job: FetchJob): Promise<boolean> {
 }
 
 /**
- * Unstick a deterministic jobId from a FAILED corpse (C3, the 24h deadlock): BullMQ dedups `add`
- * against ANY retained job with the same id, including one that exhausted its attempts. With
- * `removeOnFail age 86400` a permanently-failed parse/crm-sync job blocks a RE-UPLOAD of the same
- * file for a day — the employee has no way to retry (e.g. after the admin fixed the broken token).
- * Removing only a FAILED job is safe: waiting/active/delayed jobs keep their dedup (that's the
- * backpressure), and a completed job stays deduped for its retention hour (it succeeded — re-running
- * is pointless and the B24 marker would skip everything anyway). Best-effort: `remove()` can race
- * the sweep/eviction — a "job not found" there just means the id is already free.
+ * Free a deterministic jobId from a FINISHED job — completed OR failed (#498).
+ *
+ * BullMQ dedups `add` against ANY retained job with the same id, and both retention buckets are
+ * long enough to matter: a failed job holds its id for a day, a completed one for an hour.
+ *
+ * ⚠ THAT DEDUP IS RIGHT FOR MACHINES AND WRONG FOR PEOPLE, which is the whole bug. Re-uploading the
+ * same file is not a duplicate submission — it is the REPAIR action. The operator watches a run
+ * report «117 обработано, 0 создано», fixes the portal (marks the company as «моя», adds the
+ * requisite, corrects the account number) and uploads the same file again to make the payments
+ * land. Treating that as a duplicate made the second upload a silent no-op AND left the previous
+ * «всё разобрано» on screen — the app confirming success for work it had just refused to do.
+ *
+ * Re-running is safe and cheap by design: the authority on «already written» is the activity MARKER
+ * IN BITRIX24 (#259), not a retained Redis job. A re-run re-reads the marker, skips what exists
+ * (counted as `skipped`) and writes only what is genuinely missing. Storing that decision on our
+ * side was the mistake — see docs/PROCESSING.md.
+ *
+ * WAITING / ACTIVE / DELAYED jobs keep their dedup: an in-flight job is the one case where a second
+ * copy really is a duplicate (double click, redelivery), and that dedup is also the poller's
+ * backpressure. Best-effort — `remove()` can race the sweep; «job not found» just means the id is
+ * already free.
  */
-async function unstickFailed(queue: ReturnType<typeof getQueue>, jobId: string): Promise<void> {
+async function unstickFinished(queue: ReturnType<typeof getQueue>, jobId: string): Promise<void> {
+  await unstick(queue, jobId, state => state === 'failed' || state === 'completed')
+}
+
+/** Free the id of a FAILED job only (C3, the 24h deadlock): attempts exhausted on a broken token
+ *  would otherwise block that id for a day. Used on the machine-driven path, where a COMPLETED job
+ *  keeps its dedup on purpose — see `enqueueCrmSync`. */
+async function unstickFailedOnly(queue: ReturnType<typeof getQueue>, jobId: string): Promise<void> {
+  await unstick(queue, jobId, state => state === 'failed')
+}
+
+/**
+ * ⚠ THE READ AND THE REMOVE ARE NOT ATOMIC, and both BullMQ calls address the job by ID rather than
+ * by the snapshot we read. Two producers racing on the same id can therefore interleave so that the
+ * second one removes the job the first one just added, and the first `enqueue*` returns `true` for
+ * work that no longer exists.
+ *
+ * That is harmless HERE and only here, because every id that can collide is derived from content
+ * (file hash / batch hash): whichever job survives carries an equivalent payload, so the work still
+ * happens and the loser cost nothing but Redis churn. ⚠ Reusing this helper on a queue whose ids
+ * are NOT content-derived would turn the same race into silently dropped work — check that first.
+ *
+ * An ACTIVE job is safe regardless: BullMQ refuses to remove a job locked by a worker, the throw
+ * lands in the catch, and the trailing `add` dedups against it as usual.
+ */
+async function unstick(
+  queue: ReturnType<typeof getQueue>,
+  jobId: string,
+  shouldRemove: (state: string) => boolean
+): Promise<void> {
   try {
     const existing = await queue.getJob(jobId)
-    if (existing && await existing.getState() === 'failed') await existing.remove()
+    if (!existing) return
+    if (shouldRemove(await existing.getState())) await existing.remove()
   } catch {
     // Lost a race with eviction/sweep — the id is free (or will dedup); either way `add` proceeds.
   }
@@ -114,10 +157,14 @@ export async function enqueueParse(job: ParseJob): Promise<boolean> {
   if (!queueEnabled()) return false
   // The parse payload carries the whole file (base64, up to ~2.7 МБ) — statement content (PII).
   // Bounded age-based retention (STATEMENT_JOB_RETENTION, #245) so it doesn't bloat Redis AND a
-  // FAILED file ages out quickly. Age alone is not enough (C3): eviction is lazy, so a failed job
-  // could still dedup-block a re-upload for up to a day — unstick it explicitly.
+  // FAILED file ages out quickly. Age alone is not enough: eviction is lazy, and a finished job of
+  // either kind would dedup-block a re-upload — the one action an operator has (#498).
+  //
+  // This producer has exactly ONE caller: POST /api/import, i.e. a human pressing «Записать в CRM».
+  // That is why freeing a finished id here is safe in a way it would not be on a machine-driven
+  // queue: nothing else can call it in a loop.
   const queue = getQueue(Q_PARSE)
-  await unstickFailed(queue, parseJobId(job))
+  await unstickFinished(queue, parseJobId(job))
   await queue.add(Q_PARSE, job, { jobId: parseJobId(job), ...STATEMENT_JOB_RETENTION })
   return true
 }
@@ -180,10 +227,23 @@ export async function enqueueCrmSync(job: CrmSyncJob): Promise<boolean> {
   // The crm-sync payload carries the normalized StatementItem[] (counterparty/account/amount/
   // purpose) — financial PII. Age-bound its retention (#245) instead of the count-based default,
   // so completed batches of statement data age out of Redis promptly. Dedup is the B24 marker,
-  // not a retained job, so a re-run is safe. A FAILED corpse (attempts exhausted, e.g. on a broken
-  // token) is unstuck first (C3) — otherwise a re-upload of the same file dedup-vanishes for a day.
+  // not a retained job, so a re-run is safe.
+  //
+  // ⚠ WHICH FINISHED JOBS WE FREE DEPENDS ON WHO ASKED, and the two sources are genuinely
+  // different (#498):
+  //
+  //  - `parse` — a person re-uploaded the file. Freeing a COMPLETED id is the point: unsticking
+  //    only the parse queue would move the deadlock one step down the pipeline, because the fresh
+  //    parse chains into a crm-sync whose id is the same file hash. The operator would watch the
+  //    file parse again and still see nothing appear in CRM.
+  //  - `fetch` — the cron re-polled. Its batchId is a CONTENT hash, so an identical id means
+  //    genuinely identical operations, and re-running would re-read B24 markers for every one of
+  //    them at fleet scale to conclude «already written». That dedup is load-bearing; keep it, and
+  //    free only a FAILED corpse (attempts exhausted, e.g. a broken token) so a fixed account is
+  //    not blocked out of the rotation for a day.
   const queue = getQueue(Q_CRM)
-  await unstickFailed(queue, crmSyncJobId(job))
+  if (job.source === 'parse') await unstickFinished(queue, crmSyncJobId(job))
+  else await unstickFailedOnly(queue, crmSyncJobId(job))
   await queue.add(Q_CRM, job, { jobId: crmSyncJobId(job), ...STATEMENT_JOB_RETENTION })
   return true
 }

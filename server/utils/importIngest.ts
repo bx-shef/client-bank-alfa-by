@@ -13,6 +13,7 @@ import { validateUploadFile } from '../../app/utils/importUpload'
 import { normalizeManualStatement } from '../../app/utils/manualImport'
 import type { StatementItem } from '../../app/types/statement'
 import type { ParseJob } from '../queue/topology'
+import { MY_COMPANY_GATE_MESSAGE, type MyCompanyGate } from './myCompanyRequisites'
 
 export interface IngestResult {
   status: number
@@ -30,6 +31,14 @@ export interface IngestDeps {
   enqueueParse: (job: ParseJob) => Promise<boolean>
   /** Content hash (sha256 hex) for the idempotent job id. */
   hash: (bytes: Uint8Array) => string
+  /** Портал имеет компанию «моя» с расчётным счётом (#493). Тот же контракт, что у
+   *  `bankConnectStart`: fail-open при невозможности спросить, отсутствие депа ⇒ нет гейта.
+   *
+   *  ⚠ Ручной импорт гейтим по той же причине, что и подключение банка, хотя цена ошибки тут
+   *  меньше: файл разберётся, предпросмотр покажет операции, кнопка отработает — и не создаст
+   *  ничего. Сотрудник при этом уверен, что импорт прошёл: интерфейс сказал «принято». Отказать
+   *  с объяснением честнее, чем принять и промолчать. */
+  myCompanyGate?: (domain: string, accessToken: string) => Promise<MyCompanyGate>
   /** Отметить загрузку принятой (#417), чтобы UI мог опросить её итог. Best-effort: сбой учёта
    *  не должен отменять уже принятый файл — тогда сотрудник потерял бы импорт из-за мелочи. */
   markQueued?: (memberId: string, batchId: string, fileName: string, userId: string) => Promise<void>
@@ -69,6 +78,22 @@ export async function handleImportUpload(deps: IngestDeps, input: IngestInput): 
     userId = await deps.validateFrame(domain, accessToken)
   } catch {
     return { status: 403, body: { error: 'invalid frame token for this portal' } }
+  }
+
+  // «Моя компания» с расчётным счётом — предусловие (#493). Иначе файл разберётся, операции
+  // покажутся, кнопка отработает — и не создастся ничего, а сотрудник будет уверен, что импорт
+  // прошёл: интерфейс сказал «принято». Отказать с объяснением честнее, чем принять и промолчать.
+  if (deps.myCompanyGate) {
+    let gate: MyCompanyGate = 'ok'
+    try {
+      gate = await deps.myCompanyGate(domain, accessToken)
+    } catch {
+      // Спросить не смогли — пропускаем: заблокировать исправный портал из-за нашей же неудачи
+      // хуже, чем пропустить настроенный неверно (тот чинится на экране готовности).
+    }
+    if (gate !== 'ok') {
+      return { status: 409, body: { error: MY_COMPANY_GATE_MESSAGE[gate], reason: gate } }
+    }
   }
 
   const fileHash = deps.hash(bytes)
