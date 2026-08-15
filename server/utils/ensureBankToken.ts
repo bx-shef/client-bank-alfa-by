@@ -92,8 +92,8 @@ export interface BankRefreshDeps {
   now: () => number
   withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>) => Promise<T>
   loadToken: (q: QueryFn, memberId: string, provider: BankProviderId, accountKey: string) => Promise<BankToken | null>
-  /** Записать обновлённые токены. **UPDATE-only** — `false` значит «строки уже нет», и создавать
-   *  её заново нельзя: счёт отключили, пока мы ходили в банк (#505). */
+  /** Persist the refreshed tokens. **UPDATE-only** — `false` means the row is already gone and
+   *  must NOT be recreated: the account was disconnected while we were at the bank (#505). */
   saveToken: (q: QueryFn, token: BankToken) => Promise<boolean>
   /** Per-provider OAuth creds (from env), or `null` when the bank isn't configured. */
   creds: (provider: BankProviderId) => BankOAuthCreds | null
@@ -165,7 +165,7 @@ const liveDeps: BankRefreshDeps = {
   now: Date.now,
   withLock: withAdvisoryLock,
   loadToken: getBankToken,
-  // UPDATE-only: обновление не имеет права создать подключение — только колбэк OAuth (#505).
+  // UPDATE-only: a refresh may not create a connection — only the OAuth callback may (#505).
   saveToken: updateBankTokenSecrets,
   creds: bankCredsFromEnv,
   priorTokenAuth: priorRefreshAuthFromEnv,
@@ -236,10 +236,11 @@ export async function ensureBankToken(
       refreshToken: r.refreshToken || stored.refreshToken,
       expiresAt: deps.now() + r.expiresIn * 1000
     }
-    // ⚠ UPDATE-only, и возврат проверяется. Строка могла исчезнуть, ПОКА мы ходили в банк: лок
-    // держит других обновляющих, но `DELETE` посторонним DML advisory-lock не держит, а POST длится
-    // до 15 с. Раньше здесь был upsert, и отключённый счёт воскресал со свежим токеном — то есть
-    // приложение продолжало ходить в банк клиента после того, как он это запретил (#505).
+    // ⚠ UPDATE-only, and the result IS checked. The row may have vanished WHILE we were at the
+    // bank: the lock holds back other refreshers, but an advisory lock does not hold back a plain
+    // `DELETE`, and the POST runs up to 15 s. This used to be an upsert, so a disconnected account
+    // came back with a fresh token — the app kept reaching into the client's bank after they had
+    // forbidden it (#505).
     if (!await deps.saveToken(q, updated)) {
       console.warn(`[ensureBankToken] ${stored.provider} account was disconnected mid-refresh — token NOT stored`)
       return stored

@@ -98,8 +98,10 @@ export interface BankKeepAliveSelection {
 
 /**
  * Split the connected accounts into «renew now» and «cannot be renewed», by age of the last
- * successful connect/refresh (`connectedAt` = the row's `updated_at`, stamped by `saveBankToken`
- * on connect AND on every refresh — i.e. exactly "when we last held a fresh pair").
+ * successful connect/refresh (`connectedAt` = the row's `updated_at`, stamped by `saveBankToken` on
+ * connect and by `updateBankTokenSecrets` on every refresh — i.e. exactly "when we last held a
+ * fresh pair"). Two writers, on purpose: only the OAuth callback may CREATE a row, so a refresh
+ * that returns after the account was disconnected cannot resurrect it (#505).
  *
  * Pure over the already-loaded rows: which bank dies when is the fact most likely to be corrected
  * later, and it should be correctable in one table plus one test, not in SQL.
@@ -113,7 +115,7 @@ export interface BankKeepAliveSelection {
  *
  * ⚠ THE WINDOW HAS A FLOOR AS WELL AS A CEILING, and the floor is the load-bearing half. A grant
  * the bank has finally rejected (consent revoked, app de-registered) never gets its `updated_at`
- * re-stamped — the failing refresh throws long before `saveBankToken`. Without a lower bound such
+ * re-stamped — the failing refresh throws long before `updateBankTokenSecrets`. Without a lower bound such
  * a row stays «due» FOREVER: it sorts oldest-first, monopolises the capped batch, and earns a
  * fresh call to the bank's OAuth endpoint on every single tick, for as long as the row exists.
  * That is a plausible route to a bank deciding we are abusing it — reached with no misconfiguration
