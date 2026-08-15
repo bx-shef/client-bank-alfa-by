@@ -87,8 +87,46 @@ export function foldHomoglyphs(text: string, alphabet: Alphabet): string {
 // grab "1234" out of "12345", and a prefixed mask does not match a fragment). The
 // class includes Belarusian `Іі`/`Ўў` (Alfa-Bank BY) beyond А-Я/а-я/Ёё.
 const ALNUM = '0-9A-Za-zА-Яа-яЁёІіЎў'
-const BOUND_L = `(?<![${ALNUM}])`
 const BOUND_R = `(?![${ALNUM}])`
+
+/**
+ * Words that habitually sit FLUSH against an invoice number in Belarusian purposes (#492).
+ *
+ * MEASURED, not guessed: on 40 live incoming payments, three of the numbers that exist in the text
+ * were invisible to us, and all three for this one reason — «СЧЕТУ1000001» typed without a space,
+ * «N» pressed against the digits. That is the entire gap between what we recognise and the ceiling.
+ * The failure was SILENT: such a line landed neither in «распознано» nor in «цель не найдена», it
+ * simply was not there.
+ *
+ * ⚠ WHY A NAMED LIST AND NOT A LOOSER BOUNDARY. The obvious fix — «allow a letter to the left when
+ * the mask starts with a digit» — hands `d+` the tail of every article number (`КЛЕЙ2000` → `2000`)
+ * and every code that ends in digits. Those false numbers are worse than the misses: each one makes
+ * the app announce «цель не найдена» about something that was never a number. This list is about the
+ * DOMAIN — it is the word «счёт» in its cases plus the number sign — so it cannot grow into that.
+ *
+ * ⚠ `№` IS ABSENT ON PURPOSE: it is not in `ALNUM`, so the plain boundary already admits it, and
+ * `№1000001` has always worked. Only LETTER prefixes need naming.
+ */
+const PREFIX_NOISE = ['СЧЕТУ', 'СЧЕТА', 'СЧЕТ', 'СЧЁТ', 'СЧ', 'NO', 'N'] as const
+
+/**
+ * Left boundary: either nothing alphanumeric to the left (the original rule), or one of the noise
+ * words above — which must ITSELF start at a token boundary.
+ *
+ * ⚠ THAT NESTED BOUNDARY IS LOAD-BEARING. Without it `PN1234` would match on the `N`, and article
+ * numbers ending in `…N` would start producing phantom invoice numbers — reintroducing exactly the
+ * false positives this list exists to avoid.
+ *
+ * ⚠ THE LIST IS FOLDED WITH THE SAME ALPHABET as the purpose and the mask. Under `latin`,
+ * «СЧЕТУ» becomes «CЧETY» (Ч has no Latin lookalike), so an unfolded literal would simply never
+ * match — the fix would silently do nothing for exactly the portals that chose that alphabet.
+ */
+function boundLeft(alphabet: Alphabet): string {
+  const words = PREFIX_NOISE
+    .map(w => escapeRegExp(foldHomoglyphs(w, alphabet)))
+    .join('|')
+  return `(?:(?<![${ALNUM}])|(?<=(?<![${ALNUM}])(?:${words})))`
+}
 
 /**
  * Compile a (already homoglyph-folded) mask into a RegExp body: `d` → одна цифра, `d+` → одна или
@@ -156,7 +194,7 @@ export function recognizeByMatrices(
     const body = maskToPattern(foldHomoglyphs(mask, alphabet))
     let re: RegExp
     try {
-      re = new RegExp(BOUND_L + '(' + body + ')' + BOUND_R, 'giu')
+      re = new RegExp(boundLeft(alphabet) + '(' + body + ')' + BOUND_R, 'giu')
     } catch {
       continue // a mask that somehow compiles to invalid regex is skipped, not thrown
     }
