@@ -292,7 +292,49 @@ export interface PriorRegistrationInput {
  * `jwks` modulus first — `GET /register/{clientId}` returns it, and comparing it against the key
  * you sign with is a one-minute answer.
  */
+/**
+ * Shortest RSA modulus we accept in a `jwks`, in base64url characters. A 1024-bit key is ~171, a
+ * 2048-bit one ~342. The number is a FLOOR against garbage, not a key-strength policy — the case it
+ * exists for produced **zero**.
+ */
+const MIN_JWK_MODULUS_CHARS = 170
+
+/**
+ * Refuse a `jwks` whose RSA key carries no usable modulus.
+ *
+ * This is the guard the incident asked for. A registration is ONE-WAY at this bank — `PUT /register`
+ * answers `500`, so a bad key can only be fixed by registering again, which mints a new `client_id`
+ * and orphans every account already connected under the old one. And nothing between here and the
+ * damage says a word: the body is structurally valid JSON, DCR returns `201`, `client_credentials`
+ * works, `POST /accountConsents` returns `201` — the bank only needs the key at `GET /oauth2/authorize`,
+ * three steps and one bank login later, where the account holder gets `invalid_request_object` after
+ * typing their internet-bank password.
+ *
+ * How the zero got there: a registration script read the PEM with a single-line `.env` parser, the
+ * key was truncated, `openssl` failed without anyone checking, and `n` came out empty. So the check
+ * is on the VALUE, not on the shape — the shape was fine.
+ */
+function assertUsableJwks(jwks: unknown): void {
+  const keys = (jwks as { keys?: unknown })?.keys
+  if (!Array.isArray(keys) || keys.length === 0) {
+    throw new Error('priorOauth.buildRegistrationMetadata: jwks carries no keys')
+  }
+  for (const key of keys) {
+    const k = key as { kty?: unknown, kid?: unknown, n?: unknown }
+    if (k?.kty !== 'RSA') continue
+    const n = typeof k.n === 'string' ? k.n : ''
+    if (n.length < MIN_JWK_MODULUS_CHARS) {
+      throw new Error(
+        `priorOauth.buildRegistrationMetadata: RSA key «${String(k.kid ?? '?')}» has an unusable modulus `
+        + `(${n.length} chars, expected at least ${MIN_JWK_MODULUS_CHARS}). Registration is one-way here — `
+        + 'check that the private key was read whole before sending this.'
+      )
+    }
+  }
+}
+
 export function buildRegistrationMetadata(input: PriorRegistrationInput): Record<string, unknown> {
+  if (input.jwks) assertUsableJwks(input.jwks)
   return {
     client_name: input.clientName,
     redirect_uris: [input.redirectUri],

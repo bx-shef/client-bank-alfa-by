@@ -1,6 +1,6 @@
 # Операции: пост-запускной runbook (#246)
 
-> Last reviewed: 2026-08-14
+> Last reviewed: 2026-08-15
 
 Как понять, что приложение живо, где смотреть диагностику, что делать при типовых сбоях,
 как откатиться и куда эскалировать. Дополняет [`DEPLOY.md`](DEPLOY.md) (как деплоить) и
@@ -391,6 +391,7 @@ TLS-терминатора.
 ```
 [crypto-gw] корни ГосСУОК: 2 сертификат(ов) в /etc/crypto-gw/ca/gossuok-bundle.pem
 [crypto-gw] проверка цепочки: bundle подтверждает эталонный сертификат банка — OK
+[crypto-gw] allowlist: разрешено маршрутов — 2 (всё остальное 404)
 nginx: the configuration file /tmp/crypto-gw.nginx.conf test is successful
 [crypto-gw] апстрим: apibel.priorbank.by:9345; слушаю :1080; nice=19
 ```

@@ -66,7 +66,7 @@ describe('token/auth bodies', () => {
 
 describe('DCR registration metadata', () => {
   it('token_endpoint_auth_method is an ARRAY and jwks is a STRING (the two 500-hiding shapes)', () => {
-    const jwks = { keys: [{ kty: 'RSA', kid: 'k1' }] }
+    const jwks = { keys: [{ kty: 'RSA', kid: 'k1', e: 'AQAB', n: 'x'.repeat(342) }] }
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks })
     expect(Array.isArray(meta.token_endpoint_auth_method)).toBe(true)
     // PINNED value, not just the shape (#444): the default is the SANDBOX-ONLY method. When this
@@ -90,6 +90,23 @@ describe('DCR registration metadata', () => {
     // The real cause back then was an empty modulus in `jwks`. Keeping the pin anyway: sending a
     // correct declaration is right regardless of whether this particular bank reads it.
     expect(meta.request_object_signing_alg).toBe('RS256')
+  })
+
+  it('отвергает RSA-ключ без пригодного модуля — та самая причина инцидента', () => {
+    // Регистрация у этого банка ОДНОСТОРОННЯЯ: `PUT /register` отвечает `500`, поэтому испорченный
+    // ключ чинится только новой регистрацией — а она даёт новый `client_id` и осиротит все уже
+    // подключённые счета. При этом до самого конца ничто не подаёт голоса: тело структурно верное,
+    // DCR отдаёт `201`, `client_credentials` работает, согласие создаётся. Ключ нужен банку только
+    // на `GET /oauth2/authorize` — тремя шагами и одним входом в интернет-банк позже.
+    const broken = { keys: [{ kty: 'RSA', kid: 'k1', e: 'AQAB', n: '' }] }
+    expect(() => buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks: broken }))
+      .toThrow(/modulus/i)
+    // Пустой набор ключей — тот же класс: структура есть, содержимого нет.
+    expect(() => buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks: { keys: [] } }))
+      .toThrow(/no keys/i)
+    // Правдоподобный модуль проходит — иначе гард запретил бы работать вообще.
+    const ok = { keys: [{ kty: 'RSA', kid: 'k1', e: 'AQAB', n: 'x'.repeat(342) }] }
+    expect(() => buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks: ok })).not.toThrow()
   })
 
   it('omits jwks when none is provided', () => {
