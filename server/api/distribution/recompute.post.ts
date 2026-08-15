@@ -1,7 +1,7 @@
 // POST /api/distribution/recompute — recompute «осталось распределить» for every payment carrier of
 // the portal (#109 §3/§9.2 «пересчитать» — the manual recovery backstop). Auth = the B24 FRAME access
-// token (Authorization: Bearer) + X-B24-Domain, admin-gated. Feature ON by default (opt OUT with
-// DISTRIBUTION_PROVISION_ENABLED=0). Single-flight per portal (advisory lock, same as provisioning).
+// token (Authorization: Bearer) + X-B24-Domain, admin-gated. Feature OFF by default (enable with
+// DISTRIBUTION_PROVISION_ENABLED=1). Single-flight per portal (advisory lock, same as provisioning).
 // Thin I/O over the pure handler (server/utils/recomputeRequest.ts); the SP writes run on the portal's
 // STORED OAuth token.
 

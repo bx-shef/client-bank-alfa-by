@@ -293,7 +293,13 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `DistributionTab` — секция «Смарт-процессы и распределение». Роут убран из `nitro.prerender.routes`,
   кнопка «Проверить настройки» в `ImportStatusBanner` теперь эмитит `openSettings` (страница
   открывает слайдовер), а не ведёт на удалённый маршрут.
-- **UI-контур распределения (#109 §9.3 #4, admin-only, за feature-gate `DISTRIBUTION_PROVISION_ENABLED`):**
+- **UI-контур распределения (#109 §9.3 #4, admin-only, за feature-gate `DISTRIBUTION_PROVISION_ENABLED`
+  — ⚠ ВЫКЛЮЧЕН по умолчанию, включает ровно значение `1`):** провижининг СОЗДАЁТ смарт-процессы в CRM
+  клиента, а кнопки отката в проде нет (`crm.type.delete` только в dev-скриптах). Раньше гейт был
+  опт-аутом, и кнопка «Настроить смарт-процессы» висела в настройках у каждого установившего портала
+  без предупреждения; выключение было пунктом чек-листа — а пункт, который надо помнить для каждого
+  стенда, это дефект, ждущий единственного раза, когда его забудут. Умолчание совпало с остальными
+  мутирующими переключателями (`autoDistribute`/`CRON_REAL_POLL`/`MANUAL_POLL_ENABLED`).
   `ProvisionSpCard` (кнопка «Настроить смарт-процессы» → `POST /api/distribution/provision`) +
   **`DistributionTab`** (`useDistributionLedger` → `GET /api/distribution/ledger`: карточки платежей
   `DistributionLedgerCard` на **b24ui** с суммой/«осталось»/badge overLimit+requiresRedistribution +

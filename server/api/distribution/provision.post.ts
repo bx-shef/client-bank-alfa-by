@@ -1,7 +1,7 @@
 // POST /api/distribution/provision — provision (create/verify) the two distribution smart processes
 // and persist their entityTypeIds to portal settings (#109, §9.1). Auth = the B24 FRAME access token
 // (Authorization: Bearer) + X-B24-Domain, admin-gated (same model as /api/poll-now). Feature is ON by
-// default at this dev stage (opt OUT with DISTRIBUTION_PROVISION_ENABLED=0) — it CREATES smart
+// OFF by default (enable with DISTRIBUTION_PROVISION_ENABLED=1) — it CREATES smart
 // processes on the portal. Thin I/O over the pure handler (server/utils/provisionRequest.ts).
 
 import { handleProvisionRequest, type ProvisionRequestDeps } from '../../utils/provisionRequest'
@@ -21,7 +21,8 @@ import { SETTINGS_KEY, parsePortalSettings, serializePortalSettings, type Portal
 
 function liveProvisionDeps(): ProvisionRequestDeps {
   return {
-    // App-side gate: default ON at this dev stage (opt OUT with DISTRIBUTION_PROVISION_ENABLED=0).
+    // App-side gate: OFF by default — this creates smart processes in the client's CRM and prod
+    // has no undo, so it is opt-in like every other mutating switch (DISTRIBUTION_PROVISION_ENABLED=1).
     enabled: distributionEnabled(),
     memberIdByDomain: async domain => (await getMemberIdByDomain(dbQuery, domain)) ?? '',
     validateFrame: async (domain, accessToken) => {

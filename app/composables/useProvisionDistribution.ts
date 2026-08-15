@@ -5,7 +5,7 @@ import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/c
 // /api/distribution/provision with the FRAME token (Bearer + X-B24-Domain) — the backend gates on
 // the feature flag + admin, then creates/verifies the SPs on the portal's STORED OAuth token and
 // stores their entityTypeIds in settings. Outside a portal frame there is no token → inert. Mirrors
-// useManualPoll. The feature is OFF unless the owner sets DISTRIBUTION_PROVISION_ENABLED — the UI
+// useManualPoll. The feature is OFF unless the owner sets DISTRIBUTION_PROVISION_ENABLED=1 — the UI
 // surfaces the backend's response (404 disabled / 403 admin / 200 result) rather than hiding it.
 
 export interface ProvisionResponse {
