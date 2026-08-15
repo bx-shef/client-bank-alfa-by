@@ -92,43 +92,55 @@ export function hasConnection(tokens: readonly BankToken[], provider: BankProvid
   return tokens.some(t => t.provider === provider)
 }
 
+/** Ask ONE bank for its account list. Never throws — the failure is the result. */
+async function askProvider(
+  provider: BankProviderId,
+  stored: BankToken,
+  deps: BankSideListDeps
+): Promise<BankSideProviderResult> {
+  const base = deps.apiBase(provider)
+  if (!base) return { provider, accounts: [], error: 'банк не настроен на этом сервере' }
+  try {
+    const fresh = await deps.ensureFresh(stored)
+    const raw = await deps.getJson(accountsUrl(provider, base), fresh.accessToken)
+    const accounts = provider === 'prior-by'
+      // Prior addresses accounts by an opaque id; the IBAN lives in `identification`. A row with
+      // no identification is unusable as a matrix row (nothing to compare against a requisite),
+      // so it is dropped rather than shown as an empty line.
+      ? extractAccounts(raw)
+          .map(a => ({ number: (a.identification ?? '').trim(), currency: a.currency }))
+          .filter(a => a.number)
+      : extractAlfaAccounts(raw)
+    // Tag every row with its bank. The matrix flattens both banks into one list, and an untagged
+    // row could then be offered as the account of the OTHER bank's connection — see the note on
+    // `BankSideAccount.provider`.
+    return { provider, accounts: accounts.map(a => ({ ...a, provider })) }
+  } catch (e) {
+    // The message reaches an admin's screen, so it is sanitised (CRLF/length) — a bank error
+    // body is external text. The Bearer never appears in these messages (the route's `getJson`
+    // keeps the upstream error in `cause`), and we surface `message` only.
+    return { provider, accounts: [], error: sanitizeForLog((e as Error)?.message ?? 'ошибка запроса') }
+  }
+}
+
 /**
  * Ask every connected bank for its account list. Providers the portal has NOT connected are
  * skipped entirely (no row, no error) — «вы не подключали Приор» is not a problem to report.
+ *
+ * ⚠ THE BANKS ARE ASKED IN PARALLEL, and that is a timeout requirement rather than a speed
+ * preference. Sequentially, two connected banks at a 15 s transport timeout add up to 30 s — the
+ * exact ceiling of the standard nginx profile this route runs under. The admin would then get a
+ * bare 504 instead of our own «банк не ответил» line, i.e. lose the very diagnostic the screen
+ * exists to give. In parallel the worst case stays one timeout, whatever the number of banks.
+ * Order is preserved (`Promise.all` over `LISTABLE_PROVIDERS`), so the screen is stable.
  */
 export async function listBankSideAccounts(memberId: string, deps: BankSideListDeps): Promise<BankSideProviderResult[]> {
   const tokens = await deps.tokens(memberId)
-  const out: BankSideProviderResult[] = []
-
-  for (const provider of LISTABLE_PROVIDERS) {
-    const stored = pickToken(tokens, provider)
-    if (!stored) continue
-
-    const base = deps.apiBase(provider)
-    if (!base) {
-      out.push({ provider, accounts: [], error: 'банк не настроен на этом сервере' })
-      continue
-    }
-    try {
-      const fresh = await deps.ensureFresh(stored)
-      const raw = await deps.getJson(accountsUrl(provider, base), fresh.accessToken)
-      const accounts = provider === 'prior-by'
-        // Prior addresses accounts by an opaque id; the IBAN lives in `identification`. A row with
-        // no identification is unusable as a matrix row (nothing to compare against a requisite),
-        // so it is dropped rather than shown as an empty line.
-        ? extractAccounts(raw)
-            .map(a => ({ number: (a.identification ?? '').trim(), currency: a.currency }))
-            .filter(a => a.number)
-        : extractAlfaAccounts(raw)
-      out.push({ provider, accounts })
-    } catch (e) {
-      // The message reaches an admin's screen, so it is sanitised (CRLF/length) — a bank error
-      // body is external text. The Bearer never appears in these messages (`bankFetchError`
-      // keeps it in `cause`), and we surface `message` only.
-      out.push({ provider, accounts: [], error: sanitizeForLog((e as Error)?.message ?? 'ошибка запроса') })
-    }
-  }
-  return out
+  const asks = LISTABLE_PROVIDERS
+    .map(provider => ({ provider, stored: pickToken(tokens, provider) }))
+    .filter((x): x is { provider: BankProviderId, stored: BankToken } => x.stored !== null)
+    .map(({ provider, stored }) => askProvider(provider, stored, deps))
+  return Promise.all(asks)
 }
 
 /** Account keys the portal currently holds a token for, EXCLUDING pending ones — a pending row is

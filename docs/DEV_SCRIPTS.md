@@ -1,6 +1,6 @@
 # Дев-скрипты: разведка, посев, живые прогоны
 
-> Last reviewed: 2026-08-14
+> Last reviewed: 2026-08-15
 
 Скрипты из `package.json`, которые **не** входят в сборку и нужны для работы с живыми API банков и
 тестовым порталом Bitrix24. Вынесены из `CLAUDE.md`, где занимали 130 строк справочника и мешали
@@ -124,11 +124,14 @@
   конверта `{result,…}`) и `--force-refresh` (бэкдейтит истечение → проверяет **refresh+persist**). Креды — в
   git-ignored `.env.b24oauth` (шаблон `.env.b24oauth.example`). Dev-only, не часть SSG.
 - `scripts/todo-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой смоук
-  записи дела (#259)** (настраиваемое дело). Гоняет **тот же** код, что crm-sync:
-  `buildConfigurableActivity`→`writeConfigurableActivityViaRest`→`findActivityByMarker` по OAuth-транспорту
+  записи дела (#259/#495)** (универсальное дело). Гоняет **тот же** код, что crm-sync:
+  `buildTodoActivity`→`writeTodoActivityViaRest`→`findActivityByMarker` по OAuth-транспорту
   (`makePortalSdkCall`, in-memory токен-стор, креды из `.env.b24oauth`). **Dry-run по умолчанию** (печатает
-  params); `--apply` создаёт настраиваемое дело и проверяет **round-trip дедупа** (поиск маркера находит
-  созданное дело). ⚠ Гоняется **обязательно перед выкатом смены носителя** (#495): маркер ставится ВТОРЫМ вызовом, и round-trip «записали → нашли по маркеру» — единственная проверка, что дедуп не сломан. Dev-only.
+  params); `--apply` создаёт дело и проверяет **round-trip дедупа** (поиск маркера находит созданное дело).
+  ⚠ Гоняется **обязательно перед выкатом смены носителя** (#495): `todo.add` маркер не принимает, он ставится
+  ВТОРЫМ вызовом (`crm.activity.update`), и round-trip «записали → нашли по маркеру» — единственная проверка,
+  что дедуп пережил смену носителя. Юнит-тесты этого доказать не могут: они не знают, фильтрует ли портал
+  универсальное дело по `ORIGINATOR_ID`. Dev-only, ПИШЕТ в реальный CRM.
 - `scripts/trigger-register-test.ts` (`pnpm trigger:test` / `--apply`) — **живой смоук регистрации триггера
   автоматизации (#79)**. Гоняет **тот же** билдер, что установка: `buildTriggerRegisterCall(B24_PAYMENT_TRIGGER)`
   → `crm.automation.trigger.add` по OAuth-транспорту (`makePortalSdkCall`, креды `.env.b24oauth`). **Dry-run по

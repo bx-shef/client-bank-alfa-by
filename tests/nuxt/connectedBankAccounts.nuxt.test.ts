@@ -4,6 +4,7 @@ import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import ConnectedBankAccounts from '~/components/ConnectedBankAccounts.vue'
 import { provisionalAccountKey } from '~/utils/bankAccountKey'
+import type { BankSideAccount } from '~/utils/bankAccountMatrix'
 
 // Список подключений (#404) + привязка счёта к подключению, сделанному без него (#407).
 // Проверяется проводка, которую чистые тесты не видят: что «висящее» подключение выглядит как
@@ -139,7 +140,7 @@ describe('ConnectedBankAccounts — выбор счёта из ответа ба
     connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true
   }
 
-  async function mountWithBank(bankAccounts: { number: string, currency?: string }[]) {
+  async function mountWithBank(bankAccounts: BankSideAccount[]) {
     const wrapper = await mountSuspended(ConnectedBankAccounts, { props: { bankAccounts } })
     await flushPromises()
     await nextTick()
@@ -148,7 +149,7 @@ describe('ConnectedBankAccounts — выбор счёта из ответа ба
 
   it('счета банка предлагаются кнопками рядом с ожидающим подключением', async () => {
     listReply.value = [pendingRow]
-    const w = await mountWithBank([{ number: 'BY11ALFA0001', currency: 'BYN' }])
+    const w = await mountWithBank([{ number: 'BY11ALFA0001', currency: 'BYN', provider: 'alfa-by' }])
     const chips = w.find('[data-testid="account-suggestions"]')
     expect(chips.exists()).toBe(true)
     expect(chips.text()).toContain('BY11ALFA0001')
@@ -157,7 +158,7 @@ describe('ConnectedBankAccounts — выбор счёта из ответа ба
 
   it('клик по счёту привязывает ИМЕННО его, отправляя временный ключ', async () => {
     listReply.value = [pendingRow]
-    const w = await mountWithBank([{ number: 'BY11ALFA0001' }])
+    const w = await mountWithBank([{ number: 'BY11ALFA0001', provider: 'alfa-by' }])
     await w.find('[data-testid="account-suggestions"] button').trigger('click')
     await flushPromises()
     const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/set-account')
@@ -172,7 +173,10 @@ describe('ConnectedBankAccounts — выбор счёта из ответа ба
       pendingRow,
       { provider: 'alfa-by', accountKey: 'BY11ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }
     ]
-    const w = await mountWithBank([{ number: 'BY11 ALFA 0001' }, { number: 'BY11ALFA0002' }])
+    const w = await mountWithBank([
+      { number: 'BY11 ALFA 0001', provider: 'alfa-by' },
+      { number: 'BY11ALFA0002', provider: 'alfa-by' }
+    ])
     const chips = w.find('[data-testid="account-suggestions"]')
     // Сравнение нормализованное: то же подключение, записанное с пробелами, — не «ещё один счёт».
     expect(chips.text()).not.toContain('BY11 ALFA 0001')
@@ -182,6 +186,42 @@ describe('ConnectedBankAccounts — выбор счёта из ответа ба
   it('банк не ответил — поле ввода остаётся единственным путём, а не исчезает', async () => {
     listReply.value = [pendingRow]
     const w = await mountWithBank([])
+    expect(w.find('[data-testid="account-suggestions"]').exists()).toBe(false)
+    expect(w.find('[data-testid="pending-alfa-by"] input').exists()).toBe(true)
+  })
+
+  it('счёт ЧУЖОГО банка к выбору не предлагается', async () => {
+    // Портал может держать Альфу и Приор одновременно — это штатно. Без фильтра по банку счёт
+    // Приора попал бы в подсказки альфового подключения, а клик записал бы его в `account_key`
+    // альфовой строки: конфликта нет (уникальность в пределах провайдера), зато дальше этот номер
+    // уходит БУКВАЛЬНО параметром `number=` в запрос выписки Альфы — подключение молча умирает.
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([
+      { number: 'BY11PJCB0001', provider: 'prior-by' },
+      { number: 'BY11ALFA0001', provider: 'alfa-by' }
+    ])
+    const chips = w.find('[data-testid="account-suggestions"]')
+    expect(chips.text()).not.toContain('BY11PJCB0001')
+    expect(chips.text()).toContain('BY11ALFA0001')
+  })
+
+  it('одинаковый номер у разных банков — не «уже привязан»', async () => {
+    // Ключ хранилища — (банк, счёт). Считать номер занятым без учёта банка значило бы спрятать
+    // единственный доступный счёт второго банка.
+    listReply.value = [
+      { ...pendingRow, provider: 'prior-by' },
+      { provider: 'alfa-by', accountKey: 'BY11X0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }
+    ]
+    const w = await mountWithBank([{ number: 'BY11X0001', provider: 'prior-by' }])
+    expect(w.find('[data-testid="account-suggestions"]').text()).toContain('BY11X0001')
+  })
+
+  it('строка банка без метки провайдера к выбору не предлагается — отказ в безопасную сторону', async () => {
+    // Метку ставит сервер. Если она почему-то не доехала (старый бэкенд при разъехавшемся выкате),
+    // предложить такой счёт значило бы, возможно, привязать его не к тому банку. Молчим и
+    // оставляем поле ввода — это неудобно, но не ломает подключение.
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([{ number: 'BY11ALFA0001' }])
     expect(w.find('[data-testid="account-suggestions"]').exists()).toBe(false)
     expect(w.find('[data-testid="pending-alfa-by"] input').exists()).toBe(true)
   })

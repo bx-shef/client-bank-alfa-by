@@ -166,3 +166,51 @@ describe('гейт в точках входа (#493)', () => {
     expect(enqueued).toHaveLength(1)
   })
 })
+
+describe('findMyCompanyAccounts — ровно один счёт на строку реквизита (#494, ревью)', () => {
+  it('оба поля заполнены → берём ОДИН номер, а не два', () => {
+    // BY-порталы заполняют и `RQ_ACC_NUM`, и `RQ_IIK` — это один физический счёт. Раньше он попадал
+    // в список дважды, и на экране сверки вторая копия неизбежно оказывалась «банк его не отдаёт».
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push([method, params])
+      if (method === 'crm.item.list') return { result: { items: [{ id: 7 }] } }
+      if (method === 'crm.requisite.list') return { result: [{ ID: 100, ENTITY_ID: 7 }] }
+      return { result: [{ ENTITY_ID: 100, RQ_ACC_NUM: 'BY00BANK0001', RQ_IIK: 'BY00BANK0001' }] }
+    }
+    return findMyCompanyAccounts(call).then((out) => {
+      expect(out).toEqual([{ companyId: '7', accounts: ['BY00BANK0001'] }])
+    })
+  })
+
+  it('заполнен только RQ_IIK → он и берётся (фолбэк, как при поиске)', async () => {
+    const call = async (method: string) => {
+      if (method === 'crm.item.list') return { result: { items: [{ id: 7 }] } }
+      if (method === 'crm.requisite.list') return { result: [{ ID: 100, ENTITY_ID: 7 }] }
+      return { result: [{ ENTITY_ID: 100, RQ_ACC_NUM: '', RQ_IIK: 'BY00BANK0002' }] }
+    }
+    expect(await findMyCompanyAccounts(call)).toEqual([{ companyId: '7', accounts: ['BY00BANK0002'] }])
+  })
+
+  it('номер отдаётся ДОСЛОВНО — краевой пробел не срезается', async () => {
+    // Он и есть та поломка, которую экран сверки обязан показать: в CRM пробел лежит, а поиск
+    // сравнивает посимвольно. Срезав его здесь, мы бы отчитались «сопоставлено» на сломанном
+    // портале — тот самый зелёный флажок, который хуже отсутствия проверки.
+    const call = async (method: string) => {
+      if (method === 'crm.item.list') return { result: { items: [{ id: 7 }] } }
+      if (method === 'crm.requisite.list') return { result: [{ ID: 100, ENTITY_ID: 7 }] }
+      return { result: [{ ENTITY_ID: 100, RQ_ACC_NUM: ' BY00BANK0001' }] }
+    }
+    const out = await findMyCompanyAccounts(call)
+    expect(out[0]?.accounts).toEqual([' BY00BANK0001'])
+  })
+
+  it('поле из одних пробелов считается пустым и уходит в фолбэк', async () => {
+    const call = async (method: string) => {
+      if (method === 'crm.item.list') return { result: { items: [{ id: 7 }] } }
+      if (method === 'crm.requisite.list') return { result: [{ ID: 100, ENTITY_ID: 7 }] }
+      return { result: [{ ENTITY_ID: 100, RQ_ACC_NUM: '   ', RQ_IIK: 'BY00BANK0003' }] }
+    }
+    expect((await findMyCompanyAccounts(call))[0]?.accounts).toEqual(['BY00BANK0003'])
+  })
+})

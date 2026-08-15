@@ -16,6 +16,8 @@
 // because it converts an unanswered question into a wrong answer. Hence `looks-same` is its OWN
 // state, never folded into `matched`.
 
+import type { BankProviderId } from '~/types/statement'
+
 /** How the statement side is normalised before the CRM search — the SAME rule as
  *  `normalizeAccount` in `server/utils/companyLookup.ts`, duplicated here because this module must
  *  stay free of server imports (it renders in the browser). Kept in sync by a test that imports
@@ -29,6 +31,15 @@ export interface BankSideAccount {
   /** The number as the bank returns it (IBAN for both our banks). */
   number: string
   currency?: string
+  /**
+   * WHICH bank reported it. Not decoration — a portal may hold Alfa and Prior at once (that is the
+   * designed behaviour), and an untagged list would let a Prior IBAN be offered as the account of
+   * an Alfa connection. `account_key` is used LITERALLY as the `number=` parameter of Alfa's own
+   * statement call, so accepting that suggestion would key the connection with a number Alfa has
+   * never heard of and silently kill its polling — with no conflict raised, because the uniqueness
+   * check is scoped per provider.
+   */
+  provider?: BankProviderId
 }
 
 /** One account as CRM stores it, with its owning company. */
@@ -89,7 +100,15 @@ export function buildAccountMatrix(input: MatrixInput): MatrixRow[] {
     }
     usedBank.add(norm)
     // Byte-identical is the ONLY thing the CRM search will match. Anything else is a trap.
-    const exact = c.number.trim() === bank.number.trim()
+    //
+    // ⚠ NO `.trim()` HERE, and that is the whole point. A requisite pasted as ` BY00BANK0001`
+    // (leading space — the same class of slip as the internal ones) is stored with that space, and
+    // `crm.requisite.bankdetail.list` will not find it. Trimming before comparing would paint the
+    // row green while the import stayed broken — the exact false answer this state exists to
+    // prevent, just reached from the other end. `findMyCompanyAccounts` keeps the raw value for the
+    // same reason; the bank side is edge-trimmed because a bank's padding is transport noise, not
+    // something stored in anyone's CRM.
+    const exact = c.number === bank.number
     rows.push({ state: exact ? 'matched' : 'looks-same', crm: c, bank, connected: isConnected(bank.number) })
   }
 

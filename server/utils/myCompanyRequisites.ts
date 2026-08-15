@@ -85,12 +85,22 @@ export async function findMyCompanyAccounts(call: RestCall): Promise<MyCompanyAc
   for (const d of bank) {
     const companyId = owner.get(`${d?.ENTITY_ID ?? ''}`)
     if (!companyId) continue
-    // Both fields are checked because Belarusian portals fill one or the other — the same
-    // either/or `companyLookup` walks when searching (`RQ_ACC_NUM` → `RQ_IIK` fallback).
-    for (const field of ['RQ_ACC_NUM', 'RQ_IIK'] as const) {
-      const v = `${d?.[field] ?? ''}`.trim()
-      if (v) out.get(companyId)?.accounts.push(v)
-    }
+    // Both fields are checked because Belarusian portals fill one or the other — the SAME
+    // either/or `companyLookup` walks when searching (`RQ_ACC_NUM` → `RQ_IIK` fallback), and it is
+    // a fallback there, so it is a fallback here: one bank detail row is ONE account. Pushing both
+    // when both are filled (which BY portals do) would put the same physical account on the
+    // reconciliation screen twice, once of them inevitably as «банк его не отдаёт».
+    //
+    // ⚠ THE VALUE IS PUSHED UNTRIMMED. Trimming is only how we ask «is this field filled». A
+    // requisite pasted as ` BY00BANK0001` keeps that space in CRM, and the search compares the
+    // stored value byte for byte — so stripping it here would let the matrix report «сопоставлено»
+    // for an account the import cannot find. That is the green-check-on-a-broken-portal outcome
+    // this module's header calls worse than no check at all, and it is reached precisely by being
+    // helpful.
+    const raw = [d?.RQ_ACC_NUM, d?.RQ_IIK]
+      .map(v => `${v ?? ''}`)
+      .find(v => v.trim() !== '')
+    if (raw !== undefined) out.get(companyId)?.accounts.push(raw)
   }
   return [...out.values()]
 }

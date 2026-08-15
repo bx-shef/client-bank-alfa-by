@@ -25,13 +25,29 @@ const emit = defineEmits<{ changed: [] }>()
 
 const { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey } = useBankAccounts()
 
-/** Номера, которые уже привязаны, — предлагать их к выбору незачем (сервер всё равно ответит 409). */
+/** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
+ *  провайдера: один и тот же номер у разных банков это разные строки хранилища. */
 const takenKeys = computed(() => new Set(
-  accounts.value.filter(a => !isPendingAccountKey(a.accountKey)).map(a => normalizeForCompare(a.accountKey))
+  accounts.value
+    .filter(a => !isPendingAccountKey(a.accountKey))
+    .map(a => `${a.provider}|${normalizeForCompare(a.accountKey)}`)
 ))
 
-/** Что предложить для ожидающего подключения: счета банка, ещё не привязанные ни к одной строке. */
-const suggestions = computed(() => props.bankAccounts.filter(b => !takenKeys.value.has(normalizeForCompare(b.number))))
+/**
+ * Что предложить ожидающему подключению: счета ТОГО ЖЕ банка, ещё не привязанные.
+ *
+ * ⚠ Фильтр по банку обязателен. Портал может держать Альфу и Приор одновременно — это штатно, — а
+ * сверка складывает обе стороны в один список. Без фильтра счёт Приора предлагался бы к выбору для
+ * подключения Альфы, и клик по нему записал бы его в `account_key` альфовой строки. Конфликта не
+ * возникло бы: уникальность проверяется в пределах провайдера. А дальше `account_key` уходит
+ * БУКВАЛЬНО параметром `number=` в запрос выписки Альфы — то есть подключение молча перестало бы
+ * работать, и выглядело бы это как «банк ничего не отдаёт».
+ */
+function suggestionsFor(a: ConnectedBankAccount) {
+  return props.bankAccounts.filter(b =>
+    b.provider === a.provider && !takenKeys.value.has(`${a.provider}|${normalizeForCompare(b.number)}`)
+  )
+}
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
@@ -170,13 +186,13 @@ defineExpose({ reload: load })
               <!-- Счета, которые назвал сам банк (#494): один клик вместо перепечатывания IBAN.
                    Показываем ТОЛЬКО когда банк ответил — иначе остаётся поле ниже. -->
               <div
-                v-if="suggestions.length"
+                v-if="suggestionsFor(a).length"
                 class="flex w-full flex-wrap items-center gap-2"
                 data-testid="account-suggestions"
               >
                 <span class="text-xs text-(--ui-color-base-3)">Банк отдал:</span>
                 <B24Button
-                  v-for="s in suggestions"
+                  v-for="s in suggestionsFor(a)"
                   :key="s.number"
                   :label="s.currency ? `${s.number} · ${s.currency}` : s.number"
                   :aria-label="`Выбрать счёт ${s.number}`"

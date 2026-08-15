@@ -83,3 +83,37 @@ describe('правило сравнения не должно разъехать
     }
   })
 })
+
+describe('пробел по краям реквизита — тоже ловушка (#494, ревью)', () => {
+  it('реквизит с ведущим пробелом — «записан иначе», а НЕ «сопоставлено»', () => {
+    // Ровно тот же класс ошибки, что внутренние пробелы: в CRM пробел сохраняется, а поиск
+    // сравнивает посимвольно. Причесать края перед сравнением значило бы покрасить строку зелёным
+    // на портале, где импорт не работает, — ложный ответ вместо неотвеченного вопроса.
+    const rows = buildAccountMatrix({
+      crm: [{ companyId: '7', number: ' BY00BANK0001' }],
+      bank: [{ number: 'BY00BANK0001' }],
+      connectedKeys: []
+    })
+    expect(rows[0]?.state).toBe('looks-same')
+  })
+
+  it('хвостовой пробел — так же', () => {
+    const rows = buildAccountMatrix({
+      crm: [{ companyId: '7', number: 'BY00BANK0001 ' }],
+      bank: [{ number: 'BY00BANK0001' }],
+      connectedKeys: []
+    })
+    expect(rows[0]?.state).toBe('looks-same')
+  })
+
+  it('банк отдал номер с краевым пробелом — это транспортный шум, строку он не ломает', () => {
+    // Сторона банка обрезается по краям при извлечении (`extractAlfaAccounts`): у банка это
+    // форматирование ответа, а не то, что лежит у кого-то в реквизитах.
+    const rows = buildAccountMatrix({
+      crm: [{ companyId: '7', number: 'BY00BANK0001' }],
+      bank: [{ number: 'BY00BANK0001' }],
+      connectedKeys: []
+    })
+    expect(rows[0]?.state).toBe('matched')
+  })
+})

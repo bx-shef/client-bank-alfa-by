@@ -129,7 +129,7 @@ describe('listBankSideAccounts', () => {
     const out = await listBankSideAccounts('M1', deps({
       getJson: async () => ({ accounts: [{ number: 'BY11ALFA0001', currIso: 'BYN' }] })
     }))
-    expect(out).toEqual([{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001', currency: 'BYN' }] }])
+    expect(out).toEqual([{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001', currency: 'BYN', provider: 'alfa-by' }] }])
   })
 
   it('maps Prior rows through `identification`, dropping ones without an IBAN', async () => {
@@ -144,7 +144,7 @@ describe('listBankSideAccounts', () => {
         }
       })
     }))
-    expect(out).toEqual([{ provider: 'prior-by', accounts: [{ number: 'BY11PJCB0001', currency: 'BYN' }] }])
+    expect(out).toEqual([{ provider: 'prior-by', accounts: [{ number: 'BY11PJCB0001', currency: 'BYN', provider: 'prior-by' }] }])
   })
 
   it('fails SOFT per provider: a bank error does not blank the other bank', async () => {
@@ -158,9 +158,10 @@ describe('listBankSideAccounts', () => {
         return { data: { account: [{ accountId: 'x', accountDetails: { identification: 'BY11PJCB0001' } }] } }
       }
     }))
-    expect(calls).toEqual(['alfa-by', 'prior-by'])
+    // Оба банка спрошены; порядок в `calls` не утверждаем — запросы идут параллельно.
+    expect([...calls].sort()).toEqual(['alfa-by', 'prior-by'])
     expect(out[0]).toEqual({ provider: 'alfa-by', accounts: [], error: 'банк не ответил (503)' })
-    expect(out[1]?.accounts).toEqual([{ number: 'BY11PJCB0001', currency: undefined }])
+    expect(out[1]?.accounts).toEqual([{ number: 'BY11PJCB0001', currency: undefined, provider: 'prior-by' }])
   })
 
   it('reports an unconfigured provider without touching the network', async () => {
@@ -210,5 +211,59 @@ describe('listBankSideAccounts', () => {
 
   it('never lists `manual` — it has no API', () => {
     expect(LISTABLE_PROVIDERS).not.toContain('manual')
+  })
+})
+
+describe('listBankSideAccounts — банк на каждой строке и параллельный опрос (ревью #494)', () => {
+  it('каждая строка помечена своим банком', async () => {
+    const out = await listBankSideAccounts('M1', deps({
+      getJson: async () => ({ accounts: [{ number: 'BY11ALFA0001' }] })
+    }))
+    expect(out[0]?.accounts[0]?.provider).toBe('alfa-by')
+  })
+
+  it('метка банка ставится и для Приора — без неё его счёт предложили бы к подключению Альфы', async () => {
+    const out = await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'prior-by' })],
+      getJson: async () => ({ data: { account: [{ accountId: 'x', accountDetails: { identification: 'BY11PJCB0001' } }] } })
+    }))
+    expect(out[0]?.accounts[0]?.provider).toBe('prior-by')
+  })
+
+  it('банки опрашиваются ПАРАЛЛЕЛЬНО — последовательно два таймаута перевалили бы за потолок nginx', async () => {
+    let inFlight = 0
+    let peak = 0
+    await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'alfa-by' }), token({ provider: 'prior-by' })],
+      getJson: async () => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise(r => setTimeout(r, 5))
+        inFlight -= 1
+        return { accounts: [] }
+      }
+    }))
+    expect(peak).toBe(2)
+  })
+
+  it('порядок провайдеров стабилен, несмотря на параллельность — экран не должен прыгать', async () => {
+    const out = await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'prior-by' }), token({ provider: 'alfa-by' })],
+      getJson: async (url) => {
+        // Приор отвечает медленнее — порядок всё равно обязан идти по LISTABLE_PROVIDERS.
+        if (!url.includes('partner')) await new Promise(r => setTimeout(r, 10))
+        return { accounts: [] }
+      }
+    }))
+    expect(out.map(p => p.provider)).toEqual(['alfa-by', 'prior-by'])
+  })
+
+  it('падение обновления токена (протухший грант) тоже мягкое — самый вероятный отказ этого экрана', async () => {
+    const out = await listBankSideAccounts('M1', deps({
+      ensureFresh: async () => {
+        throw new Error('invalid_grant')
+      }
+    }))
+    expect(out[0]).toMatchObject({ provider: 'alfa-by', accounts: [], error: 'invalid_grant' })
   })
 })

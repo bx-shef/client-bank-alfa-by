@@ -598,7 +598,7 @@ export async function handleCrmSyncJob(
       continue
     }
     // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE
-    // writeActivity (configurable.add), so a redelivery's getActivityId finds it — no separate
+    // writeActivity (todo.add + marker update, #495), so a redelivery's getActivityId finds it — no separate
     // remember step, and no write→remember gap to lose.
     // Error-chat notice (ambiguous/manual allocation), deferred from the allocation block so it
     // sits AFTER the marker write: a redelivery is `continue`d at the top gate before reaching

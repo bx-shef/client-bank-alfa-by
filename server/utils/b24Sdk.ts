@@ -258,7 +258,7 @@ export const FRAME_TOKEN_REJECTED = 'invalid_token: frame access token cannot be
  *  ~2 req/s is shared across buckets, and a residual QUERY_LIMIT_EXCEEDED then escalates to a
  *  (idempotent) BullMQ job retry instead of an in-SDK backoff),
  *  but `maxRetries:1` (one attempt, no retry) + `retryOnNetworkError:false`: a crm-sync job
- *  issues NON-IDEMPOTENT writes (`crm.activity.configurable.add`, and the allocation mutations),
+ *  issues NON-IDEMPOTENT writes (`crm.activity.todo.add`, and the allocation mutations),
  *  and ANY in-SDK retry — after a client timeout OR a server 5xx, where the request may have
  *  already COMMITTED — would silently DUPLICATE the entity (Bitrix does not enforce
  *  originId/xmlId uniqueness, so the marker wouldn't stop a second row within one call). We let

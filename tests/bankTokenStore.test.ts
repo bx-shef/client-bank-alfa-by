@@ -150,6 +150,12 @@ describe('renameBankTokenAccount', () => {
     expect(update.sql).toMatch(/UPDATE bank_tokens/i)
     expect(update.sql).toMatch(/member_id = \$1 AND provider = \$2 AND account_key = \$3/i)
     expect(update.params).toEqual(['m1', 'alfa-by', '~pending:n1', 'BY01'])
+    // ⚠ SET-часть тоже под охраной: `updated_at = now()` здесь — регрессия #488. Эта колонка
+    // означает «когда мы последний раз держали свежую пару токенов», и по ней keep-alive решает,
+    // кого обновлять. Переименование счёта токенов не трогает, но перевело бы часы вперёд — и
+    // подключение, которому пора обновляться, тихо выпало бы из выборки до самой смерти гранта.
+    // Проверяем САМ запрос: «для единообразия» возвращённый `now()` прошёл бы прежний тест зелёным.
+    expect(update.sql).not.toMatch(/updated_at/i)
   })
 
   it('занятый номер → conflict, и UPDATE вообще не выполняется', async () => {

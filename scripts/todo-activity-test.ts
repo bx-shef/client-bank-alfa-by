@@ -75,7 +75,7 @@ const deps: SdkPortalDeps = {
 }
 
 async function main() {
-  head(`todo.add (#259 Phase B) · портал ${domain} · ${apply ? 'APPLY' : 'DRY-RUN'}`)
+  head(`todo.add (#495, дедуп #259) · портал ${domain} · ${apply ? 'APPLY' : 'DRY-RUN'}`)
   const params = buildTodoActivity(item, { id: Number(companyId || 0) })
   const originId = activityOriginId(item)
   console.log(`${C.dim}маркер: ORIGINATOR_ID=${ACTIVITY_ORIGINATOR_ID} · ORIGIN_ID=${originId}${C.reset}`)
@@ -105,10 +105,10 @@ async function main() {
   if (!before) {
     createdId = await writeTodoActivityViaRest(item, companyId, call)
     if (!createdId) {
-      err('todo.add не вернул id (проверь layout/права/OAuth-контекст)')
+      err('todo.add не вернул id (проверь права/контекст приложения)')
       process.exit(1)
     }
-    ok(`создано настраиваемое дело #${createdId} (компания ${companyId})`)
+    ok(`создано дело #${createdId} (компания ${companyId})`)
   }
 
   // 3) post-search: the marker must now find exactly our activity (dedup round-trip).

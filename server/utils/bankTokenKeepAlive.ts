@@ -27,16 +27,16 @@
 //      scan and counted separately — that count is the thing worth showing an admin.
 
 import type { BankProviderId } from '../../app/types/statement'
-import { BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
+import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 import { sanitizeForLog } from './logSanitize'
 
 const HOUR_MS = 3_600_000
 
-// ⚠ Сроки жизни и полоса обновления живут в `app/utils/bankTokenLifetime.ts`, а не здесь: этими же
-// числами интерфейс настроек решает, что показать администратору. Разъехавшись, они дали бы ровно
-// ту беду, ради которой всё писалось, — зелёную строку на подключении, которое сервер уже похоронил.
-export { BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs }
+// ⚠ Lifetimes and the renew band live in `app/utils/bankTokenLifetime.ts`, not here: the settings
+// UI decides what to show an admin from the SAME numbers. Let them drift and you get exactly the
+// failure this module was written for — a calm green row on a connection the server already buried.
+export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs }
 
 /** Max accounts refreshed per run — bounds the burst against the bank's OAuth endpoint the same
  *  way the portal keep-alive bounds Bitrix. Deliberately generous relative to `bank_tokens`
@@ -89,6 +89,11 @@ export interface BankKeepAliveSelection {
   unrefreshable: BankAccountRef[]
   /** Connections already past their whole lifetime — refreshing them cannot succeed. */
   expired: BankAccountRef[]
+  /** TRUE only if the cap actually dropped someone. Inferring it from `due.length === cap` cried
+   *  wolf on the boundary: exactly-cap accounts due is a full batch handled in full, not a batch
+   *  that lost work — and a warning that fires when nothing is wrong is how warnings stop being
+   *  read. */
+  truncated: boolean
 }
 
 /**
@@ -116,6 +121,12 @@ export interface BankKeepAliveSelection {
  * lifetime is therefore reported as `expired` instead: it cannot succeed, so retrying it is
  * indistinguishable from hammering. (The portal twin bounds its window for exactly this reason,
  * `tokenKeepAlive.ts`.)
+ *
+ * ⚠ THAT FLOOR APPLIES ONLY TO A MEASURED LIFETIME (`BANK_REFRESH_TTL_MEASURED`). On a guessed one
+ * it would be a floor built on a number nobody verified: too short a guess would stop renewing a
+ * living connection, and — because the UI refuses to say «expired» on a guess — do it while the
+ * badge still reads a reassuring «скоро обновим». Guessed providers therefore keep being retried;
+ * the bank is the authority on whether the grant is gone.
  */
 export function selectBankAccountsNearExpiry(
   rows: readonly BankAccountInfo[],
@@ -126,6 +137,7 @@ export function selectBankAccountsNearExpiry(
   const due: BankAccountRef[] = []
   const unrefreshable: BankAccountRef[] = []
   const expired: BankAccountRef[] = []
+  let truncated = false
   const ordered = [...rows].sort((a, b) => a.connectedAt - b.connectedAt)
   for (const row of ordered) {
     const ref: BankAccountRef = { memberId: row.memberId, provider: row.provider, accountKey: row.accountKey }
@@ -138,13 +150,26 @@ export function selectBankAccountsNearExpiry(
     const ttlMs = (BANK_REFRESH_TTL_SEC[row.provider] ?? 0) * 1000
     const age = nowMs - row.connectedAt
     if (!Number.isFinite(age)) continue // unparsable timestamp → skip rather than refresh blindly
-    if (age >= ttlMs) {
+    // ⚠ «Past its lifetime» is only sayable about a MEASURED lifetime — the same rule the UI
+    // follows (`connectionHealth`), and it has to be the same rule or the two disagree in the worst
+    // possible direction. Prior's figure is a conservative GUESS; if it is too short, burying the
+    // row here stops renewing a connection that is perfectly alive, while the badge keeps saying a
+    // calm «скоро обновим» because the UI refuses to declare death on a guess. That is precisely
+    // the split this pair of modules exists to prevent, arrived at from the server side.
+    //
+    // On a guessed lifetime we therefore keep TRYING: the bank is the authority. If the grant is
+    // really gone the refresh fails, `hasRefresh`/the error path make it honest by fact, and the
+    // floor that protects us from hammering a revoked grant is restored the moment the figure is
+    // measured — or replaced by the consent's own `expirationDate` (#503).
+    if (age >= ttlMs && BANK_REFRESH_TTL_MEASURED[row.provider]) {
       expired.push(ref)
       continue
     }
-    if (age >= threshold && due.length < limit) due.push(ref)
+    if (age < threshold) continue
+    if (due.length < limit) due.push(ref)
+    else truncated = true
   }
-  return { due, unrefreshable, expired }
+  return { due, unrefreshable, expired, truncated }
 }
 
 /** Injected side-effects, so the orchestrator unit-tests without a DB or a bank. */
@@ -197,13 +222,13 @@ function logSafeKey(v: string): string {
  */
 export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKeepAliveSummary> {
   const rows = await deps.listAccounts()
-  const { due, unrefreshable, expired } = selectBankAccountsNearExpiry(rows, deps.now())
+  const { due, unrefreshable, expired, truncated } = selectBankAccountsNearExpiry(rows, deps.now())
   const s: BankKeepAliveSummary = {
     selected: due.length, refreshed: 0, skipped: 0, failed: 0,
     unrefreshable: unrefreshable.length, expired: expired.length
   }
-  if (due.length >= MAX_BANK_KEEP_ALIVE_BATCH) {
-    deps.warn?.(`[bank-keepalive] batch saturated (${due.length} ≥ cap ${MAX_BANK_KEEP_ALIVE_BATCH}) — some connections may expire before the next run`)
+  if (truncated) {
+    deps.warn?.(`[bank-keepalive] batch saturated (cap ${MAX_BANK_KEEP_ALIVE_BATCH}) — connections were left for the next run and some may expire first`)
   }
   for (const ref of due) {
     try {

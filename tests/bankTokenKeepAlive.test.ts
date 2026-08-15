@@ -6,6 +6,7 @@ import {
   narrowestBandMs, refreshAtAgeMs, runBankKeepAlive,
   selectBankAccountsNearExpiry, type BankKeepAliveDeps
 } from '../server/utils/bankTokenKeepAlive'
+import { connectionHealth } from '../app/utils/bankTokenLifetime'
 
 // Мотив, а не только предмет: подключение Альфы, давшее первые 208 боевых операций, умерло за
 // ~16 часов — refresh банка живёт ~10 ч, а обновлял его только сам опрос по дороге (#488).
@@ -202,11 +203,27 @@ describe('runBankKeepAlive', () => {
   })
 
   it('насыщение батча слышно — иначе часть подключений тихо не успела бы', async () => {
-    const rows = Array.from({ length: MAX_BANK_KEEP_ALIVE_BATCH }, (_, i) =>
+    const rows = Array.from({ length: MAX_BANK_KEEP_ALIVE_BATCH + 1 }, (_, i) =>
       acc({ accountKey: `A${i}`, connectedAt: NOW - 9 * HOUR }))
     const { d, warn } = deps({ listAccounts: async () => rows })
     await runBankKeepAlive(d)
     expect(warn.some(w => w.includes('saturated'))).toBe(true)
+  })
+
+  it('РОВНО потолок подключений — тревоги нет: полный батч обработан целиком, никто не потерян', () => {
+    // Прежде тревога выводилась из `due.length === cap` и на границе кричала впустую. Предупреждение,
+    // срабатывающее когда всё в порядке, — это способ отучить от предупреждений вообще.
+    const rows = Array.from({ length: MAX_BANK_KEEP_ALIVE_BATCH }, (_, i) =>
+      acc({ accountKey: `A${i}`, connectedAt: NOW - 9 * HOUR }))
+    expect(selectBankAccountsNearExpiry(rows, NOW).truncated).toBe(false)
+  })
+
+  it('на одного больше потолка — усечение честно объявлено', () => {
+    const rows = Array.from({ length: MAX_BANK_KEEP_ALIVE_BATCH + 1 }, (_, i) =>
+      acc({ accountKey: `A${i}`, connectedAt: NOW - 9 * HOUR }))
+    const sel = selectBankAccountsNearExpiry(rows, NOW)
+    expect(sel.truncated).toBe(true)
+    expect(sel.due).toHaveLength(MAX_BANK_KEEP_ALIVE_BATCH)
   })
 })
 
@@ -275,3 +292,40 @@ describe('проводка в кроне', () => {
 })
 
 vi.mock('node:crypto', async orig => orig())
+
+describe('угаданный срок жизни не хоронит подключение (ревью #489)', () => {
+  // Для Приора срок — консервативная ДОГАДКА (`BANK_REFRESH_TTL_MEASURED['prior-by'] === false`).
+  // Интерфейс на догадке «истекло» не говорит принципиально; сервер обязан судить так же, иначе
+  // расхождение выходит в худшую сторону: обновлять перестали, а бейдж спокойно пишет «скоро
+  // обновим», и подключение умирает молча — ровно то, ради чего писался весь модуль.
+  const NOW = 1_700_000_000_000
+  const row = (provider: 'alfa-by' | 'prior-by', ageMs: number) => ({
+    memberId: 'M', provider, accountKey: 'BY1',
+    connectedAt: NOW - ageMs, expiresAt: NOW, hasRefresh: true
+  })
+
+  it('Приор старше своего УГАДАННОГО срока — остаётся в очереди на обновление, не в «истекло»', () => {
+    const ttlMs = BANK_REFRESH_TTL_SEC['prior-by'] * 1000
+    const sel = selectBankAccountsNearExpiry([row('prior-by', ttlMs + 60_000)], NOW)
+    expect(sel.expired).toHaveLength(0)
+    expect(sel.due).toHaveLength(1)
+  })
+
+  it('Альфа старше своего ИЗМЕРЕННОГО срока — по-прежнему «истекло», пол против долбёжки на месте', () => {
+    const ttlMs = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+    const sel = selectBankAccountsNearExpiry([row('alfa-by', ttlMs + 60_000)], NOW)
+    expect(sel.expired).toHaveLength(1)
+    expect(sel.due).toHaveLength(0)
+  })
+
+  it('решение сервера и подпись в интерфейсе не расходятся ни для одного банка', () => {
+    // Инвариант, а не пример: «сервер похоронил» обязано совпадать с «интерфейс говорит истекло».
+    for (const provider of ['alfa-by', 'prior-by'] as const) {
+      const ttlMs = BANK_REFRESH_TTL_SEC[provider] * 1000
+      const conn = row(provider, ttlMs + 60_000)
+      const serverBuried = selectBankAccountsNearExpiry([conn], NOW).expired.length > 0
+      const uiSaysExpired = connectionHealth(conn, NOW) === 'expired'
+      expect(serverBuried).toBe(uiSaysExpired)
+    }
+  })
+})
