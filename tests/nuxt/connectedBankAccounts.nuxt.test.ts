@@ -129,3 +129,60 @@ describe('ConnectedBankAccounts — состояние подключения (#
     expect(hint).toContain('интернет-банк')
   })
 })
+
+describe('ConnectedBankAccounts — выбор счёта из ответа банка (#494)', () => {
+  // Раньше номер счёта надо было ПЕРЕПЕЧАТАТЬ (28 знаков IBAN), и опечатка не давала никакой
+  // ошибки: опрос шёл по номеру, которого у банка нет, а операции не приземлялись. Банк сам
+  // называет свои счета — значит выбор должен быть кликом.
+  const pendingRow = {
+    provider: 'alfa-by', accountKey: PENDING,
+    connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true
+  }
+
+  async function mountWithBank(bankAccounts: { number: string, currency?: string }[]) {
+    const wrapper = await mountSuspended(ConnectedBankAccounts, { props: { bankAccounts } })
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('счета банка предлагаются кнопками рядом с ожидающим подключением', async () => {
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([{ number: 'BY11ALFA0001', currency: 'BYN' }])
+    const chips = w.find('[data-testid="account-suggestions"]')
+    expect(chips.exists()).toBe(true)
+    expect(chips.text()).toContain('BY11ALFA0001')
+    expect(chips.text()).toContain('BYN')
+  })
+
+  it('клик по счёту привязывает ИМЕННО его, отправляя временный ключ', async () => {
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([{ number: 'BY11ALFA0001' }])
+    await w.find('[data-testid="account-suggestions"] button').trigger('click')
+    await flushPromises()
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/set-account')
+    expect(call).toBeTruthy()
+    expect((call?.[1] as { body: Record<string, string> }).body).toMatchObject({
+      provider: 'alfa-by', pendingKey: PENDING, accountKey: 'BY11ALFA0001'
+    })
+  })
+
+  it('уже привязанный счёт повторно не предлагается — сервер ответил бы 409', async () => {
+    listReply.value = [
+      pendingRow,
+      { provider: 'alfa-by', accountKey: 'BY11ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }
+    ]
+    const w = await mountWithBank([{ number: 'BY11 ALFA 0001' }, { number: 'BY11ALFA0002' }])
+    const chips = w.find('[data-testid="account-suggestions"]')
+    // Сравнение нормализованное: то же подключение, записанное с пробелами, — не «ещё один счёт».
+    expect(chips.text()).not.toContain('BY11 ALFA 0001')
+    expect(chips.text()).toContain('BY11ALFA0002')
+  })
+
+  it('банк не ответил — поле ввода остаётся единственным путём, а не исчезает', async () => {
+    listReply.value = [pendingRow]
+    const w = await mountWithBank([])
+    expect(w.find('[data-testid="account-suggestions"]').exists()).toBe(false)
+    expect(w.find('[data-testid="pending-alfa-by"] input').exists()).toBe(true)
+  })
+})

@@ -1,6 +1,6 @@
 # Реестр методов Bitrix24 REST (что и где используем)
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-15
 
 Единый учёт **всех** вызовов Bitrix24 REST в приложении: метод, его **версия/поколение**,
 scope, транспорт (фрейм-SDK или серверный OAuth), файл-владелец, можно ли батчить, статус
@@ -46,8 +46,8 @@ scope, транспорт (фрейм-SDK или серверный OAuth), фа
 |-------|-----------|-------|---------------|------|-----------------|------------|
 | `app.option.get` | classic | — (app) | `server/utils/appSettings.ts`, `settingsHandler.ts` | да | актуален | Чтение настроек приложения (per-portal, per-app KV). |
 | `app.option.set` | classic | — (app) | `settingsHandler.ts` | да | актуален | Запись настроек приложения (чат-настройки под `SETTINGS_KEY`, #16). **Admin-only (#182):** `handleWriteSetting` гейтит на `profile.ADMIN` (`verifyFrameAdmin`) до записи. |
-| `crm.requisite.bankdetail.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Поиск реквизитов по счёту контрагента (`RQ_ACC_NUM`→`RQ_IIK`). |
-| `crm.requisite.list` | classic | `crm` | `server/utils/companyLookup.ts` | да | актуален | Реквизит → компания (`ENTITY_TYPE_ID=4`). |
+| `crm.requisite.bankdetail.list` | classic | `crm` | `server/utils/{companyLookup,myCompanyRequisites}.ts` | да | актуален | Поиск реквизитов по счёту контрагента (`RQ_ACC_NUM`→`RQ_IIK`); обратный ход — счета «моих компаний» для предусловия #493 и сверки #494. |
+| `crm.requisite.list` | classic | `crm` | `server/utils/{companyLookup,myCompanyRequisites}.ts` | да | актуален | Реквизит → компания (`ENTITY_TYPE_ID=4`) и компания → её реквизиты (фильтр `ENTITY_ID`). |
 | `crm.item.list` | classic | `crm` | `server/utils/{invoiceLookup,companyLookup,itemByIdLookup,paymentLookup}.ts` | да | актуален | Поиск смарт-счёта (`entityTypeId=31`) по номеру+компании (#109); фильтр «моей» компании (`entityTypeId=4`, `isMyCompany='Y'`, Этап C); резолв цели **по id+компании** (IDOR-скоуп, `itemByIdLookup`; стратегия `by-id`: invoice-id/deal-id/smart-id); **сделки компании** (`entityTypeId=2`, фильтр `companyId`) для company-пула оплат (`paymentLookup.findCompanyDealPayments`). Поля подтверждены на живом портале. |
 | `crm.status.list` | classic | `crm` | `server/utils/stageLoader.ts` | да | актуален | Справочник стадий → множество «отрицательных» (`SEMANTICS='F'`/`EXTRA.SEMANTICS='failure'`) для фильтра целей (#109). `ENTITY_ID`: инвойс `SMART_INVOICE_STAGE_<catId>`, сделка `DEAL_STAGE`(воронка 0)/`DEAL_STAGE_<catId>`, смарт-процесс `DYNAMIC_<etid>_STAGE_<catId>` (всегда с реальным id категории). Подтверждено вживую: инвойс `DT31_11:D`, сделка `LOSE`/`APOLOGY`, смарт-процесс `DT1032_67:FAIL`. |
 | `crm.category.list` | classic | `crm` | `server/utils/negativeStages.ts` | да | актуален | Список воронок (категорий) типа объекта (`entityTypeId`) → ids для перебора стадий (#109). Ответ `result.categories[].id`; дефолтная воронка сделок — `id:0` (`isDefault:'Y'`), валидна для `crm.status.list`. Строит **единый предикат `isNegativeStage`** на весь портал (объединение отрицательных стадий всех воронок инвойсов+сделок), раз на джобу. |

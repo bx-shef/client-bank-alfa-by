@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useBankAccounts, type ConnectedBankAccount } from '~/composables/useBankAccounts'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
+import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMatrix'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { connectionHealth, connectionHealthBadge } from '~/utils/bankTokenLifetime'
@@ -13,7 +14,24 @@ import { connectionHealth, connectionHealthBadge } from '~/utils/bankTokenLifeti
 // Admin gate is NOT repeated here: the card that hosts this already gates on admin, and the
 // backend re-gates both routes (the client gate is convenience, the server one is authority).
 
+// Счета, которые отдал сам банк (#494) — из общей сверки, живущей в родительской карточке.
+// Благодаря им выбор счёта у ожидающего подключения становится КЛИКОМ, а не перепечатыванием
+// 28-значного IBAN: именно опечатка в нём на первом боевом прогоне дала «117 обработано, 0
+// создано» без единого сообщения об ошибке. Поле ввода остаётся — банк может и не ответить.
+const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), { bankAccounts: () => [] })
+// Родитель перечитывает сверку после привязки/отключения: обе половины экрана описывают одно и то
+// же, и оставить одну устаревшей — значит показать противоречие самому себе.
+const emit = defineEmits<{ changed: [] }>()
+
 const { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey } = useBankAccounts()
+
+/** Номера, которые уже привязаны, — предлагать их к выбору незачем (сервер всё равно ответит 409). */
+const takenKeys = computed(() => new Set(
+  accounts.value.filter(a => !isPendingAccountKey(a.accountKey)).map(a => normalizeForCompare(a.accountKey))
+))
+
+/** Что предложить для ожидающего подключения: счета банка, ещё не привязанные ни к одной строке. */
+const suggestions = computed(() => props.bankAccounts.filter(b => !takenKeys.value.has(normalizeForCompare(b.number))))
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
@@ -50,15 +68,18 @@ function rowLabel(a: ConnectedBankAccount): string {
     : `${providerLabel(a.provider)} ${a.accountKey}`
 }
 
-async function onAssign(a: ConnectedBankAccount) {
+async function onAssign(a: ConnectedBankAccount, value?: string) {
   const key = rowKey(a)
   // Успех → строка перечитается уже с настоящим номером, черновик больше не нужен.
-  if (await setAccount(a, drafts.value[key] ?? '')) drafts.value[key] = ''
+  if (await setAccount(a, value ?? drafts.value[key] ?? '')) {
+    drafts.value[key] = ''
+    emit('changed')
+  }
 }
 
 async function onDisconnect(a: ConnectedBankAccount) {
   confirming.value = ''
-  await disconnect(a)
+  if (await disconnect(a)) emit('changed')
 }
 
 defineExpose({ reload: load })
@@ -146,6 +167,27 @@ defineExpose({ reload: load })
               class="mt-1 flex flex-wrap items-center gap-2"
               :data-testid="`pending-${a.provider}`"
             >
+              <!-- Счета, которые назвал сам банк (#494): один клик вместо перепечатывания IBAN.
+                   Показываем ТОЛЬКО когда банк ответил — иначе остаётся поле ниже. -->
+              <div
+                v-if="suggestions.length"
+                class="flex w-full flex-wrap items-center gap-2"
+                data-testid="account-suggestions"
+              >
+                <span class="text-xs text-(--ui-color-base-3)">Банк отдал:</span>
+                <B24Button
+                  v-for="s in suggestions"
+                  :key="s.number"
+                  :label="s.currency ? `${s.number} · ${s.currency}` : s.number"
+                  :aria-label="`Выбрать счёт ${s.number}`"
+                  color="air-secondary-accent"
+                  size="xs"
+                  class="font-mono"
+                  :loading="saving === rowKey(a)"
+                  :disabled="saving === rowKey(a)"
+                  @click="onAssign(a, s.number)"
+                />
+              </div>
               <B24Input
                 v-model="drafts[rowKey(a)]"
                 placeholder="BY00ALFA00000000000000000000"

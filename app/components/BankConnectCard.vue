@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, useTemplateRef } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useBankConnect } from '~/composables/useBankConnect'
+import { useBankMatrix } from '~/composables/useBankMatrix'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 
@@ -28,6 +29,13 @@ const { start, syncEnabled, connecting, error, enabled } = useBankConnect()
 // admin returns from the bank tab to a list that still says «пока ничего не подключено» — the exact
 // complaint #404 is about, reproduced inside one session.
 const connectedList = useTemplateRef<{ reload: () => Promise<void> }>('connectedList')
+
+// Сверка счетов (#494) живёт ЗДЕСЬ, а не внутри блока, который её рисует: тот же ответ нужен и
+// списку подключений выше — из него он делает кнопки «выбрать счёт» вместо поля ввода. Один запрос
+// на два блока: он ходит в банк, и два запроса означали бы двойной поход плюс риск показать две
+// половины экрана, противоречащие друг другу.
+const matrix = useBankMatrix()
+onMounted(matrix.load)
 
 const adminChecked = ref(false)
 const started = ref(false)
@@ -97,7 +105,10 @@ async function onConnect() {
     started.value = true
     // The bank tab is top-level and never notifies us, so poll-free: refresh when the admin comes
     // back to this tab. Once is enough — a second connect re-arms it.
-    window.addEventListener('focus', () => void connectedList.value?.reload(), { once: true })
+    window.addEventListener('focus', () => {
+      void connectedList.value?.reload()
+      void matrix.load()
+    }, { once: true })
   } else if (url && !win) {
     error.value = 'Разрешите всплывающие окна для этого сайта и повторите'
   } else {
@@ -140,7 +151,25 @@ async function onConnect() {
     <div class="space-y-4">
       <!-- What is already bound, with a per-row disconnect (#404). Above the form on purpose:
            the first question after a connect is «что у меня подключено?». -->
-      <ConnectedBankAccounts ref="connectedList" />
+      <ConnectedBankAccounts
+        ref="connectedList"
+        :bank-accounts="matrix.bankAccounts.value"
+        @changed="matrix.load()"
+      />
+
+      <hr class="border-(--ui-color-design-tinted-na-stroke)">
+
+      <!-- Сверка «наш счёт ↔ счёт в банке» (#494). Ниже списка подключений и ВЫШЕ формы: сначала
+           «что подключено», потом «сходится ли это с реквизитами», и только потом «подключить ещё».
+           На первом боевом прогоне именно этот вопрос остался без ответа — портал отчитался
+           «117 обработано, 0 создано», и узнать почему было неоткуда. -->
+      <AccountMatrix
+        :rows="matrix.rows.value"
+        :providers="matrix.providers.value"
+        :loading="matrix.loading.value"
+        :loaded="matrix.loaded.value"
+        :error="matrix.error.value"
+      />
 
       <hr class="border-(--ui-color-design-tinted-na-stroke)">
 
