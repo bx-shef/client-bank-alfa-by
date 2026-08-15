@@ -26,6 +26,7 @@ import { describeUpstreamError } from './logSanitize'
 import { CONNECT_STATE_TTL_MS } from '../../app/utils/bankConnectTtl'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
+import { MY_COMPANY_GATE_MESSAGE, type MyCompanyGate } from './myCompanyRequisites'
 
 /** Non-secret authorize config for a provider, from env. `null` when the provider isn't configured
  *  (feature off) or has no plain code-flow config (Prior uses its own multi-step config —
@@ -75,6 +76,15 @@ export interface ConnectStartDeps {
   buildPriorUrl: (config: PriorConnectConfig, state: string, nowMs: number) => Promise<string>
   /** HMAC secret for the connect state (the operator SESSION_SECRET). Empty ⇒ fail-closed. */
   secret: string
+  /** Whether the portal has a company marked «моя» with a settlement account (#493).
+   *
+   *  ⚠ FAIL-OPEN on purpose, and this is the one place that deserves the exception: the gate exists
+   *  to save the account owner a pointless trip through their internet bank, not to protect
+   *  anything. If we cannot ASK the portal (REST hiccup, trimmed rights), blocking a correctly
+   *  configured client would be a worse outcome than letting a misconfigured one through — the
+   *  second is recoverable in the settings screen, the first is not recoverable at all from the
+   *  admin's side. Absent dep ⇒ no gate (older wirings, tests). */
+  myCompanyGate?: (domain: string, accessToken: string) => Promise<MyCompanyGate>
   /** Optional sanitized logger (already-safe strings only) — mirrors the callback's. Without it a
    *  failed Prior preamble would be completely unobservable (one opaque 502 for a rejected token Б,
    *  a consent 4xx, a missing intent id, or a malformed signing key). */
@@ -154,6 +164,23 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   // Admin-only: connecting a bank binds credentials to the whole portal. Enforce here — the callback
   // trusts the signed state blindly, so the authorization to START the flow must be gated now.
   if (!frame.isAdmin) return { status: 403, body: { error: 'bank connect requires a portal administrator' } }
+
+  // «Моя компания» с расчётным счётом — предусловие, а не настройка (#493). Проверяем ЗДЕСЬ,
+  // до построения authorize-URL: дальше человек введёт пароль от интернет-банка и подтвердит
+  // доступ к деньгам компании, и потратить это на настройку, которая не может создать ни одной
+  // записи, — самая дорогая из возможных ошибок, а вовсе не неудобство.
+  if (deps.myCompanyGate) {
+    let gate: MyCompanyGate = 'ok'
+    try {
+      gate = await deps.myCompanyGate(domain, accessToken)
+    } catch (e) {
+      // Спросить не смогли — пропускаем (см. контракт депа) и говорим об этом вслух.
+      deps.log?.(`[bank-connect] my-company precheck failed, allowing: ${(e as Error)?.message ?? ''}`)
+    }
+    if (gate !== 'ok') {
+      return { status: 409, body: { error: MY_COMPANY_GATE_MESSAGE[gate], reason: gate } }
+    }
+  }
 
   // memberId comes from OUR resolved portal (not the client) → the callback can trust state.memberId.
   // (There is no `memberId` in ConnectStartInput — the client cannot supply/override it; invariant 1.)

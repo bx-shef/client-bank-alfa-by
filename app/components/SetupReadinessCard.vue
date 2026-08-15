@@ -29,6 +29,7 @@ const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
   connectedAccounts: setup.status.value.connectedAccounts,
   pendingAccounts: setup.status.value.pendingAccounts,
+  myCompany: setup.status.value.myCompany,
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
   lastRunMs: setup.status.value.lastRunMs

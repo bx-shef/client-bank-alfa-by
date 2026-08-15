@@ -10,6 +10,7 @@
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import { bankConnectConfigFromEnv, handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
+import { findMyCompanyAccounts, myCompanyGate } from '../../utils/myCompanyRequisites'
 import { buildPriorConnectUrl, priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { signPriorJwt } from '../../utils/priorJwt'
 import { priorWriteHeaders } from '../../../app/utils/priorOauth'
@@ -69,6 +70,10 @@ function liveConnectDeps(): ConnectStartDeps {
       newId: () => randomUUID()
     }, nowMs),
     secret: resolveAuthConfig(process.env).secret,
+    // «Моя компания» с расчётным счётом (#493): проверяем ДО того, как человек пойдёт в банк
+    // вводить пароль. Тем же фрейм-токеном администратора, который уже проверен выше.
+    myCompanyGate: async (domain, accessToken) =>
+      myCompanyGate(await findMyCompanyAccounts((method, params) => frameRestCall(domain, accessToken, method, params))),
     // Sanitized already (the handler passes text through sanitizeForLog) — keeps a failed Prior
     // preamble diagnosable instead of one opaque 502.
     log: msg => console.info(msg)
