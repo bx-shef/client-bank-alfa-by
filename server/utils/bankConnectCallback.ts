@@ -195,7 +195,11 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
     accountKey: state.accountKey || provisionalAccountKey(state.nonce),
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
-    expiresAt: input.nowMs + tokens.expiresIn * 1000
+    expiresAt: input.nowMs + tokens.expiresIn * 1000,
+    // Срок СОГЛАСИЯ — из проверенного state (#503). Другие часы, чем у токена: когда согласие
+    // вышло, обновлять нечего, нужен вход владельца счёта в интернет-банк. Отсутствует у Альфы
+    // (согласий не выдаёт) — тогда 0 = «неизвестно», и по нему никого не хоронят.
+    consentExpiresAt: state.consentExpiresAt ?? 0
   })
   deps.log?.(`[bank-connect] connected ${state.provider} account for member ${state.memberId}`)
   return { status: 200, html: hasAccount ? OK_PAGE_ACCOUNT : OK_PAGE_PENDING }

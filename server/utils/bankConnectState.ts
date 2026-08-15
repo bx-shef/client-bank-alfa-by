@@ -36,6 +36,14 @@ export interface BankConnectState {
   nonce: string
   /** Absolute expiry, epoch ms — short (the OAuth round-trip), so a leaked state can't be replayed. */
   exp: number
+  /**
+   * Срок согласия банка, epoch ms (#503; Приор выдаёт, Альфа нет). Отсутствует — неизвестно.
+   *
+   * ⚠ Едет ИМЕННО ЗДЕСЬ, а не в отдельном хранилище, потому что между стартом подключения и
+   * возвратом из банка своего состояния у нас нет, а подписанный state — единственное, чему
+   * колбэк вправе верить. Подделать значение нельзя: HMAC покрывает всё тело.
+   */
+  consentExpiresAt?: number
 }
 
 const b64url = (buf: Buffer | string): string =>
