@@ -278,16 +278,19 @@ export interface PriorRegistrationInput {
  * us) — and it is ALSO what `private_key_jwt` verifies the `client_assertion` against, so the
  * same registered key serves both.
  *
- * ⚠ `request_object_signing_alg` is NOT optional here, and its absence is invisible until the very
- * last step. Registration succeeds, `client_credentials` succeeds, `POST /accountConsents` returns
- * `201` — and then `GET /oauth2/authorize` bounces the account holder back with
- * `error=invalid_request_object&error_description=server_error`, AFTER they have already been sent
- * to their bank. The bank publishes exactly one accepted value (`request_object_signing_alg_values_supported: ['RS256']`,
- * read live from `/oidcdiscovery`) but will not assume it: a client that never declared how it
- * signs gets its signed `request` JWT refused. Registering `id_token_signed_response_alg` alone is
- * NOT the same declaration — that one covers the id_token the bank issues to us, this one covers
- * the request object we send to the bank, and we shipped the first without the second. Measured
- * against the sandbox, 2026-08-14 (docs/PRIOR_API.md).
+ * `request_object_signing_alg` is sent because the bank publishes exactly one accepted value
+ * (`request_object_signing_alg_values_supported: ['RS256']`, read live from `/oidcdiscovery`) and
+ * declaring it is what the spec asks of a client that signs its request objects. It costs nothing.
+ *
+ * ⚠ It is NOT what fixes `invalid_request_object`, despite an earlier claim here that said so.
+ * Priorbank does not store or return the field: `GET /register/{clientId}` omits it for a client
+ * that authorizes SUCCESSFULLY and for one that does not (both read live through the production
+ * gateway, 2026-08-15). What actually caused that failure was an EMPTY modulus in `jwks` — a
+ * registration script had truncated the PEM, so the bank held a key it could not verify anything
+ * with. The re-registration that fixed it changed two things at once (the key and this field), and
+ * the wrong one got the credit. If authorize ever refuses a signed request again, check the stored
+ * `jwks` modulus first — `GET /register/{clientId}` returns it, and comparing it against the key
+ * you sign with is a one-minute answer.
  */
 export function buildRegistrationMetadata(input: PriorRegistrationInput): Record<string, unknown> {
   return {

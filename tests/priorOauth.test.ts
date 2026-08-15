@@ -79,15 +79,16 @@ describe('DCR registration metadata', () => {
     expect(meta.client_name).toBe('App')
   })
 
-  it('declares request_object_signing_alg — without it authorize dies AFTER the bank login', () => {
+  it('declares request_object_signing_alg — the one value the bank accepts', () => {
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob' })
-    // Live-measured (2026-08-14): a registration without this field passes DCR, passes
-    // client_credentials and gets `201` on /accountConsents, then bounces the account holder off
-    // /oauth2/authorize with `invalid_request_object` — i.e. the failure surfaces only after they
-    // have logged into their bank. Pinned separately from `id_token_signed_response_alg` on
-    // purpose: the two look interchangeable and are not (id_token = what the bank signs for us,
-    // request object = what we sign for the bank), and shipping only the latter is exactly the
-    // bug this pins.
+    // `/oidcdiscovery` publishes exactly one accepted value, and a client that signs its request
+    // objects is supposed to declare which algorithm it uses. Cheap and spec-correct.
+    //
+    // ⚠ This does NOT guard against `invalid_request_object`, and an earlier version of this
+    // comment claimed it did. Priorbank neither stores nor returns the field — `GET /register/{id}`
+    // omits it for a client that authorizes fine and for one that doesn't (measured live, 2026-08-15).
+    // The real cause back then was an empty modulus in `jwks`. Keeping the pin anyway: sending a
+    // correct declaration is right regardless of whether this particular bank reads it.
     expect(meta.request_object_signing_alg).toBe('RS256')
   })
 
