@@ -25,6 +25,9 @@ describe('handleSetupStatus', () => {
     expect(res.body).toEqual({
       connectedAccounts: 2,
       pendingAccounts: 0,
+      // Сколько подключений приложение уже считает нерабочими (#504) — браузер этого знать не
+      // может, а без этого «Банк подключён» горит зелёным на сломанном подключении.
+      unhealthyAccounts: 0,
       pollEnabled: true,
       pollIntervalMin: 5,
       lastRunMs: 1_700_000_000_000
@@ -77,5 +80,27 @@ describe('handleSetupStatus', () => {
     })
     expect((await handleSetupStatus(d, input)).status).toBe(403)
     expect(read).toBe(false)
+  })
+})
+
+describe('счётчик нерабочих подключений доезжает до ответа (#504)', () => {
+  // ⚠ Проверка «в дефолтном случае там ноль» ничего не доказывает: захардкоженная константа
+  // проходит её ровно так же. А цена незаметности тут высокая — роут продолжает честно СЧИТАТЬ
+  // нерабочие подключения, но докладывает, что всё хорошо, и экран готовности снова красит
+  // «Банк подключён» зелёным на подключении, по которому импорт уже стоит.
+  it('сколько насчитали — столько и отдали', async () => {
+    const res = await handleSetupStatus(
+      deps({ countAccounts: async () => ({ connected: 3, pending: 1, unhealthy: 2 }) }),
+      input
+    )
+    expect(res.body).toMatchObject({ connectedAccounts: 3, pendingAccounts: 1, unhealthyAccounts: 2 })
+  })
+
+  it('старый источник без поля — ноль, а не падение', async () => {
+    const res = await handleSetupStatus(
+      deps({ countAccounts: async () => ({ connected: 1, pending: 0 }) }),
+      input
+    )
+    expect(res.body.unhealthyAccounts).toBe(0)
   })
 })

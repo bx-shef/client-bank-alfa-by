@@ -31,6 +31,8 @@ import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
 import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
 import { recordQueueHealth } from '../utils/queueAlertState'
+import { keepAlivePulse, keepAliveStartedAt, markKeepAliveStarted, recordKeepAlivePulse } from '../utils/keepAliveState'
+import { runKeepAliveTick } from '../utils/keepAliveTick'
 import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
@@ -254,14 +256,19 @@ export default defineNitroPlugin((nitroApp) => {
       log: (m: string) => console.info(m),
       warn: (m: string) => console.warn(m)
     }
-    const runBankKeepAliveTick = async () => {
-      try {
-        await withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps))
-      } catch (err) {
-        // Only a failure of the account listing itself reaches here — per-account ones are isolated inside.
-        console.error('[queue] bank keep-alive run failed:', (err as Error)?.message)
-      }
-    }
+    // Сам тик — в `runKeepAliveTick` (server/utils/keepAliveTick.ts), чтобы инвариант «пульс только
+    // на ЗАВЕРШЁННОМ прогоне» можно было проверить тестом. Пока он жил здесь try/catch'ем, его
+    // можно было вывернуть наизнанку (писать пульс в `catch`), не уронив ни одного теста, — то есть
+    // погасить ровно ту тревогу, ради которой пульс и заведён.
+    const runBankKeepAliveTick = () => runKeepAliveTick({
+      run: () => withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps)),
+      record: recordKeepAlivePulse,
+      now: Date.now,
+      error: (m: string) => console.error(m)
+    })
+    // Отмечаем, что таймер ЗАПЛАНИРОВАН: иначе «прогонов ещё не было» неотличимо от «не
+    // запускается», и регрессия, при которой продление падает с первого же тика, молчала бы вечно.
+    markKeepAliveStarted(Date.now())
     bankKeepAliveTimer = setInterval(runBankKeepAliveTick, bankKeepAliveMs)
     void runBankKeepAliveTick() // at boot: a connection may have idled all night while the service was down
     console.info('[queue] bank token keep-alive scheduled (every %d min, #489)', bankKeepAliveMs / 60_000)
@@ -378,7 +385,10 @@ export default defineNitroPlugin((nitroApp) => {
             // Умирающие банковские подключения — в тот же канал (#497 §3). Карточку на `/queues`
             // надо ОТКРЫТЬ, а refresh Альфы умирает под утро (#488), когда на экран никто не
             // смотрит: пул-дашборд закрыть критерий «МЫ видим его проблемы» не может.
-            bankRows: () => listAllBankAccountInfo(dbQuery)
+            bankRows: () => listAllBankAccountInfo(dbQuery),
+            // Пульс продления (#504). Каденция берётся ТА ЖЕ, что у самого таймера, — иначе
+            // оператор, разредивший продление через env, получал бы ложную тревогу на каждом тике.
+            keepAlive: () => ({ pulse: keepAlivePulse(), intervalMs: bankKeepAliveMs, startedAtMs: keepAliveStartedAt() })
           }))
         delivery = result.state
       } catch (err) {

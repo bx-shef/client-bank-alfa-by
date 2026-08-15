@@ -20,14 +20,15 @@
 
 import type { BankProviderId } from '../../app/types/statement'
 import { BANK_LABELS } from '../../app/utils/bankLabels'
-import { connectionHealth } from '../../app/utils/bankTokenLifetime'
+import { connectionHealth, needsHumanHealth } from '../../app/utils/bankTokenLifetime'
 import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import { pluralRu } from '../../app/utils/importStatus'
 import type { BankHealthRow } from '../../app/utils/bankHealthOverview'
+import { pulseAgeMs, pulseState, type KeepAlivePulse } from '../../app/utils/keepAlivePulse'
 import type { QueueAlert } from './queueAlert'
 
-/** Состояния, которые не рассосутся сами: их чинит владелец счёта, зайдя в интернет-банк. */
-const NEEDS_HUMAN = new Set(['expired', 'no-refresh'])
+// Список «чинит человек» — из `bankTokenLifetime.ts`, единственного источника. Своя копия здесь
+// уже была третьей, и разойтись им было бы нечем помешать.
 
 /**
  * Свернуть строки подключений в тревоги для пуш-канала.
@@ -43,7 +44,7 @@ export function evaluateBankHealth(rows: readonly BankHealthRow[], nowMs: number
     // Незавершённая настройка — не поломка: у банка нет такого «номера», опрашивать нечего, и
     // будить по ней некого. Она видна на экране готовности у самого админа.
     if (isPendingAccountKey(row.accountKey)) continue
-    if (!NEEDS_HUMAN.has(connectionHealth(row, nowMs))) continue
+    if (!needsHumanHealth(connectionHealth(row, nowMs))) continue
     const acc = byProvider.get(row.provider) ?? { connections: 0, portals: new Set<string>() }
     acc.connections += 1
     acc.portals.add(row.memberId)
@@ -63,4 +64,36 @@ export function evaluateBankHealth(rows: readonly BankHealthRow[], nowMs: number
     })
   }
   return out
+}
+
+/**
+ * Dead man's switch продления токенов (#504): механизм не подаёт признаков жизни.
+ *
+ * ⚠ Это ДРУГОЙ диагноз, чем «подключения мертвы» выше, и потому отдельный эпизод. Там банк нас
+ * отверг — чинит владелец счёта, зайдя в интернет-банк. Здесь встала НАША машинерия — чиним мы, и
+ * подключения ещё живы, но начнут умирать через полосу обновления. Слить их в один эпизод значило
+ * бы отправить оператора не туда.
+ *
+ * ⚠ «Прогонов ещё не было» само по себе тревогой не считается — сразу после старта это норма, —
+ * НО ЭСКАЛИРУЕТ по возрасту процесса (`startedAtMs`). Без эскалации регрессия, при которой таймер
+ * не завёлся вовсе или падает на каждом прогоне с самого первого тика, давала бы тишину НАВСЕГДА:
+ * тот же «умерли в пятницу, узнали в понедельник», ради которого всё написано, только зайдя с
+ * другого конца. Текст в этом случае говорит «не отрабатывало ни разу», а не выдумывает часы.
+ */
+export function evaluateKeepAlivePulse(
+  pulse: KeepAlivePulse | null,
+  nowMs: number,
+  intervalMs: number,
+  startedAtMs: number | null = null
+): QueueAlert[] {
+  if (pulseState(pulse, nowMs, intervalMs, { startedAtMs }) !== 'stale') return []
+  const age = pulseAgeMs(pulse, nowMs)
+  const since = age === null
+    ? 'не отрабатывало НИ РАЗУ с запуска сервиса'
+    : `не отрабатывало ${Math.max(1, Math.round(age / 3_600_000))} ${pluralRu(Math.max(1, Math.round(age / 3_600_000)), ['час', 'часа', 'часов'])}`
+  return [{
+    kind: 'keepalive-stale',
+    queue: 'bank-keepalive',
+    text: `продление банковских токенов ${since} — подключения клиентов начнут умирать, чинить нам (это НЕ отказ банка)`
+  }]
 }

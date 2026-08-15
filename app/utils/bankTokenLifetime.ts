@@ -67,6 +67,22 @@ export function refreshAtAgeMs(provider: BankProviderId, band = KEEP_ALIVE_BAND)
  */
 export type BankConnectionHealth = 'ok' | 'due' | 'expired' | 'no-refresh' | 'unknown'
 
+/**
+ * Состояния, которые НЕ рассосутся сами: их лечит человек, зайдя в интернет-банк.
+ *
+ * ⚠ Единственный источник. Список успел разойтись по трём файлам (тревога в Telegram, сводка для
+ * оператора, экран готовности портала), и это ровно тот дрейф, о котором предупреждает шапка
+ * модуля: поправят в одном месте — три экрана начнут расходиться молча. `due` сюда не входит
+ * намеренно («мы уже обновляем сами»), `unknown` — тоже («срок неизвестен», хоронить по догадке
+ * нельзя).
+ */
+export const NEEDS_HUMAN_HEALTH: readonly BankConnectionHealth[] = ['expired', 'no-refresh']
+
+/** Требует ли это состояние действия человека. */
+export function needsHumanHealth(h: BankConnectionHealth): boolean {
+  return NEEDS_HUMAN_HEALTH.includes(h)
+}
+
 export interface ConnectionLike {
   provider: BankProviderId
   /** Epoch ms of the last successful connect/refresh. */

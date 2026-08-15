@@ -11,9 +11,9 @@ import { findMyCompanyAccounts, myCompanyGate } from '../utils/myCompanyRequisit
 import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
-import { listBankAccountsForPortal } from '../utils/bankTokenStore'
+import { listBankAccountInfoForPortal } from '../utils/bankTokenStore'
 import { getImportResult } from '../utils/importResultStore'
-import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
+import { summarizeBankHealth, unhealthyConnections } from '../../app/utils/bankHealthOverview'
 import { queueEnabled } from '../queue/connection'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
@@ -31,10 +31,21 @@ function liveDeps(): SetupStatusDeps {
     // Подключения без выбранного счёта (#407) НЕ считаются: с них ничего не забрать, а зелёная
     // строка «банк подключён» на таком портале — ровно та ложная галочка, ради которой экран и
     // существует.
+    // ⚠ Считаем не только НАЛИЧИЕ строки, но и СОСТОЯНИЕ подключения (#504): продлить его может
+    // быть уже нечем (`no-refresh`) или поздно (`expired`), и тогда зелёная строка «банк подключён»
+    // — та же ложная галочка, что и на ожидающем подключении, только дороже: импорт уже стоит.
+    // Отсюда `listBankAccountInfoForPortal`, а не `…AccountsForPortal` — первый несёт свежесть.
+    // ⚠ Ни одной собственной строки арифметики здесь нет, и это намеренно: роут не покрывается
+    // юнит-тестами, а посчитанное по месту в этом проекте уже однажды можно было заменить на
+    // константу, не уронив ни одного теста. Всё считает `summarizeBankHealth` — то самое ядро,
+    // которым живёт экран оператора, и оно же само выносит ожидающие подключения из состояний.
     countAccounts: async (memberId) => {
-      const all = await listBankAccountsForPortal(dbQuery, memberId)
-      const pending = all.filter(a => isPendingAccountKey(a.accountKey)).length
-      return { connected: all.length - pending, pending }
+      const o = summarizeBankHealth(await listBankAccountInfoForPortal(dbQuery, memberId), Date.now())
+      return {
+        connected: o.total.connections - o.pending.connections,
+        pending: o.pending.connections,
+        unhealthy: unhealthyConnections(o)
+      }
     },
     // BOTH conditions the cron actually needs, not just the flag: the scheduler returns early
     // without Redis (`queueEnabled`), so reporting the flag alone would show a confident green
