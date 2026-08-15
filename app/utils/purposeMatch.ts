@@ -87,8 +87,63 @@ export function foldHomoglyphs(text: string, alphabet: Alphabet): string {
 // grab "1234" out of "12345", and a prefixed mask does not match a fragment). The
 // class includes Belarusian `Іі`/`Ўў` (Alfa-Bank BY) beyond А-Я/а-я/Ёё.
 const ALNUM = '0-9A-Za-zА-Яа-яЁёІіЎў'
-const BOUND_L = `(?<![${ALNUM}])`
 const BOUND_R = `(?![${ALNUM}])`
+
+/**
+ * Words that habitually sit FLUSH against an invoice number in Belarusian purposes (#492).
+ *
+ * MEASURED, not guessed: on 40 live incoming payments, three of the numbers that exist in the text
+ * were invisible to us, and all three for this one reason — «СЧЕТУ1000001» typed without a space,
+ * «N» pressed against the digits. That is the entire gap between what we recognise and the ceiling.
+ * The failure was SILENT: such a line landed neither in «распознано» nor in «цель не найдена», it
+ * simply was not there.
+ *
+ * ⚠ WHY A NAMED LIST AND NOT A LOOSER BOUNDARY. The obvious fix — «allow a letter to the left when
+ * the mask starts with a digit» — hands `d+` the tail of every article number (`КЛЕЙ2000` → `2000`)
+ * and every code that ends in digits. Those false numbers are worse than the misses: each one makes
+ * the app announce «цель не найдена» about something that was never a number. This list is about the
+ * DOMAIN — it is the word «счёт» in its cases plus the number sign — so it cannot grow into that.
+ *
+ * ⚠ `№` IS ABSENT ON PURPOSE: it is not in `ALNUM`, so the plain boundary already admits it, and
+ * `№1000001` has always worked. Only LETTER prefixes need naming.
+ */
+const INVOICE_WORDS = ['СЧЕТУ', 'СЧЕТА', 'СЧЕТ', 'СЧЁТ', 'СЧ'] as const
+
+/**
+ * The number sign, which may follow the word above before the digits start.
+ *
+ * ⚠ ONLY AFTER THAT WORD — never on its own. `N`/`NO` is a GENERIC «номер», glued to whatever
+ * document is being referenced, so admitting it by itself hands every `d+`-shaped mask a number it
+ * has no business reading: `АКТУ NO456`, `Р/С N301234567`, `ПО ЗАЯВКЕ N55`, `ДОГОВОРУ N45/16`,
+ * and line items `ТОВАР N1 … N2`. Measured against the real function, all five turn into invoice
+ * numbers the moment bare `N` is allowed — and the line-item case is the dangerous one, because
+ * `N1`/`N2` are exactly the low numbers a young company's real invoices carry.
+ *
+ * Tying it to the invoice word costs nothing: in all three cases measured on live payments the `N`
+ * stands right after «СЧЕТУ» («СОГЛАСНО СЧЕТУ N1000002-B24»). The generic use never does.
+ */
+const NUMBER_SIGN = ['NO', 'N'] as const
+
+/**
+ * Left boundary: either nothing alphanumeric to the left (the original rule), or one of the noise
+ * words above — which must ITSELF start at a token boundary.
+ *
+ * ⚠ THAT NESTED BOUNDARY IS LOAD-BEARING. Without it `PN1234` would match on the `N`, and article
+ * numbers ending in `…N` would start producing phantom invoice numbers — reintroducing exactly the
+ * false positives this list exists to avoid.
+ *
+ * ⚠ THE LIST IS FOLDED WITH THE SAME ALPHABET as the purpose and the mask. Under `latin`,
+ * «СЧЕТУ» becomes «CЧETY» (Ч has no Latin lookalike), so an unfolded literal would simply never
+ * match — the fix would silently do nothing for exactly the portals that chose that alphabet.
+ */
+function boundLeft(alphabet: Alphabet): string {
+  const fold = (w: string) => escapeRegExp(foldHomoglyphs(w, alphabet))
+  const words = INVOICE_WORDS.map(fold).join('|')
+  const sign = NUMBER_SIGN.map(fold).join('|')
+  // «счёт» in some case, optionally followed by a number sign, optionally spaced — then the digits.
+  const noise = `(?:${words})\\s*(?:${sign})?`
+  return `(?:(?<![${ALNUM}])|(?<=(?<![${ALNUM}])${noise}))`
+}
 
 /**
  * Compile a (already homoglyph-folded) mask into a RegExp body: `d` → одна цифра, `d+` → одна или
@@ -150,13 +205,17 @@ export function recognizeByMatrices(
   )
   const out: RecognizedId[] = []
   const seen = new Set<string>()
+  // Собирается ОДИН раз: алфавит на весь вызов неизменен, а до этого свёртка+склейка повторялись на
+  // каждой матрице (до `MAX_MATRICES`) ради одинакового результата. Капы существуют как бюджет
+  // против DoS — тратить его на пересборку константы незачем.
+  const left = boundLeft(alphabet)
   for (const matrix of matrices.slice(0, MAX_MATRICES)) {
     const mask = matrix.mask.trim()
     if (!mask || mask.length > MAX_MASK_CHARS) continue
     const body = maskToPattern(foldHomoglyphs(mask, alphabet))
     let re: RegExp
     try {
-      re = new RegExp(BOUND_L + '(' + body + ')' + BOUND_R, 'giu')
+      re = new RegExp(left + '(' + body + ')' + BOUND_R, 'giu')
     } catch {
       continue // a mask that somehow compiles to invalid regex is skipped, not thrown
     }
