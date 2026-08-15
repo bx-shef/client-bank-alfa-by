@@ -226,3 +226,35 @@ describe('ConnectedBankAccounts — выбор счёта из ответа ба
     expect(w.find('[data-testid="pending-alfa-by"] input').exists()).toBe(true)
   })
 })
+
+describe('срок согласия банка (#503)', () => {
+  // Счета компонент грузит сам (`/api/bank/accounts`), поэтому строку задаём через тот же
+  // фейк-ответ, что и остальные тесты файла, а не пропсом.
+  const base = { provider: 'prior-by', accountKey: 'BY13', connectedAt: Date.now(), expiresAt: Date.now() + 3_600_000, hasRefresh: true }
+  const DAY = 86_400_000
+
+  it('дата показана, пока согласие живо', async () => {
+    listReply.value = [{ ...base, consentExpiresAt: Date.now() + 60 * DAY }]
+    expect((await mountReady()).text()).toContain('согласие банка действует до')
+  })
+
+  it('за неделю до конца — предупреждение с ДЕЙСТВИЕМ, а не просто дата', async () => {
+    // Продлевает согласие владелец счёта из интернет-банка; без этого админ не поймёт, что делать.
+    listReply.value = [{ ...base, consentExpiresAt: Date.now() + 3 * DAY }]
+    const t = (await mountReady()).text()
+    expect(t).toContain('истекает')
+    expect(t).toContain('интернет-банк')
+  })
+
+  it('ДАТЫ НЕТ — о согласии молчим, а не рисуем прочерк', async () => {
+    // У Альфы согласий не бывает вовсе: строка про них была бы выдуманной сущностью.
+    listReply.value = [{ ...base, provider: 'alfa-by', consentExpiresAt: 0 }]
+    expect((await mountReady()).text()).not.toContain('согласие банка')
+  })
+
+  it('уже истекло — молчим: про это кричит бейдж состояния', async () => {
+    // Две надписи об одном размывают единственное действие.
+    listReply.value = [{ ...base, consentExpiresAt: Date.now() - DAY }]
+    expect((await mountReady()).text()).not.toContain('согласие банка действует')
+  })
+})

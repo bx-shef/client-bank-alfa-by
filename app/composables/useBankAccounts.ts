@@ -17,6 +17,14 @@ export interface ConnectedBankAccount {
   expiresAt: number
   /** False ⇒ no refresh token stored ⇒ the account must be re-connected once access expires. */
   hasRefresh: boolean
+  /**
+   * Epoch ms, когда истекает СОГЛАСИЕ банка (#503). `0`/отсутствует — банк согласий не выдаёт
+   * (Альфа) или подключение сделано до появления поля: тогда о согласии не говорим ничего.
+   *
+   * ⚠ Другие часы, чем у токена: когда согласие вышло, продлевать нечего — нужен вход владельца
+   * счёта в интернет-банк, а это не то, что организуют за вечер.
+   */
+  consentExpiresAt?: number
 }
 
 export function useBankAccounts() {
