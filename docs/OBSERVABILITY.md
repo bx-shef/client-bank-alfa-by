@@ -1,6 +1,6 @@
 # Наблюдаемость: OpenTelemetry (#78)
 
-> Last reviewed: 2026-07-31
+> Last reviewed: 2026-08-15
 
 Глубокая телеметрия backend'а на **OpenTelemetry** (официальный вектор Bitrix24 —
 `bitrix-tools/b24-ai-starter-otel`): трейсы + метрики (+ логи) по OTLP в коллектор →
@@ -25,7 +25,7 @@
   - `withSpan('<job>', …)` — **все четыре job-воркера**: `crm-sync` (исходы `{op_count, recognized, resolved,
     allocated, ambiguous, manual, distributed}`), `bank-fetch` (`{provider, op_count=fetched}`), `file-parse`
     (`{provider, op_count=parsed}` — единственная стадия без авто-дочернего спана, чистый CPU), `b24-events`
-    (`{kind, portal.hash}`). Плюс **крон-корни** `cron.real-poll`/`cron.keep-alive`/`cron.sweep` — иначе их
+    (`{kind, portal.hash}`). Плюс **крон-корни** `cron.real-poll`/`cron.keep-alive`/`cron.bank-keep-alive`/`cron.sweep` — иначе их
     pg/redis/http-спаны экспортируются сиротами без родителя.
   - Bank-fetch HTTP (`$fetch` к Альфе) и bank-OAuth POST ловит **авто-undici** — дочерние спаны под `bank-fetch`-root.
   - `withSpan('http.<route>', …)` / `withFrameRouteSpan(...)` — **все фрейм-токен HTTP-роуты** (порт #220/#221):

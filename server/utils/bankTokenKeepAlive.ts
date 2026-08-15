@@ -29,6 +29,7 @@
 import type { BankProviderId } from '../../app/types/statement'
 import { BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
+import { sanitizeForLog } from './logSanitize'
 
 const HOUR_MS = 3_600_000
 
@@ -42,19 +43,52 @@ export { BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs }
  *  (tens of rows), so saturation means something is wrong, not that we're busy. */
 export const MAX_BANK_KEEP_ALIVE_BATCH = 100
 
-/** Default scan cadence in minutes. Must stay well BELOW the narrowest near-expiry band
- *  (Alfa: 2 h) — a scan that runs less often than the band is wide can step over it entirely. */
+/** Default scan cadence in minutes — half the narrowest band, so one missed tick still leaves a
+ *  whole band to catch the token in. */
 export const BANK_KEEP_ALIVE_MINUTES = 60
-/** Cadence clamp. The lower bound keeps a typo from turning this into a refresh loop against the
- *  bank; the upper bound keeps it meaningfully shorter than Alfa's ~10 h life. */
+
+/**
+ * The narrowest near-expiry band across configured providers, in ms — the width of the window a
+ * token spends between «renew me» and «too late». Alfa's is 2 h (10 h lifetime × the 20 % band).
+ *
+ * Providers with an unknown lifetime contribute nothing (they are never renewed); with none
+ * configured at all the fallback is an hour, which is conservative in the safe direction.
+ */
+export function narrowestBandMs(): number {
+  const bands = (Object.keys(BANK_REFRESH_TTL_SEC) as BankProviderId[])
+    .map(p => (BANK_REFRESH_TTL_SEC[p] ?? 0) * 1000 * KEEP_ALIVE_BAND)
+    .filter(v => v > 0)
+  return bands.length ? Math.min(...bands) : HOUR_MS
+}
+
+/** Lower clamp — keeps a typo (`BANK_KEEPALIVE_MINUTES=1`) from turning this into a request loop
+ *  against the bank's OAuth endpoint. */
 export const MIN_BANK_KEEP_ALIVE_MINUTES = 5
-export const MAX_BANK_KEEP_ALIVE_MINUTES = 240
+
+/**
+ * Upper clamp — DERIVED, not chosen.
+ *
+ * ⚠ A fixed number here was a live footgun: 240 min was legal and **wider than Alfa's 2 h band**,
+ * so an operator lowering the polling frequency «чтобы не дёргать банк» could step over the window
+ * entirely and resurrect exactly the overnight death this module exists to prevent — silently, with
+ * every check green. Deriving it from the band makes that unrepresentable: the ceiling is half the
+ * narrowest band, so even a maximally-lazy schedule gets two chances inside every window.
+ *
+ * Consequence worth knowing: shorten a provider's lifetime and this ceiling follows, which may
+ * clamp an operator's configured value down. That is the correct direction — the alternative is a
+ * setting that is honoured and does not work.
+ */
+export function maxBankKeepAliveMinutes(): number {
+  return Math.max(MIN_BANK_KEEP_ALIVE_MINUTES, Math.floor(narrowestBandMs() / 2 / 60_000))
+}
 
 export interface BankKeepAliveSelection {
   /** Accounts to refresh now, oldest first, capped. */
   due: BankAccountRef[]
   /** Connections that CANNOT be kept alive (no stored refresh token) — a human must reconnect. */
   unrefreshable: BankAccountRef[]
+  /** Connections already past their whole lifetime — refreshing them cannot succeed. */
+  expired: BankAccountRef[]
 }
 
 /**
@@ -71,6 +105,17 @@ export interface BankKeepAliveSelection {
  *
  * ⚠ A provider with a zero lifetime (`manual`, or a bank whose figure is unknown) is skipped, not
  * refreshed constantly: `refreshAtAgeMs` returns 0, and «age ≥ 0» is true for everything.
+ *
+ * ⚠ THE WINDOW HAS A FLOOR AS WELL AS A CEILING, and the floor is the load-bearing half. A grant
+ * the bank has finally rejected (consent revoked, app de-registered) never gets its `updated_at`
+ * re-stamped — the failing refresh throws long before `saveBankToken`. Without a lower bound such
+ * a row stays «due» FOREVER: it sorts oldest-first, monopolises the capped batch, and earns a
+ * fresh call to the bank's OAuth endpoint on every single tick, for as long as the row exists.
+ * That is a plausible route to a bank deciding we are abusing it — reached with no misconfiguration
+ * at all, just by accumulating revoked connections over months. Anything older than the full
+ * lifetime is therefore reported as `expired` instead: it cannot succeed, so retrying it is
+ * indistinguishable from hammering. (The portal twin bounds its window for exactly this reason,
+ * `tokenKeepAlive.ts`.)
  */
 export function selectBankAccountsNearExpiry(
   rows: readonly BankAccountInfo[],
@@ -80,6 +125,7 @@ export function selectBankAccountsNearExpiry(
   const limit = opts.limit ?? MAX_BANK_KEEP_ALIVE_BATCH
   const due: BankAccountRef[] = []
   const unrefreshable: BankAccountRef[] = []
+  const expired: BankAccountRef[] = []
   const ordered = [...rows].sort((a, b) => a.connectedAt - b.connectedAt)
   for (const row of ordered) {
     const ref: BankAccountRef = { memberId: row.memberId, provider: row.provider, accountKey: row.accountKey }
@@ -89,11 +135,16 @@ export function selectBankAccountsNearExpiry(
     }
     const threshold = refreshAtAgeMs(row.provider, opts.band)
     if (threshold <= 0) continue // lifetime unknown/none → don't touch the bank
+    const ttlMs = (BANK_REFRESH_TTL_SEC[row.provider] ?? 0) * 1000
     const age = nowMs - row.connectedAt
     if (!Number.isFinite(age)) continue // unparsable timestamp → skip rather than refresh blindly
+    if (age >= ttlMs) {
+      expired.push(ref)
+      continue
+    }
     if (age >= threshold && due.length < limit) due.push(ref)
   }
-  return { due, unrefreshable }
+  return { due, unrefreshable, expired }
 }
 
 /** Injected side-effects, so the orchestrator unit-tests without a DB or a bank. */
@@ -120,6 +171,19 @@ export interface BankKeepAliveSummary {
   failed: number
   /** Connections with no stored refresh token at all — cannot be kept alive by anyone. */
   unrefreshable: number
+  /** Connections already past their whole lifetime — deliberately NOT retried (see the selector). */
+  expired: number
+}
+
+/** How many account keys one «needs a human» log line may name. Beyond this the list stops being
+ *  read and starts being scrolled past — and on a multi-tenant install the count is the signal,
+ *  the names are only there to start the conversation. */
+export const MAX_NAMED_IN_LOG = 10
+
+/** «a/1, b/2 … +N ещё» — a bounded, sanitised rendering of a ref list for one log line. */
+function nameRefs(refs: readonly BankAccountRef[]): string {
+  const shown = refs.slice(0, MAX_NAMED_IN_LOG).map(r => `${r.provider}/${logSafeKey(r.accountKey)}`).join(', ')
+  return refs.length > MAX_NAMED_IN_LOG ? `${shown} (+${refs.length - MAX_NAMED_IN_LOG} more)` : shown
 }
 
 /** Account keys can carry an IBAN; clamp + strip before logging (defence-in-depth, PRIVACY §Логи). */
@@ -133,9 +197,10 @@ function logSafeKey(v: string): string {
  */
 export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKeepAliveSummary> {
   const rows = await deps.listAccounts()
-  const { due, unrefreshable } = selectBankAccountsNearExpiry(rows, deps.now())
+  const { due, unrefreshable, expired } = selectBankAccountsNearExpiry(rows, deps.now())
   const s: BankKeepAliveSummary = {
-    selected: due.length, refreshed: 0, skipped: 0, failed: 0, unrefreshable: unrefreshable.length
+    selected: due.length, refreshed: 0, skipped: 0, failed: 0,
+    unrefreshable: unrefreshable.length, expired: expired.length
   }
   if (due.length >= MAX_BANK_KEEP_ALIVE_BATCH) {
     deps.warn?.(`[bank-keepalive] batch saturated (${due.length} ≥ cap ${MAX_BANK_KEEP_ALIVE_BATCH}) — some connections may expire before the next run`)
@@ -155,30 +220,28 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
       else s.skipped++
     } catch (e) {
       s.failed++
-      deps.warn?.(`[bank-keepalive] refresh failed for ${ref.provider}/${logSafeKey(ref.accountKey)}: ${(e as { message?: string })?.message ?? String(e)}`)
+      // ⚠ Текст ошибки СОЧИНЯЕТ БАНК: `parseTokenResponse` склеивает его из `error_description`
+      // ответа. Это ровно тот класс строк, ради которого заведён `sanitizeForLog`, и именно здесь
+      // он нужнее всего — эту строку никто не читает в момент появления.
+      deps.warn?.(`[bank-keepalive] refresh failed for ${ref.provider}/${logSafeKey(ref.accountKey)}: ${sanitizeForLog((e as { message?: string })?.message ?? String(e))}`)
     }
   }
   // The unrefreshable count is the actionable half of this log line: it names connections that no
   // amount of retrying will fix, and that nobody is otherwise told about.
   if (unrefreshable.length > 0) {
-    deps.warn?.(`[bank-keepalive] ${unrefreshable.length} connection(s) have NO refresh token — they die with their access token and need reconnecting: ${unrefreshable.map(r => `${r.provider}/${logSafeKey(r.accountKey)}`).join(', ')}`)
+    deps.warn?.(`[bank-keepalive] ${unrefreshable.length} connection(s) have NO refresh token — they die with their access token and need reconnecting: ${nameRefs(unrefreshable)}`)
   }
-  deps.log?.(`[bank-keepalive] selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable}`)
+  // Expired connections are NOT an error we can retry our way out of — they are a queue of human
+  // actions. Saying so once per run is the only way anyone learns the import stopped for them.
+  if (expired.length > 0) {
+    deps.warn?.(`[bank-keepalive] ${expired.length} connection(s) are past their refresh lifetime and are NOT retried — reconnect required: ${nameRefs(expired)}`)
+  }
+  deps.log?.(`[bank-keepalive] selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
   return s
 }
 
-/** Scan cadence in ms from a minutes setting, clamped. Pure. */
+/** Scan cadence in ms from a minutes setting, clamped into [MIN, derived max]. Pure. */
 export function bankKeepAliveIntervalMs(minutes: number): number {
   const m = Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : BANK_KEEP_ALIVE_MINUTES
-  return Math.min(MAX_BANK_KEEP_ALIVE_MINUTES, Math.max(MIN_BANK_KEEP_ALIVE_MINUTES, m)) * 60_000
-}
-
-/** Sanity bound used by the wiring: the scan must be shorter than the narrowest band, or it can
- *  step over a token's near-expiry window entirely. Exported so a test can assert the default. */
-export function narrowestBandMs(): number {
-  const bands = (Object.keys(BANK_REFRESH_TTL_SEC) as BankProviderId[])
-    .map(p => refreshAtAgeMs(p))
-    .filter(v => v > 0)
-    .map(v => v * (KEEP_ALIVE_BAND / (1 - KEEP_ALIVE_BAND)))
-  return bands.length ? Math.min(...bands) : HOUR_MS
+  return Math.min(maxBankKeepAliveMinutes(), Math.max(MIN_BANK_KEEP_ALIVE_MINUTES, m)) * 60_000
 }

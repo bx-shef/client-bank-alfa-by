@@ -89,3 +89,43 @@ describe('ConnectedBankAccounts', () => {
     expect(fetchMock.mock.calls.some(c => c[0] === '/api/bank/disconnect')).toBe(false)
   })
 })
+
+describe('ConnectedBankAccounts — состояние подключения (#488)', () => {
+  // Прежде строка говорила только «подключён N назад», а единственное поле про сроки —
+  // `expiresAt` — описывает ACCESS-токен. Из-за этого мёртвое подключение выглядело здоровым:
+  // access свежий, refresh за ним уже не существует. Бейдж считает по ВОЗРАСТУ ПАРЫ.
+  const HOUR = 3_600_000
+  const row = (over: Record<string, unknown>) => ({
+    provider: 'alfa-by', accountKey: 'BY01ALFA0001',
+    connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true, ...over
+  })
+
+  it('в полосе обновления — «скоро обновим»', async () => {
+    listReply.value = [row({ connectedAt: Date.now() - 9 * HOUR })]
+    expect((await mountReady()).text()).toContain('скоро обновим')
+  })
+
+  it('старше срока жизни — «подключение истекло»', async () => {
+    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR })]
+    expect((await mountReady()).text()).toContain('подключение истекло')
+  })
+
+  it('без refresh-токена — «нужно переподключить», даже если подключение свежее', async () => {
+    listReply.value = [row({ hasRefresh: false })]
+    expect((await mountReady()).text()).toContain('нужно переподключить')
+  })
+
+  it('исправное подключение бейджа НЕ получает — иначе значки перестают читать', async () => {
+    listReply.value = [row({})]
+    const t = (await mountReady()).text()
+    expect(t).not.toContain('скоро обновим')
+    expect(t).not.toContain('подключение истекло')
+    expect(t).not.toContain('нужно переподключить')
+  })
+
+  it('подсказка доезжает до разметки — бейдж без объяснения бесполезен', async () => {
+    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR })]
+    const hint = (await mountReady()).find('[title]').attributes('title')
+    expect(hint).toContain('интернет-банк')
+  })
+})

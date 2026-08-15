@@ -262,8 +262,16 @@ export async function renameBankTokenAccount(
   if (taken.length > 0) return 'conflict'
   let rows: Record<string, unknown>[]
   try {
+    // ⚠ `updated_at` НЕ трогаем, хотя раньше трогали. Это переименование метки, а не получение
+    // новой пары токенов: сам токен здесь не меняется ни на байт. С тех пор как `updated_at` стал
+    // часами СВЕЖЕСТИ ТОКЕНА (keep-alive #489 и бейдж состояния решают по нему), его сброс здесь
+    // означал бы вот что: админ авторизовался утром, вернулся к вкладке через семь часов и вписал
+    // номер — и десятичасовой токен, которому осталось три часа, начинает считаться
+    // свежесозданным. Обновление придёт на восьмом часу от ПЕРЕИМЕНОВАНИЯ, то есть на пятнадцатом
+    // от выдачи, когда банк давно его забыл. Ровно та ночная смерть, от которой keep-alive и
+    // написан, только заходящая с другой стороны.
     rows = await query(
-      `UPDATE bank_tokens SET account_key = $4, updated_at = now()
+      `UPDATE bank_tokens SET account_key = $4
         WHERE member_id = $1 AND provider = $2 AND account_key = $3
         RETURNING member_id`,
       [memberId, provider, fromKey, toKey]

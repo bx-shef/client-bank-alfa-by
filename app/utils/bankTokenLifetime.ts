@@ -28,6 +28,26 @@ export const BANK_REFRESH_TTL_SEC: Record<BankProviderId, number> = {
   'manual': 0
 }
 
+/**
+ * Which of those numbers we actually KNOW.
+ *
+ * ⚠ This distinction is not pedantry — the same number does two jobs with very different costs.
+ * As a refresh threshold, being wrong costs a spare token call. As the badge «подключение
+ * истекло», it costs a person a trip into their internet bank to re-authorise something that was
+ * never broken. An assumed lifetime is good enough for the first job and not for the second, so
+ * the UI refuses to declare a connection dead on a guess (see `connectionHealth`).
+ *
+ * `alfa-by` is measured: a connection made at 13:29 was rejected by 05:00 the next morning (#488),
+ * matching the bank's documented ~10 h. Prior's figure is a conservative guess — the bank does not
+ * publish it, and the honest fix is to store the consent's own `expirationDate`, which Prior DOES
+ * return when the consent is created (#503).
+ */
+export const BANK_REFRESH_TTL_MEASURED: Record<BankProviderId, boolean> = {
+  'alfa-by': true,
+  'prior-by': false,
+  'manual': false
+}
+
 /** Renew once the token is within this fraction of its life from expiry (0.2 of Alfa's 10 h = 2 h). */
 export const KEEP_ALIVE_BAND = 0.2
 
@@ -69,7 +89,11 @@ export function connectionHealth(c: ConnectionLike, nowMs: number): BankConnecti
   if (ttlMs <= 0) return 'unknown'
   const age = nowMs - c.connectedAt
   if (!Number.isFinite(age) || age < 0) return 'unknown'
-  if (age >= ttlMs) return 'expired'
+  // ⚠ «Истекло» произносим ТОЛЬКО про измеренный срок. На угаданном это была бы ложная тревога,
+  // которая стоит человеку похода в интернет-банк за тем, что не ломалось. Для угаданного срока
+  // потолок остаётся «пора обновить» — приложение попробует само, и если банк откажет, состояние
+  // станет честным по факту, а не по нашей догадке.
+  if (age >= ttlMs) return BANK_REFRESH_TTL_MEASURED[c.provider] ? 'expired' : 'due'
   if (age >= refreshAtAgeMs(c.provider)) return 'due'
   return 'ok'
 }

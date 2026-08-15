@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BankAccountInfo, BankToken } from '../server/utils/bankTokenStore'
 import {
   BANK_KEEP_ALIVE_MINUTES, BANK_REFRESH_TTL_SEC, MAX_BANK_KEEP_ALIVE_BATCH,
-  bankKeepAliveIntervalMs, narrowestBandMs, refreshAtAgeMs, runBankKeepAlive,
+  MIN_BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, maxBankKeepAliveMinutes,
+  narrowestBandMs, refreshAtAgeMs, runBankKeepAlive,
   selectBankAccountsNearExpiry, type BankKeepAliveDeps
 } from '../server/utils/bankTokenKeepAlive'
 
@@ -70,12 +71,39 @@ describe('selectBankAccountsNearExpiry', () => {
   })
 
   it('самые старые первыми и не больше капа', () => {
+    // Возраст держим ВНУТРИ окна [8 ч, 10 ч) — за ним строка считается истёкшей и в очередь не
+    // попадает вовсе (см. тест ниже), поэтому шаг минутный, а не часовой.
     const rows = Array.from({ length: MAX_BANK_KEEP_ALIVE_BATCH + 5 }, (_, i) =>
-      acc({ accountKey: `A${i}`, connectedAt: NOW - (20 + i) * HOUR }))
+      acc({ accountKey: `A${i}`, connectedAt: NOW - (8 * HOUR + i * 60_000) }))
     const r = selectBankAccountsNearExpiry(rows.slice().reverse(), NOW)
     expect(r.due).toHaveLength(MAX_BANK_KEEP_ALIVE_BATCH)
     // Порядок по возрасту: первым идёт самый старый из набора.
     expect(r.due[0]!.accountKey).toBe(`A${rows.length - 1}`)
+  })
+
+  it('граница ВКЛЮЧИТЕЛЬНАЯ: возраст ровно на пороге — уже пора', () => {
+    // Классическое место для случайной замены `>=` на `>` при рефакторинге.
+    const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - refreshAtAgeMs('alfa-by') })], NOW)
+    expect(r.due).toHaveLength(1)
+  })
+
+  it('⚠ старше ВСЕГО срока жизни — «expired», и мы его НЕ дёргаем', () => {
+    // Отозванный банком грант не обновляет `updated_at` — рефреш падает раньше сохранения.
+    // Без верхней границы такая строка сортируется первой, занимает капнутый батч и приносит
+    // банку новый запрос НА КАЖДОМ тике, вечно. Это и есть путь к «вы нас злоупотребляете»,
+    // достижимый без единой ошибки в настройке — просто накоплением отозванных подключений.
+    const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - 11 * HOUR })], NOW)
+    expect(r.due).toEqual([])
+    expect(r.expired).toHaveLength(1)
+  })
+
+  it('мёртвая строка не вытесняет живые из капнутого батча', () => {
+    const rows = [
+      acc({ accountKey: 'DEAD', connectedAt: NOW - 50 * HOUR }),
+      acc({ accountKey: 'ALIVE', connectedAt: NOW - 9 * HOUR })
+    ]
+    const r = selectBankAccountsNearExpiry(rows, NOW, { limit: 1 })
+    expect(r.due.map(d => d.accountKey)).toEqual(['ALIVE'])
   })
 
   it('непарсибельная метка времени пропускается, а не обновляется вслепую', () => {
@@ -106,7 +134,7 @@ describe('runBankKeepAlive', () => {
   it('обновляет то, что пора, и отчитывается счётчиками', async () => {
     const { d } = deps()
     await expect(runBankKeepAlive(d)).resolves.toEqual({
-      selected: 1, refreshed: 1, skipped: 0, failed: 0, unrefreshable: 0
+      selected: 1, refreshed: 1, skipped: 0, failed: 0, unrefreshable: 0, expired: 0
     })
   })
 
@@ -159,6 +187,20 @@ describe('runBankKeepAlive', () => {
     await expect(runBankKeepAlive(d)).rejects.toThrow('db down')
   })
 
+  it('истёкшие подключения названы в логе и НЕ ретраятся', async () => {
+    const { d, warn } = deps({ listAccounts: async () => [acc({ accountKey: 'DEAD', connectedAt: NOW - 50 * HOUR })] })
+    const s = await runBankKeepAlive(d)
+    expect(s).toMatchObject({ selected: 0, expired: 1, failed: 0 })
+    expect(warn.some(w => w.includes('DEAD') && w.includes('NOT retried'))).toBe(true)
+  })
+
+  it('длинный список не разворачивается в одну гигантскую строку лога', async () => {
+    const rows = Array.from({ length: 40 }, (_, i) => acc({ accountKey: `N${i}`, hasRefresh: false }))
+    const { d, warn } = deps({ listAccounts: async () => rows })
+    await runBankKeepAlive(d)
+    expect(warn.some(w => w.includes('+30 more'))).toBe(true)
+  })
+
   it('насыщение батча слышно — иначе часть подключений тихо не успела бы', async () => {
     const rows = Array.from({ length: MAX_BANK_KEEP_ALIVE_BATCH }, (_, i) =>
       acc({ accountKey: `A${i}`, connectedAt: NOW - 9 * HOUR }))
@@ -173,15 +215,22 @@ describe('каденция и инварианты', () => {
     expect(bankKeepAliveIntervalMs(60)).toBe(60 * 60_000)
     expect(bankKeepAliveIntervalMs(0)).toBe(BANK_KEEP_ALIVE_MINUTES * 60_000)
     expect(bankKeepAliveIntervalMs(1)).toBe(5 * 60_000)
-    expect(bankKeepAliveIntervalMs(99_999)).toBe(240 * 60_000)
+    // Верхний потолок ВЫВОДИТСЯ из полосы, а не выбран числом: 60 мин = половина 2-часовой
+    // полосы Альфы. Прежний фиксированный кламп (240 мин) был ШИРЕ полосы, то есть законная
+    // настройка «пореже, чтобы не дёргать банк» возвращала ту самую ночную смерть — молча.
+    expect(bankKeepAliveIntervalMs(99_999)).toBe(maxBankKeepAliveMinutes() * 60_000)
+    expect(maxBankKeepAliveMinutes() * 60_000).toBeLessThan(narrowestBandMs())
     expect(bankKeepAliveIntervalMs(Number.NaN)).toBe(BANK_KEEP_ALIVE_MINUTES * 60_000)
   })
 
-  it('⚠ сканирование ЧАЩЕ самой узкой полосы — иначе можно перешагнуть окно целиком', () => {
-    // Это и есть инвариант, ради которого написан `narrowestBandMs`: если каденция станет
-    // шире полосы (кто-то поднимет период «чтобы не дёргать банк»), токен успеет умереть
-    // между двумя сканами, и keep-alive будет существовать, ничего не делая.
-    expect(bankKeepAliveIntervalMs(BANK_KEEP_ALIVE_MINUTES)).toBeLessThan(narrowestBandMs())
+  it('⚠ сканирование ЧАЩЕ самой узкой полосы — при ЛЮБОМ допустимом значении', () => {
+    // Это и есть инвариант, ради которого выводится потолок: если каденция станет шире полосы,
+    // токен успеет умереть между двумя сканами, и keep-alive будет существовать, ничего не делая.
+    // Проверяем не только дефолт, но и границы — прежняя версия проверяла лишь дефолт и потому
+    // пропускала легальные значения, которые инвариант нарушают.
+    for (const m of [1, MIN_BANK_KEEP_ALIVE_MINUTES, BANK_KEEP_ALIVE_MINUTES, 10_000]) {
+      expect(bankKeepAliveIntervalMs(m)).toBeLessThan(narrowestBandMs())
+    }
   })
 
   it('срок жизни задан для КАЖДОГО провайдера — новый банк не скомпилируется молча', () => {
@@ -190,25 +239,38 @@ describe('каденция и инварианты', () => {
     expect(BANK_REFRESH_TTL_SEC['prior-by']).toBeGreaterThan(0)
     expect(BANK_REFRESH_TTL_SEC.manual).toBe(0) // онлайн-токена нет
     expect(refreshAtAgeMs('alfa-by')).toBe(8 * HOUR)
+    // ⚠ Пин ЗНАЧЕНИЯ, а не неравенства: перепутанный множитель в формуле полосы дал бы 32 ч
+    // вместо 2 ч, и проверка «каденция меньше полосы» осталась бы зелёной на сломанной формуле.
+    expect(narrowestBandMs()).toBe(2 * HOUR)
+    expect(BANK_KEEP_ALIVE_MINUTES).toBe(60) // документировано в .env.example и QUEUES.md
   })
 })
 
 describe('проводка в кроне', () => {
   it('keep-alive НЕ гейтится флагом опроса выписки', async () => {
     // Ровно эта сцепка и убивала подключение: `CRON_REAL_POLL` заведён, чтобы не дёргать
-    // ВЫПИСКУ, а обновление токена выпиской не является. Сторожим текстом плагина.
+    // ВЫПИСКУ, а обновление токена выпиской не является.
+    //
+    // ⚠ Считаем упоминания флага ВО ВСЁМ ФАЙЛЕ, а не внутри вырезанного окна. Оконная проверка
+    // (первая редакция этого теста) не ловила самый правдоподобный регресс: обернуть весь
+    // банковский крон-блок СНАРУЖИ одним `if (CRON_REAL_POLL)` «чтобы сгруппировать». Обёртка
+    // ложится ДО маркера, в окно не попадает, и тест остаётся зелёным на сломанном коде.
+    // Приём взят у `priorAuthSingleChokePoint.test.ts` — «единственная законная точка».
     const { readFileSync } = await import('node:fs')
     const src = readFileSync(new URL('../server/plugins/queue.ts', import.meta.url), 'utf8')
-    // Границы берём по маркерам самого блока, а не «N символов назад»: соседний блок опроса
-    // упоминает флаг законно, и окно по длине поймало бы его, а не нашу проводку.
-    const from = src.indexOf('// Keep-alive БАНКОВСКИХ токенов')
+    const mentions = [...src.matchAll(/process\.env\.CRON_REAL_POLL\b|envFlag\(['"]CRON_REAL_POLL/g)]
+    expect(mentions).toHaveLength(1) // единственное законное — сам опрос выписки
+  })
+
+  it('обновление вызывается ПРИНУДИТЕЛЬНО', async () => {
+    // Без `force` смотрели бы на срок access-токена — тот сигнал, которого как раз не хватает.
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('../server/plugins/queue.ts', import.meta.url), 'utf8')
+    const from = src.indexOf('bankKeepAliveDeps')
     const to = src.indexOf('bankKeepAliveTimer = setInterval')
     expect(from).toBeGreaterThan(0)
     expect(to).toBeGreaterThan(from)
-    const block = src.slice(from, to)
-    expect(block).not.toContain('CRON_REAL_POLL=')
-    expect(block).not.toContain('envFlag(\'CRON_REAL_POLL')
-    expect(block).toContain('force: true') // без force смотрели бы на срок access-токена
+    expect(src.slice(from, to)).toContain('force: true')
   })
 })
 
