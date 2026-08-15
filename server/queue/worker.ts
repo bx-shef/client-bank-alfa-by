@@ -52,6 +52,7 @@ import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
+import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
@@ -539,6 +540,7 @@ export function liveHandlerDeps(): HandlerDeps {
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
+      forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync

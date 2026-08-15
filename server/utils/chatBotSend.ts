@@ -35,6 +35,14 @@ export function resetBotCache(): void {
   botIdByPortal.clear()
 }
 
+/** Forget one portal — called on ONAPPUNINSTALL, where every other per-portal store is purged too.
+ *  Not a leak worth fearing (the key only ever arrives through an authenticated path, so growth is
+ *  bounded by portals that really installed us), but leaving one store out of the uninstall sweep is
+ *  how a store quietly stops being swept at all. */
+export function forgetBot(memberId: string): void {
+  botIdByPortal.delete(memberId)
+}
+
 /**
  * Resolve this portal's bot id, registering it if needed.
  *
@@ -56,11 +64,21 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
   try {
     const resp = await call(registration.method, registration.params)
     const id = extractBotId(resp)
-    botIdByPortal.set(memberId, id)
+    // ⚠ Кэшируем ТОЛЬКО положительный ответ. Непонятный, но не бросивший — это не «у портала
+    // никогда не будет бота», а «мы не разобрали форму»: имена полей конверта мы угадываем, и один
+    // нетипичный ответ навсегда (до рестарта) отключал бы бота на портале, не оставив ни симптома.
+    // Отрицательный вывод делает только ветка `catch` ниже, и только по документированному отказу.
+    if (id) botIdByPortal.set(memberId, id)
     return id
   } catch (error) {
     if (isPermanentBotError(error)) {
-      // «Не бывает» — запоминаем, чтобы не спрашивать на каждом сообщении.
+      // «Не бывает» — запоминаем, чтобы не спрашивать на каждом сообщении. Сказать об этом ВСЛУХ,
+      // один раз: молчание здесь неотличимо от «бот работает», а самый частый повод попасть сюда —
+      // старая установка без скоупа `imbot`, которую чинит переустановка приложения.
+      console.info(
+        '[chat] бот недоступен на портале, сообщения пойдут от имени владельца токена: %s',
+        (error as Error)?.message ?? 'без описания'
+      )
       botIdByPortal.set(memberId, null)
       return null
     }

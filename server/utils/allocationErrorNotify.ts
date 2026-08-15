@@ -1,10 +1,9 @@
-// Post an ALLOCATION-error notice for one operation to the portal's error chat
-// (im.message.add) over a portal-bound RestCall (#109, PROCESSING.md §5). Pure over
-// the injected `call` — unit-testable with a fake. The message text is built by the
-// shared, tested builder in app/utils/allocationErrorMessage.ts; this module only
-// does the REST call + result extraction, reusing chatNotifyWrite's method name +
-// id extractor. Whether a decision warrants a notice is decided by the builder (it
-// returns null for a clean allocate / none — then nothing is sent).
+// Post an ALLOCATION-error notice for one operation to the portal's error chat over a portal-bound
+// RestCall (#109, PROCESSING.md §5). Pure over the injected `call` — unit-testable with a fake. The
+// message text is built by the shared, tested builder in app/utils/allocationErrorMessage.ts; this
+// module only hands it to `postChatMessage`, which picks the route (bot first, token owner as
+// fallback — #496). Whether a decision warrants a notice is decided by the builder (it returns null
+// for a clean allocate / none — then nothing is sent).
 
 import type { StatementItem } from '../../app/types/statement'
 import type { AllocationDecision } from '../../app/utils/allocation'

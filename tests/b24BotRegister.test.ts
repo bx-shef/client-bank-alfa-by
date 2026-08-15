@@ -66,6 +66,22 @@ describe('isPermanentBotError', () => {
     expect(isPermanentBotError(new Error('BOT_LIMIT_EXCEEDED'))).toBe(true)
   })
 
+  it('НЕТ СКОУПА — самый частый случай, и он не говорит «ACCESS_DENIED»', () => {
+    // Каждый портал, установленный до этой фичи, живёт со старым грантом без `imbot`. Это не
+    // экзотика, а вся существующая база установок. Репозиторий уже знает, как этот отказ выглядит
+    // на проводе (#408): машиночитаемый `insufficient_scope` часто отсутствует, и SDK отдаёт только
+    // человеческую фразу про HIGHER PRIVILEGES. Пропустив их, мы сочли бы всю базу «транзиентной» и
+    // перерегистрировали бы бота на КАЖДОМ сообщении, вечно.
+    expect(isPermanentBotError(new Error('insufficient_scope'))).toBe(true)
+    expect(isPermanentBotError(new Error('The request requires HIGHER PRIVILEGES than provided by the access token')))
+      .toBe(true)
+  })
+
+  it('регистр не важен — портал отдаёт то так, то эдак', () => {
+    expect(isPermanentBotError(new Error('access_denied'))).toBe(true)
+    expect(isPermanentBotError(new Error('Access Denied'))).toBe(true)
+  })
+
   it('сетевой сбой ПОСТОЯННЫМ не считается', () => {
     // Иначе одна плохая минута подписывала бы все сообщения именем сотрудника до перезапуска.
     expect(isPermanentBotError(new Error('socket hang up'))).toBe(false)

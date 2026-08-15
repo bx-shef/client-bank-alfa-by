@@ -75,16 +75,33 @@ export function extractBotId(resp: Record<string, unknown>): string | null {
 /**
  * Errors that mean «this portal will never have a bot», as opposed to «try again later».
  *
- * The distinction is the whole point of the fallback: `ACCESS_DENIED` (REST API is a paid-plan
- * feature) and `BOT_LIMIT_EXCEEDED` are properties of the client's portal, not transient faults.
- * Retrying them on every message would burn REST budget forever and still deliver nothing — so we
- * stop asking and post as the token owner instead. A network blip is NOT in this list: it must stay
- * retryable, or one bad minute would demote a healthy portal until the next restart.
+ * The distinction is the whole point of the fallback: these are properties of the client's portal,
+ * not transient faults. Retrying them on every message would burn REST budget forever and still
+ * deliver nothing — so we stop asking and post as the token owner instead. A network blip is NOT in
+ * this list: it must stay retryable, or one bad minute would demote a healthy portal until restart.
+ *
+ * ⚠ THE MISSING-SCOPE SHAPE IS THE ONE THAT MATTERS MOST, and it does not say «ACCESS_DENIED».
+ * Every portal installed before this feature keeps its old grant without `imbot` until it
+ * reinstalls — that is the COMMON case, not the exotic one. This repo already learned what that
+ * failure looks like on the wire (#408, `classifyProvisionError`): the machine-readable
+ * `insufficient_scope` is often absent and all the SDK surfaces is the human sentence «The request
+ * requires HIGHER PRIVILEGES than provided by the … token». Omitting those two would classify the
+ * entire existing install base as «transient» and re-attempt registration on every single chat
+ * message, forever, against a rate limit this codebase otherwise guards carefully.
  */
-const PERMANENT_BOT_ERRORS = ['ACCESS_DENIED', 'BOT_LIMIT_EXCEEDED', 'ERROR_METHOD_NOT_FOUND', 'INVALID_CREDENTIALS']
+const PERMANENT_BOT_ERRORS = [
+  'access_denied',
+  'access denied',
+  'bot_limit_exceeded',
+  'error_method_not_found',
+  'invalid_credentials',
+  // Missing `imbot` scope — see the warning above.
+  'insufficient_scope',
+  'higher privileges'
+]
 
 /** Whether an error from the bot API means «give up on the bot for this portal». */
 export function isPermanentBotError(error: unknown): boolean {
-  const text = `${(error as Error)?.message ?? error ?? ''}`.toUpperCase()
+  const text = `${(error as Error)?.message ?? error ?? ''}`.toLowerCase()
   return PERMANENT_BOT_ERRORS.some(code => text.includes(code))
 }

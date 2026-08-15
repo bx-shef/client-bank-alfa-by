@@ -1,8 +1,9 @@
-// Post a DELETION-error notice to the portal's error chat (im.message.add) over a portal-bound
-// RestCall (#109, PROCESSING.md §9.2/§5). Pure over the injected `call` — unit-testable with a fake.
-// The message text is built by the shared, tested builder in app/utils/deletionErrorMessage.ts;
-// this module only does the REST call + result extraction, reusing chatNotifyWrite's method name +
-// id extractor. The caller guarantees a non-empty `dialogId` (skips when the portal has no error chat).
+// Post a DELETION-error notice to the portal's error chat over a portal-bound RestCall
+// (#109, PROCESSING.md §9.2/§5). Pure over the injected `call` — unit-testable with a fake. The
+// message text is built by the shared, tested builder in app/utils/deletionErrorMessage.ts; this
+// module only hands it to `postChatMessage`, which picks the route (bot first, token owner as
+// fallback — #496). The caller guarantees a non-empty `dialogId` (skips when the portal has no
+// error chat).
 
 import { buildDeletionErrorMessage, type DeletionErrorKind } from '../../app/utils/deletionErrorMessage'
 import { postChatMessage } from './chatNotifyWrite'

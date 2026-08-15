@@ -140,6 +140,38 @@ describe('install.vue — inside a B24 frame', () => {
     expect(regOrder).toBeLessThan(finishSpy.mock.invocationCallOrder[0]!)
   })
 
+  it('registers the app chat bot (imbot.v2.Bot.register) before finishing (#496)', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    type CallArg = { method: string, params: Record<string, unknown> }
+    const regIndex = callSpy.mock.calls.findIndex((call) => {
+      const arg = (call as unknown[])[0] as CallArg
+      // ⚠ Именно v2: `imbot.register` — устаревшее поколение, и ошибка тут тихая (старый метод
+      // существует и отвечает).
+      return arg?.method === 'imbot.v2.Bot.register'
+    })
+    expect(regIndex).toBeGreaterThanOrEqual(0)
+    const regArg = (callSpy.mock.calls[regIndex]![0]) as CallArg
+    expect(regArg.params.CODE).toBe('cba_statement_bot')
+    expect(JSON.stringify(regArg)).not.toMatch(/botToken/i) // под OAuth его быть не должно
+    const regOrder = callSpy.mock.invocationCallOrder[regIndex]!
+    expect(regOrder).toBeLessThan(finishSpy.mock.invocationCallOrder[0]!)
+  })
+
+  it('bot registration is BEST-EFFORT: a portal without the imbot scope still installs', async () => {
+    // Самый частый случай на старых установках: скоуп не выдан, регистрация отвергнута. Установка
+    // уже доставила токены — валить её из-за подписи сообщений нельзя.
+    callSpy.mockImplementation(async () => ({
+      isSuccess: false,
+      getData: () => ({ result: false }),
+      getErrorMessages: () => ['The request requires HIGHER PRIVILEGES than provided by the access token']
+    }))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Ошибка установки')
+  })
+
   it('trigger registration is BEST-EFFORT: a rejected promise does not block the install', async () => {
     // Non-admin installer / non-commercial plan → the API rejects trigger.add. The
     // install must still finish (the token-delivering event.bind already succeeded).

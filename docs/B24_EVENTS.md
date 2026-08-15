@@ -228,7 +228,7 @@ Backend принимает все вебхуки одной точкой вхо�
 1. **Публичный HTTPS backend.** Б24 шлёт события на публичный URL (`localhost` из compose недоступен):
    деплой за nginx-proxy (`https://<домен>/api/b24/events`) либо туннель (`cloudflared`/`ngrok`) в dev.
 2. **Регистрация локального приложения.** Путь установки = `https://<домен>/install`, обработчик (iframe)
-   = `https://<домен>/app`, права `crm,sale,im,documentgenerator,userfieldconfig,user_brief,placement` (источник — `B24_REQUIRED_SCOPES` в `app/config/b24.ts`; **`userfieldconfig` обязателен** — без него провижининг смарт-процессов молча отказывает, #408). Обработчик события **отдельно указывать
+   = `https://<домен>/app`, права `crm,sale,im,imbot,documentgenerator,userfieldconfig,user_brief,placement` (источник — `B24_REQUIRED_SCOPES` в `app/config/b24.ts`; **`userfieldconfig` обязателен** — без него провижининг смарт-процессов молча отказывает, #408; **`imbot`** — без него сообщения в чаты идут от имени сотрудника, а не приложения, #496). Обработчик события **отдельно указывать
    не нужно** — `/install` сам биндит `ONAPPINSTALL`/`ONAPPUNINSTALL` (до `installFinish`). Проверить —
    панель «Диагностика» на `/install` (блок «События») или `event.get`.
 3. **Установить** → в логах `[b24 events] ONAPPINSTALL member_id=…` + `bootstrapped`; строка в
