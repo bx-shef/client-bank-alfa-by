@@ -33,7 +33,12 @@ function fakeDeps(over: Partial<BankRefreshDeps> & { stored?: BankToken | null, 
       loads.push([m, p, a])
       return over.stored === undefined ? tok() : over.stored
     },
-    saveToken: async (_q, t) => { saved.push(t) },
+    // UPDATE-only contract (#505): `true` = the row was found and updated. By default the fake
+    // stands in for an existing connection.
+    saveToken: async (_q, t) => {
+      saved.push(t)
+      return true
+    },
     creds: () => creds,
     postRefresh: async (url, body, headers) => {
       posts.push({ url, body, headers })
@@ -186,7 +191,7 @@ describe('ensureBankToken', () => {
 
   it('account disconnected between check and lock (stored=null) → no save, returns passed token', async () => {
     const near = tok({ expiresAt: NOW - 1 })
-    const saveToken = vi.fn(async () => {})
+    const saveToken = vi.fn(async () => true)
     const { deps } = fakeDeps({ stored: null })
     const out = await ensureBankToken(near, { ...deps, saveToken })
     expect(out).toBe(near)
@@ -277,5 +282,31 @@ describe('bankCredsFromEnv', () => {
   })
   it('manual provider → null (no online OAuth)', () => {
     expect(bankCredsFromEnv('manual')).toBeNull()
+  })
+})
+
+describe('disconnect during a refresh (#505)', () => {
+  // ⚠ The race is real, not theoretical: the refresh holds a per-account advisory lock, but that
+  // lock does not hold back a plain `DELETE`, and the bank POST runs up to 15 s. The order
+  // «re-read → go to the bank → admin hits Disconnect → come back and save» used to resurrect the
+  // row through `INSERT … ON CONFLICT`, and the app kept reaching into the client's bank after
+  // they had forbidden it.
+
+  it('row vanished while we were at the bank — the token is NOT written back', async () => {
+    const near = tok({ expiresAt: NOW + 10_000 })
+    // `false` = the UPDATE matched no row, i.e. the account was disconnected between re-read and write.
+    const saveToken = vi.fn(async () => false)
+    const { deps } = fakeDeps({ stored: near })
+    const out = await ensureBankToken(near, { ...deps, saveToken })
+    expect(saveToken).toHaveBeenCalledTimes(1) // the attempt IS how we learn the row is gone
+    expect(out).toBe(near) // hand back the stored token: the fetch then fails honestly
+  })
+
+  it('normal path untouched: the row is there, the refresh is persisted', async () => {
+    const near = tok({ expiresAt: NOW + 10_000 })
+    const { deps, saved } = fakeDeps({ stored: near })
+    const out = await ensureBankToken(near, deps)
+    expect(saved).toEqual([out])
+    expect(out.accessToken).toBe('A2')
   })
 })

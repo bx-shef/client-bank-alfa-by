@@ -7,7 +7,8 @@ import {
   listAllBankAccountInfo,
   listAllBankAccounts,
   listBankTokensForPortal,
-  saveBankToken
+  saveBankToken,
+  updateBankTokenSecrets
 } from '../server/utils/bankTokenStore'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
@@ -219,7 +220,12 @@ describe('SCHEMA_SQL', () => {
 // Behavioral in-memory model of the bank_tokens table — honours the composite-PK upsert,
 // the WHERE scoping, and ORDER BY, so tests verify SEMANTICS (isolation/overwrite/order),
 // not just SQL substrings. pg returns BIGINT as a STRING, so expires_at is stored stringly.
-function memStore() {
+/**
+ * `clock` — подвижные «часы БД» вместо `now()`. Нужны, чтобы модель отличала «строку
+ * перештамповали» от «не тронули»: по `updated_at` keep-alive решает, кого пора обновлять, и без
+ * наблюдаемой метки удаление `updated_at = now()` из живого SQL не ловится ничем (#505 ревью).
+ */
+function memStore(clock = { now: 1_700_000_000_000 }) {
   const rows = new Map<string, Record<string, unknown>>()
   const key = (m: string, p: string, a: string) => `${m}|${p}|${a}`
   const query: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]> = async (sql, params = []) => {
@@ -228,9 +234,35 @@ function memStore() {
       const [member_id, provider, account_key, access_token, refresh_token_enc, expires_at] = p
       rows.set(key(member_id, provider, account_key), {
         member_id, provider, account_key, access_token, refresh_token_enc,
-        expires_at: String(expires_at) // pg int8 → string
+        expires_at: String(expires_at), // pg int8 → string
+        updated_at: new Date(clock.now)
       })
       return []
+    }
+    // ⚠ ПРОВЕРЯЕТСЯ РАНЬШЕ ЧТЕНИЯ: UPDATE несёт тот же `WHERE member_id = $1 AND provider = $2 AND
+    // account_key = $3`, и если отдать его ветке чтения, модель вернёт строку — то есть подмена
+    // UPDATE-only на upsert выглядела бы «успехом», а тест прошёл бы на сломанном коде.
+    if (/^UPDATE bank_tokens/.test(sql) && /SET\s+access_token/.test(sql)) {
+      const [member_id, provider, account_key, access_token, refresh_token_enc, expires_at] = p
+      const k = key(member_id, provider, account_key)
+      const r = rows.get(k)
+      if (!r) return [] // UPDATE-only: строки нет ⇒ ничего не создаём
+      rows.set(k, {
+        ...r,
+        access_token,
+        refresh_token_enc,
+        expires_at: String(expires_at),
+        // Штамп только если его правда просит SQL — иначе мутация «убрать updated_at = now()» была
+        // бы невидимой, а именно она тихо ломает выбор кандидатов keep-alive (#489).
+        updated_at: /updated_at\s*=\s*now\(\)/.test(sql) ? new Date(clock.now) : r.updated_at
+      })
+      return [{ member_id }]
+    }
+    // Скан по ВСЕМ порталам (listAllBankAccountInfo): без параметров, сортировка по updated_at.
+    if (/FROM bank_tokens ORDER BY updated_at/.test(sql)) {
+      return [...rows.values()]
+        .map(r => ({ ...r, has_refresh: r.refresh_token_enc !== '' && !String(r.refresh_token_enc).endsWith(':') }))
+        .sort((a, b) => Number(a.updated_at) - Number(b.updated_at))
     }
     if (/WHERE member_id = \$1 AND provider = \$2 AND account_key = \$3/.test(sql)) {
       const r = rows.get(key(p[0], p[1], p[2]))
@@ -373,5 +405,94 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
     }]
     const [row] = await listAllBankAccountInfo(query)
     expect(row!.hasRefresh).toBe(false)
+  })
+})
+
+describe('updateBankTokenSecrets — UPDATE-only (#505)', () => {
+  // ⚠ Эти проверки существуют потому, что вся защита #505 держится на ОДНОМ свойстве SQL: он не
+  // создаёт строку. Пока метод проверялся только через фейк в `ensureBankToken.test.ts`, подмена
+  // его обратно на upsert не роняла ни одного теста — то есть фикс был не защищён вообще.
+
+  it('существующее подключение обновляется, отвечает true, значения реально меняются', async () => {
+    const q = memStore()
+    await saveBankToken(q, token)
+    const ok = await updateBankTokenSecrets(q, {
+      ...token, accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000
+    })
+    expect(ok).toBe(true)
+    expect(await getBankToken(q, 'm1', 'alfa-by', 'MC_7')).toEqual({
+      ...token, accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000
+    })
+  })
+
+  it('СТРОКИ НЕТ ⇒ false, и подключение НЕ создаётся — это и есть весь смысл #505', async () => {
+    const q = memStore()
+    const ok = await updateBankTokenSecrets(q, token)
+    expect(ok).toBe(false)
+    expect(await getBankToken(q, 'm1', 'alfa-by', 'MC_7')).toBeNull()
+    expect(await listBankTokensForPortal(q, 'm1')).toEqual([])
+  })
+
+  it('отключили счёт, пока шёл рефреш — воскрешения не происходит', async () => {
+    // Ровно последовательность из issue: подключение есть → админ жмёт «Отключить» → вернувшийся
+    // рефреш пытается сохранить токен.
+    const q = memStore()
+    await saveBankToken(q, token)
+    await deleteBankTokensForPortal(q, 'm1')
+    expect(await updateBankTokenSecrets(q, { ...token, accessToken: 'ACCESS2' })).toBe(false)
+    expect(await listBankTokensForPortal(q, 'm1')).toEqual([])
+  })
+
+  it('ONAPPUNINSTALL: портал удалил приложение — его банковские креды не возвращаются', async () => {
+    // Второй случай, который лок на маршруте «Отключить» не закрыл бы: удаление приложения сносит
+    // ВСЕ счета портала тем же нелокируемым DELETE.
+    const q = memStore()
+    await saveBankToken(q, token)
+    await saveBankToken(q, { ...token, accountKey: 'MC_8' })
+    await deleteBankTokensForPortal(q, 'm1')
+    expect(await updateBankTokenSecrets(q, token)).toBe(false)
+    expect(await updateBankTokenSecrets(q, { ...token, accountKey: 'MC_8' })).toBe(false)
+    expect(await listBankTokensForPortal(q, 'm1')).toEqual([])
+  })
+
+  it('ПЕРЕШТАМПОВЫВАЕТ updated_at — по нему keep-alive выбирает, кого пора обновлять (#489)', async () => {
+    // Без штампа свежий токен либо вечно «due» (лишний запрос в банк на каждом тике), либо по
+    // старой метке уходит в «expired» и не обновляется вовсе — та самая ночная смерть.
+    const clock = { now: 1_700_000_000_000 }
+    const q = memStore(clock)
+    await saveBankToken(q, token)
+    const before = (await listAllBankAccountInfo(q))[0]!.connectedAt
+    clock.now += 3_600_000
+    await updateBankTokenSecrets(q, { ...token, accessToken: 'ACCESS2' })
+    const after = (await listAllBankAccountInfo(q))[0]!.connectedAt
+    expect(after).toBe(before + 3_600_000)
+  })
+
+  it('пустой refresh кладётся ЛИТЕРАЛЬНОЙ пустой строкой, а не шифром пустой строки', async () => {
+    // Тот же инвариант, что у `saveBankToken`: шифрование '' даёт непустой блоб, и признак
+    // `has_refresh` начинает врать «подключено» про счёт, который нечем продлить.
+    const q = memStore()
+    await saveBankToken(q, token)
+    await updateBankTokenSecrets(q, { ...token, refreshToken: '' })
+    expect((await listAllBankAccountInfo(q))[0]!.hasRefresh).toBe(false)
+    expect((await getBankToken(q, 'm1', 'alfa-by', 'MC_7'))!.refreshToken).toBe('')
+  })
+
+  it('ИЗОЛЯЦИЯ: обновляет ровно свою строку по всем трём ключам', async () => {
+    // Перепутанные местами $2/$3 иначе прошли бы незамеченными.
+    const q = memStore()
+    for (const t of [
+      token,
+      { ...token, accountKey: 'MC_8' },
+      { ...token, provider: 'prior-by' as const },
+      { ...token, memberId: 'm2' }
+    ]) await saveBankToken(q, t)
+
+    await updateBankTokenSecrets(q, { ...token, accessToken: 'ONLY-ME' })
+
+    expect((await getBankToken(q, 'm1', 'alfa-by', 'MC_7'))!.accessToken).toBe('ONLY-ME')
+    for (const [m, p, a] of [['m1', 'alfa-by', 'MC_8'], ['m1', 'prior-by', 'MC_7'], ['m2', 'alfa-by', 'MC_7']] as const) {
+      expect((await getBankToken(q, m, p, a))!.accessToken, `${m}/${p}/${a}`).toBe('ACCESS')
+    }
   })
 })

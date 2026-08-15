@@ -36,9 +36,13 @@ export interface BankToken {
 
 /**
  * Upsert a connected bank account's tokens (refresh encrypted before storage). Keyed by
- * `(member_id, provider, account_key)` — a re-connect or a refresh simply overwrites the
- * row (bank OAuth rotates the refresh token every refresh, so no write-once). Atomic at
- * the row level via the single upsert.
+ * `(member_id, provider, account_key)` — a re-connect simply overwrites the row (bank OAuth
+ * rotates the refresh token every refresh, so no write-once). Atomic at the row level via the
+ * single upsert.
+ *
+ * ⚠ THIS CREATES A CONNECTION. A token refresh must use `updateBankTokenSecrets` (UPDATE-only) —
+ * see its docblock: the INSERT semantics here carry the power to resurrect a disconnected account,
+ * and that power belongs only to the OAuth callback, where a human just authorised us at the bank.
  */
 export async function saveBankToken(query: QueryFn, token: BankToken): Promise<void> {
   await query(
@@ -67,6 +71,53 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
     [token.memberId, token.provider, token.accountKey, token.accessToken,
       token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
   )
+}
+
+/**
+ * Persist REFRESHED tokens of an existing connection. UPDATE-only: with no such row it writes
+ * nothing and answers `false` (#505).
+ *
+ * ⚠ WHY THIS IS SEPARATE FROM `saveBankToken`. The refresh takes a per-account advisory lock and
+ * re-reads the row inside it — but an advisory lock does not hold back unrelated DML, and a
+ * `DELETE` is exactly that. The order that actually happens: the refresh re-reads the row → goes
+ * to the bank (POST up to 15 s) → the admin hits «Отключить», the `DELETE` runs and commits → the
+ * refresh returns and saves through `INSERT … ON CONFLICT`, **recreating the row**. A connection
+ * the person had just deliberately removed went on living and being polled. For a bank connection
+ * «disconnect» means «stop reaching into my bank», so a silent resurrection breaks precisely what
+ * the button was pressed for.
+ *
+ * ⚠ WHY THIS RATHER THAN A LOCK ON THE DELETE. A lock in the disconnect route would cover that
+ * route only, while the same INSERT also resurrects a row during app removal
+ * (`deleteBankTokensForPortal` on `ONAPPUNINSTALL`) — i.e. we would keep the bank credentials of a
+ * portal that removed us, and there is nowhere to put the lock there (one DELETE wipes every
+ * account of the portal at once). UPDATE-only closes both with a single rule, needing neither a
+ * second lock nor a tombstone table with its sweep. It also avoids the lock's own cost:
+ * `lock_timeout` is 10 s while the bank POST runs up to 15 s, so «Отключить» could have failed
+ * outright just for landing behind someone else's refresh. Operation order does not matter here:
+ * deleted before our UPDATE — it finds no row; after — the delete takes the row away. Same ending.
+ *
+ * ⚠ The power to create a connection stays with `saveBankToken`, i.e. with the OAuth callback,
+ * where a human has just authenticated at the bank. The rotated refresh is therefore lost for a
+ * disconnected account only — nobody will use it, and reconnecting issues a fresh grant.
+ *
+ * `updated_at` is re-stamped: keep-alive picks renewal candidates by it (#489).
+ */
+export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): Promise<boolean> {
+  const rows = await query(
+    `UPDATE bank_tokens
+        SET access_token      = $4,
+            refresh_token_enc = $5,
+            expires_at        = $6,
+            updated_at        = now()
+      WHERE member_id = $1 AND provider = $2 AND account_key = $3
+      RETURNING member_id`,
+    // An empty refresh is a LITERAL empty string — not NULL, not ciphertext — for exactly the
+    // reasons spelled out in `saveBankToken` (encrypting '' yields a non-empty blob, which makes
+    // the `has_refresh` probe answer true for an account that cannot be refreshed at all).
+    [token.memberId, token.provider, token.accountKey, token.accessToken,
+      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
+  )
+  return rows.length > 0
 }
 
 /** Map a DB row to a `BankToken`, decrypting the refresh blob. Throws if it can't be

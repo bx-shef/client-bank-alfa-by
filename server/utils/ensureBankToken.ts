@@ -21,7 +21,7 @@ import { signPriorJwt } from './priorJwt'
 import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
-import { getBankToken, saveBankToken } from './bankTokenStore'
+import { getBankToken, updateBankTokenSecrets } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
 
@@ -92,7 +92,9 @@ export interface BankRefreshDeps {
   now: () => number
   withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>) => Promise<T>
   loadToken: (q: QueryFn, memberId: string, provider: BankProviderId, accountKey: string) => Promise<BankToken | null>
-  saveToken: (q: QueryFn, token: BankToken) => Promise<void>
+  /** Persist the refreshed tokens. **UPDATE-only** — `false` means the row is already gone and
+   *  must NOT be recreated: the account was disconnected while we were at the bank (#505). */
+  saveToken: (q: QueryFn, token: BankToken) => Promise<boolean>
   /** Per-provider OAuth creds (from env), or `null` when the bank isn't configured. */
   creds: (provider: BankProviderId) => BankOAuthCreds | null
   /** POST the refresh body to the token URL (with provider-specific auth headers) and
@@ -163,7 +165,8 @@ const liveDeps: BankRefreshDeps = {
   now: Date.now,
   withLock: withAdvisoryLock,
   loadToken: getBankToken,
-  saveToken: saveBankToken,
+  // UPDATE-only: a refresh may not create a connection — only the OAuth callback may (#505).
+  saveToken: updateBankTokenSecrets,
   creds: bankCredsFromEnv,
   priorTokenAuth: priorRefreshAuthFromEnv,
   postRefresh: (url, body, headers) => {
@@ -233,7 +236,15 @@ export async function ensureBankToken(
       refreshToken: r.refreshToken || stored.refreshToken,
       expiresAt: deps.now() + r.expiresIn * 1000
     }
-    await deps.saveToken(q, updated)
+    // ⚠ UPDATE-only, and the result IS checked. The row may have vanished WHILE we were at the
+    // bank: the lock holds back other refreshers, but an advisory lock does not hold back a plain
+    // `DELETE`, and the POST runs up to 15 s. This used to be an upsert, so a disconnected account
+    // came back with a fresh token — the app kept reaching into the client's bank after they had
+    // forbidden it (#505).
+    if (!await deps.saveToken(q, updated)) {
+      console.warn(`[ensureBankToken] ${stored.provider} account was disconnected mid-refresh — token NOT stored`)
+      return stored
+    }
     return updated
   })
 }
