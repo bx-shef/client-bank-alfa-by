@@ -63,7 +63,13 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
        access_token       = EXCLUDED.access_token,
        refresh_token_enc  = EXCLUDED.refresh_token_enc,
        expires_at         = EXCLUDED.expires_at,
-       consent_expires_at = EXCLUDED.consent_expires_at,
+       -- НЕИЗВЕСТНОЕ НЕ ЗАТИРАЕТ ИЗВЕСТНОЕ. 0 значит «даты нет», и при переподключении счёта
+       -- (ответ банка без expirationDate — транзиентная аномалия) прямое присваивание стёрло бы
+       -- реальный срок, который мы уже знали: подключение осталось бы живым, но предупреждение
+       -- «согласие истекает через неделю» пропало бы до следующего удачного цикла.
+       consent_expires_at = CASE WHEN EXCLUDED.consent_expires_at > 0
+                                 THEN EXCLUDED.consent_expires_at
+                                 ELSE bank_tokens.consent_expires_at END,
        updated_at         = now()`,
     // ⚠ An EMPTY refresh token is stored as a LITERAL empty string — NOT encrypted, and NOT SQL
     // NULL. Encrypting '' yields a perfectly non-empty blob (`iv:tag:` with an empty ciphertext
@@ -157,7 +163,12 @@ function rowToBankToken(row: Record<string, unknown>): BankToken {
     accountKey: String(row.account_key),
     accessToken: String(row.access_token),
     refreshToken,
-    expiresAt: Number(row.expires_at)
+    expiresAt: Number(row.expires_at),
+    // ⚠ Читать ОБЯЗАТЕЛЬНО, хотя SELECT колонку и так тянет: без этой строки `getBankToken` молча
+    // отдавал бы токен без срока согласия, а `saveBankToken` при переподключении получил бы
+    // `undefined` → 0 → «дата неизвестна». То есть знание о сроке терялось бы на каждом
+    // round-trip, и предупреждение «согласие истекает» просто не появлялось бы (#503).
+    consentExpiresAt: Number(row.consent_expires_at ?? 0)
   }
 }
 

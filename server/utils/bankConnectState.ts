@@ -88,6 +88,11 @@ export function verifyConnectState(value: string | undefined, secret: string, no
   if (typeof payload.memberId !== 'string' || !payload.memberId) return null
   if (typeof payload.provider !== 'string' || !payload.provider) return null
   if (typeof payload.nonce !== 'string' || !payload.nonce) return null
+  // Симметрия с остальными полями: подделать тело без секрета нельзя, но проверка типа стоит здесь
+  // на случай будущего пути, собирающего state не из extractConsentExpiry (который сам гарантирует
+  // number|null). Битое значение иначе доехало бы до BIGINT-колонки молча.
+  if (payload.consentExpiresAt !== undefined
+    && (typeof payload.consentExpiresAt !== 'number' || !Number.isFinite(payload.consentExpiresAt))) return null
   if (typeof payload.exp !== 'number' || payload.exp <= nowMs) return null
   return payload
 }
