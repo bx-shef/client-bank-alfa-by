@@ -82,3 +82,25 @@ describe('handleSetupStatus', () => {
     expect(read).toBe(false)
   })
 })
+
+describe('счётчик нерабочих подключений доезжает до ответа (#504)', () => {
+  // ⚠ Проверка «в дефолтном случае там ноль» ничего не доказывает: захардкоженная константа
+  // проходит её ровно так же. А цена незаметности тут высокая — роут продолжает честно СЧИТАТЬ
+  // нерабочие подключения, но докладывает, что всё хорошо, и экран готовности снова красит
+  // «Банк подключён» зелёным на подключении, по которому импорт уже стоит.
+  it('сколько насчитали — столько и отдали', async () => {
+    const res = await handleSetupStatus(
+      deps({ countAccounts: async () => ({ connected: 3, pending: 1, unhealthy: 2 }) }),
+      input
+    )
+    expect(res.body).toMatchObject({ connectedAccounts: 3, pendingAccounts: 1, unhealthyAccounts: 2 })
+  })
+
+  it('старый источник без поля — ноль, а не падение', async () => {
+    const res = await handleSetupStatus(
+      deps({ countAccounts: async () => ({ connected: 1, pending: 0 }) }),
+      input
+    )
+    expect(res.body.unhealthyAccounts).toBe(0)
+  })
+})
