@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MatchMatrix } from '~/utils/purposeMatch'
-import { foldHomoglyphs, recognizeByMatrices } from '~/utils/purposeMatch'
+import { foldHomoglyphs, MAX_ID_CHARS, recognizeByMatrices } from '~/utils/purposeMatch'
 
 // Pure matrix-based identifier recognition from a payment purpose (#109, §4).
 // Masks are config (real prefixes arrive with live statements) — tests supply
@@ -201,6 +201,27 @@ describe('номер, слипшийся с предыдущим словом и
     }
   })
 
+  it('нижний регистр — тот же результат', () => {
+    const got = recognizeByMatrices('оплата по счету1000001-b24 от 01.01.2026', m('d+-B24'))
+    expect(got.map(r => r.value)).toEqual(['1000001-в24'])
+  })
+
+  it('несколько номеров в одной строке — оба', () => {
+    const got = recognizeByMatrices('ПО СЧЕТУ1000001-B24 И СЧЕТУ1000002-B24', m('d+-B24'))
+    expect(got.map(r => r.value)).toEqual(['1000001-В24', '1000002-В24'])
+  })
+
+  it('номер в самом начале строки', () => {
+    const got = recognizeByMatrices('1000001-B24 ОПЛАТА', m('d+-B24'))
+    expect(got.map(r => r.value)).toEqual(['1000001-В24'])
+  })
+
+  it('слишком длинное значение после префикса отбрасывается капом', () => {
+    // `MAX_ID_CHARS` — защита от абсурдных совпадений; послабление границы её не обходит.
+    const long = '9'.repeat(MAX_ID_CHARS + 5)
+    expect(recognizeByMatrices(`ПО СЧЕТУ${long}`, m('d+'))).toEqual([])
+  })
+
   it('№ работал и раньше — он не буква и границу не нарушает', () => {
     const got = recognizeByMatrices('ОПЛАТА ПО СЧЕТУ №1000001-B24', m('d+-B24'))
     expect(got.map(r => r.value)).toEqual(['1000001-В24'])
@@ -225,8 +246,58 @@ describe('послабление границы НЕ открыло дорогу
     expect(recognizeByMatrices('КОД ЛИСЧ1234', bare)).toEqual([])
   })
 
-  it('«N» на своём месте номер всё-таки открывает', () => {
-    expect(recognizeByMatrices('ТОВАР N1234 ШТ', bare).map(r => r.value)).toEqual(['1234'])
+  it('«N» САМ ПО СЕБЕ номер НЕ открывает — он про любой документ, не только про счёт', () => {
+    // ⚠ Здесь стоял обратный тест, и он закреплял настоящий дефект. `N`/`№` — общий знак номера,
+    // его лепят к чему угодно; допустив его сам по себе, мы отдаём каждой маске вида `d+` номер,
+    // читать который она не имеет права. Проверено на реальной функции — все пять ниже
+    // превращались в «номер счёта», стоило разрешить голый `N`.
+    expect(recognizeByMatrices('ОПЛАТА ЗА ТОВАР N1234 ШТ', bare)).toEqual([])
+  })
+
+  it('номера ЧУЖИХ документов номером счёта не становятся', () => {
+    for (const purpose of [
+      'СОГЛАСНО АКТУ NO456 СДАЧИ-ПРИЕМКИ РАБОТ',
+      'ПЕРЕЧИСЛЕНИЕ НА Р/С N301234567 ПОЛУЧАТЕЛЯ',
+      'ПО ЗАЯВКЕ N55 НА ВОЗВРАТ СРЕДСТВ'
+    ]) {
+      expect(recognizeByMatrices(purpose, bare), purpose).toEqual([])
+    }
+  })
+
+  it('позиции в накладной — самый опасный случай: N1/N2 совпадают с ранними счетами', () => {
+    // У молодой компании реальные счета как раз и нумеруются с единицы, поэтому ложный «номер 1»
+    // это не только шум в чате ошибок, но и шанс сойтись с настоящим счётом по сумме.
+    expect(recognizeByMatrices('ОПЛАТА ЗА ТОВАР N1 ТОВАР N2 СОГЛАСНО НАКЛАДНОЙ', bare)).toEqual([])
+  })
+
+  it('номер договора с косой чертой — тоже не счёт', () => {
+    const slash = [{ mask: 'd+/d+', kind: 'invoice-number' as const }]
+    expect(recognizeByMatrices('ПО ДОГОВОРУ N45/16 ОТ 12.03.2026', slash)).toEqual([])
+  })
+})
+
+describe('знак номера работает ТОЛЬКО после слова «счёт» (#492)', () => {
+  const m = [{ mask: 'd+-B24', kind: 'invoice-number' as const }]
+
+  it('«СЧЕТУ N1000002-B24» — распознаётся: знак номера привязан к слову «счёт»', () => {
+    // Все три замеренных на живых платежах случая выглядят именно так — `N` стоит сразу за
+    // «СЧЕТУ». Общее употребление знака номера так не выглядит никогда.
+    const got = recognizeByMatrices('СОГЛАСНО СЧЕТУ N1000002-B24 ОТ 01.01.2026', m)
+    expect(got.map(r => r.value)).toEqual(['1000002-В24'])
+  })
+
+  it('«СЧЕТ NO1000002-B24» — двухбуквенная форма тоже', () => {
+    const got = recognizeByMatrices('ОПЛАТА ПО СЧЕТ NO1000002-B24', m)
+    expect(got.map(r => r.value)).toEqual(['1000002-В24'])
+  })
+
+  it('без пробела между словом и знаком — тоже', () => {
+    const got = recognizeByMatrices('ОПЛАТА ПО СЧЕТУN1000002-B24', m)
+    expect(got.map(r => r.value)).toEqual(['1000002-В24'])
+  })
+
+  it('знак номера после ЧУЖОГО слова счёт не открывает', () => {
+    expect(recognizeByMatrices('ПО АКТУ N1000002-B24', m)).toEqual([])
   })
 })
 

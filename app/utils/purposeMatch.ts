@@ -107,7 +107,22 @@ const BOUND_R = `(?![${ALNUM}])`
  * ⚠ `№` IS ABSENT ON PURPOSE: it is not in `ALNUM`, so the plain boundary already admits it, and
  * `№1000001` has always worked. Only LETTER prefixes need naming.
  */
-const PREFIX_NOISE = ['СЧЕТУ', 'СЧЕТА', 'СЧЕТ', 'СЧЁТ', 'СЧ', 'NO', 'N'] as const
+const INVOICE_WORDS = ['СЧЕТУ', 'СЧЕТА', 'СЧЕТ', 'СЧЁТ', 'СЧ'] as const
+
+/**
+ * The number sign, which may follow the word above before the digits start.
+ *
+ * ⚠ ONLY AFTER THAT WORD — never on its own. `N`/`NO` is a GENERIC «номер», glued to whatever
+ * document is being referenced, so admitting it by itself hands every `d+`-shaped mask a number it
+ * has no business reading: `АКТУ NO456`, `Р/С N301234567`, `ПО ЗАЯВКЕ N55`, `ДОГОВОРУ N45/16`,
+ * and line items `ТОВАР N1 … N2`. Measured against the real function, all five turn into invoice
+ * numbers the moment bare `N` is allowed — and the line-item case is the dangerous one, because
+ * `N1`/`N2` are exactly the low numbers a young company's real invoices carry.
+ *
+ * Tying it to the invoice word costs nothing: in all three cases measured on live payments the `N`
+ * stands right after «СЧЕТУ» («СОГЛАСНО СЧЕТУ N1000002-B24»). The generic use never does.
+ */
+const NUMBER_SIGN = ['NO', 'N'] as const
 
 /**
  * Left boundary: either nothing alphanumeric to the left (the original rule), or one of the noise
@@ -122,10 +137,12 @@ const PREFIX_NOISE = ['СЧЕТУ', 'СЧЕТА', 'СЧЕТ', 'СЧЁТ', 'СЧ'
  * match — the fix would silently do nothing for exactly the portals that chose that alphabet.
  */
 function boundLeft(alphabet: Alphabet): string {
-  const words = PREFIX_NOISE
-    .map(w => escapeRegExp(foldHomoglyphs(w, alphabet)))
-    .join('|')
-  return `(?:(?<![${ALNUM}])|(?<=(?<![${ALNUM}])(?:${words})))`
+  const fold = (w: string) => escapeRegExp(foldHomoglyphs(w, alphabet))
+  const words = INVOICE_WORDS.map(fold).join('|')
+  const sign = NUMBER_SIGN.map(fold).join('|')
+  // «счёт» in some case, optionally followed by a number sign, optionally spaced — then the digits.
+  const noise = `(?:${words})\\s*(?:${sign})?`
+  return `(?:(?<![${ALNUM}])|(?<=(?<![${ALNUM}])${noise}))`
 }
 
 /**
@@ -188,13 +205,17 @@ export function recognizeByMatrices(
   )
   const out: RecognizedId[] = []
   const seen = new Set<string>()
+  // Собирается ОДИН раз: алфавит на весь вызов неизменен, а до этого свёртка+склейка повторялись на
+  // каждой матрице (до `MAX_MATRICES`) ради одинакового результата. Капы существуют как бюджет
+  // против DoS — тратить его на пересборку константы незачем.
+  const left = boundLeft(alphabet)
   for (const matrix of matrices.slice(0, MAX_MATRICES)) {
     const mask = matrix.mask.trim()
     if (!mask || mask.length > MAX_MASK_CHARS) continue
     const body = maskToPattern(foldHomoglyphs(mask, alphabet))
     let re: RegExp
     try {
-      re = new RegExp(boundLeft(alphabet) + '(' + body + ')' + BOUND_R, 'giu')
+      re = new RegExp(left + '(' + body + ')' + BOUND_R, 'giu')
     } catch {
       continue // a mask that somehow compiles to invalid regex is skipped, not thrown
     }
