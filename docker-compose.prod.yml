@@ -254,6 +254,12 @@ services:
       # Per-worker parallelism for fetch/parse/crm-sync (default 1). Raise with care:
       # crm-sync is REST-bound and B24 limits are per-portal — batch first (docs/QUEUES.md).
       QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-1}
+      # Раскрыть НАЗНАЧЕНИЕ ПЛАТЕЖА в логе операций (`[op]`). ⚠ Осознанное временное послабление
+      # docs/PRIVACY.md §Логи — включают на время калибровки «карты сопоставления» (маску нельзя
+      # написать для нумерации, которую ни разу не видел) и ВЫКЛЮЧАЮТ обратно. Ровно тот же
+      # порядок, что с уровнем error-лога крипто-шлюза. Нужна ИМЕННО ЗДЕСЬ: crm-sync крутится на
+      # воркере, на backend переменная не сделает ничего.
+      STATEMENT_DEBUG_LOG: ${STATEMENT_DEBUG_LOG:-0}
       # Global A8 rate limiter — attached HERE (the fetch workers), so these knobs are inert
       # unless passed to this service. The default 100/60s sits right AT Alfa's own ceiling
       # with no headroom, so lower it here if the bank starts throttling. Prior is budgeted

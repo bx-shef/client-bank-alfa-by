@@ -105,6 +105,16 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
  *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
+/** Reveal the PAYMENT PURPOSE in the `[op]` log line (`STATEMENT_DEBUG_LOG=1`; default OFF).
+ *  Read once at start — flipping it means a restart, which is intended: this is a deliberate,
+ *  announced loosening of docs/PRIVACY.md §Логи for a calibration run, not a runtime knob.
+ *  Everything else in `[op]` is logged unconditionally; only this field is gated. */
+const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
+/** Cap for the revealed purpose. Longer than the `logSafe` default (128) because a real purpose
+ *  routinely carries several document numbers and the tail is where they sit — truncating there
+ *  would hide the very thing the flag is turned on to see. */
+const MAX_LOGGED_PURPOSE = 300
+
 const DEMO_DELAY = demoDelayMs(Number(process.env.DEMO_DELAY_MS ?? 600))
 const demoPause = (account: string): Promise<void> =>
   isDemoAccount(account) && DEMO_DELAY > 0 ? delay(DEMO_DELAY) : Promise.resolve()
@@ -124,13 +134,22 @@ export function liveHandlerDeps(): HandlerDeps {
         await demoPause(job.account)
         return demoItems(job)
       }
-      return fetchBankStatement({
+      const items = await fetchBankStatement({
         memberId: job.memberId,
         provider: job.providerId,
         account: job.account,
         dateFrom: job.dateFrom,
         dateTo: job.dateTo
       })
+      // A poll that answers with NOTHING and a poll that never reached the bank looked identical
+      // from outside: both produced silence, because a chained crm-sync only exists when
+      // items.length > 0 and a thrown fetch is reported by the failure path. So «no operations»
+      // was indistinguishable from «wrong window», «wrong account» and «connection dead» — the
+      // first question asked of every live run had no answer anywhere. One line per fetch settles
+      // it. Amounts/purposes stay out (docs/PRIVACY.md §Логи); the account is logSafe'd like
+      // everywhere else, since the bank echoes operator-supplied values.
+      console.log(`[fetch] ${job.providerId} portal ${job.memberId}, account ${logSafe(job.account)} ${job.dateFrom}..${job.dateTo}: ${items.length} ops`)
+      return items
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
     // to operations (server is the single parse authority). Demo/fetch path is
@@ -280,6 +299,24 @@ export function liveHandlerDeps(): HandlerDeps {
           ? `manual(${decision.candidates.length} candidates, no exact match)`
           : 'none'
       console.log(`[allocate] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
+    },
+    // Per-op outcome — the one line an operation gets when it matched NOTHING (see the dep's doc
+    // in handlers.ts). The counterparty's account is the payload here on purpose: it is the exact
+    // value `findCompany` looks up in the portal's requisites, so it turns an opaque «unmatched»
+    // into «this number is not on any company in your CRM» — which is a thing the owner can act on.
+    // Follows docs/PRIVACY.md §Логи: account/docId/counterparty account are logged, AMOUNTS ARE
+    // NOT, and the purpose only behind the opt-in gate below.
+    onOperation: (item, outcome, memberId) => {
+      const owner = outcome.owner === 'client'
+        ? 'company'
+        : outcome.owner === 'my-company' ? 'my-company (fallback)' : 'NO OWNER'
+      // The purpose is payer-authored free text — the widest untrusted field we hold, and the one
+      // §Логи deliberately keeps out of the log. But calibrating the recognition matrices means
+      // reading REAL purposes: you cannot write a mask for a numbering you have never seen. So it
+      // is available, opt-in, exactly like the crypto gateway's error-log level (#460) — a
+      // temporary loosening for a live run, switched back after. Default OFF.
+      const purpose = STATEMENT_DEBUG_LOG ? ` purpose="${logSafe(item.purpose, MAX_LOGGED_PURPOSE)}"` : ''
+      console.log(`[op] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${item.direction} ${item.currency} ← ${logSafe(item.counterparty.account) || 'счёт не указан'} → ${owner}, recognized ${outcome.recognized}, activity ${outcome.activityId ?? '—'}${purpose}`)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
