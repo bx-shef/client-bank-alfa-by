@@ -27,35 +27,15 @@
 //      scan and counted separately — that count is the thing worth showing an admin.
 
 import type { BankProviderId } from '../../app/types/statement'
-import { ALFA_REFRESH_TOKEN_TTL_SEC } from '../../app/utils/alfaOauth'
+import { BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 
 const HOUR_MS = 3_600_000
 
-/**
- * Refresh-token lifetime per provider, in SECONDS.
- *
- * ⚠ `alfa-by` is the bank's documented figure AND confirmed live (#488): a connection died between
- * hour 10 and hour 16 of idleness. `prior-by` is a deliberate UNDER-estimate, not a measurement —
- * the bank does not document it and we have not observed an expiry. Guessing low costs at most a
- * couple of extra token calls a day per account; guessing high costs a dead connection that only
- * the account owner can revive by logging into their internet bank. When Prior's real figure is
- * measured, raise this and say so here.
- *
- * `manual` has no online token at all — file upload — and never appears in `bank_tokens`; it is
- * present only so the map stays exhaustive over `BankProviderId` (a new bank won't compile until
- * its lifetime is stated).
- */
-export const BANK_REFRESH_TTL_SEC: Record<BankProviderId, number> = {
-  'alfa-by': ALFA_REFRESH_TOKEN_TTL_SEC,
-  'prior-by': 12 * 3600,
-  'manual': 0
-}
-
-/** Refresh once the token is within this fraction of its life from expiry. 0.2 of Alfa's 10 h is
- *  a 2 h band — comfortably wider than the hourly scan, so a token is always renewed with hours
- *  to spare even if one scan is missed (a restart, a slow tick). */
-export const KEEP_ALIVE_BAND = 0.2
+// ⚠ Сроки жизни и полоса обновления живут в `app/utils/bankTokenLifetime.ts`, а не здесь: этими же
+// числами интерфейс настроек решает, что показать администратору. Разъехавшись, они дали бы ровно
+// ту беду, ради которой всё писалось, — зелёную строку на подключении, которое сервер уже похоронил.
+export { BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs }
 
 /** Max accounts refreshed per run — bounds the burst against the bank's OAuth endpoint the same
  *  way the portal keep-alive bounds Bitrix. Deliberately generous relative to `bank_tokens`
@@ -69,12 +49,6 @@ export const BANK_KEEP_ALIVE_MINUTES = 60
  *  bank; the upper bound keeps it meaningfully shorter than Alfa's ~10 h life. */
 export const MIN_BANK_KEEP_ALIVE_MINUTES = 5
 export const MAX_BANK_KEEP_ALIVE_MINUTES = 240
-
-/** Age (ms) at which a provider's token should be renewed: its lifetime minus the band. */
-export function refreshAtAgeMs(provider: BankProviderId, band = KEEP_ALIVE_BAND): number {
-  const ttlMs = (BANK_REFRESH_TTL_SEC[provider] ?? 0) * 1000
-  return ttlMs * (1 - band)
-}
 
 export interface BankKeepAliveSelection {
   /** Accounts to refresh now, oldest first, capped. */

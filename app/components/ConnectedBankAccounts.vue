@@ -4,6 +4,7 @@ import { useBankAccounts, type ConnectedBankAccount } from '~/composables/useBan
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
+import { connectionHealth, connectionHealthBadge } from '~/utils/bankTokenLifetime'
 
 // Connected bank accounts, with a per-row disconnect (#404). Lives inside BankConnectCard, above
 // the connect form, so the admin sees what is already bound BEFORE adding another account —
@@ -33,6 +34,13 @@ function providerLabel(id: ConnectedBankAccount['provider']): string {
 function connectedAgo(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return ''
   return formatRelativeTime(new Date(ms).toISOString(), Date.now())
+}
+
+/** Бейдж состояния подключения (#488) или `null`, когда сказать нечего. Чистое ядро —
+ *  `bankTokenLifetime.ts`, ТО ЖЕ, по которому сервер решает, кого обновлять: собственное правило
+ *  в интерфейсе рисовало бы зелёное на подключении, которое сервер уже похоронил. */
+function healthBadge(a: ConnectedBankAccount) {
+  return connectionHealthBadge(connectionHealth(a, Date.now()))
 }
 
 /** Подпись строки для скринридера. Временный ключ служебный — озвучивать его бессмысленно. */
@@ -118,11 +126,17 @@ defineExpose({ reload: load })
                 size="xs"
                 label="счёт не выбран"
               />
+              <!-- Состояние подключения (#488). Считается по ВОЗРАСТУ ПАРЫ, а не по `expiresAt`:
+                   тот описывает access-токен, и именно поэтому мёртвое подключение раньше
+                   выглядело здоровым — access свежий, а refresh за ним уже не существует.
+                   `ok` бейджа не даёт намеренно: значок на каждой исправной строке приучает их
+                   не читать, а «подключён N назад» строчкой ниже и так всё говорит. -->
               <B24Badge
-                v-if="!a.hasRefresh"
-                color="air-primary-warning"
+                v-if="healthBadge(a)"
+                :color="healthBadge(a)!.color"
                 size="xs"
-                label="нужно переподключить"
+                :label="healthBadge(a)!.label"
+                :title="healthBadge(a)!.hint"
               />
             </div>
             <!-- Подключение без счёта (#407): строка есть, номера ещё нет — просим выбрать прямо
