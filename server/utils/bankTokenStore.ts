@@ -36,9 +36,13 @@ export interface BankToken {
 
 /**
  * Upsert a connected bank account's tokens (refresh encrypted before storage). Keyed by
- * `(member_id, provider, account_key)` — a re-connect or a refresh simply overwrites the
- * row (bank OAuth rotates the refresh token every refresh, so no write-once). Atomic at
- * the row level via the single upsert.
+ * `(member_id, provider, account_key)` — a re-connect simply overwrites the row (bank OAuth
+ * rotates the refresh token every refresh, so no write-once). Atomic at the row level via the
+ * single upsert.
+ *
+ * ⚠ ЭТО СОЗДАЁТ ПОДКЛЮЧЕНИЕ. Обновлению токена нужен `updateBankTokenSecrets` (UPDATE-only) —
+ * см. его докблок: у INSERT-семантики здесь есть право воскресить отключённый счёт, и это право
+ * должно быть только у OAuth-колбэка, где человек прямо сейчас авторизовался в банке.
  */
 export async function saveBankToken(query: QueryFn, token: BankToken): Promise<void> {
   await query(
@@ -67,6 +71,49 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
     [token.memberId, token.provider, token.accountKey, token.accessToken,
       token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
   )
+}
+
+/**
+ * Записать ОБНОВЛЁННЫЕ токены существующего подключения. UPDATE-only: если строки нет, не пишет
+ * ничего и отвечает `false` (#505).
+ *
+ * ⚠ ЗАЧЕМ ОТДЕЛЬНО ОТ `saveBankToken`. Обновление берёт per-account advisory-lock и перечитывает
+ * строку внутри лока — но `DELETE` посторонним DML advisory-lock не держит. Порядок, который
+ * реально случается: обновление перечитало строку → ушло в банк (POST до 15 с) → администратор
+ * нажал «Отключить», `DELETE` прошёл и закоммитился → обновление вернулось и сохранило токен
+ * через `INSERT … ON CONFLICT`, **создав строку заново**. Подключение, которое человек только что
+ * осознанно отключил, продолжало жить и опрашиваться. У банковского подключения «отключить»
+ * означает «перестань ходить в мой банк» — молчаливое воскрешение нарушает ровно то, ради чего
+ * нажимали кнопку.
+ *
+ * ⚠ ПОЧЕМУ ИМЕННО ТАК, А НЕ ЛОК НА УДАЛЕНИИ. Лок в маршруте отключения закрыл бы только этот
+ * маршрут, а тот же INSERT воскрешает строку и на удалении приложения
+ * (`deleteBankTokensForPortal` при `ONAPPUNINSTALL`) — то есть мы сохранили бы банковские креды
+ * портала, который нас удалил. UPDATE-only снимает оба случая одним правилом и не требует ни
+ * второго лока, ни тумбстоун-таблицы со свипом. Порядок операций при этом не важен: удалили до
+ * нашего UPDATE — он не найдёт строку; после — удаление её и уносит. Оба финала одинаковы.
+ *
+ * ⚠ Право создать подключение остаётся у `saveBankToken`, то есть у OAuth-колбэка, где человек
+ * прямо сейчас прошёл авторизацию в банке. Ротацию refresh при этом теряем только у отключённого
+ * счёта — им всё равно никто не воспользуется, а повторное подключение выдаёт свежий грант.
+ *
+ * `updated_at` штампуется — по нему keep-alive выбирает, кого пора обновлять (#489).
+ */
+export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): Promise<boolean> {
+  const rows = await query(
+    `UPDATE bank_tokens
+        SET access_token      = $4,
+            refresh_token_enc = $5,
+            expires_at        = $6,
+            updated_at        = now()
+      WHERE member_id = $1 AND provider = $2 AND account_key = $3
+      RETURNING member_id`,
+    // Пустой refresh — литеральная пустая строка, не NULL и не шифротекст: ровно те же основания,
+    // что в `saveBankToken` (шифрование '' даёт непустой блоб и ломает признак `has_refresh`).
+    [token.memberId, token.provider, token.accountKey, token.accessToken,
+      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
+  )
+  return rows.length > 0
 }
 
 /** Map a DB row to a `BankToken`, decrypting the refresh blob. Throws if it can't be

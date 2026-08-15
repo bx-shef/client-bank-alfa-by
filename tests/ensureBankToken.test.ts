@@ -33,7 +33,12 @@ function fakeDeps(over: Partial<BankRefreshDeps> & { stored?: BankToken | null, 
       loads.push([m, p, a])
       return over.stored === undefined ? tok() : over.stored
     },
-    saveToken: async (_q, t) => { saved.push(t) },
+    // UPDATE-only контракт (#505): `true` = строка нашлась и обновлена. Фейк по умолчанию
+    // изображает существующее подключение.
+    saveToken: async (_q, t) => {
+      saved.push(t)
+      return true
+    },
     creds: () => creds,
     postRefresh: async (url, body, headers) => {
       posts.push({ url, body, headers })
@@ -186,7 +191,7 @@ describe('ensureBankToken', () => {
 
   it('account disconnected between check and lock (stored=null) → no save, returns passed token', async () => {
     const near = tok({ expiresAt: NOW - 1 })
-    const saveToken = vi.fn(async () => {})
+    const saveToken = vi.fn(async () => true)
     const { deps } = fakeDeps({ stored: null })
     const out = await ensureBankToken(near, { ...deps, saveToken })
     expect(out).toBe(near)
@@ -277,5 +282,30 @@ describe('bankCredsFromEnv', () => {
   })
   it('manual provider → null (no online OAuth)', () => {
     expect(bankCredsFromEnv('manual')).toBeNull()
+  })
+})
+
+describe('отключение во время обновления (#505)', () => {
+  // ⚠ Гонка реальная, а не теоретическая: обновление держит per-account advisory-lock, но `DELETE`
+  // посторонним DML этот лок не держит, а POST в банк длится до 15 с. Порядок «перечитали → ушли в
+  // банк → админ нажал «Отключить» → вернулись и сохранили» раньше воскрешал строку через
+  // `INSERT … ON CONFLICT`, и приложение продолжало ходить в банк клиента после запрета.
+
+  it('строка исчезла, пока мы были в банке — токен НЕ записывается заново', async () => {
+    const near = tok({ expiresAt: NOW + 10_000 })
+    // `false` = UPDATE не нашёл строки, то есть счёт отключили между перечитыванием и записью.
+    const saveToken = vi.fn(async () => false)
+    const { deps } = fakeDeps({ stored: near })
+    const out = await ensureBankToken(near, { ...deps, saveToken })
+    expect(saveToken).toHaveBeenCalledTimes(1) // попытка была — узнать об удалении можно только по ней
+    expect(out).toBe(near) // отдаём сохранённый токен: запрос упадёт честно, а не «успешно»
+  })
+
+  it('обычный путь не задет: строка на месте — обновление сохраняется', async () => {
+    const near = tok({ expiresAt: NOW + 10_000 })
+    const { deps, saved } = fakeDeps({ stored: near })
+    const out = await ensureBankToken(near, deps)
+    expect(saved).toEqual([out])
+    expect(out.accessToken).toBe('A2')
   })
 })

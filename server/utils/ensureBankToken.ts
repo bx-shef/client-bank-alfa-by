@@ -21,7 +21,7 @@ import { signPriorJwt } from './priorJwt'
 import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
-import { getBankToken, saveBankToken } from './bankTokenStore'
+import { getBankToken, updateBankTokenSecrets } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
 
@@ -92,7 +92,9 @@ export interface BankRefreshDeps {
   now: () => number
   withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>) => Promise<T>
   loadToken: (q: QueryFn, memberId: string, provider: BankProviderId, accountKey: string) => Promise<BankToken | null>
-  saveToken: (q: QueryFn, token: BankToken) => Promise<void>
+  /** Записать обновлённые токены. **UPDATE-only** — `false` значит «строки уже нет», и создавать
+   *  её заново нельзя: счёт отключили, пока мы ходили в банк (#505). */
+  saveToken: (q: QueryFn, token: BankToken) => Promise<boolean>
   /** Per-provider OAuth creds (from env), or `null` when the bank isn't configured. */
   creds: (provider: BankProviderId) => BankOAuthCreds | null
   /** POST the refresh body to the token URL (with provider-specific auth headers) and
@@ -163,7 +165,8 @@ const liveDeps: BankRefreshDeps = {
   now: Date.now,
   withLock: withAdvisoryLock,
   loadToken: getBankToken,
-  saveToken: saveBankToken,
+  // UPDATE-only: обновление не имеет права создать подключение — только колбэк OAuth (#505).
+  saveToken: updateBankTokenSecrets,
   creds: bankCredsFromEnv,
   priorTokenAuth: priorRefreshAuthFromEnv,
   postRefresh: (url, body, headers) => {
@@ -233,7 +236,14 @@ export async function ensureBankToken(
       refreshToken: r.refreshToken || stored.refreshToken,
       expiresAt: deps.now() + r.expiresIn * 1000
     }
-    await deps.saveToken(q, updated)
+    // ⚠ UPDATE-only, и возврат проверяется. Строка могла исчезнуть, ПОКА мы ходили в банк: лок
+    // держит других обновляющих, но `DELETE` посторонним DML advisory-lock не держит, а POST длится
+    // до 15 с. Раньше здесь был upsert, и отключённый счёт воскресал со свежим токеном — то есть
+    // приложение продолжало ходить в банк клиента после того, как он это запретил (#505).
+    if (!await deps.saveToken(q, updated)) {
+      console.warn(`[ensureBankToken] ${stored.provider} account was disconnected mid-refresh — token NOT stored`)
+      return stored
+    }
     return updated
   })
 }
