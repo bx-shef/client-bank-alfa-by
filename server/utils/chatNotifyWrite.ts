@@ -33,18 +33,6 @@ export function extractMessageId(resp: Record<string, unknown>): string | null {
   return Number.isInteger(n) && n > 0 ? `${n}` : null
 }
 
-/** Same, for `imbot.v2.Chat.Message.send`. The v2 methods wrap their payload, so an object IS the
- *  expected shape here — which is exactly why it gets its own function instead of loosening the
- *  one above and losing that method's envelope check. */
-export function extractBotMessageId(resp: Record<string, unknown>): string | null {
-  const raw = resp?.result
-  const value = raw !== null && typeof raw === 'object'
-    ? (raw as Record<string, unknown>).id ?? (raw as Record<string, unknown>).ID ?? (raw as Record<string, unknown>).messageId
-    : raw
-  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
-  return Number.isInteger(n) && n > 0 ? `${n}` : null
-}
-
 /**
  * Post `text` to `dialogId`, preferring the app's own bot (#496).
  *
@@ -79,7 +67,7 @@ export async function postChatMessage(
         // а детерминированно, во все чаты. Дублировать сообщения бухгалтеру хуже, чем не знать их id.
         //
         // Сам id никому не нужен для правильности — все вызывающие его игнорируют; он информационный.
-        return await sendAsBot(botId, dialogId, text, call, extractBotMessageId)
+        return await sendAsBot(botId, dialogId, text, call)
       } catch {
         // Настоящий отказ бота — вот здесь. Шлём как раньше: молчащий чат ошибок хуже, чем
         // сообщение с чужой подписью.

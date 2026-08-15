@@ -98,8 +98,7 @@ export async function sendAsBot(
   botId: string,
   dialogId: string,
   text: string,
-  call: RestCall,
-  extractId: (resp: Record<string, unknown>) => string | null
+  call: RestCall
 ): Promise<string | null> {
   const resp = await call(BOT_MESSAGE_METHOD, {
     BOT_ID: Number(botId),
@@ -107,5 +106,26 @@ export async function sendAsBot(
     MESSAGE: text,
     URL_PREVIEW: 'N'
   })
-  return extractId(resp)
+  return extractBotMessageId(resp)
+}
+
+/**
+ * Read the message id out of an `imbot.v2.Chat.Message.send` reply.
+ *
+ * ⚠ Lives HERE, next to the method it parses, and NOT next to `im.message.add`'s extractor. The two
+ * envelopes genuinely differ — `im.message.add` answers a bare scalar, the v2 methods wrap their
+ * payload — and a single «find an id somewhere» helper would lose the envelope check on the scalar
+ * side, where a wrong shape is silent.
+ *
+ * ⚠ The field names are INFERRED, not confirmed live. That is survivable only because `postChatMessage`
+ * treats «no exception» as delivery: a shape we fail to read costs us the id in a log line, not a
+ * duplicated message. Do not reintroduce a fallback keyed on this returning null.
+ */
+export function extractBotMessageId(resp: Record<string, unknown>): string | null {
+  const raw = resp?.result
+  const value = raw !== null && typeof raw === 'object'
+    ? (raw as Record<string, unknown>).id ?? (raw as Record<string, unknown>).ID ?? (raw as Record<string, unknown>).messageId
+    : raw
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isInteger(n) && n > 0 ? `${n}` : null
 }
