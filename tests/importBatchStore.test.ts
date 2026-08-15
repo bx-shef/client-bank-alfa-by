@@ -23,10 +23,15 @@ function fakeStore() {
       const k = key(p[0], p[1])
       const prev = rows.get(k)
       if (sql.includes('\'queued\'')) {
-        // ON CONFLICT здесь обновляет ТОЛЬКО имя файла — состояние не сбрасывается.
-        rows.set(k, prev
-          ? { ...prev, file_name: p[2] }
-          : { batch_id: p[1], user_id: p[3], state: 'queued', file_name: p[2], operations: 0, created: 0, notified: 0, unmatched: 0, error: '', updated_at: '2026-07-30T06:00:00.000Z' })
+        // ON CONFLICT сбрасывает строку в «принято» и обнуляет счётчики (#498): повторная загрузка
+        // теперь действительно перезапускает обработку, и прошлый итог на экране был бы отчётом об
+        // успехе за работу, которая ещё не началась.
+        rows.set(k, {
+          ...(prev ?? { batch_id: p[1], user_id: p[3] }),
+          state: 'queued', file_name: p[2],
+          operations: 0, created: 0, notified: 0, unmatched: 0, error: '',
+          updated_at: '2026-07-30T06:00:00.000Z'
+        })
         return []
       }
       if (sql.includes('\'error\'')) {
@@ -62,20 +67,40 @@ describe('importBatchStore', () => {
     expect(row?.fileName).toBe('v.txt')
   })
 
-  it('UPSERT «принято» НИКОГДА не трогает состояние строки', async () => {
-    // Утверждаем про САМ SQL, а не про поведение своего фейка: иначе тест остался бы зелёным,
-    // добавь кто-нибудь `state = 'queued'` в DO UPDATE — а это и есть та регрессия, от которой
-    // готовый итог повисал бы «в обработке» навсегда (повтор дедуплицируется, прогона не будет).
+  it('повторная загрузка СБРАСЫВАЕТ строку в «принято» и обнуляет счётчики (#498)', async () => {
+    // ⚠ Раньше здесь стоял ОБРАТНЫЙ тест — «UPSERT никогда не трогает состояние». Он охранял
+    // верное следствие из посылки, которая оказалась багом: повтор дедуплицировался по хешу файла,
+    // прогона действительно не было, и сброс повесил бы строку в «принято» навсегда. Дедуп
+    // человеческого действия снят (`enqueueParse`/`enqueueCrmSync`), прогон теперь происходит — и
+    // прошлое «всё разобрано» на экране стало отчётом об успехе за работу, которая не начиналась.
+    //
+    // Утверждаем про САМ SQL, а не про поведение своего фейка: фейк можно случайно научить
+    // «правильному» поведению, которого в запросе нет.
     let sql = ''
     await markBatchQueued(async (s) => {
       sql = s
       return []
     }, 'M', ID, 'v.txt', 'U1')
     const onConflict = sql.slice(sql.indexOf('ON CONFLICT'))
-    expect(onConflict).toMatch(/DO UPDATE SET\s+file_name = EXCLUDED\.file_name/)
-    expect(onConflict).not.toMatch(/\bstate\b/)
-    // Чужую строку подписью не перетереть: ключ — хеш файла, он совпадёт у коллеги с тем же файлом.
+    expect(onConflict).toMatch(/state\s+= 'queued'/)
+    expect(onConflict).toMatch(/operations = 0/)
+    expect(onConflict).toMatch(/error\s+= ''/)
+    // Чужую строку не перетереть: ключ — хеш файла, он совпадёт у коллеги с тем же файлом.
     expect(onConflict).toMatch(/WHERE import_batch\.user_id = EXCLUDED\.user_id/)
+  })
+
+  it('готовый итог сменяется на «принято» при повторной загрузке того же файла', async () => {
+    const { query } = fakeStore()
+    await markBatchQueued(query, 'M', ID, 'v.txt', 'U1')
+    await saveBatchResult(query, 'M', ID, { operations: 117, created: 0, notified: 0, unmatched: 117 })
+    expect((await getBatchResults(query, 'M', [ID], 'U1'))[0]?.state).toBe('ok')
+
+    // Оператор настроил портал и загрузил файл заново — экран обязан показать НОВЫЙ прогон.
+    await markBatchQueued(query, 'M', ID, 'v.txt', 'U1')
+    const [row] = await getBatchResults(query, 'M', [ID], 'U1')
+    expect(row?.state).toBe('queued')
+    expect(row?.unmatched).toBe(0)
+    expect(row?.operations).toBe(0)
   })
 
   it('провал несёт причину, а успех её стирает', async () => {
