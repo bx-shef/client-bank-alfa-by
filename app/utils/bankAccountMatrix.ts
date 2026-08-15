@@ -38,16 +38,15 @@ export interface CrmSideAccount {
   number: string
 }
 
-/** State of one row of the matrix. */
-export type MatrixRowState =
-  /** Present on both sides, byte-identical — the import will find this company. */
-  | 'matched'
-  /** ⚠ Present on both sides but written differently (spaces, case). The import will NOT find it. */
-  | 'looks-same'
-  /** In CRM, the bank does not report it — not connected, or belongs to another bank. */
-  | 'crm-only'
-  /** The bank reports it, CRM has no such requisite — payments on it will land nowhere. */
-  | 'bank-only'
+/**
+ * State of one row of the matrix:
+ *   `matched`    — present on both sides, byte-identical; the import will find this company;
+ *   `looks-same` — ⚠ present on both sides but written differently (spaces, case). One account to
+ *                  a human, two to the program — the import will NOT find it;
+ *   `crm-only`   — in CRM, the bank does not report it (not connected, or another bank);
+ *   `bank-only`  — the bank reports it, CRM has no such requisite → payments land nowhere.
+ */
+export type MatrixRowState = 'matched' | 'looks-same' | 'crm-only' | 'bank-only'
 
 export interface MatrixRow {
   state: MatrixRowState
