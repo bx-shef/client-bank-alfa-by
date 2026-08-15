@@ -14,6 +14,7 @@ import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queue
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
 import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
+import { HEALTH_ORDER, HEALTH_TITLE, type BankHealthOverview } from '~/utils/bankHealthOverview'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -87,6 +88,38 @@ function previewFetcher(): Promise<QueuesSnapshot> {
   return Promise.resolve({ enabled: true, queues: structuredClone(state) })
 }
 
+// Состояние банковских подключений по ВСЕМ порталам (#497 §3). Сегодня умирающее подключение
+// узнаётся по факту неработающего импорта — то есть позже клиента; критерий приёмки тестовой
+// эксплуатации сформулирован ровно наоборот. Ответ несёт только счётчики: ни номеров счетов, ни
+// идентификаторов порталов — оператору нужно «что-то ломается и у скольких», а не чужие реквизиты.
+const bankHealth = ref<BankHealthOverview | null>(null)
+const bankHealthError = ref('')
+
+async function loadBankHealth(): Promise<void> {
+  try {
+    const res = await $fetch<{ ok?: boolean, error?: string } & BankHealthOverview>('/api/ops/bank-health')
+    if (res?.ok) {
+      bankHealth.value = res
+      bankHealthError.value = ''
+    } else {
+      bankHealthError.value = res?.error || 'не удалось прочитать состояние подключений'
+    }
+  } catch {
+    // ⚠ Ошибку показываем, а не подменяем нулями: пустая сводка читалась бы как «всё спокойно»
+    // ровно тогда, когда спокойно точно не всё.
+    bankHealthError.value = 'не удалось прочитать состояние подключений'
+  }
+}
+
+/** Строки состояний в порядке «сначала то, что требует человека», без пустых. */
+const bankRows = computed(() => {
+  const o = bankHealth.value
+  if (!o) return []
+  return HEALTH_ORDER
+    .map(h => ({ health: h, title: HEALTH_TITLE[h], ...o.byHealth[h] }))
+    .filter(r => r.connections > 0)
+})
+
 // «Оцените приложение» — per-portal review lifecycle the owner manages here (not via SQL).
 const rating = useAppRatingOps()
 const RATING_META: Record<RatingState, { label: string, cls: string }> = {
@@ -140,8 +173,13 @@ watch(preview, () => void loadHealth())
 onMounted(() => {
   void rating.load()
   void loadHealth()
+  void loadBankHealth()
   // Реже графика: вердикт обновляется раз в 5 минут на сервере, чаще опрашивать нечего.
-  healthTimer = setInterval(() => void loadHealth(), 60_000)
+  healthTimer = setInterval(() => {
+    void loadHealth()
+    // Состояние подключений меняется часами, а не секундами — на том же тике и достаточно.
+    void loadBankHealth()
+  }, 60_000)
 })
 onBeforeUnmount(() => {
   if (healthTimer) clearInterval(healthTimer)
@@ -204,6 +242,90 @@ onBeforeUnmount(() => {
         :range-min="10"
         :max-points="400"
       />
+
+      <!-- Состояние банковских подключений по всем порталам (#497 §3). Строки идут «сначала то,
+           что требует человека»: экран, начинающийся с «всё хорошо», прячет единственную строку,
+           ради которой его открыли. -->
+      <B24Card
+        v-if="bankHealth || bankHealthError"
+        class="mt-6"
+        data-testid="bank-health"
+      >
+        <template #header>
+          <h2 class="font-semibold text-(--ui-color-base-1)">
+            Подключения банков
+          </h2>
+        </template>
+
+        <p
+          v-if="bankHealthError"
+          class="text-sm text-(--ui-color-accent-main-alert)"
+          role="alert"
+        >
+          {{ bankHealthError }}
+        </p>
+
+        <template v-else-if="bankHealth">
+          <p
+            v-if="!bankHealth.total.connections"
+            class="text-sm text-(--ui-color-base-3)"
+          >
+            Подключений пока нет.
+          </p>
+
+          <template v-else>
+            <p
+              class="text-sm"
+              :class="bankHealth.needAttention
+                ? 'text-(--ui-color-accent-main-alert)'
+                : 'text-(--ui-color-accent-main-success)'"
+              data-testid="bank-health-headline"
+            >
+              <template v-if="bankHealth.needAttention">
+                Требуют человека: {{ bankHealth.needAttention }}
+                {{ bankHealth.needAttention === 1 ? 'портал' : 'портала(ов)' }} —
+                владельцу счёта нужно заново войти в интернет-банк.
+              </template>
+              <template v-else>
+                Все подключения живы.
+              </template>
+            </p>
+
+            <ul class="mt-3 space-y-1 text-sm">
+              <li
+                v-for="r in bankRows"
+                :key="r.health"
+                class="flex items-baseline justify-between gap-3"
+                :data-testid="`bank-health-${r.health}`"
+              >
+                <span class="text-(--ui-color-base-2)">{{ r.title }}</span>
+                <span class="text-(--ui-color-base-3)">
+                  {{ r.connections }} на {{ r.portals }} {{ r.portals === 1 ? 'портале' : 'порталах' }}
+                </span>
+              </li>
+              <!-- Ожидающие показываем отдельной строкой: формально они живы, но опрашивать по ним
+                   нечего — админ не выбрал счёт. В «в порядке» им нельзя. -->
+              <li
+                v-if="bankHealth.pending.connections"
+                class="flex items-baseline justify-between gap-3"
+                data-testid="bank-health-pending"
+              >
+                <span class="text-(--ui-color-base-2)">счёт не выбран</span>
+                <span class="text-(--ui-color-base-3)">
+                  {{ bankHealth.pending.connections }} на {{ bankHealth.pending.portals }}
+                  {{ bankHealth.pending.portals === 1 ? 'портале' : 'порталах' }}
+                </span>
+              </li>
+            </ul>
+
+            <p class="mt-3 text-xs text-(--ui-color-base-4)">
+              Всего {{ bankHealth.total.connections }} на {{ bankHealth.total.portals }}
+              {{ bankHealth.total.portals === 1 ? 'портале' : 'порталах' }}.
+              Номеров счетов и названий порталов здесь нет намеренно.
+            </p>
+          </template>
+        </template>
+      </B24Card>
 
       <!-- Оценки приложения — управление жизненным циклом «оцените приложение» вручную (не через SQL).
            После клика «Оценить» владелец проверяет отзыв в Маркете и отмечает результат кнопками. -->
