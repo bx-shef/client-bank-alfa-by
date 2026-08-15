@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, connectionHealth, connectionHealthBadge, refreshAtAgeMs
+  BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, connectionHealth, connectionHealthBadge, refreshAtAgeMs,
+  consentExpiringSoon,
+  CONSENT_WARN_DAYS
 } from '../app/utils/bankTokenLifetime'
 
 // ⚠ Эти числа читают ДВА потребителя: сервер решает по ним, кого обновлять, интерфейс — что
@@ -79,5 +81,62 @@ describe('измеренный срок против угаданного', () =
     expect(BANK_REFRESH_TTL_MEASURED['alfa-by']).toBe(true)
     expect(BANK_REFRESH_TTL_MEASURED['prior-by']).toBe(false)
     expect(Object.keys(BANK_REFRESH_TTL_MEASURED).sort()).toEqual(Object.keys(BANK_REFRESH_TTL_SEC).sort())
+  })
+})
+
+describe('согласие банка перекрывает оценку по refresh (#503)', () => {
+  // ⚠ Два РАЗНЫХ срока: refresh-токен и согласие. У Приора согласие живёт ~90 дней, и когда оно
+  // вышло, обновление токена не поможет ничем — нужен вход владельца счёта в интернет-банк.
+  // Свежий refresh при истёкшем согласии выглядит здоровым и не работает.
+  const T = 1_700_000_000_000
+  const DAY = 86_400_000
+
+  it('согласие истекло — «истекло», даже если токен только что обновлён', () => {
+    expect(connectionHealth(
+      { provider: 'prior-by', connectedAt: T, hasRefresh: true, consentExpiresAt: T - 1 }, T
+    )).toBe('expired')
+  })
+
+  it('согласие истекло — перекрывает и «нет refresh-токена»', () => {
+    // Оба состояния требуют человека, но причина у них разная: «переподключите» против
+    // «согласие кончилось». Побеждает то, что сказал банк.
+    expect(connectionHealth(
+      { provider: 'prior-by', connectedAt: T, hasRefresh: false, consentExpiresAt: T - 1 }, T
+    )).toBe('expired')
+  })
+
+  it('согласие ещё живо — решает обычное правило', () => {
+    expect(connectionHealth(
+      { provider: 'prior-by', connectedAt: T, hasRefresh: true, consentExpiresAt: T + 30 * DAY }, T
+    )).toBe('ok')
+  })
+
+  it('ДАТЫ НЕТ ⇒ «неизвестно», а не «истекло»', () => {
+    // Умолчание решает исход для всех подключений без даты: у Альфы согласия нет вовсе, а Приор,
+    // подключённый до #503, её не хранит. «Не знаем ⇒ истекло» разом объявило бы их мёртвыми.
+    for (const v of [undefined, 0, Number.NaN, -1]) {
+      expect(connectionHealth(
+        { provider: 'alfa-by', connectedAt: T, hasRefresh: true, consentExpiresAt: v as number }, T
+      ), String(v)).toBe('ok')
+    }
+  })
+
+  it('порог «скоро истечёт» — неделя, а не день', () => {
+    // Продлевает согласие НЕ администратор, а владелец счёта в интернет-банке; за вечер такое
+    // не организуешь, и предупреждение за день было бы уведомлением об уже случившемся простое.
+    const c = (at: number) => ({ provider: 'prior-by' as const, connectedAt: T, hasRefresh: true, consentExpiresAt: at })
+    expect(consentExpiringSoon(c(T + 3 * DAY), T)).toBe(true)
+    expect(consentExpiringSoon(c(T + 30 * DAY), T)).toBe(false)
+    expect(CONSENT_WARN_DAYS).toBeGreaterThanOrEqual(7)
+  })
+
+  it('уже истёкшее — не «скоро истечёт»: это разные сообщения', () => {
+    expect(consentExpiringSoon(
+      { provider: 'prior-by', connectedAt: T, hasRefresh: true, consentExpiresAt: T - 1 }, T
+    )).toBe(false)
+  })
+
+  it('без даты «скоро истечёт» не срабатывает', () => {
+    expect(consentExpiringSoon({ provider: 'alfa-by', connectedAt: T, hasRefresh: true }, T)).toBe(false)
   })
 })

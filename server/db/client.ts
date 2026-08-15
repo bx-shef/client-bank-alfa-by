@@ -97,6 +97,17 @@ CREATE TABLE IF NOT EXISTS portal_app_rating (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Consent expiry for banks that grant one (Prior, #503). ADDED SEPARATELY on purpose: the table
+-- above is CREATE TABLE IF NOT EXISTS, so on an existing installation it is a no-op and a new
+-- column written inside it would never appear. ADD COLUMN IF NOT EXISTS is idempotent, so this
+-- stays safe on every boot — the same posture as the rest of this script.
+-- (⚠ No backticks anywhere in this string: it is a JS template literal, and one would end it.)
+--
+-- ⚠ 0 means «unknown», NOT «expired»: Alfa grants no consent at all, and Prior connections made
+-- before this change have no stored date. Reading 0 as expiry would declare every one of them dead
+-- and send people into their internet bank for something that works.
+ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS consent_expires_at BIGINT NOT NULL DEFAULT 0;
+
 -- Retired table (§9.3 #6): allocation idempotency/audit moved to the distributions
 -- smart-process (marker + status). Idempotent DROP cleans up a previously-provisioned DB.
 DROP TABLE IF EXISTS allocation_fact;

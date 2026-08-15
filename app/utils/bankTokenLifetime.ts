@@ -48,6 +48,34 @@ export const BANK_REFRESH_TTL_MEASURED: Record<BankProviderId, boolean> = {
   'manual': false
 }
 
+/**
+ * Истекло ли СОГЛАСИЕ банка. `0`/отсутствует/не число ⇒ `false` — «мы не знаем», а не «истекло».
+ *
+ * ⚠ Умолчание тут решает исход для всех подключений, у которых даты нет (Альфа вовсе, и любой
+ * Приор, подключённый до #503). «Не знаем ⇒ истекло» одним махом объявило бы их мёртвыми и послало
+ * бы людей в интернет-банк за тем, что работает.
+ */
+export function consentExpired(c: ConnectionLike, nowMs: number): boolean {
+  const at = c.consentExpiresAt
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 && nowMs >= at
+}
+
+/**
+ * За сколько до конца согласия предупреждать администратора.
+ *
+ * ⚠ Неделя, а не день: продлевает согласие НЕ администратор, а владелец счёта, заходя в
+ * интернет-банк, — и это не то, что организуют за вечер. Предупреждение за день превратилось бы в
+ * уведомление об уже случившемся простое.
+ */
+export const CONSENT_WARN_DAYS = 7
+
+/** Скоро ли истекает согласие (и ещё не истекло). Без даты — `false`. */
+export function consentExpiringSoon(c: ConnectionLike, nowMs: number, days = CONSENT_WARN_DAYS): boolean {
+  const at = c.consentExpiresAt
+  if (!(typeof at === 'number' && Number.isFinite(at) && at > 0)) return false
+  return nowMs < at && at - nowMs <= days * 86_400_000
+}
+
 /** Renew once the token is within this fraction of its life from expiry (0.2 of Alfa's 10 h = 2 h). */
 export const KEEP_ALIVE_BAND = 0.2
 
@@ -89,6 +117,15 @@ export interface ConnectionLike {
   connectedAt: number
   /** Whether a refresh token is stored at all. */
   hasRefresh: boolean
+  /**
+   * Epoch ms when the BANK'S CONSENT expires (#503). Prior returns it; 0/absent — unknown.
+   *
+   * ⚠ A different clock from the refresh token, and the stricter one. Prior's consent lives ~90
+   * days, and once it lapses no token refresh helps at all — only the account owner logging into
+   * their internet bank does. Refresh lifetime is our estimate; this date is the bank's own answer,
+   * which is why it may declare a connection dead where a guess may not.
+   */
+  consentExpiresAt?: number
 }
 
 /**
@@ -100,6 +137,11 @@ export interface ConnectionLike {
  * the thing that actually dies.
  */
 export function connectionHealth(c: ConnectionLike, nowMs: number): BankConnectionHealth {
+  // ⚠ СОГЛАСИЕ ПРОВЕРЯЕТСЯ ПЕРВЫМ и перекрывает всё остальное (#503). Это не наша оценка, а ответ
+  // банка: срок вышел — обновлять нечего, никакой refresh не поможет, нужен вход владельца счёта в
+  // интернет-банк. Свежий refresh-токен при истёкшем согласии выглядит здоровым и не работает —
+  // ровно тот разрыв между «выглядит» и «работает», ради которого написан весь модуль.
+  if (consentExpired(c, nowMs)) return 'expired'
   if (!c.hasRefresh) return 'no-refresh'
   const ttlMs = (BANK_REFRESH_TTL_SEC[c.provider] ?? 0) * 1000
   if (ttlMs <= 0) return 'unknown'

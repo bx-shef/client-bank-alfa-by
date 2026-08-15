@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CONNECT_STATE_TTL_MS } from '../app/utils/bankConnectTtl'
 import {
   PRIOR_API_PREFIXES,
+  extractConsentExpiry,
   PRIOR_CLIENT_ASSERTION_TYPE,
   PRIOR_ASSERTION_TTL_SEC,
   PRIOR_FAPI_INTERACTION_HEADER,
@@ -443,5 +444,32 @@ describe('priorWriteHeaders (#461)', () => {
     const read = priorResourceHeaders('tok', 'int-1')
     const write = priorWriteHeaders('tok', 'int-1', 'idem-1')
     for (const [k, v] of Object.entries(read)) expect(write[k]).toBe(v)
+  })
+})
+
+describe('extractConsentExpiry (#503)', () => {
+  // ⚠ Срок запрашиваем МЫ (`priorConsentExpiry`, 90 дней), но банк волен его урезать и отвечает
+  // тем, что реально выдал. Довериться своей просьбе — значит показать в интерфейсе дату, которую
+  // банк не соблюдает: ровно тот разрыв между «выглядит» и «работает».
+  it('голая дата yyyy-MM-dd → КОНЕЦ дня, а не полночь', () => {
+    // Полночь означала бы, что согласие считается мёртвым весь последний день, когда оно ещё живо,
+    // и человека посылали бы в интернет-банк на сутки раньше — каждый раз.
+    const ms = extractConsentExpiry({ data: { expirationDate: '2026-11-13' } })
+    expect(ms).toBe(Date.parse('2026-11-13T23:59:59.999Z'))
+  })
+
+  it('полный ISO берётся как есть', () => {
+    const ms = extractConsentExpiry({ data: { expirationDate: '2026-11-13T10:00:00.000Z' } })
+    expect(ms).toBe(Date.parse('2026-11-13T10:00:00.000Z'))
+  })
+
+  it('поля нет / пусто / мусор → null, дату НЕ выдумываем', () => {
+    for (const r of [{}, { data: {} }, { data: { expirationDate: '' } }, { data: { expirationDate: 'вчера' } }, null]) {
+      expect(extractConsentExpiry(r), JSON.stringify(r)).toBeNull()
+    }
+  })
+
+  it('терпит альтернативные написания поля', () => {
+    expect(extractConsentExpiry({ data: { ExpirationDateTime: '2026-11-13' } })).not.toBeNull()
   })
 })

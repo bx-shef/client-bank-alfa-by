@@ -615,6 +615,35 @@ export function extractIntentId(response: unknown): string | null {
 }
 
 /**
+ * Pull the consent's `expirationDate` out of a `/accountConsents` response, as epoch ms.
+ *
+ * ⚠ WHY READ IT BACK AT ALL — we are the ones who asked for it (`priorConsentExpiry`, 90 days). The
+ * bank is free to CLAMP that request (a shorter maximum, a policy change), and it answers with what
+ * it actually granted. Trusting our own request would then put a date in the UI that the bank does
+ * not honour — the very class of lie this whole area keeps producing: a calm green row over a
+ * connection that is already dead. Caller falls back to the requested date only when the response
+ * carries none.
+ *
+ * ⚠ Returns END OF DAY (23:59:59.999 UTC). The bank speaks `yyyy-MM-dd`, and `Date.parse` of a bare
+ * date lands on MIDNIGHT — i.e. treating the consent as dead for the whole final day it is still
+ * valid. Being a day pessimistic here is not harmless: it would tell an admin to send the account
+ * owner into their internet bank a day early, every time.
+ *
+ * `null` when absent or unparseable — the caller must not invent a date.
+ */
+export function extractConsentExpiry(response: unknown): number | null {
+  const d = unwrapData(response)
+  const raw = d.expirationDate ?? d.ExpirationDateTime ?? d.expirationDateTime
+  if (raw === undefined || raw === null) return null
+  const text = String(raw).trim()
+  if (!text) return null
+  // Bare `yyyy-MM-dd` → end of that day; a full ISO timestamp is taken as given.
+  const bare = /^\d{4}-\d{2}-\d{2}$/.test(text)
+  const ms = Date.parse(bare ? `${text}T23:59:59.999Z` : text)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
  * Pull the created resource id (statementId / transactionListId, or a generic
  * `id`) out of a create-statement/transaction response. Returns `null` if none.
  */

@@ -32,6 +32,15 @@ export interface BankToken {
   refreshToken: string
   /** Absolute epoch ms when the access token expires. */
   expiresAt: number
+  /**
+   * Epoch ms when the BANK'S CONSENT lapses (#503; Prior grants one, Alfa does not). `0`/absent —
+   * unknown, which is NOT the same as expired: see the schema comment in `db/client.ts`.
+   *
+   * ⚠ Written by the OAuth callback only. A token refresh must leave it alone — refreshing a token
+   * says nothing about the consent behind it, and overwriting it with a default would quietly erase
+   * the only date the bank ever gave us.
+   */
+  consentExpiresAt?: number
 }
 
 /**
@@ -47,13 +56,15 @@ export interface BankToken {
 export async function saveBankToken(query: QueryFn, token: BankToken): Promise<void> {
   await query(
     `INSERT INTO bank_tokens
-       (member_id, provider, account_key, access_token, refresh_token_enc, expires_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, now())
+       (member_id, provider, account_key, access_token, refresh_token_enc, expires_at,
+      consent_expires_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (member_id, provider, account_key) DO UPDATE SET
-       access_token      = EXCLUDED.access_token,
-       refresh_token_enc = EXCLUDED.refresh_token_enc,
-       expires_at        = EXCLUDED.expires_at,
-       updated_at        = now()`,
+       access_token       = EXCLUDED.access_token,
+       refresh_token_enc  = EXCLUDED.refresh_token_enc,
+       expires_at         = EXCLUDED.expires_at,
+       consent_expires_at = EXCLUDED.consent_expires_at,
+       updated_at         = now()`,
     // ⚠ An EMPTY refresh token is stored as a LITERAL empty string — NOT encrypted, and NOT SQL
     // NULL. Encrypting '' yields a perfectly non-empty blob (`iv:tag:` with an empty ciphertext
     // part), which made the `has_refresh` probe below answer TRUE for an account that has no refresh
@@ -66,10 +77,12 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
     // callback — which has no try/catch — would 500 AFTER the bank's single-use code was already
     // spent; and `rowToBankToken` would then decrypt `String(null)` = 'null' and throw «failed to
     // decrypt refresh» on every poll, a message that reads like a compromised key. Empty string
-    // keeps both paths honest with no schema migration (the project only ever runs
-    // CREATE TABLE IF NOT EXISTS — there is no ALTER path).
+    // keeps both paths honest without touching the column type. (The schema script does support
+    // idempotent `ALTER … ADD COLUMN IF NOT EXISTS` — see `consent_expires_at` — but changing an
+    // EXISTING column's nullability on a live table is a different and far riskier operation.)
     [token.memberId, token.provider, token.accountKey, token.accessToken,
-      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
+      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt,
+      token.consentExpiresAt ?? 0]
   )
 }
 
@@ -151,7 +164,7 @@ function rowToBankToken(row: Record<string, unknown>): BankToken {
 /** Load one connected account's tokens (decrypting refresh), or `null` if not connected. */
 export async function getBankToken(query: QueryFn, memberId: string, provider: BankProviderId, accountKey: string): Promise<BankToken | null> {
   const rows = await query(
-    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at
+    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at
        FROM bank_tokens WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
     [memberId, provider, accountKey]
   )
@@ -165,7 +178,7 @@ export async function getBankToken(query: QueryFn, memberId: string, provider: B
  *  ones — unlike `getBankToken` (a specific requested account fails loud). */
 export async function listBankTokensForPortal(query: QueryFn, memberId: string): Promise<BankToken[]> {
   const rows = await query(
-    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at
+    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
@@ -230,6 +243,8 @@ export interface BankAccountInfo extends BankAccountRef {
   /** Whether a refresh token is stored at all — empty means «reconnect required» (Prior may
    *  return no refresh_token, and we store it empty rather than failing the connect). */
   hasRefresh: boolean
+  /** Epoch ms the BANK'S CONSENT lapses (#503). `0` — unknown (Alfa grants none), not expired. */
+  consentExpiresAt: number
 }
 
 /** One portal's connected accounts WITH freshness, for the settings UI (#404). Deliberately does
@@ -241,7 +256,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // so an encrypted empty secret ends with a bare colon. Without this clause every pre-existing
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
-    `SELECT member_id, provider, account_key, expires_at, updated_at,
+    `SELECT member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
@@ -255,7 +270,8 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // implementation-defined and drops milliseconds — take the Date directly when we have one.
     connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
     expiresAt: Number(r.expires_at),
-    hasRefresh: r.has_refresh === true
+    hasRefresh: r.has_refresh === true,
+    consentExpiresAt: Number(r.consent_expires_at ?? 0)
   }))
 }
 
@@ -270,7 +286,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
  *  refresh lifetime differs by bank and is the thing most likely to be corrected later. */
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
-    `SELECT member_id, provider, account_key, expires_at, updated_at,
+    `SELECT member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens ORDER BY updated_at ASC`,
@@ -282,7 +298,8 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
     accountKey: String(r.account_key),
     connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
     expiresAt: Number(r.expires_at),
-    hasRefresh: r.has_refresh === true
+    hasRefresh: r.has_refresh === true,
+    consentExpiresAt: Number(r.consent_expires_at ?? 0)
   }))
 }
 

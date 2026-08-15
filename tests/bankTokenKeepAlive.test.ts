@@ -329,3 +329,38 @@ describe('угаданный срок жизни не хоронит подкл�
     }
   })
 })
+
+describe('истёкшее согласие не тратит запросы банка (#503)', () => {
+  // ⚠ Согласие — не наша догадка о сроке, а дата от самого банка. Когда она прошла, refresh не
+  // может удаться в принципе: слать его — тратить лимит банка на заведомо провальный запрос.
+  const T = 1_700_000_000_000
+  const row = (over: Record<string, unknown> = {}) => ({
+    memberId: 'm1', provider: 'prior-by' as const, accountKey: 'BY01',
+    connectedAt: T - 60_000, expiresAt: T + 600_000, hasRefresh: true, consentExpiresAt: 0, ...over
+  })
+
+  it('согласие истекло — в «expired», а не в «due», даже у свежего токена', () => {
+    const sel = selectBankAccountsNearExpiry([row({ consentExpiresAt: T - 1 })], T)
+    expect(sel.due).toEqual([])
+    expect(sel.expired).toHaveLength(1)
+  })
+
+  it('согласие истекло — перекрывает и «нет refresh-токена»', () => {
+    // Оба требуют человека, но причина разная, и решает та, которую назвал банк.
+    const sel = selectBankAccountsNearExpiry([row({ consentExpiresAt: T - 1, hasRefresh: false })], T)
+    expect(sel.unrefreshable).toEqual([])
+    expect(sel.expired).toHaveLength(1)
+  })
+
+  it('согласие живо — прежнее поведение не изменилось', () => {
+    const old = row({ consentExpiresAt: T + 30 * 86_400_000, connectedAt: T - 11 * 3_600_000 })
+    expect(selectBankAccountsNearExpiry([old], T).due).toHaveLength(1)
+  })
+
+  it('ДАТЫ НЕТ — ничего не меняется: у Альфы согласий нет вовсе', () => {
+    const alfa = row({ provider: 'alfa-by' as const, consentExpiresAt: 0, connectedAt: T - 9 * 3_600_000 })
+    const sel = selectBankAccountsNearExpiry([alfa], T)
+    expect(sel.expired).toEqual([])
+    expect(sel.due).toHaveLength(1)
+  })
+})

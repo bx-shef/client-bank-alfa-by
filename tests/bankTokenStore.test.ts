@@ -393,9 +393,21 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
     const [row] = await listAllBankAccountInfo(query)
     expect(row).toEqual({
       memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001',
-      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true
+      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true,
+      // Колонки в строке нет (Альфа согласий не выдаёт) ⇒ 0 = «неизвестно». Именно 0, а не
+      // `undefined`: ноль читается правилами как «даты нет», и подключение не хоронится (#503).
+      consentExpiresAt: 0
     })
     expect(JSON.stringify(row)).not.toContain('SECRET')
+  })
+
+  it('срок согласия доезжает из строки (#503)', async () => {
+    // Без этого дата тихо терялась бы по дороге, а экран и keep-alive продолжали бы жить догадкой.
+    const query = async () => [{
+      member_id: 'M1', provider: 'prior-by', account_key: 'A',
+      expires_at: '1', updated_at: new Date(1), has_refresh: true, consent_expires_at: '1800000000000'
+    }]
+    expect((await listAllBankAccountInfo(query))[0]!.consentExpiresAt).toBe(1_800_000_000_000)
   })
 
   it('`has_refresh` не true → false, а не «похоже на правду»', async () => {
