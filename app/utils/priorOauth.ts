@@ -278,18 +278,63 @@ export interface PriorRegistrationInput {
  * us) — and it is ALSO what `private_key_jwt` verifies the `client_assertion` against, so the
  * same registered key serves both.
  *
- * ⚠ `request_object_signing_alg` is NOT optional here, and its absence is invisible until the very
- * last step. Registration succeeds, `client_credentials` succeeds, `POST /accountConsents` returns
- * `201` — and then `GET /oauth2/authorize` bounces the account holder back with
- * `error=invalid_request_object&error_description=server_error`, AFTER they have already been sent
- * to their bank. The bank publishes exactly one accepted value (`request_object_signing_alg_values_supported: ['RS256']`,
- * read live from `/oidcdiscovery`) but will not assume it: a client that never declared how it
- * signs gets its signed `request` JWT refused. Registering `id_token_signed_response_alg` alone is
- * NOT the same declaration — that one covers the id_token the bank issues to us, this one covers
- * the request object we send to the bank, and we shipped the first without the second. Measured
- * against the sandbox, 2026-08-14 (docs/PRIOR_API.md).
+ * `request_object_signing_alg` is sent because the bank publishes exactly one accepted value
+ * (`request_object_signing_alg_values_supported: ['RS256']`, read live from `/oidcdiscovery`) and
+ * declaring it is what the spec asks of a client that signs its request objects. It costs nothing.
+ *
+ * ⚠ It is NOT what fixes `invalid_request_object`, despite an earlier claim here that said so.
+ * Priorbank does not store or return the field: `GET /register/{clientId}` omits it for a client
+ * that authorizes SUCCESSFULLY and for one that does not (both read live through the production
+ * gateway, 2026-08-15). What actually caused that failure was an EMPTY modulus in `jwks` — a
+ * registration script had truncated the PEM, so the bank held a key it could not verify anything
+ * with. The re-registration that fixed it changed two things at once (the key and this field), and
+ * the wrong one got the credit. If authorize ever refuses a signed request again, check the stored
+ * `jwks` modulus first — `GET /register/{clientId}` returns it, and comparing it against the key
+ * you sign with is a one-minute answer.
  */
+/**
+ * Shortest RSA modulus we accept in a `jwks`, in base64url characters. A 1024-bit key is ~171, a
+ * 2048-bit one ~342. The number is a FLOOR against garbage, not a key-strength policy — the case it
+ * exists for produced **zero**.
+ */
+const MIN_JWK_MODULUS_CHARS = 170
+
+/**
+ * Refuse a `jwks` whose RSA key carries no usable modulus.
+ *
+ * This is the guard the incident asked for. A registration is ONE-WAY at this bank — `PUT /register`
+ * answers `500`, so a bad key can only be fixed by registering again, which mints a new `client_id`
+ * and orphans every account already connected under the old one. And nothing between here and the
+ * damage says a word: the body is structurally valid JSON, DCR returns `201`, `client_credentials`
+ * works, `POST /accountConsents` returns `201` — the bank only needs the key at `GET /oauth2/authorize`,
+ * three steps and one bank login later, where the account holder gets `invalid_request_object` after
+ * typing their internet-bank password.
+ *
+ * How the zero got there: a registration script read the PEM with a single-line `.env` parser, the
+ * key was truncated, `openssl` failed without anyone checking, and `n` came out empty. So the check
+ * is on the VALUE, not on the shape — the shape was fine.
+ */
+function assertUsableJwks(jwks: unknown): void {
+  const keys = (jwks as { keys?: unknown })?.keys
+  if (!Array.isArray(keys) || keys.length === 0) {
+    throw new Error('priorOauth.buildRegistrationMetadata: jwks carries no keys')
+  }
+  for (const key of keys) {
+    const k = key as { kty?: unknown, kid?: unknown, n?: unknown }
+    if (k?.kty !== 'RSA') continue
+    const n = typeof k.n === 'string' ? k.n : ''
+    if (n.length < MIN_JWK_MODULUS_CHARS) {
+      throw new Error(
+        `priorOauth.buildRegistrationMetadata: RSA key «${String(k.kid ?? '?')}» has an unusable modulus `
+        + `(${n.length} chars, expected at least ${MIN_JWK_MODULUS_CHARS}). Registration is one-way here — `
+        + 'check that the private key was read whole before sending this.'
+      )
+    }
+  }
+}
+
 export function buildRegistrationMetadata(input: PriorRegistrationInput): Record<string, unknown> {
+  if (input.jwks) assertUsableJwks(input.jwks)
   return {
     client_name: input.clientName,
     redirect_uris: [input.redirectUri],

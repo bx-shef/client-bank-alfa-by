@@ -34,6 +34,18 @@ export const MAX_RESOLVED_INTENTS_PER_OP = 10
 /** Потолок сообщений «цель не найдена» на один прогон (#421) — см. комментарий у счётчика. */
 export const MAX_UNRESOLVED_NOTICES = 5
 
+/** What became of one operation, for the per-op observation callback (`onOperation`). */
+export interface OperationOutcome {
+  /** Who the activity was attached to: the payer's own company, OUR company as the
+   *  unmatched-client fallback (#91), or nobody (neither resolved → nothing written). */
+  owner: 'client' | 'my-company' | 'none'
+  /** How many identifiers the portal's matrices recognized in the purpose (§4). Zero here
+   *  on a live portal means the «карта сопоставления» does not describe its numbering. */
+  recognized: number
+  /** The activity that was written, or null when nothing was (no owner / demo / no token). */
+  activityId: string | null
+}
+
 /** Side-effects the handlers need, injected so the logic stays pure/testable.
  *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's
  *  `memberId` explicitly — deps are built once in startWorkers(), not per-job, so
@@ -92,6 +104,19 @@ export interface HandlerDeps {
    *  paid via `applyAllocation` (§2 mutation slice, below).
    *  Called once per op that resolved ≥1 candidate. MUST NOT throw (pure observation). */
   onAllocationDecision: (item: StatementItem, decision: AllocationDecision, triggerTargets: number, memberId: string) => void
+  /** Observe the OUTCOME of one operation — who ended up owning it and whether anything was
+   *  written. Called once per unique, non-excluded, non-skipped op, right after `writeActivity`,
+   *  REGARDLESS of the result.
+   *
+   *  This is the only callback that fires for an op that matched NOTHING, and that is the point:
+   *  `onRecognized`/`onResolved`/`onAllocationDecision` all require the op to have got somewhere
+   *  first, so a portal whose every payment goes `unmatched` produced ZERO log lines — the summary
+   *  said «117 processed, 117 unmatched» and nothing said WHICH account failed to resolve. That is
+   *  the one fact needed to fix it (the counterparty's account is what `findCompany` searches for
+   *  in the CRM requisites), and it was the one fact nowhere to be found.
+   *
+   *  Optional so existing wirings/tests keep type-checking. MUST NOT throw (pure observation). */
+  onOperation?: (item: StatementItem, outcome: OperationOutcome, memberId: string) => void
   /** Whether a decided AMOUNT target (deal-payment/invoice) is already applied in B24 —
    *  the payment is `paid='Y'` / the invoice is on the configured `opts.invoicePaidStageId`
    *  (Фаза A idempotency, replacing `hasAllocationFact` for the amount pre-check). Reading
@@ -551,6 +576,13 @@ export async function handleCrmSyncJob(
       if (myCompanyId) note = unmatchedClientNote(item)
     }
     const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
+    // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including
+    // the ones that matched nothing — those are exactly the ones no other callback reports.
+    deps.onOperation?.(item, {
+      owner: companyId ? 'client' : writeCompanyId ? 'my-company' : 'none',
+      recognized: intents.length,
+      activityId
+    }, job.memberId)
     if (clientUnmatched && errorChat?.dialogId) {
       // Notify the error chat AFTER the write, so `recorded` reflects whether an activity was
       // actually created (a thrown write fails the job BEFORE this — a retry then notifies once it

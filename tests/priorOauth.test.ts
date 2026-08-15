@@ -66,7 +66,7 @@ describe('token/auth bodies', () => {
 
 describe('DCR registration metadata', () => {
   it('token_endpoint_auth_method is an ARRAY and jwks is a STRING (the two 500-hiding shapes)', () => {
-    const jwks = { keys: [{ kty: 'RSA', kid: 'k1' }] }
+    const jwks = { keys: [{ kty: 'RSA', kid: 'k1', e: 'AQAB', n: 'x'.repeat(342) }] }
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks })
     expect(Array.isArray(meta.token_endpoint_auth_method)).toBe(true)
     // PINNED value, not just the shape (#444): the default is the SANDBOX-ONLY method. When this
@@ -79,16 +79,34 @@ describe('DCR registration metadata', () => {
     expect(meta.client_name).toBe('App')
   })
 
-  it('declares request_object_signing_alg — without it authorize dies AFTER the bank login', () => {
+  it('declares request_object_signing_alg — the one value the bank accepts', () => {
     const meta = buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob' })
-    // Live-measured (2026-08-14): a registration without this field passes DCR, passes
-    // client_credentials and gets `201` on /accountConsents, then bounces the account holder off
-    // /oauth2/authorize with `invalid_request_object` — i.e. the failure surfaces only after they
-    // have logged into their bank. Pinned separately from `id_token_signed_response_alg` on
-    // purpose: the two look interchangeable and are not (id_token = what the bank signs for us,
-    // request object = what we sign for the bank), and shipping only the latter is exactly the
-    // bug this pins.
+    // `/oidcdiscovery` publishes exactly one accepted value, and a client that signs its request
+    // objects is supposed to declare which algorithm it uses. Cheap and spec-correct.
+    //
+    // ⚠ This does NOT guard against `invalid_request_object`, and an earlier version of this
+    // comment claimed it did. Priorbank neither stores nor returns the field — `GET /register/{id}`
+    // omits it for a client that authorizes fine and for one that doesn't (measured live, 2026-08-15).
+    // The real cause back then was an empty modulus in `jwks`. Keeping the pin anyway: sending a
+    // correct declaration is right regardless of whether this particular bank reads it.
     expect(meta.request_object_signing_alg).toBe('RS256')
+  })
+
+  it('отвергает RSA-ключ без пригодного модуля — та самая причина инцидента', () => {
+    // Регистрация у этого банка ОДНОСТОРОННЯЯ: `PUT /register` отвечает `500`, поэтому испорченный
+    // ключ чинится только новой регистрацией — а она даёт новый `client_id` и осиротит все уже
+    // подключённые счета. При этом до самого конца ничто не подаёт голоса: тело структурно верное,
+    // DCR отдаёт `201`, `client_credentials` работает, согласие создаётся. Ключ нужен банку только
+    // на `GET /oauth2/authorize` — тремя шагами и одним входом в интернет-банк позже.
+    const broken = { keys: [{ kty: 'RSA', kid: 'k1', e: 'AQAB', n: '' }] }
+    expect(() => buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks: broken }))
+      .toThrow(/modulus/i)
+    // Пустой набор ключей — тот же класс: структура есть, содержимого нет.
+    expect(() => buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks: { keys: [] } }))
+      .toThrow(/no keys/i)
+    // Правдоподобный модуль проходит — иначе гард запретил бы работать вообще.
+    const ok = { keys: [{ kty: 'RSA', kid: 'k1', e: 'AQAB', n: 'x'.repeat(342) }] }
+    expect(() => buildRegistrationMetadata({ clientName: 'App', redirectUri: 'https://cb/ob', jwks: ok })).not.toThrow()
   })
 
   it('omits jwks when none is provided', () => {

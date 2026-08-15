@@ -83,7 +83,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -133,6 +133,9 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     onAllocationDecision: (it, decision, triggerTargets, memberId) => {
       const tag = decision.action === 'allocate' ? `allocate:${decision.target.id}:${decision.ambiguous ? 'amb' : 'one'}` : decision.action
       calls.allocLog.push([it.docId, tag, triggerTargets, memberId])
+    },
+    onOperation: (it, outcome, memberId) => {
+      calls.opLog.push([it.docId, outcome.owner, outcome.recognized, outcome.activityId, memberId])
     },
     notifyChat: async (it, _dialogId, memberId) => {
       calls.chat.push([it.docId, memberId])
@@ -1519,5 +1522,74 @@ describe('producers no-op without Redis', () => {
     const { enqueueEvent, enqueueFetch } = await import('../server/queue/producers')
     expect(await enqueueEvent({ memberId: 'M', domain: 'd', kind: 'ONAPPINSTALL', ts: '1' })).toBe(false)
     expect(await enqueueFetch({ memberId: 'M', providerId: 'manual', account: 'A', dateFrom: 'x', dateTo: 'y' })).toBe(false)
+  })
+})
+
+describe('per-op observation (onOperation) — видимость операции, которая не нашла НИЧЕГО', () => {
+  // Мотив теста, а не только его предмет: до `onOperation` операция без компании не порождала НИ
+  // ОДНОЙ строки лога. `onRecognized` требует распознанного номера, `onResolved`/`onAllocationDecision`
+  // — найденной компании; операция, провалившаяся на первом же шаге, не доходила ни до одного из них.
+  // На живом портале это дало сводку «117 обработано, 117 не опознано» и ноль сведений о том, ЧТО
+  // именно не опозналось. Здесь закреплено, что теперь такая операция отчитывается — и отчитывается
+  // ровно тем полем, по которому её чинят.
+  const job = (items: StatementItem[]): CrmSyncJob => ({
+    memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items
+  })
+
+  it('компания клиента найдена → owner=client + id созданного дела', async () => {
+    const { deps, calls } = fakeDeps()
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.opLog).toEqual([['d1', 'client', 0, 'act-1', 'M']])
+  })
+
+  it('клиент не найден, моя компания есть → owner=my-company (виден именно ФОЛБЭК, а не «нашли»)', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY' })
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.opLog).toEqual([['d1', 'my-company', 0, 'act-1', 'M']])
+  })
+
+  it('ни клиента, ни моей компании → owner=none, дела нет — ЕДИНСТВЕННАЯ строка про эту операцию', async () => {
+    // Тот самый случай с живого портала. Проверяем не только свою строку, но и МОЛЧАНИЕ остальных
+    // каналов: если однажды сюда доедет ещё один лог, тест не должен это скрыть.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null })
+    const r = await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(r).toMatchObject({ processed: 1, created: 0, unmatched: 1 })
+    expect(calls.opLog).toEqual([['d1', 'none', 0, null, 'M']])
+    expect(calls.recognized).toEqual([])
+    expect(calls.resolvedLog).toEqual([])
+    expect(calls.allocLog).toEqual([])
+  })
+
+  it('несёт число распознанных идентификаторов — ноль на живом портале значит «матрицы не описывают его нумерацию»', async () => {
+    const recognition: RecognitionSettings = { alphabet: 'cyrillic', configFields: {}, matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }] }
+    const { deps, calls } = fakeDeps({ batch: [], company: null, myCompany: null, recognition })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'оплата по счёту СЧ-1234')]), deps)
+    expect(calls.opLog).toEqual([['d1', 'none', 1, null, 'M']])
+  })
+
+  it('исключённая операция НЕ отчитывается — она не обрабатывалась, а строка соврала бы об обратном', async () => {
+    const chat: ChatSettings = { dialogId: 'chat1', rules: { directions: ['credit', 'debit'], excludeAccounts: ['A'] } }
+    const { deps, calls } = fakeDeps({ chat })
+    const r = await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(r).toMatchObject({ excluded: 1, processed: 1 })
+    expect(calls.opLog).toEqual([])
+  })
+
+  it('дедуп-пропуск при повторной доставке НЕ отчитывается второй раз', async () => {
+    // Иначе повторная доставка джобы выглядела бы в логе как повторная запись платежа.
+    const { deps, calls } = fakeDeps()
+    const j = job([item('d1')])
+    await handleCrmSyncJob(j, deps)
+    await handleCrmSyncJob(j, deps)
+    expect(calls.opLog).toEqual([['d1', 'client', 0, 'act-1', 'M']])
+  })
+
+  it('колбэк НЕОБЯЗАТЕЛЬНЫЙ — проводка без него работает как прежде', async () => {
+    // `onOperation` добавлен опциональным ровно затем, чтобы существующие сборки deps не ломались;
+    // если он однажды станет обязательным по факту (вызов без `?.`), это упадёт здесь.
+    const { deps } = fakeDeps()
+    const { onOperation: _drop, ...withoutObserver } = deps
+    const r = await handleCrmSyncJob(job([item('d1')]), withoutObserver as HandlerDeps)
+    expect(r).toMatchObject({ processed: 1, created: 1 })
   })
 })
