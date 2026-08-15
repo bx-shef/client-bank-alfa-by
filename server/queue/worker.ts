@@ -47,10 +47,10 @@ import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
-import { writeConfigurableActivityViaRest } from '../utils/configurableActivityWrite'
+import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
-import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/configurableActivity'
+import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
@@ -202,7 +202,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return writeConfigurableActivityViaRest(item, companyId, call, note)
+      return writeTodoActivityViaRest(item, companyId, call, note)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the

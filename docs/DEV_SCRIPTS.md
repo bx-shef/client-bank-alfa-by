@@ -23,7 +23,7 @@
 | `pnpm verify:chat` | живой прогон чат-уведомлений | **пишет** сообщение и удаляет его |
 | `pnpm verify:distribution` | write-путь СП-леджера | **пишет** в портал, есть teardown |
 | `pnpm mutate:test` | мутация разнесения (оплата/стадия) | dry-run по умолчанию; `--apply` **пишет** |
-| `pnpm activity:test` | запись настраиваемого дела | dry-run; `--apply` **пишет** |
+| `pnpm activity:test` | запись универсального дела + маркер | dry-run; `--apply` **пишет** |
 | `pnpm trigger:test` | регистрация триггера автоматизации | dry-run; `--apply` **пишет** |
 | `pnpm sdk:test` / `sdk:oauth` / `sdk:crm:test` | смоуки транспорта B24 (вебхук и OAuth) | чтение; ротируют refresh: `sdk:crm:test --force-refresh`, `sdk:oauth --refresh` |
 | `scripts/extract-oauth-from-docker.sh` | вытащить OAuth-грант портала из backend-контейнера | ⚠ **ротирует refresh ЖИВОГО портала безусловно**, самим фактом запуска — только на ТЕСТОВОМ сервере; на проде портал придётся переустанавливать |
@@ -123,12 +123,12 @@
   (`B24OAuth`, как воркер) с этими кредами (in-memory токен-стор, без pg/Redis): `profile`+`crm.item.list` (проверка
   конверта `{result,…}`) и `--force-refresh` (бэкдейтит истечение → проверяет **refresh+persist**). Креды — в
   git-ignored `.env.b24oauth` (шаблон `.env.b24oauth.example`). Dev-only, не часть SSG.
-- `scripts/configurable-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой смоук
+- `scripts/todo-activity-test.ts` (`pnpm activity:test --company <id>` / `--apply`) — **живой смоук
   записи дела (#259)** (настраиваемое дело). Гоняет **тот же** код, что crm-sync:
   `buildConfigurableActivity`→`writeConfigurableActivityViaRest`→`findActivityByMarker` по OAuth-транспорту
   (`makePortalSdkCall`, in-memory токен-стор, креды из `.env.b24oauth`). **Dry-run по умолчанию** (печатает
   params); `--apply` создаёт настраиваемое дело и проверяет **round-trip дедупа** (поиск маркера находит
-  созданное дело). `configurable.add` — только OAuth-контекст, вебхуком не проверить (класс #79). Dev-only.
+  созданное дело). ⚠ Гоняется **обязательно перед выкатом смены носителя** (#495): маркер ставится ВТОРЫМ вызовом, и round-trip «записали → нашли по маркеру» — единственная проверка, что дедуп не сломан. Dev-only.
 - `scripts/trigger-register-test.ts` (`pnpm trigger:test` / `--apply`) — **живой смоук регистрации триггера
   автоматизации (#79)**. Гоняет **тот же** билдер, что установка: `buildTriggerRegisterCall(B24_PAYMENT_TRIGGER)`
   → `crm.automation.trigger.add` по OAuth-транспорту (`makePortalSdkCall`, креды `.env.b24oauth`). **Dry-run по

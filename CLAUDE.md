@@ -428,10 +428,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `app/utils/activity.ts` — **общие хелперы дела**: заголовок (`buildActivityTitle`), деньги/дата
     (`formatMoney`/`formatIsoDate`), TZ-штамп дедлайна (`toPortalDeadline`, UTC+3), тип-владелец
     (`CRM_OWNER_TYPE_COMPANY`), app-namespace `ACTIVITY_ORIGIN`, `CrmCompanyRef`. Сам билдер носителя —
-    `configurableActivity.ts` (настраиваемое дело). **Безопасность:** внешние поля (назначение/контрагент/
+    `todoActivity.ts` (универсальное дело, #495). **Безопасность:** внешние поля (назначение/контрагент/
     номер документа — контролирует плательщик) прогоняются через `neutralizeBb` (BB-скобки → полноширинные)
     — иначе `[url=…]`/упоминания попали бы в карточку. `neutralizeBb` живёт здесь (шарится в
-    `chatMessage.ts` и `configurableActivity.ts`, чтобы не было цикла импорта).
+    `chatMessage.ts` и `todoActivity.ts`, чтобы не было цикла импорта).
   - `app/utils/allocation.ts` — **чистое ядро разнесения оплат** (#109, спека — `docs/PROCESSING.md` §2):
     `resolveAllocation` над кандидатами, уже отфильтрованными по компаниям **и по стадии** (инвойсы/сделки
     с отрицательной стадией исключены; Этап C/D), решает по критерию владельца (совпали **сумма** — точно,
@@ -619,11 +619,11 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     — `resolveTombstoneDays` кламп [1,365] дефолт 30 + `sweepExpiredTombstones`, DI+тесты) сносит `portal_tombstone`
     старше `TOMBSTONE_TTL_DAYS`; висит на том же крон-тике, что statement-свип (#245, под `cron.sweep`-спаном).
     `deleted_ts` — в **секундах** (B24 `ts`), сверка с `EXTRACT(EPOCH FROM now())` unit-safe (мс-значение не подметётся рано).
-  - **Дедуп дел — в B24, без стора (#259).** crm-sync пишет **настраиваемое дело** с маркером
+  - **Дедуп дел — в B24, без стора (#259).** crm-sync пишет **универсальное дело** с маркером
     `originatorId`+`originId` и перед записью ищет его (`crm.activity.list`), поэтому Postgres-стора
     `{dedupKey→activityId}` больше нет (таблица `activity_dedup`, модуль `activityDedupStore.ts` и
-    `rememberActivity` удалены). Модули носителя/поиска — ниже (`configurableActivity.ts`/
-    `configurableActivityWrite.ts`/`activityMarkerLookup.ts`). In-batch `Set` в `handleCrmSyncJob`
+    `rememberActivity` удалены). Модули носителя/поиска — ниже (`todoActivity.ts`/
+    `todoActivityWrite.ts`/`activityMarkerLookup.ts`). In-batch `Set` в `handleCrmSyncJob`
     снимает дубли внутри пакета; кросс-джобовую идемпотентность держит маркер в B24.
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/utils/envCheck.ts` (+ плагин `server/plugins/envCheck.ts`) — валидация env на старте
@@ -916,7 +916,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (пер-портальный лимитер). **In-client РЕТРАЙ отключён** (`disableSdkRetry` → `setRestrictionManagerParams`
     `{...ParamsFactory.getDefault(), maxRetries:1, retryOnNetworkError:false}`, #123, паритет с `ai-price-import`):
     троттл (leaky-bucket) остаётся — он **проактивно** не даёт словить `QUERY_LIMIT_EXCEEDED`, — но ретрай на сетевом
-    сбое/5xx выключен, т.к. crm-sync шлёт **неидемпотентные** записи (`crm.activity.configurable.add`, мутации разнесения):
+    сбое/5xx выключен, т.к. crm-sync шлёт **неидемпотентные** записи (`crm.activity.todo.add`, мутации разнесения):
     ретрай после закоммитившегося-но-таймутнувшего запроса **задвоил бы** сущность (Bitrix не enforce-ит уникальность
     маркера в пределах одного вызова). Падаем всей джобой → BullMQ-ретрай **идемпотентен** (read-before-write по маркеру +
     applied-детект мутаций). `setRestrictionManagerParams` async, но конфиг присваивается синхронно (до первого await) →
@@ -944,24 +944,29 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`isHaltOnError`+`returnAjaxResult`), конверты per-команда в порядке (с ре-аттачем `total`/`next`), чанкинг по
     `SDK_BATCH_MAX`=50, halt-on-error (падение батча/любой команды → throw, без тихого пропуска). Проведён в
     `negativeStages` (пер-воронковые `crm.status.list` — одним батчем на тип сущности). Детали — `docs/QUEUES.md` §REST-бюджет.
-  - **Настраиваемое дело — единственный носитель операции (#259):** `app/utils/configurableActivity.ts` (чистый
-    билдер `crm.activity.configurable.add` — `layout` (**required** top-level `icon`=`{code}` + `header` +
-    `body.logo` + `text`/`withTitle`-блоки `ContentBlockDto`, сверено с офдокой) + маркер
-    `originatorId`=app-namespace/`originId`=ключ операции; внешние поля
-    BB-нейтрализованы) → `server/utils/configurableActivityWrite.ts`
-    (`writeConfigurableActivityViaRest`, конверт `{result:{activity:{id}}}`). Дедуп — **поиск маркера в B24**
-    `server/utils/activityMarkerLookup.ts` (`findActivityByMarker` по паре `ORIGINATOR_ID`+`ORIGIN_ID`; пустой
-    маркер → без REST); стора нет, `rememberActivity` убран (маркер пишется атомарно с делом). Прежний
-    `crm.activity.todo.add`-путь (`crmActivityWrite.ts`) и билдер `buildTodoActivity` **удалены**.
-    **Подтверждено вживую end-to-end** (OAuth-портал `bel.bitrix24.by`, `pnpm activity:test --company 1 --apply`):
-    OAuth-транспорт (#191) → `configurable.add` создаёт дело → `findActivityByMarker` находит ровно его
-    (дедуп-round-trip). Системные коды: `body.logo='document'`, `icon.code='sum'` (`crm.timeline.logo.list` /
-    `crm.timeline.icon.list`). ⚠ **Live-находка (исправлена):** `LayoutDto.icon` — **обязательное** поле (без него
-    портал отвергает вызов: «Поле icon в LayoutDto должно быть заполнено»); добавлен `LAYOUT_ICON_CODE='sum'`.
-    Пустые внешние поля (физлицо без УНП, комиссия без назначения) билдер **дропает** из `blocks` (портал
-    `value:''` терпит — live-probed, но рендерит битую строку; `amount`+`document` всегда есть → layout не пуст).
-    Сама запись `configurable.add` — **только OAuth-контекст** (класс #79; `ERROR_WRONG_CONTEXT` вебхуком) →
-    смоук `pnpm activity:test` OAuth-кредами.
+  - **Универсальное дело — единственный носитель операции (#495, сменило настраиваемое из #259):**
+    `app/utils/todoActivity.ts` (чистый билдер `crm.activity.todo.add`: владелец-компания, срок
+    (`toPortalDeadline`, UTC+3), BB-описание, **цвет по направлению** — приход `'4'` зелёный, расход
+    `'7'` розовый) → `server/utils/todoActivityWrite.ts` (транспорт). **Почему сменили:** настраиваемое
+    дело **ломало карточку компании** на живом портале и не умеет сказать глазом три вещи — цвет,
+    срок и «не выполнено». Соседний продукт прошёл этот путь в обратную сторону раньше
+    (`ai-price-import` #328) и живёт на `todo.add` в проде.
+    ⚠ **`colorId` — СТРОКИ, и цвет передаётся ВСЕГДА:** у жёлтого номера нет вовсе, его получают,
+    НЕ передав параметр, — то есть «цвет не задан» и «выбран жёлтый» на портале неотличимы, и
+    забытый параметр читался бы как осознанный выбор.
+    ⚠ **Дело НЕ закрывается никогда** (в отличие от соседа, который закрывает чистые импорты):
+    платёж — это то, с чем человек ещё должен что-то сделать, а закрытое дело читается как
+    «сделано, смотреть незачем». Отсутствие флага здесь — решение, и оно закреплено тестом.
+    ⚠ **Маркер дедупа ставится ВТОРЫМ вызовом** (`crm.activity.update` вместе с `DESCRIPTION_TYPE=3`
+    — BB; при дефолте `2`/HTML человек читал бы `[B]…[/B]` буквально). `todo.add` маркера не
+    принимает. Между вызовами дело существует БЕЗ маркера: упавший update **компенсируется
+    удалением сироты** (немаркированное дело хуже отсутствующего — дедуп не найдёт его никогда, и
+    повтор положит рядом второе), но жёсткий крах между вызовами оставит один дубль. Принятая цена
+    работающей карточки; поиск маркера (`findActivityByMarker`) не изменился.
+    ⚠ **Описание теперь РАЗМЕЧЕННОЕ**, поэтому нейтрализация BB стала несущей, а не защитной:
+    `[URL=…]` из назначения платежа стал бы настоящей ссылкой в карточке клиента.
+    Смоук перед выкатом — `pnpm activity:test --company <id> --apply` (OAuth-креды; проверяет
+    round-trip «записали → нашли по маркеру»).
   - `app/utils/allocationMutation.ts` — **чистый билдер мутации разнесения** (§2 мутационный слайс, #109):
     `buildAllocationMutation(target, opts)` — для `deal-payment` возвращает `{method:'crm.item.payment.pay',params:{id}}`;
     для `invoice` — `{method:'crm.item.update',params:{entityTypeId:31,id,fields:{stageId}}}` **при заданной** стадии

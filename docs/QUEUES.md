@@ -62,7 +62,7 @@ flowchart LR
 
   QC -->|handleCrmSyncJob<br/>дедуп account+docId| WC[воркер crm-sync]
   WC --> FC[поиск компании<br/>по корр-счёту]
-  WC --> WA[настраиваемое дело<br/>crm.activity.configurable.add]
+  WC --> WA[универсальное дело<br/>crm.activity.todo.add]
   WC --> NC[сообщение в чат<br/>по правилам]
 
   OBS[GET /api/queues<br/>waiting / active / completed / failed] -. читает .-> Q
@@ -82,13 +82,15 @@ flowchart LR
   `dedupKey` (`account|docId`; пустой `docId` → контент-сигнатура, #430 C1 —
   [`PROCESSING.md`](PROCESSING.md) §1). Против повторной доставки *всего* джоба (падение воркера после частичной записи)
   идемпотентность живёт **в B24, не в нашей БД** (#259, [`PROCESSING.md`](PROCESSING.md) §1): `writeActivity`
-  пишет **настраиваемое дело** (`crm.activity.configurable.add`) с маркером `originatorId`+`originId`, а
+  пишет **универсальное дело** (`crm.activity.todo.add`) и следом ставит маркер `ORIGINATOR_ID`+`ORIGIN_ID`, а
   `handleCrmSyncJob` **перед записью** ищет этот маркер (`getActivityId`→`findActivityByMarker`→
   `crm.activity.list`) и пропускает уже записанные — стора `activity_dedup` больше нет, `rememberActivity`
-  убран (маркер атомарен с делом). Транспорт **живой** (`writeConfigurableActivityViaRest`) по per-portal
+  убран. Транспорт **живой** (`writeTodoActivityViaRest`) по per-portal
   `RestCall`, с гейтом демо-счётов (`isDemoAccount`) — демо-нагрузка в реальный портал не пишет.
-  ⚠ `configurable.add` — только OAuth-контекст (класс #79), вебхуком не проверить → **live-смоук пройден**
-  (`pnpm activity:test`, `bel.bitrix24.by`: write + дедуп round-trip). Инвойс/смарт-процесс несут `xmlId` — для будущего носителя-элемента СП (§2/§5).
+  ⚠ **Маркер ставится ВТОРЫМ вызовом** (`crm.activity.update`) — `todo.add` его не принимает (#495).
+  Между вызовами дело существует без маркера: упавший update компенсируется удалением сироты, но
+  жёсткий крах между ними оставит дубль. Это принятая цена работающей карточки компании; проверяется
+  live-смоуком `pnpm activity:test` (write + дедуп round-trip). Инвойс/смарт-процесс несут `xmlId` — для будущего носителя-элемента СП (§2/§5).
   Чужие поля (`originId`/`xmlId` клиентских сделок/инвойсов) **не штампуем** — наш маркер на нашей записи.
 - **Брак пакета без ключа портала.** Воркер, взяв пакет, **первым делом** проверяет наличие токена
   портала. Нет (приложение удалено, в т.ч. посреди выгрузки) → пакет **отвергается** (убрать из очереди,
@@ -254,14 +256,14 @@ TLS-шлюз — он **есть и проверен вживую** (свой о
    применяется к **fetch/parse**, события — всегда 1). Самый дешёвый рычаг. ⚠ Узкое место — `crm-sync`
    (I/O к B24): включать concurrency/реплики для него **только после** (а) per-portal лимитера/батча
    (`callBatch`, иначе `QUERY_LIMIT`) и (б) **атомарности дедупа** (маркер в B24, #109/#259/PROCESSING §1):
-   read-before-write (`findActivityByMarker`→`configurable.add`) под параллелизмом — TOCTOU-окно между
+   read-before-write (`findActivityByMarker`→`todo.add`) под параллелизмом — TOCTOU-окно между
    поиском маркера и записью, два воркера могут создать дубль дела. Поэтому **crm-sync ЗАКРЕПЛЁН на
    concurrency 1** (#163, `concurrency: 1` в его `Worker`, не разделяемый `QUEUE_CONCURRENCY`) — поднятие
    общего knob'а масштабирует только fetch/parse и **не** делает crm-sync in-process-параллельным (иначе
    вернулся бы тот самый TOCTOU); **fetch/parse масштабируются свободно**.
    **Страховка от stalled-редоставки (#163, порт из `ai-price-import`).** Даже при concurrency=1 дубль
    мог родиться иначе: BullMQ считает джоб «протухшим» (stalled), если лок воркера не продлился, и отдаёт его
-   **второму** воркеру — если первый ещё в `configurable.add`, оба минуют маркер и пишут дубль. `crmLockTuning()`
+   **второму** воркеру — если первый ещё в `todo.add`, оба минуют маркер и пишут дубль. `crmLockTuning()`
    поднимает `lockDuration`/`stalledInterval` до **60с** (дефолт 30с): живой crm-воркер продлевает лок каждые
    `lockDuration/2` (его await'ы — REST-I/O, не блокируют event loop), поэтому ложно «протухнуть» практически не
    может → второй воркер не стартует параллельно. `maxStalledCount:1` — одна recovery-редоставка реально
