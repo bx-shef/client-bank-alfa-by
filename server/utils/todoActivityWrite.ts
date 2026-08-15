@@ -19,10 +19,57 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import {
-  ACTIVITY_DELETE_METHOD, ACTIVITY_UPDATE_METHOD, TODO_ACTIVITY_ADD_METHOD,
+  ACTIVITY_DELETE_METHOD, ACTIVITY_ORIGINATOR_ID, ACTIVITY_UPDATE_METHOD, TODO_ACTIVITY_ADD_METHOD,
   buildActivityMarkerUpdate, buildTodoActivity
 } from '../../app/utils/todoActivity'
+import { dedupKey } from '../../app/utils/statement'
+import { findActivityByMarker } from './activityMarkerLookup'
 import type { RestCall } from './companyLookup'
+
+/**
+ * Portals whose marker mechanism has been proven ON THIS PROCESS. See `verifyMarkerOnce`.
+ * In-memory by design: it is a probe, not a fact worth persisting, and a restart re-proving it
+ * costs one REST call.
+ */
+const markerProven = new Set<string>()
+
+/** Exposed for tests — a module-level cache would otherwise leak between cases. */
+export function resetMarkerProof(): void {
+  markerProven.clear()
+}
+
+/**
+ * Prove — ONCE per portal per process — that the marker we just stamped is actually findable.
+ *
+ * WHY THIS EXISTS. The marker is set by a SECOND call (`crm.activity.update`), because `todo.add`
+ * does not accept it. The compensating delete above covers an update that ERRORS. It does not cover
+ * an update that reports success while the field does not stick — and that failure is silent,
+ * total, and unbounded: `findActivityByMarker` finds nothing on the next run, so EVERY operation is
+ * written again, every poll, forever, into a client's CRM. Unit tests cannot rule it out (they do
+ * not know what a real portal does with these fields on this activity type), which is exactly why
+ * the smoke script existed as a manual pre-deploy gate.
+ *
+ * So the code proves it itself, on the first real write: read the marker back the same way the next
+ * run would. If it is not there, throw — the job retries, the operation is not silently duplicated,
+ * and the message says what to check. One extra REST call per portal per process is a rounding
+ * error next to a timeline nobody can clean up.
+ *
+ * ⚠ Failure to VERIFY (transport error) is not failure to mark: it is rethrown by `call` and
+ * handled as any other transient error. Only a definite «not found» is treated as proof of absence.
+ */
+async function verifyMarkerOnce(item: StatementItem, memberId: string, call: RestCall): Promise<void> {
+  if (markerProven.has(memberId)) return
+  const found = await findActivityByMarker(ACTIVITY_ORIGINATOR_ID, dedupKey(item), call)
+  if (!found) {
+    throw new Error(
+      '[activity] the dedup marker did not stick: the activity was created and updated without error, '
+      + 'but a search by ORIGINATOR_ID/ORIGIN_ID does not find it. Every operation would be written '
+      + 'again on every run. Check that crm.activity.update may set these fields on this portal '
+      + '(pnpm activity:test --company <id> --apply).'
+    )
+  }
+  markerProven.add(memberId)
+}
 
 /**
  * Pull the created activity id out of the `todo.add` response.
@@ -52,7 +99,10 @@ export async function writeTodoActivityViaRest(
   item: StatementItem,
   companyId: string,
   call: RestCall,
-  note?: string
+  note?: string,
+  /** Portal id — used only to prove the marker mechanism once per process (`verifyMarkerOnce`).
+   *  Omitted ⇒ no verification (keeps the smoke script and older callers working unchanged). */
+  memberId?: string
 ): Promise<string | null> {
   const params = buildTodoActivity(item, { id: Number(companyId) }, note)
   const added = await call(TODO_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
@@ -76,5 +126,10 @@ export async function writeTodoActivityViaRest(
     }
     throw updateError
   }
+
+  // Проверяется ПОСЛЕ успешной маркировки и только один раз на портал: см. `verifyMarkerOnce`.
+  // Сирота при провале проверки не остаётся — дело промаркировано, просто найти его не удалось;
+  // повторный прогон найдёт его по маркеру, если механизм всё-таки работает, и не задвоит.
+  if (memberId) await verifyMarkerOnce(item, memberId, call)
   return id
 }

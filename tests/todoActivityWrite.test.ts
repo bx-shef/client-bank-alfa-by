@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StatementItem } from '../app/types/statement'
 import {
   ACTIVITY_DELETE_METHOD, ACTIVITY_UPDATE_METHOD, TODO_ACTIVITY_ADD_METHOD
 } from '../app/utils/todoActivity'
-import { extractTodoActivityId, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
+import { ACTIVITY_LIST_METHOD } from '../server/utils/activityMarkerLookup'
+import { extractTodoActivityId, resetMarkerProof, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
 
 // Универсальное дело не принимает маркер в том же вызове, которым создаётся (#495) — маркер и
 // тип описания живут только в `crm.activity.update`. Значит между вызовами есть окно, в котором
@@ -102,5 +103,56 @@ describe('writeTodoActivityViaRest', () => {
     })
     await expect(writeTodoActivityViaRest(item(), '42', call)).rejects.toThrow('add boom')
     expect(call).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('маркер проверяется на деле, а не на слово (#495)', () => {
+  // Компенсирующее удаление закрывает update, который УПАЛ. Оно не закрывает update, который
+  // отчитался успехом, а поле не поставил — и это отказ молчаливый, полный и неограниченный:
+  // следующий прогон не найдёт маркер, и каждая операция будет записываться заново, каждый опрос,
+  // вечно, в CRM клиента. Юнит-тесты этого исключить не могут (они не знают, что реальный портал
+  // делает с этими полями), поэтому код проверяет сам — один раз на портал на процесс.
+  beforeEach(resetMarkerProof)
+
+  const subject = item({ docId: 'v1' })
+
+  function calls(markerFound: boolean) {
+    const seen: string[] = []
+    const call = async (method: string) => {
+      seen.push(method)
+      if (method === TODO_ACTIVITY_ADD_METHOD) return { result: { id: 77 } }
+      if (method === ACTIVITY_LIST_METHOD) return { result: markerFound ? [{ ID: 77 }] : [] }
+      return { result: true }
+    }
+    return { call, seen }
+  }
+
+  it('маркер находится — запись успешна, проверка больше не повторяется', async () => {
+    const { call, seen } = calls(true)
+    expect(await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1')).toBe('77')
+    expect(seen.filter(m => m === ACTIVITY_LIST_METHOD)).toHaveLength(1)
+
+    // Второй платёж того же портала проверку уже не платит.
+    await writeTodoActivityViaRest(item({ docId: 'v2' }), '5', call, undefined, 'M1')
+    expect(seen.filter(m => m === ACTIVITY_LIST_METHOD)).toHaveLength(1)
+  })
+
+  it('маркер НЕ находится — падаем громко, а не копим дубли молча', async () => {
+    const { call } = calls(false)
+    await expect(writeTodoActivityViaRest(subject, '5', call, undefined, 'M1'))
+      .rejects.toThrow(/маркер|marker/i)
+  })
+
+  it('каждый портал проверяется отдельно — поведение может отличаться', async () => {
+    const { call, seen } = calls(true)
+    await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1')
+    await writeTodoActivityViaRest(subject, '5', call, undefined, 'M2')
+    expect(seen.filter(m => m === ACTIVITY_LIST_METHOD)).toHaveLength(2)
+  })
+
+  it('без portalId проверки нет — смоук-скрипт и старые вызовы работают как раньше', async () => {
+    const { call, seen } = calls(false)
+    expect(await writeTodoActivityViaRest(subject, '5', call)).toBe('77')
+    expect(seen).not.toContain(ACTIVITY_LIST_METHOD)
   })
 })

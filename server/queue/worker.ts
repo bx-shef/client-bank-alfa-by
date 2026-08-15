@@ -202,7 +202,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return writeTodoActivityViaRest(item, companyId, call, note)
+      return writeTodoActivityViaRest(item, companyId, call, note, memberId)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
