@@ -86,7 +86,11 @@ say "Крипто-шлюз Приорбанка (если включён)"
 GW_ROUTES_BASELINE="${GW_ROUTES_BASELINE:-2}"
 # Секция целиком необязательная: у большинства развёртываний шлюза нет, и его отсутствие — не
 # авария. Но если он поднят, проверить надо ТРИ вещи, и каждая однажды стоила часа.
-if $DC ps --format '{{.Service}}' 2>/dev/null | grep -q '^crypto-gw$'; then
+# ⚠ `-a` не украшение: без него `ps` показывает ТОЛЬКО запущенные, и контейнер в restart-loop
+# (у `crypto-gw` стоит `restart: unless-stopped`, а сорванный монтаж корней роняет его в цикл —
+# это описано в OPERATIONS.md как типовой сбой) сюда просто не попадёт. Мы ушли бы в ветку «шлюз
+# не развёрнут, для песочницы это нормально» — то есть объявили бы аварию нормой.
+if $DC ps -a --format '{{.Service}}' 2>/dev/null | grep -q '^crypto-gw$'; then
   gw_log=$($DC logs --tail 40 crypto-gw 2>/dev/null)
 
   # 1. Понимает ли образ GW_ALLOW вообще. Старый образ переменную ИГНОРИРУЕТ молча: контейнер
@@ -113,18 +117,24 @@ if $DC ps --format '{{.Service}}' 2>/dev/null | grep -q '^crypto-gw$'; then
   # 3. Доходит ли трафик ДО БАНКА. Разница читается по `upstream`: прочерк — отказ вынес сам шлюз
   #    (путь вне списка), число — ответил банк. Мы бьём в ресурсный API без токена и ждём 401:
   #    это ответ банка, то есть доказательство, что рукопожатие по СТБ 34.101.65 состоялось.
-  probe=$($DC exec -T backend node -e "fetch('http://crypto-gw:1080/open-banking/v1.0/accounts').then(r=>console.log(r.status)).catch(e=>console.log('ERR',e.cause&&e.cause.code))" 2>/dev/null | tr -d '[:space:]')
+  # Таймаут обязателен, как и у curl-проверок ниже: шлюз, принявший соединение и замолчавший,
+  # иначе подвешивает ВСЮ диагностику — а зовут её в момент аварии, когда это дороже всего.
+  probe=$($DC exec -T backend node -e "fetch('http://crypto-gw:1080/open-banking/v1.0/accounts',{signal:AbortSignal.timeout(10000)}).then(r=>console.log(r.status)).catch(e=>console.log('ERR',(e.cause&&e.cause.code)||e.name))" 2>/dev/null | tr -d '[:space:]')
   case "$probe" in
-    401) ok "банк отвечает через шлюз (401 без токена — рукопожатие состоялось)" ;;
-    404) bad "шлюз вернул 404 — ресурсный API вне списка маршрутов, проверить GW_ALLOW" ;;
-    "")  bad "проба через шлюз не отработала — backend в сети cryptonet? (частая забытая строка)" ;;
-    *)   warn "проба через шлюз: $probe (ожидался 401)" ;;
+    401)   ok "банк отвечает через шлюз (401 без токена — рукопожатие состоялось)" ;;
+    404)   bad "шлюз вернул 404 — ресурсный API вне списка маршрутов, проверить GW_ALLOW" ;;
+    "")    bad "проба не дала вывода — контейнер backend запущен? ('$DC ps -a')" ;;
+    # ⚠ Забытая строка `- cryptonet` у backend/worker (третье из трёх мест, OPERATIONS.md) даёт
+    # именно СЕТЕВУЮ ошибку, а не пустой вывод: имя `crypto-gw` не резолвится. Подсказка висела на
+    # пустой ветке, куда этот случай не приходит, — то есть в реальной аварии её никто бы не увидел.
+    ERR*)  bad "проба не дошла до шлюза ($probe) — backend в сети cryptonet? (частая забытая строка)" ;;
+    *)     warn "проба через шлюз: $probe (ожидался 401)" ;;
   esac
 
   # Негативная проба. Позитивная не поймала бы молча отключившийся enforcement — а именно так и
   # вёл себя образ, не знавший про GW_ALLOW: маршруты остались прежними, и ни одна проверка «а
   # отвечает ли банк» этого не заметила бы.
-  denied=$($DC exec -T backend node -e "fetch('http://crypto-gw:1080/no-such-route').then(r=>console.log(r.status)).catch(()=>console.log('ERR'))" 2>/dev/null | tr -d '[:space:]')
+  denied=$($DC exec -T backend node -e "fetch('http://crypto-gw:1080/no-such-route',{signal:AbortSignal.timeout(10000)}).then(r=>console.log(r.status)).catch(e=>console.log('ERR',(e.cause&&e.cause.code)||e.name))" 2>/dev/null | tr -d '[:space:]')
   if [ "$denied" = "404" ]; then ok "неразрешённый путь отбивается шлюзом (404) — список применяется"
   else bad "неразрешённый путь дал «$denied» вместо 404 — allowlist НЕ применяется, шлюз шире, чем задумано"; fi
 else
