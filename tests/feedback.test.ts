@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { attachedFileContent, buildFeedbackIssue, escapeHtml, MAX_COMMENT_LENGTH, MAX_FILE_EMBED, normalizeKind, sanitizeComment, stripHostileChars } from '~/utils/feedback'
+import { attachedFileContent, buildFeedbackIssue, escapeHtml, MAX_COMMENT_LENGTH, MAX_FILE_EMBED, normalizeKind, OPERATION_FIELDS, sanitizeComment, stripHostileChars } from '~/utils/feedback'
+import { makeProgramSample } from '~/utils/programFeedback'
 
 // Build hostile chars from code points (never type the invisible characters literally — that would
 // itself be a Trojan-Source vector, and the point of the strip is to remove exactly these).
@@ -215,5 +216,30 @@ describe('контекст операции в отзыве (#499)', () => {
     })
     expect(issue.body).not.toContain('УНП контрагента')
     expect(issue.body).toContain('Назначение')
+  })
+})
+
+describe('форма платежа общая с программным каналом (#499)', () => {
+  it('поля `OPERATION_FIELDS` и `ProgramSample` совпадают', () => {
+    // Правило приватности записано ОДНО на оба канала, но держится это на трёх ручных копиях формы:
+    // рендер здесь, `makeProgramSample` у воркера и литерал в `OperationList`. Комментарии заявляют
+    // синхронность — комментарии её не обеспечивают. Расхождение проявилось бы так: один канал уже
+    // шлёт новое поле, второй нет, а FEEDBACK.md описывает то, чего нет ни в одном.
+    const sample = makeProgramSample({
+      account: 'BY00OUR0001',
+      docId: 'd1',
+      docNum: '1',
+      acceptDate: '2026-08-15T00:00:00.000Z',
+      direction: 'credit',
+      amount: 1,
+      currency: 'BYN',
+      purpose: 'p',
+      operCodeName: '',
+      counterparty: { name: 'n', account: 'a', unp: 'u', bank: 'b' }
+    }, 'unmatched')
+    // `kind` описывает, на чём запуталась ПРОГРАММА, — у отзыва сотрудника такого поля нет.
+    const programKeys = Object.keys(sample).filter(k => k !== 'kind').sort()
+    const renderedKeys = OPERATION_FIELDS.map(([key]) => key).sort()
+    expect(renderedKeys).toEqual(programKeys)
   })
 })

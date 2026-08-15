@@ -4,6 +4,7 @@ import ArrowTopSIcon from '@bitrix24/b24icons-vue/outline/ArrowTopSIcon'
 import ArrowDownSIcon from '@bitrix24/b24icons-vue/outline/ArrowDownSIcon'
 import EmptyMessageIcon from '@bitrix24/b24icons-vue/outline/EmptyMessageIcon'
 import type { StatementItem } from '~/types/statement'
+import { makeProgramSample } from '~/utils/programFeedback'
 
 // Statement operations as a compact, scannable list (modelled on the Bitrix24 /
 // Alfa "Последние операции" view): rows grouped by day, a direction tile
@@ -49,18 +50,13 @@ function toRow(item: StatementItem) {
     name: item.counterparty.name,
     purpose: item.purpose,
     requisites: requisites(item),
-    // Отзыв о КОНКРЕТНОМ платеже (#499). Форма — ровно та же, что у программного канала
-    // (`makeProgramSample`): два канала об одном событии под двумя разными правилами разъехались
-    // бы, и разъехался бы тот, который никто не перечитывает.
-    sample: {
-      direction: item.direction,
-      amount: item.amount,
-      currency: item.currency,
-      purpose: item.purpose,
-      counterparty: item.counterparty.name,
-      counterpartyAccount: item.counterparty.account,
-      counterpartyUnp: item.counterparty.unp
-    } as Record<string, unknown>
+    // Отзыв о КОНКРЕТНОМ платеже (#499). Форму строит ТОТ ЖЕ `makeProgramSample`, что и программный
+    // канал, — не копия «такой же формы», а буквально она: правило приватности записано одно на два
+    // канала, и держать его на двух ручных литералах значит ждать, пока они разойдутся. `kind`
+    // описывает, на чём запуталась программа; у отзыва человека такого нет, поэтому оно снимается.
+    sample: (({ kind: _kind, ...rest }) => rest as Record<string, unknown>)(
+      makeProgramSample(item, 'unmatched')
+    )
   }
 }
 
@@ -164,6 +160,7 @@ const hasItems = computed(() => props.items.length > 0)
           <div class="pb-3 pl-12">
             <FeedbackWidget
               :operation="row.sample"
+              :subject-key="row.key"
               place="операция"
             />
           </div>

@@ -23,11 +23,12 @@ function fakeStore() {
       const k = key(p[0], p[1])
       const prev = rows.get(k)
       if (sql.includes('\'queued\'')) {
-        // ON CONFLICT сбрасывает строку в «принято» и обнуляет счётчики (#498): повторная загрузка
-        // теперь действительно перезапускает обработку, и прошлый итог на экране был бы отчётом об
-        // успехе за работу, которая ещё не началась.
+        // ON CONFLICT сбрасывает строку в «принято», обнуляет счётчики и ПЕРЕПОДПИСЫВАЕТ её на
+        // того, кто загрузил последним (#498): повтор теперь действительно перезапускает обработку,
+        // и её итог должен достаться тому, кто её запустил.
         rows.set(k, {
-          ...(prev ?? { batch_id: p[1], user_id: p[3] }),
+          ...(prev ?? { batch_id: p[1] }),
+          user_id: p[3],
           state: 'queued', file_name: p[2],
           operations: 0, created: 0, notified: 0, unmatched: 0, error: '',
           updated_at: '2026-07-30T06:00:00.000Z'
@@ -85,8 +86,27 @@ describe('importBatchStore', () => {
     expect(onConflict).toMatch(/state\s+= 'queued'/)
     expect(onConflict).toMatch(/operations = 0/)
     expect(onConflict).toMatch(/error\s+= ''/)
-    // Чужую строку не перетереть: ключ — хеш файла, он совпадёт у коллеги с тем же файлом.
-    expect(onConflict).toMatch(/WHERE import_batch\.user_id = EXCLUDED\.user_id/)
+    // ⚠ И строка переподписывается на последнего загрузившего. Прежний
+    // `WHERE import_batch.user_id = EXCLUDED.user_id` защищал подпись, пока повтор ничего не
+    // запускал; теперь запускает — и отметка коллеги не проходила, а его прогон всё равно шёл и
+    // перезаписывал счётчики (`saveBatchResult` пишет без пользователя). Итог принадлежал одному,
+    // подпись другому, и запустивший не видел СВОЕГО результата вовсе.
+    expect(onConflict).toMatch(/user_id\s+= EXCLUDED\.user_id/)
+    expect(onConflict).not.toMatch(/WHERE/)
+  })
+
+  it('коллега, загрузивший тот же файл, видит СВОЙ результат', async () => {
+    // Ключ — хеш ФАЙЛА, поэтому у двух сотрудников он совпадёт. Прогон общий (файл тот же), значит
+    // и ответ общий — но достаться он должен тому, кто его запустил, иначе экран у него пуст.
+    const { query } = fakeStore()
+    await markBatchQueued(query, 'M', ID, 'v.txt', 'ALICE')
+    await saveBatchResult(query, 'M', ID, { operations: 5, created: 5, notified: 0, unmatched: 0 })
+
+    await markBatchQueued(query, 'M', ID, 'v.txt', 'BOB')
+    await saveBatchResult(query, 'M', ID, { operations: 5, created: 5, notified: 0, unmatched: 0 })
+    const [forBob] = await getBatchResults(query, 'M', [ID], 'BOB')
+    expect(forBob?.state).toBe('ok')
+    expect(forBob?.created).toBe(5)
   })
 
   it('готовый итог сменяется на «принято» при повторной загрузке того же файла', async () => {

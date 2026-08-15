@@ -13,19 +13,25 @@ import { useFeedback } from '~/composables/useFeedback'
 // платёж» и есть содержание отзыва, а спрашивать разрешение на то, куда сам же ткнул, — это лишний
 // клик ни за чем. Файл целиком — другое дело: в нём все ОСТАЛЬНЫЕ платежи, на которые не показывал
 // никто, и он по-прежнему за галкой (#198). `place` — не данные клиента, а где человек стоял.
+// `subjectKey` (#499) — что именно оценивают (ключ операции, хеш файла). Нужен потому, что виджет
+// НЕ переживает своего хозяина: внутри строки операции он живёт в `B24Collapsible`, а тот выгружает
+// содержимое при сворачивании. «Спасибо за отзыв!» исчезало вместе со строкой, и повторное
+// раскрытие снова предлагало кнопки — то есть второй 👍 заводил ВТОРОЙ issue о том же платеже,
+// столько раз, сколько строку свернули и развернули.
 const props = defineProps<{
   fileName?: string
   fileText?: string
   operation?: Record<string, unknown>
   place?: string
+  subjectKey?: string
 }>()
-const { enabled, ensureEnabled, submit } = useFeedback()
+const { enabled, ensureEnabled, submit, alreadyRated, rememberRated } = useFeedback()
 
 const open = ref(false) // comment box shown
 const comment = ref('')
 const attachFile = ref(false) // consent to attach the statement file (default OFF — explicit opt-in)
 const sending = ref(false)
-const sent = ref(false)
+const sent = ref(alreadyRated(props.subjectKey))
 const error = ref('')
 
 onMounted(() => {
@@ -64,8 +70,10 @@ async function rate(kind: 'up' | 'down'): Promise<void> {
       operation: props.operation,
       place: props.place
     })
-    if (ok) sent.value = true
-    else error.value = 'Отзыв доступен только внутри портала Bitrix24'
+    if (ok) {
+      sent.value = true
+      rememberRated(props.subjectKey)
+    } else { error.value = 'Отзыв доступен только внутри портала Bitrix24' }
   } catch {
     error.value = 'Не удалось отправить отзыв'
   } finally {

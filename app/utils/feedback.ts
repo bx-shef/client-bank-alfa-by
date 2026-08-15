@@ -68,7 +68,8 @@ export interface FeedbackContext {
    * line, and it is the same line #198 drew.
    */
   operation?: unknown
-  /** Where the employee was standing (`операция` / `загрузка` / `настройки`). Not client data —
+  /** Which screen the employee was on (`операция` / `загрузка` / `разбор` / `экран готовности` /
+   *  `общий экран`). Not client data —
    *  it is how triage tells «разобралось не так» from «не понимаю, чего от меня хотят». */
   place?: unknown
   /** Raw statement text, embedded in the issue ONLY with the employee's explicit consent (#198).
@@ -80,7 +81,7 @@ export interface FeedbackContext {
 /** Fields of a reported operation, in render order. A fixed list rather than «whatever the object
  *  has»: an object spread would silently start shipping any field a future `StatementItem` gains,
  *  which is exactly how a privacy rule stops matching its own documentation. */
-const OPERATION_FIELDS: ReadonlyArray<readonly [string, string]> = [
+export const OPERATION_FIELDS: ReadonlyArray<readonly [string, string]> = [
   ['direction', 'Направление'],
   ['amount', 'Сумма'],
   ['currency', 'Валюта'],

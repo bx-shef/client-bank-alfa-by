@@ -1,6 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { ref } from 'vue'
 import StatementUpload from '~/components/StatementUpload.vue'
+
+// Канал отзывов серверный — включаем мокой, иначе виджеты не рисуются и проверять нечего.
+vi.mock('~/composables/useFeedback', () => ({
+  useFeedback: () => ({
+    enabled: ref(true),
+    ensureEnabled: vi.fn(async () => {}),
+    submit: vi.fn(async () => true),
+    alreadyRated: () => false,
+    rememberRated: () => {}
+  })
+}))
 
 // Render/wiring test. The parse itself (windows-1251 decode → operations, dedup,
 // validation) is covered on real fixtures in tests/importUpload.test.ts; the
@@ -30,5 +42,13 @@ describe('StatementUpload', () => {
     sessionStorage.setItem('cba.import.batches', '{"не":"массив"}')
     const wrapper = await mountSuspended(StatementUpload)
     expect(wrapper.find('[data-testid="batch-results"]').exists()).toBe(false)
+  })
+
+  it('без разбора и без итога виджетов отзыва нет — спрашивать не о чем (#499)', async () => {
+    // Виджет «разбор» появляется только когда что-то разобралось, виджет «загрузка» — только когда
+    // карточка итога вообще есть. Пустой экран не должен спрашивать «результат помог?».
+    sessionStorage.removeItem('cba.import.batches')
+    const wrapper = await mountSuspended(StatementUpload)
+    expect(wrapper.findAllComponents({ name: 'FeedbackWidget' })).toHaveLength(0)
   })
 })

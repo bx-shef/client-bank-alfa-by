@@ -125,6 +125,20 @@ async function unstickFailedOnly(queue: ReturnType<typeof getQueue>, jobId: stri
   await unstick(queue, jobId, state => state === 'failed')
 }
 
+/**
+ * ⚠ THE READ AND THE REMOVE ARE NOT ATOMIC, and both BullMQ calls address the job by ID rather than
+ * by the snapshot we read. Two producers racing on the same id can therefore interleave so that the
+ * second one removes the job the first one just added, and the first `enqueue*` returns `true` for
+ * work that no longer exists.
+ *
+ * That is harmless HERE and only here, because every id that can collide is derived from content
+ * (file hash / batch hash): whichever job survives carries an equivalent payload, so the work still
+ * happens and the loser cost nothing but Redis churn. ⚠ Reusing this helper on a queue whose ids
+ * are NOT content-derived would turn the same race into silently dropped work — check that first.
+ *
+ * An ACTIVE job is safe regardless: BullMQ refuses to remove a job locked by a worker, the throw
+ * lands in the catch, and the trailing `add` dedups against it as usual.
+ */
 async function unstick(
   queue: ReturnType<typeof getQueue>,
   jobId: string,

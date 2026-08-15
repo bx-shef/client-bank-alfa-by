@@ -45,6 +45,16 @@ function connectCalls() {
   return fetchMock.mock.calls.filter(c => c[0] === '/api/bank/connect')
 }
 
+// ⚠ ФАЙЛОВЫЙ, а не точечный. Часть тестов зовёт `vi.unstubAllGlobals()` (им нужен свой `window.open`),
+// и вместе с ним отваливается стаб `$fetch`. Дальше происходило худшее, что может сделать тест: он
+// оставался ЗЕЛЁНЫМ, но проверял не то. Компонент ловил любую ошибку и рисовал ОБЩЕЕ «Не удалось
+// начать подключение», assert на наличие ошибки срабатывал — а серверного текста, ради которого
+// тест написан, никто не читал, и запроса вообще не было. Чинить это после каждого
+// `unstubAllGlobals()` по месту значит ждать, пока кто-нибудь допишет тест и забудет.
+beforeEach(() => {
+  vi.stubGlobal('$fetch', fetchMock)
+})
+
 afterEach(() => {
   fetchMock.mockClear()
   connectReply.value = {}
@@ -131,7 +141,12 @@ describe('BankConnectCard connect interaction', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(true)
+    // ⚠ Проверяем, что дошли ДО сервера и показали ЕГО причину. Раньше здесь стоял голый
+    // «ошибка есть» — и он был зелёным ровно потому, что стаб `$fetch` отвалился этажом выше:
+    // запроса не было вовсе, компонент рисовал общее «Не удалось начать подключение», а тест
+    // рапортовал об успехе. Assert, который нельзя провалить, охраняет не код, а сам себя.
+    expect(connectCalls()).toHaveLength(1)
+    expect(wrapper.find('[data-testid="connect-error"]').text()).toContain('provider not available')
     expect(wrapper.find('[data-testid="connect-started"]').exists()).toBe(false)
     expect(fakeWin.close).toHaveBeenCalled() // blank tab dropped on failure
     vi.unstubAllGlobals()
@@ -174,12 +189,6 @@ describe('BankConnectCard connect interaction', () => {
 })
 
 describe('BankConnectCard — сверка счетов внутри карточки (#494)', () => {
-  // Тест выше зовёт `vi.unstubAllGlobals()`, и вместе с ним отваливается стаб `$fetch`. Без
-  // восстановления эти проверки были бы зелёными при ЛЮБОМ поведении компонента.
-  beforeEach(() => {
-    vi.stubGlobal('$fetch', fetchMock)
-  })
-
   it('карточка сама запрашивает сверку при открытии', async () => {
     await mountReady()
     expect(fetchMock.mock.calls.filter(c => c[0] === '/api/bank/matrix')).toHaveLength(1)

@@ -13,7 +13,8 @@ export interface FeedbackSubmitContext {
   /** The operation the employee pointed at (#499) — same shape as the program channel's sample, so
    *  one privacy rule covers both. No consent gate: pointing at it IS the report. */
   operation?: Record<string, unknown>
-  /** Where the employee was standing (операция / загрузка / настройки). Not client data. */
+  /** Which screen the employee was on (операция / загрузка / разбор / экран готовности /
+   *  общий экран). Not client data. */
   place?: string
   /** Raw statement text — sent ONLY when the employee ticks the consent box (#198). The server
    *  embeds it in the private issue only when `attachFile` is also true. */
@@ -22,6 +23,22 @@ export interface FeedbackSubmitContext {
 
 const enabled = ref<boolean | null>(null) // null = not probed yet; shared across widgets
 let probing: Promise<void> | null = null
+
+/**
+ * Subjects already rated in this tab (#499).
+ *
+ * ⚠ MODULE-LEVEL ON PURPOSE, because the widget does not outlive its host. Inside an operation row
+ * it sits in a `B24Collapsible`, which unmounts its content on collapse — so «Спасибо за отзыв!»
+ * disappeared the moment the row was folded, and re-expanding offered the buttons again as if
+ * nothing had happened. A second 👍 is a second POST, and the happy path has no content dedup
+ * (only the transient-retry outbox dedups by hash), so that is a second GitHub issue about the same
+ * payment, repeatable as many times as the row is toggled.
+ *
+ * A `Set` in module scope, not `sessionStorage`: this is politeness about double-sending, not a
+ * durable fact. Surviving a reload would also mean an employee who genuinely wants to re-report a
+ * payment after a fix has no way to.
+ */
+const ratedSubjects = new Set<string>()
 
 export function useFeedback() {
   /** Probe whether the channel is on (once). Failure → treated as OFF (widget stays hidden). */
@@ -56,5 +73,15 @@ export function useFeedback() {
     return true
   }
 
-  return { enabled, ensureEnabled, submit }
+  /** Has this subject already been rated in this tab? Empty key ⇒ never remembered (a widget with
+   *  no subject is a general «как вам вообще» and may legitimately be sent more than once). */
+  function alreadyRated(subjectKey?: string): boolean {
+    return !!subjectKey && ratedSubjects.has(subjectKey)
+  }
+
+  function rememberRated(subjectKey?: string): void {
+    if (subjectKey) ratedSubjects.add(subjectKey)
+  }
+
+  return { enabled, ensureEnabled, submit, alreadyRated, rememberRated }
 }

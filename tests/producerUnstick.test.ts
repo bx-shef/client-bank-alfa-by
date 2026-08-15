@@ -32,8 +32,14 @@ vi.mock('bullmq', () => ({
       const job = jobs.get(jobId)
       if (!job) return null
       return {
-        getState: async () => job.state,
+        getState: async () => {
+          if (job.state === 'throw-on-state') throw new Error('redis blip')
+          return job.state
+        },
         remove: async () => {
+          // Реальный BullMQ отказывается удалять задачу, захваченную воркером, — это и есть тот
+          // случай, ради которого стоит `catch`.
+          if (job.state === 'locked') throw new Error('Job could not be removed because it is locked by another worker')
           job.removed = true
           jobs.delete(jobId)
         }
@@ -106,6 +112,32 @@ describe('повторная загрузка файла (#498)', () => {
     await finish('failed', () => enqueueCrmSync(crmJob('fetch')))
     adds.length = 0
     await enqueueCrmSync(crmJob('fetch'))
+    expect(adds).toHaveLength(1)
+  })
+})
+
+describe('unstick не роняет постановку задачи (#498, ревью)', () => {
+  // Освобождение id — вспомогательный шаг, а не условие. Если он не удался (воркер перехватил
+  // задачу между чтением состояния и удалением, Redis моргнул), поставить задачу всё равно надо:
+  // в худшем случае `add` сдедуплицируется — то есть ровно прежнее поведение, а не отказ приёма.
+  it('задача захвачена воркером — `add` всё равно вызывается, ошибка не всплывает', async () => {
+    await enqueueParse(parseJob)
+    for (const job of jobs.values()) job.state = 'locked'
+    adds.length = 0
+    await expect(enqueueParse(parseJob)).resolves.toBe(true)
+    // Задача осталась (её держит воркер), поэтому `add` сдедуплицировался — работа не потеряна.
+    expect(jobs.size).toBe(1)
+  })
+
+  it('чтение состояния упало — постановка не отменяется', async () => {
+    await enqueueParse(parseJob)
+    for (const job of jobs.values()) job.state = 'throw-on-state'
+    await expect(enqueueParse(parseJob)).resolves.toBe(true)
+  })
+
+  it('задачи с таким id уже нет — просто ставим новую', async () => {
+    adds.length = 0
+    await expect(enqueueParse(parseJob)).resolves.toBe(true)
     expect(adds).toHaveLength(1)
   })
 })
