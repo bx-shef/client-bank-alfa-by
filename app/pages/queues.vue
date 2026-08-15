@@ -16,6 +16,7 @@ import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps
 import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
+import type { KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -98,10 +99,19 @@ const bankHealthError = ref('')
 // Когда продление токенов последний раз отработало (#504). Живёт рядом с карточкой подключений,
 // потому что отвечает на вопрос про них: «а механизм, который их держит, вообще жив?»
 const keepAliveAt = ref<number | null>(null)
-const keepAliveLine = computed(() => keepAliveAt.value === null
-  ? 'Продление токенов: прогонов ещё не было (после перезапуска это нормально).'
+const keepAliveSummary = ref<KeepAlivePulseSummary | null>(null)
+const keepAliveLine = computed(() => {
+  if (keepAliveAt.value === null) return 'Продление токенов: прогонов ещё не было (после перезапуска это нормально).'
   // `formatRelativeTime` принимает ISO — общий формат статуса импорта, не заводим второй.
-  : `Продление токенов: ${formatRelativeTime(new Date(keepAliveAt.value).toISOString(), Date.now())}.`)
+  const when = formatRelativeTime(new Date(keepAliveAt.value).toISOString(), Date.now())
+  const s = keepAliveSummary.value
+  // Итог прогона показываем, а не возим вхолостую: «отработало 5 минут назад» и «отработало 5 минут
+  // назад, из них 3 не удалось» — разные новости, и вторая объясняет, почему подключения всё равно
+  // мрут. Молчим только когда сказать нечего (в полосе обновления никого не было).
+  if (!s || (s.refreshed === 0 && s.failed === 0)) return `Продление токенов: ${when}.`
+  const failed = s.failed > 0 ? `, не удалось ${s.failed}` : ''
+  return `Продление токенов: ${when} — обновлено ${s.refreshed}${failed}.`
+})
 
 async function loadBankHealth(): Promise<void> {
   if (isPreview()) {
@@ -170,6 +180,7 @@ async function loadHealth() {
     // Синтетический пульс — иначе на статике карточка показывала бы «прогонов ещё не было», и
     // эталон снимка документировал бы пустое состояние вместо рабочего.
     keepAliveAt.value = Date.now() - 12 * 60_000
+    keepAliveSummary.value = { selected: 3, refreshed: 2, skipped: 0, failed: 1, unrefreshable: 1, expired: 0 }
     // ⚠ Обязательно снять флаг ошибки: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому
     // первый прогон успевает сходить в сеть и упасть, а карточка ошибки в шаблоне идёт первой и
     // перекрыла бы вердикт. Без этой строки превью-карточка не появлялась вовсе.
@@ -177,11 +188,12 @@ async function loadHealth() {
     return
   }
   try {
-    const payload = await $fetch<QueueHealthPayload & { keepAliveAt?: number | null }>('/api/ops/queues')
+    const payload = await $fetch<QueueHealthPayload & { keepAliveAt?: number | null, keepAliveSummary?: KeepAlivePulseSummary | null }>('/api/ops/queues')
     health.value = presentQueueHealth(payload, Date.now())
     // Пульс продления банковских токенов (#504) — приезжает тем же запросом. `null` = прогонов в
     // этом процессе не было; это НЕ «всё хорошо», и подпись обязана сказать именно так.
     keepAliveAt.value = payload?.keepAliveAt ?? null
+    keepAliveSummary.value = payload?.keepAliveSummary ?? null
     healthFailed.value = false
   } catch {
     // Недоступный эндпоинт — тоже информация: молча оставить прошлый (возможно зелёный) вердикт

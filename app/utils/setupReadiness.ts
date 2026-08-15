@@ -14,6 +14,7 @@
 
 import { paymentSpEtid, distributionSpEtid } from '~/config/distributionSp'
 import type { PortalSettings } from '~/utils/settings'
+import { pluralRu } from '~/utils/importStatus'
 
 /** One checklist line. `ok` drives the icon; `hint` is what to DO when it isn't ok. */
 export interface ReadinessItem {
@@ -117,7 +118,7 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
       // подключение не всплывало бы нигде, кроме списка внутри карточки банка.
       ok: snap.connectedAccounts > 0 && pending === 0 && unhealthy === 0,
       detail: snap.connectedAccounts > 0
-        ? `${snap.connectedAccounts} ${accountsWord(snap.connectedAccounts)}${unhealthy > 0 ? `, из них ${unhealthy} не работает` : ''}${pending > 0 ? `, ещё ${pending} без счёта` : ''}`
+        ? `${snap.connectedAccounts} ${accountsWord(snap.connectedAccounts)}${unhealthy > 0 ? `, из них ${unhealthy} ${pluralRu(unhealthy, ['не работает', 'не работают', 'не работают'])}` : ''}${pending > 0 ? `, ещё ${pending} без счёта` : ''}`
         : (pending > 0 ? `${pending} без выбранного счёта` : 'нет подключений'),
       // Нерабочее подключение важнее незавершённого: там настройку не доделали, здесь она была
       // доделана и сломалась — импорт по этому счёту уже стоит.

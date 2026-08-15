@@ -16,7 +16,7 @@
 // Чистое ядро: вход — уже загруженные строки, выход — счётчики. Ни I/O, ни расшифровки.
 
 import type { BankProviderId } from '~/types/statement'
-import { connectionHealth, type BankConnectionHealth } from '~/utils/bankTokenLifetime'
+import { connectionHealth, NEEDS_HUMAN_HEALTH, needsHumanHealth, type BankConnectionHealth } from '~/utils/bankTokenLifetime'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { pluralRu } from '~/utils/importStatus'
 
@@ -105,7 +105,7 @@ export function summarizeBankHealth(
     const set = portalsBy.get(health) ?? new Set<string>()
     set.add(row.memberId)
     portalsBy.set(health, set)
-    if (health === 'expired' || health === 'no-refresh') attention.add(row.memberId)
+    if (needsHumanHealth(health)) attention.add(row.memberId)
   }
 
   for (const [health, set] of portalsBy) byHealth[health].portals = set.size
@@ -160,6 +160,20 @@ export const HEALTH_TITLE: Record<BankConnectionHealth, string> = {
   'due': 'скоро обновим',
   'unknown': 'срок неизвестен',
   'ok': 'в порядке'
+}
+
+/**
+ * Сколько ПОДКЛЮЧЕНИЙ приложение уже считает нерабочими: `expired` + `no-refresh`.
+ *
+ * ⚠ Отдельная функция, а не подсчёт по месту, ровно потому, что мест два: экран оператора и экран
+ * готовности портала. Посчитанное по месту в роуте не покрывается ничем — в этом проекте такое уже
+ * приводило к тому, что подсчёт можно было заменить на константу, не уронив ни одного теста.
+ *
+ * ⚠ Ожидающие (`~pending:`) сюда не попадают по построению: `summarizeBankHealth` выносит их
+ * отдельно и в состояния не кладёт. Это важно — незавершённая настройка не «сломанное подключение».
+ */
+export function unhealthyConnections(o: BankHealthOverview): number {
+  return NEEDS_HUMAN_HEALTH.reduce((n, h) => n + o.byHealth[h].connections, 0)
 }
 
 /** Одна готовая к показу строка состояния. */

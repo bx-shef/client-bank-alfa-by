@@ -32,6 +32,7 @@ import { withSpan } from '../utils/telemetrySpan'
 import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
 import { recordQueueHealth } from '../utils/queueAlertState'
 import { keepAlivePulse, keepAliveStartedAt, markKeepAliveStarted, recordKeepAlivePulse } from '../utils/keepAliveState'
+import { runKeepAliveTick } from '../utils/keepAliveTick'
 import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
@@ -255,17 +256,16 @@ export default defineNitroPlugin((nitroApp) => {
       log: (m: string) => console.info(m),
       warn: (m: string) => console.warn(m)
     }
-    const runBankKeepAliveTick = async () => {
-      try {
-        const summary = await withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps))
-        // Пульс (#504) — только на ЗАВЕРШЁННОМ прогоне: упавший скан это не сердцебиение, и
-        // отмечать его значило бы гасить ровно ту тревогу, ради которой пульс заведён.
-        recordKeepAlivePulse(summary, Date.now())
-      } catch (err) {
-        // Only a failure of the account listing itself reaches here — per-account ones are isolated inside.
-        console.error('[queue] bank keep-alive run failed:', (err as Error)?.message)
-      }
-    }
+    // Сам тик — в `runKeepAliveTick` (server/utils/keepAliveTick.ts), чтобы инвариант «пульс только
+    // на ЗАВЕРШЁННОМ прогоне» можно было проверить тестом. Пока он жил здесь try/catch'ем, его
+    // можно было вывернуть наизнанку (писать пульс в `catch`), не уронив ни одного теста, — то есть
+    // погасить ровно ту тревогу, ради которой пульс и заведён.
+    const runBankKeepAliveTick = () => runKeepAliveTick({
+      run: () => withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps)),
+      record: recordKeepAlivePulse,
+      now: Date.now,
+      error: (m: string) => console.error(m)
+    })
     // Отмечаем, что таймер ЗАПЛАНИРОВАН: иначе «прогонов ещё не было» неотличимо от «не
     // запускается», и регрессия, при которой продление падает с первого же тика, молчала бы вечно.
     markKeepAliveStarted(Date.now())

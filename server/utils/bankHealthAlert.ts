@@ -20,15 +20,15 @@
 
 import type { BankProviderId } from '../../app/types/statement'
 import { BANK_LABELS } from '../../app/utils/bankLabels'
-import { connectionHealth } from '../../app/utils/bankTokenLifetime'
+import { connectionHealth, needsHumanHealth } from '../../app/utils/bankTokenLifetime'
 import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import { pluralRu } from '../../app/utils/importStatus'
 import type { BankHealthRow } from '../../app/utils/bankHealthOverview'
 import { pulseAgeMs, pulseState, type KeepAlivePulse } from '../../app/utils/keepAlivePulse'
 import type { QueueAlert } from './queueAlert'
 
-/** Состояния, которые не рассосутся сами: их чинит владелец счёта, зайдя в интернет-банк. */
-const NEEDS_HUMAN = new Set(['expired', 'no-refresh'])
+// Список «чинит человек» — из `bankTokenLifetime.ts`, единственного источника. Своя копия здесь
+// уже была третьей, и разойтись им было бы нечем помешать.
 
 /**
  * Свернуть строки подключений в тревоги для пуш-канала.
@@ -44,7 +44,7 @@ export function evaluateBankHealth(rows: readonly BankHealthRow[], nowMs: number
     // Незавершённая настройка — не поломка: у банка нет такого «номера», опрашивать нечего, и
     // будить по ней некого. Она видна на экране готовности у самого админа.
     if (isPendingAccountKey(row.accountKey)) continue
-    if (!NEEDS_HUMAN.has(connectionHealth(row, nowMs))) continue
+    if (!needsHumanHealth(connectionHealth(row, nowMs))) continue
     const acc = byProvider.get(row.provider) ?? { connections: 0, portals: new Set<string>() }
     acc.connections += 1
     acc.portals.add(row.memberId)
