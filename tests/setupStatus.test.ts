@@ -25,6 +25,9 @@ describe('handleSetupStatus', () => {
     expect(res.body).toEqual({
       connectedAccounts: 2,
       pendingAccounts: 0,
+      // Сколько подключений приложение уже считает нерабочими (#504) — браузер этого знать не
+      // может, а без этого «Банк подключён» горит зелёным на сломанном подключении.
+      unhealthyAccounts: 0,
       pollEnabled: true,
       pollIntervalMin: 5,
       lastRunMs: 1_700_000_000_000

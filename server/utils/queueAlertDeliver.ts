@@ -192,7 +192,8 @@ const RECOVERY_SENTENCE: Record<string, (subject: string) => string> = {
   'failing': s => `очередь «${s}» — задачи перестали падать.`,
   'unreadable': s => `очередь «${s}» снова читается.`,
   // Подлежащее здесь — банк, а не очередь; общий шаблон с «очередь «alfa-by»» был бы просто ложью.
-  'bank-dead': s => `${BANK_LABELS[s as BankProviderId] ?? s} — мёртвых подключений больше нет.`
+  'bank-dead': s => `${BANK_LABELS[s as BankProviderId] ?? s} — мёртвых подключений больше нет.`,
+  'keepalive-stale': () => 'продление банковских токенов снова отрабатывает.'
 }
 
 /** Message announcing a new problem. */

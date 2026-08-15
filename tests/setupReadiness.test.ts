@@ -185,3 +185,44 @@ describe('строка «Моя компания» (#493)', () => {
     expect(isFullyReady(buildReadiness({ ...base, myCompany: 'no-account' }))).toBe(false)
   })
 })
+
+describe('нерабочее подключение не красится зелёным (#504)', () => {
+  // ⚠ Экран существует ровно ради таких случаев: строка в БД есть, а импорта нет. Раньше «Банк
+  // подключён» горело зелёным по факту наличия строки — то есть громче всего врало именно тогда,
+  // когда подключение сломалось.
+  const withBank = (over: Record<string, unknown>) => buildReadiness({
+    settings: parsePortalSettings({}),
+    connectedAccounts: 2,
+    pollEnabled: true,
+    pollIntervalMin: 5,
+    lastRunMs: null,
+    ...over
+  }).find(r => r.key === 'bank')!
+
+  it('все подключения живы — зелено', () => {
+    expect(withBank({ unhealthyAccounts: 0 }).ok).toBe(true)
+  })
+
+  it('есть истёкшее — НЕ зелено, и сказано сколько', () => {
+    const row = withBank({ unhealthyAccounts: 1 })
+    expect(row.ok).toBe(false)
+    expect(row.detail).toContain('1 не работает')
+  })
+
+  it('подсказка ведёт к действию — вход владельца счёта в интернет-банк', () => {
+    // Единственное, чем это лечится. Общая «подключите счёт» тут не помогает: счёт подключён.
+    expect(withBank({ unhealthyAccounts: 1 }).hint).toContain('интернет-банк')
+  })
+
+  it('нерабочее важнее незавершённого — подсказка про поломку, а не про выбор счёта', () => {
+    // Там настройку не доделали, здесь она была доделана и сломалась: импорт уже стоит.
+    const row = withBank({ unhealthyAccounts: 1, pendingAccounts: 1 })
+    expect(row.hint).toContain('интернет-банк')
+    expect(row.ok).toBe(false)
+  })
+
+  it('старый сервер поля не прислал — строка не краснеет на ровном месте', () => {
+    // Дефолт «считать сломанным» дал бы красную строку на исправном портале.
+    expect(withBank({}).ok).toBe(true)
+  })
+})

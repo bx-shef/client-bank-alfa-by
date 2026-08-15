@@ -15,6 +15,7 @@ import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
 import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
+import { formatRelativeTime } from '~/utils/importStatus'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -94,6 +95,13 @@ function previewFetcher(): Promise<QueuesSnapshot> {
 // идентификаторов порталов — оператору нужно «что-то ломается и у скольких», а не чужие реквизиты.
 const bankHealth = ref<BankHealthOverview | null>(null)
 const bankHealthError = ref('')
+// Когда продление токенов последний раз отработало (#504). Живёт рядом с карточкой подключений,
+// потому что отвечает на вопрос про них: «а механизм, который их держит, вообще жив?»
+const keepAliveAt = ref<number | null>(null)
+const keepAliveLine = computed(() => keepAliveAt.value === null
+  ? 'Продление токенов: прогонов ещё не было (после перезапуска это нормально).'
+  // `formatRelativeTime` принимает ISO — общий формат статуса импорта, не заводим второй.
+  : `Продление токенов: ${formatRelativeTime(new Date(keepAliveAt.value).toISOString(), Date.now())}.`)
 
 async function loadBankHealth(): Promise<void> {
   if (isPreview()) {
@@ -159,6 +167,9 @@ async function loadHealth() {
       alerts: [{ kind: 'stalled', queue: 'crm-sync', text: 'очередь «crm-sync» не разгребается: 4 задачи ждут, самая старая — уже 25 мин' }],
       alertsCheckedAt: Date.now() - 60_000
     }, Date.now())
+    // Синтетический пульс — иначе на статике карточка показывала бы «прогонов ещё не было», и
+    // эталон снимка документировал бы пустое состояние вместо рабочего.
+    keepAliveAt.value = Date.now() - 12 * 60_000
     // ⚠ Обязательно снять флаг ошибки: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому
     // первый прогон успевает сходить в сеть и упасть, а карточка ошибки в шаблоне идёт первой и
     // перекрыла бы вердикт. Без этой строки превью-карточка не появлялась вовсе.
@@ -166,8 +177,11 @@ async function loadHealth() {
     return
   }
   try {
-    const payload = await $fetch<QueueHealthPayload>('/api/ops/queues')
+    const payload = await $fetch<QueueHealthPayload & { keepAliveAt?: number | null }>('/api/ops/queues')
     health.value = presentQueueHealth(payload, Date.now())
+    // Пульс продления банковских токенов (#504) — приезжает тем же запросом. `null` = прогонов в
+    // этом процессе не было; это НЕ «всё хорошо», и подпись обязана сказать именно так.
+    keepAliveAt.value = payload?.keepAliveAt ?? null
     healthFailed.value = false
   } catch {
     // Недоступный эндпоинт — тоже информация: молча оставить прошлый (возможно зелёный) вердикт
@@ -339,7 +353,16 @@ onBeforeUnmount(() => {
               >{{ h }}</code>
             </p>
 
-            <p class="mt-3 text-xs text-(--ui-color-base-4)">
+            <!-- Пульс механизма, который эти подключения держит (#504). Без него «всё живо» на
+                 экране может означать «продление встало час назад, а умирать они начнут к ночи». -->
+            <p
+              class="mt-3 text-xs text-(--ui-color-base-4)"
+              data-testid="bank-keepalive-pulse"
+            >
+              {{ keepAliveLine }}
+            </p>
+
+            <p class="mt-1 text-xs text-(--ui-color-base-4)">
               Всего {{ spreadLabel(bankHealth.total.connections, bankHealth.total.portals) }}.
               Номеров счетов, доменов и member_id здесь нет намеренно — только необратимые метки.
             </p>

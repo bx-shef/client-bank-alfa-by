@@ -8,6 +8,7 @@
 import { SESSION_COOKIE, operatorAllowed, resolveAuthConfig } from '../../utils/session'
 import { readQueueCounts } from '../../queue/stats'
 import { queueAlertState } from '../../utils/queueAlertState'
+import { keepAlivePulse } from '../../utils/keepAliveState'
 
 export default defineEventHandler(async (event) => {
   const cfg = resolveAuthConfig(process.env)
@@ -22,5 +23,16 @@ export default defineEventHandler(async (event) => {
   // On a worker-role instance (QUEUE_CRON=0) the check never runs, so it stays null there too —
   // correct, since nginx routes the operator zone to the primary.
   const health = queueAlertState()
-  return { ...(await readQueueCounts()), alerts: health.alerts, alertsCheckedAt: health.checkedAtMs }
+  // Пульс продления банковских токенов (#504). Отдаётся РЯДОМ с вердиктом, а не внутри него:
+  // тревога говорит «сломалось», а пульс отвечает на вопрос «а оно вообще живо?» — и до первой
+  // тревоги ответ на него всё равно нужен. `null` = прогонов в этом процессе не было; экран обязан
+  // показать это как «ещё не проверяли», а не как «всё хорошо».
+  const pulse = keepAlivePulse()
+  return {
+    ...(await readQueueCounts()),
+    alerts: health.alerts,
+    alertsCheckedAt: health.checkedAtMs,
+    keepAliveAt: pulse?.atMs ?? null,
+    keepAliveSummary: pulse?.summary ?? null
+  }
 })

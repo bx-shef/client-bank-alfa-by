@@ -24,6 +24,7 @@ import { connectionHealth } from '../../app/utils/bankTokenLifetime'
 import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import { pluralRu } from '../../app/utils/importStatus'
 import type { BankHealthRow } from '../../app/utils/bankHealthOverview'
+import { pulseAgeMs, pulseState, type KeepAlivePulse } from '../../app/utils/keepAlivePulse'
 import type { QueueAlert } from './queueAlert'
 
 /** Состояния, которые не рассосутся сами: их чинит владелец счёта, зайдя в интернет-банк. */
@@ -63,4 +64,32 @@ export function evaluateBankHealth(rows: readonly BankHealthRow[], nowMs: number
     })
   }
   return out
+}
+
+/**
+ * Dead man's switch продления токенов (#504): механизм не подаёт признаков жизни.
+ *
+ * ⚠ Это ДРУГОЙ диагноз, чем «подключения мертвы» выше, и потому отдельный эпизод. Там банк нас
+ * отверг — чинит владелец счёта, зайдя в интернет-банк. Здесь встала НАША машинерия — чиним мы, и
+ * подключения ещё живы, но начнут умирать через полосу обновления. Слить их в один эпизод значило
+ * бы отправить оператора не туда.
+ *
+ * ⚠ `never` тревогой НЕ считается: сразу после старта процесса прогонов ещё не было, и это норма.
+ * Отличить «только запустились» от «таймер не завёлся вовсе» по одному этому значению нельзя —
+ * судить надо по возрасту процесса, а такого знания у чистой функции нет. Первый же прогон
+ * (он идёт при старте, `void runBankKeepAliveTick()`) снимает неопределённость.
+ */
+export function evaluateKeepAlivePulse(
+  pulse: KeepAlivePulse | null,
+  nowMs: number,
+  intervalMs: number
+): QueueAlert[] {
+  if (pulseState(pulse, nowMs, intervalMs) !== 'stale') return []
+  const age = pulseAgeMs(pulse, nowMs) ?? 0
+  const hours = Math.max(1, Math.round(age / 3_600_000))
+  return [{
+    kind: 'keepalive-stale',
+    queue: 'bank-keepalive',
+    text: `продление банковских токенов не отрабатывало ${hours} ${pluralRu(hours, ['час', 'часа', 'часов'])} — подключения клиентов начнут умирать, чинить нам (это НЕ отказ банка)`
+  }]
 }

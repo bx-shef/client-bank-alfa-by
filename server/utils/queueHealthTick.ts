@@ -1,6 +1,7 @@
 import { evaluateQueueHealth } from './queueAlert'
-import { evaluateBankHealth } from './bankHealthAlert'
+import { evaluateBankHealth, evaluateKeepAlivePulse } from './bankHealthAlert'
 import type { BankHealthRow } from '../../app/utils/bankHealthOverview'
+import type { KeepAlivePulse } from '../../app/utils/keepAlivePulse'
 import { readQueueHealth, type QueueHealthReader } from './queueHealthRead'
 import {
   alertMessage, episodeKey, markAnnounced, markRecovered, planAlertDelivery, recoveryMessage,
@@ -42,6 +43,13 @@ export interface QueueHealthTickDeps {
    * очередей. Отказ чтения не должен гасить проверку конвейера, поэтому изолирован.
    */
   bankRows?: () => Promise<BankHealthRow[]>
+  /**
+   * Пульс продления банковских токенов и его каденция (#504). Необязательна.
+   *
+   * ⚠ Читается СИНХРОННО и без I/O — это память того же процесса. Поэтому, в отличие от `bankRows`,
+   * тут нечему падать и нечего изолировать.
+   */
+  keepAlive?: () => { pulse: KeepAlivePulse | null, intervalMs: number }
 }
 
 export interface QueueHealthTickResult {
@@ -89,6 +97,12 @@ export async function runQueueHealthTick(
       } catch (err) {
         deps.error(`[queue] bank health read failed: ${(err as Error)?.message}`)
       }
+    }
+    // Продление токенов встало — НАША авария, не отказ банка (#504). Отдельным эпизодом, потому
+    // что чинится другим действием и другими людьми.
+    if (deps.keepAlive) {
+      const { pulse, intervalMs } = deps.keepAlive()
+      alerts.push(...evaluateKeepAlivePulse(pulse, deps.now(), intervalMs))
     }
     deps.record(alerts, deps.now())
     for (const a of alerts) deps.warn(`[queue-alert] ${a.text}`)

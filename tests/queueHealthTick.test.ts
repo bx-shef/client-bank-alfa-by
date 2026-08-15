@@ -218,3 +218,51 @@ describe('runQueueHealthTick', () => {
     expect(pushed[0]).not.toContain('Состояние:')
   })
 })
+
+describe('пульс продления токенов (#504)', () => {
+  const stalePulse = {
+    pulse: { atMs: T0 - 5 * 60 * MIN, summary: { selected: 0, refreshed: 0, skipped: 0, failed: 0, unrefreshable: 0, expired: 0 } },
+    intervalMs: 60 * MIN
+  }
+
+  it('встало продление — уходит в пуш отдельным эпизодом', async () => {
+    // Смысл #504: остановку продления сегодня видно только в логе, а лог требует, чтобы кто-то уже
+    // смотрел. Диагноз здесь НАШ («машинерия встала»), а не «банк отверг» — потому и эпизод свой.
+    const { d, pushed } = deps({ keepAlive: () => stalePulse })
+    const r = await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(r.announced).toBe(1)
+    expect(pushed.join('\n')).toContain('продление банковских токенов')
+  })
+
+  it('свежий пульс — тишина', async () => {
+    const { d, pushed } = deps({
+      keepAlive: () => ({ pulse: { ...stalePulse.pulse, atMs: T0 - 10 * MIN }, intervalMs: 60 * MIN })
+    })
+    const r = await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(r.announced).toBe(0)
+    expect(pushed).toEqual([])
+  })
+
+  it('без зависимости тик работает ровно как прежде', async () => {
+    const { d } = deps()
+    expect((await runQueueHealthTick(emptyDeliveryState(), d)).announced).toBe(0)
+  })
+
+  it('эпизод не повторяется, а восстановление объявляется связной фразой', async () => {
+    const broken = deps({ keepAlive: () => stalePulse })
+    const first = await runQueueHealthTick(emptyDeliveryState(), broken.d)
+    const still = deps({ keepAlive: () => stalePulse })
+    const second = await runQueueHealthTick(first.state, still.d)
+    expect(second.announced).toBe(0)
+    const healed = deps({ keepAlive: () => ({ pulse: { ...stalePulse.pulse, atMs: T0 }, intervalMs: 60 * MIN }) })
+    const third = await runQueueHealthTick(second.state, healed.d)
+    expect(third.recovered).toBe(1)
+    expect(healed.pushed.join('\n')).toContain('снова отрабатывает')
+  })
+
+  it('попадает и в вердикт для `/queues`, а не только в чат', async () => {
+    const { d, recorded } = deps({ keepAlive: () => stalePulse })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(recorded[0]?.alerts.map(a => a.kind)).toContain('keepalive-stale')
+  })
+})

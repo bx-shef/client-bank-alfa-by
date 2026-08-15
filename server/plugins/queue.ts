@@ -31,6 +31,7 @@ import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
 import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
 import { recordQueueHealth } from '../utils/queueAlertState'
+import { keepAlivePulse, recordKeepAlivePulse } from '../utils/keepAliveState'
 import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
@@ -256,7 +257,10 @@ export default defineNitroPlugin((nitroApp) => {
     }
     const runBankKeepAliveTick = async () => {
       try {
-        await withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps))
+        const summary = await withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps))
+        // Пульс (#504) — только на ЗАВЕРШЁННОМ прогоне: упавший скан это не сердцебиение, и
+        // отмечать его значило бы гасить ровно ту тревогу, ради которой пульс заведён.
+        recordKeepAlivePulse(summary, Date.now())
       } catch (err) {
         // Only a failure of the account listing itself reaches here — per-account ones are isolated inside.
         console.error('[queue] bank keep-alive run failed:', (err as Error)?.message)
@@ -378,7 +382,10 @@ export default defineNitroPlugin((nitroApp) => {
             // Умирающие банковские подключения — в тот же канал (#497 §3). Карточку на `/queues`
             // надо ОТКРЫТЬ, а refresh Альфы умирает под утро (#488), когда на экран никто не
             // смотрит: пул-дашборд закрыть критерий «МЫ видим его проблемы» не может.
-            bankRows: () => listAllBankAccountInfo(dbQuery)
+            bankRows: () => listAllBankAccountInfo(dbQuery),
+            // Пульс продления (#504). Каденция берётся ТА ЖЕ, что у самого таймера, — иначе
+            // оператор, разредивший продление через env, получал бы ложную тревогу на каждом тике.
+            keepAlive: () => ({ pulse: keepAlivePulse(), intervalMs: bankKeepAliveMs })
           }))
         delivery = result.state
       } catch (err) {

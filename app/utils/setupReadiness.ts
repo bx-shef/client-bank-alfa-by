@@ -33,6 +33,14 @@ export interface ReadinessSnapshot {
   connectedAccounts: number
   /** Подключения, у которых счёт так и не выбран (#407). Ноль по умолчанию. */
   pendingAccounts?: number
+  /**
+   * Подключения, которые приложение уже считает нерабочими — `expired`/`no-refresh` (#504).
+   *
+   * ⚠ Отдельно от `connectedAccounts` намеренно: строка в БД есть, а импорта нет. Зелёная галочка
+   * по факту наличия строки — та же ложь, что и на ожидающем подключении, только дороже: там
+   * настройка не закончена, здесь она была закончена и сломалась.
+   */
+  unhealthyAccounts?: number
   /** Server-side poll gate (`CRON_REAL_POLL`) — OFF means no automatic polling at all. */
   pollEnabled: boolean
   /** Poll period in minutes (`CRON_INTERVAL_MIN`). */
@@ -77,6 +85,9 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
   const matrixCount = snap.settings.recognition?.matrices?.length ?? 0
 
   const pending = snap.pendingAccounts ?? 0
+  // ⚠ Дефолт 0, а не «считать сломанным»: старый сервер поля не пришлёт, и красная строка на
+  // исправном портале была бы хуже отсутствия проверки.
+  const unhealthy = snap.unhealthyAccounts ?? 0
 
   return [
     // «Моя компания» идёт ПЕРВОЙ, раньше банка, и это порядок действий, а не важности: без неё
@@ -104,15 +115,19 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
       // Незавершённое подключение (счёт не выбран) НЕ считается подключённым — с него ничего не
       // забрать. Но и молчать о нём нельзя: админ авторизовался, закрыл вкладку, и такое
       // подключение не всплывало бы нигде, кроме списка внутри карточки банка.
-      ok: snap.connectedAccounts > 0 && pending === 0,
+      ok: snap.connectedAccounts > 0 && pending === 0 && unhealthy === 0,
       detail: snap.connectedAccounts > 0
-        ? `${snap.connectedAccounts} ${accountsWord(snap.connectedAccounts)}${pending > 0 ? `, ещё ${pending} без счёта` : ''}`
+        ? `${snap.connectedAccounts} ${accountsWord(snap.connectedAccounts)}${unhealthy > 0 ? `, из них ${unhealthy} не работает` : ''}${pending > 0 ? `, ещё ${pending} без счёта` : ''}`
         : (pending > 0 ? `${pending} без выбранного счёта` : 'нет подключений'),
-      hint: pending > 0
-        ? 'Есть подключение без выбранного счёта — укажите номер в разделе «Подключение банка», иначе выписка по нему не забирается.'
-        : (snap.connectedAccounts > 0
-            ? ''
-            : 'Подключите счёт в разделе «Подключение банка». Без него работает только ручная загрузка файла выписки.')
+      // Нерабочее подключение важнее незавершённого: там настройку не доделали, здесь она была
+      // доделана и сломалась — импорт по этому счёту уже стоит.
+      hint: unhealthy > 0
+        ? 'Подключение больше не продлевается — банк не примет наш токен. Владельцу счёта нужно заново войти в интернет-банк: раздел «Подключение банка», подключить счёт ещё раз.'
+        : (pending > 0
+            ? 'Есть подключение без выбранного счёта — укажите номер в разделе «Подключение банка», иначе выписка по нему не забирается.'
+            : (snap.connectedAccounts > 0
+                ? ''
+                : 'Подключите счёт в разделе «Подключение банка». Без него работает только ручная загрузка файла выписки.'))
     },
     {
       key: 'chat',

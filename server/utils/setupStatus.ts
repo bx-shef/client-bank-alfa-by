@@ -18,7 +18,7 @@ export interface SetupStatusDeps {
   memberIdByDomain: (domain: string) => Promise<string | null>
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
   /** Счета портала: подключённые (с выбранным номером) и ожидающие выбора (#407). */
-  countAccounts: (memberId: string) => Promise<{ connected: number, pending: number }>
+  countAccounts: (memberId: string) => Promise<{ connected: number, pending: number, unhealthy?: number }>
   /** Server gate `CRON_REAL_POLL` — automatic polling runs at all. */
   pollEnabled: boolean
   /** Cron period in minutes (`CRON_INTERVAL_MIN`). */
@@ -66,6 +66,7 @@ export async function handleSetupStatus(
       // забытое (авторизовался и закрыл вкладку) не всплывало нигде. Отдаём счётчик, чтобы экран
       // готовности о нём напомнил — иначе это тихая дыра.
       pendingAccounts: counts.pending,
+      unhealthyAccounts: counts.unhealthy ?? 0,
       pollEnabled: deps.pollEnabled,
       pollIntervalMin: deps.pollIntervalMin,
       lastRunMs,

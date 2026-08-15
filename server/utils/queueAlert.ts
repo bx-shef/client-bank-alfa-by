@@ -101,7 +101,7 @@ export const FAILURE_WINDOW_MS = 60 * 60 * 1000
  *  `bankHealthAlert.ts`). Живёт в этом union потому, что доставку (один раз на эпизод, пол на
  *  переобъявление, «объявлено» = реально доставлено) уже умеет `planAlertDelivery`, и второй такой
  *  механизм означал бы второй набор его ошибок. */
-export type QueueAlertKind = 'stalled' | 'failing' | 'unreadable' | 'bank-dead'
+export type QueueAlertKind = 'stalled' | 'failing' | 'unreadable' | 'bank-dead' | 'keepalive-stale'
 
 export interface QueueAlert {
   kind: QueueAlertKind
