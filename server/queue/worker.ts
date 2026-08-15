@@ -341,7 +341,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyChatViaRest(item, dialogId, call)
+        await notifyChatViaRest(item, dialogId, call, memberId)
       } catch (e) {
         console.error('chat notify failed', memberId, (e as Error)?.message)
       }
@@ -467,7 +467,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyAllocationErrorViaRest(item, decision, dialogId, call)
+        await notifyAllocationErrorViaRest(item, decision, dialogId, call, memberId)
       } catch (e) {
         console.error('alloc error notify failed', memberId, (e as Error)?.message)
       }
@@ -478,7 +478,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyUnresolvedViaRest(item, identifiers, dialogId, call, truncated)
+        await notifyUnresolvedViaRest(item, identifiers, dialogId, call, truncated, memberId)
       } catch (e) {
         console.error('unresolved notify failed', memberId, (e as Error)?.message)
       }
@@ -490,7 +490,7 @@ export function liveHandlerDeps(): HandlerDeps {
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return
-        await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call)
+        await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call, memberId)
       } catch (e) {
         console.error('unmatched notify failed', memberId, (e as Error)?.message)
       }
@@ -937,7 +937,7 @@ async function notifyDeletionError(job: DeletionJob, kind: DeletionErrorKind, fr
       console.info('[deletion] %s #%s (portal=%s) — no error chat, skip', kind, logSafe(job.entityId), portalHash(job.memberId))
       return
     }
-    await notifyDeletionErrorViaRest(kind, job.entityId, dialogId, call, freed !== undefined ? { freed } : {})
+    await notifyDeletionErrorViaRest(kind, job.entityId, dialogId, call, freed !== undefined ? { freed } : {}, job.memberId)
   } catch (e) {
     console.warn('[deletion] error-chat notify failed', kind, portalHash(job.memberId), (e as Error)?.message)
   }

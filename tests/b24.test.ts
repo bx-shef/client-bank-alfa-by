@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, marketDetailPath } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
-  it('lists crm, sale, im, documentgenerator, userfieldconfig, user_brief and placement', () => {
+  it('lists crm, sale, im, imbot, documentgenerator, userfieldconfig, user_brief and placement', () => {
     // `sale` — resolve an order-id → its payments (sale.payment.list, #172).
     // `documentgenerator` — the via-document bridge (crm.documentgenerator.document.list, #109).
     // `userfieldconfig` — distribution SP provisioning creates its custom fields (#408); the code
     // called `userfieldconfig.add` while the scope was NOT requested, so provisioning failed on
     // every portal that hadn't been granted it by hand.
-    expect([...B24_REQUIRED_SCOPES]).toEqual(['crm', 'sale', 'im', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'])
+    expect([...B24_REQUIRED_SCOPES]).toEqual(['crm', 'sale', 'im', 'imbot', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'])
   })
 
   it('has no duplicate scopes', () => {

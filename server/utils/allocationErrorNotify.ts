@@ -9,7 +9,7 @@
 import type { StatementItem } from '../../app/types/statement'
 import type { AllocationDecision } from '../../app/utils/allocation'
 import { buildAllocationErrorMessage, buildUnresolvedMessage } from '../../app/utils/allocationErrorMessage'
-import { CHAT_MESSAGE_METHOD, extractMessageId } from './chatNotifyWrite'
+import { postChatMessage } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
 /**
@@ -23,18 +23,12 @@ export async function notifyAllocationErrorViaRest(
   item: StatementItem,
   decision: AllocationDecision,
   dialogId: string,
-  call: RestCall
+  call: RestCall,
+  memberId?: string
 ): Promise<string | null> {
   const message = buildAllocationErrorMessage(item, decision)
   if (!message) return null
-  // URL_PREVIEW=N: the headline carries external (payer-controlled) text — don't let
-  // a pasted URL expand into a rich preview card in the operator chat.
-  const resp = await call(CHAT_MESSAGE_METHOD, {
-    DIALOG_ID: dialogId,
-    MESSAGE: message,
-    URL_PREVIEW: 'N'
-  })
-  return extractMessageId(resp)
+  return postChatMessage(dialogId, message, call, memberId)
 }
 
 /**
@@ -46,14 +40,10 @@ export async function notifyUnresolvedViaRest(
   identifiers: readonly string[],
   dialogId: string,
   call: RestCall,
-  truncated = false
+  truncated = false,
+  memberId?: string
 ): Promise<string | null> {
   const message = buildUnresolvedMessage(item, identifiers, truncated)
   if (!message) return null
-  const resp = await call(CHAT_MESSAGE_METHOD, {
-    DIALOG_ID: dialogId,
-    MESSAGE: message,
-    URL_PREVIEW: 'N'
-  })
-  return extractMessageId(resp)
+  return postChatMessage(dialogId, message, call, memberId)
 }

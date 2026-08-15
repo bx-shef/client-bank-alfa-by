@@ -6,7 +6,7 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import { buildUnmatchedMessage } from '../../app/utils/unmatchedNotice'
-import { CHAT_MESSAGE_METHOD, extractMessageId } from './chatNotifyWrite'
+import { postChatMessage } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
 /**
@@ -20,14 +20,8 @@ export async function notifyUnmatchedViaRest(
   item: StatementItem,
   dialogId: string,
   recordedToMyCompany: boolean,
-  call: RestCall
+  call: RestCall,
+  memberId?: string
 ): Promise<string | null> {
-  // URL_PREVIEW=N: the notice carries external (payer-controlled) text (the counterparty account)
-  // — don't let a pasted URL expand into a rich preview card in the operator chat.
-  const resp = await call(CHAT_MESSAGE_METHOD, {
-    DIALOG_ID: dialogId,
-    MESSAGE: buildUnmatchedMessage(item, recordedToMyCompany),
-    URL_PREVIEW: 'N'
-  })
-  return extractMessageId(resp)
+  return postChatMessage(dialogId, buildUnmatchedMessage(item, recordedToMyCompany), call, memberId)
 }
