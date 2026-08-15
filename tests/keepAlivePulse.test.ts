@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MISSED_TICKS_BEFORE_ALARM, pulseAgeMs, pulseState, type KeepAlivePulse } from '../app/utils/keepAlivePulse'
+import { keepAlivePulseLine, MISSED_TICKS_BEFORE_ALARM, pulseAgeMs, pulseState, type KeepAlivePulse } from '../app/utils/keepAlivePulse'
 import { evaluateKeepAlivePulse } from '../server/utils/bankHealthAlert'
 
 // Пульс продления банковских токенов (#504). Продление — голый `setInterval`, а не задача очереди,
@@ -116,5 +116,34 @@ describe('evaluateKeepAlivePulse', () => {
   it('в тексте нет ни счетов, ни member_id — канал внешний', () => {
     const text = evaluateKeepAlivePulse(pulse(5 * HOUR), NOW, INTERVAL).map(a => a.text).join('')
     expect(text).not.toMatch(/BY\d|member/i)
+  })
+})
+
+describe('строка пульса на экране оператора', () => {
+  const rel = () => '5 минут назад'
+  const sum = (over: Partial<KeepAlivePulse['summary']> = {}) => ({
+    selected: 3, refreshed: 2, skipped: 0, failed: 0, unrefreshable: 0, expired: 0, ...over
+  })
+
+  it('прогонов не было — говорим это прямо, а не прочерком', () => {
+    // Пустота или «—» не отличили бы свежий перезапуск от невзведённого таймера.
+    expect(keepAlivePulseLine(null, null, rel)).toContain('прогонов ещё не было')
+  })
+
+  it('прогон был, но обновлять было некого — только время, без нулей', () => {
+    // В полосе обновления никого не было: это штатный прогон, а не бездействие.
+    expect(keepAlivePulseLine(NOW, sum({ refreshed: 0 }), rel)).toBe('Продление токенов: 5 минут назад.')
+  })
+
+  it('обновления были — показываем сколько', () => {
+    expect(keepAlivePulseLine(NOW, sum(), rel)).toBe('Продление токенов: 5 минут назад — обновлено 2.')
+  })
+
+  it('НЕУДАЧИ названы отдельно — иначе непонятно, почему подключения мрут при живом продлении', () => {
+    expect(keepAlivePulseLine(NOW, sum({ failed: 1 }), rel)).toContain('не удалось 1')
+  })
+
+  it('сводки нет вовсе (старый ответ сервера) — строка всё равно осмысленна', () => {
+    expect(keepAlivePulseLine(NOW, null, rel)).toBe('Продление токенов: 5 минут назад.')
   })
 })

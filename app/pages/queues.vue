@@ -16,7 +16,7 @@ import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps
 import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
-import type { KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
+import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -100,18 +100,12 @@ const bankHealthError = ref('')
 // потому что отвечает на вопрос про них: «а механизм, который их держит, вообще жив?»
 const keepAliveAt = ref<number | null>(null)
 const keepAliveSummary = ref<KeepAlivePulseSummary | null>(null)
-const keepAliveLine = computed(() => {
-  if (keepAliveAt.value === null) return 'Продление токенов: прогонов ещё не было (после перезапуска это нормально).'
+const keepAliveLine = computed(() => keepAlivePulseLine(
+  keepAliveAt.value,
+  keepAliveSummary.value,
   // `formatRelativeTime` принимает ISO — общий формат статуса импорта, не заводим второй.
-  const when = formatRelativeTime(new Date(keepAliveAt.value).toISOString(), Date.now())
-  const s = keepAliveSummary.value
-  // Итог прогона показываем, а не возим вхолостую: «отработало 5 минут назад» и «отработало 5 минут
-  // назад, из них 3 не удалось» — разные новости, и вторая объясняет, почему подключения всё равно
-  // мрут. Молчим только когда сказать нечего (в полосе обновления никого не было).
-  if (!s || (s.refreshed === 0 && s.failed === 0)) return `Продление токенов: ${when}.`
-  const failed = s.failed > 0 ? `, не удалось ${s.failed}` : ''
-  return `Продление токенов: ${when} — обновлено ${s.refreshed}${failed}.`
-})
+  ms => formatRelativeTime(new Date(ms).toISOString(), Date.now())
+))
 
 async function loadBankHealth(): Promise<void> {
   if (isPreview()) {
