@@ -14,7 +14,7 @@ import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queue
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
 import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
-import { HEALTH_ORDER, HEALTH_TITLE, type BankHealthOverview } from '~/utils/bankHealthOverview'
+import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
 
 definePageMeta({ layout: 'clear', middleware: 'auth' })
 
@@ -96,29 +96,40 @@ const bankHealth = ref<BankHealthOverview | null>(null)
 const bankHealthError = ref('')
 
 async function loadBankHealth(): Promise<void> {
+  if (isPreview()) {
+    // ⚠ Превью-ветка ОБЯЗАТЕЛЬНА, и ровно по той же причине, что у вердикта здоровья выше: без неё
+    // карточка на статике уходит в «не удалось прочитать» (эндпоинта там нет), то есть эталон
+    // скриншота документирует не интерфейс, а его отказ. Хуже — она делает снимок НЕДЕТЕРМИНИРОВАННЫМ:
+    // ответ 404 приходит асинхронно, высота страницы меняется между кадрами, и визуальный тест
+    // краснеет мигая, а не по делу. Синтетика намеренно показывает ИНТЕРЕСНЫЙ случай (есть
+    // требующие человека и есть незавершённые) — карточка, снятая в состоянии «всё хорошо»,
+    // не показывает ничего из того, ради чего она сделана.
+    bankHealth.value = PREVIEW_BANK_HEALTH
+    // Снять флаг обязательно: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому первый
+    // прогон успевает сходить в сеть и упасть, а блок ошибки в шаблоне идёт первым.
+    bankHealthError.value = ''
+    return
+  }
   try {
-    const res = await $fetch<{ ok?: boolean, error?: string } & BankHealthOverview>('/api/ops/bank-health')
-    if (res?.ok) {
-      bankHealth.value = res
-      bankHealthError.value = ''
-    } else {
-      bankHealthError.value = res?.error || 'не удалось прочитать состояние подключений'
-    }
-  } catch {
+    const res = await $fetch<{ ok?: boolean } & BankHealthOverview>('/api/ops/bank-health')
+    bankHealth.value = res
+    bankHealthError.value = ''
+  } catch (e) {
+    // ⚠ Ошибку читаем ИЗ ИСКЛЮЧЕНИЯ, а не из разрешённого значения. `$fetch` (ofetch) бросает на
+    // любом не-2xx, а роут отдаёт `ok:false` ТОЛЬКО вместе с не-2xx (401/503) — поэтому ветка
+    // «резолвилось, но ok:false» недостижима, и написанная так проверка молча теряла бы разницу
+    // между «сессия истекла» и «база недоступна». Тот же разбор, что в `frameFetchError`.
+    //
     // ⚠ Ошибку показываем, а не подменяем нулями: пустая сводка читалась бы как «всё спокойно»
     // ровно тогда, когда спокойно точно не всё.
-    bankHealthError.value = 'не удалось прочитать состояние подключений'
+    const said = (e as { data?: { error?: string } })?.data?.error
+    bankHealthError.value = said || 'не удалось прочитать состояние подключений'
   }
 }
 
-/** Строки состояний в порядке «сначала то, что требует человека», без пустых. */
-const bankRows = computed(() => {
-  const o = bankHealth.value
-  if (!o) return []
-  return HEALTH_ORDER
-    .map(h => ({ health: h, title: HEALTH_TITLE[h], ...o.byHealth[h] }))
-    .filter(r => r.connections > 0)
-})
+// Строки и заголовок считает чистое ядро (склонения — через общий `pluralRu`), страница только рисует.
+const bankRows = computed(() => bankHealth.value ? bankHealthRows(bankHealth.value) : [])
+const bankHeadline = computed(() => bankHealth.value ? attentionHeadline(bankHealth.value) : '')
 
 // «Оцените приложение» — per-portal review lifecycle the owner manages here (not via SQL).
 const rating = useAppRatingOps()
@@ -167,8 +178,12 @@ async function loadHealth() {
 
 // Best-effort — the rating card is independent of the queue chart (it drives its own fetch).
 // Запрос разбирается роутером уже ПОСЛЕ монтирования, поэтому недостаточно спросить один раз:
-// перечитываем вердикт, когда флаг превью наконец становится известен.
-watch(preview, () => void loadHealth())
+// перечитываем вердикт, когда флаг превью наконец становится известен. Обе карточки, а не одна:
+// у них общий источник недетерминизма — момент, когда `?preview=1` наконец разобран.
+watch(preview, () => {
+  void loadHealth()
+  void loadBankHealth()
+})
 
 onMounted(() => {
   void rating.load()
@@ -281,14 +296,7 @@ onBeforeUnmount(() => {
                 : 'text-(--ui-color-accent-main-success)'"
               data-testid="bank-health-headline"
             >
-              <template v-if="bankHealth.needAttention">
-                Требуют человека: {{ bankHealth.needAttention }}
-                {{ bankHealth.needAttention === 1 ? 'портал' : 'портала(ов)' }} —
-                владельцу счёта нужно заново войти в интернет-банк.
-              </template>
-              <template v-else>
-                Все подключения живы.
-              </template>
+              {{ bankHeadline }}
             </p>
 
             <ul class="mt-3 space-y-1 text-sm">
@@ -299,9 +307,7 @@ onBeforeUnmount(() => {
                 :data-testid="`bank-health-${r.health}`"
               >
                 <span class="text-(--ui-color-base-2)">{{ r.title }}</span>
-                <span class="text-(--ui-color-base-3)">
-                  {{ r.connections }} на {{ r.portals }} {{ r.portals === 1 ? 'портале' : 'порталах' }}
-                </span>
+                <span class="text-(--ui-color-base-3)">{{ r.countLabel }}</span>
               </li>
               <!-- Ожидающие показываем отдельной строкой: формально они живы, но опрашивать по ним
                    нечего — админ не выбрал счёт. В «в порядке» им нельзя. -->
@@ -312,16 +318,30 @@ onBeforeUnmount(() => {
               >
                 <span class="text-(--ui-color-base-2)">счёт не выбран</span>
                 <span class="text-(--ui-color-base-3)">
-                  {{ bankHealth.pending.connections }} на {{ bankHealth.pending.portals }}
-                  {{ bankHealth.pending.portals === 1 ? 'портале' : 'порталах' }}
+                  {{ spreadLabel(bankHealth.pending.connections, bankHealth.pending.portals) }}
                 </span>
               </li>
             </ul>
 
+            <!-- Метки требующих внимания порталов: без них «3 портала требуют внимания» — тупик,
+                 по нему нельзя отличить «те же три, что вчера» от «ещё два новых». Метка
+                 необратима (`portalHash`) и совпадает с `portal.hash` в телеметрии. -->
+            <p
+              v-if="bankHealth.attentionPortals?.length"
+              class="mt-3 text-xs text-(--ui-color-base-4)"
+              data-testid="bank-health-portals"
+            >
+              Порталы (метки телеметрии):
+              <code
+                v-for="h in bankHealth.attentionPortals"
+                :key="h"
+                class="ml-1 rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5"
+              >{{ h }}</code>
+            </p>
+
             <p class="mt-3 text-xs text-(--ui-color-base-4)">
-              Всего {{ bankHealth.total.connections }} на {{ bankHealth.total.portals }}
-              {{ bankHealth.total.portals === 1 ? 'портале' : 'порталах' }}.
-              Номеров счетов и названий порталов здесь нет намеренно.
+              Всего {{ spreadLabel(bankHealth.total.connections, bankHealth.total.portals) }}.
+              Номеров счетов, доменов и member_id здесь нет намеренно — только необратимые метки.
             </p>
           </template>
         </template>

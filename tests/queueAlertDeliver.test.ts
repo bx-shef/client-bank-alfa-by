@@ -153,7 +153,31 @@ describe('messages', () => {
   it('recovery message names the queue and what stopped', () => {
     const m = recoveryMessage('stalled:bank-fetch')
     expect(m).toContain('bank-fetch')
-    expect(m).toContain('простой')
+    expect(m).toContain('снова разгребается')
+  })
+
+  it('восстановление — СВЯЗНОЕ предложение для каждого типа эпизода', () => {
+    // ⚠ Раньше шаблон был общий («… — {слово} прекратились») со словарём подлежащих, и по-русски
+    // не сходился ни в одном падеже: «простой прекратились», «нечитаемая очередь прекратились».
+    // Это сообщение читают один раз — в момент, когда решают, что можно выдохнуть.
+    for (const key of ['stalled:crm-sync', 'failing:crm-sync', 'unreadable:crm-sync', 'bank-dead:alfa-by']) {
+      expect(recoveryMessage(key), key).not.toContain('прекратились')
+    }
+    expect(recoveryMessage('failing:crm-sync')).toContain('перестали падать')
+    expect(recoveryMessage('unreadable:crm-sync')).toContain('снова читается')
+  })
+
+  it('у банковского эпизода подлежащее — БАНК, а не очередь', () => {
+    // Общий шаблон назвал бы это «очередь «alfa-by»» — просто ложь: очереди с таким именем нет.
+    const m = recoveryMessage('bank-dead:alfa-by')
+    expect(m).toContain('Альфа-Банк')
+    expect(m).not.toContain('очередь')
+  })
+
+  it('незнакомый тип эпизода остаётся читаемым, а не превращается в бессмыслицу', () => {
+    // Появиться такой ключ может только при рассинхроне версий — ровно в тот момент, когда
+    // сообщение обязано быть понятным.
+    expect(recoveryMessage('brand-new:thing')).toContain('thing')
   })
 
   it('приватность СКВОЗНАЯ: текст выводим только из имени очереди и счётчиков (docs/PRIVACY.md)', () => {
