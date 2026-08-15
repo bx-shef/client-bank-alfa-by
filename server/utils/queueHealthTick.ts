@@ -49,7 +49,7 @@ export interface QueueHealthTickDeps {
    * ⚠ Читается СИНХРОННО и без I/O — это память того же процесса. Поэтому, в отличие от `bankRows`,
    * тут нечему падать и нечего изолировать.
    */
-  keepAlive?: () => { pulse: KeepAlivePulse | null, intervalMs: number }
+  keepAlive?: () => { pulse: KeepAlivePulse | null, intervalMs: number, startedAtMs?: number | null }
 }
 
 export interface QueueHealthTickResult {
@@ -101,8 +101,8 @@ export async function runQueueHealthTick(
     // Продление токенов встало — НАША авария, не отказ банка (#504). Отдельным эпизодом, потому
     // что чинится другим действием и другими людьми.
     if (deps.keepAlive) {
-      const { pulse, intervalMs } = deps.keepAlive()
-      alerts.push(...evaluateKeepAlivePulse(pulse, deps.now(), intervalMs))
+      const { pulse, intervalMs, startedAtMs } = deps.keepAlive()
+      alerts.push(...evaluateKeepAlivePulse(pulse, deps.now(), intervalMs, startedAtMs ?? null))
     }
     deps.record(alerts, deps.now())
     for (const a of alerts) deps.warn(`[queue-alert] ${a.text}`)

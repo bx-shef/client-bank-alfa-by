@@ -11,6 +11,23 @@
 import type { KeepAlivePulse, KeepAlivePulseSummary } from '../../app/utils/keepAlivePulse'
 
 let pulse: KeepAlivePulse | null = null
+let startedAtMs: number | null = null
+
+/**
+ * Отметить, что таймер продления ЗАПЛАНИРОВАН в этом процессе.
+ *
+ * ⚠ Без этой метки «прогонов ещё не было» нельзя отличить от «не запускается»: обе выглядят как
+ * пустой пульс. А регрессия, при которой таймер не завёлся вовсе, — это как раз тот случай, когда
+ * молчание длится вечно и никого не будит.
+ */
+export function markKeepAliveStarted(atMs: number): void {
+  startedAtMs = atMs
+}
+
+/** Когда таймер был запланирован, `null` — в этом процессе он не запускался (роль без крона). */
+export function keepAliveStartedAt(): number | null {
+  return startedAtMs
+}
 
 /** Record one COMPLETED run. Never called for a run that threw — a failed scan is not a heartbeat. */
 export function recordKeepAlivePulse(summary: KeepAlivePulseSummary, atMs: number): void {
@@ -25,4 +42,5 @@ export function keepAlivePulse(): KeepAlivePulse | null {
 /** Test seam — the module keeps process-wide state by design. */
 export function resetKeepAlivePulse(): void {
   pulse = null
+  startedAtMs = null
 }

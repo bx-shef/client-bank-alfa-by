@@ -20,10 +20,20 @@ describe('pulseState', () => {
     expect(pulseState(pulse(10 * 60_000), NOW, INTERVAL)).toBe('ok')
   })
 
-  it('прогонов ещё не было — «never», и это НЕ «сломалось»', () => {
-    // Сразу после старта процесса так и должно быть. Отличить «только запустились» от «таймер не
-    // завёлся» по одному этому значению нельзя — судить надо по возрасту процесса.
+  it('прогонов ещё не было и процесс только поднялся — «never», это НЕ «сломалось»', () => {
     expect(pulseState(null, NOW, INTERVAL)).toBe('never')
+    expect(pulseState(null, NOW, INTERVAL, { startedAtMs: NOW - 10 * 60_000 })).toBe('never')
+  })
+
+  it('ЭСКАЛАЦИЯ: пульса нет дольше окна с момента старта — это уже stale', () => {
+    // ⚠ Без эскалации регрессия «таймер не завёлся вовсе / падает с первого тика» давала бы тишину
+    // НАВСЕГДА: тот же «умерли в пятницу, узнали в понедельник», только зайдя с другого конца.
+    expect(pulseState(null, NOW, INTERVAL, { startedAtMs: NOW - 5 * HOUR })).toBe('stale')
+  })
+
+  it('без известного времени старта эскалации нет — не выдумываем возраст процесса', () => {
+    // Роль без крона (`QUEUE_CRON=0`) таймер не запускает вовсе, и тревожить по ней не о чем.
+    expect(pulseState(null, NOW, INTERVAL, { startedAtMs: null })).toBe('never')
   })
 
   it('один пропущенный тик — ещё не авария', () => {
@@ -70,9 +80,17 @@ describe('evaluateKeepAlivePulse', () => {
     expect(evaluateKeepAlivePulse(pulse(10 * 60_000), NOW, INTERVAL)).toEqual([])
   })
 
-  it('«ещё не было прогонов» тревогой НЕ считается', () => {
+  it('«ещё не было прогонов» сразу после старта тревогой НЕ считается', () => {
     // Иначе каждый рестарт процесса пейджил бы оператора.
     expect(evaluateKeepAlivePulse(null, NOW, INTERVAL)).toEqual([])
+    expect(evaluateKeepAlivePulse(null, NOW, INTERVAL, NOW - 10 * 60_000)).toEqual([])
+  })
+
+  it('таймер не завёлся вовсе — тревога говорит «ни разу», а не выдуманные часы', () => {
+    const [a] = evaluateKeepAlivePulse(null, NOW, INTERVAL, NOW - 5 * HOUR)
+    expect(a?.kind).toBe('keepalive-stale')
+    expect(a?.text).toContain('НИ РАЗУ')
+    expect(a?.text).not.toMatch(/\d+ час/)
   })
 
   it('протухший пульс — тревога с возрастом и с указанием, что чинить НАМ', () => {

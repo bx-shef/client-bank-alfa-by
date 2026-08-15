@@ -57,17 +57,29 @@ export function pulseState(
   pulse: KeepAlivePulse | null,
   nowMs: number,
   intervalMs: number,
-  missedTicks = MISSED_TICKS_BEFORE_ALARM
+  opts: { startedAtMs?: number | null, missedTicks?: number } = {}
 ): PulseState {
-  if (!pulse) return 'never'
+  const missedTicks = opts.missedTicks ?? MISSED_TICKS_BEFORE_ALARM
+  const window = intervalMs * missedTicks
+  const sane = Number.isFinite(intervalMs) && intervalMs > 0
+  if (!pulse) {
+    // ⚠ «Прогонов не было» ЭСКАЛИРУЕТ по возрасту процесса, и это не мелочь. Без эскалации
+    // регрессия, при которой таймер не завёлся вовсе (или падает на каждом прогоне с первого
+    // тика), давала бы тишину НАВСЕГДА — тот же «умерли в пятницу, узнали в понедельник», ради
+    // которого всё и написано, только зайдя с другого конца. Через окно молчания это уже не
+    // «только запустились», а «не запускается».
+    if (!sane || opts.startedAtMs == null) return 'never'
+    const up = nowMs - opts.startedAtMs
+    return Number.isFinite(up) && up > window ? 'stale' : 'never'
+  }
   // Кривой интервал (0/NaN/отрицательный) НЕ превращаем в «всё протухло»: это сделало бы опечатку в
   // env неотличимой от настоящей аварии. Такой интервал — сам по себе повод для envCheck, а не для
   // ложной тревоги здесь.
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return 'ok'
+  if (!sane) return 'ok'
   const age = nowMs - pulse.atMs
   // Часы, ушедшие назад (правка времени, подмена в тесте), не должны читаться как древний пульс.
   if (!Number.isFinite(age) || age < 0) return 'ok'
-  return age > intervalMs * missedTicks ? 'stale' : 'ok'
+  return age > window ? 'stale' : 'ok'
 }
 
 /** Возраст пульса в миллисекундах, `null` — прогонов не было. */

@@ -31,7 +31,7 @@ import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
 import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
 import { recordQueueHealth } from '../utils/queueAlertState'
-import { keepAlivePulse, recordKeepAlivePulse } from '../utils/keepAliveState'
+import { keepAlivePulse, keepAliveStartedAt, markKeepAliveStarted, recordKeepAlivePulse } from '../utils/keepAliveState'
 import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
@@ -266,6 +266,9 @@ export default defineNitroPlugin((nitroApp) => {
         console.error('[queue] bank keep-alive run failed:', (err as Error)?.message)
       }
     }
+    // Отмечаем, что таймер ЗАПЛАНИРОВАН: иначе «прогонов ещё не было» неотличимо от «не
+    // запускается», и регрессия, при которой продление падает с первого же тика, молчала бы вечно.
+    markKeepAliveStarted(Date.now())
     bankKeepAliveTimer = setInterval(runBankKeepAliveTick, bankKeepAliveMs)
     void runBankKeepAliveTick() // at boot: a connection may have idled all night while the service was down
     console.info('[queue] bank token keep-alive scheduled (every %d min, #489)', bankKeepAliveMs / 60_000)
@@ -385,7 +388,7 @@ export default defineNitroPlugin((nitroApp) => {
             bankRows: () => listAllBankAccountInfo(dbQuery),
             // Пульс продления (#504). Каденция берётся ТА ЖЕ, что у самого таймера, — иначе
             // оператор, разредивший продление через env, получал бы ложную тревогу на каждом тике.
-            keepAlive: () => ({ pulse: keepAlivePulse(), intervalMs: bankKeepAliveMs })
+            keepAlive: () => ({ pulse: keepAlivePulse(), intervalMs: bankKeepAliveMs, startedAtMs: keepAliveStartedAt() })
           }))
         delivery = result.state
       } catch (err) {

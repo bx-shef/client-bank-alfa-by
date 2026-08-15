@@ -74,22 +74,26 @@ export function evaluateBankHealth(rows: readonly BankHealthRow[], nowMs: number
  * подключения ещё живы, но начнут умирать через полосу обновления. Слить их в один эпизод значило
  * бы отправить оператора не туда.
  *
- * ⚠ `never` тревогой НЕ считается: сразу после старта процесса прогонов ещё не было, и это норма.
- * Отличить «только запустились» от «таймер не завёлся вовсе» по одному этому значению нельзя —
- * судить надо по возрасту процесса, а такого знания у чистой функции нет. Первый же прогон
- * (он идёт при старте, `void runBankKeepAliveTick()`) снимает неопределённость.
+ * ⚠ «Прогонов ещё не было» само по себе тревогой не считается — сразу после старта это норма, —
+ * НО ЭСКАЛИРУЕТ по возрасту процесса (`startedAtMs`). Без эскалации регрессия, при которой таймер
+ * не завёлся вовсе или падает на каждом прогоне с самого первого тика, давала бы тишину НАВСЕГДА:
+ * тот же «умерли в пятницу, узнали в понедельник», ради которого всё написано, только зайдя с
+ * другого конца. Текст в этом случае говорит «не отрабатывало ни разу», а не выдумывает часы.
  */
 export function evaluateKeepAlivePulse(
   pulse: KeepAlivePulse | null,
   nowMs: number,
-  intervalMs: number
+  intervalMs: number,
+  startedAtMs: number | null = null
 ): QueueAlert[] {
-  if (pulseState(pulse, nowMs, intervalMs) !== 'stale') return []
-  const age = pulseAgeMs(pulse, nowMs) ?? 0
-  const hours = Math.max(1, Math.round(age / 3_600_000))
+  if (pulseState(pulse, nowMs, intervalMs, { startedAtMs }) !== 'stale') return []
+  const age = pulseAgeMs(pulse, nowMs)
+  const since = age === null
+    ? 'не отрабатывало НИ РАЗУ с запуска сервиса'
+    : `не отрабатывало ${Math.max(1, Math.round(age / 3_600_000))} ${pluralRu(Math.max(1, Math.round(age / 3_600_000)), ['час', 'часа', 'часов'])}`
   return [{
     kind: 'keepalive-stale',
     queue: 'bank-keepalive',
-    text: `продление банковских токенов не отрабатывало ${hours} ${pluralRu(hours, ['час', 'часа', 'часов'])} — подключения клиентов начнут умирать, чинить нам (это НЕ отказ банка)`
+    text: `продление банковских токенов ${since} — подключения клиентов начнут умирать, чинить нам (это НЕ отказ банка)`
   }]
 }
