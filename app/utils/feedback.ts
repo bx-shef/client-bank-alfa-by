@@ -56,11 +56,39 @@ export interface IssuePayload { title: string, body: string, labels: string[] }
 export interface FeedbackContext {
   fileName?: unknown
   appVersion?: unknown
+  /**
+   * THE OPERATION THE EMPLOYEE POINTED AT (#499). Same shape as the program channel's
+   * `ProgramSample`, deliberately: two channels reporting the same kind of event under two
+   * different privacy rules would drift, and the one that drifts looser is the one nobody reviews.
+   *
+   * ⚠ WHY THIS NEEDS NO CONSENT CHECKBOX while the whole file (below) does. The employee pressed
+   * 👎 ON this payment — «which payment» IS the report, and asking permission to send the thing
+   * they just pointed at is theatre that costs a click and buys nothing. The file is different in
+   * kind: it carries every OTHER payment too, and those the employee never pointed at. That is the
+   * line, and it is the same line #198 drew.
+   */
+  operation?: unknown
+  /** Where the employee was standing (`операция` / `загрузка` / `настройки`). Not client data —
+   *  it is how triage tells «разобралось не так» from «не понимаю, чего от меня хотят». */
+  place?: unknown
   /** Raw statement text, embedded in the issue ONLY with the employee's explicit consent (#198).
    *  PRIVACY: this is the client's financial statement (accounts/amounts/УНП) — it is rendered
    *  ONLY because the receiving repo is PRIVATE (see the module header). Absent/empty ⇒ no block. */
   fileContent?: unknown
 }
+
+/** Fields of a reported operation, in render order. A fixed list rather than «whatever the object
+ *  has»: an object spread would silently start shipping any field a future `StatementItem` gains,
+ *  which is exactly how a privacy rule stops matching its own documentation. */
+const OPERATION_FIELDS: ReadonlyArray<readonly [string, string]> = [
+  ['direction', 'Направление'],
+  ['amount', 'Сумма'],
+  ['currency', 'Валюта'],
+  ['purpose', 'Назначение'],
+  ['counterparty', 'Контрагент'],
+  ['counterpartyAccount', 'Счёт контрагента'],
+  ['counterpartyUnp', 'УНП контрагента']
+]
 
 const MAX_CONTEXT_VALUE = 300
 
@@ -87,6 +115,23 @@ export const MAX_FILE_EMBED_ESCAPED = 35000
  */
 export function attachedFileContent(attachFile: unknown, fileContent: unknown, cap = MAX_FILE_EMBED): string | undefined {
   return attachFile === true && typeof fileContent === 'string' ? fileContent.slice(0, cap) : undefined
+}
+
+/**
+ * Render the reported operation as inert context lines. Every value goes through `contextLine`, so
+ * the payer-controlled purpose and counterparty name cannot forge markdown — they are the two
+ * fields an outsider actually gets to write.
+ *
+ * A non-object (or a missing one) renders nothing rather than `[object Object]`: the widget can be
+ * mounted where there is no operation at all, and «отзыв без платежа» is a normal report.
+ */
+function operationLines(operation: unknown): string[] {
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return []
+  const op = operation as Record<string, unknown>
+  const lines = OPERATION_FIELDS
+    .map(([key, label]) => contextLine(label, op[key]))
+    .filter((l): l is string => l !== null)
+  return lines
 }
 
 /**
@@ -152,8 +197,10 @@ export function buildFeedbackIssue(kind: FeedbackKind, comment: unknown, context
     ? `${kindWord} · ${firstLine}`
     : `Отзыв сотрудника — ${kindWord}`).slice(0, 120)
   const contextLines = [
+    contextLine('Где', context.place),
     contextLine('Файл', context.fileName),
-    contextLine('Версия приложения', context.appVersion)
+    contextLine('Версия приложения', context.appVersion),
+    ...operationLines(context.operation)
   ].filter((l): l is string => l !== null)
   const body = [
     `- **Оценка:** ${kindWord}`,

@@ -323,6 +323,16 @@ function clearAll() {
             @click="batches.retry()"
           />
         </template>
+
+        <!-- Отзыв стоит здесь, у ИТОГА, а не только под разбором (#499): «разобралось» и
+             «записалось» — разные события, и жалуются обычно на второе. Файл к отзыву прикладывается
+             по галке в 👎-панели, как и ниже. -->
+        <FeedbackWidget
+          :file-name="feedbackFileName"
+          :file-text="feedbackFileText"
+          place="загрузка"
+          class="mt-4"
+        />
       </B24Card>
     </div>
 
@@ -333,6 +343,7 @@ function clearAll() {
       v-if="okCount"
       :file-name="feedbackFileName"
       :file-text="feedbackFileText"
+      place="разбор"
       class="mt-4"
     />
 

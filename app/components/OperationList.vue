@@ -48,7 +48,19 @@ function toRow(item: StatementItem) {
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
     name: item.counterparty.name,
     purpose: item.purpose,
-    requisites: requisites(item)
+    requisites: requisites(item),
+    // Отзыв о КОНКРЕТНОМ платеже (#499). Форма — ровно та же, что у программного канала
+    // (`makeProgramSample`): два канала об одном событии под двумя разными правилами разъехались
+    // бы, и разъехался бы тот, который никто не перечитывает.
+    sample: {
+      direction: item.direction,
+      amount: item.amount,
+      currency: item.currency,
+      purpose: item.purpose,
+      counterparty: item.counterparty.name,
+      counterpartyAccount: item.counterparty.account,
+      counterpartyUnp: item.counterparty.unp
+    } as Record<string, unknown>
   }
 }
 
@@ -145,6 +157,16 @@ const hasItems = computed(() => props.items.length > 0)
             size="sm"
             class="pb-3 pl-12"
           />
+          <!-- Отзыв живёт ВНУТРИ раскрытой строки, а не рядом с каждой (#499): сто виджетов в
+               списке — это сто раз «не нажимайте меня», а раскрытая строка означает, что человек
+               уже смотрит именно на этот платёж. Виджет сам себя не рисует, пока канал выключен на
+               сервере, поэтому на непод-ключённом портале ничего не появится. -->
+          <div class="pb-3 pl-12">
+            <FeedbackWidget
+              :operation="row.sample"
+              place="операция"
+            />
+          </div>
         </template>
       </B24Collapsible>
     </div>

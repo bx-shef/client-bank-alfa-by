@@ -9,7 +9,16 @@ import { useFeedback } from '~/composables/useFeedback'
 // private, so client context is permitted). See docs/FEEDBACK.md.
 // `fileText` (the decoded statement text) enables the file-attach consent (#198): when present, the
 // 👎 box offers a checkbox to attach the raw statement to the private issue for reproduction.
-const props = defineProps<{ fileName?: string, fileText?: string }>()
+// `operation` (#499) — тот платёж, на который человек показал. Едет БЕЗ галки согласия: «какой
+// платёж» и есть содержание отзыва, а спрашивать разрешение на то, куда сам же ткнул, — это лишний
+// клик ни за чем. Файл целиком — другое дело: в нём все ОСТАЛЬНЫЕ платежи, на которые не показывал
+// никто, и он по-прежнему за галкой (#198). `place` — не данные клиента, а где человек стоял.
+const props = defineProps<{
+  fileName?: string
+  fileText?: string
+  operation?: Record<string, unknown>
+  place?: string
+}>()
 const { enabled, ensureEnabled, submit } = useFeedback()
 
 const open = ref(false) // comment box shown
@@ -49,7 +58,12 @@ async function rate(kind: 'up' | 'down'): Promise<void> {
     // Attach the statement ONLY on a 👎 (the consent box lives in the 👎 panel), when ticked AND we
     // have the text — so an instant 👍 never carries a file even if the box was opened and ticked.
     const fileContent = kind === 'down' && attachFile.value && props.fileText ? props.fileText : undefined
-    const ok = await submit(kind, comment.value.trim() || undefined, { fileName: props.fileName, fileContent })
+    const ok = await submit(kind, comment.value.trim() || undefined, {
+      fileName: props.fileName,
+      fileContent,
+      operation: props.operation,
+      place: props.place
+    })
     if (ok) sent.value = true
     else error.value = 'Отзыв доступен только внутри портала Bitrix24'
   } catch {

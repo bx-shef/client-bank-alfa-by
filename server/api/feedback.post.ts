@@ -54,7 +54,7 @@ export default defineEventHandler(async (event) => {
         kind?: unknown
         comment?: unknown
         attachFile?: unknown
-        context?: { fileName?: unknown, appVersion?: unknown, fileContent?: unknown }
+        context?: { fileName?: unknown, appVersion?: unknown, fileContent?: unknown, operation?: unknown, place?: unknown }
       } | null
       // File-attach (#198) is consent-gated by the pure `attachedFileContent`: embed the statement text
       // ONLY when the client set attachFile === true, bounding the accepted text server-side (defense —
@@ -67,7 +67,16 @@ export default defineEventHandler(async (event) => {
         domain,
         kind: raw?.kind,
         comment: raw?.comment,
-        context: { fileName: raw?.context?.fileName, appVersion: raw?.context?.appVersion, fileContent }
+        // Поля перечислены поимённо, а не проброшены объектом: пробросить `raw.context` целиком
+        // значило бы принимать всё, что клиент решит туда положить, — и правило приватности,
+        // записанное в FEEDBACK.md, перестало бы описывать то, что реально уезжает в issue.
+        context: {
+          fileName: raw?.context?.fileName,
+          appVersion: raw?.context?.appVersion,
+          place: raw?.context?.place,
+          operation: raw?.context?.operation,
+          fileContent
+        }
       })
       span.outcome = httpOutcomeForStatus(status)
       if (status === 500 || status === 502) {

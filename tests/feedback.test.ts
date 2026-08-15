@@ -153,3 +153,67 @@ describe('feedback — attachedFileContent (server consent gate)', () => {
     expect(attachedFileContent(true, 'x'.repeat(MAX_FILE_EMBED + 100))!.length).toBe(MAX_FILE_EMBED)
   })
 })
+
+describe('контекст операции в отзыве (#499)', () => {
+  const op = {
+    direction: 'credit',
+    amount: 1234.56,
+    currency: 'BYN',
+    purpose: 'Оплата по счёту СЧ-1',
+    counterparty: 'ООО Ромашка',
+    counterpartyAccount: 'BY00BANK00000000000000000001',
+    counterpartyUnp: '191234567'
+  }
+
+  it('поля платежа попадают в issue — иначе воспроизвести нечего', () => {
+    const issue = buildFeedbackIssue('down', 'не тот счёт', { operation: op })
+    expect(issue.body).toContain('Назначение')
+    expect(issue.body).toContain('Оплата по счёту СЧ-1')
+    expect(issue.body).toContain('1234.56')
+    expect(issue.body).toContain('УНП контрагента')
+  })
+
+  it('поле, которого нет в списке, НЕ уезжает — правило приватности описывает то, что реально едет', () => {
+    // Спред объекта начал бы отправлять любое новое поле `StatementItem` молча, и записанное в
+    // FEEDBACK.md правило перестало бы соответствовать коду ровно в тот момент, когда его добавили.
+    const issue = buildFeedbackIssue('down', 'x', {
+      operation: { ...op, secretInternalField: 'НЕ ДОЛЖНО УЕХАТЬ' }
+    })
+    expect(issue.body).not.toContain('НЕ ДОЛЖНО УЕХАТЬ')
+  })
+
+  it('назначение платежа не может подделать разметку — его пишет плательщик', () => {
+    const issue = buildFeedbackIssue('down', 'x', {
+      operation: { ...op, purpose: '[злая ссылка](http://evil.test)\n## подделанный заголовок' }
+    })
+    // Значение обезврежено не вырезанием, а рамкой: перевод строки схлопнут (иначе значение
+    // вырвалось бы из своей строки и вставило целый раздел), всё остальное лежит ВНУТРИ inline-кода,
+    // где markdown не разбирается. Поэтому ссылка не становится ссылкой, а `##` — заголовком.
+    expect(issue.body).not.toMatch(/^## подделанный заголовок/m)
+    const line = issue.body.split('\n').find(l => l.includes('злая ссылка'))!
+    expect(line).toMatch(/^- \*\*Назначение:\*\* `.*`$/)
+    expect(line).toContain('подделанный заголовок') // всё в одной строке, наружу ничего не ушло
+  })
+
+  it('нет операции — отзыв всё равно валиден: «просто не работает» это нормальный отчёт', () => {
+    const issue = buildFeedbackIssue('down', 'ничего не понимаю', { place: 'экран готовности' })
+    expect(issue.body).toContain('экран готовности')
+    expect(issue.body).not.toContain('object Object')
+  })
+
+  it('мусор вместо операции не роняет сборку и ничего не рисует', () => {
+    for (const junk of [null, 'строка', 42, ['a'], undefined]) {
+      const issue = buildFeedbackIssue('up', undefined, { operation: junk })
+      expect(issue.body).not.toContain('object Object')
+      expect(issue.body).not.toContain('Направление')
+    }
+  })
+
+  it('пустые поля операции опускаются, а не рисуются пустыми строками', () => {
+    const issue = buildFeedbackIssue('down', 'x', {
+      operation: { ...op, counterpartyUnp: '', counterparty: '' }
+    })
+    expect(issue.body).not.toContain('УНП контрагента')
+    expect(issue.body).toContain('Назначение')
+  })
+})

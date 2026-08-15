@@ -10,6 +10,11 @@ import { frameAuth, frameAuthHeaders } from '~/composables/useFrameAuth'
 export interface FeedbackSubmitContext {
   fileName?: string
   appVersion?: string
+  /** The operation the employee pointed at (#499) — same shape as the program channel's sample, so
+   *  one privacy rule covers both. No consent gate: pointing at it IS the report. */
+  operation?: Record<string, unknown>
+  /** Where the employee was standing (операция / загрузка / настройки). Not client data. */
+  place?: string
   /** Raw statement text — sent ONLY when the employee ticks the consent box (#198). The server
    *  embeds it in the private issue only when `attachFile` is also true. */
   fileContent?: string
