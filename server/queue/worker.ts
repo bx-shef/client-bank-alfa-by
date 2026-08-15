@@ -316,7 +316,19 @@ export function liveHandlerDeps(): HandlerDeps {
       // is available, opt-in, exactly like the crypto gateway's error-log level (#460) — a
       // temporary loosening for a live run, switched back after. Default OFF.
       const purpose = STATEMENT_DEBUG_LOG ? ` purpose="${logSafe(item.purpose, MAX_LOGGED_PURPOSE)}"` : ''
-      console.log(`[op] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${item.direction} ${item.currency} ← ${logSafe(item.counterparty.account) || 'счёт не указан'} → ${owner}, recognized ${outcome.recognized}, activity ${outcome.activityId ?? '—'}${purpose}`)
+      // ⚠ `currency` тоже logSafe: у Альфы и Приора это СЫРОЙ проброс из JSON банка
+      // (`row.currIso`/`tx.currency`, только trim), а не наш enum — в отличие от `direction`,
+      // который нормализаторы вычисляют сами. Поле новое в логах, и обойти его было легко
+      // именно потому, что рядом стоит безопасный сосед.
+      const op = `${logSafe(item.account)}|${logSafe(item.docId)}`
+      const from = logSafe(item.counterparty.account) || 'счёт не указан'
+      // ⚠ Названо `intents`, а НЕ `recognized`, хотя поле зовётся так: в сводке джобы `recognized`
+      // считает ОПЕРАЦИИ, у которых распознан хотя бы один номер, а здесь — сколько номеров
+      // распознано в ЭТОЙ операции. Оператор, сверяющий строки лога со сводкой (ровно то, ради чего
+      // строка и заведена), сложил бы одно с другим и не сошёлся — тем более что сводочный счётчик
+      // растёт и для дедуп-пропущенных операций, которые `[op]` не печатает вовсе.
+      const tail = `intents ${outcome.recognized}, activity ${outcome.activityId ?? '—'}`
+      console.log(`[op] portal ${memberId}, op ${op}: ${item.direction} ${logSafe(item.currency, 8)} ← ${from} → ${owner}, ${tail}${purpose}`)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);

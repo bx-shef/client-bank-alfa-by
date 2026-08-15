@@ -87,13 +87,67 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
 })
 
 describe('liveHandlerDeps — log-only observers never throw', () => {
-  it('onRecognized / onResolved / onAllocationDecision are side-effect-free logs', () => {
+  it('onRecognized / onResolved / onAllocationDecision / onOperation are side-effect-free logs', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const it0 = demoItem()
     expect(() => deps.onRecognized(it0, [], 'M')).not.toThrow()
     expect(() => deps.onResolved(it0, [], 'M')).not.toThrow()
     expect(() => deps.onAllocationDecision(it0, decision, 0, 'M')).not.toThrow()
+    expect(() => deps.onOperation?.(it0, { owner: 'none', recognized: 0, activityId: null }, 'M')).not.toThrow()
+  })
+})
+
+describe('liveHandlerDeps — `[op]` не раскрывает назначение платежа без флага', () => {
+  // Это приватность, а не косметика: назначение — текст плательщика, самое широкое неконтролируемое
+  // поле, которое мы держим, и docs/PRIVACY.md §Логи держит его вне лога по умолчанию. Гейт —
+  // одна тернарная ветка в живой строке; вернуть её «упрощением» ничего не стоит, а заметить
+  // отсутствующий регресс можно только на чужом сервере, где лог уже написан.
+  // `STATEMENT_DEBUG_LOG` читается при загрузке модуля и в тестах не задан ⇒ проверяем дефолт.
+  const SECRET = 'ОПЛАТА ПО СЧЁТУ 1545874-B24 ЗА ЦЕМЕНТ'
+
+  it('назначения нет в строке, зато есть счёт контрагента — то, ради чего строка и заведена', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    deps.onOperation?.(demoItem({ purpose: SECRET, counterparty: { name: 'X', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
+    const line = log.mock.calls.map(c => c.join(' ')).join('\n')
+    expect(line).not.toContain(SECRET)
+    expect(line).not.toContain('ЦЕМЕНТ') // и фрагментом тоже не протекает
+    expect(line).toContain('BY77TEST')
+  })
+
+  it('суммы в строке нет — граница PRIVACY.md §Логи проходит здесь же', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    deps.onOperation?.(demoItem({ amount: 987654.32 }), { owner: 'none', recognized: 0, activityId: null }, 'M')
+    const line = log.mock.calls.map(c => c.join(' ')).join('\n')
+    expect(line).not.toContain('987654')
+    expect(line).not.toContain('987 654')
+  })
+})
+
+describe('liveHandlerDeps — `[op]` раскрывает назначение при включённом флаге', () => {
+  // Вторая половина обязательна: сама по себе проверка «назначения нет» осталась бы зелёной и
+  // если бы гейт перестал работать вовсе (например, поле выкинули из строки). Флаг читается при
+  // загрузке модуля — как DEMO_DELAY_MS выше, — поэтому единственный способ его проверить —
+  // пересобрать модуль с другим окружением.
+  const SECRET = 'ОПЛАТА ПО СЧЁТУ 1545874-B24 ЗА ЦЕМЕНТ'
+  const saved = process.env.STATEMENT_DEBUG_LOG
+
+  afterEach(() => {
+    vi.resetModules()
+    if (saved === undefined) delete process.env.STATEMENT_DEBUG_LOG
+    else process.env.STATEMENT_DEBUG_LOG = saved
+  })
+
+  it('включённый флаг реально печатает назначение (обрезанное по капу)', async () => {
+    process.env.STATEMENT_DEBUG_LOG = '1'
+    vi.resetModules()
+    const { liveHandlerDeps } = await import('../server/queue/worker')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    liveHandlerDeps().onOperation?.(demoItem({ purpose: `${SECRET} ${'х'.repeat(500)}` }), { owner: 'none', recognized: 0, activityId: null }, 'M')
+    const line = log.mock.calls.map(c => c.join(' ')).join('\n')
+    expect(line).toContain(SECRET)
+    // Кап держит: одно поле не может залить строку целиком.
+    expect(line).not.toContain('х'.repeat(400))
   })
 })
 
