@@ -1,4 +1,6 @@
 import { evaluateQueueHealth } from './queueAlert'
+import { evaluateBankHealth } from './bankHealthAlert'
+import type { BankHealthRow } from '../../app/utils/bankHealthOverview'
 import { readQueueHealth, type QueueHealthReader } from './queueHealthRead'
 import {
   alertMessage, episodeKey, markAnnounced, markRecovered, planAlertDelivery, recoveryMessage,
@@ -30,6 +32,16 @@ export interface QueueHealthTickDeps {
   error: (message: string) => void
   /** Link appended to an alert, or null when no https site url is configured. */
   queuesUrl?: string | null
+  /**
+   * Банковские подключения по всем порталам (#497 §3). Необязательна: без неё тик работает ровно
+   * как прежде.
+   *
+   * ⚠ Едет ЧЕРЕЗ ЭТОТ ЖЕ ТИК, а не отдельным таймером, намеренно. Второй таймер означал бы второй
+   * не-перекрывающийся страж, второе состояние доставки и вторую пару «объявили/восстановилось»,
+   * пишущую в тот же чат, — то есть удвоение всей механики ради данных, которые меняются РЕЖЕ
+   * очередей. Отказ чтения не должен гасить проверку конвейера, поэтому изолирован.
+   */
+  bankRows?: () => Promise<BankHealthRow[]>
 }
 
 export interface QueueHealthTickResult {
@@ -68,6 +80,16 @@ export async function runQueueHealthTick(
   let plan: ReturnType<typeof planAlertDelivery>
   try {
     const alerts = evaluateQueueHealth(await readQueueHealth(deps.reader, deps.now()), deps.now())
+    // Мёртвые банковские подключения — в тот же канал и тем же механизмом эпизодов. ИЗОЛИРОВАНО:
+    // недоступная база не должна отменять проверку конвейера, которая уже отработала. Молчание
+    // здесь честнее выдумки — состояние подключений мы в этот раз просто не знаем.
+    if (deps.bankRows) {
+      try {
+        alerts.push(...evaluateBankHealth(await deps.bankRows(), deps.now()))
+      } catch (err) {
+        deps.error(`[queue] bank health read failed: ${(err as Error)?.message}`)
+      }
+    }
     deps.record(alerts, deps.now())
     for (const a of alerts) deps.warn(`[queue-alert] ${a.text}`)
     plan = planAlertDelivery(alerts, previous, deps.now())

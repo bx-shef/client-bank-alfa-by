@@ -1,4 +1,6 @@
 import type { QueueAlert } from './queueAlert'
+import type { BankProviderId } from '../../app/types/statement'
+import { BANK_LABELS } from '../../app/utils/bankLabels'
 
 // What actually gets PUSHED out of the queue health check, and when (#426, ported from
 // `ai-price-import`).
@@ -176,11 +178,21 @@ export function markRecovered(state: DeliveryState, key: EpisodeKey): DeliverySt
  *  same chat, so «⚠️ очередь встала» without a subject is unactionable. */
 export const ALERT_APP_NAME = 'Импорт выписки клиент-банка'
 
-/** Human name for an episode key in the recovery notice. */
-const KIND_WORD: Record<string, string> = {
-  stalled: 'простой',
-  failing: 'падения задач',
-  unreadable: 'нечитаемая очередь'
+/**
+ * Готовое предложение «стало хорошо» по типу эпизода.
+ *
+ * ⚠ Раньше здесь был словарь ПОДЛЕЖАЩИХ, который подставлялся в общий шаблон «… — {слово}
+ * прекратились», и по-русски это не сходилось ни в одном падеже: получалось «простой
+ * прекратились» и «нечитаемая очередь прекратились». Восстановление читают ровно один раз и в
+ * тот момент, когда решают «можно выдохнуть», — сообщение обязано быть связным. Целое предложение
+ * на тип эпизода стоит столько же, а склонять уже нечего.
+ */
+const RECOVERY_SENTENCE: Record<string, (subject: string) => string> = {
+  'stalled': s => `очередь «${s}» снова разгребается.`,
+  'failing': s => `очередь «${s}» — задачи перестали падать.`,
+  'unreadable': s => `очередь «${s}» снова читается.`,
+  // Подлежащее здесь — банк, а не очередь; общий шаблон с «очередь «alfa-by»» был бы просто ложью.
+  'bank-dead': s => `${BANK_LABELS[s as BankProviderId] ?? s} — мёртвых подключений больше нет.`
 }
 
 /** Message announcing a new problem. */
@@ -192,7 +204,12 @@ export function alertMessage(a: QueueAlert, appUrl?: string | null): string {
 
 /** Message announcing that a problem is gone. */
 export function recoveryMessage(key: EpisodeKey): string {
-  const [kind, ...rest] = key.split(':')
-  const what = KIND_WORD[kind ?? ''] ?? kind
-  return `✅ ${ALERT_APP_NAME}: очередь «${rest.join(':')}» — ${what} прекратились.`
+  const cut = key.indexOf(':')
+  const kind = cut === -1 ? key : key.slice(0, cut)
+  const subject = cut === -1 ? '' : key.slice(cut + 1)
+  const make = RECOVERY_SENTENCE[kind]
+  // Неизвестный тип эпизода не должен превращаться в бессмыслицу: лучше сухо и верно, чем бойко и
+  // мимо. Такой ключ может появиться только при рассинхроне версий — и это как раз тот момент,
+  // когда сообщение обязано остаться читаемым.
+  return `✅ ${ALERT_APP_NAME}: ${make ? make(subject) : `${subject} — восстановлено.`}`
 }

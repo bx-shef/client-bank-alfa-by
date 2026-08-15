@@ -43,6 +43,67 @@ function deps(over: Partial<QueueHealthTickDeps> & {
 
 const stalledCrm = { 'crm-sync': [45 * MIN] }
 
+// Мёртвое банковское подключение (#497 §3): нет refresh-токена ⇒ продлить нечем, чинит человек.
+const deadBankRow = {
+  memberId: 'M1',
+  provider: 'alfa-by' as const,
+  accountKey: 'BY01',
+  connectedAt: T0,
+  expiresAt: T0 + 3_600_000,
+  hasRefresh: false
+}
+
+describe('мёртвые банковские подключения — в тот же канал (#497 §3)', () => {
+  it('уходят в пуш, а не только на экран', async () => {
+    // Смысл всей правки: карточку на `/queues` надо ОТКРЫТЬ, а refresh Альфы умирает под утро,
+    // когда на экран никто не смотрит.
+    const { d, pushed } = deps({ bankRows: async () => [deadBankRow] })
+    const r = await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(r.announced).toBe(1)
+    expect(pushed.join('\n')).toContain('Альфа-Банк')
+  })
+
+  it('попадают в вердикт для `/queues` тем же списком', async () => {
+    const { d, recorded } = deps({ bankRows: async () => [deadBankRow] })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(recorded[0]?.alerts.map(a => a.kind)).toContain('bank-dead')
+  })
+
+  it('НЕДОСТУПНАЯ БАЗА не отменяет проверку конвейера', async () => {
+    // Отказ чтения подключений изолирован: проверка очередей уже отработала, и терять её вердикт
+    // из-за второго источника нельзя. Молчание про банки честнее выдумки.
+    const { d, pushed, errored, recorded } = deps({
+      pending: stalledCrm,
+      bankRows: async () => { throw new Error('ECONNREFUSED') }
+    })
+    const r = await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(r.failed).toBe(false)
+    expect(r.announced).toBe(1)
+    expect(pushed.join('\n')).toContain('crm-sync')
+    expect(recorded[0]?.alerts.map(a => a.kind)).not.toContain('bank-dead')
+    expect(errored.join('\n')).toContain('bank health read failed')
+  })
+
+  it('без зависимости тик работает ровно как прежде', async () => {
+    const { d, pushed } = deps()
+    const r = await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(r.announced).toBe(0)
+    expect(pushed).toEqual([])
+  })
+
+  it('эпизод НЕ повторяется на каждом тике, а восстановление объявляется', async () => {
+    const broken = deps({ bankRows: async () => [deadBankRow] })
+    const first = await runQueueHealthTick(emptyDeliveryState(), broken.d)
+    const still = deps({ bankRows: async () => [deadBankRow] })
+    const second = await runQueueHealthTick(first.state, still.d)
+    expect(second.announced).toBe(0) // уже сказали — канал, который повторяется, перестают читать
+    const healed = deps({ bankRows: async () => [] })
+    const third = await runQueueHealthTick(second.state, healed.d)
+    expect(third.recovered).toBe(1)
+    expect(healed.pushed.join('\n')).toContain('мёртвых подключений больше нет')
+  })
+})
+
 describe('runQueueHealthTick', () => {
   it('healthy pipeline: records a verdict, logs nothing, sends nothing', async () => {
     const { d, pushed, warned, recorded } = deps()

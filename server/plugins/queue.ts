@@ -374,7 +374,11 @@ export default defineNitroPlugin((nitroApp) => {
             record: recordQueueHealth,
             warn: (m: string) => console.warn(m),
             error: (m: string) => console.error(m),
-            queuesUrl
+            queuesUrl,
+            // Умирающие банковские подключения — в тот же канал (#497 §3). Карточку на `/queues`
+            // надо ОТКРЫТЬ, а refresh Альфы умирает под утро (#488), когда на экран никто не
+            // смотрит: пул-дашборд закрыть критерий «МЫ видим его проблемы» не может.
+            bankRows: () => listAllBankAccountInfo(dbQuery)
           }))
         delivery = result.state
       } catch (err) {

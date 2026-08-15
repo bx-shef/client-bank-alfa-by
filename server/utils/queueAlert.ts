@@ -97,10 +97,15 @@ export const FAILURE_ALERT_THRESHOLD = 3
  *  few jobs an hour, a fifteen-minute window can be empty even while everything is broken. */
 export const FAILURE_WINDOW_MS = 60 * 60 * 1000
 
-export type QueueAlertKind = 'stalled' | 'failing' | 'unreadable'
+/** `bank-dead` — НЕ поломка конвейера, а мёртвые банковские подключения (#497 §3,
+ *  `bankHealthAlert.ts`). Живёт в этом union потому, что доставку (один раз на эпизод, пол на
+ *  переобъявление, «объявлено» = реально доставлено) уже умеет `planAlertDelivery`, и второй такой
+ *  механизм означал бы второй набор его ошибок. */
+export type QueueAlertKind = 'stalled' | 'failing' | 'unreadable' | 'bank-dead'
 
 export interface QueueAlert {
   kind: QueueAlertKind
+  /** Предмет эпизода: имя очереди для поломок конвейера, id провайдера для `bank-dead`. */
   queue: string
   /** Ready-to-show Russian sentence; the caller decides where it goes. */
   text: string

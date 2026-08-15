@@ -1,6 +1,6 @@
 # Наши HTTP-роуты: авторизация и коды
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-15
 
 Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
 [`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.
@@ -56,6 +56,7 @@
 | POST | `/api/feedback` | F | нет | 200, 202 (outbox), 400, 403, 409, 502, 503 | `import` |
 | GET | `/api/queues` | **T** | — | 200, 403 | `deny all` |
 | GET | `/api/ops/queues` | S | — | 200, 401 | — |
+| GET | `/api/ops/bank-health` | S | — | 200, 401, 503 | — |
 | GET | `/api/ops/app-rating` | S | — | 200, 401, 502 | — |
 | POST | `/api/ops/app-rating` | **S+C** | — | 200, 400, 401, 403 | — |
 
