@@ -113,6 +113,8 @@ describe('маркер проверяется на деле, а не на сло
   // вечно, в CRM клиента. Юнит-тесты этого исключить не могут (они не знают, что реальный портал
   // делает с этими полями), поэтому код проверяет сам — один раз на портал на процесс.
   beforeEach(resetMarkerProof)
+  /** Ретрай проверки не должен тратить реальные секунды в тестах. */
+  const noSleep = async () => {}
 
   const subject = item({ docId: 'v1' })
 
@@ -127,26 +129,42 @@ describe('маркер проверяется на деле, а не на сло
     return { call, seen }
   }
 
+  it('лаг индексации не хоронит здоровый портал: со второй попытки маркер найден', async () => {
+    // «Не нашлось сразу» и «не ставится» — разные факты, и бросать джобу заслуживает только второй.
+    // Одноразовая проверка провалила бы ПЕРВУЮ джобу каждого исправного портала.
+    let listCalls = 0
+    const call = async (method: string) => {
+      if (method === TODO_ACTIVITY_ADD_METHOD) return { result: { id: 77 } }
+      if (method === ACTIVITY_LIST_METHOD) {
+        listCalls += 1
+        return { result: listCalls >= 2 ? [{ ID: 77 }] : [] }
+      }
+      return { result: true }
+    }
+    expect(await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1', noSleep)).toBe('77')
+    expect(listCalls).toBe(2)
+  })
+
   it('маркер находится — запись успешна, проверка больше не повторяется', async () => {
     const { call, seen } = calls(true)
-    expect(await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1')).toBe('77')
+    expect(await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1', noSleep)).toBe('77')
     expect(seen.filter(m => m === ACTIVITY_LIST_METHOD)).toHaveLength(1)
 
     // Второй платёж того же портала проверку уже не платит.
-    await writeTodoActivityViaRest(item({ docId: 'v2' }), '5', call, undefined, 'M1')
+    await writeTodoActivityViaRest(item({ docId: 'v2' }), '5', call, undefined, 'M1', noSleep)
     expect(seen.filter(m => m === ACTIVITY_LIST_METHOD)).toHaveLength(1)
   })
 
   it('маркер НЕ находится — падаем громко, а не копим дубли молча', async () => {
     const { call } = calls(false)
-    await expect(writeTodoActivityViaRest(subject, '5', call, undefined, 'M1'))
-      .rejects.toThrow(/маркер|marker/i)
+    await expect(writeTodoActivityViaRest(subject, '5', call, undefined, 'M1', noSleep))
+      .rejects.toThrow(/marker/i)
   })
 
   it('каждый портал проверяется отдельно — поведение может отличаться', async () => {
     const { call, seen } = calls(true)
-    await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1')
-    await writeTodoActivityViaRest(subject, '5', call, undefined, 'M2')
+    await writeTodoActivityViaRest(subject, '5', call, undefined, 'M1', noSleep)
+    await writeTodoActivityViaRest(subject, '5', call, undefined, 'M2', noSleep)
     expect(seen.filter(m => m === ACTIVITY_LIST_METHOD)).toHaveLength(2)
   })
 

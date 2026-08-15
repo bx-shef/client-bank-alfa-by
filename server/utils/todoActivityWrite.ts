@@ -33,6 +33,11 @@ import type { RestCall } from './companyLookup'
  */
 const markerProven = new Set<string>()
 
+/** How hard the proof tries before calling the marker absent — see the retry note in
+ *  `verifyMarkerOnce`. Runs once per portal per process, so the budget is generous on purpose. */
+export const MARKER_VERIFY_ATTEMPTS = 3
+export const MARKER_VERIFY_DELAY_MS = 1000
+
 /** Exposed for tests — a module-level cache would otherwise leak between cases. */
 export function resetMarkerProof(): void {
   markerProven.clear()
@@ -57,18 +62,33 @@ export function resetMarkerProof(): void {
  * ⚠ Failure to VERIFY (transport error) is not failure to mark: it is rethrown by `call` and
  * handled as any other transient error. Only a definite «not found» is treated as proof of absence.
  */
-async function verifyMarkerOnce(item: StatementItem, memberId: string, call: RestCall): Promise<void> {
+async function verifyMarkerOnce(
+  item: StatementItem,
+  memberId: string,
+  call: RestCall,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms))
+): Promise<void> {
   if (markerProven.has(memberId)) return
-  const found = await findActivityByMarker(ACTIVITY_ORIGINATOR_ID, dedupKey(item), call)
-  if (!found) {
-    throw new Error(
-      '[activity] the dedup marker did not stick: the activity was created and updated without error, '
-      + 'but a search by ORIGINATOR_ID/ORIGIN_ID does not find it. Every operation would be written '
-      + 'again on every run. Check that crm.activity.update may set these fields on this portal '
-      + '(pnpm activity:test --company <id> --apply).'
-    )
+  const key = dedupKey(item)
+  // ⚠ RETRIED, because «not found immediately» and «not settable» are different facts and only the
+  // second one deserves a thrown job. We are reading back a field written a moment ago through a
+  // different method; if the portal needs a beat to make it searchable, a single-shot check would
+  // fail the FIRST job of every healthy portal — turning a safety net into an outage. Three tries
+  // over a couple of seconds cost nothing (this runs once per portal per process) and leave only
+  // the genuine case: the update reported success and the field is simply not there.
+  for (let attempt = 1; attempt <= MARKER_VERIFY_ATTEMPTS; attempt += 1) {
+    if (await findActivityByMarker(ACTIVITY_ORIGINATOR_ID, key, call)) {
+      markerProven.add(memberId)
+      return
+    }
+    if (attempt < MARKER_VERIFY_ATTEMPTS) await sleep(MARKER_VERIFY_DELAY_MS)
   }
-  markerProven.add(memberId)
+  throw new Error(
+    '[activity] the dedup marker did not stick: the activity was created and updated without error, '
+    + 'but a search by ORIGINATOR_ID/ORIGIN_ID does not find it. Every operation would be written '
+    + 'again on every run. Check that crm.activity.update may set these fields on this portal '
+    + '(pnpm activity:test --company <id> --apply).'
+  )
 }
 
 /**
@@ -102,7 +122,9 @@ export async function writeTodoActivityViaRest(
   note?: string,
   /** Portal id — used only to prove the marker mechanism once per process (`verifyMarkerOnce`).
    *  Omitted ⇒ no verification (keeps the smoke script and older callers working unchanged). */
-  memberId?: string
+  memberId?: string,
+  /** Injected only by tests, so the retry loop does not spend real seconds. */
+  sleep?: (ms: number) => Promise<void>
 ): Promise<string | null> {
   const params = buildTodoActivity(item, { id: Number(companyId) }, note)
   const added = await call(TODO_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
@@ -130,6 +152,6 @@ export async function writeTodoActivityViaRest(
   // Проверяется ПОСЛЕ успешной маркировки и только один раз на портал: см. `verifyMarkerOnce`.
   // Сирота при провале проверки не остаётся — дело промаркировано, просто найти его не удалось;
   // повторный прогон найдёт его по маркеру, если механизм всё-таки работает, и не задвоит.
-  if (memberId) await verifyMarkerOnce(item, memberId, call)
+  if (memberId) await verifyMarkerOnce(item, memberId, call, sleep)
   return id
 }
