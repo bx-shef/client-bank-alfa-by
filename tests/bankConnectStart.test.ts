@@ -31,7 +31,9 @@ function deps(over: Partial<ConnectStartDeps> = {}): ConnectStartDeps {
     validateFrame: async () => ({ userId: 'USER9', isAdmin: true }),
     config: () => CONFIG,
     priorConfig: () => null, // Prior unconfigured by default; the Prior tests opt in
-    buildPriorUrl: async (_c, state) => `https://prior:9344/authorize?state=${state}&request=JWT`,
+    // Подписчик, а не строка (#503): дату согласия можно положить в state только ЗДЕСЬ, после
+    // ответа банка. Фейк изображает банк, вернувший срок.
+    buildPriorUrl: async (_c, signState) => `https://prior:9344/authorize?state=${signState({ consentExpiresAt: PRIOR_CONSENT_AT })}&request=JWT`,
     secret: SECRET,
     ...over
   }
@@ -41,6 +43,8 @@ const input = {
   accessToken: 'TKN', domain: 'p.bitrix24.by', provider: 'alfa-by' as const,
   accountKey: 'BY13ALFA', nonce: 'nonce123', nowMs: now
 }
+
+const PRIOR_CONSENT_AT = 1_800_000_000_000
 
 describe('bankConnectConfigFromEnv', () => {
   const KEYS = ['ALFA_OAUTH_CLIENT_ID', 'ALFA_OAUTH_TOKEN_URL', 'ALFA_OAUTH_REDIRECT_URI', 'ALFA_OAUTH_SCOPE']
@@ -87,16 +91,22 @@ describe('handleBankConnectStart — Prior (A5b, live preamble)', () => {
   })
 
   it('runs the preamble and returns its authorize URL, passing the SIGNED state', async () => {
-    const buildPriorUrl = vi.fn(async (_c: unknown, state: string) => `https://prior/auth?state=${state}`)
+    // Преамбуле передаётся ПОДПИСЧИК, а не готовая строка (#503): дату согласия видно только
+    // здесь, после ответа банка, и положить её в state можно лишь в этот момент.
+    type Sign = (extra: { consentExpiresAt: number | null }) => string
+    const buildPriorUrl = vi.fn(async (_c: unknown, sign: Sign) =>
+      `https://prior/auth?state=${sign({ consentExpiresAt: PRIOR_CONSENT_AT })}`)
     const r = await handleBankConnectStart(deps({ priorConfig: () => PRIOR_CONFIG, buildPriorUrl }), priorInput)
     expect(r.status).toBe(200)
     expect(buildPriorUrl).toHaveBeenCalledOnce()
     // The state handed to the preamble is our signed state and verifies back to OUR memberId.
-    const state = buildPriorUrl.mock.calls[0]![1]
+    const state = buildPriorUrl.mock.calls[0]![1]({ consentExpiresAt: PRIOR_CONSENT_AT })
     const verified = verifyConnectState(state, SECRET, now)
     expect(verified?.memberId).toBe('MEMBER1')
     expect(verified?.provider).toBe('prior-by')
     expect(verified?.accountKey).toBe('BY13ALFA')
+    // Срок согласия доехал в подписанном state — иначе колбэку неоткуда его взять.
+    expect(verified?.consentExpiresAt).toBe(PRIOR_CONSENT_AT)
     expect(r.body.authorizeUrl).toContain(state)
     // Prior's config is used — the Alfa config is NOT consulted for a Prior connect.
     expect(buildPriorUrl.mock.calls[0]![0]).toEqual(PRIOR_CONFIG)

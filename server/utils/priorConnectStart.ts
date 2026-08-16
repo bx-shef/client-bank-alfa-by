@@ -23,6 +23,7 @@ import {
   buildConsentRequest,
   buildPriorAuthorizeUrl,
   extractIntentId,
+  extractConsentExpiry,
   parsePriorTokenResponse,
   priorTokenRequest,
   PRIOR_API_PREFIXES
@@ -159,7 +160,15 @@ export function priorConsentExpiry(nowMs: number, days = PRIOR_CONSENT_DAYS): st
  */
 export async function buildPriorConnectUrl(
   config: PriorConnectConfig,
-  state: string,
+  /**
+   * Подписать `state`, УЖЕ ЗНАЯ срок согласия (#503).
+   *
+   * ⚠ Колбэк, а не готовая строка, ровно из-за порядка: согласие создаётся на шаге 2, а `state`
+   * нужен только на шаге 3. Подписав раньше, мы бы не смогли положить в него дату — а другого
+   * пути донести её до колбэка нет: между стартом и возвратом из банка у нас нет своего хранилища,
+   * и подписанный state — единственное, чему колбэк вправе верить.
+   */
+  signState: (extra: { consentExpiresAt: number | null }) => string,
   deps: PriorConnectDeps,
   nowMs: number
 ): Promise<string> {
@@ -186,6 +195,11 @@ export async function buildPriorConnectUrl(
   )
   const intentId = extractIntentId(consentRaw)
   if (!intentId) throw new Error('priorConnect: consent response carried no intent id')
+  // Срок согласия берём ИЗ ОТВЕТА банка: просили мы своё (`priorConsentExpiry`), но банк волен
+  // урезать запрошенное и отвечает тем, что реально выдал. `null` — поля не было; выдумывать дату
+  // нельзя, «неизвестно» честнее (#503).
+  const consentExpiresAt = extractConsentExpiry(consentRaw)
+  const state = signState({ consentExpiresAt })
 
   // 3) sign the authorize `request` JWT (binds the consent to the authorization).
   const claims = buildAuthorizeRequestClaims({

@@ -5,7 +5,7 @@ import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMatrix'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
-import { connectionHealth, connectionHealthBadge } from '~/utils/bankTokenLifetime'
+import { connectionHealth, connectionHealthBadge, consentExpiringSoon } from '~/utils/bankTokenLifetime'
 
 // Connected bank accounts, with a per-row disconnect (#404). Lives inside BankConnectCard, above
 // the connect form, so the admin sees what is already bound BEFORE adding another account —
@@ -75,6 +75,31 @@ function connectedAgo(ms: number): string {
  *  в интерфейсе рисовало бы зелёное на подключении, которое сервер уже похоронил. */
 function healthBadge(a: ConnectedBankAccount) {
   return connectionHealthBadge(connectionHealth(a, Date.now()))
+}
+
+/**
+ * Строка про согласие банка (#503) или `''`, когда сказать нечего.
+ *
+ * ⚠ Молчим, если даты нет: у Альфы согласий не бывает вовсе, и прочерк на её строке был бы
+ * выдуманной сущностью. Молчим и об истёкшем — про него уже кричит бейдж состояния, а вторая
+ * надпись рядом только размывает единственное действие.
+ *
+ * ⚠ Предупреждаем ЗА НЕДЕЛЮ: продлевает согласие не администратор, который смотрит на этот экран,
+ * а владелец счёта — заходя в интернет-банк. За день такое не организуешь, и предупреждение
+ * накануне стало бы уведомлением об уже неизбежном простое.
+ */
+function consentLine(a: ConnectedBankAccount): string {
+  const at = a.consentExpiresAt
+  if (!at || !Number.isFinite(at) || at <= Date.now()) return ''
+  const until = new Date(at).toLocaleDateString('ru-RU')
+  return consentExpiringSoon(a, Date.now())
+    ? `согласие банка истекает ${until} — потребуется вход владельца счёта в интернет-банк`
+    : `согласие банка действует до ${until}`
+}
+
+/** Скоро ли истекает согласие — от этого зависит только тон строки, не её наличие. */
+function consentSoon(a: ConnectedBankAccount): boolean {
+  return consentExpiringSoon(a, Date.now())
 }
 
 /** Подпись строки для скринридера. Временный ключ служебный — озвучивать его бессмысленно. */
@@ -230,6 +255,17 @@ defineExpose({ reload: load })
               class="text-xs text-(--ui-color-base-3)"
             >
               подключён {{ connectedAgo(a.connectedAt) }}
+            </div>
+            <!-- Срок согласия банка (#503): другие часы, чем у токена, и продлить его может только
+                 владелец счёта из интернет-банка — поэтому предупреждаем заранее, а не по факту. -->
+            <div
+              v-if="consentLine(a)"
+              class="text-xs"
+              :class="consentSoon(a)
+                ? 'text-(--ui-color-accent-main-warning)'
+                : 'text-(--ui-color-base-3)'"
+            >
+              {{ consentLine(a) }}
             </div>
           </div>
 

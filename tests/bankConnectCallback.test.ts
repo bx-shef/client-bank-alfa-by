@@ -77,8 +77,27 @@ describe('handleBankConnectCallback', () => {
     expect(exchangeToken).toHaveBeenCalledTimes(1)
     expect(saved).toEqual([{
       memberId: 'M1', provider: 'alfa-by', accountKey: 'BY13ALFA',
-      accessToken: 'AT', refreshToken: 'RT', expiresAt: now + 3600 * 1000
+      accessToken: 'AT', refreshToken: 'RT', expiresAt: now + 3600 * 1000,
+      // Альфа согласий не выдаёт ⇒ 0 = «неизвестно» (#503). Не «истекло»: иначе подключение
+      // хоронилось бы прямо в момент создания.
+      consentExpiresAt: 0
     }])
+  })
+
+  it('срок согласия из ПРОВЕРЕННОГО state доезжает до стора (#503)', async () => {
+    // Между стартом подключения и возвратом из банка своего состояния у нас нет — подписанный
+    // state единственный канал. Потеряйся дата здесь, вся цепочка снова жила бы догадкой.
+    const at = 1_800_000_000_000
+    const { deps: d, saved } = deps()
+    // Провайдер здесь `alfa-by` не по смыслу, а по механике: у Приора обмен кода идёт своей
+    // веткой с отдельной конфигурацией, а проверяется тут именно ПРОВОДКА даты из state в стор —
+    // она общая для обоих банков и от провайдера не зависит.
+    const state = signConnectState(
+      { memberId: 'M1', provider: 'alfa-by', accountKey: 'BY13', nonce: 'n1', exp: now + 60_000, consentExpiresAt: at },
+      SECRET
+    )
+    await handleBankConnectCallback(d, { query: { code: 'C', state }, nowMs: now })
+    expect(saved[0]?.consentExpiresAt).toBe(at)
   })
 
   it('400 + no exchange when the state is missing/invalid/expired', async () => {

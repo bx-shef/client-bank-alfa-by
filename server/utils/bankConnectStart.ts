@@ -73,7 +73,7 @@ export interface ConnectStartDeps {
   /** Run Prior's async preamble (token Б → consent → signed request JWT) and return the authorize
    *  URL. Injected so this handler stays testable without network/crypto; throws on any step
    *  failure (mapped to 502 — never a half-built URL). */
-  buildPriorUrl: (config: PriorConnectConfig, state: string, nowMs: number) => Promise<string>
+  buildPriorUrl: (config: PriorConnectConfig, signState: (extra: { consentExpiresAt: number | null }) => string, nowMs: number) => Promise<string>
   /** HMAC secret for the connect state (the operator SESSION_SECRET). Empty ⇒ fail-closed. */
   secret: string
   /** Whether the portal has a company marked «моя» with a settlement account (#493).
@@ -192,14 +192,21 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     nonce,
     exp: nowMs + (input.ttlMs ?? CONNECT_STATE_TTL_MS)
   }
-  const signed = signConnectState(state, deps.secret)
+  // ⚠ Подписываем ЗДЕСЬ только для Альфы. У Приора дата согласия становится известна лишь в
+  // середине преамбулы, поэтому подпись отдаётся туда колбэком — иначе в state нечего было бы
+  // положить, а другого канала до колбэка нет (#503).
+  const signWith = (extra: { consentExpiresAt: number | null }): string =>
+    signConnectState(
+      { ...state, ...(extra.consentExpiresAt ? { consentExpiresAt: extra.consentExpiresAt } : {}) },
+      deps.secret
+    )
 
   // Prior: the authorize URL needs a LIVE preamble (token Б → consent → signed request JWT), so a
   // bank-side failure is a 502 (upstream), not a 400 — the request itself was well-formed. The
   // error text is ours (the pure core's), never the raw bank response.
   if (priorConfig) {
     try {
-      const authorizeUrl = await deps.buildPriorUrl(priorConfig, signed, nowMs)
+      const authorizeUrl = await deps.buildPriorUrl(priorConfig, signWith, nowMs)
       return { status: 200, body: { authorizeUrl } }
     } catch (e) {
       // Log SANITIZED (CRLF-stripped, capped) so the four preamble steps stay distinguishable in
@@ -213,6 +220,6 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   }
 
   // Alfa: a pure string build — no bank round-trip needed to start.
-  const authorizeUrl = buildAuthorizeUrl(config!, signed)
+  const authorizeUrl = buildAuthorizeUrl(config!, signWith({ consentExpiresAt: null }))
   return { status: 200, body: { authorizeUrl } }
 }

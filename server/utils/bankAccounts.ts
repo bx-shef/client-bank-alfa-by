@@ -112,7 +112,10 @@ export async function handleListBankAccounts(deps: ListAccountsDeps, input: Bank
         accountKey: a.accountKey,
         connectedAt: a.connectedAt,
         expiresAt: a.expiresAt,
-        hasRefresh: a.hasRefresh
+        hasRefresh: a.hasRefresh,
+        // Срок согласия банка (#503). 0 — банк его не выдаёт (Альфа) либо подключение сделано до
+        // этой правки; интерфейс тогда о согласии молчит, а не рисует прочерк.
+        consentExpiresAt: a.consentExpiresAt
       }))
     }
   }

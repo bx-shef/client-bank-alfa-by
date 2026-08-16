@@ -27,7 +27,7 @@
 //      scan and counted separately — that count is the thing worth showing an admin.
 
 import type { BankProviderId } from '../../app/types/statement'
-import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
+import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 import { sanitizeForLog } from './logSanitize'
 
@@ -36,7 +36,7 @@ const HOUR_MS = 3_600_000
 // ⚠ Lifetimes and the renew band live in `app/utils/bankTokenLifetime.ts`, not here: the settings
 // UI decides what to show an admin from the SAME numbers. Let them drift and you get exactly the
 // failure this module was written for — a calm green row on a connection the server already buried.
-export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, refreshAtAgeMs }
+export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, KEEP_ALIVE_BAND, refreshAtAgeMs }
 
 /** Max accounts refreshed per run — bounds the burst against the bank's OAuth endpoint the same
  *  way the portal keep-alive bounds Bitrix. Deliberately generous relative to `bank_tokens`
@@ -143,6 +143,15 @@ export function selectBankAccountsNearExpiry(
   const ordered = [...rows].sort((a, b) => a.connectedAt - b.connectedAt)
   for (const row of ordered) {
     const ref: BankAccountRef = { memberId: row.memberId, provider: row.provider, accountKey: row.accountKey }
+    // ⚠ СОГЛАСИЕ — ПЕРВЫМ, раньше всех оценок по возрасту токена (#503). Это не наша догадка о
+    // сроке, а дата, которую выдал сам банк: когда она прошла, обновлять нечего — грант мёртв, и
+    // помочь может только вход владельца счёта в интернет-банк. Продолжать слать сюда refresh
+    // значило бы тратить лимит банка на запрос, который не может удаться, — то самое, ради чего
+    // ниже заведён пол по измеренному сроку, только здесь мы знаем это ТОЧНО.
+    if (consentExpired(row, nowMs)) {
+      expired.push(ref)
+      continue
+    }
     if (!row.hasRefresh) {
       unrefreshable.push(ref)
       continue

@@ -6,6 +6,7 @@ import {
   getBankToken,
   listAllBankAccountInfo,
   listAllBankAccounts,
+  listBankAccountInfoForPortal,
   listBankTokensForPortal,
   saveBankToken,
   updateBankTokenSecrets
@@ -23,7 +24,9 @@ const token: BankToken = {
   accountKey: 'MC_7',
   accessToken: 'ACCESS',
   refreshToken: 'REFRESH',
-  expiresAt: 1_700_000_000_000
+  expiresAt: 1_700_000_000_000,
+  // 0 = согласия нет (Альфа) — см. #503. Не «истекло»: по нулю никого не хоронят.
+  consentExpiresAt: 0
 }
 
 /** Fake query fn that records every call and returns `rows` for SELECT/RETURNING. */
@@ -45,7 +48,7 @@ async function storedRow(t: BankToken = token): Promise<Record<string, unknown>>
   const p = insert.params as unknown[]
   return {
     member_id: p[0], provider: p[1], account_key: p[2],
-    access_token: p[3], refresh_token_enc: p[4], expires_at: p[5]
+    access_token: p[3], refresh_token_enc: p[4], expires_at: p[5], consent_expires_at: p[6]
   }
 }
 
@@ -61,6 +64,44 @@ describe('saveBankToken', () => {
     // refresh stored ENCRYPTED (not the plaintext), and decrypts back to the original
     expect(p[4]).not.toBe('REFRESH')
     expect(decryptSecret(String(p[4]))).toBe('REFRESH')
+  })
+
+  it('САМ SQL хранит правило «неизвестное не затирает известное» (#503)', () => {
+    // ⚠ Проверяем ТЕКСТ запроса, а не поведение через `memStore`: тот — рукописный фейк со своей
+    // merge-логикой, поэтому подмена CASE WHEN на прямое присваивание проходила его тестами
+    // зелёной. Тот же приём уже применён рядом (`renameBankTokenAccount` и `updated_at`).
+    const { query, calls } = fakeQuery()
+    void saveBankToken(query, token)
+    expect(calls[0]!.sql).toMatch(/CASE WHEN EXCLUDED\.consent_expires_at > 0/)
+    expect(calls[0]!.sql).toMatch(/ELSE bank_tokens\.consent_expires_at END/)
+  })
+})
+
+describe('listBankAccountInfoForPortal — проекция для экрана настроек', () => {
+  // ⚠ Именно она стоит за живым `GET /api/bank/accounts`, и до этого теста не вызывалась НИ ОДНИМ
+  // тестом: соседняя `listAllBankAccountInfo` (её зовёт keep-alive) — другая функция.
+  it('отдаёт свежесть и срок согласия, без единого секрета', async () => {
+    const { query } = fakeQuery([{
+      member_id: 'M1', provider: 'prior-by', account_key: 'BY13',
+      expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000),
+      has_refresh: true, consent_expires_at: '1800000000000',
+      access_token: 'SECRET', refresh_token_enc: 'SECRET'
+    }])
+    const [row] = await listBankAccountInfoForPortal(query, 'M1')
+    expect(row).toEqual({
+      memberId: 'M1', provider: 'prior-by', accountKey: 'BY13',
+      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000,
+      hasRefresh: true, consentExpiresAt: 1_800_000_000_000
+    })
+    expect(JSON.stringify(row)).not.toContain('SECRET')
+  })
+
+  it('колонки нет в строке ⇒ 0 = «неизвестно», а не «истекло»', async () => {
+    const { query } = fakeQuery([{
+      member_id: 'M1', provider: 'alfa-by', account_key: 'BY01',
+      expires_at: '1', updated_at: new Date(1), has_refresh: true
+    }])
+    expect((await listBankAccountInfoForPortal(query, 'M1'))[0]!.consentExpiresAt).toBe(0)
   })
 })
 
@@ -232,9 +273,14 @@ function memStore(clock = { now: 1_700_000_000_000 }) {
     const p = params as string[]
     if (/^INSERT INTO bank_tokens/.test(sql)) {
       const [member_id, provider, account_key, access_token, refresh_token_enc, expires_at] = p
+      const prev = rows.get(key(member_id, provider, account_key))
+      const consent = p[6]
       rows.set(key(member_id, provider, account_key), {
         member_id, provider, account_key, access_token, refresh_token_enc,
         expires_at: String(expires_at), // pg int8 → string
+        // Модель CASE WHEN EXCLUDED.consent_expires_at > 0 … — ноль значит «неизвестно» и не
+        // должен стирать уже известную дату (#503).
+        consent_expires_at: Number(consent) > 0 ? String(consent) : String(prev?.consent_expires_at ?? 0),
         updated_at: new Date(clock.now)
       })
       return []
@@ -393,9 +439,21 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
     const [row] = await listAllBankAccountInfo(query)
     expect(row).toEqual({
       memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001',
-      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true
+      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true,
+      // Колонки в строке нет (Альфа согласий не выдаёт) ⇒ 0 = «неизвестно». Именно 0, а не
+      // `undefined`: ноль читается правилами как «даты нет», и подключение не хоронится (#503).
+      consentExpiresAt: 0
     })
     expect(JSON.stringify(row)).not.toContain('SECRET')
+  })
+
+  it('срок согласия доезжает из строки (#503)', async () => {
+    // Без этого дата тихо терялась бы по дороге, а экран и keep-alive продолжали бы жить догадкой.
+    const query = async () => [{
+      member_id: 'M1', provider: 'prior-by', account_key: 'A',
+      expires_at: '1', updated_at: new Date(1), has_refresh: true, consent_expires_at: '1800000000000'
+    }]
+    expect((await listAllBankAccountInfo(query))[0]!.consentExpiresAt).toBe(1_800_000_000_000)
   })
 
   it('`has_refresh` не true → false, а не «похоже на правду»', async () => {
@@ -494,5 +552,39 @@ describe('updateBankTokenSecrets — UPDATE-only (#505)', () => {
     for (const [m, p, a] of [['m1', 'alfa-by', 'MC_8'], ['m1', 'prior-by', 'MC_7'], ['m2', 'alfa-by', 'MC_7']] as const) {
       expect((await getBankToken(q, m, p, a))!.accessToken, `${m}/${p}/${a}`).toBe('ACCESS')
     }
+  })
+})
+
+describe('срок согласия в сторе (#503)', () => {
+  it('дата сохраняется и читается обратно', async () => {
+    const q = memStore()
+    await saveBankToken(q, { ...token, consentExpiresAt: 1_800_000_000_000 })
+    expect((await getBankToken(q, 'm1', 'alfa-by', 'MC_7'))!.consentExpiresAt).toBe(1_800_000_000_000)
+  })
+
+  it('ПЕРЕПОДКЛЮЧЕНИЕ без даты НЕ затирает уже известную', async () => {
+    // ⚠ Ответ банка без expirationDate — транзиентная аномалия. Прямое присваивание стёрло бы
+    // реальный срок: подключение осталось бы живым, но предупреждение «истекает через неделю»
+    // пропало бы до следующего удачного цикла. Неизвестное не может отменять знание.
+    const q = memStore()
+    await saveBankToken(q, { ...token, consentExpiresAt: 1_800_000_000_000 })
+    await saveBankToken(q, { ...token, accessToken: 'A2', consentExpiresAt: 0 })
+    const got = await getBankToken(q, 'm1', 'alfa-by', 'MC_7')
+    expect(got!.accessToken).toBe('A2')
+    expect(got!.consentExpiresAt).toBe(1_800_000_000_000)
+  })
+
+  it('НОВАЯ дата известную заменяет — продление согласия должно доезжать', async () => {
+    const q = memStore()
+    await saveBankToken(q, { ...token, consentExpiresAt: 1_800_000_000_000 })
+    await saveBankToken(q, { ...token, consentExpiresAt: 1_900_000_000_000 })
+    expect((await getBankToken(q, 'm1', 'alfa-by', 'MC_7'))!.consentExpiresAt).toBe(1_900_000_000_000)
+  })
+
+  it('обновление токена (#505) даты НЕ трогает', async () => {
+    const q = memStore()
+    await saveBankToken(q, { ...token, consentExpiresAt: 1_800_000_000_000 })
+    await updateBankTokenSecrets(q, { ...token, accessToken: 'A3', consentExpiresAt: 0 })
+    expect((await getBankToken(q, 'm1', 'alfa-by', 'MC_7'))!.consentExpiresAt).toBe(1_800_000_000_000)
   })
 })

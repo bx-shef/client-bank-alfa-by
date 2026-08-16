@@ -245,7 +245,7 @@ describe('priorConnectConfigFromEnv', () => {
 describe('buildPriorConnectUrl', () => {
   it('runs token Б → consent → sign → authorize and returns the URL', async () => {
     const { deps, calls } = fakeDeps()
-    const url = await buildPriorConnectUrl(config, 'SIGNED-STATE', deps, NOW_MS)
+    const url = await buildPriorConnectUrl(config, () => 'SIGNED-STATE', deps, NOW_MS)
 
     // 1) token Б: client_credentials + scope=accounts, creds in the Basic HEADER (NOT the body)
     expect(calls.tokenUrl[0]).toBe(config.tokenUrl)
@@ -282,12 +282,42 @@ describe('buildPriorConnectUrl', () => {
     expect(url).not.toContain('PRIVATE KEY')
   })
 
+  it('срок согласия ИЗ ОТВЕТА банка доезжает до подписчика state (#503)', async () => {
+    // ⚠ Все прочие тесты передают `signState` как `() => '…'`, то есть аргумент игнорируют — а
+    // значит удаление `extractConsentExpiry` из преамбулы проходило зелёным. Здесь подписчик —
+    // шпион: проверяется РОВНО то, с чем его позвали.
+    // ⚠ Банк отвечает НЕ ТЕМ, что мы просили: просим `2026-10-26` (90 дней), он выдаёт короче.
+    // Так тест доказывает главное — берём ОТВЕТ, а не свою просьбу; иначе разницы было бы не видно.
+    const { deps, calls } = fakeDeps({
+      consentRaw: { data: { consentId: 'INTENT-9', expirationDate: '2026-09-01' } }
+    })
+    const seen: Array<{ consentExpiresAt: number | null }> = []
+    await buildPriorConnectUrl(config, (extra) => {
+      seen.push(extra)
+      return 'SIGNED-STATE'
+    }, deps, NOW_MS)
+    expect(seen).toHaveLength(1) // подписываем ровно один раз
+    expect(seen[0]!.consentExpiresAt).toBe(Date.parse('2026-09-01T23:59:59.999+03:00'))
+    // И это точно не то, что мы просили:
+    expect((calls.consentBody[0] as { data: { expirationDate: string } }).data.expirationDate).toBe('2026-10-26')
+  })
+
+  it('банк срока не вернул — подписываем `null`, дату НЕ выдумываем', async () => {
+    const { deps } = fakeDeps() // фейк по умолчанию отвечает без expirationDate
+    const seen: Array<{ consentExpiresAt: number | null }> = []
+    await buildPriorConnectUrl(config, (extra) => {
+      seen.push(extra)
+      return 'S'
+    }, deps, NOW_MS)
+    expect(seen[0]!.consentExpiresAt).toBeNull()
+  })
+
   // #444: token Б is the FOURTH client_secret_basic site and the easiest to miss (it lives in the
   // connect preamble, not the «token» modules). DCR registers ONE method per app, so leaving this
   // call on Basic breaks prod at the FIRST step — before any other migrated site is reached.
   it('private_key_jwt: token Б sends a signed client_assertion in the BODY, no Basic header', async () => {
     const { deps, calls } = fakeDeps()
-    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, 'SIGNED-STATE', deps, NOW_MS)
+    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, () => 'SIGNED-STATE', deps, NOW_MS)
 
     const body = new URLSearchParams(calls.tokenBody[0]!)
     expect(body.get('grant_type')).toBe('client_credentials')
@@ -312,8 +342,8 @@ describe('buildPriorConnectUrl', () => {
 
   it('private_key_jwt: each token call mints a FRESH assertion (single-use jti)', async () => {
     const { deps, calls } = fakeDeps()
-    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, 'S1', deps, NOW_MS)
-    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, 'S2', deps, NOW_MS)
+    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, () => 'S1', deps, NOW_MS)
+    await buildPriorConnectUrl({ ...config, authMethod: 'private_key_jwt' }, () => 'S2', deps, NOW_MS)
     const first = calls.signed[0]!.payload as Record<string, unknown>
     const third = calls.signed[2]!.payload as Record<string, unknown> // [0]=assertion, [1]=request, [2]=assertion
     expect(first.jti).not.toBe(third.jti)
@@ -329,7 +359,7 @@ describe('buildPriorConnectUrl', () => {
         tokenUrl: 'http://avtunproxy:1080/open-banking-authorize/v1.0/oauth2/token',
         authorizeBaseUrl: 'https://apibel.priorbank.by:9345'
       },
-      'SIGNED-STATE', deps, NOW_MS
+      () => 'SIGNED-STATE', deps, NOW_MS
     )
     expect(calls.tokenUrl[0]).toContain('http://avtunproxy:1080')
     expect(calls.consentUrl[0]).toContain('http://avtunproxy:1080')
@@ -351,7 +381,7 @@ describe('buildPriorConnectUrl', () => {
         tokenUrl: 'http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token',
         authorizeBaseUrl: 'https://apibel.priorbank.by:9345'
       },
-      'SIGNED-STATE', deps, NOW_MS
+      () => 'SIGNED-STATE', deps, NOW_MS
     )
     expect(calls.tokenUrl[0]).toBe('http://crypto-gw:1080/open-banking-authorize/v1.0/oauth2/token')
     expect(calls.consentUrl[0]).toBe(`https://api.priorbank.by:9344${PRIOR_API_PREFIXES.OB}/accountConsents`)
@@ -359,12 +389,12 @@ describe('buildPriorConnectUrl', () => {
 
   it('throws on an OAuth error payload from the token step (never a half-built URL)', async () => {
     const { deps } = fakeDeps({ tokenRaw: { error: 'invalid_client', error_description: 'bad creds' } })
-    await expect(buildPriorConnectUrl(config, 'S', deps, NOW_MS)).rejects.toThrow(/invalid_client/)
+    await expect(buildPriorConnectUrl(config, () => 'S', deps, NOW_MS)).rejects.toThrow(/invalid_client/)
   })
 
   it('throws when the consent response carries no intent id', async () => {
     const { deps } = fakeDeps({ consentRaw: { data: {} } })
-    await expect(buildPriorConnectUrl(config, 'S', deps, NOW_MS)).rejects.toThrow(/no intent id/)
+    await expect(buildPriorConnectUrl(config, () => 'S', deps, NOW_MS)).rejects.toThrow(/no intent id/)
   })
 
   it('does not sign or build a URL when the consent step fails', async () => {
@@ -373,7 +403,7 @@ describe('buildPriorConnectUrl', () => {
       throw new Error('consent 500')
     }
     const { deps } = fakeDeps({ postConsent, signJwt })
-    await expect(buildPriorConnectUrl(config, 'S', deps, NOW_MS)).rejects.toThrow(/consent 500/)
+    await expect(buildPriorConnectUrl(config, () => 'S', deps, NOW_MS)).rejects.toThrow(/consent 500/)
     expect(signJwt).not.toHaveBeenCalled()
   })
 })
