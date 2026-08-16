@@ -238,7 +238,10 @@ nginx в backend). Он указывается **один раз** — в фор
 через Watchtower независимо от папки).
 
 Обёртки `Makefile`: `make prod-up` / `make prod-pull` / `make prod-redeploy` (обновить образ сейчас,
-без ожидания Watchtower) / `make logs` / `make ps`.
+без ожидания Watchtower) / `make logs` / `make ps` / **`make doctor`** (диагностика стенда одним
+прогоном, домен берётся из `.env`) / **`make queue-stats`** (счётчики очередей). Последние две
+скачивают скрипт с GitHub во временный файл — репозитория в этой папке нет, а сами скрипты в
+образ не кладутся; подробности — [`OPERATIONS.md`](OPERATIONS.md) и комментарий в `Makefile`.
 
 > Альтернатива: `git clone` репозитория в папку — тогда обновление `compose`/`Makefile` одним
 > `git pull`, ценой лишних файлов (~400 КБ). На рантайм не влияет.
@@ -312,6 +315,12 @@ docker inspect <имя-прокси> --format '{{range $k,$v := .NetworkSettings
 
 При приватном репо анонимный `curl` к `raw.githubusercontent.com` и `docker pull` без логина не
 сработают — нужен GitHub PAT (`read:packages` для образа; для файлов — также `repo`/`contents:read`).
+
+⚠ Это же ломает **`make doctor` и `make queue-stats`**: они тем же анонимным `curl` качают скрипт
+из `scripts/`. Отказ громкий (`curl -f` → ненулевой код, `make` обрывает цель — вчерашний скрипт не
+подхватится), но диагностики не будет ровно тогда, когда она нужна. Вариант на этот случай — держать
+`prod-doctor.sh`/`queue-stats.sh` рядом с `compose` (тем же `git clone` с токеном из шага 1) и звать
+их напрямую, `bash ./prod-doctor.sh`.
 
 **1. Файлы `compose`/`Makefile`** — `git clone` с токеном или копия вручную:
 ```bash
