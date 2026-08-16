@@ -7,6 +7,7 @@ import { useChatSettings } from '~/composables/useChatSettings'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { isExcludedOperation, parseRuleLines, shouldNotifyChat } from '~/utils/statement'
 import { B24_PAYMENT_TRIGGER } from '~/config/b24'
+import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 import type { OperationDirection } from '~/types/statement'
 
 // Форма настроек приложения + живой предпросмотр. Единственный вход — слайдовер на /app
@@ -157,22 +158,38 @@ const previewSummary = computed(() => {
 
 <template>
   <!-- Withhold everything until the admin check resolves (no fail-open flash). -->
-  <p
+  <div
     v-if="!adminChecked"
-    class="text-sm text-(--ui-color-base-3)"
+    class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="checking"
   >
-    Проверка доступа…
-  </p>
+    <LoaderWaitIcon
+      class="size-12"
+      aria-hidden="true"
+    />
+    <ProseP
+      accent="less"
+      small
+    >
+      Проверяем доступ…
+    </ProseP>
+  </div>
 
   <!-- Non-admin in the portal: warning only, no settings. -->
-  <B24Alert
+  <div
     v-else-if="blocked"
-    color="air-primary-warning"
-    title="Настройки доступны только администратору"
-    description="Обратитесь к администратору портала Bitrix24 — изменять параметры импорта и уведомлений может только он."
+    class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="admin-gate"
-  />
+  >
+    <ProseH3
+      class="mb-0"
+    >
+      Настройки доступны только администратору
+    </ProseH3>
+    <ProseP accent="less">
+      Обратитесь к администратору вашего Bitrix24 — изменять параметры импорта и уведомлений может только он.
+    </ProseP>
+  </div>
 
   <!-- In portal, settings still loading. -->
   <p

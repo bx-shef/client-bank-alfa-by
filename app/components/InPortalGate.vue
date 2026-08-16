@@ -109,13 +109,12 @@ onUnmounted(() => {
       class="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-1 px-4 text-center"
       data-testid="portal-gate-outside"
     >
-      <ProseH2
+      <ProseH3
         ref="stub"
-        tabindex="-1"
         class="mb-0"
       >
         Откройте приложение внутри Bitrix24
-      </ProseH2>
+      </ProseH3>
       <ProseP accent="less">
         Найдите приложение в левом меню портала — или установите его из
         Маркета, если ещё не установили.

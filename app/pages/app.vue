@@ -231,12 +231,11 @@ onMounted(async () => {
       <B24Slideover
         v-model:open="settingsOpen"
         title="Настройки"
-        description="Подключение банка, уведомления в чат, смарт-процессы, распознавание. Сохраняются в вашем портале Bitrix24."
+        description="Подключения, уведомления, учет, распознавание."
         side="bottom"
       >
         <template #body>
           <ClientOnly>
-            <!-- In the slideover: Save/Cancel dismiss the panel (asSlider), like a B24 slider. -->
             <SettingsForm
               :as-slider="true"
               @close="settingsOpen = false"
