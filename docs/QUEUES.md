@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-08-16
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -269,7 +269,7 @@ TLS-шлюз — он **есть и проверен вживую** (свой о
 > ⚠ **`QUEUE_WORKERS=0` требует живого `worker`.** Если backend с `QUEUE_WORKERS=0`, а воркер не поднят —
 > вебхуки/импорты **встанут молча** (Redis жив ⇒ enqueue успешен ⇒ синхронный фолбэк не срабатывает).
 > Поднимать **весь** compose (`docker compose up -d`), не править руками только env backend; после деплоя
-> проверить сток очередей (`/queues` / `scripts/queue-stats.sh`). Плагин на старте пишет WARN в лог.
+> проверить сток очередей (`/queues` / `make queue-stats`). Плагин на старте пишет WARN в лог.
 
 Пропускную способность наращиваем **тремя рычагами**, от простого к сложному:
 
@@ -416,7 +416,7 @@ DI, покрыт тестами); по каждой из четырёх очер
 
 - **`GET /api/queues`** ([`server/api/queues.get.ts`](../server/api/queues.get.ts)) — для консоли/диагностики.
   Guard — `B24_APPLICATION_TOKEN` **только заголовком** `X-Check-Token` (constant-time); `?token=` убран
-  (утекал бы в логи/историю). Снаружи закрыт (nginx `deny all`). Из консоли — `scripts/queue-stats.sh`.
+  (утекал бы в логи/историю). Снаружи закрыт (nginx `deny all`). Из консоли на сервере — `make queue-stats`.
 - **`GET /api/ops/queues`** ([`server/api/ops/queues.get.ts`](../server/api/ops/queues.get.ts)) — **путь
   для браузера оператора**: guard по **сессии** (`operatorAllowed`, cookie `cba_sess`; когда пароль не
   задан — зона открыта, как и клиентский гвард). Именно его опрашивает страница `/queues`.

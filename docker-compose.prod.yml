@@ -131,7 +131,7 @@ services:
       # the schema. ⚠ With QUEUE_WORKERS=0, the `worker` service MUST be up — else webhooks
       # /imports enqueue fine (Redis is up) and then sit undrained SILENTLY. Bring the WHOLE
       # compose up (`docker compose -f docker-compose.prod.yml up -d`), don't hand-edit only
-      # this env; verify via /queues or scripts/queue-stats.sh after deploy.
+      # this env; verify via /queues or `make queue-stats` after deploy.
       QUEUE_WORKERS: "0"
       # --- Online bank connect + polling (stage 5). MUST be declared here: compose passes
       # ONLY the vars listed in this block, so anything merely present in `.env` never
@@ -448,7 +448,7 @@ services:
   #   # Признак, что образ переменную ПОНИМАЕТ: строка `[crypto-gw] allowlist: разрешено
   #   # маршрутов — N` в логе при старте. Нет строки — образ старый, что бы ни стояло в .env.
   #   # ⚠ Обновляя digest: прогонять ЗАНОВО (зелёный CI шлюза доказывает сборку и старт, но не то,
-  #   # что банк по-прежнему отвечает) и запускать `bash scripts/prod-doctor.sh` — он ищет в логе
+  #   # что банк по-прежнему отвечает) и запускать `make doctor` — он ищет в логе
   #   # строку `allowlist: разрешено маршрутов — N`, по которой видно, что образ вообще понимает
   #   # `GW_ALLOW`. Без неё переменная игнорируется молча.
   #   # ⚠ Привязка digest к исходнику ТОЛЬКО по времени сборки: образ не несёт метки
