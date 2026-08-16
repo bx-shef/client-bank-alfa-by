@@ -12,8 +12,25 @@ import type { RenameOutcome } from './bankAccounts'
 import { bankRefreshLockKey, isLockTimeout } from './bankRefreshLock'
 import type { QueryFn } from './tokenStore'
 
+/**
+ * Сколько ждать лок ПЕРЕИМЕНОВАНИЮ. Умолчание (10 с) — для машинных вызывающих, здесь оно вредно
+ * сразу с двух сторон.
+ *
+ * ⚠ Ожидающий держит СОЕДИНЕНИЕ ИЗ ПУЛА всё время ожидания, а пул — 10. Троттл nginx на этом
+ * маршруте пропускал всплеск в 10 запросов без задержки, то есть один админ мог занять пул
+ * целиком — а из него же берут readiness-проба, события установки и все остальные порталы.
+ * Совпадение «всплеск 10 = пул 10» было случайным, и полагаться на него нельзя.
+ *
+ * ⚠ Вторая сторона — человеческая. Ждать десять секунд ради шанса выиграть лок бессмысленно, когда
+ * повтор в одном клике: быстрый ответ «занято, повторите» честнее долгой паузы с тем же исходом.
+ * Держатель лока — сетевой POST к банку с потолком 15 с, дождаться его нельзя ни за 2 с, ни за 10.
+ *
+ * На НЕЗАНЯТЫЙ лок это не влияет вовсе — он берётся мгновенно.
+ */
+export const RENAME_LOCK_WAIT = '2s'
+
 export interface LockedRenameDeps {
-  withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>) => Promise<T>
+  withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>, opts?: { lockWait?: string }) => Promise<T>
   rename: (
     q: QueryFn, memberId: string, provider: BankProviderId, fromKey: string, toKey: string
   ) => Promise<'renamed' | 'not-found' | 'conflict'>
@@ -43,7 +60,8 @@ export function makeLockedRename(deps: LockedRenameDeps) {
       // остался бы на месте, теперь уже с тестом, утверждающим обратное.
       return await deps.withLock(
         bankRefreshLockKey(memberId, provider, fromKey),
-        q => deps.rename(q, memberId, provider, fromKey, toKey)
+        q => deps.rename(q, memberId, provider, fromKey, toKey),
+        { lockWait: RENAME_LOCK_WAIT }
       )
     } catch (e) {
       // Ждать можно 10 с (`lock_timeout`), а держатель — сетевой POST с потолком 15 с. Значит

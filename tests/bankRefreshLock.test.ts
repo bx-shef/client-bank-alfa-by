@@ -39,6 +39,47 @@ describe('isLockTimeout', () => {
 })
 
 describe('ключ лока строится ТОЛЬКО хелпером', () => {
+  it('каждый ПИСАТЕЛЬ в bank_tokens классифицирован явно', () => {
+    // ⚠ Проверки ниже ловят НЕВЕРНО НАПИСАННЫЙ ключ, но не ловят ОТСУТСТВИЕ лока: писатель, который
+    // просто не зовёт хелпер, для них невидим — он ничего не пишет неправильно, он молчит. А
+    // писателей у строки больше двух, и третий уже существует: `saveBankToken` (OAuth-колбэк)
+    // делает `INSERT … ON CONFLICT DO UPDATE` по тем же колонкам, что и обновление токена.
+    //
+    // Сегодня он безопасен: подключение всегда заводит НОВУЮ `~pending:`-строку (UI не передаёт
+    // `accountKey`), поэтому конкурировать за живой ключ ему не с кем. Но серверный контракт
+    // `accountKey` принимает, и первая же кнопка «переподключить именно этот счёт» сделает его
+    // настоящим третьим писателем — с той же тихой потерей ротированного refresh.
+    //
+    // Поэтому список писателей ЗАКРЫТ: новый (или изменивший поведение) писатель роняет тест и
+    // требует решения — берёт лок или объясняет, почему не должен. Это единственное место, где
+    // такое решение вообще кто-то примет осознанно.
+    const ROOT = join(import.meta.dirname, '..')
+    const store = readFileSync(join(ROOT, 'server/utils/bankTokenStore.ts'), 'utf8')
+    const writers = new Set<string>()
+    for (const m of store.matchAll(/^export (?:async )?function (\w+)/gm)) {
+      const start = m.index!
+      const next = store.indexOf('\nexport ', start + 1)
+      const body = store.slice(start, next < 0 ? undefined : next)
+      if (/(?:INSERT INTO|UPDATE|DELETE FROM)\s+bank_tokens/.test(body)) writers.add(m[1]!)
+    }
+
+    // Каждому — своя причина. Менять список молча нельзя: это и есть решение.
+    const CLASSIFIED: Record<string, string> = {
+      // Под локом (`ensureBankToken`) — сериализован с переименованием.
+      updateBankTokenSecrets: 'locked',
+      // Под тем же локом (`makeLockedRename`) — меняет ключ, по которому ищет предыдущий.
+      renameBankTokenAccount: 'locked',
+      // ⚠ БЕЗ лока и пока безопасно: заводит новую `~pending:`-строку, за живой ключ не борется.
+      // Появится «переподключить этот счёт» — обязан взять лок.
+      saveBankToken: 'unlocked-creates-new-row',
+      // Удаление под локом не нуждается: строки не станет в любом порядке, и обновление это
+      // увидит (UPDATE-only вернёт `false`) — ровно исход #505, он правильный.
+      deleteBankToken: 'unlocked-delete-is-terminal',
+      deleteBankTokensForPortal: 'unlocked-delete-is-terminal'
+    }
+    expect([...writers].sort()).toEqual(Object.keys(CLASSIFIED).sort())
+  })
+
   it('ни один модуль не собирает строку `bankrefresh:` сам', () => {
     // ⚠ Ровно тот дефект, о котором предупреждает issue: разойдись стороны в написании ключа хоть
     // на символ — лок формально взят, а стороны не пересеклись. Ошибка невидима полностью: тесты
