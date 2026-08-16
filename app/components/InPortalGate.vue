@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
+import Market1Icon from '@bitrix24/b24icons-vue/main/Market1Icon'
 import { useRoute } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { isPreviewQuery, portalGateState } from '~/utils/inPortalGate'
@@ -86,51 +87,53 @@ onUnmounted(() => {
       v-else-if="state === 'checking'"
       role="status"
       aria-live="polite"
-      class="flex min-h-[240px] flex-col items-center justify-center gap-3 text-(--ui-color-base-3)"
+      class="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
       data-testid="portal-gate-checking"
     >
       <template v-if="showSpinner">
         <LoaderWaitIcon
-          class="size-8"
+          class="size-12"
           aria-hidden="true"
         />
-        <p class="text-sm">
+        <ProseP
+          accent="less"
+          small
+        >
           Проверяем подключение к Bitrix24…
-        </p>
+        </ProseP>
       </template>
     </div>
 
     <div
       v-else
-      class="mx-auto flex min-h-[240px] max-w-lg flex-col items-center justify-center gap-4 px-4 text-center"
+      class="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-1 px-4 text-center"
       data-testid="portal-gate-outside"
     >
-      <h1
+      <ProseH2
         ref="stub"
         tabindex="-1"
-        class="text-xl font-semibold text-(--ui-color-base-1) outline-none"
+        class="mb-0"
       >
         Откройте приложение внутри Bitrix24
-      </h1>
-      <p class="text-sm text-(--ui-color-base-3)">
-        Эта страница работает только как приложение портала: снаружи у неё нет доступа к вашим
-        настройкам, выписке и CRM. Найдите приложение в левом меню портала — или установите его из
+      </ProseH2>
+      <ProseP accent="less">
+        Найдите приложение в левом меню портала — или установите его из
         Маркета, если ещё не установили.
-      </p>
+      </ProseP>
       <!-- Обе ссылки внешние и в новой вкладке: внутри iframe портала переход увёл бы сам фрейм на
-           лендинг (тёмная брендовая оболочка), откуда в приложение уже не вернуться. -->
-      <div class="flex flex-wrap items-center justify-center gap-2">
+           лендинг, откуда в приложение уже не вернуться. -->
+      <div class="mt-1 flex flex-wrap items-center justify-center gap-2">
         <B24Button
           label="Установить из Маркета"
-          color="air-primary"
-          size="sm"
+          color="air-secondary-accent-2"
+          :icon="Market1Icon"
           :href="LANDING_MARKET_URL"
           target="_blank"
           rel="noopener"
         />
         <B24Button
           label="О приложении"
-          color="air-secondary-no-accent"
+          color="air-secondary-accent"
           size="sm"
           href="/"
           target="_blank"
