@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CONNECT_STATE_TTL_MS } from '../app/utils/bankConnectTtl'
+import { PORTAL_TZ_OFFSET } from '../app/utils/activity'
 import {
   PRIOR_API_PREFIXES,
   extractConsentExpiry,
@@ -455,7 +456,15 @@ describe('extractConsentExpiry (#503)', () => {
     // Полночь означала бы, что согласие считается мёртвым весь последний день, когда оно ещё живо,
     // и человека посылали бы в интернет-банк на сутки раньше — каждый раз.
     const ms = extractConsentExpiry({ data: { expirationDate: '2026-11-13' } })
-    expect(ms).toBe(Date.parse('2026-11-13T23:59:59.999Z'))
+    expect(ms).toBe(Date.parse('2026-11-13T23:59:59.999+03:00'))
+    // Конец дня в UTC был бы на три часа ПОЗЖЕ — в опасную сторону: три часа согласия у банка уже
+    // нет, а мы отвечаем «жив».
+    expect(ms).toBeLessThan(Date.parse('2026-11-13T23:59:59.999Z'))
+  })
+
+  it('смещение совпадает с общим `PORTAL_TZ_OFFSET` — модуль без импортов, связывает тест', () => {
+    const ms = extractConsentExpiry({ data: { expirationDate: '2026-11-13' } })
+    expect(ms).toBe(Date.parse(`2026-11-13T23:59:59.999${PORTAL_TZ_OFFSET}`))
   })
 
   it('полный ISO берётся как есть', () => {

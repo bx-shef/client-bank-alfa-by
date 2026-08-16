@@ -624,10 +624,19 @@ export function extractIntentId(response: unknown): string | null {
  * connection that is already dead. Caller falls back to the requested date only when the response
  * carries none.
  *
- * ⚠ Returns END OF DAY (23:59:59.999 UTC). The bank speaks `yyyy-MM-dd`, and `Date.parse` of a bare
- * date lands on MIDNIGHT — i.e. treating the consent as dead for the whole final day it is still
- * valid. Being a day pessimistic here is not harmless: it would tell an admin to send the account
- * owner into their internet bank a day early, every time.
+ * ⚠ Returns END OF DAY **IN MINSK** (`23:59:59.999+03:00`). Two traps, and the second one bites:
+ *
+ *  1. `Date.parse` of a bare date lands on MIDNIGHT — treating the consent as dead for the whole
+ *     final day it is still valid, i.e. sending the account owner into their internet bank a day
+ *     early, every time.
+ *  2. Closing the day in UTC pushes the moment three hours LATE, and that error runs the DANGEROUS
+ *     way: for those hours the consent is already gone at the bank while `consentExpired` still
+ *     answers «жив» — the calm green row over a dead connection this whole area exists to prevent.
+ *     The bank is Belarusian and its bare dates are Minsk wall-clock; the project already reads
+ *     them that way (`PORTAL_TZ_OFFSET`, `activity.ts`).
+ *
+ * ⚠ The offset is a literal, not an import, ON PURPOSE: this module is deliberately import-free (a
+ * plain-node recon script loads it). `tests/priorOauth.test.ts` ties it back to `PORTAL_TZ_OFFSET`.
  *
  * `null` when absent or unparseable — the caller must not invent a date.
  */
@@ -639,7 +648,7 @@ export function extractConsentExpiry(response: unknown): number | null {
   if (!text) return null
   // Bare `yyyy-MM-dd` → end of that day; a full ISO timestamp is taken as given.
   const bare = /^\d{4}-\d{2}-\d{2}$/.test(text)
-  const ms = Date.parse(bare ? `${text}T23:59:59.999Z` : text)
+  const ms = Date.parse(bare ? `${text}T23:59:59.999+03:00` : text)
   return Number.isFinite(ms) ? ms : null
 }
 
