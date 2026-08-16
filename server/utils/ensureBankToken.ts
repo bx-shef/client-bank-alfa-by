@@ -214,7 +214,8 @@ export async function ensureBankToken(
   // (`renameBankTokenAccount`, #509): он меняет `account_key`, то есть поле, по которому мы свою
   // строку и находим. Разное написание ключа означало бы, что лок «взят», а стороны не
   // пересеклись — молча, без единой ошибки.
-  return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey), async (q) => {
+  // MUTATION H1: same drift bug, but via string concatenation instead of a template literal.
+  return deps.withLock('bankrefresh:' + token.memberId + ':' + token.provider + ':' + token.accountKey, async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed (or the account been
     // disconnected) while we waited. No stored row → don't refresh+save (would resurrect a
     // disconnected account); hand back the passed token, the fetch will fail cleanly.
