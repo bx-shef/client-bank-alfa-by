@@ -6,6 +6,7 @@ import {
   getBankToken,
   listAllBankAccountInfo,
   listAllBankAccounts,
+  listBankAccountInfoForPortal,
   listBankTokensForPortal,
   saveBankToken,
   updateBankTokenSecrets
@@ -63,6 +64,44 @@ describe('saveBankToken', () => {
     // refresh stored ENCRYPTED (not the plaintext), and decrypts back to the original
     expect(p[4]).not.toBe('REFRESH')
     expect(decryptSecret(String(p[4]))).toBe('REFRESH')
+  })
+
+  it('САМ SQL хранит правило «неизвестное не затирает известное» (#503)', () => {
+    // ⚠ Проверяем ТЕКСТ запроса, а не поведение через `memStore`: тот — рукописный фейк со своей
+    // merge-логикой, поэтому подмена CASE WHEN на прямое присваивание проходила его тестами
+    // зелёной. Тот же приём уже применён рядом (`renameBankTokenAccount` и `updated_at`).
+    const { query, calls } = fakeQuery()
+    void saveBankToken(query, token)
+    expect(calls[0]!.sql).toMatch(/CASE WHEN EXCLUDED\.consent_expires_at > 0/)
+    expect(calls[0]!.sql).toMatch(/ELSE bank_tokens\.consent_expires_at END/)
+  })
+})
+
+describe('listBankAccountInfoForPortal — проекция для экрана настроек', () => {
+  // ⚠ Именно она стоит за живым `GET /api/bank/accounts`, и до этого теста не вызывалась НИ ОДНИМ
+  // тестом: соседняя `listAllBankAccountInfo` (её зовёт keep-alive) — другая функция.
+  it('отдаёт свежесть и срок согласия, без единого секрета', async () => {
+    const { query } = fakeQuery([{
+      member_id: 'M1', provider: 'prior-by', account_key: 'BY13',
+      expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000),
+      has_refresh: true, consent_expires_at: '1800000000000',
+      access_token: 'SECRET', refresh_token_enc: 'SECRET'
+    }])
+    const [row] = await listBankAccountInfoForPortal(query, 'M1')
+    expect(row).toEqual({
+      memberId: 'M1', provider: 'prior-by', accountKey: 'BY13',
+      connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000,
+      hasRefresh: true, consentExpiresAt: 1_800_000_000_000
+    })
+    expect(JSON.stringify(row)).not.toContain('SECRET')
+  })
+
+  it('колонки нет в строке ⇒ 0 = «неизвестно», а не «истекло»', async () => {
+    const { query } = fakeQuery([{
+      member_id: 'M1', provider: 'alfa-by', account_key: 'BY01',
+      expires_at: '1', updated_at: new Date(1), has_refresh: true
+    }])
+    expect((await listBankAccountInfoForPortal(query, 'M1'))[0]!.consentExpiresAt).toBe(0)
   })
 })
 

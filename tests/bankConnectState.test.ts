@@ -97,3 +97,37 @@ describe('signConnectState / verifyConnectState', () => {
     expect(verifyConnectState('', '', now)).toBeNull()
   })
 })
+
+describe('срок согласия в state (#503)', () => {
+  it('число проходит round-trip', () => {
+    const at = 1_800_000_000_000
+    const signed = signConnectState(
+      { memberId: 'M1', provider: 'prior-by', accountKey: 'BY13', nonce: 'n', exp: now + 60_000, consentExpiresAt: at },
+      SECRET
+    )
+    expect(verifyConnectState(signed, SECRET, now)?.consentExpiresAt).toBe(at)
+  })
+
+  it('поля нет — state по-прежнему валиден (Альфа согласий не выдаёт)', () => {
+    const signed = signConnectState(
+      { memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01', nonce: 'n', exp: now + 60_000 },
+      SECRET
+    )
+    const v = verifyConnectState(signed, SECRET, now)
+    expect(v?.memberId).toBe('M1')
+    expect(v?.consentExpiresAt).toBeUndefined()
+  })
+
+  it('НЕЧИСЛОВОЕ значение отвергается, даже с валидной подписью', () => {
+    // ⚠ Подделать тело без секрета нельзя, поэтому проверка типа — про будущий путь, который
+    // соберёт state не из `extractConsentExpiry`. Битое значение иначе доехало бы до
+    // BIGINT-колонки молча, и «согласие» стало бы NaN.
+    for (const bad of ['оops', Number.NaN, Number.POSITIVE_INFINITY]) {
+      const signed = signConnectState(
+        { memberId: 'M1', provider: 'prior-by', nonce: 'n', exp: now + 60_000, consentExpiresAt: bad } as never,
+        SECRET
+      )
+      expect(verifyConnectState(signed, SECRET, now), String(bad)).toBeNull()
+    }
+  })
+})

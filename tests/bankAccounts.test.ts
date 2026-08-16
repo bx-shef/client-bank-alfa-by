@@ -21,7 +21,11 @@ const ROW: BankAccountInfo = {
   accountKey: 'BY01ALFA0001',
   connectedAt: 1_700_000_000_000,
   expiresAt: 1_700_003_600_000,
-  hasRefresh: true
+  hasRefresh: true,
+  // ⚠ НЕНУЛЕВОЕ значение принципиально. С `undefined`/дефолтом `toEqual` сравнивает вакуумно:
+  // Vitest игнорирует ключи со значением `undefined`, поэтому «точный состав полей» проходил и
+  // тогда, когда поле вообще выпилили из ответа (#503, находка ревью).
+  consentExpiresAt: 1_700_000_500_000
 }
 
 function listDeps(over: Partial<ListAccountsDeps> = {}): ListAccountsDeps {
@@ -55,8 +59,12 @@ describe('handleListBankAccounts', () => {
       accountKey: 'BY01ALFA0001',
       connectedAt: ROW.connectedAt,
       expiresAt: ROW.expiresAt,
-      hasRefresh: true
+      hasRefresh: true,
+      consentExpiresAt: ROW.consentExpiresAt
     })
+    // Отдельной строкой и на КОНКРЕТНОЕ значение: потеря поля по дороге беззвучна — сервер
+    // продолжает хранить и считать дату, а предупреждения в интерфейсе просто нет.
+    expect(accounts[0]!.consentExpiresAt).toBe(1_700_000_500_000)
     // memberId is an internal identifier — it must not be echoed to the browser.
     expect(JSON.stringify(res.body)).not.toContain('M1')
   })

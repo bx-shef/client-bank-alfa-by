@@ -282,6 +282,36 @@ describe('buildPriorConnectUrl', () => {
     expect(url).not.toContain('PRIVATE KEY')
   })
 
+  it('срок согласия ИЗ ОТВЕТА банка доезжает до подписчика state (#503)', async () => {
+    // ⚠ Все прочие тесты передают `signState` как `() => '…'`, то есть аргумент игнорируют — а
+    // значит удаление `extractConsentExpiry` из преамбулы проходило зелёным. Здесь подписчик —
+    // шпион: проверяется РОВНО то, с чем его позвали.
+    // ⚠ Банк отвечает НЕ ТЕМ, что мы просили: просим `2026-10-26` (90 дней), он выдаёт короче.
+    // Так тест доказывает главное — берём ОТВЕТ, а не свою просьбу; иначе разницы было бы не видно.
+    const { deps, calls } = fakeDeps({
+      consentRaw: { data: { consentId: 'INTENT-9', expirationDate: '2026-09-01' } }
+    })
+    const seen: Array<{ consentExpiresAt: number | null }> = []
+    await buildPriorConnectUrl(config, (extra) => {
+      seen.push(extra)
+      return 'SIGNED-STATE'
+    }, deps, NOW_MS)
+    expect(seen).toHaveLength(1) // подписываем ровно один раз
+    expect(seen[0]!.consentExpiresAt).toBe(Date.parse('2026-09-01T23:59:59.999+03:00'))
+    // И это точно не то, что мы просили:
+    expect((calls.consentBody[0] as { data: { expirationDate: string } }).data.expirationDate).toBe('2026-10-26')
+  })
+
+  it('банк срока не вернул — подписываем `null`, дату НЕ выдумываем', async () => {
+    const { deps } = fakeDeps() // фейк по умолчанию отвечает без expirationDate
+    const seen: Array<{ consentExpiresAt: number | null }> = []
+    await buildPriorConnectUrl(config, (extra) => {
+      seen.push(extra)
+      return 'S'
+    }, deps, NOW_MS)
+    expect(seen[0]!.consentExpiresAt).toBeNull()
+  })
+
   // #444: token Б is the FOURTH client_secret_basic site and the easiest to miss (it lives in the
   // connect preamble, not the «token» modules). DCR registers ONE method per app, so leaving this
   // call on Basic breaks prod at the FIRST step — before any other migrated site is reached.
