@@ -38,8 +38,15 @@ export interface DisconnectDeps extends BankAccountsDeps {
   remove: (memberId: string, provider: BankProviderId, accountKey: string) => Promise<boolean>
 }
 
+/**
+ * Исход переименования. `busy` — не ошибка, а «строку сейчас держит обновление токена, повторите»
+ * (#509): выбор счёта и обновление пишут в одну строку и сериализованы одним локом, а ждать его
+ * можно меньше, чем длится сетевой POST к банку.
+ */
+export type RenameOutcome = 'renamed' | 'not-found' | 'conflict' | 'busy'
+
 export interface SetAccountDeps extends BankAccountsDeps {
-  rename: (memberId: string, provider: BankProviderId, fromKey: string, toKey: string) => Promise<'renamed' | 'not-found' | 'conflict'>
+  rename: (memberId: string, provider: BankProviderId, fromKey: string, toKey: string) => Promise<RenameOutcome>
 }
 
 export interface BankAccountsInput {
@@ -148,6 +155,12 @@ export async function handleSetBankAccount(deps: SetAccountDeps, input: SetAccou
   const res = await deps.rename(auth.memberId, provider, pendingKey, accountKey)
   if (res === 'conflict') return { status: 409, body: { error: 'this account is already connected' } }
   if (res === 'not-found') return { status: 404, body: { error: 'pending connection not found' } }
+  // ⚠ 503, а не 409: конфликт — это «так не будет никогда» (номер занят), а здесь «сейчас занято,
+  // через несколько секунд пройдёт». Смешать их значит показать человеку тупик там, где нужен
+  // повтор, — и наоборот, приучить повторять там, где повтор не поможет.
+  if (res === 'busy') {
+    return { status: 503, body: { error: 'connection is being refreshed right now, retry in a few seconds' } }
+  }
   return { status: 200, body: { ok: true } }
 }
 

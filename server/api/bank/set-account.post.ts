@@ -10,6 +10,8 @@ import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { renameBankTokenAccount } from '../../utils/bankTokenStore'
+import { withAdvisoryLock } from '../../utils/dbLock'
+import { makeLockedRename } from '../../utils/bankAccountRename'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
@@ -22,7 +24,8 @@ function liveDeps(): SetAccountDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
-    rename: (memberId, provider, fromKey, toKey) => renameBankTokenAccount(dbQuery, memberId, provider, fromKey, toKey)
+    // Переименование сериализовано с обновлением токена — почему и как, см. `makeLockedRename` (#509).
+    rename: makeLockedRename({ withLock: withAdvisoryLock, rename: renameBankTokenAccount })
   }
 }
 

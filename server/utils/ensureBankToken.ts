@@ -21,6 +21,7 @@ import { signPriorJwt } from './priorJwt'
 import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
+import { bankRefreshLockKey } from './bankRefreshLock'
 import { getBankToken, updateBankTokenSecrets } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
@@ -209,7 +210,11 @@ export async function ensureBankToken(
     return token
   }
 
-  return deps.withLock(`bankrefresh:${token.memberId}:${token.provider}:${token.accountKey}`, async (q) => {
+  // ⚠ The key comes from the SHARED helper, not assembled here as a string. Account selection now
+  // takes the same lock (`renameBankTokenAccount`, #509): it changes `account_key` — the very field
+  // we use to find our row. A differently-spelled key would mean the lock is "held" while the two
+  // sides never actually meet — silently, with no error at all.
+  return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey), async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed (or the account been
     // disconnected) while we waited. No stored row → don't refresh+save (would resurrect a
     // disconnected account); hand back the passed token, the fetch will fail cleanly.
