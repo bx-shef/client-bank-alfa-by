@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-08-16
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -53,11 +53,11 @@ Backend (приём событий Б24 + хранилище токенов; д�
 ⚠ **`QUEUE_WORKERS=0` на backend требует живого `worker`-сервиса.** Иначе события/импорты enqueue'ятся
 (Redis жив), но никем не обрабатываются — **встают молча** (синхронный фолбэк ловит только *недоступный*
 Redis, не отсутствие воркера). Поэтому compose поднимать **целиком** (`docker compose -f docker-compose.prod.yml up -d`),
-а не править руками только env backend; после деплоя проверить сток очередей (`/queues` / `scripts/queue-stats.sh`).
+а не править руками только env backend; после деплоя проверить сток очередей (`/queues` / `make queue-stats`).
 Событийный воркер (`b24-events`) и крон — на backend (единственный инстанс, порядок install/uninstall); реплики `worker` тянут только fetch/parse/crm-sync.
 `DEMO_LOAD_N>0` включает демонстрацию: крон каждые `CRON_INTERVAL_MIN` минут кладёт
 столько синтетических fetch-джобов, чтобы поток шёл `bank-fetch → crm-sync`. **Смотреть поток
-сейчас:** `B24_APPLICATION_TOKEN=… ./scripts/queue-stats.sh` (счётчики очередей из работающего
+сейчас:** `make queue-stats` (счётчики очередей из работающего
 backend; эндпоинт `/api/queues` наружу закрыт nginx, скрипт ходит внутрь контейнера). В проде после
 подключения реального опроса выставить `DEMO_LOAD_N=0`. Полноценная телеметрия — **OpenTelemetry**
 (#78, `docs/OBSERVABILITY.md`): app-side инструментирование сделано (DEFAULT OFF); приёмная станция (коллектор + ClickHouse + Grafana) собрана в [`telemetry-station/`](../telemetry-station/README.md) и разворачивается отдельно.

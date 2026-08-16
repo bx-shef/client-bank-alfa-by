@@ -1,6 +1,6 @@
 # План рефакторинга — импорт выписки из клиент-банка (Альфа-Банк Беларусь → мультибанк)
 
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-08-16
 
 Перенос и переписывание legacy-приложения (серверный PHP-апп Bitrix24) на новый стек.
 Документ — живой план; обновляется по мере прохождения этапов.
@@ -110,7 +110,7 @@
    контракты (`topology.ts`), продюсеры (`producers.ts`), чистые обработчики (`handlers.ts`,
    с DI — тесты), воркеры (по роли env) + крон с **демо-нагрузкой** (`worker.ts`/`cron.ts`/
    `server/plugins/queue.ts`), 4-я очередь `crm-sync` (анализ→действие в B24), наблюдаемость
-   `GET /api/queues` + `scripts/queue-stats.sh`. Транспорты в обработчиках — **живые** (парсер файла,
+   `GET /api/queues` + `make queue-stats`. Транспорты в обработчиках — **живые** (парсер файла,
    B24 REST crm-sync, fetch банка Альфы A9 с глобальным rate-limiter A8); Приор — движок+connect+автоопрос
    готовы (своя очередь `bank-fetch-prior`, бюджет A8 в запросах). **Масштаб-аут — сделан:** роль контейнера решается env
    (`QUEUE_WORKERS`/`QUEUE_CRON`/`QUEUE_CONCURRENCY`, `server/queue/runtime.ts`), `docker-compose.prod.yml`

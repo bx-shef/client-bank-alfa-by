@@ -1,6 +1,6 @@
 # Операции: пост-запускной runbook (#246)
 
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-08-16
 
 Как понять, что приложение живо, где смотреть диагностику, что делать при типовых сбоях,
 как откатиться и куда эскалировать. Дополняет [`DEPLOY.md`](DEPLOY.md) (как деплоить) и
@@ -49,7 +49,7 @@
 
 Импортёр — очередь-driven, поэтому «здоровье» = очереди разгребаются, а не растут.
 
-- **Консольно (для оператора-админа сервера):** `bash scripts/queue-stats.sh` — читает
+- **Консольно (для оператора-админа сервера):** `make queue-stats` — читает
   `GET /api/queues` по токену `B24_APPLICATION_TOKEN` заголовком `X-Check-Token` (nginx снаружи
   `deny all`; токен не в URL-логах). Нужно задать `B24_APPLICATION_TOKEN` сильным значением.
   **Токен не набирать инлайном** (`B24_APPLICATION_TOKEN=… ./scripts/…` попадает в history и `ps`) —
@@ -123,8 +123,11 @@
 
 ```bash
 cd /home/bitrix/bank-import
-bash scripts/prod-doctor.sh bank-import.bx-shef.by
+make doctor
 ```
+
+Домен подставляется из `./.env` (`DOMAIN`) — набирать его руками не нужно; проверить чужой адрес
+можно через `make doctor DOMAIN=example.by`.
 
 Проверяет по порядку: что поднято, что здорово (плюс рестарты и OOM), отвечают ли `/`, `/api/health`
 и `/api/ready` изнутри сети, заданы ли ключевые переменные, нет ли в логах `[env]`/`[auth]`/финальных
@@ -748,7 +751,7 @@ docker compose -f docker-compose.prod.yml up -d worker
 
 1. Первичная триада: `/api/ready` (зависимости живы? — db+redis; `/api/health` — только liveness) →
    `docker compose ps` (все контейнеры `Up`/`healthy`, никто не `Restarting`?) →
-   `scripts/queue-stats.sh` (очереди разгребаются?).
+   `make queue-stats` (очереди разгребаются?).
    **Предусловие шага 3:** диагностика очередей требует заранее заведённого `B24_APPLICATION_TOKEN`
    (консоль) или операторского логина (`/queues`) — без них оба пути недоступны именно тогда, когда нужны.
 2. Логи по сервису: `docker compose -f docker-compose.prod.yml logs <service> --tail=200`.
