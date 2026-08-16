@@ -17,7 +17,7 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, REQUESTS_PER_ACCOUNT } from '../queue/pollCapacity'
-import { deleteBankToken, getBankToken, listAllBankAccountInfo, listAllBankAccounts, type BankAccountRef, type BankToken as BankTokenType } from '../utils/bankTokenStore'
+import { deleteBankToken, getBankToken, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts, type BankAccountRef, type BankToken as BankTokenType } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, runBankKeepAlive } from '../utils/bankTokenKeepAlive'
@@ -317,6 +317,9 @@ export default defineNitroPlugin((nitroApp) => {
             } catch (e) {
               console.error('[retention] tombstone sweep failed:', (e as Error)?.message)
             }
+            // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и
+            // чистку банковских кредов, хотя флаг заведён про payload'ы выписки. Осознанно: оба
+            // default ON, а второй таймер ради одного DELETE в полчаса — лишняя механика.
             // Брошенные подключения без счёта (#485): их не удалял никто, а копятся они гроздьями —
             // каждый повтор connect'а заводит НОВУЮ строку (nonce всякий раз другой). Изолировано
             // от соседей по той же причине, что и тумбстоуны: сбой здесь не должен отменять их.
@@ -324,7 +327,14 @@ export default defineNitroPlugin((nitroApp) => {
               const removed = await sweepAbandonedPending({
                 now: Date.now,
                 list: () => listAllBankAccountInfo(dbQuery),
-                remove: (memberId, provider, accountKey) => deleteBankToken(dbQuery, memberId, provider, accountKey),
+                // ⚠ Тот же лок, что у обновления токена и выбора счёта (#509), и перечит ВНУТРИ
+                // него: keep-alive намеренно продлевает и ожидающие подключения, и без перечита
+                // свип сносил бы строку, которую тот только что доказал живой у банка.
+                withLock: withAdvisoryLock,
+                reread: async (q, memberId, provider, accountKey) =>
+                  (await listBankAccountInfoForPortal(q, memberId))
+                    .find(r => r.provider === provider && r.accountKey === accountKey) ?? null,
+                remove: (q, memberId, provider, accountKey) => deleteBankToken(q, memberId, provider, accountKey),
                 maxAgeDays: pendingMaxAgeDays
               })
               if (removed) console.info('[retention] swept %d abandoned pending connection(s)', removed)
@@ -340,7 +350,7 @@ export default defineNitroPlugin((nitroApp) => {
       }
       sweepTimer = setInterval(runSweep, sweepMs)
       void runSweep() // once at boot
-      console.info('[queue] statement + tombstone retention sweep scheduled (every %d min; tombstone TTL %d d, #245/#77)', sweepMs / 60_000, tombstoneDays)
+      console.info('[queue] statement + tombstone + pending-connection retention sweep scheduled (every %d min; tombstone TTL %d d, #245/#77)', sweepMs / 60_000, tombstoneDays)
     }
 
     // ── Queue health check + push alerting (#426) ────────────────────────────────────────────

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { sweepAbandonedPending, resolvePendingMaxAgeDays } from '../server/utils/pendingSweep'
+import { bankRefreshLockKey, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
 import { abandonedPending, PENDING_MAX_AGE_DAYS } from '../app/utils/bankTokenLifetime'
 import { ALFA_REFRESH_TOKEN_TTL_SEC } from '../app/utils/alfaOauth'
+import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 
 // Свип брошенных ожидающих подключений (#485).
@@ -17,7 +19,7 @@ function row(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
   return {
     memberId: 'm1',
     provider: 'alfa-by',
-    accountKey: '~pending:n1',
+    accountKey: provisionalAccountKey('n1'),
     connectedAt: NOW - DAY * 3,
     expiresAt: NOW + 3600_000,
     hasRefresh: true,
@@ -26,14 +28,25 @@ function row(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
   }
 }
 
+const q = {} as never
+
 function deps(rows: BankAccountInfo[], over: Partial<Parameters<typeof sweepAbandonedPending>[0]> = {}) {
   const removed: string[] = []
+  const locks: string[] = []
   return {
     removed,
+    locks,
     made: {
       now: () => NOW,
       list: async () => rows,
-      remove: async (m: string, p: string, a: string) => {
+      withLock: async <T>(key: string, fn: (q: never) => Promise<T>): Promise<T> => {
+        locks.push(key)
+        return fn(q)
+      },
+      // По умолчанию строка под локом та же, что была в снимке.
+      reread: async (_q: never, m: string, p: string, a: string) =>
+        rows.find(r => r.memberId === m && r.provider === p && r.accountKey === a) ?? null,
+      remove: async (_q: never, m: string, p: string, a: string) => {
         removed.push(`${m}|${p}|${a}`)
         return true
       },
@@ -74,6 +87,25 @@ describe('abandonedPending', () => {
     expect(abandonedPending(old, NOW)).toBe(true)
   })
 
+  it('порог — РОВНО значение константы, и граница включительная', () => {
+    // ⚠ Тесты выше сравнивают возраст с ИМПОРТОМ константы, то есть самоссылочно: подмена самой
+    // `PENDING_MAX_AGE_DAYS` (2 → 11) проходила мимо них зелёной (найдено ревью тестировщика).
+    // А это бизнес-параметр: «банк вечером, номер утром» держится именно на нём.
+    expect(PENDING_MAX_AGE_DAYS).toBe(2)
+    const prior = (ms: number) => row({ provider: 'prior-by', connectedAt: NOW - ms })
+    const cap = PENDING_MAX_AGE_DAYS * DAY
+    expect(abandonedPending(prior(cap + 1), NOW)).toBe(true)
+    expect(abandonedPending(prior(cap), NOW)).toBe(true)
+    expect(abandonedPending(prior(cap - 1), NOW)).toBe(false)
+  })
+
+  it('пол суток встроен в САМУ функцию, а не только в разбор env', () => {
+    // Иначе гарантия «не снесёт слишком свежее» держится на дисциплине единственного вызывающего.
+    expect(abandonedPending(row({ connectedAt: NOW }), NOW, 0)).toBe(false)
+    expect(abandonedPending(row({ connectedAt: NOW }), NOW, -5)).toBe(false)
+    expect(abandonedPending(row({ connectedAt: NOW - DAY - 1 }), NOW, 0)).toBe(true)
+  })
+
   it('свежее ожидающее остаётся — человек ещё вернётся', () => {
     // Банк вечером, номер утром — обычный сценарий. Снести раньше значит послать проходить банк заново.
     expect(abandonedPending(row({ connectedAt: NOW - 3600_000 }), NOW)).toBe(false)
@@ -99,7 +131,7 @@ describe('sweepAbandonedPending', () => {
       row({ memberId: 'm2', accountKey: '~pending:b', connectedAt: NOW - DAY * 5 })
     ]
     const { made } = deps(rows, {
-      remove: async (m: string) => {
+      remove: async (_q: never, m: string) => {
         if (m === 'm1') throw new Error('connection lost')
         return true
       }
@@ -110,6 +142,41 @@ describe('sweepAbandonedPending', () => {
   it('считает только фактически удалённые', async () => {
     // Строку мог унести параллельный `disconnect` — засчитать её значило бы врать в логе ретенции.
     const { made } = deps([row({ connectedAt: NOW - DAY * 5 })], { remove: async () => false })
+    expect(await sweepAbandonedPending(made)).toBe(0)
+  })
+
+  it('НЕ сносит строку, которую keep-alive омолодил, пока мы ждали лок', async () => {
+    // ⚠ Ради этого и введён перечит. Отбор идёт по снимку начала тика; keep-alive НАМЕРЕННО
+    // продлевает и ожидающие подключения (#489), и без перечита свип сносил бы строку, которую тот
+    // только что доказал живой у банка — то есть обесценивал механику, написанную ради этих строк.
+    const stale = row({ connectedAt: NOW - DAY * 5 })
+    const { removed, made } = deps([stale], {
+      reread: async () => row({ connectedAt: NOW - 60_000 })
+    })
+    expect(await sweepAbandonedPending(made)).toBe(0)
+    expect(removed).toEqual([])
+  })
+
+  it('берёт ТОТ ЖЕ лок, что обновление токена и выбор счёта', async () => {
+    // Иначе сериализации нет: три писателя в одну строку, и двое из них друг друга не видят.
+    const { locks, made } = deps([row({ connectedAt: NOW - DAY * 5 })])
+    expect(await sweepAbandonedPending(made)).toBe(1)
+    expect(locks).toEqual([bankRefreshLockKey('m1', 'alfa-by', '~pending:n1')])
+  })
+
+  it('строка исчезла под локом — считаем ноль, а не ошибку', async () => {
+    const { made } = deps([row({ connectedAt: NOW - DAY * 5 })], { reread: async () => null })
+    expect(await sweepAbandonedPending(made)).toBe(0)
+  })
+
+  it('не дождались лока — тихо пропускаем, это не сбой', async () => {
+    // Держатель — работающий рефреш (POST к банку до 15 с). Строка брошена, подметём на следующем
+    // тике; писать про это в лог значило бы шуметь при штатной работе.
+    const { made } = deps([row({ connectedAt: NOW - DAY * 5 })], {
+      withLock: async () => {
+        throw Object.assign(new Error('lock timeout'), { code: PG_LOCK_TIMEOUT })
+      }
+    })
     expect(await sweepAbandonedPending(made)).toBe(0)
   })
 

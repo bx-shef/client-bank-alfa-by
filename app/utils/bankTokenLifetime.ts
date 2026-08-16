@@ -7,6 +7,7 @@
 // is precisely the failure this issue is about, only moved one screen over.
 
 import type { BankProviderId } from '~/types/statement'
+import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { ALFA_REFRESH_TOKEN_TTL_SEC } from '~/utils/alfaOauth'
 
 /**
@@ -217,10 +218,18 @@ export function abandonedPending(
   nowMs: number,
   maxAgeDays = PENDING_MAX_AGE_DAYS
 ): boolean {
-  if (!c.accountKey.startsWith('~pending:')) return false
+  // ⚠ Через общий хелпер, а не литералом: префикс объявлен в `bankAccountKey.ts`, и ВСЕ прочие
+  // потребители зовут именно его. Вторая копия строки разошлась бы молча — и именно здесь, в
+  // единственном гейте, который отделяет удаляемое от рабочего подключения.
+  if (!isPendingAccountKey(c.accountKey)) return false
   if (connectionHealth(c, nowMs) === 'expired') return true
   const age = nowMs - c.connectedAt
-  return Number.isFinite(age) && age >= maxAgeDays * 86_400_000
+  // ⚠ Пол встроен ЗДЕСЬ, а не только в разбор env. Функция экспортирована и удаляет данные доступа:
+  // полагаться на то, что единственный сегодняшний вызывающий передаёт уже клампленное значение, —
+  // мина для будущего рефакторинга. С `maxAgeDays = 0` она сносила бы подключение возрастом в
+  // миллисекунду (проверено ревью тестировщика прямым вызовом).
+  const floorDays = Math.max(1, maxAgeDays)
+  return Number.isFinite(age) && age >= floorDays * 86_400_000
 }
 
 /** Badge for a health state, or `null` when there is nothing worth saying.
