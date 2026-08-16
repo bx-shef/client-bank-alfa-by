@@ -17,7 +17,7 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, REQUESTS_PER_ACCOUNT } from '../queue/pollCapacity'
-import { getBankToken, listAllBankAccountInfo, listAllBankAccounts, type BankAccountRef, type BankToken as BankTokenType } from '../utils/bankTokenStore'
+import { deleteBankToken, getBankToken, listAllBankAccountInfo, listAllBankAccounts, type BankAccountRef, type BankToken as BankTokenType } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, runBankKeepAlive } from '../utils/bankTokenKeepAlive'
@@ -25,6 +25,7 @@ import { ensureBankToken } from '../utils/ensureBankToken'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
 import { sweepOldBatches } from '../utils/importBatchStore'
+import { resolvePendingMaxAgeDays, sweepAbandonedPending } from '../utils/pendingSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
@@ -300,6 +301,7 @@ export default defineNitroPlugin((nitroApp) => {
       }
       const sweepMs = sweepIntervalMs(Number(process.env.STATEMENT_SWEEP_INTERVAL_MIN || 30))
       const tombstoneDays = resolveTombstoneDays(process.env.TOMBSTONE_TTL_DAYS)
+      const pendingMaxAgeDays = resolvePendingMaxAgeDays(process.env.PENDING_MAX_AGE_DAYS)
       const runSweep = async () => {
         try {
           // Cron root span (#78) — groups the per-queue clean calls under one trace.
@@ -314,6 +316,20 @@ export default defineNitroPlugin((nitroApp) => {
               if (removed) console.info('[retention] swept %d expired tombstone(s)', removed)
             } catch (e) {
               console.error('[retention] tombstone sweep failed:', (e as Error)?.message)
+            }
+            // Брошенные подключения без счёта (#485): их не удалял никто, а копятся они гроздьями —
+            // каждый повтор connect'а заводит НОВУЮ строку (nonce всякий раз другой). Изолировано
+            // от соседей по той же причине, что и тумбстоуны: сбой здесь не должен отменять их.
+            try {
+              const removed = await sweepAbandonedPending({
+                now: Date.now,
+                list: () => listAllBankAccountInfo(dbQuery),
+                remove: (memberId, provider, accountKey) => deleteBankToken(dbQuery, memberId, provider, accountKey),
+                maxAgeDays: pendingMaxAgeDays
+              })
+              if (removed) console.info('[retention] swept %d abandoned pending connection(s)', removed)
+            } catch (e) {
+              console.error('[retention] pending sweep failed:', (e as Error)?.message)
             }
           })
         } catch (err) {
