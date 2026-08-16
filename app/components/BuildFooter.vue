@@ -1,21 +1,30 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { START_YEAR, copyrightYears } from '~/utils/landing'
-import { commitUrl, shortSha } from '~/utils/build'
+import BuildSha from '~/components/BuildSha.vue'
 
 // Shared footer: author + a link to the exact build commit. Used on the landing
 // and the in-portal app page.
-const { public: { authorName, authorUrl, commitSha } } = useRuntimeConfig()
+const { public: { authorName, authorUrl } } = useRuntimeConfig()
 
 const years = copyrightYears(START_YEAR, new Date().getFullYear())
-const sha = computed(() => shortSha(commitSha as string))
-const href = computed(() => commitUrl(commitSha as string))
 </script>
 
 <template>
+  <B24Footer class="w-full border-t border-(--ui-color-divider-default) divide-y divide-(--ui-color-divider-default) min-h-0">
+    <template #left>
+      <ProseP small accent="less">
+        Copyright © {{ years }}
+      </ProseP>
+    </template>
+
+    <B24NavigationMenu :items="items" variant="link" />
+
+    <template #right>
+      <BuildSha />
+    </template>
+  </B24Footer>
   <footer class="mt-16 flex flex-col items-center gap-1 text-center text-sm text-(--b24ui-color-text-secondary)">
     <span>
-      © {{ years }}
       <a
         :href="authorUrl"
         class="underline"
@@ -23,14 +32,5 @@ const href = computed(() => commitUrl(commitSha as string))
         rel="noopener noreferrer"
       >{{ authorName }}</a>
     </span>
-    <!-- `data-testid` — якорь для маски в визуальных регресс-тестах (#3): SHA сборки отличается
-         в каждом прогоне, и без маски эталон расходился бы ВСЕГДА. -->
-    <a
-      :href="href"
-      data-testid="build-sha"
-      class="text-xs underline opacity-70"
-      target="_blank"
-      rel="noopener noreferrer"
-    >сборка {{ sha || 'dev' }}</a>
   </footer>
 </template>
