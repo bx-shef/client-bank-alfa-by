@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import type { BankProviderId } from '~/types/statement'
 import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/composables/useFrameAuth'
+import { setAccountErrorMessage } from '~/utils/setAccountError'
 
 // Connected bank accounts for the settings UI (#404): read the list and disconnect one. Both hit
 // admin-gated frame-token routes (/api/bank/accounts, /api/bank/disconnect) — same auth model as
@@ -112,7 +113,9 @@ export function useBankAccounts() {
       await load()
       return true
     } catch (e) {
-      error.value = frameFetchError(e, 'Не удалось привязать счёт')
+      // Не `frameFetchError`: он подклеил бы английский текст сервера, а среди исходов теперь есть
+      // «занято, повторите» — совет, который обязан быть читаемым (#509).
+      error.value = setAccountErrorMessage(e)
       return false
     } finally {
       saving.value = ''

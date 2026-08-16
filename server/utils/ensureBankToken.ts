@@ -21,6 +21,7 @@ import { signPriorJwt } from './priorJwt'
 import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
+import { bankRefreshLockKey } from './bankRefreshLock'
 import { getBankToken, updateBankTokenSecrets } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
@@ -209,7 +210,11 @@ export async function ensureBankToken(
     return token
   }
 
-  return deps.withLock(`bankrefresh:${token.memberId}:${token.provider}:${token.accountKey}`, async (q) => {
+  // ⚠ Ключ — из общего хелпера, а не собран здесь строкой. Тот же лок берёт выбор счёта
+  // (`renameBankTokenAccount`, #509): он меняет `account_key`, то есть поле, по которому мы свою
+  // строку и находим. Разное написание ключа означало бы, что лок «взят», а стороны не
+  // пересеклись — молча, без единой ошибки.
+  return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey), async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed (or the account been
     // disconnected) while we waited. No stored row → don't refresh+save (would resurrect a
     // disconnected account); hand back the passed token, the fetch will fail cleanly.
