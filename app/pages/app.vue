@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import SettingsIcon from '@bitrix24/b24icons-vue/outline/SettingsIcon'
+import UploadFileIcon from '@bitrix24/b24icons-vue/outline/UploadFileIcon'
 import { splitByDirection } from '~/utils/statement'
 import type { OperationDirection, StatementItem } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
@@ -9,7 +10,6 @@ import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { pageTitle } from '~/utils/landing'
-import BuildSha from '~/components/BuildSha.vue'
 
 // In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
@@ -26,7 +26,452 @@ useHead({
 
 // Real operations only — no demo data. The backend operations feed (#5) lands here
 // later; until then the list is empty (honest empty state, not a mock).
-const items = ref<StatementItem[]>([])
+// @todo - убери мок
+// const items = ref<StatementItem[]>([])
+const items = ref<StatementItem[]>([
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '127938853',
+    docNum: '356',
+    direction: 'debit',
+    amount: 0.29,
+    currency: 'BYN',
+    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ ИВАН ИВАНОВИЧ за 24.07.2026 согл. до',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY32DEMO30120000000000000012',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-28',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00928450004',
+    docNum: '2280',
+    direction: 'debit',
+    amount: 100,
+    currency: 'BYN',
+    purpose: 'OTHR 130102 АВАНС (ЗАРАБОТНАЯ ПЛАТА) ЗА ЗА ИЮЛЬ2026Г. ПО СПИСКУ 147 ОТ 24.07.2026СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
+    counterparty: {
+      name: 'ЗАО \'ДЕМО-БАНК\'',
+      unp: '190000003',
+      account: 'BY30DEMO30120000000000000010',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-24',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00928101693',
+    docNum: '2279',
+    direction: 'debit',
+    amount: 159.78,
+    currency: 'BYN',
+    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000063 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
+    counterparty: {
+      name: 'ООО \'ВАСИЛЁК\'',
+      unp: '190000005',
+      account: 'BY24DEMO30120000000000000004',
+      bic: 'MTBKBY22'
+    },
+    acceptDate: '2026-07-24',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00928101687',
+    docNum: '2279',
+    direction: 'debit',
+    amount: 19.24,
+    currency: 'BYN',
+    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000061 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
+    counterparty: {
+      name: 'ООО \'ВАСИЛЁК\'',
+      unp: '190000005',
+      account: 'BY24DEMO30120000000000000004',
+      bic: 'MTBKBY22'
+    },
+    acceptDate: '2026-07-24',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00928101629',
+    docNum: '2278',
+    direction: 'debit',
+    amount: 1008,
+    currency: 'BYN',
+    purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
+    counterparty: {
+      name: 'ИП ИВАНОВ ИВАН ИВАНОВИЧ',
+      unp: '190000006',
+      account: 'BY23DEMO30120000000000000003',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-24',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00927735152',
+    docNum: '2043611938230893',
+    direction: 'credit',
+    amount: 6300,
+    currency: 'BYN',
+    purpose: 'OTHR 121101 ОПЛАТА РАБОТ ПООБНОВЛЕНИЮ СЕРВИСНОГО ПО ПОРТАЛА B24.DEMO-CLIENT.BY СОГЛАСНО ДОГОВОРА НА ОКАЗАНИЕ УСЛУГ И ВЫПОЛНЕНИЕ РАБОТ N 52/05.10.2020 ОТ05.10.2020 СЧЕТ-ПРОТОКОЛ СОГЛАСОВАНИЯ ЦЕНЫ 52/05.102020/31',
+    counterparty: {
+      name: 'ООО "БИЗНЕС-ЦЕНТР"',
+      unp: '190000007',
+      account: 'BY36DEMO30120000000000000016',
+      bic: 'PJCBBY2X'
+    },
+    acceptDate: '2026-07-23',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '126766867',
+    docNum: '256',
+    direction: 'debit',
+    amount: 3.7,
+    currency: 'BYN',
+    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ ИВАН ИВАНОВИЧ за 15.07.2026 согл. до',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY32DEMO30120000000000000012',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-17',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '126603199',
+    docNum: '837',
+    direction: 'debit',
+    amount: 50,
+    currency: 'BYN',
+    purpose: '2.4.23. II Вознаграждение за обслуживание по пакету услуг "Пакет Лайт" за 7 месяц 2026 г. сог-но Перечню вознаграждений Банка. Без НДС.',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-16',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '126603198',
+    docNum: '446',
+    direction: 'debit',
+    amount: 1.9,
+    currency: 'BYN',
+    purpose: '2.3.16. б) II Вознагр.за предоставление услуги "Клиент-Уведомление" путем отправки сообщения на адрес эл.почты  в июле 2026 г. cогл. П',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-16',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00923002595',
+    docNum: '2276',
+    direction: 'debit',
+    amount: 126.51,
+    currency: 'BYN',
+    purpose: 'TAXS 190101 ПОДОХОДНЫЙ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.07.2026Г.',
+    counterparty: {
+      name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
+      unp: '190000002',
+      account: 'BY35DEMO30120000000000000015',
+      bic: 'AKBBBY2X'
+    },
+    acceptDate: '2026-07-15',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00923002587',
+    docNum: '2275',
+    direction: 'debit',
+    amount: 680,
+    currency: 'BYN',
+    purpose: 'TAXS 190102 ФСЗН НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.07.2026Г.',
+    counterparty: {
+      name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
+      unp: '190000002',
+      account: 'BY27DEMO30120000000000000007',
+      bic: 'AKBBBY2X'
+    },
+    acceptDate: '2026-07-15',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00923002589',
+    docNum: '2277',
+    direction: 'debit',
+    amount: 10,
+    currency: 'BYN',
+    purpose: 'OTHR 143805 ОПЛАТА СТРАХОВЫХ ВЗНОСОВ ЗА НАЕМНЫХСОТРУДНИКОВ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.07.2026Г.СТРАХОВОЙ НОМЕР 500000001КОД ПЛАТЕЖА 10001',
+    counterparty: {
+      name: 'ФИЛИАЛ СТРАХОВЩИКА (ДЕМО)',
+      unp: '190000001',
+      account: 'BY26DEMO30120000000000000006',
+      bic: 'AKBBBY2X'
+    },
+    acceptDate: '2026-07-15',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00923002585',
+    docNum: '2274',
+    direction: 'debit',
+    amount: 1275.08,
+    currency: 'BYN',
+    purpose: 'OTHR 130102 ЗАРАБОТНАЯ ПЛАТА ЗА МЕСЯЦ (ИСТЕКШИЙ) ЗА ИЮНЬ 2026Г. ПО СПИСКУ 146 ОТ 15.07.2026 СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
+    counterparty: {
+      name: 'ЗАО \'ДЕМО-БАНК\'',
+      unp: '190000003',
+      account: 'BY30DEMO30120000000000000010',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-15',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00920729820',
+    docNum: '5954',
+    direction: 'credit',
+    amount: 700,
+    currency: 'BYN',
+    purpose: 'OTHR 123501 ОПЛАТА ЗА УСЛУГИ ПО ДОГОВОРУ 8/06.05.2022 ОТ 06.05.2022, БЕЗ НДС',
+    counterparty: {
+      name: 'ООО \'МЕТАЛЛСЕРВИС\'',
+      unp: '190000010',
+      account: 'BY33DEMO30120000000000000013',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-10',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '125791075',
+    docNum: '37',
+    direction: 'debit',
+    amount: 5.8,
+    currency: 'BYN',
+    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 07.07.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-09',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '125647285',
+    docNum: '54',
+    direction: 'debit',
+    amount: 7.25,
+    currency: 'BYN',
+    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 06.07.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-08',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00918663612',
+    docNum: '2273',
+    direction: 'debit',
+    amount: 2000,
+    currency: 'BYN',
+    purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
+    counterparty: {
+      name: 'И***В И***Н И***Ч',
+      unp: '',
+      account: 'BY25DEMO30120000000000000005',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-07',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: '125500324',
+    docNum: '253',
+    direction: 'debit',
+    amount: 3.48,
+    currency: 'BYN',
+    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 02.07.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
+    counterparty: {
+      name: 'ЗАО "ДЕМО-БАНК"',
+      unp: '190000003',
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-07',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00917983116',
+    docNum: '1937',
+    direction: 'credit',
+    amount: 100,
+    currency: 'BYN',
+    purpose: 'OTHR 121101 ЗА  ОБНОВЛЕНИЕ  . С-НО АКТА 1142/22ОТ 02.06.25Г. ДОГ.1100/30.11.2021ОТ 30.11.2021Г.',
+    counterparty: {
+      name: 'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "РОМАШКА"',
+      unp: '190000009',
+      account: 'BY31DEMO30120000000000000011',
+      bic: 'BLBBBY2X'
+    },
+    acceptDate: '2026-07-06',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00917823497',
+    docNum: '2272',
+    direction: 'debit',
+    amount: 2500,
+    currency: 'BYN',
+    purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
+    counterparty: {
+      name: 'И***В И***Н И***Ч',
+      unp: '',
+      account: 'BY25DEMO30120000000000000005',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-06',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00917822371',
+    docNum: '2271',
+    direction: 'debit',
+    amount: 72,
+    currency: 'BYN',
+    purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
+    counterparty: {
+      name: 'ИП ИВАНОВ ИВАН ИВАНОВИЧ',
+      unp: '190000006',
+      account: 'BY23DEMO30120000000000000003',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-06',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00916639804',
+    docNum: '636',
+    direction: 'credit',
+    amount: 450,
+    currency: 'BYN',
+    purpose: 'OTHR 190401 ОПЛАТА ЗА УСЛУГИ ПО АКТУ 74/26 ОТ 22.06.2026 Г. ПО ДОГОВОРУ 74/04.03.2024 ОТ 04.03.2024 Г.',
+    counterparty: {
+      name: 'ООО "ТОРГОВЫЙ ДОМ"',
+      unp: '190000008',
+      account: 'BY22DEMO30120000000000000002',
+      bic: 'PJCBBY2X'
+    },
+    acceptDate: '2026-07-02',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00916543109',
+    docNum: '2270',
+    direction: 'debit',
+    amount: 60,
+    currency: 'BYN',
+    purpose: 'OTHR 190401 ОПЛАТА СЧЕТА 145792 ОТ 2 ИЮЛЯ 2026ПО ДОГОВОРУ 151М ОТ 21.12.2020, В ТОМ ЧИСЛЕ НДС ПО СТАВКЕ 25% НА СУММУ12.00 БЕЛ.РУБ',
+    counterparty: {
+      name: 'ООО СЕТЕВАЯ КОМПАНИЯ',
+      unp: '190000004',
+      account: 'BY34DEMO30120000000000000014',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-02',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00916417690',
+    docNum: '2270',
+    direction: 'debit',
+    amount: 1200,
+    currency: 'BYN',
+    purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
+    counterparty: {
+      name: 'И***В И***Н И***Ч',
+      unp: '',
+      account: 'BY25DEMO30120000000000000005',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-02',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00916415951',
+    docNum: '2269',
+    direction: 'debit',
+    amount: 281.6,
+    currency: 'BYN',
+    purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
+    counterparty: {
+      name: 'ИП ИВАНОВ ИВАН ИВАНОВИЧ',
+      unp: '190000006',
+      account: 'BY23DEMO30120000000000000003',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-07-02',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'ABOWD00916395472',
+    docNum: '2268',
+    direction: 'debit',
+    amount: 1143.5,
+    currency: 'BYN',
+    purpose: 'OTHR 190401 АРЕНДНАЯ ПЛАТА ПО ДОГОВОРУ 53/100/20 ОТ 03.11.20, В ТОМ ЧИСЛЕ НДС ПО СТАВКЕ 20% НА СУММУ 190.58 БЕЛ.РУБ',
+    counterparty: {
+      name: 'ООО \'ВАСИЛЁК\'',
+      unp: '190000005',
+      account: 'BY29DEMO30120000000000000009',
+      bic: 'BAPBBY2X'
+    },
+    acceptDate: '2026-07-02',
+    operCodeName: '1'
+  }
+])
 const byDirection = computed(() => splitByDirection(items.value))
 
 // Filter chips (labels keep the "(N)" counts). Default "all" shows everything.
@@ -105,11 +550,19 @@ onMounted(async () => {
   <InPortalGate>
     <B24DashboardPanel
       id="home"
-      :b24ui="{ body: 'p-4 sm:pt-4 scrollbar-transparent grid gap-6 lg:grid-cols-[1fr_320px] lg:items-start' }"
+      :b24ui="{ body: 'p-4 sm:pt-0 scrollbar-transparent flex flex-col gap-4' }"
     >
       <template #header>
-        <B24DashboardNavbar title="Выписка по счёту">
+        <B24DashboardNavbar title="Банковские выписки">
           <template #right>
+            <B24Button
+              :icon="UploadFileIcon"
+              color="air-boost"
+              size="sm"
+              label="Загрузить выписку"
+              to="/import"
+            />
+
             <B24Button
               :icon="SettingsIcon"
               color="air-secondary-no-accent"
@@ -151,15 +604,29 @@ onMounted(async () => {
            ready and the app is configured; hidden while unconfigured (setup banner) or while
            the in-portal settings fetch is still resolving (avoids a flash either way). -->
         <template v-else-if="settingsReady">
-          <!-- Lively import-result summary (#62): count-up tiles + by-day / share charts.
-             Same component as the /import preview — reused for the in-portal path. Shown
-             only when there are real operations to summarize. -->
-          <ImportStatsChart
+          <div
             v-if="items.length"
-            :items="items"
-            title="Сводка по операциям"
-            class="mb-5"
-          />
+            class="flex flex-col lg:flex-row items-start justify-between gap-4"
+          >
+            <!-- Lively import-result summary (#62): count-up tiles + by-day / share charts.
+               Same component as the /import preview — reused for the in-portal path. Shown
+               only when there are real operations to summarize. -->
+            <ImportStatsChart
+              :items="items"
+              title="Сводка по операциям"
+              class="w-full"
+            />
+            <div class="w-full lg:max-w-105 shrink-0 flex flex-col items-center justify-between gap-4">
+              <ImportStatusBanner
+                :status="status"
+                @open-settings="() => { settingsOpen = true }"
+              />
+
+              <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
+                партнёр Bitrix24). Только на внутренних страницах приложения (не на лендинге). -->
+              <CustomDevCard />
+            </div>
+          </div>
 
           <!-- Operations, styled like the "Последние операции" view. -->
           <B24Card>
@@ -200,34 +667,6 @@ onMounted(async () => {
             />
           </B24Card>
         </template>
-
-        <div>
-          <ImportStatusBanner
-            :status="status"
-            class="mb-5"
-            @open-settings="() => { settingsOpen = true }"
-          />
-          <B24Button
-            color="air-secondary-no-accent"
-            size="sm"
-            label="Загрузить выписку"
-            to="/import"
-          />
-          <!-- Employee 👍/👎 on the import result (docs/FEEDBACK.md, channel «сотрудник»). Renders only
-             when the channel is configured server-side (GITHUB_FEEDBACK_*), and is inert outside a
-             portal. -->
-          <FeedbackWidget
-            place="общий экран"
-            class="mb-5"
-          />
-
-
-          <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
-             партнёр Bitrix24). Только на внутренних страницах приложения (не на лендинге). -->
-          <div class="mx-auto mt-8 w-full max-w-135">
-            <CustomDevCard />
-          </div>
-        </div>
       </template>
 
       <template #footer>
