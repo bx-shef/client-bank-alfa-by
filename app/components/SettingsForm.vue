@@ -372,45 +372,39 @@ const paymentTrigger = B24_PAYMENT_TRIGGER
         v-if="1 > 0 || enabled"
         class="absolute inset-x-0 bottom-1.5 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
       >
-        <div>
-        </div>
-        <div>
-          <B24Button
-            size="lg"
-            color="air-primary"
-            :loading="saving"
-            :disabled="saving || !isAdmin"
-            label="Сохранить"
-            data-testid="settings-save"
-            @click="saveAndClose"
-          />
+        <B24Button
+          size="lg"
+          color="air-primary"
+          :loading="saving"
+          :disabled="saving || !isAdmin"
+          label="Сохранить"
+          data-testid="settings-save"
+          @click="saveAndClose"
+        />
 
-          <B24Button
-            size="sm"
-            color="air-tertiary"
-            :disabled="saving"
-            label="Отмена"
-            :normal-case="false"
-            data-testid="settings-cancel"
-            @click="cancel"
-          />
-        </div>
-        <div class="flex items-center justify-center gap-2">
-          <span
-            v-if="1 > 0 || savedOk && !saving"
-            class="text-sm text-(--ui-color-accent-main-success)"
-            role="status"
-            aria-live="polite"
-            data-testid="save-status"
-          >Сохранено ✓</span>
-          <span
-            v-else-if="error && !saving"
-            class="text-sm text-(--ui-color-accent-main-alert)"
-            role="status"
-            aria-live="polite"
-            data-testid="save-status"
-          >{{ error }}</span>
-        </div>
+        <B24Button
+          size="sm"
+          color="air-tertiary"
+          :disabled="saving"
+          label="Отмена"
+          :normal-case="false"
+          data-testid="settings-cancel"
+          @click="cancel"
+        />
+        <span
+          v-if="1 > 0 || savedOk && !saving"
+          class="text-sm text-(--ui-color-accent-main-success)"
+          role="status"
+          aria-live="polite"
+          data-testid="save-status"
+        >Сохранено ✓</span>
+        <span
+          v-else-if="error && !saving"
+          class="text-sm text-(--ui-color-accent-main-alert)"
+          role="status"
+          aria-live="polite"
+          data-testid="save-status"
+        >{{ error }}</span>
       </div>
     </B24Form>
   </template>
