@@ -4,6 +4,10 @@ import { useSetupStatus } from '~/composables/useSetupStatus'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { buildReadiness, isFullyReady } from '~/utils/setupReadiness'
 import { formatRelativeTime } from '~/utils/importStatus'
+import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
+import CheckIcon from '@bitrix24/b24icons-vue/main/CheckIcon'
+import Cross30Icon from '@bitrix24/b24icons-vue/actions/Cross30Icon'
+import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 
 // «Что настроено, а что нет» — the first thing in the settings (#409/#405).
 //
@@ -18,12 +22,6 @@ import { formatRelativeTime } from '~/utils/importStatus'
 
 const setup = useSetupStatus()
 const chatSettings = useChatSettings()
-
-/** In-portal only. Outside the frame there is no token, so the server half is unknown — stating
- *  «осталось: 4» there would be a confident claim about a portal we never queried. Comes from
- *  useSetupStatus (its own frameAuth read), not from the settings singleton, whose flag only flips
- *  after ITS load — a child mounts before its parent, so borrowing it would flash a false preview. */
-const inFrame = computed(() => setup.inFrame.value)
 
 const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
@@ -71,105 +69,120 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <B24Card data-testid="setup-readiness">
-    <template #header>
-      <div class="flex items-center justify-between gap-2">
-        <h2 class="font-semibold">
-          Готовность к работе
-        </h2>
-        <B24Badge
-          v-if="inFrame && setup.loaded.value"
-          :color="ready ? 'air-primary-success' : 'air-primary-warning'"
-          size="xs"
-          :label="ready ? 'всё настроено' : `осталось: ${pending}`"
-          data-testid="readiness-badge"
-        />
-      </div>
-    </template>
-
-    <B24Alert
-      v-if="!inFrame"
-      color="air-primary"
-      description="Готовность видна внутри портала Bitrix24. Здесь — предпросмотр."
-      data-testid="readiness-preview"
-    />
-
-    <p
-      v-else-if="!setup.loaded.value"
-      class="text-sm text-(--ui-color-base-3)"
+  <B24Card
+    title="Готовность к работе"
+    :description="setup.loaded.value ? null : (ready ? 'всё настроено' : `осталось: ${pending}`)"
+    data-testid="setup-readiness"
+    class="w-full"
+  >
+    <div
+      v-if="setup.loaded.value"
+      class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
+      data-testid="loading"
       role="status"
       aria-live="polite"
     >
-      Проверяем настройку…
-    </p>
+      <LoaderWaitIcon
+        class="size-12"
+        aria-hidden="true"
+      />
+      <ProseP
+        accent="less"
+        small
+      >
+        Проверяем настройку…
+      </ProseP>
+    </div>
 
     <template v-else>
-      <div
+      <B24Alert
+        v-if="setup.error.value"
         role="alert"
         aria-live="assertive"
-      >
-        <B24Alert
-          v-if="setup.error.value"
-          color="air-primary-alert"
-          :description="setup.error.value"
-          class="mb-3"
-          data-testid="readiness-error"
-        />
-      </div>
+        color="air-primary-alert"
+        :icon="AlertIcon"
+        title="Проблемы."
+        :description="setup.error.value || 'Смотри логи в консоле.'"
+        class="mb-3"
+        data-testid="readiness-error"
+      />
 
       <ul class="space-y-3">
         <li
           v-for="i in items"
           :key="i.key"
-          class="flex gap-3"
+          class="flex gap-2"
           :data-testid="`readiness-${i.key}`"
         >
           <!-- Never colour alone: the ✓/! glyph and the wording carry the state too. -->
-          <span
-            class="mt-0.5 shrink-0 text-sm font-bold"
-            :class="i.ok ? 'text-(--ui-color-accent-main-success)' : 'text-(--ui-color-accent-main-warning)'"
-            aria-hidden="true"
-          >{{ i.ok ? '✓' : '!' }}</span>
+          <CheckIcon
+            v-if="i.ok"
+            class="mt-1.5 text-(--ui-color-accent-main-success) size-5"
+          />
+          <Cross30Icon
+            v-else
+            class="mt-1 text-(--ui-color-accent-main-warning) size-5"
+          />
           <div class="min-w-0">
-            <div class="text-sm font-medium">
-              {{ i.title }} — <span class="font-normal text-(--ui-color-base-3)">{{ i.detail }}</span>
+            <div class="flex flex-row flex-nowrap items-start justify-start gap-2">
+              <ProseP
+                accent="default"
+                class="mb-0"
+              >
+                {{ i.title }}
+              </ProseP>
+              <ProseP
+                accent="less"
+                small
+                class="mb-0 mt-1.5"
+              >
+                — {{ i.detail }}
+              </ProseP>
               <span class="sr-only">{{ i.ok ? '(настроено)' : '(не настроено)' }}</span>
             </div>
-            <p
+            <ProseP
               v-if="i.hint"
-              class="text-xs text-(--ui-color-base-3)"
+              small
+              accent="less"
             >
               {{ i.hint }}
-            </p>
+            </ProseP>
           </div>
         </li>
       </ul>
+    </template>
 
+    <template v-if="!setup.loaded.value" #footer>
       <!-- Schedule (#405): the question «а когда оно само сходит в банк?» had no answer anywhere. -->
-      <div class="mt-4 border-t border-(--ui-color-design-tinted-na-stroke) pt-3 text-xs text-(--ui-color-base-3)">
-        <!-- «Последний ИМПОРТ», не «опрос»: отметку ставит любой прогон crm-sync, включая ручную
-             загрузку файла — иначе портал без единого подключения читал бы «последний опрос». -->
-        <p v-if="setup.status.value.pollEnabled">
-          Опрос банка каждые {{ setup.status.value.pollIntervalMin }} мин.
-          <template v-if="lastRun">
-            Последний импорт: {{ lastRun }}.
-          </template>
-          <template v-else>
-            Импортов ещё не было.
-          </template>
-        </p>
-        <p v-else>
-          Автоматический опрос выключен, выписка не забирается сама. Ручная загрузка файла работает всегда.
-        </p>
+      <!-- «Последний ИМПОРТ», не «опрос»: отметку ставит любой прогон crm-sync, включая ручную
+           загрузку файла — иначе портал без единого подключения читал бы «последний опрос». -->
+      <ProseP
+        v-if="setup.status.value.pollEnabled"
+        accent="accent"
+      >
+        Опрос банков каждые {{ setup.status.value.pollIntervalMin }} мин.
+        <template v-if="lastRun">
+          Последний импорт: {{ lastRun }}.
+        </template>
+        <template v-else>
+          Импортов ещё не было.
+        </template>
+      </ProseP>
+      <ProseP
+        v-else
+        small
+        accent="less"
+      >
+        Автоматический опрос банков выключен, выписка не забирается сама. Ручная загрузка файла работает всегда.
+      </ProseP>
 
-        <!-- «Не понимаю, чего от меня хотят» (#499). Экран готовности перечисляет требования — и
-             это единственное место, где человек может застрять НЕ на платеже, а на самой
-             постановке задачи. Отзыв отсюда несёт только место: никаких данных клиента здесь нет. -->
-        <FeedbackWidget
-          place="экран готовности"
-          class="mt-3"
-        />
-      </div>
+      <!-- «Не понимаю, чего от меня хотят» (#499). Экран готовности перечисляет требования — и
+           это единственное место, где человек может застрять НЕ на платеже, а на самой
+           постановке задачи. Отзыв отсюда несёт только место: никаких данных клиента здесь нет. -->
+      <FeedbackWidget
+        place="экран готовности"
+        class="mt-3"
+      />
     </template>
   </B24Card>
 </template>

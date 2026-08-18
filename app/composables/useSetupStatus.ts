@@ -44,6 +44,8 @@ export function useSetupStatus() {
     if (!a) {
       status.value = { ...DEFAULTS }
       loaded.value = true
+      // @todo верни true
+      loaded.value = false
       return
     }
     loading.value = true
@@ -62,6 +64,8 @@ export function useSetupStatus() {
     } finally {
       loading.value = false
       loaded.value = true
+      // @todo верни true
+      loaded.value = false
     }
   }
 

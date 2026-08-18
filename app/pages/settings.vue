@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import CrossMIcon from '@bitrix24/b24icons-vue/outline/CrossMIcon'
 import { useB24 } from '~/composables/useB24'
 import { APP_SLIDER_PLACE_SETTINGS } from '~/config/b24'
 import { pageTitle } from '~/utils/landing'
 
-// Экран настроек, открываемый НАСТОЯЩИМ слайдером портала (`openSliderAppPage` с /app).
+// Экран настроек, открываемый слайдером портала.
 //
-// Страница держит только оболочку: шапку с крестиком и механику закрытия. Сама форма — это
-// `SettingsForm.vue`, тот же компонент, что раньше жил в `B24Slideover` внутри /app.
+// Страница держит только оболочку: шапку и механику закрытия. Сама форма — это `SettingsForm.vue`
 //
 // ⚠ Страница обязана существовать как МАРШРУТ: портал переоткрывает приложение по НАШЕМУ адресу и
 // передаёт `place`, а глобальный мидлвар уводит свежий фрейм сюда. Без маршрута открывать нечего.
@@ -56,35 +54,21 @@ async function close(): Promise<void> {
   <InPortalGate>
     <B24DashboardPanel
       id="settings"
-      :b24ui="{ body: 'p-4 sm:pt-0 scrollbar-transparent flex flex-col gap-4' }"
+      :b24ui="{ body: 'flex flex-col gap-4 flex-1 overflow-y-auto sm:p-4 sm:pt-0 scrollbar-thin' }"
     >
       <template #header>
         <B24DashboardNavbar
           :toggle="false"
           title="Настройки"
-        >
-          <template #leading>
-            <B24Button
-              :icon="CrossMIcon"
-              color="air-tertiary-no-accent"
-              size="xs"
-              :aria-label="isSlider ? 'Закрыть' : 'Вернуться к обзору'"
-              @click="close"
-            />
-          </template>
-        </B24DashboardNavbar>
+        />
       </template>
 
-      <!-- ⚠ Именно `#body`, а НЕ дефолтный слот. `B24DashboardPanel` рендерит header/body/footer
-           только когда дефолтный слот ПУСТ (в его шаблоне они вложены внутрь `<slot>` как запасной
-           вариант). Положив форму в дефолтный слот, мы молча теряем шапку — страница выглядит
-           нормально, но крестика и заголовка нет вовсе, и закрыть слайдер нечем. -->
       <template #body>
         <ClientOnly>
           <!-- `as-slider` включает в форме пару Save/Cancel, которая эмитит `close`: экран
                закрывается сам, как это делал прежний `B24Slideover`. -->
           <SettingsForm
-            :as-slider="true"
+            class="flex flex-col items-center justify-center min-h-full shrink-0"
             @close="close"
           />
         </ClientOnly>

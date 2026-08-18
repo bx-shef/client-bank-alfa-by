@@ -580,7 +580,10 @@ onMounted(async () => {
       :b24ui="{ body: 'p-4 sm:pt-0 scrollbar-transparent flex flex-col gap-4' }"
     >
       <template #header>
-        <B24DashboardNavbar title="Банковские выписки">
+        <B24DashboardNavbar
+          :toggle="false"
+          title="Банковские выписки"
+        >
           <template #right>
             <B24Button
               :icon="UploadFileIcon"
