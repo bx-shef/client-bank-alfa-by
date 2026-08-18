@@ -18,6 +18,14 @@ export interface MockB24Options {
   callMake?: ReturnType<typeof vi.fn>
   /** Стабильный спай для `$b24.slider.openPath()`. */
   openPath?: ReturnType<typeof vi.fn>
+  /** Стабильный спай для `$b24.slider.openSliderAppPage()` — открытие своего экрана слайдером. */
+  openSliderAppPage?: ReturnType<typeof vi.fn>
+  /** PLACEMENT_OPTIONS фрейма. `{ place: 'app-options' }` = мы сами открыты слайдером настроек. */
+  placementOptions?: Record<string, unknown>
+  /** Стабильный спай для `openAppSlider()` — чем страница открывает вторичный экран. */
+  openAppSlider?: ReturnType<typeof vi.fn>
+  /** Стабильный спай для `closeSlider()` — чем вторичный экран закрывает себя. */
+  closeSlider?: ReturnType<typeof vi.fn>
   /** Права, которые приложение ЗАПРАШИВАЕТ (`getRequiredRights`). Нужны тесту вердикта установки:
    *  «недовыданное право» вычисляется как запрошенное минус выданное порталом. */
   requiredRights?: string[]
@@ -47,8 +55,11 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
     // приложения и вёл в 404 (живая находка). Мок повторяет это поведение, чтобы тест ловил регресс.
     slider: {
       getUrl: (path = '/') => new URL(path, 'https://example.bitrix24.by'),
-      openPath: opts.openPath ?? vi.fn(async () => ({}))
-    }
+      openPath: opts.openPath ?? vi.fn(async () => ({})),
+      openSliderAppPage: opts.openSliderAppPage ?? vi.fn(async () => ({}))
+    },
+    // `place`, с которым портал открыл фрейм. По умолчанию пусто — обычная страница приложения.
+    placement: { options: opts.placementOptions ?? {} }
   } as unknown as B24Frame
   const inFrame = () => opts.isInit?.() ?? true
   return {
@@ -58,6 +69,12 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
     // ветки непроверяемыми — а `InPortalGate` читает именно `get()` (флаг выставляется в nextTick).
     get: () => (inFrame() ? frame : undefined),
     getOrThrow: () => frame,
+    placementPlace: () => {
+      const p = (opts.placementOptions ?? {}).place
+      return typeof p === 'string' && p ? p : undefined
+    },
+    openAppSlider: (opts.openAppSlider ?? vi.fn(async () => true)) as unknown as ReturnType<typeof useB24>['openAppSlider'],
+    closeSlider: (opts.closeSlider ?? vi.fn(async () => {})) as unknown as ReturnType<typeof useB24>['closeSlider'],
     set: () => ok,
     isInit: inFrame,
     targetOrigin: () => 'https://example.bitrix24.by',

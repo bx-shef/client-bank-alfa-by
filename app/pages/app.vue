@@ -10,6 +10,11 @@ import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { pageTitle } from '~/utils/landing'
+import {
+  APP_SLIDER_PLACE_IMPORT,
+  APP_SLIDER_PLACE_SETTINGS,
+  APP_SLIDER_WIDTH
+} from '~/config/b24'
 
 // In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
@@ -495,8 +500,30 @@ function setFilter(f: Filter) {
   page.value = 1
 }
 
-// Слайдовер настроек — ЕДИНСТВЕННЫЙ вход: отдельной страницы /settings больше нет.
-const settingsOpen = ref(false)
+// Вторичные экраны открываются НАСТОЯЩИМ слайдером портала (`openSliderAppPage({ place })`), а не
+// нашим `B24Slideover`: портал рисует свой оверлей поверх работы, с родной шапкой и поведением, и
+// экран не делит вьюпорт с этой страницей. Прежний вывод «слайдер портала для своей страницы не
+// годится» относился к `slider.openPath` (он открывает ПОРТАЛЬНЫЙ путь → 404); `openSliderAppPage`
+// переоткрывает НАШ адрес и передаёт `place`, по которому глобальный мидлвар уводит свежий фрейм на
+// нужный маршрут.
+//
+// Фолбэк обычной навигацией обязателен: вне портала слайдера нет вовсе, а внутри портал может
+// отказать во вложенном слайдере — экран всё равно должен открыться.
+async function openSettings(): Promise<void> {
+  const opened = await b24.openAppSlider(APP_SLIDER_PLACE_SETTINGS, {
+    width: APP_SLIDER_WIDTH,
+    title: 'Настройки'
+  })
+  if (!opened) await navigateTo('/settings')
+}
+
+async function openImport(): Promise<void> {
+  const opened = await b24.openAppSlider(APP_SLIDER_PLACE_IMPORT, {
+    width: APP_SLIDER_WIDTH,
+    title: 'Загрузка выписки'
+  })
+  if (!opened) await navigateTo('/import')
+}
 
 // Import status (demo until the backend poller, #5). Client fetches on mount.
 const { status, refresh } = useImportStatus()
@@ -560,7 +587,7 @@ onMounted(async () => {
               color="air-boost"
               size="sm"
               label="Загрузить выписку"
-              to="/import"
+              @click="openImport"
             />
 
             <B24Button
@@ -568,7 +595,7 @@ onMounted(async () => {
               color="air-secondary-no-accent"
               size="sm"
               label="Настройки"
-              @click="() => { settingsOpen = true }"
+              @click="openSettings"
             />
           </template>
         </B24DashboardNavbar>
@@ -589,7 +616,7 @@ onMounted(async () => {
             label="Открыть настройки"
             color="air-primary"
             class="mb-5"
-            @click="() => { settingsOpen = true }"
+            @click="openSettings"
           />
           <B24Alert
             v-else
@@ -619,7 +646,7 @@ onMounted(async () => {
             <div class="w-full lg:max-w-105 shrink-0 flex flex-col items-center justify-between gap-4">
               <ImportStatusBanner
                 :status="status"
-                @open-settings="() => { settingsOpen = true }"
+                @open-settings="openSettings"
               />
 
               <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
@@ -673,23 +700,5 @@ onMounted(async () => {
         <BuildFooter />
       </template>
     </B24DashboardPanel>
-    <!-- Settings slideover (primary entry; /settings route stays as fallback).
-       Opens from the bottom (a "bottom sheet") — comfortable in a narrow B24
-       iframe / on mobile, where a right-side panel is cramped. -->
-    <B24Slideover
-      v-model:open="settingsOpen"
-      title="Настройки"
-      description="Подключения, уведомления, учет, распознавание."
-      side="bottom"
-    >
-      <template #body>
-        <ClientOnly>
-          <SettingsForm
-            :as-slider="true"
-            @close="settingsOpen = false"
-          />
-        </ClientOnly>
-      </template>
-    </B24Slideover>
   </InPortalGate>
 </template>

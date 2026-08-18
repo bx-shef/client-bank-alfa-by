@@ -22,7 +22,7 @@ export const PUBLIC_ROUTES = ['/', '/partners'] as const
  * «недоступна». Настоящая граница доступа — фрейм-токен на сервере и сессия оператора; `noindex`
  * лишь убирает их из выдачи, где они были бы дублями сниппета лендинга.
  */
-export const SERVICE_ROUTES = ['/app', '/install', '/import', '/queues', '/login'] as const
+export const SERVICE_ROUTES = ['/app', '/install', '/import', '/settings', '/queues', '/login'] as const
 
 export type PublicRoute = typeof PUBLIC_ROUTES[number]
 export type ServiceRoute = typeof SERVICE_ROUTES[number]
