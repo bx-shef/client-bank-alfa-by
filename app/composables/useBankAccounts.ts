@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import type { BankProviderId } from '~/types/statement'
 import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { setAccountErrorMessage } from '~/utils/setAccountError'
+import { disconnectErrorMessage } from '~/utils/disconnectError'
 
 // Connected bank accounts for the settings UI (#404): read the list and disconnect one. Both hit
 // admin-gated frame-token routes (/api/bank/accounts, /api/bank/disconnect) — same auth model as
@@ -10,6 +11,11 @@ import { setAccountErrorMessage } from '~/utils/setAccountError'
 // The payload carries identity + freshness only; token material never reaches the browser.
 
 export interface ConnectedBankAccount {
+  /**
+   * Неизменяемый адрес подключения (#517). Им адресуется «Отключить»: `accountKey` МЕНЯЕТСЯ, когда
+   * подключению назначают счёт, и удаление по нему промахивалось мимо строки, отвечая успехом.
+   */
+  id: number
   provider: BankProviderId
   accountKey: string
   /** Epoch ms of the last successful connect/refresh. */
@@ -65,7 +71,7 @@ export function useBankAccounts() {
 
   /** Disconnect one account, then re-read the list (the server is the source of truth — an
    *  optimistic local splice would lie if the delete silently failed). */
-  async function disconnect(account: Pick<ConnectedBankAccount, 'provider' | 'accountKey'>): Promise<boolean> {
+  async function disconnect(account: Pick<ConnectedBankAccount, 'id' | 'provider' | 'accountKey'>): Promise<boolean> {
     const a = frameAuth()
     if (!a) {
       error.value = 'Отключение доступно только внутри портала Bitrix24'
@@ -77,12 +83,14 @@ export function useBankAccounts() {
       await $fetch('/api/bank/disconnect', {
         method: 'POST',
         headers: authHeaders(a),
-        body: { provider: account.provider, accountKey: account.accountKey }
+        // `id` адресует строку, `accountKey` едет как ОЖИДАНИЕ: сервер сверит его с текущим и
+        // ответит 409, если между отрисовкой и кликом подключение стало другим (#517).
+        body: { id: account.id, provider: account.provider, accountKey: account.accountKey }
       })
       await load()
       return true
     } catch (e) {
-      error.value = frameFetchError(e, 'Не удалось отключить счёт')
+      error.value = disconnectErrorMessage(e)
       return false
     } finally {
       removing.value = ''

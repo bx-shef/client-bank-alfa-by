@@ -247,6 +247,12 @@ export async function listBankAccountsForPortal(query: QueryFn, memberId: string
  *  `connectedAt` is the row's `updated_at` (set on connect AND on every refresh, so it reads
  *  as "last known good"), `expiresAt` lets the UI say whether the access token is still fresh. */
 export interface BankAccountInfo extends BankAccountRef {
+  /**
+   * Неизменяемый адрес строки (#517). `accountKey` МЕНЯЕТСЯ — выбор счёта переименовывает
+   * `~pending:`-ключ в настоящий номер, — поэтому по нему нельзя адресовать удаление: браузер
+   * держит адрес, которого уже нет, и «Отключить» тихо не находит строку.
+   */
+  id: number
   /** Epoch ms of the last successful connect/refresh. */
   connectedAt: number
   /** Epoch ms the access token expires at. */
@@ -267,13 +273,14 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // so an encrypted empty secret ends with a bare colon. Without this clause every pre-existing
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
-    `SELECT member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
   return rows.map(r => ({
+    id: Number(r.id),
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
     accountKey: String(r.account_key),
@@ -297,13 +304,14 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
  *  refresh lifetime differs by bank and is the thing most likely to be corrected later. */
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
-    `SELECT member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens ORDER BY updated_at ASC`,
     []
   )
   return rows.map(r => ({
+    id: Number(r.id),
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
     accountKey: String(r.account_key),
@@ -323,6 +331,53 @@ export async function deleteBankToken(query: QueryFn, memberId: string, provider
     [memberId, provider, accountKey]
   )
   return rows.length > 0
+}
+
+/**
+ * Удалить подключение по НЕИЗМЕНЯЕМОМУ адресу, сверив, что строка не изменилась под пользователем
+ * (#517). Три исхода, и все три различимы только благодаря `id`:
+ *   `removed` — удалили;
+ *   `gone`    — строки нет: честная идемпотентность (двойной клик, уже отключили);
+ *   `stale`   — строка есть, но её `account_key` уже НЕ тот, что видел нажавший.
+ *
+ * ⚠ Раньше удаление адресовалось ключом счёта, а он меняется: выбор счёта переименовывает
+ * `~pending:`-ключ в настоящий номер. DELETE по адресу из отрисованного списка не находил строку и
+ * отвечал ровно тем же `200 {removed:false}`, что и честное «уже отключено» — то есть приложение
+ * рапортовало успех, продолжая ходить в банк клиента вопреки явному запрету. Различить два случая
+ * по ключу нельзя в принципе, отсюда `id`.
+ *
+ * ⚠ `stale` — ОТКАЗ, а не «удалим всё равно». Между отрисовкой и кликом строка могла стать другой
+ * сущностью: админ жал «убрать незавершённое», а к этому моменту счёт уже выбрали, и подключение
+ * стало рабочим. Удалять по такому клику значит снести настроенный доступ вместо мусора.
+ *
+ * Member-scoped в самом WHERE: чужую строку не тронуть, даже подделав `id`.
+ */
+export async function deleteBankTokenById(
+  query: QueryFn, memberId: string, id: number, expectedAccountKey: string
+): Promise<'removed' | 'gone' | 'stale'> {
+  // ⚠ СНАЧАЛА УДАЛЕНИЕ, потом диагностика — и это не перестановка ради красоты. Обратный порядок
+  // (сперва прочитать ключ, потом удалить) оставляет окно МЕЖДУ двумя запросами: если в него
+  // попадает `renameBankTokenAccount` — а кнопки «выбрать счёт» и «Отключить» стоят в одной строке
+  // интерфейса, — то DELETE со старым ключом промахивается, и ноль строк читается как «уже
+  // отключено». То есть функция сама создавала бы ту же ложь про успех, ради устранения которой
+  // написана, только окно сжалось бы с «сколько провисела вкладка» до одного round-trip к БД.
+  // Воспроизведено на живом Postgres (ревью).
+  //
+  // Здесь же правильность обеспечивает ОДИН оператор: DELETE держит блокировку строки на время
+  // выполнения, поэтому «ключ совпал» и «строка удалена» происходят неразделимо. Разрыва, в
+  // который можно вклиниться, не остаётся.
+  const rows = await query(
+    `DELETE FROM bank_tokens WHERE member_id = $1 AND id = $2 AND account_key = $3 RETURNING member_id`,
+    [memberId, id, expectedAccountKey]
+  )
+  if (rows.length > 0) return 'removed'
+  // Ноль строк — теперь только ДИАГНОСТИКА: различить «строки нет» и «строка есть, но другая».
+  // Её собственная гонка безобидна: она уже ничего не меняет, только выбирает текст ответа.
+  const found = await query(
+    `SELECT account_key FROM bank_tokens WHERE member_id = $1 AND id = $2`,
+    [memberId, id]
+  )
+  return found.length > 0 ? 'stale' : 'gone'
 }
 
 /** Переименовать ключ счёта у подключения (#407): подключились без счёта → выбрали счёт.

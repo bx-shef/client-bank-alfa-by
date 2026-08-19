@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { decryptSecret } from '../server/utils/secretCrypto'
 import {
+  deleteBankTokenById,
   deleteBankTokensForPortal,
   renameBankTokenAccount,
   getBankToken,
@@ -82,14 +83,14 @@ describe('listBankAccountInfoForPortal — проекция для экрана 
   // тестом: соседняя `listAllBankAccountInfo` (её зовёт keep-alive) — другая функция.
   it('отдаёт свежесть и срок согласия, без единого секрета', async () => {
     const { query } = fakeQuery([{
-      member_id: 'M1', provider: 'prior-by', account_key: 'BY13',
+      id: '9', member_id: 'M1', provider: 'prior-by', account_key: 'BY13',
       expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000),
       has_refresh: true, consent_expires_at: '1800000000000',
       access_token: 'SECRET', refresh_token_enc: 'SECRET'
     }])
     const [row] = await listBankAccountInfoForPortal(query, 'M1')
     expect(row).toEqual({
-      memberId: 'M1', provider: 'prior-by', accountKey: 'BY13',
+      id: 9, memberId: 'M1', provider: 'prior-by', accountKey: 'BY13',
       connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000,
       hasRefresh: true, consentExpiresAt: 1_800_000_000_000
     })
@@ -431,14 +432,14 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
   // (и однажды в чьём-нибудь логе). Форма закреплена явно.
   it('отдаёт идентификацию + свежесть и НИ ОДНОГО секрета', async () => {
     const query = async () => [{
-      member_id: 'M1', provider: 'alfa-by', account_key: 'BY00BANK00000000000000000001',
+      id: '7', member_id: 'M1', provider: 'alfa-by', account_key: 'BY00BANK00000000000000000001',
       expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000), has_refresh: true,
       // Если кто-то расширит SELECT, поля приедут сюда — и не должны появиться в результате.
       access_token: 'SECRET', refresh_token_enc: 'SECRET'
     }]
     const [row] = await listAllBankAccountInfo(query)
     expect(row).toEqual({
-      memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001',
+      id: 7, memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001',
       connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true,
       // Колонки в строке нет (Альфа согласий не выдаёт) ⇒ 0 = «неизвестно». Именно 0, а не
       // `undefined`: ноль читается правилами как «даты нет», и подключение не хоронится (#503).
@@ -586,5 +587,87 @@ describe('срок согласия в сторе (#503)', () => {
     await saveBankToken(q, { ...token, consentExpiresAt: 1_800_000_000_000 })
     await updateBankTokenSecrets(q, { ...token, accessToken: 'A3', consentExpiresAt: 0 })
     expect((await getBankToken(q, 'm1', 'alfa-by', 'MC_7'))!.consentExpiresAt).toBe(1_800_000_000_000)
+  })
+})
+
+// Удаление по неизменяемому адресу со сверкой ключа (#517).
+//
+// До этого удаление адресовалось номером счёта — а он МЕНЯЕТСЯ, когда подключению назначают счёт.
+// Клик по строке из отрисованного минуту назад списка не находил её и отвечал `200 {removed:false}`,
+// неотличимо от честного «уже отключено». Снаружи это выглядело успехом, а приложение продолжало
+// ходить в банк клиента вопреки явному запрету.
+describe('deleteBankTokenById', () => {
+  /** Модель: DELETE удаляет, только если ключ совпал; SELECT показывает, что строка ещё есть. */
+  function fake(current: string | null) {
+    const sqls: { sql: string, params: unknown[] }[] = []
+    const query = async (sql: string, params: unknown[] = []) => {
+      sqls.push({ sql, params })
+      if (/^DELETE/.test(sql.trim())) {
+        return current !== null && params[2] === current ? [{ member_id: 'm1' }] : []
+      }
+      return current !== null ? [{ account_key: current }] : []
+    }
+    return { query, sqls }
+  }
+
+  it('удаляет, когда ключ совпадает с тем, что видел нажавший', async () => {
+    const { query, sqls } = fake('BY01')
+    expect(await deleteBankTokenById(query, 'm1', 7, 'BY01')).toBe('removed')
+    // ⚠ Удаление ПЕРВЫМ и единственным: на happy-path диагностика не нужна вовсе.
+    expect(sqls).toHaveLength(1)
+    expect(sqls[0]!.sql.trim().startsWith('DELETE')).toBe(true)
+  })
+
+  it('строки нет — `gone`, то есть честная идемпотентность двойного клика', async () => {
+    const { query } = fake(null)
+    expect(await deleteBankTokenById(query, 'm1', 7, 'BY01')).toBe('gone')
+  })
+
+  it('ключ изменился под пользователем — `stale`, и НИЧЕГО не удалено', async () => {
+    // ⚠ Отказ, а не «удалим всё равно»: пока список висел на экране, `~pending:`-подключению могли
+    // назначить счёт, и оно стало рабочим. Удалить по такому клику значит снести настроенный
+    // доступ вместо мусора.
+    const { query, sqls } = fake('BY01')
+    expect(await deleteBankTokenById(query, 'm1', 7, '~pending:n1')).toBe('stale')
+    expect(sqls.map(c => c.sql.trim().split(/\s+/)[0])).toEqual(['DELETE', 'SELECT'])
+  })
+
+  it('УДАЛЕНИЕ идёт первым — иначе между чтением и удалением влезает переименование', async () => {
+    // ⚠ Ровно та гонка, что воспроизведена на живом Postgres при ревью: обратный порядок оставляет
+    // окно, в которое попадает `renameBankTokenAccount`, и DELETE со старым ключом промахивается —
+    // ноль строк читается как «уже отключено», хотя подключение только что стало рабочим.
+    const { query, sqls } = fake(null)
+    await deleteBankTokenById(query, 'm1', 7, 'BY01')
+    expect(sqls[0]!.sql.trim().startsWith('DELETE')).toBe(true)
+  })
+
+  it('сравнение ТОЧНОЕ: регистр и пробелы не прощаются', async () => {
+    // Функция существует ради «тот ли это ключ, что видел человек». Послабление сравнения тихо
+    // расширило бы «тот же» до «похожий» — и удаление снова стало бы попадать не туда.
+    for (const stored of [' BY01', 'BY01 ', 'by01']) {
+      const { query } = fake(stored)
+      expect(await deleteBankTokenById(query, 'm1', 7, 'BY01'), stored).toBe('stale')
+    }
+  })
+
+  it('оба запроса member-scoped, и удаление сверяет ключ прямо в WHERE', async () => {
+    // ⚠ `account_key = $3` в самом DELETE — это и есть атомарность проверки: без него удаление шло
+    // бы по одному `id`, не глядя, что строка успела стать другой сущностью.
+    const { query, sqls } = fake('OTHER')
+    await deleteBankTokenById(query, 'm1', 7, 'BY01')
+    expect(sqls).toHaveLength(2)
+    for (const c of sqls) expect(c.sql).toContain('member_id = $1')
+    expect(sqls[0]!.sql).toContain('account_key = $3')
+  })
+})
+
+describe('SCHEMA_SQL — неизменяемый адрес строки (#517)', () => {
+  it('колонка и её уникальный индекс заводятся идемпотентно', async () => {
+    // Миграция гоняется на КАЖДОМ старте: не-идемпотентная форма роняла бы backend на втором.
+    const { SCHEMA_SQL } = await import('../server/db/client')
+    expect(SCHEMA_SQL).toContain('ADD COLUMN IF NOT EXISTS id BIGSERIAL')
+    expect(SCHEMA_SQL).toContain('CREATE UNIQUE INDEX IF NOT EXISTS bank_tokens_id_key')
+    // ⚠ Тройка остаётся идентичностью — `id` её не подменяет, а лишь даёт удалению адрес.
+    expect(SCHEMA_SQL).toContain('PRIMARY KEY (member_id, provider, account_key)')
   })
 })
