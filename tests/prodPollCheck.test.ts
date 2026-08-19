@@ -1,0 +1,89 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+// Гард диагностического скрипта опроса (#522).
+//
+// ⚠ Он ищет в логе конкретные маркеры, и маркеры эти живут в коде воркера. Разойдись они — скрипт
+// продолжит «работать», показывая пустые секции, и пустота будет означать не «всё тихо», а
+// «я больше не знаю, что искать». Это самый неприятный вид отказа диагностики: молчание, похожее
+// на здоровье, ровно тогда, когда её открыли из-за подозрений.
+
+const ROOT = join(import.meta.dirname, '..')
+const SCRIPT = readFileSync(join(ROOT, 'scripts', 'prod-poll-check.sh'), 'utf8')
+const WORKER = readFileSync(join(ROOT, 'server/queue/worker.ts'), 'utf8')
+const OBSERV = readFileSync(join(ROOT, 'server/queue/workerObservability.ts'), 'utf8')
+const PLUGIN = readFileSync(join(ROOT, 'server/plugins/queue.ts'), 'utf8')
+// ⚠ `[crm-sync]` строится НЕ в воркере: итоговая строка прогона живёт в чистом модуле политики
+// логирования (#498), а воркер только печатает возвращённое. Тест это поймал — искал не там.
+const OPLOG = readFileSync(join(ROOT, 'app/utils/opLogPolicy.ts'), 'utf8')
+
+describe('диагностика опроса ищет маркеры, которые код действительно печатает (#522)', () => {
+  it('исходники читаются', () => {
+    expect(SCRIPT.length).toBeGreaterThan(500)
+    expect(WORKER).toContain('console.log')
+  })
+
+  /**
+   * Текст ВСЕХ команд `grep` в скрипте — и только их.
+   *
+   * ⚠ Мутационное ревью поймало здесь дыру: первая версия искала маркер в файле ЦЕЛИКОМ, а он есть
+   * ещё и в заголовке секции («ПАДЕНИЯ задач [queue-job-failed]»). Поэтому переименование маркера
+   * в самой команде `grep` тест проходил зелёным — то есть гард проверял оформление, а не поиск.
+   */
+  const grepLines = SCRIPT.split('\n').filter(l => /\bgrep\b/.test(l)).join('\n')
+
+  it('регулярка выбирает именно команды grep', () => {
+    // Без этого «маркер найден» достигалось бы и пустой выборкой.
+    expect(grepLines).toContain('grep')
+    expect(grepLines.split('\n').length).toBeGreaterThan(5)
+    // Заголовки секций в выборку попасть не должны.
+    expect(grepLines).not.toContain('section "')
+  })
+
+  it('каждый маркер ИЩЕТСЯ командой grep', () => {
+    for (const marker of ['[fetch]', '[crm-sync]', '[op]', '[queue-job-failed]',
+      '[queue-job-retry]', '[queue-worker-error]', '[queue] real poll']) {
+      // В grep скобки бывают экранированы (`\[queue-job-failed\]`) — сверяем по содержимому.
+      expect(grepLines, `команды grep больше не ищут ${marker}`).toContain(marker.replace(/^\[|\]$/g, ''))
+    }
+  })
+
+  it('каждый маркер ПЕЧАТАЕТСЯ кодом — со скобками, в вызове лога', () => {
+    // ⚠ Второе мутационное ревью поймало и обратную дыру: сверка шла по маркеру БЕЗ скобок, а
+    // слово `fetch` встречается в `worker.ts` повсюду (`fetchQueueFor`, имена очередей, комментарии).
+    // Переименуй код `[fetch]` в `[poll]` — тест остался бы зелёным, и скрипт молча искал бы то,
+    // чего больше нет. Поэтому здесь маркер проверяется ЦЕЛИКОМ, вместе со скобками.
+    for (const [marker, source] of [
+      ['[fetch]', WORKER], ['[op]', WORKER], ['[crm-sync]', OPLOG], ['[queue] real poll', PLUGIN]
+    ] as Array<[string, string]>) {
+      expect(source, `код больше не печатает ${marker}`).toContain(marker)
+    }
+    // ⚠ Формы записи РАЗНЫЕ, и это не придирка: два тега выбираются тернарником и лежат в файле
+    // строковыми литералами (`'queue-job-failed'`), а третий подставлен прямо в шаблон
+    // (`[queue-worker-error] queue=…`). Проверка «только в кавычках» пропускала третий, проверка
+    // «просто вхождение» ловила бы его же из комментария в шапке модуля.
+    for (const tag of ['queue-job-failed', 'queue-job-retry', 'queue-worker-error']) {
+      expect(OBSERV, `наблюдаемость больше не печатает ${tag}`).toMatch(new RegExp(`'${tag}'|\\[${tag}\\]`))
+    }
+  })
+
+  it('строки планирования крона ИСКЛЮЧЕНЫ из широкого невода', () => {
+    // ⚠ Причина, по которой скрипт вообще написан: строка планирования печатается каждые 5 минут и
+    // содержит `prior-by`/`alfa-by`. Любой греп по названию банка тонет в ней, и `tail` показывает
+    // только её — вытесняя ровно то, ради чего смотрели.
+    expect(SCRIPT).toMatch(/grep -v 'real poll'/)
+  })
+
+  it('пустая секция подписана явно, а не оставлена пустой', () => {
+    // Пустой вывод неотличим от оборвавшейся команды; в диагностике это недопустимо.
+    expect(SCRIPT).toContain('(ничего)')
+  })
+
+  it('скрипт только ЧИТАЕТ — ничего не перезапускает и не правит', () => {
+    // ⚠ Его будут запускать в момент подозрения на аварию. Диагностика, которая что-то меняет,
+    // уничтожает состояние, которое пришли изучать.
+    expect(SCRIPT).not.toMatch(/up -d|restart|down\b|rm -f|sed -i|printenv/)
+    expect(SCRIPT).toMatch(/logs --since/)
+  })
+})
