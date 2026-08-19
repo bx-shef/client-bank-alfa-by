@@ -224,6 +224,30 @@ describe('updatePortalTokenSecrets — рефреш НЕ создаёт реги
     expect(query.mock.calls[0]![0]).not.toMatch(/application_token/i)
   })
 
+  it('каждое значение стоит на СВОЁМ месте — позиции сверяются целиком', async () => {
+    // ⚠ Находка мутационного ревью: проверялся только `params[3]` (шифрование refresh), поэтому
+    // перестановка `domain` и `accessToken` местами в массиве параметров не ловилась НИЧЕМ —
+    // при живом `SET domain = $2, access_token = $3` access-токен уехал бы в колонку домена, а
+    // домен в колонку токена. Это классическая ошибка рефакторинга «переставили поля в SET и
+    // забыли массив», и последствия у неё катастрофические: портал теряет и адрес, и доступ.
+    const query = present()
+    await updatePortalTokenSecrets(query, token)
+    const params = query.mock.calls[0]![1] as unknown[]
+    expect(params).toHaveLength(5)
+    expect(params[0]).toBe(token.memberId)
+    expect(params[1]).toBe(token.domain)
+    expect(params[2]).toBe(token.accessToken)
+    expect(params[4]).toBe(token.expiresAt)
+    // ⚠ И порядок в SQL сверяется с этим порядком: сам по себе правильный массив ничего не
+    // значит, если плейсхолдеры в тексте переставлены.
+    const sql = query.mock.calls[0]![0] as string
+    expect(sql).toMatch(/domain\s*=\s*\$2/)
+    expect(sql).toMatch(/access_token\s*=\s*\$3/)
+    expect(sql).toMatch(/refresh_token_enc\s*=\s*\$4/)
+    expect(sql).toMatch(/expires_at\s*=\s*\$5/)
+    expect(sql).toMatch(/WHERE member_id = \$1/)
+  })
+
   it('refresh уезжает ЗАШИФРОВАННЫМ, а не открытым текстом', async () => {
     const query = present()
     await updatePortalTokenSecrets(query, token)
