@@ -141,18 +141,21 @@ describe('getMemberIdByDomain', () => {
 })
 
 describe('deleteToken', () => {
-  it('пишет тумбстоун ПЕРЕД удалением строки, а не после (#510)', async () => {
-    // ⚠ Порядок здесь — инвариант, а не деталь реализации. Он был обратным, и это давало
-    // отдельное окно: конкурент, стартовавший МЕЖДУ удалением и записью тумбстоуна, не видел ни
-    // строки, ни запрета — то есть считал портал живым и просто ещё не сохранённым.
-    // ⚠ Основную работу делает UPDATE-only (`updatePortalTokenSecrets`), закрывающий оба окна
-    // независимо от порядка; эта перестановка — эшелонированная защита ценой одной строки, и
-    // тумбстоун читают не только рефреш-пути.
+  it('удаление и тумбстоун — ОДИН оператор, а не два (#510)', async () => {
+    // ⚠ Раньше это были два отдельных `query()`, и тогда единственным вопросом было, какой
+    // порядок менее плох: либо строка переживает запрет (живые OAuth-креды на диске у портала,
+    // только что отозвавшего согласие), либо запрет переживает строку (конкурент не видит ни
+    // того, ни другого и считает портал живым). Postgres выполняет ОДИН оператор — включая
+    // data-modifying CTE — в одной неявной транзакции, поэтому ложатся оба или ни одного, и
+    // вопрос порядка перестаёт существовать.
     const query = vi.fn(async () => [])
-    await deleteToken(query, 'm1')
-    expect(query.mock.calls[0]![0]).toMatch(/INSERT INTO portal_tombstone/)
-    expect(query.mock.calls[1]![0]).toMatch(/DELETE FROM portal_tokens WHERE member_id = \$1/)
-    expect(query.mock.calls[1]![1]).toEqual(['m1'])
+    await deleteToken(query, 'm1', 42)
+    expect(query).toHaveBeenCalledTimes(1)
+    const sql = query.mock.calls[0]![0]
+    expect(sql).toMatch(/WITH deleted AS \(/i)
+    expect(sql).toMatch(/DELETE FROM portal_tokens WHERE member_id = \$1/)
+    expect(sql).toMatch(/INSERT INTO portal_tombstone/)
+    expect(query.mock.calls[0]![1]).toEqual(['m1', 42])
   })
 
   // Ordering guard (#77): records a tombstone with the uninstall ts (GREATEST-merged).

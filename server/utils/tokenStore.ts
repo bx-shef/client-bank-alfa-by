@@ -107,34 +107,35 @@ export async function getToken(query: QueryFn, memberId: string): Promise<Portal
 }
 
 /**
- * ОБНОВИТЬ токены существующей регистрации портала. `false` — строки уже нет, писать нечего.
+ * UPDATE an existing portal registration's tokens. `false` = the row is already gone.
  *
- * ⚠ ДВА ПИСАТЕЛЯ, И ЭТО РАЗНЫЕ ПРАВА (#510; тот же приём, что у банковского стора в #505).
- * `saveToken` — upsert, он СОЗДАЁТ регистрацию, и зовёт его только обработчик `ONAPPINSTALL`
- * (роут события и register-ветка воркера), где портал прямо сейчас установил приложение.
- * Обновление токена на рефреше ходит сюда.
+ * ⚠ TWO WRITERS, WITH DIFFERENT RIGHTS (#510; the same move the bank store made in #505).
+ * `saveToken` is an upsert — it CREATES the registration, and only the `ONAPPINSTALL` handlers
+ * call it (the event route and the worker's register branch), where the portal has just installed
+ * the app. Token refreshes come here instead.
  *
- * Раньше рефреш ходил тем же upsert'ом и мог ВОСКРЕСИТЬ строку удалённого портала. Тумбстоун
- * (#77) это не закрывал — окон было ДВА, и второе шире, чем описывал комментарий модуля:
- *   1. рефреш прочитал тумбстоун (его нет) → деинсталляция прошла целиком → рефреш вставил строку;
- *   2. `deleteToken` пишет тумбстоун ПОСЛЕ удаления строки, поэтому рефреш, стартовавший ВНУТРИ
- *      самой деинсталляции, тумбстоуна тоже не видит.
- * Перестановка операций в `deleteToken` убирает только второе. UPDATE-only убирает оба разом и
- * без второго локa: после `DELETE` обновлять нечего — неважно, в каком порядке всё легло и
- * сколько заняла сеть. ⚠ А занимает она много: между перечитом и записью стоит POST на
- * OAuth-сервер Bitrix с потолком 15 с, поэтому даже перечит под advisory-локом в
- * `ensureAccessToken` окно сужал, но не закрывал.
+ * Refreshes used to go through that same upsert and could RESURRECT the row of an uninstalled
+ * portal. The tombstone (#77) did not cover it — there were TWO windows, and the second was wider
+ * than the module's own comment described:
+ *   1. the refresh read the tombstone (none yet) → the uninstall completed → the refresh inserted;
+ *   2. `deleteToken` wrote the tombstone AFTER deleting the row, so a refresh that started INSIDE
+ *      the uninstall saw no ban either.
+ * Reordering `deleteToken` would only close the second. UPDATE-only closes both at once and needs
+ * no extra lock: once the `DELETE` has run there is nothing to update, whatever the ordering and
+ * however long the network took. ⚠ And it takes long: a POST to Bitrix's OAuth server with a 15s
+ * ceiling sits between the re-read and the write, which is why even the in-lock re-read in
+ * `ensureAccessToken` narrowed the window without closing it.
  *
- * ⚠ Легитимного случая, где рефреш обязан СОЗДАТЬ строку, не существует по построению: чтобы
- * обновить пару, её сперва надо прочитать из этой же строки.
+ * ⚠ No legitimate case exists where a refresh must CREATE the row: to renew a pair you must first
+ * have read it from that very row.
  *
- * ⚠ `application_token` здесь не трогается вовсе — он write-once и приходит только с установкой;
- * рефреш о нём ничего не знает и знать не должен.
+ * ⚠ `application_token` is not touched at all here — it is write-once and arrives only with the
+ * install; a refresh knows nothing about it and must not.
  *
- * ⚠ `updated_at` штампуется ОБЯЗАТЕЛЬНО, и это противоположно `renameBankTokenAccount`, где его
- * трогать нельзя. Здесь колонка означает «когда мы последний раз держали свежую пару», и по ней
- * `selectTokensNearExpiry` (#175) выбирает порталы для проактивного продления. Не обновив её,
- * мы бы гоняли рефреш по одному и тому же порталу на каждом тике.
+ * ⚠ `updated_at` IS stamped, which is the opposite of `renameBankTokenAccount` where stamping it
+ * is forbidden. Here the column means "when we last held a fresh pair", and
+ * `selectTokensNearExpiry` (#175) picks portals for proactive keep-alive by it. Skip the stamp and
+ * an already-refreshed portal stays in the band and gets refreshed again on every tick.
  */
 export async function updatePortalTokenSecrets(query: QueryFn, token: PortalToken): Promise<boolean> {
   const rows = await query(
@@ -186,16 +187,23 @@ export async function getMemberIdByDomain(query: QueryFn, domain: string): Promi
  * newer reinstall (in `saveToken`), so it's one small bounded row per uninstalled
  * portal. `eventTs` is the B24 event timestamp (0 when unknown). */
 export async function deleteToken(query: QueryFn, memberId: string, eventTs = 0): Promise<void> {
-  // ⚠ Тумбстоун пишется ПЕРВЫМ, до удаления строки (#510). Порядок был обратный, и это давало
-  // отдельное окно: конкурент, стартовавший МЕЖДУ удалением и записью тумбстоуна, не видел ни
-  // строки, ни запрета — то есть считал портал живым и просто ещё не сохранённым. Эшелонированная
-  // защита ценой одной перестановки: основную работу делает UPDATE-only
-  // (`updatePortalTokenSecrets`), закрывающий оба окна независимо от порядка, но сужать окно там,
-  // где это бесплатно, всё равно правильно — тумбстоун читают и другие пути.
+  // ⚠ ONE statement, not two (#510). The delete and the tombstone used to be separate `query()`
+  // calls, and then the only question was which order was less bad — either the row outlives the
+  // ban (live OAuth creds on disk for a portal that just revoked consent) or the ban outlives the
+  // row (a concurrent writer sees neither and treats the portal as alive). Postgres runs a single
+  // statement — data-modifying CTE included — in one implicit transaction, so both land or
+  // neither does, and the question stops existing. No `BEGIN` needed.
+  //
+  // ⚠ The tombstone still matters even though `updatePortalTokenSecrets` is UPDATE-only: it is
+  // what stops a STALE `register` (an install job retried after this uninstall) from re-creating
+  // the portal through `saveToken` (#77). Atomicity here protects that guarantee, it does not
+  // replace it.
   await query(
-    `INSERT INTO portal_tombstone (member_id, deleted_ts) VALUES ($1, $2)
+    `WITH deleted AS (
+       DELETE FROM portal_tokens WHERE member_id = $1 RETURNING member_id
+     )
+     INSERT INTO portal_tombstone (member_id, deleted_ts) VALUES ($1, $2)
      ON CONFLICT (member_id) DO UPDATE SET deleted_ts = GREATEST(portal_tombstone.deleted_ts, EXCLUDED.deleted_ts)`,
     [memberId, eventTs]
   )
-  await query(`DELETE FROM portal_tokens WHERE member_id = $1`, [memberId])
 }

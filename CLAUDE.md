@@ -666,7 +666,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     клиента, который нас удалил. ⚠ Тумбстоун это НЕ закрывал: окон было **два**, и второе шире, чем
     описывал сам модуль — `deleteToken` писал тумбстоун ПОСЛЕ удаления строки, поэтому рефреш,
     стартовавший внутри самой деинсталляции, запрета тоже не видел. UPDATE-only снимает оба одним
-    правилом и без второго локa: после `DELETE` обновлять нечего, в каком бы порядке всё ни легло.
+    правилом и без второго лока: после `DELETE` обновлять нечего, в каком бы порядке всё ни легло.
     ⚠ Перечит под advisory-локом в `ensureAccessToken` окно **сужал, но не закрывал**: между ним и
     записью стоит POST на OAuth-сервер Б24 с потолком 15 с. ⚠ `updated_at` UPDATE-only штампует
     **обязательно** (противоположно `renameBankTokenAccount`): по нему `selectTokensNearExpiry` (#175)
@@ -1181,7 +1181,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`getPortalSettings`→`readAppSettingVia`, `appSettings.ts`). Типизация `new B24OAuth` как `OAuthCallClient` —
     compile-time drift-guard. **Компромисс (осознанный, выбор пользователя):** SDK-рефреш идёт **мимо** advisory-lock
     (`ensureAccessToken`, #35) — проигранная гонка ротации = **транзиентный ретрай BullMQ**, не порча кредов (persist —
-    UPDATE-only-эквивалент через tombstone-guarded `saveToken`); advisory-lock остаётся на keep-alive (#175). Прежний
+    persist — **UPDATE-only** `updatePortalTokenSecrets`, #510: рефреш не может пересоздать строку удалённого портала); advisory-lock остаётся на keep-alive (#175). Прежний
     ручной `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + лок + reactive-retry) **удалён** —
     SDK стал единственным транспортом. Реактивный ретрай `expired_token` теперь у самого SDK — **и для crm-sync, и для
     UI-фрейм-роутов** (`makeFrameRestCall`, `liveDeps.frameRestCall`): сырой `callRest`/`isExpiredTokenError` из
@@ -1324,7 +1324,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `server/utils/tokenKeepAlive.ts` (**проактивный keep-alive рефреш, #175**: `refresh_token` живёт ~180 д,
     установленный, но **простаивающий** портал не делает REST-вызовов → ленивый рефреш не срабатывает → токен
     молча умирает на 180-й день. Раз в сутки крон `runTokenKeepAlive` рефрешит **только** порталы у истечения:
-    `selectTokensNearExpiry` (чистый селектор по `updated_at` — его штампует `saveToken` на install/refresh, это и
+    `selectTokensNearExpiry` (чистый селектор по `updated_at` — его штампуют ОБА писателя: `saveToken` на install и
+`updatePortalTokenSecrets` на каждом рефреше (#510), это и
     есть «когда получена последняя пара»; порог ~3 д, кап `MAX_KEEP_ALIVE_BATCH`) → на каждый `ensureAccessToken`
     (у простаивавшего портала access давно истёк → рефреш всегда срабатывает, и заодно ленивый лок/идемпотентность).
     Пер-портальные ошибки (dead grant/`PAYMENT_REQUIRED`/удалён) изолированы — логируются, крон не падает. Намеренно

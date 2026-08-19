@@ -294,6 +294,9 @@ describe('sdkPortalDeps (live token-store wiring)', () => {
       if (/FROM portal_tokens WHERE member_id/i.test(q) && /SELECT member_id, domain/i.test(q)) {
         return [{ member_id: 'M1', domain: 'acme.bitrix24.com', access_token: 'AT', refresh_token_enc: encryptSecret('RT'), expires_at: 1_700_000_000_000, application_token: 'APPTOK' }]
       }
+      // ⚠ UPDATE обязан отдать строку: `RETURNING member_id` — это и есть способ узнать, что
+      // регистрация ещё жива. Пустой ответ означает «портала больше нет», и персист тогда бросает.
+      if (/UPDATE portal_tokens/i.test(q)) return [{ member_id: 'M1' }]
       return []
     }
     const deps = sdkPortalDeps({ query, clientId: 'cid', clientSecret: 'sec', now: () => 123 })
@@ -321,6 +324,23 @@ describe('sdkPortalDeps (live token-store wiring)', () => {
     const refreshEncBind = write!.p?.[3] as string
     expect(refreshEncBind).not.toBe('NEW_RT') // не открытым текстом
     expect(decryptSecret(refreshEncBind)).toBe('NEW_RT') // шифр, round-trip
+  })
+
+  it('портал удалён во время рефреша ⇒ персист БРОСАЕТ, а не глотает (#510)', async () => {
+    // ⚠ Находка ревью, и она не про хранение, а про ДЕЙСТВИЕ. Колбэк вызывается ВНУТРИ
+    // `AuthOAuthManager.refreshAuth()` самого SDK, и если он разрешается, `refreshAuth()` отдаёт
+    // свежие authData, а `_makeRequestWithAuthRetry` тут же ПЕРЕИГРЫВАЕТ исходный упавший
+    // REST-вызов с ними. То есть проглоченный `false` означал бы: портал нас удалил, токен мы
+    // честно не сохранили — и следом записали дело / отправили сообщение в чат / провели оплату
+    // в CRM этого клиента. Не держать их данные — только половина; не действовать в их портале
+    // после того, как нас выгнали, — вторая.
+    //
+    // Бросок реджектит `refreshAuth()`, переигровка не случается, джоба падает и чисто ретраится
+    // по BullMQ — тот же контракт «throw → clean retry», на котором стоит весь модуль.
+    process.env.B24_TOKEN_ENC_KEY = 'bb'.repeat(32)
+    const query: QueryFn = async q => (/UPDATE portal_tokens/i.test(q) ? [] : []) // строки нет
+    const deps = sdkPortalDeps({ query, clientId: 'cid', clientSecret: 'sec', now: () => 123 })
+    await expect(deps.saveToken(token({ accessToken: 'NEW' }))).rejects.toThrow(/uninstalled mid-refresh/)
   })
 })
 

@@ -102,11 +102,22 @@ export async function ensureAccessToken(
       expiresAt: deps.now() + r.expiresIn * 1000,
       domain: hostFromEndpoint(r.clientEndpoint) ?? stored.domain
     }
-    // ⚠ `false` (регистрации уже нет) НЕ ошибка и не повод бросать: портал удалили, пока мы
-    // ходили в OAuth-сервер. Возвращаем обновлённую пару вызывающему — его REST-вызов честно
-    // упадёт на несуществующем портале, — но в БД не осталось ничего, что пришлось бы потом
-    // подчищать. Ровно тот исход, ради которого запись сделана UPDATE-only (#510).
-    await deps.saveToken(q, updated)
+    // ⚠ UPDATE-only, and the result IS checked — same shape as `ensureBankToken` (#505/#510).
+    // The row may have vanished WHILE we were at the OAuth server: the lock holds back other
+    // refreshers, but an advisory lock does not hold back a plain `DELETE`, and the POST runs up
+    // to 15 s. `false` is not an error and must not throw — the portal simply uninstalled us —
+    // but it MUST be visible: without the line, the one moment where a rotated pair is knowingly
+    // dropped leaves no trace at all, and the next question ("why did this portal stop working?")
+    // has nothing to read.
+    if (!await deps.saveToken(q, updated)) {
+      console.warn('[ensureAccessToken] portal was uninstalled mid-refresh — token NOT stored')
+      // ⚠ Return the STALE token, not the fresh one — same call as `ensureBankToken` makes, and
+      // for the same reason. The refresh succeeded, so `updated` is a working credential for a
+      // portal that just removed us; handing it back would let one more REST call land there.
+      // The stale token fails instead, the job fails honestly, and nothing reaches a portal that
+      // withdrew consent. Costs one doomed request either way — this is the one that fails.
+      return stored
+    }
     return updated
   })
 }

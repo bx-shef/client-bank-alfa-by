@@ -464,7 +464,23 @@ export interface SdkInfra {
 export function sdkPortalDeps(infra: SdkInfra): SdkPortalDeps {
   return {
     loadToken: memberId => getToken(infra.query, memberId),
-    saveToken: token => updatePortalTokenSecrets(infra.query, token).then(() => undefined),
+    saveToken: async (token) => {
+      // ⚠ THROWS when the row is gone, and that is the whole point — traced through the SDK
+      // during review. `setCallbackRefreshAuth` runs INSIDE `AuthOAuthManager.refreshAuth()`, and
+      // if this callback resolves, `refreshAuth()` hands back fresh authData and
+      // `_makeRequestWithAuthRetry` immediately REPLAYS the original failed REST call with it.
+      // So swallowing the `false` would mean: the portal uninstalled us mid-refresh, we correctly
+      // declined to store the token — and then the SDK went ahead and wrote an activity / posted a
+      // chat message / mutated an allocation in that client's CRM anyway. Not keeping their data
+      // is only half of it; not acting in their portal after they threw us out is the other half.
+      //
+      // Throwing rejects `refreshAuth()`, the replay never happens, and the crm-sync job fails for
+      // a clean BullMQ retry — the same "throw → clean retry" contract the rest of this module
+      // already relies on (`makeSdkRestCall`, `makeSdkBatchCall`).
+      if (!await updatePortalTokenSecrets(infra.query, token)) {
+        throw new Error('portal was uninstalled mid-refresh — token NOT stored, aborting the call')
+      }
+    },
     creds: { clientId: infra.clientId, clientSecret: infra.clientSecret },
     now: infra.now,
     scope: infra.scope
