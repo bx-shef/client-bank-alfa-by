@@ -355,18 +355,29 @@ export async function deleteBankToken(query: QueryFn, memberId: string, provider
 export async function deleteBankTokenById(
   query: QueryFn, memberId: string, id: number, expectedAccountKey: string
 ): Promise<'removed' | 'gone' | 'stale'> {
-  const found = await query(
-    `SELECT account_key FROM bank_tokens WHERE member_id = $1 AND id = $2`,
-    [memberId, id]
-  )
-  if (found.length === 0) return 'gone'
-  if (String(found[0]?.account_key ?? '') !== expectedAccountKey) return 'stale'
+  // ⚠ СНАЧАЛА УДАЛЕНИЕ, потом диагностика — и это не перестановка ради красоты. Обратный порядок
+  // (сперва прочитать ключ, потом удалить) оставляет окно МЕЖДУ двумя запросами: если в него
+  // попадает `renameBankTokenAccount` — а кнопки «выбрать счёт» и «Отключить» стоят в одной строке
+  // интерфейса, — то DELETE со старым ключом промахивается, и ноль строк читается как «уже
+  // отключено». То есть функция сама создавала бы ту же ложь про успех, ради устранения которой
+  // написана, только окно сжалось бы с «сколько провисела вкладка» до одного round-trip к БД.
+  // Воспроизведено на живом Postgres (ревью).
+  //
+  // Здесь же правильность обеспечивает ОДИН оператор: DELETE держит блокировку строки на время
+  // выполнения, поэтому «ключ совпал» и «строка удалена» происходят неразделимо. Разрыва, в
+  // который можно вклиниться, не остаётся.
   const rows = await query(
     `DELETE FROM bank_tokens WHERE member_id = $1 AND id = $2 AND account_key = $3 RETURNING member_id`,
     [memberId, id, expectedAccountKey]
   )
-  // Строку могли унести между SELECT и DELETE — для вызывающего это то же «уже нет».
-  return rows.length > 0 ? 'removed' : 'gone'
+  if (rows.length > 0) return 'removed'
+  // Ноль строк — теперь только ДИАГНОСТИКА: различить «строки нет» и «строка есть, но другая».
+  // Её собственная гонка безобидна: она уже ничего не меняет, только выбирает текст ответа.
+  const found = await query(
+    `SELECT account_key FROM bank_tokens WHERE member_id = $1 AND id = $2`,
+    [memberId, id]
+  )
+  return found.length > 0 ? 'stale' : 'gone'
 }
 
 /** Переименовать ключ счёта у подключения (#407): подключились без счёта → выбрали счёт.

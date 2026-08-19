@@ -45,8 +45,8 @@ export default defineEventHandler(async (event) => {
         domain,
         provider: typeof raw?.provider === 'string' ? raw.provider : '',
         accountKey: typeof raw?.accountKey === 'string' ? raw.accountKey : '',
-        // Неизменяемый адрес строки (#517); `accountKey` рядом — это ОЖИДАНИЕ вызывающего, по
-        // расхождению с ним мы и узнаём, что список на экране устарел.
+        // The row's immutable address (#517); `accountKey` rides along as the caller's EXPECTATION —
+        // a mismatch is how we learn the on-screen list has gone stale.
         id: Number(raw?.id)
       })
       span.outcome = httpOutcomeForStatus(status)

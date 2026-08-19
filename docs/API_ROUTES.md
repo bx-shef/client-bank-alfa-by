@@ -1,6 +1,6 @@
 # Наши HTTP-роуты: авторизация и коды
 
-> Last reviewed: 2026-08-16
+> Last reviewed: 2026-08-19
 
 Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
 [`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.

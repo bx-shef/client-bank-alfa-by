@@ -40,6 +40,22 @@ async function mountReady() {
 
 const PENDING = provisionalAccountKey('nonce1')
 
+// ⚠ Кнопки ищем ПО ПОДПИСИ, а не по позиции. После первого клика строка раскрывается в пару
+// «Да, отключить» / «Отмена», и «последняя кнопка» — это ОТМЕНА: тест бы кликал не туда, запрос бы
+// не уходил, а `mockImplementationOnce` оставался бы в очереди и срабатывал в СЛЕДУЮЩЕМ тесте.
+async function askToDisconnect(wrapper: { findAll: (s: string) => { text: () => string, trigger: (e: string) => Promise<void> }[] }): Promise<void> {
+  const btn = wrapper.findAll('button').find(b => b.text().includes('Отключить') && !b.text().includes('Да,'))
+  await btn!.trigger('click')
+  await nextTick()
+}
+
+async function confirmDisconnect(wrapper: { findAll: (s: string) => { text: () => string, trigger: (e: string) => Promise<void> }[] }): Promise<void> {
+  const btn = wrapper.findAll('button').find(b => b.text().includes('Да, отключить'))
+  await btn!.trigger('click')
+  await flushPromises()
+  await nextTick()
+}
+
 describe('ConnectedBankAccounts', () => {
   it('пустой портал говорит об этом словами, а не пустотой', async () => {
     const wrapper = await mountReady()
@@ -88,6 +104,32 @@ describe('ConnectedBankAccounts', () => {
     // Первый клик только спрашивает — запроса на удаление ещё нет.
     expect(wrapper.text()).toContain('Отключить?')
     expect(fetchMock.mock.calls.some(c => c[0] === '/api/bank/disconnect')).toBe(false)
+  })
+
+  it('второй клик шлёт НЕИЗМЕНЯЕМЫЙ адрес строки, а не только номер счёта', async () => {
+    // ⚠ Единственное место, где это вообще проверяется. Прежде ни один тест не доходил до второго
+    // клика, поэтому «composable перестал слать `id`» не ронял НИЧЕГО: сервер отвечал бы 400, фича
+    // «Отключить» не работала бы совсем, а CI оставался зелёным (находка ревью тестировщика).
+    listReply.value = [{ id: 42, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }]
+    const wrapper = await mountReady()
+    await askToDisconnect(wrapper)
+    await confirmDisconnect(wrapper)
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/disconnect')
+    expect(call).toBeTruthy()
+    expect((call![1] as { body: Record<string, unknown> }).body).toMatchObject({
+      id: 42, provider: 'alfa-by', accountKey: 'BY01ALFA0001'
+    })
+  })
+
+  it('на 409 показывает «список устарел», а не общий отказ', async () => {
+    // 409 здесь значит «строка изменилась под вами», и текст обязан звать обновить список: это
+    // единственный исход, ради которого сообщение читают.
+    listReply.value = [{ id: 42, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }]
+    const wrapper = await mountReady()
+    await askToDisconnect(wrapper)
+    fetchMock.mockImplementationOnce((() => Promise.reject(Object.assign(new Error('conflict'), { statusCode: 409 }))) as unknown as typeof fetchMock)
+    await confirmDisconnect(wrapper)
+    expect(wrapper.text()).toContain('устарел')
   })
 })
 
