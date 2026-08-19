@@ -7,6 +7,7 @@
 // is precisely the failure this issue is about, only moved one screen over.
 
 import type { BankProviderId } from '~/types/statement'
+import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { ALFA_REFRESH_TOKEN_TTL_SEC } from '~/utils/alfaOauth'
 
 /**
@@ -185,6 +186,51 @@ const HEALTH_BADGE = {
     hint: 'Подключение в зоне обновления — приложение продлит его само на ближайшем цикле. Действий не требуется.'
   }
 } as const
+
+/**
+ * Потолок возраста БРОШЕННОГО ожидающего подключения (#485).
+ *
+ * ⚠ Нужен как раз потому, что «мертво» доказуемо не всегда: у Приора срок refresh — догадка
+ * (`BANK_REFRESH_TTL_MEASURED`), а согласия может не быть вовсе. Без потолка такие строки жили бы
+ * вечно — а именно они и копятся: каждое повторное подключение заводит НОВУЮ строку (nonce всякий
+ * раз другой, иначе два параллельных connect'а затирали бы друг друга).
+ *
+ * ⚠ Двое суток, а не часы: подключение начинает админ, а завершает его владелец счёта, и «зашёл в
+ * банк вечером, вписал номер утром» — обычный сценарий, а не небрежность. Снести такую строку
+ * раньше значит заставить человека проходить банк заново.
+ */
+export const PENDING_MAX_AGE_DAYS = 2
+
+/**
+ * Пора ли удалить ожидающее подключение: оно уже не может стать рабочим.
+ *
+ * Два основания, и второе не заменяет первое:
+ *  • состояние `expired` — это ДОКАЗАННАЯ смерть (истекло согласие банка либо вышел ИЗМЕРЕННЫЙ срок
+ *    refresh). Держать такую строку незачем ни минуты: выбор счёта на ней создал бы подключение,
+ *    которое отвалится на первом же обращении к банку;
+ *  • возраст сверх потолка — для случаев, где смерть не доказуема (`unknown`, `due`, `no-refresh`).
+ *
+ * ⚠ Только `~pending:`. Живое подключение свипу не подлежит никогда: у него есть выбранный счёт, по
+ * нему идёт опрос, и «состарившийся» токен там чинит keep-alive, а не удаление.
+ */
+export function abandonedPending(
+  c: ConnectionLike & { accountKey: string },
+  nowMs: number,
+  maxAgeDays = PENDING_MAX_AGE_DAYS
+): boolean {
+  // ⚠ Через общий хелпер, а не литералом: префикс объявлен в `bankAccountKey.ts`, и ВСЕ прочие
+  // потребители зовут именно его. Вторая копия строки разошлась бы молча — и именно здесь, в
+  // единственном гейте, который отделяет удаляемое от рабочего подключения.
+  if (!isPendingAccountKey(c.accountKey)) return false
+  if (connectionHealth(c, nowMs) === 'expired') return true
+  const age = nowMs - c.connectedAt
+  // ⚠ Пол встроен ЗДЕСЬ, а не только в разбор env. Функция экспортирована и удаляет данные доступа:
+  // полагаться на то, что единственный сегодняшний вызывающий передаёт уже клампленное значение, —
+  // мина для будущего рефакторинга. С `maxAgeDays = 0` она сносила бы подключение возрастом в
+  // миллисекунду (проверено ревью тестировщика прямым вызовом).
+  const floorDays = Math.max(1, maxAgeDays)
+  return Number.isFinite(age) && age >= floorDays * 86_400_000
+}
 
 /** Badge for a health state, or `null` when there is nothing worth saying.
  *  `ok` and `unknown` return null on purpose: a badge on every healthy row is noise that trains
