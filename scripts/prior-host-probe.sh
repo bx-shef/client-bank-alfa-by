@@ -69,22 +69,92 @@ API_BASE="$(envv PRIOR_OAUTH_API_BASE)"
 TOKEN_URL="$(envv PRIOR_OAUTH_TOKEN_URL)"
 AUTHORIZE_BASE="$(envv PRIOR_OAUTH_AUTHORIZE_BASE)"
 AUTH_METHOD="$(envv PRIOR_OAUTH_AUTH_METHOD)"
-PRIVATE_KEY_RAW="$(envv PRIOR_OAUTH_PRIVATE_KEY)"
 
 echo "Проба хоста Приорбанка — $TARGET"
 echo "Сейчас в .env: API_BASE=${API_BASE:-<пусто>}  TOKEN_URL=${TOKEN_URL:-<пусто>}"
 echo "               AUTHORIZE_BASE=${AUTHORIZE_BASE:-<пусто>}  метод=${AUTH_METHOD:-<по умолчанию>}"
 [ -n "$CLIENT_ID" ] && ok "client_id прочитан (${#CLIENT_ID} симв.)" || { bad "PRIOR_OAUTH_CLIENT_ID пуст"; exit 1; }
-[ -n "$PRIVATE_KEY_RAW" ] || { bad "PRIOR_OAUTH_PRIVATE_KEY пуст"; exit 1; }
 [ -n "$KID" ] || { bad "PRIOR_OAUTH_KID пуст"; exit 1; }
 
+# --- приватный ключ -----------------------------------------------------------------------------
+# ⚠ Форм хранения в `.env` несколько, и они несовместимы. Скрипт пробует их по очереди и ГОВОРИТ,
+# какая подошла: диагностика важнее краткости, потому что при отказе выбирать не из чего — ключ
+# показать нельзя, а «не разбирается» без подробностей не лечится ничем, кроме угадывания.
+#
+#   A. одна строка с экранированными переносами: PRIOR_OAUTH_PRIVATE_KEY="-----BEGIN...\n...\n-----END..."
+#   B. настоящие переносы: значение занимает несколько строк файла (docker compose так не умеет,
+#      но человек, правивший .env руками, пишет именно так — и это самая частая причина отказа);
+#   C. base64 без PEM-заголовков (иногда так кладут, чтобы уместить в одну строку).
 KEYFILE="$(mktemp /tmp/prior-key.XXXXXX)"; chmod 600 "$KEYFILE"
-trap 'rm -f "$KEYFILE"' EXIT
-# В .env перевод строки хранится как «\n» — разворачиваем обратно в настоящий PEM.
-printf '%b\n' "$PRIVATE_KEY_RAW" > "$KEYFILE"
-if openssl rsa -in "$KEYFILE" -noout 2>/dev/null; then ok "приватный ключ разобран (RSA)"
-elif openssl pkey -in "$KEYFILE" -noout 2>/dev/null; then ok "приватный ключ разобран"
-else bad "приватный ключ не разбирается — проверьте PRIOR_OAUTH_PRIVATE_KEY"; exit 1; fi
+KEYRAW="$(mktemp /tmp/prior-raw.XXXXXX)"; chmod 600 "$KEYRAW"
+trap 'rm -f "$KEYFILE" "$KEYRAW"' EXIT
+
+# Забираем значение ЦЕЛИКОМ: от строки с именем до конца значения. Конец — это либо `-----END`,
+# либо закрывающая кавычка, либо начало следующей переменной.
+awk '
+  BEGIN { grabbing = 0 }
+  !grabbing && /^[[:space:]]*(export[[:space:]]+)?PRIOR_OAUTH_PRIVATE_KEY[[:space:]]*=/ {
+    line = $0
+    sub(/^[[:space:]]*(export[[:space:]]+)?PRIOR_OAUTH_PRIVATE_KEY[[:space:]]*=/, "", line)
+    print line
+    grabbing = 1
+    # Значение закрылось на этой же строке — дальше не читаем.
+    if (line ~ /-----END/ || line ~ /\\n/) { exit }
+    next
+  }
+  grabbing {
+    # Следующая переменная — значит предыдущее значение кончилось.
+    if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?[A-Z][A-Z0-9_]*[[:space:]]*=/) exit
+    print
+    if ($0 ~ /-----END/) exit
+  }
+' ./.env > "$KEYRAW"
+
+KEY_LINES="$(wc -l < "$KEYRAW" | tr -d ' ')"
+KEY_BYTES="$(wc -c < "$KEYRAW" | tr -d ' ')"
+[ "$KEY_BYTES" -gt 1 ] || { bad "PRIOR_OAUTH_PRIVATE_KEY в ./.env не найден или пуст"; exit 1; }
+
+# Снимаем обрамляющие кавычки (в многострочном виде они на первой и последней строке).
+sed -e '1s/^[[:space:]]*"//' -e '1s/^[[:space:]]*'"'"'//' \
+    -e '$s/"[[:space:]]*$//' -e '$s/'"'"'[[:space:]]*$//' "$KEYRAW" > "$KEYRAW.q" && mv "$KEYRAW.q" "$KEYRAW"
+
+parses() { openssl pkey -in "$1" -noout 2>/dev/null || openssl rsa -in "$1" -noout 2>/dev/null; }
+
+SHAPE=""
+# A: экранированные переносы.
+if grep -q '\\n' "$KEYRAW"; then
+  printf '%b\n' "$(cat "$KEYRAW")" > "$KEYFILE"
+  parses "$KEYFILE" && SHAPE="одна строка с экранированными переносами (\\n)"
+fi
+# B: настоящие переносы — содержимое уже готовый PEM.
+if [ -z "$SHAPE" ] && grep -q -- '-----BEGIN' "$KEYRAW"; then
+  cp "$KEYRAW" "$KEYFILE"
+  parses "$KEYFILE" && SHAPE="настоящие переносы строк ($KEY_LINES строк)"
+fi
+# C: голый base64 без заголовков — обрамляем сами, пробуя оба типа PEM.
+if [ -z "$SHAPE" ] && ! grep -q -- '-----BEGIN' "$KEYRAW"; then
+  B64="$(tr -d ' \n\r' < "$KEYRAW")"
+  for T in "PRIVATE KEY" "RSA PRIVATE KEY"; do
+    { echo "-----BEGIN $T-----"; echo "$B64" | fold -w 64; echo "-----END $T-----"; } > "$KEYFILE"
+    if parses "$KEYFILE"; then SHAPE="base64 без PEM-заголовков (подставили $T)"; break; fi
+  done
+fi
+
+if [ -n "$SHAPE" ]; then
+  ok "приватный ключ разобран — форма: $SHAPE"
+else
+  bad "приватный ключ не разбирается ни в одной из известных форм"
+  # ⚠ Печатаем ТОЛЬКО безопасные признаки: количество строк, длину и первые 30 символов ПЕРВОЙ
+  # строки. У PEM это заголовок `-----BEGIN …-----`, секрета в нём нет; если там окажется что-то
+  # другое — это и есть ответ, почему не разбирается.
+  echo "    строк в значении: $KEY_LINES, байт: $KEY_BYTES"
+  echo "    начало значения:  $(head -1 "$KEYRAW" | cut -c1-30)"
+  echo "    последняя строка: $(tail -1 "$KEYRAW" | cut -c1-30)"
+  echo "    содержит '-----BEGIN': $(grep -c -- '-----BEGIN' "$KEYRAW"), '-----END': $(grep -c -- '-----END' "$KEYRAW")"
+  echo "    содержит литеральные \\n: $(grep -c '\\n' "$KEYRAW")"
+  echo "    ошибка openssl: $(openssl pkey -in "$KEYFILE" -noout 2>&1 | head -1)"
+  exit 1
+fi
 
 HOSTPORT="${TARGET#https://}"
 
