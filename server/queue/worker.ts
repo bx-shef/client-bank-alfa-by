@@ -45,7 +45,8 @@ import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
 import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
-import { resolveOpLogMode, runSummaryLine, shouldLogOperation } from '../../app/utils/opLogPolicy'
+import { resolveOpLogMode, runSummaryLine } from '../../app/utils/opLogPolicy'
+import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
@@ -116,10 +117,6 @@ const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
  *  start, exactly like the flag above — flipping it means a restart. The default prints only the
  *  operations that did NOT land; the run summary stays unconditional in every mode. */
 const OP_LOG_MODE = resolveOpLogMode(process.env.STATEMENT_OP_LOG)
-/** Cap for the revealed purpose. Longer than the `logSafe` default (128) because a real purpose
- *  routinely carries several document numbers and the tail is where they sit — truncating there
- *  would hide the very thing the flag is turned on to see. */
-const MAX_LOGGED_PURPOSE = 300
 
 const DEMO_DELAY = demoDelayMs(Number(process.env.DEMO_DELAY_MS ?? 600))
 const demoPause = (account: string): Promise<void> =>
@@ -313,33 +310,12 @@ export function liveHandlerDeps(): HandlerDeps {
     // Follows docs/PRIVACY.md §Логи: account/docId/counterparty account are logged, AMOUNTS ARE
     // NOT, and the purpose only behind the opt-in gate below.
     onOperation: (item, outcome, memberId) => {
-      // ⚠ Гейт ПЕРВЫМ делом: строка `[op]` весит 221 байт с обвязкой docker, и на масштабе
-      // «10 порталов × 100 оплат/мин» одна она съедает историю логов до четырёх часов (замер,
-      // #498). Приземлившиеся операции не печатаем: у них авторитетная запись — само дело в
-      // Bitrix24 с маркером, оно точнее и не истекает. Сколько опущено — скажет итог прогона.
-      if (!shouldLogOperation(outcome, OP_LOG_MODE)) return
-      const owner = outcome.owner === 'client'
-        ? 'company'
-        : outcome.owner === 'my-company' ? 'my-company (fallback)' : 'NO OWNER'
-      // The purpose is payer-authored free text — the widest untrusted field we hold, and the one
-      // §Логи deliberately keeps out of the log. But calibrating the recognition matrices means
-      // reading REAL purposes: you cannot write a mask for a numbering you have never seen. So it
-      // is available, opt-in, exactly like the crypto gateway's error-log level (#460) — a
-      // temporary loosening for a live run, switched back after. Default OFF.
-      const purpose = STATEMENT_DEBUG_LOG ? ` purpose="${logSafe(item.purpose, MAX_LOGGED_PURPOSE)}"` : ''
-      // ⚠ `currency` тоже logSafe: у Альфы и Приора это СЫРОЙ проброс из JSON банка
-      // (`row.currIso`/`tx.currency`, только trim), а не наш enum — в отличие от `direction`,
-      // который нормализаторы вычисляют сами. Поле новое в логах, и обойти его было легко
-      // именно потому, что рядом стоит безопасный сосед.
-      const op = `${logSafe(item.account)}|${logSafe(item.docId)}`
-      const from = logSafe(item.counterparty.account) || 'счёт не указан'
-      // ⚠ Названо `intents`, а НЕ `recognized`, хотя поле зовётся так: в сводке джобы `recognized`
-      // считает ОПЕРАЦИИ, у которых распознан хотя бы один номер, а здесь — сколько номеров
-      // распознано в ЭТОЙ операции. Оператор, сверяющий строки лога со сводкой (ровно то, ради чего
-      // строка и заведена), сложил бы одно с другим и не сошёлся — тем более что сводочный счётчик
-      // растёт и для дедуп-пропущенных операций, которые `[op]` не печатает вовсе.
-      const tail = `intents ${outcome.recognized}, activity ${outcome.activityId ?? '—'}`
-      console.log(`[op] portal ${memberId}, op ${op}: ${item.direction} ${logSafe(item.currency, 8)} ← ${from} → ${owner}, ${tail}${purpose}`)
+      // Both the volume gate and the text live in `buildOpLogLine` — a pure function with an
+      // executable test. Keeping them here made the gate verifiable only by reading the source,
+      // and a review mutation proved the cost: `if (false && !shouldLogOperation(…)) return`
+      // left the whole suite green while silently restoring the full #498 log volume.
+      const line = buildOpLogLine(item, outcome, memberId, OP_LOG_MODE, STATEMENT_DEBUG_LOG)
+      if (line) console.log(line)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);

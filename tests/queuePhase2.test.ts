@@ -359,7 +359,13 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
     // Payment NOT lost: recorded (created:1) AND flagged unmatched (payer unknown).
-    expect(r).toMatchObject({ processed: 1, created: 1, unmatched: 1, notified: 0 })
+    // ⚠ `landed: 0` здесь — ЦЕНТРАЛЬНЫЙ инвариант #498, и проверять его надо именно тут, на
+    // проводке. Дело записано, но клиент НЕ опознан, поэтому приземлением это не считается: иначе
+    // построчный лог замолчал бы ровно про главный симптом ненастроенного портала. Мутационная
+    // проверка ревью показала, что без этой строки правка `landedCleanly`, засчитывающая
+    // my-company, не роняет НИ ОДНОГО из тестов этого файла — инвариант держался только
+    // изолированным юнит-тестом чистой функции, то есть проводка была не защищена.
+    expect(r).toMatchObject({ processed: 1, created: 1, unmatched: 1, notified: 0, landed: 0 })
     // Written to MY company (not a client), carrying the reason note.
     expect(calls.activity).toEqual([['d1', 'MY', 'M', 'act-1']])
     const note = (calls.activityNote as [string, string, string | null][])[0]
@@ -391,7 +397,11 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ myCompany: 'MY', errorChat: { dialogId: 'err' } })
     deps.findCompany = async it => (it.docId === 'd1' ? 'CO' : null) // d1 client found, d2 unmatched
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit')]), deps)
-    expect(r).toMatchObject({ processed: 2, created: 2, unmatched: 1, notified: 1, credits: 2 })
+    // ⚠ `created: 2, landed: 1` в одной пачке — самая наглядная форма инварианта (#498): записали
+    // ДВА дела, а приземлилась ОДНА операция, потому что вторая ушла в мою компанию. Счётчики,
+    // совпадающие во всех остальных тестах, здесь расходятся, и перестановка полей местами или
+    // засчитывание фолбэка ломает ровно этот тест.
+    expect(r).toMatchObject({ processed: 2, created: 2, unmatched: 1, notified: 1, credits: 2, landed: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'MY', 'M', 'act-2']])
     expect(calls.unmatchedNotify).toEqual([['d2', true, 'err', 'M']]) // only the fallback op
     expect(calls.chat).toEqual([['d1', 'M']]) // only the matched client op reaches the normal chat
