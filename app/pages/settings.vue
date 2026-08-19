@@ -3,6 +3,9 @@ import { onMounted, ref } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { APP_SLIDER_PLACE_SETTINGS } from '~/config/b24'
 import { pageTitle } from '~/utils/landing'
+import { useLogger } from '~/utils/logger'
+
+const log = useLogger('settings')
 
 // Экран настроек, открываемый слайдером портала.
 //
@@ -21,32 +24,32 @@ useHead({
 
 const { init, get, placementPlace, closeSlider } = useB24()
 
-// Как экран открыт — от этого зависит, что делает закрытие:
-//  • слайдером (`place = app-options`) → закрываем оверлей портала;
-//  • обычной навигацией внутри фрейма (портал отказал в слайдере) → возвращаемся на /app;
-//  • вне портала → никуда не уходим, закрывать нечего.
-// ⚠ `null` — «ещё не знаем»: со стартовым `false` первый кадр считал бы себя standalone.
-const inPortal = ref<boolean | null>(null)
+// Состояний ровно ДВА, и это осознанное упрощение: экран открыт слайдером портала — или нет.
+// Промежуточное «во фрейме, но не слайдером» отдельной ветки не заслуживает: закрытие там ведёт
+// туда же, куда и вне портала, — на /app, а лишнее состояние заставляло бы гадать, в каком мы,
+// при каждой правке.
+//
+// ⚠ Крестик рисует САМ портал — своего мы не ставим. Наше дело только кнопка «Отмена».
 const isSlider = ref(false)
 
 onMounted(async () => {
   try {
     await init()
-    inPortal.value = !!get()
     isSlider.value = placementPlace() === APP_SLIDER_PLACE_SETTINGS
-    if (inPortal.value) await get()?.parent.setTitle('Настройки')
+    await get()?.parent.setTitle('Настройки')
   } catch (e) {
-    if (import.meta.dev) console.warn('[settings] B24 init failed', e)
+    log.warning('рукопожатие с порталом не состоялось', { error: String(e) })
   }
 })
 
-/** Закрыть экран так, как он был открыт. */
+/** Закрыть экран так, как он был открыт: слайдер — свернуть, иначе увести на обзор.
+ *  Вне портала /app — обычная страница, поэтому тупика не возникает. */
 async function close(): Promise<void> {
   if (isSlider.value) {
     await closeSlider()
     return
   }
-  if (inPortal.value) await navigateTo('/app')
+  await navigateTo('/app')
 }
 </script>
 

@@ -8,6 +8,9 @@ import { buildBotRegisterCall } from '~/utils/b24BotRegister'
 import { installVerdict, type BackendState } from '~/utils/installVerdict'
 import { checkBackendKnowsPortal } from '~/composables/useBackendInstallCheck'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
+import { useLogger } from '~/utils/logger'
+
+const log = useLogger('install')
 
 definePageMeta({ layout: 'clear' })
 
@@ -174,7 +177,7 @@ async function registerTrigger(): Promise<void> {
       : `ошибка: ${res.getErrorMessages().join('; ')}`
   } catch (error: unknown) {
     // Swallowed on purpose — the core install (token delivery) already succeeded.
-    console.warn('[install] trigger.add', error)
+    log.warning('триггер автоматизации не зарегистрировался', { error: String(error) })
     triggerRegistered.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
   }
 }
@@ -194,7 +197,7 @@ async function registerChatBot(): Promise<void> {
       ? 'ok'
       : `ошибка: ${res.getErrorMessages().join('; ')}`
   } catch (error: unknown) {
-    console.warn('[install] imbot register', error)
+    log.warning('чат-бот не зарегистрировался', { error: String(error) })
     botRegistered.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
   }
 }
@@ -274,7 +277,7 @@ async function runInstall() {
     }
     caption.value = 'Готово'
   } catch (error: unknown) {
-    console.error('[install]', error)
+    log.error('установка не завершилась', { error: String(error) })
     progressColor.value = 'air-primary-alert'
     installError.value = error instanceof Error ? error.message : String(error)
   } finally {

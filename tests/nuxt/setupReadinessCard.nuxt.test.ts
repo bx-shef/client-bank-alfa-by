@@ -53,7 +53,11 @@ describe('SetupReadinessCard', () => {
     expect(wrapper.text()).toContain('Добавьте шаблоны номеров')
     // Строк стало шесть (#421 добавил чат ошибок и карту распознавания) — счётчик считает ВСЕ
     // незакрытые, иначе он обещал бы готовность раньше, чем она наступит.
-    expect(wrapper.find('[data-testid="readiness-badge"]').text()).toContain('6')
+    //
+    // ⚠ Проверяем ТЕКСТ карточки, а не отдельный бейдж: носитель счётчика уже сменился (бейдж →
+    // подпись карточки), и тест, державшийся за элемент, покраснел на правке вёрстки, хотя
+    // проверяемое им решение не менялось. Держимся за смысл — «карточка называет, сколько осталось».
+    expect(wrapper.find('[data-testid="setup-readiness"]').text()).toContain('осталось: 6')
   })
 
   it('never re-loads chat settings — that would overwrite the admin\'s unsaved edits', async () => {
@@ -77,7 +81,9 @@ describe('SetupReadinessCard', () => {
     mockState.inPortal = false
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="readiness-preview"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="readiness-badge"]').exists()).toBe(false)
+    // Никакого уверенного счётчика: данных о портале снаружи нет, и «осталось: N» было бы
+    // утверждением о том, чего мы не спрашивали.
+    expect(wrapper.find('[data-testid="setup-readiness"]').text()).not.toContain('осталось:')
   })
 
   it('re-reads on window focus, so a just-connected account stops reading «нет подключений»', async () => {

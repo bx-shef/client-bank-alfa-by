@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import type { AccordionItem } from '@bitrix24/b24ui-nuxt'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
@@ -15,7 +16,9 @@ const emit = defineEmits<{ close: [] }>()
 
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
-const { settings, enabled, saving, savedOk, loaded, error, notifyOption, errorOption, chatFetcher } = cs
+const { settings, enabled, saving, loaded, error, notifyOption, errorOption, chatFetcher } = cs
+// Исход сохранения — тостом, а не строкой в подвале формы (см. `saveAndClose`).
+const toast = useToast()
 
 // Gate state: `adminChecked` flips only after init resolves + checkAdmin runs, so
 // the form is never rendered to an unverified (possibly non-admin) user.
@@ -51,7 +54,18 @@ onMounted(async () => {
 async function saveAndClose(): Promise<void> {
   if (!enabled.value) return
   await cs.save()
-  if (error.value) return
+  if (error.value) {
+    // Ошибку показываем ТОСТОМ и форму не закрываем: строка под кнопками жила в самом низу
+    // длинной формы, то есть человек, правивший поле наверху, узнавал о неудаче, только если
+    // догадывался прокрутить обратно.
+    toast.add({
+      title: 'Не удалось сохранить настройки',
+      description: error.value,
+      color: 'air-primary-alert'
+    })
+    return
+  }
+  toast.add({ title: 'Настройки сохранены', color: 'air-primary-success' })
   emit('close')
 }
 
@@ -127,6 +141,27 @@ const triggerCodeModel = computed<string>({
 })
 // Surfaced in the help text so the admin knows exactly what to register/attach.
 const paymentTrigger = B24_PAYMENT_TRIGGER
+
+// Живой предпросмотр: для каждой демо-операции — попадёт ли она в чат И не исключена ли из импорта
+// целиком (PROCESSING §2 A2). Это РАЗНЫЕ исходы: исключённая не попадает в CRM вовсе, а «тихая»
+// попадает, просто без сообщения, — поэтому и подписи разные, а не одно «скрыто».
+//
+// ⚠ Блок был потерян при перестройке вёрстки, и вместе с ним умерли восемь тестов. Это
+// единственное место, где админ ВИДИТ последствия правил до сохранения: без него «Приходы/Расходы»
+// и «Исключения» — три поля, эффект которых узнаёшь на живых платежах.
+const preview = computed(() =>
+  MOCK_STATEMENT.items.map(item => ({
+    item,
+    excluded: isExcludedOperation(item, settings.chat.rules),
+    notify: shouldNotifyChat(item, settings.chat.rules)
+  }))
+)
+const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
+const excludedCount = computed(() => preview.value.filter(r => r.excluded).length)
+const previewSummary = computed(() => {
+  const base = `В чат попадёт ${notifyCount.value} из ${preview.value.length} операций`
+  return excludedCount.value > 0 ? `${base}, ${excludedCount.value} — не импортируется` : base
+})
 </script>
 
 <template>
@@ -363,13 +398,58 @@ const paymentTrigger = B24_PAYMENT_TRIGGER
           </B24Accordion>
         </div>
 
-        <div class="w-full lg:max-w-105 shrink-0 flex flex-col items-center justify-between gap-4">
-          <SetupReadinessCard class="mb-4" />
+        <div class="w-full lg:max-w-105 shrink-0 flex flex-col gap-4">
+          <SetupReadinessCard />
+
+          <!-- Живой предпросмотр — главная обратная связь настроек: единственное место, где видно
+               последствия правил ДО сохранения. Рядом с готовностью, а не в конце формы: обе
+               карточки отвечают на «что сейчас будет», и читают их вместе. -->
+          <B24Card class="lg:sticky lg:top-4">
+            <template #header>
+              <h2 class="font-semibold">
+                Что попадёт в чат
+              </h2>
+            </template>
+
+            <p
+              class="mb-3 text-sm text-(--ui-color-base-3)"
+              aria-live="polite"
+              data-testid="preview-summary"
+            >
+              {{ previewSummary }}
+            </p>
+
+            <B24Alert
+              v-if="notifyCount === 0"
+              color="air-primary-warning"
+              description="При текущих правилах в чат ничего не попадёт."
+            />
+
+            <ul
+              data-testid="preview-list"
+              class="space-y-2"
+            >
+              <li
+                v-for="row in preview"
+                :key="row.item.docId"
+                class="flex items-center justify-between gap-3 text-sm"
+              >
+                <span class="truncate">{{ row.item.counterparty.name }}</span>
+                <!-- Три РАЗНЫХ исхода: исключена из импорта / импортируется, но молча / в чат. -->
+                <B24Badge
+                  :label="row.excluded ? 'не импортируется' : row.notify ? '→ в чат' : 'скрыто в чате'"
+                  :color="row.excluded ? 'air-primary-alert' : row.notify ? 'air-primary-success' : 'air-secondary'"
+                  size="sm"
+                  class="shrink-0"
+                />
+              </li>
+            </ul>
+          </B24Card>
         </div>
       </div>
       <!-- Explicit Save/Cancel (no autosave). Save persists + notifies other instances. -->
       <div
-        v-if="1 > 0 || enabled"
+        v-if="enabled"
         class="absolute inset-x-0 bottom-1.5 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
       >
         <B24Button
@@ -391,20 +471,6 @@ const paymentTrigger = B24_PAYMENT_TRIGGER
           data-testid="settings-cancel"
           @click="cancel"
         />
-        <span
-          v-if="1 > 0 || savedOk && !saving"
-          class="text-sm text-(--ui-color-accent-main-success)"
-          role="status"
-          aria-live="polite"
-          data-testid="save-status"
-        >Сохранено ✓</span>
-        <span
-          v-else-if="error && !saving"
-          class="text-sm text-(--ui-color-accent-main-alert)"
-          role="status"
-          aria-live="polite"
-          data-testid="save-status"
-        >{{ error }}</span>
       </div>
     </B24Form>
   </template>

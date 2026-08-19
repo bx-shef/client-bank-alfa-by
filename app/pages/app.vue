@@ -10,11 +10,15 @@ import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { pageTitle } from '~/utils/landing'
+import { useLogger } from '~/utils/logger'
+import { isPreviewQuery } from '~/utils/inPortalGate'
 import {
   APP_SLIDER_PLACE_IMPORT,
   APP_SLIDER_PLACE_SETTINGS,
   APP_SLIDER_WIDTH
 } from '~/config/b24'
+
+const log = useLogger('app')
 
 // In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
@@ -29,11 +33,14 @@ useHead({
   meta: [{ name: 'robots', content: 'noindex, nofollow' }]
 })
 
-// Real operations only — no demo data. The backend operations feed (#5) lands here
-// later; until then the list is empty (honest empty state, not a mock).
-// @todo - убери мок
-// const items = ref<StatementItem[]>([])
-const items = ref<StatementItem[]>([
+// Операции приходят с backend (фид #5); до него список пуст — честное пустое состояние.
+//
+// ⚠ ДЕМО-НАБОР ВИДЕН ТОЛЬКО ПО `?preview=1` — тому же штатному обходу, на котором держатся
+// скриншоты и визуальные тесты. Он существует, чтобы вёрстку длинного списка было на чём смотреть;
+// в портале его быть не должно, иначе бухгалтер увидит чужие платежи и решит, что импорт уже
+// работает. Флаг читается ИЗ РОУТЕРА, а не из `window.location`: на гидратации пререндеренной
+// страницы строка запроса пуста.
+const PREVIEW_ITEMS: StatementItem[] = [
   {
     account: 'BY10DEMO30120000000000000001',
     docId: '127938853',
@@ -476,7 +483,10 @@ const items = ref<StatementItem[]>([
     acceptDate: '2026-07-02',
     operCodeName: '1'
   }
-])
+]
+
+const route = useRoute()
+const items = computed<StatementItem[]>(() => (isPreviewQuery(route.query.preview) ? PREVIEW_ITEMS : []))
 const byDirection = computed(() => splitByDirection(items.value))
 
 // Filter chips (labels keep the "(N)" counts). Default "all" shows everything.
@@ -566,7 +576,7 @@ onMounted(async () => {
     await $b24.parent.setTitle('Выписка по счёту')
     await $b24.parent.fitWindow()
   } catch (e) {
-    if (import.meta.dev) console.warn('[app] B24 parent calls failed', e)
+    log.warning('не удалось вызвать parent-методы портала', { error: String(e) })
   }
 })
 </script>

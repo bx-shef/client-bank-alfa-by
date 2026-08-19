@@ -23,6 +23,9 @@ import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 const setup = useSetupStatus()
 const chatSettings = useChatSettings()
 
+/** Мы внутри портала? Вне его серверных фактов нет вовсе. */
+const inFrame = computed(() => setup.inFrame.value)
+
 const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
   connectedAccounts: setup.status.value.connectedAccounts,
@@ -34,6 +37,16 @@ const items = computed(() => buildReadiness({
 }))
 
 const ready = computed(() => isFullyReady(items.value))
+/** Подпись карточки. В computed, а не тернарником в шаблоне: три состояния в одну строку атрибута
+ *  не читаются, а вычислять их надо в одном месте — подпись и содержимое обязаны говорить одно. */
+const description = computed(() => {
+  // ⚠ Вне портала подписи НЕТ. Данных о портале там ниоткуда не взять, а `buildReadiness` считает
+  // по дефолтам — и карточка уверенно сообщала «осталось: 6» о портале, который никто не
+  // спрашивал. Уверенное число, посчитанное из пустоты, хуже отсутствующего.
+  if (!inFrame.value) return undefined
+  if (!setup.loaded.value) return 'проверяем…'
+  return ready.value ? 'всё настроено' : `осталось: ${pending.value}`
+})
 const pending = computed(() => items.value.filter(i => !i.ok).length)
 
 // «5 минут назад» — recomputed against a ticking clock, not a `Date.now()` frozen inside a computed
@@ -71,12 +84,19 @@ onBeforeUnmount(() => {
 <template>
   <B24Card
     title="Готовность к работе"
-    :description="setup.loaded.value ? null : (ready ? 'всё настроено' : `осталось: ${pending}`)"
+    :description="description"
     data-testid="setup-readiness"
     class="w-full"
   >
+    <B24Alert
+      v-if="!inFrame"
+      color="air-primary"
+      description="Готовность видна внутри портала Bitrix24. Здесь — предпросмотр."
+      data-testid="readiness-preview"
+    />
+
     <div
-      v-if="setup.loaded.value"
+      v-else-if="!setup.loaded.value"
       class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
       data-testid="loading"
       role="status"
@@ -152,7 +172,11 @@ onBeforeUnmount(() => {
       </ul>
     </template>
 
-    <template v-if="!setup.loaded.value" #footer>
+    <!-- Расписание — только КОГДА проверка завершена: до ответа сервера числа в нём выдуманные. -->
+    <template
+      v-if="setup.loaded.value"
+      #footer
+    >
       <!-- Schedule (#405): the question «а когда оно само сходит в банк?» had no answer anywhere. -->
       <!-- «Последний ИМПОРТ», не «опрос»: отметку ставит любой прогон crm-sync, включая ручную
            загрузку файла — иначе портал без единого подключения читал бы «последний опрос». -->

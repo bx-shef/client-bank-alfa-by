@@ -8,7 +8,8 @@ import { defaultPortalSettings } from '~/utils/settings'
 // Explicit Save/Cancel (starter #219 UX). The footer renders only in-portal (enabled), so
 // we drive a mocked useChatSettings (enabled + spyable save/load) and a mocked useB24 (admin
 // gate open). Covers: Save persists then closes the slideover; Cancel discards (load) then
-// closes; page-mode Cancel discards WITHOUT emitting close.
+// закрывается. Форма НЕ различает страницу и слайдовер: она всегда сообщает `close`, а трактует
+// его страница — так у экрана одна механика закрытия вместо двух.
 
 const save = vi.fn(async () => {})
 const load = vi.fn(async () => {})
@@ -75,12 +76,16 @@ describe('SettingsForm Save/Cancel', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
-  it('page-mode Cancel discards WITHOUT emitting close', async () => {
+  it('Cancel всегда сообщает close — что это значит, решает страница', async () => {
+    // ⚠ Прежний контракт (`asSlider`) различал «страница» и «слайдовер» ВНУТРИ формы, и без пропа
+    // Cancel закрытия не сообщал. Пропа больше нет: экран всегда открывается слайдером портала, а
+    // трактовка закрытия — дело страницы (`app/pages/settings.vue`: слайдер свернуть, иначе увести
+    // на /app). Форма своё дело сделала — откатила правки и сказала «я закончила».
     load.mockClear()
-    const wrapper = await mountForm() // no asSlider → plain page
+    const wrapper = await mountForm()
     await wrapper.find('[data-testid="settings-cancel"]').trigger('click')
     await flushPromises()
     expect(load).toHaveBeenCalled()
-    expect(wrapper.emitted('close')).toBeUndefined()
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 })

@@ -42,10 +42,10 @@ export function useSetupStatus() {
     const a = frameAuth()
     inFrame.value = a !== null
     if (!a) {
+      // Вне фрейма спрашивать некого: показываем дефолты и считаем проверку ЗАВЕРШЁННОЙ, иначе
+      // карточка вечно висела бы в состоянии «проверяем настройку…».
       status.value = { ...DEFAULTS }
       loaded.value = true
-      // @todo верни true
-      loaded.value = false
       return
     }
     loading.value = true
@@ -64,8 +64,6 @@ export function useSetupStatus() {
     } finally {
       loading.value = false
       loaded.value = true
-      // @todo верни true
-      loaded.value = false
     }
   }
 

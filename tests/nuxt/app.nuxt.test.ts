@@ -12,15 +12,21 @@ const PREVIEW = { route: '/app?preview=1' }
 // Рендер через preview-обход (фрейма в тестовой среде нет, гейт без обхода показал бы заглушку).
 // Баннер «не настроено» — портальный, поэтому не мешает; список операций РЕАЛЬНЫЙ и пустой
 // (демо-данных больше нет). Фид операций с backend (#5) наполнит его позже.
-describe('app statement page (no demo data)', () => {
-  it('renders the operations card and filter chips with zero counts', async () => {
+describe('app statement page', () => {
+  it('под `?preview=1` показывает демо-набор — вёрстку длинного списка есть на чём смотреть', async () => {
     const wrapper = await mountSuspended(AppPage, PREVIEW)
     const text = wrapper.text()
     expect(text).toContain('Последние операции')
-    // Chip filter counts are all zero — there is no mock statement.
-    expect(text).toContain('Все (0)')
-    expect(text).toContain('Приходы (0)')
-    expect(text).toContain('Расходы (0)')
+    // Счётчики чипов считают демо-набор: он существует ради вёрстки (скриншоты, визуальные тесты).
+    expect(text).toMatch(/Все \((?!0\))\d+\)/)
+  })
+
+  it('БЕЗ `?preview=1` список пуст — в портале демо-платежей быть не должно', async () => {
+    // Иначе бухгалтер увидит чужие платежи и решит, что импорт уже работает. Гейт — тот же флаг,
+    // что открывает `InPortalGate`, поэтому здесь страница монтируется без него: контента не будет
+    // вовсе, и проверяем именно отсутствие демо-строк.
+    const wrapper = await mountSuspended(AppPage, { route: '/app' })
+    expect(wrapper.text()).not.toContain('ДЕМО-БАНК')
   })
 
   it('no demo-data notice and no app-level test setting', async () => {

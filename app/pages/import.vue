@@ -5,6 +5,9 @@ import CrossMIcon from '@bitrix24/b24icons-vue/outline/CrossMIcon'
 import { useB24 } from '~/composables/useB24'
 import { APP_SLIDER_PLACE_IMPORT } from '~/config/b24'
 import { pageTitle } from '~/utils/landing'
+import { useLogger } from '~/utils/logger'
+
+const log = useLogger('import')
 
 // Manual statement upload page (P4). In-portal (`clear` layout → b24ui theming);
 // also usable standalone (parsing is client-side, no portal needed for preview).
@@ -36,7 +39,7 @@ onMounted(async () => {
     await $b24.parent.setTitle('Загрузка выписки')
     await $b24.parent.fitWindow()
   } catch (e) {
-    if (import.meta.dev) console.warn('[import] B24 parent calls failed', e)
+    log.warning('не удалось вызвать parent-методы портала', { error: String(e) })
   }
 })
 

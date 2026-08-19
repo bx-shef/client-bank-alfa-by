@@ -1,7 +1,7 @@
 // Маршруты — из единого источника (#425): из него же строятся sitemap.xml, robots.txt и признак
 // «закрыть от индексации». Копия списка здесь означала бы, что страница может попасть в пререндер,
 // но не в карту сайта (или наоборот), и заметить это можно только случайно.
-import { PRERENDER_ROUTES } from './app/config/routes'
+import { PRERENDER_ROUTES, SERVICE_ROUTES } from './app/config/routes'
 
 // Только цифры — защита от случайной опечатки или компрометации ENV в CI.
 const metrikaId = (process.env.NUXT_PUBLIC_METRIKA_ID || '109399587').replace(/\D/g, '')
@@ -14,14 +14,20 @@ if (!metrikaId) {
 // срабатывает). ID подставляется на этапе сборки. Хэш этого inline-скрипта
 // подхватывает scripts/csp-hashes.mjs из собранного HTML — CSP остаётся строгим.
 //
-// Self-silence внутри iframe (`window.self !== window.top`): in-portal-страницы
-// (`/app`,`/settings`,`/install`, layout `clear`) открываются внутри портала Б24,
-// и Метрика там НЕ инициализируется — иначе webvisor писал бы session-replay CRM
-// клиента, а цели (`reachGoal`) пачкали бы аналитику лендинга портальным трафиком.
-// `ym` тогда не определён → `useMetrikaGoal().reachGoal()` сам становится no-op.
-// Тот же приём, что в `currency-converter` (там — в `public/metrika.js`). На
-// standalone-листинге Маркета (self===top) счётчик грузится как обычно.
-const metrikaSnippet = `if(window.self===window.top){(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};m[i].l=1*new Date();for(var j=0;j<e.scripts.length;j++){if(e.scripts[j].src===r){return;}}k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})(window,document,'script','https://mc.yandex.ru/metrika/tag.js?id=${metrikaId}','ym');ym(${metrikaId},'init',{ssr:true,webvisor:true,clickmap:true,accurateTrackBounce:true,trackLinks:true});}`
+// Метрика не грузится ДВАЖДЫ отсечённая, и оба условия нужны.
+//
+// 1. Внутри iframe (`window.self !== window.top`) — иначе webvisor писал бы session-replay CRM
+//    клиента, а цели (`reachGoal`) пачкали бы аналитику лендинга портальным трафиком.
+// 2. На СЛУЖЕБНЫХ маршрутах (`SERVICE_ROUTES`) — вне зависимости от фрейма. Одного признака
+//    iframe мало: `/app?preview=1`, открытый в обычной вкладке (разработка, скриншоты, прямая
+//    ссылка), считался top-level, счётчик грузился и сыпал в консоль ошибками сертификата. Эти
+//    страницы не маркетинговые: мерить на них нечего, а писать session-replay интерфейса, где
+//    видны платежи, — тем более.
+//
+// Список маршрутов берётся из `SERVICE_ROUTES`, а не набирается руками: разъехавшийся дубль тихо
+// вернул бы счётчик на новую служебную страницу. `ym` не определён → `useMetrikaGoal()` no-op.
+const serviceRoutePattern = SERVICE_ROUTES.map(r => r.replace(/^\//, '')).join('|')
+const metrikaSnippet = `if(window.self===window.top&&!/^\\/(${serviceRoutePattern})(\\/|$)/.test(location.pathname)){(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};m[i].l=1*new Date();for(var j=0;j<e.scripts.length;j++){if(e.scripts[j].src===r){return;}}k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})(window,document,'script','https://mc.yandex.ru/metrika/tag.js?id=${metrikaId}','ym');ym(${metrikaId},'init',{ssr:true,webvisor:true,clickmap:true,accurateTrackBounce:true,trackLinks:true});}`
 
 export default defineNuxtConfig({
   modules: [
