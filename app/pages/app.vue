@@ -561,6 +561,10 @@ const settingsReady = computed(() => !inPortal.value || chatSettings.loaded.valu
 const showSetupBanner = computed(() => inPortal.value && chatSettings.loaded.value && !configured.value)
 
 const b24 = useB24()
+// Мобильное приложение Bitrix24 определяем механизмом b24ui (`useDevice()` → платформа
+// `bitrix-mobile`, её ставит плагин платформы по UA), а не JS SDK. Скрытие — через `v-if`,
+// поэтому оно не зависит от темы.
+const { isBitrixMobile } = useDevice()
 onMounted(async () => {
   // ⚠ Порядок важен: `refresh()` авторизуется фрейм-токеном, а он доступен только ПОСЛЕ `init()`.
   // Раньше статус запрашивался первым и всегда упирался в «нет токена» — баг маскировался
@@ -589,31 +593,71 @@ onMounted(async () => {
       id="home"
       :b24ui="{ body: 'p-4 sm:pt-0 scrollbar-transparent flex flex-col gap-4' }"
     >
-      <template #header>
+      <!-- ⚠ В МОБИЛЬНОМ ПРИЛОЖЕНИИ шапки нет вовсе. Заголовок там дублирует нативный заголовок
+           экрана приложения, а две кнопки рядом с ним не помещаются: на 375 px они выдавливали
+           название до «Бан!». Настройки в мобильном скрыты по той же причине, что и у соседнего
+           `ai-price-import` — это десктопная работа администратора, а не то, ради чего открывают
+           приложение с телефона. Определяем через `useDevice()` b24ui (платформа
+           `bitrix-mobile` из UA), а не через SDK. -->
+      <template
+        v-if="!isBitrixMobile"
+        #header
+      >
         <B24DashboardNavbar
           :toggle="false"
           title="Банковские выписки"
         >
+          <!-- Короткий заголовок на узком экране: полный не помещался рядом с кнопками даже после
+               того, как у них убрали подписи, — срезалась последняя буква, и это читается как
+               поломка. Обрезка средствами CSS (`truncate`) дала бы то же самое, только многоточием;
+               здесь мы выбираем, ЧТО показать, а не чем закончить. -->
+          <template #title>
+            <span class="sm:hidden">Выписки</span>
+            <span class="hidden sm:inline">Банковские выписки</span>
+          </template>
+
           <template #right>
+            <!-- ⚠ Подписи кнопок скрыты ниже `sm` — иначе они выдавливают заголовок: на 375 px
+                 «Банковские выписки» ужималось до «Бан!». Скрывать шапку целиком тут нельзя:
+                 `isBitrixMobile` — это мобильное ПРИЛОЖЕНИЕ по UA, а узкий БРАУЗЕР им не является,
+                 и он остался бы с тем же обрезанным заголовком. Подпись уезжает слотом, а не
+                 пропом `label`: проп рисует её сам, обернуть его нечем. Иконка остаётся всегда,
+                 `aria-label` даёт имя кнопке для скринридера. -->
             <B24Button
               :icon="UploadFileIcon"
               color="air-boost"
               size="sm"
-              label="Загрузить выписку"
+              aria-label="Загрузить выписку"
               @click="openImport"
-            />
+            >
+              <span class="hidden sm:inline">Загрузить выписку</span>
+            </B24Button>
 
             <B24Button
               :icon="SettingsIcon"
               color="air-secondary-no-accent"
               size="sm"
-              label="Настройки"
+              aria-label="Настройки"
               @click="openSettings"
-            />
+            >
+              <span class="hidden sm:inline">Настройки</span>
+            </B24Button>
           </template>
         </B24DashboardNavbar>
       </template>
       <template #body>
+        <!-- Ручная загрузка в мобильном — ОТДЕЛЬНОЙ кнопкой в теле, а не в шапке: шапки там нет,
+             а загрузка файла с телефона — ровно то, ради чего приложение и открывают в дороге. -->
+        <B24Button
+          v-if="isBitrixMobile"
+          :icon="UploadFileIcon"
+          color="air-boost"
+          size="md"
+          label="Загрузить выписку"
+          block
+          @click="openImport"
+        />
+
         <!-- App not configured yet (no notification chat chosen). Admins get a call-to-action
            with a shortcut to the settings; everyone else is told an admin is setting it up. -->
         <template v-if="showSetupBanner">
@@ -695,7 +739,12 @@ onMounted(async () => {
               <span>Сумма</span>
             </div>
 
-            <OperationList :items="paged" />
+            <!-- `reserve-rows` держит высоту страницы: последняя страница короче, и без резерва
+                 кнопки пагинации прыгали вверх под курсором. -->
+            <OperationList
+              :items="paged"
+              :reserve-rows="shown.length > perPage ? perPage : 0"
+            />
 
             <!-- Pagination shows only when operations overflow a page (real data). -->
             <B24Pagination

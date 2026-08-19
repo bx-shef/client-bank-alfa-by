@@ -10,7 +10,12 @@ import { makeProgramSample } from '~/utils/programFeedback'
 // Alfa "Последние операции" view): rows grouped by day, a direction tile
 // (↑ приход / ↓ расход), counterparty + purpose, the amount as the coloured
 // accent, and a row that expands to the operation's requisites.
-const props = defineProps<{ items: StatementItem[] }>()
+const props = defineProps<{
+  items: StatementItem[]
+  /** Сколько строк держать по высоте, даже если их пришло меньше (страница пагинации).
+   *  Ноль/не задано — не резервировать. */
+  reserveRows?: number
+}>()
 
 const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const groupFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })
@@ -46,6 +51,14 @@ function toRow(item: StatementItem) {
     key: `${item.account}|${item.docId}`, // dedup convention: docId unique per account
     icon: credit ? ArrowTopSIcon : ArrowDownSIcon,
     tint: credit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
+    // Плитка направления КРАСИТСЯ, а не остаётся нейтральной. Раньше она брала общий серый токен, и
+    // приход от расхода отличался только мелкой стрелкой внутри — при том что сумма справа уже была
+    // цветной. Получалось, что один и тот же признак на одной строке заявлен дважды и по-разному:
+    // справа явно, слева никак. Цвет — не единственный носитель: стрелка ↑/↓ и знак у суммы
+    // остаются, поэтому строка читается и без различения цветов.
+    tile: credit
+      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+      : 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300',
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
     name: item.counterparty.name,
     purpose: item.purpose,
@@ -59,6 +72,14 @@ function toRow(item: StatementItem) {
     )
   }
 }
+
+/** Сколько строк-заглушек добить, чтобы страница не меняла высоту.
+ *
+ *  ⚠ Заглушки настоящей разметкой, а не `min-height` числом: высота строки складывается из шрифтов
+ *  и отступов темы, и любая константа разъехалась бы с ней при первой же правке — молча, потому что
+ *  выглядело бы «почти правильно». Строки одинаковой высоты по построению (оба текста `truncate`,
+ *  то есть всегда одна линия), поэтому добивка совпадает с реальной точно. */
+const filler = computed(() => Math.max(0, (props.reserveRows ?? 0) - props.items.length))
 
 /** Items grouped by day (local tz), newest first; each row precomputed. */
 const groups = computed(() => {
@@ -97,8 +118,9 @@ const hasItems = computed(() => props.items.length > 0)
       v-for="group in groups"
       :key="group.key"
     >
-      <!-- Day header -->
-      <p class="rounded-md bg-(--ui-color-design-tinted-na-bg) px-3 py-1 text-xs font-medium text-(--ui-color-base-3)">
+      <!-- Заголовок дня — ПОДПИСЬ, а не плашка во всю ширину. Плашка брала тот же фон, что и
+           строки, весила визуально больше самих операций и читалась как ещё одна строка таблицы. -->
+      <p class="px-1 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-(--ui-color-base-4) first:pt-1">
         {{ group.label }}
       </p>
 
@@ -117,34 +139,42 @@ const hasItems = computed(() => props.items.length > 0)
              (см. `.nuxt/b24ui/table.ts`) — берём то же значение, чтобы не расходиться с ним. -->
         <!-- ⚠ Именно <button>, не <div>: CollapsibleTrigger рендерится as-child, то есть кликер —
              сам этот элемент. Div не фокусируется — строка не раскрывалась с клавиатуры (U2, #430). -->
+        <!-- ⚠ РАСКЛАДКА МЕНЯЕТСЯ НА `sm`, и это не украшение. Один ряд «плитка + текст + сумма» на
+             375 px не помещался: сумма не переносится и не сжимается, поэтому колонку с текстом
+             дожимало до `ЗАО "АЛЬФ…` и `Вознагражд-е за …` — по названию контрагента нельзя было
+             понять, кто платил. Ниже `sm` сумма уходит ПОД текст и получает всю ширину. -->
         <button
           type="button"
-          class="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-(--ui-color-bg-content-secondary) light:hover:bg-[#f6f8f9]"
+          class="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-start gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-(--ui-color-bg-content-secondary) light:hover:bg-[#f6f8f9] sm:items-center"
         >
           <span
-            class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--ui-color-design-tinted-na-bg)"
-            :class="row.tint"
+            class="flex size-10 shrink-0 items-center justify-center rounded-lg"
+            :class="row.tile"
           >
+            <!-- Иконка крупнее (`size-5` в плитке `size-10`): прежние `size-4` в `size-9` терялись
+                 в собственной подложке, а это единственный глиф, несущий направление. -->
             <component
               :is="row.icon"
-              class="size-4"
+              class="size-5"
               aria-hidden="true"
             />
           </span>
-          <div class="min-w-0 flex-1">
-            <p class="truncate font-semibold">
-              {{ row.name }}
-            </p>
-            <p class="truncate text-xs text-(--ui-color-base-3)">
-              {{ row.purpose }}
-            </p>
+          <div class="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="truncate font-semibold">
+                {{ row.name }}
+              </p>
+              <p class="truncate text-xs text-(--ui-color-base-3)">
+                {{ row.purpose }}
+              </p>
+            </div>
+            <span
+              class="shrink-0 font-semibold tabular-nums"
+              :class="row.tint"
+            >
+              {{ row.amount }}
+            </span>
           </div>
-          <span
-            class="shrink-0 font-semibold tabular-nums"
-            :class="row.tint"
-          >
-            {{ row.amount }}
-          </span>
         </button>
 
         <template #content>
@@ -166,6 +196,25 @@ const hasItems = computed(() => props.items.length > 0)
           </div>
         </template>
       </B24Collapsible>
+    </div>
+
+    <!-- Резерв высоты под недостающие строки последней страницы. Без него карточка сжималась, и
+         кнопки пагинации уезжали вверх ПОД КУРСОРОМ — следующий клик попадал мимо. -->
+    <div
+      v-for="n in filler"
+      :key="`filler-${n}`"
+      class="flex items-start gap-3 px-2 py-3 sm:items-center"
+      aria-hidden="true"
+    >
+      <span class="size-10 shrink-0" />
+      <div class="flex min-w-0 flex-1 flex-col gap-1">
+        <p class="invisible truncate font-semibold">
+          &nbsp;
+        </p>
+        <p class="invisible truncate text-xs">
+          &nbsp;
+        </p>
+      </div>
     </div>
   </div>
 </template>

@@ -44,7 +44,12 @@ async function run() {
   try {
     for (const route of ROUTES) {
       for (const theme of THEMES) {
-        const context = await browser.newContext({ colorScheme: theme })
+        // ⚠ `reducedMotion` — не косметика: счётчики на карточке сводки анимируются от нуля
+        // (count-up, rAF), и снимок ловил их НА СЕРЕДИНЕ — «Операций 24» при 26 в списке. Число
+        // менялось от прогона к прогону, и это читалось как расхождение данных, хотя данные одни.
+        // Визуальные регресс-тесты ставят тот же флаг; ручной прогон обязан совпадать с ними,
+        // иначе глазами и тестом мы смотрим на разные экраны.
+        const context = await browser.newContext({ colorScheme: theme, reducedMotion: 'reduce' })
         const page = await context.newPage()
         for (const vp of VIEWPORTS) {
           await page.setViewportSize({ width: vp.width, height: vp.height })
