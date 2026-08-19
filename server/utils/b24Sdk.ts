@@ -12,14 +12,14 @@
 // evict-on-error rebuild from the current DB token, so a rotation is observed within the
 // window (or on the next resolve after a failure). Token refresh is
 // automatic; the SDK's `setCallbackRefreshAuth` hands us the new token so we persist it
-// (via `saveToken` — tombstone-guarded, so it won't resurrect a purged portal).
+// (via `updatePortalTokenSecrets` — UPDATE-only, so it cannot resurrect a purged portal, #510).
 //
 // STATUS — this IS the crm-sync hot-path transport (see server/queue/worker.ts /
 // portalSdkResolver.ts); the former hand-rolled `callRest` resolver was retired once the SDK
 // became the default. Trade-off (#191): the SDK's automatic refresh runs OUTSIDE our per-portal
 // advisory lock (ensureAccessToken, #35), so at scale-out two concurrent same-portal refreshes
 // can race the refresh-token rotation. We accept it the way ai-price-import does: the persist is
-// UPDATE-only (tombstone-guarded `saveToken`) and each rebuild re-reads the DB token, so a lost
+// UPDATE-only (`updatePortalTokenSecrets`) and each rebuild re-reads the DB token, so a lost
 // race is a TRANSIENT job failure that BullMQ retries recover — not permanent cred corruption.
 // The advisory lock still guards the PROACTIVE keep-alive cron (#175).
 //
@@ -35,7 +35,7 @@
 import { B24OAuth, ParamsFactory } from '@bitrix24/b24jssdk'
 import type { AuthData, B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
-import { getToken, saveToken, type PortalToken, type QueryFn } from './tokenStore'
+import { getToken, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
 import { withDependencySpan } from './telemetrySpan'
 
@@ -452,19 +452,19 @@ export interface SdkInfra {
 
 /** Bind `SdkPortalDeps` (token load + refresh-persist + creds + clock) to the live token
  *  store. `saveToken` persists a reactively-refreshed token with `eventTs=0` — the store's
- *  tombstone guard then refuses to resurrect a purged portal (our UPDATE-only equivalent).
- *  NB (strictly weaker than the advisory-locked path): unlike `ensureAccessToken`, this
- *  refresh-persist has NO in-lock deleted-row re-check, so the store's documented 2-statement
- *  TOCTOU window (tombstone SELECT then UPSERT, tokenStore.ts) can, if an uninstall commits
- *  its tombstone between them, leak a STALE-DEAD token row for a gone portal. It is
- *  self-limiting — the row carries obsolete creds (REST fails), and every later refresh-persist
- *  is then tombstone-blocked, so it never re-inserts — NOT live-cred corruption. Closing it
- *  fully needs the single guarded `INSERT … WHERE NOT EXISTS(tombstone) … ON CONFLICT` the
- *  store comment anticipates (follow-up; matters more once the SDK path is default-ON). */
+ *  persist is `updatePortalTokenSecrets` — UPDATE-only (#510), so it can never re-create the row
+ *  of a portal that was uninstalled mid-refresh.
+ *
+ *  ⚠ This USED to be an upsert, and the gap it left was real: unlike `ensureAccessToken` this
+ *  path has no lock and no in-lock deleted-row re-check, so an uninstall committing while the
+ *  refresh POST was in flight left behind a dead token row for a portal that had removed us.
+ *  Self-limiting (obsolete creds, and the tombstone blocks every later persist), but still an
+ *  OAuth token we had no business keeping. UPDATE-only removes the case rather than narrowing
+ *  it — and retires the guarded-INSERT follow-up the store comment used to anticipate. */
 export function sdkPortalDeps(infra: SdkInfra): SdkPortalDeps {
   return {
     loadToken: memberId => getToken(infra.query, memberId),
-    saveToken: token => saveToken(infra.query, token, 0).then(() => undefined),
+    saveToken: token => updatePortalTokenSecrets(infra.query, token).then(() => undefined),
     creds: { clientId: infra.clientId, clientSecret: infra.clientSecret },
     now: infra.now,
     scope: infra.scope

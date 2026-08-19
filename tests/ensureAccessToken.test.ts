@@ -97,7 +97,24 @@ describe('ensureAccessToken', () => {
     const out = await ensureAccessToken(tok({ expiresAt: NEAR }), deps)
     expect(out.accessToken).toBe('A') // returns the passed token as-is
     expect(postRefresh).not.toHaveBeenCalled()
-    expect(saveToken).not.toHaveBeenCalled() // no upsert → no resurrection
+    expect(saveToken).not.toHaveBeenCalled() // не дошли до записи вовсе — окно сужено (#510)
+  })
+
+  it('деинсталляция ВО ВРЕМЯ рефреша: персист вернул false, и это не ошибка (#510)', async () => {
+    // ⚠ Случай, который перечит под локом НЕ ловит и не может поймать. Строка была на месте, когда
+    // мы её прочитали; портал удалили, пока шёл POST на OAuth-сервер Bitrix (потолок 15 с). Раньше
+    // вернувшийся рефреш пересоздавал строку удалённого портала через upsert — то есть мы
+    // оставляли себе его OAuth-токен. Теперь запись UPDATE-only: она честно ничего не находит.
+    const near = tok({ expiresAt: NEAR })
+    const { deps, postRefresh } = make(near)
+    const saveToken = vi.fn(async () => false) // строки уже нет
+    // ⚠ `false` НЕ должен бросать: портал удалён — это штатный исход, а не сбой. Вызывающий
+    // получает обновлённую пару, его REST-вызов честно упадёт на несуществующем портале, и в БД
+    // не осталось ничего, что пришлось бы подчищать.
+    const out = await ensureAccessToken(near, { ...deps, saveToken })
+    expect(postRefresh).toHaveBeenCalledTimes(1) // в банк сходили — узнать об удалении было негде
+    expect(saveToken).toHaveBeenCalledTimes(1) // попытка записи И ЕСТЬ способ узнать, что строки нет
+    expect(out.accessToken).toBe('A2')
   })
 
   it('throws on a failed refresh (e.g. dead/invalid refresh token)', async () => {

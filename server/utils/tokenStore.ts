@@ -38,16 +38,15 @@ export interface PortalToken {
  *
  * The tombstone SELECT + upsert are two statements (not one transaction). This is
  * TOCTOU-free for the bug it fixes: the `b24-events` worker is single-instance,
- * concurrency-1 (see worker.ts), so a portal's register/unregister never overlap. The
- * only residual is a token-REFRESH `saveToken` (default `eventTs=0`, on a scaled crm-sync
- * worker) interleaving with a concurrent uninstall's `deleteToken` — a narrow window that
- * SELF-LIMITS: the re-inserted row carries obsolete creds (REST fails) and every later
- * refresh-persist is tombstone-blocked, so it never re-inserts — a leaked dead row, not
- * live-cred corruption. NB: the crm-sync refresh-persist now goes through the SDK path
- * (`sdkPortalDeps.saveToken` → this function directly, NOT via `ensureAccessToken`), so —
- * unlike the keep-alive cron — it has no in-lock deleted-row re-check. Close it fully with a
- * single guarded `INSERT … WHERE NOT EXISTS(tombstone) … RETURNING` if that residual ever
- * matters (see b24Sdk.ts `sdkPortalDeps`).
+ * concurrency-1 (see worker.ts), so a portal's register/unregister never overlap.
+ *
+ * ⚠ This function is now the INSTALL path only (#510). The residual it used to document — a
+ * token-REFRESH interleaving with a concurrent uninstall and re-inserting a dead row — is gone,
+ * because refreshes no longer come here: they call `updatePortalTokenSecrets`, which is
+ * UPDATE-only and simply finds nothing to update once the row is deleted. That also retires the
+ * "close it fully with a guarded `INSERT … WHERE NOT EXISTS(tombstone) … RETURNING`" follow-up
+ * this comment used to anticipate: the guarded INSERT solved the same race atomically, whereas
+ * UPDATE-only removes the possibility of creating the row at all on that path.
  */
 export async function saveToken(query: QueryFn, token: PortalToken, eventTs = 0): Promise<boolean> {
   const blocked = await query(
@@ -107,6 +106,51 @@ export async function getToken(query: QueryFn, memberId: string): Promise<Portal
   }
 }
 
+/**
+ * ОБНОВИТЬ токены существующей регистрации портала. `false` — строки уже нет, писать нечего.
+ *
+ * ⚠ ДВА ПИСАТЕЛЯ, И ЭТО РАЗНЫЕ ПРАВА (#510; тот же приём, что у банковского стора в #505).
+ * `saveToken` — upsert, он СОЗДАЁТ регистрацию, и зовёт его только обработчик `ONAPPINSTALL`
+ * (роут события и register-ветка воркера), где портал прямо сейчас установил приложение.
+ * Обновление токена на рефреше ходит сюда.
+ *
+ * Раньше рефреш ходил тем же upsert'ом и мог ВОСКРЕСИТЬ строку удалённого портала. Тумбстоун
+ * (#77) это не закрывал — окон было ДВА, и второе шире, чем описывал комментарий модуля:
+ *   1. рефреш прочитал тумбстоун (его нет) → деинсталляция прошла целиком → рефреш вставил строку;
+ *   2. `deleteToken` пишет тумбстоун ПОСЛЕ удаления строки, поэтому рефреш, стартовавший ВНУТРИ
+ *      самой деинсталляции, тумбстоуна тоже не видит.
+ * Перестановка операций в `deleteToken` убирает только второе. UPDATE-only убирает оба разом и
+ * без второго локa: после `DELETE` обновлять нечего — неважно, в каком порядке всё легло и
+ * сколько заняла сеть. ⚠ А занимает она много: между перечитом и записью стоит POST на
+ * OAuth-сервер Bitrix с потолком 15 с, поэтому даже перечит под advisory-локом в
+ * `ensureAccessToken` окно сужал, но не закрывал.
+ *
+ * ⚠ Легитимного случая, где рефреш обязан СОЗДАТЬ строку, не существует по построению: чтобы
+ * обновить пару, её сперва надо прочитать из этой же строки.
+ *
+ * ⚠ `application_token` здесь не трогается вовсе — он write-once и приходит только с установкой;
+ * рефреш о нём ничего не знает и знать не должен.
+ *
+ * ⚠ `updated_at` штампуется ОБЯЗАТЕЛЬНО, и это противоположно `renameBankTokenAccount`, где его
+ * трогать нельзя. Здесь колонка означает «когда мы последний раз держали свежую пару», и по ней
+ * `selectTokensNearExpiry` (#175) выбирает порталы для проактивного продления. Не обновив её,
+ * мы бы гоняли рефреш по одному и тому же порталу на каждом тике.
+ */
+export async function updatePortalTokenSecrets(query: QueryFn, token: PortalToken): Promise<boolean> {
+  const rows = await query(
+    `UPDATE portal_tokens
+        SET domain            = $2,
+            access_token      = $3,
+            refresh_token_enc = $4,
+            expires_at        = $5,
+            updated_at        = now()
+      WHERE member_id = $1
+      RETURNING member_id`,
+    [token.memberId, token.domain, token.accessToken, encryptSecret(token.refreshToken), token.expiresAt]
+  )
+  return rows.length > 0
+}
+
 /** Load only the stored `application_token` for a portal (to verify a later
  * event), or `''` if the portal is unknown. Avoids decrypting the refresh token. */
 export async function getApplicationToken(query: QueryFn, memberId: string): Promise<string> {
@@ -142,10 +186,16 @@ export async function getMemberIdByDomain(query: QueryFn, domain: string): Promi
  * newer reinstall (in `saveToken`), so it's one small bounded row per uninstalled
  * portal. `eventTs` is the B24 event timestamp (0 when unknown). */
 export async function deleteToken(query: QueryFn, memberId: string, eventTs = 0): Promise<void> {
-  await query(`DELETE FROM portal_tokens WHERE member_id = $1`, [memberId])
+  // ⚠ Тумбстоун пишется ПЕРВЫМ, до удаления строки (#510). Порядок был обратный, и это давало
+  // отдельное окно: конкурент, стартовавший МЕЖДУ удалением и записью тумбстоуна, не видел ни
+  // строки, ни запрета — то есть считал портал живым и просто ещё не сохранённым. Эшелонированная
+  // защита ценой одной перестановки: основную работу делает UPDATE-only
+  // (`updatePortalTokenSecrets`), закрывающий оба окна независимо от порядка, но сужать окно там,
+  // где это бесплатно, всё равно правильно — тумбстоун читают и другие пути.
   await query(
     `INSERT INTO portal_tombstone (member_id, deleted_ts) VALUES ($1, $2)
      ON CONFLICT (member_id) DO UPDATE SET deleted_ts = GREATEST(portal_tombstone.deleted_ts, EXCLUDED.deleted_ts)`,
     [memberId, eventTs]
   )
+  await query(`DELETE FROM portal_tokens WHERE member_id = $1`, [memberId])
 }

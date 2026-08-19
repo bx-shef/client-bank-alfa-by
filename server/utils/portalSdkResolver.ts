@@ -25,7 +25,8 @@
 // REFRESH RACE — the SDK refreshes OUTSIDE our advisory lock (ensureAccessToken, #35). Two
 // concurrent same-portal refreshes can race the rotation: one wins, the other gets
 // `invalid_grant`, its job fails, BullMQ retries, the retry re-reads the now-rotated token and
-// succeeds. The persist is tombstone-guarded `saveToken` (won't resurrect a purged portal), so
+// succeeds. The persist is UPDATE-only `updatePortalTokenSecrets` (#510 — cannot re-create the row
+// of a portal that was uninstalled mid-refresh), so
 // a lost race is a TRANSIENT retryable failure, never cred corruption. The advisory lock still
 // serialises the PROACTIVE keep-alive cron (#175). This IS the crm-sync transport (the former
 // advisory-locked `callRest` resolver was retired once the SDK became the default).
