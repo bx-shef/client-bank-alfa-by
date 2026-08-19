@@ -265,6 +265,13 @@ services:
       # порядок, что с уровнем error-лога крипто-шлюза. Нужна ИМЕННО ЗДЕСЬ: crm-sync крутится на
       # воркере, на backend переменная не сделает ничего.
       STATEMENT_DEBUG_LOG: ${STATEMENT_DEBUG_LOG:-0}
+      # Подробность построчного лога операций (#498): notable (умолчание) | all | off.
+      # Замер: строка `[op]` — 221 байт с обвязкой docker, и на «10 порталов × 100 оплат/мин» одна
+      # она сжимает историю логов до ЧЕТЫРЁХ часов (а с распознаванием — до полутора). По умолчанию
+      # печатаем только НЕ приземлившиеся операции: у приземлившейся авторитетная запись — само
+      # дело в Bitrix24, оно точнее строки лога и не истекает. ⚠ `off` глушит и диагностику —
+      # это аварийный клапан, а не «тихий прод». Здесь же, а не на backend: crm-sync на воркере.
+      STATEMENT_OP_LOG: ${STATEMENT_OP_LOG:-}
       # Global A8 rate limiter — attached HERE (the fetch workers), so these knobs are inert
       # unless passed to this service. The default 100/60s sits right AT Alfa's own ceiling
       # with no headroom, so lower it here if the bank starts throttling. Prior is budgeted

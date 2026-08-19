@@ -29,6 +29,28 @@ describe('checkBackendEnv', () => {
     expect(full.warnings.some(w => /Банк Альфа/.test(w))).toBe(false)
   })
 
+  it('предупреждает про ОБА крайних режима STATEMENT_OP_LOG — и шумный, и молчаливый (#498)', () => {
+    // ⚠ Два предупреждения об одной переменной, и это не симметрия ради симметрии.
+    // `all` — забытый калибровочный флаг: он возвращает строку `[op]` на КАЖДУЮ операцию, то есть
+    // ровно тот объём, при котором замер дал четыре часа истории вместо суток. Снаружи это
+    // выглядит просто «логи стали большими» — причину не связать с флагом.
+    // `off` — обратная беда: он ничего не заливает, а ГАСИТ строки неприземлившихся операций,
+    // единственную диагностику ненастроенного портала. Тогда пустой лог читается как «всё
+    // хорошо» ровно на том портале, где не записалось ничто.
+    expect(checkBackendEnv(GOOD).warnings.some(w => /STATEMENT_OP_LOG/.test(w))).toBe(false)
+    // Умолчание и мусор — тихо: предупреждать про рабочий режим значит научить не читать warnings.
+    for (const raw of ['notable', 'NOTABLE', '', 'verbose']) {
+      expect(checkBackendEnv({ ...GOOD, STATEMENT_OP_LOG: raw }).warnings.some(w => /STATEMENT_OP_LOG/.test(w))).toBe(false)
+    }
+    const all = checkBackendEnv({ ...GOOD, STATEMENT_OP_LOG: ' ALL ' })
+    expect(all.warnings.some(w => /STATEMENT_OP_LOG=all/.test(w) && /КАЖДУЮ/.test(w))).toBe(true)
+    const off = checkBackendEnv({ ...GOOD, STATEMENT_OP_LOG: 'off' })
+    expect(off.warnings.some(w => /STATEMENT_OP_LOG=off/.test(w) && /ВЫКЛЮЧЕН/.test(w))).toBe(true)
+    // Ни один из режимов не ошибка — это настройка, а не брак конфигурации.
+    expect(all.errors).toEqual([])
+    expect(off.errors).toEqual([])
+  })
+
   it('предупреждает про включённый STATEMENT_DEBUG_LOG — забытый флаг иначе ничем не виден', () => {
     // Флаг раскрывает назначения платежей в логе (docs/PRIVACY.md §Логи). Откат ручной, а признака
     // «всё ещё включён» нет нигде: назначения просто продолжают писаться. Строка при старте — то

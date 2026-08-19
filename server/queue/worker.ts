@@ -45,6 +45,7 @@ import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
 import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
+import { resolveOpLogMode, runSummaryLine, shouldLogOperation } from '../../app/utils/opLogPolicy'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
@@ -111,6 +112,9 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
  *  announced loosening of docs/PRIVACY.md §Логи for a calibration run, not a runtime knob.
  *  Everything else in `[op]` is logged unconditionally; only this field is gated. */
 const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
+/** Насколько подробен построчный лог операций (#498). Читается один раз: смена — это перезапуск,
+ *  как и у соседнего флага. Умолчание `notable` — пишем только НЕ приземлившиеся. */
+const OP_LOG_MODE = resolveOpLogMode(process.env.STATEMENT_OP_LOG)
 /** Cap for the revealed purpose. Longer than the `logSafe` default (128) because a real purpose
  *  routinely carries several document numbers and the tail is where they sit — truncating there
  *  would hide the very thing the flag is turned on to see. */
@@ -308,6 +312,11 @@ export function liveHandlerDeps(): HandlerDeps {
     // Follows docs/PRIVACY.md §Логи: account/docId/counterparty account are logged, AMOUNTS ARE
     // NOT, and the purpose only behind the opt-in gate below.
     onOperation: (item, outcome, memberId) => {
+      // ⚠ Гейт ПЕРВЫМ делом: строка `[op]` весит 221 байт с обвязкой docker, и на масштабе
+      // «10 порталов × 100 оплат/мин» одна она съедает историю логов до четырёх часов (замер,
+      // #498). Приземлившиеся операции не печатаем: у них авторитетная запись — само дело в
+      // Bitrix24 с маркером, оно точнее и не истекает. Сколько опущено — скажет итог прогона.
+      if (!shouldLogOperation(outcome, OP_LOG_MODE)) return
       const owner = outcome.owner === 'client'
         ? 'company'
         : outcome.owner === 'my-company' ? 'my-company (fallback)' : 'NO OWNER'
@@ -719,6 +728,11 @@ export function startThroughputWorkers(
           }
           throw e
         }
+        // ⚠ БЕЗУСЛОВНАЯ запись уровня прогона (#498). Её раньше не было вовсе: сводка считалась,
+        // уезжала в БД и метрики, но в лог не попадала — то есть в логе не существовало ни одной
+        // записи, которая переживёт ротацию и объяснит, что произошло. Это O(прогонов), а не
+        // O(операций), поэтому масштаб её не съедает.
+        console.log(runSummaryLine(job.data.memberId, summary, OP_LOG_MODE))
         // Persist the run for the in-portal status card (#5) — LATEST run per portal.
         // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
         // already happened). Demo batches never touch the real portal's status row.
