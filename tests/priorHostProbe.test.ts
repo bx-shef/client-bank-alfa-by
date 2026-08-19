@@ -60,6 +60,35 @@ describe('проба хоста Приорбанка не разошлась с 
     expect(SCRIPT).toContain('grant_type=client_credentials')
   })
 
+  it('401 НЕ трактуется как «эндпоинта нет» — это «дай токен»', () => {
+    // ⚠ Живой прогон на проде поймал ровно эту ошибку в первой версии: `/oidcdiscovery` ответил
+    // `401 Missing Credentials`, а проба напечатала «сервера авторизации по этому адресу нет».
+    // Вывод был АКТИВНО ложным — на том же хосте токен выдавался прекрасно. Эндпоинт закрыт
+    // токеном, и 401 означает лишь это.
+    expect(SCRIPT).not.toMatch(/401[^\n]*нет\b/)
+    expect(SCRIPT).not.toContain('сервера авторизации по этому адресу нет')
+    // Ресурсный API различает «нет двери» и «дверь есть, нужен другой ключ» — по коду.
+    expect(SCRIPT).toMatch(/401\|403\)\s*ok/)
+    expect(SCRIPT).toMatch(/404\)\s*bad/)
+  })
+
+  it('discovery спрашивается С ТОКЕНОМ, а не до него', () => {
+    // Порядок шагов — часть смысла: пока токена нет, API-шлюз банка отвечает 401 на всё, и
+    // спрашивать конфигурацию раньше токена бессмысленно.
+    const tokenAt = SCRIPT.indexOf('grant_type=client_credentials')
+    const discAt = SCRIPT.indexOf('/oidcdiscovery"')
+    expect(tokenAt).toBeGreaterThan(-1)
+    expect(discAt).toBeGreaterThan(tokenAt)
+  })
+
+  it('проверка ресурсного API по умолчанию ЧИТАЮЩАЯ', () => {
+    // ⚠ Отличить «API здесь» от «API здесь нет» можно кодом ответа, ничего не создавая. Запись
+    // (создание согласия) остаётся за отдельным флагом — она оставляет след в банке.
+    const readAt = SCRIPT.indexOf(`"$TARGET$OB_PREFIX/accounts"`)
+    expect(readAt).toBeGreaterThan(-1)
+    expect(SCRIPT).toMatch(/WITH_CONSENT" != "1"/)
+  })
+
   it('секреты не печатаются', () => {
     // Значение токена и ключа не должно попадать в вывод — сервер общий, вывод копируют в чат.
     expect(SCRIPT).not.toMatch(/echo.*\$ACCESS[^_]/)

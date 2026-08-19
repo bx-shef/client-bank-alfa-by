@@ -36,6 +36,9 @@ done
 AUTH_PREFIX="/open-banking-authorize/v1.0"
 DCR_PREFIX="/open-banking-dcr/v1.0"
 OB_PREFIX="/open-banking/v1.0"
+# Обязательные заголовки ресурсного API (#461): банк проверяет их ДО тела запроса.
+FAPI_HEADER="x-fapi-interaction-id"
+IDEMPOTENCY_HEADER="x-idempotency-key"
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 # Печать тела ответа при ошибке. ⚠ HTML не дампим: страница-заглушка прокси или балансировщика
@@ -184,43 +187,16 @@ else
 fi
 
 # --- 2. discovery -------------------------------------------------------------------------------
-head_ "2. Конфигурация сервера авторизации (/oidcdiscovery)"
-DISC_FILE="$(mktemp /tmp/prior-disc.XXXXXX)"
-DISC_CODE="$(curl -sS -o "$DISC_FILE" -w '%{http_code}' --max-time 30 "$TARGET$DCR_PREFIX/oidcdiscovery" 2>/dev/null || echo 000)"
-echo "  HTTP $DISC_CODE  $TARGET$DCR_PREFIX/oidcdiscovery"
-if [ "$DISC_CODE" = "200" ]; then
-  ok "discovery отвечает"
-  ISSUER="$(sed -n 's/.*"issuer"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DISC_FILE" | head -1)"
-  TOKEP="$(sed -n 's/.*"token_endpoint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DISC_FILE" | head -1)"
-  AUTHEP="$(sed -n 's/.*"authorization_endpoint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DISC_FILE" | head -1)"
-  echo "    issuer:                 ${ISSUER:-<не найден>}"
-  echo "    token_endpoint:         ${TOKEP:-<не найден>}"
-  echo "    authorization_endpoint: ${AUTHEP:-<не найден>}"
-  # ⚠ Это и есть `aud` подписанных нами JWT. Разойдись он с тем, что в .env, — банк отвергнет
-  # ассерцию, и снаружи это выглядит как «не тот ключ», а не «не тот хост».
-  if [ -n "$ISSUER" ] && [ -n "$AUDIENCE" ]; then
-    if [ "$ISSUER" = "$AUDIENCE" ]; then ok "issuer СОВПАДАЕТ с PRIOR_OAUTH_AUDIENCE — менять не нужно"
-    else warn "issuer ОТЛИЧАЕТСЯ от PRIOR_OAUTH_AUDIENCE (${AUDIENCE}) — при переключении заменить"; fi
-  fi
-elif [ "$DISC_CODE" = "000" ]; then
-  bad "хост не отвечает вовсе (curl не смог соединиться) — дальше идти некуда"
-  rm -f "$DISC_FILE"
-  exit 1
-else
-  warn "discovery не ответил 200 — это уже ответ: сервера авторизации по этому адресу нет"
-  show_body "$DISC_FILE"
-fi
-rm -f "$DISC_FILE"
-
-# --- 3. токен -----------------------------------------------------------------------------------
-head_ "3. Действует ли наш БОЕВОЙ client_id на этом хосте"
-# ⚠ `client_credentials` выбран намеренно: он ничего не ротирует и ничего не создаёт. Успех
-# означает, что регистрация приложения на этом хосте ДЕЙСТВИТЕЛЬНА, то есть подключённые счета
-# при переключении не осиротеют.
+head_ "2. Действует ли наш БОЕВОЙ client_id на этом хосте"
+# ⚠ Это ГЛАВНЫЙ шаг, поэтому он идёт вторым, а не третьим: пока токена нет, остальное не о чем
+# спрашивать — API-шлюз банка отвечает 401 на всё подряд. Грант `client_credentials` выбран
+# намеренно: он ничего не ротирует и ничего не создаёт. Успех означает, что регистрация приложения
+# на этом хосте ДЕЙСТВИТЕЛЬНА, то есть подключённые счета при переключении не осиротеют.
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 NOW="$(date +%s)"
 JTI="$(openssl rand -hex 16)"
-AUD_FOR_JWT="${ISSUER:-$AUDIENCE}"
+AUD_FOR_JWT="$AUDIENCE"
+[ -n "$AUD_FOR_JWT" ] || { bad "PRIOR_OAUTH_AUDIENCE пуст — подписать ассерцию нечем"; exit 1; }
 HDR="$(printf '{"alg":"RS256","typ":"JWT","kid":"%s"}' "$KID" | b64url)"
 PAY="$(printf '{"iss":"%s","sub":"%s","aud":["%s"],"iat":%s,"exp":%s,"jti":"%s"}' \
         "$CLIENT_ID" "$CLIENT_ID" "$AUD_FOR_JWT" "$NOW" "$((NOW+300))" "$JTI" | b64url)"
@@ -245,19 +221,77 @@ if [ "$TOK_CODE" = "200" ]; then
   else
     warn "200, но access_token в ответе не нашёлся"
   fi
+elif [ "$TOK_CODE" = "000" ]; then
+  bad "хост не отвечает вовсе (curl не соединился) — дальше идти некуда"
+  rm -f "$TOK_FILE"; exit 1
 else
   bad "токен не выдан — регистрация на этом хосте не действует ЛИБО метод аутентификации другой"
-  # ⚠ Тело ошибки печатаем: там `error`/`error_description` банка, секретов в нём нет.
   show_body "$TOK_FILE"
 fi
 rm -f "$TOK_FILE"
 
-# --- 4. ресурсный API ---------------------------------------------------------------------------
-head_ "4. Отвечает ли ресурсный API (Open-banking)"
+head_ "3. Конфигурация сервера авторизации (/oidcdiscovery)"
+# ⚠ Этот эндпоинт ЗАКРЫТ токеном — 401 на нём означает «дай токен», а не «сервера тут нет».
+# Первая версия скрипта трактовала 401 как отсутствие сервера, и это был активно ложный вывод:
+# на боевом хосте всё работало, а проба сообщала обратное.
+if [ -z "$ACCESS" ]; then
+  warn "пропускаю — нет токена"
+else
+  DISC_FILE="$(mktemp /tmp/prior-disc.XXXXXX)"
+  DISC_CODE="$(curl -sS -o "$DISC_FILE" -w '%{http_code}' --max-time 30 \
+    -H "authorization: Bearer $ACCESS" \
+    -H "$FAPI_HEADER: $(openssl rand -hex 16)" \
+    "$TARGET$DCR_PREFIX/oidcdiscovery" 2>/dev/null || echo 000)"
+  echo "  HTTP $DISC_CODE  GET $TARGET$DCR_PREFIX/oidcdiscovery"
+  if [ "$DISC_CODE" = "200" ]; then
+    ok "discovery отвечает"
+    ISSUER="$(sed -n 's/.*"issuer"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DISC_FILE" | head -1)"
+    AUTHEP="$(sed -n 's/.*"authorization_endpoint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DISC_FILE" | head -1)"
+    echo "    issuer:                 ${ISSUER:-<не найден>}"
+    echo "    authorization_endpoint: ${AUTHEP:-<не найден>}"
+    # ⚠ Это и есть `aud` подписанных нами JWT. Разойдись он с тем, что в .env, — банк отвергнет
+    # ассерцию, и снаружи это выглядит как «не тот ключ», а не «не тот хост».
+    if [ -n "$ISSUER" ]; then
+      if [ "$ISSUER" = "$AUDIENCE" ]; then ok "issuer СОВПАДАЕТ с PRIOR_OAUTH_AUDIENCE — менять не нужно"
+      else warn "issuer ОТЛИЧАЕТСЯ от PRIOR_OAUTH_AUDIENCE ($AUDIENCE) — при переключении заменить"; fi
+    fi
+  else
+    warn "discovery не отдал 200 (это не приговор: токен мы уже получили, значит сервер авторизации тут есть)"
+    show_body "$DISC_FILE"
+  fi
+  rm -f "$DISC_FILE"
+fi
+
+head_ "4. Ресурсный API (Open-banking) — есть ли он на этом хосте"
+# ⚠ Проверка ЧИТАЮЩАЯ и намеренно «неполная»: `GET /accounts` требует токен B, выданный после
+# согласия владельца счёта, а у нас на руках только машинный токен. Но нам и не нужен успех —
+# нужен КОД. 404 значит «такого API по этому адресу нет», 401/403 — «API здесь, просто нужен
+# другой токен». Этого достаточно, чтобы отличить «дверь есть» от «двери нет», и это ничего
+# не создаёт в банке.
+if [ -z "$ACCESS" ]; then
+  warn "пропускаю — нет токена"
+else
+  ACC_FILE="$(mktemp /tmp/prior-acc.XXXXXX)"
+  ACC_CODE="$(curl -sS -o "$ACC_FILE" -w '%{http_code}' --max-time 30 \
+    -H "authorization: Bearer $ACCESS" \
+    -H "$FAPI_HEADER: $(openssl rand -hex 16)" \
+    "$TARGET$OB_PREFIX/accounts" 2>/dev/null || echo 000)"
+  echo "  HTTP $ACC_CODE  GET $TARGET$OB_PREFIX/accounts"
+  case "$ACC_CODE" in
+    200) ok "ресурсный API отвечает И принял машинный токен" ;;
+    401|403) ok "ресурсный API НА ЭТОМ ХОСТЕ ЕСТЬ (нужен токен владельца счёта — ожидаемо)" ;;
+    404) bad "404 — ресурсного API по этому адресу нет: выписки отсюда брать нельзя" ;;
+    *)   warn "неожиданный код — смотрим тело" ;;
+  esac
+  [ "$ACC_CODE" = "200" ] || show_body "$ACC_FILE"
+  rm -f "$ACC_FILE"
+fi
+
+head_ "5. Запись в ресурсный API (создание согласия)"
 if [ -z "$ACCESS" ]; then
   warn "пропускаю — нет токена"
 elif [ "$WITH_CONSENT" != "1" ]; then
-  echo "  пропускаю: создание согласия — ЗАПИСЬ в банк. Повторите с --with-consent, если нужно."
+  echo "  пропускаю: это ЗАПИСЬ в банк. Повторите с --with-consent, если нужно."
 else
   EXP="$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)"
   CONS_FILE="$(mktemp /tmp/prior-cons.XXXXXX)"
@@ -266,32 +300,34 @@ else
   CONS_CODE="$(curl -sS -o "$CONS_FILE" -w '%{http_code}' --max-time 45 \
     -X POST "$TARGET$OB_PREFIX/accountConsents" \
     -H "authorization: Bearer $ACCESS" \
-    -H "x-fapi-interaction-id: $(openssl rand -hex 16)" \
-    -H "x-idempotency-key: $(openssl rand -hex 16)" \
+    -H "$FAPI_HEADER: $(openssl rand -hex 16)" \
+    -H "$IDEMPOTENCY_HEADER: $(openssl rand -hex 16)" \
     -H 'content-type: application/json' \
     --data "{\"data\":{\"permissions\":[\"ReadAccountsDetail\",\"ReadStatementsDetail\",\"ReadTransactionsDetail\",\"ReadTransactionsCredits\",\"ReadTransactionsDebits\"],\"expirationDate\":\"$EXP\"}}" \
     2>/dev/null || echo 000)"
   echo "  HTTP $CONS_CODE  POST $TARGET$OB_PREFIX/accountConsents"
   if [ "$CONS_CODE" = "201" ] || [ "$CONS_CODE" = "200" ]; then
-    ok "РЕСУРСНЫЙ API РАБОТАЕТ на этом хосте (создано пробное согласие — оно не используется и истечёт)"
+    ok "РЕСУРСНЫЙ API РАБОТАЕТ ПОЛНОСТЬЮ (создано пробное согласие — оно не используется и истечёт)"
   else
-    bad "ресурсный API не принял запрос"
+    bad "запись не прошла"
     show_body "$CONS_FILE"
   fi
   rm -f "$CONS_FILE"
 fi
 
-# --- итог ---------------------------------------------------------------------------------------
 head_ "Что это означает"
 if [ -n "$ACCESS" ]; then
-  echo "  Хост принимает СЕРВЕРНЫЕ вызовы нашим боевым client_id."
-  echo "  Значит крипто-шлюз для этих вызовов не обязателен, и подключённые счета"
-  echo "  переключение переживут: гранты выданы тем же сервером авторизации."
-  echo "  ⚠ Проверить перед переключением: issuer выше должен совпасть с PRIOR_OAUTH_AUDIENCE."
+  echo "  Хост принимает СЕРВЕРНЫЕ вызовы нашим боевым client_id — крипто-шлюз для них"
+  echo "  не обязателен. Подключённые счета переключение переживут: гранты выданы тем же"
+  echo "  сервером авторизации (это же подтверждает и общий issuer)."
+  echo
+  echo "  ⚠ Что ещё стоит увидеть зелёным перед переключением:"
+  echo "    • шаг 4 — ресурсный API должен ответить 200/401/403, но НЕ 404;"
+  echo "    • шаг 3 — issuer должен совпасть с PRIOR_OAUTH_AUDIENCE (или его надо заменить)."
 else
   echo "  Хост НЕ принял наш боевой client_id. Переключать прод нельзя:"
   echo "  либо это другой реестр приложений, либо другой метод аутентификации,"
   echo "  либо серверная роль у этого адреса отсутствует и он только для браузера."
 fi
 echo
-echo "  Порядок переключения и обратного отката — docs/OPERATIONS.md, раздел про Приор."
+echo "  Порядок переключения и обратного отката — docs/PRIOR_API.md, раздел про #522."
