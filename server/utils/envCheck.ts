@@ -8,6 +8,7 @@
 //   - B24_APPLICATION_TOKEN left as a placeholder (CHANGE_ME) → the real token
 //     from ONAPPINSTALL never matches it → the verdict is 403 → install rejected.
 
+import { resolveOpLogMode } from '../../app/utils/opLogPolicy'
 import { Buffer } from 'node:buffer'
 import { resolveTelegramConfig, telegramConfigAttempted } from './telegramAlert'
 import { normalizeAuthorizeBase, normalizeBankApiBase, sameOrigin } from '../../app/utils/bankGatewayUrl'
@@ -130,6 +131,25 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
   //     забытый флаг видимым там, где оператор и так смотрит. ---
   if ((env.STATEMENT_DEBUG_LOG ?? '').trim() === '1') {
     warnings.push('STATEMENT_DEBUG_LOG=1 — НАЗНАЧЕНИЯ ПЛАТЕЖЕЙ пишутся в лог (осознанное послабление docs/PRIVACY.md §Логи на время калибровки). Выключите обратно, когда матрицы настроены.')
+  }
+  // --- Тот же класс забытого флага, но у объёма (#498). `all` возвращает строку `[op]` на КАЖДУЮ
+  //     операцию — ровно тот режим, при котором замер дал четыре часа истории логов вместо
+  //     нескольких суток. Включают его на калибровочный прогон вместе с флагом выше и так же
+  //     забывают выключить, а снаружи это выглядит просто «логи стали большими». ⚠ `off`
+  //     предупреждается ОТДЕЛЬНО и по другой причине: он не шумит, а МОЛЧИТ — гасит строки
+  //     неприземлившихся операций, то есть единственную диагностику ненастроенного портала, и
+  //     тогда «в логе пусто» читается как «всё хорошо». ---
+  // ⚠ Режим разбирает `resolveOpLogMode`, а НЕ своя копия `.trim().toLowerCase()` + список
+  //     литералов. Копия здесь была, и ревью верно назвало её будущим расхождением: изменится
+  //     набор режимов в политике — этот файл узнает об этом никогда, и предупреждения начнут
+  //     описывать поведение, которого нет. Заодно исчезает целый класс разночтений («ALL» с
+  //     пробелами, регистр, мусор) — они теперь разбираются ровно там же, где в рантайме. ---
+  const opLogMode = resolveOpLogMode(env.STATEMENT_OP_LOG)
+  if (opLogMode === 'all') {
+    warnings.push('STATEMENT_OP_LOG=all — строка [op] пишется на КАЖДУЮ операцию (режим калибровки). При потоке платежей это сжимает историю логов до часов; верните notable, когда матрицы настроены.')
+  }
+  if (opLogMode === 'off') {
+    warnings.push('STATEMENT_OP_LOG=off — построчный лог операций ВЫКЛЮЧЕН ПОЛНОСТЬЮ, включая неприземлившиеся платежи. Пустой лог перестаёт означать «всё хорошо»: диагностировать ненастроенный портал будет нечем.')
   }
 
   // --- Bank online-fetch OAuth creds (stage 5): each bank needs ALL of

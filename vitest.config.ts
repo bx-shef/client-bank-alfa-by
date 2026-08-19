@@ -17,7 +17,10 @@ export default defineConfig(async () => ({
           name: 'unit',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
-          exclude: ['tests/nuxt/**']
+          exclude: ['tests/nuxt/**'],
+          // Снимает флаги, которые модули читают ОДИН РАЗ при загрузке: без этого прогон зависит
+          // от `.env` разработчика, а красный тест выглядит поломкой кода (см. файл, #498).
+          setupFiles: ['tests/setup/env.ts']
         }
       },
       await defineVitestProject({

@@ -10,6 +10,7 @@
 
 import { createHash } from 'node:crypto'
 import type { StatementItem } from '../../app/types/statement'
+import { landedCleanly } from '../../app/utils/opLogPolicy'
 import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
 import { makeProgramSample, type ProgramSample } from '../../app/utils/programFeedback'
@@ -306,7 +307,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -353,6 +354,7 @@ export async function handleCrmSyncJob(
   let skipped = 0
   let excluded = 0
   let unmatched = 0
+  let landed = 0
   // Номер распознан, компания найдена, а цели в CRM нет (#421). Раньше этот случай не попадал
   // никуда: сообщения строились только внутри ветки «кандидаты есть».
   let unresolved = 0
@@ -578,11 +580,17 @@ export async function handleCrmSyncJob(
     const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
     // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including
     // the ones that matched nothing — those are exactly the ones no other callback reports.
-    deps.onOperation?.(item, {
-      owner: companyId ? 'client' : writeCompanyId ? 'my-company' : 'none',
+    const opOutcome = {
+      owner: (companyId ? 'client' : writeCompanyId ? 'my-company' : 'none') as 'client' | 'my-company' | 'none',
       recognized: intents.length,
       activityId
-    }, job.memberId)
+    }
+    deps.onOperation?.(item, opOutcome, job.memberId)
+    // Count the ops that LANDED (client identified AND an activity written). This is domain
+    // bookkeeping rather than a logging detail, which is why it lives here and not in the logger:
+    // the run summary uses it to state how many per-op lines were omitted, and a silent omission
+    // reads as "there was nothing else" (#498).
+    if (landedCleanly(opOutcome)) landed++
     if (clientUnmatched && errorChat?.dialogId) {
       // Notify the error chat AFTER the write, so `recorded` reflects whether an activity was
       // actually created (a thrown write fails the job BEFORE this — a retry then notifies once it
@@ -653,5 +661,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, created, notified, skipped, excluded, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }
