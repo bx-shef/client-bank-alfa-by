@@ -67,9 +67,12 @@ export function planFetches(
  *  head-of-line block Alfa. Enqueueing stays idempotent per (portal, account, window), so a slow
  *  Prior sweep grows the interval between polls, never the queue.
  *
- *  ⚠ PRODUCTION still needs the BY-crypto TLS СКЗИ gateway for Prior's `:9345` (issue #41) — a
- *  deployment prerequisite, not a code gate: without it the fetch fails at TLS and the job retries.
- *  Sandbox (`:9344`) needs no СКЗИ. */
+ *  ⚠ Which Prior host we poll is a DEPLOYMENT choice, not a code gate (#522). `:9345` speaks
+ *  BY-crypto TLS and needs the gateway in front of it; `:9344` has an industrial mode that does
+ *  not — the bank confirmed both are valid ways in, and the registration is shared between them.
+ *  Either way the code is identical: the address comes from `PRIOR_OAUTH_API_BASE`, and a host we
+ *  cannot reach fails at TLS and the job retries. See docs/PRIOR_API.md for the switch procedure
+ *  in both directions. */
 export const POLLABLE_PROVIDERS: ReadonlySet<BankProviderId> = new Set<BankProviderId>(['alfa-by', 'prior-by'])
 
 /** Group connected bank accounts (A6 registry) into the poll planner's shape: one entry per
