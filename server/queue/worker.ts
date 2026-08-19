@@ -112,8 +112,9 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
  *  announced loosening of docs/PRIVACY.md §Логи for a calibration run, not a runtime knob.
  *  Everything else in `[op]` is logged unconditionally; only this field is gated. */
 const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
-/** Насколько подробен построчный лог операций (#498). Читается один раз: смена — это перезапуск,
- *  как и у соседнего флага. Умолчание `notable` — пишем только НЕ приземлившиеся. */
+/** How verbose the per-operation log is (#498): `notable` (default) | `all` | `off`. Read once at
+ *  start, exactly like the flag above — flipping it means a restart. The default prints only the
+ *  operations that did NOT land; the run summary stays unconditional in every mode. */
 const OP_LOG_MODE = resolveOpLogMode(process.env.STATEMENT_OP_LOG)
 /** Cap for the revealed purpose. Longer than the `logSafe` default (128) because a real purpose
  *  routinely carries several document numbers and the tail is where they sit — truncating there

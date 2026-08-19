@@ -586,10 +586,10 @@ export async function handleCrmSyncJob(
       activityId
     }
     deps.onOperation?.(item, opOutcome, job.memberId)
-    // ⚠ Считаем ПРИЗЕМЛИВШИЕСЯ (клиент опознан И дело записано) — это доменная статистика, а не
-    // деталь логирования, и живёт она здесь именно поэтому. По ней же итоговая строка прогона
-    // честно сообщает, сколько построчных записей опущено: молчаливое сокращение читается как
-    // «больше ничего и не было» (#498).
+    // Count the ops that LANDED (client identified AND an activity written). This is domain
+    // bookkeeping rather than a logging detail, which is why it lives here and not in the logger:
+    // the run summary uses it to state how many per-op lines were omitted, and a silent omission
+    // reads as "there was nothing else" (#498).
     if (landedCleanly(opOutcome)) landed++
     if (clientUnmatched && errorChat?.dialogId) {
       // Notify the error chat AFTER the write, so `recorded` reflects whether an activity was
