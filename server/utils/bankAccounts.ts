@@ -186,7 +186,11 @@ export async function handleDisconnectBankAccount(deps: DisconnectDeps, input: D
     return { status: 400, body: { error: 'unknown provider' } }
   }
   const id = Number(input.id)
-  if (!Number.isInteger(id) || id <= 0) {
+  // ⚠ Верхняя граница нужна, и не для красоты: `Number.isInteger(1e21)` — ИСТИНА, а `String(1e21)`
+  // это «1e+21», то есть pg отдаст такое значение в `bigint`-параметр экспонентой, и Postgres
+  // ответит синтаксической ошибкой. Без границы это необработанное исключение и 500 там, где
+  // должен быть честный 400 (находка ревью безопасности).
+  if (!Number.isInteger(id) || id <= 0 || id > Number.MAX_SAFE_INTEGER) {
     return { status: 400, body: { error: 'a connection id is required' } }
   }
 

@@ -190,6 +190,10 @@ describe('handleDisconnectBankAccount', () => {
     expect((await handleDisconnectBankAccount(deps, { ...body, id: -1 })).status).toBe(400)
     expect((await handleDisconnectBankAccount(deps, { ...body, id: 1.5 })).status).toBe(400)
     expect((await handleDisconnectBankAccount(deps, { ...body, id: Number.NaN })).status).toBe(400)
+    // ⚠ Сверхбольшое целое тоже 400, а не 500: `Number.isInteger(1e21)` истинно, но pg отдаст его
+    // в bigint-параметр экспонентой («1e+21»), и Postgres ответит синтаксической ошибкой.
+    expect((await handleDisconnectBankAccount(deps, { ...body, id: 1e21 })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, id: Number.POSITIVE_INFINITY })).status).toBe(400)
     expect(touched).toBe(false)
   })
 
