@@ -75,6 +75,10 @@ describe('ключ лока строится ТОЛЬКО хелпером', () 
       // Удаление под локом не нуждается: строки не станет в любом порядке, и обновление это
       // увидит (UPDATE-only вернёт `false`) — ровно исход #505, он правильный.
       deleteBankToken: 'unlocked-delete-is-terminal',
+      // ⚠ То же удаление, но адресованное неизменяемым `id` и со сверкой ключа (#517). Лок не нужен
+      // по той же причине; сверка решает ДРУГУЮ задачу — не гонку за строку, а протухший список в
+      // браузере, который лок не лечит в принципе.
+      deleteBankTokenById: 'unlocked-delete-is-terminal',
       deleteBankTokensForPortal: 'unlocked-delete-is-terminal'
     }
     expect([...writers].sort()).toEqual(Object.keys(CLASSIFIED).sort())

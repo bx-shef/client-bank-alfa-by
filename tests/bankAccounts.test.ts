@@ -16,6 +16,7 @@ import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 // unknown portal, a frame token that isn't this portal's, and non-admins.
 
 const ROW: BankAccountInfo = {
+  id: 42,
   memberId: 'M1',
   provider: 'alfa-by',
   accountKey: 'BY01ALFA0001',
@@ -41,7 +42,7 @@ function disconnectDeps(over: Partial<DisconnectDeps> = {}): DisconnectDeps {
   return {
     memberIdByDomain: async () => 'M1',
     validateFrame: async () => ({ userId: '7', isAdmin: true }),
-    remove: async () => true,
+    remove: async () => 'removed' as const,
     ...over
   }
 }
@@ -55,6 +56,7 @@ describe('handleListBankAccounts', () => {
     const accounts = res.body.accounts as Record<string, unknown>[]
     expect(accounts).toHaveLength(1)
     expect(accounts[0]).toEqual({
+      id: 42,
       provider: 'alfa-by',
       accountKey: 'BY01ALFA0001',
       connectedAt: ROW.connectedAt,
@@ -138,52 +140,69 @@ describe('classifyProvisionError', () => {
 })
 
 describe('handleDisconnectBankAccount', () => {
-  it('removes the named account of the CALLER portal', async () => {
+  const body = { ...input, id: 42, provider: 'alfa-by', accountKey: ' BY01ALFA0001 ' }
+
+  it('удаляет по НЕИЗМЕНЯЕМОМУ адресу, а не по номеру счёта', async () => {
+    // ⚠ Номер МЕНЯЕТСЯ: выбор счёта переименовывает `~pending:`-ключ. Адресация по нему промахивалась
+    // мимо строки и отвечала успехом, пока приложение продолжало ходить в банк клиента (#517).
     const seen: string[] = []
     const deps = disconnectDeps({
-      remove: async (memberId, provider, accountKey) => {
-        seen.push(`${memberId}|${provider}|${accountKey}`)
-        return true
+      remove: async (memberId, id, expected) => {
+        seen.push(`${memberId}|${id}|${expected}`)
+        return 'removed'
       }
     })
-    const res = await handleDisconnectBankAccount(deps, { ...input, provider: 'alfa-by', accountKey: ' BY01ALFA0001 ' })
+    const res = await handleDisconnectBankAccount(deps, body)
     expect(res.status).toBe(200)
     expect(res.body.removed).toBe(true)
-    // memberId comes from OUR domain lookup, never from the request body.
-    expect(seen).toEqual(['M1|alfa-by|BY01ALFA0001'])
+    // memberId — из НАШЕГО поиска по домену, никогда из тела запроса.
+    expect(seen).toEqual(['M1|42|BY01ALFA0001'])
   })
 
-  it('is idempotent — removing an already-gone account is 200 {removed:false}', async () => {
-    const deps = disconnectDeps({ remove: async () => false })
-    const res = await handleDisconnectBankAccount(deps, { ...input, provider: 'alfa-by', accountKey: 'BY01ALFA0001' })
+  it('409, если строка изменилась под пользователем — и это НЕ успех', async () => {
+    // Ровно тот дефект: раньше такой клик отвечал `200 {removed:false}`, неотличимо от честного
+    // «уже отключено», и человек считал, что отключил.
+    const res = await handleDisconnectBankAccount(disconnectDeps({ remove: async () => 'stale' }), body)
+    expect(res.status).toBe(409)
+    expect(res.body.removed).toBeUndefined()
+  })
+
+  it('идемпотентность сохранена: строки нет — 200 {removed:false}, не ошибка', async () => {
+    // Двойной клик и повтор из другой вкладки не должны выглядеть поломкой (#404).
+    const res = await handleDisconnectBankAccount(disconnectDeps({ remove: async () => 'gone' }), body)
     expect(res.status).toBe(200)
     expect(res.body.removed).toBe(false)
   })
 
-  it('rejects a blank or unknown provider before touching the store', async () => {
+  it('отвергает пустой и кривой провайдер/адрес до обращения к хранилищу', async () => {
     let touched = false
     const deps = disconnectDeps({
       remove: async () => {
         touched = true
-        return true
+        return 'removed'
       }
     })
-    expect((await handleDisconnectBankAccount(deps, { ...input, provider: '', accountKey: 'A' })).status).toBe(400)
-    expect((await handleDisconnectBankAccount(deps, { ...input, provider: 'alfa-by', accountKey: '' })).status).toBe(400)
-    expect((await handleDisconnectBankAccount(deps, { ...input, provider: 'evil-bank', accountKey: 'A' })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, provider: '' })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, accountKey: '' })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, provider: 'evil-bank' })).status).toBe(400)
+    // ⚠ Без адреса удалять нечего: молча взять «первую подходящую» строку было бы худшим исходом.
+    expect((await handleDisconnectBankAccount(deps, { ...body, id: 0 })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, id: -1 })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, id: 1.5 })).status).toBe(400)
+    expect((await handleDisconnectBankAccount(deps, { ...body, id: Number.NaN })).status).toBe(400)
     expect(touched).toBe(false)
   })
 
-  it('is 403 for a non-admin — and never deletes', async () => {
+  it('403 для не-админа — и ничего не удаляет', async () => {
     let touched = false
     const deps = disconnectDeps({
       validateFrame: async () => ({ userId: '9', isAdmin: false }),
       remove: async () => {
         touched = true
-        return true
+        return 'removed'
       }
     })
-    expect((await handleDisconnectBankAccount(deps, { ...input, provider: 'alfa-by', accountKey: 'A' })).status).toBe(403)
+    expect((await handleDisconnectBankAccount(deps, body)).status).toBe(403)
     expect(touched).toBe(false)
   })
 })

@@ -108,6 +108,23 @@ CREATE TABLE IF NOT EXISTS portal_app_rating (
 -- and send people into their internet bank for something that works.
 ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS consent_expires_at BIGINT NOT NULL DEFAULT 0;
 
+-- Неизменяемый адрес строки подключения (#517). Первичный ключ таблицы — (member_id, provider,
+-- account_key), но сам account_key МЕНЯЕТСЯ: выбор счёта переименовывает временный ~pending:-ключ
+-- в настоящий номер. Значит браузер, отрисовавший список минуту назад, держит адрес, которого уже
+-- нет, и его «Отключить» тихо не находит строку — отвечая ровно тем же 200 {removed:false}, что и
+-- честная идемпотентность двойного клика. Различить их по ключу невозможно в принципе.
+--
+-- (⚠ Обратных кавычек здесь нет НИ ОДНОЙ: это JS-шаблонная строка, и любая из них её оборвёт.
+-- Ровно на этом уже спотыкались дважды, и SQL при этом ломается не в базе, а в парсере TS.)
+--
+-- ⚠ id НЕ становится первичным ключом и не заменяет тройку как идентичность: она используется
+-- примерно в двадцати файлах, и переезд на суррогат — отдельная работа. Здесь id решает ровно одну
+-- задачу: дать удалению адрес, который не может протухнуть.
+--
+-- BIGSERIAL на существующей таблице заполняет значения сразу; уникальность держит индекс ниже.
+ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_tokens_id_key ON bank_tokens (id);
+
 -- Retired table (§9.3 #6): allocation idempotency/audit moved to the distributions
 -- smart-process (marker + status). Idempotent DROP cleans up a previously-provisioned DB.
 DROP TABLE IF EXISTS allocation_fact;

@@ -35,7 +35,7 @@ export interface ListAccountsDeps extends BankAccountsDeps {
 }
 
 export interface DisconnectDeps extends BankAccountsDeps {
-  remove: (memberId: string, provider: BankProviderId, accountKey: string) => Promise<boolean>
+  remove: (memberId: string, id: number, expectedAccountKey: string) => Promise<'removed' | 'gone' | 'stale'>
 }
 
 /**
@@ -57,6 +57,9 @@ export interface BankAccountsInput {
 export interface DisconnectInput extends BankAccountsInput {
   provider: string
   accountKey: string
+  /** Неизменяемый адрес строки (#517). `accountKey` едет рядом как ОЖИДАНИЕ вызывающего: он
+   *  описывает, что было на экране, и расхождение означает «список устарел». */
+  id: number
 }
 
 export interface SetAccountInput extends BankAccountsInput {
@@ -115,6 +118,10 @@ export async function handleListBankAccounts(deps: ListAccountsDeps, input: Bank
     status: 200,
     body: {
       accounts: accounts.map(a => ({
+        // Неизменяемый адрес строки (#517) — им браузер адресует «Отключить». Внутренним
+        // идентификатором портала он не является: это порядковый номер строки в НАШЕЙ таблице,
+        // осмысленный только вместе с уже доказанным `member_id`, поэтому отдавать его безопасно.
+        id: a.id,
         provider: a.provider,
         accountKey: a.accountKey,
         connectedAt: a.connectedAt,
@@ -178,7 +185,24 @@ export async function handleDisconnectBankAccount(deps: DisconnectDeps, input: D
   if (!isKnownProvider(provider)) {
     return { status: 400, body: { error: 'unknown provider' } }
   }
+  const id = Number(input.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    return { status: 400, body: { error: 'a connection id is required' } }
+  }
 
-  const removed = await deps.remove(auth.memberId, provider, accountKey)
-  return { status: 200, body: { removed } }
+  // ⚠ Адресуем по `id`, а не по номеру счёта. Номер МЕНЯЕТСЯ (выбор счёта переименовывает
+  // `~pending:`-ключ), поэтому удаление по адресу из отрисованного списка не находило строку и
+  // отвечало `200 {removed:false}` — тем же, что и честное «уже отключено». Снаружи это выглядело
+  // успехом, а приложение продолжало ходить в банк клиента вопреки явному запрету.
+  const outcome = await deps.remove(auth.memberId, id, accountKey)
+  // ⚠ 409, а не тихий успех и не 404: строка ЕСТЬ, просто она уже не та, что была на экране.
+  // Единственный честный ответ — «список устарел», потому что удалять по такому клику значит
+  // снести подключение, которое за это время стало рабочим.
+  if (outcome === 'stale') {
+    return { status: 409, body: { error: 'the connection changed since the list was loaded, reload it' } }
+  }
+  // ⚠ `gone` остаётся УСПЕХОМ с `removed:false` — это идемпотентность из #404: двойной клик и
+  // повтор из другой вкладки не ошибка. Теперь она означает ровно «строки нет», а не «мы не туда
+  // посмотрели».
+  return { status: 200, body: { removed: outcome === 'removed' } }
 }
