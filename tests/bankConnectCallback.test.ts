@@ -70,7 +70,7 @@ describe('sanitizeForLog', () => {
 describe('handleBankConnectCallback', () => {
   it('happy path: verifies state → exchanges code → saves token under the state account', async () => {
     const { deps: d, saved } = deps()
-    const exchangeToken = vi.fn(async () => tokenJson)
+    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
     const r = await handleBankConnectCallback({ ...d, exchangeToken }, { query: { code: 'C', state: goodState }, nowMs: now })
     expect(r.status).toBe(200)
     expect(r.html).toContain('подключён')
@@ -101,7 +101,7 @@ describe('handleBankConnectCallback', () => {
   })
 
   it('400 + no exchange when the state is missing/invalid/expired', async () => {
-    const exchangeToken = vi.fn(async () => tokenJson)
+    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
     const bad = ['', 'garbage', signConnectState({ memberId: 'M', provider: 'alfa-by', accountKey: 'A', nonce: 'n', exp: now - 1 }, SECRET)]
     for (const state of bad) {
       const r = await handleBankConnectCallback({ ...deps().deps, exchangeToken }, { query: { code: 'C', state }, nowMs: now })
@@ -112,7 +112,7 @@ describe('handleBankConnectCallback', () => {
 
   it('400 when the bank returned an error (text NOT rendered; logged sanitized)', async () => {
     const log = vi.fn()
-    const exchangeToken = vi.fn(async () => tokenJson)
+    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
     const r = await handleBankConnectCallback(
       { ...deps().deps, exchangeToken, log },
       { query: { error: 'access_denied', error_description: 'nope\r\ninjected', state: goodState }, nowMs: now }
@@ -212,8 +212,8 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
   const q = { code: 'C', state: priorState }
 
   it('exchanges via the Prior endpoint with client_secret_basic creds (never in the body)', async () => {
-    const exchangePriorToken = vi.fn(async () => tokenJson)
-    const exchangeToken = vi.fn(async () => tokenJson)
+    const exchangePriorToken = vi.fn(async (_url: string, _body: string, _headers: Record<string, string>) => tokenJson)
+    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
     const { deps: d, saved } = deps({ priorConfig: () => PRIOR_CONFIG, exchangePriorToken, exchangeToken })
     const r = await handleBankConnectCallback(d, { query: q, nowMs: now })
 
@@ -242,7 +242,7 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
   })
 
   it('private_key_jwt: assertion in the BODY, no Authorization header (#444)', async () => {
-    const exchangePriorToken = vi.fn(async () => tokenJson)
+    const exchangePriorToken = vi.fn(async (_url: string, _body: string, _headers: Record<string, string>) => tokenJson)
     const { deps: d, saved } = deps({
       priorConfig: () => PRIOR_CONFIG,
       exchangePriorToken,
@@ -270,7 +270,7 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
   })
 
   it('400 + nothing saved when Prior is not configured', async () => {
-    const exchangePriorToken = vi.fn(async () => tokenJson)
+    const exchangePriorToken = vi.fn(async (_url: string, _body: string, _headers: Record<string, string>) => tokenJson)
     const { deps: d, saved } = deps({ priorConfig: () => null, exchangePriorToken })
     const r = await handleBankConnectCallback(d, { query: q, nowMs: now })
     expect(r.status).toBe(400)

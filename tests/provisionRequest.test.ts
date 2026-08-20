@@ -6,6 +6,10 @@ import type { ProvisionDistributionOutcome } from '../server/utils/distributionP
 // (installed + valid token + admin) → provision. DI over fakes — no pg / network.
 
 const OUTCOME: ProvisionDistributionOutcome = {
+  // ⚠ `payment`/`distribution` (SpRef) — не то же, что удобные `*Etid` рядом: у SpRef два числа
+  // (`entityTypeId` для `crm.item.*` и `id` для `userfieldconfig`), и фикстура жила без них.
+  payment: { entityTypeId: 1044, id: 144 },
+  distribution: { entityTypeId: 1046, id: 146 },
   paymentSpEtid: 1044,
   distributionSpEtid: 1046,
   createdPaymentSp: true,

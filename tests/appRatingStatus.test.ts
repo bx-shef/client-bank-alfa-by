@@ -19,7 +19,9 @@ describe('ratingStateOf', () => {
 
 describe('buildRatingStatuses', () => {
   const row = (o: Partial<RatingStatusRow> & { domain: string }): RatingStatusRow => ({
-    memberId: o.domain, domain: o.domain, promptedAtMs: null, openedAtMs: null, reviewed: false, ...o
+    // ⚠ `...o` идёт ПЕРЕД `domain`: раньше он стоял последним и молча перезаписывал `domain`
+    // тем же значением — безобидно, но ровно так же перезаписал бы и осмысленное умолчание.
+    memberId: o.domain, promptedAtMs: null, openedAtMs: null, reviewed: false, ...o, domain: o.domain
   })
 
   it('surfaces «needs attention» first: opened → prompted → none → reviewed', () => {

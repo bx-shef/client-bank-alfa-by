@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { signConnectState, verifyConnectState, type BankConnectState } from '../server/utils/bankConnectState'
 import { signSession, verifySession } from '../server/utils/session'
+import type { BankProviderId } from '../app/types/statement'
 
 const SECRET = 'test-secret-key'
 const now = 1_700_000_000_000

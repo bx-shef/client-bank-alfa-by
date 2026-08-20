@@ -8,6 +8,7 @@ import {
   serializePortalSettings
 } from '~/utils/settings'
 import { MAX_MASK_CHARS, MAX_MATRICES } from '~/utils/purposeMatch'
+import type { OperationDirection } from '../app/types/statement'
 
 // Field-map caps are private to settings.ts; assert the exact documented values.
 const MAX_FIELD_LEN = 128
@@ -52,7 +53,7 @@ describe('parsePortalSettings — defensive', () => {
     const s = {
       chat: {
         dialogId: 'chat2941',
-        rules: { directions: ['credit', 'debit'] as const, excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'] }
+        rules: { directions: ['credit', 'debit'] as OperationDirection[], excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'] }
       },
       errorChat: { dialogId: 'chat77' },
       recognition: {

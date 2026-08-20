@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // security logic is the URL gate: it must refuse anything that is not a plain
 // http(s) URL before spawning (so a `javascript:`/`file:`/`data:` or a crafted
 // non-URL can never reach `spawn`/`cmd.exe`). Issue #45.
-const spawnMock = vi.hoisted(() => vi.fn(() => ({ on: vi.fn(), unref: vi.fn() })))
+const spawnMock = vi.hoisted(() => vi.fn((_cmd: string, _args: string[]) => ({ on: vi.fn(), unref: vi.fn() })))
 vi.mock('node:child_process', () => ({ spawn: spawnMock }))
 
 const { openBrowser } = await import('../scripts/lib/cli.mjs')

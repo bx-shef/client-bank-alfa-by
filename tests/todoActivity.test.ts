@@ -42,7 +42,7 @@ describe('buildTodoActivity', () => {
   it('дело НЕ закрывается — закрытое читается как «сделано, смотреть незачем»', () => {
     // Платёж это то, с чем человек ещё должен что-то сделать. Отсутствие флага здесь —
     // решение, а не недосмотр, и невидимо без этого теста.
-    const p = buildTodoActivity(item(), { id: 1 }) as Record<string, unknown>
+    const p = buildTodoActivity(item(), { id: 1 }) as unknown as Record<string, unknown>
     expect(p.completed).toBeUndefined()
     expect(p.COMPLETED).toBeUndefined()
   })

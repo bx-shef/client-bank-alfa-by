@@ -40,7 +40,7 @@ describe('extractInvoiceItems', () => {
 
 describe('findInvoicesByNumber', () => {
   it('maps opportunity→amount, currencyId→currency, id→string', async () => {
-    const call = vi.fn(async () => resp([inv({ id: 7, opportunity: 250, currencyId: 'BYN' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv({ id: 7, opportunity: 250, currencyId: 'BYN' })]))
     expect(await findInvoicesByNumber('СЧ-2001', { companyId: '5' }, call))
       .toEqual([{ kind: 'invoice', id: '7', amount: 250, currency: 'BYN' }])
     expect(call.mock.calls[0]![0]).toBe('crm.item.list')
@@ -48,13 +48,13 @@ describe('findInvoicesByNumber', () => {
   })
 
   it('populates dealId from parentId2 (deal-linked invoice, #229)', async () => {
-    const call = vi.fn(async () => resp([inv({ id: 9, opportunity: 1200, currencyId: 'BYN', parentId2: 15 })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv({ id: 9, opportunity: 1200, currencyId: 'BYN', parentId2: 15 })]))
     expect(await findInvoicesByNumber('СЧ-1200', { companyId: '7' }, call))
       .toEqual([{ kind: 'invoice', id: '9', amount: 1200, currency: 'BYN', dealId: '15' }])
   })
 
   it('omits dealId for a standalone invoice (parentId2 null/absent/0)', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       inv({ id: 1, opportunity: 100, currencyId: 'BYN', parentId2: null }),
       inv({ id: 2, opportunity: 100, currencyId: 'BYN' }),
       inv({ id: 3, opportunity: 100, currencyId: 'BYN', parentId2: 0 })
@@ -64,18 +64,18 @@ describe('findInvoicesByNumber', () => {
   })
 
   it('parses a string opportunity (the real crm.item.list shape, e.g. "250.0000")', async () => {
-    const call = vi.fn(async () => resp([inv({ id: 7, opportunity: '250.0000' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv({ id: 7, opportunity: '250.0000' })]))
     expect((await findInvoicesByNumber('СЧ-2001', { companyId: '5' }, call))[0]!.amount).toBe(250)
   })
 
   it('trims the account number before querying', async () => {
-    const call = vi.fn(async () => resp([]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([]))
     await findInvoicesByNumber('  СЧ-2001  ', { companyId: '5' }, call)
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { accountNumber: 'СЧ-2001' } })
   })
 
   it('excludes negative-stage invoices (SEMANTICS F)', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       inv({ id: 1, stageId: 'DT31_11:D' }), // Не оплачен → negative
       inv({ id: 2, stageId: 'DT31_11:N' })
     ]))
@@ -85,12 +85,12 @@ describe('findInvoicesByNumber', () => {
   })
 
   it('keeps every stage when no predicate is given', async () => {
-    const call = vi.fn(async () => resp([inv({ id: 1, stageId: 'DT31_11:D' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv({ id: 1, stageId: 'DT31_11:D' })]))
     expect(await findInvoicesByNumber('СЧ-2001', { companyId: '5' }, call)).toHaveLength(1)
   })
 
   it('feeds an empty string to the predicate when stageId is missing', async () => {
-    const call = vi.fn(async () => resp([inv({ id: 1, stageId: undefined })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv({ id: 1, stageId: undefined })]))
     const seen: string[] = []
     const isNegativeStage = (s: string) => {
       seen.push(s)
@@ -101,7 +101,7 @@ describe('findInvoicesByNumber', () => {
   })
 
   it('skips rows with a non-finite amount or empty id', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       inv({ id: 1, opportunity: 'x' }), // amount NaN
       inv({ id: '', opportunity: 100 }), // empty id
       inv({ id: 3, opportunity: 100 })
@@ -110,26 +110,26 @@ describe('findInvoicesByNumber', () => {
   })
 
   it('returns [] for a blank accountNumber without calling REST', async () => {
-    const call = vi.fn(async () => resp([inv()]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv()]))
     expect(await findInvoicesByNumber('  ', { companyId: '5' }, call)).toEqual([])
     expect(call).not.toHaveBeenCalled()
   })
 
   it('returns [] for a blank companyId without calling REST (IDOR scope must be real)', async () => {
-    const call = vi.fn(async () => resp([inv()]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv()]))
     expect(await findInvoicesByNumber('СЧ-2001', { companyId: '  ' }, call)).toEqual([])
     expect(call).not.toHaveBeenCalled()
   })
 
   it('propagates a REST error thrown by call (not found is [], errors throw)', async () => {
-    const call = vi.fn(async () => {
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     })
     await expect(findInvoicesByNumber('СЧ-2001', { companyId: '5' }, call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
   })
 
   it('returns several candidates when one number has several invoices', async () => {
-    const call = vi.fn(async () => resp([inv({ id: 1 }), inv({ id: 2 })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([inv({ id: 1 }), inv({ id: 2 })]))
     expect(await findInvoicesByNumber('СЧ-2001', { companyId: '5' }, call)).toHaveLength(2)
   })
 })

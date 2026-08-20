@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-// @ts-expect-error — plain .mjs dev-script helper, no d.ts
 import { extractPayments, pickFreeEntityTypeId, validateTestWebhook } from '../scripts/lib/b24-seed-utils.mjs'
 
 // Pure helpers for scripts/seed-test-b24.mjs — the two bits with real logic.

@@ -27,6 +27,9 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     connectedAt: NOW - HOUR,
     expiresAt: NOW + HOUR,
     hasRefresh: true,
+    id: 1,
+    lastAttemptAt: 0,
+    consentExpiresAt: 0,
     ...over
   }
 }
@@ -321,7 +324,8 @@ describe('угаданный срок жизни не хоронит подкл�
   const NOW = 1_700_000_000_000
   const row = (provider: 'alfa-by' | 'prior-by', ageMs: number) => ({
     memberId: 'M', provider, accountKey: 'BY1',
-    connectedAt: NOW - ageMs, expiresAt: NOW, hasRefresh: true
+    connectedAt: NOW - ageMs, expiresAt: NOW, hasRefresh: true,
+    id: 1, lastAttemptAt: 0, consentExpiresAt: 0
   })
 
   it('Приор старше своего УГАДАННОГО срока — остаётся в очереди на обновление, не в «истекло»', () => {
@@ -360,7 +364,8 @@ describe('истёкшее согласие не тратит запросы б�
   const T = 1_700_000_000_000
   const row = (over: Record<string, unknown> = {}) => ({
     memberId: 'm1', provider: 'prior-by' as const, accountKey: 'BY01',
-    connectedAt: T - 60_000, expiresAt: T + 600_000, hasRefresh: true, consentExpiresAt: 0, ...over
+    connectedAt: T - 60_000, expiresAt: T + 600_000, hasRefresh: true, consentExpiresAt: 0,
+    id: 1, lastAttemptAt: 0, ...over
   })
 
   it('согласие истекло — в «expired», а не в «due», даже у свежего токена', () => {

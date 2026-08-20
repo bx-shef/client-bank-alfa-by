@@ -99,14 +99,14 @@ describe('extractSettledStageIds', () => {
 
 describe('loadStageExclusions', () => {
   it('returns negatives only by default (settled empty), from ONE crm.status.list call', async () => {
-    const call = vi.fn(async () => resp(invoiceRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(invoiceRows))
     const { negative, settled } = await loadStageExclusions('SMART_INVOICE_STAGE_11', call)
     expect(negative).toEqual(new Set(['DT31_11:D']))
     expect(settled).toEqual(new Set())
     expect(call).toHaveBeenCalledTimes(1)
   })
   it('also returns the settled set when includeSettled is on', async () => {
-    const call = vi.fn(async () => resp(invoiceRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(invoiceRows))
     const { negative, settled } = await loadStageExclusions('SMART_INVOICE_STAGE_11', call, { includeSettled: true })
     expect(negative).toEqual(new Set(['DT31_11:D']))
     expect(settled).toEqual(new Set(['DT31_11:P']))
@@ -116,22 +116,22 @@ describe('loadStageExclusions', () => {
 
 describe('loadNegativeStages', () => {
   it('queries crm.status.list by ENTITY_ID and returns the negative set', async () => {
-    const call = vi.fn(async () => resp(invoiceRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(invoiceRows))
     expect(await loadNegativeStages('SMART_INVOICE_STAGE_11', call)).toEqual(new Set(['DT31_11:D']))
     expect(call.mock.calls[0]![0]).toBe('crm.status.list')
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'SMART_INVOICE_STAGE_11' } })
   })
   it('selects STATUS_ID, SEMANTICS and EXTRA (guards against dropping a field)', async () => {
-    const call = vi.fn(async () => resp(invoiceRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(invoiceRows))
     await loadNegativeStages('SMART_INVOICE_STAGE_11', call)
     expect(call.mock.calls[0]![1]).toMatchObject({ select: ['STATUS_ID', 'SEMANTICS', 'EXTRA'] })
   })
   it('returns an empty set end-to-end when no stage is negative', async () => {
-    const call = vi.fn(async () => resp([{ STATUS_ID: 'DT31_11:P', SEMANTICS: 'S' }]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([{ STATUS_ID: 'DT31_11:P', SEMANTICS: 'S' }]))
     expect(await loadNegativeStages('SMART_INVOICE_STAGE_11', call)).toEqual(new Set())
   })
   it('propagates a REST error thrown by call', async () => {
-    const call = vi.fn(async () => {
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     })
     await expect(loadNegativeStages('X', call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
@@ -152,7 +152,7 @@ describe('makeIsNegativeStage', () => {
 
 describe('loadInvoiceNegativeStage', () => {
   it('loads the predicate for a Smart Invoice category', async () => {
-    const call = vi.fn(async () => resp(invoiceRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(invoiceRows))
     const isNeg = await loadInvoiceNegativeStage(11, call)
     expect(isNeg('DT31_11:D')).toBe(true)
     expect(isNeg('DT31_11:P')).toBe(false)
@@ -168,7 +168,7 @@ describe('loadDealNegativeStage', () => {
     { STATUS_ID: 'APOLOGY', SEMANTICS: 'F' }
   ]
   it('loads the predicate for the default deal pipeline (DEAL_STAGE)', async () => {
-    const call = vi.fn(async () => resp(dealRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(dealRows))
     const isNeg = await loadDealNegativeStage(0, call)
     expect(isNeg('LOSE')).toBe(true)
     expect(isNeg('APOLOGY')).toBe(true)
@@ -177,7 +177,7 @@ describe('loadDealNegativeStage', () => {
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DEAL_STAGE' } })
   })
   it('queries DEAL_STAGE_<catId> for a non-default pipeline', async () => {
-    const call = vi.fn(async () => resp(dealRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(dealRows))
     await loadDealNegativeStage(5, call)
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DEAL_STAGE_5' } })
   })
@@ -191,7 +191,7 @@ describe('loadSmartProcessNegativeStage', () => {
     { STATUS_ID: 'DT1032_67:FAIL', SEMANTICS: 'F' }
   ]
   it('loads the predicate for a smart-process category via DYNAMIC_<etid>_STAGE_<cat>', async () => {
-    const call = vi.fn(async () => resp(smartRows))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp(smartRows))
     const isNeg = await loadSmartProcessNegativeStage(1032, 67, call)
     expect(isNeg('DT1032_67:FAIL')).toBe(true)
     expect(isNeg('DT1032_67:SUCCESS')).toBe(false)
@@ -199,13 +199,13 @@ describe('loadSmartProcessNegativeStage', () => {
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DYNAMIC_1032_STAGE_67' } })
   })
   it('passes BOTH entityTypeId and categoryId into the ENTITY_ID (no hard-coded value)', async () => {
-    const call = vi.fn(async () => resp([{ STATUS_ID: 'DT1030_63:FAIL', SEMANTICS: 'F' }]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([{ STATUS_ID: 'DT1030_63:FAIL', SEMANTICS: 'F' }]))
     const isNeg = await loadSmartProcessNegativeStage(1030, 63, call)
     expect(isNeg('DT1030_63:FAIL')).toBe(true)
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { ENTITY_ID: 'DYNAMIC_1030_STAGE_63' } })
   })
   it('also recognises the modern EXTRA.SEMANTICS="failure" shape on a smart-process row', async () => {
-    const call = vi.fn(async () => resp([{ STATUS_ID: 'DT1032_67:FAIL', EXTRA: { SEMANTICS: 'failure' } }]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([{ STATUS_ID: 'DT1032_67:FAIL', EXTRA: { SEMANTICS: 'failure' } }]))
     const isNeg = await loadSmartProcessNegativeStage(1032, 67, call)
     expect(isNeg('DT1032_67:FAIL')).toBe(true)
   })

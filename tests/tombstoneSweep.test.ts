@@ -20,7 +20,7 @@ describe('resolveTombstoneDays', () => {
 
 describe('sweepExpiredTombstones', () => {
   it('deletes rows older than `days` (deleted_ts in seconds) and returns the count', async () => {
-    const query = vi.fn(async () => [{ member_id: 'a' }, { member_id: 'b' }])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [{ member_id: 'a' }, { member_id: 'b' }])
     const removed = await sweepExpiredTombstones(query, 30)
     expect(removed).toBe(2)
     const [sql, params] = query.mock.calls[0]!
@@ -31,7 +31,7 @@ describe('sweepExpiredTombstones', () => {
     expect(params).toEqual([30 * 86_400]) // seconds
   })
   it('returns 0 on an empty table', async () => {
-    const query = vi.fn(async () => [])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     expect(await sweepExpiredTombstones(query, 30)).toBe(0)
   })
 })

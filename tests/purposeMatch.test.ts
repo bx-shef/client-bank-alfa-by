@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { MatchMatrix } from '~/utils/purposeMatch'
+import type { IdentifierKind, MatchMatrix } from '~/utils/purposeMatch'
 import { foldHomoglyphs, MAX_ID_CHARS, recognizeByMatrices } from '~/utils/purposeMatch'
 
 // Pure matrix-based identifier recognition from a payment purpose (#109, §4).
@@ -142,7 +142,9 @@ describe('recognizeByMatrices', () => {
 })
 
 describe('квантификатор d+ (#421)', () => {
-  const m = (mask: string, kind = 'invoice-number' as const) => [{ mask, kind }]
+  // ⚠ `kind: IdentifierKind`, не вывод из умолчания: `= 'invoice-number' as const` сужал параметр
+  // до одного литерала, и вызов с 'order-number' был ошибкой типа, которую никто не проверял.
+  const m = (mask: string, kind: IdentifierKind = 'invoice-number') => [{ mask, kind }]
 
   it('покрывает номера РАЗНОЙ длины — нумерация Б24 растёт от СЧ-1', () => {
     // Ради этого он и заведён: маска фиксированной длины описывает нумерацию, которой не бывает.

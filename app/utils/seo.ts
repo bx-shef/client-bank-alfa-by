@@ -173,3 +173,10 @@ export function injectNoindex(html: string): string {
   const at = html.indexOf(head[0]) + head[0].length
   return html.slice(0, at) + NOINDEX_META + html.slice(at)
 }
+
+/** JSON для `<script type="application/ld+json">`: `<` экранируется, чтобы содержимое не могло
+ *  закрыть тег. Живёт в чистом ядре, а не в композабле: это чистая строковая функция, и её
+ *  собственную гарантию нужно уметь проверить без Nuxt-окружения. */
+export function ldJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c')
+}
