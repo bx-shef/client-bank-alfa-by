@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_FETCH_RATE_DURATION_MS, DEFAULT_PRIOR_CONCURRENCY, DEFAULT_FETCH_RATE_MAX, MAX_CONCURRENCY,
@@ -20,7 +22,7 @@ describe('envFlag', () => {
 })
 
 describe('queueRuntimeConfig', () => {
-  it('defaults to a single-container role (workers + cron, concurrency 1, 100/60s fetch rate)', () => {
+  it('defaults to a single-container role (workers + cron, concurrency 1, 80/60s fetch rate)', () => {
     expect(queueRuntimeConfig({})).toEqual({
       workers: true,
       cron: true,
@@ -103,9 +105,33 @@ describe('лимит обращений к Альфе держит запас (�
   it('запас задан долей, а не переписанным числом', () => {
     // Чтобы документированный потолок банка и наша осторожность не слиплись в одну константу: когда
     // банк объявит другой лимит, менять надо ровно одно число, а доля останется долей.
-    expect(DEFAULT_FETCH_RATE_MAX).toBe(ALFA_DOCUMENTED_RATE_MAX * FETCH_RATE_HEADROOM)
     expect(FETCH_RATE_HEADROOM).toBeGreaterThan(0)
     expect(FETCH_RATE_HEADROOM).toBeLessThan(1)
+    // ⚠ Сравнение ЗНАЧЕНИЙ этого не доказывает, и мутационное ревью показало прямо: литерал `80`
+    // или формула `ALFA_DOCUMENTED_RATE_MAX - 20` дают то же число и проходят. Тест при этом
+    // ЗАЯВЛЯЕТ, что проверяет связь, — то есть создаёт уверенность, которой не даёт. Связь живёт
+    // в тексте исходника, там её и сверяем.
+    const src = readFileSync(join(import.meta.dirname, '..', 'server/queue/runtime.ts'), 'utf8')
+    expect(src, 'дефолт больше не выражен через потолок и долю')
+      .toMatch(/DEFAULT_FETCH_RATE_MAX = ALFA_DOCUMENTED_RATE_MAX \* FETCH_RATE_HEADROOM/)
+    expect(DEFAULT_FETCH_RATE_MAX).toBe(ALFA_DOCUMENTED_RATE_MAX * FETCH_RATE_HEADROOM)
+  })
+
+  it('дефолт — ЦЕЛОЕ число: BullMQ получает его как есть', () => {
+    // ⚠ 100 × 0.8 = 80 ровно, но это свойство КОНКРЕТНОЙ доли, а не приёма: 100 × 0.55 даёт
+    // 55.00000000000001. Дробный `max` воркер не уронит (сравнение в Lua-скрипте лимитера обычное),
+    // но эффективный потолок молча скруглится, и объяснить расхождение будет нечем.
+    expect(Number.isInteger(DEFAULT_FETCH_RATE_MAX)).toBe(true)
+  })
+
+  it('дефолт НЕ упоминается устаревшим числом в комментариях кода', () => {
+    // ⚠ Обе рецензии нашли одно и то же: «Default 100/60s» осталось в четырёх местах, включая тот
+    // же файл, где двадцатью строками ниже честно написано про 80. Разошедшийся дубль опаснее
+    // отсутствующего описания — это прямое правило проекта.
+    for (const rel of ['server/queue/runtime.ts', 'server/queue/worker.ts', 'server/queue/saturation.ts']) {
+      const src = readFileSync(join(import.meta.dirname, '..', rel), 'utf8')
+      expect(src, `${rel}: остался старый дефолт 100/60s`).not.toMatch(/default 100\/60s/i)
+    }
   })
 
   it('запас нельзя обойти опечаткой в env', () => {

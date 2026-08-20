@@ -89,6 +89,39 @@ export const PRIOR_POLL_MAX_DELAY_MS = 8000
  */
 export const PRIOR_POLL_BUDGET_MS = 120_000
 
+/**
+ * Размеры страниц, на которых API обычно обрезает выдачу молча.
+ *
+ * ⚠ Заведено по живому прогону (2026-08-20): опрос вернул РОВНО 100 операций, и так двенадцать
+ * раз подряд. Круглое число — классическая подпись страничного лимита, а не совпадение. Проверить
+ * по коду нельзя: в запрос мы страницу не передаём, а из ответа читаем ТОЛЬКО `data.transaction[]`
+ * — тип объявлен как «минимальная форма», поэтому `meta`/`links`/`totalCount`, если банк их шлёт,
+ * отбрасываются, не оставляя следа.
+ *
+ * Цена ошибки несимметрична: если лимит есть, мы теряем платежи **молча**, а строка лога при этом
+ * говорит «100 ops» и выглядит здоровой. Поэтому при попадании на границу печатаем ИМЕНА полей
+ * конверта, которые не читаем, — следующий же опрос скажет, есть ли там пагинация.
+ *
+ * ⚠ Только имена ключей, без значений: значения — это финансовые ПДн (`docs/PRIVACY.md`).
+ */
+export const SUSPICIOUS_PAGE_SIZES: readonly number[] = [50, 100, 200, 500, 1000]
+
+/** Похоже ли, что выдачу обрезали страницей. Чистая — проверяется без банка. */
+export function looksLikePageBoundary(count: number): boolean {
+  return SUSPICIOUS_PAGE_SIZES.includes(count)
+}
+
+/** Имена полей ответа, которые мы НЕ читаем, — чтобы увидеть пагинацию, если она есть. */
+export function unreadEnvelopeKeys(body: unknown): string[] {
+  if (!body || typeof body !== 'object') return []
+  const top = Object.keys(body as Record<string, unknown>).filter(k => k !== 'data')
+  const data = (body as { data?: unknown }).data
+  const inner = data && typeof data === 'object'
+    ? Object.keys(data as Record<string, unknown>).filter(k => k !== 'transaction' && k !== 'accountId')
+    : []
+  return [...top.map(k => k), ...inner.map(k => `data.${k}`)]
+}
+
 /** Delay before the poll after `attempt` (0-based): exponential, capped. Pure — the shape is the
  *  thing being reasoned about, so it is testable without a clock or a bank. */
 export function priorPollDelayMs(attempt: number): number {
@@ -280,7 +313,18 @@ export async function fetchPriorStatement(
         // именно гадание и привело к десяти секундам. Успех — единственный момент, когда реальная
         // длительность известна.
         deps.log?.(`[prior-poll] ready after ${attempt + 1} polls, ${Math.round(waited / 1000)}s waited`)
-        return normalizePriorTransactionList(body as PriorTransactionListResponse, { account: query.account })
+        const items = normalizePriorTransactionList(body as PriorTransactionListResponse, { account: query.account })
+        // ⚠ Подозрение на обрезанную страницу — говорим об этом ГРОМКО и сразу с уликами: сколько
+        // пришло и какие поля конверта мы не читаем. Молчаливая потеря платежей выглядит здоровым
+        // логом, и заметить её можно только сверкой с банком вручную.
+        if (looksLikePageBoundary(items.length)) {
+          const unread = unreadEnvelopeKeys(body)
+          deps.log?.(
+            `[prior-page] ⚠ ровно ${items.length} операций — возможен страничный лимит. `
+            + `Непрочитанные поля ответа: ${unread.length ? unread.join(', ') : 'нет'}`
+          )
+        }
+        return items
       }
       if (verdict.status === 'error') {
         throw new Error(`fetchPriorStatement: poll error for account ${query.account} (HTTP ${status}) — ${verdict.codes.join('; ')}`)

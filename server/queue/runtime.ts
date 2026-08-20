@@ -20,7 +20,7 @@ export interface QueueRuntime {
   /** GLOBAL rate limit for the bank-fetch queue (A8). BullMQ's worker `limiter` is
    *  shared across ALL replicas on the same queue via a Redis key (global, not per-instance
    *  — verified against the installed bullmq 5.x source), so this caps live Alfa calls across
-   *  the whole fleet at `max` per `duration` ms. Default 100/60s = Alfa's per-client cap (our
+   *  the whole fleet at `max` per `duration` ms. Default 80/60s — 80 % of Alfa's documented per-client cap (see DEFAULT_FETCH_RATE_MAX) (our
    *  app has ONE Alfa client_id, so a single global cap is correct). NB a fetch JOB is ~one
    *  Alfa request (token refresh is near-expiry-only + per-account locked); if Alfa counts
    *  its `/token` endpoint in the SAME bucket, lower this for headroom during refresh bursts. */
@@ -67,7 +67,7 @@ export const DEFAULT_FETCH_RATE_MAX = ALFA_DOCUMENTED_RATE_MAX * FETCH_RATE_HEAD
 export const DEFAULT_FETCH_RATE_DURATION_MS = 60_000
 /** Bounds so a fat-fingered value can't effectively DISABLE the cap: a huge `max`
  *  (`999999`) or a tiny `duration` (`1`ms) would both let the fleet hammer the bank.
- *  10× headroom over the default covers a higher Alfa tier; the window floor stops a
+ *  an order of magnitude over the default covers a higher Alfa tier; the window floor stops a
  *  sub-second bucket. Both edges clamp, so the cap can never be turned off by a typo. */
 export const MAX_FETCH_RATE_MAX = 1_000
 export const MIN_FETCH_RATE_DURATION_MS = 1_000

@@ -17,6 +17,31 @@ import type { QueryFn } from './tokenStore'
 /** Default wait for the lock. Right for MACHINE callers (a job retried by BullMQ). */
 export const DEFAULT_LOCK_WAIT = '10s'
 
+/**
+ * Shortest wait we allow. Guards the footgun in Postgres' own semantics: `lock_timeout = 0`
+ * **disables** the timeout — it means WAIT FOREVER, not "don't wait".
+ *
+ * ⚠ That is the exact opposite of what a caller writing `lockWait: '0'` intends, and the failure is
+ * silent and severe: instead of failing fast, the waiter camps on a pooled connection (pool = 10)
+ * until the holder finishes, which for a long critical section can be minutes. The readiness probe,
+ * install events and every other portal draw from that same pool.
+ *
+ * ⚠ There is no way to say "try once, don't wait" through `lock_timeout` at all — that would need
+ * `pg_try_advisory_xact_lock`. Callers who want fail-fast get the shortest real wait instead, which
+ * is behaviourally the same when the holder's critical section is long (the common case here).
+ */
+export const MIN_LOCK_WAIT = '100ms'
+
+/** Normalize `lockWait`: `0`/empty/garbage would mean «wait forever» (or a Postgres error), which
+ *  is never what a caller means. Pure — exported for the test. */
+export function resolveLockWait(raw: string | undefined): string {
+  const v = (raw ?? '').trim()
+  if (!v) return DEFAULT_LOCK_WAIT
+  // `0`, `0s`, `0ms`, `00` … — every spelling of «no timeout» in Postgres.
+  if (/^0+\s*(ms|s|min|h)?$/i.test(v)) return MIN_LOCK_WAIT
+  return v
+}
+
 export interface AdvisoryLockOpts {
   /**
    * How long to WAIT for the lock before giving up (`lock_timeout`). Does not affect the
@@ -57,7 +82,7 @@ export async function withAdvisoryLock<T>(
     // connection; any single statement is capped at 20s. On timeout the query throws
     // → ROLLBACK → the caller's job retries, by when the holder has usually finished.
     // set_config(..., true) = SET LOCAL, parameterized (no inline SQL string literals).
-    await client.query('SELECT set_config($1, $2, true)', ['lock_timeout', opts.lockWait ?? DEFAULT_LOCK_WAIT])
+    await client.query('SELECT set_config($1, $2, true)', ['lock_timeout', resolveLockWait(opts.lockWait)])
     await client.query('SELECT set_config($1, $2, true)', ['statement_timeout', '20s'])
     // hashtextextended(text, seed)::int8 → the bigint key form of pg_advisory_xact_lock.
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key])
