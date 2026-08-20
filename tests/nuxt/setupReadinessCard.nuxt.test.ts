@@ -128,3 +128,31 @@ describe('SetupReadinessCard — «не понимаю, чего от меня �
     expect(wrapper.findComponent({ name: 'FeedbackWidget' }).exists()).toBe(true)
   })
 })
+
+describe('SetupReadinessCard — сбой чтения состояния', () => {
+  it('не выдумывает состояние по дефолтам: ни чек-листа, ни расписания, ни «осталось: N»', async () => {
+    // `/api/setup-status` admin-only и легко отвечает 403 или падает. Дефолты композейбла —
+    // нули, поэтому и чек-лист, и строка расписания читались бы как уверенный диагноз
+    // настроенному порталу: красное «Банк подключён», «Автоматический опрос выключен».
+    fetchMock.mockImplementation((url: string) => (url === '/api/setup-status'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({})))
+    const wrapper = await mountReady()
+    const text = wrapper.text()
+
+    expect(wrapper.find('[data-testid="readiness-error"]').exists()).toBe(true)
+    expect(text).not.toContain('Автоматический опрос банков выключен')
+    expect(text).not.toContain('осталось:')
+    expect(wrapper.find('[data-testid="readiness-bank"]').exists()).toBe(false)
+  })
+
+  it('оставляет подвал карточки — там живёт форма обратной связи, на которую ссылается ошибка', async () => {
+    // Сам виджет включается серверным гейтом канала и в тестовой среде выключен; проверяем, что
+    // подвал не схлопнут целиком — иначе текст ошибки отсылал бы к форме, которой на экране нет.
+    fetchMock.mockImplementation((url: string) => (url === '/api/setup-status'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({})))
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-slot="footer"]').exists()).toBe(true)
+  })
+})

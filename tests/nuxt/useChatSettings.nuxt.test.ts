@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useChatSettings } from '~/composables/useChatSettings'
 import { nextTick } from 'vue'
 
-// Резолв названия чата (#528, 3.2). Composable — синглтон на модуль, поэтому каждый тест
-// перезагружает его через `vi.resetModules()` (иначе состояние прошлого теста переезжает).
+// Резолв названия чата (#528, 3.2). Composable — синглтон НА МОДУЛЬ, поэтому его нельзя
+// импортировать статически: `vi.resetModules()` не действует на уже полученную ссылку, и все
+// тесты работали бы с одним `settings`/`notifyOption` — то есть зависели бы от порядка запуска
+// (ранний выход `adoptTitle` по `target.value` от соседнего теста и т. п.). Берём свежий модуль
+// внутри каждого теста, ПОСЛЕ сброса.
 //
 // Проверяем ровно те три гарантии, ради которых написан `adoptTitle`: не спрашиваем портал
 // зря, не приклеиваем имя не к тому чату и не кэшируем сырой id как «известное имя».
@@ -15,6 +17,13 @@ vi.mock('~/composables/useFrameAuth', () => ({
   frameAuthHeaders: () => ({}),
   frameFetchError: (_e: unknown, fallback: string) => fallback
 }))
+
+/** Свежий инстанс composable: модуль перезагружается, синглтон создаётся заново. */
+async function freshSettings() {
+  vi.resetModules()
+  const mod = await import('~/composables/useChatSettings')
+  return mod.useChatSettings()
+}
 
 function mockFetch(handler: (url: string, opts: { params?: Record<string, unknown> }) => unknown) {
   vi.stubGlobal('$fetch', vi.fn(handler) as never)
@@ -35,7 +44,7 @@ describe('useChatSettings: название сохранённого чата', 
       }
       return { items: [] }
     })
-    const cs = useChatSettings()
+    const cs = await freshSettings()
     await cs.load()
     expect(cs.notifyOption.value?.label).toBe('Бухгалтерия')
     expect(calls.some(c => c.endsWith('?id'))).toBe(false)
@@ -49,7 +58,7 @@ describe('useChatSettings: название сохранённого чата', 
       if (opts?.params?.id === 'chat7') return { item: { value: 'chat7', label: 'Оплаты' } }
       return { items: [] }
     })
-    const cs = useChatSettings()
+    const cs = await freshSettings()
     await cs.load()
     expect(cs.notifyOption.value).toEqual({ value: 'chat7', label: 'Оплаты' })
     // Кэш в настройках — чтобы следующее открытие формы было бесплатным.
@@ -64,7 +73,7 @@ describe('useChatSettings: название сохранённого чата', 
       }
       return { item: null, items: [] }
     })
-    const cs = useChatSettings()
+    const cs = await freshSettings()
     await cs.load()
     expect(cs.notifyOption.value?.label).toBe('chat7') // значение остаётся выбираемым
     expect(cs.settings.chat.title).toBeFalsy()
@@ -88,7 +97,7 @@ describe('useChatSettings: название сохранённого чата', 
       }
       return { items: [] }
     })
-    const cs = useChatSettings()
+    const cs = await freshSettings()
     const loading = cs.load()
     // Ждём, пока запрос за названием действительно уйдёт: до этого `load()` ещё перезаписывает
     // настройки ответом сервера, и подмена id была бы затёрта — тест проверял бы не гонку.

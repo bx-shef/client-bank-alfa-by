@@ -129,7 +129,7 @@ onBeforeUnmount(() => {
          дефолтам, то есть настроенному порталу рисовались бы красные «Банк подключён» и
          «Автоопрос включён» — состояние, которого мы не читали. -->
     <B24Alert
-      v-else-if="setup.error.value"
+      v-else-if="setup.error.value && !setup.loadedOk.value"
       role="alert"
       aria-live="assertive"
       color="air-primary-alert"
@@ -191,16 +191,17 @@ onBeforeUnmount(() => {
       </ul>
     </template>
 
-    <!-- Расписание — только КОГДА проверка завершена: до ответа сервера числа в нём выдуманные. -->
-    <template
-      v-if="setup.loaded.value"
-      #footer
-    >
+    <!-- ⚠ Расписание — только когда данные НАСТОЯЩИЕ. До ответа сервера числа в нём выдуманные,
+         а при сбое чтения они выдуманные ровно так же: «Автоматический опрос выключен» — это
+         `pollEnabled:false` из дефолтов, то есть уверенная неправда настроенному порталу. Тот же
+         запрет, что для чек-листа выше. Отзыв при этом остаётся: на экране ошибки текст алерта
+         сам отсылает «напишите нам через форму обратной связи ниже». -->
+    <template #footer>
       <!-- Schedule (#405): the question «а когда оно само сходит в банк?» had no answer anywhere. -->
       <!-- «Последний ИМПОРТ», не «опрос»: отметку ставит любой прогон crm-sync, включая ручную
            загрузку файла — иначе портал без единого подключения читал бы «последний опрос». -->
       <ProseP
-        v-if="setup.status.value.pollEnabled"
+        v-if="setup.loadedOk.value && setup.status.value.pollEnabled"
         accent="accent"
       >
         Опрос банков каждые {{ setup.status.value.pollIntervalMin }} мин.
@@ -212,7 +213,7 @@ onBeforeUnmount(() => {
         </template>
       </ProseP>
       <ProseP
-        v-else
+        v-else-if="setup.loadedOk.value"
         small
         accent="less"
       >
