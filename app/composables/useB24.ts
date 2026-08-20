@@ -1,6 +1,7 @@
 import { B24Frame, Result, initializeB24Frame } from '@bitrix24/b24jssdk'
 import { B24_REQUIRED_SCOPES } from '~/config/b24'
 import { placeFromOptions, placeFromQuery } from '~/utils/placementOptions'
+import { useLogger } from '~/utils/logger'
 
 // Module-level singleton: the SDK keeps one B24Frame per page (the portal opens
 // one iframe). Safe under SSG — only ever set on the client, inside the frame.
@@ -110,6 +111,9 @@ export const useB24 = () => {
     await init()
     const f = get()
     if (!f) return false
+    // Первая половина разговора с порталом: ЧТО мы отправили. Вторая — что получил открывшийся
+    // фрейм (мидлвар). Только по обеим отличимо «мы не передали» от «портал не донёс» (#537).
+    useLogger('slider').info('просим портал открыть слайдер', { place, width: opts.width })
     try {
       await f.slider.openSliderAppPage({
         place,
