@@ -36,3 +36,31 @@ export function placeFromOptions(raw: unknown): string | undefined {
   }
   return undefined
 }
+
+/**
+ * `place` из АДРЕСА фрейма — второй штатный источник того же параметра.
+ *
+ * ⚠ Это не догадка «на всякий случай»: живой прогон показал фрейм слайдера, у которого
+ * PLACEMENT_OPTIONS пуст ЦЕЛИКОМ — нет ни `place`, ни `IFRAME` (по последнему SDK определяет
+ * `isSliderMode`, и он тоже был false). То есть портал в этом случае не кладёт параметры в
+ * init-данные, и читать их оттуда бесполезно. Приложение открывается по СВОЕМУ адресу, поэтому
+ * второй возможный носитель — строка запроса.
+ *
+ * Имя ключа ищем и в нашем виде (`place`), и с префиксом портала (`bx24_place`): префикс — то,
+ * как платформа переименовывает служебные параметры окна (`bx24_width`, `bx24_title`).
+ */
+export function placeFromQuery(search: string): string | undefined {
+  let params: URLSearchParams
+  try {
+    params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  } catch {
+    return undefined
+  }
+  for (const [key, value] of params.entries()) {
+    const k = key.toLowerCase()
+    if (k !== 'place' && k !== 'bx24_place') continue
+    const v = value.trim()
+    if (v) return v
+  }
+  return undefined
+}
