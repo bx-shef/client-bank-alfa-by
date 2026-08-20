@@ -49,11 +49,11 @@ const PREVIEW_ITEMS: StatementItem[] = [
     direction: 'debit',
     amount: 0.29,
     currency: 'BYN',
-    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ ИВАН ИВАНОВИЧ за 24.07.2026 согл. до',
+    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 24.07.2026 согл. до',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY32DEMO30120000000000000012',
+      account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-28',
@@ -70,7 +70,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
-      account: 'BY30DEMO30120000000000000010',
+      account: 'BY20DEMO30120000000000000010',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-24',
@@ -87,7 +87,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО \'ВАСИЛЁК\'',
       unp: '190000005',
-      account: 'BY24DEMO30120000000000000004',
+      account: 'BY14DEMO30120000000000000004',
       bic: 'MTBKBY22'
     },
     acceptDate: '2026-07-24',
@@ -104,7 +104,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО \'ВАСИЛЁК\'',
       unp: '190000005',
-      account: 'BY24DEMO30120000000000000004',
+      account: 'BY14DEMO30120000000000000004',
       bic: 'MTBKBY22'
     },
     acceptDate: '2026-07-24',
@@ -119,9 +119,9 @@ const PREVIEW_ITEMS: StatementItem[] = [
     currency: 'BYN',
     purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
     counterparty: {
-      name: 'ИП ИВАНОВ ИВАН ИВАНОВИЧ',
+      name: 'ИП ИВАНОВ И. И.',
       unp: '190000006',
-      account: 'BY23DEMO30120000000000000003',
+      account: 'BY13DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-24',
@@ -138,7 +138,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО "БИЗНЕС-ЦЕНТР"',
       unp: '190000007',
-      account: 'BY36DEMO30120000000000000016',
+      account: 'BY26DEMO30120000000000000016',
       bic: 'PJCBBY2X'
     },
     acceptDate: '2026-07-23',
@@ -151,11 +151,11 @@ const PREVIEW_ITEMS: StatementItem[] = [
     direction: 'debit',
     amount: 3.7,
     currency: 'BYN',
-    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ ИВАН ИВАНОВИЧ за 15.07.2026 согл. до',
+    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 15.07.2026 согл. до',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY32DEMO30120000000000000012',
+      account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-17',
@@ -172,7 +172,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY28DEMO30120000000000000008',
+      account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-16',
@@ -189,7 +189,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY28DEMO30120000000000000008',
+      account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-16',
@@ -206,7 +206,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
       unp: '190000002',
-      account: 'BY35DEMO30120000000000000015',
+      account: 'BY25DEMO30120000000000000015',
       bic: 'AKBBBY2X'
     },
     acceptDate: '2026-07-15',
@@ -223,7 +223,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
       unp: '190000002',
-      account: 'BY27DEMO30120000000000000007',
+      account: 'BY17DEMO30120000000000000007',
       bic: 'AKBBBY2X'
     },
     acceptDate: '2026-07-15',
@@ -240,7 +240,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ФИЛИАЛ СТРАХОВЩИКА (ДЕМО)',
       unp: '190000001',
-      account: 'BY26DEMO30120000000000000006',
+      account: 'BY16DEMO30120000000000000006',
       bic: 'AKBBBY2X'
     },
     acceptDate: '2026-07-15',
@@ -257,7 +257,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
-      account: 'BY30DEMO30120000000000000010',
+      account: 'BY20DEMO30120000000000000010',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-15',
@@ -274,7 +274,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО \'МЕТАЛЛСЕРВИС\'',
       unp: '190000010',
-      account: 'BY33DEMO30120000000000000013',
+      account: 'BY23DEMO30120000000000000013',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-10',
@@ -291,7 +291,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY28DEMO30120000000000000008',
+      account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-09',
@@ -308,7 +308,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY28DEMO30120000000000000008',
+      account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-08',
@@ -325,7 +325,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'И***В И***Н И***Ч',
       unp: '',
-      account: 'BY25DEMO30120000000000000005',
+      account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-07',
@@ -342,7 +342,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
-      account: 'BY28DEMO30120000000000000008',
+      account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-07',
@@ -359,7 +359,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "РОМАШКА"',
       unp: '190000009',
-      account: 'BY31DEMO30120000000000000011',
+      account: 'BY21DEMO30120000000000000011',
       bic: 'BLBBBY2X'
     },
     acceptDate: '2026-07-06',
@@ -376,7 +376,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'И***В И***Н И***Ч',
       unp: '',
-      account: 'BY25DEMO30120000000000000005',
+      account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-06',
@@ -391,9 +391,9 @@ const PREVIEW_ITEMS: StatementItem[] = [
     currency: 'BYN',
     purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
     counterparty: {
-      name: 'ИП ИВАНОВ ИВАН ИВАНОВИЧ',
+      name: 'ИП ИВАНОВ И. И.',
       unp: '190000006',
-      account: 'BY23DEMO30120000000000000003',
+      account: 'BY13DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-06',
@@ -410,7 +410,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО "ТОРГОВЫЙ ДОМ"',
       unp: '190000008',
-      account: 'BY22DEMO30120000000000000002',
+      account: 'BY12DEMO30120000000000000002',
       bic: 'PJCBBY2X'
     },
     acceptDate: '2026-07-02',
@@ -427,7 +427,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО СЕТЕВАЯ КОМПАНИЯ',
       unp: '190000004',
-      account: 'BY34DEMO30120000000000000014',
+      account: 'BY24DEMO30120000000000000014',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-02',
@@ -444,7 +444,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'И***В И***Н И***Ч',
       unp: '',
-      account: 'BY25DEMO30120000000000000005',
+      account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-02',
@@ -459,9 +459,9 @@ const PREVIEW_ITEMS: StatementItem[] = [
     currency: 'BYN',
     purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
     counterparty: {
-      name: 'ИП ИВАНОВ ИВАН ИВАНОВИЧ',
+      name: 'ИП ИВАНОВ И. И.',
       unp: '190000006',
-      account: 'BY23DEMO30120000000000000003',
+      account: 'BY13DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-07-02',
@@ -478,7 +478,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     counterparty: {
       name: 'ООО \'ВАСИЛЁК\'',
       unp: '190000005',
-      account: 'BY29DEMO30120000000000000009',
+      account: 'BY19DEMO30120000000000000009',
       bic: 'BAPBBY2X'
     },
     acceptDate: '2026-07-02',
@@ -565,9 +565,13 @@ const showSetupBanner = computed(() => inPortal.value && chatSettings.loaded.val
 // загружали, она сообщает не о состоянии импорта, а о том, что настройка не закончена: про это
 // уже говорит экран готовности в настройках, и вторая формулировка того же читается как поломка.
 // Поэтому полосу показываем, когда прогон был — или когда есть чему запускаться (подключён счёт).
+// ⚠ Прячем полосу, только когда ТОЧНО ЗНАЕМ, что подключать нечего: `/api/setup-status`
+// admin-only и не-админу отвечает 403, поэтому «нет счетов» и «нам не дали посмотреть» —
+// разные вещи. Иначе бухгалтер и админ на одном и том же портале видели бы разное.
 const setup = useSetupStatus()
+const setupKnown = computed(() => setup.loaded.value && setup.error.value === '')
 const showStatusBanner = computed(
-  () => status.value.state !== 'never' || setup.status.value.connectedAccounts > 0
+  () => status.value.state !== 'never' || !setupKnown.value || setup.status.value.connectedAccounts > 0
 )
 
 const b24 = useB24()
@@ -585,9 +589,10 @@ onMounted(async () => {
   checkAdmin()
   // Load chat settings so the setup banner reflects the real configured state.
   await chatSettings.load()
-  // Нужен только для решения «показывать ли полосу статуса» — ошибка чтения не должна
-  // ломать страницу: при неудаче остаётся нулевой счётчик, то есть полоса просто молчит.
-  await setup.load()
+  // Только для решения «показывать ли полосу статуса», поэтому НЕ в критическом пути:
+  // ждать его перед `setTitle`/`fitWindow` значило бы держать фрейм без заголовка и
+  // неподогнанным всё время запроса (а у не-админа он ещё и заведомо 403).
+  void setup.load()
   try {
     const $b24 = b24.getOrThrow()
     await $b24.parent.setTitle('Выписка по счёту')
@@ -701,14 +706,13 @@ onMounted(async () => {
            ready and the app is configured; hidden while unconfigured (setup banner) or while
            the in-portal settings fetch is still resolving (avoids a flash either way). -->
         <template v-else-if="settingsReady">
-          <div
-            v-if="items.length"
-            class="flex flex-col lg:flex-row items-start justify-between gap-4"
-          >
-            <!-- Lively import-result summary (#62): count-up tiles + by-day / share charts.
-               Same component as the /import preview — reused for the in-portal path. Shown
-               only when there are real operations to summarize. -->
+          <!-- ⚠ Полоса статуса и карточка доработок живут СНАРУЖИ ветки «есть операции»: список
+               в портале пуст до бэкенд-фида (#5), и внутри неё они не показались бы НИКОГДА —
+               то есть настроенный портал остался бы и без статуса импорта, и без кнопки
+               «Проверить настройки», ради которой полоса и заведена. -->
+          <div class="flex flex-col lg:flex-row items-start justify-between gap-4">
             <ImportStatsChart
+              v-if="items.length"
               :items="items"
               title="Сводка по операциям"
               class="w-full"
@@ -719,13 +723,9 @@ onMounted(async () => {
                 :status="status"
                 @open-settings="openSettings"
               />
-
-              <!-- Cross-sell: заказать доработку/автоматизацию под свой процесс (ИП Шевчик,
-                партнёр Bitrix24). Только на внутренних страницах приложения (не на лендинге). -->
               <CustomDevCard />
             </div>
           </div>
-
           <!-- Operations, styled like the "Последние операции" view. -->
           <B24Card>
             <template #header>

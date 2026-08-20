@@ -83,13 +83,14 @@ describe('открытие вторичных экранов слайдером 
 })
 
 describe('экран, открытый слайдером, знает об этом', () => {
-  it('/import в слайдере предлагает «Закрыть», а не «К сводке операций»', async () => {
+  it('/import в слайдере НЕ рисует своей кнопки закрытия — крестик даёт портал', async () => {
     state.place = APP_SLIDER_PLACE_IMPORT
     const wrapper = await mountSuspended(await import('~/pages/import.vue').then(m => m.default), { route: '/import?preview=1' })
     await flushPromises()
     // За слайдером нет истории: переход на /app открыл бы ВТОРОЕ приложение поверх работы.
-    expect(wrapper.text()).toContain('Закрыть')
+    // Своя кнопка «Закрыть» тоже не нужна — рядом с ней встал бы портальный крестик.
     expect(wrapper.text()).not.toContain('К сводке операций')
+    expect(wrapper.text()).not.toContain('Закрыть')
   })
 
   it('/import обычной страницей оставляет «К сводке операций»', async () => {

@@ -17,7 +17,7 @@ const items = [
 </script>
 
 <template>
-  <B24Footer class="w-full border-t border-default min-h-0">
+  <B24Footer class="w-full border-t border-default">
     <template #left>
       <ProseP
         small

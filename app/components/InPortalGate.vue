@@ -113,9 +113,11 @@ onUnmounted(() => {
       tabindex="-1"
       data-testid="portal-gate-outside"
     >
-      <ProseH3 class="mb-0">
+      <!-- Единственный заголовок экрана — первого уровня: `h3` без `h1`/`h2` рвёт иерархию
+           заголовков, по которой скринридер строит навигацию. -->
+      <ProseH1 class="mb-0 text-2xl">
         Откройте приложение внутри Bitrix24
-      </ProseH3>
+      </ProseH1>
       <ProseP accent="less">
         Найдите приложение в левом меню портала — или установите его из
         Маркета, если ещё не установили.
@@ -134,7 +136,7 @@ onUnmounted(() => {
         <B24Button
           label="О приложении"
           color="air-secondary-accent"
-          size="sm"
+          size="md"
           href="/"
           target="_blank"
           rel="noopener"

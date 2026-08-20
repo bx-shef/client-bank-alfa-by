@@ -50,15 +50,17 @@ function toRow(item: StatementItem) {
   return {
     key: `${item.account}|${item.docId}`, // dedup convention: docId unique per account
     icon: credit ? ArrowTopSIcon : ArrowDownSIcon,
-    tint: credit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
+    tint: credit ? 'text-(--ui-color-accent-main-success)' : 'text-(--ui-color-accent-main-alert)',
     // Плитка направления КРАСИТСЯ, а не остаётся нейтральной. Раньше она брала общий серый токен, и
     // приход от расхода отличался только мелкой стрелкой внутри — при том что сумма справа уже была
     // цветной. Получалось, что один и тот же признак на одной строке заявлен дважды и по-разному:
     // справа явно, слева никак. Цвет — не единственный носитель: стрелка ↑/↓ и знак у суммы
     // остаются, поэтому строка читается и без различения цветов.
     tile: credit
-      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-      : 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300',
+    // Семантические токены темы, а не сырая палитра Tailwind: портал вправе переопределить
+    // токены под свою air-тему, и захардкоженный emerald/rose за ней не поедет.
+      ? 'bg-(--ui-color-design-tinted-success-bg) text-(--ui-color-design-tinted-success-content)'
+      : 'bg-(--ui-color-design-tinted-alert-bg) text-(--ui-color-design-tinted-alert-content)',
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
     name: item.counterparty.name,
     purpose: item.purpose,
@@ -120,7 +122,7 @@ const hasItems = computed(() => props.items.length > 0)
     >
       <!-- Заголовок дня — ПОДПИСЬ, а не плашка во всю ширину. Плашка брала тот же фон, что и
            строки, весила визуально больше самих операций и читалась как ещё одна строка таблицы. -->
-      <p class="px-1 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-(--ui-color-base-4) first:pt-1">
+      <p class="px-1 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-(--ui-color-base-3) first:pt-1">
         {{ group.label }}
       </p>
 

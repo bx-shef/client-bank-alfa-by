@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import ArrowLeftMIcon from '@bitrix24/b24icons-vue/outline/ArrowLeftMIcon'
-import CrossMIcon from '@bitrix24/b24icons-vue/outline/CrossMIcon'
 import { useB24 } from '~/composables/useB24'
 import { APP_SLIDER_PLACE_IMPORT } from '~/config/b24'
 import { pageTitle } from '~/utils/landing'
@@ -42,11 +41,6 @@ onMounted(async () => {
     log.warning('не удалось вызвать parent-методы портала', { error: String(e) })
   }
 })
-
-/** Закрыть слайдер, в котором открыт этот экран. */
-async function close(): Promise<void> {
-  await b24.closeSlider()
-}
 </script>
 
 <!-- Только внутри портала (#414): снаружи нет фрейм-токена, значит запись в CRM невозможна, а
@@ -55,19 +49,10 @@ async function close(): Promise<void> {
   <InPortalGate>
     <main class="mx-auto max-w-5xl px-4 py-6">
       <!-- Back to the in-portal metrics/operations view (#219 follow-up: /import had no way back).
-           В слайдере — вместо «назад» крестик: за слайдером нет истории, и переход на /app открыл бы
-           второе приложение поверх работы. -->
+           ⚠ В слайдере своей кнопки закрытия НЕТ: крестик рисует сам портал, и вторая была бы
+           дублем — то же правило, что на странице настроек. -->
       <B24Button
-        v-if="isSlider"
-        :icon="CrossMIcon"
-        label="Закрыть"
-        color="air-tertiary-no-accent"
-        size="sm"
-        class="mb-4"
-        @click="close"
-      />
-      <B24Button
-        v-else
+        v-if="!isSlider"
         :icon="ArrowLeftMIcon"
         label="К сводке операций"
         color="air-tertiary-no-accent"

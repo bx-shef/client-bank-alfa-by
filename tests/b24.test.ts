@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, marketDetailPath } from '~/config/b24'
+import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_SETTINGS, B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, marketDetailPath, sliderRouteForPlace } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
   it('lists crm, sale, im, imbot, documentgenerator, userfieldconfig, user_brief and placement', () => {
@@ -35,5 +35,21 @@ describe('marketDetailPath', () => {
   it('returns null for an empty / whitespace-only code (feature off)', () => {
     expect(marketDetailPath('')).toBeNull()
     expect(marketDetailPath('   ')).toBeNull()
+  })
+})
+
+describe('sliderRouteForPlace', () => {
+  it('переводит place в НАШ маршрут', () => {
+    expect(sliderRouteForPlace(APP_SLIDER_PLACE_SETTINGS)).toBe('/settings')
+    expect(sliderRouteForPlace(APP_SLIDER_PLACE_IMPORT)).toBe('/import')
+  })
+
+  it('чужой/пустой place не ведёт никуда — дефолта здесь быть не должно', () => {
+    // Дефолт на '/settings' отправил бы фрейм импорта в настройки, а произвольная строка
+    // из PLACEMENT_OPTIONS — это вход, которым мы не управляем.
+    expect(sliderRouteForPlace('crm-detail-tab')).toBeUndefined()
+    expect(sliderRouteForPlace('')).toBeUndefined()
+    expect(sliderRouteForPlace(undefined)).toBeUndefined()
+    expect(sliderRouteForPlace(null)).toBeUndefined()
   })
 })

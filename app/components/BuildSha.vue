@@ -16,7 +16,7 @@ const href = computed(() => commitUrl(commitSha as string))
     :href="href"
     is-action
     data-testid="build-sha"
-    class="show mt-2 text-xs"
+    class="text-xs"
     target="_blank"
     rel="noopener noreferrer"
   >

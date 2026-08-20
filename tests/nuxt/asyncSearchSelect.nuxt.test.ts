@@ -65,3 +65,21 @@ describe('AsyncSearchSelect', () => {
     expect(wrapper.emitted('update:selectedOption')).toBeUndefined()
   })
 })
+
+describe('AsyncSearchSelect: сброс выбора', () => {
+  it('приводит очищенную модель к ПУСТОЙ СТРОКЕ, а не к undefined', async () => {
+    // Значение живёт в `PortalSettings`, где поле типизировано `string` и сравнивается
+    // с `!== ''` («настроено ли приложение»). `undefined` это сравнение проходит — портал
+    // после сброса чата считался бы настроенным, — а `JSON.stringify` вовсе выбрасывает
+    // такой ключ из тела сохранения.
+    const fetcher = vi.fn(async () => ({ items: [], total: 0 }))
+    const wrapper = await mountSuspended(AsyncSearchSelect, {
+      props: { fetcher, modelValue: 'chat42', clearable: true }
+    })
+    await wrapper.setProps({ modelValue: undefined })
+    await vi.advanceTimersByTimeAsync(0)
+
+    const emitted = wrapper.emitted('update:modelValue') as unknown[][] | undefined
+    expect(emitted?.at(-1)?.[0]).toBe('')
+  })
+})

@@ -1,4 +1,4 @@
-import { reactive, ref, watch } from 'vue'
+import { reactive, ref, watch, type Ref } from 'vue'
 import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { defaultPortalSettings, type PortalSettings } from '~/utils/settings'
@@ -87,6 +87,21 @@ function create() {
     return { value: dialogId, label: dialogId }
   }
 
+  /** Resolve one picker's missing title and apply it — but ONLY if the id it was asked
+   *  about is still the configured one. `load()` re-runs on the cross-instance pull, so a
+   *  slow lookup from the previous run could otherwise paste the OLD chat's name onto the
+   *  NEW chat's id — and that wrong name would be saved into app.option on the next Save. */
+  async function adoptTitle(key: 'chat' | 'errorChat', target: Ref<ChatOption | undefined>): Promise<void> {
+    const dialogId = settings[key].dialogId
+    if (!dialogId || target.value) return
+    const opt = await resolveOption(dialogId)
+    if (settings[key].dialogId !== dialogId) return
+    target.value = opt
+    // Кэшируем ТОЛЬКО настоящее имя: записав сюда сырой id, мы бы навсегда научили
+    // `seedOption` считать его известным именем и больше никогда не спрашивать портал.
+    if (opt.label !== opt.value) settings[key].title = opt.label
+  }
+
   async function load() {
     const a = frameAuth()
     enabled.value = a !== null
@@ -107,19 +122,14 @@ function create() {
       } catch { /* leave recent empty → id fallback */ }
       notifyOption.value = seedOption(settings.chat.dialogId, settings.chat.title, recent)
       errorOption.value = seedOption(settings.errorChat.dialogId, settings.errorChat.title, recent)
-      // Names still unknown → ask the portal (one call per unresolved picker; both
-      // are cold-path). Cache the title back into the settings so the next open is
-      // free — the same field the picker writes when a chat is chosen by hand.
-      if (settings.chat.dialogId && !notifyOption.value) {
-        const opt = await resolveOption(settings.chat.dialogId)
-        notifyOption.value = opt
-        if (opt.label !== opt.value) settings.chat.title = opt.label
-      }
-      if (settings.errorChat.dialogId && !errorOption.value) {
-        const opt = await resolveOption(settings.errorChat.dialogId)
-        errorOption.value = opt
-        if (opt.label !== opt.value) settings.errorChat.title = opt.label
-      }
+      // Names still unknown → ask the portal. In PARALLEL: they are independent, and
+      // serialized they would hold the form on «Загрузка настроек…» for both round-trips.
+      // Cache the title back into the settings so the next open is free — the same field
+      // the picker writes when a chat is chosen by hand.
+      await Promise.all([
+        adoptTitle('chat', notifyOption),
+        adoptTitle('errorChat', errorOption)
+      ])
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось загрузить настройки')
     } finally {

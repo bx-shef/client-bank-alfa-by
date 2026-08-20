@@ -57,7 +57,7 @@ async function close(): Promise<void> {
   <InPortalGate>
     <B24DashboardPanel
       id="settings"
-      :b24ui="{ body: 'flex flex-col gap-4 flex-1 overflow-y-auto sm:p-4 sm:pt-0 scrollbar-thin' }"
+      :b24ui="{ body: 'flex flex-col gap-4 flex-1 overflow-y-auto p-4 sm:pt-0 scrollbar-thin' }"
     >
       <template #header>
         <B24DashboardNavbar

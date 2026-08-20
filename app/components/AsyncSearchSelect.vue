@@ -39,9 +39,12 @@ const props = withDefaults(defineProps<{
   /** The already-selected option, so its label shows on reload even before it
    *  appears in a fetched page (stored value → known label). */
   selectedOption?: Option
-  /** Show a "Сбросить" action that clears the selection. The menu has no "nothing"
-   *  row — once a value is picked there is otherwise NO way back to "не выбрано",
-   *  and for the chat pickers that is a meaningful state (notifications off). */
+  /** Show the built-in clear button (b24ui SelectMenu `clear`). The menu has no
+   *  "nothing" row — once a value is picked there is otherwise NO way back to
+   *  "не выбрано", and for the chat pickers that is a meaningful state
+   *  (notifications off). NB this is the component's OWN affordance, rendered
+   *  inside the trigger: a button of ours next to the field would make the field
+   *  narrower exactly when a value is selected. */
   clearable?: boolean
 }>(), {
   labelKey: 'label',
@@ -101,11 +104,14 @@ function onOpenChange(open: boolean) {
   }
 }
 
-/** Clear the selection back to "не выбрано". Emits the resolved option (undefined)
- *  through the same watcher the menu uses, so a parent's cached label is dropped too. */
-function clear(): void {
-  model.value = undefined
-}
+// Normalize a cleared model to the EMPTY STRING, never undefined/null: consumers store
+// this in `PortalSettings` where the field is typed `string` and compared with `!== ''`
+// (app.vue's «настроено» gate). `undefined` passes that comparison and would report a
+// portal as configured right after the admin cleared its notification chat — and
+// JSON.stringify drops an undefined key from the save payload entirely.
+watch(model, (v) => {
+  if (v === undefined || v === null) model.value = ''
+})
 
 // Min-chars hint text (e.g. "Введите ещё N символов").
 const hint = computed(() => `Введите ещё ${Math.max(1, props.minChars - searchTerm.value.trim().length)} символ(а)`)
@@ -114,86 +120,72 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="flex w-full items-center gap-2">
-    <B24SelectMenu
-      v-bind="$attrs"
-      v-model="model"
-      v-model:search-term="searchTerm"
-      :items="displayItems"
-      :loading="loading"
-      ignore-filter
-      :label-key="labelKey"
-      :value-key="valueKey"
-      :placeholder="placeholder"
-      :disabled="disabled"
-      class="w-full flex-1"
-      @update:open="onOpenChange"
+  <B24SelectMenu
+    v-bind="$attrs"
+    v-model="model"
+    v-model:search-term="searchTerm"
+    :items="displayItems"
+    :loading="loading"
+    ignore-filter
+    :label-key="labelKey"
+    :value-key="valueKey"
+    :placeholder="placeholder"
+    :disabled="disabled"
+    :clear="clearable"
+    class="w-full"
+    @update:open="onOpenChange"
+  >
+    <!-- Forward SelectMenu item slots so consumers can render avatars/subtitles. -->
+    <template
+      v-for="name in ['item', 'item-leading', 'item-trailing']"
+      #[name]="slotProps"
+      :key="name"
     >
-      <!-- Forward SelectMenu item slots so consumers can render avatars/subtitles. -->
-      <template
-        v-for="name in ['item', 'item-leading', 'item-trailing']"
-        #[name]="slotProps"
-        :key="name"
-      >
-        <slot
-          :name="name"
-          v-bind="slotProps"
-        />
-      </template>
+      <slot
+        :name="name"
+        v-bind="slotProps"
+      />
+    </template>
 
-      <!-- Footer: search state + explicit load-more. -->
-      <template #content-bottom>
-        <div class="px-2 py-1.5 text-xs text-(--ui-color-base-3)">
-          <p
-            v-if="tooShort"
-            data-testid="too-short"
-          >
-            {{ hint }}
-          </p>
-          <div
-            v-else-if="error"
-            class="flex items-center justify-between gap-2"
-            data-testid="search-error"
-          >
-            <span class="text-(--ui-color-accent-main-alert)">{{ error }}</span>
-            <B24Button
-              size="xs"
-              color="air-secondary-no-accent"
-              label="Повторить"
-              @click="refresh()"
-            />
-          </div>
-          <p
-            v-else-if="!loading && items.length === 0"
-            data-testid="empty"
-          >
-            Ничего не найдено
-          </p>
+    <!-- Footer: search state + explicit load-more. -->
+    <template #content-bottom>
+      <div class="px-2 py-1.5 text-xs text-(--ui-color-base-3)">
+        <p
+          v-if="tooShort"
+          data-testid="too-short"
+        >
+          {{ hint }}
+        </p>
+        <div
+          v-else-if="error"
+          class="flex items-center justify-between gap-2"
+          data-testid="search-error"
+        >
+          <span class="text-(--ui-color-accent-main-alert)">{{ error }}</span>
           <B24Button
-            v-else-if="hasMore"
-            block
             size="xs"
             color="air-secondary-no-accent"
-            :loading="loading"
-            label="Показать ещё"
-            data-testid="load-more"
-            @click="loadMore()"
+            label="Повторить"
+            @click="refresh()"
           />
         </div>
-      </template>
-    </B24SelectMenu>
-
-    <!-- Reset: the menu has no "nothing" row, so without this a picked chat can
-         never be un-picked. Sits OUTSIDE the trigger — inside it, the click would
-         also toggle the menu open. -->
-    <B24Button
-      v-if="clearable && model"
-      size="xs"
-      color="air-tertiary-no-accent"
-      label="Сбросить"
-      :disabled="disabled"
-      data-testid="clear-selection"
-      @click="clear()"
-    />
-  </div>
+        <p
+          v-else-if="!loading && items.length === 0"
+          data-testid="empty"
+        >
+          Ничего не найдено
+        </p>
+        <B24Button
+          v-else-if="hasMore"
+          block
+          size="xs"
+          color="air-secondary-no-accent"
+          :loading="loading"
+          label="Показать ещё"
+          data-testid="load-more"
+          @click="loadMore()"
+        />
+      </div>
+    </template>
+  </B24SelectMenu>
 </template>

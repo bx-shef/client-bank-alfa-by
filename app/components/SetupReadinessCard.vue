@@ -121,8 +121,8 @@ onBeforeUnmount(() => {
         aria-live="assertive"
         color="air-primary-alert"
         :icon="AlertIcon"
-        title="Проблемы."
-        :description="setup.error.value || 'Смотри логи в консоле.'"
+        title="Не удалось прочитать состояние настройки"
+        :description="setup.error.value || 'Попробуйте обновить страницу. Если не поможет — напишите нам через форму обратной связи ниже.'"
         class="mb-3"
         data-testid="readiness-error"
       />
@@ -135,16 +135,22 @@ onBeforeUnmount(() => {
           :data-testid="`readiness-${i.key}`"
         >
           <!-- Never colour alone: the ✓/! glyph and the wording carry the state too. -->
+          <!-- Состояние озвучивает `sr-only`-подпись ниже, поэтому сама иконка для
+               скринридера — шум: без `aria-hidden` строка читалась бы дважды. -->
           <CheckIcon
             v-if="i.ok"
-            class="mt-1.5 text-(--ui-color-accent-main-success) size-5"
+            aria-hidden="true"
+            class="mt-1 text-(--ui-color-accent-main-success) size-5"
           />
           <Cross30Icon
             v-else
+            aria-hidden="true"
             class="mt-1 text-(--ui-color-accent-main-warning) size-5"
           />
           <div class="min-w-0">
-            <div class="flex flex-row flex-nowrap items-start justify-start gap-2">
+            <!-- `flex-wrap`: деталь строки — это номер счёта или название чата, на 375 px
+                 в одну строку с заголовком они не помещаются, а `nowrap` распирал бы блок. -->
+            <div class="flex flex-row flex-wrap items-baseline justify-start gap-x-2">
               <ProseP
                 accent="default"
                 class="mb-0"
@@ -154,7 +160,7 @@ onBeforeUnmount(() => {
               <ProseP
                 accent="less"
                 small
-                class="mb-0 mt-1.5"
+                class="mb-0 min-w-0"
               >
                 — {{ i.detail }}
               </ProseP>
