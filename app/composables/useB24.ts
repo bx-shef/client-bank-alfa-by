@@ -1,5 +1,6 @@
 import { B24Frame, Result, initializeB24Frame } from '@bitrix24/b24jssdk'
 import { B24_REQUIRED_SCOPES } from '~/config/b24'
+import { SLIDER_INTENT_KEY, encodeSliderIntent } from '~/utils/sliderIntent'
 
 // Module-level singleton: the SDK keeps one B24Frame per page (the portal opens
 // one iframe). Safe under SSG — only ever set on the client, inside the frame.
@@ -103,6 +104,12 @@ export const useB24 = () => {
     await init()
     const f = get()
     if (!f) return false
+    // Метка «куда вели» — ВТОРОЙ признак на случай, если портал откроет слайдер без нашего
+    // `place` (живой прогон #537: слайдер открывается, но приходит пустым, и человек видит в нём
+    // главный экран). Ставим ДО вызова: фрейм может открыться раньше, чем промис вернётся.
+    try {
+      window.sessionStorage.setItem(SLIDER_INTENT_KEY, encodeSliderIntent(place, Date.now()))
+    } catch { /* приватный режим / хранилище недоступно — работаем на одном `place` */ }
     try {
       await f.slider.openSliderAppPage({
         place,
