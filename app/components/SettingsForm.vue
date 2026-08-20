@@ -89,9 +89,9 @@ async function cancel(): Promise<void> {
 // day-to-day one — leaving either collapsed is how the bank connection got lost in the first place.
 const openSections = ref(['0', '1'])
 const sections = computed(() => [
-  // Bank connection FIRST: it is the action the whole online import depends on, and it used to
-  // жило только на отдельной странице, на которую из портала ничего не вело, — админ просто не
-  // мог его найти (доклад с живого прогона). Место настройки — там, где настройки открывают.
+  // Bank connection FIRST: the whole online import depends on it, and it used to live in a
+  // corner nobody opened — the admin simply could not find it (reported from a live run).
+  // A setting belongs where settings are opened.
   { label: 'Подключение банка', slot: 'bank' },
   { label: 'Уведомления в чат', slot: 'chats' },
   { label: 'Смарт-процессы и распределение', slot: 'distribution' },
@@ -239,9 +239,9 @@ const previewSummary = computed(() => {
             type="multiple"
             :items="sections"
           >
-            <!-- Служебные смарт-процессы + журнал распределения. Раньше жили ТОЛЬКО на отдельной
-                 странице /settings, до которой из портала вела одна невнятная ссылка — админ их просто
-                 не находил. Страницы больше нет: все настройки здесь. -->
+            <!-- Служебные смарт-процессы + журнал распределения. Раньше до них вела одна
+                 невнятная ссылка, и админ их просто не находил; теперь они внутри общей формы
+                 настроек, которую портал открывает слайдером. -->
             <template #distribution>
               <ProvisionSpCard />
               <DistributionTab class="mt-4" />

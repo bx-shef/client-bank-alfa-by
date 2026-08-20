@@ -25,8 +25,16 @@ const fetchMock = vi.fn((url: string, _opts?: Record<string, unknown>) => {
 })
 vi.stubGlobal('$fetch', fetchMock)
 
+// ⚠ Возвращаем и РЕАЛИЗАЦИЮ, а не только счётчики: тест, подменивший её через
+// `mockImplementation` (сценарии сбоя ниже), иначе оставляет свой отказ следующему — и тот
+// падает по причине, к которой не имеет отношения.
+const defaultFetch = (url: string) => (url === '/api/setup-status'
+  ? Promise.resolve(setupReply.value)
+  : Promise.resolve({}))
+
 afterEach(() => {
   fetchMock.mockClear()
+  fetchMock.mockImplementation(defaultFetch)
   setupReply.value = {}
   mockState.inPortal = true
 })
@@ -154,5 +162,27 @@ describe('SetupReadinessCard — сбой чтения состояния', () =
       : Promise.resolve({})))
     const wrapper = await mountReady()
     expect(wrapper.find('[data-slot="footer"]').exists()).toBe(true)
+  })
+})
+
+describe('SetupReadinessCard — сбой ОБНОВЛЕНИЯ поверх успешного чтения', () => {
+  it('не схлопывает уже показанный чек-лист: данные последнего успешного чтения целы', async () => {
+    // Экран перечитывается по возврату фокуса — например, когда админ пришёл из вкладки банка.
+    // Одна моргнувшая сеть не должна подменять готовый чек-лист сообщением об ошибке: в
+    // `status` лежат настоящие данные, а не дефолты, и именно этим случай отличается от
+    // «первое чтение упало». Ровно это различает флаг `loadedOk`.
+    setupReply.value = { connectedAccounts: 1, pollEnabled: true, pollIntervalMin: 5 }
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="readiness-bank"]').exists()).toBe(true)
+
+    fetchMock.mockImplementation((url: string) => (url === '/api/setup-status'
+      ? Promise.reject(new Error('blip'))
+      : Promise.resolve({})))
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="readiness-bank"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="readiness-error"]').exists()).toBe(false)
   })
 })

@@ -83,13 +83,16 @@ onUnmounted(() => {
   <ClientOnly>
     <slot v-if="state === 'ok'" />
 
-    <!-- Высота фиксированная и небольшая: внутри iframe портала высоту задаёт `fitWindow`, и `60vh`
+    <!-- ⚠ Высота ЗДЕСЬ фиксированная и небольшая, в отличие от заглушки ниже: это состояние
+         рисуется и ВНУТРИ портала, до `fitWindow`, где полный экран разворачивается в пустую
+         полосу или прокрутку на коротком фрейме. Заглушка «откройте внутри Bitrix24» показывается
+         только СНАРУЖИ портала — там `min-h-screen` уместен, её никто не подгоняет. Прежний `60vh`
          разворачивались бы в пустую полосу или прокрутку на коротком фрейме. -->
     <div
       v-else-if="state === 'checking'"
       role="status"
       aria-live="polite"
-      class="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
+      class="mx-auto flex min-h-[240px] max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
       data-testid="portal-gate-checking"
     >
       <template v-if="showSpinner">

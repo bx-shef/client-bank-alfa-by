@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { commitUrl, shortSha } from '~/utils/build'
 
-// Shared: a link to the exact build commit.
+// Ссылка на КОММИТ сборки: по ней с любого экрана видно, какой именно код сейчас работает.
 const { public: { commitSha } } = useRuntimeConfig()
 
 const sha = computed(() => shortSha(commitSha as string))
