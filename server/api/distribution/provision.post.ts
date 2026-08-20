@@ -12,7 +12,7 @@ import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { withAdvisoryLock } from '../../utils/dbLock'
+import { SINGLE_FLIGHT_LOCK_WAIT, withAdvisoryLock } from '../../utils/dbLock'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -54,7 +54,16 @@ function liveProvisionDeps(): ProvisionRequestDeps {
           saveSettings,
           provision: (known: KnownSpIds) => provisionDistributionSp(call, known),
           // Single-flight per portal: serialize concurrent provision requests across replicas.
-          withLock: fn => withAdvisoryLock(`provision-sp:${memberId}`, () => fn())
+          //
+          // ⚠ The wait is SHORT, for the same reason as the account rename (#509) — not a different
+          // one. Both holders are slow; the difference is that #509's is BOUNDED (one bank POST,
+          // capped at 15s) while this one is not (~18 sequential REST calls to Bitrix24). Neither
+          // can be outwaited, and a waiter occupies a POOLED CONNECTION the whole time (the pool is
+          // 10, shared with the readiness probe, install events and every other portal).
+          //
+          // ⚠ There is also nothing to wait FOR: if provisioning is already running, the second
+          // caller has no work — the first creates everything. «Already running» beats a queue.
+          withLock: fn => withAdvisoryLock(`provision-sp:${memberId}`, () => fn(), { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
         }))
     }
   }

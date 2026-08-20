@@ -12,7 +12,7 @@ import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { withAdvisoryLock } from '../../utils/dbLock'
+import { SINGLE_FLIGHT_LOCK_WAIT, withAdvisoryLock } from '../../utils/dbLock'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -38,8 +38,13 @@ function liveRecomputeDeps(): RecomputeRequestDeps {
       if (!paymentRef || !distRef) return null // SPs not provisioned
       // Single-flight per portal: serialize concurrent recomputes (and vs the crm-sync/deletion writers
       // touching the same «осталось» fields) — same advisory lock family as provisioning.
+      // ⚠ Short wait, same reason as provisioning — more so, in fact: this holder walks every payment
+      // of the portal at 2 REST calls each (up to `MAX_LEDGER_PAYMENTS`), so it runs for minutes on a
+      // busy portal, not seconds. Outwaiting it is pointless, and a waiter occupies a pooled
+      // connection throughout. A second recompute has no work — the first covers the same elements.
       return withAdvisoryLock(`distribution-recompute:${memberId}`, () =>
-        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)))
+        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)),
+      { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
     }
   }
 }

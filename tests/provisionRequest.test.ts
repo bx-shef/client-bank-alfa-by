@@ -89,3 +89,61 @@ describe('handleProvisionRequest', () => {
     expect(memberIdByDomain).not.toHaveBeenCalled()
   })
 })
+
+describe('concurrent click — «busy», not a failure (#516)', () => {
+  /** The Postgres error on an exhausted `lock_timeout` — exactly what used to escape unhandled. */
+  const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+
+  it('an exhausted lock wait ⇒ 503 with a human message, not 502', async () => {
+    // ⚠ Provisioning CREATES smart processes in the client's CRM and there is no rollback button in
+    // production. An admin who sees «provisioning failed» cannot tell whether anything was created,
+    // and the natural reaction is to press again. The message must say NOT to.
+    const r = await handleProvisionRequest(deps({
+      provision: async () => {
+        throw lockTimeout
+      }
+    }), input)
+    expect(r.status).toBe(503)
+    expect(String(r.body.error)).toMatch(/уже выполняется/)
+    expect(String(r.body.error), 'не сказано, что повтор вреден').toMatch(/Повторное нажатие/)
+  })
+
+  it('a REAL failure still surfaces as 502, never dressed up as «busy»', async () => {
+    // ⚠ Mirrors the test in `bankAccountRename` (#509). Confusing the two means telling a human to
+    // keep clicking while the cause is somewhere else entirely.
+    const r = await handleProvisionRequest(deps({
+      provision: async () => {
+        throw new Error('connection terminated')
+      }
+    }), input)
+    expect(r.status).toBe(502)
+  })
+
+  it('код 55P03 опознаётся ОБЩЕЙ функцией, а не своей копией', async () => {
+    // Разойдись копии — один маршрут отвечал бы «занято», другой «сбой», на одном и том же коде.
+    const { readFileSync } = await import('node:fs')
+    for (const rel of ['server/utils/provisionRequest.ts', 'server/utils/recomputeRequest.ts']) {
+      const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
+      expect(src, `${rel} не использует общий isLockTimeout`).toContain('isLockTimeout')
+      expect(src, `${rel} завёл свою копию кода 55P03`).not.toMatch(/'55P03'/)
+    }
+  })
+
+  it('живые маршруты реально просят КОРОТКОЕ ожидание, а не молча берут 10-секундный дефолт', async () => {
+    // ⚠ Единственный тест, который вообще смотрит на проводку. Чистые хендлеры выше получают
+    // ошибку лока через DI-мок и до `provision.post.ts`/`recompute.post.ts` не доходят никогда,
+    // поэтому пропажа третьего аргумента `{ lockWait: SINGLE_FLIGHT_LOCK_WAIT }` (мердж-конфликт,
+    // «упростили дубль») оставляла ВЕСЬ набор зелёным. А в проде это ровно то, ради чего PR и
+    // писался: ожидание молча откатывается на `DEFAULT_LOCK_WAIT`, и второй клик занимает
+    // соединение из пула (пул — 10) на десять секунд вместо одной.
+    const { readFileSync } = await import('node:fs')
+    for (const rel of ['server/api/distribution/provision.post.ts', 'server/api/distribution/recompute.post.ts']) {
+      const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
+      expect(src, `${rel} зовёт withAdvisoryLock без lockWait — вернулся дефолт 10 с`)
+        .toMatch(/lockWait:\s*SINGLE_FLIGHT_LOCK_WAIT/)
+      // Не своя строка «1s» рядом с общей константой: разойдись они — маршруты стали бы ждать
+      // по-разному, и никто бы этого не заметил.
+      expect(src, `${rel} завёл свою копию значения ожидания`).not.toMatch(/lockWait:\s*'/)
+    }
+  })
+})
