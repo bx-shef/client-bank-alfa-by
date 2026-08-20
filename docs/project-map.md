@@ -1,6 +1,6 @@
 # Карта проекта — client-bank-alfa-by
 
-> Last reviewed: 2026-08-19
+> Last reviewed: 2026-08-20
 
 Канонический срез состояния проекта: **цель, шаги, что сделано / сейчас / дальше / потом,
 что мешает запуску и что после**. Источник правды для навыков `/report-status`,
@@ -686,7 +686,7 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
      к банку даёт top-level-навигация (A7c); (8) redirect-цель — если не выводится из `memberId`, подписывать
      (open-redirect); (9) `error_description` из callback (контролирует банк) — санитизировать (CRLF/длина)
      перед логом; (10) `client_secret` из `buildTokenExchangeBody` — никогда в лог.
-   - **✅ A7c — сделано** (PR #297): UI подключения банка (b24ui) в форме настроек (тогда — страница `/settings`, ныне слайдовер на `/app`).
+   - **✅ A7c — сделано** (PR #297): UI подключения банка (b24ui) в форме настроек (страница `/settings`, её открывает слайдер портала с `/app`).
      `app/components/BankConnectCard.vue` (`B24Card`/`B24FormField`/`B24Input`/`B24Button`/`B24Alert`,
      admin-гейт `useIsAdmin` — не-админ видит предупреждение; вне фрейма — предпросмотр) + чистый composable
      `app/composables/useBankConnect.ts` (`start(provider)` → POST `/api/bank/connect` фрейм-

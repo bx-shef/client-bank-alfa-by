@@ -50,6 +50,39 @@ export const B24_EVENT_HANDLER_PATH = '/api/b24/events'
  */
 export const B24_BOUND_EVENTS = ['ONAPPINSTALL', 'ONAPPUNINSTALL'] as const
 
+/** `place`, с которым мы открываем СВОЙ вторичный экран настоящим слайдером портала
+ *  (`slider.openSliderAppPage({ place })`); он же читается из `placement.options.place` глобальным
+ *  мидлваром, чтобы увести свежий фрейм слайдера на нужный маршрут.
+ *
+ *  ⚠ Это параметр ВЫЗОВА (приезжает в PLACEMENT_OPTIONS), а НЕ зарегистрированный плейсмент —
+ *  `placement.bind` на установке не нужен. Паттерн официального `bitrix-tools/b24-ai-starter`,
+ *  вживую отработан в соседнем `ai-price-import`.
+ *
+ *  ⚠ Почему не `slider.openPath`: он открывает ПОРТАЛЬНЫЙ путь, то есть `<портал>/settings` → 404.
+ *  Свою страницу приложения открывает только `openSliderAppPage`. Прежний вывод «слайдер портала
+ *  для своей страницы не годится» был неверен — годится, просто другим методом. */
+export const APP_SLIDER_PLACE_SETTINGS = 'app-options'
+export const APP_SLIDER_PLACE_IMPORT = 'app-import'
+
+/** place → маршрут внутри приложения, куда мидлвар уводит открытый слайдер.
+ *  ⚠ Обычный вход приложения (пункт левого меню) этих значений нести не должен — иначе главный
+ *  фрейм уезжал бы с `/app` при каждом открытии. Их ставим только мы сами в `openAppSlider`. */
+export const APP_SLIDER_ROUTES: Record<string, string> = {
+  [APP_SLIDER_PLACE_SETTINGS]: '/settings',
+  [APP_SLIDER_PLACE_IMPORT]: '/import'
+}
+
+/** Чистое: на какой маршрут вести фрейм, открытый с этим `place` (undefined — никуда). */
+export function sliderRouteForPlace(place: string | undefined | null): string | undefined {
+  return place ? APP_SLIDER_ROUTES[place] : undefined
+}
+
+/** Ширина слайдера — ВЫВЕДЕНА из вёрстки, а не выбрана на глаз. Нижняя граница жёсткая: 640 px —
+ *  брейкпоинт `sm`, а внутри слайдера медиазапросы считаются от вьюпорта фрейма, поэтому уйдя под
+ *  640 десктопный слайдер молча получил бы мобильную вёрстку. 720 — запас над брейкпоинтом на поля
+ *  слайдера, которых мы не измеряли. */
+export const APP_SLIDER_WIDTH = 720
+
 /**
  * The app's own CRM automation trigger (#79). Registered at install via
  * `crm.automation.trigger.add` (idempotent — re-adding the same CODE just updates

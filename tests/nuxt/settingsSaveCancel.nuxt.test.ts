@@ -8,7 +8,8 @@ import { defaultPortalSettings } from '~/utils/settings'
 // Explicit Save/Cancel (starter #219 UX). The footer renders only in-portal (enabled), so
 // we drive a mocked useChatSettings (enabled + spyable save/load) and a mocked useB24 (admin
 // gate open). Covers: Save persists then closes the slideover; Cancel discards (load) then
-// closes; page-mode Cancel discards WITHOUT emitting close.
+// закрывается. Форма НЕ различает страницу и слайдовер: она всегда сообщает `close`, а трактует
+// его страница — так у экрана одна механика закрытия вместо двух.
 
 const save = vi.fn(async () => {})
 const load = vi.fn(async () => {})
@@ -47,9 +48,9 @@ describe('SettingsForm Save/Cancel', () => {
     expect(wrapper.find('[data-testid="settings-cancel"]').exists()).toBe(true)
   })
 
-  it('Save persists then closes the slideover (asSlider)', async () => {
+  it('Save persists then closes the screen', async () => {
     save.mockClear()
-    const wrapper = await mountForm({ asSlider: true })
+    const wrapper = await mountForm()
     await wrapper.find('[data-testid="settings-save"]').trigger('click')
     await flushPromises()
     expect(save).toHaveBeenCalledOnce()
@@ -59,28 +60,24 @@ describe('SettingsForm Save/Cancel', () => {
   it('Save keeps the panel open when the save errors', async () => {
     save.mockClear()
     cs.error.value = 'boom' // save() would set this; simulate a failed save
-    const wrapper = await mountForm({ asSlider: true })
+    const wrapper = await mountForm()
     await wrapper.find('[data-testid="settings-save"]').trigger('click')
     await flushPromises()
     expect(wrapper.emitted('close')).toBeUndefined()
     cs.error.value = ''
   })
 
-  it('Cancel discards (reloads server copy) then closes the slideover (asSlider)', async () => {
+  // ⚠ Прежний контракт (проп `asSlider`) различал «страница» и «слайдовер» ВНУТРИ формы, и без
+  // пропа Cancel закрытия не сообщал. Пропа больше нет: форма ВСЕГДА сообщает `close`, а что это
+  // значит — решает страница (`app/pages/settings.vue`: слайдер свернуть, иначе увести на /app),
+  // и это покрыто `appSlider.nuxt.test.ts`. Передавать сюда `asSlider: true` бессмысленно — проп
+  // инертен, и три таких кейса были дублями друг друга.
+  it('Cancel discards (reloads the server copy) then closes the screen', async () => {
     load.mockClear()
-    const wrapper = await mountForm({ asSlider: true })
+    const wrapper = await mountForm()
     await wrapper.find('[data-testid="settings-cancel"]').trigger('click')
     await flushPromises()
     expect(load).toHaveBeenCalled()
     expect(wrapper.emitted('close')).toHaveLength(1)
-  })
-
-  it('page-mode Cancel discards WITHOUT emitting close', async () => {
-    load.mockClear()
-    const wrapper = await mountForm() // no asSlider → plain page
-    await wrapper.find('[data-testid="settings-cancel"]').trigger('click')
-    await flushPromises()
-    expect(load).toHaveBeenCalled()
-    expect(wrapper.emitted('close')).toBeUndefined()
   })
 })

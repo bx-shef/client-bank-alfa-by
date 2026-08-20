@@ -39,6 +39,13 @@ const props = withDefaults(defineProps<{
   /** The already-selected option, so its label shows on reload even before it
    *  appears in a fetched page (stored value → known label). */
   selectedOption?: Option
+  /** Show the built-in clear button (b24ui SelectMenu `clear`). The menu has no
+   *  "nothing" row — once a value is picked there is otherwise NO way back to
+   *  "не выбрано", and for the chat pickers that is a meaningful state
+   *  (notifications off). NB this is the component's OWN affordance, rendered
+   *  inside the trigger: a button of ours next to the field would make the field
+   *  narrower exactly when a value is selected. */
+  clearable?: boolean
 }>(), {
   labelKey: 'label',
   valueKey: 'value',
@@ -46,7 +53,8 @@ const props = withDefaults(defineProps<{
   debounceMs: 250,
   placeholder: 'Начните вводить…',
   disabled: false,
-  selectedOption: undefined
+  selectedOption: undefined,
+  clearable: false
 })
 
 /** Selected value (the `valueKey` of the chosen option), or undefined. */
@@ -96,6 +104,21 @@ function onOpenChange(open: boolean) {
   }
 }
 
+// The built-in clear button renders as a span with tabindex="-1", so keyboard users could never
+// reach it — and the menu has no "nothing" row, meaning the notification chat could not be turned
+// off from the keyboard at all. `clear` accepts an object whose props are bound AFTER that
+// tabindex, so this is the supported way to make it focusable.
+const clearProps = computed(() => (props.clearable ? { 'tabindex': 0, 'aria-label': 'Очистить' } : undefined))
+
+// Normalize a cleared model to the EMPTY STRING, never undefined/null: consumers store
+// this in `PortalSettings` where the field is typed `string` and compared with `!== ''`
+// (app.vue's «настроено» gate). `undefined` passes that comparison and would report a
+// portal as configured right after the admin cleared its notification chat — and
+// JSON.stringify drops an undefined key from the save payload entirely.
+watch(model, (v) => {
+  if (v === undefined || v === null) model.value = ''
+})
+
 // Min-chars hint text (e.g. "Введите ещё N символов").
 const hint = computed(() => `Введите ещё ${Math.max(1, props.minChars - searchTerm.value.trim().length)} символ(а)`)
 
@@ -114,6 +137,7 @@ defineExpose({ refresh })
     :value-key="valueKey"
     :placeholder="placeholder"
     :disabled="disabled"
+    :clear="clearProps"
     class="w-full"
     @update:open="onOpenChange"
   >

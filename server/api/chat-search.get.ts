@@ -9,7 +9,7 @@
 
 import { frameRestCall } from '../utils/liveDeps'
 import { bearerToken } from '../utils/settingsHandler'
-import { searchChats } from '../utils/chatSearch'
+import { resolveChatOption, searchChats } from '../utils/chatSearch'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import type { RestCall } from '../utils/companyLookup'
 
@@ -28,11 +28,16 @@ export default defineEventHandler(async (event) => {
       }
       const query = getQuery(event)
       const q = typeof query.q === 'string' ? query.q : ''
+      const id = typeof query.id === 'string' ? query.id : ''
       const offset = Number(query.offset) || 0
 
       // Bind the portal transport to the caller's frame token + domain.
       const call: RestCall = (method, params) => frameRestCall(domain, token, method, params)
       try {
+        // ?id=chat123 — resolve ONE saved dialog to its title (picker seeding).
+        // Same auth/scope as the search; a chat the caller can't see resolves to
+        // null, so this leaks nothing the search wouldn't already show them.
+        if (id) return { item: await resolveChatOption(call, id) }
         return await searchChats(call, q, offset)
       } catch {
         span.outcome = 'upstream_error'

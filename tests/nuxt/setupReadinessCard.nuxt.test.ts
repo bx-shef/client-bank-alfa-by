@@ -53,7 +53,11 @@ describe('SetupReadinessCard', () => {
     expect(wrapper.text()).toContain('Добавьте шаблоны номеров')
     // Строк стало шесть (#421 добавил чат ошибок и карту распознавания) — счётчик считает ВСЕ
     // незакрытые, иначе он обещал бы готовность раньше, чем она наступит.
-    expect(wrapper.find('[data-testid="readiness-badge"]').text()).toContain('6')
+    //
+    // ⚠ Проверяем ТЕКСТ карточки, а не отдельный бейдж: носитель счётчика уже сменился (бейдж →
+    // подпись карточки), и тест, державшийся за элемент, покраснел на правке вёрстки, хотя
+    // проверяемое им решение не менялось. Держимся за смысл — «карточка называет, сколько осталось».
+    expect(wrapper.find('[data-testid="setup-readiness"]').text()).toContain('осталось: 6')
   })
 
   it('never re-loads chat settings — that would overwrite the admin\'s unsaved edits', async () => {
@@ -77,7 +81,9 @@ describe('SetupReadinessCard', () => {
     mockState.inPortal = false
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="readiness-preview"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="readiness-badge"]').exists()).toBe(false)
+    // Никакого уверенного счётчика: данных о портале снаружи нет, и «осталось: N» было бы
+    // утверждением о том, чего мы не спрашивали.
+    expect(wrapper.find('[data-testid="setup-readiness"]').text()).not.toContain('осталось:')
   })
 
   it('re-reads on window focus, so a just-connected account stops reading «нет подключений»', async () => {
@@ -120,5 +126,33 @@ describe('SetupReadinessCard — «не понимаю, чего от меня �
     setupReply.value = { connectedAccounts: 0, pollEnabled: false, pollIntervalMin: 5, lastRunMs: null }
     const wrapper = await mountReady()
     expect(wrapper.findComponent({ name: 'FeedbackWidget' }).exists()).toBe(true)
+  })
+})
+
+describe('SetupReadinessCard — сбой чтения состояния', () => {
+  it('не выдумывает состояние по дефолтам: ни чек-листа, ни расписания, ни «осталось: N»', async () => {
+    // `/api/setup-status` admin-only и легко отвечает 403 или падает. Дефолты композейбла —
+    // нули, поэтому и чек-лист, и строка расписания читались бы как уверенный диагноз
+    // настроенному порталу: красное «Банк подключён», «Автоматический опрос выключен».
+    fetchMock.mockImplementation((url: string) => (url === '/api/setup-status'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({})))
+    const wrapper = await mountReady()
+    const text = wrapper.text()
+
+    expect(wrapper.find('[data-testid="readiness-error"]').exists()).toBe(true)
+    expect(text).not.toContain('Автоматический опрос банков выключен')
+    expect(text).not.toContain('осталось:')
+    expect(wrapper.find('[data-testid="readiness-bank"]').exists()).toBe(false)
+  })
+
+  it('оставляет подвал карточки — там живёт форма обратной связи, на которую ссылается ошибка', async () => {
+    // Сам виджет включается серверным гейтом канала и в тестовой среде выключен; проверяем, что
+    // подвал не схлопнут целиком — иначе текст ошибки отсылал бы к форме, которой на экране нет.
+    fetchMock.mockImplementation((url: string) => (url === '/api/setup-status'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({})))
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-slot="footer"]').exists()).toBe(true)
   })
 })

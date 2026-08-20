@@ -1,4 +1,4 @@
-import { reactive, ref, watch } from 'vue'
+import { reactive, ref, watch, type Ref } from 'vue'
 import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { defaultPortalSettings, type PortalSettings } from '~/utils/settings'
@@ -15,8 +15,9 @@ import type { RemoteSearchPage } from '~/utils/remoteSearch'
 
 type ChatOption = { value: string, label: string }
 
-// Module-level singleton: the slideover (/app) and the full page (/settings) render
-// the same <SettingsForm/> and must share one settings state (and not double-load).
+// Module-level singleton: /settings renders the same <SettingsForm/> whether the portal opened
+// it in a slider or the browser navigated to it, and both must share one settings state (and not
+// double-load).
 // Safe as a module singleton only because these pages are CLIENT-ONLY (SSG generate,
 // layout `clear`, gated on frame auth) — it never runs during SSR, so there's no
 // cross-request state leak. Do NOT reuse this pattern on an SSR route.
@@ -59,13 +60,47 @@ function create() {
     return { items: res.items, hasMore: res.hasMore, nextOffset: res.nextOffset }
   }
 
-  /** Resolve a saved dialog id to a {value,label} for the picker: prefer the cached
-   *  title (stored at pick time), else the name from the recent list, else the id
-   *  itself (still selectable). */
+  /** Resolve a saved dialog id to a {value,label} for the picker WITHOUT a round-trip:
+   *  the cached title (stored at pick time), else the name from the recent list.
+   *  `undefined` means "name unknown here" — the caller asks the portal (below). */
   function seedOption(dialogId: string, title: string | undefined, recent: ChatOption[]): ChatOption | undefined {
     if (!dialogId) return undefined
     if (title) return { value: dialogId, label: title }
-    return recent.find(c => c.value === dialogId) ?? { value: dialogId, label: dialogId }
+    return recent.find(c => c.value === dialogId)
+  }
+
+  /** Ask the portal for a chat's title (im.dialog.get via our proxy). Used only when
+   *  neither the cached title nor the recent list knows it — a chat configured long
+   *  ago and since gone quiet otherwise showed as the raw `chat123`, which tells the
+   *  admin nothing about what is configured. Falls back to the id if the portal can't
+   *  resolve it (deleted chat / no access) — the value must stay selectable either way. */
+  async function resolveOption(dialogId: string): Promise<ChatOption> {
+    const a = frameAuth()
+    if (a) {
+      try {
+        const res = await $fetch<{ item: ChatOption | null }>('/api/chat-search', {
+          headers: frameAuthHeaders(a),
+          params: { id: dialogId }
+        })
+        if (res.item?.label) return res.item
+      } catch { /* fall through to the id */ }
+    }
+    return { value: dialogId, label: dialogId }
+  }
+
+  /** Resolve one picker's missing title and apply it — but ONLY if the id it was asked
+   *  about is still the configured one. `load()` re-runs on the cross-instance pull, so a
+   *  slow lookup from the previous run could otherwise paste the OLD chat's name onto the
+   *  NEW chat's id — and that wrong name would be saved into app.option on the next Save. */
+  async function adoptTitle(key: 'chat' | 'errorChat', target: Ref<ChatOption | undefined>): Promise<void> {
+    const dialogId = settings[key].dialogId
+    if (!dialogId || target.value) return
+    const opt = await resolveOption(dialogId)
+    if (settings[key].dialogId !== dialogId) return
+    target.value = opt
+    // Cache the REAL name only: writing the raw id here would teach `seedOption` to treat it
+    // as a known title forever, and the portal would never be asked again.
+    if (opt.label !== opt.value) settings[key].title = opt.label
   }
 
   async function load() {
@@ -88,6 +123,14 @@ function create() {
       } catch { /* leave recent empty → id fallback */ }
       notifyOption.value = seedOption(settings.chat.dialogId, settings.chat.title, recent)
       errorOption.value = seedOption(settings.errorChat.dialogId, settings.errorChat.title, recent)
+      // Names still unknown → ask the portal. In PARALLEL: they are independent, and
+      // serialized they would hold the form on «Загрузка настроек…» for both round-trips.
+      // Cache the title back into the settings so the next open is free — the same field
+      // the picker writes when a chat is chosen by hand.
+      await Promise.all([
+        adoptTitle('chat', notifyOption),
+        adoptTitle('errorChat', errorOption)
+      ])
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось загрузить настройки')
     } finally {

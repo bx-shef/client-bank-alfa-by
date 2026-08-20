@@ -3,6 +3,9 @@ import {
   chatDialogId,
   normalizeChatSearch,
   normalizeRecentChats,
+  isChatDialogId,
+  normalizeDialog,
+  resolveChatOption,
   searchChats
 } from '../server/utils/chatSearch'
 
@@ -127,5 +130,62 @@ describe('searchChats (routing + params)', () => {
   it('throws on a REST error body (route maps to a status)', async () => {
     const call = vi.fn(async () => ({ error: 'FIND_SHORT', error_description: 'Too short' }))
     await expect(searchChats(call, 'проект', 0)).rejects.toThrow('Too short')
+  })
+})
+
+describe('isChatDialogId', () => {
+  it('accepts only chat<positive int>', () => {
+    expect(isChatDialogId('chat1435')).toBe(true)
+    expect(isChatDialogId('chat0')).toBe(false)
+    expect(isChatDialogId('chat')).toBe(false)
+    // A bare numeric DIALOG_ID is a 1-1 user dialog — never a target we offer.
+    expect(isChatDialogId('42')).toBe(false)
+    expect(isChatDialogId('')).toBe(false)
+    expect(isChatDialogId(undefined)).toBe(false)
+  })
+})
+
+describe('normalizeDialog (im.dialog.get)', () => {
+  it('takes the chat name', () => {
+    expect(normalizeDialog({ result: { name: ' Бухгалтерия ' } }, 'chat7'))
+      .toEqual({ value: 'chat7', label: 'Бухгалтерия' })
+  })
+
+  it('returns null when there is no usable title', () => {
+    // Null means "we don't know" — the caller keeps its own fallback rather than
+    // showing an invented or empty name.
+    expect(normalizeDialog({ result: { name: '   ' } }, 'chat7')).toBeNull()
+    expect(normalizeDialog({}, 'chat7')).toBeNull()
+  })
+})
+
+describe('resolveChatOption', () => {
+  it('asks im.dialog.get for a valid chat id', async () => {
+    const calls: unknown[][] = []
+    const call = async (m: string, p?: Record<string, unknown>) => {
+      calls.push([m, p])
+      return { result: { name: 'Оплаты' } }
+    }
+    expect(await resolveChatOption(call, 'chat9')).toEqual({ value: 'chat9', label: 'Оплаты' })
+    expect(calls).toEqual([['im.dialog.get', { DIALOG_ID: 'chat9' }]])
+  })
+
+  it('never calls the portal for a junk id', async () => {
+    let called = false
+    const call = async () => {
+      called = true
+      return {}
+    }
+    expect(await resolveChatOption(call, 'nonsense')).toBeNull()
+    expect(called).toBe(false)
+  })
+
+  it('returns null on REST failure (a broken form is worse than a raw id)', async () => {
+    const boom = async () => {
+      throw new Error('502')
+    }
+    expect(await resolveChatOption(boom, 'chat9')).toBeNull()
+    const errBody = async () => ({ error: 'ACCESS_DENIED' })
+    expect(await resolveChatOption(errBody, 'chat9')).toBeNull()
   })
 })

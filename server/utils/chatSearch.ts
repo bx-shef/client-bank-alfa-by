@@ -124,3 +124,37 @@ export async function searchChats(
   assertOk(resp, 'im.recent.list')
   return { items: normalizeRecentChats(resp).items, hasMore: false }
 }
+
+/** True for a chat DIALOG_ID we may resolve (`chat<positive int>`). Anything else
+ *  (a user dialog id, an empty string, junk from a hand-edited app.option) is
+ *  rejected before it reaches the portal — im.dialog.get takes any DIALOG_ID, and
+ *  a numeric one would silently resolve a 1-1 dialog we never offer as a target. */
+export function isChatDialogId(value: unknown): value is string {
+  return typeof value === 'string' && /^chat[1-9]\d*$/.test(value)
+}
+
+/** Normalize an im.dialog.get response into an option, or null when the portal
+ *  returned no usable title (deleted chat, no access). Null means "we don't know
+ *  the name" — the caller keeps its own fallback rather than inventing one. */
+export function normalizeDialog(resp: Record<string, unknown>, dialogId: string): ChatOption | null {
+  const result = (resp.result ?? {}) as Record<string, unknown>
+  const label = String(result.name ?? result.title ?? '').trim()
+  return label ? { value: dialogId, label } : null
+}
+
+/**
+ * Resolve ONE saved dialog id to its title (im.dialog.get). Used by the picker to
+ * show a real chat name for a chat that is not in the recent list — otherwise the
+ * form displays the raw `chat123`, which tells the admin nothing about what they
+ * configured. Never throws: an unresolvable chat is `null`, not a broken form.
+ */
+export async function resolveChatOption(call: RestCall, dialogId: string): Promise<ChatOption | null> {
+  if (!isChatDialogId(dialogId)) return null
+  try {
+    const resp = await call('im.dialog.get', { DIALOG_ID: dialogId })
+    if (resp && resp.error) return null
+    return normalizeDialog(resp, dialogId)
+  } catch {
+    return null
+  }
+}
