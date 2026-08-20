@@ -160,7 +160,7 @@ describe('liveHandlerDeps — parseFile (manual-import parse authority)', () => 
       // литерал был формой из прошлой версии задачи и держался только на `as` — тип его не смотрел.
       memberId: 'M', providerId: 'manual', fileHash: 'h1',
       contentBase64: bytes.toString('base64'), fileName: 'выписка.txt'
-    } as Parameters<HandlerDeps['parseFile']>[0])
+    })
     expect(Array.isArray(items)).toBe(true)
     expect(items.length).toBeGreaterThan(0)
     expect(items[0]).toHaveProperty('account')

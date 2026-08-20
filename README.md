@@ -88,7 +88,7 @@ corepack enable      # активирует pnpm нужной версии
 pnpm install         # установка зависимостей
 pnpm dev             # дев-сервер
 pnpm lint            # ESLint
-pnpm typecheck       # vue-tsc: app (.nuxt/tsconfig.json) + server (.nuxt/tsconfig.server.json)
+pnpm typecheck       # vue-tsc ×3: app + server (.nuxt/tsconfig.server.json) + tests (tsconfig.tests.json)
 pnpm test            # Vitest (unit + nuxt)
 pnpm check           # lint + typecheck + test одной командой (это же гоняет CI)
 pnpm generate        # сборка статики (SSG) → .output/public

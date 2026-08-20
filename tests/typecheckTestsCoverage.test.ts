@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // ⚠ Юнит-тесты не типизировались НИЧЕМ (#527), и это не безобидно: тест проверяет поведение, а тип
@@ -17,6 +17,7 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../${rel}`, im
 
 describe('юнит-тесты покрыты typecheck (#527)', () => {
   const cfg = JSON.parse(read('tsconfig.tests.json')) as {
+    extends: string
     include: string[]
     exclude: string[]
     compilerOptions?: Record<string, unknown>
@@ -35,16 +36,67 @@ describe('юнит-тесты покрыты typecheck (#527)', () => {
 
   it('послабление ровно одно и оно названо', () => {
     // ⚠ `noUncheckedIndexedAccess` выключен СОЗНАТЕЛЬНО, и это не «чтобы собралось». В production
-    // `arr[0]` без проверки — тихий баг, поэтому там строгость нужна. В тесте `expect(calls[0])` с
-    // `undefined` роняет сам тест, то есть строгость не ловит ничего, чего не поймал бы прогон, —
-    // зато требует 56 восклицательных знаков по ассертам и приучает руку писать `!`, который потом
-    // утекает в production, где он опасен. Остальные строгие флаги — без изменений.
+    // `arr[0]` без проверки — тихий баг, поэтому там строгость нужна. В тесте она не ловит ничего,
+    // чего не поймал бы прогон: выход за границу даёт `undefined`, а он роняет сам ассерт.
+    //
+    // ⚠ Замерено: флаг даёт 56 ошибок, и 50 из них — ОДИН файл (`queuePhase2`), причём даже не
+    // индексация массива, а точечное обращение (`calls.crm`) к объекту-сборщику типа
+    // `Record<string, unknown[]>`, все ключи которого проставлены тут же при инициализации. То
+    // есть это в основном чистый false positive индексной сигнатуры, а не размен риска на
+    // удобство. Цена альтернативы — полсотни `!` по ассертам и приученная к нему рука, которая
+    // потом пишет то же самое в production. Остальные строгие флаги — без изменений.
     expect(cfg.compilerOptions).toEqual({ noUncheckedIndexedAccess: false })
   })
 
-  it('проход подключён к `pnpm typecheck`, а не живёт отдельной командой, о которой забудут', () => {
-    const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> }
-    expect(pkg.scripts.typecheck, 'tests-проход не в `pnpm typecheck` — CI его не запустит')
-      .toContain('tsconfig.tests.json')
+  it('пути nitro-типов существуют — иначе охват тихо усохнет при апгрейде Nuxt', () => {
+    // ⚠ `include` на НЕСУЩЕСТВУЮЩИЙ файл в TypeScript не ошибка — запись просто перестаёт что-либо
+    // матчить. Переименуй Nuxt эти два файла, и проход продолжит зеленеть, молча потеряв проверку
+    // амбиентных деклараций Nitro. Само `tests/**` от этого не зависит (глоб буквальный и
+    // Nuxt-независимый), поэтому цель PR не рушится — но тихую деградацию делаем громкой.
+    for (const rel of cfg.include.filter(i => i.includes('.nuxt/types/'))) {
+      expect(existsSync(fileURLToPath(new URL(`../${rel}`, import.meta.url))), `${rel} не существует`)
+        .toBe(true)
+    }
   })
+
+  it('наследуется строгий серверный конфиг, а не что-то послабее', () => {
+    // ⚠ Вся строгость третьего прохода (`strict` и прочее) приходит ЧЕРЕЗ `extends` — сам файл
+    // задаёт только охват и одно послабление. Значит подмена `extends` на конфиг послабее
+    // обнулила бы проход, не тронув ни одной проверки ниже. Поймано ревью, а не придумано.
+    expect(cfg.extends, 'третий проход перестал наследовать строгий серверный конфиг')
+      .toBe('./.nuxt/tsconfig.server.json')
+  })
+
+  it('проход подключён к `pnpm typecheck` так, что его провал РОНЯЕТ команду', () => {
+    const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> }
+    const script = pkg.scripts.typecheck ?? ''
+
+    // ⚠ Проверять подстрокой `tsconfig.tests.json` — НЕДОСТАТОЧНО, и это доказано на живом прогоне:
+    // `... && (vue-tsc -p tsconfig.tests.json --noEmit || true)` оставляет подстроку на месте,
+    // guard зеленеет, а `pnpm typecheck` возвращает 0 ДАЖЕ при настоящей ошибке типа в тестах —
+    // CI смотрит на код возврата, а не на текст. То есть проверка текста ловила бы ровно всё,
+    // кроме единственного способа сломать проход по-настоящему.
+    //
+    // Поэтому разбираем цепочку: сегмент с нашим конфигом обязан быть САМОСТОЯТЕЛЬНОЙ командой,
+    // соединённой через `&&`, без скобок, `|| true`, `;` и комментариев.
+    const segments = script.split('&&').map(x => x.trim())
+    const ours = segments.filter(x => x.includes('tsconfig.tests.json'))
+    expect(ours.length, 'tests-проход не в `pnpm typecheck` — CI его не запустит').toBe(1)
+    expect(
+      ours[0],
+      'провал tests-прохода проглатывается — команда вернёт 0 при настоящей ошибке типа'
+    ).toBe('vue-tsc -p tsconfig.tests.json --noEmit')
+
+    // И ни один ДРУГОЙ проход не должен быть заглушён тем же приёмом — иначе «зелёный typecheck»
+    // перестаёт значить «типы в порядке» целиком, а не только для тестов.
+    for (const seg of segments) {
+      expect(seg, `сегмент «${seg}» глушит свой код возврата`).not.toMatch(/\|\||;|#/)
+    }
+  })
+
+  // ⚠ Честная граница охвата: `tests/visual/**` (Playwright) не проверяется типами НИЧЕМ — ни этим
+  // проходом, ни app-проходом, ни ESLint (он здесь не type-aware). Ревью проверило это вставкой
+  // реальной ошибки типа: `pnpm typecheck` вернул 0. Это осознанно вне скоупа #527 (там про юнит-
+  // тесты), но записано, потому что «исключён, ибо Playwright» звучит как «покрыт где-то ещё», а
+  // это не так — см. docs/project-map.md.
 })

@@ -219,7 +219,7 @@ describe('ensureBankToken', () => {
 
   it('locks per (member, provider, account) and loads by the same key parts', async () => {
     const near = tok({ expiresAt: NOW + 10_000 })
-    // ⚠ Генерик-порт: `vi.fn` генерик не переносит, поэтому приведение при передаче в deps.
+    // ⚠ A generic port: `vi.fn` cannot carry a generic, hence the cast when handing it to deps.
     const withLock = vi.fn(async (_key: string, fn: (q: QueryFn) => Promise<unknown>) => fn(null as unknown as QueryFn))
     const { deps, loads } = fakeDeps({ stored: near })
     await ensureBankToken(near, { ...deps, withLock: withLock as typeof deps.withLock })
