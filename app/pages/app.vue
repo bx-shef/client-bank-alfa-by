@@ -323,7 +323,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     currency: 'BYN',
     purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
     counterparty: {
-      name: 'И***В И***Н И***Ч',
+      name: 'ПЕТРОВ П. П.',
       unp: '',
       account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
@@ -374,7 +374,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     currency: 'BYN',
     purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
     counterparty: {
-      name: 'И***В И***Н И***Ч',
+      name: 'ПЕТРОВ П. П.',
       unp: '',
       account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
@@ -442,7 +442,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     currency: 'BYN',
     purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
     counterparty: {
-      name: 'И***В И***Н И***Ч',
+      name: 'ПЕТРОВ П. П.',
       unp: '',
       account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
@@ -542,7 +542,7 @@ const { status, refresh } = useImportStatus()
 // Admin gate (drives which setup banner shows). Resolved after useB24().init().
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 
-// Chat settings (shared singleton with the SettingsForm slideover). Subscribe to the
+// Chat settings (shared singleton with the SettingsForm on /settings). Subscribe to the
 // cross-instance reload pull so a save in another open instance re-reads live. MUST run
 // SYNCHRONOUSLY in setup — after an `await` the active effect scope is lost and
 // onScopeDispose (inside subscribeReload) wouldn't bind → the pull client would leak.

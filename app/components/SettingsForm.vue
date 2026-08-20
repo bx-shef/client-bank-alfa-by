@@ -49,7 +49,7 @@ onMounted(async () => {
 })
 
 // Explicit Save (starter Save/Cancel pattern — no autosave). cs.save() persists AND
-// notifies other open instances (pull `reload.options`). On success, close the slideover
+// notifies other open instances (pull `reload.options`). On success, close the screen
 // if embedded in one; keep the form open on error so the admin can retry.
 async function saveAndClose(): Promise<void> {
   if (!enabled.value) return
@@ -69,10 +69,10 @@ async function saveAndClose(): Promise<void> {
   emit('close')
 }
 
-// Cancel = discard: re-fetch the server copy and re-seed the textarea editors, then (in the
-// slideover) close. The re-fetch matters even for the slideover: it shares this SAME JS
-// instance (the singleton settings), so without a reload the unsaved edits would still be in
-// `settings` and reappear when the slideover is re-opened. Re-seeding the textareas is needed
+// Cancel = discard: re-fetch the server copy and re-seed the textarea editors, then close. The
+// re-fetch matters because every mount shares this SAME JS instance (the singleton settings), so
+// without a reload the unsaved edits would still be in `settings` and reappear the next time the
+// screen is opened. Re-seeding the textareas is needed
 // because they're seeded once on mount — a bare load() would leave them showing pre-cancel
 // edits that then re-sync back into settings on the next keystroke.
 async function cancel(): Promise<void> {
@@ -189,9 +189,10 @@ const previewSummary = computed(() => {
     class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="admin-gate"
   >
-    <ProseH3 class="mb-0">
+    <!-- h2, а не h3: над формой стоит `h1` навбара страницы, и уровень не должен перескакивать. -->
+    <ProseH2 class="mb-0">
       Настройки доступны только администратору
-    </ProseH3>
+    </ProseH2>
     <ProseP accent="less">
       Обратитесь к администратору вашего Bitrix24 — изменять параметры импорта и уведомлений может только он.
     </ProseP>

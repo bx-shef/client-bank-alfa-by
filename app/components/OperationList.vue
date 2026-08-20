@@ -50,7 +50,13 @@ function toRow(item: StatementItem) {
   return {
     key: `${item.account}|${item.docId}`, // dedup convention: docId unique per account
     icon: credit ? ArrowTopSIcon : ArrowDownSIcon,
-    tint: credit ? 'text-(--ui-color-accent-main-success)' : 'text-(--ui-color-accent-main-alert)',
+    // ⚠ Токен на тему: `accent-main-*` в b24ui — цвет ЗАЛИВКИ, а не текста, и на белом даёт
+    // 2.07:1 (приход) и 3.12:1 (расход) при пороге 4.5:1 — то есть самый важный элемент строки,
+    // сумма, читался бы хуже всего. Для светлой берём тёмные концы палитры (4.77 / 6.07), для
+    // тёмной — те же `accent-main-*` (5.27 / 4.14), они там как раз text-grade.
+    tint: credit
+      ? 'text-(--ui-color-green-90) dark:text-(--ui-color-accent-main-success)'
+      : 'text-(--ui-color-red-80) dark:text-(--ui-color-accent-main-alert)',
     // Плитка направления КРАСИТСЯ, а не остаётся нейтральной. Раньше она брала общий серый токен, и
     // приход от расхода отличался только мелкой стрелкой внутри — при том что сумма справа уже была
     // цветной. Получалось, что один и тот же признак на одной строке заявлен дважды и по-разному:
@@ -58,9 +64,11 @@ function toRow(item: StatementItem) {
     // остаются, поэтому строка читается и без различения цветов.
     tile: credit
     // Семантические токены темы, а не сырая палитра Tailwind: портал вправе переопределить
-    // токены под свою air-тему, и захардкоженный emerald/rose за ней не поедет.
-      ? 'bg-(--ui-color-design-tinted-success-bg) text-(--ui-color-design-tinted-success-content)'
-      : 'bg-(--ui-color-design-tinted-alert-bg) text-(--ui-color-design-tinted-alert-content)',
+    // токены под свою air-тему, и захардкоженный emerald/rose за ней не поедет. Фон — парный
+    // tinted-токен (сам меняется с темой), глиф — тот же text-grade цвет, что у суммы: штатный
+    // `tinted-*-content` на светлом фоне плитки даёт 2.44:1 при пороге 3:1 для иконки-носителя.
+      ? 'bg-(--ui-color-design-tinted-success-bg) text-(--ui-color-green-90) dark:text-(--ui-color-accent-main-success)'
+      : 'bg-(--ui-color-design-tinted-alert-bg) text-(--ui-color-red-80) dark:text-(--ui-color-accent-main-alert)',
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
     name: item.counterparty.name,
     purpose: item.purpose,

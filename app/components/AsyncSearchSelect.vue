@@ -104,6 +104,12 @@ function onOpenChange(open: boolean) {
   }
 }
 
+// The built-in clear button renders as a span with tabindex="-1", so keyboard users could never
+// reach it — and the menu has no "nothing" row, meaning the notification chat could not be turned
+// off from the keyboard at all. `clear` accepts an object whose props are bound AFTER that
+// tabindex, so this is the supported way to make it focusable.
+const clearProps = computed(() => (props.clearable ? { 'tabindex': 0, 'aria-label': 'Очистить' } : undefined))
+
 // Normalize a cleared model to the EMPTY STRING, never undefined/null: consumers store
 // this in `PortalSettings` where the field is typed `string` and compared with `!== ''`
 // (app.vue's «настроено» gate). `undefined` passes that comparison and would report a
@@ -131,7 +137,7 @@ defineExpose({ refresh })
     :value-key="valueKey"
     :placeholder="placeholder"
     :disabled="disabled"
-    :clear="clearable"
+    :clear="clearProps"
     class="w-full"
     @update:open="onOpenChange"
   >

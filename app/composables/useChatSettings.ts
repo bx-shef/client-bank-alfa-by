@@ -15,8 +15,9 @@ import type { RemoteSearchPage } from '~/utils/remoteSearch'
 
 type ChatOption = { value: string, label: string }
 
-// Module-level singleton: the slideover (/app) and the full page (/settings) render
-// the same <SettingsForm/> and must share one settings state (and not double-load).
+// Module-level singleton: /settings renders the same <SettingsForm/> whether the portal opened
+// it in a slider or the browser navigated to it, and both must share one settings state (and not
+// double-load).
 // Safe as a module singleton only because these pages are CLIENT-ONLY (SSG generate,
 // layout `clear`, gated on frame auth) — it never runs during SSR, so there's no
 // cross-request state leak. Do NOT reuse this pattern on an SSR route.
@@ -97,8 +98,8 @@ function create() {
     const opt = await resolveOption(dialogId)
     if (settings[key].dialogId !== dialogId) return
     target.value = opt
-    // Кэшируем ТОЛЬКО настоящее имя: записав сюда сырой id, мы бы навсегда научили
-    // `seedOption` считать его известным именем и больше никогда не спрашивать портал.
+    // Cache the REAL name only: writing the raw id here would teach `seedOption` to treat it
+    // as a known title forever, and the portal would never be asked again.
     if (opt.label !== opt.value) settings[key].title = opt.label
   }
 

@@ -45,12 +45,16 @@ const description = computed(() => {
   // спрашивал. Уверенное число, посчитанное из пустоты, хуже отсутствующего.
   if (!inFrame.value) return undefined
   if (!setup.loaded.value) return 'проверяем…'
+  // Тот же запрет и для СБОЯ чтения: `buildReadiness` посчитает по дефолтам (ноль счетов, опрос
+  // выключен), и «осталось: 6» прозвучит уверенным диагнозом настроенному порталу, у которого мы
+  // просто не смогли спросить.
+  if (setup.error.value) return undefined
   return ready.value ? 'всё настроено' : `осталось: ${pending.value}`
 })
 const pending = computed(() => items.value.filter(i => !i.ok).length)
 
 // «5 минут назад» — recomputed against a ticking clock, not a `Date.now()` frozen inside a computed
-// (a slideover left open would otherwise keep claiming «2 минуты назад» forever).
+// (a screen left open would otherwise keep claiming «2 минуты назад» forever).
 const nowMs = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
 
@@ -83,11 +87,18 @@ onBeforeUnmount(() => {
 
 <template>
   <B24Card
-    title="Готовность к работе"
     :description="description"
     data-testid="setup-readiness"
     class="w-full"
   >
+    <!-- Заголовок слотом, а не пропом: проп `title` рендерится обычным `div`, и единственный
+         заголовок блока выпадал из навигации по заголовкам у скринридера. -->
+    <template #title>
+      <h2 class="text-lg font-semibold">
+        Готовность к работе
+      </h2>
+    </template>
+
     <B24Alert
       v-if="!inFrame"
       color="air-primary"
@@ -114,19 +125,21 @@ onBeforeUnmount(() => {
       </ProseP>
     </div>
 
-    <template v-else>
-      <B24Alert
-        v-if="setup.error.value"
-        role="alert"
-        aria-live="assertive"
-        color="air-primary-alert"
-        :icon="AlertIcon"
-        title="Не удалось прочитать состояние настройки"
-        :description="setup.error.value || 'Попробуйте обновить страницу. Если не поможет — напишите нам через форму обратной связи ниже.'"
-        class="mb-3"
-        data-testid="readiness-error"
-      />
+    <!-- Не удалось спросить сервер — показываем ТОЛЬКО это. Ниже чек-лист считался бы по
+         дефолтам, то есть настроенному порталу рисовались бы красные «Банк подключён» и
+         «Автоопрос включён» — состояние, которого мы не читали. -->
+    <B24Alert
+      v-else-if="setup.error.value"
+      role="alert"
+      aria-live="assertive"
+      color="air-primary-alert"
+      :icon="AlertIcon"
+      title="Не удалось прочитать состояние настройки"
+      :description="`${setup.error.value} Попробуйте обновить страницу — если не поможет, напишите нам через форму обратной связи ниже.`"
+      data-testid="readiness-error"
+    />
 
+    <template v-else>
       <ul class="space-y-3">
         <li
           v-for="i in items"
@@ -140,12 +153,12 @@ onBeforeUnmount(() => {
           <CheckIcon
             v-if="i.ok"
             aria-hidden="true"
-            class="mt-1 text-(--ui-color-accent-main-success) size-5"
+            class="mt-1 text-(--ui-color-green-90) dark:text-(--ui-color-accent-main-success) size-5"
           />
           <Cross30Icon
             v-else
             aria-hidden="true"
-            class="mt-1 text-(--ui-color-accent-main-warning) size-5"
+            class="mt-1 text-(--ui-color-red-80) dark:text-(--ui-color-accent-main-alert) size-5"
           />
           <div class="min-w-0">
             <!-- `flex-wrap`: деталь строки — это номер счёта или название чата, на 375 px

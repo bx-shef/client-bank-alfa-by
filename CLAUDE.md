@@ -298,7 +298,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   тревог. Инвариант закреплён тестом; составную нумерацию админ включает руками, глядя на свои
   назначения). Тесты —
   `recognitionKinds.test.ts` (exhaustive) + `nuxt/recognitionMap.nuxt.test.ts` (рендер/add-remove/предпросмотр); визуально
-  проверен (свет/тёмная, в слайдовере настроек).
+  проверен (свет/тёмная, на странице настроек).
 - `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
   в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
   мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
@@ -405,7 +405,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/composables/useB24.ts` — обёртка над `B24Frame`: `init()` (идемпотентен; no-op вне фрейма —
   когда нет `window.name`), `isInit()`, `get()`/`getOrThrow()`, `targetOrigin()`, `getRequiredRights()`,
   `placementPlace()`/`openAppSlider()`/`closeSlider()` (слайдер портала для своих страниц).
-- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (слайдовер настроек на `/app`; форма монтируется один раз, но переживает
+- `app/composables/useChatSettings.ts` — **синглтон** настроек чата (`/settings` рендерит ту же форму, открыл ли её слайдер портала или обычная навигация; форма монтируется один раз, но переживает
   закрытие панели): `load()`/`save()` `PortalSettings` через `/api/chat-settings` по
   фрейм-токену + `chatFetcher` (транспорт для `AsyncSearchSelect`, ходит в `/api/chat-search`) +
   сид-метки выбранных чатов (кэш-`title` из настроек → недавние → **запрос в портал**
@@ -670,7 +670,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     пер-портальный Redis-кулдаун `SET NX EX` (`claimCooldownSlot`, дефолт 60с, `MANUAL_POLL_COOLDOWN_SEC`;
     claim только при наличии работы), глобальный A8-лимитер ниже по потоку. Инертно (`enqueued:0`) без счетов;
     фильтр `POLLABLE_PROVIDERS` — тот же, что у крона (Альфа **и Приор**, у каждого своя очередь и свой бюджет).
-    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll`; живут в `SettingsForm` (слайдовер на `/app`).
+    UI — `PollNowButton.vue` (admin-гейт, b24ui) + `useManualPoll`; живут в `SettingsForm` (страница `/settings`).
     nginx `limit_req` на роут. `listBankAccountsForPortal` (без расшифровки refresh).
   - `server/utils/b24EventsHandler.ts` — чистый `processB24Event(payload, deps)` — **только чтение**
     (вердикт `application_token`, fail-closed → 200/400/403/503) и решение `action` (`register`/

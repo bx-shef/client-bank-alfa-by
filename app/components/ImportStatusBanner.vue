@@ -9,7 +9,8 @@ import { formatRelativeTime, importStateMeta, pluralRu } from '~/utils/importSta
 // Trust bar: one glance tells "alive / when updated / what reached people".
 // Colour = instant verdict. Presentational — the page owns the data.
 const props = defineProps<{ status: ImportRunSummary }>()
-/** Настройки открываются слайдовером на странице-владельце: отдельной страницы настроек нет. */
+/** Открыть настройки просим страницу-владельца: как именно (слайдер портала или обычная
+ *  навигация) — решает она, компонент об этом знать не должен. */
 const emit = defineEmits<{ openSettings: [] }>()
 
 // `now` is set on mount (client) so relative time is fresh and never causes an
@@ -83,7 +84,7 @@ const chainLine = computed(() => {
       v-if="status.state === 'error'"
       #actions
     >
-      <!-- Просим страницу открыть слайдовер. -->
+      <!-- Просим страницу открыть настройки. -->
       <B24Button
         label="Проверить настройки"
         color="air-primary"

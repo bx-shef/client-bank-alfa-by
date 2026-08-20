@@ -11,6 +11,7 @@ import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_SETTINGS } from '~/config/b24
 // вложенном слайдере; без перехода обычной навигацией кнопка молча ничего бы не делала.
 
 const openSlider = vi.hoisted(() => vi.fn(async () => true))
+const closeSlider = vi.hoisted(() => vi.fn(async () => {}))
 const navigateSpy = vi.hoisted(() => vi.fn(async () => {}))
 const state = vi.hoisted(() => ({ place: undefined as string | undefined }))
 
@@ -19,6 +20,7 @@ vi.mock('~/composables/useB24', async () => {
   return {
     useB24: () => makeMockB24({
       openAppSlider: openSlider,
+      closeSlider,
       placementOptions: state.place ? { place: state.place } : {}
     })
   }
@@ -33,6 +35,7 @@ afterEach(() => {
   openSlider.mockClear()
   openSlider.mockImplementation(async () => true)
   navigateSpy.mockClear()
+  closeSlider.mockClear()
   state.place = undefined
 })
 
@@ -97,5 +100,44 @@ describe('экран, открытый слайдером, знает об эт�
     const wrapper = await mountSuspended(await import('~/pages/import.vue').then(m => m.default), { route: '/import?preview=1' })
     await flushPromises()
     expect(wrapper.text()).toContain('К сводке операций')
+  })
+})
+
+describe('страница настроек закрывается так, как её открыли', () => {
+  // Форму подменяем заглушкой: предмет проверки — не она, а трактовка её события `close`
+  // страницей. Сама форма вне портала прячет Save/Cancel (persistence там инертна), поэтому
+  // кликать в ней было бы нечего.
+  const FormStub = {
+    template: '<button data-testid="stub-close" @click="$emit(\'close\')">закрыть</button>',
+    emits: ['close']
+  }
+
+  async function mountSettings() {
+    const page = await import('~/pages/settings.vue').then(m => m.default)
+    const wrapper = await mountSuspended(page, {
+      route: '/settings?preview=1',
+      global: { stubs: { SettingsForm: FormStub } }
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="stub-close"]').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('в слайдере сворачивает слайдер и НЕ навигирует', async () => {
+    // Обратной навигации тут быть не должно: за слайдером нет истории, а переход на /app
+    // открыл бы второе приложение поверх работы.
+    state.place = APP_SLIDER_PLACE_SETTINGS
+    await mountSettings()
+    expect(closeSlider).toHaveBeenCalled()
+    expect(navigateSpy).not.toHaveBeenCalled()
+  })
+
+  it('обычной страницей уводит на /app', async () => {
+    // Вне портала сворачивать нечего — без перехода экран стал бы тупиком.
+    state.place = undefined
+    await mountSettings()
+    expect(navigateSpy).toHaveBeenCalledWith('/app')
+    expect(closeSlider).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { nextTick } from 'vue'
 import AsyncSearchSelect from '~/components/AsyncSearchSelect.vue'
 
 // Render/wiring test. The menu content (states / load-more) only renders while the
@@ -77,7 +78,23 @@ describe('AsyncSearchSelect: сброс выбора', () => {
       props: { fetcher, modelValue: 'chat42', clearable: true }
     })
     await wrapper.setProps({ modelValue: undefined })
-    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+    await nextTick()
+
+    const emitted = wrapper.emitted('update:modelValue') as unknown[][] | undefined
+    expect(emitted?.at(-1)?.[0]).toBe('')
+  })
+
+  it('null от компонента приводится к пустой строке так же, как undefined', async () => {
+    // b24ui чистит значение своим `ComboboxCancel`; какой именно из двух «пустых» он отдаст,
+    // деталь его реализации — гейт «настроено» не должен от неё зависеть.
+    const fetcher = vi.fn(async () => ({ items: [], total: 0 }))
+    const wrapper = await mountSuspended(AsyncSearchSelect, {
+      props: { fetcher, modelValue: 'chat42', clearable: true }
+    })
+    await wrapper.setProps({ modelValue: null as never })
+    await nextTick()
+    await nextTick()
 
     const emitted = wrapper.emitted('update:modelValue') as unknown[][] | undefined
     expect(emitted?.at(-1)?.[0]).toBe('')
