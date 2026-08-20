@@ -100,3 +100,24 @@ describe('AsyncSearchSelect: сброс выбора', () => {
     expect(emitted?.at(-1)?.[0]).toBe('')
   })
 })
+
+describe('AsyncSearchSelect: сброс с клавиатуры', () => {
+  it('кнопка очистки фокусируема И срабатывает по Enter/Space', async () => {
+    // Штатная кнопка b24ui — `span` с `tabindex="-1"` и только click-обработчиком. Один
+    // `tabindex: 0` сделал бы хуже, чем было: Tab остановился бы на элементе, который
+    // объявляется обычным текстом и ничего не делает по клавише.
+    const fetcher = vi.fn(async () => ({ items: [], total: 0 }))
+    const wrapper = await mountSuspended(AsyncSearchSelect, {
+      props: { fetcher, modelValue: 'chat42', clearable: true }
+    })
+    const clear = wrapper.find('[aria-label="Очистить"]')
+    expect(clear.exists()).toBe(true)
+    expect(clear.attributes('tabindex')).toBe('0')
+    expect(clear.attributes('role')).toBe('button')
+
+    await clear.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    const emitted = wrapper.emitted('update:modelValue') as unknown[][] | undefined
+    expect(emitted?.at(-1)?.[0]).toBe('')
+  })
+})

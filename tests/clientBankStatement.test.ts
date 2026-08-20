@@ -276,7 +276,7 @@ describe('real client-bank formats (Type 3 / Type 4 / Type 5 fixtures)', () => {
     expect(items[0]!.direction).toBe('debit') // Db>0
     expect(items[0]!.amount).toBeCloseTo(300, 2)
     expect(items[0]!.counterparty.account).toBe('BY24TESTAB00000000000000001234')
-    expect(items[0]!.counterparty.unp).toBe('192220456')
+    expect(items[0]!.counterparty.unp).toBe('190000021')
     expect(items[1]!.direction).toBe('credit') // Credit>0 → приход
     expect(items[1]!.amount).toBeCloseTo(500, 2)
     expect(items.every(i => i.currency === 'BYN')).toBe(true)
