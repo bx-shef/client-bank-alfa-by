@@ -1,0 +1,65 @@
+// Планирование продления банковских токенов (#489).
+//
+// ⚠ Вынесено из `server/plugins/queue.ts` НЕ ради красоты, а чтобы его можно было запустить ВНЕ
+// гейта Redis. Плагин очередей начинается с `if (!queueEnabled()) return`, и продление жило внутри
+// — то есть простой Redis уносил с собой и банковские подключения. Банку до нашей очереди дела
+// нет: продлению нужны Postgres и сам банк, и ничего больше.
+//
+// Цена промаха несимметрична и измерена: у Альфы refresh живёт ~10 часов, а лечится его смерть
+// походом ВЛАДЕЛЬЦА СЧЁТА в интернет-банк. То есть каждый пропущенный тик оплачивает не сервис, а
+// клиент — и оплачивает действием, которое нельзя сделать за него.
+
+import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, runBankKeepAlive } from './bankTokenKeepAlive'
+import { runKeepAliveTick } from './keepAliveTick'
+import { markKeepAliveStarted, recordKeepAlivePulse } from './keepAliveState'
+import { ensureBankToken } from './ensureBankToken'
+import { getBankToken, listAllBankAccountInfo, markBankRefreshAttempt, type BankAccountRef, type BankToken } from './bankTokenStore'
+import { dbQuery } from '../db/client'
+import { withSpan } from './telemetrySpan'
+
+/** Живая проводка движка продления на БД и банк. */
+export function liveBankKeepAliveDeps() {
+  return {
+    now: Date.now,
+    listAccounts: () => listAllBankAccountInfo(dbQuery),
+    getToken: (ref: BankAccountRef) => getBankToken(dbQuery, ref.memberId, ref.provider, ref.accountKey),
+    // ⚠ Отметка попытки — не деталь учёта, а то, что делает редкие повторы для просроченных
+    // подключений редкими: без неё «пробовать раз в 6 часов» превращается в «пробовать каждый тик».
+    markAttempt: (ref: BankAccountRef, nowMs: number) => markBankRefreshAttempt(dbQuery, ref, nowMs),
+    // ⚠ `force` обязателен. Без него `ensureBankToken` смотрит на срок ACCESS-токена — ровно не тот
+    // сигнал: access бывает свежим, пока refresh за ним доживает последние часы. Именно поэтому
+    // обновление «по дороге» никогда не спасало.
+    refresh: (token: BankToken) => ensureBankToken(token, undefined, { force: true }),
+    log: (m: string) => console.info(m),
+    warn: (m: string) => console.warn(m)
+  }
+}
+
+/**
+ * Завести таймер продления. Возвращает сам таймер, чтобы вызывающий мог его снять на closing.
+ *
+ * ⚠ Первый прогон — НЕМЕДЛЕННО, а не через интервал: сервис мог простоять ночь, и подключение за
+ * это время как раз доживает. Ждать ещё час после старта означало бы гарантированно опоздать в
+ * самом частом сценарии.
+ */
+export function scheduleBankKeepAlive(minutesRaw?: string): NodeJS.Timeout {
+  const ms = bankKeepAliveIntervalMs(Number(minutesRaw || BANK_KEEP_ALIVE_MINUTES))
+  const deps = liveBankKeepAliveDeps()
+  // Сам тик — в `runKeepAliveTick`, чтобы инвариант «пульс только на ЗАВЕРШЁННОМ прогоне» можно
+  // было проверить тестом: пока он жил try/catch'ем в плагине, его можно было вывернуть наизнанку
+  // (писать пульс в `catch`), не уронив ни одного теста, — погасив ровно ту тревогу, ради которой
+  // пульс и заведён.
+  const tick = () => runKeepAliveTick({
+    run: () => withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(deps)),
+    record: recordKeepAlivePulse,
+    now: Date.now,
+    error: (m: string) => console.error(m)
+  })
+  // Отмечаем, что таймер ЗАПЛАНИРОВАН: иначе «прогонов ещё не было» неотличимо от «не
+  // запускается», и регрессия, при которой продление падает с первого же тика, молчала бы вечно.
+  markKeepAliveStarted(Date.now())
+  const timer = setInterval(tick, ms)
+  void tick()
+  console.info('[queue] bank token keep-alive scheduled (every %d min, #489) — вне зависимости от Redis', ms / 60_000)
+  return timer
+}

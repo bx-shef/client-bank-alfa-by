@@ -4,7 +4,10 @@ import {
   BANK_KEEP_ALIVE_MINUTES, BANK_REFRESH_TTL_SEC, MAX_BANK_KEEP_ALIVE_BATCH,
   MIN_BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, maxBankKeepAliveMinutes,
   narrowestBandMs, refreshAtAgeMs, runBankKeepAlive,
-  selectBankAccountsNearExpiry, type BankKeepAliveDeps
+  selectBankAccountsNearExpiry, type BankKeepAliveDeps,
+  EXPIRED_RETRY_INTERVAL_MS,
+  expiredRetryDue,
+  KEEP_ALIVE_BAND
 } from '../server/utils/bankTokenKeepAlive'
 import { connectionHealth } from '../app/utils/bankTokenLifetime'
 
@@ -43,7 +46,10 @@ describe('selectBankAccountsNearExpiry', () => {
 
   it('граница считается от СРОКА ЖИЗНИ ПРОВАЙДЕРА, а не одна на всех', () => {
     // Один и тот же возраст: для Альфы (10 ч) это уже пора, для Приора (12 ч) ещё нет.
-    const age = NOW - 9 * HOUR
+    // ⚠ Возраст подобран под ПОЛОСУ: обновляем с половины срока (#489), значит для Альфы порог
+    // 5 ч, для Приора 6 ч. Прежний пример брал 9 ч — он различал банки только при полосе 0.2 и
+    // молча перестал бы что-либо различать, останься здесь константа.
+    const age = NOW - 5.5 * HOUR
     const rows = [acc({ connectedAt: age }), acc({ provider: 'prior-by', accountKey: 'P1', connectedAt: age })]
     const r = selectBankAccountsNearExpiry(rows, NOW)
     expect(r.due.map(d => d.provider)).toEqual(['alfa-by'])
@@ -88,14 +94,19 @@ describe('selectBankAccountsNearExpiry', () => {
     expect(r.due).toHaveLength(1)
   })
 
-  it('⚠ старше ВСЕГО срока жизни — «expired», и мы его НЕ дёргаем', () => {
-    // Отозванный банком грант не обновляет `updated_at` — рефреш падает раньше сохранения.
-    // Без верхней границы такая строка сортируется первой, занимает капнутый батч и приносит
-    // банку новый запрос НА КАЖДОМ тике, вечно. Это и есть путь к «вы нас злоупотребляете»,
-    // достижимый без единой ошибки в настройке — просто накоплением отозванных подключений.
-    const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - 11 * HOUR })], NOW)
-    expect(r.due).toEqual([])
+  it('⚠ старше ВСЕГО срока жизни — «expired», но шанс банк сказать «нет» мы ДАЁМ', () => {
+    // ⚠ РЕШЕНИЕ ИЗМЕНИЛОСЬ (#489), и прежний тест закреплял именно старое. Он защищал от реальной
+    // беды — отозванный грант не обновляет `updated_at`, поэтому без верхней границы такая строка
+    // приносила бы банку запрос НА КАЖДОМ тике вечно. Но лекарство оказалось хуже: живой прогон
+    // дал `expired=2, refreshed=0, failed=0` — банк не спросили ни разу, а срок это НАША оценка из
+    // документации. От долбёжки теперь защищает не запрет, а редкость (`EXPIRED_RETRY_INTERVAL_MS`)
+    // и то, что живые строки идут первыми в капнутом батче.
+    const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - 11 * HOUR, lastAttemptAt: 0 })], NOW)
     expect(r.expired).toHaveLength(1)
+    expect(r.due, 'просроченной строке не дали ни одного шанса').toHaveLength(1)
+    // А вот сразу после попытки — не дёргаем.
+    const again = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - 11 * HOUR, lastAttemptAt: NOW - 60_000 })], NOW)
+    expect(again.due).toEqual([])
   })
 
   it('мёртвая строка не вытесняет живые из капнутого батча', () => {
@@ -188,11 +199,18 @@ describe('runBankKeepAlive', () => {
     await expect(runBankKeepAlive(d)).rejects.toThrow('db down')
   })
 
-  it('истёкшие подключения названы в логе и НЕ ретраятся', async () => {
-    const { d, warn } = deps({ listAccounts: async () => [acc({ accountKey: 'DEAD', connectedAt: NOW - 50 * HOUR })] })
+  it('истёкшие подключения НАЗВАНЫ в логе, и сообщение не обещает лишнего', async () => {
+    // ⚠ Прежний текст говорил «NOT retried — reconnect required». Это было правдой о коде и
+    // НЕПРАВДОЙ о мире: срок — наша оценка из документации, решает банк. Владелец по такому
+    // сообщению пошёл бы переподключать то, что вот-вот воскреснет само (#489).
+    const { d, warn } = deps({ listAccounts: async () => [acc({ accountKey: 'DEAD', connectedAt: NOW - 50 * HOUR, lastAttemptAt: NOW - 60_000 })] })
     const s = await runBankKeepAlive(d)
+    // Только что пробовали — в этот тик не дёргаем, но в логе строка обязана быть названа.
     expect(s).toMatchObject({ selected: 0, expired: 1, failed: 0 })
-    expect(warn.some(w => w.includes('DEAD') && w.includes('NOT retried'))).toBe(true)
+    const line = warn.find(w => w.includes('DEAD'))
+    expect(line).toBeTruthy()
+    expect(line, 'сообщение снова обещает, что повторов не будет').not.toMatch(/NOT retried/)
+    expect(line).toMatch(/the bank has the final say/)
   })
 
   it('длинный список не разворачивается в одну гигантскую строку лога', async () => {
@@ -255,10 +273,12 @@ describe('каденция и инварианты', () => {
     expect(BANK_REFRESH_TTL_SEC['alfa-by']).toBe(36_000) // 10 ч, подтверждено вживую (#488)
     expect(BANK_REFRESH_TTL_SEC['prior-by']).toBeGreaterThan(0)
     expect(BANK_REFRESH_TTL_SEC.manual).toBe(0) // онлайн-токена нет
-    expect(refreshAtAgeMs('alfa-by')).toBe(8 * HOUR)
-    // ⚠ Пин ЗНАЧЕНИЯ, а не неравенства: перепутанный множитель в формуле полосы дал бы 32 ч
-    // вместо 2 ч, и проверка «каденция меньше полосы» осталась бы зелёной на сломанной формуле.
-    expect(narrowestBandMs()).toBe(2 * HOUR)
+    // ⚠ Полоса 0.5 (#489): обновляем с ПОЛОВИНЫ срока, а не с 80 %. При 0.2 окно для Альфы было
+    // 8..10 ч — два часовых тика, и один пропущенный деплой хоронил подключение.
+    expect(refreshAtAgeMs('alfa-by')).toBe(5 * HOUR)
+    // ⚠ Пин ЗНАЧЕНИЯ, а не неравенства: перепутанный множитель в формуле полосы дал бы 20 ч
+    // вместо 5 ч, и проверка «каденция меньше полосы» осталась бы зелёной на сломанной формуле.
+    expect(narrowestBandMs()).toBe(5 * HOUR)
     expect(BANK_KEEP_ALIVE_MINUTES).toBe(60) // документировано в .env.example и QUEUES.md
   })
 })
@@ -282,12 +302,12 @@ describe('проводка в кроне', () => {
   it('обновление вызывается ПРИНУДИТЕЛЬНО', async () => {
     // Без `force` смотрели бы на срок access-токена — тот сигнал, которого как раз не хватает.
     const { readFileSync } = await import('node:fs')
-    const src = readFileSync(new URL('../server/plugins/queue.ts', import.meta.url), 'utf8')
-    const from = src.indexOf('bankKeepAliveDeps')
-    const to = src.indexOf('bankKeepAliveTimer = setInterval')
-    expect(from).toBeGreaterThan(0)
-    expect(to).toBeGreaterThan(from)
-    expect(src.slice(from, to)).toContain('force: true')
+    // ⚠ Проводка переехала из плагина в отдельный модуль (#489) — ровно затем, чтобы её можно было
+    // завести ВНЕ гейта Redis. Смотреть надо туда, иначе тест зелен на пустом месте.
+    const src = readFileSync(new URL('../server/utils/bankKeepAliveSchedule.ts', import.meta.url), 'utf8')
+    expect(src).toContain('force: true')
+    // И там же — отметка попытки: без неё редкие повторы просроченных станут повторами на каждом тике.
+    expect(src).toContain('markAttempt')
   })
 })
 
@@ -311,11 +331,15 @@ describe('угаданный срок жизни не хоронит подкл�
     expect(sel.due).toHaveLength(1)
   })
 
-  it('Альфа старше своего ИЗМЕРЕННОГО срока — по-прежнему «истекло», пол против долбёжки на месте', () => {
+  it('Альфа старше ИЗМЕРЕННОГО срока — «истекло» для интерфейса, но повтор всё равно будет', () => {
+    // ⚠ Пол против долбёжки остался, но сменил природу: раньше это был ЗАПРЕТ (никогда), теперь —
+    // РЕДКОСТЬ. Запрет означал, что банк не спросят вообще, а лечится такое подключение только
+    // походом владельца счёта в интернет-банк — цена ошибки в нашу сторону несопоставима с ценой
+    // одного неудачного HTTP-запроса.
     const ttlMs = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
     const sel = selectBankAccountsNearExpiry([row('alfa-by', ttlMs + 60_000)], NOW)
     expect(sel.expired).toHaveLength(1)
-    expect(sel.due).toHaveLength(0)
+    expect(sel.due).toHaveLength(1)
   })
 
   it('решение сервера и подпись в интерфейсе не расходятся ни для одного банка', () => {
@@ -362,5 +386,102 @@ describe('истёкшее согласие не тратит запросы б�
     const sel = selectBankAccountsNearExpiry([alfa], T)
     expect(sel.expired).toEqual([])
     expect(sel.due).toHaveLength(1)
+  })
+})
+
+describe('подключение не хоронится без вопроса к банку (#489, живой прогон 2026-08-20)', () => {
+  const row = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
+    id: 1, memberId: 'M', provider: 'alfa-by', accountKey: 'BY09ALFA1',
+    connectedAt: 0, lastAttemptAt: 0, expiresAt: 0, hasRefresh: true, consentExpiresAt: 0, ...over
+  })
+  const TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+
+  it('строка старше срока ПОПАДАЕТ в обновление, а не только в expired', () => {
+    // ⚠ Это и есть исходный дефект. Живой лог: `expired=2, refreshed=0, failed=0` — банк не
+    // спросили НИ РАЗУ, подключение похоронили мы сами, по своей же оценке срока. А срок взят из
+    // документации банка, не из ответа: ошибка в нашу сторону стоит одного неудачного запроса,
+    // ошибка в другую — похода владельца счёта в интернет-банк за тем, что не ломалось.
+    const now = TTL + 60_000
+    const sel = selectBankAccountsNearExpiry([row({ connectedAt: 0, lastAttemptAt: 0 })], now)
+    expect(sel.expired).toHaveLength(1) // по-прежнему видно, что она просрочена
+    expect(sel.due, 'просроченная строка не попала в обновление').toHaveLength(1)
+  })
+
+  it('но пробуется РЕДКО — иначе это долбление отозванного гранта', () => {
+    const now = TTL + EXPIRED_RETRY_INTERVAL_MS * 2
+    // Только что пробовали — ждём.
+    const fresh = selectBankAccountsNearExpiry([row({ connectedAt: 0, lastAttemptAt: now - 60_000 })], now)
+    expect(fresh.due).toHaveLength(0)
+    expect(fresh.expired).toHaveLength(1)
+    // Интервал прошёл — даём шанс.
+    const stale = selectBankAccountsNearExpiry([row({ connectedAt: 0, lastAttemptAt: now - EXPIRED_RETRY_INTERVAL_MS - 1 })], now)
+    expect(stale.due).toHaveLength(1)
+  })
+
+  it('«не пробовали ни разу» ⇒ шанс НЕМЕДЛЕННО', () => {
+    // ⚠ Ровно тот случай, что случился: подключение пережило простой сервиса, перевалило за срок и
+    // было объявлено мёртвым, ни разу не будучи спрошенным. Ждать ещё шесть часов здесь — значит
+    // повторить ту же ошибку, только медленнее.
+    expect(expiredRetryDue(0, Date.now())).toBe(true)
+    const sel = selectBankAccountsNearExpiry([row({ connectedAt: 0, lastAttemptAt: 0 })], TTL * 5)
+    expect(sel.due).toHaveLength(1)
+  })
+
+  it('живые обрабатываются ПЕРВЫМИ, просроченные — в хвосте', () => {
+    // ⚠ Состав батча порядок не меняет (просроченные и так режутся по остатку мест), но порядок
+    // ОБРАБОТКИ важен: прогон идёт последовательно, и если он оборвётся на полпути — по таймауту,
+    // рестарту, сетевому затыку, — успеть должны те, у кого шанс выше. У мёртвой строки он заведомо
+    // ниже, чем у живой.
+    const sel = selectBankAccountsNearExpiry([
+      row({ accountKey: 'DEAD', connectedAt: 0, lastAttemptAt: 0 }),
+      row({ accountKey: 'ALIVE', connectedAt: TTL * 5 - TTL * 0.7, lastAttemptAt: 0 })
+    ], TTL * 5)
+    expect(sel.due.map(d => d.accountKey)).toEqual(['ALIVE', 'DEAD'])
+  })
+
+  it('окно обновления — ПОЛОВИНА срока, а не последние 20 %', () => {
+    // ⚠ При полосе 0.2 окно для Альфы было 8..10 часов — ДВА часовых тика. Любой перерыв длиннее
+    // двух часов ровно в этом окне (деплой, простой Redis, остановка крон-инстанса) означал, что
+    // подключение перевалит за срок. Один пропущенный тик не должен стоить владельцу счёта похода
+    // в банк.
+    expect(KEEP_ALIVE_BAND).toBeGreaterThanOrEqual(0.5)
+    const windowMs = TTL * KEEP_ALIVE_BAND
+    const ticksInWindow = windowMs / (BANK_KEEP_ALIVE_MINUTES * 60_000)
+    expect(ticksInWindow, 'шансов на обновление меньше четырёх — слишком хрупко').toBeGreaterThanOrEqual(4)
+  })
+
+  it('попытка отмечается ДО похода в банк', async () => {
+    // Между запросом и ответом до 15 секунд; умри процесс внутри этого окна — метка всё равно
+    // должна остаться, иначе просроченная строка пробуется на каждом тике.
+    const order: string[] = []
+    await runBankKeepAlive({
+      now: () => TTL * 5,
+      listAccounts: async () => [row({ connectedAt: 0, lastAttemptAt: 0 })],
+      getToken: async () => ({ memberId: 'M', provider: 'alfa-by', accountKey: 'BY09ALFA1', accessToken: 'A', refreshToken: 'R', expiresAt: 1 }),
+      markAttempt: async () => {
+        order.push('mark')
+      },
+      refresh: async (t) => {
+        order.push('refresh')
+        return { ...t, expiresAt: 2 }
+      }
+    })
+    expect(order).toEqual(['mark', 'refresh'])
+  })
+
+  it('сообщение больше не обещает, что повторов не будет', async () => {
+    // ⚠ Прежний текст говорил «NOT retried — reconnect required». Это было правдой о коде и
+    // неправдой о мире, и владелец по нему пошёл бы переподключать то, что вот-вот воскреснет.
+    const warns: string[] = []
+    await runBankKeepAlive({
+      now: () => TTL * 5,
+      listAccounts: async () => [row({ connectedAt: 0, lastAttemptAt: TTL * 5 })],
+      getToken: async () => null,
+      refresh: async t => t,
+      warn: m => warns.push(m)
+    })
+    const line = warns.find(w => w.includes('past their assumed refresh lifetime'))
+    expect(line).toBeTruthy()
+    expect(line).not.toMatch(/NOT retried/)
   })
 })

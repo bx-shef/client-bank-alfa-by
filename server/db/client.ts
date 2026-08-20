@@ -123,6 +123,12 @@ ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS consent_expires_at BIGINT NOT N
 --
 -- BIGSERIAL на существующей таблице заполняет значения сразу; уникальность держит индекс ниже.
 ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+  -- Когда мы последний раз ПЫТАЛИСЬ обновить токен, независимо от исхода (#489).
+  -- ⚠ Это не то же, что updated_at: тот означает «когда мы последний раз ДЕРЖАЛИ свежую пару» и
+  -- штампуется только успехом. Без отдельной метки неудачная попытка неотличима от отсутствия
+  -- попытки, и подключение, которое мы объявили мёртвым по своим часам, пришлось бы либо не
+  -- пробовать никогда (так и было — оно умирало окончательно), либо долбить каждый тик.
+  ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS last_attempt_at BIGINT NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_tokens_id_key ON bank_tokens (id);
 
 -- Retired table (§9.3 #6): allocation idempotency/audit moved to the distributions
