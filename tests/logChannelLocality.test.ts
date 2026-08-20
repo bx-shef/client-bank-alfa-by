@@ -22,8 +22,28 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, root)), 'u
 /** Драйверы, при которых логи остаются на хосте. Всё остальное куда-то их ОТПРАВЛЯЕТ. */
 const LOCAL_DRIVERS = ['json-file', 'local', 'none']
 
-/** Образы/имена сервисов, чьё появление означает «логи теперь собирают». */
-const SHIPPER_MARKERS = /fluentd|fluent-bit|logstash|filebeat|vector|promtail|loki|datadog|sentry|splunk|graylog|newrelic|logdna/i
+/**
+ * Значения лог-драйверов docker, которые отправляют логи НАРУЖУ. Полный список драйверов docker
+ * закрыт и короток, поэтому здесь allowlist наоборот работает: перечислить удалённые проще и
+ * надёжнее, чем угадывать форму записи. `\b` обязателен — без него `splunk` матчился бы в
+ * `SPLUNKY_NAME`, а ревью поймало ровно такой ложный красный на `EMBEDDING_VECTOR_DIM`.
+ */
+const REMOTE_DRIVERS = /\b(gelf|fluentd|syslog|journald|awslogs|splunk|gcplogs|etwlogs|logentries)\b/i
+
+/** Образы/имена сервисов, чьё появление означает «логи теперь собирают».
+ *  ⚠ `otel`/`opentelemetry` тут НЕТ намеренно: проект легитимно возит трассы через OTLP
+ *  (`OTEL_EXPORTER_*` в compose), и маркер по этому слову давал бы красный на здоровом файле.
+ *  Телеметрия — отдельный канал, и `member_id` в неё уходит уже хешированным. */
+const SHIPPER_MARKERS = /\b(fluentd|fluent-bit|logstash|filebeat|promtail|loki|datadog|sentry|graylog|newrelic|logdna|alloy|rsyslog|syslog-ng|metricbeat|log-?agent|log-?forwarder|log-?shipper|log-?collector)\b/i
+
+/**
+ * ⚠ Список имён — ДЕНИЛИСТ, и он проигрывает любому имени, которого в нём нет
+ * (`registry.internal/acme-log-agent` — ревью показало это на живом примере). Поэтому рядом стоит
+ * СТРУКТУРНАЯ проверка, не зависящая от названий: сборщику логов нужен доступ к их файлам, а он в
+ * compose выглядит одинаково у всех — монтированием каталога логов docker или сокета демона.
+ * Имя можно выбрать любое, а это — нет.
+ */
+const LOG_ACCESS_MOUNT = /\/var\/lib\/docker\/containers|\/var\/log\b|docker\.sock/
 
 /**
  * Значения `driver:` из блоков `logging:` / `x-logging:` — и только из них. Блок опознаётся по
@@ -53,15 +73,34 @@ function loggingDrivers(src: string): string[] {
 }
 
 describe('логи остаются локальным каналом (#525)', () => {
+  // ⚠ Не `^docker-compose*`: ревью показало, что достаточно назвать файл `monitoring-stack.yml`
+  // (или `compose.prod.yml` — современное имя по умолчанию у docker), и он не попадал в перебор
+  // ВООБЩЕ, даже не читался. Никакой маскировки внутри YAML для обхода не требовалось.
   const composeFiles = readdirSync(fileURLToPath(root))
-    .filter(f => /^docker-compose.*\.ya?ml$/.test(f))
+    .filter(f => /\.ya?ml$/.test(f) && /compose|stack|docker/i.test(f))
 
   it('в репозитории есть compose-файлы для проверки', () => {
     // Иначе тест зелёный по пустому множеству и не значит ничего.
     expect(composeFiles.length).toBeGreaterThan(0)
   })
 
-  it.each(composeFiles)('%s: лог-драйвер локальный', (file) => {
+  it.each(composeFiles)('%s: нигде не упомянут не-локальный лог-драйвер', (file) => {
+    // ⚠ Проверка НЕ ЗАВИСИТ ОТ СТРУКТУРЫ, и это следствие разбора ревью. Построчный парсер по
+    // отступам обходился шестью способами, каждый из которых — валидный `docker compose config`:
+    // inline-flow (`logging: {driver: gelf}`), одинарные кавычки, комментарий на строке заголовка,
+    // якорь под другим именем (`x-ship:` вместо `x-logging:`), и просто другое имя файла. Гоняться
+    // за формой YAML регуляркой — проигрышная игра; вместо этого ищем сами ЗНАЧЕНИЯ драйверов,
+    // которые отправляют логи наружу. Как бы их ни записали, слово в файле останется.
+    const active = read(file).split('\n').filter(l => !/^\s*#/.test(l)).join('\n')
+    const hit = active.match(REMOTE_DRIVERS)
+    expect(
+      hit,
+      `в ${file} упомянут удалённый лог-драйвер (${hit?.[0]}) — логи сменили класс канала, `
+      + 'и решение печатать `member_id` открыто (docs/PRIVACY.md §Логи, #525) надо пересмотреть'
+    ).toBeNull()
+  })
+
+  it.each(composeFiles)('%s: локальный драйвер объявлен явно (разбор по-прежнему видит блок)', (file) => {
     // ⚠ Берём `driver:` ТОЛЬКО из блоков `logging:`/`x-logging:`, по отступу. Широкий поиск любого
     // `driver:` не годится: в compose их несколько видов, и `driver: bridge` у сети — это не про
     // логи вовсе. Такой тест падал бы на здоровом файле, а тест, который врёт, снимают.
@@ -83,6 +122,19 @@ describe('логи остаются локальным каналом (#525)', (
         + 'и решение печатать `member_id` открыто (docs/PRIVACY.md §Логи, #525) надо пересмотреть'
       ).toBe(true)
     }
+  })
+
+  it.each(composeFiles)('%s: никто не смонтировал себе доступ к логам', (file) => {
+    // ⚠ Не про имена: это ловит сборщик, названный как угодно. Наши сервисы каталог логов docker и
+    // сокет демона не монтируют — ни один, поэтому совпадение здесь означает ровно «кто-то получил
+    // доступ к логам всех контейнеров», а зачем — уже второй вопрос.
+    const active = read(file).split('\n').filter(l => !/^\s*#/.test(l)).join('\n')
+    const hit = active.match(LOG_ACCESS_MOUNT)
+    expect(
+      hit,
+      `в ${file} появился доступ к логам контейнеров (${hit?.[0]}) — логи сменили класс канала, `
+      + 'и решение печатать `member_id` открыто (docs/PRIVACY.md §Логи, #525) надо пересмотреть'
+    ).toBeNull()
   })
 
   it.each(composeFiles)('%s: нет сервиса-сборщика логов', (file) => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { runBankKeepAlive } from '../server/utils/bankTokenKeepAlive'
 
 // Гард диагностического скрипта опроса (#522).
 //
@@ -10,7 +12,8 @@ import { join } from 'node:path'
 // на здоровье, ровно тогда, когда её открыли из-за подозрений.
 
 const ROOT = join(import.meta.dirname, '..')
-const SCRIPT = readFileSync(join(ROOT, 'scripts', 'prod-poll-check.sh'), 'utf8')
+const POLL_CHECK_PATH = join(ROOT, 'scripts', 'prod-poll-check.sh')
+const SCRIPT = readFileSync(POLL_CHECK_PATH, 'utf8')
 const WORKER = readFileSync(join(ROOT, 'server/queue/worker.ts'), 'utf8')
 const OBSERV = readFileSync(join(ROOT, 'server/queue/workerObservability.ts'), 'utf8')
 const PLUGIN = readFileSync(join(ROOT, 'server/plugins/queue.ts'), 'utf8')
@@ -90,30 +93,105 @@ describe('диагностика опроса ищет маркеры, кото�
 
 describe('тишина в продлении токенов читается как АВАРИЯ, а не как норма (#504)', () => {
   // ⚠ Подсказка в этой секции раньше утверждала обратное — «пусто здесь ХОРОШО, строка печатается
-  // только при сбое». Это неверно: сводка прогона (`selected=… refreshed=…`) уходит в `deps.log`
-  // БЕЗУСЛОВНО на каждом завершённом скане, раз в час. Значит пустая секция за окно длиннее часа
-  // означает «продление не отработало ни разу» — ровно тот отказ, из-за которого подключение Альфы
-  // умирало за ночь. Диагностика, называющая аварию нормой, вреднее отсутствующей.
+  // только при сбое». Это неверно: сводка прогона уходит в `deps.log` БЕЗУСЛОВНО на каждом
+  // завершённом скане, раз в час. Значит пустая секция за окно длиннее часа означает «продление не
+  // отработало ни разу» — ровно тот отказ, из-за которого подключение Альфы умирало за ночь.
+  //
+  // ⚠ Проверки здесь ВЫПОЛНЯЮТ код, а не грепают его текст, и это не педантизм. Первая редакция
+  // грепала — и ревью прошло её насквозь двумя мутациями: ранний `return` перед сводкой и
+  // оборачивающий `if` на соседней строке гасили тихий тик, оставляя саму строку нетронутой, а
+  // тест зелёным. Ровно тот класс, который CLAUDE.md уже описывал про `shouldLogOperation`:
+  // «текстовый гард такое не ловит принципиально». Второй раз наступать не будем.
 
-  it('сводка прогона в коде действительно БЕЗУСЛОВНА', () => {
-    // Вся ветка ниже держится на этом. Стань строка условной — и «пусто» снова станет нормой,
-    // а подсказка — снова ложью, только в другую сторону.
-    const src = readFileSync(new URL('../server/utils/bankTokenKeepAlive.ts', import.meta.url), 'utf8')
-    const summary = src.split('\n').find(l => l.includes('[bank-keepalive] selected='))
-    expect(summary, 'сводка прогона пропала из keep-alive').toBeTruthy()
-    expect(summary!.trim(), 'сводка стала условной — подсказка про пустоту больше не верна')
-      .toMatch(/^deps\.log\?\.\(/)
+  it('на ТИХОМ тике (обновлять нечего) сводка всё равно печатается', async () => {
+    // Это и есть спорный случай: если молчать, когда нечего делать, то «пусто» снова становится
+    // нормой, и отличить его от «таймер мёртв» станет нечем.
+    const logged: string[] = []
+    await runBankKeepAlive({
+      now: () => 1_700_000_000_000,
+      listAccounts: async () => [],
+      getToken: async () => null,
+      refresh: async t => t,
+      log: (m: string) => logged.push(m)
+    })
+    expect(logged.some(l => l.startsWith('[bank-keepalive] selected=')),
+      'на тихом тике сводки нет — «пусто» снова неотличимо от мёртвого таймера').toBe(true)
+    expect(logged.join('\n')).toContain('selected=0')
+  })
+
+  it('и на тике С работой — тоже (сводка одна на все исходы)', async () => {
+    const logged: string[] = []
+    const NOW = 1_700_000_000_000
+    const acc = {
+      id: 1, memberId: 'M1', provider: 'alfa-by' as const, accountKey: 'BY01',
+      connectedAt: NOW - 9 * 3_600_000, expiresAt: NOW + 60_000,
+      hasRefresh: true, lastAttemptAt: 0, consentExpiresAt: 0
+    }
+    await runBankKeepAlive({
+      now: () => NOW,
+      listAccounts: async () => [acc],
+      getToken: async () => ({
+        memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01',
+        accessToken: 'a', refreshToken: 'r', expiresAt: NOW + 60_000
+      }),
+      refresh: async t => t,
+      log: (m: string) => logged.push(m)
+    })
+    const line = logged.find(l => l.startsWith('[bank-keepalive] selected='))
+    expect(line, 'сводки нет на рабочем тике').toBeTruthy()
+    expect(line!).toMatch(/refreshed=\d+/)
   })
 
   it('скрипт предупреждает о пустоте, а не называет её нормой', () => {
     expect(SCRIPT, 'вернулась формулировка «пусто — хорошо»').not.toMatch(/Пусто здесь — ХОРОШО/)
     expect(SCRIPT, 'нет предупреждения про отсутствие прогонов').toMatch(/НИ ОДНОГО прогона/)
   })
+})
 
-  it('окно короче периода продления не поднимает ложную тревогу', () => {
-    // Продление ежечасное, поэтому `SINCE=30m` законно пустой. Кричать на нём значит приучить
-    // не читать предупреждение — а оно здесь единственное.
-    expect(SCRIPT).toContain('minutes_of')
-    expect(SCRIPT, 'порог сравнения с периодом продления пропал').toMatch(/-ge 70/)
+describe('minutes_of разбирает окно ВЕРНО — проверяется исполнением, а не грепом (#504)', () => {
+  // ⚠ Первая редакция проверяла `expect(SCRIPT).toContain('minutes_of')`. Ревью выпотрошило тело
+  // функции до `echo "0"` — все тесты остались зелёными, а тревога перестала срабатывать когда бы
+  // то ни было. Проверка имени функции — не проверка функции.
+  const call = (window: string) => execFileSync('bash', ['-c',
+    `source <(sed -n '/^minutes_of()/,/^}/p' "$1"); minutes_of "$2"`, '_', POLL_CHECK_PATH, window
+  ], { encoding: 'utf8' }).trim()
+
+  it.each([
+    ['30m', '30'], ['3h', '180'], ['1h30m', '90'], ['90s', '1'], ['70m', '70'], ['2h30m', '150']
+  ])('%s → %s мин', (w, want) => expect(call(w)).toBe(want))
+
+  it('регистр не имеет значения — мобильный терминал капитализирует сам', () => {
+    // ⚠ Живой дефект, найденный ревью: `2H` возвращала 0, и тревога о мёртвом продлении молча не
+    // срабатывала — ровно в том сценарии (владелец с телефона), ради которого скрипт и написан.
+    expect(call('2H')).toBe('120')
+    expect(call('30M')).toBe('30')
+  })
+
+  it('мусор даёт 0, а не срыв', () => {
+    for (const junk of ['', 'abc', 'm', '10']) expect(call(junk)).toBe('0')
+  })
+
+  it('суток нет — docker их не принимает, и обещать их значило бы звать в тупик', () => {
+    // ⚠ `docker logs --since 3d` → «failed to parse value as time or duration». Ревью прогнало это
+    // на живом демоне: при `3d` падают ВСЕ секции разом (каждый `docker compose logs` возвращает
+    // ошибку), и эта — ещё и кричит о несуществующей аварии продления. Поэтому `d` не поддержан, а
+    // окно проверяется ДО первого обращения к docker (см. следующий тест).
+    expect(call('3d')).toBe('0')
+  })
+
+  it('скрипт отвергает окно, которое docker не примет, ДО первого обращения к нему', () => {
+    // ⚠ Проверяется КОДОМ ВОЗВРАТА, а не текстом: скрипт обязан остановиться, а не «пожаловаться и
+    // продолжить». Продолжив, он напечатал бы семь пустых секций и одну ложную тревогу.
+    let code = 0
+    let out: string
+    try {
+      out = execFileSync('bash', [POLL_CHECK_PATH, '3d'], { encoding: 'utf8', stdio: 'pipe' })
+    } catch (e) {
+      const err = e as { status?: number, stdout?: string }
+      code = err.status ?? 0
+      out = err.stdout ?? ''
+    }
+    expect(code, 'скрипт не остановился на окне, которое docker отвергнет').toBe(2)
+    expect(out).toMatch(/3d/)
   })
 })
