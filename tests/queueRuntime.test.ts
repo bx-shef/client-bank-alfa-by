@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_FETCH_RATE_DURATION_MS, DEFAULT_PRIOR_CONCURRENCY, DEFAULT_FETCH_RATE_MAX, MAX_CONCURRENCY,
-  MAX_FETCH_RATE_MAX, MIN_FETCH_RATE_DURATION_MS, envFlag, queueRuntimeConfig
+  MAX_FETCH_RATE_MAX, MIN_FETCH_RATE_DURATION_MS, envFlag, queueRuntimeConfig,
+  ALFA_DOCUMENTED_RATE_MAX, FETCH_RATE_HEADROOM
 } from '../server/queue/runtime'
 
 describe('envFlag', () => {
@@ -85,5 +86,38 @@ describe('queueRuntimeConfig', () => {
     expect(queueRuntimeConfig({ QUEUE_CONCURRENCY: String(MAX_CONCURRENCY + 500) }).concurrency).toBe(MAX_CONCURRENCY)
     // Non-positive / garbage / empty → floor of 1 (never 0, which BullMQ would reject).
     for (const v of ['0', '-3', 'abc', '']) expect(queueRuntimeConfig({ QUEUE_CONCURRENCY: v }).concurrency).toBe(1)
+  })
+})
+
+describe('лимит обращений к Альфе держит запас (замечание владельца, 2026-08-20)', () => {
+  it('дефолт НИЖЕ документированного потолка банка', () => {
+    // ⚠ Раньше дефолт стоял РОВНО на 100 — на самой границе, без запаса. Сторона не та: наш
+    // лимитер считает то, что мы СТАВИМ В ОЧЕРЕДЬ, а банк — то, что ПОЛУЧАЕТ, и совпадают эти два
+    // счёта никогда: ретрай после сетевого блипа, опрос на краю окна лимитера, расхождение часов
+    // между репликами. Стоя на границе, первое же такое расхождение — это 429, а 429 на выписке
+    // читается оператором как «банк лежит», а не как «мы спросили на чуть-чуть чаще».
+    expect(DEFAULT_FETCH_RATE_MAX).toBeLessThan(ALFA_DOCUMENTED_RATE_MAX)
+    expect(DEFAULT_FETCH_RATE_MAX).toBe(80)
+  })
+
+  it('запас задан долей, а не переписанным числом', () => {
+    // Чтобы документированный потолок банка и наша осторожность не слиплись в одну константу: когда
+    // банк объявит другой лимит, менять надо ровно одно число, а доля останется долей.
+    expect(DEFAULT_FETCH_RATE_MAX).toBe(ALFA_DOCUMENTED_RATE_MAX * FETCH_RATE_HEADROOM)
+    expect(FETCH_RATE_HEADROOM).toBeGreaterThan(0)
+    expect(FETCH_RATE_HEADROOM).toBeLessThan(1)
+  })
+
+  it('запас нельзя обойти опечаткой в env', () => {
+    // Клампы существуют ровно для этого — потолок не выключается кривым значением. Проверяем через
+    // публичный вход, а не внутреннюю функцию: оператор задаёт именно переменную окружения.
+    const at = (v: string | undefined) => queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: v } as NodeJS.ProcessEnv).fetchRate.max
+    expect(at('999999')).toBeLessThanOrEqual(MAX_FETCH_RATE_MAX)
+    expect(at('0')).toBe(DEFAULT_FETCH_RATE_MAX)
+    expect(at('мусор')).toBe(DEFAULT_FETCH_RATE_MAX)
+    expect(at(undefined)).toBe(DEFAULT_FETCH_RATE_MAX)
+    // ⚠ Поднять ВЫШЕ документированного потолка по-прежнему можно осознанно (у банка бывает
+    // другой тариф) — запрещать это здесь значило бы решать за владельца договора.
+    expect(at('100')).toBe(100)
   })
 })

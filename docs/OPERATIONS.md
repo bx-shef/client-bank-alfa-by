@@ -20,6 +20,18 @@ cd /home/bitrix/bank-import && make self-update && make help
 Сохраняет копию прежнего `Makefile` и проверяет скачанный ДО замены — битый файл лишил бы сервер
 единственного интерфейса.
 
+⚠ **`No rule to make target 'self-update'`** — значит на сервере лежит `Makefile` старше самой этой
+цели, и обновиться ей нечем: классическая курица-яйцо, на которую мы наступили сразу же. Разовый
+bootstrap (единственная сырая команда, которая тут вообще нужна; дальше только `make`):
+
+```bash
+cd /home/bitrix/bank-import && cp Makefile Makefile.bak-$(date +%s) && curl -fsSL -o /tmp/Makefile.new https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/Makefile && make -n -f /tmp/Makefile.new help >/dev/null && cp /tmp/Makefile.new Makefile && make help
+```
+
+Тот же порядок, что и у `self-update`: копия прежнего → скачивание во временный файл → **проверка,
+что скачанное вообще разбирается** → замена. Без проверки битый ответ прокси (HTML-страница вместо
+файла) молча оставил бы сервер без рабочего `Makefile`.
+
 | задача | команда |
 |---|---|
 | что вообще можно запустить | `make help` |

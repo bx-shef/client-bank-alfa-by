@@ -41,8 +41,29 @@ export interface QueueRuntime {
  *  quota / DB pool. B24 limits are per-portal anyway — batch, don't just widen. */
 export const MAX_CONCURRENCY = 100
 
-/** Bank-fetch rate defaults (A8): Alfa allows ~100 requests/min per OAuth client. */
-export const DEFAULT_FETCH_RATE_MAX = 100
+/**
+ * Bank-fetch rate defaults (A8).
+ *
+ * ⚠ Alfa's documented cap is ~100 requests/min PER OAUTH CLIENT — and our app has exactly one
+ * `client_id`, so that ceiling is shared by every portal we will ever serve. It does not grow with
+ * customers.
+ *
+ * ⚠ The default used to sit at 100 — EXACTLY on the bank's ceiling, with zero headroom. That is the
+ * wrong side of the line to be on: our limiter counts what we ENQUEUE, the bank counts what it
+ * RECEIVES, and the two never agree perfectly (retries after a network blip, a poll racing the
+ * limiter's window edge, clock skew between replicas). Sitting exactly at the cap means the first
+ * such disagreement is a 429 — and a 429 on a statement fetch reads to the operator as "the bank is
+ * down", not as "we asked a fraction too often". Held at 80 % of the documented cap (owner's call):
+ * the reserve costs nothing at our scale — one Alfa account is ONE request per sweep — and buys the
+ * difference between a self-inflicted throttle and a quiet poll.
+ *
+ * ⚠ The number is also a PILOT figure from 2026-06-30 and may differ in the contract. A reserve is
+ * the only thing standing between "the published number was optimistic" and a wedged import.
+ */
+export const ALFA_DOCUMENTED_RATE_MAX = 100
+/** Fraction of the documented cap we actually use. */
+export const FETCH_RATE_HEADROOM = 0.8
+export const DEFAULT_FETCH_RATE_MAX = ALFA_DOCUMENTED_RATE_MAX * FETCH_RATE_HEADROOM
 export const DEFAULT_FETCH_RATE_DURATION_MS = 60_000
 /** Bounds so a fat-fingered value can't effectively DISABLE the cap: a huge `max`
  *  (`999999`) or a tiny `duration` (`1`ms) would both let the fleet hammer the bank.
