@@ -29,6 +29,17 @@ import { LogLevel, LoggerFactory, type LoggerInterface } from '@bitrix24/b24jssd
  */
 const devMode = !!import.meta.dev
 
+/**
+ * Каналы, которым и в проде разрешён `info`.
+ *
+ * ⚠ Исключение, а не послабление: `slider` описывает разговор с ПОРТАЛОМ — что мы отправили и что
+ * фрейм получил в ответ. Это единственные две строки, по которым отличимо «мы не передали
+ * параметр» от «портал его не донёс», а воспроизвести разговор больше нечем: фрейм живёт у
+ * клиента, второй попытки на том же открытии не бывает. Пока вопрос открыт (#537), обе стороны
+ * обязаны быть видны в проде; закроем — строку отправки убрать, канал вернуть к WARNING.
+ */
+const VERBOSE_CHANNELS = new Set(['slider'])
+
 /** Кэш по каналу: логгер создаётся один раз на модуль, а не на каждый вызов. */
 const cache = new Map<string, LoggerInterface>()
 
@@ -40,9 +51,10 @@ const cache = new Map<string, LoggerInterface>()
 export function useLogger(channel: string): LoggerInterface {
   const cached = cache.get(channel)
   if (cached) return cached
+  const prodLevel = VERBOSE_CHANNELS.has(channel) ? LogLevel.INFO : LogLevel.WARNING
   const logger = devMode
     ? LoggerFactory.createForBrowserDevelopment(channel)
-    : LoggerFactory.createForBrowserProduction(channel, LogLevel.WARNING)
+    : LoggerFactory.createForBrowserProduction(channel, prodLevel)
   cache.set(channel, logger)
   return logger
 }
