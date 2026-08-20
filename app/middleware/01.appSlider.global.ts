@@ -55,5 +55,32 @@ export default defineNuxtRouteMiddleware(async (to) => {
   }
   // Штатный путь — `info` (в проде логгер его режет, и правильно: тут всё в порядке).
   useLogger('slider').info('открыт слайдер', { place, target })
-  if (to.path !== target) return navigateTo(target)
+  if (to.path === target) return
+  return redirectToSlider(target)
 })
+
+/** Увести фрейм на экран слайдера.
+ *
+ *  ⚠ Возвращать `navigateTo` из мидлвара ЗДЕСЬ НЕДОСТАТОЧНО, и это не теория: воспроизведено на
+ *  собранной статике (`.output/public`, `/app?place=app-options`) — мидлвар печатает «открыт
+ *  слайдер → /settings», а адрес остаётся `/app`. На ПЕРВОЙ навигации Nuxt считает редирект уже
+ *  выполненным на сервере и результат мидлвара при гидратации не применяет; у нас сервера нет
+ *  вовсе (SSG + nginx), на сервере мидлвар выходит первой же строкой — значит редирект не делает
+ *  никто. Ровно это и видел администратор: слайдер открывался и показывал главный экран. У
+ *  соседнего приложения тот же код работает потому, что там страницу отдаёт Nitro на лету.
+ *
+ *  Поэтому при гидратации навигируем САМИ — и не «сразу после монтирования»: замерено, что
+ *  `router.replace` в `app:mounted` возвращает NavigationFailure `aborted` (8), а вызванный на
+ *  такте раньше конца первой навигации — молча проигрывает ей и адрес остаётся прежним. Точка,
+ *  где это работает, — `onNuxtReady` (после `app:suspense:resolve`, следующим тиком), то есть
+ *  когда первая навигация уже завершилась и роутер свободен.
+ *
+ *  `replace`, а не `push`: `/app` в истории фрейма слайдера — не шаг пользователя, и «назад» не
+ *  должно возвращать на экран, который он не открывал. */
+function redirectToSlider(target: string) {
+  const nuxtApp = useNuxtApp()
+  if (!nuxtApp.isHydrating) return navigateTo(target, { replace: true })
+  onNuxtReady(() => {
+    void nuxtApp.runWithContext(() => navigateTo(target, { replace: true }))
+  })
+}
