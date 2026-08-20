@@ -107,8 +107,22 @@ function onOpenChange(open: boolean) {
 // The built-in clear button renders as a span with tabindex="-1", so keyboard users could never
 // reach it — and the menu has no "nothing" row, meaning the notification chat could not be turned
 // off from the keyboard at all. `clear` accepts an object whose props are bound AFTER that
-// tabindex, so this is the supported way to make it focusable.
-const clearProps = computed(() => (props.clearable ? { 'tabindex': 0, 'aria-label': 'Очистить' } : undefined))
+// tabindex, so this is the supported way to fix it.
+//
+// ⚠ `tabindex` ALONE makes things worse, not better: reka-ui's ComboboxCancel binds only `click`,
+// and b24ui renders it as a `span`, so Tab would stop on an element that announces itself as plain
+// text and does nothing on Enter/Space — a dead stop instead of an element the keyboard skipped.
+// Hence `role` and our own key handler.
+function clearOnKey(event: KeyboardEvent): void {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault() // Space would scroll the page
+  event.stopPropagation()
+  model.value = ''
+}
+
+const clearProps = computed(() => (props.clearable
+  ? { 'tabindex': 0, 'role': 'button', 'aria-label': 'Очистить', 'onKeydown': clearOnKey }
+  : undefined))
 
 // Normalize a cleared model to the EMPTY STRING, never undefined/null: consumers store
 // this in `PortalSettings` where the field is typed `string` and compared with `!== ''`

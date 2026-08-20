@@ -112,3 +112,31 @@ describe('useChatSettings: название сохранённого чата', 
     expect(cs.settings.chat.title).not.toBe('Старый чат')
   })
 })
+
+describe('useChatSettings: оба названия резолвятся параллельно', () => {
+  it('второй запрос уходит, не дожидаясь ответа на первый', async () => {
+    // Запросы независимы, а форма до их завершения показывает «Загрузка настроек…»: выстроенные
+    // в очередь, они держат экран оба круга подряд. Свойство было записано только комментарием —
+    // последовательная версия проходила все тесты.
+    let sent = 0
+    const release: Array<() => void> = []
+    mockFetch((url, opts) => {
+      if (String(url).includes('chat-settings')) {
+        return { chat: { dialogId: 'chat7' }, errorChat: { dialogId: 'chat8' } }
+      }
+      if (opts?.params?.id) {
+        sent += 1
+        return new Promise((resolve) => {
+          release.push(() => resolve({ item: { value: String(opts.params!.id), label: 'Чат' } }))
+        })
+      }
+      return { items: [] }
+    })
+
+    const cs = await freshSettings()
+    const loading = cs.load()
+    await vi.waitFor(() => expect(sent).toBe(2)) // ОБА ушли, пока ни один не ответил
+    release.forEach(fn => fn())
+    await loading
+  })
+})

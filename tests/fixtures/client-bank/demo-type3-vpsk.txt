@@ -1,4 +1,4 @@
-***** ^Type=3^ ^Acc=BY70MMBN30120000010102621830^  -  Zapros vypiski po raschetnomu schetu za den
+***** ^Type=3^ ^Acc=BY70TESTAB30120000010102620001^  -  Zapros vypiski po raschetnomu schetu za den
 [IN_PARAM]
 ^IsNazn=1^
 ^Date=08.01.2026^
@@ -18,8 +18,8 @@
 ^Num=101^
 ^NDoc=101^
 ^KorName=OOO ROMASHKA^
-^UNNRec=192220456^
-^UNNKorr=UNP platelshchika:192220456^
+^UNNRec=190000021^
+^UNNKorr=UNP platelshchika:190000021^
 ^Cod=ALFABY2X^
 ^Acc=BY24TESTAB00000000000000001234^
 ^ActualPayerName=^
@@ -36,8 +36,8 @@
 ^Num=102^
 ^NDoc=102^
 ^KorName=OOO KLIENT^
-^UNNRec=193732547^
-^UNNKorr=UNP poluchatelya:193732547^
+^UNNRec=190000022^
+^UNNKorr=UNP poluchatelya:190000022^
 ^Cod=ALFABY2X^
 ^Acc=BY34ALFA30122H10700010270000^
 ^ActualBenName=^

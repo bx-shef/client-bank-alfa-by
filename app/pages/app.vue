@@ -44,254 +44,220 @@ useHead({
 const PREVIEW_ITEMS: StatementItem[] = [
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: '127938853',
-    docNum: '356',
+    docId: 'DEMO00000001',
+    docNum: '2101',
     direction: 'debit',
-    amount: 3.4,
+    amount: 120.0,
     currency: 'BYN',
-    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 24.06.2026 согл. до',
+    purpose: 'Вознаграждение за расчётно-кассовое обслуживание за май 2026 г. Без НДС.',
     counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
+      name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
       account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-28',
+    acceptDate: '2026-06-02',
     operCodeName: '6'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00928450004',
-    docNum: '2280',
+    docId: 'DEMO00000002',
+    docNum: '2102',
     direction: 'debit',
-    amount: 140.0,
+    amount: 45.5,
     currency: 'BYN',
-    purpose: 'OTHR 130102 АВАНС (ЗАРАБОТНАЯ ПЛАТА) ЗА ЗА ИЮЛЬ2026Г. ПО СПИСКУ 100 ОТ 24.06.2026СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
+    purpose: 'Комиссия за ведение счёта за май 2026 г. Без НДС.',
     counterparty: {
       name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
-      account: 'BY20DEMO30120000000000000010',
+      account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-24',
-    operCodeName: '1'
+    acceptDate: '2026-06-02',
+    operCodeName: '6'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00928101693',
-    docNum: '2279',
-    direction: 'debit',
-    amount: 221.9,
+    docId: 'DEMO00000003',
+    docNum: '311',
+    direction: 'credit',
+    amount: 4800.0,
     currency: 'BYN',
-    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000201 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
+    purpose: 'Оплата по счёту СЧ-1001 от 01.06.2026 за услуги внедрения. Без НДС.',
     counterparty: {
-      name: 'ООО \'ВАСИЛЁК\'',
-      unp: '190000005',
-      account: 'BY14DEMO30120000000000000004',
-      bic: 'MTBKBY22'
+      name: 'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "РОМАШКА"',
+      unp: '190000001',
+      account: 'BY23DEMO30120000000000000003',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-24',
+    acceptDate: '2026-06-03',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00928101687',
-    docNum: '2279',
+    docId: 'DEMO00000004',
+    docNum: '2103',
     direction: 'debit',
-    amount: 29.36,
+    amount: 980.0,
     currency: 'BYN',
-    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000202 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
+    purpose: 'Оплата по счёту СЧ-2001 от 02.06.2026 за офисную технику. В т.ч. НДС 20%.',
     counterparty: {
-      name: 'ООО \'ВАСИЛЁК\'',
-      unp: '190000005',
-      account: 'BY14DEMO30120000000000000004',
-      bic: 'MTBKBY22'
+      name: 'ООО "ТОРГОВЫЙ ДОМ"',
+      unp: '190000002',
+      account: 'BY24DEMO30120000000000000004',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-24',
+    acceptDate: '2026-06-03',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00928101629',
-    docNum: '2278',
+    docId: 'DEMO00000005',
+    docNum: '2104',
     direction: 'debit',
-    amount: 1383.96,
+    amount: 310.75,
     currency: 'BYN',
-    purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
+    purpose: 'Оплата услуг связи и интернета за май 2026 г. по договору Д-100 от 10.01.2024. В т.ч. НДС 20%.',
+    counterparty: {
+      name: 'ООО СЕТЕВАЯ КОМПАНИЯ',
+      unp: '190000004',
+      account: 'BY25DEMO30120000000000000005',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-04',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000006',
+    docNum: '2105',
+    direction: 'debit',
+    amount: 60.0,
+    currency: 'BYN',
+    purpose: 'Вознаграждение за перевод денежных средств. Без НДС.',
+    counterparty: {
+      name: 'ЗАО \'ДЕМО-БАНК\'',
+      unp: '190000003',
+      account: 'BY22DEMO30120000000000000012',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-04',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000007',
+    docNum: '312',
+    direction: 'credit',
+    amount: 1500.0,
+    currency: 'BYN',
+    purpose: 'Оплата по счёту СЧ-1002 от 03.06.2026 за сопровождение портала. Без НДС.',
+    counterparty: {
+      name: 'ООО "БИЗНЕС-ЦЕНТР"',
+      unp: '190000005',
+      account: 'BY26DEMO30120000000000000006',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-05',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000008',
+    docNum: '2106',
+    direction: 'debit',
+    amount: 250.0,
+    currency: 'BYN',
+    purpose: 'Перевод денежных средств в рамках одного юридического лица. Без НДС.',
     counterparty: {
       name: 'ИП ИВАНОВ И. И.',
       unp: '190000006',
-      account: 'BY13DEMO30120000000000000003',
+      account: 'BY27DEMO30120000000000000007',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-24',
+    acceptDate: '2026-06-05',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00927735152',
-    docNum: '2043611938230893',
-    direction: 'credit',
-    amount: 8634.0,
+    docId: 'DEMO00000009',
+    docNum: '2107',
+    direction: 'debit',
+    amount: 1740.0,
     currency: 'BYN',
-    purpose: 'OTHR 121101 ОПЛАТА РАБОТ ПООБНОВЛЕНИЮ СЕРВИСНОГО ПО ПОРТАЛА B24.DEMO-CLIENT.BY СОГЛАСНО ДОГОВОРА НА ОКАЗАНИЕ УСЛУГ И ВЫПОЛНЕНИЕ РАБОТ N 52/05.10.2020 ОТ05.10.2020 СЧЕТ-ПРОТОКОЛ СОГЛАСОВАНИЯ ЦЕНЫ 52/05.102020/31',
+    purpose: 'Подоходный налог с заработной платы за май 2026 г. по сроку уплаты 08.06.2026.',
     counterparty: {
-      name: 'ООО "БИЗНЕС-ЦЕНТР"',
+      name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
       unp: '190000007',
-      account: 'BY26DEMO30120000000000000016',
-      bic: 'PJCBBY2X'
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-23',
+    acceptDate: '2026-06-08',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: '126766867',
-    docNum: '256',
+    docId: 'DEMO00000010',
+    docNum: '2108',
     direction: 'debit',
-    amount: 8.07,
+    amount: 2320.0,
     currency: 'BYN',
-    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 15.06.2026 согл. до',
-    counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
-      unp: '190000003',
-      account: 'BY22DEMO30120000000000000012',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-17',
-    operCodeName: '6'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: '126603199',
-    docNum: '837',
-    direction: 'debit',
-    amount: 71.5,
-    currency: 'BYN',
-    purpose: '2.4.23. II Вознаграждение за обслуживание по пакету услуг "Пакет Лайт" за 7 месяц 2026 г. сог-но Перечню вознаграждений Банка. Без НДС.',
-    counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
-      unp: '190000003',
-      account: 'BY18DEMO30120000000000000008',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-16',
-    operCodeName: '6'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: '126603198',
-    docNum: '446',
-    direction: 'debit',
-    amount: 5.6,
-    currency: 'BYN',
-    purpose: '2.3.16. б) II Вознагр.за предоставление услуги "Клиент-Уведомление" путем отправки сообщения на адрес эл.почты  в июле 2026 г. cогл. П',
-    counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
-      unp: '190000003',
-      account: 'BY18DEMO30120000000000000008',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-16',
-    operCodeName: '6'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00923002595',
-    docNum: '2276',
-    direction: 'debit',
-    amount: 176.32,
-    currency: 'BYN',
-    purpose: 'TAXS 190101 ПОДОХОДНЫЙ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.06.2026Г.',
+    purpose: 'Взносы на государственное социальное страхование за май 2026 г.',
     counterparty: {
       name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
-      unp: '190000002',
-      account: 'BY25DEMO30120000000000000015',
-      bic: 'AKBBBY2X'
+      unp: '190000007',
+      account: 'BY28DEMO30120000000000000008',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-15',
+    acceptDate: '2026-06-08',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00923002587',
-    docNum: '2275',
+    docId: 'DEMO00000011',
+    docNum: '2109',
     direction: 'debit',
-    amount: 934.6,
+    amount: 96.0,
     currency: 'BYN',
-    purpose: 'TAXS 190102 ФСЗН НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.06.2026Г.',
-    counterparty: {
-      name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
-      unp: '190000002',
-      account: 'BY17DEMO30120000000000000007',
-      bic: 'AKBBBY2X'
-    },
-    acceptDate: '2026-06-15',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00923002589',
-    docNum: '2277',
-    direction: 'debit',
-    amount: 16.7,
-    currency: 'BYN',
-    purpose: 'OTHR 143805 ОПЛАТА СТРАХОВЫХ ВЗНОСОВ ЗА НАЕМНЫХСОТРУДНИКОВ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.06.2026Г.СТРАХОВОЙ НОМЕР 500000001КОД ПЛАТЕЖА 10001',
+    purpose: 'Страховые взносы от несчастных случаев на производстве за май 2026 г.',
     counterparty: {
       name: 'ФИЛИАЛ СТРАХОВЩИКА (ДЕМО)',
-      unp: '190000001',
-      account: 'BY16DEMO30120000000000000006',
-      bic: 'AKBBBY2X'
+      unp: '190000008',
+      account: 'BY29DEMO30120000000000000009',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-15',
+    acceptDate: '2026-06-08',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00923002585',
-    docNum: '2274',
+    docId: 'DEMO00000012',
+    docNum: '2110',
     direction: 'debit',
-    amount: 1749.86,
+    amount: 3200.0,
     currency: 'BYN',
-    purpose: 'OTHR 130102 ЗАРАБОТНАЯ ПЛАТА ЗА МЕСЯЦ (ИСТЕКШИЙ) ЗА ИЮНЬ 2026Г. ПО СПИСКУ 146 ОТ 15.06.2026 СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
+    purpose: 'Аванс (заработная плата) за июнь 2026 г. по списку 7 от 09.06.2026 согласно договору Д-200 от 04.01.2021.',
+    counterparty: {
+      name: 'ИП ИВАНОВ И. И.',
+      unp: '190000006',
+      account: 'BY27DEMO30120000000000000007',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-09',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000013',
+    docNum: '2111',
+    direction: 'debit',
+    amount: 35.0,
+    currency: 'BYN',
+    purpose: 'Вознаграждение за зачисление денежных средств на счета физических лиц за 09.06.2026. Без НДС.',
     counterparty: {
       name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
-      account: 'BY20DEMO30120000000000000010',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-15',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00920729820',
-    docNum: '5954',
-    direction: 'credit',
-    amount: 962.0,
-    currency: 'BYN',
-    purpose: 'OTHR 123501 ОПЛАТА ЗА УСЛУГИ ПО ДОГОВОРУ 8/06.05.2022 ОТ 06.05.2022, БЕЗ НДС',
-    counterparty: {
-      name: 'ООО \'МЕТАЛЛСЕРВИС\'',
-      unp: '190000010',
-      account: 'BY23DEMO30120000000000000013',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-10',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: '125791075',
-    docNum: '37',
-    direction: 'debit',
-    amount: 10.95,
-    currency: 'BYN',
-    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 07.06.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
-    counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
-      unp: '190000003',
-      account: 'BY18DEMO30120000000000000008',
+      account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
     acceptDate: '2026-06-09',
@@ -299,189 +265,223 @@ const PREVIEW_ITEMS: StatementItem[] = [
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: '125647285',
-    docNum: '54',
+    docId: 'DEMO00000014',
+    docNum: '2112',
     direction: 'debit',
-    amount: 12.93,
+    amount: 640.0,
     currency: 'BYN',
-    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 06.06.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
-    counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
-      unp: '190000003',
-      account: 'BY18DEMO30120000000000000008',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-08',
-    operCodeName: '6'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00918663612',
-    docNum: '2273',
-    direction: 'debit',
-    amount: 2743.0,
-    currency: 'BYN',
-    purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
-    counterparty: {
-      name: 'ПЕТРОВ П. П.',
-      unp: '',
-      account: 'BY15DEMO30120000000000000005',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-07',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: '125500324',
-    docNum: '253',
-    direction: 'debit',
-    amount: 7.77,
-    currency: 'BYN',
-    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 02.06.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
-    counterparty: {
-      name: 'ЗАО "ДЕМО-БАНК"',
-      unp: '190000003',
-      account: 'BY18DEMO30120000000000000008',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-07',
-    operCodeName: '6'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00917983116',
-    docNum: '1937',
-    direction: 'credit',
-    amount: 140.0,
-    currency: 'BYN',
-    purpose: 'OTHR 121101 ЗА  ОБНОВЛЕНИЕ  . С-НО АКТА 1142/22ОТ 02.06.25Г. ДОГ.1100/30.11.2021ОТ 30.11.2021Г.',
-    counterparty: {
-      name: 'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "РОМАШКА"',
-      unp: '190000009',
-      account: 'BY21DEMO30120000000000000011',
-      bic: 'BLBBBY2X'
-    },
-    acceptDate: '2026-06-06',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00917823497',
-    docNum: '2272',
-    direction: 'debit',
-    amount: 3428.0,
-    currency: 'BYN',
-    purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
-    counterparty: {
-      name: 'ПЕТРОВ П. П.',
-      unp: '',
-      account: 'BY15DEMO30120000000000000005',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-06',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00917822371',
-    docNum: '2271',
-    direction: 'debit',
-    amount: 101.64,
-    currency: 'BYN',
-    purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
-    counterparty: {
-      name: 'ИП ИВАНОВ И. И.',
-      unp: '190000006',
-      account: 'BY13DEMO30120000000000000003',
-      bic: 'DEMOBY2X'
-    },
-    acceptDate: '2026-06-06',
-    operCodeName: '1'
-  },
-  {
-    account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00916639804',
-    docNum: '636',
-    direction: 'credit',
-    amount: 619.5,
-    currency: 'BYN',
-    purpose: 'OTHR 190401 ОПЛАТА ЗА УСЛУГИ ПО АКТУ 74/26 ОТ 22.06.2026 Г. ПО ДОГОВОРУ 74/04.03.2024 ОТ 04.03.2024 Г.',
+    purpose: 'Оплата по счёту СЧ-2002 от 09.06.2026 за расходные материалы. В т.ч. НДС 20%.',
     counterparty: {
       name: 'ООО "ТОРГОВЫЙ ДОМ"',
-      unp: '190000008',
-      account: 'BY12DEMO30120000000000000002',
-      bic: 'PJCBBY2X'
+      unp: '190000002',
+      account: 'BY24DEMO30120000000000000004',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-02',
+    acceptDate: '2026-06-10',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00916543109',
-    docNum: '2270',
+    docId: 'DEMO00000015',
+    docNum: '2113',
     direction: 'debit',
-    amount: 85.2,
+    amount: 88.2,
     currency: 'BYN',
-    purpose: 'OTHR 190401 ОПЛАТА СЧЕТА 145792 ОТ 2 ИЮЛЯ 2026ПО ДОГОВОРУ 151М ОТ 21.12.2020, В ТОМ ЧИСЛЕ НДС ПО СТАВКЕ 25% НА СУММУ12.00 БЕЛ.РУБ',
+    purpose: 'Оплата по акту А-500 от 31.05.2026 за хостинг. В т.ч. НДС 20%.',
     counterparty: {
       name: 'ООО СЕТЕВАЯ КОМПАНИЯ',
       unp: '190000004',
-      account: 'BY24DEMO30120000000000000014',
+      account: 'BY25DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-02',
+    acceptDate: '2026-06-10',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00916417690',
-    docNum: '2270',
-    direction: 'debit',
-    amount: 1647.0,
+    docId: 'DEMO00000016',
+    docNum: '313',
+    direction: 'credit',
+    amount: 2600.0,
     currency: 'BYN',
-    purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
+    purpose: 'Оплата по счёту СЧ-1003 от 09.06.2026 за доработку CRM. Без НДС.',
     counterparty: {
-      name: 'ПЕТРОВ П. П.',
-      unp: '',
-      account: 'BY15DEMO30120000000000000005',
+      name: 'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "РОМАШКА"',
+      unp: '190000001',
+      account: 'BY23DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-02',
+    acceptDate: '2026-06-11',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00916415951',
-    docNum: '2269',
+    docId: 'DEMO00000017',
+    docNum: '2114',
     direction: 'debit',
-    amount: 388.79,
+    amount: 150.0,
     currency: 'BYN',
-    purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
+    purpose: 'Вознаграждение за обслуживание по пакету услуг «Пакет Демо» за 6 месяц 2026 г. Без НДС.',
+    counterparty: {
+      name: 'ЗАО \'ДЕМО-БАНК\'',
+      unp: '190000003',
+      account: 'BY22DEMO30120000000000000012',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-11',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000018',
+    docNum: '2115',
+    direction: 'debit',
+    amount: 420.0,
+    currency: 'BYN',
+    purpose: 'Оплата по счёту СЧ-2003 от 12.06.2026 за канцелярские товары. В т.ч. НДС 20%.',
+    counterparty: {
+      name: 'ООО "ТОРГОВЫЙ ДОМ"',
+      unp: '190000002',
+      account: 'BY24DEMO30120000000000000004',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-15',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000019',
+    docNum: '2116',
+    direction: 'debit',
+    amount: 12.6,
+    currency: 'BYN',
+    purpose: 'Вознаграждение за предоставление услуги уведомления по электронной почте в июне 2026 г. Без НДС.',
+    counterparty: {
+      name: 'ЗАО \'ДЕМО-БАНК\'',
+      unp: '190000003',
+      account: 'BY22DEMO30120000000000000012',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-15',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000020',
+    docNum: '2117',
+    direction: 'debit',
+    amount: 1980.0,
+    currency: 'BYN',
+    purpose: 'Оплата по счёту СЧ-3001 от 15.06.2026 за аренду серверного оборудования. В т.ч. НДС 20%.',
+    counterparty: {
+      name: 'ООО СЕТЕВАЯ КОМПАНИЯ',
+      unp: '190000004',
+      account: 'BY25DEMO30120000000000000005',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-16',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000021',
+    docNum: '314',
+    direction: 'credit',
+    amount: 7300.0,
+    currency: 'BYN',
+    purpose: 'Оплата по счёту СЧ-1004 от 16.06.2026 за работы по обновлению сервисного ПО портала b24.demo-client.by согласно договору Д-300 от 05.10.2020.',
+    counterparty: {
+      name: 'ООО "БИЗНЕС-ЦЕНТР"',
+      unp: '190000005',
+      account: 'BY26DEMO30120000000000000006',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-17',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000022',
+    docNum: '2118',
+    direction: 'debit',
+    amount: 530.4,
+    currency: 'BYN',
+    purpose: 'Оплата по акту А-501 от 16.06.2026 за доставку. В т.ч. НДС 20%.',
+    counterparty: {
+      name: 'ООО "ТОРГОВЫЙ ДОМ"',
+      unp: '190000002',
+      account: 'BY24DEMO30120000000000000004',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-17',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000023',
+    docNum: '2119',
+    direction: 'debit',
+    amount: 74.0,
+    currency: 'BYN',
+    purpose: 'Вознаграждение за расчётно-кассовое обслуживание. Без НДС.',
+    counterparty: {
+      name: 'ЗАО \'ДЕМО-БАНК\'',
+      unp: '190000003',
+      account: 'BY22DEMO30120000000000000012',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-18',
+    operCodeName: '6'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000024',
+    docNum: '2120',
+    direction: 'debit',
+    amount: 3200.0,
+    currency: 'BYN',
+    purpose: 'Заработная плата за июнь 2026 г. по списку 8 от 22.06.2026 согласно договору Д-200 от 04.01.2021.',
     counterparty: {
       name: 'ИП ИВАНОВ И. И.',
       unp: '190000006',
-      account: 'BY13DEMO30120000000000000003',
+      account: 'BY27DEMO30120000000000000007',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-02',
+    acceptDate: '2026-06-22',
     operCodeName: '1'
   },
   {
     account: 'BY10DEMO30120000000000000001',
-    docId: 'ABOWD00916395472',
-    docNum: '2268',
+    docId: 'DEMO00000025',
+    docNum: '2121',
     direction: 'debit',
-    amount: 1569.6,
+    amount: 860.0,
     currency: 'BYN',
-    purpose: 'OTHR 190401 АРЕНДНАЯ ПЛАТА ПО ДОГОВОРУ 53/100/20 ОТ 03.11.20, В ТОМ ЧИСЛЕ НДС ПО СТАВКЕ 20% НА СУММУ 190.58 БЕЛ.РУБ',
+    purpose: 'Возврат излишне перечисленных средств по счёту СЧ-1001 от 01.06.2026. Без НДС.',
     counterparty: {
-      name: 'ООО \'ВАСИЛЁК\'',
-      unp: '190000005',
-      account: 'BY19DEMO30120000000000000009',
-      bic: 'BAPBBY2X'
+      name: 'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "РОМАШКА"',
+      unp: '190000001',
+      account: 'BY23DEMO30120000000000000003',
+      bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-06-02',
+    acceptDate: '2026-06-23',
+    operCodeName: '1'
+  },
+  {
+    account: 'BY10DEMO30120000000000000001',
+    docId: 'DEMO00000026',
+    docNum: '2122',
+    direction: 'debit',
+    amount: 205.3,
+    currency: 'BYN',
+    purpose: 'Оплата по счёту СЧ-3002 от 23.06.2026 за техническую поддержку. В т.ч. НДС 20%.',
+    counterparty: {
+      name: 'ООО СЕТЕВАЯ КОМПАНИЯ',
+      unp: '190000004',
+      account: 'BY25DEMO30120000000000000005',
+      bic: 'DEMOBY2X'
+    },
+    acceptDate: '2026-06-24',
     operCodeName: '1'
   }
 ]

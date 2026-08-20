@@ -219,11 +219,21 @@ const hasItems = computed(() => props.items.length > 0)
       aria-hidden="true"
     >
       <span class="size-10 shrink-0" />
-      <div class="flex min-w-0 flex-1 flex-col gap-1">
-        <p class="invisible truncate font-semibold">
-          &nbsp;
-        </p>
-        <p class="invisible truncate text-xs">
+      <!-- ⚠ Разметка повторяет РЕАЛЬНУЮ строку, включая `sm:flex-row` и строку суммы. Заглушка на
+           два уровня вместо трёх занижала высоту на ~20 px НА МОБИЛЬНОМ (там сумма уходит под
+           текст), то есть резерв не работал ровно на той раскладке, ради которой он и заведён:
+           на десктопе недобор прятал пол в 40 px от плитки, а на 375 px последняя страница
+           по-прежнему подпрыгивала под курсором. -->
+      <div class="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+        <div class="min-w-0 flex-1">
+          <p class="invisible truncate font-semibold">
+            &nbsp;
+          </p>
+          <p class="invisible truncate text-xs">
+            &nbsp;
+          </p>
+        </div>
+        <p class="invisible font-semibold">
           &nbsp;
         </p>
       </div>
