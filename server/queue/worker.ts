@@ -6,7 +6,7 @@
 // transport (manual import) and the bank fetch transport (Alfa online GET, A9 →
 // fetchBankStatement) are LIVE; a real account with no stored bank token fetches nothing
 // (inert []), and Prior online fetch throws until A5b. The live Alfa call is rate-limited
-// (A8) by a GLOBAL BullMQ queue limiter (fleet-wide, default 100/60s — QUEUE_FETCH_RATE_*).
+// (A8) by a GLOBAL BullMQ queue limiter (fleet-wide, default 80/60s — QUEUE_FETCH_RATE_*).
 
 import { Worker } from 'bullmq'
 import { claimCooldownSlot, connectionOptions, incrementWithTtl, queueEnabled } from './connection'
@@ -615,7 +615,7 @@ export function startThroughputWorkers(
     // key (`<prefix>:<queue>:limiter`, INCR'd in Lua), NOT a per-process counter (verified against
     // the installed bullmq 5.x source). So this ONE bucket caps live Alfa calls across the whole
     // fleet at max/duration. Our app has a single Alfa client_id, so a global cap is the correct
-    // model (per-group/`groupKey` limiting is a BullMQ Pro-only feature). Default 100/60s (QUEUE_FETCH_RATE_*).
+    // model (per-group/`groupKey` limiting is a BullMQ Pro-only feature). Default 80/60s — 80 % of Alfa's documented cap (QUEUE_FETCH_RATE_*).
     // Parse/crm-sync aren't rate-limited here (crm-sync throttles via the SDK RestrictionManager).
     // Follow-up: reactive 429 handling via Worker.RateLimitError + rateLimit() if Alfa 429s.
     new Worker<FetchJob>(Q_FETCH, async job => withSpan('bank-fetch', {

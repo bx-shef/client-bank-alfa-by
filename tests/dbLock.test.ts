@@ -1,0 +1,32 @@
+import { describe, expect, it } from 'vitest'
+import { DEFAULT_LOCK_WAIT, MIN_LOCK_WAIT, resolveLockWait } from '../server/utils/dbLock'
+
+// ⚠ Гард ловушки в семантике самого Postgres: `lock_timeout = 0` ОТКЛЮЧАЕТ таймаут, то есть
+// означает «ждать вечно», а не «не ждать». Это ровно наоборот тому, что имеет в виду тот, кто
+// пишет `lockWait: '0'`, и отказ при этом тихий и тяжёлый: вместо быстрого «занято» ожидающий
+// занимает соединение из пула (пул — 10) до конца работы держателя. Из этого же пула берут
+// readiness-проба, события установки и все остальные порталы.
+
+describe('ожидание advisory-лока (#516)', () => {
+  it('пусто/не задано → умолчание для машинных вызывающих', () => {
+    expect(resolveLockWait(undefined)).toBe(DEFAULT_LOCK_WAIT)
+    expect(resolveLockWait('')).toBe(DEFAULT_LOCK_WAIT)
+    expect(resolveLockWait('   ')).toBe(DEFAULT_LOCK_WAIT)
+  })
+
+  it('ЛЮБОЕ написание нуля превращается в минимальное ожидание, а не в «вечно»', () => {
+    // Написаний много, и все они в Postgres значат одно — отключить таймаут.
+    for (const zero of ['0', '0s', '0ms', '00', '0 s', '0min', '0h']) {
+      expect(resolveLockWait(zero), `«${zero}» пропущено как есть — это «ждать вечно»`).toBe(MIN_LOCK_WAIT)
+    }
+  })
+
+  it('нормальные значения проходят как есть', () => {
+    for (const v of ['2s', '10s', '500ms', '1min']) expect(resolveLockWait(v)).toBe(v)
+  })
+
+  it('минимум — не ноль', () => {
+    // Иначе гард возвращал бы ровно ту величину, от которой защищает.
+    expect(MIN_LOCK_WAIT).not.toMatch(/^0+/)
+  })
+})

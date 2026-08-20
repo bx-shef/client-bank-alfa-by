@@ -9,7 +9,9 @@ import {
   isRetryablePollStatus,
   resolvePriorAccountId,
   type PriorFetchDeps,
-  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS
+  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS,
+  looksLikePageBoundary,
+  unreadEnvelopeKeys
 } from '../server/utils/priorFetch'
 import { normalizePriorTransactionList } from '../app/utils/priorStatement'
 import { PRIOR_RESOURCE_NOT_CREATED } from '../app/utils/priorOauth'
@@ -286,5 +288,62 @@ describe('бюджет опроса ресурса (#522, замер на про
     const src = readFileSync(join(import.meta.dirname, '..', 'server/utils/priorFetch.ts'), 'utf8')
     expect(src).toMatch(/\[prior-poll\] ready after/)
     expect(src).toMatch(/deps\.log\?\.\(/)
+  })
+})
+
+describe('подозрение на страничный лимит (#522, живой прогон 2026-08-20)', () => {
+  it('круглые размеры страниц опознаются, обычные — нет', () => {
+    // ⚠ Живой опрос вернул РОВНО 100 операций двенадцать раз подряд. Пагинации нет ни в запросе,
+    // ни в разборе ответа, поэтому проверить по коду нечего: `meta`/`links`, если банк их шлёт,
+    // отбрасываются типом «минимальная форма». Цена ошибки несимметрична — потерянные платежи
+    // молчаливы, а лог при этом говорит «100 ops» и выглядит здоровым.
+    for (const n of [50, 100, 200, 500, 1000]) expect(looksLikePageBoundary(n)).toBe(true)
+    for (const n of [0, 1, 99, 101, 137, 999]) expect(looksLikePageBoundary(n)).toBe(false)
+  })
+
+  it('перечисляет ИМЕНА непрочитанных полей конверта', () => {
+    // Это и есть улика: если банк шлёт пагинацию, она окажется здесь на первом же опросе.
+    const keys = unreadEnvelopeKeys({
+      data: { accountId: 'A', transaction: [], totalCount: 350 },
+      meta: { page: 1 },
+      links: { next: 'https://…' }
+    })
+    expect(keys).toContain('meta')
+    expect(keys).toContain('links')
+    expect(keys).toContain('data.totalCount')
+    // Прочитанные поля в улики не попадают — иначе строка шумит на каждом здоровом ответе.
+    expect(keys).not.toContain('data')
+    expect(keys).not.toContain('data.transaction')
+    expect(keys).not.toContain('data.accountId')
+  })
+
+  it('⚠ значения НЕ печатаются — только имена', () => {
+    // Значения — финансовые ПДн (docs/PRIVACY.md). Строка идёт в общий лог контейнера.
+    const keys = unreadEnvelopeKeys({ data: { transaction: [] }, secret: 'BY26PJCB301206990710000009 33' })
+    expect(keys).toEqual(['secret'])
+    expect(keys.join(' ')).not.toMatch(/BY26/)
+  })
+
+  it('мусор вместо объекта не роняет разбор', () => {
+    for (const bad of [null, undefined, 'строка', 42, []]) expect(unreadEnvelopeKeys(bad)).toEqual([])
+  })
+
+  it('предупреждение печатается ТОЛЬКО на подозрительном количестве', async () => {
+    // Иначе строка шумит на каждом опросе и перестаёт читаться — ровно та беда, из-за которой
+    // построчный лог операций пришлось прижимать (#498).
+    const lines: string[] = []
+    const mk = (n: number) => fakeDeps({
+      pollSequence: [{ data: { accountId: 'ACC-1', transaction: Array.from({ length: n }, (_, i) => ({
+        transactionId: `t${i}`, creditDebitIndicator: 'Credit', amount: 1, currency: 'BYN',
+        transactionDetails: 'оплата', bookingDateTime: '2026-07-02T10:00:00+03:00', debtor: { name: 'ООО Ромашка' }
+      })) } }]
+    })
+    const a = mk(3)
+    await fetchPriorStatement(query, tok, { ...a.deps, log: l => lines.push(l) })
+    expect(lines.some(l => l.includes('[prior-page]'))).toBe(false)
+    lines.length = 0
+    const b = mk(100)
+    await fetchPriorStatement(query, tok, { ...b.deps, log: l => lines.push(l) })
+    expect(lines.some(l => l.includes('[prior-page]'))).toBe(true)
   })
 })

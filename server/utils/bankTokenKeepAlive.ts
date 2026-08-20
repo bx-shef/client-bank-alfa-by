@@ -27,7 +27,7 @@
 //      scan and counted separately — that count is the thing worth showing an admin.
 
 import type { BankProviderId } from '../../app/types/statement'
-import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
+import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 import { sanitizeForLog } from './logSanitize'
 
@@ -36,7 +36,7 @@ const HOUR_MS = 3_600_000
 // ⚠ Lifetimes and the renew band live in `app/utils/bankTokenLifetime.ts`, not here: the settings
 // UI decides what to show an admin from the SAME numbers. Let them drift and you get exactly the
 // failure this module was written for — a calm green row on a connection the server already buried.
-export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, KEEP_ALIVE_BAND, refreshAtAgeMs }
+export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs }
 
 /** Max accounts refreshed per run — bounds the burst against the bank's OAuth endpoint the same
  *  way the portal keep-alive bounds Bitrix. Deliberately generous relative to `bank_tokens`
@@ -87,7 +87,13 @@ export interface BankKeepAliveSelection {
   due: BankAccountRef[]
   /** Connections that CANNOT be kept alive (no stored refresh token) — a human must reconnect. */
   unrefreshable: BankAccountRef[]
-  /** Connections already past their whole lifetime — refreshing them cannot succeed. */
+  /**
+   * Подключения старше НАШЕЙ оценки срока жизни refresh-токена.
+   *
+   * ⚠ «Cannot succeed» — так здесь было написано, и это утверждение о мире, которого мы не знаем.
+   * Срок берётся из документации банка, а не из ответа; строки из этой корзины теперь ещё и
+   * попадают в `due` по редкому расписанию, чтобы последнее слово осталось за банком (#489).
+   */
   expired: BankAccountRef[]
   /** TRUE only if the cap actually dropped someone. Inferring it from `due.length === cap` cried
    *  wolf on the boundary: exactly-cap accounts due is a full batch handled in full, not a batch
@@ -137,6 +143,12 @@ export function selectBankAccountsNearExpiry(
 ): BankKeepAliveSelection {
   const limit = opts.limit ?? MAX_BANK_KEEP_ALIVE_BATCH
   const due: BankAccountRef[] = []
+  // ⚠ Просроченные ПРОБУЮТСЯ, но собираются ОТДЕЛЬНО и доклеиваются в хвост (#489). Иначе они
+  // конкурируют с живыми за места в капнутом батче — а у мёртвой строки шанс на успех заведомо
+  // ниже, чем у живой. Прежний тест стерёг ровно это («мёртвая строка не вытесняет живые»), и
+  // общий список сломал бы гарантию молча: капнутый батч на портале с десятком мёртвых подключений
+  // перестал бы обновлять работающие.
+  const expiredRetry: BankAccountRef[] = []
   const unrefreshable: BankAccountRef[] = []
   const expired: BankAccountRef[] = []
   let truncated = false
@@ -173,6 +185,12 @@ export function selectBankAccountsNearExpiry(
     // floor that protects us from hammering a revoked grant is restored the moment the figure is
     // measured — or replaced by the consent's own `expirationDate` (#503).
     if (age >= ttlMs && BANK_REFRESH_TTL_MEASURED[row.provider]) {
+      // ⚠ Старше срока — но ХОРОНИТЬ БЕЗ ВОПРОСА К БАНКУ мы больше не будем (#489). Прежний код
+      // клал такую строку в `expired` и не трогал её никогда; живой прогон дал ровно это —
+      // `expired=2, refreshed=0, failed=0`, то есть банк не спросили ни разу. Срок — НАША оценка,
+      // а правду знает только банк: ошибка в нашу сторону стоит одного неудачного запроса, ошибка
+      // в другую — похода владельца счёта в интернет-банк за тем, что не ломалось.
+      if (expiredRetryDue(row.lastAttemptAt, nowMs)) expiredRetry.push(ref)
       expired.push(ref)
       continue
     }
@@ -180,7 +198,11 @@ export function selectBankAccountsNearExpiry(
     if (due.length < limit) due.push(ref)
     else truncated = true
   }
-  return { due, unrefreshable, expired, truncated }
+  // Живые — первыми, просроченные — в остаток места. Обрезание считается по обоим спискам.
+  const room = Math.max(0, limit - due.length)
+  const retried = expiredRetry.slice(0, room)
+  if (expiredRetry.length > room) truncated = true
+  return { due: [...due, ...retried], unrefreshable, expired, truncated }
 }
 
 /** Injected side-effects, so the orchestrator unit-tests without a DB or a bank. */
@@ -188,6 +210,14 @@ export interface BankKeepAliveDeps {
   now: () => number
   /** Every connected account with freshness (`listAllBankAccountInfo` bound to the store). */
   listAccounts: () => Promise<BankAccountInfo[]>
+  /**
+   * Отметить попытку обновления (`markBankRefreshAttempt`). Необязательна: движок обязан работать
+   * и в тестах, и в скриптах без БД.
+   *
+   * ⚠ Но без неё редкие повторы для просроченных подключений превращаются в повторы НА КАЖДОМ
+   * тике — метка и есть то, что делает «редко» редким. Проводка проверяется отдельным тестом.
+   */
+  markAttempt?: (ref: BankAccountRef, nowMs: number) => Promise<void>
   /** Load one account's decrypted token, or null if it vanished (disconnected mid-run). */
   getToken: (ref: BankAccountRef) => Promise<BankToken | null>
   /** Refresh + persist under the per-account advisory lock. MUST be called with `{force:true}`. */
@@ -249,6 +279,11 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
         continue
       }
       const before = token.expiresAt
+      // ⚠ Отмечаем ПОПЫТКУ до похода в банк, а не после. Между запросом и ответом до 15 секунд, и
+      // если процесс умрёт внутри этого окна, метка всё равно должна остаться: иначе строка,
+      // старше своего срока, будет пробоваться на каждом тике — ровно то долбление отозванного
+      // гранта, которого мы избегаем. Best-effort: не смогли отметить — не повод отменять попытку.
+      await deps.markAttempt?.(ref, deps.now()).catch(() => {})
       const updated = await deps.refresh(token)
       // A bumped ACCESS expiry proves the pair rotated — either by us, or by a poll that won the
       // same advisory lock while we waited. Both outcomes leave a fresh refresh token behind.
@@ -267,10 +302,12 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
   if (unrefreshable.length > 0) {
     deps.warn?.(`[bank-keepalive] ${unrefreshable.length} connection(s) have NO refresh token — they die with their access token and need reconnecting: ${nameRefs(unrefreshable)}`)
   }
-  // Expired connections are NOT an error we can retry our way out of — they are a queue of human
-  // actions. Saying so once per run is the only way anyone learns the import stopped for them.
+  // ⚠ Формулировка изменена вместе с поведением (#489). Прежняя говорила «NOT retried — reconnect
+  // required», и это было ПРАВДОЙ о коде и НЕПРАВДОЙ о мире: срок — наша оценка, а решает банк.
+  // Теперь такие подключения пробуются редко (`EXPIRED_RETRY_INTERVAL_MS`), и сообщение обязано
+  // это отражать — иначе владелец пойдёт переподключать то, что вот-вот воскреснет само.
   if (expired.length > 0) {
-    deps.warn?.(`[bank-keepalive] ${expired.length} connection(s) are past their refresh lifetime and are NOT retried — reconnect required: ${nameRefs(expired)}`)
+    deps.warn?.(`[bank-keepalive] ${expired.length} connection(s) past their assumed refresh lifetime — retried rarely, the bank has the final say; if the retry keeps failing, reconnect: ${nameRefs(expired)}`)
   }
   deps.log?.(`[bank-keepalive] selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
   return s

@@ -17,11 +17,11 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, REQUESTS_PER_ACCOUNT } from '../queue/pollCapacity'
-import { deleteBankToken, getBankToken, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts, type BankAccountRef, type BankToken as BankTokenType } from '../utils/bankTokenStore'
+import { deleteBankToken, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
-import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs, runBankKeepAlive } from '../utils/bankTokenKeepAlive'
-import { ensureBankToken } from '../utils/ensureBankToken'
+import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankTokenKeepAlive'
+import { scheduleBankKeepAlive } from '../utils/bankKeepAliveSchedule'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
 import { sweepOldBatches } from '../utils/importBatchStore'
@@ -32,8 +32,7 @@ import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
 import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
 import { recordQueueHealth } from '../utils/queueAlertState'
-import { keepAlivePulse, keepAliveStartedAt, markKeepAliveStarted, recordKeepAlivePulse } from '../utils/keepAliveState'
-import { runKeepAliveTick } from '../utils/keepAliveTick'
+import { keepAlivePulse, keepAliveStartedAt } from '../utils/keepAliveState'
 import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
@@ -47,8 +46,34 @@ const IMPORT_BATCH_TTL_DAYS = 3
 const QUEUE_HEALTH_INTERVAL_MS = 5 * 60 * 1000
 
 export default defineNitroPlugin((nitroApp) => {
-  if (!queueEnabled()) return
+  // ⚠ Во время статического пререндера НИЧЕГО не заводим (та же конвенция, что у `envCheck.ts`).
+  // Причина не косметическая: живой `setInterval` НЕ ДАЁТ процессу завершиться, и `nuxt generate`
+  // виснет НАВСЕГДА уже ПОСЛЕ того, как напечатал «Generated public .output/public» — то есть
+  // выглядит успешной сборкой, которая просто не заканчивается. Раньше это было закрыто случайно:
+  // продление стояло за гейтом Redis, а Redis на сборке нет. Вынеся его из-под гейта (#489), я эту
+  // случайную защиту снял и сломал сборку — CI поймал, локальный `check-app.sh` нет, потому что
+  // `pnpm generate` в него не входил.
+  if (import.meta.prerender) return
   const role = queueRuntimeConfig()
+  let bankKeepAliveTimer: ReturnType<typeof setInterval> | undefined
+  // ⚠ Каденция вычисляется ЗДЕСЬ и переиспользуется проверкой пульса: возьми она своё число, и
+  // оператор, разредивший продление через env, получал бы ложную тревогу на каждом тике.
+  const bankKeepAliveMs = bankKeepAliveIntervalMs(Number(process.env.BANK_KEEPALIVE_MINUTES || BANK_KEEP_ALIVE_MINUTES))
+  // ⚠ ПРОДЛЕНИЕ БАНКОВСКИХ ТОКЕНОВ — ДО гейта Redis, и это главное в порядке этих строк (#489).
+  // Ему нужны Postgres и сам банк; очередь не нужна вовсе. Пока оно стояло после `queueEnabled()`,
+  // любой простой Redis тихо уносил с собой банковские подключения — а лечится их смерть не
+  // рестартом сервиса, а походом ВЛАДЕЛЬЦА СЧЁТА в интернет-банк.
+  //
+  // ⚠ И `CRON_REAL_POLL` его тоже не гейтит: тот флаг про «не долбить API выписки», а обновление
+  // токена выписку не читает. Связать одно с другим — значит убивать подключение каждый раз, когда
+  // опрос ставят на паузу; ровно это и происходило.
+  if (role.cron) {
+    bankKeepAliveTimer = scheduleBankKeepAlive(process.env.BANK_KEEPALIVE_MINUTES)
+  }
+  if (!queueEnabled()) {
+    console.warn('[queue] Redis не настроен — очереди выключены; продление банк-токенов работает независимо')
+    return
+  }
   // Deps are needed by any worker (throughput OR the event worker); build once.
   const deps = (role.workers || role.cron) ? liveHandlerDeps() : null
   const workers: Worker[] = []
@@ -75,7 +100,6 @@ export default defineNitroPlugin((nitroApp) => {
   let timer: ReturnType<typeof setInterval> | undefined
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined
-  let bankKeepAliveTimer: ReturnType<typeof setInterval> | undefined
   let sweepTimer: ReturnType<typeof setInterval> | undefined
   let batchSweepTimer: ReturnType<typeof setInterval> | undefined
   let healthTimer: ReturnType<typeof setInterval> | undefined
@@ -230,49 +254,10 @@ export default defineNitroPlugin((nitroApp) => {
       console.warn('[queue] token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
     }
 
-    // BANK token keep-alive (#488/#489) — the twin of the block above, on a different clock and
-    // with a different cost of being wrong. Kept separate deliberately: that one is gated on
-    // Bitrix creds and measured in days, this one on BANK creds and measured in hours (Alfa's
-    // refresh lives ~10 h). Measured in production: the connection dies overnight, and the cure is
-    // the ACCOUNT OWNER logging into their internet bank — so every failure here costs a human
-    // action at the client's end.
-    //
-    // ⚠ There is deliberately no `CRON_REAL_POLL` gate. That flag exists to avoid hammering the
-    // STATEMENT api; renewing a token is not a statement read and spends none of its budget.
-    // Coupling the two is exactly what killed the connection whenever polling was paused.
-    //
-    // ⚠ Known limitation: this whole plugin does not start without Redis (`queueEnabled()` at the
-    // top), so a long Redis outage still takes connections down with it. The bank could not care
-    // less about our queue — but keep-alive lives in the cron, and the cron lives in this plugin.
-    // Moving it to a standalone timer is its own decision: it changes the role of the plugin.
-    const bankKeepAliveMs = bankKeepAliveIntervalMs(Number(process.env.BANK_KEEPALIVE_MINUTES || BANK_KEEP_ALIVE_MINUTES))
-    const bankKeepAliveDeps = {
-      now: Date.now,
-      listAccounts: () => listAllBankAccountInfo(dbQuery),
-      getToken: (ref: BankAccountRef) => getBankToken(dbQuery, ref.memberId, ref.provider, ref.accountKey),
-      // ⚠ `force` is mandatory. Without it `ensureBankToken` looks at the ACCESS token's expiry —
-      // precisely the wrong signal here: access can be minutes old while the refresh behind it is
-      // living out its last few. That is why refreshing «along the way» never saved it.
-      refresh: (token: BankTokenType) => ensureBankToken(token, undefined, { force: true }),
-      log: (m: string) => console.info(m),
-      warn: (m: string) => console.warn(m)
-    }
-    // Сам тик — в `runKeepAliveTick` (server/utils/keepAliveTick.ts), чтобы инвариант «пульс только
-    // на ЗАВЕРШЁННОМ прогоне» можно было проверить тестом. Пока он жил здесь try/catch'ем, его
-    // можно было вывернуть наизнанку (писать пульс в `catch`), не уронив ни одного теста, — то есть
-    // погасить ровно ту тревогу, ради которой пульс и заведён.
-    const runBankKeepAliveTick = () => runKeepAliveTick({
-      run: () => withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(bankKeepAliveDeps)),
-      record: recordKeepAlivePulse,
-      now: Date.now,
-      error: (m: string) => console.error(m)
-    })
-    // Отмечаем, что таймер ЗАПЛАНИРОВАН: иначе «прогонов ещё не было» неотличимо от «не
-    // запускается», и регрессия, при которой продление падает с первого же тика, молчала бы вечно.
-    markKeepAliveStarted(Date.now())
-    bankKeepAliveTimer = setInterval(runBankKeepAliveTick, bankKeepAliveMs)
-    void runBankKeepAliveTick() // at boot: a connection may have idled all night while the service was down
-    console.info('[queue] bank token keep-alive scheduled (every %d min, #489)', bankKeepAliveMs / 60_000)
+    // ⚠ BANK token keep-alive (#488/#489) здесь БОЛЬШЕ НЕТ — он заведён ВЫШЕ гейта Redis, до
+    // `queueEnabled()`. Пока он жил тут, простой Redis уносил с собой банковские подключения:
+    // банку до нашей очереди дела нет, а цена промаха платится не сервисом, а владельцем счёта —
+    // походом в интернет-банк. См. `scheduleBankKeepAlive` в server/utils/bankKeepAliveSchedule.ts.
 
     // Ретенция итогов ручных загрузок (#417). ВНЕ флага `STATEMENT_SWEEP`: строка несёт имя файла
     // клиента, то есть это чистка ПДн, и ставить её в зависимость от тумблера чистки ОЧЕРЕДЕЙ

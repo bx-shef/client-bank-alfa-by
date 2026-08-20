@@ -78,9 +78,46 @@ export function consentExpiringSoon(c: ConnectionLike, nowMs: number, days = CON
 }
 
 /** Renew once the token is within this fraction of its life from expiry (0.2 of Alfa's 10 h = 2 h). */
-export const KEEP_ALIVE_BAND = 0.2
+export const KEEP_ALIVE_BAND = 0.5
 
-/** Age (ms) at which a provider's token should be renewed: lifetime minus the band. 0 ⇒ unknown. */
+/**
+ * Как часто ПРОБОВАТЬ подключение, которое мы уже сочли мёртвым по своим часам (#489).
+ *
+ * ⚠ Раньше такого числа не было, потому что не было и самой попытки: строка старше срока уходила в
+ * корзину `expired` и не обновлялась НИКОГДА. Живой прогон показал, чем это кончается —
+ * `expired=2, refreshed=0, failed=0`: банк не спросили ни разу, подключение похоронили мы сами.
+ *
+ * ⚠ Срок — НАШЕ представление о жизни токена, а банк — единственный, кто знает правду. Ошибка в
+ * нашу сторону стоит одного HTTP-запроса, который не удастся; ошибка в другую стоит владельцу
+ * счёта похода в интернет-банк за тем, что и не ломалось. Асимметрия очевидна, поэтому пробуем —
+ * но редко, чтобы не долбить действительно отозванный грант.
+ */
+export const EXPIRED_RETRY_INTERVAL_MS = 6 * 3600 * 1000
+
+/**
+ * Пора ли дать ПОСЛЕДНИЙ шанс подключению, которое старше своего срока.
+ *
+ * `lastAttemptAt === 0` (не пробовали ни разу) ⇒ пробуем немедленно: это ровно тот случай, когда
+ * подключение пережило простой сервиса и было объявлено мёртвым, ни разу не будучи спрошенным.
+ */
+export function expiredRetryDue(lastAttemptAt: number, nowMs: number, intervalMs = EXPIRED_RETRY_INTERVAL_MS): boolean {
+  if (!Number.isFinite(lastAttemptAt) || lastAttemptAt <= 0) return true
+  return nowMs - lastAttemptAt >= intervalMs
+}
+
+/**
+ * Age (ms) at which a provider's token should be renewed: lifetime minus the band. 0 ⇒ unknown.
+ *
+ * ⚠ Полоса — 0.5, а не 0.2, и это не вкусовщина. При 0.2 окно, в котором обновление вообще
+ * возможно, для Альфы составляло 8..10 часов — ДВА часовых тика. Любой перерыв длиннее двух часов
+ * ровно в этом окне (деплой, простой Redis, остановка крон-инстанса) означал, что подключение
+ * перевалит за срок и будет похоронено. Один пропущенный тик не должен стоить владельцу счёта
+ * похода в банк, поэтому обновляем с половины срока: окно 5..10 часов, пять шансов вместо двух,
+ * и каждый успех сдвигает следующее окно на пять часов вперёд.
+ *
+ * ⚠ Цена — примерно вдвое больше обращений за токеном. На фоне лимита банка (80/мин) и одного
+ * счёта на прогон это неизмеримо мало.
+ */
 export function refreshAtAgeMs(provider: BankProviderId, band = KEEP_ALIVE_BAND): number {
   const ttlMs = (BANK_REFRESH_TTL_SEC[provider] ?? 0) * 1000
   return ttlMs * (1 - band)

@@ -20,7 +20,7 @@ export interface QueueRuntime {
   /** GLOBAL rate limit for the bank-fetch queue (A8). BullMQ's worker `limiter` is
    *  shared across ALL replicas on the same queue via a Redis key (global, not per-instance
    *  — verified against the installed bullmq 5.x source), so this caps live Alfa calls across
-   *  the whole fleet at `max` per `duration` ms. Default 100/60s = Alfa's per-client cap (our
+   *  the whole fleet at `max` per `duration` ms. Default 80/60s — 80 % of Alfa's documented per-client cap (see DEFAULT_FETCH_RATE_MAX) (our
    *  app has ONE Alfa client_id, so a single global cap is correct). NB a fetch JOB is ~one
    *  Alfa request (token refresh is near-expiry-only + per-account locked); if Alfa counts
    *  its `/token` endpoint in the SAME bucket, lower this for headroom during refresh bursts. */
@@ -41,12 +41,33 @@ export interface QueueRuntime {
  *  quota / DB pool. B24 limits are per-portal anyway — batch, don't just widen. */
 export const MAX_CONCURRENCY = 100
 
-/** Bank-fetch rate defaults (A8): Alfa allows ~100 requests/min per OAuth client. */
-export const DEFAULT_FETCH_RATE_MAX = 100
+/**
+ * Bank-fetch rate defaults (A8).
+ *
+ * ⚠ Alfa's documented cap is ~100 requests/min PER OAUTH CLIENT — and our app has exactly one
+ * `client_id`, so that ceiling is shared by every portal we will ever serve. It does not grow with
+ * customers.
+ *
+ * ⚠ The default used to sit at 100 — EXACTLY on the bank's ceiling, with zero headroom. That is the
+ * wrong side of the line to be on: our limiter counts what we ENQUEUE, the bank counts what it
+ * RECEIVES, and the two never agree perfectly (retries after a network blip, a poll racing the
+ * limiter's window edge, clock skew between replicas). Sitting exactly at the cap means the first
+ * such disagreement is a 429 — and a 429 on a statement fetch reads to the operator as "the bank is
+ * down", not as "we asked a fraction too often". Held at 80 % of the documented cap (owner's call):
+ * the reserve costs nothing at our scale — one Alfa account is ONE request per sweep — and buys the
+ * difference between a self-inflicted throttle and a quiet poll.
+ *
+ * ⚠ The number is also a PILOT figure from 2026-06-30 and may differ in the contract. A reserve is
+ * the only thing standing between "the published number was optimistic" and a wedged import.
+ */
+export const ALFA_DOCUMENTED_RATE_MAX = 100
+/** Fraction of the documented cap we actually use. */
+export const FETCH_RATE_HEADROOM = 0.8
+export const DEFAULT_FETCH_RATE_MAX = ALFA_DOCUMENTED_RATE_MAX * FETCH_RATE_HEADROOM
 export const DEFAULT_FETCH_RATE_DURATION_MS = 60_000
 /** Bounds so a fat-fingered value can't effectively DISABLE the cap: a huge `max`
  *  (`999999`) or a tiny `duration` (`1`ms) would both let the fleet hammer the bank.
- *  10× headroom over the default covers a higher Alfa tier; the window floor stops a
+ *  an order of magnitude over the default covers a higher Alfa tier; the window floor stops a
  *  sub-second bucket. Both edges clamp, so the cap can never be turned off by a typo. */
 export const MAX_FETCH_RATE_MAX = 1_000
 export const MIN_FETCH_RATE_DURATION_MS = 1_000

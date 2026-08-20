@@ -38,7 +38,49 @@ const TARGETS = new Set(
 /** Цели, которые качают скрипт из `scripts/` и потому обязаны на что-то реально указывать. */
 const DOWNLOADED = [...MAKEFILE.matchAll(/\$\(RAW\)\/([\w.-]+)/g)].map(m => m[1]!)
 
+/**
+ * Имена из объявления `.PHONY`, включая перенесённые на следующие строки через `\`.
+ *
+ * ⚠ Разбирается построчно, а не одной многострочной регуляркой: та молча захватывала только две
+ * строки из трёх, и «цель не в .PHONY» тогда сообщалось бы про цели, которые там есть. Тест,
+ * ошибающийся в свою пользу, хуже отсутствующего — но и ошибающийся против тоже: он приучает
+ * править не то.
+ */
+/** Цели, объявленные в файле (левая часть до двоеточия, в начале строки). */
+function makeTargets(): string[] {
+  return [...new Set([...MAKEFILE.matchAll(/^([a-z][a-z-]*):/gm)].map(m => m[1]!))]
+}
+
+function phonyTargets(): string[] {
+  const lines = MAKEFILE.split('\n')
+  const start = lines.findIndex(l => l.startsWith('.PHONY:'))
+  if (start < 0) return []
+  const out: string[] = []
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i]!
+    const body = i === start ? line.slice('.PHONY:'.length) : line
+    out.push(...body.replace(/\\$/, '').split(/\s+/).filter(Boolean))
+    if (!line.trimEnd().endsWith('\\')) break
+  }
+  return out
+}
+
 describe('серверные команды: рантбук ⇄ Makefile ⇄ scripts (#487)', () => {
+  /**
+   * Слова, которые идут после `make` в ПРОЗЕ, а не в вызове цели. Список закрытый: новое слово
+   * обязано получить здесь причину, иначе исключения превращаются в свалку, гасящую настоящие
+   * находки.
+   *
+   * ⚠ `target` — из дословной цитаты ошибки `No rule to make target 'self-update'`. Цитата в
+   * рантбуке нужна: оператор увидит эту строку на экране и будет искать её текстом. Переписывать
+   * её ради теста значило бы испортить документацию в угоду проверке.
+   *
+   * ⚠ Сюда же просилось англоязычное «make sure» — но соседний тест показал, что в операторских
+   * документах его нет вовсе. Это и есть смысл проверки на протухание: умозрительное исключение
+   * ничего не гасит сегодня и молча погасит настоящую находку завтра.
+   */
+  const PROSE_AFTER_MAKE = new Set(['target'])
+
   it('каждая упомянутая в документации цель `make` существует', () => {
     // Опечатка или переименование цели превращают рантбук в набор команд, которые не выполняются.
     // ⚠ Берём только собственные цели (`[a-z]`), а не любую строку после `make` — в текстах есть
@@ -47,10 +89,18 @@ describe('серверные команды: рантбук ⇄ Makefile ⇄ scr
     for (const { path, text } of operatorDocs()) {
       for (const m of text.matchAll(/\bmake\s+([a-z][a-z0-9-]*)\b/g)) {
         const target = m[1]!
-        if (!TARGETS.has(target)) missing.push(`${path}: make ${target}`)
+        if (!TARGETS.has(target) && !PROSE_AFTER_MAKE.has(target)) missing.push(`${path}: make ${target}`)
       }
     }
     expect(missing).toEqual([])
+  })
+
+  it('исключения не протухли — каждое всё ещё встречается в документации', () => {
+    // Иначе список копит слова, которых давно нет, и гасит будущие настоящие находки.
+    const all = operatorDocs().map(d => d.text).join('\n')
+    for (const word of PROSE_AFTER_MAKE) {
+      expect(all, `«make ${word}» больше не встречается — уберите из списка`).toMatch(new RegExp(`\\bmake\\s+${word}\\b`))
+    }
   })
 
   it('каждый скачиваемый скрипт лежит в scripts/', () => {
@@ -62,13 +112,32 @@ describe('серверные команды: рантбук ⇄ Makefile ⇄ scr
     }
   })
 
-  it('серверные цели объявлены в .PHONY', () => {
+  it('КАЖДАЯ цель объявлена в .PHONY, а не выборочные две', () => {
     // Иначе появившийся в каталоге файл с именем цели молча выключает её: make сочтёт цель
     // собранной и не выполнит рецепт.
-    const phony = /^\.PHONY:(.*)$/m.exec(MAKEFILE)?.[1]?.split(/\s+/) ?? []
-    for (const target of ['doctor', 'queue-stats']) {
-      expect(phony, target).toContain(target)
-    }
+    //
+    // ⚠ Проверялись ровно `doctor` и `queue-stats`, то есть НИ ОДНА из целей, добавленных позже.
+    // Мутационное ревью показало эффект вживую: `touch help && make help` печатает
+    // «make: 'help' is up to date», выходит с кодом 0 и не делает ничего — отказ выглядит успехом.
+    // Для `self-update` это особенно скверно: случайный файл с таким именем в каталоге деплоя тихо
+    // парализует единственный путь обновления сервера.
+    //
+    // Поэтому список не перечисляется руками, а СВЕРЯЕТСЯ ЦЕЛИКОМ: новая цель обязана попасть в
+    // `.PHONY` либо получить здесь причину.
+    const phony = new Set(phonyTargets())
+    /** Цели, которым `.PHONY` не нужен, — файлов с такими именами не бывает по построению. */
+    const EXEMPT = new Set<string>()
+    const missing = makeTargets().filter(t => !phony.has(t) && !EXEMPT.has(t))
+    expect(missing, 'цели не в .PHONY').toEqual([])
+    // Регулярка не должна «находить» пустоту — иначе тест зелен при сломанном разборе.
+    expect(phony.size).toBeGreaterThan(10)
+  })
+
+  it('.PHONY не перечисляет несуществующих целей', () => {
+    // Обратная сторона: протухший список создаёт ложное ощущение охвата.
+    const phony = [...new Set(phonyTargets())]
+    const known = new Set(makeTargets())
+    expect(phony.filter(t => !known.has(t)), 'в .PHONY есть цели, которых нет').toEqual([])
   })
 
   it('документация не зовёт серверные скрипты так, как на сервере не выполнить', () => {
