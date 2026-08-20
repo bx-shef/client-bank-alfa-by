@@ -46,6 +46,14 @@ const IMPORT_BATCH_TTL_DAYS = 3
 const QUEUE_HEALTH_INTERVAL_MS = 5 * 60 * 1000
 
 export default defineNitroPlugin((nitroApp) => {
+  // ⚠ Во время статического пререндера НИЧЕГО не заводим (та же конвенция, что у `envCheck.ts`).
+  // Причина не косметическая: живой `setInterval` НЕ ДАЁТ процессу завершиться, и `nuxt generate`
+  // виснет НАВСЕГДА уже ПОСЛЕ того, как напечатал «Generated public .output/public» — то есть
+  // выглядит успешной сборкой, которая просто не заканчивается. Раньше это было закрыто случайно:
+  // продление стояло за гейтом Redis, а Redis на сборке нет. Вынеся его из-под гейта (#489), я эту
+  // случайную защиту снял и сломал сборку — CI поймал, локальный `check-app.sh` нет, потому что
+  // `pnpm generate` в него не входил.
+  if (import.meta.prerender) return
   const role = queueRuntimeConfig()
   let bankKeepAliveTimer: ReturnType<typeof setInterval> | undefined
   // ⚠ Каденция вычисляется ЗДЕСЬ и переиспользуется проверкой пульса: возьми она своё число, и
