@@ -1,4 +1,5 @@
-.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats prior-probe
+.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
+        prior-probe prior-switch poll-check self-update help
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -21,6 +22,7 @@ build-local:
 prod-up:
 	docker compose -f docker-compose.prod.yml up -d
 
+## Остановить стек
 prod-down:
 	docker compose -f docker-compose.prod.yml down
 
@@ -34,9 +36,11 @@ prod-redeploy:
 	docker compose -f docker-compose.prod.yml up -d && \
 	docker image prune -f
 
+## Живой лог app-контейнера (Ctrl+C чтобы выйти)
 logs:
 	docker compose -f docker-compose.prod.yml logs -f app
 
+## Состояние контейнеров стека
 ps:
 	docker compose -f docker-compose.prod.yml ps
 
@@ -66,6 +70,9 @@ ps:
 # ⚠ Берётся `main`, а НЕ то, что развёрнуто. Обычно это то же самое; когда важна точность, задайте
 # ссылку явно: `make doctor REF=<коммит>`. Цель печатает, что именно скачала.
 REF ?= main
+# Умолчания параметров диагностических целей. ⚠ Именно `?=`: пустая строка, доехавшая до скрипта
+# вместо значения, читается им как аргумент и ломает разбор — а выглядит это как ошибка скрипта.
+SINCE ?= 3h
 RAW = https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/scripts
 
 # Прочитать ОДНО значение из ./.env, не исполняя файл.
@@ -100,7 +107,51 @@ env-value = $$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$(
 	  | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]][[:space:]]*\#.*\$$//" -e "s/[[:space:]]*\$$//" \
 	        -e "s/^\"\(.*\)\"\$$/\1/" -e "s/^'\(.*\)'\$$/\1/")
 
-## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
+## Обновить САМ этот Makefile из репозитория (новые цели появляются только так)
+#
+# ⚠ Без этой цели остальные бесполезны. Репозитория на сервере нет, `Makefile` кладётся туда
+# один раз при развёртывании и дальше живёт своей жизнью — поэтому цель, добавленная в репо,
+# на сервере просто не существует, и оператору приходится набирать сырые `docker compose` и
+# `curl … | bash`. Ровно это и происходило.
+self-update:
+	@t=$$(mktemp /tmp/Makefile.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/Makefile" \
+	  && make -n -f "$$t" help >/dev/null 2>&1 \
+	  && { b="./Makefile.bak-$$(date +%Y%m%d-%H%M%S)"; cp ./Makefile "$$b"; cp "$$t" ./Makefile; \
+	       echo "[make] Makefile обновлён из $(REF), копия прежнего: $$b"; \
+	       echo "[make] новые цели:"; make help; }
+
+## Список целей с описаниями
+#
+# ⚠ Запоминает ПОСЛЕДНЮЮ строку `##` и печатает её у ближайшей следующей цели. Наивный
+# `grep -B1` этого не умеет: у половины целей между описанием и самой целью лежит ещё
+# несколько строк комментария, и они молча выпадали из списка — то есть справка врала о том,
+# что вообще можно запустить.
+help:
+	@awk '/^## /{d=substr($$0,4)} \
+	      /^[a-z][a-z-]*:/{if(d!=""){printf "  %-14s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
+	      $(MAKEFILE_LIST)
+
+## Что происходит с опросом банков: успехи, падения, продление токенов (#522)
+#
+#   make poll-check            # за 3 часа
+#   make poll-check SINCE=30m
+poll-check:
+	@t=$$(mktemp /tmp/poll-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-poll-check.sh" \
+	  && bash "$$t" "$(SINCE)"
+
+## Переключить Приорбанк между прямым адресом и крипто-шлюзом (#522)
+#
+#   make prior-switch TO=direct     # напрямую, без белорусской криптографии
+#   make prior-switch TO=gateway    # обратно через crypto-gw
+#   make prior-switch               # только показать текущее состояние
+prior-switch:
+	@t=$$(mktemp /tmp/prior-switch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prior-switch-host.sh" \
+	  && { a="--show"; [ "$(TO)" = "direct" ] && a="--to-direct"; \
+	       [ "$(TO)" = "gateway" ] && a="--to-gateway"; bash "$$t" $$a; }
+
 #
 # ⚠ Домен НЕ спрашиваем — читаем `DOMAIN` из `./.env`, который на сервере и так рядом. Аварийную
 # команду набирают с телефона, и подстановка домена руками означает опечатку в самый неудобный
@@ -120,6 +171,7 @@ prior-probe:
 	       c=""; [ "$(CONSENT)" = "1" ] && c="--with-consent"; \
 	       bash "$$t" "$$h" $$c; }
 
+## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
 doctor:
 	@echo "[make] скачиваю prod-doctor.sh из $(REF)"
 	@t=$$(mktemp /tmp/prod-doctor.XXXXXX) && trap 'rm -f "$$t"' EXIT \
