@@ -1,8 +1,8 @@
-import { isLockTimeout } from './bankRefreshLock'
 // Pure request logic for POST /api/distribution/recompute (#109, §3/§9.2 «пересчитать»). Same gate
 // model as /api/distribution/ledger (feature flag + frame admin + installed). Recomputes «осталось»
 // for every payment carrier — the manual recovery backstop (deletion crash-window / drift). Thin over
 // DI — unit-testable without pg / network / the SDK.
+import { isLockTimeout } from './bankRefreshLock'
 
 /** Injected side effects + config for {@link handleRecomputeRequest}. */
 export interface RecomputeRequestDeps {
@@ -57,13 +57,13 @@ export async function handleRecomputeRequest(
     if (recomputed === null) return { status: 200, body: { provisioned: false, recomputed: 0 } }
     return { status: 200, body: { ok: true, recomputed } }
   } catch (e) {
-    // ⚠ «Занято» — штатный исход, а не сбой (#516). Пересчёт сериализован advisory-локом на портал
-    // (он спорит и с самим crm-sync за поля «осталось»), и конкурентный клик раньше отдавал
-    // необработанное `55P03` — наружу неотличимо от настоящей поломки.
+    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Recompute is serialized by a per-portal
+    // advisory lock (it also contends with crm-sync itself over the «осталось» fields), and a
+    // concurrent click used to surface an unhandled `55P03` — indistinguishable from a real break.
     //
-    // ⚠ Отдельная причина сказать это внятно: пересчёт долгий по своей природе — он идёт по всем
-    // платёжным элементам портала. «Повторите через несколько секунд» тут было бы враньём, и
-    // человек бил бы по кнопке всё это время.
+    // ⚠ A separate reason to spell it out: recompute is long by nature, walking every payment
+    // carrier of the portal. «Retry in a few seconds» would be a lie here, and the human would keep
+    // hammering the button for all of it.
     if (isLockTimeout(e)) {
       return {
         status: 503,

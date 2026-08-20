@@ -157,13 +157,13 @@ describe('handleRecomputeRequest', () => {
   })
 })
 
-describe('конкурентный клик по пересчёту — «занято», а не сбой (#516)', () => {
-  /** Ошибка Postgres при исчерпании `lock_timeout` — ровно то, что прилетало наружу необработанным. */
+describe('concurrent click on recompute — «busy», not a failure (#516)', () => {
+  /** The Postgres error on an exhausted `lock_timeout` — exactly what used to escape unhandled. */
   const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
 
-  it('исчерпание ожидания лока ⇒ 503, и текст не врёт про «через пару секунд»', async () => {
-    // ⚠ Пересчёт идёт по ВСЕМ платежам портала и долог по своей природе. Обещать «повторите через
-    // несколько секунд» значит заставить человека бить по кнопке всё это время.
+  it('an exhausted lock wait ⇒ 503, and the text does not lie about «a couple of seconds»', async () => {
+    // ⚠ Recompute walks EVERY payment of the portal and is long by nature. Promising «retry in a few
+    // seconds» would have the human hammering the button for all of it.
     const res = await handleRecomputeRequest(rdeps({
       recompute: async () => {
         throw lockTimeout
@@ -174,7 +174,7 @@ describe('конкурентный клик по пересчёту — «зан
     expect(String(res.body.error)).toMatch(/через минуту/)
   })
 
-  it('НАСТОЯЩИЙ сбой остаётся 502 — спутать их значит советовать не то', async () => {
+  it('a REAL failure stays 502 — confusing the two means giving the wrong advice', async () => {
     const res = await handleRecomputeRequest(rdeps({
       recompute: async () => {
         throw new Error('connection terminated')

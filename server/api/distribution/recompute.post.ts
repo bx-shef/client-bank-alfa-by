@@ -38,9 +38,10 @@ function liveRecomputeDeps(): RecomputeRequestDeps {
       if (!paymentRef || !distRef) return null // SPs not provisioned
       // Single-flight per portal: serialize concurrent recomputes (and vs the crm-sync/deletion writers
       // touching the same «осталось» fields) — same advisory lock family as provisioning.
-      // ⚠ Короткое ожидание — по той же причине, что у провижининга: держатель идёт по всем
-      // платежам портала, ждать его бессмысленно, а ожидающий всё это время занимает соединение
-      // из пула. Второму пересчёту делать нечего — первый покроет те же элементы.
+      // ⚠ Short wait, same reason as provisioning — more so, in fact: this holder walks every payment
+      // of the portal at 2 REST calls each (up to `MAX_LEDGER_PAYMENTS`), so it runs for minutes on a
+      // busy portal, not seconds. Outwaiting it is pointless, and a waiter occupies a pooled
+      // connection throughout. A second recompute has no work — the first covers the same elements.
       return withAdvisoryLock(`distribution-recompute:${memberId}`, () =>
         withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)),
       { lockWait: SINGLE_FLIGHT_LOCK_WAIT })

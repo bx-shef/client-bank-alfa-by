@@ -1,6 +1,6 @@
 # Наши HTTP-роуты: авторизация и коды
 
-> Last reviewed: 2026-08-19
+> Last reviewed: 2026-08-20
 
 Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
 [`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.
@@ -48,8 +48,8 @@
 | POST | `/api/bank/disconnect` | **F+A** (member-scoped WHERE, адрес — неизменяемый `id`) | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409, 503 | `import` |
 | GET | `/api/distribution/ledger` | **F+A** + гейт `DISTRIBUTION_PROVISION_ENABLED` | **да** | 200, 400, 403, 404, 502 | — |
-| POST | `/api/distribution/provision` | **F+A** + тот же гейт | **да** | 200, 400, 403, 404, 502 | — |
-| POST | `/api/distribution/recompute` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502 | — |
+| POST | `/api/distribution/provision` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516) |
+| POST | `/api/distribution/recompute` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516) |
 | GET | `/api/app-rating` | F | нет | 200 (сбой → `{show:false}`), 400, 403, 409 | — |
 | POST | `/api/app-rating` | F | нет | 200, 400, 403, 409 | — |
 | GET | `/api/feedback` | P (булев `{enabled}`) | — | 200 | `import` |

@@ -82,14 +82,15 @@ export async function handleProvisionRequest(
       }
     }
   } catch (e) {
-    // ⚠ «Занято» — ШТАТНЫЙ исход, а не сбой (#516). Провижининг сериализован advisory-локом на
-    // портал, и конкурентный клик (второй админ, двойное нажатие, повтор из другой вкладки) раньше
-    // отдавал НЕОБРАБОТАННОЕ исключение Postgres `55P03`. Наружу это уходило как ошибка, хотя по
-    // смыслу означает ровно «эта операция уже идёт прямо сейчас».
+    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Provisioning is serialized by a per-portal
+    // advisory lock, and a concurrent click (a second admin, a double press, a retry from another
+    // tab) used to surface the UNHANDLED Postgres `55P03`. That reached the caller as an error,
+    // while it means exactly «this operation is already running right now».
     //
-    // ⚠ Здесь это хуже, чем в других местах: провижининг СОЗДАЁТ смарт-процессы в CRM клиента, и
-    // кнопки отката в проде нет. Админ, увидев ошибку, не знает, создалось что-то или нет, и
-    // естественная реакция — нажать ещё раз. Сообщение обязано сказать, что делать НЕ надо.
+    // ⚠ It is worse here than elsewhere: provisioning CREATES smart processes in the client's CRM
+    // and there is no rollback button in production. An admin who sees an error cannot tell whether
+    // anything was created, and the natural reaction is to press again. The message has to say what
+    // NOT to do.
     if (isLockTimeout(e)) {
       return {
         status: 503,

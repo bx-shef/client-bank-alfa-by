@@ -33,27 +33,49 @@ export const DEFAULT_LOCK_WAIT = '10s'
 export const MIN_LOCK_WAIT = '100ms'
 
 /**
- * Ожидание для операций «одна за раз на портал», которые ДОЛГИЕ по своей природе — провижининг
- * смарт-процессов и пересчёт распределения (#516).
+ * Wait for the «one at a time per portal» operations that are LONG by nature — smart-process
+ * provisioning and distribution recompute (#516).
  *
- * ⚠ Это НЕ копия `RENAME_LOCK_WAIT` (#509), а другой вывод из тех же посылок. Там держатель
- * работает доли секунды и подождать пару секунд осмысленно: он вот-вот закончит. Здесь держатель
- * делает десятки REST-вызовов в Bitrix24 и работает десятки секунд — ждать его почти наверняка
- * бессмысленно, а ожидающий всё это время занимает СОЕДИНЕНИЕ ИЗ ПУЛА (пул — 10), из которого
- * берут readiness-проба, события установки и все остальные порталы.
+ * ⚠ This is the SAME reasoning as `RENAME_LOCK_WAIT` (#509), not a different one — both holders are
+ * slow and neither can be outwaited, so both wait briefly and answer «busy» instead of camping on a
+ * POOLED CONNECTION (the pool is 10, shared with the readiness probe, install events and every
+ * other portal). The real difference is BOUNDEDNESS, not speed: #509's holder is ONE network POST
+ * capped at 15s (`bankAccountRename.ts`), while this one is unbounded — provisioning issues ~18
+ * sequential REST calls, and recompute walks up to `MAX_LEDGER_PAYMENTS` payments at 2 calls each,
+ * i.e. hundreds. An unbounded holder deserves the shorter wait of the two.
  *
- * ⚠ И по смыслу очереди тут не нужно: если операция уже идёт, второму вызову делать нечего —
- * первый сделает ту же работу. Правильный ответ «уже выполняется», а не «встань в очередь».
+ * ⚠ Queueing makes no sense here either: if the operation is already running, the second caller has
+ * nothing to do — the first is doing the very same work. The right answer is «already running», not
+ * «take a number».
  */
 export const SINGLE_FLIGHT_LOCK_WAIT = '1s'
 
-/** Normalize `lockWait`: `0`/empty/garbage would mean «wait forever» (or a Postgres error), which
- *  is never what a caller means. Pure — exported for the test. */
+/** Postgres duration units accepted for `lock_timeout`. `d` is in the list because Postgres takes
+ *  it too — omitting it made `0d` read as «not a zero» and sail through as «wait forever». */
+const LOCK_WAIT_UNIT = /\s*(us|ms|s|min|h|d)$/i
+
+/**
+ * Normalize `lockWait`: zero means «wait FOREVER» in Postgres, which is never what a caller means.
+ *
+ * ⚠ Zero is detected by PARSING, not by matching spellings. The previous denylist
+ * (`/^0+\s*(ms|s|min|h)?$/`) was measured against a live Postgres 16 and lost to every spelling it
+ * had not enumerated: `+0`, `-0`, `0.0s`, `.0s`, `0e0`, `0x0`, `0d` all set `lock_timeout = 0` and
+ * all slipped past it. A denylist here can only ever be as good as the list, so the unit is stripped
+ * and the rest handed to `Number()` — the same parser that understands every one of those forms.
+ *
+ * ⚠ Anything that does NOT parse as a number is passed through UNCHANGED, on purpose: Postgres
+ * rejects it loudly at `SET lock_timeout` and the operator sees the typo. Silently substituting a
+ * default would turn `10sec` into a working route with a 100 ms wait — wrong, and invisible.
+ *
+ * Pure — exported for the test.
+ */
 export function resolveLockWait(raw: string | undefined): string {
   const v = (raw ?? '').trim()
   if (!v) return DEFAULT_LOCK_WAIT
-  // `0`, `0s`, `0ms`, `00` … — every spelling of «no timeout» in Postgres.
-  if (/^0+\s*(ms|s|min|h)?$/i.test(v)) return MIN_LOCK_WAIT
+  const n = Number(v.replace(LOCK_WAIT_UNIT, '').trim())
+  // `<= 0` also catches a negative wait, which is nonsense; the fail-safe direction is a SHORT
+  // wait, never an unbounded one.
+  if (Number.isFinite(n) && n <= 0) return MIN_LOCK_WAIT
   return v
 }
 

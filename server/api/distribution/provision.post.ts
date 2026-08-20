@@ -55,15 +55,14 @@ function liveProvisionDeps(): ProvisionRequestDeps {
           provision: (known: KnownSpIds) => provisionDistributionSp(call, known),
           // Single-flight per portal: serialize concurrent provision requests across replicas.
           //
-          // ⚠ Ждём КОРОТКО, и это не копия решения из #515, а другой вывод из тех же посылок.
-          // Там (переименование счёта) держатель работает доли секунды, и подождать пару секунд
-          // осмысленно — он вот-вот закончит. Здесь держатель делает десятки REST-вызовов в
-          // Bitrix24 и работает десятки секунд; ждать его — значит почти наверняка не дождаться,
-          // заняв на всё это время СОЕДИНЕНИЕ ИЗ ПУЛА (пул — 10), из которого берут readiness-проба,
-          // события установки и все остальные порталы.
+          // ⚠ The wait is SHORT, for the same reason as the account rename (#509) — not a different
+          // one. Both holders are slow; the difference is that #509's is BOUNDED (one bank POST,
+          // capped at 15s) while this one is not (~18 sequential REST calls to Bitrix24). Neither
+          // can be outwaited, and a waiter occupies a POOLED CONNECTION the whole time (the pool is
+          // 10, shared with the readiness probe, install events and every other portal).
           //
-          // ⚠ И по смыслу ждать нечего: если провижининг уже идёт, второму делать нечего — первый
-          // создаст всё сам. Правильный ответ здесь «уже выполняется», а не очередь.
+          // ⚠ There is also nothing to wait FOR: if provisioning is already running, the second
+          // caller has no work — the first creates everything. «Already running» beats a queue.
           withLock: fn => withAdvisoryLock(`provision-sp:${memberId}`, () => fn(), { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
         }))
     }
