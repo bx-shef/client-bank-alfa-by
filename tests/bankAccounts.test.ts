@@ -17,6 +17,7 @@ import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 
 const ROW: BankAccountInfo = {
   id: 42,
+  lastAttemptAt: 0,
   memberId: 'M1',
   provider: 'alfa-by',
   accountKey: 'BY01ALFA0001',

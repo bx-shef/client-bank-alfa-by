@@ -190,8 +190,8 @@ describe('нерабочее подключение не красится зел
   // ⚠ Экран существует ровно ради таких случаев: строка в БД есть, а импорта нет. Раньше «Банк
   // подключён» горело зелёным по факту наличия строки — то есть громче всего врало именно тогда,
   // когда подключение сломалось.
-  const withBank = (over: Record<string, unknown>) => buildReadiness({
-    settings: parsePortalSettings({}),
+  const withBank = (over: Partial<ReadinessSnapshot>) => buildReadiness({
+    settings: parsePortalSettings(null),
     connectedAccounts: 2,
     pollEnabled: true,
     pollIntervalMin: 5,

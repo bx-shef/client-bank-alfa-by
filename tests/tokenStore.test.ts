@@ -80,7 +80,7 @@ describe('saveToken', () => {
 
 describe('getToken', () => {
   it('decrypts the refresh token from the stored row', async () => {
-    const query = vi.fn(async () => [{
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [{
       member_id: 'm1',
       domain: 'p.bitrix24.ru',
       access_token: 'ACCESS',
@@ -93,11 +93,11 @@ describe('getToken', () => {
   })
 
   it('returns null for an unknown portal', async () => {
-    expect(await getToken(vi.fn(async () => []), 'nope')).toBeNull()
+    expect(await getToken(vi.fn(async (_sql: string, _params?: unknown[]) => []), 'nope')).toBeNull()
   })
 
   it('throws when the refresh blob cannot be decrypted', async () => {
-    const query = vi.fn(async () => [{
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [{
       member_id: 'm1', domain: 'd', access_token: 'a', refresh_token_enc: 'garbage', expires_at: '1', application_token: 't'
     }])
     await expect(getToken(query, 'm1')).rejects.toThrow(/failed to decrypt/)
@@ -106,35 +106,35 @@ describe('getToken', () => {
 
 describe('getApplicationToken', () => {
   it('returns the stored token', async () => {
-    const query = vi.fn(async () => [{ application_token: 'APPTOK' }])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [{ application_token: 'APPTOK' }])
     expect(await getApplicationToken(query, 'm1')).toBe('APPTOK')
   })
   it('returns empty string for an unknown portal', async () => {
-    expect(await getApplicationToken(vi.fn(async () => []), 'm1')).toBe('')
+    expect(await getApplicationToken(vi.fn(async (_sql: string, _params?: unknown[]) => []), 'm1')).toBe('')
   })
 })
 
 describe('getMemberIdByDomain', () => {
   it('normalizes the domain (strips scheme/path) and passes it as a bound param', async () => {
-    const query = vi.fn(async () => [{ member_id: 'M-1' }])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [{ member_id: 'M-1' }])
     expect(await getMemberIdByDomain(query, 'https://p.bitrix24.by/some/path')).toBe('M-1')
     // Parameterized (no injection), normalized to the bare host.
     expect(query.mock.calls[0]![1]).toEqual(['p.bitrix24.by'])
   })
 
   it('returns null for an unknown domain (app not installed → 409 upstream)', async () => {
-    expect(await getMemberIdByDomain(vi.fn(async () => []), 'ghost.bitrix24.by')).toBeNull()
+    expect(await getMemberIdByDomain(vi.fn(async (_sql: string, _params?: unknown[]) => []), 'ghost.bitrix24.by')).toBeNull()
   })
 
   it('returns null for an empty/blank domain without querying', async () => {
-    const query = vi.fn(async () => [])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     expect(await getMemberIdByDomain(query, '')).toBeNull()
     expect(await getMemberIdByDomain(query, '   ')).toBeNull()
     expect(query).not.toHaveBeenCalled()
   })
 
   it('takes the most-recent row (ORDER BY updated_at DESC) if duplicates ever exist', async () => {
-    const query = vi.fn(async () => [{ member_id: 'NEWEST' }])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [{ member_id: 'NEWEST' }])
     expect(await getMemberIdByDomain(query, 'p.bitrix24.by')).toBe('NEWEST')
     expect(query.mock.calls[0]![0]).toMatch(/ORDER BY updated_at DESC/i)
   })
@@ -148,7 +148,7 @@ describe('deleteToken', () => {
     // того, ни другого и считает портал живым). Postgres выполняет ОДИН оператор — включая
     // data-modifying CTE — в одной неявной транзакции, поэтому ложатся оба или ни одного, и
     // вопрос порядка перестаёт существовать.
-    const query = vi.fn(async () => [])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     await deleteToken(query, 'm1', 42)
     expect(query).toHaveBeenCalledTimes(1)
     const sql = query.mock.calls[0]![0]
@@ -160,7 +160,7 @@ describe('deleteToken', () => {
 
   // Ordering guard (#77): records a tombstone with the uninstall ts (GREATEST-merged).
   it('writes a tombstone keeping the newest deleted_ts (GREATEST)', async () => {
-    const query = vi.fn(async () => [])
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     await deleteToken(query, 'm1', 150)
     const tomb = query.mock.calls.find(c => /INSERT INTO portal_tombstone/.test(c[0] as string))
     expect(tomb).toBeDefined()
@@ -179,9 +179,9 @@ it('test env key is 32 bytes', () => {
 // on a mismatch; this catches it offline.
 describe('updatePortalTokenSecrets — рефреш НЕ создаёт регистрацию портала (#510)', () => {
   /** Фейк «строки нет»: UPDATE ничего не вернул. */
-  const gone = () => vi.fn(async () => [] as Record<string, unknown>[])
+  const gone = () => vi.fn(async (_sql: string, _params?: unknown[]) => [] as Record<string, unknown>[])
   /** Фейк «строка есть»: UPDATE вернул member_id. */
-  const present = () => vi.fn(async () => [{ member_id: 'm1' }] as Record<string, unknown>[])
+  const present = () => vi.fn(async (_sql: string, _params?: unknown[]) => [{ member_id: 'm1' }] as Record<string, unknown>[])
 
   it('удалённый портал НЕ воскресает — false, и ни одного INSERT', async () => {
     // Суть issue. Раньше рефреш ходил тем же upsert'ом, что и установка, и мог пересоздать строку
@@ -259,7 +259,7 @@ describe('updatePortalTokenSecrets — рефреш НЕ создаёт реги
   it('настоящий сбой БД пробрасывается, а не выдаётся за «строки нет»', async () => {
     // Иначе недоступная база молча выглядела бы как удалённый портал, и рефреш тихо терял бы
     // ротированную пару — самый неприятный вид отказа, потому что снаружи он неотличим от нормы.
-    const query = vi.fn(async () => {
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => {
       throw new Error('connection refused')
     })
     await expect(updatePortalTokenSecrets(query, token)).rejects.toThrow('connection refused')

@@ -37,7 +37,7 @@ function demoItem(over: Partial<StatementItem> = {}): StatementItem {
     amount: 100,
     currency: 'BYN',
     purpose: 'тест',
-    counterparty: { name: 'X', account: 'BY00X' },
+    counterparty: { name: 'X', unp: '', account: 'BY00X' },
     acceptDate: '2026-07-16',
     ...over
   }
@@ -54,13 +54,13 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
     expect(await deps.writeActivity(demoItem(), 'C-7', 'MEMBER-1')).toBeNull()
   })
   it('writeLedger(demo) → false, no REST (§9.3 #6 — durable record is the SP row)', async () => {
-    expect(await deps.writeLedger!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSpEtid: 1044, distributionSpEtid: 1046 })).toBe(false)
+    expect(await deps.writeLedger!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSp: { entityTypeId: 1044, id: 144 }, distributionSp: { entityTypeId: 1046, id: 146 } })).toBe(false)
   })
   it('hasTriggerFact(demo) → false, no store read (§9.3 #6)', async () => {
-    expect(await deps.hasTriggerFact!(demoItem(), decision.target, 'MEMBER-1', { paymentSpEtid: 1044, distributionSpEtid: 1046 })).toBe(false)
+    expect(await deps.hasTriggerFact!(demoItem(), decision.target, 'MEMBER-1', { paymentSp: { entityTypeId: 1044, id: 144 }, distributionSp: { entityTypeId: 1046, id: 146 } })).toBe(false)
   })
   it('writeTriggerFact(demo) → false, no REST (§9.3 #6)', async () => {
-    expect(await deps.writeTriggerFact!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSpEtid: 1044, distributionSpEtid: 1046 })).toBe(false)
+    expect(await deps.writeTriggerFact!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSp: { entityTypeId: 1044, id: 144 }, distributionSp: { entityTypeId: 1046, id: 146 } })).toBe(false)
   })
   it('isTargetApplied(demo) → false, no REST state read (Фаза A)', async () => {
     expect(await deps.isTargetApplied(demoItem(), decision.target, 'MEMBER-1', {})).toBe(false)
@@ -108,7 +108,7 @@ describe('liveHandlerDeps — `[op]` не раскрывает назначен�
 
   it('назначения нет в строке, зато есть счёт контрагента — то, ради чего строка и заведена', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    deps.onOperation?.(demoItem({ purpose: SECRET, counterparty: { name: 'X', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
+    deps.onOperation?.(demoItem({ purpose: SECRET, counterparty: { name: 'X', unp: '', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
     const line = log.mock.calls.map(c => c.join(' ')).join('\n')
     expect(line).not.toContain(SECRET)
     expect(line).not.toContain('ЦЕМЕНТ') // и фрагментом тоже не протекает
@@ -156,7 +156,10 @@ describe('liveHandlerDeps — parseFile (manual-import parse authority)', () => 
     const bytes = readFileSync(fileURLToPath(new URL('./fixtures/client-bank/demo-type4-alfa.txt', import.meta.url)))
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const items = await deps.parseFile({
-      memberId: 'M', account: 'ACC', contentBase64: bytes.toString('base64'), fileName: 'выписка.txt'
+      // ⚠ Полный ParseJob: у него нет `account`, зато есть providerId/fileHash. Прежний
+      // литерал был формой из прошлой версии задачи и держался только на `as` — тип его не смотрел.
+      memberId: 'M', providerId: 'manual', fileHash: 'h1',
+      contentBase64: bytes.toString('base64'), fileName: 'выписка.txt'
     } as Parameters<HandlerDeps['parseFile']>[0])
     expect(Array.isArray(items)).toBe(true)
     expect(items.length).toBeGreaterThan(0)

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_MANUAL_POLL_COOLDOWN_SEC, handlePollNow, type PollNowDeps } from '../server/utils/pollNow'
 import type { BankAccountRef } from '../server/utils/bankTokenStore'
+import type { FetchJob } from '../server/queue/topology'
 
 const ACCOUNTS: BankAccountRef[] = [
   { memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01' },
@@ -26,7 +27,7 @@ const input = { accessToken: 'tok', domain: 'p.bitrix24.by' }
 
 describe('handlePollNow', () => {
   it('enqueues one fetch job per pollable account (alfa + prior), drops non-pollable', async () => {
-    const enqueue = vi.fn(async () => {})
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
     const r = await handlePollNow(deps({ enqueue }), input)
     expect(r.status).toBe(200)
     // BY01, BY02 (alfa) + BY03 (prior — its own queue absorbs the cost) — NOT BY04 (manual).
@@ -38,7 +39,7 @@ describe('handlePollNow', () => {
   })
 
   it('503 when the feature is disabled (app-side gate)', async () => {
-    const enqueue = vi.fn(async () => {})
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
     const r = await handlePollNow(deps({ enabled: false, enqueue }), input)
     expect(r.status).toBe(503)
     expect(enqueue).not.toHaveBeenCalled()
@@ -76,7 +77,7 @@ describe('handlePollNow', () => {
   })
 
   it('429 when the cooldown slot is already taken', async () => {
-    const enqueue = vi.fn(async () => {})
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
     const r = await handlePollNow(deps({ claimSlot: async () => false, enqueue }), input)
     expect(r.status).toBe(429)
     expect(r.body).toMatchObject({ cooldownSec: 60 })

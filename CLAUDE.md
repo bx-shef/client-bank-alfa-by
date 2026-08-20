@@ -64,7 +64,7 @@
 ```bash
 pnpm dev          # дев-сервер
 pnpm lint         # ESLint
-pnpm typecheck    # vue-tsc --noEmit (app) + vue-tsc -p .nuxt/tsconfig.server.json (server/**)
+pnpm typecheck    # ТРИ прохода: app + server/** + tests/** (tsconfig.tests.json, #527)
 pnpm test         # Vitest (оба проекта; быстрый прогон node: pnpm test --project unit)
 pnpm generate     # сборка статики (nuxt generate, SSG) — то же гоняет CI
 ```
@@ -1502,6 +1502,25 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   [`docs/DEV_SCRIPTS.md`](docs/DEV_SCRIPTS.md): таблица всех команд с пометкой, какая **пишет** в
   портал, и подробности по каждой. Креды живут в git-ignored `.env.*`, в репозиторий не попадают.
 - `tests/*.test.ts` — Vitest (node) на чистые утилиты.
+- ⚠ **Тесты типизируются ТРЕТЬИМ проходом** (`tsconfig.tests.json`, #527). До него `pnpm typecheck`
+  не смотрел на `tests/**` вообще — ни один из двух проходов их не включал, и ~200 файлов проекта
+  `unit` не проверялись ничем. Это не «тесты и так проверяются прогоном»: тест проверяет
+  **поведение**, а тип описывает **контракт с production-кодом**, и расходятся они молча. Замер при
+  включении — 195 ошибок в 38 файлах, и это ровно тот класс: мок `vi.fn(async () => …)` без
+  параметров вместо `QueryFn(sql, params)` (61 штука — то есть контракт порта не проверялся); фикстуры
+  без полей, добавленных в #517/#489 (`id`, `lastAttemptAt`, `consentExpiresAt`) — включая
+  `pendingSweep`/`bankTokenKeepAlive`, которые решают, УДАЛЯТЬ ли подключение; `paymentSpEtid` вместо
+  `paymentSp` и `authorizeBase` вместо `baseUrl` — поля, которых в типах нет вовсе. Ни одно из них
+  прогон не ловил, потому что тесты падали бы только если бы значение доехало до проверки, а оно не
+  доезжало. ⚠ Послабление ровно ОДНО и оно названо: `noUncheckedIndexedAccess: false`. В production
+  `arr[0]` без проверки — тихий баг; в тесте `expect(calls[0])` с `undefined` роняет сам тест, то
+  есть строгость не ловит ничего нового, зато требует полусотни `!` по ассертам и приучает руку к
+  оператору, который в production опасен. ⚠ `tests/nuxt/**` исключён потому, что покрыт
+  **app-проходом**, `tests/visual/**` — Playwright со своим окружением. Охват стережёт
+  `tests/typecheckTestsCoverage.test.ts`: тихо сузить `include` — единственный способ потерять
+  проверку снова. ⚠ Побочно: `ldJson` переехал из композабла `usePublicPageSeo` в чистое ядро
+  `app/utils/seo.ts` — юнит-тест не должен тянуть Nuxt-автоимпорты в серверный проход, а чистая
+  строковая функция и по конвенции живёт в `app/utils/*`.
 - `tests/nuxt/**/*.test.ts` — Vitest (проект `nuxt`) на компоненты/страницы (`mountSuspended`).
 
 Чистую логику выносим в `app/utils/*` и покрываем тестами; реактивную — в `app/composables/*`,

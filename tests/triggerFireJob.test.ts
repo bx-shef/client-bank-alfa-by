@@ -26,7 +26,7 @@ describe('handleTriggerFireJob (durable trigger retry #79)', () => {
   })
 
   it('forwards the smart-process entityTypeId + CODE to the transport (OWNER_TYPE_ID wire)', async () => {
-    const exec = vi.fn(async () => ({ applied: true } as AllocationMutationResult))
+    const exec = vi.fn<TriggerFireJobDeps['executeTriggerViaRest']>(async () => ({ applied: true } as AllocationMutationResult))
     await handleTriggerFireJob(smartJob, deps({ applied: true }, { executeTriggerViaRest: exec }))
     const [target, , opts] = exec.mock.calls[0]!
     expect(target).toEqual({ kind: 'smart-process', id: '9', entityTypeId: 1032 })

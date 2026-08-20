@@ -1,4 +1,4 @@
-import { LANDING_PUBLISHER, canonicalUrl, ogImageUrl } from '~/utils/seo'
+import { LANDING_PUBLISHER, canonicalUrl, ldJson, ogImageUrl } from '~/utils/seo'
 import { LANDING_TITLE } from '~/utils/landing'
 
 /**
@@ -89,10 +89,4 @@ export function usePublicPageSeo(opts: {
       }]
     })
   }
-}
-
-/** JSON для `<script type="application/ld+json">`: `<` экранируется, чтобы содержимое не могло
- *  закрыть тег. Экспортируется ради теста — иначе собственную гарантию нечем зафиксировать. */
-export function ldJson(value: unknown): string {
-  return JSON.stringify(value).replace(/</g, '\\u003c')
 }

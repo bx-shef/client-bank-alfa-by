@@ -110,7 +110,7 @@ describe('гейт в точках входа (#493)', () => {
     const r = await handleBankConnectStart({
       memberIdByDomain: async () => 'M1',
       validateFrame: async () => ({ userId: '1', isAdmin: true }),
-      config: () => ({ authorizeBase: 'https://bank.test', clientId: 'c', redirectUri: 'https://x/cb', scope: 's' }),
+      config: () => ({ baseUrl: 'https://bank.test', clientId: 'c', redirectUri: 'https://x/cb', scope: 's' }),
       priorConfig: () => null,
       buildPriorUrl: async () => {
         called.push('prior')

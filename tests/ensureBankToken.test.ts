@@ -11,6 +11,7 @@ import {
 } from '../server/utils/ensureBankToken'
 import { PRIOR_CLIENT_ASSERTION_TYPE } from '../app/utils/priorOauth'
 import type { BankToken } from '../server/utils/bankTokenStore'
+import type { QueryFn } from '../server/utils/tokenStore'
 
 const NOW = 1_700_000_000_000
 const creds: BankOAuthCreds = { clientId: 'cid', clientSecret: 'sec', tokenUrl: 'https://bank/token' }
@@ -218,9 +219,10 @@ describe('ensureBankToken', () => {
 
   it('locks per (member, provider, account) and loads by the same key parts', async () => {
     const near = tok({ expiresAt: NOW + 10_000 })
-    const withLock = vi.fn(async (_key: string, fn: (q: never) => Promise<unknown>) => fn(null as never))
+    // ⚠ Генерик-порт: `vi.fn` генерик не переносит, поэтому приведение при передаче в deps.
+    const withLock = vi.fn(async (_key: string, fn: (q: QueryFn) => Promise<unknown>) => fn(null as unknown as QueryFn))
     const { deps, loads } = fakeDeps({ stored: near })
-    await ensureBankToken(near, { ...deps, withLock })
+    await ensureBankToken(near, { ...deps, withLock: withLock as typeof deps.withLock })
     expect(withLock.mock.calls[0]![0]).toBe('bankrefresh:m1:alfa-by:MC_7')
     expect(loads[0]).toEqual(['m1', 'alfa-by', 'MC_7']) // loadToken got the right key parts
   })
