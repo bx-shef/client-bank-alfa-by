@@ -2,6 +2,7 @@
 // model as /api/distribution/ledger (feature flag + frame admin + installed). Recomputes «осталось»
 // for every payment carrier — the manual recovery backstop (deletion crash-window / drift). Thin over
 // DI — unit-testable without pg / network / the SDK.
+import { isLockTimeout } from './bankRefreshLock'
 
 /** Injected side effects + config for {@link handleRecomputeRequest}. */
 export interface RecomputeRequestDeps {
@@ -55,7 +56,20 @@ export async function handleRecomputeRequest(
     const recomputed = await deps.recompute(memberId)
     if (recomputed === null) return { status: 200, body: { provisioned: false, recomputed: 0 } }
     return { status: 200, body: { ok: true, recomputed } }
-  } catch {
+  } catch (e) {
+    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Recompute is serialized by a per-portal
+    // advisory lock (it also contends with crm-sync itself over the «осталось» fields), and a
+    // concurrent click used to surface an unhandled `55P03` — indistinguishable from a real break.
+    //
+    // ⚠ A separate reason to spell it out: recompute is long by nature, walking every payment
+    // carrier of the portal. «Retry in a few seconds» would be a lie here, and the human would keep
+    // hammering the button for all of it.
+    if (isLockTimeout(e)) {
+      return {
+        status: 503,
+        body: { error: 'Пересчёт уже выполняется — он идёт по всем платежам портала и занимает время. Обновите страницу через минуту.' }
+      }
+    }
     return { status: 502, body: { error: 'recompute failed' } }
   }
 }
