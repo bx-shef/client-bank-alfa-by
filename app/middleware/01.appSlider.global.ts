@@ -1,6 +1,6 @@
 import { sliderRouteForPlace } from '~/config/b24'
-import { SLIDER_INTENT_KEY, decodeSliderIntent } from '~/utils/sliderIntent'
 import { useLogger } from '~/utils/logger'
+import { parsePlacementOptions } from '~/utils/placementOptions'
 
 // Приложение, открытое НАМИ через `openSliderAppPage({ place })`, портал переоткрывает по НАШЕМУ же
 // адресу (портальный путь дал бы 404) и передаёт `place` в PLACEMENT_OPTIONS. Этот мидлвар читает
@@ -13,17 +13,20 @@ import { useLogger } from '~/utils/logger'
 // выглядела бы сломанной.
 let routed = false
 
-/** Наша собственная метка намерения — второй признак, когда портал не донёс `place`.
- *  Читается ОДИН раз и сразу снимается: она описывает конкретное нажатие кнопки, а залипнув,
- *  увела бы в настройки обычный вход в приложение. */
-function takeIntent(): string | undefined {
+/** Мы сами внутри слайдера портала? Признак самого портала (`PLACEMENT_OPTIONS.IFRAME`), а не наш
+ *  параметр, — именно поэтому по нему видно случай «слайдер открылся, а `place` не доехал». */
+function isSliderFrame(): boolean {
   try {
-    const raw = window.sessionStorage.getItem(SLIDER_INTENT_KEY)
-    window.sessionStorage.removeItem(SLIDER_INTENT_KEY)
-    return decodeSliderIntent(raw, Date.now()) ?? undefined
+    return useB24().get()?.placement?.isSliderMode === true
   } catch {
-    return undefined
+    return false
   }
+}
+
+/** Имена ключей, которые прислал портал, — для диагностики. Только имена: значения принадлежат
+ *  порталу, и в логе им не место. */
+function optionKeys(): string[] {
+  return Object.keys(parsePlacementOptions(useB24().get()?.placement?.options))
 }
 
 export default defineNuxtRouteMiddleware(async (to) => {
@@ -33,19 +36,20 @@ export default defineNuxtRouteMiddleware(async (to) => {
   // Идемпотентно; вне портала возвращает пустой результат, и гард ниже не срабатывает.
   await init()
   const place = placementPlace()
-  // Метку снимаем ВСЕГДА, даже когда `place` пришёл: иначе она пережила бы этот фрейм и увела бы
-  // следующий вход в приложение.
-  const intent = takeIntent()
-  const target = sliderRouteForPlace(place) ?? sliderRouteForPlace(intent)
+  const target = sliderRouteForPlace(place)
   routed = true
-  if (!target) return
-  // ⚠ Уровень выбран по СМЫСЛУ, а не для громкости: в проде логгер режет всё ниже `warning`, и
-  // именно в проде диагностика нужна. Штатное открытие — `info` (в проде молчит). А вот «портал
-  // не донёс `place`, спасла наша метка» — аномалия платформы, которую иначе не увидит никто:
-  // снаружи это выглядит просто как «слайдер открылся не тем экраном». В сообщении только наши
-  // собственные литералы — ни токенов, ни данных портала.
-  const log = useLogger('slider')
-  if (place) log.info('открыт слайдер', { place, target })
-  else log.warning('слайдер открыт БЕЗ place — ведём по своей метке', { intent, target })
+  if (!target) {
+    // ⚠ Тишина здесь — самый дорогой случай: слайдер открылся, но показал главный экран, и
+    // снаружи это неотличимо от «кнопка сломана». Пишем `warning`, потому что в проде логгер
+    // режет всё ниже, а нужна диагностика именно там. Печатаем ТОЛЬКО ключи PLACEMENT_OPTIONS —
+    // по ним видно, донёс ли портал параметр и под каким именем, а значений портала в логе быть
+    // не должно.
+    if (isSliderFrame()) {
+      useLogger('slider').warning('слайдер открыт без распознанного place', { optionKeys: optionKeys() })
+    }
+    return
+  }
+  // Штатный путь — `info` (в проде логгер его режет, и правильно: тут всё в порядке).
+  useLogger('slider').info('открыт слайдер', { place, target })
   if (to.path !== target) return navigateTo(target)
 })
