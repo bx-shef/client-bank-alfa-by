@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   fetchPriorStatement,
@@ -6,7 +8,8 @@ import {
   PRIOR_POLL_MAX_ATTEMPTS,
   isRetryablePollStatus,
   resolvePriorAccountId,
-  type PriorFetchDeps
+  type PriorFetchDeps,
+  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS
 } from '../server/utils/priorFetch'
 import { normalizePriorTransactionList } from '../app/utils/priorStatement'
 import { PRIOR_RESOURCE_NOT_CREATED } from '../app/utils/priorOauth'
@@ -143,8 +146,15 @@ describe('fetchPriorStatement', () => {
     // The throttle body carries no Prior error codes; classifying by body alone would make this
     // "ready with zero transactions" and silently drop a window that had operations.
     const { deps, calls } = fakeDeps({ pollStatus: 429, pollSequence: [{ message: 'Too Many Requests' }] })
-    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/not ready after/)
-    expect(calls.pollUrl).toHaveLength(PRIOR_POLL_MAX_ATTEMPTS) // treated as pending → retried
+    // ⚠ Сообщение обязано НАЗЫВАТЬ троттл. Прежнее говорило только «не готово за N опросов», и по
+    // нему нельзя было отличить «банк ещё считает» от «банк нас отшивает» — а лечатся они
+    // противоположно: ждать дольше против ходить реже. Ночь на проде прошла ровно в этой слепоте.
+    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/[1-9]\d* throttled\/5xx, last HTTP 429/)
+    // ⚠ Не ровно `PRIOR_POLL_MAX_ATTEMPTS`: опрос теперь ограничен ещё и ВРЕМЕНЕМ, и потолок
+    // связывающий — он обрывает раньше, чем кончатся попытки. Важно здесь другое: 429 трактуется
+    // как «ещё не ответ» и опрос ПОВТОРЯЕТСЯ много раз, а не считается пустой выпиской.
+    expect(calls.pollUrl.length).toBeGreaterThan(5)
+    expect(calls.pollUrl.length).toBeLessThanOrEqual(PRIOR_POLL_MAX_ATTEMPTS)
   })
 
   it('an UNRECOGNIZED 200 body (no data envelope, no error codes) fails loud, not as empty', async () => {
@@ -159,9 +169,12 @@ describe('fetchPriorStatement', () => {
 
   it('throws after exhausting the poll budget (never ready)', async () => {
     const { deps, calls } = fakeDeps({ pollSequence: [pendingResponse] })
-    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/not ready after \d+ polls/)
-    expect(calls.pollUrl).toHaveLength(PRIOR_POLL_MAX_ATTEMPTS)
-    expect(calls.sleeps).toHaveLength(PRIOR_POLL_MAX_ATTEMPTS - 1) // no wait after the final attempt
+    // И симметрично: «ещё считает» обязано быть отличимо от троттла в самом тексте.
+    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/[1-9]\d* pending, 0 throttled/)
+    expect(calls.pollUrl.length).toBeGreaterThan(5)
+    expect(calls.pollUrl.length).toBeLessThanOrEqual(PRIOR_POLL_MAX_ATTEMPTS)
+    // На одно ожидание меньше, чем опросов: после последнего опроса не спим.
+    expect(calls.sleeps).toHaveLength(calls.pollUrl.length - 1)
   })
 })
 
@@ -219,5 +232,59 @@ describe('priorApiBaseFromEnv — address rules (#455)', () => {
   it('accepts https and strips trailing slashes', () => {
     set('https://api.priorbank.by:9344/')
     expect(priorApiBaseFromEnv()).toBe('https://api.priorbank.by:9344')
+  })
+})
+
+describe('бюджет опроса ресурса (#522, замер на проде)', () => {
+  it('задержка растёт и упирается в потолок', () => {
+    // ⚠ Плоские 1500 мс на 8 попыток — это десять секунд на то, чтобы банк сгенерировал выписку за
+    // три дня. На проде это не сработало НИ РАЗУ за ночь. Рост нужен и по второй причине: 429
+    // считается «ещё не готово», и долбить жёсткий пер-аккаунтный троттл раз в 1,5 с — хороший
+    // способ остаться затроттленным.
+    expect(priorPollDelayMs(0)).toBe(PRIOR_POLL_DELAY_MS)
+    expect(priorPollDelayMs(1)).toBeGreaterThan(priorPollDelayMs(0))
+    expect(priorPollDelayMs(5)).toBeGreaterThan(priorPollDelayMs(2))
+    // Потолок обязателен: без него задержка растёт экспоненциально и последняя попытка одна съедает
+    // весь бюджет, ничего им не выиграв.
+    expect(priorPollDelayMs(50)).toBe(PRIOR_POLL_MAX_DELAY_MS)
+    expect(priorPollDelayMs(-3)).toBe(PRIOR_POLL_DELAY_MS) // отрицательная попытка не ломает арифметику
+  })
+
+  it('связывает ВРЕМЯ, а не число попыток — и ждём минуты, а не секунды', () => {
+    let byAttempts = 0
+    for (let i = 0; i < PRIOR_POLL_MAX_ATTEMPTS - 1; i++) byAttempts += priorPollDelayMs(i)
+    // ⚠ Ограничитель по времени обязан быть СВЯЗЫВАЮЩИМ: попытки в одиночку разрешили бы больше,
+    // значит именно потолок решает, когда остановиться. Иначе он недостижим при отгружаемых
+    // константах — то есть непроверяем и молча перестанет защищать при первой же правке числа
+    // попыток. Ровно это поймала мутация: с недостижимым потолком его удаление ничего не меняло.
+    expect(byAttempts).toBeGreaterThan(PRIOR_POLL_BUDGET_MS)
+    // Нижняя граница — то, ради чего правка: прежний бюджет был ~10 с и не хватал НИ РАЗУ за ночь.
+    expect(PRIOR_POLL_BUDGET_MS).toBeGreaterThan(60_000)
+    // Верхняя — слот воркера не занимается произвольно долго. Очередь Приора для того и отдельная,
+    // но у «долго» тоже должен быть предел.
+    expect(PRIOR_POLL_BUDGET_MS).toBeLessThanOrEqual(300_000)
+  })
+
+  it('потолок по ВРЕМЕНИ обрывает опрос раньше, чем кончатся попытки', async () => {
+    // ⚠ Два независимых ограничителя намеренно: правка одной константы (числа попыток или
+    // множителя) не должна уметь превратить задачу в бесконечно висящую.
+    const { deps, calls } = fakeDeps({ pollSequence: [pendingResponse] })
+    await expect(fetchPriorStatement(query, tok, deps)).rejects.toThrow(/waited/)
+    const total = calls.sleeps.reduce((a, b) => a + b, 0)
+    // Суммарное ожидание не выходит за потолок…
+    expect(total).toBeLessThanOrEqual(PRIOR_POLL_BUDGET_MS)
+    // …и оборвал опрос именно ОН, а не исчерпание попыток: снов строго меньше, чем попыток минус
+    // одна (последняя попытка не спит и без всякого потолка). ⚠ Без этой проверки потолок был бы
+    // недостижим при отгружаемых константах — мутация «снять потолок» выживала, потому что он
+    // никогда не срабатывал. Бюджет подобран так, чтобы он был СВЯЗЫВАЮЩИМ.
+    expect(calls.sleeps.length).toBeLessThan(PRIOR_POLL_MAX_ATTEMPTS - 1)
+    for (const ms of calls.sleeps) expect(ms).toBeLessThanOrEqual(PRIOR_POLL_MAX_DELAY_MS)
+  })
+
+  it('успешный опрос печатает, СКОЛЬКО ждали — иначе бюджет калибруется гаданием', () => {
+    // Именно гадание и дало десять секунд. Реальная длительность известна ровно в одном месте.
+    const src = readFileSync(join(import.meta.dirname, '..', 'server/utils/priorFetch.ts'), 'utf8')
+    expect(src).toMatch(/\[prior-poll\] ready after/)
+    expect(src).toMatch(/deps\.log\?\.\(/)
   })
 })

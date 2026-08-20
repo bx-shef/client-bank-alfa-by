@@ -49,11 +49,52 @@ import type { BankFetchQuery } from './bankFetch'
  *  `normalizePrior` consumes. Both endpoints share the create+poll shape (PriorResourceKind). */
 const RESOURCE_KIND = 'transactions' as const
 
-/** Poll budget for the async resource. Priorbank generates the list server-side; sandbox is slow
- *  AND hard-throttles (429) per account, so keep the cadence modest. Bounded so a never-ready
- *  resource fails the job (BullMQ retries) instead of hanging a worker. */
-export const PRIOR_POLL_MAX_ATTEMPTS = 8
+/**
+ * Poll budget for the async resource.
+ *
+ * ⚠ MEASURED ON PRODUCTION (2026-08-20): the old budget — 8 attempts × a flat 1500 ms, about ten
+ * seconds in total — never once saw a ready transaction list. Every poll cycle ended in
+ * `transactions not ready after 8 polls`, on every tick, all night.
+ *
+ * Ten seconds was never the intent. The whole reason Prior has its OWN queue with its OWN slots is
+ * that its create+poll is, in this repo's own words, "minutes-long" and must not head-of-line block
+ * Alfa — but the constant next to that comment allowed ten seconds. The numbers were tuned against
+ * the sandbox and quietly carried over to production, where the window is 3 days of real data.
+ *
+ * ⚠ There are TWO plausible causes and the old code could not tell them apart, which is half the
+ * problem: either the bank is still generating (poll returns pending), or it is THROTTLING us —
+ * `isRetryablePollStatus` counts 429 as "not an answer yet", and hammering a hard per-account
+ * throttle every 1.5 s is a good way to stay throttled. Backing off exponentially helps in both
+ * cases, and the failure message now reports the status breakdown so the next run says which it was.
+ *
+ * ⚠ Each JOB attempt creates a NEW resource (create+poll is one function), so giving up early is
+ * not free: we abandon a list the bank is still building and ask for another one. Better to wait.
+ */
+export const PRIOR_POLL_MAX_ATTEMPTS = 20
+/** First delay; subsequent ones grow by {@link PRIOR_POLL_BACKOFF} up to {@link PRIOR_POLL_MAX_DELAY_MS}. */
 export const PRIOR_POLL_DELAY_MS = 1500
+export const PRIOR_POLL_BACKOFF = 1.6
+export const PRIOR_POLL_MAX_DELAY_MS = 8000
+/**
+ * Hard ceiling on the whole poll phase, in wall-clock terms.
+ *
+ * ⚠ Deliberately BINDING with the shipped constants: at 8 s a poll, the attempt count alone would
+ * allow ~134 s, so this cuts the last couple of attempts. That is the point — a bound that the
+ * shipped configuration can never reach is decoration, not a guard: it cannot be tested, and it
+ * would silently stop protecting anything the moment someone raised the attempt count. Mutation
+ * testing caught exactly that: with a loose ceiling, deleting the check changed nothing.
+ *
+ * Two independent limits (attempts AND time) so that tuning either one cannot turn a job into an
+ * unbounded worker hold.
+ */
+export const PRIOR_POLL_BUDGET_MS = 120_000
+
+/** Delay before the poll after `attempt` (0-based): exponential, capped. Pure — the shape is the
+ *  thing being reasoned about, so it is testable without a clock or a bank. */
+export function priorPollDelayMs(attempt: number): number {
+  const raw = PRIOR_POLL_DELAY_MS * Math.pow(PRIOR_POLL_BACKOFF, Math.max(0, attempt))
+  return Math.min(PRIOR_POLL_MAX_DELAY_MS, Math.round(raw))
+}
 
 /** Extract the `YYYY-MM-DD` head of an ISO date (Prior wants a bare date). Throws on a value with
  *  no parseable date head — a bad window must fail loud, not fetch garbage (mirrors isoToAlfaDate). */
@@ -85,6 +126,15 @@ export interface PriorFetchDeps {
    *  engine classifies status+body itself. Throws only on network / non-JSON failures. */
   pollJson: (url: string, accessToken: string) => Promise<PriorPollReply>
   sleep: (ms: number) => Promise<void>
+  /**
+   * Diagnostic line, emitted ONLY on a successful poll (how many polls, how long we waited).
+   *
+   * ⚠ Optional on purpose — the engine must stay usable from scripts and tests without a logger —
+   * but it is the only place the REAL generation time is ever known. The ten-second budget that
+   * failed all night was a guess; without this number the next budget would be a guess too.
+   * Carries no statement content: counters only.
+   */
+  log?: (line: string) => void
 }
 
 /** HTTP statuses that mean "not an answer yet, try again": the bank throttles hard (429) and the
@@ -165,7 +215,9 @@ const liveDeps: PriorFetchDeps = {
     })
     return { status: res.status, body: res._data }
   },
-  sleep: ms => new Promise(resolve => setTimeout(resolve, ms))
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+  // Diagnostic only, and only on success — see the port's doc.
+  log: line => console.log(line)
 }
 
 /**
@@ -206,21 +258,46 @@ export async function fetchPriorStatement(
   // 2) POLL until ready (bounded). A 429/5xx counts as "not an answer yet" — never as an empty
   //    statement — so a throttled window can't silently report "no operations".
   const pollUrl = `${base}${buildPriorResourcePollPath(RESOURCE_KIND, accountId, resourceId)}`
+  // ⚠ Считаем, ЧЕМ именно отвечал банк. Прежнее сообщение говорило только «не готово за N опросов»,
+  // и по нему нельзя было отличить «банк всё ещё считает» от «банк нас троттлит» — а лечатся эти
+  // два случая противоположно (ждать дольше против ходить реже). Ночь на проде прошла именно так:
+  // одинаковая строка на каждом тике и никакого способа понять причину.
+  let throttled = 0
+  let pending = 0
+  let lastStatus = 0
+  let waited = 0
   for (let attempt = 0; attempt < PRIOR_POLL_MAX_ATTEMPTS; attempt++) {
     const { status, body } = await deps.pollJson(pollUrl, token.accessToken)
-    if (!isRetryablePollStatus(status)) {
+    lastStatus = status
+    if (isRetryablePollStatus(status)) {
+      throttled++
+    } else {
       const verdict = classifyPriorPoll(body)
       if (verdict.status === 'ready') {
         // 3) NORMALIZE (ctx.account = OUR stored account key — the statement belongs to it, not to
         //    the bank's internal id — so downstream dedup keys stay stable across id changes).
+        // ⚠ Печатаем, сколько ждали: без этого числа калибровать бюджет можно только гаданием, а
+        // именно гадание и привело к десяти секундам. Успех — единственный момент, когда реальная
+        // длительность известна.
+        deps.log?.(`[prior-poll] ready after ${attempt + 1} polls, ${Math.round(waited / 1000)}s waited`)
         return normalizePriorTransactionList(body as PriorTransactionListResponse, { account: query.account })
       }
       if (verdict.status === 'error') {
         throw new Error(`fetchPriorStatement: poll error for account ${query.account} (HTTP ${status}) — ${verdict.codes.join('; ')}`)
       }
+      pending++
     }
     // pending (or a throttled/blipped status) → wait and retry (skip the wait after the last attempt).
-    if (attempt < PRIOR_POLL_MAX_ATTEMPTS - 1) await deps.sleep(PRIOR_POLL_DELAY_MS)
+    if (attempt >= PRIOR_POLL_MAX_ATTEMPTS - 1) break
+    const delay = priorPollDelayMs(attempt)
+    // ⚠ Потолок по ВРЕМЕНИ, а не только по числу попыток: иначе правка одной константы может
+    // незаметно превратить задачу в бесконечно висящую и занять слот воркера навсегда.
+    if (waited + delay > PRIOR_POLL_BUDGET_MS) break
+    await deps.sleep(delay)
+    waited += delay
   }
-  throw new Error(`fetchPriorStatement: ${RESOURCE_KIND} not ready after ${PRIOR_POLL_MAX_ATTEMPTS} polls for account ${query.account}`)
+  throw new Error(
+    `fetchPriorStatement: ${RESOURCE_KIND} not ready for account ${query.account} — `
+    + `${pending} pending, ${throttled} throttled/5xx, last HTTP ${lastStatus}, ${Math.round(waited / 1000)}s waited`
+  )
 }
