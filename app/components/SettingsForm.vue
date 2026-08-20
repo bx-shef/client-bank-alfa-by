@@ -168,7 +168,7 @@ const previewSummary = computed(() => {
   <!-- Withhold everything until the admin check resolves (no fail-open flash). -->
   <div
     v-if="!adminChecked"
-    class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
+    class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="checking"
   >
     <LoaderWaitIcon
@@ -186,7 +186,7 @@ const previewSummary = computed(() => {
   <!-- Non-admin in the portal: warning only, no settings. -->
   <div
     v-else-if="blocked"
-    class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
+    class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="admin-gate"
   >
     <ProseH3 class="mb-0">
@@ -200,7 +200,7 @@ const previewSummary = computed(() => {
   <!-- In portal, settings still loading. -->
   <div
     v-else-if="enabled && !loaded"
-    class="mx-auto flex min-h-full max-w-lg flex-col items-center justify-center gap-3 px-4 text-center"
+    class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="loading"
   >
     <LoaderWaitIcon
@@ -449,6 +449,14 @@ const previewSummary = computed(() => {
           </B24Card>
         </div>
       </div>
+      <!-- Отзыв о САМИХ настройках (#528, 3.4): «не работает вот эта настройка» / «нужна вот
+           такая». Экран готовности рядом собирает отзыв про постановку задачи, здесь — про
+           конкретные поля формы; ставим над панелью Save/Cancel, чтобы её не перекрывать. -->
+      <FeedbackWidget
+        place="настройки"
+        class="pb-24"
+      />
+
       <!-- Explicit Save/Cancel (no autosave). Save persists + notifies other instances. -->
       <div
         v-if="enabled"

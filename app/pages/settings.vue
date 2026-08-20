@@ -70,10 +70,13 @@ async function close(): Promise<void> {
         <ClientOnly>
           <!-- `as-slider` включает в форме пару Save/Cancel, которая эмитит `close`: экран
                закрывается сам, как это делал прежний `B24Slideover`. -->
-          <SettingsForm
-            class="flex flex-col items-center justify-center min-h-full shrink-0"
-            @close="close"
-          />
+          <!-- Обёртка, а не класс на самой форме: у `SettingsForm` НЕСКОЛЬКО корневых узлов
+               (экраны «проверяем доступ» / «только администратору» / «загрузка» / сама форма),
+               и атрибуты на такой компонент не наследуются никуда — класс молча пропадал,
+               а вместе с ним и высота, по которой центрируются эти экраны. -->
+          <div class="flex min-h-full flex-1 flex-col">
+            <SettingsForm @close="close" />
+          </div>
         </ClientOnly>
       </template>
     </B24DashboardPanel>

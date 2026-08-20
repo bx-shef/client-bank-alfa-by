@@ -126,7 +126,7 @@ defineExpose({ refresh })
       :value-key="valueKey"
       :placeholder="placeholder"
       :disabled="disabled"
-      class="w-full"
+      class="w-full flex-1"
       @update:open="onOpenChange"
     >
       <!-- Forward SelectMenu item slots so consumers can render avatars/subtitles. -->

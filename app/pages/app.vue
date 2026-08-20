@@ -6,6 +6,7 @@ import { splitByDirection } from '~/utils/statement'
 import type { OperationDirection, StatementItem } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
+import { useSetupStatus } from '~/composables/useSetupStatus'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { useSettingsSync } from '~/composables/useSettingsSync'
@@ -560,6 +561,15 @@ const settingsReady = computed(() => !inPortal.value || chatSettings.loaded.valu
 // Standalone/dev (no frame) is neither blocked nor nagged — it renders the empty operations view.
 const showSetupBanner = computed(() => inPortal.value && chatSettings.loaded.value && !configured.value)
 
+// Полоса статуса импорта. «Ещё не запускалась» — правда, но пока банк не подключён и файл не
+// загружали, она сообщает не о состоянии импорта, а о том, что настройка не закончена: про это
+// уже говорит экран готовности в настройках, и вторая формулировка того же читается как поломка.
+// Поэтому полосу показываем, когда прогон был — или когда есть чему запускаться (подключён счёт).
+const setup = useSetupStatus()
+const showStatusBanner = computed(
+  () => status.value.state !== 'never' || setup.status.value.connectedAccounts > 0
+)
+
 const b24 = useB24()
 // Мобильное приложение Bitrix24 определяем механизмом b24ui (`useDevice()` → платформа
 // `bitrix-mobile`, её ставит плагин платформы по UA), а не JS SDK. Скрытие — через `v-if`,
@@ -575,6 +585,9 @@ onMounted(async () => {
   checkAdmin()
   // Load chat settings so the setup banner reflects the real configured state.
   await chatSettings.load()
+  // Нужен только для решения «показывать ли полосу статуса» — ошибка чтения не должна
+  // ломать страницу: при неудаче остаётся нулевой счётчик, то есть полоса просто молчит.
+  await setup.load()
   try {
     const $b24 = b24.getOrThrow()
     await $b24.parent.setTitle('Выписка по счёту')
@@ -702,6 +715,7 @@ onMounted(async () => {
             />
             <div class="w-full lg:max-w-105 shrink-0 flex flex-col items-center justify-between gap-4">
               <ImportStatusBanner
+                v-if="showStatusBanner"
                 :status="status"
                 @open-settings="openSettings"
               />
