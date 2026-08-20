@@ -21,9 +21,15 @@ let routed = false
  *  может не быть. Живой прогон дал ровно этот случай — options пусты целиком, признак false, и
  *  единственная строка, ради которой всё писалось, не напечаталась. Условие снято: гейт у
  *  диагностики не должен зависеть от того, что она же и диагностирует. */
-function frameFacts(): Record<string, unknown> {
+function frameFacts(to: string): Record<string, unknown> {
   const frame = useB24().get()
   return {
+    // ⚠ `path` и `placement` — чтобы отличить ОСНОВНОЕ окно приложения от фрейма слайдера.
+    // Без них строки неразличимы, и первая же диагностика ушла в молоко: в основном окне
+    // `place` отсутствует ЗАКОНОМЕРНО, и его отчёт выглядел как отчёт слайдера.
+    path: to,
+    placement: frame?.placement?.placement ?? null,
+    isSlider: frame?.placement?.isSliderMode ?? null,
     inFrame: frame !== undefined,
     optionKeys: Object.keys(parsePlacementOptions(frame?.placement?.options)),
     queryKeys: typeof window === 'undefined' ? [] : [...new URLSearchParams(window.location.search).keys()]
@@ -44,7 +50,7 @@ export default defineNuxtRouteMiddleware(async (to) => {
     // снаружи это неотличимо от «кнопка сломана». Уровень `warning`, потому что в проде логгер
     // режет всё ниже, а диагностика нужна именно там. Обычное открытие приложения (вне фрейма
     // или без параметров) шумит одной строкой — это дёшево и однократно.
-    useLogger('slider').warning('place не распознан — экран остаётся текущим', frameFacts())
+    useLogger('slider').warning('place не распознан — экран остаётся текущим', frameFacts(to.path))
     return
   }
   // Штатный путь — `info` (в проде логгер его режет, и правильно: тут всё в порядке).
