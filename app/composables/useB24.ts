@@ -1,6 +1,6 @@
 import { B24Frame, Result, initializeB24Frame } from '@bitrix24/b24jssdk'
 import { B24_REQUIRED_SCOPES } from '~/config/b24'
-import { placeFromOptions } from '~/utils/placementOptions'
+import { placeFromOptions, placeFromQuery } from '~/utils/placementOptions'
 
 // Module-level singleton: the SDK keeps one B24Frame per page (the portal opens
 // one iframe). Safe under SSG — only ever set on the client, inside the frame.
@@ -88,7 +88,12 @@ export const useB24 = () => {
     // ⚠ Через `placeFromOptions`, а не `options.place` напрямую: портал волен прислать
     // PLACEMENT_OPTIONS JSON-строкой, и тогда наивное чтение молча даёт undefined — слайдер
     // открывается главным экраном, потому что вести его оказалось не по чему (#537).
+    // ⚠ ДВА источника, и второй не запасной «на всякий случай»: на живом портале фрейм слайдера
+    // пришёл с ПУСТЫМ PLACEMENT_OPTIONS (не было даже `IFRAME`, по которому SDK определяет
+    // слайдер). Читать оттуда там нечего, а приложение открывается по своему адресу — значит
+    // параметр может приехать строкой запроса.
     return placeFromOptions(get()?.placement?.options)
+      ?? (typeof window !== 'undefined' ? placeFromQuery(window.location.search) : undefined)
   }
 
   /** Открыть СВОЙ вторичный экран настоящим слайдером портала. Возвращает `false`, когда мы вне

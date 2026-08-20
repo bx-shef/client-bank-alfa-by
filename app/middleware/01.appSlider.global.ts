@@ -13,20 +13,21 @@ import { parsePlacementOptions } from '~/utils/placementOptions'
 // выглядела бы сломанной.
 let routed = false
 
-/** Мы сами внутри слайдера портала? Признак самого портала (`PLACEMENT_OPTIONS.IFRAME`), а не наш
- *  параметр, — именно поэтому по нему видно случай «слайдер открылся, а `place` не доехал». */
-function isSliderFrame(): boolean {
-  try {
-    return useB24().get()?.placement?.isSliderMode === true
-  } catch {
-    return false
+/** Что портал реально прислал во фрейм — для диагностики. Только ИМЕНА ключей и адрес без
+ *  строки запроса: значения принадлежат порталу, и в логе им не место.
+ *
+ *  ⚠ Раньше эта диагностика стояла за признаком «мы в слайдере» (`placement.isSliderMode`), и это
+ *  была ошибка: SDK выводит его из `PLACEMENT_OPTIONS.IFRAME`, то есть из ТЕХ ЖЕ данных, которых
+ *  может не быть. Живой прогон дал ровно этот случай — options пусты целиком, признак false, и
+ *  единственная строка, ради которой всё писалось, не напечаталась. Условие снято: гейт у
+ *  диагностики не должен зависеть от того, что она же и диагностирует. */
+function frameFacts(): Record<string, unknown> {
+  const frame = useB24().get()
+  return {
+    inFrame: frame !== undefined,
+    optionKeys: Object.keys(parsePlacementOptions(frame?.placement?.options)),
+    queryKeys: typeof window === 'undefined' ? [] : [...new URLSearchParams(window.location.search).keys()]
   }
-}
-
-/** Имена ключей, которые прислал портал, — для диагностики. Только имена: значения принадлежат
- *  порталу, и в логе им не место. */
-function optionKeys(): string[] {
-  return Object.keys(parsePlacementOptions(useB24().get()?.placement?.options))
 }
 
 export default defineNuxtRouteMiddleware(async (to) => {
@@ -40,13 +41,10 @@ export default defineNuxtRouteMiddleware(async (to) => {
   routed = true
   if (!target) {
     // ⚠ Тишина здесь — самый дорогой случай: слайдер открылся, но показал главный экран, и
-    // снаружи это неотличимо от «кнопка сломана». Пишем `warning`, потому что в проде логгер
-    // режет всё ниже, а нужна диагностика именно там. Печатаем ТОЛЬКО ключи PLACEMENT_OPTIONS —
-    // по ним видно, донёс ли портал параметр и под каким именем, а значений портала в логе быть
-    // не должно.
-    if (isSliderFrame()) {
-      useLogger('slider').warning('слайдер открыт без распознанного place', { optionKeys: optionKeys() })
-    }
+    // снаружи это неотличимо от «кнопка сломана». Уровень `warning`, потому что в проде логгер
+    // режет всё ниже, а диагностика нужна именно там. Обычное открытие приложения (вне фрейма
+    // или без параметров) шумит одной строкой — это дёшево и однократно.
+    useLogger('slider').warning('place не распознан — экран остаётся текущим', frameFacts())
     return
   }
   // Штатный путь — `info` (в проде логгер его режет, и правильно: тут всё в порядке).
