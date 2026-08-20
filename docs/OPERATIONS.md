@@ -25,12 +25,33 @@ cd /home/bitrix/bank-import && make self-update && make help
 bootstrap (единственная сырая команда, которая тут вообще нужна; дальше только `make`):
 
 ```bash
-cd /home/bitrix/bank-import && cp Makefile Makefile.bak-$(date +%s) && curl -fsSL -o /tmp/Makefile.new https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/Makefile && make -n -f /tmp/Makefile.new help >/dev/null && cp /tmp/Makefile.new Makefile && make help
+cd /home/bitrix/bank-import && cp Makefile Makefile.bak-$(date +%s) && curl -fsSL -o /tmp/Makefile.new https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/Makefile && grep -q '^\.PHONY:' /tmp/Makefile.new && make -n -f /tmp/Makefile.new prod-redeploy >/dev/null && cp /tmp/Makefile.new Makefile && make help
 ```
 
 Тот же порядок, что и у `self-update`: копия прежнего → скачивание во временный файл → **проверка,
 что скачанное вообще разбирается** → замена. Без проверки битый ответ прокси (HTML-страница вместо
 файла) молча оставил бы сервер без рабочего `Makefile`.
+
+⚠ Проверка идёт по признакам, которые есть в **любой** версии файла (`.PHONY` и давняя цель
+`prod-redeploy`). Первая редакция сверялась по `help` — цели, добавленной той же правкой, — и на
+живом сервере bootstrap честно отказался: чтобы поставить новую цель, ему требовалась новая цель.
+Проверка обязана переживать любую версию, иначе она блокирует ровно то обновление, ради которого
+написана.
+
+## Крипто-шлюз: выключить, пока Приор ходит напрямую
+
+После перехода на `api.priorbank.by:9344` (#522) шлюз в тракте не участвует и только занимает CPU.
+
+```bash
+cd /home/bitrix/bank-import && make gw-stop
+```
+
+⚠ Это ВРЕМЕННО: `make prod-redeploy` поднимет его снова, пока сервис не закомментирован в
+`docker-compose.prod.yml`. В репозитории он **выключен по умолчанию**, а на сервере файл правили
+руками, чтобы его включить, — поэтому насовсем убрать можно `make compose-update` (сперва покажет
+отличия, применяет только с `CONFIRM=1`) либо закомментировав блок `crypto-gw` вручную.
+
+Обратно при сертификации СКЗИ: `make gw-start`, затем `make prior-switch TO=gateway`.
 
 | задача | команда |
 |---|---|

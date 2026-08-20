@@ -1,5 +1,6 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
-        prior-probe prior-switch poll-check self-update help
+        prior-probe prior-switch poll-check self-update help \
+        gw-stop gw-start compose-update
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -113,13 +114,53 @@ env-value = $$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$(
 # один раз при развёртывании и дальше живёт своей жизнью — поэтому цель, добавленная в репо,
 # на сервере просто не существует, и оператору приходится набирать сырые `docker compose` и
 # `curl … | bash`. Ровно это и происходило.
+#
+# ⚠ Скачанное проверяется по признаку, который есть в ЛЮБОЙ версии файла (`.PHONY` + давняя цель
+# `prod-redeploy`), а не по свежей. Первая попытка проверяла `help` — цель, добавленную этой же
+# правкой, — и bootstrap на живом сервере честно отказался: чтобы поставить новую цель, ему
+# требовалась новая цель. Проверка обязана переживать любую версию, иначе она блокирует ровно то
+# обновление, ради которого написана.
 self-update:
 	@t=$$(mktemp /tmp/Makefile.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/Makefile" \
-	  && make -n -f "$$t" help >/dev/null 2>&1 \
+	  && grep -q '^\.PHONY:' "$$t" \
+	  && make -n -f "$$t" prod-redeploy >/dev/null 2>&1 \
 	  && { b="./Makefile.bak-$$(date +%Y%m%d-%H%M%S)"; cp ./Makefile "$$b"; cp "$$t" ./Makefile; \
 	       echo "[make] Makefile обновлён из $(REF), копия прежнего: $$b"; \
 	       echo "[make] новые цели:"; make help; }
+
+## Остановить крипто-шлюз (не нужен, пока Приор ходит напрямую на :9344)
+#
+# ⚠ Это ВРЕМЕННО: `prod-redeploy` поднимет его снова, пока сервис не закомментирован в
+# `docker-compose.prod.yml`. Насовсем — `make compose-update` (в репозитории он выключен по
+# умолчанию) либо закомментировать вручную. Цель нужна ровно для «выключить прямо сейчас».
+gw-stop:
+	@docker compose -f docker-compose.prod.yml stop crypto-gw \
+	  && echo "[make] crypto-gw остановлен. ⚠ prod-redeploy поднимет его снова — см. compose-update"
+
+## Поднять крипто-шлюз обратно (понадобится при сертификации СКЗИ)
+gw-start:
+	@docker compose -f docker-compose.prod.yml up -d crypto-gw \
+	  && echo "[make] crypto-gw поднят. Переключить банк обратно: make prior-switch TO=gateway"
+
+## Обновить docker-compose.prod.yml из репозитория (ЗАТРЁТ локальные правки — сперва покажет их)
+#
+#   make compose-update              # только показать, что изменится
+#   make compose-update CONFIRM=1    # применить
+#
+# ⚠ Файл на сервере правят руками (так включали крипто-шлюз), поэтому слепая замена уничтожила бы
+# настройку, о которой никто не помнит. Отсюда два шага и обязательный CONFIRM.
+compose-update:
+	@t=$$(mktemp /tmp/compose.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/docker-compose.prod.yml" \
+	  && docker compose -f "$$t" config -q \
+	  && { echo "[make] отличия текущего файла от $(REF) (- сервер, + репозиторий):"; \
+	       diff -u ./docker-compose.prod.yml "$$t" | sed -n '3,80p' || true; \
+	       if [ "$(CONFIRM)" = "1" ]; then \
+	         b="./docker-compose.prod.yml.bak-$$(date +%Y%m%d-%H%M%S)"; cp ./docker-compose.prod.yml "$$b"; \
+	         cp "$$t" ./docker-compose.prod.yml; \
+	         echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy"; \
+	       else echo "[make] это был показ. Применить: make compose-update CONFIRM=1"; fi; }
 
 ## Список целей с описаниями
 #

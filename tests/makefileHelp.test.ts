@@ -48,7 +48,8 @@ describe('операторские цели Makefile видны в `make help`',
     // ⚠ Список закрытый: цель, которую оператор запускает на сервере, обязана быть в справке.
     // Служебные (`dev`, `build-local`) сюда не входят — их запускают из репозитория.
     const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
-      'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help']
+      'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help',
+      'gw-stop', 'gw-start', 'compose-update']
     const shown = documented()
     for (const t of OPERATOR) {
       expect(targets(), `цели ${t} нет в Makefile`).toContain(t)
@@ -61,9 +62,30 @@ describe('операторские цели Makefile видны в `make help`',
     // жизнью, поэтому новая цель в репозитории на сервере просто не существует.
     expect(MAKEFILE).toContain('self-update:')
     // Обновление обязано сохранять копию и проверять скачанное ДО замены: битый Makefile лишает
-    // сервер единственного интерфейса.
+    // сервер единственного интерфейса. Чем именно проверяет — в отдельном тесте ниже.
     expect(MAKEFILE).toMatch(/Makefile\.bak-/)
-    expect(MAKEFILE).toMatch(/make -n -f "\$\$t" help/)
+  })
+
+  it('обновляющие цели проверяют скачанное ДО замены', () => {
+    // ⚠ Обе тянут файл, от которого зависит управляемость сервера. Битый ответ прокси (HTML вместо
+    // файла) молча оставил бы стенд без рабочего Makefile или без валидного compose — и выяснилось
+    // бы это в следующий раз, когда что-то понадобится срочно.
+    const su = MAKEFILE.slice(MAKEFILE.indexOf('\nself-update:'), MAKEFILE.indexOf('\n## Остановить крипто-шлюз'))
+    expect(su, 'self-update не проверяет скачанное').toMatch(/grep -q '\^\\\.PHONY:'/)
+    // ⚠ Проверка обязана переживать ЛЮБУЮ версию файла: первая редакция сверялась по цели `help`,
+    // добавленной той же правкой, и bootstrap на живом сервере отказался ставить обновление,
+    // потому что для установки новой цели ему требовалась новая цель.
+    expect(su, 'self-update сверяется по свежей цели, а не по давней').toMatch(/prod-redeploy/)
+    expect(su).not.toMatch(/make -n -f "\$\$t" help/)
+    const cu = MAKEFILE.slice(MAKEFILE.indexOf('\ncompose-update:'))
+    expect(cu, 'compose-update не валидирует compose').toMatch(/config -q/)
+    // Замена только по явному подтверждению: файл правят руками, слепая замена уничтожила бы
+    // настройку, о которой никто не помнит.
+    // ⚠ Пинится САМО УСЛОВИЕ, а не упоминание переменной: слово `CONFIRM` встречается ещё и в
+    // подсказке «Применить: make compose-update CONFIRM=1», поэтому проверка на вхождение
+    // проходила даже при условии, выключённом в `if true` (поймано мутацией).
+    expect(cu, 'compose-update заменяет без подтверждения').toMatch(/if \[ "\$\(CONFIRM\)" = "1" \]; then/)
+    expect(cu).toMatch(/\.bak-/)
   })
 
   it('цели, зовущие скрипты, тянут их из того же REF', () => {
