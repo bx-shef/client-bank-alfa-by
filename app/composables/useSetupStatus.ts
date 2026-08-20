@@ -36,12 +36,19 @@ export function useSetupStatus() {
   const inFrame = ref(false)
   const loading = ref(false)
   const loaded = ref(false)
+  /** Было ли хоть одно УСПЕШНОЕ чтение. Отдельно от `loaded`, потому что вопросы разные:
+   *  «проверка завершилась» (можно перестать показывать лоадер) и «данные в `status` настоящие»
+   *  (можно на них ссылаться). Экран обновляется по возврату фокуса, и без этого флага одна
+   *  моргнувшая сеть схлопывала бы уже показанный чек-лист в сообщение об ошибке. */
+  const loadedOk = ref(false)
   const error = ref('')
 
   async function load(): Promise<void> {
     const a = frameAuth()
     inFrame.value = a !== null
     if (!a) {
+      // Вне фрейма спрашивать некого: показываем дефолты и считаем проверку ЗАВЕРШЁННОЙ, иначе
+      // карточка вечно висела бы в состоянии «проверяем настройку…».
       status.value = { ...DEFAULTS }
       loaded.value = true
       return
@@ -50,6 +57,7 @@ export function useSetupStatus() {
     error.value = ''
     try {
       const res = await $fetch<Partial<SetupStatus>>('/api/setup-status', { headers: authHeaders(a) })
+      loadedOk.value = true
       status.value = {
         connectedAccounts: Number(res?.connectedAccounts) || 0,
         pendingAccounts: Number(res?.pendingAccounts) || 0,
@@ -65,5 +73,5 @@ export function useSetupStatus() {
     }
   }
 
-  return { status, inFrame, loading, loaded, error, load }
+  return { status, inFrame, loading, loaded, loadedOk, error, load }
 }

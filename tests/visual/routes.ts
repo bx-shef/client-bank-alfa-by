@@ -24,6 +24,7 @@ export const VISUAL_ROUTES: readonly VisualRoute[] = [
   { slug: 'error', path: '/404.html', themes: ['dark'] },
   { slug: 'app', path: '/app?preview=1', themes: ['light', 'dark'] },
   { slug: 'import', path: '/import?preview=1', themes: ['light', 'dark'] },
+  { slug: 'settings', path: '/settings?preview=1', themes: ['light', 'dark'] },
   { slug: 'install', path: '/install?preview=1', themes: ['light', 'dark'] },
   { slug: 'queues', path: '/queues?preview=1', themes: ['light', 'dark'] },
   { slug: 'login', path: '/login', themes: ['light', 'dark'] }

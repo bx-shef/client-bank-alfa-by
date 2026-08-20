@@ -80,6 +80,49 @@ export const useB24 = () => {
     return [...B24_REQUIRED_SCOPES]
   }
 
+  /** `place`, с которым открыт ЭТОТ фрейм (`openSliderAppPage({ place })` → PLACEMENT_OPTIONS).
+   *  У обычно открытой страницы приложения его нет. По нему глобальный мидлвар уводит свежий
+   *  фрейм слайдера на нужный маршрут. */
+  function placementPlace(): string | undefined {
+    const opts = get()?.placement?.options as Record<string, unknown> | undefined
+    const p = opts?.place
+    return typeof p === 'string' && p ? p : undefined
+  }
+
+  /** Открыть СВОЙ вторичный экран настоящим слайдером портала. Возвращает `false`, когда мы вне
+   *  фрейма или портал отказал, — вызывающий тогда уходит обычной навигацией, и экран всё равно
+   *  открывается.
+   *
+   *  ⚠ `width` обязателен намеренно: под 640 px (брейкпоинт `sm`) десктопный слайдер молча
+   *  получает мобильную вёрстку, поэтому ширина выбирает КЛАСС РАСКЛАДКИ, а не просто размер.
+   *  Забытый аргумент не должен принимать это решение за нас. */
+  async function openAppSlider(
+    place: string,
+    opts: { width: number, title?: string }
+  ): Promise<boolean> {
+    await init()
+    const f = get()
+    if (!f) return false
+    try {
+      await f.slider.openSliderAppPage({
+        place,
+        bx24_width: opts.width,
+        ...(opts.title ? { bx24_title: opts.title } : {})
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** Закрыть слайдер, в котором мы сами открыты. Вне фрейма — тихий no-op. */
+  async function closeSlider(): Promise<void> {
+    await init()
+    try {
+      await get()?.parent.closeApplication()
+    } catch { /* не во фрейме — закрывать нечего */ }
+  }
+
   return {
     init,
     get,
@@ -87,6 +130,9 @@ export const useB24 = () => {
     set,
     isInit,
     targetOrigin,
-    getRequiredRights
+    getRequiredRights,
+    placementPlace,
+    openAppSlider,
+    closeSlider
   }
 }

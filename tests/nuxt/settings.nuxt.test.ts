@@ -7,8 +7,8 @@ import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { defaultPortalSettings } from '~/utils/settings'
 
-// Монтируем САМУ форму, а не страницу: отдельной страницы настроек больше нет — единственный
-// вход это слайдовер на /app, который рендерит этот же компонент.
+// Монтируем САМУ форму, а не страницу `/settings`: страница — тонкая оболочка (шапка + механика
+// закрытия), и она покрыта отдельно в `appSlider.nuxt.test.ts`.
 // Форма придерживает содержимое до конца цепочки onMounted (init + nextTick + checkAdmin + load) —
 // прокручиваем её, чтобы форма отрисовалась.
 async function mountReady() {
@@ -46,10 +46,12 @@ async function openSection(wrapper: VueWrapper, label: string) {
 }
 
 describe('форма настроек', () => {
-  it('renders the heading, the grouped sections and one preview row per operation', async () => {
+  it('renders the grouped sections and one preview row per operation', async () => {
     const wrapper = await mountReady()
     const text = wrapper.text()
-    expect(text).toContain('Настройки')
+    // ⚠ Заголовка «Настройки» здесь БОЛЬШЕ НЕТ, и это правильно: экран открывается слайдером
+    // портала, заголовок несёт его шапка (`app/pages/settings.vue`). Форма, дублирующая его,
+    // давала два одинаковых заголовка подряд. Проверять его здесь — держаться за прежнюю оболочку.
     // Accordion section labels are always rendered (headers), even while collapsed.
     expect(text).toContain('Уведомления в чат')
     expect(text).toContain('Исключения')
