@@ -1,4 +1,6 @@
-.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats prior-probe
+.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
+        prior-probe prior-switch poll-check self-update help \
+        gw-stop gw-start compose-update
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -21,6 +23,7 @@ build-local:
 prod-up:
 	docker compose -f docker-compose.prod.yml up -d
 
+## Остановить стек
 prod-down:
 	docker compose -f docker-compose.prod.yml down
 
@@ -34,9 +37,11 @@ prod-redeploy:
 	docker compose -f docker-compose.prod.yml up -d && \
 	docker image prune -f
 
+## Живой лог app-контейнера (Ctrl+C чтобы выйти)
 logs:
 	docker compose -f docker-compose.prod.yml logs -f app
 
+## Состояние контейнеров стека
 ps:
 	docker compose -f docker-compose.prod.yml ps
 
@@ -65,7 +70,29 @@ ps:
 #
 # ⚠ Берётся `main`, а НЕ то, что развёрнуто. Обычно это то же самое; когда важна точность, задайте
 # ссылку явно: `make doctor REF=<коммит>`. Цель печатает, что именно скачала.
-REF ?= main
+# ⚠ `override` — а НЕ `?=`, и это про безопасность, а не про стиль (ревью безопасности PR #535).
+#
+# `REF` подставлялся в URL макросом, и командная строка `make` могла задать его чем угодно. Две
+# проверенные вживую дыры:
+#
+#   1. `make -n doctor REF='$$(shell touch pwned)'` ВЫПОЛНЯЕТ код — при `-n`, то есть в режиме
+#      «только показать». Раскрытие макроса происходит до всякого шелла, до curl и до `bash`.
+#      Оператор, из осторожности решивший «сначала гляну через -n», не защищается, а детонирует.
+#   2. `REF='../../чужой/репозиторий/main'` уводит скачивание в ЧУЖОЙ публичный репозиторий: curl
+#      схлопывает `/../` в пути САМ, ещё до отправки, поэтому GitHub получает готовый путь и
+#      честно отдаёт чужой файл под настоящим сертификатом. Проверено запросом.
+#
+# ⚠ Передача через окружение (`export SAFE := $$(REF)`) НЕ помогает — присваивание раскрывает
+# значение точно так же; проверено. Раскрытие и есть исполнение, поэтому единственная надёжная
+# защита — не давать задавать переменную вовсе.
+#
+# Цена: нельзя проверить скрипт из ветки через `make … REF=ветка`. Это нужда разработчика, а не
+# оператора, и закрывается разовой командой `curl … | bash` с явным адресом ветки — ровно так мы и
+# делали всё время. Оператор всегда работает с `main`.
+override REF := main
+# Умолчания параметров диагностических целей. ⚠ Именно `?=`: пустая строка, доехавшая до скрипта
+# вместо значения, читается им как аргумент и ломает разбор — а выглядит это как ошибка скрипта.
+SINCE ?= 3h
 RAW = https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/scripts
 
 # Прочитать ОДНО значение из ./.env, не исполняя файл.
@@ -100,7 +127,100 @@ env-value = $$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$(
 	  | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]][[:space:]]*\#.*\$$//" -e "s/[[:space:]]*\$$//" \
 	        -e "s/^\"\(.*\)\"\$$/\1/" -e "s/^'\(.*\)'\$$/\1/")
 
-## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
+## Обновить САМ этот Makefile из репозитория (новые цели появляются только так)
+#
+# ⚠ Без этой цели остальные бесполезны. Репозитория на сервере нет, `Makefile` кладётся туда
+# один раз при развёртывании и дальше живёт своей жизнью — поэтому цель, добавленная в репо,
+# на сервере просто не существует, и оператору приходится набирать сырые `docker compose` и
+# `curl … | bash`. Ровно это и происходило.
+#
+# ⚠ Скачанное проверяется по признаку, который есть в ЛЮБОЙ версии файла (`.PHONY` + давняя цель
+# `prod-redeploy`), а не по свежей. Первая попытка проверяла `help` — цель, добавленную этой же
+# правкой, — и bootstrap на живом сервере честно отказался: чтобы поставить новую цель, ему
+# требовалась новая цель. Проверка обязана переживать любую версию, иначе она блокирует ровно то
+# обновление, ради которого написана.
+self-update:
+	@t=$$(mktemp /tmp/Makefile.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/Makefile" \
+	  && grep -q '^\.PHONY:' "$$t" \
+	  && make -n -f "$$t" prod-redeploy >/dev/null 2>&1 \
+	  && { b="./Makefile.bak-$$(date +%Y%m%d-%H%M%S)"; \
+	       cp ./Makefile "$$b" && cp "$$t" ./Makefile \
+	       && echo "[make] Makefile обновлён из $(REF), копия прежнего: $$b"; \
+	       echo "[make] новые цели:"; make help; }
+
+## Остановить крипто-шлюз (не нужен, пока Приор ходит напрямую на :9344)
+#
+# ⚠ Это ВРЕМЕННО: `prod-redeploy` поднимет его снова, пока сервис не закомментирован в
+# `docker-compose.prod.yml`. Насовсем — `make compose-update` (в репозитории он выключен по
+# умолчанию) либо закомментировать вручную. Цель нужна ровно для «выключить прямо сейчас».
+gw-stop:
+	@docker compose -f docker-compose.prod.yml stop crypto-gw \
+	  && echo "[make] crypto-gw остановлен. ⚠ prod-redeploy поднимет его снова — см. compose-update"
+
+## Поднять крипто-шлюз обратно (понадобится при сертификации СКЗИ)
+gw-start:
+	@docker compose -f docker-compose.prod.yml up -d crypto-gw \
+	  && echo "[make] crypto-gw поднят. Переключить банк обратно: make prior-switch TO=gateway"
+
+## Обновить docker-compose.prod.yml из репозитория (ЗАТРЁТ локальные правки — сперва покажет их)
+#
+#   make compose-update              # только показать, что изменится
+#   make compose-update CONFIRM=1    # применить
+#
+# ⚠ Файл на сервере правят руками (так включали крипто-шлюз), поэтому слепая замена уничтожила бы
+# настройку, о которой никто не помнит. Отсюда два шага и обязательный CONFIRM.
+#
+# ⚠ Диф печатается ЦЕЛИКОМ и с числом строк. Первая редакция резала его на 80-й строке — а один
+# только блок `crypto-gw` даёт больше семидесяти строк YAML, то есть при построчном сравнении
+# хвост уходил за срез МОЛЧА. Оператор видел начало, решал «выглядит нормально», подтверждал — и
+# терял ровно ту правку, ради защиты от которой диф и показывают. Обрезанная страховка хуже
+# отсутствующей: она создаёт уверенность. Длинный вывод на мобильном терминале — приемлемая цена.
+compose-update:
+	@t=$$(mktemp /tmp/compose.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/docker-compose.prod.yml" \
+	  && docker compose --project-directory . -f "$$t" config -q \
+	  && { d=$$(diff -u ./docker-compose.prod.yml "$$t" | tail -n +3); \
+	       n=$$(printf '%s\n' "$$d" | grep -c . || true); \
+	       echo "[make] отличия текущего файла от $(REF) — $$n строк (- сервер, + репозиторий):"; \
+	       printf '%s\n' "$$d"; \
+	       if [ "$(CONFIRM)" = "1" ]; then \
+	         b="./docker-compose.prod.yml.bak-$$(date +%Y%m%d-%H%M%S)"; \
+	         cp ./docker-compose.prod.yml "$$b" && cp "$$t" ./docker-compose.prod.yml \
+	         && echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy"; \
+	       else echo "[make] это был показ. Применить: make compose-update CONFIRM=1"; fi; }
+
+## Список целей с описаниями
+#
+# ⚠ Запоминает ПОСЛЕДНЮЮ строку `##` и печатает её у ближайшей следующей цели. Наивный
+# `grep -B1` этого не умеет: у половины целей между описанием и самой целью лежит ещё
+# несколько строк комментария, и они молча выпадали из списка — то есть справка врала о том,
+# что вообще можно запустить.
+help:
+	@awk '/^## /{d=substr($$0,4)} \
+	      /^[a-z][a-z-]*:/{if(d!=""){printf "  %-14s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
+	      $(MAKEFILE_LIST)
+
+## Что происходит с опросом банков: успехи, падения, продление токенов (#522)
+#
+#   make poll-check            # за 3 часа
+#   make poll-check SINCE=30m
+poll-check:
+	@t=$$(mktemp /tmp/poll-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-poll-check.sh" \
+	  && bash "$$t" "$(SINCE)"
+
+## Переключить Приорбанк между прямым адресом и крипто-шлюзом (#522)
+#
+#   make prior-switch TO=direct     # напрямую, без белорусской криптографии
+#   make prior-switch TO=gateway    # обратно через crypto-gw
+#   make prior-switch               # только показать текущее состояние
+prior-switch:
+	@t=$$(mktemp /tmp/prior-switch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prior-switch-host.sh" \
+	  && { a="--show"; [ "$(TO)" = "direct" ] && a="--to-direct"; \
+	       [ "$(TO)" = "gateway" ] && a="--to-gateway"; bash "$$t" $$a; }
+
 #
 # ⚠ Домен НЕ спрашиваем — читаем `DOMAIN` из `./.env`, который на сервере и так рядом. Аварийную
 # команду набирают с телефона, и подстановка домена руками означает опечатку в самый неудобный
@@ -120,6 +240,7 @@ prior-probe:
 	       c=""; [ "$(CONSENT)" = "1" ] && c="--with-consent"; \
 	       bash "$$t" "$$h" $$c; }
 
+## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
 doctor:
 	@echo "[make] скачиваю prod-doctor.sh из $(REF)"
 	@t=$$(mktemp /tmp/prod-doctor.XXXXXX) && trap 'rm -f "$$t"' EXIT \

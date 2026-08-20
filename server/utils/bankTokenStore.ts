@@ -139,6 +139,30 @@ export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): 
   return rows.length > 0
 }
 
+/**
+ * Отметить ПОПЫТКУ обновления — независимо от того, удалась она или нет (#489).
+ *
+ * ⚠ Намеренно НЕ трогает `updated_at`: та колонка означает «когда мы последний раз держали свежую
+ * пару», и по ней считается возраст токена. Проштампуй её при неудаче — и возраст сбросится, а
+ * подключение будет выглядеть свежим ровно тогда, когда оно ломается.
+ *
+ * ⚠ Без этой метки неудачная попытка неотличима от отсутствия попытки. Именно поэтому подключение,
+ * которое мы объявили мёртвым по СВОИМ часам, раньше не пробовали больше НИКОГДА: третьего
+ * варианта не существовало — либо не трогать, либо долбить отозванный грант каждый тик. Метка даёт
+ * третий: пробовать редко, и дать банку последнее слово.
+ */
+export async function markBankRefreshAttempt(
+  query: QueryFn,
+  ref: BankAccountRef,
+  nowMs: number
+): Promise<void> {
+  await query(
+    `UPDATE bank_tokens SET last_attempt_at = $4
+      WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
+    [ref.memberId, ref.provider, ref.accountKey, nowMs]
+  )
+}
+
 /** Map a DB row to a `BankToken`, decrypting the refresh blob. Throws if it can't be
  *  decrypted (wrong key / tampering) — a corrupt row must fail loud, not silently. */
 function rowToBankToken(row: Record<string, unknown>): BankToken {
@@ -260,6 +284,15 @@ export interface BankAccountInfo extends BankAccountRef {
   /** Whether a refresh token is stored at all — empty means «reconnect required» (Prior may
    *  return no refresh_token, and we store it empty rather than failing the connect). */
   hasRefresh: boolean
+  /**
+   * Epoch ms когда мы последний раз ПЫТАЛИСЬ обновить токен, чем бы попытка ни кончилась (#489).
+   * `0` — не пробовали ни разу.
+   *
+   * ⚠ Не путать с `connectedAt`: тот означает «когда мы последний раз ДЕРЖАЛИ свежую пару» и
+   * растёт только при успехе. Без отдельной метки неудачная попытка неотличима от отсутствия
+   * попытки — а из этих двух состояний следуют противоположные решения.
+   */
+  lastAttemptAt: number
   /** Epoch ms the BANK'S CONSENT lapses (#503). `0` — unknown (Alfa grants none), not expired. */
   consentExpiresAt: number
 }
@@ -273,7 +306,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // so an encrypted empty secret ends with a bare colon. Without this clause every pre-existing
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
-    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
@@ -287,6 +320,9 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // node-pg hands back a Date for TIMESTAMPTZ; String(Date) then re-parsing that human form is
     // implementation-defined and drops milliseconds — take the Date directly when we have one.
     connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
+    // ⚠ `0` = не пробовали ни разу. Отличать это от «пробовали и не вышло» обязательно: первое
+    // значит «дай шанс немедленно», второе — «подожди, прежде чем снова тратить лимит банка».
+    lastAttemptAt: Number(r.last_attempt_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0)
@@ -304,7 +340,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
  *  refresh lifetime differs by bank and is the thing most likely to be corrected later. */
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
-    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens ORDER BY updated_at ASC`,
@@ -316,6 +352,9 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
     provider: r.provider as BankProviderId,
     accountKey: String(r.account_key),
     connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
+    // ⚠ `0` = не пробовали ни разу. Отличать это от «пробовали и не вышло» обязательно: первое
+    // значит «дай шанс немедленно», второе — «подожди, прежде чем снова тратить лимит банка».
+    lastAttemptAt: Number(r.last_attempt_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0)

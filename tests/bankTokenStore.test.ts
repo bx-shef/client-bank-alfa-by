@@ -92,7 +92,10 @@ describe('listBankAccountInfoForPortal — проекция для экрана 
     expect(row).toEqual({
       id: 9, memberId: 'M1', provider: 'prior-by', accountKey: 'BY13',
       connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000,
-      hasRefresh: true, consentExpiresAt: 1_800_000_000_000
+      hasRefresh: true, consentExpiresAt: 1_800_000_000_000,
+      // ⚠ 0 = «не пробовали ни разу», а не «пробовали давно». Различие несущее: первое даёт шанс
+      // немедленно — ровно тот случай, когда подключение пережило простой сервиса (#489).
+      lastAttemptAt: 0
     })
     expect(JSON.stringify(row)).not.toContain('SECRET')
   })
@@ -443,7 +446,10 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
       connectedAt: 1_699_000_000_000, expiresAt: 1_700_000_000_000, hasRefresh: true,
       // Колонки в строке нет (Альфа согласий не выдаёт) ⇒ 0 = «неизвестно». Именно 0, а не
       // `undefined`: ноль читается правилами как «даты нет», и подключение не хоронится (#503).
-      consentExpiresAt: 0
+      consentExpiresAt: 0,
+      // Колонки `last_attempt_at` в строке тоже нет ⇒ 0 = «не пробовали», и подключение получит
+      // шанс на первом же тике (#489).
+      lastAttemptAt: 0
     })
     expect(JSON.stringify(row)).not.toContain('SECRET')
   })

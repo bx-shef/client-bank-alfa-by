@@ -79,7 +79,14 @@ describe('ключ лока строится ТОЛЬКО хелпером', () 
       // по той же причине; сверка решает ДРУГУЮ задачу — не гонку за строку, а протухший список в
       // браузере, который лок не лечит в принципе.
       deleteBankTokenById: 'unlocked-delete-is-terminal',
-      deleteBankTokensForPortal: 'unlocked-delete-is-terminal'
+      deleteBankTokensForPortal: 'unlocked-delete-is-terminal',
+      // ⚠ БЕЗ лока намеренно (#489). Пишет ТОЛЬКО `last_attempt_at` — метку «мы ходили в банк», и
+      // ни одного поля, за которое борется обновление токена. Проигранная гонка здесь стоит одной
+      // лишней попытки через шесть часов, а взятие лока — наоборот, дорого: отметка идёт ДО похода
+      // в банк, то есть держала бы лок всё время сетевого запроса, ради значения, точность
+      // которого никому не нужна.
+      // ⚠ Появится второе поле в этом UPDATE — классификация обязана пересматриваться.
+      markBankRefreshAttempt: 'unlocked-writes-only-the-attempt-stamp'
     }
     expect([...writers].sort()).toEqual(Object.keys(CLASSIFIED).sort())
   })

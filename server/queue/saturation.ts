@@ -1,6 +1,6 @@
 // Bank-fetch saturation signal (A8 follow-up; docs/OPERATIONS.md «Сигналы, которые НЕ
 // видны в дефолтных счётчиках»). The live Alfa poll is capped by a GLOBAL BullMQ queue
-// limiter (default 100/60s, QUEUE_FETCH_RATE_*). When the plan enqueues faster than the
+// limiter (default 80/60s, QUEUE_FETCH_RATE_*). When the plan enqueues faster than the
 // cap drains, BullMQ DEFERS the excess fetch jobs — a rate-limited job is not popped from
 // the `wait` list until the limiter TTL expires (verified against bullmq 5.80.5:
 // moveToActive returns early before RPOPLPUSH), so it stays counted in `waiting` (retry

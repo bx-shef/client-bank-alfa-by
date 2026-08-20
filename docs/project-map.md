@@ -703,7 +703,7 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
      `~pending:`-подключений, телеметрия латентности обмена кода на токен.
 8. ✅ **A8 — сделано** (PR #298): **глобальный** rate-limiter `Q_FETCH` — BullMQ worker `limiter`
    (shared across ALL реплик через Redis, не per-instance — сверено по офдок BullMQ ≥3.0), кап живых
-   вызовов Альфы на весь флот. Дефолт **100/60с** = per-client cap Альфы (у приложения один Alfa
+   вызовов Альфы на весь флот. Дефолт **80/60с** = 80 % от per-client cap Альфы (запас, #535) (у приложения один Alfa
    `client_id` → один глобальный кап верен; per-group лимиты убраны в BullMQ 3.0). Настройка
    `QUEUE_FETCH_RATE_MAX`/`QUEUE_FETCH_RATE_DURATION_MS` (0/мусор → дефолт, кап не отключить опечаткой).
    Парсер `runtime.ts` + проводка `startThroughputWorkers`→plugin; тесты. Follow-up: реактивный 429
@@ -721,7 +721,7 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
     no-op; повторная выдача тех же операций безопасна (crm-sync дедупит по маркеру B24 — **epoch
     прокинут и в `batchId`→`crmSyncJobId`, иначе crm-sync схлопывался бы и поздние операции дня не
     доезжали**). **Default-OFF (`CRON_REAL_POLL`, opt-in):** таймер гонит живой Alfa API — включать `=1`
-    осознанно при проверке боевой нагрузки (**rate-limiter A8 уже стоит** — глобальный кап 100/60с). Инертен
+    осознанно при проверке боевой нагрузки (**rate-limiter A8 уже стоит** — глобальный кап 80/60с). Инертен
     и потому, что реестр пуст, пока счета не подключены. Тесты (epoch-id, batchId+epoch, planner,
     окно вкл. UTC-границу, реестр).
 - **За владельцем (живая проверка):** B1/B2 sandbox-раунд (`pnpm oauth:test`/`prior:test` на деплое),
