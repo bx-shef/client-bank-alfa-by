@@ -39,6 +39,10 @@ const props = withDefaults(defineProps<{
   /** The already-selected option, so its label shows on reload even before it
    *  appears in a fetched page (stored value → known label). */
   selectedOption?: Option
+  /** Show a "Сбросить" action that clears the selection. The menu has no "nothing"
+   *  row — once a value is picked there is otherwise NO way back to "не выбрано",
+   *  and for the chat pickers that is a meaningful state (notifications off). */
+  clearable?: boolean
 }>(), {
   labelKey: 'label',
   valueKey: 'value',
@@ -46,7 +50,8 @@ const props = withDefaults(defineProps<{
   debounceMs: 250,
   placeholder: 'Начните вводить…',
   disabled: false,
-  selectedOption: undefined
+  selectedOption: undefined,
+  clearable: false
 })
 
 /** Selected value (the `valueKey` of the chosen option), or undefined. */
@@ -96,6 +101,12 @@ function onOpenChange(open: boolean) {
   }
 }
 
+/** Clear the selection back to "не выбрано". Emits the resolved option (undefined)
+ *  through the same watcher the menu uses, so a parent's cached label is dropped too. */
+function clear(): void {
+  model.value = undefined
+}
+
 // Min-chars hint text (e.g. "Введите ещё N символов").
 const hint = computed(() => `Введите ещё ${Math.max(1, props.minChars - searchTerm.value.trim().length)} символ(а)`)
 
@@ -103,71 +114,86 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <B24SelectMenu
-    v-bind="$attrs"
-    v-model="model"
-    v-model:search-term="searchTerm"
-    :items="displayItems"
-    :loading="loading"
-    ignore-filter
-    :label-key="labelKey"
-    :value-key="valueKey"
-    :placeholder="placeholder"
-    :disabled="disabled"
-    class="w-full"
-    @update:open="onOpenChange"
-  >
-    <!-- Forward SelectMenu item slots so consumers can render avatars/subtitles. -->
-    <template
-      v-for="name in ['item', 'item-leading', 'item-trailing']"
-      #[name]="slotProps"
-      :key="name"
+  <div class="flex w-full items-center gap-2">
+    <B24SelectMenu
+      v-bind="$attrs"
+      v-model="model"
+      v-model:search-term="searchTerm"
+      :items="displayItems"
+      :loading="loading"
+      ignore-filter
+      :label-key="labelKey"
+      :value-key="valueKey"
+      :placeholder="placeholder"
+      :disabled="disabled"
+      class="w-full"
+      @update:open="onOpenChange"
     >
-      <slot
-        :name="name"
-        v-bind="slotProps"
-      />
-    </template>
+      <!-- Forward SelectMenu item slots so consumers can render avatars/subtitles. -->
+      <template
+        v-for="name in ['item', 'item-leading', 'item-trailing']"
+        #[name]="slotProps"
+        :key="name"
+      >
+        <slot
+          :name="name"
+          v-bind="slotProps"
+        />
+      </template>
 
-    <!-- Footer: search state + explicit load-more. -->
-    <template #content-bottom>
-      <div class="px-2 py-1.5 text-xs text-(--ui-color-base-3)">
-        <p
-          v-if="tooShort"
-          data-testid="too-short"
-        >
-          {{ hint }}
-        </p>
-        <div
-          v-else-if="error"
-          class="flex items-center justify-between gap-2"
-          data-testid="search-error"
-        >
-          <span class="text-(--ui-color-accent-main-alert)">{{ error }}</span>
+      <!-- Footer: search state + explicit load-more. -->
+      <template #content-bottom>
+        <div class="px-2 py-1.5 text-xs text-(--ui-color-base-3)">
+          <p
+            v-if="tooShort"
+            data-testid="too-short"
+          >
+            {{ hint }}
+          </p>
+          <div
+            v-else-if="error"
+            class="flex items-center justify-between gap-2"
+            data-testid="search-error"
+          >
+            <span class="text-(--ui-color-accent-main-alert)">{{ error }}</span>
+            <B24Button
+              size="xs"
+              color="air-secondary-no-accent"
+              label="Повторить"
+              @click="refresh()"
+            />
+          </div>
+          <p
+            v-else-if="!loading && items.length === 0"
+            data-testid="empty"
+          >
+            Ничего не найдено
+          </p>
           <B24Button
+            v-else-if="hasMore"
+            block
             size="xs"
             color="air-secondary-no-accent"
-            label="Повторить"
-            @click="refresh()"
+            :loading="loading"
+            label="Показать ещё"
+            data-testid="load-more"
+            @click="loadMore()"
           />
         </div>
-        <p
-          v-else-if="!loading && items.length === 0"
-          data-testid="empty"
-        >
-          Ничего не найдено
-        </p>
-        <B24Button
-          v-else-if="hasMore"
-          block
-          size="xs"
-          color="air-secondary-no-accent"
-          :loading="loading"
-          label="Показать ещё"
-          data-testid="load-more"
-          @click="loadMore()"
-        />
-      </div>
-    </template>
-  </B24SelectMenu>
+      </template>
+    </B24SelectMenu>
+
+    <!-- Reset: the menu has no "nothing" row, so without this a picked chat can
+         never be un-picked. Sits OUTSIDE the trigger — inside it, the click would
+         also toggle the menu open. -->
+    <B24Button
+      v-if="clearable && model"
+      size="xs"
+      color="air-tertiary-no-accent"
+      label="Сбросить"
+      :disabled="disabled"
+      data-testid="clear-selection"
+      @click="clear()"
+    />
+  </div>
 </template>

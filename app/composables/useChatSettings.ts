@@ -59,13 +59,32 @@ function create() {
     return { items: res.items, hasMore: res.hasMore, nextOffset: res.nextOffset }
   }
 
-  /** Resolve a saved dialog id to a {value,label} for the picker: prefer the cached
-   *  title (stored at pick time), else the name from the recent list, else the id
-   *  itself (still selectable). */
+  /** Resolve a saved dialog id to a {value,label} for the picker WITHOUT a round-trip:
+   *  the cached title (stored at pick time), else the name from the recent list.
+   *  `undefined` means "name unknown here" — the caller asks the portal (below). */
   function seedOption(dialogId: string, title: string | undefined, recent: ChatOption[]): ChatOption | undefined {
     if (!dialogId) return undefined
     if (title) return { value: dialogId, label: title }
-    return recent.find(c => c.value === dialogId) ?? { value: dialogId, label: dialogId }
+    return recent.find(c => c.value === dialogId)
+  }
+
+  /** Ask the portal for a chat's title (im.dialog.get via our proxy). Used only when
+   *  neither the cached title nor the recent list knows it — a chat configured long
+   *  ago and since gone quiet otherwise showed as the raw `chat123`, which tells the
+   *  admin nothing about what is configured. Falls back to the id if the portal can't
+   *  resolve it (deleted chat / no access) — the value must stay selectable either way. */
+  async function resolveOption(dialogId: string): Promise<ChatOption> {
+    const a = frameAuth()
+    if (a) {
+      try {
+        const res = await $fetch<{ item: ChatOption | null }>('/api/chat-search', {
+          headers: frameAuthHeaders(a),
+          params: { id: dialogId }
+        })
+        if (res.item?.label) return res.item
+      } catch { /* fall through to the id */ }
+    }
+    return { value: dialogId, label: dialogId }
   }
 
   async function load() {
@@ -88,6 +107,19 @@ function create() {
       } catch { /* leave recent empty → id fallback */ }
       notifyOption.value = seedOption(settings.chat.dialogId, settings.chat.title, recent)
       errorOption.value = seedOption(settings.errorChat.dialogId, settings.errorChat.title, recent)
+      // Names still unknown → ask the portal (one call per unresolved picker; both
+      // are cold-path). Cache the title back into the settings so the next open is
+      // free — the same field the picker writes when a chat is chosen by hand.
+      if (settings.chat.dialogId && !notifyOption.value) {
+        const opt = await resolveOption(settings.chat.dialogId)
+        notifyOption.value = opt
+        if (opt.label !== opt.value) settings.chat.title = opt.label
+      }
+      if (settings.errorChat.dialogId && !errorOption.value) {
+        const opt = await resolveOption(settings.errorChat.dialogId)
+        errorOption.value = opt
+        if (opt.label !== opt.value) settings.errorChat.title = opt.label
+      }
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось загрузить настройки')
     } finally {

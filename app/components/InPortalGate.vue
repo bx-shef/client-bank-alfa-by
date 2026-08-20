@@ -68,6 +68,8 @@ onMounted(async () => {
   // объявлении и не узнал бы, чем всё кончилось.
   if (!inPortal.value && !preview.value) {
     await nextTick()
+    // ref на КОМПОНЕНТ отдал бы инстанс, а не элемент (у него нет focus) — поэтому ref
+    // стоит на контейнере, и ему нужен tabindex: без него элемент не фокусируем вовсе.
     stub.value?.focus()
   }
 })
@@ -106,13 +108,12 @@ onUnmounted(() => {
 
     <div
       v-else
+      ref="stub"
       class="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-1 px-4 text-center"
+      tabindex="-1"
       data-testid="portal-gate-outside"
     >
-      <ProseH3
-        ref="stub"
-        class="mb-0"
-      >
+      <ProseH3 class="mb-0">
         Откройте приложение внутри Bitrix24
       </ProseH3>
       <ProseP accent="less">

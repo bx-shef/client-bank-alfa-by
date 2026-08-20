@@ -264,6 +264,7 @@ const previewSummary = computed(() => {
                     v-model="settings.chat.dialogId"
                     :fetcher="chatFetcher"
                     :selected-option="notifyOption"
+                    clearable
                     placeholder="Начните вводить название чата"
                     data-testid="notify-chat"
                     @update:selected-option="(o:any) => (settings.chat.title = o?.label as string | undefined)"
@@ -291,6 +292,7 @@ const previewSummary = computed(() => {
                     v-model="settings.errorChat.dialogId"
                     :fetcher="chatFetcher"
                     :selected-option="errorOption"
+                    clearable
                     placeholder="Начните вводить название чата"
                     data-testid="error-chat"
                     @update:selected-option="(o: any) => (settings.errorChat.title = o?.label as string | undefined)"
