@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HEALTH_STALE_MS, HEALTH_TONE_COLOR, presentQueueHealth } from '~/utils/queueHealthView'
 import { queueAlertState, recordQueueHealth, resetQueueAlertState } from '../server/utils/queueAlertState'
+import type { QueueAlert } from '../server/utils/queueAlert'
 
 // The screen half of #426. The single thing worth testing: an empty alert list has THREE meanings,
 // and rendering them identically is the same lie as showing an unreadable queue as a healthy one.
@@ -86,7 +87,7 @@ describe('queueAlertState (процесс-широкое состояние)', (
 
   it('переданный массив тоже копируется — мутация у вызывающего не меняет хранимое', () => {
     resetQueueAlertState()
-    const source = [alert]
+    const source: QueueAlert[] = [alert]
     recordQueueHealth(source, T0)
     source.push({ kind: 'failing', queue: 'x', text: 'подделка' })
     expect(queueAlertState().alerts).toHaveLength(1)

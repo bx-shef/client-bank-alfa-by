@@ -174,7 +174,7 @@ describe('fetchBankStatement', () => {
     const priorQ: BankFetchQuery = { ...query, provider: 'prior-by', account: 'PRIOR-ACC' }
     const priorTok: BankToken = { ...tok, provider: 'prior-by', accountKey: 'PRIOR-ACC' }
     const priorItems = [{ account: 'PRIOR-ACC', docId: 't1', direction: 'credit', amount: 5, currency: 'BYN', purpose: '', counterparty: { name: 'X', unp: '', account: '' }, acceptDate: '2026-07-01' }]
-    const fetchPrior = vi.fn(async () => priorItems as never)
+    const fetchPrior = vi.fn(async (_q: BankFetchQuery, _stored: BankToken) => priorItems as never)
     const { deps } = fakeDeps({ stored: priorTok, apiConfig: () => ({ base: 'https://prior', statementPath: '/accounts' }), fetchPrior })
     const items = await fetchBankStatement(priorQ, deps)
     expect(items).toEqual(priorItems)

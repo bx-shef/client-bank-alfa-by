@@ -310,9 +310,11 @@ function memStore(clock = { now: 1_700_000_000_000 }) {
     }
     // Скан по ВСЕМ порталам (listAllBankAccountInfo): без параметров, сортировка по updated_at.
     if (/FROM bank_tokens ORDER BY updated_at/.test(sql)) {
+      // ⚠ Сортировка ДО map: спред `Record<string, unknown>` в литерал теряет индексную сигнатуру,
+      // и `a.updated_at` после него перестаёт существовать для типов. Порядок тот же по смыслу.
       return [...rows.values()]
-        .map(r => ({ ...r, has_refresh: r.refresh_token_enc !== '' && !String(r.refresh_token_enc).endsWith(':') }))
         .sort((a, b) => Number(a.updated_at) - Number(b.updated_at))
+        .map(r => ({ ...r, has_refresh: r.refresh_token_enc !== '' && !String(r.refresh_token_enc).endsWith(':') }))
     }
     if (/WHERE member_id = \$1 AND provider = \$2 AND account_key = \$3/.test(sql)) {
       const r = rows.get(key(p[0], p[1], p[2]))

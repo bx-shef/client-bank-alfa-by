@@ -41,7 +41,7 @@ describe('extractPayments', () => {
 
 describe('findDealPayments', () => {
   it('maps an unpaid payment to a deal-payment candidate (id, amount=sum, currency, dealId, accountNumber)', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, accountNumber: '1/2', sum: 1200, currency: 'BYN', paid: 'N' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, accountNumber: '1/2', sum: 1200, currency: 'BYN', paid: 'N' })]))
     expect(await findDealPayments('33', {}, call))
       .toEqual([{ kind: 'deal-payment', id: '3', amount: 1200, currency: 'BYN', dealId: '33', accountNumber: '1/2' }])
     expect(call.mock.calls[0]![0]).toBe('crm.item.payment.list')
@@ -49,25 +49,25 @@ describe('findDealPayments', () => {
   })
 
   it('omits accountNumber when the payment has none (keeps the field optional)', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, accountNumber: undefined })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, accountNumber: undefined })]))
     const out = await findDealPayments('33', {}, call)
     expect(out[0]).not.toHaveProperty('accountNumber')
   })
 
   it('skips a settled payment (paid=Y) by default', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, paid: 'Y' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, paid: 'Y' })]))
     expect(await findDealPayments('33', {}, call)).toEqual([])
   })
 
   it('keeps settled payments when includePaid is set', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, paid: 'Y', sum: 1200 })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, paid: 'Y', sum: 1200 })]))
     const out = await findDealPayments('33', { includePaid: true }, call)
     expect(out).toHaveLength(1)
     expect(out[0]!.amount).toBe(1200)
   })
 
   it('filters within a mixed list (real shape: paid 0-sum + unpaid target)', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       pay({ id: 1, accountNumber: '1/1', sum: 0, paid: 'Y' }),
       pay({ id: 5, accountNumber: '1/3', sum: 1200, paid: 'N' })
     ]))
@@ -75,14 +75,14 @@ describe('findDealPayments', () => {
   })
 
   it('skips a payment with a non-finite sum or an empty id', async () => {
-    const nonFinite = vi.fn(async () => resp([pay({ id: 3, sum: undefined })]))
+    const nonFinite = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, sum: undefined })]))
     expect(await findDealPayments('33', {}, nonFinite)).toEqual([])
-    const noId = vi.fn(async () => resp([pay({ id: undefined, sum: 1200 })]))
+    const noId = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: undefined, sum: 1200 })]))
     expect(await findDealPayments('33', {}, noId)).toEqual([])
   })
 
   it('returns every unpaid payment as its own candidate', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       pay({ id: 3, sum: 1200, paid: 'N' }),
       pay({ id: 5, sum: 300, paid: 'N' })
     ]))
@@ -91,26 +91,26 @@ describe('findDealPayments', () => {
   })
 
   it('treats paid case-insensitively (paid="y" is settled)', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, paid: 'y' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, paid: 'y' })]))
     expect(await findDealPayments('33', {}, call)).toEqual([])
   })
 
   it('trims the dealId — the query id and the candidate dealId are both clean', async () => {
-    const call = vi.fn(async () => resp([pay({ id: 3, sum: 1200 })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ id: 3, sum: 1200 })]))
     const out = await findDealPayments('  33  ', {}, call)
     expect(call.mock.calls[0]![1]).toEqual({ entityId: 33, entityTypeId: 2 })
     expect(out[0]!.dealId).toBe('33')
   })
 
   it('parses a string sum and defaults a missing currency to empty', async () => {
-    const call = vi.fn(async () => resp([pay({ sum: '250.5', currency: undefined })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay({ sum: '250.5', currency: undefined })]))
     const out = await findDealPayments('33', {}, call)
     expect(out[0]!.amount).toBeCloseTo(250.5, 2)
     expect(out[0]!.currency).toBe('')
   })
 
   it('returns [] without a REST call for a blank / non-numeric / non-positive dealId', async () => {
-    const call = vi.fn(async () => resp([pay()]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([pay()]))
     expect(await findDealPayments('  ', {}, call)).toEqual([])
     expect(await findDealPayments('abc', {}, call)).toEqual([])
     expect(await findDealPayments('0', {}, call)).toEqual([])
@@ -119,7 +119,7 @@ describe('findDealPayments', () => {
   })
 
   it('propagates a REST error thrown by call', async () => {
-    const call = vi.fn(async () => {
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     })
     await expect(findDealPayments('33', {}, call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
@@ -235,7 +235,7 @@ describe('findCompanyDealPayments', () => {
   })
 
   it('propagates a REST error from the deal list', async () => {
-    const call = vi.fn(async () => {
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => {
       throw new Error('ACCESS_DENIED')
     })
     await expect(findCompanyDealPayments('93', {}, call)).rejects.toThrow('ACCESS_DENIED')

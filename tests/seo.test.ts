@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   DISALLOWED_PATHS, LANDING_PUBLISHER, LANDING_SITE_URL,
   buildRobotsTxt, buildSitemapXml, canonicalUrl, crawlerFiles,
-  injectNoindex, isCalendarDate, NOINDEX_META, ogImageUrl, siteBaseUrl, xmlEscape
+  injectNoindex, isCalendarDate, ldJson, NOINDEX_META, ogImageUrl, siteBaseUrl, xmlEscape
 } from '~/utils/seo'
 import { PUBLIC_ROUTES, SERVICE_ROUTES, absoluteUrl } from '~/config/routes'
 import { LANDING_META_DESCRIPTION, LANDING_TITLE } from '~/utils/landing'
 import { PARTNERS_META_DESCRIPTION } from '~/utils/partners'
-import { ldJson } from '~/composables/usePublicPageSeo'
 
 // SEO-ядро (#425). Уроки взяты из соседнего `ai-price-import` (#292/#304) — там почти каждый из
 // этих кейсов сначала уехал в прод, и только потом стал тестом.

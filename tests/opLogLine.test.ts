@@ -19,7 +19,7 @@ function op(over: Partial<StatementItem> = {}): StatementItem {
     currency: 'BYN',
     direction: 'credit',
     purpose: 'оплата по счёту СЧ-1',
-    counterparty: { name: 'ООО Ромашка', account: 'BY22BBBB00000000000000000002' },
+    counterparty: { name: 'ООО Ромашка', unp: '', account: 'BY22BBBB00000000000000000002' },
     ...over
   } as StatementItem
 }
@@ -62,7 +62,7 @@ describe('содержимое строки', () => {
     // Поводом стал перенос построения строки в этот модуль: шаблон переехал целиком, и молчаливая
     // правка формы при таком переезде — самый вероятный вид регрессии.
     const line = buildOpLogLine(
-      op({ account: 'BY11X', docId: 'd1', counterparty: { name: 'N', account: 'BY22Y' } }),
+      op({ account: 'BY11X', docId: 'd1', counterparty: { name: 'N', unp: '', account: 'BY22Y' } }),
       { owner: 'none', recognized: 0, activityId: null }, 'M1', 'notable', false)
     expect(line).toBe('[op] portal M1, op BY11X|d1: credit BYN ← BY22Y → NO OWNER, intents 0, activity —')
   })
@@ -95,14 +95,14 @@ describe('содержимое строки', () => {
 
   it('внешние поля санитизируются — строка лога не склеивается инъекцией', () => {
     const line = buildOpLogLine(
-      op({ account: 'BY11\nПОДДЕЛКА', counterparty: { name: 'X', account: 'BY22\rXX' } }),
+      op({ account: 'BY11\nПОДДЕЛКА', counterparty: { name: 'X', unp: '', account: 'BY22\rXX' } }),
       stuck, 'M1', 'notable', false)!
     expect(line).not.toContain('\n')
     expect(line).not.toContain('\r')
   })
 
   it('пустой счёт контрагента назван словами, а не пустотой', () => {
-    const line = buildOpLogLine(op({ counterparty: { name: 'X', account: '' } }), stuck, 'M1', 'notable', false)!
+    const line = buildOpLogLine(op({ counterparty: { name: 'X', unp: '', account: '' } }), stuck, 'M1', 'notable', false)!
     expect(line).toContain('счёт не указан')
   })
 

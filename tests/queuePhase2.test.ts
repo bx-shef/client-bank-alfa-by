@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { StatementItem } from '../app/types/statement'
+import type { OperationDirection, StatementItem } from '../app/types/statement'
 import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
 import {
@@ -77,7 +77,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // default chat: a target set + both directions → every created op is announced
   // (keeps pre-gating chat assertions valid; gating is exercised by its own tests).
   const chat = o.chat === undefined
-    ? { dialogId: 'chat1', rules: { directions: ['credit', 'debit'] as const } }
+    ? { dialogId: 'chat1', rules: { directions: ['credit', 'debit'] as OperationDirection[] } }
     : o.chat
   const recognition: RecognitionSettings = o.recognition ?? { alphabet: 'cyrillic', matrices: [], configFields: {} }
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.

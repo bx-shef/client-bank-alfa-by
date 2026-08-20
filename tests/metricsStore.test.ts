@@ -42,7 +42,10 @@ function fakeStore() {
 describe('FEEDBACK_METRICS', () => {
   it('is separate from the summary-bound METRICS and never overlaps their names', () => {
     expect(FEEDBACK_METRICS).toEqual({ up: 'feedback_up', down: 'feedback_down' })
-    const summaryNames = new Set(Object.values(METRICS))
+    // `Set<string>`, not `Set<MetricName>`: with the narrow type TS proves the two `has` calls
+    // below can only be false, and a check that cannot fail is not a check. Widening keeps
+    // the assertion meaningful the day someone folds a feedback name into METRICS.
+    const summaryNames = new Set<string>(Object.values(METRICS))
     expect(summaryNames.has(FEEDBACK_METRICS.up)).toBe(false)
     expect(summaryNames.has(FEEDBACK_METRICS.down)).toBe(false)
   })
@@ -66,7 +69,7 @@ describe('bumpCounter', () => {
   })
 
   it('is a no-op for zero / non-finite / fractional-to-zero deltas', async () => {
-    const q = vi.fn(async () => [])
+    const q = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     await bumpCounter(q, 'm1', 'created', 0)
     await bumpCounter(q, 'm1', 'created', Number.NaN)
     await bumpCounter(q, 'm1', 'created', Infinity)
@@ -81,7 +84,7 @@ describe('bumpCounter', () => {
   })
 
   it('emits an atomic upsert keyed by (member_id, name)', async () => {
-    const q = vi.fn(async () => [])
+    const q = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     await bumpCounter(q, 'm1', 'created', 1)
     expect(q.mock.calls[0]![0]).toMatch(/ON CONFLICT \(member_id, name\) DO UPDATE SET value = metrics_counter\.value \+ EXCLUDED\.value/)
     expect(q.mock.calls[0]![1]).toEqual(['m1', 'created', 1])
@@ -108,7 +111,7 @@ describe('readCounters', () => {
   })
 
   it('SELECT is scoped by member_id (guards against a dropped WHERE)', async () => {
-    const q = vi.fn(async () => [])
+    const q = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     await readCounters(q, 'm1')
     expect(q.mock.calls[0]![0]).toMatch(/WHERE member_id = \$1/)
     expect(q.mock.calls[0]![1]).toEqual(['m1'])
@@ -133,7 +136,7 @@ describe('resetCounters / deleteMetricsForPortal', () => {
   })
 
   it('DELETE is scoped by member_id (guards against a dropped WHERE)', async () => {
-    const q = vi.fn(async () => [])
+    const q = vi.fn(async (_sql: string, _params?: unknown[]) => [])
     await resetCounters(q, 'm1')
     expect(q.mock.calls[0]![0]).toMatch(/DELETE FROM metrics_counter WHERE member_id = \$1/)
     expect(q.mock.calls[0]![1]).toEqual(['m1'])

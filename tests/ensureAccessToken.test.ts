@@ -25,7 +25,9 @@ function make(stored: PortalToken | null, refreshResp: unknown = { access_token:
   })
   const loadToken = vi.fn(async () => store.current)
   const withLock = vi.fn(async <T>(_k: string, fn: (qq: QueryFn) => Promise<T>) => fn(q))
-  const deps: RefreshDeps = { now: () => NOW, withLock, loadToken, saveToken, postRefresh }
+  // ⚠ `withLock` — генерик-порт, а `vi.fn` генерик не переносит: Mock<> от него порту не
+  // присваивается. Приведение точное (сигнатура та же), зато `.mock.calls` остаётся типизирован.
+  const deps: RefreshDeps = { now: () => NOW, withLock: withLock as RefreshDeps['withLock'], loadToken, saveToken, postRefresh }
   return { deps, store, postRefresh, saveToken, loadToken, withLock }
 }
 

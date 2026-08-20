@@ -5,6 +5,7 @@ import { abandonedPending, PENDING_MAX_AGE_DAYS } from '../app/utils/bankTokenLi
 import { ALFA_REFRESH_TOKEN_TTL_SEC } from '../app/utils/alfaOauth'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import type { BankAccountInfo } from '../server/utils/bankTokenStore'
+import type { QueryFn } from '../server/utils/tokenStore'
 
 // Свип брошенных ожидающих подключений (#485).
 //
@@ -24,11 +25,13 @@ function row(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     expiresAt: NOW + 3600_000,
     hasRefresh: true,
     consentExpiresAt: 0,
+    id: 1,
+    lastAttemptAt: 0,
     ...over
   }
 }
 
-const q = {} as never
+const q: QueryFn = async () => []
 
 function deps(rows: BankAccountInfo[], over: Partial<Parameters<typeof sweepAbandonedPending>[0]> = {}) {
   const removed: string[] = []
@@ -39,14 +42,14 @@ function deps(rows: BankAccountInfo[], over: Partial<Parameters<typeof sweepAban
     made: {
       now: () => NOW,
       list: async () => rows,
-      withLock: async <T>(key: string, fn: (q: never) => Promise<T>): Promise<T> => {
+      withLock: async <T>(key: string, fn: (q: QueryFn) => Promise<T>): Promise<T> => {
         locks.push(key)
         return fn(q)
       },
       // По умолчанию строка под локом та же, что была в снимке.
-      reread: async (_q: never, m: string, p: string, a: string) =>
+      reread: async (_q: QueryFn, m: string, p: string, a: string) =>
         rows.find(r => r.memberId === m && r.provider === p && r.accountKey === a) ?? null,
-      remove: async (_q: never, m: string, p: string, a: string) => {
+      remove: async (_q: QueryFn, m: string, p: string, a: string) => {
         removed.push(`${m}|${p}|${a}`)
         return true
       },
@@ -131,7 +134,7 @@ describe('sweepAbandonedPending', () => {
       row({ memberId: 'm2', accountKey: '~pending:b', connectedAt: NOW - DAY * 5 })
     ]
     const { made } = deps(rows, {
-      remove: async (_q: never, m: string) => {
+      remove: async (_q: QueryFn, m: string) => {
         if (m === 'm1') throw new Error('connection lost')
         return true
       }

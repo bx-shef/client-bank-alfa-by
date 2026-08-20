@@ -33,19 +33,19 @@ describe('extractDocuments', () => {
 
 describe('findDocumentEntities', () => {
   it('maps found documents to their bound entity refs (as strings)', async () => {
-    const call = vi.fn(async () => resp([doc({ entityTypeId: 2, entityId: 101 })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([doc({ entityTypeId: 2, entityId: 101 })]))
     expect(await findDocumentEntities('2026-002', call)).toEqual([{ entityTypeId: '2', entityId: '101' }])
     expect(call.mock.calls[0]![0]).toBe('crm.documentgenerator.document.list')
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { number: '2026-002' } })
   })
 
   it('resolves an invoice-bound document (entityTypeId 31)', async () => {
-    const call = vi.fn(async () => resp([doc({ number: 'СЧ-2026-002', entityTypeId: '31', entityId: '55' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([doc({ number: 'СЧ-2026-002', entityTypeId: '31', entityId: '55' })]))
     expect(await findDocumentEntities('СЧ-2026-002', call)).toEqual([{ entityTypeId: '31', entityId: '55' }])
   })
 
   it('returns EVERY document sharing the number (numbers are not portal-unique)', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       doc({ entityTypeId: 2, entityId: 101 }),
       doc({ entityTypeId: 31, entityId: 55 })
     ]))
@@ -56,7 +56,7 @@ describe('findDocumentEntities', () => {
   })
 
   it('drops a document whose number does not match (defence against an ignored filter)', async () => {
-    const call = vi.fn(async () => resp([
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([
       doc({ number: '2026-999', entityId: 777 }), // portal ignored the filter → wrong doc
       doc({ number: '2026-002', entityId: 101 })
     ]))
@@ -64,32 +64,32 @@ describe('findDocumentEntities', () => {
   })
 
   it('returns [] when no document has that number', async () => {
-    const call = vi.fn(async () => resp([]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([]))
     expect(await findDocumentEntities('nope', call)).toEqual([])
   })
 
   it('drops a document that lacks the entity binding', async () => {
-    const noType = vi.fn(async () => resp([doc({ entityTypeId: undefined })]))
+    const noType = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([doc({ entityTypeId: undefined })]))
     expect(await findDocumentEntities('2026-002', noType)).toEqual([])
-    const noId = vi.fn(async () => resp([doc({ entityId: null })]))
+    const noId = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([doc({ entityId: null })]))
     expect(await findDocumentEntities('2026-002', noId)).toEqual([])
   })
 
   it('trims the number for the guard AND inside the REST filter', async () => {
-    const call = vi.fn(async () => resp([doc({ number: '2026-002' })]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([doc({ number: '2026-002' })]))
     const out = await findDocumentEntities('  2026-002  ', call)
     expect(out).toEqual([{ entityTypeId: '2', entityId: '101' }])
     expect(call.mock.calls[0]![1]).toMatchObject({ filter: { number: '2026-002' } })
   })
 
   it('returns [] for a blank number without a REST call', async () => {
-    const call = vi.fn(async () => resp([doc()]))
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => resp([doc()]))
     expect(await findDocumentEntities('   ', call)).toEqual([])
     expect(call).not.toHaveBeenCalled()
   })
 
   it('propagates a REST error thrown by call', async () => {
-    const call = vi.fn(async () => {
+    const call = vi.fn(async (_m: string, _p: Record<string, unknown>) => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     })
     await expect(findDocumentEntities('2026-002', call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')

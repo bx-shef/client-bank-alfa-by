@@ -151,14 +151,14 @@ describe('makeSdkRestCall', () => {
 
   it('returns {} when getData is null/undefined (tolerant)', async () => {
     const { client } = fakeClient(ajax({ getData: () => null }))
-    expect(await makeSdkRestCall(client)('x')).toEqual({})
+    expect(await makeSdkRestCall(client)('x', {})).toEqual({})
   })
 
   it('passes getData through verbatim — does NOT validate the envelope shape', async () => {
     // Documents the contract: the adapter is a thin transport, not a validator. Whatever
     // the SDK hands back (even without a `result` key) reaches the lookup unchanged.
     const { client } = fakeClient(ajax({ getData: () => ({ foo: 1 }) }))
-    expect(await makeSdkRestCall(client)('x')).toEqual({ foo: 1 })
+    expect(await makeSdkRestCall(client)('x', {})).toEqual({ foo: 1 })
   })
 
   it('re-attaches top-level `total`/`next` from the SDK accessors (getData drops them) — #191 list pagination', async () => {
@@ -180,7 +180,7 @@ describe('makeSdkRestCall', () => {
       getTotal: () => 0,
       isMore: () => false
     }))
-    const out = await makeSdkRestCall(client)('crm.item.list')
+    const out = await makeSdkRestCall(client)('crm.item.list', {})
     expect(out).toEqual({ result: { items: [] }, total: 0 }) // total present (0), next absent
   })
 
@@ -188,22 +188,22 @@ describe('makeSdkRestCall', () => {
     // A future SDK bump could drop the @deprecated getTotal(); the optional guards must then
     // pass the envelope through unchanged rather than break.
     const { client } = fakeClient(ajax({ getData: () => ({ result: true }) }))
-    expect(await makeSdkRestCall(client)('crm.item.payment.pay')).toEqual({ result: true })
+    expect(await makeSdkRestCall(client)('crm.item.payment.pay', {})).toEqual({ result: true })
   })
 
   it('does not overwrite a `total` the envelope already carries', async () => {
     const { client } = fakeClient(ajax({ getData: () => ({ result: { items: [] }, total: 5 }), getTotal: () => 999 }))
-    expect((await makeSdkRestCall(client)('x')).total).toBe(5)
+    expect((await makeSdkRestCall(client)('x', {})).total).toBe(5)
   })
 
   it('throws the SDK error messages on failure (so the job fails → clean retry)', async () => {
     const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => ['QUERY_LIMIT_EXCEEDED', 'slow down'] }))
-    await expect(makeSdkRestCall(client)('crm.item.list')).rejects.toThrow('QUERY_LIMIT_EXCEEDED; slow down')
+    await expect(makeSdkRestCall(client)('crm.item.list', {})).rejects.toThrow('QUERY_LIMIT_EXCEEDED; slow down')
   })
 
   it('throws a generic message when the SDK gives no error text', async () => {
     const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => [] }))
-    await expect(makeSdkRestCall(client)('crm.deal.get')).rejects.toThrow('B24 REST crm.deal.get failed')
+    await expect(makeSdkRestCall(client)('crm.deal.get', {})).rejects.toThrow('B24 REST crm.deal.get failed')
   })
 })
 
@@ -400,7 +400,7 @@ describe('makePortalSdkCall', () => {
     expect(restrictionParams[0]).toMatchObject({ maxRetries: 1, retryOnNetworkError: false, rateLimit: { drainRate: 2 } })
 
     // returns a working RestCall routed through the client
-    const out = await call!('crm.item.list')
+    const out = await call!('crm.item.list', {})
     expect(out).toEqual({ result: { items: [] } })
     expect(calls[0]).toMatchObject({ method: 'crm.item.list' })
 

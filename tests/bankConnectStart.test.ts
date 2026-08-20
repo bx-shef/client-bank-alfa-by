@@ -6,6 +6,7 @@ import {
   type ConnectStartDeps
 } from '../server/utils/bankConnectStart'
 import { verifyConnectState } from '../server/utils/bankConnectState'
+import type { PriorConnectConfig } from '../server/utils/priorConnectStart'
 import { parseOAuthCallback } from '../app/utils/alfaOauth'
 
 const SECRET = 'connect-secret'
@@ -14,8 +15,11 @@ const now = 1_700_000_000_000
 const CONFIG = { baseUrl: 'https://alfa:8273', clientId: 'CID', redirectUri: 'https://app/cb', scope: 'accounts' }
 
 /** Prior's connect config (multi-step, carries secrets — A5b). */
-const PRIOR_CONFIG = {
+const PRIOR_CONFIG: PriorConnectConfig = {
   baseUrl: 'https://prior:9344',
+  // ⚠ Отдельно от `baseUrl` намеренно (#455/#522): банк разводит сервер авторизации и ресурсный
+  // API по разным адресам. Фикстура жила без этого поля, потому что типы её не проверяли.
+  tokenUrl: 'https://prior:9344/oauth2/token',
   authorizeBaseUrl: 'https://prior:9344',
   clientId: 'PCID',
   clientSecret: 'PSECRET',
@@ -191,7 +195,7 @@ describe('handleBankConnectStart', () => {
     const r = await handleBankConnectStart(deps(), { ...input, accountKey: '' })
     expect(r.status).toBe(200)
     const url = new URL(String(r.body.authorizeUrl))
-    const state = verifyConnectState(url.searchParams.get('state'), SECRET, input.nowMs)
+    const state = verifyConnectState(url.searchParams.get('state') ?? undefined, SECRET, input.nowMs)
     expect(state?.accountKey).toBeUndefined()
   })
 

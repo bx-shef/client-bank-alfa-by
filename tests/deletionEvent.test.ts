@@ -75,7 +75,7 @@ describe('parseDeletionRef', () => {
   })
 
   it('unconfigured SP ids → a dynamic non-invoice item is `other` (fail-safe, no accidental match)', () => {
-    expect(parseDeletionRef(dynamic('100', 1044)).kind).toBe('other') // no cfg → not our SP
+    expect(parseDeletionRef(dynamic('100', 1044))?.kind).toBe('other') // no cfg → not our SP
   })
 })
 
