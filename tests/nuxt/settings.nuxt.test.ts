@@ -7,8 +7,8 @@ import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { defaultPortalSettings } from '~/utils/settings'
 
-// Монтируем САМУ форму, а не страницу: отдельной страницы настроек больше нет — единственный
-// вход это слайдовер на /app, который рендерит этот же компонент.
+// Монтируем САМУ форму, а не страницу `/settings`: страница — тонкая оболочка (шапка + механика
+// закрытия), и она покрыта отдельно в `appSlider.nuxt.test.ts`.
 // Форма придерживает содержимое до конца цепочки onMounted (init + nextTick + checkAdmin + load) —
 // прокручиваем её, чтобы форма отрисовалась.
 async function mountReady() {

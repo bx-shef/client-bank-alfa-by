@@ -47,16 +47,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '127938853',
     docNum: '356',
     direction: 'debit',
-    amount: 0.29,
+    amount: 3.4,
     currency: 'BYN',
-    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 24.07.2026 согл. до',
+    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 24.06.2026 согл. до',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
       account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-28',
+    acceptDate: '2026-06-28',
     operCodeName: '6'
   },
   {
@@ -64,16 +64,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00928450004',
     docNum: '2280',
     direction: 'debit',
-    amount: 100,
+    amount: 140.0,
     currency: 'BYN',
-    purpose: 'OTHR 130102 АВАНС (ЗАРАБОТНАЯ ПЛАТА) ЗА ЗА ИЮЛЬ2026Г. ПО СПИСКУ 147 ОТ 24.07.2026СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
+    purpose: 'OTHR 130102 АВАНС (ЗАРАБОТНАЯ ПЛАТА) ЗА ЗА ИЮЛЬ2026Г. ПО СПИСКУ 100 ОТ 24.06.2026СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
     counterparty: {
       name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
       account: 'BY20DEMO30120000000000000010',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-24',
+    acceptDate: '2026-06-24',
     operCodeName: '1'
   },
   {
@@ -81,16 +81,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00928101693',
     docNum: '2279',
     direction: 'debit',
-    amount: 159.78,
+    amount: 221.9,
     currency: 'BYN',
-    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000063 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
+    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000201 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
     counterparty: {
       name: 'ООО \'ВАСИЛЁК\'',
       unp: '190000005',
       account: 'BY14DEMO30120000000000000004',
       bic: 'MTBKBY22'
     },
-    acceptDate: '2026-07-24',
+    acceptDate: '2026-06-24',
     operCodeName: '1'
   },
   {
@@ -98,16 +98,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00928101687',
     docNum: '2279',
     direction: 'debit',
-    amount: 19.24,
+    amount: 29.36,
     currency: 'BYN',
-    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000061 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
+    purpose: 'OTHR 190401 ОПЛАТА АКТА У-000202 ОТ 30.06.2026ПО ДОГОВОРУ 53/100/20 ОТ 03.11.2020',
     counterparty: {
       name: 'ООО \'ВАСИЛЁК\'',
       unp: '190000005',
       account: 'BY14DEMO30120000000000000004',
       bic: 'MTBKBY22'
     },
-    acceptDate: '2026-07-24',
+    acceptDate: '2026-06-24',
     operCodeName: '1'
   },
   {
@@ -115,7 +115,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00928101629',
     docNum: '2278',
     direction: 'debit',
-    amount: 1008,
+    amount: 1383.96,
     currency: 'BYN',
     purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
     counterparty: {
@@ -124,7 +124,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY13DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-24',
+    acceptDate: '2026-06-24',
     operCodeName: '1'
   },
   {
@@ -132,7 +132,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00927735152',
     docNum: '2043611938230893',
     direction: 'credit',
-    amount: 6300,
+    amount: 8634.0,
     currency: 'BYN',
     purpose: 'OTHR 121101 ОПЛАТА РАБОТ ПООБНОВЛЕНИЮ СЕРВИСНОГО ПО ПОРТАЛА B24.DEMO-CLIENT.BY СОГЛАСНО ДОГОВОРА НА ОКАЗАНИЕ УСЛУГ И ВЫПОЛНЕНИЕ РАБОТ N 52/05.10.2020 ОТ05.10.2020 СЧЕТ-ПРОТОКОЛ СОГЛАСОВАНИЯ ЦЕНЫ 52/05.102020/31',
     counterparty: {
@@ -141,7 +141,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY26DEMO30120000000000000016',
       bic: 'PJCBBY2X'
     },
-    acceptDate: '2026-07-23',
+    acceptDate: '2026-06-23',
     operCodeName: '1'
   },
   {
@@ -149,16 +149,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '126766867',
     docNum: '256',
     direction: 'debit',
-    amount: 3.7,
+    amount: 8.07,
     currency: 'BYN',
-    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 15.07.2026 согл. до',
+    purpose: 'Вознагражд-е за зачисл-е ден-х средств на текущие (расчетные) банковские счета физич-х лиц  ИП ИВАНОВ И. И. за 15.06.2026 согл. до',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
       account: 'BY22DEMO30120000000000000012',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-17',
+    acceptDate: '2026-06-17',
     operCodeName: '6'
   },
   {
@@ -166,7 +166,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '126603199',
     docNum: '837',
     direction: 'debit',
-    amount: 50,
+    amount: 71.5,
     currency: 'BYN',
     purpose: '2.4.23. II Вознаграждение за обслуживание по пакету услуг "Пакет Лайт" за 7 месяц 2026 г. сог-но Перечню вознаграждений Банка. Без НДС.',
     counterparty: {
@@ -175,7 +175,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-16',
+    acceptDate: '2026-06-16',
     operCodeName: '6'
   },
   {
@@ -183,7 +183,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '126603198',
     docNum: '446',
     direction: 'debit',
-    amount: 1.9,
+    amount: 5.6,
     currency: 'BYN',
     purpose: '2.3.16. б) II Вознагр.за предоставление услуги "Клиент-Уведомление" путем отправки сообщения на адрес эл.почты  в июле 2026 г. cогл. П',
     counterparty: {
@@ -192,7 +192,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-16',
+    acceptDate: '2026-06-16',
     operCodeName: '6'
   },
   {
@@ -200,16 +200,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00923002595',
     docNum: '2276',
     direction: 'debit',
-    amount: 126.51,
+    amount: 176.32,
     currency: 'BYN',
-    purpose: 'TAXS 190101 ПОДОХОДНЫЙ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.07.2026Г.',
+    purpose: 'TAXS 190101 ПОДОХОДНЫЙ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.06.2026Г.',
     counterparty: {
       name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
       unp: '190000002',
       account: 'BY25DEMO30120000000000000015',
       bic: 'AKBBBY2X'
     },
-    acceptDate: '2026-07-15',
+    acceptDate: '2026-06-15',
     operCodeName: '1'
   },
   {
@@ -217,16 +217,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00923002587',
     docNum: '2275',
     direction: 'debit',
-    amount: 680,
+    amount: 934.6,
     currency: 'BYN',
-    purpose: 'TAXS 190102 ФСЗН НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.07.2026Г.',
+    purpose: 'TAXS 190102 ФСЗН НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.06.2026Г.',
     counterparty: {
       name: 'ГЛАВНОЕ УПРАВЛЕНИЕ МИНФИНА (ДЕМО)',
       unp: '190000002',
       account: 'BY17DEMO30120000000000000007',
       bic: 'AKBBBY2X'
     },
-    acceptDate: '2026-07-15',
+    acceptDate: '2026-06-15',
     operCodeName: '1'
   },
   {
@@ -234,16 +234,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00923002589',
     docNum: '2277',
     direction: 'debit',
-    amount: 10,
+    amount: 16.7,
     currency: 'BYN',
-    purpose: 'OTHR 143805 ОПЛАТА СТРАХОВЫХ ВЗНОСОВ ЗА НАЕМНЫХСОТРУДНИКОВ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.07.2026Г.СТРАХОВОЙ НОМЕР 500000001КОД ПЛАТЕЖА 10001',
+    purpose: 'OTHR 143805 ОПЛАТА СТРАХОВЫХ ВЗНОСОВ ЗА НАЕМНЫХСОТРУДНИКОВ НАЛОГ С ЗАРАБОТНОЙ ПЛАТЫ ЗА ИЮНЬ 2026  ПО СРОКУ УПЛАТЫ 15.06.2026Г.СТРАХОВОЙ НОМЕР 500000001КОД ПЛАТЕЖА 10001',
     counterparty: {
       name: 'ФИЛИАЛ СТРАХОВЩИКА (ДЕМО)',
       unp: '190000001',
       account: 'BY16DEMO30120000000000000006',
       bic: 'AKBBBY2X'
     },
-    acceptDate: '2026-07-15',
+    acceptDate: '2026-06-15',
     operCodeName: '1'
   },
   {
@@ -251,16 +251,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00923002585',
     docNum: '2274',
     direction: 'debit',
-    amount: 1275.08,
+    amount: 1749.86,
     currency: 'BYN',
-    purpose: 'OTHR 130102 ЗАРАБОТНАЯ ПЛАТА ЗА МЕСЯЦ (ИСТЕКШИЙ) ЗА ИЮНЬ 2026Г. ПО СПИСКУ 146 ОТ 15.07.2026 СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
+    purpose: 'OTHR 130102 ЗАРАБОТНАЯ ПЛАТА ЗА МЕСЯЦ (ИСТЕКШИЙ) ЗА ИЮНЬ 2026Г. ПО СПИСКУ 146 ОТ 15.06.2026 СОГЛАСНО ДОГОВОРУ 30-06/100 ОТ 29.12.2015',
     counterparty: {
       name: 'ЗАО \'ДЕМО-БАНК\'',
       unp: '190000003',
       account: 'BY20DEMO30120000000000000010',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-15',
+    acceptDate: '2026-06-15',
     operCodeName: '1'
   },
   {
@@ -268,7 +268,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00920729820',
     docNum: '5954',
     direction: 'credit',
-    amount: 700,
+    amount: 962.0,
     currency: 'BYN',
     purpose: 'OTHR 123501 ОПЛАТА ЗА УСЛУГИ ПО ДОГОВОРУ 8/06.05.2022 ОТ 06.05.2022, БЕЗ НДС',
     counterparty: {
@@ -277,7 +277,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY23DEMO30120000000000000013',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-10',
+    acceptDate: '2026-06-10',
     operCodeName: '1'
   },
   {
@@ -285,16 +285,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '125791075',
     docNum: '37',
     direction: 'debit',
-    amount: 5.8,
+    amount: 10.95,
     currency: 'BYN',
-    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 07.07.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
+    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 07.06.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
       account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-09',
+    acceptDate: '2026-06-09',
     operCodeName: '6'
   },
   {
@@ -302,16 +302,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '125647285',
     docNum: '54',
     direction: 'debit',
-    amount: 7.25,
+    amount: 12.93,
     currency: 'BYN',
-    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 06.07.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
+    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 06.06.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
       account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-08',
+    acceptDate: '2026-06-08',
     operCodeName: '6'
   },
   {
@@ -319,7 +319,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00918663612',
     docNum: '2273',
     direction: 'debit',
-    amount: 2000,
+    amount: 2743.0,
     currency: 'BYN',
     purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
     counterparty: {
@@ -328,7 +328,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-07',
+    acceptDate: '2026-06-07',
     operCodeName: '1'
   },
   {
@@ -336,16 +336,16 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: '125500324',
     docNum: '253',
     direction: 'debit',
-    amount: 3.48,
+    amount: 7.77,
     currency: 'BYN',
-    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 02.07.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
+    purpose: '2.1.3.д)II Вознагражд-е за исполн-еплат-й инструкции клиента 02.06.2026 по переводу ср-в на текущие счета ФЛ сог-ноПеречнювознаграждБезНДС',
     counterparty: {
       name: 'ЗАО "ДЕМО-БАНК"',
       unp: '190000003',
       account: 'BY18DEMO30120000000000000008',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-07',
+    acceptDate: '2026-06-07',
     operCodeName: '6'
   },
   {
@@ -353,7 +353,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00917983116',
     docNum: '1937',
     direction: 'credit',
-    amount: 100,
+    amount: 140.0,
     currency: 'BYN',
     purpose: 'OTHR 121101 ЗА  ОБНОВЛЕНИЕ  . С-НО АКТА 1142/22ОТ 02.06.25Г. ДОГ.1100/30.11.2021ОТ 30.11.2021Г.',
     counterparty: {
@@ -362,7 +362,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY21DEMO30120000000000000011',
       bic: 'BLBBBY2X'
     },
-    acceptDate: '2026-07-06',
+    acceptDate: '2026-06-06',
     operCodeName: '1'
   },
   {
@@ -370,7 +370,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00917823497',
     docNum: '2272',
     direction: 'debit',
-    amount: 2500,
+    amount: 3428.0,
     currency: 'BYN',
     purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
     counterparty: {
@@ -379,7 +379,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-06',
+    acceptDate: '2026-06-06',
     operCodeName: '1'
   },
   {
@@ -387,7 +387,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00917822371',
     docNum: '2271',
     direction: 'debit',
-    amount: 72,
+    amount: 101.64,
     currency: 'BYN',
     purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
     counterparty: {
@@ -396,7 +396,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY13DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-06',
+    acceptDate: '2026-06-06',
     operCodeName: '1'
   },
   {
@@ -404,7 +404,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00916639804',
     docNum: '636',
     direction: 'credit',
-    amount: 450,
+    amount: 619.5,
     currency: 'BYN',
     purpose: 'OTHR 190401 ОПЛАТА ЗА УСЛУГИ ПО АКТУ 74/26 ОТ 22.06.2026 Г. ПО ДОГОВОРУ 74/04.03.2024 ОТ 04.03.2024 Г.',
     counterparty: {
@@ -413,7 +413,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY12DEMO30120000000000000002',
       bic: 'PJCBBY2X'
     },
-    acceptDate: '2026-07-02',
+    acceptDate: '2026-06-02',
     operCodeName: '1'
   },
   {
@@ -421,7 +421,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00916543109',
     docNum: '2270',
     direction: 'debit',
-    amount: 60,
+    amount: 85.2,
     currency: 'BYN',
     purpose: 'OTHR 190401 ОПЛАТА СЧЕТА 145792 ОТ 2 ИЮЛЯ 2026ПО ДОГОВОРУ 151М ОТ 21.12.2020, В ТОМ ЧИСЛЕ НДС ПО СТАВКЕ 25% НА СУММУ12.00 БЕЛ.РУБ',
     counterparty: {
@@ -430,7 +430,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY24DEMO30120000000000000014',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-02',
+    acceptDate: '2026-06-02',
     operCodeName: '1'
   },
   {
@@ -438,7 +438,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00916417690',
     docNum: '2270',
     direction: 'debit',
-    amount: 1200,
+    amount: 1647.0,
     currency: 'BYN',
     purpose: 'OTHR 130601 0000000A000AA0 ПЕРЕЧИСЛЯЕТСЯ ЛИЧНЫЙ ДОХОД ИП ЗА 3КВАРТАЛ 2026 БЕЗ НДС',
     counterparty: {
@@ -447,7 +447,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY15DEMO30120000000000000005',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-02',
+    acceptDate: '2026-06-02',
     operCodeName: '1'
   },
   {
@@ -455,7 +455,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00916415951',
     docNum: '2269',
     direction: 'debit',
-    amount: 281.6,
+    amount: 388.79,
     currency: 'BYN',
     purpose: 'OTHR 140101 ПЕРЕВОД ДЕНЕЖНЫХ СРЕДСТВ В РАМКАХ ОДНОГО ЮРИДИЧЕСКОГО ЛИЦАБЕЗ НДС',
     counterparty: {
@@ -464,7 +464,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY13DEMO30120000000000000003',
       bic: 'DEMOBY2X'
     },
-    acceptDate: '2026-07-02',
+    acceptDate: '2026-06-02',
     operCodeName: '1'
   },
   {
@@ -472,7 +472,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
     docId: 'ABOWD00916395472',
     docNum: '2268',
     direction: 'debit',
-    amount: 1143.5,
+    amount: 1569.6,
     currency: 'BYN',
     purpose: 'OTHR 190401 АРЕНДНАЯ ПЛАТА ПО ДОГОВОРУ 53/100/20 ОТ 03.11.20, В ТОМ ЧИСЛЕ НДС ПО СТАВКЕ 20% НА СУММУ 190.58 БЕЛ.РУБ',
     counterparty: {
@@ -481,7 +481,7 @@ const PREVIEW_ITEMS: StatementItem[] = [
       account: 'BY19DEMO30120000000000000009',
       bic: 'BAPBBY2X'
     },
-    acceptDate: '2026-07-02',
+    acceptDate: '2026-06-02',
     operCodeName: '1'
   }
 ]

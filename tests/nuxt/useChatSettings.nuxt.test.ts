@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useChatSettings } from '~/composables/useChatSettings'
+import { nextTick } from 'vue'
 
 // Резолв названия чата (#528, 3.2). Composable — синглтон на модуль, поэтому каждый тест
 // перезагружает его через `vi.resetModules()` (иначе состояние прошлого теста переезжает).
@@ -67,5 +68,38 @@ describe('useChatSettings: название сохранённого чата', 
     await cs.load()
     expect(cs.notifyOption.value?.label).toBe('chat7') // значение остаётся выбираемым
     expect(cs.settings.chat.title).toBeFalsy()
+  })
+
+  it('медленный ответ НЕ приклеивает имя старого чата к новому id', async () => {
+    // `load()` повторяется по pull-нотификации от другого инстанса формы. Без сверки id
+    // ответ предыдущего запроса подписал бы НОВЫЙ чат именем СТАРОГО — и это имя уехало бы
+    // в app.option на ближайшем сохранении.
+    let release: (v: unknown) => void = () => {}
+    let sent = false
+    mockFetch((url, opts) => {
+      if (String(url).includes('chat-settings')) {
+        return { chat: { dialogId: 'chat7' }, errorChat: { dialogId: '' } }
+      }
+      if (opts?.params?.id === 'chat7') {
+        sent = true
+        return new Promise((resolve) => {
+          release = resolve
+        })
+      }
+      return { items: [] }
+    })
+    const cs = useChatSettings()
+    const loading = cs.load()
+    // Ждём, пока запрос за названием действительно уйдёт: до этого `load()` ещё перезаписывает
+    // настройки ответом сервера, и подмена id была бы затёрта — тест проверял бы не гонку.
+    for (let i = 0; i < 50 && !sent; i++) await nextTick()
+    expect(sent).toBe(true)
+    // Пока ответ в пути, настройки перечитаны (pull от другого инстанса) и чат уже другой.
+    cs.settings.chat.dialogId = 'chat99'
+    release({ item: { value: 'chat7', label: 'Старый чат' } })
+    await loading
+
+    expect(cs.notifyOption.value?.label).not.toBe('Старый чат')
+    expect(cs.settings.chat.title).not.toBe('Старый чат')
   })
 })

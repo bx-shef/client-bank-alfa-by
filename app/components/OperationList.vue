@@ -52,11 +52,13 @@ function toRow(item: StatementItem) {
     icon: credit ? ArrowTopSIcon : ArrowDownSIcon,
     // ⚠ Токен на тему: `accent-main-*` в b24ui — цвет ЗАЛИВКИ, а не текста, и на белом даёт
     // 2.07:1 (приход) и 3.12:1 (расход) при пороге 4.5:1 — то есть самый важный элемент строки,
-    // сумма, читался бы хуже всего. Для светлой берём тёмные концы палитры (4.77 / 6.07), для
-    // тёмной — те же `accent-main-*` (5.27 / 4.14), они там как раз text-grade.
+    // сумма, читался бы хуже всего. Правило и числа — `docs/PAGE_GUIDE.md` §9.
+    // ⚠ Мерить надо и hover-фон строки: на нём `green-90` давал 4.48 — на 0.02 ниже порога,
+    // то есть текст портился ровно под курсором; `green-95` даёт 6.83. В тёмной по той же
+    // причине не `accent-main-alert` (4.14), а `red-50` (4.86).
     tint: credit
-      ? 'text-(--ui-color-green-90) dark:text-(--ui-color-accent-main-success)'
-      : 'text-(--ui-color-red-80) dark:text-(--ui-color-accent-main-alert)',
+      ? 'text-(--ui-color-green-95) dark:text-(--ui-color-accent-main-success)'
+      : 'text-(--ui-color-red-80) dark:text-(--ui-color-red-50)',
     // Плитка направления КРАСИТСЯ, а не остаётся нейтральной. Раньше она брала общий серый токен, и
     // приход от расхода отличался только мелкой стрелкой внутри — при том что сумма справа уже была
     // цветной. Получалось, что один и тот же признак на одной строке заявлен дважды и по-разному:
@@ -67,8 +69,8 @@ function toRow(item: StatementItem) {
     // токены под свою air-тему, и захардкоженный emerald/rose за ней не поедет. Фон — парный
     // tinted-токен (сам меняется с темой), глиф — тот же text-grade цвет, что у суммы: штатный
     // `tinted-*-content` на светлом фоне плитки даёт 2.44:1 при пороге 3:1 для иконки-носителя.
-      ? 'bg-(--ui-color-design-tinted-success-bg) text-(--ui-color-green-90) dark:text-(--ui-color-accent-main-success)'
-      : 'bg-(--ui-color-design-tinted-alert-bg) text-(--ui-color-red-80) dark:text-(--ui-color-accent-main-alert)',
+      ? 'bg-(--ui-color-design-tinted-success-bg) text-(--ui-color-green-95) dark:text-(--ui-color-accent-main-success)'
+      : 'bg-(--ui-color-design-tinted-alert-bg) text-(--ui-color-red-80) dark:text-(--ui-color-red-50)',
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
     name: item.counterparty.name,
     purpose: item.purpose,

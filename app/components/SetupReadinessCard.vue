@@ -153,12 +153,12 @@ onBeforeUnmount(() => {
           <CheckIcon
             v-if="i.ok"
             aria-hidden="true"
-            class="mt-1 text-(--ui-color-green-90) dark:text-(--ui-color-accent-main-success) size-5"
+            class="mt-1 text-(--ui-color-green-95) dark:text-(--ui-color-accent-main-success) size-5"
           />
           <Cross30Icon
             v-else
             aria-hidden="true"
-            class="mt-1 text-(--ui-color-red-80) dark:text-(--ui-color-accent-main-alert) size-5"
+            class="mt-1 text-(--ui-color-red-80) dark:text-(--ui-color-red-50) size-5"
           />
           <div class="min-w-0">
             <!-- `flex-wrap`: деталь строки — это номер счёта или название чата, на 375 px
