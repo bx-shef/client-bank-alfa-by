@@ -16,7 +16,7 @@
 import { buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
 import { sdkRefreshTransport } from './b24Sdk'
 import { withAdvisoryLock } from './dbLock'
-import { getToken, saveToken } from './tokenStore'
+import { getToken, updatePortalTokenSecrets } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
 
 /** True when the access token is within `skewMs` of expiry (pure, testable). */
@@ -32,7 +32,8 @@ export interface RefreshDeps {
   /** Load the portal's freshest token (on the locked connection `q`). */
   loadToken: (q: QueryFn, memberId: string) => Promise<PortalToken | null>
   /** Persist the refreshed token (on the locked connection `q`). */
-  saveToken: (q: QueryFn, token: PortalToken, eventTs?: number) => Promise<boolean>
+  /** UPDATE-only (#510): `false` = регистрации портала уже нет, создавать её рефреш не вправе. */
+  saveToken: (q: QueryFn, token: PortalToken) => Promise<boolean>
   /** POST the refresh body to B24 OAuth and return the raw JSON. */
   postRefresh: (body: string) => Promise<unknown>
 }
@@ -41,7 +42,7 @@ const liveDeps: RefreshDeps = {
   now: Date.now,
   withLock: withAdvisoryLock,
   loadToken: getToken,
-  saveToken,
+  saveToken: updatePortalTokenSecrets,
   // Refresh through the jssdk transport (`B24OAuth.auth.refreshAuth`), bounded (15s) so a hung
   // OAuth call can't pin the advisory lock + pooled connection (the whole refresh runs in the lock).
   postRefresh: sdkRefreshTransport({ timeoutMs: 15_000 })
@@ -77,10 +78,15 @@ export async function ensureAccessToken(
   return deps.withLock(`b24refresh:${token.memberId}`, async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed while we waited.
     const stored = await deps.loadToken(q, token.memberId)
-    // Portal uninstalled between the pre-lock check and acquiring the lock → its token
-    // row was deleted. Do NOT refresh+save: saveToken upserts and would RESURRECT the
-    // deleted portal. Return the passed token as-is; the downstream REST call will fail
-    // and the job won't persist anything to a portal that no longer exists.
+    // Portal uninstalled between the pre-lock check and acquiring the lock → its row is gone.
+    // Return the passed token as-is; the downstream REST call fails and nothing is persisted
+    // for a portal that no longer exists.
+    //
+    // ⚠ This early exit is now an OPTIMISATION, not the safety net (#510). It only narrows the
+    // window: the refresh POST below is a network call to Bitrix's OAuth server with a 15s
+    // ceiling, and an uninstall landing in those seconds would still have found an upsert
+    // waiting to re-create the row. The actual guarantee is that the persist is UPDATE-only —
+    // after the DELETE there is simply nothing to update, whatever the ordering.
     if (!stored) return token
     // Force path: refresh only if the stored access token is STILL the rejected one; if a
     // concurrent worker already rotated it, use theirs (avoids a redundant refresh that
@@ -96,7 +102,22 @@ export async function ensureAccessToken(
       expiresAt: deps.now() + r.expiresIn * 1000,
       domain: hostFromEndpoint(r.clientEndpoint) ?? stored.domain
     }
-    await deps.saveToken(q, updated)
+    // ⚠ UPDATE-only, and the result IS checked — same shape as `ensureBankToken` (#505/#510).
+    // The row may have vanished WHILE we were at the OAuth server: the lock holds back other
+    // refreshers, but an advisory lock does not hold back a plain `DELETE`, and the POST runs up
+    // to 15 s. `false` is not an error and must not throw — the portal simply uninstalled us —
+    // but it MUST be visible: without the line, the one moment where a rotated pair is knowingly
+    // dropped leaves no trace at all, and the next question ("why did this portal stop working?")
+    // has nothing to read.
+    if (!await deps.saveToken(q, updated)) {
+      console.warn('[ensureAccessToken] portal was uninstalled mid-refresh — token NOT stored')
+      // ⚠ Return the STALE token, not the fresh one — same call as `ensureBankToken` makes, and
+      // for the same reason. The refresh succeeded, so `updated` is a working credential for a
+      // portal that just removed us; handing it back would let one more REST call land there.
+      // The stale token fails instead, the job fails honestly, and nothing reaches a portal that
+      // withdrew consent. Costs one doomed request either way — this is the one that fails.
+      return stored
+    }
     return updated
   })
 }

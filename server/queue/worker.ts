@@ -90,7 +90,7 @@ const programFeedbackGateDeps: ProgramFeedbackGateDeps = {
 // (leaky-bucket + backoff on QUERY_LIMIT_EXCEEDED). The client is MEMOISED per portal for a
 // short TTL (per-JOB memoisation — one rate-limiter bucket + one token load per job), rebuilt
 // from the current DB token on TTL lapse or evict-on-error; refresh is reactive and persisted
-// UPDATE-only via tombstone-guarded saveToken. The SDK refreshes OUTSIDE our advisory lock — a
+// UPDATE-only via `updatePortalTokenSecrets` (#510). The SDK refreshes OUTSIDE our advisory lock — a
 // lost rotation race is a transient BullMQ retry, not corruption (see portalSdkResolver.ts);
 // the advisory lock still serialises the proactive keep-alive cron (#175). The former
 // advisory-locked `callRest` resolver (bind-once, lever-2) was retired once the SDK became the

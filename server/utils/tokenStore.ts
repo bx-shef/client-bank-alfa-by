@@ -38,16 +38,15 @@ export interface PortalToken {
  *
  * The tombstone SELECT + upsert are two statements (not one transaction). This is
  * TOCTOU-free for the bug it fixes: the `b24-events` worker is single-instance,
- * concurrency-1 (see worker.ts), so a portal's register/unregister never overlap. The
- * only residual is a token-REFRESH `saveToken` (default `eventTs=0`, on a scaled crm-sync
- * worker) interleaving with a concurrent uninstall's `deleteToken` — a narrow window that
- * SELF-LIMITS: the re-inserted row carries obsolete creds (REST fails) and every later
- * refresh-persist is tombstone-blocked, so it never re-inserts — a leaked dead row, not
- * live-cred corruption. NB: the crm-sync refresh-persist now goes through the SDK path
- * (`sdkPortalDeps.saveToken` → this function directly, NOT via `ensureAccessToken`), so —
- * unlike the keep-alive cron — it has no in-lock deleted-row re-check. Close it fully with a
- * single guarded `INSERT … WHERE NOT EXISTS(tombstone) … RETURNING` if that residual ever
- * matters (see b24Sdk.ts `sdkPortalDeps`).
+ * concurrency-1 (see worker.ts), so a portal's register/unregister never overlap.
+ *
+ * ⚠ This function is now the INSTALL path only (#510). The residual it used to document — a
+ * token-REFRESH interleaving with a concurrent uninstall and re-inserting a dead row — is gone,
+ * because refreshes no longer come here: they call `updatePortalTokenSecrets`, which is
+ * UPDATE-only and simply finds nothing to update once the row is deleted. That also retires the
+ * "close it fully with a guarded `INSERT … WHERE NOT EXISTS(tombstone) … RETURNING`" follow-up
+ * this comment used to anticipate: the guarded INSERT solved the same race atomically, whereas
+ * UPDATE-only removes the possibility of creating the row at all on that path.
  */
 export async function saveToken(query: QueryFn, token: PortalToken, eventTs = 0): Promise<boolean> {
   const blocked = await query(
@@ -107,6 +106,52 @@ export async function getToken(query: QueryFn, memberId: string): Promise<Portal
   }
 }
 
+/**
+ * UPDATE an existing portal registration's tokens. `false` = the row is already gone.
+ *
+ * ⚠ TWO WRITERS, WITH DIFFERENT RIGHTS (#510; the same move the bank store made in #505).
+ * `saveToken` is an upsert — it CREATES the registration, and only the `ONAPPINSTALL` handlers
+ * call it (the event route and the worker's register branch), where the portal has just installed
+ * the app. Token refreshes come here instead.
+ *
+ * Refreshes used to go through that same upsert and could RESURRECT the row of an uninstalled
+ * portal. The tombstone (#77) did not cover it — there were TWO windows, and the second was wider
+ * than the module's own comment described:
+ *   1. the refresh read the tombstone (none yet) → the uninstall completed → the refresh inserted;
+ *   2. `deleteToken` wrote the tombstone AFTER deleting the row, so a refresh that started INSIDE
+ *      the uninstall saw no ban either.
+ * Reordering `deleteToken` would only close the second. UPDATE-only closes both at once and needs
+ * no extra lock: once the `DELETE` has run there is nothing to update, whatever the ordering and
+ * however long the network took. ⚠ And it takes long: a POST to Bitrix's OAuth server with a 15s
+ * ceiling sits between the re-read and the write, which is why even the in-lock re-read in
+ * `ensureAccessToken` narrowed the window without closing it.
+ *
+ * ⚠ No legitimate case exists where a refresh must CREATE the row: to renew a pair you must first
+ * have read it from that very row.
+ *
+ * ⚠ `application_token` is not touched at all here — it is write-once and arrives only with the
+ * install; a refresh knows nothing about it and must not.
+ *
+ * ⚠ `updated_at` IS stamped, which is the opposite of `renameBankTokenAccount` where stamping it
+ * is forbidden. Here the column means "when we last held a fresh pair", and
+ * `selectTokensNearExpiry` (#175) picks portals for proactive keep-alive by it. Skip the stamp and
+ * an already-refreshed portal stays in the band and gets refreshed again on every tick.
+ */
+export async function updatePortalTokenSecrets(query: QueryFn, token: PortalToken): Promise<boolean> {
+  const rows = await query(
+    `UPDATE portal_tokens
+        SET domain            = $2,
+            access_token      = $3,
+            refresh_token_enc = $4,
+            expires_at        = $5,
+            updated_at        = now()
+      WHERE member_id = $1
+      RETURNING member_id`,
+    [token.memberId, token.domain, token.accessToken, encryptSecret(token.refreshToken), token.expiresAt]
+  )
+  return rows.length > 0
+}
+
 /** Load only the stored `application_token` for a portal (to verify a later
  * event), or `''` if the portal is unknown. Avoids decrypting the refresh token. */
 export async function getApplicationToken(query: QueryFn, memberId: string): Promise<string> {
@@ -142,9 +187,22 @@ export async function getMemberIdByDomain(query: QueryFn, domain: string): Promi
  * newer reinstall (in `saveToken`), so it's one small bounded row per uninstalled
  * portal. `eventTs` is the B24 event timestamp (0 when unknown). */
 export async function deleteToken(query: QueryFn, memberId: string, eventTs = 0): Promise<void> {
-  await query(`DELETE FROM portal_tokens WHERE member_id = $1`, [memberId])
+  // ⚠ ONE statement, not two (#510). The delete and the tombstone used to be separate `query()`
+  // calls, and then the only question was which order was less bad — either the row outlives the
+  // ban (live OAuth creds on disk for a portal that just revoked consent) or the ban outlives the
+  // row (a concurrent writer sees neither and treats the portal as alive). Postgres runs a single
+  // statement — data-modifying CTE included — in one implicit transaction, so both land or
+  // neither does, and the question stops existing. No `BEGIN` needed.
+  //
+  // ⚠ The tombstone still matters even though `updatePortalTokenSecrets` is UPDATE-only: it is
+  // what stops a STALE `register` (an install job retried after this uninstall) from re-creating
+  // the portal through `saveToken` (#77). Atomicity here protects that guarantee, it does not
+  // replace it.
   await query(
-    `INSERT INTO portal_tombstone (member_id, deleted_ts) VALUES ($1, $2)
+    `WITH deleted AS (
+       DELETE FROM portal_tokens WHERE member_id = $1 RETURNING member_id
+     )
+     INSERT INTO portal_tombstone (member_id, deleted_ts) VALUES ($1, $2)
      ON CONFLICT (member_id) DO UPDATE SET deleted_ts = GREATEST(portal_tombstone.deleted_ts, EXCLUDED.deleted_ts)`,
     [memberId, eventTs]
   )

@@ -285,7 +285,7 @@ describe('makeSdkBatchCall (#191 batched fan-out)', () => {
 })
 
 describe('sdkPortalDeps (live token-store wiring)', () => {
-  it('loadToken reads via getToken; saveToken persists with eventTs=0 (tombstone-guarded)', async () => {
+  it('loadToken reads via getToken; the persist is UPDATE-only and cannot resurrect (#510)', async () => {
     process.env.B24_TOKEN_ENC_KEY = 'bb'.repeat(32)
     const sql: Array<{ q: string, p?: unknown[] }> = []
     // Fake pg: tombstone SELECT → empty (not blocked); getToken SELECT → one row; upsert/delete → [].
@@ -294,6 +294,9 @@ describe('sdkPortalDeps (live token-store wiring)', () => {
       if (/FROM portal_tokens WHERE member_id/i.test(q) && /SELECT member_id, domain/i.test(q)) {
         return [{ member_id: 'M1', domain: 'acme.bitrix24.com', access_token: 'AT', refresh_token_enc: encryptSecret('RT'), expires_at: 1_700_000_000_000, application_token: 'APPTOK' }]
       }
+      // ⚠ UPDATE обязан отдать строку: `RETURNING member_id` — это и есть способ узнать, что
+      // регистрация ещё жива. Пустой ответ означает «портала больше нет», и персист тогда бросает.
+      if (/UPDATE portal_tokens/i.test(q)) return [{ member_id: 'M1' }]
       return []
     }
     const deps = sdkPortalDeps({ query, clientId: 'cid', clientSecret: 'sec', now: () => 123 })
@@ -306,18 +309,38 @@ describe('sdkPortalDeps (live token-store wiring)', () => {
     expect(loaded!.refreshToken).toBe('RT')
 
     await deps.saveToken(token({ accessToken: 'NEW', refreshToken: 'NEW_RT' }))
-    // The tombstone guard ran with eventTs=0 → any tombstone (deleted_ts >= 0) would block a
-    // resurrect; here none exists so the upsert proceeds. Prove eventTs=0 reached the store.
-    const tomb = sql.find(s => /portal_tombstone WHERE member_id = \$1 AND deleted_ts >= \$2/i.test(s.q))
-    expect(tomb?.p?.[1]).toBe(0)
-    // The persist runs the real upsert; the refresh-token bind must be ENCRYPTED (not the
-    // plaintext) and decrypt back to the token — proves the SDK-refresh → encrypted-persist
-    // chain end-to-end, not just "an INSERT ran".
-    const insert = sql.find(s => /INSERT INTO portal_tokens/i.test(s.q))
-    expect(insert).toBeTruthy()
-    const refreshEncBind = insert!.p?.[3] as string
-    expect(refreshEncBind).not.toBe('NEW_RT') // not stored in plaintext
-    expect(decryptSecret(refreshEncBind)).toBe('NEW_RT') // encrypted, round-trips
+    // ⚠ Раньше здесь проверялось, что персист — upsert с гардом тумбстоуна (`eventTs=0`). Это
+    // сузило, но не закрывало окно: тумбстоун-SELECT и INSERT — два оператора, и деинсталляция,
+    // легшая между ними, оставляла строку удалённого портала (#510). Теперь персист — голый
+    // UPDATE, и ожидание сильнее прежнего: создать строку он не может в принципе.
+    const write = sql.find(s => /UPDATE portal_tokens/i.test(s.q))
+    expect(write, 'персист не сделал UPDATE').toBeTruthy()
+    expect(sql.some(s => /INSERT INTO portal_tokens/i.test(s.q)), 'персист всё ещё вставляет строку').toBe(false)
+    // ⚠ Тумбстоун этот путь больше не читает — и это не потеря: запрещать создание нечему, когда
+    // создание невозможно. Проверяется явно, чтобы возврат к upsert'у не прошёл незамеченным.
+    expect(sql.some(s => /portal_tombstone/i.test(s.q)), 'UPDATE-only не должен читать тумбстоун').toBe(false)
+    // Refresh-токен обязан уехать ЗАШИФРОВАННЫМ и расшифроваться обратно — это доказывает всю
+    // цепочку «SDK обновил → положили шифротекст», а не просто «запрос выполнился».
+    const refreshEncBind = write!.p?.[3] as string
+    expect(refreshEncBind).not.toBe('NEW_RT') // не открытым текстом
+    expect(decryptSecret(refreshEncBind)).toBe('NEW_RT') // шифр, round-trip
+  })
+
+  it('портал удалён во время рефреша ⇒ персист БРОСАЕТ, а не глотает (#510)', async () => {
+    // ⚠ Находка ревью, и она не про хранение, а про ДЕЙСТВИЕ. Колбэк вызывается ВНУТРИ
+    // `AuthOAuthManager.refreshAuth()` самого SDK, и если он разрешается, `refreshAuth()` отдаёт
+    // свежие authData, а `_makeRequestWithAuthRetry` тут же ПЕРЕИГРЫВАЕТ исходный упавший
+    // REST-вызов с ними. То есть проглоченный `false` означал бы: портал нас удалил, токен мы
+    // честно не сохранили — и следом записали дело / отправили сообщение в чат / провели оплату
+    // в CRM этого клиента. Не держать их данные — только половина; не действовать в их портале
+    // после того, как нас выгнали, — вторая.
+    //
+    // Бросок реджектит `refreshAuth()`, переигровка не случается, джоба падает и чисто ретраится
+    // по BullMQ — тот же контракт «throw → clean retry», на котором стоит весь модуль.
+    process.env.B24_TOKEN_ENC_KEY = 'bb'.repeat(32)
+    const query: QueryFn = async q => (/UPDATE portal_tokens/i.test(q) ? [] : []) // строки нет
+    const deps = sdkPortalDeps({ query, clientId: 'cid', clientSecret: 'sec', now: () => 123 })
+    await expect(deps.saveToken(token({ accessToken: 'NEW' }))).rejects.toThrow(/uninstalled mid-refresh/)
   })
 })
 

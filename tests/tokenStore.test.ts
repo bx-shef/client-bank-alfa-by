@@ -7,7 +7,8 @@ import {
   getApplicationToken,
   getMemberIdByDomain,
   getToken,
-  saveToken
+  saveToken,
+  updatePortalTokenSecrets
 } from '../server/utils/tokenStore'
 import type { PortalToken } from '../server/utils/tokenStore'
 
@@ -140,11 +141,21 @@ describe('getMemberIdByDomain', () => {
 })
 
 describe('deleteToken', () => {
-  it('issues a DELETE by member_id', async () => {
+  it('удаление и тумбстоун — ОДИН оператор, а не два (#510)', async () => {
+    // ⚠ Раньше это были два отдельных `query()`, и тогда единственным вопросом было, какой
+    // порядок менее плох: либо строка переживает запрет (живые OAuth-креды на диске у портала,
+    // только что отозвавшего согласие), либо запрет переживает строку (конкурент не видит ни
+    // того, ни другого и считает портал живым). Postgres выполняет ОДИН оператор — включая
+    // data-modifying CTE — в одной неявной транзакции, поэтому ложатся оба или ни одного, и
+    // вопрос порядка перестаёт существовать.
     const query = vi.fn(async () => [])
-    await deleteToken(query, 'm1')
-    expect(query.mock.calls[0]![0]).toMatch(/DELETE FROM portal_tokens WHERE member_id = \$1/)
-    expect(query.mock.calls[0]![1]).toEqual(['m1'])
+    await deleteToken(query, 'm1', 42)
+    expect(query).toHaveBeenCalledTimes(1)
+    const sql = query.mock.calls[0]![0]
+    expect(sql).toMatch(/WITH deleted AS \(/i)
+    expect(sql).toMatch(/DELETE FROM portal_tokens WHERE member_id = \$1/)
+    expect(sql).toMatch(/INSERT INTO portal_tombstone/)
+    expect(query.mock.calls[0]![1]).toEqual(['m1', 42])
   })
 
   // Ordering guard (#77): records a tombstone with the uninstall ts (GREATEST-merged).
@@ -166,6 +177,95 @@ it('test env key is 32 bytes', () => {
 // Guard the one drift the fake-query tests can't catch: the SCHEMA_SQL columns
 // must cover every column the store's queries read/write. A live DB would error
 // on a mismatch; this catches it offline.
+describe('updatePortalTokenSecrets — рефреш НЕ создаёт регистрацию портала (#510)', () => {
+  /** Фейк «строки нет»: UPDATE ничего не вернул. */
+  const gone = () => vi.fn(async () => [] as Record<string, unknown>[])
+  /** Фейк «строка есть»: UPDATE вернул member_id. */
+  const present = () => vi.fn(async () => [{ member_id: 'm1' }] as Record<string, unknown>[])
+
+  it('удалённый портал НЕ воскресает — false, и ни одного INSERT', async () => {
+    // Суть issue. Раньше рефреш ходил тем же upsert'ом, что и установка, и мог пересоздать строку
+    // портала, который нас удалил, — то есть мы оставляли себе его OAuth-токен до истечения гранта.
+    const query = gone()
+    expect(await updatePortalTokenSecrets(query, token)).toBe(false)
+    expect(query.mock.calls.every(c => !/INSERT INTO portal_tokens/.test(c[0] as string))).toBe(true)
+  })
+
+  it('живой портал обновляется — true', async () => {
+    const query = present()
+    expect(await updatePortalTokenSecrets(query, token)).toBe(true)
+    expect(query.mock.calls[0]![0]).toMatch(/UPDATE portal_tokens/)
+  })
+
+  it('это UPDATE, а не upsert: ни INSERT, ни ON CONFLICT в самом SQL', async () => {
+    // ⚠ Проверяется ТЕКСТ запроса, а не только возврат: `INSERT … ON CONFLICT DO UPDATE` на живой
+    // строке вернул бы ровно тот же `true`, и разницу — единственную, ради которой всё сделано —
+    // по возвращаемому значению увидеть нельзя.
+    const query = present()
+    await updatePortalTokenSecrets(query, token)
+    const sql = query.mock.calls[0]![0] as string
+    expect(sql).not.toMatch(/INSERT/i)
+    expect(sql).not.toMatch(/ON CONFLICT/i)
+    expect(sql).toMatch(/RETURNING member_id/i)
+  })
+
+  it('штампует `updated_at` — по нему выбирает порталы проактивное продление (#175)', async () => {
+    // ⚠ Противоположно `renameBankTokenAccount`, где `now()` трогать НЕЛЬЗЯ. Здесь колонка значит
+    // «когда мы последний раз держали свежую пару», и не обновив её, продление гоняло бы рефреш по
+    // одному и тому же порталу на каждом тике.
+    const query = present()
+    await updatePortalTokenSecrets(query, token)
+    expect(query.mock.calls[0]![0]).toMatch(/updated_at\s*=\s*now\(\)/i)
+  })
+
+  it('не трогает `application_token` — он write-once и приходит только с установкой', async () => {
+    const query = present()
+    await updatePortalTokenSecrets(query, token)
+    expect(query.mock.calls[0]![0]).not.toMatch(/application_token/i)
+  })
+
+  it('каждое значение стоит на СВОЁМ месте — позиции сверяются целиком', async () => {
+    // ⚠ Находка мутационного ревью: проверялся только `params[3]` (шифрование refresh), поэтому
+    // перестановка `domain` и `accessToken` местами в массиве параметров не ловилась НИЧЕМ —
+    // при живом `SET domain = $2, access_token = $3` access-токен уехал бы в колонку домена, а
+    // домен в колонку токена. Это классическая ошибка рефакторинга «переставили поля в SET и
+    // забыли массив», и последствия у неё катастрофические: портал теряет и адрес, и доступ.
+    const query = present()
+    await updatePortalTokenSecrets(query, token)
+    const params = query.mock.calls[0]![1] as unknown[]
+    expect(params).toHaveLength(5)
+    expect(params[0]).toBe(token.memberId)
+    expect(params[1]).toBe(token.domain)
+    expect(params[2]).toBe(token.accessToken)
+    expect(params[4]).toBe(token.expiresAt)
+    // ⚠ И порядок в SQL сверяется с этим порядком: сам по себе правильный массив ничего не
+    // значит, если плейсхолдеры в тексте переставлены.
+    const sql = query.mock.calls[0]![0] as string
+    expect(sql).toMatch(/domain\s*=\s*\$2/)
+    expect(sql).toMatch(/access_token\s*=\s*\$3/)
+    expect(sql).toMatch(/refresh_token_enc\s*=\s*\$4/)
+    expect(sql).toMatch(/expires_at\s*=\s*\$5/)
+    expect(sql).toMatch(/WHERE member_id = \$1/)
+  })
+
+  it('refresh уезжает ЗАШИФРОВАННЫМ, а не открытым текстом', async () => {
+    const query = present()
+    await updatePortalTokenSecrets(query, token)
+    const params = query.mock.calls[0]![1] as unknown[]
+    expect(params).not.toContain('REFRESH')
+    expect(decryptSecret(String(params[3]))).toBe('REFRESH')
+  })
+
+  it('настоящий сбой БД пробрасывается, а не выдаётся за «строки нет»', async () => {
+    // Иначе недоступная база молча выглядела бы как удалённый портал, и рефреш тихо терял бы
+    // ротированную пару — самый неприятный вид отказа, потому что снаружи он неотличим от нормы.
+    const query = vi.fn(async () => {
+      throw new Error('connection refused')
+    })
+    await expect(updatePortalTokenSecrets(query, token)).rejects.toThrow('connection refused')
+  })
+})
+
 describe('SCHEMA_SQL ↔ queries', () => {
   it('defines every column the store uses', () => {
     for (const col of ['member_id', 'domain', 'access_token', 'refresh_token_enc', 'expires_at', 'application_token']) {

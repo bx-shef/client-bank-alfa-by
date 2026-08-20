@@ -15,8 +15,13 @@ function make(stored: PortalToken | null, refreshResp: unknown = { access_token:
   const store: { current: PortalToken | null } = { current: stored }
   const q = (async () => []) as unknown as QueryFn
   const postRefresh = vi.fn(async () => refreshResp)
+  // ⚠ Возвращает `true` — «строка была и обновилась». Тип порта это и требует (`Promise<boolean>`),
+  // но мок отдавал `undefined`, и пока результат никто не проверял, разницы не было. Как только
+  // `ensureAccessToken` стал проверять (#510, паритет с `ensureBankToken`), молчаливый `undefined`
+  // начал означать «портал удалён» — то есть мок утверждал бы обратное тому, что описывает тест.
   const saveToken = vi.fn(async (_q: QueryFn, t: PortalToken) => {
     store.current = t
+    return true
   })
   const loadToken = vi.fn(async () => store.current)
   const withLock = vi.fn(async <T>(_k: string, fn: (qq: QueryFn) => Promise<T>) => fn(q))
@@ -97,7 +102,27 @@ describe('ensureAccessToken', () => {
     const out = await ensureAccessToken(tok({ expiresAt: NEAR }), deps)
     expect(out.accessToken).toBe('A') // returns the passed token as-is
     expect(postRefresh).not.toHaveBeenCalled()
-    expect(saveToken).not.toHaveBeenCalled() // no upsert → no resurrection
+    expect(saveToken).not.toHaveBeenCalled() // не дошли до записи вовсе — окно сужено (#510)
+  })
+
+  it('деинсталляция ВО ВРЕМЯ рефреша: персист вернул false, и это не ошибка (#510)', async () => {
+    // ⚠ Случай, который перечит под локом НЕ ловит и не может поймать. Строка была на месте, когда
+    // мы её прочитали; портал удалили, пока шёл POST на OAuth-сервер Bitrix (потолок 15 с). Раньше
+    // вернувшийся рефреш пересоздавал строку удалённого портала через upsert — то есть мы
+    // оставляли себе его OAuth-токен. Теперь запись UPDATE-only: она честно ничего не находит.
+    const near = tok({ expiresAt: NEAR })
+    const { deps, postRefresh } = make(near)
+    const saveToken = vi.fn(async () => false) // строки уже нет
+    // ⚠ `false` НЕ должен бросать: портал удалён — это штатный исход, а не сбой. Вызывающий
+    // получает обновлённую пару, его REST-вызов честно упадёт на несуществующем портале, и в БД
+    // не осталось ничего, что пришлось бы подчищать.
+    const out = await ensureAccessToken(near, { ...deps, saveToken })
+    expect(postRefresh).toHaveBeenCalledTimes(1) // в OAuth-сервер сходили — узнать об удалении было негде
+    expect(saveToken).toHaveBeenCalledTimes(1) // попытка записи И ЕСТЬ способ узнать, что строки нет
+    // ⚠ Возвращается СТАРЫЙ токен, а не свежий, — тот же выбор, что у `ensureBankToken` (#505).
+    // Рефреш удался, значит `updated` это РАБОЧИЙ ключ к порталу, который только что нас удалил:
+    // отдав его, мы позволили бы ещё одному REST-вызову туда доехать. Старый честно упадёт.
+    expect(out.accessToken).toBe('A')
   })
 
   it('throws on a failed refresh (e.g. dead/invalid refresh token)', async () => {

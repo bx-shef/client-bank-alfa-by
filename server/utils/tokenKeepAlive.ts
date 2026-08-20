@@ -5,8 +5,10 @@
 //
 // This adds a SECOND path: once a day, refresh ONLY the portals whose refresh_token is
 // within a few days of expiry (age of the last saved token pair > ~177 days). We key
-// off `portal_tokens.updated_at`, which `saveToken` stamps on every install AND every
-// refresh (the sole writer), so it is exactly "when we last got a fresh pair".
+// off `portal_tokens.updated_at`, which BOTH writers stamp — install (`saveToken`) and every
+// refresh (`updatePortalTokenSecrets`) — so it is exactly "when we last got a fresh pair".
+// ⚠ That the UPDATE-only writer stamps it is not incidental (#510): skip the stamp and an
+// already-refreshed portal stays in this band and gets refreshed again on every tick.
 //
 // DELIBERATELY conservative (B24 warns that frequent refreshing risks an app auto-block):
 // a daily scan, a small batch cap, and only near-expiry portals — never "refresh all".

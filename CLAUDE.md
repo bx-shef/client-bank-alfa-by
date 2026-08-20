@@ -156,6 +156,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   и «браузер→банк» расщеплены, #455, `PRIOR_OAUTH_AUTHORIZE_BASE` + `app/utils/bankGatewayUrl.ts`);
   прод-метод аутентификации `private_key_jwt` **сделан** (#444, `PRIOR_OAUTH_AUTH_METHOD`), sandbox
   `:9344` не требует ни того, ни другого.
+  ⚠ **BY-крипто оказалось ОДНИМ ИЗ ДВУХ путей, а не единственным (#522).** Банк подтвердил, что у
+  `api.priorbank.by:9344` есть **промышленный** режим без белорусской криптографии, а `:9345` —
+  «адрес для вызова API через СКЗИ». Регистрация у них общая и `issuer` один (это мы знали и
+  раньше — DCR-запись с `:9344` читали через `:9345`), так что подключённые счета переключение
+  переживают. Шлюз **не выбрасывается**: держим оба пути, включим обратно при сертификации СКЗИ.
+  ✅ **Прод ПЕРЕКЛЮЧЁН на `:9344` (2026-08-19)** — проверено пробой с боевыми ключами (TLS,
+  токен боевым `client_id`, discovery с совпавшим `issuer`, живой ресурсный API), затем переведён
+  скриптом. Кодом это не управляется вовсе — две переменные env (`API_BASE`/`TOKEN_URL`);
+  `AUTHORIZE_BASE` (адрес для браузера) и `AUDIENCE` (claim в JWT, а не адрес) не меняются
+  никогда. Проба `scripts/prior-host-probe.sh` (не трогает refresh-токены — обновление их
+  ротирует, см. #505/#509) и переключение `scripts/prior-switch-host.sh` в обе стороны —
+  `docs/PRIOR_API.md`.
   ✅ **Блокер согласия снят (2026-08-14), песочница пройдена насквозь ИЗ ПОРТАЛА.** Месячный
   `403 BY.NBRB.Reauthenticate` держался на том, что правка банка действует только на клиентов,
   **зарегистрированных после неё**: повтор запроса старым `client_id` проверял не правку, а её
@@ -658,6 +670,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     — `resolveTombstoneDays` кламп [1,365] дефолт 30 + `sweepExpiredTombstones`, DI+тесты) сносит `portal_tombstone`
     старше `TOMBSTONE_TTL_DAYS`; висит на том же крон-тике, что statement-свип (#245, под `cron.sweep`-спаном).
     `deleted_ts` — в **секундах** (B24 `ts`), сверка с `EXTRACT(EPOCH FROM now())` unit-safe (мс-значение не подметётся рано).
+    ⚠ **ДВА ПИСАТЕЛЯ, И ЭТО РАЗНЫЕ ПРАВА (#510)** — та же болезнь и то же лекарство, что у банковского
+    стора (#505). `saveToken` — upsert, он СОЗДАЁТ регистрацию, и зовут его только обработчики
+    `ONAPPINSTALL` (роут события, register-ветка воркера, синхронный фолбэк). Рефреш ходит в
+    `updatePortalTokenSecrets` — **UPDATE-only**, `false` = регистрации уже нет. Раньше рефреш ходил тем же
+    upsert'ом и мог **воскресить строку удалённого портала**, то есть мы оставляли себе OAuth-токен
+    клиента, который нас удалил. ⚠ Тумбстоун это НЕ закрывал: окон было **два**, и второе шире, чем
+    описывал сам модуль — `deleteToken` писал тумбстоун ПОСЛЕ удаления строки, поэтому рефреш,
+    стартовавший внутри самой деинсталляции, запрета тоже не видел. UPDATE-only снимает оба одним
+    правилом и без второго лока: после `DELETE` обновлять нечего, в каком бы порядке всё ни легло.
+    ⚠ Перечит под advisory-локом в `ensureAccessToken` окно **сужал, но не закрывал**: между ним и
+    записью стоит POST на OAuth-сервер Б24 с потолком 15 с. ⚠ `updated_at` UPDATE-only штампует
+    **обязательно** (противоположно `renameBankTokenAccount`): по нему `selectTokensNearExpiry` (#175)
+    выбирает порталы для продления, и без штампа рефреш гонялся бы по одному порталу на каждом тике.
+    Порядок в `deleteToken` заодно перевёрнут (тумбстоун раньше `DELETE`) — эшелонированная защита.
+    Список писателей закрыт тестом (`tests/portalTokenWriters.test.ts`): новый обязан получить причину.
   - **Дедуп дел — в B24, без стора (#259).** crm-sync пишет **универсальное дело** с маркером
     `originatorId`+`originId` и перед записью ищет его (`crm.activity.list`), поэтому Postgres-стора
     `{dedupKey→activityId}` больше нет (таблица `activity_dedup`, модуль `activityDedupStore.ts` и
@@ -1166,7 +1193,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     (`getPortalSettings`→`readAppSettingVia`, `appSettings.ts`). Типизация `new B24OAuth` как `OAuthCallClient` —
     compile-time drift-guard. **Компромисс (осознанный, выбор пользователя):** SDK-рефреш идёт **мимо** advisory-lock
     (`ensureAccessToken`, #35) — проигранная гонка ротации = **транзиентный ретрай BullMQ**, не порча кредов (persist —
-    UPDATE-only-эквивалент через tombstone-guarded `saveToken`); advisory-lock остаётся на keep-alive (#175). Прежний
+    persist — **UPDATE-only** `updatePortalTokenSecrets`, #510: рефреш не может пересоздать строку удалённого портала); advisory-lock остаётся на keep-alive (#175). Прежний
     ручной `callRest`-резолвер (`portalRestResolver.ts`/`portalRest.ts`, bind-once + лок + reactive-retry) **удалён** —
     SDK стал единственным транспортом. Реактивный ретрай `expired_token` теперь у самого SDK — **и для crm-sync, и для
     UI-фрейм-роутов** (`makeFrameRestCall`, `liveDeps.frameRestCall`): сырой `callRest`/`isExpiredTokenError` из
@@ -1309,7 +1336,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     `server/utils/tokenKeepAlive.ts` (**проактивный keep-alive рефреш, #175**: `refresh_token` живёт ~180 д,
     установленный, но **простаивающий** портал не делает REST-вызовов → ленивый рефреш не срабатывает → токен
     молча умирает на 180-й день. Раз в сутки крон `runTokenKeepAlive` рефрешит **только** порталы у истечения:
-    `selectTokensNearExpiry` (чистый селектор по `updated_at` — его штампует `saveToken` на install/refresh, это и
+    `selectTokensNearExpiry` (чистый селектор по `updated_at` — его штампуют ОБА писателя: `saveToken` на install и
+`updatePortalTokenSecrets` на каждом рефреше (#510), это и
     есть «когда получена последняя пара»; порог ~3 д, кап `MAX_KEEP_ALIVE_BATCH`) → на каждый `ensureAccessToken`
     (у простаивавшего портала access давно истёк → рефреш всегда срабатывает, и заодно ленивый лок/идемпотентность).
     Пер-портальные ошибки (dead grant/`PAYMENT_REQUIRED`/удалён) изолированы — логируются, крон не падает. Намеренно

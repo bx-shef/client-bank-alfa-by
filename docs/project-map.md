@@ -263,7 +263,7 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
   Осталось: **остаток #191** — **SDK-транспорт — единственный, по умолчанию**:
   `portalSdkResolver.ts` → `@bitrix24/b24jssdk` (встроенный RestrictionManager = lever-1), **пер-JOB мемоизация клиента
   = lever-2** (TTL-кэш + evict-on-error от stale-token wedge). Компромисс: SDK-рефреш мимо advisory-lock → транзиентный
-  ретрай, не порча (persist — UPDATE-only-эквивалент, tombstone-guarded). Прежний ручной `callRest`-резолвер (bind-once +
+  ретрай, не порча (persist — **UPDATE-only** `updatePortalTokenSecrets`, #510). Прежний ручной `callRest`-резолвер (bind-once +
   reactive-retry `expired_token`) **удалён** вместе с флагом `QUEUE_SDK_TRANSPORT`; пул-раз-на-op + пагинация сделок
   сделаны. **Батчинг `callBatch` — частично** (`negativeStages` `crm.status.list` одним батчем; пул оплат не батчится —
   API-лимит); дизайн — `docs/QUEUES.md`);
@@ -717,7 +717,7 @@ entityTypeId (`CRM_<id>`/`UF_CRM_<id>_…`); (2) `crm.item.*` адресует U
     (на крон-инстансе, каждые `CRON_INTERVAL_MIN`): `listAllBankAccounts`→`accountsForPolling`→`pollWindow`
     (окно `[today−CRON_LOOKBACK_DAYS, today]`)→`planFetches(…, epoch)`→`enqueueFetch`. **`epoch`** (метка
     тика в `FetchJob`, часть `fetchJobId`, банк-запрос её игнорирует) делает каждый тик отдельной джобой —
-    иначе detерминированный id + `removeOnComplete`-ретенция схлопнули бы повторный опрос того же окна в
+    иначе детерминированный id + `removeOnComplete`-ретенция схлопнули бы повторный опрос того же окна в
     no-op; повторная выдача тех же операций безопасна (crm-sync дедупит по маркеру B24 — **epoch
     прокинут и в `batchId`→`crmSyncJobId`, иначе crm-sync схлопывался бы и поздние операции дня не
     доезжали**). **Default-OFF (`CRON_REAL_POLL`, opt-in):** таймер гонит живой Alfa API — включать `=1`

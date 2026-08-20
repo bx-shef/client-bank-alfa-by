@@ -1,4 +1,4 @@
-.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats
+.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats prior-probe
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -105,6 +105,21 @@ env-value = $$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$(
 # ⚠ Домен НЕ спрашиваем — читаем `DOMAIN` из `./.env`, который на сервере и так рядом. Аварийную
 # команду набирают с телефона, и подстановка домена руками означает опечатку в самый неудобный
 # момент; переопределить всё равно можно — `make doctor DOMAIN=example.by` перекрывает `.env`.
+## Проба хоста Приорбанка: принимает ли он серверные вызовы боевыми ключами (#522)
+#
+#   make prior-probe                       # проба https://api.priorbank.by:9344
+#   make prior-probe HOST=https://хост:порт
+#   make prior-probe CONSENT=1             # + создать пробное согласие (ЗАПИСЬ в банк)
+#
+# Креды берутся из ./.env и в вывод не попадают. Нужны только curl и openssl.
+prior-probe:
+	@echo "[make] скачиваю prior-host-probe.sh из $(REF)"
+	@t=$$(mktemp /tmp/prior-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prior-host-probe.sh" \
+	  && { h="$(HOST)"; [ -n "$$h" ] || h="https://api.priorbank.by:9344"; \
+	       c=""; [ "$(CONSENT)" = "1" ] && c="--with-consent"; \
+	       bash "$$t" "$$h" $$c; }
+
 doctor:
 	@echo "[make] скачиваю prod-doctor.sh из $(REF)"
 	@t=$$(mktemp /tmp/prod-doctor.XXXXXX) && trap 'rm -f "$$t"' EXIT \
