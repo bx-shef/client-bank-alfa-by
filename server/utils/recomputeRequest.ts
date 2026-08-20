@@ -1,3 +1,4 @@
+import { isLockTimeout } from './bankRefreshLock'
 // Pure request logic for POST /api/distribution/recompute (#109, §3/§9.2 «пересчитать»). Same gate
 // model as /api/distribution/ledger (feature flag + frame admin + installed). Recomputes «осталось»
 // for every payment carrier — the manual recovery backstop (deletion crash-window / drift). Thin over
@@ -55,7 +56,20 @@ export async function handleRecomputeRequest(
     const recomputed = await deps.recompute(memberId)
     if (recomputed === null) return { status: 200, body: { provisioned: false, recomputed: 0 } }
     return { status: 200, body: { ok: true, recomputed } }
-  } catch {
+  } catch (e) {
+    // ⚠ «Занято» — штатный исход, а не сбой (#516). Пересчёт сериализован advisory-локом на портал
+    // (он спорит и с самим crm-sync за поля «осталось»), и конкурентный клик раньше отдавал
+    // необработанное `55P03` — наружу неотличимо от настоящей поломки.
+    //
+    // ⚠ Отдельная причина сказать это внятно: пересчёт долгий по своей природе — он идёт по всем
+    // платёжным элементам портала. «Повторите через несколько секунд» тут было бы враньём, и
+    // человек бил бы по кнопке всё это время.
+    if (isLockTimeout(e)) {
+      return {
+        status: 503,
+        body: { error: 'Пересчёт уже выполняется — он идёт по всем платежам портала и занимает время. Обновите страницу через минуту.' }
+      }
+    }
     return { status: 502, body: { error: 'recompute failed' } }
   }
 }

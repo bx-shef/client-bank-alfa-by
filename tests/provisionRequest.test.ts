@@ -89,3 +89,43 @@ describe('handleProvisionRequest', () => {
     expect(memberIdByDomain).not.toHaveBeenCalled()
   })
 })
+
+describe('конкурентный клик — «занято», а не сбой (#516)', () => {
+  /** Ошибка Postgres при исчерпании `lock_timeout` — ровно то, что прилетало наружу необработанным. */
+  const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+
+  it('исчерпание ожидания лока ⇒ 503 с человеческим текстом, а не 502', async () => {
+    // ⚠ Провижининг СОЗДАЁТ смарт-процессы в CRM клиента, и кнопки отката в проде нет. Админ,
+    // увидев «provisioning failed», не знает, создалось что-то или нет, и естественная реакция —
+    // нажать ещё раз. Сообщение обязано сказать, что делать этого НЕ надо.
+    const r = await handleProvisionRequest(deps({
+      provision: async () => {
+        throw lockTimeout
+      }
+    }), input)
+    expect(r.status).toBe(503)
+    expect(String(r.body.error)).toMatch(/уже выполняется/)
+    expect(String(r.body.error), 'не сказано, что повтор вреден').toMatch(/Повторное нажатие/)
+  })
+
+  it('НАСТОЯЩИЙ сбой по-прежнему пробрасывается как 502, а не выдаётся за «занято»', async () => {
+    // ⚠ Зеркало теста из `bankAccountRename` (#509). Спутать эти два случая — значит предложить
+    // человеку жать кнопку, пока не надоест, тогда как причина в другом месте.
+    const r = await handleProvisionRequest(deps({
+      provision: async () => {
+        throw new Error('connection terminated')
+      }
+    }), input)
+    expect(r.status).toBe(502)
+  })
+
+  it('код 55P03 опознаётся ОБЩЕЙ функцией, а не своей копией', async () => {
+    // Разойдись копии — один маршрут отвечал бы «занято», другой «сбой», на одном и том же коде.
+    const { readFileSync } = await import('node:fs')
+    for (const rel of ['server/utils/provisionRequest.ts', 'server/utils/recomputeRequest.ts']) {
+      const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
+      expect(src, `${rel} не использует общий isLockTimeout`).toContain('isLockTimeout')
+      expect(src, `${rel} завёл свою копию кода 55P03`).not.toMatch(/'55P03'/)
+    }
+  })
+})

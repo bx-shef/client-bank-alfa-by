@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_LOCK_WAIT, MIN_LOCK_WAIT, resolveLockWait } from '../server/utils/dbLock'
+import { DEFAULT_LOCK_WAIT, MIN_LOCK_WAIT, resolveLockWait, SINGLE_FLIGHT_LOCK_WAIT } from '../server/utils/dbLock'
 
 // ⚠ Гард ловушки в семантике самого Postgres: `lock_timeout = 0` ОТКЛЮЧАЕТ таймаут, то есть
 // означает «ждать вечно», а не «не ждать». Это ровно наоборот тому, что имеет в виду тот, кто
@@ -28,5 +28,16 @@ describe('ожидание advisory-лока (#516)', () => {
   it('минимум — не ноль', () => {
     // Иначе гард возвращал бы ровно ту величину, от которой защищает.
     expect(MIN_LOCK_WAIT).not.toMatch(/^0+/)
+  })
+
+  it('ожидание для долгих single-flight операций — короткое, но НЕ нулевое', () => {
+    // ⚠ Рантайм от нуля защищён (`resolveLockWait` переводит его в минимум), поэтому мутация
+    // «сделать константу нулём» и выжила. Но константа со значением, которое ЧИТАЕТСЯ как «не
+    // ждать», а в Postgres значит «ждать вечно», вводит в заблуждение того, кто её правит следом.
+    expect(SINGLE_FLIGHT_LOCK_WAIT).not.toMatch(/^0+\s*(ms|s|min|h)?$/)
+    // И короткое: держатель здесь работает десятки секунд, ждать его бессмысленно, а ожидающий
+    // всё это время занимает соединение из пула (пул — 10).
+    expect(resolveLockWait(SINGLE_FLIGHT_LOCK_WAIT)).toBe(SINGLE_FLIGHT_LOCK_WAIT)
+    expect(SINGLE_FLIGHT_LOCK_WAIT).toMatch(/^[1-3]s$|^\d{3,4}ms$/)
   })
 })

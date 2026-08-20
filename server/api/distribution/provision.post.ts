@@ -12,7 +12,7 @@ import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { withAdvisoryLock } from '../../utils/dbLock'
+import { SINGLE_FLIGHT_LOCK_WAIT, withAdvisoryLock } from '../../utils/dbLock'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -54,7 +54,17 @@ function liveProvisionDeps(): ProvisionRequestDeps {
           saveSettings,
           provision: (known: KnownSpIds) => provisionDistributionSp(call, known),
           // Single-flight per portal: serialize concurrent provision requests across replicas.
-          withLock: fn => withAdvisoryLock(`provision-sp:${memberId}`, () => fn())
+          //
+          // ⚠ Ждём КОРОТКО, и это не копия решения из #515, а другой вывод из тех же посылок.
+          // Там (переименование счёта) держатель работает доли секунды, и подождать пару секунд
+          // осмысленно — он вот-вот закончит. Здесь держатель делает десятки REST-вызовов в
+          // Bitrix24 и работает десятки секунд; ждать его — значит почти наверняка не дождаться,
+          // заняв на всё это время СОЕДИНЕНИЕ ИЗ ПУЛА (пул — 10), из которого берут readiness-проба,
+          // события установки и все остальные порталы.
+          //
+          // ⚠ И по смыслу ждать нечего: если провижининг уже идёт, второму делать нечего — первый
+          // создаст всё сам. Правильный ответ здесь «уже выполняется», а не очередь.
+          withLock: fn => withAdvisoryLock(`provision-sp:${memberId}`, () => fn(), { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
         }))
     }
   }

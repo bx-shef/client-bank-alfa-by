@@ -156,3 +156,30 @@ describe('handleRecomputeRequest', () => {
     expect(res.body).toEqual({ provisioned: false, recomputed: 0 })
   })
 })
+
+describe('конкурентный клик по пересчёту — «занято», а не сбой (#516)', () => {
+  /** Ошибка Postgres при исчерпании `lock_timeout` — ровно то, что прилетало наружу необработанным. */
+  const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+
+  it('исчерпание ожидания лока ⇒ 503, и текст не врёт про «через пару секунд»', async () => {
+    // ⚠ Пересчёт идёт по ВСЕМ платежам портала и долог по своей природе. Обещать «повторите через
+    // несколько секунд» значит заставить человека бить по кнопке всё это время.
+    const res = await handleRecomputeRequest(rdeps({
+      recompute: async () => {
+        throw lockTimeout
+      }
+    }), input)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toMatch(/уже выполняется/)
+    expect(String(res.body.error)).toMatch(/через минуту/)
+  })
+
+  it('НАСТОЯЩИЙ сбой остаётся 502 — спутать их значит советовать не то', async () => {
+    const res = await handleRecomputeRequest(rdeps({
+      recompute: async () => {
+        throw new Error('connection terminated')
+      }
+    }), input)
+    expect(res.status).toBe(502)
+  })
+})

@@ -12,7 +12,7 @@ import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { withAdvisoryLock } from '../../utils/dbLock'
+import { SINGLE_FLIGHT_LOCK_WAIT, withAdvisoryLock } from '../../utils/dbLock'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -38,8 +38,12 @@ function liveRecomputeDeps(): RecomputeRequestDeps {
       if (!paymentRef || !distRef) return null // SPs not provisioned
       // Single-flight per portal: serialize concurrent recomputes (and vs the crm-sync/deletion writers
       // touching the same «осталось» fields) — same advisory lock family as provisioning.
+      // ⚠ Короткое ожидание — по той же причине, что у провижининга: держатель идёт по всем
+      // платежам портала, ждать его бессмысленно, а ожидающий всё это время занимает соединение
+      // из пула. Второму пересчёту делать нечего — первый покроет те же элементы.
       return withAdvisoryLock(`distribution-recompute:${memberId}`, () =>
-        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)))
+        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)),
+      { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
     }
   }
 }

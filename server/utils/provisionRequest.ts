@@ -9,6 +9,7 @@
 // from the client), and `validateFrame` re-checks the token against B24 to block a spoofed domain.
 
 import { sanitizeForLog } from './logSanitize'
+import { isLockTimeout } from './bankRefreshLock'
 import type { ProvisionDistributionOutcome } from './distributionProvisionHandler'
 
 /** Injected side effects + config for {@link handleProvisionRequest}. */
@@ -81,6 +82,20 @@ export async function handleProvisionRequest(
       }
     }
   } catch (e) {
+    // ⚠ «Занято» — ШТАТНЫЙ исход, а не сбой (#516). Провижининг сериализован advisory-локом на
+    // портал, и конкурентный клик (второй админ, двойное нажатие, повтор из другой вкладки) раньше
+    // отдавал НЕОБРАБОТАННОЕ исключение Postgres `55P03`. Наружу это уходило как ошибка, хотя по
+    // смыслу означает ровно «эта операция уже идёт прямо сейчас».
+    //
+    // ⚠ Здесь это хуже, чем в других местах: провижининг СОЗДАЁТ смарт-процессы в CRM клиента, и
+    // кнопки отката в проде нет. Админ, увидев ошибку, не знает, создалось что-то или нет, и
+    // естественная реакция — нажать ещё раз. Сообщение обязано сказать, что делать НЕ надо.
+    if (isLockTimeout(e)) {
+      return {
+        status: 503,
+        body: { error: 'Настройка смарт-процессов уже выполняется — подождите и обновите страницу. Повторное нажатие ничего не ускорит и может создать лишние сущности.' }
+      }
+    }
     // A bare «provisioning failed» left the admin with nothing to act on (#408). Classify what the
     // portal actually said: a missing scope needs a re-install/consent, an access error needs
     // portal rights — completely different actions, and neither is guessable from a generic 502.
