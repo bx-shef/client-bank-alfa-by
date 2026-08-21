@@ -54,3 +54,7 @@ service-routes.txt
 # Артефакты визуальных регресс-тестов (эталоны — в tests/visual/__screenshots__, они коммитятся)
 tests/visual/.artifacts/
 playwright-report/
+# Служебный `.last-run.json` Playwright: он пишется в `test-results/` независимо от `outputDir`
+# (сами трассы и diff-картинки уходят в `tests/visual/.artifacts/` выше), и после каждого прогона
+# каталог болтался неотслеженным.
+test-results/

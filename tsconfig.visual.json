@@ -1,0 +1,12 @@
+{
+  "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noUncheckedIndexedAccess": false
+  },
+  "include": [
+    "./tests/visual/**/*.ts",
+    "./playwright.config.ts"
+  ],
+  "exclude": ["./node_modules"]
+}
