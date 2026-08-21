@@ -36,7 +36,7 @@ export const MIN_LOCK_WAIT = '100ms'
  * Wait for the «one at a time per portal» operations that are LONG by nature — smart-process
  * provisioning and distribution recompute (#516).
  *
- * ⚠ This is the SAME reasoning as `RENAME_LOCK_WAIT` (#509), not a different one — both holders are
+ * ⚠ This is the SAME reasoning as `BANK_REFRESH_LOCK_WAIT` (#509), not a different one — both holders are
  * slow and neither can be outwaited, so both wait briefly and answer «busy» instead of camping on a
  * POOLED CONNECTION (the pool is 10, shared with the readiness probe, install events and every
  * other portal). The real difference is BOUNDEDNESS, not speed: #509's holder is ONE network POST
@@ -49,6 +49,26 @@ export const MIN_LOCK_WAIT = '100ms'
  * «take a number».
  */
 export const SINGLE_FLIGHT_LOCK_WAIT = '1s'
+
+/**
+ * Сколько ждать лок `bankrefresh:` ЧЕЛОВЕКУ. Держатель у него один и тот же во всех случаях —
+ * обновление банковского токена, то есть ОДИН сетевой POST к банку с потолком 15 с. Дождаться его
+ * нельзя ни за 2 с, ни за 10, поэтому человеку отвечаем быстро («занято, повторите» — повтор в
+ * одном клике), а машинному вызывающему оставляем умолчание: за ним никто не смотрит.
+ *
+ * ⚠ Ожидающий держит СОЕДИНЕНИЕ ИЗ ПУЛА всё время ожидания, а пул — 10; из него же берут
+ * readiness-проба, события установки и все остальные порталы. Троттл nginx на этих маршрутах
+ * пропускает всплеск в 10 запросов без задержки — то есть один админ мог занять пул целиком.
+ *
+ * ⚠ Имя — по ДЕРЖАТЕЛЮ, а не по маршруту (было `RENAME_LOCK_WAIT` в `bankAccountRename.ts`, #509).
+ * Маршрутов, ждущих этот лок с человеком на том конце, оказалось два: выбор счёта и сверка счетов
+ * `GET /api/bank/matrix` (#539). Пока константа звалась по первому из них и жила в его файле,
+ * второй унаследовал умолчание в 10 с молча — читатель `dbLock.ts` (сложившийся дом для «сколько
+ * ждать лок») соседа просто не находил.
+ *
+ * На НЕЗАНЯТЫЙ лок это не влияет вовсе — он берётся мгновенно.
+ */
+export const BANK_REFRESH_LOCK_WAIT = '2s'
 
 /** Postgres duration units accepted for `lock_timeout`. `d` is in the list because Postgres takes
  *  it too — omitting it made `0d` read as «not a zero» and sail through as «wait forever». */

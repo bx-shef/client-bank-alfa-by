@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
 import {
   accountsUrl,
   connectedKeys,
@@ -265,5 +266,31 @@ describe('listBankSideAccounts — банк на каждой строке и п
       }
     }))
     expect(out[0]).toMatchObject({ provider: 'alfa-by', accounts: [], error: 'invalid_grant' })
+  })
+})
+
+describe('сверка счетов: занятый лок обновления токена (#539)', () => {
+  it('говорит человеческим текстом, а не исключением Postgres', async () => {
+    // Держатель того же лока — плановое продление токена, у которого потолок POST к банку 15 с.
+    // Значит «не дождались» — штатный исход, и он обязан читаться как состояние, а не как поломка.
+    const out = await listBankSideAccounts('M1', deps({
+      ensureFresh: async () => {
+        throw Object.assign(new Error('canceling statement due to lock timeout'), { code: PG_LOCK_TIMEOUT })
+      }
+    }))
+    expect(out[0]?.error).toBe('банк опрашивается прямо сейчас — обновите страницу через несколько секунд')
+    // ⚠ Текста исключения на экране быть не должно: сообщение pg несёт имена таблиц.
+    expect(out[0]?.error).not.toContain('lock timeout')
+  })
+
+  it('обычная ошибка банка по-прежнему показывается как есть', async () => {
+    // Иначе «человеческий текст» съел бы диагностику: протухший грант и занятый лок чинятся
+    // по-разному, и подменять первый вторым значило бы врать админу.
+    const out = await listBankSideAccounts('M1', deps({
+      ensureFresh: async () => {
+        throw new Error('invalid_grant')
+      }
+    }))
+    expect(out[0]?.error).toBe('invalid_grant')
   })
 })

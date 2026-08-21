@@ -312,3 +312,31 @@ describe('disconnect during a refresh (#505)', () => {
     expect(out.accessToken).toBe('A2')
   })
 })
+
+describe('ensureBankToken: ожидание лока выбирает ВЫЗЫВАЮЩИЙ (#539)', () => {
+  const near = () => tok({ expiresAt: NOW + 10_000 })
+  // ⚠ Третий параметр объявлен ЯВНО: без него `calls[0][2]` — ошибка типа, то есть проверить
+  // ожидание лока было бы нечем (типы тестов проверяются, #527).
+  const spyLock = () => vi.fn(
+    async (_key: string, fn: (q: QueryFn) => Promise<unknown>, _opts?: { lockWait?: string }) => fn(null as unknown as QueryFn)
+  )
+
+  it('передаёт заданное ожидание в лок', async () => {
+    // HTTP-маршрут с админом на том конце (сверка счетов) обязан ждать коротко: держатель — POST
+    // к банку с потолком 15 с, дождаться нельзя, а ожидающий всё это время держит соединение из
+    // пула (пул — 10, из него же берут readiness-проба и остальные порталы).
+    const withLock = spyLock()
+    const { deps } = fakeDeps({ stored: near() })
+    await ensureBankToken(near(), { ...deps, withLock: withLock as typeof deps.withLock }, { lockWait: '2s' })
+    expect(withLock.mock.calls[0]![2]).toEqual({ lockWait: '2s' })
+  })
+
+  it('без указания оставляет умолчание — фоновому вызывающему ждать правильно', async () => {
+    // Крон продления и задача опроса идут без человека: короткое ожидание там означало бы
+    // пропущенный тик вместо обновлённого токена.
+    const withLock = spyLock()
+    const { deps } = fakeDeps({ stored: near() })
+    await ensureBankToken(near(), { ...deps, withLock: withLock as typeof deps.withLock })
+    expect(withLock.mock.calls[0]![2]).toEqual({ lockWait: undefined })
+  })
+})

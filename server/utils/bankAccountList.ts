@@ -25,6 +25,7 @@ import type { BankProviderId } from '../../app/types/statement'
 import type { BankSideAccount } from '../../app/utils/bankAccountMatrix'
 import { extractAccounts, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
 import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
+import { isLockTimeout } from './bankRefreshLock'
 import { sanitizeForLog } from './logSanitize'
 import type { BankToken } from './bankTokenStore'
 
@@ -116,6 +117,13 @@ async function askProvider(
     // `BankSideAccount.provider`.
     return { provider, accounts: accounts.map(a => ({ ...a, provider })) }
   } catch (e) {
+    // ⚠ Исчерпание ожидания лока — ШТАТНЫЙ исход, а не поломка: тот же `bankrefresh:` держит
+    // плановое продление токена, у которого потолок POST к банку 15 с, а мы ждём пару секунд
+    // (#539). Без этой ветки админ увидел бы сырое `canceling statement due to lock timeout` —
+    // текст, который не подсказывает ничего и вдобавок несёт имена таблиц.
+    if (isLockTimeout(e)) {
+      return { provider, accounts: [], error: 'банк опрашивается прямо сейчас — обновите страницу через несколько секунд' }
+    }
     // The message reaches an admin's screen, so it is sanitised (CRLF/length) — a bank error
     // body is external text. The Bearer never appears in these messages (the route's `getJson`
     // keeps the upstream error in `cause`), and we surface `message` only.

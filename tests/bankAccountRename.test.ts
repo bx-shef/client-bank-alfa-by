@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { makeLockedRename, RENAME_LOCK_WAIT } from '../server/utils/bankAccountRename'
-import { DEFAULT_LOCK_WAIT } from '../server/utils/dbLock'
+import { makeLockedRename } from '../server/utils/bankAccountRename'
+import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT } from '../server/utils/dbLock'
 import { bankRefreshLockKey, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
 import type { QueryFn } from '../server/utils/tokenStore'
 
@@ -64,8 +64,8 @@ describe('makeLockedRename', () => {
     // держатель — POST к банку с потолком 15 с, дождаться его нельзя всё равно, а повтор в клике.
     const { waits, made } = deps()
     await made('m1', 'alfa-by', '~pending:n1', 'BY01')
-    expect(waits).toEqual([RENAME_LOCK_WAIT])
-    expect(RENAME_LOCK_WAIT).not.toBe(DEFAULT_LOCK_WAIT)
+    expect(waits).toEqual([BANK_REFRESH_LOCK_WAIT])
+    expect(BANK_REFRESH_LOCK_WAIT).not.toBe(DEFAULT_LOCK_WAIT)
   })
 
   it('всплеск nginx на этом маршруте меньше пула соединений', () => {

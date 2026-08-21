@@ -91,7 +91,7 @@ export function parseBankRefresh(provider: BankProviderId, raw: unknown): BankRe
 /** Injected side-effects, so the refresh logic is unit-testable without DB/network. */
 export interface BankRefreshDeps {
   now: () => number
-  withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>) => Promise<T>
+  withLock: <T>(key: string, fn: (q: QueryFn) => Promise<T>, opts?: { lockWait?: string }) => Promise<T>
   loadToken: (q: QueryFn, memberId: string, provider: BankProviderId, accountKey: string) => Promise<BankToken | null>
   /** Persist the refreshed tokens. **UPDATE-only** — `false` means the row is already gone and
    *  must NOT be recreated: the account was disconnected while we were at the bank (#505). */
@@ -200,7 +200,7 @@ const liveDeps: BankRefreshDeps = {
 export async function ensureBankToken(
   token: BankToken,
   deps: BankRefreshDeps = liveDeps,
-  opts: { force?: boolean } = {}
+  opts: { force?: boolean, lockWait?: string } = {}
 ): Promise<BankToken> {
   if (!opts.force && !needsBankRefresh(token, deps.now())) return token
 
@@ -214,6 +214,11 @@ export async function ensureBankToken(
   // takes the same lock (`renameBankTokenAccount`, #509): it changes `account_key` — the very field
   // we use to find our row. A differently-spelled key would mean the lock is "held" while the two
   // sides never actually meet — silently, with no error at all.
+  // ⚠ `lockWait` НЕ имеет умолчания здесь: у этой функции два разных вызывающих. Фоновому (крон
+  // продления, задача опроса) правильно ждать долго — за ним никто не смотрит, а повтор стоит
+  // целого тика. HTTP-маршруту с админом на том конце — коротко: держатель лока это POST к банку
+  // с потолком 15 с, дождаться его нельзя, а повтор в одном клике. Значение выбирает вызывающий,
+  // потому что разница именно в нём, а не в этой функции (#539).
   return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey), async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed (or the account been
     // disconnected) while we waited. No stored row → don't refresh+save (would resurrect a
@@ -251,5 +256,5 @@ export async function ensureBankToken(
       return stored
     }
     return updated
-  })
+  }, { lockWait: opts.lockWait })
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { bankRefreshLockKey, isLockTimeout, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
+import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT } from '../server/utils/dbLock'
 
 // Лок, сериализующий двух писателей в одну строку `bank_tokens` (#509).
 //
@@ -149,5 +150,31 @@ describe('ключ лока строится ТОЛЬКО хелпером', () 
     const route = readFileSync(join(ROOT, 'server/api/bank/set-account.post.ts'), 'utf8')
     expect(route).toContain('makeLockedRename')
     expect(route).not.toMatch(/renameBankTokenAccount\s*\(\s*dbQuery/)
+  })
+})
+
+describe('HTTP-маршруты не ждут лок по-машинному (#539)', () => {
+  // ⚠ Проверяется СТРУКТУРНО, потому что дефект был именно структурным: `/api/bank/matrix` звал
+  // `ensureBankToken` без указания ожидания и МОЛЧА унаследовал умолчание в 10 с — вчетверо
+  // дольше двух уже починенных маршрутов. Поведенческий тест такого не ловит: маршрут работает,
+  // просто занимает соединение из пула (пул — 10) ради шанса выиграть у держателя, который сам
+  // ограничен 15 секундами. Новый маршрут повторил бы ошибку тем же способом.
+  const apiDir = join(process.cwd(), 'server/api/bank')
+
+  it('каждый вызов ensureBankToken из server/api/bank задаёт lockWait', () => {
+    const offenders: string[] = []
+    for (const name of readdirSync(apiDir)) {
+      if (!name.endsWith('.ts')) continue
+      const src = readFileSync(join(apiDir, name), 'utf8')
+      for (const call of src.match(/ensureBankToken\([^)]*\)/g) ?? []) {
+        if (!call.includes('lockWait')) offenders.push(`${name}: ${call}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('человеческое ожидание короче машинного умолчания', () => {
+    // Иначе константа есть, а смысла в ней нет.
+    expect(BANK_REFRESH_LOCK_WAIT).not.toBe(DEFAULT_LOCK_WAIT)
   })
 })
