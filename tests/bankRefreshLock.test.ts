@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { bankRefreshLockKey, isLockTimeout, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
 import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT } from '../server/utils/dbLock'
+import { LISTABLE_PROVIDERS } from '../server/utils/bankAccountList'
 
 // Лок, сериализующий двух писателей в одну строку `bank_tokens` (#509).
 //
@@ -153,28 +154,83 @@ describe('ключ лока строится ТОЛЬКО хелпером', () 
   })
 })
 
+/** Длительность Postgres (`2s`, `100ms`, `1min`) в миллисекундах — чтобы сравнивать ожидания
+ *  величинами, а не строками. Хватает единиц, которыми мы реально пользуемся. */
+function durationMs(raw: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(us|ms|s|min|h|d)$/.exec(raw.trim())
+  if (!m) throw new Error(`не разобрал длительность: ${raw}`)
+  const unit = { us: 0.001, ms: 1, s: 1000, min: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as 'ms']
+  return Number(m[1]) * unit
+}
+
 describe('HTTP-маршруты не ждут лок по-машинному (#539)', () => {
   // ⚠ Проверяется СТРУКТУРНО, потому что дефект был именно структурным: `/api/bank/matrix` звал
   // `ensureBankToken` без указания ожидания и МОЛЧА унаследовал умолчание в 10 с — вчетверо
   // дольше двух уже починенных маршрутов. Поведенческий тест такого не ловит: маршрут работает,
   // просто занимает соединение из пула (пул — 10) ради шанса выиграть у держателя, который сам
   // ограничен 15 секундами. Новый маршрут повторил бы ошибку тем же способом.
-  const apiDir = join(process.cwd(), 'server/api/bank')
-
-  it('каждый вызов ensureBankToken из server/api/bank задаёт lockWait', () => {
+  // ⚠ Обход РЕКУРСИВНЫЙ и по всему `server/api`, а не по одному каталогу: подкаталогов там сегодня
+  // нет, но обещание «каждый HTTP-маршрут» плоским обходом не выполняется, и вложенный роут гард
+  // обошёл бы МОЛЧА — тем же способом, каким появился сам дефект.
+  //
+  // ⚠ Честная граница гарда: он видит вызовы, написанные в самом файле роута. Маршрут, который
+  // провяжет `ensureFresh` через модуль в `server/utils` (так делают `bankFetch`/`priorFetch`),
+  // унаследует машинное умолчание, и текстом это не ловится. Поэтому у `ensureBankToken` умолчания
+  // НЕТ вовсе — решение принимает вызывающий и обязано быть написано явно.
+  it('каждый вызов ensureBankToken из HTTP-маршрутов задаёт lockWait', () => {
     const offenders: string[] = []
-    for (const name of readdirSync(apiDir)) {
-      if (!name.endsWith('.ts')) continue
-      const src = readFileSync(join(apiDir, name), 'utf8')
-      for (const call of src.match(/ensureBankToken\([^)]*\)/g) ?? []) {
-        if (!call.includes('lockWait')) offenders.push(`${name}: ${call}`)
+    for (const file of readdirSync(join(process.cwd(), 'server/api'), { recursive: true, encoding: 'utf8' })) {
+      if (!file.endsWith('.ts')) continue
+      const src = readFileSync(join(process.cwd(), 'server/api', file), 'utf8')
+      // ⚠ Регулярка допускает ОДИН уровень вложенных скобок. Наивная `[^)]*` обрывается на первой
+      // же закрывающей: у `ensureBankToken(token, bankDeps(), { lockWait: … })` она видит только
+      // `…bankDeps()`, не находит `lockWait` и краснеет на ВЕРНОМ коде. Второй параметр — объект
+      // зависимостей, то есть ровно то место, где фабричный вызов и появляется (`liveDeps` рядом
+      // это показывает), а красный билд на верном коде учит ослаблять гард (замерено мутацией).
+      for (const call of src.match(/ensureBankToken\((?:[^()]|\([^()]*\))*\)/g) ?? []) {
+        // ⚠ Требуем не САМ параметр, а ИМЕННО человеческое значение: явно вписанное машинное
+        // умолчание проходит проверку «параметр есть» и не меняет ровно ничего — это тот же
+        // дефект #539, только произнесённый вслух (замерено мутацией: гард молчал).
+        if (!/lockWait:\s*BANK_REFRESH_LOCK_WAIT/.test(call)) offenders.push(`${file}: ${call}`)
       }
     }
     expect(offenders).toEqual([])
   })
 
-  it('человеческое ожидание короче машинного умолчания', () => {
-    // Иначе константа есть, а смысла в ней нет.
-    expect(BANK_REFRESH_LOCK_WAIT).not.toBe(DEFAULT_LOCK_WAIT)
+  it('человеческое ожидание КОРОЧЕ машинного умолчания, а не просто другое', () => {
+    // ⚠ Проверка «не равно» слабее, чем кажется: `30s` — втрое дольше умолчания, то есть точная
+    // противоположность замыслу («человеку быстро, машине долго») — проходила её зелёной
+    // (замерено мутацией). Сравниваем ВЕЛИЧИНЫ.
+    expect(durationMs(BANK_REFRESH_LOCK_WAIT)).toBeLessThan(durationMs(DEFAULT_LOCK_WAIT))
+  })
+})
+
+describe('всплеск nginx на маршрутах, ждущих этот лок, меньше пула соединений', () => {
+  // ⚠ Числа живут в РАЗНЫХ файлах и друг друга не называют: `burst` в `nginx.conf`, размер пула в
+  // `server/db/client.ts`. Их совпадение 1:1 означает, что один админ может занять пул целиком —
+  // а из него берут readiness-проба, события установки и все остальные порталы.
+  //
+  // ⚠ Стоимость запроса у маршрутов РАЗНАЯ, и это не мелочь: сверка спрашивает банки ПАРАЛЛЕЛЬНО,
+  // то есть один запрос берёт под лок по соединению на банк. Гард, считавший запрос за одно
+  // соединение, пропустил бы вдвое больший расход (#539).
+  const ROUTES = [
+    { location: '/api/bank/set-account', connectionsPerRequest: 1 },
+    { location: '/api/bank/matrix', connectionsPerRequest: LISTABLE_PROVIDERS.length }
+  ]
+
+  it.each(ROUTES)('$location', ({ location, connectionsPerRequest }) => {
+    const root = join(process.cwd())
+    const nginx = readFileSync(join(root, 'nginx.conf'), 'utf8')
+    const block = nginx.slice(nginx.indexOf(`location = ${location}`))
+    // ⚠ Читаем ДИРЕКТИВУ, а не текст блока: соседний комментарий объясняет, почему значение больше
+    // не равно пулу, и наивный поиск по подстроке вытащил бы число из объяснения.
+    const directive = block.slice(0, block.indexOf('}'))
+      .split('\n')
+      .find(line => /^\s*limit_req\s+zone=/.test(line)) ?? ''
+    const burst = Number(/burst=(\d+)/.exec(directive)?.[1])
+    const poolMax = Number(/max:\s*(\d+)/.exec(readFileSync(join(root, 'server/db/client.ts'), 'utf8'))?.[1])
+    expect(burst).toBeGreaterThan(0)
+    expect(poolMax).toBeGreaterThan(0)
+    expect(burst * connectionsPerRequest).toBeLessThan(poolMax)
   })
 })

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
+import { setAccountErrorMessage } from '../app/utils/setAccountError'
 import {
   accountsUrl,
   connectedKeys,
@@ -12,6 +13,9 @@ import {
 } from '../server/utils/bankAccountList'
 import type { BankToken } from '../server/utils/bankTokenStore'
 import type { BankProviderId } from '../app/types/statement'
+
+/** Текст «занято» на экране сверки — ожидание теста, а не копия из кода. */
+const BUSY_TEXT = 'подключение сейчас обновляется — повторите через несколько секунд'
 
 function token(over: Partial<BankToken> = {}): BankToken {
   return {
@@ -278,9 +282,18 @@ describe('сверка счетов: занятый лок обновления 
         throw Object.assign(new Error('canceling statement due to lock timeout'), { code: PG_LOCK_TIMEOUT })
       }
     }))
-    expect(out[0]?.error).toBe('банк опрашивается прямо сейчас — обновите страницу через несколько секунд')
+    expect(out[0]?.error).toBe(BUSY_TEXT)
     // ⚠ Текста исключения на экране быть не должно: сообщение pg несёт имена таблиц.
     expect(out[0]?.error).not.toContain('lock timeout')
+  })
+
+  it('текст совпадает с близнецом на 503 от set-account — исход один, экран один', () => {
+    // Оба сообщения об одном и том же (лок держит обновление токена) могут появиться в одной
+    // карточке подключения. Разойдясь, они рассказали бы админу две разные истории про одно
+    // состояние. Сверяем по сути строки, а не по ссылке: у клиентского близнеца текст —
+    // предложение с заглавной и точкой, у нашего — вставка в шаблон алерта.
+    const twin = setAccountErrorMessage({ statusCode: 503 })
+    expect(twin.toLowerCase().replace(/\.$/, '')).toBe(BUSY_TEXT)
   })
 
   it('обычная ошибка банка по-прежнему показывается как есть', async () => {
