@@ -183,12 +183,12 @@ ok(`Оплата проведена (${res.method} id=${res.id}).`)
 // Not a style point: `call(method, params: Record<string, unknown>)` accepts ANYTHING, so the type
 // of `entityId` is invisible to the compiler here BY CONSTRUCTION — and when `resolveDealId` began
 // returning a string (#542), this call silently started sending `entityId:"123"` instead of `123`,
-// the last site still assembling `crm.item.payment.list` params by hand (production
-// `findDealPayments`/`isDealPaymentPaid`, and the neighbouring `verify-109-live`, all coerce to a
-// number). The helper declares `dealId: number`, so the same slip is now a BUILD error.
-// The cost here is not theoretical: this is the check that runs AFTER a live portal was mutated,
-// and a false «payment not marked paid» pushes the operator to re-run `--apply` against a payment
-// that already went through.
+// the last site still assembling `crm.item.payment.list` params by hand — production
+// `findDealPayments` and `isDealPaymentPaid` both route through the helper, which coerces. The
+// helper declares `dealId: number`, so the same slip is now a BUILD error.
+// The cost here is not theoretical: this is the check that runs AFTER a real portal was mutated
+// (the seeded test portal, `--apply`), and a false «payment not marked paid» pushes the operator to
+// re-run `--apply` against a payment that already went through.
 const listAll = await call('crm.item.payment.list', paymentListParams(Number(DEAL_ID)))
 const rows = (listAll.result as Array<Record<string, unknown>> | undefined) ?? []
 const row = rows.find(r => String(r.id) === String(target.id))
