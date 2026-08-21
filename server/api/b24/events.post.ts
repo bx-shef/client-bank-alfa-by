@@ -13,6 +13,9 @@ import { getApplicationToken, saveToken, deleteToken } from '../../utils/tokenSt
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
 import { rawOauthRefresh, verifyInstallMember, type OAuthFetchFn } from '../../utils/verifyInstallMember'
+import { useServerLogger } from '../../utils/serverLogger'
+
+const log = useServerLogger('b24-events')
 
 export default defineEventHandler(async (event) => {
   const envToken = process.env.B24_APPLICATION_TOKEN?.trim() || ''
@@ -53,7 +56,7 @@ export default defineEventHandler(async (event) => {
     if (result.action) {
       // member_id is a non-secret routing id; outcome tells whether the worker will
       // persist (queued) or we already wrote it here (sync-fallback, Redis down).
-      console.info('[b24 events] %s member_id=%s (%s)', result.action.type, result.action.memberId, result.outcome)
+      log.info(`${result.action.type} member_id=${result.action.memberId} (${result.outcome})`)
     }
 
     setResponseStatus(event, result.status)
@@ -62,7 +65,7 @@ export default defineEventHandler(async (event) => {
     // Verify read / enqueue AND sync fallback both failed, or a malformed body:
     // log server-side (no secrets — the message may carry a memberId but never a
     // token) and return 500. Nitro would otherwise leak err.message into the body.
-    console.error('[b24 events] handler error:', (err as Error)?.message)
+    log.error(`handler error: ${(err as Error)?.message}`)
     setResponseStatus(event, 500)
     return { error: 'internal error' }
   }

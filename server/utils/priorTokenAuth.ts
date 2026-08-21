@@ -13,6 +13,9 @@
 
 import { buildClientAssertionClaims, parsePriorAuthMethod, PRIOR_TOKEN_AUTH_METHODS } from '../../app/utils/priorOauth'
 import type { PriorTokenAuth, PriorTokenAuthMethod } from '../../app/utils/priorOauth'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('env')
 
 /** Everything needed to authenticate as the client, under either method. */
 export interface PriorAuthConfig {
@@ -43,7 +46,7 @@ export interface PriorAuthDeps {
  *  same condition at boot; this covers processes that read it later. */
 export function priorAuthMethodFromEnv(): PriorTokenAuthMethod {
   return parsePriorAuthMethod(process.env.PRIOR_OAUTH_AUTH_METHOD, raw =>
-    console.warn(`[env] PRIOR_OAUTH_AUTH_METHOD="${raw}" is not recognised — falling back to client_secret_basic (sandbox-only). Expected one of: ${PRIOR_TOKEN_AUTH_METHODS.join(', ')}`)
+    log.warning(`PRIOR_OAUTH_AUTH_METHOD="${raw}" is not recognised — falling back to client_secret_basic (sandbox-only). Expected one of: ${PRIOR_TOKEN_AUTH_METHODS.join(', ')}`)
   )
 }
 

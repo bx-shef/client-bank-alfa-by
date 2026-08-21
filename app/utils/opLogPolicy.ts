@@ -134,7 +134,10 @@ export interface RunSummaryLike {
  * 0 создано») пришлось разбирать вручную в базе.
  */
 export function runSummaryLine(memberId: string, s: RunSummaryLike, mode: OpLogMode): string {
-  return `[crm-sync] portal ${memberId}: ${s.processed} обработано, ${s.created} создано, `
+  // ⚠ Маркера `[crm-sync]` здесь БОЛЬШЕ НЕТ: его печатает канал логгера (#529). Второй раз он дал
+  // бы `[crm-sync] INFO: [crm-sync] portal …`; grep рантбука при этом работает по-прежнему —
+  // канал и маркер это одна и та же строка, и совпадение стережёт `tests/serverLogChannels.test.ts`.
+  return `portal ${memberId}: ${s.processed} обработано, ${s.created} создано, `
     + `${s.landed} приземлилось, ${s.unmatched} без клиента, ${s.unresolved} без цели, `
     + `${s.recognized} с распознанным номером${quietPart(s)}${opLogTail(s, mode)}`
 }

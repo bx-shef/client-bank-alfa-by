@@ -18,6 +18,9 @@ import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttribute
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
 import { SETTINGS_KEY, parsePortalSettings, serializePortalSettings, type PortalSettings } from '../../../app/utils/settings'
+import { useServerLogger } from '../../utils/serverLogger'
+
+const log = useServerLogger('queue')
 
 function liveProvisionDeps(): ProvisionRequestDeps {
   return {
@@ -33,7 +36,7 @@ function liveProvisionDeps(): ProvisionRequestDeps {
     },
     // Raw portal error → server log only (the client gets the classified text). Injected so the
     // pure handler stays free of console.*.
-    log: message => console.warn(message),
+    log: message => log.warning(message),
     provision: async (memberId) => {
       // Run on the portal's STORED OAuth token (app context — proven for crm.type.add /
       // userfieldconfig.add / app.option.set, the same transport crm-sync mutations use). The frame

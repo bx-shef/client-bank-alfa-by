@@ -19,6 +19,9 @@
 import { decryptSecret, encryptSecret } from './secretCrypto'
 import type { QueryFn } from './tokenStore'
 import type { BankProviderId } from '../../app/types/statement'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('bank-keepalive')
 
 /** A connected bank account's persisted OAuth state (refresh in clear here; encrypted
  *  in the DB). One row per `(memberId, provider, accountKey)`. */
@@ -222,7 +225,7 @@ export async function listBankTokensForPortal(query: QueryFn, memberId: string):
     try {
       out.push(rowToBankToken(row))
     } catch (e) {
-      console.warn(`[bankTokenStore] skip corrupt row member=${memberId} provider=${String(row.provider)} account=${String(row.account_key)}: ${(e as Error)?.message}`)
+      log.warning(`bankTokenStore: skip corrupt row member=${memberId} provider=${String(row.provider)} account=${String(row.account_key)}: ${(e as Error)?.message}`)
     }
   }
   return out

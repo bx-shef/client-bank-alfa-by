@@ -1,6 +1,9 @@
 import type { FeedbackPostJob } from '../queue/topology'
 import type { PostIssueResult } from './feedbackGithub'
 import type { IssuePayload } from '../../app/utils/feedback'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('import')
 
 // Pure worker for the feedback durable outbox (#61). The payload is the ALREADY-BUILT, sanitized
 // GitHub issue (the route did auth + Trojan-Source strip + HTML-escape before enqueueing), so no raw
@@ -35,5 +38,5 @@ export async function handleFeedbackPostJob(job: FeedbackPostJob, deps: Feedback
     // Numeric class only — never the GitHub body/URL/token (feedbackGithub keeps those out too).
     throw new Error(`feedback issue post failed (status ${result.status}) — retry`)
   }
-  console.warn('[feedback] permanent post failure status=%d — dropped from outbox', result.status)
+  log.warning(`feedback: permanent post failure status=${result.status} — dropped from outbox`)
 }

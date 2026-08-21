@@ -5,6 +5,9 @@
 
 import { Pool } from 'pg'
 import type { QueryFn } from '../utils/tokenStore'
+import { useServerLogger } from '../utils/serverLogger'
+
+const log = useServerLogger('pg')
 
 /** Schema for the backend tables. `CREATE TABLE IF NOT EXISTS` — safe to run on
  * every boot (see server/plugins/migrate.ts). `application_token` defaults to ''
@@ -153,7 +156,7 @@ export function getPool(): Pool {
     })
     // Without an `error` listener, an error on an idle client (e.g. the DB drops
     // the connection) crashes the whole Node process. Log and keep serving.
-    pool.on('error', err => console.error('[pg] idle client error:', err.message))
+    pool.on('error', err => log.error(`idle client error: ${err.message}`))
   }
   return pool
 }

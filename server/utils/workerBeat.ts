@@ -28,7 +28,7 @@ export function beatOnce(id: string, deps: WorkerBeatDeps): boolean {
   const mark = deps.mark ?? markWorkerBeat
   const now = deps.now ?? Date.now
   void mark(id, WORKER_BEAT_TTL_SEC, now())
-    .catch(e => deps.warn?.(`[queue] worker beat failed: ${(e as Error)?.message}`))
+    .catch(e => deps.warn?.(`worker beat failed: ${(e as Error)?.message}`))
   return true
 }
 

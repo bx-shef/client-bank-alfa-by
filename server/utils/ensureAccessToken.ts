@@ -18,6 +18,9 @@ import { sdkRefreshTransport } from './b24Sdk'
 import { withAdvisoryLock } from './dbLock'
 import { getToken, updatePortalTokenSecrets } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('token')
 
 /** True when the access token is within `skewMs` of expiry (pure, testable). */
 export function needsRefresh(token: PortalToken, nowMs: number, skewMs = 60_000): boolean {
@@ -71,7 +74,7 @@ export async function ensureAccessToken(
   const clientSecret = process.env.B24_CLIENT_SECRET?.trim()
   if (!clientId || !clientSecret) {
     // Can't refresh — hand back the stored token (may already be expired).
-    console.warn('[ensureAccessToken] near/at expiry but B24_CLIENT_ID/SECRET unset — cannot refresh')
+    log.warning('ensureAccessToken: near/at expiry but B24_CLIENT_ID/SECRET unset — cannot refresh')
     return token
   }
 
@@ -110,7 +113,7 @@ export async function ensureAccessToken(
     // dropped leaves no trace at all, and the next question ("why did this portal stop working?")
     // has nothing to read.
     if (!await deps.saveToken(q, updated)) {
-      console.warn('[ensureAccessToken] portal was uninstalled mid-refresh — token NOT stored')
+      log.warning('ensureAccessToken: portal was uninstalled mid-refresh — token NOT stored')
       // ⚠ Return the STALE token, not the fresh one — same call as `ensureBankToken` makes, and
       // for the same reason. The refresh succeeded, so `updated` is a working credential for a
       // portal that just removed us; handing it back would let one more REST call land there.

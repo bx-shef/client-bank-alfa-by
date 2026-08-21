@@ -66,6 +66,8 @@ export function buildOpLogLine(
   // заведена), сложил бы одно с другим и не сошёлся — тем более что сводочный счётчик растёт и для
   // дедуп-пропущенных операций, которых в построчном логе нет вовсе.
   const tail = `intents ${outcome.recognized}, activity ${outcome.activityId ?? '—'}`
-  return `[op] portal ${memberId}, op ${op}: ${item.direction} ${logSafe(item.currency, 8)} `
+  // ⚠ Маркер `[op]` печатает КАНАЛ логгера (#529), здесь его быть не должно — иначе строка выйдет
+  // как `[op] INFO: [op] portal …`.
+  return `portal ${memberId}, op ${op}: ${item.direction} ${logSafe(item.currency, 8)} `
     + `← ${from} → ${owner}, ${tail}${purpose}`
 }

@@ -34,7 +34,10 @@ describe('гейт объёма — исполняемый, а не тексто
 
   it('не приземлившаяся печатается — это и есть диагностика', () => {
     const line = buildOpLogLine(op(), stuck, 'M1', 'notable', false)
-    expect(line).toContain('[op] portal M1')
+    // ⚠ Маркера `[op]` в самой строке БОЛЬШЕ НЕТ — его печатает канал логгера (#529). Иначе вышло
+    // бы `[op] INFO: [op] portal …`; совпадение канала с маркером стережёт `serverLogChannels`.
+    expect(line).toContain('portal M1')
+    expect(line).not.toContain('[op]')
     expect(line).toContain('NO OWNER')
   })
 
@@ -64,7 +67,7 @@ describe('содержимое строки', () => {
     const line = buildOpLogLine(
       op({ account: 'BY11X', docId: 'd1', counterparty: { name: 'N', unp: '', account: 'BY22Y' } }),
       { owner: 'none', recognized: 0, activityId: null }, 'M1', 'notable', false)
-    expect(line).toBe('[op] portal M1, op BY11X|d1: credit BYN ← BY22Y → NO OWNER, intents 0, activity —')
+    expect(line).toBe('portal M1, op BY11X|d1: credit BYN ← BY22Y → NO OWNER, intents 0, activity —')
   })
 
   it('несёт то, что делает `unmatched` действием, и НЕ несёт сумму', () => {

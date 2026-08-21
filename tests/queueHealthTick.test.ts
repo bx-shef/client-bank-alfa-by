@@ -120,7 +120,10 @@ describe('runQueueHealthTick', () => {
     const r = await runQueueHealthTick(emptyDeliveryState(), d)
     expect(r.announced).toBe(1)
     expect(recorded[0]!.alerts.map(a => a.kind)).toEqual(['stalled'])
-    expect(warned[0]).toContain('[queue-alert]')
+    // ⚠ Маркер `[queue-alert]` теперь печатает КАНАЛ (#529) — в тексте тревоги его быть не
+    // должно, иначе строка выйдет с двумя одинаковыми префиксами. Проверяем суть сообщения.
+    expect(warned[0]).not.toContain('[queue-alert]')
+    expect(warned[0]).toContain('crm-sync')
     expect(pushed[0]).toContain('crm-sync')
     expect(pushed[0]).toContain('https://x.by/queues')
   })

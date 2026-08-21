@@ -138,7 +138,7 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
   try {
     code = parseOAuthCallback(input.query, rawState as string).code
   } catch (e) {
-    deps.log?.(`[bank-connect] callback rejected: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
+    deps.log?.(`callback rejected: ${sanitizeForLog((e as Error)?.message ?? 'error')}`)
     return { status: 400, html: ERR_PAGE }
   }
 
@@ -149,7 +149,7 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
   const config = isPrior ? null : deps.config(state.provider)
   const clientSecret = isPrior ? '' : deps.clientSecret(state.provider)
   if (!priorConfig && (!config || !clientSecret)) {
-    deps.log?.(`[bank-connect] callback: provider ${state.provider} not configured for exchange`)
+    deps.log?.(`callback: provider ${state.provider} not configured for exchange`)
     return { status: 400, html: ERR_PAGE }
   }
 
@@ -180,7 +180,7 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
     // Envelope included (`describeUpstreamError`): this step fails with the same opaque
     // «400 Bad Request» for a wrong `aud`, a wrong `kid`, an expired code and a missing header —
     // and it is the LAST step, after the account holder already logged into their bank.
-    deps.log?.(`[bank-connect] token exchange failed: ${describeUpstreamError(e)}`)
+    deps.log?.(`token exchange failed: ${describeUpstreamError(e)}`)
     return { status: 502, html: EXCHANGE_ERR_PAGE }
   }
 
@@ -201,6 +201,6 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
     // (согласий не выдаёт) — тогда 0 = «неизвестно», и по нему никого не хоронят.
     consentExpiresAt: state.consentExpiresAt ?? 0
   })
-  deps.log?.(`[bank-connect] connected ${state.provider} account for member ${state.memberId}`)
+  deps.log?.(`connected ${state.provider} account for member ${state.memberId}`)
   return { status: 200, html: hasAccount ? OK_PAGE_ACCOUNT : OK_PAGE_PENDING }
 }
