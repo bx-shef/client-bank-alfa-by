@@ -7,6 +7,7 @@ import type { OperationDirection, StatementItem } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
 import { useSetupStatus } from '~/composables/useSetupStatus'
+import { useSliderRedirect } from '~/composables/useSliderRedirect'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { useSettingsSync } from '~/composables/useSettingsSync'
@@ -579,7 +580,17 @@ const b24 = useB24()
 // `bitrix-mobile`, её ставит плагин платформы по UA), а не JS SDK. Скрытие — через `v-if`,
 // поэтому оно не зависит от темы.
 const { isBitrixMobile } = useDevice()
+
+// ⚠ Портал открывает слайдер по НАШЕМУ адресу, то есть по дороге к настройкам этот экран
+// монтируется всегда — а редирект уезжает лишь на готовности приложения. Пока он не случился,
+// страница обязана молчать: её `onMounted` не отменяется уходом, и вернувшийся позже
+// `setTitle('Выписка по счёту')` перекрыл бы уже поставленный заголовок «Настройки», а
+// `fitWindow()` подогнал бы высоту слайдера под вёрстку, которой на экране нет. Плюс три
+// холостых запроса (у не-админа один — заведомый 403) и вспышка чужого экрана.
+const leavingToSlider = computed(() => useSliderRedirect().target.value !== null)
+
 onMounted(async () => {
+  if (leavingToSlider.value) return
   // ⚠ Порядок важен: `refresh()` авторизуется фрейм-токеном, а он доступен только ПОСЛЕ `init()`.
   // Раньше статус запрашивался первым и всегда упирался в «нет токена» — баг маскировался
   // демо-моком, а с его удалением (#415) полоса статуса навсегда показывала бы «не запускалась».
@@ -603,10 +614,12 @@ onMounted(async () => {
 })
 </script>
 
-<!-- Страница осмысленна только внутри портала: снаружи нет фрейм-токена, а значит ни настроек,
+<!-- Пока фрейм уезжает на экран слайдера (`leavingToSlider`), не рисуем вообще ничего: этот
+     экран никто не открывал, портал лишь переоткрыл по нему приложение.
+     Страница осмысленна только внутри портала: снаружи нет фрейм-токена, а значит ни настроек,
      ни статуса, ни записи в CRM (#414). `?preview=1` — обход для разработки и скриншотов. -->
 <template>
-  <InPortalGate>
+  <InPortalGate v-if="!leavingToSlider">
     <B24DashboardPanel
       id="home"
       :b24ui="{ body: 'p-4 sm:pt-0 scrollbar-transparent flex flex-col gap-4' }"
