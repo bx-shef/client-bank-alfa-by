@@ -20,7 +20,7 @@ const MAX_CONFIG_FIELDS = 200
 describe('defaults', () => {
   it('default chat = no target (off), credits only, empty exclusions', () => {
     expect(defaultChatSettings()).toEqual({
-      dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] }
+      dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [], excludeCounterpartyAccounts: [] }
     })
     expect(defaultPortalSettings()).toEqual({
       chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false
@@ -53,7 +53,7 @@ describe('parsePortalSettings — defensive', () => {
     const s = {
       chat: {
         dialogId: 'chat2941',
-        rules: { directions: ['credit', 'debit'] as OperationDirection[], excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'] }
+        rules: { directions: ['credit', 'debit'] as OperationDirection[], excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'], excludeCounterpartyAccounts: ['BY-TAX'] }
       },
       errorChat: { dialogId: 'chat77' },
       recognition: {
@@ -70,7 +70,7 @@ describe('parsePortalSettings — defensive', () => {
   it('missing fields fill from defaults', () => {
     expect(parsePortalSettings('{}')).toEqual(defaultPortalSettings())
     expect(parsePortalSettings('{"chat":{"dialogId":"chat7"}}')).toEqual({
-      chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [] } },
+      chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } },
       errorChat: { dialogId: '' },
       recognition: defaultRecognitionSettings(),
       allocation: {},

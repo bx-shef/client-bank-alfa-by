@@ -19,14 +19,17 @@ const { settings } = useChatSettings()
 // вводе, поэтому посев из настроек возвращает ровно тот же текст.
 const accountsText = ref('')
 const patternsText = ref('')
+const counterpartyText = ref('')
 function seed() {
   accountsText.value = (settings.chat.rules.excludeAccounts ?? []).join('\n')
   patternsText.value = (settings.chat.rules.excludePurposePatterns ?? []).join('\n')
+  counterpartyText.value = (settings.chat.rules.excludeCounterpartyAccounts ?? []).join('\n')
 }
 onMounted(seed)
 onActivated(seed)
 watch(accountsText, v => (settings.chat.rules.excludeAccounts = parseRuleLines(v)))
 watch(patternsText, v => (settings.chat.rules.excludePurposePatterns = parseRuleLines(v)))
+watch(counterpartyText, v => (settings.chat.rules.excludeCounterpartyAccounts = parseRuleLines(v)))
 </script>
 
 <template>
@@ -47,6 +50,19 @@ watch(patternsText, v => (settings.chat.rules.excludePurposePatterns = parseRule
         placeholder="BY00..."
         class="w-full font-mono text-xs"
         data-testid="exclude-accounts"
+      />
+    </B24FormField>
+    <B24FormField
+      label="Не загружать по счетам контрагентов"
+      description="По одному счёту плательщика в строке. Для платежей, которым не нужна компания в CRM: налоговая, комиссии банка, эквайринг, связь. Такие операции перестанут заводить дела в «моей компании»."
+    >
+      <B24Textarea
+        v-model="counterpartyText"
+        :rows="3"
+        autoresize
+        placeholder="BY00..."
+        class="w-full font-mono text-xs"
+        data-testid="exclude-counterparty"
       />
     </B24FormField>
     <B24FormField

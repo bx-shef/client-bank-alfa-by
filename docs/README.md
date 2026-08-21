@@ -66,6 +66,7 @@
 |---|---|
 | [`POSITIONING.md`](POSITIONING.md) | позиционирование, ICP, отстройка от конкурентов |
 | [`MARKETPLACE_LISTING.md`](MARKETPLACE_LISTING.md) · [`MARKETPLACE_SUBMISSION_CHECKLIST.md`](MARKETPLACE_SUBMISSION_CHECKLIST.md) | карточка Маркета и чек-лист сабмита |
+| [`LIVE_RUN_CHECKLIST.md`](LIVE_RUN_CHECKLIST.md) | сквозной прогон #501 для владельца: файл → дело в CRM, шаг за шагом |
 | [`MARKET_GRAPHICS.md`](MARKET_GRAPHICS.md) | тексты для **графики** карточки — задание внешнему дизайнеру |
 | [`PRICING.md`](PRICING.md) · [`PARTNERS.md`](PARTNERS.md) | цена внедрения, работа с интеграторами |
 
