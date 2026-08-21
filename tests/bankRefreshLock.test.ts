@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { bankRefreshLockKey, isLockTimeout, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
-import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT, MIN_LOCK_WAIT, SINGLE_FLIGHT_LOCK_WAIT } from '../server/utils/dbLock'
+import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT, MIN_LOCK_WAIT } from '../server/utils/dbLock'
 import { LISTABLE_PROVIDERS } from '../server/utils/bankAccountList'
 
 // Лок, сериализующий двух писателей в одну строку `bank_tokens` (#509).
@@ -167,7 +167,6 @@ function durationMs(raw: string): number {
  *  переписаны сюда: разъехавшись, копия проверяла бы саму себя. */
 const KNOWN_WAITS: Record<string, number | undefined> = {
   BANK_REFRESH_LOCK_WAIT: durationMs(BANK_REFRESH_LOCK_WAIT),
-  SINGLE_FLIGHT_LOCK_WAIT: durationMs(SINGLE_FLIGHT_LOCK_WAIT),
   MIN_LOCK_WAIT: durationMs(MIN_LOCK_WAIT),
   DEFAULT_LOCK_WAIT: durationMs(DEFAULT_LOCK_WAIT)
 }
@@ -199,7 +198,8 @@ describe('HTTP-маршруты не ждут лок по-машинному (#5
       for (const call of src.match(/ensureBankToken\((?:[^()]|\([^()]*\))*\)/g) ?? []) {
         // ⚠ Проверяем ВЕЛИЧИНУ ожидания, а не имя константы. Первая версия требовала дословно
         // `BANK_REFRESH_LOCK_WAIT` — и краснела на верном коде, подставившем другое человеческое
-        // значение (`SINGLE_FLIGHT_LOCK_WAIT`, 1 с — короче нашего, тот же класс «человек ждёт»).
+        // значение (тогда это был `SINGLE_FLIGHT_LOCK_WAIT`, 1 с — короче нашего, тот же класс
+        // «человек ждёт»; сам он с тех пор ушёл вместе с локом провижининга, #538).
         // Красный билд на верном коде учит ослаблять гард, то есть такой гард сам себе враг
         // (замерено мутацией). Но и «параметр есть» проверять мало: явно вписанное машинное
         // умолчание проходит и не меняет ровно ничего — это дефект #539, произнесённый вслух.

@@ -59,6 +59,7 @@ import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
+import { deleteLeasesForPortal } from '../utils/singleFlightLease'
 import { fetchBankStatement } from '../utils/bankFetch'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { readAllocationApplied } from '../utils/allocationApplied'
@@ -542,6 +543,10 @@ export function liveHandlerDeps(): HandlerDeps {
       await deleteMetricsForPortal(dbQuery, memberId)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
+      // ⚠ Аренда single-flight (#538) сама не исчезнет: у неё нет свипа, а рассуждение «просроченную
+      // перезапишет следующий захват» держится на том, что захват когда-нибудь будет. У удалённого
+      // портала его не будет никогда, и строка с его member_id жила бы в базе и бэкапах вечно.
+      await deleteLeasesForPortal(dbQuery, memberId)
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },

@@ -8,9 +8,12 @@
 //    work that acts AS the portal (distribution provision/ledger/recompute, worker), not as the
 //    frame caller.
 
+import { randomUUID } from 'node:crypto'
 import { dbQuery } from '../db/client'
+import { useServerLogger } from './serverLogger'
 import { makeFrameRestCall, makePortalSdkCall, sdkPortalDeps } from './b24Sdk'
 import type { RestCall } from './companyLookup'
+import type { SingleFlightLeaseDeps } from './singleFlightLease'
 
 /** App-OAuth creds. For `frameRestCall` they are only structurally needed (a fresh frame
  *  token never refreshes); for `livePortalSdkCall` they drive the SDK's reactive refresh. */
@@ -40,4 +43,19 @@ export function livePortalSdkCall(memberId: string): Promise<RestCall | null> {
     clientSecret: process.env.B24_CLIENT_SECRET ?? '',
     now: Date.now
   }))
+}
+
+/**
+ * Живая проводка аренды single-flight (#538): короткий запрос через общий пул + случайный токен
+ * снятия. `dbQuery` берёт соединение и отдаёт его сразу, поэтому долгая REST-цепочка операции
+ * идёт БЕЗ занятого слота пула — в отличие от advisory-лока, который держал его всё время.
+ */
+export function liveLeaseDeps(): SingleFlightLeaseDeps {
+  return {
+    query: dbQuery,
+    newToken: () => randomUUID(),
+    // Потеря аренды посреди работы — единственный след того, что исключительность нарушилась;
+    // без него разбор «откуда взялись два смарт-процесса» упирается в пустоту.
+    onLeaseLost: key => useServerLogger('queue').warning(`аренда потеряна посреди работы: ${key}`)
+  }
 }

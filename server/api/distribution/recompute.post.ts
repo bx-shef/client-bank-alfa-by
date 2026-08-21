@@ -9,20 +9,22 @@ import { handleRecomputeRequest, type RecomputeRequestDeps } from '../../utils/r
 import { recomputeAllPayments } from '../../utils/distributionLedgerWrite'
 import { bearerToken } from '../../utils/settingsHandler'
 import { distributionEnabled } from '../../utils/distributionEnabled'
-import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
+import { frameRestCall, liveLeaseDeps, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { SINGLE_FLIGHT_LOCK_WAIT, withAdvisoryLock } from '../../utils/dbLock'
+import { recomputeLeaseKey, SINGLE_FLIGHT_LEASE_SEC, withSingleFlightLease } from '../../utils/singleFlightLease'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { dbQuery } from '../../db/client'
 import { distributionSpRef, paymentSpRef } from '../../../app/config/distributionSp'
+import { useServerLogger } from '../../utils/serverLogger'
 import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
 
 function liveRecomputeDeps(): RecomputeRequestDeps {
   return {
     enabled: distributionEnabled(),
+    log: message => useServerLogger('queue').warning(message),
     memberIdByDomain: async domain => (await getMemberIdByDomain(dbQuery, domain)) ?? '',
     validateFrame: async (domain, accessToken) => {
       const res = await frameRestCall(domain, accessToken, 'profile', {})
@@ -36,15 +38,23 @@ function liveRecomputeDeps(): RecomputeRequestDeps {
       const paymentRef = paymentSpRef(cf)
       const distRef = distributionSpRef(cf)
       if (!paymentRef || !distRef) return null // SPs not provisioned
-      // Single-flight per portal: serialize concurrent recomputes (and vs the crm-sync/deletion writers
-      // touching the same «осталось» fields) — same advisory lock family as provisioning.
-      // ⚠ Short wait, same reason as provisioning — more so, in fact: this holder walks every payment
-      // of the portal at 2 REST calls each (up to `MAX_LEDGER_PAYMENTS`), so it runs for minutes on a
-      // busy portal, not seconds. Outwaiting it is pointless, and a waiter occupies a pooled
-      // connection throughout. A second recompute has no work — the first covers the same elements.
-      return withAdvisoryLock(`distribution-recompute:${memberId}`, () =>
-        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)),
-      { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
+      // Single-flight per portal: сериализует пересчёты между собой.
+      //
+      // ⚠ И ТОЛЬКО их. Здесь годами стояло «and vs the crm-sync/deletion writers touching the same
+      // «осталось» fields» — это неправда: ключ `distribution-recompute:` не берёт ни один воркер,
+      // и пересчёт с crm-sync пишут одно и то же поле конкурентно, как и раньше. Обещание
+      // взаимного исключения, которого нет, опаснее его отсутствия: на него ссылаются, объясняя,
+      // почему где-то ещё защиты не нужно.
+      //
+      // ⚠ Это АРЕНДА, а не advisory-лок (#538), и здесь причина острее, чем у провижининга: этот
+      // держатель обходит КАЖДЫЙ платёж портала по два REST-вызова (до `MAX_LEDGER_PAYMENTS`), то
+      // есть работает минутами — и всё это время advisory-лок держал соединение из общего пула
+      // (10), не делая с базой ничего. Аренда занимает соединение дважды по одному запросу.
+      //
+      // ⚠ Срок аренды поэтому втрое длиннее провижининга, а ждать её не пытаемся: второму
+      // вызывающему нечего делать — первый проходит те же самые элементы.
+      return withSingleFlightLease(liveLeaseDeps(), recomputeLeaseKey(memberId), SINGLE_FLIGHT_LEASE_SEC, () =>
+        withSpan('ledger-recompute', { 'portal.hash': portalHash(memberId) }, () => recomputeAllPayments(paymentRef, distRef, call)))
     }
   }
 }
