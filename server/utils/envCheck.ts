@@ -9,6 +9,7 @@
 //     from ONAPPINSTALL never matches it → the verdict is 403 → install rejected.
 
 import { resolveOpLogMode } from '../../app/utils/opLogPolicy'
+import { isPriorRequestTypInvalid } from './priorJwt'
 import { Buffer } from 'node:buffer'
 import { resolveTelegramConfig, telegramConfigAttempted } from './telegramAlert'
 import { normalizeAuthorizeBase, normalizeBankApiBase, sameOrigin } from '../../app/utils/bankGatewayUrl'
@@ -198,6 +199,12 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
     if (missing.length > 0) {
       warnings.push(`PRIOR_OAUTH_AUTH_METHOD=private_key_jwt, но нет ${missing.join('/')} — подпись client_assertion невозможна: подключение Приора вернёт 502, обновление токена будет падать по каждому счёту.`)
     }
+  }
+  // #449. The value was rejected and replaced by the default — the connect still WORKS, but the
+  // hardening the operator believes they switched on is absent. Silence here is precisely the case
+  // where a defence counts as enabled while being off, so we say it at boot.
+  if (isPriorRequestTypInvalid(env)) {
+    warnings.push(`PRIOR_OAUTH_REQUEST_TYP="${(env.PRIOR_OAUTH_REQUEST_TYP ?? '').trim()}" не похож на media-type — значение ПРОИГНОРИРОВАНО, authorize-JWT подписывается прежним typ="JWT". Развода с client_assertion (#449) НЕТ. Ожидается токен вида oauth-authz-req+jwt.`)
   }
 
   // --- Crypto-gateway addressing (#455). `PRIOR_OAUTH_API_BASE` and `PRIOR_OAUTH_TOKEN_URL` are
