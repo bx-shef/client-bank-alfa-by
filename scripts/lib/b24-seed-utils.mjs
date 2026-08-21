@@ -28,6 +28,24 @@ export function extractPayments(result) {
 }
 
 /**
+ * `crm.item.payment.list` params for ONE deal — a mirror of `paymentListParams` in
+ * `server/utils/paymentLookup.ts`, which cannot be imported here: that one is `.ts`,
+ * and this module is loaded by plain node without strip-types.
+ *
+ * ⚠ The `Number(...)` is load-bearing, not cosmetic. The method wants a NUMERIC
+ * `entityId`, but the transport takes any object, so a string would go out silently —
+ * and inside `.mjs` nothing whatsoever would notice: `.mjs` bodies are checked neither
+ * by typecheck (`checkJs` is off) nor by ESLint (not type-aware here). That is exactly
+ * how the same slip shipped in `.ts` (#542). Not harmless in a seed script either:
+ * finding no payments, it then fails to delete the deal.
+ * @param {unknown} dealId
+ * @returns {{entityId: number, entityTypeId: number}}
+ */
+export function paymentListParams(dealId) {
+  return { entityId: Number(dealId), entityTypeId: 2 }
+}
+
+/**
  * Pick the first free CRM entityTypeId for a new smart process. Bitrix reserves
  * even ids from 1030 up for custom dynamic types, so we step by 2 from `start`
  * and skip anything already taken.
