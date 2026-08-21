@@ -59,31 +59,23 @@ export interface Statement {
 // upload) is fetched differently but produces the SAME output — a StatementItem[].
 // So the app is provider-agnostic. The interface is:
 //
-//   вход  (StatementFetchQuery):  банк + счёт + диапазон дат
-//   процесс:                      получить выписку у провайдера и разобрать её
+//   вход:   банк + счёт + диапазон дат (у каждого провайдера свой запрос — см. `bankFetch.ts`
+//           для Альфы и `priorFetch.ts` для Приора)
+//   процесс: получить выписку у провайдера и разобрать её
 //   выход (StatementItem[]): по операции — приход/расход, счёт+имя+УНП контрагента,
 //                            сумма, валюта, дата операции, назначение платежа, docId (дедуп)
+//
+// ⚠ Единый здесь ВЫХОД, а не вход, и это стоит помнить (#532). Общий тип запроса
+// (`StatementFetchQuery`) и реестр провайдеров (`app/config/banks.ts`, `BankProvider`) когда-то
+// были объявлены, но их не реализовал НИ ОДИН провайдер: и Альфа, и Приор ходят в банк своим
+// кодом со своими параметрами. Удалены — объявленная абстракция, которой никто не следует, хуже
+// её отсутствия: она обещает точку расширения, и следующий банк «зарегистрировали» бы в ней, не
+// получив ничего. Настоящие точки расширения — `POLLABLE_PROVIDERS` (`server/queue/cron.ts`),
+// очередь провайдера (`fetchQueueFor`) и его нормализатор.
 //
 // A test feeds a provider's raw response into the provider's `StatementNormalizer`
 // and asserts the resulting StatementItem[] — the exact data the app consumes.
 // The fetch (I/O, per-provider) is verified separately.
-
-/**
- * Per-account statement request: which provider, which account, which date range.
- * Credentials/tokens are resolved separately (config + token store), not here.
- * The batch, BankProvider-level query over several accounts is a distinct type —
- * `StatementQuery` in `app/config/banks.ts` (consumed by `BankProvider.getStatement`).
- */
-export interface StatementFetchQuery {
-  providerId: BankProviderId
-  /** Our account number (or the provider's account id). */
-  account: string
-  /** Inclusive date range, ISO `YYYY-MM-DD`. */
-  dateFrom: string
-  dateTo: string
-  /** Opaque pagination cursor from a previous `Statement.nextCursor`. */
-  cursor?: string
-}
 
 /** Context a normalizer needs beyond the raw response: our own account and its
  * currency, for providers whose rows don't repeat them (e.g. Prior). Alfa rows

@@ -58,7 +58,7 @@
 Приорбанк (и ручная выгрузка) отдаёт выписку в **текстовом формате client-bank**
 (`***** ^Type=…`, родственник `1CClientBankExchange`), кодировка **windows-1251 (CP1251)**.
 Это *формат*, а не банковский клиент, поэтому он обслуживает оба провайдера —
-`prior-by` и `manual` (см. `app/config/banks.ts`).
+`prior-by` и `manual` (идентификаторы провайдеров — `BankProviderId` в `app/types/statement.ts`).
 
 - **Парсер (формат):** `app/utils/clientBankText.ts` → `parseClientBankText(text)` возвращает
   секции `GENERAL` / `IN_PARAM` / `OUT_PARAM` (`header` / `items` / `footer` / `unrouted`).
@@ -1173,7 +1173,8 @@ assertion, и тогда заголовки совпадут снова — юн
 
 ## Связь с архитектурой
 
-`prior-by` и `manual` — провайдеры из абстракции `BankProvider` (`app/config/banks.ts`).
+`prior-by` и `manual` — значения `BankProviderId` (`app/types/statement.ts`; общей абстракции
+`BankProvider` больше нет — её не реализовал ни один провайдер, #532).
 Единый контракт разбора — `StatementNormalizer` (raw → `StatementItem[]`, см.
 [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) «Единый интерфейс выписки»):
 

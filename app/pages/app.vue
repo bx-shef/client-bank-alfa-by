@@ -22,9 +22,9 @@ import {
 
 const log = useLogger('app')
 
-// In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
+// In-portal page: `portal` layout wraps it in <B24App> so b24ui theming/colorMode
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
-definePageMeta({ layout: 'clear' })
+definePageMeta({ layout: 'portal' })
 
 // Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
 // без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а

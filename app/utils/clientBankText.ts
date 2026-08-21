@@ -6,7 +6,7 @@ import type { ClientBankParsed, ClientBankSection } from '~/types/clientBankText
 // Parser for the legacy Belarusian client-bank text export (`***** ^Type=`,
 // kin to `1CClientBankExchange`). The SAME text format is produced by Приорбанк
 // exports and by hand-uploaded statements, so it backs BOTH the `prior-by` and
-// `manual` providers (see app/config/banks.ts) — it is a *format* parser, not a
+// `manual` providers — it is a *format* parser, not a
 // bank client. Ported almost verbatim from the sibling `aidapioneer-tech/client-bank`
 // app (`composables/useParser.ts`) so its behavior stays auditable against the
 // live importer. Normalization to `StatementItem[]` now lives in the sibling

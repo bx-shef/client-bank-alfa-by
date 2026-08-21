@@ -3,7 +3,7 @@
 // frontend and the future backend, and unit-tested against the anonymized
 // fixtures (tests/clientBankStatement.test.ts). This is the `manual` (hand-
 // uploaded file) provider, and the file-based path for `prior-by` — the SAME
-// text format backs both (see app/config/banks.ts and issue #19).
+// text format backs both (issue #19).
 //
 // Pipeline: decode CP1251 → `parseClientBankText` (format parser) → `normalizeClientBank`
 // (this file). The parse+decode step is the "fetch" for a manual upload; this

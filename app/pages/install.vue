@@ -12,7 +12,7 @@ import { useLogger } from '~/utils/logger'
 
 const log = useLogger('install')
 
-definePageMeta({ layout: 'clear' })
+definePageMeta({ layout: 'portal' })
 
 const b24Instance = useB24()
 const isUseB24 = computed<boolean>(() => b24Instance.isInit())

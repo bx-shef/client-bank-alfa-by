@@ -8,9 +8,9 @@ import { useLogger } from '~/utils/logger'
 
 const log = useLogger('import')
 
-// Manual statement upload page (P4). In-portal (`clear` layout → b24ui theming);
+// Manual statement upload page (P4). In-portal (`portal` layout → b24ui theming);
 // also usable standalone (parsing is client-side, no portal needed for preview).
-definePageMeta({ layout: 'clear' })
+definePageMeta({ layout: 'portal' })
 
 // Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
 // без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а

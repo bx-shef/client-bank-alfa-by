@@ -24,9 +24,6 @@ export const PUBLIC_ROUTES = ['/', '/partners'] as const
  */
 export const SERVICE_ROUTES = ['/app', '/install', '/import', '/settings', '/queues', '/login'] as const
 
-export type PublicRoute = typeof PUBLIC_ROUTES[number]
-export type ServiceRoute = typeof SERVICE_ROUTES[number]
-
 /**
  * Что перечислить в `nitro.prerender.routes`.
  *
