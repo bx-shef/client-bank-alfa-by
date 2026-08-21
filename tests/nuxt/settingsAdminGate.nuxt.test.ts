@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { flushPromises } from '@vue/test-utils'
+import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import SettingsForm from '~/components/SettingsForm.vue'
 
@@ -37,11 +37,26 @@ describe('SettingsForm admin gate', () => {
     expect(wrapper.find('[data-testid="error-chat"]').exists()).toBe(false)
   })
 
+  // ⚠ После разделения настроек на разделы (#530) «форма показана» доказывается полосой разделов,
+  // а не полем чата: поля живут в СВОИХ разделах, и по умолчанию открыт банк. Поэтому проверяем и
+  // полосу (форма отрисовалась вообще), и поля после перехода в раздел чатов — иначе гейт
+  // проходил бы при пустом разделе.
+  async function openChats(wrapper: VueWrapper) {
+    const trigger = wrapper.find('[data-testid="settings-nav"]')
+      .findAll('button').find(b => b.text().trim() === 'Уведомления в чат')
+    expect(trigger, 'раздела «Уведомления в чат» нет в навигации').toBeTruthy()
+    await trigger!.trigger('click')
+    await flushPromises()
+    await nextTick()
+  }
+
   it('in portal + admin → form shown, no warning', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-nav"]').exists()).toBe(true)
+    await openChats(wrapper)
     expect(wrapper.find('[data-testid="notify-chat"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="error-chat"]').exists()).toBe(true)
   })
@@ -51,6 +66,8 @@ describe('SettingsForm admin gate', () => {
     mockState.isAdmin = false
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-nav"]').exists()).toBe(true)
+    await openChats(wrapper)
     expect(wrapper.find('[data-testid="notify-chat"]').exists()).toBe(true)
   })
 })

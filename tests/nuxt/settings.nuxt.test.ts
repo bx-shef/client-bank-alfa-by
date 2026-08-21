@@ -18,6 +18,19 @@ async function mountReady() {
   return wrapper
 }
 
+/**
+ * Форма, открытая на разделе «Уведомления в чат».
+ *
+ * ⚠ Предпросмотр «что попадёт в чат» показывается ТОЛЬКО в разделах про чат (#530): рядом с картой
+ * распознавания он отвечал бы на вопрос, которого на экране не задавали. Поэтому тесты про
+ * предпросмотр обязаны сперва открыть тот раздел, в котором он вообще есть.
+ */
+async function mountOnChats() {
+  const wrapper = await mountReady()
+  await openSection(wrapper, 'Уведомления в чат')
+  return wrapper
+}
+
 // useChatSettings() is a module-level singleton — reset it between tests so order
 // can't leak state. The preview reacts to the same singleton, so we drive the
 // filter through it rather than through b24ui component internals. Outside the
@@ -36,12 +49,20 @@ function previewRows(wrapper: VueWrapper) {
   return wrapper.findAll('[data-testid="preview-list"] li')
 }
 
-// Settings are grouped into a B24Accordion (starter #219 UX): only «Уведомления в чат»
-// (index 0) is open on mount; reka-ui unmounts collapsed panels, so a test touching a
-// field in another section must expand it first by clicking its header trigger.
+// Настройки разбиты на РАЗДЕЛЫ (#530): на экране только активный, остальные размонтированы.
+// Поэтому тест, трогающий поле другого раздела, сперва переключается на него — так же, как это
+// делает человек: кликом по пункту навигации.
+//
+// ⚠ Клик, а не установка внутреннего состояния: подмена состояния проверяла бы мою модель, а не
+// то, что пункт вообще кликабелен. Полоса разделов — единственный способ добраться до половины
+// настроек, и её неработающий пункт означал бы недостижимый экран.
 async function openSection(wrapper: VueWrapper, label: string) {
-  const trigger = wrapper.findAll('button').find(b => b.text().trim() === label)
-  if (trigger) await trigger.trigger('click')
+  const nav = wrapper.find('[data-testid="settings-nav"]')
+  expect(nav.exists(), 'полосы разделов нет — до настроек не добраться').toBe(true)
+  const trigger = nav.findAll('button').find(b => b.text().trim() === label)
+  expect(trigger, `раздела «${label}» нет в навигации`).toBeTruthy()
+  await trigger!.trigger('click')
+  await flushPromises()
   await nextTick()
 }
 
@@ -52,37 +73,42 @@ describe('форма настроек', () => {
     // ⚠ Заголовка «Настройки» здесь БОЛЬШЕ НЕТ, и это правильно: экран открывается слайдером
     // портала, заголовок несёт его шапка (`app/pages/settings.vue`). Форма, дублирующая его,
     // давала два одинаковых заголовка подряд. Проверять его здесь — держаться за прежнюю оболочку.
-    // Accordion section labels are always rendered (headers), even while collapsed.
-    expect(text).toContain('Уведомления в чат')
-    expect(text).toContain('Исключения')
-    expect(text).toContain('Авто-проведение оплат')
-    // The error-chat field lives in the open first section.
-    expect(text).toContain('Чат ошибок импорта')
+    //
+    // ⚠ Названия ВСЕХ разделов видны всегда — они в полосе навигации. В этом и была суть #530:
+    // раньше про существование настройки узнавали, только раскрыв её секцию.
+    for (const label of ['Подключение банка', 'Уведомления в чат', 'Исключения', 'Авто-проведение']) {
+      expect(text, `раздела «${label}» не видно`).toContain(label)
+    }
+    // А поля — только активного раздела. По умолчанию открыт банк (см. `settingsSections.ts`).
+    expect(text).not.toContain('Чат ошибок импорта')
+
+    await openSection(wrapper, 'Уведомления в чат')
+    expect(wrapper.text()).toContain('Чат ошибок импорта')
     expect(previewRows(wrapper)).toHaveLength(MOCK_STATEMENT.items.length)
   })
 
   it('by default announces credits and hides debits', async () => {
-    const wrapper = await mountReady()
+    const wrapper = await mountOnChats()
     const rows = previewRows(wrapper)
     expect(rows[creditIdx]!.text()).toContain('в чат')
     expect(rows[debitIdx]!.text()).toContain('скрыто')
   })
 
   it('summary counts how many operations reach the chat', async () => {
-    const wrapper = await mountReady()
+    const wrapper = await mountOnChats()
     expect(wrapper.find('[data-testid="preview-summary"]').text())
       .toContain(`В чат попадёт ${creditCount} из ${MOCK_STATEMENT.items.length}`)
   })
 
   it('disabling "Приходы" hides the credit in the preview', async () => {
-    const wrapper = await mountReady()
+    const wrapper = await mountOnChats()
     useChatSettings().settings.chat.rules.directions = ['debit']
     await nextTick()
     expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
   })
 
   it('excluding a purpose pattern marks the matching op as NOT imported (§2 A2)', async () => {
-    const wrapper = await mountReady()
+    const wrapper = await mountOnChats()
     useChatSettings().settings.chat.rules.excludePurposePatterns = [MOCK_STATEMENT.items[creditIdx]!.purpose]
     await nextTick()
     // Excluded = dropped from import entirely — a distinct badge, not the chat «скрыто».
@@ -91,7 +117,7 @@ describe('форма настроек', () => {
   })
 
   it('warns when nothing reaches the chat, but still shows the operation list', async () => {
-    const wrapper = await mountReady()
+    const wrapper = await mountOnChats()
     useChatSettings().settings.chat.rules.directions = []
     await nextTick()
     // Direction-silenced ops are still IMPORTED — the list stays visible (only the chat warning shows).
@@ -103,7 +129,7 @@ describe('форма настроек', () => {
   // Drive the real UI controls (not just the singleton) so the component wiring
   // — directionModel get/set on B24Switch, the textarea→settings watch — is covered.
   it('toggling the "Приходы" switch off silences the credit in chat (UI wiring)', async () => {
-    const wrapper = await mountReady()
+    const wrapper = await mountOnChats()
     const sw = wrapper.find('[data-testid="notify-credit"]')
     expect(sw.exists()).toBe(true)
     await sw.trigger('click')
@@ -127,8 +153,8 @@ describe('форма настроек', () => {
   // and only shows the "will mutate CRM" warning when ON (fail-safe default off).
   it('renders the auto-distribution section, off by default with no warning', async () => {
     const wrapper = await mountReady()
-    expect(wrapper.text()).toContain('Авто-проведение оплат')
-    await openSection(wrapper, 'Авто-проведение оплат')
+    expect(wrapper.text()).toContain('Авто-проведение')
+    await openSection(wrapper, 'Авто-проведение')
     expect(wrapper.find('[data-testid="auto-distribute"]').exists()).toBe(true)
     // The absent warning (driven by v-if="settings.autoDistribute") is what pins "off by default".
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(false)
@@ -136,7 +162,7 @@ describe('форма настроек', () => {
 
   it('enabling auto-distribution reveals the CRM-mutation warning', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
@@ -145,7 +171,7 @@ describe('форма настроек', () => {
 
   it('disabling auto-distribution again removes the warning (v-if teardown, not v-show)', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
@@ -159,13 +185,13 @@ describe('форма настроек', () => {
     // overwrite it, so the form must paint the warning from the loaded value on first render.
     useChatSettings().settings.autoDistribute = true
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     expect(wrapper.find('[data-testid="auto-distribute-warning"]').exists()).toBe(true)
   })
 
   it('toggling the auto-distribution switch flips settings.autoDistribute (UI wiring)', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     expect(useChatSettings().settings.autoDistribute).toBe(false)
     await wrapper.find('[data-testid="auto-distribute"]').trigger('click')
     await nextTick()
@@ -178,7 +204,7 @@ describe('форма настроек', () => {
     useChatSettings().settings.autoDistribute = true
     useChatSettings().settings.allocation.invoicePaidStageId = 'DT31_11:P'
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
     expect(input.exists()).toBe(true)
     expect((input.element as HTMLInputElement).value).toBe('DT31_11:P')
@@ -186,7 +212,7 @@ describe('форма настроек', () => {
 
   it('paid-invoice-stage input appears only when auto-distribution is on', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     expect(wrapper.find('[data-testid="invoice-paid-stage"]').exists()).toBe(false) // hidden while OFF
     useChatSettings().settings.autoDistribute = true
     await nextTick()
@@ -195,7 +221,7 @@ describe('форма настроек', () => {
 
   it('typing a paid-invoice stage sets allocation.invoicePaidStageId; clearing removes it (UI wiring)', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     const input = wrapper.find('input[data-testid="invoice-paid-stage"]')
@@ -210,7 +236,7 @@ describe('форма настроек', () => {
 
   it('trigger-code field appears only when auto-distribution is on and shows the canonical CODE (#79)', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     expect(wrapper.find('[data-testid="trigger-code"]').exists()).toBe(false) // hidden while OFF
     useChatSettings().settings.autoDistribute = true
     await nextTick()
@@ -221,7 +247,7 @@ describe('форма настроек', () => {
 
   it('typing a trigger code sets allocation.triggerCode; clearing removes it (#79 UI wiring)', async () => {
     const wrapper = await mountReady()
-    await openSection(wrapper, 'Авто-проведение оплат')
+    await openSection(wrapper, 'Авто-проведение')
     useChatSettings().settings.autoDistribute = true
     await nextTick()
     const input = wrapper.find('input[data-testid="trigger-code"]')

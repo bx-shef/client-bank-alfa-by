@@ -1,6 +1,6 @@
 # Указатель документации
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-08-21
 
 Что где лежит и когда это читать. Документов много, и без такой таблицы половина из них
 недостижима: раньше на `APP_RATING.md`, `DEPENDABOT.md`, `REPORTING_KIT.md` и
@@ -28,6 +28,7 @@
 | [`BACKEND_MAP.md`](BACKEND_MAP.md) | реестр серверных модулей разнесения + живые находки по полям REST |
 | [`ALFA_API.md`](ALFA_API.md) · [`PRIOR_API.md`](PRIOR_API.md) | API банков, OAuth, живые находки |
 | [`AUTH.md`](AUTH.md) | вход оператора в служебную зону (`/queues`) |
+| [`PERMISSIONS.md`](PERMISSIONS.md) | права сотрудников ВНУТРИ портала клиента: что есть, чего нет, чем закрыть (#531) |
 | [`APP_RATING.md`](APP_RATING.md) | попап «оцените приложение» в Маркете |
 | [`FEEDBACK.md`](FEEDBACK.md) · [`FEEDBACK_TRIAGE_AGENT.md`](FEEDBACK_TRIAGE_AGENT.md) | сбор отзывов и их разбор в бэклог |
 

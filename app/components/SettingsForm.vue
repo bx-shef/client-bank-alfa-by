@@ -1,22 +1,28 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { MOCK_STATEMENT } from '~/utils/mockStatement'
-import type { AccordionItem } from '@bitrix24/b24ui-nuxt'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
-import { parseRuleLines } from '~/utils/statement'
-import { B24_PAYMENT_TRIGGER } from '~/config/b24'
+import {
+  DEFAULT_SETTINGS_SECTION,
+  resolveSettingsSection,
+  SETTINGS_SECTIONS,
+  showsChatPreview,
+  type SettingsSectionId
+} from '~/utils/settingsSections'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 import SignIcon from '@bitrix24/b24icons-vue/main/SignIcon'
-import type { OperationDirection } from '~/types/statement'
 
-// Форма настроек приложения + живой предпросмотр.
+// Форма настроек приложения: навигация по разделам + активный раздел + общие Save/Cancel.
+//
+// ⚠ Раньше это был один аккордеон, и он ПРЯТАЛ настройки: что можно настроить, было видно только
+// по заголовкам секций, а до кнопки сохранения на длинной форме надо было прокрутить экран
+// целиком (#530). Тем же путём прошёл соседний `ai-price-import`.
 const emit = defineEmits<{ close: [] }>()
 
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
-const { settings, enabled, saving, loaded, error, notifyOption, errorOption, chatFetcher } = cs
+const { settings, enabled, saving, loaded, error } = cs
 // Исход сохранения — тостом, а не строкой в подвале формы (см. `saveAndClose`).
 const toast = useToast()
 
@@ -25,15 +31,53 @@ const toast = useToast()
 const adminChecked = ref(false)
 const blocked = computed(() => inPortal.value && !isAdmin.value)
 
-// Exclusion textareas edit line-lists; mirror to settings via parseRuleLines.
-const accountsText = ref('')
-const patternsText = ref('')
-function syncTextareas() {
-  accountsText.value = (settings.chat.rules.excludeAccounts ?? []).join('\n')
-  patternsText.value = (settings.chat.rules.excludePurposePatterns ?? []).join('\n')
-}
-watch(accountsText, v => (settings.chat.rules.excludeAccounts = parseRuleLines(v)))
-watch(patternsText, v => (settings.chat.rules.excludePurposePatterns = parseRuleLines(v)))
+// Активный раздел.
+//
+// ⚠ Адрес читаем, но НЕ пишем. Читать полезно: экран готовности и письмо могут привести сразу к
+// нужному разделу. А запись сюда означала бы навигацию на ПРЕРЕНДЕРЕННОЙ странице внутри фрейма
+// слайдера — ровно там, где Nuxt восстанавливает отложенный адрес в обход гардов (#555). Платить
+// этим риском за кнопку «назад», которой в слайдере портала нет, незачем.
+const route = useRoute()
+const section = ref<SettingsSectionId>(DEFAULT_SETTINGS_SECTION)
+
+// Пункты навигации: активный подсвечен, клик переключает раздел.
+//
+// ⚠ Подсветку даёт `active`, а НЕ `v-model`: `modelValue` у горизонтального меню означает «какое
+// подменю раскрыто» и на плоском списке без `children` не делает ничего. `value` тут не про
+// подсветку (первая редакция комментария утверждала обратное) — это идентичность пункта для
+// reka-ui, и тип прямо просит не оставлять её индексной.
+const navItems = computed(() =>
+  SETTINGS_SECTIONS.map(s => ({
+    label: s.label,
+    value: s.id,
+    active: section.value === s.id,
+    // ⚠ `preventDefault` здесь НЕ нужен и раньше стоял зря: в `select` приходит не клик, а
+    // синтетическое событие reka, и отмена его подавляет лишь закрытие раскрытого подменю —
+    // которого у плоских пунктов нет. Читалось же это как «гасим переход по ссылке», хотя
+    // переходить некуда: без `to` пункт рендерится нативной кнопкой.
+    onSelect: () => {
+      section.value = s.id
+    }
+  }))
+)
+const currentSection = computed(() => SETTINGS_SECTIONS.find(s => s.id === section.value))
+
+/**
+ * Подкрутить активный пункт в зону видимости.
+ *
+ * ⚠ Нужно ровно на узком экране и ровно для прихода ИЗВНЕ: полоса шириной 1038 px в 375 показывает
+ * два пункта из шести, поэтому ссылка вида `?section=recognition` (а её даёт и экран готовности, и
+ * письмо) открывала правильный раздел при полосе, где не подсвечено НИЧЕГО — то есть выглядела как
+ * «ничего не выбрано». Клик по пункту в подкрутке не нуждается, но и не страдает от неё.
+ *
+ * ⚠ `block: 'nearest'` обязателен: без него браузер вертикально прокручивает страницу к полосе,
+ * а нам нужна только горизонтальная доводка.
+ */
+const navEl = ref<HTMLElement | null>(null)
+watch(section, async () => {
+  await nextTick()
+  navEl.value?.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+})
 
 onMounted(async () => {
   // Await init AND a tick: useB24 flips its ready flag on nextTick after the frame
@@ -43,9 +87,9 @@ onMounted(async () => {
   await nextTick()
   checkAdmin()
   adminChecked.value = true
+  section.value = resolveSettingsSection(route.query.section)
   if (blocked.value) return // non-admin: don't load or expose the form
   if (!loaded.value) await cs.load()
-  syncTextareas()
 })
 
 // Explicit Save (starter Save/Cancel pattern — no autosave). cs.save() persists AND
@@ -69,99 +113,21 @@ async function saveAndClose(): Promise<void> {
   emit('close')
 }
 
-// Cancel = discard: re-fetch the server copy and re-seed the textarea editors, then close. The
-// re-fetch matters because every mount shares this SAME JS instance (the singleton settings), so
-// without a reload the unsaved edits would still be in `settings` and reappear the next time the
-// screen is opened. Re-seeding the textareas is needed
-// because they're seeded once on mount — a bare load() would leave them showing pre-cancel
-// edits that then re-sync back into settings on the next keystroke.
+// Cancel = discard: re-fetch the server copy, then close. The re-fetch matters because every
+// mount shares this SAME JS instance (the singleton settings), so without a reload the unsaved
+// edits would still be in `settings` and reappear the next time the screen is opened.
+//
+// ⚠ Поля-списки («Исключения») пересеваются САМИ — и на монтировании, и на возвращении из кэша
+// (`onActivated`). Именно из кэша, а не с нуля: под `KeepAlive` уход на соседний раздел ничего не
+// размонтирует, и рассуждение «вернётся — посеется заново» было бы неверным (замерено). Без
+// пересева отменённый текст оставался бы в поле и возвращался в настройки первым же нажатием
+// клавиши.
 async function cancel(): Promise<void> {
   if (enabled.value) {
     await cs.load()
-    syncTextareas()
   }
   emit('close')
 }
-
-// Accordion sections (starter B24Accordion pattern) — group the settings into collapsibles.
-// v-model keys by item INDEX (b24ui default). Open «Подключение банка» AND «Уведомления в чат»:
-// the first is what a fresh install must do (and used to be unfindable), the second is the
-// day-to-day one — leaving either collapsed is how the bank connection got lost in the first place.
-const openSections = ref(['0', '1'])
-const sections = computed(() => [
-  // Bank connection FIRST: the whole online import depends on it, and it used to live in a
-  // corner nobody opened — the admin simply could not find it (reported from a live run).
-  // A setting belongs where settings are opened.
-  { label: 'Подключение банка', slot: 'bank' },
-  { label: 'Уведомления в чат', slot: 'chats' },
-  { label: 'Смарт-процессы и распределение', slot: 'distribution' },
-  { label: 'Исключения', slot: 'exclusions' },
-  { label: 'Авто-проведение оплат', slot: 'distribute' },
-  { label: 'Карта распознавания', slot: 'recognition' }
-] satisfies AccordionItem[])
-
-// Direction toggles as switches (get/set over the notify rules array).
-function directionModel(d: OperationDirection) {
-  return computed<boolean>({
-    get: () => (settings.chat.rules.directions ?? []).includes(d),
-    set: (on) => {
-      const set = new Set(settings.chat.rules.directions ?? [])
-      if (on) set.add(d)
-      else set.delete(d)
-      settings.chat.rules.directions = [...set]
-    }
-  })
-}
-const notifyCredit = directionModel('credit')
-const notifyDebit = directionModel('debit')
-
-// Paid-invoice stage (§2): a plain string model over the optional nested field. get
-// returns '' when unset; set trims and clears the key on blank so the saved blob stays
-// minimal (matches `cleanAllocation` on the backend — blank ⇒ no stage change).
-const invoicePaidStageModel = computed<string>({
-  get: () => settings.allocation.invoicePaidStageId ?? '',
-  set: (v) => {
-    const s = v.trim()
-    if (s) settings.allocation.invoicePaidStageId = s
-    else delete settings.allocation.invoicePaidStageId
-  }
-})
-
-// Automation-trigger CODE (#79): the app registers a canonical trigger at install
-// (`B24_PAYMENT_TRIGGER`); to arm firing the admin attaches it to an automation rule
-// and puts its CODE here. Same plain-string-over-optional-field pattern as the stage;
-// blank ⇒ key removed ⇒ the worker's `autoDistribute && triggerCode` gate stays off.
-const triggerCodeModel = computed<string>({
-  get: () => settings.allocation.triggerCode ?? '',
-  set: (v) => {
-    const s = v.trim()
-    if (s) settings.allocation.triggerCode = s
-    else delete settings.allocation.triggerCode
-  }
-})
-// Surfaced in the help text so the admin knows exactly what to register/attach.
-const paymentTrigger = B24_PAYMENT_TRIGGER
-
-// Живой предпросмотр: для каждой демо-операции — попадёт ли она в чат И не исключена ли из импорта
-// целиком (PROCESSING §2 A2). Это РАЗНЫЕ исходы: исключённая не попадает в CRM вовсе, а «тихая»
-// попадает, просто без сообщения, — поэтому и подписи разные, а не одно «скрыто».
-//
-// ⚠ Блок был потерян при перестройке вёрстки, и вместе с ним умерли восемь тестов. Это
-// единственное место, где админ ВИДИТ последствия правил до сохранения: без него «Приходы/Расходы»
-// и «Исключения» — три поля, эффект которых узнаёшь на живых платежах.
-const preview = computed(() =>
-  MOCK_STATEMENT.items.map(item => ({
-    item,
-    excluded: isExcludedOperation(item, settings.chat.rules),
-    notify: shouldNotifyChat(item, settings.chat.rules)
-  }))
-)
-const notifyCount = computed(() => preview.value.filter(r => r.notify).length)
-const excludedCount = computed(() => preview.value.filter(r => r.excluded).length)
-const previewSummary = computed(() => {
-  const base = `В чат попадёт ${notifyCount.value} из ${preview.value.length} операций`
-  return excludedCount.value > 0 ? `${base}, ${excludedCount.value} — не импортируется` : base
-})
 </script>
 
 <template>
@@ -219,7 +185,7 @@ const previewSummary = computed(() => {
   <template v-else>
     <B24Form
       :state="settings"
-      class="space-y-6"
+      class="space-y-4"
     >
       <B24Alert
         v-if="!enabled"
@@ -227,238 +193,116 @@ const previewSummary = computed(() => {
         color="air-secondary-accent-2"
         title="Режим предпросмотра."
         description="Работа формы возможна только в Bitrix24."
-        class="mb-2"
       />
 
+      <!-- Полоса разделов. `B24DashboardToolbar` сам прокручивается по горизонтали: на телефоне
+           шесть пунктов в строку не помещаются, а перенос вторым рядом съедал бы пол-экрана. -->
+      <!-- ⚠ Без `-mx-4`: отрицательные поля выносили полосу на 16 px за правый край экрана, и
+           подкрутка активного пункта «до ближайшего края» ставила его ровно под этот вынос — то
+           есть на узком экране активный раздел оставался подрезанным (замерено: правый край на
+           391 при экране 375). Полоса и так во всю ширину: на мобильном у тела панели отступов
+           нет вовсе (`sm:p-4` в теме), а на широком экране рамка в 16 px совпадает с остальным
+           содержимым. -->
+      <B24DashboardToolbar class="sticky top-0 z-10 base-mode bg-default">
+        <template #left>
+          <!-- ⚠ Ref висит на ОБЁРТКЕ, а не на самом меню: `ref` на компоненте даёт его
+               экземпляр, а не узел DOM, и `querySelector` по нему упал бы в рантайме, оставаясь
+               зелёным при проверке типов. -->
+          <div ref="navEl">
+            <B24NavigationMenu
+              :items="navItems"
+              orientation="horizontal"
+              data-testid="settings-nav"
+            />
+          </div>
+        </template>
+      </B24DashboardToolbar>
+
       <div class="flex flex-col lg:flex-row items-start justify-between gap-4">
-        <div
-          class="w-full"
-        >
-          <B24Accordion
-            v-model="openSections"
-            type="multiple"
-            :items="sections"
-          >
-            <!-- Служебные смарт-процессы + журнал распределения. Раньше до них вела одна
-                 невнятная ссылка, и админ их просто не находил; теперь они внутри общей формы
-                 настроек, которую портал открывает слайдером. -->
-            <template #distribution>
-              <ProvisionSpCard />
-              <DistributionTab class="mt-4" />
-            </template>
+        <div class="w-full min-w-0 space-y-3">
+          <div>
+            <!-- h2, а не h3: над формой стоит `h1` навбара страницы. -->
+            <ProseH2
+              class="mb-0"
+              data-testid="section-title"
+            >
+              {{ currentSection?.label }}
+            </ProseH2>
+            <!-- ⚠ `accent="default"`, а не `less`: замерено — `less` на 11 px даёт 3.07:1 в
+                 светлой теме при пороге 4.5 (docs/PAGE_GUIDE.md §9), то есть самым нечитаемым на
+                 экране оказывалось единственное объяснение, что этот раздел делает. -->
+            <ProseP
+              accent="default"
+              small
+              class="mb-0"
+              data-testid="section-hint"
+            >
+              {{ currentSection?.hint }}
+            </ProseP>
+          </div>
 
-            <!-- Уведомления в чат: чат уведомлений + направления + чат ошибок. -->
-            <template #bank>
-              <!-- Online bank connection (Альфа / Приор) + the manual poll trigger. Both are
-                   admin-only and self-gate; outside a portal frame they render an inert notice. -->
-              <BankConnectCard />
-              <PollNowButton class="mt-4" />
-            </template>
-
-            <template #chats>
-              <div class="space-y-4 pt-2">
-                <B24FormField
-                  label="Чат для уведомлений"
-                  description="Куда слать сообщения о новых операциях."
-                >
-                  <AsyncSearchSelect
-                    v-model="settings.chat.dialogId"
-                    :fetcher="chatFetcher"
-                    :selected-option="notifyOption"
-                    clearable
-                    placeholder="Начните вводить название чата"
-                    data-testid="notify-chat"
-                    @update:selected-option="(o:any) => (settings.chat.title = o?.label as string | undefined)"
-                  />
-                </B24FormField>
-
-                <B24Switch
-                  v-model="notifyCredit"
-                  label="Приходы"
-                  description="когда деньги пришли на счёт"
-                  data-testid="notify-credit"
-                />
-                <B24Switch
-                  v-model="notifyDebit"
-                  label="Расходы"
-                  description="списания со счёта"
-                  data-testid="notify-debit"
-                />
-
-                <B24FormField
-                  label="Чат ошибок импорта"
-                  description="Сюда приложение пишет о сбоях обработки — деловым тоном, с пометкой, что рапортует «Импорт выписки из клиент-банка». Отдельно от чата уведомлений."
-                >
-                  <AsyncSearchSelect
-                    v-model="settings.errorChat.dialogId"
-                    :fetcher="chatFetcher"
-                    :selected-option="errorOption"
-                    clearable
-                    placeholder="Начните вводить название чата"
-                    data-testid="error-chat"
-                    @update:selected-option="(o: any) => (settings.errorChat.title = o?.label as string | undefined)"
-                  />
-                </B24FormField>
-              </div>
-            </template>
-
-            <!-- Исключения: полностью пропускаемые операции. -->
-            <template #exclusions>
-              <div class="space-y-4 pt-2">
-                <p class="text-sm text-(--ui-color-base-3)">
-                  Такие операции <strong>полностью пропускаются</strong>: не создаётся дело в CRM и не уходит
-                  уведомление в чат. (Чтобы просто не слать в чат, но заносить в CRM — используйте
-                  переключатели «Приходы/Расходы» выше.)
-                </p>
-                <B24FormField
-                  label="Не загружать по счетам"
-                  description="По одному номеру счёта в строке. Операции по этим счетам не попадут в CRM."
-                >
-                  <B24Textarea
-                    v-model="accountsText"
-                    :rows="3"
-                    autoresize
-                    placeholder="BY00..."
-                    class="w-full font-mono text-xs"
-                    data-testid="exclude-accounts"
-                  />
-                </B24FormField>
-                <B24FormField
-                  label="Не загружать по теме платежа"
-                  description="Подстроки, по одной в строке. Совпало — операция не попадёт в CRM. Напр.: между своими счетами."
-                >
-                  <B24Textarea
-                    v-model="patternsText"
-                    :rows="3"
-                    autoresize
-                    placeholder="между своими счетами"
-                    class="w-full text-xs"
-                    data-testid="exclude-patterns"
-                  />
-                </B24FormField>
-              </div>
-            </template>
-
-            <!-- Авто-проведение оплат: мутационный гейт §2. -->
-            <template #distribute>
-              <div class="space-y-4 pt-2">
-                <B24Switch
-                  v-model="settings.autoDistribute"
-                  label="Автоматически отмечать оплату в CRM"
-                  description="Когда платёж однозначно распознан по номеру — приложение само пометит оплату «оплачено» / переведёт счёт на оплаченную стадию, а для сделки/смарт-процесса запустит триггер автоматизации (если задан код ниже)."
-                  data-testid="auto-distribute"
-                />
-                <B24Alert
-                  v-if="settings.autoDistribute"
-                  color="air-primary-warning"
-                  title="Приложение будет изменять данные в CRM"
-                  description="При включённой опции приложение само проводит однозначно распознанные оплаты. Если не уверены — оставьте выключенным: тогда приложение только фиксирует, к чему относится платёж, ничего не меняя в портале."
-                  data-testid="auto-distribute-warning"
-                />
-                <B24FormField
-                  v-if="settings.autoDistribute"
-                  label="Стадия оплаченного счёта"
-                  description="Идентификатор стадии, в которую перевести смарт-счёт при оплате (напр. DT31_11:P). Оставьте пустым — стадию счёта менять не будем."
-                >
-                  <B24Input
-                    v-model="invoicePaidStageModel"
-                    placeholder="DT31_11:P"
-                    class="w-full font-mono text-xs"
-                    data-testid="invoice-paid-stage"
-                  />
-                </B24FormField>
-                <B24FormField
-                  v-if="settings.autoDistribute"
-                  label="Код триггера автоматизации"
-                  data-testid="trigger-code-field"
-                >
-                  <template #description>
-                    При установке приложение зарегистрировало триггер
-                    <strong>«{{ paymentTrigger.name }}»</strong>. Повесьте его на своё правило автоматизации
-                    (сделки/смарт-процесса), затем впишите код <code class="font-mono">{{ paymentTrigger.code }}</code>
-                    сюда — тогда при разнесении платежа на сделку приложение запустит этот триггер.
-                    Оставьте пустым — триггер запускаться не будет.
-                  </template>
-                  <B24Input
-                    v-model="triggerCodeModel"
-                    :placeholder="paymentTrigger.code"
-                    class="w-full font-mono text-xs"
-                    data-testid="trigger-code"
-                  />
-                </B24FormField>
-              </div>
-            </template>
-
-            <!-- Карта распознавания (#109 §4): matrices + alphabet + configFields. -->
-            <template #recognition>
-              <div class="pt-2">
-                <RecognitionMap
-                  v-model="settings.recognition"
-                  :disabled="blocked"
-                />
-              </div>
-            </template>
-          </B24Accordion>
+          <!-- ⚠ `KeepAlive` здесь несущий, а не «для скорости»: раздел «Подключение банка» при
+               монтировании сверяет счета, а сверка ходит В БАНК. Без кэша каждое переключение
+               вкладки туда-обратно било бы по лимитам банка запросом, которого никто не просил.
+               Кэшировать `KeepAlive` умеет только КОМПОНЕНТЫ — отсюда и вынос разделов в файлы. -->
+          <KeepAlive>
+            <SettingsSectionBank v-if="section === 'bank'" />
+            <SettingsSectionChats v-else-if="section === 'chats'" />
+            <SettingsSectionDistribution v-else-if="section === 'distribution'" />
+            <SettingsSectionExclusions v-else-if="section === 'exclusions'" />
+            <SettingsSectionAutoDistribute v-else-if="section === 'auto'" />
+            <!-- ⚠ `:disabled` не передаём: до этой ветки не-админ не доходит вовсе (выше стоит
+                 `v-else-if="blocked"` со своим экраном), и проп был бы всегда `false` — то есть
+                 обещал бы защиту, которой в этом месте не существует. -->
+            <SettingsSectionRecognition v-else-if="section === 'recognition'" />
+          </KeepAlive>
         </div>
 
         <div class="w-full lg:max-w-105 shrink-0 flex flex-col gap-4">
-          <SetupReadinessCard />
+          <!-- Готовность — на КАЖДОМ разделе (#530): она отвечает на вопрос «что ещё не
+               настроено», и он одинаково уместен, в каком бы разделе человек ни находился. -->
+          <!-- Красная строка готовности ведёт прямо в свой раздел: от «что не так» до «где это
+               чинить» — один клик. Без этого разбор `?section=` был бы возможностью, до которой
+               из приложения не добраться. -->
+          <SetupReadinessCard @open-section="section = $event" />
 
-          <!-- Живой предпросмотр — главная обратная связь настроек: единственное место, где видно
-               последствия правил ДО сохранения. Рядом с готовностью, а не в конце формы: обе
-               карточки отвечают на «что сейчас будет», и читают их вместе. -->
-          <B24Card class="lg:sticky lg:top-4">
-            <template #header>
-              <h2 class="font-semibold">
-                Что попадёт в чат
-              </h2>
-            </template>
-
-            <p
-              class="mb-3 text-sm text-(--ui-color-base-3)"
-              aria-live="polite"
-              data-testid="preview-summary"
-            >
-              {{ previewSummary }}
-            </p>
-
-            <B24Alert
-              v-if="notifyCount === 0"
-              color="air-primary-warning"
-              description="При текущих правилах в чат ничего не попадёт."
-            />
-
-            <ul
-              data-testid="preview-list"
-              class="space-y-2"
-            >
-              <li
-                v-for="row in preview"
-                :key="row.item.docId"
-                class="flex items-center justify-between gap-3 text-sm"
-              >
-                <span class="truncate">{{ row.item.counterparty.name }}</span>
-                <!-- Три РАЗНЫХ исхода: исключена из импорта / импортируется, но молча / в чат. -->
-                <B24Badge
-                  :label="row.excluded ? 'не импортируется' : row.notify ? '→ в чат' : 'скрыто в чате'"
-                  :color="row.excluded ? 'air-primary-alert' : row.notify ? 'air-primary-success' : 'air-secondary'"
-                  size="sm"
-                  class="shrink-0"
-                />
-              </li>
-            </ul>
-          </B24Card>
+          <!-- А предпросмотр — только там, где он про ЭТИ правила. Рядом с картой распознавания
+               он отвечал бы на вопрос, которого на экране не задавали. -->
+          <SettingsChatPreviewCard
+            v-if="showsChatPreview(section)"
+            class="lg:sticky lg:top-4"
+          />
         </div>
       </div>
+
       <!-- Отзыв о САМИХ настройках (#528, 3.4): «не работает вот эта настройка» / «нужна вот
            такая». Экран готовности рядом собирает отзыв про постановку задачи, здесь — про
            конкретные поля формы; ставим над панелью Save/Cancel, чтобы её не перекрывать. -->
-      <FeedbackWidget
-        place="настройки"
-        class="pb-24"
+      <!-- ⚠ В `place` едет РАЗДЕЛ, а не просто «настройки»: иначе отзыв «не работает вот эта
+           настройка» приходит без указания, в каком из шести экранов человек стоял, — а именно
+           это и надо знать, чтобы понять, о чём речь. -->
+      <FeedbackWidget :place="`настройки: ${currentSection?.label ?? ''}`" />
+
+      <!-- ⚠ Распорка под панелью Save/Cancel — ОТДЕЛЬНЫМ узлом, а не классом `pb-24` на виджете
+           отзывов. Виджет рендерится только при настроенном канале (`GITHUB_FEEDBACK_*`,
+           fail-closed), и вместе с ним исчезала распорка: замерено — панель накрывала последние
+           41 px содержимого, то есть на «Карте распознавания» подрезалось поле ввода. -->
+      <div
+        v-if="enabled"
+        class="h-24"
+        aria-hidden="true"
       />
 
-      <!-- Explicit Save/Cancel (no autosave). Save persists + notifies other instances. -->
+      <!-- Explicit Save/Cancel (no autosave). Save persists + notifies other instances.
+           ⚠ Кнопки ОБЩИЕ на все разделы, а не свои у каждого: настройки — один блоб в
+           `app.option`, и сохранение «только этого раздела» обещало бы избирательность, которой
+           на сервере нет.
+           ⚠ Панель стоит в конце формы, а НЕ приклеена к экрану — замерено: её `offsetParent` это
+           корень панели, высота которого равна высоте содержимого, поэтому `absolute bottom` кладёт
+           её в самый низ страницы. Первая редакция этого комментария утверждала обратное. До неё
+           по-прежнему надо прокрутить раздел — но раздел, а не всю форму из шести секций, и в этом
+           и состоит выигрыш #530. Настоящее приклеивание требует высоты в один экран у корня
+           панели, а в портале высоту фрейма задаёт `fitWindow` — это отдельная работа. -->
       <div
         v-if="enabled"
         class="absolute inset-x-0 bottom-1.5 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
