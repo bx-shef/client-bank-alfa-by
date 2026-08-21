@@ -178,10 +178,13 @@ async function loadHealth() {
     // эталон снимка документировал бы пустое состояние вместо рабочего.
     keepAliveAt.value = Date.now() - 12 * 60_000
     keepAliveSummary.value = { selected: 3, refreshed: 2, skipped: 0, failed: 1, unrefreshable: 1, expired: 0 }
+    // Канал в превью — рабочий: снимок должен документировать нормальное состояние.
+    // ⚠ Тон здесь `ok` (серый), поэтому КРАСНАЯ ветка в эталон не попадает вовсе — её значение
+    // держит юнит-тест (`ALERT_CHANNEL_CLASS`), а не снимок.
+    channel.value = presentAlertChannel({ configured: true, lastOk: true, lastAtMs: Date.now() })
     // ⚠ Обязательно снять флаг ошибки: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому
     // первый прогон успевает сходить в сеть и упасть, а карточка ошибки в шаблоне идёт первой и
     // перекрыла бы вердикт. Без этой строки превью-карточка не появлялась вовсе.
-    channel.value = presentAlertChannel({ configured: true, lastOk: true, lastAtMs: Date.now() })
     healthFailed.value = false
     return
   }
