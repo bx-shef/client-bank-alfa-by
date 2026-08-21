@@ -108,7 +108,10 @@ describe('priorConnectConfigFromEnv', () => {
         audience: 'https://api.priorbank.by:9544/oauth2/token',
         authMethod: 'client_secret_basic',
         privateKeyPem: 'PEM',
-        kid: 'k1'
+        kid: 'k1',
+        // #449: `typ` authorize-JWT. Умолчание равно тому, что несёт `client_assertion`, то есть
+        // прежнее поведение — развод включается только явной `PRIOR_OAUTH_REQUEST_TYP`.
+        requestTyp: 'JWT'
       })
     } finally {
       clearAll()

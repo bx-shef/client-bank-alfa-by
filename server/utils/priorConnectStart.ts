@@ -30,6 +30,7 @@ import {
 } from '../../app/utils/priorOauth'
 import type { PriorTokenAuthMethod } from '../../app/utils/priorOauth'
 import { priorAuthMethodFromEnv, resolvePriorTokenAuth } from './priorTokenAuth'
+import { priorRequestTypFromEnv } from './priorJwt'
 import { normalizeAuthorizeBase, normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 
 /** Non-secret Prior connect config (from env) + the secrets the injected transport needs. */
@@ -78,6 +79,12 @@ export interface PriorConnectConfig {
    * (guide p. 9 §2.2); production needs `private_key_jwt`. Must match what DCR registered.
    * Absent ⇒ sandbox default (#444).
    */
+  /**
+   * JOSE `typ` of the authorize REQUEST OBJECT (#449). Optional: unset means `'JWT'`, the same value
+   * the `client_assertion` carries — i.e. today's behaviour, so an existing deployment is unchanged.
+   * Set `PRIOR_OAUTH_REQUEST_TYP` to split them.
+   */
+  requestTyp?: string
   authMethod?: PriorTokenAuthMethod
   /** RS256 private key (PEM) whose public half is registered in the app's `jwks`. */
   privateKeyPem: string
@@ -112,6 +119,9 @@ export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
   const privateKeyPem = process.env.PRIOR_OAUTH_PRIVATE_KEY?.trim()
   const kid = process.env.PRIOR_OAUTH_KID?.trim()
   const authMethod = priorAuthMethodFromEnv()
+  // #449: the `typ` of the authorize REQUEST OBJECT. Default equals the assertion's, i.e. today's
+  // behaviour — the split is opt-in, see `priorRequestTypFromEnv`.
+  const requestTyp = priorRequestTypFromEnv()
   // `clientSecret` is not required under private_key_jwt — the assertion authenticates us and the
   // bank may not issue one (#444). `authorizeBaseUrl` is null when the API base is an internal
   // gateway and no public origin was configured: that combination CANNOT produce a working
@@ -119,7 +129,7 @@ export function priorConnectConfigFromEnv(): PriorConnectConfig | null {
   const secretRequired = authMethod === 'client_secret_basic'
   if (!baseUrl || !tokenUrl || !authorizeBaseUrl || !clientId || !redirectUri || !audience || !privateKeyPem || !kid) return null
   if (secretRequired && !clientSecret) return null
-  return { baseUrl, tokenUrl, authorizeBaseUrl, clientId, clientSecret: clientSecret ?? '', redirectUri, audience, authMethod, privateKeyPem, kid }
+  return { baseUrl, tokenUrl, authorizeBaseUrl, clientId, clientSecret: clientSecret ?? '', redirectUri, audience, authMethod, privateKeyPem, kid, requestTyp }
 }
 
 /** Injected side-effects, so the orchestration is testable without network/crypto/clock. */
@@ -131,8 +141,9 @@ export interface PriorConnectDeps {
   postToken: (url: string, body: string, headers: Record<string, string>) => Promise<unknown>
   /** POST the consent JSON with the token-Б Bearer; returns raw JSON. */
   postConsent: (url: string, accessToken: string, body: unknown) => Promise<unknown>
-  /** RS256-sign the authorize claim-set (server/utils/priorJwt.ts signPriorJwt). */
-  signJwt: (payload: Record<string, unknown>, privateKeyPem: string, kid: string) => string
+  /** RS256-sign the authorize claim-set (server/utils/priorJwt.ts signPriorJwt). `typ` distinguishes
+   *  this JWT from the `client_assertion` signed by the same key (#449). */
+  signJwt: (payload: Record<string, unknown>, privateKeyPem: string, kid: string, typ?: string) => string
   /** Epoch SECONDS (JWT iat/exp). */
   nowSec: () => number
   /** Fresh random ids for the JWT `jti` and the OIDC `nonce`. */
@@ -212,7 +223,11 @@ export async function buildPriorConnectUrl(
     nowSec: deps.nowSec(),
     jti: deps.newId()
   })
-  const requestJwt = deps.signJwt(claims, config.privateKeyPem, config.kid)
+  // ⚠ The FOURTH argument is the mitigation, not decoration (#449): this JWT leaves in a URL the
+  // admin forwards to the account owner, while the `client_assertion` — same key, same `kid`, a
+  // SUBSET of these very claims — never leaves a POST body. Without a distinguishing `typ` a
+  // forwarded connect link is a syntactically valid client assertion.
+  const requestJwt = deps.signJwt(claims, config.privateKeyPem, config.kid, config.requestTyp)
 
   // 4) the authorize URL the admin opens top-level.
   // ⚠ The AUTHORIZE origin, not the API base: this URL is opened by the admin's browser.
