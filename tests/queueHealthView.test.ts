@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HEALTH_STALE_MS, HEALTH_TONE_COLOR, presentQueueHealth } from '~/utils/queueHealthView'
+import { ALERT_CHANNEL_CLASS, HEALTH_STALE_MS, HEALTH_TONE_COLOR, presentQueueHealth } from '~/utils/queueHealthView'
 import { queueAlertState, recordQueueHealth, resetQueueAlertState } from '../server/utils/queueAlertState'
 import type { QueueAlert } from '../server/utils/queueAlert'
 
@@ -91,5 +91,30 @@ describe('queueAlertState (процесс-широкое состояние)', (
     recordQueueHealth(source, T0)
     source.push({ kind: 'failing', queue: 'x', text: 'подделка' })
     expect(queueAlertState().alerts).toHaveLength(1)
+  })
+})
+
+describe('цвета строки канала не ниже порога контраста (#466 §3)', () => {
+  it('красный — ИЗМЕРЕННАЯ пара, а не «семантический» токен заливки', () => {
+    // ⚠ `--ui-color-accent-main-alert` выглядит правильным по конвенции и молча ломает читаемость:
+    // это цвет ЗАЛИВКИ, текстом на светлом он даёт 3.12:1 при пороге 4.5:1 (CLAUDE.md §Цвет и
+    // контраст, замерено в #528). Первая редакция взяла именно его. Хуже всего читалась бы строка
+    // о том, что сигнализация мертва.
+    expect(ALERT_CHANNEL_CLASS.broken, 'взят цвет заливки вместо текстового')
+      .not.toMatch(/accent-main-(alert|success)/)
+    expect(ALERT_CHANNEL_CLASS.broken, 'нет тёмного переопределения — пара обязана быть двойной')
+      .toMatch(/dark:/)
+  })
+
+  it('«не настроен» и «сломан» — РАЗНЫЕ цвета', () => {
+    // Схлопнув их, мы приучили бы игнорировать красное на странице, где оно обязано что-то значить.
+    expect(ALERT_CHANNEL_CLASS.off).not.toBe(ALERT_CHANNEL_CLASS.broken)
+  })
+
+  it('сырые Tailwind-классы не используются', () => {
+    // `text-base-500` в b24ui не существует вовсе (шкала base — 1..8) и молча не даёт ничего.
+    for (const cls of Object.values(ALERT_CHANNEL_CLASS)) {
+      expect(cls, `сырой Tailwind-класс: ${cls}`).toMatch(/--ui-color-/)
+    }
   })
 })

@@ -46,11 +46,16 @@ export type AlertChannelTone = 'off' | 'broken' | 'ok'
  * ⚠ Tokens are `--ui-color-*`, not `text-base-500`/`text-red-600`: b24ui's base scale is `1..8`, so
  * `base-500` is not a generated class at all (it would silently do nothing), and raw Tailwind reds
  * fall below 4.5:1 on the light theme — which would make the line saying «alerting is dead» the
- * least readable one on the screen.
+ * least readable one on the screen. The red pair below is the measured one from PAGE_GUIDE §9
+ * (6.07 / 4.86), NOT `accent-main-alert` — that one is a FILL colour and gives 3.12:1 as text.
  */
 export const ALERT_CHANNEL_CLASS: Record<AlertChannelTone, string> = {
   off: 'text-(--ui-color-base-3)',
-  broken: 'text-(--ui-color-accent-main-alert)',
+  // ⚠ `--ui-color-accent-main-alert` тут НЕ ГОДИТСЯ, хотя выглядит «семантически правильным»: это
+  // цвет ЗАЛИВКИ, и текстом на светлом фоне он даёт 3.12:1 при пороге 4.5:1 (CLAUDE.md §Цвет и
+  // контраст, замерено в #528). Первая редакция этой строки взяла именно его — то есть повторила
+  // ошибку, которую проект уже задокументировал. Рабочая пара из PAGE_GUIDE §9: 6.07 / 4.86.
+  broken: 'text-(--ui-color-red-80) dark:text-(--ui-color-red-50)',
   ok: 'text-(--ui-color-base-3)'
 }
 
