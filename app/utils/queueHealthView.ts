@@ -11,13 +11,71 @@
 
 /** One alert as the API returns it (mirror of the server `QueueAlert`). */
 export interface QueueHealthAlert {
-  kind: 'stalled' | 'failing' | 'unreadable'
+  // ⚠ Keep in sync with `QueueAlertKind` (`server/utils/queueAlert.ts`). The lists had already
+  // drifted: neither `bank-dead` nor `keepalive-stale` was here while the API was already sending
+  // them — the screen's type silently described something other than what arrives. Pinned by a test.
+  kind: 'stalled' | 'failing' | 'unreadable' | 'bank-dead' | 'keepalive-stale' | 'no-workers'
   queue: string
   text: string
 }
 
+/** State of the alerting channel itself (#466 §3), as the screen sees it. */
+export interface AlertChannelInfo {
+  configured: boolean
+  lastOk: boolean | null
+  lastAtMs: number | null
+}
+
+/**
+ * One line about the alerting channel: is it on, and is it getting through?
+ *
+ * ⚠ Three DISTINCT meanings that must not collapse: «off» (alerts live only in the log and here),
+ * «on, but the last delivery failed» (revoked bot, wrong chat_id) and «on, delivering». Without
+ * this line the first and third look identical on screen — both are silence.
+ */
+export type AlertChannelTone = 'off' | 'broken' | 'ok'
+
+/**
+ * Text classes per channel tone.
+ *
+ * ⚠ `off` and `broken` get DIFFERENT colours, and that is not cosmetics. «Not configured» is a
+ * common and often deliberate state (dev, staging, an owner who simply never set up Telegram),
+ * while «configured but not arriving» is a real breakage. Painting both red would train the reader
+ * to ignore red on the very page where red has to mean something.
+ *
+ * ⚠ Tokens are `--ui-color-*`, not `text-base-500`/`text-red-600`: b24ui's base scale is `1..8`, so
+ * `base-500` is not a generated class at all (it would silently do nothing), and raw Tailwind reds
+ * fall below 4.5:1 on the light theme — which would make the line saying «alerting is dead» the
+ * least readable one on the screen. The red pair below is the measured one from PAGE_GUIDE §9
+ * (6.07 / 4.86), NOT `accent-main-alert` — that one is a FILL colour and gives 3.12:1 as text.
+ */
+export const ALERT_CHANNEL_CLASS: Record<AlertChannelTone, string> = {
+  off: 'text-(--ui-color-base-3)',
+  // ⚠ `--ui-color-accent-main-alert` тут НЕ ГОДИТСЯ, хотя выглядит «семантически правильным»: это
+  // цвет ЗАЛИВКИ, и текстом на светлом фоне он даёт 3.12:1 при пороге 4.5:1 (CLAUDE.md §Цвет и
+  // контраст, замерено в #528). Первая редакция этой строки взяла именно его — то есть повторила
+  // ошибку, которую проект уже задокументировал. Рабочая пара из PAGE_GUIDE §9: 6.07 / 4.86.
+  broken: 'text-(--ui-color-red-80) dark:text-(--ui-color-red-50)',
+  ok: 'text-(--ui-color-base-3)'
+}
+
+export function presentAlertChannel(info: AlertChannelInfo | null | undefined): { tone: AlertChannelTone, note: string } {
+  if (!info?.configured) {
+    return { tone: 'off', note: 'Оповещения выключены — тревоги видны только здесь и в логе' }
+  }
+  if (info.lastOk === false) {
+    return { tone: 'broken', note: 'Оповещения включены, но последняя доставка НЕ прошла — проверьте бота и chat_id' }
+  }
+  if (info.lastOk === null) {
+    return { tone: 'ok', note: 'Оповещения включены; отправлять пока было нечего' }
+  }
+  return { tone: 'ok', note: 'Оповещения включены, последняя доставка прошла' }
+}
+
 export interface QueueHealthPayload {
   alerts?: QueueHealthAlert[]
+  /** Alerting channel state (#466 §3). */
+  alertChannel?: AlertChannelInfo | null
   /** When the last check completed, ms. `null`/absent — ещё ни разу. */
   alertsCheckedAt?: number | null
 }
