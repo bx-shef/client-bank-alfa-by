@@ -1115,7 +1115,19 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     переподключения невозможен), а не 502. Оба банка приземляются на **один** callback и различаются по
     `provider` из **проверенного** state. UI — пикер банка `B24RadioGroup` (тип сужен до подключаемых, `manual`
     выбрать нельзя); подписи/плейсхолдер/кнопка следуют выбору. Env — `PRIOR_OAUTH_*`
-    (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`/`_AUTHORIZE_BASE`).
+    (`_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/`_AUDIENCE`/`_PRIVATE_KEY`/`_KID`/`_API_BASE`/
+    `_AUTHORIZE_BASE`/`_TOKEN_URL`/`_AUTH_METHOD`/`_REQUEST_TYP`). ⚠ **`_REQUEST_TYP` (#449)** разводит
+    по JOSE-`typ` два JWT, которые подписывает ОДИН ключ с ОДНИМ `kid`: authorize-`request` и
+    `client_assertion`. Claim-набор второго — строгое подмножество первого (те же
+    `iss`/`sub`/`aud`/`iat`/`exp`/`jti`, `aud` вообще из одной переменной), поэтому пока заголовки
+    одинаковы, authorize-JWT синтаксически годится как `client_assertion`. ⚠ И утечка не
+    гипотетическая: в `BankConnectCard` есть кнопка «Скопировать» ссылку **для пересылки владельцу
+    счёта**, то есть токен штатно уезжает в мессенджер при каждом подключении. По умолчанию
+    ВЫКЛЮЧЕНО — пример банка идёт вообще без `typ`, строгость валидации неизвестна, а ломается это в
+    лицо владельцу счёта. ⚠ Мера помогает, **только если банк `typ` проверяет**, и косвенно это
+    скорее не так — независимое от банка лекарство это отдельная пара ключей для assertion.
+    Репетировать на sandbox: `pnpm prior:test --request-typ oauth-authz-req+jwt`. Асимметрию держит
+    `tests/priorJwtTypSeparation.test.ts`; разбор — [`docs/PRIOR_API.md`](docs/PRIOR_API.md).
     **Автоопрос включён**: `prior-by` в `POLLABLE_PROVIDERS`, отдельная очередь `bank-fetch-prior`
     (`fetchQueueFor`) с бюджетом в ЗАПРОСАХ (`providerJobRate` делит лимит на стоимость задачи) и
     собственными слотами (`QUEUE_PRIOR_CONCURRENCY`) — длинная задача Приора не держит воркер Альфы.

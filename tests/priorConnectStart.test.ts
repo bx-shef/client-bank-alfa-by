@@ -34,7 +34,7 @@ function fakeDeps(over: Partial<PriorConnectDeps> & { tokenRaw?: unknown, consen
     consentUrl: [] as string[],
     consentToken: [] as string[],
     consentBody: [] as unknown[],
-    signed: [] as { payload: Record<string, unknown>, kid: string }[]
+    signed: [] as { payload: Record<string, unknown>, kid: string, typ?: string }[]
   }
   let idCounter = 0
   const deps: PriorConnectDeps = {
@@ -50,8 +50,13 @@ function fakeDeps(over: Partial<PriorConnectDeps> & { tokenRaw?: unknown, consen
       calls.consentBody.push(body)
       return over.consentRaw ?? { data: { consentId: 'INTENT-9' } }
     },
-    signJwt: (payload, _pem, kid) => {
-      calls.signed.push({ payload, kid })
+    // ⚠ `typ` (4-й параметр) ЗАХВАТЫВАЕТСЯ, и это не для полноты. Пока фейк объявлялся как
+    // `(payload, _pem, kid)`, он физически не видел четвёртого аргумента — то есть опечатка вида
+    // `signJwt(claims, pem, config.kid, config.kid)` не ловилась НИЧЕМ: структурный гард считает
+    // аргументы и остаётся зелёным, а в подписанный JWT уезжает `typ` со значением `kid`. Банк
+    // отклонил бы КАЖДОЕ подключение, и отклонил бы в лицо владельцу счёта, открывшему ссылку.
+    signJwt: (payload, _pem, kid, typ) => {
+      calls.signed.push({ payload, kid, typ })
       return `SIGNED.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.SIG`
     },
     nowSec: () => Math.floor(NOW_MS / 1000),
@@ -60,6 +65,27 @@ function fakeDeps(over: Partial<PriorConnectDeps> & { tokenRaw?: unknown, consen
   }
   return { deps, calls }
 }
+
+describe('#449: authorize-JWT подписывается НАСТРОЕННЫМ typ', () => {
+  // ⚠ Поведенческая половина к структурному гарду `priorJwtTypSeparation`. Тот считает АРГУМЕНТЫ,
+  // и опечатка с правильным их числом (`config.kid` вместо `config.requestTyp`) его проходит.
+  // Здесь проверяется ЗНАЧЕНИЕ — то, что реально уедет в подписанный JWT и оттуда в банк.
+  it('до подписи доезжает config.requestTyp, а не что-то другое с тем же местом', async () => {
+    const { deps, calls } = fakeDeps()
+    await buildPriorConnectUrl({ ...config, requestTyp: 'oauth-authz-req+jwt' }, () => 'SIGNED-STATE', deps, NOW_MS)
+    expect(calls.signed).toHaveLength(1)
+    expect(calls.signed[0]?.typ).toBe('oauth-authz-req+jwt')
+    // Отдельным ассертом: не `kid` и не пусто — ровно те два промаха, что структурно неотличимы.
+    expect(calls.signed[0]?.typ).not.toBe(config.kid)
+    expect(calls.signed[0]?.typ).toBeTruthy()
+  })
+
+  it('без настройки уезжает прежний JWT — прод не меняется', async () => {
+    const { deps, calls } = fakeDeps()
+    await buildPriorConnectUrl({ ...config, requestTyp: 'JWT' }, () => 'SIGNED-STATE', deps, NOW_MS)
+    expect(calls.signed[0]?.typ).toBe('JWT')
+  })
+})
 
 describe('priorConsentExpiry', () => {
   it('is a yyyy-MM-dd date in the FUTURE (consent lifetime, not the statement window)', () => {
@@ -108,7 +134,10 @@ describe('priorConnectConfigFromEnv', () => {
         audience: 'https://api.priorbank.by:9544/oauth2/token',
         authMethod: 'client_secret_basic',
         privateKeyPem: 'PEM',
-        kid: 'k1'
+        kid: 'k1',
+        // #449: `typ` authorize-JWT. Умолчание равно тому, что несёт `client_assertion`, то есть
+        // прежнее поведение — развод включается только явной `PRIOR_OAUTH_REQUEST_TYP`.
+        requestTyp: 'JWT'
       })
     } finally {
       clearAll()

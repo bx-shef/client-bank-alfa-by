@@ -323,3 +323,25 @@ describe('LOG_LEVEL (#529)', () => {
     }
   })
 })
+
+describe('#449: PRIOR_OAUTH_REQUEST_TYP', () => {
+  // ⚠ Заведён потому, что это была ЕДИНСТВЕННАЯ ветка `warnings.push` в `envCheck`, не покрытая
+  // тестом — у всех соседних он есть. Сам предикат `isPriorRequestTypInvalid` проверяется в
+  // `priorJwt.test.ts`, но ПРОВОДКА («`checkBackendEnv` реально его зовёт и реально пушит текст»)
+  // не проверялась нигде: переименование импорта или опечатка в имени переменной сломали бы
+  // предупреждение молча. А молчит оно ровно в том случае, ради которого заведено — когда оператор
+  // считает усиление включённым, а оно отброшено.
+  it('битое значение даёт предупреждение на старте', () => {
+    const w = checkBackendEnv({ ...GOOD, PRIOR_OAUTH_REQUEST_TYP: 'has space' }).warnings
+    expect(w.some(x => /PRIOR_OAUTH_REQUEST_TYP/.test(x))).toBe(true)
+    // Текст обязан сказать, что значение ПРОИГНОРИРОВАНО, — иначе оператор решит, что всё в силе.
+    expect(w.some(x => /ПРОИГНОРИРОВАН/i.test(x))).toBe(true)
+  })
+
+  it('верное значение и отсутствие значения молчат одинаково', () => {
+    for (const v of [undefined, '', 'oauth-authz-req+jwt', 'application/jwt']) {
+      const env = { ...GOOD, ...(v === undefined ? {} : { PRIOR_OAUTH_REQUEST_TYP: v }) }
+      expect(checkBackendEnv(env).warnings.some(x => /PRIOR_OAUTH_REQUEST_TYP/.test(x))).toBe(false)
+    }
+  })
+})
