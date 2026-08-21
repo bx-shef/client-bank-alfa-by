@@ -14,8 +14,11 @@ import {
 import type { BankToken } from '../server/utils/bankTokenStore'
 import type { BankProviderId } from '../app/types/statement'
 
-/** Текст «занято» на экране сверки — ожидание теста, а не копия из кода. */
-const BUSY_TEXT = 'подключение сейчас обновляется — повторите через несколько секунд'
+/** Сравнение близнецов по существу: у клиентского текст — предложение (заглавная, точка), у
+ *  серверного — вставка в шаблон алерта. Третьей копии текста здесь НЕТ намеренно: она устаревала
+ *  бы при согласованной правке обоих файлов и краснела бы на верном изменении. */
+const sameMessage = (a: string, b: string) =>
+  a.trim().toLowerCase().replace(/[.\s]+$/, '') === b.trim().toLowerCase().replace(/[.\s]+$/, '')
 
 function token(over: Partial<BankToken> = {}): BankToken {
   return {
@@ -282,18 +285,14 @@ describe('сверка счетов: занятый лок обновления 
         throw Object.assign(new Error('canceling statement due to lock timeout'), { code: PG_LOCK_TIMEOUT })
       }
     }))
-    expect(out[0]?.error).toBe(BUSY_TEXT)
+    expect(sameMessage(out[0]?.error ?? '', setAccountErrorMessage({ statusCode: 503 }))).toBe(true)
     // ⚠ Текста исключения на экране быть не должно: сообщение pg несёт имена таблиц.
     expect(out[0]?.error).not.toContain('lock timeout')
   })
 
-  it('текст совпадает с близнецом на 503 от set-account — исход один, экран один', () => {
-    // Оба сообщения об одном и том же (лок держит обновление токена) могут появиться в одной
-    // карточке подключения. Разойдясь, они рассказали бы админу две разные истории про одно
-    // состояние. Сверяем по сути строки, а не по ссылке: у клиентского близнеца текст —
-    // предложение с заглавной и точкой, у нашего — вставка в шаблон алерта.
-    const twin = setAccountErrorMessage({ statusCode: 503 })
-    expect(twin.toLowerCase().replace(/\.$/, '')).toBe(BUSY_TEXT)
+  it('обычная ошибка банка НЕ выдаётся за «занято»', () => {
+    // Иначе проверка выше стала бы бессодержательной: совпасть с близнецом мог бы любой текст.
+    expect(sameMessage('invalid_grant', setAccountErrorMessage({ statusCode: 503 }))).toBe(false)
   })
 
   it('обычная ошибка банка по-прежнему показывается как есть', async () => {

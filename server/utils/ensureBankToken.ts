@@ -214,11 +214,14 @@ export async function ensureBankToken(
   // takes the same lock (`renameBankTokenAccount`, #509): it changes `account_key` — the very field
   // we use to find our row. A differently-spelled key would mean the lock is "held" while the two
   // sides never actually meet — silently, with no error at all.
-  // ⚠ `lockWait` НЕ имеет умолчания здесь: у этой функции два разных вызывающих. Фоновому (крон
-  // продления, задача опроса) правильно ждать долго — за ним никто не смотрит, а повтор стоит
-  // целого тика. HTTP-маршруту с админом на том конце — коротко: держатель лока это POST к банку
-  // с потолком 15 с, дождаться его нельзя, а повтор в одном клике. Значение выбирает вызывающий,
-  // потому что разница именно в нём, а не в этой функции (#539).
+  // ⚠ Своего умолчания у `lockWait` здесь НЕТ — не потому, что умолчания нет вовсе (оно есть, но
+  // ниже по стеку: `resolveLockWait(undefined)` → `DEFAULT_LOCK_WAIT`), а потому, что выбирать
+  // обязан вызывающий: разница в НЁМ, а не в этой функции (#539). Фоновому (крон продления,
+  // задача опроса) правильно ждать долго — за ним никто не смотрит, а повтор стоит целого тика;
+  // HTTP-маршруту с админом — коротко: держатель это POST к банку с потолком 15 с, дождаться его
+  // нельзя, а повтор в одном клике. ⚠ Поле опционально, поэтому «забыл» компилятор не ловит —
+  // ловит структурный тест по `server/api/**` (`tests/bankRefreshLock.test.ts`), и он же честно
+  // слеп к провязке через модуль в `server/utils`.
   return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey), async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed (or the account been
     // disconnected) while we waited. No stored row → don't refresh+save (would resurrect a

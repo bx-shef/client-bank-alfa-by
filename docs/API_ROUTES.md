@@ -46,8 +46,8 @@
 | GET | `/api/bank/callback` | **ST** | n/a | 200, 400, 502 | `import`; алиасы `/oauth-alfabank-by/`, `/oauth-priorbank-by/` |
 | GET | `/api/bank/accounts` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/bank/disconnect` | **F+A** (member-scoped WHERE, адрес — неизменяемый `id`) | **да** | 200, 400, 403, 409 | `import` |
-| POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409, 503 | `import` |
-| GET | `/api/bank/matrix` | **F+A** | **да** | 200, 400, 403, 409, 502 | `import`, `burst=3` (спрашивает банки параллельно — по соединению на банк) |
+| POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409, 503 | `import`, `burst=3` |
+| GET | `/api/bank/matrix` | **F+A** | **да** | 200, 400, 403, 409, 502 | `import` + `limit_conn bank_matrix 2` (спрашивает банки параллельно — по соединению на банк) |
 | GET | `/api/distribution/ledger` | **F+A** + гейт `DISTRIBUTION_PROVISION_ENABLED` | **да** | 200, 400, 403, 404, 502 | — |
 | POST | `/api/distribution/provision` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516) |
 | POST | `/api/distribution/recompute` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516) |
