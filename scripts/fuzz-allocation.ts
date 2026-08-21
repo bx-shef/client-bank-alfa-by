@@ -70,9 +70,12 @@ const companyByAccount = (acc: string): string | null =>
 const live = (s: number) => s >= 0
 const inScope = (c: string) => c === MY_CO || c === CLIENT_CO
 
-// ⚠ Валюта — доменный union, а не `string`: генератор берёт её из `CURRENCIES`, но пока поле было
-// голой строкой, компилятор не мог сверить его с `AllocationCandidate` — и расхождение вскрылось
-// только когда скрипты попали под typecheck (#542).
+// ⚠ The fixture currency is narrowed to THIS SCRIPT'S OWN union, not to a domain type: both
+// `StatementItem` and `AllocationCandidate` declare the field as a bare `string` — deliberately, a
+// real statement is not obliged to fit five codes. So there is nothing here to cross-check against,
+// and the narrowing exists for a different reason: `pick` infers the narrow union, and assigning a
+// field declared `string` into it does not compile. That is what surfaced once the scripts came
+// under typecheck (#542).
 type Cur = typeof CURRENCIES[number]
 
 interface Inv { id: string, number: string, amount: number, currency: Cur, companyId: string, stage: number }
