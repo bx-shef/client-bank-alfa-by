@@ -1,6 +1,6 @@
 # События и авторизация Bitrix24 (установка, удаление, брокер событий)
 
-> Last reviewed: 2026-08-19
+> Last reviewed: 2026-08-21
 
 Как приложение учитывает авторизацию портала, обрабатывает установку/удаление и
 проверяет подлинность входящих событий Bitrix24. Здесь — **доменное ядро**
@@ -244,7 +244,7 @@ Backend принимает все вебхуки одной точкой вхо�
    = `https://<домен>/app`, права `crm,sale,im,imbot,documentgenerator,userfieldconfig,user_brief,placement` (источник — `B24_REQUIRED_SCOPES` в `app/config/b24.ts`; **`userfieldconfig` обязателен** — без него провижининг смарт-процессов молча отказывает, #408; **`imbot`** — без него сообщения в чаты идут от имени сотрудника, а не приложения, #496). Обработчик события **отдельно указывать
    не нужно** — `/install` сам биндит `ONAPPINSTALL`/`ONAPPUNINSTALL` (до `installFinish`). Проверить —
    панель «Диагностика» на `/install` (блок «События») или `event.get`.
-3. **Установить** → в логах `[b24 events] ONAPPINSTALL member_id=…` + `bootstrapped`; строка в
+3. **Установить** → в логах `[b24-events] INFO: ONAPPINSTALL member_id=…` + `bootstrapped`; строка в
    `portal_tokens` (роль/база в нашем прод-compose — **`app`**, не `postgres`):
    ```
    docker compose -f docker-compose.prod.yml exec db psql -U app -d app \

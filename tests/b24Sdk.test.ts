@@ -29,6 +29,15 @@ import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
 // Self-contained factory (hoisted above imports) — no outer references allowed. Individual
 // tests override via `vi.mocked(B24OAuth).mockImplementation(...)` to capture wiring.
 vi.mock('@bitrix24/b24jssdk', () => ({
+  // ⚠ Логгер тоже приходится подменять: с #529 серверные модули тянут `useServerLogger`, а он
+  // импортирует эти три экспорта из того же пакета — без них мок «съедает» их и модуль не грузится
+  // вовсе (весь файл падает как Failed Suite, а не как красный тест, то есть симптом не по адресу).
+  Logger: class { pushHandler() {} async info() {} async warning() {} async error() {} async debug() {} async notice() {} },
+  StreamHandler: class { setFormatter() {} },
+  // Пустой класс линтер отвергает, а мок формата обязан быть конструируемым — даём ему
+  // ровно тот метод, который зовёт обработчик.
+  JsonFormatter: class { format() { return '' } },
+  LogLevel: { DEBUG: 100, INFO: 200, NOTICE: 250, WARNING: 300, ERROR: 400 },
   // Regular function (not arrow) so `new B24OAuth(...)` is constructable.
   B24OAuth: vi.fn(function () {
     return {

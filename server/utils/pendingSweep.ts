@@ -23,6 +23,9 @@ import type { BankAccountInfo } from './bankTokenStore'
 import type { BankProviderId } from '../../app/types/statement'
 import { sanitizeForLog } from './logSanitize'
 import type { QueryFn } from './tokenStore'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('retention')
 
 export interface PendingSweepDeps {
   now: () => number
@@ -83,7 +86,7 @@ export async function sweepAbandonedPending(deps: PendingSweepDeps): Promise<num
     } catch (e) {
       if (isLockTimeout(e)) continue
       // Без `member_id` и без ключа счёта: строка попадает в общий лог сервиса (docs/PRIVACY.md).
-      console.error('[retention] pending sweep: %s row failed: %s', row.provider, sanitizeForLog((e as Error)?.message ?? ''))
+      log.error(`pending sweep: ${row.provider} row failed: ${sanitizeForLog((e as Error)?.message ?? '')}`)
     }
   }
   return removed

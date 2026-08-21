@@ -16,6 +16,9 @@ import { enqueueFeedbackPost } from '../queue/producers'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
+import { useServerLogger } from '../utils/serverLogger'
+
+const log = useServerLogger('import')
 
 function liveSubmitDeps(): FeedbackSubmitDeps {
   const config = resolveFeedbackConfig()
@@ -82,7 +85,7 @@ export default defineEventHandler(async (event) => {
       if (status === 500 || status === 502) {
         // Only a real GitHub transport failure (not the 503 config-gate) — log the numeric class for
         // ops. Never surface GitHub's body/URL/token.
-        console.warn('[feedback] github submission failed with status %d', status)
+        log.warning(`feedback: github submission failed with status ${status}`)
       }
       setResponseStatus(event, status)
       return body

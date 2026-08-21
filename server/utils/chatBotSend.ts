@@ -16,6 +16,9 @@
 import { buildBotRegisterCall, extractBotId, isPermanentBotError } from '../../app/utils/b24BotRegister'
 import { B24_CHAT_BOT } from '../../app/config/b24'
 import type { RestCall } from './companyLookup'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('chat')
 
 /** REST method that posts a message as a bot. ⚠ `imbot.message.add` is the DEPRECATED generation. */
 export const BOT_MESSAGE_METHOD = 'imbot.v2.Chat.Message.send'
@@ -75,10 +78,7 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
       // «Не бывает» — запоминаем, чтобы не спрашивать на каждом сообщении. Сказать об этом ВСЛУХ,
       // один раз: молчание здесь неотличимо от «бот работает», а самый частый повод попасть сюда —
       // старая установка без скоупа `imbot`, которую чинит переустановка приложения.
-      console.info(
-        '[chat] бот недоступен на портале, сообщения пойдут от имени владельца токена: %s',
-        (error as Error)?.message ?? 'без описания'
-      )
+      log.info(`бот недоступен на портале, сообщения пойдут от имени владельца токена: ${(error as Error)?.message ?? 'без описания'}`)
       botIdByPortal.set(memberId, null)
       return null
     }

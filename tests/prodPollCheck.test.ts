@@ -24,7 +24,7 @@ const OPLOG = readFileSync(join(ROOT, 'app/utils/opLogPolicy.ts'), 'utf8')
 describe('диагностика опроса ищет маркеры, которые код действительно печатает (#522)', () => {
   it('исходники читаются', () => {
     expect(SCRIPT.length).toBeGreaterThan(500)
-    expect(WORKER).toContain('console.log')
+    expect(WORKER).toContain('useServerLogger(')
   })
 
   /**
@@ -46,22 +46,34 @@ describe('диагностика опроса ищет маркеры, кото�
 
   it('каждый маркер ИЩЕТСЯ командой grep', () => {
     for (const marker of ['[fetch]', '[crm-sync]', '[op]', '[queue-job-failed]',
-      '[queue-job-retry]', '[queue-worker-error]', '[queue] real poll']) {
+      '[queue-job-retry]', '[queue-worker-error]', 'real poll']) {
       // В grep скобки бывают экранированы (`\[queue-job-failed\]`) — сверяем по содержимому.
       expect(grepLines, `команды grep больше не ищут ${marker}`).toContain(marker.replace(/^\[|\]$/g, ''))
     }
   })
 
-  it('каждый маркер ПЕЧАТАЕТСЯ кодом — со скобками, в вызове лога', () => {
-    // ⚠ Второе мутационное ревью поймало и обратную дыру: сверка шла по маркеру БЕЗ скобок, а
-    // слово `fetch` встречается в `worker.ts` повсюду (`fetchQueueFor`, имена очередей, комментарии).
-    // Переименуй код `[fetch]` в `[poll]` — тест остался бы зелёным, и скрипт молча искал бы то,
-    // чего больше нет. Поэтому здесь маркер проверяется ЦЕЛИКОМ, вместе со скобками.
-    for (const [marker, source] of [
-      ['[fetch]', WORKER], ['[op]', WORKER], ['[crm-sync]', OPLOG], ['[queue] real poll', PLUGIN]
+  it('каждый маркер ПЕЧАТАЕТСЯ кодом — теперь как КАНАЛ логгера', () => {
+    // ⚠ После #529 маркер в исходнике больше не литерал в строке: его печатает канал
+    // (`[{channel}] {level}: …`), то есть искать надо объявление канала. Смысл гарда не изменился —
+    // переименуй канал «покрасивее», и скрипт молча начнёт искать то, чего больше нет.
+    //
+    // ⚠ Второе мутационное ревью поймало обратную дыру: сверка по маркеру БЕЗ скобок проходила,
+    // потому что слово `fetch` встречается в `worker.ts` повсюду (`fetchQueueFor`, имена очередей,
+    // комментарии). Поэтому здесь проверяется точная форма объявления канала, а не вхождение слова.
+    for (const [channel, source] of [
+      ['fetch', WORKER], ['op', WORKER], ['crm-sync', WORKER], ['queue', PLUGIN]
     ] as Array<[string, string]>) {
-      expect(source, `код больше не печатает ${marker}`).toContain(marker)
+      expect(source, `код больше не заводит канал ${channel}`).toContain(`useServerLogger('${channel}')`)
     }
+    // ⚠ `[queue] real poll` — маркер из ДВУХ частей: канал плюс начало сообщения. Скрипт ищет их
+    // вместе, поэтому и проверяем обе половины, а не одну.
+    expect(PLUGIN, 'сообщение `real poll` больше не печатается').toContain('log.info(`real poll:')
+    // Текст итога прогона по-прежнему собирается чистым модулем политики — там маркера уже нет,
+    // и это тоже часть контракта: второй `[crm-sync]` дал бы задвоенный префикс в строке.
+    // ⚠ Комментарии вырезаем: маркер законно упоминается в объяснении рядом, и проверка по файлу
+    // целиком краснела бы на верном коде (та же ловушка, что уже ловилась в #542).
+    const oplogCode = OPLOG.replace(/^\s*(\/\/|\*|\/\*).*$/gm, '')
+    expect(oplogCode, 'маркер вернулся в текст итога — будет задвоен каналом').not.toContain('[crm-sync]')
     // ⚠ Формы записи РАЗНЫЕ, и это не придирка: два тега выбираются тернарником и лежат в файле
     // строковыми литералами (`'queue-job-failed'`), а третий подставлен прямо в шаблон
     // (`[queue-worker-error] queue=…`). Проверка «только в кавычках» пропускала третий, проверка
@@ -114,7 +126,7 @@ describe('тишина в продлении токенов читается к�
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    expect(logged.some(l => l.startsWith('[bank-keepalive] selected=')),
+    expect(logged.some(l => l.startsWith('selected=')),
       'на тихом тике сводки нет — «пусто» снова неотличимо от мёртвого таймера').toBe(true)
     expect(logged.join('\n')).toContain('selected=0')
   })
@@ -137,7 +149,7 @@ describe('тишина в продлении токенов читается к�
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    const line = logged.find(l => l.startsWith('[bank-keepalive] selected='))
+    const line = logged.find(l => l.startsWith('selected='))
     expect(line, 'сводки нет на рабочем тике').toBeTruthy()
     expect(line!).toMatch(/refreshed=\d+/)
   })

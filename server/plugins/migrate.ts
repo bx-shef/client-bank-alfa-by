@@ -6,13 +6,16 @@
 
 import { SCHEMA_SQL, dbQuery } from '../db/client'
 import { envFlag } from '../queue/runtime'
+import { useServerLogger } from '../utils/serverLogger'
+
+const log = useServerLogger('migrate')
 
 export default defineNitroPlugin(async () => {
   if (!process.env.DATABASE_URL) return
   // Worker replicas skip migration (RUN_MIGRATION=0) — the schema is owned by the
   // primary/HTTP instance, so N workers booting together don't race on CREATE TABLE.
   if (!envFlag(process.env.RUN_MIGRATION, true)) {
-    console.info('[migrate] skipped (RUN_MIGRATION=0) — schema owned by another instance')
+    log.info('skipped (RUN_MIGRATION=0) — schema owned by another instance')
     return
   }
   try {
@@ -20,6 +23,6 @@ export default defineNitroPlugin(async () => {
   } catch (err) {
     // Don't crash the server on a transient DB hiccup at boot — the events route
     // will surface a clear error if the table is genuinely missing.
-    console.error('[migrate] schema init failed:', (err as Error)?.message)
+    log.error(`schema init failed: ${(err as Error)?.message}`)
   }
 })

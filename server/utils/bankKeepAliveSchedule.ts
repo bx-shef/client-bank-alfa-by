@@ -16,6 +16,9 @@ import { ensureBankToken } from './ensureBankToken'
 import { getBankToken, listAllBankAccountInfo, markBankRefreshAttempt, type BankAccountRef, type BankToken } from './bankTokenStore'
 import { dbQuery } from '../db/client'
 import { withSpan } from './telemetrySpan'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('bank-keepalive')
 
 /** Живая проводка движка продления на БД и банк. */
 export function liveBankKeepAliveDeps() {
@@ -30,8 +33,8 @@ export function liveBankKeepAliveDeps() {
     // сигнал: access бывает свежим, пока refresh за ним доживает последние часы. Именно поэтому
     // обновление «по дороге» никогда не спасало.
     refresh: (token: BankToken) => ensureBankToken(token, undefined, { force: true }),
-    log: (m: string) => console.info(m),
-    warn: (m: string) => console.warn(m)
+    log: (m: string) => log.info(m),
+    warn: (m: string) => log.warning(m)
   }
 }
 
@@ -53,7 +56,7 @@ export function scheduleBankKeepAlive(minutesRaw?: string): NodeJS.Timeout {
     run: () => withSpan('cron.bank-keep-alive', { 'job.queue': 'cron.bank-keep-alive' }, () => runBankKeepAlive(deps)),
     record: recordKeepAlivePulse,
     now: Date.now,
-    error: (m: string) => console.error(m)
+    error: (m: string) => log.error(m)
   })
   // Отмечаем, что таймер ЗАПЛАНИРОВАН: иначе «прогонов ещё не было» неотличимо от «не
   // запускается», и регрессия, при которой продление падает с первого же тика, молчала бы вечно.
@@ -67,6 +70,6 @@ export function scheduleBankKeepAlive(minutesRaw?: string): NodeJS.Timeout {
   // мешать выходу».
   timer.unref?.()
   void tick()
-  console.info('[queue] bank token keep-alive scheduled (every %d min, #489) — вне зависимости от Redis', ms / 60_000)
+  log.info(`bank token keep-alive scheduled (every ${ms / 60_000} min, #489) — вне зависимости от Redis`)
   return timer
 }

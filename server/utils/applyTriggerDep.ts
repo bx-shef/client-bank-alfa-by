@@ -21,6 +21,9 @@ import type { StatementItem } from '../../app/types/statement'
 import type { AllocationCandidate } from '../../app/utils/allocation'
 import type { AllocationMutationResult } from './allocationMutationWrite'
 import type { RestCall } from './companyLookup'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('trigger')
 
 /** What the handler should do after a synchronous trigger attempt (#79). */
 export type TriggerOutcome = 'fired' | 'skip' | 'retry'
@@ -65,7 +68,7 @@ export function makeApplyTrigger(deps: ApplyTriggerDeps) {
       return res.skipped === 'unsupported' ? 'skip' : 'retry'
     } catch (e) {
       // Thrown transport error (network, or «trigger is not registered») → durable retry self-heals.
-      console.warn(`[trigger] portal ${memberId}, ${target.kind}#${target.id}: not fired (will retry) — ${(e as Error)?.message}`)
+      log.warning(`portal ${memberId}, ${target.kind}#${target.id}: not fired (will retry) — ${(e as Error)?.message}`)
       return 'retry'
     }
   }

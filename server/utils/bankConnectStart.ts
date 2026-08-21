@@ -175,7 +175,7 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
       gate = await deps.myCompanyGate(domain, accessToken)
     } catch (e) {
       // Спросить не смогли — пропускаем (см. контракт депа) и говорим об этом вслух.
-      deps.log?.(`[bank-connect] my-company precheck failed, allowing: ${(e as Error)?.message ?? ''}`)
+      deps.log?.(`my-company precheck failed, allowing: ${(e as Error)?.message ?? ''}`)
     }
     if (gate !== 'ok') {
       return { status: 409, body: { error: MY_COMPANY_GATE_MESSAGE[gate], reason: gate } }
@@ -214,7 +214,7 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
       // The bank's error ENVELOPE is included (`describeUpstreamError`): its status line alone is
       // the same "400 Bad Request" for a missing FAPI header, a rejected consent field and an
       // expired token, so without the body the log cannot tell an operator which one happened.
-      deps.log?.(`[bank-connect] prior preamble failed: ${describeUpstreamError(e)}`)
+      deps.log?.(`prior preamble failed: ${describeUpstreamError(e)}`)
       return { status: 502, body: { error: 'bank did not grant consent (connect preamble failed)' } }
     }
   }

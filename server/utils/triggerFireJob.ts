@@ -2,6 +2,9 @@ import type { TriggerFireJob } from '../queue/topology'
 import type { AllocationCandidate } from '../../app/utils/allocation'
 import type { AllocationMutationResult } from './allocationMutationWrite'
 import type { RestCall } from './companyLookup'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('trigger')
 
 // Pure worker for the durable payment-trigger retry (#79). crm-sync fired the trigger once and missed
 // (transient error, or a `triggerCode` not yet registered); this re-fires with backoff so the «деньги
@@ -46,7 +49,7 @@ export async function handleTriggerFireJob(job: TriggerFireJob, deps: TriggerFir
   if (res.applied) return
   if (res.skipped === 'unsupported') {
     // Malformed CODE mask / unsupported target — a retry can't succeed. Drop (numeric-safe log).
-    console.warn('[trigger] %s#%s: unsupported (bad CODE/target) — dropped from retry queue', job.targetKind, job.targetId)
+    log.warning(`${job.targetKind}#${job.targetId}: unsupported (bad CODE/target) — dropped from retry queue`)
     return
   }
   throw new Error(`trigger retry: not confirmed for ${job.targetKind}#${job.targetId} — retry`)

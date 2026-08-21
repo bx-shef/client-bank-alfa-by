@@ -44,6 +44,9 @@ import { ensureBankToken } from './ensureBankToken'
 import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankToken } from './bankTokenStore'
 import type { BankFetchQuery } from './bankFetch'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('fetch')
 
 /** We fetch TRANSACTIONS (not statements): the response is `data.transaction[]`, exactly what
  *  `normalizePrior` consumes. Both endpoints share the create+poll shape (PriorResourceKind). */
@@ -250,7 +253,7 @@ const liveDeps: PriorFetchDeps = {
   },
   sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
   // Diagnostic only, and only on success — see the port's doc.
-  log: line => console.log(line)
+  log: line => log.info(line)
 }
 
 /**
