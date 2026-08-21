@@ -14,7 +14,7 @@
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
 import { C, head, ok, err, warn } from './lib/cli.mjs'
-import { findDealPayments } from '../server/utils/paymentLookup.ts'
+import { findDealPayments, paymentListParams } from '../server/utils/paymentLookup.ts'
 import { buildAllocationMutation } from '../app/utils/allocationMutation.ts'
 import { payAllocationViaRest } from '../server/utils/allocationMutationWrite.ts'
 
@@ -110,8 +110,9 @@ async function resolveDealId(): Promise<string> {
     warn(`Засеянная сделка «${SEED_DEAL_TITLE}» не найдена — прогоните \`pnpm seed:b24\` (или укажите --deal <id>).`)
     process.exit(1)
   }
-  // ⚠ СТРОКА: `findDealPayments` принимает `dealId: string`. Число работало только потому, что
-  // функция внутри делает `String(dealId)` — контракт при этом нарушался молча.
+  // ⚠ A STRING, not a number: `findDealPayments` takes `dealId: string`. A number only ever
+  // «worked» because the function does `String(...)` internally — the contract was breached
+  // silently, and stayed invisible until typecheck reached the scripts (#542).
   return String(rows[0]!.ID)
 }
 const DEAL_ID = await resolveDealId()
@@ -178,7 +179,17 @@ if (!res.applied) {
 ok(`Оплата проведена (${res.method} id=${res.id}).`)
 
 // Confirm the portal state actually flipped to paid.
-const listAll = await call('crm.item.payment.list', { entityId: DEAL_ID, entityTypeId: 2 })
+// ⚠ Through `paymentListParams`, NOT a hand-built `{ entityId: DEAL_ID, entityTypeId: 2 }`.
+// Not a style point: `call(method, params: Record<string, unknown>)` accepts ANYTHING, so the type
+// of `entityId` is invisible to the compiler here BY CONSTRUCTION — and when `resolveDealId` began
+// returning a string (#542), this call silently started sending `entityId:"123"` instead of `123`,
+// the last site still assembling `crm.item.payment.list` params by hand — production
+// `findDealPayments` and `isDealPaymentPaid` both route through the helper, which coerces. The
+// helper declares `dealId: number`, so the same slip is now a BUILD error.
+// The cost here is not theoretical: this is the check that runs AFTER a real portal was mutated
+// (the seeded test portal, `--apply`), and a false «payment not marked paid» pushes the operator to
+// re-run `--apply` against a payment that already went through.
+const listAll = await call('crm.item.payment.list', paymentListParams(Number(DEAL_ID)))
 const rows = (listAll.result as Array<Record<string, unknown>> | undefined) ?? []
 const row = rows.find(r => String(r.id) === String(target.id))
 const nowPaid = row && String(row.paid) === 'Y'

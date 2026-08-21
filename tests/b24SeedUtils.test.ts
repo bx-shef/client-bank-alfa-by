@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractPayments, pickFreeEntityTypeId, validateTestWebhook } from '../scripts/lib/b24-seed-utils.mjs'
+import { extractPayments, paymentListParams, pickFreeEntityTypeId, validateTestWebhook } from '../scripts/lib/b24-seed-utils.mjs'
 
 // Pure helpers for scripts/seed-test-b24.mjs — the two bits with real logic.
 
@@ -53,5 +53,27 @@ describe('pickFreeEntityTypeId', () => {
   })
   it('is unaffected by unrelated odd ids', () => {
     expect(pickFreeEntityTypeId([1031, 1033])).toBe(1030)
+  })
+})
+
+// ⚠ THE ONLY thing that checks this helper's body. Nothing else can: `.mjs` bodies are read by
+// neither typecheck (`checkJs` is off) nor ESLint (not type-aware here), and the choke-point guard
+// in `paymentListParamsChokePoint.test.ts` looks at the SHAPE OF THE CALL, not at what the callee
+// does — proven by mutation: dropping the `Number(...)` inside this function left that guard green.
+// The coercion is the whole point (`crm.item.payment.list` wants a numeric `entityId`; a string
+// goes out silently), so it needs a test that fails when it disappears.
+describe('paymentListParams', () => {
+  it('coerces a numeric string to a number', () => {
+    expect(paymentListParams('7')).toEqual({ entityId: 7, entityTypeId: 2 })
+  })
+  it('leaves an actual number alone', () => {
+    expect(paymentListParams(123)).toEqual({ entityId: 123, entityTypeId: 2 })
+  })
+  it('always names the deal entity type', () => {
+    expect(paymentListParams(1).entityTypeId).toBe(2)
+  })
+  it('does not silently pass a string through', () => {
+    // The regression this exists for: `entityId: "123"` instead of `123` (#542).
+    expect(typeof paymentListParams('123').entityId).toBe('number')
   })
 })

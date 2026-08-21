@@ -1,6 +1,6 @@
 # client-bank-alfa-by
 
-> Last reviewed: 2026-07-30
+> Last reviewed: 2026-08-21
 
 Приложение Bitrix24 для импорта выписки из клиент-банка: онлайн из Альфа-Банка
 Беларусь (портал может быть в любой стране) или ручной загрузкой любой стандартной
@@ -88,7 +88,8 @@ corepack enable      # активирует pnpm нужной версии
 pnpm install         # установка зависимостей
 pnpm dev             # дев-сервер
 pnpm lint            # ESLint
-pnpm typecheck       # vue-tsc ×3: app + server (.nuxt/tsconfig.server.json) + tests (tsconfig.tests.json)
+pnpm typecheck       # vue-tsc ×4: app + server + node (tests, скрипты, vitest.config — tsconfig.node.json)
+                     #            + визуальные тесты и playwright.config (tsconfig.visual.json)
 pnpm test            # Vitest (unit + nuxt)
 pnpm check           # lint + typecheck + test одной командой (это же гоняет CI)
 pnpm generate        # сборка статики (SSG) → .output/public

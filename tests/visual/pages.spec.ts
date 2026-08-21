@@ -4,8 +4,9 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { VISUAL_ROUTES } from './routes'
-// @ts-expect-error — общий модуль на JS (его же использует scripts/screenshot.mjs); типов нет,
-// а заводить их ради одного вызова дороже этой строки.
+// Общий модуль на JS (его же использует scripts/screenshot.mjs) — своих типов не несёт, но под
+// проверкой (#542) выводится из самого JS, так что подавлять больше нечего: `@ts-expect-error`
+// здесь стал ЛОЖНЫМ и сам ронял проход.
 import { startStaticServer } from '../../scripts/lib/staticServer.mjs'
 
 // Визуальные регресс-тесты (#3): снимок ключевых экранов сравнивается с эталоном на каждом PR.
@@ -74,10 +75,13 @@ for (const theme of ['light', 'dark'] as const) {
       // Фикстурой, а не ручным `newContext`: ручной контекст не привязан к тесту, поэтому при
       // падении (штатный исход визуального теста) он оставался открытым, а Playwright не
       // прикладывал ни трассу, ни видео — в CI на руках оставалась одна diff-картинка.
+      // ⚠ `reducedMotion` здесь НЕ повторяем: опции с таким именем у раннера нет (она живёт в
+      // `contextOptions` и задана один раз в `playwright.config.ts`), а `contextOptions` при
+      // повторе не сливается, а ЗАМЕЩАЕТСЯ — то есть «продублировав для надёжности», мы бы
+      // затёрли конфиг. Прежняя строка молча не делала ничего (#542).
       test.use({
         colorScheme: theme,
-        viewport: { width: vp.width, height: vp.height },
-        reducedMotion: 'reduce'
+        viewport: { width: vp.width, height: vp.height }
       })
 
       for (const route of VISUAL_ROUTES.filter(r => r.themes.includes(theme))) {

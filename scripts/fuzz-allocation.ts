@@ -20,7 +20,6 @@ import { resolveAllocation } from '~/utils/allocation'
 import type { MatchMatrix } from '~/utils/purposeMatch'
 import { recognizeByMatrices } from '~/utils/purposeMatch'
 import { routeIdentifier } from '~/utils/identifierDispatch'
-import type { StatementItem } from '../app/types/statement'
 
 // ─────────────────────── seeded PRNG (mulberry32) ───────────────────────
 function mulberry32(seed: number) {
@@ -71,12 +70,16 @@ const companyByAccount = (acc: string): string | null =>
 const live = (s: number) => s >= 0
 const inScope = (c: string) => c === MY_CO || c === CLIENT_CO
 
-// ⚠ Валюта — тот же союз, что у доменной модели, а не `string`: фикстура с произвольной
-// строкой компилировалась, но описывала вход, которого в проде не бывает.
-type Currency = StatementItem['currency']
+// ⚠ The fixture currency is narrowed to THIS SCRIPT'S OWN union, not to a domain type: both
+// `StatementItem` and `AllocationCandidate` declare the field as a bare `string` — deliberately, a
+// real statement is not obliged to fit five codes. So there is nothing here to cross-check against,
+// and the narrowing exists for a different reason: `pick` infers the narrow union, and assigning a
+// field declared `string` into it does not compile. That is what surfaced once the scripts came
+// under typecheck (#542).
+type Cur = typeof CURRENCIES[number]
 
-interface Inv { id: string, number: string, amount: number, currency: Currency, companyId: string, stage: number }
-interface Pay { order: string, amount: number, currency: Currency, companyId: string, stage: number }
+interface Inv { id: string, number: string, amount: number, currency: Cur, companyId: string, stage: number }
+interface Pay { order: string, amount: number, currency: Cur, companyId: string, stage: number }
 interface Deal { id: string, companyId: string, stage: number }
 
 const invoices: Inv[] = Array.from({ length: 40 }, (_, i) => ({
@@ -111,7 +114,7 @@ const MATRICES: MatchMatrix[] = [
 ]
 
 // ─────────────────────── the algorithm (returns a category) ───────────────────────
-interface Payment { ourAcc: string, counterAcc: string, amount: number, currency: string, purpose: string }
+interface Payment { ourAcc: string, counterAcc: string, amount: number, currency: Cur, purpose: string }
 
 function classify(p: Payment): Category {
   if (!companyByAccount(p.ourAcc)) return 'my-company-not-found'
@@ -184,7 +187,7 @@ function genPayment(): Gen {
 
   let purpose = 'оплата по договору'
   let amount = pick([100, 250, 700, 1000])
-  let currency: Currency = pick(CURRENCIES)
+  let currency = pick(CURRENCIES)
   let expectedApply = false
   const liveInv = invoices.filter(i => inScope(i.companyId) && live(i.stage))
 

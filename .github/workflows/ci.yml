@@ -61,8 +61,11 @@ jobs:
       - name: Prepare Nuxt
         run: pnpm exec nuxi prepare
         # Generates .nuxt/eslint.config.mjs and the tsconfigs that lint / typecheck
-        # depend on — both .nuxt/tsconfig.json (app) and .nuxt/tsconfig.server.json
-        # (server/**, checked by the second vue-tsc pass in `pnpm typecheck`).
+        # depend on. BOTH generated tsconfigs are load-bearing: .nuxt/tsconfig.json is
+        # extended by the app pass and by tsconfig.visual.json (visual tests need its
+        # DOM lib), .nuxt/tsconfig.server.json by the server pass and by
+        # tsconfig.node.json (tests + dev scripts + vitest.config.ts) — four passes in
+        # `pnpm typecheck`, and a missing prepare would silently narrow all of them.
 
       - name: Lint
         run: pnpm lint
