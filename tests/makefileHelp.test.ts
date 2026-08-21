@@ -15,9 +15,29 @@ import { join } from 'node:path'
 const ROOT = join(import.meta.dirname, '..')
 const MAKEFILE = readFileSync(join(ROOT, 'Makefile'), 'utf8')
 
+/**
+ * Класс символов имени цели.
+ *
+ * ⚠ Было `[a-z][a-z-]*`, и это была не мелочь: GNU Make спокойно принимает цифры, точки и
+ * подчёркивания, а ВСЕ гарды этого файла (и awk самой цели `help`) опирались на узкий класс. Цель
+ * `rogue_target_2:` с захардкоженной чужой веткой в `curl` — то есть ровно та угроза, ради которой
+ * гарды написаны, — была невидима для всех шести разом: достаточно назвать её не через дефис.
+ * Замерено ревью на реальной цели, `make -n` её принимал, тесты оставались зелёными.
+ */
+const TARGET = String.raw`[A-Za-z0-9_][A-Za-z0-9_.-]*`
+
 /** Цели, объявленные в файле (левая часть до двоеточия, в начале строки). */
 function targets(): string[] {
-  return [...MAKEFILE.matchAll(/^([a-z][a-z-]*):/gm)].map(m => m[1]!)
+  return [...MAKEFILE.matchAll(new RegExp(`^(${TARGET}):`, 'gm'))].map(m => m[1]!)
+}
+
+/**
+ * Цели, чей рецепт что-то скачивает. Общий хелпер: раньше это выражение стояло дважды (в проверке
+ * `trap` и в проверке `REF`), и разъехаться двум копиям было бы нечем помешать.
+ */
+function downloaders(): RegExpExecArray[] {
+  return [...MAKEFILE.matchAll(new RegExp(`^(${TARGET}):\n(?:\t.*\n)+`, 'gm'))]
+    .filter(m => m[0].includes('curl -fsSL')) as RegExpExecArray[]
 }
 
 /** Цели, у которых описание `## …` стоит ВПЛОТНУЮ (тем же приёмом, что и `make help`: последняя
@@ -28,7 +48,7 @@ function documented(): string[] {
   for (const line of MAKEFILE.split('\n')) {
     if (line.startsWith('## ')) desc = line.slice(3)
     else {
-      const m = /^([a-z][a-z-]*):/.exec(line)
+      const m = new RegExp(`^(${TARGET}):`).exec(line)
       if (m && desc) {
         out.push(m[1]!)
         desc = ''
@@ -38,6 +58,14 @@ function documented(): string[] {
   return out
 }
 
+/** Цели, которые оператор набирает на СЕРВЕРЕ. Каждая обязана быть в `make help`. */
+const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
+  'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help',
+  'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe']
+
+/** Цели, которые запускают ИЗ РЕПОЗИТОРИЯ, а не с сервера — справка сервера их не касается. */
+const SERVICE = ['dev', 'build-local']
+
 describe('операторские цели Makefile видны в `make help`', () => {
   it('файл читается и цели находятся', () => {
     expect(targets().length).toBeGreaterThan(8)
@@ -45,16 +73,54 @@ describe('операторские цели Makefile видны в `make help`',
   })
 
   it('каждая операторская цель ОПИСАНА и попадёт в справку', () => {
-    // ⚠ Список закрытый: цель, которую оператор запускает на сервере, обязана быть в справке.
-    // Служебные (`dev`, `build-local`) сюда не входят — их запускают из репозитория.
-    const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
-      'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help',
-      'gw-stop', 'gw-start', 'compose-update']
     const shown = documented()
     for (const t of OPERATOR) {
       expect(targets(), `цели ${t} нет в Makefile`).toContain(t)
       expect(shown, `цель ${t} не попадёт в make help — описание оторвано от цели`).toContain(t)
     }
+  })
+
+  it('список операторских целей ЗАКРЫТ — новая обязана получить решение', () => {
+    // ⚠ Без этого «закрытый список» закрывал только сам себя: он проверял, что ПЕРЕЧИСЛЕННЫЕ цели
+    // описаны, и молчал о цели, которую в него не внесли. То есть ровно тот случай, ради которого
+    // гард написан — новая цель, о которой оператор не узнает, — проходил зелёным. Замерено:
+    // добавление цели в Makefile без правки списка не роняло ни одного теста.
+    // ⚠ Своя защита от «регулярка ничего не нашла»: `[].filter(…)` даёт `[]`, и проверка
+    // прошла бы зелёной, не проверив ничего. Соседний тест это ловит, но только пока файл гоняют
+    // целиком — `vitest -t «список закрыт»` показывал зелёный на полностью мёртвом `targets()`.
+    expect(targets().length, 'targets() ничего не нашла — проверка ниже была бы пустой').toBeGreaterThan(8)
+    const unclassified = targets().filter(t => !OPERATOR.includes(t) && !SERVICE.includes(t))
+    expect(unclassified, 'цель не отнесена ни к операторским, ни к служебным — решите, кто её запускает')
+      .toEqual([])
+  })
+
+  it('параметры оператора читаются как ШЕЛЛ-переменные, а не как макросы make', () => {
+    // ⚠ Замерено на настоящем Makefile: `make -n <цель> "VAR=$(shell touch X)"` ВЫПОЛНЯЕТ код на
+    // этапе разбора аргументов — под `-n`, и даже для переменной, которую файл нигде не упоминает.
+    // Это свойство самого make, закрыть его для произвольного имени нельзя (`override VAR :=`
+    // защищает, но убивает параметр — так живёт `REF`, которому значение задавать и не нужно).
+    //
+    // ⚠ Что ЗАКРЫВАЕТСЯ: форма `VAR=значение make цель` инъекцию не выполняет — но только если
+    // рецепт читает `$${VAR}` (шелл), а не `$(VAR)` (макрос). Через `$(VAR)` раскрытие происходит
+    // на обращении, и переменная из окружения исполняется так же. Замерено обе стороны:
+    // `V='$(shell touch C)' make -f Mk t` с `$(V)` в рецепте — выполнилось; с `$$V` — нет.
+    // ⚠ Это НЕ полная защита, и выдавать её за таковую нельзя: привычную форму
+    // `make цель VAR=…` никто не отменял, она работает и остаётся опасной. Общее правило
+    // («не вставляй строку `make …`, которую не составил сам») записано в OPERATIONS.md и здесь
+    // не дублируется. Гард лишь не даёт безопасной форме перестать работать.
+    const PARAMS = ['DAY', 'DOMAIN', 'HOST', 'TO', 'CONSENT', 'SINCE', 'CONFIRM']
+    for (const line of MAKEFILE.split('\n')) {
+      if (!line.startsWith('\t')) continue // только рецепты
+      for (const v of PARAMS) {
+        expect(line, `параметр ${v} читается как $(${v}) — форма через окружение перестанет защищать`)
+          .not.toContain(`$(${v})`)
+      }
+    }
+    // Гард не должен пройти, найдя пустоту: параметры обязаны реально встречаться в рецептах в
+    // безопасной форме. Без этой строки переименование любого из них выключило бы проверку молча.
+    const used = PARAMS.filter(v => MAKEFILE.includes('$${' + v + ':-}'))
+    expect(used, 'параметры не найдены в безопасной форме — имена разъехались с гардом')
+      .toEqual(PARAMS)
   })
 
   it('`self-update` существует — без него остальные цели на сервер не доедут', () => {
@@ -87,7 +153,7 @@ describe('операторские цели Makefile видны в `make help`',
     // ⚠ Пинится САМО УСЛОВИЕ, а не упоминание переменной: слово `CONFIRM` встречается ещё и в
     // подсказке «Применить: make compose-update CONFIRM=1», поэтому проверка на вхождение
     // проходила даже при условии, выключённом в `if true` (поймано мутацией).
-    expect(cu, 'compose-update заменяет без подтверждения').toMatch(/if \[ "\$\(CONFIRM\)" = "1" \]; then/)
+    expect(cu, 'compose-update заменяет без подтверждения').toMatch(/if \[ "\$\$\{CONFIRM:-\}" = "1" \]; then/)
     // ⚠ И условия МАЛО. Второе мутационное ревью показало обход, которого срез не видит вовсе:
     // `CONFIRM ?= 1`, объявленный ГДЕ УГОДНО выше по файлу, делает подтверждение значением по
     // умолчанию — и `make compose-update` без единого аргумента начинает заменять боевой compose.
@@ -138,10 +204,9 @@ describe('операторские цели Makefile видны в `make help`',
 
   it('временные файлы удаляются по trap во ВСЕХ скачивающих целях', () => {
     // Иначе на сервере копятся /tmp/Makefile.XXXXXX при каждом запуске.
-    const downloaders = [...MAKEFILE.matchAll(/^([a-z][a-z-]*):\n(?:\t.*\n)+/gm)]
-      .filter(m => m[0].includes('curl -fsSL'))
-    expect(downloaders.length).toBeGreaterThan(4)
-    for (const m of downloaders) {
+    const found = downloaders()
+    expect(found.length).toBeGreaterThan(4)
+    for (const m of found) {
       expect(m[0], `${m[1]}: нет trap на удаление временного файла`).toMatch(/trap 'rm -f "\$\$t"' EXIT/)
     }
   })
@@ -150,16 +215,25 @@ describe('операторские цели Makefile видны в `make help`',
     // ⚠ Оба литерала `--to-direct` и `--to-gateway` есть в файле при любой перестановке, поэтому
     // проверка на вхождение инверсию не ловит. А перепутанное сопоставление означает, что
     // `make prior-switch TO=direct` в момент инцидента ВКЛЮЧИТ шлюз вместо отключения.
-    expect(MAKEFILE).toMatch(/"\$\(TO\)" = "direct" \] && a="--to-direct"/)
-    expect(MAKEFILE).toMatch(/"\$\(TO\)" = "gateway" \] && a="--to-gateway"/)
+    expect(MAKEFILE).toMatch(/"\$\$\{TO:-\}" = "direct" \] && a="--to-direct"/)
+    expect(MAKEFILE).toMatch(/"\$\$\{TO:-\}" = "gateway" \] && a="--to-gateway"/)
   })
 
   it('цели, зовущие скрипты, тянут их из того же REF', () => {
     // Иначе `self-update` обновит Makefile из одной ветки, а скрипты приедут из другой.
-    for (const t of ['prior-probe', 'prior-switch', 'poll-check']) {
-      const i = MAKEFILE.indexOf(`\n${t}:`)
-      const body = MAKEFILE.slice(i, i + 400)
-      expect(body, `${t} не использует $(RAW)`).toMatch(/\$\(RAW\)/)
+    // ⚠ Перебираем ВСЕ скачивающие цели, а не три названные руками: список из трёх имён устаревал
+    // молча — новая цель качала бы скрипт откуда угодно, и тест этого не видел.
+    // ⚠ Проверяем `$(REF)`, а не `$(RAW)`: `self-update` тянет сам Makefile из КОРНЯ репозитория,
+    // а `$(RAW)` указывает в `scripts/`, так что требовать его от него было бы неверно. Общий
+    // инвариант — одна и та же ветка, и `$(RAW)` её в себе и содержит.
+    const found = downloaders()
+    expect(found.length).toBeGreaterThan(4)
+    for (const m of found) {
+      // ⚠ Смотрим на САМУ строку curl, а не на тело цели: в теле есть ещё `@echo "… из $(REF)"`,
+      // и проверка по всему телу зеленела на этом echo при захардкоженной чужой ветке в curl.
+      // Замерено мутацией — подмена URL в curl тест НЕ роняла.
+      const curlLine = m[0].split('\n').find(l => l.includes('curl -fsSL'))!
+      expect(curlLine, `${m[1]!} качает не из $(REF)`).toMatch(/\$\(RAW\)|\$\(REF\)/)
     }
   })
 })
