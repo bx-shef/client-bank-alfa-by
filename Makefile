@@ -184,7 +184,7 @@ compose-update:
 	       n=$$(printf '%s\n' "$$d" | grep -c . || true); \
 	       echo "[make] отличия текущего файла от $(REF) — $$n строк (- сервер, + репозиторий):"; \
 	       printf '%s\n' "$$d"; \
-	       if [ "$(CONFIRM)" = "1" ]; then \
+	       if [ "$${CONFIRM:-}" = "1" ]; then \
 	         b="./docker-compose.prod.yml.bak-$$(date +%Y%m%d-%H%M%S)"; \
 	         cp ./docker-compose.prod.yml "$$b" && cp "$$t" ./docker-compose.prod.yml \
 	         && echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy"; \
@@ -198,7 +198,7 @@ compose-update:
 # что вообще можно запустить.
 help:
 	@awk '/^## /{d=substr($$0,4)} \
-	      /^[a-z][a-z-]*:/{if(d!=""){printf "  %-16s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
+	      /^[A-Za-z0-9_][A-Za-z0-9_.-]*:/{if(d!=""){printf "  %-16s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
 	      $(MAKEFILE_LIST)
 
 ## Что происходит с опросом банков: успехи, падения, продление токенов (#522)
@@ -208,7 +208,7 @@ help:
 poll-check:
 	@t=$$(mktemp /tmp/poll-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-poll-check.sh" \
-	  && bash "$$t" "$(SINCE)"
+	  && bash "$$t" "$${SINCE:-}"
 
 ## Переключить Приорбанк между прямым адресом и крипто-шлюзом (#522)
 #
@@ -218,8 +218,8 @@ poll-check:
 prior-switch:
 	@t=$$(mktemp /tmp/prior-switch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prior-switch-host.sh" \
-	  && { a="--show"; [ "$(TO)" = "direct" ] && a="--to-direct"; \
-	       [ "$(TO)" = "gateway" ] && a="--to-gateway"; bash "$$t" $$a; }
+	  && { a="--show"; [ "$${TO:-}" = "direct" ] && a="--to-direct"; \
+	       [ "$${TO:-}" = "gateway" ] && a="--to-gateway"; bash "$$t" $$a; }
 
 #
 # ⚠ Домен НЕ спрашиваем — читаем `DOMAIN` из `./.env`, который на сервере и так рядом. Аварийную
@@ -236,8 +236,8 @@ prior-probe:
 	@echo "[make] скачиваю prior-host-probe.sh из $(REF)"
 	@t=$$(mktemp /tmp/prior-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prior-host-probe.sh" \
-	  && { h="$(HOST)"; [ -n "$$h" ] || h="https://api.priorbank.by:9344"; \
-	       c=""; [ "$(CONSENT)" = "1" ] && c="--with-consent"; \
+	  && { h="$${HOST:-}"; [ -n "$$h" ] || h="https://api.priorbank.by:9344"; \
+	       c=""; [ "$${CONSENT:-}" = "1" ] && c="--with-consent"; \
 	       bash "$$t" "$$h" $$c; }
 
 ## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
@@ -245,7 +245,7 @@ doctor:
 	@echo "[make] скачиваю prod-doctor.sh из $(REF)"
 	@t=$$(mktemp /tmp/prod-doctor.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-doctor.sh" \
-	  && { d="$(DOMAIN)"; [ -n "$$d" ] || d="$(call env-value,DOMAIN)"; \
+	  && { d="$${DOMAIN:-}"; [ -n "$$d" ] || d="$(call env-value,DOMAIN)"; \
 	       echo "[make] домен: $${d:-<не задан, внешние проверки пропущу>}"; bash "$$t" "$$d"; }
 
 ## Счётчики очередей из работающего backend. Нужен B24_APPLICATION_TOKEN (берётся из ./.env)
@@ -276,4 +276,4 @@ alfa-page-probe:
 	@echo "[make] скачиваю prod-alfa-page-probe.sh из $(REF)"
 	@t=$$(mktemp /tmp/alfa-page-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-alfa-page-probe.sh" \
-	  && bash "$$t" "$(DAY)"
+	  && bash "$$t" "$${DAY:-}"
