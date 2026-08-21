@@ -17,7 +17,7 @@
 > ⚠ **Но ЧТО именно — не установлено, и
 > [#488](https://github.com/bx-shef/client-bank-alfa-by/issues/488)/[#489](https://github.com/bx-shef/client-bank-alfa-by/issues/489)
 > остаются ОТКРЫТЫМИ.** Токен обновляет не только крон keep-alive: сам опрос зовёт `ensureFresh` →
-> `ensureBankToken` по дороге (`bankFetch.ts:146`), тик идёт каждые `CRON_INTERVAL_MIN`. То есть
+> `ensureBankToken` по дороге (`bankFetch.ts`, ветка Альфы в `fetchBankStatement`), тик идёт каждые `CRON_INTERVAL_MIN`. То есть
 > наблюдаемое одинаково объясняется и новым механизмом, и ровно тем старым, который #488 назвал
 > ненадёжным. `scheduleBankKeepAlive` по коду зовётся ДО `queueEnabled()` — но «код так написан» и
 > «на проде сработало именно это» разные утверждения. Различает только строка `[bank-keepalive]` в

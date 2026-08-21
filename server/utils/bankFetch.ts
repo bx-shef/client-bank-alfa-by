@@ -32,6 +32,7 @@ import { dbQuery } from '../db/client'
 import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import { dedupKey } from '../../app/utils/statement'
 import { useServerLogger } from './serverLogger'
+import { logSafe } from './logSafe'
 
 /** The statement window to fetch, resolved from a FetchJob. */
 export interface BankFetchQuery {
@@ -69,48 +70,156 @@ export function alfaStatementQuery(account: string, dateFrom: string, dateTo: st
 
 const log = useServerLogger('fetch')
 
-/** Runaway backstop for page walking — not an expected limit. A real day never approaches it. */
+/**
+ * Runaway backstop for page walking — not an expected limit.
+ *
+ * ⚠ It is NOT decoration and it is NOT redundant with {@link ALFA_WALK_BUDGET_MS}: which of the two
+ * binds depends on the bank. A bank that answers instantly is bounded by this count (19 gaps ×
+ * {@link ALFA_PAGE_DELAY_MS} stays well inside the time budget); a slow one is bounded by the time
+ * budget long before page 20. Two independent limits, both reachable, both LOUD — see `AlfaWalkStop`.
+ */
 export const MAX_ALFA_STATEMENT_PAGES = 20
 
+/** Courtesy gap between page requests of ONE account. Paid only when a page had rows, so a quiet
+ *  day (page 0 empty) still costs one request and zero waiting. */
+export const ALFA_PAGE_DELAY_MS = 500
+
+/** Wall-clock ceiling on the whole walk, measured across the bank's own latency, not just our
+ *  sleeps: 20 pages × a 20 s response is 400 s, and a job that long holds a worker slot for the
+ *  better part of two cron ticks. Binding for a slow bank (see MAX_ALFA_STATEMENT_PAGES). */
+export const ALFA_WALK_BUDGET_MS = 20_000
+
 /**
- * Walk `GET /accounts/statement` pages until one adds nothing new.
+ * Why a page walk stopped.
  *
- * ⚠ WHY THIS EXISTS (#561). We asked for one day and got back EXACTLY 100 operations, four days
- * running, with true zeros on the two days between — measured on the portal, not inferred. There is
- * no cap of 100 anywhere on our side (checked the whole bank→parse→crm-sync path), so the number
- * comes from the bank. `pageRowCount: '0'` is documented as «все», but that is a line in a PDF, not
- * a measurement — and we never read a page marker back, so if `0` actually means «default page», we
- * have been dropping everything past the first hundred every single day and could not have known.
+ * ⚠ The split is the whole point of classifying at all: `exhausted`/`repeat` mean «the bank has no
+ * more for this window», `page-cap`/`time-cap` mean «WE stopped, there may be more». Collapsing
+ * them would rebuild the exact silent truncation #561 exists to end, one layer up.
+ */
+export type AlfaWalkStop = 'exhausted' | 'repeat' | 'page-cap' | 'time-cap'
+
+export interface AlfaWalkResult {
+  /** Pages actually requested (≥1). */
+  pages: number
+  /** Operations that came from pages 2..N — i.e. rows the single-request version was losing. */
+  recovered: number
+  stop: AlfaWalkStop
+}
+
+export interface AlfaWalkDeps {
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+}
+
+/**
+ * What to say in the log about a finished walk — `null` when there is nothing worth saying.
+ *
+ * Pure, and separate from the loop on purpose: «when do we log» is the part that silently rots, and
+ * a decision embedded in a callback inside a transport can be mutated dead without a single test
+ * turning red (the same reason `buildOpLogLine` exists). Two independent facts, so up to two
+ * clauses: we recovered rows that used to vanish, and/or we stopped before the data ran out.
+ *
+ * ⚠ No `[fetch]` prefix: `ServerLineFormatter` already prints the channel, and a literal tag here
+ * would render as `[fetch] WARNING: [fetch] …` — the exact duplication `buildOpLogLine` documents.
+ */
+export function alfaWalkNotice(label: string, info: AlfaWalkResult): string | null {
+  const truncated = info.stop === 'page-cap' || info.stop === 'time-cap'
+  if (info.recovered <= 0 && !truncated) return null
+  const parts: string[] = []
+  if (info.recovered > 0) {
+    parts.push(
+      `ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ ${info.recovered} операций со страниц 2..${info.pages}`
+      + ' — до этой правки они терялись молча (#561)'
+    )
+  }
+  if (truncated) {
+    const why = info.stop === 'page-cap'
+      ? `потолок ${MAX_ALFA_STATEMENT_PAGES} страниц`
+      : `бюджет ${Math.round(ALFA_WALK_BUDGET_MS / 1000)} с`
+    parts.push(
+      `ОБХОД СТРАНИЦ ОБОРВАН на ${info.pages}-й (${why}) — выписка за это окно могла прийти НЕ ПОЛНОСТЬЮ;`
+      + ' поднимите потолок или сузьте CRON_LOOKBACK_DAYS (#561)'
+    )
+  }
+  return `${label}: ${parts.join(' | ')}`
+}
+
+/**
+ * Walk `GET /accounts/statement` pages until the bank runs out.
+ *
+ * ⚠ WHY THIS EXISTS (#561). We asked for one day and got back EXACTLY 100 operations, on five
+ * separate days, with true zeros on the two days between — measured on the portal, not inferred.
+ * There is no cap of 100 anywhere on our side (checked the whole bank→parse→crm-sync path), so the
+ * number comes from the bank. `pageRowCount: '0'` is documented as «все», but that is a line in a
+ * PDF, not a measurement — and we never read a page marker back, so if `0` actually means «default
+ * page», we have been dropping everything past the first hundred every single day and could not
+ * have known.
  *
  * ⚠ THE LOOP IS SAFE UNDER BOTH READINGS, which is the point — it does not require us to know which
  * is true:
- *   - `0` really means «все» ⇒ page 1 returns the same rows (or none). Dedup makes `fresh === 0`
- *     and we stop after ONE extra request. Nothing changes, nothing doubles.
+ *   - `0` really means «все» ⇒ page 1 repeats page 0 (or is empty). We stop after ONE extra
+ *     request. Nothing changes, nothing doubles.
  *   - `0` means «a page» ⇒ page 1 carries the operations we were silently losing. We take them and
  *     say so loudly, because a silent recovery would hide how long it had been happening.
  *
+ * ⚠ THE STOP CONDITION READS THE RAW PAGE, NOT THE DEDUP RESULT, and that distinction is load-
+ * bearing. Stopping on «this page added nothing new» looks equivalent and is not: `dedupKey` falls
+ * back to a content signature when `docId` is empty, and that signature does NOT include the payer's
+ * NAME — so two different payers with the same amount, batch `acceptDate`, template purpose and
+ * recipient account collide. On the old single-request path such a collision cost one operation; as
+ * a stop condition it would end the walk and cost EVERY REMAINING PAGE — rebuilding the silent mass
+ * loss this function exists to end. So: an empty page means the data ran out, a page whose raw rows
+ * repeat one we already fetched means the bank ignored `pageNo`, and nothing else stops the walk.
+ * Dedup still runs — but on the OUTPUT, where collapsing a duplicate is all it can do.
+ *
  * Dedup is by `dedupKey` — the SAME key the B24 activity marker uses, so «already seen» here means
- * exactly what it means downstream. That is what makes the ignored-`pageNo` case harmless rather
- * than a duplicate storm.
+ * exactly what it means downstream.
  */
 export async function fetchAlfaStatementPages(
   account: string,
   fetchPage: (pageNo: number) => Promise<AlfaStatementResponse>,
-  onRecovered?: (info: { pages: number, recovered: number }) => void
+  onWalk?: (info: AlfaWalkResult) => void,
+  deps: AlfaWalkDeps = {}
 ): Promise<StatementItem[]> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  const now = deps.now ?? (() => Date.now())
+  const startedAt = now()
+
   const out: StatementItem[] = []
   const seen = new Set<string>()
+  // Raw-page signatures, not just the previous one: a bank that cycles 0,1,0,1 would otherwise walk
+  // to the cap. Bounded by MAX_ALFA_STATEMENT_PAGES entries of data we are already holding in `out`.
+  const pageSigs = new Set<string>()
   let recovered = 0
   let pages = 0
+  // ⚠ Initialised to the LOUD value: every exit below assigns explicitly, so this is unreachable
+  // today — and if a future edit adds an exit that forgets to, it reports «we may have truncated»
+  // rather than «all good». Fail-loud is the safe default for this particular variable.
+  let stop: AlfaWalkStop = 'page-cap'
 
   for (let pageNo = 0; pageNo < MAX_ALFA_STATEMENT_PAGES; pageNo++) {
     const raw = await fetchPage(pageNo)
     const errs = alfaStatementErrors(raw)
     // Unchanged posture: an errored response is NOT «no operations» — fail loud so the job retries.
+    // Checked BEFORE the rows, because Alfa can return both, and a partial page must not be mistaken
+    // for the end of the data.
     if (errs.length > 0) {
       throw new Error(`fetchBankStatement alfa: account ${account} returned errors — ${errs.map(e => e.message ?? '?').join('; ')}`)
     }
     pages++
+
+    const rows = raw.page ?? []
+    if (rows.length === 0) {
+      stop = 'exhausted'
+      break
+    }
+    const sig = JSON.stringify(rows)
+    if (pageSigs.has(sig)) {
+      stop = 'repeat'
+      break
+    }
+    pageSigs.add(sig)
+
     let fresh = 0
     for (const item of normalizeAlfa(raw, { account })) {
       const key = dedupKey(item)
@@ -120,12 +229,19 @@ export async function fetchAlfaStatementPages(
       fresh++
     }
     if (pageNo > 0) recovered += fresh
-    // Nothing new ⇒ either the page was empty or the bank ignored `pageNo` and repeated itself.
-    // Both mean «done», and telling them apart is not worth another request.
-    if (fresh === 0) break
+
+    if (pageNo >= MAX_ALFA_STATEMENT_PAGES - 1) {
+      stop = 'page-cap'
+      break
+    }
+    if (now() - startedAt >= ALFA_WALK_BUDGET_MS) {
+      stop = 'time-cap'
+      break
+    }
+    await sleep(ALFA_PAGE_DELAY_MS)
   }
 
-  if (recovered > 0) onRecovered?.({ pages, recovered })
+  onWalk?.({ pages, recovered, stop })
   return out
 }
 
@@ -173,8 +289,9 @@ export interface BankFetchDeps {
   /** Priorbank's async create+poll engine (A5b). Injected so the delegation is unit-testable; the
    *  live impl is `fetchPriorStatement`, which owns its own POST/poll transport. */
   fetchPrior: (query: BankFetchQuery, stored: BankToken) => Promise<StatementItem[]>
-  /** Loud channel for «we just recovered operations that used to be dropped» (#561). Optional so
-   *  every existing test double keeps compiling; the live wiring below always provides it. */
+  /** Loud channel for the two things a page walk can discover (#561): operations that used to be
+   *  dropped silently, and a walk WE cut short. Optional so every existing test double keeps
+   *  compiling; the live wiring below always provides it. */
   warn?: (message: string) => void
 }
 
@@ -221,11 +338,15 @@ export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchD
         const url = `${cfg.base}${cfg.statementPath}?${alfaStatementQuery(query.account, query.dateFrom, query.dateTo, pageNo).toString()}`
         return await deps.getJson(url, token.accessToken) as AlfaStatementResponse
       },
-      // ⚠ WARNING, not info: this fires only when a later page carried operations the first one did
-      // not — i.e. proof that the single-request version had been losing them silently (#561).
-      ({ pages, recovered }) => deps.warn?.(
-        `[fetch] alfa ${query.account} ${query.dateFrom}..${query.dateTo}: ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ ${recovered} операций со страниц 2..${pages} — до этой правки они терялись молча (#561)`
-      )
+      // ⚠ WARNING, not info, and only when there is something to say: a later page carried
+      // operations the first one did not (proof the single-request version had been losing them),
+      // or WE stopped the walk before the bank ran out. `alfaWalkNotice` owns both decisions.
+      // ⚠ The account is `logSafe`'d exactly like worker.ts's `[fetch]` line — it is bank-supplied
+      // text on its way into a log, and the two lines must not disagree about that.
+      (info) => {
+        const line = alfaWalkNotice(`alfa ${logSafe(query.account)} ${query.dateFrom}..${query.dateTo}`, info)
+        if (line) deps.warn?.(line)
+      }
     )
   }
 

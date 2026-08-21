@@ -6,25 +6,33 @@
 // two numbers are wildly different (a 5-minute tick over a 105-minute sweep). Operators must see
 // the sweep time, because that — not CRON_INTERVAL_MIN — is the statement freshness they get.
 //
-// Cost is per-REQUEST, not per-job: Alfa's sweep is one GET per account, but Prior's async
-// create+poll spends up to ~10 HTTP calls per account, so the same job count is ~10× the bank
-// traffic. `requestsPerAccount` makes that explicit instead of hiding it behind "jobs".
+// Cost is per-REQUEST, not per-job, and NEITHER provider is one request per account any more: Alfa
+// walks statement pages (#561, ~2 GETs on a day with operations) and Prior's async create+poll
+// spends ~10 HTTP calls, so the same job count is 2×/10× the bank traffic.
+// `requestsPerAccount` makes that explicit instead of hiding it behind "jobs".
 //
 // No I/O — unit-tested, and the cron only logs from it (it never throttles here; the actual cap is
 // the fleet-wide BullMQ limiter, A8).
 
 /**
- * Per-provider request cost of ONE account sweep.
+ * Per-provider request cost of ONE account sweep — the TYPICAL cost, not a hard ceiling.
  *
  * ⚠ Alfa is **2**, not 1, since #561: the statement GET plus one page-walk request. The walk exists
- * because `pageRowCount: '0'` is documented as «все» but never verified, and the portal showed
- * exactly 100 operations a day for four days running — so a day with operations now always costs a
+ * because `pageRowCount: '0'` is documented as «все» but was never verified, and the portal showed
+ * exactly 100 operations a day on five separate days — so a day with operations now always costs a
  * second request to prove there is no page two. A day with none still costs one, but the budget has
  * to assume the expensive case.
  *
- * ⚠ Getting this wrong is SILENT and lands on the bank, not on us: the limiter counts JOBS, and if
- * a job secretly costs двое, the fleet spends twice the budget while every dashboard says it is
- * within cap. That is exactly the trap the Prior row already documents — hence the same treatment.
+ * ⚠ NEITHER number is a guaranteed maximum, and pretending otherwise would be the worse lie. A busy
+ * Alfa account can walk further (up to MAX_ALFA_STATEMENT_PAGES) and a slow Prior resource can poll
+ * further (up to PRIOR_POLL_MAX_ATTEMPTS = 20) — i.e. Prior's 10 has ALWAYS been a typical cost, and
+ * Alfa's 2 is the same kind of number. What bounds the tail is not this constant: each walk/poll
+ * carries its own page cap AND wall-clock budget, and both exits are logged loudly, so a fleet that
+ * systematically costs more than budgeted says so in the log instead of quietly overspending.
+ *
+ * ⚠ Getting this wrong is SILENT and lands on the bank, not on us: the limiter counts JOBS, and if a
+ * job secretly costs double, the fleet spends twice the budget while every dashboard says it is
+ * within cap. That is the whole reason the number exists.
  *
  * Prior: an accounts-resolve GET + a create POST + up to PRIOR_POLL_MAX_ATTEMPTS polls.
  */
@@ -113,6 +121,23 @@ export function providerJobRate(requestsPerWindow: number, requestsPerAccount: n
   if (!Number.isFinite(requests) || requests < 1) return 1
   if (!Number.isFinite(cost) || cost < 1) return requests
   return Math.max(1, Math.floor(requests / cost))
+}
+
+/**
+ * The inverse of {@link providerJobRate}: turn a provider's JOB-rate limiter back into the REQUEST
+ * budget it actually represents.
+ *
+ * ⚠ This exists because forgetting it is invisible. `estimateProviderCycles` takes REQUESTS; a
+ * limiter configured in JOBS looks like a plain number and substitutes silently, and the only symptom
+ * is a sweep estimate off by exactly `requestsPerAccount` — which then trips `exceedsInterval` early
+ * and tells the operator to raise CRON_LOOKBACK_DAYS for a fleet that is nowhere near the cap. That
+ * had already happened for Alfa the moment its limiter started dividing (#561). Pure.
+ */
+export function providerRequestBudget(
+  provider: string,
+  jobs: { max: number, duration: number }
+): { requests: number, durationMs: number } {
+  return { requests: jobs.max * (REQUESTS_PER_ACCOUNT[provider] ?? 1), durationMs: jobs.duration }
 }
 
 /** Human-readable capacity line for the cron log (minutes, one decimal). Pure. */

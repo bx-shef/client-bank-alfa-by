@@ -30,7 +30,7 @@ describe('envFlag', () => {
 const alfaJobs = (requests: number) => providerJobRate(requests, REQUESTS_PER_ACCOUNT['alfa-by'] ?? 1)
 
 describe('queueRuntimeConfig', () => {
-  it('defaults to a single-container role (workers + cron, concurrency 1, 80/60s fetch rate)', () => {
+  it('defaults to a single-container role (workers + cron, concurrency 1, 40 jobs/60s fetch rate)', () => {
     expect(queueRuntimeConfig({})).toEqual({
       workers: true,
       cron: true,
@@ -40,6 +40,15 @@ describe('queueRuntimeConfig', () => {
       priorFetchRate: { max: 10, duration: DEFAULT_FETCH_RATE_DURATION_MS },
       priorConcurrency: DEFAULT_PRIOR_CONCURRENCY
     })
+  })
+
+  it('sizes the Alfa limiter in JOBS too — 80 requests ÷ 2 per job = 40', () => {
+    // ⚠ Один якорь РУКОПИСНЫМ числом, а не только через `alfaJobs`. Формула проверяет проводку, но
+    // читателю нужно значение, которое реально уедет в лимитер, — и сосед по этому файлу
+    // (`priorFetchRate`, 200÷10=20) держит его именно так. Разъедется модель — здесь станет красным.
+    expect(queueRuntimeConfig({}).fetchRate.max).toBe(40)
+    expect(DEFAULT_FETCH_RATE_MAX).toBe(80)
+    expect(REQUESTS_PER_ACCOUNT['alfa-by']).toBe(2)
   })
 
   it('sizes the Prior limiter in JOBS from its REQUEST budget (per-request accounting)', () => {
