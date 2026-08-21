@@ -5,7 +5,6 @@
 // token store. Shapes follow the official REST docs (common/events/on-app-*).
 
 /** Event codes this app subscribes to. B24 sends them upper-cased on the wire. */
-export type B24EventCode = 'ONAPPINSTALL' | 'ONAPPUNINSTALL'
 
 /** App status of the subscriber, per B24: Local / Free-listed / Subscription. */
 export type B24AppStatus = 'L' | 'F' | 'S'

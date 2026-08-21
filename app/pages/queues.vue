@@ -7,7 +7,7 @@
 // generator (fabricated numbers in the browser) that does NOT poll the queues —
 // for screenshots / no-backend dev. NB: this is unrelated to the backend
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.
-// `clear` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
+// `operator` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'

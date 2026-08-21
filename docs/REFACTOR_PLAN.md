@@ -63,7 +63,9 @@
 Каждый банк получается по-своему, но отдаёт **одинаковый выход** — `StatementItem[]`. Это и делает
 приложение банк-независимым, и даёт один вид теста на всех (`app/types/statement.ts`):
 
-- **вход** — `StatementFetchQuery`: `providerId` (банк) + `account` (счёт) + `dateFrom/dateTo` (диапазон);
+- **вход** — свой у каждого провайдера (`bankFetch.ts` для Альфы, `priorFetch.ts` для Приора):
+  банк + счёт + диапазон дат. ⚠ Общего типа запроса больше нет — он был объявлен и никем не
+  реализован (#532);
   per-account; батч-запрос по нескольким счетам (`BankProvider.getStatement`) — `StatementQuery` в `banks.ts`;
 - **процесс** — получить выписку у провайдера и разобрать (`fetch` — I/O, per-provider; тестируется отдельно);
 - **выход** — `StatementItem[]`, контракт нормализатора `StatementNormalizer = (raw, ctx) => StatementItem[]`.

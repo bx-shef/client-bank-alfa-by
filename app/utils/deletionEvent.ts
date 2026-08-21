@@ -15,7 +15,6 @@ import { eventCode } from './b24Events'
 import { B24_DELETION_EVENTS, SMART_INVOICE_ENTITY_TYPE_ID } from '~/config/b24'
 
 export { B24_DELETION_EVENTS, SMART_INVOICE_ENTITY_TYPE_ID }
-export type B24DeletionEvent = typeof B24_DELETION_EVENTS[number]
 
 /** Semantic kind of a deleted entity, deciding how the consumer reconciles (§9.2):
  *  - `deal`/`invoice` — an allocation AMOUNT-target: find distributions on it, free them;

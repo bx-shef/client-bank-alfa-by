@@ -19,7 +19,7 @@ type ChatOption = { value: string, label: string }
 // it in a slider or the browser navigated to it, and both must share one settings state (and not
 // double-load).
 // Safe as a module singleton only because these pages are CLIENT-ONLY (SSG generate,
-// layout `clear`, gated on frame auth) — it never runs during SSR, so there's no
+// layout `portal`, gated on frame auth) — it never runs during SSR, so there's no
 // cross-request state leak. Do NOT reuse this pattern on an SSR route.
 let instance: ReturnType<typeof create> | null = null
 

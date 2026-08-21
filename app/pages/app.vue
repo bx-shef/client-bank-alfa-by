@@ -22,7 +22,7 @@ import {
 
 const log = useLogger('app')
 
-// In-portal page: `clear` layout wraps it in <B24App> so b24ui theming/colorMode
+// In-portal page: `portal` layout wraps it in <B24App> so b24ui theming/colorMode
 // work inside the iframe; standalone (direct URL) it just renders the same UI.
 definePageMeta({ layout: 'portal' })
 

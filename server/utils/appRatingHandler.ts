@@ -46,8 +46,6 @@ export async function handleAppRatingShow(
   return { status: 200, body: { show: shouldPrompt(state, deps.now()) } }
 }
 
-export type RatingReportAction = 'prompted' | 'opened'
-
 export interface AppRatingReportDeps {
   memberIdByDomain: (domain: string) => Promise<string | null>
   validateFrame: (domain: string, accessToken: string) => Promise<string>
