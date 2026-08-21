@@ -12,6 +12,7 @@
 import { Queue } from 'bullmq'
 import type { ConnectionOptions, RedisClient } from 'bullmq'
 import { Q_EVENTS, type QueueName } from './topology'
+import { WORKER_BEAT_PREFIX, workerBeatKey } from '../../app/utils/workerHeartbeat'
 
 const queues = new Map<QueueName, Queue>()
 
@@ -138,6 +139,35 @@ export async function incrementWithTtl(key: string, ttlSec: number): Promise<num
   // (already bucket-scoped) counter self-clean ~ttl after its last use.
   await client.expire(namespaced, Math.max(1, Math.floor(ttlSec)))
   return value
+}
+
+/** Отметить пульс воркера: `SET worker-beat:<id> <ts> EX <ttl>` (#466). Использует общий клиент
+ *  очередей. Бросает без `REDIS_URL` — гейтить `queueEnabled()`. */
+export async function markWorkerBeat(id: string, ttlSec: number, nowMs: number): Promise<void> {
+  const client = (await redisClient()) as unknown as {
+    set: (...args: unknown[]) => Promise<unknown>
+  }
+  await client.set(workerBeatKey(id), String(nowMs), 'EX', Math.max(1, Math.floor(ttlSec)))
+}
+
+/**
+ * Сколько воркеров отметилось за последний TTL (#466).
+ *
+ * ⚠ `SCAN`, а не `KEYS`: ключей единицы, но `KEYS` блокирует Redis целиком, а сюда ходит проверка
+ * здоровья — инструмент, который обязан быть дешевле того, что он проверяет.
+ */
+export async function countLiveWorkers(): Promise<number> {
+  const client = (await redisClient()) as unknown as {
+    scan: (cursor: string, ...args: unknown[]) => Promise<[string, string[]]>
+  }
+  const seen = new Set<string>()
+  let cursor = '0'
+  do {
+    const [next, batch] = await client.scan(cursor, 'MATCH', `${WORKER_BEAT_PREFIX}*`, 'COUNT', 100)
+    for (const k of batch) seen.add(k)
+    cursor = next
+  } while (cursor !== '0')
+  return seen.size
 }
 
 /** Close all cached Queue connections (graceful shutdown symmetry with workers). */

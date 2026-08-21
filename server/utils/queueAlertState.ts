@@ -13,6 +13,38 @@ import type { QueueAlert } from './queueAlert'
 let current: QueueAlert[] = []
 let checkedAtMs: number | null = null
 
+/**
+ * State of the alerting channel ITSELF (#466 §3).
+ *
+ * ⚠ Added because the channel is silent in the same way in two opposite cases: «all good» and
+ * «alerting is switched off». A wrong `chat_id`, a revoked bot, or simply unset variables produce a
+ * `console.error` and an undelivered episode — nothing of which reaches the outside. The one
+ * channel that reaches out on its own could not say that it is not reaching out.
+ */
+let channel: AlertChannelState = { configured: false, lastOk: null, lastAtMs: null }
+
+export interface AlertChannelState {
+  /** Whether both variables are set. `false` — channel off; alerts live only in the log and `/queues`. */
+  configured: boolean
+  /** Outcome of the last delivery ATTEMPT; `null` — no attempt has been made yet. */
+  lastOk: boolean | null
+  lastAtMs: number | null
+}
+
+/** Remember whether the channel is on (called once, when the cron instance starts). */
+export function recordAlertChannelConfigured(configured: boolean): void {
+  channel = { ...channel, configured }
+}
+
+/** Remember the outcome of a delivery attempt. */
+export function recordAlertDelivery(ok: boolean, atMs: number): void {
+  channel = { ...channel, lastOk: ok, lastAtMs: atMs }
+}
+
+export function alertChannelState(): AlertChannelState {
+  return { ...channel }
+}
+
 /** Store the verdict of one check. */
 export function recordQueueHealth(alerts: QueueAlert[], atMs: number): void {
   current = [...alerts]
@@ -34,4 +66,5 @@ export function queueAlertState(): { alerts: QueueAlert[], checkedAtMs: number |
 export function resetQueueAlertState(): void {
   current = []
   checkedAtMs = null
+  channel = { configured: false, lastOk: null, lastAtMs: null }
 }

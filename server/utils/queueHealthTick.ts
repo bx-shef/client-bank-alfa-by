@@ -3,6 +3,7 @@ import { evaluateBankHealth, evaluateKeepAlivePulse } from './bankHealthAlert'
 import type { BankHealthRow } from '../../app/utils/bankHealthOverview'
 import type { KeepAlivePulse } from '../../app/utils/keepAlivePulse'
 import { readQueueHealth, type QueueHealthReader } from './queueHealthRead'
+import { evaluateWorkerLiveness } from '../../app/utils/workerHeartbeat'
 import {
   alertMessage, episodeKey, markAnnounced, markRecovered, planAlertDelivery, recoveryMessage,
   type DeliveryState
@@ -50,6 +51,14 @@ export interface QueueHealthTickDeps {
    * тут нечему падать и нечего изолировать.
    */
   keepAlive?: () => { pulse: KeepAlivePulse | null, intervalMs: number, startedAtMs?: number | null }
+  /**
+   * Сколько воркеров отметилось пульсом и включены ли очереди (#466 §1). Необязательна.
+   *
+   * ⚠ ИЗОЛИРОВАНА так же, как `bankRows`: это поход в Redis, и его отказ не должен отменять уже
+   * состоявшийся вердикт по конвейеру. Молчание про воркеров честнее выдумки — при недоступном
+   * Redis правило «ноль живых» дало бы ложную тревогу вместо честного «не знаем».
+   */
+  workers?: () => Promise<{ live: number, queuesEnabled: boolean, startedAtMs?: number | null }>
 }
 
 export interface QueueHealthTickResult {
@@ -96,6 +105,17 @@ export async function runQueueHealthTick(
         alerts.push(...evaluateBankHealth(await deps.bankRows(), deps.now()))
       } catch (err) {
         deps.error(`[queue] bank health read failed: ${(err as Error)?.message}`)
+      }
+    }
+    // Разбирать очереди некому (#466 §1). Отдельным эпизодом: чинится перезапуском воркеров, а не
+    // походом к клиенту. ИЗОЛИРОВАНО — при недоступном Redis «ноль живых» это не факт, а незнание.
+    if (deps.workers) {
+      try {
+        const w = await deps.workers()
+        const alert = evaluateWorkerLiveness(w, deps.now(), w.startedAtMs ?? null)
+        if (alert) alerts.push(alert)
+      } catch (err) {
+        deps.error(`[queue] worker liveness read failed: ${(err as Error)?.message}`)
       }
     }
     // Продление токенов встало — НАША авария, не отказ банка (#504). Отдельным эпизодом, потому

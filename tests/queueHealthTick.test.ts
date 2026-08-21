@@ -266,3 +266,78 @@ describe('пульс продления токенов (#504)', () => {
     expect(recorded[0]?.alerts.map(a => a.kind)).toContain('keepalive-stale')
   })
 })
+
+describe('воркеры: тревога, изоляция и эпизод (#466 §1)', () => {
+  // ⚠ Эти проверки ВЫПОЛНЯЮТ тик через `deps`, а не грепают исходник. Первая редакция PR грепала —
+  // и ревью прошло её пятью мутациями подряд: пульс можно завести и не запустить, `catch` оставить
+  // и всё равно уронить процесс, изоляцию оставить текстом и превратить в ложную тревогу, `scan`
+  // вызвать и выбросить результат. Шаблон взят у соседних блоков `bankRows`/`keepAlive` в этом же
+  // файле — он тут был всё это время.
+
+  it('ноль живых воркеров ⇒ тревога уходит в канал', async () => {
+    const { d, pushed } = deps({ workers: async () => ({ live: 0, queuesEnabled: true, startedAtMs: T0 - 60 * MIN }) })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(pushed.join('\n')).toMatch(/ни один воркер не отметился/)
+  })
+
+  it('есть живой ⇒ молчим', async () => {
+    const { d, pushed } = deps({ workers: async () => ({ live: 2, queuesEnabled: true, startedAtMs: T0 - 60 * MIN }) })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(pushed).toEqual([])
+  })
+
+  it('ХОЛОДНЫЙ СТАРТ не будит ложной тревогой', async () => {
+    // ⚠ Ровно сценарий выката: ключи пульса истекли за простой, backend поднялся первым, первый тик
+    // идёт сразу и видит ноль живых, пока воркер грузится. Без отсрочки владелец получал бы
+    // «нет воркеров» + «✅ восстановлено» на КАЖДОМ `docker compose up`.
+    const { d, pushed } = deps({ workers: async () => ({ live: 0, queuesEnabled: true, startedAtMs: T0 - 10_000 }) })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(pushed, 'холодный старт разбудил владельца').toEqual([])
+  })
+
+  it('отказ чтения Redis НЕ превращается в тревогу «нет воркеров»', async () => {
+    // ⚠ При недоступном Redis «ноль живых» — это НЕЗНАНИЕ, а не факт. Ложная тревога здесь
+    // сработала бы ровно в аварию, когда канал и так под нагрузкой.
+    const { d, recorded, errored } = deps({
+      workers: async () => { throw new Error('ECONNREFUSED') }
+    })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    // ⚠ Проверяем ФАКТ тревоги по виду, а не её текст: сверка текста пропускала мутацию, которая
+    // поднимала `no-workers` с другой формулировкой прямо внутри `catch`.
+    expect(
+      recorded[0]?.alerts.some(a => a.kind === 'no-workers'),
+      'отказ чтения выдан за отсутствие воркеров'
+    ).toBe(false)
+    expect(errored.join('\n')).toMatch(/worker liveness/)
+  })
+
+  it('отказ чтения воркеров не отменяет уже посчитанный вердикт по очередям', async () => {
+    const { d, recorded } = deps({
+      pending: { 'crm-sync': [40 * MIN, 40 * MIN, 40 * MIN] },
+      workers: async () => { throw new Error('ECONNREFUSED') }
+    })
+    await runQueueHealthTick(emptyDeliveryState(), d)
+    expect(recorded[0]?.alerts.some(a => a.kind === 'stalled'), 'вердикт по очередям потерян').toBe(true)
+  })
+
+  it('эпизод не повторяется: на втором тике тревога не шлётся заново', async () => {
+    const first = deps({ workers: async () => ({ live: 0, queuesEnabled: true, startedAtMs: T0 - 60 * MIN }) })
+    const state = (await runQueueHealthTick(emptyDeliveryState(), first.d)).state
+    const second = deps({ workers: async () => ({ live: 0, queuesEnabled: true, startedAtMs: T0 - 60 * MIN }) })
+    await runQueueHealthTick(state, second.d)
+    expect(second.pushed, 'та же поломка объявлена дважды').toEqual([])
+  })
+
+  it('воркеры вернулись ⇒ восстановление объявлено ПО-РУССКИ, а не «workers — восстановлено»', async () => {
+    // ⚠ `RECOVERY_SENTENCE` — `Record<string, …>`, поэтому забытый вид не ловится типами и падает
+    // в фолбэк, вклеивающий английское имя очереди в русскую фразу.
+    const down = deps({ workers: async () => ({ live: 0, queuesEnabled: true, startedAtMs: T0 - 60 * MIN }) })
+    const state = (await runQueueHealthTick(emptyDeliveryState(), down.d)).state
+    const up = deps({ workers: async () => ({ live: 1, queuesEnabled: true, startedAtMs: T0 - 60 * MIN }) })
+    await runQueueHealthTick(state, up.d)
+    const text = up.pushed.join('\n')
+    expect(text, 'восстановление не объявлено вовсе').toMatch(/✅/)
+    expect(text, 'в русскую фразу вклеилось имя очереди').not.toMatch(/\bworkers\b/)
+    expect(text, 'ушёл общий фолбэк вместо своей фразы').toMatch(/воркеры снова на связи/)
+  })
+})
