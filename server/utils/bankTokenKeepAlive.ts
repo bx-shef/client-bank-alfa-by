@@ -269,7 +269,7 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
     unrefreshable: unrefreshable.length, expired: expired.length
   }
   if (truncated) {
-    deps.warn?.(`[bank-keepalive] batch saturated (cap ${MAX_BANK_KEEP_ALIVE_BATCH}) — connections were left for the next run and some may expire first`)
+    deps.warn?.(`batch saturated (cap ${MAX_BANK_KEEP_ALIVE_BATCH}) — connections were left for the next run and some may expire first`)
   }
   for (const ref of due) {
     try {
@@ -294,22 +294,22 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
       // ⚠ Текст ошибки СОЧИНЯЕТ БАНК: `parseTokenResponse` склеивает его из `error_description`
       // ответа. Это ровно тот класс строк, ради которого заведён `sanitizeForLog`, и именно здесь
       // он нужнее всего — эту строку никто не читает в момент появления.
-      deps.warn?.(`[bank-keepalive] refresh failed for ${ref.provider}/${logSafeKey(ref.accountKey)}: ${sanitizeForLog((e as { message?: string })?.message ?? String(e))}`)
+      deps.warn?.(`refresh failed for ${ref.provider}/${logSafeKey(ref.accountKey)}: ${sanitizeForLog((e as { message?: string })?.message ?? String(e))}`)
     }
   }
   // The unrefreshable count is the actionable half of this log line: it names connections that no
   // amount of retrying will fix, and that nobody is otherwise told about.
   if (unrefreshable.length > 0) {
-    deps.warn?.(`[bank-keepalive] ${unrefreshable.length} connection(s) have NO refresh token — they die with their access token and need reconnecting: ${nameRefs(unrefreshable)}`)
+    deps.warn?.(`${unrefreshable.length} connection(s) have NO refresh token — they die with their access token and need reconnecting: ${nameRefs(unrefreshable)}`)
   }
   // ⚠ Формулировка изменена вместе с поведением (#489). Прежняя говорила «NOT retried — reconnect
   // required», и это было ПРАВДОЙ о коде и НЕПРАВДОЙ о мире: срок — наша оценка, а решает банк.
   // Теперь такие подключения пробуются редко (`EXPIRED_RETRY_INTERVAL_MS`), и сообщение обязано
   // это отражать — иначе владелец пойдёт переподключать то, что вот-вот воскреснет само.
   if (expired.length > 0) {
-    deps.warn?.(`[bank-keepalive] ${expired.length} connection(s) past their assumed refresh lifetime — retried rarely, the bank has the final say; if the retry keeps failing, reconnect: ${nameRefs(expired)}`)
+    deps.warn?.(`${expired.length} connection(s) past their assumed refresh lifetime — retried rarely, the bank has the final say; if the retry keeps failing, reconnect: ${nameRefs(expired)}`)
   }
-  deps.log?.(`[bank-keepalive] selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
+  deps.log?.(`selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
   return s
 }
 

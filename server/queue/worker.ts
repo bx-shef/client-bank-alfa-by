@@ -78,6 +78,8 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 // Каналы воркера. Имена совпадают с маркерами, которые уже грепает рантбук (#529): менять их
 // «покрасивее» — значит молча сломать `docs/OPERATIONS.md` и `scripts/prod-doctor.sh`.
 const fetchLog = useServerLogger('fetch')
+// ⚠ `import` — про РУЧНУЮ загрузку (так его трактует рантбук). Отказы сохранения итога и метрик
+// сюда не относятся: они срабатывают и на пути автоопроса, поэтому идут в `crm-sync` (ревью #529).
 const importLog = useServerLogger('import')
 const recognizeLog = useServerLogger('recognize')
 const stageLog = useServerLogger('stage')
@@ -862,7 +864,7 @@ async function persistImportResult(
       errors: []
     })
   } catch (e) {
-    importLog.error(`import_result save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+    crmLog.error(`import_result save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -877,7 +879,7 @@ async function bumpMetrics(
   try {
     await bumpCounters(dbQuery, job.memberId, metricsFromSummary(summary))
   } catch (e) {
-    importLog.error(`metrics bump failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+    crmLog.error(`metrics bump failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 

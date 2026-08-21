@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-08-20
+> Last reviewed: 2026-08-21
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -267,7 +267,7 @@ nginx в backend). Он указывается **один раз** — в фор
    в `app.option` под ключом `SETTINGS_KEY`, отдельным пространством на каждый портал).
 3. Открыть настройки на каждом портале заново — каждый показывает **свой** выбранный чат и никогда
    чужой. Строки токенов в `portal_tokens` — раздельные по `member_id` (`member_id` виден в
-   диагностике `/install` или в логах backend при установке: `[b24 events] ONAPPINSTALL member_id=…`).
+   диагностике `/install` или в логах backend при установке: `[b24-events] INFO: ONAPPINSTALL member_id=…`).
 4. Деинсталляция (`ONAPPUNINSTALL`) стирает строку портала и его `app.option`-настройки — после неё
    портал начинает с чистого листа.
 

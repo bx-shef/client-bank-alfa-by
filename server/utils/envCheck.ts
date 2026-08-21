@@ -152,6 +152,15 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
     warnings.push('STATEMENT_OP_LOG=off — построчный лог операций ВЫКЛЮЧЕН ПОЛНОСТЬЮ, включая неприземлившиеся платежи. Пустой лог перестаёт означать «всё хорошо»: диагностировать ненастроенный портал будет нечем.')
   }
 
+  // --- Уровень логирования (#529). ⚠ Прецедент рядом: за строго МЕНЕЕ опасный STATEMENT_OP_LOG
+  //     предупреждение уже есть, а `LOG_LEVEL=ERROR` уносит больше — `[fetch]`, итог `[crm-sync]`
+  //     и всё, что рантбук велит читать. Молча это заметить нельзя: логи не пустые, в них просто
+  //     нет ровно тех строк, по которым диагностируют. ---
+  const logLevel = (env.LOG_LEVEL ?? '').trim().toUpperCase()
+  if (logLevel === 'ERROR' || logLevel === 'CRITICAL' || logLevel === 'ALERT' || logLevel === 'EMERGENCY') {
+    warnings.push(`LOG_LEVEL=${logLevel} — из логов исчезают [fetch], итог [crm-sync] и остальные информационные строки, по которым ведётся диагностика (docs/OPERATIONS.md). Диагностировать прогон будет нечем; верните INFO.`)
+  }
+
   // --- Bank online-fetch OAuth creds (stage 5): each bank needs ALL of
   //     <PREFIX>_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL to refresh its token (bankCredsFromEnv).
   //     A HALF-configured bank silently disables its online fetch (only a runtime warn),

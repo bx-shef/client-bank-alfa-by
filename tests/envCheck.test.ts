@@ -304,3 +304,22 @@ describe('Хостовой набор корней (NODE_EXTRA_CA_CERTS)', () =>
     expect(checkBackendEnv(env).warnings).toEqual([])
   })
 })
+
+describe('LOG_LEVEL (#529)', () => {
+  // ⚠ Прецедент задан соседним STATEMENT_OP_LOG: за настройку, которая молча уносит диагностику,
+  // предупреждаем на старте. `ERROR` опаснее — он забирает и `[fetch]`, и итог прогона, то есть
+  // ровно те строки, которые рантбук велит читать в аварию.
+  it('ERROR и выше предупреждают — иначе пропажу строк не с чем связать', () => {
+    for (const level of ['ERROR', 'error', ' Critical ']) {
+      const out = checkBackendEnv({ ...GOOD, LOG_LEVEL: level })
+      expect(out.warnings.some(w => w.includes('LOG_LEVEL')), `${level} прошёл молча`).toBe(true)
+    }
+  })
+
+  it('INFO и DEBUG молчат — это рабочие значения', () => {
+    for (const level of ['INFO', 'debug', '', undefined]) {
+      const out = checkBackendEnv({ ...GOOD, LOG_LEVEL: level })
+      expect(out.warnings.some(w => w.includes('LOG_LEVEL')), `${level} шумит зря`).toBe(false)
+    }
+  })
+})

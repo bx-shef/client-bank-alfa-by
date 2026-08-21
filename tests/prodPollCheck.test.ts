@@ -46,7 +46,7 @@ describe('диагностика опроса ищет маркеры, кото�
 
   it('каждый маркер ИЩЕТСЯ командой grep', () => {
     for (const marker of ['[fetch]', '[crm-sync]', '[op]', '[queue-job-failed]',
-      '[queue-job-retry]', '[queue-worker-error]', '[queue] real poll']) {
+      '[queue-job-retry]', '[queue-worker-error]', 'real poll']) {
       // В grep скобки бывают экранированы (`\[queue-job-failed\]`) — сверяем по содержимому.
       expect(grepLines, `команды grep больше не ищут ${marker}`).toContain(marker.replace(/^\[|\]$/g, ''))
     }
@@ -126,7 +126,7 @@ describe('тишина в продлении токенов читается к�
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    expect(logged.some(l => l.startsWith('[bank-keepalive] selected=')),
+    expect(logged.some(l => l.startsWith('selected=')),
       'на тихом тике сводки нет — «пусто» снова неотличимо от мёртвого таймера').toBe(true)
     expect(logged.join('\n')).toContain('selected=0')
   })
@@ -149,7 +149,7 @@ describe('тишина в продлении токенов читается к�
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    const line = logged.find(l => l.startsWith('[bank-keepalive] selected='))
+    const line = logged.find(l => l.startsWith('selected='))
     expect(line, 'сводки нет на рабочем тике').toBeTruthy()
     expect(line!).toMatch(/refreshed=\d+/)
   })

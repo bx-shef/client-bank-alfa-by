@@ -20,7 +20,7 @@ import { getToken, updatePortalTokenSecrets } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
 
-const log = useServerLogger('auth')
+const log = useServerLogger('token')
 
 /** True when the access token is within `skewMs` of expiry (pure, testable). */
 export function needsRefresh(token: PortalToken, nowMs: number, skewMs = 60_000): boolean {

@@ -1,5 +1,4 @@
 import {
-  JsonFormatter,
   LogLevel,
   Logger,
   StreamHandler,
@@ -49,13 +48,16 @@ import {
 export const SERVER_LOG_CHANNELS = [
   'activity',
   'allocate',
+  // ⚠ `auth` — ТОЛЬКО про вход оператора (`authGuard`). `prod-doctor.sh` грепает его как ЖАЛОБУ и
+  // считает в FAILED, поэтому подмешивать сюда штатные предупреждения продления портального токена
+  // нельзя: доктор, зовущийся в аварию, начал бы ругаться на норме (найдено ревью #529). Для них —
+  // отдельный канал `token`.
   'auth',
   'b24-events',
   'bank-connect',
   'bank-keepalive',
   'chat',
   'crm-sync',
-  'crypto-gw',
   'deletion',
   'enc-key',
   'env',
@@ -74,6 +76,7 @@ export const SERVER_LOG_CHANNELS = [
   'resolve',
   'retention',
   'stage',
+  'token',
   'trigger'
 ] as const
 
@@ -94,14 +97,21 @@ export function resolveLogLevel(raw: string | undefined): LogLevel {
 }
 
 /**
- * Формат строки. Свой, а не готовый `LineFormatter`, ровно по ОДНОЙ измеренной причине — объёму.
+ * Формат строки. Свой, а не готовый `LineFormatter`, по ДВУМ причинам, и первая — не про объём.
  *
- * ⚠ Дефолт SDK — `[{channel}] {levelName}: {message} {context} {extra} {date}`, и на строке без
- * контекста он даёт хвост `{} {} 2026-08-21 07:02:10`: ~26 лишних байт в КАЖДОЙ строке. Это не
- * придирка к косметике — объём логов у нас измерен (#498): при «10 порталов × 100 оплат/мин»
- * история в ротации сжимается до часов, и дата вдобавок ДУБЛИРУЕТ метку времени, которую docker
+ * ⚠ **`LineFormatter` ПОРТИТ сообщение, если в нём есть `$&`, `` $` ``, `$'` или `$1`.** Он
+ * подставляет значения через `String.replace` со СТРОКОВЫМ replacement, а там эти
+ * последовательности — управляющие. Замерено: сообщение «банк ответил: $& и $` » вышло как
+ * «банк ответил: {message} и [fetch] ERROR: ». Для нас это не теория: в сообщения идут ответы
+ * банка и Bitrix24 (`describeUpstreamError`, `(e as Error).message`), то есть текст, который
+ * пишем не мы. Шаблонная строка ниже такого класса ошибок не имеет вовсе.
+ *
+ * ⚠ Вторая причина — объём. Дефолт SDK добавляет хвост `{} {} 2026-08-21 07:02:10`: ~26 лишних
+ * байт в КАЖДОЙ строке, а объём логов у нас измерен (#498) — при «10 порталов × 100 оплат/мин»
+ * история в ротации сжимается до часов. Дата вдобавок ДУБЛИРУЕТ метку времени, которую docker
  * `json-file` ставит сам. Поэтому: пустой контекст не печатаем, `extra` и дату — не печатаем
- * вовсе.
+ * вовсе. ⚠ Честный итог по объёму: −26 Б за хвост, +6 Б за `INFO: ` — строка `[op]` стала
+ * примерно на 20 Б короче прежней, а не «просто короче».
  *
  * ⚠ Что сохранено дословно: `[{channel}]` в начале строки. По нему грепают рантбук и
  * `prod-doctor.sh`, и это единственная часть формата, которую менять нельзя.
@@ -109,6 +119,9 @@ export function resolveLogLevel(raw: string | undefined): LogLevel {
 export class ServerLineFormatter implements Formatter {
   format(record: LogRecord): string {
     const head = `[${record.channel}] ${record.levelName}: ${record.message}`
+    // ⚠ Сегодня контекст не передаёт НИ ОДИН вызов (замерено ревью: 94 вызова, 0 со вторым
+    // аргументом) — ветка держится под будущий структурный контекст, а не работает сейчас.
+    // Пока это так, «структурные логи» из #529 считать сделанными нельзя.
     const ctx = record.context && Object.keys(record.context).length > 0
       ? ` ${JSON.stringify(record.context)}`
       : ''
@@ -126,10 +139,13 @@ function build(channel: string): LoggerInterface {
   // ломает ПОРЯДОК строк в `docker logs` — а порядок здесь несущий, по нему читают, что за чем
   // случилось с платежом.
   const handler = new StreamHandler(level, { stream: process.stdout })
-  // JSON — по осознанному решению оператора (`LOG_JSON=1`), потому что он ЛОМАЕТ все существующие
-  // grep'ы: маркер `[op]` превращается в `"channel":"op"`. Включать его имеет смысл там, где логи
-  // забирает сборщик, а не человек глазами.
-  handler.setFormatter(process.env.LOG_JSON === '1' ? new JsonFormatter() : new ServerLineFormatter())
+  // ⚠ Переключателя на JSON здесь НЕТ намеренно (ревью #529). `JsonFormatter` из SDK ломает все
+  // существующие grep'ы (маркер `[op]` становится `"channel":"op"`) и при этом СЕГОДНЯ не даёт
+  // взамен ничего: структурного контекста ни один вызов не передаёт, вся нагрузка остаётся
+  // человеческой строкой внутри `message`, а рядом появляются пустые `context`/`extra` и ВТОРАЯ
+  // метка времени. Переключатель, единственный наблюдаемый эффект которого — «поиск перестал
+  // работать», это заряженная ловушка, а не гибкость. Заводить его вместе с настоящим контекстом.
+  handler.setFormatter(new ServerLineFormatter())
   logger.pushHandler(handler)
   return logger
 }
@@ -144,7 +160,35 @@ function build(channel: string): LoggerInterface {
 export function useServerLogger(channel: ServerLogChannel): LoggerInterface {
   const cached = cache.get(channel)
   if (cached) return cached
-  const logger = build(channel)
+  const logger = isolate(build(channel))
   cache.set(channel, logger)
   return logger
+}
+
+/**
+ * Проглотить отказ САМОГО логирования.
+ *
+ * ⚠ Это не перестраховка, и докстринг выше без неё был бы неточен. Проверено по исходникам SDK:
+ * у `Logger.log` нет ни try/catch, ни `.catch` — изоляция сегодня держится ИСКЛЮЧИТЕЛЬНО на
+ * внутреннем try внутри `StreamHandler.handle`, то есть на детали чужой реализации. А зовут нас
+ * ~100 раз без `await`: добавь кто-нибудь процессор, второй обработчик или сломанный форматтер —
+ * и бросок станет unhandled rejection, что при дефолтном Node роняет процесс воркера. Причём
+ * ровно на пути, где уже что-то сломалось и строка нужнее всего (найдено ревью #529).
+ */
+function isolate(logger: LoggerInterface): LoggerInterface {
+  const methods = ['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'] as const
+  const safe = Object.create(logger) as Record<string, unknown>
+  for (const name of methods) {
+    const fn = (logger as unknown as Record<string, unknown>)[name]
+    if (typeof fn !== 'function') continue
+    safe[name] = (...args: unknown[]) => {
+      try {
+        return Promise.resolve((fn as (...a: unknown[]) => unknown).apply(logger, args)).catch(() => undefined)
+      } catch {
+        // Синхронный бросок (сломанный форматтер) — тот же исход: молчим, но живём.
+        return Promise.resolve()
+      }
+    }
+  }
+  return safe as unknown as LoggerInterface
 }

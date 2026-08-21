@@ -104,7 +104,7 @@ export async function runQueueHealthTick(
       try {
         alerts.push(...evaluateBankHealth(await deps.bankRows(), deps.now()))
       } catch (err) {
-        deps.error(`[queue] bank health read failed: ${(err as Error)?.message}`)
+        deps.error(`bank health read failed: ${(err as Error)?.message}`)
       }
     }
     // Разбирать очереди некому (#466 §1). Отдельным эпизодом: чинится перезапуском воркеров, а не
@@ -115,7 +115,7 @@ export async function runQueueHealthTick(
         const alert = evaluateWorkerLiveness(w, deps.now(), w.startedAtMs ?? null)
         if (alert) alerts.push(alert)
       } catch (err) {
-        deps.error(`[queue] worker liveness read failed: ${(err as Error)?.message}`)
+        deps.error(`worker liveness read failed: ${(err as Error)?.message}`)
       }
     }
     // Продление токенов встало — НАША авария, не отказ банка (#504). Отдельным эпизодом, потому
@@ -125,12 +125,12 @@ export async function runQueueHealthTick(
       alerts.push(...evaluateKeepAlivePulse(pulse, deps.now(), intervalMs, startedAtMs ?? null))
     }
     deps.record(alerts, deps.now())
-    for (const a of alerts) deps.warn(`[queue-alert] ${a.text}`)
+    for (const a of alerts) deps.warn(`${a.text}`)
     plan = planAlertDelivery(alerts, previous, deps.now())
   } catch (err) {
     // The reader isolates per-queue failures, so only a bug reaches here. The state is returned
     // UNCHANGED: a tick that could not read must not look like «ничего не сломано» to the next one.
-    deps.error(`[queue] health check failed: ${(err as Error)?.message}`)
+    deps.error(`health check failed: ${(err as Error)?.message}`)
     return { state: previous, announced: 0, recovered: 0, failed: true }
   }
   let state = plan.state

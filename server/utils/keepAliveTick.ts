@@ -35,7 +35,7 @@ export async function runKeepAliveTick(deps: KeepAliveTickDeps): Promise<boolean
     deps.record(summary, deps.now())
     return true
   } catch (err) {
-    deps.error(`[queue] bank keep-alive run failed: ${(err as Error)?.message}`)
+    deps.error(`bank keep-alive run failed: ${(err as Error)?.message}`)
     return false
   }
 }
