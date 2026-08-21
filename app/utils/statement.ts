@@ -88,6 +88,18 @@ export interface ChatNotifyRules {
   excludeAccounts?: string[]
   /** Case-insensitive `purpose` substrings that EXCLUDE the op from processing entirely. */
   excludePurposePatterns?: string[]
+  /**
+   * COUNTERPARTY account numbers whose operations are EXCLUDED from processing entirely (#562).
+   *
+   * ⚠ Отдельное поле, а не расширение `excludeAccounts`, и это несущее: `excludeAccounts` матчит
+   * `item.account` — НАШ счёт («Our own account number…» в типе), то есть выключает счёт целиком.
+   * Здесь же выключается ПЛАТЕЛЬЩИК: налоговая, банк с его комиссиями, эквайринг — контрагенты,
+   * которых в CRM не будет ни при каком развитии событий, а дела от них затапливают карточку
+   * «моей компании» (замерено: 500 дел за шесть суток, все — фолбэк). Смешение двух списков в
+   * одном поле означало бы, что номер, вписанный «выключить плательщика», однажды совпадёт с
+   * нашим счётом и молча выключит весь его поток.
+   */
+  excludeCounterpartyAccounts?: string[]
 }
 
 /**
@@ -97,10 +109,18 @@ export interface ChatNotifyRules {
  * NO CRM activity, NO allocation, NO chat. This is stronger than the chat `directions`
  * filter, which only silences the announcement. Pure.
  */
-export function isExcludedOperation(item: Pick<StatementItem, 'account' | 'purpose'>, rules: ChatNotifyRules = {}): boolean {
+export function isExcludedOperation(
+  item: Pick<StatementItem, 'account' | 'purpose'> & { counterparty?: Pick<StatementItem['counterparty'], 'account'> },
+  rules: ChatNotifyRules = {}
+): boolean {
   // Guard the empty entry symmetrically with excludePurposePatterns below: a blank list entry
   // must never match (e.g. a whitespace-only account matching a blank item.account).
   if (rules.excludeAccounts?.some(acc => acc.trim() !== '' && acc.trim() === item.account.trim())) return true
+  // Счёт КОНТРАГЕНТА (#562). Сравнение точное, как у нашего счёта: «похожий» номер — другой номер.
+  // ⚠ Пустой счёт контрагента не матчится никогда — иначе пустая строка в правиле выключила бы
+  // все операции, у которых банк не сообщил счёт плательщика.
+  const cp = (item.counterparty?.account ?? '').trim()
+  if (cp !== '' && rules.excludeCounterpartyAccounts?.some(acc => acc.trim() === cp)) return true
   const purpose = item.purpose.toLowerCase()
   return rules.excludePurposePatterns?.some(p => p.trim() !== '' && purpose.includes(p.toLowerCase())) ?? false
 }

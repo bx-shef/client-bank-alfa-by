@@ -153,6 +153,26 @@ describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => 
     expect(isExcludedOperation(makeItem({ account: '  ' }), { excludeAccounts: ['   '] })).toBe(false)
   })
 
+  it('исключает по счёту КОНТРАГЕНТА — и не путает его с нашим (#562)', () => {
+    // ⚠ Поле отдельное, потому что `excludeAccounts` матчит НАШ счёт (выключает счёт целиком), а
+    // здесь выключается ПЛАТЕЛЬЩИК: налоговая, банк, эквайринг — за шесть суток они дали 500 дел
+    // в «моей компании». Номер в правиле контрагентов НЕ должен срабатывать как наш счёт.
+    const item = makeItem({ account: 'BY-OURS', counterparty: { name: 'ИМНС', unp: '100000000', account: 'BY-TAX' } })
+    expect(isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY-TAX'] })).toBe(true)
+    expect(isExcludedOperation(item, { excludeCounterpartyAccounts: [' BY-TAX '] })).toBe(true)
+    // Тот же номер в списке НАШИХ счетов этого платежа не исключает — и наоборот.
+    expect(isExcludedOperation(item, { excludeAccounts: ['BY-TAX'] })).toBe(false)
+    expect(isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY-OURS'] })).toBe(false)
+  })
+
+  it('пустой счёт контрагента не матчится никогда — пустая строка в правиле не выключает всё (#562)', () => {
+    // ⚠ Банк не всегда сообщает счёт плательщика. Пустое правило, совпавшее с пустым счётом,
+    // молча выключило бы ВСЕ такие операции.
+    const noCp = makeItem({ counterparty: { name: 'Без счёта', unp: '', account: '' } })
+    expect(isExcludedOperation(noCp, { excludeCounterpartyAccounts: [''] })).toBe(false)
+    expect(isExcludedOperation(noCp, { excludeCounterpartyAccounts: ['  '] })).toBe(false)
+  })
+
   it('shouldNotifyChat still silences an excluded op (reuses isExcludedOperation)', () => {
     const rules = { excludeAccounts: ['BY-SILENT'] }
     expect(shouldNotifyChat(makeItem({ account: 'BY-SILENT' }), rules)).toBe(false)
