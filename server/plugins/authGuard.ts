@@ -4,8 +4,11 @@
 // (no SESSION_SECRET). Never crashes and never logs secrets — see docs/AUTH.md.
 
 import { authStartupWarning } from '../utils/session'
+import { useServerLogger } from '../utils/serverLogger'
+
+const log = useServerLogger('auth')
 
 export default defineNitroPlugin(() => {
   const warning = authStartupWarning(process.env)
-  if (warning) console.warn(`[auth] ${warning}`)
+  if (warning) log.warning(warning)
 })

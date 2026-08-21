@@ -14,6 +14,9 @@
 
 import { Buffer } from 'node:buffer'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('enc-key')
 
 const ALGO = 'aes-256-gcm'
 const IV_BYTES = 12 // GCM standard nonce length
@@ -59,7 +62,7 @@ export function loadDecryptKeys(env: NodeJS.ProcessEnv = process.env): Buffer[] 
   } catch (e) {
     if (!warnedBadOldKey) {
       warnedBadOldKey = true
-      console.warn(`[enc-key] B24_TOKEN_ENC_KEY_OLD ignored — ${(e as Error)?.message}. Rows encrypted with the previous key will not decrypt; the current key still works.`)
+      log.warning(`B24_TOKEN_ENC_KEY_OLD ignored — ${(e as Error)?.message}. Rows encrypted with the previous key will not decrypt; the current key still works.`)
     }
     return [primary]
   }
@@ -87,7 +90,7 @@ let warnedPreviousKeyHit = false
 function notePreviousKeyHit(): void {
   if (warnedPreviousKeyHit) return
   warnedPreviousKeyHit = true
-  console.warn('[enc-key] decrypted with the PREVIOUS key — rotation still in progress, keep B24_TOKEN_ENC_KEY_OLD')
+  log.warning('decrypted with the PREVIOUS key — rotation still in progress, keep B24_TOKEN_ENC_KEY_OLD')
 }
 
 /** Encrypt a UTF-8 secret. Returns `iv:tag:ciphertext` (base64 parts). A fresh

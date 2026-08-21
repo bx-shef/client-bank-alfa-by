@@ -40,6 +40,7 @@ describe('проводка построчного лога операций (#49
     expect(body).toContain('buildOpLogLine(')
     // Сам текст строки в воркере больше не собирается — иначе рядом с билдером завёлся бы второй
     // путь, и санитизация/гейт на нём никем бы не проверялись.
+    // ⚠ Маркер переехал в КАНАЛ (#529): в воркере его быть не должно ни в каком виде.
     expect(body).not.toContain('[op] portal')
     expect(body).not.toContain('logSafe(')
   })
@@ -53,7 +54,7 @@ describe('проводка построчного лога операций (#49
     // Поэтому требуется структурная смежность: между закрывающей скобкой `catch` и строкой итога
     // не должно быть НИЧЕГО, кроме комментариев. Любой вставленный оператор ломает тест.
     const lines = WORKER.split('\n')
-    const at = lines.findIndex(l => l.includes('console.log(runSummaryLine('))
+    const at = lines.findIndex(l => l.includes('crmLog.info(runSummaryLine('))
     expect(at).toBeGreaterThan(-1)
     let i = at - 1
     while (i >= 0 && /^\s*(\/\/|\*|\/\*)/.test(lines[i]!)) i--
@@ -64,7 +65,7 @@ describe('проводка построчного лога операций (#49
 
     // И прежняя проверка на месте: тот же уровень вложенности, что у заведомо безусловной записи
     // результата в БД, и порядок «сначала лог, потом БД».
-    const summary = WORKER.match(/^(\s*)console\.log\(runSummaryLine\(/m)
+    const summary = WORKER.match(/^(\s*)crmLog\.info\(runSummaryLine\(/m)
     const persist = WORKER.match(/^(\s*)await persistImportResult\(/m)
     expect(summary![1]).toBe(persist![1])
     expect(WORKER.indexOf('runSummaryLine(')).toBeLessThan(WORKER.indexOf('await persistImportResult('))

@@ -16,6 +16,9 @@ import { listAllBankAccountInfo } from '../../utils/bankTokenStore'
 import { handleBankHealth } from '../../utils/bankHealthHandler'
 import { portalHash } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
+import { useServerLogger } from '../../utils/serverLogger'
+
+const log = useServerLogger('queue')
 
 export default defineEventHandler(async (event) => {
   const cfg = resolveAuthConfig(process.env)
@@ -27,7 +30,7 @@ export default defineEventHandler(async (event) => {
     listRows: () => listAllBankAccountInfo(dbQuery),
     now: Date.now,
     hashPortal: portalHash,
-    warn: (m: string) => console.error(m)
+    warn: (m: string) => log.error(m)
   })
   setResponseStatus(event, status)
   return body

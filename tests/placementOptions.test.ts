@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parsePlacementOptions, placeFromOptions, placeFromQuery } from '~/utils/placementOptions'
 
-// Чтение `place` из PLACEMENT_OPTIONS (#537). Форму того, что пришлёт портал, мы не выбираем,
+// Чтение `place` из PLACEMENT_OPTIONS (#555). Форму того, что пришлёт портал, мы не выбираем,
 // поэтому читаем ОБЕ известные (объект и JSON-строку) и не привязываемся к регистру ключа.
 
 describe('placeFromOptions', () => {
