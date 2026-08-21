@@ -33,7 +33,7 @@
 import { loadDotEnv } from './lib/env.mjs'
 import { httpRequest } from './lib/http.mjs'
 import { C, die, head, log, ok, warn } from './lib/cli.mjs'
-import { extractPayments, pickFreeEntityTypeId, validateTestWebhook } from './lib/b24-seed-utils.mjs'
+import { extractPayments, paymentListParams, pickFreeEntityTypeId, validateTestWebhook } from './lib/b24-seed-utils.mjs'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config / CLI
@@ -239,7 +239,7 @@ async function ensureCategory(entityTypeId, name) {
  *  (sets the sum) → leave unpaid. Idempotent: keeps a single unpaid payment that
  *  already carries a sum; drops empty/leftover payments before recreating. */
 async function ensureDealPayment(dealId, productId, amount) {
-  const payments = extractPayments(await rest('crm.item.payment.list', { entityId: dealId, entityTypeId: 2 }))
+  const payments = extractPayments(await rest('crm.item.payment.list', paymentListParams(dealId)))
   // Already have the fixture we want — one unpaid payment with a real sum.
   if (payments.some(p => p.paid !== 'Y' && Number(p.sum) > 0)) {
     log(`    ${C.dim}·${C.reset} неоплаченная оплата сделки уже есть (пропуск)`)
@@ -310,7 +310,7 @@ async function purge() {
       // than crash. Grant the webhook `sale` scope (or delete the deal in the UI)
       // to fully purge such deals.
       if (et === 2) {
-        const pl = await rest('crm.item.payment.list', { entityId: it.id, entityTypeId: 2 })
+        const pl = await rest('crm.item.payment.list', paymentListParams(it.id))
         for (const p of extractPayments(pl)) {
           await rest('crm.item.payment.delete', { id: p.id }).catch(e => warn(`payment ${p.id}: ${e.message}`))
         }
