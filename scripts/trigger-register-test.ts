@@ -148,7 +148,9 @@ async function main() {
     if (dealId != null) {
       const bogus = 'cba_unregistered_probe'
       try {
-        await executeTriggerViaRest({ kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }, rest, { triggerCode: bogus })
+        // ⚠ Ни `amount`, ни `currency` транспорт не принимает: триггер — это сигнал «деньги пришли»,
+        // а не перевод суммы (сверено с офдок в #79). Лишние поля компилировались молча.
+        await executeTriggerViaRest({ kind: 'deal', id: String(dealId) }, rest, { triggerCode: bogus })
         warn(`негативный контроль: незарегистрированный CODE «${bogus}» НЕ дал ошибку — проверь вручную`)
       } catch (e) {
         ok(`негативный контроль OK — незарегистрированный CODE → ошибка «${(e as Error).message}» (воркер её глотает, best-effort)`)

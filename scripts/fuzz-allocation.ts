@@ -20,6 +20,7 @@ import { resolveAllocation } from '~/utils/allocation'
 import type { MatchMatrix } from '~/utils/purposeMatch'
 import { recognizeByMatrices } from '~/utils/purposeMatch'
 import { routeIdentifier } from '~/utils/identifierDispatch'
+import type { StatementItem } from '../app/types/statement'
 
 // ─────────────────────── seeded PRNG (mulberry32) ───────────────────────
 function mulberry32(seed: number) {
@@ -70,8 +71,12 @@ const companyByAccount = (acc: string): string | null =>
 const live = (s: number) => s >= 0
 const inScope = (c: string) => c === MY_CO || c === CLIENT_CO
 
-interface Inv { id: string, number: string, amount: number, currency: string, companyId: string, stage: number }
-interface Pay { order: string, amount: number, currency: string, companyId: string, stage: number }
+// ⚠ Валюта — тот же союз, что у доменной модели, а не `string`: фикстура с произвольной
+// строкой компилировалась, но описывала вход, которого в проде не бывает.
+type Currency = StatementItem['currency']
+
+interface Inv { id: string, number: string, amount: number, currency: Currency, companyId: string, stage: number }
+interface Pay { order: string, amount: number, currency: Currency, companyId: string, stage: number }
 interface Deal { id: string, companyId: string, stage: number }
 
 const invoices: Inv[] = Array.from({ length: 40 }, (_, i) => ({
@@ -179,7 +184,7 @@ function genPayment(): Gen {
 
   let purpose = 'оплата по договору'
   let amount = pick([100, 250, 700, 1000])
-  let currency = pick(CURRENCIES)
+  let currency: Currency = pick(CURRENCIES)
   let expectedApply = false
   const liveInv = invoices.filter(i => inScope(i.companyId) && live(i.stage))
 
