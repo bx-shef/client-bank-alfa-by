@@ -5,9 +5,11 @@ import {
   resolveSettingsSection,
   SETTINGS_SECTION_IDS,
   SETTINGS_SECTIONS,
+  sectionForReadiness,
   showsChatPreview,
   type SettingsSectionId
 } from '../app/utils/settingsSections'
+import type { ReadinessItem } from '../app/utils/setupReadiness'
 
 describe('разделы настроек (#530)', () => {
   it('список и идентификаторы не разъезжаются', () => {
@@ -57,6 +59,26 @@ describe('разделы настроек (#530)', () => {
     for (const id of CHAT_PREVIEW_SECTIONS) {
       expect(SETTINGS_SECTION_IDS as readonly string[]).toContain(id)
     }
+  })
+
+  it('каждая строка готовности ведёт в раздел, где её и чинят', () => {
+    // ⚠ Инвариант, а не таблица ради таблицы: экран готовности НАЗЫВАЛ раздел словами, а идти
+    // туда человек должен был сам. Ключи берём из production-типа — забыли новый вид проверки,
+    // и он молча остался бы без ссылки.
+    const keys: ReadinessItem['key'][] = ['my-company', 'bank', 'chat', 'error-chat', 'recognition', 'smart-process', 'poll']
+    for (const key of keys) {
+      const target = sectionForReadiness(key)
+      if (target !== null) {
+        expect(SETTINGS_SECTION_IDS as readonly string[], `${key} ведёт в несуществующий раздел`).toContain(target)
+      }
+    }
+    expect(sectionForReadiness('bank')).toBe('bank')
+    expect(sectionForReadiness('poll'), 'опрос настраивается там же, где подключение').toBe('bank')
+    expect(sectionForReadiness('error-chat'), 'оба чата — в одном разделе').toBe('chats')
+    // ⚠ «Моя компания» чинится в КАРТОЧКЕ КОМПАНИИ, а не в настройках приложения: ссылка «в
+    // раздел» была бы ложью и увела бы человека не туда.
+    expect(sectionForReadiness('my-company')).toBeNull()
+    expect(sectionForReadiness('нетакого')).toBeNull()
   })
 
   it('каждый идентификатор разобран сам в себя', () => {

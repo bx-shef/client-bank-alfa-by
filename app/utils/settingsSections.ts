@@ -66,3 +66,31 @@ export const CHAT_PREVIEW_SECTIONS: readonly SettingsSectionId[] = ['chats', 'ex
 export function showsChatPreview(id: SettingsSectionId): boolean {
   return CHAT_PREVIEW_SECTIONS.includes(id)
 }
+
+/**
+ * В какой раздел ведёт строка экрана готовности.
+ *
+ * ⚠ Без этой таблицы разбор `?section=` был бы возможностью, до которой из приложения не добраться:
+ * экран готовности НАЗЫВАЛ раздел словами («выберите чат в разделе „Уведомления в чат"»), а идти
+ * туда человек должен был сам, глазами разыскивая нужный пункт в полосе. Смысл разделения — чтобы
+ * от «что не так» до «где это чинить» был один клик.
+ *
+ * ⚠ `my-company` — единственная строка, ведущая в НИКУДА, и это правда: чинится она не в настройках
+ * приложения, а в карточке компании в CRM. Ссылка «в раздел» там была бы ложью.
+ */
+export function sectionForReadiness(key: string): SettingsSectionId | null {
+  switch (key) {
+    case 'bank':
+    case 'poll':
+      return 'bank'
+    case 'chat':
+    case 'error-chat':
+      return 'chats'
+    case 'recognition':
+      return 'recognition'
+    case 'smart-process':
+      return 'distribution'
+    default:
+      return null
+  }
+}

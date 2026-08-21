@@ -7,7 +7,18 @@ import { formatRelativeTime } from '~/utils/importStatus'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 import CheckIcon from '@bitrix24/b24icons-vue/main/CheckIcon'
 import Cross30Icon from '@bitrix24/b24icons-vue/actions/Cross30Icon'
+import { SETTINGS_SECTIONS, sectionForReadiness, type SettingsSectionId } from '~/utils/settingsSections'
 import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
+
+// ⚠ Карточка не переключает раздел САМА: она живёт и на экране настроек, и (в будущем) где угодно
+// ещё, а знание «какой раздел сейчас открыт» принадлежит форме. Поэтому — событие наружу.
+const emit = defineEmits<{ openSection: [SettingsSectionId] }>()
+
+/** Название раздела для подписи кнопки: свою копию названий здесь заводить нельзя — разъедется. */
+function sectionLabel(key: string): string {
+  const id = sectionForReadiness(key)
+  return SETTINGS_SECTIONS.find(s => s.id === id)?.label ?? ''
+}
 
 // «Что настроено, а что нет» — the first thing in the settings (#409/#405).
 //
@@ -186,6 +197,20 @@ onBeforeUnmount(() => {
             >
               {{ i.hint }}
             </ProseP>
+            <!-- ⚠ Ссылка ТОЛЬКО у непорядка и только там, где раздел вообще есть (#530). Строка
+                 «Моя компания» чинится в карточке компании в CRM, а не в настройках приложения —
+                 кнопка «Перейти к настройке» там увела бы человека не туда. У зелёной строки
+                 переходить незачем: настраивать нечего. -->
+            <B24Button
+              v-if="!i.ok && sectionForReadiness(i.key)"
+              size="xs"
+              color="air-tertiary"
+              :label="`Перейти: ${sectionLabel(i.key)}`"
+              :normal-case="false"
+              class="mt-1"
+              :data-testid="`readiness-goto-${i.key}`"
+              @click="emit('openSection', sectionForReadiness(i.key)!)"
+            />
           </div>
         </li>
       </ul>
