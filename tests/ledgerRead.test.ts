@@ -5,6 +5,7 @@ import { handleRecomputeRequest, type RecomputeRequestDeps } from '../server/uti
 import { buildPaymentListCall, buildPaymentRowsListCall, parsePaymentCarrier } from '../app/utils/distributionLedger'
 import { buildUfFieldNameCamel, DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS } from '../app/config/distributionSp'
 import type { LedgerCard } from '../server/utils/distributionLedgerWrite'
+import { SingleFlightBusyError } from '../server/utils/singleFlightLease'
 
 const PSP = { entityTypeId: 1044, id: 44 }
 const DSP = { entityTypeId: 1046, id: 46 }
@@ -159,14 +160,14 @@ describe('handleRecomputeRequest', () => {
 
 describe('concurrent click on recompute — «busy», not a failure (#516)', () => {
   /** The Postgres error on an exhausted `lock_timeout` — exactly what used to escape unhandled. */
-  const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+  const busy = new SingleFlightBusyError('distribution-recompute:m1')
 
-  it('an exhausted lock wait ⇒ 503, and the text does not lie about «a couple of seconds»', async () => {
+  it('a busy single-flight ⇒ 503, and the text does not lie about «a couple of seconds»', async () => {
     // ⚠ Recompute walks EVERY payment of the portal and is long by nature. Promising «retry in a few
     // seconds» would have the human hammering the button for all of it.
     const res = await handleRecomputeRequest(rdeps({
       recompute: async () => {
-        throw lockTimeout
+        throw busy
       }
     }), input)
     expect(res.status).toBe(503)

@@ -2,7 +2,8 @@
 // model as /api/distribution/ledger (feature flag + frame admin + installed). Recomputes «осталось»
 // for every payment carrier — the manual recovery backstop (deletion crash-window / drift). Thin over
 // DI — unit-testable without pg / network / the SDK.
-import { isLockTimeout } from './bankRefreshLock'
+import { isSingleFlightBusy, isSingleFlightUnavailable } from './singleFlightLease'
+import { DB_UNAVAILABLE_TEXT } from './provisionRequest'
 
 /** Injected side effects + config for {@link handleRecomputeRequest}. */
 export interface RecomputeRequestDeps {
@@ -13,6 +14,8 @@ export interface RecomputeRequestDeps {
   /** Recompute every payment carrier for the portal (single-flight). Returns the count, or `null`
    *  when the distribution SPs aren't provisioned. */
   recompute: (memberId: string) => Promise<number | null>
+  /** Сток для серверного лога (наружу не идёт). Тот же порт, что у `ProvisionRequestDeps.log`. */
+  log?: (message: string) => void
 }
 
 export interface RecomputeRequestResult {
@@ -57,19 +60,25 @@ export async function handleRecomputeRequest(
     if (recomputed === null) return { status: 200, body: { provisioned: false, recomputed: 0 } }
     return { status: 200, body: { ok: true, recomputed } }
   } catch (e) {
-    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Recompute is serialized by a per-portal
-    // advisory lock (it also contends with crm-sync itself over the «осталось» fields), and a
-    // concurrent click used to surface an unhandled `55P03` — indistinguishable from a real break.
+    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Recompute is single-flight per portal (it
+    // also contends with crm-sync itself over the «осталось» fields), and a concurrent click used to
+    // surface an unhandled `55P03` — indistinguishable from a real break. Признак «занято» сменился
+    // вместе с механизмом (#538, аренда вместо advisory-лока), смысл ответа — нет.
     //
     // ⚠ A separate reason to spell it out: recompute is long by nature, walking every payment
     // carrier of the portal. «Retry in a few seconds» would be a lie here, and the human would keep
     // hammering the button for all of it.
-    if (isLockTimeout(e)) {
+    if (isSingleFlightBusy(e)) {
+      deps.log?.('[recompute] busy: пересчёт уже выполняется для этого портала')
       return {
         status: 503,
         body: { error: 'Пересчёт уже выполняется — он идёт по всем платежам портала и занимает время. Обновите страницу через минуту.' }
       }
     }
+    // ⚠ Пересчёт дольше провижининга, то есть в исчерпанный пул он упирается ОХОТНЕЕ, — а разбора
+    // ошибок у него не было вовсе: и наша лежащая база, и отказ портала отвечали одним «recompute
+    // failed» с одним и тем же `upstream_error` в телеметрии (#538).
+    if (isSingleFlightUnavailable(e)) return { status: 503, body: { error: DB_UNAVAILABLE_TEXT } }
     return { status: 502, body: { error: 'recompute failed' } }
   }
 }

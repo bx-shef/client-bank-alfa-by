@@ -134,6 +134,21 @@ ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS id BIGSERIAL;
   ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS last_attempt_at BIGINT NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_tokens_id_key ON bank_tokens (id);
 
+-- Аренда «одна операция на портал» БЕЗ удержания соединения (#538). Провижининг СП и пересчёт
+-- распределения раньше держали advisory-лок, то есть соединение из пула, всё время своей
+-- REST-цепочки — минуты, ни разу не обратившись к базе. Пул общий (10), и десяток одновременных
+-- операций с РАЗНЫХ порталов выедал его целиком, роняя readiness-пробу и приём событий установки.
+--
+-- (⚠ Обратных кавычек здесь нет НИ ОДНОЙ: это JS-шаблонная строка, и любая из них её оборвёт.)
+--
+-- ⚠ Строк не больше, чем порталов на число таких операций: просроченная не копится, её
+-- перезаписывает следующий же захват под тем же ключом. Свипа поэтому нет.
+CREATE TABLE IF NOT EXISTS single_flight_lease (
+  key         TEXT PRIMARY KEY,
+  token       TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+
 -- Retired table (§9.3 #6): allocation idempotency/audit moved to the distributions
 -- smart-process (marker + status). Idempotent DROP cleans up a previously-provisioned DB.
 DROP TABLE IF EXISTS allocation_fact;

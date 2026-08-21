@@ -1,6 +1,6 @@
 # Инструкция: обработка банковской выписки в CRM
 
-> Last reviewed: 2026-08-20
+> Last reviewed: 2026-08-21
 
 Как приложение обрабатывает каждую операцию из выписки: какие данные берёт, какие решения принимает
 и в какой последовательности, какие параметры учитывает.
@@ -893,7 +893,8 @@ ts, eventToken }`. Никаких сумм/счетов (id+тип, приват
 1. ✅ Чистое ядро `manualAllocation` (#327).
 2. ✅ **Провижининг payment-СП + dist-СП** (структура/поля через `crm.type.add`/`userfieldconfig.add`,
    идемпотентно + самолечение §5): транспорт `provisionDistributionSp`, оркестрация+сохранение etid
-   single-flight (`handleProvisionDistribution`), роут `POST /api/distribution/provision` за
+   single-flight (`handleProvisionDistribution`; держит АРЕНДА `single_flight_lease`, а не
+   advisory-лок — тот занимал соединение пула всю REST-цепочку, #538), роут `POST /api/distribution/provision` за
    feature-gate+admin, UI-кнопка «Настроить смарт-процессы» (#330–#335).
 3. ✅ **Транспорт леджера + hot-path:** `writeLedgerAllocation` (ensure payment-элемент по маркеру
    операции → строка распределения по `allocationFactKey` → пересчёт «осталось») вызывается в `crm-sync`
@@ -905,7 +906,7 @@ ts, eventToken }`. Никаких сумм/счетов (id+тип, приват
 4. ✅ **UI-вкладка распределения** (по образцу sync-payments): презентационное ядро `presentPaymentLedger`,
    роут чтения `GET /api/distribution/ledger`, b24ui-компонент карточек `DistributionTab`, кнопка
    **«Пересчитать»** (`POST /api/distribution/recompute` — пересчёт «осталось» всех payment-элементов,
-   single-flight; страховка §3/§9.2) (#343–#345 + текущий).
+   single-flight на той же аренде, #538; страховка §3/§9.2) (#343–#345 + текущий).
 5. ✅ **Пайплайн удаления:** `event.bind` deletion-событий на установке → webhook верифицирует
    `application_token` → `DeletionJob` в очередь `b24-deletions` → консьюмер `handleDeletionJob`
    классифицирует по SP-конфигу и маршрутизирует; **`reconcile` LIVE** для удаления цели (deactivate
