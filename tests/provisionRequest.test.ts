@@ -124,13 +124,19 @@ describe('concurrent click — «busy», not a failure (#516)', () => {
     expect(r.status).toBe(502)
   })
 
+  /** Исходник без комментариев — гард обязан судить о КОДЕ, а не о прозе рядом с ним. */
+  const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
   it('«занято» опознаётся ОБЩИМ предикатом, а не своей копией', async () => {
     // Разойдись копии — один маршрут отвечал бы «занято», другой «сбой», на одном и том же исходе.
+    // ⚠ Комментарии вырезаются, и это не косметика: проверка по сырому исходнику КРАСНЕЛА бы на
+    // верном коде, который всего лишь упоминает `'55P03'` в объяснении. Красный билд на верном
+    // коде учит ослаблять гард — то есть такой гард сам себе враг (найдено мутацией).
     const { readFileSync } = await import('node:fs')
     for (const rel of ['server/utils/provisionRequest.ts', 'server/utils/recomputeRequest.ts']) {
-      const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
-      expect(src, `${rel} не использует общий isSingleFlightBusy`).toContain('isSingleFlightBusy')
-      expect(src, `${rel} завёл свою копию кода 55P03`).not.toMatch(/'55P03'/)
+      const code = stripComments(readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8'))
+      expect(code, `${rel} не использует общий isSingleFlightBusy`).toContain('isSingleFlightBusy')
+      expect(code, `${rel} завёл свою копию кода 55P03`).not.toMatch(/'55P03'/)
     }
   })
 
@@ -149,12 +155,16 @@ describe('concurrent click — «busy», not a failure (#516)', () => {
     const { readFileSync } = await import('node:fs')
     for (const rel of ['server/api/distribution/provision.post.ts', 'server/api/distribution/recompute.post.ts']) {
       const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
-      const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+      const code = stripComments(src)
       expect(code, `${rel} не берёт аренду single-flight`).toContain('withSingleFlightLease')
       expect(code, `${rel} снова держит соединение пула advisory-локом всю REST-цепочку`)
         .not.toContain('withAdvisoryLock')
-      // Срок аренды — из общей константы: своя цифра рядом с ней разъедется молча.
-      expect(code, `${rel} завёл свою копию срока аренды`).toMatch(/_LEASE_SEC/)
+      // Срок аренды — из общей константы (имя целиком, а не по маске `_LEASE_SEC`: под неё
+      // подошла бы и чужая константа, и мутация «подставить чужой срок» проходила зелёной).
+      expect(code, `${rel} завёл свою копию срока аренды`).toContain('SINGLE_FLIGHT_LEASE_SEC')
+      // ⚠ Ключ обязан быть ПЕР-ПОРТАЛЬНЫМ и строиться общим билдером: ключ без `memberId` — это
+      // общий семафор, при котором провижининг одного клиента отвечает «занято» всем остальным.
+      expect(code, `${rel} строит ключ аренды мимо общего билдера`).toMatch(/LeaseKey\(memberId\)/)
     }
   })
 

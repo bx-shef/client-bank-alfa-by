@@ -11,6 +11,14 @@
 // waiters fail fast instead of piling up on connections, `statement_timeout` bounds
 // any single query, and the caller gives the HTTP POST its own timeout.
 
+// ⚠ КАКОЙ ИЗ ДВУХ МЕХАНИЗМОВ БРАТЬ (#538). В репозитории их теперь два, и путать их дорого.
+// Advisory-лок годится, когда критическая секция ОГРАНИЧЕНА (один вызов с потолком) И содержит
+// запрос к базе, ради которого лок и берут: перечит идёт на ТОЙ ЖЕ транзакции, и именно на нём
+// держится «не делать работу, которую сосед уже сделал» (`ensureAccessToken`/`ensureBankToken`).
+// Не выполняется хотя бы одно — бери аренду `withSingleFlightLease`: она не держит соединение,
+// а значит не выедает пул (10) на всё время сетевой цепочки. Провижининг смарт-процессов и
+// пересчёт распределения не выполняли НИ ОДНОГО из двух условий и жили под локом до #538.
+
 import { getPool } from '../db/client'
 import type { QueryFn } from './tokenStore'
 
@@ -28,7 +36,11 @@ export const DEFAULT_LOCK_WAIT = '10s'
  *
  * ⚠ There is no way to say "try once, don't wait" through `lock_timeout` at all — that would need
  * `pg_try_advisory_xact_lock`. Callers who want fail-fast get the shortest real wait instead, which
- * is behaviourally the same when the holder's critical section is long (the common case here).
+ * is behaviourally the same when the holder's critical section is long.
+ *
+ * ⚠ Раньше здесь стояло «the common case here» — после #538 это неправда: самые длинные секции
+ * (провижининг, пересчёт) ушли на аренду, и у оставшихся держателей секция ограничена одним
+ * сетевым POST с потолком 15 с.
  */
 export const MIN_LOCK_WAIT = '100ms'
 

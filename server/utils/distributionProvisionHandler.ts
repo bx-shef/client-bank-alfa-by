@@ -1,17 +1,18 @@
 // Orchestrates provisioning the two distribution smart processes and PERSISTING their
 // entityTypeIds to the portal settings (#109, PROCESSING.md §9.1, provisioning-execution slice).
 // Pure over injected deps — fully unit-testable with fakes; the live route wires the SDK RestCall,
-// the pg advisory lock (single-flight) and the telemetry span.
+// the single-flight lease (#538) and the telemetry span.
 //
 // The WHOLE op runs under `withLock` so concurrent provision requests for one portal can't both
 // miss the title probe and create DUPLICATE SPs: the first holder provisions + stores the ids; a
-// second holder, entering after COMMIT, re-reads settings (now carrying the ids) and short-circuits
+// second holder, entering afterwards, re-reads settings (now carrying the ids) and short-circuits
 // via the `known`-id path inside `provision`. That is the single-flight the transport's docstring
 // demands (there is no lock in `provisionDistributionSp` itself).
 //
 // This rests on two wiring-level assumptions (the LIVE deps must honour them):
-//  1. `withLock` uses a PER-PORTAL key (member_id-scoped) — else unrelated portals serialize
-//     (harmless) or, if the key weren't portal-stable, the guarantee would weaken.
+//  1. `withLock` uses a PER-PORTAL key (member_id-scoped) — else unrelated portals serialize (NOT
+//     harmless: one client's provisioning would answer «busy» to everyone else) or, if the key
+//     weren't portal-stable, the guarantee would weaken.
 //  2. `app.option` is read-your-writes (holder-2's REST read reflects holder-1's committed write).
 // Even if (2) lagged, duplicates are still prevented: `provisionDistributionSp` is idempotent BY
 // STABLE TITLE (probes `crm.type.list` before creating), so a stale read recovers the existing SPs
@@ -38,7 +39,8 @@ export interface ProvisionDistributionDeps {
   /** Provision (or self-heal) the SPs given the already-stored ids; returns the resolved etids.
    *  The live dep wraps `provisionDistributionSp(sdkCall, known)` in the telemetry span. */
   provision: (known: KnownSpIds) => Promise<ProvisionResult>
-  /** Single-flight wrapper: run `fn` under a per-portal advisory lock (live: `withAdvisoryLock`). */
+  /** Single-flight wrapper: run `fn` under a per-portal LEASE (live: `withSingleFlightLease`, #538 —
+   *  an advisory lock held a pooled connection for the whole REST chain). */
   withLock: <T>(fn: () => Promise<T>) => Promise<T>
 }
 

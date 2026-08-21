@@ -12,7 +12,7 @@ import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, liveLeaseDeps, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { PROVISION_LEASE_SEC, withSingleFlightLease } from '../../utils/singleFlightLease'
+import { provisionLeaseKey, SINGLE_FLIGHT_LEASE_SEC, withSingleFlightLease } from '../../utils/singleFlightLease'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -67,7 +67,7 @@ function liveProvisionDeps(): ProvisionRequestDeps {
           // ⚠ Ждать не пытаемся вовсе (у лока было короткое ожидание): дождаться держателя нельзя,
           // а второму вызывающему нечего делать — первый создаёт всё то же самое. Ответ «уже
           // выполняется» и есть правильный.
-          withLock: fn => withSingleFlightLease(liveLeaseDeps(), `provision-sp:${memberId}`, PROVISION_LEASE_SEC, fn)
+          withLock: fn => withSingleFlightLease(liveLeaseDeps(), provisionLeaseKey(memberId), SINGLE_FLIGHT_LEASE_SEC, fn)
         }))
     }
   }

@@ -9,7 +9,7 @@
 // from the client), and `validateFrame` re-checks the token against B24 to block a spoofed domain.
 
 import { sanitizeForLog } from './logSanitize'
-import { isSingleFlightBusy } from './singleFlightLease'
+import { isSingleFlightBusy, isSingleFlightUnavailable } from './singleFlightLease'
 import type { ProvisionDistributionOutcome } from './distributionProvisionHandler'
 
 /** Injected side effects + config for {@link handleProvisionRequest}. */
@@ -96,10 +96,23 @@ export async function handleProvisionRequest(
     // anything was created, and the natural reaction is to press again. The message has to say what
     // NOT to do.
     if (isSingleFlightBusy(e)) {
+      // ⚠ Без этой строки жалоба «кнопка отвечает 503» неразрешима по логам: владелец не отличит
+      // «второй админ кликает параллельно» от «висит осиротевшая аренда после рестарта», а решать
+      // надо именно это — подождать или чистить.
+      deps.log?.('[provision] busy: операция уже выполняется для этого портала')
       return {
         status: 503,
         body: { error: 'Настройка смарт-процессов уже выполняется — подождите и обновите страницу. Повторное нажатие ничего не ускорит и может создать лишние сущности.' }
       }
+    }
+    // ⚠ Отказ НАШЕЙ базы — 503 и прямая формулировка «это наша сторона» (#538). Текстовая ветка
+    // ниже ловит исчерпание пула и глубже по цепочке, но происхождение надёжно знает только тип:
+    // `connect ECONNREFUSED …:5432` совпадает с веткой `econn` и читался бы как молчание портала.
+    // ⚠ 503, а не 502: `httpOutcomeForStatus` разводит их в `unavailable` и `upstream_error`, и
+    // наша упавшая база не должна засчитываться алертингу как поломка портала клиента.
+    if (isSingleFlightUnavailable(e)) {
+      deps.log?.(`[provision] lease storage unavailable: ${sanitizeForLog(e instanceof Error ? e.message : String(e), 500)}`)
+      return { status: 503, body: { error: DB_UNAVAILABLE_TEXT } }
     }
     // A bare «provisioning failed» left the admin with nothing to act on (#408). Classify what the
     // portal actually said: a missing scope needs a re-install/consent, an access error needs
@@ -112,6 +125,11 @@ export async function handleProvisionRequest(
     return { status: 502, body: { error: classifyProvisionError(raw) } }
   }
 }
+
+/** Единственный текст про отказ НАШЕЙ базы — его отдают и типовая ветка, и текстовая. Две копии
+ *  разошлись бы, и один и тот же отказ читался бы по-разному на соседних маршрутах. */
+export const DB_UNAVAILABLE_TEXT
+  = 'Сервер сейчас не смог взять соединение с базой. Это наша сторона, а не портал: повторите через минуту — действие идемпотентно, дубликатов не будет.'
 
 /** Map a portal/transport error to an actionable Russian message. Pure — the caller logs the raw
  *  text; this only decides what the admin is told. Order matters: scope before access, because a
@@ -143,6 +161,15 @@ export function classifyProvisionError(raw: string): string {
   // `.code`, поэтому различает их только текст.
   if (s.includes('timeout exceeded when trying to connect')) {
     return 'Сервер сейчас перегружен и не смог взять соединение с базой. Это наша сторона, а не портал: повторите через минуту — действие идемпотентно, дубликатов не будет.'
+  }
+  // ⚠ ПУЛ РАНЬШЕ ТАЙМАУТА, и это не порядок ради порядка (#538). Исчерпание нашего же пула pg
+  // бросает `timeout exceeded when trying to connect` — строку, которая совпадает с веткой ниже и
+  // уверенно сообщала админу «портал не ответил вовремя». Причина при этом на НАШЕЙ стороне,
+  // Bitrix24 к ней не имеет отношения, и админ уходил искать не там. Ошибка pg-pool приходит без
+  // `.code`, поэтому различает их только текст; надёжнее — тип (`isSingleFlightUnavailable` выше),
+  // а эта ветка остаётся backstop'ом для отказов глубже по цепочке.
+  if (s.includes('timeout exceeded when trying to connect')) {
+    return DB_UNAVAILABLE_TEXT
   }
   if (s.includes('timeout') || s.includes('econn') || s.includes('fetch failed') || s.includes('network')) {
     return 'Портал не ответил вовремя. Повторите попытку — действие идемпотентно, дубликатов не будет.'

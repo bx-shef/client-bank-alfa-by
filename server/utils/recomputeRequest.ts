@@ -2,7 +2,8 @@
 // model as /api/distribution/ledger (feature flag + frame admin + installed). Recomputes «осталось»
 // for every payment carrier — the manual recovery backstop (deletion crash-window / drift). Thin over
 // DI — unit-testable without pg / network / the SDK.
-import { isSingleFlightBusy } from './singleFlightLease'
+import { isSingleFlightBusy, isSingleFlightUnavailable } from './singleFlightLease'
+import { DB_UNAVAILABLE_TEXT } from './provisionRequest'
 
 /** Injected side effects + config for {@link handleRecomputeRequest}. */
 export interface RecomputeRequestDeps {
@@ -13,6 +14,8 @@ export interface RecomputeRequestDeps {
   /** Recompute every payment carrier for the portal (single-flight). Returns the count, or `null`
    *  when the distribution SPs aren't provisioned. */
   recompute: (memberId: string) => Promise<number | null>
+  /** Сток для серверного лога (наружу не идёт). Тот же порт, что у `ProvisionRequestDeps.log`. */
+  log?: (message: string) => void
 }
 
 export interface RecomputeRequestResult {
@@ -66,11 +69,16 @@ export async function handleRecomputeRequest(
     // carrier of the portal. «Retry in a few seconds» would be a lie here, and the human would keep
     // hammering the button for all of it.
     if (isSingleFlightBusy(e)) {
+      deps.log?.('[recompute] busy: пересчёт уже выполняется для этого портала')
       return {
         status: 503,
         body: { error: 'Пересчёт уже выполняется — он идёт по всем платежам портала и занимает время. Обновите страницу через минуту.' }
       }
     }
+    // ⚠ Пересчёт дольше провижининга, то есть в исчерпанный пул он упирается ОХОТНЕЕ, — а разбора
+    // ошибок у него не было вовсе: и наша лежащая база, и отказ портала отвечали одним «recompute
+    // failed» с одним и тем же `upstream_error` в телеметрии (#538).
+    if (isSingleFlightUnavailable(e)) return { status: 503, body: { error: DB_UNAVAILABLE_TEXT } }
     return { status: 502, body: { error: 'recompute failed' } }
   }
 }
