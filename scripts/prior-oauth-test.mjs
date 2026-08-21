@@ -47,6 +47,10 @@
 //                   it prints the signed JWT and raw bodies, do not paste real-
 //                   portal output into a ticket/chat)
 //        --register-jwt (send the DCR /register body as a signed JWT, not JSON)
+//        --request-typ <media-type>  (#449; JOSE `typ` of the authorize request object.
+//        Default 'JWT' = production default. Use `oauth-authz-req+jwt` to rehearse the split
+//        HERE, on sandbox, before flipping PRIOR_OAUTH_REQUEST_TYP on prod — otherwise the
+//        first live run of a non-default typ lands on a real account owner.)
 //        --auth-method client_secret_basic|private_key_jwt  (#444; prod needs private_key_jwt —
 //                   applies to the BUSINESS app only, token A stays Basic. Affects what --dcr
 //                   registers, so register and run with the SAME value)
@@ -120,6 +124,9 @@ const cfg = {
   // registered — so `--auth-method private_key_jwt` also changes what `--dcr` registers.
   authMethod: parsePriorAuthMethod(args['auth-method'] || process.env.PRIOR_OAUTH_AUTH_METHOD, raw =>
     warn(`--auth-method "${raw}" не распознан — используется client_secret_basic (только sandbox)`)),
+  // #449: JOSE `typ` of the authorize `request` object. Same default as production, so an
+  // unflagged run is unchanged; set it to rehearse the split on sandbox BEFORE prod.
+  requestTyp: (args['request-typ'] || process.env.PRIOR_OAUTH_REQUEST_TYP || 'JWT').trim() || 'JWT',
   // JWT `aud` for the client_assertion — the ISSUER from /oidcdiscovery (port 9544, not the 9344
   // gateway). ⚠ The default below is the SANDBOX issuer: it does NOT follow `--base`, because the
   // issuer is whatever /oidcdiscovery reports, not a transform of the gateway host. Against any
@@ -224,8 +231,11 @@ function loadPrivateKey() {
   }
 }
 
-function signJwt(payload, privateKeyPem) {
-  const header = { alg: 'RS256', typ: 'JWT', kid: cfg.kid }
+// ⚠ `typ` is a PARAMETER, mirroring server/utils/priorJwt.ts (#449): this one signer serves BOTH
+// the authorize `request` object and the `client_assertion`, and the whole point of #449 is that
+// those two must be tellable apart. Default 'JWT' keeps every existing call byte-identical.
+function signJwt(payload, privateKeyPem, typ = 'JWT') {
+  const header = { alg: 'RS256', typ, kid: cfg.kid }
   const signingInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`
   const signature = createSign('RSA-SHA256').update(signingInput).sign(privateKeyPem)
   return `${signingInput}.${b64url(signature)}`
@@ -373,7 +383,10 @@ function buildAuthorizeUrl(intentId, aud, privateKeyPem) {
     nowSec: nowSec(),
     jti: `${randomUUID()}`
   })
-  const requestJwt = signJwt(claims, privateKeyPem)
+  // The authorize side only — the assertion above keeps the default, exactly as in production.
+  // Without this the recon script could not rehearse a non-default `typ` at all, and the FIRST
+  // live run of it would be a real account owner on prod (#449).
+  const requestJwt = signJwt(claims, privateKeyPem, cfg.requestTyp)
   return buildPriorAuthorizeUrl(cfg.base, {
     clientId: cfg.clientId,
     redirectUri: cfg.redirectUri,

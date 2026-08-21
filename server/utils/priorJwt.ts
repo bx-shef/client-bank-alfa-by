@@ -34,8 +34,16 @@ export const PRIOR_ASSERTION_TYP = 'JWT'
  */
 export const PRIOR_REQUEST_OBJECT_TYP = 'oauth-authz-req+jwt'
 
-/** A `typ` must be a media-type token — anything else is a typo, not a media type. */
-const TYP_MASK = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/
+/**
+ * A `typ` must be a media type — anything else is a typo, not a media type.
+ *
+ * ⚠ The `/` is allowed on purpose: RFC 7519 §5.1 only RECOMMENDS dropping the `application/`
+ * prefix, it does not forbid it, so `application/jwt` and `application/oauth-authz-req+jwt` are
+ * legitimate. A mask without `/` silently rejected them and then had `envCheck` announce
+ * «не похож на media-type» about a value that is one — telling the operator the opposite of the
+ * truth. At most one `/`, and not at either end, so `a//b` and `/jwt` stay typos.
+ */
+const TYP_MASK = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*)?$/
 
 /**
  * Which `typ` the authorize `request` JWT carries. Default is `'JWT'` — TODAY'S BEHAVIOUR, so an
@@ -70,7 +78,7 @@ export function isPriorRequestTypInvalid(env: NodeJS.ProcessEnv = process.env): 
  * distinguishable (#449). The authorize `request` object travels IN A URL — and we hand that URL to
  * the admin to forward to the account owner, so it routinely passes through a messenger — while the
  * `client_assertion` travels in a POST body. Their claim-sets differ only by the authorize side
- * having MORE: same `iss`/`sub`/`aud`/`exp`/`jti`, same `kid`, same signature key. A leaked
+ * having MORE: same `iss`/`sub`/`aud`/`iat`/`exp`/`jti`, same `kid`, same signature key. A leaked
  * authorize JWT is therefore a syntactically valid `client_assertion` unless something tells them
  * apart.
  */
