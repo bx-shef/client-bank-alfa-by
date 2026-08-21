@@ -148,7 +148,10 @@ async function main() {
     if (dealId != null) {
       const bogus = 'cba_unregistered_probe'
       try {
-        await executeTriggerViaRest({ kind: 'deal', id: String(dealId), amount: 0, currency: 'BYN' }, rest, { triggerCode: bogus })
+        // ⚠ Только `kind`+`id`: цель триггера СУММЫ НЕ НЕСЁТ — метод её и не принимает, триггер это
+        // просто сигнал «деньги пришли». Лишние поля тип отвергает, и до включения typecheck (#542)
+        // они молча создавали впечатление, что сумма куда-то едет.
+        await executeTriggerViaRest({ kind: 'deal', id: String(dealId) }, rest, { triggerCode: bogus })
         warn(`негативный контроль: незарегистрированный CODE «${bogus}» НЕ дал ошибку — проверь вручную`)
       } catch (e) {
         ok(`негативный контроль OK — незарегистрированный CODE → ошибка «${(e as Error).message}» (воркер её глотает, best-effort)`)

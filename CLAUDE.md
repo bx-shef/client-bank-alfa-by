@@ -64,7 +64,8 @@
 ```bash
 pnpm dev          # дев-сервер
 pnpm lint         # ESLint
-pnpm typecheck    # ТРИ прохода: app + server/** + tests/** (tsconfig.tests.json, #527)
+pnpm typecheck    # ЧЕТЫРЕ прохода: app + server/** + node (tests/**, scripts/**, vitest.config —
+                  # tsconfig.node.json, #527/#542) + визуальные тесты и playwright.config (tsconfig.visual.json)
 pnpm test         # Vitest (оба проекта; быстрый прогон node: pnpm test --project unit)
 pnpm generate     # сборка статики (nuxt generate, SSG) — то же гоняет CI
 ```
@@ -1553,7 +1554,9 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   [`docs/DEV_SCRIPTS.md`](docs/DEV_SCRIPTS.md): таблица всех команд с пометкой, какая **пишет** в
   портал, и подробности по каждой. Креды живут в git-ignored `.env.*`, в репозиторий не попадают.
 - `tests/*.test.ts` — Vitest (node) на чистые утилиты.
-- ⚠ **Тесты типизируются ТРЕТЬИМ проходом** (`tsconfig.tests.json`, #527). До него `pnpm typecheck`
+- ⚠ **Тесты типизируются ТРЕТЬИМ проходом** (`tsconfig.node.json`, #527/#542 — файл переименован,
+  когда в тот же проход добавились `scripts/**` и `vitest.config.ts`: имя `tsconfig.tests.json`
+  перестало описывать охват). До него `pnpm typecheck`
   не смотрел на `tests/**` вообще — ни один из двух проходов их не включал, и ~200 файлов проекта
   `unit` не проверялись ничем. Это не «тесты и так проверяются прогоном»: тест проверяет
   **поведение**, а тип описывает **контракт с production-кодом**, и расходятся они молча. Замер при
@@ -1570,12 +1573,26 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`calls.crm`) к объекту-сборщику `Record<string, unknown[]>`, все ключи которого проставлены тут
   же — то есть в основном false positive индексной сигнатуры, а не размен риска на удобство. Цена
   альтернативы — полсотни `!` по ассертам и приученная к ним рука, которая пишет то же в production. ⚠ `tests/nuxt/**` исключён потому, что покрыт
-  **app-проходом**, `tests/visual/**` — Playwright со своим окружением. Охват стережёт
-  `tests/typecheckTestsCoverage.test.ts`: тихо сузить `include` — единственный способ потерять
-  проверку снова. ⚠ Побочно: `ldJson` переехал из композабла `usePublicPageSeo` в чистое ядро
+  **app-проходом**, `tests/visual/**` — ЧЕТВЁРТЫМ (`tsconfig.visual.json`, ему нужен `lib: DOM`).
+  Охват стережёт `tests/typecheckCoverage.test.ts`: тихо сузить `include` — единственный способ
+  потерять проверку снова. ⚠ Побочно: `ldJson` переехал из композабла `usePublicPageSeo` в чистое ядро
   `app/utils/seo.ts` — юнит-тест не должен тянуть Nuxt-автоимпорты в серверный проход, а чистая
   строковая функция и по конвенции живёт в `app/utils/*`.
 - `tests/nuxt/**/*.test.ts` — Vitest (проект `nuxt`) на компоненты/страницы (`mountSuspended`).
+- ⚠ **Ещё три зоны не проверялись НИЧЕМ до #542**: `scripts/**`, `tests/visual/**` и корневые
+  конфиги. Это не мелочь охвата — замер вскрыл **мёртвую настройку**: `reducedMotion: 'reduce'` в
+  `playwright.config.ts` и в самом визуальном тесте. Опции с таким именем у раннера Playwright нет
+  вовсе (она живёт в `contextOptions`), а неизвестную опцию `use` Playwright не отвергает, а
+  **игнорирует молча**. Замерено пробой: `use: { reducedMotion }` → `matchMedia('(prefers-reduced-motion: reduce)')`
+  = **false**, `contextOptions: { reducedMotion }` → **true**. То есть эталоны снимались с
+  РАБОТАЮЩИМИ анимациями, а комментарии рядом уверяли в обратном; спасала одна CSS-врезка в тесте,
+  но она гасит только CSS — `prefers-reduced-motion` читает ещё и JS (`ImportStatsChart` выключает
+  по нему count-up цифр и анимацию ECharts, `HeroGraph` рисует статичный кадр). ⚠ Повторять
+  настройку в `test.use` НЕЛЬЗЯ: `contextOptions` при повторе не сливается, а замещается.
+  ⚠ `scripts/**` опаснее визуальных тестов, а не наоборот: они запускаются через
+  `--experimental-strip-types` (это ВЫРЕЗАНИЕ типов, без проверки), и часть из них пишет в боевые
+  порталы с `--apply`. Замер дал пять расхождений контракта — включая `number` там, где функция
+  ждёт `string`, и лишнее поле `amount` в цели триггера (метод суммы не принимает вовсе).
 
 Чистую логику выносим в `app/utils/*` и покрываем тестами; реактивную — в `app/composables/*`,
 UI — в компонентах. Это та же раскладка, что в `currency-converter` — держим её при развитии.

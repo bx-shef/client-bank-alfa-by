@@ -70,8 +70,13 @@ const companyByAccount = (acc: string): string | null =>
 const live = (s: number) => s >= 0
 const inScope = (c: string) => c === MY_CO || c === CLIENT_CO
 
-interface Inv { id: string, number: string, amount: number, currency: string, companyId: string, stage: number }
-interface Pay { order: string, amount: number, currency: string, companyId: string, stage: number }
+// ⚠ Валюта — доменный union, а не `string`: генератор берёт её из `CURRENCIES`, но пока поле было
+// голой строкой, компилятор не мог сверить его с `AllocationCandidate` — и расхождение вскрылось
+// только когда скрипты попали под typecheck (#542).
+type Cur = typeof CURRENCIES[number]
+
+interface Inv { id: string, number: string, amount: number, currency: Cur, companyId: string, stage: number }
+interface Pay { order: string, amount: number, currency: Cur, companyId: string, stage: number }
 interface Deal { id: string, companyId: string, stage: number }
 
 const invoices: Inv[] = Array.from({ length: 40 }, (_, i) => ({
@@ -106,7 +111,7 @@ const MATRICES: MatchMatrix[] = [
 ]
 
 // ─────────────────────── the algorithm (returns a category) ───────────────────────
-interface Payment { ourAcc: string, counterAcc: string, amount: number, currency: string, purpose: string }
+interface Payment { ourAcc: string, counterAcc: string, amount: number, currency: Cur, purpose: string }
 
 function classify(p: Payment): Category {
   if (!companyByAccount(p.ourAcc)) return 'my-company-not-found'

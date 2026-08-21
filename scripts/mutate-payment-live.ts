@@ -102,15 +102,17 @@ if (INVOICE_ID) {
 /** Resolve the seeded deal: an explicit --deal wins, else find «[TEST] Сделка Опт» by TITLE.
  *  (The seed dedupes deals by title — it sets no XML_ID on them — and `crm.item.list` rejects
  *  XML_ID in a deal filter anyway. Item ids are per portal, so nothing may be hardcoded here.) */
-async function resolveDealId(): Promise<number> {
-  if (dealFromArg > 0) return dealFromArg
+async function resolveDealId(): Promise<string> {
+  if (dealFromArg > 0) return String(dealFromArg)
   const res = await call('crm.deal.list', { filter: { TITLE: SEED_DEAL_TITLE }, select: ['ID'] })
   const rows = (res?.result as { ID: string }[]) ?? []
   if (!rows.length) {
     warn(`Засеянная сделка «${SEED_DEAL_TITLE}» не найдена — прогоните \`pnpm seed:b24\` (или укажите --deal <id>).`)
     process.exit(1)
   }
-  return Number(rows[0]!.ID)
+  // ⚠ Строкой, а не числом: `findDealPayments` принимает `string` (внутри он всё равно делает
+  // `String(...)`, поэтому расхождение было невидимым до включения typecheck — #542).
+  return String(rows[0]!.ID)
 }
 const DEAL_ID = await resolveDealId()
 

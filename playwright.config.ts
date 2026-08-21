@@ -43,7 +43,18 @@ export default defineConfig({
     trace: 'retain-on-failure',
     // Анимации глушим на уровне браузера (плюс CSS-врезка в самом тесте): без этого снимок ловит
     // случайный кадр и «регрессия» появляется на ровном месте.
-    reducedMotion: 'reduce',
+    //
+    // ⚠ ИМЕННО через `contextOptions`. Написанное прямо в `use` слово `reducedMotion` Playwright
+    // 1.62 не знает — такой опции у раннера нет вовсе, и она игнорировалась МОЛЧА: настройка
+    // стояла в двух местах, читалась как рабочая и не делала ничего. Замерено (#542):
+    // `use: { reducedMotion }` → `matchMedia('(prefers-reduced-motion: reduce)')` = **false**,
+    // `contextOptions: { reducedMotion }` → **true**. Ошибку нашли типы, когда конфиг наконец
+    // попал под `typecheck`, — до этого её не видел никто.
+    //
+    // ⚠ Это не дубль CSS-врезки: та гасит CSS-анимации, а `prefers-reduced-motion` читает ЕЩЁ И
+    // JS — `ImportStatsChart` по нему выключает count-up цифр и анимацию ECharts, `HeroGraph`
+    // рисует статичный кадр. Без него снимок ловил цифры на полпути.
+    contextOptions: { reducedMotion: 'reduce' },
     timezoneId: 'Europe/Minsk',
     locale: 'ru-RU'
   }

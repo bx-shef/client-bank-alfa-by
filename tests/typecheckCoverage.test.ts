@@ -15,22 +15,31 @@ import { fileURLToPath } from 'node:url'
 // стережётся.
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8')
 
-describe('юнит-тесты покрыты typecheck (#527)', () => {
-  const cfg = JSON.parse(read('tsconfig.tests.json')) as {
+describe('node-зона покрыта typecheck (#527/#542)', () => {
+  const cfg = JSON.parse(read('tsconfig.node.json')) as {
     extends: string
     include: string[]
     exclude: string[]
     compilerOptions?: Record<string, unknown>
   }
 
-  it('охват включает tests/** — иначе проверять нечего', () => {
+  it('охват включает всё, что исполняется в node вне Nitro-приложения', () => {
+    // ⚠ `scripts/**` добавлены не для полноты (#542): часть из них ходит в БОЕВЫЕ порталы с
+    // `--apply`, а запускаются они через `--experimental-strip-types` — это ВЫРЕЗАНИЕ типов, без
+    // всякой проверки. Замер при включении дал пять расхождений контракта, включая `number` там,
+    // где функция ждёт `string`.
     expect(cfg.include).toContain('./tests/**/*')
+    expect(cfg.include).toContain('./scripts/**/*.ts')
+    expect(cfg.include).toContain('./vitest.config.ts')
   })
 
   it('исключены ровно те два каталога, у которых ЕСТЬ свой проход', () => {
     // ⚠ `tests/nuxt/**` покрыт app-проходом (он в `include` корневого tsconfig), `tests/visual/**` —
     // это Playwright со своим окружением и своим `lib`. Всё остальное исключать нельзя: исключение
     // здесь означает «эти тесты снова никто не типизирует», а именно так дефект и появился.
+    // ⚠ `tests/visual/**` исключён отсюда, но покрыт СВОИМ проходом (`tsconfig.visual.json`) —
+    // ему нужен `lib: DOM` и типы Playwright. Раньше формулировка «Playwright со своим окружением»
+    // читалась как «покрыт где-то ещё», а покрыт он не был нигде (#542).
     expect(new Set(cfg.exclude)).toEqual(new Set(['./node_modules', './dist', './tests/nuxt/**', './tests/visual/**']))
   })
 
@@ -80,12 +89,14 @@ describe('юнит-тесты покрыты typecheck (#527)', () => {
     // Поэтому разбираем цепочку: сегмент с нашим конфигом обязан быть САМОСТОЯТЕЛЬНОЙ командой,
     // соединённой через `&&`, без скобок, `|| true`, `;` и комментариев.
     const segments = script.split('&&').map(x => x.trim())
-    const ours = segments.filter(x => x.includes('tsconfig.tests.json'))
-    expect(ours.length, 'tests-проход не в `pnpm typecheck` — CI его не запустит').toBe(1)
-    expect(
-      ours[0],
-      'провал tests-прохода проглатывается — команда вернёт 0 при настоящей ошибке типа'
-    ).toBe('vue-tsc -p tsconfig.tests.json --noEmit')
+    for (const cfgFile of ['tsconfig.node.json', 'tsconfig.visual.json']) {
+      const ours = segments.filter(x => x.includes(cfgFile))
+      expect(ours.length, `${cfgFile}: проход не в \`pnpm typecheck\` — CI его не запустит`).toBe(1)
+      expect(
+        ours[0],
+        `${cfgFile}: провал прохода проглатывается — команда вернёт 0 при настоящей ошибке типа`
+      ).toBe(`vue-tsc -p ${cfgFile} --noEmit`)
+    }
 
     // И ни один ДРУГОЙ проход не должен быть заглушён тем же приёмом — иначе «зелёный typecheck»
     // перестаёт значить «типы в порядке» целиком, а не только для тестов.
@@ -99,4 +110,41 @@ describe('юнит-тесты покрыты typecheck (#527)', () => {
   // реальной ошибки типа: `pnpm typecheck` вернул 0. Это осознанно вне скоупа #527 (там про юнит-
   // тесты), но записано, потому что «исключён, ибо Playwright» звучит как «покрыт где-то ещё», а
   // это не так — см. docs/project-map.md.
+})
+
+describe('визуальные тесты покрыты typecheck (#542)', () => {
+  // ⚠ Зона, которую не проверял НИКТО: vitest её не матчит (`.spec.ts`), Playwright транспилирует
+  // esbuild'ом без проверки типов, ESLint здесь не type-aware. Ошибка типа всплывала бы только
+  // рантайм-исключением в CI-джобе `visual`. И всплыла: `reducedMotion` в `use` — не опция
+  // раннера вовсе, она игнорировалась молча, то есть анимации в снимках НЕ глушились (замерено:
+  // `matchMedia('(prefers-reduced-motion: reduce)')` = false), а комментарии рядом уверяли в
+  // обратном.
+  const cfg = JSON.parse(read('tsconfig.visual.json')) as {
+    extends: string
+    include: string[]
+    compilerOptions?: Record<string, unknown>
+  }
+
+  it('охват включает и тесты, и конфиг Playwright', () => {
+    expect(cfg.include).toContain('./tests/visual/**/*.ts')
+    expect(cfg.include).toContain('./playwright.config.ts')
+  })
+
+  it('наследует APP-конфиг, а не серверный — тестам нужен DOM', () => {
+    // ⚠ Под серверным конфигом падает `document` («Cannot find name»), и соблазн «починить» это
+    // послаблением велик. Наследование app-конфига даёт `lib: DOM` штатно.
+    expect(cfg.extends).toBe('./.nuxt/tsconfig.json')
+  })
+
+  it('reducedMotion задан через contextOptions, а не как опция use', () => {
+    // ⚠ Структурно, потому что отказ МОЛЧАЛИВЫЙ: Playwright неизвестную опцию `use` не отвергает,
+    // а игнорирует. Вернуть её обратно — значит снова снимать экраны с работающими анимациями и
+    // ловить цифры count-up на полпути, при этом ничего не сломав на вид.
+    const config = read('playwright.config.ts')
+    expect(config).toContain('contextOptions: { reducedMotion:')
+    expect(config).not.toMatch(/^\s*reducedMotion:/m)
+    // В самом тесте повтора быть не должно: `contextOptions` при повторе замещается, а не
+    // сливается, — «продублировав для надёжности», мы затёрли бы конфиг.
+    expect(read('tests/visual/pages.spec.ts')).not.toMatch(/^\s*reducedMotion:/m)
+  })
 })

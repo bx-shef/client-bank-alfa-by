@@ -8,7 +8,9 @@
     "./.nuxt/types/nitro.d.ts",
     "./server/**/*",
     "./shared/**/*.d.ts",
-    "./tests/**/*"
+    "./tests/**/*",
+    "./scripts/**/*.ts",
+    "./vitest.config.ts"
   ],
   "exclude": [
     "./node_modules",

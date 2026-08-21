@@ -54,3 +54,6 @@ service-routes.txt
 # Артефакты визуальных регресс-тестов (эталоны — в tests/visual/__screenshots__, они коммитятся)
 tests/visual/.artifacts/
 playwright-report/
+# Артефакты прогона Playwright (трассы упавших визуальных тестов) — пишутся рядом с репозиторием
+# по умолчанию, в историю им не надо.
+test-results/
