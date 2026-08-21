@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
+import { setAccountErrorMessage } from '../app/utils/setAccountError'
 import {
   accountsUrl,
   connectedKeys,
@@ -11,6 +13,12 @@ import {
 } from '../server/utils/bankAccountList'
 import type { BankToken } from '../server/utils/bankTokenStore'
 import type { BankProviderId } from '../app/types/statement'
+
+/** Сравнение близнецов по существу: у клиентского текст — предложение (заглавная, точка), у
+ *  серверного — вставка в шаблон алерта. Третьей копии текста здесь НЕТ намеренно: она устаревала
+ *  бы при согласованной правке обоих файлов и краснела бы на верном изменении. */
+const sameMessage = (a: string, b: string) =>
+  a.trim().toLowerCase().replace(/[.\s]+$/, '') === b.trim().toLowerCase().replace(/[.\s]+$/, '')
 
 function token(over: Partial<BankToken> = {}): BankToken {
   return {
@@ -265,5 +273,36 @@ describe('listBankSideAccounts — банк на каждой строке и п
       }
     }))
     expect(out[0]).toMatchObject({ provider: 'alfa-by', accounts: [], error: 'invalid_grant' })
+  })
+})
+
+describe('сверка счетов: занятый лок обновления токена (#539)', () => {
+  it('говорит человеческим текстом, а не исключением Postgres', async () => {
+    // Держатель того же лока — плановое продление токена, у которого потолок POST к банку 15 с.
+    // Значит «не дождались» — штатный исход, и он обязан читаться как состояние, а не как поломка.
+    const out = await listBankSideAccounts('M1', deps({
+      ensureFresh: async () => {
+        throw Object.assign(new Error('canceling statement due to lock timeout'), { code: PG_LOCK_TIMEOUT })
+      }
+    }))
+    expect(sameMessage(out[0]?.error ?? '', setAccountErrorMessage({ statusCode: 503 }))).toBe(true)
+    // ⚠ Текста исключения на экране быть не должно: сообщение pg несёт имена таблиц.
+    expect(out[0]?.error).not.toContain('lock timeout')
+  })
+
+  it('обычная ошибка банка НЕ выдаётся за «занято»', () => {
+    // Иначе проверка выше стала бы бессодержательной: совпасть с близнецом мог бы любой текст.
+    expect(sameMessage('invalid_grant', setAccountErrorMessage({ statusCode: 503 }))).toBe(false)
+  })
+
+  it('обычная ошибка банка по-прежнему показывается как есть', async () => {
+    // Иначе «человеческий текст» съел бы диагностику: протухший грант и занятый лок чинятся
+    // по-разному, и подменять первый вторым значило бы врать админу.
+    const out = await listBankSideAccounts('M1', deps({
+      ensureFresh: async () => {
+        throw new Error('invalid_grant')
+      }
+    }))
+    expect(out[0]?.error).toBe('invalid_grant')
   })
 })

@@ -45,7 +45,10 @@ export function useBankMatrix() {
     try {
       const res = await $fetch<{ rows?: MatrixRow[], providers?: MatrixProviderStatus[] }>(
         '/api/bank/matrix',
-        { headers: authHeaders(a) }
+        // ⚠ `retry: 0` обязателен: ofetch по умолчанию повторяет GET, в том числе на 429 и без
+        // паузы, — то есть каждый отказ троттла сам удваивает нагрузку на ту же зону и приближает
+        // следующий. Маршрут вдобавок ходит в оба банка, поэтому «бесплатным» повтор тут не бывает.
+        { headers: authHeaders(a), retry: 0 }
       )
       rows.value = Array.isArray(res?.rows) ? res.rows : []
       providers.value = Array.isArray(res?.providers) ? res.providers : []
