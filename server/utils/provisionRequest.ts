@@ -9,7 +9,7 @@
 // from the client), and `validateFrame` re-checks the token against B24 to block a spoofed domain.
 
 import { sanitizeForLog } from './logSanitize'
-import { isLockTimeout } from './bankRefreshLock'
+import { isSingleFlightBusy } from './singleFlightLease'
 import type { ProvisionDistributionOutcome } from './distributionProvisionHandler'
 
 /** Injected side effects + config for {@link handleProvisionRequest}. */
@@ -82,16 +82,20 @@ export async function handleProvisionRequest(
       }
     }
   } catch (e) {
-    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Provisioning is serialized by a per-portal
-    // advisory lock, and a concurrent click (a second admin, a double press, a retry from another
-    // tab) used to surface the UNHANDLED Postgres `55P03`. That reached the caller as an error,
-    // while it means exactly «this operation is already running right now».
+    // ⚠ «Busy» is a NORMAL outcome, not a failure (#516). Provisioning is single-flight per portal,
+    // and a concurrent click (a second admin, a double press, a retry from another tab) used to
+    // surface the UNHANDLED Postgres `55P03`. That reached the caller as an error, while it means
+    // exactly «this operation is already running right now».
+    //
+    // ⚠ Признак сменился вместе с механизмом (#538): single-flight держит теперь АРЕНДА, а не
+    // advisory-лок, поэтому «занято» приходит своим типом ошибки, а не кодом Postgres. Проверять
+    // `isLockTimeout` тут больше нечего — этот путь к базе за локом не ходит вовсе.
     //
     // ⚠ It is worse here than elsewhere: provisioning CREATES smart processes in the client's CRM
     // and there is no rollback button in production. An admin who sees an error cannot tell whether
     // anything was created, and the natural reaction is to press again. The message has to say what
     // NOT to do.
-    if (isLockTimeout(e)) {
+    if (isSingleFlightBusy(e)) {
       return {
         status: 503,
         body: { error: 'Настройка смарт-процессов уже выполняется — подождите и обновите страницу. Повторное нажатие ничего не ускорит и может создать лишние сущности.' }
@@ -131,6 +135,14 @@ export function classifyProvisionError(raw: string): string {
   }
   if (s.includes('expired_token') || s.includes('invalid_token')) {
     return 'Истекла авторизация приложения в портале. Переустановите приложение и повторите.'
+  }
+  // ⚠ ПУЛ РАНЬШЕ ТАЙМАУТА, и это не порядок ради порядка (#538). Исчерпание нашего же пула pg
+  // бросает `timeout exceeded when trying to connect` — строку, которая совпадает с веткой ниже и
+  // уверенно сообщала админу «портал не ответил вовремя». Причина при этом на НАШЕЙ стороне,
+  // Bitrix24 к ней не имеет отношения, и админ уходил искать не там. Ошибка pg-pool приходит без
+  // `.code`, поэтому различает их только текст.
+  if (s.includes('timeout exceeded when trying to connect')) {
+    return 'Сервер сейчас перегружен и не смог взять соединение с базой. Это наша сторона, а не портал: повторите через минуту — действие идемпотентно, дубликатов не будет.'
   }
   if (s.includes('timeout') || s.includes('econn') || s.includes('fetch failed') || s.includes('network')) {
     return 'Портал не ответил вовремя. Повторите попытку — действие идемпотентно, дубликатов не будет.'

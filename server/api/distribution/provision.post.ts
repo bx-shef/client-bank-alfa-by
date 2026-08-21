@@ -9,10 +9,10 @@ import { handleProvisionDistribution } from '../../utils/distributionProvisionHa
 import { provisionDistributionSp, type KnownSpIds } from '../../utils/distributionSpProvision'
 import { bearerToken } from '../../utils/settingsHandler'
 import { distributionEnabled } from '../../utils/distributionEnabled'
-import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
+import { frameRestCall, liveLeaseDeps, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { SINGLE_FLIGHT_LOCK_WAIT, withAdvisoryLock } from '../../utils/dbLock'
+import { PROVISION_LEASE_SEC, withSingleFlightLease } from '../../utils/singleFlightLease'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -58,15 +58,16 @@ function liveProvisionDeps(): ProvisionRequestDeps {
           provision: (known: KnownSpIds) => provisionDistributionSp(call, known),
           // Single-flight per portal: serialize concurrent provision requests across replicas.
           //
-          // ⚠ The wait is SHORT, for the same reason as the account rename (#509) — not a different
-          // one. Both holders are slow; the difference is that #509's is BOUNDED (one bank POST,
-          // capped at 15s) while this one is not (~18 sequential REST calls to Bitrix24). Neither
-          // can be outwaited, and a waiter occupies a POOLED CONNECTION the whole time (the pool is
-          // 10, shared with the readiness probe, install events and every other portal).
+          // ⚠ Это АРЕНДА, а не advisory-лок (#538). Разница не в способе, а в том, что удерживается:
+          // лок держал соединение из пула всю REST-цепочку (~18 последовательных вызовов), ни разу
+          // не обратившись к базе, — пул общий на 10, и десяток провижинингов с РАЗНЫХ порталов
+          // выедал его целиком, роняя readiness-пробу и приём событий установки. Аренда берёт
+          // соединение дважды по одному запросу и отдаёт сразу.
           //
-          // ⚠ There is also nothing to wait FOR: if provisioning is already running, the second
-          // caller has no work — the first creates everything. «Already running» beats a queue.
-          withLock: fn => withAdvisoryLock(`provision-sp:${memberId}`, () => fn(), { lockWait: SINGLE_FLIGHT_LOCK_WAIT })
+          // ⚠ Ждать не пытаемся вовсе (у лока было короткое ожидание): дождаться держателя нельзя,
+          // а второму вызывающему нечего делать — первый создаёт всё то же самое. Ответ «уже
+          // выполняется» и есть правильный.
+          withLock: fn => withSingleFlightLease(liveLeaseDeps(), `provision-sp:${memberId}`, PROVISION_LEASE_SEC, fn)
         }))
     }
   }

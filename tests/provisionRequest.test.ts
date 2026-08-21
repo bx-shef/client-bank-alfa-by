@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { handleProvisionRequest, type ProvisionRequestDeps } from '../server/utils/provisionRequest'
+import { classifyProvisionError, handleProvisionRequest, type ProvisionRequestDeps } from '../server/utils/provisionRequest'
+import { SingleFlightBusyError } from '../server/utils/singleFlightLease'
 import type { ProvisionDistributionOutcome } from '../server/utils/distributionProvisionHandler'
 
 // Pure request gate for POST /api/distribution/provision (#109 §9.1): feature gate → frame auth
@@ -95,16 +96,16 @@ describe('handleProvisionRequest', () => {
 })
 
 describe('concurrent click — «busy», not a failure (#516)', () => {
-  /** The Postgres error on an exhausted `lock_timeout` — exactly what used to escape unhandled. */
-  const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+  /** Отказ «операция уже идёт» — ровно то, что раньше уходило наружу необработанным. */
+  const busy = new SingleFlightBusyError('provision-sp:m1')
 
-  it('an exhausted lock wait ⇒ 503 with a human message, not 502', async () => {
+  it('a busy single-flight ⇒ 503 with a human message, not 502', async () => {
     // ⚠ Provisioning CREATES smart processes in the client's CRM and there is no rollback button in
     // production. An admin who sees «provisioning failed» cannot tell whether anything was created,
     // and the natural reaction is to press again. The message must say NOT to.
     const r = await handleProvisionRequest(deps({
       provision: async () => {
-        throw lockTimeout
+        throw busy
       }
     }), input)
     expect(r.status).toBe(503)
@@ -123,31 +124,48 @@ describe('concurrent click — «busy», not a failure (#516)', () => {
     expect(r.status).toBe(502)
   })
 
-  it('код 55P03 опознаётся ОБЩЕЙ функцией, а не своей копией', async () => {
-    // Разойдись копии — один маршрут отвечал бы «занято», другой «сбой», на одном и том же коде.
+  it('«занято» опознаётся ОБЩИМ предикатом, а не своей копией', async () => {
+    // Разойдись копии — один маршрут отвечал бы «занято», другой «сбой», на одном и том же исходе.
     const { readFileSync } = await import('node:fs')
     for (const rel of ['server/utils/provisionRequest.ts', 'server/utils/recomputeRequest.ts']) {
       const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
-      expect(src, `${rel} не использует общий isLockTimeout`).toContain('isLockTimeout')
+      expect(src, `${rel} не использует общий isSingleFlightBusy`).toContain('isSingleFlightBusy')
       expect(src, `${rel} завёл свою копию кода 55P03`).not.toMatch(/'55P03'/)
     }
   })
 
-  it('живые маршруты реально просят КОРОТКОЕ ожидание, а не молча берут 10-секундный дефолт', async () => {
+  it('живые маршруты держат single-flight АРЕНДОЙ, а не advisory-локом (#538)', async () => {
     // ⚠ Единственный тест, который вообще смотрит на проводку. Чистые хендлеры выше получают
-    // ошибку лока через DI-мок и до `provision.post.ts`/`recompute.post.ts` не доходят никогда,
-    // поэтому пропажа третьего аргумента `{ lockWait: SINGLE_FLIGHT_LOCK_WAIT }` (мердж-конфликт,
-    // «упростили дубль») оставляла ВЕСЬ набор зелёным. А в проде это ровно то, ради чего PR и
-    // писался: ожидание молча откатывается на `DEFAULT_LOCK_WAIT`, и второй клик занимает
-    // соединение из пула (пул — 10) на десять секунд вместо одной.
+    // «занято» через DI-мок и до `provision.post.ts`/`recompute.post.ts` не доходят никогда,
+    // поэтому возврат к `withAdvisoryLock` оставил бы ВЕСЬ набор зелёным — а в проде это ровно тот
+    // дефект, ради которого правка и писалась: лок держит соединение из пула (пул — 10) всё время
+    // REST-цепочки, ни разу не обратившись к базе. Провижининг — это десятки секунд, пересчёт —
+    // минуты; десяток таких операций с РАЗНЫХ порталов выедает пул целиком, и readiness-проба
+    // начинает честно отвечать «Postgres недоступен» при полностью здоровом Postgres.
+    //
+    // ⚠ Проверяется ОТСУТСТВИЕ лока, а не только наличие аренды: вернуть `withAdvisoryLock` рядом
+    // с работающей арендой — самый вероятный способ починки «на всякий случай», и он возвращает
+    // ровно ту цену, от которой избавлялись.
     const { readFileSync } = await import('node:fs')
     for (const rel of ['server/api/distribution/provision.post.ts', 'server/api/distribution/recompute.post.ts']) {
       const src = readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
-      expect(src, `${rel} зовёт withAdvisoryLock без lockWait — вернулся дефолт 10 с`)
-        .toMatch(/lockWait:\s*SINGLE_FLIGHT_LOCK_WAIT/)
-      // Не своя строка «1s» рядом с общей константой: разойдись они — маршруты стали бы ждать
-      // по-разному, и никто бы этого не заметил.
-      expect(src, `${rel} завёл свою копию значения ожидания`).not.toMatch(/lockWait:\s*'/)
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+      expect(code, `${rel} не берёт аренду single-flight`).toContain('withSingleFlightLease')
+      expect(code, `${rel} снова держит соединение пула advisory-локом всю REST-цепочку`)
+        .not.toContain('withAdvisoryLock')
+      // Срок аренды — из общей константы: своя цифра рядом с ней разъедется молча.
+      expect(code, `${rel} завёл свою копию срока аренды`).toMatch(/_LEASE_SEC/)
     }
+  })
+
+  it('исчерпание НАШЕГО пула не выдаётся за молчание портала (#538)', () => {
+    // pg-pool бросает `timeout exceeded when trying to connect` — строку, совпадающую с общей
+    // веткой «timeout». Пока она стояла первой, админу уверенно сообщали «Портал не ответил
+    // вовремя», и он шёл искать причину в Bitrix24, тогда как соединения кончились у нас.
+    const poolText = classifyProvisionError('Error: timeout exceeded when trying to connect')
+    expect(poolText).not.toContain('Портал не ответил')
+    expect(poolText).toContain('наша сторона')
+    // И настоящий сетевой таймаут по-прежнему читается как таймаут портала.
+    expect(classifyProvisionError('fetch failed: network timeout')).toContain('Портал не ответил')
   })
 })

@@ -33,24 +33,6 @@ export const DEFAULT_LOCK_WAIT = '10s'
 export const MIN_LOCK_WAIT = '100ms'
 
 /**
- * Wait for the «one at a time per portal» operations that are LONG by nature — smart-process
- * provisioning and distribution recompute (#516).
- *
- * ⚠ This is the SAME reasoning as `BANK_REFRESH_LOCK_WAIT` (#509), not a different one — both holders are
- * slow and neither can be outwaited, so both wait briefly and answer «busy» instead of camping on a
- * POOLED CONNECTION (the pool is 10, shared with the readiness probe, install events and every
- * other portal). The real difference is BOUNDEDNESS, not speed: #509's holder is ONE network POST
- * capped at 15s (`bankAccountRename.ts`), while this one is unbounded — provisioning issues ~18
- * sequential REST calls, and recompute walks up to `MAX_LEDGER_PAYMENTS` payments at 2 calls each,
- * i.e. hundreds. An unbounded holder deserves the shorter wait of the two.
- *
- * ⚠ Queueing makes no sense here either: if the operation is already running, the second caller has
- * nothing to do — the first is doing the very same work. The right answer is «already running», not
- * «take a number».
- */
-export const SINGLE_FLIGHT_LOCK_WAIT = '1s'
-
-/**
  * Сколько ждать лок `bankrefresh:` ЧЕЛОВЕКУ. Держатель у него один и тот же во всех случаях —
  * обновление банковского токена, то есть ОДИН сетевой POST к банку с потолком 15 с. Дождаться его
  * нельзя ни за 2 с, ни за 10, поэтому человеку отвечаем быстро («занято, повторите» — повтор в
