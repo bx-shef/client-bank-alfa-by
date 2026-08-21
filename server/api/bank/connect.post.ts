@@ -22,6 +22,9 @@ import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
 import type { BankProviderId } from '../../../app/types/statement'
+import { useServerLogger } from '../../utils/serverLogger'
+
+const log = useServerLogger('bank-connect')
 
 function liveConnectDeps(): ConnectStartDeps {
   return {
@@ -76,7 +79,7 @@ function liveConnectDeps(): ConnectStartDeps {
       myCompanyGate(await findMyCompanyAccounts((method, params) => frameRestCall(domain, accessToken, method, params))),
     // Sanitized already (the handler passes text through sanitizeForLog) — keeps a failed Prior
     // preamble diagnosable instead of one opaque 502.
-    log: msg => console.info(msg)
+    log: msg => log.info(msg)
   }
 }
 

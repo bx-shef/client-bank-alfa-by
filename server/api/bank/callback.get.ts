@@ -16,6 +16,9 @@ import { resolveAuthConfig } from '../../utils/session'
 import { saveBankToken } from '../../utils/bankTokenStore'
 import { dbQuery } from '../../db/client'
 import type { BankProviderId } from '../../../app/types/statement'
+import { useServerLogger } from '../../utils/serverLogger'
+
+const log = useServerLogger('bank-connect')
 
 function liveCallbackDeps(): CallbackDeps {
   return {
@@ -58,7 +61,7 @@ function liveCallbackDeps(): CallbackDeps {
       newId: () => randomUUID()
     }),
     saveToken: token => saveBankToken(dbQuery, token),
-    log: msg => console.info(msg)
+    log: msg => log.info(msg)
   }
 }
 

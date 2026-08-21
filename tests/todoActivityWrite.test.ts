@@ -75,7 +75,13 @@ describe('writeTodoActivityViaRest', () => {
   it('если и удаление не вышло — всё равно виден ИСХОДНЫЙ отказ, а сирота названа в логе', async () => {
     // Ошибка удаления не объясняет, что произошло; объясняет первая. Но про сироту сказать надо,
     // иначе дубль появится «сам по себе» через сутки.
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // ⚠ Ловим ПОТОК, а не `console.error`: с #529 строка уходит в `process.stdout` через
+    // обработчик логгера, и шпион на консоли молчал бы, оставляя тест зелёным ни о чём.
+    const chunks: string[] = []
+    const err = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+      chunks.push(String(c))
+      return true
+    })
     const call = vi.fn(async (method: string) => {
       if (method === TODO_ACTIVITY_ADD_METHOD) return { result: { id: 12 } }
       throw new Error(method === ACTIVITY_UPDATE_METHOD ? 'update boom' : 'delete boom')

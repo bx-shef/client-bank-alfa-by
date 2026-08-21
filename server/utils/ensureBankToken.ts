@@ -25,6 +25,9 @@ import { bankRefreshLockKey } from './bankRefreshLock'
 import { getBankToken, updateBankTokenSecrets } from './bankTokenStore'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('bank-keepalive')
 
 /** True when the bank access token is within `skewMs` of expiry (pure, testable). */
 export function needsBankRefresh(token: BankToken, nowMs: number, skewMs = 60_000): boolean {
@@ -206,7 +209,7 @@ export async function ensureBankToken(
 
   const creds = deps.creds(token.provider)
   if (!creds) {
-    console.warn(`[ensureBankToken] ${token.provider} near/at expiry but OAuth creds unset — cannot refresh`)
+    log.warning(`ensureBankToken: ${token.provider} near/at expiry but OAuth creds unset — cannot refresh`)
     return token
   }
 
@@ -236,7 +239,7 @@ export async function ensureBankToken(
     // forever; skip the doomed round-trip and log an ACTIONABLE line instead. The caller's fetch
     // then fails on the expired access token, which is the honest state: reconnect required.
     if (!stored.refreshToken) {
-      console.warn(`[ensureBankToken] ${stored.provider} account has no refresh_token — RECONNECT REQUIRED (re-run the bank connect for this account)`)
+      log.warning(`ensureBankToken: ${stored.provider} account has no refresh_token — RECONNECT REQUIRED (re-run the bank connect for this account)`)
       return stored
     }
 
@@ -255,7 +258,7 @@ export async function ensureBankToken(
     // came back with a fresh token — the app kept reaching into the client's bank after they had
     // forbidden it (#505).
     if (!await deps.saveToken(q, updated)) {
-      console.warn(`[ensureBankToken] ${stored.provider} account was disconnected mid-refresh — token NOT stored`)
+      log.warning(`ensureBankToken: ${stored.provider} account was disconnected mid-refresh — token NOT stored`)
       return stored
     }
     return updated

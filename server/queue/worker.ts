@@ -46,6 +46,7 @@ import { createPortalSdkResolver, type PortalRestResolver } from '../utils/porta
 import { sdkPortalDeps } from '../utils/b24Sdk'
 import { B24_REQUIRED_SCOPES } from '../../app/config/b24'
 import { resolveOpLogMode, runSummaryLine } from '../../app/utils/opLogPolicy'
+import { useServerLogger } from '../utils/serverLogger'
 import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
@@ -73,6 +74,19 @@ import { findDocumentEntities } from '../utils/documentLookup'
 import { resolveIntentsForOp, type IntentResolverDeps } from '../utils/intentResolver'
 import { buildPortalNegativeStagePredicate, failOpenEntities } from '../utils/negativeStages'
 import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
+
+// Каналы воркера. Имена совпадают с маркерами, которые уже грепает рантбук (#529): менять их
+// «покрасивее» — значит молча сломать `docs/OPERATIONS.md` и `scripts/prod-doctor.sh`.
+const fetchLog = useServerLogger('fetch')
+const importLog = useServerLogger('import')
+const recognizeLog = useServerLogger('recognize')
+const stageLog = useServerLogger('stage')
+const resolveLog = useServerLogger('resolve')
+const allocateLog = useServerLogger('allocate')
+const opLog = useServerLogger('op')
+const crmLog = useServerLogger('crm-sync')
+const triggerLog = useServerLogger('trigger')
+const deletionLog = useServerLogger('deletion')
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
 const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCandidateByField, findCompanyDealPayments, findOrderPaymentIds, findDocumentEntities }
@@ -151,7 +165,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // first question asked of every live run had no answer anywhere. One line per fetch settles
       // it. Amounts/purposes stay out (docs/PRIVACY.md §Логи); the account is logSafe'd like
       // everywhere else, since the bank echoes operator-supplied values.
-      console.log(`[fetch] ${job.providerId} portal ${job.memberId}, account ${logSafe(job.account)} ${job.dateFrom}..${job.dateTo}: ${items.length} ops`)
+      fetchLog.info(`${job.providerId} portal ${job.memberId}, account ${logSafe(job.account)} ${job.dateFrom}..${job.dateTo}: ${items.length} ops`)
       return items
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
@@ -163,7 +177,7 @@ export function liveHandlerDeps(): HandlerDeps {
       const items = parseManualFileBase64(job.contentBase64)
       // fileName is the operator-supplied upload name (untrusted) → logSafe it like
       // account/docId elsewhere, so a crafted name can't inject forged log lines.
-      console.log(`[import] parsed ${items.length} ops from "${logSafe(job.fileName)}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)
+      importLog.info(`parsed ${items.length} ops from "${logSafe(job.fileName)}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)
       return items
     },
     // Find the CRM company by the counterparty's settlement account. Demo accounts
@@ -233,12 +247,12 @@ export function liveHandlerDeps(): HandlerDeps {
     // app.option (admin-writable, not control-char filtered) → logSafe it too.
     onRecognized: (item, intents, memberId) => {
       const summary = intents.map(i => `${i.kind}=${logSafe(i.value)}→${i.route.targetKind ?? 'document'}/${i.route.strategy}`).join(', ')
-      console.log(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
+      recognizeLog.info(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
       // Observability (#242): the resolver caps REST lookups at MAX_RESOLVED_INTENTS_PER_OP,
       // so any intents beyond that are silently dropped (a payer with a purpose stuffed full
       // of ids can't otherwise be seen). Surface the truncation so it's visible in logs.
       if (intents.length > MAX_RESOLVED_INTENTS_PER_OP) {
-        console.warn(`[recognize] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${intents.length} intents, capped to ${MAX_RESOLVED_INTENTS_PER_OP} for REST lookup (${intents.length - MAX_RESOLVED_INTENTS_PER_OP} dropped)`)
+        recognizeLog.warning(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${intents.length} intents, capped to ${MAX_RESOLVED_INTENTS_PER_OP} for REST lookup (${intents.length - MAX_RESOLVED_INTENTS_PER_OP} dropped)`)
       }
     },
     // Resolve recognized intents to allocation candidates via the entity lookups (#109
@@ -277,7 +291,7 @@ export function liveHandlerDeps(): HandlerDeps {
           const d = e === 'invoice' ? diagnostics.invoice : e === 'deal' ? diagnostics.deal : diagnostics.smartProcess
           return `${e}(funnels=${d?.categories},neg=${d?.negativeStages},empty=${d?.emptyCategories})`
         }).join(' ')
-        console.warn(`[stage] portal ${memberId}: suspicious negative-stage load — ${detail} (a funnel with 0 lost/fail stages, or none enumerated) — check rights/config; those entities won't be stage-excluded (fail-open)`)
+        stageLog.warning(`portal ${memberId}: suspicious negative-stage load — ${detail} (a funnel with 0 lost/fail stages, or none enumerated) — check rights/config; those entities won't be stage-excluded (fail-open)`)
         // Program feedback (docs/FEEDBACK.md channel 2, fail-open signal). Fire-and-forget: this is
         // the hot resolution path — don't delay the predicate on a GitHub POST (fileProgramSignal
         // swallows internally, so the void promise never rejects). No account here, but only real
@@ -290,7 +304,7 @@ export function liveHandlerDeps(): HandlerDeps {
     // sanitized (logSafe) like onRecognized; kind/status are safe internal data.
     onResolved: (item, resolutions, memberId) => {
       const summary = resolutions.map(r => `${r.kind}=${logSafe(r.value)}:${r.status}(${r.candidates.length})`).join(', ')
-      console.log(`[resolve] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
+      resolveLog.info(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${summary}`)
     },
     // Observe the allocation decision (§2). This callback only LOGS; the durable record is the
     // SP-ledger distribution row (`writeLedger`, §9.3 #6 — Postgres allocation_fact retired).
@@ -301,7 +315,7 @@ export function liveHandlerDeps(): HandlerDeps {
         : decision.action === 'manual'
           ? `manual(${decision.candidates.length} candidates, no exact match)`
           : 'none'
-      console.log(`[allocate] portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
+      allocateLog.info(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
     },
     // Per-op outcome — the one line an operation gets when it matched NOTHING (see the dep's doc
     // in handlers.ts). The counterparty's account is the payload here on purpose: it is the exact
@@ -315,7 +329,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // and a review mutation proved the cost: `if (false && !shouldLogOperation(…)) return`
       // left the whole suite green while silently restoring the full #498 log volume.
       const line = buildOpLogLine(item, outcome, memberId, OP_LOG_MODE, STATEMENT_DEBUG_LOG)
-      if (line) console.log(line)
+      if (line) opLog.info(line)
     },
     // Post the announcement via im.message.add. The decision (target + rules) was made
     // in handleCrmSyncJob; here we only send. Demo accounts are GATED (never real REST);
@@ -330,7 +344,7 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyChatViaRest(item, dialogId, call, memberId)
       } catch (e) {
-        console.error('chat notify failed', memberId, (e as Error)?.message)
+        crmLog.error(`chat notify failed, portal ${memberId}: ${(e as Error)?.message}`)
       }
     },
     // Idempotency pre-check for the AMOUNT mutation (#109 §2, Фаза A): is the target already
@@ -443,7 +457,7 @@ export function liveHandlerDeps(): HandlerDeps {
           opKey: dedupKey(item)
         })
       } catch (e) {
-        console.warn(`[trigger] enqueue retry failed for ${target.kind}#${target.id} — ${(e as Error)?.message}`)
+        triggerLog.warning(`enqueue retry failed for ${target.kind}#${target.id} — ${(e as Error)?.message}`)
       }
     },
     // Post an ambiguous/manual allocation notice to the error chat. Same guarantees as
@@ -456,7 +470,7 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyAllocationErrorViaRest(item, decision, dialogId, call, memberId)
       } catch (e) {
-        console.error('alloc error notify failed', memberId, (e as Error)?.message)
+        crmLog.error(`alloc error notify failed, portal ${memberId}: ${(e as Error)?.message}`)
       }
     },
     // «Номер распознан, цель не найдена» (#421) — те же гарантии, что у notifyError.
@@ -467,7 +481,7 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyUnresolvedViaRest(item, identifiers, dialogId, call, truncated, memberId)
       } catch (e) {
-        console.error('unresolved notify failed', memberId, (e as Error)?.message)
+        crmLog.error(`unresolved notify failed, portal ${memberId}: ${(e as Error)?.message}`)
       }
     },
     // Post an UNMATCHED-client notice to the error chat (#91). Same guarantees as notifyError:
@@ -479,7 +493,7 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call, memberId)
       } catch (e) {
-        console.error('unmatched notify failed', memberId, (e as Error)?.message)
+        crmLog.error(`unmatched notify failed, portal ${memberId}: ${(e as Error)?.message}`)
       }
     },
     // Read-before-write dedup guard (#259): search Bitrix24 for our marker
@@ -709,7 +723,7 @@ export function startThroughputWorkers(
         // уезжала в БД и метрики, но в лог не попадала — то есть в логе не существовало ни одной
         // записи, которая переживёт ротацию и объяснит, что произошло. Это O(прогонов), а не
         // O(операций), поэтому масштаб её не съедает.
-        console.log(runSummaryLine(job.data.memberId, summary, OP_LOG_MODE))
+        crmLog.info(runSummaryLine(job.data.memberId, summary, OP_LOG_MODE))
         // Persist the run for the in-portal status card (#5) — LATEST run per portal.
         // Best-effort: a status-persist failure must NOT fail the job (the CRM writes
         // already happened). Demo batches never touch the real portal's status row.
@@ -794,7 +808,7 @@ async function persistBatchError(job: ParseJob, message: string): Promise<void> 
   try {
     await saveBatchError(dbQuery, job.memberId, job.fileHash, message)
   } catch (e) {
-    console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
+    importLog.error(`import_batch error save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -806,7 +820,7 @@ async function persistBatchFailure(job: CrmSyncJob, message: string): Promise<vo
   try {
     await saveBatchError(dbQuery, job.memberId, job.batchId, message)
   } catch (e) {
-    console.error('import_batch error save failed', job.memberId, (e as Error)?.message)
+    importLog.error(`import_batch error save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -828,7 +842,7 @@ async function persistBatchResult(
       unmatched: summary.unmatched
     })
   } catch (e) {
-    console.error('import_batch save failed', job.memberId, (e as Error)?.message)
+    importLog.error(`import_batch save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -848,7 +862,7 @@ async function persistImportResult(
       errors: []
     })
   } catch (e) {
-    console.error('import_result save failed', job.memberId, (e as Error)?.message)
+    importLog.error(`import_result save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -863,7 +877,7 @@ async function bumpMetrics(
   try {
     await bumpCounters(dbQuery, job.memberId, metricsFromSummary(summary))
   } catch (e) {
-    console.error('metrics bump failed', job.memberId, (e as Error)?.message)
+    importLog.error(`metrics bump failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -889,7 +903,7 @@ async function fileProgramSignal(memberId: string, signal: ProgramSignal, accoun
     const payload = buildProgramFeedbackIssue({ memberId, commitSha: process.env.NUXT_PUBLIC_COMMIT_SHA, signal })
     await postFeedbackIssue(config, payload, globalThis.fetch as unknown as FeedbackFetchFn)
   } catch (e) {
-    console.error('program feedback failed', memberId, (e as Error)?.message)
+    crmLog.error(`program feedback failed, portal ${memberId}: ${(e as Error)?.message}`)
   }
 }
 
@@ -927,12 +941,12 @@ async function notifyDeletionError(job: DeletionJob, kind: DeletionErrorKind, fr
     if (!call) return
     const dialogId = parsePortalSettings(await readAppSettingVia(call, SETTINGS_KEY)).errorChat.dialogId
     if (!dialogId) {
-      console.info('[deletion] %s #%s (portal=%s) — no error chat, skip', kind, logSafe(job.entityId), portalHash(job.memberId))
+      deletionLog.info(`${kind} #${logSafe(job.entityId)} (portal=${portalHash(job.memberId)}) — no error chat, skip`)
       return
     }
     await notifyDeletionErrorViaRest(kind, job.entityId, dialogId, call, freed !== undefined ? { freed } : {}, job.memberId)
   } catch (e) {
-    console.warn('[deletion] error-chat notify failed', kind, portalHash(job.memberId), (e as Error)?.message)
+    deletionLog.warning(`error-chat notify failed: ${kind}, portal=${portalHash(job.memberId)}: ${(e as Error)?.message}`)
   }
 }
 
@@ -961,7 +975,7 @@ export function liveDeletionDeps(): DeletionReconcileDeps {
       const paymentSp = { entityTypeId: cfg.paymentSpEtid, id: cfg.paymentSpId }
       const distributionSp = { entityTypeId: cfg.distributionSpEtid, id: cfg.distributionSpId }
       const res = await reconcileTargetDeletion(paymentSp, distributionSp, targetKind, job.entityId, call)
-      console.info('[deletion] target %s #%s freed=%d parents=%d manual=%d (portal=%s)', kind, logSafe(job.entityId), res.freed, res.parentsRecomputed, res.manualParents, portalHash(job.memberId))
+      deletionLog.info(`target ${kind} #${logSafe(job.entityId)} freed=${res.freed} parents=${res.parentsRecomputed} manual=${res.manualParents} (portal=${portalHash(job.memberId)})`)
       // Notify the operator that a target was deleted and its distributions freed (§9.2), best-effort
       // (a chat failure must not fail the reconcile — the ledger is already reconciled above).
       if (res.freed > 0) await notifyDeletionError(job, targetKind, res.freed).catch(() => {})
@@ -973,7 +987,7 @@ export function liveDeletionDeps(): DeletionReconcileDeps {
     notifyCarrierDamaged: job => notifyDeletionError(job, 'payment-carrier'),
     // A hard-deleted dist row carries no parent link → can't target a recompute; manual «пересчитать» covers it.
     recomputeParent: async (job) => {
-      console.info('[deletion] distribution row #%s (portal=%s) — recompute via manual «пересчитать»', logSafe(job.entityId), portalHash(job.memberId))
+      deletionLog.info(`distribution row #${logSafe(job.entityId)} (portal=${portalHash(job.memberId)}) — recompute via manual «пересчитать»`)
     }
   }
 }

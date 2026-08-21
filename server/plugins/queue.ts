@@ -11,6 +11,7 @@
 import type { Worker } from 'bullmq'
 import { randomUUID } from 'node:crypto'
 import { startWorkerBeat } from '../utils/workerBeat'
+import { useServerLogger } from '../utils/serverLogger'
 import { closeQueues, countLiveWorkers, getQueue, queueEnabled } from '../queue/connection'
 import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveTriggerFireDeps, startDeletionWorker, startEventWorker, startFeedbackWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
@@ -39,6 +40,11 @@ import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
 import type { QueueName } from '../queue/topology'
+
+// Каналы этого модуля. Имена — те же маркеры, что уже грепает рантбук и `prod-doctor.sh` (#529).
+const log = useServerLogger('queue')
+const retention = useServerLogger('retention')
+const alert = useServerLogger('queue-alert')
 
 /** Сколько дней храним итоги ручных загрузок (#417) — переживает вкладку, но не неделю. */
 const IMPORT_BATCH_TTL_DAYS = 3
@@ -80,7 +86,7 @@ export default defineNitroPlugin((nitroApp) => {
     bankKeepAliveTimer = scheduleBankKeepAlive(process.env.BANK_KEEPALIVE_MINUTES)
   }
   if (!queueEnabled()) {
-    console.warn('[queue] Redis не настроен — очереди выключены; продление банк-токенов работает независимо')
+    log.warning('Redis не настроен — очереди выключены; продление банк-токенов работает независимо')
     return
   }
   // Deps are needed by any worker (throughput OR the event worker); build once.
@@ -98,7 +104,7 @@ export default defineNitroPlugin((nitroApp) => {
     workers.push(startFeedbackWorker(liveFeedbackPostDeps()))
     // Trigger-retry worker (#79) — re-fires missed «деньги пришли» signals with backoff (N-replica-safe).
     workers.push(startTriggerWorker(liveTriggerFireDeps()))
-    console.info('[queue] throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=%d, fetch-rate=%d/%dms; prior-fetch concurrency=%d, rate=%d jobs/%dms)', role.concurrency, role.fetchRate.max, role.fetchRate.duration, role.priorConcurrency, role.priorFetchRate.max, role.priorFetchRate.duration)
+    log.info(`throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=${role.concurrency}, fetch-rate=${role.fetchRate.max}/${role.fetchRate.duration}ms; prior-fetch concurrency=${role.priorConcurrency}, rate=${role.priorFetchRate.max} jobs/${role.priorFetchRate.duration}ms)`)
 
     // Пульс воркера (#466 §1). Без него полностью мёртвый воркер на ТИХОМ портале выглядит
     // здоровым: все правила здоровья выведены из наличия застрявшей работы, а её нет.
@@ -120,13 +126,13 @@ export default defineNitroPlugin((nitroApp) => {
     // Совпавшие ключи схлопнули бы N живых воркеров в один и спрятали смерть остальных.
     beatTimer = startWorkerBeat(randomUUID(), {
       running: () => workers.some(w => w.isRunning() && !w.isPaused()),
-      warn: m => console.warn(m)
+      warn: m => log.warning(m)
     })
   } else if (!role.workers) {
     // Loud: this instance won't drain fetch/parse/crm-sync. A worker container MUST be
     // running (docker-compose.prod.yml `worker`), else webhooks/imports pile up silently
     // (Redis is up ⇒ enqueue succeeds ⇒ no sync fallback). See docs/QUEUES.md, DEPLOY.md.
-    console.warn('[queue] QUEUE_WORKERS=0 — this instance does NOT process fetch/parse/crm-sync; a worker container MUST be running or those queues never drain')
+    log.warning('QUEUE_WORKERS=0 — this instance does NOT process fetch/parse/crm-sync; a worker container MUST be running or those queues never drain')
   }
 
   let timer: ReturnType<typeof setInterval> | undefined
@@ -143,7 +149,7 @@ export default defineNitroPlugin((nitroApp) => {
     // Deletion-reconcile worker (§9.2) rides the primary instance too — concurrency 1, per-portal
     // ledger reconciles stay ordered even when `worker` is scaled (same rationale as the event worker).
     workers.push(startDeletionWorker(liveDeletionDeps()))
-    console.info('[queue] event + deletion workers + cron scheduler started (primary instance)')
+    log.info('event + deletion workers + cron scheduler started (primary instance)')
     const demoN = Number(process.env.DEMO_LOAD_N || 0)
     // Demo cadence is SECONDS (DEMO_TICK_SEC, default 5) so the queues visibly "live"
     // on the chart — real polling stays on CRON_INTERVAL_MIN (minutes), but that path
@@ -158,9 +164,9 @@ export default defineNitroPlugin((nitroApp) => {
           // deterministic id dedupes ticks within a day into a single no-op run).
           const jobs = buildDemoFetchJobs('demo-portal', demoN, today, String(now.getTime()))
           for (const job of jobs) await enqueueFetch(job)
-          console.info('[queue] demo load: enqueued %d fetch jobs (every %d s)', jobs.length, tickMs / 1000)
+          log.info(`demo load: enqueued ${jobs.length} fetch jobs (every ${tickMs / 1000} s)`)
         } catch (err) {
-          console.error('[queue] demo tick failed:', (err as Error)?.message)
+          log.error(`demo tick failed: ${(err as Error)?.message}`)
         }
       }
       timer = setInterval(tick, tickMs)
@@ -221,13 +227,10 @@ export default defineNitroPlugin((nitroApp) => {
                 ? { requests: role.priorFetchRate.max * (REQUESTS_PER_ACCOUNT['prior-by'] ?? 1), durationMs: role.priorFetchRate.duration }
                 : { requests: role.fetchRate.max, durationMs: role.fetchRate.duration }
             ), pollMs)
-            console.info('[queue] real poll: planned %d fetch jobs (%s..%s, tick %d min) — %s',
-              jobs.length, dateFrom, dateTo, pollMs / 60_000,
-              cycles.map(c => `${c.provider}: ${formatPollCycle(c.accounts, c.cycle)}`).join(' | '))
+            log.info(`real poll: planned ${jobs.length} fetch jobs (${dateFrom}..${dateTo}, tick ${pollMs / 60_000} min) — ${cycles.map(c => `${c.provider}: ${formatPollCycle(c.accounts, c.cycle)}`).join(' | ')}`)
             for (const c of cycles) {
               if (!c.cycle.exceedsInterval) continue
-              console.warn('[queue] %s poll sweep (%d min) is longer than the tick (%d min) — the bank rate cap sets the real statement freshness for this provider, not CRON_INTERVAL_MIN. Queue growth is bounded (stable jobIds dedupe pending accounts); raise CRON_LOOKBACK_DAYS so a slower sweep cannot miss operations (docs/OPERATIONS.md).',
-                c.provider, Math.round(c.cycle.cycleMs / 60_000), Math.round(pollMs / 60_000))
+              log.warning(`${c.provider} poll sweep (${Math.round(c.cycle.cycleMs / 60_000)} min) is longer than the tick (${Math.round(pollMs / 60_000)} min) — the bank rate cap sets the real statement freshness for this provider, not CRON_INTERVAL_MIN. Queue growth is bounded (stable jobIds dedupe pending accounts); raise CRON_LOOKBACK_DAYS so a slower sweep cannot miss operations (docs/OPERATIONS.md).`)
             }
             // Best-effort: a counts read must never break the poll (it already enqueued).
             try {
@@ -238,20 +241,20 @@ export default defineNitroPlugin((nitroApp) => {
                 const sat = fetchBacklogSaturation(counts, satThreshold)
                 if (sat.over) {
                   const knob = q === Q_FETCH_PRIOR ? 'QUEUE_PRIOR_RATE_*' : 'QUEUE_FETCH_RATE_*'
-                  console.warn('[queue] %s backlog %d ≥ %d — likely rate-limit saturation (jobs DEFERRED by that queue\'s limiter, not stuck); raise %s only if the bank raises its cap (docs/OPERATIONS.md)', q, sat.backlog, satThreshold, knob)
+                  log.warning(`${q} backlog ${sat.backlog} ≥ ${satThreshold} — likely rate-limit saturation (jobs DEFERRED by that queue's limiter, not stuck); raise ${knob} only if the bank raises its cap (docs/OPERATIONS.md)`)
                 }
               }
             } catch (err) {
-              console.error('[queue] fetch saturation check failed:', (err as Error)?.message)
+              log.error(`fetch saturation check failed: ${(err as Error)?.message}`)
             }
           })
         } catch (err) {
-          console.error('[queue] real poll tick failed:', (err as Error)?.message)
+          log.error(`real poll tick failed: ${(err as Error)?.message}`)
         }
       }
       pollTimer = setInterval(poll, pollMs)
       void poll() // fire once at boot
-      console.info('[queue] real bank poll scheduled (every %d min, inert until accounts connected — A10)', pollMs / 60_000)
+      log.info(`real bank poll scheduled (every ${pollMs / 60_000} min, inert until accounts connected — A10)`)
     }
 
     // Proactive OAuth keep-alive (#175): refresh_token lives ~180d; an installed-but-idle
@@ -265,8 +268,8 @@ export default defineNitroPlugin((nitroApp) => {
         selectNearExpiry: (nowMs: number) => selectTokensNearExpiry(dbQuery, nowMs),
         getToken: (memberId: string) => getToken(dbQuery, memberId),
         ensureAccessToken: (token: Parameters<typeof ensureAccessToken>[0]) => ensureAccessToken(token),
-        log: (m: string) => console.info(m),
-        warn: (m: string) => console.warn(m)
+        log: (m: string) => log.info(m),
+        warn: (m: string) => log.warning(m)
       }
       const keepAliveMs = keepAliveIntervalMs(Number(process.env.TOKEN_KEEPALIVE_HOURS || 24))
       const runKeepAlive = async () => {
@@ -276,14 +279,14 @@ export default defineNitroPlugin((nitroApp) => {
         } catch (err) {
           // Only a failure of the initial SELECT reaches here (per-portal failures are
           // isolated inside runTokenKeepAlive). Never let it crash the cron instance.
-          console.error('[queue] token keep-alive run failed:', (err as Error)?.message)
+          log.error(`token keep-alive run failed: ${(err as Error)?.message}`)
         }
       }
       keepAliveTimer = setInterval(runKeepAlive, keepAliveMs)
       void runKeepAlive() // once at boot (cheap: a range scan + refresh of only near-expiry portals)
-      console.info('[queue] token keep-alive scheduled (every %d h, #175)', keepAliveMs / 3_600_000)
+      log.info(`token keep-alive scheduled (every ${keepAliveMs / 3_600_000} h, #175)`)
     } else {
-      console.warn('[queue] token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
+      log.warning('token keep-alive disabled — B24_CLIENT_ID/SECRET unset (idle portals may lose auth on day 180)')
     }
 
     // ⚠ BANK token keep-alive (#488/#489) здесь БОЛЬШЕ НЕТ — он заведён ВЫШЕ гейта Redis, до
@@ -299,7 +302,7 @@ export default defineNitroPlugin((nitroApp) => {
       try {
         await sweepOldBatches(dbQuery, IMPORT_BATCH_TTL_DAYS)
       } catch (e) {
-        console.error('[retention] import_batch sweep failed:', (e as Error)?.message)
+        retention.error(`import_batch sweep failed: ${(e as Error)?.message}`)
       }
     }
     batchSweepTimer = setInterval(runBatchSweep, 6 * 60 * 60 * 1000)
@@ -313,8 +316,8 @@ export default defineNitroPlugin((nitroApp) => {
       const sweepDeps = {
         clean: (queue: SweptQueue, graceMs: number, type: 'completed' | 'failed') =>
           getQueue(queue).clean(graceMs, 0, type),
-        log: (m: string) => console.info(m),
-        warn: (m: string) => console.warn(m)
+        log: (m: string) => log.info(m),
+        warn: (m: string) => log.warning(m)
       }
       const sweepMs = sweepIntervalMs(Number(process.env.STATEMENT_SWEEP_INTERVAL_MIN || 30))
       const tombstoneDays = resolveTombstoneDays(process.env.TOMBSTONE_TTL_DAYS)
@@ -330,9 +333,9 @@ export default defineNitroPlugin((nitroApp) => {
             // the statement clean.
             try {
               const removed = await sweepExpiredTombstones(dbQuery, tombstoneDays)
-              if (removed) console.info('[retention] swept %d expired tombstone(s)', removed)
+              if (removed) retention.info(`swept ${removed} expired tombstone(s)`)
             } catch (e) {
-              console.error('[retention] tombstone sweep failed:', (e as Error)?.message)
+              retention.error(`tombstone sweep failed: ${(e as Error)?.message}`)
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и
             // чистку банковских кредов, хотя флаг заведён про payload'ы выписки. Осознанно: оба
@@ -354,20 +357,20 @@ export default defineNitroPlugin((nitroApp) => {
                 remove: (q, memberId, provider, accountKey) => deleteBankToken(q, memberId, provider, accountKey),
                 maxAgeDays: pendingMaxAgeDays
               })
-              if (removed) console.info('[retention] swept %d abandoned pending connection(s)', removed)
+              if (removed) retention.info(`swept ${removed} abandoned pending connection(s)`)
             } catch (e) {
-              console.error('[retention] pending sweep failed:', (e as Error)?.message)
+              retention.error(`pending sweep failed: ${(e as Error)?.message}`)
             }
           })
         } catch (err) {
           // Per-queue clean failures are isolated inside runStatementSweep; only an unexpected
           // throw reaches here. Never let it crash the cron instance.
-          console.error('[queue] statement sweep run failed:', (err as Error)?.message)
+          log.error(`statement sweep run failed: ${(err as Error)?.message}`)
         }
       }
       sweepTimer = setInterval(runSweep, sweepMs)
       void runSweep() // once at boot
-      console.info('[queue] statement + tombstone + pending-connection retention sweep scheduled (every %d min; tombstone TTL %d d, #245/#77)', sweepMs / 60_000, tombstoneDays)
+      log.info(`statement + tombstone + pending-connection retention sweep scheduled (every ${sweepMs / 60_000} min; tombstone TTL ${tombstoneDays} d, #245/#77)`)
     }
 
     // ── Queue health check + push alerting (#426) ────────────────────────────────────────────
@@ -390,9 +393,9 @@ export default defineNitroPlugin((nitroApp) => {
       const base = String(process.env.NUXT_PUBLIC_SITE_URL ?? '').trim().replace(/\/+$/, '')
       return /^https:\/\//i.test(base) ? `${base}/queues` : null
     })()
-    console.info(telegram
-      ? '[queue] alert channel: telegram'
-      : '[queue] alert channel OFF — alerts go to the log and /queues only (set TELEGRAM_ALERT_BOT_TOKEN + TELEGRAM_ALERT_CHAT_ID)')
+    log.info(telegram
+      ? 'alert channel: telegram'
+      : 'alert channel OFF — alerts go to the log and /queues only (set TELEGRAM_ALERT_BOT_TOKEN + TELEGRAM_ALERT_CHAT_ID)')
     // ⚠ И то же самое — НА ЭКРАН (#466 §3). Строка в логе видна тому, кто уже смотрит в лог; а
     // выключенная сигнализация молчит ровно так же, как исправная и спокойная.
     recordAlertChannelConfigured(!!telegram)
@@ -421,15 +424,15 @@ export default defineNitroPlugin((nitroApp) => {
                 // только в логе, то есть тому, кто и так уже что-то заподозрил.
                 recordAlertDelivery(r.ok, Date.now())
                 // Status only — the URL carries the bot token, so nothing else is loggable.
-                if (!r.ok) console.error(`[queue-alert] telegram send failed: status=${r.status}`)
+                if (!r.ok) alert.error(`telegram send failed: status=${r.status}`)
                 return r.ok
               } catch {
                 return false // alerting must never take the cron instance down
               }
             },
             record: recordQueueHealth,
-            warn: (m: string) => console.warn(m),
-            error: (m: string) => console.error(m),
+            warn: (m: string) => alert.warning(m),
+            error: (m: string) => alert.error(m),
             queuesUrl,
             // Умирающие банковские подключения — в тот же канал (#497 §3). Карточку на `/queues`
             // надо ОТКРЫТЬ, а refresh Альфы умирает под утро (#488), когда на экран никто не
@@ -459,22 +462,22 @@ export default defineNitroPlugin((nitroApp) => {
         delivery = result.state
       } catch (err) {
         // runQueueHealthTick swallows its own failures; only a bug in the bindings reaches here.
-        console.error('[queue] health check failed:', (err as Error)?.message)
+        log.error(`health check failed: ${(err as Error)?.message}`)
       } finally {
         healthRunning = false
       }
     }
     healthTimer = setInterval(() => void runHealthCheck(), QUEUE_HEALTH_INTERVAL_MS)
     void runHealthCheck()
-    console.info('[queue] health check scheduled (every %d min, #426)', QUEUE_HEALTH_INTERVAL_MS / 60_000)
+    log.info(`health check scheduled (every ${QUEUE_HEALTH_INTERVAL_MS / 60_000} min, #426)`)
   } else {
-    console.info('[queue] cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
+    log.info('cron + event worker disabled (QUEUE_CRON=0) — they run on the primary instance')
   }
 
   // Failure/error visibility (#78): without a `failed`/`error` listener an exhausted job failure or a
   // worker-level (Redis) error is silent unless the OTel collector runs (default off). Wire greppable,
   // PII-safe log lines onto EVERY started worker (throughput + event + deletion + feedback + trigger).
-  const obsDeps = { error: (m: string) => console.error(m), warn: (m: string) => console.warn(m) }
+  const obsDeps = { error: (m: string) => log.error(m), warn: (m: string) => log.warning(m) }
   for (const w of workers) attachWorkerObservability(w, obsDeps)
 
   nitroApp.hooks.hook('close', async () => {

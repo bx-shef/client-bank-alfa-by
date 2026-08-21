@@ -7,6 +7,15 @@ import { createPortalSdkResolver, SDK_CLIENT_TTL_MS } from '../server/utils/port
 // The SDK constructor does only axios.create (no I/O), so mocking it is safe and lets us count
 // how many B24OAuth clients the resolver builds (per-JOB memoisation vs per-resolution).
 vi.mock('@bitrix24/b24jssdk', () => ({
+  // ⚠ Логгер тоже приходится подменять: с #529 серверные модули тянут `useServerLogger`, а он
+  // импортирует эти три экспорта из того же пакета — без них мок «съедает» их и модуль не грузится
+  // вовсе (весь файл падает как Failed Suite, а не как красный тест, то есть симптом не по адресу).
+  Logger: class { pushHandler() {} async info() {} async warning() {} async error() {} async debug() {} async notice() {} },
+  StreamHandler: class { setFormatter() {} },
+  // Пустой класс линтер отвергает, а мок формата обязан быть конструируемым — даём ему
+  // ровно тот метод, который зовёт обработчик.
+  JsonFormatter: class { format() { return '' } },
+  LogLevel: { DEBUG: 100, INFO: 200, NOTICE: 250, WARNING: 300, ERROR: 400 },
   B24OAuth: vi.fn(function () {
     return {
       actions: { v2: {

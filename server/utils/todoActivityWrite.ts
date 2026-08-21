@@ -25,6 +25,9 @@ import {
 import { dedupKey } from '../../app/utils/statement'
 import { findActivityByMarker } from './activityMarkerLookup'
 import type { RestCall } from './companyLookup'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('activity')
 
 /**
  * Portals whose marker mechanism has been proven ON THIS PROCESS. See `verifyMarkerOnce`.
@@ -100,9 +103,7 @@ async function deleteOrphan(id: string, call: RestCall): Promise<void> {
   try {
     await call(ACTIVITY_DELETE_METHOD, { id: Number(id) })
   } catch (deleteError) {
-    console.error(
-      `[activity] could not delete the unmarked activity ${id} — a duplicate will appear on the next run: ${(deleteError as Error)?.message}`
-    )
+    log.error(`could not delete the unmarked activity ${id} — a duplicate will appear on the next run: ${(deleteError as Error)?.message}`)
   }
 }
 

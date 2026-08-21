@@ -5,6 +5,18 @@ import type { StatementItem } from '../app/types/statement'
 import type { HandlerDeps } from '../server/queue/handlers'
 import { DEMO_ACCOUNT_PREFIX } from '../server/queue/cron'
 
+/** Перехват того, что РЕАЛЬНО уходит в лог. После #529 строка идёт не в `console.log`, а в
+ *  `process.stdout` через обработчик логгера — то есть проверять надо поток, иначе тест зеленеет
+ *  на молчащем шпионе. Замерено: запись синхронна, поэтому ассерт сразу после вызова видит её. */
+function captureLog() {
+  const chunks: string[] = []
+  vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+    chunks.push(String(c))
+    return true
+  })
+  return () => chunks.join('\n')
+}
+
 // Wiring test for `liveHandlerDeps` (server/queue/worker.ts) — the ONE runtime module the
 // pure-handler tests (queuePhase2) don't cover. We verify the two safety-critical glue behaviours
 // that hold WITHOUT a DB/portal:
@@ -107,18 +119,18 @@ describe('liveHandlerDeps — `[op]` не раскрывает назначен�
   const SECRET = 'ОПЛАТА ПО СЧЁТУ 1545874-B24 ЗА ЦЕМЕНТ'
 
   it('назначения нет в строке, зато есть счёт контрагента — то, ради чего строка и заведена', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const read = captureLog()
     deps.onOperation?.(demoItem({ purpose: SECRET, counterparty: { name: 'X', unp: '', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
-    const line = log.mock.calls.map(c => c.join(' ')).join('\n')
+    const line = read()
     expect(line).not.toContain(SECRET)
     expect(line).not.toContain('ЦЕМЕНТ') // и фрагментом тоже не протекает
     expect(line).toContain('BY77TEST')
   })
 
   it('суммы в строке нет — граница PRIVACY.md §Логи проходит здесь же', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const read = captureLog()
     deps.onOperation?.(demoItem({ amount: 987654.32 }), { owner: 'none', recognized: 0, activityId: null }, 'M')
-    const line = log.mock.calls.map(c => c.join(' ')).join('\n')
+    const line = read()
     expect(line).not.toContain('987654')
     expect(line).not.toContain('987 654')
   })
@@ -142,9 +154,9 @@ describe('liveHandlerDeps — `[op]` раскрывает назначение �
     process.env.STATEMENT_DEBUG_LOG = '1'
     vi.resetModules()
     const { liveHandlerDeps } = await import('../server/queue/worker')
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const read = captureLog()
     liveHandlerDeps().onOperation?.(demoItem({ purpose: `${SECRET} ${'х'.repeat(500)}` }), { owner: 'none', recognized: 0, activityId: null }, 'M')
-    const line = log.mock.calls.map(c => c.join(' ')).join('\n')
+    const line = read()
     expect(line).toContain(SECRET)
     // Кап держит: одно поле не может залить строку целиком.
     expect(line).not.toContain('х'.repeat(400))
