@@ -25,6 +25,7 @@ import type { BankProviderId } from '../../app/types/statement'
 import type { BankSideAccount } from '../../app/utils/bankAccountMatrix'
 import { extractAccounts, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
 import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
+import { isLockTimeout } from './bankRefreshLock'
 import { sanitizeForLog } from './logSanitize'
 import type { BankToken } from './bankTokenStore'
 
@@ -116,6 +117,20 @@ async function askProvider(
     // `BankSideAccount.provider`.
     return { provider, accounts: accounts.map(a => ({ ...a, provider })) }
   } catch (e) {
+    // ⚠ Исчерпание ожидания лока — ШТАТНЫЙ исход, а не поломка: тот же `bankrefresh:` держит
+    // плановое продление токена, у которого потолок POST к банку 15 с, а мы ждём пару секунд
+    // (#539). Без этой ветки админ увидел бы сырое `canceling statement due to lock timeout` —
+    // текст, который не подсказывает ничего и вдобавок несёт имена таблиц.
+    if (isLockTimeout(e)) {
+      // ⚠ Формулировка та же по существу, что у близнеца на 503 от `/api/bank/set-account`
+      // (у клиентского — предложение с заглавной и точкой, здесь — вставка в шаблон алерта;
+      // совпадение сверяет тест, а не глаз)
+      // (`setAccountError.ts`): исход один и тот же — лок держит обновление токена, — а появиться
+      // оба могут на одном экране, в одной карточке подключения. И не «банк опрашивается»:
+      // держатель — продление токена, оно идёт независимо от автоопроса, поэтому на портале с
+      // выключенным опросом такой текст спорил бы с экраном готовности.
+      return { provider, accounts: [], error: 'подключение сейчас обновляется — повторите через несколько секунд' }
+    }
     // The message reaches an admin's screen, so it is sanitised (CRLF/length) — a bank error
     // body is external text. The Bearer never appears in these messages (the route's `getJson`
     // keeps the upstream error in `cause`), and we surface `message` only.

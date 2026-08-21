@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { bankRefreshLockKey, isLockTimeout, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
+import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT, MIN_LOCK_WAIT, SINGLE_FLIGHT_LOCK_WAIT } from '../server/utils/dbLock'
+import { LISTABLE_PROVIDERS } from '../server/utils/bankAccountList'
 
 // Лок, сериализующий двух писателей в одну строку `bank_tokens` (#509).
 //
@@ -149,5 +151,129 @@ describe('ключ лока строится ТОЛЬКО хелпером', () 
     const route = readFileSync(join(ROOT, 'server/api/bank/set-account.post.ts'), 'utf8')
     expect(route).toContain('makeLockedRename')
     expect(route).not.toMatch(/renameBankTokenAccount\s*\(\s*dbQuery/)
+  })
+})
+
+/** Длительность Postgres (`2s`, `100ms`, `1min`) в миллисекундах — чтобы сравнивать ожидания
+ *  величинами, а не строками. Хватает единиц, которыми мы реально пользуемся. */
+function durationMs(raw: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(us|ms|s|min|h|d)$/.exec(raw.trim())
+  if (!m) throw new Error(`не разобрал длительность: ${raw}`)
+  const unit = { us: 0.001, ms: 1, s: 1000, min: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as 'ms']
+  return Number(m[1]) * unit
+}
+
+/** Ожидания лока, которые вызывающий может назвать по имени. Значения — из production, а не
+ *  переписаны сюда: разъехавшись, копия проверяла бы саму себя. */
+const KNOWN_WAITS: Record<string, number | undefined> = {
+  BANK_REFRESH_LOCK_WAIT: durationMs(BANK_REFRESH_LOCK_WAIT),
+  SINGLE_FLIGHT_LOCK_WAIT: durationMs(SINGLE_FLIGHT_LOCK_WAIT),
+  MIN_LOCK_WAIT: durationMs(MIN_LOCK_WAIT),
+  DEFAULT_LOCK_WAIT: durationMs(DEFAULT_LOCK_WAIT)
+}
+
+describe('HTTP-маршруты не ждут лок по-машинному (#539)', () => {
+  // ⚠ Проверяется СТРУКТУРНО, потому что дефект был именно структурным: `/api/bank/matrix` звал
+  // `ensureBankToken` без указания ожидания и МОЛЧА унаследовал умолчание в 10 с — вчетверо
+  // дольше двух уже починенных маршрутов. Поведенческий тест такого не ловит: маршрут работает,
+  // просто занимает соединение из пула (пул — 10) ради шанса выиграть у держателя, который сам
+  // ограничен 15 секундами. Новый маршрут повторил бы ошибку тем же способом.
+  // ⚠ Обход РЕКУРСИВНЫЙ и по всему `server/api`, а не по одному каталогу: подкаталогов там сегодня
+  // нет, но обещание «каждый HTTP-маршрут» плоским обходом не выполняется, и вложенный роут гард
+  // обошёл бы МОЛЧА — тем же способом, каким появился сам дефект.
+  //
+  // ⚠ Честная граница гарда: он видит вызовы, написанные в самом файле роута. Маршрут, который
+  // провяжет `ensureFresh` через модуль в `server/utils` (так делают `bankFetch`/`priorFetch`),
+  // унаследует машинное умолчание, и текстом это не ловится. Поэтому у `ensureBankToken` умолчания
+  // НЕТ вовсе — решение принимает вызывающий и обязано быть написано явно.
+  it('каждый вызов ensureBankToken из HTTP-маршрутов задаёт lockWait', () => {
+    const offenders: string[] = []
+    for (const file of readdirSync(join(process.cwd(), 'server/api'), { recursive: true, encoding: 'utf8' })) {
+      if (!file.endsWith('.ts')) continue
+      const src = readFileSync(join(process.cwd(), 'server/api', file), 'utf8')
+      // ⚠ Регулярка допускает ОДИН уровень вложенных скобок. Наивная `[^)]*` обрывается на первой
+      // же закрывающей: у `ensureBankToken(token, bankDeps(), { lockWait: … })` она видит только
+      // `…bankDeps()`, не находит `lockWait` и краснеет на ВЕРНОМ коде. Второй параметр — объект
+      // зависимостей, то есть ровно то место, где фабричный вызов и появляется (`liveDeps` рядом
+      // это показывает), а красный билд на верном коде учит ослаблять гард (замерено мутацией).
+      for (const call of src.match(/ensureBankToken\((?:[^()]|\([^()]*\))*\)/g) ?? []) {
+        // ⚠ Проверяем ВЕЛИЧИНУ ожидания, а не имя константы. Первая версия требовала дословно
+        // `BANK_REFRESH_LOCK_WAIT` — и краснела на верном коде, подставившем другое человеческое
+        // значение (`SINGLE_FLIGHT_LOCK_WAIT`, 1 с — короче нашего, тот же класс «человек ждёт»).
+        // Красный билд на верном коде учит ослаблять гард, то есть такой гард сам себе враг
+        // (замерено мутацией). Но и «параметр есть» проверять мало: явно вписанное машинное
+        // умолчание проходит и не меняет ровно ничего — это дефект #539, произнесённый вслух.
+        const wait = /lockWait:\s*'?([\w.]+)'?/.exec(call)?.[1]
+        const ms = wait === undefined
+          ? undefined
+          : KNOWN_WAITS[wait] ?? (/^\d/.test(wait) ? durationMs(wait) : undefined)
+        if (ms === undefined) offenders.push(`${file}: ожидание не задано или незнакомо — ${call}`)
+        else if (ms >= durationMs(DEFAULT_LOCK_WAIT)) offenders.push(`${file}: ждёт по-машинному — ${call}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('человеческое ожидание КОРОЧЕ машинного умолчания, а не просто другое', () => {
+    // ⚠ Проверка «не равно» слабее, чем кажется: `30s` — втрое дольше умолчания, то есть точная
+    // противоположность замыслу («человеку быстро, машине долго») — проходила её зелёной
+    // (замерено мутацией). Сравниваем ВЕЛИЧИНЫ.
+    expect(durationMs(BANK_REFRESH_LOCK_WAIT)).toBeLessThan(durationMs(DEFAULT_LOCK_WAIT))
+  })
+})
+
+describe('маршруты, ждущие этот лок, не могут выесть пул соединений', () => {
+  // ⚠ Считаем ОДНОВРЕМЕННОСТЬ, а не темп. Первая версия этого гарда сверяла `burst` с размером
+  // пула — и это было неверно дважды: `burst` одновременность не ограничивает вовсе (четыре
+  // запроса висят разом при любом его значении, а держатель занимает соединение до 15 с при
+  // пополнении ведра за 3 с), и понижение `burst` ломало исправный портал — зона `import` общая,
+  // открытие настроек делает 6–8 запросов подряд. Настоящий потолок ставит `limit_conn`.
+  //
+  // ⚠ Это SMOKE-проверка, а не доказательство: из тех же 10 соединений одновременно черпают
+  // readiness-проба, события установки и другие порталы. Она ловит грубое совпадение с размером
+  // пула, а не гарантирует его достаточность.
+  const ROOT = process.cwd()
+  const nginx = readFileSync(join(ROOT, 'nginx.conf'), 'utf8')
+  const poolMax = Number(/max:\s*(\d+)/.exec(readFileSync(join(ROOT, 'server/db/client.ts'), 'utf8'))?.[1])
+
+  /** Директива внутри `location` — читаем ИМЕННО её, а не текст блока: соседний комментарий
+   *  объясняет числа, и наивный поиск по подстроке вытащил бы число из объяснения. */
+  function directive(location: string, name: string): string {
+    const block = nginx.slice(nginx.indexOf(`location = ${location}`))
+    return block.slice(0, block.indexOf('}'))
+      .split('\n')
+      .find(line => new RegExp(`^\\s*${name}\\s`).test(line)) ?? ''
+  }
+
+  // ⚠ Маршруты НАХОДИМ, а не перечисляем руками: список ровно так и отстаёт — новый маршрут,
+  // берущий этот лок, попал бы в проверку выше (она обходит `server/api`) и не попал бы сюда,
+  // тем же молчаливым способом, каким появился #539. Ищем оба входа в лок: обновление токена и
+  // переименование ключа.
+  const LOCK_ENTRIES = /ensureBankToken\(|renameBankTokenAccount\(|handleSetBankAccount\(/
+  const lockRoutes = readdirSync(join(ROOT, 'server/api'), { recursive: true, encoding: 'utf8' })
+    .filter(f => f.endsWith('.ts'))
+    .filter(f => LOCK_ENTRIES.test(readFileSync(join(ROOT, 'server/api', f), 'utf8')))
+    // `bank/matrix.get.ts` → `/api/bank/matrix`
+    .map(f => `/api/${f.replace(/\\/g, '/').replace(/\.(get|post|put|delete)?\.?ts$/, '')}`)
+
+  it('находит маршруты, а не верит списку', () => {
+    expect(lockRoutes).toContain('/api/bank/matrix')
+    expect(lockRoutes).toContain('/api/bank/set-account')
+  })
+
+  it.each(['/api/bank/matrix'])('%s ограничивает одновременные запросы', (location) => {
+    // Стоимость запроса — число провайдеров: банки спрашиваются параллельно, каждый берёт лок,
+    // то есть своё соединение. Символ, а не литерал: третий банк ужесточит гард сам.
+    const conn = Number(/limit_conn\s+\S+\s+(\d+)/.exec(directive(location, 'limit_conn'))?.[1])
+    expect(conn).toBeGreaterThan(0)
+    expect(conn * LISTABLE_PROVIDERS.length).toBeLessThan(poolMax)
+  })
+
+  it('троттл сверки не строже соседей — он срабатывает САМ, на открытии экрана', () => {
+    // ⚠ Замерено: открытие настроек делает 6–8 запросов в ОБЩУЮ зону `import`. Порог ниже
+    // соседних означал бы 429 на исправном портале при втором открытии подряд, а отказ здесь
+    // убирает выбор IBAN кликом и возвращает к ручному вводу 28 знаков (#494).
+    const burst = (loc: string) => Number(/burst=(\d+)/.exec(directive(loc, 'limit_req'))?.[1])
+    expect(burst('/api/bank/matrix')).toBeGreaterThanOrEqual(burst('/api/bank/accounts'))
   })
 })

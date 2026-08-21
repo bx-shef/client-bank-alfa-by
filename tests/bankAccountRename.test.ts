@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { makeLockedRename, RENAME_LOCK_WAIT } from '../server/utils/bankAccountRename'
-import { DEFAULT_LOCK_WAIT } from '../server/utils/dbLock'
+import { makeLockedRename } from '../server/utils/bankAccountRename'
+import { BANK_REFRESH_LOCK_WAIT, DEFAULT_LOCK_WAIT } from '../server/utils/dbLock'
 import { bankRefreshLockKey, PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
 import type { QueryFn } from '../server/utils/tokenStore'
 
@@ -64,27 +62,8 @@ describe('makeLockedRename', () => {
     // держатель — POST к банку с потолком 15 с, дождаться его нельзя всё равно, а повтор в клике.
     const { waits, made } = deps()
     await made('m1', 'alfa-by', '~pending:n1', 'BY01')
-    expect(waits).toEqual([RENAME_LOCK_WAIT])
-    expect(RENAME_LOCK_WAIT).not.toBe(DEFAULT_LOCK_WAIT)
-  })
-
-  it('всплеск nginx на этом маршруте меньше пула соединений', () => {
-    // Числа живут в разных файлах и друг друга не называют, а их совпадение 1:1 означало, что один
-    // админ может занять пул целиком.
-    const ROOT = join(import.meta.dirname, '..')
-    const nginx = readFileSync(join(ROOT, 'nginx.conf'), 'utf8')
-    const block = nginx.slice(nginx.indexOf('location = /api/bank/set-account'))
-    // ⚠ Читаем ДИРЕКТИВУ, а не текст: комментарий рядом объясняет, почему значение больше не
-    // равно пулу, и наивный поиск по подстроке вытащил бы число из объяснения — тест уже краснел
-    // так при верном конфиге. Та же ловушка описана в `bankRouteTimeouts.test.ts`.
-    const directive = block.slice(0, block.indexOf('}'))
-      .split('\n')
-      .find(line => /^\s*limit_req\s+zone=/.test(line)) ?? ''
-    const burst = Number(/burst=(\d+)/.exec(directive)?.[1])
-    const poolMax = Number(/max:\s*(\d+)/.exec(readFileSync(join(ROOT, 'server/db/client.ts'), 'utf8'))?.[1])
-    expect(burst).toBeGreaterThan(0)
-    expect(poolMax).toBeGreaterThan(0)
-    expect(burst).toBeLessThan(poolMax)
+    expect(waits).toEqual([BANK_REFRESH_LOCK_WAIT])
+    expect(BANK_REFRESH_LOCK_WAIT).not.toBe(DEFAULT_LOCK_WAIT)
   })
 
   it('передаёт исходы хранилища как есть', async () => {

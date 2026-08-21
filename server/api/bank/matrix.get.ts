@@ -8,6 +8,7 @@ import { findMyCompanyAccounts } from '../../utils/myCompanyRequisites'
 import { listBankSideAccounts, connectedKeys, type BankSideListDeps } from '../../utils/bankAccountList'
 import { bankApiConfig } from '../../utils/bankFetch'
 import { ensureBankToken } from '../../utils/ensureBankToken'
+import { BANK_REFRESH_LOCK_WAIT } from '../../utils/dbLock'
 import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
@@ -34,7 +35,11 @@ async function getJson(url: string, accessToken: string): Promise<unknown> {
 function bankSideDeps(): BankSideListDeps {
   return {
     tokens: memberId => listBankTokensForPortal(dbQuery, memberId),
-    ensureFresh: token => ensureBankToken(token),
+    // ⚠ Ожидание лока — КОРОТКОЕ (#539). Умолчание в 10 с здесь означало бы, что админ, открывший
+    // экран сверки в момент планового продления токена, десять секунд держит соединение из пула
+    // (пул — 10, из него же берут readiness-проба и все остальные порталы) ради шанса выиграть у
+    // держателя, который сам ограничен 15 секундами. Дождаться нельзя — можно только не мешать.
+    ensureFresh: token => ensureBankToken(token, undefined, { lockWait: BANK_REFRESH_LOCK_WAIT }),
     // Reuses the statement transport's config resolver, so a deployment can never end up asking
     // one host for the account list and another for the statement.
     apiBase: provider => bankApiConfig(provider)?.base ?? null,
