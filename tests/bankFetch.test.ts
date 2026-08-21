@@ -3,8 +3,10 @@ import {
   alfaStatementQuery,
   bankApiConfig,
   bankFetchError,
+  fetchAlfaStatementPages,
   fetchBankStatement,
   isoToAlfaDate,
+  MAX_ALFA_STATEMENT_PAGES,
   type BankFetchDeps,
   type BankFetchQuery
 } from '../server/utils/bankFetch'
@@ -188,5 +190,83 @@ describe('fetchBankStatement', () => {
     const manualTok: BankToken = { ...tok, provider: 'manual' }
     const { deps } = fakeDeps({ stored: manualTok, apiConfig: () => ({ base: 'https://x', statementPath: '/y' }) })
     await expect(fetchBankStatement(manualQ, deps)).rejects.toThrow(/online fetch not supported/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #561: постраничный дозабор выписки Альфы.
+//
+// Повод — замер, а не подозрение: за один день приходило РОВНО 100 операций, четыре дня подряд, при
+// настоящих нулях в двух днях между. Капа на нашей стороне нет нигде по пути банк→разбор→crm-sync,
+// значит сотня приходит от банка. `pageRowCount: '0'` документирован как «все», но это строка в PDF,
+// а не измерение, и признак страницы мы никогда не читали — то есть если `0` значит «страница по
+// умолчанию», мы теряли всё за сотней каждые сутки и узнать об этом не могли.
+//
+// ⚠ Тесты проверяют ОБА прочтения, потому что цикл обязан быть безопасен, не зная, какое верно.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#561: fetchAlfaStatementPages', () => {
+  const row = (docId: string) => ({
+    number: 'BY01', operType: 'C', amount: 10, currIso: 'BYN',
+    purpose: 'p', corrName: 'n', corrNumber: 'BY99',
+    docId, docNum: docId, operDate: '13.01.2026', acceptDate: '2026-01-13T14:00:00.000'
+  })
+  const page = (ids: string[]) => ({ page: ids.map(row), errors: [] })
+
+  it('прочтение А («0» = все): страница 1 повторяет то же — берём один лишний запрос и молчим', async () => {
+    // Банк игнорирует pageNo и отдаёт тот же набор. Без дедупа это был бы шторм дублей.
+    const all = page(['a', 'b', 'c'])
+    const fetchPage = vi.fn(async () => all)
+    const onRecovered = vi.fn()
+    const out = await fetchAlfaStatementPages('BY01', fetchPage, onRecovered)
+    expect(out).toHaveLength(3)
+    expect(fetchPage).toHaveBeenCalledTimes(2) // страница 0 + одна проверочная
+    expect(onRecovered).not.toHaveBeenCalled() // нечего восстанавливать — не шумим
+  })
+
+  it('прочтение Б («0» = страница): забираем то, что раньше терялось, и говорим ГРОМКО', async () => {
+    const pages = [page(['a', 'b']), page(['c', 'd']), page([])]
+    const fetchPage = vi.fn(async (n: number) => pages[n]!)
+    const onRecovered = vi.fn()
+    const out = await fetchAlfaStatementPages('BY01', fetchPage, onRecovered)
+    expect(out.map(i => i.docId)).toEqual(['a', 'b', 'c', 'd'])
+    // ⚠ Молчаливое восстановление было бы хуже потери: оно скрыло бы, как долго это длилось.
+    expect(onRecovered).toHaveBeenCalledWith({ pages: 3, recovered: 2 })
+  })
+
+  it('пустая первая страница — ровно один запрос, никакого дозабора', async () => {
+    const fetchPage = vi.fn(async () => page([]))
+    const out = await fetchAlfaStatementPages('BY01', fetchPage)
+    expect(out).toEqual([])
+    expect(fetchPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('частичное пересечение страниц не задваивает и не теряет', async () => {
+    // Сдвиг окна между запросами — банк вернул хвост предыдущей страницы заново.
+    const pages = [page(['a', 'b']), page(['b', 'c']), page(['c'])]
+    const fetchPage = vi.fn(async (n: number) => pages[n]!)
+    const out = await fetchAlfaStatementPages('BY01', fetchPage)
+    expect(out.map(i => i.docId)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('ошибка банка на ЛЮБОЙ странице роняет забор — errored-ответ это не «нет операций»', async () => {
+    const fetchPage = vi.fn(async (n: number) =>
+      n === 0 ? page(['a']) : { page: [], errors: [{ message: 'token expired' }] })
+    await expect(fetchAlfaStatementPages('BY01', fetchPage)).rejects.toThrow(/token expired/)
+  })
+
+  it('бесконечная выдача упирается в потолок страниц, а не крутится вечно', async () => {
+    let n = 0
+    const fetchPage = vi.fn(async () => page([`x${n++}`])) // каждый раз НОВЫЙ id
+    const out = await fetchAlfaStatementPages('BY01', fetchPage)
+    expect(fetchPage).toHaveBeenCalledTimes(MAX_ALFA_STATEMENT_PAGES)
+    expect(out).toHaveLength(MAX_ALFA_STATEMENT_PAGES)
+  })
+
+  it('первый запрос идентичен прежнему — прод не меняется', () => {
+    // ⚠ Регресс-якорь: pageNo=0 обязан давать ту же строку, что и до правки.
+    expect(alfaStatementQuery('BY01', '2026-01-13', '2026-01-13').toString())
+      .toBe(alfaStatementQuery('BY01', '2026-01-13', '2026-01-13', 0).toString())
+    expect(alfaStatementQuery('BY01', '2026-01-13', '2026-01-13').toString()).toContain('pageNo=0')
+    expect(alfaStatementQuery('BY01', '2026-01-13', '2026-01-13').toString()).toContain('pageRowCount=0')
   })
 })

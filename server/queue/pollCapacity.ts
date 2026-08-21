@@ -13,10 +13,23 @@
 // No I/O — unit-tested, and the cron only logs from it (it never throttles here; the actual cap is
 // the fleet-wide BullMQ limiter, A8).
 
-/** Per-provider request cost of ONE account sweep. Alfa: a single statement GET. Prior: an
- *  accounts-resolve GET + a create POST + up to PRIOR_POLL_MAX_ATTEMPTS polls. */
+/**
+ * Per-provider request cost of ONE account sweep.
+ *
+ * ⚠ Alfa is **2**, not 1, since #561: the statement GET plus one page-walk request. The walk exists
+ * because `pageRowCount: '0'` is documented as «все» but never verified, and the portal showed
+ * exactly 100 operations a day for four days running — so a day with operations now always costs a
+ * second request to prove there is no page two. A day with none still costs one, but the budget has
+ * to assume the expensive case.
+ *
+ * ⚠ Getting this wrong is SILENT and lands on the bank, not on us: the limiter counts JOBS, and if
+ * a job secretly costs двое, the fleet spends twice the budget while every dashboard says it is
+ * within cap. That is exactly the trap the Prior row already documents — hence the same treatment.
+ *
+ * Prior: an accounts-resolve GET + a create POST + up to PRIOR_POLL_MAX_ATTEMPTS polls.
+ */
 export const REQUESTS_PER_ACCOUNT: Record<string, number> = {
-  'alfa-by': 1,
+  'alfa-by': 2,
   'prior-by': 10
 }
 

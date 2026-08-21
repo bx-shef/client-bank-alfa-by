@@ -93,7 +93,14 @@ export function queueRuntimeConfig(env: NodeJS.ProcessEnv = process.env): QueueR
     cron: envFlag(env.QUEUE_CRON, true),
     concurrency: clampConcurrency(env.QUEUE_CONCURRENCY),
     fetchRate: {
-      max: clampFetchMax(env.QUEUE_FETCH_RATE_MAX),
+      // env holds Alfa's REQUEST budget; the limiter needs JOBS → divide by the per-job cost.
+      // ⚠ Was a raw pass-through while an Alfa job was one GET. Since #561 it also walks a page,
+      // so passing the request cap straight through would spend ~2× the bank's budget with every
+      // dashboard still reading «within cap» — the same trap the Prior branch below documents.
+      max: providerJobRate(
+        clampFetchMax(env.QUEUE_FETCH_RATE_MAX),
+        REQUESTS_PER_ACCOUNT['alfa-by'] ?? 1
+      ),
       duration: clampFetchDuration(env.QUEUE_FETCH_RATE_DURATION_MS)
     },
     priorFetchRate: {
