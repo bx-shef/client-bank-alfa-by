@@ -18,7 +18,7 @@ import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, ty
 import { formatRelativeTime } from '~/utils/importStatus'
 import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
 
-definePageMeta({ layout: 'clear', middleware: 'auth' })
+definePageMeta({ layout: 'operator', middleware: 'auth' })
 
 // Tab title from the single source (pageTitle → "<section> — <app name>").
 useHead({

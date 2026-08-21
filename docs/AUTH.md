@@ -49,7 +49,7 @@
 | Выход | `server/api/auth/logout.post.ts` | тонкий I/O → `decideLogout` (403 без CSRF-заголовка, иначе чистит cookie) |
 | Статус | `server/api/auth/session.get.ts` | тонкий I/O → `sessionStatus` → `{ configured, authenticated, open, user? }` для гварда |
 | Клиент | `app/composables/useAuth.ts` | `login`/`logout`/`fetchSession` (шлёт CSRF-заголовок на мутациях) |
-| Форма | `app/pages/login.vue` | публичная страница входа (`noindex`) на **b24ui** (layout `clear` → `<B24App>`, темизуется light/dark), редирект только на относительный путь |
+| Форма | `app/pages/login.vue` | публичная страница входа (`noindex`) на **b24ui** (layout `operator` → `<B24App>`, темизуется light/dark), редирект только на относительный путь |
 | Ошибки | `app/utils/loginError.ts` | чистый маппинг статуса ответа → сообщение (503/401/прочее, обе формы ошибки — `statusCode` и `response.status`); `login.vue` зовёт в `catch`. Покрыто `tests/loginError.test.ts` (#84) |
 | Гвард | `app/middleware/auth.ts` | клиентский редирект на `/login` (см. оговорку про API-защиту) |
 | Анти-мигание | `app/components/AuthGate.vue` | client-only обёртка тела служебной страницы: пока идёт `fetchSession`, показывает нейтральное «Проверка доступа…» и раскрывает слот **только** после подтверждения сессии. SSG-HTML публичен, а `middleware`-редирект срабатывает уже **после** отрисовки — без гейта защищённый хром мелькнул бы до редиректа. Fail-open при недоступном backend (как middleware); реальная защита — на API |

@@ -1,6 +1,6 @@
 # Гайд: как создавать новые страницы в нужном виде и дизайне
 
-> Last reviewed: 2026-08-20
+> Last reviewed: 2026-08-21
 
 Приложение живёт в **двух визуальных контекстах**. Прежде чем делать страницу,
 определи, к какому она относится — от этого зависит layout, тема и стиль.
@@ -64,7 +64,7 @@ H1 и `<title>` разъедутся. Всё покрываем тестами (
 
 ```vue
 <script setup lang="ts">
-definePageMeta({ layout: 'clear' })
+definePageMeta({ layout: 'portal' })
 // в портале — useB24().init() (no-op вне фрейма) + setTitle/fitWindow в try/catch
 </script>
 
@@ -79,7 +79,15 @@ definePageMeta({ layout: 'clear' })
   скриншотов — `?preview=1` (в тесте задаётся маршрутом: `mountSuspended(Page, { route: '/app?preview=1' })`).
   Служебные страницы оператора (`/login`, `/queues`) гейтом не закрываются — у них своя сессия.
 
-- Layout `app/layouts/clear.vue` — `<B24App>` для тем/тостов, без хрома лендинга.
+- Layout `app/layouts/portal.vue` (in-portal) или `app/layouts/operator.vue` (служебные экраны
+  оператора) — оба на общей оболочке `AppShell` (`<B24App>` для тем/тостов, без хрома лендинга).
+  ⚠ Раньше это был ОДИН layout `clear` на два разных мира, и имя не различало их вовсе (#532):
+  внутри портала — iframe, фрейм-токен, `fitWindow` и слайдеры; у оператора — обычная вкладка и
+  наша сессионная кука. Разметка совпадает до сих пор, но выбор мира теперь виден в
+  `definePageMeta` и закреплён `tests/pageLayouts.test.ts`.
+  ⚠ Гейт (`InPortalGate` / `AuthGate`) живёт в СТРАНИЦЕ, а не в layout'е: `/app` подавляет свой
+  гейт целиком, пока уводит фрейм на слайдер, а `/login` не может быть под `AuthGate` по смыслу.
+  Что гейт не забыт — проверяет тот же тест.
 - Тема — **b24ui light/dark-auto** (`app.config.ts: colorModeInitialValue:
   'auto'`). Никакого форс-dark — эти страницы должны уважать выбор/ОС пользователя.
 - Верстаем на **b24ui-компонентах** (`B24Card`, `B24Button`, `B24Input`,
@@ -116,7 +124,7 @@ definePageMeta({ layout: 'clear' })
 >   `B24Frame` (iframe-приложения), `callV2/callBatch`, `fetchList`, вебхуки/OAuth, примеры.
 >
 > Это первоисточник по «как правильно» на b24ui/b24jssdk. Наш `PAGE_GUIDE` — как оно ложится на
-> **это** приложение (layout `clear`, темы, `useB24`, авторизация); по самим компонентам/токенам и
+> **это** приложение (layout `portal`/`operator`, темы, `useB24`, авторизация); по самим компонентам/токенам и
 > API SDK — сверяемся с `AGENTS.md`/`skills`/`llms.txt`. Точные сигнатуры REST-методов — через
 > MCP `b24-dev-mcp`.
 

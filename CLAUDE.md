@@ -343,7 +343,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   назначения). Тесты —
   `recognitionKinds.test.ts` (exhaustive) + `nuxt/recognitionMap.nuxt.test.ts` (рендер/add-remove/предпросмотр); визуально
   проверен (свет/тёмная, на странице настроек).
-- `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `clear`,
+- `app/components/StatementUpload.vue` + `app/pages/import.vue` (роут `/import`, layout `portal`,
   в `nitro.prerender.routes`) — **UI ручной загрузки выписки (P4, слайс 1)**: drag-drop/`<input>`
   мульти-файл, парсинг **в браузере** (детерминированный, без backend/AI) через `importUpload` →
   статус по каждому файлу (разобрано N / ошибка) + объединённый предпросмотр через `OperationList`.
@@ -533,7 +533,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   текст), сводка, предпросмотр `OperationList`, `role=status aria-live`, кнопка **«Записать в CRM»**
   (`useImport` → `POST /api/import`, слайс 2 выше). Тесты — `tests/importUpload.test.ts` (реальные
   фикстуры) + `tests/nuxt/statementUpload.nuxt.test.ts` (рендер/проводка).
-- `app/pages/install.vue` — обработчик установки B24 (layout `clear`): `init` → `event.bind`
+- `app/pages/install.vue` — обработчик установки B24 (layout `portal`): `init` → `event.bind`
   (`ONAPPINSTALL`/`ONAPPUNINSTALL` → `${siteUrl}/api/b24/events`, до `installFinish` — так текущая
   установка доставляет `application_token`) → **`crm.automation.trigger.add`** (регистрация канонического
   триггера приложения `B24_PAYMENT_TRIGGER`, #79 — best-effort, standalone не-батч) → `installFinish`
@@ -568,8 +568,18 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   непустое имя → `null` fail-safe; метод идемпотентен и требует контекста приложения, iframe его даёт; сбой
   установку не блокирует). Требует `NUXT_PUBLIC_SITE_URL` в проде (иначе откажется биндить относительный URL —
   ошибка с retry). `placement.bind` **пока не делаем** — плейсменты добиваем на тестовом портале (см. план).
-- `app/layouts/clear.vue` — минимальный layout (`<B24App>` для тем/тостов, light/dark) под in-portal-страницы
-  (`/install`, `/app`, `/import`, `/settings` в iframe) **и** standalone-страницы оператора (`/login`, `/queues`).
+- **Два служебных layout'а на общей оболочке `AppShell`** (`<B24App>` для тем/тостов, light/dark):
+  `app/layouts/portal.vue` — страницы ВНУТРИ портала (`/install`, `/app`, `/import`, `/settings`),
+  `app/layouts/operator.vue` — экраны оператора в обычной вкладке (`/login`, `/queues`).
+  ⚠ Был ОДИН layout `clear` на оба мира (#532), и имя не различало их вовсе. Разметка совпадает и
+  сейчас — но авторитет разный (фрейм-токен портала против нашей сессионной куки), поведение разное
+  (`InPortalGate` против `AuthGate`), и у оператора нет и не будет ни `fitWindow`, ни слайдеров.
+  Общая оболочка вынесена в компонент, чтобы решения в ней (например `overflow-x-clip`, #530) не
+  разъехались по половине приложения.
+  ⚠ Гейт живёт в СТРАНИЦЕ, а не в layout'е: `/app` подавляет свой `InPortalGate` целиком, пока
+  уводит фрейм на слайдер (иначе на месте уходящей страницы мелькает «Проверка доступа…»), а
+  `/login` под `AuthGate` был бы страницей, требующей войти, чтобы показать форму входа. Раз гейт в
+  странице — его можно забыть, и это ловит `tests/pageLayouts.test.ts` (закрытый список страниц).
 - `app/config/b24.ts` — чистые константы встройки: `B24_REQUIRED_SCOPES` (`crm`, `sale`, `im`,
   `documentgenerator`, **`userfieldconfig`** (#408 — провижининг СП зовёт `userfieldconfig.add`, а scope
   не запрашивался ⇒ на любом портале, где право не выдали руками, провижининг падал с опаковым
@@ -654,7 +664,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   (`resolveAuthConfig`/`checkCredentials` constant-time, `signSession`/`verifySession` — HMAC-подпись cookie;
   статус-матрикс роутов `decideLogin`/`decideLogout`/`sessionStatus` — тонкие `server/api/auth/*` только I/O,
   тестируются без сервера; тесты). Роуты `server/api/auth/login|logout|session`. Клиент — `app/composables/useAuth.ts`,
-  форма `app/pages/login.vue` на **b24ui** (`B24Card`/`B24Input`/`B24Button`/`B24Alert`, layout `clear` → light/dark),
+  форма `app/pages/login.vue` на **b24ui** (`B24Card`/`B24Input`/`B24Button`/`B24Alert`, layout `operator` → light/dark),
   публичная `noindex` (маппинг ошибок → сообщение в чистом `app/utils/loginError.ts`, покрыт тестом). Гвард
   `app/middleware/auth.ts` (клиентский редирект; реальная защита — на API), а
   `app/components/AuthGate.vue` прячет контент служебных страниц за «Проверка доступа…» до подтверждения сессии

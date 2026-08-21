@@ -7,7 +7,7 @@ import LockMIcon from '@bitrix24/b24icons-vue/outline/LockMIcon'
 import { pageTitle } from '~/utils/landing'
 
 // `clear` layout wraps the page in <B24App> → b24ui components + colorMode (light/dark) work.
-definePageMeta({ layout: 'clear' })
+definePageMeta({ layout: 'operator' })
 
 const route = useRoute()
 const { login } = useAuth()
