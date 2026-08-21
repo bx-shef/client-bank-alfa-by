@@ -42,14 +42,49 @@ export interface WorkerLiveness {
 }
 
 /**
+ * Сколько ждать после старта процесса, прежде чем «ноль живых» считать аварией.
+ *
+ * ⚠ Без этой отсрочки ХОЛОДНЫЙ СТАРТ будит владельца ложной тревогой, и это не редкий случай, а
+ * КАЖДЫЙ выкат. Прод — два контейнера: `backend` гоняет проверку здоровья, `worker` шлёт пульс, и
+ * `depends_on: service_started` означает, что `worker` может быть ещё не создан, когда `backend`
+ * уже выполняет свой первый — немедленный — тик. Тот видит ноль живых, шлёт «нет воркеров», а через
+ * пять минут «✅ восстановлено».
+ *
+ * ⚠ Соседнее правило (`pulseState`, #504) принимает `startedAtMs` ровно поэтому; здесь была та же
+ * дыра, и её нашли ревьюеры до того, как она разбудила владельца ночью.
+ *
+ * Величина — с запасом на старт контейнера и подключение к Redis, но заметно меньше периода
+ * проверки здоровья (5 мин), чтобы настоящая авария не ждала лишний тик.
+ */
+export const WORKER_STARTUP_GRACE_MS = 2 * 60_000
+
+export interface WorkerLivenessAlert {
+  kind: 'no-workers'
+  queue: string
+  text: string
+}
+
+/**
  * Тревога о том, что разбирать очереди некому. `null` — сигнала нет.
  *
  * ⚠ Молчим при выключенных очередях: там нет ни Redis, ни воркеров по построению, и события Б24
  * идут синхронным фолбэком. Кричать «нет воркеров» на такой конфигурации значит приучить не читать.
+ *
+ * ⚠ Молчим и в первые `WORKER_STARTUP_GRACE_MS` после старта процесса — см. константу. Без
+ * известного времени старта отсрочки нет: `startedAtMs == null` значит «не знаем, когда поднялись»,
+ * и тогда честнее сигналить, чем молчать вечно.
  */
-export function evaluateWorkerLiveness(state: WorkerLiveness): { kind: 'no-workers', queue: string, text: string } | null {
+export function evaluateWorkerLiveness(
+  state: WorkerLiveness,
+  nowMs?: number,
+  startedAtMs?: number | null
+): WorkerLivenessAlert | null {
   if (!state.queuesEnabled) return null
   if (state.live > 0) return null
+  if (nowMs != null && startedAtMs != null) {
+    const up = nowMs - startedAtMs
+    if (Number.isFinite(up) && up >= 0 && up < WORKER_STARTUP_GRACE_MS) return null
+  }
   return {
     kind: 'no-workers',
     queue: 'workers',

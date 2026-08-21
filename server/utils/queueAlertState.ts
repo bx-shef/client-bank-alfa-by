@@ -14,29 +14,29 @@ let current: QueueAlert[] = []
 let checkedAtMs: number | null = null
 
 /**
- * Состояние САМОГО канала оповещений (#466 §3).
+ * State of the alerting channel ITSELF (#466 §3).
  *
- * ⚠ Заведено потому, что канал молчит одинаково в двух противоположных случаях: «всё хорошо» и
- * «сигнализация выключена». Неверный `chat_id`, отозванный бот или просто незаданные переменные
- * дают `console.error` и неотправленный эпизод — наружу об этом не выходит ничего. То есть
- * единственный канал, который стучится сам, не умел сказать, что он не стучится.
+ * ⚠ Added because the channel is silent in the same way in two opposite cases: «all good» and
+ * «alerting is switched off». A wrong `chat_id`, a revoked bot, or simply unset variables produce a
+ * `console.error` and an undelivered episode — nothing of which reaches the outside. The one
+ * channel that reaches out on its own could not say that it is not reaching out.
  */
 let channel: AlertChannelState = { configured: false, lastOk: null, lastAtMs: null }
 
 export interface AlertChannelState {
-  /** Заданы ли обе переменные. `false` — канал выключен, алерты живут только в логе и на `/queues`. */
+  /** Whether both variables are set. `false` — channel off; alerts live only in the log and `/queues`. */
   configured: boolean
-  /** Исход последней ПОПЫТКИ доставки: `null` — попыток ещё не было. */
+  /** Outcome of the last delivery ATTEMPT; `null` — no attempt has been made yet. */
   lastOk: boolean | null
   lastAtMs: number | null
 }
 
-/** Запомнить, включён ли канал (зовётся один раз на старте крон-инстанса). */
+/** Remember whether the channel is on (called once, when the cron instance starts). */
 export function recordAlertChannelConfigured(configured: boolean): void {
   channel = { ...channel, configured }
 }
 
-/** Запомнить исход попытки доставки. */
+/** Remember the outcome of a delivery attempt. */
 export function recordAlertDelivery(ok: boolean, atMs: number): void {
   channel = { ...channel, lastOk: ok, lastAtMs: atMs }
 }

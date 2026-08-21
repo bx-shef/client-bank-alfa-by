@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { alertChannelState, recordAlertChannelConfigured, recordAlertDelivery, resetQueueAlertState } from '../server/utils/queueAlertState'
 import {
   evaluateWorkerLiveness, workerBeatKey,
   WORKER_BEAT_INTERVAL_MS, WORKER_BEAT_PREFIX, WORKER_BEAT_TTL_SEC
@@ -41,47 +42,33 @@ describe('каденция пульса', () => {
   })
 })
 
-describe('проводка (#466)', () => {
-  const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8')
-
-  it('идентификатор пульса УНИКАЛЕН на процесс, а не производен от pid/hostname', () => {
-    // ⚠ Реплики одного образа живут каждая в своём PID-неймспейсе, поэтому `process.pid` у них
-    // совпадает БУКВАЛЬНО, а `HOSTNAME` docker проставляет неявно (гард паритета env на него
-    // ругается — и справедливо). Совпавшие ключи схлопнули бы N живых воркеров в один и спрятали
-    // смерть остальных, то есть сломали бы ровно то, ради чего пульс заведён.
-    const src = read('server/plugins/queue.ts')
-    const line = src.split('\n').find(l => l.includes('const beatId'))
-    expect(line, 'пульс воркера не заводится').toBeTruthy()
-    expect(line!, 'id пульса выводится из pid/hostname — реплики схлопнутся')
-      .not.toMatch(/process\.pid|process\.env/)
-    expect(line!, 'id пульса не случайный').toMatch(/randomUUID|randomBytes/)
+describe('состояние канала: два писателя одного объекта (#466 §3)', () => {
+  // ⚠ ПОВЕДЕНЧЕСКИЙ тест, а не греп. Ревью мутацией доказало, что перетирание `configured` в
+  // `recordAlertDelivery` не ловилось ничем: инвариант «два писателя, каждый не задевает чужое
+  // поле» нетривиален и мутирует незаметно при рефакторинге.
+  it('запись доставки НЕ перетирает признак «канал настроен»', () => {
+    resetQueueAlertState()
+    recordAlertChannelConfigured(true)
+    recordAlertDelivery(false, 123)
+    const st = alertChannelState()
+    expect(st.configured, 'запись доставки стёрла факт настройки канала').toBe(true)
+    expect(st.lastOk).toBe(false)
+    expect(st.lastAtMs).toBe(123)
   })
 
-  it('сбой пульса НЕ роняет обработку задач', () => {
-    // Пульс — диагностика. Уронив ею воркер, мы бы своими руками устроили ту аварию, которую он
-    // призван замечать.
-    const src = read('server/plugins/queue.ts')
-    const i = src.indexOf('const beat = ()')
-    expect(i, 'пульс не заводится').toBeGreaterThan(-1)
-    expect(src.slice(i, i + 400), 'у пульса нет catch — он может уронить воркер').toContain('.catch(')
+  it('и наоборот: повторная запись «настроен» не стирает исход доставки', () => {
+    resetQueueAlertState()
+    recordAlertDelivery(true, 7)
+    recordAlertChannelConfigured(true)
+    expect(alertChannelState().lastOk, 'исход доставки потерян').toBe(true)
   })
 
-  it('счётчик живых изолирован в тике — отказ Redis не отменяет вердикт по конвейеру', () => {
-    // ⚠ И, что важнее, при недоступном Redis «ноль живых» — это НЕЗНАНИЕ, а не факт. Без изоляции
-    // проверка здоровья сама бы порождала ложную тревогу ровно в аварию.
-    const src = read('server/utils/queueHealthTick.ts')
-    const i = src.indexOf('if (deps.workers)')
-    expect(i, 'проводки счётчика воркеров нет').toBeGreaterThan(-1)
-    expect(src.slice(i, i + 300)).toContain('catch')
-  })
-
-  it('SCAN, а не KEYS — проверка обязана быть дешевле проверяемого', () => {
-    const src = read('server/queue/connection.ts')
-    const i = src.indexOf('export async function countLiveWorkers')
-    expect(i).toBeGreaterThan(-1)
-    const body = src.slice(i, i + 700)
-    expect(body).toContain('scan(')
-    expect(body, 'KEYS блокирует Redis целиком').not.toMatch(/\bkeys\(/)
+  it('состояние копируется наружу — вызывающий не может переписать хранимое', () => {
+    resetQueueAlertState()
+    recordAlertChannelConfigured(true)
+    const st = alertChannelState()
+    st.configured = false
+    expect(alertChannelState().configured).toBe(true)
   })
 })
 

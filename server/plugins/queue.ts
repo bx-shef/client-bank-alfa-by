@@ -10,7 +10,8 @@
 
 import type { Worker } from 'bullmq'
 import { randomUUID } from 'node:crypto'
-import { closeQueues, countLiveWorkers, getQueue, markWorkerBeat, queueEnabled } from '../queue/connection'
+import { startWorkerBeat } from '../utils/workerBeat'
+import { closeQueues, countLiveWorkers, getQueue, queueEnabled } from '../queue/connection'
 import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveTriggerFireDeps, startDeletionWorker, startEventWorker, startFeedbackWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
@@ -38,7 +39,6 @@ import { runQueueHealthTick } from '../utils/queueHealthTick'
 import { emptyDeliveryState, type DeliveryState } from '../utils/queueAlertDeliver'
 import { resolveTelegramConfig, sendTelegramAlert, type AlertFetchFn } from '../utils/telegramAlert'
 import type { QueueName } from '../queue/topology'
-import { WORKER_BEAT_INTERVAL_MS, WORKER_BEAT_TTL_SEC } from '../../app/utils/workerHeartbeat'
 
 /** Сколько дней храним итоги ручных загрузок (#417) — переживает вкладку, но не неделю. */
 const IMPORT_BATCH_TTL_DAYS = 3
@@ -58,6 +58,13 @@ export default defineNitroPlugin((nitroApp) => {
   if (import.meta.prerender) return
   const role = queueRuntimeConfig()
   let bankKeepAliveTimer: ReturnType<typeof setInterval> | undefined
+  // Момент старта процесса — для отсрочки тревоги «нет воркеров» на холодном старте (#466).
+  const processStartedAt = Date.now()
+  // ⚠ Объявлен ЗДЕСЬ, а не внутри блока воркеров: `unref()` лишь не даёт таймеру единолично
+  // удерживать процесс, но НЕ отменяет его. Не сняв таймер в `close`, мы даём удару сработать уже
+  // после `closeQueues()` — а он через `getQueue` пересоздаст очередь и НОВОЕ соединение с Redis,
+  // которое никто уже не закроет. Остальные шесть таймеров файла сняты именно поэтому.
+  let beatTimer: ReturnType<typeof setInterval> | undefined
   // ⚠ Каденция вычисляется ЗДЕСЬ и переиспользуется проверкой пульса: возьми она своё число, и
   // оператор, разредивший продление через env, получал бы ложную тревогу на каждом тике.
   const bankKeepAliveMs = bankKeepAliveIntervalMs(Number(process.env.BANK_KEEPALIVE_MINUTES || BANK_KEEP_ALIVE_MINUTES))
@@ -104,15 +111,17 @@ export default defineNitroPlugin((nitroApp) => {
     //
     // ⚠ Новый id на каждый рестарт — не проблема, а свойство: старый ключ истечёт сам по TTL, и
     // перезапущенный воркер не наследует чужую отметку.
-    const beatId = randomUUID()
-    const beat = () => {
-      // Никогда не бросаем: пульс — диагностика, и его сбой не должен ронять обработку задач.
-      void markWorkerBeat(beatId, WORKER_BEAT_TTL_SEC, Date.now())
-        .catch(e => console.warn('[queue] worker beat failed:', (e as Error)?.message))
-    }
-    beat()
-    const beatTimer = setInterval(beat, WORKER_BEAT_INTERVAL_MS)
-    beatTimer.unref?.()
+    // Пульс воркера (#466 §1) — планировщик вынесен, чтобы его можно было ПРОВЕРИТЬ вызовом:
+    // внутри плагина таймер можно было завести на пустой колбэк, и весь набор оставался зелёным.
+    //
+    // ⚠ Идентификатор СЛУЧАЙНЫЙ на процесс, не производный от pid/hostname: реплики одного образа
+    // живут каждая в своём PID-неймспейсе (`process.pid` совпадает буквально), а `HOSTNAME` docker
+    // проставляет неявно — его нет в compose, и гард паритета env на это справедливо ругается.
+    // Совпавшие ключи схлопнули бы N живых воркеров в один и спрятали смерть остальных.
+    beatTimer = startWorkerBeat(randomUUID(), {
+      running: () => workers.some(w => w.isRunning() && !w.isPaused()),
+      warn: m => console.warn(m)
+    })
   } else if (!role.workers) {
     // Loud: this instance won't drain fetch/parse/crm-sync. A worker container MUST be
     // running (docker-compose.prod.yml `worker`), else webhooks/imports pile up silently
@@ -429,12 +438,22 @@ export default defineNitroPlugin((nitroApp) => {
             // Пульс продления (#504). Каденция берётся ТА ЖЕ, что у самого таймера, — иначе
             // оператор, разредивший продление через env, получал бы ложную тревогу на каждом тике.
             keepAlive: () => ({ pulse: keepAlivePulse(), intervalMs: bankKeepAliveMs, startedAtMs: keepAliveStartedAt() }),
-            // Живы ли воркеры (#466 §1). Без Redis вопрос не имеет смысла — отдаём это честно, а
-            // не «ноль живых»: правило молчит при выключенных очередях, и молчать оно должно по
-            // ФАКТУ выключенности, а не потому, что счётчик случайно оказался нулём.
+            // Живы ли воркеры (#466 §1).
+            //
+            // ⚠ `queuesEnabled: true` — КОНСТАНТА, а не `queueEnabled()`: плагин выходит выше, если
+            // Redis не настроен, поэтому сюда исполнение без него не доходит вовсе. Тернарник тут
+            // читался бы как «а вдруг выключены», описывая недостижимую ветку; ревью справедливо
+            // назвало её мёртвой. Само правило проверку `queuesEnabled` сохраняет — оно чистое и
+            // зовётся не только отсюда.
+            //
+            // ⚠ `startedAtMs` обязателен: без него холодный старт (`docker compose up` — `backend`
+            // поднимается первым, первый тик идёт немедленно) шлёт «нет воркеров», пока `worker`
+            // ещё грузится, и так на КАЖДОМ выкате. Соседний `keepAlive` принимает то же и по той
+            // же причине.
             workers: async () => ({
-              live: queueEnabled() ? await countLiveWorkers() : 0,
-              queuesEnabled: queueEnabled()
+              live: await countLiveWorkers(),
+              queuesEnabled: true,
+              startedAtMs: processStartedAt
             })
           }))
         delivery = result.state
@@ -466,6 +485,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (sweepTimer) clearInterval(sweepTimer)
     if (batchSweepTimer) clearInterval(batchSweepTimer)
     if (healthTimer) clearInterval(healthTimer)
+    if (beatTimer) clearInterval(beatTimer)
     await Promise.all(workers.map(w => w.close()))
     await closeQueues()
   })

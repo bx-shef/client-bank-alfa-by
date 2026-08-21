@@ -13,7 +13,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
-import { HEALTH_TONE_COLOR, presentAlertChannel, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
+import { ALERT_CHANNEL_CLASS, HEALTH_TONE_COLOR, presentAlertChannel, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
@@ -198,6 +198,10 @@ async function loadHealth() {
     // Недоступный эндпоинт — тоже информация: молча оставить прошлый (возможно зелёный) вердикт
     // значило бы показывать «всё хорошо» при мёртвом бэкенде.
     healthFailed.value = true
+    // ⚠ И строку про канал — тоже. Она отдельный элемент (нарочно, см. шаблон), поэтому без сброса
+    // рядом с «не удалось получить состояние» висело бы бодрое «оповещения доходят» — про бэкенд,
+    // который только что не ответил. Тот самый зелёный-во-время-аварии, которого избегает соседняя ветка.
+    channel.value = null
   }
 }
 
@@ -282,7 +286,7 @@ onBeforeUnmount(() => {
       <p
         v-if="channel"
         class="mb-4 text-sm"
-        :class="channel.tone === 'ok' ? 'text-base-500' : 'text-red-600 dark:text-red-400'"
+        :class="ALERT_CHANNEL_CLASS[channel.tone]"
         data-testid="alert-channel"
       >
         {{ channel.note }}

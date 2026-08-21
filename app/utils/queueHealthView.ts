@@ -11,15 +11,15 @@
 
 /** One alert as the API returns it (mirror of the server `QueueAlert`). */
 export interface QueueHealthAlert {
-  // ⚠ Держать синхронно с `QueueAlertKind` (`server/utils/queueAlert.ts`). Список успел разойтись:
-  // здесь не было ни `bank-dead`, ни `keepalive-stale`, хотя API их уже отдавал — то есть тип
-  // экрана молча описывал не то, что приходит. Инвариант закреплён тестом.
+  // ⚠ Keep in sync with `QueueAlertKind` (`server/utils/queueAlert.ts`). The lists had already
+  // drifted: neither `bank-dead` nor `keepalive-stale` was here while the API was already sending
+  // them — the screen's type silently described something other than what arrives. Pinned by a test.
   kind: 'stalled' | 'failing' | 'unreadable' | 'bank-dead' | 'keepalive-stale' | 'no-workers'
   queue: string
   text: string
 }
 
-/** Состояние самого канала оповещений (#466 §3), как его видит экран. */
+/** State of the alerting channel itself (#466 §3), as the screen sees it. */
 export interface AlertChannelInfo {
   configured: boolean
   lastOk: boolean | null
@@ -27,13 +27,34 @@ export interface AlertChannelInfo {
 }
 
 /**
- * Одна строка про сигнализацию: включена ли и доходит ли.
+ * One line about the alerting channel: is it on, and is it getting through?
  *
- * ⚠ Три РАЗНЫХ смысла, которые нельзя схлопывать: «выключена» (алерты живут только в логе и здесь),
- * «включена, но последняя доставка не прошла» (отозванный бот, неверный chat_id) и «включена,
- * доходит». Без этой строки первый и третий случай выглядят на экране одинаково — тишиной.
+ * ⚠ Three DISTINCT meanings that must not collapse: «off» (alerts live only in the log and here),
+ * «on, but the last delivery failed» (revoked bot, wrong chat_id) and «on, delivering». Without
+ * this line the first and third look identical on screen — both are silence.
  */
-export function presentAlertChannel(info: AlertChannelInfo | null | undefined): { tone: 'off' | 'broken' | 'ok', note: string } {
+export type AlertChannelTone = 'off' | 'broken' | 'ok'
+
+/**
+ * Text classes per channel tone.
+ *
+ * ⚠ `off` and `broken` get DIFFERENT colours, and that is not cosmetics. «Not configured» is a
+ * common and often deliberate state (dev, staging, an owner who simply never set up Telegram),
+ * while «configured but not arriving» is a real breakage. Painting both red would train the reader
+ * to ignore red on the very page where red has to mean something.
+ *
+ * ⚠ Tokens are `--ui-color-*`, not `text-base-500`/`text-red-600`: b24ui's base scale is `1..8`, so
+ * `base-500` is not a generated class at all (it would silently do nothing), and raw Tailwind reds
+ * fall below 4.5:1 on the light theme — which would make the line saying «alerting is dead» the
+ * least readable one on the screen.
+ */
+export const ALERT_CHANNEL_CLASS: Record<AlertChannelTone, string> = {
+  off: 'text-(--ui-color-base-3)',
+  broken: 'text-(--ui-color-accent-main-alert)',
+  ok: 'text-(--ui-color-base-3)'
+}
+
+export function presentAlertChannel(info: AlertChannelInfo | null | undefined): { tone: AlertChannelTone, note: string } {
   if (!info?.configured) {
     return { tone: 'off', note: 'Оповещения выключены — тревоги видны только здесь и в логе' }
   }
@@ -48,7 +69,7 @@ export function presentAlertChannel(info: AlertChannelInfo | null | undefined): 
 
 export interface QueueHealthPayload {
   alerts?: QueueHealthAlert[]
-  /** Состояние канала оповещений (#466 §3). */
+  /** Alerting channel state (#466 §3). */
   alertChannel?: AlertChannelInfo | null
   /** When the last check completed, ms. `null`/absent — ещё ни разу. */
   alertsCheckedAt?: number | null

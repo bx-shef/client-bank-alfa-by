@@ -58,7 +58,7 @@ export interface QueueHealthTickDeps {
    * состоявшийся вердикт по конвейеру. Молчание про воркеров честнее выдумки — при недоступном
    * Redis правило «ноль живых» дало бы ложную тревогу вместо честного «не знаем».
    */
-  workers?: () => Promise<{ live: number, queuesEnabled: boolean }>
+  workers?: () => Promise<{ live: number, queuesEnabled: boolean, startedAtMs?: number | null }>
 }
 
 export interface QueueHealthTickResult {
@@ -111,7 +111,8 @@ export async function runQueueHealthTick(
     // походом к клиенту. ИЗОЛИРОВАНО — при недоступном Redis «ноль живых» это не факт, а незнание.
     if (deps.workers) {
       try {
-        const alert = evaluateWorkerLiveness(await deps.workers())
+        const w = await deps.workers()
+        const alert = evaluateWorkerLiveness(w, deps.now(), w.startedAtMs ?? null)
         if (alert) alerts.push(alert)
       } catch (err) {
         deps.error(`[queue] worker liveness read failed: ${(err as Error)?.message}`)
