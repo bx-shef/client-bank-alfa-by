@@ -8,7 +8,14 @@ import { ru } from '@bitrix24/b24ui-nuxt/locale'
 
 <template>
   <B24App :locale="ru">
-    <div class="min-h-screen w-screen overflow-x-hidden bg-(--ui-color-base-bg)">
+    <!-- ⚠ `overflow-x-clip`, а НЕ `overflow-x-hidden` (#530). Горизонтальное переполнение оба
+         режут одинаково, но `hidden` вдобавок делает элемент СКРОЛЛПОРТОМ (CSS: при
+         `overflow-x: hidden` вычисленный `overflow-y` перестаёт быть `visible`), а `clip` — нет.
+         Замерено: под `hidden` любой `position: sticky` на всех in-portal-страницах молча
+         переставал липнуть — он привязывался к этому контейнеру, а тот, будучи `min-h-screen`,
+         сам никогда не прокручивается (прокручивается документ). Полоса разделов настроек уезжала
+         вместе со страницей: после прокрутки на 900 px её верх оказывался на −740. -->
+    <div class="min-h-screen w-screen overflow-x-clip bg-(--ui-color-base-bg)">
       <slot />
     </div>
   </B24App>

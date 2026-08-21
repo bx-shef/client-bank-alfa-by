@@ -1,0 +1,96 @@
+// Разделы экрана настроек (#530).
+//
+// Раньше это был один аккордеон, и он ПРЯТАЛ настройки: что вообще можно настроить, было видно
+// только по заголовкам секций, а до кнопки сохранения на длинной форме надо было прокрутить экран
+// целиком. Тем же путём прошёл соседний `ai-price-import` — от аккордеона к навигации по разделам.
+//
+// ⚠ Список чистый и живёт отдельно от компонента НЕ для красоты: по нему судит и навигация, и
+// разбор адреса, и тест. Пока он был `computed` внутри `SettingsForm`, добавить раздел и забыть
+// про него в другом месте было нечем помешать.
+
+/** Идентификаторы разделов. Попадают в адрес (`?section=`), поэтому короткие и латиницей. */
+export const SETTINGS_SECTION_IDS = [
+  'bank',
+  'chats',
+  'distribution',
+  'exclusions',
+  'auto',
+  'recognition'
+] as const
+
+export type SettingsSectionId = typeof SETTINGS_SECTION_IDS[number]
+
+export interface SettingsSection {
+  id: SettingsSectionId
+  label: string
+  /** Короткая подпись под заголовком раздела — чтобы «что это» читалось без открытия. */
+  hint: string
+}
+
+/**
+ * Порядок — это порядок ЗНАКОМСТВА с приложением, а не алфавит и не важность.
+ *
+ * ⚠ «Подключение банка» первым осознанно: на нём держится весь онлайн-импорт, а жило оно когда-то
+ * в углу, который никто не открывал — админ просто не находил его (замечено на живом прогоне).
+ * Дальше — то, что настраивают в первый день (чат), потом более редкое.
+ */
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  { id: 'bank', label: 'Подключение банка', hint: 'Онлайн-импорт из Альфы и Приорбанка' },
+  { id: 'chats', label: 'Уведомления в чат', hint: 'Куда и о чём писать' },
+  { id: 'distribution', label: 'Смарт-процессы', hint: 'Служебные СП и журнал распределения' },
+  { id: 'exclusions', label: 'Исключения', hint: 'Что не переносить в CRM' },
+  { id: 'auto', label: 'Авто-проведение', hint: 'Приложение само проводит оплаты' },
+  { id: 'recognition', label: 'Карта распознавания', hint: 'Как искать номера в назначении' }
+]
+
+/** С какого раздела открывается экран без явного указания. */
+export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = 'bank'
+
+/**
+ * Разобрать раздел из адреса. Неизвестное значение — НЕ ошибка и не пустой экран: показываем
+ * раздел по умолчанию.
+ *
+ * ⚠ Иначе ссылка из старого письма или опечатка давали бы пустую страницу настроек, и человек
+ * решил бы, что сломалось приложение, а не адрес. Разделы к тому же переименовываются вместе с
+ * функциями — старые ссылки обязаны продолжать открывать хоть что-то.
+ */
+export function resolveSettingsSection(raw: unknown): SettingsSectionId {
+  const v = typeof raw === 'string' ? raw.trim() : Array.isArray(raw) ? String(raw[0] ?? '').trim() : ''
+  return (SETTINGS_SECTION_IDS as readonly string[]).includes(v) ? (v as SettingsSectionId) : DEFAULT_SETTINGS_SECTION
+}
+
+/** Секции, где сводка «что попадёт в чат» осмысленна: она отвечает на вопрос ИМЕННО этих правил. */
+export const CHAT_PREVIEW_SECTIONS: readonly SettingsSectionId[] = ['chats', 'exclusions']
+
+/** Показывать ли предпросмотр чата рядом с этим разделом. */
+export function showsChatPreview(id: SettingsSectionId): boolean {
+  return CHAT_PREVIEW_SECTIONS.includes(id)
+}
+
+/**
+ * В какой раздел ведёт строка экрана готовности.
+ *
+ * ⚠ Без этой таблицы разбор `?section=` был бы возможностью, до которой из приложения не добраться:
+ * экран готовности НАЗЫВАЛ раздел словами («выберите чат в разделе „Уведомления в чат"»), а идти
+ * туда человек должен был сам, глазами разыскивая нужный пункт в полосе. Смысл разделения — чтобы
+ * от «что не так» до «где это чинить» был один клик.
+ *
+ * ⚠ `my-company` — единственная строка, ведущая в НИКУДА, и это правда: чинится она не в настройках
+ * приложения, а в карточке компании в CRM. Ссылка «в раздел» там была бы ложью.
+ */
+export function sectionForReadiness(key: string): SettingsSectionId | null {
+  switch (key) {
+    case 'bank':
+    case 'poll':
+      return 'bank'
+    case 'chat':
+    case 'error-chat':
+      return 'chats'
+    case 'recognition':
+      return 'recognition'
+    case 'smart-process':
+      return 'distribution'
+    default:
+      return null
+  }
+}
