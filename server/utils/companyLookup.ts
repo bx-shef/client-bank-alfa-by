@@ -60,9 +60,50 @@ export function extractEntityIds(resp: Record<string, unknown>): string[] {
   return ids
 }
 
-/** Bank-detail filter for one account field (e.g. `{ RQ_ACC_NUM: '...' }`). */
+/** Bank-detail filter for one account field (e.g. `{ RQ_ACC_NUM: '...' }`). Selects the field
+ *  itself alongside `ENTITY_ID` so the caller can VERIFY each returned row (see
+ *  `matchingEntityIds` — the filter alone cannot be trusted to have applied). */
 export function bankDetailFilter(account: string, field: string): Record<string, unknown> {
-  return { filter: { [field]: account }, select: ['ENTITY_ID'] }
+  return { filter: { [field]: account }, select: ['ENTITY_ID', field] }
+}
+
+/**
+ * The `ENTITY_ID`s of rows whose `field` value REALLY equals the searched account.
+ *
+ * ⚠ This exists because the B24 filter cannot be trusted to have filtered — measured live on a
+ * portal, not inferred:
+ *   - an UNKNOWN filter field is silently IGNORED and the list returns EVERY row. With the raw
+ *     `extractEntityIds` that turned «search by account» into «the portal's first company» the moment
+ *     a field name drifted (typo, API rename) — the payment lands on the WRONG company's card with
+ *     a green log, and with `autoDistribute` armed the mutation would follow it.
+ *   - a `%` in the VALUE acts as a wildcard (`%30120A%` matched live). The counterparty account
+ *     comes from the statement — on the manual path from a FILE an employee uploaded — and
+ *     `normalizeAccount` strips only whitespace, so a malformed value reaches the filter as-is.
+ *
+ * Comparison is case-insensitive on the normalized forms: the live filter matches
+ * case-insensitively (`by11…` found `BY11…`), so a case-only difference is a match B24 already
+ * makes today and must not be dropped. A row whose value differs beyond case/whitespace is NOT a
+ * match for OUR question, whatever the filter thought.
+ */
+export function matchingEntityIds(resp: Record<string, unknown>, field: string, account: string): string[] {
+  const want = normalizeAccount(account).toUpperCase()
+  const rows = resp?.result
+  if (!Array.isArray(rows) || want === '') return []
+  const ids: string[] = []
+  for (const row of rows) {
+    const r = row as Record<string, unknown>
+    const value = r?.[field]
+    // A MISSING field is not a match (fail-closed: select asks for it explicitly, a response
+    // without it is off-contract). A present non-string scalar is COERCED, not rejected — the
+    // sibling readers of these same fields (`extractEntityIds` here, `myCompanyRequisites.ts`)
+    // already tolerate B24 returning numbers, and rejecting one would silently drop a REAL match.
+    if (value === undefined || value === null) continue
+    const text = typeof value === 'string' ? value : `${value}`
+    if (normalizeAccount(text).toUpperCase() !== want) continue
+    const id = r?.ENTITY_ID
+    if (id !== undefined && id !== null && `${id}` !== '') ids.push(`${id}`)
+  }
+  return ids
 }
 
 /** Requisite filter restricting to COMPANY requisites with the given ids.
@@ -98,6 +139,12 @@ export function extractItemIds(resp: Record<string, unknown>): string[] {
  * unique — confirmed live — so several companies on one account is a real case).
  * Empty array = no company. A transport error from `call` propagates.
  *
+ * No pagination: both steps read the first list page (≤50 rows). Fine while an account maps to
+ * a handful of companies (the documented case is «usually one, occasionally several»); page here
+ * before that stops being true. Note the verification makes the >50-rows-of-noise case SAFE
+ * rather than wrong: an ignored filter that overflows the page now yields «no match», not the
+ * first stranger on it.
+ *
  * Orphan bank details of a DELETED company still turn up at step 1, but step 2
  * (`crm.requisite.list` filtered by `ENTITY_TYPE_ID=4`) returns nothing for their
  * now-parentless requisite — CONFIRMED LIVE — so a dead company is never resolved
@@ -110,7 +157,10 @@ export async function resolveCompanyIdsByAccount(account: string, call: RestCall
   let requisiteIds: string[] = []
   for (const field of ACCOUNT_FIELDS) {
     const resp = await call('crm.requisite.bankdetail.list', bankDetailFilter(acc, field))
-    requisiteIds = extractEntityIds(resp)
+    // ⚠ Verified, not blind-extracted: the filter is not trusted to have applied — an unknown
+    // field is ignored silently and `%` in the value goes wildcard (both measured live). Blind
+    // extraction would resolve the WRONG company. See `matchingEntityIds`.
+    requisiteIds = matchingEntityIds(resp, field, acc)
     if (requisiteIds.length) break
   }
   if (!requisiteIds.length) return []
