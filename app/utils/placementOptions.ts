@@ -1,4 +1,4 @@
-// Чтение `place` из PLACEMENT_OPTIONS (#537).
+// Чтение `place` из PLACEMENT_OPTIONS (#555).
 //
 // `openSliderAppPage({ place })` отправляет параметры порталу, портал возвращает их фрейму в
 // PLACEMENT_OPTIONS — это штатный путь, и другого способа сказать открывшемуся фрейму «ты
