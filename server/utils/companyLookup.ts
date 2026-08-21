@@ -73,7 +73,7 @@ export function bankDetailFilter(account: string, field: string): Record<string,
  * ⚠ This exists because the B24 filter cannot be trusted to have filtered — measured live on a
  * portal, not inferred:
  *   - an UNKNOWN filter field is silently IGNORED and the list returns EVERY row. With the raw
- *     `extractEntityIds` that turned «search by account» into «первая компания портала» the moment
+ *     `extractEntityIds` that turned «search by account» into «the portal's first company» the moment
  *     a field name drifted (typo, API rename) — the payment lands on the WRONG company's card with
  *     a green log, and with `autoDistribute` armed the mutation would follow it.
  *   - a `%` in the VALUE acts as a wildcard (`%30120A%` matched live). The counterparty account
@@ -93,7 +93,13 @@ export function matchingEntityIds(resp: Record<string, unknown>, field: string, 
   for (const row of rows) {
     const r = row as Record<string, unknown>
     const value = r?.[field]
-    if (typeof value !== 'string' || normalizeAccount(value).toUpperCase() !== want) continue
+    // A MISSING field is not a match (fail-closed: select asks for it explicitly, a response
+    // without it is off-contract). A present non-string scalar is COERCED, not rejected — the
+    // sibling readers of these same fields (`extractEntityIds` here, `myCompanyRequisites.ts`)
+    // already tolerate B24 returning numbers, and rejecting one would silently drop a REAL match.
+    if (value === undefined || value === null) continue
+    const text = typeof value === 'string' ? value : `${value}`
+    if (normalizeAccount(text).toUpperCase() !== want) continue
     const id = r?.ENTITY_ID
     if (id !== undefined && id !== null && `${id}` !== '') ids.push(`${id}`)
   }
@@ -132,6 +138,12 @@ export function extractItemIds(resp: Record<string, unknown>): string[] {
  * company. Returns EVERY matching company id (usually one; `RQ_ACC_NUM` is NOT
  * unique — confirmed live — so several companies on one account is a real case).
  * Empty array = no company. A transport error from `call` propagates.
+ *
+ * No pagination: both steps read the first list page (≤50 rows). Fine while an account maps to
+ * a handful of companies (the documented case is «usually one, occasionally several»); page here
+ * before that stops being true. Note the verification makes the >50-rows-of-noise case SAFE
+ * rather than wrong: an ignored filter that overflows the page now yields «no match», not the
+ * first stranger on it.
  *
  * Orphan bank details of a DELETED company still turn up at step 1, but step 2
  * (`crm.requisite.list` filtered by `ENTITY_TYPE_ID=4`) returns nothing for their

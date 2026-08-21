@@ -36,8 +36,8 @@ describe('extractEntityIds', () => {
 
 describe('filters', () => {
   it('bankDetailFilter targets one account field', () => {
-    // ⚠ Поле выбирается вместе с ENTITY_ID: по нему пост-проверка (`matchingEntityIds`) сверяет,
-    // что строка НАСТОЯЩЕЕ совпадение — фильтру B24 доверять нельзя (см. её тесты ниже).
+    // ⚠ The field rides in `select` next to ENTITY_ID: the post-check (`matchingEntityIds`)
+    // verifies each row against it — the B24 filter cannot be trusted (see its tests below).
     expect(bankDetailFilter('ACC1', 'RQ_ACC_NUM')).toEqual({ filter: { RQ_ACC_NUM: 'ACC1' }, select: ['ENTITY_ID', 'RQ_ACC_NUM'] })
   })
   it('requisiteFilter restricts to company requisites by id array', () => {
@@ -60,13 +60,14 @@ function fakeCall(
   return { call, calls }
 }
 
-describe('matchingEntityIds — фильтру B24 доверять нельзя (замерено вживую)', () => {
+describe('matchingEntityIds — the B24 filter cannot be trusted (measured live)', () => {
   const resp = (rows: Record<string, unknown>[]) => ({ result: rows })
 
-  it('строка с ДРУГИМ значением отбрасывается — неизвестное поле фильтра портал игнорирует молча', () => {
-    // ⚠ Замерено на живом портале: фильтр по несуществующему полю возвращает ВСЕ строки. Слепое
-    // извлечение превращало «поиск по счёту» в «первая компания портала» — платёж уезжал в чужую
-    // карточку с зелёным логом, а при включённом autoDistribute за ним шла бы и мутация.
+  it('drops a row with a DIFFERENT value — the portal ignores an unknown filter field silently', () => {
+    // ⚠ Measured on a live portal: filtering by a non-existent field returns EVERY row. Blind
+    // extraction turned «search by account» into «the portal's first company» — the payment landed
+    // on a stranger's card with a green log, and with autoDistribute armed the mutation would
+    // have followed it.
     const all = resp([
       { ENTITY_ID: '1', RQ_ACC_NUM: 'BY26PJCB0000' },
       { ENTITY_ID: '2', RQ_ACC_NUM: 'BY09ALFA0000' },
@@ -76,31 +77,56 @@ describe('matchingEntityIds — фильтру B24 доверять нельзя
     expect(matchingEntityIds(all, 'RQ_ACC_NUM', 'BY09ALFA0000')).toEqual(['2'])
   })
 
-  it('подстрочное совпадение по % отбрасывается', () => {
-    // ⚠ Замерено: `%30120A%` в ЗНАЧЕНИИ фильтра работает как подстрока. Счёт контрагента приходит
-    // из выписки (в ручном пути — из файла), normalizeAccount срезает только пробелы.
+  it('keeps EVERY matching row of a mixed set, in response order', () => {
+    const mixed = resp([
+      { ENTITY_ID: '1', RQ_ACC_NUM: 'BY11ALFA0001' },
+      { ENTITY_ID: '2', RQ_ACC_NUM: 'BY99OTHER000' },
+      { ENTITY_ID: '3', RQ_ACC_NUM: 'BY11ALFA0001' }
+    ])
+    expect(matchingEntityIds(mixed, 'RQ_ACC_NUM', 'BY11ALFA0001')).toEqual(['1', '3'])
+  })
+
+  it('drops a %-substring match', () => {
+    // ⚠ Measured: `%30120A%` in the filter VALUE acts as a wildcard. The counterparty account
+    // comes from the statement (on the manual path — from an uploaded file), and
+    // normalizeAccount strips whitespace only.
     const rows = resp([{ ENTITY_ID: '7', RQ_ACC_NUM: 'BY11ALFA30120A11111111111111' }])
     expect(matchingEntityIds(rows, 'RQ_ACC_NUM', '%30120A%')).toEqual([])
   })
 
-  it('различие ТОЛЬКО в регистре — совпадение: живой фильтр и так матчит регистронезависимо', () => {
+  it('a case-ONLY difference is a match: the live filter already matches case-insensitively', () => {
     const rows = resp([{ ENTITY_ID: '5', RQ_ACC_NUM: 'BY11ALFA0001' }])
     expect(matchingEntityIds(rows, 'RQ_ACC_NUM', 'by11alfa0001')).toEqual(['5'])
   })
 
-  it('пробелы в ХРАНИМОМ значении не мешают: сравниваются нормализованные формы', () => {
-    // Сегодня такая строка серверным фильтром не находится вовсе (#494 looks-same), но если
-    // найдётся — отбрасывать её было бы неверно: это тот же счёт.
+  it('whitespace in the STORED value does not hurt: normalized forms are compared', () => {
+    // Today such a row is never found by the server-side filter at all (#494 looks-same), but if
+    // it ever were, dropping it would be wrong: it is the same account.
     const rows = resp([{ ENTITY_ID: '9', RQ_ACC_NUM: 'BY11 ALFA 0001' }])
     expect(matchingEntityIds(rows, 'RQ_ACC_NUM', 'BY11ALFA0001')).toEqual(['9'])
   })
 
-  it('строка БЕЗ запрошенного поля — не совпадение (fail-closed)', () => {
-    // select поле запрашивает явно; ответ без него — вне контракта, и доверять ему нельзя.
+  it('a MISSING field is not a match (fail-closed)', () => {
+    // select asks for the field explicitly; a response without it is off-contract.
     expect(matchingEntityIds(resp([{ ENTITY_ID: '4' }]), 'RQ_ACC_NUM', 'X')).toEqual([])
   })
 
-  it('пустой искомый счёт не матчит ничего', () => {
+  it('a present NUMERIC value is coerced, not rejected — B24 returns numbers elsewhere too', () => {
+    // ⚠ The sibling readers of these fields already tolerate numeric values (`{ENTITY_ID: 27}` is
+    // a long-standing fixture in this very file); a hard string-only check would silently drop a
+    // REAL match on a portal that stores a purely numeric account in the fallback field.
+    const rows = resp([{ ENTITY_ID: '6', RQ_IIK: 30120000 }])
+    expect(matchingEntityIds(rows, 'RQ_IIK', '30120000')).toEqual(['6'])
+  })
+
+  it('verifies by the REQUESTED field, not a hardcoded one', () => {
+    // Guards the `field` parameter: a row matching on RQ_ACC_NUM must not satisfy an RQ_IIK query.
+    const rows = resp([{ ENTITY_ID: '8', RQ_ACC_NUM: 'BY13X', RQ_IIK: 'KZ99Y' }])
+    expect(matchingEntityIds(rows, 'RQ_IIK', 'KZ99Y')).toEqual(['8'])
+    expect(matchingEntityIds(rows, 'RQ_IIK', 'BY13X')).toEqual([])
+  })
+
+  it('an empty searched account matches nothing', () => {
     const rows = resp([{ ENTITY_ID: '1', RQ_ACC_NUM: '' }])
     expect(matchingEntityIds(rows, 'RQ_ACC_NUM', '  ')).toEqual([])
   })
@@ -144,11 +170,11 @@ describe('findCompanyByAccount', () => {
     expect(calls[1]!.params).toEqual(requisiteFilter(['11', '12']))
   })
 
-  it('проигнорированный фильтр НЕ отдаёт чужую компанию — сквозной кейс, а не юнит хелпера', async () => {
-    // ⚠ Сценарий замера: портал вернул ВСЕ реквизиты, как будто фильтра не было. Проверяется
-    // именно через findCompanyByAccount: юнит `matchingEntityIds` выше остаётся зелёным и при
-    // слепом извлечении в resolveCompanyIdsByAccount (замерено мутацией — фикстуры остальных
-    // кейсов несут совпадающие значения, и подмена вызова их не роняла).
+  it('an IGNORED filter must not resolve a stranger — end-to-end, not just the helper unit', async () => {
+    // ⚠ The measured scenario: the portal returned ALL bank details as if there were no filter.
+    // Asserted through findCompanyByAccount on purpose: the `matchingEntityIds` units above stay
+    // green even with blind extraction inside resolveCompanyIdsByAccount (proved by mutation —
+    // every other fixture carries matching values, so swapping the call broke none of them).
     const { call, calls } = fakeCall({
       'crm.requisite.bankdetail.list': () => ({
         result: [
@@ -159,8 +185,25 @@ describe('findCompanyByAccount', () => {
       'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '42' }, { ENTITY_ID: '43' }] })
     })
     expect(await findCompanyByAccount('BY99NONE0000', call)).toBeNull()
-    // …и до второго шага дело не дошло: сверять с реквизитами нечего.
+    // …and step 2 was never reached: there is nothing to reconcile requisites against.
     expect(calls.some(c => c.method === 'crm.requisite.list')).toBe(false)
+  })
+
+  it('a transport honouring `select` still resolves — the field must actually be requested', async () => {
+    // ⚠ Behavioural twin of the shape assert on bankDetailFilter. Every other fixture puts the
+    // account field on the row UNCONDITIONALLY, so dropping the field from `select` (which makes
+    // live B24 omit it → fail-closed on every row → the lookup never finds anything again) kept
+    // 30 of 31 tests green and hung on that one shape assert alone. This fake projects rows onto
+    // the REQUESTED `select`, the way the real portal does, so the invariant is behavioural.
+    const db = [{ ENTITY_ID: '11', RQ_ACC_NUM: 'ACC-1', RQ_IIK: '' }]
+    const { call } = fakeCall({
+      'crm.requisite.bankdetail.list': (params) => {
+        const select = params.select as string[]
+        return { result: db.map(row => Object.fromEntries(select.map(f => [f, (row as Record<string, unknown>)[f]]))) }
+      },
+      'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '42' }] })
+    })
+    expect(await findCompanyByAccount('ACC-1', call)).toBe('42')
   })
 
   it('returns null when no bank detail matches (no requisite query made)', async () => {
@@ -280,7 +323,7 @@ describe('findMyCompanyByAccount', () => {
 
   it('an error-SHAPED my-company body (no result) reads as «not mine» → null', async () => {
     const { call } = fakeCall({
-      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11' }] }),
+      'crm.requisite.bankdetail.list': () => ({ result: [{ ENTITY_ID: '11', RQ_ACC_NUM: 'OUR-ACC' }] }),
       'crm.requisite.list': () => ({ result: [{ ENTITY_ID: '89' }] }),
       'crm.item.list': () => ({ error: 'insufficient_scope', error_description: 'need crm' })
     })
