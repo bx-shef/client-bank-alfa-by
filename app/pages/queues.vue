@@ -13,7 +13,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
-import { HEALTH_TONE_COLOR, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
+import { HEALTH_TONE_COLOR, presentAlertChannel, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
 import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
@@ -159,6 +159,9 @@ function fmtDate(ms: number | null): string {
 // Пустой список тревог тут НЕ равен «всё хорошо»: смысл зависит от свежести проверки, поэтому вся
 // логика — в чистом `presentQueueHealth`, а страница только рисует.
 const health = shallowRef<QueueHealthView | null>(null)
+// Состояние самой сигнализации (#466 §3). Отдельно от вердикта: выключенный канал — не «проблема
+// в очередях», а «на тревоги отсюда не рассчитывай».
+const channel = shallowRef<ReturnType<typeof presentAlertChannel> | null>(null)
 const healthFailed = ref(false)
 let healthTimer: ReturnType<typeof setInterval> | undefined
 
@@ -178,6 +181,7 @@ async function loadHealth() {
     // ⚠ Обязательно снять флаг ошибки: запрос роутер разбирает уже ПОСЛЕ монтирования, поэтому
     // первый прогон успевает сходить в сеть и упасть, а карточка ошибки в шаблоне идёт первой и
     // перекрыла бы вердикт. Без этой строки превью-карточка не появлялась вовсе.
+    channel.value = presentAlertChannel({ configured: true, lastOk: true, lastAtMs: Date.now() })
     healthFailed.value = false
     return
   }
@@ -188,6 +192,7 @@ async function loadHealth() {
     // этом процессе не было; это НЕ «всё хорошо», и подпись обязана сказать именно так.
     keepAliveAt.value = payload?.keepAliveAt ?? null
     keepAliveSummary.value = payload?.keepAliveSummary ?? null
+    channel.value = presentAlertChannel(payload?.alertChannel)
     healthFailed.value = false
   } catch {
     // Недоступный эндпоинт — тоже информация: молча оставить прошлый (возможно зелёный) вердикт
@@ -270,6 +275,18 @@ onBeforeUnmount(() => {
           </ul>
         </template>
       </B24Alert>
+
+      <!-- ⚠ Отдельным элементом, а не внутри цепочки v-if вердикта: «тревог нет» и «тревоги
+           некому доставить» — разные утверждения, и второе обесценивает первое. Вклинившись в
+           цепочку, эта строка прятала бы сам вердикт. -->
+      <p
+        v-if="channel"
+        class="mb-4 text-sm"
+        :class="channel.tone === 'ok' ? 'text-base-500' : 'text-red-600 dark:text-red-400'"
+        data-testid="alert-channel"
+      >
+        {{ channel.note }}
+      </p>
 
       <QueueMonitor
         :fetcher="fetcher"

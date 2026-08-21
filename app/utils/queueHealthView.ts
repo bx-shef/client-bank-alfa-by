@@ -11,13 +11,45 @@
 
 /** One alert as the API returns it (mirror of the server `QueueAlert`). */
 export interface QueueHealthAlert {
-  kind: 'stalled' | 'failing' | 'unreadable'
+  // ⚠ Держать синхронно с `QueueAlertKind` (`server/utils/queueAlert.ts`). Список успел разойтись:
+  // здесь не было ни `bank-dead`, ни `keepalive-stale`, хотя API их уже отдавал — то есть тип
+  // экрана молча описывал не то, что приходит. Инвариант закреплён тестом.
+  kind: 'stalled' | 'failing' | 'unreadable' | 'bank-dead' | 'keepalive-stale' | 'no-workers'
   queue: string
   text: string
 }
 
+/** Состояние самого канала оповещений (#466 §3), как его видит экран. */
+export interface AlertChannelInfo {
+  configured: boolean
+  lastOk: boolean | null
+  lastAtMs: number | null
+}
+
+/**
+ * Одна строка про сигнализацию: включена ли и доходит ли.
+ *
+ * ⚠ Три РАЗНЫХ смысла, которые нельзя схлопывать: «выключена» (алерты живут только в логе и здесь),
+ * «включена, но последняя доставка не прошла» (отозванный бот, неверный chat_id) и «включена,
+ * доходит». Без этой строки первый и третий случай выглядят на экране одинаково — тишиной.
+ */
+export function presentAlertChannel(info: AlertChannelInfo | null | undefined): { tone: 'off' | 'broken' | 'ok', note: string } {
+  if (!info?.configured) {
+    return { tone: 'off', note: 'Оповещения выключены — тревоги видны только здесь и в логе' }
+  }
+  if (info.lastOk === false) {
+    return { tone: 'broken', note: 'Оповещения включены, но последняя доставка НЕ прошла — проверьте бота и chat_id' }
+  }
+  if (info.lastOk === null) {
+    return { tone: 'ok', note: 'Оповещения включены; отправлять пока было нечего' }
+  }
+  return { tone: 'ok', note: 'Оповещения включены, последняя доставка прошла' }
+}
+
 export interface QueueHealthPayload {
   alerts?: QueueHealthAlert[]
+  /** Состояние канала оповещений (#466 §3). */
+  alertChannel?: AlertChannelInfo | null
   /** When the last check completed, ms. `null`/absent — ещё ни разу. */
   alertsCheckedAt?: number | null
 }

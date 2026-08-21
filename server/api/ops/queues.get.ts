@@ -7,7 +7,7 @@
 
 import { SESSION_COOKIE, operatorAllowed, resolveAuthConfig } from '../../utils/session'
 import { readQueueCounts } from '../../queue/stats'
-import { queueAlertState } from '../../utils/queueAlertState'
+import { alertChannelState, queueAlertState } from '../../utils/queueAlertState'
 import { keepAlivePulse } from '../../utils/keepAliveState'
 
 export default defineEventHandler(async (event) => {
@@ -33,6 +33,9 @@ export default defineEventHandler(async (event) => {
     alerts: health.alerts,
     alertsCheckedAt: health.checkedAtMs,
     keepAliveAt: pulse?.atMs ?? null,
-    keepAliveSummary: pulse?.summary ?? null
+    keepAliveSummary: pulse?.summary ?? null,
+    // ⚠ Канал оповещений сам о себе (#466 §3): выключенная сигнализация молчит так же, как
+    // исправная и спокойная, и без этой строки различить их на экране нечем.
+    alertChannel: alertChannelState()
   }
 })

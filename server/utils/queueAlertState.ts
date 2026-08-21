@@ -13,6 +13,38 @@ import type { QueueAlert } from './queueAlert'
 let current: QueueAlert[] = []
 let checkedAtMs: number | null = null
 
+/**
+ * Состояние САМОГО канала оповещений (#466 §3).
+ *
+ * ⚠ Заведено потому, что канал молчит одинаково в двух противоположных случаях: «всё хорошо» и
+ * «сигнализация выключена». Неверный `chat_id`, отозванный бот или просто незаданные переменные
+ * дают `console.error` и неотправленный эпизод — наружу об этом не выходит ничего. То есть
+ * единственный канал, который стучится сам, не умел сказать, что он не стучится.
+ */
+let channel: AlertChannelState = { configured: false, lastOk: null, lastAtMs: null }
+
+export interface AlertChannelState {
+  /** Заданы ли обе переменные. `false` — канал выключен, алерты живут только в логе и на `/queues`. */
+  configured: boolean
+  /** Исход последней ПОПЫТКИ доставки: `null` — попыток ещё не было. */
+  lastOk: boolean | null
+  lastAtMs: number | null
+}
+
+/** Запомнить, включён ли канал (зовётся один раз на старте крон-инстанса). */
+export function recordAlertChannelConfigured(configured: boolean): void {
+  channel = { ...channel, configured }
+}
+
+/** Запомнить исход попытки доставки. */
+export function recordAlertDelivery(ok: boolean, atMs: number): void {
+  channel = { ...channel, lastOk: ok, lastAtMs: atMs }
+}
+
+export function alertChannelState(): AlertChannelState {
+  return { ...channel }
+}
+
 /** Store the verdict of one check. */
 export function recordQueueHealth(alerts: QueueAlert[], atMs: number): void {
   current = [...alerts]
@@ -34,4 +66,5 @@ export function queueAlertState(): { alerts: QueueAlert[], checkedAtMs: number |
 export function resetQueueAlertState(): void {
   current = []
   checkedAtMs = null
+  channel = { configured: false, lastOk: null, lastAtMs: null }
 }
