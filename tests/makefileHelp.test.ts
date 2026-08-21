@@ -38,6 +38,14 @@ function documented(): string[] {
   return out
 }
 
+/** Цели, которые оператор набирает на СЕРВЕРЕ. Каждая обязана быть в `make help`. */
+const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
+  'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help',
+  'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe']
+
+/** Цели, которые запускают ИЗ РЕПОЗИТОРИЯ, а не с сервера — справка сервера их не касается. */
+const SERVICE = ['dev', 'build-local']
+
 describe('операторские цели Makefile видны в `make help`', () => {
   it('файл читается и цели находятся', () => {
     expect(targets().length).toBeGreaterThan(8)
@@ -45,16 +53,21 @@ describe('операторские цели Makefile видны в `make help`',
   })
 
   it('каждая операторская цель ОПИСАНА и попадёт в справку', () => {
-    // ⚠ Список закрытый: цель, которую оператор запускает на сервере, обязана быть в справке.
-    // Служебные (`dev`, `build-local`) сюда не входят — их запускают из репозитория.
-    const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
-      'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help',
-      'gw-stop', 'gw-start', 'compose-update']
     const shown = documented()
     for (const t of OPERATOR) {
       expect(targets(), `цели ${t} нет в Makefile`).toContain(t)
       expect(shown, `цель ${t} не попадёт в make help — описание оторвано от цели`).toContain(t)
     }
+  })
+
+  it('список операторских целей ЗАКРЫТ — новая обязана получить решение', () => {
+    // ⚠ Без этого «закрытый список» закрывал только сам себя: он проверял, что ПЕРЕЧИСЛЕННЫЕ цели
+    // описаны, и молчал о цели, которую в него не внесли. То есть ровно тот случай, ради которого
+    // гард написан — новая цель, о которой оператор не узнает, — проходил зелёным. Замерено:
+    // добавление цели в Makefile без правки списка не роняло ни одного теста.
+    const unclassified = targets().filter(t => !OPERATOR.includes(t) && !SERVICE.includes(t))
+    expect(unclassified, 'цель не отнесена ни к операторским, ни к служебным — решите, кто её запускает')
+      .toEqual([])
   })
 
   it('`self-update` существует — без него остальные цели на сервер не доедут', () => {
@@ -156,10 +169,20 @@ describe('операторские цели Makefile видны в `make help`',
 
   it('цели, зовущие скрипты, тянут их из того же REF', () => {
     // Иначе `self-update` обновит Makefile из одной ветки, а скрипты приедут из другой.
-    for (const t of ['prior-probe', 'prior-switch', 'poll-check']) {
-      const i = MAKEFILE.indexOf(`\n${t}:`)
-      const body = MAKEFILE.slice(i, i + 400)
-      expect(body, `${t} не использует $(RAW)`).toMatch(/\$\(RAW\)/)
+    // ⚠ Перебираем ВСЕ скачивающие цели, а не три названные руками: список из трёх имён устаревал
+    // молча — новая цель качала бы скрипт откуда угодно, и тест этого не видел.
+    // ⚠ Проверяем `$(REF)`, а не `$(RAW)`: `self-update` тянет сам Makefile из КОРНЯ репозитория,
+    // а `$(RAW)` указывает в `scripts/`, так что требовать его от него было бы неверно. Общий
+    // инвариант — одна и та же ветка, и `$(RAW)` её в себе и содержит.
+    const downloaders = [...MAKEFILE.matchAll(/^([a-z][a-z-]*):\n(?:\t.*\n)+/gm)]
+      .filter(m => m[0].includes('curl -fsSL'))
+    expect(downloaders.length).toBeGreaterThan(4)
+    for (const m of downloaders) {
+      // ⚠ Смотрим на САМУ строку curl, а не на тело цели: в теле есть ещё `@echo "… из $(REF)"`,
+      // и проверка по всему телу зеленела на этом echo при захардкоженной чужой ветке в curl.
+      // Замерено мутацией — подмена URL в curl тест НЕ роняла.
+      const curlLine = m[0].split('\n').find(l => l.includes('curl -fsSL'))!
+      expect(curlLine, `${m[1]!} качает не из $(REF)`).toMatch(/\$\(RAW\)|\$\(REF\)/)
     }
   })
 })

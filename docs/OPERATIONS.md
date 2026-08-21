@@ -63,6 +63,7 @@ cd /home/bitrix/bank-import && make gw-stop
 | живой лог / состояние контейнеров | `make logs` / `make ps` |
 | проба хоста Приорбанка | `make prior-probe` |
 | переключить Приор | `make prior-switch TO=direct` / `TO=gateway` |
+| правда ли `pageRowCount=0` у Альфы значит «все» (#561) | `make alfa-page-probe` (или `DAY=2026-08-18`) |
 
 ⚠ **Параметром `make` ветку задать НЕЛЬЗЯ, и это сделано намеренно.** `REF` зафиксирован
 (`override REF := main`), потому что значение параметра раскрывается ДО шелла: `make -n doctor

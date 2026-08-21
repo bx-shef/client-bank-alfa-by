@@ -1,6 +1,6 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check self-update help \
-        gw-stop gw-start compose-update
+        gw-stop gw-start compose-update alfa-page-probe
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -198,7 +198,7 @@ compose-update:
 # что вообще можно запустить.
 help:
 	@awk '/^## /{d=substr($$0,4)} \
-	      /^[a-z][a-z-]*:/{if(d!=""){printf "  %-14s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
+	      /^[a-z][a-z-]*:/{if(d!=""){printf "  %-16s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
 	      $(MAKEFILE_LIST)
 
 ## Что происходит с опросом банков: успехи, падения, продление токенов (#522)
@@ -264,3 +264,16 @@ queue-stats:
 	  && { tok="$(call env-value,B24_APPLICATION_TOKEN)"; \
 	       echo "[make] B24_APPLICATION_TOKEN из ./.env: длина $${#tok}"; \
 	       B24_APPLICATION_TOKEN="$$tok" bash "$$t" docker-compose.prod.yml; }
+
+## Правда ли `pageRowCount=0` у Альфы значит «все» — разовая проба (#561)
+#
+#   make alfa-page-probe                 # за вчера
+#   make alfa-page-probe DAY=2026-08-18  # за день, где дел в CRM было ровно 100
+#
+# ⚠ Read-only и refresh-токен НЕ трогает: банк ротирует его при обновлении, и ручной рефреш
+# рассинхронизировал бы базу с банком (#505/#509). Ходит уже сохранённым access-токеном.
+alfa-page-probe:
+	@echo "[make] скачиваю prod-alfa-page-probe.sh из $(REF)"
+	@t=$$(mktemp /tmp/alfa-page-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-alfa-page-probe.sh" \
+	  && bash "$$t" "$(DAY)"
