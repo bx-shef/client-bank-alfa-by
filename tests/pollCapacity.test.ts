@@ -5,6 +5,7 @@ import {
   formatPollCycle,
   planRequests,
   providerJobRate,
+  providerRequestBudget,
   REQUESTS_PER_ACCOUNT,
   sweepRequests
 } from '../server/queue/pollCapacity'
@@ -15,8 +16,11 @@ import { fetchJobId } from '../server/queue/topology'
 // every portal), so the sweep time — not CRON_INTERVAL_MIN — is the real statement freshness.
 
 describe('sweepRequests', () => {
-  it('costs 1 request per Alfa account and ~10 per Prior account (async create+poll)', () => {
-    expect(sweepRequests('alfa-by', 100)).toBe(100)
+  it('costs 2 requests per Alfa account and ~10 per Prior account (async create+poll)', () => {
+    // ⚠ Alfa became TWO in #561: the statement plus the page probe that proves there is no second
+    // one. Not cosmetic — the limiter converts a REQUEST budget into JOBS through this number, so
+    // understating it overspends the bank's cap while every dashboard still reads «within cap».
+    expect(sweepRequests('alfa-by', 100)).toBe(200)
     expect(sweepRequests('prior-by', 100)).toBe(1000)
     expect(REQUESTS_PER_ACCOUNT['prior-by']).toBeGreaterThan(REQUESTS_PER_ACCOUNT['alfa-by']!)
   })
@@ -27,25 +31,30 @@ describe('sweepRequests', () => {
 })
 
 describe('estimatePollCycle', () => {
-  it('a marketplace-scale Alfa fleet needs ~105 min per sweep at 100 req/min', () => {
-    // 10_500 accounts × 1 request ÷ 100 per 60s = 6_300_000 ms = 105 min.
+  it('a marketplace-scale Alfa fleet needs ~210 min per sweep at 100 req/min', () => {
+    // 10_500 accounts × 2 requests ÷ 100 per 60s = 12_600_000 ms = 210 min (#561 doubled the cost).
     const cycle = estimatePollCycle(sweepRequests('alfa-by', 10_500), 100, 60_000, 5 * 60_000)
-    expect(cycle.requests).toBe(10_500)
-    expect(cycle.cycleMs).toBe(105 * 60_000)
+    expect(cycle.requests).toBe(21_000)
+    expect(cycle.cycleMs).toBe(210 * 60_000)
     // …which is FAR longer than a 5-minute tick — the cap, not the timer, sets the cadence.
     expect(cycle.exceedsInterval).toBe(true)
   })
 
-  it('Prior costs ~10× the same account count (per-REQUEST accounting, not per-job)', () => {
+  it('Prior costs 5× the same account count (per-REQUEST accounting, not per-job)', () => {
+    // ⚠ Was 10×, now 5×: Prior did not get cheaper, Alfa got twice as expensive (#561). Asserted as
+    // a RATIO over the constants themselves — a hardcoded multiplier would need editing on every
+    // refinement of the model, and one day someone edits it «to make it green» without reading it.
+    const ratio = (REQUESTS_PER_ACCOUNT['prior-by'] ?? 1) / (REQUESTS_PER_ACCOUNT['alfa-by'] ?? 1)
     const alfa = estimatePollCycle(sweepRequests('alfa-by', 20_600), 100, 60_000, 300_000)
     const prior = estimatePollCycle(sweepRequests('prior-by', 20_600), 100, 60_000, 300_000)
-    expect(prior.requests).toBe(alfa.requests * 10)
-    expect(prior.cycleMs).toBe(alfa.cycleMs * 10)
+    expect(ratio).toBe(5)
+    expect(prior.requests).toBe(alfa.requests * ratio)
+    expect(prior.cycleMs).toBe(alfa.cycleMs * ratio)
   })
 
   it('a small fleet finishes inside one tick (no warning)', () => {
     const cycle = estimatePollCycle(sweepRequests('alfa-by', 50), 100, 60_000, 5 * 60_000)
-    expect(cycle.cycleMs).toBe(30_000)
+    expect(cycle.cycleMs).toBe(60_000) // 50 × 2 requests ÷ 100/min (#561)
     expect(cycle.exceedsInterval).toBe(false)
   })
 
@@ -81,8 +90,8 @@ describe('planRequests', () => {
       { providerId: 'alfa-by', accounts: new Array(10_500).fill('a') },
       { providerId: 'prior-by', accounts: new Array(20_600).fill('p') }
     ]
-    // 10_500×1 + 20_600×10 = 216_500 bank requests for ONE sweep of the marketplace fleet.
-    expect(planRequests(plan)).toBe(216_500)
+    // 10_500×2 + 20_600×10 = 227_000 bank requests for ONE sweep of the marketplace fleet (#561).
+    expect(planRequests(plan)).toBe(227_000)
   })
 })
 
@@ -99,7 +108,7 @@ describe('estimateProviderCycles (queues drain in PARALLEL, not serially)', () =
   it('charges each provider against its own budget (not one serial total)', () => {
     const [alfa, prior] = estimateProviderCycles(plan, rateFor, 5 * 60_000)
     expect(alfa!.provider).toBe('alfa-by')
-    expect(alfa!.cycle.cycleMs).toBe(105 * 60_000) // 10_500 req ÷ 100/min
+    expect(alfa!.cycle.cycleMs).toBe(210 * 60_000) // 21_000 req ÷ 100/min (#561: 2 requests per account)
     expect(prior!.provider).toBe('prior-by')
     expect(prior!.cycle.cycleMs).toBe(10_300 * 60_000) // 206_000 req ÷ 20/min — its OWN, slower budget
   })
@@ -108,7 +117,7 @@ describe('estimateProviderCycles (queues drain in PARALLEL, not serially)', () =
     const [alfa, prior] = estimateProviderCycles(plan, rateFor, 5 * 60_000)
     // A single summed number would report ~2165 min for BOTH; per-provider keeps Alfa honest.
     expect(alfa!.cycle.cycleMs).toBeLessThan(prior!.cycle.cycleMs)
-    expect(alfa!.cycle.requests).toBe(10_500)
+    expect(alfa!.cycle.requests).toBe(21_000)
     expect(prior!.cycle.requests).toBe(206_000)
   })
 
@@ -151,5 +160,31 @@ describe('cron enqueue is IDEMPOTENT (the backpressure that keeps Redis bounded)
     const today = planFetches(plan, '2026-07-27', '2026-07-28').map(fetchJobId)
     const tomorrow = planFetches(plan, '2026-07-28', '2026-07-29').map(fetchJobId)
     expect(tomorrow).not.toEqual(today)
+  })
+})
+
+describe('providerRequestBudget (the inverse of providerJobRate)', () => {
+  it('converts a JOB-rate limiter back into the REQUEST budget it represents', () => {
+    expect(providerRequestBudget('alfa-by', { max: 40, duration: 60_000 }))
+      .toEqual({ requests: 80, durationMs: 60_000 })
+    expect(providerRequestBudget('prior-by', { max: 20, duration: 60_000 }))
+      .toEqual({ requests: 200, durationMs: 60_000 })
+  })
+
+  it('round-trips with providerJobRate for every pollable provider', () => {
+    // ⚠ The point of having both functions: whatever the limiter is configured with, the sweep
+    // estimate must be able to recover the request budget. Skipping the multiply is invisible —
+    // the only symptom is a sweep estimate off by exactly `requestsPerAccount`, which then trips
+    // `exceedsInterval` early and sends the operator to raise CRON_LOOKBACK_DAYS for nothing.
+    for (const provider of ['alfa-by', 'prior-by']) {
+      const cost = REQUESTS_PER_ACCOUNT[provider]!
+      const jobs = providerJobRate(100, cost)
+      expect(providerRequestBudget(provider, { max: jobs, duration: 60_000 }).requests).toBe(jobs * cost)
+    }
+  })
+
+  it('an unknown provider costs one request per job (no silent multiplication)', () => {
+    expect(providerRequestBudget('manual', { max: 7, duration: 1_000 }))
+      .toEqual({ requests: 7, durationMs: 1_000 })
   })
 })

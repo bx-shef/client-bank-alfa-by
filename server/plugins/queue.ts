@@ -19,7 +19,7 @@ import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
-import { estimateProviderCycles, formatPollCycle, REQUESTS_PER_ACCOUNT } from '../queue/pollCapacity'
+import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
 import { deleteBankToken, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
@@ -104,7 +104,7 @@ export default defineNitroPlugin((nitroApp) => {
     workers.push(startFeedbackWorker(liveFeedbackPostDeps()))
     // Trigger-retry worker (#79) — re-fires missed «деньги пришли» signals with backoff (N-replica-safe).
     workers.push(startTriggerWorker(liveTriggerFireDeps()))
-    log.info(`throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=${role.concurrency}, fetch-rate=${role.fetchRate.max}/${role.fetchRate.duration}ms; prior-fetch concurrency=${role.priorConcurrency}, rate=${role.priorFetchRate.max} jobs/${role.priorFetchRate.duration}ms)`)
+    log.info(`throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=${role.concurrency}, fetch-rate=${role.fetchRate.max} jobs/${role.fetchRate.duration}ms; prior-fetch concurrency=${role.priorConcurrency}, rate=${role.priorFetchRate.max} jobs/${role.priorFetchRate.duration}ms)`)
 
     // Пульс воркера (#466 §1). Без него полностью мёртвый воркер на ТИХОМ портале выглядит
     // здоровым: все правила здоровья выведены из наличия застрявшей работы, а её нет.
@@ -221,11 +221,16 @@ export default defineNitroPlugin((nitroApp) => {
             // Capacity, not just count: at scale the RATE CAP sets the real cadence, not this timer.
             // PER PROVIDER — each drains from its own queue/limiter, in parallel, so one serial
             // total would charge Prior's ~10× requests against Alfa's budget and misreport both.
+            // ⚠ BOTH limiters are in JOBS now (#561 put Alfa's on the same footing as Prior's), so
+            // both branches must convert back to REQUESTS. Reading `fetchRate.max` raw here made the
+            // Alfa sweep estimate exactly `REQUESTS_PER_ACCOUNT` times too long — which does not
+            // throttle anything (that path never sees this number) but prints a doubled sweep and
+            // trips `exceedsInterval` early, telling the operator to raise CRON_LOOKBACK_DAYS for a
+            // fleet nowhere near the cap. One helper for both so a third provider cannot forget.
             const cycles = estimateProviderCycles(byPortal, provider => (
               provider === 'prior-by'
-                // Prior's limiter is in JOBS; convert back to a REQUEST budget for the estimate.
-                ? { requests: role.priorFetchRate.max * (REQUESTS_PER_ACCOUNT['prior-by'] ?? 1), durationMs: role.priorFetchRate.duration }
-                : { requests: role.fetchRate.max, durationMs: role.fetchRate.duration }
+                ? providerRequestBudget(provider, role.priorFetchRate)
+                : providerRequestBudget(provider, role.fetchRate)
             ), pollMs)
             log.info(`real poll: planned ${jobs.length} fetch jobs (${dateFrom}..${dateTo}, tick ${pollMs / 60_000} min) — ${cycles.map(c => `${c.provider}: ${formatPollCycle(c.accounts, c.cycle)}`).join(' | ')}`)
             for (const c of cycles) {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { REQUESTS_PER_ACCOUNT, providerJobRate } from '../server/queue/pollCapacity'
 import {
   DEFAULT_FETCH_RATE_DURATION_MS, DEFAULT_PRIOR_CONCURRENCY, DEFAULT_FETCH_RATE_MAX, MAX_CONCURRENCY,
   MAX_FETCH_RATE_MAX, MIN_FETCH_RATE_DURATION_MS, envFlag, queueRuntimeConfig,
@@ -21,17 +22,33 @@ describe('envFlag', () => {
   })
 })
 
+// ⚠ С #561 задача Альфы стоит ДВА банковских запроса (выписка + проход по странице), поэтому
+// лимитер, который считает ЗАДАЧИ, получает бюджет ЗАПРОСОВ, делённый на стоимость — как у Приора.
+// Бюджет банка при этом НЕ меняется: вдвое меньше задач по вдвое большей цене это те же запросы.
+// Ожидания ниже считаются тем же хелпером, что и продовый код: захардкоженное число разъехалось бы
+// с моделью стоимости молча, а именно её незаметный сдвиг и порождает перерасход лимита банка.
+const alfaJobs = (requests: number) => providerJobRate(requests, REQUESTS_PER_ACCOUNT['alfa-by'] ?? 1)
+
 describe('queueRuntimeConfig', () => {
-  it('defaults to a single-container role (workers + cron, concurrency 1, 80/60s fetch rate)', () => {
+  it('defaults to a single-container role (workers + cron, concurrency 1, 40 jobs/60s fetch rate)', () => {
     expect(queueRuntimeConfig({})).toEqual({
       workers: true,
       cron: true,
       concurrency: 1,
-      fetchRate: { max: DEFAULT_FETCH_RATE_MAX, duration: DEFAULT_FETCH_RATE_DURATION_MS },
+      fetchRate: { max: alfaJobs(DEFAULT_FETCH_RATE_MAX), duration: DEFAULT_FETCH_RATE_DURATION_MS },
       // Prior's limiter is in JOBS: its 100-request budget ÷ ~10 requests per job = 10 jobs/min.
       priorFetchRate: { max: 10, duration: DEFAULT_FETCH_RATE_DURATION_MS },
       priorConcurrency: DEFAULT_PRIOR_CONCURRENCY
     })
+  })
+
+  it('sizes the Alfa limiter in JOBS too — 80 requests ÷ 2 per job = 40', () => {
+    // ⚠ Один якорь РУКОПИСНЫМ числом, а не только через `alfaJobs`. Формула проверяет проводку, но
+    // читателю нужно значение, которое реально уедет в лимитер, — и сосед по этому файлу
+    // (`priorFetchRate`, 200÷10=20) держит его именно так. Разъедется модель — здесь станет красным.
+    expect(queueRuntimeConfig({}).fetchRate.max).toBe(40)
+    expect(DEFAULT_FETCH_RATE_MAX).toBe(80)
+    expect(REQUESTS_PER_ACCOUNT['alfa-by']).toBe(2)
   })
 
   it('sizes the Prior limiter in JOBS from its REQUEST budget (per-request accounting)', () => {
@@ -52,27 +69,27 @@ describe('queueRuntimeConfig', () => {
 
   it('parses QUEUE_FETCH_RATE_* and falls back to defaults on garbage/non-positive (never disables)', () => {
     expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: '40', QUEUE_FETCH_RATE_DURATION_MS: '30000' }).fetchRate)
-      .toEqual({ max: 40, duration: 30_000 })
+      .toEqual({ max: alfaJobs(40), duration: 30_000 })
     // A 0/negative/garbage value must NOT disable the cap — fall back to the default.
     for (const v of ['0', '-5', 'abc', '']) {
-      expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: v }).fetchRate.max).toBe(DEFAULT_FETCH_RATE_MAX)
+      expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: v }).fetchRate.max).toBe(alfaJobs(DEFAULT_FETCH_RATE_MAX))
       expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_DURATION_MS: v }).fetchRate.duration).toBe(DEFAULT_FETCH_RATE_DURATION_MS)
     }
   })
 
   it('clamps the UPPER edges so a fat-fingered value cannot effectively disable the cap', () => {
     // Huge max → clamped to MAX_FETCH_RATE_MAX (else 999999/min ≈ no cap).
-    expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: '999999' }).fetchRate.max).toBe(MAX_FETCH_RATE_MAX)
+    expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: '999999' }).fetchRate.max).toBe(alfaJobs(MAX_FETCH_RATE_MAX))
     // Tiny duration → floored to MIN_FETCH_RATE_DURATION_MS (else a 1ms window ≈ no cap).
     expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_DURATION_MS: '1' }).fetchRate.duration).toBe(MIN_FETCH_RATE_DURATION_MS)
     // A sane override within bounds is preserved.
     expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: '250', QUEUE_FETCH_RATE_DURATION_MS: '30000' }).fetchRate)
-      .toEqual({ max: 250, duration: 30_000 })
+      .toEqual({ max: alfaJobs(250), duration: 30_000 })
   })
 
   it('parseInt leniency: trailing garbage keeps the leading number (still a positive cap)', () => {
     // Consistent with clampConcurrency's idiom; safe because it yields a positive cap, never 0/disabled.
-    expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: '100abc' }).fetchRate.max).toBe(100)
+    expect(queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: '100abc' }).fetchRate.max).toBe(alfaJobs(100))
   })
 
   it('HTTP/primary role: QUEUE_WORKERS=0 disables workers, cron stays', () => {
@@ -138,12 +155,15 @@ describe('лимит обращений к Альфе держит запас (�
     // Клампы существуют ровно для этого — потолок не выключается кривым значением. Проверяем через
     // публичный вход, а не внутреннюю функцию: оператор задаёт именно переменную окружения.
     const at = (v: string | undefined) => queueRuntimeConfig({ QUEUE_FETCH_RATE_MAX: v } as NodeJS.ProcessEnv).fetchRate.max
-    expect(at('999999')).toBeLessThanOrEqual(MAX_FETCH_RATE_MAX)
-    expect(at('0')).toBe(DEFAULT_FETCH_RATE_MAX)
-    expect(at('мусор')).toBe(DEFAULT_FETCH_RATE_MAX)
-    expect(at(undefined)).toBe(DEFAULT_FETCH_RATE_MAX)
+    // ⚠ Потолок и дефолт заданы в ЗАПРОСАХ, а `fetchRate.max` — в ЗАДАЧАХ (#561), поэтому сравнение
+    // идёт через ту же модель стоимости, что у продового кода. Сырое число здесь означало бы, что
+    // тест закрепляет одну модель, а лимитер живёт по другой.
+    expect(at('999999')).toBeLessThanOrEqual(alfaJobs(MAX_FETCH_RATE_MAX))
+    expect(at('0')).toBe(alfaJobs(DEFAULT_FETCH_RATE_MAX))
+    expect(at('мусор')).toBe(alfaJobs(DEFAULT_FETCH_RATE_MAX))
+    expect(at(undefined)).toBe(alfaJobs(DEFAULT_FETCH_RATE_MAX))
     // ⚠ Поднять ВЫШЕ документированного потолка по-прежнему можно осознанно (у банка бывает
     // другой тариф) — запрещать это здесь значило бы решать за владельца договора.
-    expect(at('100')).toBe(100)
+    expect(at('100')).toBe(alfaJobs(100))
   })
 })

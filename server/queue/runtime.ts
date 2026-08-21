@@ -17,13 +17,20 @@ export interface QueueRuntime {
   cron: boolean
   /** Per-worker concurrency for the throughput queues (fetch/parse/crm-sync). */
   concurrency: number
-  /** GLOBAL rate limit for the bank-fetch queue (A8). BullMQ's worker `limiter` is
-   *  shared across ALL replicas on the same queue via a Redis key (global, not per-instance
-   *  — verified against the installed bullmq 5.x source), so this caps live Alfa calls across
-   *  the whole fleet at `max` per `duration` ms. Default 80/60s — 80 % of Alfa's documented per-client cap (see DEFAULT_FETCH_RATE_MAX) (our
-   *  app has ONE Alfa client_id, so a single global cap is correct). NB a fetch JOB is ~one
-   *  Alfa request (token refresh is near-expiry-only + per-account locked); if Alfa counts
-   *  its `/token` endpoint in the SAME bucket, lower this for headroom during refresh bursts. */
+  /** GLOBAL rate limit for the bank-fetch queue (A8), expressed in JOBS (what BullMQ counts).
+   *  BullMQ's worker `limiter` is shared across ALL replicas on the same queue via a Redis key
+   *  (global, not per-instance — verified against the installed bullmq 5.x source), so this caps
+   *  live Alfa calls across the whole fleet.
+   *
+   *  ⚠ `max` is JOBS, not requests, and the two stopped being the same number in #561: an Alfa job
+   *  walks statement pages, so the job rate is derived from the REQUEST budget by `providerJobRate`
+   *  exactly like `priorFetchRate` below. The env var is still the request budget — default 80/60s,
+   *  80 % of Alfa's documented per-client cap (see DEFAULT_FETCH_RATE_MAX; our app has ONE Alfa
+   *  client_id, so a single global cap is correct) — which lands as 40 jobs/60s. Anything that
+   *  reports a REQUEST figure from this must multiply back (`providerRequestBudget`).
+   *
+   *  Token refresh is near-expiry-only + per-account locked, so it is not in the per-job cost; if
+   *  Alfa counts its `/token` endpoint in the SAME bucket, lower this for headroom during bursts. */
   fetchRate: { max: number, duration: number }
   /** GLOBAL rate limit for the PRIOR bank-fetch queue, expressed in JOBS (what BullMQ counts).
    *  Prior's async create+poll spends ~10 bank REQUESTS per job, so the job rate is derived from
@@ -93,7 +100,14 @@ export function queueRuntimeConfig(env: NodeJS.ProcessEnv = process.env): QueueR
     cron: envFlag(env.QUEUE_CRON, true),
     concurrency: clampConcurrency(env.QUEUE_CONCURRENCY),
     fetchRate: {
-      max: clampFetchMax(env.QUEUE_FETCH_RATE_MAX),
+      // env holds Alfa's REQUEST budget; the limiter needs JOBS → divide by the per-job cost.
+      // ⚠ Was a raw pass-through while an Alfa job was one GET. Since #561 it also walks a page,
+      // so passing the request cap straight through would spend ~2× the bank's budget with every
+      // dashboard still reading «within cap» — the same trap the Prior branch below documents.
+      max: providerJobRate(
+        clampFetchMax(env.QUEUE_FETCH_RATE_MAX),
+        REQUESTS_PER_ACCOUNT['alfa-by'] ?? 1
+      ),
       duration: clampFetchDuration(env.QUEUE_FETCH_RATE_DURATION_MS)
     },
     priorFetchRate: {
