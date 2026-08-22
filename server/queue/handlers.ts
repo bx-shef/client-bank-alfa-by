@@ -34,6 +34,9 @@ import type { TriggerOutcome } from '../utils/applyTriggerDep'
  *  `payment-number` even triggers a company-wide scan). A legit purpose references a
  *  handful of ids at most, so 10 is generous; excess is dropped from resolution (the
  *  `recognized` metric still counts the op). Deeper rate-limiting is tracked in #191. */
+/** Потолок задач-дозаписей на один прогон — см. `deferredQueued` в `handleCrmSyncJob`. */
+export const MAX_DEFERRED_WRITES_PER_RUN = 25
+
 export const MAX_RESOLVED_INTENTS_PER_OP = 10
 
 /** Потолок сообщений «цель не найдена» на один прогон (#421) — см. комментарий у счётчика. */
@@ -166,6 +169,11 @@ export interface HandlerDeps {
    *  self-heals with backoff. BEST-EFFORT (never throws — a trigger only signals). Optional: absent /
    *  no-op (no Redis) ⇒ the trigger degrades to the prior SINGLE-SHOT behaviour. */
   enqueueTriggerRetry?: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<void>
+  /** Долговременный ретрай записи элемента реестра (#578). Отсутствует ⇒ поведение прежнее: отказ
+   *  посчитан и потерян. Обязан НЕ бросать — постановка задачи не может отменить обработку пачки. */
+  enqueueRegistryRetry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<void>
+  /** Долговременный ретрай привязок дела (#585). Те же правила. */
+  enqueueBindRetry?: (activityId: string, refs: CrmEntityRef[], memberId: string) => Promise<void>
   /** Write the decided allocation into the SP-LEDGER (#109 §9.1/§9.3): ensure the payment carrier
    *  element for the operation, add the distribution row for `target`, recompute «осталось». Called
    *  ONLY when `autoDistribute` is on AND both SP entityTypeIds are provisioned (the chooseCarrier
@@ -293,6 +301,21 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
   return { parsed: items.length, chained }
 }
 
+/**
+ * Поставить дозапись в CRM, не позволив САМОЙ постановке уронить обработку пачки (#578/#585).
+ *
+ * ⚠ Обе починки проходят через одну обёртку намеренно: правило у них одно («проверить наличие
+ * зависимости, проглотить отказ, никогда не бросать»), а записанное дважды оно однажды поменяется
+ * в одном месте. Первая редакция держала правило реестра развёрнутым по месту, и именно та копия
+ * была бы забыта: она спрятана внутри `catch` на три уровня вложенности.
+ */
+async function queueDeferredWrite(work: (() => Promise<void>) | undefined | false): Promise<void> {
+  if (!work) return
+  try {
+    await work()
+  } catch { /* очередь недоступна — остаёмся при прежнем поведении: отказ посчитан */ }
+}
+
 /** Analyse a normalized batch and act in Bitrix24: dedupe within the batch, then
  *  per operation apply read-before-write — skip ops already written (their B24 marker
  *  survives job redelivery, #259), else find the company, write the configurable activity
@@ -324,6 +347,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  An unmatched op writes nothing (no marker), so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
+
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
@@ -376,6 +400,22 @@ export async function handleCrmSyncJob(
   /** Operations whose registry element could not be written (#575) — see the call site. */
   let registryFailed = 0
   let bindingsFailed = 0
+  /**
+   * Сколько дозаписей ставим за прогон (#578/#585, находка ревью).
+   *
+   * ⚠ Отказ реестра почти всегда СИСТЕМНЫЙ, а не про конкретный платёж: смарт-процесс удалён, право
+   * отозвано, портал на обслуживании. Тогда падает КАЖДАЯ операция, и без потолка выписка на 500
+   * строк заводит 500 задач по 8 попыток — до 4000 обречённых вызовов в тот же пер-портальный
+   * лимитер 2 req/s, где живут и опрос, и продление токена, и чат. Клиент платит бюджетом за
+   * попытки, которые не могут удаться.
+   *
+   * ⚠ Различать «транзиентный» и «постоянный» ПО ТЕКСТУ ошибки мы не будем: через SDK доезжает
+   * только локализованное сообщение портала, без кода (тот же довод, что в `activityBindingsWrite`).
+   * Потолок решает ту же задачу честнее: единичный сбой лечится полностью, а системный не
+   * превращается в усилитель нагрузки — и виден оператору по счётчику, который считает ВСЕ отказы,
+   * а не только поставленные задачи.
+   */
+  let deferredQueued = 0
   /**
    * «Моя компания» по НАШЕМУ счёту — запоминается на прогон (#579).
    *
@@ -489,6 +529,14 @@ export async function handleCrmSyncJob(
         registryElementId = await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
       } catch {
         registryFailed++
+        // ⚠ Дозапись отдельной задачей (#578). Без неё проглоченный отказ терял элемент НАВСЕГДА:
+        // повтор джобы упирается в маркер дела и до реестра не доходит. Постановка — best-effort:
+        // без Redis это no-op, а её собственный отказ не имеет права отменить обработку пачки.
+        if (deferredQueued < MAX_DEFERRED_WRITES_PER_RUN) {
+          deferredQueued++
+          await queueDeferredWrite(deps.enqueueRegistryRetry
+            && (() => deps.enqueueRegistryRetry!(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)))
+        }
       }
     }
     // Error-chat notice for an ambiguous/manual allocation, captured here but EMITTED only after
@@ -721,41 +769,69 @@ export async function handleCrmSyncJob(
       // чистый повтор). Здесь мы зовём его ПОСЛЕ маркера, поэтому транзиентный отказ портала
       // уронил бы всю джобу с уже записанным делом: остаток пачки не обработан, а привязки этой
       // операции потеряны навсегда и даже не посчитаны — повтор упрётся в маркер и пройдёт мимо.
-      try {
-        const myCompanyId = clientUnmatched ? writeCompanyId : await resolveMyCompany(item)
-        const refs = planActivityBindings({
-          owner: companyRef(writeCompanyId),
-          // Порядок = важность: потолок отсекает ХВОСТ.
-          //
-          // ⚠ Сперва то, чего РОВНО ПО ОДНОМУ (элемент реестра и «моя компания»), и лишь затем
-          // цели списания, которых бывает много. Обратный порядок выглядел естественнее и был
-          // ошибкой: число целей задаёт назначение платежа, то есть ПЛАТЕЛЬЩИК, и пяти
-          // распознанных номеров хватало, чтобы вытеснить «мою компанию» — привязку, которую
-          // согласованный процесс требует ВСЕГДА. Отказом это не считалось бы и в лог не попало.
-          //
-          // ⚠ Компании-клиента в списке НЕТ намеренно: когда клиент опознан, он и есть владелец
-          // (`writeCompanyId === companyId`), а когда не опознан — `companyId` пуст. То есть эта
-          // ссылка не может добавить ничего, кроме дубля владельца.
-          refs: [
-            ledgerPaymentRef ? itemRef(ledgerPaymentRef.entityTypeId, registryElementId) : null,
-            companyRef(myCompanyId),
-            ...writeOffTargets.map(allocationTargetRef)
-          ]
-        })
-        if (refs.length > 0) {
-          const outcome = await deps.bindActivity(activityId, refs, job.memberId)
-          // ⚠ Считаем ОПЕРАЦИИ, а не отдельные привязки, — как и `registryFailed` рядом. Иначе
-          // числа в одной строке итога измеряют разное: у одной операции привязок до
-          // `MAX_ACTIVITY_BINDINGS`, и «6 без привязок» при трёх обработанных операциях читается
-          // как сломанный счётчик, а не как данные.
-          if (outcome.failed > 0) bindingsFailed++
+      // ⚠ Поиск «моей компании» — под СВОИМ гардом, и это не перестраховка. Он пробрасывает
+      // ошибки транспорта (так задумано на его первом месте вызова — там он идёт ДО маркера, и
+      // бросок означает чистый повтор). Здесь мы зовём его ПОСЛЕ маркера, поэтому его отказ не
+      // должен ни ронять джобу, ни уносить ОСТАЛЬНЫЕ ссылки: элемент реестра и сущность списания
+      // известны и без него. Найдено ревью — прежняя редакция теряла в этом случае все привязки.
+      let myCompanyId: string | null = writeCompanyId
+      let myCompanyLost = false
+      if (!clientUnmatched) {
+        try {
+          myCompanyId = await resolveMyCompany(item)
+        } catch {
+          myCompanyId = null
+          myCompanyLost = true
         }
-      } catch {
-        // Транспорт обязан не бросать, но контракт держим и здесь: дело уже записано, и падение
-        // на связи отменило бы обработку всех оставшихся операций пачки.
-        //
-        bindingsFailed++
       }
+      const refs = planActivityBindings({
+        owner: companyRef(writeCompanyId),
+        // Порядок = важность: потолок отсекает ХВОСТ.
+        //
+        // ⚠ Сперва то, чего РОВНО ПО ОДНОМУ (элемент реестра и «моя компания»), и лишь затем
+        // цели списания, которых бывает много. Обратный порядок выглядел естественнее и был
+        // ошибкой: число целей задаёт назначение платежа, то есть ПЛАТЕЛЬЩИК, и пяти
+        // распознанных номеров хватало, чтобы вытеснить «мою компанию» — привязку, которую
+        // согласованный процесс требует ВСЕГДА. Отказом это не считалось бы и в лог не попало.
+        //
+        // ⚠ Компании-клиента в списке НЕТ намеренно: когда клиент опознан, он и есть владелец
+        // (`writeCompanyId === companyId`), а когда не опознан — `companyId` пуст. То есть эта
+        // ссылка не может добавить ничего, кроме дубля владельца.
+        refs: [
+          ledgerPaymentRef ? itemRef(ledgerPaymentRef.entityTypeId, registryElementId) : null,
+          companyRef(myCompanyId),
+          ...writeOffTargets.map(allocationTargetRef)
+        ]
+      })
+      // ⚠ Две РАЗНЫЕ потери, и ретраится только одна. Отказ ЗАПИСИ привязок лечится повтором —
+      // ссылки известны. Потерянная «моя компания» повтором не лечится: мы не узнали, что именно
+      // привязывать, и задача-ретрай молча переставила бы уже стоящие пары.
+      let bindFailed = false
+      if (refs.length > 0) {
+        try {
+          const outcome = await deps.bindActivity(activityId, refs, job.memberId)
+          if (outcome.failed > 0) bindFailed = true
+        } catch {
+          // Транспорт обязан не бросать, но контракт держим и здесь: дело уже записано, и падение
+          // на связи отменило бы обработку всех оставшихся операций пачки.
+          bindFailed = true
+        }
+        if (bindFailed && deferredQueued < MAX_DEFERRED_WRITES_PER_RUN) {
+          // ⚠ Ставим ВЕСЬ список, а не «те, что упали»: транспорт не говорит, какие именно, а
+          // воркер всё равно читает `binding.list` и ставит только недостающее. Повторная
+          // привязка той же пары — ошибка портала, поэтому слепой повтор был бы хуже отсутствия
+          // ретрая.
+          deferredQueued++
+          await queueDeferredWrite(deps.enqueueBindRetry
+            && (() => deps.enqueueBindRetry!(activityId, refs, job.memberId)))
+        }
+      }
+      // ⚠ Считаем ОПЕРАЦИИ, а не отдельные привязки, — как и `registryFailed` рядом. Иначе числа в
+      // одной строке итога измеряют разное: у одной операции привязок до `MAX_ACTIVITY_BINDINGS`.
+      //
+      // ⚠ Потерянная «моя компания» считается тоже: ссылку мы не узнали, ретраить нечего, и
+      // молчание тут означало бы, что односторонняя связь выглядит как полная.
+      if (bindFailed || myCompanyLost) bindingsFailed++
     }
     // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE
     // writeActivity (todo.add + marker update, #495), so a redelivery's getActivityId finds it — no separate

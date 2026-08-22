@@ -18,6 +18,7 @@
 // independent fakes and passed against the broken order — measured).
 
 import { ensurePaymentElement } from './distributionLedgerWrite'
+import { buildRegistryFillCall } from '../../app/utils/distributionLedger'
 import { dedupKey } from '../../app/utils/statement'
 import { BANK_LABELS } from '../../app/utils/bankLabels'
 import type { PaymentRegistryFields } from '../../app/utils/distributionLedger'
@@ -59,9 +60,17 @@ export function buildRegistryFields(item: StatementItem, provider: BankProviderI
 }
 
 /**
- * Ensure the payment element for `item` exists, carrying the registry columns. Returns its id.
+ * Ensure the payment element for `item` exists AND carries the registry columns. Returns its id.
  * Idempotent by the operation key (the same one the activity marker uses) — a redelivery finds the
  * existing element instead of adding a second.
+ *
+ * ⚠ Найденному элементу колонки ДОПИСЫВАЮТСЯ (#578). `ensurePaymentElement` их не дописывает —
+ * это find-or-create без ветки update, — и пока запись реестра удавалась с первого раза и шла
+ * первой, разницы не было. Она появляется ровно там, где нужен долговременный ретрай: к моменту
+ * повтора элемент мог быть создан ГОЛЫМ (разнесением или прежним упавшим прогоном), и без
+ * дописывания повтор «успешно» не делал бы ничего, а колонки не появились бы уже никогда.
+ *
+ * ⚠ Лишний вызов платится ТОЛЬКО когда элемент уже был: на счастливом пути (создали сами) его нет.
  */
 export async function writePaymentRegistryViaRest(
   item: StatementItem,
@@ -70,12 +79,17 @@ export async function writePaymentRegistryViaRest(
   paymentSp: SpRef,
   call: RestCall
 ): Promise<string> {
-  const { id } = await ensurePaymentElement(paymentSp, {
+  const registry = buildRegistryFields(item, provider)
+  const { id, created } = await ensurePaymentElement(paymentSp, {
     opportunity: item.amount,
     currency: item.currency,
     marker: dedupKey(item),
     ...(companyId ? { companyId } : {}),
-    registry: buildRegistryFields(item, provider)
+    registry
   }, call)
+  if (!created) {
+    const fill = buildRegistryFillCall(paymentSp, id, registry)
+    if (fill) await call(fill.method, fill.params)
+  }
   return id
 }

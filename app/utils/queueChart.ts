@@ -34,11 +34,20 @@ export interface QueueMeta {
 export const QUEUE_META: readonly QueueMeta[] = [
   { name: 'b24-events', label: 'События B24', color: '#8b5cf6' },
   { name: 'bank-fetch', label: 'Опрос банка', color: '#3b82f6' },
+  // ⚠ Очередь Приора рисуется ОТДЕЛЬНО, а не сливается с «Опросом банка»: у неё свой лимитер и
+  // свои слоты, поэтому её затор ничего не говорит о состоянии Альфы (и наоборот). Отсутствовала
+  // здесь с момента своего появления — то есть на экране оператора её backlog просто не было
+  // видно, хотя счётчики в ответе роута были.
+  { name: 'bank-fetch-prior', label: 'Опрос Приора', color: '#0ea5e9' },
   { name: 'file-parse', label: 'Разбор файла', color: '#f59e0b' },
   { name: 'crm-sync', label: 'Запись в CRM', color: '#10b981', main: true },
   { name: 'b24-deletions', label: 'Удаления B24', color: '#ec4899' },
   { name: 'feedback-post', label: 'Отправка отзыва', color: '#14b8a6' },
-  { name: 'trigger-fire', label: 'Триггеры оплат', color: '#a855f7' }
+  { name: 'trigger-fire', label: 'Триггеры оплат', color: '#a855f7' },
+  // Дозапись в CRM (#578/#585). ⚠ Именно их затор и означает «портал что-то не принимает»: обе
+  // очереди пусты на здоровом портале, поэтому непустая строка здесь — сигнал сама по себе.
+  { name: 'registry-write', label: 'Дозапись реестра', color: '#f97316' },
+  { name: 'activity-bind', label: 'Дозапись привязок', color: '#6366f1' }
 ] as const
 
 /** A finite non-negative integer from an unknown counter value (never NaN). */

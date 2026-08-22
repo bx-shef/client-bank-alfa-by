@@ -8,6 +8,10 @@ import {
   Q_DELETIONS,
   Q_FEEDBACK,
   Q_TRIGGER,
+  Q_REGISTRY,
+  Q_BINDINGS,
+  activityBindJobId,
+  registryWriteJobId,
   crmSyncJobId,
   deletionJobId,
   eventJobId,
@@ -21,14 +25,19 @@ import {
   type FeedbackPostJob,
   type FetchJob,
   type ParseJob,
-  type TriggerFireJob
+  type TriggerFireJob,
+  type ActivityBindJob,
+  type RegistryWriteJob
 } from '../server/queue/topology'
 import { connectionOptions, redisUrl } from '../server/queue/connection'
 
 describe('queue names', () => {
-  it('are the eight pipeline queues, unique', () => {
-    expect(QUEUE_NAMES).toEqual([Q_EVENTS, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER])
-    expect(new Set(QUEUE_NAMES).size).toBe(8)
+  it('are the ten pipeline queues, unique', () => {
+    expect(QUEUE_NAMES).toEqual([
+      Q_EVENTS, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER,
+      Q_REGISTRY, Q_BINDINGS
+    ])
+    expect(new Set(QUEUE_NAMES).size).toBe(10)
   })
   it('keeps the ORIGINAL bank-fetch name (renaming would strand jobs already in Redis)', () => {
     expect(Q_FETCH).toBe('bank-fetch')
@@ -52,6 +61,36 @@ describe('triggerFireJobId', () => {
     expect(triggerFireJobId({ ...job, opKey: 'BY|100' })).not.toBe(triggerFireJobId(job))
     // a different target is distinct
     expect(triggerFireJobId({ ...job, targetId: '43' })).not.toBe(triggerFireJobId(job))
+  })
+})
+
+describe('идентификаторы дозаписи в CRM (#578/#585)', () => {
+  const sp = { entityTypeId: 1044, id: 44 }
+  const item = { account: 'BY00', docId: 'd1' } as RegistryWriteJob['item']
+
+  it('реестр: member|account|docId — повтор той же операции это ТА ЖЕ задача', () => {
+    // ⚠ Дедуп здесь не оптимизация: без него один портал с падающим СП плодил бы по задаче на
+    // каждый прогон опроса, а работа у них одна и та же — запись идемпотентна по маркеру.
+    const job: RegistryWriteJob = { memberId: 'M1', providerId: 'alfa-by', item, companyId: null, paymentSp: sp }
+    expect(registryWriteJobId(job)).toBe('reg|M1|BY00%7Cd1')
+    expect(registryWriteJobId({ ...job, companyId: '7' })).toBe(registryWriteJobId(job))
+    expect(registryWriteJobId({ ...job, item: { ...item, docId: 'd2' } })).not.toBe(registryWriteJobId(job))
+  })
+
+  it('привязки: member|activityId — привязки принадлежат ОДНОМУ делу', () => {
+    const job: ActivityBindJob = { memberId: 'M1', activityId: '2087', refs: [{ entityTypeId: 4, entityId: 9 }] }
+    expect(activityBindJobId(job)).toBe('bind|M1|2087')
+    // Другой набор ссылок для того же дела — та же работа, а не вторая задача.
+    expect(activityBindJobId({ ...job, refs: [] })).toBe(activityBindJobId(job))
+    expect(activityBindJobId({ ...job, activityId: '2088' })).not.toBe(activityBindJobId(job))
+  })
+
+  it('идентификаторы не содержат ":" — BullMQ его запрещает', () => {
+    const reg: RegistryWriteJob = {
+      memberId: 'M:1', providerId: 'alfa-by', item: { ...item, docId: 'd:2' }, companyId: null, paymentSp: sp
+    }
+    expect(registryWriteJobId(reg)).not.toContain(':')
+    expect(activityBindJobId({ memberId: 'M:1', activityId: '2:0', refs: [] })).not.toContain(':')
   })
 })
 

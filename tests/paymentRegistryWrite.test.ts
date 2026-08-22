@@ -201,3 +201,43 @@ describe('#575 writePaymentRegistryViaRest', () => {
     }
   })
 })
+
+describe('#578 колонки дописываются элементу, который УЖЕ существует', () => {
+  // ⚠ Ядро долговременной дозаписи (#578) и слепое пятно прежних тестов: `ensurePaymentElement` —
+  // find-or-create БЕЗ ветки update, поэтому найдя маркер, он молча возвращает id. К моменту
+  // повтора элемент мог быть создан ГОЛЫМ (разнесением или упавшим прогоном), и без этого вызова
+  // задача «успешно» не делала бы ничего, а колонки не появились бы уже никогда. Мутационный
+  // прогон подтвердил: удаление этой ветки не роняло НИ ОДНОГО теста.
+  const sp: SpRef = { entityTypeId: 1044, id: 44 }
+
+  function recorder(existingId: string | null) {
+    const calls: Array<{ method: string, params: Record<string, unknown> }> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      if (method === 'crm.item.list') {
+        return { result: { items: existingId ? [{ id: existingId }] : [] } }
+      }
+      return { result: { item: { id: existingId ?? '99' } } }
+    }
+    return { call, calls }
+  }
+
+  it('элемент найден → уходит `crm.item.update` С КОЛОНКАМИ, второго `add` нет', async () => {
+    const { call, calls } = recorder('77')
+    const id = await writePaymentRegistryViaRest(op(), 'CO', 'alfa-by', sp, call)
+    expect(id).toBe('77')
+    expect(calls.map(c => c.method)).toEqual(['crm.item.list', 'crm.item.update'])
+    const update = calls[1]!.params as { entityTypeId: number, id: number, fields: Record<string, unknown> }
+    expect(update.entityTypeId).toBe(sp.entityTypeId)
+    expect(update.id).toBe(77)
+    // Колонки те же, что и при создании — маппинг общий, второй копии нет.
+    expect(Object.values(update.fields)).toContain('Приход')
+  })
+
+  it('элемент создан нами → лишнего `update` НЕТ', async () => {
+    // Счастливый путь не должен платить вторым вызовом на каждую операцию.
+    const { call, calls } = recorder(null)
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', sp, call)
+    expect(calls.map(c => c.method)).toEqual(['crm.item.list', 'crm.item.add'])
+  })
+})

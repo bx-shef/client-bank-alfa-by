@@ -47,6 +47,10 @@ import {
  */
 export const SERVER_LOG_CHANNELS = [
   'activity',
+  // ⚠ Дозапись в CRM (#578/#585) — СВОИ каналы, а не `[crm-sync]`. Тот означает ИТОГ ПРОГОНА, и
+  // его последние строки читает рантбук (`make poll-check`); построчные сообщения дозаписи
+  // вытеснили бы оттуда сводку ровно тогда, когда оператор пришёл её читать.
+  'activity-bind',
   'allocate',
   // ⚠ `auth` — ТОЛЬКО про вход оператора (`authGuard`). `prod-doctor.sh` грепает его как ЖАЛОБУ и
   // считает в FAILED, поэтому подмешивать сюда штатные предупреждения продления портального токена
@@ -66,6 +70,7 @@ export const SERVER_LOG_CHANNELS = [
   'migrate',
   'op',
   'pg',
+  'registry-write',
   'queue',
   'queue-alert',
   // ⚠ `queue-job-failed`/`queue-job-retry`/`queue-worker-error` каналами НЕ являются, хотя рантбук

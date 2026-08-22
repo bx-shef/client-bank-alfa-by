@@ -358,14 +358,7 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
     [pf(PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
     [pf(PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
   }
-  // Registry payload (#575). Blank values are OMITTED rather than written as '': an empty string in
-  // a CRM list column reads as «the bank sent nothing here», which is true, while writing it makes
-  // the element noisier without adding a fact. A field the portal does not have yet is simply
-  // ignored by crm.item.add, so a not-yet-reprovisioned SP degrades to the old shape.
-  for (const [key, postfix] of Object.entries(REGISTRY_FIELD_POSTFIXES)) {
-    const value = input.registry?.[key as keyof PaymentRegistryFields]
-    if (typeof value === 'string' && value.trim() !== '') fields[pf(postfix)] = value.trim()
-  }
+  Object.assign(fields, registryFieldPayload(paymentSp, input.registry))
   // Link the payer company only when matched (a positive integer id).
   const companyId = Number(input.companyId)
   if (input.companyId && Number.isInteger(companyId) && companyId > 0) fields.companyId = companyId
@@ -395,6 +388,50 @@ const REGISTRY_FIELD_POSTFIXES: Record<keyof Required<PaymentRegistryFields>, st
   purpose: PAYMENT_SP_FIELDS.purpose.postfix,
   ownAccount: PAYMENT_SP_FIELDS.ownAccount.postfix,
   bank: PAYMENT_SP_FIELDS.bank.postfix
+}
+
+/**
+ * Registry columns as an SP field payload — the ONE place the mapping lives.
+ *
+ * Blank values are OMITTED rather than written as '': an empty string in a CRM list column reads as
+ * «the bank sent nothing here», which is true, while writing it makes the element noisier without
+ * adding a fact. A field the portal does not have yet is simply ignored by `crm.item.add`, so a
+ * not-yet-reprovisioned SP degrades to the old shape.
+ */
+export function registryFieldPayload(paymentSp: SpRef, registry?: PaymentRegistryFields): Record<string, unknown> {
+  const pf = (postfix: string) => buildUfFieldNameCamel(paymentSp.id, postfix)
+  const out: Record<string, unknown> = {}
+  for (const [key, postfix] of Object.entries(REGISTRY_FIELD_POSTFIXES)) {
+    const value = registry?.[key as keyof PaymentRegistryFields]
+    if (typeof value === 'string' && value.trim() !== '') out[pf(postfix)] = value.trim()
+  }
+  return out
+}
+
+/**
+ * Дописать колонки реестра элементу, который УЖЕ существует (#578).
+ *
+ * ⚠ Понадобилось потому, что `ensurePaymentElement` — find-or-create БЕЗ ветки update: найдя
+ * маркер, он молча возвращает id, ничего не дописывая. Пока запись реестра шла первой и с первого
+ * раза, этого хватало. Долговременный ретрай (#578) приходит ПОСЛЕ того, как элемент мог быть
+ * создан голым (разнесением или упавшим прогоном), — и без этого вызова он «успешно» не делал бы
+ * ничего, а колонки не появились бы уже никогда.
+ *
+ * `null` при пустом наборе: слать `crm.item.update` без полей — вызов, который ничего не меняет.
+ */
+export function buildRegistryFillCall(
+  paymentSp: SpRef,
+  elementId: string | number,
+  registry?: PaymentRegistryFields
+): { method: string, params: Record<string, unknown> } | null {
+  const fields = registryFieldPayload(paymentSp, registry)
+  if (Object.keys(fields).length === 0) return null
+  const id = Number(elementId)
+  if (!Number.isInteger(id) || id <= 0) return null
+  return {
+    method: 'crm.item.update',
+    params: { entityTypeId: paymentSp.entityTypeId, id, fields }
+  }
 }
 
 /** Build the `crm.item.list` that finds a payment carrier element by its operation marker (idempotency
