@@ -715,27 +715,46 @@ export async function handleCrmSyncJob(
     // запоминается на прогон (`resolveMyCompany`), а зовётся только когда привязки вообще есть
     // кому ставить: на портале без этой возможности лишних трёх вызовов быть не должно.
     if (deps.bindActivity) {
-      const myCompanyId = clientUnmatched ? writeCompanyId : await resolveMyCompany(item)
-      const refs = planActivityBindings({
-        owner: companyRef(writeCompanyId),
-        // Порядок = важность: потолок отсекает хвост, а без элемента реестра и сущности списания
-        // дело теряет ровно то, ради чего связь и заводится.
-        refs: [
-          ledgerPaymentRef ? itemRef(ledgerPaymentRef.entityTypeId, registryElementId) : null,
-          ...writeOffTargets.map(allocationTargetRef),
-          companyRef(companyId),
-          companyRef(myCompanyId)
-        ]
-      })
-      if (refs.length > 0) {
-        try {
+      // ⚠ ВЕСЬ блок под `try`, а не только сам вызов привязок — включая поиск «моей компании».
+      // Найдено ревью, и это был настоящий дефект: `findMyCompany` пробрасывает ошибки транспорта
+      // (так и задумано на его ПЕРВОМ месте вызова — там он идёт ДО маркера, и бросок означает
+      // чистый повтор). Здесь мы зовём его ПОСЛЕ маркера, поэтому транзиентный отказ портала
+      // уронил бы всю джобу с уже записанным делом: остаток пачки не обработан, а привязки этой
+      // операции потеряны навсегда и даже не посчитаны — повтор упрётся в маркер и пройдёт мимо.
+      try {
+        const myCompanyId = clientUnmatched ? writeCompanyId : await resolveMyCompany(item)
+        const refs = planActivityBindings({
+          owner: companyRef(writeCompanyId),
+          // Порядок = важность: потолок отсекает ХВОСТ.
+          //
+          // ⚠ Сперва то, чего РОВНО ПО ОДНОМУ (элемент реестра и «моя компания»), и лишь затем
+          // цели списания, которых бывает много. Обратный порядок выглядел естественнее и был
+          // ошибкой: число целей задаёт назначение платежа, то есть ПЛАТЕЛЬЩИК, и пяти
+          // распознанных номеров хватало, чтобы вытеснить «мою компанию» — привязку, которую
+          // согласованный процесс требует ВСЕГДА. Отказом это не считалось бы и в лог не попало.
+          //
+          // ⚠ Компании-клиента в списке НЕТ намеренно: когда клиент опознан, он и есть владелец
+          // (`writeCompanyId === companyId`), а когда не опознан — `companyId` пуст. То есть эта
+          // ссылка не может добавить ничего, кроме дубля владельца.
+          refs: [
+            ledgerPaymentRef ? itemRef(ledgerPaymentRef.entityTypeId, registryElementId) : null,
+            companyRef(myCompanyId),
+            ...writeOffTargets.map(allocationTargetRef)
+          ]
+        })
+        if (refs.length > 0) {
           const outcome = await deps.bindActivity(activityId, refs, job.memberId)
-          bindingsFailed += outcome.failed
-        } catch {
-          // Транспорт обязан не бросать, но контракт держим и здесь: дело уже записано, и падение
-          // на связи отменило бы обработку всех оставшихся операций пачки.
-          bindingsFailed += refs.length
+          // ⚠ Считаем ОПЕРАЦИИ, а не отдельные привязки, — как и `registryFailed` рядом. Иначе
+          // числа в одной строке итога измеряют разное: у одной операции привязок до
+          // `MAX_ACTIVITY_BINDINGS`, и «6 без привязок» при трёх обработанных операциях читается
+          // как сломанный счётчик, а не как данные.
+          if (outcome.failed > 0) bindingsFailed++
         }
+      } catch {
+        // Транспорт обязан не бросать, но контракт держим и здесь: дело уже записано, и падение
+        // на связи отменило бы обработку всех оставшихся операций пачки.
+        //
+        bindingsFailed++
       }
     }
     // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE

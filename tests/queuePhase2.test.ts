@@ -1852,10 +1852,12 @@ describe('#579 привязки дела к сущностям CRM', () => {
     expect(calls.bind).toHaveLength(1)
     const [activityId, refs] = calls.bind[0] as [string, string[], string]
     expect(activityId).toBe('act-1')
-    // 1044:… — элемент реестра, 31:7 — смарт-счёт (сущность списания), 4:9 — моя компания.
+    // 1044:… — элемент реестра, 4:9 — моя компания, 31:7 — смарт-счёт (сущность списания).
+    // ⚠ Порядок значим: потолок режет ХВОСТ, поэтому первыми идут ссылки, которых ровно по одной,
+    // а цели списания (их число задаёт назначение платежа, то есть плательщик) — последними.
     // Компании-владельца (4:5) быть НЕ должно: портал держит эту пару сам, а повторная привязка
     // отвечает ошибкой.
-    expect(refs).toEqual(['1044:101', '31:7', '4:9'])
+    expect(refs).toEqual(['1044:101', '4:9', '31:7'])
   })
 
   it('«моя компания» ищется и для ОПОЗНАННОГО клиента — иначе связь односторонняя', async () => {
@@ -1876,7 +1878,9 @@ describe('#579 привязки дела к сущностям CRM', () => {
     const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
     expect(calls.activity).toHaveLength(2)
     expect(r.created).toBe(2)
-    expect(r.bindingsFailed).toBe(4)
+    // ⚠ ДВЕ, а не четыре: единица счёта — ОПЕРАЦИЯ (у одной их до `MAX_ACTIVITY_BINDINGS`), иначе
+    // в строке итога рядом с `registryFailed` стояли бы числа в разных единицах.
+    expect(r.bindingsFailed).toBe(2)
     expect(r.registryFailed).toBe(0)
   })
 
@@ -1906,6 +1910,52 @@ describe('#579 привязки дела к сущностям CRM', () => {
     await handleCrmSyncJob(job([item('a')]), deps)
     expect(calls.bind).toHaveLength(1)
     expect((calls.bind[0] as [string, string[], string])[1]).toEqual(['4:9'])
+  })
+
+  it('триггер-цель вяжется и при ВЫКЛЮЧЕННОМ авто-проведении', async () => {
+    // ⚠ Мутационный прогон показал, что это решение не защищал ни один тест: гейт `autoDistribute`
+    // можно было накинуть и на привязки, оставив набор зелёным. А он гейтит МУТАЦИЮ портала —
+    // привязка ничего не меняет, и спрятать её на портале, где платежи разбирают руками, значит
+    // спрятать связь там, где она нужнее всего.
+    const dealTarget: IntentResolution[] = [{
+      kind: 'deal-id', value: '77', status: 'resolved',
+      candidates: [{ kind: 'deal', id: '77', amount: 0, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({
+      recognition: spMatrix, resolve: dealTarget, company: '5', myCompany: '9', autoDistribute: false
+    })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect((calls.bind[0] as [string, string[], string])[1]).toContain('2:77')
+  })
+
+  it('«моя компания» отказала — дело и пачка целы, отказ посчитан', async () => {
+    // ⚠ Настоящий дефект, найденный ревью: поиск «моей компании» ПРОБРАСЫВАЕТ ошибки транспорта
+    // (так задумано на его первом месте вызова — там он идёт ДО маркера). Здесь он идёт ПОСЛЕ,
+    // поэтому непойманный бросок уронил бы джобу с уже записанным делом: остаток пачки не
+    // обработан, а привязки этой операции потеряны навсегда и даже не посчитаны.
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, company: '5', myCompany: '9' })
+    deps.findMyCompany = async () => {
+      throw new Error('портал ответил 502')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity, 'пачка оборвалась на первой операции').toHaveLength(2)
+    expect(r.created).toBe(2)
+    expect(r.bindingsFailed, 'потеря привязок не посчитана').toBe(2)
+  })
+
+  it('много целей списания НЕ вытесняют «мою компанию» из плана', async () => {
+    // ⚠ Число целей задаёт НАЗНАЧЕНИЕ ПЛАТЕЖА, то есть плательщик. При обратном порядке пяти
+    // распознанных номеров хватало, чтобы выбить «мою компанию» за потолок — привязку, которую
+    // согласованный процесс требует всегда. Отказом это не считалось бы и в лог не попало.
+    const many: IntentResolution[] = Array.from({ length: 8 }, (_, i) => ({
+      kind: 'deal-id' as const, value: `${i + 1}`, status: 'resolved' as const,
+      candidates: [{ kind: 'deal' as const, id: `${i + 1}`, amount: 0, currency: 'BYN' }]
+    }))
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, resolve: many, company: '5', myCompany: '9' })
+    await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    const refs = (calls.bind[0] as [string, string[], string])[1]
+    expect(refs, 'вытеснена «моя компания»').toContain('4:9')
+    expect(refs.length).toBeLessThanOrEqual(6)
   })
 
   it('#579 отказ привязок ВИДЕН в строке итога и отдельно от реестра', () => {

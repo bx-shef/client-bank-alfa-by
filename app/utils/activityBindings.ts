@@ -16,7 +16,7 @@ import { CRM_OWNER_TYPE_COMPANY } from '~/utils/activity'
 import { SMART_INVOICE_ENTITY_TYPE_ID } from '~/config/b24'
 import type { AllocationCandidate } from '~/utils/allocation'
 
-/** REST-метод привязки дела к сущности. Современное поколение (не устаревшее `crm.activity.*`). */
+/** REST-метод привязки дела к сущности (поколение `classic`, как и соседние `crm.activity.*`). */
 export const ACTIVITY_BINDING_ADD_METHOD = 'crm.activity.binding.add'
 /** Чтение привязок — нужно живой проверке: запись сама по себе ничего не доказывает. */
 export const ACTIVITY_BINDING_LIST_METHOD = 'crm.activity.binding.list'
@@ -84,8 +84,15 @@ export function allocationTargetRef(
   }
 }
 
-/** Ключ тождества привязки — по нему снимаются дубли (одна сущность, один вызов). */
-function refKey(ref: CrmEntityRef): string {
+/**
+ * Ключ тождества привязки — по нему снимаются дубли (одна сущность, один вызов).
+ *
+ * ⚠ ЭКСПОРТИРУЕТСЯ и используется транспортом: там по этому же ключу сверяются уже стоящие пары,
+ * прочитанные из `binding.list`. Вторая копия формата разошлась бы молча — и ровно в аварийной
+ * ветке, где транспорт перестал бы узнавать применённые привязки и переставлял бы их заново,
+ * получая «уже привязано» на каждой.
+ */
+export function bindingKey(ref: CrmEntityRef): string {
   return `${ref.entityTypeId}:${ref.entityId}`
 }
 
@@ -104,12 +111,12 @@ export function planActivityBindings(opts: {
   limit?: number
 }): CrmEntityRef[] {
   const seen = new Set<string>()
-  if (opts.owner) seen.add(refKey(opts.owner))
+  if (opts.owner) seen.add(bindingKey(opts.owner))
   const out: CrmEntityRef[] = []
   const limit = opts.limit ?? MAX_ACTIVITY_BINDINGS
   for (const ref of opts.refs) {
     if (!ref) continue
-    const key = refKey(ref)
+    const key = bindingKey(ref)
     if (seen.has(key)) continue
     seen.add(key)
     out.push(ref)

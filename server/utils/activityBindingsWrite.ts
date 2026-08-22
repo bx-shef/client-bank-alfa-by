@@ -9,7 +9,7 @@
 //
 // ⚠ Цена названа честно: непоставленная привязка теряется НАВСЕГДА — следующий опрос увидит маркер
 // дела и до этого места не дойдёт. Тот же класс, что у реестра платежей (#575/#578), и лечится он
-// тем же — долговременной очередью, а не ретраем на месте.
+// тем же — долговременной очередью, а не ретраем на месте: заведено отдельной задачей #585.
 //
 // ЗАМЕРЕНО НА ЖИВОМ ПОРТАЛЕ (2026-08-22, `pnpm verify:bindings --oauth`) — оба факта несущие:
 //
@@ -24,12 +24,17 @@
 //      — правильность самих ссылок: их собирает и валидирует чистый планировщик, а живая проверка
 //      читает привязки обратно.
 //
+// ⚠ Тексты ошибок идут в лог через `logSafe`: они приходят ОТ ПОРТАЛА, а правило PRIVACY.md §Логи
+// требует этого от любого внешнего текста (перевод строки внутри подделал бы соседнюю строку лога,
+// а многокилобайтный текст съел бы измеренный бюджет объёма).
+//
 // ⚠ Батч берётся, когда он есть, и падает ЦЕЛИКОМ: `RestBatch` здесь halt-on-error, то есть одна
 // плохая привязка уронит всю пачку. Отсюда и путь отступления выше: одна неадресуемая сущность не
 // уносит остальные, а в НОРМАЛЬНОМ случае вызов остаётся один, а не четыре.
 
-import { ACTIVITY_BINDING_LIST_METHOD, buildBindingCall, type CrmEntityRef } from '../../app/utils/activityBindings'
+import { ACTIVITY_BINDING_LIST_METHOD, bindingKey, buildBindingCall, type CrmEntityRef } from '../../app/utils/activityBindings'
 import type { RestBatch, RestCall } from './companyLookup'
+import { logSafe } from './logSafe'
 import { useServerLogger } from './serverLogger'
 
 const log = useServerLogger('activity')
@@ -40,9 +45,9 @@ export interface BindingOutcome {
   failed: number
 }
 
-/** Ключ пары — тот же формат, что у планировщика (`entityTypeId:entityId`). */
+/** Ключ пары — ТОТ ЖЕ `bindingKey`, что у планировщика: своя копия формата разошлась бы молча. */
 function key(entityTypeId: unknown, entityId: unknown): string {
-  return `${entityTypeId}:${entityId}`
+  return bindingKey({ entityTypeId: Number(entityTypeId), entityId: Number(entityId) })
 }
 
 /**
@@ -84,7 +89,7 @@ export async function bindActivityViaRest(
       return { bound: commands.length, failed: 0 }
     } catch (batchError) {
       // Halt-on-error: часть команд могла примениться, часть нет, и портал не говорит какая именно.
-      log.warning(`привязки дела ${activityId}: батч отказал, повторяю поштучно — ${(batchError as Error)?.message}`)
+      log.warning(`привязки дела ${activityId}: батч отказал, повторяю поштучно — ${logSafe(String((batchError as Error)?.message ?? batchError))}`)
     }
   }
 
@@ -94,7 +99,7 @@ export async function bindActivityViaRest(
   try {
     already = await existingBindings(Number(activityId), call)
   } catch (listError) {
-    log.warning(`привязки дела ${activityId}: не удалось прочитать текущие — ${(listError as Error)?.message}`)
+    log.warning(`привязки дела ${activityId}: не удалось прочитать текущие — ${logSafe(String((listError as Error)?.message ?? listError))}`)
   }
 
   let bound = 0
@@ -109,7 +114,7 @@ export async function bindActivityViaRest(
       bound++
     } catch (error) {
       failed++
-      log.warning(`привязка дела ${activityId} к ${command.params.entityTypeId}:${command.params.entityId} не поставлена — ${(error as Error)?.message}`)
+      log.warning(`привязка дела ${activityId} к ${command.params.entityTypeId}:${command.params.entityId} не поставлена — ${logSafe(String((error as Error)?.message ?? error))}`)
     }
   }
   return { bound, failed }
