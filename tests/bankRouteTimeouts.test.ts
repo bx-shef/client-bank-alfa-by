@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TOKEN_EXCHANGE_TIMEOUT_MS } from '../server/utils/bankConnectCallback'
 
@@ -82,4 +82,33 @@ describe('таймауты банковских маршрутов соглас�
       expect(directives(file)).toHaveLength(1)
     }
   })
+})
+
+describe('каждый маршрут /api/bank/* дросселируется nginx (#576, находка ревью)', () => {
+  // ⚠ Гард заведён потому, что новый маршрут `/api/bank/pause` его НЕ имел, и это никто не заметил:
+  // без своего `location =` он проваливается в общий `location /api/`, где `limit_req` нет вовсе.
+  // А каждый из этих маршрутов на запрос делает вызов `profile` В ПОРТАЛ КЛИЕНТА и обращение к
+  // нашей БД — то есть незадросселированный роут это усилитель нагрузки и на нас, и на портал.
+  //
+  // ⚠ Список ОТКРЫТЫЙ намеренно, в отличие от `adminGatedRoutes`: там требуется решение «кто может»,
+  // а здесь решение одно на всех — троттл нужен каждому. Поэтому проверяем ВСЕ файлы маршрутов,
+  // какие есть на диске, а не перечисленные руками: перечисление руками и есть тот способ, которым
+  // следующий маршрут снова окажется без защиты.
+  const nginx = readFileSync(join(process.cwd(), 'nginx.conf'), 'utf8')
+  const dir = join(process.cwd(), 'server/api/bank')
+  const routes = readdirSync(dir).filter(f => /\.(get|post)\.ts$/.test(f))
+
+  it('на диске есть маршруты банка — иначе тест ничего не проверяет', () => {
+    expect(routes.length).toBeGreaterThan(0)
+  })
+
+  for (const file of routes) {
+    const name = file.replace(/\.(get|post)\.ts$/, '')
+    it(`/api/bank/${name} — свой location с limit_req`, () => {
+      const block = new RegExp(`location = /api/bank/${name}\\s*\\{([^}]*)\\}`)
+      const m = block.exec(nginx)
+      expect(m, `нет блока location = /api/bank/${name} в nginx.conf`).not.toBeNull()
+      expect(m![1]).toMatch(/limit_req\s+zone=/)
+    })
+  }
 })

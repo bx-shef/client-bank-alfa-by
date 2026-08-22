@@ -10,9 +10,11 @@ import {
   listBankAccountInfoForPortal,
   listBankTokensForPortal,
   saveBankToken,
-  updateBankTokenSecrets
+  updateBankTokenSecrets,
+  setBankPollPaused
 } from '../server/utils/bankTokenStore'
 import type { BankToken } from '../server/utils/bankTokenStore'
+import type { QueryFn } from '../server/utils/tokenStore'
 
 // The store encrypts/decrypts via the default env key — set a deterministic one.
 beforeAll(() => {
@@ -183,6 +185,64 @@ describe('listAllBankAccounts (A6 registry)', () => {
 // Привязка счёта к подключению, сделанному без него (#407). Проверяем ровно то, что защищает
 // данные: member/provider-скоуп в SQL, отказ вместо затирания занятого номера, и что гонка двух
 // одновременных привязок даёт честный conflict, а не необработанное падение.
+describe('setBankPollPaused — пауза автоопроса (#576)', () => {
+  // ⚠ Заведено потому, что БЕЗ прямого теста здесь три мутации проходили ЗЕЛЁНЫМИ (замерено на
+  // ревью): снятие `member_id` из WHERE (это IDOR — чужой портал), снятие сверки `account_key` и
+  // добавление `updated_at = now()` (это убивает продление токена). Обработчик выше инъектирует
+  // фейковый `setPaused` и до SQL не доходит НИКОГДА, поэтому вся заявленная правильность модуля
+  // держалась на одном комментарии.
+
+  it('адресует строку member_id + id + СВЕРЯЕТ номер счёта', async () => {
+    const { query, calls } = fakeQuery([{ member_id: 'm1' }])
+    expect(await setBankPollPaused(query, 'm1', 42, 'BY01ALFA', true)).toBe('updated')
+    const upd = calls[0]!
+    expect(upd.sql).toMatch(/UPDATE bank_tokens/i)
+    // ⚠ Все три условия в ОДНОМ регулярном выражении: проверка по отдельности прошла бы и тогда,
+    // когда одно из них выкинули, — а выкинутый `member_id` это доступ к чужому порталу.
+    expect(upd.sql).toMatch(/member_id = \$1 AND id = \$2 AND account_key = \$3/i)
+    expect(upd.params).toEqual(['m1', 42, 'BY01ALFA', true])
+  })
+
+  it('НЕ штампует updated_at — иначе пауза убивала бы продление токена', async () => {
+    // ⚠ Не стиль, а несущее (#489): по `updated_at` keep-alive выбирает, кого продлевать. Перевод
+    // часов вперёд нажатием паузы выкинул бы подключение из очереди продления, и оно умерло бы за
+    // ночь — ровно та беда, от которой пауза спасает. Смотрим на САМ SQL: возвращённый «для
+    // единообразия» `now()` не заметил бы ни один поведенческий тест.
+    const { query, calls } = fakeQuery([{ member_id: 'm1' }])
+    await setBankPollPaused(query, 'm1', 42, 'BY01ALFA', true)
+    expect(calls[0]!.sql).not.toMatch(/updated_at/i)
+  })
+
+  it('пишет ТОЛЬКО poll_paused — ни одной колонки токена', async () => {
+    // Классификация писателя (`unlocked-single-column`) держится ровно на этом: лок не нужен,
+    // потому что за эту колонку обновление токена не борется. Появится второе поле — довод рухнет.
+    const { query, calls } = fakeQuery([{ member_id: 'm1' }])
+    await setBankPollPaused(query, 'm1', 42, 'BY01ALFA', false)
+    const setPart = /SET([\s\S]*?)WHERE/i.exec(calls[0]!.sql)![1]!
+    expect(setPart).toMatch(/poll_paused/i)
+    expect(setPart).not.toMatch(/access_token|refresh_token_enc|expires_at|account_key/i)
+  })
+
+  it('строки нет → gone, строка есть но с другим номером → stale', async () => {
+    // Два РАЗНЫХ исхода: `gone` — подключение отключили (обновление списка покажет пустое место),
+    // `stale` — оно живо, но уже не то, что было на экране. Слить их нельзя.
+    const gone = fakeQuery([])
+    expect(await setBankPollPaused(gone.query, 'm1', 42, 'BY01ALFA', true)).toBe('gone')
+
+    let call = 0
+    const stale: QueryFn = async (_sql, _params) => (call++ === 0 ? [] : [{ account_key: 'BY02ALFA' }])
+    expect(await setBankPollPaused(stale, 'm1', 42, 'BY01ALFA', true)).toBe('stale')
+  })
+
+  it('диагностический SELECT тоже скоуплен по порталу', async () => {
+    // Иначе по чужому `id` можно было бы выяснить, существует ли строка у другого портала.
+    const { query, calls } = fakeQuery([])
+    await setBankPollPaused(query, 'm1', 42, 'BY01ALFA', true)
+    expect(calls[1]!.sql).toMatch(/WHERE member_id = \$1 AND id = \$2/i)
+    expect(calls[1]!.params).toEqual(['m1', 42])
+  })
+})
+
 describe('renameBankTokenAccount', () => {
   /** Фейк с двумя ответами: первый — на проверку занятости, второй — на UPDATE…RETURNING. */
   function twoStep(taken: Record<string, unknown>[], updated: Record<string, unknown>[]) {

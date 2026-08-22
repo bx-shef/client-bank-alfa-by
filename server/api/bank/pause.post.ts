@@ -1,17 +1,18 @@
-// POST /api/bank/pause — приостановить или возобновить АВТООПРОС одного подключения (#576).
-// Auth = фрейм-токен B24 + X-B24-Domain, только админ: тот же гейт, что у connect/disconnect —
-// банковские креды портало-широкие, и кто может их привязать, тот же и распоряжается опросом.
-// Тонкий ввод-вывод над server/utils/bankAccounts.ts.
+// POST /api/bank/pause — pause or resume the AUTOMATIC poll of ONE connection (#576).
+// Auth = B24 frame token + X-B24-Domain, admin-only: the same gate as connect/disconnect — bank
+// credentials are portal-wide, so whoever may bind them also governs the polling. Thin I/O over
+// server/utils/bankAccounts.ts.
 //
-// ⚠ Это НЕ «Отключить». Отключение стирает грант, и вернуть его может только владелец счёта,
-// заново войдя в интернет-банк. Пауза не трогает ни грант, ни продление токена (#489) — приложение
-// просто перестаёт ходить за выпиской. До этой ручки выбор был бинарным, и «слишком много
-// операций» лечилось единственным способом, который стоил повторной авторизации в банке.
+// ⚠ This is NOT «Отключить». Disconnecting destroys the grant, and only the ACCOUNT OWNER can
+// restore it by signing into their internet bank again. Pausing touches neither the grant nor the
+// token keep-alive (#489) — the app simply stops fetching statements. Until this route the choice
+// was binary, and «too many operations» had exactly one cure: the one that cost a re-authorisation
+// at the bank.
 //
-// ⚠ Адресуется неизменяемым `id` строки, а не номером счёта (#517): номер МЕНЯЕТСЯ, когда админ
-// выбирает счёт незавершённому подключению, поэтому адрес из отрисованного списка может описывать
-// уже другую строку. Номер едет рядом как ОЖИДАНИЕ вызывающего — расхождение это 409 «список
-// устарел», а не тихое переключение не того подключения.
+// ⚠ Addressed by the row's immutable `id`, not by the account number (#517): the number CHANGES
+// when an admin assigns an account to a pending connection, so an address taken from the rendered
+// list may describe a different row by now. The number rides along as the caller's EXPECTATION — a
+// mismatch is a 409 «list is stale», not a silent toggle of the wrong connection.
 
 import { handlePauseBankPoll, type PausePollDeps } from '../../utils/bankAccounts'
 import { bearerToken } from '../../utils/settingsHandler'
@@ -21,6 +22,13 @@ import { setBankPollPaused } from '../../utils/bankTokenStore'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
+import { useServerLogger } from '../../utils/serverLogger'
+
+// ⚠ Канал ПЕРЕИСПОЛЬЗУЕТСЯ (`bank-connect`), а не заводится новый. Имена каналов — это маркеры, по
+// которым грепает рантбук, и оператор, разбирающий «импорт встал», смотрит жизненный цикл
+// подключения. Отдельный `[bank-pause]` означал бы второй маркер, о существовании которого надо
+// знать заранее, — а такой маркер хуже отсутствующего. Сама строка достаточно отличима внутри канала.
+const bankLog = useServerLogger('bank-connect')
 
 function liveDeps(): PausePollDeps {
   return {
@@ -30,7 +38,12 @@ function liveDeps(): PausePollDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
-    setPaused: (memberId, id, expectedAccountKey, paused) => setBankPollPaused(dbQuery, memberId, id, expectedAccountKey, paused)
+    setPaused: (memberId, id, expectedAccountKey, paused) => setBankPollPaused(dbQuery, memberId, id, expectedAccountKey, paused),
+    // Audit trail: WHO stopped the import. Pausing is the cheapest way to silently halt a client's
+    // feed — unlike disconnecting it needs no re-auth at the bank and looks from outside like «the
+    // statement stopped arriving». We have no audit column, so a log line is the record.
+    audit: ({ memberId, userId, provider, id, paused }) =>
+      bankLog.info(`portal ${memberId}: ${provider} #${id} — автоопрос ${paused ? 'ПРИОСТАНОВЛЕН' : 'возобновлён'} пользователем ${userId || '—'}`)
   }
 }
 

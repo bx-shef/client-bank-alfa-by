@@ -43,12 +43,12 @@ export interface ReadinessSnapshot {
    */
   unhealthyAccounts?: number
   /**
-   * Сколько подключений с ПАУЗОЙ автоопроса (#576).
+   * How many connections have their automatic poll PAUSED (#576).
    *
-   * ⚠ Отдельно и от `connectedAccounts`, и от `unhealthyAccounts`: это ВЫБОР администратора, а не
-   * поломка, поэтому строку про банк красным оно не красит. Но и промолчать нельзя — при всех
-   * счетах на паузе строка «Автоопрос: каждые N мин» была бы ложью, и тишину пошли бы искать в
-   * банке.
+   * ⚠ Kept apart from both `connectedAccounts` and `unhealthyAccounts`: this is an admin's CHOICE,
+   * not a fault, so it never paints the bank line red. Staying silent is not an option either —
+   * with every account paused, «Автоопрос: каждые N мин» would simply be a lie, and the silence
+   * would be hunted down at the bank.
    */
   pausedAccounts?: number
   /** Server-side poll gate (`CRON_REAL_POLL`) — OFF means no automatic polling at all. */
@@ -183,16 +183,16 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
 }
 
 /**
- * Строка «Автоматический опрос банка» (#576 добавил в неё паузу).
+ * The «Автоматический опрос банка» line (#576 added the pause to it).
  *
- * Три состояния, и они РАЗНЫЕ по тому, кто может их изменить:
- *   выключен на сервере — админ портала не может ничего, это владелец приложения;
- *   все счета на паузе — админ выключил сам и включает сам, это не проблема;
- *   часть на паузе      — опрос идёт, но не по всем счетам; молчать об этом нельзя.
+ * Three states, and they differ by WHO can change them:
+ *   disabled on the server — the portal admin can do nothing, that is the app owner's switch;
+ *   every account paused  — the admin turned it off and turns it back on; not a problem;
+ *   some accounts paused  — polling runs, but not for every account; staying silent would mislead.
  *
- * ⚠ Пауза НЕ делает строку красной. Красное здесь означает «настройка не доведена», а пауза —
- * доведённая настройка, которой воспользовались. Покрасив её красным, мы бы приучили
- * администратора видеть красное на экране, который он сам и привёл в это состояние.
+ * ⚠ A pause does NOT make the line red. Red here means «setup is not finished», while a pause is
+ * finished setup being used. Painting it red would train the admin to see red on a screen they put
+ * into that state themselves.
  */
 function pollLine(snap: ReadinessSnapshot, paused: number, connected: number): ReadinessItem {
   if (!snap.pollEnabled) {
@@ -201,8 +201,8 @@ function pollLine(snap: ReadinessSnapshot, paused: number, connected: number): R
       title: 'Автоматический опрос банка включён',
       ok: false,
       detail: 'выключен',
-      // Гейт серверный, и админ портала действительно не может его тронуть — говорим об этом
-      // прямо, вместо действия, которого он не выполнит.
+      // The gate is server-side, so a portal admin genuinely cannot fix this themselves — say so
+      // instead of showing an action they can't perform.
       hint: 'Опрос выключен на сервере приложения. Обратитесь к владельцу приложения — из портала это не включается.'
     }
   }

@@ -40,6 +40,18 @@ export interface DisconnectDeps extends BankAccountsDeps {
 
 export interface PausePollDeps extends BankAccountsDeps {
   setPaused: (memberId: string, id: number, expectedAccountKey: string, paused: boolean) => Promise<'updated' | 'gone' | 'stale'>
+  /**
+   * След в журнале: КТО остановил импорт (#576, находка ревью по безопасности).
+   *
+   * ⚠ Пауза — самый дешёвый способ незаметно остановить импорт клиента: в отличие от отключения,
+   * она не требует повторной авторизации в банке и снаружи выглядит как «выписка перестала
+   * приходить». Без записи бухгалтер видит «на паузе», но не знает, кто из коллег и когда её
+   * поставил, — и выяснить это неоткуда. Собственной колонки аудита у нас нет, поэтому пишем хотя
+   * бы строку в лог: этого хватает для разбора постфактум по `docs/OPERATIONS.md`.
+   *
+   * ⚠ Необязательная: логирование не должно быть условием работоспособности действия.
+   */
+  audit?: (entry: { memberId: string, userId: string, provider: string, id: number, paused: boolean }) => void
 }
 
 /**
@@ -95,7 +107,7 @@ function isKnownProvider(v: string): v is BankProviderId {
 
 /** Shared gate: portal installed + frame token proven for that portal + caller is an admin.
  *  Returns the resolved memberId, or the error result to hand straight back. */
-async function authorize(deps: BankAccountsDeps, input: BankAccountsInput): Promise<{ memberId: string } | { error: BankAccountsResult }> {
+async function authorize(deps: BankAccountsDeps, input: BankAccountsInput): Promise<{ memberId: string, userId: string } | { error: BankAccountsResult }> {
   const { accessToken, domain } = input
   if (!accessToken || !domain) {
     return { error: { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } } }
@@ -112,7 +124,7 @@ async function authorize(deps: BankAccountsDeps, input: BankAccountsInput): Prom
   if (!frame.isAdmin) {
     return { error: { status: 403, body: { error: 'bank connections are administrator-only' } } }
   }
-  return { memberId }
+  return { memberId, userId: frame.userId }
 }
 
 /** List the caller portal's connected bank accounts (identity + freshness, no secrets). */
@@ -217,6 +229,11 @@ export async function handlePauseBankPoll(deps: PausePollDeps, input: PausePollI
   }
 
   const outcome = await deps.setPaused(auth.memberId, id, accountKey, input.paused)
+  // ⚠ Пишем ТОЛЬКО состоявшееся изменение: строка про попытку, которая ничего не поменяла, разбор
+  // постфактум не облегчает, а зашумляет — искать будут «кто выключил», а не «кто нажал мимо».
+  if (outcome === 'updated') {
+    deps.audit?.({ memberId: auth.memberId, userId: auth.userId, provider, id, paused: input.paused })
+  }
   if (outcome === 'stale') {
     return { status: 409, body: { error: 'the connection changed since the list was loaded, reload it' } }
   }
