@@ -84,7 +84,7 @@ describe('таймауты банковских маршрутов соглас�
   })
 })
 
-describe('каждый маршрут /api/bank/* дросселируется nginx (#576, находка ревью)', () => {
+describe('каждый админский маршрут в портал дросселируется nginx (#576, находка ревью)', () => {
   // ⚠ Гард заведён потому, что новый маршрут `/api/bank/pause` его НЕ имел, и это никто не заметил:
   // без своего `location =` он проваливается в общий `location /api/`, где `limit_req` нет вовсе.
   // А каждый из этих маршрутов на запрос делает вызов `profile` В ПОРТАЛ КЛИЕНТА и обращение к
@@ -95,19 +95,25 @@ describe('каждый маршрут /api/bank/* дросселируется n
   // какие есть на диске, а не перечисленные руками: перечисление руками и есть тот способ, которым
   // следующий маршрут снова окажется без защиты.
   const nginx = readFileSync(join(process.cwd(), 'nginx.conf'), 'utf8')
-  const dir = join(process.cwd(), 'server/api/bank')
-  const routes = readdirSync(dir).filter(f => /\.(get|post)\.ts$/.test(f))
+  const bank = readdirSync(join(process.cwd(), 'server/api/bank'))
+    .filter(f => /\.(get|post)\.ts$/.test(f))
+    .map(f => `bank/${f.replace(/\.(get|post)\.ts$/, '')}`)
+  // ⚠ Стирание дел (#576 п.4) — не банковский маршрут, но тот же класс: админский, ходит в портал,
+  // а стирание вдобавок НЕОБРАТИМО. Правило одно, поэтому и проверка одна.
+  const activities = readdirSync(join(process.cwd(), 'server/api/activities'))
+    .filter(f => /\.(get|post)\.ts$/.test(f))
+    .map(f => `activities/${f.replace(/\.(get|post)\.ts$/, '')}`)
+  const routes = [...bank, ...activities]
 
-  it('на диске есть маршруты банка — иначе тест ничего не проверяет', () => {
+  it('на диске есть маршруты — иначе тест ничего не проверяет', () => {
     expect(routes.length).toBeGreaterThan(0)
   })
 
-  for (const file of routes) {
-    const name = file.replace(/\.(get|post)\.ts$/, '')
-    it(`/api/bank/${name} — свой location с limit_req`, () => {
-      const block = new RegExp(`location = /api/bank/${name}\\s*\\{([^}]*)\\}`)
+  for (const name of routes) {
+    it(`/api/${name} — свой location с limit_req`, () => {
+      const block = new RegExp(`location = /api/${name}\\s*\\{([^}]*)\\}`)
       const m = block.exec(nginx)
-      expect(m, `нет блока location = /api/bank/${name} в nginx.conf`).not.toBeNull()
+      expect(m, `нет блока location = /api/${name} в nginx.conf`).not.toBeNull()
       expect(m![1]).toMatch(/limit_req\s+zone=/)
     })
   }

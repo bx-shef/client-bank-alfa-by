@@ -11,8 +11,8 @@
 import { randomUUID } from 'node:crypto'
 import { dbQuery } from '../db/client'
 import { useServerLogger } from './serverLogger'
-import { makeFrameRestCall, makePortalSdkCall, sdkPortalDeps } from './b24Sdk'
-import type { RestCall } from './companyLookup'
+import { makeFrameRestCall, makePortalSdkCall, makePortalSdkClient, makeSdkBatchCall, makeSdkRestCall, sdkPortalDeps } from './b24Sdk'
+import type { RestBatch, RestCall } from './companyLookup'
 import type { SingleFlightLeaseDeps } from './singleFlightLease'
 
 /** App-OAuth creds. For `frameRestCall` they are only structurally needed (a fresh frame
@@ -43,6 +43,43 @@ export function livePortalSdkCall(memberId: string): Promise<RestCall | null> {
     clientSecret: process.env.B24_CLIENT_SECRET ?? '',
     now: Date.now
   }))
+}
+
+/**
+ * Батч-транспорт на ХРАНИМОМ токене портала — пара к `livePortalSdkCall` (#576 п.4).
+ *
+ * ⚠ Заведён потому, что стирание дел удаляет их СОТНЯМИ: по одному это 2 запроса в секунду, то
+ * есть минуты, и такая работа не помещается в HTTP-запрос. Замерено на живом портале, что
+ * `crm.activity.delete` в батче РАЗРЕШЁН (пробный вызов вернул ошибку команды, а не
+ * `ERROR_BATCH_METHOD_NOT_ALLOWED`), поэтому пачками по 50 это секунды.
+ *
+ * ⚠ Батч останавливается на первой упавшей команде (`isHaltOnError: true`) — здесь это НЕ
+ * недостаток: вызывающий (`eraseActivities`) трактует падение чанка как «дальше не идём» и берёт
+ * итог у портала, а не из своей арифметики.
+ */
+export async function livePortalSdkBatch(memberId: string): Promise<RestBatch | null> {
+  return (await livePortalSdk(memberId))?.batch ?? null
+}
+
+/**
+ * ОДИН клиент портала, дающий и одиночные вызовы, и батч (#576 п.4, находка ревью).
+ *
+ * ⚠ Заведён потому, что вызвать `livePortalSdkCall` и `livePortalSdkBatch` подряд — значит поднять
+ * ДВА независимых клиента на один портал, а вместе с ними два независимых ведра лимитера и две
+ * загрузки токена. Это прямо перечит правилу, ради которого сделан `createPortalSdkResolver`:
+ * одна единица работы — один клиент, одно ведро. Практическая цена не теоретическая: суммарный
+ * темп к порталу выходит за 2 запроса в секунду, а если один клиент обновит токен на полпути,
+ * второй продолжит со старым и начнёт получать `expired_token` — посреди НЕОБРАТИМОГО удаления.
+ */
+export async function livePortalSdk(memberId: string): Promise<{ call: RestCall, batch: RestBatch } | null> {
+  const client = await makePortalSdkClient(memberId, sdkPortalDeps({
+    query: dbQuery,
+    clientId: process.env.B24_CLIENT_ID ?? '',
+    clientSecret: process.env.B24_CLIENT_SECRET ?? '',
+    now: Date.now
+  }))
+  if (!client) return null
+  return { call: makeSdkRestCall(client, { memberId }), batch: makeSdkBatchCall(client, { memberId }) }
 }
 
 /**

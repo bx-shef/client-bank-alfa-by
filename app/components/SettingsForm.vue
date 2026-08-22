@@ -255,6 +255,7 @@ async function cancel(): Promise<void> {
                  `v-else-if="blocked"` со своим экраном), и проп был бы всегда `false` — то есть
                  обещал бы защиту, которой в этом месте не существует. -->
             <SettingsSectionRecognition v-else-if="section === 'recognition'" />
+            <SettingsSectionCleanup v-else-if="section === 'cleanup'" />
           </KeepAlive>
         </div>
 
