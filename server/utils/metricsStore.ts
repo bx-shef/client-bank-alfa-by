@@ -29,7 +29,16 @@ export const METRICS = {
   allocated: 'allocated', // dist-СП distribution rows written (§9.3 #6; 0 for portals without provisioned SPs)
   distributed: 'distributed', // portal mutations applied (payment.pay / invoice stage) or triggers fired
   ambiguous: 'ambiguous', // allocation had >1 amount target
-  manual: 'manual' // amount candidates but no exact match → manual queue
+  manual: 'manual', // amount candidates but no exact match → manual queue
+  // ⚠ Lifetime, not per-run, precisely because it is a DATA LOSS counter (#575). The failure is
+  // swallowed so the batch survives, and the element is then gone for good — the next poll hits the
+  // activity marker and skips the operation. The run-summary line says it once and scrolls out with
+  // log rotation; this survives, appears in `GET /api/import/metrics`, and is the only place an
+  // owner can see «за всё время реестр потерял N платежей» without greping.
+  // ⚠ Имя совпадает с полем сводки, как и у всех остальных счётчиков этого блока (см. шапку:
+  // «a rename can't silently drift»); snake_case тут был бы разрывом этого правила, а не стилем —
+  // snake_case носят только `feedback_*`, которые сводкой и НЕ порождаются.
+  registryFailed: 'registryFailed'
 } as const
 
 export type MetricName = typeof METRICS[keyof typeof METRICS]
@@ -63,7 +72,8 @@ export function metricsFromSummary(
     [METRICS.allocated]: summary.allocated,
     [METRICS.distributed]: summary.distributed,
     [METRICS.ambiguous]: summary.ambiguous,
-    [METRICS.manual]: summary.manual
+    [METRICS.manual]: summary.manual,
+    [METRICS.registryFailed]: summary.registryFailed
   }
 }
 

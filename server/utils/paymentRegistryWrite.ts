@@ -8,9 +8,14 @@
 // import — and nothing said why. Agreed with the owner 2026-08-22: the element is written for
 // EVERY operation, independent of `autoDistribute`, of client identification and of any target.
 //
-// The allocation path (`writeLedgerAllocation`) still ensures the same element by the same marker
-// before adding its distribution row, so the two paths converge instead of racing: whichever runs
-// first creates it, the other finds it.
+// ⚠ ORDER, not a race. The allocation path (`writeLedgerAllocation`/`writeTriggerLedgerFact`) calls
+// the same `ensurePaymentElement` by the same marker — but WITHOUT the registry payload, and that
+// function does not update an element it finds. So «whichever runs first» is not a harmless
+// symmetry: if allocation ran first the element would be created bare and this write would find the
+// marker taken and return quietly, leaving the registry columns empty exactly for the payments that
+// DID match. `handleCrmSyncJob` therefore calls the registry write BEFORE the allocation block, and
+// a test with shared element state pins that order (an earlier version of that test used two
+// independent fakes and passed against the broken order — measured).
 
 import { ensurePaymentElement } from './distributionLedgerWrite'
 import { dedupKey } from '../../app/utils/statement'
@@ -19,6 +24,7 @@ import type { PaymentRegistryFields } from '../../app/utils/distributionLedger'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import type { SpRef } from '../../app/config/distributionSp'
 import type { RestCall } from './companyLookup'
+import { neutralizeBb } from '../../app/utils/activity'
 
 /** Human labels for the direction column — «приход»/«расход» read as data, `credit`/`debit` do not. */
 export const DIRECTION_LABELS = { credit: 'Приход', debit: 'Расход' } as const
@@ -32,14 +38,23 @@ export const DIRECTION_LABELS = { credit: 'Приход', debit: 'Расход' 
  */
 export function buildRegistryFields(item: StatementItem, provider: BankProviderId): PaymentRegistryFields {
   return {
-    operationDate: item.acceptDate,
+    // ⚠ Наши собственные значения — плательщик их не касается.
+    // ⚠ Дата — ТОЛЬКО календарная часть: поле типа `date`, а Bitrix24 переводит присланный момент в
+    // часовой пояс портала прежде, чем взять дату (замерено 2026-08-22), поэтому сырой
+    // `2026-08-21T23:30:00Z` лёг бы 22 августа. Банк называет дату проводки, а не момент времени.
+    operationDate: item.acceptDate.slice(0, 10),
     direction: DIRECTION_LABELS[item.direction],
-    counterparty: item.counterparty.name,
-    counterpartyAccount: item.counterparty.account,
-    counterpartyUnp: item.counterparty.unp,
-    purpose: item.purpose,
     ownAccount: item.account,
-    bank: BANK_LABELS[provider] ?? provider
+    bank: BANK_LABELS[provider] ?? provider,
+    // ⚠ А эти четыре ПИШЕТ ПЛАТЕЛЬЩИК, и через `neutralizeBb` их прогоняет КАЖДЫЙ писатель в
+    // проекте — описание дела, сообщение в чат, оповещения об ошибках. Без этого реестр был бы
+    // единственным местом, куда назначение платежа попадает сырым, — и местом самым читаемым: в
+    // список СП бухгалтер смотрит чаще, чем в описание дела. Счёт и УНП скобок не содержат никогда,
+    // поэтому на настоящих данных это тождественная замена и срабатывает только на подделке.
+    counterparty: neutralizeBb(item.counterparty.name),
+    counterpartyAccount: neutralizeBb(item.counterparty.account),
+    counterpartyUnp: neutralizeBb(item.counterparty.unp),
+    purpose: neutralizeBb(item.purpose)
   }
 }
 

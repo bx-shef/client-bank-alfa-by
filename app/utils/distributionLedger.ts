@@ -362,8 +362,8 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
   // a CRM list column reads as «the bank sent nothing here», which is true, while writing it makes
   // the element noisier without adding a fact. A field the portal does not have yet is simply
   // ignored by crm.item.add, so a not-yet-reprovisioned SP degrades to the old shape.
-  for (const [key, postfix] of REGISTRY_FIELD_POSTFIXES) {
-    const value = input.registry?.[key]
+  for (const [key, postfix] of Object.entries(REGISTRY_FIELD_POSTFIXES)) {
+    const value = input.registry?.[key as keyof PaymentRegistryFields]
     if (typeof value === 'string' && value.trim() !== '') fields[pf(postfix)] = value.trim()
   }
   // Link the payer company only when matched (a positive integer id).
@@ -375,18 +375,27 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
   }
 }
 
-/** Registry field → its SP postfix. Exhaustive over `PaymentRegistryFields` by construction: a new
- *  registry fact will not compile until it is given a column. */
-const REGISTRY_FIELD_POSTFIXES: readonly (readonly [keyof PaymentRegistryFields, string])[] = [
-  ['operationDate', PAYMENT_SP_FIELDS.operationDate.postfix],
-  ['direction', PAYMENT_SP_FIELDS.direction.postfix],
-  ['counterparty', PAYMENT_SP_FIELDS.counterparty.postfix],
-  ['counterpartyAccount', PAYMENT_SP_FIELDS.counterpartyAccount.postfix],
-  ['counterpartyUnp', PAYMENT_SP_FIELDS.counterpartyUnp.postfix],
-  ['purpose', PAYMENT_SP_FIELDS.purpose.postfix],
-  ['ownAccount', PAYMENT_SP_FIELDS.ownAccount.postfix],
-  ['bank', PAYMENT_SP_FIELDS.bank.postfix]
-] as const satisfies readonly (readonly [keyof PaymentRegistryFields, string])[]
+/**
+ * Registry field → its SP postfix.
+ *
+ * ⚠ A `Record` over `Required<PaymentRegistryFields>`, and that shape is the point: a ninth registry
+ * fact does NOT compile until it is given a column here. The first version was a tuple ARRAY typed
+ * `readonly [keyof PaymentRegistryFields, string][]` with the same claim in its comment — and the
+ * claim was false. Measured with `tsc --noEmit`: an array only constrains each pair's first element
+ * to be *a* valid key, never that every key appears, so adding a field and forgetting the row
+ * compiled clean, and `buildPaymentElementAddCall` (which iterates this map, not the payload) would
+ * have dropped it in silence. `BANK_LABELS` in `bankLabels.ts` is the same pattern done right.
+ */
+const REGISTRY_FIELD_POSTFIXES: Record<keyof Required<PaymentRegistryFields>, string> = {
+  operationDate: PAYMENT_SP_FIELDS.operationDate.postfix,
+  direction: PAYMENT_SP_FIELDS.direction.postfix,
+  counterparty: PAYMENT_SP_FIELDS.counterparty.postfix,
+  counterpartyAccount: PAYMENT_SP_FIELDS.counterpartyAccount.postfix,
+  counterpartyUnp: PAYMENT_SP_FIELDS.counterpartyUnp.postfix,
+  purpose: PAYMENT_SP_FIELDS.purpose.postfix,
+  ownAccount: PAYMENT_SP_FIELDS.ownAccount.postfix,
+  bank: PAYMENT_SP_FIELDS.bank.postfix
+}
 
 /** Build the `crm.item.list` that finds a payment carrier element by its operation marker (idempotency
  *  probe — one carrier per operation). Selects id + our total + currency (for a later recompute). */

@@ -364,7 +364,7 @@ export async function handleCrmSyncJob(
   let notified = 0
   let skipped = 0
   let excluded = 0
-  /** Операции, у которых не удалось записать элемент реестра (#575). См. комментарий у вызова. */
+  /** Operations whose registry element could not be written (#575) — see the call site. */
   let registryFailed = 0
   let unmatched = 0
   let landed = 0
@@ -418,6 +418,47 @@ export async function handleCrmSyncJob(
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
+    // ─── Реестр платежей (#575) ───────────────────────────────────────────────────────────────
+    // Элемент СП пишется ПЕРВЫМ — раньше и разнесения, и дела.
+    //
+    // ⚠ Несущая причина ровно ОДНА — разнесение (следующий абзац). Соблазнительный довод «раньше
+    // дела, чтобы упавшая запись не оставила маркера и повтор прошёл операцию заново» ЛОЖЕН, и
+    // держать его тут вредно: отказ реестра ПРОГЛАТЫВАЕТСЯ, а `writeActivity` вызывается сразу
+    // после — безусловно, не по исходу реестра. Значит маркер встанет в этом же проходе при любом
+    // порядке, и никакого самолечения ретраем нет. Обратное утверждение убеждало бы следующего
+    // читателя, что потерянный элемент «когда-нибудь допишется сам».
+    //
+    // ⚠ Раньше РАЗНЕСЕНИЯ — потому что `writeLedgerAllocation`/`writeTriggerLedgerFact` зовут тот же
+    // `ensurePaymentElement`, но БЕЗ полей реестра, а он при найденном маркере не дописывает ничего.
+    // Отработай разнесение первым — элемент создался бы голым, реестр нашёл бы маркер занятым и
+    // тихо вышел: колонки не появились бы, и это даже не посчиталось бы отказом. Сегодня ветка не
+    // срабатывает (совпадений «плательщик в CRM» ноль — та самая причина, ради которой #575 и
+    // заведён), поэтому промах был бы латентным и выстрелил бы ровно тогда, когда контрагентов
+    // начнут заводить: в реестре вперемешку строки с контрагентом и без. Это читается как порча
+    // данных, а не как понятный дефект. Порядок и есть починка — обе стороны сходятся на маркере,
+    // и кто пришёл первым, тот и создал.
+    //
+    // ⚠ Отказ ПРОГЛАТЫВАЕТСЯ, в отличие от `writeLedger`, который пробрасывает. Тот писал только на
+    // удавшемся разнесении, то есть редко; этот зовётся на КАЖДУЮ операцию, и проброс отменил бы
+    // всю пачку на первой же плохой — и так на каждом повторе. Операции до неё остаются с делами,
+    // операции после не получают ничего: снаружи импорт, вставший на середине без объяснения.
+    // Согласованный процесс (PROCESSING.md, Этап D) ставит дело первым — «ДЕЛО — ВСЕГДА», — и
+    // вторичная запись не имеет права держать первичную в заложниках.
+    //
+    // ⚠ Цена названа честно: проглоченный отказ означает потерянный навсегда элемент (следующий
+    // опрос упрётся в маркер дела). Поэтому он СЧИТАЕТСЯ и печатается в безусловной строке итога —
+    // молчащий пустой СП при живом импорте это ровно тот симптом, ради которого #575 и заведён.
+    //
+    // ⚠ Отсутствующие поля отказом НЕ являются: `crm.item.add` молча игнорирует неизвестные UF-ключи
+    // (замерено на живом портале 2026-08-22), поэтому СП, созданный до #575, продолжает получать
+    // элементы — просто без колонок реестра, пока администратор не перезапустит провижининг.
+    if (ledgerPaymentRef && deps.writePaymentRegistry) {
+      try {
+        await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
+      } catch {
+        registryFailed++
+      }
+    }
     // Error-chat notice for an ambiguous/manual allocation, captured here but EMITTED only after
     // the dedup marker is committed (below) — im.message.add has no dedup, so posting it before the
     // marker would let a job-level retry re-post it. Job retries are more frequent now that the SDK
@@ -589,40 +630,6 @@ export async function handleCrmSyncJob(
       const myCompanyId = await deps.findMyCompany(item, job.memberId)
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
-    }
-    // Registry element FIRST, activity second — deliberately the opposite order from the notices
-    // and the trigger, which are deferred PAST the activity marker.
-    //
-    // ⚠ The reason is the dedup gate at the top of this loop. Written after the activity, a failing
-    // registry write would leave a marker behind, and the retry would `continue` past the whole
-    // operation — the element would then never be written for it, silently. Written first, a
-    // failure leaves no marker, so a retry reprocesses the operation from the top;
-    // `ensurePaymentElement` is idempotent by the same key, so nothing doubles. The notices cannot
-    // use this order because im.message.add has no dedup at all.
-    //
-    // ⚠ And the failure is SWALLOWED, unlike `writeLedger`, which propagates. That asymmetry is the
-    // point: the ledger wrote only on a successful allocation (rare — on a portal whose payers are
-    // not in CRM, never), so a throw there cost one operation. This runs for EVERY operation, so a
-    // throw here would abort the batch on the first bad one and every retry after it: the ops
-    // BEFORE it keep their activities, the ops after it never get one, and the accountant sees the
-    // import stop halfway with no explanation. The agreed process (PROCESSING.md, Этап D) puts the
-    // activity first — «ДЕЛО — ВСЕГДА» — and the registry element is the secondary record; it must
-    // not hold the primary one hostage.
-    //
-    // ⚠ The cost is named honestly: a swallowed failure means that element is missing for good (the
-    // next poll hits the activity marker and skips the operation). That is why it is COUNTED and
-    // printed in the unconditional run-summary line — a silently empty SP beside a working import is
-    // the exact symptom #575 exists to remove, and it must not come back through the error path.
-    //
-    // ⚠ Missing user fields are NOT this case: `crm.item.add` ignores unknown UF keys silently
-    // (measured on a live portal 2026-08-22), so an SP provisioned before #575 still gets elements —
-    // just without the registry columns until the admin re-runs provisioning.
-    if (ledgerPaymentRef && deps.writePaymentRegistry) {
-      try {
-        await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
-      } catch {
-        registryFailed++
-      }
     }
     const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
     // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including

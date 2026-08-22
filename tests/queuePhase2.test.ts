@@ -332,9 +332,13 @@ describe('handleCrmSyncJob', () => {
   it('#575 реестр не пишется, когда смарт-процесс не провижинен', async () => {
     // «Кое-где нет смарт-процессов» (владелец) — там деградируем до одного дела, а не падаем.
     const { deps, calls } = fakeDeps({ company: null, myCompany: '9' })
-    await handleCrmSyncJob(job([item('no-sp')]), deps)
+    const r = await handleCrmSyncJob(job([item('no-sp')]), deps)
     expect(calls.registry).toEqual([])
     expect(calls.activity).toHaveLength(1)
+    // ⚠ И это НЕ отказ. Без проверки счётчика тест проходил и когда гейт `ledgerPaymentRef` снимали
+    // вовсе: вызов тогда падал внутри и уходил в `catch`, `calls.registry` оставался пуст — то есть
+    // «не пишем, потому что нечего» было неотличимо от «пытались и не смогли».
+    expect(r.registryFailed).toBe(0)
   })
 
   it('#575 реестр пишется ДО дела — иначе его сбой навсегда пропускает операцию', async () => {
@@ -356,8 +360,48 @@ describe('handleCrmSyncJob', () => {
       order.push('activity')
       return origActivity(...a)
     }
+    const origLedger = deps.writeLedger!
+    deps.writeLedger = async (...a) => {
+      order.push('ledger')
+      return origLedger(...a)
+    }
     await handleCrmSyncJob(job([item('order-check')]), deps)
-    expect(order).toEqual(['registry', 'activity'])
+    expect(order[0]).toBe('registry')
+    expect(order.at(-1)).toBe('activity')
+  })
+
+  it('#575 разнесение НЕ обгоняет реестр: элемент создаётся с полями, а не голым', async () => {
+    // ⚠ Тест с ОБЩИМ состоянием, а не с двумя независимыми фейками, и это несущее различие.
+    // `writeLedgerAllocation` зовёт тот же `ensurePaymentElement`, но БЕЗ полей реестра, а тот при
+    // найденном маркере не дописывает ничего. Пока фейки независимы, оба «успешны» и промах не
+    // виден вовсе; здесь они делят один склад элементов с той же семантикой «кто первым создал,
+    // тот и записал». ⚠ Ветка разнесения обязана РЕАЛЬНО сработать — иначе тест зелен при любом
+    // порядке (проверено мутацией: без совпавшей цели он проходит и с прежним, сломанным кодом).
+    const elements = new Map<string, { registry: boolean }>()
+    const ensure = (marker: string, withRegistry: boolean) => {
+      if (!elements.has(marker)) elements.set(marker, { registry: withRegistry })
+      return marker
+    }
+    const spMatrix: RecognitionSettings = {
+      alphabet: 'cyrillic',
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }],
+      configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }
+    }
+    const exact: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, resolve: exact })
+    deps.writePaymentRegistry = async o => ensure(dedupKey(o), true)
+    deps.writeLedger = async (o) => {
+      ensure(dedupKey(o), false)
+      return true
+    }
+    const op = item('d1', 'credit', 'счет СЧ-0001')
+    const r = await handleCrmSyncJob(job([op]), deps)
+    expect(r.allocated).toBe(1) // ветка разнесения действительно отработала
+    expect(calls.ledger.length + 1).toBeGreaterThan(0)
+    expect(elements.get(dedupKey(op))).toEqual({ registry: true })
   })
 
   it('#575 отказ реестра НЕ отменяет дело: операция записана, отказ посчитан', async () => {

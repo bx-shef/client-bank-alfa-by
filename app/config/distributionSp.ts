@@ -36,8 +36,8 @@ export interface SpRef {
 export interface SpUserField {
   /** POSTFIX only; full name = `UF_CRM_<id>_<postfix>`. */
   postfix: string
-  /** B24 user-field type: `double` (number), `boolean` (Y/N), `string`, `integer`. */
-  userTypeId: 'double' | 'boolean' | 'string' | 'integer'
+  /** B24 user-field type: `double` (number), `boolean` (Y/N), `string`, `integer`, `date`. */
+  userTypeId: 'double' | 'boolean' | 'string' | 'integer' | 'date'
   /** Human label (edit-form). */
   label: string
   /** Optional `userfieldconfig.add` `settings`. For `double` MONEY fields we set `{ PRECISION: 2 }`:
@@ -66,9 +66,22 @@ export const PAYMENT_SP_FIELDS = {
   // every operation searchable and filterable in CRM. Until #575 it held only the money fields,
   // because an element was written ONLY when an allocation succeeded; the rest of the statement
   // (who paid, when, what for) lived solely in the activity's prose. These carry it as DATA.
-  /** Operation date (`acceptDate`), the field the registry is sorted and filtered by. */
-  operationDate: { postfix: 'OP_DATE', userTypeId: 'string', label: 'Дата операции' },
-  /** Direction — приход/расход, as text: an SP boolean would read as «да/нет» in the list. */
+  /** Operation date — the axis the registry is sorted and filtered by, so it is a real `date`, not
+   *  text: only a typed field gives the CRM list a calendar range picker, and finding «платежи с 1
+   *  по 15 августа» is the whole point of a registry.
+   *  ⚠ It is fed the DATE COMPONENT ONLY (`acceptDate.slice(0,10)`), never the raw instant. Measured
+   *  on a live portal 2026-08-22: B24 converts a timestamp into the PORTAL's timezone before taking
+   *  the date, so `2026-08-21T23:30:00Z` lands on 22 August — an off-by-one on a booking date, which
+   *  for an accountant is a wrong day, not a rounding detail. A bare `YYYY-MM-DD` round-trips
+   *  literally, whatever the portal's zone. The bank states a calendar date; reinterpreting it
+   *  through zones is wrong in principle, not merely risky. */
+  operationDate: { postfix: 'OP_DATE', userTypeId: 'date', label: 'Дата операции' },
+  /** Direction — приход/расход as TEXT.
+   *  ⚠ `boolean` was rejected because an SP boolean reads as «да/нет» in the list, and `enumeration`
+   *  because it does not work here: measured 2026-08-22 — `userfieldconfig.add` accepted the field
+   *  but registered no inline `list` items, and `crm.item.add` given the text «Приход» stored `0`.
+   *  A silently-wrong stored value is worse than a plain string, and doing it properly would mean
+   *  resolving per-portal enum item ids on every write. Two values do not earn that. */
   direction: { postfix: 'DIRECTION', userTypeId: 'string', label: 'Направление' },
   /** Counterparty name as the bank spelled it (NOT the CRM company — that is the `companyId` link). */
   counterparty: { postfix: 'COUNTERPARTY', userTypeId: 'string', label: 'Контрагент' },

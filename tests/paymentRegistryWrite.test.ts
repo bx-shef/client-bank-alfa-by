@@ -37,7 +37,9 @@ describe('#575 buildRegistryFields', () => {
   it('переносит всё, что сказала выписка, включая банк человеческим именем', () => {
     const f = buildRegistryFields(op(), 'prior-by')
     expect(f).toEqual({
-      operationDate: '2026-08-21T14:00:00.000',
+      // ⚠ Только календарная часть: поле типа `date`, а портал переводит момент в свой часовой
+      // пояс прежде, чем взять дату (замерено), поэтому сырой момент дал бы сдвиг на сутки.
+      operationDate: '2026-08-21',
       direction: 'Приход',
       counterparty: 'ООО «Ромашка»',
       counterpartyAccount: 'BY11ALFA30120A11111111111111',
@@ -54,7 +56,7 @@ describe('#575 buildRegistryFields', () => {
     expect(DIRECTION_LABELS).toEqual({ credit: 'Приход', debit: 'Расход' })
   })
 
-  it('неизвестный провайдер отдаёт свой id, а не пустую клетку', () => {
+  it('провайдер ручной загрузки тоже получает человеческое имя, а не пустую клетку', () => {
     // «Имени для этого банка у нас нет» — тоже факт; пустая клетка читается как «банк неизвестен».
     const f = buildRegistryFields(op(), 'manual')
     expect(f.bank).toBeTruthy()
@@ -72,13 +74,48 @@ describe('#575 колонки реестра в crm.item.add', () => {
       registry: buildRegistryFields(op(), 'prior-by')
     })
     const f = call.params.fields as Record<string, unknown>
+    // ⚠ Проверяются ВСЕ ВОСЕМЬ. Прежняя версия смотрела на четыре — и мутация «убрать строку из
+    // карты постфиксов» для остальных четырёх проходила зелёной: поле просто не доезжало до
+    // `crm.item.add`, а сказать об этом было некому.
+    expect(f[uf(PAYMENT_SP_FIELDS.operationDate.postfix)]).toBe('2026-08-21')
+    expect(f[uf(PAYMENT_SP_FIELDS.direction.postfix)]).toBe('Приход')
     expect(f[uf(PAYMENT_SP_FIELDS.counterparty.postfix)]).toBe('ООО «Ромашка»')
     expect(f[uf(PAYMENT_SP_FIELDS.counterpartyAccount.postfix)]).toBe('BY11ALFA30120A11111111111111')
+    expect(f[uf(PAYMENT_SP_FIELDS.counterpartyUnp.postfix)]).toBe('191234567')
     expect(f[uf(PAYMENT_SP_FIELDS.purpose.postfix)]).toBe('Оплата по счёту СЧ-1234')
+    expect(f[uf(PAYMENT_SP_FIELDS.ownAccount.postfix)]).toBe(op().account)
     expect(f[uf(PAYMENT_SP_FIELDS.bank.postfix)]).toBe('Приорбанк')
     // Денежные поля на месте — реестр их не вытеснил.
     expect(f[uf(PAYMENT_SP_FIELDS.total.postfix)]).toBe(1840.55)
     expect(f[uf(PAYMENT_SP_FIELDS.marker.postfix)]).toBe('M')
+  })
+
+  it('значение обрезается по краям, а не пишется с пробелами', () => {
+    // ⚠ Мутация «оставить проверку на пустоту, но писать нетримленное значение» прежде проходила
+    // зелёной. Пробелы по краям в колонке CRM — это несовпадение при фильтре и поиске, то есть
+    // ровно та беда, от которой реестр и должен спасать.
+    const call = buildPaymentElementAddCall(SP, {
+      opportunity: 1, currency: 'BYN', marker: 'M',
+      registry: buildRegistryFields(op({ purpose: '  Оплата по счёту СЧ-1234  ' }), 'alfa-by')
+    })
+    const f = call.params.fields as Record<string, unknown>
+    expect(f[uf(PAYMENT_SP_FIELDS.purpose.postfix)]).toBe('Оплата по счёту СЧ-1234')
+  })
+
+  it('постфиксы полей закреплены ЛИТЕРАЛАМИ — переименование осиротит поле на живом портале', () => {
+    // ⚠ Единственное место, где строки проверяются НЕЗАВИСИМО от объявления. Всё остальное (и
+    // провижининг, и карта записи, и тесты выше) читает `PAYMENT_SP_FIELDS`, поэтому переименование
+    // постфикса сходится само с собой и проходит зелёным. А на портале это означает: старое поле
+    // `UF_CRM_<id>_PURPOSE` остаётся висеть со всеми значениями, рядом создаётся пустое новое, и
+    // никакой миграции у нас нет. Меняешь строку здесь — значит, осознанно.
+    expect(PAYMENT_SP_FIELDS.operationDate.postfix).toBe('OP_DATE')
+    expect(PAYMENT_SP_FIELDS.direction.postfix).toBe('DIRECTION')
+    expect(PAYMENT_SP_FIELDS.counterparty.postfix).toBe('COUNTERPARTY')
+    expect(PAYMENT_SP_FIELDS.counterpartyAccount.postfix).toBe('CP_ACCOUNT')
+    expect(PAYMENT_SP_FIELDS.counterpartyUnp.postfix).toBe('CP_UNP')
+    expect(PAYMENT_SP_FIELDS.purpose.postfix).toBe('PURPOSE')
+    expect(PAYMENT_SP_FIELDS.ownAccount.postfix).toBe('OWN_ACCOUNT')
+    expect(PAYMENT_SP_FIELDS.bank.postfix).toBe('BANK')
   })
 
   it('пустое значение НЕ пишется пустой строкой', () => {
@@ -103,6 +140,33 @@ describe('#575 колонки реестра в crm.item.add', () => {
       uf(PAYMENT_SP_FIELDS.needDistributionsSum.postfix),
       uf(PAYMENT_SP_FIELDS.total.postfix)
     ].sort())
+  })
+})
+
+describe('#575 нейтрализация полей, которые пишет плательщик', () => {
+  it('BB-разметка из назначения и имени контрагента не доезжает до карточки живой', () => {
+    // ⚠ Назначение платежа и имя контрагента набирает ПЛАТЕЛЬЩИК. В проекте их нейтрализует каждый
+    // писатель — описание дела, сообщение в чат, оповещения об ошибках; реестр не имеет права быть
+    // исключением, тем более что в список смарт-процесса смотрят чаще, чем в описание дела.
+    const f = buildRegistryFields(op({
+      purpose: 'Оплата [URL=https://evil.test]тут[/URL] по счёту',
+      counterparty: { name: 'ООО [B]Ромашка[/B]', unp: '191234567', account: 'BY26PJCB30120000000000000933' }
+    }), 'alfa-by')
+    expect(f.purpose).not.toContain('[')
+    expect(f.purpose).not.toContain(']')
+    expect(f.counterparty).not.toContain('[')
+    // ⚠ Текст при этом ЧИТАЕМ — нейтрализация меняет скобки на полноширинные, а не вырезает слова:
+    // реестр обязан оставаться пригодным для поиска по назначению.
+    expect(f.purpose).toContain('Оплата')
+    expect(f.purpose).toContain('по счёту')
+    expect(f.counterparty).toContain('Ромашка')
+  })
+
+  it('на настоящих данных нейтрализация — тождественная замена', () => {
+    // Счёт и УНП скобок не содержат никогда, поэтому защита не портит то, что бухгалтер копирует.
+    const f = buildRegistryFields(op(), 'alfa-by')
+    expect(f.counterpartyAccount).toBe(op().counterparty.account)
+    expect(f.counterpartyUnp).toBe(op().counterparty.unp)
   })
 })
 
