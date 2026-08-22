@@ -16,6 +16,7 @@ import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { IssuePayload } from '../../app/utils/feedback'
 import type { AllocationTargetKind } from '../../app/utils/allocation'
 import type { SpRef } from '../../app/config/distributionSp'
+import { dedupKey } from '../../app/utils/statement'
 
 export const Q_EVENTS = 'b24-events'
 export const Q_FETCH = 'bank-fetch'
@@ -38,13 +39,14 @@ export const Q_DELETIONS = 'b24-deletions'
 export const Q_FEEDBACK = 'feedback-post'
 export const Q_TRIGGER = 'trigger-fire'
 /**
- * Долговременный ретрай ЗАПИСИ В РЕЕСТР платежей (#578) и ПРИВЯЗОК дела (#585).
+ * Durable retry for the payment REGISTRY write (#578) and for the activity BINDINGS (#585).
  *
- * ⚠ Очереди ДВЕ, а не одна общая «дозапись в CRM», хотя болезнь у них одна. Разное всё, что важно
- * для очереди: payload реестра несёт операцию выписки (финансовые ПДн ⇒ ограниченное по возрасту
- * удержание, #245), payload привязок — только id сущностей CRM; у реестра ретрай лечит отказ
- * записи, у привязок — ещё и частично применённый батч. Общая очередь заставила бы каждого
- * потребителя разбирать вид задачи, а бюджет простоя (`queueAlert`) стал бы средним по больнице.
+ * ⚠ TWO queues, not one shared «deferred CRM write», even though the illness is the same.
+ * Everything a queue actually cares about differs: the registry payload carries a statement
+ * operation (financial PII ⇒ age-bound retention, #245), the bindings payload only CRM entity ids;
+ * the registry retry heals a failed write, the bindings retry also heals a half-applied batch. One
+ * shared queue would force every consumer to branch on the job kind, and its stall budget
+ * (`queueAlert`) would become an average of two unlike things.
  */
 export const Q_REGISTRY = 'registry-write'
 export const Q_BINDINGS = 'activity-bind'
@@ -197,36 +199,38 @@ export interface TriggerFireJob {
 }
 
 /**
- * Запись элемента реестра платежей, не удавшаяся синхронно (#578).
+ * A payment-registry element write that failed synchronously (#578).
  *
- * ⚠ Несёт САМУ ОПЕРАЦИЮ выписки — иначе колонки реестра неоткуда взять. Это финансовые ПДн, как и
- * в `crm-sync`, поэтому удержание задачи ограничено по ВОЗРАСТУ (#245), а не по числу.
+ * ⚠ It carries the STATEMENT OPERATION itself — the registry columns come from nowhere else. That
+ * is financial PII, exactly as in `crm-sync`, so the job's retention is bound by AGE (#245), not
+ * by count, and the queue is swept (`statementSweep`).
  *
- * ⚠ `companyId` — это КЛИЕНТ (или `null`), а не «моя компания»: элемент связывает плательщика, и
- * подстановка фолбэка пометила бы чужой платёж как свой собственный.
+ * ⚠ `companyId` is the CLIENT (or `null`), never the my-company fallback: the element links the
+ * PAYER, and substituting the fallback would label a stranger's payment as our own company's.
  */
 export interface RegistryWriteJob {
   memberId: string
   providerId: BankProviderId
-  /** Операция выписки — источник всех восьми колонок реестра. */
+  /** The statement operation — the source of all eight registry columns. */
   item: StatementItem
-  /** id компании-плательщика в CRM, если она опознана. */
+  /** CRM id of the payer company, when it was identified. */
   companyId: string | null
-  /** Смарт-процесс «Платежи» портала на момент постановки задачи. */
+  /** The portal's payments smart process as it was when the job was queued. */
   paymentSp: SpRef
 }
 
 /**
- * Привязки дела, не вставшие синхронно (#585).
+ * Activity bindings that did not stick synchronously (#585).
  *
- * ⚠ Payload НЕ содержит ПДн: только id дела и пары «тип сущности + id» внутри CRM клиента. Поэтому
- * удержание здесь обычное, а не ограниченное возрастом.
+ * ⚠ The payload holds NO PII: only the activity id and «entity type + id» pairs inside the client's
+ * own CRM. Hence ordinary retention here, and no place in the statement sweep.
  */
 export interface ActivityBindJob {
   memberId: string
-  /** id дела, к которому привязываем. */
+  /** Activity the bindings belong to. */
   activityId: string
-  /** Пары, которые должны стоять на деле. Уже стоящие воркер пропустит, прочитав `binding.list`. */
+  /** Pairs that must end up on the activity. The worker reads `binding.list` and skips the ones
+   *  already there — a repeat binding of the same pair is an ERROR on the portal. */
   refs: Array<{ entityTypeId: number, entityId: number }>
 }
 
@@ -278,14 +282,21 @@ export function feedbackPostJobId(job: FeedbackPostJob): string {
 }
 
 export function registryWriteJobId(job: RegistryWriteJob): string {
-  // member|opKey (#578) — одна операция, один элемент реестра. Повторная постановка той же
-  // операции дедуплицируется: сама запись идемпотентна по маркеру.
-  return joinId(['reg', job.memberId, `${job.item.account}|${job.item.docId}`])
+  // member|operation key (#578) — one operation, one registry element. Re-queueing the same
+  // operation dedups: the write itself is idempotent by the marker.
+  //
+  // ⚠ The key comes from `dedupKey`, it is NOT re-assembled here as `account|docId`. The
+  // difference shows up exactly where it is hardest to notice: with a blank `docId` (the bank sent
+  // none) the naive join gives EVERY operation of that account the SAME id, and BullMQ silently
+  // collapses them into one job — so the retry queue built against a silent loss would itself
+  // silently lose every element but the first. `dedupKey` already closed that case with a content
+  // hash (#430 C1), and the neighbouring trigger queue uses it too (`opKey`).
+  return joinId(['reg', job.memberId, dedupKey(job.item)])
 }
 
 export function activityBindJobId(job: ActivityBindJob): string {
-  // member|activityId (#585) — привязки принадлежат ОДНОМУ делу, и повторная постановка для того
-  // же дела это та же работа, а не вторая.
+  // member|activityId (#585) — bindings belong to ONE activity, so re-queueing for the same
+  // activity is the same work, not a second job.
   return joinId(['bind', job.memberId, job.activityId])
 }
 

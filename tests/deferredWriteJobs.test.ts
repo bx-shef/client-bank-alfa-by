@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleActivityBindJob, handleRegistryWriteJob } from '../server/utils/deferredWriteJobs'
 import type { ActivityBindJob, RegistryWriteJob } from '../server/queue/topology'
+import type { RegistryWriteJobDeps } from '../server/utils/deferredWriteJobs'
 import type { StatementItem } from '../app/types/statement'
 
 // Долговременная дозапись в CRM (#578 реестр / #585 привязки).
@@ -28,6 +29,17 @@ const REGISTRY_JOB: RegistryWriteJob = {
   paymentSp: { entityTypeId: 1044, id: 44 }
 }
 
+/** Зависимости реестровой задачи: писатель + связка «найти дело и привязать элемент» (#578/#585). */
+function registryDeps(over: Partial<RegistryWriteJobDeps> = {}): RegistryWriteJobDeps {
+  return {
+    resolvePortalCall: async () => ({} as never),
+    writePaymentRegistry: async () => '101',
+    findActivityId: async () => null,
+    bindActivity: async () => ({ bound: 0, failed: 0 }),
+    ...over
+  }
+}
+
 describe('дозапись элемента реестра (#578)', () => {
   it('зовёт того же писателя, что и синхронный путь, с теми же аргументами', async () => {
     // ⚠ Тот же писатель — не мелочь: он дописывает колонки элементу, который НАШЁЛ. К моменту
@@ -35,26 +47,58 @@ describe('дозапись элемента реестра (#578)', () => {
     // «упрощённый» путь записи молча не сделал бы ничего.
     const call = { tag: 'rest' } as never
     const writePaymentRegistry = vi.fn(async () => '101')
-    await handleRegistryWriteJob(REGISTRY_JOB, { resolvePortalCall: async () => call, writePaymentRegistry })
+    await handleRegistryWriteJob(REGISTRY_JOB, registryDeps({ resolvePortalCall: async () => call, writePaymentRegistry }))
     expect(writePaymentRegistry).toHaveBeenCalledWith(ITEM, '7', 'alfa-by', REGISTRY_JOB.paymentSp, call)
   })
 
   it('нет токена портала — БРОСАЕТ, а не «успех»', async () => {
     // Приложение могли удалить: тогда попытки честно закончатся (их число ограничено). Тихий
     // выход означал бы очередь, которая всегда успешна и ничего не чинит.
-    await expect(handleRegistryWriteJob(REGISTRY_JOB, {
+    await expect(handleRegistryWriteJob(REGISTRY_JOB, registryDeps({
       resolvePortalCall: async () => null,
       writePaymentRegistry: vi.fn()
-    })).rejects.toThrow(/no portal token/)
+    }))).rejects.toThrow(/no portal token/)
   })
 
   it('отказ писателя пробрасывается — BullMQ повторит', async () => {
-    await expect(handleRegistryWriteJob(REGISTRY_JOB, {
-      resolvePortalCall: async () => ({} as never),
+    await expect(handleRegistryWriteJob(REGISTRY_JOB, registryDeps({
       writePaymentRegistry: async () => {
         throw new Error('портал молчит')
       }
-    })).rejects.toThrow('портал молчит')
+    }))).rejects.toThrow('портал молчит')
+  })
+
+  it('дозаписанный элемент ПРИВЯЗЫВАЕТСЯ к делу операции', async () => {
+    // ⚠ Найдено ревью, и без этого починка была бы половинчатой. Синхронный путь привязывал дело к
+    // элементу, которого в тот момент НЕ БЫЛО (запись упала), и второй попытки у привязки не будет:
+    // операция отсеется на маркере. То есть элемент появился бы, а дойти до него из карточки
+    // платежа стало бы нельзя — навсегда и молча.
+    const bindActivity = vi.fn(async () => ({ bound: 1, failed: 0 }))
+    await handleRegistryWriteJob(REGISTRY_JOB, registryDeps({
+      writePaymentRegistry: async () => '101',
+      findActivityId: async () => '2087',
+      bindActivity
+    }))
+    expect(bindActivity).toHaveBeenCalledTimes(1)
+    const [activityId, refs] = bindActivity.mock.calls[0] as unknown as [string, Array<{ entityTypeId: number, entityId: number }>]
+    expect(activityId).toBe('2087')
+    expect(refs).toEqual([{ entityTypeId: 1044, entityId: 101 }])
+  })
+
+  it('дела ещё нет — выходим тихо, а не падаем', async () => {
+    // Реестр пишется РАНЬШЕ дела, поэтому «дела нет» — обычное состояние. Следующий прогон запишет
+    // его сам и там же привяжет элемент, который уже создан.
+    const bindActivity = vi.fn()
+    await expect(handleRegistryWriteJob(REGISTRY_JOB, registryDeps({ findActivityId: async () => null, bindActivity })))
+      .resolves.toBeUndefined()
+    expect(bindActivity).not.toHaveBeenCalled()
+  })
+
+  it('элемент записан, но привязка не встала — БРОСАЕМ (повтор дешёвый и идемпотентный)', async () => {
+    await expect(handleRegistryWriteJob(REGISTRY_JOB, registryDeps({
+      findActivityId: async () => '2087',
+      bindActivity: async () => ({ bound: 0, failed: 1 })
+    }))).rejects.toThrow(/not bound/)
   })
 })
 

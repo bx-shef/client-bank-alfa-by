@@ -504,13 +504,9 @@ export function liveHandlerDeps(): HandlerDeps {
     // app-context — the resolver's SDK call provides it (a webhook gets «Application context
     // required»). `executeTriggerViaRest` (#269) takes the CODE via `opts.triggerCode`.
     applyTrigger: makeApplyTrigger({ isDemoAccount, resolvePortalCall, executeTriggerViaRest }),
-    // Durable retry (#79): a missed trigger fire ('retry' outcome) is handed to the trigger-fire
-    // queue so it self-heals with backoff. BEST-EFFORT — never throws (a trigger only signals). Demo
-    // gated (defensive; applyTrigger already returns 'skip' for demo). No Redis ⇒ enqueue no-ops ⇒
-    // graceful degrade to single-shot. The job carries only target ids + the app CODE (no financial PII).
-    // Дозапись элемента реестра (#578) и привязок дела (#585). Обе — best-effort постановки:
-    // демо-счета не ставим вовсе, отказ постановки глотаем (без Redis это и так no-op), потому что
-    // задача-починка не имеет права отменить обработку пачки, ради которой всё и делается.
+    // Deferred CRM writes (#578 registry / #585 bindings). Both enqueues are BEST-EFFORT: demo
+    // accounts are never queued, and an enqueue failure is swallowed (without Redis it is a no-op
+    // anyway) — a repair job has no right to abort the very batch it exists to complete.
     enqueueRegistryRetry: async (item, companyId, memberId, provider, paymentSp) => {
       try {
         if (isDemoAccount(item.account)) return
@@ -526,6 +522,10 @@ export function liveHandlerDeps(): HandlerDeps {
         crmLog.warning(`portal ${memberId}: дозапись привязок не поставлена — ${logSafe(String((e as Error)?.message ?? e))}`)
       }
     },
+    // Durable retry (#79): a missed trigger fire ('retry' outcome) is handed to the trigger-fire
+    // queue so it self-heals with backoff. BEST-EFFORT — never throws (a trigger only signals). Demo
+    // gated (defensive; applyTrigger already returns 'skip' for demo). No Redis ⇒ enqueue no-ops ⇒
+    // graceful degrade to single-shot. The job carries only target ids + the app CODE (no financial PII).
     enqueueTriggerRetry: async (item, target, memberId, code) => {
       try {
         if (isDemoAccount(item.account)) return
@@ -869,18 +869,26 @@ export function startFeedbackWorker(deps: FeedbackPostJobDeps): Worker {
   }, () => handleFeedbackPostJob(job.data, deps)), { connection: connectionOptions() })
 }
 
-/** Живые зависимости воркеров дозаписи в CRM (#578/#585) — тот же токен и тот же транспорт, что у
- *  синхронного пути. Батч воркеру привязок НЕ даётся сознательно: см. `handleActivityBindJob`. */
+/** Live deps for the deferred-write workers (#578/#585): the same stored token and the same
+ *  transports the synchronous path uses. No batch is handed to either — see `handleActivityBindJob`
+ *  (a halted batch is exactly what the retry path must not repeat). */
 export function liveRegistryWriteDeps(): RegistryWriteJobDeps {
-  return { resolvePortalCall, writePaymentRegistry: writePaymentRegistryViaRest }
+  return {
+    resolvePortalCall,
+    writePaymentRegistry: writePaymentRegistryViaRest,
+    findActivityId: findActivityByMarker,
+    // ⚠ No batch — a single binding, and the same path the bindings retry takes.
+    bindActivity: (activityId, refs, call) => bindActivityViaRest(activityId, refs, call)
+  }
 }
 
 export function liveActivityBindDeps(): ActivityBindJobDeps {
-  return { resolvePortalCall, bindActivity: bindActivityViaRest }
+  // ⚠ No batch is passed, and the port does not accept one: see `handleActivityBindJob`.
+  return { resolvePortalCall, bindActivity: (activityId, refs, call) => bindActivityViaRest(activityId, refs, call) }
 }
 
-/** Воркер дозаписи элемента реестра (#578). Запись идемпотентна по маркеру операции и дописывает
- *  колонки уже существующему элементу, поэтому повтор безопасен и на частично сделанной работе. */
+/** The registry-write retry worker (#578). The write is idempotent by the operation marker AND
+ *  fills the columns of an element it finds, so a repeat is safe even on half-done work. */
 export function startRegistryWorker(deps: RegistryWriteJobDeps): Worker {
   return new Worker<RegistryWriteJob>(Q_REGISTRY, async job => withSpan('registry-write', {
     'job.queue': 'registry-write',
@@ -888,8 +896,8 @@ export function startRegistryWorker(deps: RegistryWriteJobDeps): Worker {
   }, () => handleRegistryWriteJob(job.data, deps)), { connection: connectionOptions() })
 }
 
-/** Воркер дозаписи привязок дела (#585). Ставит только недостающие пары (читает `binding.list`),
- *  поэтому повтор не превращается в поток «уже привязано». */
+/** The activity-bind retry worker (#585). Adds only the pairs that are missing (it reads
+ *  `binding.list` first), so a repeat does not turn into a stream of «already bound» errors. */
 export function startBindingsWorker(deps: ActivityBindJobDeps): Worker {
   return new Worker<ActivityBindJob>(Q_BINDINGS, async job => withSpan('activity-bind', {
     'job.queue': 'activity-bind',

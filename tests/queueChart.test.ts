@@ -11,6 +11,7 @@ import {
   totalBacklog,
   type QueuesSnapshot
 } from '~/utils/queueChart'
+import { QUEUE_NAMES } from '../server/queue/topology'
 
 // Pure data-shaping for the queue monitor chart: build the live time-series from
 // GET /api/queues snapshots (the chart component only renders). See docs/QUEUES.md.
@@ -190,5 +191,25 @@ describe('legendRows', () => {
     expect(crm).toMatchObject({ label: 'Запись в CRM', waiting: 5, active: 1, completed: 38, failed: 2 })
     const events = rows.find(r => r.name === 'b24-events')!
     expect(events).toMatchObject({ waiting: 0, active: 0, completed: 0, failed: 0 })
+  })
+})
+
+describe('состав панели очередей (#578/#585, находка ревью)', () => {
+  // ⚠ `QUEUE_META` — ВТОРОЙ список очередей, независимый от `QUEUE_NAMES`, и расходятся они молча:
+  // счётчики в ответе роута есть, а на экране оператора очереди нет. Так и случилось — `bank-fetch-prior`
+  // не рисовался с момента появления, а дозапись реестра/привязок добавилась бы к нему третьей.
+  it('каждая очередь конвейера имеет строку на экране', () => {
+    const drawn = new Set(QUEUE_META.map(q => q.name))
+    expect([...QUEUE_NAMES].filter(n => !drawn.has(n)), 'очередь есть в коде, но не видна оператору').toEqual([])
+  })
+
+  it('на экране нет очередей, которых нет в конвейере', () => {
+    const known = new Set<string>(QUEUE_NAMES)
+    expect(QUEUE_META.map(q => q.name).filter(n => !known.has(n)), 'рисуем несуществующую очередь').toEqual([])
+  })
+
+  it('цвета уникальны — иначе две линии неразличимы', () => {
+    const colors = QUEUE_META.map(q => q.color)
+    expect(new Set(colors).size).toBe(colors.length)
   })
 })

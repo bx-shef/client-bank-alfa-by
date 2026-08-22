@@ -50,9 +50,10 @@ import { pluralRu } from '../../app/utils/importStatus'
  *    altogether. The budget is therefore finite but past the whole backoff ladder.
  *  - **`feedback-post`** — durable retry over 8 attempts (~1 hour of GitHub flakiness by design), so
  *    the budget is двукратный запас поверх этого, not 20 minutes.
- *  - **`registry-write` / `activity-bind`** — дозапись в CRM (#578/#585): те же 8 попыток, но по
- *    30 с, то есть ~2 ч. Окно короче триггерного НАМЕРЕННО: там ждут действия администратора, здесь
- *    — отказа портала, который либо пройдёт за десятки минут, либо не пройдёт вовсе.
+ *  - **`registry-write` / `activity-bind`** — дозапись в CRM (#578/#585): те же 8 попыток по 30 с,
+ *    что и у `feedback-post`, то есть ≈1 час (3810 с) штатного `delayed`-времени. Окно короче триггерного
+ *    НАМЕРЕННО: там ждут действия администратора, здесь — отказа портала, который либо пройдёт за
+ *    десятки минут, либо не пройдёт вовсе.
  *
  * The fast paths keep the source's 20 minutes: `b24-events` (install/uninstall — a stall means
  * portals silently lose tokens), `file-parse`/`crm-sync` (a person uploaded a file and is waiting
@@ -69,9 +70,10 @@ export const STALL_BUDGET_MS: Record<QueueName, number | null> = {
   [Q_FEEDBACK]: 2 * 60 * 60 * 1000,
   // 48 h > the ~34 h backoff ladder, so normal self-healing never trips it, but a dead worker does.
   [Q_TRIGGER]: 48 * 60 * 60 * 1000,
-  // Дозапись в CRM (#578/#585): ретрай 8 попыток по `30s·2^(n-1)` ≈ 2 ч штатного `delayed`-времени.
-  // Бюджет — двукратный запас поверх лестницы, как у `feedback-post`: меньше значило бы пейджить о
-  // работающем самолечении, а `null` сделал бы очередь невидимой для алертинга вместе с её воркером.
+  // Дозапись в CRM (#578/#585): 8 попыток по `30s·2^(n-1)` ≈ 63 мин штатного `delayed`-времени
+  // (та же лестница, что у `feedback-post`, — и тот же бюджет 4 ч поверх неё). Запас нарочно
+  // больше двукратного: сюда попадает ещё и ожидание в очереди на занятом воркере. `null` сделал
+  // бы очередь невидимой для алертинга вместе с её воркером.
   [Q_REGISTRY]: 4 * 60 * 60 * 1000,
   [Q_BINDINGS]: 4 * 60 * 60 * 1000
 }

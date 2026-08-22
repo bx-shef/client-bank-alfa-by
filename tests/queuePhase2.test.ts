@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BankProviderId, OperationDirection, StatementItem } from '../app/types/statement'
 import {
-  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
+  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_DEFERRED_WRITES_PER_RUN, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
 import {
   DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
@@ -2025,6 +2025,48 @@ describe('#579 привязки дела к сущностям CRM', () => {
     const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
     expect(calls.activity).toHaveLength(2)
     expect(r.registryFailed).toBe(2)
+  })
+
+  it('отказ поиска «моей компании» не уносит ОСТАЛЬНЫЕ привязки', async () => {
+    // ⚠ Найдено ревью. `findMyCompany` пробрасывает ошибки транспорта — так и задумано на его
+    // первом месте вызова (он идёт ДО маркера, и бросок означает чистый повтор). Здесь он ПОСЛЕ
+    // маркера, и прежняя редакция теряла из-за его блипа ВСЕ привязки операции разом, включая
+    // элемент реестра и сущность списания, которые известны и без него.
+    const exact: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, resolve: exact, company: '5', myCompany: '9' })
+    deps.findMyCompany = async () => {
+      throw new Error('портал ответил 502')
+    }
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    // Остальное привязано прямо сейчас…
+    expect(calls.bind, 'привязки не поставлены вовсе').toHaveLength(1)
+    expect((calls.bind[0] as [string, string[], string])[1]).toContain('31:7')
+    // …но операция помечена как потерявшая привязку: «мою компанию» мы так и не узнали, ретраить
+    // нечего, и молчание выдавало бы одностороннюю связь за полную.
+    expect(r.bindingsFailed).toBe(1)
+    expect(calls.bindRetry, 'ретраить нечего — ссылка неизвестна').toHaveLength(0)
+  })
+
+  it('#578 системный отказ НЕ превращается в усилитель нагрузки: потолок задач на прогон', async () => {
+    // ⚠ Отказ реестра почти всегда системный (СП удалён, право отозвано), то есть падает КАЖДАЯ
+    // операция. Без потолка выписка на сотни строк заводила бы задачу на каждую, по 8 попыток — в
+    // тот же пер-портальный лимитер, где живут опрос и продление токена. Различать «постоянный» и
+    // «транзиентный» по ТЕКСТУ ошибки нельзя: через SDK доезжает только локализованная строка.
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: spConfig }, company: '5'
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('СП удалён на портале')
+    }
+    const many = Array.from({ length: MAX_DEFERRED_WRITES_PER_RUN + 10 }, (_, i) => item(`op-${i}`))
+    const r = await handleCrmSyncJob(job(many), deps)
+    // Считаем ВСЕ отказы — оператор видит настоящий масштаб…
+    expect(r.registryFailed).toBe(many.length)
+    // …а задач ставим не больше потолка.
+    expect(calls.regRetry).toHaveLength(MAX_DEFERRED_WRITES_PER_RUN)
   })
 
   it('#579 отказ привязок ВИДЕН в строке итога и отдельно от реестра', () => {

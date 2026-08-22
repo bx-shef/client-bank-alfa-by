@@ -17,7 +17,7 @@ vi.mock('bullmq', () => ({
   }
 }))
 
-const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION } = await import('../server/queue/producers')
+const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, enqueueRegistryWrite, enqueueActivityBind, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION, CRM_RETRY_RETENTION, DEFERRED_WRITE_RETRY } = await import('../server/queue/producers')
 
 afterEach(() => {
   adds.length = 0
@@ -75,5 +75,39 @@ describe('producer retention wiring', () => {
     expect(onFail.age).toBeGreaterThan(0)
     expect(onFail.age).toBeLessThanOrEqual(24 * 3600)
     expect(onFail.count).toBeGreaterThan(0)
+  })
+})
+
+describe('дозапись в CRM: ретрай и удержание (#578/#585)', () => {
+  const item = {
+    account: 'BY00', docId: 'd1', direction: 'credit' as const, amount: 1, currency: 'BYN',
+    purpose: 'p', counterparty: { name: '', unp: '', account: '', bank: '' }, acceptDate: '2026-08-22T00:00:00+03:00'
+  }
+
+  it('registry-write: ретрай ЕСТЬ, удержание — как у выписки (в payload ПДн)', async () => {
+    // ⚠ Мутационный прогон показал дыру: без `attempts` BullMQ берёт 1 попытку, то есть вся идея
+    // «долговременной дозаписи» молча выключается, и ни один тест этого не замечал.
+    await enqueueRegistryWrite({ memberId: 'M', providerId: 'alfa-by', item, companyId: null, paymentSp: { entityTypeId: 1044, id: 44 } })
+    const opts = optsFor('registry-write')
+    expect(opts).toMatchObject(DEFERRED_WRITE_RETRY)
+    expect(opts).toMatchObject(STATEMENT_JOB_RETENTION)
+    expect(opts).toHaveProperty('jobId')
+  })
+
+  it('activity-bind: тот же ретрай, но обычное удержание (ПДн в payload нет)', async () => {
+    await enqueueActivityBind({ memberId: 'M', activityId: '2087', refs: [{ entityTypeId: 4, entityId: 9 }] })
+    const opts = optsFor('activity-bind')
+    expect(opts).toMatchObject(DEFERRED_WRITE_RETRY)
+    expect(opts).toMatchObject(CRM_RETRY_RETENTION)
+    expect(opts).toHaveProperty('jobId')
+  })
+
+  it('лестница ретраев — та, что описана в комментарии (≈1 час, а не «~2 часа»)', () => {
+    // ⚠ Число проверяется, потому что на него ссылаются и бюджет простоя очереди, и PRIVACY.md
+    // (сколько ПДн лежат в Redis). Первая редакция посчитала его неверно, и ошибка разошлась по
+    // трём документам молча.
+    const { attempts, backoff } = DEFERRED_WRITE_RETRY
+    const total = Array.from({ length: attempts - 1 }, (_, i) => backoff.delay * 2 ** i).reduce((a, b) => a + b, 0)
+    expect(total).toBe(3810_000) // ≈1 час, а не два
   })
 })

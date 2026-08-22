@@ -202,6 +202,19 @@ export async function enqueueFeedbackPost(job: FeedbackPostJob): Promise<boolean
 
 /**
 /**
+ * Retention for repair jobs whose payload carries NO statement (`trigger-fire`, `activity-bind`).
+ *
+ * ⚠ A named constant because this literal already appeared in the file twice, character for
+ * character. A future retention change (say, a shorter `removeOnFail` after a privacy review) gets
+ * applied to the named constants, and the third inline copy would silently keep the old policy with
+ * no test to notice.
+ */
+export const CRM_RETRY_RETENTION = {
+  removeOnComplete: { age: 3600, count: 100 },
+  removeOnFail: { age: 86_400, count: 200 }
+} as const
+
+/**
  * Durable-retry options for the payment-trigger self-heal (#79). crm-sync already fired ONCE, so these
  * are the retries: exponential backoff `60s·2^(n-1)` over 12 attempts (11 retries) — cumulative span
  * ~34h (top interval ~17h). A long window because the common miss is a `triggerCode`
@@ -212,30 +225,33 @@ export async function enqueueFeedbackPost(job: FeedbackPostJob): Promise<boolean
 export const TRIGGER_RETRY_OPTS = {
   attempts: 12,
   backoff: { type: 'exponential' as const, delay: 60_000 },
-  removeOnComplete: { age: 3600, count: 100 },
-  removeOnFail: { age: 86_400, count: 200 }
+  ...CRM_RETRY_RETENTION
 } as const
 
 /**
- * Долговременный ретрай записи в реестр платежей (#578) и привязок дела (#585).
+ * Durable retry for the payment-registry write (#578) and the activity bindings (#585).
  *
- * ⚠ Окно КОРОЧЕ, чем у триггера (там ~34 часа), и это не небрежность. Триггер ждёт ДЕЙСТВИЯ
- * АДМИНИСТРАТОРА — регистрации CODE, — поэтому его ретраи обязаны пережить рабочий день. Здесь
- * лечится отказ портала или сети: он либо проходит за десятки минут, либо не пройдёт вовсе, и
- * сутки бесплодных попыток лишь жгут лимит запросов клиента. 8 попыток по `30s·2^(n-1)` — это
- * ~2 часа, чего хватает и на переустановку приложения, и на плановые работы портала.
+ * ⚠ The window is SHORTER than the trigger's (~34 h there), and that is not carelessness. The
+ * trigger waits for an ADMIN ACTION — registering the CODE — so its retries must outlive a working
+ * day. Here what is being healed is a portal/network failure: it either clears within tens of
+ * minutes or not at all, and a day of fruitless attempts only burns the client's request budget.
  *
- * ⚠ Удержание задач с ОПЕРАЦИЕЙ ВЫПИСКИ ограничено возрастом (`STATEMENT_JOB_RETENTION`, #245):
- * payload реестра — финансовые ПДн. У привязок payload это id сущностей CRM, там ограничение
- * обычное.
+ * ⚠ The ladder: 8 attempts = 7 retries at `30s·2^(n-1)`, i.e. 30+60+120+240+480+960+1920 s =
+ * **3810 s ≈ 1 hour** (top interval ~32 min) — the very same ladder as `FEEDBACK_RETRY_OPTS` above. The
+ * number is spelled out because the first draft wrote «~2 hours», and that figure was already
+ * cited by the queue's stall budget AND by `PRIVACY.md` (how long statement PII sits in Redis). A
+ * number derived wrong once spreads through documents silently.
+ *
+ * ⚠ Retention for jobs carrying a STATEMENT is age-bound (`STATEMENT_JOB_RETENTION`, #245) — the
+ * registry payload is financial PII. The bindings payload is CRM ids, so it takes the ordinary one.
  */
 export const DEFERRED_WRITE_RETRY = {
   attempts: 8,
   backoff: { type: 'exponential' as const, delay: 30_000 }
 } as const
 
-/** Поставить дозапись элемента реестра (#578). No-op (false) без Redis — тогда поведение прежнее:
- *  отказ считается и теряется. */
+/** Queue a deferred registry-element write (#578). No-op (false) without Redis — behaviour then
+ *  degrades to the previous one: the failure is counted and lost. */
 export async function enqueueRegistryWrite(job: RegistryWriteJob): Promise<boolean> {
   if (!queueEnabled()) return false
   await getQueue(Q_REGISTRY).add(Q_REGISTRY, job, {
@@ -248,10 +264,7 @@ export async function enqueueRegistryWrite(job: RegistryWriteJob): Promise<boole
 export async function enqueueActivityBind(job: ActivityBindJob): Promise<boolean> {
   if (!queueEnabled()) return false
   await getQueue(Q_BINDINGS).add(Q_BINDINGS, job, {
-    jobId: activityBindJobId(job),
-    ...DEFERRED_WRITE_RETRY,
-    removeOnComplete: { age: 3600, count: 100 },
-    removeOnFail: { age: 86_400, count: 200 }
+    jobId: activityBindJobId(job), ...DEFERRED_WRITE_RETRY, ...CRM_RETRY_RETENTION
   })
   return true
 }
