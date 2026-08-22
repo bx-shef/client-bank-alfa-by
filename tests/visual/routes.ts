@@ -21,6 +21,9 @@ export interface VisualRoute {
 export const VISUAL_ROUTES: readonly VisualRoute[] = [
   { slug: 'index', path: '/', themes: ['dark'] },
   { slug: 'partners', path: '/partners', themes: ['dark'] },
+  // ⚠ Справка публична, но живёт на `portal`-layout (её открывают и слайдером портала), поэтому
+  // темы у неё ДВЕ, как у портальных страниц, а не одна тёмная, как у лендинга.
+  { slug: 'help', path: '/help', themes: ['light', 'dark'] },
   { slug: 'error', path: '/404.html', themes: ['dark'] },
   { slug: 'app', path: '/app?preview=1', themes: ['light', 'dark'] },
   { slug: 'import', path: '/import?preview=1', themes: ['light', 'dark'] },

@@ -35,6 +35,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 
 const { crawlerFiles, injectNoindex } = await import(pathToFileURL(join(here, '..', 'app', 'utils', 'seo.ts')).href)
+const { buildLlmsTxt } = await import(pathToFileURL(join(here, '..', 'app', 'utils', 'faq.ts')).href)
+const { LANDING_SITE_URL } = await import(pathToFileURL(join(here, '..', 'app', 'utils', 'seo.ts')).href)
 const { SERVICE_ROUTES } = await import(pathToFileURL(join(here, '..', 'app', 'config', 'routes.ts')).href)
 
 const [outDirArg, lastmodArg] = process.argv.slice(2)
@@ -48,6 +50,11 @@ mkdirSync(outDir, { recursive: true })
 writeFileSync(join(outDir, 'robots.txt'), robots, 'utf8')
 writeFileSync(join(outDir, 'sitemap.xml'), sitemap, 'utf8')
 
+// `llms.txt` — та же справка, что и на `/help`, но простым текстом для ИИ-агента клиента (#576).
+// ⚠ Домен берётся тот же канонический, что и у карты сайта, и по той же причине: адрес
+// РАЗВЁРТЫВАНИЯ здесь ни при чём, а агент, получивший ссылку на staging, отправит туда человека.
+writeFileSync(join(outDir, 'llms.txt'), buildLlmsTxt(LANDING_SITE_URL), 'utf8')
+
 // Список служебных маршрутов — для гардов сборки (Dockerfile). Хардкодить его там значило бы
 // завести ТРЕТЬЮ копию знания рядом с `routes.ts` и тестом: добавили страницу — тест зелёный,
 // а артефакт-гард её молча не проверяет. Файл технический, в образ не попадает.
@@ -60,4 +67,4 @@ if (existsSync(notFound)) {
   writeFileSync(notFound, injectNoindex(readFileSync(notFound, 'utf8')), 'utf8')
 }
 
-console.info('[seo] robots.txt + sitemap.xml written to %s%s', outDir, lastmod ? ` (lastmod ${lastmod})` : ' (без lastmod)')
+console.info('[seo] robots.txt + sitemap.xml + llms.txt written to %s%s', outDir, lastmod ? ` (lastmod ${lastmod})` : ' (без lastmod)')

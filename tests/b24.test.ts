@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_SETTINGS, B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, marketDetailPath, sliderRouteForPlace } from '~/config/b24'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { FAQ } from '~/utils/faq'
+import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_SETTINGS, B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, helpSliderPlace, marketDetailPath, sliderRouteForPlace } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
   it('lists crm, sale, im, imbot, documentgenerator, userfieldconfig, user_brief and placement', () => {
@@ -51,5 +54,38 @@ describe('sliderRouteForPlace', () => {
     expect(sliderRouteForPlace('')).toBeUndefined()
     expect(sliderRouteForPlace(undefined)).toBeUndefined()
     expect(sliderRouteForPlace(null)).toBeUndefined()
+  })
+})
+
+describe('контекстная справка через слайдер (#576 п.2)', () => {
+  it('place справки ведёт на её якорь', () => {
+    for (const e of FAQ) {
+      expect(sliderRouteForPlace(helpSliderPlace(e.id))).toBe(`/help#${e.id}`)
+    }
+  })
+
+  it('неизвестный якорь открывает справку с начала, а не пустоту', () => {
+    // ⚠ `place` приходит от портала, то есть снаружи. Подставить его в адрес как есть значило бы
+    // пустить чужое значение в маршрут; а опечатка в нашей же ссылке иначе давала бы пустой экран.
+    expect(sliderRouteForPlace(helpSliderPlace('нет-такого'))).toBe('/help')
+    expect(sliderRouteForPlace(helpSliderPlace('../settings'))).toBe('/help')
+    expect(sliderRouteForPlace(helpSliderPlace(''))).toBe('/help')
+  })
+
+  it('якоря контекстных ссылок в UI существуют в справке', () => {
+    // ⚠ Ссылка с несуществующим якорем — тихий дефект: кнопка работает, справка открывается, но
+    // человек попадает не туда, где ответ на его вопрос.
+    const ids = new Set(FAQ.map(e => e.id))
+    const files = readdirSync(join(process.cwd(), 'app'), { recursive: true, encoding: 'utf8' })
+      .map(String)
+      // ⚠ Сам компонент ссылки исключён: у него `anchor` — имя пропа, а не значение якоря.
+      .filter(f => f.endsWith('.vue') && !f.endsWith('HelpLink.vue'))
+    const used: string[] = []
+    for (const f of files) {
+      const src = readFileSync(join(process.cwd(), 'app', f), 'utf8')
+      for (const m of src.matchAll(/anchor="([^"]+)"/g)) used.push(m[1]!)
+    }
+    expect(used.length, 'контекстных ссылок нет вовсе — проверять нечего').toBeGreaterThan(0)
+    expect(used.filter(a => !ids.has(a)), 'ссылка ведёт на несуществующий раздел справки').toEqual([])
   })
 })
