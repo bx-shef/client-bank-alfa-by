@@ -52,6 +52,7 @@ import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { writePaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
+import { bindActivityViaRest } from '../utils/activityBindingsWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
@@ -224,6 +225,28 @@ export function liveHandlerDeps(): HandlerDeps {
       const call = await resolvePortalCall(memberId)
       if (!call) return null
       return writeTodoActivityViaRest(item, companyId, call, note, memberId)
+    },
+    // Привязки дела к сущностям CRM (#579). ЛУЧШИЕ УСИЛИЯ и НИКОГДА не бросает — контракт зепа.
+    //
+    // ⚠ Здесь `return {bound:0, failed:refs.length}` вместо throw, и это ПРОТИВОПОЛОЖНО соседнему
+    // `writePaymentRegistry`. Разница не в аккуратности, а в моменте: реестр пишется ДО дела, и его
+    // отказ ещё может быть исправлен повтором джобы; привязки ставятся ПОСЛЕ маркера, поэтому
+    // повтора у них не будет никогда — бросок лишь отменил бы обработку остальных операций пачки,
+    // ничего не починив. Отказ считается и попадает в строку итога.
+    //
+    // ⚠ Батч берётся ТОТ ЖЕ, что у остальных фан-аутов: четыре привязки в одном round-trip вместо
+    // четырёх — на выписке в сотни строк это разница в бюджете портала, а не в стиле.
+    bindActivity: async (activityId, refs, memberId) => {
+      if (refs.length === 0) return { bound: 0, failed: 0 }
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return { bound: 0, failed: refs.length }
+        const batch = await resolvePortalCall.batch(memberId)
+        return await bindActivityViaRest(activityId, refs, call, batch ?? undefined)
+      } catch (e) {
+        crmLog.warning(`portal ${memberId}: привязки дела ${activityId} не поставлены — ${logSafe(String((e as Error)?.message ?? e))}`)
+        return { bound: 0, failed: refs.length }
+      }
     },
     // Registry element for EVERY operation (#575) — see the dep's doc for why it is unconditional.
     // ⚠ `companyId` here is the CLIENT (or null): the element links the payer, and passing the
@@ -907,7 +930,7 @@ async function persistImportResult(
  *  Gated to real (non-demo) portals; swallows errors so metrics can't fail a job. */
 async function bumpMetrics(
   job: CrmSyncJob,
-  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number }
+  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number, bindingsFailed: number }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
   if (!account || isDemoAccount(account)) return

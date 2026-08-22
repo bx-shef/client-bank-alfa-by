@@ -42,6 +42,8 @@ interface FakeOpts {
   negativeStage?: ((stageId: string) => boolean) | null
   /** error-chat target; default { dialogId: '' } (off). Set a dialogId to enable error notices. */
   errorChat?: ChatTarget
+  /** что возвращает bindActivity (#579); по умолчанию — все привязки встали. */
+  bindOutcome?: { bound: number, failed: number }
   /** autoDistribute gate (§2 mutation slice); default false (fact-only). */
   autoDistribute?: boolean
   /** allocation-mutation config (§2/#79), e.g. `{ invoicePaidStageId, triggerCode }`; default {}. */
@@ -84,7 +86,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -114,7 +116,13 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     },
     writePaymentRegistry: async (it, companyId, memberId, provider, paymentSp) => {
       calls.registry.push([it.docId, companyId, memberId, provider, paymentSp.entityTypeId])
-      return `pay-${it.docId}`
+      // ⚠ ЧИСЛОВОЙ id, как отдаёт настоящий `crm.item.add`: привязки дела (#579) отбраковывают
+      // нечисловой, и символическая заглушка молча выключила бы половину проверок.
+      return `${100 + calls.registry.length}`
+    },
+    bindActivity: async (activityId, refs, memberId) => {
+      calls.bind.push([activityId, refs.map(r => `${r.entityTypeId}:${r.entityId}`), memberId])
+      return o.bindOutcome ?? { bound: refs.length, failed: 0 }
     },
     getPortalSettings: async (memberId) => {
       calls.settings.push(memberId)
@@ -440,7 +448,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, landed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, landed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
@@ -451,10 +459,10 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps() // the fake persists the marker across calls
     const j = job([item('d1'), item('d2')])
     const first = await handleCrmSyncJob(j, deps)
-    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, unmatched: 0 })
+    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0 })
     // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 2, excluded: 0, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 2, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -463,7 +471,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -477,7 +485,7 @@ describe('handleCrmSyncJob', () => {
     // The confused-op sample (#FEEDBACK) rides on the summary — split it out so the counter check
     // stays strict, then assert it captured the first unmatched op.
     const { sample, ...counters } = r
-    expect(counters).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 0, registryFailed: 0, unmatched: 2, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(counters).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 2, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -517,7 +525,11 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps({ company: 'CO', myCompany: 'MY', errorChat: { dialogId: 'err' } })
     await handleCrmSyncJob(job([item('d1', 'credit')]), deps)
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1']]) // to the CLIENT, not my company
-    expect(calls.findMy).toEqual([]) // my-company lookup not even attempted when client matched
+    // ⚠ Поиск «моей компании» здесь ТЕПЕРЬ БЫВАЕТ — его зовут привязки дела (#579), потому что
+    // дело обязано связывать обе стороны платежа. Инвариант этого теста в другом: опознанный
+    // клиент остаётся ВЛАДЕЛЬЦЕМ записи и не получает блока-причины, то есть фолбэк «в мою
+    // компанию» не срабатывает. Проверять «не искали» значило бы держать здесь чужое обещание.
+    expect(calls.activityNote).toEqual([['d1', 'CO', null]])
     expect(calls.unmatchedNotify).toEqual([])
     expect((calls.activityNote as [string, string, string | null][])[0]![2]).toBeNull() // no note on the client write
   })
@@ -574,7 +586,7 @@ describe('handleCrmSyncJob', () => {
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
     const { sample, ...counters } = r // sample (d3, unmatched) split out so the counter check stays strict
-    expect(counters).toEqual({ processed: 3, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, unmatched: 1, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
+    expect(counters).toEqual({ processed: 3, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 1, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -614,7 +626,7 @@ describe('handleCrmSyncJob', () => {
     const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
     // Full shape: only `excluded` and the приход/расход split move; nothing produced.
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(acc.calls.find).toEqual([]) // never even looked up the company
     expect(acc.calls.activity).toEqual([]) // NO CRM activity written
     expect(acc.calls.chat).toEqual([]) // NO chat
@@ -624,7 +636,7 @@ describe('handleCrmSyncJob', () => {
     // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(pur.calls.activity).toEqual([])
     expect(pur.calls.chat).toEqual([])
   })
@@ -1774,9 +1786,14 @@ describe('per-op observation (onOperation) — видимость операци
     // d2 подменяем на «клиент найден», чтобы в одном пакете сошлись все три исхода.
     const base = deps.findCompany
     deps.findCompany = async (it, m) => (it.docId === 'd2' ? 'CO' : base(it, m))
+    // ⚠ Третья операция идёт по ДРУГОМУ нашему счёту, и это не декорация: «моя компания» ищется
+    // ПО СЧЁТУ, поэтому ответ на неё запоминается на прогон (#579 — иначе пачка из сотни строк
+    // одного счёта дала бы сотню одинаковых поисков по три вызова каждый). Подмена по `docId`
+    // описывала бы поведение, которого у портала нет: у одного счёта не может быть двух ответов.
     const myBase = deps.findMyCompany
-    deps.findMyCompany = async (it, m) => (it.docId === 'd3' ? null : myBase(it, m))
-    await handleCrmSyncJob(job([item('d1'), item('d2'), item('d3')]), deps)
+    deps.findMyCompany = async (it, m) => (it.account === 'BY-OTHER' ? null : myBase(it, m))
+    const d3 = { ...item('d3'), account: 'BY-OTHER' }
+    await handleCrmSyncJob(job([item('d1'), item('d2'), d3]), deps)
     expect(calls.opLog).toEqual([
       ['d1', 'my-company', 0, 'act-1', 'M'],
       ['d2', 'client', 0, 'act-2', 'M'],
@@ -1801,5 +1818,107 @@ describe('per-op observation (onOperation) — видимость операци
     deps.writeActivity = async () => null
     await handleCrmSyncJob(job([item('d1')]), deps)
     expect(calls.opLog).toEqual([['d1', 'client', 0, null, 'M']])
+  })
+})
+
+describe('#579 привязки дела к сущностям CRM', () => {
+  const job = (items: StatementItem[]): CrmSyncJob => ({ memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items })
+
+  // ⚠ Шаг 3 согласованного процесса (PROCESSING.md, Этап D). Дело несёт РОВНО ОДНУ пару владельца,
+  // поэтому связь с реестром платежей, сущностью списания и второй компанией существует только
+  // через отдельные вызовы. Промах здесь ТИХИЙ: дело записано, карточка выглядит нормально, и то,
+  // что из платежа некуда дойти, замечают месяцем позже при сверке.
+
+  const spConfig = {
+    'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46'
+  }
+  const spMatrix: RecognitionSettings = {
+    alphabet: 'cyrillic',
+    matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }],
+    configFields: spConfig
+  }
+
+  it('элемент реестра, сущность списания и вторая компания — привязаны; владелец нет', async () => {
+    const exact: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]
+    }]
+    // ⚠ id — ЧИСЛОВЫЕ, как на живом портале: планировщик отбраковывает нечисловой id намеренно
+    // (портал принимает любой `entityId` молча, и «CO» повесило бы платёж в никуда), поэтому
+    // символические заглушки здесь проверяли бы не то.
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, resolve: exact, company: '5', myCompany: '9' })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    expect(r.bindingsFailed).toBe(0)
+    expect(calls.bind).toHaveLength(1)
+    const [activityId, refs] = calls.bind[0] as [string, string[], string]
+    expect(activityId).toBe('act-1')
+    // 1044:… — элемент реестра, 31:7 — смарт-счёт (сущность списания), 4:9 — моя компания.
+    // Компании-владельца (4:5) быть НЕ должно: портал держит эту пару сам, а повторная привязка
+    // отвечает ошибкой.
+    expect(refs).toEqual(['1044:101', '31:7', '4:9'])
+  })
+
+  it('«моя компания» ищется и для ОПОЗНАННОГО клиента — иначе связь односторонняя', async () => {
+    // ⚠ Раньше `findMyCompany` звали только когда клиент не опознан. Для привязок она нужна
+    // всегда: дело обязано связывать обе стороны платежа.
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, company: '5', myCompany: '9' })
+    await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
+    // ⚠ И ровно ОДИН раз на прогон: поиск это три вызова в портал, а счёт у пачки один.
+    expect(calls.findMy).toHaveLength(1)
+    const refs = (calls.bind[1] as [string, string[], string])[1]
+    expect(refs).toContain('4:9')
+  })
+
+  it('отказ привязок НЕ отменяет дело и считается отдельно от реестра', async () => {
+    // ⚠ Дело важнее связи: привязки ставятся ПОСЛЕ маркера, поэтому проброс отменил бы обработку
+    // всей оставшейся пачки, ничего не починив — повтор упёрся бы в маркер и прошёл мимо.
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, company: '5', myCompany: '9', bindOutcome: { bound: 0, failed: 2 } })
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.created).toBe(2)
+    expect(r.bindingsFailed).toBe(4)
+    expect(r.registryFailed).toBe(0)
+  })
+
+  it('бросивший транспорт тоже не роняет пачку', async () => {
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, company: '5', myCompany: '9' })
+    deps.bindActivity = async () => {
+      throw new Error('портал молчит')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.created).toBe(2)
+    expect(r.bindingsFailed).toBeGreaterThan(0)
+  })
+
+  it('нечего привязывать — вызова нет', async () => {
+    // Клиент не опознан, «моей компании» нет, реестра нет: дело не пишется вовсе, и звать
+    // привязки не по чему.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null })
+    await handleCrmSyncJob(job([item('a')]), deps)
+    expect(calls.bind).toHaveLength(0)
+  })
+
+  it('без смарт-процессов дело всё равно вяжется к обеим компаниям', async () => {
+    // ⚠ Портал без провижининга — обычное состояние, и связь «клиент ↔ моя компания» там
+    // единственная, какую вообще можно поставить. Пропустив вызов, мы отдали бы ему пустую карточку.
+    const { deps, calls } = fakeDeps({ company: '5', myCompany: '9' })
+    await handleCrmSyncJob(job([item('a')]), deps)
+    expect(calls.bind).toHaveLength(1)
+    expect((calls.bind[0] as [string, string[], string])[1]).toEqual(['4:9'])
+  })
+
+  it('#579 отказ привязок ВИДЕН в строке итога и отдельно от реестра', () => {
+    const line = runSummaryLine('M', {
+      processed: 3, landed: 3, created: 3, unmatched: 0, unresolved: 0, recognized: 0,
+      skipped: 0, excluded: 0, registryFailed: 1, bindingsFailed: 2
+    }, 'notable')
+    expect(line).toContain('1 без записи в реестр')
+    expect(line).toContain('2 без привязок')
+    const clean = runSummaryLine('M', {
+      processed: 3, landed: 3, created: 3, unmatched: 0, unresolved: 0, recognized: 0,
+      skipped: 0, excluded: 0, bindingsFailed: 0
+    }, 'notable')
+    expect(clean, 'ноль не должен превращаться в шум').not.toContain('без привязок')
   })
 })
