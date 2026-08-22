@@ -1,17 +1,23 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  fetchPriorStatement,
-  isoDateOnly,
-  priorApiBaseFromEnv,
+  MAX_PRIOR_STATEMENT_PAGES,
+  PRIOR_PAGE_DELAY_MS,
   PRIOR_POLL_MAX_ATTEMPTS,
+  fetchPriorStatement,
   isRetryablePollStatus,
+  isoDateOnly,
+  looksLikePageBoundary,
+  priorApiBaseFromEnv,
+  priorNextPageUrl,
+  PRIOR_WALK_BUDGET_MS,
+  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS,
+  priorWalkNotice,
   resolvePriorAccountId,
   type PriorFetchDeps,
-  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS,
-  looksLikePageBoundary,
-  unreadEnvelopeKeys
+  unreadEnvelopeKeys,
+  walkPriorPages
 } from '../server/utils/priorFetch'
 import { normalizePriorTransactionList } from '../app/utils/priorStatement'
 import { PRIOR_RESOURCE_NOT_CREATED } from '../app/utils/priorOauth'
@@ -121,6 +127,33 @@ describe('fetchPriorStatement', () => {
     expect(items).toHaveLength(2)
     expect(calls.pollUrl).toHaveLength(3) // two pending + one ready
     expect(calls.sleeps).toHaveLength(2) // waited between the pending polls
+  })
+
+  it('follows links.next through the LIVE wiring — pages fetched via pollJson, notice via log', async () => {
+    // ⚠ The walk units above exercise the loop in isolation; this covers the seam — a ready poll
+    // body carrying `links.next` must make fetchPriorStatement request the second page over the
+    // same pollJson transport and report the recovery through deps.log.
+    const page2 = {
+      data: { transaction: [{ transactionId: 'T-EXTRA', creditDebitIndicator: 'Credit', amount: 7, currency: 'BYN', bookingDateTime: '2026-07-01T10:00:00' }] },
+      links: {}
+    }
+    const first = { ...readyResponse(), links: { next: '/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9?page=2' } }
+    const logged: string[] = []
+    const { deps, calls } = fakeDeps({ pollSequence: [first, page2], log: line => logged.push(line) })
+    const items = await fetchPriorStatement(query, tok, deps)
+    expect(items.map(i => i.docId)).toContain('T-EXTRA')
+    expect(calls.pollUrl.at(-1)).toBe('https://prior:9344/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9?page=2')
+    expect(logged.some(l => l.includes('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 1'))).toBe(true)
+    // The notice rides the [prior-page] marker exactly once — the channel prefix is not doubled.
+    expect(logged.filter(l => l.includes('ПАГИНАЦИЯ'))[0]).toMatch(/^\[prior-page\] /)
+  })
+
+  it('one page and no next — no extra polls, no pagination notice (the ordinary tick stays quiet)', async () => {
+    const logged: string[] = []
+    const { deps, calls } = fakeDeps({ log: line => logged.push(line) })
+    await fetchPriorStatement(query, tok, deps)
+    expect(calls.pollUrl).toHaveLength(1)
+    expect(logged.some(l => l.includes('ПАГИНАЦИЯ') || l.includes('ОБОРВАН'))).toBe(false)
   })
 
   it('throws when the API base is not configured', async () => {
@@ -345,5 +378,161 @@ describe('подозрение на страничный лимит (#522, жи�
     const b = mk(100)
     await fetchPriorStatement(query, tok, { ...b.deps, log: l => lines.push(l) })
     expect(lines.some(l => l.includes('[prior-page]'))).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #561: Prior transaction-list page walking (`links.next`).
+//
+// Measured on production 2026-08-22: every tick returned EXACTLY 100 operations for the window,
+// with unread `links`/`meta` sitting in the envelope — the same silent truncation #561 chased on
+// Alfa, but with the pagination pointer right there in the response.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#561: priorNextPageUrl', () => {
+  const BASE = 'https://api.priorbank.by:9344'
+
+  it('reads links.next as a string or an {href} object, resolved against our base', () => {
+    expect(priorNextPageUrl({ links: { next: '/openbanking/v1/x?page=2' } }, BASE))
+      .toBe(`${BASE}/openbanking/v1/x?page=2`)
+    expect(priorNextPageUrl({ links: { next: { href: `${BASE}/x?page=2` } } }, BASE))
+      .toBe(`${BASE}/x?page=2`)
+  })
+
+  it('refuses a cross-origin next — the Bearer never follows bank-supplied text off our origin', () => {
+    expect(priorNextPageUrl({ links: { next: 'https://evil.example/x' } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: 'http://api.priorbank.by:9344/x' } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: `${BASE.replace('9344', '9345')}/x` } }, BASE)).toBeNull()
+  })
+
+  it('absent/blank/malformed next reads as no next', () => {
+    expect(priorNextPageUrl({ links: {} }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: '  ' } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: 7 } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({}, BASE)).toBeNull()
+    expect(priorNextPageUrl(null, BASE)).toBeNull()
+  })
+})
+
+describe('#561: walkPriorPages', () => {
+  const BASE = 'https://api.priorbank.by:9344'
+  const nowait = { sleep: async () => {} }
+  const tx = (id: string) => ({
+    transactionId: id, creditDebitIndicator: 'Credit', amount: 10, currency: 'BYN',
+    transactionDetails: 'p', bookingDateTime: '2026-08-21T10:00:00',
+    debtor: { name: 'n' }, debtorAccount: { identification: 'BY99X' }
+  })
+  const page = (ids: string[], next?: string) => ({
+    data: { transaction: ids.map(tx) },
+    links: next === undefined ? {} : { next }
+  })
+
+  it('follows links.next and recovers rows the single-page version was losing', async () => {
+    const pages: Record<string, unknown> = {
+      [`${BASE}/p2`]: page(['c', 'd'], '/p3'),
+      [`${BASE}/p3`]: page(['e'])
+    }
+    const fetchPage = vi.fn(async (url: string) => ({ status: 200, body: pages[url]! }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a', 'b'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out.map(i => i.docId)).toEqual(['a', 'b', 'c', 'd', 'e'])
+    expect(onWalk).toHaveBeenCalledWith({ pages: 3, recovered: 3, stop: 'exhausted' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 3')
+  })
+
+  it('no next link — one page, no extra requests, silence', async () => {
+    const fetchPage = vi.fn()
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a']), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(1)
+    expect(fetchPage).not.toHaveBeenCalled()
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'exhausted' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toBeNull()
+  })
+
+  it('a repeating raw page means the bank looped — stop quietly, nothing doubles', async () => {
+    const same = page(['a', 'b'], '/p2')
+    const fetchPage = vi.fn(async () => ({ status: 200, body: same }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(same, 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(2)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 2, recovered: 0, stop: 'repeat' })
+  })
+
+  it('a page that dedups to nothing must NOT end the walk (the #566 regression, not repeated here)', async () => {
+    // Two DIFFERENT payers colliding on the empty-docId content signature: raw pages differ, so the
+    // walk continues; the output collapses the collision — all dedup can safely do.
+    const anon = (name: string) => ({
+      transactionId: '', creditDebitIndicator: 'Credit', amount: 5, currency: 'BYN',
+      transactionDetails: 'same purpose', bookingDateTime: '2026-08-21T10:00:00',
+      debtor: { name }, debtorAccount: { identification: 'BY99SAME' }
+    })
+    const pages: Record<string, unknown> = {
+      [`${BASE}/p2`]: { data: { transaction: [anon('Петров')] }, links: { next: '/p3' } },
+      [`${BASE}/p3`]: page(['real'])
+    }
+    const fetchPage = vi.fn(async (url: string) => ({ status: 200, body: pages[url]! }))
+    const out = await walkPriorPages(
+      { data: { transaction: [anon('Иванов')] }, links: { next: '/p2' } },
+      'ACC', BASE, fetchPage, undefined, nowait
+    )
+    expect(fetchPage).toHaveBeenCalledTimes(2) // page 3 was still requested
+    expect(out.map(i => i.docId)).toEqual(['', 'real'])
+  })
+
+  it('a cross-origin next stops LOUDLY — refused is not the same as absent', async () => {
+    const onWalk = vi.fn()
+    await walkPriorPages(page(['a'], 'https://evil.example/x'), 'ACC', BASE, vi.fn(), onWalk, nowait)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'foreign-next' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ЧУЖОЙ origin')
+  })
+
+  it('a throttled next page stops loudly instead of failing the job — the next tick self-heals', async () => {
+    const fetchPage = vi.fn(async () => ({ status: 429, body: null }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(1)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'not-ready' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+  })
+
+  it('a page ERROR throws — a broken answer is not a slow one', async () => {
+    // The unrecognized-response shape is the honest fixture: a 400 body without our data envelope
+    // classifies as an error either way, and the message must carry the page number.
+    const fetchPage = vi.fn(async () => ({ status: 400, body: { nonsense: true } }))
+    await expect(walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, undefined, nowait))
+      .rejects.toThrow(/page 2 error .*HTTP 400/)
+  })
+
+  it('endless distinct pages stop at the cap — and say it truncated', async () => {
+    let n = 0
+    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`x${n++}`], '/next') }))
+    const onWalk = vi.fn()
+    await walkPriorPages(page(['x-first'], '/next'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    const info = onWalk.mock.calls[0]![0] as { pages: number, stop: string }
+    expect(info.stop).toBe('page-cap')
+    expect(info.pages).toBe(MAX_PRIOR_STATEMENT_PAGES)
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain(`потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц`)
+  })
+
+  it('a slow bank stops on the wall-clock budget', async () => {
+    let clock = 0
+    const now = () => (clock += 9_000)
+    let n = 0
+    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`y${n++}`], '/next') }))
+    const onWalk = vi.fn()
+    await walkPriorPages(page(['y-first'], '/next'), 'ACC', BASE, fetchPage, onWalk, { sleep: async () => {}, now })
+    expect((onWalk.mock.calls[0]![0] as { stop: string }).stop).toBe('time-cap')
+  })
+
+  it('waits between pages, and only between them', async () => {
+    const sleep = vi.fn(async (_ms: number) => {})
+    const pages: Record<string, unknown> = { [`${BASE}/p2`]: page(['b']) }
+    await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, async url => ({ status: 200, body: pages[url]! }), undefined, { sleep })
+    expect(sleep.mock.calls.map(c => c[0])).toEqual([PRIOR_PAGE_DELAY_MS])
+  })
+
+  it('the caps are pinned and both reachable — neither is decoration', () => {
+    expect(MAX_PRIOR_STATEMENT_PAGES).toBe(20)
+    expect((MAX_PRIOR_STATEMENT_PAGES - 1) * PRIOR_PAGE_DELAY_MS).toBeLessThan(PRIOR_WALK_BUDGET_MS)
   })
 })
