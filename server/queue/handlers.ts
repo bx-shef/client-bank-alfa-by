@@ -9,7 +9,7 @@
 //                                            └─ notify chat (by rules)
 
 import { createHash } from 'node:crypto'
-import type { StatementItem } from '../../app/types/statement'
+import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import { landedCleanly } from '../../app/utils/opLogPolicy'
 import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
@@ -66,6 +66,17 @@ export interface HandlerDeps {
    *  no company matched, so there's no owner). Optional `note` prepends a reason block —
    *  used for the UNMATCHED-client fallback written to my company (#91). */
   writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string) => Promise<string | null>
+  /**
+   * Registry write (#575): ensure the payment SP carries an element for THIS operation.
+   *
+   * ⚠ Called for EVERY non-excluded, non-skipped operation — independent of `autoDistribute`, of
+   * whether the client was identified, and of whether a target was found. The SP is named
+   * «Импорт выписки: платежи» and the owner expects a registry of payments; until #575 an element
+   * appeared only when an allocation SUCCEEDED, so a portal whose payers are not in CRM saw an
+   * empty SP beside a working import. Idempotent by the same operation key as the activity marker.
+   * Returns the element id (or null when the SP is not provisioned / on a demo portal).
+   */
+  writePaymentRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<string | null>
   /** Read the portal's full settings blob (chat target + rules + recognition matrices)
    *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
    *  not per operation — one app.option read feeds both the chat and recognition steps. */
@@ -307,7 +318,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -353,6 +364,8 @@ export async function handleCrmSyncJob(
   let notified = 0
   let skipped = 0
   let excluded = 0
+  /** Операции, у которых не удалось записать элемент реестра (#575). См. комментарий у вызова. */
+  let registryFailed = 0
   let unmatched = 0
   let landed = 0
   // Номер распознан, компания найдена, а цели в CRM нет (#421). Раньше этот случай не попадал
@@ -577,6 +590,40 @@ export async function handleCrmSyncJob(
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
     }
+    // Registry element FIRST, activity second — deliberately the opposite order from the notices
+    // and the trigger, which are deferred PAST the activity marker.
+    //
+    // ⚠ The reason is the dedup gate at the top of this loop. Written after the activity, a failing
+    // registry write would leave a marker behind, and the retry would `continue` past the whole
+    // operation — the element would then never be written for it, silently. Written first, a
+    // failure leaves no marker, so a retry reprocesses the operation from the top;
+    // `ensurePaymentElement` is idempotent by the same key, so nothing doubles. The notices cannot
+    // use this order because im.message.add has no dedup at all.
+    //
+    // ⚠ And the failure is SWALLOWED, unlike `writeLedger`, which propagates. That asymmetry is the
+    // point: the ledger wrote only on a successful allocation (rare — on a portal whose payers are
+    // not in CRM, never), so a throw there cost one operation. This runs for EVERY operation, so a
+    // throw here would abort the batch on the first bad one and every retry after it: the ops
+    // BEFORE it keep their activities, the ops after it never get one, and the accountant sees the
+    // import stop halfway with no explanation. The agreed process (PROCESSING.md, Этап D) puts the
+    // activity first — «ДЕЛО — ВСЕГДА» — and the registry element is the secondary record; it must
+    // not hold the primary one hostage.
+    //
+    // ⚠ The cost is named honestly: a swallowed failure means that element is missing for good (the
+    // next poll hits the activity marker and skips the operation). That is why it is COUNTED and
+    // printed in the unconditional run-summary line — a silently empty SP beside a working import is
+    // the exact symptom #575 exists to remove, and it must not come back through the error path.
+    //
+    // ⚠ Missing user fields are NOT this case: `crm.item.add` ignores unknown UF keys silently
+    // (measured on a live portal 2026-08-22), so an SP provisioned before #575 still gets elements —
+    // just without the registry columns until the admin re-runs provisioning.
+    if (ledgerPaymentRef && deps.writePaymentRegistry) {
+      try {
+        await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
+      } catch {
+        registryFailed++
+      }
+    }
     const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
     // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including
     // the ones that matched nothing — those are exactly the ones no other callback reports.
@@ -661,5 +708,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }

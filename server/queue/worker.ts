@@ -51,6 +51,7 @@ import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
+import { writePaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
@@ -223,6 +224,23 @@ export function liveHandlerDeps(): HandlerDeps {
       const call = await resolvePortalCall(memberId)
       if (!call) return null
       return writeTodoActivityViaRest(item, companyId, call, note, memberId)
+    },
+    // Registry element for EVERY operation (#575) — see the dep's doc for why it is unconditional.
+    // ⚠ `companyId` here is the CLIENT (or null): the element links the payer, and passing the
+    // my-company fallback would label a stranger's payment as our own company's.
+    writePaymentRegistry: async (item, companyId, memberId, provider, paymentSp) => {
+      if (isDemoAccount(item.account)) return null
+      const call = await resolvePortalCall(memberId)
+      if (!call) return null
+      try {
+        return await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+      } catch (e) {
+        // Logged HERE and rethrown: the handler counts the failure (and keeps the activity, see the
+        // comment at its call site), but only this layer has the portal's actual error text. The
+        // count alone would say «сколько», never «почему».
+        crmLog.error(`portal ${memberId}: реестр платежей не записан — ${(e as Error)?.message}`)
+        throw e
+      }
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the

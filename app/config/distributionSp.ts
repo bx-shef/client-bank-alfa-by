@@ -59,7 +59,33 @@ export const PAYMENT_SP_FIELDS = {
   /** «требует распределения» (Y/N) — set when a manual target changed/was deleted (§3/§9.2). */
   requiresRedistribution: { postfix: 'NEEDS_REDISTR', userTypeId: 'boolean', label: 'Требует распределения' },
   /** Dedup marker = the operation key (idempotent write-once carrier per operation). */
-  marker: { postfix: 'MARKER', userTypeId: 'string', label: 'Маркер операции' }
+  marker: { postfix: 'MARKER', userTypeId: 'string', label: 'Маркер операции' },
+
+  // ─── Registry fields (#575) ───────────────────────────────────────────────────────────────────
+  // ⚠ The SP is named «Импорт выписки: платежи» and the owner expects a REGISTRY of payments —
+  // every operation searchable and filterable in CRM. Until #575 it held only the money fields,
+  // because an element was written ONLY when an allocation succeeded; the rest of the statement
+  // (who paid, when, what for) lived solely in the activity's prose. These carry it as DATA.
+  /** Operation date (`acceptDate`), the field the registry is sorted and filtered by. */
+  operationDate: { postfix: 'OP_DATE', userTypeId: 'string', label: 'Дата операции' },
+  /** Direction — приход/расход, as text: an SP boolean would read as «да/нет» in the list. */
+  direction: { postfix: 'DIRECTION', userTypeId: 'string', label: 'Направление' },
+  /** Counterparty name as the bank spelled it (NOT the CRM company — that is the `companyId` link). */
+  counterparty: { postfix: 'COUNTERPARTY', userTypeId: 'string', label: 'Контрагент' },
+  /** Counterparty settlement account — what `findCompanyByAccount` searches by; the one fact that
+   *  turns «клиент не определён» into a fixable task (paste it into the company's requisite). */
+  counterpartyAccount: { postfix: 'CP_ACCOUNT', userTypeId: 'string', label: 'Счёт контрагента' },
+  /** Counterparty УНП, when the bank supplied it. */
+  counterpartyUnp: { postfix: 'CP_UNP', userTypeId: 'string', label: 'УНП контрагента' },
+  /** Payment purpose — the text the recognition matrices read (§4). */
+  purpose: { postfix: 'PURPOSE', userTypeId: 'string', label: 'Назначение платежа' },
+  /** OUR account the operation belongs to — the registry is filtered by it. */
+  ownAccount: { postfix: 'OWN_ACCOUNT', userTypeId: 'string', label: 'Наш счёт' },
+  /** The bank the operation came from. ⚠ Data, NOT part of the dedup key: the key is written into
+   *  every activity marker already created, and widening it would unstick them all and re-create
+   *  the whole history as duplicates. The account number already encodes the bank; the field exists
+   *  so the registry, the erase action and the poll pause can filter by it (agreed 2026-08-22). */
+  bank: { postfix: 'BANK', userTypeId: 'string', label: 'Банк' }
 } as const satisfies Record<string, SpUserField>
 
 /** User fields on the DISTRIBUTIONS SP (one child = one allocation). */

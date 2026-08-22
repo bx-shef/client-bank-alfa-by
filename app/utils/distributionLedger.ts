@@ -328,6 +328,21 @@ export interface PaymentElementInput {
   marker: string
   /** CRM company id (payer), when matched — links the client (isClientEnabled). Optional. */
   companyId?: string
+  /** Registry payload (#575) — what the statement said about this operation. Optional so the
+   *  allocation path and older callers keep compiling; the live write always supplies it. */
+  registry?: PaymentRegistryFields
+}
+
+/** The statement facts carried onto the payment element so the SP reads as a REGISTRY (#575). */
+export interface PaymentRegistryFields {
+  operationDate?: string
+  direction?: string
+  counterparty?: string
+  counterpartyAccount?: string
+  counterpartyUnp?: string
+  purpose?: string
+  ownAccount?: string
+  bank?: string
 }
 
 /** Build the `crm.item.add` call that creates the payment CARRIER element. «Осталось распределить»
@@ -343,6 +358,14 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
     [pf(PAYMENT_SP_FIELDS.needDistributionsSum.postfix)]: amount,
     [pf(PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
   }
+  // Registry payload (#575). Blank values are OMITTED rather than written as '': an empty string in
+  // a CRM list column reads as «the bank sent nothing here», which is true, while writing it makes
+  // the element noisier without adding a fact. A field the portal does not have yet is simply
+  // ignored by crm.item.add, so a not-yet-reprovisioned SP degrades to the old shape.
+  for (const [key, postfix] of REGISTRY_FIELD_POSTFIXES) {
+    const value = input.registry?.[key]
+    if (typeof value === 'string' && value.trim() !== '') fields[pf(postfix)] = value.trim()
+  }
   // Link the payer company only when matched (a positive integer id).
   const companyId = Number(input.companyId)
   if (input.companyId && Number.isInteger(companyId) && companyId > 0) fields.companyId = companyId
@@ -351,6 +374,19 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
     params: { entityTypeId: paymentSp.entityTypeId, fields }
   }
 }
+
+/** Registry field → its SP postfix. Exhaustive over `PaymentRegistryFields` by construction: a new
+ *  registry fact will not compile until it is given a column. */
+const REGISTRY_FIELD_POSTFIXES: readonly (readonly [keyof PaymentRegistryFields, string])[] = [
+  ['operationDate', PAYMENT_SP_FIELDS.operationDate.postfix],
+  ['direction', PAYMENT_SP_FIELDS.direction.postfix],
+  ['counterparty', PAYMENT_SP_FIELDS.counterparty.postfix],
+  ['counterpartyAccount', PAYMENT_SP_FIELDS.counterpartyAccount.postfix],
+  ['counterpartyUnp', PAYMENT_SP_FIELDS.counterpartyUnp.postfix],
+  ['purpose', PAYMENT_SP_FIELDS.purpose.postfix],
+  ['ownAccount', PAYMENT_SP_FIELDS.ownAccount.postfix],
+  ['bank', PAYMENT_SP_FIELDS.bank.postfix]
+] as const satisfies readonly (readonly [keyof PaymentRegistryFields, string])[]
 
 /** Build the `crm.item.list` that finds a payment carrier element by its operation marker (idempotency
  *  probe — one carrier per operation). Selects id + our total + currency (for a later recompute). */
