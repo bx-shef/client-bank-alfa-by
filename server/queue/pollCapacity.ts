@@ -34,11 +34,16 @@
  * job secretly costs double, the fleet spends twice the budget while every dashboard says it is
  * within cap. That is the whole reason the number exists.
  *
- * Prior: an accounts-resolve GET + a create POST + up to PRIOR_POLL_MAX_ATTEMPTS polls.
+ * ⚠ Prior is **11**, not 10, since #573: an accounts-resolve GET + a create POST + polls + at
+ * least ONE page walk. Same reasoning that took Alfa 1→2 in #561, and measured the same way — the
+ * prod log showed EXACTLY 100 operations per tick with an unread `links.next` in the envelope, so
+ * a busy account now always pays for a second page. Leaving it at 10 would have re-opened the very
+ * trap the paragraph above describes: the limiter counts jobs, the bank counts requests, and the
+ * dashboard would keep reading «within cap» while the fleet overspent.
  */
 export const REQUESTS_PER_ACCOUNT: Record<string, number> = {
   'alfa-by': 2,
-  'prior-by': 10
+  'prior-by': 11
 }
 
 /** Requests one sweep of `accounts` accounts of `provider` costs (defaults to 1 when unknown). */

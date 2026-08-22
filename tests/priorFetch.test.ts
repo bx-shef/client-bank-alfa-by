@@ -129,10 +129,10 @@ describe('fetchPriorStatement', () => {
     expect(calls.sleeps).toHaveLength(2) // waited between the pending polls
   })
 
-  it('follows links.next through the LIVE wiring — pages fetched via pollJson, notice via log', async () => {
-    // ⚠ The walk units above exercise the loop in isolation; this covers the seam — a ready poll
-    // body carrying `links.next` must make fetchPriorStatement request the second page over the
-    // same pollJson transport and report the recovery through deps.log.
+  it('идёт по links.next через ЖИВУЮ проводку — страницы через pollJson, извещение через log', async () => {
+    // ⚠ Юниты выше гоняют цикл в отрыве; этот покрывает ШОВ — готовое тело опроса с `links.next`
+    // обязано заставить fetchPriorStatement запросить вторую страницу тем же транспортом pollJson
+    // и сообщить о восстановлении через deps.log.
     const page2 = {
       data: { transaction: [{ transactionId: 'T-EXTRA', creditDebitIndicator: 'Credit', amount: 7, currency: 'BYN', bookingDateTime: '2026-07-01T10:00:00' }] },
       links: {}
@@ -144,11 +144,37 @@ describe('fetchPriorStatement', () => {
     expect(items.map(i => i.docId)).toContain('T-EXTRA')
     expect(calls.pollUrl.at(-1)).toBe('https://prior:9344/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9?page=2')
     expect(logged.some(l => l.includes('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 1'))).toBe(true)
-    // The notice rides the [prior-page] marker exactly once — the channel prefix is not doubled.
+    // Извещение несёт маркер [prior-page] ровно один раз — префикс канала не задваивается.
     expect(logged.filter(l => l.includes('ПАГИНАЦИЯ'))[0]).toMatch(/^\[prior-page\] /)
   })
 
-  it('one page and no next — no extra polls, no pagination notice (the ordinary tick stays quiet)', async () => {
+  it('бэкстоп «ровно N без пагинации» молчит, когда обход ОБОРВАЛИ, а не закончили', async () => {
+    // ⚠ Гейт бэкстопа требует `pages === 1 && stop === 'exhausted'`, и клауза про exhausted была
+    // не покрыта ничем: мутация, снимавшая её, оставляла зелёными все 3312 юнит-тестов. Без неё
+    // бэкстоп после затроттленной одностраничной попытки заявлял бы «links.next НЕТ» про ссылку,
+    // которая была. Ровно 100 операций — подозрительное круглое число (SUSPICIOUS_PAGE_SIZES).
+    const row = (id: string) => ({
+      transactionId: id, creditDebitIndicator: 'Credit', amount: 1, currency: 'BYN',
+      bookingDateTime: '2026-07-01T10:00:00'
+    })
+    const hundred = { data: { transaction: Array.from({ length: 100 }, (_, i) => row(`t${i}`)) }, links: { next: '/p2' } }
+    const logged: string[] = []
+    const { deps } = fakeDeps({
+      pollSequence: [hundred],
+      pollJson: async (url: string) => (url.endsWith('/p2')
+        ? { status: 429, body: null }
+        : { status: 200, body: hundred }),
+      log: line => logged.push(line)
+    })
+    const items = await fetchPriorStatement(query, tok, deps)
+    expect(items).toHaveLength(100)
+    // Обход оборвали (429) ⇒ про «links.next НЕТ» говорить нельзя: ссылка была.
+    expect(logged.some(l => l.includes('links.next НЕТ'))).toBe(false)
+    // …но про сам обрыв сказать обязаны.
+    expect(logged.some(l => l.includes('ОБХОД СТРАНИЦ ОБОРВАН'))).toBe(true)
+  })
+
+  it('одна страница без next — лишних опросов нет, извещения нет (обычный тик молчит)', async () => {
     const logged: string[] = []
     const { deps, calls } = fakeDeps({ log: line => logged.push(line) })
     await fetchPriorStatement(query, tok, deps)
@@ -382,29 +408,29 @@ describe('подозрение на страничный лимит (#522, жи�
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// #561: Prior transaction-list page walking (`links.next`).
+// #561: постраничный обход списка транзакций Приора (`links.next`).
 //
-// Measured on production 2026-08-22: every tick returned EXACTLY 100 operations for the window,
-// with unread `links`/`meta` sitting in the envelope — the same silent truncation #561 chased on
-// Alfa, but with the pagination pointer right there in the response.
+// Замер на проде 2026-08-22: каждый тик приносил РОВНО 100 операций за окно, а в конверте лежали
+// непрочитанные `links`/`meta` — та же тихая обрезка, за которой #561 гонялся у Альфы, только
+// указатель пагинации лежал прямо в ответе.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('#561: priorNextPageUrl', () => {
+describe('#561: priorNextPageUrl — ссылку банка резолвим и проверяем', () => {
   const BASE = 'https://api.priorbank.by:9344'
 
-  it('reads links.next as a string or an {href} object, resolved against our base', () => {
+  it('читает links.next строкой и объектом {href}, резолвит против НАШЕЙ базы', () => {
     expect(priorNextPageUrl({ links: { next: '/openbanking/v1/x?page=2' } }, BASE))
       .toBe(`${BASE}/openbanking/v1/x?page=2`)
     expect(priorNextPageUrl({ links: { next: { href: `${BASE}/x?page=2` } } }, BASE))
       .toBe(`${BASE}/x?page=2`)
   })
 
-  it('refuses a cross-origin next — the Bearer never follows bank-supplied text off our origin', () => {
+  it('отвергает чужой origin — Bearer не уходит по тексту банка за пределы нашего origin', () => {
     expect(priorNextPageUrl({ links: { next: 'https://evil.example/x' } }, BASE)).toBeNull()
     expect(priorNextPageUrl({ links: { next: 'http://api.priorbank.by:9344/x' } }, BASE)).toBeNull()
     expect(priorNextPageUrl({ links: { next: `${BASE.replace('9344', '9345')}/x` } }, BASE)).toBeNull()
   })
 
-  it('absent/blank/malformed next reads as no next', () => {
+  it('отсутствующий/пустой/битый next читается как «ссылки нет»', () => {
     expect(priorNextPageUrl({ links: {} }, BASE)).toBeNull()
     expect(priorNextPageUrl({ links: { next: '  ' } }, BASE)).toBeNull()
     expect(priorNextPageUrl({ links: { next: 7 } }, BASE)).toBeNull()
@@ -413,7 +439,7 @@ describe('#561: priorNextPageUrl', () => {
   })
 })
 
-describe('#561: walkPriorPages', () => {
+describe('#561: walkPriorPages — обход страниц', () => {
   const BASE = 'https://api.priorbank.by:9344'
   const nowait = { sleep: async () => {} }
   const tx = (id: string) => ({
@@ -426,7 +452,7 @@ describe('#561: walkPriorPages', () => {
     links: next === undefined ? {} : { next }
   })
 
-  it('follows links.next and recovers rows the single-page version was losing', async () => {
+  it('идёт по links.next и забирает строки, которые одностраничная версия теряла', async () => {
     const pages: Record<string, unknown> = {
       [`${BASE}/p2`]: page(['c', 'd'], '/p3'),
       [`${BASE}/p3`]: page(['e'])
@@ -439,7 +465,7 @@ describe('#561: walkPriorPages', () => {
     expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 3')
   })
 
-  it('no next link — one page, no extra requests, silence', async () => {
+  it('ссылки нет — одна страница, лишних запросов нет, молчим', async () => {
     const fetchPage = vi.fn()
     const onWalk = vi.fn()
     const out = await walkPriorPages(page(['a']), 'ACC', BASE, fetchPage, onWalk, nowait)
@@ -449,18 +475,42 @@ describe('#561: walkPriorPages', () => {
     expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toBeNull()
   })
 
-  it('a repeating raw page means the bank looped — stop quietly, nothing doubles', async () => {
+  it('links.next на уже пройденную страницу — ЦИКЛ: останов, и говорим об этом громко', async () => {
+    // ⚠ Детектор цикла — URL, а не содержимое страницы. Сигнатура содержимого была первой
+    // попыткой и оказалась неверной: две ПУСТЫЕ страницы байт-идентичны, не будучи циклом, — см.
+    // регресс-тест ниже, который та версия не проходила.
     const same = page(['a', 'b'], '/p2')
     const fetchPage = vi.fn(async () => ({ status: 200, body: same }))
     const onWalk = vi.fn()
     const out = await walkPriorPages(same, 'ACC', BASE, fetchPage, onWalk, nowait)
     expect(out).toHaveLength(2)
     expect(onWalk).toHaveBeenCalledWith({ pages: 2, recovered: 0, stop: 'repeat' })
+    // ⚠ Цикл — ровно тот случай, когда мы НЕ знаем, всё ли увидели. Считать его честным концом
+    // значило заново построить ту тихую обрезку, ради конца которой файл и написан.
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('банк зациклился')
   })
 
-  it('a page that dedups to nothing must NOT end the walk (the #566 regression, not repeated here)', async () => {
-    // Two DIFFERENT payers colliding on the empty-docId content signature: raw pages differ, so the
-    // walk continues; the output collapses the collision — all dedup can safely do.
+  it('ПУСТЫЕ страницы посередине не обрывают обход — данные после них всё равно забираются', async () => {
+    // ⚠ Регресс, найденный ревью и воспроизведённый до правки: при детекторе по сигнатуре
+    // содержимого набор [a] → [] → [] → [реальные] обрывался на третьей странице, четвёртую не
+    // запрашивал и НЕ ПЕЧАТАЛ НИЧЕГО — ровно болезнь #561, этажом выше.
+    const pages: Record<string, unknown> = {
+      [`${BASE}/e2`]: { data: { transaction: [] }, links: { next: '/e3' } },
+      [`${BASE}/e3`]: { data: { transaction: [] }, links: { next: '/e4' } },
+      [`${BASE}/e4`]: page(['real-later'])
+    }
+    const fetchPage = vi.fn(async (url: string) => ({ status: 200, body: pages[url]! }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a'], '/e2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(fetchPage).toHaveBeenCalledTimes(3)
+    expect(out.map(i => i.docId)).toEqual(['a', 'real-later'])
+    expect(onWalk).toHaveBeenCalledWith({ pages: 4, recovered: 1, stop: 'exhausted' })
+  })
+
+  it('страница, схлопнувшаяся дедупом в ноль, НЕ имеет права обрывать обход (регресс #566)', async () => {
+    // Два РАЗНЫХ плательщика, схлопнувшихся в одну контент-сигнатуру при пустом docId: сырые
+    // страницы различны, обход идёт дальше; на выходе коллизия схлопывается — всё, что дедупу
+    // позволено сделать безопасно.
     const anon = (name: string) => ({
       transactionId: '', creditDebitIndicator: 'Credit', amount: 5, currency: 'BYN',
       transactionDetails: 'same purpose', bookingDateTime: '2026-08-21T10:00:00',
@@ -479,14 +529,43 @@ describe('#561: walkPriorPages', () => {
     expect(out.map(i => i.docId)).toEqual(['', 'real'])
   })
 
-  it('a cross-origin next stops LOUDLY — refused is not the same as absent', async () => {
+  it('links.next = null / пустая строка — это ЧИСТЫЙ конец, а не отказ', async () => {
+    // ⚠ Обычная REST-конвенция «страниц больше нет». Пока «есть ссылка» значило `!== undefined`,
+    // такой конец помечался `foreign-next`, печатал «указывает на ЧУЖОЙ origin» про ссылку,
+    // которой не было, и ГЛУШИЛ бэкстоп ниже — тот гейтится на `stop === 'exhausted'`. То есть
+    // бэкстоп молчал ровно там, где задуман говорить. Найдено ревью на реальной форме данных.
+    for (const next of [null, '', '   ', { href: null }, { href: '' }]) {
+      const onWalk = vi.fn()
+      await walkPriorPages(
+        { data: { transaction: [tx('a')] }, links: { next } },
+        'ACC', BASE, vi.fn(), onWalk, nowait
+      )
+      expect(onWalk.mock.calls[0]![0], `next=${JSON.stringify(next)}`)
+        .toEqual({ pages: 1, recovered: 0, stop: 'exhausted' })
+      expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toBeNull()
+    }
+  })
+
+  it('ожидающая (pending) следующая страница — тоже not-ready, а не ошибка', async () => {
+    // ⚠ У `not-ready` ДВЕ причины: HTTP 429/5xx и собственный pending-конверт банка
+    // (`BY.NBRB.Resource.NotCreated`). Тестом была покрыта только первая — замерено мутацией,
+    // отключавшей вторую ветку: полный набор оставался зелёным.
+    const fetchPage = vi.fn(async () => ({ status: 200, body: { errors: [{ code: 'BY.NBRB.Resource.NotCreated' }] } }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(1)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'not-ready' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+  })
+
+  it('чужой origin в next останавливает ГРОМКО — отвергнуто и «нет ссылки» это разное', async () => {
     const onWalk = vi.fn()
     await walkPriorPages(page(['a'], 'https://evil.example/x'), 'ACC', BASE, vi.fn(), onWalk, nowait)
     expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'foreign-next' })
     expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ЧУЖОЙ origin')
   })
 
-  it('a throttled next page stops loudly instead of failing the job — the next tick self-heals', async () => {
+  it('затроттленная следующая страница останавливает громко, но не роняет джобу — тик залечит', async () => {
     const fetchPage = vi.fn(async () => ({ status: 429, body: null }))
     const onWalk = vi.fn()
     const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
@@ -495,43 +574,45 @@ describe('#561: walkPriorPages', () => {
     expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
   })
 
-  it('a page ERROR throws — a broken answer is not a slow one', async () => {
-    // The unrecognized-response shape is the honest fixture: a 400 body without our data envelope
-    // classifies as an error either way, and the message must carry the page number.
+  it('ОШИБКА страницы бросает — сломанный ответ это не медленный', async () => {
+    // Честная фикстура — неопознанный ответ: тело 400 без нашего конверта данных классифицируется
+    // как ошибка в любом случае, и сообщение обязано нести номер страницы.
     const fetchPage = vi.fn(async () => ({ status: 400, body: { nonsense: true } }))
     await expect(walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, undefined, nowait))
       .rejects.toThrow(/page 2 error .*HTTP 400/)
   })
 
-  it('endless distinct pages stop at the cap — and say it truncated', async () => {
+  it('бесконечные РАЗНЫЕ страницы упираются в потолок — и говорят, что усекли', async () => {
+    // ⚠ Каждая следующая ссылка обязана быть РАЗНОЙ — постоянная это цикл, и детектор по URL
+    // (справедливо) останавливается на нём задолго до потолка страниц.
     let n = 0
-    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`x${n++}`], '/next') }))
+    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`x${n}`], `/next-${n++}`) }))
     const onWalk = vi.fn()
-    await walkPriorPages(page(['x-first'], '/next'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    await walkPriorPages(page(['x-first'], '/next-start'), 'ACC', BASE, fetchPage, onWalk, nowait)
     const info = onWalk.mock.calls[0]![0] as { pages: number, stop: string }
     expect(info.stop).toBe('page-cap')
     expect(info.pages).toBe(MAX_PRIOR_STATEMENT_PAGES)
     expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain(`потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц`)
   })
 
-  it('a slow bank stops on the wall-clock budget', async () => {
+  it('медленный банк останавливается по бюджету реального времени', async () => {
     let clock = 0
     const now = () => (clock += 9_000)
     let n = 0
-    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`y${n++}`], '/next') }))
+    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`y${n}`], `/slow-${n++}`) }))
     const onWalk = vi.fn()
-    await walkPriorPages(page(['y-first'], '/next'), 'ACC', BASE, fetchPage, onWalk, { sleep: async () => {}, now })
+    await walkPriorPages(page(['y-first'], '/slow-start'), 'ACC', BASE, fetchPage, onWalk, { sleep: async () => {}, now })
     expect((onWalk.mock.calls[0]![0] as { stop: string }).stop).toBe('time-cap')
   })
 
-  it('waits between pages, and only between them', async () => {
+  it('ждёт между страницами, и только между ними', async () => {
     const sleep = vi.fn(async (_ms: number) => {})
     const pages: Record<string, unknown> = { [`${BASE}/p2`]: page(['b']) }
     await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, async url => ({ status: 200, body: pages[url]! }), undefined, { sleep })
     expect(sleep.mock.calls.map(c => c[0])).toEqual([PRIOR_PAGE_DELAY_MS])
   })
 
-  it('the caps are pinned and both reachable — neither is decoration', () => {
+  it('оба предела закреплены и достижимы — ни один не украшение', () => {
     expect(MAX_PRIOR_STATEMENT_PAGES).toBe(20)
     expect((MAX_PRIOR_STATEMENT_PAGES - 1) * PRIOR_PAGE_DELAY_MS).toBeLessThan(PRIOR_WALK_BUDGET_MS)
   })

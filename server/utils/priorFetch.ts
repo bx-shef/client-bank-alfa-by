@@ -46,6 +46,7 @@ import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankToken } from './bankTokenStore'
 import type { BankFetchQuery } from './bankFetch'
 import { useServerLogger } from './serverLogger'
+import { logSafe } from './logSafe'
 
 const log = useServerLogger('fetch')
 
@@ -166,8 +167,9 @@ export function priorNextPageUrl(body: unknown, base: string): string | null {
   }
 }
 
-/** Why a Prior page walk stopped. `exhausted` (no next link) and `repeat` (the bank looped) mean
- *  «done»; everything else means WE stopped and the window may be incomplete. */
+/** Why a Prior page walk stopped. Only `exhausted` (the bank offered no next link) means the data
+ *  honestly ran out — EVERYTHING else, `repeat` included, means the window may be incomplete and
+ *  must be said out loud. */
 export type PriorWalkStop = 'exhausted' | 'repeat' | 'page-cap' | 'time-cap' | 'foreign-next' | 'not-ready'
 
 export interface PriorWalkResult {
@@ -178,13 +180,36 @@ export interface PriorWalkResult {
 }
 
 /**
+ * Why the walk stopped and WHAT TO DO — exhaustive by construction, so a new `PriorWalkStop` will
+ * not compile until someone decides what to tell the operator about it.
+ *
+ * ⚠ The advice is per-cause because «следующий тик заберёт хвост сам» is TRUE FOR ONE OF THEM. A
+ * throttled page really does self-heal (the next tick creates a fresh resource). A structural
+ * 20-page account, a systematically slow bank, a moved bank domain and a looping cursor repeat
+ * identically every tick — telling the operator to wait there teaches them to ignore the line.
+ * The Alfa sibling already words its two causes as actions; Prior's four must too.
+ */
+const TRUNCATION_ADVICE: Record<PriorWalkStop, string> = {
+  'exhausted': '', // never rendered — `exhausted` is the one silent stop
+  'repeat': 'links.next ведёт на уже пройденную страницу: банк зациклился. Повторяется каждый тик — смотрите ответ банка, ждать бесполезно.',
+  'page-cap': `упёрлись в потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц. Если повторяется — сузьте CRON_LOOKBACK_DAYS или поднимите потолок.`,
+  'time-cap': `исчерпан бюджет ${Math.round(PRIOR_WALK_BUDGET_MS / 1000)} с. Если повторяется — банк отвечает медленно: сузьте окно.`,
+  'foreign-next': 'links.next указывает на ЧУЖОЙ origin — токен туда не понесём. Это НАСТРОЙКА, а не задержка: проверьте адрес банка и шлюз.',
+  'not-ready': 'следующая страница не готова или троттлится — единственный случай, когда следующий тик действительно заберёт хвост сам.'
+}
+
+/**
  * What to say in the log about a finished walk — `null` when there is nothing worth saying.
  * Pure and separate from the loop for the same reason `alfaWalkNotice` is: «when do we log» is the
  * part that silently rots inside a transport callback. No literal `[fetch]`/`[prior-page]` prefix —
  * the logger prints the channel itself.
  */
 export function priorWalkNotice(label: string, info: PriorWalkResult): string | null {
-  const truncated = info.stop !== 'exhausted' && info.stop !== 'repeat'
+  // ⚠ ONLY `exhausted` is silent. `repeat` used to be silent too, on the reasoning that a looping
+  // bank means «done» — and that was wrong twice over: a loop is precisely the case where we do NOT
+  // know whether we saw everything, and treating it as a clean end rebuilt the silent truncation
+  // this whole file exists to end. Measured: the walk stopped early and logged nothing.
+  const truncated = info.stop !== 'exhausted'
   if (info.recovered <= 0 && !truncated) return null
   const parts: string[] = []
   if (info.recovered > 0) {
@@ -194,16 +219,10 @@ export function priorWalkNotice(label: string, info: PriorWalkResult): string | 
     )
   }
   if (truncated) {
-    const why = info.stop === 'page-cap'
-      ? `потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц`
-      : info.stop === 'time-cap'
-        ? `бюджет ${Math.round(PRIOR_WALK_BUDGET_MS / 1000)} с`
-        : info.stop === 'foreign-next'
-          ? 'links.next указывает на ЧУЖОЙ origin — токен туда не понесём'
-          : 'следующая страница не готова/троттлится'
+    const why = TRUNCATION_ADVICE[info.stop]
     parts.push(
-      `ОБХОД СТРАНИЦ ОБОРВАН на ${info.pages}-й (${why}) — выписка за это окно могла прийти НЕ ПОЛНОСТЬЮ;`
-      + ' следующий тик заберёт хвост сам (#561)'
+      `ОБХОД СТРАНИЦ ОБОРВАН на ${info.pages}-й — выписка за это окно могла прийти НЕ ПОЛНОСТЬЮ.`
+      + ` ${why} (#561)`
     )
   }
   return `${label}: ${parts.join(' | ')}`
@@ -212,9 +231,17 @@ export function priorWalkNotice(label: string, info: PriorWalkResult): string | 
 /**
  * Walk the materialized transaction list by `links.next` until the bank runs out.
  *
- * ⚠ THE STOP CONDITION READS THE RAW PAGE, NOT THE DEDUP RESULT — the same load-bearing distinction
- * `fetchAlfaStatementPages` documents: `dedupKey` falls back to a content signature that omits the
- * payer's NAME, so a colliding page must collapse in the OUTPUT without ending the walk.
+ * ⚠ THE STOP CONDITION NEVER READS THE DEDUP RESULT, and that distinction is load-bearing:
+ * `dedupKey` falls back to a content signature that omits the payer's NAME, so a colliding page
+ * must collapse in the OUTPUT without ending the walk.
+ *
+ * ⚠ THE CYCLE DETECTOR IS THE URL, NOT THE PAGE CONTENT — and this is where Prior deliberately
+ * differs from `fetchAlfaStatementPages`. Alfa numbers its own pages (`pageNo`), so identical
+ * CONTENT at a different page number is the only way to see «the bank ignored the cursor». Prior
+ * hands us the cursor itself, so a loop is literally «next points where we have already been»,
+ * and content-identity is a bad proxy for it: two EMPTY pages are byte-identical without being a
+ * loop at all. Measured — page1=[a], page2=[], page3=[], page4=[real] ended the walk at page 3
+ * and never requested page 4, losing real operations in silence.
  *
  * ⚠ A non-ready/throttled page STOPS the walk loudly instead of failing the job: throwing would
  * re-create the whole resource on retry (the create+poll is the expensive part), while the rolling
@@ -235,7 +262,8 @@ export async function walkPriorPages(
 
   const out: StatementItem[] = []
   const seen = new Set<string>()
-  const pageSigs = new Set<string>()
+  /** URLs already fetched in THIS walk — the loop detector (see the doc above). */
+  const visited = new Set<string>()
   let recovered = 0
   let pages = 0
   // No initializer ON PURPOSE: every exit below is a `break` that assigns, so definite-assignment
@@ -246,14 +274,6 @@ export async function walkPriorPages(
   let body = firstBody
   for (;;) {
     pages++
-    const rows = (body as PriorTransactionListResponse | undefined)?.data?.transaction ?? []
-    const sig = JSON.stringify(rows)
-    if (pages > 1 && pageSigs.has(sig)) {
-      stop = 'repeat'
-      break
-    }
-    pageSigs.add(sig)
-
     let fresh = 0
     for (const item of normalizePriorTransactionList(body as PriorTransactionListResponse, { account })) {
       const key = dedupKey(item)
@@ -266,11 +286,24 @@ export async function walkPriorPages(
 
     const rawNext = priorNextPageUrl(body, base)
     if (rawNext === null) {
-      // Distinguish «no link» from «link we refused»: a cross-origin next is the one case where
+      // Distinguish «no link» from «link we REFUSED»: a cross-origin next is the one case where
       // absent and rejected must not read the same — the second means the window IS incomplete.
-      const links = (body as { links?: { next?: unknown } } | undefined)?.links
-      const hadNext = !!links && typeof links === 'object' && (links as { next?: unknown }).next !== undefined
-      stop = hadNext ? 'foreign-next' : 'exhausted'
+      //
+      // ⚠ «Present» means a NON-EMPTY STRING (or an {href} carrying one), not merely `!== undefined`.
+      // `links: { next: null }` and `next: ''` are ordinary REST for «no more pages»; calling them a
+      // refusal mislabelled a clean end as `foreign-next`, printed «указывает на ЧУЖОЙ origin» about
+      // a link that did not exist, and — worse — suppressed the round-count backstop below, which
+      // gates on `stop === 'exhausted'`. So the backstop went quiet exactly where it was designed
+      // to speak. Found by review on real-shaped input, not by mutation.
+      const rawLink = (body as { links?: { next?: unknown } } | undefined)?.links?.next
+      const linkText = typeof rawLink === 'string'
+        ? rawLink
+        : (rawLink && typeof rawLink === 'object' ? (rawLink as { href?: unknown }).href : undefined)
+      stop = typeof linkText === 'string' && linkText.trim() !== '' ? 'foreign-next' : 'exhausted'
+      break
+    }
+    if (visited.has(rawNext)) {
+      stop = 'repeat'
       break
     }
     if (pages >= MAX_PRIOR_STATEMENT_PAGES) {
@@ -281,6 +314,7 @@ export async function walkPriorPages(
       stop = 'time-cap'
       break
     }
+    visited.add(rawNext)
     await sleep(PRIOR_PAGE_DELAY_MS)
 
     const reply = await fetchPage(rawNext)
@@ -511,7 +545,9 @@ export async function fetchPriorStatement(
             walk = info
             // ⚠ WARNING, not info: this line means either «operations used to vanish» or «the
             // window may be incomplete» — both are what the runbook greps for, not narration.
-            const line = priorWalkNotice(`${query.account} ${from}..${to}`, info)
+            // ⚠ logSafe exactly like the Alfa sibling and worker.ts's [fetch] line: an account key
+            // on its way into a log is bank-supplied text, and the two lines must not disagree.
+            const line = priorWalkNotice(`${logSafe(query.account)} ${from}..${to}`, info)
             if (line) (deps.warn ?? deps.log)?.(`[prior-page] ${line}`)
           },
           { sleep: deps.sleep }
