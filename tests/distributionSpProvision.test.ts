@@ -153,14 +153,22 @@ describe('provisionDistributionSp', () => {
     const addedNames = calls
       .filter(c => c.method === 'userfieldconfig.add')
       .map(c => (c.params.field as Record<string, unknown>).fieldName)
-    expect(addedNames).toEqual([
-      `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.total.postfix}`,
-      `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.currency.postfix}`,
-      `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.needDistributionsSum.postfix}`,
-      `UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.requiresRedistribution.postfix}`
-    ])
+    // ⚠ Ожидание ВЫВОДИТСЯ из объявленного набора, а не переписывается руками списком имён. Здесь
+    // нет решения, которое стоило бы принимать поштучно: любое объявленное поле обязано довозиться
+    // на уже существующий СП, иначе портал, где смарт-процесс создан прежней версией, молча живёт
+    // без новых колонок. Ручной список ловил бы это как «поправь тест» — то есть предлагал бы
+    // ослабить проверку ровно там, где она сработала. Порядок тоже проверяется: он совпадает с
+    // порядком объявления, потому что провижининг идёт по `Object.values`.
+    const expectedAdds = Object.entries(PAYMENT_SP_FIELDS)
+      .filter(([key]) => key !== 'marker')
+      .map(([, f]) => `UF_CRM_${paymentEtid}_${f.postfix}`)
+    expect(addedNames).toEqual(expectedAdds)
     expect(addedNames).not.toContain(`UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.marker.postfix}`)
-    expect(res.addedFields).toBe(4)
+    expect(res.addedFields).toBe(expectedAdds.length)
+    // #575: поля реестра — не «просто ещё поля». Смарт-процесс на боевом портале уже создан, и
+    // единственный путь, которым они там появятся, это самолечение при повторном провижининге.
+    expect(addedNames).toContain(`UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.purpose.postfix}`)
+    expect(addedNames).toContain(`UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS.counterpartyAccount.postfix}`)
   })
 
   it('mixed known/unknown ids: skips probe for the known SP, recovers the other by title', async () => {

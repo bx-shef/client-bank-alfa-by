@@ -9,7 +9,7 @@
 //                                            └─ notify chat (by rules)
 
 import { createHash } from 'node:crypto'
-import type { StatementItem } from '../../app/types/statement'
+import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import { landedCleanly } from '../../app/utils/opLogPolicy'
 import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
@@ -66,6 +66,17 @@ export interface HandlerDeps {
    *  no company matched, so there's no owner). Optional `note` prepends a reason block —
    *  used for the UNMATCHED-client fallback written to my company (#91). */
   writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string) => Promise<string | null>
+  /**
+   * Registry write (#575): ensure the payment SP carries an element for THIS operation.
+   *
+   * ⚠ Called for EVERY non-excluded, non-skipped operation — independent of `autoDistribute`, of
+   * whether the client was identified, and of whether a target was found. The SP is named
+   * «Импорт выписки: платежи» and the owner expects a registry of payments; until #575 an element
+   * appeared only when an allocation SUCCEEDED, so a portal whose payers are not in CRM saw an
+   * empty SP beside a working import. Idempotent by the same operation key as the activity marker.
+   * Returns the element id (or null when the SP is not provisioned / on a demo portal).
+   */
+  writePaymentRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<string | null>
   /** Read the portal's full settings blob (chat target + rules + recognition matrices)
    *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
    *  not per operation — one app.option read feeds both the chat and recognition steps. */
@@ -307,7 +318,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -353,6 +364,8 @@ export async function handleCrmSyncJob(
   let notified = 0
   let skipped = 0
   let excluded = 0
+  /** Operations whose registry element could not be written (#575) — see the call site. */
+  let registryFailed = 0
   let unmatched = 0
   let landed = 0
   // Номер распознан, компания найдена, а цели в CRM нет (#421). Раньше этот случай не попадал
@@ -405,6 +418,47 @@ export async function handleCrmSyncJob(
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
+    // ─── Реестр платежей (#575) ───────────────────────────────────────────────────────────────
+    // Элемент СП пишется ПЕРВЫМ — раньше и разнесения, и дела.
+    //
+    // ⚠ Несущая причина ровно ОДНА — разнесение (следующий абзац). Соблазнительный довод «раньше
+    // дела, чтобы упавшая запись не оставила маркера и повтор прошёл операцию заново» ЛОЖЕН, и
+    // держать его тут вредно: отказ реестра ПРОГЛАТЫВАЕТСЯ, а `writeActivity` вызывается сразу
+    // после — безусловно, не по исходу реестра. Значит маркер встанет в этом же проходе при любом
+    // порядке, и никакого самолечения ретраем нет. Обратное утверждение убеждало бы следующего
+    // читателя, что потерянный элемент «когда-нибудь допишется сам».
+    //
+    // ⚠ Раньше РАЗНЕСЕНИЯ — потому что `writeLedgerAllocation`/`writeTriggerLedgerFact` зовут тот же
+    // `ensurePaymentElement`, но БЕЗ полей реестра, а он при найденном маркере не дописывает ничего.
+    // Отработай разнесение первым — элемент создался бы голым, реестр нашёл бы маркер занятым и
+    // тихо вышел: колонки не появились бы, и это даже не посчиталось бы отказом. Сегодня ветка не
+    // срабатывает (совпадений «плательщик в CRM» ноль — та самая причина, ради которой #575 и
+    // заведён), поэтому промах был бы латентным и выстрелил бы ровно тогда, когда контрагентов
+    // начнут заводить: в реестре вперемешку строки с контрагентом и без. Это читается как порча
+    // данных, а не как понятный дефект. Порядок и есть починка — обе стороны сходятся на маркере,
+    // и кто пришёл первым, тот и создал.
+    //
+    // ⚠ Отказ ПРОГЛАТЫВАЕТСЯ, в отличие от `writeLedger`, который пробрасывает. Тот писал только на
+    // удавшемся разнесении, то есть редко; этот зовётся на КАЖДУЮ операцию, и проброс отменил бы
+    // всю пачку на первой же плохой — и так на каждом повторе. Операции до неё остаются с делами,
+    // операции после не получают ничего: снаружи импорт, вставший на середине без объяснения.
+    // Согласованный процесс (PROCESSING.md, Этап D) ставит дело первым — «ДЕЛО — ВСЕГДА», — и
+    // вторичная запись не имеет права держать первичную в заложниках.
+    //
+    // ⚠ Цена названа честно: проглоченный отказ означает потерянный навсегда элемент (следующий
+    // опрос упрётся в маркер дела). Поэтому он СЧИТАЕТСЯ и печатается в безусловной строке итога —
+    // молчащий пустой СП при живом импорте это ровно тот симптом, ради которого #575 и заведён.
+    //
+    // ⚠ Отсутствующие поля отказом НЕ являются: `crm.item.add` молча игнорирует неизвестные UF-ключи
+    // (замерено на живом портале 2026-08-22), поэтому СП, созданный до #575, продолжает получать
+    // элементы — просто без колонок реестра, пока администратор не перезапустит провижининг.
+    if (ledgerPaymentRef && deps.writePaymentRegistry) {
+      try {
+        await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
+      } catch {
+        registryFailed++
+      }
+    }
     // Error-chat notice for an ambiguous/manual allocation, captured here but EMITTED only after
     // the dedup marker is committed (below) — im.message.add has no dedup, so posting it before the
     // marker would let a job-level retry re-post it. Job retries are more frequent now that the SDK
@@ -661,5 +715,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }

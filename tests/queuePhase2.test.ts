@@ -8,6 +8,7 @@ import {
 } from '../server/queue/cron'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import { dedupKey } from '../app/utils/statement'
+import { runSummaryLine } from '../app/utils/opLogPolicy'
 import type { CrmSyncJob, FetchJob } from '../server/queue/topology'
 import type { ChatSettings, ChatTarget, PortalSettings, RecognitionSettings } from '../app/utils/settings'
 import type { RecognitionIntent } from '../app/utils/recognitionIntent'
@@ -83,7 +84,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -110,6 +111,10 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.activity.push([it.docId, companyId, memberId, id])
       calls.activityNote.push([it.docId, companyId, note ?? null]) // #91 reason-block capture
       return id
+    },
+    writePaymentRegistry: async (it, companyId, memberId, provider, paymentSp) => {
+      calls.registry.push([it.docId, companyId, memberId, provider, paymentSp.entityTypeId])
+      return `pay-${it.docId}`
     },
     getPortalSettings: async (memberId) => {
       calls.settings.push(memberId)
@@ -305,13 +310,137 @@ describe('handleCrmSyncJob', () => {
     memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items
   })
 
+  it('#575 реестр: элемент СП пишется для КАЖДОЙ операции, даже когда клиент не опознан', async () => {
+    // ⚠ Суть #575. До правки элемент появлялся только внутри ветки «разнесено», то есть требовал и
+    // опознанного клиента, и найденной цели. На портале, где плательщиков нет в CRM (замерено: 366
+    // счетов, ноль совпадений), это условие не выполняется никогда — СП оставался пуст при
+    // работающем импорте, и ничего об этом не говорило.
+    const spCfg: RecognitionSettings = {
+      alphabet: 'cyrillic', matrices: [],
+      configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }
+    }
+    const { deps, calls } = fakeDeps({ company: null, myCompany: '9', recognition: spCfg })
+    await handleCrmSyncJob(job([item('no-client')]), deps)
+    expect(calls.registry).toHaveLength(1)
+    // Клиент не опознан ⇒ в элемент едет null, а НЕ фолбэк «моя компания»: иначе чужой платёж был
+    // бы подписан нашей собственной компанией.
+    expect(calls.registry[0]).toEqual(['no-client', null, 'M', 'alfa-by', 1044])
+    // Дело при этом всё равно записано в мою компанию — реестр его не заменяет.
+    expect(calls.activity).toHaveLength(1)
+  })
+
+  it('#575 реестр не пишется, когда смарт-процесс не провижинен', async () => {
+    // «Кое-где нет смарт-процессов» (владелец) — там деградируем до одного дела, а не падаем.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: '9' })
+    const r = await handleCrmSyncJob(job([item('no-sp')]), deps)
+    expect(calls.registry).toEqual([])
+    expect(calls.activity).toHaveLength(1)
+    // ⚠ И это НЕ отказ. Без проверки счётчика тест проходил и когда гейт `ledgerPaymentRef` снимали
+    // вовсе: вызов тогда падал внутри и уходил в `catch`, `calls.registry` оставался пуст — то есть
+    // «не пишем, потому что нечего» было неотличимо от «пытались и не смогли».
+    expect(r.registryFailed).toBe(0)
+  })
+
+  it('#575 реестр пишется ДО дела — иначе его сбой навсегда пропускает операцию', async () => {
+    // ⚠ Порядок несущий и противоположен порядку оповещений. Дедуп-гейт наверху цикла ищет маркер
+    // ДЕЛА: если реестр писать после дела и он упадёт, джоба уйдёт в ретрай, гейт найдёт маркер и
+    // сделает `continue` — элемент не появится никогда, молча. Обратный порядок безопасен, потому
+    // что запись элемента идемпотентна по тому же ключу.
+    const order: string[] = []
+    const { deps } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' } }
+    })
+    const origRegistry = deps.writePaymentRegistry!
+    const origActivity = deps.writeActivity
+    deps.writePaymentRegistry = async (...a) => {
+      order.push('registry')
+      return origRegistry(...a)
+    }
+    deps.writeActivity = async (...a) => {
+      order.push('activity')
+      return origActivity(...a)
+    }
+    const origLedger = deps.writeLedger!
+    deps.writeLedger = async (...a) => {
+      order.push('ledger')
+      return origLedger(...a)
+    }
+    await handleCrmSyncJob(job([item('order-check')]), deps)
+    expect(order[0]).toBe('registry')
+    expect(order.at(-1)).toBe('activity')
+  })
+
+  it('#575 разнесение НЕ обгоняет реестр: элемент создаётся с полями, а не голым', async () => {
+    // ⚠ Тест с ОБЩИМ состоянием, а не с двумя независимыми фейками, и это несущее различие.
+    // `writeLedgerAllocation` зовёт тот же `ensurePaymentElement`, но БЕЗ полей реестра, а тот при
+    // найденном маркере не дописывает ничего. Пока фейки независимы, оба «успешны» и промах не
+    // виден вовсе; здесь они делят один склад элементов с той же семантикой «кто первым создал,
+    // тот и записал». ⚠ Ветка разнесения обязана РЕАЛЬНО сработать — иначе тест зелен при любом
+    // порядке (проверено мутацией: без совпавшей цели он проходит и с прежним, сломанным кодом).
+    const elements = new Map<string, { registry: boolean }>()
+    const ensure = (marker: string, withRegistry: boolean) => {
+      if (!elements.has(marker)) elements.set(marker, { registry: withRegistry })
+      return marker
+    }
+    const spMatrix: RecognitionSettings = {
+      alphabet: 'cyrillic',
+      matrices: [{ mask: 'СЧ-dddd', kind: 'invoice-number' }],
+      configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }
+    }
+    const exact: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, resolve: exact })
+    deps.writePaymentRegistry = async o => ensure(dedupKey(o), true)
+    deps.writeLedger = async (o) => {
+      ensure(dedupKey(o), false)
+      return true
+    }
+    const op = item('d1', 'credit', 'счет СЧ-0001')
+    const r = await handleCrmSyncJob(job([op]), deps)
+    expect(r.allocated).toBe(1) // ветка разнесения действительно отработала
+    expect(calls.ledger.length + 1).toBeGreaterThan(0)
+    expect(elements.get(dedupKey(op))).toEqual({ registry: true })
+  })
+
+  it('#575 отказ реестра НЕ отменяет дело: операция записана, отказ посчитан', async () => {
+    // ⚠ Асимметрия с `writeLedger` (тот пробрасывает) намеренная и несущая. Реестр зовётся на
+    // КАЖДУЮ операцию, поэтому проброс отменил бы всю пачку на первой же плохой — операции до неё
+    // остались бы с делами, операции после не получили бы ничего, и на каждом ретрае повторялось бы
+    // то же. Бухгалтер увидел бы импорт, вставший на середине без объяснения.
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' } }
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('SP удалён на портале')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.created).toBe(2)
+    expect(r.registryFailed).toBe(2)
+  })
+
+  it('#575 отказ реестра ВИДЕН в строке итога прогона — иначе пустой СП вернулся бы молча', () => {
+    const line = runSummaryLine('M', {
+      processed: 3, landed: 3, created: 3, unmatched: 0, unresolved: 0, recognized: 0,
+      skipped: 0, excluded: 0, registryFailed: 2
+    }, 'notable')
+    expect(line).toContain('2 без записи в реестр')
+    const clean = runSummaryLine('M', {
+      processed: 3, landed: 3, created: 3, unmatched: 0, unresolved: 0, recognized: 0,
+      skipped: 0, excluded: 0, registryFailed: 0
+    }, 'notable')
+    expect(clean).not.toContain('реестр')
+  })
+
   it('dedupes within the batch and writes+remembers+notifies per unique op', async () => {
     const { deps, calls } = fakeDeps()
     const r = await handleCrmSyncJob(
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, landed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, landed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
@@ -322,10 +451,10 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps() // the fake persists the marker across calls
     const j = job([item('d1'), item('d2')])
     const first = await handleCrmSyncJob(j, deps)
-    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, unmatched: 0 })
+    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, unmatched: 0 })
     // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 2, excluded: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 2, excluded: 0, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -334,7 +463,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -348,7 +477,7 @@ describe('handleCrmSyncJob', () => {
     // The confused-op sample (#FEEDBACK) rides on the summary — split it out so the counter check
     // stays strict, then assert it captured the first unmatched op.
     const { sample, ...counters } = r
-    expect(counters).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 0, unmatched: 2, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(counters).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 0, registryFailed: 0, unmatched: 2, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -445,7 +574,7 @@ describe('handleCrmSyncJob', () => {
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
     const { sample, ...counters } = r // sample (d3, unmatched) split out so the counter check stays strict
-    expect(counters).toEqual({ processed: 3, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, unmatched: 1, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
+    expect(counters).toEqual({ processed: 3, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, unmatched: 1, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -485,7 +614,7 @@ describe('handleCrmSyncJob', () => {
     const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
     // Full shape: only `excluded` and the приход/расход split move; nothing produced.
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(acc.calls.find).toEqual([]) // never even looked up the company
     expect(acc.calls.activity).toEqual([]) // NO CRM activity written
     expect(acc.calls.chat).toEqual([]) // NO chat
@@ -495,7 +624,7 @@ describe('handleCrmSyncJob', () => {
     // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(pur.calls.activity).toEqual([])
     expect(pur.calls.chat).toEqual([])
   })

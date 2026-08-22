@@ -51,6 +51,7 @@ import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
+import { writePaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
@@ -223,6 +224,35 @@ export function liveHandlerDeps(): HandlerDeps {
       const call = await resolvePortalCall(memberId)
       if (!call) return null
       return writeTodoActivityViaRest(item, companyId, call, note, memberId)
+    },
+    // Registry element for EVERY operation (#575) — see the dep's doc for why it is unconditional.
+    // ⚠ `companyId` here is the CLIENT (or null): the element links the payer, and passing the
+    // my-company fallback would label a stranger's payment as our own company's.
+    writePaymentRegistry: async (item, companyId, memberId, provider, paymentSp) => {
+      if (isDemoAccount(item.account)) return null
+      const call = await resolvePortalCall(memberId)
+      // ⚠ THROW, not `return null` — the same choice `writeLedger`/`applyAllocation`/`hasTriggerFact`/
+      // `writeTriggerFact` make right here. A silent null would not reach the handler's `catch`, so a
+      // portal whose token died mid-batch would produce ZERO registry elements while the run summary
+      // still printed `registryFailed: 0` — «реестр работает штатно» during a total registry outage.
+      // Throwing at least counts it; the activity write hits the same dead token a line later anyway.
+      if (!call) throw new Error(`writePaymentRegistry: no portal token for ${memberId}`)
+      try {
+        return await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+      } catch (e) {
+        // Logged HERE and rethrown: the handler counts the failure (and keeps the activity, see the
+        // comment at its call site), but only this layer has the portal's actual error text. The
+        // count alone would say «сколько», never «почему».
+        //
+        // ⚠ Через `logSafe`, потому что текст сюда приходит ОТ ПОРТАЛА, а не от нас: правило
+        // PRIVACY.md §Логи требует этого от любого внешнего текста, и полагаться на то, что
+        // Bitrix24 не эхает присланные значения, нельзя — это его выбор, а не наш инвариант.
+        // (Замерено 2026-08-22: на отказе `crm.item.add` значения полей в `error_description` не
+        // возвращаются, а нечисловое значение в `double`-поле портал вообще принимает молча. То
+        // есть сегодня канала утечки нет — но обёртка стоит там, где правило её требует.)
+        crmLog.error(`portal ${memberId}: реестр платежей не записан — ${logSafe(String((e as Error)?.message ?? e))}`)
+        throw e
+      }
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
@@ -877,7 +907,7 @@ async function persistImportResult(
  *  Gated to real (non-demo) portals; swallows errors so metrics can't fail a job. */
 async function bumpMetrics(
   job: CrmSyncJob,
-  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number }
+  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
   if (!account || isDemoAccount(account)) return

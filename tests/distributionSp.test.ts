@@ -80,7 +80,7 @@ describe('SP user fields', () => {
   it('every field carries a postfix, a userTypeId and a label', () => {
     for (const field of [...Object.values(PAYMENT_SP_FIELDS), ...Object.values(DISTRIBUTION_SP_FIELDS)]) {
       expect(field.postfix).toMatch(/^[A-Z0-9_]+$/)
-      expect(['double', 'boolean', 'string', 'integer']).toContain(field.userTypeId)
+      expect(['double', 'boolean', 'string', 'integer', 'date']).toContain(field.userTypeId)
       expect(field.label.length).toBeGreaterThan(0)
     }
   })

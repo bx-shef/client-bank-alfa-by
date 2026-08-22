@@ -55,6 +55,11 @@ function demoItem(over: Partial<StatementItem> = {}): StatementItem {
   }
 }
 
+/** Обычная (не демо) операция — для проверок, которые обязаны дойти до транспорта. */
+function realItem(): StatementItem {
+  return demoItem({ account: 'BY00REAL0000000000000000001' })
+}
+
 const target = { kind: 'deal-payment' as const, id: '5' }
 const decision = { action: 'allocate' as const, target: { ...target, amount: 100, currency: 'BYN' }, ambiguous: false, alternatives: [] }
 
@@ -73,6 +78,17 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
   })
   it('writeTriggerFact(demo) → false, no REST (§9.3 #6)', async () => {
     expect(await deps.writeTriggerFact!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSp: { entityTypeId: 1044, id: 144 }, distributionSp: { entityTypeId: 1046, id: 146 } })).toBe(false)
+  })
+  it('writePaymentRegistry(demo) → null, no REST (#575)', async () => {
+    expect(await deps.writePaymentRegistry!(demoItem(), 'C-7', 'MEMBER-1', 'alfa-by', { entityTypeId: 1044, id: 144 })).toBeNull()
+  })
+  it('writePaymentRegistry БЕЗ токена портала БРОСАЕТ, а не отдаёт null (#575)', async () => {
+    // ⚠ Не косметика. `null` не доходит до `catch` в обработчике, поэтому счётчик `registryFailed`
+    // остался бы нулём: портал, чей токен умер посреди пачки, не получил бы НИ ОДНОГО элемента
+    // реестра, а строка итога печатала бы «реестр работает штатно». Ровно этот выбор делают четыре
+    // соседние зависимости (`writeLedger`/`applyAllocation`/`hasTriggerFact`/`writeTriggerFact`).
+    await expect(deps.writePaymentRegistry!(realItem(), 'C-7', 'MEMBER-NO-TOKEN', 'alfa-by', { entityTypeId: 1044, id: 144 }))
+      .rejects.toThrow()
   })
   it('isTargetApplied(demo) → false, no REST state read (Фаза A)', async () => {
     expect(await deps.isTargetApplied(demoItem(), decision.target, 'MEMBER-1', {})).toBe(false)
