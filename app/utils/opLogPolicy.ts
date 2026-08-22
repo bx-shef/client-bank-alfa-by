@@ -123,6 +123,10 @@ export interface RunSummaryLike {
   /** Операции, у которых не удалось записать элемент реестра (#575). Необязательное: у прежних
    *  вызывающих поля нет, а печатается оно только при ненулевом значении. */
   registryFailed?: number
+  /** Операции, у которых не встала ХОТЯ БЫ ОДНА привязка дела (#579). Единица — ОПЕРАЦИЯ, как и у
+   *  `registryFailed`: у одной операции привязок несколько, и счётчик в тех же строках, но в других
+   *  единицах читался бы как сломанный. Необязательное — печатается только при ненулевом значении. */
+  bindingsFailed?: number
 }
 
 /**
@@ -142,7 +146,7 @@ export function runSummaryLine(memberId: string, s: RunSummaryLike, mode: OpLogM
   // канал и маркер это одна и та же строка, и совпадение стережёт `tests/serverLogChannels.test.ts`.
   return `portal ${memberId}: ${s.processed} обработано, ${s.created} создано, `
     + `${s.landed} приземлилось, ${s.unmatched} без клиента, ${s.unresolved} без цели, `
-    + `${s.recognized} с распознанным номером${registryPart(s)}${quietPart(s)}${opLogTail(s, mode)}`
+    + `${s.recognized} с распознанным номером${registryPart(s)}${bindingsPart(s)}${quietPart(s)}${opLogTail(s, mode)}`
 }
 
 /**
@@ -160,6 +164,22 @@ export function runSummaryLine(memberId: string, s: RunSummaryLike, mode: OpLogM
 function registryPart(s: RunSummaryLike): string {
   const n = s.registryFailed ?? 0
   return n > 0 ? `, ⚠ ${n} без записи в реестр` : ''
+}
+
+/**
+ * Операции, у которых не встали привязки дела (#579).
+ *
+ * ⚠ Отдельной строкой от реестра, а не сложением в одно число: это РАЗНЫЕ поломки с разным
+ * лечением. Пустой реестр значит «элемента нет вовсе», непоставленная привязка — «элемент есть, но
+ * из дела до него не дойти». Сложив их, мы получили бы счётчик, по которому нельзя решить, куда
+ * идти смотреть.
+ *
+ * ⚠ Как и у реестра, потеря окончательна: следующий опрос упрётся в маркер дела и до привязок не
+ * дойдёт. Поэтому это отказ в основной части строки, а не штатная причина рядом с дедупом.
+ */
+function bindingsPart(s: RunSummaryLike): string {
+  const n = s.bindingsFailed ?? 0
+  return n > 0 ? `, ⚠ ${n} без привязок` : ''
 }
 
 /**

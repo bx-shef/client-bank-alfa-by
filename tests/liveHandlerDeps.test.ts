@@ -90,6 +90,20 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
     await expect(deps.writePaymentRegistry!(realItem(), 'C-7', 'MEMBER-NO-TOKEN', 'alfa-by', { entityTypeId: 1044, id: 144 }))
       .rejects.toThrow()
   })
+  it('bindActivity БЕЗ токена портала не бросает, а отдаёт «все не поставлены» (#579)', async () => {
+    // ⚠ Противоположно соседнему `writePaymentRegistry`, и это не непоследовательность. Реестр
+    // пишется ДО дела, поэтому его бросок означает чистый повтор джобы. Привязки ставятся ПОСЛЕ
+    // маркера дела: повтор до них уже не дойдёт (операция отсеется на дедуп-гейте), так что бросок
+    // не починил бы ничего — он лишь отменил бы обработку всех оставшихся операций пачки.
+    // Мутационный прогон показал, что этот контракт не защищал НИ ОДИН тест.
+    await expect(deps.bindActivity!('2087', [{ entityTypeId: 4, entityId: 9 }], 'MEMBER-NO-TOKEN'))
+      .resolves.toEqual({ bound: 0, failed: 1 })
+  })
+  it('bindActivity без ссылок не ходит в портал вовсе (#579)', async () => {
+    // Пустой список — штатный исход (клиент не опознан, реестра нет, цель не найдена), а не сбой:
+    // резолвить токен ради нуля вызовов значит платить за ничто на каждой такой операции.
+    await expect(deps.bindActivity!('2087', [], 'MEMBER-NO-TOKEN')).resolves.toEqual({ bound: 0, failed: 0 })
+  })
   it('isTargetApplied(demo) → false, no REST state read (Фаза A)', async () => {
     expect(await deps.isTargetApplied(demoItem(), decision.target, 'MEMBER-1', {})).toBe(false)
   })

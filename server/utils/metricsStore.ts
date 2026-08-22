@@ -38,7 +38,12 @@ export const METRICS = {
   // ⚠ Имя совпадает с полем сводки, как и у всех остальных счётчиков этого блока (см. шапку:
   // «a rename can't silently drift»); snake_case тут был бы разрывом этого правила, а не стилем —
   // snake_case носят только `feedback_*`, которые сводкой и НЕ порождаются.
-  registryFailed: 'registryFailed'
+  registryFailed: 'registryFailed',
+  // ⚠ Тот же класс потери, что и у реестра, и по той же причине пожизненный (#579): привязки
+  // ставятся ПОСЛЕ маркера дела, поэтому непоставленная связь не появится уже никогда — повтор
+  // опроса до этого места не дойдёт. Отдельным счётчиком, а не слитым с реестром: «элемента нет»
+  // и «элемент есть, но из дела до него не дойти» чинятся в разных местах.
+  bindingsFailed: 'bindingsFailed'
 } as const
 
 export type MetricName = typeof METRICS[keyof typeof METRICS]
@@ -73,7 +78,8 @@ export function metricsFromSummary(
     [METRICS.distributed]: summary.distributed,
     [METRICS.ambiguous]: summary.ambiguous,
     [METRICS.manual]: summary.manual,
-    [METRICS.registryFailed]: summary.registryFailed
+    [METRICS.registryFailed]: summary.registryFailed,
+    [METRICS.bindingsFailed]: summary.bindingsFailed
   }
 }
 

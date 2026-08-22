@@ -17,6 +17,10 @@ import { makeProgramSample, type ProgramSample } from '../../app/utils/programFe
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
 import { isTriggerTarget, summarizeAllocation, type AllocationCandidate, type AllocationDecision } from '../../app/utils/allocation'
+import {
+  allocationTargetRef, companyRef, itemRef, planActivityBindings, type CrmEntityRef
+} from '../../app/utils/activityBindings'
+import type { BindingOutcome } from '../utils/activityBindingsWrite'
 import type { AllocationMutationOpts } from '../../app/utils/allocationMutation'
 import type { IntentResolution } from '../utils/intentResolver'
 import { parseConfiguredEntityTypeId, SMART_ENTITY_CONFIG_KEY } from '../utils/intentResolver'
@@ -77,6 +81,11 @@ export interface HandlerDeps {
    * Returns the element id (or null when the SP is not provisioned / on a demo portal).
    */
   writePaymentRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<string | null>
+  /** Привязать дело к сущностям CRM (#579, шаг 3): элемент реестра, сущность списания, обе
+   *  компании. ЛУЧШИЕ УСИЛИЯ — возвращает, сколько привязок не удалось, и НИКОГДА не бросает:
+   *  дело уже записано и промаркировано, а падение здесь отменило бы всю оставшуюся пачку, не
+   *  поставив привязки всё равно (повтор упрётся в маркер). */
+  bindActivity?: (activityId: string, refs: CrmEntityRef[], memberId: string) => Promise<BindingOutcome>
   /** Read the portal's full settings blob (chat target + rules + recognition matrices)
    *  from app.option, or null when unset/unavailable. Resolved ONCE per crm-sync job,
    *  not per operation — one app.option read feeds both the chat and recognition steps. */
@@ -318,7 +327,7 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -366,6 +375,26 @@ export async function handleCrmSyncJob(
   let excluded = 0
   /** Operations whose registry element could not be written (#575) — see the call site. */
   let registryFailed = 0
+  let bindingsFailed = 0
+  /**
+   * «Моя компания» по НАШЕМУ счёту — запоминается на прогон (#579).
+   *
+   * ⚠ Раньше она искалась только когда клиент не опознан. Привязкам она нужна ВСЕГДА (дело обязано
+   * связывать обе стороны платежа), а поиск — это три вызова в портал. Без памяти пачка из сотни
+   * операций одного счёта дала бы триста одинаковых запросов; ключ — наш счёт, потому что именно
+   * он и решает, чья это компания.
+   *
+   * ⚠ Отрицательный ответ кэшируется тоже: «в реквизитах нет нашего счёта» — состояние портала, а
+   * не сбой, и переспрашивать его на каждой операции значит платить втройне за один и тот же «нет».
+   */
+  const myCompanyByAccount = new Map<string, string | null>()
+  const resolveMyCompany = async (item: StatementItem): Promise<string | null> => {
+    const cached = myCompanyByAccount.get(item.account)
+    if (cached !== undefined) return cached
+    const found = await deps.findMyCompany(item, job.memberId)
+    myCompanyByAccount.set(item.account, found)
+    return found
+  }
   let unmatched = 0
   let landed = 0
   // Номер распознан, компания найдена, а цели в CRM нет (#421). Раньше этот случай не попадал
@@ -452,9 +481,12 @@ export async function handleCrmSyncJob(
     // ⚠ Отсутствующие поля отказом НЕ являются: `crm.item.add` молча игнорирует неизвестные UF-ключи
     // (замерено на живом портале 2026-08-22), поэтому СП, созданный до #575, продолжает получать
     // элементы — просто без колонок реестра, пока администратор не перезапустит провижининг.
+    // id элемента нужен привязкам дела (#579): из карточки платежа человек должен попадать в
+    // реестр и обратно. Отдельного прохода за ним не нужно — элемент пишется ДО дела (см. выше).
+    let registryElementId: string | null = null
     if (ledgerPaymentRef && deps.writePaymentRegistry) {
       try {
-        await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
+        registryElementId = await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
       } catch {
         registryFailed++
       }
@@ -464,6 +496,9 @@ export async function handleCrmSyncJob(
     // marker would let a job-level retry re-post it. Job retries are more frequent now that the SDK
     // in-client retry is off (#123), which is exactly why this must sit behind the marker.
     let errorNotice: AllocationDecision | null = null
+    // Сущности списания, к которым надо привязать дело (#579). Собираются здесь, а ставятся ПОСЛЕ
+    // маркера — как и всё остальное в этом цикле, что нельзя повторить безнаказанно.
+    const writeOffTargets: Array<Pick<AllocationCandidate, 'kind' | 'id'> & { dealId?: string, entityTypeId?: number }> = []
     // Распознанные, но не нашедшие цели номера (#421) — отправляются ПОСЛЕ записи маркера, как и
     // `errorNotice`: иначе повторная доставка джобы переслала бы сообщение (у чата дедупа нет).
     let unresolvedIds: string[] = []
@@ -552,6 +587,7 @@ export async function handleCrmSyncJob(
         // company (this block only runs then), so the scope is the payer (IDOR).
         if (summary.decision.action === 'allocate') {
           const target = summary.decision.target
+          writeOffTargets.push(target)
           const etids = ledgerPaymentRef && ledgerDistributionRef ? { paymentSp: ledgerPaymentRef, distributionSp: ledgerDistributionRef } : null
           // Portal MUTATION (§2) gated on the opt-in `autoDistribute`. The pre-check reads B24 STATE
           // (`isTargetApplied` — payment `paid='Y'` / invoice on the configured paid stage, Фаза A)
@@ -607,6 +643,12 @@ export async function handleCrmSyncJob(
         if (autoDistribute && settings?.allocation?.triggerCode) {
           triggerCandidates = candidates
         }
+        // ⚠ Триггер-цели (сделка/смарт-процесс) привязываем НЕЗАВИСИМО от `autoDistribute`: тот
+        // гейтит МУТАЦИЮ портала (провести оплату, дёрнуть автоматизацию), а привязка ничего не
+        // меняет — она лишь показывает человеку, к чему платёж относится. Ставить её в зависимость
+        // от разрешения писать в CRM значило бы прятать связь ровно на тех порталах, где ещё не
+        // доверились авто-проведению и потому разбирают платежи руками.
+        writeOffTargets.push(...candidates.filter(c => isTriggerTarget(c.kind)))
         // Capture (don't send yet) — the notice is posted after writeActivity stamps the marker,
         // so a redelivery is `continue`d at the top gate before it can re-post (see below).
         if ((summary.outcome === 'ambiguous' || summary.outcome === 'manual') && errorChat?.dialogId) {
@@ -627,7 +669,7 @@ export async function handleCrmSyncJob(
     if (clientUnmatched) {
       unmatched++
       sample ??= makeProgramSample(item, 'unmatched')
-      const myCompanyId = await deps.findMyCompany(item, job.memberId)
+      const myCompanyId = await resolveMyCompany(item)
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
     }
@@ -658,6 +700,62 @@ export async function handleCrmSyncJob(
       // next poll once requisites exist); the error-chat notice above already flagged it. For a
       // matched-client write that returned null (demo/no token) — unchanged skip.
       continue
+    }
+    // ─── Привязки дела (#579, шаг 3 согласованного процесса) ─────────────────────────────────
+    // Дело несёт РОВНО ОДНУ пару владельца, поэтому всё остальное, что человек должен из него
+    // достать, привязывается отдельными вызовами: элемент реестра платежей, сущность списания и
+    // вторая компания (владельцем стала одна из двух).
+    //
+    // ⚠ ПОСЛЕ маркера, как и чат-оповещения: до него любой отказ ниже по коду вернул бы джобу на
+    // повтор, и привязки ставились бы второй раз — а повторная привязка той же пары у портала
+    // ОШИБКА (`ACTIVITY_IS_ALREADY_BOUND`, замерено живым прогоном), то есть шум, неотличимый от
+    // настоящего сбоя.
+    //
+    // ⚠ «Моя компания» ищется и для ОПОЗНАННОГО клиента — иначе связь односторонняя. Поиск
+    // запоминается на прогон (`resolveMyCompany`), а зовётся только когда привязки вообще есть
+    // кому ставить: на портале без этой возможности лишних трёх вызовов быть не должно.
+    if (deps.bindActivity) {
+      // ⚠ ВЕСЬ блок под `try`, а не только сам вызов привязок — включая поиск «моей компании».
+      // Найдено ревью, и это был настоящий дефект: `findMyCompany` пробрасывает ошибки транспорта
+      // (так и задумано на его ПЕРВОМ месте вызова — там он идёт ДО маркера, и бросок означает
+      // чистый повтор). Здесь мы зовём его ПОСЛЕ маркера, поэтому транзиентный отказ портала
+      // уронил бы всю джобу с уже записанным делом: остаток пачки не обработан, а привязки этой
+      // операции потеряны навсегда и даже не посчитаны — повтор упрётся в маркер и пройдёт мимо.
+      try {
+        const myCompanyId = clientUnmatched ? writeCompanyId : await resolveMyCompany(item)
+        const refs = planActivityBindings({
+          owner: companyRef(writeCompanyId),
+          // Порядок = важность: потолок отсекает ХВОСТ.
+          //
+          // ⚠ Сперва то, чего РОВНО ПО ОДНОМУ (элемент реестра и «моя компания»), и лишь затем
+          // цели списания, которых бывает много. Обратный порядок выглядел естественнее и был
+          // ошибкой: число целей задаёт назначение платежа, то есть ПЛАТЕЛЬЩИК, и пяти
+          // распознанных номеров хватало, чтобы вытеснить «мою компанию» — привязку, которую
+          // согласованный процесс требует ВСЕГДА. Отказом это не считалось бы и в лог не попало.
+          //
+          // ⚠ Компании-клиента в списке НЕТ намеренно: когда клиент опознан, он и есть владелец
+          // (`writeCompanyId === companyId`), а когда не опознан — `companyId` пуст. То есть эта
+          // ссылка не может добавить ничего, кроме дубля владельца.
+          refs: [
+            ledgerPaymentRef ? itemRef(ledgerPaymentRef.entityTypeId, registryElementId) : null,
+            companyRef(myCompanyId),
+            ...writeOffTargets.map(allocationTargetRef)
+          ]
+        })
+        if (refs.length > 0) {
+          const outcome = await deps.bindActivity(activityId, refs, job.memberId)
+          // ⚠ Считаем ОПЕРАЦИИ, а не отдельные привязки, — как и `registryFailed` рядом. Иначе
+          // числа в одной строке итога измеряют разное: у одной операции привязок до
+          // `MAX_ACTIVITY_BINDINGS`, и «6 без привязок» при трёх обработанных операциях читается
+          // как сломанный счётчик, а не как данные.
+          if (outcome.failed > 0) bindingsFailed++
+        }
+      } catch {
+        // Транспорт обязан не бросать, но контракт держим и здесь: дело уже записано, и падение
+        // на связи отменило бы обработку всех оставшихся операций пачки.
+        //
+        bindingsFailed++
+      }
     }
     // Dedup is atomic now (#259): the ORIGINATOR_ID/ORIGIN_ID marker is written INSIDE
     // writeActivity (todo.add + marker update, #495), so a redelivery's getActivityId finds it — no separate
@@ -715,5 +813,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }
