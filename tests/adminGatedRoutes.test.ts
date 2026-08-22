@@ -17,6 +17,11 @@ const API = join(process.cwd(), 'server/api')
 
 /** Маршруты, требующие администратора портала. */
 const ADMIN_ONLY = [
+  // ⚠ Оба маршрута стирания — админские (#576 п.4), и довод сильнее, чем у банковских: действие
+  // НЕОБРАТИМО и затрагивает CRM всего портала, а не того, кто нажал. Подсчёт тоже админский,
+  // потому что он раскрывает, сколько дел приложение записало на портале.
+  'activities/erasable.get.ts',
+  'activities/erase.post.ts',
   'bank/accounts.get.ts',
   'bank/connect.post.ts',
   'bank/disconnect.post.ts',
@@ -98,6 +103,8 @@ describe('кто может звать маршруты приложения (#5
     // тест, где не-админ получает 403. Он и есть авторитет; этот файл лишь не даёт маршруту
     // остаться совсем без него.
     const handlers: Record<string, string> = {
+      'activities/erasable.get.ts': 'eraseRequest',
+      'activities/erase.post.ts': 'eraseRequest',
       'bank/accounts.get.ts': 'bankAccounts',
       'bank/connect.post.ts': 'bankConnectStart',
       'bank/disconnect.post.ts': 'bankAccounts',

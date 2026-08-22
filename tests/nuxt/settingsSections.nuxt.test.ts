@@ -42,7 +42,8 @@ const ANCHOR: Record<SettingsSectionId, string> = {
   distribution: '[data-testid="provision-sp"]',
   exclusions: '[data-testid="exclude-accounts"]',
   auto: '[data-testid="auto-distribute"]',
-  recognition: '[data-testid="recognition-map"]'
+  recognition: '[data-testid="recognition-map"]',
+  cleanup: '[data-testid="erase-activities"]'
 }
 
 describe('разделы настроек — проводка (#530)', () => {
@@ -51,7 +52,7 @@ describe('разделы настроек — проводка (#530)', () => {
     // уменьшаются вместе. А исчезнувший раздел — это недостижимая настройка, то есть ровно та
     // болезнь, ради которой #530 и делался. Список закрыт так же, как каналы лога и цели Makefile.
     expect([...SETTINGS_SECTIONS.map(s => s.id)].sort())
-      .toEqual(['auto', 'bank', 'chats', 'distribution', 'exclusions', 'recognition'])
+      .toEqual(['auto', 'bank', 'chats', 'cleanup', 'distribution', 'exclusions', 'recognition'])
   })
 
   it.each(SETTINGS_SECTIONS.map(s => [s.label, s.id, s.hint] as const))(

@@ -15,7 +15,8 @@ export const SETTINGS_SECTION_IDS = [
   'distribution',
   'exclusions',
   'auto',
-  'recognition'
+  'recognition',
+  'cleanup'
 ] as const
 
 export type SettingsSectionId = typeof SETTINGS_SECTION_IDS[number]
@@ -40,7 +41,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'distribution', label: 'Смарт-процессы', hint: 'Служебные СП и журнал распределения' },
   { id: 'exclusions', label: 'Исключения', hint: 'Что не переносить в CRM' },
   { id: 'auto', label: 'Авто-проведение', hint: 'Приложение само проводит оплаты' },
-  { id: 'recognition', label: 'Карта распознавания', hint: 'Как искать номера в назначении' }
+  { id: 'recognition', label: 'Карта распознавания', hint: 'Как искать номера в назначении' },
+  // ⚠ ПОСЛЕДНИМ намеренно, и это не «менее важно». Раздел удаляет записи из CRM НЕОБРАТИМО, а
+  // порядок здесь — порядок знакомства: человек, впервые открывший настройки, должен дойти до
+  // разрушающего действия последним, а не наткнуться на него по дороге к чату.
+  { id: 'cleanup', label: 'Очистка', hint: 'Стереть дела, созданные приложением' }
 ]
 
 /** С какого раздела открывается экран без явного указания. */

@@ -11,8 +11,8 @@
 import { randomUUID } from 'node:crypto'
 import { dbQuery } from '../db/client'
 import { useServerLogger } from './serverLogger'
-import { makeFrameRestCall, makePortalSdkCall, sdkPortalDeps } from './b24Sdk'
-import type { RestCall } from './companyLookup'
+import { makeFrameRestCall, makePortalSdkCall, makePortalSdkClient, makeSdkBatchCall, sdkPortalDeps } from './b24Sdk'
+import type { RestBatch, RestCall } from './companyLookup'
 import type { SingleFlightLeaseDeps } from './singleFlightLease'
 
 /** App-OAuth creds. For `frameRestCall` they are only structurally needed (a fresh frame
@@ -43,6 +43,28 @@ export function livePortalSdkCall(memberId: string): Promise<RestCall | null> {
     clientSecret: process.env.B24_CLIENT_SECRET ?? '',
     now: Date.now
   }))
+}
+
+/**
+ * Батч-транспорт на ХРАНИМОМ токене портала — пара к `livePortalSdkCall` (#576 п.4).
+ *
+ * ⚠ Заведён потому, что стирание дел удаляет их СОТНЯМИ: по одному это 2 запроса в секунду, то
+ * есть минуты, и такая работа не помещается в HTTP-запрос. Замерено на живом портале, что
+ * `crm.activity.delete` в батче РАЗРЕШЁН (пробный вызов вернул ошибку команды, а не
+ * `ERROR_BATCH_METHOD_NOT_ALLOWED`), поэтому пачками по 50 это секунды.
+ *
+ * ⚠ Батч останавливается на первой упавшей команде (`isHaltOnError: true`) — здесь это НЕ
+ * недостаток: вызывающий (`eraseActivities`) трактует падение чанка как «дальше не идём» и берёт
+ * итог у портала, а не из своей арифметики.
+ */
+export async function livePortalSdkBatch(memberId: string): Promise<RestBatch | null> {
+  const client = await makePortalSdkClient(memberId, sdkPortalDeps({
+    query: dbQuery,
+    clientId: process.env.B24_CLIENT_ID ?? '',
+    clientSecret: process.env.B24_CLIENT_SECRET ?? '',
+    now: Date.now
+  }))
+  return client ? makeSdkBatchCall(client, { memberId }) : null
 }
 
 /**
