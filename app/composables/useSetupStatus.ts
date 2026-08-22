@@ -12,6 +12,8 @@ export interface SetupStatus {
   connectedAccounts: number
   /** Подключения без выбранного счёта (#407) — их надо доводить до конца. */
   pendingAccounts: number
+  /** Подключения с приостановленным автоопросом (#576). */
+  pausedAccounts?: number
   pollEnabled: boolean
   pollIntervalMin: number
   lastRunMs: number | null

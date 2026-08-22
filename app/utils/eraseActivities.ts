@@ -21,11 +21,6 @@
 
 import { ACTIVITY_ORIGIN } from './activity'
 
-/** Метод, которым перечисляются дела портала. */
-export const ACTIVITY_LIST_METHOD = 'crm.activity.list'
-/** Метод удаления одного дела. */
-export const ACTIVITY_DELETE_METHOD = 'crm.activity.delete'
-
 /**
  * Период стирания. Обе границы НЕОБЯЗАТЕЛЬНЫ, и это все четыре формы, которые просил владелец:
  * ни одной (всё), только `from`, только `to`, обе.

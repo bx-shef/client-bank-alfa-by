@@ -10,6 +10,7 @@
 // удалять — ему не передают ни батч, ни метод удаления.
 
 import { parsePeriod, type EraseSelection } from '../../app/utils/eraseActivities'
+import { isSingleFlightBusy, isSingleFlightUnavailable } from './singleFlightLease'
 import type { EraseOutcome } from './eraseActivitiesWrite'
 
 export interface EraseResult {
@@ -112,7 +113,29 @@ export async function handleEraseActivities(deps: EraseDeps, input: EraseInput):
   if ('error' in auth) return auth.error
   const selection = parseEraseSelection(input)
   if (!selection) return { status: 400, body: { error: 'invalid period or account list' } }
-  const outcome = await deps.erase(auth.memberId, selection)
-  deps.audit?.({ memberId: auth.memberId, userId: auth.userId, selection, outcome })
-  return { status: 200, body: { deleted: outcome.deleted, remaining: outcome.remaining } }
+  try {
+    const outcome = await deps.erase(auth.memberId, selection)
+    deps.audit?.({ memberId: auth.memberId, userId: auth.userId, selection, outcome })
+    return { status: 200, body: { deleted: outcome.deleted, remaining: outcome.remaining } }
+  } catch (e) {
+    // ⚠ «Уже идёт» — не ошибка, а правильный ответ (#538, тот же разбор, что у провижининга и
+    // пересчёта). Второму вызывающему нечего делать: первый удаляет ровно те же дела.
+    //
+    // ⚠ Здесь довод острее, чем у соседей, и он не про удобство. Два одновременных стирания
+    // собирают СВОИ списки идентификаторов, пока ни одно ещё ничего не удалило, а обход страниц
+    // идёт ПО СМЕЩЕНИЮ: удаления одного, попавшие в листинг другого, сдвигают выборку, и часть дел
+    // молча не попадает в список. То есть без аренды «стереть всё» тихо стирало бы не всё —
+    // на НЕОБРАТИМОМ действии, где повторить проверку нечем.
+    if (isSingleFlightBusy(e)) {
+      return {
+        status: 503,
+        body: { error: 'Стирание уже выполняется для этого портала. Дождитесь его завершения и обновите страницу — повторный запуск сейчас пропустил бы часть дел.' }
+      }
+    }
+    // Наша база, а не портал: отвечаем 503, чтобы алертинг не засчитал это как поломку CRM клиента.
+    if (isSingleFlightUnavailable(e)) {
+      return { status: 503, body: { error: 'Сервис приложения временно недоступен, повторите через минуту.' } }
+    }
+    throw e
+  }
 }

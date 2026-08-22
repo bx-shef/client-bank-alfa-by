@@ -14,7 +14,8 @@ import { handleEraseActivities, type EraseDeps } from '../../utils/eraseRequest'
 import { eraseActivities } from '../../utils/eraseActivitiesWrite'
 import { periodLabel } from '../../../app/utils/eraseActivities'
 import { bearerToken } from '../../utils/settingsHandler'
-import { frameRestCall, livePortalSdkBatch, livePortalSdkCall } from '../../utils/liveDeps'
+import { frameRestCall, liveLeaseDeps, livePortalSdk } from '../../utils/liveDeps'
+import { eraseLeaseKey, SINGLE_FLIGHT_LEASE_SEC, withSingleFlightLease } from '../../utils/singleFlightLease'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { useServerLogger } from '../../utils/serverLogger'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -32,10 +33,17 @@ function liveDeps(): EraseDeps {
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
     erase: async (memberId, selection) => {
-      const call = await livePortalSdkCall(memberId)
-      const batch = await livePortalSdkBatch(memberId)
-      if (!call || !batch) throw new Error(`erase: no portal token for ${memberId}`)
-      return eraseActivities(selection, call, batch)
+      // ⚠ ОДИН клиент на оба транспорта (находка ревью): два независимых клиента дали бы два ведра
+      // лимитера и две загрузки токена, а обновление токена одним из них посреди НЕОБРАТИМОГО
+      // удаления оставило бы второго со старым.
+      const sdk = await livePortalSdk(memberId)
+      if (!sdk) throw new Error(`erase: no portal token for ${memberId}`)
+      // ⚠ Аренда «одно стирание на портал» (#538): без неё два параллельных запроса сдвигают
+      // offset-пагинацию друг другу и часть дел молча не попадает в список.
+      return withSingleFlightLease(
+        liveLeaseDeps(), eraseLeaseKey(memberId), SINGLE_FLIGHT_LEASE_SEC,
+        () => eraseActivities(selection, sdk.call, sdk.batch)
+      )
     },
     // ⚠ Необратимое действие обязано оставлять запись. Своей таблицы аудита нет, поэтому строка в
     // журнале — единственный способ ответить постфактум на «кто удалил дела за август».

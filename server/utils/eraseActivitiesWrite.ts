@@ -17,14 +17,18 @@
 // осталось СЕЙЧАС, и его называет сам портал.
 
 import {
-  ACTIVITY_DELETE_METHOD,
-  ACTIVITY_LIST_METHOD,
   buildEraseListFilter,
   selectDeletable,
   type ActivityRow,
   type EraseSelection
 } from '../../app/utils/eraseActivities'
 import type { RestBatch, RestCall } from './companyLookup'
+// ⚠ Оба метода берутся из СУЩЕСТВУЮЩИХ источников, а не объявляются здесь заново. Свои копии в
+// `app/utils/eraseActivities.ts` были дублями: Nuxt авто-импортит весь `app/utils/**` в ОДНО
+// плоское пространство имён, и `ACTIVITY_DELETE_METHOD` там уже был (`todoActivity.ts`) — какая из
+// двух побеждала, зависело от порядка импортов, а разойтись они могли молча (находка ревью).
+import { ACTIVITY_DELETE_METHOD } from '../../app/utils/todoActivity'
+import { ACTIVITY_LIST_METHOD } from './activityMarkerLookup'
 
 /** Размер страницы `crm.activity.list` — задаётся порталом, не нами. */
 export const ACTIVITY_PAGE = 50
@@ -89,9 +93,16 @@ export async function countErasableActivities(
     filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start: 0
   })
   const total = totalOf(first)
-  const wantsAccounts = selection.accounts.filter(a => a !== '').length > 0
-  if (!wantsAccounts) return { count: Math.min(total, cap), capped: total > cap }
 
+  // ⚠ `selectDeletable` применяется ВСЕГДА, в том числе когда отбора по счетам нет.
+  //
+  // Прежняя версия в этом случае возвращала сырой `total` портала, не заглянув в строки, — и это
+  // расходилось с собственным правилом модуля «не доверяй фильтру запроса, перепроверь ответ»
+  // (находка ревью). Цена расхождения не абстрактная: показанное «будет стёрто 300» считалось бы
+  // ОДНИМ правилом, а удалялось бы по ДРУГОМУ — строки без `id` и без нашей метки подсчёт бы
+  // засчитал, а стирание отбросило. Человек увидел бы «удалено 287 из 300» на необратимом
+  // действии и не понял бы, что произошло. Лишние страницы стоят до шести запросов при потолке в
+  // 300 — несопоставимо дешевле, чем расхождение двух чисел.
   let matched = selectDeletable(rowsOf(first), selection).length
   let start = ACTIVITY_PAGE
   while (start < total && matched < cap) {
@@ -101,7 +112,11 @@ export async function countErasableActivities(
     matched += selectDeletable(rowsOf(page), selection).length
     start += ACTIVITY_PAGE
   }
-  return { count: Math.min(matched, cap), capped: matched > cap || start < total }
+  // ⚠ `capped` означает «под отбор попадает БОЛЬШЕ, чем мы стираем за раз», и здесь он честно
+  // консервативен: обход прекращается, как только набрано `cap`, поэтому оставшиеся страницы могли
+  // бы не дать ни одного совпадения. Ошибка в эту сторону безопасна — «и более» приглашает нажать
+  // ещё раз, а лишнее нажатие ничего не портит; обратная ошибка молча оставила бы дела.
+  return { count: Math.min(matched, cap), capped: matched >= cap && start < total }
 }
 
 /**

@@ -92,9 +92,25 @@ export function recomputeLeaseKey(memberId: string): string {
   return `distribution-recompute:${memberId}`
 }
 
+/**
+ * Стирание дел портала (#576 п.4).
+ *
+ * ⚠ Нужна по той же причине, что и у соседей, только острее: операция НЕОБРАТИМА. Два
+ * одновременных стирания (двойной клик из разных вкладок, повтор после долгого ответа) собирают
+ * СВОЙ список идентификаторов, пока ни одно ещё ничего не удалило, а потом удаляют одно и то же:
+ * второе получает «not found» и обрывается, а его отчёт человеку становится бессмысленным.
+ *
+ * ⚠ Хуже того, обход страниц идёт по смещению: удаления одного запроса, попавшие в ЛИСТИНГ
+ * другого, сдвигают выборку, и часть дел молча не попадает в список — классический пропуск при
+ * offset-пагинации по сжимающемуся набору. То есть без аренды «стереть всё» тихо стирало бы не всё.
+ */
+export function eraseLeaseKey(memberId: string): string {
+  return `erase-activities:${memberId}`
+}
+
 /** Все аренды портала — то, что обязано исчезнуть вместе с порталом. */
 export function portalLeaseKeys(memberId: string): string[] {
-  return [provisionLeaseKey(memberId), recomputeLeaseKey(memberId)]
+  return [provisionLeaseKey(memberId), recomputeLeaseKey(memberId), eraseLeaseKey(memberId)]
 }
 
 /** Снять все аренды портала (удаление приложения). Идемпотентно. */

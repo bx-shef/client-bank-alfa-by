@@ -5,6 +5,7 @@ import {
   isSingleFlightUnavailable,
   LEASE_RENEW_MS,
   portalLeaseKeys,
+  eraseLeaseKey,
   provisionLeaseKey,
   recomputeLeaseKey,
   SINGLE_FLIGHT_LEASE_SEC,
@@ -252,7 +253,10 @@ describe('аренда single-flight (#538)', () => {
     expect(recomputeLeaseKey('m1')).toContain('m1')
     expect(provisionLeaseKey('m1')).not.toBe(provisionLeaseKey('m2'))
     expect(provisionLeaseKey('m1')).not.toBe(recomputeLeaseKey('m1'))
-    expect(portalLeaseKeys('m1')).toEqual([provisionLeaseKey('m1'), recomputeLeaseKey('m1')])
+    // ⚠ Список ЗАКРЫТ: новая операция обязана попасть сюда, иначе её аренда переживёт удаление
+    // приложения — портала уже нет, а строка в таблице держит его ключ.
+    expect(portalLeaseKeys('m1')).toEqual([provisionLeaseKey('m1'), recomputeLeaseKey('m1'), eraseLeaseKey('m1')])
+    expect(new Set(portalLeaseKeys('m1')).size).toBe(3) // ключи операций не совпадают между собой
   })
 
   it('удаление портала уносит ВСЕ его аренды и только его', async () => {

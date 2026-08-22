@@ -15,6 +15,16 @@ vi.mock('~/composables/useFrameAuth', () => ({
 vi.mock('~/composables/useIsAdmin', () => ({
   useIsAdmin: () => ({ isAdmin: { value: true }, inPortal: { value: true }, check: () => {} })
 }))
+// Состояние опроса читается живьём (#576, находка ревью): предупреждение обязано различать
+// «опрос идёт» и «опрос стоит», иначе оно одинаково в опасном и безопасном случае.
+const pollState = { pollEnabled: true, connectedAccounts: 1, pausedAccounts: 0 }
+vi.mock('~/composables/useSetupStatus', () => ({
+  useSetupStatus: () => ({
+    status: { value: pollState },
+    loadedOk: { value: true },
+    load: async () => {}
+  })
+}))
 
 const counted = { value: { count: 7, capped: false } }
 const fetchMock = vi.fn((url: string) => {
@@ -29,6 +39,7 @@ vi.stubGlobal('$fetch', fetchMock)
 afterEach(() => {
   fetchMock.mockClear()
   counted.value = { count: 7, capped: false }
+  Object.assign(pollState, { pollEnabled: true, connectedAccounts: 1, pausedAccounts: 0 })
 })
 
 async function mountReady() {
@@ -91,9 +102,32 @@ describe('раздел «Очистка» (#576 п.4)', () => {
     expect(w.text()).toContain('Удалено дел: 7')
   })
 
-  it('предупреждает, что сперва надо приостановить опрос', async () => {
+  it('опрос ИДЁТ — предупреждаем громко', async () => {
     // ⚠ Маркер дедупа живёт на самом деле: стирание при работающем опросе вернёт операции обратно,
     // и человек решит, что кнопка не работает.
-    expect((await mountReady()).text()).toContain('приостановите опрос')
+    expect((await mountReady()).text()).toContain('Опрос банка сейчас работает')
+  })
+
+  it('все подключения на паузе — говорим, что стирать безопасно', async () => {
+    // ⚠ Прежняя версия показывала один и тот же текст в обоих случаях. Предупреждение, одинаковое
+    // в опасном и безопасном случае, не предупреждает ни о чём — его перестают читать.
+    Object.assign(pollState, { pollEnabled: true, connectedAccounts: 2, pausedAccounts: 2 })
+    expect((await mountReady()).text()).toContain('стирать безопасно')
+  })
+
+  it('опрос выключен на сервере — тоже безопасно', async () => {
+    Object.assign(pollState, { pollEnabled: false, connectedAccounts: 2, pausedAccounts: 0 })
+    expect((await mountReady()).text()).toContain('стирать безопасно')
+  })
+
+  it('часть на паузе, часть работает — это ОПАСНЫЙ случай', async () => {
+    Object.assign(pollState, { pollEnabled: true, connectedAccounts: 3, pausedAccounts: 2 })
+    expect((await mountReady()).text()).toContain('Опрос банка сейчас работает')
+  })
+
+  it('прямо говорит, что элементы смарт-процесса НЕ стираются', async () => {
+    // ⚠ Текст рядом перечисляет, чего мы не трогаем у клиента; молчание про наш же смарт-процесс
+    // на этом фоне читалось бы как «его тоже стёрли». А выходит наоборот.
+    expect((await mountReady()).text()).toContain('Элементы смарт-процесса')
   })
 })

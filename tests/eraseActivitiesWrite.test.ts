@@ -29,10 +29,30 @@ function fakePortal(rows: Record<string, unknown>[], afterRows = rows) {
 const all = { period: {}, accounts: [] }
 
 describe('countErasableActivities — показать до удаления', () => {
-  it('без отбора по счетам берёт total портала одним запросом, страницы не листает', async () => {
-    const { call } = fakePortal(Array.from({ length: 120 }, (_, i) => ours(String(i))))
-    expect(await countErasableActivities(all, call)).toEqual({ count: 120, capped: false })
-    expect((call as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1)
+  it('перепроверяет метку в ОТВЕТЕ даже без отбора по счетам', async () => {
+    // ⚠ Прежняя версия здесь возвращала сырой `total` портала, не заглянув в строки, — и подсчёт
+    // считался ОДНИМ правилом, а стирание шло по ДРУГОМУ. Человек увидел бы «удалено 287 из 300»
+    // на необратимом действии и не понял бы, что произошло (находка ревью).
+    const rows = [
+      ...Array.from({ length: 10 }, (_, i) => ours(String(i))),
+      { ID: '900', ORIGINATOR_ID: 'SomeOtherApp', ORIGIN_ID: 'BY01ALFA|D900' },
+      { ID: '', ORIGINATOR_ID: ACTIVITY_ORIGIN, ORIGIN_ID: 'BY01ALFA|D901' }
+    ]
+    const { call } = fakePortal(rows)
+    expect(await countErasableActivities(all, call)).toEqual({ count: 10, capped: false })
+  })
+
+  it('подсчёт и стирание дают ОДНО И ТО ЖЕ число', async () => {
+    // Инвариант, ради которого подсчёт и был приведён к общему правилу: обещанное в подтверждении
+    // обязано совпасть с удалённым.
+    const rows = [
+      ...Array.from({ length: 30 }, (_, i) => ours(String(i))),
+      { ID: '900', ORIGINATOR_ID: 'SomeOtherApp', ORIGIN_ID: 'BY01ALFA|D900' }
+    ]
+    const counted = await countErasableActivities(all, fakePortal(rows).call)
+    const { call, batch } = fakePortal(rows, [rows[30]!])
+    const erased = await eraseActivities(all, call, batch)
+    expect(erased.deleted).toBe(counted.count)
   })
 
   it('с отбором по счетам считает ТОЧНО, пройдя страницы', async () => {
@@ -49,6 +69,20 @@ describe('countErasableActivities — показать до удаления', (
     const res = await countErasableActivities(all, call)
     expect(res.count).toBe(MAX_ERASE_PER_REQUEST)
     expect(res.capped).toBe(true)
+  })
+
+  it('потолок достигнут, а страницы ещё остались — честно «и более»', async () => {
+    // ⚠ Ветка `start < total` не проверялась ничем: её удаление проходило зелёным. А это ровно тот
+    // случай, ради которого фича и делается — дел больше, чем стирается за раз.
+    const rows = Array.from({ length: 200 }, (_, i) => ours(String(i)))
+    const { call } = fakePortal(rows)
+    expect(await countErasableActivities(all, call, 60)).toEqual({ count: 60, capped: true })
+  })
+
+  it('ровно потолок и страницы кончились — «и более» НЕТ', async () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ours(String(i)))
+    const { call } = fakePortal(rows)
+    expect(await countErasableActivities(all, call, 100)).toEqual({ count: 100, capped: false })
   })
 
   it('НЕ умеет удалять: батч ему не передаётся вовсе', () => {

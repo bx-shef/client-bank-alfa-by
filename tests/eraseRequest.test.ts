@@ -7,6 +7,7 @@ import {
   type CountDeps,
   type EraseDeps
 } from '../server/utils/eraseRequest'
+import { SingleFlightBusyError, SingleFlightUnavailableError } from '../server/utils/singleFlightLease'
 
 // ⚠ Действие НЕОБРАТИМО. Поэтому тут проверяется прежде всего не «работает ли», а «не может ли
 // сработать не там и не для того»: гейт админа, отказ на кривом вводе (вместо тихого расширения
@@ -135,6 +136,42 @@ describe('handleEraseActivities — само стирание', () => {
     expect((await handleEraseActivities(deps, { ...input, to: '2026-8-1' })).status).toBe(400)
     expect((await handleEraseActivities(deps, { ...input, from: '2026-08-31', to: '2026-08-01' })).status).toBe(400)
     expect(touched).toBe(false)
+  })
+
+  it('«уже идёт» — это 503, а не авария, и в аудит не пишется', async () => {
+    // ⚠ Второму вызывающему нечего делать: первый удаляет ровно те же дела. Хуже того, параллельное
+    // стирание сдвигает offset-пагинацию друг другу, и часть дел молча не попала бы в список —
+    // на НЕОБРАТИМОМ действии. Поэтому отказ, а не «попробуем тоже».
+    const seen: number[] = []
+    const deps = eraseDeps({
+      erase: async () => {
+        throw new SingleFlightBusyError('erase-activities:M1')
+      },
+      audit: e => seen.push(e.outcome.deleted)
+    })
+    const res = await handleEraseActivities(deps, input)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('уже выполняется')
+    expect(seen).toEqual([]) // ничего не стёрли — и в журнале об этом ни строки
+  })
+
+  it('наша база недоступна — 503, а не 502: это не поломка портала клиента', async () => {
+    // Разведение важно для алертинга: 503 → `unavailable`, 502 → `upstream_error`.
+    const deps = eraseDeps({
+      erase: async () => {
+        throw new SingleFlightUnavailableError('erase-activities:M1', new Error('pool'))
+      }
+    })
+    expect((await handleEraseActivities(deps, input)).status).toBe(503)
+  })
+
+  it('прочие ошибки НЕ проглатываются — молчать о них нельзя', async () => {
+    const deps = eraseDeps({
+      erase: async () => {
+        throw new Error('портал не ответил')
+      }
+    })
+    await expect(handleEraseActivities(deps, input)).rejects.toThrow('портал не ответил')
   })
 
   it('пишет в аудит КТО и ЧТО стёр — но только после успеха', async () => {
