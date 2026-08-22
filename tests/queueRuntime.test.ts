@@ -36,8 +36,8 @@ describe('queueRuntimeConfig', () => {
       cron: true,
       concurrency: 1,
       fetchRate: { max: alfaJobs(DEFAULT_FETCH_RATE_MAX), duration: DEFAULT_FETCH_RATE_DURATION_MS },
-      // Prior's limiter is in JOBS: its 100-request budget ÷ ~10 requests per job = 10 jobs/min.
-      priorFetchRate: { max: 10, duration: DEFAULT_FETCH_RATE_DURATION_MS },
+      // Prior's limiter is in JOBS: its 100-request budget ÷ ~11 requests per job = 9 jobs/min.
+      priorFetchRate: { max: 9, duration: DEFAULT_FETCH_RATE_DURATION_MS },
       priorConcurrency: DEFAULT_PRIOR_CONCURRENCY
     })
   })
@@ -52,8 +52,8 @@ describe('queueRuntimeConfig', () => {
   })
 
   it('sizes the Prior limiter in JOBS from its REQUEST budget (per-request accounting)', () => {
-    // 200 requests/min ÷ ~10 per Prior job = 20 jobs/min — NOT 200, which would overspend ~10×.
-    expect(queueRuntimeConfig({ QUEUE_PRIOR_RATE_MAX: '200' }).priorFetchRate.max).toBe(20)
+    // 200 requests/min ÷ ~11 per Prior job = 18 jobs/min — NOT 200, which would overspend ~11×.
+    expect(queueRuntimeConfig({ QUEUE_PRIOR_RATE_MAX: '200' }).priorFetchRate.max).toBe(18)
     // Garbage/non-positive falls back to the default budget (never disables the cap).
     expect(queueRuntimeConfig({ QUEUE_PRIOR_RATE_MAX: '0' }).priorFetchRate.max)
       .toBe(queueRuntimeConfig({}).priorFetchRate.max)

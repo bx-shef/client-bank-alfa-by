@@ -1,17 +1,23 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  fetchPriorStatement,
-  isoDateOnly,
-  priorApiBaseFromEnv,
+  MAX_PRIOR_STATEMENT_PAGES,
+  PRIOR_PAGE_DELAY_MS,
   PRIOR_POLL_MAX_ATTEMPTS,
+  fetchPriorStatement,
   isRetryablePollStatus,
+  isoDateOnly,
+  looksLikePageBoundary,
+  priorApiBaseFromEnv,
+  priorNextPageUrl,
+  PRIOR_WALK_BUDGET_MS,
+  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS,
+  priorWalkNotice,
   resolvePriorAccountId,
   type PriorFetchDeps,
-  priorPollDelayMs, PRIOR_POLL_DELAY_MS, PRIOR_POLL_MAX_DELAY_MS, PRIOR_POLL_BUDGET_MS,
-  looksLikePageBoundary,
-  unreadEnvelopeKeys
+  unreadEnvelopeKeys,
+  walkPriorPages
 } from '../server/utils/priorFetch'
 import { normalizePriorTransactionList } from '../app/utils/priorStatement'
 import { PRIOR_RESOURCE_NOT_CREATED } from '../app/utils/priorOauth'
@@ -121,6 +127,59 @@ describe('fetchPriorStatement', () => {
     expect(items).toHaveLength(2)
     expect(calls.pollUrl).toHaveLength(3) // two pending + one ready
     expect(calls.sleeps).toHaveLength(2) // waited between the pending polls
+  })
+
+  it('идёт по links.next через ЖИВУЮ проводку — страницы через pollJson, извещение через log', async () => {
+    // ⚠ Юниты выше гоняют цикл в отрыве; этот покрывает ШОВ — готовое тело опроса с `links.next`
+    // обязано заставить fetchPriorStatement запросить вторую страницу тем же транспортом pollJson
+    // и сообщить о восстановлении через deps.log.
+    const page2 = {
+      data: { transaction: [{ transactionId: 'T-EXTRA', creditDebitIndicator: 'Credit', amount: 7, currency: 'BYN', bookingDateTime: '2026-07-01T10:00:00' }] },
+      links: {}
+    }
+    const first = { ...readyResponse(), links: { next: '/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9?page=2' } }
+    const logged: string[] = []
+    const { deps, calls } = fakeDeps({ pollSequence: [first, page2], log: line => logged.push(line) })
+    const items = await fetchPriorStatement(query, tok, deps)
+    expect(items.map(i => i.docId)).toContain('T-EXTRA')
+    expect(calls.pollUrl.at(-1)).toBe('https://prior:9344/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9?page=2')
+    expect(logged.some(l => l.includes('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 1'))).toBe(true)
+    // Извещение несёт маркер [prior-page] ровно один раз — префикс канала не задваивается.
+    expect(logged.filter(l => l.includes('ПАГИНАЦИЯ'))[0]).toMatch(/^\[prior-page\] /)
+  })
+
+  it('бэкстоп «ровно N без пагинации» молчит, когда обход ОБОРВАЛИ, а не закончили', async () => {
+    // ⚠ Гейт бэкстопа требует `pages === 1 && stop === 'exhausted'`, и клауза про exhausted была
+    // не покрыта ничем: мутация, снимавшая её, оставляла зелёными все 3312 юнит-тестов. Без неё
+    // бэкстоп после затроттленной одностраничной попытки заявлял бы «links.next НЕТ» про ссылку,
+    // которая была. Ровно 100 операций — подозрительное круглое число (SUSPICIOUS_PAGE_SIZES).
+    const row = (id: string) => ({
+      transactionId: id, creditDebitIndicator: 'Credit', amount: 1, currency: 'BYN',
+      bookingDateTime: '2026-07-01T10:00:00'
+    })
+    const hundred = { data: { transaction: Array.from({ length: 100 }, (_, i) => row(`t${i}`)) }, links: { next: '/p2' } }
+    const logged: string[] = []
+    const { deps } = fakeDeps({
+      pollSequence: [hundred],
+      pollJson: async (url: string) => (url.endsWith('/p2')
+        ? { status: 429, body: null }
+        : { status: 200, body: hundred }),
+      log: line => logged.push(line)
+    })
+    const items = await fetchPriorStatement(query, tok, deps)
+    expect(items).toHaveLength(100)
+    // Обход оборвали (429) ⇒ про «links.next НЕТ» говорить нельзя: ссылка была.
+    expect(logged.some(l => l.includes('links.next НЕТ'))).toBe(false)
+    // …но про сам обрыв сказать обязаны.
+    expect(logged.some(l => l.includes('ОБХОД СТРАНИЦ ОБОРВАН'))).toBe(true)
+  })
+
+  it('одна страница без next — лишних опросов нет, извещения нет (обычный тик молчит)', async () => {
+    const logged: string[] = []
+    const { deps, calls } = fakeDeps({ log: line => logged.push(line) })
+    await fetchPriorStatement(query, tok, deps)
+    expect(calls.pollUrl).toHaveLength(1)
+    expect(logged.some(l => l.includes('ПАГИНАЦИЯ') || l.includes('ОБОРВАН'))).toBe(false)
   })
 
   it('throws when the API base is not configured', async () => {
@@ -345,5 +404,216 @@ describe('подозрение на страничный лимит (#522, жи�
     const b = mk(100)
     await fetchPriorStatement(query, tok, { ...b.deps, log: l => lines.push(l) })
     expect(lines.some(l => l.includes('[prior-page]'))).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #561: постраничный обход списка транзакций Приора (`links.next`).
+//
+// Замер на проде 2026-08-22: каждый тик приносил РОВНО 100 операций за окно, а в конверте лежали
+// непрочитанные `links`/`meta` — та же тихая обрезка, за которой #561 гонялся у Альфы, только
+// указатель пагинации лежал прямо в ответе.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#561: priorNextPageUrl — ссылку банка резолвим и проверяем', () => {
+  const BASE = 'https://api.priorbank.by:9344'
+
+  it('читает links.next строкой и объектом {href}, резолвит против НАШЕЙ базы', () => {
+    expect(priorNextPageUrl({ links: { next: '/openbanking/v1/x?page=2' } }, BASE))
+      .toBe(`${BASE}/openbanking/v1/x?page=2`)
+    expect(priorNextPageUrl({ links: { next: { href: `${BASE}/x?page=2` } } }, BASE))
+      .toBe(`${BASE}/x?page=2`)
+  })
+
+  it('отвергает чужой origin — Bearer не уходит по тексту банка за пределы нашего origin', () => {
+    expect(priorNextPageUrl({ links: { next: 'https://evil.example/x' } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: 'http://api.priorbank.by:9344/x' } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: `${BASE.replace('9344', '9345')}/x` } }, BASE)).toBeNull()
+  })
+
+  it('отсутствующий/пустой/битый next читается как «ссылки нет»', () => {
+    expect(priorNextPageUrl({ links: {} }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: '  ' } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({ links: { next: 7 } }, BASE)).toBeNull()
+    expect(priorNextPageUrl({}, BASE)).toBeNull()
+    expect(priorNextPageUrl(null, BASE)).toBeNull()
+  })
+})
+
+describe('#561: walkPriorPages — обход страниц', () => {
+  const BASE = 'https://api.priorbank.by:9344'
+  const nowait = { sleep: async () => {} }
+  const tx = (id: string) => ({
+    transactionId: id, creditDebitIndicator: 'Credit', amount: 10, currency: 'BYN',
+    transactionDetails: 'p', bookingDateTime: '2026-08-21T10:00:00',
+    debtor: { name: 'n' }, debtorAccount: { identification: 'BY99X' }
+  })
+  const page = (ids: string[], next?: string) => ({
+    data: { transaction: ids.map(tx) },
+    links: next === undefined ? {} : { next }
+  })
+
+  it('идёт по links.next и забирает строки, которые одностраничная версия теряла', async () => {
+    const pages: Record<string, unknown> = {
+      [`${BASE}/p2`]: page(['c', 'd'], '/p3'),
+      [`${BASE}/p3`]: page(['e'])
+    }
+    const fetchPage = vi.fn(async (url: string) => ({ status: 200, body: pages[url]! }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a', 'b'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out.map(i => i.docId)).toEqual(['a', 'b', 'c', 'd', 'e'])
+    expect(onWalk).toHaveBeenCalledWith({ pages: 3, recovered: 3, stop: 'exhausted' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 3')
+  })
+
+  it('ссылки нет — одна страница, лишних запросов нет, молчим', async () => {
+    const fetchPage = vi.fn()
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a']), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(1)
+    expect(fetchPage).not.toHaveBeenCalled()
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'exhausted' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toBeNull()
+  })
+
+  it('links.next на уже пройденную страницу — ЦИКЛ: останов, и говорим об этом громко', async () => {
+    // ⚠ Детектор цикла — URL, а не содержимое страницы. Сигнатура содержимого была первой
+    // попыткой и оказалась неверной: две ПУСТЫЕ страницы байт-идентичны, не будучи циклом, — см.
+    // регресс-тест ниже, который та версия не проходила.
+    const same = page(['a', 'b'], '/p2')
+    const fetchPage = vi.fn(async () => ({ status: 200, body: same }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(same, 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(2)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 2, recovered: 0, stop: 'repeat' })
+    // ⚠ Цикл — ровно тот случай, когда мы НЕ знаем, всё ли увидели. Считать его честным концом
+    // значило заново построить ту тихую обрезку, ради конца которой файл и написан.
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('банк зациклился')
+  })
+
+  it('ПУСТЫЕ страницы посередине не обрывают обход — данные после них всё равно забираются', async () => {
+    // ⚠ Регресс, найденный ревью и воспроизведённый до правки: при детекторе по сигнатуре
+    // содержимого набор [a] → [] → [] → [реальные] обрывался на третьей странице, четвёртую не
+    // запрашивал и НЕ ПЕЧАТАЛ НИЧЕГО — ровно болезнь #561, этажом выше.
+    const pages: Record<string, unknown> = {
+      [`${BASE}/e2`]: { data: { transaction: [] }, links: { next: '/e3' } },
+      [`${BASE}/e3`]: { data: { transaction: [] }, links: { next: '/e4' } },
+      [`${BASE}/e4`]: page(['real-later'])
+    }
+    const fetchPage = vi.fn(async (url: string) => ({ status: 200, body: pages[url]! }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a'], '/e2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(fetchPage).toHaveBeenCalledTimes(3)
+    expect(out.map(i => i.docId)).toEqual(['a', 'real-later'])
+    expect(onWalk).toHaveBeenCalledWith({ pages: 4, recovered: 1, stop: 'exhausted' })
+  })
+
+  it('страница, схлопнувшаяся дедупом в ноль, НЕ имеет права обрывать обход (регресс #566)', async () => {
+    // Два РАЗНЫХ плательщика, схлопнувшихся в одну контент-сигнатуру при пустом docId: сырые
+    // страницы различны, обход идёт дальше; на выходе коллизия схлопывается — всё, что дедупу
+    // позволено сделать безопасно.
+    const anon = (name: string) => ({
+      transactionId: '', creditDebitIndicator: 'Credit', amount: 5, currency: 'BYN',
+      transactionDetails: 'same purpose', bookingDateTime: '2026-08-21T10:00:00',
+      debtor: { name }, debtorAccount: { identification: 'BY99SAME' }
+    })
+    const pages: Record<string, unknown> = {
+      [`${BASE}/p2`]: { data: { transaction: [anon('Петров')] }, links: { next: '/p3' } },
+      [`${BASE}/p3`]: page(['real'])
+    }
+    const fetchPage = vi.fn(async (url: string) => ({ status: 200, body: pages[url]! }))
+    const out = await walkPriorPages(
+      { data: { transaction: [anon('Иванов')] }, links: { next: '/p2' } },
+      'ACC', BASE, fetchPage, undefined, nowait
+    )
+    expect(fetchPage).toHaveBeenCalledTimes(2) // page 3 was still requested
+    expect(out.map(i => i.docId)).toEqual(['', 'real'])
+  })
+
+  it('links.next = null / пустая строка — это ЧИСТЫЙ конец, а не отказ', async () => {
+    // ⚠ Обычная REST-конвенция «страниц больше нет». Пока «есть ссылка» значило `!== undefined`,
+    // такой конец помечался `foreign-next`, печатал «указывает на ЧУЖОЙ origin» про ссылку,
+    // которой не было, и ГЛУШИЛ бэкстоп ниже — тот гейтится на `stop === 'exhausted'`. То есть
+    // бэкстоп молчал ровно там, где задуман говорить. Найдено ревью на реальной форме данных.
+    for (const next of [null, '', '   ', { href: null }, { href: '' }]) {
+      const onWalk = vi.fn()
+      await walkPriorPages(
+        { data: { transaction: [tx('a')] }, links: { next } },
+        'ACC', BASE, vi.fn(), onWalk, nowait
+      )
+      expect(onWalk.mock.calls[0]![0], `next=${JSON.stringify(next)}`)
+        .toEqual({ pages: 1, recovered: 0, stop: 'exhausted' })
+      expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toBeNull()
+    }
+  })
+
+  it('ожидающая (pending) следующая страница — тоже not-ready, а не ошибка', async () => {
+    // ⚠ У `not-ready` ДВЕ причины: HTTP 429/5xx и собственный pending-конверт банка
+    // (`BY.NBRB.Resource.NotCreated`). Тестом была покрыта только первая — замерено мутацией,
+    // отключавшей вторую ветку: полный набор оставался зелёным.
+    const fetchPage = vi.fn(async () => ({ status: 200, body: { errors: [{ code: 'BY.NBRB.Resource.NotCreated' }] } }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(1)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'not-ready' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+  })
+
+  it('чужой origin в next останавливает ГРОМКО — отвергнуто и «нет ссылки» это разное', async () => {
+    const onWalk = vi.fn()
+    await walkPriorPages(page(['a'], 'https://evil.example/x'), 'ACC', BASE, vi.fn(), onWalk, nowait)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'foreign-next' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ЧУЖОЙ origin')
+  })
+
+  it('затроттленная следующая страница останавливает громко, но не роняет джобу — тик залечит', async () => {
+    const fetchPage = vi.fn(async () => ({ status: 429, body: null }))
+    const onWalk = vi.fn()
+    const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    expect(out).toHaveLength(1)
+    expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'not-ready' })
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+  })
+
+  it('ОШИБКА страницы бросает — сломанный ответ это не медленный', async () => {
+    // Честная фикстура — неопознанный ответ: тело 400 без нашего конверта данных классифицируется
+    // как ошибка в любом случае, и сообщение обязано нести номер страницы.
+    const fetchPage = vi.fn(async () => ({ status: 400, body: { nonsense: true } }))
+    await expect(walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, undefined, nowait))
+      .rejects.toThrow(/page 2 error .*HTTP 400/)
+  })
+
+  it('бесконечные РАЗНЫЕ страницы упираются в потолок — и говорят, что усекли', async () => {
+    // ⚠ Каждая следующая ссылка обязана быть РАЗНОЙ — постоянная это цикл, и детектор по URL
+    // (справедливо) останавливается на нём задолго до потолка страниц.
+    let n = 0
+    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`x${n}`], `/next-${n++}`) }))
+    const onWalk = vi.fn()
+    await walkPriorPages(page(['x-first'], '/next-start'), 'ACC', BASE, fetchPage, onWalk, nowait)
+    const info = onWalk.mock.calls[0]![0] as { pages: number, stop: string }
+    expect(info.stop).toBe('page-cap')
+    expect(info.pages).toBe(MAX_PRIOR_STATEMENT_PAGES)
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain(`потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц`)
+  })
+
+  it('медленный банк останавливается по бюджету реального времени', async () => {
+    let clock = 0
+    const now = () => (clock += 9_000)
+    let n = 0
+    const fetchPage = vi.fn(async () => ({ status: 200, body: page([`y${n}`], `/slow-${n++}`) }))
+    const onWalk = vi.fn()
+    await walkPriorPages(page(['y-first'], '/slow-start'), 'ACC', BASE, fetchPage, onWalk, { sleep: async () => {}, now })
+    expect((onWalk.mock.calls[0]![0] as { stop: string }).stop).toBe('time-cap')
+  })
+
+  it('ждёт между страницами, и только между ними', async () => {
+    const sleep = vi.fn(async (_ms: number) => {})
+    const pages: Record<string, unknown> = { [`${BASE}/p2`]: page(['b']) }
+    await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, async url => ({ status: 200, body: pages[url]! }), undefined, { sleep })
+    expect(sleep.mock.calls.map(c => c[0])).toEqual([PRIOR_PAGE_DELAY_MS])
+  })
+
+  it('оба предела закреплены и достижимы — ни один не украшение', () => {
+    expect(MAX_PRIOR_STATEMENT_PAGES).toBe(20)
+    expect((MAX_PRIOR_STATEMENT_PAGES - 1) * PRIOR_PAGE_DELAY_MS).toBeLessThan(PRIOR_WALK_BUDGET_MS)
   })
 })

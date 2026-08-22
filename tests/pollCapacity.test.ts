@@ -16,12 +16,12 @@ import { fetchJobId } from '../server/queue/topology'
 // every portal), so the sweep time — not CRON_INTERVAL_MIN — is the real statement freshness.
 
 describe('sweepRequests', () => {
-  it('costs 2 requests per Alfa account and ~10 per Prior account (async create+poll)', () => {
+  it('costs 2 requests per Alfa account and ~11 per Prior account (async create+poll+page)', () => {
     // ⚠ Alfa became TWO in #561: the statement plus the page probe that proves there is no second
     // one. Not cosmetic — the limiter converts a REQUEST budget into JOBS through this number, so
     // understating it overspends the bank's cap while every dashboard still reads «within cap».
     expect(sweepRequests('alfa-by', 100)).toBe(200)
-    expect(sweepRequests('prior-by', 100)).toBe(1000)
+    expect(sweepRequests('prior-by', 100)).toBe(1100)
     expect(REQUESTS_PER_ACCOUNT['prior-by']).toBeGreaterThan(REQUESTS_PER_ACCOUNT['alfa-by']!)
   })
   it('defaults to 1 for an unknown provider and floors at 0', () => {
@@ -41,13 +41,14 @@ describe('estimatePollCycle', () => {
   })
 
   it('Prior costs 5× the same account count (per-REQUEST accounting, not per-job)', () => {
-    // ⚠ Was 10×, now 5×: Prior did not get cheaper, Alfa got twice as expensive (#561). Asserted as
-    // a RATIO over the constants themselves — a hardcoded multiplier would need editing on every
-    // refinement of the model, and one day someone edits it «to make it green» without reading it.
+    // ⚠ Was 10×, now 5.5×: Prior did not get cheaper, Alfa got twice as expensive (#561) and Prior
+    // gained a page walk (#573). Asserted as a RATIO over the constants themselves — a hardcoded
+    // multiplier would need editing on every refinement of the model, and one day someone edits it
+    // «to make it green» without reading it.
     const ratio = (REQUESTS_PER_ACCOUNT['prior-by'] ?? 1) / (REQUESTS_PER_ACCOUNT['alfa-by'] ?? 1)
     const alfa = estimatePollCycle(sweepRequests('alfa-by', 20_600), 100, 60_000, 300_000)
     const prior = estimatePollCycle(sweepRequests('prior-by', 20_600), 100, 60_000, 300_000)
-    expect(ratio).toBe(5)
+    expect(ratio).toBe(5.5)
     expect(prior.requests).toBe(alfa.requests * ratio)
     expect(prior.cycleMs).toBe(alfa.cycleMs * ratio)
   })
@@ -67,7 +68,7 @@ describe('estimatePollCycle', () => {
 
 describe('providerJobRate (bank REQUESTS → BullMQ JOBS)', () => {
   it('divides the request budget by the per-job cost — Prior 100 req/min = 10 jobs/min', () => {
-    expect(providerJobRate(100, REQUESTS_PER_ACCOUNT['prior-by']!)).toBe(10)
+    expect(providerJobRate(100, REQUESTS_PER_ACCOUNT['prior-by']!)).toBe(9) // 100 ÷ 11, floored
     // Sizing the limiter with the RAW request cap would spend ~10× the bank budget.
     expect(providerJobRate(100, 10)).toBeLessThan(100)
   })
@@ -90,8 +91,8 @@ describe('planRequests', () => {
       { providerId: 'alfa-by', accounts: new Array(10_500).fill('a') },
       { providerId: 'prior-by', accounts: new Array(20_600).fill('p') }
     ]
-    // 10_500×2 + 20_600×10 = 227_000 bank requests for ONE sweep of the marketplace fleet (#561).
-    expect(planRequests(plan)).toBe(227_000)
+    // 10_500×2 + 20_600×11 = 247_600 bank requests for ONE sweep of the marketplace fleet (#573).
+    expect(planRequests(plan)).toBe(247_600)
   })
 })
 
@@ -110,7 +111,7 @@ describe('estimateProviderCycles (queues drain in PARALLEL, not serially)', () =
     expect(alfa!.provider).toBe('alfa-by')
     expect(alfa!.cycle.cycleMs).toBe(210 * 60_000) // 21_000 req ÷ 100/min (#561: 2 requests per account)
     expect(prior!.provider).toBe('prior-by')
-    expect(prior!.cycle.cycleMs).toBe(10_300 * 60_000) // 206_000 req ÷ 20/min — its OWN, slower budget
+    expect(prior!.cycle.cycleMs).toBe(11_330 * 60_000) // 226_600 req ÷ 20/min — its OWN, slower budget
   })
 
   it('a slow provider does not inflate the fast one (the serial-sum bug)', () => {
@@ -118,7 +119,7 @@ describe('estimateProviderCycles (queues drain in PARALLEL, not serially)', () =
     // A single summed number would report ~2165 min for BOTH; per-provider keeps Alfa honest.
     expect(alfa!.cycle.cycleMs).toBeLessThan(prior!.cycle.cycleMs)
     expect(alfa!.cycle.requests).toBe(21_000)
-    expect(prior!.cycle.requests).toBe(206_000)
+    expect(prior!.cycle.requests).toBe(226_600)
   })
 
   it('flags exceedsInterval per provider (a small Alfa fleet stays quiet while Prior warns)', () => {
@@ -168,7 +169,7 @@ describe('providerRequestBudget (the inverse of providerJobRate)', () => {
     expect(providerRequestBudget('alfa-by', { max: 40, duration: 60_000 }))
       .toEqual({ requests: 80, durationMs: 60_000 })
     expect(providerRequestBudget('prior-by', { max: 20, duration: 60_000 }))
-      .toEqual({ requests: 200, durationMs: 60_000 })
+      .toEqual({ requests: 220, durationMs: 60_000 })
   })
 
   it('round-trips with providerJobRate for every pollable provider', () => {

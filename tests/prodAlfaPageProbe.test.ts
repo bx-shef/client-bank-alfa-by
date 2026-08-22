@@ -25,34 +25,53 @@ function callFn(fn: string, ...args: string[]): string {
 }
 
 describe('#561 проба: вердикт (исполнением, а не грепом)', () => {
-  const verdict = (p0: string, p1: string) => callFn('verdict', p0, p1)
+  const verdict = (p0: string, p1: string, same: string) => callFn('verdict', p0, p1, same)
   const STATES = ['1', '0', '-1', ''] as const
 
-  it('непустая ВТОРАЯ страница решает вопрос сама, чем бы ни ответила первая', () => {
-    // ⚠ Живой дефект, найденный ревью: общая проверка «неполный ответ» стояла раньше и глушила
-    // уже готовый вывод. На таблице 4×4 молчали два случая из шестнадцати — и оба были RED, то
-    // есть проба замалчивала именно доказанную потерю операций.
-    for (const p0 of STATES) expect(verdict(p0, '0'), `P0=${p0 || '<пусто>'}`).toBe('RED')
+  it('непустая И ОТЛИЧАЮЩАЯСЯ вторая страница при ПРОЧИТАННОЙ первой — потеря доказана', () => {
+    // ⚠ Живой урок первого боевого прогона: непустая страница 1 сама по себе НЕ доказательство —
+    // при прочтении «0 = все» банк повторяет ту же выдачу на любой странице, и старый вердикт
+    // объявил «потери доказаны» про день с одной операцией. RED требует сравнения двух
+    // ПРОЧИТАННЫХ страниц; сравнение мусора с данными сравнением двух страниц не является.
+    expect(verdict('0', '0', '0')).toBe('RED')
+    expect(verdict('1', '0', '0')).toBe('RED')
+    for (const p0 of ['-1', '']) expect(verdict(p0, '0', '0'), `P0=${p0 || '<пусто>'}`).toBe('INCONCLUSIVE')
+  })
+
+  it('страница 1 повторяет страницу 0 байт-в-байт — «0» означает ВСЕ, а не потерю', () => {
+    expect(verdict('0', '0', '1')).toBe('GREEN-REPEAT')
+  })
+
+  it('непустая страница 1 БЕЗ сравнения содержимого — не вердикт', () => {
+    // Сравнить было нечего (одна из страниц не дожила до FLAT) ⇒ честное «не знаем».
+    expect(verdict('0', '0', '')).toBe('INCONCLUSIVE')
   })
 
   it('зелёный вердикт требует ОБЕИХ известных страниц', () => {
-    expect(verdict('0', '1')).toBe('GREEN')
+    expect(verdict('0', '1', '0')).toBe('GREEN')
     // ⚠ Ни одно неизвестное состояние не должно давать «потерь не было»: цена ошибки в эту
     // сторону — молча вернуть стоимость задачи к 1 и снова терять операции.
-    for (const p0 of ['-1', '']) expect(verdict(p0, '1')).toBe('INCONCLUSIVE')
-    for (const p1 of ['-1', '']) expect(verdict('0', p1)).toBe('INCONCLUSIVE')
+    for (const p0 of ['-1', '']) expect(verdict(p0, '1', '0')).toBe('INCONCLUSIVE')
+    for (const p1 of ['-1', '']) expect(verdict('0', p1, '0')).toBe('INCONCLUSIVE')
   })
 
   it('обе страницы пусты — операций не было, проба ничего не доказывает', () => {
-    expect(verdict('1', '1')).toBe('NODATA')
+    expect(verdict('1', '1', '1')).toBe('NODATA')
   })
 
-  it('вся таблица 4×4 разобрана и GREEN достижим ровно в одном случае', () => {
-    const table = STATES.flatMap(p0 => STATES.map(p1 => [p0, p1, verdict(p0, p1)] as const))
-    expect(table).toHaveLength(16)
-    expect(table.filter(([,, v]) => v === 'GREEN')).toHaveLength(1)
-    expect(table.filter(([,, v]) => v === 'RED')).toHaveLength(4)
-    expect(table.every(([,, v]) => ['RED', 'GREEN', 'NODATA', 'INCONCLUSIVE'].includes(v))).toBe(true)
+  it('вся таблица 4×4×{0,1,пусто} разобрана — уверенный вердикт только на полных данных', () => {
+    const table = STATES.flatMap(p0 => STATES.flatMap(p1 =>
+      ['0', '1', ''].map(same => [p0, p1, same, verdict(p0, p1, same)] as const)))
+    expect(table).toHaveLength(48)
+    for (const [p0, p1, same, v] of table) {
+      expect(['RED', 'GREEN', 'GREEN-REPEAT', 'NODATA', 'INCONCLUSIVE']).toContain(v)
+      // Любой уверенный вердикт запрещён, пока хоть одна страница не прочитана.
+      if (p0 === '' || p1 === '' || p0 === '-1' || p1 === '-1') {
+        expect(v, `P0=${p0} P1=${p1} same=${same}`).toBe('INCONCLUSIVE')
+      }
+      // RED обязан опираться на доказанное РАЗЛИЧИЕ страниц, не на непустоту.
+      if (v === 'RED') expect(same).toBe('0')
+    }
   })
 })
 
