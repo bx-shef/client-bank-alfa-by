@@ -238,6 +238,15 @@ export interface BankAccountRef {
   memberId: string
   provider: BankProviderId
   accountKey: string
+  /**
+   * Автоопрос на этом подключении приостановлен (#576).
+   *
+   * ⚠ Читает это ТОЛЬКО планировщик опроса (`accountsForPolling`). Продление токена
+   * (`bankTokenKeepAlive`, #489) идёт своей выборкой и паузу не видит — намеренно: иначе
+   * поставленное на паузу подключение умерло бы за ночь, и человеку пришлось бы заново входить в
+   * интернет-банк за тем, что он всего лишь притормозил.
+   */
+  pollPaused: boolean
 }
 
 /** Enumerate EVERY connected bank account across ALL portals (A6 registry) for the real
@@ -246,13 +255,14 @@ export interface BankAccountRef {
  *  bad). Ordered for a stable plan. */
 export async function listAllBankAccounts(query: QueryFn): Promise<BankAccountRef[]> {
   const rows = await query(
-    `SELECT member_id, provider, account_key FROM bank_tokens ORDER BY member_id, provider, account_key`,
+    `SELECT member_id, provider, account_key, poll_paused FROM bank_tokens ORDER BY member_id, provider, account_key`,
     []
   )
   return rows.map(r => ({
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
-    accountKey: String(r.account_key)
+    accountKey: String(r.account_key),
+    pollPaused: r.poll_paused === true
   }))
 }
 
@@ -260,13 +270,14 @@ export async function listAllBankAccounts(query: QueryFn): Promise<BankAccountRe
  *  poll (#54) only needs which accounts to fetch, not their tokens). Member-scoped. */
 export async function listBankAccountsForPortal(query: QueryFn, memberId: string): Promise<BankAccountRef[]> {
   const rows = await query(
-    `SELECT member_id, provider, account_key FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
+    `SELECT member_id, provider, account_key, poll_paused FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
   return rows.map(r => ({
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
-    accountKey: String(r.account_key)
+    accountKey: String(r.account_key),
+    pollPaused: r.poll_paused === true
   }))
 }
 
@@ -310,6 +321,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
+            poll_paused,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
@@ -328,7 +340,8 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     lastAttemptAt: Number(r.last_attempt_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
-    consentExpiresAt: Number(r.consent_expires_at ?? 0)
+    consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    pollPaused: r.poll_paused === true
   }))
 }
 
@@ -344,6 +357,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
+            poll_paused,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens ORDER BY updated_at ASC`,
@@ -360,7 +374,8 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
     lastAttemptAt: Number(r.last_attempt_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
-    consentExpiresAt: Number(r.consent_expires_at ?? 0)
+    consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    pollPaused: r.poll_paused === true
   }))
 }
 
@@ -415,6 +430,42 @@ export async function deleteBankTokenById(
   if (rows.length > 0) return 'removed'
   // Ноль строк — теперь только ДИАГНОСТИКА: различить «строки нет» и «строка есть, но другая».
   // Её собственная гонка безобидна: она уже ничего не меняет, только выбирает текст ответа.
+  const found = await query(
+    `SELECT account_key FROM bank_tokens WHERE member_id = $1 AND id = $2`,
+    [memberId, id]
+  )
+  return found.length > 0 ? 'stale' : 'gone'
+}
+
+/**
+ * Поставить автоопрос подключения на паузу или снять её (#576).
+ *
+ * Адресуется тем же НЕИЗМЕНЯЕМЫМ `id` и с той же сверкой ключа, что и удаление (#517), и по той же
+ * причине: `account_key` меняется, когда админ выбирает счёт, поэтому адрес из отрисованного списка
+ * может описывать уже другое подключение. Исходы те же три и различимы только благодаря `id`:
+ *   `updated` — переключили;
+ *   `gone`    — строки нет (отключили, пока смотрели);
+ *   `stale`   — строка есть, но её `account_key` уже НЕ тот, что видел нажавший.
+ *
+ * ⚠ `stale` — отказ, а не «переключим всё равно»: за это время подключение из незавершённого могло
+ * стать рабочим, и пауза легла бы не на то, на что смотрел человек.
+ *
+ * ⚠ `updated_at` НЕ штампуется — намеренно, тем же правилом, что у `renameBankTokenAccount`.
+ * Колонка означает «когда мы последний раз держали свежую пару токенов», по ней keep-alive (#489)
+ * выбирает, кого продлевать. Перевести её вперёд нажатием паузы значило бы выкинуть подключение из
+ * очереди продления — то есть пауза убивала бы токен, ровно то, что issue запрещает.
+ *
+ * Member-scoped в самом WHERE: чужую строку не тронуть, даже подделав `id`.
+ */
+export async function setBankPollPaused(
+  query: QueryFn, memberId: string, id: number, expectedAccountKey: string, paused: boolean
+): Promise<'updated' | 'gone' | 'stale'> {
+  const rows = await query(
+    `UPDATE bank_tokens SET poll_paused = $4
+      WHERE member_id = $1 AND id = $2 AND account_key = $3 RETURNING member_id`,
+    [memberId, id, expectedAccountKey, paused]
+  )
+  if (rows.length > 0) return 'updated'
   const found = await query(
     `SELECT account_key FROM bank_tokens WHERE member_id = $1 AND id = $2`,
     [memberId, id]

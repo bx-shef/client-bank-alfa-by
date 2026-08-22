@@ -38,6 +38,10 @@ export interface DisconnectDeps extends BankAccountsDeps {
   remove: (memberId: string, id: number, expectedAccountKey: string) => Promise<'removed' | 'gone' | 'stale'>
 }
 
+export interface PausePollDeps extends BankAccountsDeps {
+  setPaused: (memberId: string, id: number, expectedAccountKey: string, paused: boolean) => Promise<'updated' | 'gone' | 'stale'>
+}
+
 /**
  * Исход переименования. `busy` — не ошибка, а «строку сейчас держит обновление токена, повторите»
  * (#509): выбор счёта и обновление пишут в одну строку и сериализованы одним локом, а ждать его
@@ -60,6 +64,11 @@ export interface DisconnectInput extends BankAccountsInput {
   /** Неизменяемый адрес строки (#517). `accountKey` едет рядом как ОЖИДАНИЕ вызывающего: он
    *  описывает, что было на экране, и расхождение означает «список устарел». */
   id: number
+}
+
+export interface PausePollInput extends DisconnectInput {
+  /** `true` — приостановить автоопрос, `false` — возобновить. */
+  paused: boolean
 }
 
 export interface SetAccountInput extends BankAccountsInput {
@@ -129,7 +138,9 @@ export async function handleListBankAccounts(deps: ListAccountsDeps, input: Bank
         hasRefresh: a.hasRefresh,
         // Срок согласия банка (#503). 0 — банк его не выдаёт (Альфа) либо подключение сделано до
         // этой правки; интерфейс тогда о согласии молчит, а не рисует прочерк.
-        consentExpiresAt: a.consentExpiresAt
+        consentExpiresAt: a.consentExpiresAt,
+        // Автоопрос приостановлен (#576) — подключение живо, токен продлевается, за выпиской не ходим.
+        pollPaused: a.pollPaused
       }))
     }
   }
@@ -169,6 +180,51 @@ export async function handleSetBankAccount(deps: SetAccountDeps, input: SetAccou
     return { status: 503, body: { error: 'connection is being refreshed right now, retry in a few seconds' } }
   }
   return { status: 200, body: { ok: true } }
+}
+
+/**
+ * Приостановить или возобновить АВТООПРОС одного подключения (#576).
+ *
+ * ⚠ Не путать с «Отключить». Отключение стирает грант, и вернуть его может только ВЛАДЕЛЕЦ СЧЁТА,
+ * заново войдя в свой интернет-банк; пауза не трогает ни грант, ни продление токена — приложение
+ * просто перестаёт ходить за выпиской. До этой ручки выбор был бинарным, и «слишком много операций»
+ * лечилось единственным способом, который стоил повторной авторизации в банке.
+ *
+ * Адресация и разбор исходов — те же, что у отключения (#517): неизменяемый `id` плюс сверка номера
+ * счёта как ОЖИДАНИЯ вызывающего.
+ */
+export async function handlePauseBankPoll(deps: PausePollDeps, input: PausePollInput): Promise<BankAccountsResult> {
+  const auth = await authorize(deps, input)
+  if ('error' in auth) return auth.error
+
+  const provider = input.provider?.trim() ?? ''
+  const accountKey = input.accountKey?.trim() ?? ''
+  if (!provider || !accountKey) {
+    return { status: 400, body: { error: 'provider and accountKey are required' } }
+  }
+  if (!isKnownProvider(provider)) return { status: 400, body: { error: 'unknown provider' } }
+  const id = Number(input.id)
+  // Та же верхняя граница, что у отключения, и по той же причине: `1e21` проходит `isInteger`, а в
+  // `bigint`-параметр уезжает экспонентой и роняет запрос синтаксической ошибкой Postgres.
+  if (!Number.isInteger(id) || id <= 0 || id > Number.MAX_SAFE_INTEGER) {
+    return { status: 400, body: { error: 'a connection id is required' } }
+  }
+  // ⚠ Строго булев, без приведения. `paused: 'false'` из кривого клиента при мягкой проверке стало
+  // бы `true` — то есть «возобновить» молча поставило бы на паузу, и человек искал бы причину
+  // тишины в банке.
+  if (typeof input.paused !== 'boolean') {
+    return { status: 400, body: { error: 'paused must be a boolean' } }
+  }
+
+  const outcome = await deps.setPaused(auth.memberId, id, accountKey, input.paused)
+  if (outcome === 'stale') {
+    return { status: 409, body: { error: 'the connection changed since the list was loaded, reload it' } }
+  }
+  // ⚠ `gone` — 404, а НЕ идемпотентный успех, в отличие от отключения. Там «строки нет» и есть
+  // желаемый исход, здесь же просили изменить состояние строки, которой нет: ответить успехом
+  // значило бы показать в интерфейсе паузу, которой в базе не существует.
+  if (outcome === 'gone') return { status: 404, body: { error: 'connection not found' } }
+  return { status: 200, body: { paused: input.paused } }
 }
 
 /** Disconnect one account of the caller's portal. Idempotent — removing an already-gone account

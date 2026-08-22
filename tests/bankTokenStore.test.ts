@@ -95,7 +95,10 @@ describe('listBankAccountInfoForPortal — проекция для экрана 
       hasRefresh: true, consentExpiresAt: 1_800_000_000_000,
       // ⚠ 0 = «не пробовали ни разу», а не «пробовали давно». Различие несущее: первое даёт шанс
       // немедленно — ровно тот случай, когда подключение пережило простой сервиса (#489).
-      lastAttemptAt: 0
+      lastAttemptAt: 0,
+      // ⚠ Отсутствие колонки в ответе БД читается как «не на паузе», а не как `undefined`: строка,
+      // записанная до #576, обязана опрашиваться, а не выпасть из плана молча.
+      pollPaused: false
     })
     expect(JSON.stringify(row)).not.toContain('SECRET')
   })
@@ -160,12 +163,15 @@ describe('listAllBankAccounts (A6 registry)', () => {
     ])
     const refs = await listAllBankAccounts(query)
     expect(refs).toEqual([
-      { memberId: 'm1', provider: 'alfa-by', accountKey: 'A1' },
-      { memberId: 'm2', provider: 'prior-by', accountKey: 'P1' }
+      // ⚠ Колонки `poll_paused` в этих строках НЕТ, и результат обязан быть `false`, а не
+      // `undefined`: строка, записанная до #576, должна опрашиваться как обычно, а не выпасть из
+      // плана молча — тот же довод, что у нулей `consent_expires_at`/`last_attempt_at` ниже.
+      { memberId: 'm1', provider: 'alfa-by', accountKey: 'A1', pollPaused: false },
+      { memberId: 'm2', provider: 'prior-by', accountKey: 'P1', pollPaused: false }
     ])
     // SELECTs only identity columns (no access_token/refresh_token_enc) — a corrupt refresh
     // can't hide a healthy account from polling.
-    expect(calls[0]!.sql).toMatch(/SELECT member_id, provider, account_key FROM bank_tokens/)
+    expect(calls[0]!.sql).toMatch(/SELECT member_id, provider, account_key, poll_paused FROM bank_tokens/)
     expect(calls[0]!.sql).not.toMatch(/refresh_token_enc|access_token/)
   })
   it('empty store → []', async () => {
@@ -451,7 +457,9 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
       consentExpiresAt: 0,
       // Колонки `last_attempt_at` в строке тоже нет ⇒ 0 = «не пробовали», и подключение получит
       // шанс на первом же тике (#489).
-      lastAttemptAt: 0
+      lastAttemptAt: 0,
+      // Колонки `poll_paused` нет ⇒ `false`: подключение, заведённое до #576, опрашивается.
+      pollPaused: false
     })
     expect(JSON.stringify(row)).not.toContain('SECRET')
   })

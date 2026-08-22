@@ -154,7 +154,13 @@ export function selectBankAccountsNearExpiry(
   let truncated = false
   const ordered = [...rows].sort((a, b) => a.connectedAt - b.connectedAt)
   for (const row of ordered) {
-    const ref: BankAccountRef = { memberId: row.memberId, provider: row.provider, accountKey: row.accountKey }
+    // ⚠ `pollPaused` переносится, но продление НА НЕГО НЕ СМОТРИТ (#576) — и это условие задачи,
+    // а не упущение. Пауза останавливает походы за ВЫПИСКОЙ; поставленное на паузу подключение
+    // обязано пережить ночь, иначе владельцу счёта пришлось бы заново входить в интернет-банк за
+    // тем, что он всего лишь притормозил. Отбор здесь идёт по сроку токена, и только по нему.
+    const ref: BankAccountRef = {
+      memberId: row.memberId, provider: row.provider, accountKey: row.accountKey, pollPaused: row.pollPaused
+    }
     // ⚠ СОГЛАСИЕ — ПЕРВЫМ, раньше всех оценок по возрасту токена (#503). Это не наша догадка о
     // сроке, а дата, которую выдал сам банк: когда она прошла, обновлять нечего — грант мёртв, и
     // помочь может только вход владельца счёта в интернет-банк. Продолжать слать сюда refresh
