@@ -18,6 +18,7 @@ import { queueEnabled } from '../queue/connection'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
+import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 
 function liveDeps(): SetupStatusDeps {
   const interval = Number(process.env.CRON_INTERVAL_MIN ?? NaN)
@@ -40,11 +41,17 @@ function liveDeps(): SetupStatusDeps {
     // константу, не уронив ни одного теста. Всё считает `summarizeBankHealth` — то самое ядро,
     // которым живёт экран оператора, и оно же само выносит ожидающие подключения из состояний.
     countAccounts: async (memberId) => {
-      const o = summarizeBankHealth(await listBankAccountInfoForPortal(dbQuery, memberId), Date.now())
+      const rows = await listBankAccountInfoForPortal(dbQuery, memberId)
+      const o = summarizeBankHealth(rows, Date.now())
       return {
         connected: o.total.connections - o.pending.connections,
         pending: o.pending.connections,
-        unhealthy: unhealthyConnections(o)
+        unhealthy: unhealthyConnections(o),
+        // Пауза (#576) считается ЗДЕСЬ, по тем же строкам, а не через `summarizeBankHealth`: та
+        // сводка описывает ЗДОРОВЬЕ подключения, а пауза здоровьем не является — подключение живо,
+        // токен продлевается. Смешать их значило бы показать выбор администратора как неполадку.
+        // ⚠ Незавершённые не считаем: опрашивать там нечего, и пауза на них не ставится.
+        paused: rows.filter(r => r.pollPaused && !isPendingAccountKey(r.accountKey)).length
       }
     },
     // BOTH conditions the cron actually needs, not just the flag: the scheduler returns early

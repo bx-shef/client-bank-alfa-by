@@ -226,3 +226,39 @@ describe('нерабочее подключение не красится зел
     expect(withBank({}).ok).toBe(true)
   })
 })
+
+describe('#576 пауза автоопроса на экране готовности', () => {
+  const base = (over: Partial<ReadinessSnapshot> = {}): ReadinessSnapshot => snap({
+    connectedAccounts: 2, pollEnabled: true, pollIntervalMin: 5, ...over
+  })
+  const poll = (s: ReadinessSnapshot) => buildReadiness(s).find(i => i.key === 'poll')!
+
+  it('часть подключений на паузе — строка остаётся ЗЕЛЁНОЙ, но говорит об этом', () => {
+    // ⚠ Красное здесь означает «настройка не доведена», а пауза — доведённая настройка, которой
+    // воспользовались. Покрасив её красным, мы приучили бы админа видеть красное на экране,
+    // который он сам и привёл в это состояние.
+    const item = poll(base({ pausedAccounts: 1 }))
+    expect(item.ok).toBe(true)
+    expect(item.detail).toContain('1 подключение на паузе')
+  })
+
+  it('ВСЕ подключения на паузе — прямо сказано, что выписки не будет', () => {
+    // Без этого строка «каждые 5 мин» была бы ложью, и тишину пошли бы искать в банке.
+    const item = poll(base({ pausedAccounts: 2 }))
+    expect(item.detail).toContain('все подключения на паузе')
+    expect(item.hint).toContain('возобновите')
+  })
+
+  it('пауз нет — строка прежняя, без приписок', () => {
+    expect(poll(base()).detail).toBe('каждые 5 мин')
+    expect(poll(base({ pausedAccounts: 0 })).detail).toBe('каждые 5 мин')
+  })
+
+  it('опрос выключен НА СЕРВЕРЕ — пауза этого не перекрывает', () => {
+    // Два разных «не опрашиваем», и чинят их разные люди: серверный гейт — владелец приложения,
+    // паузу — админ портала. Слить их значило бы отправить админа не туда.
+    const item = poll(base({ pollEnabled: false, pausedAccounts: 2 }))
+    expect(item.ok).toBe(false)
+    expect(item.hint).toContain('владельцу приложения')
+  })
+})
