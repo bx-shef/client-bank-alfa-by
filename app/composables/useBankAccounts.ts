@@ -3,6 +3,7 @@ import type { BankProviderId } from '~/types/statement'
 import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { setAccountErrorMessage } from '~/utils/setAccountError'
 import { disconnectErrorMessage } from '~/utils/disconnectError'
+import { pausePollErrorMessage } from '~/utils/pausePollError'
 
 // Connected bank accounts for the settings UI (#404): read the list and disconnect one. Both hit
 // admin-gated frame-token routes (/api/bank/accounts, /api/bank/disconnect) — same auth model as
@@ -32,13 +33,78 @@ export interface ConnectedBankAccount {
    * счёта в интернет-банк, а это не то, что организуют за вечер.
    */
   consentExpiresAt?: number
+  /**
+   * Автоопрос этого подключения приостановлен (#576).
+   *
+   * ⚠ Не «отключено». Грант жив, токен продлевается — приложение просто не ходит за выпиской.
+   * Отсутствует ⇒ `false`: подключение, заведённое до появления паузы, опрашивается как обычно.
+   */
+  pollPaused?: boolean
 }
+
+/**
+ * Синтетические подключения для `?preview=1` — разработка без портала и ВИЗУАЛЬНЫЕ ЭТАЛОНЫ (#3).
+ *
+ * ⚠ Заведено потому, что вне портала список ВСЕГДА пуст (нет фрейм-токена), а значит ни один
+ * скриншот и ни один визуальный эталон не показывали строку подключения ВООБЩЕ. Всё, что живёт в
+ * строке — бейджи состояния, выбор счёта, пауза, подтверждение отключения, — не было прикрыто
+ * визуальной регрессией ни разу; проверить своё изменение глазами было негде.
+ *
+ * ⚠ Случай намеренно ИНТЕРЕСНЫЙ: рабочее подключение, приостановленное и незавершённое. Список,
+ * снятый в состоянии «одна обычная строка», не документирует ничего из того, ради чего он сделан.
+ *
+ * ⚠ Данные СИНТЕТИЧЕСКИЕ и обязаны такими остаться: они попадают и в коммитимые эталоны, и в
+ * публичный JS-чанк, то есть настоящий номер счёта здесь — это публикация реквизитов.
+ *
+ * ⚠ Метки времени НУЛЕВЫЕ намеренно, и «починить» их нельзя. Состояние подключения считается по
+ * ВОЗРАСТУ пары (`connectionHealth(a, Date.now())`), поэтому любая фиксированная дата рано или
+ * поздно всё равно станет «истекло», а дата, вычисленная от `Date.now()`, сделала бы снимок
+ * НЕДЕТЕРМИНИРОВАННЫМ — строка «подключён N назад» менялась бы каждый день, и визуальная джоба
+ * краснела бы вечно и не по делу. Отсюда первый ряд с бейджем «подключение истекло»: это не
+ * недосмотр, а цена детерминированности. Показанные состояния при этом честные — истёкшее,
+ * приостановленное и незавершённое подключения администратор увидит все три.
+ */
+export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
+  {
+    id: 1,
+    provider: 'alfa-by',
+    accountKey: 'BY00ALFA00000000000000000001',
+    connectedAt: 0,
+    expiresAt: 0,
+    hasRefresh: true,
+    consentExpiresAt: 0,
+    pollPaused: false
+  },
+  {
+    id: 2,
+    provider: 'prior-by',
+    accountKey: 'BY00PJCB00000000000000000002',
+    connectedAt: 0,
+    expiresAt: 0,
+    hasRefresh: true,
+    consentExpiresAt: 0,
+    pollPaused: true
+  },
+  {
+    id: 3,
+    provider: 'prior-by',
+    accountKey: '~pending:preview',
+    connectedAt: 0,
+    expiresAt: 0,
+    hasRefresh: false,
+    consentExpiresAt: 0,
+    pollPaused: false
+  }
+]
 
 export function useBankAccounts() {
   const accounts = ref<ConnectedBankAccount[]>([])
   const loading = ref(false)
   const removing = ref('')
   const saving = ref('')
+  /** Ключ строки, у которой сейчас переключается пауза (#576) — свой флаг, чтобы кнопка паузы не
+   *  блокировала «Отключить» на той же строке и наоборот. */
+  const pausing = ref('')
   const error = ref('')
   /** True once a load has resolved — lets the UI tell «пусто» apart from «ещё не спрашивали». */
   const loaded = ref(false)
@@ -97,6 +163,38 @@ export function useBankAccounts() {
     }
   }
 
+  /**
+   * Приостановить или возобновить автоопрос одного подключения (#576).
+   *
+   * ⚠ После успеха перечитываем список с сервера, а не правим локально: оптимистичная правка
+   * соврала бы ровно в том случае, ради которого сервер вообще отвечает статусами — когда строка
+   * под пользователем изменилась.
+   */
+  async function setPaused(account: Pick<ConnectedBankAccount, 'id' | 'provider' | 'accountKey'>, paused: boolean): Promise<boolean> {
+    const a = frameAuth()
+    if (!a) {
+      error.value = 'Управление опросом доступно только внутри портала Bitrix24'
+      return false
+    }
+    pausing.value = rowKey(account)
+    error.value = ''
+    try {
+      await $fetch('/api/bank/pause', {
+        method: 'POST',
+        headers: authHeaders(a),
+        // `id` адресует строку, `accountKey` едет как ОЖИДАНИЕ — сервер сверит его с текущим (#517).
+        body: { id: account.id, provider: account.provider, accountKey: account.accountKey, paused }
+      })
+      await load()
+      return true
+    } catch (e) {
+      error.value = pausePollErrorMessage(e, paused)
+      return false
+    } finally {
+      pausing.value = ''
+    }
+  }
+
   /** Назначить счёт подключению, сделанному без него (#407). Переименовывается только временный
    *  ключ — сервер это и проверяет; здесь просто UI-обёртка. */
   async function setAccount(account: Pick<ConnectedBankAccount, 'provider' | 'accountKey'>, accountKey: string): Promise<boolean> {
@@ -130,5 +228,5 @@ export function useBankAccounts() {
     }
   }
 
-  return { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey }
+  return { accounts, loading, loaded, removing, saving, pausing, error, load, disconnect, setPaused, setAccount, rowKey }
 }

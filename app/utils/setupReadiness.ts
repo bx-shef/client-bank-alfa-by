@@ -42,6 +42,15 @@ export interface ReadinessSnapshot {
    * настройка не закончена, здесь она была закончена и сломалась.
    */
   unhealthyAccounts?: number
+  /**
+   * How many connections have their automatic poll PAUSED (#576).
+   *
+   * ⚠ Kept apart from both `connectedAccounts` and `unhealthyAccounts`: this is an admin's CHOICE,
+   * not a fault, so it never paints the bank line red. Staying silent is not an option either —
+   * with every account paused, «Автоопрос: каждые N мин» would simply be a lie, and the silence
+   * would be hunted down at the bank.
+   */
+  pausedAccounts?: number
   /** Server-side poll gate (`CRON_REAL_POLL`) — OFF means no automatic polling at all. */
   pollEnabled: boolean
   /** Poll period in minutes (`CRON_INTERVAL_MIN`). */
@@ -89,6 +98,7 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
   // ⚠ Дефолт 0, а не «считать сломанным»: старый сервер поля не пришлёт, и красная строка на
   // исправном портале была бы хуже отсутствия проверки.
   const unhealthy = snap.unhealthyAccounts ?? 0
+  const paused = snap.pausedAccounts ?? 0
 
   return [
     // «Моя компания» идёт ПЕРВОЙ, раньше банка, и это порядок действий, а не важности: без неё
@@ -168,16 +178,51 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
       detail: spReady ? 'созданы' : 'не созданы',
       hint: spReady ? '' : 'Нажмите «Настроить смарт-процессы». Без них приложение не сможет вести учёт распределения оплат.'
     },
-    {
+    pollLine(snap, paused, snap.connectedAccounts)
+  ]
+}
+
+/**
+ * The «Автоматический опрос банка» line (#576 added the pause to it).
+ *
+ * Three states, and they differ by WHO can change them:
+ *   disabled on the server — the portal admin can do nothing, that is the app owner's switch;
+ *   every account paused  — the admin turned it off and turns it back on; not a problem;
+ *   some accounts paused  — polling runs, but not for every account; staying silent would mislead.
+ *
+ * ⚠ A pause does NOT make the line red. Red here means «setup is not finished», while a pause is
+ * finished setup being used. Painting it red would train the admin to see red on a screen they put
+ * into that state themselves.
+ */
+function pollLine(snap: ReadinessSnapshot, paused: number, connected: number): ReadinessItem {
+  if (!snap.pollEnabled) {
+    return {
       key: 'poll',
       title: 'Автоматический опрос банка включён',
-      ok: snap.pollEnabled,
-      detail: snap.pollEnabled ? `каждые ${snap.pollIntervalMin} мин` : 'выключен',
+      ok: false,
+      detail: 'выключен',
       // The gate is server-side, so a portal admin genuinely cannot fix this themselves — say so
       // instead of showing an action they can't perform.
-      hint: snap.pollEnabled ? '' : 'Опрос выключен на сервере приложения. Обратитесь к владельцу приложения — из портала это не включается.'
+      hint: 'Опрос выключен на сервере приложения. Обратитесь к владельцу приложения — из портала это не включается.'
     }
-  ]
+  }
+  const every = `каждые ${snap.pollIntervalMin} мин`
+  if (paused > 0 && connected > 0 && paused >= connected) {
+    return {
+      key: 'poll',
+      title: 'Автоматический опрос банка включён',
+      ok: true,
+      detail: `${every}, но все подключения на паузе`,
+      hint: 'Опрос приостановлен вами — возобновите его в разделе «Подключение банка», когда снова понадобится выписка.'
+    }
+  }
+  return {
+    key: 'poll',
+    title: 'Автоматический опрос банка включён',
+    ok: true,
+    detail: paused > 0 ? `${every}; ${paused} ${pluralRu(paused, ['подключение', 'подключения', 'подключений'])} на паузе` : every,
+    hint: ''
+  }
 }
 
 /** True when every checklist line is ok — the app is fully set up. */

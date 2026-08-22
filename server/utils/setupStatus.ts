@@ -18,7 +18,7 @@ export interface SetupStatusDeps {
   memberIdByDomain: (domain: string) => Promise<string | null>
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
   /** Счета портала: подключённые (с выбранным номером) и ожидающие выбора (#407). */
-  countAccounts: (memberId: string) => Promise<{ connected: number, pending: number, unhealthy?: number }>
+  countAccounts: (memberId: string) => Promise<{ connected: number, pending: number, unhealthy?: number, paused?: number }>
   /** Server gate `CRON_REAL_POLL` — automatic polling runs at all. */
   pollEnabled: boolean
   /** Cron period in minutes (`CRON_INTERVAL_MIN`). */
@@ -67,6 +67,10 @@ export async function handleSetupStatus(
       // готовности о нём напомнил — иначе это тихая дыра.
       pendingAccounts: counts.pending,
       unhealthyAccounts: counts.unhealthy ?? 0,
+      // Приостановленные подключения (#576). ⚠ Считаются ОТДЕЛЬНО от «не работает»: это выбор
+      // администратора, а не поломка. Но и молчать нельзя — при всех счетах на паузе строка
+      // «Автоопрос: каждые N мин» была бы просто ложью, и человек искал бы причину тишины в банке.
+      pausedAccounts: counts.paused ?? 0,
       pollEnabled: deps.pollEnabled,
       pollIntervalMin: deps.pollIntervalMin,
       lastRunMs,

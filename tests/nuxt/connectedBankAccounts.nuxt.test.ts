@@ -300,3 +300,57 @@ describe('срок согласия банка (#503)', () => {
     expect((await mountReady()).text()).not.toContain('согласие банка действует')
   })
 })
+
+describe('#576 пауза автоопроса', () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: 7, provider: 'alfa-by', accountKey: 'BY01ALFA0001',
+    connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true, pollPaused: false, ...over
+  })
+  const pauseBtn = (w: { findAll: (s: string) => { text: () => string, trigger: (e: string) => Promise<void> }[] }) =>
+    w.findAll('button').find(b => b.text().includes('Пауза') || b.text().includes('Возобновить'))
+
+  it('обычное подключение предлагает «Пауза», приостановленное — «Возобновить»', async () => {
+    listReply.value = [row()]
+    expect(pauseBtn(await mountReady())!.text()).toContain('Пауза')
+
+    listReply.value = [row({ pollPaused: true })]
+    expect(pauseBtn(await mountReady())!.text()).toContain('Возобновить')
+  })
+
+  it('приостановленное подключение помечено бейджем, а не выглядит сломанным', async () => {
+    // ⚠ Подключение при этом ЖИВОЕ — токен продлевается, грант цел. Строка не должна читаться как
+    // поломка, иначе админ пойдёт чинить то, что сам и выключил.
+    listReply.value = [row({ pollPaused: true })]
+    expect((await mountReady()).text()).toContain('опрос на паузе')
+  })
+
+  it('шлёт неизменяемый id и ожидаемый номер счёта, а не только номер', async () => {
+    // ⚠ Номер МЕНЯЕТСЯ при выборе счёта, поэтому адресация только по нему промахивалась бы мимо
+    // строки — тот же дефект, что чинил #517 у отключения.
+    listReply.value = [row()]
+    const wrapper = await mountReady()
+    await pauseBtn(wrapper)!.trigger('click')
+    await flushPromises()
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/pause')
+    expect(call).toBeTruthy()
+    expect((call![1] as { body: Record<string, unknown> }).body)
+      .toEqual({ id: 7, provider: 'alfa-by', accountKey: 'BY01ALFA0001', paused: true })
+  })
+
+  it('у подключения БЕЗ выбранного счёта кнопки паузы нет', async () => {
+    // Опрашивать там нечего (у банка нет такого «номера»), значит и приостанавливать нечего.
+    listReply.value = [row({ accountKey: PENDING })]
+    expect(pauseBtn(await mountReady())).toBeUndefined()
+  })
+
+  it('пока хоть одно подключение на паузе — предупреждаем о потере дней', async () => {
+    // ⚠ Приложение забирает выписку за ОКНО (сутки), а не за всё пропущенное: после долгой паузы
+    // пропущенные дни не подтянутся никогда. Молчать об этом — значит знать о потере данных и не
+    // сказать.
+    listReply.value = [row({ pollPaused: true })]
+    expect((await mountReady()).text()).toContain('за пропущенные дни')
+
+    listReply.value = [row()]
+    expect((await mountReady()).text()).not.toContain('за пропущенные дни')
+  })
+})

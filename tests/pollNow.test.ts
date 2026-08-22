@@ -4,10 +4,10 @@ import type { BankAccountRef } from '../server/utils/bankTokenStore'
 import type { FetchJob } from '../server/queue/topology'
 
 const ACCOUNTS: BankAccountRef[] = [
-  { memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01' },
-  { memberId: 'm1', provider: 'alfa-by', accountKey: 'BY02' },
-  { memberId: 'm1', provider: 'prior-by', accountKey: 'BY03' }, // pollable (own queue+limiter)
-  { memberId: 'm1', provider: 'manual', accountKey: 'BY04' } // filtered out (no online fetch)
+  { memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01', pollPaused: false },
+  { memberId: 'm1', provider: 'alfa-by', accountKey: 'BY02', pollPaused: false },
+  { memberId: 'm1', provider: 'prior-by', accountKey: 'BY03', pollPaused: false }, // pollable (own queue+limiter)
+  { memberId: 'm1', provider: 'manual', accountKey: 'BY04', pollPaused: false } // filtered out (no online fetch)
 ]
 
 const deps = (over: Partial<PollNowDeps> = {}): PollNowDeps => ({

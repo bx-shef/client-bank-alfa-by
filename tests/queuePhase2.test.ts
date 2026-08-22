@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { OperationDirection, StatementItem } from '../app/types/statement'
+import type { BankProviderId, OperationDirection, StatementItem } from '../app/types/statement'
 import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
 import {
@@ -1585,15 +1585,20 @@ describe('cron helpers', () => {
     // omitted → no epoch key at all (base job-id stays stable)
     expect(planFetches([{ memberId: 'M', providerId: 'alfa-by', accounts: ['A1'] }], '2026-07-01', '2026-07-02')[0]!.epoch).toBeUndefined()
   })
+  /** Обычное (не приостановленное) подключение — фикстура для планировщика опроса. */
+  const live = (memberId: string, provider: BankProviderId, accountKey: string) => (
+    { memberId, provider, accountKey, pollPaused: false }
+  )
+
   it('accountsForPolling groups by portal+provider, dedups, filters non-pollable + demo (A6)', () => {
     const out = accountsForPolling([
-      { memberId: 'M1', provider: 'alfa-by', accountKey: 'A1' },
-      { memberId: 'M1', provider: 'alfa-by', accountKey: 'A1' }, // dup → collapsed
-      { memberId: 'M1', provider: 'alfa-by', accountKey: 'A2' },
-      { memberId: 'M2', provider: 'alfa-by', accountKey: 'B1' },
-      { memberId: 'M1', provider: 'prior-by', accountKey: 'P1' }, // prior is pollable (own queue)
-      { memberId: 'M1', provider: 'alfa-by', accountKey: `${DEMO_ACCOUNT_PREFIX}x` }, // demo → dropped
-      { memberId: 'M1', provider: 'manual', accountKey: 'U1' } // no online fetch → dropped
+      live('M1', 'alfa-by', 'A1'),
+      live('M1', 'alfa-by', 'A1'), // dup → collapsed
+      live('M1', 'alfa-by', 'A2'),
+      live('M2', 'alfa-by', 'B1'),
+      live('M1', 'prior-by', 'P1'), // prior is pollable (own queue)
+      live('M1', 'alfa-by', `${DEMO_ACCOUNT_PREFIX}x`), // demo → dropped
+      live('M1', 'manual', 'U1') // no online fetch → dropped
     ])
     expect(out).toEqual([
       { memberId: 'M1', providerId: 'alfa-by', accounts: ['A1', 'A2'] },
@@ -1610,11 +1615,29 @@ describe('cron helpers', () => {
     // У банка нет такого «номера»: задача падала бы на каждом тике вечно, сжигая общий лимит
     // запросов (у Приора одна задача ~10 запросов) и забивая лог. Ждём привязки счёта.
     const out = accountsForPolling([
-      { memberId: 'M', provider: 'alfa-by', accountKey: provisionalAccountKey('n1') },
-      { memberId: 'M', provider: 'alfa-by', accountKey: 'BY01ALFA' }
+      live('M', 'alfa-by', provisionalAccountKey('n1')),
+      live('M', 'alfa-by', 'BY01ALFA')
     ])
     expect(out).toEqual([{ memberId: 'M', providerId: 'alfa-by', accounts: ['BY01ALFA'] }])
   })
+  it('#576 приостановленное подключение НЕ опрашивается', () => {
+    const out = accountsForPolling([
+      { ...live('M', 'alfa-by', 'BY01ALFA'), pollPaused: true },
+      live('M', 'alfa-by', 'BY02ALFA')
+    ])
+    expect(out).toEqual([{ memberId: 'M', providerId: 'alfa-by', accounts: ['BY02ALFA'] }])
+  })
+
+  it('#576 пауза на ВСЕХ счетах портала убирает портал из плана целиком', () => {
+    // ⚠ Не то же, что «ноль счетов»: строки в базе есть, токены продлеваются, подключение живо —
+    // просто ходить за выпиской не надо. Пустой план здесь и есть правильный исход.
+    const out = accountsForPolling([
+      { ...live('M', 'alfa-by', 'BY01ALFA'), pollPaused: true },
+      { ...live('M', 'prior-by', 'BY02PJCB'), pollPaused: true }
+    ])
+    expect(out).toEqual([])
+  })
+
   it('pollWindow returns [today-lookback, today] as ISO YYYY-MM-DD', () => {
     const now = new Date('2026-07-17T09:30:00.000Z')
     expect(pollWindow(now, 0)).toEqual({ dateFrom: '2026-07-17', dateTo: '2026-07-17' })

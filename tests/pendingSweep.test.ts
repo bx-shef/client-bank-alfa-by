@@ -24,6 +24,7 @@ function row(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     connectedAt: NOW - DAY * 3,
     expiresAt: NOW + 3600_000,
     hasRefresh: true,
+    pollPaused: false,
     consentExpiresAt: 0,
     id: 1,
     lastAttemptAt: 0,

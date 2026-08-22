@@ -21,6 +21,11 @@ const ADMIN_ONLY = [
   'bank/connect.post.ts',
   'bank/disconnect.post.ts',
   'bank/matrix.get.ts',
+  // ⚠ Пауза автоопроса — админская (#576) по тому же доводу, что подключение и отключение: банк
+  // привязан ко ВСЕМУ порталу, и остановка импорта затрагивает всех его сотрудников, а не того,
+  // кто нажал. Бухгалтеру, у которого «перестала приходить выписка», нечего противопоставить
+  // коллеге, который её тихо поставил на паузу.
+  'bank/pause.post.ts',
   'bank/set-account.post.ts',
   'distribution/ledger.get.ts',
   'distribution/provision.post.ts',
@@ -97,6 +102,7 @@ describe('кто может звать маршруты приложения (#5
       'bank/connect.post.ts': 'bankConnectStart',
       'bank/disconnect.post.ts': 'bankAccounts',
       'bank/matrix.get.ts': 'bankMatrix',
+      'bank/pause.post.ts': 'bankAccounts',
       'bank/set-account.post.ts': 'bankAccounts',
       'distribution/ledger.get.ts': 'ledgerRequest',
       'distribution/provision.post.ts': 'provisionRequest',

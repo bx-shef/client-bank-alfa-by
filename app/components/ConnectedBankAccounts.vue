@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useBankAccounts, type ConnectedBankAccount } from '~/composables/useBankAccounts'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useBankAccounts, PREVIEW_BANK_ACCOUNTS, type ConnectedBankAccount } from '~/composables/useBankAccounts'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
+import { isPreviewQuery } from '~/utils/inPortalGate'
 import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMatrix'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
@@ -23,7 +24,8 @@ const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), 
 // же, и оставить одну устаревшей — значит показать противоречие самому себе.
 const emit = defineEmits<{ changed: [] }>()
 
-const { accounts, loading, loaded, removing, saving, error, load, disconnect, setAccount, rowKey } = useBankAccounts()
+const { accounts, loading, loaded, removing, saving, pausing, error, load, disconnect, setPaused, setAccount, rowKey } = useBankAccounts()
+const route = useRoute()
 
 /** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
  *  провайдера: один и тот же номер у разных банков это разные строки хранилища. */
@@ -56,7 +58,48 @@ const drafts = ref<Record<string, string>>({})
  *  deliberate second click rather than a native confirm() — the latter is blocked in some iframes. */
 const confirming = ref('')
 
-onMounted(load)
+/**
+ * Превью-ветка (#3) — синтетический список для `?preview=1`.
+ *
+ * ⚠ Обязательна по той же причине, что у карточки здоровья на `/queues`: вне портала фрейм-токена
+ * нет, список ВСЕГДА пуст, и ни один скриншот и ни один визуальный эталон не показывали строку
+ * подключения вообще. Всё, что живёт в строке — бейджи состояния, выбор счёта, пауза, подтверждение
+ * отключения — не было прикрыто визуальной регрессией ни разу.
+ *
+ * ⚠ Флаг читается РЕАКТИВНО, а не один раз в `onMounted`, и это не стиль. На ПРЕРЕНДЕРЕННОЙ
+ * странице Nuxt гидратирует на голом пути и восстанавливает настоящий адрес позже (#555), поэтому
+ * `onMounted` видит пустую строку запроса. Первая версия читала флаг там — и превью молча не
+ * работало: снимок показывал «Пока ничего не подключено» ровно на том экране, ради которого
+ * заводился (проверено на собранной статике).
+ *
+ * ⚠ Превью побеждает В ОБЕ СТОРОНЫ, а не «watch приходит позже и затирает». Прежняя версия
+ * полагалась на второе, и вне портала это верно (у `load()` ранний выход БЕЗ единого `await`), но
+ * ВНУТРИ портала с реальным токеном — нет: `load()` уходит в сеть и возвращается ПОСЛЕ `watch`,
+ * молча затирая фикстуру. То есть `/settings?preview=1`, открытый в портале, давал результат по
+ * гонке двух источников, ни один из которых не сверялся с другим (находка ревью). Поэтому флаг
+ * проверяется дважды: реактивно и ещё раз после ответа сети.
+ *
+ * ⚠ `onNuxtReady` (приём мидлвара слайдера, #555) здесь НЕ подходит: в тестовой среде
+ * `mountSuspended` он не срабатывает вовсе, и компонент перестаёт загружаться — проверено, три
+ * существующих теста стали красными. Приём верен для мидлвара, но не для компонента.
+ */
+const preview = computed(() => isPreviewQuery(route.query.preview))
+
+function usePreviewFixture(): void {
+  accounts.value = PREVIEW_BANK_ACCOUNTS
+  loaded.value = true
+}
+
+watch(preview, (isPreview) => {
+  if (isPreview) usePreviewFixture()
+}, { immediate: true })
+
+onMounted(async () => {
+  if (preview.value) return
+  await load()
+  // Адрес мог восстановиться, пока шёл запрос (#555) — тогда победить обязано превью.
+  if (preview.value) usePreviewFixture()
+})
 
 function providerLabel(id: ConnectedBankAccount['provider']): string {
   return BANK_LABELS[id] ?? id
@@ -200,6 +243,16 @@ defineExpose({ reload: load })
                 :label="healthBadge(a)!.label"
                 :title="healthBadge(a)!.hint"
               />
+              <!-- Пауза автоопроса (#576). ⚠ Отдельный бейдж, а не цвет строки: подключение при
+                   этом ЖИВОЕ — токен продлевается, грант цел, — и покрасить строку «как сломанную»
+                   значило бы отправить администратора чинить то, что он сам и выключил. -->
+              <B24Badge
+                v-if="a.pollPaused"
+                color="air-secondary-accent-1"
+                size="xs"
+                label="опрос на паузе"
+                title="Подключение живо и токен продлевается — приложение просто не ходит за выпиской"
+              />
             </div>
             <!-- Подключение без счёта (#407): строка есть, номера ещё нет — просим выбрать прямо
                  здесь, иначе такое подключение было бы «висящим» и непонятным. -->
@@ -270,6 +323,21 @@ defineExpose({ reload: load })
           </div>
 
           <div class="flex items-center gap-2">
+            <!-- Пауза опроса (#576). Стоит РЯДОМ с «Отключить» намеренно: это и есть тот выбор,
+                 которого не хватало — раньше «слишком много операций» лечилось только отключением,
+                 а оно стоит владельцу счёта повторного входа в интернет-банк. Подтверждения не
+                 требует: действие обратимо тем же нажатием. Для незавершённого подключения кнопки
+                 нет — опрашивать там нечего, ставить на паузу нечего. -->
+            <B24Button
+              v-if="!isPendingAccountKey(a.accountKey) && confirming !== rowKey(a)"
+              :label="a.pollPaused ? 'Возобновить' : 'Пауза'"
+              :aria-label="`${a.pollPaused ? 'Возобновить' : 'Приостановить'} опрос — ${rowLabel(a)}`"
+              color="air-tertiary-no-accent"
+              size="xs"
+              :loading="pausing === rowKey(a)"
+              :disabled="pausing === rowKey(a)"
+              @click="setPaused(a, !a.pollPaused)"
+            />
             <template v-if="confirming === rowKey(a)">
               <span
                 class="text-xs text-(--ui-color-base-3)"
@@ -306,8 +374,24 @@ defineExpose({ reload: load })
     </ul>
 
     <p class="text-xs text-(--ui-color-base-3)">
-      Отключение убирает доступ приложения к счёту — операции по нему перестанут поступать.
-      Уже записанные в CRM данные остаются.
+      «Пауза» останавливает только автоматический опрос: доступ и подключение сохраняются, и
+      возобновить можно тем же нажатием. Отключение убирает доступ приложения к счёту — вернуть его
+      сможет только владелец счёта, заново авторизовавшись в интернет-банке. Уже записанные в CRM
+      данные остаются в обоих случаях.
+    </p>
+    <!-- ⚠ Молчать об этом нельзя. Приложение забирает выписку за ОКНО (по умолчанию сутки), а не
+         «всё, что накопилось»: после паузы длиннее окна пропущенные дни не подтянутся НИКОГДА и
+         НИ ОДНОЙ строкой в интерфейсе. Человек, поставивший опрос на паузу на неделю, обнаружил бы
+         это только сверкой с банком — то есть потерей данных, о которой мы знали и промолчали.
+         Лекарство есть и оно рядом: ручная загрузка файла выписки за нужный период. -->
+    <p
+      v-if="accounts.some(a => a.pollPaused)"
+      class="text-xs text-(--ui-color-accent-main-warning)"
+      role="status"
+    >
+      Пока опрос на паузе, операции за пропущенные дни в CRM не попадут: приложение забирает
+      выписку за последние сутки, а не за всё пропущенное время. Если пауза затянется — загрузите
+      файл выписки за этот период вручную на странице «Загрузить выписку».
     </p>
   </section>
 </template>

@@ -21,6 +21,12 @@
 //
 // Pure over injected I/O (DI) like the rest of `server/utils` — unit-testable without a bank.
 
+// ⚠ Сверка счетов СОЗНАТЕЛЬНО не смотрит на паузу автоопроса (#576). Пауза останавливает
+// АВТОМАТИЧЕСКИЙ поход за выпиской; сверка — разовое действие администратора, который прямо сейчас
+// открыл настройки и хочет увидеть, что банк вообще отдаёт. Отказать ему потому, что опрос на
+// паузе, значило бы спрятать единственный экран, по которому он проверяет, всё ли настроено.
+// Записано явно, чтобы следующий читатель не счёл это забытым путём (находка ревью).
+
 import type { BankProviderId } from '../../app/types/statement'
 import type { BankSideAccount } from '../../app/utils/bankAccountMatrix'
 import { extractAccounts, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'

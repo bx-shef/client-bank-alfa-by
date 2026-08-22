@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   handleDisconnectBankAccount,
   handleListBankAccounts,
+  handlePauseBankPoll,
   handleSetBankAccount,
   type DisconnectDeps,
   type ListAccountsDeps,
+  type PausePollDeps,
   type SetAccountDeps
 } from '../server/utils/bankAccounts'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
@@ -24,6 +26,7 @@ const ROW: BankAccountInfo = {
   connectedAt: 1_700_000_000_000,
   expiresAt: 1_700_003_600_000,
   hasRefresh: true,
+  pollPaused: false,
   // ⚠ НЕНУЛЕВОЕ значение принципиально. С `undefined`/дефолтом `toEqual` сравнивает вакуумно:
   // Vitest игнорирует ключи со значением `undefined`, поэтому «точный состав полей» проходил и
   // тогда, когда поле вообще выпилили из ответа (#503, находка ревью).
@@ -48,6 +51,15 @@ function disconnectDeps(over: Partial<DisconnectDeps> = {}): DisconnectDeps {
   }
 }
 
+function pauseDeps(over: Partial<PausePollDeps> = {}): PausePollDeps {
+  return {
+    memberIdByDomain: async () => 'M1',
+    validateFrame: async () => ({ userId: '7', isAdmin: true }),
+    setPaused: async () => 'updated' as const,
+    ...over
+  }
+}
+
 const input = { accessToken: 't', domain: 'p.bitrix24.by' }
 
 describe('handleListBankAccounts', () => {
@@ -63,7 +75,8 @@ describe('handleListBankAccounts', () => {
       connectedAt: ROW.connectedAt,
       expiresAt: ROW.expiresAt,
       hasRefresh: true,
-      consentExpiresAt: ROW.consentExpiresAt
+      consentExpiresAt: ROW.consentExpiresAt,
+      pollPaused: false
     })
     // Отдельной строкой и на КОНКРЕТНОЕ значение: потеря поля по дороге беззвучна — сервер
     // продолжает хранить и считать дату, а предупреждения в интерфейсе просто нет.
@@ -208,6 +221,90 @@ describe('handleDisconnectBankAccount', () => {
       }
     })
     expect((await handleDisconnectBankAccount(deps, body)).status).toBe(403)
+    expect(touched).toBe(false)
+  })
+})
+
+describe('#576 handlePauseBankPoll — пауза автоопроса', () => {
+  const body = { ...input, id: 42, provider: 'alfa-by', accountKey: ' BY01ALFA0001 ', paused: true }
+
+  it('ставит на паузу по НЕИЗМЕНЯЕМОМУ адресу, номер счёта — только ожидание', async () => {
+    const seen: string[] = []
+    const res = await handlePauseBankPoll(pauseDeps({
+      setPaused: async (memberId, id, expected, paused) => {
+        seen.push(`${memberId}|${id}|${expected}|${paused}`)
+        return 'updated'
+      }
+    }), body)
+    expect(res.status).toBe(200)
+    expect(res.body.paused).toBe(true)
+    // memberId — из НАШЕГО поиска по домену, никогда из тела запроса.
+    expect(seen).toEqual(['M1|42|BY01ALFA0001|true'])
+  })
+
+  it('снимает паузу тем же вызовом', async () => {
+    const res = await handlePauseBankPoll(pauseDeps(), { ...body, paused: false })
+    expect(res.status).toBe(200)
+    expect(res.body.paused).toBe(false)
+  })
+
+  it('409, если строка изменилась под пользователем', async () => {
+    // За это время подключение могло стать другим — класть паузу вслепую нельзя.
+    const res = await handlePauseBankPoll(pauseDeps({ setPaused: async () => 'stale' }), body)
+    expect(res.status).toBe(409)
+  })
+
+  it('404, если строки нет — а НЕ идемпотентный успех', async () => {
+    // ⚠ Отличие от «Отключить»: там «строки нет» и есть желаемый исход, здесь просили изменить
+    // состояние строки, которой нет. Успех показал бы в интерфейсе паузу, которой в базе не
+    // существует.
+    const res = await handlePauseBankPoll(pauseDeps({ setPaused: async () => 'gone' }), body)
+    expect(res.status).toBe(404)
+  })
+
+  it('`paused` обязан быть булевым — строка «false» это 400, а не тихое включение паузы', async () => {
+    // ⚠ При мягком приведении `'false'` стало бы `true`: «возобновить» молча поставило бы на
+    // паузу, и человек искал бы причину тишины в банке.
+    let touched = false
+    const deps = pauseDeps({
+      setPaused: async () => {
+        touched = true
+        return 'updated'
+      }
+    })
+    expect((await handlePauseBankPoll(deps, { ...body, paused: 'false' as unknown as boolean })).status).toBe(400)
+    expect((await handlePauseBankPoll(deps, { ...body, paused: undefined as unknown as boolean })).status).toBe(400)
+    expect(touched).toBe(false)
+  })
+
+  it('отвергает кривой провайдер/адрес до обращения к хранилищу', async () => {
+    let touched = false
+    const deps = pauseDeps({
+      setPaused: async () => {
+        touched = true
+        return 'updated'
+      }
+    })
+    expect((await handlePauseBankPoll(deps, { ...body, provider: 'evil-bank' })).status).toBe(400)
+    expect((await handlePauseBankPoll(deps, { ...body, accountKey: '' })).status).toBe(400)
+    expect((await handlePauseBankPoll(deps, { ...body, id: 0 })).status).toBe(400)
+    // Сверхбольшое целое — 400, а не 500: pg отдал бы его в bigint экспонентой.
+    expect((await handlePauseBankPoll(deps, { ...body, id: 1e21 })).status).toBe(400)
+    expect(touched).toBe(false)
+  })
+
+  it('403 для не-админа — и ничего не меняет', async () => {
+    // Банк привязан ко ВСЕМУ порталу: остановка импорта затрагивает всех сотрудников, а не того,
+    // кто нажал.
+    let touched = false
+    const deps = pauseDeps({
+      validateFrame: async () => ({ userId: '9', isAdmin: false }),
+      setPaused: async () => {
+        touched = true
+        return 'updated'
+      }
+    })
+    expect((await handlePauseBankPoll(deps, body)).status).toBe(403)
     expect(touched).toBe(false)
   })
 })
