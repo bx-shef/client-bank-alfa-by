@@ -18,8 +18,15 @@ import { decodeUploadText } from '../../app/utils/importUpload'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
-import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_TRIGGER } from './topology'
-import type { CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob, TriggerFireJob } from './topology'
+import { Q_BINDINGS, Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_REGISTRY, Q_TRIGGER } from './topology'
+import type {
+  ActivityBindJob, CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob,
+  RegistryWriteJob, TriggerFireJob
+} from './topology'
+import {
+  handleActivityBindJob, handleRegistryWriteJob,
+  type ActivityBindJobDeps, type RegistryWriteJobDeps
+} from '../utils/deferredWriteJobs'
 import { handleFeedbackPostJob, type FeedbackPostJobDeps } from '../utils/feedbackPostJob'
 import { handleTriggerFireJob, type TriggerFireJobDeps } from '../utils/triggerFireJob'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
@@ -33,7 +40,7 @@ import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob,
   MAX_RESOLVED_INTENTS_PER_OP, type HandlerDeps
 } from './handlers'
-import { enqueueCrmSync, enqueueTriggerFire } from './producers'
+import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
@@ -501,6 +508,24 @@ export function liveHandlerDeps(): HandlerDeps {
     // queue so it self-heals with backoff. BEST-EFFORT — never throws (a trigger only signals). Demo
     // gated (defensive; applyTrigger already returns 'skip' for demo). No Redis ⇒ enqueue no-ops ⇒
     // graceful degrade to single-shot. The job carries only target ids + the app CODE (no financial PII).
+    // Дозапись элемента реестра (#578) и привязок дела (#585). Обе — best-effort постановки:
+    // демо-счета не ставим вовсе, отказ постановки глотаем (без Redis это и так no-op), потому что
+    // задача-починка не имеет права отменить обработку пачки, ради которой всё и делается.
+    enqueueRegistryRetry: async (item, companyId, memberId, provider, paymentSp) => {
+      try {
+        if (isDemoAccount(item.account)) return
+        await enqueueRegistryWrite({ memberId, providerId: provider, item, companyId, paymentSp })
+      } catch (e) {
+        crmLog.warning(`portal ${memberId}: дозапись реестра не поставлена — ${logSafe(String((e as Error)?.message ?? e))}`)
+      }
+    },
+    enqueueBindRetry: async (activityId, refs, memberId) => {
+      try {
+        await enqueueActivityBind({ memberId, activityId, refs })
+      } catch (e) {
+        crmLog.warning(`portal ${memberId}: дозапись привязок не поставлена — ${logSafe(String((e as Error)?.message ?? e))}`)
+      }
+    },
     enqueueTriggerRetry: async (item, target, memberId, code) => {
       try {
         if (isDemoAccount(item.account)) return
@@ -842,6 +867,34 @@ export function startFeedbackWorker(deps: FeedbackPostJobDeps): Worker {
     'job.queue': 'feedback-post',
     'portal.hash': portalHash(job.data.memberId)
   }, () => handleFeedbackPostJob(job.data, deps)), { connection: connectionOptions() })
+}
+
+/** Живые зависимости воркеров дозаписи в CRM (#578/#585) — тот же токен и тот же транспорт, что у
+ *  синхронного пути. Батч воркеру привязок НЕ даётся сознательно: см. `handleActivityBindJob`. */
+export function liveRegistryWriteDeps(): RegistryWriteJobDeps {
+  return { resolvePortalCall, writePaymentRegistry: writePaymentRegistryViaRest }
+}
+
+export function liveActivityBindDeps(): ActivityBindJobDeps {
+  return { resolvePortalCall, bindActivity: bindActivityViaRest }
+}
+
+/** Воркер дозаписи элемента реестра (#578). Запись идемпотентна по маркеру операции и дописывает
+ *  колонки уже существующему элементу, поэтому повтор безопасен и на частично сделанной работе. */
+export function startRegistryWorker(deps: RegistryWriteJobDeps): Worker {
+  return new Worker<RegistryWriteJob>(Q_REGISTRY, async job => withSpan('registry-write', {
+    'job.queue': 'registry-write',
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleRegistryWriteJob(job.data, deps)), { connection: connectionOptions() })
+}
+
+/** Воркер дозаписи привязок дела (#585). Ставит только недостающие пары (читает `binding.list`),
+ *  поэтому повтор не превращается в поток «уже привязано». */
+export function startBindingsWorker(deps: ActivityBindJobDeps): Worker {
+  return new Worker<ActivityBindJob>(Q_BINDINGS, async job => withSpan('activity-bind', {
+    'job.queue': 'activity-bind',
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleActivityBindJob(job.data, deps)), { connection: connectionOptions() })
 }
 
 /** Live deps for the trigger-retry worker (#79): re-fire via the SAME transport as the sync path,

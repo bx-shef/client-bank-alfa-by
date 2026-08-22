@@ -86,7 +86,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [], regRetry: [], bindRetry: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -119,6 +119,12 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       // ⚠ ЧИСЛОВОЙ id, как отдаёт настоящий `crm.item.add`: привязки дела (#579) отбраковывают
       // нечисловой, и символическая заглушка молча выключила бы половину проверок.
       return `${100 + calls.registry.length}`
+    },
+    enqueueRegistryRetry: async (it, companyId, memberId, provider, paymentSp) => {
+      calls.regRetry.push([it.docId, companyId, memberId, provider, paymentSp.entityTypeId])
+    },
+    enqueueBindRetry: async (activityId, refs, memberId) => {
+      calls.bindRetry.push([activityId, refs.map(r => `${r.entityTypeId}:${r.entityId}`), memberId])
     },
     bindActivity: async (activityId, refs, memberId) => {
       calls.bind.push([activityId, refs.map(r => `${r.entityTypeId}:${r.entityId}`), memberId])
@@ -1956,6 +1962,69 @@ describe('#579 привязки дела к сущностям CRM', () => {
     const refs = (calls.bind[0] as [string, string[], string])[1]
     expect(refs, 'вытеснена «моя компания»').toContain('4:9')
     expect(refs.length).toBeLessThanOrEqual(6)
+  })
+
+  it('#585 упавшие привязки уходят в долговременную дозапись — списком ЦЕЛИКОМ', async () => {
+    // ⚠ Ставим весь список, а не «те, что упали»: транспорт не говорит, какие именно, а воркер всё
+    // равно читает `binding.list` и ставит только недостающее. Повторная привязка той же пары —
+    // ошибка, поэтому слепой повтор был бы хуже отсутствия ретрая.
+    const { deps, calls } = fakeDeps({
+      recognition: spMatrix, company: '5', myCompany: '9', bindOutcome: { bound: 1, failed: 1 }
+    })
+    const r = await handleCrmSyncJob(job([item('a')]), deps)
+    expect(r.bindingsFailed).toBe(1)
+    expect(calls.bindRetry).toHaveLength(1)
+    const [activityId, refs] = calls.bindRetry[0] as [string, string[], string]
+    expect(activityId).toBe('act-1')
+    expect(refs).toEqual((calls.bind[0] as [string, string[], string])[1])
+  })
+
+  it('#585 удавшиеся привязки НЕ ставят задачу', async () => {
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, company: '5', myCompany: '9' })
+    await handleCrmSyncJob(job([item('a')]), deps)
+    expect(calls.bindRetry).toHaveLength(0)
+  })
+
+  it('#585 отказ ПОСТАНОВКИ задачи не роняет пачку', async () => {
+    // Постановка — это починка. Уронив ею обработку, мы разменяли бы связь одной операции на
+    // импорт всех остальных.
+    const { deps, calls } = fakeDeps({
+      recognition: spMatrix, company: '5', myCompany: '9', bindOutcome: { bound: 0, failed: 2 }
+    })
+    deps.enqueueBindRetry = async () => {
+      throw new Error('Redis лёг')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.bindingsFailed).toBe(2)
+  })
+
+  it('#578 упавшая запись реестра уходит в долговременную дозапись', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: spConfig }, company: '5'
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('СП удалён на портале')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(r.registryFailed).toBe(2)
+    expect(calls.regRetry).toHaveLength(2)
+    expect((calls.regRetry[0] as unknown[])[4], 'потерян смарт-процесс, в который писать').toBe(1044)
+  })
+
+  it('#578 отказ ПОСТАНОВКИ задачи не роняет пачку', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: spConfig }, company: '5'
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('СП удалён на портале')
+    }
+    deps.enqueueRegistryRetry = async () => {
+      throw new Error('Redis лёг')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.registryFailed).toBe(2)
   })
 
   it('#579 отказ привязок ВИДЕН в строке итога и отдельно от реестра', () => {

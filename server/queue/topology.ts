@@ -15,6 +15,7 @@
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { IssuePayload } from '../../app/utils/feedback'
 import type { AllocationTargetKind } from '../../app/utils/allocation'
+import type { SpRef } from '../../app/config/distributionSp'
 
 export const Q_EVENTS = 'b24-events'
 export const Q_FETCH = 'bank-fetch'
@@ -36,9 +37,20 @@ export const Q_CRM = 'crm-sync'
 export const Q_DELETIONS = 'b24-deletions'
 export const Q_FEEDBACK = 'feedback-post'
 export const Q_TRIGGER = 'trigger-fire'
+/**
+ * Долговременный ретрай ЗАПИСИ В РЕЕСТР платежей (#578) и ПРИВЯЗОК дела (#585).
+ *
+ * ⚠ Очереди ДВЕ, а не одна общая «дозапись в CRM», хотя болезнь у них одна. Разное всё, что важно
+ * для очереди: payload реестра несёт операцию выписки (финансовые ПДн ⇒ ограниченное по возрасту
+ * удержание, #245), payload привязок — только id сущностей CRM; у реестра ретрай лечит отказ
+ * записи, у привязок — ещё и частично применённый батч. Общая очередь заставила бы каждого
+ * потребителя разбирать вид задачи, а бюджет простоя (`queueAlert`) стал бы средним по больнице.
+ */
+export const Q_REGISTRY = 'registry-write'
+export const Q_BINDINGS = 'activity-bind'
 
 /** All queue names, for wiring workers/monitoring. */
-export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER] as const
+export const QUEUE_NAMES = [Q_EVENTS, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_CRM, Q_DELETIONS, Q_FEEDBACK, Q_TRIGGER, Q_REGISTRY, Q_BINDINGS] as const
 export type QueueName = typeof QUEUE_NAMES[number]
 
 /** Portal credentials to persist on register (ONAPPINSTALL). `refreshTokenEnc` is
@@ -184,6 +196,40 @@ export interface TriggerFireJob {
   opKey: string
 }
 
+/**
+ * Запись элемента реестра платежей, не удавшаяся синхронно (#578).
+ *
+ * ⚠ Несёт САМУ ОПЕРАЦИЮ выписки — иначе колонки реестра неоткуда взять. Это финансовые ПДн, как и
+ * в `crm-sync`, поэтому удержание задачи ограничено по ВОЗРАСТУ (#245), а не по числу.
+ *
+ * ⚠ `companyId` — это КЛИЕНТ (или `null`), а не «моя компания»: элемент связывает плательщика, и
+ * подстановка фолбэка пометила бы чужой платёж как свой собственный.
+ */
+export interface RegistryWriteJob {
+  memberId: string
+  providerId: BankProviderId
+  /** Операция выписки — источник всех восьми колонок реестра. */
+  item: StatementItem
+  /** id компании-плательщика в CRM, если она опознана. */
+  companyId: string | null
+  /** Смарт-процесс «Платежи» портала на момент постановки задачи. */
+  paymentSp: SpRef
+}
+
+/**
+ * Привязки дела, не вставшие синхронно (#585).
+ *
+ * ⚠ Payload НЕ содержит ПДн: только id дела и пары «тип сущности + id» внутри CRM клиента. Поэтому
+ * удержание здесь обычное, а не ограниченное возрастом.
+ */
+export interface ActivityBindJob {
+  memberId: string
+  /** id дела, к которому привязываем. */
+  activityId: string
+  /** Пары, которые должны стоять на деле. Уже стоящие воркер пропустит, прочитав `binding.list`. */
+  refs: Array<{ entityTypeId: number, entityId: number }>
+}
+
 // Separator for job-id parts. BullMQ FORBIDS ':' in a custom job id (it namespaces
 // its Redis keys with ':', so a custom id containing ':' throws "Custom Id cannot
 // contain :"). We join with '|', which encodeURIComponent escapes (%7C) — so no
@@ -229,6 +275,18 @@ export function deletionJobId(job: DeletionJob): string {
 export function feedbackPostJobId(job: FeedbackPostJob): string {
   // member|hash (#61) — the same built issue (double-submit / redelivery) dedups to one job.
   return joinId(['fb', job.memberId, job.contentHash])
+}
+
+export function registryWriteJobId(job: RegistryWriteJob): string {
+  // member|opKey (#578) — одна операция, один элемент реестра. Повторная постановка той же
+  // операции дедуплицируется: сама запись идемпотентна по маркеру.
+  return joinId(['reg', job.memberId, `${job.item.account}|${job.item.docId}`])
+}
+
+export function activityBindJobId(job: ActivityBindJob): string {
+  // member|activityId (#585) — привязки принадлежат ОДНОМУ делу, и повторная постановка для того
+  // же дела это та же работа, а не вторая.
+  return joinId(['bind', job.memberId, job.activityId])
 }
 
 export function triggerFireJobId(job: TriggerFireJob): string {

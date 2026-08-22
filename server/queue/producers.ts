@@ -5,9 +5,11 @@
 
 import { getQueue, queueEnabled } from './connection'
 import {
-  Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, fetchQueueFor, Q_PARSE, Q_TRIGGER,
-  crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId, triggerFireJobId,
-  type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob, type FetchJob, type ParseJob, type TriggerFireJob
+  Q_BINDINGS, Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, fetchQueueFor, Q_PARSE, Q_REGISTRY, Q_TRIGGER,
+  activityBindJobId, crmSyncJobId, deletionJobId, eventJobId, feedbackPostJobId, fetchJobId, parseJobId,
+  registryWriteJobId, triggerFireJobId,
+  type ActivityBindJob, type CrmSyncJob, type DeletionJob, type EventJob, type FeedbackPostJob,
+  type FetchJob, type ParseJob, type RegistryWriteJob, type TriggerFireJob
 } from './topology'
 
 /**
@@ -213,6 +215,46 @@ export const TRIGGER_RETRY_OPTS = {
   removeOnComplete: { age: 3600, count: 100 },
   removeOnFail: { age: 86_400, count: 200 }
 } as const
+
+/**
+ * Долговременный ретрай записи в реестр платежей (#578) и привязок дела (#585).
+ *
+ * ⚠ Окно КОРОЧЕ, чем у триггера (там ~34 часа), и это не небрежность. Триггер ждёт ДЕЙСТВИЯ
+ * АДМИНИСТРАТОРА — регистрации CODE, — поэтому его ретраи обязаны пережить рабочий день. Здесь
+ * лечится отказ портала или сети: он либо проходит за десятки минут, либо не пройдёт вовсе, и
+ * сутки бесплодных попыток лишь жгут лимит запросов клиента. 8 попыток по `30s·2^(n-1)` — это
+ * ~2 часа, чего хватает и на переустановку приложения, и на плановые работы портала.
+ *
+ * ⚠ Удержание задач с ОПЕРАЦИЕЙ ВЫПИСКИ ограничено возрастом (`STATEMENT_JOB_RETENTION`, #245):
+ * payload реестра — финансовые ПДн. У привязок payload это id сущностей CRM, там ограничение
+ * обычное.
+ */
+export const DEFERRED_WRITE_RETRY = {
+  attempts: 8,
+  backoff: { type: 'exponential' as const, delay: 30_000 }
+} as const
+
+/** Поставить дозапись элемента реестра (#578). No-op (false) без Redis — тогда поведение прежнее:
+ *  отказ считается и теряется. */
+export async function enqueueRegistryWrite(job: RegistryWriteJob): Promise<boolean> {
+  if (!queueEnabled()) return false
+  await getQueue(Q_REGISTRY).add(Q_REGISTRY, job, {
+    jobId: registryWriteJobId(job), ...DEFERRED_WRITE_RETRY, ...STATEMENT_JOB_RETENTION
+  })
+  return true
+}
+
+/** Поставить дозапись привязок дела (#585). No-op (false) без Redis. */
+export async function enqueueActivityBind(job: ActivityBindJob): Promise<boolean> {
+  if (!queueEnabled()) return false
+  await getQueue(Q_BINDINGS).add(Q_BINDINGS, job, {
+    jobId: activityBindJobId(job),
+    ...DEFERRED_WRITE_RETRY,
+    removeOnComplete: { age: 3600, count: 100 },
+    removeOnFail: { age: 86_400, count: 200 }
+  })
+  return true
+}
 
 /** Enqueue a payment trigger for durable retry after a missed synchronous fire (#79). No-op (false)
  *  without Redis — the trigger then degrades to the prior single-shot behavior. */

@@ -14,7 +14,7 @@ import { startWorkerBeat } from '../utils/workerBeat'
 import { useServerLogger } from '../utils/serverLogger'
 import { closeQueues, countLiveWorkers, getQueue, queueEnabled } from '../queue/connection'
 import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
-import { liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveTriggerFireDeps, startDeletionWorker, startEventWorker, startFeedbackWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
+import { liveActivityBindDeps, liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveRegistryWriteDeps, liveTriggerFireDeps, startBindingsWorker, startDeletionWorker, startEventWorker, startFeedbackWorker, startRegistryWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
@@ -104,7 +104,12 @@ export default defineNitroPlugin((nitroApp) => {
     workers.push(startFeedbackWorker(liveFeedbackPostDeps()))
     // Trigger-retry worker (#79) — re-fires missed «деньги пришли» signals with backoff (N-replica-safe).
     workers.push(startTriggerWorker(liveTriggerFireDeps()))
-    log.info(`throughput + feedback + trigger workers started (fetch/parse/crm-sync/feedback-post/trigger-fire, concurrency=${role.concurrency}, fetch-rate=${role.fetchRate.max} jobs/${role.fetchRate.duration}ms; prior-fetch concurrency=${role.priorConcurrency}, rate=${role.priorFetchRate.max} jobs/${role.priorFetchRate.duration}ms)`)
+    // Дозапись в CRM (#578/#585) — реестр платежей и привязки дела, не удавшиеся синхронно.
+    // ⚠ Обе безопасны на N репликах: запись реестра идемпотентна по маркеру операции, а привязки
+    // воркер ставит только недостающие, прочитав `binding.list`.
+    workers.push(startRegistryWorker(liveRegistryWriteDeps()))
+    workers.push(startBindingsWorker(liveActivityBindDeps()))
+    log.info(`throughput + feedback + trigger + deferred-write workers started (fetch/parse/crm-sync/feedback-post/trigger-fire/registry-write/activity-bind, concurrency=${role.concurrency}, fetch-rate=${role.fetchRate.max} jobs/${role.fetchRate.duration}ms; prior-fetch concurrency=${role.priorConcurrency}, rate=${role.priorFetchRate.max} jobs/${role.priorFetchRate.duration}ms)`)
 
     // Пульс воркера (#466 §1). Без него полностью мёртвый воркер на ТИХОМ портале выглядит
     // здоровым: все правила здоровья выведены из наличия застрявшей работы, а её нет.

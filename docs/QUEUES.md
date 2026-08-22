@@ -28,9 +28,20 @@
 | `b24-deletions` | `Q_DELETIONS` | `DeletionJob` (`memberId`, `domain`, `eventCode`, `entityId`, `entityTypeId?`, `ts`) | вебхук CRM-удаления (§9.2) | классифицирует по SP-конфигу → reconcile леджера / чат ошибок (primary-инстанс, concurrency 1) |
 | `feedback-post` | `Q_FEEDBACK` | `FeedbackPostJob` (`memberId`, `kind`, `payload`, `contentHash`) | роут `POST /api/feedback` при **транзиентном** сбое GitHub (#61) | ретраит POST issue с backoff (`FEEDBACK_RETRY_OPTS`) → на успехе #195-метрика; перманентный 4xx — дроп |
 | `trigger-fire` | `Q_TRIGGER` | `TriggerFireJob` (`memberId`, `triggerCode`, `targetKind`, `targetId`, `targetEntityTypeId?`, `opKey`) | crm-sync при **промахе** синхронного фаера триггера (#79) | пере-фаерит `crm.automation.trigger.execute` с backoff (`TRIGGER_RETRY_OPTS`) до `{result:true}` (само-заживает, когда CODE зарегистрирован); `unsupported`/битый CODE — дроп |
+| `registry-write` | `Q_REGISTRY` | `RegistryWriteJob` (`memberId`, `providerId`, `item`, `companyId`, `paymentSp`) | crm-sync при отказе синхронной записи элемента реестра (#578) | пере-записывает элемент СП «Платежи» с backoff; запись идемпотентна по маркеру операции **и дописывает колонки уже существующему элементу** — иначе повтор «успешно» не делал бы ничего |
+| `activity-bind` | `Q_BINDINGS` | `ActivityBindJob` (`memberId`, `activityId`, `refs`) | crm-sync, когда часть привязок дела не встала (#585) | доставляет привязки: читает `crm.activity.binding.list` и ставит **только недостающие** (повторная привязка той же пары — ошибка портала) |
 
 `bank-fetch` и `file-parse` — два входа с разных источников (онлайн-банк и файл), оба дают
 нормализованный `StatementItem[]` и **сходятся в `crm-sync`** — общий «анализ + запись в CRM».
+
+⚠ **Три последние очереди — не части конвейера, а САМОЛЕЧЕНИЕ** (`trigger-fire`, `registry-write`,
+`activity-bind`). Общая у них причина: соответствующая запись идёт ПОСЛЕ маркера дедупа, поэтому
+повтор `crm-sync` до неё уже не дойдёт — операция отсеется на гейте. Без очереди проглоченный отказ
+терял результат навсегда, и знал об этом только счётчик в строке итога.
+
+⚠ Очереди дозаписи РАЗНЫЕ, хотя болезнь одна: payload реестра несёт операцию выписки (финансовые
+ПДн ⇒ подметается `statementSweep`), payload привязок — только id сущностей CRM. Общая очередь
+заставила бы потребителя разбирать вид задачи, а бюджет простоя стал бы средним по больнице.
 
 ## Поток
 

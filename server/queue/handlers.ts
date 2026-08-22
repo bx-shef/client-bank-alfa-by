@@ -166,6 +166,11 @@ export interface HandlerDeps {
    *  self-heals with backoff. BEST-EFFORT (never throws — a trigger only signals). Optional: absent /
    *  no-op (no Redis) ⇒ the trigger degrades to the prior SINGLE-SHOT behaviour. */
   enqueueTriggerRetry?: (item: StatementItem, target: AllocationCandidate, memberId: string, code: string) => Promise<void>
+  /** Долговременный ретрай записи элемента реестра (#578). Отсутствует ⇒ поведение прежнее: отказ
+   *  посчитан и потерян. Обязан НЕ бросать — постановка задачи не может отменить обработку пачки. */
+  enqueueRegistryRetry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<void>
+  /** Долговременный ретрай привязок дела (#585). Те же правила. */
+  enqueueBindRetry?: (activityId: string, refs: CrmEntityRef[], memberId: string) => Promise<void>
   /** Write the decided allocation into the SP-LEDGER (#109 §9.1/§9.3): ensure the payment carrier
    *  element for the operation, add the distribution row for `target`, recompute «осталось». Called
    *  ONLY when `autoDistribute` is on AND both SP entityTypeIds are provisioned (the chooseCarrier
@@ -324,6 +329,16 @@ export async function handleParseJob(job: ParseJob, deps: HandlerDeps): Promise<
  *  An unmatched op writes nothing (no marker), so a later redelivery re-attempts it once a
  *  matching company exists (attaching an unmatched operation elsewhere — follow-up).
  */
+/** Поставить дозапись привязок, не позволив постановке уронить обработку пачки (#585). */
+async function enqueueBindRetry(
+  deps: HandlerDeps, activityId: string, refs: CrmEntityRef[], memberId: string
+): Promise<void> {
+  if (!deps.enqueueBindRetry) return
+  try {
+    await deps.enqueueBindRetry(activityId, refs, memberId)
+  } catch { /* очередь недоступна — остаёмся при прежнем поведении */ }
+}
+
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
@@ -489,6 +504,14 @@ export async function handleCrmSyncJob(
         registryElementId = await deps.writePaymentRegistry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
       } catch {
         registryFailed++
+        // ⚠ Дозапись отдельной задачей (#578). Без неё проглоченный отказ терял элемент НАВСЕГДА:
+        // повтор джобы упирается в маркер дела и до реестра не доходит. Постановка — best-effort:
+        // без Redis это no-op, а её собственный отказ не имеет права отменить обработку пачки.
+        if (deps.enqueueRegistryRetry) {
+          try {
+            await deps.enqueueRegistryRetry(item, companyId, job.memberId, job.providerId, ledgerPaymentRef)
+          } catch { /* очередь недоступна — остаёмся при прежнем поведении */ }
+        }
       }
     }
     // Error-chat notice for an ambiguous/manual allocation, captured here but EMITTED only after
@@ -748,12 +771,18 @@ export async function handleCrmSyncJob(
           // числа в одной строке итога измеряют разное: у одной операции привязок до
           // `MAX_ACTIVITY_BINDINGS`, и «6 без привязок» при трёх обработанных операциях читается
           // как сломанный счётчик, а не как данные.
-          if (outcome.failed > 0) bindingsFailed++
+          if (outcome.failed > 0) {
+            bindingsFailed++
+            // ⚠ Дозапись отдельной задачей (#585). Ставим ВЕСЬ список, а не «те, что упали»:
+            // транспорт не говорит, какие именно, а воркер всё равно читает `binding.list` и
+            // ставит только недостающее. Повторная привязка той же пары — ошибка, поэтому
+            // слепой повтор был бы хуже отсутствия ретрая.
+            await enqueueBindRetry(deps, activityId, refs, job.memberId)
+          }
         }
       } catch {
         // Транспорт обязан не бросать, но контракт держим и здесь: дело уже записано, и падение
         // на связи отменило бы обработку всех оставшихся операций пачки.
-        //
         bindingsFailed++
       }
     }
