@@ -83,9 +83,14 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
     data-testid="provision-sp"
   >
     <template #header>
-      <h2 class="font-semibold">
-        Смарт-процессы распределения
-      </h2>
+      <div class="flex items-baseline gap-3 flex-wrap">
+        <h2 class="font-semibold">
+          Смарт-процессы распределения
+        </h2>
+        <!-- Вопрос «что это вообще создаст в моей CRM» задают, глядя на кнопку, а не в оглавлении
+             справки — тем более что откатить создание смарт-процессов кнопкой нельзя. -->
+        <HelpLink anchor="smart-process" />
+      </div>
     </template>
 
     <div class="space-y-4">

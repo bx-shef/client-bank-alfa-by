@@ -1,6 +1,6 @@
 # SEO лендинга: настройка и проверка
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-08-22
 
 Что настраивает **владелец руками** (панели вебмастера, шаринг) и что проверяется **после каждого
 выката**. Как SEO устроено в коде — [`CLAUDE.md`](../CLAUDE.md) §«SEO лендинга»; сама задача — [#425](https://github.com/bx-shef/client-bank-alfa-by/issues/425).
@@ -40,8 +40,12 @@ D=https://bank-import.bx-shef.by
 # 1. robots.txt: есть Sitemap, закрыт /api/, служебных страниц НЕТ (они держатся на noindex)
 curl -sS $D/robots.txt
 
-# 2. sitemap.xml: два <loc>, lastmod = дата коммита сборки
+# 2. sitemap.xml: по <loc> на каждый PUBLIC_ROUTES (сейчас три: /, /partners, /help),
+#    lastmod = дата коммита сборки
 curl -sS $D/sitemap.xml
+
+# 2b. llms.txt: справка для ИИ-помощника клиента, ссылки — на канонический домен
+curl -sS $D/llms.txt | head -20
 
 # 3. Несуществующий адрес отдаёт 404, а не лендинг с кодом 200 (soft-404)
 curl -sSo /dev/null -w '%{http_code}\n' $D/no-such-page

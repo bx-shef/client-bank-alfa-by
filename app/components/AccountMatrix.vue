@@ -50,9 +50,18 @@ function stateColor(state: MatrixRow['state']) {
     class="space-y-3"
     data-testid="account-matrix"
   >
-    <h3 class="text-sm font-semibold">
-      Сверка счетов: CRM ↔ банк
-    </h3>
+    <div class="flex items-baseline gap-3 flex-wrap">
+      <h3 class="text-sm font-semibold">
+        Сверка счетов: CRM ↔ банк
+      </h3>
+      <!-- ⚠ Самый частый вопрос («почему дела в моей компании») отвечается именно этим экраном, и
+           ссылка обязана быть ЗДЕСЬ: в общем оглавлении справки её ищет тот, кто уже догадался,
+           что смотреть надо сюда. -->
+      <HelpLink
+        anchor="my-company"
+        label="Почему дела попадают в «мою компанию»?"
+      />
+    </div>
 
     <p
       v-if="loading && !loaded"

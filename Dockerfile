@@ -70,6 +70,10 @@ RUN grep -q 'name="robots"' .output/public/404.html \
       || { echo 'SEO: 404.html без noindex — injectNoindex не отработал'; exit 1; }
 RUN test -s .output/public/robots.txt || { echo 'SEO: robots.txt не сгенерирован'; exit 1; }
 RUN grep -q '<loc>' .output/public/sitemap.xml || { echo 'SEO: sitemap.xml пуст'; exit 1; }
+# `llms.txt` — справка для ИИ-помощника клиента (#576). Гард на артефакте, а не на тесте: тест
+# проверяет БИЛДЕР, а пропасть файл может на шаге записи — и тогда агент клиента получает 404 и
+# отвечает по своим догадкам, что снаружи неотличимо от «приложение работает не так».
+RUN grep -q '/help' .output/public/llms.txt || { echo 'SEO: llms.txt не сгенерирован или без ссылки на справку'; exit 1; }
 
 # Inject per-build sha256 CSP hashes for Nuxt's inline scripts into nginx.conf,
 # so the served CSP needs no `script-src 'unsafe-inline'`. Writes in place.

@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { FAQ, FAQ_AGENT_PROMPT, FAQ_INTRO, buildLlmsTxt } from '~/utils/faq'
 import { LANDING_SITE_URL } from '~/utils/seo'
 
@@ -59,5 +63,26 @@ describe('справка', () => {
     const txt = buildLlmsTxt(LANDING_SITE_URL)
     expect(txt.endsWith('\n')).toBe(true)
     expect(txt).not.toMatch(/\n{3}/)
+  })
+})
+
+describe('llms.txt доезжает до статики', () => {
+  // ⚠ Юнит-теста билдера НЕДОСТАТОЧНО, и это измерено мутацией: убрать запись файла из
+  // `scripts/seo-files.mjs` — весь набор остаётся зелёным, а на сайте появляется 404, по которому
+  // ИИ-агент клиента отвечает своими догадками. Поэтому здесь запускается САМ скрипт сборки.
+  it('генератор пишет непустой llms.txt со ссылкой на справку', () => {
+    const out = mkdtempSync(join(tmpdir(), 'seo-llms-'))
+    const res = spawnSync(process.execPath, [
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--import', './scripts/lib/alias-loader.mjs',
+      'scripts/seo-files.mjs',
+      out
+    ], { cwd: process.cwd(), encoding: 'utf8' })
+    expect(res.status, res.stderr).toBe(0)
+    const txt = readFileSync(join(out, 'llms.txt'), 'utf8')
+    expect(txt).toContain(`${LANDING_SITE_URL}/help`)
+    expect(txt).toContain(FAQ[0]!.question)
+    rmSync(out, { recursive: true, force: true })
   })
 })

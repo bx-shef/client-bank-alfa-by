@@ -98,8 +98,12 @@ describe('ConnectedBankAccounts', () => {
   it('отключение требует подтверждения вторым кликом', async () => {
     listReply.value = [{ provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }]
     const wrapper = await mountReady()
-    const buttons = wrapper.findAll('button')
-    await buttons[buttons.length - 1]!.trigger('click')
+    // ⚠ Кнопку ищем ПО ПОДПИСИ, а не «последнюю на экране»: индекс ломается от любой соседней
+    // кнопки (так и вышло, когда рядом появилась ссылка в справку), причём ломается неочевидно —
+    // тест краснеет на исправном коде отключения.
+    const disconnect = wrapper.findAll('button').find(b => b.text().trim() === 'Отключить')
+    expect(disconnect, 'кнопки «Отключить» нет вовсе').toBeTruthy()
+    await disconnect!.trigger('click')
     await nextTick()
     // Первый клик только спрашивает — запроса на удаление ещё нет.
     expect(wrapper.text()).toContain('Отключить?')
