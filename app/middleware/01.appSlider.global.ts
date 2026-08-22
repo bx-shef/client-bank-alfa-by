@@ -121,7 +121,10 @@ function redirectToSlider(to: RouteLocationNormalized, target: string) {
   // пререндеренную страницу Nuxt гидратирует на голом пути, поэтому в `to` строки запроса нет
   // вовсе. Замерено — с `to.query` фрейм приезжал на голый `/settings`, и целевой экран терял и
   // `place`, и параметры портала (`APP_SID` и прочие), то есть переставал быть слайдером.
-  const dest = { path: target, query: queryFromLocation() }
+  // ⚠ Маршрут справки приходит с якорем (`/help#exclusions`, #576 п.2), а `navigateTo` якорь
+  // ВНУТРИ `path` не понимает — он оказался бы частью пути, и страница не нашлась бы. Разделяем.
+  const [path, hash] = target.split('#')
+  const dest = { path: path!, query: queryFromLocation(), ...(hash ? { hash: `#${hash}` } : {}) }
   if (!nuxtApp.isHydrating) return navigateTo(dest, { replace: true })
   useSliderRedirect().claim(target)
   onNuxtReady(() => {

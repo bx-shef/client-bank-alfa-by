@@ -1,3 +1,9 @@
+// ⚠ Единственный импорт в этом файле, и он не нарушает его правило «только чистые данные»:
+// `faq.ts` — такой же плоский текстовый модуль без SDK. Нужен он ровно за одним: `place`
+// контекстной справки приходит от портала, и якорь в нём сверяется с реальными разделами, а не
+// подставляется в маршрут как есть.
+import { FAQ } from '~/utils/faq'
+
 /**
  * Bitrix24 integration constants. Plain data, no SDK import — so the
  * required-scopes contract is unit-testable without the b24jssdk runtime.
@@ -72,9 +78,34 @@ export const APP_SLIDER_ROUTES: Record<string, string> = {
   [APP_SLIDER_PLACE_IMPORT]: '/import'
 }
 
+/**
+ * Префикс `place` контекстной справки: `app-help-<якорь раздела>` (#576 п.2).
+ *
+ * ⚠ Почему не один `app-help` на всю справку: контекстная ссылка ставится там, где человек
+ * ЗАСТРЯЛ, и открыть ему оглавление — значит вернуть его к поиску своего вопроса. Якорь несёт
+ * СМЫСЛ ссылки, поэтому едет вместе с `place`, а не рядом.
+ *
+ * ⚠ Другого канала у него и нет: строку запроса фрейму задаёт портал, а хэш до фрейма не доезжает
+ * вовсе. `place` — единственное, что мы можем передать открываемому экрану сами.
+ */
+export const APP_SLIDER_PLACE_HELP_PREFIX = 'app-help-'
+
+/** `place` для контекстной ссылки в справку. Якорь — `id` раздела из `FAQ`. */
+export function helpSliderPlace(anchor: string): string {
+  return `${APP_SLIDER_PLACE_HELP_PREFIX}${anchor}`
+}
+
 /** Чистое: на какой маршрут вести фрейм, открытый с этим `place` (undefined — никуда). */
 export function sliderRouteForPlace(place: string | undefined | null): string | undefined {
-  return place ? APP_SLIDER_ROUTES[place] : undefined
+  if (!place) return undefined
+  if (place.startsWith(APP_SLIDER_PLACE_HELP_PREFIX)) {
+    const anchor = place.slice(APP_SLIDER_PLACE_HELP_PREFIX.length)
+    // ⚠ Якорь СВЕРЯЕТСЯ с реальными разделами, а не подставляется как есть. `place` приходит от
+    // портала, то есть снаружи; непроверенное значение уехало бы прямо в адрес фрейма. И заодно
+    // это ловит опечатку в ссылке: неизвестный якорь открывает справку с начала, а не пустоту.
+    return FAQ.some(e => e.id === anchor) ? `/help#${anchor}` : '/help'
+  }
+  return APP_SLIDER_ROUTES[place]
 }
 
 /** Ширина слайдера — ВЫВЕДЕНА из вёрстки, а не выбрана на глаз. Нижняя граница жёсткая: 640 px —

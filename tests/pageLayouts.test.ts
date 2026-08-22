@@ -23,6 +23,19 @@ const PORTAL = ['app.vue', 'import.vue', 'install.vue', 'settings.vue']
 const OPERATOR = ['login.vue', 'queues.vue']
 /** Публичные страницы лендинга. */
 const LANDING = ['index.vue', 'partners.vue']
+/**
+ * Публичная страница, которую открывают И снаружи, И слайдером портала: справка (#576).
+ *
+ * ⚠ Четвёртая категория заведена не ради исключения из правил, а потому что мир у страницы
+ * действительно свой: она индексируется (ссылку даём в карточке Маркета), но рисуется внутри
+ * слайдера рядом с настройками — а брендовая тёмная оболочка лендинга там выглядела бы чужой
+ * страницей. Отсюда `portal`-layout при публичном маршруте.
+ *
+ * ⚠ `InPortalGate` ей ЗАПРЕЩЁН, и это проверяется: гейт закрывает то, что без фрейм-токена не
+ * работает, а справка — чистый текст. Закрыв её гейтом, мы сделали бы недоступной ровно ту
+ * страницу, которую даём людям, у которых что-то не работает.
+ */
+const PUBLIC_PORTAL = ['help.vue']
 
 /** Исходник без комментариев — судим о КОДЕ, а не о прозе рядом с ним. */
 function stripComments(src: string): string {
@@ -65,7 +78,7 @@ function hasTag(code: string, tag: string): boolean {
 
 describe('layout и гейт каждой страницы (#532)', () => {
   it('все страницы классифицированы', () => {
-    const known = new Set([...PORTAL, ...OPERATOR, ...LANDING])
+    const known = new Set([...PORTAL, ...OPERATOR, ...LANDING, ...PUBLIC_PORTAL])
     // ⚠ Обход РЕКУРСИВНЫЙ, хотя `app/pages` сейчас плоский: соседний закрытый список страниц
     // (`seoMetaPlacement.test.ts`) промахнулся ровно нерекурсивным вариантом — вложенная страница
     // не попадала в сопоставление, и «третьего не дано» проходило молча на неклассифицированной.
@@ -93,6 +106,14 @@ describe('layout и гейт каждой страницы (#532)', () => {
       const gate = /<InPortalGate\b[^>]*>/.exec(code)?.[0] ?? ''
       if (f === 'app.vue') expect(gate, 'app.vue: пропало условие подавления гейта на уходе в слайдер').toContain('v-if="!leavingToSlider"')
       else expect(gate, `${f}: гейт под условием — он может не сработать`).not.toContain('v-if')
+    }
+  })
+
+  it('публичная справка: portal-layout, но без портального гейта', () => {
+    for (const f of PUBLIC_PORTAL) {
+      const code = codeOnly(f)
+      expect(scriptOnly(f), `${f}: чужой layout`).toContain('layout: \'portal\'')
+      expect(hasTag(code, 'InPortalGate'), `${f}: гейт на справке — недоступна тем, кому нужна`).toBe(false)
     }
   })
 

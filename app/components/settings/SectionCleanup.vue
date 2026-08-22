@@ -119,6 +119,10 @@ async function onErase(): Promise<void> {
       description="Действие необратимо и затрагивает CRM всего портала."
     />
     <template v-else>
+      <HelpLink
+        anchor="erased-returned"
+        label="Почему стёртые дела возвращаются?"
+      />
       <p
         data-testid="erase-activities"
         class="text-sm text-(--ui-color-base-3)"

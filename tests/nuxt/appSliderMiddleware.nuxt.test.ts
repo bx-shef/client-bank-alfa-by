@@ -85,6 +85,24 @@ describe('мидлвар слайдера', () => {
     expect(navigateSpy).toHaveBeenCalledWith(dest('/import'), { replace: true })
   })
 
+  it('справка едет с ЯКОРЕМ, а не с решёткой внутри пути', async () => {
+    // ⚠ Контекстная ссылка «Что это значит?» несёт якорь раздела в самом `place` (#576 п.2) —
+    // другого канала нет: строку запроса задаёт портал, а хэш до фрейма не доезжает. Дальше якорь
+    // обязан отделиться от пути: `navigateTo({ path: '/help#exclusions' })` ищет ПУТЬ с решёткой,
+    // такого маршрута нет, и слайдер показал бы 404. Мутация «не разделять» проходила зелёной —
+    // чистый `sliderRouteForPlace` о судьбе своей строки ничего не знает.
+    state.optionsAfterInit = { place: 'app-help-exclusions' }
+    await runMiddleware('/app')
+    expect(navigateSpy).toHaveBeenCalledWith({ path: '/help', query: {}, hash: '#exclusions' }, { replace: true })
+  })
+
+  it('справка без якоря не получает пустой хэш', async () => {
+    // Пустой `hash: '#'` — это адрес, отличающийся от чистого, и в истории фрейма он лишний.
+    state.optionsAfterInit = { place: 'app-help-нет-такого' }
+    await runMiddleware('/app')
+    expect(navigateSpy).toHaveBeenCalledWith(dest('/help'), { replace: true })
+  })
+
   it('обычное открытие приложения (без place) никуда не уводит', async () => {
     await runMiddleware('/app')
     expect(navigateSpy).not.toHaveBeenCalled()
