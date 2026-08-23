@@ -21,7 +21,6 @@ const OUTCOME: ProvisionDistributionOutcome = {
 
 function deps(over: Partial<ProvisionRequestDeps> = {}): ProvisionRequestDeps {
   return {
-    enabled: true,
     memberIdByDomain: async () => 'MEMBER1',
     validateFrame: async () => ({ userId: '7', isAdmin: true }),
     provision: async () => OUTCOME,
@@ -43,13 +42,6 @@ describe('handleProvisionRequest', () => {
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true, addedFields: 3, storedChanged: true })
     expect(provision).toHaveBeenCalledWith('MEMBER1')
-  })
-
-  it('404 when the feature is disabled (reveals nothing, checked first)', async () => {
-    const provision = vi.fn(async () => OUTCOME)
-    const res = await handleProvisionRequest(deps({ enabled: false, provision }), input)
-    expect(res.status).toBe(404)
-    expect(provision).not.toHaveBeenCalled()
   })
 
   it('400 without a token or domain', async () => {
@@ -87,10 +79,14 @@ describe('handleProvisionRequest', () => {
     expect(res.body.ok).toBeUndefined()
   })
 
-  it('gate order: disabled beats missing creds (no auth probing when off)', async () => {
+  it('порядок гейтов: без токена и домена портал даже не ищем', async () => {
+    // ⚠ Прежде первым стоял feature-гейт (`DISTRIBUTION_PROVISION_ENABLED`), и он же прикрывал
+    // этот порядок. Флага больше нет — режим приложения всегда «включено», потому что смарт-процесс
+    // «Платежи» это РЕЕСТР, а не дополнительная возможность, — поэтому проверять порядок надо
+    // отдельно: спрашивать базу о портале до того, как вызывающий вообще представился, незачем.
     const memberIdByDomain = vi.fn(async () => 'M')
-    const res = await handleProvisionRequest(deps({ enabled: false, memberIdByDomain }), { accessToken: '', domain: '' })
-    expect(res.status).toBe(404)
+    const res = await handleProvisionRequest(deps({ memberIdByDomain }), { accessToken: '', domain: '' })
+    expect(res.status).toBe(400)
     expect(memberIdByDomain).not.toHaveBeenCalled()
   })
 })

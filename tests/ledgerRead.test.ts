@@ -80,7 +80,6 @@ describe('loadPortalLedger', () => {
 const OUT: LedgerCard[] = [{ id: '1', total: 100, currency: 'BYN', requiresRedistribution: false, rows: [] }]
 function deps(over: Partial<LedgerRequestDeps> = {}): LedgerRequestDeps {
   return {
-    enabled: true,
     memberIdByDomain: async () => 'M1',
     validateFrame: async () => ({ userId: '7', isAdmin: true }),
     loadLedger: async () => OUT,
@@ -94,9 +93,6 @@ describe('handleLedgerRequest', () => {
     const res = await handleLedgerRequest(deps(), input)
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ provisioned: true, cards: OUT })
-  })
-  it('404 when disabled', async () => {
-    expect((await handleLedgerRequest(deps({ enabled: false }), input)).status).toBe(404)
   })
   it('400 without creds, 409 not installed, 403 not admin', async () => {
     expect((await handleLedgerRequest(deps(), { accessToken: '', domain: '' })).status).toBe(400)
@@ -138,7 +134,7 @@ describe('recomputeAllPayments', () => {
 })
 
 function rdeps(over: Partial<RecomputeRequestDeps> = {}): RecomputeRequestDeps {
-  return { enabled: true, memberIdByDomain: async () => 'M1', validateFrame: async () => ({ userId: '7', isAdmin: true }), recompute: async () => 5, ...over }
+  return { memberIdByDomain: async () => 'M1', validateFrame: async () => ({ userId: '7', isAdmin: true }), recompute: async () => 5, ...over }
 }
 
 describe('handleRecomputeRequest', () => {
@@ -147,8 +143,7 @@ describe('handleRecomputeRequest', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ ok: true, recomputed: 5 })
   })
-  it('404 disabled, 403 not admin, 409 not installed', async () => {
-    expect((await handleRecomputeRequest(rdeps({ enabled: false }), input)).status).toBe(404)
+  it('403 not admin, 409 not installed', async () => {
     expect((await handleRecomputeRequest(rdeps({ validateFrame: async () => ({ userId: '7', isAdmin: false }) }), input)).status).toBe(403)
     expect((await handleRecomputeRequest(rdeps({ memberIdByDomain: async () => '' }), input)).status).toBe(409)
   })

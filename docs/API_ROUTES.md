@@ -48,7 +48,7 @@
 | POST | `/api/bank/disconnect` | **F+A** (member-scoped WHERE, адрес — неизменяемый `id`) | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409, 503 | `import`, `burst=3` |
 | GET | `/api/bank/matrix` | **F+A** | **да** | 200, 400, 403, 409, 502 | `import` + `limit_conn bank_matrix 2` (спрашивает банки параллельно — по соединению на банк) |
-| GET | `/api/distribution/ledger` | **F+A** + гейт `DISTRIBUTION_PROVISION_ENABLED` | **да** | 200, 400, 403, 404, 502 | — |
+| GET | `/api/distribution/ledger` | **F+A** | **да** | 200, 400, 403, 404, 502 | — |
 | POST | `/api/distribution/provision` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516); держит аренда, не advisory-лок (#538) |
 | POST | `/api/distribution/recompute` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516); держит аренда, не advisory-лок (#538) |
 | GET | `/api/app-rating` | F | нет | 200 (сбой → `{show:false}`), 400, 403, 409 | — |

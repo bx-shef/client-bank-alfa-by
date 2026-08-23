@@ -98,7 +98,11 @@ describe('ProvisionSpCard interaction', () => {
     expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('на месте')
   })
 
-  it('disabled (404) → friendly "отключена" error', async () => {
+  it('404 больше не значит «отключено» — маршрут есть всегда', async () => {
+    // ⚠ Ветку «отключена» убрали вместе с env-гейтом (2026-08-23): смарт-процесс «Платежи» это
+    // реестр, а не опция, и режим приложения всегда «включено». Оставить прежний текст значило бы
+    // отправлять админа искать переключатель, которого больше нет, — а 404 теперь означает ровно
+    // то, что означает обычно: маршрута не нашлось (кривой прокси, старая сборка).
     fetchMock.mockRejectedValueOnce({ statusCode: 404 })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="provision-button"]').trigger('click')
@@ -106,7 +110,7 @@ describe('ProvisionSpCard interaction', () => {
     await nextTick()
     const err = wrapper.find('[data-testid="provision-error"]')
     expect(err.exists()).toBe(true)
-    expect(err.text()).toContain('отключена')
+    expect(err.text()).not.toContain('отключена')
     expect(wrapper.find('[data-testid="provision-message"]').exists()).toBe(false)
   })
 

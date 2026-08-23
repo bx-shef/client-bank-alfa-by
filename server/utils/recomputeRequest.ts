@@ -7,8 +7,6 @@ import { DB_UNAVAILABLE_TEXT } from './provisionRequest'
 
 /** Injected side effects + config for {@link handleRecomputeRequest}. */
 export interface RecomputeRequestDeps {
-  /** Feature gate: OFF unless the owner opts in (default false, fail-closed). */
-  enabled: boolean
   memberIdByDomain: (domain: string) => Promise<string>
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
   /** Recompute every payment carrier for the portal (single-flight). Returns the count, or `null`
@@ -32,8 +30,6 @@ export async function handleRecomputeRequest(
   deps: RecomputeRequestDeps,
   input: { accessToken: string, domain: string }
 ): Promise<RecomputeRequestResult> {
-  if (!deps.enabled) return { status: 404, body: { error: 'distribution disabled' } }
-
   const accessToken = (input.accessToken || '').trim()
   const domain = (input.domain || '').trim()
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }

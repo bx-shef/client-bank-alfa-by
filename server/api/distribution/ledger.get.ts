@@ -1,13 +1,11 @@
 // GET /api/distribution/ledger — the portal's distribution ledger (payment carriers + their rows)
 // for the «Распределение» UI (#109 §9.3 #4). Auth = the B24 FRAME access token (Authorization:
-// Bearer) + X-B24-Domain, admin-gated. Feature OFF by default (enable with DISTRIBUTION_PROVISION_ENABLED=1; same gate
-// as provisioning). Thin I/O over the pure handler (server/utils/ledgerRequest.ts); the SP read runs
+// Bearer) + X-B24-Domain, admin-gated. Thin I/O over the pure handler (server/utils/ledgerRequest.ts); the SP read runs
 // on the portal's STORED OAuth token.
 
 import { handleLedgerRequest, type LedgerRequestDeps } from '../../utils/ledgerRequest'
 import { loadPortalLedger } from '../../utils/distributionLedgerWrite'
 import { bearerToken } from '../../utils/settingsHandler'
-import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
@@ -20,7 +18,6 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
 
 function liveLedgerDeps(): LedgerRequestDeps {
   return {
-    enabled: distributionEnabled(),
     memberIdByDomain: async domain => (await getMemberIdByDomain(dbQuery, domain)) ?? '',
     validateFrame: async (domain, accessToken) => {
       const res = await frameRestCall(domain, accessToken, 'profile', {})

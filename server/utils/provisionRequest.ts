@@ -14,8 +14,6 @@ import type { ProvisionDistributionOutcome } from './distributionProvisionHandle
 
 /** Injected side effects + config for {@link handleProvisionRequest}. */
 export interface ProvisionRequestDeps {
-  /** Feature gate: provisioning is OFF unless the owner opts in (default false, fail-closed). */
-  enabled: boolean
   /** Resolve the caller's portal member id from its domain (proves the app is installed). */
   memberIdByDomain: (domain: string) => Promise<string>
   /** Re-check the frame token against B24: returns the user id (membership proof) + admin flag. */
@@ -44,8 +42,6 @@ export async function handleProvisionRequest(
   deps: ProvisionRequestDeps,
   input: { accessToken: string, domain: string }
 ): Promise<ProvisionRequestResult> {
-  if (!deps.enabled) return { status: 404, body: { error: 'provisioning disabled' } }
-
   const accessToken = (input.accessToken || '').trim()
   const domain = (input.domain || '').trim()
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }

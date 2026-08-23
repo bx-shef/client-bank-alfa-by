@@ -1,14 +1,17 @@
 // POST /api/distribution/provision — provision (create/verify) the two distribution smart processes
 // and persist their entityTypeIds to portal settings (#109, §9.1). Auth = the B24 FRAME access token
-// (Authorization: Bearer) + X-B24-Domain, admin-gated (same model as /api/poll-now). Feature is ON by
-// OFF by default (enable with DISTRIBUTION_PROVISION_ENABLED=1) — it CREATES smart
-// processes on the portal. Thin I/O over the pure handler (server/utils/provisionRequest.ts).
+// (Authorization: Bearer) + X-B24-Domain, admin-gated (same model as /api/poll-now).
+//
+// ⚠ NO feature flag any more (owner's call, 2026-08-23): the payments smart process is not an
+// optional extra, it is the REGISTRY every operation is written to (#575). A portal without it
+// imports into a void, so the app's mode is «always on» and the only gates left are the ones that
+// answer «who may do this»: the frame token proves the portal, `profile.ADMIN` proves the person.
+// Thin I/O over the pure handler (server/utils/provisionRequest.ts).
 
 import { handleProvisionRequest, type ProvisionRequestDeps } from '../../utils/provisionRequest'
 import { handleProvisionDistribution } from '../../utils/distributionProvisionHandler'
 import { provisionDistributionSp, type KnownSpIds } from '../../utils/distributionSpProvision'
 import { bearerToken } from '../../utils/settingsHandler'
-import { distributionEnabled } from '../../utils/distributionEnabled'
 import { frameRestCall, liveLeaseDeps, livePortalSdkCall } from '../../utils/liveDeps'
 import { pickAppOption } from '../../utils/appSettings'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
@@ -24,9 +27,6 @@ const log = useServerLogger('queue')
 
 function liveProvisionDeps(): ProvisionRequestDeps {
   return {
-    // App-side gate: OFF by default — this creates smart processes in the client's CRM and prod
-    // has no undo, so it is opt-in like every other mutating switch (DISTRIBUTION_PROVISION_ENABLED=1).
-    enabled: distributionEnabled(),
     memberIdByDomain: async domain => (await getMemberIdByDomain(dbQuery, domain)) ?? '',
     validateFrame: async (domain, accessToken) => {
       // `profile` proves the token works for THIS portal (else B24 throws) + returns the ADMIN flag.

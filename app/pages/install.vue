@@ -7,6 +7,7 @@ import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
 import { buildBotRegisterCall } from '~/utils/b24BotRegister'
 import { installVerdict, type BackendState } from '~/utils/installVerdict'
 import { checkBackendKnowsPortal } from '~/composables/useBackendInstallCheck'
+import { useProvisionDistribution } from '~/composables/useProvisionDistribution'
 import { LANDING_TITLE, pageTitle } from '~/utils/landing'
 import { useLogger } from '~/utils/logger'
 
@@ -60,6 +61,17 @@ const checkingBackend = ref(false)
 const triggerRegistered = ref('')
 // Best-effort chat-bot registration outcome (#496), same shape as the trigger above.
 const botRegistered = ref('')
+/**
+ * Смарт-процессы приложения: '' — не пытались, 'ok' — на месте, иначе текст ошибки.
+ *
+ * ⚠ Заводится потому, что до сих пор их СОЗДАВАЛ ЧЕЛОВЕК — кнопкой в настройках, за флагом. А
+ * смарт-процесс «Платежи» это не дополнительная возможность, а РЕЕСТР, в который пишется каждая
+ * операция (#575): портал без него импортирует в пустоту, и заметно это лишь тем, что смарт-процесс
+ * пуст при живом импорте — ровно тот симптом, с которого #575 и начался. Установка обязана
+ * оставлять портал рабочим, а не наполовину настроенным.
+ */
+const spProvisioned = ref('')
+const provisionSp = useProvisionDistribution()
 
 interface InitData {
   appInfo?: { ID?: number, CODE?: string, VERSION?: string }
@@ -95,6 +107,7 @@ const diagnostics = computed(() => {
     events: initData.value.eventList ?? [],
     // Best-effort automation-trigger registration (#79): '' hides the row.
     trigger: triggerRegistered.value,
+    smartProcess: spProvisioned.value,
     // Best-effort chat-bot registration (#496): '' hides the row.
     bot: botRegistered.value
   }
@@ -108,6 +121,7 @@ const verdict = computed(() => installVerdict({
   missingScopes: diagnostics.value.missing,
   trigger: triggerRegistered.value,
   bot: botRegistered.value,
+  smartProcess: spProvisioned.value,
   backend: backendState.value
 }))
 // Раскрытие «Диагностики». ОБЯЗАТЕЛЬНО обычный ref под v-model, а не computed под :model-value:
@@ -202,6 +216,26 @@ async function registerChatBot(): Promise<void> {
   }
 }
 
+/**
+ * Создаёт (или проверяет) смарт-процессы приложения сразу на установке.
+ *
+ * ⚠ BEST-EFFORT, как триггер и бот: установка уже удалась и токены доставлены, поэтому отказ здесь
+ * не имеет права её валить. Но, в отличие от них, отсутствие смарт-процессов — не косметика: без
+ * СП «Платежи» реестр не ведётся вовсе, поэтому исход попадает в ВЕРДИКТ, а не только в диагностику.
+ *
+ * ⚠ Идемпотентно по построению (`provisionDistributionSp` — find-or-create + самолечение полей),
+ * поэтому повторная установка ничего не задваивает, а недостающие колонки, наоборот, довозит.
+ */
+async function provisionSmartProcesses(): Promise<void> {
+  try {
+    await provisionSp.provision()
+    spProvisioned.value = provisionSp.error.value ? `ошибка: ${provisionSp.error.value}` : 'ok'
+  } catch (error: unknown) {
+    log.warning('смарт-процессы не настроились', { error: String(error) })
+    spProvisioned.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
 /** Runs the install flow. Surfaces failures as a retryable error state instead
  *  of throwing (a thrown error would leave the page stuck with no way out).
  *  placement.bind is intentionally not done here yet — the app's in-portal pages
@@ -274,6 +308,16 @@ async function runInstall() {
       backendState.value = await checkBackendKnowsPortal()
     } finally {
       checkingBackend.value = false
+    }
+    // Смарт-процессы приложения — сразу, без похода в настройки.
+    //
+    // ⚠ ПОСЛЕ проверки серверной части, и порядок здесь несущий: провижининг идёт нашим маршрутом
+    // на СОХРАНЁННОМ токене портала, а токен приносит событие `ONAPPINSTALL`, которое летит мимо
+    // iframe. Пока backend не подтвердил, что знает портал, звать было бы нечего — получили бы 409
+    // и записали ложную «ошибку» о том, что просто ещё не доехало.
+    if (backendState.value === 'ok') {
+      caption.value = 'Настройка смарт-процессов…'
+      await provisionSmartProcesses()
     }
     caption.value = 'Готово'
   } catch (error: unknown) {
@@ -395,6 +439,10 @@ onMounted(runInstall)
                 <template v-if="diagnostics.trigger">
                   <span class="text-(--ui-color-base-3)">Триггер автоматизации:</span>
                   <span class="break-all">{{ diagnostics.trigger }}</span>
+                </template>
+                <template v-if="diagnostics.smartProcess">
+                  <span class="text-(--ui-color-base-3)">Смарт-процессы:</span>
+                  <span class="break-all">{{ diagnostics.smartProcess }}</span>
                 </template>
                 <template v-if="diagnostics.appInfo">
                   <span class="text-(--ui-color-base-3)">App:</span>

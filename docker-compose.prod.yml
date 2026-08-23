@@ -173,10 +173,6 @@ services:
       CRON_REAL_POLL: ${CRON_REAL_POLL:-0}
       MANUAL_POLL_ENABLED: ${MANUAL_POLL_ENABLED:-0}
       MANUAL_POLL_COOLDOWN_SEC: ${MANUAL_POLL_COOLDOWN_SEC:-}
-      # ⚠ Distribution contour is ON by default and CREATES smart processes in the client's CRM.
-      # Without this line the documented opt-out (`DISTRIBUTION_PROVISION_ENABLED=0` in .env) is
-      # silently ignored — compose passes ONLY what is listed here.
-      DISTRIBUTION_PROVISION_ENABLED: ${DISTRIBUTION_PROVISION_ENABLED:-}
       # Self-hosted portals: without this the SSRF host allowlist rejects them and there is no
       # way to fix it from .env alone.
       B24_SELFHOSTED_HOSTS: ${B24_SELFHOSTED_HOSTS:-}
