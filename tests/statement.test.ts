@@ -106,16 +106,12 @@ describe('shouldNotifyChat', () => {
     expect(shouldNotifyChat(makeItem({ direction: 'credit' }), { directions: ['debit'] })).toBe(false)
   })
 
-  it('applies account and purpose exclusions independently in one ruleset', () => {
-    const rules = { excludeAccounts: ['BY-SILENT'], excludePurposePatterns: ['между своими'] }
-    expect(shouldNotifyChat(makeItem({ account: 'BY-SILENT' }), rules)).toBe(false)
+  it('applies counterparty and purpose exclusions independently in one ruleset', () => {
+    const rules = { excludeCounterpartyAccounts: ['BY-TAX'], excludePurposePatterns: ['между своими'] }
+    const fromTax = makeItem({ counterparty: { name: 'ИМНС', unp: '100000000', account: 'BY-TAX' } })
+    expect(shouldNotifyChat(fromTax, rules)).toBe(false)
     expect(shouldNotifyChat(makeItem({ purpose: 'Перевод между своими счетами' }), rules)).toBe(false)
     expect(shouldNotifyChat(makeItem(), rules)).toBe(true)
-  })
-
-  it('silences excluded accounts (trim-insensitive)', () => {
-    const item = makeItem({ account: 'BY80ACC' })
-    expect(shouldNotifyChat(item, { excludeAccounts: [' BY80ACC '] })).toBe(false)
   })
 
   it('silences purposes matching an exclude pattern (case-insensitive)', () => {
@@ -129,8 +125,15 @@ describe('shouldNotifyChat', () => {
 })
 
 describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => {
-  it('excludes a listed account (trim-insensitive)', () => {
-    expect(isExcludedOperation(makeItem({ account: 'BY80ACC' }), { excludeAccounts: [' BY80ACC '] })).toBe(true)
+  it('НАШ счёт исключением не выключается — такого списка нет вовсе', () => {
+    // ⚠ Список наших счетов снят по решению владельца (2026-08-23): он дублировал «Паузу»
+    // подключения, причём хуже неё — этот гейт стоит уже ПОСЛЕ похода в банк, а пауза
+    // останавливает опрос до него и не тратит лимит запросов. Единственным оправданием оставалась
+    // файловая загрузка, но файл выписки выгружается ПО ОДНОМУ счёту (проверено по фикстурам —
+    // шапка несёт один `^Acc=…^`), и грузящий сам выбирает, по какому. Тест держит отсутствие:
+    // вернуть поле «для симметрии с контрагентами» — первое, что придёт в голову следующему.
+    const item = makeItem({ account: 'BY80ACC' })
+    expect(isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY80ACC'] })).toBe(false)
   })
 
   it('excludes a purpose matching a pattern (case-insensitive)', () => {
@@ -147,21 +150,13 @@ describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => 
     expect(isExcludedOperation(makeItem(), { excludePurposePatterns: ['', '  '] })).toBe(false)
   })
 
-  it('a blank account rule never matches (not even a blank account) — no "exclude everything" trap', () => {
-    // Symmetric with the empty-purpose guard: a whitespace-only excludeAccounts entry is inert.
-    expect(isExcludedOperation(makeItem({ account: '' }), { excludeAccounts: [''] })).toBe(false)
-    expect(isExcludedOperation(makeItem({ account: '  ' }), { excludeAccounts: ['   '] })).toBe(false)
-  })
-
   it('исключает по счёту КОНТРАГЕНТА — и не путает его с нашим (#562)', () => {
-    // ⚠ Поле отдельное, потому что `excludeAccounts` матчит НАШ счёт (выключает счёт целиком), а
-    // здесь выключается ПЛАТЕЛЬЩИК: налоговая, банк, эквайринг — за шесть суток они дали 500 дел
+    // ⚠ Выключается ПЛАТЕЛЬЩИК: налоговая, банк, эквайринг — за шесть суток они дали 500 дел
     // в «моей компании». Номер в правиле контрагентов НЕ должен срабатывать как наш счёт.
     const item = makeItem({ account: 'BY-OURS', counterparty: { name: 'ИМНС', unp: '100000000', account: 'BY-TAX' } })
     expect(isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY-TAX'] })).toBe(true)
     expect(isExcludedOperation(item, { excludeCounterpartyAccounts: [' BY-TAX '] })).toBe(true)
-    // Тот же номер в списке НАШИХ счетов этого платежа не исключает — и наоборот.
-    expect(isExcludedOperation(item, { excludeAccounts: ['BY-TAX'] })).toBe(false)
+    // НАШ счёт в этом же списке платёж не исключает — сравнивается только сторона контрагента.
     expect(isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY-OURS'] })).toBe(false)
   })
 
@@ -201,7 +196,8 @@ describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => 
   })
 
   it('shouldNotifyChat still silences an excluded op (reuses isExcludedOperation)', () => {
-    const rules = { excludeAccounts: ['BY-SILENT'] }
-    expect(shouldNotifyChat(makeItem({ account: 'BY-SILENT' }), rules)).toBe(false)
+    const rules = { excludeCounterpartyAccounts: ['BY-TAX'] }
+    const fromTax = makeItem({ counterparty: { name: 'ИМНС', unp: '100000000', account: 'BY-TAX' } })
+    expect(shouldNotifyChat(fromTax, rules)).toBe(false)
   })
 })
