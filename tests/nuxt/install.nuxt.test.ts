@@ -15,7 +15,7 @@ const batchSpy = vi.hoisted(() => vi.fn(async (_arg?: unknown) => ({
   getData: () => ({ scope: ['crm'], eventList: [] as { event: string, handler: string }[] }),
   getErrorMessages: () => [] as string[]
 })))
-const state = vi.hoisted(() => ({ inFrame: false, requiredRights: [] as string[] }))
+const state = vi.hoisted(() => ({ inFrame: false, requiredRights: [] as string[], accessToken: '' }))
 
 vi.mock('vue-router', async (orig) => {
   const actual = await orig<typeof import('vue-router')>()
@@ -31,7 +31,8 @@ vi.mock('~/composables/useB24', async () => {
       setTitle: titleSpy,
       batchMake: batchSpy,
       callMake: callSpy,
-      requiredRights: state.requiredRights
+      requiredRights: state.requiredRights,
+      ...(state.accessToken ? { accessToken: state.accessToken } : {})
     })
   }
 })
@@ -50,6 +51,7 @@ beforeEach(() => {
   // mockClear keeps implementations, so restore the default (a test may have
   // installed a failure-aware mockImplementation).
   state.requiredRights = []
+  state.accessToken = ''
   batchSpy.mockImplementation(defaultBatch)
   callSpy.mockImplementation(async () => ({ isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] }))
 })
@@ -269,5 +271,76 @@ describe('install.vue — вердикт установки (#410)', () => {
     const wrapper = await mountSuspended(InstallPage)
     await vi.advanceTimersByTimeAsync(13000)
     expect(wrapper.find('[data-testid="install-verdict"]').exists()).toBe(false)
+  })
+})
+
+describe('install.vue — смарт-процессы создаются САМИ (решение владельца 2026-08-23)', () => {
+  // ⚠ Этого блока не было, и мутационный прогон показал цену: снять вызов провижининга целиком или
+  // убрать его try/catch можно было, не уронив НИ ОДНОГО теста. Причина структурная — у мока фрейма
+  // намеренно нет токена, поэтому `frameAuth()` отдаёт null, проверка серверной части выходит до
+  // `$fetch`, и весь путь оказывается недостижим. Здесь токен задаётся явно, а `$fetch` замокан.
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    state.inFrame = true
+    state.accessToken = 'frame-token'
+    fetchMock.mockReset()
+    // `/api/setup-status` — зонд #413: 200 значит «серверная часть знает портал».
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('setup-status')) return {}
+      return { ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true }
+    })
+    vi.stubGlobal('$fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** Вызовы к нашему backend, в порядке обращения. */
+  const urls = () => fetchMock.mock.calls.map(c => String(c[0]))
+
+  it('провижининг идёт ПОСЛЕ подтверждения серверной части — иначе 409 и ложная ошибка', async () => {
+    // ⚠ Порядок несущий: провижининг работает на СОХРАНЁННОМ токене портала, а его приносит
+    // `ONAPPINSTALL` мимо iframe. До подтверждения вызов вернул бы 409 и записал в вердикт ошибку
+    // о том, что событие просто ещё не доехало.
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(20000)
+    const probe = urls().findIndex(u => u.includes('setup-status'))
+    const provision = urls().findIndex(u => u.includes('/api/distribution/provision'))
+    expect(probe, 'зонд серверной части не вызывался').toBeGreaterThanOrEqual(0)
+    expect(provision, 'провижининг смарт-процессов не вызывался').toBeGreaterThanOrEqual(0)
+    expect(provision).toBeGreaterThan(probe)
+    // И только методом POST — GET создал бы иллюзию, что мы просто читаем состояние.
+    const opts = fetchMock.mock.calls[provision]![1] as { method?: string, headers?: Record<string, string> }
+    expect(opts?.method).toBe('POST')
+    expect(opts?.headers?.authorization).toContain('frame-token')
+  })
+
+  it('серверная часть НЕ подтвердила портал — провижининг не зовём вовсе', async () => {
+    // 409 = события установки ещё нет. Звать провижининг значило бы получить свой 409 и записать
+    // ошибку о том, чего не случилось.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('setup-status')) throw Object.assign(new Error('conflict'), { statusCode: 409 })
+      return { ok: true }
+    })
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(urls().some(u => u.includes('/api/distribution/provision'))).toBe(false)
+  })
+
+  it('провижининг упал — установка ВСЁ РАВНО завершена (best-effort)', async () => {
+    // ⚠ Тот же контракт, что у триггера и бота: токены уже доставлены, и отказ второстепенного шага
+    // не имеет права превращать удавшуюся установку в «Ошибка установки».
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('setup-status')) return {}
+      throw Object.assign(new Error('crm.type.add failed'), { statusCode: 502 })
+    })
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(finishSpy, 'установка не завершилась из-за второстепенного шага').toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Ошибка установки')
+    // …но молчать об этом нельзя: без смарт-процесса не ведётся реестр.
+    expect(wrapper.text()).toContain('смарт-процессы')
   })
 })

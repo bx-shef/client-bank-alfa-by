@@ -1,12 +1,14 @@
 import { ref } from 'vue'
 import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/composables/useFrameAuth'
 
-// Provision the two distribution smart processes (#109 §9.1) from the in-portal admin UI. POSTs to
-// /api/distribution/provision with the FRAME token (Bearer + X-B24-Domain) — the backend gates on
-// the feature flag + admin, then creates/verifies the SPs on the portal's STORED OAuth token and
-// stores their entityTypeIds in settings. Outside a portal frame there is no token → inert. Mirrors
-// useManualPoll. The feature is OFF unless the owner sets DISTRIBUTION_PROVISION_ENABLED=1 — the UI
-// surfaces the backend's response (404 disabled / 403 admin / 200 result) rather than hiding it.
+// Provision the two distribution smart processes (#109 §9.1). POSTs to /api/distribution/provision
+// with the FRAME token (Bearer + X-B24-Domain) — the backend proves the portal + `profile.ADMIN`,
+// then creates/verifies the SPs on the portal's STORED OAuth token and stores their entityTypeIds
+// in settings. Outside a portal frame there is no token → inert. Mirrors useManualPoll.
+//
+// ⚠ There is NO feature flag any more (owner's call, 2026-08-23): the payments smart process is the
+// REGISTRY every operation is written to (#575), not an optional extra, so the app's mode is always
+// «on». The same call runs unattended right after install — see `app/pages/install.vue`.
 
 export interface ProvisionResponse {
   ok?: boolean
@@ -53,8 +55,7 @@ export function useProvisionDistribution() {
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
       const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status
-      if (status === 404) error.value = 'Настройка смарт-процессов сейчас отключена.'
-      else if (status === 403) error.value = 'Настроить смарт-процессы может только администратор портала.'
+      if (status === 403) error.value = 'Настроить смарт-процессы может только администратор портала.'
       else if (status === 409) error.value = 'Приложение не установлено на портал.'
       else error.value = frameFetchError(e, 'Не удалось настроить смарт-процессы')
     } finally {

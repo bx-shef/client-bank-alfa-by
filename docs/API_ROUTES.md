@@ -1,6 +1,6 @@
 # Наши HTTP-роуты: авторизация и коды
 
-> Last reviewed: 2026-08-21
+> Last reviewed: 2026-08-23
 
 Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
 [`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.
@@ -48,9 +48,9 @@
 | POST | `/api/bank/disconnect` | **F+A** (member-scoped WHERE, адрес — неизменяемый `id`) | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409, 503 | `import`, `burst=3` |
 | GET | `/api/bank/matrix` | **F+A** | **да** | 200, 400, 403, 409, 502 | `import` + `limit_conn bank_matrix 2` (спрашивает банки параллельно — по соединению на банк) |
-| GET | `/api/distribution/ledger` | **F+A** + гейт `DISTRIBUTION_PROVISION_ENABLED` | **да** | 200, 400, 403, 404, 502 | — |
-| POST | `/api/distribution/provision` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516); держит аренда, не advisory-лок (#538) |
-| POST | `/api/distribution/recompute` | **F+A** + тот же гейт, single-flight | **да** | 200, 400, 403, 404, 502, **503** | 503 = «уже выполняется» (#516); держит аренда, не advisory-лок (#538) |
+| GET | `/api/distribution/ledger` | **F+A** | **да** | 200, 400, 401, 403, 409, 502 | — |
+| POST | `/api/distribution/provision` | **F+A**, single-flight | **да** | 200, 400, 401, 403, 409, 502, **503** | 503 = «уже выполняется» (#516); держит аренда, не advisory-лок (#538) |
+| POST | `/api/distribution/recompute` | **F+A**, single-flight | **да** | 200, 400, 401, 403, 409, 502, **503** | 503 = «уже выполняется» (#516); держит аренда, не advisory-лок (#538) |
 | GET | `/api/app-rating` | F | нет | 200 (сбой → `{show:false}`), 400, 403, 409 | — |
 | POST | `/api/app-rating` | F | нет | 200, 400, 403, 409 | — |
 | GET | `/api/feedback` | P (булев `{enabled}`) | — | 200 | `import` |

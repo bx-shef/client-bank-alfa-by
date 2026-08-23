@@ -1,5 +1,5 @@
 // Pure request logic for POST /api/distribution/recompute (#109, §3/§9.2 «пересчитать»). Same gate
-// model as /api/distribution/ledger (feature flag + frame admin + installed). Recomputes «осталось»
+// model as /api/distribution/ledger (frame admin + installed). Recomputes «осталось»
 // for every payment carrier — the manual recovery backstop (deletion crash-window / drift). Thin over
 // DI — unit-testable without pg / network / the SDK.
 import { isSingleFlightBusy, isSingleFlightUnavailable } from './singleFlightLease'
@@ -7,8 +7,6 @@ import { DB_UNAVAILABLE_TEXT } from './provisionRequest'
 
 /** Injected side effects + config for {@link handleRecomputeRequest}. */
 export interface RecomputeRequestDeps {
-  /** Feature gate: OFF unless the owner opts in (default false, fail-closed). */
-  enabled: boolean
   memberIdByDomain: (domain: string) => Promise<string>
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
   /** Recompute every payment carrier for the portal (single-flight). Returns the count, or `null`
@@ -24,7 +22,7 @@ export interface RecomputeRequestResult {
 }
 
 /**
- * Handle one recompute request: gate → auth → recompute. Order: feature gate (404) → frame auth
+ * Handle one recompute request: gate → auth → recompute. Order: frame auth
  * (400 no creds → 409 not installed → 401 bad token → 403 not admin) → recompute. Not provisioned ⇒
  * `200 {provisioned:false, recomputed:0}`. A downstream error maps to 502. Never throws.
  */
@@ -32,8 +30,6 @@ export async function handleRecomputeRequest(
   deps: RecomputeRequestDeps,
   input: { accessToken: string, domain: string }
 ): Promise<RecomputeRequestResult> {
-  if (!deps.enabled) return { status: 404, body: { error: 'distribution disabled' } }
-
   const accessToken = (input.accessToken || '').trim()
   const domain = (input.domain || '').trim()
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
