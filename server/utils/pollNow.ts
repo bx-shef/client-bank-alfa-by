@@ -5,8 +5,10 @@
 // #54 is explicit that poll frequency is regulated APP-SIDE, never by a portal user/admin —
 // a portal admin must not be able to outrun the bank's rate limit (a ban hits the shared app).
 // This endpoint honours that with four layers, none of which the caller controls:
-//   1. FEATURE GATE — `enabled` (env MANUAL_POLL_ENABLED, default OFF): the owner decides whether
-//      portals get the button at all. Off ⇒ 503 before anything.
+//   1. QUEUES — `enabled`: without Redis the enqueue would silently no-op, so we answer 503 instead
+//      of pretending the poll started. ⚠ Своего ВЫКЛЮЧАТЕЛЯ у ручного опроса больше нет
+//      (`MANUAL_POLL_ENABLED` снят 2026-08-23, решение владельца): кнопка нужна на каждом портале,
+//      а частоту держат остальные три слоя, ни один из которых вызывающий не контролирует.
 //   2. ADMIN GATE — the frame token must belong to THIS portal (blocks X-B24-Domain spoofing) and
 //      the caller must be a portal admin.
 //   3. PER-PORTAL COOLDOWN — a Redis NX-EX slot (`claimSlot`): within the cooldown a repeat poll is
@@ -27,7 +29,7 @@ export interface PollNowResult {
 }
 
 export interface PollNowDeps {
-  /** Feature gate — env MANUAL_POLL_ENABLED (default OFF) AND queues enabled. Off ⇒ 503. */
+  /** Очереди доступны (Redis). Нет ⇒ 503: постановка задачи молча ничего не сделала бы. */
   enabled: boolean
   /** Cooldown length (seconds) for the per-portal manual-poll slot. */
   cooldownSec: number
@@ -68,7 +70,7 @@ export const DEFAULT_MANUAL_POLL_COOLDOWN_SEC = 60
  * window; inert (200, enqueued:0) when the portal has no connected accounts yet.
  */
 export async function handlePollNow(deps: PollNowDeps, input: PollNowInput): Promise<PollNowResult> {
-  if (!deps.enabled) return { status: 503, body: { error: 'manual poll disabled' } }
+  if (!deps.enabled) return { status: 503, body: { error: 'очередь недоступна — опрос сейчас не запустить' } }
 
   const { accessToken, domain } = input
   if (!accessToken || !domain) {

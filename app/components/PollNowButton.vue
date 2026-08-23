@@ -11,7 +11,7 @@ import { dayVerdictMessage, isoDayFromMs, pollDayVerdict } from '~/utils/dayValu
 // admin here too (no fail-open flash). Outside the portal frame it's a preview. Mirrors
 // BankConnectCard's admin/preview handling.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
-const { poll, syncEnabled, polling, error, message, enabled } = useManualPoll()
+const { poll, syncEnabled, polling, error, message, enabled, outcome, waiting } = useManualPoll()
 
 const adminChecked = ref(false)
 
@@ -23,7 +23,7 @@ const day = ref('')
 const dayVerdict = computed(() => (day.value ? pollDayVerdict(day.value, isoDayFromMs(Date.now())) : 'malformed'))
 const dayError = computed(() => (day.value ? dayVerdictMessage(dayVerdict.value) : ''))
 /** Забор доступен только с выбранным и годным днём — дата обязательна. */
-const canFetchDay = computed(() => dayVerdict.value === 'ok' && !polling.value)
+const canFetchDay = computed(() => dayVerdict.value === 'ok' && !polling.value && !waiting.value)
 
 onMounted(async () => {
   await useB24().init().catch(() => {})
@@ -95,16 +95,43 @@ onMounted(async () => {
         />
       </div>
 
+      <!-- ⚠ Кнопки заблокированы и на время ОЖИДАНИЯ исхода, а не только запроса: `polling`
+           гаснет сразу после ответа сервера, и второе нажатие запускало бы второй цикл ожидания
+           поверх первого. -->
       <B24Button
-        :loading="polling"
-        :disabled="polling"
-        :aria-busy="polling"
+        :loading="polling || waiting"
+        :disabled="polling || waiting"
+        :aria-busy="polling || waiting"
         color="air-primary"
         data-testid="poll-button"
         @click="poll()"
       >
         Опросить сейчас
       </B24Button>
+
+      <!-- ⚠ Исход прогона показываем ЗДЕСЬ, ОБЩИМ для обеих кнопок и ВЫШЕ раздела про день:
+           «Опросить сейчас» тоже дожидается исхода, а под заголовком «Забрать за конкретный день»
+           его результат читался бы как ответ про выбранную дату. Без этого блока кнопка отвечала
+           «опрос запущен» и замолкала навсегда, и отличить «банк вернул ноль» от «кнопка не
+           работает» человек в портале не мог никак. -->
+      <div
+        role="status"
+        aria-live="polite"
+      >
+        <p
+          v-if="waiting"
+          class="text-sm text-(--ui-color-base-3)"
+          data-testid="poll-waiting"
+        >
+          Ждём ответа банка…
+        </p>
+        <B24Alert
+          v-else-if="outcome"
+          color="air-primary-success"
+          :description="outcome"
+          data-testid="poll-outcome"
+        />
+      </div>
 
       <!-- ⚠ Забор за день стоит ОТДЕЛЬНЫМ блоком под чертой, а не второй кнопкой в ряд: у кнопок
            разный смысл. «Опросить сейчас» берёт обычное окно и безопасен при случайном клике,
@@ -131,9 +158,9 @@ onMounted(async () => {
         </B24FormField>
 
         <B24Button
-          :loading="polling"
+          :loading="polling || waiting"
           :disabled="!canFetchDay"
-          :aria-busy="polling"
+          :aria-busy="polling || waiting"
           color="air-secondary-accent-1"
           data-testid="poll-day-button"
           @click="poll(day)"

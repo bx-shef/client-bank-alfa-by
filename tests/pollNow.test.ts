@@ -38,7 +38,10 @@ describe('handlePollNow', () => {
     expect(providers).not.toContain('manual')
   })
 
-  it('503 when the feature is disabled (app-side gate)', async () => {
+  it('503 без очередей — а не молчаливое «запущено»', async () => {
+    // ⚠ Своего выключателя у ручного опроса больше нет (`MANUAL_POLL_ENABLED` снят 2026-08-23):
+    // кнопка нужна на каждом портале. Остаётся ровно одна причина ответить отказом — недоступные
+    // очереди: постановка задачи тогда молча ничего не делает, и «опрос запущен» было бы ложью.
     const enqueue = vi.fn(async (_job: FetchJob) => {})
     const r = await handlePollNow(deps({ enabled: false, enqueue }), input)
     expect(r.status).toBe(503)
@@ -151,6 +154,16 @@ describe('точечный забор за выбранный день (#592)', 
       expect(validateFrame, `${bad}: сходили в портал зря`).not.toHaveBeenCalled()
       expect(enqueue, bad).not.toHaveBeenCalled()
     }
+  })
+
+  it('кулдаун применяется и к забору за день', async () => {
+    // ⚠ Мутация из ревью: `if (!day) { …claimSlot… }` снимала кулдаун именно с забора за день, и
+    // весь набор оставался зелёным — оба прежних теста кулдауна ходили БЕЗ дня. То есть слой,
+    // который мы называем защитой от долбёжа, не был проверен там, где им пользуются.
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ claimSlot: async () => false, enqueue }), { ...input, day: '2026-07-10' })
+    expect(r.status).toBe(429)
+    expect(enqueue, 'забор за день прошёл мимо кулдауна').not.toHaveBeenCalled()
   })
 
   it('сегодняшний день разрешён', async () => {

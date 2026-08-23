@@ -1,15 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
-import {
-  DEFAULT_SETTINGS_SECTION,
-  resolveSettingsSection,
-  SETTINGS_SECTIONS,
-  showsChatPreview,
-  type SettingsSectionId
-} from '~/utils/settingsSections'
+import { SETTINGS_SECTIONS, showsChatPreview, type SettingsSectionId } from '~/utils/settingsSections'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 import SignIcon from '@bitrix24/b24icons-vue/main/SignIcon'
 
@@ -18,7 +12,22 @@ import SignIcon from '@bitrix24/b24icons-vue/main/SignIcon'
 // ⚠ Раньше это был один аккордеон, и он ПРЯТАЛ настройки: что можно настроить, было видно только
 // по заголовкам секций, а до кнопки сохранения на длинной форме надо было прокрутить экран
 // целиком (#530). Тем же путём прошёл соседний `ai-price-import`.
-const emit = defineEmits<{ close: [] }>()
+// ⚠ Раздел приходит ПРОПОМ, а состояние живёт на странице (`settings.vue`): там же навигация и
+// заголовок панели. Форма его только читает.
+//
+// ⚠ Передаётся ИДЕНТИФИКАТОР, а не готовый объект раздела, хотя странице объект тоже нужен. Две
+// копии одного состояния однажды разойдутся — а список разделов закрытый и лежит в чистом
+// `settingsSections.ts`, поэтому вывести объект по идентификатору стоит одну строку и соврать не
+// может.
+const props = defineProps<{ section: SettingsSectionId }>()
+// ⚠ `update:section` обязателен, а не «на будущее»: экран готовности внутри формы переключает
+// раздел («перейти и починить» — один клик), и пока раздел был локальным `ref`, он писал в него
+// напрямую. С переездом состояния на страницу такая запись стала записью В ПРОП: Vue её не
+// применяет, и ссылки экрана готовности молча перестали бы работать — заметить это можно только
+// кликнув. Отсюда `v-model:section` со стороны страницы.
+const emit = defineEmits<{ 'close': [], 'update:section': [SettingsSectionId] }>()
+
+const currentSection = computed(() => SETTINGS_SECTIONS.find(s => s.id === props.section))
 
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
@@ -31,54 +40,6 @@ const toast = useToast()
 const adminChecked = ref(false)
 const blocked = computed(() => inPortal.value && !isAdmin.value)
 
-// Активный раздел.
-//
-// ⚠ Адрес читаем, но НЕ пишем. Читать полезно: экран готовности и письмо могут привести сразу к
-// нужному разделу. А запись сюда означала бы навигацию на ПРЕРЕНДЕРЕННОЙ странице внутри фрейма
-// слайдера — ровно там, где Nuxt восстанавливает отложенный адрес в обход гардов (#555). Платить
-// этим риском за кнопку «назад», которой в слайдере портала нет, незачем.
-const route = useRoute()
-const section = ref<SettingsSectionId>(DEFAULT_SETTINGS_SECTION)
-
-// Пункты навигации: активный подсвечен, клик переключает раздел.
-//
-// ⚠ Подсветку даёт `active`, а НЕ `v-model`: `modelValue` у горизонтального меню означает «какое
-// подменю раскрыто» и на плоском списке без `children` не делает ничего. `value` тут не про
-// подсветку (первая редакция комментария утверждала обратное) — это идентичность пункта для
-// reka-ui, и тип прямо просит не оставлять её индексной.
-const navItems = computed(() =>
-  SETTINGS_SECTIONS.map(s => ({
-    label: s.label,
-    value: s.id,
-    active: section.value === s.id,
-    // ⚠ `preventDefault` здесь НЕ нужен и раньше стоял зря: в `select` приходит не клик, а
-    // синтетическое событие reka, и отмена его подавляет лишь закрытие раскрытого подменю —
-    // которого у плоских пунктов нет. Читалось же это как «гасим переход по ссылке», хотя
-    // переходить некуда: без `to` пункт рендерится нативной кнопкой.
-    onSelect: () => {
-      section.value = s.id
-    }
-  }))
-)
-const currentSection = computed(() => SETTINGS_SECTIONS.find(s => s.id === section.value))
-
-/**
- * Подкрутить активный пункт в зону видимости.
- *
- * ⚠ Нужно ровно на узком экране и ровно для прихода ИЗВНЕ: полоса шириной 1038 px в 375 показывает
- * два пункта из шести, поэтому ссылка вида `?section=recognition` (а её даёт и экран готовности, и
- * письмо) открывала правильный раздел при полосе, где не подсвечено НИЧЕГО — то есть выглядела как
- * «ничего не выбрано». Клик по пункту в подкрутке не нуждается, но и не страдает от неё.
- *
- * ⚠ `block: 'nearest'` обязателен: без него браузер вертикально прокручивает страницу к полосе,
- * а нам нужна только горизонтальная доводка.
- */
-const navEl = ref<HTMLElement | null>(null)
-watch(section, async () => {
-  await nextTick()
-  navEl.value?.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-})
-
 onMounted(async () => {
   // Await init AND a tick: useB24 flips its ready flag on nextTick after the frame
   // handshake, so isInit() lags an un-awaited init(). Without this the gate reads
@@ -87,7 +48,6 @@ onMounted(async () => {
   await nextTick()
   checkAdmin()
   adminChecked.value = true
-  section.value = resolveSettingsSection(route.query.section)
   if (blocked.value) return // non-admin: don't load or expose the form
   if (!loaded.value) await cs.load()
 })
@@ -185,7 +145,7 @@ async function cancel(): Promise<void> {
   <template v-else>
     <B24Form
       :state="settings"
-      class="space-y-4"
+      class="space-y-4 flex-1"
     >
       <B24Alert
         v-if="!enabled"
@@ -195,52 +155,8 @@ async function cancel(): Promise<void> {
         description="Работа формы возможна только в Bitrix24."
       />
 
-      <!-- Полоса разделов. `B24DashboardToolbar` сам прокручивается по горизонтали: на телефоне
-           шесть пунктов в строку не помещаются, а перенос вторым рядом съедал бы пол-экрана. -->
-      <!-- ⚠ Без `-mx-4`: отрицательные поля выносили полосу на 16 px за правый край экрана, и
-           подкрутка активного пункта «до ближайшего края» ставила его ровно под этот вынос — то
-           есть на узком экране активный раздел оставался подрезанным (замерено: правый край на
-           391 при экране 375). Полоса и так во всю ширину: на мобильном у тела панели отступов
-           нет вовсе (`sm:p-4` в теме), а на широком экране рамка в 16 px совпадает с остальным
-           содержимым. -->
-      <B24DashboardToolbar class="sticky top-0 z-10 base-mode bg-default">
-        <template #left>
-          <!-- ⚠ Ref висит на ОБЁРТКЕ, а не на самом меню: `ref` на компоненте даёт его
-               экземпляр, а не узел DOM, и `querySelector` по нему упал бы в рантайме, оставаясь
-               зелёным при проверке типов. -->
-          <div ref="navEl">
-            <B24NavigationMenu
-              :items="navItems"
-              orientation="horizontal"
-              data-testid="settings-nav"
-            />
-          </div>
-        </template>
-      </B24DashboardToolbar>
-
       <div class="flex flex-col lg:flex-row items-start justify-between gap-4">
         <div class="w-full min-w-0 space-y-3">
-          <div>
-            <!-- h2, а не h3: над формой стоит `h1` навбара страницы. -->
-            <ProseH2
-              class="mb-0"
-              data-testid="section-title"
-            >
-              {{ currentSection?.label }}
-            </ProseH2>
-            <!-- ⚠ `accent="default"`, а не `less`: замерено — `less` на 11 px даёт 3.07:1 в
-                 светлой теме при пороге 4.5 (docs/PAGE_GUIDE.md §9), то есть самым нечитаемым на
-                 экране оказывалось единственное объяснение, что этот раздел делает. -->
-            <ProseP
-              accent="default"
-              small
-              class="mb-0"
-              data-testid="section-hint"
-            >
-              {{ currentSection?.hint }}
-            </ProseP>
-          </div>
-
           <!-- ⚠ `KeepAlive` здесь несущий, а не «для скорости»: раздел «Подключение банка» при
                монтировании сверяет счета, а сверка ходит В БАНК. Без кэша каждое переключение
                вкладки туда-обратно било бы по лимитам банка запросом, которого никто не просил.
@@ -265,7 +181,7 @@ async function cancel(): Promise<void> {
           <!-- Красная строка готовности ведёт прямо в свой раздел: от «что не так» до «где это
                чинить» — один клик. Без этого разбор `?section=` был бы возможностью, до которой
                из приложения не добраться. -->
-          <SetupReadinessCard @open-section="section = $event" />
+          <SetupReadinessCard @open-section="emit('update:section', $event)" />
 
           <!-- А предпросмотр — только там, где он про ЭТИ правила. Рядом с картой распознавания
                он отвечал бы на вопрос, которого на экране не задавали. -->
@@ -298,15 +214,16 @@ async function cancel(): Promise<void> {
            ⚠ Кнопки ОБЩИЕ на все разделы, а не свои у каждого: настройки — один блоб в
            `app.option`, и сохранение «только этого раздела» обещало бы избирательность, которой
            на сервере нет.
-           ⚠ Панель стоит в конце формы, а НЕ приклеена к экрану — замерено: её `offsetParent` это
-           корень панели, высота которого равна высоте содержимого, поэтому `absolute bottom` кладёт
-           её в самый низ страницы. Первая редакция этого комментария утверждала обратное. До неё
-           по-прежнему надо прокрутить раздел — но раздел, а не всю форму из шести секций, и в этом
-           и состоит выигрыш #530. Настоящее приклеивание требует высоты в один экран у корня
-           панели, а в портале высоту фрейма задаёт `fitWindow` — это отдельная работа. -->
+           ⚠ Панель ПРИКЛЕЕНА к низу (`sticky`), и это правка владельца: раньше она стояла в конце
+           формы, и до кнопки «Сохранить» надо было прокрутить раздел целиком.
+           ⚠ `sticky`, а не `fixed`: `fixed` растягивался на весь экран и накрывал список разделов
+           слева — на невысоком фрейме последний пункт («Очистка») оказывался виден, но не
+           кликабелен (найдено ревью до выката). `sticky` держится в границах своей колонки.
+           ⚠ Распорка `h-24` выше по-прежнему нужна: без неё панель накрывает последние ~41 px
+           содержимого раздела. -->
       <div
         v-if="enabled"
-        class="absolute inset-x-0 bottom-1.5 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
+        class="sticky inset-x-0 bottom-0 z-10 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
       >
         <B24Button
           size="lg"

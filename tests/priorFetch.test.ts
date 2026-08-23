@@ -143,9 +143,9 @@ describe('fetchPriorStatement', () => {
     const items = await fetchPriorStatement(query, tok, deps)
     expect(items.map(i => i.docId)).toContain('T-EXTRA')
     expect(calls.pollUrl.at(-1)).toBe('https://prior:9344/open-banking/v1.0/accounts/OPAQUE-9/transactions/RES-9?page=2')
-    expect(logged.some(l => l.includes('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 1'))).toBe(true)
+    expect(logged.some(l => l.includes('со 2-й и дальше добрано операций: 1'))).toBe(true)
     // Извещение несёт маркер [prior-page] ровно один раз — префикс канала не задваивается.
-    expect(logged.filter(l => l.includes('ПАГИНАЦИЯ'))[0]).toMatch(/^\[prior-page\] /)
+    expect(logged.filter(l => l.includes('добрано операций'))[0]).toMatch(/^\[prior-page\] /)
   })
 
   it('бэкстоп «ровно N без пагинации» молчит, когда обход ОБОРВАЛИ, а не закончили', async () => {
@@ -462,7 +462,7 @@ describe('#561: walkPriorPages — обход страниц', () => {
     const out = await walkPriorPages(page(['a', 'b'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
     expect(out.map(i => i.docId)).toEqual(['a', 'b', 'c', 'd', 'e'])
     expect(onWalk).toHaveBeenCalledWith({ pages: 3, recovered: 3, stop: 'exhausted' })
-    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 3')
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('со 2-й и дальше добрано операций: 3')
   })
 
   it('ссылки нет — одна страница, лишних запросов нет, молчим', async () => {
@@ -487,7 +487,7 @@ describe('#561: walkPriorPages — обход страниц', () => {
     expect(onWalk).toHaveBeenCalledWith({ pages: 2, recovered: 0, stop: 'repeat' })
     // ⚠ Цикл — ровно тот случай, когда мы НЕ знаем, всё ли увидели. Считать его честным концом
     // значило заново построить ту тихую обрезку, ради конца которой файл и написан.
-    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('банк зациклился')
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('банк зациклился')
   })
 
   it('ПУСТЫЕ страницы посередине не обрывают обход — данные после них всё равно забираются', async () => {
@@ -555,14 +555,14 @@ describe('#561: walkPriorPages — обход страниц', () => {
     const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
     expect(out).toHaveLength(1)
     expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'not-ready' })
-    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
   })
 
   it('чужой origin в next останавливает ГРОМКО — отвергнуто и «нет ссылки» это разное', async () => {
     const onWalk = vi.fn()
     await walkPriorPages(page(['a'], 'https://evil.example/x'), 'ACC', BASE, vi.fn(), onWalk, nowait)
     expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'foreign-next' })
-    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ЧУЖОЙ origin')
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('ЧУЖОЙ origin')
   })
 
   it('затроттленная следующая страница останавливает громко, но не роняет джобу — тик залечит', async () => {
@@ -571,7 +571,7 @@ describe('#561: walkPriorPages — обход страниц', () => {
     const out = await walkPriorPages(page(['a'], '/p2'), 'ACC', BASE, fetchPage, onWalk, nowait)
     expect(out).toHaveLength(1)
     expect(onWalk).toHaveBeenCalledWith({ pages: 1, recovered: 0, stop: 'not-ready' })
-    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
   })
 
   it('ОШИБКА страницы бросает — сломанный ответ это не медленный', async () => {
@@ -592,7 +592,7 @@ describe('#561: walkPriorPages — обход страниц', () => {
     const info = onWalk.mock.calls[0]![0] as { pages: number, stop: string }
     expect(info.stop).toBe('page-cap')
     expect(info.pages).toBe(MAX_PRIOR_STATEMENT_PAGES)
-    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain(`потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц`)
+    expect(priorWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain(`потолок ${MAX_PRIOR_STATEMENT_PAGES} страниц`)
   })
 
   it('медленный банк останавливается по бюджету реального времени', async () => {

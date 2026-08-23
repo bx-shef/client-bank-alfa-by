@@ -171,7 +171,6 @@ services:
       PRIOR_OAUTH_AUTHORIZE_BASE: ${PRIOR_OAUTH_AUTHORIZE_BASE:-}
       # Feature gates: real cron polling (default OFF) and the admin «Опросить сейчас».
       CRON_REAL_POLL: ${CRON_REAL_POLL:-0}
-      MANUAL_POLL_ENABLED: ${MANUAL_POLL_ENABLED:-0}
       MANUAL_POLL_COOLDOWN_SEC: ${MANUAL_POLL_COOLDOWN_SEC:-}
       # Self-hosted portals: without this the SSRF host allowlist rejects them and there is no
       # way to fix it from .env alone.

@@ -77,7 +77,20 @@ describe('AccountMatrix', () => {
       rows: [{ state: 'bank-only', bank: { number: 'BY9' }, connected: false }, matched, matched]
     })
     await flushPromises()
-    expect(w.find('[data-testid="matrix-matched-count"]').text()).toContain('2')
+    expect(w.find('[data-testid="matrix-matched-count"]').text()).toContain('2 счёта сходятся')
+  })
+
+  it('одна рабочая строка — фраза человеческая, а не «Остальные 1»', async () => {
+    // ⚠ Замечание владельца: «Остальные 1 — сходятся» читается как обрывок и как ошибка
+    // склонения. Считаем словами; остальные числа склоняет общий `pluralRu`, а не ручной `=== 1`
+    // в шаблоне — такой суррогат уже давал «5 портала(ов)» в другом месте.
+    const w = await mountMatrix({
+      rows: [{ state: 'bank-only', bank: { number: 'BY9' }, connected: false }, matched]
+    })
+    await flushPromises()
+    const note = w.find('[data-testid="matrix-matched-count"]').text()
+    expect(note).toBe('Ещё один счёт сходится.')
+    expect(note, 'вернулась прежняя формулировка').not.toContain('Остальные')
   })
 
   it('отказ банка показан отдельной тревогой, а не как «банк не отдал ни одного счёта»', async () => {
