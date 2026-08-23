@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { MATRIX_STATE_LABEL, matrixIsClean, type MatrixRow } from '~/utils/bankAccountMatrix'
 import type { MatrixProviderStatus } from '~/composables/useBankMatrix'
 import { BANK_LABELS } from '~/utils/bankLabels'
+import { pluralRu } from '~/utils/importStatus'
 
 // «Наш счёт ↔ счёт в банке» (#494) — the screen that answers «почему платежи не приземляются».
 //
@@ -30,6 +31,16 @@ const props = defineProps<{
 
 const clean = computed(() => matrixIsClean(props.rows))
 const problems = computed(() => props.rows.filter(r => r.state !== 'matched'))
+
+// ⚠ Было «Остальные 1 — сходятся»: при одной строке фраза читается как обрывок и выглядит
+// ошибкой склонения (замечание владельца). Считаем словами и склоняем общим `pluralRu` — тем же,
+// что и везде, а не ручным `=== 1` в шаблоне: ручной суррогат уже давал «5 портала(ов)».
+const matchedNote = computed(() => {
+  const n = props.rows.length - problems.value.length
+  return n === 1
+    ? 'Ещё один счёт сходится.'
+    : `Ещё ${n} ${pluralRu(n, ['счёт сходится', 'счёта сходятся', 'счетов сходятся'])}.`
+})
 const providerErrors = computed(() => props.providers.filter(p => p.error))
 
 function providerLabel(id: string): string {
@@ -166,7 +177,7 @@ function stateColor(state: MatrixRow['state']) {
       class="text-xs text-(--ui-color-base-3)"
       data-testid="matrix-matched-count"
     >
-      Остальные {{ rows.length - problems.length }} — сходятся.
+      {{ matchedNote }}
     </p>
   </section>
 </template>
