@@ -148,14 +148,14 @@ describe('metricsFromSummary', () => {
   const summary = {
     processed: 10, created: 11, notified: 12, skipped: 13, excluded: 24, unmatched: 14, unresolved: 25, recognized: 15,
     resolved: 16, allocatable: 17, ambiguous: 18, manual: 19, allocated: 20, distributed: 21,
-    credits: 22, debits: 23, registryFailed: 26, bindingsFailed: 27
+    credits: 22, debits: 23, registryFailed: 26, bindingsFailed: 27, misconfigured: 28
   }
 
   it('maps each counter to its OWN summary field (no transposition)', () => {
     expect(metricsFromSummary(summary)).toEqual({
       processed: 10, created: 11, notified: 12, unmatched: 14, unresolved: 25, recognized: 15,
       resolved: 16, allocated: 20, distributed: 21, ambiguous: 18, manual: 19, registryFailed: 26,
-      bindingsFailed: 27
+      bindingsFailed: 27, misconfigured: 28
     })
   })
 
@@ -164,7 +164,7 @@ describe('metricsFromSummary', () => {
     for (const dropped of ['skipped', 'excluded', 'allocatable', 'credits', 'debits']) {
       expect(out).not.toHaveProperty(dropped)
     }
-    expect(Object.keys(out)).toHaveLength(13)
+    expect(Object.keys(out)).toHaveLength(14)
   })
 
   it('names line up with the METRICS vocab', () => {

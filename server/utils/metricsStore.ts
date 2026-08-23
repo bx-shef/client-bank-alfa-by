@@ -24,6 +24,11 @@ export const METRICS = {
   notified: 'notified', // chat notifications sent
   unmatched: 'unmatched', // payer company not found by account (#91: may still be recorded on my company)
   unresolved: 'unresolved', // номер в назначении распознан, но цели в CRM нет (#421)
+  // ⚠ Пожизненный, а не только за прогон, ровно как `registryFailed`: это счётчик состояния
+  // НАСТРОЙКИ (#572), а неверное имя поля живёт до тех пор, пока админ его не поправит. Сообщение
+  // в чат уходит раз за прогон и теряется в переписке, строка лога уезжает с ротацией — а здесь
+  // видно «за всё время N платежей ушли без привязки из-за карты распознавания».
+  misconfigured: 'misconfigured', // портал отверг поле из «карты сопоставления» (#572)
   recognized: 'recognized', // ops with ≥1 recognized identifier in the purpose
   resolved: 'resolved', // ops whose intent resolved to ≥1 allocation candidate
   allocated: 'allocated', // dist-СП distribution rows written (§9.3 #6; 0 for portals without provisioned SPs)
@@ -72,6 +77,7 @@ export function metricsFromSummary(
     [METRICS.notified]: summary.notified,
     [METRICS.unmatched]: summary.unmatched,
     [METRICS.unresolved]: summary.unresolved,
+    [METRICS.misconfigured]: summary.misconfigured,
     [METRICS.recognized]: summary.recognized,
     [METRICS.resolved]: summary.resolved,
     [METRICS.allocated]: summary.allocated,

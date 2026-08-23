@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAllocationErrorMessage, buildUnresolvedMessage } from '~/utils/allocationErrorMessage'
+import { buildSettingsErrorMessage, buildAllocationErrorMessage, buildUnresolvedMessage } from '~/utils/allocationErrorMessage'
 import type { AllocationDecision } from '~/utils/allocation'
 import type { StatementItem } from '~/types/statement'
 
@@ -72,6 +72,48 @@ describe('buildUnresolvedMessage', () => {
   it('идентификатор из назначения BB-нейтрализуется', () => {
     // Номер — это фрагмент назначения, то есть текст ПЛАТЕЛЬЩИКА, а im.message.add рендерит BB-код.
     const msg = buildUnresolvedMessage(item(), ['[url=http://evil]СЧ-1[/url]'])!
+    expect(msg).not.toContain('[url=')
+  })
+})
+
+// Сообщение «настройка не подходит порталу» (#572).
+describe('buildSettingsErrorMessage', () => {
+  it('не тащит в чат внутренние коды и английский текст портала', () => {
+    // ⚠ Найдено ревью: первая редакция вставляла причину ЦЕЛИКОМ — вместе с ключом вида
+    // (`deal-field`) и «Invalid filter: field 'UF_CRM_NOPE' is not allowed in filter». Читает это
+    // бухгалтер клиента, а не разработчик; внутренние коды остаются в логе сервера.
+    const raw = 'deal-field|field|Invalid filter: field \'UF_CRM_NOPE\' is not allowed in filter'
+    const msg = buildSettingsErrorMessage(raw) ?? ''
+    expect(msg).not.toContain('deal-field')
+    expect(msg).not.toContain('UF_CRM_NOPE')
+    expect(msg).not.toContain('Invalid filter')
+  })
+
+  it('называет РАЗДЕЛ настроек и адресует действие АДМИНИСТРАТОРУ', () => {
+    // ⚠ Настройки admin-only: попросить бухгалтера «проверьте карту распознавания» значит послать
+    // его туда, куда его не пустят.
+    const msg = buildSettingsErrorMessage('deal-field|field|x') ?? ''
+    expect(msg).toContain('Карта распознавания')
+    expect(msg).toContain('администратору')
+  })
+
+  it('различает поле и смарт-процесс — чинят их в разных местах', () => {
+    const field = buildSettingsErrorMessage('deal-field|field|x') ?? ''
+    const entity = buildSettingsErrorMessage('smart-id|entity|x') ?? ''
+    expect(field).toContain('имя поля')
+    expect(entity).toContain('смарт-процесс')
+    expect(field).not.toBe(entity)
+  })
+
+  it('битая или пустая причина → null, а не сообщение «что-то не так»', () => {
+    // Сказать «с настройками что-то не так» без указания раздела — потратить внимание человека зря.
+    expect(buildSettingsErrorMessage('')).toBeNull()
+    expect(buildSettingsErrorMessage('мусор без разделителей')).toBeNull()
+    expect(buildSettingsErrorMessage('kind|unknown-param|detail')).toBeNull()
+  })
+
+  it('нейтрализует BB — причина несёт текст портала', () => {
+    const msg = buildSettingsErrorMessage('deal-field|field|[url=http://evil]click[/url]') ?? ''
     expect(msg).not.toContain('[url=')
   })
 })

@@ -7,7 +7,7 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import type { AllocationDecision } from '../../app/utils/allocation'
-import { buildAllocationErrorMessage, buildUnresolvedMessage } from '../../app/utils/allocationErrorMessage'
+import { buildAllocationErrorMessage, buildSettingsErrorMessage, buildUnresolvedMessage } from '../../app/utils/allocationErrorMessage'
 import { postChatMessage } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
@@ -43,6 +43,24 @@ export async function notifyUnresolvedViaRest(
   memberId?: string
 ): Promise<string | null> {
   const message = buildUnresolvedMessage(item, identifiers, truncated)
+  if (!message) return null
+  return postChatMessage(dialogId, message, call, memberId)
+}
+
+/**
+ * Сообщение «карта распознавания настроена неверно» (#572) в чат ошибок. Тот же транспорт и тот же
+ * контракт: пустая причина ⇒ ничего не шлём.
+ *
+ * ⚠ Платёж сюда НЕ передаётся намеренно — это состояние настройки, одинаковое для всех операций
+ * прогона, и вызывающий шлёт его ОДИН раз за прогон, а не на каждую операцию.
+ */
+export async function notifySettingsErrorViaRest(
+  reason: string,
+  dialogId: string,
+  call: RestCall,
+  memberId?: string
+): Promise<string | null> {
+  const message = buildSettingsErrorMessage(reason)
   if (!message) return null
   return postChatMessage(dialogId, message, call, memberId)
 }

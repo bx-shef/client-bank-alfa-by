@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { PortalRestError } from '../server/utils/portalError'
 import { IDENTIFIER_ROUTES, routeIdentifier } from '~/utils/identifierDispatch'
 import type { IdentifierKind } from '~/utils/purposeMatch'
 import type { AllocationCandidate } from '~/utils/allocation'
@@ -356,6 +357,86 @@ describe('resolveIntentCandidates — deal-field (by-config-field, §4)', () => 
     expect(r.status).toBe('unsupported')
     expect(r.reason).toBeTruthy()
     expect(deps.findCandidateByField).not.toHaveBeenCalled()
+  })
+})
+
+// #572 — отказ портала «такого поля нет в фильтре» на ПОЛЕ ИЗ НАСТРОЕК.
+// #572 — the portal refuses a setting the ADMIN supplied.
+describe('resolveIntentCandidates — portal refuses a configured setting (#572)', () => {
+  /** The exact body measured live on 2026-08-23 for a bad field name. */
+  const badField = () => new PortalRestError(
+    'Invalid filter: field \'UF_CRM_NOPE\' is not allowed in filter',
+    'INVALID_ARG_VALUE',
+    'crm.item.list'
+  )
+  /** Measured the same day for a `smart-entity` pointing at a smart process that does not exist. */
+  const badEntity = () => new PortalRestError('Смарт-процесс не найден', 'NOT_FOUND', 'crm.item.list')
+
+  const ctxCfg = { ...ctx, configFields: { 'deal-field': 'UF_CRM_NOPE', 'smart-entity': '1032', 'smart-field': 'UF_CRM_NOPE' } }
+
+  it('deal-field → misconfigured, not a throw', async () => {
+    // ⚠ Before this the error propagated and killed the job; BullMQ retried three times with the
+    // same outcome, because a setting does not fix itself on retry.
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw badField()
+    })
+    const r = await resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)
+    expect(r.status).toBe('misconfigured')
+    expect(r.reason).toContain('deal-field')
+    expect(r.candidates).toEqual([])
+  })
+
+  it('smart-field → misconfigured', async () => {
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw badField()
+    })
+    const r = await resolveIntentCandidates(intent('smart-field', 'ЗАК-6001'), ctxCfg, call, deps)
+    expect(r.status).toBe('misconfigured')
+  })
+
+  it('smart-id → misconfigured on NOT_FOUND, the code a bad smart-entity actually returns', async () => {
+    // ⚠ The realistic admin mistake here is a wrong `smart-entity`, not a wrong field name — this
+    // path's filter is `{id, companyId}` and carries no field name at all. Measured: a missing smart
+    // process answers NOT_FOUND, so the first draft (INVALID_ARG_VALUE only) would never have fired
+    // here — with the whole suite green.
+    const deps = fakeDeps()
+    deps.findCandidateById = vi.fn(async () => {
+      throw badEntity()
+    })
+    const r = await resolveIntentCandidates(intent('smart-id', '4242'), ctxCfg, call, deps)
+    expect(r.status).toBe('misconfigured')
+    expect(r.reason).toContain('entity')
+  })
+
+  it('NOT_FOUND on the DEAL path still throws — there entityTypeId is OUR constant', async () => {
+    // ⚠ Swallowing it would hide OUR bug behind «check your settings».
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw badEntity()
+    })
+    await expect(resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)).rejects.toThrow()
+  })
+
+  it('any other portal error still throws — a retry is what those need', async () => {
+    // ⚠ Load-bearing: an outage, an expired token or an access denial must fail the job, or a
+    // transient failure turns into a silent «nothing found» and the payment lands unlinked.
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw new PortalRestError('portal is down', 'ACCESS_DENIED', 'crm.item.list')
+    })
+    await expect(resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)).rejects.toThrow('portal is down')
+  })
+
+  it('OUR OWN queries get no such leniency — drift in our code must fail loudly', async () => {
+    // ⚠ `invoice-number` hard-codes its field name. The same code there means a regression on our
+    // side, and swallowing it would turn a breakage into «no invoices found».
+    const deps = fakeDeps()
+    deps.findInvoicesByNumber = vi.fn(async () => {
+      throw badField()
+    })
+    await expect(resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), ctxCfg, call, deps)).rejects.toThrow(/not allowed in filter/)
   })
 })
 

@@ -202,6 +202,14 @@ export interface HandlerDeps {
   /** Сообщить в чат ошибок, что номер в назначении распознан, но цель в CRM не нашлась (#421).
    *  MUST NOT throw — как и `notifyError`, сбой чата не роняет джобу. */
   notifyUnresolved: (item: StatementItem, identifiers: string[], dialogId: string, memberId: string, truncated: boolean) => Promise<void>
+  /** «Карта распознавания настроена неверно» (#572) — ОДИН раз за прогон, не на операцию: имя поля
+   *  задаёт админ, и отказ портала одинаков для всех операций пачки. MUST NOT throw — как и
+   *  остальные оповещения, сбой чата не роняет джобу. */
+  /** ⚠ `account` — счёт операции, на которой это вскрылось. Нужен ТОЛЬКО для демо-гейта: у
+   *  соседних оповещений он берётся из `item`, а сюда item не приходит по построению (сообщение про
+   *  настройку, а не про платёж). Без него гейт поставить негде, и обещание «те же гарантии, что у
+   *  notifyUnresolved» стало бы неправдой. */
+  notifySettingsError: (reason: string, dialogId: string, memberId: string, account: string) => Promise<void>
   /** Post an UNMATCHED-client notice to the error chat `dialogId` (#91, §5): the payer company
    *  wasn't found by its account. `recordedToMyCompany` picks the wording (recorded on my company
    *  vs not recorded at all). MUST NOT throw — like notifyError, a chat failure never fails the job. */
@@ -351,7 +359,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -446,6 +454,13 @@ export async function handleCrmSyncJob(
   // ради редких случаев «нужен человек» — его просто перестали бы читать. Счётчик `unresolved`
   // капом НЕ ограничен: метрика обязана остаться честной.
   let unresolvedNotices = 0
+  // ⚠ Причина ОДНА на прогон, а не список: отказ портала «такого поля нет» одинаков для каждой
+  // операции, и накопление дало бы сотню одинаковых строк. Храним первую увиденную.
+  let misconfigured = 0
+  // ⚠ Одно сообщение за прогон: причина одинакова для каждой операции пачки (админ указал
+  // несуществующее поле или смарт-процесс), и построчно оно залило бы чат ошибок — ровно то, из-за
+  // чего такой чат перестают читать.
+  let settingsNoticeSent = false
   let recognized = 0
   let resolved = 0
   let allocatable = 0
@@ -583,6 +598,28 @@ export async function handleCrmSyncJob(
       // искал: сообщать про «нет подходящих счетов» было бы прямой ложью, а совет «проверьте номер
       // и статус документа» отправил бы бухгалтера искать несуществующую проблему вместо настройки.
       const searched = resolutions.filter(r => r.status === 'resolved')
+      // Портал не принял настройку из «карты распознавания» (#572).
+      // ⚠ Считаем ОПЕРАЦИИ, а не резолюции: у одной операции может быть несколько распознанных
+      // номеров, и все они упрутся в ту же настройку — «сколько платежей пострадало» полезнее, чем
+      // «сколько раз портал сказал нет».
+      // ⚠ И только те операции, которые в итоге НИКУДА не приземлились. Найдено ревью: у портала
+      // может быть две матрицы — рабочая (`СЧ-d+` → инвойс) и сломанная (`ЗАК-d+` → поле, которого
+      // нет. Платёж при этом разносится ПРАВИЛЬНО по первой, а счётчик срабатывал бы по второй, и
+      // строка лога вместе с пожизненной метрикой утверждали бы «N платежей ушли без привязки» про
+      // платежи, которые привязаны. Сломанную матрицу это не скрывает: сообщение в чат всё равно
+      // уходит — оно про НАСТРОЙКУ и от исхода конкретной операции не зависит.
+      const badConfig = resolutions.find(r => r.status === 'misconfigured')
+      if (badConfig) {
+        if (candidates.length === 0) misconfigured++
+        // ⚠ Сообщение шлём ЗДЕСЬ, а не после цикла. Первая редакция копила причину и отправляла в
+        // конце — и теряла её насовсем, если позже в той же пачке падала другая операция: джоба
+        // умирала, а на повторе эта операция отсеивалась на маркере уже записанного дела и причину
+        // никто не пересчитывал. Флаг держит обещание «одно сообщение за прогон».
+        if (!settingsNoticeSent && errorChat?.dialogId) {
+          settingsNoticeSent = true
+          await deps.notifySettingsError(badConfig.reason ?? '', errorChat.dialogId, job.memberId, item.account)
+        }
+      }
       if (candidates.length === 0 && searched.length > 0) {
         // Номера в назначении распознаны, а подходящей сущности у этого клиента нет: счёт удалён,
         // номер набран с опечаткой, документ в отменённой стадии. Для бухгалтера это неотличимо от
@@ -889,5 +926,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }
