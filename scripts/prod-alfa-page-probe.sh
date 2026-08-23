@@ -149,10 +149,26 @@ trap 'cleanup; exit 130' INT TERM HUP
 # успешен почти всегда: упавший psql давал `PSQL_RC=0` и пустой `ROW`, скрипт уходил в ветку «нет
 # подключённого счёта Альфы» — то есть ровно в ту ложную диагностику, которую комментарий выше
 # обещает не допускать, а блок с текстом ошибки не выполнялся никогда.
+# ⚠ ФИЛЬТР ПО ПОРТАЛУ ОБЯЗАТЕЛЕН, если порталов больше одного. Первая редакция брала `LIMIT 1`
+# по `updated_at DESC` без `member_id` — то есть на сервере с четырьмя Битриксами проба молча
+# уходила к тому счёту Альфы, чей токен обновлялся последним, и КАКОЙ ИМЕННО, оператор увидеть не
+# мог: номер на экране замаскирован. Вердикт получался про один портал, а читался как про Альфу
+# вообще. Портал задаётся его адресом: `B24=xxx.bitrix24.by make alfa-page-probe`.
+PORTAL_DOMAIN="${B24:-}"
+if [ -n "$PORTAL_DOMAIN" ]; then
+  # Одинарные кавычки в адресе исключены — иначе он не адрес; на всякий случай удваиваем их.
+  DOM_SQL="$(printf '%s' "$PORTAL_DOMAIN" | sed "s/'/''/g")"
+  PORTAL_WHERE="AND b.member_id = (SELECT member_id FROM portal_tokens WHERE domain = '$DOM_SQL')"
+else
+  PORTAL_WHERE=""
+fi
 RAW_ROW="$($DC exec -T db psql -U app -d app -At -F'|' -c \
-  "SELECT account_key, access_token FROM bank_tokens
-    WHERE provider = 'alfa-by' AND account_key NOT LIKE '~pending:%'
-    ORDER BY updated_at DESC LIMIT 1" 2>"$PSQL_ERR")"
+  "SELECT b.account_key, b.access_token,
+          (SELECT count(*) FROM bank_tokens
+             WHERE provider = 'alfa-by' AND account_key NOT LIKE '~pending:%')
+     FROM bank_tokens b
+    WHERE b.provider = 'alfa-by' AND b.account_key NOT LIKE '~pending:%' $PORTAL_WHERE
+    ORDER BY b.updated_at DESC LIMIT 1" 2>"$PSQL_ERR")"
 PSQL_RC=$?
 ROW="$(printf '%s' "$RAW_ROW" | tr -d '\r')" 
 
@@ -162,11 +178,28 @@ if [ "$PSQL_RC" -ne 0 ]; then
   exit 1
 fi
 if [ -z "$ROW" ]; then
-  printf '  \033[33m✗ в bank_tokens нет подключённого счёта Альфы — пробовать нечего\033[0m\n'
+  if [ -n "$PORTAL_DOMAIN" ]; then
+    printf '  \033[33m✗ у портала %s нет подключённого счёта Альфы — проверьте адрес\033[0m\n' "$PORTAL_DOMAIN"
+  else
+    printf '  \033[33m✗ в bank_tokens нет подключённого счёта Альфы — пробовать нечего\033[0m\n'
+  fi
   exit 1
 fi
 ACCOUNT="${ROW%%|*}"
-TOKEN="${ROW#*|}"
+REST="${ROW#*|}"
+TOKEN="${REST%%|*}"
+TOTAL_ALFA="${REST##*|}"
+# ⚠ Неоднозначность НЕ разрешаем сами: подключений Альфы несколько, портал не назван — значит
+# «какой счёт проверяем» решает случайный порядок обновления токенов, а вердикт этой пробы
+# определяет, оставлять ли навсегда удвоенный расход общего лимита банка. Отказ дешевле.
+if [ -z "$PORTAL_DOMAIN" ] && [ "${TOTAL_ALFA:-1}" != "1" ]; then
+  printf '  \033[33m✗ подключений Альфы на сервере: %s — какое проверять, неясно\033[0m\n' "$TOTAL_ALFA"
+  echo "  Назовите портал его адресом:"
+  echo "    B24=xxx.bitrix24.by make alfa-page-probe DAY=$DAY"
+  echo "  ⚠ Адрес ставится ПЕРЕД make, а не после — параметр после make раскрывается ещё до"
+  echo "  шелла и исполняет то, что в него подставлено (см. CLAUDE.md, раздел про make)."
+  exit 1
+fi
 if [ -z "$TOKEN" ] || [ "$TOKEN" = "$ACCOUNT" ]; then
   printf '  \033[33m✗ у счёта %s не удалось прочитать access-токен — дождитесь опроса и повторите\033[0m\n' "$(mask "$ACCOUNT")"
   exit 1
