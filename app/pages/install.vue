@@ -296,7 +296,12 @@ async function runInstall() {
 
     caption.value = 'Завершение установки…'
     progressColor.value = 'air-primary-success'
-    progressValue.value = 100
+    // ⚠ НЕ 100: после `installFinish` идут ещё проверка серверной части (до ~16 с нарастающих
+    // пауз) и провижининг смарт-процессов (~29 последовательных вызовов в портал, десятки секунд).
+    // Полная полоса над надписью «Настройка смарт-процессов…» читается как «уже всё» и провоцирует
+    // закрыть вкладку ровно там, где закрывать дороже всего: обратную связь об отказе после этого
+    // взять негде.
+    progressValue.value = 85
     await sleep(800)
     await $b24.installFinish()
     finished.value = true
@@ -319,6 +324,7 @@ async function runInstall() {
       caption.value = 'Настройка смарт-процессов…'
       await provisionSmartProcesses()
     }
+    progressValue.value = 100
     caption.value = 'Готово'
   } catch (error: unknown) {
     log.error('установка не завершилась', { error: String(error) })

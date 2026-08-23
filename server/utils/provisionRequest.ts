@@ -1,6 +1,8 @@
 // Pure request logic for POST /api/distribution/provision (#109, §9.1 live-обвязка). Gates the
-// provisioning-execution behind: a feature flag (default OFF), the caller's B24 FRAME token
-// (proves portal membership + carries the ADMIN flag), and portal-installed check. The compound
+// provisioning-execution behind the caller's B24 FRAME token (proves portal membership + carries
+// the ADMIN flag) and a portal-installed check. ⚠ The env feature flag is GONE (2026-08-23, owner's
+// call): the payments smart process is the REGISTRY every operation is written to (#575), so the
+// remaining gates answer «who may», never «is this on». The compound
 // provisioning itself is `handleProvisionDistribution` (single-flight + persist), injected as
 // `provision`. Thin over DI — unit-testable without pg / network / the SDK.
 //
@@ -33,9 +35,9 @@ export interface ProvisionRequestResult {
 }
 
 /**
- * Handle one provision request: gate → auth → provision. Order matters — the feature gate is
- * checked first (a disabled feature reveals nothing), then frame auth (400 no creds → 409 not
- * installed → 401 bad token → 403 not admin), then the provisioning. A downstream error maps to
+ * Handle one provision request: auth → provision. Order matters — 400 no creds → 409 not installed
+ * → 401 bad token → 403 not admin, then the provisioning: we do not look a portal up before the
+ * caller has even presented credentials. A downstream error maps to
  * 502 (the outcome body is only returned on success). Never throws.
  */
 export async function handleProvisionRequest(

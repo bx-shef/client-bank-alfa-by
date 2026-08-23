@@ -1,5 +1,5 @@
 // Pure request logic for GET /api/distribution/ledger (#109, §9.3 #4). Same gate model as
-// /api/distribution/provision: feature flag (default OFF), frame token (membership + ADMIN), portal
+// /api/distribution/provision: frame token (membership + ADMIN), portal
 // installed. Returns the portal's payment carriers + their distribution rows for the «Распределение»
 // UI. Thin over DI — unit-testable without pg / network / the SDK.
 
@@ -21,7 +21,7 @@ export interface LedgerRequestResult {
 }
 
 /**
- * Handle one ledger read: gate → auth → load. Order: feature gate first (404), then frame auth
+ * Handle one ledger read: gate → auth → load. Order: then frame auth
  * (400 no creds → 409 not installed → 401 bad token → 403 not admin), then the load. A downstream
  * error maps to 502. When the SPs are not provisioned yet, returns `200 {provisioned:false, cards:[]}`
  * (the UI shows a «настройте смарт-процессы» prompt, not an error). Never throws.

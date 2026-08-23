@@ -3,7 +3,7 @@ import { classifyProvisionError, handleProvisionRequest, type ProvisionRequestDe
 import { SingleFlightBusyError } from '../server/utils/singleFlightLease'
 import type { ProvisionDistributionOutcome } from '../server/utils/distributionProvisionHandler'
 
-// Pure request gate for POST /api/distribution/provision (#109 §9.1): feature gate → frame auth
+// Pure request gate for POST /api/distribution/provision (#109 §9.1): frame auth
 // (installed + valid token + admin) → provision. DI over fakes — no pg / network.
 
 const OUTCOME: ProvisionDistributionOutcome = {

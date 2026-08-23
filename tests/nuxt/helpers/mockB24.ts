@@ -29,6 +29,14 @@ export interface MockB24Options {
   /** Права, которые приложение ЗАПРАШИВАЕТ (`getRequiredRights`). Нужны тесту вердикта установки:
    *  «недовыданное право» вычисляется как запрошенное минус выданное порталом. */
   requiredRights?: string[]
+  /**
+   * Фрейм-токен. По умолчанию его НЕТ — см. предупреждение ниже.
+   *
+   * ⚠ Задавать только вместе с моком `$fetch`: с токеном `frameAuth()` перестаёт отдавать `null`,
+   * и всё, что ходит на backend по фрейм-токену (проверка серверной части, провижининг
+   * смарт-процессов), пойдёт в сеть по-настоящему.
+   */
+  accessToken?: string
 }
 
 /**
@@ -41,10 +49,15 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
   const ok = { isSuccess: true } as unknown as Result
   // Minimal B24Frame fake — only what install.vue / the in-portal pages touch.
   const frame = {
-    // ⚠ Намеренно БЕЗ `access_token`: `frameAuth()` тогда отдаёт null, и проверка серверной части
-    // на установке (#413) выходит до `$fetch`. Добавишь токен — install.nuxt.test.ts начнёт реально
-    // ходить в сеть под фейковыми таймерами; тогда сначала замокай `$fetch` в том файле.
-    auth: { getAuthData: () => ({ domain: 'example.bitrix24.by' }), isAdmin: opts.isAdmin ?? true },
+    // ⚠ По умолчанию БЕЗ `access_token`: `frameAuth()` тогда отдаёт null, и всё, что ходит на
+    // backend по фрейм-токену (проверка серверной части #413, провижининг смарт-процессов),
+    // выходит ДО `$fetch`. Тесту, которому этот путь и нужен, токен задаётся явно через
+    // `accessToken` — и там же обязан быть мок `$fetch`, иначе тест пойдёт в сеть под фейковыми
+    // таймерами.
+    auth: {
+      getAuthData: () => ({ domain: 'example.bitrix24.by', ...(opts.accessToken ? { access_token: opts.accessToken } : {}) }),
+      isAdmin: opts.isAdmin ?? true
+    },
     parent: { setTitle: opts.setTitle ?? vi.fn(async () => {}), fitWindow: vi.fn(async () => {}) },
     actions: { v2: {
       batch: { make: opts.batchMake ?? vi.fn(async () => ({ getData: () => ({}) })) },
