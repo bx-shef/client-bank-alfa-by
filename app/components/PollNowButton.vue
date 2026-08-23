@@ -11,7 +11,7 @@ import { dayVerdictMessage, isoDayFromMs, pollDayVerdict } from '~/utils/dayValu
 // admin here too (no fail-open flash). Outside the portal frame it's a preview. Mirrors
 // BankConnectCard's admin/preview handling.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
-const { poll, syncEnabled, polling, error, message, enabled } = useManualPoll()
+const { poll, syncEnabled, polling, error, message, enabled, outcome, waiting } = useManualPoll()
 
 const adminChecked = ref(false)
 
@@ -140,6 +140,29 @@ onMounted(async () => {
         >
           Забрать
         </B24Button>
+
+        <!-- ⚠ Исход прогона показываем ЗДЕСЬ, а не оставляем в логах сервера: без этого кнопка
+             отвечала «опрос запущен» и замолкала навсегда, и отличить «банк вернул ноль» от
+             «кнопка не работает» человек в портале не мог никак. Именно на этом застряла живая
+             проверка забора за день. -->
+        <div
+          role="status"
+          aria-live="polite"
+        >
+          <p
+            v-if="waiting"
+            class="text-sm text-(--ui-color-base-3)"
+            data-testid="poll-waiting"
+          >
+            Ждём ответа банка…
+          </p>
+          <B24Alert
+            v-else-if="outcome"
+            color="air-primary-success"
+            :description="outcome"
+            data-testid="poll-outcome"
+          />
+        </div>
       </div>
     </div>
   </B24Card>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useTemplateRef } from 'vue'
+import { computed, ref, useTemplateRef } from 'vue'
 import { CalendarDate, getLocalTimeZone, today } from '@internationalized/date'
 import CalendarIcon from '@bitrix24/b24icons-vue/outline/CalendarIcon'
 import { isIsoDay, toIsoDay } from '~/utils/dayValue'
@@ -42,6 +42,22 @@ const value = computed({
   }
 })
 
+const calendarOpen = ref(false)
+
+/**
+ * Выбор в календаре периода: записать и закрыть окно ПОСЛЕ ВТОРОЙ границы.
+ *
+ * ⚠ Не после первой: у периода клика два, и закрытие по первому не дало бы выбрать конец —
+ * поведение «как у select» здесь означает «закрылось, когда выбор завершён», а не «закрылось по
+ * первому клику».
+ */
+function pickRange(v: { start?: unknown, end?: unknown } | null): void {
+  const start = v?.start as CalendarDate | undefined
+  const end = v?.end as CalendarDate | undefined
+  value.value = { start, end }
+  if (start && end) calendarOpen.value = false
+}
+
 /** Будущее выбрать нельзя: дел, созданных завтра, не бывает. */
 const maxValue = computed(() => today(getLocalTimeZone()))
 const filled = computed(() => from.value !== '' || to.value !== '')
@@ -66,7 +82,10 @@ function clear(): void {
       data-testid="day-range-input"
     >
       <template #trailing>
-        <B24Popover :reference="inputDate?.inputsRef?.[0]?.$el">
+        <B24Popover
+          v-model:open="calendarOpen"
+          :reference="inputDate?.inputsRef?.[0]?.$el"
+        >
           <B24Button
             color="air-tertiary-no-accent"
             size="sm"
@@ -78,12 +97,13 @@ function clear(): void {
 
           <template #content>
             <B24Calendar
-              v-model="value"
+              :model-value="value"
               class="p-2"
               range
               :number-of-months="2"
               :max-value="maxValue"
               data-testid="day-range-calendar"
+              @update:model-value="pickRange"
             />
           </template>
         </B24Popover>

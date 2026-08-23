@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useTemplateRef } from 'vue'
+import { computed, ref, useTemplateRef } from 'vue'
 import { CalendarDate, getLocalTimeZone, today } from '@internationalized/date'
 import CalendarIcon from '@bitrix24/b24icons-vue/outline/CalendarIcon'
 import { isIsoDay, toIsoDay } from '~/utils/dayValue'
@@ -48,6 +48,19 @@ const value = computed({
   set: (v) => { model.value = v ? toIsoDay({ year: v.year, month: v.month, day: v.day }) : '' }
 })
 
+const calendarOpen = ref(false)
+
+/**
+ * Выбор дня в календаре: записать и ЗАКРЫТЬ окно — поведение обычного `select`.
+ *
+ * ⚠ Здесь закрывать можно сразу, потому что выбор состоит из одного клика. У периода
+ * (`DayRangeField`) так нельзя: там кликов два, и закрытие после первого не дало бы выбрать конец.
+ */
+function pickDay(v: unknown): void {
+  value.value = (v ?? null) as CalendarDate | null
+  calendarOpen.value = false
+}
+
 const maxValue = computed(() => toCalendar(props.max) ?? today(getLocalTimeZone()))
 const minValue = computed(() => toCalendar(props.min))
 </script>
@@ -64,7 +77,13 @@ const minValue = computed(() => toCalendar(props.min))
       data-testid="day-input"
     >
       <template #trailing>
-        <B24Popover :reference="inputDate?.inputsRef?.[3]?.$el">
+        <!-- ⚠ Открытость поповера контролируем САМИ, чтобы закрыть его по выбору даты: без этого
+             окно оставалось висеть, и человек, привыкший к select'у, жал мимо, чтобы его убрать
+             (замечание владельца). -->
+        <B24Popover
+          v-model:open="calendarOpen"
+          :reference="inputDate?.inputsRef?.[3]?.$el"
+        >
           <B24Button
             color="air-tertiary-no-accent"
             size="sm"
@@ -76,11 +95,12 @@ const minValue = computed(() => toCalendar(props.min))
 
           <template #content>
             <B24Calendar
-              v-model="value"
+              :model-value="value"
               class="p-2"
               :max-value="maxValue"
               :min-value="minValue"
               data-testid="day-calendar"
+              @update:model-value="pickDay"
             />
           </template>
         </B24Popover>

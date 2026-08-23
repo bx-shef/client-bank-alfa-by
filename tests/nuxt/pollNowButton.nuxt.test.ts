@@ -23,8 +23,24 @@ vi.mock('~/composables/useFrameAuth', () => ({
 const fetchMock = vi.fn()
 vi.stubGlobal('$fetch', fetchMock)
 
+/**
+ * Ответ на POST /api/poll-now; чтение метки прогона (`/api/import/status`) обслуживается отдельно.
+ *
+ * ⚠ Мок по АДРЕСУ, а не по порядку вызовов: после того как кнопка научилась дожидаться исхода,
+ * первым уходит чтение статуса, и очередь `mockResolvedValueOnce` доставалась не тому запросу —
+ * тесты краснели на исправном коде и молчали бы о настоящей поломке.
+ */
+function answerPoll(reply: unknown, opts: { reject?: boolean } = {}): void {
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).startsWith('/api/import/status')) return { lastSyncAt: null }
+    if (opts.reject) throw reply
+    return reply
+  })
+}
+
 afterEach(() => {
   fetchMock.mockReset()
+  fetchMock.mockResolvedValue({})
   mockState.isInit = true
   mockState.isAdmin = true
 })
@@ -64,7 +80,7 @@ describe('PollNowButton admin gate', () => {
 
 describe('PollNowButton poll interaction', () => {
   it('clicking → posts and shows the success message', async () => {
-    fetchMock.mockResolvedValueOnce({ enqueued: 2, accounts: 2, cooldownSec: 60 })
+    answerPoll({ enqueued: 2, accounts: 2, cooldownSec: 60 })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
     await flushPromises()
@@ -75,7 +91,7 @@ describe('PollNowButton poll interaction', () => {
   })
 
   it('cooldown (429) → friendly error, no success', async () => {
-    fetchMock.mockRejectedValueOnce({ statusCode: 429 })
+    answerPoll({ statusCode: 429 }, { reject: true })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
     await flushPromises()
@@ -88,7 +104,7 @@ describe('PollNowButton poll interaction', () => {
     // ⚠ Своего выключателя у ручного опроса больше нет (снят 2026-08-23): 503 теперь значит
     // «очередь недоступна» — сбой на нашей стороне, который сам пройдёт. Прежний текст «опрос
     // отключён» отправлял бы админа искать несуществующую настройку.
-    fetchMock.mockRejectedValueOnce({ statusCode: 503 })
+    answerPoll({ statusCode: 503 }, { reject: true })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
     await flushPromises()
@@ -101,7 +117,7 @@ describe('PollNowButton poll interaction', () => {
   })
 
   it('not admin (403) → friendly "администратор" error', async () => {
-    fetchMock.mockRejectedValueOnce({ statusCode: 403 })
+    answerPoll({ statusCode: 403 }, { reject: true })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
     await flushPromises()
@@ -110,7 +126,7 @@ describe('PollNowButton poll interaction', () => {
   })
 
   it('no connected accounts → prompts to connect first', async () => {
-    fetchMock.mockResolvedValueOnce({ enqueued: 0, accounts: 0 })
+    answerPoll({ enqueued: 0, accounts: 0 })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
     await flushPromises()
@@ -133,7 +149,7 @@ describe('забор за выбранный день (#592)', () => {
   })
 
   it('выбранный день уходит в запрос', async () => {
-    fetchMock.mockResolvedValue({ enqueued: 2, accounts: 2, day: '2026-07-10' })
+    answerPoll({ enqueued: 2, accounts: 2, day: '2026-07-10' })
     const wrapper = await mountReady()
     // Календарь — сторонний компонент; выбор дня выставляем через модель поля.
     const field = wrapper.findComponent({ name: 'DayField' })
@@ -141,16 +157,107 @@ describe('забор за выбранный день (#592)', () => {
     await nextTick()
     await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
     await flushPromises()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ body: { day: '2026-07-10' } })
+    // ⚠ Ищем ИМЕННО вызов забора: рядом идут чтения `/api/import/status` (метка прогона до старта
+    // и ожидание исхода), и привязка к порядку вызовов ломалась бы от любой правки этой логики.
+    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
+    expect(post, 'запрос на забор не ушёл вовсе').toBeTruthy()
+    expect(post![1]).toMatchObject({ body: { day: '2026-07-10' } })
     expect(wrapper.find('[data-testid="poll-message"]').text()).toContain('2026-07-10')
   })
 
   it('обычный опрос по-прежнему идёт без дня', async () => {
-    fetchMock.mockResolvedValue({ enqueued: 1, accounts: 1 })
+    answerPoll({ enqueued: 1, accounts: 1 })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
     await flushPromises()
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ body: {} })
+    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
+    expect(post, 'обычный опрос не ушёл').toBeTruthy()
+    expect(post![1]).toMatchObject({ body: {} })
+  })
+})
+
+describe('исход забора виден в портале (#592)', () => {
+  /** Ответ статуса меняется после запуска — так выглядит завершившийся прогон. */
+  function answerWithRun(run: { lastSyncAt: string, operations: number, activitiesCreated: number }): void {
+    let started = false
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).startsWith('/api/import/status')) {
+        return started ? run : { lastSyncAt: null }
+      }
+      started = true
+      return { enqueued: 1, accounts: 1, day: '2026-07-10' }
+    })
+  }
+
+  it('пустой ответ банка назван прямо, а не выдан за неработающую кнопку', async () => {
+    // ⚠ Это и есть то, на чём застряла живая проверка: кнопка отвечала «опрос запущен» и молчала,
+    // и «банк вернул ноль» снаружи неотличимо от «кнопка не работает». Пустой забор теперь пишет
+    // след (worker), а интерфейс его читает.
+    vi.useFakeTimers()
+    try {
+      answerWithRun({ lastSyncAt: '2026-07-10T10:00:00.000Z', operations: 0, activitiesCreated: 0 })
+      const wrapper = await mountReady()
+      const field = wrapper.findComponent({ name: 'DayField' })
+      field.vm.$emit('update:modelValue', '2026-07-10')
+      await nextTick()
+      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+      await nextTick()
+      const out = wrapper.find('[data-testid="poll-outcome"]')
+      expect(out.exists(), 'исход не показан — кнопка снова молчит').toBe(true)
+      expect(out.text()).toMatch(/операций.*нет/i)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ПРЕЖНИЙ прогон портала не выдаётся за исход этого забора', async () => {
+    // ⚠ У портала почти всегда уже есть результат от планового опроса. Без сверки с меткой ДО
+    // запуска интерфейс мгновенно показал бы ЕГО как итог нажатия — «пришло 40 операций» о том,
+    // чего эта кнопка не делала. Мутация «не сверять метку» проходила зелёной, пока не было
+    // этого теста.
+    vi.useFakeTimers()
+    try {
+      const old = { lastSyncAt: '2026-07-01T08:00:00.000Z', operations: 40, activitiesCreated: 40 }
+      fetchMock.mockImplementation(async (url: string) => {
+        if (String(url).startsWith('/api/import/status')) return old
+        return { enqueued: 1, accounts: 1, day: '2026-07-10' }
+      })
+      const wrapper = await mountReady()
+      const field = wrapper.findComponent({ name: 'DayField' })
+      field.vm.$emit('update:modelValue', '2026-07-10')
+      await nextTick()
+      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await flushPromises()
+      await nextTick()
+      const out = wrapper.find('[data-testid="poll-outcome"]')
+      const text = out.exists() ? out.text() : ''
+      expect(text, 'показали чужой прогон как свой').not.toContain('40')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('пришедшие операции названы числом', async () => {
+    vi.useFakeTimers()
+    try {
+      answerWithRun({ lastSyncAt: '2026-07-10T10:00:00.000Z', operations: 12, activitiesCreated: 9 })
+      const wrapper = await mountReady()
+      const field = wrapper.findComponent({ name: 'DayField' })
+      field.vm.$emit('update:modelValue', '2026-07-10')
+      await nextTick()
+      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="poll-outcome"]').text()).toContain('12')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

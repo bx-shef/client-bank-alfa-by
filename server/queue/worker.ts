@@ -178,6 +178,13 @@ export function liveHandlerDeps(): HandlerDeps {
       // it. Amounts/purposes stay out (docs/PRIVACY.md §Логи); the account is logSafe'd like
       // everywhere else, since the bank echoes operator-supplied values.
       fetchLog.info(`${job.providerId} portal ${job.memberId}, account ${logSafe(job.account)} ${job.dateFrom}..${job.dateTo}: ${items.length} ops`)
+      // ⚠ ПУСТОЙ забор тоже прогон, и он обязан оставить след. `crm-sync` ставится только когда
+      // операции есть, а результат портала пишет именно он — поэтому «банк ответил, операций за
+      // этот день нет» не доходило до интерфейса НИКАК, и человек, нажавший «Забрать», не мог
+      // отличить его от «кнопка не работает». Ровно на этом застряла проверка забора за день.
+      // ⚠ Пишем только при нуле: когда операции есть, полную сводку (записано/в чат) положит
+      // `crm-sync`, и две записи гонялись бы за одну строку портала.
+      if (items.length === 0) await persistEmptyFetch(job)
       return items
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
@@ -980,6 +987,28 @@ async function persistBatchResult(
     })
   } catch (e) {
     importLog.error(`import_batch save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+  }
+}
+
+/**
+ * Отметить прогон, не принёсший ни одной операции.
+ *
+ * ⚠ Лучшие усилия и НИКОГДА не бросает: это учёт, а не работа. Провал записи не должен ронять
+ * джобу забора — иначе диагностика ломала бы то, что диагностирует.
+ */
+async function persistEmptyFetch(job: FetchJob): Promise<void> {
+  if (!job.account || isDemoAccount(job.account)) return
+  try {
+    await saveImportResult(dbQuery, job.memberId, {
+      state: 'ok',
+      lastSyncAt: new Date().toISOString(),
+      operations: 0,
+      activitiesCreated: 0,
+      chatNotified: 0,
+      errors: []
+    })
+  } catch (e) {
+    fetchLog.error(`import_result save failed (empty fetch), portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 
