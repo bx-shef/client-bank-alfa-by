@@ -638,6 +638,27 @@ describe('handleCrmSyncJob', () => {
     expect(acc.calls.chat).toEqual([]) // NO chat
   })
 
+  it('excluded COUNTERPARTY account → op skipped entirely (#562)', async () => {
+    // ⚠ Третья ветка гейта — единственная, что читает ВЛОЖЕННОЕ поле (`item.counterparty.account`),
+    // а не поле верхнего уровня. Юнит-тест `isExcludedOperation` работает на своей фикстуре и
+    // расхождения формы `StatementItem` не увидел бы; здесь через гейт идёт настоящая операция.
+    const cp = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeCounterpartyAccounts: ['BY1'] } } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), cp.deps)
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(cp.calls.find).toEqual([]) // компанию не искали вовсе
+    expect(cp.calls.activity).toEqual([]) // дела нет
+    expect(cp.calls.chat).toEqual([]) // и в чат не ушло
+  })
+
+  it('НАШ счёт в списке контрагентских — НЕ исключает (#562: списки не взаимозаменяемы)', async () => {
+    // ⚠ Ради этого поля и разведены два списка: номер, вписанный «выключить плательщика», не должен
+    // однажды совпасть с нашим счётом и молча выключить весь его поток. Проверяем встречное
+    // направление — наш счёт 'A' в контрагентском списке обязан не сработать.
+    const wrong = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeCounterpartyAccounts: ['A'] } } })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit')]), wrong.deps)
+    expect(r).toMatchObject({ processed: 1, excluded: 0, created: 1 })
+  })
+
   it('excluded purpose substring → op skipped entirely (no activity, counted excluded)', async () => {
     // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })

@@ -165,6 +165,33 @@ describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => 
     expect(isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY-OURS'] })).toBe(false)
   })
 
+  it('ГАРД ИНВАРИАНТА: без настроек не исключается НИКТО — даже «очевидные» неклиенты (#562)', () => {
+    // ⚠ Решение владельца (2026-08-23): программно на гейте A2 не исключается ничего — ни по имени
+    // плательщика, ни по виду платежа. Записано в PROCESSING §2 A2, продублировано админу в справке
+    // и на экране «Исключений».
+    //
+    // ⚠ Прозой такой инвариант не держится. Зашитый перечень («ИМНС», «эквайринг»), эвристика по
+    // имени или «умное умолчание» прошли бы весь набор зелёными: остальные тесты подают правила
+    // явно и потому проверяют лишь то, что заданное правило срабатывает, а не то, что НЕЗАДАННОЕ
+    // не срабатывает. Здесь правил нет вовсе — сработать может только самодеятельность.
+    const obvious = [
+      { name: 'ИМНС по г. Минску', unp: '100000000', account: 'BY-TAX' },
+      { name: 'ОАО «Банк» комиссия за РКО', unp: '100000001', account: 'BY-BANK' },
+      { name: 'Эквайринг торговый', unp: '100000002', account: 'BY-ACQ' },
+      { name: 'Республиканский бюджет', unp: '100000003', account: 'BY-BUDGET' }
+    ]
+    for (const counterparty of obvious) {
+      const item = makeItem({ counterparty, purpose: `оплата ${counterparty.name} за услуги` })
+      expect(isExcludedOperation(item, {}), counterparty.name).toBe(false)
+      expect(isExcludedOperation(item), `${counterparty.name} без правил вовсе`).toBe(false)
+      // Заполненные, но НЕ совпадающие списки — тоже не повод исключить.
+      expect(
+        isExcludedOperation(item, { excludeAccounts: ['BY-OTHER'], excludeCounterpartyAccounts: ['BY-OTHER'], excludePurposePatterns: ['ничего похожего'] }),
+        `${counterparty.name} с чужими правилами`
+      ).toBe(false)
+    }
+  })
+
   it('пустой счёт контрагента не матчится никогда — пустая строка в правиле не выключает всё (#562)', () => {
     // ⚠ Банк не всегда сообщает счёт плательщика. Пустое правило, совпавшее с пустым счётом,
     // молча выключило бы ВСЕ такие операции.
