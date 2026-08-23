@@ -206,10 +206,13 @@ describe('совпадение тел на пустом дне (#561) — ПРО
       ].join('\n') + '\n')
       chmodSync(join(bin, 'docker'), 0o755)
       chmodSync(join(bin, 'curl'), 0o755)
-      return execFileSync('bash', [SCRIPT_PATH], {
+      // ⚠ День передаётся АРГУМЕНТОМ, а не через env: скрипт читает `$1`, и переменная окружения
+      // была бы инертна — тесты молча пошли бы по часам раннера и сломались бы на образе без
+      // GNU/BSD `date` тем, что день вообще не определился бы.
+      return execFileSync('bash', [SCRIPT_PATH, '2026-08-18'], {
         cwd: dir,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, FIXTURES: dir, DAY: '2026-08-18' }
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, FIXTURES: dir }
       })
     } finally {
       rmSync(dir, { recursive: true, force: true })
