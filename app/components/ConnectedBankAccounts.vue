@@ -7,6 +7,7 @@ import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMa
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { connectionHealth, connectionHealthBadge, consentExpiringSoon } from '~/utils/bankTokenLifetime'
+import { pauseAllSummary, planPauseAll } from '~/utils/bankPauseAll'
 
 // Connected bank accounts, with a per-row disconnect (#404). Lives inside BankConnectCard, above
 // the connect form, so the admin sees what is already bound BEFORE adding another account —
@@ -24,7 +25,7 @@ const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), 
 // же, и оставить одну устаревшей — значит показать противоречие самому себе.
 const emit = defineEmits<{ changed: [] }>()
 
-const { accounts, loading, loaded, removing, saving, pausing, error, load, disconnect, setPaused, setAccount, rowKey } = useBankAccounts()
+const { accounts, loading, loaded, removing, saving, pausing, pausingAll, error, load, disconnect, setPaused, setPausedAll, setAccount, rowKey } = useBankAccounts()
 const route = useRoute()
 
 /** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
@@ -49,6 +50,28 @@ function suggestionsFor(a: ConnectedBankAccount) {
   return props.bankAccounts.filter(b =>
     b.provider === a.provider && !takenKeys.value.has(`${a.provider}|${normalizeForCompare(b.number)}`)
   )
+}
+
+/**
+ * План массового переключения паузы (#581): что делает кнопка «всё» и над какими строками.
+ * `null` ⇒ кнопки нет. Всё решение — в чистом ядре, здесь только рендер.
+ */
+const bulk = computed(() => planPauseAll(accounts.value))
+
+/** Итог последнего массового переключения — показывается рядом с кнопкой, не вместо списка. */
+const bulkNote = ref('')
+
+/**
+ * ⚠ Итог обязателен, и это не вежливость. Частичный отказ («переключились три из четырёх») без
+ * сообщения читается как полный успех, а один продолжающий работать счёт потом ищут в банке.
+ * Правду о состоянии показывает перечитанный список, а эта строка объясняет, почему он такой.
+ */
+async function togglePauseAll(): Promise<void> {
+  const plan = bulk.value
+  if (!plan) return
+  bulkNote.value = ''
+  const { done, failed } = await setPausedAll(plan.rows, plan.paused)
+  bulkNote.value = pauseAllSummary(done, failed, plan.paused)
 }
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
@@ -209,8 +232,40 @@ defineExpose({ reload: load })
       Пока ничего не подключено. Подключите счёт ниже — после этого он появится здесь.
     </p>
 
+    <!-- Массовое переключение (#581). Стоит НАД списком: намерение «выключить всё» возникает от
+         вида списка целиком, а не от конкретной строки. Показывается только когда есть что
+         переключать (решает чистое ядро) — иначе это кнопка, которая ничего не делает. -->
+    <div
+      v-if="bulk"
+      class="flex flex-wrap items-center gap-2"
+    >
+      <B24Button
+        color="air-secondary"
+        size="sm"
+        :label="bulk.label"
+        :loading="pausingAll"
+        :disabled="pausingAll"
+        data-testid="pause-all"
+        @click="togglePauseAll"
+      />
+      <span
+        v-if="bulkNote"
+        class="text-xs text-(--ui-color-base-3)"
+        role="status"
+        aria-live="polite"
+        data-testid="pause-all-note"
+      >
+        {{ bulkNote }}
+      </span>
+    </div>
+
+    <!-- ⚠ `v-if`, а не `v-else-if`: между этим списком и пустым состоянием выше теперь стоит блок
+         массового переключения, а `v-else-if` обязан идти НЕПОСРЕДСТВЕННО за своим `v-if`. Условия
+         и так взаимоисключающие (`accounts.length` против `!accounts.length`), так что цепочка тут
+         ничего не давала, кроме скрытой хрупкости — стоило вставить что-нибудь между, и список
+         переставал рисоваться. -->
     <ul
-      v-else-if="accounts.length"
+      v-if="accounts.length"
       class="space-y-2"
     >
       <li

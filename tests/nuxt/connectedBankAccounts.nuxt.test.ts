@@ -19,7 +19,11 @@ vi.mock('~/composables/useFrameAuth', () => ({
 }))
 
 const listReply = { value: [] as Record<string, unknown>[] }
-const fetchMock = vi.fn((url: string, _opts?: Record<string, unknown>) => {
+// ⚠ Возврат объявлен ШИРОКО (`Record<string, unknown>`), а не выведен из тела. Иначе тип мока
+// сужается до первой формы ответа, и `mockImplementation`, подменяющий поведение в отдельном тесте
+// (например «вторая строка отвечает 409»), перестаёт компилироваться — при полностью корректном
+// тесте.
+const fetchMock = vi.fn((url: string, _opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
   if (url === '/api/bank/accounts') return Promise.resolve({ accounts: listReply.value })
   return Promise.resolve({ ok: true })
 })
@@ -356,5 +360,94 @@ describe('#576 пауза автоопроса', () => {
 
     listReply.value = [row()]
     expect((await mountReady()).text()).not.toContain('за пропущенные дни')
+  })
+
+  // Массовое переключение паузы (#581) — проводка: план из чистого ядра, цикл, итог, перечитывание.
+  describe('«Приостановить всё»', () => {
+    const row = (id: number, accountKey: string, pollPaused = false) => ({
+      id, provider: 'alfa-by', accountKey, connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true, pollPaused
+    })
+
+    it('одно подключение — кнопки НЕТ', async () => {
+      listReply.value = [row(1, 'BY01ALFA0001')]
+      const wrapper = await mountReady()
+      expect(wrapper.find('[data-testid="pause-all"]').exists()).toBe(false)
+    })
+
+    it('два работающих — кнопка есть и приостанавливает ОБА', async () => {
+      listReply.value = [row(1, 'BY01ALFA0001'), row(2, 'BY01ALFA0002')]
+      const wrapper = await mountReady()
+      const btn = wrapper.find('[data-testid="pause-all"]')
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).toContain('Приостановить всё')
+      fetchMock.mockClear()
+      await btn.trigger('click')
+      await flushPromises()
+      const pauses = fetchMock.mock.calls.filter(c => c[0] === '/api/bank/pause')
+      expect(pauses).toHaveLength(2)
+      expect((pauses[0]![1] as { body: { paused: boolean, id: number } }).body.paused).toBe(true)
+      expect((pauses[0]![1] as { body: { id: number } }).body.id).toBe(1)
+      // ⚠ Список перечитывается ОДИН раз в конце, а не после каждой строки: иначе N+1 запрос и
+      // список, мигающий под курсором.
+      expect(fetchMock.mock.calls.filter(c => c[0] === '/api/bank/accounts')).toHaveLength(1)
+    })
+
+    it('оба на паузе — подпись переворачивается на «Возобновить всё»', async () => {
+      listReply.value = [row(1, 'BY01ALFA0001', true), row(2, 'BY01ALFA0002', true)]
+      const wrapper = await mountReady()
+      expect(wrapper.find('[data-testid="pause-all"]').text()).toContain('Возобновить всё')
+    })
+
+    it('ЧАСТИЧНЫЙ отказ показывается, а не выдаётся за успех', async () => {
+      // ⚠ Ровно та ложь, из-за которой потом ищут поломку в банке: администратор уверен, что опрос
+      // выключен, а один счёт продолжает заводить дела.
+      listReply.value = [row(1, 'BY01ALFA0001'), row(2, 'BY01ALFA0002')]
+      const wrapper = await mountReady()
+      let seen = 0
+      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => {
+        if (url === '/api/bank/accounts') return Promise.resolve({ accounts: listReply.value })
+        seen++
+        return seen === 2 ? Promise.reject(new Error('409')) : Promise.resolve({ ok: true })
+      })
+      await wrapper.find('[data-testid="pause-all"]').trigger('click')
+      await flushPromises()
+      await nextTick()
+      const note = wrapper.find('[data-testid="pause-all-note"]')
+      expect(note.exists()).toBe(true)
+      expect(note.text()).toContain('не переключилось')
+      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => (url === '/api/bank/accounts'
+        ? Promise.resolve({ accounts: listReply.value })
+        : Promise.resolve({ ok: true })))
+    })
+
+    it('отказ ОДНОЙ строки не останавливает остальные', async () => {
+      // Намерение — «выключить всё»; остановившись на первой сбойной строке, мы оставили бы
+      // остальные работать, хотя они переключились бы.
+      listReply.value = [row(1, 'BY01ALFA0001'), row(2, 'BY01ALFA0002'), row(3, 'BY01ALFA0003')]
+      const wrapper = await mountReady()
+      let seen = 0
+      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => {
+        if (url === '/api/bank/accounts') return Promise.resolve({ accounts: listReply.value })
+        seen++
+        return seen === 1 ? Promise.reject(new Error('409')) : Promise.resolve({ ok: true })
+      })
+      await wrapper.find('[data-testid="pause-all"]').trigger('click')
+      await flushPromises()
+      expect(seen, 'все три строки были опрошены').toBe(3)
+      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => (url === '/api/bank/accounts'
+        ? Promise.resolve({ accounts: listReply.value })
+        : Promise.resolve({ ok: true })))
+    })
+
+    it('незавершённое подключение в цикл НЕ попадает', async () => {
+      listReply.value = [row(1, 'BY01ALFA0001'), row(2, 'BY01ALFA0002'), row(3, PENDING)]
+      const wrapper = await mountReady()
+      fetchMock.mockClear()
+      await wrapper.find('[data-testid="pause-all"]').trigger('click')
+      await flushPromises()
+      const pauses = fetchMock.mock.calls.filter(c => c[0] === '/api/bank/pause')
+      expect(pauses).toHaveLength(2)
+      expect(pauses.map(c => (c[1] as { body: { id: number } }).body.id)).toEqual([1, 2])
+    })
   })
 })
