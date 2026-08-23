@@ -164,13 +164,21 @@ async function onErase(): Promise<void> {
       </p>
 
       <div class="grid gap-3 sm:grid-cols-2">
+        <!-- ⚠ Календарь, а не `B24Input type="date"`: нативное поле показывает формат
+             операционной системы (в портале это сплошь и рядом `mm/dd/yyyy`), молча принимает
+             несуществующий день и не умеет запретить будущее. Здесь это не косметика — действие
+             необратимо, и «стереть по 08/09» вместо «по 09.08» стирает не тот период. -->
         <B24FormField
           label="С даты"
           hint="Пусто — с самого начала"
         >
-          <B24Input
+          <!-- ⚠ Границы связаны между собой: конец периода ограничивает начало и наоборот.
+               Предупреждение «начало позже конца» ниже остаётся — оно ловит уже введённую пару
+               (например, когда сперва выбрали начало, а потом конец раньше него). -->
+          <DayField
             v-model="from"
-            type="date"
+            :max="to"
+            clearable
             @update:model-value="reset"
           />
         </B24FormField>
@@ -178,9 +186,10 @@ async function onErase(): Promise<void> {
           label="По дату"
           hint="Пусто — по сегодня"
         >
-          <B24Input
+          <DayField
             v-model="to"
-            type="date"
+            :min="from"
+            clearable
             @update:model-value="reset"
           />
         </B24FormField>

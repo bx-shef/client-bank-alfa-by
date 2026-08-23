@@ -17,6 +17,7 @@
 // It only ever polls the caller's OWN portal's connected accounts (listAccounts is member-scoped).
 
 import { accountsForPolling, planFetches, pollWindow } from '../queue/cron'
+import { dayVerdictMessage, isoDayFromMs, pollDayVerdict } from '../../app/utils/dayValue'
 import type { FetchJob } from '../queue/topology'
 import type { BankAccountRef } from './bankTokenStore'
 
@@ -51,6 +52,10 @@ export interface PollNowDeps {
 export interface PollNowInput {
   accessToken: string
   domain: string
+  /** Один день `ГГГГ-ММ-ДД` для точечного забора (#588). Пусто ⇒ обычное скользящее окно.
+   *  ⚠ Именно ОДИН день, а не интервал: интервал — это N задач к банку за один клик, то есть
+   *  нагрузка, которую портал задавал бы себе сам вопреки #54 («частоту регулируем мы»). */
+  day?: string
 }
 
 /** Default manual-poll cooldown (seconds): a manual test poll no more than once per minute per
@@ -68,6 +73,15 @@ export async function handlePollNow(deps: PollNowDeps, input: PollNowInput): Pro
   const { accessToken, domain } = input
   if (!accessToken || !domain) {
     return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
+  }
+
+  // ⚠ День проверяется ДО любых REST-вызовов и ДО заявки на кулдаун: отвергнутая дата не должна
+  // стоить портала ни обращения к Bitrix24, ни минуты паузы — иначе опечатка в календаре
+  // блокировала бы исправную кнопку.
+  const day = (input.day || '').trim()
+  if (day) {
+    const verdict = pollDayVerdict(day, isoDayFromMs(deps.nowMs))
+    if (verdict !== 'ok') return { status: 400, body: { error: dayVerdictMessage(verdict) } }
   }
 
   // Portal key check — do we hold tokens for this domain's portal?
@@ -99,9 +113,15 @@ export async function handlePollNow(deps: PollNowDeps, input: PollNowInput): Pro
 
   // Fresh fetch: `epoch` = now, so the fetch jobId is distinct from a same-window cron poll and
   // actually re-fetches (crm-sync still dedupes writes by the B24 marker).
-  const { dateFrom, dateTo } = pollWindow(new Date(deps.nowMs), deps.lookbackDays)
+  // ⚠ Точечный день (#588) заменяет окно ЦЕЛИКОМ (`dateFrom = dateTo = day`), а не расширяет его:
+  // «забрать за 17 августа» и должно спросить банк ровно про 17 августа — одна задача, один запрос.
+  const { dateFrom, dateTo } = day
+    ? { dateFrom: day, dateTo: day }
+    : pollWindow(new Date(deps.nowMs), deps.lookbackDays)
   const jobs = planFetches(byPortal, dateFrom, dateTo, String(deps.nowMs))
   for (const job of jobs) await deps.enqueue(job)
 
-  return { status: 200, body: { enqueued: jobs.length, accounts: pollable, cooldownSec: deps.cooldownSec } }
+  // `day` возвращаем эхом: интерфейс подтверждает человеку, ЗА КАКОЙ день ушла задача, — иначе
+  // выбранная дата и ответ «опрос запущен» связаны только его памятью.
+  return { status: 200, body: { enqueued: jobs.length, accounts: pollable, cooldownSec: deps.cooldownSec, ...(day ? { day } : {}) } }
 }

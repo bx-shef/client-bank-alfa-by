@@ -112,3 +112,49 @@ describe('handlePollNow', () => {
     expect(DEFAULT_MANUAL_POLL_COOLDOWN_SEC).toBeGreaterThanOrEqual(30)
   })
 })
+
+describe('точечный забор за выбранный день (#588)', () => {
+  it('день заменяет окно ЦЕЛИКОМ — одна задача про один день', async () => {
+    // ⚠ Не «расширить окно до дня», а именно заменить: «забрать за 17 августа» обязано спросить
+    // банк ровно про 17 августа. Иначе запрос ушёл бы за скользящее окно, вернул сегодняшние
+    // операции, и человек прочитал бы это как «за тот день у банка ничего нет».
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ enqueue }), { ...input, day: '2026-07-10' })
+    expect(r.status).toBe(200)
+    expect(r.body, 'день не подтверждён эхом — интерфейсу нечего показать').toMatchObject({ day: '2026-07-10' })
+    for (const call of enqueue.mock.calls) {
+      const job = call[0] as { dateFrom: string, dateTo: string }
+      expect(job.dateFrom).toBe('2026-07-10')
+      expect(job.dateTo).toBe('2026-07-10')
+    }
+  })
+
+  it('без дня — прежнее скользящее окно, эха дня нет', async () => {
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ enqueue }), input)
+    expect(r.body).not.toHaveProperty('day')
+    const job = enqueue.mock.calls[0]?.[0] as { dateFrom: string, dateTo: string }
+    expect(job.dateFrom).not.toBe(job.dateTo)
+  })
+
+  it('будущий и кривой день отвергаются ДО банка, портала и кулдауна', async () => {
+    // ⚠ Порядок здесь несущий: отвергнутая дата не должна стоить ни REST-вызова к Bitrix24, ни
+    // минуты паузы — иначе опечатка в календаре блокировала бы исправную кнопку на кулдаун.
+    for (const bad of ['2026-07-18', '2026-02-31', 'вчера']) {
+      const enqueue = vi.fn(async (_job: FetchJob) => {})
+      const claimSlot = vi.fn(async () => true)
+      const validateFrame = vi.fn(async () => ({ userId: '7', isAdmin: true }))
+      const r = await handlePollNow(deps({ enqueue, claimSlot, validateFrame }), { ...input, day: bad })
+      expect(r.status, bad).toBe(400)
+      expect(String(r.body.error), bad).not.toBe('')
+      expect(claimSlot, `${bad}: сожжён кулдаун`).not.toHaveBeenCalled()
+      expect(validateFrame, `${bad}: сходили в портал зря`).not.toHaveBeenCalled()
+      expect(enqueue, bad).not.toHaveBeenCalled()
+    }
+  })
+
+  it('сегодняшний день разрешён', async () => {
+    const r = await handlePollNow(deps(), { ...input, day: '2026-07-17' })
+    expect(r.status).toBe(200)
+  })
+})
