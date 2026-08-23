@@ -23,8 +23,14 @@ export interface PauseAllPlan<T extends PausableAccount> {
   paused: boolean
   /** Строки, которые надо переключить: только те, что сейчас в противоположном состоянии. */
   rows: T[]
+  /** Сколько всего реальных подключений (без ожидающих). ⚠ Нужен ИТОГУ, а не кнопке: переключаем
+   *  дельту, а человеку важен результат — «на паузе все 4», а не «переключили 3». */
+  total: number
   /** Подпись кнопки. */
   label: string
+  /** Подсказка: сколько строк реально затронет нажатие. ⚠ По списку это на глаз не сосчитать —
+   *  состояние видно только по бейджу в каждой строке. */
+  hint: string
 }
 
 /**
@@ -51,9 +57,18 @@ export function planPauseAll<T extends PausableAccount>(accounts: readonly T[]):
   if (real.length < 2) return null
   const allPaused = real.every(a => a.pollPaused === true)
   const paused = !allPaused
+  // ⚠ Проверки «`rows` пуст» здесь НЕТ, и её отсутствие намеренно. При `real.length >= 2` пустым
+  // этот список быть не может: либо все на паузе (тогда `paused=false` и берём все), либо хотя бы
+  // одна работает (тогда `paused=true` и берём как минимум её). Написанная «на всякий случай»
+  // проверка читалась бы как настоящее предусловие, и её пришлось бы поддерживать как настоящее —
+  // при том что покрыть её тестом нельзя в принципе.
   const rows = real.filter(a => (a.pollPaused === true) !== paused)
-  if (rows.length === 0) return null
-  return { paused, rows, label: paused ? 'Приостановить всё' : 'Возобновить всё' }
+  // ⚠ «по N подключениям из M», а не «по N из M подключениям»: во втором варианте падежи спорят —
+  // после «из» нужен родительный, а слово стоит в дательном. Поймано просмотром снимка.
+  const hint = paused
+    ? `Остановит опрос по ${rows.length} ${pluralAccounts(rows.length)} из ${real.length}. Пропущенные дни не наверстываются.`
+    : `Возобновит опрос по ${rows.length} ${pluralAccounts(rows.length)} из ${real.length}.`
+  return { paused, rows, total: real.length, label: paused ? 'Приостановить всё' : 'Возобновить всё', hint }
 }
 
 /**
@@ -66,11 +81,15 @@ export function planPauseAll<T extends PausableAccount>(accounts: readonly T[]):
  * ⚠ Ничего не вышло вовсе — тоже отдельный текст: «0 из 4» и «ошибка» читаются одинаково плохо,
  * если не сказать прямо, что состояние не изменилось.
  */
-export function pauseAllSummary(done: number, failed: number, paused: boolean): string {
+export function pauseAllSummary(done: number, failed: number, paused: boolean, total: number): string {
   const verb = paused ? 'приостановлен' : 'возобновлён'
-  if (failed === 0) return `Опрос ${verb} по ${done} ${pluralAccounts(done)}.`
-  if (done === 0) return `Не удалось переключить ни одно подключение — состояние не изменилось. Список обновлён, попробуйте ещё раз.`
-  return `Опрос ${verb} по ${done} ${pluralAccounts(done)}, а ${failed} не переключилось. Список обновлён — проверьте оставшиеся строки.`
+  // ⚠ Полный успех сообщает ИТОГ, а не дельту. Переключаем мы только несовпадающие строки, поэтому
+  // при 4 подключениях (одно уже стояло на паузе) дельта равна 3 — и «приостановлен по 3
+  // подключениям» читается как «одно ещё качает», хотя качать перестали ВСЕ. Человеку нужен
+  // результат, а не наша арифметика.
+  if (failed === 0) return `Опрос ${verb} по всем ${total} ${pluralAccounts(total)}.`
+  if (done === 0) return 'Не удалось переключить ни одно подключение — состояние не изменилось. Попробуйте ещё раз.'
+  return `Опрос ${verb} по ${done} ${pluralAccounts(done)} из ${total}, ${failed} не переключилось — проверьте оставшиеся строки.`
 }
 
 /** Склонение «подключение» в дательном. ⚠ Через ОБЩИЙ `pluralRu`, а не свой `=== 1`: ручной

@@ -23,14 +23,19 @@ const listReply = { value: [] as Record<string, unknown>[] }
 // сужается до первой формы ответа, и `mockImplementation`, подменяющий поведение в отдельном тесте
 // (например «вторая строка отвечает 409»), перестаёт компилироваться — при полностью корректном
 // тесте.
-const fetchMock = vi.fn((url: string, _opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+function defaultFetch(url: string, _opts?: Record<string, unknown>): Promise<Record<string, unknown>> {
   if (url === '/api/bank/accounts') return Promise.resolve({ accounts: listReply.value })
   return Promise.resolve({ ok: true })
-})
+}
+const fetchMock = vi.fn(defaultFetch)
 vi.stubGlobal('$fetch', fetchMock)
 
 afterEach(() => {
-  fetchMock.mockClear()
+  // ⚠ `mockReset`, а не только `mockClear`: последний чистит ВЫЗОВЫ, но оставляет подменённую
+  // реализацию. Тест, упавший до строки восстановления, протаскивал свой счётчик в следующие, и те
+  // падали по чужой причине — диагноз уводило в сторону.
+  fetchMock.mockReset()
+  fetchMock.mockImplementation(defaultFetch)
   listReply.value = []
   mockState.inPortal = true
 })
@@ -415,9 +420,6 @@ describe('#576 пауза автоопроса', () => {
       const note = wrapper.find('[data-testid="pause-all-note"]')
       expect(note.exists()).toBe(true)
       expect(note.text()).toContain('не переключилось')
-      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => (url === '/api/bank/accounts'
-        ? Promise.resolve({ accounts: listReply.value })
-        : Promise.resolve({ ok: true })))
     })
 
     it('отказ ОДНОЙ строки не останавливает остальные', async () => {
@@ -434,9 +436,29 @@ describe('#576 пауза автоопроса', () => {
       await wrapper.find('[data-testid="pause-all"]').trigger('click')
       await flushPromises()
       expect(seen, 'все три строки были опрошены').toBe(3)
-      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => (url === '/api/bank/accounts'
-        ? Promise.resolve({ accounts: listReply.value })
-        : Promise.resolve({ ok: true })))
+    })
+
+    it('запросы идут ПОСЛЕДОВАТЕЛЬНО, а не залпом', async () => {
+      // ⚠ Это заявленный инвариант всей правки, и мутация в `Promise.all` переживала ВЕСЬ набор:
+      // существующие тесты проверяют, что все строки в итоге опрошены, а не что вторая ждёт первую.
+      // Между тем именно последовательность защищает от 429 в задросселированной зоне nginx.
+      listReply.value = [row(1, 'BY01ALFA0001'), row(2, 'BY01ALFA0002'), row(3, 'BY01ALFA0003')]
+      const wrapper = await mountReady()
+      let started = 0
+      let release: (() => void) | null = null
+      fetchMock.mockImplementation((url: string): Promise<Record<string, unknown>> => {
+        if (url === '/api/bank/accounts') return Promise.resolve({ accounts: listReply.value })
+        started++
+        // Первый запрос «зависает», пока мы его не отпустим: при залпе остальные уже стартовали бы.
+        if (started === 1) return new Promise(resolve => (release = () => resolve({ ok: true })))
+        return Promise.resolve({ ok: true })
+      })
+      void wrapper.find('[data-testid="pause-all"]').trigger('click')
+      await flushPromises()
+      expect(started, 'вторая строка НЕ должна стартовать, пока первая не завершилась').toBe(1)
+      release!()
+      await flushPromises()
+      expect(started).toBe(3)
     })
 
     it('незавершённое подключение в цикл НЕ попадает', async () => {

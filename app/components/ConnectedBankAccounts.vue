@@ -71,8 +71,15 @@ async function togglePauseAll(): Promise<void> {
   if (!plan) return
   bulkNote.value = ''
   const { done, failed } = await setPausedAll(plan.rows, plan.paused)
-  bulkNote.value = pauseAllSummary(done, failed, plan.paused)
+  bulkNote.value = pauseAllSummary(done, failed, plan.paused, plan.total)
 }
+
+// ⚠ Заметка гаснет, как только список изменился ИНАЧЕ. Без этого она переживала построчное
+// «Возобновить» и продолжала утверждать «на паузе все 4» рядом с кнопкой, подпись которой уже
+// перевернулась обратно, — то есть экран спорил сам с собой.
+watch(accounts, () => {
+  if (!pausingAll.value) bulkNote.value = ''
+})
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
@@ -246,17 +253,26 @@ defineExpose({ reload: load })
         :loading="pausingAll"
         :disabled="pausingAll"
         data-testid="pause-all"
+        :title="bulk.hint"
         @click="togglePauseAll"
       />
+      <!-- ⚠ Цена названа ДО клика, а не после. Предупреждение о пропущенных днях ниже по странице
+           показывается только когда что-то УЖЕ на паузе — то есть человек, впервые гасящий импорт
+           по всем счетам разом, не видел его в момент решения вовсе, а при нескольких подключениях
+           оно ещё и уезжает за экран. -->
       <span
-        v-if="bulkNote"
+        class="text-xs text-(--ui-color-base-4)"
+        data-testid="pause-all-hint"
+      >{{ bulk.hint }}</span>
+      <!-- ⚠ Живой регион существует ВСЕГДА, а текст появляется внутри него. Регион, созданный
+           вместе с содержимым, скринридеры обычно не объявляют — а это единственная обратная связь
+           о частичном отказе. Тот же приём, что у алерта ошибок двумя блоками выше. -->
+      <span
         class="text-xs text-(--ui-color-base-3)"
         role="status"
         aria-live="polite"
         data-testid="pause-all-note"
-      >
-        {{ bulkNote }}
-      </span>
+      >{{ bulkNote }}</span>
     </div>
 
     <!-- ⚠ `v-if`, а не `v-else-if`: между этим списком и пустым состоянием выше теперь стоит блок
@@ -390,7 +406,7 @@ defineExpose({ reload: load })
               color="air-tertiary-no-accent"
               size="xs"
               :loading="pausing === rowKey(a)"
-              :disabled="pausing === rowKey(a)"
+              :disabled="pausingAll || pausing === rowKey(a)"
               @click="setPaused(a, !a.pollPaused)"
             />
             <template v-if="confirming === rowKey(a)">
@@ -405,7 +421,7 @@ defineExpose({ reload: load })
                 color="air-primary-alert"
                 size="xs"
                 :loading="removing === rowKey(a)"
-                :disabled="removing === rowKey(a)"
+                :disabled="pausingAll || removing === rowKey(a)"
                 @click="onDisconnect(a)"
               />
               <B24Button
