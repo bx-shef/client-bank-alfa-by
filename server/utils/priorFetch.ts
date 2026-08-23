@@ -172,6 +172,12 @@ export function priorNextPageUrl(body: unknown, base: string): string | null {
  *  must be said out loud. */
 export type PriorWalkStop = 'exhausted' | 'repeat' | 'page-cap' | 'time-cap' | 'foreign-next' | 'not-ready'
 
+/** Что сказать в лог об обходе страниц и НАСКОЛЬКО громко. */
+export interface WalkNotice {
+  level: 'info' | 'warn'
+  text: string
+}
+
 export interface PriorWalkResult {
   pages: number
   /** Operations that came from pages 2..N — rows the single-page version was losing. */
@@ -204,7 +210,7 @@ const TRUNCATION_ADVICE: Record<PriorWalkStop, string> = {
  * part that silently rots inside a transport callback. No literal `[fetch]`/`[prior-page]` prefix —
  * the logger prints the channel itself.
  */
-export function priorWalkNotice(label: string, info: PriorWalkResult): string | null {
+export function priorWalkNotice(label: string, info: PriorWalkResult): WalkNotice | null {
   // ⚠ ONLY `exhausted` is silent. `repeat` used to be silent too, on the reasoning that a looping
   // bank means «done» — and that was wrong twice over: a loop is precisely the case where we do NOT
   // know whether we saw everything, and treating it as a clean end rebuilt the silent truncation
@@ -214,8 +220,7 @@ export function priorWalkNotice(label: string, info: PriorWalkResult): string | 
   const parts: string[] = []
   if (info.recovered > 0) {
     parts.push(
-      `ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ ${info.recovered} операций со страниц 2..${info.pages}`
-      + ' — до этой правки они терялись молча (#561)'
+      `страниц: ${info.pages}, со 2-й и дальше добрано операций: ${info.recovered}`
     )
   }
   if (truncated) {
@@ -225,7 +230,11 @@ export function priorWalkNotice(label: string, info: PriorWalkResult): string | 
       + ` ${why} (#561)`
     )
   }
-  return `${label}: ${parts.join(' | ')}`
+  // ⚠ Уровень РАЗНЫЙ, и это замечание владельца по живому логу: строка о добранных страницах
+  // печаталась WARNING на КАЖДОМ тике штатной работы («168 операций со страниц 2..3»), то есть
+  // предупреждала о том, что уже починено, и забивала поиск настоящих проблем. Тревога здесь одна
+  // — ОБРЫВ обхода: окно могло прийти не полностью. Штатный сбор страниц — просто факт.
+  return { level: truncated ? 'warn' : 'info', text: `${label}: ${parts.join(' | ')}` }
 }
 
 /**
@@ -543,12 +552,16 @@ export async function fetchPriorStatement(
           nextUrl => deps.pollJson(nextUrl, token.accessToken),
           (info) => {
             walk = info
-            // ⚠ WARNING, not info: this line means either «operations used to vanish» or «the
-            // window may be incomplete» — both are what the runbook greps for, not narration.
+            // ⚠ Уровень выбирает сам `priorWalkNotice`: тревога — только ОБРЫВ обхода, штатно
+            // собранные страницы идут INFO. Прежде WARNING печаталось на каждом тике исправной
+            // работы, то есть предупреждало о починенном и забивало поиск настоящих проблем.
             // ⚠ logSafe exactly like the Alfa sibling and worker.ts's [fetch] line: an account key
             // on its way into a log is bank-supplied text, and the two lines must not disagree.
-            const line = priorWalkNotice(`${logSafe(query.account)} ${from}..${to}`, info)
-            if (line) (deps.warn ?? deps.log)?.(`[prior-page] ${line}`)
+            const notice = priorWalkNotice(`${logSafe(query.account)} ${from}..${to}`, info)
+            if (notice) {
+              const sink = notice.level === 'warn' ? (deps.warn ?? deps.log) : (deps.log ?? deps.warn)
+              sink?.(`[prior-page] ${notice.text}`)
+            }
           },
           { sleep: deps.sleep }
         )

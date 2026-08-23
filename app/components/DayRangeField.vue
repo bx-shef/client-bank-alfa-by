@@ -62,6 +62,7 @@ function clear(): void {
       range
       :max-value="maxValue"
       size="sm"
+      locale="ru"
       data-testid="day-range-input"
     >
       <template #trailing>

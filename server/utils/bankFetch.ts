@@ -22,6 +22,7 @@
 // `err.message` log is readable, while `{ cause }` preserves the chain — the same posture as
 // b24Rest.ts, which already rethrows the raw ofetch error of an auth-bearing portal call.
 
+import type { WalkNotice } from './priorFetch'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import { normalizeAlfa, alfaStatementErrors, type AlfaStatementResponse } from '../../app/utils/alfaStatement'
 import { ensureBankToken } from './ensureBankToken'
@@ -122,14 +123,13 @@ export interface AlfaWalkDeps {
  * ⚠ No `[fetch]` prefix: `ServerLineFormatter` already prints the channel, and a literal tag here
  * would render as `[fetch] WARNING: [fetch] …` — the exact duplication `buildOpLogLine` documents.
  */
-export function alfaWalkNotice(label: string, info: AlfaWalkResult): string | null {
+export function alfaWalkNotice(label: string, info: AlfaWalkResult): WalkNotice | null {
   const truncated = info.stop === 'page-cap' || info.stop === 'time-cap'
   if (info.recovered <= 0 && !truncated) return null
   const parts: string[] = []
   if (info.recovered > 0) {
     parts.push(
-      `ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ ${info.recovered} операций со страниц 2..${info.pages}`
-      + ' — до этой правки они терялись молча (#561)'
+      `страниц: ${info.pages}, со 2-й и дальше добрано операций: ${info.recovered}`
     )
   }
   if (truncated) {
@@ -141,7 +141,9 @@ export function alfaWalkNotice(label: string, info: AlfaWalkResult): string | nu
       + ' поднимите потолок или сузьте CRON_LOOKBACK_DAYS (#561)'
     )
   }
-  return `${label}: ${parts.join(' | ')}`
+  // ⚠ Уровень разный по той же причине, что у близнеца в `priorFetch.ts`: штатно собранные
+  // страницы — факт, а не тревога. Тревога — только обрыв обхода.
+  return { level: truncated ? 'warn' : 'info', text: `${label}: ${parts.join(' | ')}` }
 }
 
 /**
@@ -289,10 +291,13 @@ export interface BankFetchDeps {
   /** Priorbank's async create+poll engine (A5b). Injected so the delegation is unit-testable; the
    *  live impl is `fetchPriorStatement`, which owns its own POST/poll transport. */
   fetchPrior: (query: BankFetchQuery, stored: BankToken) => Promise<StatementItem[]>
-  /** Loud channel for the two things a page walk can discover (#561): operations that used to be
-   *  dropped silently, and a walk WE cut short. Optional so every existing test double keeps
-   *  compiling; the live wiring below always provides it. */
+  /** Тревожный канал обхода страниц (#561): обрыв обхода — окно могло прийти не полностью.
+   *  Optional so every existing test double keeps compiling; the live wiring below always
+   *  provides it. */
   warn?: (message: string) => void
+  /** Спокойный канал того же обхода: сколько страниц собрали. ⚠ Отдельный от `warn` потому, что
+   *  на живом проде эта строка печаталась предупреждением на КАЖДОМ тике исправной работы. */
+  log?: (message: string) => void
 }
 
 const liveDeps: BankFetchDeps = {
@@ -301,6 +306,7 @@ const liveDeps: BankFetchDeps = {
   apiConfig: bankApiConfig,
   fetchPrior: (query, stored) => fetchPriorStatement(query, stored),
   warn: message => log.warning(message),
+  log: message => log.info(message),
   getJson: async (url, accessToken) => {
     const fetchJson = $fetch as unknown as (
       url: string,
@@ -338,14 +344,14 @@ export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchD
         const url = `${cfg.base}${cfg.statementPath}?${alfaStatementQuery(query.account, query.dateFrom, query.dateTo, pageNo).toString()}`
         return await deps.getJson(url, token.accessToken) as AlfaStatementResponse
       },
-      // ⚠ WARNING, not info, and only when there is something to say: a later page carried
-      // operations the first one did not (proof the single-request version had been losing them),
-      // or WE stopped the walk before the bank ran out. `alfaWalkNotice` owns both decisions.
+      // ⚠ Уровень выбирает САМ `alfaWalkNotice`: обрыв обхода — тревога (окно могло прийти не
+      // полностью), штатно собранные страницы — факт. Прежде оба случая шли WARNING, и на живом
+      // проде это означало предупреждение на каждом тике о том, что уже починено.
       // ⚠ The account is `logSafe`'d exactly like worker.ts's `[fetch]` line — it is bank-supplied
       // text on its way into a log, and the two lines must not disagree about that.
       (info) => {
-        const line = alfaWalkNotice(`alfa ${logSafe(query.account)} ${query.dateFrom}..${query.dateTo}`, info)
-        if (line) deps.warn?.(line)
+        const notice = alfaWalkNotice(`alfa ${logSafe(query.account)} ${query.dateFrom}..${query.dateTo}`, info)
+        if (notice) (notice.level === 'warn' ? deps.warn : (deps.log ?? deps.warn))?.(notice.text)
       }
     )
   }

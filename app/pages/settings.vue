@@ -24,6 +24,12 @@ const log = useLogger('settings')
 const route = useRoute()
 const section = ref<SettingsSectionId>(DEFAULT_SETTINGS_SECTION)
 
+// Открыт ли боковой список разделов. ⚠ Переменная обязана существовать: `v-model:open` на
+// необъявленном значении — не «пустой по умолчанию», а обращение к несуществующему свойству
+// в рантайме; проверка типов это и поймала. Открыт по умолчанию — на широком экране список
+// разделов и есть навигация, а закрытый старт прятал бы её при первом открытии слайдера.
+const open = ref(true)
+
 // Пункты навигации: активный подсвечен, клик переключает раздел.
 //
 // ⚠ Подсветку даёт `active`, а НЕ `v-model`: `modelValue` у горизонтального меню означает «какое
@@ -115,11 +121,15 @@ async function close(): Promise<void> {
         </template>
 
         <template #default="{ collapsed }">
+          <!-- ⚠ `data-testid` держит проверку «до каждого раздела можно дойти кликом»: полоса
+               разделов — единственный путь к половине настроек, и её неработающий пункт означает
+               недостижимый экран. -->
           <B24NavigationMenu
             :collapsed="collapsed"
             :items="navItems"
             orientation="vertical"
             popover
+            data-testid="settings-nav"
           />
         </template>
       </B24DashboardSidebar>
@@ -143,7 +153,7 @@ async function close(): Promise<void> {
           <B24DashboardNavbar
             :toggle="false"
             :b24ui="{ root: 'ps-4' }"
-            :title=" currentSection?.label || 'Важные параметры'"
+            :title="currentSection?.label || 'Важные параметры'"
           />
           <!-- ⚠ `accent="default"`, а не `less`: замерено — `less` на 11 px даёт 3.07:1 в
                  светлой теме при пороге 4.5 (docs/PAGE_GUIDE.md §9), то есть самым нечитаемым на
@@ -166,16 +176,42 @@ async function close(): Promise<void> {
                и атрибуты на такой компонент не наследуются никуда — класс молча пропадал,
                а вместе с ним и высота, по которой центрируются эти экраны. -->
             <div class="flex min-h-full flex-1 flex-col">
+              <!-- ⚠ `v-model:section`, а не односторонний проп: экран готовности внутри формы
+                   переключает раздел («перейти и починить»), и без обратной связи эти ссылки
+                   молча перестают работать. -->
               <SettingsForm
-                :section="section"
-                :currentSection="currentSection"
+                v-model:section="section"
                 @close="close"
               />
             </div>
+            <!-- Заглушка на время, пока форма не смонтировалась на клиенте.
+                 ⚠ Она повторяет РАСКЛАДКУ раздела, а не рисует одну полоску: страница
+                 пререндеренная, поэтому этот кадр видно на каждом открытии слайдера, и заглушка
+                 не в форме содержимого даёт скачок вёрстки в момент подмены. Пропорции взяты с
+                 реального раздела — карточка настроек слева и экран готовности справа.
+                 ⚠ `aria-hidden` + `aria-busy` на обёртке: скринридеру читать нечего, но состояние
+                 «идёт загрузка» сообщить надо, иначе экран для него просто пуст. -->
             <template #fallback>
-              <div class="flex min-h-full flex-1 flex-col">
-                <!-- @todo Добавить собранный через несколько B24Skeleton заглушку -->
-                <B24Skeleton class="w-4 h-2" />
+              <div
+                class="flex min-h-full flex-1 flex-col gap-4"
+                aria-busy="true"
+                data-testid="settings-skeleton"
+              >
+                <div
+                  class="flex flex-col lg:flex-row items-start gap-4"
+                  aria-hidden="true"
+                >
+                  <div class="w-full min-w-0 space-y-3">
+                    <B24Skeleton class="h-7 w-2/5" />
+                    <B24Skeleton class="h-4 w-3/5" />
+                    <B24Skeleton class="h-40 w-full" />
+                    <B24Skeleton class="h-24 w-full" />
+                  </div>
+                  <div class="w-full lg:w-80 space-y-3">
+                    <B24Skeleton class="h-5 w-1/2" />
+                    <B24Skeleton class="h-32 w-full" />
+                  </div>
+                </div>
               </div>
             </template>
           </ClientOnly>

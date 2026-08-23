@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
-import { showsChatPreview } from '~/utils/settingsSections'
+import { SETTINGS_SECTIONS, showsChatPreview, type SettingsSectionId } from '~/utils/settingsSections'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 import SignIcon from '@bitrix24/b24icons-vue/main/SignIcon'
 
@@ -12,7 +12,22 @@ import SignIcon from '@bitrix24/b24icons-vue/main/SignIcon'
 // ⚠ Раньше это был один аккордеон, и он ПРЯТАЛ настройки: что можно настроить, было видно только
 // по заголовкам секций, а до кнопки сохранения на длинной форме надо было прокрутить экран
 // целиком (#530). Тем же путём прошёл соседний `ai-price-import`.
-const emit = defineEmits<{ close: [] }>()
+// ⚠ Раздел приходит ПРОПОМ, а состояние живёт на странице (`settings.vue`): там же навигация и
+// заголовок панели. Форма его только читает.
+//
+// ⚠ Передаётся ИДЕНТИФИКАТОР, а не готовый объект раздела, хотя странице объект тоже нужен. Две
+// копии одного состояния однажды разойдутся — а список разделов закрытый и лежит в чистом
+// `settingsSections.ts`, поэтому вывести объект по идентификатору стоит одну строку и соврать не
+// может.
+const props = defineProps<{ section: SettingsSectionId }>()
+// ⚠ `update:section` обязателен, а не «на будущее»: экран готовности внутри формы переключает
+// раздел («перейти и починить» — один клик), и пока раздел был локальным `ref`, он писал в него
+// напрямую. С переездом состояния на страницу такая запись стала записью В ПРОП: Vue её не
+// применяет, и ссылки экрана готовности молча перестали бы работать — заметить это можно только
+// кликнув. Отсюда `v-model:section` со стороны страницы.
+const emit = defineEmits<{ 'close': [], 'update:section': [SettingsSectionId] }>()
+
+const currentSection = computed(() => SETTINGS_SECTIONS.find(s => s.id === props.section))
 
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
@@ -166,7 +181,7 @@ async function cancel(): Promise<void> {
           <!-- Красная строка готовности ведёт прямо в свой раздел: от «что не так» до «где это
                чинить» — один клик. Без этого разбор `?section=` был бы возможностью, до которой
                из приложения не добраться. -->
-          <SetupReadinessCard @open-section="section = $event" />
+          <SetupReadinessCard @open-section="emit('update:section', $event)" />
 
           <!-- А предпросмотр — только там, где он про ЭТИ правила. Рядом с картой распознавания
                он отвечал бы на вопрос, которого на экране не задавали. -->
@@ -190,7 +205,7 @@ async function cancel(): Promise<void> {
            fail-closed), и вместе с ним исчезала распорка: замерено — панель накрывала последние
            41 px содержимого, то есть на «Карте распознавания» подрезалось поле ввода. -->
       <div
-        v-if="1 > 0 || enabled"
+        v-if="enabled"
         class="h-24"
         aria-hidden="true"
       />
@@ -206,8 +221,8 @@ async function cancel(): Promise<void> {
            и состоит выигрыш #530. Настоящее приклеивание требует высоты в один экран у корня
            панели, а в портале высоту фрейма задаёт `fitWindow` — это отдельная работа. -->
       <div
-        v-if="1 > 0 || enabled"
-        class="fixed z-10 base-mode inset-x-0 bottom-0 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
+        v-if="enabled"
+        class="fixed inset-x-0 bottom-0 z-10 base-mode bg-default flex items-center justify-center gap-2.5 border-t border-t-(--ui-color-divider-less) shadow-top-md py-3.25 px-3.25"
       >
         <B24Button
           size="lg"

@@ -84,7 +84,10 @@ describe('PollNowButton poll interaction', () => {
     expect(wrapper.find('[data-testid="poll-message"]').exists()).toBe(false)
   })
 
-  it('disabled (503) → friendly "отключён" error', async () => {
+  it('503 → говорит про ВРЕМЕННУЮ недоступность, а не про «выключено»', async () => {
+    // ⚠ Своего выключателя у ручного опроса больше нет (снят 2026-08-23): 503 теперь значит
+    // «очередь недоступна» — сбой на нашей стороне, который сам пройдёт. Прежний текст «опрос
+    // отключён» отправлял бы админа искать несуществующую настройку.
     fetchMock.mockRejectedValueOnce({ statusCode: 503 })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
@@ -92,7 +95,8 @@ describe('PollNowButton poll interaction', () => {
     await nextTick()
     const err = wrapper.find('[data-testid="poll-error"]')
     expect(err.exists()).toBe(true)
-    expect(err.text()).toContain('отключён')
+    expect(err.text()).toMatch(/недоступ/i)
+    expect(err.text(), 'снова говорим про выключатель, которого нет').not.toMatch(/отключ/i)
     expect(wrapper.find('[data-testid="poll-message"]').exists()).toBe(false)
   })
 

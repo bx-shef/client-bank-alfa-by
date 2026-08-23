@@ -60,6 +60,7 @@ const minValue = computed(() => toCalendar(props.min))
       :max-value="maxValue"
       :min-value="minValue"
       size="sm"
+      locale="ru"
       data-testid="day-input"
     >
       <template #trailing>

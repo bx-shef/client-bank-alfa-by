@@ -38,7 +38,10 @@ describe('handlePollNow', () => {
     expect(providers).not.toContain('manual')
   })
 
-  it('503 when the feature is disabled (app-side gate)', async () => {
+  it('503 без очередей — а не молчаливое «запущено»', async () => {
+    // ⚠ Своего выключателя у ручного опроса больше нет (`MANUAL_POLL_ENABLED` снят 2026-08-23):
+    // кнопка нужна на каждом портале. Остаётся ровно одна причина ответить отказом — недоступные
+    // очереди: постановка задачи тогда молча ничего не делает, и «опрос запущен» было бы ложью.
     const enqueue = vi.fn(async (_job: FetchJob) => {})
     const r = await handlePollNow(deps({ enabled: false, enqueue }), input)
     expect(r.status).toBe(503)

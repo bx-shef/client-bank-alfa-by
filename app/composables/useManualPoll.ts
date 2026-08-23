@@ -5,8 +5,7 @@ import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/c
 // from the in-portal admin UI. POSTs to /api/poll-now with the FRAME token (Bearer + X-B24-Domain) —
 // the backend gates on the feature flag + admin + a per-portal cooldown, then enqueues the fetch
 // jobs. Outside a portal frame there is no token → inert. Frame-auth helpers are shared (useFrameAuth),
-// same as useBankConnect. The feature is OFF unless the owner sets MANUAL_POLL_ENABLED — the UI
-// surfaces the backend's response (disabled / cooldown / enqueued N) rather than hiding the button.
+// same as useBankConnect. UI показывает ответ сервера (кулдаун / поставлено N), а не прячет кнопку.
 
 export interface PollNowResponse {
   enqueued?: number
@@ -59,7 +58,9 @@ export function useManualPoll() {
       const said = (e as { data?: { error?: unknown } })?.data?.error
       if (status === 400 && typeof said === 'string' && said) error.value = said
       else if (status === 429) error.value = 'Слишком часто — подождите немного и повторите.'
-      else if (status === 503) error.value = 'Ручной опрос сейчас отключён.'
+      // ⚠ 503 больше не значит «функция выключена» (свой выключатель снят 2026-08-23) — он значит
+      // «очередь недоступна», то есть сбой на нашей стороне, и текст обязан вести к действию.
+      else if (status === 503) error.value = 'Сервис обработки временно недоступен — повторите через пару минут.'
       else if (status === 403) error.value = 'Опрос может запустить только администратор портала.'
       else error.value = frameFetchError(e, 'Не удалось запустить опрос')
     } finally {

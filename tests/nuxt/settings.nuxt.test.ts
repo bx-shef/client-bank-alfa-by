@@ -3,6 +3,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { nextTick } from 'vue'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import SettingsForm from '~/components/SettingsForm.vue'
+import { SETTINGS_SECTIONS, type SettingsSectionId } from '~/utils/settingsSections'
 import { MOCK_STATEMENT } from '~/utils/mockStatement'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { defaultPortalSettings } from '~/utils/settings'
@@ -11,8 +12,8 @@ import { defaultPortalSettings } from '~/utils/settings'
 // закрытия), и она покрыта отдельно в `appSlider.nuxt.test.ts`.
 // Форма придерживает содержимое до конца цепочки onMounted (init + nextTick + checkAdmin + load) —
 // прокручиваем её, чтобы форма отрисовалась.
-async function mountReady() {
-  const wrapper = await mountSuspended(SettingsForm)
+async function mountReady(section: SettingsSectionId = 'bank') {
+  const wrapper = await mountSuspended(SettingsForm, { props: { section } })
   await flushPromises()
   await nextTick()
   return wrapper
@@ -26,8 +27,7 @@ async function mountReady() {
  * предпросмотр обязаны сперва открыть тот раздел, в котором он вообще есть.
  */
 async function mountOnChats() {
-  const wrapper = await mountReady()
-  await openSection(wrapper, 'Уведомления в чат')
+  const wrapper = await mountReady('chats')
   return wrapper
 }
 
@@ -56,12 +56,18 @@ function previewRows(wrapper: VueWrapper) {
 // ⚠ Клик, а не установка внутреннего состояния: подмена состояния проверяла бы мою модель, а не
 // то, что пункт вообще кликабелен. Полоса разделов — единственный способ добраться до половины
 // настроек, и её неработающий пункт означал бы недостижимый экран.
+/**
+ * Открыть раздел.
+ *
+ * ⚠ Здесь это СМЕНА ПРОПА, а не клик: с переездом раскладки слайдера навигация живёт на странице
+ * `/settings`, а форма получает активный раздел пропом. Кликабельность пунктов и подсветка
+ * проверяются там же, на странице (`settingsSections.nuxt.test.ts`), — дублировать их здесь
+ * значило бы проверять чужую ответственность и краснеть от правок вёрстки страницы.
+ */
 async function openSection(wrapper: VueWrapper, label: string) {
-  const nav = wrapper.find('[data-testid="settings-nav"]')
-  expect(nav.exists(), 'полосы разделов нет — до настроек не добраться').toBe(true)
-  const trigger = nav.findAll('button').find(b => b.text().trim() === label)
-  expect(trigger, `раздела «${label}» нет в навигации`).toBeTruthy()
-  await trigger!.trigger('click')
+  const found = SETTINGS_SECTIONS.find(sec => sec.label === label)
+  expect(found, `раздела «${label}» нет в списке`).toBeTruthy()
+  await wrapper.setProps({ section: found!.id })
   await flushPromises()
   await nextTick()
 }
@@ -76,9 +82,9 @@ describe('форма настроек', () => {
     //
     // ⚠ Названия ВСЕХ разделов видны всегда — они в полосе навигации. В этом и была суть #530:
     // раньше про существование настройки узнавали, только раскрыв её секцию.
-    for (const label of ['Подключение банка', 'Уведомления в чат', 'Исключения', 'Авто-проведение']) {
-      expect(text, `раздела «${label}» не видно`).toContain(label)
-    }
+    // ⚠ Проверка «видны все разделы» переехала в тест СТРАНИЦЫ: с новой раскладкой слайдера
+    // список разделов живёт на ней (`settingsSections.nuxt.test.ts` проверяет и состав, и то,
+    // что до каждого можно дойти кликом). Здесь форме доступен только активный раздел.
     // А поля — только активного раздела. По умолчанию открыт банк (см. `settingsSections.ts`).
     expect(text).not.toContain('Чат ошибок импорта')
 
@@ -153,7 +159,6 @@ describe('форма настроек', () => {
   // and only shows the "will mutate CRM" warning when ON (fail-safe default off).
   it('renders the auto-distribution section, off by default with no warning', async () => {
     const wrapper = await mountReady()
-    expect(wrapper.text()).toContain('Авто-проведение')
     await openSection(wrapper, 'Авто-проведение')
     expect(wrapper.find('[data-testid="auto-distribute"]').exists()).toBe(true)
     // The absent warning (driven by v-if="settings.autoDistribute") is what pins "off by default".

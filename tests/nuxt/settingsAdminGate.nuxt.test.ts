@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { flushPromises, type VueWrapper } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import SettingsForm from '~/components/SettingsForm.vue'
 
@@ -16,8 +16,8 @@ vi.mock('~/composables/useB24', async () => {
   return { useB24: () => makeMockB24({ isInit: () => mockState.isInit, isAdmin: mockState.isAdmin }) }
 })
 
-async function mountReady() {
-  const wrapper = await mountSuspended(SettingsForm)
+async function mountReady(section: 'bank' | 'chats' = 'bank') {
+  const wrapper = await mountSuspended(SettingsForm, { props: { section } })
   await flushPromises()
   await nextTick()
   return wrapper
@@ -37,26 +37,15 @@ describe('SettingsForm admin gate', () => {
     expect(wrapper.find('[data-testid="error-chat"]').exists()).toBe(false)
   })
 
-  // ⚠ После разделения настроек на разделы (#530) «форма показана» доказывается полосой разделов,
-  // а не полем чата: поля живут в СВОИХ разделах, и по умолчанию открыт банк. Поэтому проверяем и
-  // полосу (форма отрисовалась вообще), и поля после перехода в раздел чатов — иначе гейт
-  // проходил бы при пустом разделе.
-  async function openChats(wrapper: VueWrapper) {
-    const trigger = wrapper.find('[data-testid="settings-nav"]')
-      .findAll('button').find(b => b.text().trim() === 'Уведомления в чат')
-    expect(trigger, 'раздела «Уведомления в чат» нет в навигации').toBeTruthy()
-    await trigger!.trigger('click')
-    await flushPromises()
-    await nextTick()
-  }
+  // ⚠ «Форма показана» доказывается СОДЕРЖИМЫМ раздела, а не полосой разделов: с переездом
+  // раскладки слайдера навигация живёт на странице `/settings`, а форме раздел приходит пропом.
+  // Поэтому монтируем сразу на разделе чатов — иначе гейт проходил бы при пустом разделе.
 
   it('in portal + admin → form shown, no warning', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
-    const wrapper = await mountReady()
+    const wrapper = await mountReady('chats')
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="settings-nav"]').exists()).toBe(true)
-    await openChats(wrapper)
     expect(wrapper.find('[data-testid="notify-chat"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="error-chat"]').exists()).toBe(true)
   })
@@ -64,10 +53,8 @@ describe('SettingsForm admin gate', () => {
   it('outside the portal (standalone) → not blocked, form shown', async () => {
     mockState.isInit = false
     mockState.isAdmin = false
-    const wrapper = await mountReady()
+    const wrapper = await mountReady('chats')
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="settings-nav"]').exists()).toBe(true)
-    await openChats(wrapper)
     expect(wrapper.find('[data-testid="notify-chat"]').exists()).toBe(true)
   })
 })
