@@ -12,18 +12,21 @@
 // the lazy `STATEMENT_JOB_RETENTION.age` uses — we apply them eagerly, we don't shorten them.
 
 import { FETCH_JOB_RETENTION, STATEMENT_JOB_RETENTION } from './producers'
-import { Q_CRM, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE } from './topology'
+import { Q_CRM, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_REGISTRY } from './topology'
 
 /** Queues swept eagerly. Two reasons, both because BullMQ's own age eviction is LAZY (it runs
  *  only from inside another job's `moveToFinished` on the SAME set, so a quiet queue never trims):
  *   - `file-parse` / `crm-sync` carry financial PII (file bytes / StatementItem[]) — privacy (#245);
+ *   - `registry-write` carries ONE `StatementItem` (#578) — same PII, same rule. ⚠ Пропустить её
+ *     было бы тихой утечкой правила: задача дозаписи живёт дольше остальных (ретраи с backoff),
+ *     то есть именно она задерживает данные выписки в Redis дольше всех прочих;
  *   - the FETCH queues carry no statement content, but their FAILED jobs hold the stable jobId that
  *     the poller's backpressure depends on. A failed fetch is only re-planned once its id is freed,
  *     and nothing else frees it: with `removeOnComplete: true` a COMPLETING fetch trims nothing, so
  *     without this sweep one failure would silently drop that account out of the poll rotation until
  *     another fetch happened to fail an hour later. Sweeping by wall clock makes "retry, not
  *     abandon" actually true. */
-export const SWEPT_QUEUES = [Q_PARSE, Q_CRM, Q_FETCH, Q_FETCH_PRIOR] as const
+export const SWEPT_QUEUES = [Q_PARSE, Q_CRM, Q_REGISTRY, Q_FETCH, Q_FETCH_PRIOR] as const
 export type SweptQueue = typeof SWEPT_QUEUES[number]
 
 /** Queues that hold no statement content — only completed-job removal is already immediate there,

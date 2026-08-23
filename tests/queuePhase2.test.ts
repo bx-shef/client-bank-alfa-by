@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BankProviderId, OperationDirection, StatementItem } from '../app/types/statement'
 import {
-  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
+  handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob, type HandlerDeps, MAX_DEFERRED_WRITES_PER_RUN, MAX_UNRESOLVED_NOTICES } from '../server/queue/handlers'
 import {
   DEMO_ACCOUNT_PREFIX, POLLABLE_PROVIDERS, accountsForPolling, buildDemoFetchJobs, cronIntervalMs,
   demoDelayMs, demoItems, demoTickMs, isDemoAccount, planFetches, pollWindow
@@ -86,7 +86,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [], regRetry: [], bindRetry: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -119,6 +119,12 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       // ⚠ ЧИСЛОВОЙ id, как отдаёт настоящий `crm.item.add`: привязки дела (#579) отбраковывают
       // нечисловой, и символическая заглушка молча выключила бы половину проверок.
       return `${100 + calls.registry.length}`
+    },
+    enqueueRegistryRetry: async (it, companyId, memberId, provider, paymentSp) => {
+      calls.regRetry.push([it.docId, companyId, memberId, provider, paymentSp.entityTypeId])
+    },
+    enqueueBindRetry: async (activityId, refs, memberId) => {
+      calls.bindRetry.push([activityId, refs.map(r => `${r.entityTypeId}:${r.entityId}`), memberId])
     },
     bindActivity: async (activityId, refs, memberId) => {
       calls.bind.push([activityId, refs.map(r => `${r.entityTypeId}:${r.entityId}`), memberId])
@@ -1956,6 +1962,111 @@ describe('#579 привязки дела к сущностям CRM', () => {
     const refs = (calls.bind[0] as [string, string[], string])[1]
     expect(refs, 'вытеснена «моя компания»').toContain('4:9')
     expect(refs.length).toBeLessThanOrEqual(6)
+  })
+
+  it('#585 упавшие привязки уходят в долговременную дозапись — списком ЦЕЛИКОМ', async () => {
+    // ⚠ Ставим весь список, а не «те, что упали»: транспорт не говорит, какие именно, а воркер всё
+    // равно читает `binding.list` и ставит только недостающее. Повторная привязка той же пары —
+    // ошибка, поэтому слепой повтор был бы хуже отсутствия ретрая.
+    const { deps, calls } = fakeDeps({
+      recognition: spMatrix, company: '5', myCompany: '9', bindOutcome: { bound: 1, failed: 1 }
+    })
+    const r = await handleCrmSyncJob(job([item('a')]), deps)
+    expect(r.bindingsFailed).toBe(1)
+    expect(calls.bindRetry).toHaveLength(1)
+    const [activityId, refs] = calls.bindRetry[0] as [string, string[], string]
+    expect(activityId).toBe('act-1')
+    expect(refs).toEqual((calls.bind[0] as [string, string[], string])[1])
+  })
+
+  it('#585 удавшиеся привязки НЕ ставят задачу', async () => {
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, company: '5', myCompany: '9' })
+    await handleCrmSyncJob(job([item('a')]), deps)
+    expect(calls.bindRetry).toHaveLength(0)
+  })
+
+  it('#585 отказ ПОСТАНОВКИ задачи не роняет пачку', async () => {
+    // Постановка — это починка. Уронив ею обработку, мы разменяли бы связь одной операции на
+    // импорт всех остальных.
+    const { deps, calls } = fakeDeps({
+      recognition: spMatrix, company: '5', myCompany: '9', bindOutcome: { bound: 0, failed: 2 }
+    })
+    deps.enqueueBindRetry = async () => {
+      throw new Error('Redis лёг')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.bindingsFailed).toBe(2)
+  })
+
+  it('#578 упавшая запись реестра уходит в долговременную дозапись', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: spConfig }, company: '5'
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('СП удалён на портале')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(r.registryFailed).toBe(2)
+    expect(calls.regRetry).toHaveLength(2)
+    expect((calls.regRetry[0] as unknown[])[4], 'потерян смарт-процесс, в который писать').toBe(1044)
+  })
+
+  it('#578 отказ ПОСТАНОВКИ задачи не роняет пачку', async () => {
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: spConfig }, company: '5'
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('СП удалён на портале')
+    }
+    deps.enqueueRegistryRetry = async () => {
+      throw new Error('Redis лёг')
+    }
+    const r = await handleCrmSyncJob(job([item('a'), item('b')]), deps)
+    expect(calls.activity).toHaveLength(2)
+    expect(r.registryFailed).toBe(2)
+  })
+
+  it('отказ поиска «моей компании» не уносит ОСТАЛЬНЫЕ привязки', async () => {
+    // ⚠ Найдено ревью. `findMyCompany` пробрасывает ошибки транспорта — так и задумано на его
+    // первом месте вызова (он идёт ДО маркера, и бросок означает чистый повтор). Здесь он ПОСЛЕ
+    // маркера, и прежняя редакция теряла из-за его блипа ВСЕ привязки операции разом, включая
+    // элемент реестра и сущность списания, которые известны и без него.
+    const exact: IntentResolution[] = [{
+      kind: 'invoice-number', value: 'СЧ-0001', status: 'resolved',
+      candidates: [{ kind: 'invoice', id: '7', amount: 10, currency: 'BYN' }]
+    }]
+    const { deps, calls } = fakeDeps({ recognition: spMatrix, resolve: exact, company: '5', myCompany: '9' })
+    deps.findMyCompany = async () => {
+      throw new Error('портал ответил 502')
+    }
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'счет СЧ-0001')]), deps)
+    // Остальное привязано прямо сейчас…
+    expect(calls.bind, 'привязки не поставлены вовсе').toHaveLength(1)
+    expect((calls.bind[0] as [string, string[], string])[1]).toContain('31:7')
+    // …но операция помечена как потерявшая привязку: «мою компанию» мы так и не узнали, ретраить
+    // нечего, и молчание выдавало бы одностороннюю связь за полную.
+    expect(r.bindingsFailed).toBe(1)
+    expect(calls.bindRetry, 'ретраить нечего — ссылка неизвестна').toHaveLength(0)
+  })
+
+  it('#578 системный отказ НЕ превращается в усилитель нагрузки: потолок задач на прогон', async () => {
+    // ⚠ Отказ реестра почти всегда системный (СП удалён, право отозвано), то есть падает КАЖДАЯ
+    // операция. Без потолка выписка на сотни строк заводила бы задачу на каждую, по 8 попыток — в
+    // тот же пер-портальный лимитер, где живут опрос и продление токена. Различать «постоянный» и
+    // «транзиентный» по ТЕКСТУ ошибки нельзя: через SDK доезжает только локализованная строка.
+    const { deps, calls } = fakeDeps({
+      recognition: { alphabet: 'cyrillic', matrices: [], configFields: spConfig }, company: '5'
+    })
+    deps.writePaymentRegistry = async () => {
+      throw new Error('СП удалён на портале')
+    }
+    const many = Array.from({ length: MAX_DEFERRED_WRITES_PER_RUN + 10 }, (_, i) => item(`op-${i}`))
+    const r = await handleCrmSyncJob(job(many), deps)
+    // Считаем ВСЕ отказы — оператор видит настоящий масштаб…
+    expect(r.registryFailed).toBe(many.length)
+    // …а задач ставим не больше потолка.
+    expect(calls.regRetry).toHaveLength(MAX_DEFERRED_WRITES_PER_RUN)
   })
 
   it('#579 отказ привязок ВИДЕН в строке итога и отдельно от реестра', () => {

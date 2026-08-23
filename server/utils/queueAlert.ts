@@ -23,7 +23,7 @@
 // needs no retained history (job timestamps survive any trimming), no previous snapshot, and no
 // assumption about traffic.
 
-import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_TRIGGER, type QueueName } from '../queue/topology'
+import { Q_BINDINGS, Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_REGISTRY, Q_TRIGGER, type QueueName } from '../queue/topology'
 import { pluralRu } from '../../app/utils/importStatus'
 
 /**
@@ -32,7 +32,7 @@ import { pluralRu } from '../../app/utils/importStatus'
  *
  * ⚠ This is the one place the port DIVERGES from `ai-price-import`, and it has to. There a single
  * 20-minute threshold covers every queue, because every queue there is a fast path with a person
- * waiting at the end of it. Here three of the eight queues are SLOW BY DESIGN, and a flat threshold
+ * waiting at the end of it. Here five of the ten queues are SLOW BY DESIGN, and a flat threshold
  * would page us constantly about the system working exactly as specified:
  *
  *  - **`bank-fetch` / `bank-fetch-prior`** — the poller is deliberately back-pressured by the global
@@ -50,6 +50,10 @@ import { pluralRu } from '../../app/utils/importStatus'
  *    altogether. The budget is therefore finite but past the whole backoff ladder.
  *  - **`feedback-post`** — durable retry over 8 attempts (~1 hour of GitHub flakiness by design), so
  *    the budget is двукратный запас поверх этого, not 20 minutes.
+ *  - **`registry-write` / `activity-bind`** — дозапись в CRM (#578/#585): те же 8 попыток по 30 с,
+ *    что и у `feedback-post`, то есть ≈1 час (3810 с) штатного `delayed`-времени. Окно короче триггерного
+ *    НАМЕРЕННО: там ждут действия администратора, здесь — отказа портала, который либо пройдёт за
+ *    десятки минут, либо не пройдёт вовсе.
  *
  * The fast paths keep the source's 20 minutes: `b24-events` (install/uninstall — a stall means
  * portals silently lose tokens), `file-parse`/`crm-sync` (a person uploaded a file and is waiting
@@ -65,7 +69,13 @@ export const STALL_BUDGET_MS: Record<QueueName, number | null> = {
   [Q_FETCH_PRIOR]: 6 * 60 * 60 * 1000,
   [Q_FEEDBACK]: 2 * 60 * 60 * 1000,
   // 48 h > the ~34 h backoff ladder, so normal self-healing never trips it, but a dead worker does.
-  [Q_TRIGGER]: 48 * 60 * 60 * 1000
+  [Q_TRIGGER]: 48 * 60 * 60 * 1000,
+  // Дозапись в CRM (#578/#585): 8 попыток по `30s·2^(n-1)` ≈ 63 мин штатного `delayed`-времени
+  // (та же лестница, что у `feedback-post`, — и тот же бюджет 4 ч поверх неё). Запас нарочно
+  // больше двукратного: сюда попадает ещё и ожидание в очереди на занятом воркере. `null` сделал
+  // бы очередь невидимой для алертинга вместе с её воркером.
+  [Q_REGISTRY]: 4 * 60 * 60 * 1000,
+  [Q_BINDINGS]: 4 * 60 * 60 * 1000
 }
 
 /** Budget for a queue name that is not in the table — a queue added without touching this file.

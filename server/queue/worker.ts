@@ -18,8 +18,15 @@ import { decodeUploadText } from '../../app/utils/importUpload'
 import { claimProgramFeedbackSlot, type ProgramFeedbackGateDeps } from '../utils/programFeedbackCap'
 import { withSpan } from '../utils/telemetrySpan'
 import { portalHash } from '../utils/telemetryAttributes'
-import { Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_TRIGGER } from './topology'
-import type { CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob, TriggerFireJob } from './topology'
+import { Q_BINDINGS, Q_CRM, Q_DELETIONS, Q_EVENTS, Q_FEEDBACK, Q_FETCH, Q_FETCH_PRIOR, Q_PARSE, Q_REGISTRY, Q_TRIGGER } from './topology'
+import type {
+  ActivityBindJob, CrmSyncJob, DeletionJob, EventJob, FeedbackPostJob, FetchJob, ParseJob,
+  RegistryWriteJob, TriggerFireJob
+} from './topology'
+import {
+  handleActivityBindJob, handleRegistryWriteJob,
+  type ActivityBindJobDeps, type RegistryWriteJobDeps
+} from '../utils/deferredWriteJobs'
 import { handleFeedbackPostJob, type FeedbackPostJobDeps } from '../utils/feedbackPostJob'
 import { handleTriggerFireJob, type TriggerFireJobDeps } from '../utils/triggerFireJob'
 import { handleDeletionJob, type DeletionReconcileDeps } from '../utils/deletionReconcile'
@@ -33,7 +40,7 @@ import {
   handleCrmSyncJob, handleEventJob, handleFetchJob, handleParseJob,
   MAX_RESOLVED_INTENTS_PER_OP, type HandlerDeps
 } from './handlers'
-import { enqueueCrmSync, enqueueTriggerFire } from './producers'
+import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
@@ -497,6 +504,24 @@ export function liveHandlerDeps(): HandlerDeps {
     // app-context — the resolver's SDK call provides it (a webhook gets «Application context
     // required»). `executeTriggerViaRest` (#269) takes the CODE via `opts.triggerCode`.
     applyTrigger: makeApplyTrigger({ isDemoAccount, resolvePortalCall, executeTriggerViaRest }),
+    // Deferred CRM writes (#578 registry / #585 bindings). Both enqueues are BEST-EFFORT: demo
+    // accounts are never queued, and an enqueue failure is swallowed (without Redis it is a no-op
+    // anyway) — a repair job has no right to abort the very batch it exists to complete.
+    enqueueRegistryRetry: async (item, companyId, memberId, provider, paymentSp) => {
+      try {
+        if (isDemoAccount(item.account)) return
+        await enqueueRegistryWrite({ memberId, providerId: provider, item, companyId, paymentSp })
+      } catch (e) {
+        crmLog.warning(`portal ${memberId}: дозапись реестра не поставлена — ${logSafe(String((e as Error)?.message ?? e))}`)
+      }
+    },
+    enqueueBindRetry: async (activityId, refs, memberId) => {
+      try {
+        await enqueueActivityBind({ memberId, activityId, refs })
+      } catch (e) {
+        crmLog.warning(`portal ${memberId}: дозапись привязок не поставлена — ${logSafe(String((e as Error)?.message ?? e))}`)
+      }
+    },
     // Durable retry (#79): a missed trigger fire ('retry' outcome) is handed to the trigger-fire
     // queue so it self-heals with backoff. BEST-EFFORT — never throws (a trigger only signals). Demo
     // gated (defensive; applyTrigger already returns 'skip' for demo). No Redis ⇒ enqueue no-ops ⇒
@@ -842,6 +867,42 @@ export function startFeedbackWorker(deps: FeedbackPostJobDeps): Worker {
     'job.queue': 'feedback-post',
     'portal.hash': portalHash(job.data.memberId)
   }, () => handleFeedbackPostJob(job.data, deps)), { connection: connectionOptions() })
+}
+
+/** Live deps for the deferred-write workers (#578/#585): the same stored token and the same
+ *  transports the synchronous path uses. No batch is handed to either — see `handleActivityBindJob`
+ *  (a halted batch is exactly what the retry path must not repeat). */
+export function liveRegistryWriteDeps(): RegistryWriteJobDeps {
+  return {
+    resolvePortalCall,
+    writePaymentRegistry: writePaymentRegistryViaRest,
+    findActivityId: findActivityByMarker,
+    // ⚠ No batch — a single binding, and the same path the bindings retry takes.
+    bindActivity: (activityId, refs, call) => bindActivityViaRest(activityId, refs, call)
+  }
+}
+
+export function liveActivityBindDeps(): ActivityBindJobDeps {
+  // ⚠ No batch is passed, and the port does not accept one: see `handleActivityBindJob`.
+  return { resolvePortalCall, bindActivity: (activityId, refs, call) => bindActivityViaRest(activityId, refs, call) }
+}
+
+/** The registry-write retry worker (#578). The write is idempotent by the operation marker AND
+ *  fills the columns of an element it finds, so a repeat is safe even on half-done work. */
+export function startRegistryWorker(deps: RegistryWriteJobDeps): Worker {
+  return new Worker<RegistryWriteJob>(Q_REGISTRY, async job => withSpan('registry-write', {
+    'job.queue': 'registry-write',
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleRegistryWriteJob(job.data, deps)), { connection: connectionOptions() })
+}
+
+/** The activity-bind retry worker (#585). Adds only the pairs that are missing (it reads
+ *  `binding.list` first), so a repeat does not turn into a stream of «already bound» errors. */
+export function startBindingsWorker(deps: ActivityBindJobDeps): Worker {
+  return new Worker<ActivityBindJob>(Q_BINDINGS, async job => withSpan('activity-bind', {
+    'job.queue': 'activity-bind',
+    'portal.hash': portalHash(job.data.memberId)
+  }, () => handleActivityBindJob(job.data, deps)), { connection: connectionOptions() })
 }
 
 /** Live deps for the trigger-retry worker (#79): re-fire via the SAME transport as the sync path,

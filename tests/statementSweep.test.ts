@@ -47,6 +47,10 @@ describe('sweepPlan', () => {
       { queue: 'file-parse', type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS },
       { queue: 'crm-sync', type: 'completed', graceMs: SWEEP_COMPLETED_GRACE_MS },
       { queue: 'crm-sync', type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS },
+      // `registry-write` (#578) несёт ОДНУ операцию выписки — те же ПДн, то же правило. И живёт
+      // она дольше прочих: это очередь ретраев с backoff.
+      { queue: 'registry-write', type: 'completed', graceMs: SWEEP_COMPLETED_GRACE_MS },
+      { queue: 'registry-write', type: 'failed', graceMs: SWEEP_FAILED_GRACE_MS },
       // Fetch queues drop completed jobs immediately (removeOnComplete: true) — only FAILED can
       // hold a stable jobId and dedup-block an account out of the poll rotation.
       { queue: 'bank-fetch', type: 'failed', graceMs: SWEEP_FETCH_FAILED_GRACE_MS },
@@ -54,8 +58,11 @@ describe('sweepPlan', () => {
     ])
   })
   it('sweeps the PII queues AND both fetch queues (b24-events is not swept)', () => {
-    expect([...SWEPT_QUEUES]).toEqual(['file-parse', 'crm-sync', 'bank-fetch', 'bank-fetch-prior'])
+    expect([...SWEPT_QUEUES]).toEqual(['file-parse', 'crm-sync', 'registry-write', 'bank-fetch', 'bank-fetch-prior'])
     expect([...SWEPT_QUEUES]).not.toContain('b24-events')
+    // ⚠ `activity-bind` (#585) НЕ подметается намеренно: в её payload только id сущностей CRM —
+    // выписки там нет, и правило удержания ПДн к ней не относится.
+    expect([...SWEPT_QUEUES]).not.toContain('activity-bind')
   })
   it('never sweeps a fetch queue COMPLETED set (nothing to sweep — removed on completion)', () => {
     const fetchPlans = sweepPlan().filter(p => p.queue.startsWith('bank-fetch'))
@@ -85,9 +92,9 @@ describe('runStatementSweep', () => {
   it('cleans both queues × both types and sums removed counts', async () => {
     const { deps, calls } = makeDeps()
     const s = await runStatementSweep(deps)
-    // 2 PII queues × (completed+failed) + 2 fetch queues × failed = 6 clean calls.
-    expect(calls).toHaveLength(6)
-    expect(s).toEqual({ completedRemoved: 2, failedRemoved: 4, failed: 0 })
+    // 3 PII queues × (completed+failed) + 2 fetch queues × failed = 8 clean calls.
+    expect(calls).toHaveLength(8)
+    expect(s).toEqual({ completedRemoved: 3, failedRemoved: 5, failed: 0 })
   })
 
   it('passes the retention-derived grace to each clean call', async () => {
@@ -111,8 +118,8 @@ describe('runStatementSweep', () => {
     const s = await runStatementSweep(deps)
     // Every surviving call still ran; only the one throw is counted.
     expect(s.failed).toBe(1)
-    expect(s.completedRemoved).toBe(1) // only crm-sync completed
-    expect(s.failedRemoved).toBe(4) // file-parse + crm-sync + both fetch queues
+    expect(s.completedRemoved).toBe(2) // crm-sync + registry-write completed
+    expect(s.failedRemoved).toBe(5) // file-parse + crm-sync + registry-write + both fetch queues
     expect(warns.some(w => w.includes('file-parse/completed'))).toBe(true)
   })
 
@@ -120,12 +127,12 @@ describe('runStatementSweep', () => {
     const { deps } = makeDeps({
       clean: async (queue, _graceMs, type) => {
         if (queue === 'crm-sync' && type === 'completed') return ['a', 'b', 'c']
-        if (type === 'completed') return ['x'] // file-parse completed → 1
+        if (type === 'completed') return ['x'] // file-parse и registry-write completed → по 1
         return [] // failed sets empty this run
       }
     })
     const s = await runStatementSweep(deps)
-    expect(s.completedRemoved).toBe(4) // 3 (crm-sync) + 1 (file-parse)
+    expect(s.completedRemoved).toBe(5) // 3 (crm-sync) + 1 (file-parse) + 1 (registry-write)
     expect(s.failedRemoved).toBe(0)
     expect(s.failed).toBe(0)
   })
@@ -143,7 +150,7 @@ describe('runStatementSweep', () => {
       }
     })
     const s = await runStatementSweep(deps)
-    expect(s).toEqual({ completedRemoved: 0, failedRemoved: 0, failed: 6 })
+    expect(s).toEqual({ completedRemoved: 0, failedRemoved: 0, failed: 8 })
   })
 
   it('emits a summary log line', async () => {
