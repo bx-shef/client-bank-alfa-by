@@ -116,3 +116,37 @@ describe('PollNowButton poll interaction', () => {
     expect(msg.text()).toContain('подключите счёт')
   })
 })
+
+describe('забор за выбранный день (#592)', () => {
+  it('без выбранного дня кнопка «Забрать» заблокирована — дата обязательна', async () => {
+    // ⚠ Не «заберём за сегодня по умолчанию»: молчаливая подстановка дня означала бы, что человек
+    // нажал кнопку, не выбрав то, ради чего она заведена, и получил не тот день.
+    const wrapper = await mountReady()
+    const btn = wrapper.find('[data-testid="poll-day-button"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('disabled')).toBeDefined()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('выбранный день уходит в запрос', async () => {
+    fetchMock.mockResolvedValue({ enqueued: 2, accounts: 2, day: '2026-07-10' })
+    const wrapper = await mountReady()
+    // Календарь — сторонний компонент; выбор дня выставляем через модель поля.
+    const field = wrapper.findComponent({ name: 'DayField' })
+    field.vm.$emit('update:modelValue', '2026-07-10')
+    await nextTick()
+    await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ body: { day: '2026-07-10' } })
+    expect(wrapper.find('[data-testid="poll-message"]').text()).toContain('2026-07-10')
+  })
+
+  it('обычный опрос по-прежнему идёт без дня', async () => {
+    fetchMock.mockResolvedValue({ enqueued: 1, accounts: 1 })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="poll-button"]').trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ body: {} })
+  })
+})

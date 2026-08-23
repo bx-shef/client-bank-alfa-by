@@ -40,7 +40,7 @@ const ANCHOR: Record<SettingsSectionId, string> = {
   bank: '[data-testid="bank-connect"]',
   chats: '[data-testid="notify-chat"]',
   distribution: '[data-testid="provision-sp"]',
-  exclusions: '[data-testid="exclude-accounts"]',
+  exclusions: '[data-testid="exclude-counterparty"]',
   auto: '[data-testid="auto-distribute"]',
   recognition: '[data-testid="recognition-map"]',
   cleanup: '[data-testid="erase-activities"]'
@@ -101,20 +101,20 @@ describe('разделы настроек — проводка (#530)', () => {
     // Отдельно от предыдущего: черновик держится зеркалированием в настройки, а не кэшем.
     const wrapper = await mountReady()
     await openSection(wrapper, 'Исключения')
-    await wrapper.find('textarea[data-testid="exclude-accounts"]').setValue('BY00 ЧЕРНОВИК')
+    await wrapper.find('textarea[data-testid="exclude-counterparty"]').setValue('BY00 ЧЕРНОВИК')
     await openSection(wrapper, 'Уведомления в чат')
     await openSection(wrapper, 'Исключения')
-    expect((wrapper.find('textarea[data-testid="exclude-accounts"]').element as HTMLTextAreaElement).value)
+    expect((wrapper.find('textarea[data-testid="exclude-counterparty"]').element as HTMLTextAreaElement).value)
       .toBe('BY00 ЧЕРНОВИК')
   })
 
-  it('поле «не загружать по счетам» реально пишет в настройки', async () => {
+  it('поле «чужие счета» реально пишет в настройки', async () => {
     // Зеркальный тест к уже существующему на «по теме платежа»: без него поле могло никуда не
     // писаться, и мутация «убрать watch» проходила зелёной.
     const wrapper = await mountReady()
     await openSection(wrapper, 'Исключения')
-    await wrapper.find('textarea[data-testid="exclude-accounts"]').setValue('BY11\nBY22')
-    expect(useChatSettings().settings.chat.rules.excludeAccounts).toEqual(['BY11', 'BY22'])
+    await wrapper.find('textarea[data-testid="exclude-counterparty"]').setValue('BY11\nBY22')
+    expect(useChatSettings().settings.chat.rules.excludeCounterpartyAccounts).toEqual(['BY11', 'BY22'])
   })
 
   it('поля «Исключений» пересеваются после перечитывания настроек', async () => {
@@ -123,12 +123,12 @@ describe('разделы настроек — проводка (#530)', () => {
     // первое же нажатие клавиши вернуло бы его в настройки — то есть отмена тихо не срабатывала.
     const wrapper = await mountReady()
     await openSection(wrapper, 'Исключения')
-    await wrapper.find('textarea[data-testid="exclude-accounts"]').setValue('ОТМЕНЁННОЕ')
+    await wrapper.find('textarea[data-testid="exclude-counterparty"]').setValue('ОТМЕНЁННОЕ')
     await openSection(wrapper, 'Уведомления в чат')
     // Сервер вернул свою копию (эмулируем то, что делает cs.load()).
-    useChatSettings().settings.chat.rules.excludeAccounts = ['BY-СЕРВЕРНОЕ']
+    useChatSettings().settings.chat.rules.excludeCounterpartyAccounts = ['BY-СЕРВЕРНОЕ']
     await openSection(wrapper, 'Исключения')
-    expect((wrapper.find('textarea[data-testid="exclude-accounts"]').element as HTMLTextAreaElement).value)
+    expect((wrapper.find('textarea[data-testid="exclude-counterparty"]').element as HTMLTextAreaElement).value)
       .toBe('BY-СЕРВЕРНОЕ')
   })
 

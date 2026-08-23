@@ -627,9 +627,11 @@ describe('handleCrmSyncJob', () => {
     expect(dir.calls.chat).toEqual([['d1', 'M']])
   })
 
-  it('excluded account → op skipped ENTIRELY: no company lookup, no activity, no chat (PROCESSING §2 A2)', async () => {
-    // item.account = 'A' (see item()); excludeAccounts:['A'] must skip the whole op.
-    const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
+  it('excluded counterparty → op skipped ENTIRELY: no company lookup, no activity, no chat (PROCESSING §2 A2)', async () => {
+    // item.counterparty.account = 'BY1' (see item()); excludeCounterpartyAccounts:['BY1'] skips it.
+    // ⚠ Списка НАШИХ счетов больше нет (снят 2026-08-23): он дублировал «Паузу» подключения и был
+    // хуже неё — этот гейт срабатывает уже ПОСЛЕ похода в банк.
+    const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeCounterpartyAccounts: ['BY1'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
     // Full shape: only `excluded` and the приход/расход split move; nothing produced.
     expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
@@ -669,10 +671,10 @@ describe('handleCrmSyncJob', () => {
   })
 
   it('mixed batch: excluded op skipped while a non-excluded op in the SAME batch processes normally', async () => {
-    // Exclude only d1's account. d1.account='A' (excluded); override d2 to a different account.
-    const mix = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeAccounts: ['A'] } } })
-    const d1 = item('d1', 'credit') // account 'A' → excluded
-    const d2 = { ...item('d2', 'credit'), account: 'B' } // account 'B' → processed
+    // Exclude only d1's counterparty. d1's payer is 'BY1' (excluded); d2 gets a different payer.
+    const mix = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeCounterpartyAccounts: ['BY1'] } } })
+    const d1 = item('d1', 'credit') // payer 'BY1' → excluded
+    const d2 = { ...item('d2', 'credit'), counterparty: { name: 'C2', unp: '2', account: 'BY2' } } // → processed
     const r = await handleCrmSyncJob(job([d1, d2]), mix.deps)
     expect(r).toMatchObject({ processed: 2, created: 1, excluded: 1, unmatched: 0 })
     // Only the non-excluded op reached company lookup / activity / chat.
@@ -1769,7 +1771,7 @@ describe('per-op observation (onOperation) — видимость операци
   })
 
   it('исключённая операция НЕ отчитывается — она не обрабатывалась, а строка соврала бы об обратном', async () => {
-    const chat: ChatSettings = { dialogId: 'chat1', rules: { directions: ['credit', 'debit'], excludeAccounts: ['A'] } }
+    const chat: ChatSettings = { dialogId: 'chat1', rules: { directions: ['credit', 'debit'], excludeCounterpartyAccounts: ['BY1'] } }
     const { deps, calls } = fakeDeps({ chat })
     const r = await handleCrmSyncJob(job([item('d1')]), deps)
     expect(r).toMatchObject({ excluded: 1, processed: 1 })

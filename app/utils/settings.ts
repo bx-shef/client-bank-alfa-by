@@ -131,7 +131,7 @@ export interface PortalSettings {
 export const SETTINGS_KEY = 'cb_settings_v1'
 
 export function defaultChatSettings(): ChatSettings {
-  return { dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } }
+  return { dialogId: '', rules: { directions: ['credit'], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } }
 }
 
 export function defaultRecognitionSettings(): RecognitionSettings {
@@ -256,7 +256,6 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
       dialogId: cleanDialogId(chatRaw.dialogId),
       rules: {
         directions: cleanDirections(rulesRaw.directions),
-        excludeAccounts: cleanList(rulesRaw.excludeAccounts),
         excludePurposePatterns: cleanList(rulesRaw.excludePurposePatterns),
         excludeCounterpartyAccounts: cleanList(rulesRaw.excludeCounterpartyAccounts)
       }

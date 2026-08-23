@@ -461,8 +461,8 @@ export async function handleCrmSyncJob(
   for (const item of unique) {
     // Exclusion gate (PROCESSING.md §2 A2): an operation whose account or purpose is
     // excluded is skipped ENTIRELY — no recognition, no company lookup, no CRM activity, no
-    // allocation, no chat. This is a PROCESSING exclusion (from the chat rules' excludeAccounts/
-    // excludePurposePatterns), distinct from the `directions` chat-only filter below. Runs
+    // allocation, no chat. This is a PROCESSING exclusion (from the chat rules'
+    // excludeCounterpartyAccounts/excludePurposePatterns), distinct from the chat-only filter. Runs
     // before everything else so an excluded op costs no REST. `chat?.rules` holds the lists
     // (they're configured alongside the chat block); absent ⇒ nothing excluded.
     if (isExcludedOperation(item, chat?.rules)) {

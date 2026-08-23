@@ -163,28 +163,25 @@ async function onErase(): Promise<void> {
         остаются — реестр платежей продолжает хранить историю операций.
       </p>
 
-      <div class="grid gap-3 sm:grid-cols-2">
-        <B24FormField
-          label="С даты"
-          hint="Пусто — с самого начала"
-        >
-          <B24Input
-            v-model="from"
-            type="date"
-            @update:model-value="reset"
-          />
-        </B24FormField>
-        <B24FormField
-          label="По дату"
-          hint="Пусто — по сегодня"
-        >
-          <B24Input
-            v-model="to"
-            type="date"
-            @update:model-value="reset"
-          />
-        </B24FormField>
-      </div>
+      <!-- ⚠ Период ОДНИМ полем-диапазоном, а не двумя календарями: два одинаковых месяца рядом
+           не показывали сам период — человек выбирал начало, терял его из виду и получал
+           перевёрнутый период, о котором узнавал из предупреждения внизу. Диапазон подсвечивает
+           выбранное между границами и перевёрнутым быть не может по построению. Нативное
+           `type="date"` не годилось раньше по другой причине: оно показывало формат операционной
+           системы (в портале сплошь `mm/dd/yyyy`) и молча принимало несуществующий день, а
+           действие здесь необратимо. -->
+      <B24FormField
+        label="Период"
+        hint="Пусто — за всё время: с самого начала по сегодня"
+      >
+        <DayRangeField
+          v-model:from="from"
+          v-model:to="to"
+          @update:from="reset"
+          @update:to="reset"
+        />
+      </B24FormField>
+
       <p
         v-if="periodBad"
         class="text-xs text-(--ui-color-accent-main-alert)"

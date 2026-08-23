@@ -48,7 +48,10 @@ export default defineEventHandler(async (event) => {
   return withFrameRouteSpan(
     { name: 'http.poll-now.post', method: 'POST', op: 'poll-now.enqueue', domain },
     async (span) => {
-      const { status, body } = await handlePollNow(livePollNowDeps(), { accessToken: token, domain })
+      // Тело необязательно: без него — обычный опрос скользящим окном, как было до #592.
+      const payload = await readBody<{ day?: unknown }>(event).catch(() => null)
+      const day = typeof payload?.day === 'string' ? payload.day : ''
+      const { status, body } = await handlePollNow(livePollNowDeps(), { accessToken: token, domain, day })
       span.outcome = httpOutcomeForStatus(status)
       setResponseStatus(event, status)
       return body

@@ -20,7 +20,7 @@ const MAX_CONFIG_FIELDS = 200
 describe('defaults', () => {
   it('default chat = no target (off), credits only, empty exclusions', () => {
     expect(defaultChatSettings()).toEqual({
-      dialogId: '', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [], excludeCounterpartyAccounts: [] }
+      dialogId: '', rules: { directions: ['credit'], excludePurposePatterns: [], excludeCounterpartyAccounts: [] }
     })
     expect(defaultPortalSettings()).toEqual({
       chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false
@@ -53,7 +53,7 @@ describe('parsePortalSettings — defensive', () => {
     const s = {
       chat: {
         dialogId: 'chat2941',
-        rules: { directions: ['credit', 'debit'] as OperationDirection[], excludeAccounts: ['BY00'], excludePurposePatterns: ['возврат'], excludeCounterpartyAccounts: ['BY-TAX'] }
+        rules: { directions: ['credit', 'debit'] as OperationDirection[], excludePurposePatterns: ['возврат'], excludeCounterpartyAccounts: ['BY-TAX'] }
       },
       errorChat: { dialogId: 'chat77' },
       recognition: {
@@ -70,7 +70,7 @@ describe('parsePortalSettings — defensive', () => {
   it('missing fields fill from defaults', () => {
     expect(parsePortalSettings('{}')).toEqual(defaultPortalSettings())
     expect(parsePortalSettings('{"chat":{"dialogId":"chat7"}}')).toEqual({
-      chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludeAccounts: [], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } },
+      chat: { dialogId: 'chat7', rules: { directions: ['credit'], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } },
       errorChat: { dialogId: '' },
       recognition: defaultRecognitionSettings(),
       allocation: {},
@@ -161,8 +161,8 @@ describe('parsePortalSettings — defensive', () => {
   })
 
   it('exclusion lists: coerced, trimmed, de-blanked, deduped', () => {
-    const r = parsePortalSettings('{"chat":{"rules":{"excludeAccounts":[" BY1 ","BY1","",2],"excludePurposePatterns":["x","x"]}}}').chat.rules
-    expect(r.excludeAccounts).toEqual(['BY1', '2'])
+    const r = parsePortalSettings('{"chat":{"rules":{"excludeCounterpartyAccounts":[" BY1 ","BY1","",2],"excludePurposePatterns":["x","x"]}}}').chat.rules
+    expect(r.excludeCounterpartyAccounts).toEqual(['BY1', '2'])
     expect(r.excludePurposePatterns).toEqual(['x'])
   })
 
@@ -176,8 +176,8 @@ describe('parsePortalSettings — defensive', () => {
     expect(parsePortalSettings(JSON.stringify({ chat: { dialogId: longId } })).chat.dialogId.length).toBe(64)
     // 1000 unique exclusion entries → capped at 500
     const many = Array.from({ length: 1000 }, (_, i) => `acc${i}`)
-    const r = parsePortalSettings(JSON.stringify({ chat: { rules: { excludeAccounts: many } } })).chat.rules
-    expect(r.excludeAccounts!.length).toBe(500)
+    const r = parsePortalSettings(JSON.stringify({ chat: { rules: { excludeCounterpartyAccounts: many } } })).chat.rules
+    expect(r.excludeCounterpartyAccounts!.length).toBe(500)
     // each entry length-capped at 256
     const longEntry = 'y'.repeat(400)
     const r2 = parsePortalSettings(JSON.stringify({ chat: { rules: { excludePurposePatterns: [longEntry] } } })).chat.rules
@@ -191,11 +191,11 @@ describe('parsePortalSettings — defensive', () => {
     // accepted trade-off (a real exclusion list never nears 500). Pinning ['dup'] catches a
     // regression that removes the slice (which would instead return ['dup','unique-past-cap']).
     const input = [...Array.from({ length: 500 }, () => 'dup'), 'unique-past-cap']
-    const r = parsePortalSettings(JSON.stringify({ chat: { rules: { excludeAccounts: input } } })).chat.rules
-    expect(r.excludeAccounts).toEqual(['dup'])
+    const r = parsePortalSettings(JSON.stringify({ chat: { rules: { excludeCounterpartyAccounts: input } } })).chat.rules
+    expect(r.excludeCounterpartyAccounts).toEqual(['dup'])
     // A huge all-blank array is bounded too (blanks are dropped → empty result, no full scan).
     const blanks = Array.from({ length: 5000 }, () => '   ')
-    expect(parsePortalSettings(JSON.stringify({ chat: { rules: { excludeAccounts: blanks } } })).chat.rules.excludeAccounts)
+    expect(parsePortalSettings(JSON.stringify({ chat: { rules: { excludeCounterpartyAccounts: blanks } } })).chat.rules.excludeCounterpartyAccounts)
       .toEqual([])
   })
 })

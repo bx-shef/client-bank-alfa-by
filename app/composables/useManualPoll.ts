@@ -12,6 +12,8 @@ export interface PollNowResponse {
   enqueued?: number
   accounts?: number
   cooldownSec?: number
+  /** День, за который ушла задача (эхо запроса) — интерфейс подтверждает выбор человеку. */
+  day?: string
   error?: string
 }
 
@@ -26,8 +28,9 @@ export function useManualPoll() {
     enabled.value = frameAuth() !== null
   }
 
-  /** Trigger the poll. Sets `message` on success, `error` on any failure. */
-  async function poll(): Promise<void> {
+  /** Trigger the poll. `day` (`ГГГГ-ММ-ДД`) — точечный забор за один день (#592); пусто ⇒ обычное
+   *  скользящее окно. Sets `message` on success, `error` on any failure. */
+  async function poll(day = ''): Promise<void> {
     const a = frameAuth()
     enabled.value = a !== null
     error.value = ''
@@ -38,15 +41,24 @@ export function useManualPoll() {
     }
     polling.value = true
     try {
-      const res = await $fetch<PollNowResponse>('/api/poll-now', { method: 'POST', headers: authHeaders(a) })
+      const res = await $fetch<PollNowResponse>('/api/poll-now', {
+        method: 'POST',
+        headers: authHeaders(a),
+        body: day ? { day } : {}
+      })
       const n = res?.enqueued ?? 0
+      const forDay = res?.day ? ` за ${res.day}` : ''
       message.value = n > 0
-        ? `Опрос запущен: счетов — ${res?.accounts ?? n}.`
+        ? `Опрос запущен${forDay}: счетов — ${res?.accounts ?? n}. Операции появятся в CRM через минуту-другую.`
         : 'Опрос запущен, но подключённых счетов нет — сначала подключите счёт.'
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
       const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status
-      if (status === 429) error.value = 'Слишком часто — подождите немного и повторите.'
+      // ⚠ 400 несёт ОСМЫСЛЕННЫЙ текст (день в будущем, кривая дата) — его и показываем, иначе
+      // человек видел бы «не удалось запустить опрос» про собственную опечатку в календаре.
+      const said = (e as { data?: { error?: unknown } })?.data?.error
+      if (status === 400 && typeof said === 'string' && said) error.value = said
+      else if (status === 429) error.value = 'Слишком часто — подождите немного и повторите.'
       else if (status === 503) error.value = 'Ручной опрос сейчас отключён.'
       else if (status === 403) error.value = 'Опрос может запустить только администратор портала.'
       else error.value = frameFetchError(e, 'Не удалось запустить опрос')

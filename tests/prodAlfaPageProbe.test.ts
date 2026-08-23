@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 // Проба `pageNo=1` (#561) — та же форма покрытия, что у `prod-poll-check.sh`: чистые функции
 // вырезаются из скрипта `sed`-диапазоном и исполняются, а не грепаются.
@@ -141,7 +142,9 @@ describe('#561 проба: гарантии, которые обещает ша�
 
   it('refresh-токен не выбирается запросом — свойство структурное, а не обещание', () => {
     expect(SCRIPT).not.toContain('refresh_token')
-    expect(SCRIPT).toContain('SELECT account_key, access_token')
+    // ⚠ Проверяем ИМЕНА КОЛОНОК, а не всю строку SELECT: она обросла фильтром по порталу (#587),
+    // и привязка к её тексту краснела бы на любой правке запроса, ничего не охраняя.
+    expect(SCRIPT).toMatch(/SELECT[^;]*account_key[^;]*access_token/)
   })
 
   it('проверка сертификата банка не отключается', () => {
@@ -168,5 +171,143 @@ describe('#561 проба: гарантии, которые обещает ша�
     }
     expect(code, 'скрипт не остановился на негодном дне').toBe(2)
     expect(out).toMatch(/ГГГГ-ММ-ДД/)
+  })
+})
+
+describe('совпадение тел на пустом дне (#561) — ПРОГОНОМ, а не грепом', () => {
+  // ⚠ Первая редакция этой проверки грепала исходник регуляркой, и мутационный прогон показал,
+  // что она даёт обе ошибки сразу. Пропускала настоящий баг: ПЕРЕСТАНОВКА тел двух веток
+  // оставляла все нужные строки в блоке, тест зеленел, а на пустом дне возвращалось дословно то
+  // самое «банк проигнорировал pageNo», ради снятия которого правка и делалась. И краснела на
+  // верном коде: переставленные операнды сравнения, `case` вместо `if`, форма `[ "x$P0" = "x0" ]`,
+  // переформулированное сообщение и даже реиндент блока — пять тождественных переписок.
+  // Поэтому проверяем НАПЕЧАТАННОЕ: скрипт целиком прогоняется на подставных `docker` и `curl`.
+  // Побочно это накрывает и вычисление `SAME`, и передачу его в `verdict` — то есть места, где
+  // сломан вызов, а не функция, и которые изолированные вызовы функций не видят в принципе.
+  const EMPTY = '{"page":[]}'
+  const OPS = '{"page":[{"docId":"1","amount":"10.00"}]}'
+  const OTHER = '{"page":[{"docId":"2","amount":"20.00"}]}'
+  const GARBAGE = '{"error":"maintenance"}'
+
+  /** Прогнать скрипт целиком, подсунув ему ответы банка на страницы 0 и 1. */
+  function runProbe(page0: string, page1: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'alfa-probe-'))
+    try {
+      writeFileSync(join(dir, 'docker-compose.prod.yml'), '')
+      writeFileSync(join(dir, 'page0.json'), page0)
+      writeFileSync(join(dir, 'page1.json'), page1)
+      const bin = join(dir, 'bin')
+      mkdirSync(bin)
+      // Стаб базы: отдаёт счёт и токен в том же формате `-At -F'|'`, что читает скрипт.
+      writeFileSync(join(bin, 'docker'), '#!/bin/sh\necho "BY00TESTACCOUNT0000000000001|test-token|1"\n')
+      // Стаб банка: читает конфиг `-K -` со stdin и отвечает фикстурой по номеру страницы.
+      writeFileSync(join(bin, 'curl'), [
+        '#!/bin/sh',
+        'cfg="$(cat)"',
+        'case "$cfg" in *"pageNo=1"*) cat "$FIXTURES/page1.json";; *) cat "$FIXTURES/page0.json";; esac'
+      ].join('\n') + '\n')
+      chmodSync(join(bin, 'docker'), 0o755)
+      chmodSync(join(bin, 'curl'), 0o755)
+      // ⚠ День передаётся АРГУМЕНТОМ, а не через env: скрипт читает `$1`, и переменная окружения
+      // была бы инертна — тесты молча пошли бы по часам раннера и сломались бы на образе без
+      // GNU/BSD `date` тем, что день вообще не определился бы.
+      return execFileSync('bash', [SCRIPT_PATH, '2026-08-18'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, FIXTURES: dir }
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  /** Прогнать скрипт с подставной базой, отдающей заданную строку и заданный счётчик. */
+  function runWithDb(row: string, env: Record<string, string> = {}): { out: string, code: number } {
+    const dir = mkdtempSync(join(tmpdir(), 'alfa-probe-'))
+    try {
+      writeFileSync(join(dir, 'docker-compose.prod.yml'), '')
+      writeFileSync(join(dir, 'page0.json'), EMPTY)
+      writeFileSync(join(dir, 'page1.json'), EMPTY)
+      const bin = join(dir, 'bin')
+      mkdirSync(bin)
+      // Стаб базы отвечает одинаково на любой SQL — нам важна реакция скрипта, а не сам запрос.
+      writeFileSync(join(bin, 'docker'), `#!/bin/sh\necho '${row}'\n`)
+      writeFileSync(join(bin, 'curl'), '#!/bin/sh\ncat > /dev/null\ncat "$FIXTURES/page0.json"\n')
+      chmodSync(join(bin, 'docker'), 0o755)
+      chmodSync(join(bin, 'curl'), 0o755)
+      try {
+        const out = execFileSync('bash', [SCRIPT_PATH, '2026-08-18'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, FIXTURES: dir, ...env }
+        })
+        return { out, code: 0 }
+      } catch (e) {
+        const err = e as { stdout?: string, status?: number }
+        return { out: err.stdout ?? '', code: err.status ?? -1 }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('порталов несколько, адрес не назван — проба ОТКАЗЫВАЕТСЯ, а не гадает', () => {
+    // ⚠ Первая редакция брала `LIMIT 1` по `updated_at DESC` без фильтра по порталу: на сервере с
+    // четырьмя Битриксами она молча уходила к счёту того портала, чей токен обновлялся последним,
+    // и какой именно — оператор увидеть не мог (номер на экране маскируется). Вердикт получался
+    // про один портал, а читался как про Альфу вообще. Цена ошибки — решение, оставлять ли
+    // навсегда удвоенный расход общего лимита банка.
+    const { out, code } = runWithDb('BY00TESTACCOUNT0000000000001|test-token|4')
+    expect(code, 'проба продолжила работу при неоднозначном выборе счёта').not.toBe(0)
+    expect(out).toContain('подключений Альфы на сервере: 4')
+    expect(out, 'подсказка не называет, как выбрать портал').toContain('B24=')
+    expect(out, 'проба всё-таки сходила в банк').not.toContain('Ответ банка')
+  })
+
+  it('портал назван — проба работает, даже когда подключений несколько', () => {
+    const { out, code } = runWithDb('BY00TESTACCOUNT0000000000001|test-token|4', { B24: 'bel.bitrix24.by' })
+    expect(code).toBe(0)
+    expect(out).toContain('Ответ банка')
+  })
+
+  it('подключение ровно одно — адрес не требуется', () => {
+    const { out, code } = runWithDb('BY00TESTACCOUNT0000000000001|test-token|1')
+    expect(code).toBe(0)
+    expect(out).toContain('Ответ банка')
+  })
+
+  it('день без операций: совпадение пустых тел не выдаётся за игнор pageNo', () => {
+    // ⚠ Замерено на живом проде (2026-08-18, день без операций): обе страницы пусты, тела
+    // совпадают по скучной причине — сравнивать нечего, — а проба уверенно печатала «банк
+    // проигнорировал pageNo». Пятью строками ниже её же вердикт говорил «проба ничего не
+    // доказывает», то есть скрипт противоречил сам себе, и первым читают верхнюю строку.
+    const out = runProbe(EMPTY, EMPTY)
+    expect(out, 'проба снова выдаёт совпадение пустых тел за игнор pageNo').not.toContain('проигнорировал pageNo')
+    expect(out, 'на пустом дне молчание вместо объяснения').toContain('сравнивать было нечего')
+    expect(out).toContain('операций нет вовсе')
+  })
+
+  it('день с операциями и совпавшими телами: игнор pageNo назван прямо', () => {
+    const out = runProbe(OPS, OPS)
+    expect(out, 'настоящий повтор страниц перестал опознаваться').toContain('проигнорировал pageNo')
+    expect(out).toContain('«0» означает ВСЕ')
+  })
+
+  it('страницы РАЗЛИЧАЮТСЯ — потеря доказана, и повтор не объявляется', () => {
+    // ⚠ Ловит мутацию «SAME всегда 1»: она превращала доказанную потерю операций в бодрое
+    // «потерь не было, стоимость задачи можно вернуть к 1» — самая дорогая ошибка этой пробы.
+    const out = runProbe(OPS, OTHER)
+    expect(out).toContain('означает СТРАНИЦУ')
+    expect(out).not.toContain('проигнорировал pageNo')
+  })
+
+  it('неразобравшийся ответ не выдаётся за пустую страницу', () => {
+    // ⚠ Та же болезнь, что чинил #561, только тише: строкой выше проба говорит «банк ответил чем-то
+    // другим», а строкой ниже прежняя редакция утверждала «обе страницы пусты» — они не пусты, их
+    // не удалось разобрать.
+    const out = runProbe(GARBAGE, GARBAGE)
+    expect(out).toContain('нет ключа page[]')
+    expect(out, 'неопознанный ответ снова назван пустой страницей').not.toContain('операций в ответе нет ни на той')
+    expect(out).toContain('не разобрались одинаково')
   })
 })

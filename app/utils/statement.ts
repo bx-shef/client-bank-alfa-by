@@ -75,7 +75,7 @@ export function splitByDirection(items: readonly StatementItem[]): {
 
 /** Rules controlling which operations are processed and announced.
  *  Two DIFFERENT scopes live here (PROCESSING.md §2 A2):
- *  - `excludeAccounts` / `excludePurposePatterns` — a **processing** exclusion: a matching
+ *  - `excludePurposePatterns` / `excludeCounterpartyAccounts` — a **processing** exclusion: a matching
  *    operation is skipped ENTIRELY (no CRM activity, no allocation, no chat). See
  *    `isExcludedOperation`.
  *  - `directions` — a **chat-only** filter: an op of a non-announced direction is still
@@ -84,27 +84,27 @@ export interface ChatNotifyRules {
   /** Directions to announce in chat. Default: only `credit` (приходы). An empty array
    * announces nothing (but ops are still written to CRM — this is chat-only). */
   directions?: OperationDirection[]
-  /** Account numbers to EXCLUDE from processing entirely (not just chat). */
-  excludeAccounts?: string[]
   /** Case-insensitive `purpose` substrings that EXCLUDE the op from processing entirely. */
   excludePurposePatterns?: string[]
   /**
    * COUNTERPARTY account numbers whose operations are EXCLUDED from processing entirely (#562).
    *
-   * ⚠ Отдельное поле, а не расширение `excludeAccounts`, и это несущее: `excludeAccounts` матчит
-   * `item.account` — НАШ счёт («Our own account number…» в типе), то есть выключает счёт целиком.
-   * Здесь же выключается ПЛАТЕЛЬЩИК: налоговая, банк с его комиссиями, эквайринг — контрагенты,
+   * ⚠ Речь именно о ПЛАТЕЛЬЩИКЕ: налоговая, банк с его комиссиями, эквайринг — контрагенты,
    * которых в CRM не будет ни при каком развитии событий, а дела от них затапливают карточку
-   * «моей компании» (замерено: 500 дел за шесть суток, все — фолбэк). Смешение двух списков в
-   * одном поле означало бы, что номер, вписанный «выключить плательщика», однажды совпадёт с
-   * нашим счётом и молча выключит весь его поток.
+   * «моей компании» (замерено: 500 дел за шесть суток, все — фолбэк).
+   *
+   * ⚠ Симметричного списка НАШИХ счетов здесь нет намеренно (решение владельца, 2026-08-23): он
+   * дублировал «Паузу» подключения, причём хуже неё — этот гейт стоит в `crm-sync`, то есть уже
+   * ПОСЛЕ похода в банк, а пауза останавливает опрос до него и не тратит лимит запросов. Его
+   * единственным оправданием оставалась файловая загрузка, но файл выписки выгружается ПО ОДНОМУ
+   * счёту (проверено по фикстурам), и тот, кто его грузит, сам выбирает, по какому.
    */
   excludeCounterpartyAccounts?: string[]
 }
 
 /**
  * Whether an operation is EXCLUDED from processing entirely (PROCESSING.md §2 A2): its
- * account is listed in `excludeAccounts`, or its `purpose` contains an
+ * counterparty account is listed in `excludeCounterpartyAccounts`, or its `purpose` contains an
  * `excludePurposePatterns` substring (case-insensitive). An excluded op is skipped whole —
  * NO CRM activity, NO allocation, NO chat. This is stronger than the chat `directions`
  * filter, which only silences the announcement. Pure.
@@ -113,10 +113,7 @@ export function isExcludedOperation(
   item: Pick<StatementItem, 'account' | 'purpose'> & { counterparty?: Pick<StatementItem['counterparty'], 'account'> },
   rules: ChatNotifyRules = {}
 ): boolean {
-  // Guard the empty entry symmetrically with excludePurposePatterns below: a blank list entry
-  // must never match (e.g. a whitespace-only account matching a blank item.account).
-  if (rules.excludeAccounts?.some(acc => acc.trim() !== '' && acc.trim() === item.account.trim())) return true
-  // Счёт КОНТРАГЕНТА (#562). Сравнение точное, как у нашего счёта: «похожий» номер — другой номер.
+  // Счёт КОНТРАГЕНТА (#562). Сравнение ТОЧНОЕ: «похожий» номер — другой номер.
   // ⚠ Пустой счёт контрагента не матчится никогда — иначе пустая строка в правиле выключила бы
   // все операции, у которых банк не сообщил счёт плательщика.
   const cp = (item.counterparty?.account ?? '').trim()
@@ -126,7 +123,7 @@ export function isExcludedOperation(
 }
 
 /** Split a textarea value into a clean list: one item per line, trimmed, no
- * blanks or duplicates. Used to edit `excludeAccounts`/`excludePurposePatterns`. */
+ * blanks or duplicates. Used to edit the exclusion lists. */
 export function parseRuleLines(text: string): string[] {
   const seen = new Set<string>()
   for (const raw of text.split(/\r?\n/)) {
