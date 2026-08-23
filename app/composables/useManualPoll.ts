@@ -17,11 +17,15 @@ export interface PollNowResponse {
 }
 
 /** Сколько ждём появления итога прогона и как часто спрашиваем. */
-const OUTCOME_TIMEOUT_MS = 90_000
+// ⚠ Окно и шаг подобраны под ЦЕНУ запроса, а не под нетерпение: `/api/import/status` проверяет
+// фрейм-токен вызовом `profile` в портал клиента, то есть каждый наш опрос тратит его же лимит
+// (2 запроса в секунду на портал), деля его с идущим `crm-sync`. 80 с по 8 с — это десять
+// проверок вместо тридцати.
+const OUTCOME_TIMEOUT_MS = 80_000
 // ⚠ Шаг 5 с, а не 3: зона nginx `import` даёт 20 запросов в минуту на IP, то есть ровно один в
 // три секунды, и опрос с таким шагом съедал бы её целиком — соседний бухгалтер из того же офиса
 // получал бы 429 на экране готовности.
-const OUTCOME_STEP_MS = 5_000
+const OUTCOME_STEP_MS = 8_000
 
 export function useManualPoll() {
   const polling = ref(false)
@@ -80,7 +84,12 @@ export function useManualPoll() {
       message.value = n > 0
         ? `Опрос запущен${forDay}: счетов — ${res?.accounts ?? n}. Операции появятся в CRM через минуту-другую.`
         : 'Опрос запущен, но подключённых счетов нет — сначала подключите счёт.'
-      if (n > 0 && baseKnown) void awaitOutcome(a, before, day)
+      // ⚠ Исход показываем ТОЛЬКО когда счёт один. Отметка обращения к банку одна на портал, а
+      // задача ставится НА КАЖДЫЙ счёт: при двух счетах пустой ответ по первому пришёл бы раньше
+      // и был бы предъявлен как исход — «операций нет» о заборе, который по второму счёту принёс
+      // сорок. Соврать про деньги хуже, чем промолчать; при нескольких счетах отправляем в
+      // «Последние операции», где виден настоящий результат.
+      if (n > 0 && baseKnown && (res?.accounts ?? n) === 1) void awaitOutcome(a, before, day)
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
       const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status

@@ -204,7 +204,7 @@ describe('исход забора виден в портале (#592)', () => {
       await nextTick()
       await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
       await flushPromises()
-      await vi.advanceTimersByTimeAsync(6000)
+      await vi.advanceTimersByTimeAsync(9000)
       await flushPromises()
       await nextTick()
       const out = wrapper.find('[data-testid="poll-outcome"]')
@@ -233,7 +233,7 @@ describe('исход забора виден в портале (#592)', () => {
       await nextTick()
       await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
       await flushPromises()
-      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.advanceTimersByTimeAsync(20_000)
       await flushPromises()
       await nextTick()
       const out = wrapper.find('[data-testid="poll-outcome"]')
@@ -254,7 +254,7 @@ describe('исход забора виден в портале (#592)', () => {
       await nextTick()
       await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
       await flushPromises()
-      await vi.advanceTimersByTimeAsync(6000)
+      await vi.advanceTimersByTimeAsync(9000)
       await flushPromises()
       await nextTick()
       expect(wrapper.find('[data-testid="poll-outcome"]').text()).toContain('12')
@@ -285,7 +285,7 @@ describe('исход не выдумывается (находки ревью #5
       await nextTick()
       await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
       await flushPromises()
-      await vi.advanceTimersByTimeAsync(12_000)
+      await vi.advanceTimersByTimeAsync(20_000)
       await flushPromises()
       await nextTick()
       expect(wrapper.find('[data-testid="poll-outcome"]').exists(), 'показали чужой прогон').toBe(false)
@@ -309,6 +309,38 @@ describe('исход не выдумывается (находки ревью #5
       await flushPromises()
       await nextTick()
       expect(wrapper.find('[data-testid="poll-button"]').attributes('disabled')).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('несколько счетов — исход не выдумывается (ревью кода #596)', () => {
+  it('при двух счетах итог НЕ объявляется: отметка одна на портал, а задач две', async () => {
+    // ⚠ Отметка обращения к банку одна на портал, а задача ставится НА КАЖДЫЙ счёт. Пустой ответ
+    // по первому счёту приходит раньше и был бы предъявлен как исход — «операций нет» о заборе,
+    // который по второму счёту принёс сорок. Соврать про деньги хуже, чем промолчать.
+    vi.useFakeTimers()
+    try {
+      let started = false
+      fetchMock.mockImplementation(async (url: string) => {
+        if (String(url).startsWith('/api/import/status')) {
+          return started ? { lastFetchAt: '2026-07-10T10:00:00.000Z', lastFetchOps: 0 } : { lastFetchAt: null }
+        }
+        started = true
+        return { enqueued: 2, accounts: 2, day: '2026-07-10' }
+      })
+      const wrapper = await mountReady()
+      const field = wrapper.findComponent({ name: 'DayField' })
+      field.vm.$emit('update:modelValue', '2026-07-10')
+      await nextTick()
+      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(20_000)
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="poll-outcome"]').exists(), 'объявили исход по одному из счетов').toBe(false)
+      expect(wrapper.find('[data-testid="poll-message"]').exists(), 'молчим совсем — человек не знает, что задача ушла').toBe(true)
     } finally {
       vi.useRealTimers()
     }

@@ -351,7 +351,13 @@ export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchD
       // text on its way into a log, and the two lines must not disagree about that.
       (info) => {
         const notice = alfaWalkNotice(`alfa ${logSafe(query.account)} ${query.dateFrom}..${query.dateTo}`, info)
-        if (notice) (notice.level === 'warn' ? deps.warn : (deps.log ?? deps.warn))?.(notice.text)
+        // ⚠ У тревоги есть отступление на `log`, как у близнеца в `priorFetch.ts`: набор зависимостей
+        // без `warn` иначе ГЛОТАЛ бы предупреждение об оборванном обходе — ту самую молчаливую
+        // потерю операций, ради прекращения которой всё это и написано (#561).
+        if (notice) {
+          const sink = notice.level === 'warn' ? (deps.warn ?? deps.log) : (deps.log ?? deps.warn)
+          sink?.(notice.text)
+        }
       }
     )
   }

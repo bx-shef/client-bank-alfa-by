@@ -87,11 +87,13 @@ onMounted(async () => {
     await init()
     isSlider.value = placementPlace() === APP_SLIDER_PLACE_SETTINGS
     await get()?.parent.setTitle('Настройки')
-
-    section.value = resolveSettingsSection(route.query.section)
   } catch (e) {
     log.warning('рукопожатие с порталом не состоялось', { error: String(e) })
   }
+  // ⚠ Раздел из адреса разбираем ВНЕ try: он не зависит ни от портала, ни от `setTitle`. Внутри
+  // блока отказ `setTitle` глотал и его — и глубокая ссылка (её даёт экран готовности) молча
+  // открывала раздел по умолчанию.
+  section.value = resolveSettingsSection(route.query.section)
 })
 
 /** Закрыть экран так, как он был открыт: слайдер — свернуть, иначе увести на обзор.

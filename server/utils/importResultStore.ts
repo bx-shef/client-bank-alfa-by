@@ -36,9 +36,14 @@ function coerceErrors(v: unknown): string[] {
  */
 export async function markBankFetch(query: QueryFn, memberId: string, ops: number): Promise<void> {
   const n = Number.isFinite(ops) && ops > 0 ? Math.floor(ops) : 0
+  // ⚠ Запись создаётся ТОЛЬКО для установленного портала. Задача забора может доехать до воркера
+  // уже ПОСЛЕ `ONAPPUNINSTALL` (очередь живёт своей жизнью), и обычный upsert воскресил бы строку
+  // удалённого портала — тот же класс, что закрыли UPDATE-only писателями в #505/#510, только
+  // здесь `import_result` никто не подметает, и строка осталась бы навсегда.
   await query(
     `INSERT INTO import_result (member_id, last_fetch_at, last_fetch_ops, updated_at)
-     VALUES ($1, now(), $2, now())
+     SELECT $1, now(), $2, now()
+      WHERE EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)
      ON CONFLICT (member_id) DO UPDATE SET
        last_fetch_at = now(),
        last_fetch_ops = EXCLUDED.last_fetch_ops,
