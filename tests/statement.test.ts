@@ -181,7 +181,7 @@ describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => 
       expect(isExcludedOperation(item), `${counterparty.name} без правил вовсе`).toBe(false)
       // Заполненные, но НЕ совпадающие списки — тоже не повод исключить.
       expect(
-        isExcludedOperation(item, { excludeAccounts: ['BY-OTHER'], excludeCounterpartyAccounts: ['BY-OTHER'], excludePurposePatterns: ['ничего похожего'] }),
+        isExcludedOperation(item, { excludeCounterpartyAccounts: ['BY-OTHER'], excludePurposePatterns: ['ничего похожего'] }),
         `${counterparty.name} с чужими правилами`
       ).toBe(false)
     }

@@ -28,7 +28,7 @@ export function useManualPoll() {
     enabled.value = frameAuth() !== null
   }
 
-  /** Trigger the poll. `day` (`ГГГГ-ММ-ДД`) — точечный забор за один день (#588); пусто ⇒ обычное
+  /** Trigger the poll. `day` (`ГГГГ-ММ-ДД`) — точечный забор за один день (#592); пусто ⇒ обычное
    *  скользящее окно. Sets `message` on success, `error` on any failure. */
   async function poll(day = ''): Promise<void> {
     const a = frameAuth()

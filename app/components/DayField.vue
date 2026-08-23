@@ -4,7 +4,7 @@ import { CalendarDate, getLocalTimeZone, today } from '@internationalized/date'
 import CalendarIcon from '@bitrix24/b24icons-vue/outline/CalendarIcon'
 import { isIsoDay, toIsoDay } from '~/utils/dayValue'
 
-// Поле выбора ОДНОГО дня (#588). Наружу — обычная строка `ГГГГ-ММ-ДД` (или пустая), внутрь — тип
+// Поле выбора ОДНОГО дня (#592). Наружу — обычная строка `ГГГГ-ММ-ДД` (или пустая), внутрь — тип
 // календаря, поэтому вызывающие не тянут `@internationalized/date`.
 //
 // ⚠ Раскладка — штатная пара `B24InputDate` + `B24Calendar` в поповере (пример «As a date picker»

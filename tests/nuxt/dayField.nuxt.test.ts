@@ -3,7 +3,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import DayField from '~/components/DayField.vue'
 import DayRangeField from '~/components/DayRangeField.vue'
 
-// Поле выбора одного дня на штатном B24Calendar (#588). Проверяем ГРАНИЦУ и преобразование
+// Поле выбора одного дня (#592). Проверяем ГРАНИЦУ и преобразование
 // строка↔календарь — то, ради чего компонент и заведён общим на два места.
 describe('DayField', () => {
   it('поле ввода и кнопка календаря на месте', async () => {

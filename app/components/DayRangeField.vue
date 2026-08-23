@@ -4,7 +4,7 @@ import { CalendarDate, getLocalTimeZone, today } from '@internationalized/date'
 import CalendarIcon from '@bitrix24/b24icons-vue/outline/CalendarIcon'
 import { isIsoDay, toIsoDay } from '~/utils/dayValue'
 
-// Период из двух дней одним полем (#588), штатная пара `B24InputDate range` + `B24Calendar range`
+// Период из двух дней одним полем (#592), штатная пара `B24InputDate range` + `B24Calendar range`
 // (пример «As a date range picker» в документации b24ui).
 //
 // ⚠ Одно поле вместо двух — не косметика. Два отдельных календаря показывали два одинаковых месяца

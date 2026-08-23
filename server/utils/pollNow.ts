@@ -52,7 +52,7 @@ export interface PollNowDeps {
 export interface PollNowInput {
   accessToken: string
   domain: string
-  /** Один день `ГГГГ-ММ-ДД` для точечного забора (#588). Пусто ⇒ обычное скользящее окно.
+  /** Один день `ГГГГ-ММ-ДД` для точечного забора (#592). Пусто ⇒ обычное скользящее окно.
    *  ⚠ Именно ОДИН день, а не интервал: интервал — это N задач к банку за один клик, то есть
    *  нагрузка, которую портал задавал бы себе сам вопреки #54 («частоту регулируем мы»). */
   day?: string
@@ -113,7 +113,7 @@ export async function handlePollNow(deps: PollNowDeps, input: PollNowInput): Pro
 
   // Fresh fetch: `epoch` = now, so the fetch jobId is distinct from a same-window cron poll and
   // actually re-fetches (crm-sync still dedupes writes by the B24 marker).
-  // ⚠ Точечный день (#588) заменяет окно ЦЕЛИКОМ (`dateFrom = dateTo = day`), а не расширяет его:
+  // ⚠ Точечный день (#592) заменяет окно ЦЕЛИКОМ (`dateFrom = dateTo = day`), а не расширяет его:
   // «забрать за 17 августа» и должно спросить банк ровно про 17 августа — одна задача, один запрос.
   const { dateFrom, dateTo } = day
     ? { dateFrom: day, dateTo: day }
