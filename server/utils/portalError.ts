@@ -1,86 +1,142 @@
-// Код ошибки Bitrix24, доживающий до вызывающего (#572).
+// The Bitrix24 error CODE, surviving all the way to the caller (#572).
 //
-// ⚠ До этого модуля код ошибки ТЕРЯЛСЯ. `makeSdkRestCall` бросал голый `new Error(...)` из
-// `res.getErrorMessages()`, а тот возвращает только `e.message`. У SDK при этом код есть:
-// `AjaxError.code = response.data.error` (замерено по `core/http/ajax-error.mjs`), но в
-// `formatErrorMessage` он попадает ТОЛЬКО когда описания нет вовсе — а у настоящих ошибок портала
-// оно есть всегда, и сообщение оказывается чистым описанием без кода.
+// ⚠ Before this module the code was LOST. `makeSdkRestCall` threw a bare `new Error(...)` built from
+// `res.getErrorMessages()`, and that accessor returns only `e.message`. The SDK does carry the code —
+// `AjaxError.code = response.data.error` (read off `core/http/ajax-error.mjs`) — but its
+// `formatErrorMessage` folds the code into the message ONLY when there is no description, and a real
+// portal error always has one. So the message arrived as a clean description with no code.
 //
-// ⚠ Почему это не косметика. Портал отвечает описанием на ЯЗЫКЕ ПОРТАЛА, и единственный способ
-// отличить «админ ошибся в имени поля» от «портал молчит» был разбор чужой локализованной строки —
-// то есть проверка, которая завтра придёт по-английски и перестанет работать молча. Код
-// (`INVALID_ARG_VALUE`) — машинный и стабильный.
+// ⚠ Why that is not cosmetic: the portal answers with a description in the PORTAL'S language, so the
+// only way to tell «the admin mistyped a setting» from «the portal is down» was to parse a foreign
+// localized string — a check that silently stops working the day it arrives in another language.
 //
-// Модуль намеренно ЧИСТЫЙ и без импортов SDK: его читают и транспорт, и резолвер, и тесты.
+// Deliberately PURE and free of SDK imports: the transport, the resolver and the tests all read it.
 
-/** Ошибка REST-вызова портала с сохранённым машинным кодом (`error` из тела ответа B24). */
+/** A portal REST failure that kept its machine-readable code (`error` from the B24 response body). */
 export class PortalRestError extends Error {
-  /** Код из тела ответа портала: `INVALID_ARG_VALUE`, `ACCESS_DENIED`, … Пустая строка — код
-   *  не доехал (сетевой сбой, ошибка самого SDK). */
-  readonly portalCode: string
-  /** Метод, на котором это случилось — для лога; в сообщение НЕ подставляется, чтобы текст
-   *  оставался тем же, что видел прежний код. */
+  /**
+   * The code from the portal response body: `INVALID_ARG_VALUE`, `NOT_FOUND`, `ACCESS_DENIED`, …
+   * Empty when no code arrived (a network failure, or an SDK-internal error).
+   *
+   * ⚠ Named `code`, NOT `portalCode`, and that is load-bearing rather than taste. `errorKind()`
+   * (`telemetrySpan.ts`) reads `e.code ?? e.name`; under any other name it would fall through to
+   * `.name` and stamp EVERY single-call SDK failure across the whole app as `PortalRestError` —
+   * one flat label replacing the previous `Error`, while the one genuinely useful value (the portal
+   * code) never reached telemetry at all. With this name `error_kind` becomes the portal code, which
+   * is a class rather than data and therefore safe to record.
+   */
+  readonly code: string
+  /** The method it happened on — for logs. Deliberately NOT interpolated into the message, so the
+   *  text stays exactly what the pre-#572 code produced (`classifyProvisionError` matches on it). */
   readonly method: string
 
-  constructor(message: string, portalCode: string, method: string) {
+  constructor(message: string, code: string, method: string) {
     super(message)
     this.name = 'PortalRestError'
-    this.portalCode = portalCode
+    this.code = code
     this.method = method
   }
 }
 
-/** Код ошибки портала, если он сохранился; иначе пустая строка. Принимает `unknown`, потому что
- *  до вызывающего ошибка доезжает через `catch`. */
+/**
+ * The portal error code, or an empty string. Takes `unknown` — the error reaches the caller through
+ * a `catch`.
+ *
+ * ⚠ It reads the code from ANY error shape, and that is the whole point rather than defensiveness.
+ * The first draft looked only at `PortalRestError` and was DEAD CODE for the main case: the SDK
+ * splits codes into soft and hard, and `INVALID_ARG_VALUE` is HARD. Measured against the pinned
+ * version — `RestrictionManager.BUILT_IN_HARD_ERROR_CODES.includes('INVALID_ARG_VALUE') === true`,
+ * `BUILT_IN_SOFT_ERROR_CODES` → `false` — and `abstract-http.mjs` returns a failed result ONLY for
+ * soft codes (`exceptionCodeForSoft.includes(lastError.code)`), otherwise `throw lastError`. So our
+ * transport's `!res.isSuccess` branch is never reached for this case at all: a raw `AjaxError`
+ * propagates instead. Caught in review; the unit tests missed it because they hand-built
+ * `PortalRestError` instances and never exercised the real throw path.
+ *
+ * ⚠ Read STRUCTURALLY rather than via `instanceof AjaxError`: an SDK import does not belong in a
+ * pure module, and on a major SDK bump a structural read degrades to «no code» instead of failing
+ * to compile somewhere unexpected.
+ */
 export function portalErrorCode(e: unknown): string {
-  return e instanceof PortalRestError ? e.portalCode : ''
+  const code = (e as { code?: unknown } | null | undefined)?.code
+  return typeof code === 'string' ? code : ''
 }
 
 /**
- * Портал отверг ФИЛЬТР: в нём поле, которого у сущности нет.
+ * Portal error codes that mean «the ADMIN's recognition-map setting is wrong», per lookup shape.
  *
- * Замерено на живом портале (2026-08-23, `crm.item.list` на сделке):
- *   `{"error":"INVALID_ARG_VALUE","error_description":"Invalid filter: field 'TOTALLY_BOGUS_FIELD'
- *    is not allowed in filter"}` — HTTP 400, одинаково для простого и для UF-поля.
+ * ⚠ The two sets differ because the admin-supplied parameter differs, and conflating them would
+ * misclassify. All values below are MEASURED live (2026-08-23, `crm.item.list`):
  *
- * ⚠ Это состояние НАСТРОЙКИ, а не сбой: имя поля набирает администратор в «карте сопоставления»,
- * и пока он его не поправит, ответ будет тем же на каждой попытке. Ретраить бессмысленно.
+ *  - a field name the entity does not have →
+ *    `INVALID_ARG_VALUE` / «Invalid filter: field 'X' is not allowed in filter» (HTTP 400, identical
+ *    for a plain and a UF field). This is what `deal-field`/`smart-field` get wrong.
+ *  - a smart process that does not exist → `NOT_FOUND` / «Смарт-процесс не найден»;
+ *    `entityTypeId: 0` → `ENTITY_TYPE_NOT_SUPPORTED`. This is what `smart-entity` gets wrong, and it
+ *    is the ONLY admin-supplied parameter on the `smart-id` path — its filter is `{id, companyId}`,
+ *    with no field name in it at all.
  *
- * ⚠ Проверяем ТОЛЬКО код, а не текст описания. Описание приходит на языке портала и содержит имя
- * поля — сверять по нему значило бы завести проверку, которая молча перестанет срабатывать на
- * англоязычном портале.
+ * ⚠ The first draft wrapped all three kinds with the filter-field set alone. Measurement showed that
+ * would never have fired for `smart-id`: a bad `entityTypeId` answers `NOT_FOUND`, so the realistic
+ * admin mistake there stayed a job-killing retry loop while the unit tests were green.
+ *
+ * ⚠ `NOT_FOUND` is NOT in the deal set on purpose. On the deal path `entityTypeId` is our own
+ * constant (2), so `NOT_FOUND` there would mean something else entirely — and swallowing it would
+ * hide OUR bug behind «check your settings».
  */
-export function isFilterFieldRejected(e: unknown): boolean {
-  return portalErrorCode(e) === 'INVALID_ARG_VALUE'
+const FIELD_MISCONFIG_CODES = ['INVALID_ARG_VALUE'] as const
+const ENTITY_MISCONFIG_CODES = ['INVALID_ARG_VALUE', 'NOT_FOUND', 'ENTITY_TYPE_NOT_SUPPORTED'] as const
+
+/** Which admin-supplied parameter a lookup depends on — picks the code set above. */
+export type ConfiguredParam = 'field' | 'entity'
+
+/**
+ * Did the portal reject the lookup because of an admin-supplied setting?
+ *
+ * ⚠ HONEST LIMIT: `INVALID_ARG_VALUE` is Bitrix's GENERIC invalid-argument code, not a
+ * filter-field-specific one — a value of the wrong type against an otherwise-correct field raises it
+ * too. So this answers «the portal refused arguments we built from settings», and the message built
+ * on it must NOT assert one single cause. `buildSettingsErrorMessage` is written accordingly.
+ *
+ * ⚠ Matched on the CODE only, never on the description: the description arrives in the portal's
+ * language and embeds the field name.
+ */
+export function isSettingsRejection(e: unknown, param: ConfiguredParam): boolean {
+  const code = portalErrorCode(e)
+  if (!code) return false
+  const codes: readonly string[] = param === 'entity' ? ENTITY_MISCONFIG_CODES : FIELD_MISCONFIG_CODES
+  return codes.includes(code)
 }
 
-/** Минимум, который нужен от результата SDK, чтобы достать код. `getErrors` объявлен
- *  необязательным: у батч-результата его может не быть, и тогда код просто не доедет — это хуже,
- *  чем с кодом, но не хуже, чем было до этого модуля. */
+/** The minimum we need from an SDK result to read a code. `getErrors` is optional so a future SDK
+ *  shape that drops it degrades to «no code» rather than failing to typecheck. */
 export interface SdkErrorCarrier {
   getErrorMessages: () => string[]
-  /** ⚠ Именно `Iterable`, а не массив: SDK отдаёт `IterableIterator<Error>` (значения `Map`), и
-   *  объявление массивом ломает совместимость типов — поймано компиляторным дрейф-гардом
-   *  `OAuthCallClient`, а не глазами. */
+  /** ⚠ `Iterable`, not an array: the SDK returns `IterableIterator<Error>` (Map values), and
+   *  declaring an array breaks type compatibility — caught by the `OAuthCallClient` compile-time
+   *  drift guard, not by eye. */
   getErrors?: () => Iterable<unknown>
 }
 
-/** Достать код первой ошибки результата SDK. Ошибки SDK — экземпляры `AjaxError` с полем `code`;
- *  читаем структурно (`{ code?: unknown }`), а не через `instanceof`, чтобы не тащить сюда импорт
- *  SDK и не ломаться на его мажорном обновлении. */
+/**
+ * The code of the first error on an SDK result, read structurally.
+ *
+ * ⚠ The ITERATION sits inside the `try`, not just the accessor call. Guarding only the call left the
+ * same class of risk open: a `getErrors()` returning a non-iterable (or a lazy generator throwing
+ * mid-iteration) would raise a `TypeError` here — and this runs inside the transport's error branch,
+ * so that `TypeError` would REPLACE the `PortalRestError` being built and destroy the original
+ * portal message too. Strictly worse than the pre-#572 behaviour.
+ */
 export function firstPortalErrorCode(res: SdkErrorCarrier): string {
   if (typeof res.getErrors !== 'function') return ''
-  let errors: Iterable<unknown>
   try {
-    errors = res.getErrors() ?? []
+    for (const e of res.getErrors() ?? []) {
+      const code = (e as { code?: unknown })?.code
+      if (typeof code === 'string' && code) return code
+    }
   } catch {
-    // Аксессор SDK не обязан быть безопасным на всех формах результата, а потеря кода не должна
-    // превращаться в потерю самой ошибки — вызывающий всё равно бросит по сообщению.
+    // Losing the code must never become losing the error itself: the caller still throws with the
+    // message, just without classification.
     return ''
-  }
-  for (const e of errors) {
-    const code = (e as { code?: unknown })?.code
-    if (typeof code === 'string' && code) return code
   }
   return ''
 }

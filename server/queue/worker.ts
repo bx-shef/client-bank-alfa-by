@@ -565,9 +565,14 @@ export function liveHandlerDeps(): HandlerDeps {
         crmLog.error(`unresolved notify failed, portal ${memberId}: ${(e as Error)?.message}`)
       }
     },
-    // «Карта распознавания настроена неверно» (#572) — те же гарантии, что у notifyUnresolved.
+    // «Настройка распознавания не подходит порталу» (#572) — те же гарантии, что у notifyUnresolved.
     // ⚠ Платёж не передаётся: сообщение про НАСТРОЙКУ, а не про операцию, и шлётся раз за прогон.
-    notifySettingsError: async (reason, dialogId, memberId) => {
+    // ⚠ Демо-гейт стоит на ПАЧКЕ, а не на операции, и это единственный способ его тут поставить:
+    // соседи (`notifyError`/`notifyUnresolved`/`notifyUnmatched`) смотрят на `item.account`, а
+    // сюда item не приходит по построению. Без гейта комментарий «те же гарантии» был бы ложью, а
+    // демо-путь, привязанный к настоящему memberId, писал бы в живой чат клиента.
+    notifySettingsError: async (reason, dialogId, memberId, account) => {
+      if (isDemoAccount(account)) return
       try {
         const call = await resolvePortalCall(memberId)
         if (!call) return

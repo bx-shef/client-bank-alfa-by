@@ -69,6 +69,10 @@ async function main(): Promise<void> {
   let itemId = 0
   try {
     // 1. Throwaway SP with NO client binding — the exact shape the resolver worries about.
+    // ⚠ The raw response is captured BEFORE parsing so a shape change cannot orphan the SP: the
+    // portal has already created it by then, and a throw from `extractCreatedSpRef` used to leave
+    // `typeId = 0`, so `finally` deleted nothing AND said nothing. An orphan smart process in a
+    // client CRM is exactly the litter this file promises never to leave.
     const created = await call('crm.type.add', {
       fields: {
         title: PROBE_TITLE,
@@ -81,8 +85,10 @@ async function main(): Promise<void> {
         isRecyclebinEnabled: true
       }
     })
+    const rawTypeId = Number(((created.result as { type?: { id?: unknown } })?.type)?.id ?? 0)
+    if (Number.isInteger(rawTypeId) && rawTypeId > 0) typeId = rawTypeId // teardown can proceed even if the ref fails to parse
     const ref = extractCreatedSpRef(created)
-    if (!ref) throw new Error('crm.type.add вернул СП без entityTypeId/id')
+    if (!ref) throw new Error(`crm.type.add вернул СП без entityTypeId/id (title "${PROBE_TITLE}", сырой id ${rawTypeId || '—'})`)
     entityTypeId = ref.entityTypeId
     typeId = ref.id
     ok(`СП создан: entityTypeId=${entityTypeId}, typeId=${typeId} ${C.dim}(isClientEnabled: false)${C.reset}`)
@@ -97,10 +103,24 @@ async function main(): Promise<void> {
     //    worked» from «SP was empty all along».
     const baseline = await raw('crm.item.list', { entityTypeId })
     const baseItems = (((baseline.body.result as { items?: unknown[] })?.items) ?? []) as unknown[]
+    // ⚠ ASSERTED, not merely printed. Found in review: the verdict below branched only on the
+    // filtered call, so if the baseline came back empty for any unrelated reason (indexing lag, a
+    // non-JSON response coerced to `{}` by `rawCall`), BOTH calls would read `items=0` and the
+    // script would print a confident green FAIL-CLOSED while proving nothing. A precondition that
+    // is only logged is not a precondition.
+    if (baseItems.length === 0) throw new Error('база пуста: элемент не виден и БЕЗ фильтра — замер недействителен')
     ok(`база (без фильтра): items=${baseItems.length}`)
 
     // 4. THE MEASUREMENT.
-    const probe = await raw('crm.item.list', { entityTypeId, filter: { companyId: FOREIGN_COMPANY_ID } })
+    // ⚠ `select` mirrors the production shape (`itemByIdParams`), minus `parentId2`, which
+    // `selectFields` already excludes for a deal. Measured separately: an UNKNOWN field in `select`
+    // is IGNORED silently (HTTP 200) — only the filter is strict — so `select` cannot be the cause
+    // of the verdict either way.
+    const probe = await raw('crm.item.list', {
+      entityTypeId,
+      filter: { companyId: FOREIGN_COMPANY_ID },
+      select: ['id', 'companyId', 'stageId', 'opportunity', 'currencyId']
+    })
     const probeItems = (((probe.body.result as { items?: unknown[] })?.items) ?? []) as unknown[]
 
     head('РЕЗУЛЬТАТ')
@@ -126,6 +146,8 @@ async function main(): Promise<void> {
       if (typeId) {
         await call('crm.type.delete', { id: typeId }).then(() => ok('СП удалён'),
           (e: unknown) => err(`СП НЕ удалён (typeId=${typeId}): ${String(e)} — удалите вручную`))
+      } else if (entityTypeId) {
+        err(`СП создан, но его id неизвестен — найдите и удалите вручную по названию "${PROBE_TITLE}"`)
       }
     }
   }

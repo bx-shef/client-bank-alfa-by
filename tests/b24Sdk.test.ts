@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { isSettingsRejection, PortalRestError, portalErrorCode } from '../server/utils/portalError'
 import { B24OAuth } from '@bitrix24/b24jssdk'
 import type { B24OAuthParams } from '@bitrix24/b24jssdk'
 import type { OAuthCallClient, SdkAjaxResult, SdkPortalDeps } from '../server/utils/b24Sdk'
@@ -208,6 +209,31 @@ describe('makeSdkRestCall', () => {
   it('throws the SDK error messages on failure (so the job fails → clean retry)', async () => {
     const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => ['QUERY_LIMIT_EXCEEDED', 'slow down'] }))
     await expect(makeSdkRestCall(client)('crm.item.list', {})).rejects.toThrow('QUERY_LIMIT_EXCEEDED; slow down')
+  })
+
+  it('keeps the PORTAL CODE on the thrown error (#572)', async () => {
+    // ⚠ Mutation testing showed this was uncovered: reverting `PortalRestError` back to a bare
+    // `Error` killed ZERO tests, because the neighbouring case above asserts only on the message
+    // substring. The whole settings-error classification hangs on the code surviving this hop.
+    const { client } = fakeClient(ajax({
+      isSuccess: false,
+      getErrorMessages: () => ['Invalid filter: field \'UF_CRM_NOPE\' is not allowed in filter'],
+      getErrors: () => [Object.assign(new Error('x'), { code: 'INVALID_ARG_VALUE' })]
+    }))
+    const caught = await makeSdkRestCall(client)('crm.item.list', {}).catch((e: unknown) => e)
+    expect(caught).toBeInstanceOf(PortalRestError)
+    expect(portalErrorCode(caught)).toBe('INVALID_ARG_VALUE')
+    expect(isSettingsRejection(caught, 'field')).toBe(true)
+    // The message is unchanged — callers that log or match on it must see exactly what they did.
+    expect((caught as Error).message).toContain('is not allowed in filter')
+  })
+
+  it('a result without `getErrors` still throws, just without a code', async () => {
+    // Losing the code must never become losing the error itself.
+    const { client } = fakeClient(ajax({ isSuccess: false, getErrorMessages: () => ['boom'] }))
+    const caught = await makeSdkRestCall(client)('crm.item.list', {}).catch((e: unknown) => e)
+    expect((caught as Error).message).toBe('boom')
+    expect(portalErrorCode(caught)).toBe('')
   })
 
   it('throws a generic message when the SDK gives no error text', async () => {

@@ -78,6 +78,9 @@ export interface OAuthCallClient {
 export interface SdkBatchResult {
   isSuccess: boolean
   getErrorMessages: () => string[]
+  /** Same purpose as on `SdkAjaxResult` (#572): the portal code lives on the error objects, not in
+   *  the message. Optional for the same forward-compatibility reason. */
+  getErrors?: () => Iterable<unknown>
   getData: () => unknown
 }
 
@@ -94,10 +97,11 @@ export interface SdkAjaxResult {
   isSuccess: boolean
   getData: () => Record<string, unknown> | null | undefined
   getErrorMessages: () => string[]
-  /** Сами объекты ошибок — из них берётся МАШИННЫЙ код портала (#572). `getErrorMessages()`
-   *  отдаёт только `e.message`, а он у настоящей ошибки равен описанию БЕЗ кода, поэтому без
-   *  этого аксессора `INVALID_ARG_VALUE` до вызывающего не доезжал вовсе. Необязателен по той же
-   *  причине, что `getTotal`: мажорное обновление SDK не должно ронять typecheck. */
+  /** The error OBJECTS — the machine-readable portal code is read off them (#572).
+   *  `getErrorMessages()` yields only `e.message`, which on a real portal error equals the
+   *  description WITHOUT the code, so without this accessor `INVALID_ARG_VALUE` never reached the
+   *  caller at all. Optional for the same reason as `getTotal`: a major SDK bump must not break
+   *  typecheck. */
   getErrors?: () => Iterable<unknown>
   getTotal?: () => number
   isMore?: () => boolean
@@ -200,10 +204,15 @@ export function makeSdkRestCall(client: OAuthCallClient, opts: { memberId?: stri
     async () => {
       const res = await client.actions.v2.call.make({ method, params })
       if (!res.isSuccess) {
-        // ⚠ Бросаем С КОДОМ портала (#572). Прежний голый `new Error(messages)` терял его
-        // безвозвратно, и единственным способом отличить ошибку НАСТРОЙКИ («такого поля нет»)
-        // от сбоя транспорта оставался разбор локализованного описания. Текст сообщения не
-        // изменился — вызывающие, которые его логируют, видят ровно то же.
+        // ⚠ Throw WITH the portal code (#572). The old bare `new Error(messages)` dropped it for
+        // good, leaving the parsing of a localized description as the only way to tell a SETTINGS
+        // error («no such field») from a transport failure. The message text is unchanged, so
+        // callers that log or match on it (`classifyProvisionError`) see exactly what they did.
+        //
+        // ⚠ This branch is NOT the main path for the #572 case: `INVALID_ARG_VALUE` is a HARD code
+        // for the SDK, so `abstract-http.mjs` throws its own `AjaxError` before we ever get a failed
+        // result (measured — see `portalError.ts`). It still matters for SOFT codes, and
+        // `portalErrorCode` reads either shape.
         throw new PortalRestError(
           res.getErrorMessages().join('; ') || `B24 REST ${method} failed`,
           firstPortalErrorCode(res),
@@ -234,14 +243,18 @@ export function makeSdkBatchCall(client: OAuthCallClient, opts: { memberId?: str
           calls: chunk.map(c => [c.method, c.params ?? {}] as [string, Record<string, unknown>]),
           options: { isHaltOnError: true, returnAjaxResult: true }
         })
-        if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || 'B24 batch failed')
+        // ⚠ Same contract as the single-call path (#572): a batch failure carries its portal code
+        // too. Leaving a bare `Error` here would put two sibling throw sites under two different
+        // guarantees — exactly the drift `portalError.ts` was written to end — and would silently
+        // give `portalErrorCode(e) === ''` to any future batched consumer of the classifier.
+        if (!res.isSuccess) throw new PortalRestError(res.getErrorMessages().join('; ') || 'B24 batch failed', firstPortalErrorCode(res), 'batch')
         // ARRAY calls + returnAjaxResult:true → getData() is an AjaxResult[] in input order
         // (the SDK's union type widens to `unknown`; coerce to the array form we requested).
         const rows = (res.getData() ?? []) as SdkAjaxResult[]
         // A command that itself failed is not `isSuccess` even when the batch envelope is —
         // surface it as a throw (halt-on-error semantics for the whole job).
         for (const row of rows) {
-          if (!row.isSuccess) throw new Error(row.getErrorMessages().join('; ') || 'B24 batch command failed')
+          if (!row.isSuccess) throw new PortalRestError(row.getErrorMessages().join('; ') || 'B24 batch command failed', firstPortalErrorCode(row), 'batch')
           out.push(sdkEnvelope(row, false)) // reattachNext:false — batch rows always carry next:0 (see sdkEnvelope)
         }
       }

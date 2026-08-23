@@ -194,8 +194,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     notifyUnresolved: async (it, identifiers, dialogId, memberId, truncated) => {
       calls.unresolvedChat.push([it.docId, identifiers, dialogId, memberId, truncated])
     },
-    notifySettingsError: async (reason, dialogId, memberId) => {
-      calls.settingsChat.push([reason, dialogId, memberId])
+    notifySettingsError: async (reason, dialogId, memberId, account) => {
+      calls.settingsChat.push([reason, dialogId, memberId, account])
     },
     notifyError: async (it, decision, dialogId, memberId) => {
       calls.errChat.push([it.docId, decision.action, dialogId, memberId])
@@ -747,7 +747,7 @@ describe('handleCrmSyncJob', () => {
       recognition: invoiceMatrix,
       company: 'CO',
       errorChat: { dialogId: 'err' },
-      resolve: [{ kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field: портал отверг фильтр — Invalid filter: field \'UF_CRM_NOPE\' is not allowed in filter' }]
+      resolve: [{ kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field|field|Invalid filter' }]
     })
     const r = await handleCrmSyncJob(job([
       item('d1', 'credit', 'Оплата по счету СЧ-1234'),
@@ -766,18 +766,38 @@ describe('handleCrmSyncJob', () => {
       recognition: invoiceMatrix,
       company: 'CO',
       errorChat: { dialogId: 'err' },
-      resolve: [{ kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field: портал отверг фильтр' }]
+      resolve: [{ kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field|field|x' }]
     })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
     expect(r.unresolved).toBe(0)
     expect(calls.unresolvedChat).toEqual([])
   })
 
+  it('платёж РАЗНЕСЛО по рабочей матрице — счётчик молчит, а сообщение всё равно уходит', async () => {
+    // ⚠ Найдено ревью. У портала может быть две матрицы: рабочая и сломанная. Платёж при этом
+    // привязывается ПРАВИЛЬНО, а счётчик срабатывал бы по сломанной — и строка лога вместе с
+    // пожизненной метрикой утверждали бы «N платежей ушли без привязки» про привязанные платежи.
+    // ⚠ Сообщение при этом обязано уйти: оно про НАСТРОЙКУ, а не про исход конкретной операции.
+    const { deps, calls } = fakeDeps({
+      recognition: invoiceMatrix,
+      company: 'CO',
+      errorChat: { dialogId: 'err' },
+      resolve: [
+        { kind: 'invoice-number', value: 'СЧ-1234', status: 'resolved', candidates: [{ kind: 'invoice', id: '9', amount: 10, currency: 'BYN' }] },
+        { kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field|field|x' }
+      ]
+    })
+    const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
+    expect(r.misconfigured, 'платёж приземлился — потерей не считаем').toBe(0)
+    expect(r.resolved).toBe(1)
+    expect(calls.settingsChat, 'но про сломанную матрицу сказать обязаны').toHaveLength(1)
+  })
+
   it('без чата ошибок неверная настройка всё равно СЧИТАЕТСЯ', async () => {
     const { deps, calls } = fakeDeps({
       recognition: invoiceMatrix,
       company: 'CO',
-      resolve: [{ kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field: портал отверг фильтр' }]
+      resolve: [{ kind: 'deal-field', value: 'СЧ-1234', status: 'misconfigured', candidates: [], reason: 'deal-field|field|x' }]
     })
     const r = await handleCrmSyncJob(job([item('d1', 'credit', 'Оплата по счету СЧ-1234')]), deps)
     expect(r.misconfigured).toBe(1)
