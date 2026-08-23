@@ -65,7 +65,7 @@ import { findActivityByMarker } from '../utils/activityMarkerLookup'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
-import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
+import { notifyAllocationErrorViaRest, notifySettingsErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { deleteLeasesForPortal } from '../utils/singleFlightLease'
@@ -565,6 +565,17 @@ export function liveHandlerDeps(): HandlerDeps {
         crmLog.error(`unresolved notify failed, portal ${memberId}: ${(e as Error)?.message}`)
       }
     },
+    // «Карта распознавания настроена неверно» (#572) — те же гарантии, что у notifyUnresolved.
+    // ⚠ Платёж не передаётся: сообщение про НАСТРОЙКУ, а не про операцию, и шлётся раз за прогон.
+    notifySettingsError: async (reason, dialogId, memberId) => {
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return
+        await notifySettingsErrorViaRest(reason, dialogId, call, memberId)
+      } catch (e) {
+        crmLog.error(`settings-error notify failed, portal ${memberId}: ${(e as Error)?.message}`)
+      }
+    },
     // Post an UNMATCHED-client notice to the error chat (#91). Same guarantees as notifyError:
     // demo gated, no token → skip, whole body swallow+logged (a chat failure must never fail the job).
     notifyUnmatched: async (item, dialogId, recordedToMyCompany, memberId) => {
@@ -991,7 +1002,7 @@ async function persistImportResult(
  *  Gated to real (non-demo) portals; swallows errors so metrics can't fail a job. */
 async function bumpMetrics(
   job: CrmSyncJob,
-  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number, bindingsFailed: number }
+  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number, bindingsFailed: number, misconfigured: number }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
   if (!account || isDemoAccount(account)) return

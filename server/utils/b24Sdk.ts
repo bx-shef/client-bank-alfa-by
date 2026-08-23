@@ -38,6 +38,7 @@ import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
 import { getToken, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
 import { withDependencySpan } from './telemetrySpan'
+import { firstPortalErrorCode, PortalRestError } from './portalError'
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
 const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
@@ -93,6 +94,11 @@ export interface SdkAjaxResult {
   isSuccess: boolean
   getData: () => Record<string, unknown> | null | undefined
   getErrorMessages: () => string[]
+  /** Сами объекты ошибок — из них берётся МАШИННЫЙ код портала (#572). `getErrorMessages()`
+   *  отдаёт только `e.message`, а он у настоящей ошибки равен описанию БЕЗ кода, поэтому без
+   *  этого аксессора `INVALID_ARG_VALUE` до вызывающего не доезжал вовсе. Необязателен по той же
+   *  причине, что `getTotal`: мажорное обновление SDK не должно ронять typecheck. */
+  getErrors?: () => Iterable<unknown>
   getTotal?: () => number
   isMore?: () => boolean
 }
@@ -193,7 +199,17 @@ export function makeSdkRestCall(client: OAuthCallClient, opts: { memberId?: stri
     { system: 'bitrix24', operation: method, method, scope: method.split('.')[0], memberId: opts.memberId },
     async () => {
       const res = await client.actions.v2.call.make({ method, params })
-      if (!res.isSuccess) throw new Error(res.getErrorMessages().join('; ') || `B24 REST ${method} failed`)
+      if (!res.isSuccess) {
+        // ⚠ Бросаем С КОДОМ портала (#572). Прежний голый `new Error(messages)` терял его
+        // безвозвратно, и единственным способом отличить ошибку НАСТРОЙКИ («такого поля нет»)
+        // от сбоя транспорта оставался разбор локализованного описания. Текст сообщения не
+        // изменился — вызывающие, которые его логируют, видят ровно то же.
+        throw new PortalRestError(
+          res.getErrorMessages().join('; ') || `B24 REST ${method} failed`,
+          firstPortalErrorCode(res),
+          method
+        )
+      }
       return sdkEnvelope(res)
     }
   )

@@ -202,6 +202,10 @@ export interface HandlerDeps {
   /** Сообщить в чат ошибок, что номер в назначении распознан, но цель в CRM не нашлась (#421).
    *  MUST NOT throw — как и `notifyError`, сбой чата не роняет джобу. */
   notifyUnresolved: (item: StatementItem, identifiers: string[], dialogId: string, memberId: string, truncated: boolean) => Promise<void>
+  /** «Карта распознавания настроена неверно» (#572) — ОДИН раз за прогон, не на операцию: имя поля
+   *  задаёт админ, и отказ портала одинаков для всех операций пачки. MUST NOT throw — как и
+   *  остальные оповещения, сбой чата не роняет джобу. */
+  notifySettingsError: (reason: string, dialogId: string, memberId: string) => Promise<void>
   /** Post an UNMATCHED-client notice to the error chat `dialogId` (#91, §5): the payer company
    *  wasn't found by its account. `recordedToMyCompany` picks the wording (recorded on my company
    *  vs not recorded at all). MUST NOT throw — like notifyError, a chat failure never fails the job. */
@@ -351,7 +355,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -446,6 +450,10 @@ export async function handleCrmSyncJob(
   // ради редких случаев «нужен человек» — его просто перестали бы читать. Счётчик `unresolved`
   // капом НЕ ограничен: метрика обязана остаться честной.
   let unresolvedNotices = 0
+  // ⚠ Причина ОДНА на прогон, а не список: отказ портала «такого поля нет» одинаков для каждой
+  // операции, и накопление дало бы сотню одинаковых строк. Храним первую увиденную.
+  let misconfigured = 0
+  let misconfiguredReason = ''
   let recognized = 0
   let resolved = 0
   let allocatable = 0
@@ -583,6 +591,15 @@ export async function handleCrmSyncJob(
       // искал: сообщать про «нет подходящих счетов» было бы прямой ложью, а совет «проверьте номер
       // и статус документа» отправил бы бухгалтера искать несуществующую проблему вместо настройки.
       const searched = resolutions.filter(r => r.status === 'resolved')
+      // Портал отверг фильтр: в «карте распознавания» указано поле, которого у сущности нет (#572).
+      // ⚠ Считаем ОПЕРАЦИИ, а не резолюции: у одной операции может быть несколько распознанных
+      // номеров, и все они упрутся в ту же неверную настройку — счётчик «сколько платежей
+      // пострадало» полезнее, чем «сколько раз портал сказал нет».
+      const badConfig = resolutions.find(r => r.status === 'misconfigured')
+      if (badConfig) {
+        misconfigured++
+        if (!misconfiguredReason) misconfiguredReason = badConfig.reason ?? ''
+      }
       if (candidates.length === 0 && searched.length > 0) {
         // Номера в назначении распознаны, а подходящей сущности у этого клиента нет: счёт удалён,
         // номер набран с опечаткой, документ в отменённой стадии. Для бухгалтера это неотличимо от
@@ -888,6 +905,13 @@ export async function handleCrmSyncJob(
     created++
   }
 
+  // ⚠ ОДНО сообщение на прогон, и после цикла, а не внутри него. Причина одинакова для каждой
+  // операции пачки (админ указал несуществующее поле), поэтому сообщение внутри цикла залило бы чат
+  // ошибок сотней одинаковых строк — ровно то, из-за чего такой чат перестают читать.
+  if (misconfiguredReason && errorChat?.dialogId) {
+    await deps.notifySettingsError(misconfiguredReason, errorChat.dialogId, job.memberId)
+  }
+
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
 }

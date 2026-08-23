@@ -20,6 +20,7 @@
 // (`typecheck:server`, #187 fixed), so the compiler gates this; a test that runs every
 // kind through the function (tests/intentResolver.test.ts) is the belt-and-suspenders.
 
+import { isFilterFieldRejected } from './portalError'
 import type { RecognitionIntent } from '../../app/utils/recognitionIntent'
 import type { IdentifierKind } from '../../app/utils/purposeMatch'
 import type { AllocationCandidate, AllocationTargetKind } from '../../app/utils/allocation'
@@ -80,7 +81,19 @@ export function parseConfiguredEntityTypeId(raw: string | undefined): number | n
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
-export type IntentStatus = 'resolved' | 'unsupported'
+/**
+ * `resolved` — искали в CRM (нашли или нет).
+ * `unsupported` — вид не настроен, в CRM НЕ ходили.
+ * `misconfigured` — ходили, и портал сказал, что настройка неверна (#572): в «карте сопоставления»
+ *   указано поле, которого у сущности нет.
+ *
+ * ⚠ Третий статус заведён потому, что до него этот случай был НЕОТЛИЧИМ от сбоя портала: ошибка
+ * летела наверх, роняла джобу, и BullMQ повторял её восемь раз — с тем же результатом, потому что
+ * имя поля от повтора не исправится. В логе это выглядело как отказ транспорта, а чинится на экране
+ * настроек. `unsupported` тоже не годится: он значит «не искали», и по нему намеренно НЕ шлют
+ * сообщений — то есть неверная настройка так и осталась бы молчаливой.
+ */
+export type IntentStatus = 'resolved' | 'unsupported' | 'misconfigured'
 
 /** The outcome of dispatching one recognized intent. `candidates` is `[]` both when
  *  the kind is not yet dispatchable and when it is but nothing matched — the two are
@@ -106,6 +119,36 @@ const BY_ID_TARGET: Record<'invoice-id' | 'deal-id', { targetKind: AllocationTar
 
 const unsupported = (intent: RecognitionIntent, reason: string): IntentResolution =>
   ({ kind: intent.kind, value: intent.value, status: 'unsupported', candidates: [], reason })
+
+const misconfigured = (intent: RecognitionIntent, reason: string): IntentResolution =>
+  ({ kind: intent.kind, value: intent.value, status: 'misconfigured', candidates: [], reason })
+
+/**
+ * Выполнить поиск, имя поля/тип сущности для которого задал АДМИНИСТРАТОР, и превратить отказ
+ * портала «такого поля нет в фильтре» в состояние настройки вместо падения джобы.
+ *
+ * ⚠ Применяется ТОЛЬКО к видам, параметр которых приходит из «карты сопоставления»
+ * (`deal-field`/`smart-field`/`smart-id`). Для наших собственных запросов (`invoice-number`,
+ * `deal-id`, …) имена полей зашиты в коде, и там тот же `INVALID_ARG_VALUE` означает НАШ дрейф —
+ * он обязан ронять джобу громко, иначе регрессия в коде тихо превратится в «ничего не найдено».
+ * Это и есть причина, по которой обёртка не надета на весь `switch`.
+ *
+ * ⚠ Ловим ровно `INVALID_ARG_VALUE` и ровно по КОДУ (`portalError.ts`). Всё остальное —
+ * недоступность портала, истёкший токен, отказ в правах — по-прежнему летит наверх и даёт чистый
+ * повтор: от повтора оно как раз лечится.
+ */
+async function resolveConfigured(
+  intent: RecognitionIntent,
+  what: string,
+  run: () => Promise<IntentResolution>
+): Promise<IntentResolution> {
+  try {
+    return await run()
+  } catch (e) {
+    if (!isFilterFieldRejected(e)) throw e
+    return misconfigured(intent, `${what}: портал отверг фильтр — ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
 
 /** Route one bridged document entity ref (`entityTypeId`) to the allocation target
  *  it must be resolved as (`via-document`, §4). Deal (2) and smart-invoice (31) are
@@ -241,20 +284,32 @@ export async function resolveIntentCandidates(
       // only the field name is portal-specific. No configured field ⇒ can't look up → unsupported.
       const fieldName = ctx.configFields?.[DEAL_FIELD_CONFIG_KEY]
       if (!fieldName) return unsupported(intent, 'deal-field: no configured field (configFields["deal-field"])')
-      const found = await deps.findCandidateByField('deal', DEAL_ENTITY_TYPE_ID, fieldName, intent.value, opts, call)
-      return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+      return resolveConfigured(intent, 'deal-field', async () => {
+        const found = await deps.findCandidateByField('deal', DEAL_ENTITY_TYPE_ID, fieldName, intent.value, opts, call)
+        return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+      })
     }
     case 'smart-id': {
       // The value IS the smart-process element's own id. Unlike a deal, the smart process's
       // entityTypeId is portal-specific → read it from config; missing/invalid ⇒ unsupported.
-      // ⚠ IDOR live-verify gate: the company scope relies on the SP having a `companyId` field
-      // (live-confirmed for deals, NOT for an arbitrary configured SP). If a given SP has no
-      // company binding, B24 may ignore the unknown filter key → scope fails open. Verify the
-      // real portal's SP carries companyId before firing its trigger (log/count safe until then).
+      // ⚠ Прежний комментарий предупреждал, что на смарт-процессе БЕЗ привязки к клиенту фильтр
+      // `companyId` может быть проигнорирован и скоуп по компании «раскроется» (fail-open). ЗАМЕРЕНО
+      // на живом портале (2026-08-23, `scripts/probe-sp-company-filter.ts`): это НЕ ТАК, и исход
+      // оказался третьим — не fail-open и не громкий отказ, а **fail-closed**. СП, созданный с
+      // `isClientEnabled: false`, содержит один элемент; `crm.item.list` с
+      // `filter: {companyId: <чужой>}` принимается и возвращает `items: []`, `total: 0`, тогда как
+      // без фильтра тот же вызов отдаёт этот элемент. То есть чужие строки не возвращаются.
+      //
+      // ⚠ Но у замера есть ВТОРАЯ сторона, и она важнее первой: на таком СП фильтр по компании не
+      // совпадёт НИКОГДА — элементу просто негде нести `companyId`. Значит указавший такой СП
+      // администратор получит вечное «цель не найдена» без единой подсказки, почему. Это не дыра в
+      // безопасности, а тупик настройки; заведён отдельно, см. #572.
       const entityTypeId = parseConfiguredEntityTypeId(ctx.configFields?.[SMART_ENTITY_CONFIG_KEY])
       if (!entityTypeId) return unsupported(intent, 'smart-id: no configured entityTypeId (configFields["smart-entity"])')
-      const found = await deps.findCandidateById('smart-process', entityTypeId, intent.value, opts, call)
-      return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+      return resolveConfigured(intent, 'smart-id', async () => {
+        const found = await deps.findCandidateById('smart-process', entityTypeId, intent.value, opts, call)
+        return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+      })
     }
     case 'smart-field': {
       // Search the smart process by a CONFIGURED user-field. Needs BOTH the portal-specific
@@ -263,8 +318,10 @@ export async function resolveIntentCandidates(
       const fieldName = ctx.configFields?.[SMART_FIELD_CONFIG_KEY]
       if (!entityTypeId) return unsupported(intent, 'smart-field: no configured entityTypeId (configFields["smart-entity"])')
       if (!fieldName) return unsupported(intent, 'smart-field: no configured field (configFields["smart-field"])')
-      const found = await deps.findCandidateByField('smart-process', entityTypeId, fieldName, intent.value, opts, call)
-      return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+      return resolveConfigured(intent, 'smart-field', async () => {
+        const found = await deps.findCandidateByField('smart-process', entityTypeId, fieldName, intent.value, opts, call)
+        return { ...base, status: 'resolved', candidates: found ? [found] : [] }
+      })
     }
     case 'document-number': {
       // Bridge: number → generated document(s) → bound entity ref(s). Route each ref by

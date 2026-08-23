@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { PortalRestError } from '../server/utils/portalError'
 import { IDENTIFIER_ROUTES, routeIdentifier } from '~/utils/identifierDispatch'
 import type { IdentifierKind } from '~/utils/purposeMatch'
 import type { AllocationCandidate } from '~/utils/allocation'
@@ -356,6 +357,69 @@ describe('resolveIntentCandidates — deal-field (by-config-field, §4)', () => 
     expect(r.status).toBe('unsupported')
     expect(r.reason).toBeTruthy()
     expect(deps.findCandidateByField).not.toHaveBeenCalled()
+  })
+})
+
+// #572 — отказ портала «такого поля нет в фильтре» на ПОЛЕ ИЗ НАСТРОЕК.
+describe('resolveIntentCandidates — портал отверг настроенное поле (#572)', () => {
+  const rejected = () => new PortalRestError(
+    // Текст замерен на живом портале 2026-08-23.
+    'Invalid filter: field \'UF_CRM_NOPE\' is not allowed in filter',
+    'INVALID_ARG_VALUE',
+    'crm.item.list'
+  )
+
+  const ctxCfg = { ...ctx, configFields: { 'deal-field': 'UF_CRM_NOPE', 'smart-entity': '1032', 'smart-field': 'UF_CRM_NOPE' } }
+
+  it('deal-field → misconfigured, а НЕ бросок', async () => {
+    // ⚠ До этого ошибка летела наверх и роняла джобу, BullMQ повторял её восемь раз — с тем же
+    // исходом, потому что имя поля от повтора не исправится.
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw rejected()
+    })
+    const r = await resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)
+    expect(r.status).toBe('misconfigured')
+    expect(r.reason).toContain('deal-field')
+    expect(r.candidates).toEqual([])
+  })
+
+  it('smart-field → misconfigured', async () => {
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw rejected()
+    })
+    const r = await resolveIntentCandidates(intent('smart-field', 'ЗАК-6001'), ctxCfg, call, deps)
+    expect(r.status).toBe('misconfigured')
+  })
+
+  it('smart-id → misconfigured', async () => {
+    const deps = fakeDeps()
+    deps.findCandidateById = vi.fn(async () => {
+      throw rejected()
+    })
+    const r = await resolveIntentCandidates(intent('smart-id', '4242'), ctxCfg, call, deps)
+    expect(r.status).toBe('misconfigured')
+  })
+
+  it('ЛЮБАЯ другая ошибка портала по-прежнему БРОСАЕТСЯ — от неё лечит повтор', async () => {
+    // ⚠ Несущее: недоступность, истёкший токен, отказ в правах обязаны валить джобу, иначе
+    // временный сбой превратится в тихое «ничего не нашли» и платёж уедет без привязки.
+    const deps = fakeDeps()
+    deps.findCandidateByField = vi.fn(async () => {
+      throw new PortalRestError('portal is down', 'ACCESS_DENIED', 'crm.item.list')
+    })
+    await expect(resolveIntentCandidates(intent('deal-field', 'ЗАК-6001'), ctxCfg, call, deps)).rejects.toThrow('portal is down')
+  })
+
+  it('НАШИ собственные запросы этой поблажки НЕ получают — дрейф в коде обязан падать громко', async () => {
+    // ⚠ У `invoice-number` имя поля зашито в НАШЕМ коде. Тот же `INVALID_ARG_VALUE` там означает
+    // регрессию у нас, и проглотив её, мы превратили бы поломку в «счетов не нашлось».
+    const deps = fakeDeps()
+    deps.findInvoicesByNumber = vi.fn(async () => {
+      throw rejected()
+    })
+    await expect(resolveIntentCandidates(intent('invoice-number', 'СЧ-1'), ctxCfg, call, deps)).rejects.toThrow(/not allowed in filter/)
   })
 })
 
