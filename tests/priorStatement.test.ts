@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   normalizePriorTransaction,
-  normalizePriorTransactionList
+  normalizePriorTransactionList,
+  priorDirection
 } from '~/utils/priorStatement'
 import type { PriorTransaction } from '~/utils/priorStatement'
 
@@ -134,5 +135,38 @@ describe('normalizePriorTransactionList', () => {
   it('returns [] for an empty/absent transaction array', () => {
     expect(normalizePriorTransactionList({ data: { transaction: [] } }, { account: 'A' })).toEqual([])
     expect(normalizePriorTransactionList({}, { account: 'A' })).toEqual([])
+  })
+})
+
+describe('направление операции у Приора — не одна строка «Debit»', () => {
+  const ctx = { account: 'BY26PJCB0001', currency: 'BYN' }
+  const tx = (over: Record<string, unknown>) => ({
+    transactionId: 'T1', amount: 10, currency: 'BYN', bookingDateTime: '2026-08-18T10:00:00', ...over
+  })
+
+  it('понимает регистр и форму ISO 20022 (DBIT/CRDT)', () => {
+    // ⚠ Прежде сравнение было строгим `=== 'Debit'`, и любое иное написание молча давало ПРИХОД.
+    // Это не потеря операции, а неверное её отображение: расход показывался приходом, и числа в
+    // карточке компании выглядели достоверными. Половина банковских API пишет DBIT/CRDT.
+    for (const flag of ['Debit', 'debit', 'DEBIT', 'DBIT', ' dbit ']) {
+      expect(priorDirection(tx({ creditDebitIndicator: flag }) as never, ctx.account), flag).toBe('debit')
+    }
+    for (const flag of ['Credit', 'credit', 'CRDT']) {
+      expect(priorDirection(tx({ creditDebitIndicator: flag }) as never, ctx.account), flag).toBe('credit')
+    }
+  })
+
+  it('индикатор непонятен — смотрим, не наш ли счёт плательщик', () => {
+    // ⚠ Независимый признак: если деньги списаны С НАШЕГО счёта, это расход, чем бы банк его ни
+    // пометил. Применяется ТОЛЬКО когда индикатор нечитаем — спорить с явным ответом банка нельзя.
+    const out = tx({ creditDebitIndicator: 'что-то новое', debtorAccount: { identification: ctx.account } })
+    expect(priorDirection(out as never, ctx.account)).toBe('debit')
+    const inc = tx({ creditDebitIndicator: '', creditorAccount: { identification: ctx.account } })
+    expect(priorDirection(inc as never, ctx.account)).toBe('credit')
+  })
+
+  it('явный индикатор ВАЖНЕЕ совпадения счёта', () => {
+    const both = tx({ creditDebitIndicator: 'Credit', debtorAccount: { identification: ctx.account } })
+    expect(priorDirection(both as never, ctx.account), 'угадали вопреки ответу банка').toBe('credit')
   })
 })
