@@ -32,7 +32,7 @@ vi.stubGlobal('$fetch', fetchMock)
  */
 function answerPoll(reply: unknown, opts: { reject?: boolean } = {}): void {
   fetchMock.mockImplementation(async (url: string) => {
-    if (String(url).startsWith('/api/import/status')) return { lastSyncAt: null }
+    if (String(url).startsWith('/api/import/status')) return { lastFetchAt: null }
     if (opts.reject) throw reply
     return reply
   })
@@ -100,10 +100,11 @@ describe('PollNowButton poll interaction', () => {
     expect(wrapper.find('[data-testid="poll-message"]').exists()).toBe(false)
   })
 
-  it('503 → говорит про ВРЕМЕННУЮ недоступность, а не про «выключено»', async () => {
-    // ⚠ Своего выключателя у ручного опроса больше нет (снят 2026-08-23): 503 теперь значит
-    // «очередь недоступна» — сбой на нашей стороне, который сам пройдёт. Прежний текст «опрос
-    // отключён» отправлял бы админа искать несуществующую настройку.
+  it('503 говорит про недоступность обработки — и не обещает, что пройдёт само', async () => {
+    // ⚠ Своего выключателя у ручного опроса больше нет (снят 2026-08-23): 503 значит «очередь
+    // недоступна». Прежний текст «опрос отключён» отправлял админа искать несуществующую
+    // настройку; обещание «повторите через пару минут» тоже неверно — Redis может быть не
+    // настроен на этом контуре вовсе, и тогда ждать бессмысленно (находка ревью).
     answerPoll({ statusCode: 503 }, { reject: true })
     const wrapper = await mountReady()
     await wrapper.find('[data-testid="poll-button"]').trigger('click')
@@ -113,6 +114,7 @@ describe('PollNowButton poll interaction', () => {
     expect(err.exists()).toBe(true)
     expect(err.text()).toMatch(/недоступ/i)
     expect(err.text(), 'снова говорим про выключатель, которого нет').not.toMatch(/отключ/i)
+    expect(err.text(), 'обещаем, что пройдёт само — а может и не пройти').not.toMatch(/через пару минут/i)
     expect(wrapper.find('[data-testid="poll-message"]').exists()).toBe(false)
   })
 
@@ -178,11 +180,11 @@ describe('забор за выбранный день (#592)', () => {
 
 describe('исход забора виден в портале (#592)', () => {
   /** Ответ статуса меняется после запуска — так выглядит завершившийся прогон. */
-  function answerWithRun(run: { lastSyncAt: string, operations: number, activitiesCreated: number }): void {
+  function answerWithRun(run: { lastFetchAt: string, lastFetchOps: number }): void {
     let started = false
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).startsWith('/api/import/status')) {
-        return started ? run : { lastSyncAt: null }
+        return started ? run : { lastFetchAt: null }
       }
       started = true
       return { enqueued: 1, accounts: 1, day: '2026-07-10' }
@@ -195,14 +197,14 @@ describe('исход забора виден в портале (#592)', () => {
     // след (worker), а интерфейс его читает.
     vi.useFakeTimers()
     try {
-      answerWithRun({ lastSyncAt: '2026-07-10T10:00:00.000Z', operations: 0, activitiesCreated: 0 })
+      answerWithRun({ lastFetchAt: '2026-07-10T10:00:00.000Z', lastFetchOps: 0 })
       const wrapper = await mountReady()
       const field = wrapper.findComponent({ name: 'DayField' })
       field.vm.$emit('update:modelValue', '2026-07-10')
       await nextTick()
       await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
       await flushPromises()
-      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(6000)
       await flushPromises()
       await nextTick()
       const out = wrapper.find('[data-testid="poll-outcome"]')
@@ -220,7 +222,7 @@ describe('исход забора виден в портале (#592)', () => {
     // этого теста.
     vi.useFakeTimers()
     try {
-      const old = { lastSyncAt: '2026-07-01T08:00:00.000Z', operations: 40, activitiesCreated: 40 }
+      const old = { lastFetchAt: '2026-07-01T08:00:00.000Z', lastFetchOps: 40 }
       fetchMock.mockImplementation(async (url: string) => {
         if (String(url).startsWith('/api/import/status')) return old
         return { enqueued: 1, accounts: 1, day: '2026-07-10' }
@@ -245,17 +247,68 @@ describe('исход забора виден в портале (#592)', () => {
   it('пришедшие операции названы числом', async () => {
     vi.useFakeTimers()
     try {
-      answerWithRun({ lastSyncAt: '2026-07-10T10:00:00.000Z', operations: 12, activitiesCreated: 9 })
+      answerWithRun({ lastFetchAt: '2026-07-10T10:00:00.000Z', lastFetchOps: 12 })
       const wrapper = await mountReady()
       const field = wrapper.findComponent({ name: 'DayField' })
       field.vm.$emit('update:modelValue', '2026-07-10')
       await nextTick()
       await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
       await flushPromises()
-      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(6000)
       await flushPromises()
       await nextTick()
       expect(wrapper.find('[data-testid="poll-outcome"]').text()).toContain('12')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('исход не выдумывается (находки ревью #596)', () => {
+  it('базовую отметку прочитать не удалось — исход НЕ показываем', async () => {
+    // ⚠ Без базовой отметки любое существующее значение сойдёт за наш исход: человеку покажут
+    // чужой прогон как итог его нажатия. Молчание тут честнее выдумки.
+    vi.useFakeTimers()
+    try {
+      let asked = 0
+      fetchMock.mockImplementation(async (url: string) => {
+        if (String(url).startsWith('/api/import/status')) {
+          asked++
+          if (asked === 1) throw new Error('нет связи')
+          return { lastFetchAt: '2026-07-01T08:00:00.000Z', lastFetchOps: 40 }
+        }
+        return { enqueued: 1, accounts: 1, day: '2026-07-10' }
+      })
+      const wrapper = await mountReady()
+      const field = wrapper.findComponent({ name: 'DayField' })
+      field.vm.$emit('update:modelValue', '2026-07-10')
+      await nextTick()
+      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(12_000)
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="poll-outcome"]').exists(), 'показали чужой прогон').toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('кнопки заблокированы, пока идёт ожидание исхода', async () => {
+    // ⚠ `polling` гаснет сразу после ответа сервера, а ожидание живёт ещё до 90 с. Без блокировки
+    // второе нажатие запускало бы второй цикл поверх первого, и они писали бы в один и тот же
+    // текст — с чужим днём.
+    vi.useFakeTimers()
+    try {
+      fetchMock.mockImplementation(async (url: string) => {
+        if (String(url).startsWith('/api/import/status')) return { lastFetchAt: null }
+        return { enqueued: 1, accounts: 1 }
+      })
+      const wrapper = await mountReady()
+      await wrapper.find('[data-testid="poll-button"]').trigger('click')
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="poll-button"]').attributes('disabled')).toBeDefined()
     } finally {
       vi.useRealTimers()
     }

@@ -24,6 +24,15 @@ export interface ImportRunSummary {
   chatNotified: number
   /** Human-readable errors from the last run (empty when clean). */
   errors: string[]
+  /**
+   * Когда мы в последний раз СПРОСИЛИ банк и сколько операций он отдал.
+   *
+   * ⚠ Отдельно от `lastSyncAt`/`operations`: те описывают ПРОГОН ОБРАБОТКИ, а он бывает только
+   * когда операции есть. Забор, вернувший ноль, — тоже событие, и без этой пары человек, нажавший
+   * «Забрать», не мог отличить «банк ответил, за этот день пусто» от «кнопка не работает».
+   */
+  lastFetchAt?: string | null
+  lastFetchOps?: number
   /** ISO timestamp of the next scheduled sync, if known. Reserved for a future
    *  "next sync in …" hint — not rendered yet (backend poller, #5). */
   nextSyncAt?: string | null

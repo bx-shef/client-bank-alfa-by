@@ -94,9 +94,16 @@ const minValue = computed(() => toCalendar(props.min))
           />
 
           <template #content>
+            <!-- ⚠ `prevent-deselect` обязателен: без него повторный клик по УЖЕ выбранному дню
+                 снимает выбор (штатное поведение календаря), и поле молча очищается. У забора это
+                 самый естественный жест — открыть и ткнуть в подсвеченный день, «подтверждаю».
+                 ⚠ `locale` календарю задаётся ОТДЕЛЬНО от поля: без него месяцы и дни недели
+                 приходят английскими, а неделя начинается с воскресенья. -->
             <B24Calendar
               :model-value="value"
               class="p-2"
+              locale="ru"
+              prevent-deselect
               :max-value="maxValue"
               :min-value="minValue"
               data-testid="day-calendar"

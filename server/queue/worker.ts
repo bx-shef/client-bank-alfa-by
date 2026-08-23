@@ -44,7 +44,7 @@ import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTrigg
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
-import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
+import { deleteImportResultForPortal, markBankFetch, saveImportResult } from '../utils/importResultStore'
 import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
 import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
@@ -184,7 +184,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // отличить его от «кнопка не работает». Ровно на этом застряла проверка забора за день.
       // ⚠ Пишем только при нуле: когда операции есть, полную сводку (записано/в чат) положит
       // `crm-sync`, и две записи гонялись бы за одну строку портала.
-      if (items.length === 0) await persistEmptyFetch(job)
+      await markFetchOutcome(job, items.length)
       return items
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
@@ -991,24 +991,17 @@ async function persistBatchResult(
 }
 
 /**
- * Отметить прогон, не принёсший ни одной операции.
+ * Отметить обращение к банку: когда спросили и сколько отдал.
  *
  * ⚠ Лучшие усилия и НИКОГДА не бросает: это учёт, а не работа. Провал записи не должен ронять
  * джобу забора — иначе диагностика ломала бы то, что диагностирует.
  */
-async function persistEmptyFetch(job: FetchJob): Promise<void> {
+async function markFetchOutcome(job: FetchJob, ops: number): Promise<void> {
   if (!job.account || isDemoAccount(job.account)) return
   try {
-    await saveImportResult(dbQuery, job.memberId, {
-      state: 'ok',
-      lastSyncAt: new Date().toISOString(),
-      operations: 0,
-      activitiesCreated: 0,
-      chatNotified: 0,
-      errors: []
-    })
+    await markBankFetch(dbQuery, job.memberId, ops)
   } catch (e) {
-    fetchLog.error(`import_result save failed (empty fetch), portal ${job.memberId}: ${(e as Error)?.message}`)
+    fetchLog.error(`fetch mark failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 

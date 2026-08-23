@@ -100,6 +100,7 @@ function clear(): void {
               :model-value="value"
               class="p-2"
               range
+              locale="ru"
               :number-of-months="2"
               :max-value="maxValue"
               data-testid="day-range-calendar"

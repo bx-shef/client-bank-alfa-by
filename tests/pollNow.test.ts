@@ -156,6 +156,16 @@ describe('точечный забор за выбранный день (#592)', 
     }
   })
 
+  it('кулдаун применяется и к забору за день', async () => {
+    // ⚠ Мутация из ревью: `if (!day) { …claimSlot… }` снимала кулдаун именно с забора за день, и
+    // весь набор оставался зелёным — оба прежних теста кулдауна ходили БЕЗ дня. То есть слой,
+    // который мы называем защитой от долбёжа, не был проверен там, где им пользуются.
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ claimSlot: async () => false, enqueue }), { ...input, day: '2026-07-10' })
+    expect(r.status).toBe(429)
+    expect(enqueue, 'забор за день прошёл мимо кулдауна').not.toHaveBeenCalled()
+  })
+
   it('сегодняшний день разрешён', async () => {
     const r = await handlePollNow(deps(), { ...input, day: '2026-07-17' })
     expect(r.status).toBe(200)
