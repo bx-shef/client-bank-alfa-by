@@ -44,6 +44,20 @@ export interface BankToken {
    * the only date the bank ever gave us.
    */
   consentExpiresAt?: number
+  /**
+   * Идентификатор ГРАНТА банка, общий для всех счетов одного подключения (#23-#25).
+   *
+   * Согласие банк выдаёт на НАБОР счетов клиента, поэтому одно прохождение OAuth должно давать
+   * столько строк, сколько счетов админ выбрал. Общий грант — единственный способ сделать это
+   * безопасно: банк РОТИРУЕТ refresh при каждом обновлении, и две независимые строки с одной и той
+   * же парой сожгли бы токен друг друга (первая обновилась — у второй на руках мёртвый refresh).
+   * Поэтому обновление сериализуется ЛОКОМ ПО ГРАНТУ и пишет ротированную пару во все его строки.
+   *
+   * ⚠ Пустая строка — «грант не размечен» (подключения, заведённые до этой правки), и это НЕ
+   * признак общности: сравнение по пустому значению склеило бы все старые строки портала в один
+   * грант и разослало бы им чужие токены. Всякое сравнение обязано нести `<> ''`.
+   */
+  grantId?: string
 }
 
 /**
@@ -60,8 +74,8 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
   await query(
     `INSERT INTO bank_tokens
        (member_id, provider, account_key, access_token, refresh_token_enc, expires_at,
-      consent_expires_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+      consent_expires_at, grant_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
      ON CONFLICT (member_id, provider, account_key) DO UPDATE SET
        access_token       = EXCLUDED.access_token,
        refresh_token_enc  = EXCLUDED.refresh_token_enc,
@@ -73,6 +87,12 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
        consent_expires_at = CASE WHEN EXCLUDED.consent_expires_at > 0
                                  THEN EXCLUDED.consent_expires_at
                                  ELSE bank_tokens.consent_expires_at END,
+       -- Тем же правилом, что и срок согласия: неизвестное не затирает известное. Переподключение
+       -- без гранта (старый вызывающий) не должно РАСКЛЕИВАТЬ уже размеченное подключение — иначе
+       -- счета одного согласия снова начали бы обновляться каждый со своей копией refresh.
+       grant_id           = CASE WHEN EXCLUDED.grant_id <> ''
+                                 THEN EXCLUDED.grant_id
+                                 ELSE bank_tokens.grant_id END,
        updated_at         = now()`,
     // ⚠ An EMPTY refresh token is stored as a LITERAL empty string — NOT encrypted, and NOT SQL
     // NULL. Encrypting '' yields a perfectly non-empty blob (`iv:tag:` with an empty ciphertext
@@ -91,7 +111,7 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
     // EXISTING column's nullability on a live table is a different and far riskier operation.)
     [token.memberId, token.provider, token.accountKey, token.accessToken,
       token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt,
-      token.consentExpiresAt ?? 0]
+      token.consentExpiresAt ?? 0, token.grantId ?? '']
   )
 }
 
@@ -126,13 +146,24 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
  */
 export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): Promise<boolean> {
   const rows = await query(
-    `UPDATE bank_tokens
+    // ⚠ ЗАПИСЬ ИДЁТ ВО ВСЕ СЧЕТА ГРАНТА, а не только в тот, по которому нас позвали (#23). Банк
+    // ротирует refresh при каждом обновлении: обнови мы одну строку, у остальных счетов того же
+    // согласия на руках остался бы СГОРЕВШИЙ refresh, и они умерли бы по одному на своих тиках —
+    // молча, ночью, с симптомом «подключение вдруг перестало работать» (#489).
+    //
+    // ⚠ Одним оператором, а не «прочитать грант → обновить по гранту»: между двумя запросами строку
+    // могли удалить или переразметить, и второй записал бы токены не туда, куда смотрел первый.
+    // `<> ''` обязательна — пустой грант это «не размечено», а не «общий» (см. `grantId`).
+    `UPDATE bank_tokens t
         SET access_token      = $4,
             refresh_token_enc = $5,
             expires_at        = $6,
             updated_at        = now()
-      WHERE member_id = $1 AND provider = $2 AND account_key = $3
-      RETURNING member_id`,
+       FROM bank_tokens src
+      WHERE src.member_id = $1 AND src.provider = $2 AND src.account_key = $3
+        AND t.member_id = src.member_id AND t.provider = src.provider
+        AND (t.id = src.id OR (src.grant_id <> '' AND t.grant_id = src.grant_id))
+      RETURNING t.member_id`,
     // An empty refresh is a LITERAL empty string — not NULL, not ciphertext — for exactly the
     // reasons spelled out in `saveBankToken` (encrypting '' yields a non-empty blob, which makes
     // the `has_refresh` probe answer true for an account that cannot be refreshed at all).
@@ -195,14 +226,18 @@ function rowToBankToken(row: Record<string, unknown>): BankToken {
     // отдавал бы токен без срока согласия, а `saveBankToken` при переподключении получил бы
     // `undefined` → 0 → «дата неизвестна». То есть знание о сроке терялось бы на каждом
     // round-trip, и предупреждение «согласие истекает» просто не появлялось бы (#503).
-    consentExpiresAt: Number(row.consent_expires_at ?? 0)
+    consentExpiresAt: Number(row.consent_expires_at ?? 0),
+    // По той же причине, что и срок согласия выше: не прочитаешь — и `ensureBankToken` возьмёт лок
+    // по СЧЁТУ вместо гранта, то есть счета одного согласия снова начнут обновляться параллельно.
+    grantId: String(row.grant_id ?? '')
   }
 }
 
 /** Load one connected account's tokens (decrypting refresh), or `null` if not connected. */
 export async function getBankToken(query: QueryFn, memberId: string, provider: BankProviderId, accountKey: string): Promise<BankToken | null> {
   const rows = await query(
-    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at
+    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at,
+            grant_id
        FROM bank_tokens WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
     [memberId, provider, accountKey]
   )
@@ -216,7 +251,8 @@ export async function getBankToken(query: QueryFn, memberId: string, provider: B
  *  ones — unlike `getBankToken` (a specific requested account fails loud). */
 export async function listBankTokensForPortal(query: QueryFn, memberId: string): Promise<BankToken[]> {
   const rows = await query(
-    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at
+    `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at,
+            grant_id
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
     [memberId]
   )
@@ -309,6 +345,9 @@ export interface BankAccountInfo extends BankAccountRef {
   lastAttemptAt: number
   /** Epoch ms the BANK'S CONSENT lapses (#503). `0` — unknown (Alfa grants none), not expired. */
   consentExpiresAt: number
+  /** Грант банка, общий для счетов одного подключения (#23). `''` — подключение не размечено
+   *  (заведено до этой правки); интерфейс по нему группирует счета в одно «подключение». */
+  grantId: string
 }
 
 /** One portal's connected accounts WITH freshness, for the settings UI (#404). Deliberately does
@@ -321,7 +360,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused,
+            poll_paused, grant_id,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
@@ -341,6 +380,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    grantId: String(r.grant_id ?? ''),
     pollPaused: r.poll_paused === true
   }))
 }
@@ -357,7 +397,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused,
+            poll_paused, grant_id,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens ORDER BY updated_at ASC`,
@@ -375,6 +415,7 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    grantId: String(r.grant_id ?? ''),
     pollPaused: r.poll_paused === true
   }))
 }
@@ -515,6 +556,76 @@ export async function renameBankTokenAccount(
     throw e
   }
   return rows.length > 0 ? 'renamed' : 'not-found'
+}
+
+/**
+ * Исход добавления счёта к уже существующему подключению (#23).
+ *   `added`     — счёт заведён и делит грант с исходной строкой;
+ *   `gone`      — исходной строки нет (подключение отключили, пока смотрели на список);
+ *   `stale`     — строка есть, но её `account_key` уже НЕ тот, что видел нажавший;
+ *   `conflict`  — такой счёт у портала в этом банке уже подключён;
+ *   `unmarked`  — у исходной строки нет гранта (подключение заведено до #23), делить нечего.
+ */
+export type AddAccountOutcome = 'added' | 'gone' | 'stale' | 'conflict' | 'unmarked'
+
+/**
+ * Добавить ЕЩЁ ОДИН счёт к существующему подключению банка (#23): согласие банка покрывает набор
+ * счетов клиента, поэтому второй, третий и шестой счёт не требуют повторного входа владельца в
+ * интернет-банк — им нужна лишь своя строка под тем же грантом.
+ *
+ * Адресуется тем же НЕИЗМЕНЯЕМЫМ `id` и с той же сверкой `account_key`, что удаление (#517) и
+ * пауза (#576), и по той же причине: ключ меняется при выборе счёта, поэтому адрес из отрисованного
+ * списка может описывать уже другое подключение.
+ *
+ * ⚠ ЛОК НЕ БЕРЁТСЯ, и это не забывчивость. Спор за живую строку тут не возникает: исходная строка
+ * только ЧИТАЕТСЯ (одним и тем же оператором, то есть неразделимо с записью), а пишется новая, за
+ * которую пока никто не борется. Обновление токена, идущее параллельно, запишет ротированную пару
+ * во все строки гранта — включая нашу, если она уже вставлена, и не включая, если ещё нет; во
+ * втором случае новая строка получает ту же пару, что видела исходная, то есть ту, которую банк ещё
+ * не ротировал ЛИБО уже ротировал вместе с исходной. Разойтись они не могут: обе берутся из одной
+ * строки одним чтением.
+ *
+ * ⚠ `updated_at` новой строки — `now()`, а НЕ копия исходного. Колонка означает «когда мы последний
+ * раз держали свежую пару», и пара здесь ровно та же, что у исходной строки, — но её возраст мы
+ * знаем как раз по исходной. Копировать чужой штамп было бы честнее, однако keep-alive обновляет
+ * грант ЦЕЛИКОМ по самой старой его строке, поэтому лишний свежий штамп ничего не сдвигает, а
+ * простая `now()` не даёт новой строке выглядеть протухшей раньше, чем у неё вообще была попытка.
+ */
+export async function addBankAccountToGrant(
+  query: QueryFn, memberId: string, sourceId: number, expectedAccountKey: string, accountKey: string
+): Promise<AddAccountOutcome> {
+  const src = await query(
+    `SELECT account_key, grant_id, provider FROM bank_tokens WHERE member_id = $1 AND id = $2`,
+    [memberId, sourceId]
+  )
+  const row = src[0]
+  if (!row) return 'gone'
+  if (String(row.account_key) !== expectedAccountKey) return 'stale'
+  // Пустой грант — «не размечено», а не «общий»: разделить нечего, и подставить сюда пустую строку
+  // значило бы склеить с ней все прочие неразмеченные подключения портала (см. `grantId`).
+  if (String(row.grant_id ?? '') === '') return 'unmarked'
+  if (String(row.account_key) === accountKey) return 'conflict'
+
+  try {
+    const rows = await query(
+      // INSERT … SELECT: секреты копируются ВНУТРИ базы и ни на шаг не покидают её — расшифровывать
+      // и перешифровывать их в процессе не требуется, поэтому и незачем.
+      `INSERT INTO bank_tokens
+         (member_id, provider, account_key, access_token, refresh_token_enc, expires_at,
+          consent_expires_at, grant_id, last_attempt_at, poll_paused, updated_at)
+       SELECT member_id, provider, $3, access_token, refresh_token_enc, expires_at,
+              consent_expires_at, grant_id, 0, false, now()
+         FROM bank_tokens WHERE member_id = $1 AND id = $2
+       RETURNING member_id`,
+      [memberId, sourceId, accountKey]
+    )
+    // Ноль строк — исходную удалили между чтением и вставкой. Это `gone`, а не молчаливый успех.
+    return rows.length > 0 ? 'added' : 'gone'
+  } catch (e) {
+    // 23505 = unique_violation по (member_id, provider, account_key): такой счёт уже подключён.
+    if ((e as { code?: string })?.code === '23505') return 'conflict'
+    throw e
+  }
 }
 
 /** Delete ALL of a portal's bank tokens on ONAPPUNINSTALL (a removed app keeps no data).

@@ -61,6 +61,12 @@ export interface PausePollDeps extends BankAccountsDeps {
  */
 export type RenameOutcome = 'renamed' | 'not-found' | 'conflict' | 'busy'
 
+export interface AddAccountDeps extends BankAccountsDeps {
+  add: (
+    memberId: string, sourceId: number, expectedAccountKey: string, accountKey: string
+  ) => Promise<'added' | 'gone' | 'stale' | 'conflict' | 'unmarked'>
+}
+
 export interface SetAccountDeps extends BankAccountsDeps {
   rename: (memberId: string, provider: BankProviderId, fromKey: string, toKey: string) => Promise<RenameOutcome>
 }
@@ -81,6 +87,15 @@ export interface DisconnectInput extends BankAccountsInput {
 export interface PausePollInput extends DisconnectInput {
   /** `true` — приостановить автоопрос, `false` — возобновить. */
   paused: boolean
+}
+
+export interface AddAccountInput extends BankAccountsInput {
+  /** Неизменяемый адрес ИСХОДНОЙ строки — подключения, к которому добавляем счёт (#517). */
+  id: number
+  /** Номер счёта исходной строки — ОЖИДАНИЕ вызывающего, как при удалении и паузе. */
+  sourceAccountKey: string
+  /** Номер добавляемого счёта. */
+  accountKey: string
 }
 
 export interface SetAccountInput extends BankAccountsInput {
@@ -190,6 +205,54 @@ export async function handleSetBankAccount(deps: SetAccountDeps, input: SetAccou
   // повтор, — и наоборот, приучить повторять там, где повтор не поможет.
   if (res === 'busy') {
     return { status: 503, body: { error: 'connection is being refreshed right now, retry in a few seconds' } }
+  }
+  return { status: 200, body: { ok: true } }
+}
+
+/**
+ * Добавить ЕЩЁ ОДИН счёт к существующему подключению банка (#23).
+ *
+ * ⚠ Зачем ручка вообще: согласие банк выдаёт на НАБОР счетов клиента, а строка у нас была одна на
+ * счёт, и завести второй счёт можно было только повторным прохождением OAuth — то есть очередным
+ * походом ВЛАДЕЛЬЦА СЧЁТА в интернет-банк. У клиента с шестью счетами это шесть походов за тем, на
+ * что банк уже дал одно разрешение.
+ *
+ * ⚠ Новый счёт НЕ проверяется у банка на месте, и это осознанно: у нас нет дешёвого способа
+ * спросить «покрывает ли согласие этот номер» — списки счетов отдаются одним запросом на банк и
+ * стоят лимита. Ошибка тут дёшева и видна: несуществующий счёт просто не даст операций, а сверка
+ * счетов (`/api/bank/matrix`) покажет его как «в банке такого нет».
+ *
+ * Адресация и разбор исходов — те же, что у отключения (#517) и паузы (#576): неизменяемый `id`
+ * исходной строки плюс сверка её номера как ОЖИДАНИЯ вызывающего.
+ */
+export async function handleAddBankAccount(deps: AddAccountDeps, input: AddAccountInput): Promise<BankAccountsResult> {
+  const auth = await authorize(deps, input)
+  if ('error' in auth) return auth.error
+
+  const id = Number(input.id)
+  const sourceAccountKey = input.sourceAccountKey?.trim() ?? ''
+  const accountKey = input.accountKey?.trim() ?? ''
+  if (!Number.isInteger(id) || id <= 0) return { status: 400, body: { error: 'id is required' } }
+  if (!sourceAccountKey) return { status: 400, body: { error: 'sourceAccountKey is required' } }
+  if (!ACCOUNT_KEY_RE.test(accountKey)) {
+    return { status: 400, body: { error: 'a valid account number is required' } }
+  }
+  // ⚠ Добавлять счёт к НЕЗАВЕРШЁННОМУ подключению нельзя: у него самого счёт ещё не выбран, и
+  // «добавить второй» к строке без первого — это не добавление, а обходной путь мимо `set-account`,
+  // который единственный умеет превращать временный ключ в настоящий.
+  if (isPendingAccountKey(sourceAccountKey)) {
+    return { status: 409, body: { error: 'choose the account of this connection first' } }
+  }
+
+  const res = await deps.add(auth.memberId, id, sourceAccountKey, accountKey)
+  if (res === 'conflict') return { status: 409, body: { error: 'this account is already connected' } }
+  if (res === 'gone') return { status: 404, body: { error: 'connection not found' } }
+  if (res === 'stale') return { status: 409, body: { error: 'the list is out of date, refresh it' } }
+  // ⚠ Подключения, заведённые ДО #23, гранта не несут, и делить им нечего: скопировать им токены
+  // «просто так» значило бы завести вторую строку с той же парой, которую банк ротирует, — то есть
+  // своими руками сделать то, от чего грант и защищает. Честный ответ — переподключить.
+  if (res === 'unmarked') {
+    return { status: 409, body: { error: 'this connection predates multi-account support, reconnect it first' } }
   }
   return { status: 200, body: { ok: true } }
 }

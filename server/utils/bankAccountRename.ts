@@ -18,6 +18,14 @@ export interface LockedRenameDeps {
   rename: (
     q: QueryFn, memberId: string, provider: BankProviderId, fromKey: string, toKey: string
   ) => Promise<'renamed' | 'not-found' | 'conflict'>
+  /**
+   * Грант подключения, если он размечен (#23) — по нему берётся лок, когда счета делят согласие.
+   *
+   * ⚠ Читается ДО лока, и это безопасно: грант строки не меняется никогда — его ставит только
+   * OAuth-колбэк при создании, а переименование трогает `account_key`. Худшее, что успевает
+   * случиться, — строку удалили, и тогда переименование само вернёт `not-found`.
+   */
+  grantOf?: (memberId: string, provider: BankProviderId, accountKey: string) => Promise<string>
 }
 
 /**
@@ -37,13 +45,17 @@ export function makeLockedRename(deps: LockedRenameDeps) {
   return async function rename(
     memberId: string, provider: BankProviderId, fromKey: string, toKey: string
   ): Promise<RenameOutcome> {
+    // Пустая строка (нет функции / грант не размечен) даёт прежний лок по счёту.
+    const grantId = (await deps.grantOf?.(memberId, provider, fromKey)) ?? ''
     try {
       // ⚠ Ключ — по `fromKey`. Это НЕ придирка: обновляющая сторона держит строку под тем ключом,
       // который видит СЕЙЧАС, то есть под старым. Лок по `toKey` был бы взят добросовестно и не
       // пересёкся бы с ней ни разу — вся защита превратилась бы в накладные расходы, а дефект
       // остался бы на месте, теперь уже с тестом, утверждающим обратное.
       return await deps.withLock(
-        bankRefreshLockKey(memberId, provider, fromKey),
+        // ⚠ Грант ВАЖНЕЕ ключа счёта, когда он есть: обновление берёт лок по гранту (#23), и лок
+        // по счёту не пересёкся бы с ним ни разу — та же дыра, что и с `toKey` абзацем выше.
+        bankRefreshLockKey(memberId, provider, fromKey, grantId),
         q => deps.rename(q, memberId, provider, fromKey, toKey),
         { lockWait: BANK_REFRESH_LOCK_WAIT }
       )

@@ -225,7 +225,7 @@ export async function ensureBankToken(
   // нельзя, а повтор в одном клике. ⚠ Поле опционально, поэтому «забыл» компилятор не ловит —
   // ловит структурный тест по `server/api/**` (`tests/bankRefreshLock.test.ts`), и он же честно
   // слеп к провязке через модуль в `server/utils`.
-  return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey), async (q) => {
+  return deps.withLock(bankRefreshLockKey(token.memberId, token.provider, token.accountKey, token.grantId ?? ''), async (q) => {
     // Re-read INSIDE the lock — another worker may have refreshed (or the account been
     // disconnected) while we waited. No stored row → don't refresh+save (would resurrect a
     // disconnected account); hand back the passed token, the fetch will fail cleanly.

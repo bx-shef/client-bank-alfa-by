@@ -96,3 +96,32 @@ describe('makeLockedRename', () => {
     }
   })
 })
+
+describe('#23 при общем гранте лок берётся по гранту', () => {
+  it('размеченное подключение — ключ гранта, а не счёта', async () => {
+    // ⚠ Обновление токена берёт лок ПО ГРАНТУ (#23). Лок по счёту не пересёкся бы с ним ни разу —
+    // ровно та же дыра, что и лок по `toKey` выше, и такая же невидимая снаружи.
+    const { keys, made } = deps({ grantOf: async () => 'G1' })
+    await made('m1', 'alfa-by', '~pending:n1', 'BY01')
+    expect(keys).toEqual([bankRefreshLockKey('m1', 'alfa-by', '~pending:n1', 'G1')])
+    expect(keys[0]).toContain('G1')
+  })
+
+  it('грант читается по СТАРОМУ ключу — по новому строки ещё нет', async () => {
+    const seen: string[] = []
+    const { made } = deps({
+      grantOf: async (_m, _p, accountKey) => {
+        seen.push(accountKey)
+        return 'G1'
+      }
+    })
+    await made('m1', 'alfa-by', '~pending:n1', 'BY01')
+    expect(seen).toEqual(['~pending:n1'])
+  })
+
+  it('без функции (или без гранта) — прежний ключ по счёту', async () => {
+    const { keys, made } = deps({ grantOf: async () => '' })
+    await made('m1', 'alfa-by', '~pending:n1', 'BY01')
+    expect(keys).toEqual([bankRefreshLockKey('m1', 'alfa-by', '~pending:n1')])
+  })
+})

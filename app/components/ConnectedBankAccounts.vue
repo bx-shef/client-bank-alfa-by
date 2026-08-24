@@ -25,7 +25,10 @@ const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), 
 // же, и оставить одну устаревшей — значит показать противоречие самому себе.
 const emit = defineEmits<{ changed: [] }>()
 
-const { accounts, loading, loaded, removing, saving, pausing, pausingAll, error, load, disconnect, setPaused, setPausedAll, setAccount, rowKey } = useBankAccounts()
+const {
+  accounts, loading, loaded, removing, saving, pausing, pausingAll, adding, error,
+  load, disconnect, setPaused, setPausedAll, setAccount, addAccount, rowKey
+} = useBankAccounts()
 const route = useRoute()
 
 /** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
@@ -83,6 +86,31 @@ watch(accounts, () => {
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
+
+/**
+ * У какой строки раскрыт блок «добавить счёт» (#23).
+ *
+ * ⚠ Свёрнут по умолчанию намеренно. Подавляющему большинству порталов хватает одного счёта, а
+ * поле ввода рядом с рабочим подключением читалось бы как «здесь чего-то не хватает» — ровно тем
+ * же способом, каким вводило в заблуждение поле номера в форме подключения (снято по живому
+ * прогону 2026-08-14). Открывает его тот, кто действительно пришёл за вторым счётом.
+ */
+const expandingAdd = ref('')
+/** Черновики номеров ДОБАВЛЯЕМЫХ счетов (#23) — свои, чтобы не мешаться с выбором счёта (#407). */
+const addDrafts = ref<Record<string, string>>({})
+
+/**
+ * Может ли к этой строке добавляться счёт (#23).
+ *
+ * ⚠ Два запрета, и оба — не про интерфейс. У НЕЗАВЕРШЁННОГО подключения счёт ещё не выбран, и
+ * «добавить второй» к строке без первого было бы обходом `set-account`. У подключения БЕЗ ГРАНТА
+ * (заведено до #23) делить нечего: копия токенов означала бы вторую строку с парой, которую банк
+ * ротирует, то есть ровно тот дефект, от которого грант защищает. Сервер отвечает на оба, но
+ * показывать кнопку, ведущую в гарантированный отказ, — приучать не верить кнопкам.
+ */
+function canAddAccount(a: ConnectedBankAccount): boolean {
+  return !isPendingAccountKey(a.accountKey) && a.grantId !== ''
+}
 
 /** Which row is awaiting confirmation. Disconnect is destructive (imports stop), so it takes a
  *  deliberate second click rather than a native confirm() — the latter is blocked in some iframes. */
@@ -187,6 +215,15 @@ async function onAssign(a: ConnectedBankAccount, value?: string) {
   // Успех → строка перечитается уже с настоящим номером, черновик больше не нужен.
   if (await setAccount(a, value ?? drafts.value[key] ?? '')) {
     drafts.value[key] = ''
+    emit('changed')
+  }
+}
+
+async function onAdd(a: ConnectedBankAccount, value?: string) {
+  const key = rowKey(a)
+  if (await addAccount(a, value ?? addDrafts.value[key] ?? '')) {
+    addDrafts.value[key] = ''
+    expandingAdd.value = ''
     emit('changed')
   }
 }
@@ -374,6 +411,68 @@ defineExpose({ reload: load })
             >
               {{ a.accountKey }}
             </div>
+            <!-- Ещё один счёт того же согласия (#23). Согласие банк выдаёт на НАБОР счетов клиента,
+                 поэтому шестой счёт не должен стоить шестого входа владельца в интернет-банк.
+                 Свёрнуто по умолчанию: большинству порталов хватает одного счёта, а открытое поле
+                 рядом с рабочим подключением читалось бы как «здесь чего-то не хватает». -->
+            <B24Button
+              v-if="canAddAccount(a) && expandingAdd !== rowKey(a)"
+              label="Добавить счёт"
+              :aria-label="`Добавить счёт к подключению ${rowLabel(a)}`"
+              color="air-tertiary"
+              size="xs"
+              class="mt-1"
+              :data-testid="`add-account-open-${a.provider}`"
+              @click="expandingAdd = rowKey(a)"
+            />
+            <div
+              v-else-if="canAddAccount(a)"
+              class="mt-1 flex flex-wrap items-center gap-2"
+              :data-testid="`add-account-${a.provider}`"
+            >
+              <!-- Счета, которые назвал сам банк, — тот же клик вместо перепечатывания IBAN, что и
+                   при выборе счёта (#494). Уже привязанные отфильтрованы: сервер ответил бы 409. -->
+              <div
+                v-if="suggestionsFor(a).length"
+                class="flex w-full flex-wrap items-center gap-2"
+                data-testid="add-account-suggestions"
+              >
+                <span class="text-xs text-(--ui-color-base-3)">Банк отдал:</span>
+                <B24Button
+                  v-for="s in suggestionsFor(a)"
+                  :key="s.number"
+                  :label="s.currency ? `${s.number} · ${s.currency}` : s.number"
+                  :aria-label="`Добавить счёт ${s.number}`"
+                  color="air-secondary-accent"
+                  size="xs"
+                  class="font-mono"
+                  :loading="adding === rowKey(a)"
+                  :disabled="adding === rowKey(a)"
+                  @click="onAdd(a, s.number)"
+                />
+              </div>
+              <B24Input
+                v-model="addDrafts[rowKey(a)]"
+                placeholder="BY00ALFA00000000000000000000"
+                class="w-full max-w-xs font-mono text-xs"
+                :aria-label="`Номер добавляемого счёта для ${providerLabel(a.provider)}`"
+              />
+              <B24Button
+                label="Добавить"
+                color="air-primary"
+                size="xs"
+                :loading="adding === rowKey(a)"
+                :disabled="adding === rowKey(a)"
+                @click="onAdd(a)"
+              />
+              <B24Button
+                label="Отмена"
+                color="air-tertiary"
+                size="xs"
+                :disabled="adding === rowKey(a)"
+                @click="expandingAdd = ''"
+              />
+            </div>
             <div
               v-if="connectedAgo(a.connectedAt)"
               class="text-xs text-(--ui-color-base-3)"
@@ -453,6 +552,13 @@ defineExpose({ reload: load })
     <HelpLink
       anchor="pause-gap"
       label="Что будет с операциями за время паузы?"
+    />
+    <!-- ⚠ Ссылка стоит ЗДЕСЬ, у списка подключений, а не в общей справке: именно тут человек и
+         застревает, обнаружив, что счетов у компании несколько, а строка одна. Справка объясняет
+         и обратный ход — как исправить ошибочно указанный счёт, не теряя доступ у остальных. -->
+    <HelpLink
+      anchor="many-accounts"
+      label="У компании несколько счетов?"
     />
     <!-- ⚠ Молчать об этом нельзя. Приложение забирает выписку за ОКНО (по умолчанию сутки), а не
          «всё, что накопилось»: после паузы длиннее окна пропущенные дни не подтянутся НИКОГДА и

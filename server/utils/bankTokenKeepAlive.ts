@@ -152,6 +152,27 @@ export function selectBankAccountsNearExpiry(
   const unrefreshable: BankAccountRef[] = []
   const expired: BankAccountRef[] = []
   let truncated = false
+  /**
+   * Гранты, по которым обновление на этом прогоне УЖЕ запланировано (#23).
+   *
+   * ⚠ Счета одного согласия делят пару токенов, и банк РОТИРУЕТ refresh при каждом обновлении.
+   * Взять в батч шесть строк одного гранта — значит шесть раз потратить один refresh: первый обмен
+   * удастся, остальные пять пойдут со сгоревшим и получат `invalid_grant`. Внешне это выглядит как
+   * «подключение вдруг отвалилось», причём тем вернее, чем больше счетов у клиента. Обновление
+   * пишет ротированную пару СРАЗУ ВО ВСЕ строки гранта (`updateBankTokenSecrets`), поэтому одной
+   * строки на грант и достаточно.
+   *
+   * ⚠ Дедуп стоит ТОЛЬКО на действии (обновить), а не на учёте: `expired`/`unrefreshable` — это
+   * сводка «сколько подключений в таком состоянии», и схлопывать в ней счета значило бы занижать
+   * число строк, которые человеку предстоит чинить.
+   */
+  const plannedGrants = new Set<string>()
+  /** `true` — по этому гранту обновление уже запланировано (пустой грант не группирует). */
+  const grantTaken = (row: BankAccountInfo): boolean =>
+    row.grantId !== '' && plannedGrants.has(row.grantId)
+  const takeGrant = (row: BankAccountInfo): void => {
+    if (row.grantId !== '') plannedGrants.add(row.grantId)
+  }
   const ordered = [...rows].sort((a, b) => a.connectedAt - b.connectedAt)
   for (const row of ordered) {
     // ⚠ `pollPaused` переносится, но продление НА НЕГО НЕ СМОТРИТ (#576) — и это условие задачи,
@@ -196,13 +217,20 @@ export function selectBankAccountsNearExpiry(
       // `expired=2, refreshed=0, failed=0`, то есть банк не спросили ни разу. Срок — НАША оценка,
       // а правду знает только банк: ошибка в нашу сторону стоит одного неудачного запроса, ошибка
       // в другую — похода владельца счёта в интернет-банк за тем, что не ломалось.
-      if (expiredRetryDue(row.lastAttemptAt, nowMs)) expiredRetry.push(ref)
+      if (expiredRetryDue(row.lastAttemptAt, nowMs) && !grantTaken(row)) {
+        expiredRetry.push(ref)
+        takeGrant(row)
+      }
       expired.push(ref)
       continue
     }
     if (age < threshold) continue
-    if (due.length < limit) due.push(ref)
-    else truncated = true
+    // Обновление по гранту уже запланировано — второй счёт того же согласия только сжёг бы refresh.
+    if (grantTaken(row)) continue
+    if (due.length < limit) {
+      due.push(ref)
+      takeGrant(row)
+    } else truncated = true
   }
   // Живые — первыми, просроченные — в остаток места. Обрезание считается по обоим спискам.
   const room = Math.max(0, limit - due.length)
