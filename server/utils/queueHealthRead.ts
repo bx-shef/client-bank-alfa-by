@@ -41,10 +41,17 @@ export interface RawFailedAt {
  * OAuth vocabulary as much as to Bitrix's, and a bank transport whose own credentials are refused
  * is OUR outage — filtering it out would hide the failure of every poll at once.
  *
- * ⚠ Known blind spot (follow-up in #426): `invalid_grant` across ALL portals at once is our
- * incident, not the tenants' — it means `B24_CLIENT_SECRET` was rotated. This filter hides it, and
- * — unlike an earlier note claimed — the stall rule does NOT catch it either: those jobs fail fast,
- * so the queue keeps draining and `oldestPendingAgeMs` stays small. It needs its own signal.
+ * ⚠ Known blind spot (follow-up in #426): `invalid_grant` across ALL portals at once would be our
+ * incident, not the tenants'. This filter hides it, and — unlike an earlier note claimed — the
+ * stall rule does NOT catch it either: those jobs fail fast, so the queue keeps draining and
+ * `oldestPendingAgeMs` stays small. It needs its own signal.
+ *
+ * ⚠ MEASURED 2026-08-24, correcting this very note: it used to say the mass case "means
+ * B24_CLIENT_SECRET was rotated". It does not. Probing the live OAuth server, a valid client_id
+ * with a WRONG secret answers `invalid_client` (HTTP 400); `invalid_grant` comes back only for a
+ * genuinely dead grant under the CORRECT secret. So secret rotation does not produce this shape —
+ * a mass `invalid_grant` has some other cause, and the reaper (#574) treats `invalid_grant` as a
+ * per-portal signal on that measured basis.
  */
 const PORTAL_SIDE_PATTERNS = [
   // Портал. `[\s_]` — Битрикс отдаёт и `ACCESS_DENIED`, и «Access denied».

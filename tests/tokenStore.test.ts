@@ -3,11 +3,15 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { SCHEMA_SQL } from '../server/db/client'
 import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
 import {
+  countRevokedPortals,
   deleteToken,
   getApplicationToken,
   getMemberIdByDomain,
   getToken,
+  countPortals,
+  markGrantRevoked,
   saveToken,
+  selectReapablePortals,
   updatePortalTokenSecrets
 } from '../server/utils/tokenStore'
 import type { PortalToken } from '../server/utils/tokenStore'
@@ -279,5 +283,140 @@ describe('SCHEMA_SQL ↔ queries', () => {
     // The tombstone block, matched as a unit so the PRIMARY KEY assertion binds to THIS
     // table (not portal_tokens): member_id PK backs deleteToken's ON CONFLICT (member_id).
     expect(SCHEMA_SQL).toMatch(/CREATE TABLE IF NOT EXISTS portal_tombstone \([^;]*member_id\s+TEXT PRIMARY KEY[^;]*deleted_ts\s+BIGINT NOT NULL/s)
+  })
+})
+
+// Отметка «грант мёртв» и выборка кандидатов на удаление (#574).
+//
+// ⚠ Проверяется САМ SQL, а не только возвращаемое значение. Здесь два инварианта, промах в каждом
+// из которых не падает и не виден: отметка не должна перезаписываться (иначе срок отодвигается
+// вечно и портал не стирается никогда), и она не должна трогать `updated_at` (иначе мёртвый портал
+// выпадает из выборки продления, перестаёт получать отказы — и уборщик сам себя выключает).
+describe('markGrantRevoked (#574)', () => {
+  it('ставит отметку ТОЛЬКО когда её ещё нет', async () => {
+    const { query, calls } = fakeQuery()
+    await markGrantRevoked(query, 'M1', 1_700_000_000_000)
+    const sql = calls[0]!.sql
+    expect(sql).toMatch(/UPDATE portal_tokens/)
+    expect(sql, 'без этого условия срок отодвигался бы каждым тиком').toMatch(/grant_revoked_at\s*=\s*0/)
+    expect(calls[0]!.params).toEqual(['M1', 1_700_000_000_000])
+  })
+
+  it('отметка НЕ штампует updated_at — иначе уборщик сам себя выключит', async () => {
+    // По `updated_at` выбираются порталы для продления (#175). Сдвинув его, мы выкинули бы мёртвый
+    // портал из выборки — то есть перестали бы получать отказы, по которым и считается срок.
+    const { query, calls } = fakeQuery()
+    await markGrantRevoked(query, 'M1', 1)
+    expect(calls[0]!.sql).not.toMatch(/updated_at/)
+  })
+})
+
+describe('selectReapablePortals / countRevokedPortals (#574)', () => {
+  it('берёт только помеченных и только старше границы, самых давних первыми', async () => {
+    const calls: { sql: string, params?: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      calls.push({ sql, params })
+      return [{ member_id: 'M1', grant_revoked_at: 111 }]
+    })
+    const rows = await selectReapablePortals(query, 999, 3)
+    expect(rows).toEqual([{ memberId: 'M1', revokedAtMs: 111 }])
+    const sql = calls[0]!.sql
+    expect(sql, 'неотмеченные не должны попадать в выборку').toMatch(/grant_revoked_at > 0/)
+    expect(sql).toMatch(/grant_revoked_at <= \$1/)
+    expect(sql, 'при упоре в потолок очередь должна двигаться, а не топтаться').toMatch(/ORDER BY grant_revoked_at ASC/)
+    expect(sql, 'без LIMIT ошибка классификации вернула бы всех клиентов разом').toMatch(/LIMIT \$2/)
+  })
+
+  it('LIMIT не может стать нулевым или отрицательным', async () => {
+    const calls: { sql: string, params?: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    })
+    await selectReapablePortals(query, 999, 0)
+    expect((calls[0]!.params as unknown[])[1]).toBe(1)
+    await selectReapablePortals(query, 999, -5)
+    expect((calls[1]!.params as unknown[])[1]).toBe(1)
+  })
+
+  it('строки без member_id отбрасываются, а не превращаются в удаление пустого id', async () => {
+    const query = vi.fn(async () => [{ member_id: '', grant_revoked_at: 1 }, { member_id: 'M2', grant_revoked_at: 2 }])
+    expect(await selectReapablePortals(query, 999, 3)).toEqual([{ memberId: 'M2', revokedAtMs: 2 }])
+  })
+
+  it('счётчик кандидатов считает по тому же условию', async () => {
+    const calls: { sql: string }[] = []
+    const query = vi.fn(async (sql: string) => {
+      calls.push({ sql })
+      return [{ n: 7 }]
+    })
+    expect(await countRevokedPortals(query, 999)).toBe(7)
+    expect(calls[0]!.sql).toMatch(/grant_revoked_at > 0 AND grant_revoked_at <= \$1/)
+  })
+})
+
+describe('#574: скоуп по порталу в SQL — не «параметр есть», а «он в WHERE»', () => {
+  // ⚠ Ревью замерило дыру: из `markGrantRevoked` можно было убрать `member_id = $1` из WHERE,
+  // оставив `memberId` в массиве параметров, и НИ ОДИН тест не падал — проверялись только
+  // `params`. В проде это значит: один портал поймал `invalid_grant`, а помечены мёртвыми ВСЕ
+  // живые разом, и всем запущен таймер до необратимого стирания.
+  function sqlOf(calls: { sql: string }[]): string {
+    return calls.map(c => c.sql).join('\n')
+  }
+
+  it('пометка адресована ОДНОМУ порталу', async () => {
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    })
+    await markGrantRevoked(query as unknown as QueryFn, 'M1', 1)
+    expect(sqlOf(calls), 'без скоупа пометка накрыла бы весь флот').toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+  })
+
+  it('снятие пометки ВШИТО в обновление токена, а не живёт отдельным запросом', async () => {
+    // ⚠ Отдельный запрос на залоченном соединении мог упасть, перевести транзакцию в aborted, и
+    // COMMIT молча стал бы ROLLBACK: токен у Б24 ротирован, а у нас не сохранён — портал сломан
+    // навсегда. Вшитое в тот же UPDATE условие рассинхронизировать нечем.
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return [{ member_id: 'M1' }]
+    })
+    await updatePortalTokenSecrets(query as unknown as QueryFn, {
+      memberId: 'M1', domain: 'p.bitrix24.by', accessToken: 'A', refreshToken: 'R',
+      expiresAt: 1, applicationToken: 'T'
+    })
+    expect(sqlOf(calls), 'успешное обновление обязано снимать отметку тем же запросом').toMatch(/grant_revoked_at\s*=\s*0/)
+  })
+
+  it('переустановка портала СНИМАЕТ отметку — сильнейшее доказательство жизни', async () => {
+    // Портал исчез без события, метка осталась; клиент переустановил приложение и настраивает его.
+    // Пока банк не подключён, серверных REST-вызовов нет, рефреша нет — и без сброса в апсерте
+    // свежепоставленный портал дожил бы до порога с чужой меткой и был бы стёрт.
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    })
+    await saveToken(query as unknown as QueryFn, {
+      memberId: 'M1', domain: 'p.bitrix24.by', accessToken: 'A', refreshToken: 'R',
+      expiresAt: 1, applicationToken: 'T'
+    })
+    const upsert = calls.map(c => c.sql).find(x => /ON CONFLICT/.test(x)) ?? ''
+    expect(upsert).toMatch(/grant_revoked_at\s*=\s*0/)
+  })
+
+  it('countPortals считает ВЕСЬ флот, а не только живых', async () => {
+    // Знаменатель предохранителя: вычти из него уже помеченных — и он полз бы вверх по доле с
+    // каждой пометкой, то есть предохранитель слабел бы ровно по мере развития аварии.
+    const calls: { sql: string }[] = []
+    const query = vi.fn(async (sql: string) => {
+      calls.push({ sql })
+      return [{ n: 7 }]
+    })
+    const n = await countPortals(query as unknown as QueryFn)
+    expect(n).toBe(7)
+    expect(sqlOf(calls)).not.toMatch(/grant_revoked_at/)
   })
 })

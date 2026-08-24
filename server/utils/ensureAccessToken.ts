@@ -15,8 +15,11 @@
 
 import { buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
 import { sdkRefreshTransport } from './b24Sdk'
+import { dbQuery } from '../db/client'
 import { withAdvisoryLock } from './dbLock'
-import { getToken, updatePortalTokenSecrets } from './tokenStore'
+import { portalErrorCode } from './portalError'
+import { isGrantDead } from '../../app/utils/portalReaper'
+import { getToken, markGrantRevoked, updatePortalTokenSecrets } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
 
@@ -39,6 +42,19 @@ export interface RefreshDeps {
   saveToken: (q: QueryFn, token: PortalToken) => Promise<boolean>
   /** POST the refresh body to B24 OAuth and return the raw JSON. */
   postRefresh: (body: string) => Promise<unknown>
+  /**
+   * Mark the grant as dead (#574). Takes NO `q` — and that is the whole point.
+   *
+   * ⚠ MEASURED BUG, fixed here: this used to be called with the locked connection `q`, right
+   * before `throw e`. `withAdvisoryLock` wraps the callback in BEGIN/COMMIT and ROLLBACKs on
+   * throw, so the UPDATE was rolled back by the very throw that followed it — the column could
+   * NEVER become non-zero, and the whole reaper was inert. Verified against a real Postgres.
+   *
+   * ⚠ So the mark MUST go on its own connection, outside the lock transaction. That is safe: the
+   * mark is idempotent (`WHERE grant_revoked_at = 0`) and touches a column no other writer in
+   * the refresh path competes for.
+   */
+  markGrantRevoked?: (memberId: string, atMs: number) => Promise<void>
 }
 
 const liveDeps: RefreshDeps = {
@@ -46,6 +62,8 @@ const liveDeps: RefreshDeps = {
   withLock: withAdvisoryLock,
   loadToken: getToken,
   saveToken: updatePortalTokenSecrets,
+  // Own connection from the pool, NOT the locked one — see the field's doc comment.
+  markGrantRevoked: (memberId, atMs) => markGrantRevoked(dbQuery, memberId, atMs),
   // Refresh through the jssdk transport (`B24OAuth.auth.refreshAuth`), bounded (15s) so a hung
   // OAuth call can't pin the advisory lock + pooled connection (the whole refresh runs in the lock).
   postRefresh: sdkRefreshTransport({ timeoutMs: 15_000 })
@@ -97,7 +115,28 @@ export async function ensureAccessToken(
     const shouldRefresh = opts.force ? stored.accessToken === token.accessToken : needsRefresh(stored, deps.now())
     if (!shouldRefresh) return stored
 
-    const r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
+    // Observing a dead grant here covers the keep-alive path ONLY (#574). This is NOT the single
+    // point every portal-token refresh flows through — that claim was wrong, and the header of
+    // this very file already says otherwise: the crm-sync hot path refreshes reactively inside the
+    // SDK, bypassing us. That path marks the grant itself (`makeSdkRestCall`, #574), which is
+    // where an uninstalled-but-still-polled portal actually gets hit first.
+    let r: ReturnType<typeof parseRefreshResponse>
+    try {
+      r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
+    } catch (e) {
+      // ⚠ BEST EFFORT, and it never replaces the original error: callers rely on a dead grant
+      // THROWING (the job fails, the retry is clean). Swapping the exception for a write failure
+      // would turn a legible failure into a puzzling one.
+      if (isGrantDead(portalErrorCode(e)) && deps.markGrantRevoked) {
+        try {
+          // NB: NOT on `q` — the throw below rolls that transaction back. See the dep's doc.
+          await deps.markGrantRevoked(stored.memberId, deps.now())
+        } catch (markError) {
+          log.warning(`ensureAccessToken: failed to mark a dead grant: ${(markError as Error)?.message}`)
+        }
+      }
+      throw e
+    }
     const updated: PortalToken = {
       ...stored,
       accessToken: r.accessToken,
@@ -121,6 +160,17 @@ export async function ensureAccessToken(
       // withdrew consent. Costs one doomed request either way — this is the one that fails.
       return stored
     }
+    // NB: clearing the dead-grant mark is NOT a separate statement any more (#574) — it is folded
+    // into `updatePortalTokenSecrets`' own UPDATE, so a successful token write and a cleared mark
+    // are the same row write and cannot come apart.
+    //
+    // ⚠ The separate call was actively DANGEROUS on this connection, which is why it is gone. It
+    // ran after `saveToken` inside the lock's transaction, wrapped in try/catch. Any error there
+    // (`statement_timeout` is 20s on this connection, deadlock, reset) puts Postgres into the
+    // aborted-transaction state; the catch swallowed it, and the following COMMIT then silently
+    // degrades to ROLLBACK *without raising*. Net effect: B24 had already rotated the refresh
+    // token, we returned `updated` as if stored, and the portal's auth was permanently broken —
+    // the exact #35-class failure this module exists to prevent.
     return updated
   })
 }

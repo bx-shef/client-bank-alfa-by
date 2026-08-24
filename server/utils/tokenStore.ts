@@ -64,7 +64,8 @@ export async function saveToken(query: QueryFn, token: PortalToken, eventTs = 0)
        refresh_token_enc = EXCLUDED.refresh_token_enc,
        expires_at        = EXCLUDED.expires_at,
        application_token = COALESCE(NULLIF(portal_tokens.application_token, ''), EXCLUDED.application_token),
-       updated_at        = now()`,
+       updated_at        = now(),
+       grant_revoked_at  = 0`,
     [
       token.memberId,
       token.domain,
@@ -144,7 +145,13 @@ export async function updatePortalTokenSecrets(query: QueryFn, token: PortalToke
             access_token      = $3,
             refresh_token_enc = $4,
             expires_at        = $5,
-            updated_at        = now()
+            updated_at        = now(),
+            -- ⚠ Снятие отметки мёртвого гранта (#574) — ЗДЕСЬ, в том же UPDATE, а не отдельным
+            -- запросом. Успешное обновление токена и снятая отметка обязаны быть одной записью
+            -- строки: отдельный запрос на залоченном соединении мог упасть, перевести транзакцию в
+            -- aborted, и следующий COMMIT молча стал бы ROLLBACK — токен у Б24 уже ротирован, а у
+            -- нас не сохранён. Вшитое условие забыть нельзя и рассинхронизировать нечем.
+            grant_revoked_at  = 0
       WHERE member_id = $1
       RETURNING member_id`,
     [token.memberId, token.domain, token.accessToken, encryptSecret(token.refreshToken), token.expiresAt]
@@ -206,4 +213,76 @@ export async function deleteToken(query: QueryFn, memberId: string, eventTs = 0)
      ON CONFLICT (member_id) DO UPDATE SET deleted_ts = GREATEST(portal_tombstone.deleted_ts, EXCLUDED.deleted_ts)`,
     [memberId, eventTs]
   )
+}
+
+/**
+ * Отметить, что грант портала ответил «мёртв» (#574) — ТОЛЬКО если отметки ещё не было.
+ *
+ * ⚠ `WHERE grant_revoked_at = 0` несущее: отсчёт идёт от ПЕРВОГО отказа. Перезаписывая метку на
+ * каждом тике, мы отодвигали бы срок вечно, и портал не был бы стёрт никогда — уборщик выглядел бы
+ * рабочим и не работал.
+ *
+ * ⚠ `updated_at` НЕ трогаем: по нему выбираются порталы для продления (#175), и сдвинув его, мы
+ * выкинули бы мёртвый портал из выборки — то есть перестали бы получать отказы, по которым и
+ * считается срок. Сам себе выключатель.
+ *
+ * ⚠ Как и все писатели после #510 — UPDATE-only: у удалённого портала обновлять нечего.
+ */
+export async function markGrantRevoked(query: QueryFn, memberId: string, atMs: number): Promise<void> {
+  await query(
+    `UPDATE portal_tokens SET grant_revoked_at = $2 WHERE member_id = $1 AND grant_revoked_at = 0`,
+    [memberId, Math.floor(atMs)]
+  )
+}
+
+/**
+ * Порталы, у которых грант мёртв дольше порога — кандидаты на удаление (#574).
+ *
+ * ⚠ Порог считает ВЫЗЫВАЮЩИЙ и передаёт границу: SQL не должен знать про политику, а тест —
+ * подсовывать часы в базу.
+ *
+ * ⚠ `LIMIT` обязателен и приходит снаружи: без него ошибка классификации однажды вернула бы всех
+ * клиентов разом. Сортировка по метке — стираем самых давних, а не случайных: при упоре в потолок
+ * очередь должна двигаться, а не топтаться на одних и тех же строках.
+ */
+export async function selectReapablePortals(
+  query: QueryFn,
+  beforeMs: number,
+  limit: number
+): Promise<{ memberId: string, revokedAtMs: number }[]> {
+  const rows = await query(
+    `SELECT member_id, grant_revoked_at FROM portal_tokens
+      WHERE grant_revoked_at > 0 AND grant_revoked_at <= $1
+      ORDER BY grant_revoked_at ASC
+      LIMIT $2`,
+    [Math.floor(beforeMs), Math.max(1, Math.floor(limit))]
+  )
+  return rows
+    .map(r => ({
+      memberId: String((r as { member_id?: unknown }).member_id ?? ''),
+      revokedAtMs: Number((r as { grant_revoked_at?: unknown }).grant_revoked_at ?? 0)
+    }))
+    .filter(r => r.memberId !== '')
+}
+
+/** Сколько порталов сейчас помечены мёртвым грантом — для строки лога «кандидатов N». */
+export async function countRevokedPortals(query: QueryFn, beforeMs: number): Promise<number> {
+  const rows = await query(
+    `SELECT count(*)::int AS n FROM portal_tokens WHERE grant_revoked_at > 0 AND grant_revoked_at <= $1`,
+    [Math.floor(beforeMs)]
+  )
+  return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
+}
+
+/**
+ * Сколько порталов у нас всего — знаменатель предохранителя по доле флота (#574).
+ *
+ * ⚠ Считаем ВСЕ строки, а не только живые: предохранитель отвечает на вопрос «не выглядит ли
+ * мёртвым слишком многое из того, что у нас есть», и знаменатель, из которого уже вычли
+ * помеченных, сам бы полз вверх по доле с каждой пометкой — то есть предохранитель ослабевал бы
+ * ровно по мере развития аварии, от которой заведён.
+ */
+export async function countPortals(query: QueryFn): Promise<number> {
+  const rows = await query(`SELECT count(*)::int AS n FROM portal_tokens`, [])
+  return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
 }

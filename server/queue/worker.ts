@@ -638,11 +638,19 @@ export function liveHandlerDeps(): HandlerDeps {
     // RestCall (#191) so a just-uninstalled portal's cached access token can't be reused by an
     // in-flight job — restores the instant cutoff (the DB row is gone; the cache isn't).
     deletePortal: async (memberId, eventTs) => {
+      // ⚠ БАНКОВСКИЕ КРЕДЫ — ПЕРВЫМИ, и порядок здесь несущий (#574). Шагов семь, транзакции нет, и
+      // при отказе на середине то, что уже удалено, удалено, а остальное остаётся. Раньше первым
+      // шёл `deleteToken`, то есть `portal_tokens`; уборщик выбирает кандидатов ИЗ `portal_tokens`,
+      // так что после такого частичного отказа портал больше никогда не попадёт в выборку, а
+      // `deleteBankTokensForPortal` достижим только из `ONAPPUNINSTALL` (которого у пропавшего
+      // портала не будет) и из свипа `~pending:`. Банковские креды остались бы навсегда, и их
+      // продолжал бы освежать `bankTokenKeepAlive` — ровно та утечка, ради закрытия которой всё и
+      // написано, сделанная НЕУСТРАНИМОЙ тем самым инструментом.
+      await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteToken(dbQuery, memberId, eventTs)
       await deleteImportResultForPortal(dbQuery, memberId)
       await deleteBatchesForPortal(dbQuery, memberId)
       await deleteMetricsForPortal(dbQuery, memberId)
-      await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
       // ⚠ Аренда single-flight (#538) сама не исчезнет: у неё нет свипа, а рассуждение «просроченную
       // перезапишет следующий захват» держится на том, что захват когда-нибудь будет. У удалённого

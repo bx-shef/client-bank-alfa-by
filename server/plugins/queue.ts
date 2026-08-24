@@ -27,10 +27,13 @@ import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankT
 import { scheduleBankKeepAlive } from '../utils/bankKeepAliveSchedule'
 import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/statementSweep'
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
+import { runPortalReaper } from '../utils/portalReaperRun'
+import { REAP_MIN_INTERVAL_MS, resolveReapDays } from '../../app/utils/portalReaper'
+import { claimReapSlot } from '../utils/portalReaperSchedule'
+import { countPortals, countRevokedPortals, selectReapablePortals, getToken } from '../utils/tokenStore'
 import { sweepOldBatches } from '../utils/importBatchStore'
 import { resolvePendingMaxAgeDays, sweepAbandonedPending } from '../utils/pendingSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
-import { getToken } from '../utils/tokenStore'
 import { dbQuery } from '../db/client'
 import { withSpan } from '../utils/telemetrySpan'
 import { MAX_FAILED_SCAN } from '../utils/queueHealthRead'
@@ -332,6 +335,7 @@ export default defineNitroPlugin((nitroApp) => {
       const sweepMs = sweepIntervalMs(Number(process.env.STATEMENT_SWEEP_INTERVAL_MIN || 30))
       const tombstoneDays = resolveTombstoneDays(process.env.TOMBSTONE_TTL_DAYS)
       const pendingMaxAgeDays = resolvePendingMaxAgeDays(process.env.PENDING_MAX_AGE_DAYS)
+      const reapDays = resolveReapDays(process.env.PORTAL_REAP_DAYS)
       const runSweep = async () => {
         try {
           // Cron root span (#78) — groups the per-queue clean calls under one trace.
@@ -346,6 +350,56 @@ export default defineNitroPlugin((nitroApp) => {
               if (removed) retention.info(`swept ${removed} expired tombstone(s)`)
             } catch (e) {
               retention.error(`tombstone sweep failed: ${(e as Error)?.message}`)
+            }
+            // Уборщик порталов с мёртвым грантом (#574). Изолирован по той же причине, что соседи:
+            // отказ здесь не должен отменить чистку выписок.
+            //
+            // ⚠ Висит на ТОМ ЖЕ тике, что и остальные свипы, а не на своём таймере — и это не
+            // экономия. Второй таймер означал бы второе состояние «когда последний раз отработал»
+            // и второй способ незаметно не отработать, а данные, за которыми он ходит, меняются
+            // раз в сутки.
+            // ⚠ ЖИВЁТ ПОД ДВУМЯ ЧУЖИМИ ГЕЙТАМИ, и это осознанный размен, а не недосмотр. Блок
+            // стоит внутри `STATEMENT_SWEEP` и ниже `queueEnabled()`, хотя уборщику нужен только
+            // Postgres: без Redis и при `STATEMENT_SWEEP=0` он не отработает вовсе, и строки
+            // `[retention]` не будет — снаружи неотличимо от «кандидатов нет». Отдельный таймер
+            // (как у `scheduleBankKeepAlive`, #489) не заведён потому, что отказ здесь фейлит
+            // БЕЗОПАСНО: не отработали — никого не стёрли, а пометку ставят другие пути, которые
+            // под этими гейтами не сидят. Обратная ошибка (стереть лишнего) необратима, эта — нет.
+            // ⚠ Но молчать об этом нельзя: `PORTAL_REAP_ENABLED=1` без Redis не делает НИЧЕГО.
+            // Сказано и в `.env.example`, и в `QUEUES.md`.
+            //
+            // ⚠ СВОЯ каденция, и держит её АРЕНДА В БАЗЕ, а не память процесса: `runSweep` зовётся
+            // сразу на старте, поэтому метка в памяти разрешала бы прогон на КАЖДОМ рестарте, и
+            // crash-loop выкосил бы флот по три портала за перезапуск. Разбор — `portalReaperSchedule.ts`.
+            if (await claimReapSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runPortalReaper({
+                  now: Date.now,
+                  countRevoked: beforeMs => countRevokedPortals(dbQuery, beforeMs),
+                  countPortals: () => countPortals(dbQuery),
+                  selectReapable: (beforeMs, limit) => selectReapablePortals(dbQuery, beforeMs, limit),
+                  // ⚠ Удаление по умолчанию ВЫКЛЮЧЕНО. Пометка идёт всегда — она безвредна и делает
+                  // проблему видимой; необратимое стирание владелец включает осознанно, увидев на
+                  // `/queues`, кого именно уборщик считает мёртвым.
+                  // `envFlag`, а не `=== '1'`: во всём этом файле булевы читаются им, и
+                  // `PORTAL_REAP_ENABLED=true` иначе молча означал бы «выключено».
+                  reapEnabled: envFlag(process.env.PORTAL_REAP_ENABLED, false),
+                  // ⚠ ТОТ ЖЕ путь, что у штатного `ONAPPUNINSTALL`: своя «облегчённая» чистка была
+                  // бы вторым списком того, что надо удалить, и он разошёлся бы с первым — а
+                  // недоудалённые банковские креды это ровно то, ради чего уборщик написан.
+                  // ⚠ БРОСАЕМ, а не молча выходим, если `deps` нет: `runPortalReaper` считает
+                  // успехом любой не-бросок, поэтому тихий выход дал бы в логе «портал стёрт» о
+                  // портале, которого никто не трогал — ложь опаснее отказа.
+                  deletePortal: async (memberId, eventTs) => {
+                    if (!deps) throw new Error('portal reaper: deps unavailable, refusing to report a deletion that did not happen')
+                    await deps.deletePortal(memberId, eventTs)
+                  },
+                  log: (m: string) => retention.info(m),
+                  warn: (m: string) => retention.warning(m)
+                }, reapDays)
+              } catch (e) {
+                retention.error(`portal reaper failed: ${(e as Error)?.message}`)
+              }
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и
             // чистку банковских кредов, хотя флаг заведён про payload'ы выписки. Осознанно: оба

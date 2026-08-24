@@ -1,6 +1,6 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check self-update help \
-        gw-stop gw-start compose-update alfa-page-probe
+        gw-stop gw-start compose-update alfa-page-probe reap-status reap-off
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -287,3 +287,30 @@ alfa-page-probe:
 	@t=$$(mktemp /tmp/alfa-page-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-alfa-page-probe.sh" \
 	  && B24="$${B24:-}" bash "$$t" "$${DAY:-}"
+
+## Что видит уборщик мёртвых грантов: сколько порталов помечено и что он делал (#574)
+#
+#   make reap-status
+#
+# ⚠ ТОЛЬКО ПОКАЗЫВАЕТ. Удалять эта цель не умеет вовсе — у скрипта нет ни одной команды удаления,
+# и это осознанно: «сухой прогон» флагом означал бы, что один неверный булев превращает показ в
+# необратимое стирание.
+reap-status:
+	@echo "[make] скачиваю prod-reap-status.sh из $(REF)"
+	@t=$$(mktemp /tmp/reap-status.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
+	  && bash "$$t" docker-compose.prod.yml
+
+## АВАРИЙНО выключить необратимое стирание порталов (#574); пометка продолжает идти
+#
+#   make reap-off
+#
+# ⚠ Стирание и так выключено по умолчанию. Цель нужна на случай, когда его включали: она снимает
+# PORTAL_REAP_ENABLED в .env и перезапускает backend (`restart` НЕ перечитывает .env).
+reap-off:
+	@cd /home/bitrix/bank-import \
+	  && cp .env .env.bak.$$(date +%Y%m%d%H%M%S) \
+	  && sed -i '/^PORTAL_REAP_ENABLED=/d' .env \
+	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
+	  && docker compose -f docker-compose.prod.yml up -d backend \
+	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
