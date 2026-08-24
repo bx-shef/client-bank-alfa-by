@@ -23,7 +23,7 @@ import { BANK_REFRESH_TTL_SEC, BANK_REFRESH_TTL_MEASURED, consentExpired, type C
 // ли большая доля флота» одна и та же, расходится только ЕДИНИЦА счёта (там порталы, здесь строки).
 import type { ReapVerdict } from './portalReaper'
 
-export { reapVerdict, reapDue, REAP_MIN_INTERVAL_MS, fleetBreach as bankFleetBreach } from './portalReaper'
+export { reapVerdict, fleetBreach as bankFleetBreach } from './portalReaper'
 
 /**
  * Epoch ms, когда подключение стало ИЗМЕРЕННО мёртвым, или `null`, если такого не случилось.
@@ -48,8 +48,12 @@ export function bankDeathSinceMs(c: ConnectionLike, nowMs: number): number | nul
   // Согласие — дата самого банка. `consentExpired` уже проверяет `> 0` и конечность.
   if (consentExpired(c, nowMs) && typeof c.consentExpiresAt === 'number') marks.push(c.consentExpiresAt)
   // Измеренный TTL — только для провайдеров, чей срок мы ЗНАЕМ (Альфа). Догадка (Приор) исключена.
+  // ⚠ `hasRefresh` в условии — не лишняя проверка: `connectionHealth` называет `no-refresh` РАНЬШЕ
+  // измеренного TTL, поэтому строка без токена продления там никогда не 'expired'-по-TTL. Держим ту
+  // же границу и здесь, иначе код и комментарий выше разошлись бы (находка ревью). Строку без
+  // refresh хоронит только истёкшее согласие — по дате банка, а не по нашему сроку.
   const ttlMs = (BANK_REFRESH_TTL_SEC[c.provider] ?? 0) * 1000
-  if (ttlMs > 0 && BANK_REFRESH_TTL_MEASURED[c.provider] && Number.isFinite(c.connectedAt)) {
+  if (ttlMs > 0 && BANK_REFRESH_TTL_MEASURED[c.provider] && c.hasRefresh && Number.isFinite(c.connectedAt)) {
     const deathAt = c.connectedAt + ttlMs
     if (nowMs >= deathAt) marks.push(deathAt)
   }

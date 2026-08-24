@@ -37,10 +37,12 @@ export function bankDisconnectReason(c: ConnectionLike, nowMs: number): BankDisc
   return null
 }
 
+// ⚠ Текст для БУХГАЛТЕРА, а не технаря (находка ревью): без «токенов» и «нашего доступа» —
+// говорим про разрешение на доступ к счёту, которое банк перестал продлевать.
 const REASON_TEXT: Record<BankDisconnectReason, string> = {
   'consent-expired': 'истёк срок разрешения на доступ к счёту',
-  'refresh-dead': 'банк перестал принимать наш доступ',
-  'no-refresh': 'банк не выдал токен для продления доступа'
+  'refresh-dead': 'банк перестал продлевать доступ к счёту',
+  'no-refresh': 'банк не продлил разрешение на доступ к счёту'
 }
 
 /**
@@ -54,6 +56,6 @@ const REASON_TEXT: Record<BankDisconnectReason, string> = {
 export function buildBankDisconnectNotice(provider: BankProviderId, accountKey: string, reason: BankDisconnectReason): string {
   const bank = BANK_LABELS[provider] ?? 'банк'
   return `Подключение к счёту ${accountKey} (${bank}) отключено: ${REASON_TEXT[reason]}. `
-    + 'Чтобы возобновить импорт выписки, переподключите банк в настройках приложения — '
-    + 'потребуется вход владельца счёта в интернет-банк.'
+    + 'Чтобы возобновить импорт выписки, переподключите банк в настройках приложения '
+    + '(это делает администратор портала) — потребуется вход владельца счёта в интернет-банк.'
 }

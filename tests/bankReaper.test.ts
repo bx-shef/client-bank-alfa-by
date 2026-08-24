@@ -54,6 +54,17 @@ describe('bankDeathSinceMs — измеренная смерть, не дога�
   it('согласие 0/отсутствует — не считается истёкшим', () => {
     expect(bankDeathSinceMs({ provider: 'prior-by', connectedAt: NOW - DAY, hasRefresh: true, consentExpiresAt: 0 }, NOW)).toBeNull()
   })
+
+  it('Альфа БЕЗ refresh не хоронится по TTL — только по согласию (код == комментарий)', () => {
+    // ⚠ Находка ревью: TTL-ветка обязана учитывать hasRefresh, иначе она разошлась бы с
+    // `connectionHealth`, который проверяет no-refresh РАНЬШЕ TTL. Без согласия такая строка живёт
+    // (показывается как «нужно переподключить»), а не хоронится нашим сроком.
+    const connectedAt = NOW - ALFA_TTL - 40 * DAY
+    expect(bankDeathSinceMs({ provider: 'alfa-by', connectedAt, hasRefresh: false }, NOW)).toBeNull()
+    // Но истёкшее согласие её всё же хоронит — по дате банка.
+    const consentAt = NOW - 20 * DAY
+    expect(bankDeathSinceMs({ provider: 'alfa-by', connectedAt, hasRefresh: false, consentExpiresAt: consentAt }, NOW)).toBe(consentAt)
+  })
 })
 
 describe('bankDeadForDays', () => {

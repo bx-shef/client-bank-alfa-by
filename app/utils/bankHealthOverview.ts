@@ -246,7 +246,7 @@ export interface BankHealthRowView {
 export interface BankAttentionRowView {
   id: number
   portalHash: string
-  /** «Приорбанк · портал 3f1a9c0b7e42 · мёртво 42 дн.» — уже собранная подпись. */
+  /** «Приорбанк · портал 3f1a9c0b7e42 · мёртво 42 дня» — уже собранная подпись. */
   label: string
   /** Состояние — для тона строки. */
   health: BankConnectionHealth

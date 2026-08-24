@@ -9,7 +9,7 @@
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.
 // `operator` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
@@ -153,13 +153,30 @@ const disconnectNote = ref('')
 // Зеркало server/utils/session.ts CSRF_HEADER — как в useAppRatingOps/useAuth.
 const OPS_CSRF = { 'x-cba-auth': '1' }
 
+// ⚠ Открывая подтверждение, уводим фокус на «Отмена» (находка ревью по a11y и UX): деструктивная
+// «Да, отключить» не должна оказаться под курсором/фокусом, а появление пары кнопок иначе не
+// объявляется скринридеру. Прошлую ноту чистим — она была про другое подключение.
+async function askDisconnect(id: number): Promise<void> {
+  disconnectNote.value = ''
+  confirmDisconnectId.value = id
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-testid="bank-disconnect-cancel-${id}"]`)?.focus()
+}
+
+function cancelDisconnect(): void {
+  disconnectNote.value = ''
+  confirmDisconnectId.value = null
+}
+
 async function disconnectBank(id: number): Promise<void> {
   if (isPreview()) return // в превью действий нет — только вёрстка
   disconnectingId.value = id
   disconnectNote.value = ''
   try {
     await $fetch('/api/ops/bank-disconnect', { method: 'POST', headers: OPS_CSRF, body: { id } })
-    disconnectNote.value = 'Подключение отключено, клиенту отправлена пометка в чат ошибок.'
+    // ⚠ Пометка клиенту — best-effort (чат ошибок может быть не настроен), поэтому «уйдёт», а не
+    // «отправлена»: утверждать факт, которого код не гарантирует, нельзя.
+    disconnectNote.value = 'Подключение отключено. Клиенту уйдёт пометка в чат ошибок, если он настроен.'
     confirmDisconnectId.value = null
     await loadBankHealth()
   } catch (e) {
@@ -433,6 +450,7 @@ onBeforeUnmount(() => {
                   <span class="flex items-center gap-2">
                     <B24Button
                       label="Да, отключить"
+                      :aria-label="`Подтвердить отключение: ${r.label}`"
                       color="air-primary-alert"
                       size="xs"
                       :loading="disconnectingId === r.id"
@@ -442,20 +460,23 @@ onBeforeUnmount(() => {
                     />
                     <B24Button
                       label="Отмена"
+                      :aria-label="`Отменить отключение: ${r.label}`"
                       color="air-tertiary"
                       size="xs"
                       :disabled="disconnectingId === r.id"
-                      @click="confirmDisconnectId = null"
+                      :data-testid="`bank-disconnect-cancel-${r.id}`"
+                      @click="cancelDisconnect()"
                     />
                   </span>
                 </template>
                 <B24Button
                   v-else
                   label="Отключить"
+                  :aria-label="`Отключить: ${r.label}`"
                   color="air-tertiary-no-accent"
                   size="xs"
                   :data-testid="`bank-disconnect-${r.id}`"
-                  @click="confirmDisconnectId = r.id"
+                  @click="askDisconnect(r.id)"
                 />
               </div>
               <p
