@@ -171,3 +171,65 @@ describe('точечный забор за выбранный день (#592)', 
     expect(r.status).toBe(200)
   })
 })
+
+describe('#19 забор адресуется КОНКРЕТНОМУ подключению', () => {
+  it('опрашивается ровно один счёт, а не все подключения портала', async () => {
+    // ⚠ Без адреса «забрать за 18 августа» ставит задачу на КАЖДЫЙ счёт портала, тогда как человек
+    // смотрел на конкретную строку и про неё спрашивал: лимит запросов тратится на счета, о
+    // которых не спрашивали, а ответ «опрос запущен» не говорит, что именно опрошено.
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ enqueue }), { ...input, provider: 'alfa-by', accountKey: 'BY02' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ enqueued: 1, accounts: 1, provider: 'alfa-by', accountKey: 'BY02' })
+    expect(enqueue).toHaveBeenCalledTimes(1)
+    expect((enqueue.mock.calls[0]![0] as { account: string }).account).toBe('BY02')
+  })
+
+  it('БАНК — часть адреса: тот же номер у другого банка не подходит', async () => {
+    // Один и тот же номер у разных банков — разные строки хранилища. Отбор по одному номеру
+    // опросил бы чужое подключение, о котором не просили.
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ enqueue }), { ...input, provider: 'prior-by', accountKey: 'BY02' })
+    expect(r.status).toBe(404)
+    expect(enqueue).not.toHaveBeenCalled()
+  })
+
+  it('счёта нет — 404, а не тихое «0 задач»', async () => {
+    // ⚠ «enqueued: 0» неотличимо от «портал вообще ничего не подключил», и человек, чей счёт только
+    // что отключили из соседней вкладки, прочитал бы это как «опрос сработал, операций нет».
+    const r = await handlePollNow(deps(), { ...input, accountKey: 'BY99', provider: 'alfa-by' })
+    expect(r.status).toBe(404)
+  })
+
+  it('счёт на паузе — 409 с объяснением, а не тишина', async () => {
+    const paused: BankAccountRef[] = [{ memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01', pollPaused: true }]
+    const r = await handlePollNow(deps({ listAccounts: async () => paused }), {
+      ...input, provider: 'alfa-by', accountKey: 'BY01'
+    })
+    expect(r.status).toBe(409)
+    expect(String(r.body.error)).toContain('паузу')
+  })
+
+  it('адрес + день работают вместе и оба возвращаются эхом', async () => {
+    const enqueue = vi.fn(async (_job: FetchJob) => {})
+    const r = await handlePollNow(deps({ enqueue }), {
+      ...input, provider: 'alfa-by', accountKey: 'BY01', day: '2026-07-16'
+    })
+    expect(r.body).toMatchObject({ day: '2026-07-16', provider: 'alfa-by', accountKey: 'BY01', enqueued: 1 })
+    const job = enqueue.mock.calls[0]![0] as { dateFrom: string, dateTo: string }
+    expect([job.dateFrom, job.dateTo]).toEqual(['2026-07-16', '2026-07-16'])
+  })
+
+  it('без адреса поведение прежнее — все подключённые счета', async () => {
+    const r = await handlePollNow(deps(), input)
+    expect(r.body).toMatchObject({ enqueued: 3 })
+    expect(r.body.provider).toBeUndefined()
+  })
+
+  it('ЧУЖОЙ счёт не достаётся: список member-scoped, отбор идёт уже внутри него', async () => {
+    const r = await handlePollNow(deps({ listAccounts: async () => [] }), {
+      ...input, provider: 'alfa-by', accountKey: 'BY01'
+    })
+    expect(r.status).toBe(404)
+  })
+})

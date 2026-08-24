@@ -97,6 +97,22 @@ export const useB24 = () => {
       ?? (typeof window !== 'undefined' ? placeFromQuery(window.location.search) : undefined)
   }
 
+  /**
+   * Открыты ли МЫ САМИ в слайдере — по признаку SDK (`placement.isSliderMode`), а не по адресу (#15).
+   *
+   * ⚠ Второй признак к нашему `place`, а не замена ему: `place` мы ставим сами и он однозначен, но
+   * живой портал уже присылал фрейму слайдера ПУСТОЙ PLACEMENT_OPTIONS (#555). Спрашиваем сам SDK,
+   * а не повторяем его чтение `options.IFRAME`, иначе логика разъедется при её изменении в SDK.
+   * До `init()` — `false`; вызывающий дожидается init.
+   */
+  function isSliderMode(): boolean {
+    try {
+      return get()?.placement?.isSliderMode === true
+    } catch {
+      return false
+    }
+  }
+
   /** Открыть СВОЙ вторичный экран настоящим слайдером портала. Возвращает `false`, когда мы вне
    *  фрейма или портал отказал, — вызывающий тогда уходит обычной навигацией, и экран всё равно
    *  открывается.
@@ -143,6 +159,7 @@ export const useB24 = () => {
     targetOrigin,
     getRequiredRights,
     placementPlace,
+    isSliderMode,
     openAppSlider,
     closeSlider
   }

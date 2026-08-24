@@ -24,6 +24,9 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     memberId: 'M1',
     provider: 'alfa-by',
     accountKey: 'BY00BANK00000000000000000001',
+    // ⚠ По умолчанию грант НЕ размечен: так фикстура описывает подключение, заведённое до #23, и
+    // строки не склеиваются между собой — дедуп по гранту проверяется отдельным набором.
+    grantId: '',
     connectedAt: NOW - HOUR,
     expiresAt: NOW + HOUR,
     hasRefresh: true,
@@ -47,7 +50,12 @@ describe('selectBankAccountsNearExpiry', () => {
   it('Альфа за 9 часов до истечения — в очереди на обновление', () => {
     // TTL 10 ч, полоса 20% ⇒ обновляем начиная с возраста 8 ч.
     const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - 9 * HOUR })], NOW)
-    expect(r.due).toEqual([{ memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001', pollPaused: false }])
+    expect(r.due).toEqual([{
+      memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001', pollPaused: false,
+      // ⚠ Грант обязан доехать до `markBankRefreshAttempt`: метка адресуется им, и без неё
+      // отозванный грант получал бы запрос каждый тик — по разу на каждый свой счёт.
+      grantId: ''
+    }])
   })
 
   it('граница считается от СРОКА ЖИЗНИ ПРОВАЙДЕРА, а не одна на всех', () => {
@@ -328,7 +336,7 @@ describe('угаданный срок жизни не хоронит подкл�
   const row = (provider: 'alfa-by' | 'prior-by', ageMs: number) => ({
     memberId: 'M', provider, accountKey: 'BY1',
     connectedAt: NOW - ageMs, expiresAt: NOW, hasRefresh: true, pollPaused: false,
-    id: 1, lastAttemptAt: 0, consentExpiresAt: 0
+    id: 1, lastAttemptAt: 0, consentExpiresAt: 0, grantId: ''
   })
 
   it('Приор старше своего УГАДАННОГО срока — остаётся в очереди на обновление, не в «истекло»', () => {
@@ -368,7 +376,7 @@ describe('истёкшее согласие не тратит запросы б�
   const row = (over: Record<string, unknown> = {}) => ({
     memberId: 'm1', provider: 'prior-by' as const, accountKey: 'BY01',
     connectedAt: T - 60_000, expiresAt: T + 600_000, hasRefresh: true, consentExpiresAt: 0,
-    id: 1, lastAttemptAt: 0, pollPaused: false, ...over
+    id: 1, lastAttemptAt: 0, pollPaused: false, grantId: '', ...over
   })
 
   it('согласие истекло — в «expired», а не в «due», даже у свежего токена', () => {
@@ -414,7 +422,7 @@ describe('подключение не хоронится без вопроса �
   const row = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
     id: 1, memberId: 'M', provider: 'alfa-by', accountKey: 'BY09ALFA1',
     connectedAt: 0, lastAttemptAt: 0, expiresAt: 0, hasRefresh: true, consentExpiresAt: 0,
-    pollPaused: false, ...over
+    pollPaused: false, grantId: '', ...over
   })
   const TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
 
@@ -505,5 +513,74 @@ describe('подключение не хоронится без вопроса �
     const line = warns.find(w => w.includes('past their assumed refresh lifetime'))
     expect(line).toBeTruthy()
     expect(line).not.toMatch(/NOT retried/)
+  })
+})
+
+describe('#23 счета одного гранта обновляются ОДИН раз, а не по разу на счёт', () => {
+  it('шесть счетов одного согласия дают одну задачу на обновление', () => {
+    // ⚠ Банк РОТИРУЕТ refresh при каждом обновлении. Возьми батч все шесть строк — первый обмен
+    // удастся, остальные пять пойдут со сгоревшим токеном и получат `invalid_grant`. Снаружи это
+    // «подключение вдруг отвалилось», причём тем вернее, чем больше счетов у клиента.
+    const rows = ['BY01', 'BY02', 'BY03', 'BY04', 'BY05', 'BY06']
+      .map(accountKey => acc({ accountKey, grantId: 'G1', connectedAt: NOW - 9 * HOUR }))
+    const sel = selectBankAccountsNearExpiry(rows, NOW)
+    expect(sel.due).toHaveLength(1)
+  })
+
+  it('РАЗНЫЕ гранты не схлопываются — иначе второе согласие не обновлялось бы вовсе', () => {
+    const rows = [
+      acc({ accountKey: 'BY01', grantId: 'G1', connectedAt: NOW - 9 * HOUR }),
+      acc({ accountKey: 'BY09', grantId: 'G2', connectedAt: NOW - 9 * HOUR })
+    ]
+    expect(selectBankAccountsNearExpiry(rows, NOW).due).toHaveLength(2)
+  })
+
+  it('ПУСТОЙ грант не группирует — старые подключения обновляются каждое само', () => {
+    // Пустая строка означает «не размечено», а не «общий грант»: склей мы их, портал с двумя
+    // старыми подключениями обновлял бы только одно, а второе умирало бы за ночь.
+    const rows = [
+      acc({ accountKey: 'BY01', grantId: '', connectedAt: NOW - 9 * HOUR }),
+      acc({ accountKey: 'BY02', grantId: '', connectedAt: NOW - 9 * HOUR })
+    ]
+    expect(selectBankAccountsNearExpiry(rows, NOW).due).toHaveLength(2)
+  })
+
+  it('дедуп ловит и ПОВТОРЫ просроченных — иначе отозванный грант долбится по разу на счёт', () => {
+    // ⚠ Отдельная ветка от `due`, и покрывать её надо отдельно: замерено, что снятие дедупа именно
+    // здесь оставляло весь набор зелёным. Смысл ветки — «пробовать редко»; без дедупа шесть счетов
+    // одного мёртвого гранта дают шесть запросов к банку на каждом тике вместо одного раз в шесть
+    // часов, то есть ровно ту долбёжку, ради запрета которой метка попытки и заведена.
+    const ttlMs = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+    const rows = ['BY01', 'BY02', 'BY03'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', connectedAt: NOW - ttlMs - 60_000, lastAttemptAt: 0 }))
+    const sel = selectBankAccountsNearExpiry(rows, NOW)
+    // Три строки в учёте «истекло» — чинить человеку три подключения…
+    expect(sel.expired).toHaveLength(3)
+    // …но обменять refresh можно только один раз: он у них общий.
+    expect(sel.due).toHaveLength(1)
+  })
+
+  it('УЧЁТ по СРОКУ ЖИЗНИ тоже считает строки, а не гранты', () => {
+    // Второй вход в тот же инвариант: дедуп стоит на действии, и «случайно» распространить его на
+    // учёт TTL-ветки — значит занизить число подключений к починке у клиентов с несколькими счетами.
+    const ttlMs = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+    const rows = ['BY01', 'BY02'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', connectedAt: NOW - ttlMs - 60_000 }))
+    expect(selectBankAccountsNearExpiry(rows, NOW).expired).toHaveLength(2)
+  })
+
+  it('УЧЁТ «нечем обновлять» тоже считает строки', () => {
+    const rows = ['BY01', 'BY02'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', hasRefresh: false, connectedAt: NOW - 9 * HOUR }))
+    expect(selectBankAccountsNearExpiry(rows, NOW).unrefreshable).toHaveLength(2)
+  })
+
+  it('УЧЁТ не схлопывается: «истекло» считает СТРОКИ, а не гранты', () => {
+    // ⚠ Дедуп стоит только на ДЕЙСТВИИ. `expired` — это сводка «сколько подключений предстоит
+    // чинить человеку», и схлопывание занижало бы её ровно у тех клиентов, у кого счетов больше.
+    const ttlMs = 10 * 3_600_000 * 10 // заведомо больше любого срока
+    const rows = ['BY01', 'BY02'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', consentExpiresAt: NOW - 1, connectedAt: NOW - ttlMs }))
+    expect(selectBankAccountsNearExpiry(rows, NOW).expired).toHaveLength(2)
   })
 })

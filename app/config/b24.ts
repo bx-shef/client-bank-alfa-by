@@ -67,6 +67,15 @@ export const B24_BOUND_EVENTS = ['ONAPPINSTALL', 'ONAPPUNINSTALL'] as const
  *  ⚠ Почему не `slider.openPath`: он открывает ПОРТАЛЬНЫЙ путь, то есть `<портал>/settings` → 404.
  *  Свою страницу приложения открывает только `openSliderAppPage`. Прежний вывод «слайдер портала
  *  для своей страницы не годится» был неверен — годится, просто другим методом. */
+/**
+ * `place` главного экрана, открытого СЛАЙДЕРОМ (#15).
+ *
+ * ⚠ Нужен не для маршрутизации (адрес и так `/app`), а как ПРИЗНАК: по нему открытый нами слайдер
+ * узнаёт себя и не пытается открыть ещё один. Без такого признака лаунчер открыл бы слайдер, тот
+ * счёл бы себя базовым фреймом и открыл следующий — и так без предела.
+ */
+export const APP_SLIDER_PLACE_MAIN = 'app-main'
+
 export const APP_SLIDER_PLACE_SETTINGS = 'app-options'
 export const APP_SLIDER_PLACE_IMPORT = 'app-import'
 
@@ -74,6 +83,9 @@ export const APP_SLIDER_PLACE_IMPORT = 'app-import'
  *  ⚠ Обычный вход приложения (пункт левого меню) этих значений нести не должен — иначе главный
  *  фрейм уезжал бы с `/app` при каждом открытии. Их ставим только мы сами в `openAppSlider`. */
 export const APP_SLIDER_ROUTES: Record<string, string> = {
+  // Главный экран (#15) — тот же адрес, что у базового фрейма: `place` здесь не ведёт никуда, он
+  // лишь ОТЛИЧАЕТ слайдер от лаунчера. Строка нужна, чтобы мидлвар не счёл `place` неизвестным.
+  [APP_SLIDER_PLACE_MAIN]: '/app',
   [APP_SLIDER_PLACE_SETTINGS]: '/settings',
   [APP_SLIDER_PLACE_IMPORT]: '/import'
 }

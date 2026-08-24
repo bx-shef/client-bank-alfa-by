@@ -54,6 +54,12 @@ describe('Prior resource headers have a single choke point (#461)', () => {
   // from this list — and equally on a NEW transport appearing without review.
   const EXPECTED_USERS = [
     join('server', 'api', 'bank', 'connect.post.ts'), // consent, in the connect preamble
+    // ⚠ Сверка счетов (#20). Раньше её транспорт слал ОДИН `Authorization`, а банк проверяет
+    // заголовок взаимодействия на любом вызове и делает это ДО тела — значит счета Приора не
+    // появлялись в сверке никогда. Отказ там fail-soft по провайдеру, поэтому симптом читался как
+    // «банк их не отдаёт», то есть указывал не на ту сторону. Ровно тот случай, о котором
+    // предупреждает комментарий выше: «следующий забытый заголовок — живой 400».
+    join('server', 'utils', 'bankAccountList.ts'),
     join('server', 'utils', 'priorFetch.ts') // create + list + poll, in the poller
   ].sort()
 

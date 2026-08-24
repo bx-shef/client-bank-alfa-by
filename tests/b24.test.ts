@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FAQ } from '~/utils/faq'
-import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_SETTINGS, B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, helpSliderPlace, marketDetailPath, sliderRouteForPlace } from '~/config/b24'
+import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_MAIN, APP_SLIDER_PLACE_SETTINGS, B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, helpSliderPlace, marketDetailPath, sliderRouteForPlace } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
   it('lists crm, sale, im, imbot, documentgenerator, userfieldconfig, user_brief and placement', () => {
@@ -45,6 +45,9 @@ describe('sliderRouteForPlace', () => {
   it('переводит place в НАШ маршрут', () => {
     expect(sliderRouteForPlace(APP_SLIDER_PLACE_SETTINGS)).toBe('/settings')
     expect(sliderRouteForPlace(APP_SLIDER_PLACE_IMPORT)).toBe('/import')
+    // ⚠ Главный экран (#15) должен быть ИЗВЕСТНЫМ place, а не «чужим»: иначе мидлвар счёл бы фрейм
+    // слайдера, открытого лаунчером, неопознанным и оставил бы предупреждение на штатном пути.
+    expect(sliderRouteForPlace(APP_SLIDER_PLACE_MAIN)).toBe('/app')
   })
 
   it('чужой/пустой place не ведёт никуда — дефолта здесь быть не должно', () => {

@@ -139,34 +139,7 @@ describe('PollNowButton poll interaction', () => {
   })
 })
 
-describe('забор за выбранный день (#592)', () => {
-  it('без выбранного дня кнопка «Забрать» заблокирована — дата обязательна', async () => {
-    // ⚠ Не «заберём за сегодня по умолчанию»: молчаливая подстановка дня означала бы, что человек
-    // нажал кнопку, не выбрав то, ради чего она заведена, и получил не тот день.
-    const wrapper = await mountReady()
-    const btn = wrapper.find('[data-testid="poll-day-button"]')
-    expect(btn.exists()).toBe(true)
-    expect(btn.attributes('disabled')).toBeDefined()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('выбранный день уходит в запрос', async () => {
-    answerPoll({ enqueued: 2, accounts: 2, day: '2026-07-10' })
-    const wrapper = await mountReady()
-    // Календарь — сторонний компонент; выбор дня выставляем через модель поля.
-    const field = wrapper.findComponent({ name: 'DayField' })
-    field.vm.$emit('update:modelValue', '2026-07-10')
-    await nextTick()
-    await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
-    await flushPromises()
-    // ⚠ Ищем ИМЕННО вызов забора: рядом идут чтения `/api/import/status` (метка прогона до старта
-    // и ожидание исхода), и привязка к порядку вызовов ломалась бы от любой правки этой логики.
-    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
-    expect(post, 'запрос на забор не ушёл вовсе').toBeTruthy()
-    expect(post![1]).toMatchObject({ body: { day: '2026-07-10' } })
-    expect(wrapper.find('[data-testid="poll-message"]').text()).toContain('2026-07-10')
-  })
-
+describe('#19 забора за день здесь БОЛЬШЕ НЕТ — он переехал в строку подключения', () => {
   it('обычный опрос по-прежнему идёт без дня', async () => {
     answerPoll({ enqueued: 1, accounts: 1 })
     const wrapper = await mountReady()
@@ -176,91 +149,15 @@ describe('забор за выбранный день (#592)', () => {
     expect(post, 'обычный опрос не ушёл').toBeTruthy()
     expect(post![1]).toMatchObject({ body: {} })
   })
-})
 
-describe('исход забора виден в портале (#592)', () => {
-  /** Ответ статуса меняется после запуска — так выглядит завершившийся прогон. */
-  function answerWithRun(run: { lastFetchAt: string, lastFetchOps: number }): void {
-    let started = false
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url).startsWith('/api/import/status')) {
-        return started ? run : { lastFetchAt: null }
-      }
-      started = true
-      return { enqueued: 1, accounts: 1, day: '2026-07-10' }
-    })
-  }
-
-  it('пустой ответ банка назван прямо, а не выдан за неработающую кнопку', async () => {
-    // ⚠ Это и есть то, на чём застряла живая проверка: кнопка отвечала «опрос запущен» и молчала,
-    // и «банк вернул ноль» снаружи неотличимо от «кнопка не работает». Пустой забор теперь пишет
-    // след (worker), а интерфейс его читает.
-    vi.useFakeTimers()
-    try {
-      answerWithRun({ lastFetchAt: '2026-07-10T10:00:00.000Z', lastFetchOps: 0 })
-      const wrapper = await mountReady()
-      const field = wrapper.findComponent({ name: 'DayField' })
-      field.vm.$emit('update:modelValue', '2026-07-10')
-      await nextTick()
-      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
-      await flushPromises()
-      await vi.advanceTimersByTimeAsync(9000)
-      await flushPromises()
-      await nextTick()
-      const out = wrapper.find('[data-testid="poll-outcome"]')
-      expect(out.exists(), 'исход не показан — кнопка снова молчит').toBe(true)
-      expect(out.text()).toMatch(/операций.*нет/i)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('ПРЕЖНИЙ прогон портала не выдаётся за исход этого забора', async () => {
-    // ⚠ У портала почти всегда уже есть результат от планового опроса. Без сверки с меткой ДО
-    // запуска интерфейс мгновенно показал бы ЕГО как итог нажатия — «пришло 40 операций» о том,
-    // чего эта кнопка не делала. Мутация «не сверять метку» проходила зелёной, пока не было
-    // этого теста.
-    vi.useFakeTimers()
-    try {
-      const old = { lastFetchAt: '2026-07-01T08:00:00.000Z', lastFetchOps: 40 }
-      fetchMock.mockImplementation(async (url: string) => {
-        if (String(url).startsWith('/api/import/status')) return old
-        return { enqueued: 1, accounts: 1, day: '2026-07-10' }
-      })
-      const wrapper = await mountReady()
-      const field = wrapper.findComponent({ name: 'DayField' })
-      field.vm.$emit('update:modelValue', '2026-07-10')
-      await nextTick()
-      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
-      await flushPromises()
-      await vi.advanceTimersByTimeAsync(20_000)
-      await flushPromises()
-      await nextTick()
-      const out = wrapper.find('[data-testid="poll-outcome"]')
-      const text = out.exists() ? out.text() : ''
-      expect(text, 'показали чужой прогон как свой').not.toContain('40')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('пришедшие операции названы числом', async () => {
-    vi.useFakeTimers()
-    try {
-      answerWithRun({ lastFetchAt: '2026-07-10T10:00:00.000Z', lastFetchOps: 12 })
-      const wrapper = await mountReady()
-      const field = wrapper.findComponent({ name: 'DayField' })
-      field.vm.$emit('update:modelValue', '2026-07-10')
-      await nextTick()
-      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
-      await flushPromises()
-      await vi.advanceTimersByTimeAsync(9000)
-      await flushPromises()
-      await nextTick()
-      expect(wrapper.find('[data-testid="poll-outcome"]').text()).toContain('12')
-    } finally {
-      vi.useRealTimers()
-    }
+  it('поля дня в карточке ручного опроса нет', async () => {
+    // ⚠ Инвариант, а не описание текущего вида. Здесь у забора не было АДРЕСА: он ставил задачу на
+    // КАЖДЫЙ подключённый счёт портала, тогда как человек смотрел на конкретную строку и про неё
+    // спрашивал — а лимит запросов тратился на счета, о которых не спрашивали. Вернуть поле сюда
+    // «чтобы было под рукой» — значит вернуть безадресность.
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="poll-day-button"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'DayField' }).exists()).toBe(false)
   })
 })
 
@@ -279,11 +176,10 @@ describe('исход не выдумывается (находки ревью #5
         }
         return { enqueued: 1, accounts: 1, day: '2026-07-10' }
       })
+      // Проверяется логика ИСХОДА, а не выбор дня: она общая для обеих кнопок, и здесь дешевле
+      // нажать обычный опрос — забор за день с #19 живёт в строке подключения.
       const wrapper = await mountReady()
-      const field = wrapper.findComponent({ name: 'DayField' })
-      field.vm.$emit('update:modelValue', '2026-07-10')
-      await nextTick()
-      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await wrapper.find('[data-testid="poll-button"]').trigger('click')
       await flushPromises()
       await vi.advanceTimersByTimeAsync(20_000)
       await flushPromises()
@@ -330,11 +226,10 @@ describe('несколько счетов — исход не выдумывае
         started = true
         return { enqueued: 2, accounts: 2, day: '2026-07-10' }
       })
+      // Проверяется логика ИСХОДА, а не выбор дня: она общая для обеих кнопок, и здесь дешевле
+      // нажать обычный опрос — забор за день с #19 живёт в строке подключения.
       const wrapper = await mountReady()
-      const field = wrapper.findComponent({ name: 'DayField' })
-      field.vm.$emit('update:modelValue', '2026-07-10')
-      await nextTick()
-      await wrapper.find('[data-testid="poll-day-button"]').trigger('click')
+      await wrapper.find('[data-testid="poll-button"]').trigger('click')
       await flushPromises()
       await vi.advanceTimersByTimeAsync(20_000)
       await flushPromises()

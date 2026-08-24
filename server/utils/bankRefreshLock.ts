@@ -31,7 +31,18 @@ import type { BankProviderId } from '../../app/types/statement'
  * ⚠ Переименование обязано брать лок по СТАРОМУ ключу — по тому, под которым строку сейчас видит
  * обновляющая сторона. Взятый по новому, он не пересечётся с ней ни разу и будет бесполезен.
  */
-export function bankRefreshLockKey(memberId: string, provider: BankProviderId, accountKey: string): string {
+export function bankRefreshLockKey(
+  memberId: string, provider: BankProviderId, accountKey: string, grantId = ''
+): string {
+  // ⚠ ЕСТЬ ГРАНТ — ЛОК ПО ГРАНТУ (#23). Счета одного согласия делят пару токенов, и обновление
+  // пишет ротированную сразу во все его строки (`updateBankTokenSecrets`). Лок по СЧЁТУ здесь
+  // ничего не сериализует: два счёта одного гранта взяли бы РАЗНЫЕ локи, пошли бы в банк
+  // параллельно, и второй потратил бы refresh, который первый уже сжёг. То есть ровно та тихая
+  // ночная смерть, ради предотвращения которой лок и существует, — но теперь при взятом локе.
+  //
+  // ⚠ Пустой грант — «не размечено», и склеивать такие строки нельзя: общий лок на них
+  // сериализовал бы независимые подключения портала (см. `grantId` в `bankTokenStore`).
+  if (grantId !== '') return `bankrefresh:${memberId}:${provider}:grant:${grantId}`
   return `bankrefresh:${memberId}:${provider}:${accountKey}`
 }
 

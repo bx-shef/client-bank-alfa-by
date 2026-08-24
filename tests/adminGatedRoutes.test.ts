@@ -23,6 +23,9 @@ const ADMIN_ONLY = [
   'activities/erasable.get.ts',
   'activities/erase.post.ts',
   'bank/accounts.get.ts',
+  // ⚠ Добавление счёта к существующему подключению — админское (#23) по тому же доводу, что и
+  // подключение: оно расширяет банковский доступ портала на ещё один счёт, не спрашивая банк.
+  'bank/add-account.post.ts',
   'bank/connect.post.ts',
   'bank/disconnect.post.ts',
   'bank/matrix.get.ts',
@@ -106,6 +109,7 @@ describe('кто может звать маршруты приложения (#5
       'activities/erasable.get.ts': 'eraseRequest',
       'activities/erase.post.ts': 'eraseRequest',
       'bank/accounts.get.ts': 'bankAccounts',
+      'bank/add-account.post.ts': 'bankAccounts',
       'bank/connect.post.ts': 'bankConnectStart',
       'bank/disconnect.post.ts': 'bankAccounts',
       'bank/matrix.get.ts': 'bankMatrix',

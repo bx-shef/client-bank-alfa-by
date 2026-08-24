@@ -5,7 +5,7 @@
 
 import { handleBankMatrix, type BankMatrixDeps } from '../../utils/bankMatrix'
 import { findMyCompanyAccounts } from '../../utils/myCompanyRequisites'
-import { listBankSideAccounts, connectedKeys, type BankSideListDeps } from '../../utils/bankAccountList'
+import { accountsRequestHeaders, listBankSideAccounts, connectedKeys, type BankSideListDeps } from '../../utils/bankAccountList'
 import { bankApiConfig } from '../../utils/bankFetch'
 import { ensureBankToken } from '../../utils/ensureBankToken'
 import { BANK_REFRESH_LOCK_WAIT } from '../../utils/dbLock'
@@ -15,17 +15,31 @@ import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { listBankTokensForPortal } from '../../utils/bankTokenStore'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
+import { randomUUID } from 'node:crypto'
+import type { BankProviderId } from '../../../app/types/statement'
 import { dbQuery } from '../../db/client'
 
-/** GET a JSON resource with a Bearer token. The auth header never appears in the thrown message —
- *  only the status and the upstream text, which the caller sanitises. */
-async function getJson(url: string, accessToken: string): Promise<unknown> {
+/**
+ * GET a JSON resource with the provider's own headers. The auth header never appears in the thrown
+ * message — only the status and the upstream text, which the caller sanitises.
+ *
+ * ⚠ ЗАГОЛОВКИ ЗАВИСЯТ ОТ БАНКА (#20). Приор проверяет заголовок взаимодействия FAPI на ЛЮБОМ вызове и
+ * делает это ДО тела (#461): запрос с одним `Authorization` он отвергает. Прежняя версия слала
+ * ровно его, и счета Приора в сверке не появлялись НИКОГДА — а поскольку отказ здесь fail-soft по
+ * провайдеру, выглядело это как «банк их не отдаёт», то есть указывало не на ту сторону.
+ * ⚠ Сам ВЫБОР заголовков — в чистом `accountsRequestHeaders`, и там же общий билдер заголовков
+ * Приора: здесь утверждение «для Приора шлём его заголовки» было бы непроверяемым.
+ */
+async function getJson(provider: BankProviderId, url: string, accessToken: string): Promise<unknown> {
   const fetchJson = $fetch as unknown as (
     url: string,
     opts: { method: string, headers: Record<string, string>, timeout: number }
   ) => Promise<unknown>
+  // Выбор заголовков — в чистом `accountsRequestHeaders`: здесь он был бы непроверяем, а
+  // ошибиться в нём значит потерять счета целого банка молча (#20).
+  const headers = accountsRequestHeaders(provider, accessToken, randomUUID())
   try {
-    return await fetchJson(url, { method: 'GET', headers: { authorization: `Bearer ${accessToken}` }, timeout: 20_000 })
+    return await fetchJson(url, { method: 'GET', headers, timeout: 20_000 })
   } catch (e) {
     const status = (e as { status?: number })?.status
     throw new Error(`банк не ответил${status ? ` (${status})` : ''}`, { cause: e })

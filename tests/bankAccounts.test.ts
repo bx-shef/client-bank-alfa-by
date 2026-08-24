@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  handleAddBankAccount,
   handleDisconnectBankAccount,
   handleListBankAccounts,
   handlePauseBankPoll,
   handleSetBankAccount,
+  type AddAccountDeps,
   type DisconnectDeps,
   type ListAccountsDeps,
   type PausePollDeps,
@@ -30,7 +32,8 @@ const ROW: BankAccountInfo = {
   // ⚠ НЕНУЛЕВОЕ значение принципиально. С `undefined`/дефолтом `toEqual` сравнивает вакуумно:
   // Vitest игнорирует ключи со значением `undefined`, поэтому «точный состав полей» проходил и
   // тогда, когда поле вообще выпилили из ответа (#503, находка ревью).
-  consentExpiresAt: 1_700_000_500_000
+  consentExpiresAt: 1_700_000_500_000,
+  grantId: 'g1'
 }
 
 function listDeps(over: Partial<ListAccountsDeps> = {}): ListAccountsDeps {
@@ -76,7 +79,11 @@ describe('handleListBankAccounts', () => {
       expiresAt: ROW.expiresAt,
       hasRefresh: true,
       consentExpiresAt: ROW.consentExpiresAt,
-      pollPaused: false
+      pollPaused: false,
+      // ⚠ Грант ОБЯЗАН доехать до браузера (#23): по нему интерфейс решает, показывать ли «Добавить
+      // счёт». Потеряй его проекция — поле пришло бы `undefined`, проверка `!== ''` дала бы истину,
+      // и кнопка появилась бы ровно у тех подключений, которым сервер гарантированно откажет.
+      grantId: 'g1'
     })
     // Отдельной строкой и на КОНКРЕТНОЕ значение: потеря поля по дороге беззвучна — сервер
     // продолжает хранить и считать дату, а предупреждения в интерфейсе просто нет.
@@ -394,5 +401,92 @@ describe('handleSetBankAccount', () => {
     })
     expect((await handleSetBankAccount(d, body)).status).toBe(403)
     expect(touched).toBe(false)
+  })
+})
+
+describe('handleAddBankAccount — второй счёт без повторного входа в банк (#23)', () => {
+  function deps(over: Partial<AddAccountDeps> = {}): AddAccountDeps {
+    return {
+      memberIdByDomain: async () => 'M1',
+      validateFrame: async () => ({ userId: '7', isAdmin: true }),
+      add: async () => 'added',
+      ...over
+    }
+  }
+  const body = { ...input, id: 5, sourceAccountKey: 'BY01ALFA0001', accountKey: 'BY02ALFA0002' }
+
+  it('добавляет счёт к существующему подключению', async () => {
+    const seen: string[] = []
+    const d = deps({
+      add: async (memberId, sourceId, expected, accountKey) => {
+        seen.push(`${memberId}|${sourceId}|${expected}|${accountKey}`)
+        return 'added'
+      }
+    })
+    expect((await handleAddBankAccount(d, body)).status).toBe(200)
+    // memberId — из ПРОВЕРЕННОГО домена, а не из тела запроса.
+    expect(seen).toEqual(['M1|5|BY01ALFA0001|BY02ALFA0002'])
+  })
+
+  it('403 не-админу — и ничего не пишет', async () => {
+    // Банковский доступ портало-широкий: добавление счёта расширяет его, не спрашивая банк.
+    let touched = false
+    const d = deps({
+      validateFrame: async () => ({ userId: '9', isAdmin: false }),
+      add: async () => {
+        touched = true
+        return 'added'
+      }
+    })
+    expect((await handleAddBankAccount(d, body)).status).toBe(403)
+    expect(touched).toBe(false)
+  })
+
+  it('НЕЗАВЕРШЁННОЕ подключение — 409, а не обход `set-account`', async () => {
+    // ⚠ У него самого счёт ещё не выбран. «Добавить второй» к строке без первого — это не
+    // добавление, а способ завести настоящий номер мимо единственного маршрута, который умеет
+    // превращать временный ключ в постоянный.
+    let touched = false
+    const d = deps({
+      add: async () => {
+        touched = true
+        return 'added'
+      }
+    })
+    const res = await handleAddBankAccount(d, { ...body, sourceAccountKey: provisionalAccountKey('n1') })
+    expect(res.status).toBe(409)
+    expect(touched).toBe(false)
+  })
+
+  it('кривой номер счёта отбраковывается ДО записи', async () => {
+    let touched = false
+    const d = deps({
+      add: async () => {
+        touched = true
+        return 'added'
+      }
+    })
+    for (const accountKey of ['', ' ', 'BY01 ALFA', 'BY01;DROP', 'ы'.repeat(3)]) {
+      expect((await handleAddBankAccount(d, { ...body, accountKey })).status).toBe(400)
+    }
+    expect(touched).toBe(false)
+  })
+
+  it('исходы стора отображаются в РАЗНЫЕ коды — тупик и «повторите» не путаются', async () => {
+    const codes: Record<string, number> = {
+      conflict: 409, gone: 404, stale: 409, unmarked: 409, added: 200
+    }
+    for (const [outcome, status] of Object.entries(codes)) {
+      const d = deps({ add: async () => outcome as 'added' })
+      expect((await handleAddBankAccount(d, body)).status).toBe(status)
+    }
+  })
+
+  it('подключение без гранта объясняет ПРИЧИНУ, а не «конфликт»', async () => {
+    // ⚠ Скопировать токены такому подключению значило бы завести вторую строку с парой, которую
+    // банк ротирует, — то есть своими руками сделать то, от чего грант защищает. Честный ответ —
+    // переподключить, и человек должен это прочитать.
+    const res = await handleAddBankAccount(deps({ add: async () => 'unmarked' }), body)
+    expect(String(res.body.error)).toContain('reconnect')
   })
 })

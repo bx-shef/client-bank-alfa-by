@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import type { BankProviderId } from '~/types/statement'
 import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/composables/useFrameAuth'
+import { addAccountErrorMessage } from '~/utils/addAccountError'
 import { setAccountErrorMessage } from '~/utils/setAccountError'
 import { disconnectErrorMessage } from '~/utils/disconnectError'
 import { pausePollErrorMessage } from '~/utils/pausePollError'
@@ -40,6 +41,14 @@ export interface ConnectedBankAccount {
    * Отсутствует ⇒ `false`: подключение, заведённое до появления паузы, опрашивается как обычно.
    */
   pollPaused?: boolean
+  /**
+   * Грант банка — одно прохождение OAuth, общее для счетов одного согласия (#23).
+   *
+   * ⚠ `''`/отсутствует означает «не размечено» (подключение заведено до поддержки нескольких
+   * счетов), а НЕ «общий грант»: по такому подключению добавить счёт нельзя, потому что делить
+   * нечего — копия токенов дала бы вторую строку с парой, которую банк ротирует.
+   */
+  grantId?: string
 }
 
 /**
@@ -73,7 +82,10 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     expiresAt: 0,
     hasRefresh: true,
     consentExpiresAt: 0,
-    pollPaused: false
+    pollPaused: false,
+    // Грант размечен — строка показывает кнопку «Добавить счёт» (#23), иначе визуальный эталон
+    // не документировал бы её вовсе.
+    grantId: 'preview-grant'
   },
   {
     id: 2,
@@ -83,7 +95,8 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     expiresAt: 0,
     hasRefresh: true,
     consentExpiresAt: 0,
-    pollPaused: true
+    pollPaused: true,
+    grantId: 'preview-grant-2'
   },
   {
     id: 3,
@@ -93,7 +106,10 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     expiresAt: 0,
     hasRefresh: false,
     consentExpiresAt: 0,
-    pollPaused: false
+    pollPaused: false,
+    // Незавершённое подключение гранта тоже несёт, но кнопки «Добавить счёт» у него нет: счёт
+    // самого подключения ещё не выбран (см. `canAddAccount`).
+    grantId: 'preview-grant-3'
   }
 ]
 
@@ -113,6 +129,9 @@ export function useBankAccounts() {
    *  противоположным значением. Первая редакция обещала это комментарием, но гасила только саму
    *  кнопку «всё» — поймано ревью. */
   const pausingAll = ref(false)
+  /** Ключ строки, к которой сейчас добавляется счёт (#23) — свой флаг по той же причине, что и у
+   *  паузы: одна занятая кнопка не должна блокировать остальные на той же строке. */
+  const adding = ref('')
   const error = ref('')
   /** True once a load has resolved — lets the UI tell «пусто» apart from «ещё не спрашивали». */
   const loaded = ref(false)
@@ -290,5 +309,45 @@ export function useBankAccounts() {
     }
   }
 
-  return { accounts, loading, loaded, removing, saving, pausing, pausingAll, error, load, disconnect, setPaused, setPausedAll, setAccount, rowKey }
+  /**
+   * Добавить ЕЩЁ ОДИН счёт к существующему подключению (#23).
+   *
+   * ⚠ Ключевое отличие от `setAccount`: тот ПЕРЕИМЕНОВЫВАЕТ временный ключ (счёт у подключения
+   * один и он ещё не выбран), а этот заводит новую строку под тем же грантом банка. Согласие банк
+   * выдаёт на набор счетов клиента, поэтому шестой счёт не стоит шестого входа в интернет-банк.
+   */
+  async function addAccount(account: Pick<ConnectedBankAccount, 'id' | 'provider' | 'accountKey'>, accountKey: string): Promise<boolean> {
+    const a = frameAuth()
+    if (!a) {
+      error.value = 'Действие доступно только внутри портала Bitrix24'
+      return false
+    }
+    const value = accountKey.trim()
+    if (!value) {
+      // Точка — как во всех остальных сообщениях этого же алерта.
+      error.value = 'Укажите номер счёта.'
+      return false
+    }
+    adding.value = rowKey(account)
+    error.value = ''
+    try {
+      await $fetch('/api/bank/add-account', {
+        method: 'POST',
+        headers: authHeaders(a),
+        // `id` адресует исходную строку, номер едет как ОЖИДАНИЕ — сервер сверит его с текущим и
+        // ответит 409, если между отрисовкой и кликом подключение стало другим (#517).
+        body: { id: account.id, sourceAccountKey: account.accountKey, accountKey: value }
+      })
+      await load()
+      return true
+    } catch (e) {
+      // Не `frameFetchError`: исходов несколько, они английские, и каждый требует своего действия.
+      error.value = addAccountErrorMessage(e)
+      return false
+    } finally {
+      adding.value = ''
+    }
+  }
+
+  return { accounts, loading, loaded, removing, saving, pausing, pausingAll, adding, error, load, disconnect, setPaused, setPausedAll, setAccount, addAccount, rowKey }
 }

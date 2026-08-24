@@ -71,6 +71,8 @@ export const SERVER_LOG_CHANNELS = [
   'op',
   'pg',
   'registry-write',
+  // Провижининг смарт-процессов: создание типов, полей и раскладки карточки (#27).
+  'provision',
   'queue',
   'queue-alert',
   // ⚠ `queue-job-failed`/`queue-job-retry`/`queue-worker-error` каналами НЕ являются, хотя рантбук
