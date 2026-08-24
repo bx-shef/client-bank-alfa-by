@@ -105,6 +105,14 @@ export function useBankAccounts() {
   /** Ключ строки, у которой сейчас переключается пауза (#576) — свой флаг, чтобы кнопка паузы не
    *  блокировала «Отключить» на той же строке и наоборот. */
   const pausing = ref('')
+  /** Идёт массовое переключение (#581) — отдельный флаг: он гасит кнопку «всё» И построчные
+   *  действия разом, тогда как `pausing` адресует ОДНУ строку.
+   *  ⚠ Построчные кнопки гасить обязательно, и это не косметика. Цикл сделан ПОСЛЕДОВАТЕЛЬНЫМ
+   *  именно чтобы не слать залп в задросселированную зону nginx; ручной клик по строке во время
+   *  цикла создаёт ровно такой параллельный запрос, а на одной строке — ещё и гонку записи с
+   *  противоположным значением. Первая редакция обещала это комментарием, но гасила только саму
+   *  кнопку «всё» — поймано ревью. */
+  const pausingAll = ref(false)
   const error = ref('')
   /** True once a load has resolved — lets the UI tell «пусто» apart from «ещё не спрашивали». */
   const loaded = ref(false)
@@ -195,6 +203,60 @@ export function useBankAccounts() {
     }
   }
 
+  /**
+   * Переключить паузу СРАЗУ по всем подходящим подключениям (#581).
+   *
+   * ⚠ Это тонкий цикл поверх того же `POST /api/bank/pause` — новой семантики хранения не
+   * заводится. Пауза остаётся пер-счёт; кнопка экономит четыре клика, а не вводит «паузу портала».
+   *
+   * ⚠ ПОСЛЕДОВАТЕЛЬНО, а не `Promise.all`. Роут сидит в задросселированной зоне nginx (`import`),
+   * и залп из четырёх запросов — самый дешёвый способ получить 429 на исправном портале. Строк
+   * единицы, ждать нечего.
+   *
+   * ⚠ На отказе НЕ останавливаемся. Намерение — «выключить всё»; остановившись на первой сбойной
+   * строке, мы оставили бы остальные работать, хотя они переключились бы. Что не вышло — считаем и
+   * говорим прямо.
+   *
+   * ⚠ Список перечитываем ОДИН раз в конце, а не после каждой строки, как это делает `setPaused`.
+   * Там перечитывание — защита от вранья оптимистичной правки; здесь оно дало бы N+1 запрос и
+   * список, мигающий под курсором. Финальное чтение показывает ФАКТИЧЕСКОЕ состояние — это честнее
+   * перечисления «что не вышло» по нашим же ответам.
+   */
+  async function setPausedAll(
+    rows: readonly Pick<ConnectedBankAccount, 'id' | 'provider' | 'accountKey'>[],
+    paused: boolean
+  ): Promise<{ done: number, failed: number }> {
+    const a = frameAuth()
+    if (!a) {
+      error.value = 'Управление опросом доступно только внутри портала Bitrix24'
+      return { done: 0, failed: rows.length }
+    }
+    pausingAll.value = true
+    error.value = ''
+    let done = 0
+    let failed = 0
+    try {
+      for (const row of rows) {
+        try {
+          await $fetch('/api/bank/pause', {
+            method: 'POST',
+            headers: authHeaders(a),
+            body: { id: row.id, provider: row.provider, accountKey: row.accountKey, paused }
+          })
+          done++
+        } catch {
+          // ⚠ Текст ошибки строки СЮДА не поднимаем: у четырёх строк он был бы четырёх видов, а
+          // читателю нужен один понятный итог. Правду о состоянии показывает перечитанный список.
+          failed++
+        }
+      }
+      await load()
+    } finally {
+      pausingAll.value = false
+    }
+    return { done, failed }
+  }
+
   /** Назначить счёт подключению, сделанному без него (#407). Переименовывается только временный
    *  ключ — сервер это и проверяет; здесь просто UI-обёртка. */
   async function setAccount(account: Pick<ConnectedBankAccount, 'provider' | 'accountKey'>, accountKey: string): Promise<boolean> {
@@ -228,5 +290,5 @@ export function useBankAccounts() {
     }
   }
 
-  return { accounts, loading, loaded, removing, saving, pausing, error, load, disconnect, setPaused, setAccount, rowKey }
+  return { accounts, loading, loaded, removing, saving, pausing, pausingAll, error, load, disconnect, setPaused, setPausedAll, setAccount, rowKey }
 }

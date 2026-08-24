@@ -12,6 +12,10 @@ export interface SetupStatus {
   connectedAccounts: number
   /** Подключения без выбранного счёта (#407) — их надо доводить до конца. */
   pendingAccounts: number
+  /** Подключения, которые приложение уже считает нерабочими (#504). ⚠ Поля не было в этом типе
+   *  ВОВСЕ, хотя сервер его шлёт и `setupReadiness` читает: тип разошёлся с ответом, и счётчик не
+   *  показывался ни разу. */
+  unhealthyAccounts?: number
   /** Подключения с приостановленным автоопросом (#576). */
   pausedAccounts?: number
   pollEnabled: boolean
@@ -63,9 +67,23 @@ export function useSetupStatus() {
       status.value = {
         connectedAccounts: Number(res?.connectedAccounts) || 0,
         pendingAccounts: Number(res?.pendingAccounts) || 0,
+        // ⚠ Эти три поля ТЕРЯЛИСЬ (найдено ревью #597). Сервер их шлёт (`setupStatus.ts`), а
+        // здесь литерал пересобирался по полям и молча их не переносил — то есть три функции
+        // выглядели рабочими и не работали ни разу:
+        //   • `pausedAccounts` — раздел «Очистка» считает `paused ?? 0` ⇒ всегда 0 ⇒ он предупреждал
+        //     «опрос идёт», даже когда ВСЕ подключения на паузе. С массовой кнопкой (#581) это
+        //     стало заметно сразу: приостановил всё — и тут же читаешь, что опрос идёт;
+        //   • `unhealthyAccounts` — счётчик уже нерабочих подключений (#504) не показывался;
+        //   • `myCompany` — строка «моя компания» (#493) на экране готовности не рисовалась ВОВСЕ.
+        // ⚠ Пересборка по полям здесь намеренная (сервер отдаёт `Partial`, доверять форме нельзя),
+        // поэтому лекарство не «спред», а перенос каждого поля с коэрсом — и тест, который держит
+        // полноту.
+        unhealthyAccounts: Number(res?.unhealthyAccounts) || 0,
+        pausedAccounts: Number(res?.pausedAccounts) || 0,
         pollEnabled: res?.pollEnabled === true,
         pollIntervalMin: Number(res?.pollIntervalMin) || DEFAULTS.pollIntervalMin,
-        lastRunMs: typeof res?.lastRunMs === 'number' ? res.lastRunMs : null
+        lastRunMs: typeof res?.lastRunMs === 'number' ? res.lastRunMs : null,
+        ...(res?.myCompany ? { myCompany: res.myCompany } : {})
       }
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось загрузить состояние настройки')
