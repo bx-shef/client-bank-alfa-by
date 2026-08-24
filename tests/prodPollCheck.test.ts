@@ -207,3 +207,60 @@ describe('minutes_of разбирает окно ВЕРНО — проверяе
     expect(out).toMatch(/3d/)
   })
 })
+
+describe('вердикт «КТО продлевает банк-токен» (#488/#489)', () => {
+  // ⚠ Секция отвечает на вопрос, который из факта «подключение живёт» НЕ следует: токен обновляет и
+  // крон продления, и сам опрос по дороге. Различает только сводка прогона — а значит скрипт
+  // РАЗБИРАЕТ её формат, и разойдись они, вердикт молча станет «прогонов не было». То есть
+  // диагностика соврала бы в сторону «продление не работает» ровно тогда, когда оно работает.
+
+  /** Тот же конвейер, что в скрипте, — сюда подставляются НАСТОЯЩИЕ строки сводки. */
+  function verdictCounts(logLines: string[]): { runs: number, selected: number, refreshed: number } {
+    const out = execFileSync('sh', ['-c',
+      `grep -F '[bank-keepalive]' | grep -oE 'selected=[0-9]+ refreshed=[0-9]+' `
+      + `| awk -F'[= ]' '{sel+=$2; ref+=$4; n++} END {print (n?n:0), (sel?sel:0), (ref?ref:0)}'`
+    ], { input: logLines.join('\n'), encoding: 'utf8' }).trim().split(/\s+/).map(Number)
+    return { runs: out[0]!, selected: out[1]!, refreshed: out[2]! }
+  }
+
+  it('разбирает НАСТОЯЩУЮ строку сводки, а не выдуманную', async () => {
+    // Строку берём у самого `runBankKeepAlive`: если он завтра переставит поля, тест упадёт здесь,
+    // а не на проде тишиной в диагностике.
+    const logged: string[] = []
+    await runBankKeepAlive({
+      now: () => 1_700_000_000_000,
+      listAccounts: async () => [],
+      getToken: async () => null,
+      refresh: async t => t,
+      log: (m: string) => logged.push(m)
+    })
+    const summary = logged.find(l => l.startsWith('selected='))
+    expect(summary, 'сводки нет — вердикту не из чего строиться').toBeTruthy()
+    // Канал добавляет реальный логгер; здесь дописываем его так же, как видит `docker compose logs`.
+    const counts = verdictCounts([`[bank-keepalive] INFO: ${summary}`])
+    expect(counts.runs, 'скрипт не распознал настоящую строку сводки').toBe(1)
+  })
+
+  it('«крон продлевал» и «крон ходил вхолостую» РАЗЛИЧАЮТСЯ — в этом вся ценность секции', () => {
+    const worked = verdictCounts(['[bank-keepalive] INFO: selected=2 refreshed=2 skipped=0 failed=0 unrefreshable=0 expired=0'])
+    expect(worked).toEqual({ runs: 1, selected: 2, refreshed: 2 })
+
+    const idle = verdictCounts([
+      '[bank-keepalive] INFO: selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0',
+      '[bank-keepalive] INFO: selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0'
+    ])
+    // Крон отработал дважды и никого не отобрал ⇒ токен всё время свежий ⇒ держит его ОПРОС.
+    expect(idle).toEqual({ runs: 2, selected: 0, refreshed: 0 })
+  })
+
+  it('чужие строки в счёт не идут', () => {
+    expect(verdictCounts(['[queue] INFO: real poll: 2 accounts'])).toEqual({ runs: 0, selected: 0, refreshed: 0 })
+  })
+
+  it('скрипт действительно содержит эту секцию и оба вердикта', () => {
+    // Иначе тест проверял бы конвейер, которого в скрипте нет.
+    expect(SCRIPT).toContain('КТО продлевает банк-токен')
+    expect(SCRIPT, 'вердикт «продлевает крон» пропал').toMatch(/продлевает КРОН/)
+    expect(SCRIPT, 'вердикт «продлевает опрос» пропал').toMatch(/продлевает ОПРОС/)
+  })
+})
