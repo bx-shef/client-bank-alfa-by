@@ -13,6 +13,10 @@ export interface PollNowResponse {
   cooldownSec?: number
   /** День, за который ушла задача (эхо запроса) — интерфейс подтверждает выбор человеку. */
   day?: string
+  /** Банк и счёт, по которым ушла задача (эхо запроса, #19) — без них «опрос запущен» не говорит,
+   *  ЧТО именно опрошено, а на портале с двумя банками это и есть весь вопрос. */
+  provider?: string
+  accountKey?: string
   error?: string
 }
 
@@ -50,7 +54,7 @@ export function useManualPoll() {
 
   /** Trigger the poll. `day` (`ГГГГ-ММ-ДД`) — точечный забор за один день (#592); пусто ⇒ обычное
    *  скользящее окно. Sets `message` on success, `error` on any failure. */
-  async function poll(day = ''): Promise<void> {
+  async function poll(day = '', target?: { provider: string, accountKey: string }): Promise<void> {
     const a = frameAuth()
     enabled.value = a !== null
     error.value = ''
@@ -77,12 +81,17 @@ export function useManualPoll() {
       const res = await $fetch<PollNowResponse>('/api/poll-now', {
         method: 'POST',
         headers: authHeaders(a),
-        body: day ? { day } : {}
+        body: { ...(day ? { day } : {}), ...(target ?? {}) }
       })
       const n = res?.enqueued ?? 0
       const forDay = res?.day ? ` за ${res.day}` : ''
+      // ⚠ Адресный забор называет СЧЁТ (#19): «опрос запущен: счетов — 1» не отвечает на вопрос
+      // «а какой именно», а на портале с двумя банками это и есть весь вопрос.
+      const forAccount = res?.accountKey ? ` по счёту ${res.accountKey}` : ''
       message.value = n > 0
-        ? `Опрос запущен${forDay}: счетов — ${res?.accounts ?? n}. Операции появятся в CRM через минуту-другую.`
+        ? (forAccount
+            ? `Опрос запущен${forDay}${forAccount}. Операции появятся в CRM через минуту-другую.`
+            : `Опрос запущен${forDay}: счетов — ${res?.accounts ?? n}. Операции появятся в CRM через минуту-другую.`)
         : 'Опрос запущен, но подключённых счетов нет — сначала подключите счёт.'
       // ⚠ Исход показываем ТОЛЬКО когда счёт один. Отметка обращения к банку одна на портал, а
       // задача ставится НА КАЖДЫЙ счёт: при двух счетах пустой ответ по первому пришёл бы раньше
@@ -105,6 +114,9 @@ export function useManualPoll() {
       // «повторите через пару минут» во втором случае отправляет админа ждать вечно.
       else if (status === 503) error.value = 'Обработка сейчас недоступна. Если повторяется — сообщите администратору сервиса.'
       else if (status === 403) error.value = 'Опрос может запустить только администратор портала.'
+      // Адресный забор (#19): счёт исчез между отрисовкой и кликом либо не опрашивается.
+      else if (status === 404) error.value = 'Подключение не найдено — обновите страницу.'
+      else if (status === 409 && typeof said === 'string' && said) error.value = said
       else error.value = frameFetchError(e, 'Не удалось запустить опрос')
     } finally {
       polling.value = false

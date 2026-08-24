@@ -38,6 +38,10 @@ afterEach(() => {
   fetchMock.mockImplementation(defaultFetch)
   listReply.value = []
   mockState.inPortal = true
+  // ⚠ `B24Modal` ТЕЛЕПОРТИРУЕТСЯ в `body` и не убирается вместе с размонтированным компонентом.
+  // Без уборки следующий тест находит `document.querySelector`-ом ЧУЖОЕ окно из прошлого теста —
+  // клик по нему ничего не делает, и падение выглядит как «кнопка не отправила запрос».
+  document.body.innerHTML = ''
 })
 
 async function mountReady() {
@@ -642,5 +646,89 @@ describe('#23 несколько счетов ОДНОГО банка — стр
     const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/add-account')
     expect((call![1] as { body: Record<string, unknown> }).body)
       .toEqual({ id: 6, sourceAccountKey: 'BY02ALFA0002', accountKey: 'BY03ALFA0003' })
+  })
+})
+
+describe('#19 забор за день адресуется КОНКРЕТНОМУ счёту', () => {
+  const A = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+
+  // ⚠ Окно ТЕЛЕПОРТИРУЕТСЯ в `body` (так устроен `B24Modal`), поэтому искать его в поддереве
+  // компонента бесполезно — ищем в документе.
+  const inModal = (sel: string) => document.querySelector(sel)
+
+  async function openFetch(wrapper: Awaited<ReturnType<typeof mountReady>>, id = 5) {
+    await wrapper.find(`[data-testid="fetch-day-open-${id}"]`).trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+  }
+
+  async function pickDay(wrapper: Awaited<ReturnType<typeof mountReady>>, day: string) {
+    wrapper.findComponent({ name: 'DayField' }).vm.$emit('update:modelValue', day)
+    await nextTick()
+  }
+
+  async function runFetch() {
+    const btn = inModal('[data-testid="fetch-day-run"]') as HTMLElement | null
+    btn?.click()
+    await flushPromises()
+  }
+
+  it('в запрос уходят банк, счёт И день', async () => {
+    // ⚠ Раньше кнопка жила в карточке ручного опроса и ставила задачу на КАЖДЫЙ счёт портала:
+    // человек смотрел на конкретную строку, а спрашивали банк обо всех, тратя общий лимит запросов
+    // на счета, о которых не спрашивали.
+    listReply.value = [A]
+    const wrapper = await mountReady()
+    await openFetch(wrapper)
+    await pickDay(wrapper, '2026-07-10')
+    await runFetch()
+
+    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
+    expect(post, 'запрос на забор не ушёл').toBeTruthy()
+    expect((post![1] as { body: Record<string, unknown> }).body)
+      .toEqual({ day: '2026-07-10', provider: 'alfa-by', accountKey: 'BY01ALFA0001' })
+  })
+
+  it('окно называет БАНК И СЧЁТ — иначе непонятно, что заберут', async () => {
+    listReply.value = [A]
+    const wrapper = await mountReady()
+    await openFetch(wrapper)
+    expect(inModal('[data-testid="fetch-day-modal"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('BY01ALFA0001')
+  })
+
+  it('без выбранного дня «Забрать» заблокировано — дата обязательна', async () => {
+    // ⚠ Не «за сегодня по умолчанию»: молчаливая подстановка означала бы, что человек нажал кнопку,
+    // не выбрав то, ради чего она заведена, и получил не тот день.
+    listReply.value = [A]
+    const wrapper = await mountReady()
+    await openFetch(wrapper)
+    expect((inModal('[data-testid="fetch-day-run"]') as HTMLButtonElement | null)?.disabled).toBe(true)
+    expect(fetchMock.mock.calls.some(c => c[0] === '/api/poll-now')).toBe(false)
+  })
+
+  it('адрес берётся из ТОЙ строки, по которой нажали', async () => {
+    const B = { ...A, id: 6, accountKey: 'BY02ALFA0002' }
+    listReply.value = [A, B]
+    const wrapper = await mountReady()
+    await openFetch(wrapper, 6)
+    await pickDay(wrapper, '2026-07-10')
+    await runFetch()
+    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
+    expect((post![1] as { body: Record<string, unknown> }).body)
+      .toMatchObject({ accountKey: 'BY02ALFA0002' })
+  })
+
+  it('ПРИОСТАНОВЛЕННОМУ подключению кнопки нет — забирать по нему нечего', async () => {
+    listReply.value = [{ ...A, pollPaused: true }]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="fetch-day-open-5"]').exists()).toBe(false)
+  })
+
+  it('НЕЗАВЕРШЁННОМУ подключению кнопки нет — счёт ещё не выбран', async () => {
+    listReply.value = [{ ...A, accountKey: PENDING }]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="fetch-day-open-5"]').exists()).toBe(false)
   })
 })
