@@ -131,15 +131,34 @@ describe('#575 колонки реестра в crm.item.add', () => {
     }
   })
 
-  it('без блока реестра форма вызова прежняя — старые вызывающие не сломаны', () => {
+  it('без блока реестра форма вызова прежняя — плюс внешний код', () => {
+    // ⚠ `xmlId` пишется ВСЕГДА, когда есть маркер: это естественный внешний код записи (счёт|id
+    // операции в банке). Портал оставлял его пустым, и связь элемента с выпиской снаружи не
+    // читалась вовсе — только через наше поле (замечание владельца по живой карточке).
     const call = buildPaymentElementAddCall(SP, { opportunity: 5, currency: 'BYN', marker: 'M' })
     const f = call.params.fields as Record<string, unknown>
     expect(Object.keys(f).sort()).toEqual([
+      'xmlId',
       uf(PAYMENT_SP_FIELDS.currency.postfix),
       uf(PAYMENT_SP_FIELDS.marker.postfix),
       uf(PAYMENT_SP_FIELDS.needDistributionsSum.postfix),
       uf(PAYMENT_SP_FIELDS.total.postfix)
     ].sort())
+    expect(f.xmlId).toBe('M')
+  })
+
+  it('человеческий заголовок вместо «Импорт выписки: платежи #45»', () => {
+    // ⚠ Заголовок стоит в списке реестра, в поиске и в каждой ссылке на элемент — то есть ровно
+    // там, где человек ищет платёж глазами. Портальное умолчание не говорит о платеже ничего.
+    const call = buildPaymentElementAddCall(SP, {
+      opportunity: 5, currency: 'BYN', marker: 'M', title: 'Приход 450,00 BYN от ИП Иванов'
+    })
+    expect((call.params.fields as Record<string, unknown>).title).toBe('Приход 450,00 BYN от ИП Иванов')
+  })
+
+  it('пустой заголовок не отправляется — портал подставит своё, а не пустоту', () => {
+    const call = buildPaymentElementAddCall(SP, { opportunity: 5, currency: 'BYN', marker: 'M', title: '   ' })
+    expect('title' in (call.params.fields as Record<string, unknown>)).toBe(false)
   })
 })
 

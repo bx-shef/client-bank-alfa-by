@@ -76,6 +76,9 @@ export async function handleProvisionRequest(
         distributionSpEtid: outcome.distributionSpEtid,
         created: outcome.createdPaymentSp || outcome.createdDistributionSp,
         addedFields: outcome.addedFields,
+        // ⚠ Отдаём наружу: карточка без раскладки — не поломка, но админ должен узнать об этом
+        // сразу, а не обнаружить пустую карточку через неделю (лучшие усилия у провижининга).
+        cardConfigured: outcome.cardConfigured,
         storedChanged: outcome.storedChanged
       }
     }

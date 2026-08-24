@@ -131,6 +131,91 @@ export function buildUfFieldName(spTypeId: number, postfix: string): string {
   return `UF_CRM_${spTypeId}_${postfix}`
 }
 
+/**
+ * Имя поля так, как его ХРАНИТ портал: `UF_CRM<id>_<POSTFIX>` — БЕЗ подчёркивания после `CRM`.
+ *
+ * ⚠ Это не то же самое, что `buildUfFieldName` (`UF_CRM_<id>_<POSTFIX>`), которым поле СОЗДАЁТСЯ:
+ * портал нормализует имя при создании, и обратно читается уже слитная форма. Замерено на живом
+ * портале 2026-08-23: `crm.item.fields` отдаёт `ufCrm7OpDate`, а настройка карточки принимает и
+ * возвращает `UF_CRM7_OP_DATE`. Настройке карточки нужна именно эта форма — с формой создания она
+ * поля просто не найдёт и молча покажет пустой раздел.
+ */
+export function buildUfStoredFieldName(spTypeId: number, postfix: string): string {
+  return `UF_CRM${spTypeId}_${postfix}`
+}
+
+/**
+ * Раскладка карточки элемента реестра платежей (#27).
+ *
+ * ⚠ Зачем вообще: поля на элементе БЫЛИ и были подписаны по-русски, но карточка их не показывала —
+ * портал рисует раскладку по умолчанию, и клиент, моя компания, сумма, дата и назначение в неё не
+ * попадали. То есть реестр держал данные, которые человек не видел.
+ *
+ * ⚠ `scope: 'C'` — общая настройка на всех пользователей портала, а не личная настройка того, кто
+ * нажал кнопку: иначе бухгалтер увидел бы прежнюю пустую карточку.
+ *
+ * Порядок разделов — порядок вопросов к платежу: что это → между кем → откуда → что осталось.
+ */
+export function buildPaymentCardConfigCall(paymentSp: SpRef): { method: string, params: Record<string, unknown> } {
+  const f = (postfix: string) => buildUfStoredFieldName(paymentSp.id, postfix)
+  const F = PAYMENT_SP_FIELDS
+  return {
+    method: 'crm.item.details.configuration.set',
+    params: {
+      entityTypeId: paymentSp.entityTypeId,
+      scope: 'C',
+      data: [
+        {
+          name: 'payment',
+          title: 'Платёж',
+          type: 'section',
+          elements: [
+            { name: f(F.operationDate.postfix), optionFlags: 1 },
+            { name: f(F.direction.postfix), optionFlags: 1 },
+            { name: f(F.total.postfix), optionFlags: 1 },
+            { name: f(F.currency.postfix), optionFlags: 1 },
+            { name: f(F.purpose.postfix), optionFlags: 1 }
+          ]
+        },
+        {
+          name: 'parties',
+          title: 'Стороны',
+          type: 'section',
+          elements: [
+            // ⚠ Стандартные поля связи — они уже включены флагами типа (`isClientEnabled`,
+            // `isMycompanyEnabled`), но в раскладку по умолчанию не попадали.
+            { name: 'COMPANY_ID', optionFlags: 1 },
+            { name: 'MYCOMPANY_ID', optionFlags: 1 },
+            { name: f(F.counterparty.postfix), optionFlags: 1 },
+            { name: f(F.counterpartyAccount.postfix), optionFlags: 1 },
+            { name: f(F.counterpartyUnp.postfix) }
+          ]
+        },
+        {
+          name: 'source',
+          title: 'Источник',
+          type: 'section',
+          elements: [
+            { name: f(F.ownAccount.postfix), optionFlags: 1 },
+            { name: f(F.bank.postfix), optionFlags: 1 },
+            { name: f(F.marker.postfix) },
+            { name: 'CREATED_TIME' }
+          ]
+        },
+        {
+          name: 'distribution',
+          title: 'Распределение',
+          type: 'section',
+          elements: [
+            { name: f(F.needDistributionsSum.postfix), optionFlags: 1 },
+            { name: f(F.requiresRedistribution.postfix) }
+          ]
+        }
+      ]
+    }
+  }
+}
+
 /** The CAMELCASE B24 user-field name `crm.item.*` uses for read/write/FILTER (its default when
  *  `useOriginalUfNames` is not 'Y'). Live-confirmed: filtering by the ORIGINAL `UF_CRM_<id>_<postfix>`
  *  name returns EMPTY even with `useOriginalUfNames:'Y'`, but the camelCase name matches — so the ledger
