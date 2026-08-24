@@ -151,25 +151,34 @@ export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): 
     // согласия на руках остался бы СГОРЕВШИЙ refresh, и они умерли бы по одному на своих тиках —
     // молча, ночью, с симптомом «подключение вдруг перестало работать» (#489).
     //
-    // ⚠ Одним оператором, а не «прочитать грант → обновить по гранту»: между двумя запросами строку
-    // могли удалить или переразметить, и второй записал бы токены не туда, куда смотрел первый.
-    // `<> ''` обязательна — пустой грант это «не размечено», а не «общий» (см. `grantId`).
-    `UPDATE bank_tokens t
+    // ⚠ ЯКОРЬ — ГРАНТ, А НЕ СТРОКА СЧЁТА (находка ревью по гонкам). Первая версия искала строку по
+    // `account_key` и от неё шла к сёстрам; тогда «Отключить» этот счёт, пока идёт обновление,
+    // убивало ПОДКЛЮЧЕНИЕ ЦЕЛИКОМ: `DELETE` коммитился за время POST (до 15 с), якорь исчезал,
+    // UPDATE не находил ничего, и все остальные счета оставались с refresh, который банк уже
+    // заменил. То есть кнопка, задуманная как безопасный способ убрать ОДИН счёт (#24/#25),
+    // хоронила все шесть. Грант приходит параметром — вызывающий держит его в токене, — поэтому
+    // исчезновение одной строки больше ничего не значит.
+    //
+    // ⚠ `<> ''` обязательна: пустой грант это «не размечено», а не «общий» (см. `grantId`), и такое
+    // подключение по-прежнему адресуется своим номером счёта.
+    `UPDATE bank_tokens
         SET access_token      = $4,
             refresh_token_enc = $5,
             expires_at        = $6,
             updated_at        = now()
-       FROM bank_tokens src
-      WHERE src.member_id = $1 AND src.provider = $2 AND src.account_key = $3
-        AND t.member_id = src.member_id AND t.provider = src.provider
-        AND (t.id = src.id OR (src.grant_id <> '' AND t.grant_id = src.grant_id))
-      RETURNING t.member_id`,
+      WHERE member_id = $1 AND provider = $2
+        AND CASE WHEN $7 <> '' THEN grant_id = $7 ELSE account_key = $3 END
+      RETURNING member_id`,
     // An empty refresh is a LITERAL empty string — not NULL, not ciphertext — for exactly the
     // reasons spelled out in `saveBankToken` (encrypting '' yields a non-empty blob, which makes
     // the `has_refresh` probe answer true for an account that cannot be refreshed at all).
     [token.memberId, token.provider, token.accountKey, token.accessToken,
-      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt]
+      token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt,
+      token.grantId ?? '']
   )
+  // ⚠ `false` теперь означает «от подключения не осталось НИ ОДНОЙ строки», а не «отключили тот
+  // счёт, по которому нас позвали». Это и есть правильный смысл: ротированную пару некуда деть
+  // только тогда, когда убрали всё подключение.
   return rows.length > 0
 }
 
@@ -184,6 +193,16 @@ export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): 
  * которое мы объявили мёртвым по СВОИМ часам, раньше не пробовали больше НИКОГДА: третьего
  * варианта не существовало — либо не трогать, либо долбить отозванный грант каждый тик. Метка даёт
  * третий: пробовать редко, и дать банку последнее слово.
+ *
+ * ⚠ ШТАМПУЕТСЯ ВЕСЬ ГРАНТ, а не одна строка (#23, находка ревью). Обновление тоже идёт по гранту,
+ * и асимметрия здесь возвращала бы ровно ту долбёжку, ради запрета которой колонка заведена:
+ * планировщик берёт из гранта ОДНУ строку, а какую именно — не определено (счета гранта несут
+ * одинаковый `updated_at`, его проставляет один и тот же UPDATE). На следующем тике первой могла
+ * оказаться другая строка того же гранта, с нулевой меткой, и отозванный грант получал запрос
+ * каждый тик — по разу на счёт, то есть тем чаще, чем больше счетов у клиента.
+ *
+ * ⚠ Пустой грант не группирует — тем же правилом, что и везде: он значит «не размечено», а не
+ * «общий», и склейка по нему разослала бы метку чужим подключениям портала.
  */
 export async function markBankRefreshAttempt(
   query: QueryFn,
@@ -191,9 +210,13 @@ export async function markBankRefreshAttempt(
   nowMs: number
 ): Promise<void> {
   await query(
-    `UPDATE bank_tokens SET last_attempt_at = $4
-      WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
-    [ref.memberId, ref.provider, ref.accountKey, nowMs]
+    // Якорь — грант, ровно по тому же доводу, что у `updateBankTokenSecrets`: строку счёта могли
+    // отключить между отбором и штампом, и тогда метка не легла бы никуда.
+    `UPDATE bank_tokens
+        SET last_attempt_at = $4
+      WHERE member_id = $1 AND provider = $2
+        AND CASE WHEN $5 <> '' THEN grant_id = $5 ELSE account_key = $3 END`,
+    [ref.memberId, ref.provider, ref.accountKey, nowMs, ref.grantId ?? '']
   )
 }
 
@@ -231,6 +254,46 @@ function rowToBankToken(row: Record<string, unknown>): BankToken {
     // по СЧЁТУ вместо гранта, то есть счета одного согласия снова начнут обновляться параллельно.
     grantId: String(row.grant_id ?? '')
   }
+}
+
+/**
+ * Банк и грант строки по её неизменяемому `id` (#23/#517) — без загрузки и расшифровки токенов.
+ *
+ * Нужен добавлению счёта: лок берётся ПО ГРАНТУ, а грант надо знать до лока. `null` — строки нет.
+ * Секретов не читает по тому же доводу, что и `getBankGrantId` ниже.
+ */
+export async function getBankRowGrant(
+  query: QueryFn, memberId: string, id: number
+): Promise<{ provider: BankProviderId, grantId: string } | null> {
+  const rows = await query(
+    `SELECT provider, grant_id FROM bank_tokens WHERE member_id = $1 AND id = $2`,
+    [memberId, id]
+  )
+  const r = rows[0]
+  return r ? { provider: r.provider as BankProviderId, grantId: String(r.grant_id ?? '') } : null
+}
+
+/**
+ * Прочитать ТОЛЬКО грант подключения (#23) — без загрузки и расшифровки токенов.
+ *
+ * ⚠ Отдельная функция, а не `getBankToken(...).grantId`, по двум причинам (находка ревью по
+ * безопасности). Во-первых, `rowToBankToken` РАСШИФРОВЫВАЕТ refresh: разворачивать банковский
+ * секрет в память процесса ради чтения ключа группировки незачем — путь выбора счёта секретов не
+ * касался вовсе. Во-вторых, он на неудаче БРОСАЕТ, и строка с неразбираемым шифротекстом (смена
+ * `B24_TOKEN_ENC_KEY`, повреждение) сделала бы выбор счёта невыполнимым: исключение улетело бы
+ * мимо ветки «занято» наружу как 500, и админ не смог бы ни довести подключение до рабочего, ни
+ * прочитать причину — при том, что в списке такая строка видна (он секретов не читает специально).
+ *
+ * `''` — строки нет либо грант не размечен; и то, и другое даёт прежний лок по счёту.
+ */
+export async function getBankGrantId(
+  query: QueryFn, memberId: string, provider: BankProviderId, accountKey: string
+): Promise<string> {
+  const rows = await query(
+    `SELECT grant_id FROM bank_tokens WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
+    [memberId, provider, accountKey]
+  )
+  return rows[0] ? String(rows[0].grant_id ?? '') : ''
 }
 
 /** Load one connected account's tokens (decrypting refresh), or `null` if not connected. */
@@ -283,6 +346,13 @@ export interface BankAccountRef {
    * интернет-банк за тем, что он всего лишь притормозил.
    */
   pollPaused: boolean
+  /**
+   * Грант подключения (#23) — по нему адресуется штамп попытки обновления и берётся лок.
+   *
+   * ⚠ Необязателен: `BankAccountRef` собирают и планировщик опроса, и тесты, а группировка по
+   * гранту нужна только пишущим путям. Отсутствует ⇒ прежняя адресация по номеру счёта.
+   */
+  grantId?: string
 }
 
 /** Enumerate EVERY connected bank account across ALL portals (A6 registry) for the real
@@ -298,7 +368,8 @@ export async function listAllBankAccounts(query: QueryFn): Promise<BankAccountRe
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
     accountKey: String(r.account_key),
-    pollPaused: r.poll_paused === true
+    pollPaused: r.poll_paused === true,
+    grantId: String(r.grant_id ?? '')
   }))
 }
 
@@ -313,7 +384,8 @@ export async function listBankAccountsForPortal(query: QueryFn, memberId: string
     memberId: String(r.member_id),
     provider: r.provider as BankProviderId,
     accountKey: String(r.account_key),
-    pollPaused: r.poll_paused === true
+    pollPaused: r.poll_paused === true,
+    grantId: String(r.grant_id ?? '')
   }))
 }
 
@@ -400,7 +472,12 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
             poll_paused, grant_id,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
-       FROM bank_tokens ORDER BY updated_at ASC`,
+       -- ⚠ id вторым ключом ОБЯЗАТЕЛЕН (#23, находка ревью): счета одного гранта несут одинаковый
+       -- updated_at — его проставляет один и тот же UPDATE, — а порядок ничьей в PostgreSQL не
+       -- определён и зависит от физического порядка в куче, который меняется при каждой записи.
+       -- Без него планировщик выбирал бы из гранта то одну строку, то другую, и решения, принятые
+       -- по метке ПЕРВОЙ строки, дрейфовали бы от тика к тику без единой видимой причины.
+       FROM bank_tokens ORDER BY updated_at ASC, id ASC`,
     []
   )
   return rows.map(r => ({
@@ -577,13 +654,18 @@ export type AddAccountOutcome = 'added' | 'gone' | 'stale' | 'conflict' | 'unmar
  * пауза (#576), и по той же причине: ключ меняется при выборе счёта, поэтому адрес из отрисованного
  * списка может описывать уже другое подключение.
  *
- * ⚠ ЛОК НЕ БЕРЁТСЯ, и это не забывчивость. Спор за живую строку тут не возникает: исходная строка
- * только ЧИТАЕТСЯ (одним и тем же оператором, то есть неразделимо с записью), а пишется новая, за
- * которую пока никто не борется. Обновление токена, идущее параллельно, запишет ротированную пару
- * во все строки гранта — включая нашу, если она уже вставлена, и не включая, если ещё нет; во
- * втором случае новая строка получает ту же пару, что видела исходная, то есть ту, которую банк ещё
- * не ротировал ЛИБО уже ротировал вместе с исходной. Разойтись они не могут: обе берутся из одной
- * строки одним чтением.
+ * ⚠ ВЫЗЫВАЕТСЯ ПОД ГРАНТОВЫМ ЛОКОМ (`makeLockedAddAccount`), и это не перестраховка. Первая версия
+ * шла без лока, рассуждая, что исходная строка только читается, а пишется новая, за которую никто
+ * не борется. Рассуждение неверно при read committed (находка ревью по гонкам): `INSERT … SELECT`
+ * не блокируется на НЕЗАКОММИЧЕННОМ `UPDATE` обновления — он читает предыдущую версию строки.
+ * Последовательность: обновление уже получило от банка новую пару и выполнило свой UPDATE, но не
+ * закоммитилось; в это окно наша вставка читает СТАРУЮ видимую версию и копирует в новую строку
+ * refresh, который банк уже отозвал, — со штампом `now()`, то есть выглядящий самым свежим в
+ * гранте. Дальше задача опроса нового счёта предъявит банку сожжённый токен, а у банков со
+ * стандартной проверкой повторного использования это отзывает грант ЦЕЛИКОМ.
+ *
+ * Сама функция лок не берёт намеренно: она чистая над инъектируемым `QueryFn` и тестируется без БД.
+ * Обход ловится структурно (`tests/bankRefreshLock.test.ts`).
  *
  * ⚠ `updated_at` новой строки — `now()`, а НЕ копия исходного. Колонка означает «когда мы последний
  * раз держали свежую пару», и пара здесь ровно та же, что у исходной строки, — но её возраст мы

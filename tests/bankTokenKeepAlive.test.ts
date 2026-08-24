@@ -50,7 +50,12 @@ describe('selectBankAccountsNearExpiry', () => {
   it('Альфа за 9 часов до истечения — в очереди на обновление', () => {
     // TTL 10 ч, полоса 20% ⇒ обновляем начиная с возраста 8 ч.
     const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - 9 * HOUR })], NOW)
-    expect(r.due).toEqual([{ memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001', pollPaused: false }])
+    expect(r.due).toEqual([{
+      memberId: 'M1', provider: 'alfa-by', accountKey: 'BY00BANK00000000000000000001', pollPaused: false,
+      // ⚠ Грант обязан доехать до `markBankRefreshAttempt`: метка адресуется им, и без неё
+      // отозванный грант получал бы запрос каждый тик — по разу на каждый свой счёт.
+      grantId: ''
+    }])
   })
 
   it('граница считается от СРОКА ЖИЗНИ ПРОВАЙДЕРА, а не одна на всех', () => {
@@ -538,6 +543,36 @@ describe('#23 счета одного гранта обновляются ОДИ
       acc({ accountKey: 'BY02', grantId: '', connectedAt: NOW - 9 * HOUR })
     ]
     expect(selectBankAccountsNearExpiry(rows, NOW).due).toHaveLength(2)
+  })
+
+  it('дедуп ловит и ПОВТОРЫ просроченных — иначе отозванный грант долбится по разу на счёт', () => {
+    // ⚠ Отдельная ветка от `due`, и покрывать её надо отдельно: замерено, что снятие дедупа именно
+    // здесь оставляло весь набор зелёным. Смысл ветки — «пробовать редко»; без дедупа шесть счетов
+    // одного мёртвого гранта дают шесть запросов к банку на каждом тике вместо одного раз в шесть
+    // часов, то есть ровно ту долбёжку, ради запрета которой метка попытки и заведена.
+    const ttlMs = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+    const rows = ['BY01', 'BY02', 'BY03'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', connectedAt: NOW - ttlMs - 60_000, lastAttemptAt: 0 }))
+    const sel = selectBankAccountsNearExpiry(rows, NOW)
+    // Три строки в учёте «истекло» — чинить человеку три подключения…
+    expect(sel.expired).toHaveLength(3)
+    // …но обменять refresh можно только один раз: он у них общий.
+    expect(sel.due).toHaveLength(1)
+  })
+
+  it('УЧЁТ по СРОКУ ЖИЗНИ тоже считает строки, а не гранты', () => {
+    // Второй вход в тот же инвариант: дедуп стоит на действии, и «случайно» распространить его на
+    // учёт TTL-ветки — значит занизить число подключений к починке у клиентов с несколькими счетами.
+    const ttlMs = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+    const rows = ['BY01', 'BY02'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', connectedAt: NOW - ttlMs - 60_000 }))
+    expect(selectBankAccountsNearExpiry(rows, NOW).expired).toHaveLength(2)
+  })
+
+  it('УЧЁТ «нечем обновлять» тоже считает строки', () => {
+    const rows = ['BY01', 'BY02'].map(accountKey =>
+      acc({ accountKey, grantId: 'G1', hasRefresh: false, connectedAt: NOW - 9 * HOUR }))
+    expect(selectBankAccountsNearExpiry(rows, NOW).unrefreshable).toHaveLength(2)
   })
 
   it('УЧЁТ не схлопывается: «истекло» считает СТРОКИ, а не гранты', () => {

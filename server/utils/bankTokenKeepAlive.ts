@@ -180,7 +180,10 @@ export function selectBankAccountsNearExpiry(
     // обязано пережить ночь, иначе владельцу счёта пришлось бы заново входить в интернет-банк за
     // тем, что он всего лишь притормозил. Отбор здесь идёт по сроку токена, и только по нему.
     const ref: BankAccountRef = {
-      memberId: row.memberId, provider: row.provider, accountKey: row.accountKey, pollPaused: row.pollPaused
+      memberId: row.memberId, provider: row.provider, accountKey: row.accountKey, pollPaused: row.pollPaused,
+      // ⚠ Грант обязан доехать до `markBankRefreshAttempt`: метка адресуется им, иначе она легла бы
+      // на одну строку гранта, и отозванный грант получал бы запрос каждый тик — по разу на счёт.
+      grantId: row.grantId
     }
     // ⚠ СОГЛАСИЕ — ПЕРВЫМ, раньше всех оценок по возрасту токена (#503). Это не наша догадка о
     // сроке, а дата, которую выдал сам банк: когда она прошла, обновлять нечего — грант мёртв, и

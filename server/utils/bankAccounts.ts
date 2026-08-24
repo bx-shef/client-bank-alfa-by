@@ -64,7 +64,7 @@ export type RenameOutcome = 'renamed' | 'not-found' | 'conflict' | 'busy'
 export interface AddAccountDeps extends BankAccountsDeps {
   add: (
     memberId: string, sourceId: number, expectedAccountKey: string, accountKey: string
-  ) => Promise<'added' | 'gone' | 'stale' | 'conflict' | 'unmarked'>
+  ) => Promise<'added' | 'gone' | 'stale' | 'conflict' | 'unmarked' | 'busy'>
 }
 
 export interface SetAccountDeps extends BankAccountsDeps {
@@ -167,7 +167,13 @@ export async function handleListBankAccounts(deps: ListAccountsDeps, input: Bank
         // этой правки; интерфейс тогда о согласии молчит, а не рисует прочерк.
         consentExpiresAt: a.consentExpiresAt,
         // Автоопрос приостановлен (#576) — подключение живо, токен продлевается, за выпиской не ходим.
-        pollPaused: a.pollPaused
+        pollPaused: a.pollPaused,
+        // ⚠ ГРАНТ ОБЯЗАТЕЛЕН В ОТВЕТЕ (#23, находка ревью). По нему интерфейс решает, показывать ли
+        // «Добавить счёт»; не отдай мы его — поле пришло бы `undefined`, проверка `!== ''` дала бы
+        // ИСТИНУ, и кнопка появилась бы ровно у тех подключений, которым сервер гарантированно
+        // ответит отказом. Фикстуры компонентных тестов грант несут, поэтому промах был бы виден
+        // только на живом портале. Сам грант не секрет: он ездит в authorize-URL.
+        grantId: a.grantId
       }))
     }
   }
@@ -253,6 +259,11 @@ export async function handleAddBankAccount(deps: AddAccountDeps, input: AddAccou
   // своими руками сделать то, от чего грант и защищает. Честный ответ — переподключить.
   if (res === 'unmarked') {
     return { status: 409, body: { error: 'this connection predates multi-account support, reconnect it first' } }
+  }
+  // ⚠ 503, а не 409: конфликт — «так не будет никогда», а здесь «сейчас занято, через несколько
+  // секунд пройдёт» (строку держит обновление токена). Тот же разбор, что у `set-account` (#509).
+  if (res === 'busy') {
+    return { status: 503, body: { error: 'connection is being refreshed right now, retry in a few seconds' } }
   }
   return { status: 200, body: { ok: true } }
 }

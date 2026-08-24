@@ -9,7 +9,7 @@ import { handleSetBankAccount, type SetAccountDeps } from '../../utils/bankAccou
 import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { getBankToken, renameBankTokenAccount } from '../../utils/bankTokenStore'
+import { getBankGrantId, renameBankTokenAccount } from '../../utils/bankTokenStore'
 import { withAdvisoryLock } from '../../utils/dbLock'
 import { makeLockedRename } from '../../utils/bankAccountRename'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -29,8 +29,10 @@ function liveDeps(): SetAccountDeps {
       withLock: withAdvisoryLock,
       rename: renameBankTokenAccount,
       // Грант подключения — по нему берётся лок, когда счета делят согласие (#23).
-      grantOf: async (memberId, provider, accountKey) =>
-        (await getBankToken(dbQuery, memberId, provider, accountKey))?.grantId ?? ''
+      // ⚠ Именно `getBankGrantId`, а НЕ `getBankToken(...).grantId`: второй расшифровывает refresh
+      // (незачем) и бросает на битой строке, из-за чего выбор счёта отвечал бы 500 ровно тому, кто
+      // и так не может пользоваться подключением. Разобрано в докблоке функции.
+      grantOf: (memberId, provider, accountKey) => getBankGrantId(dbQuery, memberId, provider, accountKey)
     })
   }
 }

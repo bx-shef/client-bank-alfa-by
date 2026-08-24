@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { decryptSecret } from '../server/utils/secretCrypto'
 import {
   addBankAccountToGrant,
+  markBankRefreshAttempt,
   deleteBankTokenById,
   deleteBankTokensForPortal,
   renameBankTokenAccount,
@@ -174,8 +175,10 @@ describe('listAllBankAccounts (A6 registry)', () => {
       // ⚠ Колонки `poll_paused` в этих строках НЕТ, и результат обязан быть `false`, а не
       // `undefined`: строка, записанная до #576, должна опрашиваться как обычно, а не выпасть из
       // плана молча — тот же довод, что у нулей `consent_expires_at`/`last_attempt_at` ниже.
-      { memberId: 'm1', provider: 'alfa-by', accountKey: 'A1', pollPaused: false },
-      { memberId: 'm2', provider: 'prior-by', accountKey: 'P1', pollPaused: false }
+      // Колонки `grant_id` в этих строках тоже нет ⇒ `''`: подключение, заведённое до #23, гранта
+      // не несёт, и пустое значение НЕ склеивает его с другими такими же.
+      { memberId: 'm1', provider: 'alfa-by', accountKey: 'A1', pollPaused: false, grantId: '' },
+      { memberId: 'm2', provider: 'prior-by', accountKey: 'P1', pollPaused: false, grantId: '' }
     ])
     // SELECTs only identity columns (no access_token/refresh_token_enc) — a corrupt refresh
     // can't hide a healthy account from polling.
@@ -384,15 +387,15 @@ function memStore(clock = { now: 1_700_000_000_000 }) {
     // UPDATE-only на upsert выглядела бы «успехом», а тест прошёл бы на сломанном коде.
     if (/^UPDATE bank_tokens/.test(sql) && /SET\s+access_token/.test(sql)) {
       const [member_id, provider, account_key, access_token, refresh_token_enc, expires_at] = p
-      const k = key(member_id, provider, account_key)
-      const src = rows.get(k)
-      if (!src) return [] // UPDATE-only: строки нет ⇒ ничего не создаём
-      // ⚠ Запись идёт во ВСЕ строки гранта (#23), а не только в адресуемую: банк ротирует refresh, и
-      // оставленный без обновления счёт того же согласия умер бы на своём тике со сгоревшим токеном.
-      // Пустой грант не группирует — тогда затрагивается ровно одна строка, как раньше.
-      const grant = String(src.grant_id ?? '')
+      // ⚠ ЯКОРЬ — ГРАНТ, А НЕ СТРОКА СЧЁТА (#23, находка ревью по гонкам). Грант приходит ПАРАМЕТРОМ
+      // ($7), поэтому исчезновение адресуемой строки больше ничего не значит: раньше «Отключить»
+      // этот счёт во время обновления уносило ротированную пару у ВСЕХ счетов подключения.
+      // Пустой грант не группирует — тогда адресуемся номером счёта, как раньше.
+      const grant = String(p[6] ?? '')
       const targets = [...rows.entries()].filter(([, r]) =>
-        r === src || (grant !== '' && r.member_id === member_id && r.provider === provider && String(r.grant_id ?? '') === grant))
+        r.member_id === member_id && r.provider === provider
+        && (grant !== '' ? String(r.grant_id ?? '') === grant : r.account_key === account_key))
+      if (targets.length === 0) return [] // UPDATE-only: строк нет ⇒ ничего не создаём
       for (const [tk, r] of targets) {
         rows.set(tk, {
           ...r,
@@ -888,5 +891,106 @@ describe('addBankAccountToGrant — второй счёт без повторн�
     await saveBankToken(q, base)
     const [row] = await listBankAccountInfoForPortal(q, 'm1')
     expect(await addBankAccountToGrant(q, 'ЧУЖОЙ', row!.id, 'BY01', 'BY02')).toBe('gone')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// SQL-КОНТРАКТ ДВУХ НОВЫХ ОПЕРАТОРОВ (#23, находка ревью по тестам)
+//
+// ⚠ Почему отдельный набор, хотя поведенческие тесты выше зелёные. `memStore` не ИСПОЛНЯЕТ SQL — он
+// переписывает его семантику на JS: адресация идёт по ключу `Map`, а группировку по гранту модель
+// вычисляет сама. Значит любая правка самого WHERE для неё невидима, и замерено это буквально:
+// снятие `member_id` из обоих запросов, снятие `<> ''` и полное удаление веера по гранту оставляли
+// весь набор зелёным. У соседних функций (`renameBankTokenAccount`, `setBankPollPaused`,
+// `deleteBankTokenById`) такие контрактные тесты есть давно — новые операторы получают свои.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('SQL-контракт: обновление секретов адресуется ГРАНТОМ и не выходит за портал (#23)', () => {
+  async function sqlOf(t: BankToken): Promise<string> {
+    const { query, calls } = fakeQuery([{ member_id: 'm1' }])
+    await updateBankTokenSecrets(query, t)
+    return calls[0]!.sql
+  }
+
+  it('портал и банк — в самом WHERE: чужие строки не затрагиваются никогда', async () => {
+    const sql = await sqlOf({ ...token, grantId: 'G1' })
+    expect(sql).toMatch(/WHERE\s+member_id = \$1 AND provider = \$2/)
+  })
+
+  it('ГРАНТ приходит ПАРАМЕТРОМ, а не ищется через строку счёта', async () => {
+    // ⚠ Первая версия шла `UPDATE … FROM bank_tokens src WHERE src.account_key = $3`, то есть
+    // якорем служила строка того счёта, ради которого пошли в банк. «Отключить» её во время
+    // обновления убивало ПОДКЛЮЧЕНИЕ ЦЕЛИКОМ: DELETE коммитился за время POST (до 15 с), якорь
+    // исчезал, UPDATE не находил ничего, и остальные счета оставались с refresh, который банк уже
+    // заменил. Кнопка, задуманная как безопасный способ убрать один счёт, хоронила все шесть.
+    const sql = await sqlOf({ ...token, grantId: 'G1' })
+    expect(sql).not.toMatch(/FROM\s+bank_tokens\s+src/)
+    expect(sql).toMatch(/grant_id = \$7/)
+  })
+
+  it('пустой грант НЕ группирует — адресация падает обратно на номер счёта', async () => {
+    const sql = await sqlOf({ ...token, grantId: '' })
+    expect(sql).toMatch(/\$7 <> ''/)
+    expect(sql).toMatch(/ELSE account_key = \$3/)
+  })
+
+  it('грант реально уезжает в параметры, а не остаётся в коде', async () => {
+    const { query, calls } = fakeQuery([{ member_id: 'm1' }])
+    await updateBankTokenSecrets(query, { ...token, grantId: 'G7' })
+    expect(calls[0]!.params).toContain('G7')
+  })
+
+  it('`updated_at` штампуется — по нему keep-alive выбирает кандидатов (#489)', async () => {
+    expect(await sqlOf({ ...token, grantId: 'G1' })).toMatch(/updated_at\s*=\s*now\(\)/)
+  })
+})
+
+describe('SQL-контракт: метка попытки адресуется тем же грантом (#23)', () => {
+  it('портал, банк и грант — в WHERE; `updated_at` НЕ трогается', async () => {
+    // ⚠ Асимметрия с обновлением возвращала бы долбёжку отозванного гранта: планировщик штампует
+    // одну строку гранта, а на следующем тике первой могла оказаться другая, с нулевой меткой.
+    // ⚠ `updated_at` здесь трогать нельзя: он означает «когда мы держали свежую пару», и штамп при
+    // НЕУДАЧЕ сбросил бы возраст — подключение выглядело бы свежим ровно когда ломается.
+    const { query, calls } = fakeQuery()
+    await markBankRefreshAttempt(query, {
+      memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01', pollPaused: false, grantId: 'G1'
+    }, 1_700_000_000_000)
+    const sql = calls[0]!.sql
+    expect(sql).toMatch(/WHERE\s+member_id = \$1 AND provider = \$2/)
+    expect(sql).toMatch(/grant_id = \$5/)
+    expect(sql).toMatch(/\$5 <> ''/)
+    expect(sql).not.toMatch(/updated_at/)
+    expect(calls[0]!.params).toContain('G1')
+  })
+})
+
+describe('SQL-контракт: добавление счёта не выходит за портал и несёт грант (#23)', () => {
+  it('ОБА запроса member-scoped — чужую строку не скопировать даже по верному id', async () => {
+    const { query, calls } = fakeQuery([{ account_key: 'BY01', grant_id: 'G1', provider: 'alfa-by', member_id: 'm1' }])
+    await addBankAccountToGrant(query, 'm1', 5, 'BY01', 'BY02')
+    expect(calls).toHaveLength(2)
+    // Чтение исходной строки.
+    expect(calls[0]!.sql).toMatch(/WHERE member_id = \$1 AND id = \$2/)
+    // Вставка: источник тоже ограничен порталом, а `member_id`/`provider` берутся ИЗ СТРОКИ.
+    expect(calls[1]!.sql).toMatch(/FROM bank_tokens WHERE member_id = \$1 AND id = \$2/)
+    expect(calls[1]!.sql).toMatch(/SELECT member_id, provider, \$3/)
+  })
+
+  it('грант КОПИРУЕТСЯ в новую строку — иначе счёт выпал бы из подключения', async () => {
+    // ⚠ Скопируй мы вместо гранта пустую строку — новый счёт обновлялся бы отдельно, со своей
+    // копией refresh, то есть ровно тем способом, от которого грант и защищает.
+    const { query, calls } = fakeQuery([{ account_key: 'BY01', grant_id: 'G1', provider: 'alfa-by', member_id: 'm1' }])
+    await addBankAccountToGrant(query, 'm1', 5, 'BY01', 'BY02')
+    const insert = calls[1]!.sql
+    expect(insert).toMatch(/consent_expires_at, grant_id, last_attempt_at, poll_paused, updated_at/)
+    expect(insert).toMatch(/consent_expires_at, grant_id, 0, false, now\(\)/)
+  })
+
+  it('новая строка начинает БЕЗ метки попытки и БЕЗ паузы', async () => {
+    // Копия чужой метки означала бы, что новый счёт уже «пробовали», а копия паузы — что он молча
+    // не опрашивается, хотя человек только что его добавил.
+    const { query, calls } = fakeQuery([{ account_key: 'BY01', grant_id: 'G1', provider: 'alfa-by', member_id: 'm1' }])
+    await addBankAccountToGrant(query, 'm1', 5, 'BY01', 'BY02')
+    expect(calls[1]!.sql).toMatch(/, 0, false, now\(\)/)
   })
 })

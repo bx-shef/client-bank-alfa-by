@@ -71,7 +71,13 @@ export async function sweepAbandonedPending(deps: PendingSweepDeps): Promise<num
     if (!abandonedPending(row, deps.now(), maxAge)) continue
     try {
       const done = await deps.withLock(
-        bankRefreshLockKey(row.memberId, row.provider, row.accountKey),
+        // ⚠ ГРАНТ ОБЯЗАТЕЛЕН В КЛЮЧЕ (#23, находка ревью). Колбэк подключения размечает грантом и
+        // `~pending:`-строки, поэтому обновление токена берёт по ним лок ВИДА ГРАНТА. Ключ по счёту
+        // не пересёкся бы с ним ни разу: свип перечитал бы до-рефрешную строку, счёл её брошенной и
+        // снёс подключение, которое прямо сейчас доказало банку свою жизнеспособность, — а
+        // ротированная банком пара пропала бы вместе с ней. Молча: «не дождался лока» свип не
+        // печатает намеренно, а причину удаления не печатает вовсе.
+        bankRefreshLockKey(row.memberId, row.provider, row.accountKey, row.grantId),
         async (q) => {
           const fresh = await deps.reread(q, row.memberId, row.provider, row.accountKey)
           // Строки уже нет (успел «Отключить» или параллельная реплика) — считать нечего.

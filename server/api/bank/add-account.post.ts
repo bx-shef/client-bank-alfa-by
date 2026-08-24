@@ -16,7 +16,9 @@ import { handleAddBankAccount, type AddAccountDeps } from '../../utils/bankAccou
 import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { addBankAccountToGrant } from '../../utils/bankTokenStore'
+import { addBankAccountToGrant, getBankRowGrant } from '../../utils/bankTokenStore'
+import { withAdvisoryLock } from '../../utils/dbLock'
+import { makeLockedAddAccount } from '../../utils/bankAccountAdd'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
@@ -29,10 +31,15 @@ function liveDeps(): AddAccountDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
-    // ⚠ Лока здесь нет намеренно — почему, разобрано в докблоке `addBankAccountToGrant`: спора за
-    // живую строку не возникает, исходная только читается, а пишется новая.
-    add: (memberId, sourceId, expectedAccountKey, accountKey) =>
-      addBankAccountToGrant(dbQuery, memberId, sourceId, expectedAccountKey, accountKey)
+    // ⚠ Под ГРАНТОВЫМ локом — тем же, что держит обновление токена. Почему вставка новой строки
+    // всё равно нуждается в нём, разобрано в `makeLockedAddAccount` и `addBankAccountToGrant`:
+    // `INSERT … SELECT` при read committed читает предыдущую версию строки и может скопировать
+    // refresh, который банк уже отозвал.
+    add: makeLockedAddAccount({
+      withLock: withAdvisoryLock,
+      add: addBankAccountToGrant,
+      grantOf: (memberId, id) => getBankRowGrant(dbQuery, memberId, id)
+    })
   }
 }
 
