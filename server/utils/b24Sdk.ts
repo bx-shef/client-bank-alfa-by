@@ -35,10 +35,11 @@
 import { B24OAuth, ParamsFactory } from '@bitrix24/b24jssdk'
 import type { AuthData, B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
-import { getToken, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
+import { clearGrantRevoked, getToken, markGrantRevoked, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
 import { withDependencySpan } from './telemetrySpan'
-import { firstPortalErrorCode, PortalRestError } from './portalError'
+import { firstPortalErrorCode, portalErrorCode, PortalRestError } from './portalError'
+import { isGrantDead } from '../../app/utils/portalReaper'
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
 const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
@@ -196,13 +197,55 @@ function sdkEnvelope(res: SdkAjaxResult, reattachNext = true): Record<string, un
   return envelope
 }
 
-export function makeSdkRestCall(client: OAuthCallClient, opts: { memberId?: string } = {}): RestCall {
+/**
+ * Run the SDK call and, if its REACTIVE refresh reports a dead grant, record that (#574).
+ *
+ * ⚠ THIS is where a vanished portal is actually noticed first, and getting that wrong was the
+ * central mistake in the first cut of #574. The mark used to live only in `ensureAccessToken`,
+ * which has exactly ONE caller — the daily keep-alive — and whose selection window is
+ * `[now-180d, now-177d)`. A portal that dies today would therefore be probed only during a
+ * ~3-day window ~177 days later, so `PORTAL_REAP_DAYS=30` really meant "~207 days, if we happened
+ * to probe in those three days".
+ *
+ * ⚠ Meanwhile the realistic dead portal is NOT quiet: its `bank_tokens` survive, the cron keeps
+ * polling its accounts, and every resulting crm-sync job comes through here. So this path sees
+ * the dead grant within a day — and it is also the path that has something worth protecting
+ * (a portal that never connected a bank has no bank credentials to leak).
+ *
+ * ⚠ BEST EFFORT and never swallows: the original error is always rethrown. Marking is a side
+ * note about the portal, not the outcome of the call.
+ */
+async function callAndWatchGrant(
+  client: OAuthCallClient,
+  method: string,
+  params: Record<string, unknown>,
+  opts: { memberId?: string, onGrantDead?: (memberId: string) => Promise<void> }
+): Promise<SdkAjaxResult> {
+  try {
+    return await client.actions.v2.call.make({ method, params })
+  } catch (e) {
+    const { memberId, onGrantDead } = opts
+    if (memberId && onGrantDead && isGrantDead(portalErrorCode(e))) {
+      try {
+        await onGrantDead(memberId)
+      } catch {
+        // A failed mark must not mask the portal error the caller is waiting for.
+      }
+    }
+    throw e
+  }
+}
+
+export function makeSdkRestCall(
+  client: OAuthCallClient,
+  opts: { memberId?: string, onGrantDead?: (memberId: string) => Promise<void> } = {}
+): RestCall {
   return (method, params) => withDependencySpan(
     // system/method/scope describe the SHAPE of the call; portal is hashed. Params (which can
     // carry account/amount/purpose in a filter) are NEVER attached — see telemetryAttributes.
     { system: 'bitrix24', operation: method, method, scope: method.split('.')[0], memberId: opts.memberId },
     async () => {
-      const res = await client.actions.v2.call.make({ method, params })
+      const res = await callAndWatchGrant(client, method, params, opts)
       if (!res.isSuccess) {
         // ⚠ Throw WITH the portal code (#572). The old bare `new Error(messages)` dropped it for
         // good, leaving the parsing of a localized description as the only way to tell a SETTINGS
@@ -272,6 +315,10 @@ export interface SdkPortalDeps {
   creds: B24OAuthSecret
   now: () => number
   scope?: string
+  /** Record that this portal's grant is dead (#574). Optional: without it nothing changes except
+   *  that the reaper stops being told — which is exactly the failure mode #574 started from, so
+   *  the live wiring in `sdkPortalDeps` always provides it. */
+  onGrantDead?: (memberId: string) => Promise<void>
 }
 
 /** Error thrown when a FRAME token hits an auth error. Carries `invalid_token` so the shape
@@ -324,7 +371,8 @@ export async function makePortalSdkClient(memberId: string, deps: SdkPortalDeps)
 
 export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
   const client = await makePortalSdkClient(memberId, deps)
-  return client ? makeSdkRestCall(client, { memberId }) : null
+  // `onGrantDead` is what makes the reaper's signal timely (#574) — see `callAndWatchGrant`.
+  return client ? makeSdkRestCall(client, { memberId, onGrantDead: deps.onGrantDead }) : null
 }
 
 /** Build a `RestCall` from an ad-hoc FRAME token (the `X-B24-Domain` + Bearer access token a
@@ -509,9 +557,16 @@ export function sdkPortalDeps(infra: SdkInfra): SdkPortalDeps {
       if (!await updatePortalTokenSecrets(infra.query, token)) {
         throw new Error('portal was uninstalled mid-refresh — token NOT stored, aborting the call')
       }
+      // A successful refresh proves the portal is alive, so any dead-grant mark must go (#574).
+      // Best effort: failing to clear it must not undo a refresh that actually worked — the next
+      // success clears it, and until then the 30-day threshold is nowhere near elapsing.
+      try {
+        await clearGrantRevoked(infra.query, token.memberId)
+      } catch { /* see above */ }
     },
     creds: { clientId: infra.clientId, clientSecret: infra.clientSecret },
     now: infra.now,
-    scope: infra.scope
+    scope: infra.scope,
+    onGrantDead: memberId => markGrantRevoked(infra.query, memberId, infra.now())
   }
 }

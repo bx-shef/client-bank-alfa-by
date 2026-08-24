@@ -15,6 +15,7 @@
 
 import { buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
 import { sdkRefreshTransport } from './b24Sdk'
+import { dbQuery } from '../db/client'
 import { withAdvisoryLock } from './dbLock'
 import { portalErrorCode } from './portalError'
 import { isGrantDead } from '../../app/utils/portalReaper'
@@ -41,11 +42,26 @@ export interface RefreshDeps {
   saveToken: (q: QueryFn, token: PortalToken) => Promise<boolean>
   /** POST the refresh body to B24 OAuth and return the raw JSON. */
   postRefresh: (body: string) => Promise<unknown>
-  /** Отметить мёртвый грант (#574) — на локальном соединении `q`. Необязательна: без неё поведение
-   *  ровно прежнее, просто уборщик не получит сигнала. Отсутствие ломать вызывающих не должно —
-   *  их тут больше десятка, и половина живёт в тестах. */
-  markGrantRevoked?: (q: QueryFn, memberId: string, atMs: number) => Promise<void>
-  /** Снять отметку после удачного обновления (#574). Необязательна по той же причине. */
+  /**
+   * Mark the grant as dead (#574). Takes NO `q` — and that is the whole point.
+   *
+   * ⚠ MEASURED BUG, fixed here: this used to be called with the locked connection `q`, right
+   * before `throw e`. `withAdvisoryLock` wraps the callback in BEGIN/COMMIT and ROLLBACKs on
+   * throw, so the UPDATE was rolled back by the very throw that followed it — the column could
+   * NEVER become non-zero, and the whole reaper was inert. Verified against a real Postgres.
+   *
+   * ⚠ So the mark MUST go on its own connection, outside the lock transaction. That is safe: the
+   * mark is idempotent (`WHERE grant_revoked_at = 0`) and touches a column no other writer in
+   * the refresh path competes for.
+   */
+  markGrantRevoked?: (memberId: string, atMs: number) => Promise<void>
+  /**
+   * Clear the mark after a successful refresh (#574).
+   *
+   * ⚠ This one DOES take `q`, and the asymmetry with `markGrantRevoked` is deliberate: clearing
+   * must be ATOMIC with persisting the fresh token. If the transaction rolls back, the token was
+   * not saved either, so the portal is still unproven and the mark must survive.
+   */
   clearGrantRevoked?: (q: QueryFn, memberId: string) => Promise<void>
 }
 
@@ -54,7 +70,8 @@ const liveDeps: RefreshDeps = {
   withLock: withAdvisoryLock,
   loadToken: getToken,
   saveToken: updatePortalTokenSecrets,
-  markGrantRevoked,
+  // Own connection from the pool, NOT the locked one — see the field's doc comment.
+  markGrantRevoked: (memberId, atMs) => markGrantRevoked(dbQuery, memberId, atMs),
   clearGrantRevoked,
   // Refresh through the jssdk transport (`B24OAuth.auth.refreshAuth`), bounded (15s) so a hung
   // OAuth call can't pin the advisory lock + pooled connection (the whole refresh runs in the lock).
@@ -107,24 +124,24 @@ export async function ensureAccessToken(
     const shouldRefresh = opts.force ? stored.accessToken === token.accessToken : needsRefresh(stored, deps.now())
     if (!shouldRefresh) return stored
 
-    // ⚠ Наблюдение «грант мёртв» стоит ЗДЕСЬ, а не в продлении (#574), и это несущее. Выборка
-    // keep-alive намеренно выбрасывает мёртвые гранты из окна через несколько прогонов (иначе они
-    // монополизировали бы батч), так что наблюдать отказ там значило бы увидеть его в лучшем случае
-    // трижды за полгода. `ensureAccessToken` — ЕДИНСТВЕННАЯ точка, через которую идут все
-    // обновления портального токена: и продление, и `crm-sync`, и маршруты интерфейса. Кто первый
-    // получил отказ, тот и поставил отметку.
+    // Observing a dead grant here covers the keep-alive path ONLY (#574). This is NOT the single
+    // point every portal-token refresh flows through — that claim was wrong, and the header of
+    // this very file already says otherwise: the crm-sync hot path refreshes reactively inside the
+    // SDK, bypassing us. That path marks the grant itself (`makeSdkRestCall`, #574), which is
+    // where an uninstalled-but-still-polled portal actually gets hit first.
     let r: ReturnType<typeof parseRefreshResponse>
     try {
       r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
     } catch (e) {
-      // ⚠ Отметка — ЛУЧШИЕ УСИЛИЯ и никогда не подменяет исходную ошибку. Вызывающие полагаются на
-      // то, что мёртвый грант БРОСАЕТ (джоба падает, чат ошибок молчит, повтор чистый); подменив
-      // исключение отказом записи, мы превратили бы понятный сбой в загадочный.
+      // ⚠ BEST EFFORT, and it never replaces the original error: callers rely on a dead grant
+      // THROWING (the job fails, the retry is clean). Swapping the exception for a write failure
+      // would turn a legible failure into a puzzling one.
       if (isGrantDead(portalErrorCode(e)) && deps.markGrantRevoked) {
         try {
-          await deps.markGrantRevoked(q, stored.memberId, deps.now())
+          // NB: NOT on `q` — the throw below rolls that transaction back. See the dep's doc.
+          await deps.markGrantRevoked(stored.memberId, deps.now())
         } catch (markError) {
-          log.warning(`ensureAccessToken: не удалось отметить мёртвый грант: ${(markError as Error)?.message}`)
+          log.warning(`ensureAccessToken: failed to mark a dead grant: ${(markError as Error)?.message}`)
         }
       }
       throw e
@@ -152,15 +169,15 @@ export async function ensureAccessToken(
       // withdrew consent. Costs one doomed request either way — this is the one that fails.
       return stored
     }
-    // ⚠ Успех СНИМАЕТ отметку безусловно (#574). Условие «только если отметка есть» было бы
-    // оптимизацией ценой правила: без сброса один транзиентный `invalid_grant` — а он бывает при
-    // гонке ротации — приговаривал бы живой портал навсегда, и никакое последующее здоровье его бы
-    // не спасло. Тоже лучшие усилия: не сняли отметку — портал доживёт до следующего успеха.
+    // ⚠ Success clears the mark UNCONDITIONALLY (#574). Guarding on "only if a mark exists" would
+    // be an optimisation bought with the rule itself: without a reset, one transient
+    // `invalid_grant` — which happens on a rotation race — would condemn a live portal forever.
+    // On `q` on purpose: this must be atomic with the token write (see the dep's doc).
     if (deps.clearGrantRevoked) {
       try {
         await deps.clearGrantRevoked(q, stored.memberId)
       } catch (clearError) {
-        log.warning(`ensureAccessToken: не удалось снять отметку мёртвого гранта: ${(clearError as Error)?.message}`)
+        log.warning(`ensureAccessToken: failed to clear the dead-grant mark: ${(clearError as Error)?.message}`)
       }
     }
     return updated

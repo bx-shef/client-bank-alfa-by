@@ -6,36 +6,45 @@
 // `app/utils/portalReaper.ts`.
 //
 // ⚠ Зачем: портал может исчезнуть не по-штатному (удалён без доставки события, сменил домен), и
-// тогда агрегаты уйдут по TTL, а `portal_tokens` и особенно `bank_tokens` останутся — и продление
-// (#175) будет их ОБНОВЛЯТЬ. То есть мы держим и освежаем банковские доступы клиента, который уже
-// не наш. Это приватность (`docs/PRIVACY.md`), а не уборка мусора.
+// тогда агрегаты уйдут по TTL, а `portal_tokens` и `bank_tokens` останутся. Банковские токены при
+// этом ПРОДЛЕВАЕТ отдельный `bankTokenKeepAlive` (#488/#489), который на грант портала не смотрит
+// вовсе, — то есть доступы к счетам ушедшего клиента освежаются сами по себе. Это приватность
+// (`docs/PRIVACY.md`), а не уборка мусора.
+//
+// ⚠ УДАЛЕНИЕ ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО (`PORTAL_REAP_ENABLED`). Пометка идёт всегда — она безвредна и
+// именно она делает проблему видимой; необратимое стирание владелец включает осознанно, увидев в
+// логе, скольких именно уборщик считает мёртвыми. Причина не в осторожности вообще, а в замере:
+// сигнал появляется не через `PORTAL_REAP_DAYS` дней (см. `docs/OPERATIONS.md`), и до первого
+// живого подтверждения на реальном флоте автономное стирание обещало бы точность, которой нет.
 
-import { MAX_REAP_PER_RUN, reaperLogLine, reapVerdict } from '../../app/utils/portalReaper'
+import {
+  fleetBreach,
+  MAX_REAP_PER_RUN,
+  type ReapRunFacts,
+  reaperLogLine,
+  reapVerdict
+} from '../../app/utils/portalReaper'
+import { portalHash } from './telemetryAttributes'
 
 /** Инъектируемые side-effects — чтобы правило тестировалось без базы. */
 export interface PortalReaperDeps {
   now: () => number
-  /** Сколько порталов помечено мёртвым грантом дольше порога (для строки лога). */
+  /** Сколько порталов помечено мёртвым грантом дольше порога (для строки лога и экрана). */
   countRevoked: (beforeMs: number) => Promise<number>
+  /** Сколько порталов у нас всего — знаменатель предохранителя по доле флота. */
+  countPortals: () => Promise<number>
   /** Кандидаты на удаление: самые давние первыми, не больше `limit`. Возвращает и МЕТКУ, потому
    *  что решение перепроверяется чистым правилом — см. `runPortalReaper`. */
   selectReapable: (beforeMs: number, limit: number) => Promise<{ memberId: string, revokedAtMs: number }[]>
   /** Полная чистка портала — ТОТ ЖЕ путь, что у штатного `ONAPPUNINSTALL`. */
   deletePortal: (memberId: string, eventTs: number) => Promise<void>
+  /** Стирать ли на самом деле. `false` — только считаем и показываем. */
+  reapEnabled: boolean
   log?: (msg: string) => void
   warn?: (msg: string) => void
 }
 
-export interface PortalReaperSummary {
-  /** Сколько строк подошло под порог. */
-  candidates: number
-  /** Сколько реально стёрто в этот прогон. */
-  reaped: number
-  /** Упёрлись в потолок за прогон. */
-  capped: boolean
-  /** Сколько удалений не прошло (изолированы, прогон не падает). */
-  failed: number
-}
+export type PortalReaperSummary = ReapRunFacts
 
 /**
  * Один прогон уборщика.
@@ -50,12 +59,11 @@ export interface PortalReaperSummary {
  * `deleteToken`, и метка «сейчас» верна: настоящая переустановка произойдёт ПОЗЖЕ, её событие
  * будет новее, и наш тумбстоун её не заблокирует.
  *
- * ⚠ Отказ удаления ОДНОГО портала изолирован: прогон продолжается, а сбой считается и попадает в
- * лог. Один битый портал не должен оставлять в базе остальных — это тот же принцип, что у
- * продления (#175).
+ * ⚠ Отказ удаления ОДНОГО портала изолирован: прогон продолжается, а сбой считается, попадает в
+ * лог отдельной строкой И в сводку прогона.
  *
  * ⚠ Строка лога печатается ВСЕГДА, даже когда стирать нечего. Уборщик, который молчит, неотличим
- * от невзведённого, а узнать об этом хочется до проверки приватности, а не после.
+ * от невзведённого.
  */
 export async function runPortalReaper(deps: PortalReaperDeps, days: number): Promise<PortalReaperSummary> {
   const nowMs = deps.now()
@@ -63,8 +71,30 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
   // подсовывать в неё часы.
   const beforeMs = nowMs - days * 86_400_000
   const candidates = await deps.countRevoked(beforeMs)
+  const s: PortalReaperSummary = {
+    candidates, reaped: 0, failed: 0, capped: false,
+    observeOnly: !deps.reapEnabled, breach: false, days
+  }
+
+  // ⚠ Предохранитель стоит ДО выборки кандидатов и до любого удаления: если мёртвым выглядит
+  // заметная доля флота, дело почти наверняка в нас, а не в клиентах, и правильное действие —
+  // не стереть аккуратно по трое, а не стирать вовсе и закричать.
+  if (candidates > 0 && fleetBreach(candidates, await deps.countPortals())) {
+    s.breach = true
+    deps.warn?.(`уборщик ОСТАНОВЛЕН: мёртвыми выглядят ${candidates} порталов — это слишком большая `
+      + `доля флота. Так выглядит наша общая поломка, а не уход клиентов. Ничего не стёрто`)
+    deps.log?.(reaperLogLine(s))
+    return s
+  }
+
+  // Наблюдение без удаления: считаем и показываем, но в базу за кандидатами не идём.
+  if (!deps.reapEnabled) {
+    deps.log?.(reaperLogLine(s))
+    return s
+  }
+
   const ids = await deps.selectReapable(beforeMs, MAX_REAP_PER_RUN)
-  const s: PortalReaperSummary = { candidates, reaped: 0, capped: candidates > ids.length, failed: 0 }
+  s.capped = candidates > ids.length
   const eventTs = Math.floor(nowMs / 1000)
   for (const row of ids) {
     const memberId = row.memberId
@@ -74,7 +104,7 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
     // максимальна: удаление необратимо. Не сошлось — НЕ удаляем и говорим об этом громко.
     if (reapVerdict(row.revokedAtMs, nowMs, days) !== 'reap') {
       s.failed++
-      deps.warn?.(`портал ${logSafeMember(memberId)} НЕ стёрт: выборка и правило разошлись (метка ${row.revokedAtMs}, порог ${days} дн.)`)
+      deps.warn?.(`портал ${portalHash(memberId)} НЕ стёрт: выборка и правило разошлись (метка ${row.revokedAtMs}, порог ${days} дн.)`)
       continue
     }
     try {
@@ -83,17 +113,18 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
       // ⚠ Каждое удаление — отдельной ГРОМКОЙ строкой, а не только числом в итоге. Это
       // необратимое стирание чужих данных: если оно однажды сработает не на том портале, узнать,
       // на каком именно, надо будет из лога, и «стёрто 3» на этот вопрос не отвечает.
-      deps.warn?.(`портал ${logSafeMember(memberId)} стёрт: грант мёртв дольше ${days} дн.`)
+      //
+      // ⚠ Портал назван НЕОБРАТИМОЙ меткой, а не сырым `member_id`, — по прецеденту канала
+      // `[deletion]` в воркере. Обоснование «печатаем открыто, он и так лежит первичным ключом в
+      // наших таблицах» (#525) перестаёт работать ровно здесь: строки из этих таблиц в этот момент
+      // уничтожаются, и лог остаётся ЕДИНСТВЕННЫМ пережившим упоминанием связи «этот портал ↔ мы
+      // держали его банковские креды».
+      deps.warn?.(`портал ${portalHash(memberId)} стёрт: грант мёртв дольше ${days} дн.`)
     } catch (e) {
       s.failed++
-      deps.warn?.(`не удалось стереть портал ${logSafeMember(memberId)}: ${(e as Error)?.message ?? String(e)}`)
+      deps.warn?.(`не удалось стереть портал ${portalHash(memberId)}: ${(e as Error)?.message ?? String(e)}`)
     }
   }
-  deps.log?.(reaperLogLine(s.candidates, s.reaped, s.capped, days))
+  deps.log?.(reaperLogLine(s))
   return s
-}
-
-/** `member_id` — hex-идентификатор от Б24; чистим и капим перед логом (эшелонированная защита). */
-function logSafeMember(id: string): string {
-  return id.replace(/[^\w.-]/g, '').slice(0, 64)
 }

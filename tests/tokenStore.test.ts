@@ -9,6 +9,7 @@ import {
   getApplicationToken,
   getMemberIdByDomain,
   getToken,
+  countPortals,
   markGrantRevoked,
   saveToken,
   selectReapablePortals,
@@ -361,5 +362,48 @@ describe('selectReapablePortals / countRevokedPortals (#574)', () => {
     })
     expect(await countRevokedPortals(query, 999)).toBe(7)
     expect(calls[0]!.sql).toMatch(/grant_revoked_at > 0 AND grant_revoked_at <= \$1/)
+  })
+})
+
+describe('#574: скоуп по порталу в SQL — не «параметр есть», а «он в WHERE»', () => {
+  // ⚠ Ревью замерило дыру: из `markGrantRevoked` можно было убрать `member_id = $1` из WHERE,
+  // оставив `memberId` в массиве параметров, и НИ ОДИН тест не падал — проверялись только
+  // `params`. В проде это значит: один портал поймал `invalid_grant`, а помечены мёртвыми ВСЕ
+  // живые разом, и всем запущен таймер до необратимого стирания.
+  function sqlOf(calls: { sql: string }[]): string {
+    return calls.map(c => c.sql).join('\n')
+  }
+
+  it('пометка адресована ОДНОМУ порталу', async () => {
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    })
+    await markGrantRevoked(query as unknown as QueryFn, 'M1', 1)
+    expect(sqlOf(calls), 'без скоупа пометка накрыла бы весь флот').toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+  })
+
+  it('снятие пометки адресовано ОДНОМУ порталу', async () => {
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    })
+    await clearGrantRevoked(query as unknown as QueryFn, 'M1')
+    expect(sqlOf(calls), 'без скоупа один успех «оживил» бы все помеченные порталы').toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+  })
+
+  it('countPortals считает ВЕСЬ флот, а не только живых', async () => {
+    // Знаменатель предохранителя: вычти из него уже помеченных — и он полз бы вверх по доле с
+    // каждой пометкой, то есть предохранитель слабел бы ровно по мере развития аварии.
+    const calls: { sql: string }[] = []
+    const query = vi.fn(async (sql: string) => {
+      calls.push({ sql })
+      return [{ n: 7 }]
+    })
+    const n = await countPortals(query as unknown as QueryFn)
+    expect(n).toBe(7)
+    expect(sqlOf(calls)).not.toMatch(/grant_revoked_at/)
   })
 })

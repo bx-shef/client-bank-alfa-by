@@ -277,3 +277,16 @@ export async function countRevokedPortals(query: QueryFn, beforeMs: number): Pro
   )
   return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
 }
+
+/**
+ * Сколько порталов у нас всего — знаменатель предохранителя по доле флота (#574).
+ *
+ * ⚠ Считаем ВСЕ строки, а не только живые: предохранитель отвечает на вопрос «не выглядит ли
+ * мёртвым слишком многое из того, что у нас есть», и знаменатель, из которого уже вычли
+ * помеченных, сам бы полз вверх по доле с каждой пометкой — то есть предохранитель ослабевал бы
+ * ровно по мере развития аварии, от которой заведён.
+ */
+export async function countPortals(query: QueryFn): Promise<number> {
+  const rows = await query(`SELECT count(*)::int AS n FROM portal_tokens`, [])
+  return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
+}
