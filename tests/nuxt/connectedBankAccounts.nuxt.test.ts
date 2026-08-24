@@ -518,9 +518,9 @@ describe('#23 добавление счёта к существующему по
   it('свёрнуто по умолчанию: поле не показывается, пока его не попросили', async () => {
     listReply.value = [LIVE]
     const wrapper = await mountReady()
-    expect(wrapper.find('[data-testid="add-account-alfa-by"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(false)
     await openAdd(wrapper)
-    expect(wrapper.find('[data-testid="add-account-alfa-by"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(true)
   })
 
   it('счёт, названный банком, добавляется КЛИКОМ — 28 знаков не перепечатывают', async () => {
@@ -551,7 +551,7 @@ describe('#23 добавление счёта к существующему по
     const btn = wrapper.findAll('button').find(b => b.text() === 'Отмена')
     await btn!.trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-testid="add-account-alfa-by"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(false)
     expect(fetchMock.mock.calls.some(c => c[0] === '/api/bank/add-account')).toBe(false)
   })
 })
@@ -581,13 +581,13 @@ describe('#23 объяснения и обратная связь (находк�
     // интерфейса, и первая реакция — «кнопка пропала», а не «схожу в справку».
     listReply.value = [LIVE, OLD]
     const wrapper = await mountReady()
-    expect(wrapper.find('[data-testid="no-grant-alfa-by"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="no-grant-6"]').exists()).toBe(true)
   })
 
   it('объяснения НЕТ, когда сравнивать не с чем — все подключения одинаково старые', async () => {
     listReply.value = [OLD]
     const wrapper = await mountReady()
-    expect(wrapper.find('[data-testid="no-grant-alfa-by"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="no-grant-6"]').exists()).toBe(false)
   })
 
   it('подпись про отключение НЕ пугает безусловно — она оговаривает несколько счетов', async () => {
@@ -605,9 +605,42 @@ describe('#23 объяснения и обратная связь (находк�
     const wrapper = await mountReady()
     await wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')!.trigger('click')
     await nextTick()
-    const input = wrapper.find('[data-testid="add-account-alfa-by"] input')
+    const input = wrapper.find('[data-testid="add-account-5"] input')
     const hintId = input.attributes('aria-describedby')
     expect(hintId).toBeTruthy()
     expect(wrapper.find(`#${hintId}`).text()).toContain('без пробелов')
+  })
+})
+
+describe('#23 несколько счетов ОДНОГО банка — строки не путаются (находка код-ревью)', () => {
+  const A = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+  const B = { ...A, id: 6, accountKey: 'BY02ALFA0002' }
+
+  it('раскрывается РОВНО та строка, по которой нажали', async () => {
+    // ⚠ Именно эта правка и создаёт случай «несколько строк одного банка», поэтому адресация по
+    // провайдеру ломалась бы ровно на ней: она нашла бы ПЕРВУЮ строку банка, и раскрытие (а после
+    // отмены — и фокус клавиатурного пользователя) уезжало бы на чужой счёт.
+    listReply.value = [A, B]
+    const wrapper = await mountReady()
+    const buttons = wrapper.findAll('button').filter(b => b.text() === 'Добавить ещё счёт')
+    expect(buttons).toHaveLength(2)
+    await buttons[1]!.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="add-account-6"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(false)
+  })
+
+  it('добавление адресуется id ВТОРОЙ строки, а не первой строки того же банка', async () => {
+    listReply.value = [A, B]
+    const wrapper = await mountReady()
+    await wrapper.findAll('button').filter(b => b.text() === 'Добавить ещё счёт')[1]!.trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="add-account-6"] input').setValue('BY03ALFA0003')
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')!.trigger('click')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/add-account')
+    expect((call![1] as { body: Record<string, unknown> }).body)
+      .toEqual({ id: 6, sourceAccountKey: 'BY02ALFA0002', accountKey: 'BY03ALFA0003' })
   })
 })

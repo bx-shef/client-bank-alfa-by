@@ -244,7 +244,10 @@ async function openAdd(a: ConnectedBankAccount) {
 async function closeAdd(a: ConnectedBankAccount) {
   expandingAdd.value = ''
   await nextTick()
-  const btn = document.querySelector<HTMLElement>(`[data-testid="add-account-open-${a.provider}"]`)
+  // ⚠ Адрес — по `id` СТРОКИ, а не по банку (находка код-ревью). Именно эта правка и создаёт
+  // случай, когда у одного банка несколько строк: селектор по провайдеру нашёл бы ПЕРВУЮ из них, и
+  // после отмены фокус клавиатурного пользователя уезжал бы на кнопку чужого счёта.
+  const btn = document.querySelector<HTMLElement>(`[data-testid="add-account-open-${a.id}"]`)
   btn?.focus()
 }
 
@@ -454,7 +457,7 @@ defineExpose({ reload: load })
             <div
               v-if="!isPendingAccountKey(a.accountKey) && a.grantId === '' && hasGrantedAccount"
               class="mt-1 text-xs text-(--ui-color-base-3)"
-              :data-testid="`no-grant-${a.provider}`"
+              :data-testid="`no-grant-${a.id}`"
             >
               Добавить второй счёт к этому подключению нельзя — оно сделано до появления такой
               возможности.
@@ -476,14 +479,14 @@ defineExpose({ reload: load })
               class="mt-1"
               :aria-expanded="false"
               :aria-controls="`add-account-${a.id}`"
-              :data-testid="`add-account-open-${a.provider}`"
+              :data-testid="`add-account-open-${a.id}`"
               @click="openAdd(a)"
             />
             <div
               v-else-if="canAddAccount(a)"
               :id="`add-account-${a.id}`"
               class="mt-1 flex flex-wrap items-center gap-2"
-              :data-testid="`add-account-${a.provider}`"
+              :data-testid="`add-account-${a.id}`"
             >
               <!-- Счета, которые назвал сам банк, — тот же клик вместо перепечатывания IBAN, что и
                    при выборе счёта (#494). Уже привязанные отфильтрованы: сервер ответил бы 409. -->
