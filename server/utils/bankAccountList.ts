@@ -29,7 +29,7 @@
 
 import type { BankProviderId } from '../../app/types/statement'
 import type { BankSideAccount } from '../../app/utils/bankAccountMatrix'
-import { extractAccounts, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
+import { extractAccounts, priorResourceHeaders, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
 import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import { isLockTimeout } from './bankRefreshLock'
 import { sanitizeForLog } from './logSanitize'
@@ -54,7 +54,36 @@ export interface BankSideListDeps {
   /** Provider API origin, or `null` when the provider isn't configured on this deployment. */
   apiBase: (provider: BankProviderId) => string | null
   /** GET a JSON resource with a Bearer token. Must not leak the auth on error. */
-  getJson: (url: string, accessToken: string) => Promise<unknown>
+  /**
+   * GET одного JSON-ресурса банка.
+   *
+   * ⚠ ПРОВАЙДЕР — ОБЯЗАТЕЛЬНЫЙ ПАРАМЕТР (#20), а не удобство. Приор проверяет
+   * заголовок взаимодействия FAPI на ЛЮБОМ вызове и делает это ДО тела (#461), поэтому запрос с одним
+   * лишь `Authorization` он отвергает. Отказ здесь fail-soft по провайдеру — значит счета Приора
+   * просто не появлялись в сверке, и выглядело это как «банк их не отдаёт», а не как наш дефект.
+   * Заголовки собирает ВЫЗЫВАЮЩИЙ, и тем же общим билдером, что и путь опроса — здесь их не видно
+   * намеренно: этот модуль решает, ЧТО спросить у банка, а не как подписать запрос.
+   */
+  getJson: (provider: BankProviderId, url: string, accessToken: string) => Promise<unknown>
+}
+
+/**
+ * Заголовки запроса списка счетов — по банку (#20).
+ *
+ * ⚠ ЧИСТАЯ функция и живёт ЗДЕСЬ, а не в роуте, ровно потому, что дефект был именно в ней. Роут —
+ * `defineEventHandler` поверх живого `$fetch`, и утверждение «для Приора шлём его заголовки» там
+ * непроверяемо: мутация «слать один Authorization» проходила зелёной, а на живом портале означала,
+ * что счета Приора не появляются в сверке НИКОГДА. Банк проверяет заголовок взаимодействия FAPI на
+ * ЛЮБОМ вызове и делает это ДО тела (#461), а отказ здесь fail-soft по провайдеру — то есть симптом
+ * читался как «банк их не отдаёт» и указывал не на ту сторону.
+ *
+ * `interactionId` инъектируется: своей случайности у чистой функции быть не должно.
+ */
+export function accountsRequestHeaders(
+  provider: BankProviderId, accessToken: string, interactionId: string
+): Record<string, string> {
+  if (provider === 'prior-by') return priorResourceHeaders(accessToken, interactionId)
+  return { authorization: `Bearer ${accessToken}` }
 }
 
 /** Extract the account list from Alfa's `GET /accounts/` envelope (`{accounts:[{number,currIso}]}`).
@@ -109,15 +138,28 @@ async function askProvider(
   if (!base) return { provider, accounts: [], error: 'банк не настроен на этом сервере' }
   try {
     const fresh = await deps.ensureFresh(stored)
-    const raw = await deps.getJson(accountsUrl(provider, base), fresh.accessToken)
-    const accounts = provider === 'prior-by'
+    const raw = await deps.getJson(provider, accountsUrl(provider, base), fresh.accessToken)
+    if (provider === 'prior-by') {
       // Prior addresses accounts by an opaque id; the IBAN lives in `identification`. A row with
       // no identification is unusable as a matrix row (nothing to compare against a requisite),
       // so it is dropped rather than shown as an empty line.
-      ? extractAccounts(raw)
-          .map(a => ({ number: (a.identification ?? '').trim(), currency: a.currency }))
-          .filter(a => a.number)
-      : extractAlfaAccounts(raw)
+      const all = extractAccounts(raw)
+      const usable = all
+        .map(a => ({ number: (a.identification ?? '').trim(), currency: a.currency, provider }))
+        .filter(a => a.number)
+      // ⚠ БАНК ОТВЕТИЛ, А ПОКАЗАТЬ НЕЧЕГО — это НЕ то же самое, что «банк молчит» (#20). Молча
+      // отбросив все строки, экран выглядел бы как отказ связи, и админ искал бы причину в банке
+      // или в подключении, тогда как чинится это на стороне банка — у счёта не заполнен IBAN.
+      if (usable.length === 0 && all.length > 0) {
+        return {
+          provider,
+          accounts: [],
+          error: `банк вернул ${all.length} счёт(ов) без номера — сверять не с чем`
+        }
+      }
+      return { provider, accounts: usable }
+    }
+    const accounts = extractAlfaAccounts(raw)
     // Tag every row with its bank. The matrix flattens both banks into one list, and an untagged
     // row could then be offered as the account of the OTHER bank's connection — see the note on
     // `BankSideAccount.provider`.

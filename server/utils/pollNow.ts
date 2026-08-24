@@ -58,6 +58,18 @@ export interface PollNowInput {
    *  ⚠ Именно ОДИН день, а не интервал: интервал — это N задач к банку за один клик, то есть
    *  нагрузка, которую портал задавал бы себе сам вопреки #54 («частоту регулируем мы»). */
   day?: string
+  /**
+   * Точечный забор ПО ОДНОМУ подключению (#19): банк и номер счёта.
+   *
+   * ⚠ Заведено потому, что «забрать за 18 августа» без адреса — это задача на КАЖДЫЙ подключённый
+   * счёт портала, а человек смотрел на конкретную строку и про неё спрашивал. На портале с двумя
+   * банками ответ «опрос запущен» не говорил, ЧТО именно опрошено, а лимит запросов тратился на
+   * счета, о которых не спрашивали.
+   *
+   * Пусто ⇒ прежнее поведение: все подключённые счета портала.
+   */
+  provider?: string
+  accountKey?: string
 }
 
 /** Default manual-poll cooldown (seconds): a manual test poll no more than once per minute per
@@ -102,9 +114,30 @@ export async function handlePollNow(deps: PollNowDeps, input: PollNowInput): Pro
 
   // Only poll accounts of THIS portal, filtered to pollable providers (drops Prior until A5b / demo).
   const accounts = await deps.listAccounts(memberId)
-  const byPortal = accountsForPolling(accounts)
+  // ⚠ Отбор ДО `accountsForPolling`, а не после: тот сворачивает счета в план по порталам, и
+  // выцеплять оттуда одну строку значило бы разбирать структуру, которую только что собрали.
+  // ⚠ Сравнение ТОЧНОЕ и по обоим полям: один и тот же номер у разных банков — разные строки
+  // хранилища, и отбор по одному номеру опросил бы чужое подключение.
+  const wantProvider = (input.provider || '').trim()
+  const wantAccount = (input.accountKey || '').trim()
+  const targeted = wantProvider || wantAccount
+  const scoped = targeted
+    ? accounts.filter(a => a.provider === wantProvider && a.accountKey === wantAccount)
+    : accounts
+  // ⚠ Просили конкретный счёт, а его нет — это 404, а не тихий «enqueued: 0». Второе неотличимо от
+  // «портал вообще ничего не подключил», и человек, чей счёт только что отключили из соседней
+  // вкладки, читал бы его как «опрос сработал, но операций нет».
+  if (targeted && scoped.length === 0) {
+    return { status: 404, body: { error: 'подключение не найдено — обновите список' } }
+  }
+  const byPortal = accountsForPolling(scoped)
   const pollable = byPortal.reduce((n, p) => n + p.accounts.length, 0)
   // No connected accounts yet → nothing to do; do NOT burn the cooldown on a no-op.
+  // ⚠ Адресованный счёт есть, но опрашивать его нельзя (пауза, ожидающий ключ) — тоже НЕ тишина:
+  // строка на экране выглядит подключённой, и «0 задач» без объяснения читается как поломка кнопки.
+  if (pollable === 0 && targeted) {
+    return { status: 409, body: { error: 'это подключение сейчас не опрашивается — снимите паузу или выберите счёт' } }
+  }
   if (pollable === 0) return { status: 200, body: { enqueued: 0, accounts: 0 } }
 
   // Per-portal cooldown: reject a too-soon repeat so the button can't outrun the bank rate.
@@ -125,5 +158,16 @@ export async function handlePollNow(deps: PollNowDeps, input: PollNowInput): Pro
 
   // `day` возвращаем эхом: интерфейс подтверждает человеку, ЗА КАКОЙ день ушла задача, — иначе
   // выбранная дата и ответ «опрос запущен» связаны только его памятью.
-  return { status: 200, body: { enqueued: jobs.length, accounts: pollable, cooldownSec: deps.cooldownSec, ...(day ? { day } : {}) } }
+  // Банк и счёт возвращаются эхом по той же причине, что и день: без них «опрос запущен» не
+  // говорит, ЧТО опрошено, а на портале с двумя банками это и есть весь вопрос (#19).
+  return {
+    status: 200,
+    body: {
+      enqueued: jobs.length,
+      accounts: pollable,
+      cooldownSec: deps.cooldownSec,
+      ...(day ? { day } : {}),
+      ...(targeted ? { provider: wantProvider, accountKey: wantAccount } : {})
+    }
+  }
 }

@@ -16,9 +16,13 @@ import { useLogger } from '~/utils/logger'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import {
   APP_SLIDER_PLACE_IMPORT,
+  APP_SLIDER_PLACE_MAIN,
   APP_SLIDER_PLACE_SETTINGS,
   APP_SLIDER_WIDTH
 } from '~/config/b24'
+import {
+  appLaunchMode, canAutoOpenMain, MAIN_SLIDER_MARK_KEY, type AppLaunchMode
+} from '~/utils/appLaunchMode'
 
 const log = useLogger('app')
 
@@ -553,14 +557,31 @@ useSettingsSync().subscribeReload(() => void chatSettings.load())
 
 // «Настроено» = a notification chat is chosen (its dialogId is non-empty). That is the
 // minimal switch that turns the pipeline on, so it gates the setup banner.
+/**
+ * Пусковая страница или рабочий экран (#15).
+ *
+ * `launcher` — базовый фрейм портала (прямая ссылка, пункт левого меню). Он открывает главную
+ * СЛАЙДЕРОМ и сам не поднимает ничего: иначе опрос статуса, чтение настроек и pull-подписка
+ * крутились бы в ДВУХ фреймах разом — в базовом и в открытом им слайдере.
+ * До `init()` считаем рабочим экраном: вне портала лаунчер был бы тупиком (открывать слайдер нечем).
+ */
+const launch = ref<AppLaunchMode>('work')
+const isLauncher = computed(() => launch.value === 'launcher')
+/** Портал отказал в слайдере — показываем кнопку, а не мёртвую страницу. */
+const sliderFailed = ref(false)
+
 const configured = computed(() => chatSettings.settings.chat.dialogId !== '')
 // Settings are «ready» to decide the view: outside the portal there's nothing to load;
 // inside, only once chatSettings.load() has resolved. Gating on this avoids a flash of the
 // "not configured" banner while the fetch is still in flight for an already-configured portal.
-const settingsReady = computed(() => !inPortal.value || chatSettings.loaded.value)
+// ⚠ ЛАУНЧЕР ГАСИТ ОБЕ ВЕТКИ РАЗОМ (#15), и гейт стоит ЗДЕСЬ, а не в шаблоне. Ветки связаны цепочкой
+// `v-if`/`v-else-if`: погаси мы в шаблоне только первую, вторая перехватила бы её и показала рабочий
+// экран ровно там, где его быть не должно. Один источник решения — одно поведение.
+const settingsReady = computed(() => !isLauncher.value && (!inPortal.value || chatSettings.loaded.value))
 // Show the setup banner only inside the portal, after settings loaded, when not configured.
 // Standalone/dev (no frame) is neither blocked nor nagged — it renders the empty operations view.
-const showSetupBanner = computed(() => inPortal.value && chatSettings.loaded.value && !configured.value)
+const showSetupBanner = computed(() =>
+  !isLauncher.value && inPortal.value && chatSettings.loaded.value && !configured.value)
 
 // Полоса статуса импорта. «Ещё не запускалась» — правда, но пока банк не подключён и файл не
 // загружали, она сообщает не о состоянии импорта, а о том, что настройка не закончена: про это
@@ -589,6 +610,36 @@ const { isBitrixMobile } = useDevice()
 // холостых запроса (у не-админа один — заведомый 403) и вспышка чужого экрана.
 const leavingToSlider = computed(() => useSliderRedirect().target.value !== null)
 
+/** Отметка предыдущего автооткрытия в этой вкладке — страховка от бесконечного открытия. */
+function lastMainSliderAt(): number | null {
+  try {
+    const raw = window.sessionStorage?.getItem(MAIN_SLIDER_MARK_KEY)
+    return raw ? Number(raw) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Открыть главную слайдером.
+ *
+ * ⚠ Отметку ставим ТОЛЬКО на успехе: иначе портал, где слайдеры вообще не открываются, съедал бы ею
+ * право на автооткрытие — и повторная загрузка страницы в пределах окна оставляла бы человека на
+ * пусковой странице с нерабочей кнопкой и без рабочего экрана.
+ */
+async function openMain(): Promise<boolean> {
+  const opened = await b24.openAppSlider(APP_SLIDER_PLACE_MAIN, {
+    width: APP_SLIDER_WIDTH, title: 'Банковские выписки'
+  })
+  sliderFailed.value = !opened
+  if (opened) {
+    try {
+      window.sessionStorage?.setItem(MAIN_SLIDER_MARK_KEY, String(Date.now()))
+    } catch { /* приватный режим — без отметки, страховка от цикла просто не сработает */ }
+  }
+  return opened
+}
+
 onMounted(async () => {
   if (leavingToSlider.value) return
   // ⚠ Порядок важен: `refresh()` авторизуется фрейм-токеном, а он доступен только ПОСЛЕ `init()`.
@@ -596,6 +647,25 @@ onMounted(async () => {
   // демо-моком, а с его удалением (#415) полоса статуса навсегда показывала бы «не запускалась».
   await b24.init()
   if (!b24.isInit()) return
+  // ⚠ `?preview=1` — рабочий экран, а не лаунчер. Флаг это дев-обход для разработки, скриншотов и
+  // визуальных тестов: он существует ровно ради того, чтобы показать НАСТОЯЩИЙ экран без портала.
+  // Открой мы под ним слайдер (а вне портала он и не откроется), приёмка увидела бы пустую пусковую
+  // страницу вместо работы. Гейт `InPortalGate` этот же флаг пропускает, и здесь та же дверь.
+  launch.value = isPreviewQuery(route.query.preview)
+    ? 'work'
+    : appLaunchMode({
+        inFrame: b24.isInit(),
+        place: b24.placementPlace(),
+        sliderMode: b24.isSliderMode(),
+        isMobile: isBitrixMobile.value
+      })
+  if (launch.value === 'launcher') {
+    // Автооткрытие — не чаще раза в окно (страховка от цикла); кнопку человек всегда нажмёт сам.
+    if (!canAutoOpenMain(lastMainSliderAt(), Date.now())) return
+    if (await openMain()) return
+    // Слайдер не открылся — не оставляем человека на мёртвой странице, работаем как раньше.
+    launch.value = 'work'
+  }
   await refresh()
   checkAdmin()
   // Load chat settings so the setup banner reflects the real configured state.
@@ -677,10 +747,38 @@ onMounted(async () => {
         </B24DashboardNavbar>
       </template>
       <template #body>
+        <!-- ПУСКОВАЯ СТРАНИЦА (#15): приложение открыли прямой ссылкой или пунктом левого меню.
+             Рабочий экран здесь НЕ поднимаем — он уже открыт слайдером поверх, и держать его в двух
+             фреймах значило бы удвоить опрос статуса, чтение настроек и pull-подписку к порталу
+             клиента. Кнопка нужна, чтобы был путь обратно после закрытия слайдера. -->
+        <div
+          v-if="launch === 'launcher'"
+          class="py-6 text-center"
+          role="status"
+          data-testid="app-launcher"
+        >
+          <p class="mb-4 text-base text-(--ui-color-base-3)">
+            Выписки открываются отдельным окном поверх портала. Не открылось или вы его закрыли —
+            нажмите «Открыть выписки».
+          </p>
+          <p
+            v-if="sliderFailed"
+            class="mb-4 text-sm text-(--ui-color-accent-main-alert)"
+          >
+            Окно открыть не удалось. Попробуйте ещё раз или обновите страницу.
+          </p>
+          <B24Button
+            color="air-primary"
+            label="Открыть выписки"
+            data-testid="app-launcher-open"
+            @click="() => { void openMain() }"
+          />
+        </div>
+
         <!-- Ручная загрузка в мобильном — ОТДЕЛЬНОЙ кнопкой в теле, а не в шапке: шапки там нет,
              а загрузка файла с телефона — ровно то, ради чего приложение и открывают в дороге. -->
         <B24Button
-          v-if="isBitrixMobile"
+          v-if="isBitrixMobile && !isLauncher"
           :icon="UploadFileIcon"
           color="air-boost"
           size="md"

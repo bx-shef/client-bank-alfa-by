@@ -12,6 +12,7 @@
 import {
   DISTRIBUTION_SP_FIELDS,
   DISTRIBUTION_SP_TITLE,
+  buildPaymentCardConfigCall,
   PAYMENT_SP_FIELDS,
   PAYMENT_SP_TITLE,
   buildDistributionSpCreateCall,
@@ -23,6 +24,9 @@ import {
 } from '../../app/config/distributionSp'
 import { extractSmartProcessTypes, findSmartProcessRefByTitle } from '../../app/utils/distributionCarrier'
 import type { RestCall } from './companyLookup'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('provision')
 
 /** Known (stored) SP refs, so a re-run skips the probe/create when already provisioned. BOTH the
  *  entityTypeId AND the type id must be known to skip (the id is needed for the field probe). */
@@ -51,6 +55,9 @@ export interface ProvisionResult {
   createdDistributionSp: boolean
   /** How many user fields this run added across both SPs (0 ⇒ fully provisioned already). */
   addedFields: number
+  /** Применена ли общая раскладка карточки реестра. `false` ⇒ поля на месте, но карточка их не
+   *  показывает: неудобство, а не поломка (см. лучшие усилия у вызова). */
+  cardConfigured: boolean
 }
 
 /** Method that lists the portal's smart-process types (probe for existing SP by title). */
@@ -178,6 +185,22 @@ export async function provisionDistributionSp(call: RestCall, known: KnownSpIds 
   const addedPayment = await ensureFields(call, payment.ref, Object.values(PAYMENT_SP_FIELDS))
   const addedDistribution = await ensureFields(call, distribution.ref, Object.values(DISTRIBUTION_SP_FIELDS))
 
+  // Раскладка карточки реестра — ПОСЛЕ создания полей: настройка ссылается на них по именам, и до
+  // их появления портал молча выбросил бы несуществующие.
+  //
+  // ⚠ ЛУЧШИЕ УСИЛИЯ: провижининг создаёт смарт-процессы в CRM клиента, и отката у него нет. Карточка
+  // без нужной раскладки — неудобство (поля на месте, их видно через список и фильтры), а упавший
+  // на ней провижининг оставил бы портал с наполовину созданными сущностями и потребовал бы
+  // повторного клика, который человеку не с чем сравнить.
+  let cardConfigured = false
+  try {
+    const cfg = buildPaymentCardConfigCall(payment.ref)
+    await call(cfg.method, cfg.params)
+    cardConfigured = true
+  } catch (e) {
+    log.warning(`card layout not applied for payment SP: ${(e as Error)?.message ?? e}`)
+  }
+
   return {
     payment: payment.ref,
     distribution: distribution.ref,
@@ -185,6 +208,7 @@ export async function provisionDistributionSp(call: RestCall, known: KnownSpIds 
     distributionSpEtid: distribution.ref.entityTypeId,
     createdPaymentSp: payment.created,
     createdDistributionSp: distribution.created,
-    addedFields: addedPayment + addedDistribution
+    addedFields: addedPayment + addedDistribution,
+    cardConfigured
   }
 }

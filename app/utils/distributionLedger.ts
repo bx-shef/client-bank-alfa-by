@@ -331,6 +331,14 @@ export interface PaymentElementInput {
   /** Registry payload (#575) — what the statement said about this operation. Optional so the
    *  allocation path and older callers keep compiling; the live write always supplies it. */
   registry?: PaymentRegistryFields
+  /**
+   * Человеческий заголовок элемента, например «Приход 450,00 BYN от ИП Иванов».
+   *
+   * ⚠ Без него портал подставляет своё: «Импорт выписки: платежи #45» — замечание владельца по
+   * живой карточке. Такой заголовок стоит в списке реестра, в поиске и в каждой ссылке на элемент,
+   * то есть ровно там, где человек ищет платёж глазами, и не говорит о платеже НИЧЕГО.
+   */
+  title?: string
 }
 
 /** The statement facts carried onto the payment element so the SP reads as a REGISTRY (#575). */
@@ -359,6 +367,13 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
     [pf(PAYMENT_SP_FIELDS.marker.postfix)]: input.marker
   }
   Object.assign(fields, registryFieldPayload(paymentSp, input.registry))
+  // Заголовок и внешний код — то, что видно снаружи элемента.
+  //
+  // ⚠ `xmlId` = маркер операции: это ЕСТЕСТВЕННЫЙ внешний код записи (счёт|id операции в банке), по
+  // нему элемент сопоставляется с выпиской и с делом. Портал оставлял его пустым, и связь с
+  // источником жила только в нашем поле — то есть снаружи её не было.
+  if (typeof input.title === 'string' && input.title.trim() !== '') fields.title = input.title.trim()
+  if (input.marker) fields.xmlId = input.marker
   // Link the payer company only when matched (a positive integer id).
   const companyId = Number(input.companyId)
   if (input.companyId && Number.isInteger(companyId) && companyId > 0) fields.companyId = companyId
