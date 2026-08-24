@@ -35,7 +35,15 @@ describe('писатели portal_tokens классифицированы', () =
       // и создавать её рефреш не вправе (#510).
       updatePortalTokenSecrets: 'update-only-refresh',
       // Удаление терминально: строки не станет в любом порядке, а обновление это увидит.
-      deleteToken: 'delete-is-terminal'
+      deleteToken: 'delete-is-terminal',
+      // ⚠ Пишет РОВНО ОДНУ колонку `grant_revoked_at` (#574) и только когда она пуста: отсчёт
+      // идёт от ПЕРВОГО отказа, иначе срок отодвигался бы каждым тиком и портал не был бы стёрт
+      // никогда. UPDATE-only, как все после #510. `updated_at` НЕ трогает — по нему выбираются
+      // порталы для продления, и сдвинув его, отметка выключила бы сама себя.
+      markGrantRevoked: 'update-only-one-column',
+      // Обратная ей: успех обнуляет отметку безусловно, иначе один транзиентный отказ приговаривал
+      // бы живой портал навсегда.
+      clearGrantRevoked: 'update-only-one-column'
     }
     expect([...writers].sort()).toEqual(Object.keys(CLASSIFIED).sort())
   })

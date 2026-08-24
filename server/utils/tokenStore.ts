@@ -207,3 +207,73 @@ export async function deleteToken(query: QueryFn, memberId: string, eventTs = 0)
     [memberId, eventTs]
   )
 }
+
+/**
+ * Отметить, что грант портала ответил «мёртв» (#574) — ТОЛЬКО если отметки ещё не было.
+ *
+ * ⚠ `WHERE grant_revoked_at = 0` несущее: отсчёт идёт от ПЕРВОГО отказа. Перезаписывая метку на
+ * каждом тике, мы отодвигали бы срок вечно, и портал не был бы стёрт никогда — уборщик выглядел бы
+ * рабочим и не работал.
+ *
+ * ⚠ `updated_at` НЕ трогаем: по нему выбираются порталы для продления (#175), и сдвинув его, мы
+ * выкинули бы мёртвый портал из выборки — то есть перестали бы получать отказы, по которым и
+ * считается срок. Сам себе выключатель.
+ *
+ * ⚠ Как и все писатели после #510 — UPDATE-only: у удалённого портала обновлять нечего.
+ */
+export async function markGrantRevoked(query: QueryFn, memberId: string, atMs: number): Promise<void> {
+  await query(
+    `UPDATE portal_tokens SET grant_revoked_at = $2 WHERE member_id = $1 AND grant_revoked_at = 0`,
+    [memberId, Math.floor(atMs)]
+  )
+}
+
+/**
+ * Снять отметку мёртвого гранта: обновление прошло, портал жив.
+ *
+ * ⚠ Вызывается на КАЖДОМ успехе, а не только когда отметка есть. Условие `<> 0` тут было бы
+ * оптимизацией ценой правила: «успех обнуляет» должно выполняться безусловно, иначе однажды
+ * появится путь, где отметка переживает удачное обновление.
+ */
+export async function clearGrantRevoked(query: QueryFn, memberId: string): Promise<void> {
+  await query(`UPDATE portal_tokens SET grant_revoked_at = 0 WHERE member_id = $1`, [memberId])
+}
+
+/**
+ * Порталы, у которых грант мёртв дольше порога — кандидаты на удаление (#574).
+ *
+ * ⚠ Порог считает ВЫЗЫВАЮЩИЙ и передаёт границу: SQL не должен знать про политику, а тест —
+ * подсовывать часы в базу.
+ *
+ * ⚠ `LIMIT` обязателен и приходит снаружи: без него ошибка классификации однажды вернула бы всех
+ * клиентов разом. Сортировка по метке — стираем самых давних, а не случайных: при упоре в потолок
+ * очередь должна двигаться, а не топтаться на одних и тех же строках.
+ */
+export async function selectReapablePortals(
+  query: QueryFn,
+  beforeMs: number,
+  limit: number
+): Promise<{ memberId: string, revokedAtMs: number }[]> {
+  const rows = await query(
+    `SELECT member_id, grant_revoked_at FROM portal_tokens
+      WHERE grant_revoked_at > 0 AND grant_revoked_at <= $1
+      ORDER BY grant_revoked_at ASC
+      LIMIT $2`,
+    [Math.floor(beforeMs), Math.max(1, Math.floor(limit))]
+  )
+  return rows
+    .map(r => ({
+      memberId: String((r as { member_id?: unknown }).member_id ?? ''),
+      revokedAtMs: Number((r as { grant_revoked_at?: unknown }).grant_revoked_at ?? 0)
+    }))
+    .filter(r => r.memberId !== '')
+}
+
+/** Сколько порталов сейчас помечены мёртвым грантом — для строки лога «кандидатов N». */
+export async function countRevokedPortals(query: QueryFn, beforeMs: number): Promise<number> {
+  const rows = await query(
+    `SELECT count(*)::int AS n FROM portal_tokens WHERE grant_revoked_at > 0 AND grant_revoked_at <= $1`,
+    [Math.floor(beforeMs)]
+  )
+  return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
+}

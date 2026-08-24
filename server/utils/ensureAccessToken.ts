@@ -16,7 +16,9 @@
 import { buildRefreshBody, hostFromEndpoint, parseRefreshResponse } from './b24Oauth'
 import { sdkRefreshTransport } from './b24Sdk'
 import { withAdvisoryLock } from './dbLock'
-import { getToken, updatePortalTokenSecrets } from './tokenStore'
+import { portalErrorCode } from './portalError'
+import { isGrantDead } from '../../app/utils/portalReaper'
+import { clearGrantRevoked, getToken, markGrantRevoked, updatePortalTokenSecrets } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
 
@@ -39,6 +41,12 @@ export interface RefreshDeps {
   saveToken: (q: QueryFn, token: PortalToken) => Promise<boolean>
   /** POST the refresh body to B24 OAuth and return the raw JSON. */
   postRefresh: (body: string) => Promise<unknown>
+  /** Отметить мёртвый грант (#574) — на локальном соединении `q`. Необязательна: без неё поведение
+   *  ровно прежнее, просто уборщик не получит сигнала. Отсутствие ломать вызывающих не должно —
+   *  их тут больше десятка, и половина живёт в тестах. */
+  markGrantRevoked?: (q: QueryFn, memberId: string, atMs: number) => Promise<void>
+  /** Снять отметку после удачного обновления (#574). Необязательна по той же причине. */
+  clearGrantRevoked?: (q: QueryFn, memberId: string) => Promise<void>
 }
 
 const liveDeps: RefreshDeps = {
@@ -46,6 +54,8 @@ const liveDeps: RefreshDeps = {
   withLock: withAdvisoryLock,
   loadToken: getToken,
   saveToken: updatePortalTokenSecrets,
+  markGrantRevoked,
+  clearGrantRevoked,
   // Refresh through the jssdk transport (`B24OAuth.auth.refreshAuth`), bounded (15s) so a hung
   // OAuth call can't pin the advisory lock + pooled connection (the whole refresh runs in the lock).
   postRefresh: sdkRefreshTransport({ timeoutMs: 15_000 })
@@ -97,7 +107,28 @@ export async function ensureAccessToken(
     const shouldRefresh = opts.force ? stored.accessToken === token.accessToken : needsRefresh(stored, deps.now())
     if (!shouldRefresh) return stored
 
-    const r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
+    // ⚠ Наблюдение «грант мёртв» стоит ЗДЕСЬ, а не в продлении (#574), и это несущее. Выборка
+    // keep-alive намеренно выбрасывает мёртвые гранты из окна через несколько прогонов (иначе они
+    // монополизировали бы батч), так что наблюдать отказ там значило бы увидеть его в лучшем случае
+    // трижды за полгода. `ensureAccessToken` — ЕДИНСТВЕННАЯ точка, через которую идут все
+    // обновления портального токена: и продление, и `crm-sync`, и маршруты интерфейса. Кто первый
+    // получил отказ, тот и поставил отметку.
+    let r: ReturnType<typeof parseRefreshResponse>
+    try {
+      r = parseRefreshResponse(await deps.postRefresh(buildRefreshBody({ clientId, clientSecret }, stored.refreshToken)))
+    } catch (e) {
+      // ⚠ Отметка — ЛУЧШИЕ УСИЛИЯ и никогда не подменяет исходную ошибку. Вызывающие полагаются на
+      // то, что мёртвый грант БРОСАЕТ (джоба падает, чат ошибок молчит, повтор чистый); подменив
+      // исключение отказом записи, мы превратили бы понятный сбой в загадочный.
+      if (isGrantDead(portalErrorCode(e)) && deps.markGrantRevoked) {
+        try {
+          await deps.markGrantRevoked(q, stored.memberId, deps.now())
+        } catch (markError) {
+          log.warning(`ensureAccessToken: не удалось отметить мёртвый грант: ${(markError as Error)?.message}`)
+        }
+      }
+      throw e
+    }
     const updated: PortalToken = {
       ...stored,
       accessToken: r.accessToken,
@@ -120,6 +151,17 @@ export async function ensureAccessToken(
       // The stale token fails instead, the job fails honestly, and nothing reaches a portal that
       // withdrew consent. Costs one doomed request either way — this is the one that fails.
       return stored
+    }
+    // ⚠ Успех СНИМАЕТ отметку безусловно (#574). Условие «только если отметка есть» было бы
+    // оптимизацией ценой правила: без сброса один транзиентный `invalid_grant` — а он бывает при
+    // гонке ротации — приговаривал бы живой портал навсегда, и никакое последующее здоровье его бы
+    // не спасло. Тоже лучшие усилия: не сняли отметку — портал доживёт до следующего успеха.
+    if (deps.clearGrantRevoked) {
+      try {
+        await deps.clearGrantRevoked(q, stored.memberId)
+      } catch (clearError) {
+        log.warning(`ensureAccessToken: не удалось снять отметку мёртвого гранта: ${(clearError as Error)?.message}`)
+      }
     }
     return updated
   })
