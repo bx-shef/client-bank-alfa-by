@@ -187,6 +187,9 @@ services:
       PENDING_MAX_AGE_DAYS: ${PENDING_MAX_AGE_DAYS:-}
       PORTAL_REAP_DAYS: ${PORTAL_REAP_DAYS:-}
       PORTAL_REAP_ENABLED: ${PORTAL_REAP_ENABLED:-}
+      # Порог уборщика мёртвых банк-подключений (#599, хвост #574). Стирание ВСЕГДА включено (без
+      # флага): клиентов на боевом нет. Порог в днях; пусто = умолчание (30), кламп вверх от пола (14).
+      BANK_REAP_DAYS: ${BANK_REAP_DAYS:-}
       TOKEN_KEEPALIVE_HOURS: ${TOKEN_KEEPALIVE_HOURS:-}
       QUEUE_FETCH_SATURATION_THRESHOLD: ${QUEUE_FETCH_SATURATION_THRESHOLD:-}
       # Telegram alert channel (#426, docs/OPERATIONS.md). ONLY here, not on `worker`: the queue

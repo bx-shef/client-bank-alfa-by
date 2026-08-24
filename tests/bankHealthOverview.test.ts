@@ -15,6 +15,7 @@ const HOUR = 3_600_000
 
 function row(over: Partial<BankHealthRow> = {}): BankHealthRow {
   return {
+    id: 1,
     memberId: 'M1',
     provider: 'alfa-by',
     accountKey: 'BY01',
@@ -238,5 +239,70 @@ describe('превью-фикстура', () => {
   it('показывает ИНТЕРЕСНЫЙ случай — иначе эталон не документирует смысл карточки', () => {
     expect(PREVIEW_BANK_HEALTH.needAttention).toBeGreaterThan(0)
     expect(PREVIEW_BANK_HEALTH.pending.connections).toBeGreaterThan(0)
+  })
+})
+
+describe('#599 attentionConnections — поштучный список для ручного отключения', () => {
+  const DAY = 86_400_000
+  const ALFA_TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+  // ⚠ Фейковый хеш НЕ встраивает сырой member_id — иначе `not.toContain(member)` ловил бы его же
+  // внутри `hash-<member>`. Реальный portalHash это SHA-256 и сырого id не содержит.
+  const HASH: Record<string, string> = {
+    'MEMBER-RAW-AAA': 'aaa000opaque', 'MEMBER-RAW-BBB': 'bbb111opaque', 'MEMBER-RAW-CCC': 'ccc222opaque',
+    'A': 'aOpaque', 'B': 'bOpaque', 'C': 'cOpaque'
+  }
+  const hash = (m: string) => HASH[m] ?? 'zOpaque'
+
+  it('нездоровые строки попадают в список с opaque id и меткой портала, БЕЗ счёта', () => {
+    const rows = [
+      row({ id: 5, memberId: 'MEMBER-RAW-AAA', accountKey: 'BY_SECRET_01', hasRefresh: false }), // no-refresh
+      row({ id: 6, memberId: 'MEMBER-RAW-BBB', connectedAt: NOW - ALFA_TTL - 40 * DAY }), // expired
+      row({ id: 7, memberId: 'MEMBER-RAW-CCC' }) // ok
+    ]
+    const o = summarizeBankHealth(rows, NOW, hash)
+    expect(o.attentionConnections?.map(c => c.id).sort()).toEqual([5, 6])
+    const json = JSON.stringify(o.attentionConnections)
+    expect(json).not.toContain('BY_SECRET_01')
+    // ⚠ Сырого member_id в выводе быть не должно — только его хеш.
+    expect(json).not.toContain('MEMBER-RAW-AAA')
+    expect(json).toContain('aaa000opaque')
+  })
+
+  it('deadDays датируется для измеренной смерти и null для no-refresh без согласия', () => {
+    const rows = [
+      row({ id: 6, memberId: 'B', connectedAt: NOW - ALFA_TTL - 30 * DAY }), // 30 дней мёртв
+      row({ id: 5, memberId: 'A', hasRefresh: false }) // no-refresh, даты нет
+    ]
+    const o = summarizeBankHealth(rows, NOW, hash)
+    const byId = new Map(o.attentionConnections!.map(c => [c.id, c.deadDays]))
+    expect(byId.get(6)).toBe(30)
+    expect(byId.get(5)).toBeNull()
+  })
+
+  it('БЕЗ хешера поля нет вовсе — та же граница приватности, что у attentionPortals', () => {
+    const o = summarizeBankHealth([row({ hasRefresh: false })], NOW)
+    expect(o.attentionConnections).toBeUndefined()
+  })
+
+  it('ожидающие (~pending:) в список не попадают', () => {
+    const o = summarizeBankHealth([row({ accountKey: provisionalAccountKey('n1'), hasRefresh: false })], NOW, hash)
+    expect(o.attentionConnections).toEqual([])
+  })
+})
+
+describe('#599 bankAttentionRowViews — подписи строк', () => {
+  it('банк, метка портала и «мёртво N дней»; без даты — состояние', async () => {
+    const { bankAttentionRowViews } = await import('../app/utils/bankHealthOverview')
+    const views = bankAttentionRowViews({
+      ...PREVIEW_BANK_HEALTH,
+      attentionConnections: [
+        { id: 1, portalHash: 'abcd', provider: 'alfa-by', health: 'expired', deadDays: 42 },
+        { id: 2, portalHash: 'ef01', provider: 'prior-by', health: 'no-refresh', deadDays: null }
+      ]
+    })
+    expect(views[0]!.label).toContain('Альфа-Банк')
+    expect(views[0]!.label).toContain('abcd')
+    expect(views[0]!.label).toContain('42')
+    expect(views[1]!.label).toContain('переподключить')
   })
 })

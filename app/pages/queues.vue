@@ -9,12 +9,12 @@
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.
 // `operator` layout → b24ui theming + dark; <AuthGate> keeps protected chrome from
 // flashing before the auth redirect; `noindex`. See docs/QUEUES.md, docs/AUTH.md.
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queueChart'
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
 import { ALERT_CHANNEL_CLASS, HEALTH_TONE_COLOR, presentAlertChannel, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
-import { attentionHeadline, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
+import { attentionHeadline, bankAttentionRowViews, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
 
@@ -142,6 +142,50 @@ async function loadBankHealth(): Promise<void> {
 // Строки и заголовок считает чистое ядро (склонения — через общий `pluralRu`), страница только рисует.
 const bankRows = computed(() => bankHealth.value ? bankHealthRows(bankHealth.value) : [])
 const bankHeadline = computed(() => bankHealth.value ? attentionHeadline(bankHealth.value) : '')
+// Поштучные нерабочие подключения — их оператор может отключить руками (#599).
+const bankAttentionRows = computed(() => bankHealth.value ? bankAttentionRowViews(bankHealth.value) : [])
+
+// Ключ строки, которую сейчас отключаем (свой флаг, чтобы одна кнопка не блокировала остальные).
+const disconnectingId = ref<number | null>(null)
+// Строка, ждущая подтверждения вторым кликом: отключение необратимо и шлёт клиенту пометку.
+const confirmDisconnectId = ref<number | null>(null)
+const disconnectNote = ref('')
+// Зеркало server/utils/session.ts CSRF_HEADER — как в useAppRatingOps/useAuth.
+const OPS_CSRF = { 'x-cba-auth': '1' }
+
+// ⚠ Открывая подтверждение, уводим фокус на «Отмена» (находка ревью по a11y и UX): деструктивная
+// «Да, отключить» не должна оказаться под курсором/фокусом, а появление пары кнопок иначе не
+// объявляется скринридеру. Прошлую ноту чистим — она была про другое подключение.
+async function askDisconnect(id: number): Promise<void> {
+  disconnectNote.value = ''
+  confirmDisconnectId.value = id
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-testid="bank-disconnect-cancel-${id}"]`)?.focus()
+}
+
+function cancelDisconnect(): void {
+  disconnectNote.value = ''
+  confirmDisconnectId.value = null
+}
+
+async function disconnectBank(id: number): Promise<void> {
+  if (isPreview()) return // в превью действий нет — только вёрстка
+  disconnectingId.value = id
+  disconnectNote.value = ''
+  try {
+    await $fetch('/api/ops/bank-disconnect', { method: 'POST', headers: OPS_CSRF, body: { id } })
+    // ⚠ Пометка клиенту — best-effort (чат ошибок может быть не настроен), поэтому «уйдёт», а не
+    // «отправлена»: утверждать факт, которого код не гарантирует, нельзя.
+    disconnectNote.value = 'Подключение отключено. Клиенту уйдёт пометка в чат ошибок, если он настроен.'
+    confirmDisconnectId.value = null
+    await loadBankHealth()
+  } catch (e) {
+    const said = (e as { data?: { error?: string } })?.data?.error
+    disconnectNote.value = said || 'Не удалось отключить — попробуйте ещё раз.'
+  } finally {
+    disconnectingId.value = null
+  }
+}
 
 // «Оцените приложение» — per-portal review lifecycle the owner manages here (not via SQL).
 const rating = useAppRatingOps()
@@ -382,6 +426,69 @@ onBeforeUnmount(() => {
                 class="ml-1 rounded bg-(--ui-color-design-tinted-na-bg) px-1.5 py-0.5"
               >{{ h }}</code>
             </p>
+
+            <!-- Нерабочие подключения ПОШТУЧНО — оператор может отключить конкретное (#599).
+                 Отключение необратимо и шлёт клиенту пометку в чат ошибок, поэтому — вторым кликом
+                 (не `confirm()`: он блокируется в части iframe'ов). Что именно за подключение —
+                 видно по банку и метке портала; номера счёта здесь нет намеренно, как и везде. -->
+            <div
+              v-if="bankAttentionRows.length"
+              class="mt-4 space-y-2"
+              data-testid="bank-attention-list"
+            >
+              <p class="text-xs font-medium text-(--ui-color-base-2)">
+                Отключить нерабочее подключение (клиенту уйдёт пометка в чат ошибок):
+              </p>
+              <div
+                v-for="r in bankAttentionRows"
+                :key="r.id"
+                class="flex flex-wrap items-center justify-between gap-2 rounded bg-(--ui-color-design-tinted-na-bg) px-2 py-1.5"
+                :data-testid="`bank-attention-${r.id}`"
+              >
+                <span class="text-xs text-(--ui-color-base-2)">{{ r.label }}</span>
+                <template v-if="confirmDisconnectId === r.id">
+                  <span class="flex items-center gap-2">
+                    <B24Button
+                      label="Да, отключить"
+                      :aria-label="`Подтвердить отключение: ${r.label}`"
+                      color="air-primary-alert"
+                      size="xs"
+                      :loading="disconnectingId === r.id"
+                      :disabled="disconnectingId === r.id"
+                      :data-testid="`bank-disconnect-confirm-${r.id}`"
+                      @click="disconnectBank(r.id)"
+                    />
+                    <B24Button
+                      label="Отмена"
+                      :aria-label="`Отменить отключение: ${r.label}`"
+                      color="air-tertiary"
+                      size="xs"
+                      :disabled="disconnectingId === r.id"
+                      :data-testid="`bank-disconnect-cancel-${r.id}`"
+                      @click="cancelDisconnect()"
+                    />
+                  </span>
+                </template>
+                <B24Button
+                  v-else
+                  label="Отключить"
+                  :aria-label="`Отключить: ${r.label}`"
+                  color="air-tertiary-no-accent"
+                  size="xs"
+                  :data-testid="`bank-disconnect-${r.id}`"
+                  @click="askDisconnect(r.id)"
+                />
+              </div>
+              <p
+                v-if="disconnectNote"
+                class="text-xs text-(--ui-color-base-3)"
+                role="status"
+                aria-live="polite"
+                data-testid="bank-disconnect-note"
+              >
+                {{ disconnectNote }}
+              </p>
+            </div>
 
             <!-- Пульс механизма, который эти подключения держит (#504). Без него «всё живо» на
                  экране может означать «продление встало час назад, а умирать они начнут к ночи». -->
