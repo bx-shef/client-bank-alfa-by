@@ -518,6 +518,7 @@ defineExpose({ reload: load })
               color="air-tertiary"
               size="xs"
               class="mt-1"
+              :disabled="pausingAll"
               :aria-expanded="false"
               :aria-controls="`add-account-${a.id}`"
               :data-testid="`add-account-open-${a.id}`"
@@ -617,6 +618,7 @@ defineExpose({ reload: load })
               :aria-label="`Забрать выписку за день — ${rowLabel(a)}`"
               color="air-tertiary-no-accent"
               size="xs"
+              :disabled="pausingAll"
               :data-testid="`fetch-day-open-${a.id}`"
               @click="openFetch(a)"
             />
