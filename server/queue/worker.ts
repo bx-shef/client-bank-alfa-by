@@ -44,7 +44,7 @@ import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTrigg
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
-import { deleteImportResultForPortal, saveImportResult } from '../utils/importResultStore'
+import { deleteImportResultForPortal, markBankFetch, saveImportResult } from '../utils/importResultStore'
 import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
 import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
@@ -178,6 +178,13 @@ export function liveHandlerDeps(): HandlerDeps {
       // it. Amounts/purposes stay out (docs/PRIVACY.md §Логи); the account is logSafe'd like
       // everywhere else, since the bank echoes operator-supplied values.
       fetchLog.info(`${job.providerId} portal ${job.memberId}, account ${logSafe(job.account)} ${job.dateFrom}..${job.dateTo}: ${items.length} ops`)
+      // ⚠ Отмечаем КАЖДЫЙ забор, а не только пустой. `crm-sync` ставится лишь когда операции
+      // есть, а сводку прогона пишет именно он — поэтому «банк ответил, операций за этот день
+      // нет» не доходило до интерфейса НИКАК, и человек, нажавший «Забрать», не мог отличить это
+      // от «кнопка не работает». Ровно на этом застряла проверка забора за день.
+      // ⚠ Отметка идёт в СВОИ колонки и сводку прогона не трогает — иначе пустой забор одного
+      // счёта затирал бы результат соседнего (у портала один ряд, счетов несколько).
+      await markFetchOutcome(job, items.length)
       return items
     },
     // Manual import: decode the windows-1251 file carried in the packet and parse it
@@ -980,6 +987,21 @@ async function persistBatchResult(
     })
   } catch (e) {
     importLog.error(`import_batch save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+  }
+}
+
+/**
+ * Отметить обращение к банку: когда спросили и сколько отдал.
+ *
+ * ⚠ Лучшие усилия и НИКОГДА не бросает: это учёт, а не работа. Провал записи не должен ронять
+ * джобу забора — иначе диагностика ломала бы то, что диагностирует.
+ */
+async function markFetchOutcome(job: FetchJob, ops: number): Promise<void> {
+  if (!job.account || isDemoAccount(job.account)) return
+  try {
+    await markBankFetch(dbQuery, job.memberId, ops)
+  } catch (e) {
+    fetchLog.error(`fetch mark failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 

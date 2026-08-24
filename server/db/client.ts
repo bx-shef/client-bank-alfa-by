@@ -126,6 +126,14 @@ ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS consent_expires_at BIGINT NOT N
 --
 -- BIGSERIAL на существующей таблице заполняет значения сразу; уникальность держит индекс ниже.
 ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+
+-- Отметка ПОСЛЕДНЕГО ОБРАЩЕНИЯ К БАНКУ, отдельно от сводки прогона (#592).
+-- ⚠ Отдельные колонки, а не запись в last_sync_at/operations: у портала один ряд на все счета,
+-- и забор, не принёсший операций, затирал бы содержательный результат соседнего счёта — «0 операций»
+-- о прогоне, который записал в CRM десятки дел. Здесь же хранится только «когда мы в последний раз
+-- спросили банк и сколько он отдал», и на сводку прогона это не влияет.
+ALTER TABLE import_result ADD COLUMN IF NOT EXISTS last_fetch_at TIMESTAMPTZ;
+ALTER TABLE import_result ADD COLUMN IF NOT EXISTS last_fetch_ops INTEGER NOT NULL DEFAULT 0;
   -- Когда мы последний раз ПЫТАЛИСЬ обновить токен, независимо от исхода (#489).
   -- ⚠ Это не то же, что updated_at: тот означает «когда мы последний раз ДЕРЖАЛИ свежую пару» и
   -- штампуется только успехом. Без отдельной метки неудачная попытка неотличима от отсутствия

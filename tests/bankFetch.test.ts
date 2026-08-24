@@ -238,7 +238,7 @@ describe('#561: fetchAlfaStatementPages', () => {
     expect(out.map(i => i.docId)).toEqual(['a', 'b', 'c', 'd'])
     // ⚠ A silent recovery would be worse than the loss: it would hide how long it had been going on.
     expect(onWalk).toHaveBeenCalledWith({ pages: 3, recovered: 2, stop: 'exhausted' })
-    expect(alfaWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 2')
+    expect(alfaWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('со 2-й и дальше добрано операций: 2')
   })
 
   it('an empty first page costs exactly one request and no waiting', async () => {
@@ -323,7 +323,7 @@ describe('#561: fetchAlfaStatementPages', () => {
     // ⚠ Hitting the ceiling must be DISTINGUISHABLE from running out of data, or #561 comes back one
     // layer up: the truncation just moves from 100 operations to 20 pages and nobody hears about it.
     expect(onWalk).toHaveBeenCalledWith({ pages: MAX_ALFA_STATEMENT_PAGES, recovered: MAX_ALFA_STATEMENT_PAGES - 1, stop: 'page-cap' })
-    expect(alfaWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+    expect(alfaWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
   })
 
   it('a slow bank stops on the wall-clock budget, before the page cap', async () => {
@@ -337,7 +337,7 @@ describe('#561: fetchAlfaStatementPages', () => {
     const info = onWalk.mock.calls[0]![0] as { pages: number, stop: string }
     expect(info.stop).toBe('time-cap')
     expect(info.pages).toBeLessThan(MAX_ALFA_STATEMENT_PAGES)
-    expect(alfaWalkNotice('acc', onWalk.mock.calls[0]![0])).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
+    expect(alfaWalkNotice('acc', onWalk.mock.calls[0]![0])?.text).toContain('ОБХОД СТРАНИЦ ОБОРВАН')
   })
 
   it('the page cap and the time budget are BOTH reachable — neither is decoration', () => {
@@ -365,21 +365,28 @@ describe('#561: alfaWalkNotice', () => {
 
   it('carries no literal channel tag — the formatter already prints one', () => {
     // ⚠ `[fetch] WARNING: [fetch] …` is the duplication buildOpLogLine documents; do not rebuild it.
-    const line = alfaWalkNotice('alfa BY01 2026-01-13..2026-01-13', { pages: 3, recovered: 2, stop: 'exhausted' })
-    expect(line).not.toContain('[fetch]')
-    expect(line).toContain('alfa BY01 2026-01-13..2026-01-13')
+    const notice = alfaWalkNotice('alfa BY01 2026-01-13..2026-01-13', { pages: 3, recovered: 2, stop: 'exhausted' })!
+    expect(notice.text).not.toContain('[fetch]')
+    expect(notice.text).toContain('alfa BY01 2026-01-13..2026-01-13')
+    // ⚠ Штатно собранные страницы — ФАКТ, а не тревога. Замечание владельца по живому логу: эта
+    // строка печаталась WARNING на каждом тике исправной работы, то есть предупреждала о том, что
+    // уже починено, и забивала поиск настоящих проблем.
+    expect(notice.level, 'исправная пагинация снова кричит').toBe('info')
   })
 
   it('reports both facts at once when both happened', () => {
-    const line = alfaWalkNotice('acc', { pages: 20, recovered: 19, stop: 'page-cap' })!
-    expect(line).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 19')
-    expect(line).toContain('ОБХОД СТРАНИЦ ОБОРВАН на 20-й')
-    expect(line).toContain('потолок 20 страниц')
+    const notice = alfaWalkNotice('acc', { pages: 20, recovered: 19, stop: 'page-cap' })!
+    expect(notice.text).toContain('со 2-й и дальше добрано операций: 19')
+    expect(notice.text).toContain('ОБХОД СТРАНИЦ ОБОРВАН на 20-й')
+    expect(notice.text).toContain('потолок 20 страниц')
+    // ⚠ Обрыв — ЕДИНСТВЕННАЯ тревога этого обхода: окно могло прийти не полностью.
+    expect(notice.level).toBe('warn')
   })
 
   it('names the wall-clock budget when that is what stopped it', () => {
-    const line = alfaWalkNotice('acc', { pages: 6, recovered: 0, stop: 'time-cap' })!
-    expect(line).toContain(`бюджет ${Math.round(ALFA_WALK_BUDGET_MS / 1000)} с`)
+    const notice = alfaWalkNotice('acc', { pages: 6, recovered: 0, stop: 'time-cap' })!
+    expect(notice.text).toContain(`бюджет ${Math.round(ALFA_WALK_BUDGET_MS / 1000)} с`)
+    expect(notice.level).toBe('warn')
   })
 })
 
@@ -395,19 +402,24 @@ describe('#561: fetchBankStatement page walking (live wiring)', () => {
     let call = 0
     const warn = vi.fn()
     const seenUrls: string[] = []
+    const info = vi.fn()
     const { deps } = fakeDeps({
       getJson: async (url: string) => {
         seenUrls.push(url)
         return pages[call++]!
       },
-      warn
+      warn,
+      log: info
     })
     const out = await fetchBankStatement(query, deps)
     expect(out.map(i => i.docId)).toEqual(['a', 'b'])
     expect(seenUrls.map(u => /pageNo=(\d+)/.exec(u)![1])).toEqual(['0', '1', '2'])
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0]![0]).toContain('ПАГИНАЦИЯ ВЕРНУЛА ЕЩЁ 1')
-    expect(warn.mock.calls[0]![0]).not.toContain('[fetch]')
+    // ⚠ Штатно собранные страницы идут в СПОКОЙНЫЙ канал: на живом проде эта строка печаталась
+    // предупреждением на каждом тике исправной работы (замечание владельца по логу 2026-08-23).
+    expect(warn, 'исправная пагинация снова кричит').not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledTimes(1)
+    expect(info.mock.calls[0]![0]).toContain('со 2-й и дальше добрано операций: 1')
+    expect(info.mock.calls[0]![0]).not.toContain('[fetch]')
   })
 
   it('stays silent on the ordinary poll', async () => {

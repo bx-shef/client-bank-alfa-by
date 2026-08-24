@@ -34,8 +34,10 @@ vi.mock('~/composables/useB24', async () => {
   return { useB24: () => makeMockB24({ isInit: () => true, isAdmin: true }) }
 })
 
-async function mountForm(props: Record<string, unknown> = {}) {
-  const wrapper = await mountSuspended(SettingsForm, { props })
+// ⚠ Раздел — обязательный проп формы (состояние живёт на странице `/settings`, там же навигация
+// и заголовок панели). Умолчание здесь только чтобы не повторять его в каждом тесте.
+async function mountForm(props: Partial<InstanceType<typeof SettingsForm>['$props']> = {}) {
+  const wrapper = await mountSuspended(SettingsForm, { props: { section: 'bank', ...props } })
   await flushPromises()
   await nextTick()
   return wrapper

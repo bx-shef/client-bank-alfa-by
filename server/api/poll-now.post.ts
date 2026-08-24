@@ -4,8 +4,10 @@
 // window. Thin I/O over the pure handler (server/utils/pollNow.ts), which enforces the feature gate,
 // admin gate, per-portal cooldown, and app-side-only frequency control (#54).
 //
-// The frame token is itself the CSRF defense (only the in-portal iframe holds it). Feature is OFF
-// unless MANUAL_POLL_ENABLED=1 AND queues are enabled (fail-closed) — the owner opts portals in.
+// The frame token is itself the CSRF defense (only the in-portal iframe holds it).
+// ⚠ Отдельного выключателя у кнопки НЕТ (`MANUAL_POLL_ENABLED` снят 2026-08-23): она нужна на
+// каждом портале, а частоту держат admin-гейт, пер-портальный кулдаун, глобальный лимитер очереди
+// и `limit_req` nginx — ни один из них вызывающий не контролирует.
 
 import { DEFAULT_MANUAL_POLL_COOLDOWN_SEC, handlePollNow, type PollNowDeps } from '../utils/pollNow'
 import { bearerToken } from '../utils/settingsHandler'
@@ -21,8 +23,8 @@ import { dbQuery } from '../db/client'
 function livePollNowDeps(): PollNowDeps {
   const cooldownSec = Number(process.env.MANUAL_POLL_COOLDOWN_SEC ?? NaN)
   return {
-    // App-side gate (#54): default OFF; also requires queues (else enqueue no-ops silently).
-    enabled: process.env.MANUAL_POLL_ENABLED === '1' && queueEnabled(),
+    // Без очередей постановка задачи молча ничего не сделает — честнее ответить 503.
+    enabled: queueEnabled(),
     cooldownSec: Number.isFinite(cooldownSec) && cooldownSec > 0 ? Math.floor(cooldownSec) : DEFAULT_MANUAL_POLL_COOLDOWN_SEC,
     lookbackDays: Number(process.env.CRON_LOOKBACK_DAYS || 1),
     memberIdByDomain: domain => getMemberIdByDomain(dbQuery, domain),

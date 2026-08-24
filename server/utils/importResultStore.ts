@@ -23,10 +23,40 @@ function coerceErrors(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((e): e is string => typeof e === 'string') : []
 }
 
+/**
+ * Отметить обращение к банку: когда спросили и сколько операций он отдал.
+ *
+ * ⚠ Пишет ТОЛЬКО свои две колонки и НИКОГДА не трогает сводку прогона. Забор, не принёсший
+ * операций, иначе затирал бы результат соседнего счёта того же портала — у портала один ряд, а
+ * счетов несколько, и «0 операций» показывалось бы о прогоне, который записал десятки дел.
+ * Ровно так первая редакция и делала (найдено ревью до выката).
+ *
+ * ⚠ `INSERT … ON CONFLICT` нужен потому, что у портала может ещё не быть ряда вовсе: первый в
+ * жизни забор пустой — обычное начало.
+ */
+export async function markBankFetch(query: QueryFn, memberId: string, ops: number): Promise<void> {
+  const n = Number.isFinite(ops) && ops > 0 ? Math.floor(ops) : 0
+  // ⚠ Запись создаётся ТОЛЬКО для установленного портала. Задача забора может доехать до воркера
+  // уже ПОСЛЕ `ONAPPUNINSTALL` (очередь живёт своей жизнью), и обычный upsert воскресил бы строку
+  // удалённого портала — тот же класс, что закрыли UPDATE-only писателями в #505/#510, только
+  // здесь `import_result` никто не подметает, и строка осталась бы навсегда.
+  await query(
+    `INSERT INTO import_result (member_id, last_fetch_at, last_fetch_ops, updated_at)
+     SELECT $1, now(), $2, now()
+      WHERE EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)
+     ON CONFLICT (member_id) DO UPDATE SET
+       last_fetch_at = now(),
+       last_fetch_ops = EXCLUDED.last_fetch_ops,
+       updated_at = now()`,
+    [memberId, n]
+  )
+}
+
 /** Read the last import run for a portal, or null if none has been recorded yet. */
 export async function getImportResult(query: QueryFn, memberId: string): Promise<ImportRunSummary | null> {
   const rows = await query(
-    `SELECT state, last_sync_at, operations, activities_created, chat_notified, errors
+    `SELECT state, last_sync_at, operations, activities_created, chat_notified, errors,
+            last_fetch_at, last_fetch_ops
      FROM import_result WHERE member_id = $1`,
     [memberId]
   )
@@ -39,7 +69,10 @@ export async function getImportResult(query: QueryFn, memberId: string): Promise
     operations: Number(row.operations) || 0,
     activitiesCreated: Number(row.activities_created) || 0,
     chatNotified: Number(row.chat_notified) || 0,
-    errors: coerceErrors(row.errors)
+    errors: coerceErrors(row.errors),
+    // Отметка обращения к банку — отдельно от сводки прогона (см. `markBankFetch`).
+    lastFetchAt: row.last_fetch_at == null ? null : new Date(row.last_fetch_at as string | number | Date).toISOString(),
+    lastFetchOps: Number(row.last_fetch_ops) || 0
   }
 }
 

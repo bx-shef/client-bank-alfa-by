@@ -62,11 +62,40 @@ function extractUnp(party?: PriorTxParty): string {
 }
 
 /**
+ * Направление операции.
+ *
+ * ⚠ Прежде было строгое `tx.creditDebitIndicator === 'Debit'`, и это опасно ассиметрично: ЛЮБОЕ
+ * иное значение молча становилось ПРИХОДОМ. То есть расход, помеченный банком как `DBIT`, `debit`
+ * или `DEBIT`, попадал бы в CRM приходом — не «потерялся», а показан неверно, что хуже: числа в
+ * карточке компании выглядят достоверными. Документация банка обещает `Credit`/`Debit`, но
+ * обещание документации — не измерение (ровно на этом уже обожглись с `pageRowCount=0`, #561).
+ *
+ * ⚠ Сравнение регистронезависимое и понимает форму ISO 20022 (`DBIT`/`CRDT`) — её использует
+ * половина банковских API, и различие между стандартами стоит одной строки здесь и неверной
+ * суммы в CRM там.
+ *
+ * ⚠ Второй, независимый признак — НАШ счёт: если он значится плательщиком, деньги ушли, чем бы
+ * банк это ни пометил. Он берётся только когда индикатор непонятен: спорить с явным ответом банка
+ * мы не вправе, а вот молча угадывать «приход» — тем более.
+ */
+export function priorDirection(tx: PriorTransaction, ourAccount: string): OperationDirection {
+  const flag = (tx.creditDebitIndicator ?? '').trim().toLowerCase()
+  if (flag === 'debit' || flag === 'dbit') return 'debit'
+  if (flag === 'credit' || flag === 'crdt') return 'credit'
+  const ours = (ourAccount ?? '').trim()
+  if (ours) {
+    if ((tx.debtorAccount?.identification ?? '').trim() === ours) return 'debit'
+    if ((tx.creditorAccount?.identification ?? '').trim() === ours) return 'credit'
+  }
+  return 'credit'
+}
+
+/**
  * Map one Priorbank transaction to a StatementItem. `ctx` carries our own
- * account number/currency. Direction: `Debit` → расход, anything else → приход.
+ * account number/currency.
  */
 export function normalizePriorTransaction(tx: PriorTransaction, ctx: PriorAccountContext): StatementItem {
-  const direction: OperationDirection = tx.creditDebitIndicator === 'Debit' ? 'debit' : 'credit'
+  const direction = priorDirection(tx, ctx.account)
   // Counterparty = payer on a credit, payee on a debit.
   const party = direction === 'credit' ? tx.debtor : tx.creditor
   const account = direction === 'credit' ? tx.debtorAccount : tx.creditorAccount

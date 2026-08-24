@@ -41,7 +41,7 @@
 | GET | `/api/import/batch?ids=` | F (+ скоуп по порталу И сотруднику в WHERE) | нет | 200, 400, 403, 409 | `import` |
 | GET | `/api/import/metrics` | F | нет | 200, 400, 403, 409 | `import` |
 | POST | `/api/import/metrics-reset` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
-| POST | `/api/poll-now` | **F+A** + гейт `MANUAL_POLL_ENABLED` + кулдаун | **да** | 200, 400, 403, 409, 429, 503 | `import` |
+| POST | `/api/poll-now` | **F+A** + кулдаун (пер-портальный) | **да** | 200, 400, 403, 409, 429, 503 | `import` |
 | POST | `/api/bank/connect` | **F+A** | **да** | 200, 400, 403, 409, 502, 503 | `import` |
 | GET | `/api/bank/callback` | **ST** | n/a | 200, 400, 502 | `import`; алиасы `/oauth-alfabank-by/`, `/oauth-priorbank-by/` |
 | GET | `/api/bank/accounts` | **F+A** | **да** | 200, 400, 403, 409 | `import` |

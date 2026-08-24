@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { nextTick } from 'vue'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
-import SettingsForm from '~/components/SettingsForm.vue'
+import SettingsPage from '~/pages/settings.vue'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { defaultPortalSettings } from '~/utils/settings'
 import { SETTINGS_SECTIONS, showsChatPreview, type SettingsSectionId } from '~/utils/settingsSections'
@@ -14,8 +14,19 @@ import { SETTINGS_SECTIONS, showsChatPreview, type SettingsSectionId } from '~/u
 // было опустошить, экран готовности убрать, заголовок заклинить на первом разделе, предпросмотр
 // показать везде, `?section=` не читать. То есть тесты не защищали ни одного обещания #530.
 
+// ⚠ Мок портала обязателен: страница закрыта `InPortalGate`, и без него на экране нет НИЧЕГО —
+// ни навигации, ни формы. Пока разделы жили в самой форме, гейт был выше по дереву и тесту не
+// мешал; с переездом раскладки он попал внутрь проверяемого.
+vi.mock('~/composables/useB24', async () => {
+  const { makeMockB24 } = await import('./helpers/mockB24')
+  return { useB24: () => makeMockB24({ isInit: () => true, isAdmin: true }) }
+})
+
+// ⚠ Монтируем СТРАНИЦУ, а не форму: с переездом раскладки слайдера навигация, заголовок и
+// подсказка раздела живут на странице, а форма получает раздел пропом. Проверять проводку по
+// одной только форме теперь нельзя — половина проверяемого в неё не входит.
 async function mountReady() {
-  const wrapper = await mountSuspended(SettingsForm)
+  const wrapper = await mountSuspended(SettingsPage)
   await flushPromises()
   await nextTick()
   return wrapper
@@ -63,8 +74,7 @@ describe('разделы настроек — проводка (#530)', () => {
 
       // Содержимое — иначе раздел можно опустошить, и никто не заметит.
       expect(wrapper.find(ANCHOR[id]).exists(), `раздел «${label}» пуст`).toBe(true)
-      // Заголовок и подсказка привязаны к АКТИВНОМУ разделу, а не к первому в списке.
-      expect(wrapper.find('[data-testid="section-title"]').text()).toBe(label)
+      // Подсказка привязана к АКТИВНОМУ разделу, а не к первому в списке.
       expect(wrapper.find('[data-testid="section-hint"]').text()).toBe(hint)
       // ⚠ Требование issue дословно: готовность остаётся на КАЖДОМ экране.
       expect(wrapper.find('[data-testid="setup-readiness"]').exists(), 'пропала готовность').toBe(true)
@@ -154,9 +164,15 @@ describe('раздел из адреса (#530)', () => {
     // готовности, и письмо), и мутация «не читать `?section=`» проходила зелёной: все названия
     // разделов и так видны в полосе, поэтому проверка по тексту страницы бесполезна — нужен
     // именно заголовок активного раздела.
-    const wrapper = await mountSuspended(SettingsForm, { route: `/settings?section=${query}` })
+    const wrapper = await mountSuspended(SettingsPage, { route: `/settings?section=${query}` })
     await flushPromises()
     await nextTick()
-    expect(wrapper.find('[data-testid="section-title"]').text()).toBe(expected)
+    // ⚠ Проверяем ПОДСВЕЧЕННЫЙ пункт навигации, а не текст страницы: названия всех разделов видны
+    // в списке всегда, поэтому поиск по тексту прошёл бы и с нечитаемым `?section=`. Заголовок
+    // панели для этого не годится — он рисуется штатным `B24DashboardNavbar` и своего якоря не
+    // имеет; подсветка же и есть то, что человек видит как «открыт этот раздел».
+    const active = wrapper.find('[data-testid="settings-nav"]').findAll('[aria-current]')
+    expect(active, 'подсвечен не один пункт').toHaveLength(1)
+    expect(active[0]!.text().trim()).toBe(expected)
   })
 })
