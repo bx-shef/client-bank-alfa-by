@@ -38,6 +38,10 @@ afterEach(() => {
   fetchMock.mockImplementation(defaultFetch)
   listReply.value = []
   mockState.inPortal = true
+  // ⚠ `B24Modal` ТЕЛЕПОРТИРУЕТСЯ в `body` и не убирается вместе с размонтированным компонентом.
+  // Без уборки следующий тест находит `document.querySelector`-ом ЧУЖОЕ окно из прошлого теста —
+  // клик по нему ничего не делает, и падение выглядит как «кнопка не отправила запрос».
+  document.body.innerHTML = ''
 })
 
 async function mountReady() {
@@ -471,5 +475,260 @@ describe('#576 пауза автоопроса', () => {
       expect(pauses).toHaveLength(2)
       expect(pauses.map(c => (c[1] as { body: { id: number } }).body.id)).toEqual([1, 2])
     })
+  })
+})
+
+describe('#23 добавление счёта к существующему подключению', () => {
+  const LIVE = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+
+  async function openAdd(wrapper: Awaited<ReturnType<typeof mountReady>>) {
+    const btn = wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')
+    await btn!.trigger('click')
+    await nextTick()
+  }
+
+  it('шлёт id ИСХОДНОЙ строки и её номер как ожидание', async () => {
+    // ⚠ Именно `id`, а не номер: номер меняется при выборе счёта, поэтому адрес из отрисованного
+    // списка может описывать уже другую строку (#517). Номер едет рядом как ОЖИДАНИЕ.
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    await openAdd(wrapper)
+    await wrapper.find('input').setValue('BY02ALFA0002')
+    const btn = wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')
+    await btn!.trigger('click')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/add-account')
+    expect(call).toBeTruthy()
+    expect((call![1] as { body: Record<string, unknown> }).body)
+      .toEqual({ id: 5, sourceAccountKey: 'BY01ALFA0001', accountKey: 'BY02ALFA0002' })
+  })
+
+  it('НЕЗАВЕРШЁННОМУ подключению кнопки нет — счёт самого подключения ещё не выбран', async () => {
+    listReply.value = [{ ...LIVE, accountKey: PENDING }]
+    const wrapper = await mountReady()
+    expect(wrapper.findAll('button').some(b => b.text() === 'Добавить ещё счёт')).toBe(false)
+  })
+
+  it('подключению БЕЗ ГРАНТА кнопки нет — делить нечего, был бы гарантированный отказ', async () => {
+    // ⚠ Копия токенов такому подключению завела бы вторую строку с парой, которую банк ротирует, —
+    // ровно тот дефект, от которого грант защищает. Кнопка, ведущая в отказ, приучает не верить
+    // кнопкам, поэтому её нет вовсе.
+    listReply.value = [{ ...LIVE, grantId: '' }]
+    const wrapper = await mountReady()
+    expect(wrapper.findAll('button').some(b => b.text() === 'Добавить ещё счёт')).toBe(false)
+  })
+
+  it('свёрнуто по умолчанию: поле не показывается, пока его не попросили', async () => {
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(false)
+    await openAdd(wrapper)
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(true)
+  })
+
+  it('счёт, названный банком, добавляется КЛИКОМ — 28 знаков не перепечатывают', async () => {
+    listReply.value = [LIVE]
+    const bankAccounts: BankSideAccount[] = [
+      { provider: 'alfa-by', number: 'BY02ALFA0002', currency: 'BYN' },
+      // Уже подключённый предлагать незачем — сервер ответил бы 409.
+      { provider: 'alfa-by', number: 'BY01ALFA0001', currency: 'BYN' }
+    ]
+    const wrapper = await mountSuspended(ConnectedBankAccounts, { props: { bankAccounts } })
+    await flushPromises()
+    await nextTick()
+    await openAdd(wrapper)
+
+    const chips = wrapper.find('[data-testid="add-account-suggestions"]').findAll('button')
+    expect(chips).toHaveLength(1)
+    await chips[0]!.trigger('click')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/add-account')
+    expect((call![1] as { body: Record<string, unknown> }).body.accountKey).toBe('BY02ALFA0002')
+  })
+
+  it('«Отмена» сворачивает блок и НИЧЕГО не отправляет', async () => {
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    await openAdd(wrapper)
+    const btn = wrapper.findAll('button').find(b => b.text() === 'Отмена')
+    await btn!.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(false)
+    expect(fetchMock.mock.calls.some(c => c[0] === '/api/bank/add-account')).toBe(false)
+  })
+})
+
+describe('#23 объяснения и обратная связь (находки ревью по UX)', () => {
+  const LIVE = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+  const OLD = { ...LIVE, id: 6, accountKey: 'BY07ALFA0007', grantId: '' }
+
+  it('успех ГОВОРИТ о себе, а не растворяется в списке', async () => {
+    // ⚠ Блок схлопывается, новая строка появляется где-то ниже без выделения — при двух-трёх
+    // подключениях это неотличимо от «кнопка ничего не сделала», ровно тот симптом, от которого
+    // лечили #404.
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')!.trigger('click')
+    await nextTick()
+    await wrapper.find('input').setValue('BY02ALFA0002')
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')!.trigger('click')
+    await flushPromises()
+    const done = wrapper.find('[data-testid="add-account-done"]')
+    expect(done.exists()).toBe(true)
+    expect(done.text()).toContain('BY02ALFA0002')
+  })
+
+  it('подключение БЕЗ гранта объясняет, почему у него нет кнопки', async () => {
+    // ⚠ Иначе две визуально одинаковые строки, у одной кнопка есть, у другой нет: читается как сбой
+    // интерфейса, и первая реакция — «кнопка пропала», а не «схожу в справку».
+    listReply.value = [LIVE, OLD]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="no-grant-6"]').exists()).toBe(true)
+  })
+
+  it('объяснения НЕТ, когда сравнивать не с чем — все подключения одинаково старые', async () => {
+    listReply.value = [OLD]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="no-grant-6"]').exists()).toBe(false)
+  })
+
+  it('подпись про отключение НЕ пугает безусловно — она оговаривает несколько счетов', async () => {
+    // ⚠ Прежний текст утверждал, что вернуть доступ сможет только владелец счёта, и прямо
+    // противоречил справке, которая предлагает исправлять номер через «Отключить» + «Добавить».
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    const text = wrapper.text()
+    expect(text).toContain('другие счета')
+    expect(text).toContain('без повторного входа')
+  })
+
+  it('поле связано с подсказкой о формате — плейсхолдер исчезает при вводе', async () => {
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')!.trigger('click')
+    await nextTick()
+    const input = wrapper.find('[data-testid="add-account-5"] input')
+    const hintId = input.attributes('aria-describedby')
+    expect(hintId).toBeTruthy()
+    expect(wrapper.find(`#${hintId}`).text()).toContain('без пробелов')
+  })
+})
+
+describe('#23 несколько счетов ОДНОГО банка — строки не путаются (находка код-ревью)', () => {
+  const A = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+  const B = { ...A, id: 6, accountKey: 'BY02ALFA0002' }
+
+  it('раскрывается РОВНО та строка, по которой нажали', async () => {
+    // ⚠ Именно эта правка и создаёт случай «несколько строк одного банка», поэтому адресация по
+    // провайдеру ломалась бы ровно на ней: она нашла бы ПЕРВУЮ строку банка, и раскрытие (а после
+    // отмены — и фокус клавиатурного пользователя) уезжало бы на чужой счёт.
+    listReply.value = [A, B]
+    const wrapper = await mountReady()
+    const buttons = wrapper.findAll('button').filter(b => b.text() === 'Добавить ещё счёт')
+    expect(buttons).toHaveLength(2)
+    await buttons[1]!.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="add-account-6"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="add-account-5"]').exists()).toBe(false)
+  })
+
+  it('добавление адресуется id ВТОРОЙ строки, а не первой строки того же банка', async () => {
+    listReply.value = [A, B]
+    const wrapper = await mountReady()
+    await wrapper.findAll('button').filter(b => b.text() === 'Добавить ещё счёт')[1]!.trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="add-account-6"] input').setValue('BY03ALFA0003')
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')!.trigger('click')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/bank/add-account')
+    expect((call![1] as { body: Record<string, unknown> }).body)
+      .toEqual({ id: 6, sourceAccountKey: 'BY02ALFA0002', accountKey: 'BY03ALFA0003' })
+  })
+})
+
+describe('#19 забор за день адресуется КОНКРЕТНОМУ счёту', () => {
+  const A = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+
+  // ⚠ Окно ТЕЛЕПОРТИРУЕТСЯ в `body` (так устроен `B24Modal`), поэтому искать его в поддереве
+  // компонента бесполезно — ищем в документе.
+  const inModal = (sel: string) => document.querySelector(sel)
+
+  async function openFetch(wrapper: Awaited<ReturnType<typeof mountReady>>, id = 5) {
+    await wrapper.find(`[data-testid="fetch-day-open-${id}"]`).trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+  }
+
+  async function pickDay(wrapper: Awaited<ReturnType<typeof mountReady>>, day: string) {
+    wrapper.findComponent({ name: 'DayField' }).vm.$emit('update:modelValue', day)
+    await nextTick()
+  }
+
+  async function runFetch() {
+    const btn = inModal('[data-testid="fetch-day-run"]') as HTMLElement | null
+    btn?.click()
+    await flushPromises()
+  }
+
+  it('в запрос уходят банк, счёт И день', async () => {
+    // ⚠ Раньше кнопка жила в карточке ручного опроса и ставила задачу на КАЖДЫЙ счёт портала:
+    // человек смотрел на конкретную строку, а спрашивали банк обо всех, тратя общий лимит запросов
+    // на счета, о которых не спрашивали.
+    listReply.value = [A]
+    const wrapper = await mountReady()
+    await openFetch(wrapper)
+    await pickDay(wrapper, '2026-07-10')
+    await runFetch()
+
+    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
+    expect(post, 'запрос на забор не ушёл').toBeTruthy()
+    expect((post![1] as { body: Record<string, unknown> }).body)
+      .toEqual({ day: '2026-07-10', provider: 'alfa-by', accountKey: 'BY01ALFA0001' })
+  })
+
+  it('окно называет БАНК И СЧЁТ — иначе непонятно, что заберут', async () => {
+    listReply.value = [A]
+    const wrapper = await mountReady()
+    await openFetch(wrapper)
+    expect(inModal('[data-testid="fetch-day-modal"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('BY01ALFA0001')
+  })
+
+  it('без выбранного дня «Забрать» заблокировано — дата обязательна', async () => {
+    // ⚠ Не «за сегодня по умолчанию»: молчаливая подстановка означала бы, что человек нажал кнопку,
+    // не выбрав то, ради чего она заведена, и получил не тот день.
+    listReply.value = [A]
+    const wrapper = await mountReady()
+    await openFetch(wrapper)
+    expect((inModal('[data-testid="fetch-day-run"]') as HTMLButtonElement | null)?.disabled).toBe(true)
+    expect(fetchMock.mock.calls.some(c => c[0] === '/api/poll-now')).toBe(false)
+  })
+
+  it('адрес берётся из ТОЙ строки, по которой нажали', async () => {
+    const B = { ...A, id: 6, accountKey: 'BY02ALFA0002' }
+    listReply.value = [A, B]
+    const wrapper = await mountReady()
+    await openFetch(wrapper, 6)
+    await pickDay(wrapper, '2026-07-10')
+    await runFetch()
+    const post = fetchMock.mock.calls.find(c => c[0] === '/api/poll-now')
+    expect((post![1] as { body: Record<string, unknown> }).body)
+      .toMatchObject({ accountKey: 'BY02ALFA0002' })
+  })
+
+  it('ПРИОСТАНОВЛЕННОМУ подключению кнопки нет — забирать по нему нечего', async () => {
+    listReply.value = [{ ...A, pollPaused: true }]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="fetch-day-open-5"]').exists()).toBe(false)
+  })
+
+  it('НЕЗАВЕРШЁННОМУ подключению кнопки нет — счёт ещё не выбран', async () => {
+    listReply.value = [{ ...A, accountKey: PENDING }]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="fetch-day-open-5"]').exists()).toBe(false)
   })
 })

@@ -9,7 +9,7 @@ import { handleSetBankAccount, type SetAccountDeps } from '../../utils/bankAccou
 import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
-import { renameBankTokenAccount } from '../../utils/bankTokenStore'
+import { getBankGrantId, renameBankTokenAccount } from '../../utils/bankTokenStore'
 import { withAdvisoryLock } from '../../utils/dbLock'
 import { makeLockedRename } from '../../utils/bankAccountRename'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
@@ -25,7 +25,15 @@ function liveDeps(): SetAccountDeps {
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
     // Переименование сериализовано с обновлением токена — почему и как, см. `makeLockedRename` (#509).
-    rename: makeLockedRename({ withLock: withAdvisoryLock, rename: renameBankTokenAccount })
+    rename: makeLockedRename({
+      withLock: withAdvisoryLock,
+      rename: renameBankTokenAccount,
+      // Грант подключения — по нему берётся лок, когда счета делят согласие (#23).
+      // ⚠ Именно `getBankGrantId`, а НЕ `getBankToken(...).grantId`: второй расшифровывает refresh
+      // (незачем) и бросает на битой строке, из-за чего выбор счёта отвечал бы 500 ровно тому, кто
+      // и так не может пользоваться подключением. Разобрано в докблоке функции.
+      grantOf: (memberId, provider, accountKey) => getBankGrantId(dbQuery, memberId, provider, accountKey)
+    })
   }
 }
 

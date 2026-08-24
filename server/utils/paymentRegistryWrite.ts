@@ -25,7 +25,7 @@ import type { PaymentRegistryFields } from '../../app/utils/distributionLedger'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import type { SpRef } from '../../app/config/distributionSp'
 import type { RestCall } from './companyLookup'
-import { neutralizeBb } from '../../app/utils/activity'
+import { buildActivityTitle, neutralizeBb } from '../../app/utils/activity'
 
 /** Human labels for the direction column — «приход»/«расход» read as data, `credit`/`debit` do not. */
 export const DIRECTION_LABELS = { credit: 'Приход', debit: 'Расход' } as const
@@ -84,6 +84,12 @@ export async function writePaymentRegistryViaRest(
     opportunity: item.amount,
     currency: item.currency,
     marker: dedupKey(item),
+    // ⚠ Тот же заголовок, что у дела: «Приход 450,00 BYN от ИП Иванов». Портал иначе подставляет
+    // «Импорт выписки: платежи #45» — строку, которая стоит в списке реестра и в каждой ссылке и
+    // не говорит о платеже ничего (замечание владельца по живой карточке).
+    // ⚠ `neutralizeBb` — как и у дела: имя контрагента пишет плательщик, а заголовок элемента
+    // рендерится в интерфейсе портала.
+    title: neutralizeBb(buildActivityTitle(item)),
     ...(companyId ? { companyId } : {}),
     registry
   }, call)

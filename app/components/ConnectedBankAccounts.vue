@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useBankAccounts, PREVIEW_BANK_ACCOUNTS, type ConnectedBankAccount } from '~/composables/useBankAccounts'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { isPreviewQuery } from '~/utils/inPortalGate'
@@ -8,6 +8,8 @@ import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { connectionHealth, connectionHealthBadge, consentExpiringSoon } from '~/utils/bankTokenLifetime'
 import { pauseAllSummary, planPauseAll } from '~/utils/bankPauseAll'
+import { useManualPoll } from '~/composables/useManualPoll'
+import { dayVerdictMessage, isoDayFromMs, pollDayVerdict } from '~/utils/dayValue'
 
 // Connected bank accounts, with a per-row disconnect (#404). Lives inside BankConnectCard, above
 // the connect form, so the admin sees what is already bound BEFORE adding another account —
@@ -25,7 +27,10 @@ const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), 
 // же, и оставить одну устаревшей — значит показать противоречие самому себе.
 const emit = defineEmits<{ changed: [] }>()
 
-const { accounts, loading, loaded, removing, saving, pausing, pausingAll, error, load, disconnect, setPaused, setPausedAll, setAccount, rowKey } = useBankAccounts()
+const {
+  accounts, loading, loaded, removing, saving, pausing, pausingAll, adding, error,
+  load, disconnect, setPaused, setPausedAll, setAccount, addAccount, rowKey
+} = useBankAccounts()
 const route = useRoute()
 
 /** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
@@ -83,6 +88,33 @@ watch(accounts, () => {
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
+
+/**
+ * У какой строки раскрыт блок «добавить счёт» (#23).
+ *
+ * ⚠ Свёрнут по умолчанию намеренно. Подавляющему большинству порталов хватает одного счёта, а
+ * поле ввода рядом с рабочим подключением читалось бы как «здесь чего-то не хватает» — ровно тем
+ * же способом, каким вводило в заблуждение поле номера в форме подключения (снято по живому
+ * прогону 2026-08-14). Открывает его тот, кто действительно пришёл за вторым счётом.
+ */
+const expandingAdd = ref('')
+/** Черновики номеров ДОБАВЛЯЕМЫХ счетов (#23) — свои, чтобы не мешаться с выбором счёта (#407). */
+const addDrafts = ref<Record<string, string>>({})
+/** Сообщение об успешном добавлении — озвучивается и показывается рядом с местом клика (#23). */
+const added = ref('')
+
+/**
+ * Может ли к этой строке добавляться счёт (#23).
+ *
+ * ⚠ Два запрета, и оба — не про интерфейс. У НЕЗАВЕРШЁННОГО подключения счёт ещё не выбран, и
+ * «добавить второй» к строке без первого было бы обходом `set-account`. У подключения БЕЗ ГРАНТА
+ * (заведено до #23) делить нечего: копия токенов означала бы вторую строку с парой, которую банк
+ * ротирует, то есть ровно тот дефект, от которого грант защищает. Сервер отвечает на оба, но
+ * показывать кнопку, ведущую в гарантированный отказ, — приучать не верить кнопкам.
+ */
+function canAddAccount(a: ConnectedBankAccount): boolean {
+  return !isPendingAccountKey(a.accountKey) && a.grantId !== ''
+}
 
 /** Which row is awaiting confirmation. Disconnect is destructive (imports stop), so it takes a
  *  deliberate second click rather than a native confirm() — the latter is blocked in some iframes. */
@@ -187,6 +219,90 @@ async function onAssign(a: ConnectedBankAccount, value?: string) {
   // Успех → строка перечитается уже с настоящим номером, черновик больше не нужен.
   if (await setAccount(a, value ?? drafts.value[key] ?? '')) {
     drafts.value[key] = ''
+    emit('changed')
+  }
+}
+
+/**
+ * Забор за конкретный день — ПО ЭТОМУ счёту (#19).
+ *
+ * ⚠ Раньше кнопка жила в карточке ручного опроса и ставила задачу на КАЖДЫЙ подключённый счёт
+ * портала: человек смотрел на конкретную строку, а лимит запросов тратился на счета, о которых он
+ * не спрашивал, и ответ «опрос запущен» не говорил, что именно опрошено. Теперь действие
+ * адресовано — и адрес виден прямо в заголовке окна.
+ *
+ * ⚠ Именно ОДИН день, а не интервал: интервал это N задач к банку за один клик, то есть нагрузка,
+ * которую портал назначал бы себе сам вопреки правилу «частоту регулируем мы» (#54).
+ */
+const {
+  poll, polling: pollingDay, error: pollError, message: pollMessage, outcome: pollOutcome, waiting: pollWaiting
+} = useManualPoll()
+/** Строка, для которой открыто окно забора; `null` — окно закрыто. */
+const fetchingRow = ref<ConnectedBankAccount | null>(null)
+const fetchDay = ref('')
+const fetchDayVerdict = computed(() =>
+  (fetchDay.value ? pollDayVerdict(fetchDay.value, isoDayFromMs(Date.now())) : 'malformed'))
+const fetchDayError = computed(() => (fetchDay.value ? dayVerdictMessage(fetchDayVerdict.value) : ''))
+/** Забор доступен только с выбранным и годным днём — дата обязательна. */
+const canFetchDay = computed(() => fetchDayVerdict.value === 'ok' && !pollingDay.value)
+
+function openFetch(a: ConnectedBankAccount) {
+  fetchDay.value = ''
+  pollMessage.value = ''
+  pollError.value = ''
+  pollOutcome.value = ''
+  fetchingRow.value = a
+}
+
+async function onFetchDay() {
+  const a = fetchingRow.value
+  if (!a || !canFetchDay.value) return
+  await poll(fetchDay.value, { provider: a.provider, accountKey: a.accountKey })
+  // Окно закрываем только на успехе: при отказе человек должен прочитать причину, не открывая заново.
+  if (!pollError.value) fetchingRow.value = null
+}
+
+/** Есть ли в портале хоть одно РАЗМЕЧЕННОЕ подключение — только тогда отсутствие кнопки у соседа
+ *  требует объяснения: сравнивать не с чем, если её нет ни у кого. */
+const hasGrantedAccount = computed(() => accounts.value.some(canAddAccount))
+
+/**
+ * Раскрыть блок добавления и увести фокус в поле.
+ *
+ * ⚠ Возврат фокуса обязателен в обе стороны (находка ревью по доступности): кнопка и блок — это
+ * `v-if`/`v-else-if`, то есть нажатая кнопка ИСЧЕЗАЕТ из DOM, фокус падает на `<body>`, и
+ * клавиатурный пользователь начинает Tab с начала страницы. То же при отмене и после успеха.
+ */
+async function openAdd(a: ConnectedBankAccount) {
+  // Прошлый успех больше не про то, что человек делает сейчас.
+  added.value = ''
+  expandingAdd.value = rowKey(a)
+  await nextTick()
+  const el = document.getElementById(`add-account-${a.id}`)?.querySelector('input')
+  el?.focus()
+}
+
+async function closeAdd(a: ConnectedBankAccount) {
+  expandingAdd.value = ''
+  await nextTick()
+  // ⚠ Адрес — по `id` СТРОКИ, а не по банку (находка код-ревью). Именно эта правка и создаёт
+  // случай, когда у одного банка несколько строк: селектор по провайдеру нашёл бы ПЕРВУЮ из них, и
+  // после отмены фокус клавиатурного пользователя уезжал бы на кнопку чужого счёта.
+  const btn = document.querySelector<HTMLElement>(`[data-testid="add-account-open-${a.id}"]`)
+  btn?.focus()
+}
+
+async function onAdd(a: ConnectedBankAccount, value?: string) {
+  const key = rowKey(a)
+  // Номер читаем ДО вызова: после успеха черновик очищается, и сообщение осталось бы без номера.
+  const number = (value ?? addDrafts.value[key] ?? '').trim()
+  if (await addAccount(a, number)) {
+    addDrafts.value[key] = ''
+    // ⚠ Успех обязан СКАЗАТЬ о себе (находка ревью по UX): блок схлопывается, новая строка
+    // появляется где-то в списке без выделения, и при двух-трёх подключениях это неотличимо от
+    // «кнопка ничего не сделала» — ровно тот симптом, от которого лечили #404.
+    added.value = `Счёт ${number} добавлен к подключению ${providerLabel(a.provider)}.`
+    await closeAdd(a)
     emit('changed')
   }
 }
@@ -360,7 +476,7 @@ defineExpose({ reload: load })
                 :aria-label="`Номер счёта для подключения ${providerLabel(a.provider)}`"
               />
               <B24Button
-                label="Привязать счёт"
+                label="Указать номер счёта"
                 color="air-primary"
                 size="xs"
                 :loading="saving === rowKey(a)"
@@ -373,6 +489,104 @@ defineExpose({ reload: load })
               class="truncate font-mono text-xs text-(--ui-color-base-3)"
             >
               {{ a.accountKey }}
+            </div>
+            <!-- ⚠ Отсутствие кнопки надо ОБЪЯСНИТЬ (#23, находка ревью по UX): две визуально
+                 одинаковые строки, у одной кнопка есть, у другой нет — читается как сбой
+                 интерфейса, и первая реакция «кнопка пропала», а не «схожу в справку». Показываем
+                 только когда сравнивать есть с чем: если размеченных подключений в портале нет
+                 вовсе, разницы человек не видит и объяснять нечего. -->
+            <div
+              v-if="!isPendingAccountKey(a.accountKey) && a.grantId === '' && hasGrantedAccount"
+              class="mt-1 text-xs text-(--ui-color-base-3)"
+              :data-testid="`no-grant-${a.id}`"
+            >
+              Добавить второй счёт к этому подключению нельзя — оно сделано до появления такой
+              возможности.
+              <HelpLink
+                anchor="many-accounts"
+                label="Что делать"
+              />
+            </div>
+            <!-- Ещё один счёт того же согласия (#23). Согласие банк выдаёт на НАБОР счетов клиента,
+                 поэтому шестой счёт не должен стоить шестого входа владельца в интернет-банк.
+                 Свёрнуто по умолчанию: большинству порталов хватает одного счёта, а открытое поле
+                 рядом с рабочим подключением читалось бы как «здесь чего-то не хватает». -->
+            <B24Button
+              v-if="canAddAccount(a) && expandingAdd !== rowKey(a)"
+              label="Добавить ещё счёт"
+              :aria-label="`Добавить ещё счёт к подключению ${rowLabel(a)}`"
+              color="air-tertiary"
+              size="xs"
+              class="mt-1"
+              :disabled="pausingAll"
+              :aria-expanded="false"
+              :aria-controls="`add-account-${a.id}`"
+              :data-testid="`add-account-open-${a.id}`"
+              @click="openAdd(a)"
+            />
+            <div
+              v-else-if="canAddAccount(a)"
+              :id="`add-account-${a.id}`"
+              class="mt-1 flex flex-wrap items-center gap-2"
+              :data-testid="`add-account-${a.id}`"
+            >
+              <!-- Счета, которые назвал сам банк, — тот же клик вместо перепечатывания IBAN, что и
+                   при выборе счёта (#494). Уже привязанные отфильтрованы: сервер ответил бы 409. -->
+              <div
+                v-if="suggestionsFor(a).length"
+                class="flex w-full flex-wrap items-center gap-2"
+                data-testid="add-account-suggestions"
+              >
+                <!-- ⚠ Не «Банк отдал»: список уже отфильтрован от подключённых, то есть банк на
+                     самом деле назвал больше. Плюс это жаргон, а читает бухгалтер. -->
+                <span class="text-xs text-(--ui-color-base-3)">Ещё не подключены:</span>
+                <B24Button
+                  v-for="s in suggestionsFor(a)"
+                  :key="s.number"
+                  :label="s.currency ? `${s.number} · ${s.currency}` : s.number"
+                  :aria-label="`Добавить счёт ${s.number}`"
+                  color="air-secondary-accent"
+                  size="xs"
+                  class="font-mono"
+                  :loading="adding === rowKey(a)"
+                  :disabled="adding === rowKey(a)"
+                  @click="onAdd(a, s.number)"
+                />
+              </div>
+              <B24Input
+                v-model="addDrafts[rowKey(a)]"
+                placeholder="BY00ALFA00000000000000000000"
+                class="w-full max-w-xs font-mono text-xs"
+                :aria-label="`Номер добавляемого счёта для ${providerLabel(a.provider)}`"
+                :aria-describedby="`add-hint-${a.id}`"
+                :disabled="adding === rowKey(a)"
+              />
+              <!-- ⚠ Формат жил только в плейсхолдере, а он исчезает при вводе и полю не описание.
+                   Это же снимает главную причину отказа 400: номер копируют из реквизитов ВМЕСТЕ с
+                   пробелами, и «допустимы буквы и цифры» человек читает, глядя на буквы и цифры. -->
+              <span
+                :id="`add-hint-${a.id}`"
+                class="w-full text-xs text-(--ui-color-base-3)"
+              >
+                Номер — как в реквизитах компании, без пробелов.
+              </span>
+              <B24Button
+                label="Добавить счёт"
+                :aria-label="`Добавить счёт ${providerLabel(a.provider)}`"
+                color="air-primary"
+                size="xs"
+                :loading="adding === rowKey(a)"
+                :disabled="adding === rowKey(a)"
+                @click="onAdd(a)"
+              />
+              <B24Button
+                label="Отмена"
+                :aria-label="`Отменить добавление счёта — ${rowLabel(a)}`"
+                color="air-tertiary"
+                size="xs"
+                :disabled="adding === rowKey(a)"
+                @click="closeAdd(a)"
+              />
             </div>
             <div
               v-if="connectedAgo(a.connectedAt)"
@@ -394,6 +608,20 @@ defineExpose({ reload: load })
           </div>
 
           <div class="flex items-center gap-2">
+            <!-- Забор за конкретный день ПО ЭТОМУ счёту (#19). Раньше эта кнопка жила в карточке
+                 ручного опроса и ставила задачу на КАЖДЫЙ счёт портала: человек смотрел на
+                 конкретную строку, а спрашивали банк обо всех. Приостановленному подключению
+                 кнопки нет — забирать по нему нечего, сервер ответит отказом. -->
+            <B24Button
+              v-if="!isPendingAccountKey(a.accountKey) && !a.pollPaused && confirming !== rowKey(a)"
+              label="Забрать за день"
+              :aria-label="`Забрать выписку за день — ${rowLabel(a)}`"
+              color="air-tertiary-no-accent"
+              size="xs"
+              :disabled="pausingAll"
+              :data-testid="`fetch-day-open-${a.id}`"
+              @click="openFetch(a)"
+            />
             <!-- Пауза опроса (#576). Стоит РЯДОМ с «Отключить» намеренно: это и есть тот выбор,
                  которого не хватало — раньше «слишком много операций» лечилось только отключением,
                  а оно стоит владельцу счёта повторного входа в интернет-банк. Подтверждения не
@@ -444,15 +672,112 @@ defineExpose({ reload: load })
       </li>
     </ul>
 
+    <!-- ⚠ Оговорка про несколько счетов ОБЯЗАТЕЛЬНА (#23, находка ревью по UX). Без неё эта подпись
+         утверждала безусловно: «вернуть доступ сможет только владелец счёта, заново авторизовавшись
+         в интернет-банке», — и прямо противоречила справке, которая предлагает исправлять неверный
+         номер через «Отключить» + «Добавить счёт». На экране висит именно пугающая формулировка,
+         поэтому админ не пошёл бы тем путём, который мы для него и задумали. -->
     <p class="text-xs text-(--ui-color-base-3)">
       «Пауза» останавливает только автоматический опрос: доступ и подключение сохраняются, и
-      возобновить можно тем же нажатием. Отключение убирает доступ приложения к счёту — вернуть его
-      сможет только владелец счёта, заново авторизовавшись в интернет-банке. Уже записанные в CRM
-      данные остаются в обоих случаях.
+      возобновить можно тем же нажатием. Отключение убирает доступ приложения к этому счёту. Если у
+      подключения есть другие счета, они продолжат работать, а отключённый можно вернуть кнопкой
+      «Добавить ещё счёт» — без повторного входа в интернет-банк. Если счёт был единственным,
+      вернуть доступ сможет только владелец счёта, заново авторизовавшись в банке. Уже записанные в
+      CRM данные остаются в любом случае.
+    </p>
+    <!-- ⚠ Окно, а не поле в строке: календарь занимает экран, а строк подключений может быть шесть.
+         Заголовок называет БАНК И СЧЁТ — ровно то, чего не хватало прежней кнопке. -->
+    <B24Modal
+      :open="fetchingRow !== null"
+      :title="fetchingRow ? `Забрать выписку — ${rowLabel(fetchingRow)}` : ''"
+      @update:open="(v: boolean) => { if (!v) fetchingRow = null }"
+    >
+      <template #body>
+        <div
+          class="space-y-3"
+          data-testid="fetch-day-modal"
+        >
+          <p class="text-sm text-(--ui-color-base-2)">
+            Если операции за какой-то день не подтянулись — выберите его и заберите повторно.
+            Дубликатов не будет: уже записанные операции приложение узнаёт по самому делу.
+            Интервал не поддерживается намеренно — это нагрузка на общий лимит запросов к банку.
+          </p>
+          <B24FormField
+            label="День"
+            required
+            :error="fetchDayError"
+            hint="Сегодняшний или прошедший — будущий выбрать нельзя"
+          >
+            <DayField v-model="fetchDay" />
+          </B24FormField>
+          <B24Alert
+            v-if="pollError"
+            color="air-primary-alert"
+            :description="pollError"
+            data-testid="fetch-day-error"
+          />
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex items-center gap-2">
+          <B24Button
+            label="Забрать"
+            color="air-primary"
+            :loading="pollingDay || pollWaiting"
+            :disabled="!canFetchDay"
+            :aria-busy="pollingDay || pollWaiting"
+            data-testid="fetch-day-run"
+            @click="onFetchDay"
+          />
+          <B24Button
+            label="Отмена"
+            color="air-tertiary"
+            :disabled="pollingDay"
+            @click="fetchingRow = null"
+          />
+        </div>
+      </template>
+    </B24Modal>
+
+    <!-- ⚠ ИСХОД, а не только «опрос запущен» (#592). Пустой ответ банка снаружи неотличим от
+         «кнопка не работает», и живая проверка застряла ровно на этом: приложение отвечало
+         «запущен» и молчало. Забор адресный, поэтому счёт ровно один — исход показывать честно. -->
+    <B24Alert
+      v-if="pollOutcome"
+      color="air-primary-success"
+      :description="pollOutcome"
+      data-testid="fetch-day-outcome"
+    />
+
+    <p
+      v-if="pollMessage"
+      class="text-xs text-(--ui-color-accent-main-success)"
+      role="status"
+      aria-live="polite"
+      data-testid="fetch-day-done"
+    >
+      {{ pollMessage }}
+    </p>
+
+    <p
+      v-if="added"
+      class="text-xs text-(--ui-color-accent-main-success)"
+      role="status"
+      aria-live="polite"
+      data-testid="add-account-done"
+    >
+      {{ added }}
     </p>
     <HelpLink
       anchor="pause-gap"
       label="Что будет с операциями за время паузы?"
+    />
+    <!-- ⚠ Ссылка стоит ЗДЕСЬ, у списка подключений, а не в общей справке: именно тут человек и
+         застревает, обнаружив, что счетов у компании несколько, а строка одна. Справка объясняет
+         и обратный ход — как исправить ошибочно указанный счёт, не теряя доступ у остальных. -->
+    <HelpLink
+      anchor="many-accounts"
+      label="У компании несколько счетов?"
     />
     <!-- ⚠ Молчать об этом нельзя. Приложение забирает выписку за ОКНО (по умолчанию сутки), а не
          «всё, что накопилось»: после паузы длиннее окна пропущенные дни не подтянутся НИКОГДА и

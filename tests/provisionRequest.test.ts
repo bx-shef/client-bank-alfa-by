@@ -15,7 +15,7 @@ const OUTCOME: ProvisionDistributionOutcome = {
   distributionSpEtid: 1046,
   createdPaymentSp: true,
   createdDistributionSp: false,
-  addedFields: 3,
+  addedFields: 3, cardConfigured: true,
   storedChanged: true
 }
 
@@ -40,7 +40,7 @@ describe('handleProvisionRequest', () => {
     const provision = vi.fn(async () => OUTCOME)
     const res = await handleProvisionRequest(deps({ provision }), input)
     expect(res.status).toBe(200)
-    expect(res.body).toMatchObject({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true, addedFields: 3, storedChanged: true })
+    expect(res.body).toMatchObject({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true, addedFields: 3, cardConfigured: true, storedChanged: true })
     expect(provision).toHaveBeenCalledWith('MEMBER1')
   })
 

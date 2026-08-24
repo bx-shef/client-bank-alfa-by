@@ -240,3 +240,52 @@ describe('provisionDistributionSp', () => {
     expect(calls.some(c => c.method === 'userfieldconfig.add')).toBe(false)
   })
 })
+
+describe('раскладка карточки реестра (#27)', () => {
+  it('после создания полей выставляется ОБЩАЯ настройка карточки', async () => {
+    // ⚠ Поля на элементе были и были подписаны по-русски, но карточка их не показывала: портал
+    // рисует раскладку по умолчанию, и клиент, моя компания, сумма, дата и назначение в неё не
+    // попадали. То есть реестр держал данные, которых человек не видел.
+    const calls: Array<{ method: string, params: Record<string, unknown> }> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      if (method === 'crm.type.add') return { result: { type: { entityTypeId: 1038, id: 7 } } }
+      return { result: {} }
+    }
+    const res = await provisionDistributionSp(call as never, {
+      payment: { entityTypeId: 1038, id: 7 },
+      distribution: { entityTypeId: 1040, id: 8 }
+    })
+    const cfg = calls.find(c => c.method === 'crm.item.details.configuration.set')
+    expect(cfg, 'раскладка карточки не выставляется').toBeTruthy()
+    expect(cfg!.params.scope, 'личная настройка вместо общей — бухгалтер увидит прежнюю карточку').toBe('C')
+    expect(res.cardConfigured).toBe(true)
+
+    // Имена полей — в той форме, в какой их ХРАНИТ портал: `UF_CRM7_…`, без подчёркивания после
+    // CRM. С формой создания (`UF_CRM_7_…`) настройка полей просто не найдёт и покажет пустой
+    // раздел (замерено на живом портале).
+    const names = (cfg!.params.data as Array<{ elements: Array<{ name: string }> }>)
+      .flatMap(s => s.elements.map(e => e.name))
+    expect(names).toContain('UF_CRM7_OP_DATE')
+    expect(names).toContain('UF_CRM7_PURPOSE')
+    expect(names, 'клиент не попал в карточку').toContain('COMPANY_ID')
+    expect(names, 'моя компания не попала в карточку').toContain('MYCOMPANY_ID')
+    expect(names.some(n => n.startsWith('UF_CRM_7_')), 'форма СОЗДАНИЯ поля вместо хранимой').toBe(false)
+  })
+
+  it('отказ настройки карточки НЕ роняет провижининг', async () => {
+    // ⚠ Провижининг создаёт смарт-процессы в CRM клиента, отката нет. Карточка без раскладки —
+    // неудобство (поля на месте, видны в списке и фильтрах), а падение здесь оставило бы портал с
+    // наполовину созданными сущностями.
+    const call = async (method: string) => {
+      if (method === 'crm.item.details.configuration.set') throw new Error('нет прав')
+      return { result: {} }
+    }
+    const res = await provisionDistributionSp(call as never, {
+      payment: { entityTypeId: 1038, id: 7 },
+      distribution: { entityTypeId: 1040, id: 8 }
+    })
+    expect(res.cardConfigured).toBe(false)
+    expect(res.payment.entityTypeId).toBe(1038)
+  })
+})

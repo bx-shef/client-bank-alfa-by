@@ -227,6 +227,18 @@ describe('ensureBankToken', () => {
     expect(loads[0]).toEqual(['m1', 'alfa-by', 'MC_7']) // loadToken got the right key parts
   })
 
+  it('ГРАНТ ДОЕЗЖАЕТ ДО КЛЮЧА ЛОКА — иначе счета одного согласия не сериализуются (#23)', async () => {
+    // ⚠ Дыра, которую эта проверка закрывает, невидима вдвойне: чистый `bankRefreshLockKey` покрыт
+    // своими тестами, но НИКТО не проверял, что грант ему вообще передают. Забудь мы аргумент — лок
+    // берётся добросовестно, ошибок нет, тесты зелёные, а два счёта одного гранта уходят в банк
+    // параллельно, и второй тратит refresh, который первый уже сжёг ротацией.
+    const near = tok({ expiresAt: NOW + 10_000, grantId: 'G1' })
+    const withLock = vi.fn(async (_key: string, fn: (q: QueryFn) => Promise<unknown>) => fn(null as unknown as QueryFn))
+    const { deps } = fakeDeps({ stored: near })
+    await ensureBankToken(near, { ...deps, withLock: withLock as typeof deps.withLock })
+    expect(withLock.mock.calls[0]![0]).toBe('bankrefresh:m1:alfa-by:grant:G1')
+  })
+
   it('NON-FORCE re-read: passed token near-expiry but stored is FRESH (concurrent worker won) → return stored, no refresh', async () => {
     const passedNear = tok({ expiresAt: NOW + 10_000, accessToken: 'OLD' })
     const storedFresh = tok({ expiresAt: NOW + 3_600_000, accessToken: 'FRESH' })

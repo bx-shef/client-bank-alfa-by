@@ -22,6 +22,8 @@ export interface MockB24Options {
   openSliderAppPage?: ReturnType<typeof vi.fn>
   /** PLACEMENT_OPTIONS фрейма. `{ place: 'app-options' }` = мы сами открыты слайдером настроек. */
   placementOptions?: Record<string, unknown>
+  /** Признак SDK «мы сами открыты в слайдере» (#15) — второй к нашему `place`. */
+  sliderMode?: boolean
   /** Стабильный спай для `openAppSlider()` — чем страница открывает вторичный экран. */
   openAppSlider?: ReturnType<typeof vi.fn>
   /** Стабильный спай для `closeSlider()` — чем вторичный экран закрывает себя. */
@@ -86,6 +88,9 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
       const p = (opts.placementOptions ?? {}).place
       return typeof p === 'string' && p ? p : undefined
     },
+    // ⚠ По умолчанию НЕ слайдер: тесты, которым это неважно, должны видеть обычный фрейм. Тест
+    // пусковой страницы (#15) задаёт признак явно — иначе ветка лаунчера не проверялась бы.
+    isSliderMode: () => opts.sliderMode === true,
     openAppSlider: (opts.openAppSlider ?? vi.fn(async () => true)) as unknown as ReturnType<typeof useB24>['openAppSlider'],
     closeSlider: (opts.closeSlider ?? vi.fn(async () => {})) as unknown as ReturnType<typeof useB24>['closeSlider'],
     set: () => ok,

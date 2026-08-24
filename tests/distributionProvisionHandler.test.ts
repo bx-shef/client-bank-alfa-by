@@ -48,7 +48,7 @@ const RESULT = (over: Partial<ProvisionResult> = {}): ProvisionResult => {
     distributionSpEtid: distribution.entityTypeId,
     createdPaymentSp: true,
     createdDistributionSp: true,
-    addedFields: 8,
+    addedFields: 8, cardConfigured: true,
     ...over
   }
 }
@@ -78,7 +78,7 @@ describe('handleProvisionDistribution', () => {
     }
     const { deps } = makeDeps({
       initial: { [PAYMENT_SP_CONFIG_KEY]: '100', [PAYMENT_SP_ID_CONFIG_KEY]: '10', [DISTRIBUTION_SP_CONFIG_KEY]: '200', [DISTRIBUTION_SP_ID_CONFIG_KEY]: '20' },
-      provisionResult: RESULT({ payment: REF(100, 10), distribution: REF(200, 20), createdPaymentSp: false, createdDistributionSp: false, addedFields: 0 }),
+      provisionResult: RESULT({ payment: REF(100, 10), distribution: REF(200, 20), createdPaymentSp: false, createdDistributionSp: false, addedFields: 0, cardConfigured: true }),
       onProvision: capture
     })
     const out = await handleProvisionDistribution(deps)
@@ -89,7 +89,7 @@ describe('handleProvisionDistribution', () => {
   it('does NOT write settings when the resolved ids equal what is stored (idempotent)', async () => {
     const { deps, saved } = makeDeps({
       initial: { [PAYMENT_SP_CONFIG_KEY]: '1044', [PAYMENT_SP_ID_CONFIG_KEY]: '44', [DISTRIBUTION_SP_CONFIG_KEY]: '1046', [DISTRIBUTION_SP_ID_CONFIG_KEY]: '46' },
-      provisionResult: RESULT({ createdPaymentSp: false, createdDistributionSp: false, addedFields: 0 })
+      provisionResult: RESULT({ createdPaymentSp: false, createdDistributionSp: false, addedFields: 0, cardConfigured: true })
     })
     const out = await handleProvisionDistribution(deps)
     expect(out.storedChanged).toBe(false)
@@ -100,7 +100,7 @@ describe('handleProvisionDistribution', () => {
     // stored only the payment id; distribution recovered by title → must persist
     const { deps, saved } = makeDeps({
       initial: { [PAYMENT_SP_CONFIG_KEY]: '1044' },
-      provisionResult: RESULT({ createdPaymentSp: false, createdDistributionSp: false, addedFields: 0 })
+      provisionResult: RESULT({ createdPaymentSp: false, createdDistributionSp: false, addedFields: 0, cardConfigured: true })
     })
     const out = await handleProvisionDistribution(deps)
     expect(out.storedChanged).toBe(true)

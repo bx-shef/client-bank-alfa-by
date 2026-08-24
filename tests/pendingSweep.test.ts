@@ -26,6 +26,7 @@ function row(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     hasRefresh: true,
     pollPaused: false,
     consentExpiresAt: 0,
+    grantId: '',
     id: 1,
     lastAttemptAt: 0,
     ...over

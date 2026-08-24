@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { PG_LOCK_TIMEOUT } from '../server/utils/bankRefreshLock'
 import { setAccountErrorMessage } from '../app/utils/setAccountError'
 import {
+  accountsRequestHeaders,
   accountsUrl,
   connectedKeys,
   extractAlfaAccounts,
@@ -159,8 +160,7 @@ describe('listBankSideAccounts', () => {
     const calls: BankProviderId[] = []
     const out = await listBankSideAccounts('M1', deps({
       tokens: async () => [token({ provider: 'alfa-by' }), token({ provider: 'prior-by' })],
-      getJson: async (url) => {
-        const provider: BankProviderId = url.includes('partner') ? 'alfa-by' : 'prior-by'
+      getJson: async (provider, _url) => {
         calls.push(provider)
         if (provider === 'alfa-by') throw new Error('банк не ответил (503)')
         return { data: { account: [{ accountId: 'x', accountDetails: { identification: 'BY11PJCB0001' } }] } }
@@ -197,7 +197,7 @@ describe('listBankSideAccounts', () => {
     const seen: string[] = []
     await listBankSideAccounts('M1', deps({
       ensureFresh: async t => ({ ...t, accessToken: 'FRESH' }),
-      getJson: async (_url, at) => {
+      getJson: async (_provider, _url, at) => {
         seen.push(at)
         return { accounts: [] }
       }
@@ -304,5 +304,76 @@ describe('сверка счетов: занятый лок обновления 
       }
     }))
     expect(out[0]?.error).toBe('invalid_grant')
+  })
+})
+
+describe('#20 Приор отдаёт счета, а сверка их не показывала', () => {
+  it('банк передаётся транспорту — он собирает СВОИ заголовки', async () => {
+    // ⚠ Корень дефекта. Приор проверяет заголовок взаимодействия FAPI на ЛЮБОМ вызове и делает это
+    // ДО тела (#461), поэтому запрос с одним `Authorization` он отвергает. Транспорт сверки слал
+    // ровно его, а отказ здесь fail-soft по провайдеру — значит счета Приора не появлялись в
+    // сверке НИКОГДА, и выглядело это как «банк их не отдаёт», то есть указывало не на ту сторону.
+    const seen: string[] = []
+    await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'alfa-by' }), token({ provider: 'prior-by' })],
+      getJson: async (provider) => {
+        seen.push(provider)
+        return { accounts: [] }
+      }
+    }))
+    expect([...seen].sort()).toEqual(['alfa-by', 'prior-by'])
+  })
+
+  it('банк ответил, но НИ У ОДНОГО счёта нет номера — это состояние, а не молчание', async () => {
+    // ⚠ Молча отбросив все строки, экран выглядел бы как отказ связи, и админ искал бы причину в
+    // банке или в подключении — тогда как чинится это на стороне банка: у счёта не заполнен IBAN.
+    const out = await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'prior-by' })],
+      getJson: async () => ({ data: { account: [{ accountId: 'x' }, { accountId: 'y' }] } })
+    }))
+    expect(out[0]?.accounts).toEqual([])
+    expect(String(out[0]?.error)).toContain('без номера')
+    expect(String(out[0]?.error)).toContain('2')
+  })
+
+  it('часть счетов без номера — показываем остальные и НЕ жалуемся', async () => {
+    // Пустая строка сверять не с чем, но остальные вполне рабочие: жалоба тут была бы ложной.
+    const out = await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'prior-by' })],
+      getJson: async () => ({
+        data: { account: [{ accountId: 'x' }, { accountId: 'y', accountDetails: { identification: 'BY11PJCB0001' } }] }
+      })
+    }))
+    expect(out[0]?.accounts).toEqual([{ number: 'BY11PJCB0001', currency: undefined, provider: 'prior-by' }])
+    expect(out[0]?.error).toBeUndefined()
+  })
+
+  it('банк вернул ПУСТОЙ список — это не «без номера», а честный ноль', async () => {
+    const out = await listBankSideAccounts('M1', deps({
+      tokens: async () => [token({ provider: 'prior-by' })],
+      getJson: async () => ({ data: { account: [] } })
+    }))
+    expect(out[0]?.accounts).toEqual([])
+    expect(out[0]?.error).toBeUndefined()
+  })
+})
+
+describe('#20 заголовки списка счетов зависят от банка', () => {
+  it('Приору идут ЕГО заголовки, а не один Authorization', async () => {
+    // ⚠ Ровно та мутация, что жила на проде: транспорт слал один `Authorization`, банк отвергал
+    // запрос ДО тела, отказ глотался fail-soft по провайдеру — и счета Приора не появлялись в
+    // сверке никогда. Проверять это в роуте нельзя: там `defineEventHandler` поверх живого fetch.
+    const h = accountsRequestHeaders('prior-by', 'AT', 'I-1')
+    expect(Object.keys(h).length).toBeGreaterThan(1)
+    expect(Object.values(h)).toContain('I-1')
+    expect(h.authorization).toBe('Bearer AT')
+  })
+
+  it('Альфе — только Bearer: лишние заголовки ей не нужны', async () => {
+    expect(accountsRequestHeaders('alfa-by', 'AT', 'I-1')).toEqual({ authorization: 'Bearer AT' })
+  })
+
+  it('идентификатор взаимодействия ИНЪЕКТИРУЕТСЯ — у чистой функции нет своей случайности', async () => {
+    expect(accountsRequestHeaders('prior-by', 'AT', 'A')).not.toEqual(accountsRequestHeaders('prior-by', 'AT', 'B'))
   })
 })

@@ -51,9 +51,15 @@ export default defineEventHandler(async (event) => {
     { name: 'http.poll-now.post', method: 'POST', op: 'poll-now.enqueue', domain },
     async (span) => {
       // Тело необязательно: без него — обычный опрос скользящим окном, как было до #592.
-      const payload = await readBody<{ day?: unknown }>(event).catch(() => null)
+      type Raw = { day?: unknown, provider?: unknown, accountKey?: unknown }
+      const payload = await readBody<Raw>(event).catch(() => null)
       const day = typeof payload?.day === 'string' ? payload.day : ''
-      const { status, body } = await handlePollNow(livePollNowDeps(), { accessToken: token, domain, day })
+      // Адрес подключения (#19): банк + счёт. Пусто ⇒ прежнее поведение, все счета портала.
+      const provider = typeof payload?.provider === 'string' ? payload.provider : ''
+      const accountKey = typeof payload?.accountKey === 'string' ? payload.accountKey : ''
+      const { status, body } = await handlePollNow(livePollNowDeps(), {
+        accessToken: token, domain, day, provider, accountKey
+      })
       span.outcome = httpOutcomeForStatus(status)
       setResponseStatus(event, status)
       return body
