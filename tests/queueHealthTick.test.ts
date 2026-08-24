@@ -45,6 +45,7 @@ const stalledCrm = { 'crm-sync': [45 * MIN] }
 
 // Мёртвое банковское подключение (#497 §3): нет refresh-токена ⇒ продлить нечем, чинит человек.
 const deadBankRow = {
+  id: 1,
   memberId: 'M1',
   provider: 'alfa-by' as const,
   accountKey: 'BY01',

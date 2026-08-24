@@ -18,16 +18,42 @@
 import type { BankProviderId } from '~/types/statement'
 import { connectionHealth, NEEDS_HUMAN_HEALTH, needsHumanHealth, type BankConnectionHealth } from '~/utils/bankTokenLifetime'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
+import { bankDeadForDays, bankDeathSinceMs } from '~/utils/bankReaper'
 import { pluralRu } from '~/utils/importStatus'
+import { BANK_LABELS } from '~/utils/bankLabels'
 
 /** Одна строка `bank_tokens` в том виде, в каком её отдаёт стор (без токенов). */
 export interface BankHealthRow {
+  /** Неизменяемый адрес строки — им оператор адресует ручное отключение (#599). Opaque: без БД
+   *  ничего не значит, поэтому отдавать его наружу безопасно. */
+  id: number
   memberId: string
   provider: BankProviderId
   accountKey: string
   connectedAt: number
   expiresAt: number
   hasRefresh: boolean
+  /** Срок согласия банка (#503) — нужен, чтобы `connectionHealth` увидел истёкшее согласие. Без
+   *  него Приор-подключения с истёкшим согласием читались бы как здоровые. */
+  consentExpiresAt?: number
+}
+
+/**
+ * Одно НЕЗДОРОВОЕ подключение, которое оператор может отключить руками (#599). PII-free:
+ * `portalHash` вместо портала, opaque `id` вместо счёта. Номера счёта здесь НЕТ — оператору он не
+ * нужен, а его отсутствие держит ту же границу приватности, что и весь экран.
+ */
+export interface BankAttentionConnection {
+  /** Opaque id строки — для действия «Отключить». */
+  id: number
+  /** Необратимая метка портала. */
+  portalHash: string
+  provider: BankProviderId
+  /** `expired` / `no-refresh` — только то, что чинит человек. */
+  health: BankConnectionHealth
+  /** Сколько дней подключение ИЗМЕРЕННО-мёртво; `null` — смерть не датируется (напр. `no-refresh`
+   *  без истёкшего согласия: когда именно умерло, неизвестно). */
+  deadDays: number | null
 }
 
 /** Сводка по одному состоянию: сколько подключений и на скольких порталах. */
@@ -58,6 +84,12 @@ export interface BankHealthOverview {
    * ⚠ Поле ОТСУТСТВУЕТ, когда хешер не передан. Так и задумано — см. `summarizeBankHealth`.
    */
   attentionPortals?: string[]
+  /**
+   * НЕЗДОРОВЫЕ подключения ПОШТУЧНО — чтобы оператор мог отключить конкретное (#599). Как и
+   * `attentionPortals`, поле ОТСУТСТВУЕТ без хешера (fail-safe): забытая зависимость даёт экран без
+   * действий, а не сырые id/member_id в теле ответа.
+   */
+  attentionConnections?: BankAttentionConnection[]
 }
 
 function emptyBucket(): HealthBucket {
@@ -91,6 +123,7 @@ export function summarizeBankHealth(
   const pendingPortals = new Set<string>()
   const allPortals = new Set<string>()
   const attention = new Set<string>()
+  const attentionConnections: BankAttentionConnection[] = []
   const pending = emptyBucket()
 
   for (const row of rows) {
@@ -105,7 +138,19 @@ export function summarizeBankHealth(
     const set = portalsBy.get(health) ?? new Set<string>()
     set.add(row.memberId)
     portalsBy.set(health, set)
-    if (needsHumanHealth(health)) attention.add(row.memberId)
+    if (needsHumanHealth(health)) {
+      attention.add(row.memberId)
+      // Поштучный список для ручного отключения — только с хешером (иначе сырой id/портал наружу).
+      if (hashPortal) {
+        attentionConnections.push({
+          id: row.id,
+          portalHash: hashPortal(row.memberId),
+          provider: row.provider,
+          health,
+          deadDays: bankDeadForDays(bankDeathSinceMs(row, nowMs), nowMs)
+        })
+      }
+    }
   }
 
   for (const [health, set] of portalsBy) byHealth[health].portals = set.size
@@ -120,7 +165,13 @@ export function summarizeBankHealth(
     // забытая зависимость даёт экран без меток, а не список `member_id` в теле HTTP-ответа. Сырой
     // идентификатор не покидает эту функцию ни при каком вызове; `sort()` — чтобы порядок не
     // зависел от порядка строк в БД (иначе одинаковая по смыслу сводка «мигала» бы между опросами).
-    ...(hashPortal ? { attentionPortals: [...attention].map(hashPortal).sort() } : {})
+    ...(hashPortal ? { attentionPortals: [...attention].map(hashPortal).sort() } : {}),
+    // Стабильный порядок: сначала «нужно переподключить», затем «истекло», внутри — по метке
+    // портала, чтобы список не мигал между опросами.
+    ...(hashPortal
+      ? { attentionConnections: attentionConnections.sort((a, b) =>
+          a.health.localeCompare(b.health) || a.portalHash.localeCompare(b.portalHash) || a.id - b.id) }
+      : {})
   }
 }
 
@@ -149,7 +200,12 @@ export const PREVIEW_BANK_HEALTH: BankHealthOverview = {
   pending: { connections: 1, portals: 1 },
   total: { connections: 9, portals: 5 },
   needAttention: 2,
-  attentionPortals: ['3f1a9c0b7e42', 'c07d5b6142ae']
+  attentionPortals: ['3f1a9c0b7e42', 'c07d5b6142ae'],
+  attentionConnections: [
+    { id: 101, portalHash: '3f1a9c0b7e42', provider: 'prior-by', health: 'no-refresh', deadDays: null },
+    { id: 102, portalHash: 'c07d5b6142ae', provider: 'alfa-by', health: 'expired', deadDays: 42 },
+    { id: 103, portalHash: 'c07d5b6142ae', provider: 'prior-by', health: 'expired', deadDays: 12 }
+  ]
 }
 
 /** Подписи состояний для экрана оператора — короче клиентских: оператор знает предметную область,
@@ -184,6 +240,31 @@ export interface BankHealthRowView {
   portals: number
   /** «3 на 2 порталах» — уже просклонённое; компонент только печатает. */
   countLabel: string
+}
+
+/** Одна готовая к показу СТРОКА ДЕЙСТВИЯ (нерабочее подключение, которое можно отключить). */
+export interface BankAttentionRowView {
+  id: number
+  portalHash: string
+  /** «Приорбанк · портал 3f1a9c0b7e42 · мёртво 42 дн.» — уже собранная подпись. */
+  label: string
+  /** Состояние — для тона строки. */
+  health: BankConnectionHealth
+}
+
+/**
+ * Собрать подписи строк-действий (#599). Чистая презентация: банк, метка портала и, если смерть
+ * датируется, «мёртво N дн.». У `no-refresh` без истёкшего согласия даты нет — тогда пишем просто
+ * «нужно переподключить», не выдумывая срок.
+ */
+export function bankAttentionRowViews(o: BankHealthOverview): BankAttentionRowView[] {
+  return (o.attentionConnections ?? []).map((c) => {
+    const bank = BANK_LABELS[c.provider] ?? c.provider
+    const dead = c.deadDays !== null
+      ? `мёртво ${c.deadDays} ${pluralRu(c.deadDays, ['день', 'дня', 'дней'])}`
+      : HEALTH_TITLE[c.health]
+    return { id: c.id, portalHash: c.portalHash, health: c.health, label: `${bank} · портал ${c.portalHash} · ${dead}` }
+  })
 }
 
 /** «N на M порталах» одним правилом для всех строк — включая «счёт не выбран». */

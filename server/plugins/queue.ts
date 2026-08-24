@@ -20,7 +20,7 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
-import { deleteBankToken, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
+import { deleteBankToken, deleteBankTokenById, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankTokenKeepAlive'
@@ -29,6 +29,9 @@ import { runStatementSweep, sweepIntervalMs, type SweptQueue } from '../queue/st
 import { resolveTombstoneDays, sweepExpiredTombstones } from '../utils/tombstoneSweep'
 import { runPortalReaper } from '../utils/portalReaperRun'
 import { REAP_MIN_INTERVAL_MS, resolveReapDays } from '../../app/utils/portalReaper'
+import { resolveBankReapDays } from '../../app/utils/bankReaper'
+import { runBankReaper } from '../utils/bankReaperRun'
+import { claimBankReapSlot } from '../utils/bankReaperSchedule'
 import { claimReapSlot } from '../utils/portalReaperSchedule'
 import { countPortals, countRevokedPortals, selectReapablePortals, getToken } from '../utils/tokenStore'
 import { sweepOldBatches } from '../utils/importBatchStore'
@@ -336,6 +339,7 @@ export default defineNitroPlugin((nitroApp) => {
       const tombstoneDays = resolveTombstoneDays(process.env.TOMBSTONE_TTL_DAYS)
       const pendingMaxAgeDays = resolvePendingMaxAgeDays(process.env.PENDING_MAX_AGE_DAYS)
       const reapDays = resolveReapDays(process.env.PORTAL_REAP_DAYS)
+      const bankReapDays = resolveBankReapDays(process.env.BANK_REAP_DAYS)
       const runSweep = async () => {
         try {
           // Cron root span (#78) — groups the per-queue clean calls under one trace.
@@ -399,6 +403,24 @@ export default defineNitroPlugin((nitroApp) => {
                 }, reapDays)
               } catch (e) {
                 retention.error(`portal reaper failed: ${(e as Error)?.message}`)
+              }
+            }
+            // Мёртвые банк-подключения у ЖИВОГО портала (#599, хвост #574). Стирает ОДНУ строку, а
+            // не портал; БЕЗ флага (клиентов нет), но с теми же предохранителями. Своя аренда —
+            // отдельный ключ от портального уборщика (разные операции). Тот же размен по гейтам
+            // `STATEMENT_SWEEP`/`queueEnabled`, что и у соседей: отказ здесь фейлит БЕЗОПАСНО (не
+            // отработали — никого не стёрли), а пометку о нездоровье ставят другие пути.
+            if (await claimBankReapSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runBankReaper({
+                  now: Date.now,
+                  listAccounts: () => listAllBankAccountInfo(dbQuery),
+                  remove: (memberId, id, expectedAccountKey) => deleteBankTokenById(dbQuery, memberId, id, expectedAccountKey),
+                  log: (m: string) => retention.info(`[bank-reap] ${m}`),
+                  warn: (m: string) => retention.warning(`[bank-reap] ${m}`)
+                }, bankReapDays)
+              } catch (e) {
+                retention.error(`bank reaper failed: ${(e as Error)?.message}`)
               }
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и

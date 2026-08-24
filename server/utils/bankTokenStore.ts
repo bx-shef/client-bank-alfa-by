@@ -457,6 +457,39 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
   }))
 }
 
+/**
+ * Одна строка по неизменяемому `id`, со свежестью и БЕЗ расшифровки токенов (#599).
+ *
+ * ⚠ БЕЗ member-скоупа намеренно: адресуется оператором из `/api/ops/*` (сессия оператора, не
+ * фрейм-токен портала), который действует по всем порталам — `member_id` берётся ИЗ строки, а не
+ * сверяется. Секретов не выбирает (как и соседи): оператору они не нужны и не должны покидать сервер.
+ */
+export async function getBankAccountInfoById(query: QueryFn, id: number): Promise<BankAccountInfo | null> {
+  const rows = await query(
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
+            poll_paused, grant_id,
+            (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
+             AND refresh_token_enc NOT LIKE '%:') AS has_refresh
+       FROM bank_tokens WHERE id = $1`,
+    [id]
+  )
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: Number(r.id),
+    memberId: String(r.member_id),
+    provider: r.provider as BankProviderId,
+    accountKey: String(r.account_key),
+    connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
+    lastAttemptAt: Number(r.last_attempt_at ?? 0),
+    expiresAt: Number(r.expires_at),
+    hasRefresh: r.has_refresh === true,
+    consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    grantId: String(r.grant_id ?? ''),
+    pollPaused: r.poll_paused === true
+  }
+}
+
 /** EVERY connected account across ALL portals, with freshness — the keep-alive scan (#489).
  *  Same projection as `listBankAccountInfoForPortal` (identity + `updated_at` + `expires_at` +
  *  `has_refresh`), just without the member filter, and deliberately WITHOUT decryption: the scan

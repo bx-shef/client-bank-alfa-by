@@ -9,6 +9,7 @@ const NOW = 1_700_000_000_000
 
 function row(over: Partial<BankHealthRow> = {}): BankHealthRow {
   return {
+    id: 1,
     memberId: 'M1',
     provider: 'alfa-by',
     accountKey: 'BY01',
