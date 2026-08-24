@@ -3,7 +3,6 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { SCHEMA_SQL } from '../server/db/client'
 import { decryptSecret, encryptSecret } from '../server/utils/secretCrypto'
 import {
-  clearGrantRevoked,
   countRevokedPortals,
   deleteToken,
   getApplicationToken,
@@ -293,7 +292,7 @@ describe('SCHEMA_SQL ↔ queries', () => {
 // из которых не падает и не виден: отметка не должна перезаписываться (иначе срок отодвигается
 // вечно и портал не стирается никогда), и она не должна трогать `updated_at` (иначе мёртвый портал
 // выпадает из выборки продления, перестаёт получать отказы — и уборщик сам себя выключает).
-describe('markGrantRevoked / clearGrantRevoked (#574)', () => {
+describe('markGrantRevoked (#574)', () => {
   it('ставит отметку ТОЛЬКО когда её ещё нет', async () => {
     const { query, calls } = fakeQuery()
     await markGrantRevoked(query, 'M1', 1_700_000_000_000)
@@ -309,15 +308,6 @@ describe('markGrantRevoked / clearGrantRevoked (#574)', () => {
     const { query, calls } = fakeQuery()
     await markGrantRevoked(query, 'M1', 1)
     expect(calls[0]!.sql).not.toMatch(/updated_at/)
-  })
-
-  it('снятие адресовано порталу и БЕЗУСЛОВНО', async () => {
-    // «Успех обнуляет» должно выполняться всегда: условие `<> 0` было бы оптимизацией ценой
-    // правила, и однажды появился бы путь, где отметка переживает удачное обновление.
-    const { query, calls } = fakeQuery()
-    await clearGrantRevoked(query, 'M1')
-    expect(calls[0]!.sql).toMatch(/grant_revoked_at\s*=\s*0/)
-    expect(calls[0]!.params).toEqual(['M1'])
   })
 })
 
@@ -384,14 +374,37 @@ describe('#574: скоуп по порталу в SQL — не «парамет�
     expect(sqlOf(calls), 'без скоупа пометка накрыла бы весь флот').toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
   })
 
-  it('снятие пометки адресовано ОДНОМУ порталу', async () => {
+  it('снятие пометки ВШИТО в обновление токена, а не живёт отдельным запросом', async () => {
+    // ⚠ Отдельный запрос на залоченном соединении мог упасть, перевести транзакцию в aborted, и
+    // COMMIT молча стал бы ROLLBACK: токен у Б24 ротирован, а у нас не сохранён — портал сломан
+    // навсегда. Вшитое в тот же UPDATE условие рассинхронизировать нечем.
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return [{ member_id: 'M1' }]
+    })
+    await updatePortalTokenSecrets(query as unknown as QueryFn, {
+      memberId: 'M1', domain: 'p.bitrix24.by', accessToken: 'A', refreshToken: 'R',
+      expiresAt: 1, applicationToken: 'T'
+    })
+    expect(sqlOf(calls), 'успешное обновление обязано снимать отметку тем же запросом').toMatch(/grant_revoked_at\s*=\s*0/)
+  })
+
+  it('переустановка портала СНИМАЕТ отметку — сильнейшее доказательство жизни', async () => {
+    // Портал исчез без события, метка осталась; клиент переустановил приложение и настраивает его.
+    // Пока банк не подключён, серверных REST-вызовов нет, рефреша нет — и без сброса в апсерте
+    // свежепоставленный портал дожил бы до порога с чужой меткой и был бы стёрт.
     const calls: { sql: string, params: unknown[] }[] = []
     const query = vi.fn(async (sql: string, params: unknown[]) => {
       calls.push({ sql, params })
       return []
     })
-    await clearGrantRevoked(query as unknown as QueryFn, 'M1')
-    expect(sqlOf(calls), 'без скоупа один успех «оживил» бы все помеченные порталы').toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+    await saveToken(query as unknown as QueryFn, {
+      memberId: 'M1', domain: 'p.bitrix24.by', accessToken: 'A', refreshToken: 'R',
+      expiresAt: 1, applicationToken: 'T'
+    })
+    const upsert = calls.map(c => c.sql).find(x => /ON CONFLICT/.test(x)) ?? ''
+    expect(upsert).toMatch(/grant_revoked_at\s*=\s*0/)
   })
 
   it('countPortals считает ВЕСЬ флот, а не только живых', async () => {

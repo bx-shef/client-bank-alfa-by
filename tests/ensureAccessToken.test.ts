@@ -30,12 +30,11 @@ function make(stored: PortalToken | null, refreshResp: unknown = { access_token:
   // #574: без этих шпионов шов «наблюдение мёртвого гранта» не проверялся НИЧЕМ — удаление всего
   // блока пометки оставляло весь набор зелёным (замерено мутацией на ревью).
   const markGrantRevoked = vi.fn(async (_m: string, _at: number) => {})
-  const clearGrantRevoked = vi.fn(async (_q: QueryFn, _m: string) => {})
   const deps: RefreshDeps = {
     now: () => NOW, withLock: withLock as RefreshDeps['withLock'], loadToken, saveToken, postRefresh,
-    markGrantRevoked, clearGrantRevoked
+    markGrantRevoked
   }
-  return { deps, store, postRefresh, saveToken, loadToken, withLock, markGrantRevoked, clearGrantRevoked, q }
+  return { deps, store, postRefresh, saveToken, loadToken, withLock, markGrantRevoked, q }
 }
 
 describe('needsRefresh', () => {
@@ -247,20 +246,14 @@ describe('ensureAccessToken: сигнал мёртвого гранта (#574)',
     await expect(ensureAccessToken(tok({ expiresAt: NEAR }), h.deps)).rejects.toThrow(/invalid_grant/)
   })
 
-  it('успех СНИМАЕТ метку — и на залоченном соединении, атомарно с записью токена', async () => {
-    // Зеркало предыдущего: снятие обязано откатываться вместе с несостоявшейся записью токена,
-    // иначе портал считался бы доказанно живым по транзакции, которой не было.
+  it('успех НЕ делает отдельного запроса на снятие метки', async () => {
+    // ⚠ Снятие вшито в UPDATE самого токена (`updatePortalTokenSecrets`). Отдельный запрос на
+    // залоченном соединении был опасен: упав, он переводил транзакцию в aborted, catch его глотал,
+    // а следующий COMMIT молча становился ROLLBACK — токен у Б24 ротирован, у нас не сохранён.
     const h = make(tok({ expiresAt: NEAR }))
     await ensureAccessToken(tok({ expiresAt: NEAR }), h.deps)
-    expect(h.clearGrantRevoked).toHaveBeenCalledWith(h.q, 'M')
-  })
-
-  it('метка снимается БЕЗУСЛОВНО, а не «только если была»', async () => {
-    // Без этого один транзиентный `invalid_grant` (бывает на гонке ротации) приговаривал бы живой
-    // портал навсегда: следующий успех метку бы не тронул.
-    const h = make(tok({ expiresAt: NEAR }))
-    await ensureAccessToken(tok({ expiresAt: NEAR }), h.deps)
-    await ensureAccessToken(tok({ expiresAt: NEAR }), h.deps)
-    expect(h.clearGrantRevoked.mock.calls.length).toBeGreaterThanOrEqual(1)
+    expect(h.saveToken, 'запись токена и есть снятие метки').toHaveBeenCalledTimes(1)
+    expect((h.deps as unknown as Record<string, unknown>).clearGrantRevoked,
+      'отдельная зависимость снятия не должна вернуться — она и была ловушкой').toBeUndefined()
   })
 })

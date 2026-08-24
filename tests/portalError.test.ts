@@ -116,3 +116,32 @@ describe('firstPortalErrorCode', () => {
     expect(firstPortalErrorCode(res)).toBe('INVALID_ARG_VALUE')
   })
 })
+
+describe('portalErrorCode: обёртка SDK (#574)', () => {
+  // ⚠ ЗАМЕРЕНО запуском версии 2.0.0: `RefreshTokenError` наследует `SdkError` как БРАТ `AjaxError`,
+  // поэтому `instanceof AjaxError === false`, и `abstract-http.mjs` заворачивает его в
+  // `AjaxError{code:'JSSDK_UNKNOWN_ERROR', originalError: <настоящая>}`. Без разворачивания
+  // `invalid_grant` доезжает до вызывающего как `JSSDK_UNKNOWN_ERROR`, и сигнал уборщика мёртв.
+  // Тесты пропустили это дважды, потому что собирали ошибку руками вместо реального пути.
+  it('достаёт настоящий код из-под обёртки', () => {
+    const wrapped = Object.assign(new Error('dead'), {
+      code: 'JSSDK_UNKNOWN_ERROR',
+      originalError: Object.assign(new Error('grant is dead'), { code: 'invalid_grant' })
+    })
+    expect(portalErrorCode(wrapped)).toBe('invalid_grant')
+  })
+
+  it('обычный код читается как раньше и обёрткой не перебивается', () => {
+    expect(portalErrorCode(Object.assign(new Error('x'), { code: 'INVALID_ARG_VALUE' }))).toBe('INVALID_ARG_VALUE')
+  })
+
+  it('обёртка без вложенного кода остаётся собой, а не пустотой', () => {
+    // Иначе диагностика потеряла бы единственное, что вообще было известно об ошибке.
+    expect(portalErrorCode(Object.assign(new Error('x'), { code: 'JSSDK_UNKNOWN_ERROR' }))).toBe('JSSDK_UNKNOWN_ERROR')
+  })
+
+  it('мусор не роняет', () => {
+    expect(portalErrorCode(null)).toBe('')
+    expect(portalErrorCode({ originalError: null })).toBe('')
+  })
+})

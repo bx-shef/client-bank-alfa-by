@@ -61,7 +61,9 @@ function documented(): string[] {
 /** Цели, которые оператор набирает на СЕРВЕРЕ. Каждая обязана быть в `make help`. */
 const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
   'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'self-update', 'help',
-  'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe']
+  'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe',
+  // #574: показать, кого уборщик считает мёртвым, и аварийно выключить стирание.
+  'reap-status', 'reap-off']
 
 /** Цели, которые запускают ИЗ РЕПОЗИТОРИЯ, а не с сервера — справка сервера их не касается. */
 const SERVICE = ['dev', 'build-local']

@@ -64,7 +64,8 @@ export async function saveToken(query: QueryFn, token: PortalToken, eventTs = 0)
        refresh_token_enc = EXCLUDED.refresh_token_enc,
        expires_at        = EXCLUDED.expires_at,
        application_token = COALESCE(NULLIF(portal_tokens.application_token, ''), EXCLUDED.application_token),
-       updated_at        = now()`,
+       updated_at        = now(),
+       grant_revoked_at  = 0`,
     [
       token.memberId,
       token.domain,
@@ -144,7 +145,13 @@ export async function updatePortalTokenSecrets(query: QueryFn, token: PortalToke
             access_token      = $3,
             refresh_token_enc = $4,
             expires_at        = $5,
-            updated_at        = now()
+            updated_at        = now(),
+            -- ⚠ Снятие отметки мёртвого гранта (#574) — ЗДЕСЬ, в том же UPDATE, а не отдельным
+            -- запросом. Успешное обновление токена и снятая отметка обязаны быть одной записью
+            -- строки: отдельный запрос на залоченном соединении мог упасть, перевести транзакцию в
+            -- aborted, и следующий COMMIT молча стал бы ROLLBACK — токен у Б24 уже ротирован, а у
+            -- нас не сохранён. Вшитое условие забыть нельзя и рассинхронизировать нечем.
+            grant_revoked_at  = 0
       WHERE member_id = $1
       RETURNING member_id`,
     [token.memberId, token.domain, token.accessToken, encryptSecret(token.refreshToken), token.expiresAt]
@@ -226,17 +233,6 @@ export async function markGrantRevoked(query: QueryFn, memberId: string, atMs: n
     `UPDATE portal_tokens SET grant_revoked_at = $2 WHERE member_id = $1 AND grant_revoked_at = 0`,
     [memberId, Math.floor(atMs)]
   )
-}
-
-/**
- * Снять отметку мёртвого гранта: обновление прошло, портал жив.
- *
- * ⚠ Вызывается на КАЖДОМ успехе, а не только когда отметка есть. Условие `<> 0` тут было бы
- * оптимизацией ценой правила: «успех обнуляет» должно выполняться безусловно, иначе однажды
- * появится путь, где отметка переживает удачное обновление.
- */
-export async function clearGrantRevoked(query: QueryFn, memberId: string): Promise<void> {
-  await query(`UPDATE portal_tokens SET grant_revoked_at = 0 WHERE member_id = $1`, [memberId])
 }
 
 /**

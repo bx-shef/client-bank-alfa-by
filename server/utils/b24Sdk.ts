@@ -35,7 +35,7 @@
 import { B24OAuth, ParamsFactory } from '@bitrix24/b24jssdk'
 import type { AuthData, B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
-import { clearGrantRevoked, getToken, markGrantRevoked, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
+import { getToken, markGrantRevoked, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
 import { withDependencySpan } from './telemetrySpan'
 import { firstPortalErrorCode, portalErrorCode, PortalRestError } from './portalError'
@@ -557,12 +557,6 @@ export function sdkPortalDeps(infra: SdkInfra): SdkPortalDeps {
       if (!await updatePortalTokenSecrets(infra.query, token)) {
         throw new Error('portal was uninstalled mid-refresh — token NOT stored, aborting the call')
       }
-      // A successful refresh proves the portal is alive, so any dead-grant mark must go (#574).
-      // Best effort: failing to clear it must not undo a refresh that actually worked — the next
-      // success clears it, and until then the 30-day threshold is nowhere near elapsing.
-      try {
-        await clearGrantRevoked(infra.query, token.memberId)
-      } catch { /* see above */ }
     },
     creds: { clientId: infra.clientId, clientSecret: infra.clientSecret },
     now: infra.now,

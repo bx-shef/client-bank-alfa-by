@@ -20,6 +20,7 @@
 import {
   fleetBreach,
   MAX_REAP_PER_RUN,
+  REAP_OVERFETCH,
   type ReapRunFacts,
   reaperLogLine,
   reapVerdict
@@ -72,7 +73,7 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
   const beforeMs = nowMs - days * 86_400_000
   const candidates = await deps.countRevoked(beforeMs)
   const s: PortalReaperSummary = {
-    candidates, reaped: 0, failed: 0, capped: false,
+    candidates, reaped: 0, failed: 0, diverged: 0, capped: false,
     observeOnly: !deps.reapEnabled, breach: false, days
   }
 
@@ -87,14 +88,16 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
     return s
   }
 
-  // Наблюдение без удаления: считаем и показываем, но в базу за кандидатами не идём.
-  if (!deps.reapEnabled) {
-    deps.log?.(reaperLogLine(s))
-    return s
-  }
-
-  const ids = await deps.selectReapable(beforeMs, MAX_REAP_PER_RUN)
-  s.capped = candidates > ids.length
+  // ⚠ ВЫБОРКА ИДЁТ И В РЕЖИМЕ НАБЛЮДЕНИЯ. Соблазн «незачем ходить в базу, если не стираем» стоил бы
+  // ровно того, ради чего наблюдение и заведено: владелец включал бы необратимое удаление, увидев
+  // число из ДРУГОГО запроса (`countRevoked`), а сам путь выборки впервые исполнился бы в тот
+  // прогон, который уже стирает. Здесь он исполняется вхолостую, и в лог идут метки порталов —
+  // видно, те же это три портала каждый день или каждый раз новые.
+  //
+  // ⚠ Берём БОЛЬШЕ потолка, чтобы расхождение не заклинивало очередь. Выборка отсортирована по
+  // метке ASC, поэтому разошедшиеся строки — самые давние, то есть первые в каждом прогоне: без
+  // запаса они съедали бы весь бюджет вечно, и ни один настоящий кандидат не был бы стёрт никогда.
+  const ids = await deps.selectReapable(beforeMs, MAX_REAP_PER_RUN + REAP_OVERFETCH)
   const eventTs = Math.floor(nowMs / 1000)
   for (const row of ids) {
     const memberId = row.memberId
@@ -102,9 +105,22 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
     // правило жило бы только в SQL-условии выборки, а чистая функция была бы мёртвым кодом — то
     // есть двумя источниками одной истины, которые однажды разойдутся. Здесь цена расхождения
     // максимальна: удаление необратимо. Не сошлось — НЕ удаляем и говорим об этом громко.
+    //
+    // ⚠ Считается ОТДЕЛЬНО от `failed`: «правило и SQL разошлись» чинится в коде, а «база не дала
+    // удалить» — на сервере. В одной графе они читались бы как одна проблема, и строка итога
+    // «НЕ УДАЛОСЬ стереть N» указывала бы на базу при логической ошибке.
     if (reapVerdict(row.revokedAtMs, nowMs, days) !== 'reap') {
-      s.failed++
+      s.diverged++
       deps.warn?.(`портал ${portalHash(memberId)} НЕ стёрт: выборка и правило разошлись (метка ${row.revokedAtMs}, порог ${days} дн.)`)
+      continue
+    }
+    if (s.reaped >= MAX_REAP_PER_RUN) {
+      s.capped = true
+      break
+    }
+    if (!deps.reapEnabled) {
+      // Тот же путь, тот же порядок, та же проверка — но без необратимого шага.
+      deps.log?.(`портал ${portalHash(memberId)} — кандидат на стирание (грант мёртв дольше ${days} дн.); удаление выключено`)
       continue
     }
     try {

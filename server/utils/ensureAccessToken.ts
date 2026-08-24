@@ -19,7 +19,7 @@ import { dbQuery } from '../db/client'
 import { withAdvisoryLock } from './dbLock'
 import { portalErrorCode } from './portalError'
 import { isGrantDead } from '../../app/utils/portalReaper'
-import { clearGrantRevoked, getToken, markGrantRevoked, updatePortalTokenSecrets } from './tokenStore'
+import { getToken, markGrantRevoked, updatePortalTokenSecrets } from './tokenStore'
 import type { PortalToken, QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
 
@@ -55,14 +55,6 @@ export interface RefreshDeps {
    * the refresh path competes for.
    */
   markGrantRevoked?: (memberId: string, atMs: number) => Promise<void>
-  /**
-   * Clear the mark after a successful refresh (#574).
-   *
-   * ⚠ This one DOES take `q`, and the asymmetry with `markGrantRevoked` is deliberate: clearing
-   * must be ATOMIC with persisting the fresh token. If the transaction rolls back, the token was
-   * not saved either, so the portal is still unproven and the mark must survive.
-   */
-  clearGrantRevoked?: (q: QueryFn, memberId: string) => Promise<void>
 }
 
 const liveDeps: RefreshDeps = {
@@ -72,7 +64,6 @@ const liveDeps: RefreshDeps = {
   saveToken: updatePortalTokenSecrets,
   // Own connection from the pool, NOT the locked one — see the field's doc comment.
   markGrantRevoked: (memberId, atMs) => markGrantRevoked(dbQuery, memberId, atMs),
-  clearGrantRevoked,
   // Refresh through the jssdk transport (`B24OAuth.auth.refreshAuth`), bounded (15s) so a hung
   // OAuth call can't pin the advisory lock + pooled connection (the whole refresh runs in the lock).
   postRefresh: sdkRefreshTransport({ timeoutMs: 15_000 })
@@ -169,17 +160,17 @@ export async function ensureAccessToken(
       // withdrew consent. Costs one doomed request either way — this is the one that fails.
       return stored
     }
-    // ⚠ Success clears the mark UNCONDITIONALLY (#574). Guarding on "only if a mark exists" would
-    // be an optimisation bought with the rule itself: without a reset, one transient
-    // `invalid_grant` — which happens on a rotation race — would condemn a live portal forever.
-    // On `q` on purpose: this must be atomic with the token write (see the dep's doc).
-    if (deps.clearGrantRevoked) {
-      try {
-        await deps.clearGrantRevoked(q, stored.memberId)
-      } catch (clearError) {
-        log.warning(`ensureAccessToken: failed to clear the dead-grant mark: ${(clearError as Error)?.message}`)
-      }
-    }
+    // NB: clearing the dead-grant mark is NOT a separate statement any more (#574) — it is folded
+    // into `updatePortalTokenSecrets`' own UPDATE, so a successful token write and a cleared mark
+    // are the same row write and cannot come apart.
+    //
+    // ⚠ The separate call was actively DANGEROUS on this connection, which is why it is gone. It
+    // ran after `saveToken` inside the lock's transaction, wrapped in try/catch. Any error there
+    // (`statement_timeout` is 20s on this connection, deadlock, reset) puts Postgres into the
+    // aborted-transaction state; the catch swallowed it, and the following COMMIT then silently
+    // degrades to ROLLBACK *without raising*. Net effect: B24 had already rotated the refresh
+    // token, we returned `updated` as if stored, and the portal's auth was permanently broken —
+    // the exact #35-class failure this module exists to prevent.
     return updated
   })
 }

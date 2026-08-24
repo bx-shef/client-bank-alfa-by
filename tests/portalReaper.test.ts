@@ -8,6 +8,7 @@ import {
   MIN_REAP_DAYS,
   reapDue,
   REAP_MIN_INTERVAL_MS,
+  REAP_OVERFETCH,
   reaperLogLine,
   reapVerdict,
   resolveReapDays
@@ -134,23 +135,28 @@ describe('runPortalReaper', () => {
     }), 30)
     expect(deletePortal, 'живой портал НЕ должен быть стёрт').not.toHaveBeenCalled()
     expect(r.reaped).toBe(0)
-    expect(r.failed).toBe(1)
+    expect(r.diverged, 'логическая ошибка считается ОТДЕЛЬНО от отказа базы').toBe(1)
+    expect(r.failed, 'база тут ни при чём').toBe(0)
     expect(warn.mock.calls.some(c => String(c[0]).includes('разошлись'))).toBe(true)
   })
 
   it('потолок за прогон соблюдается и объявляется', async () => {
     // ⚠ Потолок не про нагрузку, а про класс ошибок: если классификатор однажды сочтёт мёртвым
     // живое, катастрофа «снесли всех за тик» превращается в «снесли троих, и это видно».
-    const rows = Array.from({ length: MAX_REAP_PER_RUN }, (_, i) => ({ memberId: `M${i}`, revokedAtMs: NOW - 40 * DAY }))
+    const rows = Array.from({ length: 99 }, (_, i) => ({ memberId: `M${i}`, revokedAtMs: NOW - 40 * DAY }))
     const log = vi.fn()
+    const deletePortal = vi.fn(async () => {})
     const r = await runPortalReaper(deps({
       countRevoked: async () => 99,
       selectReapable: async (_b, limit) => rows.slice(0, limit),
+      deletePortal,
       log
     }), 30)
     expect(r.reaped).toBe(MAX_REAP_PER_RUN)
+    expect(deletePortal, 'сверх потолка не стираем, сколько бы строк ни отдала выборка')
+      .toHaveBeenCalledTimes(MAX_REAP_PER_RUN)
     expect(r.capped).toBe(true)
-    expect(String(log.mock.calls[0]?.[0])).toContain('не больше')
+    expect(String(log.mock.calls.at(-1)?.[0])).toContain('не больше')
   })
 
   it('отказ ОДНОГО удаления не отменяет остальные', async () => {
@@ -189,7 +195,7 @@ describe('runPortalReaper', () => {
     // Уборщик, который молчит, неотличим от невзведённого.
     const log = vi.fn()
     const r = await runPortalReaper(deps({ log }), 30)
-    expect(r).toEqual({ candidates: 0, reaped: 0, capped: false, failed: 0, observeOnly: false, breach: false, days: 30 })
+    expect(r).toEqual({ candidates: 0, reaped: 0, capped: false, failed: 0, diverged: 0, observeOnly: false, breach: false, days: 30 })
     expect(log).toHaveBeenCalledTimes(1)
   })
 
@@ -197,11 +203,13 @@ describe('runPortalReaper', () => {
     // База не должна знать про политику, а тест — подсовывать в неё время.
     const selectReapable = vi.fn(async () => [])
     await runPortalReaper(deps({ selectReapable }), 30)
-    expect(selectReapable).toHaveBeenCalledWith(NOW - 30 * DAY, MAX_REAP_PER_RUN)
+    // ⚠ Берём с запасом сверх потолка: иначе разошедшиеся строки (они самые давние, значит первые)
+    // съедали бы весь бюджет в каждом прогоне и очередь не двигалась бы никогда.
+    expect(selectReapable).toHaveBeenCalledWith(NOW - 30 * DAY, MAX_REAP_PER_RUN + REAP_OVERFETCH)
   })
 })
 
-const FACTS = { candidates: 0, reaped: 0, failed: 0, capped: false, observeOnly: false, breach: false, days: 30 }
+const FACTS = { candidates: 0, reaped: 0, failed: 0, diverged: 0, capped: false, observeOnly: false, breach: false, days: 30 }
 
 describe('reaperLogLine', () => {
   it('называет порог — иначе по строке не понять, чем руководствовались', () => {
@@ -297,18 +305,25 @@ describe('runPortalReaper: предохранитель и наблюдение'
     expect(r.breach).toBe(false)
   })
 
-  it('удаление ВЫКЛЮЧЕНО ⇒ считаем, но не трогаем базу', async () => {
+  it('удаление ВЫКЛЮЧЕНО ⇒ идём ТЕМ ЖЕ путём, но без необратимого шага', async () => {
+    // ⚠ Несущее. Соблазн «незачем ходить в базу, если не стираем» стоил бы того, ради чего
+    // наблюдение и заведено: владелец включал бы необратимое удаление, увидев число из ДРУГОГО
+    // запроса, а путь выборки впервые исполнился бы в тот прогон, который уже стирает.
     const deletePortal = vi.fn(async () => {})
     const selectReapable = vi.fn(async () => [{ memberId: 'M1', revokedAtMs: NOW - 40 * DAY }])
+    const log = vi.fn()
     const r = await runPortalReaper(deps({
       reapEnabled: false,
       countRevoked: async () => 1,
       selectReapable,
-      deletePortal
+      deletePortal,
+      log
     }), 30)
-    expect(deletePortal).not.toHaveBeenCalled()
-    expect(selectReapable, 'кандидатов даже не выбираем — незачем').not.toHaveBeenCalled()
+    expect(deletePortal, 'необратимый шаг не делается').not.toHaveBeenCalled()
+    expect(selectReapable, 'а путь выборки — исполняется').toHaveBeenCalled()
     expect(r).toMatchObject({ candidates: 1, reaped: 0, observeOnly: true })
+    const said = log.mock.calls.map(c => String(c[0])).join('\n')
+    expect(said, 'владелец должен видеть, КОГО именно').toContain(portalHash('M1'))
   })
 
   it('провал удаления попадает в СВОДКУ, а не только в строку по порталу', async () => {

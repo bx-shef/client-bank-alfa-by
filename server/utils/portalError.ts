@@ -58,8 +58,24 @@ export class PortalRestError extends Error {
  */
 export function portalErrorCode(e: unknown): string {
   const code = (e as { code?: unknown } | null | undefined)?.code
+  if (typeof code === 'string' && code && code !== SDK_WRAPPER_CODE) return code
+  // ⚠ MEASURED, and this is the SECOND time the same trap was walked into (#574). The SDK wraps any
+  // error that is neither `AjaxError` nor `AxiosError` into `AjaxError{code:'JSSDK_UNKNOWN_ERROR',
+  // originalError: <the real one>}` (`abstract-http.mjs::_convertUnknownErrorToAjaxError`). The
+  // dead-grant case goes exactly there: `RefreshTokenError` extends `SdkError` as a SIBLING of
+  // `AjaxError`, so `new RefreshTokenError(...) instanceof AjaxError === false` (verified by
+  // running the pinned 2.0.0). Without unwrapping, `invalid_grant` reaches every caller as
+  // `JSSDK_UNKNOWN_ERROR` and the reaper's hot-path signal is dead code.
+  //
+  // ⚠ ONE level of unwrapping, not a loop: the SDK nests exactly once, and an unbounded walk would
+  // invent a contract nothing guarantees (and could loop on a self-referencing `originalError`).
+  const inner = (e as { originalError?: { code?: unknown } } | null | undefined)?.originalError?.code
+  if (typeof inner === 'string' && inner) return inner
   return typeof code === 'string' ? code : ''
 }
+
+/** The code the SDK stamps on anything it could not classify — the real code is in `originalError`. */
+const SDK_WRAPPER_CODE = 'JSSDK_UNKNOWN_ERROR'
 
 /**
  * Portal error codes that mean «the ADMIN's recognition-map setting is wrong», per lookup shape.
