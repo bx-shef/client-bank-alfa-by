@@ -7,6 +7,7 @@ import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMa
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { connectionHealth, connectionHealthBadge, consentExpiringSoon } from '~/utils/bankTokenLifetime'
+import { pauseAllSummary, planPauseAll } from '~/utils/bankPauseAll'
 
 // Connected bank accounts, with a per-row disconnect (#404). Lives inside BankConnectCard, above
 // the connect form, so the admin sees what is already bound BEFORE adding another account —
@@ -24,7 +25,7 @@ const props = withDefaults(defineProps<{ bankAccounts?: BankSideAccount[] }>(), 
 // же, и оставить одну устаревшей — значит показать противоречие самому себе.
 const emit = defineEmits<{ changed: [] }>()
 
-const { accounts, loading, loaded, removing, saving, pausing, error, load, disconnect, setPaused, setAccount, rowKey } = useBankAccounts()
+const { accounts, loading, loaded, removing, saving, pausing, pausingAll, error, load, disconnect, setPaused, setPausedAll, setAccount, rowKey } = useBankAccounts()
 const route = useRoute()
 
 /** Номера, уже привязанные В ЭТОМ банке, — предлагать их незачем (сервер ответит 409). Ключ несёт
@@ -50,6 +51,35 @@ function suggestionsFor(a: ConnectedBankAccount) {
     b.provider === a.provider && !takenKeys.value.has(`${a.provider}|${normalizeForCompare(b.number)}`)
   )
 }
+
+/**
+ * План массового переключения паузы (#581): что делает кнопка «всё» и над какими строками.
+ * `null` ⇒ кнопки нет. Всё решение — в чистом ядре, здесь только рендер.
+ */
+const bulk = computed(() => planPauseAll(accounts.value))
+
+/** Итог последнего массового переключения — показывается рядом с кнопкой, не вместо списка. */
+const bulkNote = ref('')
+
+/**
+ * ⚠ Итог обязателен, и это не вежливость. Частичный отказ («переключились три из четырёх») без
+ * сообщения читается как полный успех, а один продолжающий работать счёт потом ищут в банке.
+ * Правду о состоянии показывает перечитанный список, а эта строка объясняет, почему он такой.
+ */
+async function togglePauseAll(): Promise<void> {
+  const plan = bulk.value
+  if (!plan) return
+  bulkNote.value = ''
+  const { done, failed } = await setPausedAll(plan.rows, plan.paused)
+  bulkNote.value = pauseAllSummary(done, failed, plan.paused, plan.total)
+}
+
+// ⚠ Заметка гаснет, как только список изменился ИНАЧЕ. Без этого она переживала построчное
+// «Возобновить» и продолжала утверждать «на паузе все 4» рядом с кнопкой, подпись которой уже
+// перевернулась обратно, — то есть экран спорил сам с собой.
+watch(accounts, () => {
+  if (!pausingAll.value) bulkNote.value = ''
+})
 
 /** Черновики номеров для подключений, ждущих выбора счёта (#407) — по одному на строку. */
 const drafts = ref<Record<string, string>>({})
@@ -209,8 +239,49 @@ defineExpose({ reload: load })
       Пока ничего не подключено. Подключите счёт ниже — после этого он появится здесь.
     </p>
 
+    <!-- Массовое переключение (#581). Стоит НАД списком: намерение «выключить всё» возникает от
+         вида списка целиком, а не от конкретной строки. Показывается только когда есть что
+         переключать (решает чистое ядро) — иначе это кнопка, которая ничего не делает. -->
+    <div
+      v-if="bulk"
+      class="flex flex-wrap items-center gap-2"
+    >
+      <B24Button
+        color="air-secondary"
+        size="sm"
+        :label="bulk.label"
+        :loading="pausingAll"
+        :disabled="pausingAll"
+        data-testid="pause-all"
+        :title="bulk.hint"
+        @click="togglePauseAll"
+      />
+      <!-- ⚠ Цена названа ДО клика, а не после. Предупреждение о пропущенных днях ниже по странице
+           показывается только когда что-то УЖЕ на паузе — то есть человек, впервые гасящий импорт
+           по всем счетам разом, не видел его в момент решения вовсе, а при нескольких подключениях
+           оно ещё и уезжает за экран. -->
+      <span
+        class="text-xs text-(--ui-color-base-4)"
+        data-testid="pause-all-hint"
+      >{{ bulk.hint }}</span>
+      <!-- ⚠ Живой регион существует ВСЕГДА, а текст появляется внутри него. Регион, созданный
+           вместе с содержимым, скринридеры обычно не объявляют — а это единственная обратная связь
+           о частичном отказе. Тот же приём, что у алерта ошибок двумя блоками выше. -->
+      <span
+        class="text-xs text-(--ui-color-base-3)"
+        role="status"
+        aria-live="polite"
+        data-testid="pause-all-note"
+      >{{ bulkNote }}</span>
+    </div>
+
+    <!-- ⚠ `v-if`, а не `v-else-if`: между этим списком и пустым состоянием выше теперь стоит блок
+         массового переключения, а `v-else-if` обязан идти НЕПОСРЕДСТВЕННО за своим `v-if`. Условия
+         и так взаимоисключающие (`accounts.length` против `!accounts.length`), так что цепочка тут
+         ничего не давала, кроме скрытой хрупкости — стоило вставить что-нибудь между, и список
+         переставал рисоваться. -->
     <ul
-      v-else-if="accounts.length"
+      v-if="accounts.length"
       class="space-y-2"
     >
       <li
@@ -335,7 +406,7 @@ defineExpose({ reload: load })
               color="air-tertiary-no-accent"
               size="xs"
               :loading="pausing === rowKey(a)"
-              :disabled="pausing === rowKey(a)"
+              :disabled="pausingAll || pausing === rowKey(a)"
               @click="setPaused(a, !a.pollPaused)"
             />
             <template v-if="confirming === rowKey(a)">
@@ -350,7 +421,7 @@ defineExpose({ reload: load })
                 color="air-primary-alert"
                 size="xs"
                 :loading="removing === rowKey(a)"
-                :disabled="removing === rowKey(a)"
+                :disabled="pausingAll || removing === rowKey(a)"
                 @click="onDisconnect(a)"
               />
               <B24Button
