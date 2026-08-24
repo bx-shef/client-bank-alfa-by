@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   ACTIVITY_BINDING_ADD_METHOD, CRM_ENTITY_TYPE_DEAL, MAX_ACTIVITY_BINDINGS, allocationTargetRef,
-  buildBindingCall, companyRef, itemRef, planActivityBindings
+  buildBindingCall, companyRef, itemRef, planActivityBindings,
+  isDynamicEntityType
 } from '~/utils/activityBindings'
 import { CRM_OWNER_TYPE_COMPANY } from '~/utils/activity'
 import { SMART_INVOICE_ENTITY_TYPE_ID } from '~/config/b24'
@@ -69,11 +70,13 @@ describe('план привязок', () => {
   })
 
   it('дубли схлопываются, пустые пропускаются, порядок сохраняется', () => {
+    // ⚠ Тип 1038 в этом наборе больше не проходит — смарт-процессы отбрасываются целиком
+    // (перехватывают владельца дела, замерено на живом портале). Дубли проверяем на сделке.
     const plan = planActivityBindings({
-      refs: [itemRef(1038, '7'), null, companyRef(15), itemRef(1038, '7'), undefined, companyRef(15)]
+      refs: [itemRef(CRM_ENTITY_TYPE_DEAL, '7'), null, companyRef(15), itemRef(CRM_ENTITY_TYPE_DEAL, '7'), undefined, companyRef(15)]
     })
     expect(plan).toEqual([
-      { entityTypeId: 1038, entityId: 7 },
+      { entityTypeId: CRM_ENTITY_TYPE_DEAL, entityId: 7 },
       { entityTypeId: CRM_OWNER_TYPE_COMPANY, entityId: 15 }
     ])
   })
@@ -108,5 +111,41 @@ describe('вызов привязки', () => {
   it('непригодный id дела → вызова нет', () => {
     expect(buildBindingCall('', { entityTypeId: 4, entityId: 1 })).toBeNull()
     expect(buildBindingCall('abc', { entityTypeId: 4, entityId: 1 })).toBeNull()
+  })
+})
+
+describe('смарт-процессы в привязки НЕ попадают (#26, замерено на живом портале)', () => {
+  it('элемент реестра платежей отбрасывается', () => {
+    // ⚠ Привязка динамического типа ПЕРЕХВАТЫВАЕТ владельца дела: мы создаём дело с
+    // `ownerTypeId: 4` (компания), а после привязки элемента `crm.activity.get` отдаёт
+    // `OWNER_TYPE_ID: 1038`. Наружу — «Клиент» в списке дел показывает «Импорт выписки: платежи
+    // #45» вместо плательщика. Вернуть владельца нечем: `crm.activity.update` отвечает
+    // «Fields is not specified». Замерено на живом портале 2026-08-23.
+    const refs = planActivityBindings({
+      owner: { entityTypeId: 4, entityId: 7 },
+      refs: [{ entityTypeId: 1038, entityId: 45 }, { entityTypeId: 4, entityId: 9 }]
+    })
+    expect(refs, 'смарт-процесс снова привязывается — владелец дела будет перехвачен')
+      .toEqual([{ entityTypeId: 4, entityId: 9 }])
+  })
+
+  it('системные сущности проходят: сделка, счёт, компания, контакт', () => {
+    // ⚠ Отбрасываем ровно динамические типы, а не «всё кроме компании»: связь со сделкой и счётом
+    // — то, ради чего привязки и заводились (#579), и она владельца не трогает.
+    const refs = planActivityBindings({
+      refs: [
+        { entityTypeId: 2, entityId: 1 },
+        { entityTypeId: 31, entityId: 2 },
+        { entityTypeId: 3, entityId: 3 },
+        { entityTypeId: 4, entityId: 4 }
+      ]
+    })
+    expect(refs.map(r => r.entityTypeId)).toEqual([2, 31, 3, 4])
+  })
+
+  it('граница динамических типов — 128', () => {
+    expect(isDynamicEntityType(127)).toBe(false)
+    expect(isDynamicEntityType(128)).toBe(true)
+    expect(isDynamicEntityType(1038)).toBe(true)
   })
 })
