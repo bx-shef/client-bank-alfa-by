@@ -20,22 +20,41 @@ describe('addAccountErrorMessage (#23)', () => {
     const old = addAccountErrorMessage(err(409, 'this connection predates multi-account support, reconnect it first'))
     expect(new Set([taken, stale, old]).size).toBe(3)
     expect(old).toContain('заново')
-    expect(stale).toContain('обновите')
-    expect(taken).toContain('другой номер')
+    expect(stale).toContain('обновите страницу')
+    expect(taken).toContain('уже есть в списке')
   })
 
   it('незавершённое подключение отправляет выбрать счёт, а не переподключать', () => {
     expect(addAccountErrorMessage(err(409, 'choose the account of this connection first')))
-      .toContain('счёт самого подключения')
+      .toContain('у самого подключения')
   })
 
   it('остальные статусы — свои тексты, а не общая заглушка', () => {
-    const texts = [403, 404, 400].map(s => addAccountErrorMessage(err(s)))
-    expect(new Set(texts).size).toBe(3)
+    const texts = [403, 404, 400, 503].map(s => addAccountErrorMessage(err(s)))
+    expect(new Set(texts).size).toBe(4)
     expect(texts.every(t => t !== addAccountErrorMessage(err(500)))).toBe(true)
   })
 
-  it('неизвестный отказ не молчит', () => {
-    expect(addAccountErrorMessage(new Error('boom'))).toBeTruthy()
+  it('неизвестный отказ не молчит И даёт выход', () => {
+    // ⚠ «Попробуйте ещё раз» на втором повторе не даёт ничего — фолбэк обязан называть следующий шаг.
+    expect(addAccountErrorMessage(new Error('boom'))).toContain('заново')
+  })
+
+  it('«занято» (503) не смешивается с тупиковым конфликтом', () => {
+    // 409 — «так не будет никогда», 503 — «через несколько секунд пройдёт». Один текст на оба
+    // приучил бы либо повторять впустую, либо сдаваться там, где хватило бы второго клика (#509).
+    expect(addAccountErrorMessage(err(503))).toContain('повторите')
+    expect(addAccountErrorMessage(err(503))).not.toBe(addAccountErrorMessage(err(409)))
+  })
+
+  it('400 называет ПРОБЕЛЫ — самую вероятную причину', () => {
+    // Номер копируют из реквизитов вместе с пробелами; «допустимы буквы и цифры» человек читает,
+    // глядя на буквы и цифры, и остаётся в тупике.
+    expect(addAccountErrorMessage(err(400))).toContain('пробелы')
+  })
+
+  it('«подключите заново» называет ЦЕНУ — вход владельца счёта в банк', () => {
+    expect(addAccountErrorMessage(err(409, 'this connection predates multi-account support')))
+      .toContain('владельца счёта')
   })
 })

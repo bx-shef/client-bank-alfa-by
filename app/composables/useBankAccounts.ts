@@ -324,7 +324,8 @@ export function useBankAccounts() {
     }
     const value = accountKey.trim()
     if (!value) {
-      error.value = 'Укажите номер счёта'
+      // Точка — как во всех остальных сообщениях этого же алерта.
+      error.value = 'Укажите номер счёта.'
       return false
     }
     adding.value = rowKey(account)

@@ -478,7 +478,7 @@ describe('#23 добавление счёта к существующему по
   const LIVE = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
 
   async function openAdd(wrapper: Awaited<ReturnType<typeof mountReady>>) {
-    const btn = wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')
+    const btn = wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')
     await btn!.trigger('click')
     await nextTick()
   }
@@ -490,7 +490,7 @@ describe('#23 добавление счёта к существующему по
     const wrapper = await mountReady()
     await openAdd(wrapper)
     await wrapper.find('input').setValue('BY02ALFA0002')
-    const btn = wrapper.findAll('button').find(b => b.text() === 'Добавить')
+    const btn = wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')
     await btn!.trigger('click')
     await flushPromises()
 
@@ -503,7 +503,7 @@ describe('#23 добавление счёта к существующему по
   it('НЕЗАВЕРШЁННОМУ подключению кнопки нет — счёт самого подключения ещё не выбран', async () => {
     listReply.value = [{ ...LIVE, accountKey: PENDING }]
     const wrapper = await mountReady()
-    expect(wrapper.findAll('button').some(b => b.text() === 'Добавить счёт')).toBe(false)
+    expect(wrapper.findAll('button').some(b => b.text() === 'Добавить ещё счёт')).toBe(false)
   })
 
   it('подключению БЕЗ ГРАНТА кнопки нет — делить нечего, был бы гарантированный отказ', async () => {
@@ -512,7 +512,7 @@ describe('#23 добавление счёта к существующему по
     // кнопкам, поэтому её нет вовсе.
     listReply.value = [{ ...LIVE, grantId: '' }]
     const wrapper = await mountReady()
-    expect(wrapper.findAll('button').some(b => b.text() === 'Добавить счёт')).toBe(false)
+    expect(wrapper.findAll('button').some(b => b.text() === 'Добавить ещё счёт')).toBe(false)
   })
 
   it('свёрнуто по умолчанию: поле не показывается, пока его не попросили', async () => {
@@ -553,5 +553,61 @@ describe('#23 добавление счёта к существующему по
     await nextTick()
     expect(wrapper.find('[data-testid="add-account-alfa-by"]').exists()).toBe(false)
     expect(fetchMock.mock.calls.some(c => c[0] === '/api/bank/add-account')).toBe(false)
+  })
+})
+
+describe('#23 объяснения и обратная связь (находки ревью по UX)', () => {
+  const LIVE = { id: 5, provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: 0, expiresAt: 0, hasRefresh: true, grantId: 'G1' }
+  const OLD = { ...LIVE, id: 6, accountKey: 'BY07ALFA0007', grantId: '' }
+
+  it('успех ГОВОРИТ о себе, а не растворяется в списке', async () => {
+    // ⚠ Блок схлопывается, новая строка появляется где-то ниже без выделения — при двух-трёх
+    // подключениях это неотличимо от «кнопка ничего не сделала», ровно тот симптом, от которого
+    // лечили #404.
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')!.trigger('click')
+    await nextTick()
+    await wrapper.find('input').setValue('BY02ALFA0002')
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить счёт')!.trigger('click')
+    await flushPromises()
+    const done = wrapper.find('[data-testid="add-account-done"]')
+    expect(done.exists()).toBe(true)
+    expect(done.text()).toContain('BY02ALFA0002')
+  })
+
+  it('подключение БЕЗ гранта объясняет, почему у него нет кнопки', async () => {
+    // ⚠ Иначе две визуально одинаковые строки, у одной кнопка есть, у другой нет: читается как сбой
+    // интерфейса, и первая реакция — «кнопка пропала», а не «схожу в справку».
+    listReply.value = [LIVE, OLD]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="no-grant-alfa-by"]').exists()).toBe(true)
+  })
+
+  it('объяснения НЕТ, когда сравнивать не с чем — все подключения одинаково старые', async () => {
+    listReply.value = [OLD]
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="no-grant-alfa-by"]').exists()).toBe(false)
+  })
+
+  it('подпись про отключение НЕ пугает безусловно — она оговаривает несколько счетов', async () => {
+    // ⚠ Прежний текст утверждал, что вернуть доступ сможет только владелец счёта, и прямо
+    // противоречил справке, которая предлагает исправлять номер через «Отключить» + «Добавить».
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    const text = wrapper.text()
+    expect(text).toContain('другие счета')
+    expect(text).toContain('без повторного входа')
+  })
+
+  it('поле связано с подсказкой о формате — плейсхолдер исчезает при вводе', async () => {
+    listReply.value = [LIVE]
+    const wrapper = await mountReady()
+    await wrapper.findAll('button').find(b => b.text() === 'Добавить ещё счёт')!.trigger('click')
+    await nextTick()
+    const input = wrapper.find('[data-testid="add-account-alfa-by"] input')
+    const hintId = input.attributes('aria-describedby')
+    expect(hintId).toBeTruthy()
+    expect(wrapper.find(`#${hintId}`).text()).toContain('без пробелов')
   })
 })

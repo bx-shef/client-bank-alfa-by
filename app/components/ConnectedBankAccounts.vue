@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useBankAccounts, PREVIEW_BANK_ACCOUNTS, type ConnectedBankAccount } from '~/composables/useBankAccounts'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { isPreviewQuery } from '~/utils/inPortalGate'
@@ -98,6 +98,8 @@ const drafts = ref<Record<string, string>>({})
 const expandingAdd = ref('')
 /** Черновики номеров ДОБАВЛЯЕМЫХ счетов (#23) — свои, чтобы не мешаться с выбором счёта (#407). */
 const addDrafts = ref<Record<string, string>>({})
+/** Сообщение об успешном добавлении — озвучивается и показывается рядом с местом клика (#23). */
+const added = ref('')
 
 /**
  * Может ли к этой строке добавляться счёт (#23).
@@ -219,11 +221,44 @@ async function onAssign(a: ConnectedBankAccount, value?: string) {
   }
 }
 
+/** Есть ли в портале хоть одно РАЗМЕЧЕННОЕ подключение — только тогда отсутствие кнопки у соседа
+ *  требует объяснения: сравнивать не с чем, если её нет ни у кого. */
+const hasGrantedAccount = computed(() => accounts.value.some(canAddAccount))
+
+/**
+ * Раскрыть блок добавления и увести фокус в поле.
+ *
+ * ⚠ Возврат фокуса обязателен в обе стороны (находка ревью по доступности): кнопка и блок — это
+ * `v-if`/`v-else-if`, то есть нажатая кнопка ИСЧЕЗАЕТ из DOM, фокус падает на `<body>`, и
+ * клавиатурный пользователь начинает Tab с начала страницы. То же при отмене и после успеха.
+ */
+async function openAdd(a: ConnectedBankAccount) {
+  // Прошлый успех больше не про то, что человек делает сейчас.
+  added.value = ''
+  expandingAdd.value = rowKey(a)
+  await nextTick()
+  const el = document.getElementById(`add-account-${a.id}`)?.querySelector('input')
+  el?.focus()
+}
+
+async function closeAdd(a: ConnectedBankAccount) {
+  expandingAdd.value = ''
+  await nextTick()
+  const btn = document.querySelector<HTMLElement>(`[data-testid="add-account-open-${a.provider}"]`)
+  btn?.focus()
+}
+
 async function onAdd(a: ConnectedBankAccount, value?: string) {
   const key = rowKey(a)
-  if (await addAccount(a, value ?? addDrafts.value[key] ?? '')) {
+  // Номер читаем ДО вызова: после успеха черновик очищается, и сообщение осталось бы без номера.
+  const number = (value ?? addDrafts.value[key] ?? '').trim()
+  if (await addAccount(a, number)) {
     addDrafts.value[key] = ''
-    expandingAdd.value = ''
+    // ⚠ Успех обязан СКАЗАТЬ о себе (находка ревью по UX): блок схлопывается, новая строка
+    // появляется где-то в списке без выделения, и при двух-трёх подключениях это неотличимо от
+    // «кнопка ничего не сделала» — ровно тот симптом, от которого лечили #404.
+    added.value = `Счёт ${number} добавлен к подключению ${providerLabel(a.provider)}.`
+    await closeAdd(a)
     emit('changed')
   }
 }
@@ -397,7 +432,7 @@ defineExpose({ reload: load })
                 :aria-label="`Номер счёта для подключения ${providerLabel(a.provider)}`"
               />
               <B24Button
-                label="Привязать счёт"
+                label="Указать номер счёта"
                 color="air-primary"
                 size="xs"
                 :loading="saving === rowKey(a)"
@@ -411,22 +446,42 @@ defineExpose({ reload: load })
             >
               {{ a.accountKey }}
             </div>
+            <!-- ⚠ Отсутствие кнопки надо ОБЪЯСНИТЬ (#23, находка ревью по UX): две визуально
+                 одинаковые строки, у одной кнопка есть, у другой нет — читается как сбой
+                 интерфейса, и первая реакция «кнопка пропала», а не «схожу в справку». Показываем
+                 только когда сравнивать есть с чем: если размеченных подключений в портале нет
+                 вовсе, разницы человек не видит и объяснять нечего. -->
+            <div
+              v-if="!isPendingAccountKey(a.accountKey) && a.grantId === '' && hasGrantedAccount"
+              class="mt-1 text-xs text-(--ui-color-base-3)"
+              :data-testid="`no-grant-${a.provider}`"
+            >
+              Добавить второй счёт к этому подключению нельзя — оно сделано до появления такой
+              возможности.
+              <HelpLink
+                anchor="many-accounts"
+                label="Что делать"
+              />
+            </div>
             <!-- Ещё один счёт того же согласия (#23). Согласие банк выдаёт на НАБОР счетов клиента,
                  поэтому шестой счёт не должен стоить шестого входа владельца в интернет-банк.
                  Свёрнуто по умолчанию: большинству порталов хватает одного счёта, а открытое поле
                  рядом с рабочим подключением читалось бы как «здесь чего-то не хватает». -->
             <B24Button
               v-if="canAddAccount(a) && expandingAdd !== rowKey(a)"
-              label="Добавить счёт"
-              :aria-label="`Добавить счёт к подключению ${rowLabel(a)}`"
+              label="Добавить ещё счёт"
+              :aria-label="`Добавить ещё счёт к подключению ${rowLabel(a)}`"
               color="air-tertiary"
               size="xs"
               class="mt-1"
+              :aria-expanded="false"
+              :aria-controls="`add-account-${a.id}`"
               :data-testid="`add-account-open-${a.provider}`"
-              @click="expandingAdd = rowKey(a)"
+              @click="openAdd(a)"
             />
             <div
               v-else-if="canAddAccount(a)"
+              :id="`add-account-${a.id}`"
               class="mt-1 flex flex-wrap items-center gap-2"
               :data-testid="`add-account-${a.provider}`"
             >
@@ -437,7 +492,9 @@ defineExpose({ reload: load })
                 class="flex w-full flex-wrap items-center gap-2"
                 data-testid="add-account-suggestions"
               >
-                <span class="text-xs text-(--ui-color-base-3)">Банк отдал:</span>
+                <!-- ⚠ Не «Банк отдал»: список уже отфильтрован от подключённых, то есть банк на
+                     самом деле назвал больше. Плюс это жаргон, а читает бухгалтер. -->
+                <span class="text-xs text-(--ui-color-base-3)">Ещё не подключены:</span>
                 <B24Button
                   v-for="s in suggestionsFor(a)"
                   :key="s.number"
@@ -456,9 +513,21 @@ defineExpose({ reload: load })
                 placeholder="BY00ALFA00000000000000000000"
                 class="w-full max-w-xs font-mono text-xs"
                 :aria-label="`Номер добавляемого счёта для ${providerLabel(a.provider)}`"
+                :aria-describedby="`add-hint-${a.id}`"
+                :disabled="adding === rowKey(a)"
               />
+              <!-- ⚠ Формат жил только в плейсхолдере, а он исчезает при вводе и полю не описание.
+                   Это же снимает главную причину отказа 400: номер копируют из реквизитов ВМЕСТЕ с
+                   пробелами, и «допустимы буквы и цифры» человек читает, глядя на буквы и цифры. -->
+              <span
+                :id="`add-hint-${a.id}`"
+                class="w-full text-xs text-(--ui-color-base-3)"
+              >
+                Номер — как в реквизитах компании, без пробелов.
+              </span>
               <B24Button
-                label="Добавить"
+                label="Добавить счёт"
+                :aria-label="`Добавить счёт ${providerLabel(a.provider)}`"
                 color="air-primary"
                 size="xs"
                 :loading="adding === rowKey(a)"
@@ -467,10 +536,11 @@ defineExpose({ reload: load })
               />
               <B24Button
                 label="Отмена"
+                :aria-label="`Отменить добавление счёта — ${rowLabel(a)}`"
                 color="air-tertiary"
                 size="xs"
                 :disabled="adding === rowKey(a)"
-                @click="expandingAdd = ''"
+                @click="closeAdd(a)"
               />
             </div>
             <div
@@ -543,11 +613,27 @@ defineExpose({ reload: load })
       </li>
     </ul>
 
+    <!-- ⚠ Оговорка про несколько счетов ОБЯЗАТЕЛЬНА (#23, находка ревью по UX). Без неё эта подпись
+         утверждала безусловно: «вернуть доступ сможет только владелец счёта, заново авторизовавшись
+         в интернет-банке», — и прямо противоречила справке, которая предлагает исправлять неверный
+         номер через «Отключить» + «Добавить счёт». На экране висит именно пугающая формулировка,
+         поэтому админ не пошёл бы тем путём, который мы для него и задумали. -->
     <p class="text-xs text-(--ui-color-base-3)">
       «Пауза» останавливает только автоматический опрос: доступ и подключение сохраняются, и
-      возобновить можно тем же нажатием. Отключение убирает доступ приложения к счёту — вернуть его
-      сможет только владелец счёта, заново авторизовавшись в интернет-банке. Уже записанные в CRM
-      данные остаются в обоих случаях.
+      возобновить можно тем же нажатием. Отключение убирает доступ приложения к этому счёту. Если у
+      подключения есть другие счета, они продолжат работать, а отключённый можно вернуть кнопкой
+      «Добавить ещё счёт» — без повторного входа в интернет-банк. Если счёт был единственным,
+      вернуть доступ сможет только владелец счёта, заново авторизовавшись в банке. Уже записанные в
+      CRM данные остаются в любом случае.
+    </p>
+    <p
+      v-if="added"
+      class="text-xs text-(--ui-color-accent-main-success)"
+      role="status"
+      aria-live="polite"
+      data-testid="add-account-done"
+    >
+      {{ added }}
     </p>
     <HelpLink
       anchor="pause-gap"
