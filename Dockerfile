@@ -32,6 +32,10 @@ ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 # engines devalue that. Empty → the element is simply omitted (a wrong lastmod is worse than none).
 ARG NUXT_PUBLIC_BUILD_DATE
 ENV NUXT_PUBLIC_BUILD_DATE=$NUXT_PUBLIC_BUILD_DATE
+# Локальный режим форка/white-label (#39): NUXT_PUBLIC_LOCAL_MODE=1 запекается в статику и скрывает
+# наши промо/брендинг-баннеры. Суть приложения не меняется. Пусто → обычный режим.
+ARG NUXT_PUBLIC_LOCAL_MODE
+ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 RUN pnpm generate
 
 # --- SEO guards on the ACTUAL built HTML (#425) -------------------------------------------------
@@ -100,6 +104,10 @@ ARG NUXT_PUBLIC_COMMIT_SHA
 ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 ARG NUXT_PUBLIC_BUILD_DATE
 ENV NUXT_PUBLIC_BUILD_DATE=$NUXT_PUBLIC_BUILD_DATE
+# Локальный режим (#39) — симметрично статике: Nitro пререндерит те же страницы, флаг должен
+# запечься одинаково в оба образа, иначе один показал бы промо, другой нет.
+ARG NUXT_PUBLIC_LOCAL_MODE
+ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 RUN pnpm build
 
 FROM node:22-alpine AS backend

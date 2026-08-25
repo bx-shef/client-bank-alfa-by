@@ -17,7 +17,11 @@ import { splitByDirection } from '~/utils/statement'
 import { MAX_FILE_EMBED } from '~/utils/feedback'
 import { useImport, type ImportOutcome } from '~/composables/useImport'
 import { useImportBatches } from '~/composables/useImportBatches'
+import { useLocalMode } from '~/composables/useLocalMode'
 import { batchStateLabel, summaryMessage } from '~/utils/importBatchView'
+
+// Локальный режим форка (#39): скрывает попап «оцените приложение» (наш листинг Маркета).
+const localMode = useLocalMode()
 
 const results = ref<UploadItemResult[]>([])
 // Raw files kept aligned 1:1 with `results` (same truncated batch order) so we can
@@ -352,7 +356,10 @@ function clearAll() {
     />
 
     <!-- «Оцените приложение» — surfaces (server-throttled) after a successful CRM write; inert
-         outside a portal. -->
-    <AppRatingModal :trigger="ratingTrigger" />
+         outside a portal. В локальном режиме форка (#39) скрыт: попап про НАШ листинг Маркета. -->
+    <AppRatingModal
+      v-if="!localMode"
+      :trigger="ratingTrigger"
+    />
   </div>
 </template>

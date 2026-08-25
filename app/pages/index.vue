@@ -16,6 +16,7 @@ import {
   LANDING_MARKET_PROMO
 } from '~/utils/landing'
 import { B24_BOOKING_URL } from '~/utils/booking'
+import { useLocalMode } from '~/composables/useLocalMode'
 
 definePageMeta({ layout: 'landing' })
 
@@ -32,6 +33,8 @@ usePublicPageSeo({
 
 useCardGlow()
 const { reachGoal } = useMetrikaGoal()
+// Локальный режим форка (#39): скрывает нашу карточку Маркета на лендинге.
+const localMode = useLocalMode()
 
 const steps = LANDING_STEPS
 const features = LANDING_FEATURES
@@ -321,7 +324,11 @@ const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: 
          primary «Оставить заявку» (стратегия «платный-first»; так же ослаблена
          дублирующая ссылка на Маркет в hero). Тексты — LANDING_MARKET_PROMO
          (docs/POSITIONING.md). -->
-    <section class="px-[22px] lg:px-8 pt-[8px] pb-[56px] sm:pb-[72px]">
+    <!-- Карточка «Приложение для Bitrix24» — НАШ листинг Маркета; в локальном режиме форка скрыта (#39). -->
+    <section
+      v-if="!localMode"
+      class="px-[22px] lg:px-8 pt-[8px] pb-[56px] sm:pb-[72px]"
+    >
       <div class="max-w-[600px] mx-auto">
         <AppInBitrixCard
           :eyebrow="LANDING_MARKET_PROMO.eyebrow"
