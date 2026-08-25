@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { QueryFn } from '../server/utils/tokenStore'
 import type { ImportRunSummary } from '../app/types/importStatus'
-import { deleteImportResultForPortal, getImportResult, saveImportResult, markBankFetch } from '../server/utils/importResultStore'
+import { deleteImportResultForPortal, getImportResult, getRecognitionMisconfig, markRecognitionMisconfig, saveImportResult, markBankFetch } from '../server/utils/importResultStore'
 
 // Fake pg over an in-memory {member_id → row} map — exercises the store's SQL branches
 // (SELECT/INSERT-upsert/DELETE) without a database.
@@ -18,6 +18,16 @@ function fakeStore() {
     if (sql.includes('last_fetch_at')) {
       const prev = rows[String(p[0])] ?? {}
       rows[String(p[0])] = { ...prev, last_fetch_at: '2026-08-23T09:00:00.000Z', last_fetch_ops: p[1] }
+      return []
+    }
+    if (sql.includes('recog_misconfig')) {
+      const prev = rows[String(p[0])] ?? {}
+      const reason = p[1] as string | null
+      rows[String(p[0])] = {
+        ...prev,
+        recog_misconfig_at: reason == null ? 0 : 1724400000000,
+        recog_misconfig_reason: reason
+      }
       return []
     }
     if (sql.trimStart().startsWith('INSERT')) {
@@ -131,5 +141,63 @@ describe('отметка обращения к банку (#592)', () => {
     const after = await getImportResult(query, 'M')
     expect(after?.lastFetchOps).toBe(3)
     expect(after?.operations, 'выдумали прогон, которого не было').toBe(0)
+  })
+})
+
+describe('markRecognitionMisconfig / getRecognitionMisconfig (#595)', () => {
+  it('непустая причина ставит признак, чистый прогон его сбрасывает', async () => {
+    const { query } = fakeStore()
+    await markRecognitionMisconfig(query, 'M', 'deal-field|field|Field not found')
+    const set = await getRecognitionMisconfig(query, 'M')
+    expect(set?.reason).toBe('deal-field|field|Field not found')
+    expect(set?.at).toBeGreaterThan(0)
+
+    // Portal починил карту → чистый прогон → признак гаснет сам.
+    await markRecognitionMisconfig(query, 'M', null)
+    expect(await getRecognitionMisconfig(query, 'M')).toBeNull()
+  })
+
+  it('пустая строка не считается признаком (эквивалент null)', async () => {
+    const { query } = fakeStore()
+    await markRecognitionMisconfig(query, 'M', '   ')
+    expect(await getRecognitionMisconfig(query, 'M')).toBeNull()
+  })
+
+  it('не трогает сводку прогона — своя пара колонок', async () => {
+    const { query } = fakeStore()
+    await saveImportResult(query, 'M', run({ operations: 7, activitiesCreated: 5, state: 'ok' }))
+    await markRecognitionMisconfig(query, 'M', 'smart-id|entity|not found')
+    const after = await getImportResult(query, 'M')
+    expect(after?.operations).toBe(7)
+    expect(after?.activitiesCreated).toBe(5)
+  })
+})
+
+describe('SQL-контракт: анти-воскрешение удалённого портала (#595, класс #505/#510)', () => {
+  // ⚠ Оба писателя `import_result` несут `WHERE EXISTS (portal_tokens)`, чтобы задача, доехавшая до
+  // воркера ПОСЛЕ ONAPPUNINSTALL, не воскресила строку удалённого портала. Подставная база это
+  // условие не моделирует (пишет безусловно), поэтому мутация, снявшая клаузу, оставалась бы
+  // зелёной — стережём САМ SQL, как `bankTokenStore.test.ts` стережёт свои WHERE.
+  function captureSql() {
+    const seen: string[] = []
+    const query: QueryFn = async (sql) => {
+      seen.push(sql)
+      return []
+    }
+    return { query, seen }
+  }
+
+  it('markRecognitionMisconfig гейтит запись по наличию portal_tokens', async () => {
+    const { query, seen } = captureSql()
+    await markRecognitionMisconfig(query, 'M', 'deal-field|field|x')
+    const sql = seen.join('\n')
+    expect(sql).toContain('EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)')
+    expect(sql).toContain('ON CONFLICT (member_id)')
+  })
+
+  it('markBankFetch тоже гейтит (тот же класс)', async () => {
+    const { query, seen } = captureSql()
+    await markBankFetch(query, 'M', 1)
+    expect(seen.join('\n')).toContain('EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)')
   })
 })
