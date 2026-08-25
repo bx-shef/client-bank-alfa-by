@@ -66,7 +66,8 @@ import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifySettingsErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
-import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
+import { deleteBankTokensForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
+import { portalsSharingAccount } from '../../app/utils/accountSharing'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { deleteLeasesForPortal } from '../utils/singleFlightLease'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -659,7 +660,24 @@ export function liveHandlerDeps(): HandlerDeps {
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },
-    enqueueCrmSync
+    enqueueCrmSync,
+    // Раздача выписки совместного счёта (#615). Опрос теперь ОДИН на счёт, а получателей столько,
+    // сколько порталов его подключили — каждый доказал доступ, пройдя авторизацию в банке.
+    //
+    // ⚠ Читаем СВОЮ базу, а не список из задачи: между планом и исполнением портал могли отключить,
+    // и раздача по устаревшему списку записала бы операции тому, кто нас только что убрал.
+    //
+    // ⚠ Демо-счёт раздаче не подлежит — его нет в хранилище токенов вовсе, поэтому ответ будет
+    // пустым, и `handleFetchJob` не поставит НИЧЕГО. Это неверно для демо-нагрузки, которой нужен
+    // ровно свой портал, поэтому она отвечается напрямую и в базу не ходит.
+    portalsForAccount: async (job) => {
+      // ⚠ Демо-нагрузка раздаче не подлежит и в базу не ходит: её счёта в хранилище токенов нет
+      // вовсе, поэтому общий путь вернул бы пустой список и синтетическая пачка не дошла бы до
+      // crm-sync — стенд показывал бы пустой конвейер при полностью исправных очередях.
+      if (isDemoAccount(job.account)) return [job.memberId]
+      const rows = await listAllBankAccounts(dbQuery)
+      return portalsSharingAccount(rows, job.providerId, job.account)
+    }
   }
 }
 

@@ -24,6 +24,8 @@ function item(docId: string, direction: 'credit' | 'debit' = 'credit', purpose =
 /** Options to shape the fake CRM-side behaviour for a test. */
 interface FakeOpts {
   batch?: StatementItem[]
+  /** кому раздать выписку совместного счёта (#615); по умолчанию — только опрашивавший портал. */
+  portalsForAccount?: string[]
   /** company id returned by findCompany (default 'CO'); null = unmatched. */
   company?: string | null
   /** my-company id returned by findMyCompany (default null = my company not found either). */
@@ -86,7 +88,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [], regRetry: [], bindRetry: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [], regRetry: [], bindRetry: [], portalsFor: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -213,6 +215,12 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     enqueueCrmSync: async (job) => {
       calls.crm.push(job)
       return true
+    },
+    // Раздача совместного счёта (#615). По умолчанию — ровно опрашивавший портал, то есть прежнее
+    // поведение: тесты, которых раздача не касается, продолжают проверять то же, что и раньше.
+    portalsForAccount: async (job) => {
+      calls.portalsFor.push([job.providerId, job.account])
+      return o.portalsForAccount ?? [job.memberId]
     }
   }
   return { deps, calls }
@@ -249,7 +257,7 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
   it('chains a non-empty batch onto crm-sync with a window+CONTENT batchId', async () => {
     const { deps, calls } = fakeDeps([item('d1'), item('d2')])
     const r = await handleFetchJob(fetchJob, deps)
-    expect(r).toEqual({ fetched: 2, chained: true })
+    expect(r).toEqual({ fetched: 2, chained: true, portals: 1 })
     const batchId = (calls.crm[0] as CrmSyncJob).batchId
     expect(batchId).toMatch(/^ACC:2026-07-01:2026-07-31:[0-9a-f]{16}$/)
     expect((calls.crm[0] as CrmSyncJob).source).toBe('fetch')
@@ -280,8 +288,41 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
   })
   it('does not chain an empty batch', async () => {
     const { deps, calls } = fakeDeps([])
-    expect(await handleFetchJob(fetchJob, deps)).toEqual({ fetched: 0, chained: false })
+    expect(await handleFetchJob(fetchJob, deps)).toEqual({ fetched: 0, chained: false, portals: 0 })
     expect(calls.crm).toEqual([])
+    // ⚠ И раздачу не спрашиваем: запрос к базе ради пустой пачки — трата на каждом тике каждого
+    // счёта, на котором в этот час просто не было операций (то есть на подавляющем большинстве).
+    expect(calls.portalsFor).toEqual([])
+  })
+
+  // ---- один счёт из нескольких порталов (#615) -------------------------------------------
+  it('счёт подключён из двух порталов — пачка уходит ОБОИМ, каждому своей задачей', async () => {
+    // Опрос теперь ОДИН на счёт (иначе порталы убивают refresh друг другу, #488), поэтому раздача
+    // получателей — единственное, что связывает второй портал с его же операциями.
+    const { deps, calls } = fakeDeps({ batch: [item('d1')], portalsForAccount: ['M-A', 'M-B'] })
+    const r = await handleFetchJob(fetchJob, deps)
+    expect(r).toMatchObject({ chained: true, portals: 2 })
+    expect((calls.crm as CrmSyncJob[]).map(j => j.memberId)).toEqual(['M-A', 'M-B'])
+    // ⚠ batchId ОДИН и тот же: `crmSyncJobId` = `crm|memberId|batchId`, так что задачи не
+    // схлопываются, а дедуп у каждого портала свой.
+    const ids = new Set((calls.crm as CrmSyncJob[]).map(j => j.batchId))
+    expect(ids.size).toBe(1)
+  })
+
+  it('никого не осталось — не пишем НИКОМУ, включая опрашивавший портал', async () => {
+    // Так выглядит ровно один случай: счёт отключили, пока задача летела. Подставить сюда
+    // `job.memberId` значило бы записать операции порталу, который только что запретил нам к ним
+    // ходить, — а это единственный запрет, который у клиента вообще есть.
+    const { deps, calls } = fakeDeps({ batch: [item('d1')], portalsForAccount: [] })
+    const r = await handleFetchJob(fetchJob, deps)
+    expect(r).toMatchObject({ chained: false, portals: 0 })
+    expect(calls.crm).toEqual([])
+  })
+
+  it('раздача спрашивается по БАНКУ и счёту — один номер у разных банков это разные счета', async () => {
+    const { deps, calls } = fakeDeps({ batch: [item('d1')] })
+    await handleFetchJob(fetchJob, deps)
+    expect(calls.portalsFor).toEqual([[fetchJob.providerId, fetchJob.account]])
   })
   it('MANUAL upload reaches the SP-ledger exactly like a bank poll (#404 follow-up check)', async () => {
     // A manual /import upload и опрос банка сходятся в ОДНОЙ crm-sync-джобе; ничего в конвейере не

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { runSubscriptionCutoff, type SubscriptionCutoffDeps } from '../server/utils/subscriptionCutoffRun'
-import { SUBSCRIPTION_CUTOFF_DAYS, MAX_SUBSCRIPTION_CUTOFF_PER_RUN } from '../app/utils/portalSubscription'
+import {
+  SUBSCRIPTION_CUTOFF_DAYS, MAX_SUBSCRIPTION_CUTOFF_PER_RUN, subscriptionCutoffLogLine
+} from '../app/utils/portalSubscription'
 
 // Автоотключение банка у портала без подписки на REST (#614, часть 3).
 //
@@ -18,6 +20,7 @@ function deps(over: Partial<SubscriptionCutoffDeps> = {}): SubscriptionCutoffDep
     countPortals: async () => 100,
     selectDue: async () => [],
     disconnectBanks: async () => 1,
+    probeSubscription: async () => 'dead' as const,
     clearMark: async () => true,
     ...over
   }
@@ -203,6 +206,82 @@ describe('автоотключение банка при мёртвой подп
     }), SUBSCRIPTION_CUTOFF_DAYS)
     expect(s.cutoff).toBe(1)
     expect(s.failed).toBe(0)
+  })
+
+  // ---- живой перезапрос перед необратимым (#614) --------------------------------------------
+  it('подписка вернулась — банк НЕ трогаем и снимаем метку', async () => {
+    // ⚠ Дыра, которую это закрывает, не теоретическая: метку снимает ТОЛЬКО удачный прогон
+    // crm-sync, а на тихом счёте (за четверо суток ни одной операции) его не бывает вовсе —
+    // опрос вернул пустую выписку, писать нечего. Клиент, оплативший на второй день, метку не
+    // снимает ничем, и на пятые сутки мы отключили бы банк у исправного платящего портала.
+    const disconnectBanks = vi.fn(async () => 1)
+    const clearMark = vi.fn(async () => true)
+    const s = await runSubscriptionCutoff(deps({
+      countDue: async () => 1,
+      selectDue: async () => [due('M1', 30)],
+      probeSubscription: async () => 'alive',
+      disconnectBanks, clearMark
+    }), SUBSCRIPTION_CUTOFF_DAYS)
+    expect(disconnectBanks).not.toHaveBeenCalled()
+    expect(clearMark).toHaveBeenCalledWith('M1')
+    expect(s.recovered).toBe(1)
+    expect(s.cutoff).toBe(0)
+  })
+
+  it('портал не ответил — не знаем, значит НЕ рвём; метка остаётся', async () => {
+    const disconnectBanks = vi.fn(async () => 1)
+    const clearMark = vi.fn(async () => true)
+    const s = await runSubscriptionCutoff(deps({
+      countDue: async () => 1,
+      selectDue: async () => [due('M1', 30)],
+      probeSubscription: async () => 'unknown',
+      disconnectBanks, clearMark
+    }), SUBSCRIPTION_CUTOFF_DAYS)
+    expect(disconnectBanks).not.toHaveBeenCalled()
+    // ⚠ Метку НЕ снимаем: следующий прогон обязан переспросить, иначе «не ответил» стало бы
+    // способом навсегда уйти от отключения.
+    expect(clearMark).not.toHaveBeenCalled()
+    expect(s.unknown).toBe(1)
+  })
+
+  it('сам перезапрос упал — это тоже «не знаем», а не отключение', async () => {
+    const disconnectBanks = vi.fn(async () => 1)
+    const s = await runSubscriptionCutoff(deps({
+      countDue: async () => 1,
+      selectDue: async () => [due('M1', 30)],
+      probeSubscription: async () => { throw new Error('сеть моргнула') },
+      disconnectBanks
+    }), SUBSCRIPTION_CUTOFF_DAYS)
+    expect(disconnectBanks).not.toHaveBeenCalled()
+    expect(s.unknown).toBe(1)
+  })
+
+  it('перезапрос идёт ДО отключения, а не после', async () => {
+    const order: string[] = []
+    await runSubscriptionCutoff(deps({
+      countDue: async () => 1,
+      selectDue: async () => [due('M1', 30)],
+      probeSubscription: async () => {
+        order.push('probe')
+        return 'dead'
+      },
+      disconnectBanks: async () => {
+        order.push('disconnect')
+        return 1
+      }
+    }), SUBSCRIPTION_CUTOFF_DAYS)
+    expect(order).toEqual(['probe', 'disconnect'])
+  })
+
+  it('«вернулась» и «не ответил» — РАЗНЫЕ строки итога, а не одна', async () => {
+    // Первое это исправленная ложная тревога, второе — отложенное решение: портал всё ещё под
+    // угрозой отключения. Слитые в одну строку, они прятали бы второе.
+    const line = subscriptionCutoffLogLine({
+      candidates: 2, cutoff: 0, connections: 0, failed: 0, skipped: 0,
+      recovered: 1, unknown: 1, diverged: 0, capped: false, breach: false, days: 4
+    })
+    expect(line).toContain('вернувшейся подпиской')
+    expect(line).toContain('не ответили на перезапрос')
   })
 
   it('граница уходит в SQL готовой — база не знает про политику', async () => {

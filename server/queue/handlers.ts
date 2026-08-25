@@ -231,6 +231,25 @@ export interface HandlerDeps {
   deletePortal: (memberId: string, eventTs: number) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
+  /**
+   * Кому раздать выписку по этому счёту (#615): порталы с СОБСТВЕННЫМ подключением к нему.
+   *
+   * Опрос счёта теперь ОДИН на все порталы (иначе они гоняются за ротацией refresh и убивают
+   * грант друг другу — механизм ежедневной смерти Альфы, #488), поэтому получателей у одной
+   * пачки может быть несколько.
+   *
+   * ⚠ Спрашивается ЗДЕСЬ, а не кладётся в задачу планировщиком: между планом и исполнением портал
+   * могли отключить, и раздача по устаревшему списку записала бы операции тому, кто нас только
+   * что убрал. Список свежий стоит одного запроса к своей базе — задача только что сходила в банк.
+   *
+   * ⚠ Пустой ответ (никто не подключён — счёт отключили, пока задача летела) означает, что писать
+   * НЕКОМУ, а не «пиши тому, кто опрашивал»: см. `handleFetchJob`.
+   *
+   * ⚠ Принимает ЗАДАЧУ целиком, а не пару «банк + счёт»: демо-нагрузке нужен ровно свой портал
+   * (её счёта нет в хранилище токенов вовсе), и без `memberId` она молча перестала бы доходить до
+   * crm-sync — то есть стенд показывал бы пустой конвейер при работающих очередях.
+   */
+  portalsForAccount: (job: FetchJob) => Promise<string[]>
 }
 
 /** Apply a verified B24 event to the store — the consumer is the SINGLE writer
@@ -264,7 +283,9 @@ export function batchContentHash(items: readonly StatementItem[]): string {
 }
 
 /** Fetch a statement window, then hand the normalized batch to crm-sync. */
-export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<{ fetched: number, chained: boolean }> {
+export async function handleFetchJob(
+  job: FetchJob, deps: HandlerDeps
+): Promise<{ fetched: number, chained: boolean, portals: number }> {
   const items = await deps.fetchStatement(job)
   // The crm-sync jobId derives from batchId, and crm-sync RETAINS completed jobs
   // (STATEMENT_JOB_RETENTION) — so a batchId that repeats is silently dropped by BullMQ's
@@ -282,16 +303,35 @@ export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<
   // the same hash → still idempotent. `epoch` (manual «Опросить сейчас») is deliberately NOT part
   // of it: an operator-forced refetch of unchanged data need not redo the CRM work either.
   const batchId = `${job.account}:${job.dateFrom}:${job.dateTo}:${batchContentHash(items)}`
-  const chained = items.length > 0
-    ? await deps.enqueueCrmSync({
-        memberId: job.memberId,
-        providerId: job.providerId,
-        source: 'fetch',
-        batchId,
-        items
-      })
-    : false
-  return { fetched: items.length, chained }
+  if (items.length === 0) return { fetched: 0, chained: false, portals: 0 }
+
+  // ⚠ ОДИН опрос — НЕСКОЛЬКО получателей (#615). Счёт может быть подключён из разных порталов
+  // Bitrix24; каждый из них сам прошёл авторизацию в банке и тем доказал право на эти операции,
+  // поэтому пачка уходит каждому. Раньше опрашивал КАЖДЫЙ портал сам, и они убивали refresh друг
+  // другу (Альфа ротирует его при каждом обновлении, а лок пер-портальный).
+  //
+  // ⚠ `crmSyncJobId` — это `crm|memberId|batchId`, поэтому задачи разных порталов НЕ схлопываются
+  // и дедуп у каждого свой. Это уже так работало; менять ничего не пришлось.
+  //
+  // ⚠ Опрашивавший портал добавляется в список ОБЯЗАТЕЛЬНО, но только если он там уже есть —
+  // `portalsForAccount` и есть источник истины. Ниже — почему пустой список не подменяется им.
+  const targets = await deps.portalsForAccount(job)
+
+  // ⚠ Никого не осталось — НЕ пишем никому, в том числе опрашивавшему. Так выглядит ровно один
+  // случай: счёт отключили, пока задача летела. Подставить сюда `job.memberId` значило бы записать
+  // операции порталу, который только что запретил нам к ним ходить, — а это единственный запрет,
+  // который у клиента вообще есть.
+  if (targets.length === 0) return { fetched: items.length, chained: false, portals: 0 }
+
+  let chained = false
+  for (const memberId of targets) {
+    // ⚠ Отказ постановки ОДНОМУ порталу не отменяет остальных: у них независимые задачи, и общий
+    // `throw` заставил бы BullMQ переопросить БАНК ради портала, чья очередь просто моргнула.
+    if (await deps.enqueueCrmSync({ memberId, providerId: job.providerId, source: 'fetch', batchId, items })) {
+      chained = true
+    }
+  }
+  return { fetched: items.length, chained, portals: targets.length }
 }
 
 /** Parse an uploaded file, then hand the normalized batch to crm-sync. */

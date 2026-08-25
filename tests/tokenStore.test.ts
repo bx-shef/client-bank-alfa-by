@@ -17,7 +17,8 @@ import {
   clearSubscriptionEnded,
   selectSubscriptionEnded,
   selectSubscriptionCutoff,
-  countSubscriptionCutoff
+  countSubscriptionCutoff,
+  getSubscriptionEndedAt
 } from '../server/utils/tokenStore'
 import type { PortalToken } from '../server/utils/tokenStore'
 
@@ -483,6 +484,21 @@ describe('метка истёкшей подписки (#614)', () => {
     expect(sql).toMatch(/subscription_ended_at > 0/)
     expect(sql, 'при упоре в потолок очередь должна двигаться').toMatch(/ORDER BY subscription_ended_at ASC/)
     expect(sql).toMatch(/LIMIT \$1/)
+  })
+
+  it('чтение метки адресовано ОДНОМУ порталу — на нём держится гейт ручного отключения', () => {
+    // ⚠ Без скоупа по порталу оператор отключал бы живое подключение одного клиента на основании
+    // мёртвой подписки ДРУГОГО. Единственный тест на этот SQL: `memStore` его не исполняет.
+    const { calls, query } = spy()
+    return getSubscriptionEndedAt(query, 'M1').then(() => {
+      expect(sqlOf(calls)).toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+      expect(calls[0]?.params).toEqual(['M1'])
+    })
+  })
+
+  it('метки нет — это НОЛЬ, а не отказ: подписка просто жива', async () => {
+    const query = vi.fn(async () => []) as unknown as QueryFn
+    expect(await getSubscriptionEndedAt(query, 'M1')).toBe(0)
   })
 
   // ⚠ Выборка автоотключения (#614) — отдельная от консольной НАМЕРЕННО: консоли нужны ВСЕ

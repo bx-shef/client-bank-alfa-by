@@ -174,7 +174,16 @@ export function summarizeBankHealth(
     set.add(row.memberId)
     portalsBy.set(health, set)
     // Подписка портала мертва — банковское подключение при этом может быть живым (#614).
-    const subEnded = subscriptionEndedAt?.get(row.memberId) ?? 0
+    //
+    // ⚠ РАЗДЕЛЫ ВЗАИМОИСКЛЮЧАЮЩИ, и это не косметика. Строка бывает нерабочей И по банку, И по
+    // подписке разом; двумя независимыми `if` она попадала бы в ОБА списка — одно и то же
+    // подключение показывалось бы оператору дважды, с разными формулировками, а `confirmDisconnectId`
+    // у списков общий, поэтому клик по одной копии переводил бы в подтверждение и вторую.
+    //
+    // ⚠ Приоритет — БАНКОВСКИЙ, тот же, что на сервере (`bankReason ?? subscription-ended`): такую
+    // строку чинит владелец счёта входом в интернет-банк, и подписка этого не отменяет. Разойдись
+    // экран с сервером — оператор увидел бы «подписка», а пометка клиенту ушла бы про банк.
+    const subEnded = needsHumanHealth(health) ? 0 : (subscriptionEndedAt?.get(row.memberId) ?? 0)
     if (hashPortal && subEnded > 0) {
       subscriptionDead.push({
         id: row.id,

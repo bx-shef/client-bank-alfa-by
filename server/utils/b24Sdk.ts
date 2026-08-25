@@ -40,7 +40,7 @@ import { assertPortalHost } from './b24Rest'
 import { withDependencySpan } from './telemetrySpan'
 import { firstPortalErrorCode, portalErrorCode, PortalRestError } from './portalError'
 import { isGrantDead } from '../../app/utils/portalReaper'
-import { isSubscriptionEnded } from '../../app/utils/portalSubscription'
+import { isSubscriptionEnded, SUBSCRIPTION_ENDED_RE } from '../../app/utils/portalSubscription'
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
 const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
@@ -227,7 +227,7 @@ async function callAndWatchGrant(
     // ⚠ Подписка отдаётся и ФАКТОМ ОТКАЗА, и провалившимся результатом, поэтому проверяются оба
     // пути. Живой лог 2026-08-25 показал текст в сообщении задачи, а какой именно веткой он туда
     // пришёл — не наблюдалось; закрывать надо обе, иначе метка не встанет ровно в половине случаев.
-    if (!res.isSuccess) await noteSubscription(res.getErrorMessages().join('; '), opts)
+    if (!res.isSuccess) await noteSubscription(res.getErrorMessages().join('; '), opts, params)
     return res
   } catch (e) {
     const { memberId, onGrantDead } = opts
@@ -238,7 +238,7 @@ async function callAndWatchGrant(
         // A failed mark must not mask the portal error the caller is waiting for.
       }
     }
-    await noteSubscription(e, opts)
+    await noteSubscription(e, opts, params)
     throw e
   }
 }
@@ -253,14 +253,39 @@ export interface PortalCallOpts {
 }
 
 /**
+ * Несут ли параметры вызова ту же фразу, по которой мы опознаём мёртвую подписку.
+ *
+ * ⚠ Ошибаемся в сторону «несут»: несериализуемые параметры (циклическая ссылка) дают `true`, то
+ * есть метка НЕ ставится. Пропущенная метка стоит суток отсрочки, ложная — отключения банка у
+ * исправного портала.
+ */
+function echoesSubscriptionPhrase(params: Record<string, unknown>): boolean {
+  try {
+    return SUBSCRIPTION_ENDED_RE.test(JSON.stringify(params) ?? '')
+  } catch {
+    return true
+  }
+}
+
+/**
  * Отметить истёкшую подписку, если отказ говорит именно о ней (#614).
  *
  * ⚠ ЛУЧШИЕ УСИЛИЯ и никогда не подменяет исходную ошибку: вызывающий ждёт отказа портала, а не
  * отказа нашей записи. Тот же контракт, что у `onGrantDead`.
  */
-async function noteSubscription(reason: unknown, opts: PortalCallOpts): Promise<void> {
+async function noteSubscription(
+  reason: unknown, opts: PortalCallOpts, params: Record<string, unknown>
+): Promise<void> {
   const { memberId, onSubscriptionEnded } = opts
   if (!memberId || !onSubscriptionEnded || !isSubscriptionEnded(reason)) return
+  // ⚠ ЕСЛИ ЭТУ ФРАЗУ ОТПРАВИЛИ МЫ САМИ — увидеть её в ответе не значит ничего. Признак у нас
+  // текстовый (машинного кода Bitrix24 на этот отказ не даёт), а часть параметров записи — текст
+  // ПЛАТЕЛЬЩИКА: назначение платежа, имя контрагента. Отрази портал такое значение в описании
+  // ошибки — и любой, кто перечислит рубль с нужным назначением, поставил бы чужому порталу метку
+  // «подписка мертва», а через четверо суток тому отключило бы банк. Отражает ли Bitrix24
+  // параметры в тексте отказа, мы НЕ замеряли; проверка стоит один `JSON.stringify` и делает
+  // ответ на этот вопрос неважным.
+  if (echoesSubscriptionPhrase(params)) return
   try {
     await onSubscriptionEnded(memberId)
   } catch {
@@ -348,7 +373,7 @@ export interface SdkPortalDeps {
    *  that the reaper stops being told — which is exactly the failure mode #574 started from, so
    *  the live wiring in `sdkPortalDeps` always provides it. */
   onGrantDead?: (memberId: string) => Promise<void>
-  /** Record that the portal's REST subscription has lapsed (#614). Same optionality, same reason. */
+  /** Подписка портала на REST истекла (#614). Та же необязательность и та же причина, что у `onGrantDead`. */
   onSubscriptionEnded?: (memberId: string) => Promise<void>
 }
 
