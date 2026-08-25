@@ -16,36 +16,27 @@ import type { StatementItem, OperationDirection } from '~/types/statement'
 import { round2 } from '~/utils/money'
 
 /**
- * `crm.item.list` для последних операций: наши поля реестра + маркер, сорт по `id` убыв. (свежие
- * сверху), первая страница. `select` перечисляет РОВНО читаемые поля — лишние колонки СП в витрину
- * не тащим.
+ * `crm.item.list` для последних операций: сорт по `id` убыв. (свежие сверху), первая страница.
+ *
+ * ⚠ **`select` НЕ задаём намеренно (#41).** Прежде мы перечисляли РОВНО наши поля — и на живом
+ * портале `crm.item.list` возвращал доденьги (`TOTAL`/`CURRENCY`/`MARKER`), но НЕ поля реестра #575
+ * (контрагент/назначение/дата/направление), хотя на карточке элемента они заполнены (её рисует
+ * `crm.item.get`, отдающий все поля). То есть явный `select` только что добавленных UF-полей СП их
+ * не отдавал. Без `select` метод отдаёт ПОЛНЫЙ элемент (системные + все UF), а маппер разбирает
+ * нужные поля по именам — лишние колонки в витрину всё равно не попадают, их отбрасывает маппер.
+ * Плата — чуть больший ответ на 50 строк, приемлемо для витрины.
  *
  * ⚠ Размер страницы НЕ задаём: у `crm.item.list` его нет как параметра — портал отдаёт фиксированную
- * страницу (50), а пагинацию мы не листаем (нужны только последние). Прежняя константа `LIMIT=50`
- * держалась на совпадении с этим дефолтом, а не на контракте, и вводила в заблуждение — снята.
+ * страницу (50), а пагинацию мы не листаем (нужны только последние).
  * ⚠ `id DESC` — это «последние ИМПОРТИРОВАННЫЕ», а не «последние по дате операции»: ручная загрузка
  * старой выписки поставит свежесозданные элементы старых операций сверху. `OperationList` группирует
  * по дню, так что для витрины это приемлемо; знать про компромисс стоит.
  */
 export function buildRecentOperationsListCall(paymentSp: SpRef): { method: string, params: Record<string, unknown> } {
-  const uf = (postfix: string) => buildUfFieldNameCamel(paymentSp.id, postfix)
   return {
     method: 'crm.item.list',
     params: {
       entityTypeId: paymentSp.entityTypeId,
-      select: [
-        'id',
-        uf(PAYMENT_SP_FIELDS.total.postfix),
-        uf(PAYMENT_SP_FIELDS.currency.postfix),
-        uf(PAYMENT_SP_FIELDS.operationDate.postfix),
-        uf(PAYMENT_SP_FIELDS.direction.postfix),
-        uf(PAYMENT_SP_FIELDS.counterparty.postfix),
-        uf(PAYMENT_SP_FIELDS.counterpartyAccount.postfix),
-        uf(PAYMENT_SP_FIELDS.counterpartyUnp.postfix),
-        uf(PAYMENT_SP_FIELDS.purpose.postfix),
-        uf(PAYMENT_SP_FIELDS.ownAccount.postfix),
-        uf(PAYMENT_SP_FIELDS.marker.postfix)
-      ],
       order: { id: 'DESC' },
       start: 0
     }
