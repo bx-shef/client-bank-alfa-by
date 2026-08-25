@@ -231,6 +231,28 @@ export interface HandlerDeps {
   deletePortal: (memberId: string, eventTs: number) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
+  /**
+   * Кому раздать выписку по этому счёту (#615): порталам, чей счёт ПОДТВЕРДИЛ БАНК.
+   *
+   * Опрос совместного счёта теперь ОДИН на все порталы (иначе они гоняются за ротацией refresh и
+   * убивают грант друг другу — механизм ежедневной смерти Альфы, #488), поэтому получателей у
+   * одной пачки может быть несколько.
+   *
+   * ⚠ Введённый номер счёта доказательством НЕ является: его вписывают руками и мы его не
+   * проверяем. Первая редакция сопоставляла порталы по нему и была утечкой между клиентами —
+   * админ чужого портала вписывал ваш IBAN и получал вашу выписку себе в CRM.
+   *
+   * ⚠ Спрашивается ЗДЕСЬ, а не кладётся в задачу планировщиком: между планом и исполнением портал
+   * могли отключить, и раздача по устаревшему списку записала бы операции тому, кто нас только
+   * что убрал. Свежий список стоит одного запроса к своей базе — задача только что сходила в банк.
+   *
+   * ⚠ ОПРАШИВАВШИЙ ПОРТАЛ ОБЯЗАН БЫТЬ В СПИСКЕ. Он сходил в банк своим грантом, и банк отдал ему
+   * эту выписку — гейт подтверждения существует для СОСЕДЕЙ, а не для хозяина. Первая редакция
+   * требовала подтверждения от всех и молча останавливала запись в CRM у всех обычных порталов:
+   * подтверждение спрашивается только про СПОРНЫЕ счета, а у большинства счёт уникален, поэтому
+   * его не было бы никогда. Симптом — тишина в CRM при живом `[fetch]`, без единой ошибки.
+   */
+  portalsForAccount: (job: FetchJob) => Promise<string[]>
 }
 
 /** Apply a verified B24 event to the store — the consumer is the SINGLE writer
@@ -264,7 +286,9 @@ export function batchContentHash(items: readonly StatementItem[]): string {
 }
 
 /** Fetch a statement window, then hand the normalized batch to crm-sync. */
-export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<{ fetched: number, chained: boolean }> {
+export async function handleFetchJob(
+  job: FetchJob, deps: HandlerDeps
+): Promise<{ fetched: number, chained: boolean, portals: number }> {
   const items = await deps.fetchStatement(job)
   // The crm-sync jobId derives from batchId, and crm-sync RETAINS completed jobs
   // (STATEMENT_JOB_RETENTION) — so a batchId that repeats is silently dropped by BullMQ's
@@ -282,16 +306,41 @@ export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<
   // the same hash → still idempotent. `epoch` (manual «Опросить сейчас») is deliberately NOT part
   // of it: an operator-forced refetch of unchanged data need not redo the CRM work either.
   const batchId = `${job.account}:${job.dateFrom}:${job.dateTo}:${batchContentHash(items)}`
-  const chained = items.length > 0
-    ? await deps.enqueueCrmSync({
-        memberId: job.memberId,
-        providerId: job.providerId,
-        source: 'fetch',
-        batchId,
-        items
-      })
-    : false
-  return { fetched: items.length, chained }
+  // ⚠ Пустую пачку не раздаём и получателей не спрашиваем: запрос к базе ради «операций не было»
+  // это трата на каждом тике каждого счёта, то есть на подавляющем большинстве тиков.
+  if (items.length === 0) return { fetched: 0, chained: false, portals: 0 }
+
+  // ⚠ ОДИН опрос — НЕСКОЛЬКО получателей (#615), но только тех, чей счёт подтвердил банк.
+  // `crmSyncJobId` = `crm|memberId|batchId`, поэтому задачи разных порталов не схлопываются и
+  // дедуп у каждого свой — это уже так работало, менять не пришлось.
+  const targets = await deps.portalsForAccount(job)
+
+  // ⚠ Пусто — редкий и честный исход: проводка сочла, что отдавать некому. Живая проводка всегда
+  // включает сюда опрашивавший портал (он сходил в банк своим грантом), поэтому на практике это
+  // означает демо-путь или отсутствие проводки вовсе. Подставлять `job.memberId` ЗДЕСЬ не нужно:
+  // решение «кому отдать» принимает одно место, и дублировать его правило значит однажды разойтись.
+  if (targets.length === 0) return { fetched: items.length, chained: false, portals: 0 }
+
+  let chained = false
+  for (const memberId of targets) {
+    // ⚠ Отказ постановки ОДНОМУ порталу не отменяет остальных, и это ДЕЛАЕТСЯ, а не только
+    // утверждается: `enqueueCrmSync` своих ошибок не глотает, и без `try` обрыв Redis между двумя
+    // получателями уронил бы задачу целиком — BullMQ повторил бы её и заново сходил бы В БАНК ради
+    // очереди, которая моргнула. Первая редакция несла ровно этот комментарий БЕЗ `try` (находка
+    // ревью): текст обещал изоляцию, которой в коде не было.
+    //
+    // ⚠ Повтор безопасен: `crmSyncJobId` = `crm|memberId|batchId`, поэтому уже поставленные
+    // получатели дедуплицируются очередью, а не задваиваются.
+    try {
+      if (await deps.enqueueCrmSync({ memberId, providerId: job.providerId, source: 'fetch', batchId, items })) {
+        chained = true
+      }
+    } catch {
+      // Считать отдельно нечего: сводка прогона и так покажет, что часть получателей не дошла,
+      // а сам отказ очереди виден в её собственных счётчиках.
+    }
+  }
+  return { fetched: items.length, chained, portals: targets.length }
 }
 
 /** Parse an uploaded file, then hand the normalized batch to crm-sync. */

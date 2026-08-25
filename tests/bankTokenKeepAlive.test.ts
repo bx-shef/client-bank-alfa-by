@@ -35,6 +35,7 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     id: 1,
     lastAttemptAt: 0,
     consentExpiresAt: 0,
+    accountConfirmedAt: 0,
     ...over
   }
 }
@@ -335,7 +336,7 @@ describe('угаданный срок жизни не хоронит подкл�
   const row = (provider: 'alfa-by' | 'prior-by', ageMs: number) => ({
     memberId: 'M', provider, accountKey: 'BY1',
     connectedAt: NOW - ageMs, expiresAt: NOW, hasRefresh: true, pollPaused: false,
-    id: 1, lastAttemptAt: 0, consentExpiresAt: 0, grantId: ''
+    id: 1, lastAttemptAt: 0, consentExpiresAt: 0, accountConfirmedAt: 0, grantId: ''
   })
 
   it('Приор старше своего УГАДАННОГО срока — остаётся в очереди на обновление, не в «истекло»', () => {
@@ -375,7 +376,7 @@ describe('истёкшее согласие не тратит запросы б�
   const row = (over: Record<string, unknown> = {}) => ({
     memberId: 'm1', provider: 'prior-by' as const, accountKey: 'BY01',
     connectedAt: T - 60_000, expiresAt: T + 600_000, hasRefresh: true, consentExpiresAt: 0,
-    id: 1, lastAttemptAt: 0, pollPaused: false, grantId: '', ...over
+    id: 1, lastAttemptAt: 0, pollPaused: false, grantId: '', accountConfirmedAt: 0, ...over
   })
 
   it('согласие истекло — в «expired», а не в «due», даже у свежего токена', () => {
@@ -421,7 +422,7 @@ describe('подключение не хоронится без вопроса �
   const row = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
     id: 1, memberId: 'M', provider: 'alfa-by', accountKey: 'BY09ALFA1',
     connectedAt: 0, lastAttemptAt: 0, expiresAt: 0, hasRefresh: true, consentExpiresAt: 0,
-    pollPaused: false, grantId: '', ...over
+    accountConfirmedAt: 0, pollPaused: false, grantId: '', ...over
   })
   const TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
 

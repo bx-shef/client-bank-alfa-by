@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { decryptSecret } from '../server/utils/secretCrypto'
 import {
   addBankAccountToGrant,
@@ -13,7 +15,8 @@ import {
   listBankTokensForPortal,
   saveBankToken,
   updateBankTokenSecrets,
-  setBankPollPaused
+  setBankPollPaused,
+  markAccountsConfirmed
 } from '../server/utils/bankTokenStore'
 import type { BankToken } from '../server/utils/bankTokenStore'
 import type { QueryFn } from '../server/utils/tokenStore'
@@ -87,6 +90,64 @@ describe('saveBankToken', () => {
 describe('listBankAccountInfoForPortal — проекция для экрана настроек', () => {
   // ⚠ Именно она стоит за живым `GET /api/bank/accounts`, и до этого теста не вызывалась НИ ОДНИМ
   // тестом: соседняя `listAllBankAccountInfo` (её зовёт keep-alive) — другая функция.
+  it('КАЖДЫЙ SELECT, строящий BankAccountInfo, читает подтверждение счёта', async () => {
+    // ⚠ СТРУКТУРНЫЙ гард, и он написан по живой находке ревью (#615): колонку добавили в маппер
+    // трижды, а в SELECT — один раз из трёх. Маппер читал `r.account_confirmed_at` из строки, где
+    // такой колонки нет, получал `undefined ?? 0` и ВСЕГДА отдавал ноль. Признак был мёртв
+    // целиком: и выбор поллера, и раздача выписки видели «никто не подтверждён».
+    //
+    // ⚠ Ни типы, ни обычные тесты этого не ловят В ПРИНЦИПЕ. Строка из pg — `Record<string,
+    // unknown>`, лишний ключ компилятору не виден; а фейковая строка в тесте содержит ровно то,
+    // что положил автор теста, то есть повторяет его же ошибку. Ровно так же однажды потерялся
+    // `consent_expires_at` (#503).
+    const src = readFileSync(join(import.meta.dirname, '..', 'server/utils/bankTokenStore.ts'), 'utf8')
+    // ⚠ Признак проекции `BankAccountInfo` — `last_attempt_at`, и он выбран не наугад. `poll_paused`
+    // есть и у лёгкой `BankAccountRef`, `consent_expires_at` — и у `BankToken` с секретами; ни той,
+    // ни другому подтверждение не положено ни типом, ни смыслом, и гард ругался бы на исправные
+    // запросы. `last_attempt_at` есть ровно у проекции, которая несёт `accountConfirmedAt`.
+    const selects = src.split('`SELECT').slice(1).filter(b => b.slice(0, 400).includes('last_attempt_at'))
+    expect(selects.length).toBeGreaterThanOrEqual(3)
+    for (const block of selects) {
+      expect(block.slice(0, 400), `SELECT без account_confirmed_at:\n${block.slice(0, 200)}`)
+        .toContain('account_confirmed_at')
+    }
+  })
+
+  it('подтверждение ДОЕЗЖАЕТ из строки БД, а не подставляется нулём', async () => {
+    // Позитивный двойник к тесту «колонки нет ⇒ 0»: тот совпадал с багом и потому его не ловил.
+    const { query } = fakeQuery([{
+      id: '7', member_id: 'M1', provider: 'alfa-by', account_key: 'BY01',
+      expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000),
+      has_refresh: true, account_confirmed_at: '1800000000000'
+    }])
+    const [row] = await listAllBankAccountInfo(query)
+    expect(row?.accountConfirmedAt).toBe(1_800_000_000_000)
+  })
+
+  it('подтверждение счёта скоуплено ПОРТАЛОМ — иначе это IDOR', async () => {
+    // ⚠ Единственная проверка этого SQL: `memStore` его не исполняет, он переписывает семантику на
+    // JS, поэтому правки WHERE для него невидимы. Замерено мутацией: снятие `member_id` проходило
+    // зелёным — а означает оно, что подтверждение одного портала проставится ЧУЖОЙ строке с тем же
+    // номером, то есть ровно тому вписанному вручную номеру, ради которого признак и заведён.
+    const { calls, query } = fakeQuery([{ id: '1' }])
+    await markAccountsConfirmed(query, 'M1', 'alfa-by', ['BY01'], 1_800_000_000_000)
+    const sql = calls.map(c => c.sql).join('\n')
+    expect(sql).toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+    expect(sql).toMatch(/provider\s*=\s*\$2/)
+    expect(sql).toMatch(/account_key\s*=\s*ANY/)
+    // ⚠ `updated_at` НЕ штампуем: по нему keep-alive выбирает, кого продлевать (#489).
+    expect(sql).not.toMatch(/updated_at/)
+    // ⚠ И ни одной колонки, кроме подтверждения: иначе классификация «без лока» перестаёт быть верной.
+    expect(sql).toMatch(/SET\s+account_confirmed_at\s*=\s*\$4/)
+  })
+
+  it('пустой список счетов — в базу не ходим вовсе', async () => {
+    const { calls, query } = fakeQuery([])
+    expect(await markAccountsConfirmed(query, 'M1', 'alfa-by', [], 1)).toBe(0)
+    expect(await markAccountsConfirmed(query, 'M1', 'alfa-by', [''], 1)).toBe(0)
+    expect(calls).toHaveLength(0)
+  })
+
   it('отдаёт свежесть и срок согласия, без единого секрета', async () => {
     const { query } = fakeQuery([{
       id: '9', member_id: 'M1', provider: 'prior-by', account_key: 'BY13',
@@ -102,6 +163,10 @@ describe('listBankAccountInfoForPortal — проекция для экрана 
       // ⚠ 0 = «не пробовали ни разу», а не «пробовали давно». Различие несущее: первое даёт шанс
       // немедленно — ровно тот случай, когда подключение пережило простой сервиса (#489).
       lastAttemptAt: 0,
+      // ⚠ Колонки `account_confirmed_at` нет ⇒ 0 = «банк счёт не подтверждал» (#615). Подключение,
+      // заведённое до этой правки, раздачу выписки соседнему порталу не получает — и не должно:
+      // номер счёта вписан руками, а введённый номер доказательством не является.
+      accountConfirmedAt: 0,
       // ⚠ Отсутствие колонки в ответе БД читается как «не на паузе», а не как `undefined`: строка,
       // записанная до #576, обязана опрашиваться, а не выпасть из плана молча.
       pollPaused: false,
@@ -560,6 +625,10 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
       // Колонки `last_attempt_at` в строке тоже нет ⇒ 0 = «не пробовали», и подключение получит
       // шанс на первом же тике (#489).
       lastAttemptAt: 0,
+      // Колонки `account_confirmed_at` нет ⇒ 0 = «банк счёт не подтверждал». Именно так и должно
+      // быть у подключения, заведённого до #615: раздавать по нему выписку соседнему порталу
+      // нельзя, пока банк сам не назовёт этот номер среди счетов гранта.
+      accountConfirmedAt: 0,
       // Колонки `poll_paused` нет ⇒ `false`: подключение, заведённое до #576, опрашивается.
       pollPaused: false,
       // Колонки `grant_id` нет ⇒ `''`: подключение, заведённое до #23, гранта не несёт.

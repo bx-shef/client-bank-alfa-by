@@ -138,7 +138,7 @@ describe('тишина в продлении токенов читается к�
     const acc = {
       id: 1, memberId: 'M1', provider: 'alfa-by' as const, accountKey: 'BY01',
       connectedAt: NOW - 9 * 3_600_000, expiresAt: NOW + 60_000,
-      hasRefresh: true, lastAttemptAt: 0, consentExpiresAt: 0, pollPaused: false, grantId: ''
+      hasRefresh: true, lastAttemptAt: 0, consentExpiresAt: 0, accountConfirmedAt: 0, pollPaused: false, grantId: ''
     }
     await runBankKeepAlive({
       now: () => NOW,
