@@ -172,3 +172,32 @@ describe('markRecognitionMisconfig / getRecognitionMisconfig (#595)', () => {
     expect(after?.activitiesCreated).toBe(5)
   })
 })
+
+describe('SQL-контракт: анти-воскрешение удалённого портала (#595, класс #505/#510)', () => {
+  // ⚠ Оба писателя `import_result` несут `WHERE EXISTS (portal_tokens)`, чтобы задача, доехавшая до
+  // воркера ПОСЛЕ ONAPPUNINSTALL, не воскресила строку удалённого портала. Подставная база это
+  // условие не моделирует (пишет безусловно), поэтому мутация, снявшая клаузу, оставалась бы
+  // зелёной — стережём САМ SQL, как `bankTokenStore.test.ts` стережёт свои WHERE.
+  function captureSql() {
+    const seen: string[] = []
+    const query: QueryFn = async (sql) => {
+      seen.push(sql)
+      return []
+    }
+    return { query, seen }
+  }
+
+  it('markRecognitionMisconfig гейтит запись по наличию portal_tokens', async () => {
+    const { query, seen } = captureSql()
+    await markRecognitionMisconfig(query, 'M', 'deal-field|field|x')
+    const sql = seen.join('\n')
+    expect(sql).toContain('EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)')
+    expect(sql).toContain('ON CONFLICT (member_id)')
+  })
+
+  it('markBankFetch тоже гейтит (тот же класс)', async () => {
+    const { query, seen } = captureSql()
+    await markBankFetch(query, 'M', 1)
+    expect(seen.join('\n')).toContain('EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)')
+  })
+})
