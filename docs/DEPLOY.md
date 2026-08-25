@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-08-21
+> Last reviewed: 2026-08-252026-08-21
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
@@ -10,6 +10,10 @@
 
 > **Альтернативный таргет — Битрикс24 Вайбкод Black Hole** (закрытый Bitrix-Cloud VM, деплой по
 > REST, приложение одним Nitro-процессом на :3000): [`DEPLOY_VIBECODE.md`](DEPLOY_VIBECODE.md).
+>
+> **Ещё один таргет — виртуальная машина Битрикс24 клиента** (приложение рядом с порталом,
+> nginx машины терминирует TLS и проксирует в docker, обновления опросом git):
+> [`DEPLOY_BITRIXVM.md`](DEPLOY_BITRIXVM.md).
 > Артефакты (`deploy/vibecode-deploy.sh`, workflow) — **opt-in**, основной путь не трогают.
 
 Backend (приём событий Б24 + хранилище токенов; дальше — OAuth Альфы, опрос, дела/чат) —
