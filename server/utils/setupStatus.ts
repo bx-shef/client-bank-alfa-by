@@ -9,6 +9,8 @@
 // Auth mirrors the other bank routes (portal installed → frame token proven for THAT domain →
 // admin): the answer describes the portal's configuration posture, which is admin business.
 
+import { parseMisconfigReason } from '../../app/utils/setupReadiness'
+
 export interface SetupStatusResult {
   status: number
   body: Record<string, unknown>
@@ -29,6 +31,10 @@ export interface SetupStatusDeps {
    *  ⚠ Отказ REST здесь НЕ роняет весь ответ: экран готовности — самое место, где «половина
    *  сведений» полезнее пустого экрана, а строка без данных просто не рисуется. */
   myCompany?: (domain: string, accessToken: string) => Promise<'ok' | 'no-company' | 'no-account'>
+  /** Persistent-признак «последний прогон упёрся в неверную карту распознавания» (#595) — сырая
+   *  причина `what|param|detail`, или null если чисто. Разбирается ЗДЕСЬ в слот; английский
+   *  `detail` клиенту не уходит. Отсутствует ⇒ строка карты зависит только от числа шаблонов. */
+  recognitionMisconfig?: (memberId: string) => Promise<string | null>
 }
 
 export async function handleSetupStatus(
@@ -52,11 +58,13 @@ export async function handleSetupStatus(
   }
   if (!frame.isAdmin) return { status: 403, body: { error: 'setup status is administrator-only' } }
 
-  const [counts, lastRunMs, myCompany] = await Promise.all([
+  const [counts, lastRunMs, myCompany, misconfigReason] = await Promise.all([
     deps.countAccounts(memberId),
     deps.lastRunMs(memberId),
-    deps.myCompany?.(domain, accessToken).catch(() => undefined)
+    deps.myCompany?.(domain, accessToken).catch(() => undefined),
+    deps.recognitionMisconfig?.(memberId).catch(() => null)
   ])
+  const misconfigSlot = parseMisconfigReason(misconfigReason ?? null)
 
   return {
     status: 200,
@@ -77,7 +85,10 @@ export async function handleSetupStatus(
       // Ключ появляется только когда мы действительно спросили и получили ответ: пустая галочка
       // на экране готовности честнее выдуманной, а выдуманная тут особенно дорога — именно этот
       // экран человек открывает, чтобы понять, почему ничего не работает.
-      ...(myCompany ? { myCompany } : {})
+      ...(myCompany ? { myCompany } : {}),
+      // Слот сломанной настройки карты распознавания (#595). Английский `detail` портала СЮДА не
+      // едет — он остаётся в логе, клиенту показываем только «какое поле чинить».
+      ...(misconfigSlot ? { recognitionMisconfig: misconfigSlot } : {})
     }
   }
 }

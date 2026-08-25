@@ -44,7 +44,7 @@ import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTrigg
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
-import { deleteImportResultForPortal, markBankFetch, saveImportResult } from '../utils/importResultStore'
+import { deleteImportResultForPortal, markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
 import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
 import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
@@ -1015,7 +1015,7 @@ async function markFetchOutcome(job: FetchJob, ops: number): Promise<void> {
 
 async function persistImportResult(
   job: CrmSyncJob,
-  summary: { processed: number, created: number, notified: number }
+  summary: { processed: number, created: number, notified: number, misconfigReason?: string }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
   if (!account || isDemoAccount(account)) return
@@ -1030,6 +1030,14 @@ async function persistImportResult(
     })
   } catch (e) {
     crmLog.error(`import_result save failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+  }
+  // Persistent-признак misconfig карты распознавания для экрана готовности (#595). Пишется на
+  // КАЖДОМ прогоне: непустая причина ⇒ красная строка, пустая ⇒ сброс (portal починил карту).
+  // ⚠ Отдельный try: сброс признака не должен зависеть от успеха записи сводки выше.
+  try {
+    await markRecognitionMisconfig(dbQuery, job.memberId, summary.misconfigReason ?? null)
+  } catch (e) {
+    crmLog.error(`recog misconfig mark failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 

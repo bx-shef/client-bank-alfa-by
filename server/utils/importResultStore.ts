@@ -52,6 +52,53 @@ export async function markBankFetch(query: QueryFn, memberId: string, ops: numbe
   )
 }
 
+/**
+ * Отметить/сбросить «последний прогон упёрся в неверную карту распознавания» (#595).
+ *
+ * `reason` — структурированная строка `what|param|detail` из `intentResolver` (не сырой ответ
+ * портала). Непустая ⇒ пишем метку времени наблюдения; `null`/пусто ⇒ ЧИСТЫЙ прогон, сбрасываем
+ * (0/NULL), и экран готовности снова зеленеет. Пишется на КАЖДОМ прогоне — это состояние
+ * наблюдения, а не настройка, и починенная карта обязана гаснуть сама.
+ *
+ * ⚠ `INSERT … ON CONFLICT` — у портала может ещё не быть ряда (первый прогон). Как и `markBankFetch`,
+ * НЕ трогает сводку прогона (свои две колонки) и создаётся только для установленного портала.
+ */
+export async function markRecognitionMisconfig(
+  query: QueryFn,
+  memberId: string,
+  reason: string | null
+): Promise<void> {
+  const r = typeof reason === 'string' && reason.trim() !== '' ? reason : null
+  await query(
+    `INSERT INTO import_result (member_id, recog_misconfig_at, recog_misconfig_reason, updated_at)
+     SELECT $1, CASE WHEN $2::text IS NULL THEN 0 ELSE (EXTRACT(EPOCH FROM now()) * 1000)::bigint END, $2, now()
+      WHERE EXISTS (SELECT 1 FROM portal_tokens WHERE member_id = $1)
+     ON CONFLICT (member_id) DO UPDATE SET
+       recog_misconfig_at = CASE WHEN $2::text IS NULL THEN 0
+         ELSE (EXTRACT(EPOCH FROM now()) * 1000)::bigint END,
+       recog_misconfig_reason = $2,
+       updated_at = now()`,
+    [memberId, r]
+  )
+}
+
+/** Прочитать persistent-признак misconfig карты распознавания (#595), или null если чисто. */
+export async function getRecognitionMisconfig(
+  query: QueryFn,
+  memberId: string
+): Promise<{ at: number, reason: string } | null> {
+  const rows = await query(
+    `SELECT recog_misconfig_at, recog_misconfig_reason FROM import_result WHERE member_id = $1`,
+    [memberId]
+  )
+  const row = rows[0]
+  if (!row) return null
+  const at = Number(row.recog_misconfig_at) || 0
+  const reason = typeof row.recog_misconfig_reason === 'string' ? row.recog_misconfig_reason : ''
+  if (at <= 0 || reason === '') return null
+  return { at, reason }
+}
+
 /** Read the last import run for a portal, or null if none has been recorded yet. */
 export async function getImportResult(query: QueryFn, memberId: string): Promise<ImportRunSummary | null> {
   const rows = await query(

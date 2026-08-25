@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildReadiness, isFullyReady, type ReadinessSnapshot } from '~/utils/setupReadiness'
+import { buildReadiness, isFullyReady, parseMisconfigReason, type ReadinessSnapshot } from '~/utils/setupReadiness'
 import { parsePortalSettings } from '~/utils/settings'
 import { PAYMENT_SP_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY } from '~/config/distributionSp'
 
@@ -136,6 +136,31 @@ describe('buildReadiness', () => {
     expect(many(22)).toBe('22 шаблона')
   })
 
+  it('карта распознавания краснеет от misconfig, даже когда шаблоны есть (#595)', () => {
+    // Портал с рабочей И сломанной матрицей: шаблоны есть (по счётчику было бы зелено), но
+    // последний прогон упёрся в отвергнутое порталом поле — строка обязана стать красной.
+    const settings = withSp()
+    settings.recognition.matrices = [{ mask: 'dddd', kind: 'invoice-number', note: '' }]
+    const green = item(buildReadiness(snap({ settings })), 'recognition')
+    expect(green.ok).toBe(true)
+
+    const red = item(buildReadiness(snap({ settings, recognitionMisconfig: { slot: 'deal-field' } })), 'recognition')
+    expect(red.ok).toBe(false)
+    expect(red.detail).toBe('настройка отвергнута порталом')
+    // Конкретика: подсказка называет ИМЕННО поле сделки, а не «что-то в карте».
+    expect(red.hint).toContain('поля сделки')
+    expect(red.hint).toContain('Карта распознавания')
+  })
+
+  it('подсказка misconfig зависит от слота, неизвестный слот — общий текст (#595)', () => {
+    const settings = withSp()
+    const hint = (slot: string) =>
+      item(buildReadiness(snap({ settings, recognitionMisconfig: { slot } })), 'recognition').hint
+    expect(hint('smart-id')).toContain('смарт-процесс')
+    expect(hint('smart-field')).toContain('имя его поля')
+    expect(hint('что-то-новое')).toContain('поля и смарт-процесс')
+  })
+
   it('is fully ready only when every line is ok', () => {
     const settings = withSp()
     settings.chat.dialogId = 'chat123'
@@ -260,5 +285,19 @@ describe('#576 пауза автоопроса на экране готовно�
     const item = poll(base({ pollEnabled: false, pausedAccounts: 2 }))
     expect(item.ok).toBe(false)
     expect(item.hint).toContain('владельцу приложения')
+  })
+})
+
+describe('parseMisconfigReason (#595)', () => {
+  it('выделяет слот из структурированной причины what|param|detail', () => {
+    expect(parseMisconfigReason('deal-field|field|Field UF_CRM_X not found')).toEqual({ slot: 'deal-field' })
+    expect(parseMisconfigReason('smart-id|entity|Смарт-процесс не найден')).toEqual({ slot: 'smart-id' })
+  })
+
+  it('пусто/битьё → null (английский detail в UI не едет)', () => {
+    expect(parseMisconfigReason(null)).toBeNull()
+    expect(parseMisconfigReason(undefined)).toBeNull()
+    expect(parseMisconfigReason('')).toBeNull()
+    expect(parseMisconfigReason('|field|detail')).toBeNull()
   })
 })

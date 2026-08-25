@@ -24,6 +24,9 @@ export interface SetupStatus {
   /** Компания «моя» с расчётным счётом (#493). `undefined` — сервер не ответил на этот вопрос
    *  (старая сборка или отказ REST); строка тогда не рисуется вовсе. */
   myCompany?: 'ok' | 'no-company' | 'no-account'
+  /** Последний прогон упёрся в неверную карту распознавания (#595). `undefined` — наблюдения нет
+   *  (или старый сервер); строка карты тогда зависит только от числа шаблонов. */
+  recognitionMisconfig?: { slot: string }
 }
 
 const DEFAULTS: SetupStatus = {
@@ -83,7 +86,12 @@ export function useSetupStatus() {
         pollEnabled: res?.pollEnabled === true,
         pollIntervalMin: Number(res?.pollIntervalMin) || DEFAULTS.pollIntervalMin,
         lastRunMs: typeof res?.lastRunMs === 'number' ? res.lastRunMs : null,
-        ...(res?.myCompany ? { myCompany: res.myCompany } : {})
+        ...(res?.myCompany ? { myCompany: res.myCompany } : {}),
+        // Признак misconfig карты распознавания (#595): переносим только валидный слот-объект,
+        // иначе кривой ответ сервера зажёг бы красную строку на исправном портале.
+        ...(res?.recognitionMisconfig && typeof res.recognitionMisconfig.slot === 'string' && res.recognitionMisconfig.slot !== ''
+          ? { recognitionMisconfig: { slot: res.recognitionMisconfig.slot } }
+          : {})
       }
     } catch (e) {
       error.value = frameFetchError(e, 'Не удалось загрузить состояние настройки')

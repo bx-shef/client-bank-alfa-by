@@ -41,10 +41,16 @@ const items = computed(() => buildReadiness({
   settings: chatSettings.settings,
   connectedAccounts: setup.status.value.connectedAccounts,
   pendingAccounts: setup.status.value.pendingAccounts,
+  // ⚠ Эти два поля #597 починил в composable, но в ЭТОТ вызов их не передали — и `buildReadiness`
+  // читал 0 по дефолту: строка банка не показывала «N не работают» (#504), а строка опроса — ветку
+  // «все на паузе» (#576). Единственный вызывающий — здесь, поэтому чинится ровно тут.
+  unhealthyAccounts: setup.status.value.unhealthyAccounts,
+  pausedAccounts: setup.status.value.pausedAccounts,
   myCompany: setup.status.value.myCompany,
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
-  lastRunMs: setup.status.value.lastRunMs
+  lastRunMs: setup.status.value.lastRunMs,
+  recognitionMisconfig: setup.status.value.recognitionMisconfig
 }))
 
 const ready = computed(() => isFullyReady(items.value))

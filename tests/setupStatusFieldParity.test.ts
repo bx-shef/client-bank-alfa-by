@@ -83,7 +83,11 @@ describe('поля /api/setup-status доезжают до клиента', () =
     // ⚠ Поимённо, а не только «список сошёлся»: у каждого своя жертва на экране, и регрессия
     // любого из трёх выглядит как «функция просто не работает», а не как ошибка.
     const mapping = clientMapping()
-    for (const field of ['pausedAccounts', 'unhealthyAccounts', 'myCompany']) {
+    // ⚠ `recognitionMisconfig` (#595) и `myCompany` уходят spread-условием (`...(x ? {…} : {})`),
+    // а `serverFields()` его регуляркой не ловит (пробел перед `?`) — то есть автоматическая
+    // половина гарда их не видит. Поэтому держим их ПОИМЕННО здесь: иначе поле, ради переноса
+    // которого гард и написан, осталось бы без охраны.
+    for (const field of ['pausedAccounts', 'unhealthyAccounts', 'myCompany', 'recognitionMisconfig']) {
       expect(mapping, `клиент снова потерял ${field}`).toContain(field)
     }
   })
