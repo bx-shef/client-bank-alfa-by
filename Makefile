@@ -1,6 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check self-update help \
-        gw-stop gw-start compose-update alfa-page-probe reap-status reap-off
+        gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
+        bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -200,6 +201,53 @@ help:
 	@awk '/^## /{d=substr($$0,4)} \
 	      /^[A-Za-z0-9_][A-Za-z0-9_.-]*:/{if(d!=""){printf "  %-16s %s\n", substr($$1,1,length($$1)-1), d; d=""}}' \
 	      $(MAKEFILE_LIST)
+
+# ─── Таргет «виртуальная машина Битрикс24» (docs/DEPLOY_BITRIXVM.md) ─────────
+# Эти цели нужны только там, где приложение стоит РЯДОМ С ПОРТАЛОМ на ВМ клиента:
+# TLS терминирует nginx машины, обновления приносит systemd-таймер по опросу git.
+# На основном проде (nginx-proxy + Watchtower) они не применяются.
+
+## Доедет ли запрос с домена до приложения: конфиг, контейнер, статика, таймер
+#
+#   make bitrix-check                       # домен из ./.env
+#   make bitrix-check DOMAIN=bank-app.example.by
+#
+# ⚠ Работает и ДО появления домена — ходит по Host-заголовку на 127.0.0.1.
+bitrix-check:
+	@t=$$(mktemp /tmp/bitrix-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/bitrixvm-check.sh" \
+	  && bash "$$t" "$${DOMAIN:-$(call env-value,DOMAIN)}"
+
+## Состояние автообновления: включён ли таймер, какой коммит развёрнут, последний прогон
+deploy-status:
+	@systemctl status bank-app-deploy.timer --no-pager -l | head -8; \
+	 echo "[make] развёрнутый коммит: $$(cat /var/lib/bank-app-deploy/deployed_sha 2>/dev/null || echo '—')"; \
+	 echo "[make] последние строки прогона:"; journalctl -u bank-app-deploy -n 15 --no-pager
+
+## Проверить обновления ПРЯМО СЕЙЧАС, не дожидаясь тика таймера
+deploy-now:
+	@systemctl start bank-app-deploy.service && journalctl -u bank-app-deploy -n 30 --no-pager
+
+## Приостановить автообновление (работающее приложение не трогает)
+#
+# ⚠ Пауза переживает перезагрузку — это осознанно: её включают, когда обновляться сейчас
+# нельзя, и «само включилось ночью» было бы худшим поведением. Не забыть про `deploy-resume`.
+deploy-pause:
+	@systemctl disable --now bank-app-deploy.timer \
+	  && echo "[make] автообновление приостановлено. Вернуть: make deploy-resume"
+
+## Вернуть автообновление после паузы
+deploy-resume:
+	@systemctl enable --now bank-app-deploy.timer && echo "[make] автообновление включено"
+
+## Оффлайн-копия образов работающих контейнеров (на случай пропажи реестра)
+#
+# ⚠ Копируются образы ЗАПУЩЕННЫХ контейнеров, а не то, что записано в .env: они доказали
+# работоспособность, а тег в файле мог уехать вперёд. Восстановление — docker load -i.
+offline-snapshot:
+	@t=$$(mktemp /tmp/snapshot.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/bank-offline-snapshot.sh" \
+	  && bash "$$t" "$$(pwd)"
 
 ## Что происходит с опросом банков: успехи, падения, продление токенов (#522)
 #
