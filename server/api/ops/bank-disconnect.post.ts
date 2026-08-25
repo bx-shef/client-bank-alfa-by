@@ -16,6 +16,7 @@ import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
 import { buildBankDisconnectNotice } from '../../../app/utils/bankDisconnectNotice'
 import { postChatMessage } from '../../utils/chatNotifyWrite'
 import { portalHash } from '../../utils/telemetryAttributes'
+import { getSubscriptionEndedAt } from '../../utils/tokenStore'
 import { dbQuery } from '../../db/client'
 import { useServerLogger } from '../../utils/serverLogger'
 
@@ -35,6 +36,9 @@ export default defineEventHandler(async (event) => {
 
   const res = await handleOpsBankDisconnect({
     now: Date.now,
+    // #614: портал с мёртвой подпиской отключаем, даже если банковское подключение живо — сам
+    // клиент этого сделать не может, приложение открывается внутри неработающего Битрикса.
+    subscriptionEndedAt: memberId => getSubscriptionEndedAt(dbQuery, memberId),
     getRow: id => getBankAccountInfoById(dbQuery, id),
     remove: (memberId, id, key) => deleteBankTokenById(dbQuery, memberId, id, key),
     // Пометка клиенту — best-effort. Свой try/catch: отказ чата не должен превращаться в 500 после

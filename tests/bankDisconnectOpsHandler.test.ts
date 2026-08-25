@@ -67,3 +67,57 @@ describe('handleOpsBankDisconnect (#599)', () => {
     expect(getRow).not.toHaveBeenCalled()
   })
 })
+
+describe('портал с мёртвой подпиской (#614)', () => {
+  // ⚠ Гейт «только нерабочее» здесь НЕДОСТАТОЧЕН: у портала с истёкшей подпиской банковское
+  // подключение бывает совершенно живым — сломана оплата Битрикса, а не доступ к счёту. Без этой
+  // ветки оператор не смог бы отключить ровно тот случай, ради которого раздел и заведён: клиент
+  // до приложения не доберётся (оно открывается ВНУТРИ неработающего Битрикса) и сам не отключит.
+
+  /** Подключение, у которого с БАНКОМ всё в порядке. */
+  const liveRow = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
+    id: 9, memberId: 'M2', provider: 'alfa-by', accountKey: 'BY02',
+    connectedAt: NOW - 60_000, expiresAt: NOW + 3_600_000, hasRefresh: true, lastAttemptAt: 0,
+    consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
+  })
+
+  it('живое подключение + мёртвая подписка ⇒ отключаем, причина НЕ банковская', async () => {
+    const { d, notified } = deps({
+      getRow: async () => liveRow(),
+      subscriptionEndedAt: async () => NOW - 5 * DAY
+    })
+    const r = await handleOpsBankDisconnect(d, 9)
+    expect(r.status).toBe(200)
+    // ⚠ Именно `subscription-ended`: сказать «банк перестал продлевать» значило бы отправить
+    // бухгалтера в банк разбираться с тем, что чинится оплатой подписки.
+    expect(notified).toEqual(['9|subscription-ended'])
+  })
+
+  it('живое подключение + ЖИВАЯ подписка ⇒ по-прежнему 409', async () => {
+    // Главный инвариант всего гейта: импорт живого клиента из операторской не обрывается.
+    const remove = vi.fn(async () => 'removed' as const)
+    const { d } = deps({ getRow: async () => liveRow(), subscriptionEndedAt: async () => 0, remove })
+    const r = await handleOpsBankDisconnect(d, 9)
+    expect(r.status).toBe(409)
+    expect(remove, 'живое подключение не должно удаляться').not.toHaveBeenCalled()
+  })
+
+  it('без проводки проверки подписки ведёт себя как раньше', async () => {
+    // Зависимость необязательная: забыли прокинуть — гейт остаётся прежним, а не открывается.
+    const remove = vi.fn(async () => 'removed' as const)
+    const { d } = deps({ getRow: async () => liveRow(), remove })
+    const r = await handleOpsBankDisconnect(d, 9)
+    expect(r.status).toBe(409)
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('НЕРАБОЧЕЕ подключение банка не переклассифицируется в подписку', async () => {
+    // Причина банка приоритетнее: она точнее описывает, что чинить, и подписку даже не спрашиваем.
+    const subSpy = vi.fn(async () => NOW - 9 * DAY)
+    const { d, notified } = deps({ subscriptionEndedAt: subSpy })
+    const r = await handleOpsBankDisconnect(d, 7)
+    expect(r.status).toBe(200)
+    expect(notified).toEqual(['7|refresh-dead'])
+    expect(subSpy, 'лишний запрос в базу при уже известной причине').not.toHaveBeenCalled()
+  })
+})
