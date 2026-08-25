@@ -390,11 +390,13 @@ export function liveHandlerDeps(): HandlerDeps {
       allocateLog.info(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
     },
     // Per-op outcome — the one line an operation gets when it matched NOTHING (see the dep's doc
-    // in handlers.ts). The counterparty's account is the payload here on purpose: it is the exact
-    // value `findCompany` looks up in the portal's requisites, so it turns an opaque «unmatched»
-    // into «this number is not on any company in your CRM» — which is a thing the owner can act on.
-    // Follows docs/PRIVACY.md §Логи: account/docId/counterparty account are logged, AMOUNTS ARE
-    // NOT, and the purpose only behind the opt-in gate below.
+    // in handlers.ts). Follows docs/PRIVACY.md §Логи: by default this line carries NO account
+    // numbers — only docId, direction, currency, owner and counters; AMOUNTS ARE NEVER logged.
+    // Both account numbers (ours + counterparty) AND the purpose sit behind the STATEMENT_DEBUG_LOG
+    // opt-in (#617): json-file rotates by size, not age, so an IBAN once logged lingers for years.
+    // The «which counterparty account is not in CRM» diagnostic moved to the client error-chat
+    // message (it names the account to whoever adds the requisite); the opt-in re-reveals it for
+    // our own calibration runs.
     onOperation: (item, outcome, memberId) => {
       // Both the volume gate and the text live in `buildOpLogLine` — a pure function with an
       // executable test. Keeping them here made the gate verifiable only by reading the source,
