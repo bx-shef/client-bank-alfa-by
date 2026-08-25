@@ -702,8 +702,12 @@ onMounted(async () => {
            `ai-price-import` — это десктопная работа администратора, а не то, ради чего открывают
            приложение с телефона. Определяем через `useDevice()` b24ui (платформа
            `bitrix-mobile` из UA), а не через SDK. -->
+      <!-- ⚠ В режиме ЛАУНЧЕРА (#38) шапки нет вовсе: заголовок и кнопки «Загрузить выписку»/
+           «Настройки» относятся к РАБОЧЕМУ экрану, а он открыт слайдером поверх. На пусковой
+           странице они вели бы во второй фрейм того же приложения (удвоение опроса/подписок) и
+           путали бы — экран лаунчера это только «окно открыто, вот путь обратно». -->
       <template
-        v-if="!isBitrixMobile"
+        v-if="!isBitrixMobile && !isLauncher"
         #header
       >
         <B24DashboardNavbar
@@ -753,28 +757,37 @@ onMounted(async () => {
              Рабочий экран здесь НЕ поднимаем — он уже открыт слайдером поверх, и держать его в двух
              фреймах значило бы удвоить опрос статуса, чтение настроек и pull-подписку к порталу
              клиента. Кнопка нужна, чтобы был путь обратно после закрытия слайдера. -->
+        <!-- ⚠ Оформление по образцу InPortalGate-outside (#38): центрированный экран с заголовком
+             первого уровня и описанием. Это единственное, что видно на пусковой странице, поэтому
+             оно должно читаться как самостоятельный экран, а не как строчка над пустотой. -->
         <div
           v-if="launch === 'launcher'"
-          class="py-6 text-center"
+          class="mx-auto flex max-w-lg flex-col items-center justify-center gap-1 px-4 py-10 text-center"
           role="status"
           data-testid="app-launcher"
         >
-          <p class="mb-4 text-base text-(--ui-color-base-3)">
-            Выписки открываются отдельным окном поверх портала. Не открылось или вы его закрыли —
+          <ProseH1 class="mb-0 text-2xl">
+            Выписки открываются в отдельном окне
+          </ProseH1>
+          <ProseP accent="less">
+            Окно открывается поверх портала. Не открылось или вы его закрыли —
             нажмите «Открыть выписки».
-          </p>
-          <p
+          </ProseP>
+          <ProseP
             v-if="sliderFailed"
-            class="mb-4 text-sm text-(--ui-color-accent-main-alert)"
+            accent="less"
+            class="text-(--ui-color-accent-main-alert)"
           >
             Окно открыть не удалось. Попробуйте ещё раз или обновите страницу.
-          </p>
-          <B24Button
-            color="air-primary"
-            label="Открыть выписки"
-            data-testid="app-launcher-open"
-            @click="() => { void openMain() }"
-          />
+          </ProseP>
+          <div class="mt-1 flex flex-wrap items-center justify-center gap-2">
+            <B24Button
+              color="air-primary"
+              label="Открыть выписки"
+              data-testid="app-launcher-open"
+              @click="() => { void openMain() }"
+            />
+          </div>
         </div>
 
         <!-- Ручная загрузка в мобильном — ОТДЕЛЬНОЙ кнопкой в теле, а не в шапке: шапки там нет,
