@@ -35,31 +35,39 @@ export interface OpLogInput extends OpLogOutcome {
  * «печатать пустое». Пустая строка в `console.log` дала бы пустую строку в логе — мусор, который
  * занимает место ровно там, где мы его экономим.
  *
- * Следует `docs/PRIVACY.md` §Логи: счёт, docId и счёт контрагента логируются, СУММЫ НЕТ, а
- * назначение — только за опт-ин флагом.
+ * Следует `docs/PRIVACY.md` §Логи: по умолчанию в строке нет ФИНАНСОВЫХ ПДн — только `docId`,
+ * направление, валюта, владелец и счётчики; номера счетов ОБЕИХ сторон и назначение платежа
+ * раскрываются лишь под опт-ин флагом `STATEMENT_DEBUG_LOG` (#617). Суммы — нигде.
  */
 export function buildOpLogLine(
   item: StatementItem,
   outcome: OpLogInput,
   memberId: string,
   mode: OpLogMode,
-  revealPurpose: boolean
+  revealPii: boolean
 ): string | null {
   if (!shouldLogOperation(outcome, mode)) return null
   const owner = outcome.owner === 'client'
     ? 'company'
     : outcome.owner === 'my-company' ? 'my-company (fallback)' : 'NO OWNER'
-  // Назначение платежа — самый широкий неконтролируемый текст, который мы держим, и §Логи держит
-  // его вне лога. Но написать маску для нумерации, которую ни разу не видел, нельзя, поэтому оно
-  // доступно опт-ином — тем же порядком, что уровень error-лога крипто-шлюза (#460): включили на
-  // прогон, выключили обратно.
-  const purpose = revealPurpose ? ` purpose="${logSafe(item.purpose, MAX_LOGGED_PURPOSE)}"` : ''
+  // ⚠ ФИНАНСОВЫЕ ПДн — номера счетов обеих сторон и назначение — пишутся ТОЛЬКО под опт-ином (#617).
+  // json-file режет лог по ОБЪЁМУ, а не по сроку (десятки строк в сутки при потолке 50 МБ ⇒
+  // вытеснение через годы), поэтому попавший в лог IBAN лежит там годами — а для ПДн считают срок.
+  // Диагностику «какой счёт контрагента не нашёлся» несёт сообщение в чат ошибок КЛИЕНТА (оно и так
+  // называет счёт тому, кто заводит реквизит), а этот флаг раскрывает поля на калибровку — тем же
+  // порядком, что уровень error-лога крипто-шлюза (#460): включили на прогон, выключили обратно.
+  // ⚠ Наш номер счёта тоже IBAN и тоже опт-ин: по умолчанию он избыточен — какой счёт опрошен, уже
+  // печатает `[fetch]`.
+  const account = revealPii ? `${logSafe(item.account)}|${logSafe(item.docId)}` : logSafe(item.docId)
+  // ⚠ `← счёт контрагента` целиком под опт-ином: пустой префикс (без стрелки) в default-строке
+  // означает «счетов в логе нет», а не «счёт не указан» — последнее видно только под флагом.
+  const from = revealPii ? `← ${logSafe(item.counterparty.account) || 'счёт не указан'} ` : ''
+  // Назначение платежа — самый широкий неконтролируемый текст, который мы держим; под тем же флагом.
+  const purpose = revealPii ? ` purpose="${logSafe(item.purpose, MAX_LOGGED_PURPOSE)}"` : ''
   // ⚠ `currency` тоже через logSafe: у Альфы и Приора это СЫРОЙ проброс из JSON банка
   // (`row.currIso`/`tx.currency`, только trim), а не наш enum — в отличие от `direction`, который
   // нормализаторы вычисляют сами. Обойти это поле легко именно потому, что рядом стоит безопасный
   // сосед.
-  const op = `${logSafe(item.account)}|${logSafe(item.docId)}`
-  const from = logSafe(item.counterparty.account) || 'счёт не указан'
   // ⚠ Названо `intents`, а НЕ `recognized`, хотя поле зовётся так: в сводке прогона `recognized`
   // считает ОПЕРАЦИИ, у которых распознан хотя бы один номер, а здесь — сколько номеров распознано
   // в ЭТОЙ операции. Оператор, сверяющий строки лога со сводкой (ровно то, ради чего строка и
@@ -68,6 +76,6 @@ export function buildOpLogLine(
   const tail = `intents ${outcome.recognized}, activity ${outcome.activityId ?? '—'}`
   // ⚠ Маркер `[op]` печатает КАНАЛ логгера (#529), здесь его быть не должно — иначе строка выйдет
   // как `[op] INFO: [op] portal …`.
-  return `portal ${memberId}, op ${op}: ${item.direction} ${logSafe(item.currency, 8)} `
-    + `← ${from} → ${owner}, ${tail}${purpose}`
+  return `portal ${memberId}, op ${account}: ${item.direction} ${logSafe(item.currency, 8)} `
+    + `${from}→ ${owner}, ${tail}${purpose}`
 }

@@ -135,10 +135,11 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
  *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
-/** Reveal the PAYMENT PURPOSE in the `[op]` log line (`STATEMENT_DEBUG_LOG=1`; default OFF).
- *  Read once at start — flipping it means a restart, which is intended: this is a deliberate,
- *  announced loosening of docs/PRIVACY.md §Логи for a calibration run, not a runtime knob.
- *  Everything else in `[op]` is logged unconditionally; only this field is gated. */
+/** Reveal FINANCIAL PII in the `[op]` log line — both account numbers (ours + counterparty) and
+ *  the payment purpose (`STATEMENT_DEBUG_LOG=1`; default OFF, #617). Read once at start — flipping
+ *  it means a restart, which is intended: this is a deliberate, announced loosening of
+ *  docs/PRIVACY.md §Логи for a calibration run, not a runtime knob. By default `[op]` carries NO
+ *  account numbers: json-file rotates by size, not age, so an IBAN once logged sits there for years. */
 const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
 /** How verbose the per-operation log is (#498): `notable` (default) | `all` | `off`. Read once at
  *  start, exactly like the flag above — flipping it means a restart. The default prints only the
@@ -389,11 +390,13 @@ export function liveHandlerDeps(): HandlerDeps {
       allocateLog.info(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
     },
     // Per-op outcome — the one line an operation gets when it matched NOTHING (see the dep's doc
-    // in handlers.ts). The counterparty's account is the payload here on purpose: it is the exact
-    // value `findCompany` looks up in the portal's requisites, so it turns an opaque «unmatched»
-    // into «this number is not on any company in your CRM» — which is a thing the owner can act on.
-    // Follows docs/PRIVACY.md §Логи: account/docId/counterparty account are logged, AMOUNTS ARE
-    // NOT, and the purpose only behind the opt-in gate below.
+    // in handlers.ts). Follows docs/PRIVACY.md §Логи: by default this line carries NO account
+    // numbers — only docId, direction, currency, owner and counters; AMOUNTS ARE NEVER logged.
+    // Both account numbers (ours + counterparty) AND the purpose sit behind the STATEMENT_DEBUG_LOG
+    // opt-in (#617): json-file rotates by size, not age, so an IBAN once logged lingers for years.
+    // The «which counterparty account is not in CRM» diagnostic moved to the client error-chat
+    // message (it names the account to whoever adds the requisite); the opt-in re-reveals it for
+    // our own calibration runs.
     onOperation: (item, outcome, memberId) => {
       // Both the volume gate and the text live in `buildOpLogLine` — a pure function with an
       // executable test. Keeping them here made the gate verifiable only by reading the source,
