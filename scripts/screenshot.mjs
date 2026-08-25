@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { resolveChromium } from './lib/chromium.mjs'
 import { startStaticServer } from './lib/staticServer.mjs'
+import { unrollScrollContainers } from './lib/unrollScroll.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PUBLIC_DIR = join(ROOT, '.output', 'public')
@@ -56,6 +57,17 @@ async function run() {
           await page.goto(`http://127.0.0.1:${port}${route}`, { waitUntil: 'networkidle', timeout: 15_000 })
           const slug = route === '/' ? 'index' : route.replace(/\W+/g, '-').replace(/^-|-$/g, '')
           const file = join(OUT_DIR, `${slug}.${vp.name}.${theme}.png`)
+          // ⚠ Та же раскатка, что в регресс-тесте (#630), и по той же причине, что `reducedMotion`
+          // выше: расходясь с ним, ручной прогон перестаёт что-либо говорить о том, что проверит
+          // CI. Без неё снимок настроек отдавал 1280×900 — первый экран, — и чтобы увидеть блок
+          // сверки счетов, приходилось писать одноразовый скрипт со снимком по локатору.
+          const unrolled = await page.evaluate(unrollScrollContainers)
+          if (unrolled.left || unrolled.clipped.length) {
+            // Предупреждаем, но снимок делаем: у ручного инструмента задача — показать, что есть.
+            // Ронять его на этом значило бы отобрать зрение ровно тогда, когда что-то сломалось.
+            console.warn(`\u26a0 ${slug}: страница снята НЕ ЦЕЛИКОМ `
+              + `(непрокрученных ${unrolled.left}, обрезанных ${unrolled.clipped.length})`)
+          }
           await page.screenshot({ path: file, fullPage: true })
           console.log(`✓ ${file.replace(ROOT, '.')}`)
         }
