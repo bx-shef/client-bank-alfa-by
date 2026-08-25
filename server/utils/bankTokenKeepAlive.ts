@@ -30,6 +30,7 @@ import type { BankProviderId } from '../../app/types/statement'
 import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 import { sanitizeForLog } from './logSanitize'
+import { portalHash } from './telemetryAttributes'
 
 const HOUR_MS = 3_600_000
 
@@ -285,8 +286,41 @@ export const MAX_NAMED_IN_LOG = 10
 
 /** «a/1, b/2 … +N ещё» — a bounded, sanitised rendering of a ref list for one log line. */
 function nameRefs(refs: readonly BankAccountRef[]): string {
-  const shown = refs.slice(0, MAX_NAMED_IN_LOG).map(r => `${r.provider}/${logSafeKey(r.accountKey)}`).join(', ')
+  // ⚠ ПОРТАЛ В ИМЕНИ ОБЯЗАТЕЛЕН, и это находка живого прогона 2026-08-24. Строка выглядела так:
+  // `reconnect: alfa-by/BY09…0000, alfa-by/BY09…0000` — один и тот же счёт дважды. Прочитать это
+  // как «две строки РАЗНЫХ порталов» было нельзя: первичный ключ `bank_tokens` — тройка
+  // (member_id, provider, account_key), поэтому одинаковые имена означают разные `member_id`, но
+  // в сообщении их не было. Владелец шёл переподключать «Альфу», не зная, что она подключена
+  // дважды с разных порталов.
+  //
+  // ⚠ Хеш, а не сырой `member_id`: канал продления печатает идентификаторы открыто (#525), но
+  // здесь достаточно РАЗЛИЧАТЬ строки, а не называть портал, и хеш это и делает.
+  const shown = refs.slice(0, MAX_NAMED_IN_LOG)
+    .map(r => `${portalHash(r.memberId)}:${r.provider}/${logSafeKey(r.accountKey)}`).join(', ')
   return refs.length > MAX_NAMED_IN_LOG ? `${shown} (+${refs.length - MAX_NAMED_IN_LOG} more)` : shown
+}
+
+/**
+ * Счета, подключённые СРАЗУ С НЕСКОЛЬКИХ порталов.
+ *
+ * ⚠ Это не учёт, а диагноз. Лок обновления берётся по `bankRefreshLockKey(memberId, …)`, то есть
+ * ПЕР-ПОРТАЛЬНО: два портала с одним счётом берут РАЗНЫЕ локи и идут в банк параллельно. Альфа
+ * ротирует refresh при каждом обновлении, поэтому второй предъявляет уже сожжённый токен. Внутри
+ * одного портала эту гонку закрывает лок по гранту (#23); между порталами координации нет и быть
+ * не может — это разные согласия.
+ *
+ * ⚠ Симптом снаружи — «подключение умирает каждую ночь без причины», и переподключение лечит его
+ * ровно до следующего обновления. Заметить это по логу было нельзя, пока в нём не было портала.
+ */
+export function accountsOnManyPortals(rows: readonly BankAccountInfo[]): string[] {
+  const byAccount = new Map<string, Set<string>>()
+  for (const r of rows) {
+    const key = `${r.provider}/${r.accountKey}`
+    const set = byAccount.get(key) ?? new Set<string>()
+    set.add(r.memberId)
+    byAccount.set(key, set)
+  }
+  return [...byAccount.entries()].filter(([, portals]) => portals.size > 1).map(([key]) => key)
 }
 
 /** Account keys can carry an IBAN; clamp + strip before logging (defence-in-depth, PRIVACY §Логи). */
@@ -345,6 +379,14 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
   // это отражать — иначе владелец пойдёт переподключать то, что вот-вот воскреснет само.
   if (expired.length > 0) {
     deps.warn?.(`${expired.length} connection(s) past their assumed refresh lifetime — retried rarely, the bank has the final say; if the retry keeps failing, reconnect: ${nameRefs(expired)}`)
+  }
+  // ⚠ Отдельной строкой и ГРОМЧЕ остальных: пока счёт подключён с двух порталов, переподключение
+  // лечит симптом до следующего обновления, и владелец ходит в интернет-банк по кругу.
+  const shared = accountsOnManyPortals(rows)
+  if (shared.length > 0) {
+    deps.warn?.(`${shared.length} account(s) connected from MORE THAN ONE portal: ${shared.map(logSafeKey).join(', ')} — `
+      + `refresh is locked per portal, so they refresh in parallel and burn each other's rotated token. `
+      + `Reconnecting only helps until the next refresh: disconnect the account on the portal that should not have it.`)
   }
   deps.log?.(`selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
   return s
