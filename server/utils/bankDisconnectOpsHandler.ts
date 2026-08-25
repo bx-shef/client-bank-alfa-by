@@ -24,6 +24,15 @@ export interface BankDisconnectOpsDeps {
   remove: (memberId: string, id: number, expectedAccountKey: string) => Promise<'removed' | 'gone' | 'stale'>
   /** Пометка в чат ошибок портала. Best-effort: НЕ бросает и не влияет на исход. */
   notify: (row: BankAccountInfo, reason: BankDisconnectReason) => Promise<void>
+  /**
+   * Когда подписка портала на REST ПЕРВЫЙ раз отказала (#614); `0` — не отказывала.
+   *
+   * ⚠ Нужна, потому что гейт «только нерабочее» здесь НЕДОСТАТОЧЕН. У портала с мёртвой подпиской
+   * банковское подключение может быть совершенно ЖИВЫМ — сломана оплата Битрикса, а не доступ к
+   * счёту. Без этой ветки оператор не смог бы отключить ровно тот случай, ради которого раздел и
+   * заведён: клиент до приложения не доберётся (оно открывается внутри Битрикса) и сам не отключит.
+   */
+  subscriptionEndedAt?: (memberId: string) => Promise<number>
 }
 
 export interface BankDisconnectOpsResult {
@@ -39,8 +48,11 @@ export async function handleOpsBankDisconnect(deps: BankDisconnectOpsDeps, rawId
   const row = await deps.getRow(id)
   if (!row) return { status: 404, body: { error: 'подключение не найдено — обновите список' } }
 
-  // ⚠ Только НЕРАБОЧЕЕ. Живое подключение клиента из операторской не отключаем.
-  const reason = bankDisconnectReason(row, deps.now())
+  // ⚠ Только НЕРАБОЧЕЕ — ЛИБО портал с мёртвой подпиской. Живое подключение живого клиента из
+  // операторской не отключаем никогда: это был бы способ тихо оборвать импорт.
+  const bankReason = bankDisconnectReason(row, deps.now())
+  const subEnded = bankReason ? 0 : ((await deps.subscriptionEndedAt?.(row.memberId)) ?? 0)
+  const reason: BankDisconnectReason | null = bankReason ?? (subEnded > 0 ? 'subscription-ended' : null)
   if (!reason) {
     return { status: 409, body: { error: 'подключение сейчас рабочее — из операторской его не отключаем' } }
   }

@@ -18,7 +18,7 @@ import { consentExpired, BANK_REFRESH_TTL_SEC, BANK_REFRESH_TTL_MEASURED, type C
  *   `refresh-dead`    — измеренный срok обновления вышел, банк не примет наш токен (Альфа);
  *   `no-refresh`      — банк не выдал токен продления вовсе.
  */
-export type BankDisconnectReason = 'consent-expired' | 'refresh-dead' | 'no-refresh'
+export type BankDisconnectReason = 'consent-expired' | 'refresh-dead' | 'no-refresh' | 'subscription-ended'
 
 /**
  * Классифицировать причину смерти подключения, или `null`, если оно ЖИВО.
@@ -42,7 +42,15 @@ export function bankDisconnectReason(c: ConnectionLike, nowMs: number): BankDisc
 const REASON_TEXT: Record<BankDisconnectReason, string> = {
   'consent-expired': 'истёк срок разрешения на доступ к счёту',
   'refresh-dead': 'банк перестал продлевать доступ к счёту',
-  'no-refresh': 'банк не продлил разрешение на доступ к счёту'
+  'no-refresh': 'банк не продлил разрешение на доступ к счёту',
+  // ⚠ Причина не в БАНКЕ, и текст обязан это отражать: с банком всё в порядке, перестал отвечать
+  // сам Битрикс. Сказать тут «банк перестал продлевать» значило бы отправить бухгалтера в банк
+  // разбираться с тем, что чинится оплатой подписки.
+  //
+  // ⚠ Сообщение почти наверняка НЕ ДОЙДЁТ: чат — это тот же REST, который перестал отвечать.
+  // Оставлено намеренно — подписку могли оплатить в промежутке, и тогда оно доедет; а если нет,
+  // отправка best-effort и на исход отключения не влияет.
+  'subscription-ended': 'подписка Bitrix24 перестала отвечать, импорт остановлен'
 }
 
 /**

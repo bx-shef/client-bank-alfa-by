@@ -15,6 +15,7 @@
 //
 // Чистое ядро: вход — уже загруженные строки, выход — счётчики. Ни I/O, ни расшифровки.
 
+import { deadDays, SUBSCRIPTION_CUTOFF_DAYS } from './portalSubscription'
 import type { BankProviderId } from '~/types/statement'
 import { connectionHealth, NEEDS_HUMAN_HEALTH, needsHumanHealth, type BankConnectionHealth } from '~/utils/bankTokenLifetime'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
@@ -56,6 +57,26 @@ export interface BankAttentionConnection {
   deadDays: number | null
 }
 
+/**
+ * Подключение портала, у которого истекла ПОДПИСКА на REST Bitrix24 (#614).
+ *
+ * ⚠ Отдельный список, а не ещё одно состояние в `attentionConnections`, и это не формальность.
+ * Там причина в БАНКЕ: подключение мертво, чинится входом владельца счёта в интернет-банк. Здесь
+ * банковское подключение может быть совершенно ЖИВЫМ — сломана оплата Битрикса. Свалив их в одну
+ * кучу, мы отправили бы оператора говорить клиенту не то.
+ */
+export interface SubscriptionDeadConnection {
+  /** Opaque id строки — для действия «Отключить». */
+  id: number
+  /** Необратимая метка портала. */
+  portalHash: string
+  provider: BankProviderId
+  /** Сколько ДНЕЙ портал не отвечает по подписке. */
+  deadDays: number
+  /** Состояние самого банковского подключения — оно может быть в полном порядке. */
+  health: BankConnectionHealth
+}
+
 /** Сводка по одному состоянию: сколько подключений и на скольких порталах. */
 export interface HealthBucket {
   connections: number
@@ -90,6 +111,16 @@ export interface BankHealthOverview {
    * действий, а не сырые id/member_id в теле ответа.
    */
   attentionConnections?: BankAttentionConnection[]
+  /**
+   * Подключения порталов с истёкшей подпиской на REST (#614).
+   *
+   * ⚠ Живёт здесь, а не в приложении, по ЖЁСТКОЙ причине: приложение открывается ВНУТРИ Битрикса,
+   * и при мёртвой подписке клиент до интерфейса не доберётся — значит отключить сам не может. Если
+   * этого нет на экране оператора, этого нет нигде.
+   *
+   * ⚠ Как и соседи, поле ОТСУТСТВУЕТ без хешера (fail-safe).
+   */
+  subscriptionDead?: SubscriptionDeadConnection[]
 }
 
 function emptyBucket(): HealthBucket {
@@ -110,7 +141,10 @@ function emptyBucket(): HealthBucket {
 export function summarizeBankHealth(
   rows: readonly BankHealthRow[],
   nowMs: number,
-  hashPortal?: (memberId: string) => string
+  hashPortal?: (memberId: string) => string,
+  /** `member_id` → когда подписка на REST ПЕРВЫЙ раз отказала (#614). Необязательна: без неё
+   *  раздел просто пуст, а не сломан. */
+  subscriptionEndedAt?: ReadonlyMap<string, number>
 ): BankHealthOverview {
   const byHealth = {
     'ok': emptyBucket(),
@@ -124,6 +158,7 @@ export function summarizeBankHealth(
   const allPortals = new Set<string>()
   const attention = new Set<string>()
   const attentionConnections: BankAttentionConnection[] = []
+  const subscriptionDead: SubscriptionDeadConnection[] = []
   const pending = emptyBucket()
 
   for (const row of rows) {
@@ -138,6 +173,19 @@ export function summarizeBankHealth(
     const set = portalsBy.get(health) ?? new Set<string>()
     set.add(row.memberId)
     portalsBy.set(health, set)
+    // Подписка портала мертва — банковское подключение при этом может быть живым (#614).
+    const subEnded = subscriptionEndedAt?.get(row.memberId) ?? 0
+    if (hashPortal && subEnded > 0) {
+      subscriptionDead.push({
+        id: row.id,
+        portalHash: hashPortal(row.memberId),
+        provider: row.provider,
+        // ⚠ Тем же `deadDays`, что и автоотключение (#614): разойдись правило — оператор увидит
+        // одно число, а отключение сработает по другому.
+        deadDays: deadDays(subEnded, nowMs),
+        health
+      })
+    }
     if (needsHumanHealth(health)) {
       attention.add(row.memberId)
       // Поштучный список для ручного отключения — только с хешером (иначе сырой id/портал наружу).
@@ -171,6 +219,11 @@ export function summarizeBankHealth(
     ...(hashPortal
       ? { attentionConnections: attentionConnections.sort((a, b) =>
           a.health.localeCompare(b.health) || a.portalHash.localeCompare(b.portalHash) || a.id - b.id) }
+      : {}),
+    // Сначала те, кто молчит ДОЛЬШЕ: у них ближе автоотключение, и посмотреть на них надо раньше.
+    ...(hashPortal && subscriptionDead.length > 0
+      ? { subscriptionDead: subscriptionDead.sort((a, b) =>
+          b.deadDays - a.deadDays || a.portalHash.localeCompare(b.portalHash) || a.id - b.id) }
       : {})
   }
 }
@@ -205,6 +258,17 @@ export const PREVIEW_BANK_HEALTH: BankHealthOverview = {
     { id: 101, portalHash: '3f1a9c0b7e42', provider: 'prior-by', health: 'no-refresh', deadDays: null },
     { id: 102, portalHash: 'c07d5b6142ae', provider: 'alfa-by', health: 'expired', deadDays: 42 },
     { id: 103, portalHash: 'c07d5b6142ae', provider: 'prior-by', health: 'expired', deadDays: 12 }
+  ],
+  // ⚠ Фикстура обязана нести и этот раздел (#614): без него визуальный эталон задокументировал бы
+  // ПУСТУЮ секцию, то есть закрепил бы её отсутствие как норму. Ровно так и пропускают регрессии в
+  // блоках, которые видно только при редком состоянии.
+  //
+  // ⚠ Состояние банка здесь `ok` НАМЕРЕННО: весь смысл раздела в том, что подключение к банку
+  // живо, а сломана оплата Битрикса. Поставь сюда `expired` — и фикстура описывала бы случай,
+  // который и так виден в списке выше.
+  subscriptionDead: [
+    { id: 104, portalHash: '9b2e4477a013', provider: 'alfa-by', deadDays: 2, health: 'ok' },
+    { id: 105, portalHash: '9b2e4477a013', provider: 'prior-by', deadDays: 2, health: 'ok' }
   ]
 }
 
@@ -296,4 +360,32 @@ export function attentionHeadline(o: BankHealthOverview): string {
   if (!o.needAttention) return 'Все подключения живы.'
   const word = pluralRu(o.needAttention, ['портал требует', 'портала требуют', 'порталов требуют'])
   return `${o.needAttention} ${word} человека — владельцу счёта нужно заново войти в интернет-банк.`
+}
+
+/**
+ * Подписи строк «портал не оплатил подписку» (#614).
+ *
+ * ⚠ Формулировка отличается от банковской НАМЕРЕННО. Там «мёртво N дней» — про доступ к счёту, и
+ * чинится это входом владельца счёта в интернет-банк. Здесь «не отвечает N дней» — про Битрикс, и
+ * чинится оплатой. Одинаковая подпись отправила бы оператора говорить клиенту не то.
+ *
+ * ⚠ Показываем, сколько осталось до автоотключения: оператор должен видеть не только состояние, но
+ * и то, что произойдёт само и когда. Иначе он либо отключит раньше времени, либо будет думать, что
+ * висеть это может вечно.
+ */
+export function subscriptionRowViews(o: BankHealthOverview): BankAttentionRowView[] {
+  return (o.subscriptionDead ?? []).map((c) => {
+    const bank = BANK_LABELS[c.provider] ?? c.provider
+    const days = `${c.deadDays} ${pluralRu(c.deadDays, ['день', 'дня', 'дней'])}`
+    const left = SUBSCRIPTION_CUTOFF_DAYS - c.deadDays
+    const tail = left > 0
+      ? `отключим через ${left} ${pluralRu(left, ['день', 'дня', 'дней'])}`
+      : 'отключение уже наступило'
+    return {
+      id: c.id,
+      portalHash: c.portalHash,
+      health: c.health,
+      label: `${bank} · портал ${c.portalHash} · не отвечает ${days} · ${tail}`
+    }
+  })
 }

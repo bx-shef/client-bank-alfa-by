@@ -341,3 +341,15 @@ export async function selectSubscriptionEnded(
     }))
     .filter(r => r.memberId !== '')
 }
+
+/** Когда подписка КОНКРЕТНОГО портала отказала впервые; `0` — не отказывала (#614).
+ *
+ *  ⚠ Точечный запрос, а не поиск в общем списке: проверка адресная, и вытягивать ради неё сотню
+ *  чужих строк значило бы платить за неё чужим объёмом при каждом отключении. */
+export async function getSubscriptionEndedAt(query: QueryFn, memberId: string): Promise<number> {
+  const rows = await query(
+    `SELECT subscription_ended_at FROM portal_tokens WHERE member_id = $1`,
+    [memberId]
+  )
+  return Number((rows[0] as { subscription_ended_at?: unknown } | undefined)?.subscription_ended_at ?? 0)
+}

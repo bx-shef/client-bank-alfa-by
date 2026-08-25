@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   attentionHeadline, bankHealthRows, HEALTH_ORDER, HEALTH_TITLE, PREVIEW_BANK_HEALTH,
-  spreadLabel, summarizeBankHealth, type BankHealthRow
+  spreadLabel, subscriptionRowViews, summarizeBankHealth, type BankHealthRow
 } from '../app/utils/bankHealthOverview'
 import { BANK_REFRESH_TTL_SEC, refreshAtAgeMs } from '../app/utils/bankTokenLifetime'
+import { SUBSCRIPTION_CUTOFF_DAYS } from '../app/utils/portalSubscription'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 
 // Обзор состояния подключений ДЛЯ НАС (#497 §3). Умирающее подключение сегодня узнаётся по факту
@@ -304,5 +305,71 @@ describe('#599 bankAttentionRowViews — подписи строк', () => {
     expect(views[0]!.label).toContain('abcd')
     expect(views[0]!.label).toContain('42')
     expect(views[1]!.label).toContain('переподключить')
+  })
+})
+
+describe('раздел «подписка не отвечает» (#614)', () => {
+  const NOW_S = 1_800_000_000_000
+  const DAY_S = 86_400_000
+
+  function subRow(over: Partial<BankHealthRow> = {}): BankHealthRow {
+    return {
+      id: 1, memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01',
+      connectedAt: NOW_S - 60_000, expiresAt: NOW_S + 3_600_000, hasRefresh: true,
+      lastAttemptAt: 0, consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
+    } as BankHealthRow
+  }
+  const hash = (m: string) => `h-${m}`
+
+  it('живое банковское подключение попадает в раздел, если подписка мертва', () => {
+    // Весь смысл раздела: с банком всё в порядке, сломана оплата Битрикса. Без этого случая
+    // оператор увидел бы пустоту ровно там, где клиент не может помочь себе сам.
+    const o = summarizeBankHealth([subRow()], NOW_S, hash, new Map([['M1', NOW_S - 3 * DAY_S]]))
+    expect(o.subscriptionDead).toHaveLength(1)
+    expect(o.subscriptionDead?.[0]).toMatchObject({ id: 1, deadDays: 3, health: 'ok' })
+  })
+
+  it('без метки подписки раздела НЕТ', () => {
+    const o = summarizeBankHealth([subRow()], NOW_S, hash, new Map())
+    expect(o.subscriptionDead).toBeUndefined()
+  })
+
+  it('без хешера раздела нет — сырой member_id наружу не уходит', () => {
+    // Тот же fail-safe, что у соседей: забытая зависимость даёт экран без действий, а не утечку.
+    const o = summarizeBankHealth([subRow()], NOW_S, undefined, new Map([['M1', NOW_S - 3 * DAY_S]]))
+    expect(o.subscriptionDead).toBeUndefined()
+    expect(JSON.stringify(o)).not.toContain('M1')
+  })
+
+  it('дольше молчащие идут первыми — у них ближе автоотключение', () => {
+    const rows = [subRow({ id: 1, memberId: 'A' }), subRow({ id: 2, memberId: 'B' })]
+    const o = summarizeBankHealth(rows, NOW_S, hash, new Map([['A', NOW_S - DAY_S], ['B', NOW_S - 3 * DAY_S]]))
+    expect(o.subscriptionDead?.map(c => c.id)).toEqual([2, 1])
+  })
+
+  it('подпись говорит и СКОЛЬКО молчит, и КОГДА отключим', () => {
+    // Оператор должен видеть не только состояние, но и что произойдёт само и когда — иначе он либо
+    // отключит раньше времени, либо решит, что висеть это может вечно.
+    const o = summarizeBankHealth([subRow()], NOW_S, hash, new Map([['M1', NOW_S - 2 * DAY_S]]))
+    const label = subscriptionRowViews(o)[0]!.label
+    expect(label).toContain('не отвечает 2 дня')
+    expect(label).toContain('отключим через 2 дня')
+  })
+
+  it('подпись НЕ говорит «мёртво» — причина не в банке', () => {
+    // Одинаковая с банковской формулировка отправила бы оператора говорить клиенту не то.
+    const o = summarizeBankHealth([subRow()], NOW_S, hash, new Map([['M1', NOW_S - 2 * DAY_S]]))
+    expect(subscriptionRowViews(o)[0]!.label).not.toContain('мёртво')
+  })
+
+  it('когда срок вышел — так и написано, а не «через 0 дней»', () => {
+    // ⚠ Ровно НА отсечке, а не «сильно позже»: только этот день отличает `left > 0` от `left >= 0`,
+    // и первая редакция теста брала девятый день — мутация «>= 0» проходила зелёной (замерено).
+    const due = new Map([['M1', NOW_S - SUBSCRIPTION_CUTOFF_DAYS * DAY_S]])
+    expect(subscriptionRowViews(summarizeBankHealth([subRow()], NOW_S, hash, due))[0]!.label)
+      .toContain('отключение уже наступило')
+    const over = new Map([['M1', NOW_S - 9 * DAY_S]])
+    expect(subscriptionRowViews(summarizeBankHealth([subRow()], NOW_S, hash, over))[0]!.label)
+      .toContain('отключение уже наступило')
   })
 })

@@ -13,6 +13,14 @@ export interface BankHealthIO {
   now: () => number
   /** Необратимая метка портала. Инъектируется, чтобы чистое ядро не тянуло `node:crypto`. */
   hashPortal: (memberId: string) => string
+  /**
+   * Порталы с истёкшей подпиской на REST (#614) — `member_id` → когда отказ случился ВПЕРВЫЕ.
+   *
+   * ⚠ Необязательна, и отсутствие означает «раздел пуст», а не «сломано». Но живая проводка её
+   * ВСЕГДА даёт: без этого раздела состояние не видно НИГДЕ — клиент до приложения не доберётся
+   * (оно открывается внутри Битрикса, а подписка мертва), а сам он отключиться не сможет.
+   */
+  listSubscriptionEnded?: () => Promise<{ memberId: string, endedAtMs: number }[]>
   /** Диагностика для оператора; наружу текст ошибки не отдаём. */
   warn?: (message: string) => void
 }
@@ -33,7 +41,16 @@ export const READ_FAILED = 'не удалось прочитать состоя�
 export async function handleBankHealth(io: BankHealthIO): Promise<BankHealthResult> {
   try {
     const rows = await io.listRows()
-    return { status: 200, body: { ok: true, ...summarizeBankHealth(rows, io.now(), io.hashPortal) } }
+    // ⚠ Отдельным try: истёкшая подписка — ДОПОЛНЕНИЕ к сводке, и её недоступность не должна
+    // уносить всю карточку. Тот же принцип, что у изоляции банковских строк от проверки очередей.
+    let subs: ReadonlyMap<string, number> | undefined
+    try {
+      const list = await io.listSubscriptionEnded?.()
+      if (list) subs = new Map(list.map(r => [r.memberId, r.endedAtMs]))
+    } catch (e) {
+      io.warn?.(`[ops] subscription-ended read failed: ${(e as Error)?.message ?? ''}`)
+    }
+    return { status: 200, body: { ok: true, ...summarizeBankHealth(rows, io.now(), io.hashPortal, subs) } }
   } catch (e) {
     io.warn?.(`[ops] bank-health read failed: ${(e as Error)?.message ?? ''}`)
     return { status: 503, body: { ok: false, error: READ_FAILED } }
