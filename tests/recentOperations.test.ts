@@ -85,15 +85,15 @@ describe('mapRecentOperations', () => {
 })
 
 describe('buildRecentOperationsListCall', () => {
-  it('свежие сверху, первая страница, БЕЗ явного select (#41)', () => {
+  it('свежие сверху, первая страница, select:[*] для всех полей (#41)', () => {
     const call = buildRecentOperationsListCall(SP)
     expect(call.method).toBe('crm.item.list')
     expect(call.params.entityTypeId).toBe(1044)
     expect(call.params.order).toEqual({ id: 'DESC' })
     expect(call.params.start).toBe(0)
-    // ⚠ `select` намеренно НЕ задаём: явный select недавно добавленных UF-полей СП на живом портале
-    // не возвращал поля реестра #575 (см. комментарий в recentOperations.ts). Без select приходит
-    // полный элемент, а нужные поля разбирает маппер по именам.
-    expect(call.params.select).toBeUndefined()
+    // ⚠ `select: ['*']`, а не перечень полей: явный select недавно добавленных UF-полей СП на живом
+    // портале не возвращал поля реестра #575 (см. комментарий в recentOperations.ts). По документации
+    // `'*'` отдаёт ВСЕ поля, включая UF; опускать select нельзя — UF-поля тогда не гарантированы.
+    expect(call.params.select).toEqual(['*'])
   })
 })
