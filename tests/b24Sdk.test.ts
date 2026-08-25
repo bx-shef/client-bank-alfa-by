@@ -590,7 +590,9 @@ describe('наблюдение истёкшей подписки (#614)', () => 
       throw new Error('Subscription has been ended')
     }
     const seen: string[] = []
-    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async (m) => {
+      seen.push(m)
+    } })
     await expect(call('crm.item.list', {})).rejects.toThrow()
     expect(seen, 'метка не поставлена — отключение через 4 дня не наступит никогда').toEqual(['M1'])
   })
@@ -601,7 +603,9 @@ describe('наблюдение истёкшей подписки (#614)', () => 
     const failed = ajax({ isSuccess: false, getErrorMessages: () => ['Subscription has been ended'] })
     const { client } = fakeClient(failed)
     const seen: string[] = []
-    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async (m) => {
+      seen.push(m)
+    } })
     await expect(call('crm.item.list', {})).rejects.toThrow()
     expect(seen).toEqual(['M1'])
   })
@@ -613,7 +617,9 @@ describe('наблюдение истёкшей подписки (#614)', () => 
       throw new Error('QUERY_LIMIT_EXCEEDED')
     }
     const seen: string[] = []
-    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async (m) => {
+      seen.push(m)
+    } })
     await expect(call('crm.item.list', {})).rejects.toThrow()
     expect(seen).toEqual([])
   })
@@ -621,7 +627,9 @@ describe('наблюдение истёкшей подписки (#614)', () => 
   it('успешный вызов метку не ставит и результат не портит', async () => {
     const { client } = fakeClient()
     const seen: string[] = []
-    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async (m) => {
+      seen.push(m)
+    } })
     await call('crm.item.list', {})
     expect(seen).toEqual([])
   })
