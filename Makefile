@@ -1,5 +1,5 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
-        prior-probe prior-switch poll-check self-update help \
+        prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -208,6 +208,15 @@ help:
 poll-check:
 	@t=$$(mktemp /tmp/poll-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-poll-check.sh" \
+	  && bash "$$t" "$${SINCE:-}"
+
+## Кого приложение не опознало и каким счётом это чинится (#501)
+#
+#   make payers              # за сутки
+#   make payers SINCE=3h
+payers:
+	@t=$$(mktemp /tmp/payers.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-payers.sh" \
 	  && bash "$$t" "$${SINCE:-}"
 
 ## Переключить Приорбанк между прямым адресом и крипто-шлюзом (#522)
