@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import SettingsIcon from '@bitrix24/b24icons-vue/outline/SettingsIcon'
 import UploadFileIcon from '@bitrix24/b24icons-vue/outline/UploadFileIcon'
 import { splitByDirection } from '~/utils/statement'
@@ -7,6 +7,7 @@ import type { OperationDirection, StatementItem } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
 import { useSetupStatus } from '~/composables/useSetupStatus'
+import { useRecentOperations } from '~/composables/useRecentOperations'
 import { useSliderRedirect } from '~/composables/useSliderRedirect'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
@@ -493,7 +494,11 @@ const PREVIEW_ITEMS: StatementItem[] = [
 ]
 
 const route = useRoute()
-const items = computed<StatementItem[]>(() => (isPreviewQuery(route.query.preview) ? PREVIEW_ITEMS : []))
+// «Последние операции» (#5/#36): в портале — реальный фид из реестра «Платежи» (`useRecentOperations`),
+// под `?preview=1` — синтетический демо-набор для скриншотов и визуальных тестов. Раньше в портале
+// список был жёстко пуст, хотя реестр в настройках уже показывал те же операции своим endpoint'ом.
+const { operations: recentOps, load: loadRecentOps } = useRecentOperations()
+const items = computed<StatementItem[]>(() => (isPreviewQuery(route.query.preview) ? PREVIEW_ITEMS : recentOps.value))
 const byDirection = computed(() => splitByDirection(items.value))
 
 // Filter chips (labels keep the "(N)" counts). Default "all" shows everything.
@@ -670,6 +675,10 @@ onMounted(async () => {
   }
   await refresh()
   checkAdmin()
+  // «Последние операции» (#36) — реальный фид из реестра «Платежи». Не в критическом пути (список
+  // может дорисоваться после `fitWindow`, как и статус): его отсутствие не должно задерживать
+  // заголовок/подгонку фрейма.
+  void loadRecentOps()
   // Load chat settings so the setup banner reflects the real configured state.
   await chatSettings.load()
   // Только для решения «показывать ли полосу статуса», поэтому НЕ в критическом пути:
@@ -683,6 +692,17 @@ onMounted(async () => {
   } catch (e) {
     log.warning('не удалось вызвать parent-методы портала', { error: String(e) })
   }
+})
+
+// ⚠ Список операций приходит фидом АСИНХРОННО, уже после `fitWindow` в `onMounted` (#36, находка
+// ревью): раньше список в портале был всегда пуст и высота не менялась, теперь он дорисовывается и
+// фрейм остаётся коротким. Переподгоняем окно, когда число операций изменилось. Best-effort и только
+// в портале (`fitWindow` вне фрейма бросает — глотаем).
+watch(() => items.value.length, async () => {
+  if (!b24.isInit()) return
+  try {
+    await b24.getOrThrow().parent.fitWindow()
+  } catch { /* вне портала fitWindow недоступен — не мешаем */ }
 })
 </script>
 
