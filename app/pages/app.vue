@@ -18,7 +18,8 @@ import {
   APP_SLIDER_PLACE_IMPORT,
   APP_SLIDER_PLACE_MAIN,
   APP_SLIDER_PLACE_SETTINGS,
-  APP_SLIDER_WIDTH
+  APP_SLIDER_WIDTH,
+  APP_SLIDER_SETTINGS_WIDTH
 } from '~/config/b24'
 import {
   appLaunchMode, canAutoOpenMain, MAIN_SLIDER_MARK_KEY, type AppLaunchMode
@@ -527,7 +528,8 @@ function setFilter(f: Filter) {
 // отказать во вложенном слайдере — экран всё равно должен открыться.
 async function openSettings(): Promise<void> {
   const opened = await b24.openAppSlider(APP_SLIDER_PLACE_SETTINGS, {
-    width: APP_SLIDER_WIDTH,
+    // Настройки шире общей ширины (#34): двухколоночный экран, нужен десктопный `lg`-режим (>1024).
+    width: APP_SLIDER_SETTINGS_WIDTH,
     title: 'Настройки'
   })
   if (!opened) await navigateTo('/settings')

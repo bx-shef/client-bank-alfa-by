@@ -76,12 +76,26 @@ describe('открытие вторичных экранов слайдером 
   it('ширина слайдера не уходит под брейкпоинт sm — иначе десктоп молча получит мобильную вёрстку', async () => {
     const wrapper = await mountSuspended(await import('~/pages/app.vue').then(m => m.default), PREVIEW)
     await flushPromises()
-    const button = wrapper.findAll('button').find(b => b.text().includes('Настройки'))
+    const button = wrapper.findAll('button').find(b => b.text().includes('Загрузить выписку'))
     await button!.trigger('click')
     await flushPromises()
     const args = openSlider.mock.calls[0] as unknown as [string, { width: number }] | undefined
     const width = args?.[1]?.width ?? 0
     expect(width).toBeGreaterThanOrEqual(640)
+  })
+
+  it('слайдер НАСТРОЕК шире 1024 — открывается сразу в десктопной раскладке (#34)', async () => {
+    // ⚠ Настройки — двухколоночный экран (`lg:flex-row`), а `lg` у b24ui это 1024: под ним колонки
+    // схлопываются и разделы уезжают под гамбургер. Настройки должны открываться шире 1024, при этом
+    // импорт/главная остаются на общей ширине.
+    const wrapper = await mountSuspended(await import('~/pages/app.vue').then(m => m.default), PREVIEW)
+    await flushPromises()
+    const button = wrapper.findAll('button').find(b => b.text().includes('Настройки'))
+    await button!.trigger('click')
+    await flushPromises()
+    const calls = openSlider.mock.calls as unknown as Array<[string, { width: number }]>
+    const args = calls.find(c => c[0] === APP_SLIDER_PLACE_SETTINGS)
+    expect(args?.[1]?.width ?? 0).toBeGreaterThan(1024)
   })
 })
 
