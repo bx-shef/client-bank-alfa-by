@@ -270,24 +270,24 @@ describe('provisionDistributionSp', () => {
     }
   })
 
-  // ⚠ Второй слой (#41): даже если одна userfieldconfig.add падает (напр. дубликат), остальные поля
-  // всё равно создаются — цикл не обрывается. Прежде первый throw ронял всё, что стояло ниже.
-  it('одна упавшая userfieldconfig.add НЕ обрывает создание остальных полей — #41', async () => {
+  // ⚠ Второй слой (#41): падение одной userfieldconfig.add НЕ обрывает попытку создать остальные
+  // поля (реестр в том числе), НО в конце ошибка ВСПЛЫВАЕТ — тихой частичной настройки быть не должно.
+  it('одна упавшая add: остальные ПОПРОБОВАНЫ, но провижининг падает (сбой не прячется) — #41', async () => {
     const paymentEtid = 300
-    const distributionEtid = 301
     let n = 0
     const { call, calls } = fakeCall({
       'userfieldconfig.list': () => ({ result: { fields: [] } }),
       'userfieldconfig.add': () => {
         n++
-        if (n === 1) throw new Error('DUPLICATE_FIELD')
+        if (n === 1) throw new Error('SOME_FIELD_ERROR')
         return { result: { field: {} } }
       }
     })
-    await provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: distributionEtid, id: distributionEtid } })
-    const totalFields = Object.values(PAYMENT_SP_FIELDS).length + Object.values(DISTRIBUTION_SP_FIELDS).length
-    // Все поля были попытаны, несмотря на падение первого (иначе было бы ровно 1 и throw наружу).
-    expect(calls.filter(c => c.method === 'userfieldconfig.add')).toHaveLength(totalFields)
+    // Провижининг падает (сбой поля доходит до вердикта установки).
+    await expect(provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: 301, id: 301 } }))
+      .rejects.toThrow(/userfieldconfig\.add failed/)
+    // Но ВСЕ поля платёжного СП были ПОПРОБОВАНЫ, несмотря на падение первого (иначе было бы ровно 1).
+    expect(calls.filter(c => c.method === 'userfieldconfig.add').length).toBe(Object.values(PAYMENT_SP_FIELDS).length)
   })
 })
 

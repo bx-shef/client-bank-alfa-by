@@ -176,6 +176,20 @@ describe('planMissingUserFields', () => {
       expect(names).toContain(buildUfFieldName(1044, PAYMENT_SP_FIELDS[key].postfix))
     }
   })
+
+  // ⚠ Гард на КОЛЛИЗИИ нормализации (ревью #41): нормализация «без _ + lower» слабее точного
+  // сравнения. Если два постфикса нормализуются одинаково, наличие одного поля замаскировало бы
+  // ОТСУТСТВИЕ другого, и оно не создалось бы никогда. Проверяем на ВСЕХ полях обоих СП: наличие
+  // ровно одного поля исключает из плана ровно одно (а не два) — то есть нормы попарно различны.
+  it('нормализация имён не даёт коллизий: каждое поле маскирует ровно себя — #41', () => {
+    for (const sp of [PAYMENT_SP_FIELDS, DISTRIBUTION_SP_FIELDS]) {
+      const all = Object.values(sp)
+      for (const f of all) {
+        const plan = planMissingUserFields(1044, all, [buildUfFieldName(1044, f.postfix)])
+        expect(plan, `поле ${f.postfix} маскирует не ровно себя (коллизия нормы?)`).toHaveLength(all.length - 1)
+      }
+    }
+  })
 })
 
 describe('SP entityTypeId accessors', () => {
