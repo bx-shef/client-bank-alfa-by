@@ -152,12 +152,28 @@ async function ensureSp(
 }
 
 /** Ensure every field in `fields` exists on the SP, creating only the missing ones. Field probing +
- *  creation key off the SP's TYPE id (`sp.id`), NOT the entityTypeId. Returns the number added. */
+ *  creation key off the SP's TYPE id (`sp.id`), NOT the entityTypeId. Returns the number added.
+ *
+ *  ⚠ Одна упавшая `userfieldconfig.add` НЕ обрывает остальные (#41). Прежде цикл был `for … await`
+ *  без обработки, и первая же ошибка (чаще всего — «поле уже существует», если сверка ошибочно
+ *  сочла его отсутствующим) выбрасывала исключение и НЕ давала создать поля, стоящие в списке
+ *  ниже, — а поля реестра #575 идут как раз последними. Теперь ошибка отдельного поля логируется и
+ *  цикл продолжается: то, что можно создать, создаётся. Дубликат существующего поля безвреден.
+ *  ⚠ Первый слой защиты — нормализованная сверка в `planMissingUserFields`: она вообще не планирует
+ *  пересоздавать существующие поля. Этот catch — второй слой на случай любой иной ошибки поля. */
 async function ensureFields(call: RestCall, sp: SpRef, fields: readonly SpUserField[]): Promise<number> {
   const existing = await listAllFieldNames(call, sp.id)
   const toAdd = planMissingUserFields(sp.id, fields, existing)
-  for (const addCall of toAdd) await call(addCall.method, addCall.params) // sequential — rate-safe, no batch
-  return toAdd.length
+  let added = 0
+  for (const addCall of toAdd) { // sequential — rate-safe, no batch
+    try {
+      await call(addCall.method, addCall.params)
+      added++
+    } catch (e) {
+      log.warning(`userfieldconfig.add failed for one field on SP ${sp.id}, continuing: ${(e as Error)?.message ?? e}`)
+    }
+  }
+  return added
 }
 
 /**

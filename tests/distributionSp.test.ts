@@ -150,6 +150,32 @@ describe('planMissingUserFields', () => {
   it('plans all fields when none exist', () => {
     expect(planMissingUserFields(1044, fields, [])).toHaveLength(fields.length)
   })
+
+  // ⚠ Регресс #41: `userfieldconfig.list` отдаёт имя НЕ в той форме, какой поле создавали
+  // (`UF_CRM_1044_TOTAL`), а в слитной (`UF_CRM1044_TOTAL`) или camel (`ufCrm1044Total`). Прямое
+  // сравнение считало существующее поле отсутствующим → план пересоздавал доденьги → на дубликате
+  // цикл падал → поля реестра #575 (в списке последние) не создавались никогда. Нормализация имени
+  // это снимает. Каждая из трёх форм существующего поля должна распознаваться как «уже есть».
+  it('распознаёт существующее поле в ЛЮБОЙ форме имени (слитной/camel/создания) — #41', () => {
+    const stored = `UF_CRM1044_${PAYMENT_SP_FIELDS.total.postfix}` // UF_CRM1044_TOTAL
+    const camel = 'ufCrm1044Total'
+    const creation = buildUfFieldName(1044, PAYMENT_SP_FIELDS.total.postfix) // UF_CRM_1044_TOTAL
+    for (const form of [stored, camel, creation]) {
+      const plan = planMissingUserFields(1044, fields, [form])
+      const names = plan.map(c => (c.params.field as Record<string, unknown>).fieldName)
+      expect(names, `форма «${form}» не распознана как существующая`).not.toContain(creation)
+      // остальные поля по-прежнему планируются — сверка не «проглатывает» всё
+      expect(plan).toHaveLength(fields.length - 1)
+    }
+  })
+
+  it('вся выписка полей #575 попадает в план на пустом СП (реестр не теряется) — #41', () => {
+    const plan = planMissingUserFields(1044, fields, [])
+    const names = plan.map(c => (c.params.field as Record<string, unknown>).fieldName)
+    for (const key of ['operationDate', 'direction', 'counterparty', 'purpose', 'ownAccount', 'bank'] as const) {
+      expect(names).toContain(buildUfFieldName(1044, PAYMENT_SP_FIELDS[key].postfix))
+    }
+  })
 })
 
 describe('SP entityTypeId accessors', () => {
