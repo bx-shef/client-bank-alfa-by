@@ -135,10 +135,11 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
  *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
-/** Reveal the PAYMENT PURPOSE in the `[op]` log line (`STATEMENT_DEBUG_LOG=1`; default OFF).
- *  Read once at start — flipping it means a restart, which is intended: this is a deliberate,
- *  announced loosening of docs/PRIVACY.md §Логи for a calibration run, not a runtime knob.
- *  Everything else in `[op]` is logged unconditionally; only this field is gated. */
+/** Reveal FINANCIAL PII in the `[op]` log line — both account numbers (ours + counterparty) and
+ *  the payment purpose (`STATEMENT_DEBUG_LOG=1`; default OFF, #617). Read once at start — flipping
+ *  it means a restart, which is intended: this is a deliberate, announced loosening of
+ *  docs/PRIVACY.md §Логи for a calibration run, not a runtime knob. By default `[op]` carries NO
+ *  account numbers: json-file rotates by size, not age, so an IBAN once logged sits there for years. */
 const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
 /** How verbose the per-operation log is (#498): `notable` (default) | `all` | `off`. Read once at
  *  start, exactly like the flag above — flipping it means a restart. The default prints only the

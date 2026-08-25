@@ -141,7 +141,7 @@ describe('шаблоны диагностических скриптов нах�
     { script: 'scripts/prod-poll-check.sh', needle: 'real poll', line: render('queue', 'INFO', 'real poll: planned 2 fetch jobs') },
     { script: 'scripts/prod-poll-check.sh', needle: '[fetch]', line: render('fetch', 'INFO', 'alfa-by BY13 2026-08-20..2026-08-21: 3 ops') },
     { script: 'scripts/prod-poll-check.sh', needle: '[crm-sync]', line: render('crm-sync', 'INFO', 'portal M1: 117 обработано') },
-    { script: 'scripts/prod-poll-check.sh', needle: '[op]', line: render('op', 'INFO', 'portal M1, op BY11|d1: credit') },
+    { script: 'scripts/prod-poll-check.sh', needle: '[op]', line: render('op', 'INFO', 'portal M1, op d1: credit') },
     { script: 'scripts/prod-doctor.sh', needle: '[env]', line: render('env', 'ERROR', 'B24_TOKEN_ENC_KEY отсутствует') },
     { script: 'scripts/prod-doctor.sh', needle: '[auth]', line: render('auth', 'WARNING', 'OPERATOR_PASSWORD пуст — вход выключен') }
   ]
