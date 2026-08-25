@@ -16,36 +16,34 @@ import type { StatementItem, OperationDirection } from '~/types/statement'
 import { round2 } from '~/utils/money'
 
 /**
- * `crm.item.list` для последних операций: наши поля реестра + маркер, сорт по `id` убыв. (свежие
- * сверху), первая страница. `select` перечисляет РОВНО читаемые поля — лишние колонки СП в витрину
- * не тащим.
+ * `crm.item.list` для последних операций: сорт по `id` убыв. (свежие сверху), первая страница.
+ *
+ * ⚠ **`select: ['*']`, а НЕ перечисление наших полей (#41).** Прежде мы перечисляли РОВНО свои поля —
+ * и на живом портале `crm.item.list` возвращал доденьги (`TOTAL`/`CURRENCY`/`MARKER`), но НЕ поля
+ * реестра #575 (контрагент/назначение/дата/направление), хотя на карточке элемента они заполнены
+ * (её рисует `crm.item.get`, отдающий все поля). ⚠ ПОЧЕМУ именно эти поля терялись — точно НЕ
+ * установлено: `TOTAL`/`CURRENCY`/`MARKER` тоже пользовательские (UF), поэтому «select не отдавал
+ * UF» объяснением быть не может; вероятнее рассинхрон camel-имени конкретных полей. По документации
+ * `select` принимает имена полей ИЛИ `'*'`, и именно `'*'` возвращает ВСЕ поля (включая множественные
+ * и UF) под их ИСТИННЫМИ camel-именами — что снимает вопрос «попало ли поле в select». Маппер
+ * разбирает нужные поля по именам; если рассинхрон в camel-имени остаётся, keys-only лог в
+ * `operations.get.ts` покажет истинные ключи, и правим уже их. Плата — чуть больший ответ на 50
+ * строк, приемлемо для витрины.
+ * ⚠ Опускать `select` вовсе НЕЛЬЗЯ: без него метод не гарантирует возврат UF-полей (документация
+ * оговаривает `'*'` отдельно) — тогда пропали бы и сумма/валюта.
  *
  * ⚠ Размер страницы НЕ задаём: у `crm.item.list` его нет как параметра — портал отдаёт фиксированную
- * страницу (50), а пагинацию мы не листаем (нужны только последние). Прежняя константа `LIMIT=50`
- * держалась на совпадении с этим дефолтом, а не на контракте, и вводила в заблуждение — снята.
+ * страницу (50), а пагинацию мы не листаем (нужны только последние).
  * ⚠ `id DESC` — это «последние ИМПОРТИРОВАННЫЕ», а не «последние по дате операции»: ручная загрузка
  * старой выписки поставит свежесозданные элементы старых операций сверху. `OperationList` группирует
  * по дню, так что для витрины это приемлемо; знать про компромисс стоит.
  */
 export function buildRecentOperationsListCall(paymentSp: SpRef): { method: string, params: Record<string, unknown> } {
-  const uf = (postfix: string) => buildUfFieldNameCamel(paymentSp.id, postfix)
   return {
     method: 'crm.item.list',
     params: {
       entityTypeId: paymentSp.entityTypeId,
-      select: [
-        'id',
-        uf(PAYMENT_SP_FIELDS.total.postfix),
-        uf(PAYMENT_SP_FIELDS.currency.postfix),
-        uf(PAYMENT_SP_FIELDS.operationDate.postfix),
-        uf(PAYMENT_SP_FIELDS.direction.postfix),
-        uf(PAYMENT_SP_FIELDS.counterparty.postfix),
-        uf(PAYMENT_SP_FIELDS.counterpartyAccount.postfix),
-        uf(PAYMENT_SP_FIELDS.counterpartyUnp.postfix),
-        uf(PAYMENT_SP_FIELDS.purpose.postfix),
-        uf(PAYMENT_SP_FIELDS.ownAccount.postfix),
-        uf(PAYMENT_SP_FIELDS.marker.postfix)
-      ],
+      select: ['*'],
       order: { id: 'DESC' },
       start: 0
     }
