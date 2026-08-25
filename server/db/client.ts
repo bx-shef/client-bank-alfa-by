@@ -134,6 +134,14 @@ ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 -- спросили банк и сколько он отдал», и на сводку прогона это не влияет.
 ALTER TABLE import_result ADD COLUMN IF NOT EXISTS last_fetch_at TIMESTAMPTZ;
 ALTER TABLE import_result ADD COLUMN IF NOT EXISTS last_fetch_ops INTEGER NOT NULL DEFAULT 0;
+  -- Последний прогон упёрся в неверную карту распознавания (#595). Раньше это уходило РАЗОВЫМ
+  -- сообщением в чат и нигде не оседало — открыв настройки назавтра, админ видел зелёный экран
+  -- готовности при по-прежнему сломанной карте. Persistent-признак: метка времени наблюдения +
+  -- структурированная причина (форма what|param|detail из intentResolver). Ноль/NULL = чисто.
+  -- ⚠ Состояние НАБЛЮДЕНИЯ, а не настройка: живёт у нас, а не в app.option; чистый прогон его
+  -- сбрасывает (portal починил карту → строка снова зелёная), поэтому пишется на КАЖДОМ прогоне.
+ALTER TABLE import_result ADD COLUMN IF NOT EXISTS recog_misconfig_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE import_result ADD COLUMN IF NOT EXISTS recog_misconfig_reason TEXT;
   -- Когда мы последний раз ПЫТАЛИСЬ обновить токен, независимо от исхода (#489).
   -- ⚠ Это не то же, что updated_at: тот означает «когда мы последний раз ДЕРЖАЛИ свежую пару» и
   -- штампуется только успехом. Без отдельной метки неудачная попытка неотличима от отсутствия

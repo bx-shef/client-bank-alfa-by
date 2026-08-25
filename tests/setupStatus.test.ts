@@ -40,6 +40,22 @@ describe('handleSetupStatus', () => {
     expect(JSON.stringify(res.body)).not.toContain('dialogId')
   })
 
+  it('отдаёт слот misconfig карты распознавания, но НЕ английский detail портала (#595)', async () => {
+    const res = await handleSetupStatus(
+      deps({ recognitionMisconfig: async () => 'deal-field|field|Field UF_CRM_X not found' }),
+      input
+    )
+    expect(res.body.recognitionMisconfig).toEqual({ slot: 'deal-field' })
+    // Английский текст портала бухгалтеру бесполезен и остаётся только в логе.
+    expect(JSON.stringify(res.body)).not.toContain('UF_CRM_X')
+    expect(JSON.stringify(res.body)).not.toContain('not found')
+  })
+
+  it('без наблюдения misconfig ключа в ответе нет вовсе (#595)', async () => {
+    const res = await handleSetupStatus(deps({ recognitionMisconfig: async () => null }), input)
+    expect('recognitionMisconfig' in res.body).toBe(false)
+  })
+
   it('reports a never-polled portal as lastRunMs: null rather than inventing a time', async () => {
     const res = await handleSetupStatus(deps({ lastRunMs: async () => null }), input)
     expect(res.body.lastRunMs).toBeNull()

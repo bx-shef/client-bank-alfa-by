@@ -12,7 +12,7 @@ import { bearerToken } from '../utils/settingsHandler'
 import { frameRestCall } from '../utils/liveDeps'
 import { getMemberIdByDomain } from '../utils/tokenStore'
 import { listBankAccountInfoForPortal } from '../utils/bankTokenStore'
-import { getImportResult } from '../utils/importResultStore'
+import { getImportResult, getRecognitionMisconfig } from '../utils/importResultStore'
 import { summarizeBankHealth, unhealthyConnections } from '../../app/utils/bankHealthOverview'
 import { queueEnabled } from '../queue/connection'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
@@ -69,6 +69,11 @@ function liveDeps(): SetupStatusDeps {
       if (!run?.lastSyncAt) return null
       const ms = Date.parse(run.lastSyncAt)
       return Number.isFinite(ms) ? ms : null
+    },
+    // Persistent-признак misconfig карты распознавания (#595) — сырая причина, слот выделит хендлер.
+    recognitionMisconfig: async (memberId) => {
+      const m = await getRecognitionMisconfig(dbQuery, memberId)
+      return m?.reason ?? null
     }
   }
 }

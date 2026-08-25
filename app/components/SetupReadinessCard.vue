@@ -44,7 +44,8 @@ const items = computed(() => buildReadiness({
   myCompany: setup.status.value.myCompany,
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
-  lastRunMs: setup.status.value.lastRunMs
+  lastRunMs: setup.status.value.lastRunMs,
+  recognitionMisconfig: setup.status.value.recognitionMisconfig
 }))
 
 const ready = computed(() => isFullyReady(items.value))

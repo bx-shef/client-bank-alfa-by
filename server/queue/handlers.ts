@@ -359,7 +359,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -457,6 +457,12 @@ export async function handleCrmSyncJob(
   // ⚠ Причина ОДНА на прогон, а не список: отказ портала «такого поля нет» одинаков для каждой
   // операции, и накопление дало бы сотню одинаковых строк. Храним первую увиденную.
   let misconfigured = 0
+  // ⚠ Persistent-признак для экрана готовности (#595): ПЕРВАЯ структурированная причина misconfig,
+  // увиденная в прогоне. Срабатывает на ЛЮБОЙ misconfigured-резолюции (как и сообщение в чат ниже),
+  // а не на узком счётчике `misconfigured` (тот требует candidates.length===0): портал с одной
+  // рабочей и одной сломанной матрицей должен светить красным, хотя платёж и разнёсся по рабочей.
+  // Пусто ⇒ прогон чистый ⇒ признак сбросится (см. worker `persistImportResult`).
+  let misconfigReason: string | undefined
   // ⚠ Одно сообщение за прогон: причина одинакова для каждой операции пачки (админ указал
   // несуществующее поле или смарт-процесс), и построчно оно залило бы чат ошибок — ровно то, из-за
   // чего такой чат перестают читать.
@@ -611,6 +617,7 @@ export async function handleCrmSyncJob(
       const badConfig = resolutions.find(r => r.status === 'misconfigured')
       if (badConfig) {
         if (candidates.length === 0) misconfigured++
+        misconfigReason ??= badConfig.reason ?? ''
         // ⚠ Сообщение шлём ЗДЕСЬ, а не после цикла. Первая редакция копила причину и отправляла в
         // конце — и теряла её насовсем, если позже в той же пачке падала другая операция: джоба
         // умирала, а на повторе эта операция отсеивалась на маркере уже записанного дела и причину
@@ -926,5 +933,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
 }
