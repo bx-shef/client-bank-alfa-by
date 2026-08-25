@@ -22,16 +22,17 @@ export function useEraseActivities() {
   /** Итог последнего стирания; `null` — ещё не стирали. */
   const result = ref<{ deleted: number, remaining: number } | null>(null)
 
-  function query(period: ErasePeriod, accounts: string[]): Record<string, unknown> {
+  function query(period: ErasePeriod, accounts: string[], counterpartyAccounts: string[]): Record<string, unknown> {
     const q: Record<string, unknown> = {}
     if (period.from) q.from = period.from
     if (period.to) q.to = period.to
     if (accounts.length) q.accounts = accounts
+    if (counterpartyAccounts.length) q.counterpartyAccounts = counterpartyAccounts
     return q
   }
 
   /** Посчитать, ничего не меняя. Всегда предшествует стиранию — это требование владельца. */
-  async function count(period: ErasePeriod, accounts: string[]): Promise<boolean> {
+  async function count(period: ErasePeriod, accounts: string[], counterpartyAccounts: string[] = []): Promise<boolean> {
     const a = frameAuth()
     if (!a) {
       error.value = 'Действие доступно только внутри портала Bitrix24'
@@ -44,7 +45,7 @@ export function useEraseActivities() {
     result.value = null
     try {
       pending.value = await $fetch<EraseCount>('/api/activities/erasable', {
-        headers: authHeaders(a), query: query(period, accounts)
+        headers: authHeaders(a), query: query(period, accounts, counterpartyAccounts)
       })
       return true
     } catch {
@@ -57,7 +58,7 @@ export function useEraseActivities() {
   }
 
   /** Стереть. НЕОБРАТИМО. */
-  async function erase(period: ErasePeriod, accounts: string[]): Promise<boolean> {
+  async function erase(period: ErasePeriod, accounts: string[], counterpartyAccounts: string[] = []): Promise<boolean> {
     const a = frameAuth()
     if (!a) {
       error.value = 'Действие доступно только внутри портала Bitrix24'
@@ -69,7 +70,7 @@ export function useEraseActivities() {
       result.value = await $fetch<{ deleted: number, remaining: number }>('/api/activities/erase', {
         method: 'POST',
         headers: authHeaders(a),
-        body: { ...query(period, accounts) }
+        body: { ...query(period, accounts, counterpartyAccounts) }
       })
       // ⚠ Подтверждение снимаем ВСЕГДА после стирания: оставленное число относилось к состоянию
       // ДО удаления, и второй клик по «Стереть» удалил бы уже не то, что было обещано.

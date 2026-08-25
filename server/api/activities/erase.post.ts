@@ -51,7 +51,10 @@ function liveDeps(): EraseDeps {
     // ни назначений (PRIVACY.md §Логи).
     audit: ({ memberId, userId, selection, outcome }) => {
       const scope = selection.accounts.length > 0 ? `счета: ${selection.accounts.join(', ')}` : 'все счета'
-      log.info(`portal ${memberId}: стёрто дел ${outcome.deleted} (${periodLabel(selection.period)}, ${scope}), осталось ${outcome.remaining} — пользователь ${userId || '—'}`)
+      // Счета контрагента — тоже НАШ фильтр (номера плательщиков, не суммы/назначения), их в журнал
+      // можно: они уже лежат в настройках «Исключений» этого же портала.
+      const cp = selection.counterpartyAccounts.length > 0 ? `, контрагент: ${selection.counterpartyAccounts.join(', ')}` : ''
+      log.info(`portal ${memberId}: стёрто дел ${outcome.deleted} (${periodLabel(selection.period)}, ${scope}${cp}), осталось ${outcome.remaining} — пользователь ${userId || '—'}`)
     }
   }
 }
@@ -59,13 +62,14 @@ function liveDeps(): EraseDeps {
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
-  type Raw = { from?: unknown, to?: unknown, accounts?: unknown }
+  type Raw = { from?: unknown, to?: unknown, accounts?: unknown, counterpartyAccounts?: unknown }
   const raw = await readBody<Raw>(event).catch(() => ({} as Raw))
   return withFrameRouteSpan(
     { name: 'http.activities-erase.post', method: 'POST', op: 'activities.erase', domain },
     async (span) => {
       const { status, body } = await handleEraseActivities(liveDeps(), {
-        accessToken: token, domain, from: raw?.from, to: raw?.to, accounts: raw?.accounts
+        accessToken: token, domain, from: raw?.from, to: raw?.to, accounts: raw?.accounts,
+        counterpartyAccounts: raw?.counterpartyAccounts
       })
       span.outcome = httpOutcomeForStatus(status)
       setResponseStatus(event, status)
