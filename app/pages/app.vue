@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import SettingsIcon from '@bitrix24/b24icons-vue/outline/SettingsIcon'
 import UploadFileIcon from '@bitrix24/b24icons-vue/outline/UploadFileIcon'
 import { splitByDirection } from '~/utils/statement'
@@ -692,6 +692,17 @@ onMounted(async () => {
   } catch (e) {
     log.warning('не удалось вызвать parent-методы портала', { error: String(e) })
   }
+})
+
+// ⚠ Список операций приходит фидом АСИНХРОННО, уже после `fitWindow` в `onMounted` (#36, находка
+// ревью): раньше список в портале был всегда пуст и высота не менялась, теперь он дорисовывается и
+// фрейм остаётся коротким. Переподгоняем окно, когда число операций изменилось. Best-effort и только
+// в портале (`fitWindow` вне фрейма бросает — глотаем).
+watch(() => items.value.length, async () => {
+  if (!b24.isInit()) return
+  try {
+    await b24.getOrThrow().parent.fitWindow()
+  } catch { /* вне портала fitWindow недоступен — не мешаем */ }
 })
 </script>
 

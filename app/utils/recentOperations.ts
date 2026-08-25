@@ -15,14 +15,17 @@ import { PAYMENT_SP_FIELDS, buildUfFieldNameCamel, type SpRef } from '~/config/d
 import type { StatementItem, OperationDirection } from '~/types/statement'
 import { round2 } from '~/utils/money'
 
-/** Сколько последних операций показываем. Одна страница `crm.item.list` (портал отдаёт по 50) —
- *  для витрины «последние» большего и не нужно, а пагинацию списка держит уже сам `OperationList`. */
-export const RECENT_OPERATIONS_LIMIT = 50
-
 /**
  * `crm.item.list` для последних операций: наши поля реестра + маркер, сорт по `id` убыв. (свежие
  * сверху), первая страница. `select` перечисляет РОВНО читаемые поля — лишние колонки СП в витрину
  * не тащим.
+ *
+ * ⚠ Размер страницы НЕ задаём: у `crm.item.list` его нет как параметра — портал отдаёт фиксированную
+ * страницу (50), а пагинацию мы не листаем (нужны только последние). Прежняя константа `LIMIT=50`
+ * держалась на совпадении с этим дефолтом, а не на контракте, и вводила в заблуждение — снята.
+ * ⚠ `id DESC` — это «последние ИМПОРТИРОВАННЫЕ», а не «последние по дате операции»: ручная загрузка
+ * старой выписки поставит свежесозданные элементы старых операций сверху. `OperationList` группирует
+ * по дню, так что для витрины это приемлемо; знать про компромисс стоит.
  */
 export function buildRecentOperationsListCall(paymentSp: SpRef): { method: string, params: Record<string, unknown> } {
   const uf = (postfix: string) => buildUfFieldNameCamel(paymentSp.id, postfix)
