@@ -142,6 +142,33 @@ describe('разделы настроек — проводка (#530)', () => {
       .toBe('BY-СЕРВЕРНОЕ')
   })
 
+  it('панель настроек прокручивает ТЕЛО (min-h-0), а не гасит overflow (#33)', async () => {
+    // ⚠ b24ui `DashboardGroup` = `fixed inset-0 overflow-hidden`, документу скроллиться негде.
+    // Прежний `overflow-y-visible` гасил тем-овый `overflow-y-auto` → контент обрезался, панель
+    // Save/Cancel липла к низу вьюпорта. Тело должно нести `min-h-0` (чтобы flex-элемент сжимался и
+    // прокручивался), а `overflow-y-visible` быть НЕ должно.
+    const wrapper = await mountReady()
+    const panel = wrapper.findComponent({ name: 'B24DashboardPanel' })
+    expect(panel.exists(), 'панель настроек не найдена').toBe(true)
+    const ui = panel.props('b24ui') as { root?: string, body?: string } | undefined
+    expect(ui?.body ?? '', 'тело панели не сжимается — не прокрутится').toContain('min-h-0')
+    expect(ui?.body ?? '', 'overflow-y-visible снова гасит скролл').not.toContain('overflow-y-visible')
+    expect(ui?.root ?? '', 'корень панели растёт за вьюпорт').toContain('min-h-0')
+  })
+
+  it('в узком слайдере выбор пункта ЗАКРЫВАЕТ раскрытое меню (#35)', async () => {
+    // ⚠ Ниже `lg` список разделов — модальный оверлей (`open`), и после выбора он оставался открытым
+    // поверх контента. Форсим его открытым через модель сайдбара, выбираем раздел, ждём закрытия.
+    const wrapper = await mountReady()
+    const sidebar = wrapper.findComponent({ name: 'B24DashboardSidebar' })
+    expect(sidebar.exists(), 'сайдбар настроек не найден').toBe(true)
+    sidebar.vm.$emit('update:open', true)
+    await nextTick()
+    expect(sidebar.props('open'), 'оверлей не открылся для теста').toBe(true)
+    await openSection(wrapper, 'Карта распознавания')
+    expect(sidebar.props('open'), 'меню осталось открытым после выбора').toBe(false)
+  })
+
   it('строка готовности ведёт в свой раздел одним кликом', async () => {
     // ⚠ Ради этого и написан разбор `?section=`: без ссылки экран готовности НАЗЫВАЛ раздел
     // словами, а искать его в полосе человек должен был сам.

@@ -126,6 +126,13 @@ export function sliderRouteForPlace(place: string | undefined | null): string | 
  *  слайдера, которых мы не измеряли. */
 export const APP_SLIDER_WIDTH = 720
 
+/** Ширина слайдера НАСТРОЕК — шире общей (#34). Настройки — двухколоночный экран (`lg:flex-row`:
+ *  раздел + карточка готовности/предпросмотра), и `lg`-брейкпоинт b24ui это 1024 px: под ним колонки
+ *  схлопываются, а список разделов уезжает под гамбургер. 1120 px уверенно перешагивает 1024, чтобы
+ *  настройки открывались сразу в десктопной раскладке с постоянным левым меню. Импорт и главная
+ *  остаются на `APP_SLIDER_WIDTH` — там одна колонка, и лишняя ширина ни к чему. */
+export const APP_SLIDER_SETTINGS_WIDTH = 1120
+
 /**
  * The app's own CRM automation trigger (#79). Registered at install via
  * `crm.automation.trigger.add` (idempotent — re-adding the same CODE just updates
