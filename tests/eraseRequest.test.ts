@@ -35,7 +35,7 @@ function eraseDeps(over: Partial<EraseDeps> = {}): EraseDeps {
 
 describe('parseEraseSelection — кривой ввод НЕ расширяет стирание', () => {
   it('пустой ввод = «за всё время по всем счетам» (законная форма)', () => {
-    expect(parseEraseSelection(input)).toEqual({ period: {}, accounts: [] })
+    expect(parseEraseSelection(input)).toEqual({ period: {}, accounts: [], counterpartyAccounts: [] })
   })
 
   it('кривая дата — отказ, а не молча отброшенная граница', () => {
@@ -51,12 +51,28 @@ describe('parseEraseSelection — кривой ввод НЕ расширяет 
   })
 
   it('пустые строки в списке отбрасываются, но список не становится «все»', () => {
-    expect(parseEraseSelection({ ...input, accounts: [' BY01ALFA ', ''] })).toEqual({ period: {}, accounts: ['BY01ALFA'] })
+    expect(parseEraseSelection({ ...input, accounts: [' BY01ALFA ', ''] })).toEqual({ period: {}, accounts: ['BY01ALFA'], counterpartyAccounts: [] })
   })
 
   it('слишком длинный список счетов — отказ', () => {
     const many = Array.from({ length: MAX_ERASE_ACCOUNTS + 1 }, (_, i) => `BY${i}`)
     expect(parseEraseSelection({ ...input, accounts: many })).toBeNull()
+  })
+
+  it('счета контрагента (#591) — свободный формат, как в «Исключениях»', () => {
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: [' BY99PAYER0001 ', ''] }))
+      .toEqual({ period: {}, accounts: [], counterpartyAccounts: ['BY99PAYER0001'] })
+    // ⚠ Счёт плательщика с ПРОБЕЛОМ/`/` принимается (в CRM такие есть — состояние looks-same): иначе
+    // счёт можно ИСКЛЮЧИТЬ, но нельзя ВЫЧИСТИТЬ уже созданные дела — фича не работает ровно на них.
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: ['BY00 BANK 1234', '30-06/765'] }))
+      .toEqual({ period: {}, accounts: [], counterpartyAccounts: ['BY00 BANK 1234', '30-06/765'] })
+    // Но структурный мусор — по-прежнему ОТКАЗ: перевод строки внутри, не-строка, не-массив, перебор.
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: ['a\nb'] })).toBeNull()
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: [42] })).toBeNull()
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: 'BY99' })).toBeNull()
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: ['x'.repeat(65)] })).toBeNull()
+    const many = Array.from({ length: MAX_ERASE_ACCOUNTS + 1 }, (_, i) => `BY${i}`)
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: many })).toBeNull()
   })
 })
 

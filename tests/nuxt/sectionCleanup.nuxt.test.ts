@@ -125,6 +125,40 @@ describe('раздел «Очистка» (#576 п.4)', () => {
     expect((await mountReady()).text()).toContain('Опрос банка сейчас работает')
   })
 
+  it('счёт контрагента (#591) доезжает до запроса подсчёта', async () => {
+    const w = await mountReady()
+    const ta = w.find('textarea')
+    expect(ta.exists()).toBe(true)
+    await ta.setValue('BY99PAYER0001')
+    await nextTick()
+    await btn(w, 'Посчитать')!.trigger('click')
+    await flushPromises()
+    // Запрос ушёл с параметром counterpartyAccounts именно этого счёта.
+    const call = fetchMock.mock.calls.find(c => c[0] === '/api/activities/erasable') as unknown as [string, { query: { counterpartyAccounts?: string[] } }] | undefined
+    expect(call).toBeTruthy()
+    expect(call![1].query.counterpartyAccounts).toEqual(['BY99PAYER0001'])
+  })
+
+  it('слишком длинный счёт контрагента блокирует «Посчитать» и объясняет ошибку (#591)', async () => {
+    const w = await mountReady()
+    await w.find('textarea').setValue('x'.repeat(65))
+    await nextTick()
+    expect(w.text()).toContain('Слишком длинный номер счёта')
+    // Кнопка «Посчитать» отключена — кривой ввод не должен уходить на сервер.
+    const countBtn = w.findAll('button').find(b => b.text().includes('Посчитать')) as unknown as { attributes: (a: string) => string | undefined }
+    expect(countBtn.attributes('disabled')).toBeDefined()
+  })
+
+  it('правка счёта контрагента СНИМАЕТ подтверждение (#591)', async () => {
+    const w = await mountReady()
+    await btn(w, 'Посчитать')!.trigger('click')
+    await flushPromises()
+    expect(btn(w, 'Да, стереть')).toBeTruthy()
+    await w.find('textarea').setValue('BY99PAYER0001')
+    await nextTick()
+    expect(btn(w, 'Да, стереть')).toBeUndefined()
+  })
+
   it('прямо говорит, что элементы смарт-процесса НЕ стираются', async () => {
     // ⚠ Текст рядом перечисляет, чего мы не трогаем у клиента; молчание про наш же смарт-процесс
     // на этом фоне читалось бы как «его тоже стёрли». А выходит наоборот.

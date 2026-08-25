@@ -60,6 +60,9 @@ const ANY_PORTAL_USER = [
   'import.post.ts',
   'import/batch.get.ts',
   'import/metrics.get.ts',
+  // «Последние операции» для главного экрана (#5/#36) — витрина, её смотрит любой сотрудник, в
+  // отличие от admin-only реестра распределения (`distribution/ledger.get.ts`).
+  'import/operations.get.ts',
   'import/status.get.ts'
 ]
 

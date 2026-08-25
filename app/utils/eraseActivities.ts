@@ -19,7 +19,7 @@
 // Для необратимого действия это неприемлемо, поэтому B24 сужает по своему (`ORIGINATOR_ID` + даты),
 // а точное сравнение по счёту делает эта функция.
 
-import { ACTIVITY_ORIGIN } from './activity'
+import { ACTIVITY_ORIGIN, neutralizeBb } from './activity'
 
 /**
  * Период стирания. Обе границы НЕОБЯЗАТЕЛЬНЫ, и это все четыре формы, которые просил владелец:
@@ -45,6 +45,20 @@ export interface EraseSelection {
    * попадать под «стереть всё по этому банку» ровно тогда, когда это нужнее всего.
    */
   accounts: string[]
+  /**
+   * Счета КОНТРАГЕНТА (плательщика), по которым стираем (#591). Пустой список ⇒ фильтр не применяется.
+   *
+   * ⚠ ЗАЧЕМ. Админ добавил счёт плательщика в «Исключения» → новые операции по нему в CRM не
+   * попадают, но УЖЕ созданные дела убрать было нечем: единственным ходом было «стереть всё за
+   * период», а это снесло бы и корректные дела настоящих клиентов. Здесь — тот же счёт плательщика,
+   * что и в исключениях, точным сравнением.
+   *
+   * ⚠ Источник — строка `Счёт:` в ОПИСАНИИ дела (`counterpartyAccountOf`), а не маркер: маркер
+   * (`ORIGIN_ID`) несёт НАШ счёт, а счёт контрагента там либо отсутствует (при `docId`), либо
+   * захеширован в сигнатуру. В описании же он лежит человекочитаемой строкой, которую и пишет
+   * `buildActivityDescription`.
+   */
+  counterpartyAccounts: string[]
 }
 
 /** Строка дела, как её отдаёт `crm.activity.list` с нашим `select`. */
@@ -52,6 +66,9 @@ export interface ActivityRow {
   id: string
   originatorId: string
   originId: string
+  /** Описание дела (`DESCRIPTION`) — читается ТОЛЬКО когда задан фильтр по счёту контрагента (#591);
+   *  иначе пусто, чтобы не тащить лишнее поле в общем пути. */
+  description: string
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -103,6 +120,21 @@ export function accountOfOrigin(originId: string): string {
 }
 
 /**
+ * Счёт контрагента из ОПИСАНИЯ дела (#591) — значение строки `[B]Счёт:[/B] <счёт>`.
+ *
+ * ⚠ Метка `[B]Счёт:[/B]` — НАША и неподделываема: описание пишет `buildActivityDescription`, а
+ * поля плательщика (имя/назначение) проходят `neutralizeBb`, превращающий их ASCII-скобки в
+ * полноширинные. Значит плательщик не может вписать в своё имя `[B]Счёт:[/B]` с настоящими
+ * скобками и подсунуть чужой счёт. Сам номер счёта — букво-цифровой, скобок не содержит, поэтому
+ * доезжает до описания как есть и сравнивается точно. Нет строки счёта (банк его не сообщил) ⇒
+ * пустая строка: под фильтр по счёту контрагента такое дело не попадёт никогда.
+ */
+export function counterpartyAccountOf(description: string): string {
+  const m = /\[B\]Счёт:\[\/B\][ \t]*([^\n\r]*)/.exec(description)
+  return m ? m[1]!.trim() : ''
+}
+
+/**
  * Отобрать строки, которые действительно можно удалить.
  *
  * ⚠ ВТОРАЯ граница безопасности, и она не дублирует первую. Первая (фильтр) — наш код, вторая
@@ -112,12 +144,21 @@ export function accountOfOrigin(originId: string): string {
  */
 export function selectDeletable(rows: readonly ActivityRow[], selection: EraseSelection): ActivityRow[] {
   const wanted = new Set(selection.accounts.filter(a => a !== ''))
+  // Счета контрагента (#591) — второй, независимый фильтр. Пустой ⇒ не применяется.
+  // ⚠ Значение из описания хранится как `neutralizeBb(cp.account)`, поэтому и фильтр прогоняем через
+  // тот же `neutralizeBb` (+trim), иначе счёт с BB-скобками сравнивался бы с уже нейтрализованным и
+  // молча не совпал бы. Для обычного номера (без скобок) это no-op — сравнение остаётся точным.
+  const wantedCp = new Set(
+    selection.counterpartyAccounts.map(a => neutralizeBb(a.trim())).filter(a => a !== '')
+  )
   return rows.filter((r) => {
     if (r.originatorId !== ACTIVITY_ORIGIN) return false
     if (!r.id) return false
-    if (wanted.size === 0) return true
-    // Точное сравнение счёта, а не «содержит»: см. шапку модуля.
-    return wanted.has(accountOfOrigin(r.originId))
+    // Точное сравнение счёта, а не «содержит»: см. шапку модуля. Оба фильтра — И: если заданы
+    // и наш счёт, и счёт контрагента, дело обязано совпасть с обоими.
+    if (wanted.size > 0 && !wanted.has(accountOfOrigin(r.originId))) return false
+    if (wantedCp.size > 0 && !wantedCp.has(counterpartyAccountOf(r.description))) return false
+    return true
   })
 }
 

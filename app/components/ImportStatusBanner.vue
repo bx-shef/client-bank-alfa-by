@@ -33,7 +33,10 @@ const icon = computed(() => {
 const title = computed(() => {
   const s = props.status
   if (s.state === 'ok' && s.lastSyncAt && now.value) {
-    return `Обновлено ${formatRelativeTime(s.lastSyncAt, now.value)}`
+    // ⚠ «Последние движения», а НЕ «Обновлено» (#37): метка ставится только когда прогон дал
+    // операции, поэтому «обновлено N назад» читалось как «опрос был N назад» и путало с частотой
+    // опроса (она своя — CRON_INTERVAL_MIN). Честнее сказать, когда были последние движения.
+    return `Последние движения — ${formatRelativeTime(s.lastSyncAt, now.value)}`
   }
   return meta.value.label
 })
@@ -44,19 +47,24 @@ const absoluteTime = computed(() =>
     : ''
 )
 
-// "+N новых операций" / "Новых операций нет". Reuses the tested pluralRu helper.
+// "+N движений по счёту" / "Новых движений нет" (#37 — «движения» понятнее бухгалтеру, чем
+// техническое «операции»). Reuses the tested pluralRu helper.
 const operationsLine = computed(() => {
   const n = props.status.operations
-  if (n <= 0) return 'Новых операций нет'
-  return `+${n} ${pluralRu(n, ['новая операция', 'новые операции', 'новых операций'])}`
+  if (n <= 0) return 'Новых движений по счёту нет'
+  return `+${n} ${pluralRu(n, ['движение', 'движения', 'движений'])} по счёту`
 })
 
-// "Записано в CRM · N уведомления в чат" — confirms the chain reached the end.
+// "Записаны в CRM · N уведомлений в чат" — что именно доехало до людей (#37).
+// ⚠ «уведомление в чат», а не голое «N в чат»: число рядом с «записано в CRM» читалось как «часть
+// ушла НЕ в CRM». Это уведомления в ЧАТ УВЕДОМЛЕНИЙ — не проблемы (те идут в чат ошибок отдельно).
 const chainLine = computed(() => {
   const s = props.status
   if (s.state !== 'ok' || s.operations === 0) return ''
-  const chat = s.chatNotified > 0 ? ` · ${s.chatNotified} в чат` : ''
-  return `Записано в CRM${chat}`
+  const chat = s.chatNotified > 0
+    ? ` · ${s.chatNotified} ${pluralRu(s.chatNotified, ['уведомление', 'уведомления', 'уведомлений'])} в чат`
+    : ''
+  return `Записаны в CRM${chat}`
 })
 </script>
 

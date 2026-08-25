@@ -9,6 +9,11 @@
 //     found», а не `ERROR_BATCH_METHOD_NOT_ALLOWED`). Без этого 400 дел удалялись бы по одному при
 //     лимите 2 запроса в секунду — три минуты, то есть не в HTTP-запросе, а в очереди.
 //
+// ⚠ ЕЩЁ НЕ ЗАМЕРЕНО (#591): что `crm.activity.list` возвращает непустой `DESCRIPTION` при явном
+//   `select: ['…','DESCRIPTION']` и в каком виде (BB/`DESCRIPTION_TYPE`). Стандартное поведение
+//   Bitrix, риск низкий, но по правилу модуля «мерь, не предполагай» — проверить на боевом до
+//   опоры на фильтр по счёту контрагента и внести сюда.
+//
 // ⚠ Общий батч-транспорт ОСТАНАВЛИВАЕТСЯ на первой упавшей команде (`isHaltOnError: true`), и для
 // чтения это верно. Для удаления — нет: дело, уже удалённое человеком вручную, оборвало бы весь
 // остаток пачки. Поэтому здесь падение чанка НЕ считается провалом операции: мы прекращаем удалять
@@ -44,6 +49,21 @@ export const ACTIVITY_PAGE = 50
  */
 export const MAX_ERASE_PER_REQUEST = 300
 
+/**
+ * Потолок ПРОСМОТРЕННЫХ страниц за один вызов (#591).
+ *
+ * ⚠ Заведён вместе с фильтром по счёту контрагента. До него обход всегда упирался в `cap` за ~6
+ * страниц: без отбора КАЖДАЯ строка — совпадение, и `matched` добирал 300 сразу. С РЕДКИМ счётом
+ * контрагента (плательщик встречается в единицах дел из тысяч) `matched` растёт медленно, и обход
+ * прошёл бы `total/50` страниц — десятки запросов, то есть тот самый таймаут nginx, которого весь
+ * модуль избегает. Потолок держит худший случай в 40 страниц (2000 дел, ~20с при 2 запросах/с).
+ * ⚠ Цена честная: совпадения ГЛУБЖЕ 40 страниц за один заход не найдутся — но это НЕДОудаление
+ * (безопасная сторона для необратимого действия), о нём говорит `capped`, а глубокую историю
+ * чистят, сузив период. Обход одинаков в подсчёте и стирании, поэтому показанное совпадает с
+ * удалённым.
+ */
+export const MAX_ERASE_PAGES = 40
+
 /** Что вернула операция. */
 export interface EraseOutcome {
   /** Сколько дел удалено этим вызовом. */
@@ -60,9 +80,22 @@ function rowsOf(resp: Record<string, unknown>): ActivityRow[] {
     return {
       id: row.ID != null ? String(row.ID) : '',
       originatorId: row.ORIGINATOR_ID != null ? String(row.ORIGINATOR_ID) : '',
-      originId: row.ORIGIN_ID != null ? String(row.ORIGIN_ID) : ''
+      originId: row.ORIGIN_ID != null ? String(row.ORIGIN_ID) : '',
+      // `DESCRIPTION` приходит ТОЛЬКО когда мы его запросили (фильтр по счёту контрагента, #591);
+      // иначе поля в ответе нет, и это честная пустая строка.
+      description: row.DESCRIPTION != null ? String(row.DESCRIPTION) : ''
     }
   })
+}
+
+/**
+ * Поля `select` для `crm.activity.list`. `DESCRIPTION` добавляется ТОЛЬКО при фильтре по счёту
+ * контрагента (#591): из него `counterpartyAccountOf` достаёт счёт. В общем пути его не тащим —
+ * описание объёмное (назначение, реквизиты), а на счёт по НАШЕЙ стороне оно не нужно.
+ */
+function listSelect(selection: EraseSelection): string[] {
+  const base = ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID']
+  return selection.counterpartyAccounts.length > 0 ? [...base, 'DESCRIPTION'] : base
 }
 
 /** Сколько дел ВСЕГО попадает под фильтр портала (до нашего точного отбора по счёту). */
@@ -89,8 +122,9 @@ export async function countErasableActivities(
   cap = MAX_ERASE_PER_REQUEST
 ): Promise<{ count: number, capped: boolean }> {
   const filter = buildEraseListFilter(selection.period)
+  const select = listSelect(selection)
   const first = await call(ACTIVITY_LIST_METHOD, {
-    filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start: 0
+    filter, select, order: { ID: 'ASC' }, start: 0
   })
   const total = totalOf(first)
 
@@ -105,18 +139,21 @@ export async function countErasableActivities(
   // 300 — несопоставимо дешевле, чем расхождение двух чисел.
   let matched = selectDeletable(rowsOf(first), selection).length
   let start = ACTIVITY_PAGE
-  while (start < total && matched < cap) {
+  let pages = 1
+  while (start < total && matched < cap && pages < MAX_ERASE_PAGES) {
     const page = await call(ACTIVITY_LIST_METHOD, {
-      filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start
+      filter, select, order: { ID: 'ASC' }, start
     })
     matched += selectDeletable(rowsOf(page), selection).length
     start += ACTIVITY_PAGE
+    pages++
   }
-  // ⚠ `capped` означает «под отбор попадает БОЛЬШЕ, чем мы стираем за раз», и здесь он честно
-  // консервативен: обход прекращается, как только набрано `cap`, поэтому оставшиеся страницы могли
-  // бы не дать ни одного совпадения. Ошибка в эту сторону безопасна — «и более» приглашает нажать
-  // ещё раз, а лишнее нажатие ничего не портит; обратная ошибка молча оставила бы дела.
-  return { count: Math.min(matched, cap), capped: matched >= cap && start < total }
+  // ⚠ `capped` означает «под отбор попадает БОЛЬШЕ, чем мы стираем/просмотрели за раз», и здесь он
+  // честно консервативен: обход прекращается по набору `cap` ЛИБО по потолку страниц (#591), поэтому
+  // оставшиеся страницы могли бы не дать ни одного совпадения. Ошибка в эту сторону безопасна — «и
+  // более» приглашает нажать ещё раз/сузить период, а лишнее нажатие ничего не портит; обратная
+  // ошибка молча оставила бы дела.
+  return { count: Math.min(matched, cap), capped: (matched >= cap || pages >= MAX_ERASE_PAGES) && start < total }
 }
 
 /**
@@ -134,16 +171,21 @@ export async function eraseActivities(
   cap = MAX_ERASE_PER_REQUEST
 ): Promise<EraseOutcome> {
   const filter = buildEraseListFilter(selection.period)
-  const listParams = { filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start: 0 }
+  const listParams = { filter, select: listSelect(selection), order: { ID: 'ASC' }, start: 0 }
 
   const first = await call(ACTIVITY_LIST_METHOD, listParams)
   const total = totalOf(first)
   const ids: string[] = selectDeletable(rowsOf(first), selection).map(r => r.id)
   let start = ACTIVITY_PAGE
-  while (start < total && ids.length < cap) {
+  let pages = 1
+  // ⚠ Тот же потолок страниц, что и в подсчёте (#591) — иначе редкий счёт контрагента заставил бы
+  // обход пройти всю историю и упереться в таймаут. Обход обязан быть ИДЕНТИЧЕН подсчёту, чтобы
+  // показанное человеку число совпало с удалённым.
+  while (start < total && ids.length < cap && pages < MAX_ERASE_PAGES) {
     const page = await call(ACTIVITY_LIST_METHOD, { ...listParams, start })
     ids.push(...selectDeletable(rowsOf(page), selection).map(r => r.id))
     start += ACTIVITY_PAGE
+    pages++
   }
   const doomed = ids.slice(0, cap)
 

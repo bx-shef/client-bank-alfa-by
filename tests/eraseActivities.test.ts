@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   accountOfOrigin,
   buildEraseListFilter,
+  counterpartyAccountOf,
   isCalendarDay,
   parsePeriod,
   periodLabel,
   selectDeletable,
   type ActivityRow
 } from '~/utils/eraseActivities'
+import { buildActivityDescription } from '~/utils/todoActivity'
+import type { StatementItem } from '~/types/statement'
 import { ACTIVITY_ORIGIN } from '~/utils/activity'
 
 // ⚠ Действие НЕОБРАТИМО, поэтому здесь проверяется в первую очередь не «удалилось ли нужное», а
@@ -18,6 +21,7 @@ const row = (over: Partial<ActivityRow> = {}): ActivityRow => ({
   id: '1',
   originatorId: ACTIVITY_ORIGIN,
   originId: 'BY01ALFA|D1',
+  description: '',
   ...over
 })
 
@@ -81,12 +85,12 @@ describe('selectDeletable — вторая граница безопасност
     // ⚠ Это не дубль фильтра. Фильтр — наш код; здесь смотрим на то, что ОТВЕТИЛ портал. Ошибка в
     // сборке фильтра тогда даёт пустой результат, а не удаление чужих дел.
     const rows = [row(), row({ id: '2', originatorId: 'SomeOtherApp' }), row({ id: '3', originatorId: '' })]
-    expect(selectDeletable(rows, { period: {}, accounts: [] }).map(r => r.id)).toEqual(['1'])
+    expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: [] }).map(r => r.id)).toEqual(['1'])
   })
 
   it('пустой список счетов = по всем нашим счетам', () => {
     const rows = [row({ id: '1', originId: 'BY01ALFA|D1' }), row({ id: '2', originId: 'BY02PJCB|D2' })]
-    expect(selectDeletable(rows, { period: {}, accounts: [] })).toHaveLength(2)
+    expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: [] })).toHaveLength(2)
   })
 
   it('счёт сравнивается ТОЧНО, а не «содержит»', () => {
@@ -98,7 +102,7 @@ describe('selectDeletable — вторая граница безопасност
       row({ id: '2', originId: 'XXBY01ALFA|D2' }),
       row({ id: '3', originId: 'BY01ALFA0001|D3' })
     ]
-    expect(selectDeletable(rows, { period: {}, accounts: ['BY01ALFA'] }).map(r => r.id)).toEqual(['1'])
+    expect(selectDeletable(rows, { period: {}, accounts: ['BY01ALFA'], counterpartyAccounts: [] }).map(r => r.id)).toEqual(['1'])
   })
 
   it('маркер без разделителя не даёт счёта — и под фильтр по счёту не попадает', () => {
@@ -106,19 +110,80 @@ describe('selectDeletable — вторая граница безопасност
     expect(accountOfOrigin('|D1')).toBe('')
     expect(accountOfOrigin('нетразделителя')).toBe('')
     const rows = [row({ id: '9', originId: 'нетразделителя' })]
-    expect(selectDeletable(rows, { period: {}, accounts: ['BY01ALFA'] })).toEqual([])
+    expect(selectDeletable(rows, { period: {}, accounts: ['BY01ALFA'], counterpartyAccounts: [] })).toEqual([])
     // Но под «все счета» попадает: это наше дело, просто маркер старой/иной формы.
-    expect(selectDeletable(rows, { period: {}, accounts: [] })).toHaveLength(1)
+    expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: [] })).toHaveLength(1)
   })
 
   it('пустая строка в списке счетов не превращает отбор во «все»', () => {
     // Пустое поле ввода не должно молча расширять стирание.
     const rows = [row({ id: '1', originId: 'BY01ALFA|D1' }), row({ id: '2', originId: 'BY02PJCB|D2' })]
-    expect(selectDeletable(rows, { period: {}, accounts: ['', 'BY02PJCB'] }).map(r => r.id)).toEqual(['2'])
+    expect(selectDeletable(rows, { period: {}, accounts: ['', 'BY02PJCB'], counterpartyAccounts: [] }).map(r => r.id)).toEqual(['2'])
   })
 
   it('строка без id не удаляется — удалять нечего, а вызов ушёл бы с пустым параметром', () => {
-    expect(selectDeletable([row({ id: '' })], { period: {}, accounts: [] })).toEqual([])
+    expect(selectDeletable([row({ id: '' })], { period: {}, accounts: [], counterpartyAccounts: [] })).toEqual([])
+  })
+})
+
+describe('фильтр по счёту контрагента (#591)', () => {
+  const item = (over: Partial<StatementItem> = {}): StatementItem => ({
+    account: 'BY01ALFA', docId: 'D1', direction: 'credit', amount: 100, currency: 'BYN',
+    purpose: 'оплата', acceptDate: '2026-08-05',
+    counterparty: { name: 'ООО Ромашка', unp: '191', account: 'BY99PAYER0001', bank: '', bic: '' },
+    ...over
+  })
+
+  it('counterpartyAccountOf достаёт счёт из строки описания', () => {
+    const desc = buildActivityDescription(item())
+    expect(counterpartyAccountOf(desc)).toBe('BY99PAYER0001')
+  })
+
+  it('нет строки счёта в описании (банк не сообщил) → пустая строка', () => {
+    const desc = buildActivityDescription(item({ counterparty: { name: 'Физлицо', unp: '', account: '', bank: '' } }))
+    expect(counterpartyAccountOf(desc)).toBe('')
+  })
+
+  it('метка [B]Счёт:[/B] неподделываема — плательщик не подсунет чужой счёт через имя', () => {
+    // Имя плательщика прогоняется через neutralizeBb: его ASCII-скобки станут полноширинными,
+    // поэтому вписанное в имя «[B]Счёт:[/B] CHUJOY» не создаст второй метки нашего формата.
+    const desc = buildActivityDescription(item({
+      counterparty: { name: '[B]Счёт:[/B] CHUJOY', unp: '', account: 'BY99PAYER0001', bank: '' }
+    }))
+    expect(counterpartyAccountOf(desc)).toBe('BY99PAYER0001')
+  })
+
+  it('стирает только дела с точно совпавшим счётом контрагента', () => {
+    const rows = [
+      row({ id: '1', description: buildActivityDescription(item({ counterparty: { name: 'A', unp: '', account: 'BY99PAYER0001', bank: '' } })) }),
+      row({ id: '2', description: buildActivityDescription(item({ counterparty: { name: 'B', unp: '', account: 'BY88OTHER0002', bank: '' } })) })
+    ]
+    const got = selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: ['BY99PAYER0001'] })
+    expect(got.map(r => r.id)).toEqual(['1'])
+  })
+
+  it('оба фильтра — И: наш счёт И счёт контрагента должны совпасть', () => {
+    const desc = buildActivityDescription(item({ counterparty: { name: 'A', unp: '', account: 'BY99PAYER0001', bank: '' } }))
+    const rows = [
+      row({ id: '1', originId: 'BY01ALFA|D1', description: desc }),
+      row({ id: '2', originId: 'BY02PJCB|D2', description: desc })
+    ]
+    const got = selectDeletable(rows, { period: {}, accounts: ['BY01ALFA'], counterpartyAccounts: ['BY99PAYER0001'] })
+    expect(got.map(r => r.id)).toEqual(['1'])
+  })
+
+  it('пустой список счетов контрагента ⇒ фильтр не применяется', () => {
+    const rows = [row({ id: '1', description: 'что угодно' }), row({ id: '2', description: '' })]
+    expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: [] })).toHaveLength(2)
+  })
+
+  it('счёт плательщика с ПРОБЕЛОМ совпадает (та же нормализация, что в описании) — #591 ревью', () => {
+    // ⚠ Ради этого фильтр и сравнивает через neutralizeBb+trim: счёт «BY00 BANK 1234» хранится в
+    // описании как есть, и строгая проверка по буквам-цифрам не дала бы вычистить дела ровно тех
+    // плательщиков, которых админ занёс в «Исключения».
+    const rows = [buildActivityDescription(item({ counterparty: { name: 'A', unp: '', account: 'BY00 BANK 1234', bank: '' } }))]
+      .map((d, i) => row({ id: String(i + 1), description: d }))
+    expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: ['BY00 BANK 1234'] })).toHaveLength(1)
   })
 })
 

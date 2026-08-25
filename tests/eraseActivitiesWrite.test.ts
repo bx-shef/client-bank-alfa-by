@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { countErasableActivities, eraseActivities, MAX_ERASE_PER_REQUEST } from '../server/utils/eraseActivitiesWrite'
+import { countErasableActivities, eraseActivities, MAX_ERASE_PER_REQUEST, MAX_ERASE_PAGES } from '../server/utils/eraseActivitiesWrite'
 import { ACTIVITY_ORIGIN } from '../app/utils/activity'
 import type { RestBatch, RestCall } from '../server/utils/companyLookup'
 
@@ -26,7 +26,7 @@ function fakePortal(rows: Record<string, unknown>[], afterRows = rows) {
   return { call, batch, deletedCount: () => deleted }
 }
 
-const all = { period: {}, accounts: [] }
+const all = { period: {}, accounts: [], counterpartyAccounts: [] }
 
 describe('countErasableActivities — показать до удаления', () => {
   it('перепроверяет метку в ОТВЕТЕ даже без отбора по счетам', async () => {
@@ -61,7 +61,7 @@ describe('countErasableActivities — показать до удаления', (
       ...Array.from({ length: 40 }, (_, i) => ours(`p${i}`, 'BY02PJCB'))
     ]
     const { call } = fakePortal(rows)
-    expect(await countErasableActivities({ period: {}, accounts: ['BY02PJCB'] }, call)).toEqual({ count: 40, capped: false })
+    expect(await countErasableActivities({ period: {}, accounts: ['BY02PJCB'], counterpartyAccounts: [] }, call)).toEqual({ count: 40, capped: false })
   })
 
   it('упёрлись в потолок — говорим об этом, а не показываем усечённое число как точное', async () => {
@@ -83,6 +83,27 @@ describe('countErasableActivities — показать до удаления', (
     const rows = Array.from({ length: 100 }, (_, i) => ours(String(i)))
     const { call } = fakePortal(rows)
     expect(await countErasableActivities(all, call, 100)).toEqual({ count: 100, capped: false })
+  })
+
+  it('обход упирается в потолок страниц при редком счёте контрагента (#591)', async () => {
+    // ⚠ С редким плательщиком `matched` растёт медленно, и без потолка обход прошёл бы всю историю
+    // (десятки запросов, таймаут). Потолок держит его в MAX_ERASE_PAGES страниц. Здесь НИ ОДНО дело
+    // не совпадает по счёту контрагента, а история длиннее потолка ⇒ count 0, но capped=true —
+    // «нечего» было бы ложью, совпадение могло быть за пределами просмотренного.
+    const rows = Array.from({ length: (MAX_ERASE_PAGES + 5) * 50 }, (_, i) => ({
+      ID: String(i), ORIGINATOR_ID: ACTIVITY_ORIGIN, ORIGIN_ID: `BY01ALFA|D${i}`,
+      DESCRIPTION: '[B]Счёт:[/B] BY88OTHER0002'
+    }))
+    let calls = 0
+    const call: RestCall = vi.fn(async (_m, params) => {
+      calls++
+      const start = Number(params.start ?? 0)
+      return { result: rows.slice(start, start + 50), total: rows.length }
+    })
+    const res = await countErasableActivities({ period: {}, accounts: [], counterpartyAccounts: ['BY99PAYER0001'] }, call)
+    expect(res).toEqual({ count: 0, capped: true })
+    // Обход не ушёл дальше потолка: ровно MAX_ERASE_PAGES вызовов списка.
+    expect(calls).toBe(MAX_ERASE_PAGES)
   })
 
   it('НЕ умеет удалять: батч ему не передаётся вовсе', () => {
@@ -120,9 +141,33 @@ describe('eraseActivities — само удаление', () => {
   it('отбор по счёту доезжает до удаления', async () => {
     const rows = [ours('1', 'BY01ALFA'), ours('2', 'BY02PJCB')]
     const { call, batch } = fakePortal(rows, [])
-    await eraseActivities({ period: {}, accounts: ['BY02PJCB'] }, call, batch)
+    await eraseActivities({ period: {}, accounts: ['BY02PJCB'], counterpartyAccounts: [] }, call, batch)
     const sent = (batch as unknown as { mock: { calls: [{ params?: { id?: string } }[]][] } }).mock.calls
     expect(sent.flatMap(c => c[0].map(x => x.params?.id))).toEqual(['2'])
+  })
+
+  it('фильтр по счёту контрагента (#591): DESCRIPTION запрашивается и решает удаление', async () => {
+    const withCp = (id: string, cp: string) => ({
+      ID: id, ORIGINATOR_ID: ACTIVITY_ORIGIN, ORIGIN_ID: `BY01ALFA|D${id}`,
+      DESCRIPTION: `[B]Приход:[/B] 100 BYN\n[B]Счёт:[/B] ${cp}`
+    })
+    const rows = [withCp('1', 'BY99PAYER0001'), withCp('2', 'BY88OTHER0002')]
+    const { call, batch } = fakePortal(rows, [])
+    const selection = { period: {}, accounts: [], counterpartyAccounts: ['BY99PAYER0001'] }
+    await eraseActivities(selection, call, batch)
+    const sent = (batch as unknown as { mock: { calls: [{ params?: { id?: string } }[]][] } }).mock.calls
+    expect(sent.flatMap(c => c[0].map(x => x.params?.id))).toEqual(['1'])
+    // ⚠ DESCRIPTION обязано быть в select — иначе счёт контрагента прочитать неоткуда, и фильтр
+    // молча совпал бы с пустой строкой (не удалил бы ничего).
+    const listParams = (call as unknown as { mock: { calls: [string, Record<string, unknown>][] } }).mock.calls[0]![1]
+    expect(listParams.select).toContain('DESCRIPTION')
+  })
+
+  it('без фильтра по контрагенту DESCRIPTION НЕ запрашивается (общий путь лёгкий)', async () => {
+    const { call, batch } = fakePortal([ours('1')], [])
+    await eraseActivities({ period: {}, accounts: [], counterpartyAccounts: [] }, call, batch)
+    const listParams = (call as unknown as { mock: { calls: [string, Record<string, unknown>][] } }).mock.calls[0]![1]
+    expect(listParams.select).not.toContain('DESCRIPTION')
   })
 
   it('упавшая пачка ОСТАНАВЛИВАЕТ, но не проваливает операцию', async () => {

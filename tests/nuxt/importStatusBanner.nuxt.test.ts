@@ -23,19 +23,33 @@ describe('ImportStatusBanner', () => {
     })
     await nextTick()
     const text = wrapper.text()
-    expect(text).toContain('Обновлено')
-    expect(text).toContain('+3 новые операции') // grammatically correct for 2–4
-    expect(text).toContain('Записано в CRM')
-    expect(text).toContain('2 в чат')
+    // #37: заголовок «Последние движения», а не «Обновлено» (путало с частотой опроса).
+    expect(text).toContain('Последние движения')
+    expect(text).toContain('+3 движения по счёту') // правильное склонение для 2–4
+    expect(text).toContain('Записаны в CRM')
+    // #37: явно «уведомления в чат», а не голое «2 в чат» (читалось как «часть не в CRM»).
+    expect(text).toContain('2 уведомления в чат')
   })
 
-  it('ok with zero operations: "Новых операций нет" and no chain line', async () => {
+  it('ok with zero operations: "Новых движений нет" and no chain line', async () => {
     const wrapper = await mountSuspended(ImportStatusBanner, {
       props: { status: make({ state: 'ok', lastSyncAt: new Date().toISOString(), operations: 0 }) }
     })
     await nextTick()
-    expect(wrapper.text()).toContain('Новых операций нет')
-    expect(wrapper.text()).not.toContain('Записано в CRM')
+    expect(wrapper.text()).toContain('Новых движений по счёту нет')
+    expect(wrapper.text()).not.toContain('Записаны в CRM')
+  })
+
+  it('ok с одной операцией и одним уведомлением — правильное склонение (#37)', async () => {
+    const wrapper = await mountSuspended(ImportStatusBanner, {
+      props: {
+        status: make({ state: 'ok', lastSyncAt: new Date().toISOString(), operations: 1, chatNotified: 1 })
+      }
+    })
+    await nextTick()
+    const text = wrapper.text()
+    expect(text).toContain('+1 движение по счёту')
+    expect(text).toContain('1 уведомление в чат')
   })
 
   it('error: shows the error and a "Проверить настройки" action', async () => {
