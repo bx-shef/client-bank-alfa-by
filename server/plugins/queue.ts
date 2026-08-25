@@ -17,11 +17,10 @@ import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveActivityBindDeps, liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveRegistryWriteDeps, liveTriggerFireDeps, startBindingsWorker, startDeletionWorker, startEventWorker, startFeedbackWorker, startRegistryWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
-import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, isPollableAccount, planFetches, pollWindow } from '../queue/cron'
-import { pickAccountPollers, sharedAccountsLogLine } from '../../app/utils/accountSharing'
+import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
-import { deleteBankToken, deleteBankTokenById, deleteBankTokensForPortal, listAllBankAccountInfo, listBankAccountInfoForPortal } from '../utils/bankTokenStore'
+import { deleteBankToken, deleteBankTokenById, deleteBankTokensForPortal, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankTokenKeepAlive'
@@ -225,17 +224,8 @@ export default defineNitroPlugin((nitroApp) => {
           // Cron root span (#78) — groups the poll's pg scan + Redis enqueues under one trace
           // (otherwise they float as orphan child spans). No-op when telemetry off.
           await withSpan('cron.real-poll', { 'job.queue': 'cron.real-poll' }, async () => {
-            // ⚠ Читаем ПОЛНЫЕ строки, а не короткие ссылки: выбор поллера у совместного счёта
-            // (#615) смотрит на свежесть подключения, а её в `BankAccountRef` нет.
-            const rows = await listAllBankAccountInfo(dbQuery)
-            // Один счёт — ОДИН опрос (#615). До этого каждый портал опрашивал банк своим
-            // подключением, и они убивали refresh друг другу: Альфа ротирует токен при каждом
-            // обновлении, а лок берётся пер-портально. Это и был механизм ежедневной смерти (#488).
-            const pollable = rows.filter(isPollableAccount)
-            const pollers = pickAccountPollers(pollable, Date.now())
-            const shareNote = sharedAccountsLogLine(pollable.length, pollers.length)
-            if (shareNote) log.info(`[fetch] ${shareNote}`)
-            const byPortal = accountsForPolling(pollers)
+            const refs = await listAllBankAccounts(dbQuery)
+            const byPortal = accountsForPolling(refs)
             if (byPortal.length === 0) return // no connected accounts yet — nothing to do
             const now = new Date()
             const { dateFrom, dateTo } = pollWindow(now, lookback)

@@ -163,9 +163,26 @@ export function summarizeBankHealth(
 
   for (const row of rows) {
     allPortals.add(row.memberId)
+    // ⚠ Метку подписки читаем ДО отсева ожидающих (#614). Автоотключение стирает ВСЕ строки
+    // портала, включая `~pending:`, — а раздел консоли их не показывал, потому что отсев стоял
+    // раньше. Получалось, что единственное состояние, которое раздел прятал, было ровно то, ради
+    // которого он написан: админ прошёл банк, не успел выбрать счёт, подписка кончилась — и через
+    // четверо суток недонастроенное подключение молча исчезало, без обратного отсчёта и без кнопки.
+    const subEndedRaw = subscriptionEndedAt?.get(row.memberId) ?? 0
     if (isPendingAccountKey(row.accountKey)) {
       pending.connections += 1
       pendingPortals.add(row.memberId)
+      if (hashPortal && subEndedRaw > 0) {
+        subscriptionDead.push({
+          id: row.id,
+          portalHash: hashPortal(row.memberId),
+          provider: row.provider,
+          deadDays: deadDays(subEndedRaw, nowMs),
+          // ⚠ Состояние — `unknown`, а не `ok`: у ожидающего подключения счёта ещё нет, и судить
+          // о здоровье банковской пары не по чему. `ok` утверждал бы то, чего мы не проверяли.
+          health: 'unknown'
+        })
+      }
       continue
     }
     const health = connectionHealth(row, nowMs)
@@ -183,7 +200,7 @@ export function summarizeBankHealth(
     // ⚠ Приоритет — БАНКОВСКИЙ, тот же, что на сервере (`bankReason ?? subscription-ended`): такую
     // строку чинит владелец счёта входом в интернет-банк, и подписка этого не отменяет. Разойдись
     // экран с сервером — оператор увидел бы «подписка», а пометка клиенту ушла бы про банк.
-    const subEnded = needsHumanHealth(health) ? 0 : (subscriptionEndedAt?.get(row.memberId) ?? 0)
+    const subEnded = needsHumanHealth(health) ? 0 : subEndedRaw
     if (hashPortal && subEnded > 0) {
       subscriptionDead.push({
         id: row.id,

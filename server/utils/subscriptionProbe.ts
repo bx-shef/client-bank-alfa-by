@@ -10,12 +10,23 @@
 // запросов в сутки, а не нагрузка на флот.
 
 import type { RestCall } from './companyLookup'
+import { withTimeout } from './b24Sdk'
 import { isSubscriptionEnded } from '../../app/utils/portalSubscription'
 
 /** Самый дешёвый метод, который есть у ЛЮБОГО портала и не зависит от настройки CRM. */
 export const SUBSCRIPTION_PROBE_METHOD = 'profile'
 
 export type SubscriptionVerdict = 'alive' | 'dead' | 'unknown'
+
+/**
+ * Потолок ожидания портала.
+ *
+ * ⚠ У обычного вызова SDK таймаута НЕТ вовсе (`withTimeout` накинут только на рефреш), а этот
+ * вызов — ПЕРВЫЙ исходящий REST на свип-тике: за ним в том же тике идёт чистка брошенных
+ * подключений. Портал, который принял соединение и молчит, задержал бы её на весь тик, а то и на
+ * несколько. Ждём не дольше, чем не жалко: не дождались — `unknown`, то есть отложили решение.
+ */
+export const SUBSCRIPTION_PROBE_TIMEOUT_MS = 15_000
 
 /**
  * Спросить портал напрямую.
@@ -30,7 +41,7 @@ export type SubscriptionVerdict = 'alive' | 'dead' | 'unknown'
 export async function probeSubscriptionVia(call: RestCall | null): Promise<SubscriptionVerdict> {
   if (!call) return 'unknown' // токена нет — судить не по чему
   try {
-    await call(SUBSCRIPTION_PROBE_METHOD, {})
+    await withTimeout(call(SUBSCRIPTION_PROBE_METHOD, {}), SUBSCRIPTION_PROBE_TIMEOUT_MS)
     return 'alive'
   } catch (e) {
     return isSubscriptionEnded(e) ? 'dead' : 'unknown'
