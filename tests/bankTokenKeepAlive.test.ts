@@ -7,8 +7,7 @@ import {
   selectBankAccountsNearExpiry, type BankKeepAliveDeps,
   EXPIRED_RETRY_INTERVAL_MS,
   expiredRetryDue,
-  KEEP_ALIVE_BAND
-} from '../server/utils/bankTokenKeepAlive'
+  KEEP_ALIVE_BAND, accountsOnManyPortals } from '../server/utils/bankTokenKeepAlive'
 import { connectionHealth } from '../app/utils/bankTokenLifetime'
 
 // Мотив, а не только предмет: подключение Альфы, давшее первые 208 боевых операций, умерло за
@@ -582,5 +581,67 @@ describe('#23 счета одного гранта обновляются ОДИ
     const rows = ['BY01', 'BY02'].map(accountKey =>
       acc({ accountKey, grantId: 'G1', consentExpiresAt: NOW - 1, connectedAt: NOW - ttlMs }))
     expect(selectBankAccountsNearExpiry(rows, NOW).expired).toHaveLength(2)
+  })
+})
+
+describe('счёт, подключённый с НЕСКОЛЬКИХ порталов (#488)', () => {
+  // ⚠ Найдено живым прогоном 2026-08-24. В логе стояло `reconnect: alfa-by/BY09…, alfa-by/BY09…` —
+  // один и тот же счёт дважды. Прочитать это как «разные порталы» было нельзя: первичный ключ
+  // `bank_tokens` это тройка (member_id, provider, account_key), значит одинаковые имена = разные
+  // `member_id`, — но портала в сообщении не было, и владелец шёл переподключать вслепую.
+  // ⚠ Через готовый `acc`, а не своим литералом с кастом: каст скрыл бы расхождение формы, а
+  // компилятор его сразу нашёл (`id` — число, а не строка).
+  function row(memberId: string, accountKey: string): BankAccountInfo {
+    return acc({ memberId, accountKey, grantId: `g-${memberId}` })
+  }
+
+  it('один счёт на двух порталах — находится', () => {
+    expect(accountsOnManyPortals([row('A', 'BY09'), row('B', 'BY09')])).toEqual(['alfa-by/BY09'])
+  })
+
+  it('один счёт на одном портале — не жалуемся', () => {
+    expect(accountsOnManyPortals([row('A', 'BY09')])).toEqual([])
+  })
+
+  it('разные счета одного портала — не жалуемся', () => {
+    // Это штатный случай #23–#25: одно согласие, несколько счетов.
+    expect(accountsOnManyPortals([row('A', 'BY09'), row('A', 'BY10')])).toEqual([])
+  })
+
+  it('счёт различается ПРОВАЙДЕРОМ, а не только номером', () => {
+    // Один номер у разных банков — разные подключения, гонки между ними нет.
+    const prior = { ...row('B', 'BY09'), provider: 'prior-by' } as BankAccountInfo
+    expect(accountsOnManyPortals([row('A', 'BY09'), prior])).toEqual([])
+  })
+
+  it('имя в логе РАЗЛИЧАЕТ порталы', async () => {
+    // Без этого две строки печатались одинаково, и «две штуки» выглядело как опечатка.
+    const logged: string[] = []
+    await runBankKeepAlive({
+      now: () => NOW + 40 * HOUR,
+      listAccounts: async () => [row('A', 'BY09'), row('B', 'BY09')],
+      getToken: async () => null,
+      refresh: async t => t,
+      log: (m: string) => logged.push(m),
+      warn: (m: string) => logged.push(m)
+    })
+    const text = logged.join('\n')
+    expect(text, 'счета с разных порталов по-прежнему неразличимы в логе')
+      .toMatch(/[0-9a-f]{6,}:alfa-by\/BY09[\s\S]*[0-9a-f]{6,}:alfa-by\/BY09/)
+  })
+
+  it('о совместном подключении говорится ОТДЕЛЬНО и с лекарством', async () => {
+    const logged: string[] = []
+    await runBankKeepAlive({
+      now: () => NOW,
+      listAccounts: async () => [row('A', 'BY09'), row('B', 'BY09')],
+      getToken: async () => null,
+      refresh: async t => t,
+      log: (m: string) => logged.push(m),
+      warn: (m: string) => logged.push(m)
+    })
+    const text = logged.join('\n')
+    expect(text).toMatch(/MORE THAN ONE portal/)
+    expect(text, 'не сказано, что переподключение лечит лишь до следующего обновления').toMatch(/until the next refresh/)
   })
 })
