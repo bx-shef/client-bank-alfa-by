@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { QUEUE_NAMES, type QueueName } from '../server/queue/topology'
 import {
   countRecentFailures, isServiceFailure, readQueueHealth, summarisePending,
-  type RawFailedAt, type RawPendingJob
-} from '../server/utils/queueHealthRead'
+  type RawFailedAt, type RawPendingJob } from '../server/utils/queueHealthRead'
 
 // Reading side (#426). Two contracts matter here and are easy to break silently:
 //  1. an unreachable queue must NOT read as empty-and-healthy;
@@ -124,5 +123,25 @@ describe('readQueueHealth', () => {
       }
     }, T0)
     expect(out.find(o => o.queue === 'bank-fetch')!.unreadable).toBe(true)
+  })
+})
+
+describe('отозванный доступ к приложению — сторона ПОРТАЛА (замер 2026-08-25)', () => {
+  // ⚠ На боевом стенде у портала отозвали доступ к приложению в Маркете, и каждая его операция
+  // стала падать `Subscription has been ended` — три попытки на операцию, до упора. Без этой
+  // классификации такой портал считался бы НАШЕЙ поломкой и пейджил бы владельца тем, что тот
+  // починить не может.
+  it('НЕ засчитывается как наша поломка', () => {
+    expect(isServiceFailure('Subscription has been ended')).toBe(false)
+  })
+
+  it('регистр и обрамление не мешают', () => {
+    expect(isServiceFailure('Error: subscription has been ended')).toBe(false)
+    expect(isServiceFailure('SUBSCRIPTION HAS BEEN ENDED')).toBe(false)
+  })
+
+  it('а настоящая наша поломка по-прежнему засчитывается', () => {
+    // Иначе список превратился бы в глушилку всего подряд.
+    expect(isServiceFailure('ECONNREFUSED 10.0.0.5:5432')).toBe(true)
   })
 })
