@@ -12,7 +12,13 @@ import {
   markGrantRevoked,
   saveToken,
   selectReapablePortals,
-  updatePortalTokenSecrets
+  updatePortalTokenSecrets,
+  markSubscriptionEnded,
+  clearSubscriptionEnded,
+  selectSubscriptionEnded,
+  selectSubscriptionCutoff,
+  countSubscriptionCutoff,
+  getSubscriptionEndedAt
 } from '../server/utils/tokenStore'
 import type { PortalToken } from '../server/utils/tokenStore'
 
@@ -418,5 +424,108 @@ describe('#574: скоуп по порталу в SQL — не «парамет�
     const n = await countPortals(query as unknown as QueryFn)
     expect(n).toBe(7)
     expect(sqlOf(calls)).not.toMatch(/grant_revoked_at/)
+  })
+})
+
+describe('метка истёкшей подписки (#614)', () => {
+  function sqlOf(calls: { sql: string }[]): string {
+    return calls.map(c => c.sql).join('\n')
+  }
+  function spy() {
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    })
+    return { calls, query: query as unknown as QueryFn }
+  }
+
+  it('ставится ТОЛЬКО когда её ещё нет — отсчёт от первого отказа', () => {
+    // Перезаписывая метку каждым отказом, мы отодвигали бы срок вечно, и отключение не наступило
+    // бы никогда: механизм выглядел бы рабочим и не работал.
+    const { calls, query } = spy()
+    return markSubscriptionEnded(query, 'M1', 123).then(() => {
+      expect(sqlOf(calls)).toMatch(/subscription_ended_at\s*=\s*0/)
+    })
+  })
+
+  it('адресована ОДНОМУ порталу', async () => {
+    // Без скоупа один отказавший портал пометил бы весь флот и запустил всем таймер отключения.
+    const { calls, query } = spy()
+    await markSubscriptionEnded(query, 'M1', 123)
+    expect(sqlOf(calls)).toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+  })
+
+  it('НЕ штампует updated_at — иначе выбьет портал из выборки продления', async () => {
+    const { calls, query } = spy()
+    await markSubscriptionEnded(query, 'M1', 123)
+    expect(sqlOf(calls)).not.toMatch(/updated_at/)
+  })
+
+  it('снятие тоже адресовано одному порталу и не трогает лишних строк', async () => {
+    const { calls, query } = spy()
+    await clearSubscriptionEnded(query, 'M1')
+    expect(sqlOf(calls)).toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+    // `<> 0` защищает от UPDATE на каждый прогон каждого живого портала.
+    expect(sqlOf(calls)).toMatch(/subscription_ended_at\s*<>\s*0/)
+  })
+
+  it('снятие сообщает, БЫЛА ли метка — иначе в лог шла бы строка на каждый прогон', async () => {
+    const query = vi.fn(async () => []) as unknown as QueryFn
+    expect(await clearSubscriptionEnded(query, 'M1')).toBe(false)
+    const hit = vi.fn(async () => [{ member_id: 'M1' }]) as unknown as QueryFn
+    expect(await clearSubscriptionEnded(hit, 'M1')).toBe(true)
+  })
+
+  it('выборка берёт только помеченных, самых давних первыми, с потолком', async () => {
+    const { calls, query } = spy()
+    await selectSubscriptionEnded(query, 5)
+    const sql = sqlOf(calls)
+    expect(sql).toMatch(/subscription_ended_at > 0/)
+    expect(sql, 'при упоре в потолок очередь должна двигаться').toMatch(/ORDER BY subscription_ended_at ASC/)
+    expect(sql).toMatch(/LIMIT \$1/)
+  })
+
+  it('чтение метки адресовано ОДНОМУ порталу — на нём держится гейт ручного отключения', () => {
+    // ⚠ Без скоупа по порталу оператор отключал бы живое подключение одного клиента на основании
+    // мёртвой подписки ДРУГОГО. Единственный тест на этот SQL: `memStore` его не исполняет.
+    const { calls, query } = spy()
+    return getSubscriptionEndedAt(query, 'M1').then(() => {
+      expect(sqlOf(calls)).toMatch(/WHERE[\s\S]*member_id\s*=\s*\$1/)
+      expect(calls[0]?.params).toEqual(['M1'])
+    })
+  })
+
+  it('метки нет — это НОЛЬ, а не отказ: подписка просто жива', async () => {
+    const query = vi.fn(async () => []) as unknown as QueryFn
+    expect(await getSubscriptionEndedAt(query, 'M1')).toBe(0)
+  })
+
+  // ⚠ Выборка автоотключения (#614) — отдельная от консольной НАМЕРЕННО: консоли нужны ВСЕ
+  // помеченные (она рисует обратный отсчёт), автомату — только перешагнувшие границу. Одна
+  // функция на два вопроса означала бы условие «граница или ноль» прямо в SQL, а его цена
+  // очевидна: ошибись в нём — и автомат отключит банк у портала, помеченного минуту назад.
+  // ⚠ Проверяется САМ SQL: `memStore` в тестах его не исполняет, он переписывает семантику на JS,
+  // поэтому правки `WHERE` для него невидимы (замерено на #23-#25).
+  it('автоотключение смотрит только за границу — иначе отключит помеченных минуту назад', async () => {
+    const { calls, query } = spy()
+    await selectSubscriptionCutoff(query, 123, 5)
+    const sql = sqlOf(calls)
+    expect(sql).toMatch(/subscription_ended_at > 0/)
+    expect(sql, 'без границы кандидатом станет КАЖДЫЙ помеченный').toMatch(/subscription_ended_at <= \$1/)
+    expect(sql, 'при упоре в потолок очередь должна двигаться').toMatch(/ORDER BY subscription_ended_at ASC/)
+    expect(sql).toMatch(/LIMIT \$2/)
+    expect(calls[0]?.params).toEqual([123, 5])
+  })
+
+  it('счётчик кандидатов считает по ТОЙ ЖЕ границе, что и выборка', async () => {
+    // Он знаменатель предохранителя по доле флота. Разойдись условия — предохранитель считал бы
+    // одно множество, а отключалось бы другое.
+    const { calls, query } = spy()
+    await countSubscriptionCutoff(query, 456)
+    const sql = sqlOf(calls)
+    expect(sql).toMatch(/subscription_ended_at > 0/)
+    expect(sql).toMatch(/subscription_ended_at <= \$1/)
+    expect(calls[0]?.params).toEqual([456])
   })
 })

@@ -14,7 +14,7 @@ import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queue
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
 import { ALERT_CHANNEL_CLASS, HEALTH_TONE_COLOR, presentAlertChannel, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
-import { attentionHeadline, bankAttentionRowViews, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
+import { attentionHeadline, bankAttentionRowViews, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview, subscriptionRowViews } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
 
@@ -144,6 +144,10 @@ const bankRows = computed(() => bankHealth.value ? bankHealthRows(bankHealth.val
 const bankHeadline = computed(() => bankHealth.value ? attentionHeadline(bankHealth.value) : '')
 // Поштучные нерабочие подключения — их оператор может отключить руками (#599).
 const bankAttentionRows = computed(() => bankHealth.value ? bankAttentionRowViews(bankHealth.value) : [])
+// #614: порталы, у которых истекла подписка на REST. ⚠ Отдельным списком, а не вперемешку с
+// банковскими: там причина в банке и чинится входом владельца счёта в интернет-банк, здесь — в
+// оплате Битрикса. Свалив в кучу, отправим оператора говорить клиенту не то.
+const subscriptionRows = computed(() => bankHealth.value ? subscriptionRowViews(bankHealth.value) : [])
 
 // Ключ строки, которую сейчас отключаем (свой флаг, чтобы одна кнопка не блокировала остальные).
 const disconnectingId = ref<number | null>(null)
@@ -488,6 +492,60 @@ onBeforeUnmount(() => {
               >
                 {{ disconnectNote }}
               </p>
+            </div>
+
+            <!-- #614: порталы с истёкшей подпиской на REST. ⚠ Живёт ЗДЕСЬ, а не в приложении, по
+                 жёсткой причине: приложение открывается ВНУТРИ Битрикса, и при мёртвой подписке
+                 клиент до интерфейса не доберётся — значит отключить сам не может. Нет этого на
+                 экране оператора — нет нигде. -->
+            <div
+              v-if="subscriptionRows.length"
+              class="mt-4 space-y-2"
+              data-testid="subscription-dead-list"
+            >
+              <p class="text-xs font-medium text-(--ui-color-base-2)">
+                Подписка Bitrix24 не отвечает — клиент не может отключиться сам:
+              </p>
+              <div
+                v-for="r in subscriptionRows"
+                :key="`sub-${r.id}`"
+                class="flex flex-wrap items-center justify-between gap-2 rounded bg-(--ui-color-design-tinted-warning-bg) px-2 py-1.5"
+                :data-testid="`subscription-dead-${r.id}`"
+              >
+                <span class="text-xs text-(--ui-color-base-2)">{{ r.label }}</span>
+                <template v-if="confirmDisconnectId === r.id">
+                  <span class="flex items-center gap-2">
+                    <B24Button
+                      label="Да, отключить"
+                      :aria-label="`Подтвердить отключение: ${r.label}`"
+                      color="air-primary-alert"
+                      size="xs"
+                      :loading="disconnectingId === r.id"
+                      :disabled="disconnectingId === r.id"
+                      :data-testid="`subscription-disconnect-confirm-${r.id}`"
+                      @click="disconnectBank(r.id)"
+                    />
+                    <B24Button
+                      label="Отмена"
+                      :aria-label="`Отменить отключение: ${r.label}`"
+                      color="air-tertiary"
+                      size="xs"
+                      :disabled="disconnectingId === r.id"
+                      :data-testid="`subscription-disconnect-cancel-${r.id}`"
+                      @click="cancelDisconnect()"
+                    />
+                  </span>
+                </template>
+                <B24Button
+                  v-else
+                  label="Отключить"
+                  :aria-label="`Отключить: ${r.label}`"
+                  color="air-tertiary-no-accent"
+                  size="xs"
+                  :data-testid="`subscription-disconnect-${r.id}`"
+                  @click="askDisconnect(r.id)"
+                />
+              </div>
             </div>
 
             <!-- Пульс механизма, который эти подключения держит (#504). Без него «всё живо» на

@@ -20,7 +20,7 @@ import { enqueueFetch } from '../queue/producers'
 import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
-import { deleteBankToken, deleteBankTokenById, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
+import { deleteBankToken, deleteBankTokenById, deleteBankTokensForPortal, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankTokenKeepAlive'
@@ -32,8 +32,16 @@ import { REAP_MIN_INTERVAL_MS, resolveReapDays } from '../../app/utils/portalRea
 import { resolveBankReapDays } from '../../app/utils/bankReaper'
 import { runBankReaper } from '../utils/bankReaperRun'
 import { claimBankReapSlot } from '../utils/bankReaperSchedule'
+import { claimSubscriptionCutoffSlot } from '../utils/subscriptionCutoffSchedule'
+import { runSubscriptionCutoff } from '../utils/subscriptionCutoffRun'
+import { probeSubscriptionVia } from '../utils/subscriptionProbe'
+import { livePortalSdkCall } from '../utils/liveDeps'
+import { SUBSCRIPTION_CUTOFF_DAYS } from '../../app/utils/portalSubscription'
 import { claimReapSlot } from '../utils/portalReaperSchedule'
-import { countPortals, countRevokedPortals, selectReapablePortals, getToken } from '../utils/tokenStore'
+import {
+  clearSubscriptionEnded, countPortals, countRevokedPortals, countSubscriptionCutoff,
+  selectReapablePortals, selectSubscriptionCutoff, getToken
+} from '../utils/tokenStore'
 import { sweepOldBatches } from '../utils/importBatchStore'
 import { resolvePendingMaxAgeDays, sweepAbandonedPending } from '../utils/pendingSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
@@ -421,6 +429,30 @@ export default defineNitroPlugin((nitroApp) => {
                 }, bankReapDays)
               } catch (e) {
                 retention.error(`bank reaper failed: ${(e as Error)?.message}`)
+              }
+            }
+            // Портал без подписки на REST (#614). Отключаем БАНК, а не портал: приложение
+            // установлено законно, кончилась оплата REST. Пока висит — портал жжёт лимит банка и
+            // гоняется за ротацией refresh с другими порталами, у которых тот же счёт (#615), а
+            // записать не может ничего. Своя аренда — отдельный ключ от обоих уборщиков.
+            if (await claimSubscriptionCutoffSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runSubscriptionCutoff({
+                  now: Date.now,
+                  countDue: beforeMs => countSubscriptionCutoff(dbQuery, beforeMs),
+                  countPortals: () => countPortals(dbQuery),
+                  selectDue: (beforeMs, limit) => selectSubscriptionCutoff(dbQuery, beforeMs, limit),
+                  disconnectBanks: memberId => deleteBankTokensForPortal(dbQuery, memberId),
+                  // ⚠ Живой перезапрос ПЕРЕД необратимым шагом: метку снимает только удачный
+                  // прогон crm-sync, а на тихом счёте его не бывает вовсе — без этой проверки
+                  // автомат отключил бы банк у портала, оплатившего подписку на второй день.
+                  probeSubscription: async memberId => probeSubscriptionVia(await livePortalSdkCall(memberId)),
+                  clearMark: memberId => clearSubscriptionEnded(dbQuery, memberId),
+                  log: (m: string) => retention.info(`[sub-cutoff] ${m}`),
+                  warn: (m: string) => retention.warning(`[sub-cutoff] ${m}`)
+                }, SUBSCRIPTION_CUTOFF_DAYS)
+              } catch (e) {
+                retention.error(`subscription cutoff failed: ${(e as Error)?.message}`)
               }
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и
