@@ -152,12 +152,39 @@ async function ensureSp(
 }
 
 /** Ensure every field in `fields` exists on the SP, creating only the missing ones. Field probing +
- *  creation key off the SP's TYPE id (`sp.id`), NOT the entityTypeId. Returns the number added. */
+ *  creation key off the SP's TYPE id (`sp.id`), NOT the entityTypeId. Returns the number added.
+ *
+ *  ⚠ Одна упавшая `userfieldconfig.add` НЕ обрывает создание ОСТАЛЬНЫХ (#41). Прежде цикл был
+ *  `for … await` без обработки, и первая же ошибка НЕ давала создать поля, стоящие в списке ниже, —
+ *  а поля реестра #575 идут как раз последними. Теперь мы ПРОБУЕМ создать все запланированные поля
+ *  (реестр в том числе), собирая ошибки, и лишь ПОСЛЕ — если хоть одно поле не создалось — бросаем
+ *  сводную ошибку. Так достигается и робастность (одно поле не блокирует прочие), и честность:
+ *  реальный сбой (нет scope `userfieldconfig` #408, кривой спек поля) не прячется под успехом, а
+ *  доходит до вердикта установки — иначе вернули бы ту самую ТИХУЮ частичную настройку, ради
+ *  искоренения которой всё и написано.
+ *  ⚠ Дубликатов тут быть НЕ должно: первый слой — нормализованная сверка в `planMissingUserFields`
+ *  (#41) — не планирует пересоздавать существующие поля. Если дубликат всё же прилетел, это сигнал
+ *  о непокрытой форме имени, и громкая ошибка здесь правильнее тихого пропуска. Повтор идемпотентен
+ *  (нормализация пропустит уже созданные, повторит только неудавшееся). */
 async function ensureFields(call: RestCall, sp: SpRef, fields: readonly SpUserField[]): Promise<number> {
   const existing = await listAllFieldNames(call, sp.id)
   const toAdd = planMissingUserFields(sp.id, fields, existing)
-  for (const addCall of toAdd) await call(addCall.method, addCall.params) // sequential — rate-safe, no batch
-  return toAdd.length
+  let added = 0
+  const errors: string[] = []
+  for (const addCall of toAdd) { // sequential — rate-safe, no batch
+    try {
+      await call(addCall.method, addCall.params)
+      added++
+    } catch (e) {
+      const fieldName = (addCall.params.field as { fieldName?: unknown })?.fieldName
+      errors.push(`${String(fieldName)}: ${(e as Error)?.message ?? e}`)
+    }
+  }
+  if (errors.length > 0) {
+    log.warning(`userfieldconfig.add failed for ${errors.length}/${toAdd.length} field(s) on SP ${sp.id}`)
+    throw new Error(`userfieldconfig.add failed for ${errors.length}/${toAdd.length} field(s) on SP ${sp.id}: ${errors.join('; ')}`)
+  }
+  return added
 }
 
 /**
