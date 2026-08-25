@@ -43,7 +43,7 @@ import {
 import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
-import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
+import { deleteToken, getApplicationToken, saveToken, clearSubscriptionEnded } from '../utils/tokenStore'
 import { deleteImportResultForPortal, markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
 import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
@@ -1038,6 +1038,20 @@ async function persistImportResult(
     await markRecognitionMisconfig(dbQuery, job.memberId, summary.misconfigReason ?? null)
   } catch (e) {
     crmLog.error(`recog misconfig mark failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+  }
+  // Подписка на REST жива — прогон дошёл сюда, значит портал ответил (#614).
+  //
+  // ⚠ Снятие стоит ЗДЕСЬ, а не в успешном REST-вызове: там оно означало бы UPDATE на каждый вызов
+  // каждого живого портала, а прогон — естественная единица «портал точно отвечает». Опоздание на
+  // один прогон безвредно: отсечка — четверо суток.
+  //
+  // ⚠ Отдельный try по той же причине, что у соседа: неудача снятия не должна отменять сводку.
+  try {
+    if (await clearSubscriptionEnded(dbQuery, job.memberId)) {
+      crmLog.info(`portal ${job.memberId}: подписка на REST снова отвечает — метка снята`)
+    }
+  } catch (e) {
+    crmLog.error(`subscription mark clear failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 

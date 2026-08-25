@@ -578,3 +578,67 @@ describe('sdkRefreshTransport (keep-alive refresh via SDK, #175)', () => {
     await expect(sdkRefreshTransport()(body)).rejects.toThrow('invalid_grant')
   })
 })
+
+describe('наблюдение истёкшей подписки (#614)', () => {
+  // ⚠ Шов, а не правило: чистое ядро (`isSubscriptionEnded`) проверено отдельно, а здесь — что его
+  // ВООБЩЕ кто-то зовёт. Ровно этой проверки не было у #574, и удаление всего блока пометки
+  // оставляло весь набор зелёным (замерено мутацией на ревью).
+
+  it('ОШИБКА об истёкшей подписке ставит метку', async () => {
+    const { client } = fakeClient()
+    client.actions.v2.call.make = async () => {
+      throw new Error('Subscription has been ended')
+    }
+    const seen: string[] = []
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    await expect(call('crm.item.list', {})).rejects.toThrow()
+    expect(seen, 'метка не поставлена — отключение через 4 дня не наступит никогда').toEqual(['M1'])
+  })
+
+  it('ПРОВАЛИВШИЙСЯ РЕЗУЛЬТАТ с тем же текстом — тоже', async () => {
+    // ⚠ Портал отдаёт отказ двумя путями, и какой именно был в живом логе — не наблюдалось.
+    // Закрыть надо оба, иначе метка не встанет ровно в половине случаев.
+    const failed = ajax({ isSuccess: false, getErrorMessages: () => ['Subscription has been ended'] })
+    const { client } = fakeClient(failed)
+    const seen: string[] = []
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    await expect(call('crm.item.list', {})).rejects.toThrow()
+    expect(seen).toEqual(['M1'])
+  })
+
+  it('ЧУЖОЙ отказ метку НЕ ставит', async () => {
+    // Ошибка в эту сторону отключает банк живому клиенту через четверо суток.
+    const { client } = fakeClient()
+    client.actions.v2.call.make = async () => {
+      throw new Error('QUERY_LIMIT_EXCEEDED')
+    }
+    const seen: string[] = []
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    await expect(call('crm.item.list', {})).rejects.toThrow()
+    expect(seen).toEqual([])
+  })
+
+  it('успешный вызов метку не ставит и результат не портит', async () => {
+    const { client } = fakeClient()
+    const seen: string[] = []
+    const call = makeSdkRestCall(client, { memberId: 'M1', onSubscriptionEnded: async m => { seen.push(m) } })
+    await call('crm.item.list', {})
+    expect(seen).toEqual([])
+  })
+
+  it('отказ САМОЙ пометки не подменяет ошибку портала', async () => {
+    // Вызывающий ждёт отказа портала; подменив его отказом нашей записи, мы превратили бы понятный
+    // сбой в загадочный. Тот же контракт, что у `onGrantDead`.
+    const { client } = fakeClient()
+    client.actions.v2.call.make = async () => {
+      throw new Error('Subscription has been ended')
+    }
+    const call = makeSdkRestCall(client, {
+      memberId: 'M1',
+      onSubscriptionEnded: async () => {
+        throw new Error('база молчит')
+      }
+    })
+    await expect(call('crm.item.list', {})).rejects.toThrow(/Subscription has been ended/)
+  })
+})

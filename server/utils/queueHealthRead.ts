@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_ENDED_RE } from '../../app/utils/portalSubscription'
 import { QUEUE_NAMES, type QueueName } from '../queue/topology'
 import { FAILURE_WINDOW_MS, type QueueHealthInput } from './queueAlert'
 
@@ -70,7 +71,9 @@ const PORTAL_SIDE_PATTERNS = [
   // упора. Это состояние ПОРТАЛА, а не наша авария: чинится продлением подписки у клиента. Без
   // этой строки такой портал считался бы нашей поломкой и пейджил бы владельца тем, что тот
   // починить не может, — ровно то, ради чего заведён весь этот список.
-  /subscription\s+has\s+been\s+ended/i,
+  // ⚠ Та же регулярка, что у метки #614 — ОДНА, а не копия: разъехавшись, они дали бы портал,
+  // который помечен как «без подписки», но при этом считается нашей аварией.
+  SUBSCRIPTION_ENDED_RE,
   // Банк: согласие клиента истекло / счёт не в списке согласия — переподключает клиент, не мы.
   /consent/i,
   /согласи[ея]/i

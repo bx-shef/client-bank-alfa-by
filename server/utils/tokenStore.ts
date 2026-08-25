@@ -286,3 +286,58 @@ export async function countPortals(query: QueryFn): Promise<number> {
   const rows = await query(`SELECT count(*)::int AS n FROM portal_tokens`, [])
   return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
 }
+
+/**
+ * Отметить, что подписка портала на REST истекла (#614) — ТОЛЬКО если отметки ещё не было.
+ *
+ * ⚠ `WHERE subscription_ended_at = 0` несущее: отсчёт идёт от ПЕРВОГО отказа. Перезаписывая метку
+ * на каждом отказе, мы отодвигали бы срок вечно, и отключение не наступило бы никогда — механизм
+ * выглядел бы рабочим и не работал. Тот же урок, что у `markGrantRevoked` (#574).
+ *
+ * ⚠ `updated_at` НЕ трогаем: по нему выбираются порталы для продления (#175).
+ *
+ * ⚠ UPDATE-only, как все писатели после #510: у удалённого портала обновлять нечего.
+ */
+export async function markSubscriptionEnded(query: QueryFn, memberId: string, atMs: number): Promise<void> {
+  await query(
+    `UPDATE portal_tokens SET subscription_ended_at = $2 WHERE member_id = $1 AND subscription_ended_at = 0`,
+    [memberId, Math.floor(atMs)]
+  )
+}
+
+/**
+ * Снять отметку: портал снова отвечает, значит подписку оплатили.
+ *
+ * ⚠ Условие `<> 0` здесь НЕ оптимизация ценой правила, а защита от лишней записи: снятие зовётся
+ * после КАЖДОГО удачного прогона, и без условия это был бы UPDATE на каждый прогон каждого живого
+ * портала. Правило «успех снимает» при этом выполняется безусловно — строка либо уже нулевая,
+ * либо обнулится.
+ */
+export async function clearSubscriptionEnded(query: QueryFn, memberId: string): Promise<boolean> {
+  const rows = await query(
+    `UPDATE portal_tokens SET subscription_ended_at = 0
+      WHERE member_id = $1 AND subscription_ended_at <> 0
+      RETURNING member_id`,
+    [memberId]
+  )
+  return rows.length > 0
+}
+
+/** Порталы с истёкшей подпиской — для консоли оператора и автоотключения (#614). */
+export async function selectSubscriptionEnded(
+  query: QueryFn, limit: number
+): Promise<{ memberId: string, endedAtMs: number }[]> {
+  const rows = await query(
+    `SELECT member_id, subscription_ended_at FROM portal_tokens
+      WHERE subscription_ended_at > 0
+      ORDER BY subscription_ended_at ASC
+      LIMIT $1`,
+    [Math.max(1, Math.floor(limit))]
+  )
+  return rows
+    .map(r => ({
+      memberId: String((r as { member_id?: unknown }).member_id ?? ''),
+      endedAtMs: Number((r as { subscription_ended_at?: unknown }).subscription_ended_at ?? 0)
+    }))
+    .filter(r => r.memberId !== '')
+}
