@@ -15,7 +15,9 @@ import {
   updatePortalTokenSecrets,
   markSubscriptionEnded,
   clearSubscriptionEnded,
-  selectSubscriptionEnded
+  selectSubscriptionEnded,
+  selectSubscriptionCutoff,
+  countSubscriptionCutoff
 } from '../server/utils/tokenStore'
 import type { PortalToken } from '../server/utils/tokenStore'
 
@@ -481,5 +483,33 @@ describe('метка истёкшей подписки (#614)', () => {
     expect(sql).toMatch(/subscription_ended_at > 0/)
     expect(sql, 'при упоре в потолок очередь должна двигаться').toMatch(/ORDER BY subscription_ended_at ASC/)
     expect(sql).toMatch(/LIMIT \$1/)
+  })
+
+  // ⚠ Выборка автоотключения (#614) — отдельная от консольной НАМЕРЕННО: консоли нужны ВСЕ
+  // помеченные (она рисует обратный отсчёт), автомату — только перешагнувшие границу. Одна
+  // функция на два вопроса означала бы условие «граница или ноль» прямо в SQL, а его цена
+  // очевидна: ошибись в нём — и автомат отключит банк у портала, помеченного минуту назад.
+  // ⚠ Проверяется САМ SQL: `memStore` в тестах его не исполняет, он переписывает семантику на JS,
+  // поэтому правки `WHERE` для него невидимы (замерено на #23-#25).
+  it('автоотключение смотрит только за границу — иначе отключит помеченных минуту назад', async () => {
+    const { calls, query } = spy()
+    await selectSubscriptionCutoff(query, 123, 5)
+    const sql = sqlOf(calls)
+    expect(sql).toMatch(/subscription_ended_at > 0/)
+    expect(sql, 'без границы кандидатом станет КАЖДЫЙ помеченный').toMatch(/subscription_ended_at <= \$1/)
+    expect(sql, 'при упоре в потолок очередь должна двигаться').toMatch(/ORDER BY subscription_ended_at ASC/)
+    expect(sql).toMatch(/LIMIT \$2/)
+    expect(calls[0]?.params).toEqual([123, 5])
+  })
+
+  it('счётчик кандидатов считает по ТОЙ ЖЕ границе, что и выборка', async () => {
+    // Он знаменатель предохранителя по доле флота. Разойдись условия — предохранитель считал бы
+    // одно множество, а отключалось бы другое.
+    const { calls, query } = spy()
+    await countSubscriptionCutoff(query, 456)
+    const sql = sqlOf(calls)
+    expect(sql).toMatch(/subscription_ended_at > 0/)
+    expect(sql).toMatch(/subscription_ended_at <= \$1/)
+    expect(calls[0]?.params).toEqual([456])
   })
 })

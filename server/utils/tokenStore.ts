@@ -324,6 +324,45 @@ export async function clearSubscriptionEnded(query: QueryFn, memberId: string): 
 }
 
 /** Порталы с истёкшей подпиской — для консоли оператора и автоотключения (#614). */
+/**
+ * Сколько порталов молчат по подписке дольше границы — знаменателя предохранителя (#614).
+ *
+ * ⚠ Отдельно от выборки: выборка ограничена потолком за прогон, и судить по ней о доле флота
+ * значило бы всегда видеть маленькое число ровно тогда, когда сломались мы сами.
+ */
+export async function countSubscriptionCutoff(query: QueryFn, beforeMs: number): Promise<number> {
+  const rows = await query(
+    `SELECT count(*)::int AS n FROM portal_tokens
+      WHERE subscription_ended_at > 0 AND subscription_ended_at <= $1`,
+    [Math.floor(beforeMs)]
+  )
+  return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0)
+}
+
+/**
+ * Кандидаты на автоотключение банка: молчат дольше границы, самые давние первыми (#614).
+ *
+ * ⚠ Отдаёт и МЕТКУ: решение перепроверяется чистым правилом в прогоне, иначе политика жила бы
+ * только в этом `WHERE`, а чистая функция была бы мёртвым кодом — два источника одной истины.
+ */
+export async function selectSubscriptionCutoff(
+  query: QueryFn, beforeMs: number, limit: number
+): Promise<{ memberId: string, endedAtMs: number }[]> {
+  const rows = await query(
+    `SELECT member_id, subscription_ended_at FROM portal_tokens
+      WHERE subscription_ended_at > 0 AND subscription_ended_at <= $1
+      ORDER BY subscription_ended_at ASC
+      LIMIT $2`,
+    [Math.floor(beforeMs), Math.max(1, Math.floor(limit))]
+  )
+  return rows
+    .map(r => ({
+      memberId: String((r as { member_id?: unknown }).member_id ?? ''),
+      endedAtMs: Number((r as { subscription_ended_at?: unknown }).subscription_ended_at ?? 0)
+    }))
+    .filter(r => r.memberId !== '')
+}
+
 export async function selectSubscriptionEnded(
   query: QueryFn, limit: number
 ): Promise<{ memberId: string, endedAtMs: number }[]> {
