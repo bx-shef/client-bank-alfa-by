@@ -113,7 +113,13 @@ describe('ключ лока строится ТОЛЬКО хелпером', () 
       // в банк, то есть держала бы лок всё время сетевого запроса, ради значения, точность
       // которого никому не нужна.
       // ⚠ Появится второе поле в этом UPDATE — классификация обязана пересматриваться.
-      markBankRefreshAttempt: 'unlocked-writes-only-the-attempt-stamp'
+      markBankRefreshAttempt: 'unlocked-writes-only-the-attempt-stamp',
+      // ⚠ БЕЗ лока намеренно (#615). Пишет ТОЛЬКО `account_confirmed_at` — колонку, за которую
+      // обновление токена не борется вовсе. Гонку с переименованием счёта закрывает само условие
+      // `account_key = ANY(...)`: переименованная строка под него не попадёт, и подтверждение
+      // просто не проставится — это верный исход, потому что подтверждали мы другой номер.
+      // ⚠ Появится второе поле в этом UPDATE — классификация обязана пересматриваться.
+      markAccountsConfirmed: 'unlocked-single-column'
     }
     expect([...writers].sort()).toEqual(Object.keys(CLASSIFIED).sort())
   })
@@ -274,7 +280,12 @@ describe('маршруты, ждущие этот лок, не могут вые
   // берущий этот лок, попал бы в проверку выше (она обходит `server/api`) и не попал бы сюда,
   // тем же молчаливым способом, каким появился #539. Ищем оба входа в лок: обновление токена и
   // переименование ключа.
-  const LOCK_ENTRIES = /ensureBankToken\(|renameBankTokenAccount\(|handleSetBankAccount\(/
+  // ⚠ `bankSideDeps(` — вход в лок ЧЕРЕЗ ОДНУ КОСВЕННОСТЬ, и он здесь не для полноты. Проводка
+  // запроса счетов жила прямо в роуте сверки и была вынесена в `server/utils`, когда тот же список
+  // понадобился фоновому подтверждению (#615). Роут при этом берёт лок ровно как прежде, а гард,
+  // смотрящий только на текст `server/api/**`, перестал его видеть — то есть вынос функции молча
+  // снял проверку, ради которой гард и написан (#539). Ровно тот способ, каким появился сам #539.
+  const LOCK_ENTRIES = /ensureBankToken\(|renameBankTokenAccount\(|handleSetBankAccount\(|bankSideDeps\(/
   const lockRoutes = readdirSync(join(ROOT, 'server/api'), { recursive: true, encoding: 'utf8' })
     .filter(f => f.endsWith('.ts'))
     .filter(f => LOCK_ENTRIES.test(readFileSync(join(ROOT, 'server/api', f), 'utf8')))

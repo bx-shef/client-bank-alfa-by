@@ -17,10 +17,11 @@ import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveActivityBindDeps, liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveRegistryWriteDeps, liveTriggerFireDeps, startBindingsWorker, startDeletionWorker, startEventWorker, startFeedbackWorker, startRegistryWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
-import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
+import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, isPollableAccount, planFetches, pollWindow } from '../queue/cron'
+import { pickAccountPollers, sharedAccountsLogLine } from '../../app/utils/accountSharing'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
-import { deleteBankToken, deleteBankTokenById, deleteBankTokensForPortal, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
+import { deleteBankToken, deleteBankTokenById, deleteBankTokensForPortal, listAllBankAccountInfo, listBankAccountInfoForPortal, markAccountsConfirmed } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankTokenKeepAlive'
@@ -35,6 +36,10 @@ import { claimBankReapSlot } from '../utils/bankReaperSchedule'
 import { claimSubscriptionCutoffSlot } from '../utils/subscriptionCutoffSchedule'
 import { runSubscriptionCutoff } from '../utils/subscriptionCutoffRun'
 import { probeSubscriptionVia } from '../utils/subscriptionProbe'
+import { runAccountConfirm } from '../utils/accountConfirmRun'
+import { bankSideDeps } from '../utils/bankSideDeps'
+import { DEFAULT_LOCK_WAIT } from '../utils/dbLock'
+import { listBankSideAccounts } from '../utils/bankAccountList'
 import { livePortalSdkCall } from '../utils/liveDeps'
 import { SUBSCRIPTION_CUTOFF_DAYS } from '../../app/utils/portalSubscription'
 import { claimReapSlot } from '../utils/portalReaperSchedule'
@@ -224,8 +229,17 @@ export default defineNitroPlugin((nitroApp) => {
           // Cron root span (#78) — groups the poll's pg scan + Redis enqueues under one trace
           // (otherwise they float as orphan child spans). No-op when telemetry off.
           await withSpan('cron.real-poll', { 'job.queue': 'cron.real-poll' }, async () => {
-            const refs = await listAllBankAccounts(dbQuery)
-            const byPortal = accountsForPolling(refs)
+            // ⚠ Читаем ПОЛНЫЕ строки, а не короткие ссылки: выбор поллера у совместного счёта
+            // (#615) смотрит и на подтверждение банком, и на свежесть подключения.
+            const rows = await listAllBankAccountInfo(dbQuery)
+            // Совместный счёт — ОДИН опрос (#615). Сворачиваются ТОЛЬКО строки, чей счёт подтвердил
+            // банк: введённый номер доказательством не является. Неподтверждённая строка
+            // опрашивает свой счёт сама, как раньше.
+            const pollable = rows.filter(isPollableAccount)
+            const pollers = pickAccountPollers(pollable, Date.now())
+            const shareNote = sharedAccountsLogLine(pollable.length, pollers.length)
+            if (shareNote) log.info(`[fetch] ${shareNote}`)
+            const byPortal = accountsForPolling(pollers)
             if (byPortal.length === 0) return // no connected accounts yet — nothing to do
             const now = new Date()
             const { dateFrom, dateTo } = pollWindow(now, lookback)
@@ -454,6 +468,26 @@ export default defineNitroPlugin((nitroApp) => {
               } catch (e) {
                 retention.error(`subscription cutoff failed: ${(e as Error)?.message}`)
               }
+            }
+            // Подтверждение спорных счетов банком (#615). Дёшево по замыслу: спрашиваем только про
+            // номера, заявленные БОЛЕЕ ЧЕМ одним порталом и ещё не подтверждённые, — на обычном
+            // флоте (у каждого свой счёт) не делает ни одного обращения к банку. Своей аренды не
+            // берёт: проход идемпотентен, ничего не удаляет и при повторе просто переспросит.
+            try {
+              await runAccountConfirm({
+                now: Date.now,
+                listRows: () => listAllBankAccountInfo(dbQuery),
+                // ⚠ Ожидание лока — МАШИННОЕ (умолчание `withAdvisoryLock`): здесь никто не ждёт ответа, а
+                // бросить работу из-за планового продления токена значило бы не подтвердить счёт и
+                // ещё сутки опрашивать его двумя порталами — ровно то, что мы чиним.
+                bankSide: memberId => listBankSideAccounts(memberId, bankSideDeps(DEFAULT_LOCK_WAIT)),
+                confirm: (memberId, provider, keys, atMs) =>
+                  markAccountsConfirmed(dbQuery, memberId, provider, keys, atMs),
+                log: (m: string) => retention.info(`[account-confirm] ${m}`),
+                warn: (m: string) => retention.warning(`[account-confirm] ${m}`)
+              })
+            } catch (e) {
+              retention.error(`account confirm failed: ${(e as Error)?.message}`)
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и
             // чистку банковских кредов, хотя флаг заведён про payload'ы выписки. Осознанно: оба

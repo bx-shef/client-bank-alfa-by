@@ -10,7 +10,7 @@ const ALFA_TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
 const deadRow = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
   id: 7, memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01',
   connectedAt: NOW - ALFA_TTL - 40 * DAY, expiresAt: NOW, hasRefresh: true, lastAttemptAt: 0,
-  consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
+  consentExpiresAt: 0, accountConfirmedAt: 0, pollPaused: false, grantId: '', ...over
 })
 
 function deps(over: Partial<BankDisconnectOpsDeps> = {}) {
@@ -78,7 +78,7 @@ describe('портал с мёртвой подпиской (#614)', () => {
   const liveRow = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
     id: 9, memberId: 'M2', provider: 'alfa-by', accountKey: 'BY02',
     connectedAt: NOW - 60_000, expiresAt: NOW + 3_600_000, hasRefresh: true, lastAttemptAt: 0,
-    consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
+    consentExpiresAt: 0, accountConfirmedAt: 0, pollPaused: false, grantId: '', ...over
   })
 
   it('живое подключение + мёртвая подписка ⇒ отключаем, причина НЕ банковская', async () => {
