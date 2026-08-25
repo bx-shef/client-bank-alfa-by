@@ -35,7 +35,7 @@ function eraseDeps(over: Partial<EraseDeps> = {}): EraseDeps {
 
 describe('parseEraseSelection — кривой ввод НЕ расширяет стирание', () => {
   it('пустой ввод = «за всё время по всем счетам» (законная форма)', () => {
-    expect(parseEraseSelection(input)).toEqual({ period: {}, accounts: [] })
+    expect(parseEraseSelection(input)).toEqual({ period: {}, accounts: [], counterpartyAccounts: [] })
   })
 
   it('кривая дата — отказ, а не молча отброшенная граница', () => {
@@ -51,12 +51,22 @@ describe('parseEraseSelection — кривой ввод НЕ расширяет 
   })
 
   it('пустые строки в списке отбрасываются, но список не становится «все»', () => {
-    expect(parseEraseSelection({ ...input, accounts: [' BY01ALFA ', ''] })).toEqual({ period: {}, accounts: ['BY01ALFA'] })
+    expect(parseEraseSelection({ ...input, accounts: [' BY01ALFA ', ''] })).toEqual({ period: {}, accounts: ['BY01ALFA'], counterpartyAccounts: [] })
   })
 
   it('слишком длинный список счетов — отказ', () => {
     const many = Array.from({ length: MAX_ERASE_ACCOUNTS + 1 }, (_, i) => `BY${i}`)
     expect(parseEraseSelection({ ...input, accounts: many })).toBeNull()
+  })
+
+  it('счета контрагента (#591) разбираются тем же строгим правилом', () => {
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: [' BY99PAYER0001 ', ''] }))
+      .toEqual({ period: {}, accounts: [], counterpartyAccounts: ['BY99PAYER0001'] })
+    // ⚠ Кривой номер контрагента — тоже ОТКАЗ: молча отброшенный фильтр расширил бы стирание.
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: ['не счёт'] })).toBeNull()
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: 'BY99' })).toBeNull()
+    const many = Array.from({ length: MAX_ERASE_ACCOUNTS + 1 }, (_, i) => `BY${i}`)
+    expect(parseEraseSelection({ ...input, counterpartyAccounts: many })).toBeNull()
   })
 })
 

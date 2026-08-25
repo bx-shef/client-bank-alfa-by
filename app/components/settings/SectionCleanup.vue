@@ -9,6 +9,7 @@ import { isPreviewQuery } from '~/utils/inPortalGate'
 import { useRoute } from 'vue-router'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { parsePeriod, periodLabel } from '~/utils/eraseActivities'
+import { parseRuleLines } from '~/utils/statement'
 import type { BankProviderId } from '~/types/statement'
 
 // Раздел «Очистка» (#576 п.4): стереть дела, созданные приложением.
@@ -32,7 +33,15 @@ const from = ref('')
 const to = ref('')
 /** Выбранные НАШИ счета; пусто ⇒ по всем. */
 const picked = ref<string[]>([])
+/** Счета контрагента (#591): построчный ввод, пусто ⇒ фильтр не применяется. */
+const counterpartyText = ref('')
 const confirming = ref(false)
+
+/** Разобранный список счетов контрагента (одна строка — один счёт, без пустых и дублей). */
+const counterpartyAccounts = computed(() => parseRuleLines(counterpartyText.value))
+/** Есть ли в введённых счетах строка не букво-цифрового формата — тогда сервер откажет. */
+const ACCOUNT_RE = /^[A-Za-z0-9]{1,64}$/
+const counterpartyBad = computed(() => counterpartyAccounts.value.some(a => !ACCOUNT_RE.test(a)))
 
 // ⚠ Превью-ветка — по той же причине, что у списка подключений: вне портала счетов нет, и чипы
 // выбора не попадали бы ни в один скриншот и ни в один визуальный эталон. Флаг читается РЕАКТИВНО:
@@ -76,7 +85,11 @@ const pollRunning = computed<boolean | null>(() => {
 
 const period = computed(() => parsePeriod({ from: from.value, to: to.value }))
 const periodBad = computed(() => period.value === null)
-const scopeLabel = computed(() => (picked.value.length > 0 ? `счета: ${picked.value.join(', ')}` : 'все счета'))
+const scopeLabel = computed(() => {
+  const ourScope = picked.value.length > 0 ? `счета: ${picked.value.join(', ')}` : 'все счета'
+  const cp = counterpartyAccounts.value.length > 0 ? `, контрагент: ${counterpartyAccounts.value.join(', ')}` : ''
+  return `${ourScope}${cp}`
+})
 
 function toggle(accountKey: string): void {
   const i = picked.value.indexOf(accountKey)
@@ -98,14 +111,14 @@ function providerLabel(p: BankProviderId): string {
 
 async function onCount(): Promise<void> {
   confirming.value = false
-  if (!period.value) return
-  await count(period.value, picked.value)
+  if (!period.value || counterpartyBad.value) return
+  await count(period.value, picked.value, counterpartyAccounts.value)
   confirming.value = (pending.value?.count ?? 0) > 0
 }
 
 async function onErase(): Promise<void> {
-  if (!period.value) return
-  await erase(period.value, picked.value)
+  if (!period.value || counterpartyBad.value) return
+  await erase(period.value, picked.value, counterpartyAccounts.value)
   confirming.value = false
 }
 </script>
@@ -211,12 +224,34 @@ async function onErase(): Promise<void> {
         </div>
       </div>
 
+      <!-- ⚠ Фильтр по счёту контрагента (#591): админ вписал счёт плательщика в «Исключения» —
+           новые операции по нему в CRM не идут, а уже созданные дела убрать было нечем, кроме
+           «стереть всё за период», что снесло бы и дела настоящих клиентов. Здесь — тот же счёт
+           плательщика, точным сравнением. Пусто ⇒ фильтр не применяется. -->
+      <B24FormField
+        label="Счета контрагента (необязательно)"
+        hint="Один счёт на строку. Пусто — не фильтруем по контрагенту. Стираются только дела, где счёт плательщика точно совпал."
+      >
+        <B24Textarea
+          v-model="counterpartyText"
+          :rows="3"
+          placeholder="BY00…"
+          @update:model-value="reset"
+        />
+      </B24FormField>
+      <p
+        v-if="counterpartyBad"
+        class="text-xs text-(--ui-color-accent-main-alert)"
+      >
+        Счёт может содержать только буквы и цифры (без пробелов). Проверьте введённые строки.
+      </p>
+
       <div class="flex flex-wrap items-center gap-2">
         <B24Button
           label="Посчитать"
           color="air-secondary-accent"
           :loading="counting"
-          :disabled="counting || periodBad"
+          :disabled="counting || periodBad || counterpartyBad"
           @click="onCount"
         />
         <span

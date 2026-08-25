@@ -47,7 +47,10 @@ export default defineEventHandler(async (event) => {
         from: q.from,
         to: q.to,
         // Счета приходят повторяющимся параметром; одиночное значение нормализуем в массив.
-        accounts: q.accounts === undefined ? undefined : (Array.isArray(q.accounts) ? q.accounts : [q.accounts])
+        accounts: q.accounts === undefined ? undefined : (Array.isArray(q.accounts) ? q.accounts : [q.accounts]),
+        counterpartyAccounts: q.counterpartyAccounts === undefined
+          ? undefined
+          : (Array.isArray(q.counterpartyAccounts) ? q.counterpartyAccounts : [q.counterpartyAccounts])
       })
       span.outcome = httpOutcomeForStatus(status)
       setResponseStatus(event, status)

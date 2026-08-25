@@ -60,9 +60,22 @@ function rowsOf(resp: Record<string, unknown>): ActivityRow[] {
     return {
       id: row.ID != null ? String(row.ID) : '',
       originatorId: row.ORIGINATOR_ID != null ? String(row.ORIGINATOR_ID) : '',
-      originId: row.ORIGIN_ID != null ? String(row.ORIGIN_ID) : ''
+      originId: row.ORIGIN_ID != null ? String(row.ORIGIN_ID) : '',
+      // `DESCRIPTION` приходит ТОЛЬКО когда мы его запросили (фильтр по счёту контрагента, #591);
+      // иначе поля в ответе нет, и это честная пустая строка.
+      description: row.DESCRIPTION != null ? String(row.DESCRIPTION) : ''
     }
   })
+}
+
+/**
+ * Поля `select` для `crm.activity.list`. `DESCRIPTION` добавляется ТОЛЬКО при фильтре по счёту
+ * контрагента (#591): из него `counterpartyAccountOf` достаёт счёт. В общем пути его не тащим —
+ * описание объёмное (назначение, реквизиты), а на счёт по НАШЕЙ стороне оно не нужно.
+ */
+function listSelect(selection: EraseSelection): string[] {
+  const base = ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID']
+  return selection.counterpartyAccounts.length > 0 ? [...base, 'DESCRIPTION'] : base
 }
 
 /** Сколько дел ВСЕГО попадает под фильтр портала (до нашего точного отбора по счёту). */
@@ -89,8 +102,9 @@ export async function countErasableActivities(
   cap = MAX_ERASE_PER_REQUEST
 ): Promise<{ count: number, capped: boolean }> {
   const filter = buildEraseListFilter(selection.period)
+  const select = listSelect(selection)
   const first = await call(ACTIVITY_LIST_METHOD, {
-    filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start: 0
+    filter, select, order: { ID: 'ASC' }, start: 0
   })
   const total = totalOf(first)
 
@@ -107,7 +121,7 @@ export async function countErasableActivities(
   let start = ACTIVITY_PAGE
   while (start < total && matched < cap) {
     const page = await call(ACTIVITY_LIST_METHOD, {
-      filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start
+      filter, select, order: { ID: 'ASC' }, start
     })
     matched += selectDeletable(rowsOf(page), selection).length
     start += ACTIVITY_PAGE
@@ -134,7 +148,7 @@ export async function eraseActivities(
   cap = MAX_ERASE_PER_REQUEST
 ): Promise<EraseOutcome> {
   const filter = buildEraseListFilter(selection.period)
-  const listParams = { filter, select: ['ID', 'ORIGINATOR_ID', 'ORIGIN_ID'], order: { ID: 'ASC' }, start: 0 }
+  const listParams = { filter, select: listSelect(selection), order: { ID: 'ASC' }, start: 0 }
 
   const first = await call(ACTIVITY_LIST_METHOD, listParams)
   const total = totalOf(first)

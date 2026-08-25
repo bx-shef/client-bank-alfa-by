@@ -39,6 +39,8 @@ export interface EraseInput {
   from?: unknown
   to?: unknown
   accounts?: unknown
+  /** Счета контрагента для фильтра (#591). Тот же формат номера, что и у наших счетов. */
+  counterpartyAccounts?: unknown
 }
 
 /** Тот же формат номера счёта, что и на подключении: буквы и цифры. */
@@ -80,21 +82,34 @@ async function authorize(deps: EraseAuthDeps, input: EraseInput): Promise<{ memb
 export function parseEraseSelection(input: EraseInput): EraseSelection | null {
   const period = parsePeriod({ from: input.from, to: input.to })
   if (!period) return null
-  const raw = input.accounts
-  if (raw === undefined || raw === null) return { period, accounts: [] }
+  const accounts = parseAccountList(input.accounts)
+  if (accounts === null) return null
+  const counterpartyAccounts = parseAccountList(input.counterpartyAccounts)
+  if (counterpartyAccounts === null) return null
+  return { period, accounts, counterpartyAccounts }
+}
+
+/**
+ * Разобрать список номеров счетов из недоверенного ввода. `null` — отказ (не массив, слишком длинный,
+ * кривой номер); пустой/отсутствующий ⇒ `[]`.
+ *
+ * ⚠ Кривой номер — ОТКАЗ, а не пропуск: молча отброшенный единственный номер превратил бы «стереть
+ * по этому счёту» в «стереть по всем», а это необратимое действие. Тот же довод и для счёта
+ * контрагента: отброшенный фильтр расширил бы удаление.
+ */
+function parseAccountList(raw: unknown): string[] | null {
+  if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) return null
   if (raw.length > MAX_ERASE_ACCOUNTS) return null
-  const accounts: string[] = []
+  const out: string[] = []
   for (const a of raw) {
     if (typeof a !== 'string') return null
     const v = a.trim()
     if (v === '') continue
-    // ⚠ Кривой номер — отказ, а не пропуск: пропущенный номер превратил бы «стереть по этому
-    // счёту» в «стереть по всем», если он был единственным.
     if (!ACCOUNT_RE.test(v)) return null
-    accounts.push(v)
+    out.push(v)
   }
-  return { period, accounts }
+  return out
 }
 
 /** Сколько дел попадёт под удаление. Ничего не меняет. */
