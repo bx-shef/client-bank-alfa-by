@@ -8,6 +8,7 @@ import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
 import { useSetupStatus } from '~/composables/useSetupStatus'
 import { useRecentOperations } from '~/composables/useRecentOperations'
+import { useLocalMode } from '~/composables/useLocalMode'
 import { useSliderRedirect } from '~/composables/useSliderRedirect'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
@@ -498,6 +499,8 @@ const route = useRoute()
 // под `?preview=1` — синтетический демо-набор для скриншотов и визуальных тестов. Раньше в портале
 // список был жёстко пуст, хотя реестр в настройках уже показывал те же операции своим endpoint'ом.
 const { operations: recentOps, load: loadRecentOps } = useRecentOperations()
+// Локальный режим форка (#39): скрывает наши промо/брендинг-баннеры (здесь — `CustomDevCard`).
+const localMode = useLocalMode()
 const items = computed<StatementItem[]>(() => (isPreviewQuery(route.query.preview) ? PREVIEW_ITEMS : recentOps.value))
 const byDirection = computed(() => splitByDirection(items.value))
 
@@ -869,7 +872,9 @@ watch(() => items.value.length, async () => {
                 :status="status"
                 @open-settings="openSettings"
               />
-              <CustomDevCard />
+              <!-- Промо-карточка «Нужна доработка» — НАШ cross-sell, в локальном режиме форка
+                   скрыта (#39). -->
+              <CustomDevCard v-if="!localMode" />
             </div>
           </div>
           <!-- Operations, styled like the "Последние операции" view. -->

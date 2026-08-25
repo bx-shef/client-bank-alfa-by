@@ -135,9 +135,11 @@ export interface HandlerDeps {
    *  This is the only callback that fires for an op that matched NOTHING, and that is the point:
    *  `onRecognized`/`onResolved`/`onAllocationDecision` all require the op to have got somewhere
    *  first, so a portal whose every payment goes `unmatched` produced ZERO log lines — the summary
-   *  said «117 processed, 117 unmatched» and nothing said WHICH account failed to resolve. That is
-   *  the one fact needed to fix it (the counterparty's account is what `findCompany` searches for
-   *  in the CRM requisites), and it was the one fact nowhere to be found.
+   *  said «117 processed, 117 unmatched» and this is the only line that fires for such an op.
+   *  ⚠ WHICH counterparty account failed to resolve is no longer in this line by default (#617:
+   *  IBANs are financial PII with multi-year log retention) — that fact is carried by the client
+   *  error-chat message (`findCompany` searches `RQ_ACC_NUM`, and the message names that account to
+   *  whoever adds the requisite); the `STATEMENT_DEBUG_LOG` opt-in re-reveals it in this line.
    *
    *  Optional so existing wirings/tests keep type-checking. MUST NOT throw (pure observation). */
   onOperation?: (item: StatementItem, outcome: OperationOutcome, memberId: string) => void
