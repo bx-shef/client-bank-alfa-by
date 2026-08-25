@@ -109,7 +109,69 @@ describe('handleBankMatrix result', () => {
     }), input)
     expect(res.status).toBe(200)
     expect(res.body.providers).toEqual([{ provider: 'alfa-by', count: 0, error: 'банк не ответил (503)' }])
-    // The CRM row must NOT be rendered as `matched` just because the bank half is missing.
+  })
+  // ⚠ The row-state assertion that used to sit here is gone on purpose. It read
+  // `toBe('crm-only')`, i.e. it PINNED the defect; weakening it to `.not.toBe('matched')` (the
+  // first attempt) made it a strictly weaker duplicate of the test below, which has the identical
+  // setup — it would have passed for `looks-same`, `bank-only` or any future state alike. This test
+  // now owns exactly what its title claims: the per-provider error is reported apart from the rows.
+
+  // ⚠ ХВОСТ #539. This assertion used to read `toBe('crm-only')` — the test PINNED the defect. A
+  // provider that errors contributes no accounts, so every CRM account was labelled «банк его не
+  // отдаёт» with an instruction to connect the bank, while the alert directly above said the
+  // bank's list was unknown. A healthy portal was sent to fix healthy requisites for the few
+  // seconds a token renewal holds the lock.
+  it('a silent bank yields `unchecked`, never the confident «банк его не отдаёт»', async () => {
+    const res = await handleBankMatrix(deps({
+      bankSide: async () => [{
+        provider: 'alfa-by',
+        accounts: [],
+        error: 'подключение сейчас обновляется — повторите через несколько секунд'
+      }]
+    }), input)
+    const rows = res.body.rows as MatrixRow[]
+    expect(rows[0]?.state).toBe('unchecked')
+  })
+
+  it('an answering bank still yields `crm-only` — the honest «банк о нём не знает»', async () => {
+    // Mutation guard: wire the flag unconditionally and this real state disappears entirely.
+    const res = await handleBankMatrix(deps({
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA7777' }] }]
+    }), input)
+    const rows = res.body.rows as MatrixRow[]
+    expect(rows.find(r => r.crm)?.state).toBe('crm-only')
+  })
+
+  it('ONE silent bank clouds the unmatched rows even when the other answered', async () => {
+    // We cannot tell which bank a CRM account belongs to — that is the question being asked. So a
+    // single unanswered provider is enough to turn «нет у банка» into «не спрашивали».
+    const res = await handleBankMatrix(deps({
+      myCompanies: async () => [{ companyId: '7', accounts: ['BY11ALFA0001', 'BY11PJCB0002'] }],
+      bankSide: async () => [
+        { provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001' }] },
+        { provider: 'prior-by', accounts: [], error: 'банк не ответил (503)' }
+      ]
+    }), input)
+    const rows = res.body.rows as MatrixRow[]
+    expect(rows.map(r => r.state).sort()).toEqual(['matched', 'unchecked'])
+  })
+
+  it('an empty-but-successful answer is NOT «incomplete» — it is a real, negative answer', async () => {
+    // ⚠ `accounts: []` without an `error` means the bank replied and covers nothing. Treating that
+    // as unknown would hide the genuinely broken portal this screen exists for.
+    const res = await handleBankMatrix(deps({
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [] }]
+    }), input)
+    const rows = res.body.rows as MatrixRow[]
+    expect(rows[0]?.state).toBe('crm-only')
+  })
+
+  it('an empty error string does not count as a failure', async () => {
+    // `error: ''` is what a sloppy transport produces; `Boolean(p.error)` must read it as «no error»
+    // rather than clouding every row on a healthy portal.
+    const res = await handleBankMatrix(deps({
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [], error: '' }]
+    }), input)
     const rows = res.body.rows as MatrixRow[]
     expect(rows[0]?.state).toBe('crm-only')
   })

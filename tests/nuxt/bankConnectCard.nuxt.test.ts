@@ -1,13 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, reactive } from 'vue'
 import BankConnectCard from '~/components/BankConnectCard.vue'
 
 // Admin gate + render + connect interaction for the bank connect card (A7c). Drive it through a
 // mocked useB24 (real SDK can't load in tests) and a mocked useFrameAuth (so `enabled` reflects
 // in-portal). The gate is default-CLOSED — the card is withheld until the onMounted admin-check.
 const mockState = { isInit: true, isAdmin: true }
+
+// ⚠ `?preview=1` подставляет синтетическую сверку (`PREVIEW_BANK_MATRIX`). Компонент читает флаг из
+// РОУТЕРА, а не из `window.location` (#555), поэтому мокаем именно роут. По умолчанию — пусто, то
+// есть все прежние тесты идут прежним путём.
+// ⚠ РЕАКТИВНЫЙ: гонка проверяется переключением флага ПОСЛЕ монтирования, а на голом объекте
+// `computed` не пересчитался бы — тест «проверял» бы кэш и был бы зелёным при любом поведении.
+const routeQuery = reactive<{ preview?: string }>({})
+vi.mock('vue-router', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  useRoute: () => ({ query: routeQuery })
+}))
 
 vi.mock('~/composables/useB24', async () => {
   const { makeMockB24 } = await import('./helpers/mockB24')
@@ -56,6 +67,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  delete routeQuery.preview
   fetchMock.mockClear()
   connectReply.value = {}
   matrixReply.value = { rows: [], providers: [] }
@@ -226,5 +238,59 @@ describe('BankConnectCard — сверка счетов внутри карто�
     })
     const w = await mountReady()
     expect(w.find('[data-testid="bank-connect"]').exists()).toBe(true)
+  })
+})
+
+describe('BankConnectCard: синтетическая сверка под ?preview=1', () => {
+  // ⚠ Вне портала матрица ВСЕГДА пуста (нет фрейм-токена), поэтому блок сверки не попадал ни в один
+  // визуальный эталон. Фикстура закрывает эту дыру — и сама остаётся непроверенной, если её не
+  // прикрыть здесь: находка ревью (у соседнего `ConnectedBankAccounts` теста тоже нет).
+
+  it('фикстура рисуется, а сеть за ней не ходит', async () => {
+    routeQuery.preview = '1'
+    const w = await mountReady()
+    expect(w.text()).toContain('BY00ALFA00000000000000000009')
+    expect(fetchMock.mock.calls.filter(c => c[0] === '/api/bank/matrix')).toEqual([])
+  })
+
+  it('⚠ поздний ответ сети НЕ затирает фикстуру', async () => {
+    // Гонка, ради которой `reloadMatrix()` перепроверяет флаг ПОСЛЕ `await`: на гидратации
+    // пререндеренной страницы адрес восстанавливается позже монтирования (#555), поэтому запрос
+    // успевает уйти и вернуться уже при активном превью. Без перепроверки экран схлопывался бы в
+    // пустую сверку — и молча, потому что пустая сверка это законное состояние.
+    type MatrixReply = { rows: unknown[], providers: unknown[] }
+    let release: (v: MatrixReply) => void = () => {}
+    const pending = new Promise<MatrixReply>(r => (release = r))
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
+      if (url === '/api/bank/matrix') return pending
+      return Promise.resolve(connectReply.value)
+    })
+    const w = await mountReady()
+    routeQuery.preview = '1'
+    release({ rows: [], providers: [] })
+    await flushPromises()
+    await nextTick()
+    expect(w.text()).toContain('BY00ALFA00000000000000000009')
+  })
+
+  it('⚠ упавший запрос не оставляет красную ошибку рядом с фикстурой', async () => {
+    // Внутри портала сверка может честно отказать (403 не-админу, 409 до конца установки). Если
+    // после этого включится превью, экран заявлял бы И отказ, И его результат разом.
+    type MatrixReply = { rows: unknown[], providers: unknown[] }
+    let reject: (e: unknown) => void = () => {}
+    const pending = new Promise<MatrixReply>((_r, rj) => (reject = rj))
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
+      if (url === '/api/bank/matrix') return pending
+      return Promise.resolve(connectReply.value)
+    })
+    const w = await mountReady()
+    routeQuery.preview = '1'
+    reject(new Error('403'))
+    await flushPromises()
+    await nextTick()
+    expect(w.find('[data-testid="matrix-error"]').exists()).toBe(false)
+    expect(w.text()).toContain('BY00ALFA00000000000000000009')
   })
 })
