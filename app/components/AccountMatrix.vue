@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { MATRIX_STATE_LABEL, matrixIsClean, matrixProblems, type MatrixRow } from '~/utils/bankAccountMatrix'
+import {
+  bankSideIncomplete, matrixIsClean, matrixProblems, matrixStateLabel, uncheckedNumbers,
+  type MatrixRow
+} from '~/utils/bankAccountMatrix'
 import type { MatrixProviderStatus } from '~/composables/useBankMatrix'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { pluralRu } from '~/utils/importStatus'
@@ -35,15 +38,26 @@ const clean = computed(() => matrixIsClean(props.rows))
 const problems = computed(() => matrixProblems(props.rows))
 const unchecked = computed(() => props.rows.filter(r => r.state === 'unchecked'))
 
-// ⚠ Непроверенные СВОРАЧИВАЕМ в счётчик, а не рисуем строками: состояние транзиентное (обычно
-// пара секунд, пока идёт продление токена — #539), инструкции у него нет, а полный список из
-// пяти карточек на исправном портале читался бы как авария. При этом молчать нельзя: в счётчик
-// «сходятся» они не попадут — за них мы не ручаемся.
+// ⚠ Непроверенные СВОРАЧИВАЕМ в абзац, а не рисуем карточками: инструкции у них нет — чинить
+// нечего, — а полный список карточек на исправном портале читался бы как авария. При этом в счётчик
+// «сходятся» они тоже не попадают: за них мы не ручаемся.
+//
+// ⚠ НО НОМЕРА НАЗЫВАЕМ. Первая редакция сворачивала их в голое число, и это был тот же дефект,
+// вывернутый наизнанку: отказ банка бывает ПОСТОЯННЫМ (мёртвый грант, банк не настроен на этом
+// сервере), и тогда счёт исчезал с экрана НАВСЕГДА. Ровно так спрятался бы реквизит с опечаткой,
+// ради которого экран и написан («117 обработано, 0 создано»): второй банк молчит вечно, первый
+// счёт не назвал, а экран сообщает «проверить не удалось» и не показывает, ЧТО именно.
+//
+// ⚠ Пояснение берётся из подписи состояния, а не пишется здесь вторым текстом: иначе юнит-тест
+// сторожил бы строку, которой админ не видит, а видел бы админ строку, которую не сторожит никто
+// (находка ревью).
 const uncheckedNote = computed(() => {
   const n = unchecked.value.length
-  return `${n} ${pluralRu(n, ['счёт', 'счёта', 'счетов'])} проверить не удалось: банк не ответил, `
-    + 'какие счета покрывает согласие. Это не проблема реквизитов — повторите сверку через '
-    + 'несколько секунд.'
+  const { shown, more } = uncheckedNumbers(props.rows)
+  const tail = more ? `${shown.join(', ')} и ещё ${more}` : shown.join(', ')
+  const which = tail ? ` (${tail})` : ''
+  return `${n} ${pluralRu(n, ['счёт', 'счёта', 'счетов'])} проверить не удалось${which}. `
+    + matrixStateLabel('unchecked').hint
 })
 
 // ⚠ Было «Остальные 1 — сходятся»: при одной строке фраза читается как обрывок и выглядит
@@ -60,8 +74,10 @@ const matchedNote = computed(() => {
     : `Ещё ${n} ${pluralRu(n, ['счёт сходится', 'счёта сходятся', 'счетов сходятся'])}.`
 })
 const providerErrors = computed(() => props.providers.filter(p => p.error))
-/** Хотя бы один подключённый банк в этот прогон не ответил — сторона банка НЕПОЛНА. */
-const bankSilent = computed(() => providerErrors.value.length > 0)
+/** Хотя бы один подключённый банк в этот прогон не ответил — сторона банка НЕПОЛНА.
+ *  ⚠ ТЕМ ЖЕ предикатом, что и на сервере (`bankIncomplete` в `bankMatrix.ts`): написанные порознь,
+ *  строки и надпись над ними однажды описали бы разные миры. */
+const bankSilent = computed(() => bankSideIncomplete(props.providers))
 
 // ⚠ Те же два over-claim'а, что и в строках, только в сводках. Молчащий банк мог держать счёт,
 // которого нет в реквизитах (`bank-only` — самая дорогая строка экрана), а мы бы уже написали
@@ -172,7 +188,7 @@ function stateColor(state: MatrixRow['state']) {
           <B24Badge
             :color="stateColor(r.state)"
             size="xs"
-            :label="MATRIX_STATE_LABEL[r.state].title"
+            :label="matrixStateLabel(r.state).title"
           />
           <B24Badge
             v-if="r.connected"
@@ -202,7 +218,7 @@ function stateColor(state: MatrixRow['state']) {
         </dl>
 
         <p class="mt-2 text-xs text-(--ui-color-base-3)">
-          {{ MATRIX_STATE_LABEL[r.state].hint }}
+          {{ matrixStateLabel(r.state).hint }}
         </p>
       </li>
     </ul>

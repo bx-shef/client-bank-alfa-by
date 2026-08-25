@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MATRIX_ROW_ACTIONABLE, MATRIX_STATE_LABEL, buildAccountMatrix, matrixIsClean, matrixProblems,
-  normalizeForCompare, type MatrixRowState
+  MATRIX_ROW_ACTIONABLE, MATRIX_STATE_LABEL, bankSideIncomplete, buildAccountMatrix, matrixIsClean,
+  matrixProblems, matrixStateLabel, normalizeForCompare, uncheckedNumbers, type MatrixRowState
 } from '../app/utils/bankAccountMatrix'
 import { normalizeAccount } from '../server/utils/companyLookup'
 
@@ -195,8 +195,8 @@ describe('банк не ответил — «не знаем» вместо «б
   it('подпись говорит про НЕЗНАНИЕ и не отправляет подключать банк', () => {
     const label = MATRIX_STATE_LABEL['unchecked']
     expect(label.title).not.toContain('не отдаёт')
-    expect(label.hint).toContain('неизвестно')
-    expect(label.hint).toContain('повторите')
+    expect(label.hint).toContain('сверить их сейчас не с чем')
+    expect(label.hint).toContain('повторите сверку')
     // ⚠ Ровно та инструкция, которая и была вредной: чинить нечего, банк просто молчит.
     expect(label.hint).not.toContain('подключите')
   })
@@ -207,5 +207,98 @@ describe('банк не ответил — «не знаем» вместо «б
     const states: MatrixRowState[] = ['matched', 'looks-same', 'crm-only', 'bank-only', 'unchecked']
     for (const s of states) expect(typeof MATRIX_ROW_ACTIONABLE[s]).toBe('boolean')
     expect(Object.keys(MATRIX_ROW_ACTIONABLE).sort()).toEqual([...states].sort())
+  })
+
+  it('⚠ и ЗНАЧЕНИЯ таблицы закреплены поимённо, а не только тип', () => {
+    // Находка ревью: проверка `typeof … === 'boolean'` — тавтология, её проходит и НЕВЕРНОЕ
+    // значение. Замерено рассуждением: `'crm-only': false` (например при мерже комментарий
+    // «чинить нечего» переехал строкой выше) молча выключил бы показ самого частого содержательного
+    // состояния экрана — «счёт есть в реквизитах, банк его не назвал», — и ни один тест не упал бы.
+    expect(MATRIX_ROW_ACTIONABLE).toEqual({
+      'bank-only': true,
+      'looks-same': true,
+      'crm-only': true,
+      'unchecked': false,
+      'matched': false
+    })
+  })
+
+  it('подпись неизвестного состояния не роняет рендер (скос выката)', () => {
+    // Статика и backend выкатываются разными образами: несколько минут один может быть новее
+    // другого, и прямая индексация дала бы `undefined.title` — ПУСТОЙ экран настроек вместо одной
+    // незнакомой строки.
+    expect(matrixStateLabel('unchecked').title).toBe(MATRIX_STATE_LABEL['unchecked'].title)
+    expect(matrixStateLabel('who-knows' as MatrixRowState).title).toBeTruthy()
+    expect(matrixStateLabel('who-knows' as MatrixRowState).hint).toBe('')
+  })
+})
+
+describe('предикат «сторона банка неполна» — ОДИН на сервер и интерфейс', () => {
+  it('ошибка хотя бы у одного провайдера', () => {
+    expect(bankSideIncomplete([{ error: null }, { error: 'банк не ответил' }])).toBe(true)
+  })
+
+  it('ответили все — полна', () => {
+    expect(bankSideIncomplete([{ error: null }, {}])).toBe(false)
+  })
+
+  it('пустая строка ошибки — НЕ отказ', () => {
+    // Иначе неаккуратный транспорт затуманил бы каждую строку на исправном портале.
+    expect(bankSideIncomplete([{ error: '' }])).toBe(false)
+  })
+
+  it('провайдеров нет вовсе — спрашивать было некого', () => {
+    expect(bankSideIncomplete([])).toBe(false)
+  })
+})
+
+describe('⚠ непроверенный счёт НЕ должен исчезнуть с экрана (находка ревью)', () => {
+  // Отказ банка бывает ПОСТОЯННЫМ — мёртвый грант, «банк не настроен на этом сервере», — и тогда
+  // `bankIncomplete` истинно НА КАЖДОМ прогоне. Первая редакция сворачивала такие строки в голое
+  // число, то есть счёт пропадал с экрана НАВСЕГДА: ровно так спрятался бы реквизит с опечаткой,
+  // ради которого экран и написан. Тот же дефект, вывернутый наизнанку.
+
+  const rows = () => buildAccountMatrix({
+    crm: [crm('BY00BANK0003'), crm('BY00BANK0005')],
+    bank: [],
+    connectedKeys: [],
+    bankIncomplete: true
+  })
+
+  it('номера непроверенных счетов доступны для показа', () => {
+    expect(uncheckedNumbers(rows()).shown).toEqual(['BY00BANK0003', 'BY00BANK0005'])
+    expect(uncheckedNumbers(rows()).more).toBe(0)
+  })
+
+  it('длинный список капится, но остаток НАЗЫВАЕТСЯ числом, а не отбрасывается', () => {
+    const many = buildAccountMatrix({
+      crm: ['A1', 'A2', 'A3', 'A4', 'A5'].map(n => crm(n)),
+      bank: [],
+      connectedKeys: [],
+      bankIncomplete: true
+    })
+    const got = uncheckedNumbers(many, 2)
+    expect(got.shown).toEqual(['A1', 'A2'])
+    expect(got.more).toBe(3)
+  })
+
+  it('строки других состояний в список номеров не подмешиваются', () => {
+    const mixed = buildAccountMatrix({
+      crm: [crm('BY00BANK0001'), crm('BY00BANK0003')],
+      bank: [bank('BY00BANK0001'), bank('BY00BANK0002')],
+      connectedKeys: [],
+      bankIncomplete: true
+    })
+    expect(uncheckedNumbers(mixed).shown).toEqual(['BY00BANK0003'])
+  })
+
+  it('⚠ подпись НЕ обещает, что дело не в реквизитах', () => {
+    // Прежний текст говорил «Это НЕ проблема реквизита» и «повторите через несколько секунд» —
+    // оба утверждения ложны при постоянном отказе банка: реквизит с опечаткой выглядит так же.
+    const hint = MATRIX_STATE_LABEL['unchecked'].hint
+    expect(hint).not.toContain('не проблема')
+    expect(hint).not.toContain('через несколько секунд')
+    expect(hint, 'должна отправлять к предупреждению, если повторяется').toContain('повторяется')
+    expect(hint).toContain('непроверенными')
   })
 })

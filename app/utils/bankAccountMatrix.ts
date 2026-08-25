@@ -65,10 +65,10 @@ export type MatrixRowState = 'matched' | 'looks-same' | 'crm-only' | 'bank-only'
 /**
  * Which states are something the admin must ACT on.
  *
- * ⚠ A `Record` over the union rather than a `!==` list at each call site: a new state then cannot
- * compile until someone has decided what it means, and the two consumers (the composable and the
- * component) cannot drift apart. They already had two hand-written copies of `state !== 'matched'`,
- * which is exactly how `unchecked` would have silently become «a problem to fix».
+ * ⚠ A `Record` over the union rather than a `!== 'matched'` test at the call site: a new state then
+ * cannot compile until someone has decided what it means. `state !== 'matched'` reads as «anything
+ * not working is a problem», which is exactly how `unchecked` — a question we never asked — would
+ * have silently become «a problem to fix».
  */
 export const MATRIX_ROW_ACTIONABLE: Record<MatrixRowState, boolean> = {
   'bank-only': true,
@@ -118,8 +118,9 @@ export interface MatrixInput {
 
 /**
  * Build the matrix. Rows come out in the order an admin should read them: problems first
- * (`bank-only`, then `looks-same`, then `crm-only`), working pairs last — a screen that leads with
- * everything being fine buries the one line that explains why nothing works.
+ * (`bank-only`, then `looks-same`, then `crm-only`), then the rows we could not check
+ * (`unchecked`), working pairs last — a screen that leads with everything being fine buries the one
+ * line that explains why nothing works.
  */
 export function buildAccountMatrix(input: MatrixInput): MatrixRow[] {
   const connected = new Set(input.connectedKeys.map(normalizeForCompare))
@@ -196,10 +197,64 @@ export const MATRIX_STATE_LABEL: Record<MatrixRowState, { title: string, hint: s
   },
   'unchecked': {
     title: 'проверить не удалось',
-    hint: 'Банк сейчас не ответил, какие счета покрывает согласие, поэтому есть у него этот счёт '
-      + 'или нет — неизвестно. Это НЕ проблема реквизита и обычно проходит само: повторите сверку '
-      + 'через несколько секунд.'
+    // ⚠ «Это НЕ проблема реквизита» стояло здесь и было ТЕМ ЖЕ грехом, только с другого конца.
+    // Отказ банка бывает и ПОСТОЯННЫМ — мёртвый грант, банк не настроен на этом сервере
+    // (`bankAccountList.ts`: «банк не настроен на этом сервере»), — и тогда «повторите через
+    // несколько секунд» это обещание, которое не сбудется, а «не проблема реквизита» —
+    // утверждение, которое может оказаться ложным: реквизит с опечаткой выглядел бы ровно так же.
+    // Говорим то, что знаем: сверить не с чем, обычно проходит само, а если нет — причина названа
+    // в предупреждении выше.
+    hint: 'Банк не ответил, какие счета покрывает согласие, поэтому сверить их сейчас не с чем. '
+      + 'Обычно проходит само — повторите сверку. Если повторяется, причина названа в '
+      + 'предупреждении выше, и до тех пор эти счета остаются непроверенными.'
   }
+}
+
+/**
+ * Label for a row state, tolerant of a state this bundle has never heard of.
+ *
+ * ⚠ Статика и backend выкатываются РАЗНЫМИ образами (CLAUDE.md §Деплой), поэтому несколько минут
+ * один может быть новее другого. Прямая индексация `MATRIX_STATE_LABEL[state]` даёт в этом окне
+ * `undefined.title` — TypeError в рендере, то есть ПУСТОЙ экран настроек вместо одной незнакомой
+ * строки. Следующее добавленное состояние не должно стоить админу белой страницы.
+ */
+export function matrixStateLabel(state: MatrixRowState): { title: string, hint: string } {
+  return MATRIX_STATE_LABEL[state] ?? { title: 'состояние неизвестно', hint: '' }
+}
+
+/**
+ * Which accounts we could not check, for the collapsed line.
+ *
+ * ⚠ НОМЕРА ПОКАЗЫВАЮТСЯ, и это несущее. `unchecked` не выводится строкой (инструкции у него нет),
+ * поэтому без номеров счёт исчезает с экрана целиком — а отказ банка бывает ПОСТОЯННЫМ, и тогда
+ * он исчезает навсегда. Ровно так спрятался бы реквизит с опечаткой, ради которого экран и сделан
+ * («117 обработано, 0 создано»): второй банк молчит вечно, первый счёт не назвал, а экран говорит
+ * «проверить не удалось» и не показывает, ЧТО именно.
+ *
+ * ⚠ Капим: у портала с десятком счетов абзац иначе становится стеной цифр.
+ */
+export function uncheckedNumbers(
+  rows: readonly MatrixRow[], max = MAX_UNCHECKED_SHOWN
+): { shown: string[], more: number } {
+  const all = rows.filter(r => r.state === 'unchecked').map(r => r.crm?.number ?? '').filter(Boolean)
+  return { shown: all.slice(0, max), more: Math.max(0, all.length - max) }
+}
+
+export const MAX_UNCHECKED_SHOWN = 3
+
+/**
+ * Is the bank side INCOMPLETE — did at least one provider we asked stay silent?
+ *
+ * ⚠ Одно правило на сервер и на интерфейс. Сервер решает по нему состояние строк
+ * (`bankIncomplete`), компонент — текст сводок и цвет; напиши их порознь, и однажды строки скажут
+ * «банк его не отдаёт», а надпись над ними — «банк не ответил». Обе стороны видят у провайдера
+ * одно поле `error`, поэтому предикат общий.
+ *
+ * ⚠ `Boolean`, а не `!== undefined`: пустая строка — это «ошибки не было». Иначе неаккуратный
+ * транспорт затуманил бы КАЖДУЮ строку на исправном портале.
+ */
+export function bankSideIncomplete(providers: readonly { error?: string | null }[]): boolean {
+  return providers.some(p => Boolean(p.error))
 }
 
 /**

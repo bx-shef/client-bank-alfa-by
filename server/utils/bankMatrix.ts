@@ -17,7 +17,7 @@
 // portals whose admin is looking at a stale page.
 
 import type { CrmSideAccount, MatrixRow } from '../../app/utils/bankAccountMatrix'
-import { buildAccountMatrix } from '../../app/utils/bankAccountMatrix'
+import { bankSideIncomplete, buildAccountMatrix } from '../../app/utils/bankAccountMatrix'
 import type { BankSideProviderResult } from './bankAccountList'
 import type { MyCompanyAccounts } from './myCompanyRequisites'
 
@@ -88,7 +88,11 @@ export async function handleBankMatrix(deps: BankMatrixDeps, input: BankMatrixIn
   // would be classified «банк его не отдаёт» — a confident claim about a question we never got to
   // ask. `listBankSideAccounts` only returns providers the portal actually connected, so this is
   // «a bank we asked stayed silent», never «Приор не подключён».
-  const bankIncomplete = providers.some(p => Boolean(p.error))
+  //
+  // ⚠ The predicate is SHARED with the component (which re-derives the same thing to word its
+  // summaries): written twice, the rows and the line above them would one day describe different
+  // worlds.
+  const bankIncomplete = bankSideIncomplete(providers)
   const rows: MatrixRow[] = buildAccountMatrix({ crm, bank, connectedKeys, bankIncomplete })
 
   return {

@@ -109,10 +109,12 @@ describe('handleBankMatrix result', () => {
     }), input)
     expect(res.status).toBe(200)
     expect(res.body.providers).toEqual([{ provider: 'alfa-by', count: 0, error: 'банк не ответил (503)' }])
-    // The CRM row must NOT be rendered as `matched` just because the bank half is missing.
-    const rows = res.body.rows as MatrixRow[]
-    expect(rows[0]?.state).not.toBe('matched')
   })
+  // ⚠ The row-state assertion that used to sit here is gone on purpose. It read
+  // `toBe('crm-only')`, i.e. it PINNED the defect; weakening it to `.not.toBe('matched')` (the
+  // first attempt) made it a strictly weaker duplicate of the test below, which has the identical
+  // setup — it would have passed for `looks-same`, `bank-only` or any future state alike. This test
+  // now owns exactly what its title claims: the per-provider error is reported apart from the rows.
 
   // ⚠ ХВОСТ #539. This assertion used to read `toBe('crm-only')` — the test PINNED the defect. A
   // provider that errors contributes no accounts, so every CRM account was labelled «банк его не

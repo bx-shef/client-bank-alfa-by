@@ -54,6 +54,11 @@ const previewMatrix = computed(() => isPreviewQuery(route.query.preview))
 function usePreviewMatrix(): void {
   matrix.rows.value = PREVIEW_BANK_MATRIX.rows
   matrix.providers.value = PREVIEW_BANK_MATRIX.providers
+  // ⚠ Ошибку тоже гасим. Внутри портала запрос мог УЖЕ упасть (403 не-админу, 409 до конца
+  // установки) к моменту, когда адрес со строкой запроса восстановился; без сброса экран рисовал
+  // бы красное «Не удалось сверить счета с банком» ОДНОВРЕМЕННО с четырьмя синтетическими строками
+  // — то есть заявлял бы и отказ, и его результат (находка ревью).
+  matrix.error.value = ''
   matrix.loaded.value = true
 }
 
