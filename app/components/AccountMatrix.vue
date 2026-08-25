@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { MATRIX_STATE_LABEL, matrixIsClean, type MatrixRow } from '~/utils/bankAccountMatrix'
+import { MATRIX_STATE_LABEL, matrixIsClean, matrixProblems, type MatrixRow } from '~/utils/bankAccountMatrix'
 import type { MatrixProviderStatus } from '~/composables/useBankMatrix'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { pluralRu } from '~/utils/importStatus'
@@ -30,18 +30,52 @@ const props = defineProps<{
 }>()
 
 const clean = computed(() => matrixIsClean(props.rows))
-const problems = computed(() => props.rows.filter(r => r.state !== 'matched'))
+// ⚠ НЕ `state !== 'matched'`: строка `unchecked` означает «банк не ответил, мы не спрашивали», и в
+// списке проблем она предлагала бы чинить исправный реквизит — ровно то, от чего этот экран лечит.
+const problems = computed(() => matrixProblems(props.rows))
+const unchecked = computed(() => props.rows.filter(r => r.state === 'unchecked'))
+
+// ⚠ Непроверенные СВОРАЧИВАЕМ в счётчик, а не рисуем строками: состояние транзиентное (обычно
+// пара секунд, пока идёт продление токена — #539), инструкции у него нет, а полный список из
+// пяти карточек на исправном портале читался бы как авария. При этом молчать нельзя: в счётчик
+// «сходятся» они не попадут — за них мы не ручаемся.
+const uncheckedNote = computed(() => {
+  const n = unchecked.value.length
+  return `${n} ${pluralRu(n, ['счёт', 'счёта', 'счетов'])} проверить не удалось: банк не ответил, `
+    + 'какие счета покрывает согласие. Это не проблема реквизитов — повторите сверку через '
+    + 'несколько секунд.'
+})
 
 // ⚠ Было «Остальные 1 — сходятся»: при одной строке фраза читается как обрывок и выглядит
 // ошибкой склонения (замечание владельца). Считаем словами и склоняем общим `pluralRu` — тем же,
 // что и везде, а не ручным `=== 1` в шаблоне: ручной суррогат уже давал «5 портала(ов)».
+const matchedCount = computed(() => props.rows.filter(r => r.state === 'matched').length)
 const matchedNote = computed(() => {
-  const n = props.rows.length - problems.value.length
+  // ⚠ Считаем `matched`, а НЕ «всё, что не проблема»: прежняя арифметика (`длина минус проблемы`)
+  // засчитала бы `unchecked` в «сходятся», то есть поручилась бы за строки, которых никто не
+  // проверял, — тем же способом, каким `crm-only` уверенно врал про молчащий банк.
+  const n = matchedCount.value
   return n === 1
     ? 'Ещё один счёт сходится.'
     : `Ещё ${n} ${pluralRu(n, ['счёт сходится', 'счёта сходятся', 'счетов сходятся'])}.`
 })
 const providerErrors = computed(() => props.providers.filter(p => p.error))
+/** Хотя бы один подключённый банк в этот прогон не ответил — сторона банка НЕПОЛНА. */
+const bankSilent = computed(() => providerErrors.value.length > 0)
+
+// ⚠ Те же два over-claim'а, что и в строках, только в сводках. Молчащий банк мог держать счёт,
+// которого нет в реквизитах (`bank-only` — самая дорогая строка экрана), а мы бы уже написали
+// «всё сходится» / «ни один банк не сообщил о своих». Утверждение о ПОЛНОТЕ мы вправе делать
+// только когда ответили все, поэтому обе сводки в этом случае говорят про неполноту вслух.
+const cleanNote = computed(() => bankSilent.value
+  ? `Расхождений не найдено: ${props.rows.length}. Но один из банков сейчас не ответил — его `
+  + 'счета в сверку не вошли. Повторите через несколько секунд.'
+  : `Всё сходится: ${props.rows.length} — счета в реквизитах совпадают с тем, что отдаёт банк.`)
+const emptyNote = computed(() => bankSilent.value
+  ? 'В реквизитах «моих компаний» нет расчётных счетов, а банк сейчас не ответил, какие счета '
+  + 'покрывает согласие. Добавьте счёт в реквизиты своей компании и повторите сверку.'
+  : 'Сверять пока нечего: в реквизитах «моих компаний» нет расчётных счетов, и ни один банк не '
+    + 'сообщил о своих. Добавьте счёт в реквизиты своей компании и подключите банк.')
 
 function providerLabel(id: string): string {
   return BANK_LABELS[id as keyof typeof BANK_LABELS] ?? id
@@ -110,16 +144,17 @@ function stateColor(state: MatrixRow['state']) {
       class="text-sm text-(--ui-color-base-3)"
       data-testid="matrix-empty"
     >
-      Сверять пока нечего: в реквизитах «моих компаний» нет расчётных счетов, и ни один банк не
-      сообщил о своих. Добавьте счёт в реквизиты своей компании и подключите банк.
+      {{ emptyNote }}
     </p>
 
+    <!-- ⚠ Зелёный — только когда ответили ВСЕ банки: цвет здесь читается как «можно не смотреть». -->
     <p
       v-else-if="loaded && clean && rows.length"
-      class="text-sm text-(--ui-color-accent-main-success)"
+      :class="bankSilent ? 'text-(--ui-color-base-3)' : 'text-(--ui-color-accent-main-success)'"
+      class="text-sm"
       data-testid="matrix-clean"
     >
-      Всё сходится: {{ rows.length }} — счета в реквизитах совпадают с тем, что отдаёт банк.
+      {{ cleanNote }}
     </p>
 
     <ul
@@ -172,8 +207,18 @@ function stateColor(state: MatrixRow['state']) {
       </li>
     </ul>
 
+    <!-- «Проверить не удалось» — отдельной тихой строкой, ОТДЕЛЬНО от «сходятся»: ручаться за
+         строку, которую никто не проверял, значит повторить исходную ошибку с другой стороны. -->
     <p
-      v-if="loaded && problems.length && rows.length > problems.length"
+      v-if="loaded && unchecked.length"
+      class="text-xs text-(--ui-color-base-3)"
+      data-testid="matrix-unchecked-count"
+    >
+      {{ uncheckedNote }}
+    </p>
+
+    <p
+      v-if="loaded && matchedCount && (problems.length || unchecked.length)"
       class="text-xs text-(--ui-color-base-3)"
       data-testid="matrix-matched-count"
     >

@@ -55,9 +55,34 @@ export interface CrmSideAccount {
  *   `looks-same` — ⚠ present on both sides but written differently (spaces, case). One account to
  *                  a human, two to the program — the import will NOT find it;
  *   `crm-only`   — in CRM, the bank does not report it (not connected, or another bank);
- *   `bank-only`  — the bank reports it, CRM has no such requisite → payments land nowhere.
+ *   `bank-only`  — the bank reports it, CRM has no such requisite → payments land nowhere;
+ *   `unchecked`  — ⚠ in CRM, and we NEVER GOT TO ASK: a bank failed to answer this run. Absence of
+ *                  an answer is not an answer, and this state exists precisely so the screen cannot
+ *                  pretend otherwise (see the note on `MatrixInput.bankIncomplete`).
  */
-export type MatrixRowState = 'matched' | 'looks-same' | 'crm-only' | 'bank-only'
+export type MatrixRowState = 'matched' | 'looks-same' | 'crm-only' | 'bank-only' | 'unchecked'
+
+/**
+ * Which states are something the admin must ACT on.
+ *
+ * ⚠ A `Record` over the union rather than a `!==` list at each call site: a new state then cannot
+ * compile until someone has decided what it means, and the two consumers (the composable and the
+ * component) cannot drift apart. They already had two hand-written copies of `state !== 'matched'`,
+ * which is exactly how `unchecked` would have silently become «a problem to fix».
+ */
+export const MATRIX_ROW_ACTIONABLE: Record<MatrixRowState, boolean> = {
+  'bank-only': true,
+  'looks-same': true,
+  'crm-only': true,
+  // Nothing to do about either of these: one works, the other was never asked about.
+  'unchecked': false,
+  'matched': false
+}
+
+/** Rows that carry an instruction — the ones rendered in full. */
+export function matrixProblems(rows: readonly MatrixRow[]): MatrixRow[] {
+  return rows.filter(r => MATRIX_ROW_ACTIONABLE[r.state])
+}
 
 export interface MatrixRow {
   state: MatrixRowState
@@ -74,6 +99,21 @@ export interface MatrixInput {
   bank: readonly BankSideAccount[]
   /** Account keys we already hold a token for. */
   connectedKeys: readonly string[]
+  /**
+   * ⚠ TRUE WHEN AT LEAST ONE CONNECTED BANK FAILED TO ANSWER this run (a lock timeout while the
+   * token is being renewed is the common, self-healing case — #539). The bank side is then
+   * INCOMPLETE, and a CRM account missing from it proves nothing.
+   *
+   * Without this flag the matrix stated the opposite of what it knew: every CRM account fell into
+   * `crm-only` — «банк его не отдаёт», with an instruction to connect the bank — while the alert
+   * directly above said the bank's list was unknown. A healthy portal was told to go fix healthy
+   * requisites, in a screen that exists to stop exactly that.
+   *
+   * ⚠ REQUIRED, not optional-defaulting-to-false: forgetting to wire it must not silently restore
+   * the old confident-wrong answer. Positive knowledge is unaffected — `bank-only`, `matched` and
+   * `looks-same` all rest on a bank that DID report the account.
+   */
+  bankIncomplete: boolean
 }
 
 /**
@@ -95,7 +135,13 @@ export function buildAccountMatrix(input: MatrixInput): MatrixRow[] {
     const norm = normalizeForCompare(c.number)
     const bank = bankByNorm.get(norm)
     if (!bank) {
-      rows.push({ state: 'crm-only', crm: c, connected: isConnected(c.number) })
+      // ⚠ «Банк его не отдаёт» is a claim about the bank's answer. With a provider in error there
+      // is no answer to make a claim about, so the row says so instead of guessing.
+      rows.push({
+        state: input.bankIncomplete ? 'unchecked' : 'crm-only',
+        crm: c,
+        connected: isConnected(c.number)
+      })
       continue
     }
     usedBank.add(norm)
@@ -118,7 +164,11 @@ export function buildAccountMatrix(input: MatrixInput): MatrixRow[] {
     rows.push({ state: 'bank-only', bank: b, connected: isConnected(b.number) })
   }
 
-  const order: Record<MatrixRowState, number> = { 'bank-only': 0, 'looks-same': 1, 'crm-only': 2, 'matched': 3 }
+  // Problems first, then what we could not check, then what works: the admin reads top-down and
+  // must not have to scroll past healthy rows to reach the line that explains the breakage.
+  const order: Record<MatrixRowState, number> = {
+    'bank-only': 0, 'looks-same': 1, 'crm-only': 2, 'unchecked': 3, 'matched': 4
+  }
   return rows.sort((a, b) => order[a.state] - order[b.state])
 }
 
@@ -143,11 +193,23 @@ export const MATRIX_STATE_LABEL: Record<MatrixRowState, { title: string, hint: s
     title: 'нет в реквизитах',
     hint: 'Банк отдаёт этот счёт, а в реквизитах его нет. Операции по нему приедут и не найдут '
       + 'вашу компанию — то есть не приземлятся никуда. Добавьте номер в реквизиты своей компании.'
+  },
+  'unchecked': {
+    title: 'проверить не удалось',
+    hint: 'Банк сейчас не ответил, какие счета покрывает согласие, поэтому есть у него этот счёт '
+      + 'или нет — неизвестно. Это НЕ проблема реквизита и обычно проходит само: повторите сверку '
+      + 'через несколько секунд.'
   }
 }
 
-/** True when nothing on the screen needs attention — used to decide whether to show the block at
- *  all in the compact view. */
+/**
+ * True when nothing on the screen needs attention — used to decide whether to show the block at
+ * all in the compact view.
+ *
+ * ⚠ `unchecked` is NOT clean, even though it is not actionable either. «Всё сходится» is a claim
+ * about every row, and a row we could not check is not one we may vouch for. The screen stays open
+ * next to the provider-error alert instead of closing over an unanswered question.
+ */
 export function matrixIsClean(rows: readonly MatrixRow[]): boolean {
   return rows.every(r => r.state === 'matched')
 }

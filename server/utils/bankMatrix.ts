@@ -84,7 +84,12 @@ export async function handleBankMatrix(deps: BankMatrixDeps, input: BankMatrixIn
   const providers = await deps.bankSide(memberId)
   const connectedKeys = await deps.connected(memberId)
   const bank = providers.flatMap(p => p.accounts)
-  const rows: MatrixRow[] = buildAccountMatrix({ crm, bank, connectedKeys })
+  // ⚠ A provider that errored contributes NO accounts, so without this flag every CRM account
+  // would be classified «банк его не отдаёт» — a confident claim about a question we never got to
+  // ask. `listBankSideAccounts` only returns providers the portal actually connected, so this is
+  // «a bank we asked stayed silent», never «Приор не подключён».
+  const bankIncomplete = providers.some(p => Boolean(p.error))
+  const rows: MatrixRow[] = buildAccountMatrix({ crm, bank, connectedKeys, bankIncomplete })
 
   return {
     status: 200,

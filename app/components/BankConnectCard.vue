@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, useTemplateRef } from 'vue'
+import { computed, nextTick, onMounted, ref, useTemplateRef, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useBankConnect } from '~/composables/useBankConnect'
-import { useBankMatrix } from '~/composables/useBankMatrix'
+import { PREVIEW_BANK_MATRIX, useBankMatrix } from '~/composables/useBankMatrix'
+import { isPreviewQuery } from '~/utils/inPortalGate'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 
@@ -34,8 +36,43 @@ const connectedList = useTemplateRef<{ reload: () => Promise<void> }>('connected
 // списку подключений выше — из него он делает кнопки «выбрать счёт» вместо поля ввода. Один запрос
 // на два блока: он ходит в банк, и два запроса означали бы двойной поход плюс риск показать две
 // половины экрана, противоречащие друг другу.
+const route = useRoute()
 const matrix = useBankMatrix()
-onMounted(matrix.load)
+
+// ⚠ Вне портала матрица пуста (нет фрейм-токена), поэтому блок сверки не попадал ни в один снимок
+// и ни в один визуальный эталон. Под `?preview=1` подставляем синтетическую — ту же роль, что
+// `PREVIEW_BANK_ACCOUNTS` играет для списка подключений.
+//
+// ⚠ Флаг читается из РОУТЕРА, а не из `window.location`: на гидратации пререндеренной страницы
+// строка запроса пуста (#555).
+//
+// ⚠ И проверяется ДВАЖДЫ — реактивно и ещё раз после ответа сети. Вне портала `load()` выходит
+// рано и без единого `await`, но ВНУТРИ портала он уходит в сеть и вернулся бы ПОСЛЕ подстановки,
+// молча затерев фикстуру. Ровно эту гонку ревью нашло у соседнего списка; повторять её незачем.
+const previewMatrix = computed(() => isPreviewQuery(route.query.preview))
+
+function usePreviewMatrix(): void {
+  matrix.rows.value = PREVIEW_BANK_MATRIX.rows
+  matrix.providers.value = PREVIEW_BANK_MATRIX.providers
+  matrix.loaded.value = true
+}
+
+watch(previewMatrix, (on) => {
+  if (on) usePreviewMatrix()
+}, { immediate: true })
+
+/** ЕДИНСТВЕННАЯ точка перечитывания сверки — иначе один из трёх вызывающих однажды сходит в сеть
+ *  мимо фикстуры и молча сотрёт её на экране предпросмотра (и в визуальном эталоне). */
+async function reloadMatrix(): Promise<void> {
+  if (previewMatrix.value) {
+    usePreviewMatrix()
+    return
+  }
+  await matrix.load()
+  if (previewMatrix.value) usePreviewMatrix()
+}
+
+onMounted(reloadMatrix)
 
 const adminChecked = ref(false)
 const started = ref(false)
@@ -107,7 +144,7 @@ async function onConnect() {
     // back to this tab. Once is enough — a second connect re-arms it.
     window.addEventListener('focus', () => {
       void connectedList.value?.reload()
-      void matrix.load()
+      void reloadMatrix()
     }, { once: true })
   } else if (url && !win) {
     error.value = 'Разрешите всплывающие окна для этого сайта и повторите'
@@ -154,7 +191,7 @@ async function onConnect() {
       <ConnectedBankAccounts
         ref="connectedList"
         :bank-accounts="matrix.bankAccounts.value"
-        @changed="matrix.load()"
+        @changed="reloadMatrix()"
       />
 
       <hr class="border-(--ui-color-design-tinted-na-stroke)">
