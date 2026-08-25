@@ -1,6 +1,6 @@
 # Деплой (фронтенд-лендинг + backend B24)
 
-> Last reviewed: 2026-08-252026-08-21
+> Last reviewed: 2026-08-25
 
 Фронтенд — статика (`nuxt generate`), раздаётся nginx. Схема та же, что у соседнего
 `currency-converter`: **GHCR + Watchtower за общим nginx-proxy** (TLS — Let's Encrypt).
