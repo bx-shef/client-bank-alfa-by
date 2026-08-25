@@ -258,5 +258,6 @@ jobs:
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL }}
             NUXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
             NUXT_PUBLIC_BUILD_DATE=${{ steps.builddate.outputs.date }}
+            NUXT_PUBLIC_LOCAL_MODE=${{ vars.NUXT_PUBLIC_LOCAL_MODE }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}

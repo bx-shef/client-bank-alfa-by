@@ -9,6 +9,7 @@
 //     from ONAPPINSTALL never matches it → the verdict is 403 → install rejected.
 
 import { resolveOpLogMode } from '../../app/utils/opLogPolicy'
+import { isLocalMode } from '../../app/utils/localMode'
 import { isPriorRequestTypInvalid } from './priorJwt'
 import { Buffer } from 'node:buffer'
 import { resolveTelegramConfig, telegramConfigAttempted } from './telegramAlert'
@@ -160,6 +161,17 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
   const logLevel = (env.LOG_LEVEL ?? '').trim().toUpperCase()
   if (logLevel === 'ERROR' || logLevel === 'CRITICAL' || logLevel === 'ALERT' || logLevel === 'EMERGENCY') {
     warnings.push(`LOG_LEVEL=${logLevel} — из логов исчезают [fetch], итог [crm-sync] и остальные информационные строки, по которым ведётся диагностика (docs/OPERATIONS.md). Диагностировать прогон будет нечем; верните INFO.`)
+  }
+
+  // --- Локальный режим форка (#39). Флаг фронтовый (build-time, запекается в статику), но бэк
+  //     проверяет его СИММЕТРИЧНО: образы статики и Nitro собираются вместе, и рассинхрон
+  //     («статика с промо, backend думает, что режим локальный») — ровно тот класс тихой ошибки,
+  //     что и забытый флаг. ⚠ Задан, но НЕ распознан как включение — самый опасный случай: значение
+  //     есть, оператор думает, что промо скрыты, а `isLocalMode` вернул false (fail-safe в сторону
+  //     показа), и билд ушёл с нашим брендингом. Поведение бэка флаг НЕ меняет (баннеров там нет). ---
+  const localModeRaw = (env.NUXT_PUBLIC_LOCAL_MODE ?? '').trim()
+  if (localModeRaw && !isLocalMode(localModeRaw)) {
+    warnings.push(`NUXT_PUBLIC_LOCAL_MODE="${localModeRaw}" не распознан как включение — локальный режим НЕ активен, промо/брендинг-баннеры остаются. Чтобы включить, задайте 1/true/yes/on (иначе оставьте пустым).`)
   }
 
   // --- Bank online-fetch OAuth creds (stage 5): each bank needs ALL of

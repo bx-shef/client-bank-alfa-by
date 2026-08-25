@@ -730,6 +730,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
 - `app/components/BuildFooter.vue` (+ `app/utils/build.ts`, покрыт тестами) — подвал лендинга и
   `/app`: автор + ссылка на **коммит сборки** (`сборка <sha>` → GitHub commit); sha из
   `NUXT_PUBLIC_COMMIT_SHA` (CI передаёт `github.sha`, в dev — «dev»).
+- **Локальный режим форка/white-label (#39)** — `NUXT_PUBLIC_LOCAL_MODE` (BUILD-TIME build-arg,
+  запекается в статику): суть импорта НЕ меняется, скрываются НАШИ промо/брендинг-баннеры
+  (`CustomDevCard` на `/app`, `AppInBitrixCard`/карточка Маркета на лендинге, визитка
+  `BusinessCardModal`, попап оценки `AppRatingModal`). ⚠ FAQ/справка и виджеты обратной связи
+  ОСТАЮТСЯ. Ядро — чистый `app/utils/localMode.ts` (`isLocalMode`, fail-safe В СТОРОНУ показа
+  брендинга: истинно только `1/true/yes/on`, сомнительное/пустое/кривое → обычный режим, иначе
+  опечатка молча выпустила бы обезличенный билд); композабл `useLocalMode` читает
+  `runtimeConfig.public.localMode`. Гейт в компонентах — `v-if="!localMode"`. ⚠ Флаг
+  BUILD-TIME, а не runtime: статика и in-portal UI пререндерятся на сборке, runtime-переменную
+  фронт бы не подхватил — поэтому build-arg в ОБА builder-таргета `Dockerfile` (статика + Nitro,
+  симметрично, иначе один образ с промо, другой без) + `docker-compose.yml` build.args + CI
+  build-args (`vars.NUXT_PUBLIC_LOCAL_MODE`). ⚠ Бэк поведения НЕ меняет (баннеров там нет), но
+  `envCheck` проверяет флаг СИММЕТРИЧНО: задан, но не распознан как включение → warning (тот же
+  класс «оператор думал, что включил, а промо остались»). Контекст форка — свой CI + свой GHCR.
+  Тесты: `localMode` (ядро), `envCheck` (warning), `nuxt/localModeGate` (гейт мутационно проверен).
 - **Промо-компоненты (cross-sell), общие по экосистеме** — переносимы 1:1 из `currency-converter`
   (правим в одном месте, копируем без правок; каталог в `docs/PAGE_GUIDE.md` §6):
   - `app/components/HoldRevealQr.vue` — мобильная кнопка-«отпечаток» с QR (hold-to-reveal): кладётся

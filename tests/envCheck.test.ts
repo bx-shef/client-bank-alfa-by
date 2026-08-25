@@ -18,6 +18,18 @@ describe('checkBackendEnv', () => {
     expect(r.warnings).toEqual([])
   })
 
+  it('локальный режим (#39): молчит на валидных/пустом, предупреждает на нераспознанном', () => {
+    // Пусто → обычный режим, тихо.
+    expect(checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: '' }).warnings.some(w => /LOCAL_MODE/.test(w))).toBe(false)
+    // Явное включение — тоже тихо (это рабочий режим, не проблема).
+    for (const v of ['1', 'true', 'on']) {
+      expect(checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: v }).warnings.some(w => /LOCAL_MODE/.test(w))).toBe(false)
+    }
+    // Задан, но НЕ распознан — опасный случай (оператор думал, что включил): предупреждаем.
+    const bad = checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: 'enable' })
+    expect(bad.warnings.some(w => /NUXT_PUBLIC_LOCAL_MODE/.test(w) && /не распознан/.test(w))).toBe(true)
+  })
+
   it('warns on a HALF-configured bank (some but not all OAuth creds), silent when absent or complete', () => {
     // none set → no bank warning (feature simply off)
     expect(checkBackendEnv(GOOD).warnings.some(w => /Банк/.test(w))).toBe(false)

@@ -64,6 +64,11 @@ export default defineNuxtConfig({
       // Git commit the build came from — shown in the footer as a link to the
       // exact commit. CI passes ${{ github.sha }}; empty in dev.
       commitSha: '',
+      // «Локальный режим» для форка/white-label (#39): суть приложения не меняется, но
+      // скрываются НАШИ промо/брендинг-баннеры (cross-sell, визитка, карточка Маркета) и попап
+      // «оцените приложение». BUILD-TIME: запекается в статику, поэтому задаётся build-arg
+      // NUXT_PUBLIC_LOCAL_MODE=1 (Dockerfile/CI форка). Пустое/0 → обычный режим.
+      localMode: process.env.NUXT_PUBLIC_LOCAL_MODE || '',
       // Яндекс.Метрика — id счётчика (только цифры, отфильтрован выше).
       metrikaId,
       // Bitrix24 Market listing code override for the «оцените приложение» modal. Empty → the
