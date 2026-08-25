@@ -12,7 +12,7 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
   return {
     id: 1, memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01',
     connectedAt: NOW - 60_000, expiresAt: NOW, hasRefresh: true, lastAttemptAt: 0,
-    consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
+    consentExpiresAt: 0, accountConfirmedAt: 0, pollPaused: false, grantId: '', ...over
   }
 }
 

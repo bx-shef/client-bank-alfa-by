@@ -66,7 +66,8 @@ import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifySettingsErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
-import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
+import { deleteBankTokensForPortal, listAllBankAccountInfo } from '../utils/bankTokenStore'
+import { statementRecipients } from '../../app/utils/accountSharing'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { deleteLeasesForPortal } from '../utils/singleFlightLease'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -659,7 +660,25 @@ export function liveHandlerDeps(): HandlerDeps {
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },
-    enqueueCrmSync
+    enqueueCrmSync,
+    // Раздача выписки совместного счёта (#615) — ТОЛЬКО порталам, чей счёт подтвердил банк.
+    //
+    // ⚠ Читаем СВОЮ базу, а не список из задачи: между планом и исполнением портал могли отключить,
+    // и раздача по устаревшему списку записала бы операции тому, кто нас только что убрал.
+    //
+    // ⚠ Демо-нагрузка в базу не ходит и раздаче не подлежит: её счёта в хранилище токенов нет
+    // вовсе, поэтому общий путь вернул бы пустой список и синтетическая пачка не дошла бы до
+    // crm-sync — стенд показывал бы пустой конвейер при полностью исправных очередях.
+    portalsForAccount: async (job) => {
+      // ⚠ Демо-нагрузка в базу не ходит: её счёта в хранилище токенов нет вовсе.
+      if (isDemoAccount(job.account)) return [job.memberId]
+      const rows = await listAllBankAccountInfo(dbQuery)
+      // ⚠ Опрашивавший портал передаётся ЯВНО и получает выписку всегда: он сходил в банк своим
+      // грантом, и банк отдал ему её. Гейт подтверждения — про СОСЕДЕЙ. Первая редакция требовала
+      // подтверждения и от него, и это молча останавливало запись в CRM у всех обычных порталов:
+      // подтверждение спрашивается только про спорные счета, а у большинства счёт уникален.
+      return statementRecipients(rows, job.providerId, job.account, job.memberId)
+    }
   }
 }
 
