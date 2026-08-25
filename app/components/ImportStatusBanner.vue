@@ -36,7 +36,7 @@ const title = computed(() => {
     // ⚠ «Последние движения», а НЕ «Обновлено» (#37): метка ставится только когда прогон дал
     // операции, поэтому «обновлено N назад» читалось как «опрос был N назад» и путало с частотой
     // опроса (она своя — CRON_INTERVAL_MIN). Честнее сказать, когда были последние движения.
-    return `Последние движения ${formatRelativeTime(s.lastSyncAt, now.value)}`
+    return `Последние движения — ${formatRelativeTime(s.lastSyncAt, now.value)}`
   }
   return meta.value.label
 })
