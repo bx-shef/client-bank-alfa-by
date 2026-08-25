@@ -478,7 +478,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
 export async function getBankAccountInfoById(query: QueryFn, id: number): Promise<BankAccountInfo | null> {
   const rows = await query(
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused, grant_id,
+            poll_paused, grant_id, account_confirmed_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE id = $1`,
@@ -547,7 +547,7 @@ export async function markAccountsConfirmed(
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused, grant_id,
+            poll_paused, grant_id, account_confirmed_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        -- ⚠ id вторым ключом ОБЯЗАТЕЛЕН (#23, находка ревью): счета одного гранта несут одинаковый

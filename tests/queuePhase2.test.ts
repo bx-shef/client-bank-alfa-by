@@ -305,6 +305,20 @@ describe('handleFetchJob / handleParseJob → crm-sync', () => {
     expect(new Set((calls.crm as CrmSyncJob[]).map(j => j.batchId)).size).toBe(1)
   })
 
+  it('очередь моргнула на одном получателе — остальные получают пачку', async () => {
+    // ⚠ Без изоляции обрыв Redis между двумя получателями уронил бы задачу целиком, и BullMQ
+    // повторил бы её — то есть СНОВА сходил бы в банк ради очереди, которая моргнула.
+    const { deps, calls } = fakeDeps({ batch: [item('d1')], portalsForAccount: ['M-A', 'M-B'] })
+    const orig = deps.enqueueCrmSync
+    deps.enqueueCrmSync = async (job) => {
+      if (job.memberId === 'M-A') throw new Error('redis моргнул')
+      return orig(job)
+    }
+    const r = await handleFetchJob(fetchJob, deps)
+    expect(r.chained).toBe(true)
+    expect((calls.crm as CrmSyncJob[]).map(j => j.memberId)).toEqual(['M-B'])
+  })
+
   it('получателей нет — не пишем НИКОМУ, включая опрашивавший портал', async () => {
     // Так выглядят ровно два случая: счёт отключили, пока задача летела, либо его никто не
     // подтверждал. Подставить `job.memberId` значило бы вернуть доверие к введённому номеру.

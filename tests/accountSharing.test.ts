@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  isAccountConfirmed, pickAccountPollers, portalsNeedingConfirm, portalsSharingAccount, sharedAccountKey,
+  isAccountConfirmed, pickAccountPollers, portalsNeedingConfirm, sharedAccountKey, statementRecipients,
   sharedAccountsLogLine, type SharedAccountRow
 } from '../app/utils/accountSharing'
 import { BANK_REFRESH_TTL_SEC } from '../app/utils/bankTokenLifetime'
@@ -28,39 +28,49 @@ function row(over: Partial<SharedAccountRow> = {}): SharedAccountRow {
   }
 }
 
-describe('граница раздачи: только подтверждённый банком счёт', () => {
-  it('оба портала подтверждены — раздаём обоим', () => {
-    const rows = [row({ memberId: 'A' }), row({ memberId: 'B' })]
-    expect(portalsSharingAccount(rows, 'alfa-by', 'BY09ALFA1')).toEqual(['A', 'B'])
+describe('кому отдаём выписку', () => {
+  it('ОПРАШИВАВШИЙ портал получает свою выписку ВСЕГДА, без подтверждения', () => {
+    // ⚠ Главный сценарий продукта, и первая редакция его ЛОМАЛА. Подтверждение спрашивается только
+    // про спорные счета, поэтому у портала с уникальным счётом его не будет никогда — выписка
+    // забиралась бы из банка успешно и не доходила бы до CRM ни до кого. Ни ошибки, ни строки в
+    // логе, только тишина в CRM при живом [fetch]. Он сходил в банк СВОИМ грантом, и банк отдал
+    // ему эту выписку — сильнее доказательства владения не бывает.
+    const rows = [row({ memberId: 'A', accountConfirmedAt: 0 })]
+    expect(statementRecipients(rows, 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A'])
   })
 
-  it('НЕподтверждённый портал не получает чужую выписку — это и есть утечка', () => {
+  it('строки в базе нет вовсе — опрашивавший всё равно получает своё', () => {
+    // Счёт отключили, пока задача летела. Выписку он уже забрал своим грантом.
+    expect(statementRecipients([], 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A'])
+  })
+
+  it('сосед с ПОДТВЕРЖДЁННЫМ счётом получает тоже', () => {
+    const rows = [row({ memberId: 'A' }), row({ memberId: 'B' })]
+    expect(statementRecipients(rows, 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A', 'B'])
+  })
+
+  it('сосед БЕЗ подтверждения не получает — это и есть утечка', () => {
     // Ровно тот сценарий, который убил первую редакцию: X вписал чужой IBAN руками.
     const rows = [row({ memberId: 'A' }), row({ memberId: 'X', accountConfirmedAt: 0 })]
-    expect(portalsSharingAccount(rows, 'alfa-by', 'BY09ALFA1')).toEqual(['A'])
-  })
-
-  it('не подтверждён НИКТО — не раздаём никому, даже одному', () => {
-    const rows = [row({ memberId: 'A', accountConfirmedAt: 0 })]
-    expect(portalsSharingAccount(rows, 'alfa-by', 'BY09ALFA1')).toEqual([])
+    expect(statementRecipients(rows, 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A'])
   })
 
   it('банк — часть ключа: тот же номер в другом банке это ДРУГОЙ счёт', () => {
     const rows = [row({ memberId: 'A' }), row({ memberId: 'B', provider: 'prior-by' })]
-    expect(portalsSharingAccount(rows, 'alfa-by', 'BY09ALFA1')).toEqual(['A'])
+    expect(statementRecipients(rows, 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A'])
     expect(sharedAccountKey('alfa-by', 'X')).not.toBe(sharedAccountKey('prior-by', 'X'))
   })
 
-  it('мёртвый банковский грант НЕ лишает портал СВОИХ операций', () => {
+  it('мёртвый банковский грант НЕ лишает соседа СВОИХ операций', () => {
     // Доступ он доказал; мёртвый токен мешает ходить в банк, а не получать уже принесённое.
     // Иначе починка «переподключите банк» не отличалась бы от «мы вас отключили».
     const rows = [row({ memberId: 'A' }), row({ memberId: 'B', hasRefresh: false })]
-    expect(portalsSharingAccount(rows, 'alfa-by', 'BY09ALFA1')).toEqual(['A', 'B'])
+    expect(statementRecipients(rows, 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A', 'B'])
   })
 
   it('порядок детерминированный и без повторов', () => {
     const rows = [row({ memberId: 'B' }), row({ memberId: 'A' }), row({ memberId: 'B' })]
-    expect(portalsSharingAccount(rows, 'alfa-by', 'BY09ALFA1')).toEqual(['A', 'B'])
+    expect(statementRecipients(rows, 'alfa-by', 'BY09ALFA1', 'A')).toEqual(['A', 'B'])
   })
 
   it('подтверждением считается только положительная метка', () => {

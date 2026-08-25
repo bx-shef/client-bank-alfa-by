@@ -37,6 +37,7 @@ import { claimSubscriptionCutoffSlot } from '../utils/subscriptionCutoffSchedule
 import { runSubscriptionCutoff } from '../utils/subscriptionCutoffRun'
 import { probeSubscriptionVia } from '../utils/subscriptionProbe'
 import { runAccountConfirm } from '../utils/accountConfirmRun'
+import { claimAccountConfirmSlot } from '../utils/accountConfirmSchedule'
 import { bankSideDeps } from '../utils/bankSideDeps'
 import { DEFAULT_LOCK_WAIT } from '../utils/dbLock'
 import { listBankSideAccounts } from '../utils/bankAccountList'
@@ -473,21 +474,26 @@ export default defineNitroPlugin((nitroApp) => {
             // номера, заявленные БОЛЕЕ ЧЕМ одним порталом и ещё не подтверждённые, — на обычном
             // флоте (у каждого свой счёт) не делает ни одного обращения к банку. Своей аренды не
             // берёт: проход идемпотентен, ничего не удаляет и при повторе просто переспросит.
-            try {
-              await runAccountConfirm({
-                now: Date.now,
-                listRows: () => listAllBankAccountInfo(dbQuery),
-                // ⚠ Ожидание лока — МАШИННОЕ (умолчание `withAdvisoryLock`): здесь никто не ждёт ответа, а
-                // бросить работу из-за планового продления токена значило бы не подтвердить счёт и
-                // ещё сутки опрашивать его двумя порталами — ровно то, что мы чиним.
-                bankSide: memberId => listBankSideAccounts(memberId, bankSideDeps(DEFAULT_LOCK_WAIT)),
-                confirm: (memberId, provider, keys, atMs) =>
-                  markAccountsConfirmed(dbQuery, memberId, provider, keys, atMs),
-                log: (m: string) => retention.info(`[account-confirm] ${m}`),
-                warn: (m: string) => retention.warning(`[account-confirm] ${m}`)
-              })
-            } catch (e) {
-              retention.error(`account confirm failed: ${(e as Error)?.message}`)
+            // ⚠ СВОЯ аренда (#615, замечание ревью): проход идемпотентен, но ограничивать надо не
+            // корректность, а ЧАСТОТУ обращений к лимиту банка — свип-тик зовётся сразу на старте,
+            // и без аренды контейнер в цикле рестартов спрашивал бы банк на каждом старте.
+            if (await claimAccountConfirmSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runAccountConfirm({
+                  now: Date.now,
+                  listRows: () => listAllBankAccountInfo(dbQuery),
+                  // ⚠ Ожидание лока — МАШИННОЕ (умолчание `withAdvisoryLock`): здесь никто не ждёт ответа, а
+                  // бросить работу из-за планового продления токена значило бы не подтвердить счёт и
+                  // ещё сутки опрашивать его двумя порталами — ровно то, что мы чиним.
+                  bankSide: memberId => listBankSideAccounts(memberId, bankSideDeps(DEFAULT_LOCK_WAIT)),
+                  confirm: (memberId, provider, keys, atMs) =>
+                    markAccountsConfirmed(dbQuery, memberId, provider, keys, atMs),
+                  log: (m: string) => retention.info(`[account-confirm] ${m}`),
+                  warn: (m: string) => retention.warning(`[account-confirm] ${m}`)
+                })
+              } catch (e) {
+                retention.error(`account confirm failed: ${(e as Error)?.message}`)
+              }
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и
             // чистку банковских кредов, хотя флаг заведён про payload'ы выписки. Осознанно: оба

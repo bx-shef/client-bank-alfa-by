@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { decryptSecret } from '../server/utils/secretCrypto'
 import {
   addBankAccountToGrant,
@@ -88,6 +90,40 @@ describe('saveBankToken', () => {
 describe('listBankAccountInfoForPortal — проекция для экрана настроек', () => {
   // ⚠ Именно она стоит за живым `GET /api/bank/accounts`, и до этого теста не вызывалась НИ ОДНИМ
   // тестом: соседняя `listAllBankAccountInfo` (её зовёт keep-alive) — другая функция.
+  it('КАЖДЫЙ SELECT, строящий BankAccountInfo, читает подтверждение счёта', async () => {
+    // ⚠ СТРУКТУРНЫЙ гард, и он написан по живой находке ревью (#615): колонку добавили в маппер
+    // трижды, а в SELECT — один раз из трёх. Маппер читал `r.account_confirmed_at` из строки, где
+    // такой колонки нет, получал `undefined ?? 0` и ВСЕГДА отдавал ноль. Признак был мёртв
+    // целиком: и выбор поллера, и раздача выписки видели «никто не подтверждён».
+    //
+    // ⚠ Ни типы, ни обычные тесты этого не ловят В ПРИНЦИПЕ. Строка из pg — `Record<string,
+    // unknown>`, лишний ключ компилятору не виден; а фейковая строка в тесте содержит ровно то,
+    // что положил автор теста, то есть повторяет его же ошибку. Ровно так же однажды потерялся
+    // `consent_expires_at` (#503).
+    const src = readFileSync(join(import.meta.dirname, '..', 'server/utils/bankTokenStore.ts'), 'utf8')
+    // ⚠ Признак проекции `BankAccountInfo` — `last_attempt_at`, и он выбран не наугад. `poll_paused`
+    // есть и у лёгкой `BankAccountRef`, `consent_expires_at` — и у `BankToken` с секретами; ни той,
+    // ни другому подтверждение не положено ни типом, ни смыслом, и гард ругался бы на исправные
+    // запросы. `last_attempt_at` есть ровно у проекции, которая несёт `accountConfirmedAt`.
+    const selects = src.split('`SELECT').slice(1).filter(b => b.slice(0, 400).includes('last_attempt_at'))
+    expect(selects.length).toBeGreaterThanOrEqual(3)
+    for (const block of selects) {
+      expect(block.slice(0, 400), `SELECT без account_confirmed_at:\n${block.slice(0, 200)}`)
+        .toContain('account_confirmed_at')
+    }
+  })
+
+  it('подтверждение ДОЕЗЖАЕТ из строки БД, а не подставляется нулём', async () => {
+    // Позитивный двойник к тесту «колонки нет ⇒ 0»: тот совпадал с багом и потому его не ловил.
+    const { query } = fakeQuery([{
+      id: '7', member_id: 'M1', provider: 'alfa-by', account_key: 'BY01',
+      expires_at: '1700000000000', updated_at: new Date(1_699_000_000_000),
+      has_refresh: true, account_confirmed_at: '1800000000000'
+    }])
+    const [row] = await listAllBankAccountInfo(query)
+    expect(row?.accountConfirmedAt).toBe(1_800_000_000_000)
+  })
+
   it('подтверждение счёта скоуплено ПОРТАЛОМ — иначе это IDOR', async () => {
     // ⚠ Единственная проверка этого SQL: `memStore` его не исполняет, он переписывает семантику на
     // JS, поэтому правки WHERE для него невидимы. Замерено мутацией: снятие `member_id` проходило

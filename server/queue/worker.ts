@@ -67,7 +67,7 @@ import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifySettingsErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
 import { deleteBankTokensForPortal, listAllBankAccountInfo } from '../utils/bankTokenStore'
-import { portalsSharingAccount } from '../../app/utils/accountSharing'
+import { statementRecipients } from '../../app/utils/accountSharing'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { deleteLeasesForPortal } from '../utils/singleFlightLease'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -670,9 +670,14 @@ export function liveHandlerDeps(): HandlerDeps {
     // вовсе, поэтому общий путь вернул бы пустой список и синтетическая пачка не дошла бы до
     // crm-sync — стенд показывал бы пустой конвейер при полностью исправных очередях.
     portalsForAccount: async (job) => {
+      // ⚠ Демо-нагрузка в базу не ходит: её счёта в хранилище токенов нет вовсе.
       if (isDemoAccount(job.account)) return [job.memberId]
       const rows = await listAllBankAccountInfo(dbQuery)
-      return portalsSharingAccount(rows, job.providerId, job.account)
+      // ⚠ Опрашивавший портал передаётся ЯВНО и получает выписку всегда: он сходил в банк своим
+      // грантом, и банк отдал ему её. Гейт подтверждения — про СОСЕДЕЙ. Первая редакция требовала
+      // подтверждения и от него, и это молча останавливало запись в CRM у всех обычных порталов:
+      // подтверждение спрашивается только про спорные счета, а у большинства счёт уникален.
+      return statementRecipients(rows, job.providerId, job.account, job.memberId)
     }
   }
 }
