@@ -79,6 +79,14 @@ RUN grep -q '/help' .output/public/llms.txt || { echo 'SEO: llms.txt не сге
 # so the served CSP needs no `script-src 'unsafe-inline'`. Writes in place.
 RUN node scripts/csp-hashes.mjs .output/public nginx.conf nginx.conf
 
+# Домены КОРОБОЧНОГО портала Bitrix24 в CSP (frame-ancestors + connect-src). Пусто —
+# штатный облачный случай. Без этого приложение на своём домене открывается снаружи, но
+# внутри коробочного портала показывает пустой фрейм: браузер режет и вложение, и вызовы.
+# ⚠ Тому же списку место и на backend — переменная B24_SELFHOSTED_HOSTS (SSRF-гейт): здесь
+# решение принимает браузер, там наш сервер, и одно другое не заменяет.
+ARG B24_PORTAL_ORIGINS
+RUN node scripts/csp-portal-origins.mjs "$B24_PORTAL_ORIGINS" nginx.conf nginx.conf
+
 # --- Backend (separate service): Node server with the B24 webhook endpoint
 # (/api/b24/events) + portal token store. Built from the SAME codebase via
 # `nuxt build` (node-server preset), so it reuses the domain core. The static
