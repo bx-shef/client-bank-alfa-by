@@ -124,7 +124,9 @@ const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: 
                 size="xl"
                 @click="reachGoal('booking_click')"
               />
+              <!-- Кнопка Маркета — НАШ промо-канал (дубль `AppInBitrixCard`); в локальном режиме форка скрыта (#39). -->
               <B24Button
+                v-if="!localMode"
                 label="Открыть в Маркете Bitrix24"
                 :to="LANDING_MARKET_URL"
                 target="_blank"
@@ -265,8 +267,10 @@ const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: 
           {{ LANDING_DEMO.note }}
         </p>
 
-        <!-- Обязательный посыл про кастом-доработку под клиента (на его сервере). -->
+        <!-- Посыл про кастом-доработку под клиента — НАШ cross-sell (дубль `CustomDevCard`), в
+             локальном режиме форка скрыт (#39). -->
         <div
+          v-if="!localMode"
           data-glow-card
           class="mt-6 rounded-2xl border border-[rgb(var(--color-accent-primary-ch)/0.25)] bg-[rgb(var(--color-accent-primary-ch)/0.05)] p-6 sm:p-7 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6"
         >
