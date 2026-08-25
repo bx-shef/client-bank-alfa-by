@@ -79,12 +79,16 @@ async function authorize(deps: EraseAuthDeps, input: EraseInput): Promise<{ memb
  * быть ОТКАЗОМ: молча отброшенная граница расширила бы необратимое действие вместо того, чтобы
  * его сузить.
  */
+/** Потолок длины одного номера счёта контрагента: тот же порядок, что у нашего `ACCOUNT_RE` (64),
+ *  против запроса, заставляющего держать в памяти произвольную строку. */
+export const MAX_CP_ACCOUNT_CHARS = 64
+
 export function parseEraseSelection(input: EraseInput): EraseSelection | null {
   const period = parsePeriod({ from: input.from, to: input.to })
   if (!period) return null
-  const accounts = parseAccountList(input.accounts)
+  const accounts = parseAccountList(input.accounts, 'strict')
   if (accounts === null) return null
-  const counterpartyAccounts = parseAccountList(input.counterpartyAccounts)
+  const counterpartyAccounts = parseAccountList(input.counterpartyAccounts, 'free')
   if (counterpartyAccounts === null) return null
   return { period, accounts, counterpartyAccounts }
 }
@@ -96,8 +100,16 @@ export function parseEraseSelection(input: EraseInput): EraseSelection | null {
  * ⚠ Кривой номер — ОТКАЗ, а не пропуск: молча отброшенный единственный номер превратил бы «стереть
  * по этому счёту» в «стереть по всем», а это необратимое действие. Тот же довод и для счёта
  * контрагента: отброшенный фильтр расширил бы удаление.
+ *
+ * ⚠ ДВА режима, и это НЕ придирка (находка ревью #591). НАШ счёт — букво-цифровой (`strict`,
+ * `ACCOUNT_RE`): он лежит префиксом в маркере и приходит из подключения. Счёт КОНТРАГЕНТА — `free`:
+ * он должен принимать РОВНО ТО ЖЕ, что поле «Исключения» (свободный `B24Textarea`), иначе счёт
+ * плательщика с пробелом/`/` (а такие в CRM есть — состояние `looks-same`) можно ИСКЛЮЧИТЬ, но
+ * нельзя ВЫЧИСТИТЬ уже созданные дела — то есть фича не работает ровно на тех счетах, ради которых
+ * заведена. Ограничения `free` — только структурные (число, длина, без переводов строк), сравнение
+ * дальше точное после общей нормализации (`selectDeletable`).
  */
-function parseAccountList(raw: unknown): string[] | null {
+function parseAccountList(raw: unknown, mode: 'strict' | 'free'): string[] | null {
   if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) return null
   if (raw.length > MAX_ERASE_ACCOUNTS) return null
@@ -106,7 +118,12 @@ function parseAccountList(raw: unknown): string[] | null {
     if (typeof a !== 'string') return null
     const v = a.trim()
     if (v === '') continue
-    if (!ACCOUNT_RE.test(v)) return null
+    if (mode === 'strict') {
+      if (!ACCOUNT_RE.test(v)) return null
+    } else {
+      // Свободный номер: без переводов строк (одна строка — один счёт) и в пределах потолка длины.
+      if (v.length > MAX_CP_ACCOUNT_CHARS || /[\r\n]/.test(v)) return null
+    }
     out.push(v)
   }
   return out

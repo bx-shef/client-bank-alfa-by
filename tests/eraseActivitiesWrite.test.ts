@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { countErasableActivities, eraseActivities, MAX_ERASE_PER_REQUEST } from '../server/utils/eraseActivitiesWrite'
+import { countErasableActivities, eraseActivities, MAX_ERASE_PER_REQUEST, MAX_ERASE_PAGES } from '../server/utils/eraseActivitiesWrite'
 import { ACTIVITY_ORIGIN } from '../app/utils/activity'
 import type { RestBatch, RestCall } from '../server/utils/companyLookup'
 
@@ -83,6 +83,27 @@ describe('countErasableActivities — показать до удаления', (
     const rows = Array.from({ length: 100 }, (_, i) => ours(String(i)))
     const { call } = fakePortal(rows)
     expect(await countErasableActivities(all, call, 100)).toEqual({ count: 100, capped: false })
+  })
+
+  it('обход упирается в потолок страниц при редком счёте контрагента (#591)', async () => {
+    // ⚠ С редким плательщиком `matched` растёт медленно, и без потолка обход прошёл бы всю историю
+    // (десятки запросов, таймаут). Потолок держит его в MAX_ERASE_PAGES страниц. Здесь НИ ОДНО дело
+    // не совпадает по счёту контрагента, а история длиннее потолка ⇒ count 0, но capped=true —
+    // «нечего» было бы ложью, совпадение могло быть за пределами просмотренного.
+    const rows = Array.from({ length: (MAX_ERASE_PAGES + 5) * 50 }, (_, i) => ({
+      ID: String(i), ORIGINATOR_ID: ACTIVITY_ORIGIN, ORIGIN_ID: `BY01ALFA|D${i}`,
+      DESCRIPTION: '[B]Счёт:[/B] BY88OTHER0002'
+    }))
+    let calls = 0
+    const call: RestCall = vi.fn(async (_m, params) => {
+      calls++
+      const start = Number(params.start ?? 0)
+      return { result: rows.slice(start, start + 50), total: rows.length }
+    })
+    const res = await countErasableActivities({ period: {}, accounts: [], counterpartyAccounts: ['BY99PAYER0001'] }, call)
+    expect(res).toEqual({ count: 0, capped: true })
+    // Обход не ушёл дальше потолка: ровно MAX_ERASE_PAGES вызовов списка.
+    expect(calls).toBe(MAX_ERASE_PAGES)
   })
 
   it('НЕ умеет удалять: батч ему не передаётся вовсе', () => {

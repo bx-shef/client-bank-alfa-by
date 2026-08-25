@@ -19,7 +19,7 @@
 // Для необратимого действия это неприемлемо, поэтому B24 сужает по своему (`ORIGINATOR_ID` + даты),
 // а точное сравнение по счёту делает эта функция.
 
-import { ACTIVITY_ORIGIN } from './activity'
+import { ACTIVITY_ORIGIN, neutralizeBb } from './activity'
 
 /**
  * Период стирания. Обе границы НЕОБЯЗАТЕЛЬНЫ, и это все четыре формы, которые просил владелец:
@@ -145,7 +145,12 @@ export function counterpartyAccountOf(description: string): string {
 export function selectDeletable(rows: readonly ActivityRow[], selection: EraseSelection): ActivityRow[] {
   const wanted = new Set(selection.accounts.filter(a => a !== ''))
   // Счета контрагента (#591) — второй, независимый фильтр. Пустой ⇒ не применяется.
-  const wantedCp = new Set(selection.counterpartyAccounts.filter(a => a !== ''))
+  // ⚠ Значение из описания хранится как `neutralizeBb(cp.account)`, поэтому и фильтр прогоняем через
+  // тот же `neutralizeBb` (+trim), иначе счёт с BB-скобками сравнивался бы с уже нейтрализованным и
+  // молча не совпал бы. Для обычного номера (без скобок) это no-op — сравнение остаётся точным.
+  const wantedCp = new Set(
+    selection.counterpartyAccounts.map(a => neutralizeBb(a.trim())).filter(a => a !== '')
+  )
   return rows.filter((r) => {
     if (r.originatorId !== ACTIVITY_ORIGIN) return false
     if (!r.id) return false

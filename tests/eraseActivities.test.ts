@@ -176,6 +176,15 @@ describe('фильтр по счёту контрагента (#591)', () => {
     const rows = [row({ id: '1', description: 'что угодно' }), row({ id: '2', description: '' })]
     expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: [] })).toHaveLength(2)
   })
+
+  it('счёт плательщика с ПРОБЕЛОМ совпадает (та же нормализация, что в описании) — #591 ревью', () => {
+    // ⚠ Ради этого фильтр и сравнивает через neutralizeBb+trim: счёт «BY00 BANK 1234» хранится в
+    // описании как есть, и строгая проверка по буквам-цифрам не дала бы вычистить дела ровно тех
+    // плательщиков, которых админ занёс в «Исключения».
+    const rows = [buildActivityDescription(item({ counterparty: { name: 'A', unp: '', account: 'BY00 BANK 1234', bank: '' } }))]
+      .map((d, i) => row({ id: String(i + 1), description: d }))
+    expect(selectDeletable(rows, { period: {}, accounts: [], counterpartyAccounts: ['BY00 BANK 1234'] })).toHaveLength(1)
+  })
 })
 
 describe('periodLabel — что человек прочитает в подтверждении', () => {

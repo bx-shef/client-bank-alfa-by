@@ -39,9 +39,13 @@ const confirming = ref(false)
 
 /** Разобранный список счетов контрагента (одна строка — один счёт, без пустых и дублей). */
 const counterpartyAccounts = computed(() => parseRuleLines(counterpartyText.value))
-/** Есть ли в введённых счетах строка не букво-цифрового формата — тогда сервер откажет. */
-const ACCOUNT_RE = /^[A-Za-z0-9]{1,64}$/
-const counterpartyBad = computed(() => counterpartyAccounts.value.some(a => !ACCOUNT_RE.test(a)))
+/**
+ * Кривой ввод счёта контрагента — ТОЛЬКО структурный (слишком длинная строка). Формат счёта НЕ
+ * ограничиваем буквами-цифрами: поле обязано принимать то же, что «Исключения» (счёт плательщика
+ * бывает с пробелом/`/`), иначе исключённый счёт нельзя вычистить — то же правило, что на сервере.
+ */
+const MAX_CP_ACCOUNT_CHARS = 64
+const counterpartyBad = computed(() => counterpartyAccounts.value.some(a => a.length > MAX_CP_ACCOUNT_CHARS))
 
 // ⚠ Превью-ветка — по той же причине, что у списка подключений: вне портала счетов нет, и чипы
 // выбора не попадали бы ни в один скриншот и ни в один визуальный эталон. Флаг читается РЕАКТИВНО:
@@ -85,11 +89,30 @@ const pollRunning = computed<boolean | null>(() => {
 
 const period = computed(() => parsePeriod({ from: from.value, to: to.value }))
 const periodBad = computed(() => period.value === null)
-const scopeLabel = computed(() => {
-  const ourScope = picked.value.length > 0 ? `счета: ${picked.value.join(', ')}` : 'все счета'
-  const cp = counterpartyAccounts.value.length > 0 ? `, контрагент: ${counterpartyAccounts.value.join(', ')}` : ''
+
+/**
+ * Подпись отбора. ⚠ Два списка разделены `;`, а не запятой: слитый через запятые ряд «A, B, C, D»
+ * не давал увидеть, где кончаются наши счета и начинается счёт контрагента. Когда заданы оба —
+ * это ПЕРЕСЕЧЕНИЕ (дело обязано совпасть и с нашим счётом, и со счётом плательщика).
+ */
+function formatScope(accounts: string[], counterparty: string[]): string {
+  const ourScope = accounts.length > 0 ? `наши счета: ${accounts.join(', ')}` : 'все наши счета'
+  const cp = counterparty.length > 0 ? `; счёт плательщика: ${counterparty.join(', ')}` : ''
   return `${ourScope}${cp}`
-})
+}
+const scopeLabel = computed(() => formatScope(picked.value, counterpartyAccounts.value))
+
+/**
+ * Снимок ОТБОРА на момент подсчёта (#591, находка ревью). Подтверждение и стирание работают по нему,
+ * а не по «живым» полям: иначе правка поля, пока «Посчитать» ещё в полёте, показала бы старое число
+ * рядом с новой подписью, а стёрла бы уже третье. Любая правка полей вызывает `reset()` и снимок
+ * обнуляет.
+ */
+const confirmed = ref<{ accounts: string[], counterparty: string[], period: ReturnType<typeof parsePeriod> } | null>(null)
+/** Оба фильтра заданы одновременно — тогда это пересечение, и об этом стоит сказать прямо. */
+const confirmedIsIntersection = computed(() =>
+  (confirmed.value?.accounts.length ?? 0) > 0 && (confirmed.value?.counterparty.length ?? 0) > 0
+)
 
 function toggle(accountKey: string): void {
   const i = picked.value.indexOf(accountKey)
@@ -103,6 +126,7 @@ function toggle(accountKey: string): void {
 function reset(): void {
   pending.value = null
   confirming.value = false
+  confirmed.value = null
 }
 
 function providerLabel(p: BankProviderId): string {
@@ -111,15 +135,25 @@ function providerLabel(p: BankProviderId): string {
 
 async function onCount(): Promise<void> {
   confirming.value = false
+  confirmed.value = null
   if (!period.value || counterpartyBad.value) return
-  await count(period.value, picked.value, counterpartyAccounts.value)
-  confirming.value = (pending.value?.count ?? 0) > 0
+  // Снимок отбора, по которому и посчитали: подтверждение/стирание пойдут по нему, не по «живым»
+  // полям, которые могли смениться, пока шёл запрос.
+  const snap = { period: period.value, accounts: [...picked.value], counterparty: [...counterpartyAccounts.value] }
+  await count(snap.period, snap.accounts, snap.counterparty)
+  if ((pending.value?.count ?? 0) > 0) {
+    confirmed.value = snap
+    confirming.value = true
+  }
 }
 
 async function onErase(): Promise<void> {
-  if (!period.value || counterpartyBad.value) return
-  await erase(period.value, picked.value, counterpartyAccounts.value)
+  // ⚠ Стираем СНИМОК, а не живые поля: человек подтверждал именно посчитанный отбор.
+  const snap = confirmed.value
+  if (!snap || !snap.period) return
+  await erase(snap.period, snap.accounts, snap.counterparty)
   confirming.value = false
+  confirmed.value = null
 }
 </script>
 
@@ -243,7 +277,7 @@ async function onErase(): Promise<void> {
         v-if="counterpartyBad"
         class="text-xs text-(--ui-color-accent-main-alert)"
       >
-        Счёт может содержать только буквы и цифры (без пробелов). Проверьте введённые строки.
+        Слишком длинный номер счёта — проверьте, что в строке один счёт.
       </p>
 
       <div class="flex flex-wrap items-center gap-2">
@@ -263,23 +297,38 @@ async function onErase(): Promise<void> {
       </div>
 
       <B24Alert
-        v-if="pending && pending.count === 0"
+        v-if="pending && pending.count === 0 && !pending.capped"
         color="air-primary-success"
         title="Стирать нечего"
         description="Под этот отбор не попало ни одного дела, созданного приложением."
       />
+      <!-- ⚠ Ноль совпадений, но обход упёрся в потолок страниц (#591): при редком счёте плательщика
+           дело могло не попасть в просмотренные — «нечего» тут было бы ложью. Просим сузить период. -->
+      <B24Alert
+        v-else-if="pending && pending.count === 0 && pending.capped"
+        color="air-primary-warning"
+        title="В просмотренных делах совпадений нет"
+        description="Дел под этот период слишком много, чтобы проверить все за раз. Если ждёте совпадений — сузьте период и повторите."
+      />
 
       <div
-        v-if="confirming && pending"
+        v-if="confirming && pending && confirmed && confirmed.period"
         class="space-y-2 rounded-md border border-(--ui-color-design-tinted-alert-stroke) p-3"
       >
         <div class="text-sm font-medium">
           Под удаление попадёт дел: {{ pending.count }}{{ pending.capped ? ' и более' : '' }}
         </div>
+        <!-- ⚠ Подпись строится из СНИМКА отбора (`confirmed`), а не из живых полей: иначе правка
+             поля после подсчёта показала бы старое число рядом с новой подписью. -->
         <p class="text-xs text-(--ui-color-base-3)">
-          {{ periodLabel(period!) }}, {{ scopeLabel }}. Восстановить удалённые дела нельзя.
+          {{ periodLabel(confirmed.period) }}, {{ formatScope(confirmed.accounts, confirmed.counterparty) }}.
+          <template v-if="confirmedIsIntersection">
+            Удалятся только дела, совпавшие И с нашим счётом, И со счётом плательщика.
+          </template>
+          Восстановить удалённые дела нельзя.
           <template v-if="pending.capped">
-            За один раз стирается не больше {{ pending.count }} — остальные удалятся повторным нажатием.
+            За один раз стирается не больше {{ pending.count }} — остальные удалятся повторным нажатием
+            или сузьте период.
           </template>
         </p>
         <div class="flex flex-wrap gap-2">
