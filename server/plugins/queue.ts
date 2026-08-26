@@ -63,6 +63,11 @@ import type { QueueName } from '../queue/topology'
 
 // Каналы этого модуля. Имена — те же маркеры, что уже грепает рантбук и `prod-doctor.sh` (#529).
 const log = useServerLogger('queue')
+// ⚠ СВОЙ канал, а не литерал `[fetch]` в теле сообщения на канале `queue`: форматтер печатает
+// КАНАЛ, поэтому вторая форма даёт `[queue] INFO: [fetch] …` — ровно то задвоение, которое
+// `buildOpLogLine` документирует как дефект. Диагностика и рантбук грепают по `[fetch]`, и обе
+// формы им годятся, но соседние строки одного смысла обязаны выглядеть одинаково.
+const fetchLog = useServerLogger('fetch')
 const retention = useServerLogger('retention')
 const alert = useServerLogger('queue-alert')
 
@@ -200,7 +205,15 @@ export default defineNitroPlugin((nitroApp) => {
 
     // Real bank polling (A10): every CRON_INTERVAL_MIN, enqueue one fetch job per connected
     // bank account (A6 registry over the bank_tokens store) for a rolling window. INERT until
-    // accounts are connected (A7) — an empty registry enqueues nothing (silent, no per-tick noise).
+    // accounts are connected (A7) — an empty registry enqueues nothing.
+    //
+    // ⚠ INERT БОЛЬШЕ НЕ ЗНАЧИТ БЕЗМОЛВНО (#488). Здесь стояло «silent, no per-tick noise», и
+    // молчание стоило владельцу четырёх дней: пустые `[fetch]`, `[crm-sync]`, `[op]`, ни падений,
+    // ни ретраев — и ни единой строки о причине, которых на самом деле три. Холостой тик теперь
+    // печатает ОДНУ строку с разбором (`pollSkipReason`). Цена названа честно: на портале без
+    // подключений это строка каждые `CRON_INTERVAL_MIN`, то есть ~288 строк в сутки при дефолтных
+    // пяти минутах. Размен принят — тишина в этом состоянии неотличима от полной поломки, а
+    // «шум» здесь сам себя гасит: подключили счёт — строка исчезла.
     //
     // SCALE (marketplace: tens of thousands of connected accounts). The enqueue is IDEMPOTENT —
     // no per-tick `epoch`, so the jobId is stable per (portal, account, window). That is the
@@ -239,7 +252,7 @@ export default defineNitroPlugin((nitroApp) => {
             const pollable = rows.filter(isPollableAccount)
             const pollers = pickAccountPollers(pollable, Date.now())
             const shareNote = sharedAccountsLogLine(pollable.length, pollers.length)
-            if (shareNote) log.info(`[fetch] ${shareNote}`)
+            if (shareNote) fetchLog.info(shareNote)
             const byPortal = accountsForPolling(pollers)
             if (byPortal.length === 0) {
               // ⚠ НЕ МОЛЧА (#488). Прежде здесь стоял голый `return`, и на боевом стенде это дало
@@ -249,8 +262,15 @@ export default defineNitroPlugin((nitroApp) => {
               //
               // ⚠ Печатаем под маркером `[fetch]`: диагностика и рантбук ищут причины опроса именно
               // по нему, а строка, которую надо искать отдельным грепом, найдена не будет.
+              //
+              // ⚠ КРОН ЖИВЁТ НА `backend`, а не на `worker` (`docker-compose.prod.yml`), и на этом
+              // строка едва не потерялась (находка ревью): секция `[fetch]` в `prod-poll-check.sh`
+              // грепала ТОЛЬКО `worker`, то есть новая диагностика была бы невидима ровно в том
+              // инструменте, ради которого написана. Скрипт теперь читает оба контейнера, а
+              // «настоящий опрос» отличает по хвосту `N ops` — иначе эта строка засчиталась бы за
+              // доказательство опроса и воскресила бы вердикт, который тот же PR и хоронит.
               const why = pollSkipReason(rows)
-              if (why) log.info(`[fetch] ${why}`)
+              if (why) fetchLog.info(why)
               return
             }
             const now = new Date()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pollSkipReason } from '../server/queue/cron'
+import { isPollableAccount, pollSkipReason } from '../server/queue/cron'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import type { BankAccountRef } from '../server/utils/bankTokenStore'
 
@@ -76,5 +76,27 @@ describe('ПОЧЕМУ опрашивать нечего — молчание т
     expect(why).not.toContain('secret')
     expect(why).not.toContain('M1')
     expect(why).not.toContain('BY00')
+  })
+
+  it('⚠ КАЖДАЯ причина отказа `isPollableAccount` названа — иначе строка соврёт про «паузу»', () => {
+    // ⚠ Замечание ревью: `pollSkipReason` перечисляет условия ВРУЧНУЮ, а всё, что не подошло под
+    // первые три, молча зачисляет в «на паузе». Появись у `isPollableAccount` пятое условие — оно
+    // приземлилось бы туда же, и оператор пошёл бы снимать паузу, которой никто не ставил.
+    // Скомпилировать сверку нельзя (условия — тело функции), поэтому проверяем ИСХОДОМ: для
+    // каждого известного отказа строка обязана назвать СВОЮ формулировку, а совпадение двух
+    // формулировок означало бы ровно ту склейку.
+    const cases: Array<{ row: BankAccountRef, needle: string }> = [
+      { row: ref({ provider: 'manual', accountKey: 'M' }), needle: 'не опрашиваются по типу' },
+      { row: ref({ accountKey: provisionalAccountKey('n1') }), needle: 'без выбранного счёта' },
+      { row: ref({ pollPaused: true }), needle: 'на паузе' }
+    ]
+    const seen = new Set<string>()
+    for (const c of cases) {
+      expect(isPollableAccount(c.row), 'фикстура перестала быть отказом — тест проверяет не то').toBe(false)
+      const why = pollSkipReason([c.row])!
+      expect(why, `причина «${c.needle}» не названа`).toContain(c.needle)
+      seen.add(c.needle)
+    }
+    expect(seen.size, 'две причины склеились в одну формулировку').toBe(cases.length)
   })
 })

@@ -215,13 +215,25 @@ describe('вердикт «КТО продлевает банк-токен» (#4
   // РАЗБИРАЕТ её формат, и разойдись они, вердикт молча станет «прогонов не было». То есть
   // диагностика соврала бы в сторону «продление не работает» ровно тогда, когда оно работает.
 
-  /** Тот же конвейер, что в скрипте, — сюда подставляются НАСТОЯЩИЕ строки сводки. */
-  function verdictCounts(logLines: string[]): { runs: number, selected: number, refreshed: number } {
-    const out = execFileSync('sh', ['-c',
-      `grep -F '[bank-keepalive]' | grep -oE 'total=[0-9]+ selected=[0-9]+ refreshed=[0-9]+' `
-      + `| awk -F'[= ]' '{sel+=$2; ref+=$4; n++} END {print (n?n:0), (sel?sel:0), (ref?ref:0)}'`
-    ], { input: logLines.join('\n'), encoding: 'utf8' }).trim().split(/\s+/).map(Number)
-    return { runs: out[0]!, selected: out[1]!, refreshed: out[2]! }
+  /**
+   * НАСТОЯЩИЙ разбор из скрипта, а не его копия здесь.
+   *
+   * ⚠ Копия была, и она молча разошлась (находка ревью): в скрипте формат сводки получил поле
+   * `total=`, позиции в `awk` там пересчитали, а в близнеце — нет, и он стал читать `total` как
+   * `selected`. Тест при этом остался зелёным, потому что во всех фикстурах числа совпадали
+   * (2/2/2 и 0/0/0). То есть охранник, поставленный ловить сдвиг полей, сам его и пропустил.
+   * Теперь конвейер ВЫРЕЗАЕТСЯ из скрипта, а подменяется в нём ровно одно — источник строк.
+   */
+  function verdictCounts(logLines: string[]): { runs: number, selected: number, refreshed: number, total: number } {
+    const from = SCRIPT.indexOf('ka_lines="$(')
+    const to = SCRIPT.indexOf('# Снимок — из последней строки')
+    expect(from, 'разбор сводки не найден — его переписали').toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    const block = SCRIPT.slice(from, to)
+      .replaceAll('$DC logs --since "$SINCE" worker backend 2>&1', 'cat')
+    const out = execFileSync('bash', ['-c', block + '\necho "$runs $sel $ref $total"'],
+      { input: logLines.join('\n'), encoding: 'utf8' }).trim().split(/\s+/).map(Number)
+    return { runs: out[0]!, selected: out[1]!, refreshed: out[2]!, total: out[3]! }
   }
 
   it('разбирает НАСТОЯЩУЮ строку сводки, а не выдуманную', async () => {
@@ -244,18 +256,38 @@ describe('вердикт «КТО продлевает банк-токен» (#4
 
   it('«крон продлевал» и «крон ходил вхолостую» РАЗЛИЧАЮТСЯ — в этом вся ценность секции', () => {
     const worked = verdictCounts(['[bank-keepalive] INFO: total=2 selected=2 refreshed=2 skipped=0 failed=0 unrefreshable=0 expired=0'])
-    expect(worked).toEqual({ runs: 1, selected: 2, refreshed: 2 })
+    expect(worked).toEqual({ runs: 1, selected: 2, refreshed: 2, total: 2 })
 
     const idle = verdictCounts([
       '[bank-keepalive] INFO: total=0 selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0',
       '[bank-keepalive] INFO: total=0 selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0'
     ])
     // Крон отработал дважды и никого не отобрал ⇒ токен всё время свежий ⇒ держит его ОПРОС.
-    expect(idle).toEqual({ runs: 2, selected: 0, refreshed: 0 })
+    expect(idle).toEqual({ runs: 2, selected: 0, refreshed: 0, total: 0 })
+  })
+
+  it('⚠ поля РАЗЛИЧАЮТСЯ между собой — фикстура из одинаковых чисел не проверяет ничего', () => {
+    // Ровно тот случай, который прежний близнец пропускал: пока `total==selected==refreshed`,
+    // сдвиг на соседнее поле неотличим от правильного разбора.
+    const c = verdictCounts(['[bank-keepalive] INFO: total=9 selected=5 refreshed=3 skipped=1 failed=2 unrefreshable=0 expired=0'])
+    expect(c).toEqual({ runs: 1, selected: 5, refreshed: 3, total: 9 })
+  })
+
+  it('⚠ БЭКЕНД ЕЩЁ НЕ ВЫКАЧЕН: строка без `total=` разбирается, а не пропадает', () => {
+    // Обычное состояние стенда, а не экзотика: `make self-update` привозит скрипты, а бэкенд
+    // приезжает отдельным docker-образом. С обязательным `total=` такая пара давала НОЛЬ
+    // разобранных строк, а ноль прогонов — уверенное «контейнер пересоздавали, вердикта нет»,
+    // то есть постоянный ложный диагноз ровно в момент выката (находка ревью).
+    const c = verdictCounts(['[bank-keepalive] INFO: selected=2 refreshed=1 skipped=0 failed=0 unrefreshable=0 expired=0'])
+    expect(c.runs, 'строка старого формата потеряна — вердикт станет «прогонов не было»').toBe(1)
+    expect(c).toMatchObject({ selected: 2, refreshed: 1 })
+    // ⚠ `-1`, а не `0`: «поля нет» и «счетов нет» — разные вещи, и второе печатает красную
+    // тревогу «подключённых счетов НЕТ НИ ОДНОГО».
+    expect(c.total, 'отсутствие поля выдано за ноль счетов').toBe(-1)
   })
 
   it('чужие строки в счёт не идут', () => {
-    expect(verdictCounts(['[queue] INFO: real poll: 2 accounts'])).toEqual({ runs: 0, selected: 0, refreshed: 0 })
+    expect(verdictCounts(['[queue] INFO: real poll: 2 accounts'])).toEqual({ runs: 0, selected: 0, refreshed: 0, total: -1 })
   })
 
   it('скрипт действительно содержит эту секцию и оба вердикта', () => {
@@ -346,7 +378,48 @@ describe('вердикт «КТО продлевает» не имеет пра�
   })
 
   it('счётчик [fetch] реально считается, а не берётся из воздуха', () => {
-    expect(SCRIPT).toMatch(/fetch_n="\$\(\$DC logs .*grep -cF '\[fetch\]'/)
+    expect(SCRIPT).toMatch(/fetch_n="\$\(\$DC logs .*grep -c/)
+  })
+
+  it('⚠ счётчик [fetch] читает ОБА контейнера: крон живёт на backend, а не на worker', () => {
+    // Находка ревью. Задачи опроса разбирает `worker`, но крон-тик — и строку о причине холостого
+    // прогона (#488) — печатает `backend`. Секция, читавшая только `worker`, была слепа ровно к
+    // той диагностике, ради которой её и завели.
+    const at = SCRIPT.indexOf('fetch_n="$(')
+    expect(at).toBeGreaterThan(0)
+    expect(SCRIPT.slice(at, at + 200), 'счётчик [fetch] снова читает один контейнер').toContain('worker backend')
+  })
+
+  it('⚠ ПОВЕДЕНЧЕСКИ: «опрашивать нечего» за опрос НЕ засчитывается', () => {
+    // Иначе новая строка сама подтверждала бы вердикт «продлевает ОПРОС» — ровно ту ложь, которую
+    // этот же PR и хоронит. Настоящий опрос всегда сообщает число операций, холостой тик — нет.
+    const at = SCRIPT.indexOf('fetch_n="$(')
+    const line = SCRIPT.slice(at, SCRIPT.indexOf('\n', at))
+    const pipeline = line.replace('fetch_n="$(', '').replace(/\)"\s*$/, '')
+      .replace('$DC logs --since "$SINCE" worker backend 2>&1', 'cat')
+    const count = (lines: string[]) =>
+      Number(execFileSync('bash', ['-c', pipeline], { input: lines.join('\n'), encoding: 'utf8' }).trim())
+    expect(count(['[fetch] INFO: alfa-by portal M1, account BY13 2026-08-20..2026-08-21: 3 ops']),
+      'настоящий опрос перестал считаться').toBe(1)
+    expect(count(['[fetch] INFO: опрашивать нечего: подключённых счетов нет ни одного']),
+      'холостой тик засчитан за опрос — вердикт «продлевает ОПРОС» воскрес').toBe(0)
+  })
+
+  it('⚠ крон-тик РЕАЛЬНО зовёт разбор причины — и с ПОЛНЫМ списком, а не с отфильтрованным', () => {
+    // Гард структурный: `defineNitroPlugin` в юнит-тесте не запустить, а весь смысл правки — в
+    // ОДНОЙ строке внутри `if (byPortal.length === 0)`. Три мутации проходят зелёными без него:
+    // убрать вызов, звать `pollSkipReason(pollable)` (список уже отфильтрован до пустого — ответ
+    // всегда «счетов нет вовсе», независимо от настоящей причины) и снять маркер `[fetch]`.
+    // Форма — та же, что у `bankKeepAliveWiring`/`pollCycleBudgetChokePoint`.
+    const gateAt = PLUGIN.indexOf('if (byPortal.length === 0)')
+    expect(gateAt, 'гейт пустого отбора исчез').toBeGreaterThan(0)
+    const block = PLUGIN.slice(gateAt, PLUGIN.indexOf('const now = new Date()', gateAt))
+    expect(block, 'разбор причины не зовётся из холостого тика').toContain('pollSkipReason(rows)')
+    expect(block, 'причина печатается не под маркером [fetch] — диагностика её не найдёт')
+      .toMatch(/fetchLog\.info\(why\)/)
+    // ⚠ Канал, а не литерал в тексте: форматтер печатает канал, поэтому `log.info('[fetch] …')`
+    // дало бы `[queue] INFO: [fetch] …` — задвоение, которое `buildOpLogLine` зовёт дефектом.
+    expect(PLUGIN).toContain('useServerLogger(\'fetch\')')
   })
 
   it('при пустом [fetch] ответ — «НИКТО», и он называет обе причины', () => {
@@ -421,13 +494,72 @@ describe('вердикт «КТО продлевает» не имеет пра�
     expect(out).toContain('продлевает ОПРОС')
   })
 
-  it('⚠ покрытие окна проверяется ДО вердикта, а не после', () => {
+  it('⚠ покрытие окна гасит выводы ИЗ ОТСУТСТВИЯ работы, но не прямые наблюдения', () => {
     // Прежде оговорка «бэкенд перезапускали» печаталась строкой НИЖЕ вердикта — то есть после
-    // того, как читатель уже принял ответ. На окне в минуты `selected=0` не значит ничего.
-    const verdictAt = SCRIPT.indexOf('ВЕРДИКТА НЕТ')
-    const cronAnswerAt = SCRIPT.indexOf('продлевает КРОН')
-    expect(verdictAt, 'проверка покрытия исчезла').toBeGreaterThan(0)
-    expect(verdictAt, 'проверка покрытия должна стоять раньше любого вердикта').toBeLessThan(cronAnswerAt)
+    // того, как читатель уже принял ответ. Первая правка перенесла её ВЫШЕ ВСЕГО и промахнулась в
+    // другую сторону (находка ревью): «крон продлил токен» — это ПРЯМОЕ наблюдение, короткое окно
+    // не делает его неправдой, а замолчав его, диагностика теряет единственный положительный
+    // ответ ровно после выката, когда его чаще всего и спрашивают.
+    // ⚠ Ищем В САМОМ БЛОКЕ вердикта, а не по всему файлу: те же слова стоят в шапке секции как
+    // объяснение правила чтения, и по ним порядок веток «доказывался» бы комментарием.
+    const block = SCRIPT.slice(SCRIPT.indexOf('# ⚠ ПОРЯДОК ВЕТОК'), SCRIPT.indexOf('section "ВОРОНКА платежа'))
+    const gate = block.indexOf('ВЕРДИКТА НЕТ')
+    const cronWorked = block.indexOf('продлевает КРОН')
+    const cronFailed = block.indexOf('НЕ продлил ни одного')
+    const fromAbsence = block.indexOf('⚠ ОТВЕТ: продлевает ОПРОС')
+    expect(gate, 'проверка покрытия исчезла').toBeGreaterThan(0)
+    expect(fromAbsence, 'ветка «продлевает ОПРОС» не найдена в блоке вердикта').toBeGreaterThan(0)
+    expect(cronWorked, 'прямое наблюдение «продлевает КРОН» ушло под гейт покрытия').toBeLessThan(gate)
+    expect(cronFailed, 'прямое наблюдение «отбирал и не продлил» ушло под гейт покрытия').toBeLessThan(gate)
+    expect(gate, 'вывод из отсутствия работы больше не гасится непокрытым окном').toBeLessThan(fromAbsence)
+  })
+
+  it('⚠ прямые наблюдения ПОВЕДЕНЧЕСКИ переживают непокрытое окно', () => {
+    // Мутационная страховка к предыдущему: порядок строк в файле можно сохранить, а условие
+    // сломать. Сутки с одним прогоном — окно заведомо непокрытое.
+    const worked = verdict({ runs: 1, sel: 2, ref: 2, expd: 0, unref: 0, fetch_n: 0, sinceMin: 1440 })
+    expect(worked, 'успешное продление замолчали из-за короткого окна').toContain('продлевает КРОН')
+    const failed = verdict({ runs: 1, sel: 2, ref: 0, fail: 2, expd: 0, unref: 0, fetch_n: 0, sinceMin: 1440 })
+    expect(failed, 'отказ банка замолчали из-за короткого окна').toContain('НЕ продлил ни одного')
+  })
+
+  it('⚠ «прогонов не было» не подменяется догадкой про пересозданный контейнер', () => {
+    // При `runs=0` и окне от трёх часов условие непокрытия истинно ВСЕГДА, поэтому гейт
+    // перехватывал этот случай (находка ревью) — и печатал «контейнер пересоздавали», тогда как
+    // секция выше в тот же момент говорит «продление не отработало НИ РАЗУ, проверьте QUEUE_CRON».
+    // Два взаимно исключающих диагноза об одном логе, и заметная строка называла менее вероятный.
+    const out = verdict({ runs: 0, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 0, sinceMin: 180 })
+    expect(out).toContain('прогонов не было')
+    expect(out, 'пустой лог выдан за пересозданный контейнер').not.toContain('ВЕРДИКТА НЕТ')
+  })
+
+  /** Прогнать блок «сколько строк вообще видит продление» — он стоит ВЫШЕ блока вердикта. */
+  function totalNotice(v: { runs: number, total: number }): string {
+    const from = SCRIPT.indexOf('# ⚠ Сколько строк подключений видит продление')
+    const to = SCRIPT.indexOf('# Похороненные подключения')
+    expect(from, 'блок «подключённых счетов нет» не найден — его переписали').toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    return execFileSync('bash', ['-c', `runs=${v.runs}; total=${v.total}\n` + SCRIPT.slice(from, to)],
+      { encoding: 'utf8' })
+  }
+
+  it('⚠ «подключённых счетов НЕТ НИ ОДНОГО» — говорится только когда это ИЗВЕСТНО', () => {
+    // Блок целиком новый и не был покрыт ничем (находка ревью): мутация `-eq 0` → `-ne 0`,
+    // подмена `total` на `sel` и просто удаление блока проходили зелёными.
+    expect(totalNotice({ runs: 24, total: 0 })).toContain('НЕТ НИ ОДНОГО')
+    expect(totalNotice({ runs: 24, total: 3 }), 'тревога на портале с подключениями').not.toContain('НЕТ НИ ОДНОГО')
+    // ⚠ `-1` — «бэкенд старый, поля не печатает». Выдать незнание за ноль счетов значило бы
+    // отправить оператора подключать банк, который подключён.
+    expect(totalNotice({ runs: 24, total: -1 }), 'незнание выдано за отсутствие счетов').not.toContain('НЕТ НИ ОДНОГО')
+    // Прогонов не было ⇒ и `total` неоткуда взять.
+    expect(totalNotice({ runs: 0, total: 0 })).not.toContain('НЕТ НИ ОДНОГО')
+  })
+
+  it('⚠ сутки с ТРЕМЯ прогонами — окно непокрыто (ради этого порог и переписан)', () => {
+    // Прежний порог «меньше двух» такое окно пропускал. Ни один тест этого не пинил: все фикстуры
+    // были `runs:1` или `runs:24`, а они классифицируются одинаково при любом делителе.
+    const out = verdict({ runs: 3, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 5, sinceMin: 1440 })
+    expect(out, 'сутки с тремя прогонами снова считаются покрытым окном').toContain('ВЕРДИКТА НЕТ')
   })
 
   it('покрытие считается от ожидаемого числа прогонов, а не от порога «меньше двух»', () => {
