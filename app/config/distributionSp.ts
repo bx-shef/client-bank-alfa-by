@@ -268,7 +268,7 @@ export function buildUfFieldConfigCall(spTypeId: number, field: SpUserField): { 
  * NeedDistr`), а поля контрагента/назначения/даты/направления не появлялись НИКОГДА, сколько ни
  * переинициализируй. Нормализация приводит все три формы к одной: `UF_CRM_13_OP_DATE`,
  * `UF_CRM13_OP_DATE` и `ufCrm13OpDate` → `ufcrm13opdate`. Наши постфиксы после неё различимы. */
-function normalizeFieldNameForCompare(name: string): string {
+export function normalizeFieldNameForCompare(name: string): string {
   return name.replace(/_/g, '').toLowerCase()
 }
 

@@ -124,3 +124,49 @@ describe('счётчик нерабочих подключений доезжа�
     expect(res.body.unhealthyAccounts).toBe(0)
   })
 })
+
+// ⚠ #46: серверный fail-open ключа `spFieldNames`. Держала его ТОЛЬКО проза, а мутация
+// `...(spFieldNames ? {…} : {})` → `spFieldNames: spFieldNames ?? []` оставляла весь набор
+// зелёным и красила КАЖДЫЙ портал: пустой список читается ядром как «нет ни одного поля реестра»,
+// то есть экран уверенно посылает чинить исправное. Находка ревью.
+describe('поля смарт-процесса: ключ появляется только когда реально спросили (#46)', () => {
+  const withFields = { ...input, wantFields: true }
+
+  it('деп не задан — ключа нет', async () => {
+    const res = await handleSetupStatus(deps(), withFields)
+    expect(res.body).not.toHaveProperty('spFieldNames')
+  })
+
+  it('деп вернул null (портал не ответил) — ключа нет, а не пустой список', async () => {
+    const res = await handleSetupStatus(deps({ spFieldNames: async () => null }), withFields)
+    expect(res.body).not.toHaveProperty('spFieldNames')
+  })
+
+  it('деп упал — ключа нет, остальной ответ цел', async () => {
+    const res = await handleSetupStatus(
+      deps({ spFieldNames: async () => { throw new Error('портал молчит') } }), withFields)
+    expect(res.status).toBe(200)
+    expect(res.body).not.toHaveProperty('spFieldNames')
+    expect(res.body.connectedAccounts).toBe(2)
+  })
+
+  it('портал ответил — имена уезжают как есть', async () => {
+    const res = await handleSetupStatus(deps({ spFieldNames: async () => ['ufCrm13Total'] }), withFields)
+    expect(res.body.spFieldNames).toEqual(['ufCrm13Total'])
+  })
+
+  // ⚠ Дорогая проверка (два REST в портал) спрашивается ТОЛЬКО по явному запросу: `/app` зовёт тот
+  // же маршрут на каждом открытии, а строки смарт-процессов у него нет вовсе.
+  it('без запроса поля НЕ спрашиваются вовсе — деп не зовут', async () => {
+    let called = 0
+    const res = await handleSetupStatus(
+      deps({
+        spFieldNames: async () => {
+          called++
+          return ['ufCrm13Total']
+        }
+      }), input)
+    expect(called, 'деп не должен вызываться без wantFields').toBe(0)
+    expect(res.body).not.toHaveProperty('spFieldNames')
+  })
+})
