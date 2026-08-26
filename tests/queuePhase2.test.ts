@@ -32,6 +32,8 @@ interface FakeOpts {
   myCompany?: string | null
   /** dedup keys already written (getActivityId returns a stored id for these). */
   alreadyWritten?: Set<string>
+  /** #45: дозаливка колонок реестра падает (проверяем, что пачка при этом не рушится). */
+  backfillThrows?: boolean
   /** chat settings; default announces both directions. null ⇒ getPortalSettings
    *  returns null (settings unavailable — chat AND recognition off). */
   chat?: ChatSettings | null
@@ -88,7 +90,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], bind: [], regRetry: [], bindRetry: [], portalsFor: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [], portalsFor: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -115,6 +117,11 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.activity.push([it.docId, companyId, memberId, id])
       calls.activityNote.push([it.docId, companyId, note ?? null]) // #91 reason-block capture
       return id
+    },
+    backfillRegistry: async (it, memberId, provider, paymentSp) => {
+      calls.backfill.push([it.docId, memberId, provider, paymentSp.entityTypeId])
+      if (o.backfillThrows) throw new Error('portal refused the backfill update')
+      return 'filled'
     },
     writePaymentRegistry: async (it, companyId, memberId, provider, paymentSp) => {
       calls.registry.push([it.docId, companyId, memberId, provider, paymentSp.entityTypeId])
@@ -396,6 +403,58 @@ describe('handleCrmSyncJob', () => {
     expect(calls.activity).toHaveLength(1)
   })
 
+  // ⚠ #45: дедуп-гейт стоит РАНЬШЕ записи реестра, поэтому портал, обновивший смарт-процесс уже
+  // после импорта, не мог заполнить историю НИКОГДА — колонки появлялись только у операций,
+  // которых ещё нет в CRM. На живом портале это стоило владельцу ручного удаления дел и элементов.
+  // Чинит повторная ЗАГРУЗКА ФАЙЛА — ровно тот путь, что назван человеку в сообщениях (#43).
+  describe('#45 дозаливка колонок реестра у уже записанной операции', () => {
+    const spCfg: RecognitionSettings = {
+      alphabet: 'cyrillic', matrices: [],
+      configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }
+    }
+    const parseJob = (items: StatementItem[]): CrmSyncJob => ({
+      memberId: 'M', providerId: 'alfa-by', source: 'parse', batchId: 'b', items
+    })
+
+    it('ручная загрузка дозаполняет операцию, отсеянную дедупом', async () => {
+      const { deps, calls } = fakeDeps({ recognition: spCfg, alreadyWritten: new Set([dedupKey(item('old'))]) })
+      const r = await handleCrmSyncJob(parseJob([item('old')]), deps)
+      expect(r.skipped, 'операция всё так же отсеяна — второго дела быть не должно').toBe(1)
+      expect(calls.activity, 'дело НЕ создаётся повторно').toHaveLength(0)
+      expect(calls.backfill).toEqual([['old', 'M', 'alfa-by', 1044]])
+      expect(r.registryBackfilled).toBe(1)
+    })
+
+    // ⚠ Несущее ограничение: окно автоопроса намеренно нахлёстывается, и сквозь дедуп на каждом
+    // тике проходят все вчерашние операции. Безусловная дозапись стоила бы лишнего вызова на
+    // каждую из них каждые несколько минут — навсегда, ради состояния, случающегося однажды.
+    it('АВТООПРОС не платит за дозаливку — деп не зовут вовсе', async () => {
+      const { deps, calls } = fakeDeps({ recognition: spCfg, alreadyWritten: new Set([dedupKey(item('old'))]) })
+      const r = await handleCrmSyncJob(job([item('old')]), deps) // source: 'fetch'
+      expect(r.skipped).toBe(1)
+      expect(calls.backfill, 'опрос не должен трогать историю реестра').toHaveLength(0)
+      expect(r.registryBackfilled).toBe(0)
+    })
+
+    it('без смарт-процесса дозаливать нечего — деп не зовут', async () => {
+      const { deps, calls } = fakeDeps({ alreadyWritten: new Set([dedupKey(item('old'))]) }) // без configFields
+      await handleCrmSyncJob(parseJob([item('old')]), deps)
+      expect(calls.backfill).toHaveLength(0)
+    })
+
+    it('отказ дозаливки не роняет пачку — считается отдельно от registryFailed', async () => {
+      const { deps } = fakeDeps({
+        recognition: spCfg,
+        alreadyWritten: new Set([dedupKey(item('old'))]),
+        backfillThrows: true
+      })
+      const r = await handleCrmSyncJob(parseJob([item('old')]), deps)
+      expect(r.registryBackfillFailed).toBe(1)
+      expect(r.registryFailed, 'это ДРУГОЙ отказ: там элемент не создан вовсе').toBe(0)
+      expect(r.processed).toBe(1)
+    })
+  })
+
   it('#575 реестр не пишется, когда смарт-процесс не провижинен', async () => {
     // «Кое-где нет смарт-процессов» (владелец) — там деградируем до одного дела, а не падаем.
     const { deps, calls } = fakeDeps({ company: null, myCompany: '9' })
@@ -507,7 +566,7 @@ describe('handleCrmSyncJob', () => {
       job([item('d1', 'credit'), item('d1', 'credit'), item('d2', 'debit')]), // d1 duplicated
       deps
     )
-    expect(r).toEqual({ processed: 2, landed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
+    expect(r).toEqual({ processed: 2, landed: 2, created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 1 })
     expect(calls.activity).toEqual([['d1', 'CO', 'M', 'act-1'], ['d2', 'CO', 'M', 'act-2']])
     // All three CRM ops receive the portal memberId ('M').
     expect(calls.find).toEqual([['d1', 'M'], ['d2', 'M']])
@@ -518,10 +577,10 @@ describe('handleCrmSyncJob', () => {
     const { deps, calls } = fakeDeps() // the fake persists the marker across calls
     const j = job([item('d1'), item('d2')])
     const first = await handleCrmSyncJob(j, deps)
-    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0 })
+    expect(first).toMatchObject({ created: 2, notified: 2, skipped: 0, excluded: 0, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0 })
     // Redeliver the SAME job: every op now carries a marker → all skipped, no side effects.
     const second = await handleCrmSyncJob(j, deps)
-    expect(second).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 2, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(second).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 2, excluded: 0, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(calls.activity).toHaveLength(2) // still just the first run's two writes
     expect(calls.chat).toHaveLength(2) // no re-notify on redelivery
     expect(calls.find).toHaveLength(2) // skipped ops don't even reach findCompany
@@ -530,7 +589,7 @@ describe('handleCrmSyncJob', () => {
   it('skips ops already written (B24 marker dedup) — no re-write, no re-notify', async () => {
     const { deps, calls } = fakeDeps({ alreadyWritten: new Set(['A|d1']) })
     const r = await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
-    expect(r).toEqual({ processed: 2, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(r).toEqual({ processed: 2, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     // d1 was skipped BEFORE findCompany: only d2 hit findCompany/writeActivity/chat.
     expect(calls.find).toEqual([['d2', 'M']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -544,7 +603,7 @@ describe('handleCrmSyncJob', () => {
     // The confused-op sample (#FEEDBACK) rides on the summary — split it out so the counter check
     // stays strict, then assert it captured the first unmatched op.
     const { sample, ...counters } = r
-    expect(counters).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 2, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
+    expect(counters).toEqual({ processed: 2, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 0, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 2, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 0 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([]) // nothing written → no marker → retried on redelivery
     expect(calls.chat).toEqual([])
@@ -645,7 +704,7 @@ describe('handleCrmSyncJob', () => {
     deps.findCompany = async it => (it.docId === 'd2' ? 'CO' : null)
     const r = await handleCrmSyncJob(job([item('d1', 'credit'), item('d2', 'credit'), item('d3', 'debit')]), deps)
     const { sample, ...counters } = r // sample (d3, unmatched) split out so the counter check stays strict
-    expect(counters).toEqual({ processed: 3, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, bindingsFailed: 0, unmatched: 1, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
+    expect(counters).toEqual({ processed: 3, landed: 1, created: 1, notified: 1, skipped: 1, excluded: 0, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 1, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 2, debits: 1 })
     expect(sample?.kind).toBe('unmatched')
     expect(calls.activity).toEqual([['d2', 'CO', 'M', 'act-1']])
     expect(calls.chat).toEqual([['d2', 'M']])
@@ -687,7 +746,7 @@ describe('handleCrmSyncJob', () => {
     const acc = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeCounterpartyAccounts: ['BY1'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), acc.deps)
     // Full shape: only `excluded` and the приход/расход split move; nothing produced.
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(acc.calls.find).toEqual([]) // never even looked up the company
     expect(acc.calls.activity).toEqual([]) // NO CRM activity written
     expect(acc.calls.chat).toEqual([]) // NO chat
@@ -699,7 +758,7 @@ describe('handleCrmSyncJob', () => {
     // расхождения формы `StatementItem` не увидел бы; здесь через гейт идёт настоящая операция.
     const cp = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludeCounterpartyAccounts: ['BY1'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), cp.deps)
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(cp.calls.find).toEqual([]) // компанию не искали вовсе
     expect(cp.calls.activity).toEqual([]) // дела нет
     expect(cp.calls.chat).toEqual([]) // и в чат не ушло
@@ -718,7 +777,7 @@ describe('handleCrmSyncJob', () => {
     // item.purpose = 'p' (see item()); excludePurposePatterns:['p'] must skip the whole op.
     const pur = fakeDeps({ chat: { dialogId: 'c', rules: { directions: ['credit'], excludePurposePatterns: ['p'] } } })
     const r = await handleCrmSyncJob(job([item('d1', 'credit')]), pur.deps)
-    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
+    expect(r).toEqual({ processed: 1, landed: 0, created: 0, notified: 0, skipped: 0, excluded: 1, registryFailed: 0, registryBackfilled: 0, registryBackfillFailed: 0, bindingsFailed: 0, unmatched: 0, unresolved: 0, misconfigured: 0, recognized: 0, resolved: 0, allocatable: 0, ambiguous: 0, manual: 0, allocated: 0, distributed: 0, ledgerWritten: 0, credits: 1, debits: 0 })
     expect(pur.calls.activity).toEqual([])
     expect(pur.calls.chat).toEqual([])
   })

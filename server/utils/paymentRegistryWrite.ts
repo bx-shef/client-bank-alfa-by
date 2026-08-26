@@ -17,13 +17,13 @@
 // a test with shared element state pins that order (an earlier version of that test used two
 // independent fakes and passed against the broken order — measured).
 
-import { ensurePaymentElement } from './distributionLedgerWrite'
-import { buildRegistryFillCall } from '../../app/utils/distributionLedger'
+import { ensurePaymentElement, extractListItems } from './distributionLedgerWrite'
+import { buildRegistryFillCall, buildRegistryProbeCall } from '../../app/utils/distributionLedger'
 import { dedupKey } from '../../app/utils/statement'
 import { BANK_LABELS } from '../../app/utils/bankLabels'
 import type { PaymentRegistryFields } from '../../app/utils/distributionLedger'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
-import type { SpRef } from '../../app/config/distributionSp'
+import { buildUfFieldNameCamel, PAYMENT_SP_FIELDS, type SpRef } from '../../app/config/distributionSp'
 import type { RestCall } from './companyLookup'
 import { buildActivityTitle, neutralizeBb } from '../../app/utils/activity'
 
@@ -98,4 +98,41 @@ export async function writePaymentRegistryViaRest(
     if (fill) await call(fill.method, fill.params)
   }
   return id
+}
+
+/**
+ * Дозаполнить колонки реестра у элемента, который УЖЕ существует (#45).
+ *
+ * ⚠ ЗАЧЕМ. Дедуп-гейт `crm-sync` отсеивает операцию по маркеру ДЕЛА раньше, чем доходит до записи
+ * реестра, поэтому портал, обновивший смарт-процесс уже после импорта, не мог заполнить историю
+ * НИКОГДА: новые поля появлялись только у операций, которых ещё нет в CRM. На живом портале это
+ * стоило владельцу ручного удаления дел и элементов — единственного пути, который работал.
+ *
+ * ⚠ Зовётся ТОЛЬКО с ручной загрузки (`source: 'parse'`), а не с автоопроса. Окно опроса намеренно
+ * нахлёстывается, поэтому на каждом тике сквозь дедуп проходят все вчерашние операции: безусловная
+ * дозапись стоила бы лишнего вызова на КАЖДУЮ из них КАЖДЫЕ несколько минут — навсегда, ради
+ * состояния, которое случается один раз при обновлении смарт-процесса. Ручная загрузка — редкое и
+ * осознанное действие, и ровно она уже названа человеку как способ починки (#43).
+ *
+ * ⚠ Пустой ли элемент, проверяем ТЕМ ЖЕ запросом, которым его ищем: поле-индикатор идёт в `select`,
+ * поэтому уже заполненный элемент не стоит ни одного лишнего вызова. Индикатор — дата операции:
+ * её пишет ровно этот код, и она непуста у любого полного элемента.
+ */
+export async function backfillPaymentRegistryViaRest(
+  item: StatementItem,
+  provider: BankProviderId,
+  paymentSp: SpRef,
+  call: RestCall
+): Promise<'filled' | 'already' | 'missing'> {
+  const probe = buildRegistryProbeCall(paymentSp, dedupKey(item))
+  const res = await call(probe.method, probe.params)
+  const found = extractListItems(res)[0]
+  if (!found) return 'missing' // элемента нет — эта операция реестра ещё не касалась
+  const marker = buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.operationDate.postfix)
+  const filledAlready = String(found[marker] ?? '').trim() !== ''
+  if (filledAlready) return 'already'
+  const fill = buildRegistryFillCall(paymentSp, String(found.id), buildRegistryFields(item, provider))
+  if (!fill) return 'already' // нечего дописывать
+  await call(fill.method, fill.params)
+  return 'filled'
 }

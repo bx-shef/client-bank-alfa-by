@@ -123,6 +123,10 @@ export interface RunSummaryLike {
   /** Операции, у которых не удалось записать элемент реестра (#575). Необязательное: у прежних
    *  вызывающих поля нет, а печатается оно только при ненулевом значении. */
   registryFailed?: number
+  /** Сколько операций дозаполнено колонками реестра при повторной загрузке (#45). */
+  registryBackfilled?: number
+  /** Сколько дозаливок не удалось (#45) — отдельно от `registryFailed`. */
+  registryBackfillFailed?: number
   /** Операции, у которых не встала ХОТЯ БЫ ОДНА привязка дела (#579). Единица — ОПЕРАЦИЯ, как и у
    *  `registryFailed`: у одной операции привязок несколько, и счётчик в тех же строках, но в других
    *  единицах читался бы как сломанный. Необязательное — печатается только при ненулевом значении. */
@@ -149,7 +153,7 @@ export function runSummaryLine(memberId: string, s: RunSummaryLike, mode: OpLogM
   // канал и маркер это одна и та же строка, и совпадение стережёт `tests/serverLogChannels.test.ts`.
   return `portal ${memberId}: ${s.processed} обработано, ${s.created} создано, `
     + `${s.landed} приземлилось, ${s.unmatched} без клиента, ${s.unresolved} без цели, `
-    + `${s.recognized} с распознанным номером${misconfiguredPart(s)}${registryPart(s)}${bindingsPart(s)}${quietPart(s)}${opLogTail(s, mode)}`
+    + `${s.recognized} с распознанным номером${misconfiguredPart(s)}${registryPart(s)}${bindingsPart(s)}${backfillPart(s)}${quietPart(s)}${opLogTail(s, mode)}`
 }
 
 /**
@@ -183,6 +187,26 @@ function misconfiguredPart(s: RunSummaryLike): string {
 function registryPart(s: RunSummaryLike): string {
   const n = s.registryFailed ?? 0
   return n > 0 ? `, ⚠ ${n} без записи в реестр` : ''
+}
+
+/**
+ * Операции, которым при повторной загрузке ДОЗАПОЛНИЛИ колонки реестра (#45).
+ *
+ * ⚠ Это не отказ, а результат, и стоит он рядом с «уже было записано» намеренно: обе приписки
+ * объясняют, почему прогон, не создавший ни одного дела, всё-таки был полезен. Без неё повторная
+ * загрузка ради починки истории выглядела бы полностью холостой («N уже было записано») — то есть
+ * человек не узнал бы, что она сработала.
+ * ⚠ При нуле молчим — общее правило приписок: постоянный «0 дозаполнено» это шум.
+ */
+function backfillPart(s: RunSummaryLike): string {
+  const filled = s.registryBackfilled ?? 0
+  const failed = s.registryBackfillFailed ?? 0
+  const parts: string[] = []
+  if (filled > 0) parts.push(`${filled} дозаполнено в реестре`)
+  // ⚠ Отдельно от `registryFailed`: там элемент не создан ВОВСЕ, здесь он есть, но история не
+  // дописалась. Лечится это в разных местах, поэтому и числа разные.
+  if (failed > 0) parts.push(`⚠ ${failed} не удалось дозаполнить`)
+  return parts.length > 0 ? `, ${parts.join(', ')}` : ''
 }
 
 /**
