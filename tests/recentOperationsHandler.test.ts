@@ -14,28 +14,28 @@ function deps(over: Partial<RecentOperationsDeps> = {}): RecentOperationsDeps {
   return {
     memberIdByDomain: async () => 'M1',
     validateFrame: async () => '7',
-    loadOperations: async () => [op],
+    loadOperations: async () => ({ operations: [op], total: 1 }),
     ...over
   }
 }
 
-const input = { accessToken: 't', domain: 'p.bitrix24.by' }
+const input = { accessToken: 't', domain: 'p.bitrix24.by', range: { from: '', to: '' } }
 
 describe('handleRecentOperations', () => {
   it('200 с операциями и configured=true', async () => {
     const res = await handleRecentOperations(deps(), input)
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ operations: [op], configured: true })
+    expect(res.body).toEqual({ operations: [op], configured: true, total: 1 })
   })
 
   it('СП не создан (loadOperations=null) → 200, пусто, configured=false', async () => {
     const res = await handleRecentOperations(deps({ loadOperations: async () => null }), input)
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ operations: [], configured: false })
+    expect(res.body).toEqual({ operations: [], configured: false, total: 0 })
   })
 
   it('401 без токена/домена', async () => {
-    expect((await handleRecentOperations(deps(), { accessToken: '', domain: '' })).status).toBe(401)
+    expect((await handleRecentOperations(deps(), { ...input, accessToken: '', domain: '' })).status).toBe(401)
   })
 
   it('409 если портал не установлен', async () => {
@@ -57,10 +57,54 @@ describe('handleRecentOperations', () => {
       validateFrame: async () => { throw new Error('bad') },
       loadOperations: async () => {
         touched = true
-        return [op]
+        return { operations: [op], total: 1 }
       }
     })
     await handleRecentOperations(d, input)
     expect(touched).toBe(false)
+  })
+})
+
+// ── Период (#42) ────────────────────────────────────────────────────────────────────────────────
+describe('handleRecentOperations: период', () => {
+  it('диапазон доезжает до чтения реестра', async () => {
+    let seen = { from: '', to: '' }
+    const d = deps({
+      loadOperations: async (_m, range) => {
+        seen = range
+        return { operations: [], total: 0 }
+      }
+    })
+    await handleRecentOperations(d, { ...input, range: { from: '2026-08-01', to: '2026-08-31' } })
+    expect(seen).toEqual({ from: '2026-08-01', to: '2026-08-31' })
+  })
+
+  // ⚠ Кривая граница ОТКАЗЫВАЕТ, а не отбрасывается: молча отброшенное условие РАСШИРЯЕТ период,
+  // и человек увидел бы чужой срок под подписью своего. Проверяем ещё и что до реестра не дошли.
+  it('400 на несуществующий день, реестр не читается', async () => {
+    let called = false
+    const d = deps({
+      loadOperations: async () => {
+        called = true
+        return { operations: [], total: 0 }
+      }
+    })
+    const res = await handleRecentOperations(d, { ...input, range: { from: '2026-02-31', to: '' } })
+    expect(res.status).toBe(400)
+    expect(called).toBe(false)
+  })
+
+  it('400 на перевёрнутый период', async () => {
+    const res = await handleRecentOperations(deps(), { ...input, range: { from: '2026-08-31', to: '2026-08-01' } })
+    expect(res.status).toBe(400)
+  })
+
+  // `total` больше длины списка — портал отдал только первую страницу; витрина обязана это знать,
+  // иначе сводка над списком выдаёт обрезок за весь период.
+  it('total пробрасывается как есть, включая null', async () => {
+    const many = await handleRecentOperations(deps({ loadOperations: async () => ({ operations: [op], total: 120 }) }), input)
+    expect((many.body as { total: number | null }).total).toBe(120)
+    const unknown = await handleRecentOperations(deps({ loadOperations: async () => ({ operations: [op], total: null }) }), input)
+    expect((unknown.body as { total: number | null }).total).toBeNull()
   })
 })

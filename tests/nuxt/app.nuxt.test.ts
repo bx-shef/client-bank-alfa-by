@@ -45,3 +45,39 @@ describe('app statement page', () => {
     expect(wrapper.text()).toContain('Загрузить выписку')
   })
 })
+
+// ── Период показа (#42) ─────────────────────────────────────────────────────────────────────────
+// ⚠ Проверяем ПРОВОДКУ, а не только присутствие кнопок: раньше витрина брала последние 50 записей
+// реестра без привязки к датам и без подписи о сроке, поэтому важно, что смена периода реально
+// перезапрашивает фид с ГРАНИЦАМИ, а не просто перекрашивает кнопку.
+describe('app: период показа (#42)', () => {
+  it('рисует все пресеты и подпись «за какой период»', async () => {
+    const wrapper = await mountSuspended(AppPage, PREVIEW)
+    const text = wrapper.text()
+    for (const label of ['День', '2 дня', '3 дня', 'Неделя', 'Месяц', 'Квартал', 'Год', 'Диапазон']) {
+      expect(text).toContain(label)
+    }
+    // Умолчание — месяц, значит подпись обязана быть диапазоном, а не «за всё время».
+    expect(text).toMatch(/с \d+ \S+ \d{4} по \d+ \S+ \d{4}/)
+  })
+
+  it('клик по «День» меняет подпись на один день', async () => {
+    const wrapper = await mountSuspended(AppPage, PREVIEW)
+    const dayBtn = wrapper.findAll('button').find(b => b.text().trim() === 'День')
+    expect(dayBtn).toBeTruthy()
+    await dayBtn!.trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    expect(wrapper.text()).toMatch(/за \d+ \S+ \d{4}/)
+    expect(wrapper.text()).not.toMatch(/с \d+ \S+ \d{4} по/)
+  })
+
+  // ⚠ «Диапазон» с пустыми границами НЕ должен уходить запросом: пустой период означает «за всё
+  // время», то есть один клик по вкладке молча просил бы весь реестр портала.
+  it('«Диапазон» открывает поле выбора и говорит «за всё время»', async () => {
+    const wrapper = await mountSuspended(AppPage, PREVIEW)
+    const btn = wrapper.findAll('button').find(b => b.text().trim() === 'Диапазон')
+    await btn!.trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    expect(wrapper.text()).toContain('за всё время')
+  })
+})

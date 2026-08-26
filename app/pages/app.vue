@@ -17,6 +17,10 @@ import { pageTitle } from '~/utils/landing'
 import { useLogger } from '~/utils/logger'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import {
+  OPERATION_PERIOD_PRESETS, DEFAULT_OPERATION_PERIOD, operationPeriodRange, operationPeriodCaption,
+  todayIsoDay, isValidDayRange, type OperationPeriodPreset, type DayRange
+} from '~/utils/operationPeriod'
+import {
   APP_SLIDER_PLACE_IMPORT,
   APP_SLIDER_PLACE_MAIN,
   APP_SLIDER_PLACE_SETTINGS,
@@ -498,7 +502,49 @@ const route = useRoute()
 // «Последние операции» (#5/#36): в портале — реальный фид из реестра «Платежи» (`useRecentOperations`),
 // под `?preview=1` — синтетический демо-набор для скриншотов и визуальных тестов. Раньше в портале
 // список был жёстко пуст, хотя реестр в настройках уже показывал те же операции своим endpoint'ом.
-const { operations: recentOps, load: loadRecentOps } = useRecentOperations()
+const { operations: recentOps, total: recentTotal, load: loadRecentOps } = useRecentOperations()
+
+// ── Период показа (#42) ────────────────────────────────────────────────────────────────────────
+// ⚠ Витрина брала последние 50 элементов реестра БЕЗ привязки к датам и без единого слова о том,
+// за какой это срок — а «Сводка по операциям» над списком считалась по тому же набору, то есть
+// числа тоже были «за неизвестно что». Поэтому селектор и ПОДПИСЬ появляются вместе.
+const period = ref<OperationPeriodPreset>(DEFAULT_OPERATION_PERIOD)
+const customFrom = ref('')
+const customTo = ref('')
+// ⚠ «Сегодня» берём по ЛОКАЛЬНЫМ часам и ОДИН раз на монтирование: период — календарь бухгалтера,
+// а не пояс сервера; пересчёт на каждый рендер двигал бы границу в полночь под открытым экраном.
+const today = ref(todayIsoDay())
+const periodRange = computed<DayRange>(() =>
+  operationPeriodRange(period.value, today.value, { from: customFrom.value, to: customTo.value })
+)
+const periodCaption = computed(() => operationPeriodCaption(periodRange.value))
+// Произвольный диапазон человек набирает по одной границе, и промежуточное состояние бывает
+// перевёрнутым — запрашивать его нельзя, но и ошибкой это не является: подсказываем и ждём.
+const periodValid = computed(() => isValidDayRange(periodRange.value))
+
+/** Перезапросить фид под текущий период. Вне портала (`?preview=1`) инертно — там демо-набор. */
+function reloadForPeriod(): void {
+  if (!periodValid.value) return
+  page.value = 1
+  void loadRecentOps(periodRange.value)
+}
+
+function setPeriod(p: OperationPeriodPreset): void {
+  period.value = p
+  // ⚠ Переход на «Диапазон» СРАЗУ ничего не запрашивает: границы ещё пусты, а пустой диапазон
+  // означает «за всё время» — то есть один клик по вкладке молча просил бы весь реестр.
+  if (p === 'custom' && !customFrom.value && !customTo.value) return
+  reloadForPeriod()
+}
+
+watch([customFrom, customTo], () => {
+  if (period.value === 'custom') reloadForPeriod()
+})
+
+/** Показаны не все операции периода: портал отдаёт фиксированную страницу (50). */
+const truncated = computed(() =>
+  recentTotal.value !== null && recentTotal.value > recentOps.value.length
+)
 // Локальный режим форка (#39): скрывает наши промо/брендинг-баннеры (здесь — `CustomDevCard`).
 const localMode = useLocalMode()
 const items = computed<StatementItem[]>(() => (isPreviewQuery(route.query.preview) ? PREVIEW_ITEMS : recentOps.value))
@@ -681,7 +727,7 @@ onMounted(async () => {
   // «Последние операции» (#36) — реальный фид из реестра «Платежи». Не в критическом пути (список
   // может дорисоваться после `fitWindow`, как и статус): его отсутствие не должно задерживать
   // заголовок/подгонку фрейма.
-  void loadRecentOps()
+  void loadRecentOps(periodRange.value)
   // Load chat settings so the setup banner reflects the real configured state.
   await chatSettings.load()
   // Только для решения «показывать ли полосу статуса», поэтому НЕ в критическом пути:
@@ -880,13 +926,57 @@ watch(() => items.value.length, async () => {
           <!-- Operations, styled like the "Последние операции" view. -->
           <B24Card>
             <template #header>
-              <h2 class="font-semibold">
-                Последние операции
-              </h2>
+              <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <h2 class="font-semibold">
+                  Последние операции
+                </h2>
+                <!-- ⚠ Подпись периода — не украшение: без неё список и сводка над ним не отвечают
+                     на первый вопрос бухгалтера «а это за какой срок?». -->
+                <span class="text-xs text-(--ui-color-base-3)">{{ periodCaption }}</span>
+              </div>
             </template>
 
-            <!-- Filter chips -->
+            <!-- Период показа (#42). Отбор идёт по ДАТЕ ОПЕРАЦИИ, а не по времени записи. -->
             <div class="flex flex-wrap gap-2">
+              <B24Button
+                v-for="p in OPERATION_PERIOD_PRESETS"
+                :key="p.value"
+                :label="p.label"
+                :color="period === p.value ? 'air-primary' : 'air-tertiary-no-accent'"
+                :aria-pressed="period === p.value"
+                size="xs"
+                @click="setPeriod(p.value)"
+              />
+            </div>
+            <B24FormField
+              v-if="period === 'custom'"
+              label="Период"
+              hint="Пусто с одной стороны — без ограничения с этой стороны"
+              class="mt-3 max-w-90"
+            >
+              <DayRangeField
+                v-model:from="customFrom"
+                v-model:to="customTo"
+              />
+            </B24FormField>
+            <B24Alert
+              v-if="!periodValid"
+              color="air-secondary-alert"
+              title="Начало периода позже конца"
+              description="Поправьте границы — до этого список не обновляется."
+              class="mt-3"
+            />
+            <!-- Портал отдаёт фиксированную страницу реестра: длинный период в неё не влезает, и
+                 молчать об этом нельзя — иначе сводка над списком выдаёт обрезок за весь период. -->
+            <p
+              v-else-if="truncated"
+              class="mt-3 text-xs text-(--ui-color-base-3)"
+            >
+              В периоде {{ recentTotal }} операций, показаны последние {{ recentOps.length }}. Выберите срок короче, чтобы увидеть остальные.
+            </p>
+
+            <!-- Filter chips -->
+            <div class="mt-4 flex flex-wrap gap-2">
               <B24Button
                 v-for="c in chips"
                 :key="c.value"
