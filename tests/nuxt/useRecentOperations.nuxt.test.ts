@@ -16,7 +16,7 @@ vi.mock('~/composables/useFrameAuth', () => ({
   frameFetchError: (_e: unknown, f: string) => f
 }))
 
-const fetchMock = vi.fn(async () => ({ operations: [op], configured: true }))
+const fetchMock = vi.fn(async (_url: string, _opts?: unknown): Promise<unknown> => ({ operations: [op], configured: true }))
 vi.stubGlobal('$fetch', fetchMock)
 
 afterEach(() => {
@@ -43,7 +43,11 @@ describe('useRecentOperations', () => {
   it('в фрейме переносит operations и configured из ответа', async () => {
     const s = await subject()
     await s.load()
-    expect(fetchMock).toHaveBeenCalledWith('/api/import/operations', expect.anything())
+    // ⚠ Границы периода проверяем ЯВНО: с `expect.anything()` мутация «убрать query из $fetch»
+    // проходила зелёной, то есть цепочка «UI → query → роут» не была пришпилена нигде (#42).
+    expect(fetchMock).toHaveBeenCalledWith('/api/import/operations', expect.objectContaining({
+      query: { from: '', to: '' }
+    }))
     expect(s.operations.value).toEqual([op])
     expect(s.configured.value).toBe(true)
   })
@@ -63,5 +67,61 @@ describe('useRecentOperations', () => {
     expect(s.error.value).not.toBe('')
     expect(s.operations.value).toEqual([]) // остаётся пустым, а не бросает
     expect(s.loaded.value).toBe(true)
+  })
+})
+
+// ── Период (#42) ────────────────────────────────────────────────────────────────────────────────
+describe('useRecentOperations: период', () => {
+  it('границы периода доезжают до роута строкой запроса', async () => {
+    const s = await subject()
+    await s.load({ from: '2026-08-01', to: '2026-08-31' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/import/operations', expect.objectContaining({
+      query: { from: '2026-08-01', to: '2026-08-31' }
+    }))
+  })
+
+  it('total и truncated переносятся из ответа', async () => {
+    fetchMock.mockResolvedValue({ operations: [op], configured: true, total: 137, truncated: true })
+    const s = await subject()
+    await s.load()
+    expect(s.total.value).toBe(137)
+    expect(s.truncated.value).toBe(true)
+  })
+
+  // ⚠ Отказ ОЧИЩАЕТ список. Оставленные операции прежнего периода под новой подписью читались бы
+  // как данные: «за сегодня 50 платежей» вместо «мы не смогли спросить».
+  it('отказ очищает список и счётчики — они относились к другому периоду', async () => {
+    const s = await subject()
+    await s.load({ from: '2026-08-01', to: '2026-08-31' })
+    expect(s.operations.value).toEqual([op])
+    fetchMock.mockRejectedValue(new Error('нет сети'))
+    await s.load({ from: '2026-08-26', to: '2026-08-26' })
+    expect(s.operations.value).toEqual([])
+    expect(s.total.value).toBeNull()
+    expect(s.truncated.value).toBe(false)
+    expect(s.error.value).not.toBe('')
+  })
+
+  // ⚠ Гонка: период переключают кликами, и медленный ответ ПРЕДЫДУЩЕГО приходил бы после быстрого,
+  // оставляя список одного срока под подписью другого.
+  it('поздний ответ прошлого периода не затирает свежий', async () => {
+    let releaseSlow: (v: unknown) => void = () => {}
+    const slow = new Promise((res) => {
+      releaseSlow = res
+    })
+    const oldOp = { ...op, docId: 'СТАРЫЙ' }
+    fetchMock.mockImplementationOnce(async () => await slow)
+    fetchMock.mockImplementationOnce(async () => ({ operations: [op], configured: true, total: 1 }))
+
+    const s = await subject()
+    const first = s.load({ from: '2025-01-01', to: '2025-12-31' })
+    const second = s.load({ from: '2026-08-26', to: '2026-08-26' })
+    await second
+    releaseSlow({ operations: [oldOp], configured: true, total: 999, truncated: true })
+    await first
+
+    expect(s.operations.value).toEqual([op])
+    expect(s.total.value).toBe(1)
+    expect(s.truncated.value).toBe(false)
   })
 })

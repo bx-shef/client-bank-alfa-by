@@ -15,6 +15,13 @@ const props = defineProps<{
   /** Сколько строк держать по высоте, даже если их пришло меньше (страница пагинации).
    *  Ноль/не задано — не резервировать. */
   reserveRows?: number
+  /** Подпись пустого состояния (#42).
+   *
+   *  ⚠ Умолчание «Операции появятся после первой синхронизации» ВРЁТ на портале, где импорт идёт
+   *  полгода, а просто выбран короткий период: человек читает это как поломку и идёт в раздел
+   *  «не работает». Вызывающий, у которого есть период, обязан сказать про период. */
+  emptyTitle?: string
+  emptyHint?: string
 }>()
 
 const money = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -118,10 +125,10 @@ const hasItems = computed(() => props.items.length > 0)
   >
     <EmptyMessageIcon class="size-8 text-(--ui-color-base-4)" />
     <p class="font-medium">
-      Пока пусто
+      {{ emptyTitle || 'Пока пусто' }}
     </p>
     <p class="text-sm text-(--ui-color-base-3)">
-      Операции появятся после первой синхронизации.
+      {{ emptyHint || 'Операции появятся после первой синхронизации.' }}
     </p>
   </div>
 

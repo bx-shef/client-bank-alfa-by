@@ -26,16 +26,28 @@ function liveDeps(): RecentOperationsDeps {
       const result = res?.result as { ID?: unknown } | undefined
       return result?.ID != null ? String(result.ID) : ''
     },
-    loadOperations: async (memberId) => {
+    loadOperations: async (memberId, range) => {
       const call = await livePortalSdkCall(memberId)
       if (!call) return null
       const cf = parsePortalSettings(pickAppOption(await call('app.option.get', {}), SETTINGS_KEY)).recognition.configFields
       const paymentRef = paymentSpRef(cf)
       if (!paymentRef) return null // СП «Платежи» не создан → витрина покажет пустое состояние
       return withSpan('recent-ops-read', { 'portal.hash': portalHash(memberId) }, async () => {
-        const listCall = buildRecentOperationsListCall(paymentRef)
+        const listCall = buildRecentOperationsListCall(paymentRef, range)
         const res = await call(listCall.method, listCall.params)
-        return mapRecentOperations(extractListItems(res), paymentRef)
+        // `total` — сколько операций в ПЕРИОДЕ; страницу задаёт портал, и без этого числа витрина
+        // выдавала бы обрезок за весь период (#42). Портал не сообщил ⇒ `null`, а не 0: ноль
+        // означал бы «в периоде пусто» при непустом списке на экране.
+        const raw = extractListItems(res)
+        const total = typeof res?.total === 'number' ? res.total : null
+        // ⚠ Обрезка считается по СЫРОЙ странице, до маппинга: маппер отбрасывает элементы без
+        // валидной суммы, и сравнение с длиной результата объявляло бы обрезку из-за одного
+        // испорченного руками элемента — с советом, который не помог бы никогда.
+        return {
+          operations: mapRecentOperations(raw, paymentRef),
+          total,
+          truncated: total !== null && total > raw.length
+        }
       })
     }
   }
@@ -47,7 +59,9 @@ export default defineEventHandler(async (event) => {
   return withFrameRouteSpan(
     { name: 'http.import-operations.get', method: 'GET', op: 'import.operations', domain },
     async (span) => {
-      const { status, body } = await handleRecentOperations(liveDeps(), { accessToken: token, domain })
+      const q = getQuery(event)
+      const range = { from: String(q.from ?? '').trim(), to: String(q.to ?? '').trim() }
+      const { status, body } = await handleRecentOperations(liveDeps(), { accessToken: token, domain, range })
       span.outcome = httpOutcomeForStatus(status)
       setResponseStatus(event, status)
       return body

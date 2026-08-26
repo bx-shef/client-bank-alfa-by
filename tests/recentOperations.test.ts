@@ -85,15 +85,44 @@ describe('mapRecentOperations', () => {
 })
 
 describe('buildRecentOperationsListCall', () => {
+  // Имя поля даты в форме, которую отдаёт портал (camel), — по нему идут и фильтр, и сортировка.
+  const DATE_FIELD = 'ufCrm3OpDate'
+
   it('свежие сверху, первая страница, select:[*] для всех полей (#41)', () => {
     const call = buildRecentOperationsListCall(SP)
     expect(call.method).toBe('crm.item.list')
     expect(call.params.entityTypeId).toBe(1044)
-    expect(call.params.order).toEqual({ id: 'DESC' })
     expect(call.params.start).toBe(0)
     // ⚠ `select: ['*']`, а не перечень полей: явный select недавно добавленных UF-полей СП на живом
     // портале не возвращал поля реестра #575 (см. комментарий в recentOperations.ts). По документации
     // `'*'` отдаёт ВСЕ поля, включая UF; опускать select нельзя — UF-поля тогда не гарантированы.
     expect(call.params.select).toEqual(['*'])
+  })
+
+  // ⚠ Сортировка по ДАТЕ ОПЕРАЦИИ, а не по `id`: ручная загрузка старой выписки создаёт свежие
+  // элементы старых операций, и порядок по `id` показал бы их первыми под подписью «за неделю».
+  // Второй ключ `id` обязателен — у операций одного дня даты равны, и без него порядок ничьей не
+  // определён, то есть строки прыгали бы между запросами.
+  it('сортировка: дата операции убыв., вторым ключом id убыв.', () => {
+    const order = buildRecentOperationsListCall(SP).params.order as Record<string, string>
+    expect(Object.entries(order)).toEqual([[DATE_FIELD, 'DESC'], ['id', 'DESC']])
+  })
+
+  // ── Период (#42) ─────────────────────────────────────────────────────────────────────────────
+  it('обе границы → включающий фильтр по полю даты операции', () => {
+    const call = buildRecentOperationsListCall(SP, { from: '2026-08-01', to: '2026-08-31' })
+    expect(call.params.filter).toEqual({
+      [`>=${DATE_FIELD}`]: '2026-08-01',
+      [`<=${DATE_FIELD}`]: '2026-08-31'
+    })
+  })
+
+  // ⚠ Пустая граница — условие НЕ ставится вовсе. Подставь мы сюда пустую строку, портал сравнивал
+  // бы дату с пустым значением, и «с 1 августа по сегодня» превратилось бы в неизвестно что.
+  it('пустая граница не ставит условия', () => {
+    expect(buildRecentOperationsListCall(SP, { from: '2026-08-01', to: '' }).params.filter)
+      .toEqual({ [`>=${DATE_FIELD}`]: '2026-08-01' })
+    expect(buildRecentOperationsListCall(SP, { from: '', to: '' }).params.filter).toEqual({})
+    expect(buildRecentOperationsListCall(SP).params.filter).toEqual({})
   })
 })
