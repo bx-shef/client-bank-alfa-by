@@ -298,11 +298,13 @@ export function liveHandlerDeps(): HandlerDeps {
     // ⚠ В отличие от соседа выше, отсутствие токена здесь `missing`, а НЕ throw: эта запись идёт
     // поверх УЖЕ обработанной операции (дело создано прошлым прогоном), и валить из-за неё разбор
     // остальной пачки нечем оправдать. Хендлер считает исход и печатает его в итоге прогона.
-    backfillRegistry: async (item, memberId, provider, paymentSp) => {
-      if (isDemoAccount(item.account)) return 'missing'
+    backfillRegistry: async (item, companyId, memberId, provider, paymentSp) => {
+      if (isDemoAccount(item.account)) return 'already'
       const call = await resolvePortalCall(memberId)
-      if (!call) return 'missing'
-      return await backfillPaymentRegistryViaRest(item, provider, paymentSp, call)
+      // ⚠ Нет токена — `already`, а НЕ throw: запись идёт поверх уже обработанной операции (дело
+      // создано прошлым прогоном), и валить из-за неё разбор остальной пачки нечем оправдать.
+      if (!call) return 'already'
+      return await backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
