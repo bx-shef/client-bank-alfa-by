@@ -785,4 +785,19 @@ describe('ПОЧЕМУ истекло — строкой, а не всплыва
     const w = await mountReady()
     expect(w.find('[data-testid="health-hint-1"]').exists()).toBe(false)
   })
+
+  it('«нет refresh-токена» — строка тоже показывается, и говорит про БАНК, а не про наш сервер', async () => {
+    // ⚠ Находка ревью: строка гейтится списком `NEEDS_HUMAN_HEALTH`, а в нём ДВА состояния, не
+    // одно. Проверялось только `expired` — то есть половина показов подсказки не была покрыта
+    // ничем, включая единственный случай, где переподключение и есть верный совет при СВЕЖЕМ
+    // подключении.
+    listReply.value = [deadRow({ hasRefresh: false, connectedAt: Date.now(), lastAttemptAt: 0 })]
+    const w = await mountReady()
+    const hint = w.find('[data-testid="health-hint-1"]')
+    expect(hint.exists(), 'у состояния «нет refresh-токена» подсказки нет вовсе').toBe(true)
+    expect(hint.text()).toContain('переподключите счёт')
+    // Разбор причин истечения сюда не примешивается: здесь нечем продлевать в принципе, и
+    // «мы ни разу не пытались» было бы про другое — совет остаётся верным.
+    expect(hint.text()).not.toContain('НИ РАЗУ')
+  })
 })

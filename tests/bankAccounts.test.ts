@@ -21,7 +21,11 @@ import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 
 const ROW: BankAccountInfo = {
   id: 42,
-  lastAttemptAt: 0,
+  // ⚠ НЕНУЛЕВОЕ по той же причине, что `consentExpiresAt` ниже (находка ревью): с нулём обе
+  // проверки поля сводились к «0 === 0», и мутация `lastAttemptAt: 0` прямо в проекции роута
+  // проходила зелёной. Ноль ловил только ПРОПАЖУ ключа, но не подмену его константой — а поле
+  // несущее: на нём держится `expiredCause` («банк отказал» против «мы не пытались»).
+  lastAttemptAt: 1_700_000_123_000,
   memberId: 'M1',
   provider: 'alfa-by',
   accountKey: 'BY01ALFA0001',

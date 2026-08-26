@@ -204,9 +204,19 @@ export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): 
  * ⚠ Пустой грант не группирует — тем же правилом, что и везде: он значит «не размечено», а не
  * «общий», и склейка по нему разослала бы метку чужим подключениям портала.
  */
+/**
+ * Что нужно `markBankRefreshAttempt`, чтобы найти строку: грант (а при пустом гранте — счёт).
+ *
+ * ⚠ УЖЕ, чем `BankAccountRef`, и намеренно: отметку ставят ДВА пути продления (#488), и у второго —
+ * `ensureBankToken` — на руках `BankToken`, у которого нет и не должно быть `pollPaused` (пауза
+ * относится к опросу, а не к токену). Требовать здесь полный `BankAccountRef` значило бы заставить
+ * вызывающего выдумать поле, которое эта функция не читает, — а выдуманное поле однажды прочтут.
+ */
+export type BankAttemptRef = Pick<BankAccountRef, 'memberId' | 'provider' | 'accountKey'> & { grantId?: string }
+
 export async function markBankRefreshAttempt(
   query: QueryFn,
-  ref: BankAccountRef,
+  ref: BankAttemptRef,
   nowMs: number
 ): Promise<void> {
   await query(

@@ -1022,7 +1022,7 @@ describe('SQL-контракт: метка попытки адресуется �
     // НЕУДАЧЕ сбросил бы возраст — подключение выглядело бы свежим ровно когда ломается.
     const { query, calls } = fakeQuery()
     await markBankRefreshAttempt(query, {
-      memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01', pollPaused: false, grantId: 'G1'
+      memberId: 'm1', provider: 'alfa-by', accountKey: 'BY01', grantId: 'G1'
     }, 1_700_000_000_000)
     const sql = calls[0]!.sql
     expect(sql).toMatch(/WHERE\s+member_id = \$1 AND provider = \$2/)
