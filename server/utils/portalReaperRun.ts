@@ -26,6 +26,7 @@ import {
   reapVerdict
 } from '../../app/utils/portalReaper'
 import { portalHash } from './telemetryAttributes'
+import type { PortalPurgeReason } from '../queue/handlers'
 
 /** Инъектируемые side-effects — чтобы правило тестировалось без базы. */
 export interface PortalReaperDeps {
@@ -38,7 +39,7 @@ export interface PortalReaperDeps {
    *  что решение перепроверяется чистым правилом — см. `runPortalReaper`. */
   selectReapable: (beforeMs: number, limit: number) => Promise<{ memberId: string, revokedAtMs: number }[]>
   /** Полная чистка портала — ТОТ ЖЕ путь, что у штатного `ONAPPUNINSTALL`. */
-  deletePortal: (memberId: string, eventTs: number) => Promise<void>
+  deletePortal: (memberId: string, eventTs: number, reason: PortalPurgeReason) => Promise<void>
   /** Стирать ли на самом деле. `false` — только считаем и показываем. */
   reapEnabled: boolean
   log?: (msg: string) => void
@@ -124,7 +125,10 @@ export async function runPortalReaper(deps: PortalReaperDeps, days: number): Pro
       continue
     }
     try {
-      await deps.deletePortal(memberId, eventTs)
+      // ⚠ `grant-dead`, а НЕ `uninstall` (#641): клиент приложение не удалял, он просто исчез.
+      // Общая функция стирания пишет строку аудита, и без явного повода она заявила бы оператору
+      // «приложение УДАЛЕНО» о том, что сделала наша собственная автоматика.
+      await deps.deletePortal(memberId, eventTs, 'grant-dead')
       s.reaped++
       // ⚠ Каждое удаление — отдельной ГРОМКОЙ строкой, а не только числом в итоге. Это
       // необратимое стирание чужих данных: если оно однажды сработает не на том портале, узнать,

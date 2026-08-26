@@ -51,7 +51,35 @@ export interface DisconnectDeps extends BankAccountsDeps {
    *
    * ⚠ Необязательная: журнал не должен быть условием работоспособности действия.
    */
-  audit?: (entry: { memberId: string, userId: string, provider: string, id: number }) => void
+  audit?: (entry: BankDisconnectAudit) => void
+}
+
+/** Что записать о состоявшемся отключении. */
+export interface BankDisconnectAudit {
+  memberId: string
+  userId: string
+  provider: string
+  /** Неизменяемый адрес строки `bank_tokens` (#517). Номера счёта тут НЕТ — лог живёт до
+   *  вытеснения по объёму (#617), а для разбора хватает `id`. */
+  id: number
+}
+
+/**
+ * Текст записи об отключении — ЧИСТЫМ билдером, а не шаблоном внутри проводки роута.
+ *
+ * ⚠ Находка ревью тестировщика: пока строка собиралась инлайн, единственной её проверкой был
+ * `toContain('подключение ОТКЛЮЧЕНО пользователем')` по исходнику. Мутация «поменять местами
+ * `${provider}` и `${id}`» проходила зелёной — то есть сломать можно было ровно то, ради чего
+ * запись и делается (какой банк и какую строку отключили), не уронив ни одного теста. У проекта
+ * для этого есть устоявшийся приём (`buildOpLogLine`, `runSummaryLine`), он и применён.
+ *
+ * ⚠ Портал в открытом виде — как у соседней паузы того же канала: строка `portal_tokens` остаётся
+ * жить, и довод «лог — единственный переживший след» (по которому хеширует уборщик) здесь не
+ * работает.
+ */
+export function bankDisconnectAuditLine(e: BankDisconnectAudit): string {
+  return `portal ${e.memberId}: ${e.provider} #${e.id} — подключение ОТКЛЮЧЕНО пользователем ${e.userId || '—'}`
+    + ' (необратимо, нужен повторный вход в интернет-банк)'
 }
 
 export interface PausePollDeps extends BankAccountsDeps {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bankDisconnectAuditLine,
   handleAddBankAccount,
   handleDisconnectBankAccount,
   handleListBankAccounts,
@@ -218,6 +219,27 @@ describe('handleDisconnectBankAccount', () => {
       const { deps, seen } = withAudit({ validateFrame: async () => ({ userId: '9', isAdmin: false }) })
       expect((await handleDisconnectBankAccount(deps, body)).status).toBe(403)
       expect(seen).toEqual([])
+    })
+
+    it('⚠ ТЕКСТ записи проверяется на КАЖДОМ поле — иначе его можно сломать молча', () => {
+      // Находка ревью тестировщика: пока строка собиралась шаблоном внутри проводки роута,
+      // единственной её проверкой было `toContain('подключение ОТКЛЮЧЕНО пользователем')` по
+      // исходнику. Мутация «поменять местами `${provider}` и `${id}`» проходила зелёной — то есть
+      // сломать можно было ровно то, ради чего запись и делается.
+      const line = bankDisconnectAuditLine({ memberId: 'M1', userId: '7', provider: 'alfa-by', id: 42 })
+      expect(line).toContain('portal M1:')
+      expect(line, 'банк и адрес строки перепутаны местами').toContain('alfa-by #42')
+      expect(line).toContain('пользователем 7')
+      expect(line, 'запись не говорит, что действие необратимо').toContain('необратимо')
+      // ⚠ Номера счёта в записи быть не должно: лог живёт до вытеснения по объёму (#617).
+      expect(line).not.toMatch(/BY\d{2}[A-Z]{4}/)
+    })
+
+    it('неизвестный пользователь не превращается в пустое место', () => {
+      // `validateFrame` отдаёт пустую строку, когда портал не вернул `profile.ID`. Без фолбэка
+      // строка обрывалась бы на «пользователем », и читатель решил бы, что запись битая.
+      expect(bankDisconnectAuditLine({ memberId: 'M1', userId: '', provider: 'alfa-by', id: 42 }))
+        .toContain('пользователем —')
     })
 
     it('журнал НЕОБЯЗАТЕЛЕН: без него отключение работает как прежде', async () => {

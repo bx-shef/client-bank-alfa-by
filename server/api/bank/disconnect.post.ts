@@ -10,7 +10,7 @@
 // browser rendered found nothing and answered the same `200 {removed:false}` as honest
 // idempotency — reporting success while the app kept reaching into the client's bank.
 
-import { handleDisconnectBankAccount, type DisconnectDeps } from '../../utils/bankAccounts'
+import { bankDisconnectAuditLine, handleDisconnectBankAccount, type DisconnectDeps } from '../../utils/bankAccounts'
 import { useServerLogger } from '../../utils/serverLogger'
 import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
@@ -20,8 +20,8 @@ import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
 
-// ⚠ Канал ПЕРЕИСПОЛЬЗУЕТСЯ (`bank-connect`), как у паузы: имена каналов — маркеры, по которым
-// грепает рантбук, и новый канал на одно действие пришлось бы заводить во все инструменты.
+// ⚠ The channel is REUSED (`bank-connect`), same as pause: channel names are the markers the
+// runbook greps for, and a new channel per action would have to be taught to every tool.
 const bankLog = useServerLogger('bank-connect')
 
 function liveDeps(): DisconnectDeps {
@@ -33,12 +33,11 @@ function liveDeps(): DisconnectDeps {
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
     remove: (memberId, id, expectedAccountKey) => deleteBankTokenById(dbQuery, memberId, id, expectedAccountKey),
-    // ⚠ След в журнале: КТО оборвал связь с банком (#641). До этого ОБРАТИМАЯ пауза писала имя
-    // нажавшего, а НЕОБРАТИМОЕ отключение — ничего: живой разбор упёрся ровно в это, строк
-    // `bank_tokens` не осталось, а кто их убрал, было неоткуда узнать. Номера счёта в строке НЕТ —
-    // лог живёт до вытеснения по объёму (#617), а `id` строки для разбора достаточно.
-    audit: ({ memberId, userId, provider, id }) =>
-      bankLog.warning(`portal ${memberId}: ${provider} #${id} — подключение ОТКЛЮЧЕНО пользователем ${userId || '—'} (необратимо, нужен повторный вход в интернет-банк)`)
+    // Audit trail: WHO cut the bank link (#641). The REVERSIBLE pause already logged who pressed
+    // it; the IRREVERSIBLE disconnect logged nothing — a live post-mortem ran straight into that:
+    // no `bank_tokens` rows left and no way to learn who removed them. The text is built by a pure
+    // function so it can be tested; inline, a swap of `provider` and `id` passed every check.
+    audit: entry => bankLog.warning(bankDisconnectAuditLine(entry))
   }
 }
 
