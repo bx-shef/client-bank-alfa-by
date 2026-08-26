@@ -14,7 +14,7 @@ function deps(over: Partial<RecentOperationsDeps> = {}): RecentOperationsDeps {
   return {
     memberIdByDomain: async () => 'M1',
     validateFrame: async () => '7',
-    loadOperations: async () => ({ operations: [op], total: 1 }),
+    loadOperations: async () => ({ operations: [op], total: 1, truncated: false }),
     ...over
   }
 }
@@ -25,13 +25,15 @@ describe('handleRecentOperations', () => {
   it('200 с операциями и configured=true', async () => {
     const res = await handleRecentOperations(deps(), input)
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ operations: [op], configured: true, total: 1 })
+    expect(res.body).toEqual({ operations: [op], configured: true, total: 1, truncated: false })
   })
 
   it('СП не создан (loadOperations=null) → 200, пусто, configured=false', async () => {
     const res = await handleRecentOperations(deps({ loadOperations: async () => null }), input)
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ operations: [], configured: false, total: 0 })
+    // ⚠ `total: null`, а не `0`: СП не создан — период НИКТО не спрашивал, и «в периоде пусто» было
+    // бы уверенным ответом о непроверенном.
+    expect(res.body).toEqual({ operations: [], configured: false, total: null, truncated: false })
   })
 
   it('401 без токена/домена', async () => {
@@ -57,7 +59,7 @@ describe('handleRecentOperations', () => {
       validateFrame: async () => { throw new Error('bad') },
       loadOperations: async () => {
         touched = true
-        return { operations: [op], total: 1 }
+        return { operations: [op], total: 1, truncated: false }
       }
     })
     await handleRecentOperations(d, input)
@@ -72,7 +74,7 @@ describe('handleRecentOperations: период', () => {
     const d = deps({
       loadOperations: async (_m, range) => {
         seen = range
-        return { operations: [], total: 0 }
+        return { operations: [], total: 0, truncated: false }
       }
     })
     await handleRecentOperations(d, { ...input, range: { from: '2026-08-01', to: '2026-08-31' } })
@@ -86,7 +88,7 @@ describe('handleRecentOperations: период', () => {
     const d = deps({
       loadOperations: async () => {
         called = true
-        return { operations: [], total: 0 }
+        return { operations: [], total: 0, truncated: false }
       }
     })
     const res = await handleRecentOperations(d, { ...input, range: { from: '2026-02-31', to: '' } })
@@ -102,9 +104,20 @@ describe('handleRecentOperations: период', () => {
   // `total` больше длины списка — портал отдал только первую страницу; витрина обязана это знать,
   // иначе сводка над списком выдаёт обрезок за весь период.
   it('total пробрасывается как есть, включая null', async () => {
-    const many = await handleRecentOperations(deps({ loadOperations: async () => ({ operations: [op], total: 120 }) }), input)
-    expect((many.body as { total: number | null }).total).toBe(120)
-    const unknown = await handleRecentOperations(deps({ loadOperations: async () => ({ operations: [op], total: null }) }), input)
+    const many = await handleRecentOperations(deps({ loadOperations: async () => ({ operations: [op], total: 120, truncated: true }) }), input)
+    expect((many.body as { total: number | null, truncated: boolean }).total).toBe(120)
+    expect((many.body as { truncated: boolean }).truncated).toBe(true)
+    const unknown = await handleRecentOperations(deps({ loadOperations: async () => ({ operations: [op], total: null, truncated: false }) }), input)
     expect((unknown.body as { total: number | null }).total).toBeNull()
+  })
+
+  // ⚠ Порядок гейтов закрепляем: сперва «есть ли чем доказать, что ты этого портала», и только
+  // потом разбор собственного ввода. Иначе 400 на кривой период отвечал бы КОМУ УГОДНО раньше
+  // 401 — а различать наши ответы, не предъявив ничего, посторонний не должен.
+  it('без токена — 401, даже если период тоже кривой', async () => {
+    const res = await handleRecentOperations(deps(), {
+      accessToken: '', domain: '', range: { from: '2026-02-31', to: '' }
+    })
+    expect(res.status).toBe(401)
   })
 })

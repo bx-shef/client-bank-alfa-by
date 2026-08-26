@@ -35,11 +35,19 @@ function liveDeps(): RecentOperationsDeps {
       return withSpan('recent-ops-read', { 'portal.hash': portalHash(memberId) }, async () => {
         const listCall = buildRecentOperationsListCall(paymentRef, range)
         const res = await call(listCall.method, listCall.params)
-        // `total` — сколько операций в ПЕРИОДЕ; страница фиксированная (50), и без этого числа
-        // витрина выдавала бы обрезок за весь период (#42). Портал не сообщил ⇒ `null`, а не 0:
-        // ноль означал бы «в периоде пусто» при непустом списке на экране.
+        // `total` — сколько операций в ПЕРИОДЕ; страницу задаёт портал, и без этого числа витрина
+        // выдавала бы обрезок за весь период (#42). Портал не сообщил ⇒ `null`, а не 0: ноль
+        // означал бы «в периоде пусто» при непустом списке на экране.
+        const raw = extractListItems(res)
         const total = typeof res?.total === 'number' ? res.total : null
-        return { operations: mapRecentOperations(extractListItems(res), paymentRef), total }
+        // ⚠ Обрезка считается по СЫРОЙ странице, до маппинга: маппер отбрасывает элементы без
+        // валидной суммы, и сравнение с длиной результата объявляло бы обрезку из-за одного
+        // испорченного руками элемента — с советом, который не помог бы никогда.
+        return {
+          operations: mapRecentOperations(raw, paymentRef),
+          total,
+          truncated: total !== null && total > raw.length
+        }
       })
     }
   }

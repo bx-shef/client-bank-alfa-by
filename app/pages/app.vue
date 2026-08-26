@@ -14,6 +14,7 @@ import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { pageTitle } from '~/utils/landing'
+import { pluralRu } from '~/utils/importStatus'
 import { useLogger } from '~/utils/logger'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import {
@@ -502,38 +503,75 @@ const route = useRoute()
 // «Последние операции» (#5/#36): в портале — реальный фид из реестра «Платежи» (`useRecentOperations`),
 // под `?preview=1` — синтетический демо-набор для скриншотов и визуальных тестов. Раньше в портале
 // список был жёстко пуст, хотя реестр в настройках уже показывал те же операции своим endpoint'ом.
-const { operations: recentOps, total: recentTotal, load: loadRecentOps } = useRecentOperations()
+const {
+  operations: recentOps, total: recentTotal, truncated: recentTruncated,
+  loading: recentLoading, error: recentError, load: loadRecentOps
+} = useRecentOperations()
 
 // ── Период показа (#42) ────────────────────────────────────────────────────────────────────────
-// ⚠ Витрина брала последние 50 элементов реестра БЕЗ привязки к датам и без единого слова о том,
-// за какой это срок — а «Сводка по операциям» над списком считалась по тому же набору, то есть
-// числа тоже были «за неизвестно что». Поэтому селектор и ПОДПИСЬ появляются вместе.
+// ⚠ Витрина брала последние записи реестра БЕЗ привязки к датам и без единого слова о том, за какой
+// это срок — а «Сводка по операциям» над списком считалась по тому же набору, то есть числа тоже
+// были «за неизвестно что». Поэтому селектор и ПОДПИСЬ появляются вместе.
 const period = ref<OperationPeriodPreset>(DEFAULT_OPERATION_PERIOD)
 const customFrom = ref('')
 const customTo = ref('')
-// ⚠ «Сегодня» берём по ЛОКАЛЬНЫМ часам и ОДИН раз на монтирование: период — календарь бухгалтера,
-// а не пояс сервера; пересчёт на каждый рендер двигал бы границу в полночь под открытым экраном.
-const today = ref(todayIsoDay())
-const periodRange = computed<DayRange>(() =>
-  operationPeriodRange(period.value, today.value, { from: customFrom.value, to: customTo.value })
-)
-const periodCaption = computed(() => operationPeriodCaption(periodRange.value))
-// Произвольный диапазон человек набирает по одной границе, и промежуточное состояние бывает
-// перевёрнутым — запрашивать его нельзя, но и ошибкой это не является: подсказываем и ждём.
-const periodValid = computed(() => isValidDayRange(periodRange.value))
 
-/** Перезапросить фид под текущий период. Вне портала (`?preview=1`) инертно — там демо-набор. */
+/**
+ * «Сегодня» для расчёта периода.
+ *
+ * ⚠ Под `?preview=1` день ФИКСИРОВАН, и это не удобство, а два требования сразу. Первое: подпись
+ * периода попадает в визуальные эталоны, а настоящая дата меняется каждые сутки — джоба краснела бы
+ * ежедневно, и «красное не по делу» кончается тем, что тест отключают. Второе: демо-набор
+ * синтетический и датирован июнем, поэтому под сегодняшней подписью он показывал бы операции
+ * ЗАВЕДОМО НЕ ТОГО срока — ровно та ложь, ради устранения которой задача и заведена.
+ * Значение — последний день демо-набора, поэтому месячное умолчание накрывает его целиком.
+ */
+const PREVIEW_TODAY = '2026-06-24'
+const previewMode = computed(() => isPreviewQuery(route.query.preview))
+function periodToday(): string {
+  return previewMode.value ? PREVIEW_TODAY : todayIsoDay()
+}
+
+/** Период, ВЫБРАННЫЙ в контролах. Это ещё не то, что на экране. */
+const pickedRange = computed<DayRange>(() =>
+  operationPeriodRange(period.value, periodToday(), { from: customFrom.value, to: customTo.value })
+)
+// ⚠ Подпись описывает ПРИМЕНЁННЫЙ период, а не выбранный. Иначе она обгоняла бы данные: клик по
+// «Диапазон» с пустыми границами (запрос при этом намеренно не уходит) мгновенно писал бы «за всё
+// время» над месячным списком, а каждое переключение пресета на секунду подписывало бы старые
+// операции новым сроком — ровно та ложь, ради запрета которой сервер отвечает 400 на кривую границу.
+const appliedRange = ref<DayRange>(operationPeriodRange(DEFAULT_OPERATION_PERIOD, periodToday()))
+const periodCaption = computed(() => operationPeriodCaption(appliedRange.value))
+
+/**
+ * Готов ли выбранный период к запросу.
+ *
+ * ⚠ У произвольного диапазона требуем ОБЕ границы. Пустой диапазон означает «за всё время», то
+ * есть один клик по вкладке (или кнопка «Сбросить» в поле) молча просил бы весь реестр портала; а
+ * выбор в календаре проходит через промежуточное состояние с одной границей, и без этого условия
+ * каждый выбор периода стоил бы лишнего тяжёлого запроса с чужим сроком. Готовые пресеты —
+ * всегда полные, у них границы считает код.
+ */
+const periodReady = computed(() =>
+  period.value !== 'custom'
+    ? true
+    : Boolean(customFrom.value && customTo.value) && isValidDayRange(pickedRange.value)
+)
+/** Диапазон выбран задом наперёд — это состояние ввода, а не ошибка: подсказываем и ждём. */
+const periodReversed = computed(() =>
+  period.value === 'custom' && Boolean(customFrom.value && customTo.value) && !isValidDayRange(pickedRange.value)
+)
+
+/** Перезапросить фид под выбранный период. Вне портала (`?preview=1`) инертно — там демо-набор. */
 function reloadForPeriod(): void {
-  if (!periodValid.value) return
+  if (!periodReady.value) return
   page.value = 1
-  void loadRecentOps(periodRange.value)
+  appliedRange.value = pickedRange.value
+  void loadRecentOps(appliedRange.value)
 }
 
 function setPeriod(p: OperationPeriodPreset): void {
   period.value = p
-  // ⚠ Переход на «Диапазон» СРАЗУ ничего не запрашивает: границы ещё пусты, а пустой диапазон
-  // означает «за всё время» — то есть один клик по вкладке молча просил бы весь реестр.
-  if (p === 'custom' && !customFrom.value && !customTo.value) return
   reloadForPeriod()
 }
 
@@ -541,13 +579,23 @@ watch([customFrom, customTo], () => {
   if (period.value === 'custom') reloadForPeriod()
 })
 
-/** Показаны не все операции периода: портал отдаёт фиксированную страницу (50). */
-const truncated = computed(() =>
-  recentTotal.value !== null && recentTotal.value > recentOps.value.length
+// ⚠ Признак превью на ПРЕРЕНДЕРЕННОЙ странице появляется ПОЗЖЕ монтирования: Nuxt восстанавливает
+// отложенный адрес на `app:suspense:resolve`, то есть после `onMounted` (#555). Поэтому применённый
+// период нельзя снять один раз — иначе под `?preview=1` подпись остаётся с НАСТОЯЩИМ днём, а
+// эталоны визуальных тестов краснеют каждые сутки (замерено на собранной статике: список июньский,
+// подпись августовская — ровно та ложь, ради устранения которой задача заведена).
+watch(previewMode, () => {
+  appliedRange.value = pickedRange.value
+})
+
+/** Число операций периода со склонением — «В периоде 1 операция», а не «1 операций». */
+const totalLabel = computed(() =>
+  `${recentTotal.value ?? 0} ${pluralRu(recentTotal.value ?? 0, ['операция', 'операции', 'операций'])}`
 )
+
 // Локальный режим форка (#39): скрывает наши промо/брендинг-баннеры (здесь — `CustomDevCard`).
 const localMode = useLocalMode()
-const items = computed<StatementItem[]>(() => (isPreviewQuery(route.query.preview) ? PREVIEW_ITEMS : recentOps.value))
+const items = computed<StatementItem[]>(() => (previewMode.value ? PREVIEW_ITEMS : recentOps.value))
 const byDirection = computed(() => splitByDirection(items.value))
 
 // Filter chips (labels keep the "(N)" counts). Default "all" shows everything.
@@ -727,7 +775,10 @@ onMounted(async () => {
   // «Последние операции» (#36) — реальный фид из реестра «Платежи». Не в критическом пути (список
   // может дорисоваться после `fitWindow`, как и статус): его отсутствие не должно задерживать
   // заголовок/подгонку фрейма.
-  void loadRecentOps(periodRange.value)
+  // ⚠ Период пересчитываем ЗДЕСЬ, а не только в `setup`: страница пререндерится, и вычисленный на
+  // сборке день попал бы в статику — вкладка, открытая через сутки, спрашивала бы вчерашний срок.
+  appliedRange.value = pickedRange.value
+  void loadRecentOps(appliedRange.value)
   // Load chat settings so the setup banner reflects the real configured state.
   await chatSettings.load()
   // Только для решения «показывать ли полосу статуса», поэтому НЕ в критическом пути:
@@ -906,10 +957,14 @@ watch(() => items.value.length, async () => {
                то есть настроенный портал остался бы и без статуса импорта, и без кнопки
                «Проверить настройки», ради которой полоса и заведена. -->
           <div class="flex flex-col lg:flex-row items-start justify-between gap-4">
+            <!-- ⚠ Период — В ЗАГОЛОВКЕ сводки, а не только над списком ниже: задача заведена ровно
+                 потому, что числа над списком были «за неизвестно что», и селектор без подписи
+                 ЗДЕСЬ оставил бы дефект на месте, добавив ощущение, что он исправлен. -->
             <ImportStatsChart
               v-if="items.length"
               :items="items"
-              title="Сводка по операциям"
+              :title="`Сводка по операциям ${periodCaption}`"
+              :note="recentTruncated ? `Показаны не все: в периоде ${totalLabel}, портал отдал последние ${recentOps.length}.` : ''"
               class="w-full"
             />
             <div class="w-full lg:max-w-105 shrink-0 flex flex-col items-center justify-between gap-4">
@@ -937,21 +992,26 @@ watch(() => items.value.length, async () => {
             </template>
 
             <!-- Период показа (#42). Отбор идёт по ДАТЕ ОПЕРАЦИИ, а не по времени записи. -->
-            <div class="flex flex-wrap gap-2">
+            <div
+              role="group"
+              aria-label="Период показа операций"
+              class="flex flex-wrap items-center gap-2"
+            >
+              <span class="text-xs text-(--ui-color-base-3)">Период:</span>
               <B24Button
                 v-for="p in OPERATION_PERIOD_PRESETS"
                 :key="p.value"
                 :label="p.label"
                 :color="period === p.value ? 'air-primary' : 'air-tertiary-no-accent'"
                 :aria-pressed="period === p.value"
-                size="xs"
+                size="sm"
                 @click="setPeriod(p.value)"
               />
             </div>
             <B24FormField
               v-if="period === 'custom'"
-              label="Период"
-              hint="Пусто с одной стороны — без ограничения с этой стороны"
+              label="Свой период"
+              hint="Нужны обе границы — иначе запрос ушёл бы за весь реестр"
               class="mt-3 max-w-90"
             >
               <DayRangeField
@@ -959,24 +1019,42 @@ watch(() => items.value.length, async () => {
                 v-model:to="customTo"
               />
             </B24FormField>
-            <B24Alert
-              v-if="!periodValid"
-              color="air-secondary-alert"
-              title="Начало периода позже конца"
-              description="Поправьте границы — до этого список не обновляется."
-              class="mt-3"
-            />
-            <!-- Портал отдаёт фиксированную страницу реестра: длинный период в неё не влезает, и
-                 молчать об этом нельзя — иначе сводка над списком выдаёт обрезок за весь период. -->
-            <p
-              v-else-if="truncated"
-              class="mt-3 text-xs text-(--ui-color-base-3)"
-            >
-              В периоде {{ recentTotal }} операций, показаны последние {{ recentOps.length }}. Выберите срок короче, чтобы увидеть остальные.
-            </p>
+            <div aria-live="polite">
+              <B24Alert
+                v-if="periodReversed"
+                color="air-primary-alert"
+                title="Начало периода позже конца"
+                description="Поправьте границы — до этого список не обновляется."
+                class="mt-3"
+              />
+              <!-- ⚠ Отказ обязан быть ВИДЕН: список при нём очищается, и без сообщения пустой экран
+                   под подписью периода читался бы как «за этот срок платежей не было». -->
+              <B24Alert
+                v-else-if="recentError"
+                color="air-primary-alert"
+                title="Не удалось загрузить операции"
+                :description="recentError"
+                class="mt-3"
+              />
+              <!-- Портал отдаёт фиксированную страницу реестра: длинный период в неё не влезает, и
+                   молчать об этом нельзя — иначе сводка выдаёт обрезок за весь период. Обрезку
+                   считает СЕРВЕР по сырой странице (маппер отбрасывает битые элементы, и сравнение
+                   с длиной списка объявляло бы обрезку там, где её нет). -->
+              <p
+                v-else-if="recentTruncated"
+                class="mt-3 text-xs text-(--ui-color-base-3)"
+              >
+                В периоде {{ totalLabel }} — загружены последние {{ recentOps.length }}. Более короткий срок покажет остальные; весь реестр целиком — в смарт-процессе «Платежи».
+              </p>
+            </div>
 
             <!-- Filter chips -->
-            <div class="mt-4 flex flex-wrap gap-2">
+            <div
+              role="group"
+              aria-label="Направление операций"
+              class="mt-4 flex flex-wrap items-center gap-2"
+            >
+              <span class="text-xs text-(--ui-color-base-3)">Показывать:</span>
               <B24Button
                 v-for="c in chips"
                 :key="c.value"
@@ -996,9 +1074,14 @@ watch(() => items.value.length, async () => {
 
             <!-- `reserve-rows` держит высоту страницы: последняя страница короче, и без резерва
                  кнопки пагинации прыгали вверх под курсором. -->
+            <!-- ⚠ Пустое состояние называет ПЕРИОД: умолчание «появятся после первой
+                 синхронизации» на портале с полугодом импорта читается как поломка, хотя причина —
+                 выбранный срок. Пока грузим — молчим о причинах вовсе. -->
             <OperationList
               :items="paged"
               :reserve-rows="shown.length > perPage ? perPage : 0"
+              :empty-title="recentLoading ? 'Загружаем…' : (status.state === 'never' ? '' : 'За выбранный период операций нет')"
+              :empty-hint="recentLoading ? 'Спрашиваем портал за выбранный период.' : (status.state === 'never' ? '' : `Показано ${periodCaption}. Выберите срок длиннее, если ждёте более ранние операции.`)"
             />
 
             <!-- Pagination shows only when operations overflow a page (real data). -->

@@ -47,9 +47,10 @@ describe('app statement page', () => {
 })
 
 // ── Период показа (#42) ─────────────────────────────────────────────────────────────────────────
-// ⚠ Проверяем ПРОВОДКУ, а не только присутствие кнопок: раньше витрина брала последние 50 записей
-// реестра без привязки к датам и без подписи о сроке, поэтому важно, что смена периода реально
-// перезапрашивает фид с ГРАНИЦАМИ, а не просто перекрашивает кнопку.
+// ⚠ Проверяем ПРОВОДКУ, а не только присутствие кнопок: витрина брала последние 50 записей реестра
+// без привязки к датам, поэтому важно, что смена периода реально перезапрашивает фид С ГРАНИЦАМИ.
+// Под `?preview=1` «сегодня» ФИКСИРОВАНО (`PREVIEW_TODAY`) — иначе и эталоны, и эти утверждения
+// зависели бы от календаря машины.
 describe('app: период показа (#42)', () => {
   it('рисует все пресеты и подпись «за какой период»', async () => {
     const wrapper = await mountSuspended(AppPage, PREVIEW)
@@ -57,27 +58,35 @@ describe('app: период показа (#42)', () => {
     for (const label of ['День', '2 дня', '3 дня', 'Неделя', 'Месяц', 'Квартал', 'Год', 'Диапазон']) {
       expect(text).toContain(label)
     }
-    // Умолчание — месяц, значит подпись обязана быть диапазоном, а не «за всё время».
-    expect(text).toMatch(/с \d+ \S+ \d{4} по \d+ \S+ \d{4}/)
+    // Умолчание — месяц от фиксированного дня превью.
+    expect(text).toContain('с 26 мая 2026 по 24 июня 2026')
   })
 
-  it('клик по «День» меняет подпись на один день', async () => {
-    const wrapper = await mountSuspended(AppPage, PREVIEW)
-    const dayBtn = wrapper.findAll('button').find(b => b.text().trim() === 'День')
-    expect(dayBtn).toBeTruthy()
-    await dayBtn!.trigger('click')
-    await new Promise(r => setTimeout(r, 0))
-    expect(wrapper.text()).toMatch(/за \d+ \S+ \d{4}/)
-    expect(wrapper.text()).not.toMatch(/с \d+ \S+ \d{4} по/)
-  })
-
-  // ⚠ «Диапазон» с пустыми границами НЕ должен уходить запросом: пустой период означает «за всё
-  // время», то есть один клик по вкладке молча просил бы весь реестр портала.
-  it('«Диапазон» открывает поле выбора и говорит «за всё время»', async () => {
+  // ⚠ Подпись описывает ПРИМЕНЁННЫЙ период. Клик по «Диапазон» запроса не шлёт (границы пусты), и
+  // подпись обязана остаться прежней — иначе над месячным списком мгновенно встало бы «за всё
+  // время», то есть экран соврал бы о том, что показывает.
+  it('«Диапазон» открывает поле выбора и НЕ переписывает подпись', async () => {
     const wrapper = await mountSuspended(AppPage, PREVIEW)
     const btn = wrapper.findAll('button').find(b => b.text().trim() === 'Диапазон')
     await btn!.trigger('click')
     await new Promise(r => setTimeout(r, 0))
-    expect(wrapper.text()).toContain('за всё время')
+    expect(wrapper.text()).toContain('Свой период')
+    expect(wrapper.text()).toContain('с 26 мая 2026 по 24 июня 2026')
+    expect(wrapper.text()).not.toContain('за всё время')
+  })
+
+  it('клик по «День» применяет однодневный период — подпись меняется на день', async () => {
+    const wrapper = await mountSuspended(AppPage, PREVIEW)
+    const dayBtn = wrapper.findAll('button').find(b => b.text().trim() === 'День')
+    await dayBtn!.trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    expect(wrapper.text()).toContain('за 24 июня 2026')
+  })
+
+  // ⚠ Период попадает и в ЗАГОЛОВОК СВОДКИ: задача заведена ровно потому, что числа над списком
+  // были «за неизвестно что», и подпись только у списка оставила бы дефект на месте.
+  it('сводка над списком тоже названа периодом', async () => {
+    const wrapper = await mountSuspended(AppPage, PREVIEW)
+    expect(wrapper.text()).toContain('Сводка по операциям с 26 мая 2026 по 24 июня 2026')
   })
 })
