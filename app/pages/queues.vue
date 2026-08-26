@@ -62,8 +62,20 @@ for (const q of QUEUE_META) state[q.name] = { waiting: 2, active: 0, completed: 
 // ⚠ ДЕТЕРМИНИРОВАННЫЙ псевдослучайный генератор, а не `Math.random()`. Превью — это ещё и то,
 // что снимают визуальные регресс-тесты (#3): со стенным рандомом таблица очередей и заголовок
 // «сейчас в очереди N» менялись бы в каждом прогоне, то есть эталон был бы либо мигающим, либо
-// зелёным лишь потому, что расхождение укладывается в допуск. Seed фиксирован — превью выглядит
-// «живым» (счётчики дрейфуют от тика к тику), но одинаково от запуска к запуску.
+// зелёным лишь потому, что расхождение укладывается в допуск.
+//
+// ⚠ ФИКСИРОВАННОГО SEED БЫЛО МАЛО, и прежняя формулировка «одинаково от запуска к запуску» была
+// НЕВЕРНА. Детерминированной была последовательность ЗНАЧЕНИЙ, а не момент снимка: `QueueMonitor`
+// дёргает загрузчик по таймеру (`pollMs` 2–10 с), поэтому сколько тиков успеет пройти до кадра —
+// вопрос стенных часов и загрузки машины. Замерено ревью: под двумя воркерами (конфигурация CI)
+// один и тот же эталон разошёлся на 569 пикселей при потолке 400, и разошлись именно ЦИФРЫ в
+// таблице (`0,3,3,0` против `0,2,6,0`), а не сглаживание шрифта. При `retries: 0` каждый такой
+// прогон — красный CI на чужом PR.
+//
+// Поэтому снимок ЗАМОРОЖЕН: первый тик считается как раньше, дальше загрузчик отдаёт ту же
+// копию. ⚠ Цена названа честно: линия графика в превью перестаёт «жить». Она невелика — canvas в
+// снимке и так скрыт целиком (см. `FREEZE_CSS`), то есть на эталон график не влияет вовсе, а
+// человеку, открывшему `?preview=1`, важнее таблица и карточки.
 let seed = 0x2f6e2b1
 function nextRandom(): number {
   // xorshift32 — три строки, без зависимостей, период с запасом для десятка тиков.
@@ -74,20 +86,25 @@ function nextRandom(): number {
 }
 const rnd = (n: number) => Math.floor(nextRandom() * (n + 1))
 
-/** Превью-загрузчик (только `?preview=1`): синтетика в браузере — двигает счётчики
- * (waiting дрейфует, часть уходит в active → completed, изредка failed), форма как у
+/** Снимок первого тика. Дальше отдаём его же — см. ⚠ про замороженный снимок выше. */
+let frozen: Record<string, QueueCounts> | null = null
+
+/** Превью-загрузчик (только `?preview=1`): синтетика в браузере, форма как у
  * GET /api/ops/queues. Очереди НЕ опрашивает. */
 function previewFetcher(): Promise<QueuesSnapshot> {
-  for (const q of QUEUE_META) {
-    const s = state[q.name]!
-    const arrived = rnd(q.main ? 4 : 3)
-    const capacity = Math.min(s.waiting + arrived, 1 + rnd(3))
-    s.waiting = Math.max(0, s.waiting + arrived - capacity)
-    s.active = capacity
-    s.completed += capacity
-    if (nextRandom() < 0.06) s.failed += 1
+  if (!frozen) {
+    for (const q of QUEUE_META) {
+      const s = state[q.name]!
+      const arrived = rnd(q.main ? 4 : 3)
+      const capacity = Math.min(s.waiting + arrived, 1 + rnd(3))
+      s.waiting = Math.max(0, s.waiting + arrived - capacity)
+      s.active = capacity
+      s.completed += capacity
+      if (nextRandom() < 0.06) s.failed += 1
+    }
+    frozen = structuredClone(state)
   }
-  return Promise.resolve({ enabled: true, queues: structuredClone(state) })
+  return Promise.resolve({ enabled: true, queues: structuredClone(frozen) })
 }
 
 // Состояние банковских подключений по ВСЕМ порталам (#497 §3). Сегодня умирающее подключение

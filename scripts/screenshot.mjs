@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { resolveChromium } from './lib/chromium.mjs'
 import { startStaticServer } from './lib/staticServer.mjs'
+import { unrollScrollContainers } from './lib/unrollScroll.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PUBLIC_DIR = join(ROOT, '.output', 'public')
@@ -56,6 +57,23 @@ async function run() {
           await page.goto(`http://127.0.0.1:${port}${route}`, { waitUntil: 'networkidle', timeout: 15_000 })
           const slug = route === '/' ? 'index' : route.replace(/\W+/g, '-').replace(/^-|-$/g, '')
           const file = join(OUT_DIR, `${slug}.${vp.name}.${theme}.png`)
+          // The same unroll the regression test does (#630), for the same reason `reducedMotion`
+          // above is shared: without it the settings shot was 1280x900 — the first screen only —
+          // and seeing the account-matrix block took a throwaway locator-screenshot script.
+          //
+          // NOTE the parity is PARTIAL, and saying otherwise would be the misleading half. The
+          // spec additionally aborts non-local requests, injects FREEZE_CSS, waits for
+          // `document.fonts.ready` and masks the build SHA and the footer year; this tool does
+          // none of that. So `/` here still loads the Bitrix24 form from its CDN, which CI never
+          // sees. Shared so far: the browser, `reducedMotion`, and this unroll.
+          const unrolled = await page.evaluate(unrollScrollContainers)
+          if (unrolled.left.length || unrolled.clipped.length) {
+            // Warn, but still take the shot: a manual tool exists to show what IS there, and
+            // refusing exactly when something broke would take away the eyes we came for.
+            console.warn(`\u26a0 ${slug}: page captured PARTIALLY — `
+              + `stuck: ${unrolled.left.join('; ') || 'none'}; `
+              + `clipped: ${unrolled.clipped.join('; ') || 'none'}`)
+          }
           await page.screenshot({ path: file, fullPage: true })
           console.log(`✓ ${file.replace(ROOT, '.')}`)
         }
