@@ -31,7 +31,7 @@ describe('unmatchedClientNote', () => {
   it('НЕ советует невыполнимую ручную привязку, а называет рабочий путь — #43', () => {
     const note = unmatchedClientNote(makeItem())
     expect(note).not.toMatch(/привяжите (её )?вручную/i)
-    expect(note).toContain('удалите это дело')
+    expect(note).toMatch(/удалит[ьеи] это дело/i)
     expect(note).toContain('смарт-процесса')
     expect(note).toContain('нельзя')
   })
@@ -39,6 +39,13 @@ describe('unmatchedClientNote', () => {
   it('тип карточки контрагента следует направлению: приход — Клиент, расход — Поставщик — #43', () => {
     expect(unmatchedClientNote(makeItem({ direction: 'credit' }))).toContain('«Клиент»')
     expect(unmatchedClientNote(makeItem({ direction: 'debit' }))).toContain('«Поставщик»')
+  })
+
+  // ⚠ Оговорка обязана быть в ТЕКСТЕ, а не только в JSDoc (находка ревью #43): админ, заведший
+  // контрагента как «Партнёр», иначе решит, что импорт не сработал из-за типа, и пойдёт чинить
+  // не то. Приложение ищет компанию ТОЛЬКО по счёту в реквизитах.
+  it('текст оговаривает, что тип компании на поиск не влияет — #43', () => {
+    expect(unmatchedClientNote(makeItem())).toMatch(/на поиск он не влияет|ищет по счёту/i)
   })
 
   it('BB-neutralizes a payer-controlled account (no live BB markup leaks into the card)', () => {
@@ -60,8 +67,11 @@ describe('buildUnmatchedMessage', () => {
     expect(msg).toContain('BY24CLIENT0001')
     // ⚠ #43: вместо невыполнимого «требует ручной привязки» — рабочий порядок действий.
     expect(msg).not.toMatch(/ручной привязки/i)
-    expect(msg).toContain('Заведите контрагента')
-    expect(msg).toContain('удалите это дело')
+    expect(msg).toMatch(/завед[ие]те/i)
+    expect(msg).toMatch(/удалит[ьеи] это дело/i)
+    // ⚠ Хвост в ЧАТ намеренно короткий (повторяется на каждую операцию) — полная процедура в
+    // справке. Гард на регресс «расписали инструкцию заново»: длина хвоста ограничена.
+    expect(msg).toMatch(/справк/i)
   })
 
   it('not-recorded variant: says nothing was written and to add requisites', () => {
