@@ -120,26 +120,31 @@ describe('форма настроек', () => {
     const wrapper = await mountOnChats()
     useChatSettings().settings.chat.rules.directions = ['debit']
     await nextTick()
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто')
+    // ⚠ #44: выключенное направление больше НЕ «скрыто в чате» — операция не импортируется вовсе.
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('направление выключено')
   })
 
   it('excluding a purpose pattern marks the matching op as NOT imported (§2 A2)', async () => {
     const wrapper = await mountOnChats()
     useChatSettings().settings.chat.rules.excludePurposePatterns = [MOCK_STATEMENT.items[creditIdx]!.purpose]
     await nextTick()
-    // Excluded = dropped from import entirely — a distinct badge, not the chat «скрыто».
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('не импортируется')
+    // ⚠ Причина непереноса НАЗЫВАЕТСЯ (#44): исключения и направление чинятся в разных полях формы,
+    // поэтому у них разные бейджи — а сводка считает и то, и другое одним числом «не импортируется».
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('исключена')
     expect(wrapper.find('[data-testid="preview-summary"]').text()).toContain('не импортируется')
   })
 
-  it('warns when nothing reaches the chat, but still shows the operation list', async () => {
+  it('обе галки сняты — не импортируется НИЧЕГО, и список это показывает — #44', async () => {
     const wrapper = await mountOnChats()
     useChatSettings().settings.chat.rules.directions = []
     await nextTick()
-    // Direction-silenced ops are still IMPORTED — the list stays visible (only the chat warning shows).
+    // ⚠ Список остаётся видимым: он и объясняет, что именно не поедет. Прежде эта проверка
+    // утверждала «операции всё равно импортируются, просто молча» — теперь это неверно.
     expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('в чат ничего не попадёт')
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто в чате')
+    expect(wrapper.text()).toContain('ни одна операция не будет перенесена в CRM')
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('направление выключено')
+    expect(wrapper.find('[data-testid="preview-summary"]').text())
+      .toContain(`${MOCK_STATEMENT.items.length} — не импортируется`)
   })
 
   // Drive the real UI controls (not just the singleton) so the component wiring
@@ -150,9 +155,10 @@ describe('форма настроек', () => {
     expect(sw.exists()).toBe(true)
     await sw.trigger('click')
     await nextTick()
-    // Direction is a chat-only filter now: the op is still imported (list stays), just silenced.
+    // ⚠ #44: направление — гейт ЗАГРУЗКИ. Список остаётся (он показывает, что не поедет), но
+    // бейдж больше не обещает запись без оповещения.
     expect(wrapper.find('[data-testid="preview-list"]').exists()).toBe(true)
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('скрыто в чате')
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('направление выключено')
   })
 
   it('typing an exclude pattern marks the matching op NOT imported (UI wiring)', async () => {
@@ -162,7 +168,7 @@ describe('форма настроек', () => {
     expect(textarea.exists()).toBe(true)
     await textarea.setValue(MOCK_STATEMENT.items[creditIdx]!.purpose)
     await nextTick()
-    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('не импортируется')
+    expect(previewRows(wrapper)[creditIdx]!.text()).toContain('исключена')
   })
 
   // Auto-distribution gate (§2 mutation slice): the switch binds settings.autoDistribute

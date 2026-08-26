@@ -80,6 +80,12 @@ const batchSummary = computed(() => summaryMessage(batches.results.value))
 // sessionStorage, поэтому вернувшийся сотрудник видит результат, а не «принято» из ниоткуда.
 onMounted(() => {
   void batches.restore()
+  // ⚠ БЕЗ ЭТОГО ФИЛЬТР МЁРТВ (#44, находка ревью). Синглтон настроек на фрейме `/import` свежий:
+  // форма настроек тут не монтируется, а слайдер открывает `/import` отдельным фреймом. Без
+  // загрузки `settings.chat.rules` навсегда остаются дефолтом (оба направления), и предпросмотр
+  // показывал бы операции, которые в CRM не поедут, — ровно тот разрыв, который правка закрывает.
+  // Best-effort: вне портала запрос инертен, и предпросмотр честно показывает всё.
+  void chatSettings.load()
 })
 
 async function processFiles(files: File[]) {
@@ -230,6 +236,19 @@ function clearAll() {
 
       <!-- Summary + combined preview. The summary line is the ONE live region here — a short,
            stable sentence a screen reader can announce without flooding (U3). -->
+      <!-- ⚠ Пропущенные по настройке НАЗЫВАЮТСЯ (#44), и строка стоит СНАРУЖИ блока «есть операции»
+           (находка ревью). Внутри него она не показалась бы в самом важном случае: выписка целиком
+           из выключенного направления даёт пустой `allItems`, и файл исчезал бы МОЛЧА — ровно то
+           прочтение «приложение потеряло операции», ради которого объяснение и написано. -->
+      <p
+        v-if="skippedByDirection.length"
+        class="text-sm text-(--ui-color-base-3)"
+        data-testid="skipped-by-direction"
+      >
+        Не будут загружены: {{ skippedByDirection.length }} —
+        в настройках выключены {{ skippedDirectionLabel }}.
+      </p>
+
       <template v-if="allItems.length">
         <p
           role="status"
@@ -240,18 +259,6 @@ function clearAll() {
           Файлов: {{ okCount }}{{ errCount ? ` (ошибок: ${errCount})` : '' }} ·
           операций: {{ allItems.length }} ·
           приходов: {{ totals.credits.length }} · расходов: {{ totals.debits.length }}
-        </p>
-
-        <!-- ⚠ Пропущенные по настройке НАЗЫВАЮТСЯ (#44): молча исчезнувшая половина файла читается
-             как «приложение потеряло операции», а это осознанный выбор администратора. Строка
-             говорит и сколько, и где это включается. -->
-        <p
-          v-if="skippedByDirection.length"
-          class="text-sm text-(--ui-color-base-3)"
-          data-testid="skipped-by-direction"
-        >
-          Не будут загружены: {{ skippedByDirection.length }} —
-          в настройках выключены {{ skippedDirectionLabel }}.
         </p>
 
         <!-- Lively result summary (#62): count-up tiles + ECharts by-day / share charts. -->

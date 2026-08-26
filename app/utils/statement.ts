@@ -78,11 +78,16 @@ export function splitByDirection(items: readonly StatementItem[]): {
  *  - `excludePurposePatterns` / `excludeCounterpartyAccounts` — a **processing** exclusion: a matching
  *    operation is skipped ENTIRELY (no CRM activity, no allocation, no chat). See
  *    `isExcludedOperation`.
- *  - `directions` — a **chat-only** filter: an op of a non-announced direction is still
- *    written to CRM, just not announced. See `shouldNotifyChat`. */
+ *  - `directions` — **ТОЖЕ гейт загрузки** (#44): операция выключенного направления не переносится
+ *    НИКУДА — ни дела, ни элемента смарт-процесса, ни чата, ни строки в статистике. См.
+ *    `isDirectionEnabled`. ⚠ Прежде это был фильтр ТОЛЬКО чата («записываем, но молчим»); смысл
+ *    сменён решением владельца 2026-08-26, потому что «не показывать расходы» человек понимает как
+ *    «не тащить их в CRM». Отличие от исключений — в ПРИЧИНЕ: там «этот плательщик не нужен»,
+ *    здесь «этот вид операций не переносим», и чинятся они в разных полях настроек. */
 export interface ChatNotifyRules {
-  /** Directions to announce in chat. Default: only `credit` (приходы). An empty array
-   * announces nothing (but ops are still written to CRM — this is chat-only). */
+  /** Направления, которые переносим в CRM. По умолчанию — ОБА (импорт выписки обязан переносить её
+   * целиком; сузить — осознанный выбор администратора). Пустой массив — законное «не переносить
+   * ничего» и сохраняется как есть. */
   directions?: OperationDirection[]
   /** Case-insensitive `purpose` substrings that EXCLUDE the op from processing entirely. */
   excludePurposePatterns?: string[]
