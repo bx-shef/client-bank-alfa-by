@@ -70,6 +70,17 @@ export interface OperationOutcome {
  *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's
  *  `memberId` explicitly — deps are built once in startWorkers(), not per-job, so
  *  the portal context rides on the call, not the closure. */
+/**
+ * ПОЧЕМУ стираем портал — и это разные события, а не оттенок формулировки (#641).
+ *
+ *   `uninstall`  — пришло `ONAPPUNINSTALL`: клиент удалил приложение сам.
+ *   `grant-dead` — уборщик #574: портал исчез БЕЗ уведомления, его OAuth-грант мёртв дольше
+ *                  порога. Клиент ничего не удалял, и сказать про него «приложение УДАЛЕНО»
+ *                  значит соврать оператору, который читает журнал ровно затем, чтобы понять,
+ *                  куда делось подключение.
+ */
+export type PortalPurgeReason = 'uninstall' | 'grant-dead'
+
 export interface HandlerDeps {
   /** Pull a statement window from the bank (Alfa/Prior transport — stage 3/5). */
   fetchStatement: (job: FetchJob) => Promise<StatementItem[]>
@@ -246,8 +257,14 @@ export interface HandlerDeps {
   savePortal: (job: EventJob) => Promise<void>
   /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges).
    *  `eventTs` (B24 event timestamp) records an ordering tombstone (#77) so a stale
-   *  register can't resurrect the portal after this uninstall. */
-  deletePortal: (memberId: string, eventTs: number) => Promise<void>
+   *  register can't resurrect the portal after this uninstall.
+   *
+   *  ⚠ `reason` is REQUIRED, and it is not decoration (#641). This same function is also the
+   *  portal reaper's eraser (#574) — a portal that vanished WITHOUT an uninstall — so the audit
+   *  line it writes must not claim «the client removed the app» for a wipe our own automation
+   *  performed. Only the caller knows which it is, so the caller says it; a new caller cannot
+   *  forget, because the parameter does not compile away. */
+  deletePortal: (memberId: string, eventTs: number, reason: PortalPurgeReason) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
   /**
@@ -279,7 +296,7 @@ export interface HandlerDeps {
  *  portal (always). Install registers it (persists credentials). */
 export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<{ kind: string, cleaned: boolean, registered: boolean }> {
   if (job.kind === 'ONAPPUNINSTALL') {
-    await deps.deletePortal(job.memberId, Number(job.ts) || 0)
+    await deps.deletePortal(job.memberId, Number(job.ts) || 0, 'uninstall')
     return { kind: job.kind, cleaned: true, registered: false }
   }
   // ONAPPINSTALL: register the portal. `credentials` is always present for a
