@@ -6,7 +6,9 @@ import { isPreviewQuery } from '~/utils/inPortalGate'
 import { normalizeForCompare, type BankSideAccount } from '~/utils/bankAccountMatrix'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { BANK_LABELS } from '~/utils/bankLabels'
-import { connectionHealth, connectionHealthBadge, consentExpiringSoon } from '~/utils/bankTokenLifetime'
+import {
+  NEEDS_HUMAN_HEALTH, connectionHealth, connectionHealthBadge, connectionHint, consentExpiringSoon
+} from '~/utils/bankTokenLifetime'
 import { pauseAllSummary, planPauseAll } from '~/utils/bankPauseAll'
 import { useManualPoll } from '~/composables/useManualPoll'
 import { dayVerdictMessage, isoDayFromMs, pollDayVerdict } from '~/utils/dayValue'
@@ -180,6 +182,36 @@ function connectedAgo(ms: number): string {
  *  в интерфейсе рисовало бы зелёное на подключении, которое сервер уже похоронил. */
 function healthBadge(a: ConnectedBankAccount) {
   return connectionHealthBadge(connectionHealth(a, Date.now()))
+}
+
+/**
+ * Подсказка под бейджем — с учётом ПРИЧИНЫ, когда подключение истекло (#488).
+ *
+ * ⚠ Раньше она жила только в `title`, то есть во всплывашке. Задача, из которой это выросло:
+ * владелец четвёртый день переподключал Альфу и каждый раз назавтра видел то же «подключение
+ * истекло». Всплывашка тут бесполезна вдвойне — на мобильном её нет вовсе, а именно с телефона
+ * чаще всего и смотрят.
+ */
+function healthHint(a: ConnectedBankAccount): string {
+  return connectionHint(a, Date.now())
+}
+
+/** Показывать ли развёрнутое объяснение строкой, а не всплывашкой. */
+function showsHint(a: ConnectedBankAccount): boolean {
+  return NEEDS_HUMAN_HEALTH.includes(connectionHealth(a, Date.now()))
+}
+
+/**
+ * Когда мы последний раз ПЫТАЛИСЬ обновить — человеческой строкой.
+ *
+ * ⚠ «Не пытались ни разу» и «пытались час назад» ведут к противоположным действиям, и без этой
+ * строки они на экране неразличимы: бейдж у них один и тот же. Показываем только там, где это
+ * решает — на подключении, требующем человека.
+ */
+function attemptNote(a: ConnectedBankAccount): string {
+  const at = Number(a.lastAttemptAt ?? 0)
+  if (!Number.isFinite(at) || at <= 0) return 'Попыток обновления не было ни одной.'
+  return `Последняя попытка обновления: ${connectedAgo(at)}.`
 }
 
 /**
@@ -428,7 +460,7 @@ defineExpose({ reload: load })
                 :color="healthBadge(a)!.color"
                 size="xs"
                 :label="healthBadge(a)!.label"
-                :title="healthBadge(a)!.hint"
+                :title="healthHint(a)"
               />
               <!-- Пауза автоопроса (#576). ⚠ Отдельный бейдж, а не цвет строки: подключение при
                    этом ЖИВОЕ — токен продлевается, грант цел, — и покрасить строку «как сломанную»
@@ -490,6 +522,21 @@ defineExpose({ reload: load })
             >
               {{ a.accountKey }}
             </div>
+            <!-- ⚠ ПОЧЕМУ истекло — СТРОКОЙ, а не всплывашкой (#488). Бейдж называет состояние, но
+                 не следующее действие, а действий тут ДВА РАЗНЫХ: банк отказал — помогает
+                 переподключение; продление ни разу не бралось за строку — оно бесполезно и вернёт
+                 зелёный ровно на один срок жизни токена. Именно на этой развилке уходили дни:
+                 экран советовал одно и то же в обоих случаях.
+                 ⚠ Стоит ПОСЛЕ номера счёта, а не между ним и названием банка: длинный абзац
+                 посередине разрывает то, что человек читает одним взглядом — какой банк и какой
+                 счёт (замерено скриншотом). -->
+            <p
+              v-if="showsHint(a)"
+              class="mt-1 text-xs text-(--ui-color-base-3)"
+              :data-testid="`health-hint-${a.id}`"
+            >
+              {{ healthHint(a) }} {{ attemptNote(a) }}
+            </p>
             <!-- ⚠ Отсутствие кнопки надо ОБЪЯСНИТЬ (#23, находка ревью по UX): две визуально
                  одинаковые строки, у одной кнопка есть, у другой нет — читается как сбой
                  интерфейса, и первая реакция «кнопка пропала», а не «схожу в справку». Показываем

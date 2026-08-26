@@ -376,3 +376,29 @@ describe('#23 грант ДОЕЗЖАЕТ до лока на каждом мар
     expect(src).toMatch(/bankRefreshLockKey\([^)]*grantId/)
   })
 })
+
+describe('отметка попытки продления пишется НЕ на залоченном соединении (#488/#574)', () => {
+  // ⚠ Гард структурный, потому что поведенческим этот дефект не ловится в принципе: в тестах
+  // `withLock` — фейк без транзакции, и мок `markAttempt` отработает одинаково, куда бы его ни
+  // подключили. А на живом Postgres разница фатальна: `withAdvisoryLock` делает `ROLLBACK` на
+  // исключении, а исключение здесь — обычное дело (банк отверг грант). Отметка, поставленная
+  // внутри транзакции, откатилась бы вместе с ним, и колонка не стала бы ненулевой НИКОГДА.
+  // Ровно этот мёртвый механизм уже ловили замером на живой базе в #574; повторять замер второй
+  // раз незачем, а вот запретить повтор — стоит.
+  const SRC = readFileSync(join(process.cwd(), 'server/utils/ensureBankToken.ts'), 'utf8')
+
+  it('живая проводка берёт пул (`dbQuery`), а не `q` из-под лока', () => {
+    const wire = SRC.match(/markAttempt:\s*\([^)]*\)\s*=>\s*markBankRefreshAttempt\(([^,]+),/)
+    expect(wire, 'проводка `markAttempt` в liveDeps исчезла — отметка перестала ставиться').toBeTruthy()
+    expect(wire![1]!.trim(), 'отметка ушла на залоченное соединение — её съест ROLLBACK').toBe('dbQuery')
+  })
+
+  it('вызов стоит ДО похода в банк, а не после', () => {
+    // Порядок несущий: он и есть содержание `expiredCause` («банк отказал» против «не пытались»).
+    const mark = SRC.indexOf('deps.markAttempt?.(')
+    const post = SRC.indexOf('deps.postRefresh(url, body, headers)')
+    expect(mark).toBeGreaterThan(-1)
+    expect(post).toBeGreaterThan(-1)
+    expect(mark, 'отметка после запроса в банк — отказ банка не отметится никогда').toBeLessThan(post)
+  })
+})
