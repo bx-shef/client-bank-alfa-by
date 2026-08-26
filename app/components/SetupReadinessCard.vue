@@ -50,7 +50,10 @@ const items = computed(() => buildReadiness({
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
   lastRunMs: setup.status.value.lastRunMs,
-  recognitionMisconfig: setup.status.value.recognitionMisconfig
+  recognitionMisconfig: setup.status.value.recognitionMisconfig,
+  // ⚠ #46: без этого поля строка смарт-процессов не увидит нехватки полей реестра — ровно та
+  // забытая проводка, что уже случилась с `unhealthyAccounts`/`pausedAccounts` (см. выше).
+  spFieldNames: setup.status.value.spFieldNames
 }))
 
 const ready = computed(() => isFullyReady(items.value))

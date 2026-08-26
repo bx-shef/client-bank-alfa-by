@@ -27,6 +27,8 @@ export interface SetupStatus {
   /** Последний прогон упёрся в неверную карту распознавания (#595). `undefined` — наблюдения нет
    *  (или старый сервер); строка карты тогда зависит только от числа шаблонов. */
   recognitionMisconfig?: { slot: string }
+  /** Имена полей смарт-процесса «Платежи», как их отдал портал (#46). Отсутствует ⇒ не спрашивали. */
+  spFieldNames?: string[]
 }
 
 const DEFAULTS: SetupStatus = {
@@ -89,6 +91,11 @@ export function useSetupStatus() {
         ...(res?.myCompany ? { myCompany: res.myCompany } : {}),
         // Признак misconfig карты распознавания (#595): переносим только валидный слот-объект,
         // иначе кривой ответ сервера зажёг бы красную строку на исправном портале.
+        // ⚠ Ключ переносим ТОЛЬКО когда сервер его прислал (#46): отсутствие означает «не
+        // спрашивали», и подставлять пустой массив нельзя — он читался бы как «полей нет вовсе».
+        ...(Array.isArray(res?.spFieldNames)
+          ? { spFieldNames: res.spFieldNames.filter((n): n is string => typeof n === 'string') }
+          : {}),
         ...(res?.recognitionMisconfig && typeof res.recognitionMisconfig.slot === 'string' && res.recognitionMisconfig.slot !== ''
           ? { recognitionMisconfig: { slot: res.recognitionMisconfig.slot } }
           : {})

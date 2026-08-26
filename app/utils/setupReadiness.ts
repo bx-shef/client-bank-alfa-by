@@ -12,7 +12,7 @@
 // the `nowMs` handed in — so it is fully testable and the same model serves the server response and
 // the UI.
 
-import { paymentSpEtid, distributionSpEtid } from '~/config/distributionSp'
+import { paymentSpEtid, distributionSpEtid, paymentSpTypeId, buildUfFieldNameCamel, PAYMENT_SP_FIELDS } from '~/config/distributionSp'
 import type { PortalSettings } from '~/utils/settings'
 import { pluralRu } from '~/utils/importStatus'
 
@@ -72,6 +72,45 @@ export interface ReadinessSnapshot {
    * он бесполезен бухгалтеру и остаётся только в логе.
    */
   recognitionMisconfig?: { slot: string }
+  /**
+   * Имена полей, которые смарт-процесс «Платежи» РЕАЛЬНО несёт (#46) — как их отдаёт портал
+   * (`crm.item.fields`, camelCase). `undefined` — не спрашивали или спросить не удалось.
+   *
+   * ⚠ Зачем отдельный факт, если id смарт-процесса уже сохранён. Потому что «СП создан» и «СП
+   * годится для импорта» — РАЗНЫЕ вещи, и на боевом портале они разошлись: тип существовал, id
+   * лежал в настройках, строка светила зелёным, а из тринадцати полей на нём было пять — только
+   * денежные. Поля реестра (#575) добавились в код позже, а провижининг их не создал, и
+   * `crm.item.add` молча игнорирует неизвестные UF-ключи. Импорт писал контрагента, назначение,
+   * дату и направление В ПУСТОТУ: дела создавались, реестр наполнялся, но строки выходили немые,
+   * а все операции читались приходом, потому что «Направление» пустое. Ни один экран об этом не
+   * говорил — диагноз занял день на живом портале.
+   *
+   * ⚠ Читается `crm.item.fields`, а НЕ `userfieldconfig.list`: второму нужно право
+   * `userfieldconfig`, которого у портала может не быть (оно требует переустановки приложения) —
+   * то есть проверка молчала бы ровно там, где чаще всего и ломается.
+   */
+  spFieldNames?: string[]
+}
+
+/**
+ * Каких полей реестра НЕ ХВАТАЕТ на смарт-процессе «Платежи» (#46) — человеческими подписями.
+ *
+ * Пустой массив = всё на месте ЛИБО проверить нечем (нет id смарт-процесса / портал не ответил).
+ * ⚠ Незнание не красит строку: «мы не спросили» и «поля нет» — разные вещи, и выдавать первое за
+ * второе на экране, который читают в поисках причины поломки, значит послать чинить исправное.
+ */
+export function missingPaymentSpFields(
+  configFields: Record<string, string> | undefined,
+  fieldNames: string[] | undefined
+): string[] {
+  const spTypeId = paymentSpTypeId(configFields)
+  if (spTypeId === null || !fieldNames) return []
+  // ⚠ Сравнение регистронезависимое: имя приходит от портала, и его форма уже однажды оказалась
+  // не той, какой поле создавали (#41). Точное совпадение регистра тут ничего не защищает.
+  const present = new Set(fieldNames.map(n => n.toLowerCase()))
+  return Object.values(PAYMENT_SP_FIELDS)
+    .filter(f => !present.has(buildUfFieldNameCamel(spTypeId, f.postfix).toLowerCase()))
+    .map(f => f.label)
 }
 
 /**
@@ -198,15 +237,54 @@ export function buildReadiness(snap: ReadinessSnapshot): ReadinessItem[] {
         : 'Выберите чат ошибок в разделе «Уведомления в чат». Без него сообщения о неопознанных платежах и неудачном разнесении не приходят никуда.'
     },
     recognitionLine(snap, matrixCount),
-    {
-      key: 'smart-process',
-      title: 'Смарт-процессы распределения настроены',
-      ok: spReady,
-      detail: spReady ? 'созданы' : 'не созданы',
-      hint: spReady ? '' : 'Нажмите «Настроить смарт-процессы». Без них приложение не сможет вести учёт распределения оплат.'
-    },
+    smartProcessLine(snap, spReady),
     pollLine(snap, paused, snap.connectedAccounts)
   ]
+}
+
+/**
+ * Строка «Смарт-процессы» (#46 добавил проверку ПОЛЕЙ, а не только факта создания).
+ *
+ * Три состояния вместо двух, и среднее — то, ради которого правка и сделана:
+ *   • СП не созданы — как было;
+ *   • созданы, но НЕ ХВАТАЕТ полей реестра — импорт при этом идёт и выглядит рабочим, а данные
+ *     операции уходят в пустоту (портал молча отбрасывает неизвестные UF-ключи). Именно это
+ *     состояние сутки выглядело зелёной галочкой на боевом портале;
+ *   • всё на месте.
+ *
+ * ⚠ Не спросили (`spFieldNames === undefined`) ⇒ ведём себя как раньше: строка зелёная по факту
+ * создания. Красить её от незнания нельзя — старый сервер поля не пришлёт вовсе.
+ */
+function smartProcessLine(snap: ReadinessSnapshot, spReady: boolean): ReadinessItem {
+  const missing = spReady ? missingPaymentSpFields(snap.settings.recognition?.configFields, snap.spFieldNames) : []
+  if (spReady && missing.length > 0) {
+    return {
+      key: 'smart-process',
+      title: 'Смарт-процессы распределения настроены',
+      ok: false,
+      detail: `созданы, но нет ${missing.length} ${fieldsWord(missing.length)}`,
+      // ⚠ Поля названы ПОИМЕННО: «не хватает полей» отправляет искать наугад, а список сразу
+      // показывает, что пропали именно колонки выписки, и объясняет немые строки в реестре.
+      hint: `Нажмите «Настроить смарт-процессы» — на смарт-процессе «Платежи» не хватает полей: `
+        + `${missing.join(', ')}. Пока их нет, эти данные операции никуда не записываются: `
+        + 'портал молча отбрасывает поля, которых у него нет.'
+    }
+  }
+  return {
+    key: 'smart-process',
+    title: 'Смарт-процессы распределения настроены',
+    ok: spReady,
+    detail: spReady ? 'созданы' : 'не созданы',
+    hint: spReady ? '' : 'Нажмите «Настроить смарт-процессы». Без них приложение не сможет вести учёт распределения оплат.'
+  }
+}
+
+/** Plural «поля/полей» для строки смарт-процессов. */
+function fieldsWord(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'поля'
+  return 'полей'
 }
 
 /**
