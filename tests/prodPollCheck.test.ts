@@ -328,3 +328,112 @@ describe('воронка платежа (#501)', () => {
     expect(printed, 'не названа вторая возможная причина').toMatch(/номеров действительно нет|номеров в назначениях/i)
   })
 })
+
+describe('вердикт «КТО продлевает» не имеет права соврать (живой прогон 2026-08-26)', () => {
+  // ⚠ Это исправление ПО ФАКТУ ЛЖИ, а не по подозрению. Владелец прислал прогон, где `[fetch]` был
+  // пуст ЦЕЛИКОМ — то есть за окно не случилось ни одного опроса, — а скрипт уверенно ответил
+  // «продлевает ОПРОС, а не крон». Вывод делался из `selected=0`, то есть из ОТСУТСТВИЯ работы у
+  // крона, и ничем не подкреплялся. Диагностика прозвучала успокаивающе ровно там, где не работало
+  // вообще ничего, и увела разбор на день.
+
+  it('«продлевает ОПРОС» произносится ТОЛЬКО при доказанном опросе', () => {
+    // Ветка обязана требовать `fetch_n > 0`. Без этого условия она снова начнёт выводить работу
+    // опроса из его отсутствия.
+    const branch = SCRIPT.split('\n').find(l => l.includes('"${sel:-0}" -eq 0')
+      && l.includes('fetch_n'))
+    expect(branch, 'ветка «продлевает ОПРОС» не сверяется с числом [fetch]').toBeTruthy()
+    expect(branch).toContain('-gt 0')
+  })
+
+  it('счётчик [fetch] реально считается, а не берётся из воздуха', () => {
+    expect(SCRIPT).toMatch(/fetch_n="\$\(\$DC logs .*grep -cF '\[fetch\]'/)
+  })
+
+  it('при пустом [fetch] ответ — «НИКТО», и он называет обе причины', () => {
+    expect(SCRIPT).toContain('токен не продлевал НИКТО')
+    // Обе проверяемые причины обязаны быть названы: без них ответ верен, но бесполезен.
+    expect(SCRIPT).toContain('CRON_REAL_POLL=0')
+    expect(SCRIPT).toMatch(/подключённых счетов нет/)
+  })
+
+  /**
+   * Прогнать САМ блок вердикта из скрипта с подставленными числами.
+   *
+   * ⚠ Текстовых проверок тут мало, и это доказано мутацией: замена условия покрытия на `if false`
+   * прошла зелёной — порядок строк в файле от этого не меняется. Берём блок ИЗ ФАЙЛА и исполняем,
+   * как это делает гард отчёта по плательщикам.
+   */
+  interface VerdictInput {
+    runs: number
+    sel: number
+    ref: number
+    fail?: number
+    expd: number
+    unref: number
+    fetch_n: number
+    sinceMin: number
+  }
+
+  function verdict(v: VerdictInput): string {
+    const from = SCRIPT.indexOf('# ⚠ ПОКРЫТИЕ ОКНА')
+    const to = SCRIPT.indexOf('section "ВОРОНКА платежа')
+    expect(from, 'блок вердикта не найден — его переписали').toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    const block = SCRIPT.slice(from, to)
+    const prelude = `minutes_of() { echo ${v.sinceMin}; }\n`
+      + `SINCE=w; runs=${v.runs}; sel=${v.sel}; ref=${v.ref}; fail=${v.fail ?? 0}\n`
+      + `expd=${v.expd}; unref=${v.unref}; fetch_n=${v.fetch_n}\n`
+    return execFileSync('bash', ['-c', prelude + block], { encoding: 'utf8' })
+  }
+
+  it('ПОВЕДЕНЧЕСКИ: пустой [fetch] при нулевом отборе даёт «НИКТО», а не «ОПРОС»', () => {
+    // Ровно вход владельца: сутки, один прогон продления... но окно не покрыто, поэтому сперва
+    // берём покрытое окно, чтобы проверить именно эту развилку.
+    const out = verdict({ runs: 24, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 0, sinceMin: 1440 })
+    expect(out).toContain('не продлевал НИКТО')
+    expect(out).not.toContain('продлевает ОПРОС')
+  })
+
+  it('ПОВЕДЕНЧЕСКИ: живой опрос при нулевом отборе — по-прежнему «ОПРОС»', () => {
+    const out = verdict({ runs: 24, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 12, sinceMin: 1440 })
+    expect(out).toContain('продлевает ОПРОС')
+    expect(out).not.toContain('не продлевал НИКТО')
+  })
+
+  it('ПОВЕДЕНЧЕСКИ: непокрытое окно ГАСИТ любой вердикт', () => {
+    // Вход владельца дословно: SINCE=24h, прогонов 1 — контейнер пересоздавали.
+    const out = verdict({ runs: 1, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 0, sinceMin: 1440 })
+    expect(out).toContain('ВЕРДИКТА НЕТ')
+    expect(out).not.toContain('продлевает ОПРОС')
+    expect(out).not.toContain('не продлевал НИКТО')
+    expect(out).not.toContain('продлевает КРОН')
+  })
+
+  it('ПОВЕДЕНЧЕСКИ: успешное продление называется кроном', () => {
+    const out = verdict({ runs: 24, sel: 3, ref: 3, expd: 0, unref: 0, fetch_n: 0, sinceMin: 1440 })
+    expect(out).toContain('продлевает КРОН')
+  })
+
+  it('короткое окно вердикт НЕ гасит — там мало прогонов по построению', () => {
+    // При SINCE=1h ожидается один прогон, и «один» не значит «логи потеряли».
+    const out = verdict({ runs: 1, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 5, sinceMin: 60 })
+    expect(out).not.toContain('ВЕРДИКТА НЕТ')
+    expect(out).toContain('продлевает ОПРОС')
+  })
+
+  it('⚠ покрытие окна проверяется ДО вердикта, а не после', () => {
+    // Прежде оговорка «бэкенд перезапускали» печаталась строкой НИЖЕ вердикта — то есть после
+    // того, как читатель уже принял ответ. На окне в минуты `selected=0` не значит ничего.
+    const verdictAt = SCRIPT.indexOf('ВЕРДИКТА НЕТ')
+    const cronAnswerAt = SCRIPT.indexOf('продлевает КРОН')
+    expect(verdictAt, 'проверка покрытия исчезла').toBeGreaterThan(0)
+    expect(verdictAt, 'проверка покрытия должна стоять раньше любого вердикта').toBeLessThan(cronAnswerAt)
+  })
+
+  it('покрытие считается от ожидаемого числа прогонов, а не от порога «меньше двух»', () => {
+    // Продление ежечасное: за окно N часов прогонов должно быть ~N. Прежний порог «меньше 2»
+    // молчал бы про сутки с тремя прогонами — а это тоже потерянные логи.
+    expect(SCRIPT).toContain('expected_runs=')
+    expect(SCRIPT).toMatch(/minutes_of "\$SINCE"\) \/ 60/)
+  })
+})
