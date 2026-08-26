@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { runBankKeepAlive } from '../server/utils/bankTokenKeepAlive'
 import { runSummaryLine } from '../app/utils/opLogPolicy'
 
@@ -445,6 +446,8 @@ describe('вердикт «КТО продлевает» не имеет пра�
     unref: number
     fetch_n: number
     sinceMin: number
+    /** `BANK_KEEPALIVE_MINUTES` в `./.env` рядом со стеком. Не задан ⇒ файла нет вовсе. */
+    kaMin?: number
   }
 
   function verdict(v: VerdictInput): string {
@@ -456,7 +459,16 @@ describe('вердикт «КТО продлевает» не имеет пра�
     const prelude = `minutes_of() { echo ${v.sinceMin}; }\n`
       + `SINCE=w; runs=${v.runs}; sel=${v.sel}; ref=${v.ref}; fail=${v.fail ?? 0}\n`
       + `expd=${v.expd}; unref=${v.unref}; fetch_n=${v.fetch_n}\n`
-    return execFileSync('bash', ['-c', prelude + block], { encoding: 'utf8' })
+    // ⚠ Свой каталог на КАЖДЫЙ прогон: блок читает каденцию продления из `./.env`, и без изоляции
+    // тест зависел бы от gitignored-файла в корне репозитория — то есть проходил бы у одного и
+    // падал у другого, а причина не была бы видна ни в коде, ни в диффе.
+    const dir = mkdtempSync(join(tmpdir(), 'pollcheck-'))
+    try {
+      if (v.kaMin !== undefined) writeFileSync(join(dir, '.env'), `BANK_KEEPALIVE_MINUTES=${v.kaMin}\n`)
+      return execFileSync('bash', ['-c', prelude + block], { encoding: 'utf8', cwd: dir })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }
 
   it('ПОВЕДЕНЧЕСКИ: пустой [fetch] при нулевом отборе даёт «НИКТО», а не «ОПРОС»', () => {
@@ -555,6 +567,19 @@ describe('вердикт «КТО продлевает» не имеет пра�
     expect(totalNotice({ runs: 0, total: 0 })).not.toContain('НЕТ НИ ОДНОГО')
   })
 
+  it('⚠ каденция продления берётся из .env, а не зашита часом', () => {
+    // `BANK_KEEPALIVE_MINUTES` настраивается и законно доходит до 150 (потолок — половина самой
+    // узкой полосы обновления). При зашитом часе такой стенд давал бы вечное «ВЕРДИКТА НЕТ» НА
+    // ИСПРАВНОЙ работе: за сутки прогонов ~9, а «ожидалось» 24. Замечание ревью.
+    const args = { runs: 9, sel: 0, ref: 0, expd: 0, unref: 0, fetch_n: 5, sinceMin: 1440 }
+    expect(verdict({ ...args, kaMin: 150 }), 'исправный стенд с редкой каденцией объявлен непокрытым')
+      .not.toContain('ВЕРДИКТА НЕТ')
+    // Тот же вход при часовой каденции — окно действительно непокрыто.
+    expect(verdict({ ...args, kaMin: 60 })).toContain('ВЕРДИКТА НЕТ')
+    // Файла нет ⇒ час, как в коде по умолчанию.
+    expect(verdict(args)).toContain('ВЕРДИКТА НЕТ')
+  })
+
   it('⚠ сутки с ТРЕМЯ прогонами — окно непокрыто (ради этого порог и переписан)', () => {
     // Прежний порог «меньше двух» такое окно пропускал. Ни один тест этого не пинил: все фикстуры
     // были `runs:1` или `runs:24`, а они классифицируются одинаково при любом делителе.
@@ -563,9 +588,9 @@ describe('вердикт «КТО продлевает» не имеет пра�
   })
 
   it('покрытие считается от ожидаемого числа прогонов, а не от порога «меньше двух»', () => {
-    // Продление ежечасное: за окно N часов прогонов должно быть ~N. Прежний порог «меньше 2»
-    // молчал бы про сутки с тремя прогонами — а это тоже потерянные логи.
+    // За окно N минут прогонов должно быть ~N/каденция. Прежний порог «меньше 2» молчал бы про
+    // сутки с тремя прогонами — а это тоже потерянные логи.
     expect(SCRIPT).toContain('expected_runs=')
-    expect(SCRIPT).toMatch(/minutes_of "\$SINCE"\) \/ 60/)
+    expect(SCRIPT).toMatch(/minutes_of "\$SINCE"\) \/ ka_min/)
   })
 })
