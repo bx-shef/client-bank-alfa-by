@@ -127,9 +127,9 @@ describe('тишина в продлении токенов читается к�
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    expect(logged.some(l => l.startsWith('selected=')),
+    expect(logged.some(l => l.startsWith('total=')),
       'на тихом тике сводки нет — «пусто» снова неотличимо от мёртвого таймера').toBe(true)
-    expect(logged.join('\n')).toContain('selected=0')
+    expect(logged.join('\n')).toContain('total=0 selected=0')
   })
 
   it('и на тике С работой — тоже (сводка одна на все исходы)', async () => {
@@ -150,7 +150,7 @@ describe('тишина в продлении токенов читается к�
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    const line = logged.find(l => l.startsWith('selected='))
+    const line = logged.find(l => l.startsWith('total='))
     expect(line, 'сводки нет на рабочем тике').toBeTruthy()
     expect(line!).toMatch(/refreshed=\d+/)
   })
@@ -218,7 +218,7 @@ describe('вердикт «КТО продлевает банк-токен» (#4
   /** Тот же конвейер, что в скрипте, — сюда подставляются НАСТОЯЩИЕ строки сводки. */
   function verdictCounts(logLines: string[]): { runs: number, selected: number, refreshed: number } {
     const out = execFileSync('sh', ['-c',
-      `grep -F '[bank-keepalive]' | grep -oE 'selected=[0-9]+ refreshed=[0-9]+' `
+      `grep -F '[bank-keepalive]' | grep -oE 'total=[0-9]+ selected=[0-9]+ refreshed=[0-9]+' `
       + `| awk -F'[= ]' '{sel+=$2; ref+=$4; n++} END {print (n?n:0), (sel?sel:0), (ref?ref:0)}'`
     ], { input: logLines.join('\n'), encoding: 'utf8' }).trim().split(/\s+/).map(Number)
     return { runs: out[0]!, selected: out[1]!, refreshed: out[2]! }
@@ -235,7 +235,7 @@ describe('вердикт «КТО продлевает банк-токен» (#4
       refresh: async t => t,
       log: (m: string) => logged.push(m)
     })
-    const summary = logged.find(l => l.startsWith('selected='))
+    const summary = logged.find(l => l.startsWith('total='))
     expect(summary, 'сводки нет — вердикту не из чего строиться').toBeTruthy()
     // Канал добавляет реальный логгер; здесь дописываем его так же, как видит `docker compose logs`.
     const counts = verdictCounts([`[bank-keepalive] INFO: ${summary}`])
@@ -243,12 +243,12 @@ describe('вердикт «КТО продлевает банк-токен» (#4
   })
 
   it('«крон продлевал» и «крон ходил вхолостую» РАЗЛИЧАЮТСЯ — в этом вся ценность секции', () => {
-    const worked = verdictCounts(['[bank-keepalive] INFO: selected=2 refreshed=2 skipped=0 failed=0 unrefreshable=0 expired=0'])
+    const worked = verdictCounts(['[bank-keepalive] INFO: total=2 selected=2 refreshed=2 skipped=0 failed=0 unrefreshable=0 expired=0'])
     expect(worked).toEqual({ runs: 1, selected: 2, refreshed: 2 })
 
     const idle = verdictCounts([
-      '[bank-keepalive] INFO: selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0',
-      '[bank-keepalive] INFO: selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0'
+      '[bank-keepalive] INFO: total=0 selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0',
+      '[bank-keepalive] INFO: total=0 selected=0 refreshed=0 skipped=0 failed=0 unrefreshable=0 expired=0'
     ])
     // Крон отработал дважды и никого не отобрал ⇒ токен всё время свежий ⇒ держит его ОПРОС.
     expect(idle).toEqual({ runs: 2, selected: 0, refreshed: 0 })

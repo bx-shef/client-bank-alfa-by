@@ -17,7 +17,7 @@ import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveActivityBindDeps, liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveRegistryWriteDeps, liveTriggerFireDeps, startBindingsWorker, startDeletionWorker, startEventWorker, startFeedbackWorker, startRegistryWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
-import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, isPollableAccount, planFetches, pollWindow } from '../queue/cron'
+import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, isPollableAccount, planFetches, pollSkipReason, pollWindow } from '../queue/cron'
 import { pickAccountPollers, sharedAccountsLogLine } from '../../app/utils/accountSharing'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
@@ -241,7 +241,18 @@ export default defineNitroPlugin((nitroApp) => {
             const shareNote = sharedAccountsLogLine(pollable.length, pollers.length)
             if (shareNote) log.info(`[fetch] ${shareNote}`)
             const byPortal = accountsForPolling(pollers)
-            if (byPortal.length === 0) return // no connected accounts yet — nothing to do
+            if (byPortal.length === 0) {
+              // ⚠ НЕ МОЛЧА (#488). Прежде здесь стоял голый `return`, и на боевом стенде это дало
+              // картину, в которой не работало решительно ничего: пустые `[fetch]`, `[crm-sync]`,
+              // `[op]`, ни падений, ни ретраев — и ни единой строки о причине. Причин при этом
+              // ТРИ, чинятся они в разных местах, а выглядели одинаково. Разбор — `pollSkipReason`.
+              //
+              // ⚠ Печатаем под маркером `[fetch]`: диагностика и рантбук ищут причины опроса именно
+              // по нему, а строка, которую надо искать отдельным грепом, найдена не будет.
+              const why = pollSkipReason(rows)
+              if (why) log.info(`[fetch] ${why}`)
+              return
+            }
             const now = new Date()
             const { dateFrom, dateTo } = pollWindow(now, lookback)
             // NO per-tick epoch: the jobId must stay STABLE per (portal, account, window) so this
