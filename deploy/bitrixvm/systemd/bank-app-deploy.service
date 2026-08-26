@@ -1,0 +1,22 @@
+[Unit]
+Description=Обновление приложения импорта выписки по опросу git
+Documentation=https://github.com/bx-shef/client-bank-alfa-by/blob/main/docs/DEPLOY_BITRIXVM.md
+# Сеть и docker должны быть подняты: без них тик просто израсходовался бы впустую,
+# а в журнале осталась бы ошибка, неотличимая от настоящей поломки доступа.
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bank-app-deploy
+# ⚠ Секреты (ключ git, токен реестра) НЕ здесь: их читает сам скрипт из файлов с
+# правами 0600. Всё, что попадёт в юнит, видно любому пользователю через
+# `systemctl cat`, и там же оно окажется в бэкапе конфигурации.
+Environment=BANK_APP_DEPLOY_CONFIG=/etc/bank-app-deploy/deploy.env
+# Обновление тянет образы и ждёт готовности стека; лимит с запасом, но конечный —
+# зависший `docker pull` иначе держал бы блокировку до перезагрузки.
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
