@@ -13,11 +13,12 @@ import {
   processUploadBatch,
   type UploadItemResult
 } from '~/utils/importUpload'
-import { splitByDirection } from '~/utils/statement'
+import { isDirectionEnabled, splitByDirection } from '~/utils/statement'
 import { MAX_FILE_EMBED } from '~/utils/feedback'
 import { useImport, type ImportOutcome } from '~/composables/useImport'
 import { useImportBatches } from '~/composables/useImportBatches'
 import { useLocalMode } from '~/composables/useLocalMode'
+import { useChatSettings } from '~/composables/useChatSettings'
 import { batchStateLabel, summaryMessage } from '~/utils/importBatchView'
 
 // Локальный режим форка (#39): скрывает попап «оцените приложение» (наш листинг Маркета).
@@ -46,7 +47,24 @@ const feedbackFileText = ref('')
 let procSeq = 0
 
 // Combined, de-duped operations across all successfully parsed files.
-const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
+const parsedItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
+
+// ⚠ Предпросмотр показывает ровно то, что ПОПАДЁТ В CRM (#44). Снятая галка «Приходы»/«Расходы» —
+// гейт загрузки, а не фильтр оповещения: такая операция не создаст ни дела, ни элемента
+// смарт-процесса. Показывать её в предпросмотре значило бы обещать запись, которой не будет.
+// ⚠ Настройки читаются из того же синглтона, что и форма настроек; вне портала он инертен и
+// отдаёт дефолты (оба направления), поэтому предпросмотр там показывает всё.
+const chatSettings = useChatSettings()
+const skippedByDirection = computed(() =>
+  parsedItems.value.filter(i => !isDirectionEnabled(i, chatSettings.settings.chat.rules)))
+const allItems = computed(() =>
+  parsedItems.value.filter(i => isDirectionEnabled(i, chatSettings.settings.chat.rules)))
+/** Какие направления выключены — называем словами, а не «часть операций». */
+const skippedDirectionLabel = computed(() => {
+  const dirs = new Set(skippedByDirection.value.map(i => i.direction))
+  const names = [...(dirs.has('credit') ? ['приходы'] : []), ...(dirs.has('debit') ? ['расходы'] : [])]
+  return names.join(' и ')
+})
 const okCount = computed(() => results.value.filter(r => r.ok).length)
 const errCount = computed(() => results.value.filter(r => !r.ok).length)
 const totals = computed(() => splitByDirection(allItems.value))
@@ -222,6 +240,18 @@ function clearAll() {
           Файлов: {{ okCount }}{{ errCount ? ` (ошибок: ${errCount})` : '' }} ·
           операций: {{ allItems.length }} ·
           приходов: {{ totals.credits.length }} · расходов: {{ totals.debits.length }}
+        </p>
+
+        <!-- ⚠ Пропущенные по настройке НАЗЫВАЮТСЯ (#44): молча исчезнувшая половина файла читается
+             как «приложение потеряло операции», а это осознанный выбор администратора. Строка
+             говорит и сколько, и где это включается. -->
+        <p
+          v-if="skippedByDirection.length"
+          class="text-sm text-(--ui-color-base-3)"
+          data-testid="skipped-by-direction"
+        >
+          Не будут загружены: {{ skippedByDirection.length }} —
+          в настройках выключены {{ skippedDirectionLabel }}.
         </p>
 
         <!-- Lively result summary (#62): count-up tiles + ECharts by-day / share charts. -->

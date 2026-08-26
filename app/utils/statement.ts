@@ -133,17 +133,49 @@ export function parseRuleLines(text: string): string[] {
   return [...seen]
 }
 
-const DEFAULT_DIRECTIONS: OperationDirection[] = ['credit']
+/**
+ * Направления, включённые по умолчанию — ОБА (#44).
+ *
+ * ⚠ Раньше здесь стоял только `credit`, и это было безопасно, пока переключатели управляли лишь
+ * ЧАТОМ: молчаливый по умолчанию чат — разумная осторожность. Теперь та же настройка решает, будет
+ * ли операция ЗАГРУЖЕНА вовсе, и прежний дефолт означал бы, что свежеустановленное приложение молча
+ * не переносит расходы — половину выписки, без единого слова на экране. Импорт выписки по умолчанию
+ * обязан переносить выписку целиком; сузить это админ может сам и осознанно.
+ */
+const DEFAULT_DIRECTIONS: OperationDirection[] = ['credit', 'debit']
+
+/**
+ * Разрешено ли направление операции настройками портала (#44).
+ *
+ * ⚠ Это ГЕЙТ ЗАГРУЗКИ, а не фильтр оповещения. Снятая галка «Расходы» означает: расход не попадает
+ * НИКУДА — ни дела, ни элемента смарт-процесса, ни сообщения в чат, ни строки в статистике. Прежде
+ * направление фильтровало только чат, а запись шла всё равно; решение владельца (2026-08-26)
+ * сделало настройку сквозной, потому что «не показывать расходы» человек и понимает как «не
+ * тащить их в CRM».
+ * ⚠ Галка ОДНА на все подключённые банки и счета — пер-банковской настройки направления нет.
+ */
+export function isDirectionEnabled(item: StatementItem, rules: ChatNotifyRules = {}): boolean {
+  return (rules.directions ?? DEFAULT_DIRECTIONS).includes(item.direction)
+}
+
+/**
+ * Загружаем ли операцию вообще (#44) — единый гейт входа.
+ *
+ * Ложь по ЛЮБОЙ из двух причин: направление выключено настройкой или операция попала в исключения
+ * (счёт контрагента / подстрока назначения). Исход одинаков — операция не переносится никуда.
+ */
+export function shouldImportOperation(item: StatementItem, rules: ChatNotifyRules = {}): boolean {
+  return isDirectionEnabled(item, rules) && !isExcludedOperation(item, rules)
+}
 
 /**
  * Whether an operation should be announced to the chat, given the rules.
- * Defaults to "announce credits only". An item is silenced when its direction
- * is not allowed OR it is an excluded operation (`isExcludedOperation`). Note an
- * excluded op never reaches this check in crm-sync (it's skipped whole earlier) — the
- * exclusion is repeated here so the settings preview and any direct caller stay correct.
+ *
+ * ⚠ Совпадает с гейтом загрузки (#44): всё, что загружено, идёт и в чат — отдельного «загрузить, но
+ * не оповещать» в модели больше нет. Функция сохранена как ИМЯ СМЫСЛА для предпросмотра настроек
+ * («что попадёт в чат») и для вызывающих, которым важен именно чат; в `crm-sync` операция с
+ * выключенным направлением до неё не доходит вовсе — её отсекает `shouldImportOperation`.
  */
 export function shouldNotifyChat(item: StatementItem, rules: ChatNotifyRules = {}): boolean {
-  const directions = rules.directions ?? DEFAULT_DIRECTIONS
-  if (!directions.includes(item.direction)) return false
-  return !isExcludedOperation(item, rules)
+  return shouldImportOperation(item, rules)
 }

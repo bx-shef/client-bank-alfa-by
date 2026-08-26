@@ -90,17 +90,30 @@ describe('форма настроек', () => {
     expect(previewRows(wrapper)).toHaveLength(MOCK_STATEMENT.items.length)
   })
 
-  it('by default announces credits and hides debits', async () => {
+  // ⚠ #44: дефолт СМЕНИЛСЯ на оба направления. Пока галки управляли только чатом, молчаливый по
+  // умолчанию чат был осторожностью; теперь та же настройка решает, будет ли операция ЗАГРУЖЕНА, и
+  // прежний дефолт означал бы, что свежеустановленное приложение молча не переносит расходы.
+  it('по умолчанию переносим ОБА направления — #44', async () => {
     const wrapper = await mountOnChats()
     const rows = previewRows(wrapper)
     expect(rows[creditIdx]!.text()).toContain('в чат')
-    expect(rows[debitIdx]!.text()).toContain('скрыто')
+    expect(rows[debitIdx]!.text()).toContain('в чат')
   })
 
-  it('summary counts how many operations reach the chat', async () => {
+  it('сводка считает, сколько операций дойдёт до чата (по умолчанию — все) — #44', async () => {
     const wrapper = await mountOnChats()
     expect(wrapper.find('[data-testid="preview-summary"]').text())
-      .toContain(`В чат попадёт ${creditCount} из ${MOCK_STATEMENT.items.length}`)
+      .toContain(`В чат попадёт ${MOCK_STATEMENT.items.length} из ${MOCK_STATEMENT.items.length}`)
+  })
+
+  // ⚠ Сводка обязана следовать настройке, а не быть константой: выключив приходы, админ должен
+  // увидеть уменьшившееся число ещё до сохранения — это и есть смысл предпросмотра.
+  it('выключенное направление уменьшает сводку — #44', async () => {
+    const wrapper = await mountOnChats()
+    useChatSettings().settings.chat.rules.directions = ['debit']
+    await nextTick()
+    expect(wrapper.find('[data-testid="preview-summary"]').text())
+      .toContain(`В чат попадёт ${MOCK_STATEMENT.items.length - creditCount} из ${MOCK_STATEMENT.items.length}`)
   })
 
   it('disabling "Приходы" hides the credit in the preview', async () => {
