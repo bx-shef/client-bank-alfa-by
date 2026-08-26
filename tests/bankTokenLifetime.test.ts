@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, connectionHealth, connectionHealthBadge, refreshAtAgeMs,
+  BANK_REFRESH_TTL_MEASURED,
+  BANK_REFRESH_TTL_SEC,
+  CONSENT_WARN_DAYS,
+  EXPIRED_NEVER_TRIED_HINT,
+  connectionHealth,
+  connectionHealthBadge,
+  connectionHint,
   consentExpiringSoon,
-  CONSENT_WARN_DAYS
+  expiredCause,
+  refreshAtAgeMs,
+  type ConnectionLike
 } from '../app/utils/bankTokenLifetime'
 
 // ⚠ Эти числа читают ДВА потребителя: сервер решает по ним, кого обновлять, интерфейс — что
@@ -144,5 +152,100 @@ describe('согласие банка перекрывает оценку по r
 
   it('без даты «скоро истечёт» не срабатывает', () => {
     expect(consentExpiringSoon({ provider: 'alfa-by', connectedAt: T, hasRefresh: true }, T)).toBe(false)
+  })
+})
+
+describe('ПОЧЕМУ истекло: банк отказал или мы не пытались (#488)', () => {
+  // ⚠ Задача, из которой это выросло: владелец четвёртый день переподключал Альфу и каждый раз
+  // назавтра видел то же «подключение истекло». Экран в ОБОИХ случаях советовал одно и то же —
+  // «переподключите счёт», — а помогает это ровно в одном из них.
+
+  const TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
+  const NOW = 1_800_000_000_000
+  /** Строка, истёкшая по измеренному сроку Альфы. */
+  const dead = (over: Partial<ConnectionLike> = {}): ConnectionLike => ({
+    provider: 'alfa-by',
+    connectedAt: NOW - TTL - 3_600_000,
+    hasRefresh: true,
+    consentExpiresAt: 0,
+    ...over
+  })
+
+  it('попытка ПОСЛЕ последнего успеха — банк отказал', () => {
+    const c = dead({ lastAttemptAt: NOW - 3_600_000 })
+    expect(connectionHealth(c, NOW)).toBe('expired')
+    expect(expiredCause(c, NOW)).toBe('bank-refused')
+  })
+
+  it('попыток не было вовсе — продление не бралось за строку', () => {
+    expect(expiredCause(dead({ lastAttemptAt: 0 }), NOW)).toBe('never-tried')
+    expect(expiredCause(dead(), NOW)).toBe('never-tried')
+  })
+
+  it('⚠ попытка РАНЬШЕ последнего успеха — тоже «не пытались», и это не придирка', () => {
+    // Держится всё на ПОРЯДКЕ двух записей внутри прогона продления: отметка попытки ставится ДО
+    // похода в банк, а `updated_at` (он же `connectedAt`) — только после успеха. Значит сразу
+    // после удачи отметка ЗАКОНОМЕРНО оказывается позади, и «позади» здесь означает ровно одно:
+    // с тех пор к строке не подходили.
+    const c = dead({ connectedAt: NOW - TTL - 3_600_000, lastAttemptAt: NOW - TTL - 3_600_001 })
+    expect(expiredCause(c, NOW)).toBe('never-tried')
+  })
+
+  it('битая отметка читается в осторожную сторону', () => {
+    expect(expiredCause(dead({ lastAttemptAt: Number.NaN }), NOW)).toBe('never-tried')
+    expect(expiredCause(dead({ lastAttemptAt: -5 }), NOW)).toBe('never-tried')
+  })
+
+  it('⚠ нет отметки И битая дата успеха — всё равно «не пытались»', () => {
+    // Мутационная страховка: без явной проверки отметки эта строка провалилась бы в ветку
+    // «дата успеха нечитаема ⇒ считаем, что банк отказал» и посоветовала бы переподключение — при
+    // том что попыток не было ни одной. Замерено: снятие проверки оставляло набор зелёным, пока
+    // этого случая в нём не было.
+    expect(expiredCause(dead({ connectedAt: Number.NaN, lastAttemptAt: 0 }), NOW)).toBe('never-tried')
+  })
+
+  it('⚠ отметка РОВНО в момент успеха — «не пытались», а не «пытались»', () => {
+    // Граница, и она смещена в осторожную сторону сознательно: равенство означает, что попытка не
+    // ПОЗЖЕ успеха, то есть с тех пор к строке не подходили. Замерено: замена `>` на `>=`
+    // проходила зелёной, пока равенство не проверялось ни одним тестом.
+    const t = NOW - TTL - 3_600_000
+    expect(expiredCause(dead({ connectedAt: t, lastAttemptAt: t }), NOW)).toBe('never-tried')
+  })
+
+  it('подсказка «не пытались» НЕ советует переподключать', () => {
+    // Переподключение здесь — самое естественное и самое бесполезное действие: вернёт зелёный
+    // бейдж на один срок жизни токена, и всё повторится. Ровно на этом ушли четыре дня.
+    const hint = connectionHint(dead({ lastAttemptAt: 0 }), NOW)
+    expect(hint).toBe(EXPIRED_NEVER_TRIED_HINT)
+    expect(hint).not.toContain('Переподключите')
+    expect(hint).toContain('НИ РАЗУ')
+    expect(hint).toContain('poll-check')
+  })
+
+  it('подсказка «банк отказал» остаётся прежней — там переподключение и правда лечит', () => {
+    const hint = connectionHint(dead({ lastAttemptAt: NOW - 3_600_000 }), NOW)
+    expect(hint).toContain('Переподключите счёт')
+  })
+
+  it('⚠ истёкшее СОГЛАСИЕ банка сильнее — про «мы не пытались» там молчим', () => {
+    // Дата пришла от самого банка, и никакое продление её не отменит. Сказать «дело не в банке»
+    // значило бы отправить человека искать поломку у нас, тогда как чинится оно у банка.
+    const c: ConnectionLike = {
+      provider: 'prior-by',
+      connectedAt: NOW - 1000,
+      hasRefresh: true,
+      consentExpiresAt: NOW - 1000,
+      lastAttemptAt: 0
+    }
+    expect(connectionHealth(c, NOW)).toBe('expired')
+    expect(connectionHint(c, NOW)).toContain('Переподключите счёт')
+  })
+
+  it('здоровые состояния подсказку не меняют', () => {
+    const ok: ConnectionLike = { provider: 'alfa-by', connectedAt: NOW, hasRefresh: true, consentExpiresAt: 0 }
+    expect(connectionHint(ok, NOW)).toBe('')
+    const due: ConnectionLike = { ...ok, connectedAt: NOW - TTL * 0.75 }
+    expect(connectionHealth(due, NOW)).toBe('due')
+    expect(connectionHint(due, NOW)).toContain('Действий не требуется')
   })
 })
