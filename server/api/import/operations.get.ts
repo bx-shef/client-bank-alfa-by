@@ -13,7 +13,6 @@ import { getMemberIdByDomain } from '../../utils/tokenStore'
 import { withSpan } from '../../utils/telemetrySpan'
 import { portalHash, httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
-import { useServerLogger } from '../../utils/serverLogger'
 import { dbQuery } from '../../db/client'
 import { paymentSpRef } from '../../../app/config/distributionSp'
 import { SETTINGS_KEY, parsePortalSettings } from '../../../app/utils/settings'
@@ -36,14 +35,7 @@ function liveDeps(): RecentOperationsDeps {
       return withSpan('recent-ops-read', { 'portal.hash': portalHash(memberId) }, async () => {
         const listCall = buildRecentOperationsListCall(paymentRef)
         const res = await call(listCall.method, listCall.params)
-        const items = extractListItems(res)
-        // ⚠ Диагностика #41 (только ИМЕНА полей первого элемента, без значений — не ПДн): по ней
-        // видно, отдал ли `crm.item.list` поля реестра #575. Пусто/только доденьги ⇒ метод их не
-        // вернул; полный набор ⇒ читаются. Читается через `make logs`. Снять после подтверждения.
-        if (items[0]) {
-          useServerLogger('import').info(`recent-ops item field keys: ${Object.keys(items[0]).sort().join(',')}`)
-        }
-        return mapRecentOperations(items, paymentRef)
+        return mapRecentOperations(extractListItems(res), paymentRef)
       })
     }
   }
