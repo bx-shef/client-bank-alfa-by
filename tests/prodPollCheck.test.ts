@@ -594,3 +594,90 @@ describe('вердикт «КТО продлевает» не имеет пра�
     expect(SCRIPT).toMatch(/minutes_of "\$SINCE"\) \/ ka_min/)
   })
 })
+
+describe('КТО ОТКЛЮЧАЛ БАНК — пять путей, и все обязаны быть видны (#641)', () => {
+  // ⚠ Выросло из первого же успешного применения #636 на боевом стенде: диагностика ответила
+  // «подключённых счетов нет ни одного», и следом выяснилось, что узнать, КУДА они делись, нечем.
+  // Строку `bank_tokens` стирают пять путей, разбросанных по трём каналам, а в инструменте был
+  // виден ОДИН. Молчание остальных неотличимо от «ничего не происходило».
+
+  /** Прогнать секцию, подставив строки лога вместо `docker compose logs`. */
+  function disconnects(logLines: string[]): string {
+    const from = SCRIPT.indexOf('section "КТО ОТКЛЮЧАЛ БАНК')
+    const to = SCRIPT.indexOf('cat <<\'HINT\'')
+    expect(from, 'секция «КТО ОТКЛЮЧАЛ БАНК» не найдена — её переписали').toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    const block = SCRIPT.slice(from, to)
+      .replace('$DC logs --since "$SINCE" worker backend 2>&1', 'cat')
+      .replace('section "КТО ОТКЛЮЧАЛ БАНК            (#641)"', '')
+    const prelude = 'SINCE=w\n'
+      + 'show() { local out; out="$(cat)"; if [ -n "$out" ]; then echo "$out"; else echo "(ничего)"; fi; }\n'
+    return execFileSync('bash', ['-c', prelude + block], { input: logLines.join('\n'), encoding: 'utf8' })
+  }
+
+  // Строки — в той форме, в какой их печатает НАСТОЯЩИЙ логгер (канал + уровень + текст).
+  const PATHS: Array<{ what: string, line: string }> = [
+    {
+      what: 'админ нажал «Отключить»',
+      line: '[bank-connect] WARNING: portal M1: alfa-by #42 — подключение ОТКЛЮЧЕНО пользователем 7 (необратимо, нужен повторный вход в интернет-банк)'
+    },
+    {
+      what: 'приложение удалено из портала',
+      line: '[bank-connect] WARNING: portal M1: приложение УДАЛЕНО — стираем всё, включая подключения к банкам (#641)'
+    },
+    {
+      what: 'уборщик мёртвых подключений (#599)',
+      line: '[retention] WARNING: [bank-reap] подключение стёрто: портал ab12cd34, банк alfa-by, мёртво дольше 30 дн.'
+    },
+    {
+      what: 'свип брошенных «счёт не выбран» (#485)',
+      line: '[retention] INFO: swept 2 abandoned pending connection(s)'
+    },
+    {
+      what: 'автоотключение по подписке (#614)',
+      line: '[sub-cutoff] WARNING: портал ab12cd34: банк отключён — REST молчит 4 дн.'
+    }
+  ]
+
+  it.each(PATHS)('$what — попадает в секцию', ({ line }) => {
+    const out = disconnects([line])
+    expect(out, 'путь удаления не виден в диагностике').toContain(line.slice(line.indexOf(': ') + 2, line.indexOf(': ') + 30))
+    expect(out).not.toContain('записей об отключении нет')
+  })
+
+  it('⚠ ВСЕ пять путей ловятся ОДНИМ прогоном — иначе секция отвечает наполовину', () => {
+    const out = disconnects(PATHS.map(p => p.line))
+    for (const p of PATHS) {
+      const needle = p.line.slice(p.line.indexOf(': ') + 2, p.line.indexOf(': ') + 30)
+      expect(out, `путь «${p.what}» потерялся, когда рядом есть другие`).toContain(needle)
+    }
+  })
+
+  it('чужие строки в секцию не лезут', () => {
+    // Пауза — НЕ отключение: она обратима и у неё своя секция. Смешать их значит научить читателя
+    // видеть обрыв связи там, где импорт просто притормозили.
+    const out = disconnects([
+      '[bank-connect] INFO: portal M1: alfa-by #42 — автоопрос ПРИОСТАНОВЛЕН пользователем 7',
+      '[fetch] INFO: alfa-by portal M1, account BY13 2026-08-20..2026-08-21: 3 ops'
+    ])
+    expect(out).toContain('записей об отключении нет')
+  })
+
+  it('⚠ пустая секция НЕ выдаётся за «никто не отключал»', () => {
+    // Логи живут внутри контейнера, и `prod-redeploy` уносит их вместе с ним. Ровно так и вышло
+    // на живом разборе: к моменту вопроса история уже была стёрта перевыкатом.
+    const out = disconnects([])
+    expect(out).toContain('записей об отключении нет')
+    expect(out, 'пустота выдана за доказательство').toMatch(/перевыкат|пересоздавали/)
+  })
+
+  it('код действительно печатает каждую из этих строк', () => {
+    // Иначе секция ищет то, чего никто не пишет, — и её пустота снова ничего не значит.
+    const ROUTE = readFileSync(join(ROOT, 'server/api/bank/disconnect.post.ts'), 'utf8')
+    expect(ROUTE, '«Отключить» снова не оставляет следа в журнале').toContain('подключение ОТКЛЮЧЕНО пользователем')
+    expect(WORKER, 'удаление приложения снова молчит').toContain('приложение УДАЛЕНО')
+    expect(PLUGIN, 'маркер уборщика подключений пропал').toContain('[bank-reap]')
+    expect(PLUGIN, 'свип брошенных подключений снова молчит').toContain('abandoned pending connection')
+    expect(PLUGIN, 'маркер автоотключения по подписке пропал').toContain('[sub-cutoff]')
+  })
+})

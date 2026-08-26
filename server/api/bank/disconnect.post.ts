@@ -11,6 +11,7 @@
 // idempotency — reporting success while the app kept reaching into the client's bank.
 
 import { handleDisconnectBankAccount, type DisconnectDeps } from '../../utils/bankAccounts'
+import { useServerLogger } from '../../utils/serverLogger'
 import { bearerToken } from '../../utils/settingsHandler'
 import { frameRestCall } from '../../utils/liveDeps'
 import { getMemberIdByDomain } from '../../utils/tokenStore'
@@ -18,6 +19,10 @@ import { deleteBankTokenById } from '../../utils/bankTokenStore'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
+
+// ⚠ Канал ПЕРЕИСПОЛЬЗУЕТСЯ (`bank-connect`), как у паузы: имена каналов — маркеры, по которым
+// грепает рантбук, и новый канал на одно действие пришлось бы заводить во все инструменты.
+const bankLog = useServerLogger('bank-connect')
 
 function liveDeps(): DisconnectDeps {
   return {
@@ -27,7 +32,13 @@ function liveDeps(): DisconnectDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
-    remove: (memberId, id, expectedAccountKey) => deleteBankTokenById(dbQuery, memberId, id, expectedAccountKey)
+    remove: (memberId, id, expectedAccountKey) => deleteBankTokenById(dbQuery, memberId, id, expectedAccountKey),
+    // ⚠ След в журнале: КТО оборвал связь с банком (#641). До этого ОБРАТИМАЯ пауза писала имя
+    // нажавшего, а НЕОБРАТИМОЕ отключение — ничего: живой разбор упёрся ровно в это, строк
+    // `bank_tokens` не осталось, а кто их убрал, было неоткуда узнать. Номера счёта в строке НЕТ —
+    // лог живёт до вытеснения по объёму (#617), а `id` строки для разбора достаточно.
+    audit: ({ memberId, userId, provider, id }) =>
+      bankLog.warning(`portal ${memberId}: ${provider} #${id} — подключение ОТКЛЮЧЕНО пользователем ${userId || '—'} (необратимо, нужен повторный вход в интернет-банк)`)
   }
 }
 

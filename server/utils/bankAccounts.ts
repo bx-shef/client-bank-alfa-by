@@ -36,6 +36,22 @@ export interface ListAccountsDeps extends BankAccountsDeps {
 
 export interface DisconnectDeps extends BankAccountsDeps {
   remove: (memberId: string, id: number, expectedAccountKey: string) => Promise<'removed' | 'gone' | 'stale'>
+  /**
+   * След в журнале: КТО оборвал связь с банком (#641).
+   *
+   * ⚠ Асимметрия, которую этим и чинят: ОБРАТИМАЯ пауза (#576) писала в журнал имя нажавшего, а
+   * НЕОБРАТИМОЕ отключение не писало ничего вовсе. Между ними разница не в пользу паузы: снятая
+   * пауза возвращает импорт кликом, а стёртое подключение возвращает только повторный поход
+   * ВЛАДЕЛЬЦА СЧЁТА в интернет-банк. Живой разбор 2026-08-26 упёрся ровно в это: строк
+   * `bank_tokens` не осталось, а кто их убрал — в логе не было ни слова.
+   *
+   * ⚠ Пишется ТОЛЬКО на состоявшемся удалении: `gone` (двойной клик) и `stale` (список устарел)
+   * ничего не оборвали, и запись о них превратила бы журнал в шум ровно того же вида, из-за
+   * которого настоящую строку потом не найдут.
+   *
+   * ⚠ Необязательная: журнал не должен быть условием работоспособности действия.
+   */
+  audit?: (entry: { memberId: string, userId: string, provider: string, id: number }) => void
 }
 
 export interface PausePollDeps extends BankAccountsDeps {
@@ -361,5 +377,8 @@ export async function handleDisconnectBankAccount(deps: DisconnectDeps, input: D
   // ⚠ `gone` остаётся УСПЕХОМ с `removed:false` — это идемпотентность из #404: двойной клик и
   // повтор из другой вкладки не ошибка. Теперь она означает ровно «строки нет», а не «мы не туда
   // посмотрели».
+  if (outcome === 'removed') {
+    deps.audit?.({ memberId: auth.memberId, userId: auth.userId, provider, id })
+  }
   return { status: 200, body: { removed: outcome === 'removed' } }
 }

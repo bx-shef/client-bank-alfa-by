@@ -100,6 +100,10 @@ const opLog = useServerLogger('op')
 const crmLog = useServerLogger('crm-sync')
 const triggerLog = useServerLogger('trigger')
 const deletionLog = useServerLogger('deletion')
+// ⚠ Канал ПЕРЕИСПОЛЬЗУЕТСЯ с роутами `server/api/bank/*`, а не заводится новый: все события
+// «подключение к банку появилось / исчезло» обязаны грепаться одним маркером, иначе секция
+// «Кто отключал банк» (#641) собирала бы их из трёх разных мест и однажды одно потеряла.
+const bankConnectLog = useServerLogger('bank-connect')
 
 /** Entity resolvers the intent dispatch composes (#109 slice 2). Bound once. */
 const intentResolverDeps: IntentResolverDeps = { findInvoicesByNumber, findCandidateById, findCandidateByField, findCompanyDealPayments, findOrderPaymentIds, findDocumentEntities }
@@ -663,6 +667,12 @@ export function liveHandlerDeps(): HandlerDeps {
       // портала не будет) и из свипа `~pending:`. Банковские креды остались бы навсегда, и их
       // продолжал бы освежать `bankTokenKeepAlive` — ровно та утечка, ради закрытия которой всё и
       // написано, сделанная НЕУСТРАНИМОЙ тем самым инструментом.
+      // ⚠ След в журнале ДО удаления (#641). Удаление приложения — самый разрушительный из путей,
+      // стирающих связь клиента с банком, и единственный, который до этого не оставлял в логе
+      // ничего вовсе. Живой разбор 2026-08-26 упёрся ровно в это: строк `bank_tokens` не осталось,
+      // а кто их убрал — неоткуда узнать. Пишем ДО, а не после: шагов семь и транзакции нет, так
+      // что частичный отказ на середине иначе не оставил бы и этой строки.
+      bankConnectLog.warning(`portal ${memberId}: приложение УДАЛЕНО — стираем всё, включая подключения к банкам (#641)`)
       await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
       await deleteToken(dbQuery, memberId, eventTs)
       await deleteImportResultForPortal(dbQuery, memberId)

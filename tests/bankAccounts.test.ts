@@ -181,6 +181,53 @@ describe('classifyProvisionError', () => {
 describe('handleDisconnectBankAccount', () => {
   const body = { ...input, id: 42, provider: 'alfa-by', accountKey: ' BY01ALFA0001 ' }
 
+  describe('след в журнале: КТО оборвал связь с банком (#641)', () => {
+    // ⚠ Асимметрия, которую этим чинят: ОБРАТИМАЯ пауза писала имя нажавшего, а НЕОБРАТИМОЕ
+    // отключение не писало ничего. Живой разбор 2026-08-26 упёрся ровно в это — строк
+    // `bank_tokens` не осталось, а кто их убрал, было неоткуда узнать.
+    type Entry = { memberId: string, userId: string, provider: string, id: number }
+
+    function withAudit(over: Partial<DisconnectDeps> = {}) {
+      const seen: Entry[] = []
+      const deps = disconnectDeps({ audit: (e: Entry) => seen.push(e), ...over })
+      return { deps, seen }
+    }
+
+    it('состоявшееся удаление пишет портал, пользователя, банк и адрес строки', async () => {
+      const { deps, seen } = withAudit()
+      expect((await handleDisconnectBankAccount(deps, body)).status).toBe(200)
+      expect(seen).toEqual([{ memberId: 'M1', userId: '7', provider: 'alfa-by', id: 42 }])
+    })
+
+    it('⚠ «строки уже нет» НЕ пишется — это двойной клик, связь оборвал кто-то другой', async () => {
+      // Иначе журнал заполнится записями о несостоявшихся отключениях, и настоящую в нём не найдут
+      // ровно тогда, когда придут искать.
+      const { deps, seen } = withAudit({ remove: async () => 'gone' as const })
+      expect((await handleDisconnectBankAccount(deps, body)).status).toBe(200)
+      expect(seen, 'запись об отключении, которого не было').toEqual([])
+    })
+
+    it('⚠ «список устарел» тоже НЕ пишется — ничего не удалили', async () => {
+      const { deps, seen } = withAudit({ remove: async () => 'stale' as const })
+      expect((await handleDisconnectBankAccount(deps, body)).status).toBe(409)
+      expect(seen).toEqual([])
+    })
+
+    it('⚠ отказ гейта не пишется и до удаления не доходит', async () => {
+      // Запись о том, что не-админ «отключил», обвиняла бы невиновного.
+      const { deps, seen } = withAudit({ validateFrame: async () => ({ userId: '9', isAdmin: false }) })
+      expect((await handleDisconnectBankAccount(deps, body)).status).toBe(403)
+      expect(seen).toEqual([])
+    })
+
+    it('журнал НЕОБЯЗАТЕЛЕН: без него отключение работает как прежде', async () => {
+      // Диагностика не смеет быть условием работоспособности действия.
+      const res = await handleDisconnectBankAccount(disconnectDeps(), body)
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ removed: true })
+    })
+  })
+
   it('удаляет по НЕИЗМЕНЯЕМОМУ адресу, а не по номеру счёта', async () => {
     // ⚠ Номер МЕНЯЕТСЯ: выбор счёта переименовывает `~pending:`-ключ. Адресация по нему промахивалась
     // мимо строки и отвечала успехом, пока приложение продолжало ходить в банк клиента (#517).
