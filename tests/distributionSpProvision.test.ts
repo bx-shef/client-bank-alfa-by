@@ -239,6 +239,56 @@ describe('provisionDistributionSp', () => {
     expect(res.addedFields).toBe(0) // all fields seen across both pages → nothing re-added
     expect(calls.some(c => c.method === 'userfieldconfig.add')).toBe(false)
   })
+
+  // ⚠ Регресс #41 (боевой портал): userfieldconfig.list отдаёт имя в СЛИТНОЙ форме `UF_CRM<id>_<POSTFIX>`
+  // (без подчёркивания после CRM), а поле создавалось как `UF_CRM_<id>_<POSTFIX>`. Раньше сверка не
+  // совпадала → доденьги планировались на пересоздание → на дубликате цикл падал → поля реестра #575
+  // не создавались. Теперь: имя в слитной форме распознаётся, план — ТОЛЬКО недостающие поля реестра.
+  it('распознаёт существующие поля в СЛИТНОЙ форме имени и доводит поля реестра #575 — #41', async () => {
+    const paymentEtid = 13
+    const distributionEtid = 14
+    const moneyPostfixes = ['TOTAL', 'CURRENCY', 'NEED_DISTR', 'NEEDS_REDISTR', 'MARKER']
+    const { call, calls } = fakeCall({
+      'userfieldconfig.list': (params) => {
+        const entityId = (params.filter as Record<string, unknown>).entityId
+        if (entityId === `CRM_${paymentEtid}`) {
+          // как боевой портал: только доденьги, и в СЛИТНОЙ форме (UF_CRM13_TOTAL)
+          return { result: { fields: moneyPostfixes.map(p => ({ fieldName: `UF_CRM${paymentEtid}_${p}` })) } }
+        }
+        return { result: { fields: [] } }
+      },
+      'userfieldconfig.add': () => ({ result: { field: {} } })
+    })
+    await provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: distributionEtid, id: distributionEtid } })
+    const addedNames = calls.filter(c => c.method === 'userfieldconfig.add')
+      .map(c => (c.params.field as Record<string, unknown>).fieldName)
+    // Доденьги НЕ пересоздаются (распознаны в слитной форме)…
+    expect(addedNames).not.toContain(`UF_CRM_${paymentEtid}_TOTAL`)
+    // …а поля реестра #575 — создаются (раньше не создавались никогда).
+    for (const key of ['operationDate', 'direction', 'counterparty', 'counterpartyAccount', 'purpose', 'ownAccount', 'bank'] as const) {
+      expect(addedNames).toContain(`UF_CRM_${paymentEtid}_${PAYMENT_SP_FIELDS[key].postfix}`)
+    }
+  })
+
+  // ⚠ Второй слой (#41): падение одной userfieldconfig.add НЕ обрывает попытку создать остальные
+  // поля (реестр в том числе), НО в конце ошибка ВСПЛЫВАЕТ — тихой частичной настройки быть не должно.
+  it('одна упавшая add: остальные ПОПРОБОВАНЫ, но провижининг падает (сбой не прячется) — #41', async () => {
+    const paymentEtid = 300
+    let n = 0
+    const { call, calls } = fakeCall({
+      'userfieldconfig.list': () => ({ result: { fields: [] } }),
+      'userfieldconfig.add': () => {
+        n++
+        if (n === 1) throw new Error('SOME_FIELD_ERROR')
+        return { result: { field: {} } }
+      }
+    })
+    // Провижининг падает (сбой поля доходит до вердикта установки).
+    await expect(provisionDistributionSp(call, { payment: { entityTypeId: paymentEtid, id: paymentEtid }, distribution: { entityTypeId: 301, id: 301 } }))
+      .rejects.toThrow(/userfieldconfig\.add failed/)
+    // Но ВСЕ поля платёжного СП были ПОПРОБОВАНЫ, несмотря на падение первого (иначе было бы ровно 1).
+    expect(calls.filter(c => c.method === 'userfieldconfig.add').length).toBe(Object.values(PAYMENT_SP_FIELDS).length)
+  })
 })
 
 describe('раскладка карточки реестра (#27)', () => {

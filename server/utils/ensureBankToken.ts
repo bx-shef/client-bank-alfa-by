@@ -22,7 +22,8 @@ import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
 import { bankRefreshLockKey } from './bankRefreshLock'
-import { getBankToken, updateBankTokenSecrets } from './bankTokenStore'
+import { getBankToken, markBankRefreshAttempt, updateBankTokenSecrets } from './bankTokenStore'
+import { dbQuery } from '../db/client'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
@@ -108,6 +109,20 @@ export interface BankRefreshDeps {
    *  private_key_jwt, #444). `null`/absent ⇒ fall back to client_secret_basic from `creds` —
    *  the sandbox behaviour. Injected so the refresh stays testable without node:crypto. */
   priorTokenAuth?: () => PriorTokenAuth | null
+  /**
+   * Отметить, что мы ИДЁМ в банк за продлением (`last_attempt_at`), ДО самого похода.
+   *
+   * ⚠ Это не телеметрия — на этой отметке держится ответ, который читает администратор портала
+   * (`expiredCause`, #488): «банк отказал» (переподключение лечит) против «мы ни разу не пытались»
+   * (не лечит). Раньше отметку ставил ТОЛЬКО крон продления, а опрос обновлял токен молча — то
+   * есть отказ банка, полученный по пути опроса, выглядел как «никто не пробовал», и карточка
+   * уверенно советовала НЕ переподключать ровно там, где переподключение и было лекарством.
+   * Зеркальная версия того же дефекта, ради которого всё писалось.
+   *
+   * ⚠ ЛУЧШИЕ УСИЛИЯ: отказ отметки не смеет отменить продление — иначе диагностика ломала бы то,
+   * что диагностирует.
+   */
+  markAttempt?: (token: BankToken, nowMs: number) => Promise<void>
 }
 
 /** Resolve a provider's OAuth creds from env. Alfa: `ALFA_OAUTH_*`; Prior: `PRIOR_OAUTH_*`.
@@ -173,6 +188,11 @@ const liveDeps: BankRefreshDeps = {
   saveToken: updateBankTokenSecrets,
   creds: bankCredsFromEnv,
   priorTokenAuth: priorRefreshAuthFromEnv,
+  // ⚠ НА ПУЛЕ (`dbQuery`), а НЕ на залоченном соединении `q`. `withAdvisoryLock` делает `ROLLBACK`
+  // на исключении, а исключение здесь — обычное дело (банк отверг грант). Отметка, поставленная
+  // внутри транзакции, откатилась бы вместе с ним, и колонка не стала бы ненулевой НИКОГДА —
+  // ровно тот мёртвый механизм, который уже ловили замером в #574.
+  markAttempt: (token, nowMs) => markBankRefreshAttempt(dbQuery, token, nowMs),
   postRefresh: (url, body, headers) => {
     // Cast $fetch to a plain signature (dynamic URL → opt out of Nitro route-type
     // inference; same guard as ensureAccessToken/callRest). Bounded so a hung OAuth call
@@ -245,6 +265,15 @@ export async function ensureBankToken(
 
     const priorAuth = stored.provider === 'prior-by' ? (deps.priorTokenAuth?.() ?? undefined) : undefined
     const { url, body, headers } = bankRefreshRequest(stored.provider, creds, stored.refreshToken, priorAuth)
+    // ⚠ ОТМЕТКА — ДО ПОХОДА В БАНК, и порядок здесь несущий (тот же, что в `runBankKeepAlive`):
+    // на нём держится `expiredCause` (#488). Поставь её ПОСЛЕ успеха — и отказ банка, который она
+    // и должна фиксировать, не отметился бы НИКОГДА, а карточка советовала бы админу не
+    // переподключать ровно там, где переподключение и есть лекарство.
+    try {
+      await deps.markAttempt?.(stored, deps.now())
+    } catch {
+      // Лучшие усилия: продление важнее собственной диагностики.
+    }
     const r = parseBankRefresh(stored.provider, await deps.postRefresh(url, body, headers))
     const updated: BankToken = {
       ...stored,

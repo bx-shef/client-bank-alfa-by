@@ -141,7 +141,7 @@ describe('шаблоны диагностических скриптов нах�
     { script: 'scripts/prod-poll-check.sh', needle: 'real poll', line: render('queue', 'INFO', 'real poll: planned 2 fetch jobs') },
     { script: 'scripts/prod-poll-check.sh', needle: '[fetch]', line: render('fetch', 'INFO', 'alfa-by BY13 2026-08-20..2026-08-21: 3 ops') },
     { script: 'scripts/prod-poll-check.sh', needle: '[crm-sync]', line: render('crm-sync', 'INFO', 'portal M1: 117 обработано') },
-    { script: 'scripts/prod-poll-check.sh', needle: '[op]', line: render('op', 'INFO', 'portal M1, op BY11|d1: credit') },
+    { script: 'scripts/prod-poll-check.sh', needle: '[op]', line: render('op', 'INFO', 'portal M1, op d1: credit') },
     { script: 'scripts/prod-doctor.sh', needle: '[env]', line: render('env', 'ERROR', 'B24_TOKEN_ENC_KEY отсутствует') },
     { script: 'scripts/prod-doctor.sh', needle: '[auth]', line: render('auth', 'WARNING', 'OPERATOR_PASSWORD пуст — вход выключен') }
   ]
@@ -155,7 +155,13 @@ describe('шаблоны диагностических скриптов нах�
     const patterns = src.split('\n')
       .filter(l => /\bgrep\b/.test(l) && !/\bgrep\s+(?:-\w+\s+)*-v\b|\bgrep\s+-v\b/.test(l))
       .flatMap(l => [...l.matchAll(/grep\s+(?:-\w+\s+)*'([^']+)'/g)].map(m => m[1]!))
-      .filter(p => p.includes(needle.replace(/[[\]]/g, '')))
+      // ⚠ Маркер ищем СКОБКАМИ (в обеих формах — литеральной `[op]` и экранированной `\[op\]`), а
+      // не подстрокой имени. Подстрока сгребала чужие шаблоны: `\[fetch\].*[0-9]+ ops` содержит
+      // буквы `op` внутри слова `ops`, и гард требовал от него совпадения со строкой `[op] …`.
+      // Ложная тревога на исправном скрипте — то же зло, что молчание на сломанном.
+      .filter(p => (needle.startsWith('[')
+        ? new RegExp(`\\\\?\\[${needle.replace(/[[\]]/g, '')}\\\\?\\]`).test(p)
+        : p.includes(needle)))
     expect(patterns.length, `${script} больше не ищет ${needle}`).toBeGreaterThan(0)
     // ⚠ И ГЛАВНОЕ: КАЖДЫЙ такой шаблон обязан совпасть с реально отрендеренной строкой. Именно
     // «каждый», а не «хотя бы один»: иначе достаточно одного случайно подходящего рядом.

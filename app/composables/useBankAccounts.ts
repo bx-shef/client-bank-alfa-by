@@ -27,6 +27,15 @@ export interface ConnectedBankAccount {
   /** False ⇒ no refresh token stored ⇒ the account must be re-connected once access expires. */
   hasRefresh: boolean
   /**
+   * Epoch ms последней ПОПЫТКИ обновления токена (#488). `0`/отсутствует — не пробовали ни разу.
+   *
+   * ⚠ Нужен ровно для одного вопроса, и вопрос этот дорогой: истёкшее подключение, которое мы
+   * пытались обновить и получили отказ банка, чинится переподключением, а истёкшее, за которое
+   * продление ни разу не бралось, — не чинится им вовсе. На экране эти два состояния выглядели
+   * одинаково, и разница стоила владельцу четырёх дней повторных переподключений.
+   */
+  lastAttemptAt?: number
+  /**
    * Epoch ms, когда истекает СОГЛАСИЕ банка (#503). `0`/отсутствует — банк согласий не выдаёт
    * (Альфа) или подключение сделано до появления поля: тогда о согласии не говорим ничего.
    *
@@ -82,6 +91,7 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     expiresAt: 0,
     hasRefresh: true,
     consentExpiresAt: 0,
+    lastAttemptAt: 0,
     pollPaused: false,
     // Грант размечен — строка показывает кнопку «Добавить счёт» (#23), иначе визуальный эталон
     // не документировал бы её вовсе.
@@ -95,6 +105,7 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     expiresAt: 0,
     hasRefresh: true,
     consentExpiresAt: 0,
+    lastAttemptAt: 0,
     pollPaused: true,
     grantId: 'preview-grant-2'
   },
@@ -106,6 +117,7 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     expiresAt: 0,
     hasRefresh: false,
     consentExpiresAt: 0,
+    lastAttemptAt: 0,
     pollPaused: false,
     // Незавершённое подключение гранта тоже несёт, но кнопки «Добавить счёт» у него нет: счёт
     // самого подключения ещё не выбран (см. `canAddAccount`).

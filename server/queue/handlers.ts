@@ -37,6 +37,18 @@ import type { TriggerOutcome } from '../utils/applyTriggerDep'
 /** Потолок задач-дозаписей на один прогон — см. `deferredQueued` в `handleCrmSyncJob`. */
 export const MAX_DEFERRED_WRITES_PER_RUN = 25
 
+/**
+ * Потолок дозаливок реестра за один прогон ручной загрузки (#45).
+ *
+ * ⚠ Заметно БОЛЬШЕ, чем у отложенной записи рядом (25), и это не небрежность: та чинит редкий
+ * сбой, а эта — историю целого портала, и потолок в десятки означал бы, что человек грузит один и
+ * тот же файл двадцать раз. При 2 req/s (лимитер портала) триста операций это около пяти минут —
+ * терпимо для действия, которое делают раз в жизни портала, и заведомо меньше, чем ждать вечно.
+ * ⚠ Остаток НЕ замалчивается: он попадает в итог прогона, иначе оборванная на середине дозаливка
+ * выглядела бы законченной.
+ */
+export const MAX_BACKFILLS_PER_RUN = 300
+
 export const MAX_RESOLVED_INTENTS_PER_OP = 10
 
 /** Потолок сообщений «цель не найдена» на один прогон (#421) — см. комментарий у счётчика. */
@@ -84,6 +96,11 @@ export interface HandlerDeps {
    * Returns the element id (or null when the SP is not provisioned / on a demo portal).
    */
   writePaymentRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<string | null>
+  /**
+   * Дозаполнить колонки реестра у элемента, который УЖЕ есть (#45) — для операции, отсеянной
+   * дедупом. Зовётся ТОЛЬКО с ручной загрузки: см. `backfillPaymentRegistryViaRest`.
+   */
+  backfillRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<'filled' | 'already' | 'created'>
   /** Привязать дело к сущностям CRM (#579, шаг 3): элемент реестра, сущность списания, обе
    *  компании. ЛУЧШИЕ УСИЛИЯ — возвращает, сколько привязок не удалось, и НИКОГДА не бросает:
    *  дело уже записано и промаркировано, а падение здесь отменило бы всю оставшуюся пачку, не
@@ -135,9 +152,11 @@ export interface HandlerDeps {
    *  This is the only callback that fires for an op that matched NOTHING, and that is the point:
    *  `onRecognized`/`onResolved`/`onAllocationDecision` all require the op to have got somewhere
    *  first, so a portal whose every payment goes `unmatched` produced ZERO log lines — the summary
-   *  said «117 processed, 117 unmatched» and nothing said WHICH account failed to resolve. That is
-   *  the one fact needed to fix it (the counterparty's account is what `findCompany` searches for
-   *  in the CRM requisites), and it was the one fact nowhere to be found.
+   *  said «117 processed, 117 unmatched» and this is the only line that fires for such an op.
+   *  ⚠ WHICH counterparty account failed to resolve is no longer in this line by default (#617:
+   *  IBANs are financial PII with multi-year log retention) — that fact is carried by the client
+   *  error-chat message (`findCompany` searches `RQ_ACC_NUM`, and the message names that account to
+   *  whoever adds the requisite); the `STATEMENT_DEBUG_LOG` opt-in re-reveals it in this line.
    *
    *  Optional so existing wirings/tests keep type-checking. MUST NOT throw (pure observation). */
   onOperation?: (item: StatementItem, outcome: OperationOutcome, memberId: string) => void
@@ -231,6 +250,28 @@ export interface HandlerDeps {
   deletePortal: (memberId: string, eventTs: number) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
+  /**
+   * Кому раздать выписку по этому счёту (#615): порталам, чей счёт ПОДТВЕРДИЛ БАНК.
+   *
+   * Опрос совместного счёта теперь ОДИН на все порталы (иначе они гоняются за ротацией refresh и
+   * убивают грант друг другу — механизм ежедневной смерти Альфы, #488), поэтому получателей у
+   * одной пачки может быть несколько.
+   *
+   * ⚠ Введённый номер счёта доказательством НЕ является: его вписывают руками и мы его не
+   * проверяем. Первая редакция сопоставляла порталы по нему и была утечкой между клиентами —
+   * админ чужого портала вписывал ваш IBAN и получал вашу выписку себе в CRM.
+   *
+   * ⚠ Спрашивается ЗДЕСЬ, а не кладётся в задачу планировщиком: между планом и исполнением портал
+   * могли отключить, и раздача по устаревшему списку записала бы операции тому, кто нас только
+   * что убрал. Свежий список стоит одного запроса к своей базе — задача только что сходила в банк.
+   *
+   * ⚠ ОПРАШИВАВШИЙ ПОРТАЛ ОБЯЗАН БЫТЬ В СПИСКЕ. Он сходил в банк своим грантом, и банк отдал ему
+   * эту выписку — гейт подтверждения существует для СОСЕДЕЙ, а не для хозяина. Первая редакция
+   * требовала подтверждения от всех и молча останавливала запись в CRM у всех обычных порталов:
+   * подтверждение спрашивается только про СПОРНЫЕ счета, а у большинства счёт уникален, поэтому
+   * его не было бы никогда. Симптом — тишина в CRM при живом `[fetch]`, без единой ошибки.
+   */
+  portalsForAccount: (job: FetchJob) => Promise<string[]>
 }
 
 /** Apply a verified B24 event to the store — the consumer is the SINGLE writer
@@ -264,7 +305,9 @@ export function batchContentHash(items: readonly StatementItem[]): string {
 }
 
 /** Fetch a statement window, then hand the normalized batch to crm-sync. */
-export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<{ fetched: number, chained: boolean }> {
+export async function handleFetchJob(
+  job: FetchJob, deps: HandlerDeps
+): Promise<{ fetched: number, chained: boolean, portals: number }> {
   const items = await deps.fetchStatement(job)
   // The crm-sync jobId derives from batchId, and crm-sync RETAINS completed jobs
   // (STATEMENT_JOB_RETENTION) — so a batchId that repeats is silently dropped by BullMQ's
@@ -282,16 +325,41 @@ export async function handleFetchJob(job: FetchJob, deps: HandlerDeps): Promise<
   // the same hash → still idempotent. `epoch` (manual «Опросить сейчас») is deliberately NOT part
   // of it: an operator-forced refetch of unchanged data need not redo the CRM work either.
   const batchId = `${job.account}:${job.dateFrom}:${job.dateTo}:${batchContentHash(items)}`
-  const chained = items.length > 0
-    ? await deps.enqueueCrmSync({
-        memberId: job.memberId,
-        providerId: job.providerId,
-        source: 'fetch',
-        batchId,
-        items
-      })
-    : false
-  return { fetched: items.length, chained }
+  // ⚠ Пустую пачку не раздаём и получателей не спрашиваем: запрос к базе ради «операций не было»
+  // это трата на каждом тике каждого счёта, то есть на подавляющем большинстве тиков.
+  if (items.length === 0) return { fetched: 0, chained: false, portals: 0 }
+
+  // ⚠ ОДИН опрос — НЕСКОЛЬКО получателей (#615), но только тех, чей счёт подтвердил банк.
+  // `crmSyncJobId` = `crm|memberId|batchId`, поэтому задачи разных порталов не схлопываются и
+  // дедуп у каждого свой — это уже так работало, менять не пришлось.
+  const targets = await deps.portalsForAccount(job)
+
+  // ⚠ Пусто — редкий и честный исход: проводка сочла, что отдавать некому. Живая проводка всегда
+  // включает сюда опрашивавший портал (он сходил в банк своим грантом), поэтому на практике это
+  // означает демо-путь или отсутствие проводки вовсе. Подставлять `job.memberId` ЗДЕСЬ не нужно:
+  // решение «кому отдать» принимает одно место, и дублировать его правило значит однажды разойтись.
+  if (targets.length === 0) return { fetched: items.length, chained: false, portals: 0 }
+
+  let chained = false
+  for (const memberId of targets) {
+    // ⚠ Отказ постановки ОДНОМУ порталу не отменяет остальных, и это ДЕЛАЕТСЯ, а не только
+    // утверждается: `enqueueCrmSync` своих ошибок не глотает, и без `try` обрыв Redis между двумя
+    // получателями уронил бы задачу целиком — BullMQ повторил бы её и заново сходил бы В БАНК ради
+    // очереди, которая моргнула. Первая редакция несла ровно этот комментарий БЕЗ `try` (находка
+    // ревью): текст обещал изоляцию, которой в коде не было.
+    //
+    // ⚠ Повтор безопасен: `crmSyncJobId` = `crm|memberId|batchId`, поэтому уже поставленные
+    // получатели дедуплицируются очередью, а не задваиваются.
+    try {
+      if (await deps.enqueueCrmSync({ memberId, providerId: job.providerId, source: 'fetch', batchId, items })) {
+        chained = true
+      }
+    } catch {
+      // Считать отдельно нечего: сводка прогона и так покажет, что часть получателей не дошла,
+      // а сам отказ очереди виден в её собственных счётчиках.
+    }
+  }
+  return { fetched: items.length, chained, portals: targets.length }
 }
 
 /** Parse an uploaded file, then hand the normalized batch to crm-sync. */
@@ -359,7 +427,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -407,6 +475,12 @@ export async function handleCrmSyncJob(
   let excluded = 0
   /** Operations whose registry element could not be written (#575) — see the call site. */
   let registryFailed = 0
+  /** Сколько операций дозаполнили колонками реестра при повторной загрузке (#45). */
+  let registryBackfilled = 0
+  /** Сколько дозаливок не удалось — отдельно от `registryFailed`: там элемент не создан вовсе. */
+  let registryBackfillFailed = 0
+  /** Сколько операций не дозаполнили из-за капа — человек должен знать, что нужна ещё загрузка. */
+  let registryBackfillSkipped = 0
   let bindingsFailed = 0
   /**
    * Сколько дозаписей ставим за прогон (#578/#585, находка ревью).
@@ -505,6 +579,42 @@ export async function handleCrmSyncJob(
     // (redelivered) job, its marker is in B24 — don't create a second one.
     if (await deps.getActivityId(job.memberId, key)) {
       skipped++
+      // ─── Дозаливка истории реестра (#45) ────────────────────────────────────────────────────
+      // ⚠ Дедуп стоит РАНЬШЕ записи реестра, поэтому портал, обновивший смарт-процесс уже после
+      // импорта, не мог заполнить историю НИКОГДА: колонки появлялись только у операций, которых
+      // ещё нет в CRM. На живом портале это стоило ручного удаления дел и элементов — путь,
+      // который человек не обязан знать.
+      //
+      // ⚠ Только с РУЧНОЙ загрузки (`source: 'parse'`). Окно автоопроса намеренно нахлёстывается,
+      // и сквозь дедуп на каждом тике проходят все вчерашние операции: безусловная дозапись
+      // стоила бы лишнего вызова на каждую из них каждые несколько минут — навсегда, ради
+      // состояния, случающегося один раз при обновлении СП. Повторная загрузка файла уже названа
+      // человеку способом починки (#43), и ровно она теперь и чинит.
+      //
+      // ⚠ Отказ ПРОГЛАТЫВАЕТСЯ: это вторичная запись поверх уже обработанной операции, и ронять
+      // из-за неё разбор остальной пачки нельзя. Считается отдельно от `registryFailed` — там
+      // «элемент не создан вовсе», здесь «историю дозаполнить не вышло», чинится это разным.
+      if (job.source === 'parse' && ledgerPaymentRef && deps.backfillRegistry) {
+        // ⚠ КАП на прогон. Файл до 2 МБ несёт сотни операций, а на skip-пути уже есть вызов
+        // (`getActivityId`); backfill добавляет ещё один-два. При 2 req/s это десятки минут, и всё
+        // это время очередь `crm-sync` (concurrency 1) занята одним порталом. Тот же приём, что у
+        // соседней отложенной записи. Недоделанное чинится следующей загрузкой — об остатке
+        // говорит итог прогона, иначе человек решил бы, что дозаливка прошла целиком.
+        if (registryBackfilled + registryBackfillFailed < MAX_BACKFILLS_PER_RUN) {
+          try {
+            // ⚠ Компания ищется ЗДЕСЬ: при отсутствующем элементе (СП появился позже импорта)
+            // дозаливка создаёт его полноценно, а элемент без ссылки на плательщика — половина
+            // реестра. На обычном пути `findCompany` зовётся ниже; здесь мы до него не доходим.
+            const backfillCompany = await deps.findCompany(item, job.memberId)
+            const outcome = await deps.backfillRegistry(item, backfillCompany, job.memberId, job.providerId, ledgerPaymentRef)
+            if (outcome !== 'already') registryBackfilled++
+          } catch {
+            registryBackfillFailed++
+          }
+        } else {
+          registryBackfillSkipped++
+        }
+      }
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
@@ -933,5 +1043,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
 }

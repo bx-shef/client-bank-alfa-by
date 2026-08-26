@@ -13,12 +13,16 @@
 
 import { SESSION_COOKIE, operatorAllowed, resolveAuthConfig } from '../../utils/session'
 import { listAllBankAccountInfo } from '../../utils/bankTokenStore'
+import { selectSubscriptionEnded } from '../../utils/tokenStore'
 import { handleBankHealth } from '../../utils/bankHealthHandler'
 import { portalHash } from '../../utils/telemetryAttributes'
 import { dbQuery } from '../../db/client'
 import { useServerLogger } from '../../utils/serverLogger'
 
 const log = useServerLogger('queue')
+
+/** Сколько порталов с истёкшей подпиской показываем оператору за раз. */
+const MAX_SUBSCRIPTION_LISTED = 50
 
 export default defineEventHandler(async (event) => {
   const cfg = resolveAuthConfig(process.env)
@@ -28,6 +32,9 @@ export default defineEventHandler(async (event) => {
   }
   const { status, body } = await handleBankHealth({
     listRows: () => listAllBankAccountInfo(dbQuery),
+    // ⚠ Потолок есть и здесь: экран оператора не должен превращаться в выгрузку всего флота, если
+    // однажды подписка отвалится массово. Дальше первых строк смотреть всё равно не будут.
+    listSubscriptionEnded: () => selectSubscriptionEnded(dbQuery, MAX_SUBSCRIPTION_LISTED),
     now: Date.now,
     hashPortal: portalHash,
     warn: (m: string) => log.error(m)

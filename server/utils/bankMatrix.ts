@@ -17,7 +17,7 @@
 // portals whose admin is looking at a stale page.
 
 import type { CrmSideAccount, MatrixRow } from '../../app/utils/bankAccountMatrix'
-import { buildAccountMatrix } from '../../app/utils/bankAccountMatrix'
+import { bankSideIncomplete, buildAccountMatrix } from '../../app/utils/bankAccountMatrix'
 import type { BankSideProviderResult } from './bankAccountList'
 import type { MyCompanyAccounts } from './myCompanyRequisites'
 
@@ -84,7 +84,16 @@ export async function handleBankMatrix(deps: BankMatrixDeps, input: BankMatrixIn
   const providers = await deps.bankSide(memberId)
   const connectedKeys = await deps.connected(memberId)
   const bank = providers.flatMap(p => p.accounts)
-  const rows: MatrixRow[] = buildAccountMatrix({ crm, bank, connectedKeys })
+  // ⚠ A provider that errored contributes NO accounts, so without this flag every CRM account
+  // would be classified «банк его не отдаёт» — a confident claim about a question we never got to
+  // ask. `listBankSideAccounts` only returns providers the portal actually connected, so this is
+  // «a bank we asked stayed silent», never «Приор не подключён».
+  //
+  // ⚠ The predicate is SHARED with the component (which re-derives the same thing to word its
+  // summaries): written twice, the rows and the line above them would one day describe different
+  // worlds.
+  const bankIncomplete = bankSideIncomplete(providers)
+  const rows: MatrixRow[] = buildAccountMatrix({ crm, bank, connectedKeys, bankIncomplete })
 
   return {
     status: 200,

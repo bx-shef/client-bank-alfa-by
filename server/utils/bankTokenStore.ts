@@ -204,9 +204,19 @@ export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): 
  * ⚠ Пустой грант не группирует — тем же правилом, что и везде: он значит «не размечено», а не
  * «общий», и склейка по нему разослала бы метку чужим подключениям портала.
  */
+/**
+ * Что нужно `markBankRefreshAttempt`, чтобы найти строку: грант (а при пустом гранте — счёт).
+ *
+ * ⚠ УЖЕ, чем `BankAccountRef`, и намеренно: отметку ставят ДВА пути продления (#488), и у второго —
+ * `ensureBankToken` — на руках `BankToken`, у которого нет и не должно быть `pollPaused` (пауза
+ * относится к опросу, а не к токену). Требовать здесь полный `BankAccountRef` значило бы заставить
+ * вызывающего выдумать поле, которое эта функция не читает, — а выдуманное поле однажды прочтут.
+ */
+export type BankAttemptRef = Pick<BankAccountRef, 'memberId' | 'provider' | 'accountKey'> & { grantId?: string }
+
 export async function markBankRefreshAttempt(
   query: QueryFn,
-  ref: BankAccountRef,
+  ref: BankAttemptRef,
   nowMs: number
 ): Promise<void> {
   await query(
@@ -417,6 +427,16 @@ export interface BankAccountInfo extends BankAccountRef {
   lastAttemptAt: number
   /** Epoch ms the BANK'S CONSENT lapses (#503). `0` — unknown (Alfa grants none), not expired. */
   consentExpiresAt: number
+  /**
+   * Epoch ms когда БАНК подтвердил, что этот номер счёта принадлежит гранту этой строки (#615).
+   * `0` — не спрашивали или банк его не назвал.
+   *
+   * ⚠ Нужен потому, что номер счёта админ вписывает РУКАМИ и мы его нигде не проверяем. Пока
+   * каждый портал опрашивает банк сам, вписанный чужой номер безвреден: задача просто падает.
+   * А РАЗДАВАТЬ по нему выписку нельзя — админ чужого портала впишет ваш IBAN и получит вашу
+   * выписку себе в CRM.
+   */
+  accountConfirmedAt: number
   /** Грант банка, общий для счетов одного подключения (#23). `''` — подключение не размечено
    *  (заведено до этой правки); интерфейс по нему группирует счета в одно «подключение». */
   grantId: string
@@ -432,7 +452,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused, grant_id,
+            poll_paused, grant_id, account_confirmed_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE member_id = $1 ORDER BY provider, account_key`,
@@ -452,6 +472,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    accountConfirmedAt: Number(r.account_confirmed_at ?? 0),
     grantId: String(r.grant_id ?? ''),
     pollPaused: r.poll_paused === true
   }))
@@ -467,7 +488,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
 export async function getBankAccountInfoById(query: QueryFn, id: number): Promise<BankAccountInfo | null> {
   const rows = await query(
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused, grant_id,
+            poll_paused, grant_id, account_confirmed_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        FROM bank_tokens WHERE id = $1`,
@@ -485,6 +506,7 @@ export async function getBankAccountInfoById(query: QueryFn, id: number): Promis
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    accountConfirmedAt: Number(r.account_confirmed_at ?? 0),
     grantId: String(r.grant_id ?? ''),
     pollPaused: r.poll_paused === true
   }
@@ -499,10 +521,43 @@ export async function getBankAccountInfoById(query: QueryFn, id: number): Promis
  *  on a busy install, not thousands. Selecting all of them and filtering in a pure function is
  *  cheaper to reason about (and to test) than a per-provider `CASE` cutoff in SQL, because the
  *  refresh lifetime differs by bank and is the thing most likely to be corrected later. */
+/**
+ * Отметить счета, которые БАНК назвал среди счетов гранта портала (#615).
+ *
+ * ⚠ ЧЕТВЁРТЫЙ писатель `bank_tokens`, и он UPDATE-only, как трое прежних (#505/#509/#576): пишет
+ * РОВНО ОДНУ колонку и не может создать строку. Апсертом здесь была бы та же беда, что уже дважды
+ * ловили: отключённое подключение воскресало бы фоновым проходом.
+ *
+ * ⚠ `updated_at` НЕ штампуем: по нему keep-alive выбирает, кого продлевать (#489). Перевод часов
+ * вперёд выкинул бы подключение из выборки до самой смерти гранта.
+ *
+ * ⚠ Лок НЕ берём: за эту колонку никто не борется — обновление токена её не трогает, а гонку с
+ * переименованием счёта закрывает само условие `WHERE account_key = ANY(...)`: переименованная
+ * строка под него просто не попадёт. Взять лок было бы ВРЕДНО — держит его сетевой POST к банку.
+ *
+ * ⚠ Скоуп по порталу в самом WHERE (IDOR): подтверждение одного портала не должно проставляться
+ * чужой строке с тем же номером — в этом весь смысл признака.
+ *
+ * @returns сколько строк отмечено.
+ */
+export async function markAccountsConfirmed(
+  query: QueryFn, memberId: string, provider: BankProviderId, accountKeys: readonly string[], atMs: number
+): Promise<number> {
+  const keys = [...new Set(accountKeys.filter(k => k !== ''))]
+  if (keys.length === 0) return 0
+  const rows = await query(
+    `UPDATE bank_tokens SET account_confirmed_at = $4
+      WHERE member_id = $1 AND provider = $2 AND account_key = ANY($3::text[])
+      RETURNING id`,
+    [memberId, provider, keys, Math.floor(atMs)]
+  )
+  return rows.length
+}
+
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
     `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
-            poll_paused, grant_id,
+            poll_paused, grant_id, account_confirmed_at,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
        -- ⚠ id вторым ключом ОБЯЗАТЕЛЕН (#23, находка ревью): счета одного гранта несут одинаковый
@@ -525,6 +580,7 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
+    accountConfirmedAt: Number(r.account_confirmed_at ?? 0),
     grantId: String(r.grant_id ?? ''),
     pollPaused: r.poll_paused === true
   }))

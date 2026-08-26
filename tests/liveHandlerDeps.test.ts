@@ -148,13 +148,18 @@ describe('liveHandlerDeps — `[op]` не раскрывает назначен�
   // `STATEMENT_DEBUG_LOG` читается при загрузке модуля и в тестах не задан ⇒ проверяем дефолт.
   const SECRET = 'ОПЛАТА ПО СЧЁТУ 1545874-B24 ЗА ЦЕМЕНТ'
 
-  it('назначения нет в строке, зато есть счёт контрагента — то, ради чего строка и заведена', () => {
+  it('без флага в строке нет ни назначения, ни номеров счетов обеих сторон (#617)', () => {
     const read = captureLog()
-    deps.onOperation?.(demoItem({ purpose: SECRET, counterparty: { name: 'X', unp: '', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
+    deps.onOperation?.(demoItem({ account: 'BY55OUR', purpose: SECRET, counterparty: { name: 'X', unp: '', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
     const line = read()
     expect(line).not.toContain(SECRET)
     expect(line).not.toContain('ЦЕМЕНТ') // и фрагментом тоже не протекает
-    expect(line).toContain('BY77TEST')
+    // ⚠ #617: номера счетов обеих сторон — финансовые ПДн с многолетней ретенцией — по умолчанию
+    // вне строки; диагностику «какой счёт не нашёлся» несёт сообщение в чат ошибок клиента.
+    expect(line).not.toContain('BY77TEST')
+    expect(line).not.toContain('BY55OUR')
+    // Диагностика без ПДн осталась: исход операции виден.
+    expect(line).toContain('NO OWNER')
   })
 
   it('суммы в строке нет — граница PRIVACY.md §Логи проходит здесь же', () => {
@@ -185,11 +190,14 @@ describe('liveHandlerDeps — `[op]` раскрывает назначение �
     vi.resetModules()
     const { liveHandlerDeps } = await import('../server/queue/worker')
     const read = captureLog()
-    liveHandlerDeps().onOperation?.(demoItem({ purpose: `${SECRET} ${'х'.repeat(500)}` }), { owner: 'none', recognized: 0, activityId: null }, 'M')
+    liveHandlerDeps().onOperation?.(demoItem({ account: 'BY55OUR', purpose: `${SECRET} ${'х'.repeat(500)}`, counterparty: { name: 'X', unp: '', account: 'BY77TEST' } }), { owner: 'none', recognized: 0, activityId: null }, 'M')
     const line = read()
     expect(line).toContain(SECRET)
     // Кап держит: одно поле не может залить строку целиком.
     expect(line).not.toContain('х'.repeat(400))
+    // ⚠ #617: тот же флаг раскрывает и номера счетов обеих сторон — для отладки на нашей стороне.
+    expect(line).toContain('BY77TEST')
+    expect(line).toContain('BY55OUR')
   })
 })
 

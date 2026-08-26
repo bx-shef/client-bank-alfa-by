@@ -16,6 +16,7 @@ import {
   LANDING_MARKET_PROMO
 } from '~/utils/landing'
 import { B24_BOOKING_URL } from '~/utils/booking'
+import { useLocalMode } from '~/composables/useLocalMode'
 
 definePageMeta({ layout: 'landing' })
 
@@ -32,6 +33,8 @@ usePublicPageSeo({
 
 useCardGlow()
 const { reachGoal } = useMetrikaGoal()
+// Локальный режим форка (#39): скрывает нашу карточку Маркета на лендинге.
+const localMode = useLocalMode()
 
 const steps = LANDING_STEPS
 const features = LANDING_FEATURES
@@ -121,7 +124,9 @@ const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: 
                 size="xl"
                 @click="reachGoal('booking_click')"
               />
+              <!-- Кнопка Маркета — НАШ промо-канал (дубль `AppInBitrixCard`); в локальном режиме форка скрыта (#39). -->
               <B24Button
+                v-if="!localMode"
                 label="Открыть в Маркете Bitrix24"
                 :to="LANDING_MARKET_URL"
                 target="_blank"
@@ -262,8 +267,10 @@ const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: 
           {{ LANDING_DEMO.note }}
         </p>
 
-        <!-- Обязательный посыл про кастом-доработку под клиента (на его сервере). -->
+        <!-- Посыл про кастом-доработку под клиента — НАШ cross-sell (дубль `CustomDevCard`), в
+             локальном режиме форка скрыт (#39). -->
         <div
+          v-if="!localMode"
           data-glow-card
           class="mt-6 rounded-2xl border border-[rgb(var(--color-accent-primary-ch)/0.25)] bg-[rgb(var(--color-accent-primary-ch)/0.05)] p-6 sm:p-7 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6"
         >
@@ -321,7 +328,11 @@ const BANK_ACCENT: Record<'cyan' | 'green', { card: string, pill: string, name: 
          primary «Оставить заявку» (стратегия «платный-first»; так же ослаблена
          дублирующая ссылка на Маркет в hero). Тексты — LANDING_MARKET_PROMO
          (docs/POSITIONING.md). -->
-    <section class="px-[22px] lg:px-8 pt-[8px] pb-[56px] sm:pb-[72px]">
+    <!-- Карточка «Приложение для Bitrix24» — НАШ листинг Маркета; в локальном режиме форка скрыта (#39). -->
+    <section
+      v-if="!localMode"
+      class="px-[22px] lg:px-8 pt-[8px] pb-[56px] sm:pb-[72px]"
+    >
       <div class="max-w-[600px] mx-auto">
         <AppInBitrixCard
           :eyebrow="LANDING_MARKET_PROMO.eyebrow"

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildRegistryFields, DIRECTION_LABELS, writePaymentRegistryViaRest } from '../server/utils/paymentRegistryWrite'
+import {
+  buildRegistryFields, DIRECTION_LABELS, writePaymentRegistryViaRest, backfillPaymentRegistryViaRest
+} from '../server/utils/paymentRegistryWrite'
 import { buildPaymentElementAddCall } from '../app/utils/distributionLedger'
 import { PAYMENT_SP_FIELDS, buildUfFieldNameCamel } from '../app/config/distributionSp'
 import { dedupKey } from '../app/utils/statement'
@@ -258,5 +260,70 @@ describe('#578 колонки дописываются элементу, кот�
     const { call, calls } = recorder(null)
     await writePaymentRegistryViaRest(op(), null, 'alfa-by', sp, call)
     expect(calls.map(c => c.method)).toEqual(['crm.item.list', 'crm.item.add'])
+  })
+})
+
+// ⚠ #45: дозаливка реестра у операции, которую дедуп УЖЕ отсеял. Транспорт не был покрыт ничем —
+// проводка проверялась фейком, всегда возвращавшим 'filled', то есть ровно те ветки, где живут оба
+// найденных ревью риска, не проверялись выполнением.
+describe('#45 backfillPaymentRegistryViaRest', () => {
+  const dirField = buildUfFieldNameCamel(SP.id, PAYMENT_SP_FIELDS.direction.postfix)
+
+  /** Транспорт: probe возвращает `items`, всё прочее — пустой успех. */
+  function fake(items: Record<string, unknown>[]) {
+    return vi.fn(async (method: string, _params: Record<string, unknown>) => {
+      if (method === 'crm.item.list') return { result: { items } }
+      if (method === 'crm.item.add') return { result: { item: { id: 77 } } }
+      return { result: { item: {} } }
+    }) as unknown as RestCall
+  }
+
+  it('элемента НЕТ — создаём полноценно, а не выходим (главный случай #45)', async () => {
+    // ⚠ Портал, где смарт-процесс появился ПОЗЖЕ импорта: на том прогоне элемент не создавался
+    // вовсе. Прежняя редакция возвращала здесь `missing` и не делала ничего — то есть починка,
+    // обещанная человеку в справке, молча не срабатывала именно там, где нужна (находка ревью).
+    const call = fake([])
+    expect(await backfillPaymentRegistryViaRest(op(), '9', 'alfa-by', SP, call)).toBe('created')
+    const add = recorded(call).find(([m]) => m === 'crm.item.add')
+    expect(add, 'элемент обязан создаться').toBeTruthy()
+    const fields = (add![1].fields ?? {}) as Record<string, unknown>
+    expect(fields[dirField]).toBe('Приход')
+    expect(fields.companyId, 'ссылка на плательщика — половина смысла реестра').toBe(9)
+  })
+
+  it('элемент ПУСТОЙ — дописываем колонки', async () => {
+    const call = fake([{ id: 42, [dirField]: '' }])
+    expect(await backfillPaymentRegistryViaRest(op(), null, 'alfa-by', SP, call)).toBe('filled')
+    const upd = recorded(call).find(([m]) => m === 'crm.item.update')
+    expect(upd![1].id).toBe(42)
+    expect((upd![1].fields as Record<string, unknown>)[dirField]).toBe('Приход')
+  })
+
+  it('элемент УЖЕ заполнен — ни одного лишнего вызова', async () => {
+    const call = fake([{ id: 42, [dirField]: 'Приход' }])
+    expect(await backfillPaymentRegistryViaRest(op(), null, 'alfa-by', SP, call)).toBe('already')
+    expect(recorded(call).some(([m]) => m !== 'crm.item.list'), 'update слать не за чем').toBe(false)
+  })
+
+  // ⚠ ИНДИКАТОР — НАПРАВЛЕНИЕ, А НЕ ДАТА, и это находка ревью, а не вкусовщина. Дата приходит ИЗ
+  // ВЫПИСКИ, и все четыре нормализатора умеют вернуть пустую строку (банк не прислал / формат не
+  // разобран). Пустые значения `registryFieldPayload` опускает, поэтому колонка даты у такой
+  // операции не появится НИКОГДА — и дозаливка повторялась бы на каждой загрузке вечно, а счётчик
+  // в логе врал бы «дозаполнено N».
+  it('операция без даты в выписке не дозаполняется бесконечно — #45', async () => {
+    const noDate = op({ acceptDate: '' })
+    const call = fake([{ id: 42, [dirField]: 'Приход' }]) // направление записано прошлым прогоном
+    expect(await backfillPaymentRegistryViaRest(noDate, null, 'alfa-by', SP, call)).toBe('already')
+    expect(recorded(call).some(([m]) => m === 'crm.item.update')).toBe(false)
+  })
+
+  it('probe ищет по маркеру операции — чужой элемент не трогаем', async () => {
+    const call = fake([{ id: 42, [dirField]: 'Приход' }])
+    await backfillPaymentRegistryViaRest(op(), null, 'alfa-by', SP, call)
+    const [, params] = recorded(call).find(([m]) => m === 'crm.item.list')!
+    const markerField = buildUfFieldNameCamel(SP.id, PAYMENT_SP_FIELDS.marker.postfix)
+    expect((params.filter as Record<string, unknown>)[markerField]).toBe(dedupKey(op()))
+    // Индикатор идёт тем же запросом — заполненный элемент не стоит второго round-trip.
+    expect(params.select).toContain(dirField)
   })
 })

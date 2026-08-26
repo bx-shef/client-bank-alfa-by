@@ -110,6 +110,12 @@ CREATE TABLE IF NOT EXISTS portal_app_rating (
 -- before this change have no stored date. Reading 0 as expiry would declare every one of them dead
 -- and send people into their internet bank for something that works.
 ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS consent_expires_at BIGINT NOT NULL DEFAULT 0;
+-- Счёт ПОДТВЕРЖДЁН банком для этого гранта (#615): банк перечислил его среди счетов гранта.
+-- 0 -- не спрашивали или не нашли. Нужен потому, что номер счёта админ вписывает РУКАМИ и нигде
+-- не проверяется: пока каждый портал опрашивает банк сам, вписанный чужой номер безвреден -- его
+-- задача просто падает. А раздавать по нему выписку нельзя, иначе админ чужого портала впишет ваш
+-- IBAN и получит вашу выписку себе в CRM.
+ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS account_confirmed_at BIGINT NOT NULL DEFAULT 0;
 
 -- Неизменяемый адрес строки подключения (#517). Первичный ключ таблицы — (member_id, provider,
 -- account_key), но сам account_key МЕНЯЕТСЯ: выбор счёта переименовывает временный ~pending:-ключ
@@ -194,6 +200,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS bank_tokens_id_key ON bank_tokens (id);
 -- был бы стёрт никогда — уборщик выглядел бы рабочим и не работал. Любое удачное обновление
 -- обнуляет отметку, иначе один транзиентный отказ приговаривал бы портал навсегда.
 ALTER TABLE portal_tokens ADD COLUMN IF NOT EXISTS grant_revoked_at BIGINT NOT NULL DEFAULT 0;
+
+-- Когда подписка портала на REST API Bitrix24 ПЕРВЫЙ раз ответила «истекла» (#614). Ноль — жива.
+--
+-- ⚠ Отдельная колонка, а не переиспользование grant_revoked_at: сигналы РАЗНЫЕ и следствия разные.
+-- invalid_grant значит «приложение удалили» и ведёт к стиранию портала через месяц (#574);
+-- Subscription has been ended значит «клиент не оплатил» — портал жив, приложение на месте, и
+-- через четыре дня мы отключаем только БАНКОВСКИЕ подключения, ничего не стирая.
+--
+-- ⚠ Отсчёт от ПЕРВОГО отказа, снятие при первом успехе. Отдельного счётчика «сколько ошибок
+-- подряд» не нужно: срок в четыре дня сам служит порогом, а блип снимется следующим удачным
+-- вызовом задолго до отсечки.
+ALTER TABLE portal_tokens ADD COLUMN IF NOT EXISTS subscription_ended_at BIGINT NOT NULL DEFAULT 0;
 
 -- Аренда «одна операция на портал» БЕЗ удержания соединения (#538). Провижининг СП и пересчёт
 -- распределения раньше держали advisory-лок, то есть соединение из пула, всё время своей

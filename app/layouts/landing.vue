@@ -13,11 +13,14 @@ import LogInIcon from '@bitrix24/b24icons-vue/outline/LogInIcon'
 import HomeIcon from '@bitrix24/b24icons-vue/outline/HomeIcon'
 import HandshakeIcon from '@bitrix24/b24icons-vue/outline/HandshakeIcon'
 import { LANDING_MARKET_URL } from '~/utils/landing'
+import { useLocalMode } from '~/composables/useLocalMode'
 
 // Public-landing chrome ported from offer.bx-shef.by (bx-shef Lp): dark branded
 // header + footer + business card. Scoped to this layout so the in-portal pages
 // (/app, /settings, /login, /queues) keep their own light/dark-auto theme.
 const cardOpen = ref(false)
+// Локальный режим форка (#39): скрывает визитку ИП Шевчик (наш брендинг).
+const localMode = useLocalMode()
 
 // Порядок: сначала аудитории сайта (Клиентам/Партнёрам — внутренние страницы,
 // дают переключаться между двумя частями лендинга), затем где взять продукт
@@ -105,7 +108,9 @@ useHead({
       <B24NavigationMenu :items="navItems" />
 
       <template #right>
+        <!-- Визитка ИП Шевчик — НАШ брендинг; в локальном режиме форка кнопка скрыта (#39). -->
         <B24Button
+          v-if="!localMode"
           aria-label="Визитка"
           color="air-tertiary-no-accent"
           :icon="ContactDetailsIcon"
@@ -146,6 +151,7 @@ useHead({
 
     <ClientOnly>
       <BusinessCardModal
+        v-if="!localMode"
         :open="cardOpen"
         @close="cardOpen = false"
       />

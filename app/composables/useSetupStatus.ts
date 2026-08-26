@@ -27,6 +27,8 @@ export interface SetupStatus {
   /** Последний прогон упёрся в неверную карту распознавания (#595). `undefined` — наблюдения нет
    *  (или старый сервер); строка карты тогда зависит только от числа шаблонов. */
   recognitionMisconfig?: { slot: string }
+  /** Имена полей смарт-процесса «Платежи», как их отдал портал (#46). Отсутствует ⇒ не спрашивали. */
+  spFieldNames?: string[]
 }
 
 const DEFAULTS: SetupStatus = {
@@ -52,7 +54,16 @@ export function useSetupStatus() {
   const loadedOk = ref(false)
   const error = ref('')
 
-  async function load(): Promise<void> {
+  /**
+   * Прочитать серверную половину экрана готовности.
+   *
+   * ⚠ `fields` — ОТДЕЛЬНАЯ, дорогая часть (#46): проверка полей смарт-процесса стоит двух REST в
+   * портал (`app.option.get` + `crm.item.fields`) и нужна ровно одному экрану — карточке
+   * готовности в настройках. `/app` зовёт тот же `load()` на каждом открытии, а строки
+   * смарт-процессов у него нет вовсе, поэтому по умолчанию поля НЕ запрашиваются: платит тот, кто
+   * показывает. Без этого каждое открытие главного экрана дарило порталу два лишних вызова.
+   */
+  async function load(opts: { fields?: boolean } = {}): Promise<void> {
     const a = frameAuth()
     inFrame.value = a !== null
     if (!a) {
@@ -65,7 +76,10 @@ export function useSetupStatus() {
     loading.value = true
     error.value = ''
     try {
-      const res = await $fetch<Partial<SetupStatus>>('/api/setup-status', { headers: authHeaders(a) })
+      const res = await $fetch<Partial<SetupStatus>>('/api/setup-status', {
+        headers: authHeaders(a),
+        ...(opts.fields ? { query: { fields: '1' } } : {})
+      })
       loadedOk.value = true
       status.value = {
         connectedAccounts: Number(res?.connectedAccounts) || 0,
@@ -89,6 +103,11 @@ export function useSetupStatus() {
         ...(res?.myCompany ? { myCompany: res.myCompany } : {}),
         // Признак misconfig карты распознавания (#595): переносим только валидный слот-объект,
         // иначе кривой ответ сервера зажёг бы красную строку на исправном портале.
+        // ⚠ Ключ переносим ТОЛЬКО когда сервер его прислал (#46): отсутствие означает «не
+        // спрашивали», и подставлять пустой массив нельзя — он читался бы как «полей нет вовсе».
+        ...(Array.isArray(res?.spFieldNames)
+          ? { spFieldNames: res.spFieldNames.filter((n): n is string => typeof n === 'string') }
+          : {}),
         ...(res?.recognitionMisconfig && typeof res.recognitionMisconfig.slot === 'string' && res.recognitionMisconfig.slot !== ''
           ? { recognitionMisconfig: { slot: res.recognitionMisconfig.slot } }
           : {})

@@ -50,7 +50,10 @@ const items = computed(() => buildReadiness({
   pollEnabled: setup.status.value.pollEnabled,
   pollIntervalMin: setup.status.value.pollIntervalMin,
   lastRunMs: setup.status.value.lastRunMs,
-  recognitionMisconfig: setup.status.value.recognitionMisconfig
+  recognitionMisconfig: setup.status.value.recognitionMisconfig,
+  // ⚠ #46: без этого поля строка смарт-процессов не увидит нехватки полей реестра — ровно та
+  // забытая проводка, что уже случилась с `unhealthyAccounts`/`pausedAccounts` (см. выше).
+  spFieldNames: setup.status.value.spFieldNames
 }))
 
 const ready = computed(() => isFullyReady(items.value))
@@ -84,11 +87,11 @@ const lastRun = computed(() => {
  *  redirect that never notifies us) doesn't leave the checklist claiming «нет подключений» about
  *  the account the admin just connected. */
 function refresh() {
-  void setup.load()
+  void setup.load({ fields: true })
 }
 
 onMounted(() => {
-  void setup.load()
+  void setup.load({ fields: true })
   // Chat settings are NOT loaded here: the parent form already loaded them, and useChatSettings.load()
   // is NOT idempotent — a second call would re-fetch and `Object.assign` the server copy over
   // whatever the admin has typed since, silently discarding edits.

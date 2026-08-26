@@ -147,6 +147,89 @@ describe('ensureBankToken', () => {
     expect(saved).toEqual([out]) // persisted the rotated token
   })
 
+  // ⚠ #488, находка ревью. Отметка попытки (`last_attempt_at`) — не телеметрия: на ней держится
+  // ответ, который читает администратор портала («банк отказал» ⇒ переподключение лечит, против
+  // «мы ни разу не пытались» ⇒ не лечит). Ставил её ТОЛЬКО крон продления, а опрос обновлял токен
+  // по дороге молча — то есть отказ банка, полученный по пути опроса, выглядел как «никто не
+  // пробовал». Зеркальная копия дефекта, ради которого задача и заводилась.
+  describe('отметка попытки продления (#488)', () => {
+    it('ставится ДО похода в банк — иначе отказ банка не отметился бы НИКОГДА', async () => {
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const order: string[] = []
+      const { deps } = fakeDeps({ stored: near })
+      await ensureBankToken(near, {
+        ...deps,
+        markAttempt: async () => {
+          order.push('mark')
+        },
+        postRefresh: async (...args) => {
+          order.push('post')
+          return deps.postRefresh(...args)
+        }
+      })
+      expect(order).toEqual(['mark', 'post'])
+    })
+
+    it('отмечается и тогда, когда банк ОТКАЗАЛ — ради этого случая всё и написано', async () => {
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored: near })
+      const markAttempt = vi.fn(async () => {})
+      await expect(ensureBankToken(near, {
+        ...deps,
+        markAttempt,
+        postRefresh: async () => {
+          throw new Error('invalid_grant')
+        }
+      })).rejects.toThrow('invalid_grant')
+      expect(markAttempt).toHaveBeenCalledTimes(1)
+    })
+
+    it('отмечается СТРОКА ИЗ БАЗЫ, а не переданный токен — ключ счёта мог смениться', async () => {
+      // Между отбором и локом админ мог выбрать счёт (`~pending:` → номер, #509). Отмечать надо то,
+      // что реально лежит в базе, иначе метка легла бы мимо строки.
+      const near = tok({ accountKey: '~pending:n1', expiresAt: NOW + 10_000 })
+      const stored = tok({ accountKey: 'BY99REAL', expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored })
+      const marked: BankToken[] = []
+      const markAttempt = async (t: BankToken) => {
+        marked.push(t)
+      }
+      await ensureBankToken(near, { ...deps, loadToken: async () => stored, markAttempt })
+      expect(marked[0]?.accountKey).toBe('BY99REAL')
+    })
+
+    it('свежий токен банк не трогает — и отметку тоже', async () => {
+      const { deps } = fakeDeps()
+      const markAttempt = vi.fn(async () => {})
+      await ensureBankToken(tok(), { ...deps, markAttempt })
+      expect(markAttempt).not.toHaveBeenCalled()
+    })
+
+    it('нет refresh-токена — в банк не идём, значит и попытки нет', async () => {
+      // Иначе строка без refresh копила бы «попытки», которых не было, и `expiredCause` объявлял
+      // бы «банк отказал» там, где мы не спрашивали.
+      const near = tok({ provider: 'prior-by', expiresAt: NOW + 10_000, refreshToken: '' })
+      const { deps } = fakeDeps({ stored: near })
+      const markAttempt = vi.fn(async () => {})
+      await ensureBankToken(near, { ...deps, markAttempt })
+      expect(markAttempt).not.toHaveBeenCalled()
+    })
+
+    it('отказ САМОЙ отметки не смеет отменить продление', async () => {
+      // Лучшие усилия: диагностика не имеет права ломать то, что диагностирует.
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps, saved } = fakeDeps({ stored: near })
+      const out = await ensureBankToken(near, {
+        ...deps,
+        markAttempt: async () => {
+          throw new Error('db down')
+        }
+      })
+      expect(out.accessToken).toBe('A2')
+      expect(saved).toHaveLength(1)
+    })
+  })
+
   it('keeps the old refresh token when the provider omits a new one (Prior)', async () => {
     const near = tok({ provider: 'prior-by', expiresAt: NOW + 10_000, refreshToken: 'OLD' })
     const { deps } = fakeDeps({ stored: near, refreshRaw: { access_token: 'A2', expires_in: 900 } })

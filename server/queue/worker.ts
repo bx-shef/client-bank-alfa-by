@@ -43,7 +43,7 @@ import {
 import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
-import { deleteToken, getApplicationToken, saveToken } from '../utils/tokenStore'
+import { deleteToken, getApplicationToken, saveToken, clearSubscriptionEnded } from '../utils/tokenStore'
 import { deleteImportResultForPortal, markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
 import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
@@ -58,7 +58,7 @@ import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
-import { writePaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
+import { writePaymentRegistryViaRest, backfillPaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { bindActivityViaRest } from '../utils/activityBindingsWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
@@ -66,7 +66,8 @@ import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifySettingsErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
-import { deleteBankTokensForPortal } from '../utils/bankTokenStore'
+import { deleteBankTokensForPortal, listAllBankAccountInfo } from '../utils/bankTokenStore'
+import { statementRecipients } from '../../app/utils/accountSharing'
 import { deleteRatingForPortal } from '../utils/appRatingStore'
 import { deleteLeasesForPortal } from '../utils/singleFlightLease'
 import { fetchBankStatement } from '../utils/bankFetch'
@@ -134,10 +135,11 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 /** Artificial processing delay for the load demo (env DEMO_DELAY_MS), so the demo's
  *  fetch/crm-sync jobs sit in the queues long enough to show a visible backlog on
  *  the chart. Applied ONLY to demo accounts; real jobs never wait. Read once. */
-/** Reveal the PAYMENT PURPOSE in the `[op]` log line (`STATEMENT_DEBUG_LOG=1`; default OFF).
- *  Read once at start — flipping it means a restart, which is intended: this is a deliberate,
- *  announced loosening of docs/PRIVACY.md §Логи for a calibration run, not a runtime knob.
- *  Everything else in `[op]` is logged unconditionally; only this field is gated. */
+/** Reveal FINANCIAL PII in the `[op]` log line — both account numbers (ours + counterparty) and
+ *  the payment purpose (`STATEMENT_DEBUG_LOG=1`; default OFF, #617). Read once at start — flipping
+ *  it means a restart, which is intended: this is a deliberate, announced loosening of
+ *  docs/PRIVACY.md §Логи for a calibration run, not a runtime knob. By default `[op]` carries NO
+ *  account numbers: json-file rotates by size, not age, so an IBAN once logged sits there for years. */
 const STATEMENT_DEBUG_LOG = process.env.STATEMENT_DEBUG_LOG === '1'
 /** How verbose the per-operation log is (#498): `notable` (default) | `all` | `off`. Read once at
  *  start, exactly like the flag above — flipping it means a restart. The default prints only the
@@ -291,6 +293,19 @@ export function liveHandlerDeps(): HandlerDeps {
         throw e
       }
     },
+    // Дозаливка колонок реестра у уже существующего элемента (#45) — только с ручной загрузки.
+    //
+    // ⚠ В отличие от соседа выше, отсутствие токена здесь `missing`, а НЕ throw: эта запись идёт
+    // поверх УЖЕ обработанной операции (дело создано прошлым прогоном), и валить из-за неё разбор
+    // остальной пачки нечем оправдать. Хендлер считает исход и печатает его в итоге прогона.
+    backfillRegistry: async (item, companyId, memberId, provider, paymentSp) => {
+      if (isDemoAccount(item.account)) return 'already'
+      const call = await resolvePortalCall(memberId)
+      // ⚠ Нет токена — `already`, а НЕ throw: запись идёт поверх уже обработанной операции (дело
+      // создано прошлым прогоном), и валить из-за неё разбор остальной пачки нечем оправдать.
+      if (!call) return 'already'
+      return await backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+    },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
     // recognition steps. Goes through the SAME bind-once resolver as the per-op calls, so
@@ -388,11 +403,13 @@ export function liveHandlerDeps(): HandlerDeps {
       allocateLog.info(`portal ${memberId}, op ${logSafe(item.account)}|${logSafe(item.docId)}: ${detail}${triggerTargets ? ` +${triggerTargets} trigger` : ''}`)
     },
     // Per-op outcome — the one line an operation gets when it matched NOTHING (see the dep's doc
-    // in handlers.ts). The counterparty's account is the payload here on purpose: it is the exact
-    // value `findCompany` looks up in the portal's requisites, so it turns an opaque «unmatched»
-    // into «this number is not on any company in your CRM» — which is a thing the owner can act on.
-    // Follows docs/PRIVACY.md §Логи: account/docId/counterparty account are logged, AMOUNTS ARE
-    // NOT, and the purpose only behind the opt-in gate below.
+    // in handlers.ts). Follows docs/PRIVACY.md §Логи: by default this line carries NO account
+    // numbers — only docId, direction, currency, owner and counters; AMOUNTS ARE NEVER logged.
+    // Both account numbers (ours + counterparty) AND the purpose sit behind the STATEMENT_DEBUG_LOG
+    // opt-in (#617): json-file rotates by size, not age, so an IBAN once logged lingers for years.
+    // The «which counterparty account is not in CRM» diagnostic moved to the client error-chat
+    // message (it names the account to whoever adds the requisite); the opt-in re-reveals it for
+    // our own calibration runs.
     onOperation: (item, outcome, memberId) => {
       // Both the volume gate and the text live in `buildOpLogLine` — a pure function with an
       // executable test. Keeping them here made the gate verifiable only by reading the source,
@@ -659,7 +676,25 @@ export function liveHandlerDeps(): HandlerDeps {
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },
-    enqueueCrmSync
+    enqueueCrmSync,
+    // Раздача выписки совместного счёта (#615) — ТОЛЬКО порталам, чей счёт подтвердил банк.
+    //
+    // ⚠ Читаем СВОЮ базу, а не список из задачи: между планом и исполнением портал могли отключить,
+    // и раздача по устаревшему списку записала бы операции тому, кто нас только что убрал.
+    //
+    // ⚠ Демо-нагрузка в базу не ходит и раздаче не подлежит: её счёта в хранилище токенов нет
+    // вовсе, поэтому общий путь вернул бы пустой список и синтетическая пачка не дошла бы до
+    // crm-sync — стенд показывал бы пустой конвейер при полностью исправных очередях.
+    portalsForAccount: async (job) => {
+      // ⚠ Демо-нагрузка в базу не ходит: её счёта в хранилище токенов нет вовсе.
+      if (isDemoAccount(job.account)) return [job.memberId]
+      const rows = await listAllBankAccountInfo(dbQuery)
+      // ⚠ Опрашивавший портал передаётся ЯВНО и получает выписку всегда: он сходил в банк своим
+      // грантом, и банк отдал ему её. Гейт подтверждения — про СОСЕДЕЙ. Первая редакция требовала
+      // подтверждения и от него, и это молча останавливало запись в CRM у всех обычных порталов:
+      // подтверждение спрашивается только про спорные счета, а у большинства счёт уникален.
+      return statementRecipients(rows, job.providerId, job.account, job.memberId)
+    }
   }
 }
 
@@ -1038,6 +1073,20 @@ async function persistImportResult(
     await markRecognitionMisconfig(dbQuery, job.memberId, summary.misconfigReason ?? null)
   } catch (e) {
     crmLog.error(`recog misconfig mark failed, portal ${job.memberId}: ${(e as Error)?.message}`)
+  }
+  // Подписка на REST жива — прогон дошёл сюда, значит портал ответил (#614).
+  //
+  // ⚠ Снятие стоит ЗДЕСЬ, а не в успешном REST-вызове: там оно означало бы UPDATE на каждый вызов
+  // каждого живого портала, а прогон — естественная единица «портал точно отвечает». Опоздание на
+  // один прогон безвредно: отсечка — четверо суток.
+  //
+  // ⚠ Отдельный try по той же причине, что у соседа: неудача снятия не должна отменять сводку.
+  try {
+    if (await clearSubscriptionEnded(dbQuery, job.memberId)) {
+      crmLog.info(`portal ${job.memberId}: подписка на REST снова отвечает — метка снята`)
+    }
+  } catch (e) {
+    crmLog.error(`subscription mark clear failed, portal ${job.memberId}: ${(e as Error)?.message}`)
   }
 }
 

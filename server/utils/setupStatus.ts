@@ -35,11 +35,15 @@ export interface SetupStatusDeps {
    *  причина `what|param|detail`, или null если чисто. Разбирается ЗДЕСЬ в слот; английский
    *  `detail` клиенту не уходит. Отсутствует ⇒ строка карты зависит только от числа шаблонов. */
   recognitionMisconfig?: (memberId: string) => Promise<string | null>
+  /** Имена полей, которые смарт-процесс «Платежи» реально несёт (#46) — `crm.item.fields`.
+   *  `null`/отказ ⇒ ключ в ответе не появится, и строка смарт-процессов ведёт себя как раньше:
+   *  «не спросили» не имеет права красить её красным. */
+  spFieldNames?: (memberId: string) => Promise<string[] | null>
 }
 
 export async function handleSetupStatus(
   deps: SetupStatusDeps,
-  input: { accessToken: string, domain: string }
+  input: { accessToken: string, domain: string, wantFields?: boolean }
 ): Promise<SetupStatusResult> {
   const accessToken = (input.accessToken || '').trim()
   const domain = (input.domain || '').trim()
@@ -58,11 +62,17 @@ export async function handleSetupStatus(
   }
   if (!frame.isAdmin) return { status: 403, body: { error: 'setup status is administrator-only' } }
 
-  const [counts, lastRunMs, myCompany, misconfigReason] = await Promise.all([
+  const [counts, lastRunMs, myCompany, misconfigReason, spFieldNames] = await Promise.all([
     deps.countAccounts(memberId),
     deps.lastRunMs(memberId),
     deps.myCompany?.(domain, accessToken).catch(() => undefined),
-    deps.recognitionMisconfig?.(memberId).catch(() => null)
+    deps.recognitionMisconfig?.(memberId).catch(() => null),
+    // ⚠ Отказ проглатывается так же, как у «моей компании»: экран готовности полезнее с половиной
+    // сведений, чем пустой, а недостающая строка просто ведёт себя по-старому.
+    // ⚠ Спрашиваем ТОЛЬКО когда попросили (`wantFields`): проверка стоит двух REST в портал, а
+    // нужна одному экрану — карточке готовности. `/app` зовёт тот же маршрут на каждом открытии и
+    // строки смарт-процессов не показывает вовсе; платить за неё он не должен.
+    input.wantFields ? deps.spFieldNames?.(memberId).catch(() => null) : null
   ])
   const misconfigSlot = parseMisconfigReason(misconfigReason ?? null)
 
@@ -88,7 +98,10 @@ export async function handleSetupStatus(
       ...(myCompany ? { myCompany } : {}),
       // Слот сломанной настройки карты распознавания (#595). Английский `detail` портала СЮДА не
       // едет — он остаётся в логе, клиенту показываем только «какое поле чинить».
-      ...(misconfigSlot ? { recognitionMisconfig: misconfigSlot } : {})
+      ...(misconfigSlot ? { recognitionMisconfig: misconfigSlot } : {}),
+      // Фактические поля СП «Платежи» (#46). Ключ появляется ТОЛЬКО когда портал действительно
+      // ответил: иначе клиент не должен отличать «полей нет» от «мы не спросили».
+      ...(spFieldNames ? { spFieldNames } : {})
     }
   }
 }

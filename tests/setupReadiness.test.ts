@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { buildReadiness, isFullyReady, parseMisconfigReason, type ReadinessSnapshot } from '~/utils/setupReadiness'
+import {
+  buildReadiness, isFullyReady, parseMisconfigReason, missingPaymentSpFields, type ReadinessSnapshot
+} from '~/utils/setupReadiness'
 import { parsePortalSettings } from '~/utils/settings'
-import { PAYMENT_SP_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY } from '~/config/distributionSp'
+import {
+  PAYMENT_SP_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY, PAYMENT_SP_ID_CONFIG_KEY,
+  PAYMENT_SP_FIELDS, buildUfFieldNameCamel, buildUfFieldName, buildUfStoredFieldName
+} from '~/config/distributionSp'
 
 // Setup-readiness checklist (#409/#405) — «что настроено, а что нет» for a PORTAL (not the infra
 // probe in server/utils/readiness.ts). The point of the model is that a half-configured portal is
@@ -299,5 +304,102 @@ describe('parseMisconfigReason (#595)', () => {
     expect(parseMisconfigReason(undefined)).toBeNull()
     expect(parseMisconfigReason('')).toBeNull()
     expect(parseMisconfigReason('|field|detail')).toBeNull()
+  })
+})
+
+// ⚠ #46: «СП создан» и «СП годится для импорта» — РАЗНЫЕ вещи, и на боевом портале они разошлись:
+// тип существовал, id лежал в настройках, строка светила зелёным, а из 13 полей на нём было пять —
+// только денежные. Поля реестра (#575) добавились в код позже, провижининг их не создал, а
+// `crm.item.add` молча игнорирует неизвестные UF-ключи: контрагент, назначение, дата и направление
+// уходили В ПУСТОТУ. Строки в CRM выходили немые, все операции читались приходом (поле
+// «Направление» пустое), и ни один экран об этом не говорил — диагноз занял день.
+describe('строка смарт-процессов ловит нехватку полей реестра (#46)', () => {
+  const SP_ID = 13
+  /** Настройки с обоими СП И сохранённым type-id (без него поля не проверить). */
+  function withSpAndTypeId() {
+    const s = withSp()
+    s.recognition.configFields[PAYMENT_SP_ID_CONFIG_KEY] = String(SP_ID)
+    return s
+  }
+  const nameOf = (postfix: string) => buildUfFieldNameCamel(SP_ID, postfix)
+  const ALL = Object.values(PAYMENT_SP_FIELDS).map(f => nameOf(f.postfix))
+  /** Ровно то, что отдавал боевой портал: только денежные поля. */
+  const MONEY_ONLY = ['TOTAL', 'CURRENCY', 'NEED_DISTR', 'NEEDS_REDISTR', 'MARKER'].map(nameOf)
+
+  it('все поля на месте — строка зелёная', () => {
+    const it0 = item(buildReadiness(snap({ settings: withSpAndTypeId(), spFieldNames: ALL })), 'smart-process')
+    expect(it0.ok).toBe(true)
+    expect(it0.detail).toBe('созданы')
+  })
+
+  it('боевой случай: только денежные поля — строка КРАСНАЯ и называет пропавшие', () => {
+    const it0 = item(buildReadiness(snap({ settings: withSpAndTypeId(), spFieldNames: MONEY_ONLY })), 'smart-process')
+    expect(it0.ok).toBe(false)
+    // Поля названы поимённо — иначе админ ищет наугад.
+    expect(it0.hint).toContain('Контрагент')
+    expect(it0.hint).toContain('Назначение платежа')
+    expect(it0.hint).toContain('Направление')
+    expect(it0.hint).toContain('Дата операции')
+    // И сказано, чем это грозит: данные уходят в пустоту.
+    expect(it0.hint).toMatch(/не записыва|отбрасывает/i)
+  })
+
+  it('НЕ спрашивали (поля не пришли) — ведём себя как раньше, зелёным', () => {
+    // ⚠ «Мы не спросили» и «полей нет» — разные вещи. Красить от незнания значит послать чинить
+    // исправное; старый сервер этого поля не пришлёт вовсе.
+    const it0 = item(buildReadiness(snap({ settings: withSpAndTypeId() })), 'smart-process')
+    expect(it0.ok).toBe(true)
+  })
+
+  it('СП не созданы — строка красная по прежней причине, про поля не говорим', () => {
+    const it0 = item(buildReadiness(snap({ spFieldNames: [] })), 'smart-process')
+    expect(it0.ok).toBe(false)
+    expect(it0.detail).toBe('не созданы')
+  })
+
+  it('нет сохранённого type-id — проверить нечем, строка не краснеет', () => {
+    // `withSp()` кладёт только entityTypeId; имя UF-поля строится по type-id, поэтому без него
+    // сверка невозможна — и обязана молчать, а не выдумывать.
+    const it0 = item(buildReadiness(snap({ settings: withSp(), spFieldNames: MONEY_ONLY })), 'smart-process')
+    expect(it0.ok).toBe(true)
+  })
+})
+
+describe('missingPaymentSpFields (#46)', () => {
+  const SP_ID = 13
+  const cfg = { [PAYMENT_SP_ID_CONFIG_KEY]: String(SP_ID) }
+
+  it('регистр имени не важен — портал уже присылал не ту форму (#41)', () => {
+    const upper = Object.values(PAYMENT_SP_FIELDS).map(f => buildUfFieldNameCamel(SP_ID, f.postfix).toUpperCase())
+    expect(missingPaymentSpFields(cfg, upper)).toEqual([])
+  })
+
+  // ⚠ НАХОДКА РЕВЬЮ и главный риск этой правки: своего `.toLowerCase()` было МАЛО. Портал отдаёт
+  // имя поля в ТРЁХ формах, и подчёркнутые (`UF_CRM_13_OP_DATE` как создавали, `UF_CRM13_OP_DATE`
+  // хранимая) под ним не совпали бы НИ ОДНА — экран показал бы «не хватает 13 полей» на полностью
+  // исправном портале, то есть послал бы чинить работающее. Сверка обязана идти той же линейкой,
+  // что и провижининг (`normalizeFieldNameForCompare`).
+  it('ВСЕ три формы имени признаются существующими, включая подчёркнутые — #41/#46', () => {
+    const forms: Array<[string, (p: string) => string]> = [
+      ['camel (умолчание crm.item.fields)', p => buildUfFieldNameCamel(SP_ID, p)],
+      ['форма создания UF_CRM_13_X', p => buildUfFieldName(SP_ID, p)],
+      ['хранимая форма UF_CRM13_X', p => buildUfStoredFieldName(SP_ID, p)]
+    ]
+    for (const [label, build] of forms) {
+      const names = Object.values(PAYMENT_SP_FIELDS).map(f => build(f.postfix))
+      expect(missingPaymentSpFields(cfg, names), `форма «${label}» не распознана`).toEqual([])
+    }
+  })
+
+  it('пропущенное поле названо своей человеческой подписью', () => {
+    const all = Object.values(PAYMENT_SP_FIELDS)
+    const without = all.filter(f => f.postfix !== PAYMENT_SP_FIELDS.purpose.postfix)
+      .map(f => buildUfFieldNameCamel(SP_ID, f.postfix))
+    expect(missingPaymentSpFields(cfg, without)).toEqual([PAYMENT_SP_FIELDS.purpose.label])
+  })
+
+  it('незнание — пустой список, а не «всё пропало»', () => {
+    expect(missingPaymentSpFields(cfg, undefined)).toEqual([])
+    expect(missingPaymentSpFields(undefined, ['ufCrm13Total'])).toEqual([])
   })
 })

@@ -18,6 +18,18 @@ describe('checkBackendEnv', () => {
     expect(r.warnings).toEqual([])
   })
 
+  it('локальный режим (#39): молчит на валидных/пустом, предупреждает на нераспознанном', () => {
+    // Пусто → обычный режим, тихо.
+    expect(checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: '' }).warnings.some(w => /LOCAL_MODE/.test(w))).toBe(false)
+    // Явное включение — тоже тихо (это рабочий режим, не проблема).
+    for (const v of ['1', 'true', 'on']) {
+      expect(checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: v }).warnings.some(w => /LOCAL_MODE/.test(w))).toBe(false)
+    }
+    // Задан, но НЕ распознан — опасный случай (оператор думал, что включил): предупреждаем.
+    const bad = checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: 'enable' })
+    expect(bad.warnings.some(w => /NUXT_PUBLIC_LOCAL_MODE/.test(w) && /не распознан/.test(w))).toBe(true)
+  })
+
   it('warns on a HALF-configured bank (some but not all OAuth creds), silent when absent or complete', () => {
     // none set → no bank warning (feature simply off)
     expect(checkBackendEnv(GOOD).warnings.some(w => /Банк/.test(w))).toBe(false)
@@ -52,12 +64,14 @@ describe('checkBackendEnv', () => {
   })
 
   it('предупреждает про включённый STATEMENT_DEBUG_LOG — забытый флаг иначе ничем не виден', () => {
-    // Флаг раскрывает назначения платежей в логе (docs/PRIVACY.md §Логи). Откат ручной, а признака
-    // «всё ещё включён» нет нигде: назначения просто продолжают писаться. Строка при старте — то
-    // единственное место, где это заметно раньше, чем по самому логу.
+    // Флаг раскрывает назначения платежей И номера счетов обеих сторон в логе (docs/PRIVACY.md
+    // §Логи, #617). Откат ручной, а признака «всё ещё включён» нет нигде: ПДн просто продолжают
+    // писаться. Строка при старте — то единственное место, где это заметно раньше, чем по логу.
     expect(checkBackendEnv(GOOD).warnings.some(w => /STATEMENT_DEBUG_LOG/.test(w))).toBe(false)
     const on = checkBackendEnv({ ...GOOD, STATEMENT_DEBUG_LOG: '1' })
-    expect(on.warnings.some(w => /STATEMENT_DEBUG_LOG/.test(w) && /НАЗНАЧЕНИЯ/.test(w))).toBe(true)
+    // ⚠ Матчим ОБА новых предмета послабления: иначе правка, потерявшая упоминание номеров счетов
+    // (суть #617), прошла бы зелёной — тест бы стерёг только назначение.
+    expect(on.warnings.some(w => /STATEMENT_DEBUG_LOG/.test(w) && /НАЗНАЧЕНИЯ/.test(w) && /НОМЕРА СЧЕТОВ/.test(w))).toBe(true)
     // Любое другое значение — выключено (совпадает с `=== '1'` в воркере); иначе предупреждение
     // орало бы на стендах, где переменная просто объявлена нулём.
     for (const v of ['0', 'true', 'yes', '']) {

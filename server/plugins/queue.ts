@@ -17,10 +17,11 @@ import { Q_FETCH, Q_FETCH_PRIOR } from '../queue/topology'
 import { liveActivityBindDeps, liveDeletionDeps, liveFeedbackPostDeps, liveHandlerDeps, liveRegistryWriteDeps, liveTriggerFireDeps, startBindingsWorker, startDeletionWorker, startEventWorker, startFeedbackWorker, startRegistryWorker, startThroughputWorkers, startTriggerWorker } from '../queue/worker'
 import { attachWorkerObservability } from '../queue/workerObservability'
 import { enqueueFetch } from '../queue/producers'
-import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, planFetches, pollWindow } from '../queue/cron'
+import { accountsForPolling, buildDemoFetchJobs, cronIntervalMs, demoTickMs, isPollableAccount, planFetches, pollSkipReason, pollWindow } from '../queue/cron'
+import { pickAccountPollers, sharedAccountsLogLine } from '../../app/utils/accountSharing'
 import { clampSaturationThreshold, fetchBacklogSaturation, type FetchQueueCounts } from '../queue/saturation'
 import { estimateProviderCycles, formatPollCycle, providerRequestBudget } from '../queue/pollCapacity'
-import { deleteBankToken, deleteBankTokenById, listAllBankAccountInfo, listBankAccountInfoForPortal, listAllBankAccounts } from '../utils/bankTokenStore'
+import { deleteBankToken, deleteBankTokenById, deleteBankTokensForPortal, listAllBankAccountInfo, listBankAccountInfoForPortal, markAccountsConfirmed } from '../utils/bankTokenStore'
 import { queueRuntimeConfig, envFlag } from '../queue/runtime'
 import { keepAliveIntervalMs, runTokenKeepAlive, selectTokensNearExpiry } from '../utils/tokenKeepAlive'
 import { BANK_KEEP_ALIVE_MINUTES, bankKeepAliveIntervalMs } from '../utils/bankTokenKeepAlive'
@@ -32,8 +33,21 @@ import { REAP_MIN_INTERVAL_MS, resolveReapDays } from '../../app/utils/portalRea
 import { resolveBankReapDays } from '../../app/utils/bankReaper'
 import { runBankReaper } from '../utils/bankReaperRun'
 import { claimBankReapSlot } from '../utils/bankReaperSchedule'
+import { claimSubscriptionCutoffSlot } from '../utils/subscriptionCutoffSchedule'
+import { runSubscriptionCutoff } from '../utils/subscriptionCutoffRun'
+import { probeSubscriptionVia } from '../utils/subscriptionProbe'
+import { runAccountConfirm } from '../utils/accountConfirmRun'
+import { claimAccountConfirmSlot } from '../utils/accountConfirmSchedule'
+import { bankSideDeps } from '../utils/bankSideDeps'
+import { DEFAULT_LOCK_WAIT } from '../utils/dbLock'
+import { listBankSideAccounts } from '../utils/bankAccountList'
+import { livePortalSdkCall } from '../utils/liveDeps'
+import { SUBSCRIPTION_CUTOFF_DAYS } from '../../app/utils/portalSubscription'
 import { claimReapSlot } from '../utils/portalReaperSchedule'
-import { countPortals, countRevokedPortals, selectReapablePortals, getToken } from '../utils/tokenStore'
+import {
+  clearSubscriptionEnded, countPortals, countRevokedPortals, countSubscriptionCutoff,
+  selectReapablePortals, selectSubscriptionCutoff, getToken
+} from '../utils/tokenStore'
 import { sweepOldBatches } from '../utils/importBatchStore'
 import { resolvePendingMaxAgeDays, sweepAbandonedPending } from '../utils/pendingSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
@@ -49,6 +63,11 @@ import type { QueueName } from '../queue/topology'
 
 // Каналы этого модуля. Имена — те же маркеры, что уже грепает рантбук и `prod-doctor.sh` (#529).
 const log = useServerLogger('queue')
+// ⚠ СВОЙ канал, а не литерал `[fetch]` в теле сообщения на канале `queue`: форматтер печатает
+// КАНАЛ, поэтому вторая форма даёт `[queue] INFO: [fetch] …` — ровно то задвоение, которое
+// `buildOpLogLine` документирует как дефект. Диагностика и рантбук грепают по `[fetch]`, и обе
+// формы им годятся, но соседние строки одного смысла обязаны выглядеть одинаково.
+const fetchLog = useServerLogger('fetch')
 const retention = useServerLogger('retention')
 const alert = useServerLogger('queue-alert')
 
@@ -186,7 +205,15 @@ export default defineNitroPlugin((nitroApp) => {
 
     // Real bank polling (A10): every CRON_INTERVAL_MIN, enqueue one fetch job per connected
     // bank account (A6 registry over the bank_tokens store) for a rolling window. INERT until
-    // accounts are connected (A7) — an empty registry enqueues nothing (silent, no per-tick noise).
+    // accounts are connected (A7) — an empty registry enqueues nothing.
+    //
+    // ⚠ INERT БОЛЬШЕ НЕ ЗНАЧИТ БЕЗМОЛВНО (#488). Здесь стояло «silent, no per-tick noise», и
+    // молчание стоило владельцу четырёх дней: пустые `[fetch]`, `[crm-sync]`, `[op]`, ни падений,
+    // ни ретраев — и ни единой строки о причине, которых на самом деле три. Холостой тик теперь
+    // печатает ОДНУ строку с разбором (`pollSkipReason`). Цена названа честно: на портале без
+    // подключений это строка каждые `CRON_INTERVAL_MIN`, то есть ~288 строк в сутки при дефолтных
+    // пяти минутах. Размен принят — тишина в этом состоянии неотличима от полной поломки, а
+    // «шум» здесь сам себя гасит: подключили счёт — строка исчезла.
     //
     // SCALE (marketplace: tens of thousands of connected accounts). The enqueue is IDEMPOTENT —
     // no per-tick `epoch`, so the jobId is stable per (portal, account, window). That is the
@@ -216,9 +243,36 @@ export default defineNitroPlugin((nitroApp) => {
           // Cron root span (#78) — groups the poll's pg scan + Redis enqueues under one trace
           // (otherwise they float as orphan child spans). No-op when telemetry off.
           await withSpan('cron.real-poll', { 'job.queue': 'cron.real-poll' }, async () => {
-            const refs = await listAllBankAccounts(dbQuery)
-            const byPortal = accountsForPolling(refs)
-            if (byPortal.length === 0) return // no connected accounts yet — nothing to do
+            // ⚠ Читаем ПОЛНЫЕ строки, а не короткие ссылки: выбор поллера у совместного счёта
+            // (#615) смотрит и на подтверждение банком, и на свежесть подключения.
+            const rows = await listAllBankAccountInfo(dbQuery)
+            // Совместный счёт — ОДИН опрос (#615). Сворачиваются ТОЛЬКО строки, чей счёт подтвердил
+            // банк: введённый номер доказательством не является. Неподтверждённая строка
+            // опрашивает свой счёт сама, как раньше.
+            const pollable = rows.filter(isPollableAccount)
+            const pollers = pickAccountPollers(pollable, Date.now())
+            const shareNote = sharedAccountsLogLine(pollable.length, pollers.length)
+            if (shareNote) fetchLog.info(shareNote)
+            const byPortal = accountsForPolling(pollers)
+            if (byPortal.length === 0) {
+              // ⚠ НЕ МОЛЧА (#488). Прежде здесь стоял голый `return`, и на боевом стенде это дало
+              // картину, в которой не работало решительно ничего: пустые `[fetch]`, `[crm-sync]`,
+              // `[op]`, ни падений, ни ретраев — и ни единой строки о причине. Причин при этом
+              // ТРИ, чинятся они в разных местах, а выглядели одинаково. Разбор — `pollSkipReason`.
+              //
+              // ⚠ Печатаем под маркером `[fetch]`: диагностика и рантбук ищут причины опроса именно
+              // по нему, а строка, которую надо искать отдельным грепом, найдена не будет.
+              //
+              // ⚠ КРОН ЖИВЁТ НА `backend`, а не на `worker` (`docker-compose.prod.yml`), и на этом
+              // строка едва не потерялась (находка ревью): секция `[fetch]` в `prod-poll-check.sh`
+              // грепала ТОЛЬКО `worker`, то есть новая диагностика была бы невидима ровно в том
+              // инструменте, ради которого написана. Скрипт теперь читает оба контейнера, а
+              // «настоящий опрос» отличает по хвосту `N ops` — иначе эта строка засчиталась бы за
+              // доказательство опроса и воскресила бы вердикт, который тот же PR и хоронит.
+              const why = pollSkipReason(rows)
+              if (why) fetchLog.info(why)
+              return
+            }
             const now = new Date()
             const { dateFrom, dateTo } = pollWindow(now, lookback)
             // NO per-tick epoch: the jobId must stay STABLE per (portal, account, window) so this
@@ -421,6 +475,55 @@ export default defineNitroPlugin((nitroApp) => {
                 }, bankReapDays)
               } catch (e) {
                 retention.error(`bank reaper failed: ${(e as Error)?.message}`)
+              }
+            }
+            // Портал без подписки на REST (#614). Отключаем БАНК, а не портал: приложение
+            // установлено законно, кончилась оплата REST. Пока висит — портал жжёт лимит банка и
+            // гоняется за ротацией refresh с другими порталами, у которых тот же счёт (#615), а
+            // записать не может ничего. Своя аренда — отдельный ключ от обоих уборщиков.
+            if (await claimSubscriptionCutoffSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runSubscriptionCutoff({
+                  now: Date.now,
+                  countDue: beforeMs => countSubscriptionCutoff(dbQuery, beforeMs),
+                  countPortals: () => countPortals(dbQuery),
+                  selectDue: (beforeMs, limit) => selectSubscriptionCutoff(dbQuery, beforeMs, limit),
+                  disconnectBanks: memberId => deleteBankTokensForPortal(dbQuery, memberId),
+                  // ⚠ Живой перезапрос ПЕРЕД необратимым шагом: метку снимает только удачный
+                  // прогон crm-sync, а на тихом счёте его не бывает вовсе — без этой проверки
+                  // автомат отключил бы банк у портала, оплатившего подписку на второй день.
+                  probeSubscription: async memberId => probeSubscriptionVia(await livePortalSdkCall(memberId)),
+                  clearMark: memberId => clearSubscriptionEnded(dbQuery, memberId),
+                  log: (m: string) => retention.info(`[sub-cutoff] ${m}`),
+                  warn: (m: string) => retention.warning(`[sub-cutoff] ${m}`)
+                }, SUBSCRIPTION_CUTOFF_DAYS)
+              } catch (e) {
+                retention.error(`subscription cutoff failed: ${(e as Error)?.message}`)
+              }
+            }
+            // Подтверждение спорных счетов банком (#615). Дёшево по замыслу: спрашиваем только про
+            // номера, заявленные БОЛЕЕ ЧЕМ одним порталом и ещё не подтверждённые, — на обычном
+            // флоте (у каждого свой счёт) не делает ни одного обращения к банку. Своей аренды не
+            // берёт: проход идемпотентен, ничего не удаляет и при повторе просто переспросит.
+            // ⚠ СВОЯ аренда (#615, замечание ревью): проход идемпотентен, но ограничивать надо не
+            // корректность, а ЧАСТОТУ обращений к лимиту банка — свип-тик зовётся сразу на старте,
+            // и без аренды контейнер в цикле рестартов спрашивал бы банк на каждом старте.
+            if (await claimAccountConfirmSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runAccountConfirm({
+                  now: Date.now,
+                  listRows: () => listAllBankAccountInfo(dbQuery),
+                  // ⚠ Ожидание лока — МАШИННОЕ (умолчание `withAdvisoryLock`): здесь никто не ждёт ответа, а
+                  // бросить работу из-за планового продления токена значило бы не подтвердить счёт и
+                  // ещё сутки опрашивать его двумя порталами — ровно то, что мы чиним.
+                  bankSide: memberId => listBankSideAccounts(memberId, bankSideDeps(DEFAULT_LOCK_WAIT)),
+                  confirm: (memberId, provider, keys, atMs) =>
+                    markAccountsConfirmed(dbQuery, memberId, provider, keys, atMs),
+                  log: (m: string) => retention.info(`[account-confirm] ${m}`),
+                  warn: (m: string) => retention.warning(`[account-confirm] ${m}`)
+                })
+              } catch (e) {
+                retention.error(`account confirm failed: ${(e as Error)?.message}`)
               }
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и

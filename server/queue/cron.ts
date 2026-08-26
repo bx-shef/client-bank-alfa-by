@@ -75,6 +75,35 @@ export function planFetches(
  *  in both directions. */
 export const POLLABLE_PROVIDERS: ReadonlySet<BankProviderId> = new Set<BankProviderId>(['alfa-by', 'prior-by'])
 
+/**
+ * Можно ли вообще опрашивать это подключение. ОДНА точка на все пути (#615).
+ *
+ * ⚠ Вынесено из `accountsForPolling` потому, что через тот же фильтр обязан пройти и выбор поллера
+ * у совместного счёта (`pickAccountPollers`). Проверяй они разное — приостановленное подключение
+ * могло бы стать поллером, и весь счёт молча перестал бы опрашиваться, хотя паузу ставил один
+ * портал из нескольких.
+ */
+export function isPollableAccount(ref: BankAccountRef): boolean {
+  if (!POLLABLE_PROVIDERS.has(ref.provider)) return false
+  if (isDemoAccount(ref.accountKey)) return false
+  // Подключение без выбранного счёта (#407) опрашивать НЕЛЬЗЯ: у банка нет такого номера, задача
+  // будет падать на каждом тике вечно — сжигая общий лимит запросов и забивая лог. У Приора это
+  // ещё и дорого (одна задача ~10 запросов). Ждём, пока админ привяжет счёт.
+  if (isPendingAccountKey(ref.accountKey)) return false
+  // Пауза автоопроса (#576). Стоит ЗДЕСЬ, в одной точке, потому что через неё проходят ОБА пути:
+  // крон-тик и ручное «Опросить сейчас». Проверка в каждом вызывающем разъехалась бы — и
+  // разъехалась бы в сторону «опрашиваем», то есть паузы, которая не работает.
+  //
+  // ⚠ Продление токена сюда НЕ ходит (`bankTokenKeepAlive` читает свою выборку), и это условие
+  // задачи, а не совпадение: поставленное на паузу подключение обязано пережить ночь, иначе
+  // владельцу счёта придётся заново входить в интернет-банк за тем, что он всего лишь притормозил.
+  //
+  // ⚠ Пауза — СВОЙСТВО ПОДКЛЮЧЕНИЯ, а не счёта: у совместного счёта (#615) пауза одного портала
+  // не останавливает опрос остальным. Иначе любой из них в одиночку выключил бы импорт всем.
+  if (ref.pollPaused) return false
+  return true
+}
+
 /** Group connected bank accounts (A6 registry) into the poll planner's shape: one entry per
  *  (portal, provider) with its deduped account list. Filters to POLLABLE_PROVIDERS and drops
  *  any demo account (belt-and-braces — demo accounts never reach the token store). Pure. */
@@ -83,20 +112,7 @@ export function accountsForPolling(
 ): { memberId: string, providerId: BankProviderId, accounts: string[] }[] {
   const groups = new Map<string, { memberId: string, providerId: BankProviderId, accounts: string[] }>()
   for (const ref of refs) {
-    if (!POLLABLE_PROVIDERS.has(ref.provider)) continue
-    if (isDemoAccount(ref.accountKey)) continue
-    // Подключение без выбранного счёта (#407) опрашивать НЕЛЬЗЯ: у банка нет такого номера, задача
-    // будет падать на каждом тике вечно — сжигая общий лимит запросов и забивая лог. У Приора это
-    // ещё и дорого (одна задача ~10 запросов). Ждём, пока админ привяжет счёт.
-    if (isPendingAccountKey(ref.accountKey)) continue
-    // Пауза автоопроса (#576). Стоит ЗДЕСЬ, в одной точке, потому что через неё проходят ОБА
-    // пути: крон-тик и ручное «Опросить сейчас». Проверка в каждом вызывающем разъехалась бы —
-    // и разъехалась бы в сторону «опрашиваем», то есть паузы, которая не работает.
-    //
-    // ⚠ Продление токена сюда НЕ ходит (`bankTokenKeepAlive` читает свою выборку), и это условие
-    // задачи, а не совпадение: поставленное на паузу подключение обязано пережить ночь, иначе
-    // владельцу счёта придётся заново входить в интернет-банк за тем, что он всего лишь притормозил.
-    if (ref.pollPaused) continue
+    if (!isPollableAccount(ref)) continue
     const key = `${ref.memberId}|${ref.provider}`
     let g = groups.get(key)
     if (!g) {
@@ -155,4 +171,41 @@ export function demoItems(job: FetchJob): StatementItem[] {
     acceptDate: `${job.dateFrom}T00:00:00.000Z`
   })
   return [mk(1, 'credit'), mk(2, 'debit')]
+}
+
+/**
+ * ПОЧЕМУ опрашивать нечего — строкой в лог (#488, живой разбор 2026-08-26).
+ *
+ * ⚠ Заведено по факту потерянных дней, а не для полноты. Крон-тик при пустом отборе возвращался
+ * МОЛЧА (`if (byPortal.length === 0) return`), и на боевом стенде это дало картину, в которой не
+ * работало решительно ничего: пустые `[fetch]`, `[crm-sync]`, `[op]`, ни одного падения, ни одного
+ * ретрая — и ни единой строки о причине. При этом причин ТРИ, и чинятся они в разных местах:
+ *
+ *   • подключённых счетов нет вовсе — заводить подключение в настройках портала;
+ *   • счета есть, но у них не выбран номер (`~pending:`) — дожать выбор счёта;
+ *   • счета есть, но опрос по ним приостановлен — снять паузу.
+ *
+ * Снаружи все три выглядели ОДИНАКОВО — как полная тишина, которая с равным успехом означает
+ * «сломан опрос». Молчание, похожее на здоровье, — ровно тот отказ диагностики, который этот
+ * проект держит на прицеле.
+ *
+ * ⚠ Только СЧЁТЧИКИ: ни номера счёта, ни идентификатора портала. Строка уходит в общий лог, а он
+ * живёт до вытеснения по объёму (#617).
+ */
+export function pollSkipReason(rows: readonly BankAccountRef[]): string | null {
+  if (rows.some(isPollableAccount)) return null
+  if (rows.length === 0) return 'опрашивать нечего: подключённых счетов нет ни одного'
+  let pending = 0
+  let paused = 0
+  let foreign = 0
+  for (const r of rows) {
+    if (!POLLABLE_PROVIDERS.has(r.provider) || isDemoAccount(r.accountKey)) foreign++
+    else if (isPendingAccountKey(r.accountKey)) pending++
+    else paused++
+  }
+  const parts: string[] = []
+  if (pending) parts.push(`${pending} без выбранного счёта`)
+  if (paused) parts.push(`${paused} на паузе`)
+  if (foreign) parts.push(`${foreign} не опрашиваются по типу`)
+  return `опрашивать нечего: из ${rows.length} подключени(й) — ${parts.join(', ')}`
 }

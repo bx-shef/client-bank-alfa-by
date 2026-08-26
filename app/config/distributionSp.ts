@@ -257,18 +257,35 @@ export function buildUfFieldConfigCall(spTypeId: number, field: SpUserField): { 
   }
 }
 
+/** Каноничная форма имени поля для СВЕРКИ существования: без подчёркиваний, в нижнем регистре.
+ *
+ * ⚠ Зачем (#41). Поле создаётся как `UF_CRM_<id>_<POSTFIX>` (`buildUfFieldName`), но `userfieldconfig.list`
+ * возвращает имя в ДРУГОЙ форме — слитной `UF_CRM<id>_<POSTFIX>` (см. `buildUfStoredFieldName`) или
+ * camel `ufCrm<id><Pascal>`. Прямое сравнение строк тогда не совпадает, и `planMissingUserFields`
+ * считает СУЩЕСТВУЮЩЕЕ поле отсутствующим → планирует пересоздать его → `userfieldconfig.add` падает
+ * на дубликате → последовательный цикл обрывается ДО полей реестра (#575), которые в списке идут
+ * последними. Замерено на живом портале: СП держал только доденьги (`ufCrm13Total/Currency/Marker/
+ * NeedDistr`), а поля контрагента/назначения/даты/направления не появлялись НИКОГДА, сколько ни
+ * переинициализируй. Нормализация приводит все три формы к одной: `UF_CRM_13_OP_DATE`,
+ * `UF_CRM13_OP_DATE` и `ufCrm13OpDate` → `ufcrm13opdate`. Наши постфиксы после неё различимы. */
+export function normalizeFieldNameForCompare(name: string): string {
+  return name.replace(/_/g, '').toLowerCase()
+}
+
 /** Plan the `userfieldconfig.add` calls needed to bring a smart process's fields up to date:
  *  one call per field whose full name is NOT already present (`existingFieldNames`, from
  *  `userfieldconfig.list`). `spTypeId` is the SP's TYPE id (field names are keyed by it). Idempotent —
- *  a re-run after all fields exist plans nothing, so provisioning self-heals a partially-created SP. */
+ *  a re-run after all fields exist plans nothing, so provisioning self-heals a partially-created SP.
+ *  ⚠ Сверка идёт по НОРМАЛИЗОВАННОМУ имени (#41): `userfieldconfig.list` отдаёт имя не в той форме,
+ *  какой поле создавали, и прямое сравнение пропускало существующие поля — см. `normalizeFieldNameForCompare`. */
 export function planMissingUserFields(
   spTypeId: number,
   fields: readonly SpUserField[],
   existingFieldNames: readonly string[]
 ): { method: string, params: Record<string, unknown> }[] {
-  const present = new Set(existingFieldNames)
+  const present = new Set(existingFieldNames.map(normalizeFieldNameForCompare))
   return fields
-    .filter(f => !present.has(buildUfFieldName(spTypeId, f.postfix)))
+    .filter(f => !present.has(normalizeFieldNameForCompare(buildUfFieldName(spTypeId, f.postfix))))
     .map(f => buildUfFieldConfigCall(spTypeId, f))
 }
 

@@ -14,7 +14,7 @@ import { QUEUE_META, type QueueCounts, type QueuesSnapshot } from '~/utils/queue
 import { pageTitle } from '~/utils/landing'
 import { useAppRatingOps, type RatingState } from '~/composables/useAppRatingOps'
 import { ALERT_CHANNEL_CLASS, HEALTH_TONE_COLOR, presentAlertChannel, presentQueueHealth, type QueueHealthPayload, type QueueHealthView } from '~/utils/queueHealthView'
-import { attentionHeadline, bankAttentionRowViews, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview } from '~/utils/bankHealthOverview'
+import { attentionHeadline, bankAttentionRowViews, bankHealthRows, PREVIEW_BANK_HEALTH, spreadLabel, type BankHealthOverview, subscriptionRowViews } from '~/utils/bankHealthOverview'
 import { formatRelativeTime } from '~/utils/importStatus'
 import { keepAlivePulseLine, type KeepAlivePulseSummary } from '~/utils/keepAlivePulse'
 
@@ -62,8 +62,20 @@ for (const q of QUEUE_META) state[q.name] = { waiting: 2, active: 0, completed: 
 // ⚠ ДЕТЕРМИНИРОВАННЫЙ псевдослучайный генератор, а не `Math.random()`. Превью — это ещё и то,
 // что снимают визуальные регресс-тесты (#3): со стенным рандомом таблица очередей и заголовок
 // «сейчас в очереди N» менялись бы в каждом прогоне, то есть эталон был бы либо мигающим, либо
-// зелёным лишь потому, что расхождение укладывается в допуск. Seed фиксирован — превью выглядит
-// «живым» (счётчики дрейфуют от тика к тику), но одинаково от запуска к запуску.
+// зелёным лишь потому, что расхождение укладывается в допуск.
+//
+// ⚠ ФИКСИРОВАННОГО SEED БЫЛО МАЛО, и прежняя формулировка «одинаково от запуска к запуску» была
+// НЕВЕРНА. Детерминированной была последовательность ЗНАЧЕНИЙ, а не момент снимка: `QueueMonitor`
+// дёргает загрузчик по таймеру (`pollMs` 2–10 с), поэтому сколько тиков успеет пройти до кадра —
+// вопрос стенных часов и загрузки машины. Замерено ревью: под двумя воркерами (конфигурация CI)
+// один и тот же эталон разошёлся на 569 пикселей при потолке 400, и разошлись именно ЦИФРЫ в
+// таблице (`0,3,3,0` против `0,2,6,0`), а не сглаживание шрифта. При `retries: 0` каждый такой
+// прогон — красный CI на чужом PR.
+//
+// Поэтому снимок ЗАМОРОЖЕН: первый тик считается как раньше, дальше загрузчик отдаёт ту же
+// копию. ⚠ Цена названа честно: линия графика в превью перестаёт «жить». Она невелика — canvas в
+// снимке и так скрыт целиком (см. `FREEZE_CSS`), то есть на эталон график не влияет вовсе, а
+// человеку, открывшему `?preview=1`, важнее таблица и карточки.
 let seed = 0x2f6e2b1
 function nextRandom(): number {
   // xorshift32 — три строки, без зависимостей, период с запасом для десятка тиков.
@@ -74,20 +86,25 @@ function nextRandom(): number {
 }
 const rnd = (n: number) => Math.floor(nextRandom() * (n + 1))
 
-/** Превью-загрузчик (только `?preview=1`): синтетика в браузере — двигает счётчики
- * (waiting дрейфует, часть уходит в active → completed, изредка failed), форма как у
+/** Снимок первого тика. Дальше отдаём его же — см. ⚠ про замороженный снимок выше. */
+let frozen: Record<string, QueueCounts> | null = null
+
+/** Превью-загрузчик (только `?preview=1`): синтетика в браузере, форма как у
  * GET /api/ops/queues. Очереди НЕ опрашивает. */
 function previewFetcher(): Promise<QueuesSnapshot> {
-  for (const q of QUEUE_META) {
-    const s = state[q.name]!
-    const arrived = rnd(q.main ? 4 : 3)
-    const capacity = Math.min(s.waiting + arrived, 1 + rnd(3))
-    s.waiting = Math.max(0, s.waiting + arrived - capacity)
-    s.active = capacity
-    s.completed += capacity
-    if (nextRandom() < 0.06) s.failed += 1
+  if (!frozen) {
+    for (const q of QUEUE_META) {
+      const s = state[q.name]!
+      const arrived = rnd(q.main ? 4 : 3)
+      const capacity = Math.min(s.waiting + arrived, 1 + rnd(3))
+      s.waiting = Math.max(0, s.waiting + arrived - capacity)
+      s.active = capacity
+      s.completed += capacity
+      if (nextRandom() < 0.06) s.failed += 1
+    }
+    frozen = structuredClone(state)
   }
-  return Promise.resolve({ enabled: true, queues: structuredClone(state) })
+  return Promise.resolve({ enabled: true, queues: structuredClone(frozen) })
 }
 
 // Состояние банковских подключений по ВСЕМ порталам (#497 §3). Сегодня умирающее подключение
@@ -144,6 +161,10 @@ const bankRows = computed(() => bankHealth.value ? bankHealthRows(bankHealth.val
 const bankHeadline = computed(() => bankHealth.value ? attentionHeadline(bankHealth.value) : '')
 // Поштучные нерабочие подключения — их оператор может отключить руками (#599).
 const bankAttentionRows = computed(() => bankHealth.value ? bankAttentionRowViews(bankHealth.value) : [])
+// #614: порталы, у которых истекла подписка на REST. ⚠ Отдельным списком, а не вперемешку с
+// банковскими: там причина в банке и чинится входом владельца счёта в интернет-банк, здесь — в
+// оплате Битрикса. Свалив в кучу, отправим оператора говорить клиенту не то.
+const subscriptionRows = computed(() => bankHealth.value ? subscriptionRowViews(bankHealth.value) : [])
 
 // Ключ строки, которую сейчас отключаем (свой флаг, чтобы одна кнопка не блокировала остальные).
 const disconnectingId = ref<number | null>(null)
@@ -488,6 +509,60 @@ onBeforeUnmount(() => {
               >
                 {{ disconnectNote }}
               </p>
+            </div>
+
+            <!-- #614: порталы с истёкшей подпиской на REST. ⚠ Живёт ЗДЕСЬ, а не в приложении, по
+                 жёсткой причине: приложение открывается ВНУТРИ Битрикса, и при мёртвой подписке
+                 клиент до интерфейса не доберётся — значит отключить сам не может. Нет этого на
+                 экране оператора — нет нигде. -->
+            <div
+              v-if="subscriptionRows.length"
+              class="mt-4 space-y-2"
+              data-testid="subscription-dead-list"
+            >
+              <p class="text-xs font-medium text-(--ui-color-base-2)">
+                Подписка Bitrix24 не отвечает — клиент не может отключиться сам:
+              </p>
+              <div
+                v-for="r in subscriptionRows"
+                :key="`sub-${r.id}`"
+                class="flex flex-wrap items-center justify-between gap-2 rounded bg-(--ui-color-design-tinted-warning-bg) px-2 py-1.5"
+                :data-testid="`subscription-dead-${r.id}`"
+              >
+                <span class="text-xs text-(--ui-color-base-2)">{{ r.label }}</span>
+                <template v-if="confirmDisconnectId === r.id">
+                  <span class="flex items-center gap-2">
+                    <B24Button
+                      label="Да, отключить"
+                      :aria-label="`Подтвердить отключение: ${r.label}`"
+                      color="air-primary-alert"
+                      size="xs"
+                      :loading="disconnectingId === r.id"
+                      :disabled="disconnectingId === r.id"
+                      :data-testid="`subscription-disconnect-confirm-${r.id}`"
+                      @click="disconnectBank(r.id)"
+                    />
+                    <B24Button
+                      label="Отмена"
+                      :aria-label="`Отменить отключение: ${r.label}`"
+                      color="air-tertiary"
+                      size="xs"
+                      :disabled="disconnectingId === r.id"
+                      :data-testid="`subscription-disconnect-cancel-${r.id}`"
+                      @click="cancelDisconnect()"
+                    />
+                  </span>
+                </template>
+                <B24Button
+                  v-else
+                  label="Отключить"
+                  :aria-label="`Отключить: ${r.label}`"
+                  color="air-tertiary-no-accent"
+                  size="xs"
+                  :data-testid="`subscription-disconnect-${r.id}`"
+                  @click="askDisconnect(r.id)"
+                />
+              </div>
             </div>
 
             <!-- Пульс механизма, который эти подключения держит (#504). Без него «всё живо» на

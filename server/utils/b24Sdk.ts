@@ -35,11 +35,12 @@
 import { B24OAuth, ParamsFactory } from '@bitrix24/b24jssdk'
 import type { AuthData, B24OAuthParams, B24OAuthSecret, CallbackRefreshAuth, CustomRefreshAuth } from '@bitrix24/b24jssdk'
 import type { BatchCommand, RestBatch, RestCall } from './companyLookup'
-import { getToken, markGrantRevoked, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
+import { getToken, markGrantRevoked, markSubscriptionEnded, updatePortalTokenSecrets, type PortalToken, type QueryFn } from './tokenStore'
 import { assertPortalHost } from './b24Rest'
 import { withDependencySpan } from './telemetrySpan'
 import { firstPortalErrorCode, portalErrorCode, PortalRestError } from './portalError'
 import { isGrantDead } from '../../app/utils/portalReaper'
+import { isSubscriptionEnded, SUBSCRIPTION_ENDED_RE } from '../../app/utils/portalSubscription'
 
 /** B24 OAuth server endpoint (constant — the SDK refreshes tokens against it). */
 const B24_SERVER_ENDPOINT = 'https://oauth.bitrix.info/rest/'
@@ -219,10 +220,15 @@ async function callAndWatchGrant(
   client: OAuthCallClient,
   method: string,
   params: Record<string, unknown>,
-  opts: { memberId?: string, onGrantDead?: (memberId: string) => Promise<void> }
+  opts: PortalCallOpts
 ): Promise<SdkAjaxResult> {
   try {
-    return await client.actions.v2.call.make({ method, params })
+    const res = await client.actions.v2.call.make({ method, params })
+    // ⚠ Подписка отдаётся и ФАКТОМ ОТКАЗА, и провалившимся результатом, поэтому проверяются оба
+    // пути. Живой лог 2026-08-25 показал текст в сообщении задачи, а какой именно веткой он туда
+    // пришёл — не наблюдалось; закрывать надо обе, иначе метка не встанет ровно в половине случаев.
+    if (!res.isSuccess) await noteSubscription(res.getErrorMessages().join('; '), opts, params)
+    return res
   } catch (e) {
     const { memberId, onGrantDead } = opts
     if (memberId && onGrantDead && isGrantDead(portalErrorCode(e))) {
@@ -232,14 +238,62 @@ async function callAndWatchGrant(
         // A failed mark must not mask the portal error the caller is waiting for.
       }
     }
+    await noteSubscription(e, opts, params)
     throw e
   }
 }
 
-export function makeSdkRestCall(
-  client: OAuthCallClient,
-  opts: { memberId?: string, onGrantDead?: (memberId: string) => Promise<void> } = {}
-): RestCall {
+/** Что мы умеем заметить попутно, вызывая портал хранимым токеном. */
+export interface PortalCallOpts {
+  memberId?: string
+  /** Грант мёртв — приложение удалили в портале (#574). */
+  onGrantDead?: (memberId: string) => Promise<void>
+  /** Подписка на REST истекла — клиент не оплатил (#614). Портал ЖИВ, стирать его нельзя. */
+  onSubscriptionEnded?: (memberId: string) => Promise<void>
+}
+
+/**
+ * Несут ли параметры вызова ту же фразу, по которой мы опознаём мёртвую подписку.
+ *
+ * ⚠ Ошибаемся в сторону «несут»: несериализуемые параметры (циклическая ссылка) дают `true`, то
+ * есть метка НЕ ставится. Пропущенная метка стоит суток отсрочки, ложная — отключения банка у
+ * исправного портала.
+ */
+function echoesSubscriptionPhrase(params: Record<string, unknown>): boolean {
+  try {
+    return SUBSCRIPTION_ENDED_RE.test(JSON.stringify(params) ?? '')
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Отметить истёкшую подписку, если отказ говорит именно о ней (#614).
+ *
+ * ⚠ ЛУЧШИЕ УСИЛИЯ и никогда не подменяет исходную ошибку: вызывающий ждёт отказа портала, а не
+ * отказа нашей записи. Тот же контракт, что у `onGrantDead`.
+ */
+async function noteSubscription(
+  reason: unknown, opts: PortalCallOpts, params: Record<string, unknown>
+): Promise<void> {
+  const { memberId, onSubscriptionEnded } = opts
+  if (!memberId || !onSubscriptionEnded || !isSubscriptionEnded(reason)) return
+  // ⚠ ЕСЛИ ЭТУ ФРАЗУ ОТПРАВИЛИ МЫ САМИ — увидеть её в ответе не значит ничего. Признак у нас
+  // текстовый (машинного кода Bitrix24 на этот отказ не даёт), а часть параметров записи — текст
+  // ПЛАТЕЛЬЩИКА: назначение платежа, имя контрагента. Отрази портал такое значение в описании
+  // ошибки — и любой, кто перечислит рубль с нужным назначением, поставил бы чужому порталу метку
+  // «подписка мертва», а через четверо суток тому отключило бы банк. Отражает ли Bitrix24
+  // параметры в тексте отказа, мы НЕ замеряли; проверка стоит один `JSON.stringify` и делает
+  // ответ на этот вопрос неважным.
+  if (echoesSubscriptionPhrase(params)) return
+  try {
+    await onSubscriptionEnded(memberId)
+  } catch {
+    // см. выше
+  }
+}
+
+export function makeSdkRestCall(client: OAuthCallClient, opts: PortalCallOpts = {}): RestCall {
   return (method, params) => withDependencySpan(
     // system/method/scope describe the SHAPE of the call; portal is hashed. Params (which can
     // carry account/amount/purpose in a filter) are NEVER attached — see telemetryAttributes.
@@ -319,6 +373,8 @@ export interface SdkPortalDeps {
    *  that the reaper stops being told — which is exactly the failure mode #574 started from, so
    *  the live wiring in `sdkPortalDeps` always provides it. */
   onGrantDead?: (memberId: string) => Promise<void>
+  /** Подписка портала на REST истекла (#614). Та же необязательность и та же причина, что у `onGrantDead`. */
+  onSubscriptionEnded?: (memberId: string) => Promise<void>
 }
 
 /** Error thrown when a FRAME token hits an auth error. Carries `invalid_token` so the shape
@@ -372,7 +428,7 @@ export async function makePortalSdkClient(memberId: string, deps: SdkPortalDeps)
 export async function makePortalSdkCall(memberId: string, deps: SdkPortalDeps): Promise<RestCall | null> {
   const client = await makePortalSdkClient(memberId, deps)
   // `onGrantDead` is what makes the reaper's signal timely (#574) — see `callAndWatchGrant`.
-  return client ? makeSdkRestCall(client, { memberId, onGrantDead: deps.onGrantDead }) : null
+  return client ? makeSdkRestCall(client, { memberId, onGrantDead: deps.onGrantDead, onSubscriptionEnded: deps.onSubscriptionEnded }) : null
 }
 
 /** Build a `RestCall` from an ad-hoc FRAME token (the `X-B24-Domain` + Bearer access token a
@@ -561,6 +617,7 @@ export function sdkPortalDeps(infra: SdkInfra): SdkPortalDeps {
     creds: { clientId: infra.clientId, clientSecret: infra.clientSecret },
     now: infra.now,
     scope: infra.scope,
-    onGrantDead: memberId => markGrantRevoked(infra.query, memberId, infra.now())
+    onGrantDead: memberId => markGrantRevoked(infra.query, memberId, infra.now()),
+    onSubscriptionEnded: memberId => markSubscriptionEnded(infra.query, memberId, infra.now())
   }
 }
