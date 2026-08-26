@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { runBankKeepAlive } from '../server/utils/bankTokenKeepAlive'
 import { runSummaryLine } from '../app/utils/opLogPolicy'
+import { bankDisconnectAuditLine } from '../server/utils/bankAccounts'
 
 // Гард диагностического скрипта опроса (#522).
 //
@@ -592,5 +593,161 @@ describe('вердикт «КТО продлевает» не имеет пра�
     // сутки с тремя прогонами — а это тоже потерянные логи.
     expect(SCRIPT).toContain('expected_runs=')
     expect(SCRIPT).toMatch(/minutes_of "\$SINCE"\) \/ ka_min/)
+  })
+})
+
+describe('КТО ОТКЛЮЧАЛ БАНК — ШЕСТЬ путей, и все обязаны быть видны (#641)', () => {
+  // ⚠ Выросло из первого же успешного применения #636 на боевом стенде: диагностика ответила
+  // «подключённых счетов нет ни одного», и следом выяснилось, что узнать, КУДА они делись, нечем.
+  // Строку `bank_tokens` стирают ШЕСТЬ путей, разбросанных по трём каналам, а в инструменте был
+  // виден ОДИН. Молчание остальных неотличимо от «ничего не происходило».
+  //
+  // ⚠ Список закрыт ОТДЕЛЬНЫМ гардом ниже, и это не педантизм: первая редакция сама потеряла путь
+  // (отключение оператором с `/queues`), а тест, перечисляющий пути руками, зафиксировал неверную
+  // предпосылку и прошёл зелёным. Перечисление проверяет ТЕКСТЫ; полноту проверяет греп по коду.
+
+  /** Прогнать секцию, подставив строки лога вместо `docker compose logs`. */
+  function disconnects(logLines: string[]): string {
+    const from = SCRIPT.indexOf('section "КТО ОТКЛЮЧАЛ БАНК')
+    const to = SCRIPT.indexOf('cat <<\'HINT\'')
+    expect(from, 'секция «КТО ОТКЛЮЧАЛ БАНК» не найдена — её переписали').toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    const block = SCRIPT.slice(from, to)
+      .replace('$DC logs --since "$SINCE" worker backend 2>&1', 'cat')
+      .replace('section "КТО ОТКЛЮЧАЛ БАНК            (#641)"', '')
+    const prelude = 'SINCE=w\n'
+      + 'show() { local out; out="$(cat)"; if [ -n "$out" ]; then echo "$out"; else echo "(ничего)"; fi; }\n'
+    return execFileSync('bash', ['-c', prelude + block], { input: logLines.join('\n'), encoding: 'utf8' })
+  }
+
+  // Строки — в той форме, в какой их печатает НАСТОЯЩИЙ логгер (канал + уровень + текст).
+  const PATHS: Array<{ what: string, line: string }> = [
+    {
+      what: 'админ нажал «Отключить»',
+      line: '[bank-connect] WARNING: portal M1: alfa-by #42 — подключение ОТКЛЮЧЕНО пользователем 7 (необратимо, нужен повторный вход в интернет-банк)'
+    },
+    {
+      what: 'приложение удалено из портала (ONAPPUNINSTALL)',
+      line: '[bank-connect] WARNING: portal ab12cd34: стираем ВСЁ, включая подключения к банкам — приложение удалено из портала (ONAPPUNINSTALL) (#641)'
+    },
+    {
+      what: 'уборщик мёртвых грантов портала (#574) — НЕ удаление клиентом',
+      line: '[bank-connect] WARNING: portal ab12cd34: стираем ВСЁ, включая подключения к банкам — грант портала мёртв, портал исчез без уведомления (#574) (#641)'
+    },
+    {
+      what: 'уборщик мёртвых подключений (#599)',
+      line: '[retention] WARNING: [bank-reap] подключение стёрто: портал ab12cd34, банк alfa-by, мёртво дольше 30 дн.'
+    },
+    {
+      what: 'свип брошенных «счёт не выбран» (#485)',
+      line: '[retention] INFO: swept 2 abandoned pending connection(s)'
+    },
+    {
+      what: 'оператор отключил нерабочее подключение с /queues (#599)',
+      line: '[bank-connect] INFO: portal ab12cd34: alfa-by #7 — отключено оператором (нерабочее: expired)'
+    },
+    {
+      // ⚠ Форма ИМЕННО такая: `sub-cutoff` — не канал, а префикс внутри сообщения на канале
+      // `retention` (`retention.warning(\`[sub-cutoff] ${m}\`)`). Первая редакция писала его
+      // каналом, то есть шапка блока про «настоящий логгер» для этой строки врала, и любое
+      // будущее ужесточение шаблона до якоря на начало строки прошло бы тест зелёным, перестав
+      // ловить прод.
+      what: 'автоотключение по подписке (#614)',
+      line: '[retention] WARNING: [sub-cutoff] портал ab12cd34: подписка Б24 молчит дольше 4 дн. — банк отключён (подключений 3)'
+    }
+  ]
+
+  it.each(PATHS)('$what — попадает в секцию', ({ line }) => {
+    const out = disconnects([line])
+    expect(out, 'путь удаления не виден в диагностике').toContain(line.slice(line.indexOf(': ') + 2, line.indexOf(': ') + 30))
+    expect(out).not.toContain('записей об отключении нет')
+  })
+
+  it('⚠ ВСЕ пять путей ловятся ОДНИМ прогоном — иначе секция отвечает наполовину', () => {
+    const out = disconnects(PATHS.map(p => p.line))
+    for (const p of PATHS) {
+      const needle = p.line.slice(p.line.indexOf(': ') + 2, p.line.indexOf(': ') + 30)
+      expect(out, `путь «${p.what}» потерялся, когда рядом есть другие`).toContain(needle)
+    }
+  })
+
+  it('⚠ СПИСОК ПУТЕЙ ЗАКРЫТ: каждое место, стирающее `bank_tokens`, обязано быть учтено', () => {
+    // ⚠ Ради этого гарда всё и переписано. Перечисление путей руками — ровно тот способ, каким
+    // первая редакция потеряла отключение оператором: тест зафиксировал неверную предпосылку
+    // «путей пять» и прошёл зелёным, а секция молчала о состоявшемся отключении. Полноту нельзя
+    // проверять тем же списком, который проверяют тексты, — её проверяет ГРЕП ПО КОДУ.
+    const sites = execFileSync('bash', ['-c',
+      'grep -rln "deleteBankTokenById\\|deleteBankTokensForPortal(\\|deleteBankToken(" server/api server/queue server/plugins server/utils '
+      + '| grep -v bankTokenStore.ts | grep -v bankRefreshLock.ts | sort'
+    ], { cwd: ROOT, encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+
+    // ⚠ Закрытый список: новое место обязано получить РЕШЕНИЕ — попадает оно в секцию или нет и
+    // почему. Молча добавить шестой… седьмой путь и не заметить нельзя.
+    const KNOWN: Record<string, string> = {
+      'server/api/bank/disconnect.post.ts': 'админ портала «Отключить» → «подключение ОТКЛЮЧЕНО пользователем»',
+      'server/api/ops/bank-disconnect.post.ts': 'оператор с /queues → «отключено оператором»',
+      'server/queue/worker.ts': 'ONAPPUNINSTALL и уборщик грантов #574 → «стираем ВСЁ, включая подключения»',
+      'server/plugins/queue.ts': '#599 «подключение стёрто», #614 «банк отключён», #485 «abandoned pending connection»',
+      'server/utils/bankDisconnectOpsHandler.ts': 'чистое ядро операторского пути — логирует роут, не оно',
+      'server/utils/bankReaperRun.ts': 'чистое ядро #599 — логирует проводка в queue.ts'
+      // ⚠ `pendingSweep.ts` (#485) сюда НЕ попадает и не должен: он принимает `remove` параметром,
+      // а живое удаление подставляет `queue.ts` — то есть по грепу это одно место, а не два.
+      // Имя функции в его шапке — цитата в комментарии, и ловить её значило бы охранять прозу.
+    }
+    for (const f of sites) {
+      expect(KNOWN[f], `новое место, стирающее bank_tokens: ${f} — решите, попадает ли оно в секцию «КТО ОТКЛЮЧАЛ БАНК»`).toBeTruthy()
+    }
+    // И обратно: исчезнувший из кода путь обязан уйти из списка, иначе он охраняет пустоту.
+    for (const f of Object.keys(KNOWN)) {
+      expect(sites, `путь ${f} исчез из кода — уберите его из списка и из секции`).toContain(f)
+    }
+  })
+
+  it('⚠ «ничего не стёрто» — НЕ отключение: уборщик пишет это под своим же маркером', () => {
+    // Голый `[bank-reap]` ловил безусловный итог прогона и срабатывание предохранителя. Строка,
+    // дословно говорящая «ничего не стёрто», вставала под заголовком «КТО ОТКЛЮЧАЛ БАНК» — и,
+    // что хуже, гасила оговорку про перевыкат (она печатается только на пустом выводе).
+    const out = disconnects([
+      '[retention] INFO: [bank-reap] порог 30 дн.: кандидатов 0, стёрто 0',
+      '[retention] WARNING: [bank-reap] уборщик подключений ОСТАНОВЛЕН: измеренно-мёртвыми выглядят 4 из 5 — Ничего не стёрто',
+      '[retention] WARNING: [bank-reap] не удалось стереть подключение (портал ab12cd34, банк alfa-by): db down'
+    ])
+    expect(out, 'итог прогона уборщика выдан за отключение').toContain('записей об отключении нет')
+  })
+
+  it('чужие строки в секцию не лезут', () => {
+    // Пауза — НЕ отключение: она обратима и у неё своя секция. Смешать их значит научить читателя
+    // видеть обрыв связи там, где импорт просто притормозили.
+    const out = disconnects([
+      '[bank-connect] INFO: portal M1: alfa-by #42 — автоопрос ПРИОСТАНОВЛЕН пользователем 7',
+      '[fetch] INFO: alfa-by portal M1, account BY13 2026-08-20..2026-08-21: 3 ops'
+    ])
+    expect(out).toContain('записей об отключении нет')
+  })
+
+  it('⚠ пустая секция НЕ выдаётся за «никто не отключал»', () => {
+    // Логи живут внутри контейнера, и `prod-redeploy` уносит их вместе с ним. Ровно так и вышло
+    // на живом разборе: к моменту вопроса история уже была стёрта перевыкатом.
+    const out = disconnects([])
+    expect(out).toContain('записей об отключении нет')
+    expect(out, 'пустота выдана за доказательство').toMatch(/перевыкат|пересоздавали/)
+  })
+
+  it('код действительно печатает каждую из этих строк', () => {
+    // Иначе секция ищет то, чего никто не пишет, — и её пустота снова ничего не значит.
+    // ⚠ Текст админского отключения проверяется у ЧИСТОГО билдера, а не грепом по роуту: там он
+    // собирается из полей, и перестановка `provider`/`id` грепом не ловилась (находка ревью).
+    expect(bankDisconnectAuditLine({ memberId: 'M1', userId: '7', provider: 'alfa-by', id: 42 }),
+      '«Отключить» снова не оставляет следа в журнале').toContain('подключение ОТКЛЮЧЕНО пользователем')
+    const OPS = readFileSync(join(ROOT, 'server/api/ops/bank-disconnect.post.ts'), 'utf8')
+    expect(OPS, 'отключение оператором снова молчит').toContain('отключено оператором')
+    expect(WORKER, 'стирание портала снова молчит').toContain('стираем ВСЁ, включая подключения')
+    // ⚠ Оба повода обязаны быть РАЗНЫМИ текстами: общий текст приписывал бы уборщику #574
+    // действие клиента, которого не было.
+    expect(WORKER).toContain('приложение удалено из портала (ONAPPUNINSTALL)')
+    expect(WORKER, 'уборщик грантов снова выдаётся за удаление клиентом').toContain('портал исчез без уведомления')
+    expect(PLUGIN, 'маркер уборщика подключений пропал').toContain('[bank-reap]')
+    expect(PLUGIN, 'свип брошенных подключений снова молчит').toContain('abandoned pending connection')
+    expect(PLUGIN, 'маркер автоотключения по подписке пропал').toContain('[sub-cutoff]')
   })
 })
