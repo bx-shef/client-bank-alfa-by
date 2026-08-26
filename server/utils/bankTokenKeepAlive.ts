@@ -388,7 +388,10 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
       + `refresh is locked per portal, so they refresh in parallel and burn each other's rotated token. `
       + `Reconnecting only helps until the next refresh: disconnect the account on the portal that should not have it.`)
   }
-  deps.log?.(`selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
+  // ⚠ `total` — по факту потерянных дней (#488). Сводка из одних нулей читалась одинаково в двух
+  // РАЗНЫХ мирах: «подключений нет вовсе» и «все подключения свежие, обновлять нечего». Первое —
+  // поломка настройки, второе — норма, и различить их по строке было нельзя.
+  deps.log?.(`total=${rows.length} selected=${s.selected} refreshed=${s.refreshed} skipped=${s.skipped} failed=${s.failed} unrefreshable=${s.unrefreshable} expired=${s.expired}`)
   return s
 }
 

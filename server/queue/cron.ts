@@ -172,3 +172,40 @@ export function demoItems(job: FetchJob): StatementItem[] {
   })
   return [mk(1, 'credit'), mk(2, 'debit')]
 }
+
+/**
+ * ПОЧЕМУ опрашивать нечего — строкой в лог (#488, живой разбор 2026-08-26).
+ *
+ * ⚠ Заведено по факту потерянных дней, а не для полноты. Крон-тик при пустом отборе возвращался
+ * МОЛЧА (`if (byPortal.length === 0) return`), и на боевом стенде это дало картину, в которой не
+ * работало решительно ничего: пустые `[fetch]`, `[crm-sync]`, `[op]`, ни одного падения, ни одного
+ * ретрая — и ни единой строки о причине. При этом причин ТРИ, и чинятся они в разных местах:
+ *
+ *   • подключённых счетов нет вовсе — заводить подключение в настройках портала;
+ *   • счета есть, но у них не выбран номер (`~pending:`) — дожать выбор счёта;
+ *   • счета есть, но опрос по ним приостановлен — снять паузу.
+ *
+ * Снаружи все три выглядели ОДИНАКОВО — как полная тишина, которая с равным успехом означает
+ * «сломан опрос». Молчание, похожее на здоровье, — ровно тот отказ диагностики, который этот
+ * проект держит на прицеле.
+ *
+ * ⚠ Только СЧЁТЧИКИ: ни номера счёта, ни идентификатора портала. Строка уходит в общий лог, а он
+ * живёт до вытеснения по объёму (#617).
+ */
+export function pollSkipReason(rows: readonly BankAccountRef[]): string | null {
+  if (rows.some(isPollableAccount)) return null
+  if (rows.length === 0) return 'опрашивать нечего: подключённых счетов нет ни одного'
+  let pending = 0
+  let paused = 0
+  let foreign = 0
+  for (const r of rows) {
+    if (!POLLABLE_PROVIDERS.has(r.provider) || isDemoAccount(r.accountKey)) foreign++
+    else if (isPendingAccountKey(r.accountKey)) pending++
+    else paused++
+  }
+  const parts: string[] = []
+  if (pending) parts.push(`${pending} без выбранного счёта`)
+  if (paused) parts.push(`${paused} на паузе`)
+  if (foreign) parts.push(`${foreign} не опрашиваются по типу`)
+  return `опрашивать нечего: из ${rows.length} подключени(й) — ${parts.join(', ')}`
+}

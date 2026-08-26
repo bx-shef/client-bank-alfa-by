@@ -184,9 +184,20 @@ describe('ConnectedBankAccounts — состояние подключения (#
   })
 
   it('подсказка доезжает до разметки — бейдж без объяснения бесполезен', async () => {
-    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR })]
+    // ⚠ Случай теперь назван ЯВНО: попытка обновления ПОСЛЕ последнего успеха, то есть банк
+    // отказал — и только тогда «переподключите» верно. Раньше фикстура отметки не несла вовсе, и
+    // тест молча проверял ветку, которой на живом портале соответствует ДРУГОЙ совет (#488).
+    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR, lastAttemptAt: Date.now() - HOUR })]
     const hint = (await mountReady()).find('[title]').attributes('title')
     expect(hint).toContain('интернет-банк')
+  })
+
+  it('⚠ то же подключение БЕЗ единой попытки обновления — совет ДРУГОЙ', async () => {
+    // Ровно та развилка, на которой уходили дни: бейдж один и тот же, а действия противоположные.
+    listReply.value = [row({ connectedAt: Date.now() - 11 * HOUR })]
+    const hint = (await mountReady()).find('[title]').attributes('title')
+    expect(hint).not.toContain('интернет-банк')
+    expect(hint).toContain('НИ РАЗУ')
   })
 })
 
@@ -730,5 +741,63 @@ describe('#19 забор за день адресуется КОНКРЕТНОМ
     listReply.value = [{ ...A, accountKey: PENDING }]
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="fetch-day-open-5"]').exists()).toBe(false)
+  })
+})
+
+describe('ПОЧЕМУ истекло — строкой, а не всплывашкой (#488)', () => {
+  // ⚠ Владелец четвёртый день переподключал Альфу и каждый раз назавтра видел то же «подключение
+  // истекло». Подсказка жила только в `title` — на мобильном её нет вовсе, а смотрят чаще с него.
+
+  const TTL_MS = 36_000 * 1000
+  const deadRow = (over: Record<string, unknown> = {}) => ({
+    id: 1,
+    provider: 'alfa-by' as const,
+    accountKey: 'BY00ALFA00000000000000000001',
+    connectedAt: Date.now() - TTL_MS - 3_600_000,
+    expiresAt: 0,
+    hasRefresh: true,
+    consentExpiresAt: 0,
+    pollPaused: false,
+    grantId: 'g1',
+    ...over
+  })
+
+  it('продление не бралось за строку — говорим это и НЕ советуем переподключать', async () => {
+    listReply.value = [deadRow({ lastAttemptAt: 0 })]
+    const w = await mountReady()
+    const hint = w.find('[data-testid="health-hint-1"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('НИ РАЗУ')
+    expect(hint.text()).toContain('Попыток обновления не было ни одной')
+    expect(hint.text()).not.toContain('Переподключите счёт')
+  })
+
+  it('банк отказал — прежний совет остаётся, он тут верный', async () => {
+    listReply.value = [deadRow({ lastAttemptAt: Date.now() - 3_600_000 })]
+    const w = await mountReady()
+    const hint = w.find('[data-testid="health-hint-1"]')
+    expect(hint.text()).toContain('Переподключите счёт')
+    expect(hint.text()).toContain('Последняя попытка обновления')
+  })
+
+  it('на здоровом подключении лишней строки нет', async () => {
+    listReply.value = [deadRow({ connectedAt: Date.now(), lastAttemptAt: 0 })]
+    const w = await mountReady()
+    expect(w.find('[data-testid="health-hint-1"]').exists()).toBe(false)
+  })
+
+  it('«нет refresh-токена» — строка тоже показывается, и говорит про БАНК, а не про наш сервер', async () => {
+    // ⚠ Находка ревью: строка гейтится списком `NEEDS_HUMAN_HEALTH`, а в нём ДВА состояния, не
+    // одно. Проверялось только `expired` — то есть половина показов подсказки не была покрыта
+    // ничем, включая единственный случай, где переподключение и есть верный совет при СВЕЖЕМ
+    // подключении.
+    listReply.value = [deadRow({ hasRefresh: false, connectedAt: Date.now(), lastAttemptAt: 0 })]
+    const w = await mountReady()
+    const hint = w.find('[data-testid="health-hint-1"]')
+    expect(hint.exists(), 'у состояния «нет refresh-токена» подсказки нет вовсе').toBe(true)
+    expect(hint.text()).toContain('переподключите счёт')
+    // Разбор причин истечения сюда не примешивается: здесь нечем продлевать в принципе, и
+    // «мы ни разу не пытались» было бы про другое — совет остаётся верным.
+    expect(hint.text()).not.toContain('НИ РАЗУ')
   })
 })
