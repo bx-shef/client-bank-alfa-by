@@ -37,6 +37,18 @@ import type { TriggerOutcome } from '../utils/applyTriggerDep'
 /** Потолок задач-дозаписей на один прогон — см. `deferredQueued` в `handleCrmSyncJob`. */
 export const MAX_DEFERRED_WRITES_PER_RUN = 25
 
+/**
+ * Потолок дозаливок реестра за один прогон ручной загрузки (#45).
+ *
+ * ⚠ Заметно БОЛЬШЕ, чем у отложенной записи рядом (25), и это не небрежность: та чинит редкий
+ * сбой, а эта — историю целого портала, и потолок в десятки означал бы, что человек грузит один и
+ * тот же файл двадцать раз. При 2 req/s (лимитер портала) триста операций это около пяти минут —
+ * терпимо для действия, которое делают раз в жизни портала, и заведомо меньше, чем ждать вечно.
+ * ⚠ Остаток НЕ замалчивается: он попадает в итог прогона, иначе оборванная на середине дозаливка
+ * выглядела бы законченной.
+ */
+export const MAX_BACKFILLS_PER_RUN = 300
+
 export const MAX_RESOLVED_INTENTS_PER_OP = 10
 
 /** Потолок сообщений «цель не найдена» на один прогон (#421) — см. комментарий у счётчика. */
@@ -84,6 +96,11 @@ export interface HandlerDeps {
    * Returns the element id (or null when the SP is not provisioned / on a demo portal).
    */
   writePaymentRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<string | null>
+  /**
+   * Дозаполнить колонки реестра у элемента, который УЖЕ есть (#45) — для операции, отсеянной
+   * дедупом. Зовётся ТОЛЬКО с ручной загрузки: см. `backfillPaymentRegistryViaRest`.
+   */
+  backfillRegistry?: (item: StatementItem, companyId: string | null, memberId: string, provider: BankProviderId, paymentSp: SpRef) => Promise<'filled' | 'already' | 'created'>
   /** Привязать дело к сущностям CRM (#579, шаг 3): элемент реестра, сущность списания, обе
    *  компании. ЛУЧШИЕ УСИЛИЯ — возвращает, сколько привязок не удалось, и НИКОГДА не бросает:
    *  дело уже записано и промаркировано, а падение здесь отменило бы всю оставшуюся пачку, не
@@ -410,7 +427,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -458,6 +475,12 @@ export async function handleCrmSyncJob(
   let excluded = 0
   /** Operations whose registry element could not be written (#575) — see the call site. */
   let registryFailed = 0
+  /** Сколько операций дозаполнили колонками реестра при повторной загрузке (#45). */
+  let registryBackfilled = 0
+  /** Сколько дозаливок не удалось — отдельно от `registryFailed`: там элемент не создан вовсе. */
+  let registryBackfillFailed = 0
+  /** Сколько операций не дозаполнили из-за капа — человек должен знать, что нужна ещё загрузка. */
+  let registryBackfillSkipped = 0
   let bindingsFailed = 0
   /**
    * Сколько дозаписей ставим за прогон (#578/#585, находка ревью).
@@ -556,6 +579,42 @@ export async function handleCrmSyncJob(
     // (redelivered) job, its marker is in B24 — don't create a second one.
     if (await deps.getActivityId(job.memberId, key)) {
       skipped++
+      // ─── Дозаливка истории реестра (#45) ────────────────────────────────────────────────────
+      // ⚠ Дедуп стоит РАНЬШЕ записи реестра, поэтому портал, обновивший смарт-процесс уже после
+      // импорта, не мог заполнить историю НИКОГДА: колонки появлялись только у операций, которых
+      // ещё нет в CRM. На живом портале это стоило ручного удаления дел и элементов — путь,
+      // который человек не обязан знать.
+      //
+      // ⚠ Только с РУЧНОЙ загрузки (`source: 'parse'`). Окно автоопроса намеренно нахлёстывается,
+      // и сквозь дедуп на каждом тике проходят все вчерашние операции: безусловная дозапись
+      // стоила бы лишнего вызова на каждую из них каждые несколько минут — навсегда, ради
+      // состояния, случающегося один раз при обновлении СП. Повторная загрузка файла уже названа
+      // человеку способом починки (#43), и ровно она теперь и чинит.
+      //
+      // ⚠ Отказ ПРОГЛАТЫВАЕТСЯ: это вторичная запись поверх уже обработанной операции, и ронять
+      // из-за неё разбор остальной пачки нельзя. Считается отдельно от `registryFailed` — там
+      // «элемент не создан вовсе», здесь «историю дозаполнить не вышло», чинится это разным.
+      if (job.source === 'parse' && ledgerPaymentRef && deps.backfillRegistry) {
+        // ⚠ КАП на прогон. Файл до 2 МБ несёт сотни операций, а на skip-пути уже есть вызов
+        // (`getActivityId`); backfill добавляет ещё один-два. При 2 req/s это десятки минут, и всё
+        // это время очередь `crm-sync` (concurrency 1) занята одним порталом. Тот же приём, что у
+        // соседней отложенной записи. Недоделанное чинится следующей загрузкой — об остатке
+        // говорит итог прогона, иначе человек решил бы, что дозаливка прошла целиком.
+        if (registryBackfilled + registryBackfillFailed < MAX_BACKFILLS_PER_RUN) {
+          try {
+            // ⚠ Компания ищется ЗДЕСЬ: при отсутствующем элементе (СП появился позже импорта)
+            // дозаливка создаёт его полноценно, а элемент без ссылки на плательщика — половина
+            // реестра. На обычном пути `findCompany` зовётся ниже; здесь мы до него не доходим.
+            const backfillCompany = await deps.findCompany(item, job.memberId)
+            const outcome = await deps.backfillRegistry(item, backfillCompany, job.memberId, job.providerId, ledgerPaymentRef)
+            if (outcome !== 'already') registryBackfilled++
+          } catch {
+            registryBackfillFailed++
+          }
+        } else {
+          registryBackfillSkipped++
+        }
+      }
       continue
     }
     const companyId = await deps.findCompany(item, job.memberId)
@@ -984,5 +1043,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
 }

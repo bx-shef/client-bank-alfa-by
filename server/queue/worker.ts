@@ -58,7 +58,7 @@ import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
 import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
-import { writePaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
+import { writePaymentRegistryViaRest, backfillPaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { bindActivityViaRest } from '../utils/activityBindingsWrite'
 import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
@@ -292,6 +292,19 @@ export function liveHandlerDeps(): HandlerDeps {
         crmLog.error(`portal ${memberId}: реестр платежей не записан — ${logSafe(String((e as Error)?.message ?? e))}`)
         throw e
       }
+    },
+    // Дозаливка колонок реестра у уже существующего элемента (#45) — только с ручной загрузки.
+    //
+    // ⚠ В отличие от соседа выше, отсутствие токена здесь `missing`, а НЕ throw: эта запись идёт
+    // поверх УЖЕ обработанной операции (дело создано прошлым прогоном), и валить из-за неё разбор
+    // остальной пачки нечем оправдать. Хендлер считает исход и печатает его в итоге прогона.
+    backfillRegistry: async (item, companyId, memberId, provider, paymentSp) => {
+      if (isDemoAccount(item.account)) return 'already'
+      const call = await resolvePortalCall(memberId)
+      // ⚠ Нет токена — `already`, а НЕ throw: запись идёт поверх уже обработанной операции (дело
+      // создано прошлым прогоном), и валить из-за неё разбор остальной пачки нечем оправдать.
+      if (!call) return 'already'
+      return await backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the

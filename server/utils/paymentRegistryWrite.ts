@@ -17,13 +17,13 @@
 // a test with shared element state pins that order (an earlier version of that test used two
 // independent fakes and passed against the broken order — measured).
 
-import { ensurePaymentElement } from './distributionLedgerWrite'
-import { buildRegistryFillCall } from '../../app/utils/distributionLedger'
+import { ensurePaymentElement, extractListItems } from './distributionLedgerWrite'
+import { buildRegistryFillCall, buildRegistryProbeCall } from '../../app/utils/distributionLedger'
 import { dedupKey } from '../../app/utils/statement'
 import { BANK_LABELS } from '../../app/utils/bankLabels'
 import type { PaymentRegistryFields } from '../../app/utils/distributionLedger'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
-import type { SpRef } from '../../app/config/distributionSp'
+import { buildUfFieldNameCamel, PAYMENT_SP_FIELDS, type SpRef } from '../../app/config/distributionSp'
 import type { RestCall } from './companyLookup'
 import { buildActivityTitle, neutralizeBb } from '../../app/utils/activity'
 
@@ -98,4 +98,58 @@ export async function writePaymentRegistryViaRest(
     if (fill) await call(fill.method, fill.params)
   }
   return id
+}
+
+/**
+ * Дозаполнить (или СОЗДАТЬ) элемент реестра для операции, которую дедуп уже отсеял (#45).
+ *
+ * ⚠ ЗАЧЕМ. Дедуп-гейт `crm-sync` отсеивает операцию по маркеру ДЕЛА раньше, чем доходит до записи
+ * реестра, поэтому портал, настроивший смарт-процесс уже после импорта, не мог заполнить историю
+ * НИКОГДА. На живом портале это стоило владельцу ручного удаления дел и элементов.
+ *
+ * ⚠ ЭЛЕМЕНТА МОЖЕТ НЕ БЫТЬ ВОВСЕ, и это ГЛАВНЫЙ случай, а не редкий (находка ревью). Если СП
+ * появился позже импорта, то на том прогоне `ledgerPaymentRef` был `null` и элемент не создавался:
+ * дозаписывать оказалось бы нечего, и починка, обещанная человеку, молча не срабатывала бы именно
+ * там, где нужна. Поэтому `missing` не «выходим», а полноценная запись — та же, что на обычном
+ * пути, с колонками и ссылкой на компанию.
+ *
+ * ⚠ Зовётся ТОЛЬКО с ручной загрузки (`source: 'parse'`), а не с автоопроса: окно опроса намеренно
+ * нахлёстывается, и сквозь дедуп на каждом тике проходят все вчерашние операции — безусловная
+ * дозапись стоила бы лишнего вызова на каждую из них каждые несколько минут, навсегда, ради
+ * состояния, случающегося один раз при обновлении СП.
+ *
+ * ⚠ ИНДИКАТОР ЗАПОЛНЕННОСТИ — НАПРАВЛЕНИЕ, А НЕ ДАТА (находка ревью). Дата берётся из выписки
+ * (`acceptDate`), и все четыре нормализатора умеют вернуть пустую строку — банк не прислал или
+ * прислал в неизвестном формате. Пустые значения `registryFieldPayload` ОПУСКАЕТ, значит колонка
+ * даты у такой операции не появится никогда, и «дозаполнение» повторялось бы на каждой загрузке
+ * вечно, а счётчик в логе врал бы «дозаполнено N». Направление же вычисляем МЫ сами
+ * (`DIRECTION_LABELS[item.direction]`), и оно непусто по построению у любого элемента, который
+ * писал этот код.
+ */
+export async function backfillPaymentRegistryViaRest(
+  item: StatementItem,
+  companyId: string | null,
+  provider: BankProviderId,
+  paymentSp: SpRef,
+  call: RestCall
+): Promise<'filled' | 'already' | 'created'> {
+  const marker = dedupKey(item)
+  // ⚠ Пустой маркер дал бы фильтр без условий, то есть перечисление ВСЕГО смарт-процесса (тот же
+  // гард, что у `findDistributionByMarker`). Практически `dedupKey` непуст всегда — но цена ошибки
+  // здесь не «ничего не нашли», а «взяли чужой элемент и переписали его колонки».
+  if (marker === '') return 'already'
+  const probe = buildRegistryProbeCall(paymentSp, marker)
+  const res = await call(probe.method, probe.params)
+  const found = extractListItems(res)[0]
+  // Элемента нет — создаём полноценно (см. ⚠ выше): это и есть портал, где СП появился позже.
+  if (!found) {
+    await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+    return 'created'
+  }
+  const indicator = buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.direction.postfix)
+  if (String(found[indicator] ?? '').trim() !== '') return 'already'
+  const fill = buildRegistryFillCall(paymentSp, String(found.id), buildRegistryFields(item, provider))
+  if (!fill) return 'already' // нечего дописывать
+  await call(fill.method, fill.params)
+  return 'filled'
 }

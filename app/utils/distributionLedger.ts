@@ -449,6 +449,30 @@ export function buildRegistryFillCall(
   }
 }
 
+/**
+ * Найти элемент реестра по маркеру операции И СРАЗУ узнать, заполнены ли его колонки (#45).
+ *
+ * ⚠ Поле-индикатор (дата операции) идёт в `select` ВМЕСТЕ с id, поэтому проверка «уже заполнен»
+ * не стоит второго вызова: дозаливка истории и так делается по операции, и лишний round-trip на
+ * каждую превратил бы её в заметную нагрузку на портал.
+ *
+ * ⚠ Индикатором выбрано НАПРАВЛЕНИЕ, а не дата и не счёт. Всё, что приходит ИЗ ВЫПИСКИ, банк может
+ * не прислать (или прислать в формате, который нормализатор не разобрал) — а пустые значения
+ * `registryFieldPayload` опускает, поэтому такая колонка не появится никогда и «дозаполнение»
+ * повторялось бы на каждой загрузке вечно, врущим счётчиком в логе. Направление вычисляем МЫ сами
+ * (`DIRECTION_LABELS`), и оно непусто по построению у любого элемента, записанного этим кодом.
+ */
+export function buildRegistryProbeCall(paymentSp: SpRef, marker: string): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.list',
+    params: {
+      entityTypeId: paymentSp.entityTypeId,
+      filter: { [buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.marker.postfix)]: marker },
+      select: ['id', buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.direction.postfix)]
+    }
+  }
+}
+
 /** Build the `crm.item.list` that finds a payment carrier element by its operation marker (idempotency
  *  probe — one carrier per operation). Selects id + our total + currency (for a later recompute). */
 export function buildPaymentMarkerListCall(paymentSp: SpRef, marker: string): { method: string, params: Record<string, unknown> } {
