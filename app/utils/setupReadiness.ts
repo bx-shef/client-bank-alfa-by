@@ -12,7 +12,10 @@
 // the `nowMs` handed in — so it is fully testable and the same model serves the server response and
 // the UI.
 
-import { paymentSpEtid, distributionSpEtid, paymentSpTypeId, buildUfFieldNameCamel, PAYMENT_SP_FIELDS } from '~/config/distributionSp'
+import {
+  paymentSpEtid, distributionSpEtid, paymentSpTypeId, buildUfFieldNameCamel,
+  normalizeFieldNameForCompare, PAYMENT_SP_FIELDS
+} from '~/config/distributionSp'
 import type { PortalSettings } from '~/utils/settings'
 import { pluralRu } from '~/utils/importStatus'
 
@@ -105,11 +108,17 @@ export function missingPaymentSpFields(
 ): string[] {
   const spTypeId = paymentSpTypeId(configFields)
   if (spTypeId === null || !fieldNames) return []
-  // ⚠ Сравнение регистронезависимое: имя приходит от портала, и его форма уже однажды оказалась
-  // не той, какой поле создавали (#41). Точное совпадение регистра тут ничего не защищает.
-  const present = new Set(fieldNames.map(n => n.toLowerCase()))
+  // ⚠ Сверка идёт ТОЙ ЖЕ линейкой, что и провижининг — `normalizeFieldNameForCompare` (#41).
+  // Портал отдаёт имя поля в ТРЁХ формах: `UF_CRM_13_OP_DATE` (как создавали), `UF_CRM13_OP_DATE`
+  // (хранимая) и `ufCrm13OpDate` (camel, умолчание `crm.item.fields`). Своего `.toLowerCase()`
+  // здесь было МАЛО и это опаснее, чем кажется: подчёркиваний он не снимает, поэтому оригинальная
+  // форма (иная версия портала, self-hosted, чей-то `useOriginalUfNames:'Y'`) прочиталась бы как
+  // «нет НИ ОДНОГО поля» — красный экран со списком из тринадцати пунктов на полностью исправном
+  // портале. Это хуже исходного бага: экран уверенно посылает чинить работающее.
+  // ⚠ Две копии нормализации разъехались бы молча, поэтому функция одна на оба места.
+  const present = new Set(fieldNames.map(normalizeFieldNameForCompare))
   return Object.values(PAYMENT_SP_FIELDS)
-    .filter(f => !present.has(buildUfFieldNameCamel(spTypeId, f.postfix).toLowerCase()))
+    .filter(f => !present.has(normalizeFieldNameForCompare(buildUfFieldNameCamel(spTypeId, f.postfix))))
     .map(f => f.label)
 }
 

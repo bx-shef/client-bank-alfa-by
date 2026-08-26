@@ -81,20 +81,28 @@ function liveDeps(): SetupStatusDeps {
     // Какие поля смарт-процесс «Платежи» реально несёт (#46).
     //
     // ⚠ Читается на СТОРЕДНОМ токене портала, а не фрейм-токеном админа: это факт о портале, а не
-    // о том, кто открыл настройки, и тот же токен уже читает `configFields` строкой ниже.
+    // о том, кто открыл настройки.
     // ⚠ `crm.item.fields`, а НЕ `userfieldconfig.list`: второму нужно право `userfieldconfig`,
     // которого у портала может не быть (требует переустановки приложения) — а именно на таком
     // портале проверка и нужнее всего. `crm.item.fields` обходится правом `crm`.
-    // ⚠ `null` при любой заминке: «не спросили» не должно краситься как «полей нет».
+    // ⚠ `useOriginalUfNames:'N'` ПЕРЕДАЁТСЯ ЯВНО. Это умолчание метода, но опираться на умолчание,
+    // когда есть выбор, незачем: под `'Y'` имена приходят в оригинальной форме, и хотя сверка её
+    // переживёт (`normalizeFieldNameForCompare`), полагаться на две страховки разом не нужно.
+    // ⚠ `null` при любой заминке — «не спросили» не должно краситься как «полей нет». Пустой
+    // список полей это ТОЖЕ `null`, а не `[]`: `crm.item.fields` всегда возвращает системные поля,
+    // поэтому пустота означает неожиданный ответ, а `[]` уехал бы клиенту как «нет ни одного поля»
+    // и покрасил бы исправный портал красным (находка ревью).
     spFieldNames: async (memberId) => {
       const call = await livePortalSdkCall(memberId)
       if (!call) return null
       const cf = parsePortalSettings(pickAppOption(await call('app.option.get', {}), SETTINGS_KEY)).recognition.configFields
       const ref = paymentSpRef(cf)
       if (!ref) return null // СП не создан — про поля говорить нечего, строка и так красная
-      const res = await call('crm.item.fields', { entityTypeId: ref.entityTypeId })
+      const res = await call('crm.item.fields', { entityTypeId: ref.entityTypeId, useOriginalUfNames: 'N' })
       const fields = (res?.result as { fields?: Record<string, unknown> } | undefined)?.fields
-      return fields && typeof fields === 'object' ? Object.keys(fields) : null
+      if (!fields || typeof fields !== 'object') return null
+      const names = Object.keys(fields)
+      return names.length > 0 ? names : null
     }
   }
 }
@@ -102,10 +110,12 @@ function liveDeps(): SetupStatusDeps {
 export default defineEventHandler(async (event) => {
   const token = bearerToken(getHeader(event, 'authorization'))
   const domain = (getHeader(event, 'x-b24-domain') || '').trim()
+  // Дорогая проверка полей СП (#46) — только по явному запросу того экрана, который её показывает.
+  const wantFields = getQuery(event).fields === '1'
   return withFrameRouteSpan(
     { name: 'http.setup-status.get', method: 'GET', op: 'setup.status', domain },
     async (span) => {
-      const { status, body } = await handleSetupStatus(liveDeps(), { accessToken: token, domain })
+      const { status, body } = await handleSetupStatus(liveDeps(), { accessToken: token, domain, wantFields })
       span.outcome = httpOutcomeForStatus(status)
       setResponseStatus(event, status)
       return body

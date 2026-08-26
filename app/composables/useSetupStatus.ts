@@ -54,7 +54,16 @@ export function useSetupStatus() {
   const loadedOk = ref(false)
   const error = ref('')
 
-  async function load(): Promise<void> {
+  /**
+   * Прочитать серверную половину экрана готовности.
+   *
+   * ⚠ `fields` — ОТДЕЛЬНАЯ, дорогая часть (#46): проверка полей смарт-процесса стоит двух REST в
+   * портал (`app.option.get` + `crm.item.fields`) и нужна ровно одному экрану — карточке
+   * готовности в настройках. `/app` зовёт тот же `load()` на каждом открытии, а строки
+   * смарт-процессов у него нет вовсе, поэтому по умолчанию поля НЕ запрашиваются: платит тот, кто
+   * показывает. Без этого каждое открытие главного экрана дарило порталу два лишних вызова.
+   */
+  async function load(opts: { fields?: boolean } = {}): Promise<void> {
     const a = frameAuth()
     inFrame.value = a !== null
     if (!a) {
@@ -67,7 +76,10 @@ export function useSetupStatus() {
     loading.value = true
     error.value = ''
     try {
-      const res = await $fetch<Partial<SetupStatus>>('/api/setup-status', { headers: authHeaders(a) })
+      const res = await $fetch<Partial<SetupStatus>>('/api/setup-status', {
+        headers: authHeaders(a),
+        ...(opts.fields ? { query: { fields: '1' } } : {})
+      })
       loadedOk.value = true
       status.value = {
         connectedAccounts: Number(res?.connectedAccounts) || 0,

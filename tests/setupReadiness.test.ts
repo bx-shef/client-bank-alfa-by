@@ -5,7 +5,7 @@ import {
 import { parsePortalSettings } from '~/utils/settings'
 import {
   PAYMENT_SP_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY, PAYMENT_SP_ID_CONFIG_KEY,
-  PAYMENT_SP_FIELDS, buildUfFieldNameCamel
+  PAYMENT_SP_FIELDS, buildUfFieldNameCamel, buildUfFieldName, buildUfStoredFieldName
 } from '~/config/distributionSp'
 
 // Setup-readiness checklist (#409/#405) — «что настроено, а что нет» for a PORTAL (not the infra
@@ -372,6 +372,23 @@ describe('missingPaymentSpFields (#46)', () => {
   it('регистр имени не важен — портал уже присылал не ту форму (#41)', () => {
     const upper = Object.values(PAYMENT_SP_FIELDS).map(f => buildUfFieldNameCamel(SP_ID, f.postfix).toUpperCase())
     expect(missingPaymentSpFields(cfg, upper)).toEqual([])
+  })
+
+  // ⚠ НАХОДКА РЕВЬЮ и главный риск этой правки: своего `.toLowerCase()` было МАЛО. Портал отдаёт
+  // имя поля в ТРЁХ формах, и подчёркнутые (`UF_CRM_13_OP_DATE` как создавали, `UF_CRM13_OP_DATE`
+  // хранимая) под ним не совпали бы НИ ОДНА — экран показал бы «не хватает 13 полей» на полностью
+  // исправном портале, то есть послал бы чинить работающее. Сверка обязана идти той же линейкой,
+  // что и провижининг (`normalizeFieldNameForCompare`).
+  it('ВСЕ три формы имени признаются существующими, включая подчёркнутые — #41/#46', () => {
+    const forms: Array<[string, (p: string) => string]> = [
+      ['camel (умолчание crm.item.fields)', p => buildUfFieldNameCamel(SP_ID, p)],
+      ['форма создания UF_CRM_13_X', p => buildUfFieldName(SP_ID, p)],
+      ['хранимая форма UF_CRM13_X', p => buildUfStoredFieldName(SP_ID, p)]
+    ]
+    for (const [label, build] of forms) {
+      const names = Object.values(PAYMENT_SP_FIELDS).map(f => build(f.postfix))
+      expect(missingPaymentSpFields(cfg, names), `форма «${label}» не распознана`).toEqual([])
+    }
   })
 
   it('пропущенное поле названо своей человеческой подписью', () => {

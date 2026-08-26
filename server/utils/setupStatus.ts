@@ -43,7 +43,7 @@ export interface SetupStatusDeps {
 
 export async function handleSetupStatus(
   deps: SetupStatusDeps,
-  input: { accessToken: string, domain: string }
+  input: { accessToken: string, domain: string, wantFields?: boolean }
 ): Promise<SetupStatusResult> {
   const accessToken = (input.accessToken || '').trim()
   const domain = (input.domain || '').trim()
@@ -69,7 +69,10 @@ export async function handleSetupStatus(
     deps.recognitionMisconfig?.(memberId).catch(() => null),
     // ⚠ Отказ проглатывается так же, как у «моей компании»: экран готовности полезнее с половиной
     // сведений, чем пустой, а недостающая строка просто ведёт себя по-старому.
-    deps.spFieldNames?.(memberId).catch(() => null)
+    // ⚠ Спрашиваем ТОЛЬКО когда попросили (`wantFields`): проверка стоит двух REST в портал, а
+    // нужна одному экрану — карточке готовности. `/app` зовёт тот же маршрут на каждом открытии и
+    // строки смарт-процессов не показывает вовсе; платить за неё он не должен.
+    input.wantFields ? deps.spFieldNames?.(memberId).catch(() => null) : null
   ])
   const misconfigSlot = parseMisconfigReason(misconfigReason ?? null)
 

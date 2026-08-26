@@ -39,7 +39,12 @@ const CLIENT = readFileSync('app/composables/useSetupStatus.ts', 'utf8')
  * литерала. Пока в тексте, по которому ищем, может оказаться проза, гард проверяет прозу, а не код.
  */
 function clientMapping(): string {
-  const start = CLIENT.indexOf('status.value = {')
+  // ⚠ Якорь — МНОГОСТРОЧНЫЙ литерал (`status.value = {` + перевод строки). Рядом стоит однострочный
+  // сброс `status.value = { ...DEFAULTS }`, и цепляться за общее начало нельзя: конец тогда искался
+  // по первому же `\n      }`, а им может оказаться закрывающая скобка соседнего вызова (что и
+  // случилось, когда у `$fetch` появился второй аргумент-объект). Гард молча начинал смотреть в
+  // пустой фрагмент и падал на исправном коде — то есть переставал отличать поломку от своей.
+  const start = CLIENT.indexOf('status.value = {\n')
   expect(start, 'в useSetupStatus.ts не найден литерал состояния — гард ослеп, почини его').toBeGreaterThan(0)
   const end = CLIENT.indexOf('\n      }', start)
   expect(end, 'литерал состояния не закрыт — гард ослеп').toBeGreaterThan(start)
