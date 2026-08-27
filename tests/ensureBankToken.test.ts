@@ -262,7 +262,7 @@ describe('ensureBankToken', () => {
       })).rejects.toThrow(/invalid_client/)
     })
 
-    it('исходное сообщение СОХРАНЯЕТСЯ — по нему грепает рантбук и считает телеметрия', async () => {
+    it('исходное сообщение СОХРАНЯЕТСЯ — по нему грепает рантбук', async () => {
       const near = tok({ expiresAt: NOW + 10_000 })
       const { deps } = fakeDeps({ stored: near })
       const err = await ensureBankToken(near, {
@@ -273,7 +273,63 @@ describe('ensureBankToken', () => {
       }).then(() => null, (e: Error) => e)
       expect(err, 'продление не упало — тест проверяет не то').toBeInstanceOf(Error)
       expect(err!.message, 'потеряли класс отказа, по которому ищут в логе').toContain('400 Bad Request')
-      expect((err as Error & { cause?: unknown }).cause, 'потерян оригинал со стеком').toBeTruthy()
+      expect(err!.message, 'причина не дописана').toContain('invalid_grant')
+    })
+
+    it('⚠ ТЕЛО ЗАПРОСА не попадает в сообщение ни при каких условиях', async () => {
+      // В нём живой `refresh_token` и (у Альфы) `client_secret`. Инвариант заявлен в комментарии,
+      // но не проверялся ничем: фикстуры `postRefresh` игнорировали свои аргументы, поэтому
+      // мутация «дописать `(${body})` к сообщению» прошла бы незамеченной (находка ревью).
+      const near = tok({ expiresAt: NOW + 10_000, refreshToken: 'RT-live-secret-value-0123456789' })
+      const { deps } = fakeDeps({ stored: near })
+      let sentBody = ''
+      const err = await ensureBankToken(near, {
+        ...deps,
+        postRefresh: async (_u, b) => {
+          sentBody = b
+          throw Object.assign(new Error('[POST] "https://bank/token": 400 Bad Request'),
+            { data: { error: 'invalid_grant' } })
+        }
+      }).then(() => null, (e: Error) => e)
+      expect(sentBody, 'тело запроса не собралось — тест проверяет не то').toContain('RT-live-secret')
+      expect(err!.message, 'тело запроса уехало в сообщение исключения').not.toContain('RT-live-secret')
+      expect(err!.message).toContain('invalid_grant')
+    })
+
+    it('⚠⚠ ПРОВОДКА: секреты доезжают до редакции, а не остаются в аргументах по умолчанию', async () => {
+      // Мутация «звать `bankOAuthErrorDetail(e)` без второго аргумента» проходила зелёной: юнит
+      // на саму функцию передаёт секреты руками, а проводку не проверял никто. Между тем именно
+      // она и защищает — функция без секретов вырезать значение не может в принципе.
+      const refresh = 'RT-live-secret-value-0123456789'
+      const near = tok({ expiresAt: NOW + 10_000, refreshToken: refresh })
+      const { deps } = fakeDeps({ stored: near })
+      const err = await ensureBankToken(near, {
+        ...deps,
+        postRefresh: async () => {
+          // Банк цитирует отвергнутый параметр ЗНАЧЕНИЕМ — под шаблон формы это не попадает.
+          throw Object.assign(new Error('[POST] "https://bank/token": 400 Bad Request'),
+            { data: { error: 'invalid_grant', error_description: `refresh token '${refresh}' already used` } })
+        }
+      }).then(() => null, (e: Error) => e)
+      expect(err!.message, 'живой refresh-токен уехал в лог: секреты не доехали до редакции')
+        .not.toContain(refresh)
+      expect(err!.message, 'вместе с секретом вычистили и диагностику').toContain('invalid_grant')
+    })
+
+    it('⚠ класс отказа СОХРАНЯЕТСЯ — по нему телеметрия метит спан', async () => {
+      // Первая редакция бросала голый `new Error`, и `errorKind()` деградировал с `FetchError` до
+      // безликого `Error` ровно в обогащённом случае (находка ревью).
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored: near })
+      const err = await ensureBankToken(near, {
+        ...deps,
+        postRefresh: async () => {
+          throw Object.assign(new Error('[POST] "https://bank/token": 400 Bad Request'),
+            { name: 'FetchError', data: { error: 'invalid_grant' }, status: 400 })
+        }
+      }).then(() => null, (e: Error) => e)
+      expect(err!.name, 'потерян класс отказа — job.error_kind станет безликим').toBe('FetchError')
+      expect((err as Error & { status?: number }).status).toBe(400)
     })
 
     it('отказ БЕЗ разбираемого тела пробрасывается как есть, а не оборачивается пустотой', async () => {
@@ -307,11 +363,71 @@ describe('ensureBankToken', () => {
       expect(bankOAuthErrorDetail({ data: '<html>502</html>' })).toContain('502')
     })
 
-    it('пустое/чужое тело даёт пустую строку — приписки не будет', () => {
-      for (const data of [undefined, null, {}, 42, { foo: 'bar' }]) {
-        expect(bankOAuthErrorDetail({ data }), JSON.stringify(data)).toBe('')
+    it('⚠ строковая ветка ТОЖЕ капается и чистится — иначе прокси подделает строку лога', () => {
+      // Находка ревью: у функции были ДВА вызова `logSafe`, по одному на ветку, и строковая
+      // проверялась только на `toContain('502')`. Мутация «вернуть `data.trim()`» проходила
+      // зелёной, а с ней в лог уезжал перевод строки — прямой CWE-117.
+      expect(bankOAuthErrorDetail({ data: 'x'.repeat(5000) }).length).toBeLessThanOrEqual(200)
+      const forged = bankOAuthErrorDetail({ data: 'proxy said:\nERROR: подделанная строка' })
+      expect(forged, 'перевод строки прошёл в лог').not.toContain('\n')
+    })
+
+    it('⚠ КОНВЕРТ НЕ ПО RFC разбирается, а не теряется', () => {
+      // Токен-эндпоинт Альфы стоит на шлюзе WSO2 (`{fault:…}`), у Приора Open Banking
+      // (`{Code, Errors:[…]}`). Разбирай мы только `error`/`error_description` — вернулась бы
+      // пустота, то есть то самое опаковое «400», ради которого всё писалось (находка ревью).
+      expect(bankOAuthErrorDetail({ data: { fault: { code: 900901, message: 'Invalid Credentials' } } }))
+        .toContain('Invalid Credentials')
+      expect(bankOAuthErrorDetail({ data: { Code: '400 BadRequest', Errors: [{ ErrorCode: 'BY.NBRB.Field.Invalid' }] } }))
+        .toContain('BY.NBRB.Field.Invalid')
+    })
+
+    it('⚠⚠ СЕКРЕТ, процитированный банком, ВЫРЕЗАЕТСЯ — по форме и по значению', () => {
+      // Блокер ревью безопасности. OAuth-серверы рутинно цитируют отвергнутый параметр, а в теле
+      // нашего запроса едут `client_secret` (Альфа), `client_assertion` (Приор) и живой
+      // `refresh_token`. Кап длины от этого не спасает: голова строки — как раз то место, куда
+      // процитированный токен и попадает.
+      const refresh = 'RT-live-secret-value-0123456789'
+      const secret = 'CS-live-client-secret-0123456789'
+
+      // По ЗНАЧЕНИЮ: банк процитировал голый токен, ни один шаблон формы не совпадёт.
+      const byValue = bankOAuthErrorDetail(
+        { data: { error: 'invalid_grant', error_description: `refresh token '${refresh}' already used` } },
+        [refresh, secret]
+      )
+      expect(byValue, 'живой refresh-токен уехал в лог').not.toContain(refresh)
+      expect(byValue).toContain('[redacted]')
+      expect(byValue, 'диагностика вычищена вместе с секретом').toContain('invalid_grant')
+
+      // По ФОРМЕ: подписанный `client_assertion` в описании.
+      const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.c2lnbmF0dXJlLXZhbHVl'
+      const byShape = bankOAuthErrorDetail(
+        { data: { error: 'invalid_client', error_description: `assertion rejected: ${jwt}` } }, []
+      )
+      expect(byShape, 'подписанный assertion уехал в лог').not.toContain(jwt)
+      expect(byShape).toContain('invalid_client')
+    })
+
+    it('⚠ ПУСТОЙ секрет не превращает текст в решето', () => {
+      // У Приора под `private_key_jwt` `client_secret` может отсутствовать вовсе. Замена пустой
+      // строки вырезала бы вообще всё.
+      expect(bankOAuthErrorDetail({ data: { error: 'invalid_grant' } }, ['', 'abc']))
+        .toBe('invalid_grant')
+    })
+
+    it('пустое тело даёт пустую строку — приписки не будет', () => {
+      // ⚠ `{}`/`[]` информации не несут, а приписку рисуют: `— банк ответил: {}` хуже её
+      // отсутствия, потому что читатель решит, что причина названа, и перестанет искать.
+      for (const data of [undefined, null, {}, [], 42, 'unserializable' in {} ? 1 : '   ']) {
+        expect(bankOAuthErrorDetail({ data }), JSON.stringify(data) ?? String(data)).toBe('')
       }
       expect(bankOAuthErrorDetail(new Error('plain'))).toBe('')
+    })
+
+    it('⚠ НЕЗНАКОМЫЙ, но НЕПУСТОЙ конверт отдаётся целиком — это лучше, чем молчание', () => {
+      // Ровно тот случай, ради которого фолбэк и заведён: форму мы не знаем, но у человека на
+      // руках оказывается то, что банк действительно сказал.
+      expect(bankOAuthErrorDetail({ data: { foo: 'bar' } })).toContain('bar')
     })
 
     it('⚠ ДЛИНА ограничена: строка уезжает в лог, который живёт до вытеснения по объёму', () => {

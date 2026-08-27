@@ -6,7 +6,13 @@
 // it is unit-testable without importing the side-effectful worker module (#242).
 
 /** Replace every control/format char (incl. CR, LF, NUL, ANSI escapes) with a
- *  space and truncate to `max` chars. Pure — no I/O. */
+ *  space and truncate to `max` chars. Pure — no I/O.
+ *
+ *  ⚠ `Zl`/`Zp` тоже вычищаются (U+2028/U+2029), хотя в `Cc`/`Cf` они не входят: часть читателей
+ *  лога считает их переводом строки, а значение сюда попадает и от АПСТРИМА (ответ банка, #649),
+ *  то есть от стороны, которой выгодно подделать вторую строку. Unix-инструменты, которыми
+ *  оперирует рантбук, их разделителем не считают — но полагаться на потребителя там, где правило
+ *  формулируется в одну категорию, незачем. */
 export function logSafe(s: string, max = 128): string {
-  return String(s ?? '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, max)
+  return String(s ?? '').replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').slice(0, max)
 }
