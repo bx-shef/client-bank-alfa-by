@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   bankCredsFromEnv,
+  bankOAuthErrorDetail,
   bankRefreshRequest,
   ensureBankToken,
   needsBankRefresh,
@@ -227,6 +228,101 @@ describe('ensureBankToken', () => {
       })
       expect(out.accessToken).toBe('A2')
       expect(saved).toHaveLength(1)
+    })
+  })
+
+  // ⚠ #649, по живому прогону 2026-08-27. Двенадцать финальных падений с текстом
+  // `[POST] ".../token": 400 Bad Request` — и по нему нельзя было отличить «refresh мёртв, нужен
+  // поход владельца счёта в банк» от «у нас в .env не тот client_secret». Цена ошибки
+  // несимметрична: во втором случае человека посылают в интернет-банк впустую.
+  describe('причина отказа токен-эндпоинта доезжает до человека (#649)', () => {
+    /** Ошибка в форме, которую бросает ofetch: сообщение + разобранное тело в `data`. */
+    const fetchError = (message: string, data: unknown) => Object.assign(new Error(message), { data })
+
+    it('`invalid_grant` называется прямо — это единственный случай, где нужен поход в банк', async () => {
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored: near })
+      await expect(ensureBankToken(near, {
+        ...deps,
+        postRefresh: async () => {
+          throw fetchError('[POST] "https://bank/token": 400 Bad Request',
+            { error: 'invalid_grant', error_description: 'Refresh token is invalid or expired' })
+        }
+      })).rejects.toThrow(/invalid_grant/)
+    })
+
+    it('⚠ `invalid_client` НЕ путается с ним — это наш .env, а не мёртвый грант', async () => {
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored: near })
+      await expect(ensureBankToken(near, {
+        ...deps,
+        postRefresh: async () => {
+          throw fetchError('[POST] "https://bank/token": 400 Bad Request', { error: 'invalid_client' })
+        }
+      })).rejects.toThrow(/invalid_client/)
+    })
+
+    it('исходное сообщение СОХРАНЯЕТСЯ — по нему грепает рантбук и считает телеметрия', async () => {
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored: near })
+      const err = await ensureBankToken(near, {
+        ...deps,
+        postRefresh: async () => {
+          throw fetchError('[POST] "https://bank/token": 400 Bad Request', { error: 'invalid_grant' })
+        }
+      }).then(() => null, (e: Error) => e)
+      expect(err, 'продление не упало — тест проверяет не то').toBeInstanceOf(Error)
+      expect(err!.message, 'потеряли класс отказа, по которому ищут в логе').toContain('400 Bad Request')
+      expect((err as Error & { cause?: unknown }).cause, 'потерян оригинал со стеком').toBeTruthy()
+    })
+
+    it('отказ БЕЗ разбираемого тела пробрасывается как есть, а не оборачивается пустотой', async () => {
+      // Сеть легла, таймаут, обрыв — тела нет. Приписка «банк ответил: » была бы враньём.
+      const near = tok({ expiresAt: NOW + 10_000 })
+      const { deps } = fakeDeps({ stored: near })
+      const err = await ensureBankToken(near, {
+        ...deps,
+        postRefresh: async () => {
+          throw new Error('fetch failed')
+        }
+      }).then(() => null, (e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err!.message).toBe('fetch failed')
+      expect(err!.message).not.toContain('банк ответил')
+    })
+  })
+
+  describe('bankOAuthErrorDetail', () => {
+    it('склеивает код и описание, когда есть оба', () => {
+      expect(bankOAuthErrorDetail({ data: { error: 'invalid_grant', error_description: 'expired' } }))
+        .toBe('invalid_grant: expired')
+    })
+
+    it('обходится одним из двух', () => {
+      expect(bankOAuthErrorDetail({ data: { error: 'invalid_client' } })).toBe('invalid_client')
+      expect(bankOAuthErrorDetail({ data: { error_description: 'no soup for you' } })).toBe('no soup for you')
+    })
+
+    it('не-JSON ответ (HTML от прокси) отдаётся текстом, а не теряется', () => {
+      expect(bankOAuthErrorDetail({ data: '<html>502</html>' })).toContain('502')
+    })
+
+    it('пустое/чужое тело даёт пустую строку — приписки не будет', () => {
+      for (const data of [undefined, null, {}, 42, { foo: 'bar' }]) {
+        expect(bankOAuthErrorDetail({ data }), JSON.stringify(data)).toBe('')
+      }
+      expect(bankOAuthErrorDetail(new Error('plain'))).toBe('')
+    })
+
+    it('⚠ ДЛИНА ограничена: строка уезжает в лог, который живёт до вытеснения по объёму', () => {
+      const detail = bankOAuthErrorDetail({ data: { error_description: 'x'.repeat(5000) } })
+      expect(detail.length).toBeLessThanOrEqual(200)
+    })
+
+    it('⚠ управляющие символы вычищаются — иначе банк впишет свою строку в наш лог', () => {
+      // Перевод строки в теле ответа подделал бы вторую строку лога с любым содержанием.
+      const detail = bankOAuthErrorDetail({ data: { error: 'x\nERROR: всё сломалось' } })
+      expect(detail).not.toContain('\n')
     })
   })
 

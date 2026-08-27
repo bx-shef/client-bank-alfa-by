@@ -27,6 +27,7 @@ import { dbQuery } from '../db/client'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
+import { logSafe } from './logSafe'
 
 const log = useServerLogger('bank-keepalive')
 
@@ -212,6 +213,39 @@ const liveDeps: BankRefreshDeps = {
 }
 
 /**
+ * Достать из отказа токен-эндпоинта ПРИЧИНУ, которую называет сам банк (#649).
+ *
+ * ⚠ Ради этой строки всё и написано. Живой прогон 2026-08-27 дал двенадцать финальных падений с
+ * текстом `[POST] ".../token": 400 Bad Request` — и по нему нельзя отличить состояния, у которых
+ * РАЗНЫЕ починки и разная цена:
+ *   `invalid_grant`         — refresh мёртв или уже потрачен ⇒ лечит ТОЛЬКО повторный вход
+ *                             владельца счёта в интернет-банк, ретраи бессмысленны;
+ *   `invalid_client`        — наши `client_id`/`client_secret` не те ⇒ чинится в `.env`, поход
+ *                             владельца в банк не нужен и вреден (потратит время впустую);
+ *   `invalid_request`       — запрос собран неверно ⇒ это наш баг, и клиент тут ни при чём;
+ *   `unsupported_grant_type`/`invalid_scope` — расхождение регистрации с кодом.
+ * Мы держали ответ банка в руках и выбрасывали его, оставляя человеку голое «400».
+ *
+ * ⚠ Отдаём ТОЛЬКО `error` и урезанное `error_description`. Тело ответа токен-эндпоинта по RFC 6749
+ * секретов не несёт, но полагаться на это без ограничителя нельзя: банк волен положить туда что
+ * угодно, а строка уезжает в лог, который живёт до вытеснения по объёму.
+ *
+ * ⚠ ЗАПРОС не логируем ни при каких условиях — в нём сам refresh-токен и (у Альфы) client_secret.
+ */
+export function bankOAuthErrorDetail(e: unknown): string {
+  const data = (e as { data?: unknown })?.data
+  if (data == null) return ''
+  // Не-JSON ответ (HTML от прокси, пустая строка) — берём как есть, урезав.
+  if (typeof data === 'string') return logSafe(data.trim(), 200)
+  if (typeof data !== 'object') return ''
+  const rec = data as Record<string, unknown>
+  const code = typeof rec.error === 'string' ? rec.error.trim() : ''
+  const desc = typeof rec.error_description === 'string' ? rec.error_description.trim() : ''
+  if (!code && !desc) return ''
+  return logSafe(code && desc ? `${code}: ${desc}` : code || desc, 200)
+}
+
+/**
  * Return a valid access token for the connected bank account, refreshing (once, under a
  * per-account lock) if within the skew of expiry, and persisting the rotated tokens.
  * Without provider creds it hands back the stored token (may be expired) so the caller's
@@ -274,7 +308,20 @@ export async function ensureBankToken(
     } catch {
       // Лучшие усилия: продление важнее собственной диагностики.
     }
-    const r = parseBankRefresh(stored.provider, await deps.postRefresh(url, body, headers))
+    // ⚠ Причину отказа достаём ЗДЕСЬ, а не у вызывающих: путей продления два (крон и опрос по
+    // дороге), и оба падают этим же исключением. Обогащать в каждом — значит однажды обогатить в
+    // одном; ровно так `markBankRefreshAttempt` и оказался только на одном из них (#488).
+    let raw: unknown
+    try {
+      raw = await deps.postRefresh(url, body, headers)
+    } catch (e) {
+      const detail = bankOAuthErrorDetail(e)
+      if (!detail) throw e
+      // ⚠ Оригинал остаётся в `cause`: по нему BullMQ и телеметрия по-прежнему видят класс отказа,
+      // а человек читает причину. Подменять исключение целиком нельзя — потеряется стек.
+      throw new Error(`${(e as Error)?.message ?? 'bank token refresh failed'} — банк ответил: ${detail}`, { cause: e })
+    }
+    const r = parseBankRefresh(stored.provider, raw)
     const updated: BankToken = {
       ...stored,
       accessToken: r.accessToken,
