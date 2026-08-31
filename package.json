@@ -57,9 +57,9 @@
   },
   "dependencies": {
     "@bitrix24/b24icons-vue": "^2.0.7",
-    "@bitrix24/b24jssdk": "^2.0.0",
-    "@bitrix24/b24jssdk-nuxt": "^2.0.0",
-    "@bitrix24/b24ui-nuxt": "^2.10.0",
+    "@bitrix24/b24jssdk": "^2.1.0",
+    "@bitrix24/b24jssdk-nuxt": "^2.1.0",
+    "@bitrix24/b24ui-nuxt": "^2.12.0",
     "@fontsource/roboto-mono": "^5.3.0",
     "@fontsource/rubik": "^5.3.0",
     "@internationalized/date": "^3.12.3",
