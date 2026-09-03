@@ -34,7 +34,7 @@ onUnmounted(() => window.removeEventListener('message', onFrameMessage))
     <iframe
       v-if="src"
       :src="src"
-      class="min-h-[760px] w-full border-0 rounded-2xl sm:min-h-[620px]"
+      class="min-h-[760px] w-full border-0 rounded-2xl sm:min-h-[640px]"
       title="Форма заявки на установку"
       loading="lazy"
     />
