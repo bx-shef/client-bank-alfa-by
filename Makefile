@@ -1,7 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
-        bank-history alfa-refresh-now \
+        bank-history alfa-refresh-now alfa-refresh-schedule alfa-refresh-log alfa-refresh-stop \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -361,6 +361,35 @@ reap-status:
 	@t=$$(mktemp /tmp/reap-status.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
 	  && bash "$$t" docker-compose.prod.yml
+
+## Лестница пауз: какой простой между обновлениями Альфа ещё терпит (#488)
+#
+#   make alfa-refresh-schedule     # запустить в фоне (переживает выход из ssh)
+#   make alfa-refresh-log          # смотреть журнал
+#   make alfa-refresh-stop         # остановить
+#
+# ⚠ Измеряет ПАУЗУ МЕЖДУ ОБНОВЛЕНИЯМИ, а не время от подключения: удачное обновление выдаёт новую
+# пару и сбрасывает отсчёт простоя, поэтому лестница «от старта» после первого успеха проверяла бы
+# всегда один и тот же интервал. Ступени: 1м, 30м, 1ч, 2ч … 11ч, останов на первой ошибке —
+# последняя удавшаяся пауза безопасна, первая упавшая нет.
+# ⚠ Свой набор: GAPS="1m 30m 1h 2h" make alfa-refresh-schedule
+alfa-refresh-schedule:
+	@echo "[make] скачиваю alfa-refresh-schedule.sh из $(REF)"
+	@t=$$(mktemp /tmp/alfa-sch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-schedule.sh" \
+	  && RAW_URL="$(RAW)" GAPS="$${GAPS:-}" bash "$$t"
+
+## Журнал лестницы пауз (#488)
+alfa-refresh-log:
+	@t=$$(mktemp /tmp/alfa-sch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-schedule.sh" \
+	  && bash "$$t" --log
+
+## Остановить лестницу пауз (#488)
+alfa-refresh-stop:
+	@t=$$(mktemp /tmp/alfa-sch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-schedule.sh" \
+	  && bash "$$t" --stop
 
 ## Обновить токен Альфы ПРЯМО СЕЙЧАС и показать, что шлём и что ответил банк (#488)
 #
