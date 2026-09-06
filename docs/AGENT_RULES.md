@@ -16,20 +16,45 @@ from the language of the request, or from a neighbouring file. Use this table.
 | What you are writing | Language |
 |---|---|
 | Code, identifiers, file names | English |
-| JSDoc, code comments, test names, fixtures | English |
-| Commit messages, squash subject and body, tags, `CHANGELOG` | English (Conventional Commits — release-please parses them) |
-| Documentation, `README`, Skill files | The language of the file you are editing. A **new** doc file: English |
+| JSDoc, code comments, test names, fixtures | **Russian** (adapted 2026-08-30 — see below) |
+| Commit messages, squash subject and body, tags | **Russian** (adapted 2026-08-30 — see below) |
+| Documentation, `README`, Skill files | The language of the file you are editing. A **new** doc file: **Russian** |
 | PR title and description | Russian |
 | Issues — new and follow-up | Russian |
 | Comments on issues and PRs, replies in review threads | Russian |
 | Review-panel report and project status report to the maintainer | Russian |
-| User-facing strings in the product | Whatever the package's i18n setup dictates — look it up, do not invent a locale |
+| User-facing strings in the product | Russian — the product ships RU-only, there is no i18n layer to consult |
 
 If something is not in this table, match the language of the file or thread you
 are writing into, and say in one line which you chose and why.
 
-Two things never switch language, whatever else is happening: the commit
-subject (release-please reads it) and code identifiers.
+One thing never switches language, whatever else is happening: code identifiers.
+
+### Что адаптировано под этот проект и почему (2026-08-30)
+
+Три строки таблицы изменены решением владельца. Замеры — на день адаптации,
+перемеряй, прежде чем ссылаться (это §5.3).
+
+- **Комментарии и JSDoc: English → русский.** Исходное правило расходилось с
+  фактом: русские комментарии сейчас в **126 из 126** файлов `server/utils` и
+  **89 из 92** `app/utils`. То есть по-русски здесь пишут и так, а безусловное
+  «English» пришлось бы нарушать в каждом файле.
+  ⚠ Смешение языков ВНУТРИ одного модуля остаётся дефектом чтения. Правя
+  англоязычный блок, не оставляй его двуязычным посреди функции: либо пиши
+  по-русски рядом с русским соседом, либо переводи блок целиком. Массовый
+  перевод — отдельным PR, а не попутно с правкой по делу.
+- **Коммиты: English Conventional Commits → русский.** Обоснование исходного
+  правила («release-please parses them») здесь не выполняется: release-please в
+  репозитории нет — слово встречается только внутри вендорного `reporting-kit/`
+  как пример жаргона. Релизы идут через GHCR + Watchtower (`docs/DEPLOY.md`),
+  `CHANGELOG` не ведётся, вся история коммитов русская.
+- **Новый документ: English → русский.** Совпадает с конвенцией `CLAUDE.md`
+  («пользовательский текст, README и документация — на русском»): эти документы
+  читает владелец и клиент.
+
+Сам этот файл остаётся английским — он пришёл таким от владельца, и переводить
+его значило бы переписывать чужой документ. Разделы адаптации — по-русски, как
+и всё, что дописано здесь.
 
 ---
 
@@ -80,13 +105,14 @@ real changes.
    actually merge into, not against a stale base.
 2. **Explain the PR in plain language** — what it does and why, before any
    tooling runs. If that summary is hard to write, the PR is doing too much.
-3. **Run `/review`** over the diff, from several angles.
+3. **Run `/code-review`** over the diff, from several angles. (The skill is named
+   `/code-review` here; the rules said `/review`.)
 
 ### 3.2 The five reviewers — when to convene them
 
-`/review` runs on every PR. The panel of five does not.
+`/code-review` runs on every PR. The panel of five does not.
 
-| Convene the panel | `/review` is enough |
+| Convene the panel | `/code-review` is enough |
 |---|---|
 | Behaviour or public API changes | Tests and test harness only |
 | External promises: security, governance, licensing | Documentation and comments |
@@ -95,9 +121,20 @@ real changes.
 
 When in doubt, convene.
 
-*Why this split:* on #507 the five produced four findings and `/review` had
-already found all four; on #503 they found what `/review` could not see. The
-difference is not diff size — it is whether the PR promises something outward.
+*Почему разделение (адаптировано 2026-08-30).* Исходные примеры (#507, #503)
+пришли из соседнего проекта — здесь эти номера принадлежат другой работе, и
+ссылаться на них значило бы отправить читателя не туда (§5.4). Своей статистики
+у нас пока мало; вот что измерено:
+
+- **#649** — панель и `/code-review` нашли одно и то же: утечку credential'ов в
+  лог, потерю класса ошибки, неразобранный конверт и мой же регресс в воронке.
+  Панель добавила независимое подтверждение блокера, но не нашла ничего сверх.
+- **#634** — блокер (отметку попытки ставил только крон, а не оба пути
+  продления) нашла панель; `/code-review` на этом PR не гонялся, так что
+  сравнение неполное и выдавать его за довод нельзя.
+
+То есть критерий ниже держится на рассуждении, а не на нашей статистике. Правая
+колонка — не «мелкий диск», а «PR ничего не обещает наружу».
 
 The fourth row on the left is about the agent itself. If the fix grew out of a
 claim that was reasoned rather than measured, convene the panel however small the
@@ -150,10 +187,12 @@ Tell every reviewer, in their prompt:
 - **Follow-up issues are filed in Russian**, either as new issues or as an
   expansion of an existing one. Give them real context; a one-line "починить
   потом" is not a follow-up issue.
-- **Write the squash message deliberately**, in English. If the PR carries a
-  `BREAKING CHANGE`, phrase it so the changelog later says clearly what changed —
-  the squash subject and body are what release-please reads (see
-  [releasing.md](releasing.md)).
+- **Write the squash message deliberately**, по-русски (адаптировано 2026-08-30).
+  Ни release-please, ни `CHANGELOG` здесь нет — значит сообщение пишется не для
+  машины, а для человека, который через полгода спросит «почему так сделано».
+  Поэтому subject называет РЕШЕНИЕ, а не файлы, а тело — довод и цену: что
+  измерено, что отвергнуто и почему. Ссылка на `releasing.md` из исходных правил
+  снята: такого файла в проекте нет.
 - **Refresh the `Last reviewed` stamps** in touched docs and Skill files to the
   merge date.
 
@@ -236,13 +275,24 @@ published under the org's name — ask the maintainer, even at the cost of a pau
 The table is a set of baselines with alarm levels. **Re-measure before citing —
 never quote these figures from this file as current** (that is 5.3).
 
-| Signal | Baseline when measured | Alarm |
+⚠ Числа ниже перемерены на этом репозитории 2026-08-30 — исходные пришли из
+соседнего проекта и к нам не относились.
+
+| Signal | Baseline when measured (2026-08-30) | Alarm |
 |---|---|---|
-| Ratio of test code to `src` | 0.41 | above 1.0 |
-| Snapshot corpus | 26 MB | already over — tracked in #87 |
-| JSDoc blocks of 20+ lines | 15, longest 59 lines | a block longer than the component it documents |
-| Guards / defensive checks | 34, of which 5 added in five days | faster than one per week |
-| Edits to one config file within a week | up to 5 | more than five |
+| Отношение строк `tests/**` к `app/**` + `server/**` (только `.ts`) | **1.22** | **уже за порогом** — см. ниже |
+| То же с учётом `.vue` | 0.95 | above 1.0 |
+| Корпус визуальных эталонов | 9.2 МБ, 34 снимка | рост без новых страниц |
+| `CLAUDE.md` | 2889 строк, 416 КБ | документ, который перестают читать целиком |
+| Документов в `docs/` | 40 | новый документ вместо раздела в существующем |
+| Edits to one config file within a week | не мерялось | more than five |
+
+⚠ **Первая строка уже за тревогой, и это не повод сокращать тесты.** Прежде чем
+резать, перемерь и посмотри на состав: у нас есть классы тестов, которых в
+обычном проекте нет — структурные гарды (закрытые списки путей удаления,
+охват typecheck, гард `make`-целей) и поведенческие прогоны шелл-скриптов.
+Они длинные и заведены по факту потерянных дней, а не ради процента. Тревога
+здесь означает «останься и посмотри, что именно выросло», а не «удали».
 
 ### 6.2 The rules behind them
 
@@ -263,37 +313,18 @@ everything else is derived from mistakes made in real sessions.*
 
 ---
 
-## Расхождения с этим репозиторием (не разрешены)
+## Как этот файл адаптировался
 
-Записано агентом при внесении файла 2026-08-27. Правила выше — источник; ниже —
-места, где они расходятся с ИЗМЕРЕННЫМ состоянием репозитория. Пока владелец не
-решил, агент следует правилам и называет расхождение вслух (§5.7), а не выбирает
-молча.
+Правила пришли от владельца 2026-08-27 и были положены в репозиторий дословно —
+вместе с разделом, где агент выписал три расхождения с фактическим состоянием
+проекта, не разрешая их: язык коммитов, язык комментариев и ссылки из соседнего
+проекта.
 
-1. **§0, коммиты: «English (Conventional Commits — release-please parses them)».**
-   Release-please в этом репозитории **нет** — упоминание встречается только внутри
-   вендорного `reporting-kit/` как пример жаргона. Релизы идут через GHCR + Watchtower
-   (`docs/DEPLOY.md`), `CHANGELOG` не ведётся. При этом вся история коммитов —
-   русская. То есть обоснование правила здесь не выполняется, а его применение
-   расколет историю пополам. Нужно решение: заводим release-please или пишем
-   коммиты по-русски, как раньше.
+2026-08-30 владелец их разрешил: коммиты и комментарии — по-русски, `releasing.md`
+— пропускаем. Правки внесены в сами разделы (§0, §3.1, §3.2, §4.1, §6.1) и
+помечены там же датой и доводом, а раздел с нерешёнными расхождениями снят —
+он перестал описывать реальность.
 
-2. **§0, комментарии и JSDoc: «English».** `CLAUDE.md` фиксирует обратное правило —
-   «язык ближайшего окружения», — и не по вкусу, а по замеру: 45 из 98 файлов
-   `server/utils` и 47 из 67 `app/utils` несут русские комментарии. Безусловное
-   «по-английски» нарушается половиной кода; в `CLAUDE.md` прямо сказано, почему
-   от него отказались. Нужно решение: массовый перевод или сохранение правила
-   кластера.
-
-3. **Ссылки и якоря из чужого репозитория.** §4.1 ссылается на `releasing.md` —
-   такого файла здесь нет. §3.2 опирается на #507/#503, §6.1 на #87; в этом
-   репозитории эти номера принадлежат другим задачам. Правила, судя по всему,
-   пришли из соседнего проекта. Смысл разделов от этого не страдает, но ссылки
-   ведут не туда (§5.4).
-
-Плюс два уточнения, не расхождения:
-
-- **§3.1 «Run `/review`»** — здесь навык называется `/code-review`.
-- **§3.2 сужает панель пятерых** по сравнению с прежним указанием владельца
-  («каждый PR — пять ревьюеров»). Агент читает это как осознанное послабление и
-  следует таблице; при сомнении созывает панель, как велит сам раздел.
+⚠ Что при этом НЕ изменилось: §5 целиком (рабочая дисциплина), §2 (`main` только
+через PR), §3.3–§3.4 (состав панели и порядок отчёта), §6.2. Это правила
+владельца, и трогать их адаптация не вправе.
