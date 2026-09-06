@@ -1,11 +1,8 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
-<<<<<<< HEAD
+        bank-history \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
-=======
-        bank-history
->>>>>>> origin/main
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
