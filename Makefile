@@ -1,7 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
-        bank-history \
+        bank-history alfa-password-probe \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -361,6 +361,22 @@ reap-status:
 	@t=$$(mktemp /tmp/reap-status.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
 	  && bash "$$t" docker-compose.prod.yml
+
+## Принимает ли регистрация Альфы вход по ключу API — Password Grant (#488)
+#
+#   ALFA_API_KEY='<ключ из кабинета Альфа Бизнес Онлайн>' make alfa-password-probe
+#
+# ⚠ Один запрос, отвечающий на вопрос, который отделяет находку от починки: банк отвергает
+# продление словами «User session not alive», потому что токен Code Grant выдан внутри сессии
+# входа владельца счёта. Password Grant сессии не имеет вовсе. Проба НЕ трогает refresh-токены
+# подключённых счетов и ничего не пишет в базу; ключ и секреты в вывод не попадают.
+# ⚠ Ключ передаётся ПЕРЕД make, а не параметром: значение параметра раскрывается до шелла и
+# попадает в `make -n` и в процесс-лист (тот же довод, что у REF).
+alfa-password-probe:
+	@echo "[make] скачиваю alfa-password-probe.sh из $(REF)"
+	@t=$$(mktemp /tmp/alfa-pw.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/alfa-password-probe.sh" \
+	  && ALFA_API_KEY="$${ALFA_API_KEY:-}" bash "$$t"
 
 ## Продлевал ли крон банк-токен — ИЗ БАЗЫ, а не из лога (переживает перевыкат, #488)
 #
