@@ -9,13 +9,18 @@
 import { parseBracketForm } from '../../../app/utils/b24Events'
 import { dbQuery } from '../../db/client'
 import { handleEventRequest } from '../../utils/b24EventsHandler'
-import { getApplicationToken, saveToken, deleteToken } from '../../utils/tokenStore'
+import { getApplicationToken, saveToken } from '../../utils/tokenStore'
+import { LIVE_PORTAL_PURGE_DEPS, portalPurgeReasonText, purgePortalStorage } from '../../utils/portalPurge'
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
 import { rawOauthRefresh, verifyInstallMember, type OAuthFetchFn } from '../../utils/verifyInstallMember'
 import { useServerLogger } from '../../utils/serverLogger'
+import { portalHash } from '../../utils/telemetryAttributes'
 
 const log = useServerLogger('b24-events')
+// ⚠ Канал ТОТ ЖЕ, что у пути через очередь: секция «КТО ОТКЛЮЧАЛ БАНК» (#641) грепает `[bank-connect]`,
+// и строка в «своём» канале осталась бы невидимой ровно для той диагностики, ради которой пишется.
+const bankConnectLog = useServerLogger('bank-connect')
 
 export default defineEventHandler(async (event) => {
   const envToken = process.env.B24_APPLICATION_TOKEN?.trim() || ''
@@ -41,12 +46,32 @@ export default defineEventHandler(async (event) => {
       saveCredentials: async (token, eventTs) => {
         await saveToken(dbQuery, token, eventTs)
       },
-      // Uninstall erases the portal token. B24 does NOT resend online events, so this sync
-      // fallback is the only chance to purge when Redis is down. Activity dedup now lives in
-      // B24 (the marker on the activity), so there's no local dedup map to purge here.
+      // Uninstall erases everything we hold about the portal. B24 does NOT resend online events, so
+      // this sync fallback is the only chance to purge when Redis is down.
       // `eventTs` records the ordering tombstone (#77) so a stale register can't resurrect.
+      //
+      // ⚠ ДО #654 ЗДЕСЬ СТИРАЛСЯ ТОЛЬКО `portal_tokens`, при том что комментарий обещал «purge».
+      // Недостиранными оставались БАНКОВСКИЕ КРЕДЫ, а `bankTokenKeepAlive` намеренно вынесен
+      // из-под гейта Redis (#489) и продолжал их обновлять каждый час — бессрочно. Ни один
+      // уборщик до них не дотягивался: #574 выбирает кандидатов из `portal_tokens` (строки уже
+      // нет), #599 хоронит по возрасту токена (токен свежий, его же и продлевают). Приложение
+      // удалено, портала у нас нет — а доступ к счёту клиента лежит и поддерживается живым.
+      //
+      // ⚠ Список хранилищ НЕ повторяем: он в `portalPurge.ts`, и разошёлся он ровно потому, что
+      // существовал в двух экземплярах.
       deletePortal: async (memberId, eventTs) => {
-        await deleteToken(dbQuery, memberId, eventTs)
+        // ⚠ След в журнале ДО стирания — по тем же двум причинам, что и на пути через очередь
+        // (#641): это разрушительный путь, и он был ЕДИНСТВЕННЫМ, не оставлявшим в логе ничего.
+        // Портал хешируется: строки прямо сейчас уничтожаются, и лог остаётся единственным
+        // пережившим упоминанием связи «этот портал ↔ мы держали его банковские креды».
+        // Формулировка — НАМЕРЕНИЕ: шагов семь, транзакции нет, «стёрли» было бы утверждением о
+        // том, чего ещё не произошло. Аварийный путь достижим только при недоступном Redis, и
+        // именно поэтому его молчание было незаметно.
+        bankConnectLog.warning(
+          `portal ${portalHash(memberId)}: стираем ВСЁ, включая подключения к банкам — `
+          + `${portalPurgeReasonText('uninstall')}, аварийный путь без очереди (#654)`
+        )
+        await purgePortalStorage(dbQuery, memberId, eventTs, LIVE_PORTAL_PURGE_DEPS)
       },
       encrypt: encryptSecret,
       now: () => Date.now(),

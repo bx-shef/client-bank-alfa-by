@@ -43,11 +43,11 @@ import {
 import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
-import { deleteToken, getApplicationToken, saveToken, clearSubscriptionEnded } from '../utils/tokenStore'
-import { deleteImportResultForPortal, markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
-import { deleteBatchesForPortal, saveBatchError, saveBatchResult } from '../utils/importBatchStore'
+import { getApplicationToken, saveToken, clearSubscriptionEnded } from '../utils/tokenStore'
+import { markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
+import { saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
-import { FEEDBACK_METRICS, bumpCounter, bumpCounters, deleteMetricsForPortal, metricsFromSummary } from '../utils/metricsStore'
+import { FEEDBACK_METRICS, bumpCounter, bumpCounters, metricsFromSummary } from '../utils/metricsStore'
 import { decryptSecret } from '../utils/secretCrypto'
 import { createPortalSdkResolver, type PortalRestResolver } from '../utils/portalSdkResolver'
 import { sdkPortalDeps } from '../utils/b24Sdk'
@@ -66,10 +66,9 @@ import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
 import { notifyAllocationErrorViaRest, notifySettingsErrorViaRest, notifyUnresolvedViaRest } from '../utils/allocationErrorNotify'
-import { deleteBankTokensForPortal, listAllBankAccountInfo } from '../utils/bankTokenStore'
+import { listAllBankAccountInfo } from '../utils/bankTokenStore'
 import { statementRecipients } from '../../app/utils/accountSharing'
-import { deleteRatingForPortal } from '../utils/appRatingStore'
-import { deleteLeasesForPortal } from '../utils/singleFlightLease'
+import { LIVE_PORTAL_PURGE_DEPS, purgePortalStorage } from '../utils/portalPurge'
 import { fetchBankStatement } from '../utils/bankFetch'
 import { executeTriggerViaRest, payAllocationViaRest } from '../utils/allocationMutationWrite'
 import { readAllocationApplied } from '../utils/allocationApplied'
@@ -692,16 +691,10 @@ export function liveHandlerDeps(): HandlerDeps {
           ? 'приложение удалено из портала (ONAPPUNINSTALL)'
           : 'грант портала мёртв, портал исчез без уведомления (#574)'} (#641)`
       )
-      await deleteBankTokensForPortal(dbQuery, memberId) // stage-5 bank creds — a removed app keeps none
-      await deleteToken(dbQuery, memberId, eventTs)
-      await deleteImportResultForPortal(dbQuery, memberId)
-      await deleteBatchesForPortal(dbQuery, memberId)
-      await deleteMetricsForPortal(dbQuery, memberId)
-      await deleteRatingForPortal(dbQuery, memberId) // «оцените приложение» state — kept рядом с авторизацией
-      // ⚠ Аренда single-flight (#538) сама не исчезнет: у неё нет свипа, а рассуждение «просроченную
-      // перезапишет следующий захват» держится на том, что захват когда-нибудь будет. У удалённого
-      // портала его не будет никогда, и строка с его member_id жила бы в базе и бэкапах вечно.
-      await deleteLeasesForPortal(dbQuery, memberId)
+      // ⚠ Список хранилищ живёт в ОДНОМ месте (`portalPurge.ts`, #654) и здесь не повторяется.
+      // Он уже успел разойтись: аварийный путь приёма `ONAPPUNINSTALL` стирал только `portal_tokens`,
+      // оставляя банковские креды удалённого приложения — и `bankTokenKeepAlive` их обновлял.
+      await purgePortalStorage(dbQuery, memberId, eventTs, LIVE_PORTAL_PURGE_DEPS)
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
       resolvePortalCall.evict(memberId)
     },
