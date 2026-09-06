@@ -1,7 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
-        bank-history \
+        bank-history alfa-refresh-now \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -360,6 +360,22 @@ reap-status:
 	@echo "[make] скачиваю prod-reap-status.sh из $(REF)"
 	@t=$$(mktemp /tmp/reap-status.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
+	  && bash "$$t" docker-compose.prod.yml
+
+## Обновить токен Альфы ПРЯМО СЕЙЧАС и показать, что шлём и что ответил банк (#488)
+#
+#   make alfa-refresh-now
+#
+# ⚠ Отвечает на вопрос, который рассуждением не решить: банк отверг штатное продление ВНУТРИ
+# документированного срока refresh-токена. Прошло сейчас, вскоре после подключения — дело во
+# ВРЕМЕНИ; не прошло и сейчас — дело в том, ЧТО МЫ ШЛЁМ, и продление не работало никогда.
+# ⚠ В отличие от `bank-history`, проба ПИШЕТ в базу: банк ротирует refresh при обновлении, и не
+# сохранив новую пару, она убила бы подключение. Секреты в вывод не попадают — про отправляемый
+# токен печатаются только признаки (длина, контрольная сумма, пробелы, набор символов).
+alfa-refresh-now:
+	@echo "[make] скачиваю alfa-refresh-now.sh из $(REF)"
+	@t=$$(mktemp /tmp/alfa-rn.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-now.sh" \
 	  && bash "$$t" docker-compose.prod.yml
 
 ## Продлевал ли крон банк-токен — ИЗ БАЗЫ, а не из лога (переживает перевыкат, #488)
