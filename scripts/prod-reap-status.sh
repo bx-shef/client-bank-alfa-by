@@ -23,14 +23,29 @@ echo "Порог:     ${days:-30} дн. (пол 14, занизить нельз�
 echo
 
 echo "-- помеченные порталы (метка ставится при ответе банка 'грант мёртв') --"
-docker compose -f "$COMPOSE" exec -T db psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "
+# ⚠ Креды НЕ УГАДЫВАЕМ (2026-09-06). Здесь стояло `${POSTGRES_USER:-postgres}`, а compose задаёт
+# `app`/`app` жёстко и в шелле оператора этих переменных нет вовсе — значит подстановка ВСЕГДА
+# давала `postgres`, psql всегда падал, а `2>/dev/null` прятал причину. То есть эта секция не
+# работала НИ РАЗУ с момента появления и молча печатала «не смог прочитать базу» при здоровом
+# Postgres. Нашлось только когда тем же способом сломался соседний `prod-bank-history.sh`.
+# Спрашиваем у самого контейнера: compose кладёт туда `POSTGRES_USER`/`POSTGRES_DB`.
+rerr=$(mktemp /tmp/reap-status-err.XXXXXX)
+trap 'rm -f "$rerr"' EXIT
+if out=$(docker compose -f "$COMPOSE" exec -T db \
+           sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' 2>"$rerr" <<'SQL'
   SELECT
     count(*) FILTER (WHERE grant_revoked_at > 0)                                        AS marked,
     count(*)                                                                            AS total,
     coalesce(to_char(to_timestamp(min(NULLIF(grant_revoked_at,0))/1000),'YYYY-MM-DD'),'—') AS oldest
-  FROM portal_tokens;" 2>/dev/null \
-  | awk -F'|' '{printf "помечено:  %s из %s порталов\nсамая старая метка: %s\n", $1, $2, $3}' \
-  || echo "не смог прочитать базу — смотреть 'make logs'"
+  FROM portal_tokens;
+SQL
+); then
+  printf '%s\n' "$out" | awk -F'|' '{printf "помечено:  %s из %s порталов\nсамая старая метка: %s\n", $1, $2, $3}'
+else
+  # ⚠ Причину показываем: прятать её — ровно то, из-за чего поломка прожила незамеченной.
+  echo "не смог прочитать базу. Что ответил Postgres:"
+  sed 's/^/  /' "$rerr"
+fi
 echo
 
 echo "-- последние строки уборщика в логе --"

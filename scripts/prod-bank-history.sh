@@ -27,7 +27,17 @@ echo
 
 # ⚠ Номер счёта маскируется серединой: строку читают с телефона и пересылают в чат, а репозиторий
 # публичный. Хвоста и головы хватает, чтобы узнать свой счёт, и не хватает, чтобы его использовать.
-docker compose -f "$COMPOSE" exec -T db psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -F'|' -c "
+# ⚠ Креды НЕ УГАДЫВАЕМ. Первая редакция подставляла `${POSTGRES_USER:-postgres}` — а compose задаёт
+# `app`/`app` жёстко, и переменных этих в шелле оператора нет вовсе. Скрипт молча печатал «не смог
+# прочитать базу» при полностью здоровом Postgres. Ту же ошибку нёс `prod-reap-status.sh`, то есть
+# ВТОРАЯ диагностика была мертва с рождения и никто этого не заметил.
+# Правильный способ — спросить у самого контейнера: compose кладёт туда `POSTGRES_USER`/`POSTGRES_DB`,
+# и угадывать нечего. SQL едет через stdin, а не через `-c`: внутри него полно одинарных кавычек.
+err=/tmp/bank-history-err.$$
+trap 'rm -f /tmp/bank-history.$$ "$err"' EXIT
+if ! docker compose -f "$COMPOSE" exec -T db \
+      sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F"|"' \
+      > /tmp/bank-history.$$ 2>"$err" <<'SQL'
   SELECT
     left(md5(member_id), 6),
     provider,
@@ -47,10 +57,16 @@ docker compose -f "$COMPOSE" exec -T db psql -U "${POSTGRES_USER:-postgres}" -d 
     CASE WHEN consent_expires_at > 0
          THEN to_char(to_timestamp(consent_expires_at / 1000.0), 'YYYY-MM-DD') ELSE '—' END
   FROM bank_tokens
-  ORDER BY updated_at;" 2>/dev/null > /tmp/bank-history.$$ || {
-    echo "не смог прочитать базу — проверьте 'make ps'"; rm -f /tmp/bank-history.$$; exit 0; }
-
-trap 'rm -f /tmp/bank-history.$$' EXIT
+  ORDER BY updated_at;
+SQL
+then
+  # ⚠ ПРИЧИНУ ПОКАЗЫВАЕМ. Прежняя редакция глушила stderr в /dev/null и печатала только «проверьте
+  # make ps» — то есть диагностика прятала собственную ошибку и отправляла оператора смотреть на
+  # контейнеры, которые здоровы. Ровно так этот скрипт и провалился на первом же живом запуске.
+  echo "не смог прочитать базу. Что ответил Postgres:"
+  sed 's/^/  /' "$err"
+  exit 0
+fi
 
 if [ ! -s /tmp/bank-history.$$ ]; then
   # ⚠ Пустая таблица — САМА ПО СЕБЕ находка, а не «нечего показать»: именно так выглядел простой
