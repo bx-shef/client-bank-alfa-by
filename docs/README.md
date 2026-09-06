@@ -47,6 +47,7 @@
 |---|---|
 | [`DEPLOY.md`](DEPLOY.md) | развернуть с нуля и обновлять (основной путь: GHCR + Watchtower + nginx) |
 | [`DEPLOY_VIBECODE.md`](DEPLOY_VIBECODE.md) | альтернативный таргет: Битрикс24 Вайбкод Black Hole |
+| [`DEPLOY_BITRIXVM.md`](DEPLOY_BITRIXVM.md) | альтернативный таргет: рядом с порталом на виртуальной машине Битрикс24 |
 | [`OPERATIONS.md`](OPERATIONS.md) | runbook: health, типовые аварии, откат, **бэкапы**, эскалация |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | телеметрия OpenTelemetry, что можно и нельзя класть в спаны |
 | [`PRIVACY.md`](PRIVACY.md) | что храним, сколько и как чистим (финансовые ПДн) |
