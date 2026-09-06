@@ -1,6 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
-        gw-stop gw-start compose-update alfa-page-probe reap-status reap-off
+        gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
+        bank-history
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -308,6 +309,20 @@ reap-status:
 	@echo "[make] скачиваю prod-reap-status.sh из $(REF)"
 	@t=$$(mktemp /tmp/reap-status.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
+	  && bash "$$t" docker-compose.prod.yml
+
+## Продлевал ли крон банк-токен — ИЗ БАЗЫ, а не из лога (переживает перевыкат, #488)
+#
+#   make bank-history
+#
+# ⚠ Отвечает на вопрос, который `poll-check` ответить НЕ МОЖЕТ: лог живёт внутри контейнера и
+# уходит с ним на каждом перевыкате, а две колонки `bank_tokens` — нет. Их порядок различает
+# «продление ходило, банк отказал» (лечится переподключением) и «продление не ходило вовсе»
+# (наша поломка — переподключение купит один срок и повторится).
+bank-history:
+	@echo "[make] скачиваю prod-bank-history.sh из $(REF)"
+	@t=$$(mktemp /tmp/bank-history.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-bank-history.sh" \
 	  && bash "$$t" docker-compose.prod.yml
 
 ## АВАРИЙНО выключить необратимое стирание порталов (#574); пометка продолжает идти

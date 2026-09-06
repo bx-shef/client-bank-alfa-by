@@ -63,7 +63,10 @@ const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 
   'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'payers', 'self-update', 'help',
   'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe',
   // #574: показать, кого уборщик считает мёртвым, и аварийно выключить стирание.
-  'reap-status', 'reap-off']
+  'reap-status', 'reap-off',
+  // #488: две колонки `bank_tokens`, которые переживают перевыкат, — единственный способ отличить
+  // «продление ходило, банк отказал» от «продление не ходило вовсе» после пересоздания контейнера.
+  'bank-history']
 
 /** Цели, которые запускают ИЗ РЕПОЗИТОРИЯ, а не с сервера — справка сервера их не касается. */
 const SERVICE = ['dev', 'build-local']
