@@ -51,13 +51,16 @@ fi
 rm -f /tmp/arn-err.$$
 
 id=$(echo "$row" | cut -d'|' -f1)
-акк=$(echo "$row" | cut -d'|' -f2)
+acct=$(echo "$row" | cut -d'|' -f2)
 blob=$(echo "$row" | cut -d'|' -f3)
 ok_at=$(echo "$row" | cut -d'|' -f4)
 ok_min=$(echo "$row" | cut -d'|' -f5)
 
-case "$акк" in ~pending:*) показ='(счёт не выбран)' ;; *) показ="${акк:0:6}…${акк: -4}" ;; esac
-echo "строка              : #$id  $показ"
+# ⚠ Имена переменных — ЛАТИНИЦЕЙ. Кириллическое имя bash в общем случае не принимает:
+# на боевом стенде это дало `акк=…: command not found` и `bad substitution`, то есть
+# строка подключения не отобразилась вовсе. Держит `tests/shellAsciiVars.test.ts`.
+case "$acct" in ~pending:*) shown='(счёт не выбран)' ;; *) shown="${acct:0:6}…${acct: -4}" ;; esac
+echo "строка              : #$id  $shown"
 echo "последняя удачная   : $ok_at  ($ok_min мин назад)"
 echo "⚠ Именно эта давность и есть предмет опыта: сработает — дело было во времени."
 echo
@@ -113,9 +116,12 @@ const body = new URLSearchParams({
   grant_type: 'refresh_token', refresh_token: token, client_id: clientId, client_secret: clientSecret
 }).toString()
 
+// ⚠ Две ступени. Первая вырезает то, что мы ОТПРАВИЛИ. Вторая — любую длинную строку из
+// алфавита токенов: апстрим волен процитировать в ошибке значение, которого мы не посылали.
 const redact = (s) => String(s)
   .split(clientSecret).join('***')
   .split(token).join('***')
+  .replace(/[A-Za-z0-9+/_-]{40,}={0,2}/g, '***')
 
 ;(async () => {
   let res, text
@@ -131,7 +137,23 @@ const redact = (s) => String(s)
   }
   console.log('ЧТО ОТВЕТИЛ БАНК')
   console.log('  HTTP ' + res.status)
-  console.log('  ' + redact(text).slice(0, 600))
+  // ⚠ ТЕЛО ОТВЕТА ЦЕЛИКОМ НЕ ПЕЧАТАЕМ. Первая редакция печатала его «с вырезанными секретами», но
+  // вырезала только то, что ОТПРАВИЛИ (старый refresh, client_secret) — а в успешном ответе лежит
+  // НОВАЯ пара, которой в списке замен быть не могло. Владелец вставил такой вывод в переписку;
+  // это и есть цена «отредактируем по значениям». Правило теперь обратное: на успехе печатаем
+  // ТОЛЬКО выбранные безопасные поля, на отказе — текст ошибки, из которого вырезаны И отправленные
+  // секреты, И всё, что похоже на токен.
+  if (res.status === 200) {
+    let peek = {}
+    try { peek = JSON.parse(text) } catch { /* покажем как есть ниже */ }
+    console.log('  scope=' + (peek.scope ?? '?') + ' token_type=' + (peek.token_type ?? '?')
+      + ' expires_in=' + (peek.expires_in ?? '?'))
+    console.log('  access_token: получен, длина ' + String(peek.access_token || '').length)
+    console.log('  refresh_token: ' + (peek.refresh_token
+      ? 'получен, длина ' + peek.refresh_token.length : 'НЕ выдан'))
+  } else {
+    console.log('  ' + redact(text).slice(0, 600))
+  }
   console.log('')
 
   if (res.status !== 200) {
@@ -183,7 +205,11 @@ if [ -n "${save:-}" ]; then
                    expires_at = $EXP, updated_at = now()
              WHERE id = $ID
             RETURNING 1;"' 2>&1)
-  if [ "$(echo "$upd" | tail -1)" = "1" ]; then
+  # ⚠ Ищем строку `1` ГДЕ УГОДНО в выводе, а не последнюю: psql печатает и результат RETURNING, и
+  # командный тег `UPDATE 1`, и последней оказывается вторая. Первая редакция сравнивала с хвостом
+  # и на успешной записи печатала «НЕ СОХРАНИЛАСЬ» — то есть посылала владельца переподключать
+  # рабочее подключение. Ложная тревога здесь дороже молчания.
+  if echo "$upd" | grep -qx '1'; then
     echo "  новая пара СОХРАНЕНА в строку #$id — подключение осталось рабочим."
   else
     echo "  ⚠ НОВАЯ ПАРА НЕ СОХРАНИЛАСЬ. Банк её уже выдал, а значит прежняя потрачена:"
