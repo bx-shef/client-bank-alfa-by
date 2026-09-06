@@ -17,9 +17,15 @@
 //   1. THE CLOCK IS HOURS, NOT MONTHS. Bitrix refresh lives 180 days and a daily scan is plenty;
 //      Alfa's lives ~10 hours, so the scan must run hourly and the near-expiry band is measured in
 //      hours too. A daily cadence here would be indistinguishable from doing nothing.
-//   2. WE MUST FORCE. `ensureBankToken` refreshes when the ACCESS token is near expiry, which is
-//      exactly the wrong signal: the access token can be perfectly fresh while the refresh behind
-//      it is minutes from death. Hence `{force: true}` — see `runBankKeepAlive`.
+//   2. WE MUST FORCE. `ensureBankToken` refreshes when the ACCESS token is near expiry, which on
+//      its own is not enough: the access token can be perfectly fresh while the refresh behind it
+//      is minutes from death. Hence `{force: true}` — see `runBankKeepAlive`.
+//      ⚠ ДО 2026-09-06 здесь стояло «exactly the WRONG signal», и это стоило подключений. Из
+//      «недостаточно» сделали «неверно» и ВЫБРОСИЛИ срок access-токена из отбора — а вместе с ним
+//      ту часовую каденцию, на которой держится сессия банка. Замер: с опросом (обновление по
+//      сроку access, ~раз в час) подключение жило шестеро суток; без опроса, на одной пятичасовой
+//      полосе refresh, банк отвечал `invalid_grant: User session not alive` через 5 ч 48 мин.
+//      Правильный вывод из того наблюдения — ДОБАВИТЬ второй повод, а не заменить первый (#488).
 //   3. SOME ACCOUNTS CANNOT BE KEPT ALIVE AT ALL. Prior may issue no refresh token; we store an
 //      empty string on purpose (`saveBankToken`). Such a connection dies when its access token
 //      does and only a human re-authorising in the bank can revive it. Retrying it forever would
@@ -33,6 +39,15 @@ import { sanitizeForLog } from './logSanitize'
 import { portalHash } from './telemetryAttributes'
 
 const HOUR_MS = 3_600_000
+
+/**
+ * Насколько раньше срока идём за новым ACCESS-токеном.
+ *
+ * ⚠ Тот же зазор, что у `needsBankRefresh` в `ensureBankToken`, и это не совпадение: там он
+ * существует, чтобы не отправить в банк токен, истекающий на середине запроса. Здесь — чтобы
+ * каденция крона совпадала с той, по которой подключение реально жило шестеро суток.
+ */
+export const ACCESS_REFRESH_SKEW_MS = 60_000
 
 // ⚠ Lifetimes and the renew band live in `app/utils/bankTokenLifetime.ts`, not here: the settings
 // UI decides what to show an admin from the SAME numbers. Let them drift and you get exactly the
@@ -215,6 +230,25 @@ export function selectBankAccountsNearExpiry(
     // really gone the refresh fails, `hasRefresh`/the error path make it honest by fact, and the
     // floor that protects us from hammering a revoked grant is restored the moment the figure is
     // measured — or replaced by the consent's own `expirationDate` (#503).
+    // ⚠ ACCESS-ТОКЕН — ВТОРОЙ, НЕЗАВИСИМЫЙ ПОВОД ПОЙТИ В БАНК, и до 2026-09-06 его тут не было.
+    // Это и убивало подключения (#488). Цепочка замерена целиком:
+    //   • пока шёл ОПРОС, токен обновлял `ensureBankToken` по дороге — по сроку ACCESS-токена
+    //     (`needsBankRefresh`), то есть примерно раз в час. Подключение жило ШЕСТЕРО СУТОК;
+    //   • как только опрос прекращался (пауза, счёт не выбран, выходные), единственным
+    //     продлевающим оставался этот крон — а он ждал ПОЛОВИНЫ СРОКА REFRESH-ТОКЕНА, то есть
+    //     пять часов;
+    //   • на 5 ч 48 мин банк ответил `invalid_grant: User session not alive` — сессия, к которой
+    //     привязан грант Code Grant, к тому времени уже кончилась.
+    //
+    // ⚠ Прежний довод («access — exactly the wrong signal, он бывает свежим при умирающем
+    // refresh») ВЕРЕН, но из него следует «добавить второй повод», а не «заменить первый».
+    // Заменив, мы выбросили ровно ту часовую каденцию, которая и держала сессию банка живой:
+    // обычный OAuth-клиент обновляется по истечении access-токена, и банк на это рассчитывает.
+    // Поэтому здесь ОБЪЕДИНЕНИЕ: идём в банк, если пора по access ИЛИ пора по refresh.
+    //
+    // ⚠ `expiresAt === 0` — «срок неизвестен», а не «истёк»: такие строки решаются только по
+    // возрасту, иначе неизвестность превратилась бы в поход в банк на каждом тике.
+    const accessDue = row.expiresAt > 0 && row.expiresAt <= nowMs + ACCESS_REFRESH_SKEW_MS
     if (age >= ttlMs && BANK_REFRESH_TTL_MEASURED[row.provider]) {
       // ⚠ Старше срока — но ХОРОНИТЬ БЕЗ ВОПРОСА К БАНКУ мы больше не будем (#489). Прежний код
       // клал такую строку в `expired` и не трогал её никогда; живой прогон дал ровно это —
@@ -228,7 +262,7 @@ export function selectBankAccountsNearExpiry(
       expired.push(ref)
       continue
     }
-    if (age < threshold) continue
+    if (!accessDue && age < threshold) continue
     // Обновление по гранту уже запланировано — второй счёт того же согласия только сжёг бы refresh.
     if (grantTaken(row)) continue
     if (due.length < limit) {

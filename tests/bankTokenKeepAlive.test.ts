@@ -719,3 +719,66 @@ describe('счёт, подключённый с НЕСКОЛЬКИХ порта�
     expect(text, 'не сказано, что переподключение лечит лишь до следующего обновления').toMatch(/until the next refresh/)
   })
 })
+
+// Продление идёт и по сроку ACCESS-токена, а не только по возрасту refresh (#488).
+//
+// ⚠ Из-за отсутствия этого повода подключения и умирали. Замерено на бою: пока шёл ОПРОС, токен
+// обновлялся по дороге примерно раз в час (по сроку access) и подключение жило шестеро суток; как
+// только опрос прекращался, оставался только этот крон с полосой в ПЯТЬ часов — и на 5 ч 48 мин
+// банк отвечал `invalid_grant: User session not alive`.
+describe('продление по сроку access-токена (#488)', () => {
+  const H = 3_600_000
+  const T0 = 1_757_138_400_000
+  const row = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
+    id: 1, memberId: 'm', provider: 'alfa-by', accountKey: '~pending:a',
+    connectedAt: T0, lastAttemptAt: 0, expiresAt: T0 + H, hasRefresh: true,
+    consentExpiresAt: 0, accountConfirmedAt: 0, grantId: 'g1', pollPaused: false, ...over
+  })
+
+  it('access истёк, а refresh ещё молод — В БАНК ВСЁ РАВНО ИДЁМ', () => {
+    // Ровно тот случай, который выпадал: возраст 2 часа (полоса — 5 ч), но access мёртв с 07:00.
+    const now = T0 + 2 * H
+    const s = selectBankAccountsNearExpiry([row()], now)
+    expect(s.due).toHaveLength(1)
+  })
+
+  it('access свежий и refresh молод — не трогаем банк зря', () => {
+    const now = T0 + 10 * 60_000 // +10 минут
+    expect(selectBankAccountsNearExpiry([row()], now).due).toHaveLength(0)
+  })
+
+  it('зазор соблюдён: за минуту до истечения access уже идём', () => {
+    const now = T0 + H - 30_000 // access истекает через 30 с
+    expect(selectBankAccountsNearExpiry([row()], now).due).toHaveLength(1)
+  })
+
+  it('неизвестный срок access (0) решается ТОЛЬКО по возрасту', () => {
+    // ⚠ «Не знаем» не должно превращаться в поход в банк на каждом тике.
+    const young = selectBankAccountsNearExpiry([row({ expiresAt: 0 })], T0 + 2 * H)
+    expect(young.due).toHaveLength(0)
+    const old = selectBankAccountsNearExpiry([row({ expiresAt: 0 })], T0 + 6 * H)
+    expect(old.due).toHaveLength(1)
+  })
+
+  it('согласие банка истекло — access-повод его не перебивает', () => {
+    // Дата от банка сильнее любых наших оценок: обновлять нечем, в банк не идём.
+    const s = selectBankAccountsNearExpiry([row({ consentExpiresAt: T0 - 1 })], T0 + 2 * H)
+    expect(s.due).toHaveLength(0)
+    expect(s.expired).toHaveLength(1)
+  })
+
+  it('нечем продлевать — access-повод не отправляет в банк впустую', () => {
+    const s = selectBankAccountsNearExpiry([row({ hasRefresh: false })], T0 + 2 * H)
+    expect(s.due).toHaveLength(0)
+    expect(s.unrefreshable).toHaveLength(1)
+  })
+
+  it('счета одного гранта не удваивают запрос и по access-поводу', () => {
+    // Банк ротирует refresh: два обмена одной пары — второй со сгоревшим токеном.
+    const s = selectBankAccountsNearExpiry(
+      [row({ id: 1, accountKey: 'BY01' }), row({ id: 2, accountKey: 'BY02' })],
+      T0 + 2 * H
+    )
+    expect(s.due).toHaveLength(1)
+  })
+})
