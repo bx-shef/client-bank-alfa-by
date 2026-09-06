@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expiredCause } from '../app/utils/bankTokenLifetime'
+import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, expiredCause } from '../app/utils/bankTokenLifetime'
 
 // Гард диагностики «продлевал ли крон банк-токен» (#488).
 //
@@ -102,4 +102,46 @@ describe('прод-скрипты не угадывают креды базы и
       expect(src).toMatch(/Что ответил Postgres/)
     })
   }
+})
+
+// Сроки жизни токена ПОВТОРЕНЫ в SQL — иначе скрипт не смог бы решить, произносить ли причину.
+// Копия опасна ровно тем же, чем копия правила: разъедется молча, и совет «переподключите» уедет
+// не туда. Держим числа сверкой с исходником.
+describe('сроки в SQL совпадают с `bankTokenLifetime` (#488)', () => {
+  const SQL = readFileSync(join(ROOT, 'scripts', 'prod-bank-history.sh'), 'utf8')
+
+  it('срок Альфы и Приора взят из кода, а не выдуман', () => {
+    expect(BANK_REFRESH_TTL_SEC['alfa-by']).toBe(36000)
+    expect(BANK_REFRESH_TTL_SEC['prior-by']).toBe(43200)
+    expect(SQL).toContain('CASE provider WHEN \'alfa-by\' THEN 36000 ELSE 43200 END')
+  })
+
+  it('полоса продления та же', () => {
+    expect(KEEP_ALIVE_BAND).toBe(0.5)
+    expect(SQL).toContain('END * 0.5')
+  })
+
+  it('«истекло» произносится только про ИЗМЕРЕННЫЙ срок', () => {
+    // ⚠ У Приора срок — догадка (`BANK_REFRESH_TTL_MEASURED['prior-by'] === false`), и хоронить по
+    // ней значит слать владельца счёта в интернет-банк за тем, что не ломалось.
+    expect(BANK_REFRESH_TTL_MEASURED['alfa-by']).toBe(true)
+    expect(BANK_REFRESH_TTL_MEASURED['prior-by']).toBe(false)
+    expect(SQL).toContain('CASE provider WHEN \'alfa-by\' THEN \'expired\' ELSE \'due\' END')
+  })
+
+  it('причина произносится ТОЛЬКО у истёкшего подключения', () => {
+    // ⚠ Живой прогон 2026-09-06: первая редакция посоветовала переподключить Приора, у которого
+    // последняя удачная пара была два часа назад. В коде причину спрашивают под `h === 'expired'`.
+    const verdict = SQL.slice(SQL.indexOf('case "$health" in'))
+    expect(verdict).toMatch(/expired\)[\s\S]*bank-refused/)
+    expect(SQL).toContain('Живо, продление в срок')
+    // Ветки здорового состояния обязаны существовать — без них «ok» падал бы в общий совет.
+    for (const branch of ['no-refresh)', 'due)', 'ok)']) expect(verdict).toContain(branch)
+  })
+
+  it('согласие банка перекрывает оценки по возрасту токена', () => {
+    // Это дата САМОГО банка, а не наша оценка: вышла — обновлять нечего, порядок веток несущий.
+    const health = SQL.slice(SQL.indexOf('CASE\n      WHEN consent_expires_at'))
+    expect(health.indexOf('consent_expires_at')).toBeLessThan(health.indexOf('refresh_token_enc'))
+  })
 })

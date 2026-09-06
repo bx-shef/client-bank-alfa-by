@@ -55,7 +55,25 @@ if ! docker compose -f "$COMPOSE" exec -T db \
          THEN 'bank-refused' ELSE 'never-tried' END,
     CASE WHEN poll_paused THEN 'на паузе' ELSE '' END,
     CASE WHEN consent_expires_at > 0
-         THEN to_char(to_timestamp(consent_expires_at / 1000.0), 'YYYY-MM-DD') ELSE '—' END
+         THEN to_char(to_timestamp(consent_expires_at / 1000.0), 'YYYY-MM-DD') ELSE '—' END,
+    -- ⚠ СОСТОЯНИЕ, и оно решает, произносить ли причину вообще. Зеркало `connectionHealth`
+    -- (`app/utils/bankTokenLifetime.ts`); числа сверяет `tests/prodBankHistory.test.ts`.
+    -- Порядок веток тот же и он несущий: согласие банка перекрывает всё (это его дата, а не наша
+    -- оценка), затем «нечем продлевать», затем сроки. «Истекло» произносим ТОЛЬКО про ИЗМЕРЕННЫЙ
+    -- срок: у Приора он догадка, и хоронить по ней значит слать человека в интернет-банк за тем,
+    -- что не ломалось.
+    CASE
+      WHEN consent_expires_at > 0
+       AND consent_expires_at <= (extract(epoch FROM now()) * 1000)      THEN 'expired'
+      WHEN refresh_token_enc = ''                                        THEN 'no-refresh'
+      WHEN provider NOT IN ('alfa-by', 'prior-by')                       THEN 'unknown'
+      WHEN extract(epoch FROM (now() - updated_at))
+             >= CASE provider WHEN 'alfa-by' THEN 36000 ELSE 43200 END
+        THEN CASE provider WHEN 'alfa-by' THEN 'expired' ELSE 'due' END
+      WHEN extract(epoch FROM (now() - updated_at))
+             >= CASE provider WHEN 'alfa-by' THEN 36000 ELSE 43200 END * 0.5 THEN 'due'
+      ELSE 'ok'
+    END
   FROM bank_tokens
   ORDER BY updated_at;
 SQL
@@ -78,7 +96,7 @@ if [ ! -s /tmp/bank-history.$$ ]; then
 fi
 
 n=0
-while IFS='|' read -r portal prov acct ok_at ok_h try_at try_h cause paused consent; do
+while IFS='|' read -r portal prov acct ok_at ok_h try_at try_h cause paused consent health; do
   n=$((n + 1))
   echo "── портал ${portal}  ${prov}  ${acct}${paused:+  [${paused}]}"
   echo "   последняя УДАЧНАЯ пара : ${ok_at}  (${ok_h} ч назад)"
@@ -88,14 +106,37 @@ while IFS='|' read -r portal prov acct ok_at ok_h try_at try_h cause paused cons
     echo "   последняя ПОПЫТКА      : ${try_at}  (${try_h} ч назад)"
   fi
   [ "$consent" != "—" ] && echo "   согласие банка до      : ${consent}"
-  if [ "$cause" = "bank-refused" ]; then
-    echo "   ⇒ продление ХОДИЛО в банк после последнего успеха, и банк отказал."
-    echo "     Чинится переподключением: вход владельца счёта в интернет-банк."
-  else
-    echo "   ⇒ ⚠ с момента последнего успеха продление НЕ ХОДИЛО в банк ни разу."
-    echo "     Значит дело НЕ в банке. Переподключение купит один срок жизни токена"
-    echo "     и повторится ровно так же — причину искать у нас (#488)."
-  fi
+  # ⚠ ПРИЧИНУ произносим ТОЛЬКО у истёкшего подключения, и это не косметика. Первая редакция
+  # печатала её у КАЖДОЙ строки — и на живом прогоне 2026-09-06 посоветовала переподключить
+  # Приора, у которого последняя удачная пара была два часа назад, а согласие банка действует до
+  # конца ноября. Уверенный неверный совет, стоящий человеку похода в интернет-банк, — ровно тот
+  # класс ошибки, ради которого весь этот модуль и написан.
+  # В коде так и сделано: `connectionHint` спрашивает `expiredCause` под `if (h === 'expired')`.
+  case "$health" in
+    expired)
+      if [ "$cause" = "bank-refused" ]; then
+        echo "   ⇒ ИСТЕКЛО. Продление ХОДИЛО в банк после последнего успеха, и банк отказал."
+        echo "     Чинится переподключением: вход владельца счёта в интернет-банк."
+      else
+        echo "   ⇒ ⚠ ИСТЕКЛО, но с последнего успеха продление НЕ ХОДИЛО в банк ни разу."
+        echo "     Значит дело НЕ в банке. Переподключение купит один срок жизни токена"
+        echo "     и повторится ровно так же — причину искать у нас (#488)."
+      fi
+      ;;
+    no-refresh)
+      echo "   ⇒ Продлевать НЕЧЕМ: банк не выдал refresh-токен."
+      echo "     Живёт, пока жив access-токен; лечится только переподключением."
+      ;;
+    due)
+      echo "   ⇒ Пора обновить — приложение попробует само. Действий не требуется."
+      ;;
+    ok)
+      echo "   ⇒ Живо, продление в срок. Действий не требуется."
+      ;;
+    *)
+      echo "   ⇒ Состояние неизвестно (срок жизни токена для этого банка не задан)."
+      ;;
+  esac
   echo
 done < /tmp/bank-history.$$
 
