@@ -118,7 +118,11 @@ describe('runPortalReaper', () => {
       deletePortal
     }), 30)
     expect(r.reaped).toBe(1)
-    expect(deletePortal).toHaveBeenCalledWith('M1', Math.floor(NOW / 1000))
+    // ⚠ Третьим — ПОВОД (#641), и он обязан быть `grant-dead`, а не `uninstall`. Стирание идёт
+    // общей функцией с обработчиком `ONAPPUNINSTALL`, и она пишет запись аудита: с чужим поводом
+    // журнал заявил бы «клиент удалил приложение» о том, что сделала наша собственная автоматика,
+    // — оператору, который читает журнал ровно затем, чтобы понять, куда делось подключение.
+    expect(deletePortal).toHaveBeenCalledWith('M1', Math.floor(NOW / 1000), 'grant-dead')
   })
 
   it('РАСХОЖДЕНИЕ выборки и правила ОСТАНАВЛИВАЕТ удаление', async () => {

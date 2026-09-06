@@ -45,8 +45,29 @@ export function describeUpstreamError(e: unknown, max = 400): string {
  * the `eyJ` of `{"`) and a `client_secret=` / `client_assertion=` form pair. Everything else is left
  * alone — over-redacting would blunt the diagnostic this function exists for.
  */
-function redactCredentials(s: string): string {
+export function redactCredentials(s: string): string {
   return s
     .replace(/eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g, '[jwt]')
-    .replace(/((?:client_secret|client_assertion)=)[^&\s"']+/gi, '$1[redacted]')
+    .replace(/((?:client_secret|client_assertion|refresh_token)=)[^&\s"']+/gi, '$1[redacted]')
+}
+
+/**
+ * Вырезать из текста КОНКРЕТНЫЕ секреты, которые мы только что отправили (#649).
+ *
+ * ⚠ Шаблонов из `redactCredentials` тут НЕ ХВАТАЕТ, и это не перестраховка. Они ловят форму
+ * (`client_secret=…`, JWT), а апстрим волен процитировать голое ЗНАЧЕНИЕ: `refresh token
+ * 'AbCdEf…' already used` — ни одного шаблона не совпадёт. Это первое место в проекте, где в теле
+ * запроса едет живой `refresh_token`: обмен по коду его не шлёт вовсе, поэтому прежним вызовам
+ * такая редакция была не нужна.
+ *
+ * ⚠ Короткие значения НЕ вырезаем: пустая строка (у Приора `client_secret` может отсутствовать)
+ * или двухсимвольный мусор превратили бы осмысленный текст в решето, а то и стёрли бы его целиком.
+ */
+export function redactValues(s: string, secrets: readonly string[]): string {
+  let out = s
+  for (const secret of secrets) {
+    if (typeof secret !== 'string' || secret.length < 8) continue
+    out = out.split(secret).join('[redacted]')
+  }
+  return out
 }

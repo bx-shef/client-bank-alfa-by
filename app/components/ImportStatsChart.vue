@@ -26,7 +26,10 @@ const props = withDefaults(defineProps<{
   /** Card heading. Defaults to the import wording; pass a neutral title where nothing was
    *  just imported (e.g. the in-portal /app overview of demo/portal data). */
   title?: string
-}>(), { title: 'Результат импорта' })
+  /** Оговорка под заголовком: числа посчитаны НЕ по всем данным (#42 — портал отдал только первую
+   *  страницу периода). Пусто ⇒ строки нет. Молчать нельзя: сводка без неё выдаёт обрезок за целое. */
+  note?: string
+}>(), { title: 'Результат импорта', note: '' })
 
 const stats = computed(() => computeImportStats(props.items))
 const currencies = computed(() => stats.value.byCurrency.map(c => c.currency))
@@ -241,9 +244,17 @@ onBeforeUnmount(() => {
   <B24Card v-if="stats.total > 0">
     <template #header>
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 class="font-semibold">
-          {{ title }}
-        </h2>
+        <div>
+          <h2 class="font-semibold">
+            {{ title }}
+          </h2>
+          <p
+            v-if="note"
+            class="mt-0.5 text-xs text-(--ui-color-base-3)"
+          >
+            {{ note }}
+          </p>
+        </div>
         <B24Select
           v-if="showSelector"
           :model-value="selected"

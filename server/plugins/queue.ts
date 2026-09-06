@@ -448,9 +448,12 @@ export default defineNitroPlugin((nitroApp) => {
                   // ⚠ БРОСАЕМ, а не молча выходим, если `deps` нет: `runPortalReaper` считает
                   // успехом любой не-бросок, поэтому тихий выход дал бы в логе «портал стёрт» о
                   // портале, которого никто не трогал — ложь опаснее отказа.
-                  deletePortal: async (memberId, eventTs) => {
+                  // ⚠ Повод прокидывается НАСКВОЗЬ, а не подставляется здесь: `runPortalReaper`
+                  // передаёт `grant-dead`, и запись аудита (#641) называет истинную причину.
+                  // Подставь мы повод в проводке — уборщик снова заявлял бы «приложение удалено».
+                  deletePortal: async (memberId, eventTs, reason) => {
                     if (!deps) throw new Error('portal reaper: deps unavailable, refusing to report a deletion that did not happen')
-                    await deps.deletePortal(memberId, eventTs)
+                    await deps.deletePortal(memberId, eventTs, reason)
                   },
                   log: (m: string) => retention.info(m),
                   warn: (m: string) => retention.warning(m)

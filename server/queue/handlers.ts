@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import { landedCleanly } from '../../app/utils/opLogPolicy'
-import { dedupKey, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
+import { dedupKey, isDirectionEnabled, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
 import { makeProgramSample, type ProgramSample } from '../../app/utils/programFeedback'
 import type { PortalSettings } from '../../app/utils/settings'
@@ -70,6 +70,17 @@ export interface OperationOutcome {
  *  The CRM-side ops (`findCompany`/`writeActivity`/`notifyChat`) take the portal's
  *  `memberId` explicitly — deps are built once in startWorkers(), not per-job, so
  *  the portal context rides on the call, not the closure. */
+/**
+ * ПОЧЕМУ стираем портал — и это разные события, а не оттенок формулировки (#641).
+ *
+ *   `uninstall`  — пришло `ONAPPUNINSTALL`: клиент удалил приложение сам.
+ *   `grant-dead` — уборщик #574: портал исчез БЕЗ уведомления, его OAuth-грант мёртв дольше
+ *                  порога. Клиент ничего не удалял, и сказать про него «приложение УДАЛЕНО»
+ *                  значит соврать оператору, который читает журнал ровно затем, чтобы понять,
+ *                  куда делось подключение.
+ */
+export type PortalPurgeReason = 'uninstall' | 'grant-dead'
+
 export interface HandlerDeps {
   /** Pull a statement window from the bank (Alfa/Prior transport — stage 3/5). */
   fetchStatement: (job: FetchJob) => Promise<StatementItem[]>
@@ -246,8 +257,14 @@ export interface HandlerDeps {
   savePortal: (job: EventJob) => Promise<void>
   /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges).
    *  `eventTs` (B24 event timestamp) records an ordering tombstone (#77) so a stale
-   *  register can't resurrect the portal after this uninstall. */
-  deletePortal: (memberId: string, eventTs: number) => Promise<void>
+   *  register can't resurrect the portal after this uninstall.
+   *
+   *  ⚠ `reason` is REQUIRED, and it is not decoration (#641). This same function is also the
+   *  portal reaper's eraser (#574) — a portal that vanished WITHOUT an uninstall — so the audit
+   *  line it writes must not claim «the client removed the app» for a wipe our own automation
+   *  performed. Only the caller knows which it is, so the caller says it; a new caller cannot
+   *  forget, because the parameter does not compile away. */
+  deletePortal: (memberId: string, eventTs: number, reason: PortalPurgeReason) => Promise<void>
   /** Chain the normalized batch onto the crm-sync queue. */
   enqueueCrmSync: (job: CrmSyncJob) => Promise<boolean>
   /**
@@ -279,7 +296,7 @@ export interface HandlerDeps {
  *  portal (always). Install registers it (persists credentials). */
 export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<{ kind: string, cleaned: boolean, registered: boolean }> {
   if (job.kind === 'ONAPPUNINSTALL') {
-    await deps.deletePortal(job.memberId, Number(job.ts) || 0)
+    await deps.deletePortal(job.memberId, Number(job.ts) || 0, 'uninstall')
     return { kind: job.kind, cleaned: true, registered: false }
   }
   // ONAPPINSTALL: register the portal. `credentials` is always present for a
@@ -427,7 +444,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, directionSkipped: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -474,6 +491,8 @@ export async function handleCrmSyncJob(
   let skipped = 0
   let excluded = 0
   /** Operations whose registry element could not be written (#575) — see the call site. */
+  /** Операции, не перенесённые из-за выключенного направления (#44) — своя причина, свой счётчик. */
+  let directionSkipped = 0
   let registryFailed = 0
   /** Сколько операций дозаполнили колонками реестра при повторной загрузке (#45). */
   let registryBackfilled = 0
@@ -554,12 +573,28 @@ export async function handleCrmSyncJob(
   // earliest confused op in iteration order.
   let sample: ProgramSample | undefined
   for (const item of unique) {
+    // ─── Гейт направления (#44) ──────────────────────────────────────────────────────────────
+    // Снятая галка «Приходы»/«Расходы» означает «не тащить это в CRM вовсе»: ни дела, ни элемента
+    // смарт-процесса, ни сообщения в чат, ни строки в статистике.
+    //
+    // ⚠ Смысл настройки ИЗМЕНЁН (решение владельца 2026-08-26). Прежде направление фильтровало
+    // ТОЛЬКО чат — операция всё равно записывалась в CRM, — и это расходилось с тем, как настройку
+    // читает человек: «не показывать расходы» он понимает как «не переносить их». Спека §2 A2
+    // приведена в соответствие вместе с этой правкой.
+    // ⚠ Считается ОТДЕЛЬНЫМ счётчиком от `excluded`: там причина «этот плательщик нам не нужен»
+    // (список счетов/назначений), здесь — «этот вид операций не переносим». Сложи их, и по числу
+    // нельзя было бы понять, какую настройку смотреть.
+    // ⚠ Галка ОДНА на все банки и счета — пер-банковской настройки направления в модели нет.
+    if (!isDirectionEnabled(item, chat?.rules)) {
+      directionSkipped++
+      continue
+    }
     // Exclusion gate (PROCESSING.md §2 A2): an operation whose account or purpose is
     // excluded is skipped ENTIRELY — no recognition, no company lookup, no CRM activity, no
     // allocation, no chat. This is a PROCESSING exclusion (from the chat rules'
-    // excludeCounterpartyAccounts/excludePurposePatterns), distinct from the chat-only filter. Runs
-    // before everything else so an excluded op costs no REST. `chat?.rules` holds the lists
-    // (they're configured alongside the chat block); absent ⇒ nothing excluded.
+    // excludeCounterpartyAccounts/excludePurposePatterns). Runs before everything else so an
+    // excluded op costs no REST. `chat?.rules` holds the lists (they're configured alongside the
+    // chat block); absent ⇒ nothing excluded.
     if (isExcludedOperation(item, chat?.rules)) {
       excluded++
       continue
@@ -1043,5 +1078,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, directionSkipped, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
 }

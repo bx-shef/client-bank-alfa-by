@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { StatementItem } from '~/types/statement'
-import { dedupKey, directionFromOperType, isExcludedOperation, parseRuleLines, shouldNotifyChat, splitByDirection } from '~/utils/statement'
+import {
+  dedupKey, directionFromOperType, isDirectionEnabled, isExcludedOperation, parseRuleLines,
+  shouldImportOperation, shouldNotifyChat, splitByDirection
+} from '~/utils/statement'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   return {
@@ -92,9 +95,26 @@ describe('parseRuleLines', () => {
 })
 
 describe('shouldNotifyChat', () => {
-  it('announces credits by default and silences debits', () => {
+  // ⚠ #44: дефолт СМЕНИЛСЯ на оба направления, и это следствие смены смысла настройки. Пока
+  // галки управляли только чатом, молчаливый по умолчанию чат был разумной осторожностью. Теперь
+  // та же настройка решает, будет ли операция ЗАГРУЖЕНА, и прежний дефолт означал бы, что
+  // свежеустановленное приложение молча не переносит расходы — половину выписки, без слова на
+  // экране. Импорт выписки по умолчанию обязан переносить её целиком.
+  it('по умолчанию переносим ОБА направления — #44', () => {
     expect(shouldNotifyChat(makeItem({ direction: 'credit' }))).toBe(true)
-    expect(shouldNotifyChat(makeItem({ direction: 'debit' }))).toBe(false)
+    expect(shouldNotifyChat(makeItem({ direction: 'debit' }))).toBe(true)
+  })
+
+  it('снятая галка направления выключает операцию ЦЕЛИКОМ, а не только чат — #44', () => {
+    // Гейт загрузки: ни дела, ни элемента СП, ни чата, ни статистики.
+    expect(isDirectionEnabled(makeItem({ direction: 'debit' }), { directions: ['credit'] })).toBe(false)
+    expect(shouldImportOperation(makeItem({ direction: 'debit' }), { directions: ['credit'] })).toBe(false)
+    // А включённое направление проходит — и его всё ещё может отсечь список исключений.
+    expect(shouldImportOperation(makeItem({ direction: 'credit' }), { directions: ['credit'] })).toBe(true)
+    expect(shouldImportOperation(
+      makeItem({ direction: 'credit', counterparty: { name: 'x', unp: '', account: 'BY-TAX' } }),
+      { directions: ['credit'], excludeCounterpartyAccounts: ['BY-TAX'] }
+    )).toBe(false)
   })
 
   it('can opt debits in via directions rule', () => {

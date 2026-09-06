@@ -157,6 +157,79 @@ describe('runBankKeepAlive', () => {
     return { d, warn, log }
   }
 
+  describe('успех НАЗЫВАЕТ счёт, а не только считает (#488, ночная проверка)', () => {
+    // ⚠ До 2026-08-27 отказ счёт называл, а успех — нет. Пока подключение было одно, разницы не
+    // было. С двумя банками сразу `refreshed=1` не говорит, ЧЕЙ токен продлили, — то есть
+    // измерение, ради которого продление и читают, становится негодным ровно тогда, когда его
+    // впервые собрались прочесть.
+
+    it('продлённое подключение названо провайдером и счётом', async () => {
+      const { d, log } = deps()
+      await runBankKeepAlive(d)
+      const line = log.find(l => l.startsWith('renewed '))
+      expect(line, 'успешное продление по-прежнему безымянно — утром не понять, чей токен продлили').toBeTruthy()
+      expect(line).toContain('alfa-by/')
+    })
+
+    it('⚠ ДВА БАНКА РАЗЛИЧИМЫ — ради этого всё и делалось', async () => {
+      // Ночная проверка: Альфа опрашивается (её освежает опрос), Приор на паузе (его может
+      // продлить только крон). Общий счётчик их не различает, поимённая строка — различает.
+      const { d, log } = deps({
+        listAccounts: async () => [
+          acc({ provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: NOW - 9 * HOUR }),
+          acc({ provider: 'prior-by', accountKey: 'BY02PRIOR002', connectedAt: NOW - 9 * HOUR, pollPaused: true })
+        ]
+      })
+      const s = await runBankKeepAlive(d)
+      expect(s.refreshed).toBe(2)
+      const named = log.filter(l => l.startsWith('renewed '))
+      expect(named, 'продлили два, а назвали не два').toHaveLength(2)
+      expect(named.join('\n')).toContain('prior-by/')
+      expect(named.join('\n')).toContain('alfa-by/')
+    })
+
+    it('⚠ ПАУЗА не мешает продлению — на этом держится вся ночная проверка', async () => {
+      // Если бы пауза выбрасывала строку из выборки, приостановленное подключение умирало бы за
+      // ночь — ровно та беда, от которой пауза и спасает.
+      const { d, log } = deps({
+        listAccounts: async () => [acc({ provider: 'prior-by', connectedAt: NOW - 9 * HOUR, pollPaused: true })]
+      })
+      const s = await runBankKeepAlive(d)
+      expect(s.selected, 'приостановленное подключение выпало из продления').toBe(1)
+      expect(log.some(l => l.startsWith('renewed ') && l.includes('prior-by/'))).toBe(true)
+    })
+
+    it('НЕудачное продление имени не печатает — иначе отказ читался бы как успех', async () => {
+      const { d, log } = deps({
+        refresh: async () => {
+          throw new Error('400 Bad Request — банк ответил: invalid_grant')
+        }
+      })
+      await runBankKeepAlive(d)
+      expect(log.some(l => l.startsWith('renewed '))).toBe(false)
+    })
+
+    it('⚠ «пара не помолодела» — тоже НЕ успех', async () => {
+      // `skipped`: обновление не состоялось (строку отключили, или пару уже повернул кто-то). Имя
+      // здесь означало бы «крон продлил», чего не было.
+      const { d, log } = deps({ refresh: async (t: BankToken) => t })
+      const s = await runBankKeepAlive(d)
+      expect(s.refreshed).toBe(0)
+      expect(log.some(l => l.startsWith('renewed '))).toBe(false)
+    })
+
+    it('⚠ номер счёта в строке МАСКИРУЕТСЯ тем же правилом, что у отказа', async () => {
+      // Лог живёт до вытеснения по объёму (#617); успех не должен нести больше, чем отказ.
+      const { d, log } = deps({
+        listAccounts: async () => [acc({ accountKey: 'BY01ALFA0001 расшифровка/чужое', connectedAt: NOW - 9 * HOUR })]
+      })
+      await runBankKeepAlive(d)
+      const line = log.find(l => l.startsWith('renewed '))!
+      expect(line).not.toContain(' расшифровка')
+      expect(line).not.toContain('/чужое')
+    })
+  })
+
   it('обновляет то, что пора, и отчитывается счётчиками', async () => {
     const { d } = deps()
     await expect(runBankKeepAlive(d)).resolves.toEqual({

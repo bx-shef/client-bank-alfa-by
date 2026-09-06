@@ -13,11 +13,12 @@ import {
   processUploadBatch,
   type UploadItemResult
 } from '~/utils/importUpload'
-import { splitByDirection } from '~/utils/statement'
+import { isDirectionEnabled, splitByDirection } from '~/utils/statement'
 import { MAX_FILE_EMBED } from '~/utils/feedback'
 import { useImport, type ImportOutcome } from '~/composables/useImport'
 import { useImportBatches } from '~/composables/useImportBatches'
 import { useLocalMode } from '~/composables/useLocalMode'
+import { useChatSettings } from '~/composables/useChatSettings'
 import { batchStateLabel, summaryMessage } from '~/utils/importBatchView'
 
 // Локальный режим форка (#39): скрывает попап «оцените приложение» (наш листинг Маркета).
@@ -46,7 +47,24 @@ const feedbackFileText = ref('')
 let procSeq = 0
 
 // Combined, de-duped operations across all successfully parsed files.
-const allItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
+const parsedItems = computed(() => dedupItems(results.value.flatMap(r => r.items)))
+
+// ⚠ Предпросмотр показывает ровно то, что ПОПАДЁТ В CRM (#44). Снятая галка «Приходы»/«Расходы» —
+// гейт загрузки, а не фильтр оповещения: такая операция не создаст ни дела, ни элемента
+// смарт-процесса. Показывать её в предпросмотре значило бы обещать запись, которой не будет.
+// ⚠ Настройки читаются из того же синглтона, что и форма настроек; вне портала он инертен и
+// отдаёт дефолты (оба направления), поэтому предпросмотр там показывает всё.
+const chatSettings = useChatSettings()
+const skippedByDirection = computed(() =>
+  parsedItems.value.filter(i => !isDirectionEnabled(i, chatSettings.settings.chat.rules)))
+const allItems = computed(() =>
+  parsedItems.value.filter(i => isDirectionEnabled(i, chatSettings.settings.chat.rules)))
+/** Какие направления выключены — называем словами, а не «часть операций». */
+const skippedDirectionLabel = computed(() => {
+  const dirs = new Set(skippedByDirection.value.map(i => i.direction))
+  const names = [...(dirs.has('credit') ? ['приходы'] : []), ...(dirs.has('debit') ? ['расходы'] : [])]
+  return names.join(' и ')
+})
 const okCount = computed(() => results.value.filter(r => r.ok).length)
 const errCount = computed(() => results.value.filter(r => !r.ok).length)
 const totals = computed(() => splitByDirection(allItems.value))
@@ -62,6 +80,12 @@ const batchSummary = computed(() => summaryMessage(batches.results.value))
 // sessionStorage, поэтому вернувшийся сотрудник видит результат, а не «принято» из ниоткуда.
 onMounted(() => {
   void batches.restore()
+  // ⚠ БЕЗ ЭТОГО ФИЛЬТР МЁРТВ (#44, находка ревью). Синглтон настроек на фрейме `/import` свежий:
+  // форма настроек тут не монтируется, а слайдер открывает `/import` отдельным фреймом. Без
+  // загрузки `settings.chat.rules` навсегда остаются дефолтом (оба направления), и предпросмотр
+  // показывал бы операции, которые в CRM не поедут, — ровно тот разрыв, который правка закрывает.
+  // Best-effort: вне портала запрос инертен, и предпросмотр честно показывает всё.
+  void chatSettings.load()
 })
 
 async function processFiles(files: File[]) {
@@ -212,6 +236,19 @@ function clearAll() {
 
       <!-- Summary + combined preview. The summary line is the ONE live region here — a short,
            stable sentence a screen reader can announce without flooding (U3). -->
+      <!-- ⚠ Пропущенные по настройке НАЗЫВАЮТСЯ (#44), и строка стоит СНАРУЖИ блока «есть операции»
+           (находка ревью). Внутри него она не показалась бы в самом важном случае: выписка целиком
+           из выключенного направления даёт пустой `allItems`, и файл исчезал бы МОЛЧА — ровно то
+           прочтение «приложение потеряло операции», ради которого объяснение и написано. -->
+      <p
+        v-if="skippedByDirection.length"
+        class="text-sm text-(--ui-color-base-3)"
+        data-testid="skipped-by-direction"
+      >
+        Не будут загружены: {{ skippedByDirection.length }} —
+        в настройках выключены {{ skippedDirectionLabel }}.
+      </p>
+
       <template v-if="allItems.length">
         <p
           role="status"

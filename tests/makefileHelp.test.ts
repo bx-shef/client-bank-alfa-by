@@ -64,6 +64,9 @@ const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 
   'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe',
   // #574: показать, кого уборщик считает мёртвым, и аварийно выключить стирание.
   'reap-status', 'reap-off',
+  // #488: две колонки `bank_tokens`, которые переживают перевыкат, — единственный способ отличить
+  // «продление ходило, банк отказал» от «продление не ходило вовсе» после пересоздания контейнера.
+  'bank-history',
   // Таргет «виртуальная машина Битрикс24» (docs/DEPLOY_BITRIXVM.md): проверка тракта до
   // приложения и управление автообновлением по опросу git.
   'bitrix-check', 'deploy-status', 'deploy-now', 'deploy-pause', 'deploy-resume',

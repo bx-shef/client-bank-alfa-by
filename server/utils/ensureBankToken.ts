@@ -27,6 +27,8 @@ import { dbQuery } from '../db/client'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
 import { useServerLogger } from './serverLogger'
+import { logSafe } from './logSafe'
+import { redactCredentials, redactValues } from './logSanitize'
 
 const log = useServerLogger('bank-keepalive')
 
@@ -212,6 +214,65 @@ const liveDeps: BankRefreshDeps = {
 }
 
 /**
+ * Достать из отказа токен-эндпоинта ПРИЧИНУ, которую называет сам банк (#649).
+ *
+ * ⚠ Ради этой строки всё и написано. Живой прогон 2026-08-27 дал двенадцать финальных падений с
+ * текстом `[POST] ".../token": 400 Bad Request` — и по нему нельзя отличить состояния, у которых
+ * РАЗНЫЕ починки и разная цена:
+ *   `invalid_grant`         — refresh мёртв или уже потрачен ⇒ лечит ТОЛЬКО повторный вход
+ *                             владельца счёта в интернет-банк, ретраи бессмысленны;
+ *   `invalid_client`        — наши `client_id`/`client_secret` не те ⇒ чинится в `.env`, поход
+ *                             владельца в банк не нужен и вреден (потратит время впустую);
+ *   `invalid_request`       — запрос собран неверно ⇒ это наш баг, и клиент тут ни при чём;
+ *   `unsupported_grant_type`/`invalid_scope` — расхождение регистрации с кодом.
+ * Мы держали ответ банка в руках и выбрасывали его, оставляя человеку голое «400».
+ *
+ * ⚠ ТЕКСТ ПИШЕТ АПСТРИМ, поэтому одного капа длины НЕ ХВАТАЕТ — и это ровно та ошибка, которую
+ * поймало ревью в первой редакции. OAuth-серверы рутинно цитируют отвергнутый параметр внутри
+ * `error_description`, а в теле нашего запроса едут `client_secret` (Альфа), `client_assertion`
+ * (Приор под `private_key_jwt`) и живой `refresh_token` — то есть сама ошибка может нести
+ * credential, который мы только что отправили. Обрезка до 200 символов от этого не спасает: голова
+ * строки — как раз то место, куда процитированный токен и попадает. Отсюда двойная редакция.
+ *
+ * ⚠ ЗАПРОС не логируем ни при каких условиях — в нём сам refresh-токен и (у Альфы) client_secret.
+ */
+export function bankOAuthErrorDetail(e: unknown, secrets: readonly string[] = []): string {
+  const data = (e as { data?: unknown })?.data
+  if (data == null) return ''
+  let detail = ''
+  if (typeof data === 'string') {
+    detail = data.trim()
+  } else if (typeof data === 'object') {
+    const rec = data as Record<string, unknown>
+    const code = typeof rec.error === 'string' ? rec.error.trim() : ''
+    const desc = typeof rec.error_description === 'string' ? rec.error_description.trim() : ''
+    detail = code && desc ? `${code}: ${desc}` : code || desc
+    // ⚠ КОНВЕРТ БЫВАЕТ НЕ ПО RFC, и это не экзотика (находка ревью): токен-эндпоинт Альфы стоит на
+    // шлюзе WSO2, который отвечает `{fault:{code,message,description}}`, а Open Banking Приора —
+    // `{Code, Errors:[{ErrorCode}]}`. Разбирай мы только `error`/`error_description` — вернулась бы
+    // пустота, то есть ровно то опаковое «400 Bad Request», ради которого всё и писалось, причём
+    // молча: в логе не было бы ни следа того, что тело вообще пришло.
+    if (!detail) {
+      try {
+        detail = JSON.stringify(data) ?? ''
+      } catch {
+        // Циклическая ссылка или бросающий `toJSON` — сам факт наличия тела уже полезен.
+        detail = '[unserializable]'
+      }
+      // ⚠ Пустой конверт информации не несёт, а приписку рисует. `— банк ответил: {}` хуже, чем
+      // её отсутствие: читатель решит, что причина названа, и перестанет искать дальше.
+      if (detail === '{}' || detail === '[]' || detail === 'null') detail = ''
+    }
+  }
+  if (!detail) return ''
+  // ⚠ РЕДАКЦИЯ ДВОЙНАЯ, и одной из двух не хватает. `redactCredentials` ловит ФОРМУ
+  // (`client_secret=…`, JWT) — этого хватало прежним вызывающим. Здесь в теле запроса едет живой
+  // `refresh_token`, а его апстрим цитирует ЗНАЧЕНИЕМ («refresh token 'AbCd…' already used»), под
+  // шаблон не попадающим. Поэтому вторым проходом вырезаем то, что реально отправили.
+  return logSafe(redactValues(redactCredentials(detail), secrets), 200)
+}
+
+/**
  * Return a valid access token for the connected bank account, refreshing (once, under a
  * per-account lock) if within the skew of expiry, and persisting the rotated tokens.
  * Without provider creds it hands back the stored token (may be expired) so the caller's
@@ -274,7 +335,33 @@ export async function ensureBankToken(
     } catch {
       // Лучшие усилия: продление важнее собственной диагностики.
     }
-    const r = parseBankRefresh(stored.provider, await deps.postRefresh(url, body, headers))
+    // ⚠ Причину отказа достаём ЗДЕСЬ, а не у вызывающих: путей продления два (крон и опрос по
+    // дороге), и оба падают этим же исключением. Обогащать в каждом — значит однажды обогатить в
+    // одном; ровно так `markBankRefreshAttempt` и оказался только на одном из них (#488).
+    let raw: unknown
+    try {
+      raw = await deps.postRefresh(url, body, headers)
+    } catch (e) {
+      // ⚠ ОБОГАЩЕНИЕ ЗДЕСЬ, а не у вызывающих, и их ЧЕТВЕРО (первая редакция комментария писала
+      // «два» — неверно): крон продления, опрос Альфы, опрос Приора и сверка счетов на экране
+      // настроек. Обогащать в каждом — значит однажды обогатить в одном; ровно так
+      // `markBankRefreshAttempt` и оказался только на кроне (#488). Чем больше вызывающих, тем
+      // сильнее довод чинить в одной точке.
+      //
+      // ⚠ Секреты передаём ЯВНО: они есть здесь в области видимости, и только здесь. Апстрим волен
+      // процитировать их обратно — этот класс поведения задокументирован в `logSanitize.ts`.
+      const detail = bankOAuthErrorDetail(e, [stored.refreshToken, creds.clientSecret])
+      // ⚠ ДОПИСЫВАЕМ сообщение, а не пересоздаём исключение (находка ревью). Первая редакция
+      // бросала голый `new Error(..., { cause })` — и теряла `name`/`code`/`status`, по которым
+      // `errorKind()` метит спан: `job.error_kind` деградировал с `FetchError` до безликого
+      // `Error` ровно в том случае, который правка делает информативнее. BullMQ вдобавок хранит
+      // стек НОВОЙ ошибки, а не той, что в `cause`, — то есть «сохраняем стек» было ровно
+      // наоборот. Мутация `message` сохраняет объект целиком; ofetch создал его для нас и больше
+      // никому не отдал.
+      if (detail && e instanceof Error) e.message = `${e.message} — банк ответил: ${detail}`
+      throw e
+    }
+    const r = parseBankRefresh(stored.provider, raw)
     const updated: BankToken = {
       ...stored,
       accessToken: r.accessToken,

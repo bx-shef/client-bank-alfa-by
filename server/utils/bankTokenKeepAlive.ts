@@ -358,8 +358,21 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
       const updated = await deps.refresh(token)
       // A bumped ACCESS expiry proves the pair rotated — either by us, or by a poll that won the
       // same advisory lock while we waited. Both outcomes leave a fresh refresh token behind.
-      if (updated.expiresAt > before) s.refreshed++
-      else s.skipped++
+      if (updated.expiresAt > before) {
+        s.refreshed++
+        // ⚠ УСПЕХ НАЗЫВАЕТ СЧЁТ, и до 2026-08-27 не называл — только общий счётчик `refreshed=N`.
+        // Отказ счёт называл, успех нет; асимметрия ровно наоборот той, что нужна. Пока подключение
+        // было одно, разницы не было. С двумя банками сразу «refreshed=1» не говорит, ЧЕЙ токен
+        // продлили, — то есть измерение, ради которого продление и читают, становится негодным.
+        //
+        // ⚠ Формулировка осторожная («свежая пара после нашей попытки»), потому что счётчик растёт
+        // и когда пару успел повернуть ОПРОС, выигравший тот же лок, — это сказано строкой выше и
+        // остаётся правдой. Для подключения НА ПАУЗЕ двусмысленности нет: за выпиской к нему никто
+        // не ходит, и продлить его мог только крон. На этом и держится ночная проверка #488/#489.
+        deps.log?.(`renewed ${ref.provider}/${logSafeKey(ref.accountKey)} — свежая пара после попытки крона`)
+      } else {
+        s.skipped++
+      }
     } catch (e) {
       s.failed++
       // ⚠ Текст ошибки СОЧИНЯЕТ БАНК: `parseTokenResponse` склеивает его из `error_description`

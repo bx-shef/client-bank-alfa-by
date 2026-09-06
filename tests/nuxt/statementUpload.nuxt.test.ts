@@ -29,6 +29,23 @@ describe('StatementUpload', () => {
     expect(wrapper.find('[data-testid="clear"]').exists()).toBe(false)
   })
 
+  // ⚠ #44: предпросмотр обязан показывать то, что ПОПАДЁТ В CRM. Первая редакция правки читала
+  // настройки, но никто их не ЗАГРУЖАЛ — синглтон на фрейме `/import` свежий (форма настроек тут
+  // не монтируется), поэтому `directions` навсегда оставались дефолтом, фильтр был мёртв, а строка
+  // «Не будут загружены» не появлялась никогда. Проверяем именно ЗАПРОС настроек: тест, который
+  // подсовывает значения в синглтон напрямую, обошёл бы отсутствующий `load()` и дал ложное зелёное.
+  it('запрашивает настройки портала — иначе фильтр направлений мёртв (#44)', async () => {
+    const { useChatSettings } = await import('~/composables/useChatSettings')
+    const singleton = useChatSettings()
+    const spy = vi.spyOn(singleton, 'load').mockResolvedValue(undefined)
+    try {
+      await mountSuspended(StatementUpload)
+      expect(spy, 'без load() настройки остаются дефолтными и фильтр не работает').toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('the file input accepts only .txt and allows multiple', async () => {
     const wrapper = await mountSuspended(StatementUpload)
     const input = wrapper.find('[data-testid="file-input"]')

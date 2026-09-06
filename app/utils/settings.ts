@@ -131,7 +131,7 @@ export interface PortalSettings {
 export const SETTINGS_KEY = 'cb_settings_v1'
 
 export function defaultChatSettings(): ChatSettings {
-  return { dialogId: '', rules: { directions: ['credit'], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } }
+  return { dialogId: '', rules: { directions: ['credit', 'debit'], excludePurposePatterns: [], excludeCounterpartyAccounts: [] } }
 }
 
 export function defaultRecognitionSettings(): RecognitionSettings {
@@ -177,9 +177,11 @@ function cleanList(v: unknown): string[] {
 
 /** Coerce `directions`: keep valid values in order; only fall back to the default
  *  when the field is missing/not-an-array. An explicit `[]` (both switches off) is a
- *  legitimate "announce nothing" and is preserved. */
+ *  legitimate "import nothing" and is preserved.
+ *  ⚠ Дефолт — ОБА направления (#44): настройка стала гейтом ЗАГРУЗКИ, и прежний `['credit']`
+ *  означал бы, что портал со старым или битым блобом молча перестаёт переносить расходы. */
 function cleanDirections(v: unknown): OperationDirection[] {
-  if (!Array.isArray(v)) return ['credit']
+  if (!Array.isArray(v)) return ['credit', 'debit']
   // Bound the scan (#182): `v.includes(d)` is O(|v|) per direction and scans an untrusted
   // array to the end when a direction is absent. Slice to a cap and probe an O(1) Set —
   // `directions` legitimately holds 0-2 entries, so nothing genuine is lost. Order follows
