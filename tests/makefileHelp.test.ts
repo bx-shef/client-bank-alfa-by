@@ -114,7 +114,7 @@ describe('операторские цели Makefile видны в `make help`',
     // `make цель VAR=…` никто не отменял, она работает и остаётся опасной. Общее правило
     // («не вставляй строку `make …`, которую не составил сам») записано в OPERATIONS.md и здесь
     // не дублируется. Гард лишь не даёт безопасной форме перестать работать.
-    const PARAMS = ['DAY', 'DOMAIN', 'HOST', 'TO', 'CONSENT', 'SINCE', 'CONFIRM']
+    const PARAMS = ['DAY', 'DOMAIN', 'HOST', 'TO', 'CONSENT', 'SINCE', 'CONFIRM', 'PORT']
     for (const line of MAKEFILE.split('\n')) {
       if (!line.startsWith('\t')) continue // только рецепты
       for (const v of PARAMS) {

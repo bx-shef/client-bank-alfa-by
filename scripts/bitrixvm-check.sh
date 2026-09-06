@@ -10,6 +10,9 @@ set -Eeuo pipefail
 
 DOMAIN="${1:-}"
 [ -n "$DOMAIN" ] || { echo "не задан домен: make bitrix-check DOMAIN=bank-app.example.by" >&2; exit 1; }
+# ⚠ Порт передаёт вызывающий (`make bitrix-check` берёт APP_BIND_PORT из .env). Зашитая
+# восьмёрка-тысяча на установке с другим портом давала бы уверенно ЛОЖНЫЕ «контейнер не
+# слушает» и «порт в конфиге не совпадает» — то есть диагностика посылала бы чинить исправное.
 PORT="${2:-8080}"
 
 ok()   { printf '  \033[32mOK\033[0m   %s\n' "$*"; }
@@ -30,7 +33,10 @@ nginx -t >/dev/null 2>&1 && ok "nginx -t проходит" || bad "nginx -t па
 # ⚠ Свой server-блок с тем же именем — самая дорогая ошибка этой площадки: nginx берёт первый по
 # порядку инклюда (блок BitrixVM), домен молча отдаёт портал, и снаружи это неотличимо от
 # «приложение не поднялось». Ищем именно дубль имени, а не наличие файлов.
-dupes=$(grep -rl "server_name .*\b$DOMAIN\b" /etc/nginx/bx/site_enabled/ /etc/nginx/bx/site_ext_enabled/ 2>/dev/null | wc -l)
+# ⚠ `grep | wc` под `set -e` + `pipefail` умирает, когда grep ничего не нашёл (код 1) или
+# каталога нет (код 2) — то есть ровно в тех случаях, ради которых диагностику и запускают:
+# домена ещё нет, каталог не создан. Поэтому неудача grep гасится ЯВНО, до конвейера.
+dupes=$({ grep -rl "server_name .*\b$DOMAIN\b" /etc/nginx/bx/site_enabled/ /etc/nginx/bx/site_ext_enabled/ 2>/dev/null || true; } | wc -l)
 [ "$dupes" -le 2 ] && ok "server-блоков с этим именем: $dupes (ожидаемо 2 — http и https)" \
   || bad "server-блоков с этим именем: $dupes — есть лишний, домен может уйти не туда"
 
@@ -54,7 +60,11 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${h[@]}" http://12
 # выглядит как «открылось, но не работает», и причину ищут в приложении.
 asset=$(curl -sS --max-time 10 "${h[@]}" http://127.0.0.1/ | grep -o '/_nuxt/[^"]*\.js' | head -1 || true)
 if [ -n "$asset" ]; then
-  read -r code type < <(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --max-time 10 "${h[@]}" "http://127.0.0.1$asset")
+  # ⚠ Не `read` из подстановки процесса: curl не печатает перевод строки, поэтому `read`
+  # возвращает 1, и при `set -e` скрипт умирает ровно здесь — на своей главной проверке,
+  # не напечатав ни вердикта, ни следующего раздела. Замерено запуском.
+  probe=$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --max-time 10 "${h[@]}" "http://127.0.0.1$asset" || echo '000 -')
+  code=${probe%% *}; type=${probe#* }
   case "$code:$type" in
     200:*javascript*) ok "статика $asset отдаётся приложением" ;;
     *)                bad "статика $asset: код $code, тип $type"

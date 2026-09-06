@@ -35,8 +35,12 @@ die() { printf '[deploy] ОШИБКА: %s\n' "$*" >&2; exit 1; }
 : "${STACK_DIR:?в $CONFIG не задан STACK_DIR (каталог с docker-compose и .env)}"
 : "${IMAGE_APP:?в $CONFIG не задан IMAGE_APP (без тега)}"
 : "${IMAGE_BACKEND:?в $CONFIG не задан IMAGE_BACKEND (без тега)}"
-: "${HEALTH_URL:=http://127.0.0.1:8080/api/health}"
-: "${READY_URL:=http://127.0.0.1:8080/api/ready}"
+# ⚠ Порт берётся из настроек, а не зашит. `APP_BIND_PORT` документирован как изменяемый, и с
+# зашитой восьмёркой-тысячей установка на другом порту проваливала бы проверку здоровья КАЖДЫЙ
+# раз и откатывалась вечно — при полностью исправном приложении.
+: "${APP_BIND_PORT:=8080}"
+: "${HEALTH_URL:=http://127.0.0.1:$APP_BIND_PORT/api/health}"
+: "${READY_URL:=http://127.0.0.1:$APP_BIND_PORT/api/ready}"
 : "${SHA_TAG_LENGTH:=7}"
 
 mkdir -p "$STATE_DIR"
@@ -66,8 +70,13 @@ if [ -n "${GIT_SSH_KEY:-}" ]; then
 fi
 
 log "опрашиваю $GIT_URL ($GIT_BRANCH)"
-remote_line="$(git ls-remote --exit-code "$GIT_URL" "refs/heads/$GIT_BRANCH" 2>&1)" \
-  || die "не удалось опросить репозиторий: $remote_line"
+# ⚠ stderr НЕ сливается в stdout. ssh печатает туда «Warning: Permanently added …» при первом
+# в жизни подключении, и эта строка становилась бы первым токеном вместо sha — то есть самый
+# первый прогон падал бы с сообщением «неожиданный ответ», уводящим искать причину не там.
+git_err=$(mktemp "$STATE_DIR/ls-remote.XXXXXX")
+trap 'rm -f "$git_err"' EXIT
+remote_line="$(git ls-remote --exit-code "$GIT_URL" "refs/heads/$GIT_BRANCH" 2>"$git_err")" \
+  || die "не удалось опросить репозиторий: $(tr '\n' ' ' <"$git_err")"
 remote_sha="${remote_line%%[[:space:]]*}"
 [ ${#remote_sha} -eq 40 ] || die "неожиданный ответ git ls-remote: $remote_line"
 
@@ -93,10 +102,20 @@ if [ -n "${REGISTRY_TOKEN_FILE:-}" ]; then
 fi
 
 # Тянем ОБА образа ДО перезапуска: если второй недокачался, стек ещё не тронут.
+#
+# ⚠ Отказ отказу рознь, и глотать их одинаково нельзя. «Образа ещё нет» — штатное ожидание
+# сборки, а вот отказ доступа, опечатка в имени образа или пропавшая сеть — это поломка,
+# которая иначе выдавала бы себя за ожидание: обновления прекращаются НАВСЕГДА, при этом
+# таймер выглядит здоровым и в журнале каждые пять минут стоит успокаивающая строка.
 for image in "$IMAGE_APP:$tag" "$IMAGE_BACKEND:$tag"; do
-  if ! docker pull --quiet "$image" >/dev/null 2>&1; then
-    log "образа $image ещё нет — вероятно, CI не закончил сборку; попробую на следующем тике"
-    exit 0
+  if ! pull_err=$(docker pull --quiet "$image" 2>&1); then
+    case "$pull_err" in
+      *"manifest unknown"*|*"not found"*|*"manifest for"*)
+        log "образа $image ещё нет — CI не закончил сборку; попробую на следующем тике"
+        exit 0 ;;
+      *)
+        die "не удалось скачать $image: $(printf '%s' "$pull_err" | tr '\n' ' ')" ;;
+    esac
   fi
 done
 

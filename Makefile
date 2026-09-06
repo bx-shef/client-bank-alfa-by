@@ -209,14 +209,17 @@ help:
 
 ## Доедет ли запрос с домена до приложения: конфиг, контейнер, статика, таймер
 #
-#   make bitrix-check                       # домен из ./.env
+#   make bitrix-check                       # домен и порт из ./.env
 #   make bitrix-check DOMAIN=bank-app.example.by
+#   PORT=8081 make bitrix-check             # если контейнер опубликован не на 8080
 #
 # ⚠ Работает и ДО появления домена — ходит по Host-заголовку на 127.0.0.1.
 bitrix-check:
 	@t=$$(mktemp /tmp/bitrix-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/bitrixvm-check.sh" \
-	  && bash "$$t" "$${DOMAIN:-$(call env-value,DOMAIN)}"
+	  && d="$${DOMAIN:-}"; [ -n "$$d" ] || d="$(call env-value,DOMAIN)"; \
+	     p="$${PORT:-}"; [ -n "$$p" ] || p="$(call env-value,APP_BIND_PORT)"; \
+	     bash "$$t" "$$d" "$${p:-8080}"
 
 ## Состояние автообновления: включён ли таймер, какой коммит развёрнут, последний прогон
 deploy-status:
