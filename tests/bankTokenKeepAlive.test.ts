@@ -27,7 +27,11 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     // строки не склеиваются между собой — дедуп по гранту проверяется отдельным набором.
     grantId: '',
     connectedAt: NOW - HOUR,
-    expiresAt: NOW + HOUR,
+    // ⚠ Access живёт ЧАС от момента выдачи — так отвечает боевая Альфа (`expires_in: 3600`).
+    // Прежняя фикстура ставила `NOW + HOUR` при `connectedAt: NOW - HOUR`, то есть описывала
+    // ДВУХЧАСОВОЙ токен, какого банк не выдаёт. Пока отбор на `expiresAt` не смотрел, это ничего
+    // не значило; с #488 значит, и врущая фикстура прятала бы поведение.
+    expiresAt: NOW,
     hasRefresh: true,
     // ⚠ По умолчанию НЕ на паузе. Продление обязано идти и для паузы (#576), и отдельный тест
     // ниже это закрепляет — но базовая фикстура описывает обычное подключение.
@@ -42,7 +46,12 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
 
 describe('selectBankAccountsNearExpiry', () => {
   it('свежее подключение не трогаем — лишний рефреш это запрос к банку', () => {
-    const r = selectBankAccountsNearExpiry([acc({ connectedAt: NOW - HOUR })], NOW)
+    // ⚠ «Свежее» теперь означает «access ещё далеко до половины срока», а не «строка молодая»
+    // (#488). Прежний пример брал возраст в час — при часовом токене это момент, когда обновляться
+    // УЖЕ поздно: замер дал отказ через три секунды после истечения.
+    const r = selectBankAccountsNearExpiry(
+      [acc({ connectedAt: NOW - 10 * 60_000, expiresAt: NOW + 50 * 60_000 })], NOW
+    )
     expect(r.due).toEqual([])
     expect(r.unrefreshable).toEqual([])
   })
@@ -63,8 +72,14 @@ describe('selectBankAccountsNearExpiry', () => {
     // ⚠ Возраст подобран под ПОЛОСУ: обновляем с половины срока (#489), значит для Альфы порог
     // 5 ч, для Приора 6 ч. Прежний пример брал 9 ч — он различал банки только при полосе 0.2 и
     // молча перестал бы что-либо различать, останься здесь константа.
+    // ⚠ `expiresAt: 0` — срок access НЕИЗВЕСТЕН, и только тогда решает полоса провайдера (#488).
+    // У строки с известным сроком access давно истёк бы (он живёт час), и она попала бы в
+    // обновление по этому поводу — различие банков было бы не видно вовсе.
     const age = NOW - 5.5 * HOUR
-    const rows = [acc({ connectedAt: age }), acc({ provider: 'prior-by', accountKey: 'P1', connectedAt: age })]
+    const rows = [
+      acc({ connectedAt: age, expiresAt: 0 }),
+      acc({ provider: 'prior-by', accountKey: 'P1', connectedAt: age, expiresAt: 0 })
+    ]
     const r = selectBankAccountsNearExpiry(rows, NOW)
     expect(r.due.map(d => d.provider)).toEqual(['alfa-by'])
   })
@@ -334,12 +349,12 @@ describe('runBankKeepAlive', () => {
 
 describe('каденция и инварианты', () => {
   it('интервал клампится — опечатка не превращает это в цикл запросов к банку', () => {
-    expect(bankKeepAliveIntervalMs(60)).toBe(60 * 60_000)
+    // ⚠ Потолок ВЫВОДИТСЯ теперь из жизни ACCESS-токена, а не из полосы refresh (#488): час,
+    // заданный оператором, клампится до 15 минут. Прежние 60 минут равнялись ВСЕЙ жизни access,
+    // то есть тик мог прийтись ровно на момент, когда обновляться уже поздно.
+    expect(bankKeepAliveIntervalMs(60)).toBe(15 * 60_000)
     expect(bankKeepAliveIntervalMs(0)).toBe(BANK_KEEP_ALIVE_MINUTES * 60_000)
     expect(bankKeepAliveIntervalMs(1)).toBe(5 * 60_000)
-    // Верхний потолок ВЫВОДИТСЯ из полосы, а не выбран числом: 60 мин = половина 2-часовой
-    // полосы Альфы. Прежний фиксированный кламп (240 мин) был ШИРЕ полосы, то есть законная
-    // настройка «пореже, чтобы не дёргать банк» возвращала ту самую ночную смерть — молча.
     expect(bankKeepAliveIntervalMs(99_999)).toBe(maxBankKeepAliveMinutes() * 60_000)
     expect(maxBankKeepAliveMinutes() * 60_000).toBeLessThan(narrowestBandMs())
     expect(bankKeepAliveIntervalMs(Number.NaN)).toBe(BANK_KEEP_ALIVE_MINUTES * 60_000)
@@ -366,7 +381,10 @@ describe('каденция и инварианты', () => {
     // ⚠ Пин ЗНАЧЕНИЯ, а не неравенства: перепутанный множитель в формуле полосы дал бы 20 ч
     // вместо 5 ч, и проверка «каденция меньше полосы» осталась бы зелёной на сломанной формуле.
     expect(narrowestBandMs()).toBe(5 * HOUR)
-    expect(BANK_KEEP_ALIVE_MINUTES).toBe(60) // документировано в .env.example и QUEUES.md
+    // ⚠ 10 минут, а не 60 (#488): час равен всей жизни access-токена, и тик такой же длины мог
+    // прийтись на момент, когда обменивать refresh уже поздно. Замер: отказ через три секунды
+    // после истечения access.
+    expect(BANK_KEEP_ALIVE_MINUTES).toBe(10)
   })
 })
 
@@ -717,5 +735,74 @@ describe('счёт, подключённый с НЕСКОЛЬКИХ порта�
     const text = logged.join('\n')
     expect(text).toMatch(/MORE THAN ONE portal/)
     expect(text, 'не сказано, что переподключение лечит лишь до следующего обновления').toMatch(/until the next refresh/)
+  })
+})
+
+// Продление идёт, ПОКА ЖИВ ACCESS-ТОКЕН (#488, лестница пауз 2026-09-06).
+//
+// ⚠ Измерено на боевом контуре: обмен `grant_type=refresh_token` проходит, пока access жив
+// (пауза 1 мин и 30 мин → 200), и отвергается через ТРИ СЕКУНДЫ после его истечения
+// (пауза 60 мин → 400 `invalid_grant: User session not alive`). До этой правки отбор смотрел
+// только на возраст refresh — полосу в ПЯТЬ часов, — и приходил в банк, когда было уже поздно.
+describe('продление по сроку ACCESS-токена (#488)', () => {
+  const H = 3_600_000
+  const T0 = 1_757_138_400_000
+  /** Пара выдана в T0, access живёт час — как отвечает боевая Альфа (`expires_in: 3600`). */
+  const row = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
+    id: 1, memberId: 'm', provider: 'alfa-by', accountKey: '~pending:a',
+    connectedAt: T0, lastAttemptAt: 0, expiresAt: T0 + H, hasRefresh: true,
+    consentExpiresAt: 0, accountConfirmedAt: 0, grantId: 'g1', pollPaused: false, ...over
+  })
+  const due = (nowMs: number, over?: Partial<BankAccountInfo>) =>
+    selectBankAccountsNearExpiry([row(over)], nowMs).due.length
+
+  it('до половины срока access в банк не ходим', () => {
+    expect(due(T0 + 29 * 60_000)).toBe(0)
+  })
+
+  it('на половине срока access — идём, хотя refresh ещё молод (2 часа до полосы)', () => {
+    // Ровно измеренная точка: 30 минут до истечения часового токена — обмен проходит.
+    expect(due(T0 + 30 * 60_000)).toBe(1)
+  })
+
+  it('после истечения access всё равно пробуем — решает банк, а не мы', () => {
+    // ⚠ Мы уже знаем, что банк тут откажет. Но «не пробовать» означало бы похоронить строку своей
+    // оценкой, а `expiredCause` (#488) строится на том, что попытка БЫЛА: без неё карточка советует
+    // НЕ переподключать ровно там, где переподключение и есть лекарство.
+    expect(due(T0 + 2 * H)).toBe(1)
+  })
+
+  it('неизвестный срок access решается по возрасту refresh, как раньше', () => {
+    // ⚠ «Не знаем» не должно превращаться в поход в банк на каждом тике.
+    expect(due(T0 + 2 * H, { expiresAt: 0 })).toBe(0)
+    expect(due(T0 + 6 * H, { expiresAt: 0 })).toBe(1)
+  })
+
+  it('согласие банка истекло — повод по access его не перебивает', () => {
+    const s = selectBankAccountsNearExpiry([row({ consentExpiresAt: T0 - 1 })], T0 + 40 * 60_000)
+    expect(s.due).toHaveLength(0)
+    expect(s.expired).toHaveLength(1)
+  })
+
+  it('нечем продлевать — повод по access не шлёт в банк впустую', () => {
+    const s = selectBankAccountsNearExpiry([row({ hasRefresh: false })], T0 + 40 * 60_000)
+    expect(s.due).toHaveLength(0)
+    expect(s.unrefreshable).toHaveLength(1)
+  })
+
+  it('счета одного гранта не удваивают запрос и по этому поводу', () => {
+    // Банк ротирует refresh: два обмена одной пары — второй со сгоревшим токеном.
+    const s = selectBankAccountsNearExpiry(
+      [row({ id: 1, accountKey: 'BY01' }), row({ id: 2, accountKey: 'BY02' })],
+      T0 + 40 * 60_000
+    )
+    expect(s.due).toHaveLength(1)
+  })
+
+  it('каденция не может стать реже второй половины жизни access', () => {
+    // ⚠ Оператор, разредивший сканирование «чтобы не дёргать банк», иначе вернул бы ночную смерть.
+    expect(maxBankKeepAliveMinutes()).toBeLessThanOrEqual(15)
+    expect(bankKeepAliveIntervalMs(60)).toBeLessThanOrEqual(15 * 60_000)
+    expect(BANK_KEEP_ALIVE_MINUTES).toBeLessThanOrEqual(maxBankKeepAliveMinutes())
   })
 })

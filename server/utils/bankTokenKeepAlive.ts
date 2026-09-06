@@ -27,12 +27,32 @@
 //      scan and counted separately — that count is the thing worth showing an admin.
 
 import type { BankProviderId } from '../../app/types/statement'
+import { ALFA_ACCESS_TOKEN_TTL_SEC } from '../../app/utils/alfaOauth'
 import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 import { sanitizeForLog } from './logSanitize'
 import { portalHash } from './telemetryAttributes'
 
 const HOUR_MS = 3_600_000
+
+/**
+ * Доля жизни ACCESS-токена, после которой идём за новой парой.
+ *
+ * ⚠ ЧИСЛО ИЗМЕРЕНО, а не выбрано (#488, лестница пауз 2026-09-06). Банк принимает
+ * `grant_type=refresh_token`, ПОКА ЖИВ ACCESS-ТОКЕН, и отвергает, как только тот истёк:
+ *
+ *   пауза 1 мин   (access жив)                    → 200
+ *   пауза 30 мин  (access жив, 30 мин до конца)   → 200
+ *   пауза 60 мин  (access истёк 3 СЕКУНДЫ назад)  → 400 invalid_grant: User session not alive
+ *
+ * Это прямо опровергает документацию банка («Если токен доступа ИСТЕК… обменяйте refresh на новую
+ * пару»): именно после истечения обменять и нельзя, а заявленные для refresh 36000 с недостижимы.
+ *
+ * Половина взята потому, что это ЕДИНСТВЕННАЯ проверенная точка: на 30 минутах до конца
+ * шестидесятиминутного токена обмен прошёл. Брать больше — уходить в непроверенное, ближе к той
+ * границе, за которой измерен отказ.
+ */
+export const ACCESS_REFRESH_AT = 0.5
 
 // ⚠ Lifetimes and the renew band live in `app/utils/bankTokenLifetime.ts`, not here: the settings
 // UI decides what to show an admin from the SAME numbers. Let them drift and you get exactly the
@@ -44,9 +64,15 @@ export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRE
  *  (tens of rows), so saturation means something is wrong, not that we're busy. */
 export const MAX_BANK_KEEP_ALIVE_BATCH = 100
 
-/** Default scan cadence in minutes — half the narrowest band, so one missed tick still leaves a
- *  whole band to catch the token in. */
-export const BANK_KEEP_ALIVE_MINUTES = 60
+/**
+ * Каденция сканирования, минуты.
+ *
+ * ⚠ БЫЛО 60, и это убивало подключения (#488). Час равен всей жизни access-токена Альфы, поэтому
+ * тик мог прийтись ровно на момент, когда обновляться УЖЕ поздно — замер показал отказ через три
+ * секунды после истечения. Тик обязан попадать ВНУТРЬ второй половины жизни токена, а не совпадать
+ * с её концом.
+ */
+export const BANK_KEEP_ALIVE_MINUTES = 10
 
 /**
  * The narrowest near-expiry band across configured providers, in ms — the width of the window a
@@ -80,7 +106,12 @@ export const MIN_BANK_KEEP_ALIVE_MINUTES = 5
  * setting that is honoured and does not work.
  */
 export function maxBankKeepAliveMinutes(): number {
-  return Math.max(MIN_BANK_KEEP_ALIVE_MINUTES, Math.floor(narrowestBandMs() / 2 / 60_000))
+  // ⚠ Потолок ВЫВЕДЕН из жизни ACCESS-токена, а не из полосы refresh (#488). Обновляться надо,
+  // пока access жив; значит между двумя тиками не должна умещаться вторая половина его жизни —
+  // иначе оператор, разредивший сканирование «чтобы не дёргать банк», вернул бы ту самую ночную
+  // смерть, причём при зелёных проверках на всех экранах.
+  const halfLifeMs = ALFA_ACCESS_TOKEN_TTL_SEC * 1000 * (1 - ACCESS_REFRESH_AT)
+  return Math.max(MIN_BANK_KEEP_ALIVE_MINUTES, Math.floor(halfLifeMs / 2 / 60_000))
 }
 
 export interface BankKeepAliveSelection {
@@ -199,7 +230,27 @@ export function selectBankAccountsNearExpiry(
       unrefreshable.push(ref)
       continue
     }
+    // ⚠ ГЛАВНЫЙ ПОВОД ПОЙТИ В БАНК — СРОК ACCESS-ТОКЕНА, и до 2026-09-06 его тут не было вовсе.
+    // Именно это убивало подключения: отбор смотрел только на возраст refresh (полоса — пять
+    // часов), а банк к тому времени уже час как отвергал обмен. Замер: 30 минут до истечения
+    // access — обмен проходит, три секунды ПОСЛЕ — `invalid_grant: User session not alive`.
+    //
+    // ⚠ Срок жизни access считаем ПО СТРОКЕ: `connectedAt` — момент выдачи текущей пары,
+    // `expiresAt` — её конец, оба записаны при сохранении. Константы тут нет намеренно: банк волен
+    // сменить `expires_in`, и зашитое число молча разъехалось бы с действительностью — ровно так
+    // мы уже обожглись на 36000 с для refresh.
+    //
+    // ⚠ Неизвестный срок (нули, битые метки) НЕ считается поводом: «не знаем» превратилось бы в
+    // поход в банк на каждом тике. Такие строки решаются по возрасту, как раньше.
+    const accessLifeMs = row.expiresAt - row.connectedAt
+    const accessDue = Number.isFinite(accessLifeMs) && accessLifeMs > 0
+      && nowMs >= row.connectedAt + accessLifeMs * ACCESS_REFRESH_AT
+
     const threshold = refreshAtAgeMs(row.provider, opts.band)
+    // ⚠ Этот гейт БЕЗУСЛОВЕН, и ослаблять его нельзя (поймано тестом «провайдер с неизвестным
+    // сроком ПРОПУСКАЕТСЯ»). `threshold <= 0` значит «у провайдера нет онлайн-OAuth вовсе» —
+    // например `manual`, у которого и токена-то нет. Пустив сюда повод по access, мы отправили бы
+    // в банк строку, для которой `bankRefreshRequest` просто бросает исключение.
     if (threshold <= 0) continue // lifetime unknown/none → don't touch the bank
     const ttlMs = (BANK_REFRESH_TTL_SEC[row.provider] ?? 0) * 1000
     const age = nowMs - row.connectedAt
@@ -228,7 +279,8 @@ export function selectBankAccountsNearExpiry(
       expired.push(ref)
       continue
     }
-    if (age < threshold) continue
+    // Идём в банк, если пора по ЛЮБОМУ из двух поводов.
+    if (!accessDue && age < threshold) continue
     // Обновление по гранту уже запланировано — второй счёт того же согласия только сжёг бы refresh.
     if (grantTaken(row)) continue
     if (due.length < limit) {
