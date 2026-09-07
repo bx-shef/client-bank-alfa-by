@@ -1,7 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
-        bank-history alert-test refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
+        bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -261,14 +261,6 @@ poll-check:
 	@t=$$(mktemp /tmp/poll-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-poll-check.sh" \
 	  && bash "$$t" "$${SINCE:-}"
-
-## Послать тестовое сообщение в канал оповещений и сказать, дошло ли (#466)
-#
-#   make alert-test
-alert-test:
-	@t=$$(mktemp /tmp/alert-test.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "$(RAW)/prod-alert-test.sh" \
-	  && bash "$$t"
 
 ## Кого приложение не опознало и каким счётом это чинится (#501)
 #
