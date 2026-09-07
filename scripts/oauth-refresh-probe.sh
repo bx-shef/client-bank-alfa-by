@@ -46,8 +46,14 @@ row=$(docker compose -f "$COMPOSE" exec -T db \
 SQL
 )
 if [ -z "${row:-}" ]; then
-  echo "строк нет. Что ответил Postgres (если ошибка):"; sed 's/^/  /' /tmp/orp-err.$$ 2>/dev/null
-  rm -f /tmp/orp-err.$$; exit 0
+  # ⚠ «Строк нет» — это НЕ отказ банка, а невозможность попробовать. Лестница обязана различать
+  # их машинной меткой, а не наличием слова в прозе: 2026-09-07 она объявила «банк не терпит 1m»
+  # на отсутствующем подключении Альфы, то есть выдала уверенный вердикт о банке, которого не
+  # спрашивали.
+  echo "VERDICT|not-attempted"
+  echo "подключения нет в базе — обмен не выполнялся. Что ответил Postgres (если ошибка):"
+  sed 's/^/  /' /tmp/orp-err.$$ 2>/dev/null
+  rm -f /tmp/orp-err.$$; exit 2
 fi
 rm -f /tmp/orp-err.$$
 
@@ -69,7 +75,10 @@ js=$(mktemp /tmp/orp.XXXXXX.js) && trap 'rm -f "$js"' EXIT
 cat > "$js" <<'NODE'
 const crypto = require('node:crypto')
 const P = process.env.P
-const fail = (m) => { console.log('РЕЗУЛЬТАТ: ' + m); process.exit(0) }
+// ⚠ Любой выход ДО ответа банка — «не состоялось», а не отказ: нет ключа, не расшифровался блоб,
+// не хватает env, не достучались по сети. Смешивать их с отказом банка нельзя — вердикт лестницы
+// строится на этом различии.
+const fail = (m) => { console.log('VERDICT|not-attempted'); console.log('РЕЗУЛЬТАТ: ' + m); process.exit(0) }
 const env = (n) => (process.env[n] || '').trim()
 const sum = (v) => crypto.createHash('sha256').update(v).digest('hex').slice(0, 12)
 
@@ -166,6 +175,7 @@ const redact = (s) => String(s).split(token).join('***')
     console.log('  refresh_token: ' + (j.refresh_token ? 'получен, длина ' + j.refresh_token.length : 'НЕ выдан'))
     console.log('')
     if (!j.access_token) fail('200 без access_token')
+    console.log('VERDICT|ok')
     console.log('РЕЗУЛЬТАТ: ✅ ОБНОВЛЕНИЕ ПРОШЛО.')
     const keep = j.refresh_token || token
     const iv = crypto.randomBytes(12)
@@ -177,13 +187,14 @@ const redact = (s) => String(s).split(token).join('***')
   } else {
     console.log('  ' + redact(text).slice(0, 600))
     console.log('')
-    console.log('РЕЗУЛЬТАТ: обновление НЕ прошло.')
+    console.log('VERDICT|bank-refused')
+    console.log('РЕЗУЛЬТАТ: обновление НЕ прошло — банк ОТВЕТИЛ отказом.')
   }
 })()
 NODE
 
 res=$(docker compose -f "$COMPOSE" exec -T -e BLOB="$blob" -e P="$P" backend node < "$js" 2>&1)
-echo "$res" | grep -v '^SAVE|'
+echo "$res" | grep -vE '^(SAVE|VERDICT)\|'
 save=$(echo "$res" | grep '^SAVE|' | head -1)
 
 if [ -n "${save:-}" ]; then
@@ -204,3 +215,21 @@ if [ -n "${save:-}" ]; then
     echo "$upd" | sed 's/^/    /'
   fi
 fi
+
+# ⚠ КОД ВОЗВРАТА — ЕДИНСТВЕННЫЙ КАНАЛ ДЛЯ ЛЕСТНИЦЫ, и он выводится из машинной метки, а не из
+# кода возврата `docker compose`: тот отдаёт 1 и на «сервис не поднят», то есть на аварии стенда
+# лестница объявила бы отказ банка. Метку печатает только наш код и только после того, как
+# HTTP-статус банка реально прочитан.
+#   0 — банк обновил пару
+#   1 — банк ОТВЕТИЛ отказом (это ответ опыта)
+#   2 — обмена не было вовсе (нет строки, нет ключа, нет env, не достучались) — НЕ вердикт о банке
+verdict_code() {
+  case "$(printf '%s\n' "$1" | grep '^VERDICT|' | head -1 | cut -d'|' -f2)" in
+    ok)           return 0 ;;
+    bank-refused) return 1 ;;
+    *)            return 2 ;;
+  esac
+}
+
+verdict_code "$res"
+exit $?
