@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Лестница пауз: какой простой между обновлениями Альфа ещё терпит (#488).
+# Лестница пауз для ЛЮБОГО из трёх поставщиков: какой простой между обновлениями он терпит (#488).
 #
 # ЗАЧЕМ. Измерено: на паузе 2 минуты обновление проходит, на 5 ч 48 мин — банк отвечает
 # `invalid_grant: User session not alive`. Граница между ними НЕИЗВЕСТНА, а от неё зависит, как
@@ -19,26 +19,30 @@
 # лестница отвечала бы на вопрос о себе, а не о продукте.
 #
 # Использование:
-#   make alfa-refresh-schedule     # запустить в фоне (переживает выход из ssh)
-#   make alfa-refresh-log          # смотреть журнал
-#   make alfa-refresh-stop         # остановить
+#   P=alfa|prior|b24 make refresh-ladder      # запустить в фоне (переживает выход из ssh)
+#   P=alfa|prior|b24 make refresh-ladder-log   # смотреть журнал
+#   P=alfa|prior|b24 make refresh-ladder-stop  # остановить
+#
+# ⚠ Журнал и pid — СВОИ на поставщика: три лестницы идут параллельно и не мешают друг другу.
+# Общий файл склеил бы их ступени в одну кашу, а именно сравнение по ступеням и есть цель.
 #
 # Свой набор пауз:
-#   GAPS="1m 30m 1h 2h" make alfa-refresh-schedule
+#   GAPS="1m 30m 1h 2h" P=prior make refresh-ladder
 set -u
 
 BASE=/home/bitrix/bank-import
 cd "$BASE" 2>/dev/null || true
-LOG="$BASE/alfa-refresh-schedule.log"
-PIDF="$BASE/alfa-refresh-schedule.pid"
+P="${P:-alfa}"
+LOG="$BASE/refresh-ladder-$P.log"
+PIDF="$BASE/refresh-ladder-$P.pid"
 RAW_URL="${RAW_URL:-}"
 GAPS="${GAPS:-1m 30m 1h 2h 3h 4h 5h 6h 7h 8h 9h 10h 11h}"
 
 if [ "${1:-}" = "--stop" ]; then
   if [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null; then
-    echo "лестница остановлена (pid $(cat "$PIDF"))"
+    echo "лестница [$P] остановлена"
   else
-    echo "запущенной лестницы не нашёл"
+    echo "запущенной лестницы [$P] не нашёл"
   fi
   rm -f "$PIDF"
   exit 0
@@ -51,8 +55,8 @@ if [ "${1:-}" = "--log" ]; then
 fi
 
 if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
-  echo "лестница УЖЕ идёт (pid $(cat "$PIDF")). Журнал: make alfa-refresh-log"
-  echo "Остановить: make alfa-refresh-stop"
+  echo "лестница [$P] УЖЕ идёт (pid $(cat "$PIDF")). Журнал: P=$P make refresh-ladder-log"
+  echo "Остановить: P=$P make refresh-ladder-stop"
   exit 0
 fi
 
@@ -60,13 +64,13 @@ fi
 # меняется. Лестница обязана мерить одну и ту же версию запроса от первой ступени до последней.
 ONCE=$(mktemp /tmp/alfa-once.XXXXXX.sh)
 if [ -n "$RAW_URL" ]; then
-  curl -fsSL -o "$ONCE" "$RAW_URL/alfa-refresh-now.sh" || { echo "не скачал alfa-refresh-now.sh"; exit 2; }
+  curl -fsSL -o "$ONCE" "$RAW_URL/oauth-refresh-probe.sh" || { echo "не скачал oauth-refresh-probe.sh"; exit 2; }
 else
   echo "не задан RAW_URL — запускайте через 'make alfa-refresh-schedule'"; exit 2
 fi
 
 run_ladder() {
-  echo "=== ЛЕСТНИЦА ПАУЗ, старт $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
+  echo "=== ЛЕСТНИЦА ПАУЗ [$P], старт $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
   echo "ступени: $GAPS" >> "$LOG"
   echo "цель: найти самую длинную паузу между обновлениями, которую банк ещё терпит" >> "$LOG"
   echo >> "$LOG"
@@ -76,7 +80,7 @@ run_ladder() {
     echo "--- ступень $step: пауза $gap, засыпаю в $(date '+%H:%M:%S') ---" >> "$LOG"
     sleep "$gap" || { echo "sleep прерван — выходим" >> "$LOG"; break; }
     echo "--- ступень $step: пауза $gap ПРОШЛА, обновляю в $(date '+%H:%M:%S') ---" >> "$LOG"
-    out=$(bash "$ONCE" docker-compose.prod.yml 2>&1)
+    out=$(bash "$ONCE" "$P" docker-compose.prod.yml 2>&1)
     echo "$out" >> "$LOG"
     if echo "$out" | grep -q 'ОБНОВЛЕНИЕ ПРОШЛО'; then
       echo ">>> ступень $step ($gap): УСПЕХ — банк терпит паузу $gap" >> "$LOG"
@@ -98,14 +102,14 @@ run_ladder() {
 
 # ⚠ `setsid` + отвязка от терминала: прогон идёт сутками, а запускают его с телефона. Без этого
 # лестница умирала бы вместе с ssh-сессией — то есть на первой же ступени длиннее пары минут.
-setsid bash -c "$(declare -f run_ladder); LOG='$LOG'; PIDF='$PIDF'; ONCE='$ONCE'; GAPS='$GAPS'; run_ladder" \
+setsid bash -c "$(declare -f run_ladder); LOG='$LOG'; PIDF='$PIDF'; ONCE='$ONCE'; GAPS='$GAPS'; P='$P'; run_ladder" \
   </dev/null >/dev/null 2>&1 &
 echo $! > "$PIDF"
-echo "Лестница запущена (pid $(cat "$PIDF")). Она переживёт выход из ssh."
+echo "Лестница [$P] запущена (pid $(cat "$PIDF")). Она переживёт выход из ssh."
 echo "Ступени: $GAPS"
 echo
-echo "Смотреть:     make alfa-refresh-log"
-echo "Остановить:   make alfa-refresh-stop"
+echo "Смотреть:     P=$P make refresh-ladder-log"
+echo "Остановить:   P=$P make refresh-ladder-stop"
 echo
 echo "⚠ Первая ступень — через минуту. Дальше паузы растут; на первой ошибке прогон встанет,"
 echo "  и последняя удавшаяся ступень будет ответом «какой простой банк терпит»."

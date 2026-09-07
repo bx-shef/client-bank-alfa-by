@@ -1,7 +1,7 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
-        bank-history alfa-refresh-now alfa-refresh-schedule alfa-refresh-log alfa-refresh-stop \
+        bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -362,50 +362,50 @@ reap-status:
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
 	  && bash "$$t" docker-compose.prod.yml
 
-## Лестница пауз: какой простой между обновлениями Альфа ещё терпит (#488)
+## Обновить OAuth-токен ПРЯМО СЕЙЧАС и показать, что шлём и что ответили (#488)
 #
-#   make alfa-refresh-schedule     # запустить в фоне (переживает выход из ssh)
-#   make alfa-refresh-log          # смотреть журнал
-#   make alfa-refresh-stop         # остановить
+#   P=alfa make refresh-now      # Альфа-Банк
+#   P=prior make refresh-now     # Приорбанк
+#   P=b24 make refresh-now       # Bitrix24
 #
-# ⚠ Измеряет ПАУЗУ МЕЖДУ ОБНОВЛЕНИЯМИ, а не время от подключения: удачное обновление выдаёт новую
-# пару и сбрасывает отсчёт простоя, поэтому лестница «от старта» после первого успеха проверяла бы
-# всегда один и тот же интервал. Ступени: 1м, 30м, 1ч, 2ч … 11ч, останов на первой ошибке —
-# последняя удавшаяся пауза безопасна, первая упавшая нет.
-# ⚠ Свой набор: GAPS="1m 30m 1h 2h" make alfa-refresh-schedule
-alfa-refresh-schedule:
-	@echo "[make] скачиваю alfa-refresh-schedule.sh из $(REF)"
-	@t=$$(mktemp /tmp/alfa-sch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-schedule.sh" \
-	  && RAW_URL="$(RAW)" GAPS="$${GAPS:-}" bash "$$t"
+# ⚠ Один скрипт на троих: ответ должен получаться одинаковым способом, иначе три поставщика потом
+# не сравнить. Форма запроса у них РАЗНАЯ (Б24 и Альфа — креды в теле, Приор — Basic либо
+# подписанный client_assertion), и проба строит её так же, как продукт.
+# ⚠ ПИШЕТ в базу: все трое ротируют refresh при обмене, и не сохранив новую пару, проба убила бы
+# подключение. Секреты и токены в вывод не попадают.
+refresh-now:
+	@echo "[make] скачиваю oauth-refresh-probe.sh из $(REF)"
+	@t=$$(mktemp /tmp/orp.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/oauth-refresh-probe.sh" \
+	  && bash "$$t" "$${P:-alfa}" docker-compose.prod.yml
 
-## Журнал лестницы пауз (#488)
-alfa-refresh-log:
-	@t=$$(mktemp /tmp/alfa-sch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-schedule.sh" \
-	  && bash "$$t" --log
-
-## Остановить лестницу пауз (#488)
-alfa-refresh-stop:
-	@t=$$(mktemp /tmp/alfa-sch.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-schedule.sh" \
-	  && bash "$$t" --stop
-
-## Обновить токен Альфы ПРЯМО СЕЙЧАС и показать, что шлём и что ответил банк (#488)
+## Лестница пауз: какой простой между обновлениями терпит поставщик (#488)
 #
-#   make alfa-refresh-now
+#   P=alfa make refresh-ladder        # запустить в фоне (переживает выход из ssh)
+#   P=prior make refresh-ladder
+#   P=b24 make refresh-ladder
 #
-# ⚠ Отвечает на вопрос, который рассуждением не решить: банк отверг штатное продление ВНУТРИ
-# документированного срока refresh-токена. Прошло сейчас, вскоре после подключения — дело во
-# ВРЕМЕНИ; не прошло и сейчас — дело в том, ЧТО МЫ ШЛЁМ, и продление не работало никогда.
-# ⚠ В отличие от `bank-history`, проба ПИШЕТ в базу: банк ротирует refresh при обновлении, и не
-# сохранив новую пару, она убила бы подключение. Секреты в вывод не попадают — про отправляемый
-# токен печатаются только признаки (длина, контрольная сумма, пробелы, набор символов).
-alfa-refresh-now:
-	@echo "[make] скачиваю alfa-refresh-now.sh из $(REF)"
-	@t=$$(mktemp /tmp/alfa-rn.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "$(RAW)/alfa-refresh-now.sh" \
-	  && bash "$$t" docker-compose.prod.yml
+# ⚠ Измеряет ПАУЗУ МЕЖДУ ОБНОВЛЕНИЯМИ, а не время от подключения: удачный обмен выдаёт новую пару и
+# сбрасывает отсчёт простоя. Ступени 1м, 30м, 1ч, 2ч … 11ч, останов на первой ошибке.
+# ⚠ Журнал и pid — свои на поставщика, три лестницы идут параллельно.
+# ⚠ Свой набор: GAPS="1m 30m 1h" P=prior make refresh-ladder
+refresh-ladder:
+	@echo "[make] скачиваю oauth-refresh-ladder.sh из $(REF)"
+	@t=$$(mktemp /tmp/orl.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/oauth-refresh-ladder.sh" \
+	  && RAW_URL="$(RAW)" P="$${P:-alfa}" GAPS="$${GAPS:-}" bash "$$t"
+
+## Журнал лестницы пауз: P=alfa|prior|b24 make refresh-ladder-log (#488)
+refresh-ladder-log:
+	@t=$$(mktemp /tmp/orl.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/oauth-refresh-ladder.sh" \
+	  && P="$${P:-alfa}" bash "$$t" --log
+
+## Остановить лестницу пауз: P=alfa|prior|b24 make refresh-ladder-stop (#488)
+refresh-ladder-stop:
+	@t=$$(mktemp /tmp/orl.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/oauth-refresh-ladder.sh" \
+	  && P="$${P:-alfa}" bash "$$t" --stop
 
 ## Продлевал ли крон банк-токен — ИЗ БАЗЫ, а не из лога (переживает перевыкат, #488)
 #
