@@ -9,7 +9,7 @@
 // response body carries a URL with a signed state; keep it out of any downstream Referer).
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import { bankConnectConfigFromEnv, handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
+import { handleBankConnectStart, type ConnectStartDeps } from '../../utils/bankConnectStart'
 import { findMyCompanyAccounts, myCompanyGate } from '../../utils/myCompanyRequisites'
 import { buildPriorConnectUrl, priorConnectConfigFromEnv } from '../../utils/priorConnectStart'
 import { signPriorJwt } from '../../utils/priorJwt'
@@ -36,7 +36,6 @@ function liveConnectDeps(): ConnectStartDeps {
       const result = res?.result as { ID?: unknown, ADMIN?: unknown } | undefined
       return { userId: result?.ID != null ? String(result.ID) : '', isAdmin: result?.ADMIN === true }
     },
-    config: bankConnectConfigFromEnv,
     priorConfig: priorConnectConfigFromEnv,
     // Prior's live preamble (A5b): token Б → consent → RS256-signed `request` JWT. Client
     // authentication for the token call is resolved upstream by `resolvePriorTokenAuth` +

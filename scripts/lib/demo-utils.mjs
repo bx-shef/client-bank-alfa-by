@@ -1,7 +1,7 @@
-// Pure helpers for scripts/alfa-oauth-test.mjs — extracted so the
-// security-sensitive bits (token/number masking) and the fiddly parsers
+// Pure helpers for the bank recon scripts (prior-oauth-test.mjs; also lib/cli.mjs and lib/env.mjs)
+// — extracted so the security-sensitive bits (token/number masking) and the fiddly parsers
 // (.env lines, OAuth redirect, CLI args) are unit-tested (tests/demoUtils.test.ts).
-// Plain ESM, no deps — the demo script stays standalone (no build step).
+// Plain ESM, no deps — the scripts stay standalone (no build step).
 
 /** Parse `--flag value` / `--bool` CLI args into a plain object. */
 export function parseArgs(argv) {

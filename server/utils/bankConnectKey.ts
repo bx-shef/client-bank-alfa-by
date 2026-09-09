@@ -17,12 +17,14 @@
 //
 // ⚠ КЛЮЧ НЕ ПОПАДАЕТ НИКУДА, КРОМЕ ШИФРОВАННОГО ПОЛЯ: ни в лог, ни в ответ, ни в текст ошибки.
 // Он опаснее refresh-токена — тот ротируется при каждом обмене и утёкший стареет сам, а ключ годен,
-// пока клиент его не отзовёт.
+// пока клиент его не отзовёт. Ответ банка на отказ В ЛОГ пишется, но прогнанным через
+// `redactValues` по фактически отправленным ключу и секрету — см. ветку `catch` ниже.
 
 import type { BankProviderId } from '../../app/types/statement'
 import { buildPasswordGrantBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { isPendingAccountKey, provisionalAccountKey } from '../../app/utils/bankAccountKey'
 import { gateConnectAdmin, type ConnectStartDeps } from './bankConnectStart'
+import { describeUpstreamError, redactValues } from './logSanitize'
 import type { BankToken } from './bankTokenStore'
 
 /** Ответ роута: 200 + что подключили, либо 4xx/5xx + причина. */
@@ -93,9 +95,18 @@ export async function handleBankConnectKey(
     const raw = await deps.exchange(config.baseUrl, buildPasswordGrantBody(config, key, clientSecret))
     tokens = parseTokenResponse(raw as Record<string, unknown>)
   } catch (e) {
-    // ⚠ Текст банка наружу НЕ отдаём: в ответ на негодный ключ он повторяет присланные параметры,
-    // а среди них сам ключ и `client_secret`. Человеку — что делать, в лог — форма ошибки без тела.
-    deps.log?.(`alfa password grant failed: ${(e as Error)?.name ?? 'error'}`)
+    // ⚠ Текст банка НАРУЖУ не отдаём, но В ЛОГ отдаём — РЕДАКТИРОВАННЫМ. Первая редакция писала
+    // только имя класса исключения (`FetchError`), и это оказалось отказом, который невозможно
+    // разобрать: на живом подключении 2026-09-09 админ получил «банк не принял ключ API» и не мог
+    // узнать, дело в ключе, в `client_id`, в адресе (песочница вместо боевого) или в сети — а
+    // разбираются эти четыре причины в четырёх разных местах. Осторожность, доведённая до
+    // неотличимости причин, перестаёт быть осторожностью.
+    //
+    // ⚠ Двойная редакция обязательна, и шаблонов ОДНИХ не хватает: `redactCredentials` ловит
+    // ФОРМУ (`client_secret=…`, JWT), а банк волен процитировать голое ЗНАЧЕНИЕ ключа — оно едет
+    // в `username=`, которого в шаблонах нет. `redactValues` вырезает ровно те две строки, что мы
+    // только что отправили, поэтому промах шаблона ничего не открывает.
+    deps.log?.(`alfa password grant failed: ${redactValues(describeUpstreamError(e), [key, clientSecret])}`)
     return {
       status: 502,
       body: { error: 'банк не принял ключ API. Проверьте, что ключ скопирован целиком, действителен и выпущен под наш Client ID' }

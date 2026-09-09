@@ -402,4 +402,30 @@ describe('#488 подключение Альфы ключом API', () => {
     expect(wrapper.find('[data-testid="key-connected"]').exists()).toBe(false)
     keyReply.value = { connected: true }
   })
+
+  // ⚠ ЖИВАЯ НАХОДКА 2026-09-09. Админ получил отказ на ключе Альфы, переключился на Приорбанк — и
+  // над кнопкой «Подключить Приорбанк» осталась висеть та же красная плашка «банк не принял ключ
+  // API». То есть приложение приписало Приору ошибку, которой у него не было и быть не могло: он
+  // ключами не подключается вовсе. Со стороны это читается как «второй банк тоже сломан».
+  it('смена банка ГАСИТ чужой отказ и стирает ключ из поля', async () => {
+    mockState.isInit = true
+    mockState.isAdmin = true
+    keyReply.value = { error: 'банк не принял ключ API' }
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="api-key-input"]').setValue('BAD')
+    await wrapper.find('[data-testid="connect-key-button"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(true)
+
+    await pickPrior(wrapper)
+    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(false)
+    // Поле ключа у Приора не рендерится вовсе; вернувшись к Альфе, находим его пустым — ключ
+    // выпущен ПОД КОНКРЕТНЫЙ банк, и держать его наготове для другого нельзя.
+    const radios = wrapper.findAll('[role="radio"]')
+    await radios[0]!.trigger('click')
+    await nextTick()
+    expect((wrapper.find('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe('')
+    keyReply.value = { connected: true }
+  })
 })

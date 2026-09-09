@@ -65,7 +65,7 @@ import {
   maskToken as maskTokenPure, maskNumber as maskNumberPure
 } from './lib/demo-utils.mjs'
 import { loadDotEnv } from './lib/env.mjs'
-// Console + HTTP plumbing shared with alfa-oauth-test.mjs (scripts/lib).
+// Console + HTTP plumbing shared with the other recon scripts (scripts/lib).
 import { C, log, ok, warn, err, head, die, openBrowser } from './lib/cli.mjs'
 import { httpRequest } from './lib/http.mjs'
 // The pure Open Banking (СПР) core (app/utils/priorOauth.ts) — imported DIRECTLY,

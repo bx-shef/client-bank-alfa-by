@@ -126,6 +126,40 @@ describe('#488 подключение ключом: секреты не выте
     expect(String(r.body.error)).toMatch(/ключ API/)
   })
 
+  // ⚠ ЖИВАЯ НАХОДКА 2026-09-09. Первая редакция логировала одно имя класса исключения
+  // (`deps.log(e.name)` → «Error»), и отказ стал НЕРАЗБИРАЕМЫМ: админ получил «банк не принял ключ
+  // API» и не мог узнать, дело в ключе, в `client_id`, в адресе (песочница вместо боевого) или в
+  // сети — а чинятся эти четыре причины в четырёх разных местах. Тест держит ОБА свойства сразу,
+  // потому что по отдельности каждое чинится неправильно: молчание «ради безопасности» и
+  // болтливость «ради диагностики».
+  it('причина отказа ПОПАДАЕТ В ЛОГ — иначе чинить нечего', async () => {
+    const { d, logs } = deps({
+      exchange: async () => {
+        throw Object.assign(new Error('[POST] "https://bank.test:8273/token": 400 Bad Request'), {
+          data: { error: 'invalid_client', error_description: 'client credentials are invalid' }
+        })
+      }
+    })
+    await handleBankConnectKey(d, input)
+    const line = logs.join('\n')
+    // Код ошибки банка — то единственное, что различает причины.
+    expect(line).toContain('invalid_client')
+    expect(line).toContain('400')
+    // И по-прежнему без секретов (их в этом ответе нет, но проверка держит инвариант на месте).
+    expect(line).not.toContain(KEY)
+    expect(line).not.toContain(SECRET)
+  })
+
+  it('лог однострочный: перевод строки из ответа банка не подделает соседнюю запись', async () => {
+    const { d, logs } = deps({
+      exchange: async () => {
+        throw new Error('invalid_grant\r\n[bank-connect] INFO: подключено')
+      }
+    })
+    await handleBankConnectKey(d, input)
+    expect(logs.join('')).not.toMatch(/[\r\n]/)
+  })
+
   it('успех — ключа нет и в ответе тоже', async () => {
     const { d } = deps()
     const r = await handleBankConnectKey(d, input)

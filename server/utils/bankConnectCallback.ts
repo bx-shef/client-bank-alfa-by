@@ -13,15 +13,13 @@
 //  - The token-exchange body carries `client_secret` — never logged (we log neither the body nor the
 //    raw error object).
 
-import { parseOAuthCallback, buildTokenExchangeBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
-import { buildCodeExchangeBody, parsePriorTokenResponse, priorTokenRequest } from '../../app/utils/priorOauth'
+import { buildCodeExchangeBody, parseOAuthCallback, parsePriorTokenResponse, priorTokenRequest } from '../../app/utils/priorOauth'
 import type { PriorTokenAuth } from '../../app/utils/priorOauth'
 import { verifyConnectState } from './bankConnectState'
 import { provisionalAccountKey } from '../../app/utils/bankAccountKey'
 import { describeUpstreamError, sanitizeForLog } from './logSanitize'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankToken } from './bankTokenStore'
-import type { BankProviderId } from '../../app/types/statement'
 
 export interface CallbackResult {
   status: number
@@ -32,13 +30,8 @@ export interface CallbackResult {
 export interface CallbackDeps {
   /** HMAC secret for the connect state (operator SESSION_SECRET). Empty ⇒ every state fails. */
   secret: string
-  /** Per-provider authorize/token config from env (null ⇒ not configured). */
-  config: (provider: BankProviderId) => AlfaOAuthConfig | null
-  /** The provider's OAuth client secret (server-only). Empty ⇒ can't exchange. */
-  clientSecret: (provider: BankProviderId) => string
-  /** POST the token-exchange body to `${baseUrl}/token`, returning the raw JSON. MUST NOT log the
-   *  body (client_secret) or leak it on error. */
-  exchangeToken: (baseUrl: string, body: URLSearchParams) => Promise<unknown>
+  // ⚠ Депов Альфы здесь БОЛЬШЕ НЕТ (#488): её authorize-поток убран, а держать неиспользуемые
+  // порты значило бы обещать вызывающему подключение, которого этот путь не делает.
   /** Prior's connect config from env (null ⇒ not configured), A5b. */
   priorConfig: () => PriorConnectConfig | null
   /** POST Prior's code exchange, returning the raw JSON. Client authentication is already applied
@@ -142,20 +135,25 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
     return { status: 400, html: ERR_PAGE }
   }
 
-  // 3) Exchange code → tokens. Provider-specific: Alfa puts client_secret in the BODY, Prior uses
-  //    client_secret_basic (creds in the Authorization header). Neither is ever logged.
-  const isPrior = state.provider === 'prior-by'
-  const priorConfig = isPrior ? deps.priorConfig() : null
-  const config = isPrior ? null : deps.config(state.provider)
-  const clientSecret = isPrior ? '' : deps.clientSecret(state.provider)
-  if (!priorConfig && (!config || !clientSecret)) {
+  // 3) Обмен кода на токены — ТОЛЬКО для Приора (#488).
+  //
+  // ⚠ У Альфы authorize-потока больше нет: измерено, что цепочка refresh Code Grant живёт ровно
+  // 10 часов от авторизации и не продлевается ничем, поэтому она подключается ключом API. Состояние
+  // с её провайдером сюда прийти всё же может — подписанное ДО выката и ещё не истёкшее (окно
+  // 15 минут). Отвечаем страницей отказа, а не молчанием: человек только что вошёл в банк.
+  if (state.provider !== 'prior-by') {
+    deps.log?.(`callback: provider ${state.provider} no longer uses the authorize flow`)
+    return { status: 400, html: ERR_PAGE }
+  }
+  const priorConfig = deps.priorConfig()
+  if (!priorConfig) {
     deps.log?.(`callback: provider ${state.provider} not configured for exchange`)
     return { status: 400, html: ERR_PAGE }
   }
 
   let tokens: { accessToken: string, refreshToken: string, expiresIn: number }
   try {
-    if (priorConfig) {
+    {
       // ⚠ From `tokenUrl`, NOT derived from `baseUrl`. This is the SAME endpoint the connect
       // preamble calls (token Б) and the refresh path calls — three call sites of one URL. Deriving
       // it here would split them again the moment the bank's authorization server and its resource
@@ -172,9 +170,6 @@ export async function handleBankConnectCallback(deps: CallbackDeps, input: Callb
       // Prior may omit refresh_token; store '' rather than undefined (the store's shape) — the
       // account then simply can't refresh until reconnected, same as ensureBankToken's fallback.
       tokens = { accessToken: t.accessToken, refreshToken: t.refreshToken ?? '', expiresIn: t.expiresIn }
-    } else {
-      const rawTokens = await deps.exchangeToken(config!.baseUrl, buildTokenExchangeBody(config!, code, clientSecret))
-      tokens = parseTokenResponse(rawTokens as Record<string, unknown>)
     }
   } catch (e) {
     // Envelope included (`describeUpstreamError`): this step fails with the same opaque

@@ -31,6 +31,14 @@ export function frameAuthHeaders(a: FrameAuth): Record<string, string> {
 
 /** Human-readable message from a $fetch error, preferring the route's {error}. */
 export function frameFetchError(e: unknown, fallback: string): string {
-  const data = (e as { data?: { error?: string } })?.data
-  return data?.error ? `${fallback}: ${data.error}` : fallback
+  const err = e as { status?: number, statusCode?: number, data?: { error?: string } } | null | undefined
+  // ⚠ 429 НАЗЫВАЕМ ОТДЕЛЬНО. Его отдаёт nginx, а не наш роут, поэтому тела с `error` в нём нет и
+  // человек видел голое «Не удалось загрузить …» — то есть отказ, неотличимый от поломки сервера.
+  // Живая находка 2026-09-09: админ несколько раз подряд открыл настройки, выбрал лимит зоны, и
+  // сразу ТРИ блока (список подключений, сверка счетов, экран готовности) сказали «не удалось» —
+  // из чего он заключил, что пропало подключение к Приору. Оно никуда не пропадало.
+  if (err?.status === 429 || err?.statusCode === 429) {
+    return `${fallback}: слишком много запросов подряд. Подождите минуту и обновите страницу`
+  }
+  return err?.data?.error ? `${fallback}: ${err.data.error}` : fallback
 }

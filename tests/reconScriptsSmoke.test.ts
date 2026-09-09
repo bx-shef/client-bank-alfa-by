@@ -46,23 +46,10 @@ beforeAll(() => {
 afterAll(() => rmSync(keyPath, { force: true }))
 
 describe('recon scripts — offline --url-only smoke (#103)', () => {
-  it('alfa-oauth-test builds a valid authorize URL from cfg bindings and exits 0', () => {
-    // Pin every URL input so the assertions are hermetic (immune to a local .env).
-    const { status, out } = runScript('scripts/alfa-oauth-test.mjs', [
-      '--url-only', '--client-id', 'c', '--base', 'https://alfa.example',
-      '--redirect-uri', 'https://rd.example', '--scope', 'accounts', '--state', 'st123'
-    ])
-    expect(status).toBe(0)
-    const url = out.match(/https:\/\/\S*authorize\?response_type=code\S*/)?.[0] ?? ''
-    expect(url).toBeTruthy()
-    // Each cfg.* field must reach its URL param (a mis-bound field would drop/undefine it).
-    expect(url).toContain('client_id=c')
-    expect(url).toContain('scope=accounts')
-    expect(url).toContain('redirect_uri=https%3A%2F%2Frd.example')
-    expect(url).toContain('state=st123')
-    expect(url.startsWith('https://alfa.example/authorize?response_type=code')).toBe(true)
-    expect(url).not.toContain('undefined') // no cfg field silently resolved to undefined
-  }, 30_000)
+  // ⚠ Дымовой проверки `alfa-oauth-test` здесь БОЛЬШЕ НЕТ вместе с самим скриптом (#488):
+  // authorize-поток у Альфы убран, потому что цепочка refresh Code Grant живёт ровно 10 часов от
+  // авторизации и не продлевается ничем. Подключение идёт ключом API, и разведывать в нём нечего —
+  // тело запроса покрыто юнит-тестом `alfaOauth.test.ts`, а весь путь целиком — `bankConnectKey`.
 
   it('prior-oauth-test builds a signed authorize request with the right claims and exits 0', () => {
     const { status, out } = runScript(

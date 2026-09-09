@@ -1,13 +1,13 @@
 # Дев-скрипты: разведка, посев, живые прогоны
 
-> Last reviewed: 2026-08-23
+> Last reviewed: 2026-09-09
 
 Скрипты из `package.json` и серверные цели `Makefile` (`make doctor` / `make queue-stats`), которые
 **не** входят в сборку и нужны для работы с живыми API банков, тестовым порталом Bitrix24 и боевым
 стендом. Вынесены из `CLAUDE.md`, где занимали 130 строк справочника и мешали читать карту модулей.
 
 ⚠ Все они требуют реальных кредов и живут в git-ignored `.env.*`-файлах (`.env.b24test`,
-`.env.b24oauth`, `.env.alfabankby`, `.env.priorbank`). В репозиторий креды не попадают — есть только
+`.env.b24oauth`, `.env.priorbank`). В репозиторий креды не попадают — есть только
 `*.example`-шаблоны.
 
 ## Полный список команд
@@ -36,7 +36,6 @@
 |---|---|---|---|
 | `make doctor` | сервер | проверка боевого стенда (контейнеры, health, env, логи, HTTPS) | только чтение; секретов не печатает; домен берётся из `./.env` |
 | `make queue-stats` | сервер | счётчики очередей из работающего backend | только чтение; токен берётся из `./.env` |
-| `pnpm oauth:test` | дев | живой прогон OAuth/выписки Альфы (sandbox) | только чтение |
 | `pnpm prior:test` | дев | то же для Приорбанка (Open Banking СПР) | только чтение |
 | `pnpm parse:statement <файл>` | дев | разбор файла выписки в консоль | безопасно, без сети |
 | `pnpm fuzz:allocation [seed] [N]` | дев | фузз алгоритма разнесения на синтетике | безопасно, без сети |
@@ -59,8 +58,9 @@
 
 ## Подробности
 
-- `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) — живой прогон OAuth/выписки Альфы по
-  `.env.alfabankby` (sandbox), маскировка секретов; см. `docs/ALFA_API.md`.
+- ⚠ `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) — **УДАЛЁН** вместе с authorize-потоком Альфы
+  (#488): он весь состоял из шагов, которых больше нет. Живая проверка Альфы — на боевом стенде
+  (`make poll-check`, `make alfa-page-probe`); см. `docs/ALFA_API.md`.
 - `scripts/prior-oauth-test.mjs` (`pnpm prior:test`) — живой прогон Open Banking (СПР) Приорбанка
   по `.env.priorbank` (sandbox): `--gen-key`/`--oidc`/`--dcr`/consent→authorize→выписка; см. `docs/PRIOR_API.md`.
   **`--auth-method private_key_jwt`** (#444) переключает клиентскую аутентификацию на прод-метод:
@@ -81,7 +81,7 @@
 - **Оба банк-скрипта импортят чистые OAuth-ядра напрямую** (`alfaOauth.ts`/`priorOauth.ts`) —
   инлайн-копий билдеров URL/тел/claims больше нет, дрейф невозможен by construction (#45; раньше
   так возник баг auth Альфы #26). Node стрипает `.ts`-типы на лету (`--experimental-strip-types`
-  в `oauth:test`/`prior:test`; ядра без импортов, лоадер не нужен). RS256-подпись и `node:crypto` —
+  в `prior:test`; ядра без импортов, лоадер не нужен). RS256-подпись и `node:crypto` —
   у Приора локально. Реальный путь скриптов теперь покрыт тестами ядер (`tests/{alfa,prior}Oauth.test.ts`).
   **Проводку `cfg→ядро`** (глюкод скрипта, а не билдеры) стережёт `tests/reconScriptsSmoke.test.ts` (#103):
   **спавнит** каждый скрипт офлайн (`--url-only`, сеть/секреты не нужны — Приору генерит одноразовый

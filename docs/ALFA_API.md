@@ -43,39 +43,46 @@
 > см. `docker-compose.prod.yml`), и только им: проверку сертификата не отключаем. Песочница этого
 > не показывала — она выдана другим удостоверяющим центром.
 > Лимит запросов: **100/мин** на API (пилот). Живые вызовы — на деплой-сервере с реальными
-> кредами `.env.alfabankby` (см. REFACTOR_PLAN → «Живые прогоны банков»); геоблок-ограничения нет.
+> кредами из его `.env` (`ALFA_OAUTH_*`); геоблок-ограничения нет.
 >
 > Прямые ссылки `item-info.jag?…` — динамические и могут смениться при обновлении портала;
 > при недоступности искать API через каталог `developerhub.alfabank.by/developerhub/`.
 
 ## Что используем
 
-### 1. Авторизация (OAuth 2.0, Authorization Code + refresh)
+### 1. Авторизация — **Password Grant (ключ API)**
 
-Уходим с legacy password-grant на **Authorization Code** — пользователь логинится у Альфы и
-даёт согласие; мы храним `refresh_token` и обновляем `access_token`.
+⚠ **ЭТО ЕДИНСТВЕННЫЙ ЖИВОЙ СПОСОБ.** Authorization Code Grant у Альфы **убран из кода** 2026-09-09
+(#488): измерено дважды на боевом контуре, что цепочка его `refresh_token` живёт **ровно 10 часов от
+авторизации** и не продлевается ни своевременным обновлением, ни обращениями к API — то есть
+непрерывный импорт требовал бы входа владельца счёта в интернет-банк дважды в сутки. Разбор замера,
+ответ банка и решение — ниже по документу (§«`invalid_grant: User session not alive`» и
+§«РЕШЕНИЕ 2026-09-09»). Здесь — как работает то, что осталось.
 
 | Шаг | Запрос | Ключевые параметры |
 |---|---|---|
-| (1) Authorize | `GET {base}/authorize` | `response_type=code`, `client_id`, `scope=accounts`, `redirect_uri`, `state` |
-| (2) Callback | `→ {redirect_uri}?code=…&state=…` | проверяем `state` (CSRF), `code` короткоживущий — меняем сразу |
-| (3) Token | `POST {base}/token` | `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret` |
-| (4) Refresh | `POST {base}/token` | `grant_type=refresh_token`, `refresh_token`, `client_id`, `client_secret` |
+| (1) Ключ API | владелец счёта генерирует его в Альфа Бизнес Онлайн под наш `client_id` | ничего не вызываем; ключ бессрочен, отзывается клиентом |
+| (2) Токены | `POST {base}/token` | `grant_type=password`, `username=<ключ API>`, `client_id`, `client_secret`, `scope=accounts` |
+| (3) Refresh | `POST {base}/token` | `grant_type=refresh_token`, `refresh_token`, `client_id`, `client_secret` |
+| (4) Переиздание | `POST {base}/token` | тот же шаг (2) — когда цепочка refresh умерла, ключ выпускает пару заново БЕЗ человека |
 
-> **Аутентификация токен-эндпоинта — канон: креды в теле запроса** (`client_id` +
-> `client_secret` в `application/x-www-form-urlencoded`), как в примере документации
-> Альфы и в `app/utils/alfaOauth.ts`. Скрипт `scripts/alfa-oauth-test.mjs` приведён к
-> тому же способу (#26). На **sandbox** прошёл и вариант HTTP Basic (`Authorization:
-> Basic base64(id:secret)`) — т.е. песочница принимает оба; на **прод** способ
-> подтвердить у Альфы (`api@alfa-bank.by`) на BY-прогоне. `client_secret` —
-> только в теле, никогда в URL/логах.
+> **Пароля в этом типе авторизации нет** — в `username` едет ключ API, а не логин клиента от банка.
+> Именно поэтому исходное возражение против Password Grant («держим у себя ключ от чужого банка»)
+> к нему не относится: ключ выдан ПОД НАШ `client_id`, ограничен запрошенным scope и в кабинете
+> клиента есть кнопки «Заблокировать»/«Отозвать».
+
+> **Аутентификация токен-эндпоинта — креды в теле запроса** (`client_id` + `client_secret` в
+> `application/x-www-form-urlencoded`), как в примере документации Альфы и в
+> `app/utils/alfaOauth.ts`. На **sandbox** проходил и вариант HTTP Basic — т.е. песочница
+> принимает оба. `client_secret` — только в теле, никогда в URL/логах.
 
 - Ответ токена: `access_token`, `token_type` (default `Bearer`), `expires_in=3600` (1 ч, в коде —
-  дефолт `parseTokenResponse`), `refresh_token`. TTL refresh — `ALFA_REFRESH_TOKEN_TTL_SEC` ≈ 36000 с
-  (~10 ч; по доке/свагеру Альфы, уточнить на живом прогоне).
-- `redirect_uri` обязан **точно совпадать** с зарегистрированным в приложении; берётся из env
-  (`ALFA_REDIRECT_URI`, см. `.env.example`), а не хардкодится в коде/доке.
+  дефолт `parseTokenResponse`), `refresh_token`. TTL refresh — `ALFA_REFRESH_TOKEN_TTL_SEC` = 36000 с
+  (10 ч; документация банка, и на Code Grant это же число подтвердилось замером до минуты).
+- `redirect_uri` **не участвует вовсе** — редиректа в поток больше нет.
 - `client_secret` — только в env сервера (никогда в репозиторий/логи/URL).
+- **Ключ API** — не в env, а в строке подключения (`bank_tokens.api_key_enc`, шифрован тем же
+  `B24_TOKEN_ENC_KEY`): он свой у каждого портала и открывает счета именно его клиента.
 
 ### 2. Счета и выписка
 
@@ -116,23 +123,21 @@
 > Печатные формы (`/statement/{format}` pdf/xlsx/…), аресты, брони, SWIFT, реестр — **пока не
 > используем**; подключим по мере необходимости.
 
-## Пример вызовов (проверено на sandbox, 2026-06-30)
+## Пример вызовов — ИСТОРИЯ прогона на sandbox (2026-06-30)
 
-Полный поток **OAuth (Authorization Code) → `/accounts/` → выписка → refresh** прогнан
+⚠ **Шаги 1-2 описывают УБРАННЫЙ поток** (Authorization Code, #488) и оставлены как запись того,
+что было прогнано вживую, а не как инструкция. Шаги 3-5 (`/accounts/`, выписка, refresh) остаются
+в силе — они одни и те же при любом типе авторизации.
+
+Полный поток **OAuth (Authorization Code) → `/accounts/` → выписка → refresh** был прогнан
 вживую на песочнике `developerhub.alfabank.by:8273` тестовыми `client_id/secret`.
 Все значения ниже — маскированы. `base = https://developerhub.alfabank.by:8273`.
 
-> Перепроверить вживую: `pnpm oauth:test` (скрипт `scripts/alfa-oauth-test.mjs`,
-> без зависимостей, Node ≥ 18). Это **песочничный** инструмент: конфиг берётся из
-> `.env.alfabankby` — скопируй шаблон `.env.alfabankby.example` → `.env.alfabankby` и впиши
-> `ALFA_CLIENT_SECRET` (файл в `.gitignore`). Скрипт в баннере явно помечает режим
-> `● SANDBOX`/`● NON-SANDBOX`. Токены и номера счетов в консоли маскируются; в дамп
-> `alfa-demo-output.json` (gitignore) токены пишутся **замаскированными** (полные —
-> только под `--full`). Флаги: `--env <file>`, `--from-year/--to-year`, `--account`,
-> `--code`, `--refresh`, `--url-only`, `--full`.
->
-> ⚠ По умолчанию опрашиваются **все годы 2000…2029** по каждому счёту с паузой 700 мс —
-> это несколько минут. Для быстрой проверки сузь период: `pnpm oauth:test --from-year 2024 --to-year 2024`.
+> ⚠ **Разведочный скрипт `scripts/alfa-oauth-test.mjs` (`pnpm oauth:test`) УДАЛЁН** вместе с
+> authorize-потоком (#488) — он весь состоял из шагов 1-2 ниже, которых больше нет. Живая проверка
+> подключения делается теперь на боевом стенде: `make poll-check` (что происходит с опросом) и
+> `make alfa-page-probe` (пагинация выписки уже сохранённым access-токеном). Пример ниже оставлен
+> как ИСТОРИЯ прогона 2026-06-30, а не как инструкция.
 
 ### 1. Authorize (браузер)
 
@@ -504,7 +509,8 @@ GET https://ibapi2.alfabank.by:8273/authorize
     &redirect_uri=<redirect_uri>&state=<одноразовый CSRF-токен>
 ```
 
-**2. Обмен кода на токены (сервер, сразу после возврата)** — `buildTokenExchangeBody`:
+**2. Обмен кода на токены (сервер, сразу после возврата)** — билдер `buildTokenExchangeBody`,
+удалённый вместе с потоком:
 
 ```
 POST https://ibapi2.alfabank.by:8273/token

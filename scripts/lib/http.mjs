@@ -1,6 +1,6 @@
-// Minimal HTTPS request helper shared by the bank sandbox demo scripts
-// (alfa-oauth-test.mjs, prior-oauth-test.mjs). Standalone: no npm deps, so the
-// scripts stay build-free (`node scripts/…`). Node >= 18.
+// Minimal HTTPS request helper shared by the recon/live scripts (prior-oauth-test.mjs and the
+// verify-*/seed-* family). Standalone: no npm deps, so the scripts stay build-free
+// (`node scripts/…`). Node >= 18.
 //
 // Security posture: this NEVER disables TLS verification. It honours the standard
 // CA env vars (NODE_EXTRA_CA_CERTS) — a cert failure is a real finding to report,

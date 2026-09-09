@@ -1,6 +1,6 @@
 # SEO лендинга: настройка и проверка
 
-> Last reviewed: 2026-08-22
+> Last reviewed: 2026-09-09
 
 Что настраивает **владелец руками** (панели вебмастера, шаринг) и что проверяется **после каждого
 выката**. Как SEO устроено в коде — [`CLAUDE.md`](../CLAUDE.md) §«SEO лендинга»; сама задача — [#425](https://github.com/bx-shef/client-bank-alfa-by/issues/425).
@@ -121,7 +121,7 @@ grep -o '<meta name="robots"[^>]*>' .output/public/app/index.html
 1. Поменять `LANDING_SITE_URL` (`app/utils/seo.ts`) и литерал домена в тестах, которые его пинят
    (`tests/seo.test.ts`, `tests/b24EventBind.test.ts`, `tests/alfaOauth.test.ts`) — иначе CI красный.
 2. Поменять `NUXT_PUBLIC_SITE_URL` (repo-переменная CI) и `DOMAIN`/`*_REDIRECT_URI` в `.env`
-   развёртывания (образцы — `.env.example`, `.env.alfabankby.example`, `.env.priorbank.example`).
+   развёртывания (образцы — `.env.example`, `.env.priorbank.example`).
 3. **Перерегистрировать `redirect_uri` на стороне банков** (Альфа, Приор) и обновить URL обработчика
    событий в карточке приложения Б24. Банк сверяет адрес байт-в-байт: не сделать — connect-поток
    перестанет работать молча, при зелёной сборке. Это самый дорогой шаг, и он не в нашем коде.

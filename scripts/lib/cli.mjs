@@ -1,7 +1,6 @@
-// Tiny console/CLI helpers shared by the bank sandbox demo scripts
-// (alfa-oauth-test.mjs, prior-oauth-test.mjs): ANSI colours, the ✓/!/✗ log
-// prefixes, section headers, `die`, and a cross-platform browser opener.
-// Standalone (no npm deps) so the scripts stay build-free.
+// Tiny console/CLI helpers shared by the recon/live scripts (prior-oauth-test.mjs and the
+// verify-*/seed-* family): ANSI colours, the ✓/!/✗ log prefixes, section headers, `die`, and a
+// cross-platform browser opener. Standalone (no npm deps) so the scripts stay build-free.
 
 import { spawn } from 'node:child_process'
 import { platform } from 'node:process'

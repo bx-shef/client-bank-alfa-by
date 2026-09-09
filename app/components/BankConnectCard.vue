@@ -9,6 +9,7 @@ import { PREVIEW_BANK_MATRIX, useBankMatrix } from '~/composables/useBankMatrix'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
+import { copyToClipboard } from '~/utils/clipboard'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank and starts the OAuth connect:
 // POST /api/bank/connect (frame token) → the backend returns the bank authorize
@@ -107,18 +108,17 @@ const LINK_TTL_MIN = CONNECT_STATE_TTL_MIN
 
 async function copyLink() {
   if (!authorizeUrl.value) return
-  try {
-    await navigator.clipboard.writeText(authorizeUrl.value)
+  // Тот же общий помощник, что и у Client ID: во фрейме портала Clipboard API закрыт политикой,
+  // а фолбэк `execCommand` работает. Здесь ветка отказа была и раньше — она и подсказала, что
+  // соседняя кнопка молчала зря.
+  if (await copyToClipboard(authorizeUrl.value)) {
     copied.value = true
     setTimeout(() => {
       copied.value = false
     }, 2500)
-  } catch {
-    // Clipboard API is unavailable over plain http and can be denied by permissions policy — in a
-    // portal iframe both are realistic. Say so instead of failing mutely; the input below still
-    // holds the URL for a manual select-and-copy.
-    error.value = 'Не удалось скопировать — выделите ссылку в поле ниже и скопируйте вручную'
+    return
   }
+  error.value = 'Не удалось скопировать — выделите ссылку в поле ниже и скопируйте вручную'
 }
 
 /** The banks that have an online (OAuth) connect path. `manual` is file upload — not connectable,
@@ -153,19 +153,42 @@ const isKeyProvider = computed(() => KEY_PROVIDERS.includes(provider.value))
 const apiKey = ref('')
 const keyConnected = ref(false)
 
+// ⚠ СМЕНА БАНКА СБРАСЫВАЕТ ИСХОД ПРЕДЫДУЩЕГО. Живая находка 2026-09-09: админ получил отказ на
+// ключе Альфы, переключился на Приорбанк — и над кнопкой «Подключить Приорбанк» осталась висеть
+// красная плашка «банк не принял ключ API», то есть приложение приписало Приору ошибку, которой у
+// него не было и быть не могло (он ключами не подключается вовсе). Успех симметрично: «подключено»
+// от одного банка над формой другого читалось бы ещё хуже.
+// ⚠ Ключ из поля тоже стираем: он выпущен ПОД КОНКРЕТНЫЙ банк, и отправить его второму — послать
+// чужой секрет постороннему получателю.
+watch(provider, () => {
+  error.value = ''
+  keyConnected.value = false
+  started.value = false
+  apiKey.value = ''
+})
+
 /** Наш `client_id` — его вписывают в кабинете банка при выпуске ключа. Пусто ⇒ не показываем. */
 const alfaClientId = computed(() => String(setup.status.value?.alfaClientId ?? ''))
 const clientIdCopied = ref(false)
 
 async function copyClientId() {
   if (!alfaClientId.value) return
-  try {
-    await navigator.clipboard.writeText(alfaClientId.value)
+  // ⚠ Через общий `copyToClipboard`, а НЕ голым `navigator.clipboard` (живая находка 2026-09-09:
+  // «кнопка скопировать не работает»). Мы внутри КРОСС-ДОМЕННОГО фрейма портала, а там Clipboard
+  // API закрыт разрешительной политикой, пока родитель не выдал `clipboard-write` — выдавать её
+  // порталу незачем и он этого не делает. У помощника есть фолбэк через `execCommand`, который во
+  // фрейме работает.
+  // ⚠ И провал теперь ГОВОРИТ О СЕБЕ. Прежняя ветка молчала «поле рядом остаётся выделяемым» —
+  // рассуждение верное, поведение неверное: снаружи это неотличимо от сломанной кнопки, человек
+  // жмёт её ещё раз и ждёт. Ровно это и произошло.
+  if (await copyToClipboard(alfaClientId.value)) {
     clientIdCopied.value = true
-  } catch {
-    // Буфер обмена недоступен по http и может быть запрещён политикой во фрейме — поле рядом
-    // остаётся выделяемым, поэтому молчим, а не пугаем ошибкой.
+    setTimeout(() => {
+      clientIdCopied.value = false
+    }, 2500)
+    return
   }
+  error.value = 'Не удалось скопировать — выделите значение в поле и скопируйте вручную'
 }
 
 async function onConnectKey() {
