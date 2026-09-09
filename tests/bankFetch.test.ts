@@ -8,6 +8,7 @@ import {
   bankFetchError,
   fetchAlfaStatementPages,
   fetchBankStatement,
+  isBankUnauthorized,
   isoToAlfaDate,
   MAX_ALFA_STATEMENT_PAGES,
   type BankFetchDeps,
@@ -427,5 +428,123 @@ describe('#561: fetchBankStatement page walking (live wiring)', () => {
     const { deps } = fakeDeps({ warn })
     await fetchBankStatement(query, deps)
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+// ⚠ ЖИВАЯ НАХОДКА 2026-09-09 (боевой лог). Три попытки подряд `401 Unauthorized` на
+// `/accounts/statement` — и задача умерла окончательно. Переспросить токен было НЕКОМУ: `ensureFresh`
+// решает по ЧАСАМ, а по часам токен был свежим; часовое продление рассудило так же (`selected=0
+// refreshed=0`). Подключение вставало намертво в состоянии «формально живой токен, который банк не
+// принимает», и само не чинилось никогда.
+//
+// ⚠ Это же состояние — единственная форма, в которой проявилось бы взаимное гашение ДВУХ порталов,
+// подключённых ОДНИМ ключом API (второй ключ на тот же client_id банк не выдаёт).
+describe('#488 отказ банка в токене: переспрашиваем и повторяем', () => {
+  /** Ошибка в той форме, в какой её отдаёт живой транспорт: статус лежит в `cause`. */
+  function unauthorized(): Error {
+    return bankFetchError(Object.assign(new Error('401 Unauthorized'), { status: 401 }))
+  }
+
+  it('401 → force-переиздание → повтор проходит, страница собрана', async () => {
+    let first = true
+    const forced: (boolean | undefined)[] = []
+    const tokens: string[] = []
+    const { deps } = fakeDeps({
+      ensureFresh: async (t, opts) => {
+        forced.push(opts?.force)
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async (_url, accessToken) => {
+        tokens.push(accessToken)
+        if (first) {
+          first = false
+          throw unauthorized()
+        }
+        return demoAlfaResponse()
+      }
+    })
+    const items = await fetchBankStatement(query, deps)
+    expect(items.length).toBeGreaterThan(0)
+    // Первый заход — обычным свежим токеном, повтор — уже переизданным.
+    expect(tokens[0]).toBe('FRESH')
+    expect(tokens[1]).toBe('REISSUED')
+    // ⚠ Второй вызов обязан быть ИМЕННО force: без флага `ensureBankToken` смотрит на часы и
+    // вернул бы тот же отвергнутый токен — починка была бы мёртвой.
+    expect(forced).toEqual([undefined, true])
+  })
+
+  // ⚠ Мутационная проверка: передай мы в force-вызов ИСХОДНЫЙ `stored` вместо текущего токена,
+  // сравнение «в базе всё ещё мой?» не совпало бы, обновления не случилось бы, и повтор ушёл бы с
+  // тем же отвергнутым значением. Тест ловит это, проверяя, ЧТО именно отдали переспрашивателю.
+  it('переспрашиваем ТЕКУЩИЙ токен, а не исходный из базы', async () => {
+    const seen: string[] = []
+    let first = true
+    const { deps } = fakeDeps({
+      ensureFresh: async (t, opts) => {
+        seen.push(t.accessToken)
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async () => {
+        if (first) {
+          first = false
+          throw unauthorized()
+        }
+        return demoAlfaResponse()
+      }
+    })
+    await fetchBankStatement(query, deps)
+    expect(seen).toEqual(['ACCESS', 'FRESH'])
+  })
+
+  it('переспрашиваем РОВНО ОДИН раз за забор — мёртвый грант не жжёт лимит банка', async () => {
+    let ensured = 0
+    const { deps } = fakeDeps({
+      ensureFresh: async (t, opts) => {
+        ensured++
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async () => {
+        throw unauthorized()
+      }
+    })
+    await expect(fetchBankStatement(query, deps)).rejects.toThrow(/401/)
+    // Один обычный + один force. Третьего быть не должно: цикл «отказ → переиздание» на каждой из
+    // двадцати страниц выел бы лимит банка целиком.
+    expect(ensured).toBe(2)
+  })
+
+  it('ДРУГАЯ ошибка банка переспрашивания НЕ вызывает', async () => {
+    let ensured = 0
+    const { deps } = fakeDeps({
+      ensureFresh: async (t) => {
+        ensured++
+        return { ...t, accessToken: 'FRESH' }
+      },
+      getJson: async () => {
+        throw bankFetchError(Object.assign(new Error('500 Internal Server Error'), { status: 500 }))
+      }
+    })
+    await expect(fetchBankStatement(query, deps)).rejects.toThrow(/500/)
+    expect(ensured).toBe(1)
+  })
+})
+
+describe('isBankUnauthorized', () => {
+  it('видит статус и наверху, и в cause — живой транспорт кладёт его именно в cause', () => {
+    expect(isBankUnauthorized(Object.assign(new Error('x'), { status: 401 }))).toBe(true)
+    expect(isBankUnauthorized(bankFetchError(Object.assign(new Error('x'), { status: 401 })))).toBe(true)
+    expect(isBankUnauthorized(bankFetchError(Object.assign(new Error('x'), { status: 403 })))).toBe(true)
+  })
+
+  it('прочие отказы — не про токен', () => {
+    expect(isBankUnauthorized(bankFetchError(Object.assign(new Error('x'), { status: 500 })))).toBe(false)
+    expect(isBankUnauthorized(new Error('boom'))).toBe(false)
+    expect(isBankUnauthorized(null)).toBe(false)
+  })
+
+  // ⚠ По тексту не решаем: «401» встречается и в чужом сообщении, а решение здесь тратит запрос из
+  // лимита банка. Мутация «искать /401/ в message» валит этот тест.
+  it('текст сообщения статусом НЕ считается', () => {
+    expect(isBankUnauthorized(new Error('банк ответил: код 401 в теле документа'))).toBe(false)
   })
 })

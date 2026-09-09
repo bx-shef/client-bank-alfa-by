@@ -277,6 +277,35 @@ export function bankApiConfig(provider: BankProviderId): { base: string, stateme
 /** Build the transport error from a caught fetch failure (exported for testing). Keeps a
  *  readable top-level `message` for a plain `err.message` log while `{ cause }` preserves the
  *  chain — the offending Bearer lives only in the (deep) cause, same posture as b24Rest.ts. */
+/**
+ * Отверг ли банк наш токен (401/403), а не отказал по другой причине.
+ *
+ * ⚠ ЖИВАЯ НАХОДКА 2026-09-09. Боевой лог: три попытки подряд `401 Unauthorized` на
+ * `/accounts/statement` — и задача умерла окончательно, потому что переспросить токен было
+ * НЕКОМУ: `ensureFresh` смотрит на ЧАСЫ (`needsBankRefresh`), а по часам токен был свежим. Часовое
+ * продление рассудило так же (`selected=0 refreshed=0`). То есть подключение вставало намертво в
+ * состоянии «формально живой токен, который банк не принимает», и само не чинилось никогда.
+ *
+ * ⚠ Это же состояние — единственная форма, в которой проявилось бы взаимное гашение ДВУХ порталов
+ * Bitrix24, подключённых ОДНИМ ключом API (второй ключ на тот же `client_id` банк не выдаёт).
+ * Если сессия Альфы считается на ключ, выдача пары одному порталу обесценивает access-токен
+ * другого — и он получает ровно 401.
+ *
+ * ⚠ Статус ищем и в самой ошибке, и в `cause`: живой транспорт заворачивает ответ в
+ * `bankFetchError`, оставляя исходную ofetch-ошибку (со `status`) в `cause`. Смотреть только
+ * наверх значило бы не увидеть статус ни разу на боевом пути.
+ * ⚠ По ТЕКСТУ не решаем: «401» встречается и в теле чужого сообщения, а решение здесь ведёт к
+ * трате запроса из лимита банка.
+ */
+export function isBankUnauthorized(e: unknown): boolean {
+  const statusOf = (v: unknown): unknown => (v as { status?: unknown } | null | undefined)?.status
+  for (const candidate of [e, (e as { cause?: unknown } | null | undefined)?.cause]) {
+    const status = statusOf(candidate)
+    if (status === 401 || status === 403) return true
+  }
+  return false
+}
+
 export function bankFetchError(e: unknown): Error {
   const status = (e as { status?: number })?.status
   const message = (e as Error)?.message ?? 'error'
@@ -286,7 +315,9 @@ export function bankFetchError(e: unknown): Error {
 /** Injected side-effects — so the transport is unit-testable without network/DB. */
 export interface BankFetchDeps {
   loadToken: (memberId: string, provider: BankProviderId, account: string) => Promise<BankToken | null>
-  ensureFresh: (token: BankToken) => Promise<BankToken>
+  /** Свежий токен подключения. `force` — РЕАКТИВНО, после отказа банка: обновить (а при
+   *  сохранённом ключе API — выпустить пару заново), даже если по часам токен ещё жив. */
+  ensureFresh: (token: BankToken, opts?: { force?: boolean }) => Promise<BankToken>
   apiConfig: (provider: BankProviderId) => { base: string, statementPath: string } | null
   /** GET a JSON resource with a Bearer token. Implementations must NOT leak the auth on error. */
   getJson: (url: string, accessToken: string) => Promise<unknown>
@@ -304,7 +335,7 @@ export interface BankFetchDeps {
 
 const liveDeps: BankFetchDeps = {
   loadToken: (memberId, provider, account) => getBankToken(dbQuery, memberId, provider, account),
-  ensureFresh: token => ensureBankToken(token),
+  ensureFresh: (token, opts) => ensureBankToken(token, undefined, opts),
   apiConfig: bankApiConfig,
   fetchPrior: (query, stored) => fetchPriorStatement(query, stored),
   warn: message => log.warning(message),
@@ -339,13 +370,36 @@ export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchD
   if (!cfg) throw new Error(`fetchBankStatement: ${query.provider} API base not configured (set <PREFIX>_OAUTH_API_BASE)`)
 
   if (query.provider === 'alfa-by') {
-    const token = await deps.ensureFresh(stored)
+    let token = await deps.ensureFresh(stored)
+    // ⚠ ПЕРЕСПРАШИВАЕМ ТОКЕН НА ОТКАЗ БАНКА — РОВНО ОДИН РАЗ ЗА ЗАБОР. Без этого 401 был тупиком:
+    // `ensureFresh` выше решает по ЧАСАМ, и «свежий по часам, но отвергнутый банком» токен не
+    // обновлял никто — ни здесь, ни часовое продление (оно смотрит на те же часы). Замерено на
+    // боевом 2026-09-09: три попытки 401 и окончательная смерть задачи при `selected=0` у продления.
+    //
+    // ⚠ Передаём ТЕКУЩИЙ токен, а не исходный `stored`: у `force` смысл «обнови, если в базе всё
+    // ещё лежит тот, которым я только что получил отказ». Передай мы `stored` после того, как
+    // первый `ensureFresh` уже обновил пару, сравнение не совпало бы, обновления не случилось бы —
+    // и повтор ушёл бы с ТЕМ ЖЕ отвергнутым токеном, то есть починка была бы мёртвой.
+    //
+    // ⚠ Один раз, а не на каждую страницу: при по-настоящему мёртвом гранте цикл «отказ →
+    // переиздание» жёг бы лимит банка на каждой из двадцати страниц. Не помогло — падаем, и это
+    // честный исход: подключение чинит человек.
+    let reauthed = false
+    const requestPage = async (pageNo: number): Promise<AlfaStatementResponse> => {
+      const url = `${cfg.base}${cfg.statementPath}?${alfaStatementQuery(query.account, query.dateFrom, query.dateTo, pageNo).toString()}`
+      try {
+        return await deps.getJson(url, token.accessToken) as AlfaStatementResponse
+      } catch (e) {
+        if (reauthed || !isBankUnauthorized(e)) throw e
+        reauthed = true
+        deps.warn?.(`alfa ${logSafe(query.account)}: банк отверг токен — переспрашиваем и повторяем`)
+        token = await deps.ensureFresh(token, { force: true })
+        return await deps.getJson(url, token.accessToken) as AlfaStatementResponse
+      }
+    }
     return fetchAlfaStatementPages(
       query.account,
-      async (pageNo) => {
-        const url = `${cfg.base}${cfg.statementPath}?${alfaStatementQuery(query.account, query.dateFrom, query.dateTo, pageNo).toString()}`
-        return await deps.getJson(url, token.accessToken) as AlfaStatementResponse
-      },
+      requestPage,
       // ⚠ Уровень выбирает САМ `alfaWalkNotice`: обрыв обхода — тревога (окно могло прийти не
       // полностью), штатно собранные страницы — факт. Прежде оба случая шли WARNING, и на живом
       // проде это означало предупреждение на каждом тике о том, что уже починено.
