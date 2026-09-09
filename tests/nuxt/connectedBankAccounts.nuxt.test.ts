@@ -75,6 +75,24 @@ describe('ConnectedBankAccounts', () => {
     expect(wrapper.find('[data-testid="accounts-empty"]').exists()).toBe(true)
   })
 
+  // ⚠ ЖИВОЙ ЭКРАН 2026-09-09. Красная плашка «слишком много запросов подряд» и ПРЯМО ПОД НЕЙ
+  // «Пока ничего не подключено» — при двух рабочих подключениях Альфы. Список пуст не потому, что
+  // подключений нет, а потому что мы не смогли спросить: `loaded` истинно и на неудачном чтении
+  // (он значит «проверка завершилась», а не «данные настоящие»).
+  // ⚠ Цена — не косметика: поверивший этой строке пойдёт подключать банк заново, то есть потратит
+  // поход ВЛАДЕЛЬЦА СЧЁТА в интернет-банк на подключение, которое уже есть.
+  it('после ОТКАЗА чтения «ничего не подключено» НЕ утверждается', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).startsWith('/api/bank/accounts')) return Promise.reject(Object.assign(new Error('429'), { status: 429 }))
+      return defaultFetch(url)
+    })
+    const wrapper = await mountReady()
+    // Ошибка показана…
+    expect(wrapper.find('[data-testid="accounts-error"]').exists()).toBe(true)
+    // …а утверждение о факте — нет.
+    expect(wrapper.find('[data-testid="accounts-empty"]').exists()).toBe(false)
+  })
+
   it('показывает подключённый счёт и банк', async () => {
     listReply.value = [{ provider: 'alfa-by', accountKey: 'BY01ALFA0001', connectedAt: Date.now(), expiresAt: Date.now(), hasRefresh: true }]
     const wrapper = await mountReady()

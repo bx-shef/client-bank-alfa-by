@@ -377,3 +377,95 @@ describe('#20 заголовки списка счетов зависят от �
     expect(accountsRequestHeaders('prior-by', 'AT', 'A')).not.toEqual(accountsRequestHeaders('prior-by', 'AT', 'B'))
   })
 })
+
+// ⚠ ЖИВОЙ ЭКРАН 2026-09-09. Портал показывал «Альфа-Банк: банк не ответил (401). Список счетов
+// этого банка сейчас неизвестен» — в ту же минуту, когда забор выписки по этому же подключению
+// работал. Разница была ровно одна: у забора реактивное переспрашивание токена уже стояло (#488),
+// а здесь `ensureFresh` решал ПО ЧАСАМ, и «свежий по часам, но отвергнутый банком» токен не
+// обновлял никто.
+//
+// ⚠ Цена не косметическая: без стороны банка КАЖДЫЙ счёт «моей компании» уходит в состояние «не
+// спрашивали», и выбор счёта кликом — то, ради чего экран сделан, — пропадает. Админ возвращается
+// к ручному вводу 28 знаков, где сравнение посимвольное.
+describe('#488 сверка: отказ банка в токене — переспрашиваем и повторяем', () => {
+  function unauthorized(): Error {
+    return Object.assign(new Error('банк не ответил (401)'), { status: 401 })
+  }
+
+  it('401 → force-переиздание → повтор проходит, счета собраны', async () => {
+    const forced: (boolean | undefined)[] = []
+    const used: string[] = []
+    let first = true
+    const res = await listBankSideAccounts('M1', deps({
+      ensureFresh: async (t, opts) => {
+        forced.push(opts?.force)
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async (_p, _url, accessToken) => {
+        used.push(accessToken)
+        if (first) {
+          first = false
+          throw unauthorized()
+        }
+        return { accounts: [{ number: 'BY11ALFA0001', currIso: 'BYN' }] }
+      }
+    }))
+    const alfa = res.find(r => r.provider === 'alfa-by')
+    expect(alfa?.error).toBeUndefined()
+    expect(alfa?.accounts.map(a => a.number)).toEqual(['BY11ALFA0001'])
+    expect(used).toEqual(['FRESH', 'REISSUED'])
+    // ⚠ Второй вызов обязан быть force: без флага решение снова принимается по часам и вернулся бы
+    // тот же отвергнутый токен — починка была бы мёртвой.
+    expect(forced).toEqual([undefined, true])
+  })
+
+  it('переспрашиваем ТЕКУЩИЙ токен, а не исходный из базы', async () => {
+    const seen: string[] = []
+    let first = true
+    await listBankSideAccounts('M1', deps({
+      ensureFresh: async (t, opts) => {
+        seen.push(t.accessToken)
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async () => {
+        if (first) {
+          first = false
+          throw unauthorized()
+        }
+        return { accounts: [] }
+      }
+    }))
+    // Первый заход — токеном из базы, второй — тем, который только что получил отказ.
+    expect(seen[1]).toBe('FRESH')
+  })
+
+  it('переспрашиваем РОВНО ОДИН раз — мёртвый грант не жжёт лимит банка на каждом открытии', async () => {
+    let ensured = 0
+    const res = await listBankSideAccounts('M1', deps({
+      ensureFresh: async (t, opts) => {
+        ensured++
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async () => {
+        throw unauthorized()
+      }
+    }))
+    expect(ensured).toBe(2)
+    // Не помогло — честный отказ по провайдеру, а не исключение: соседний банк гаснуть не должен.
+    expect(res.find(r => r.provider === 'alfa-by')?.error).toMatch(/401/)
+  })
+
+  it('ДРУГОЙ отказ банка переспрашивания НЕ вызывает', async () => {
+    let ensured = 0
+    await listBankSideAccounts('M1', deps({
+      ensureFresh: async (t) => {
+        ensured++
+        return { ...t, accessToken: 'FRESH' }
+      },
+      getJson: async () => {
+        throw Object.assign(new Error('банк не ответил (500)'), { status: 500 })
+      }
+    }))
+    expect(ensured).toBe(1)
+  })
+})

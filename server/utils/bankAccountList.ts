@@ -27,6 +27,7 @@
 // паузе, значило бы спрятать единственный экран, по которому он проверяет, всё ли настроено.
 // Записано явно, чтобы следующий читатель не счёл это забытым путём (находка ревью).
 
+import { isBankUnauthorized } from './bankFetch'
 import type { BankProviderId } from '../../app/types/statement'
 import type { BankSideAccount } from '../../app/utils/bankAccountMatrix'
 import { extractAccounts, priorResourceHeaders, PRIOR_API_PREFIXES } from '../../app/utils/priorOauth'
@@ -50,7 +51,9 @@ export interface BankSideProviderResult {
 export interface BankSideListDeps {
   /** Every stored token of the portal (pending ones included — see the note in `pickToken`). */
   tokens: (memberId: string) => Promise<BankToken[]>
-  ensureFresh: (token: BankToken) => Promise<BankToken>
+  /** Свежий токен подключения. `force` — РЕАКТИВНО, после отказа банка: обновить, а при
+   *  сохранённом ключе API выпустить пару заново, даже если по часам токен ещё жив. */
+  ensureFresh: (token: BankToken, opts?: { force?: boolean }) => Promise<BankToken>
   /** Provider API origin, or `null` when the provider isn't configured on this deployment. */
   apiBase: (provider: BankProviderId) => string | null
   /** GET a JSON resource with a Bearer token. Must not leak the auth on error. */
@@ -137,8 +140,26 @@ async function askProvider(
   const base = deps.apiBase(provider)
   if (!base) return { provider, accounts: [], error: 'банк не настроен на этом сервере' }
   try {
-    const fresh = await deps.ensureFresh(stored)
-    const raw = await deps.getJson(provider, accountsUrl(provider, base), fresh.accessToken)
+    // ⚠ ПЕРЕСПРАШИВАЕМ ТОКЕН НА ОТКАЗ БАНКА — ровно как забор выписки (#488). Живой экран
+    // 2026-09-09: «Альфа-Банк: банк не ответил (401)» на портале, где сам забор в ту же минуту
+    // работал. Разница была только в этом: у забора реактивное переспрашивание уже стояло, а
+    // здесь `ensureFresh` решал ПО ЧАСАМ — «свежий по часам, но отвергнутый банком» токен не
+    // обновлял никто, и сверка показывала отказ связи там, где протух токен.
+    //
+    // ⚠ Цена промаха тут не «неудобно»: без стороны банка каждый счёт «моей компании» уходит в
+    // состояние «не спрашивали», а выбор счёта кликом (ради которого экран и сделан) пропадает —
+    // админ возвращается к ручному вводу 28 знаков.
+    let fresh = await deps.ensureFresh(stored)
+    const url = accountsUrl(provider, base)
+    let raw: unknown
+    try {
+      raw = await deps.getJson(provider, url, fresh.accessToken)
+    } catch (e) {
+      // Один раз за провайдера: мёртвый грант иначе жёг бы лимит банка на каждом открытии экрана.
+      if (!isBankUnauthorized(e)) throw e
+      fresh = await deps.ensureFresh(fresh, { force: true })
+      raw = await deps.getJson(provider, url, fresh.accessToken)
+    }
     if (provider === 'prior-by') {
       // Prior addresses accounts by an opaque id; the IBAN lives in `identification`. A row with
       // no identification is unusable as a matrix row (nothing to compare against a requisite),
