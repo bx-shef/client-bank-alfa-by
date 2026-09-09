@@ -110,15 +110,17 @@ describe('гейт в точках входа (#493)', () => {
     const r = await handleBankConnectStart({
       memberIdByDomain: async () => 'M1',
       validateFrame: async () => ({ userId: '1', isAdmin: true }),
-      config: () => ({ baseUrl: 'https://bank.test', clientId: 'c', redirectUri: 'https://x/cb', scope: 's' }),
-      priorConfig: () => null,
+      // ⚠ Провайдер сменён на Приора (#488): у Альфы authorize-потока больше нет, она подключается
+      // ключом API. Смысл теста не изменился — гейт «моей компании» обязан сработать ДО похода в
+      // банк, — но проверять его на банке, который туда не ходит, значило бы не проверять ничего.
+      priorConfig: () => ({ tokenUrl: 'https://prior/token' }) as never,
       buildPriorUrl: async () => {
         called.push('prior')
         return 'x'
       },
       secret: 'a'.repeat(32),
       myCompanyGate: async () => 'no-company'
-    }, { accessToken: 't', domain: 'p.bitrix24.by', provider: 'alfa-by', accountKey: '', nonce: 'n', nowMs: 1 })
+    }, { accessToken: 't', domain: 'p.bitrix24.by', provider: 'prior-by', accountKey: '', nonce: 'n', nowMs: 1 })
     expect(r.status).toBe(409)
     expect(String(r.body.error)).toContain('Моя компания')
     expect(r.body.reason).toBe('no-company')

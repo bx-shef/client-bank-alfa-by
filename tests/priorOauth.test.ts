@@ -33,7 +33,8 @@ import {
   extractPriorErrorCodes,
   classifyPriorPoll,
   PRIOR_RESOURCE_NOT_CREATED,
-  AUTHORIZE_REQUEST_TTL_SEC
+  AUTHORIZE_REQUEST_TTL_SEC,
+  parseOAuthCallback
 } from '~/utils/priorOauth'
 
 // Pure Open Banking (СПР) core — same builders/parsers the sandbox script and
@@ -480,5 +481,43 @@ describe('extractConsentExpiry (#503)', () => {
 
   it('терпит альтернативные написания поля', () => {
     expect(extractConsentExpiry({ data: { ExpirationDateTime: '2026-11-13' } })).not.toBeNull()
+  })
+})
+
+// ⚠ Разбор возврата банка переехал сюда из тестов Альфы (#488) вместе с самой функцией:
+// authorize-поток остался только у Приора.
+describe('parseOAuthCallback', () => {
+  it('returns the code when state matches', () => {
+    expect(parseOAuthCallback({ code: 'abc', state: 's1' }, 's1')).toEqual({ code: 'abc' })
+  })
+  it('handles array-valued query params (Nuxt useRoute().query)', () => {
+    expect(parseOAuthCallback({ code: ['abc'], state: ['s1'] }, 's1')).toEqual({ code: 'abc' })
+  })
+  it('throws when state is absent', () => {
+    expect(() => parseOAuthCallback({ code: 'abc' }, 's1')).toThrow(/state mismatch/i)
+  })
+  it('includes error_description in the thrown message', () => {
+    expect(() => parseOAuthCallback({ error: 'access_denied', error_description: 'user said no', state: 's1' }, 's1'))
+      .toThrow(/access_denied — user said no/)
+  })
+  it('names no bank in its errors — this parser serves BOTH providers', () => {
+    // Substring assertions elsewhere in this file pass on any prefix, so nothing caught the real
+    // cost of the old wording: a Priorbank connect failed with `[bank-connect] callback rejected:
+    // Alfa OAuth callback error: invalid_request_object`, and the log sent the reader off into the
+    // wrong integration for a while. Both banks land on one callback route, told apart by the
+    // verified state, so the shared parser must stay provider-neutral.
+    expect(() => parseOAuthCallback({ error: 'access_denied', state: 's1' }, 's1')).toThrow(/^Bank OAuth/)
+    expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/^Bank OAuth/)
+    expect(() => parseOAuthCallback({ state: 's1' }, 's1')).toThrow(/^Bank OAuth/)
+  })
+
+  it('throws on state mismatch (CSRF guard)', () => {
+    expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/state mismatch/i)
+  })
+  it('throws on missing code', () => {
+    expect(() => parseOAuthCallback({ state: 's1' }, 's1')).toThrow(/missing authorization code/i)
+  })
+  it('throws on an error callback', () => {
+    expect(() => parseOAuthCallback({ error: 'access_denied', state: 's1' }, 's1')).toThrow(/access_denied/)
   })
 })

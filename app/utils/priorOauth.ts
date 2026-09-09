@@ -240,6 +240,39 @@ export function buildClientCredentialsBody(scope: string): URLSearchParams {
 }
 
 /** Form body exchanging an authorization `code` for token B. */
+/**
+ * Разобрать возврат банка на колбэке: вытащить `code`, сверив `state`.
+ *
+ * ⚠ Переехал сюда из `alfaOauth.ts` (#488) вместе с authorize-потоком: у Альфы его больше нет, а
+ * функция не альфовская — она разбирает обычный ответ OAuth и нужна колбэку, который теперь
+ * обслуживает только Приора. Оставить её в чужом модуле значило бы держать «файл про Альфу», из
+ * которого Приор импортирует свою механику.
+ *
+ * Бросает при ошибке провайдера, несовпадении `state` (возможный CSRF) и отсутствии кода. Текст
+ * исключения содержит присланное банком описание — вызывающий обязан САНИТИЗИРОВАТЬ его перед
+ * логом и никогда не рендерить на страницу.
+ */
+export function parseOAuthCallback(
+  query: Record<string, string | string[] | undefined>,
+  expectedState: string
+): { code: string } {
+  const get = (k: string): string | undefined => (Array.isArray(query[k]) ? query[k][0] : query[k])
+
+  const error = get('error')
+  if (error) {
+    throw new Error(`Bank OAuth callback error: ${error}${get('error_description') ? ` — ${get('error_description')}` : ''}`)
+  }
+  const state = get('state')
+  if (!state || state !== expectedState) {
+    throw new Error('Bank OAuth callback: state mismatch (possible CSRF)')
+  }
+  const code = get('code')
+  if (!code) {
+    throw new Error('Bank OAuth callback: missing authorization code')
+  }
+  return { code }
+}
+
 export function buildCodeExchangeBody(code: string, redirectUri: string): URLSearchParams {
   return new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri })
 }

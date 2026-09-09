@@ -1,14 +1,20 @@
-// Pure OAuth 2.0 helpers for Alfa-Bank Belarus (partner.authorization 1.0.0).
-// No I/O — builds the authorize URL and the token request bodies, and parses
-// the token response. The HTTP transport + secret handling live in the engine
-// (server), which reads config from env. Verified offline with unit tests;
-// the live code↔token exchange runs from a Belarus-reachable host (the Alfa
-// sandbox refuses TLS from other networks).
+// Чистые помощники OAuth Альфа-Банка Беларусь (`partner.authorization 1.0.0`). Без ввода-вывода:
+// собирают тела запросов к `${baseUrl}/token` и разбирают ответ. Транспорт и секреты — на сервере.
 //
-// Flow (Authorization Code): redirect the user to buildAuthorizeUrl() → Alfa
-// calls back redirectUri with `?code=…&state=…` → exchange via the token body
-// from buildTokenExchangeBody() → store tokens → refresh with buildRefreshBody().
-// Token requests are POSTed by the caller to `${baseUrl}/token`.
+// ⚠ AUTHORIZATION CODE FLOW ЗДЕСЬ БОЛЬШЕ НЕТ (#488, решение владельца 2026-09-09). Он работал —
+// но только для разработки. На проде измерено дважды: цепочка refresh живёт РОВНО 10 часов от
+// авторизации и не продлевается ни своевременным обновлением (19 обменов по полчаса проходят,
+// 20-й на 10 ч 03 мин отвергается), ни обращениями к API (те же 19 ступеней делали успешный
+// вызов — граница не сдвинулась ни на минуту). То есть серверное приложение требовало живого
+// входа владельца счёта в интернет-банк дважды в сутки, навсегда.
+//
+// Осталось два запроса, и оба живут без человека:
+//   • `buildPasswordGrantBody` — обмен КЛЮЧА API на пару токенов (ключ бессрочный, его выдаёт
+//     владелец счёта в своём кабинете под наш `client_id` и там же может отозвать);
+//   • `buildRefreshBody` — обычное продление, пока цепочка жива.
+// Умерла цепочка — пара переиздаётся ключом (`ensureBankToken`), а не человеком.
+//
+// ⚠ У Приора всё иначе и остаётся на OAuth: там Open Banking, и другого пути нет (`priorOauth.ts`).
 
 /** Non-secret OAuth config (clientSecret is added only server-side at call time). */
 export interface AlfaOAuthConfig {
@@ -16,7 +22,6 @@ export interface AlfaOAuthConfig {
    * `https://ibapi2.alfabank.by:8273` (prod). No trailing slash. */
   baseUrl: string
   clientId: string
-  redirectUri: string
   /** Space-separated scopes; default `accounts`. */
   scope?: string
 }
@@ -27,79 +32,6 @@ const DEFAULT_SCOPE = 'accounts'
  * response — kept here so the documented value is greppable and verifiable;
  * confirm against the sandbox on the live run. */
 export const ALFA_REFRESH_TOKEN_TTL_SEC = 36_000
-
-/**
- * Build the authorization URL the user is redirected to. `state` is an opaque
- * anti-CSRF value the caller generates and later verifies on the callback.
- * Throws if `baseUrl` is empty (would yield a relative, broken URL).
- */
-export function buildAuthorizeUrl(config: AlfaOAuthConfig, state: string): string {
-  if (!config.baseUrl) throw new Error('AlfaOAuthConfig.baseUrl is required')
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: config.clientId,
-    scope: config.scope ?? DEFAULT_SCOPE,
-    redirect_uri: config.redirectUri,
-    state
-  })
-  return `${config.baseUrl.replace(/\/+$/, '')}/authorize?${params.toString()}`
-}
-
-/**
- * Parse the OAuth callback query (Alfa redirects to
- * `redirectUri?code=…&state=…`). Verifies `state` matches the value we sent
- * (anti-CSRF) and that a code is present. The code is short-lived — exchange it
- * for tokens immediately. Throws on mismatch/missing/error.
- *
- * Order: an `error` payload is reported before the state check (so a genuine
- * provider error surfaces verbatim). `error_description` is provider-controlled —
- * the transport must sanitize it before writing to structured logs (CRLF/length).
- *
- * ⚠ The messages say «Bank», not «Alfa»: this parser is shared — BOTH providers land on one
- * callback route and are told apart by the verified state (server/utils/bankConnectCallback.ts).
- * Naming one bank in the text cost real debugging time on the Prior connect, where the log line
- * `[bank-connect] callback rejected: Bank OAuth callback error: invalid_request_object` sent the
- * reader looking at the wrong integration.
- */
-export function parseOAuthCallback(
-  query: Record<string, string | string[] | undefined>,
-  expectedState: string
-): { code: string } {
-  const get = (k: string): string | undefined => (Array.isArray(query[k]) ? query[k][0] : query[k])
-
-  const error = get('error')
-  if (error) {
-    throw new Error(`Bank OAuth callback error: ${error}${get('error_description') ? ` — ${get('error_description')}` : ''}`)
-  }
-  const state = get('state')
-  if (!state || state !== expectedState) {
-    throw new Error('Bank OAuth callback: state mismatch (possible CSRF)')
-  }
-  const code = get('code')
-  if (!code) {
-    throw new Error('Bank OAuth callback: missing authorization code')
-  }
-  return { code }
-}
-
-/** Form body for exchanging an authorization `code` for tokens. Caller POSTs it
- * to `${baseUrl}/token`. Client credentials go in the BODY (client_id +
- * client_secret) — the canonical method per Alfa's documented example (#26);
- * the recon script scripts/alfa-oauth-test.mjs imports this builder directly, so
- * it can't drift (#45). The returned body contains `client_secret` — never log it. */
-export function buildTokenExchangeBody(
-  config: Pick<AlfaOAuthConfig, 'clientId' | 'redirectUri'>,
-  code: string,
-  clientSecret: string
-): URLSearchParams {
-  return new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: config.redirectUri,
-    client_id: config.clientId,
-    client_secret: clientSecret
-  })
-}
 
 /**
  * Тело запроса Password Grant — обмен КЛЮЧА API на пару токенов (#488).

@@ -10,17 +10,20 @@
 // blindly), then (3) build the bank authorize URL carrying a SIGNED connect state (bankConnectState)
 // whose `memberId` is taken from OUR resolved portal — NOT from the client — so the eventual callback
 // can trust it (A7b invariant 1). The A7c frontend will open the returned URL at the TOP level; the
-// bank redirects to our callback (A7b-2) with `code` + `state`. Provider config
-// comes from env (bankConnectConfigFromEnv); an unconfigured/unsupported provider is rejected here
-// rather than producing a broken authorize URL.
+// bank redirects to our callback (A7b-2) with `code` + `state`. Provider config comes from env
+// (priorConnectConfigFromEnv); an unconfigured/unsupported provider is rejected here rather than
+// producing a broken authorize URL.
 //
-// TWO PROVIDER SHAPES (A5b): Alfa's authorize URL is a pure string build, so the gates above are the
-// whole flow. Prior needs a LIVE preamble first (token Б → /accountConsents → RS256-signed `request`
-// JWT — see priorConnectStart.ts), injected here as `buildPriorUrl`; its failure is an upstream 502
-// (the request was well-formed), while an unconfigured provider stays a 400. The gates, the signed
-// state and the admin requirement are IDENTICAL for both — only the URL construction differs.
+// ⚠ ПУТЬ ОСТАЛСЯ ТОЛЬКО У ПРИОРА (#488). У Альфы authorize-поток убран совсем: измерено дважды,
+// что цепочка refresh её Code Grant живёт РОВНО 10 часов от авторизации и не продлевается ни
+// частым обновлением, ни обращениями к API, — то есть непрерывный импорт требовал бы живого входа
+// владельца счёта в интернет-банк дважды в сутки. Альфа подключается ключом API — соседний
+// `bankConnectKey.ts`, общие проверки у них одни (`gateConnectAdmin`). У Приора Open Banking, и выбора
+// там нет: его authorize-URL требует ЖИВОЙ преамбулы (токен Б → /accountConsents → RS256-подписанный
+// `request` JWT — см. priorConnectStart.ts), внедрённой сюда как `buildPriorUrl`; её сбой — 502 (запрос был
+// корректен), а ненастроенный провайдер — 400.
 
-import { buildAuthorizeUrl, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
+import type { AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { signConnectState, type BankConnectState } from './bankConnectState'
 import { describeUpstreamError } from './logSanitize'
 import { CONNECT_STATE_TTL_MS } from '../../app/utils/bankConnectTtl'
@@ -28,26 +31,32 @@ import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 import { MY_COMPANY_GATE_MESSAGE, type MyCompanyGate } from './myCompanyRequisites'
 
-/** Non-secret authorize config for a provider, from env. `null` when the provider isn't configured
- *  (feature off) or has no plain code-flow config (Prior uses its own multi-step config —
- *  `priorConnectConfigFromEnv`). Pure. Alfa's authorize host is DERIVED from `ALFA_OAUTH_TOKEN_URL`
- *  (strip the trailing `/token`) so we don't add another env var; `ALFA_OAUTH_REDIRECT_URI` must
- *  EXACTLY match the one registered in the Alfa app. */
+/** Non-secret token-endpoint config for Alfa, from env. `null` when the provider isn't configured
+ *  (feature off) or isn't Alfa (Prior uses its own multi-step config — `priorConnectConfigFromEnv`;
+ *  `manual` has no bank at all). Pure. The host is DERIVED from `ALFA_OAUTH_TOKEN_URL` (strip the
+ *  trailing `/token`) so we don't add another env var.
+ *
+ *  ⚠ Живёт ЗДЕСЬ, а зовёт его `/api/bank/connect-key` — этот путь Альфу больше не обслуживает
+ *  (#488). Переезд функции в `bankConnectKey.ts` был бы честнее, но разошёлся бы с историей и с
+ *  `envCheck`, который читает ту же тройку переменных; оставлено намеренно. */
 export function bankConnectConfigFromEnv(provider: BankProviderId): AlfaOAuthConfig | null {
   if (provider !== 'alfa-by') return null // Prior has its own config/flow; manual has no OAuth
   const clientId = process.env.ALFA_OAUTH_CLIENT_ID?.trim()
   const tokenUrl = process.env.ALFA_OAUTH_TOKEN_URL?.trim()
-  const redirectUri = process.env.ALFA_OAUTH_REDIRECT_URI?.trim()
-  if (!clientId || !tokenUrl || !redirectUri) return null
+  // ⚠ `ALFA_OAUTH_REDIRECT_URI` БОЛЬШЕ НЕ ТРЕБУЕТСЯ и не читается: он существовал только ради
+  // authorize-редиректа, которого у Альфы больше нет (#488). Останься он обязательным — стенд, где
+  // переменную не задали, отвечал бы «провайдер недоступен» на подключение ПО КЛЮЧУ, к которому
+  // адрес возврата отношения не имеет.
+  if (!clientId || !tokenUrl) return null
   // Authorize host = TOKEN_URL minus its trailing `/token`. If it doesn't end in /token we can't
   // derive the host safely → treat as unconfigured (fail-closed, no broken authorize URL).
   if (!/\/token\/*$/.test(tokenUrl)) return null
   const baseUrl = tokenUrl.replace(/\/token\/*$/, '')
-  // Must be an absolute http(s) host — a relative TOKEN_URL like `/token` strips to '' and would
-  // make buildAuthorizeUrl throw (500); fail-closed to null instead, as the doc above promises.
+  // Must be an absolute http(s) host — a relative TOKEN_URL like `/token` strips to '' and the
+  // exchange would POST to `/token` on ourselves; fail-closed to null instead.
   if (!/^https?:\/\/[^/]/.test(baseUrl)) return null
   const scope = process.env.ALFA_OAUTH_SCOPE?.trim()
-  return { baseUrl, clientId, redirectUri, ...(scope ? { scope } : {}) }
+  return { baseUrl, clientId, ...(scope ? { scope } : {}) }
 }
 
 export interface ConnectStartResult {
@@ -64,9 +73,6 @@ export interface ConnectStartDeps {
    *  THROWING if the token isn't valid for that portal (blocks domain spoofing). One call serves
    *  both membership proof and the admin gate. */
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
-  /** Per-provider authorize config from env (null ⇒ not configured / unsupported). Alfa only —
-   *  Prior's multi-step config is `priorConfig` below. */
-  config: (provider: BankProviderId) => AlfaOAuthConfig | null
   /** Prior's connect config from env (null ⇒ not configured). Separate from `config` because
    *  Prior needs secrets (client_secret + signing key) for its live preamble, A5b. */
   priorConfig: () => PriorConnectConfig | null
@@ -194,12 +200,19 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     return { status: 400, body: { error: 'a valid account number is required' } }
   }
 
-  // Provider must be configured + supported BEFORE we do any REST — a clean 400, not a broken URL.
-  // Alfa uses the plain code-flow config; Prior has its own (multi-step, carries secrets, A5b).
+  // ⚠ ЭТОТ ПУТЬ ОБСЛУЖИВАЕТ ТОЛЬКО ПРИОРА (#488). У Альфы authorize-поток убран совсем: измерено,
+  // что цепочка refresh Code Grant живёт ровно 10 часов от авторизации и не продлевается ничем, то
+  // есть подключение требовало живого входа владельца счёта в интернет-банк дважды в сутки. Она
+  // подключается ключом API — `/api/bank/connect-key`. У Приора Open Banking, и выбора там нет.
   const isPrior = provider === 'prior-by'
-  const config = isPrior ? null : deps.config(provider)
-  const priorConfig = isPrior ? deps.priorConfig() : null
-  if (!config && !priorConfig) {
+  if (!isPrior) {
+    return {
+      status: 400,
+      body: { error: `${provider}: этот банк подключается ключом API, а не переходом в банк` }
+    }
+  }
+  const priorConfig = deps.priorConfig()
+  if (!priorConfig) {
     return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
   }
 
@@ -232,7 +245,7 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   // Prior: the authorize URL needs a LIVE preamble (token Б → consent → signed request JWT), so a
   // bank-side failure is a 502 (upstream), not a 400 — the request itself was well-formed. The
   // error text is ours (the pure core's), never the raw bank response.
-  if (priorConfig) {
+  {
     try {
       const authorizeUrl = await deps.buildPriorUrl(priorConfig, signWith, nowMs)
       return { status: 200, body: { authorizeUrl } }
@@ -246,8 +259,4 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
       return { status: 502, body: { error: 'bank did not grant consent (connect preamble failed)' } }
     }
   }
-
-  // Alfa: a pure string build — no bank round-trip needed to start.
-  const authorizeUrl = buildAuthorizeUrl(config!, signWith({ consentExpiresAt: null }))
-  return { status: 200, body: { authorizeUrl } }
 }

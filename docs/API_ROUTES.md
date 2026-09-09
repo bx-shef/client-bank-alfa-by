@@ -1,6 +1,6 @@
 # Наши HTTP-роуты: авторизация и коды
 
-> Last reviewed: 2026-08-23
+> Last reviewed: 2026-09-09
 
 Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
 [`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.
@@ -42,8 +42,9 @@
 | GET | `/api/import/metrics` | F | нет | 200, 400, 403, 409 | `import` |
 | POST | `/api/import/metrics-reset` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/poll-now` | **F+A** + кулдаун (пер-портальный) | **да** | 200, 400, 403, 409, 429, 503 | `import` |
-| POST | `/api/bank/connect` | **F+A** | **да** | 200, 400, 403, 409, 502, 503 | `import` |
-| GET | `/api/bank/callback` | **ST** | n/a | 200, 400, 502 | `import`; алиасы `/oauth-alfabank-by/`, `/oauth-priorbank-by/` |
+| POST | `/api/bank/connect` | **F+A** | **да** | 200, 400, 403, 409, 502, 503 | `import`; ТОЛЬКО Приор (#488) |
+| POST | `/api/bank/connect-key` | **F+A** | **да** | 200, 400, 403, 409, 502, 503 | `import`; Альфа ключом API (#488) |
+| GET | `/api/bank/callback` | **ST** | n/a | 200, 400, 502 | `import`; алиас `/oauth-priorbank-by/` (только Приор, #488) |
 | GET | `/api/bank/accounts` | **F+A** | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/bank/disconnect` | **F+A** (member-scoped WHERE, адрес — неизменяемый `id`) | **да** | 200, 400, 403, 409 | `import` |
 | POST | `/api/bank/set-account` | **F+A** (только `~pending:`-ключ) | **да** | 200, 400, 403, 404, 409, 503 | `import`, `burst=3` |

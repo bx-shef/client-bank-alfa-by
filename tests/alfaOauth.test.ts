@@ -1,83 +1,36 @@
 import { describe, expect, it } from 'vitest'
 import {
   ALFA_REFRESH_TOKEN_TTL_SEC,
-  buildAuthorizeUrl,
+  buildPasswordGrantBody,
   buildRefreshBody,
-  buildTokenExchangeBody,
   isAccessTokenExpired,
-  parseOAuthCallback,
   parseTokenResponse
 } from '~/utils/alfaOauth'
 
+// ⚠ `redirectUri` в конфигурации БОЛЬШЕ НЕТ: он существовал только ради authorize-редиректа,
+// которого у Альфы не осталось (#488). Подключение идёт ключом API, адрес возврата не участвует.
 const config = {
   baseUrl: 'https://developerhub.alfabank.by:8273/',
-  clientId: 'CID',
-  redirectUri: 'https://bank-import.bx-shef.by/oauth-alfabank-by/'
+  clientId: 'CID'
 }
 
-describe('buildAuthorizeUrl', () => {
-  it('builds the /authorize URL with code flow params and trims trailing slash', () => {
-    const url = new URL(buildAuthorizeUrl(config, 'st8'))
-    expect(url.origin + url.pathname).toBe('https://developerhub.alfabank.by:8273/authorize')
-    expect(url.searchParams.get('response_type')).toBe('code')
-    expect(url.searchParams.get('client_id')).toBe('CID')
-    expect(url.searchParams.get('scope')).toBe('accounts')
-    expect(url.searchParams.get('redirect_uri')).toBe(config.redirectUri)
-    expect(url.searchParams.get('state')).toBe('st8')
-  })
-  it('uses a custom scope when provided', () => {
-    const url = new URL(buildAuthorizeUrl({ ...config, scope: 'accounts profile' }, 's'))
-    expect(url.searchParams.get('scope')).toBe('accounts profile')
-  })
-  it('throws on empty baseUrl (would yield a relative URL)', () => {
-    expect(() => buildAuthorizeUrl({ ...config, baseUrl: '' }, 's')).toThrow(/baseUrl is required/)
-  })
-})
-
-describe('parseOAuthCallback', () => {
-  it('returns the code when state matches', () => {
-    expect(parseOAuthCallback({ code: 'abc', state: 's1' }, 's1')).toEqual({ code: 'abc' })
-  })
-  it('handles array-valued query params (Nuxt useRoute().query)', () => {
-    expect(parseOAuthCallback({ code: ['abc'], state: ['s1'] }, 's1')).toEqual({ code: 'abc' })
-  })
-  it('throws when state is absent', () => {
-    expect(() => parseOAuthCallback({ code: 'abc' }, 's1')).toThrow(/state mismatch/i)
-  })
-  it('includes error_description in the thrown message', () => {
-    expect(() => parseOAuthCallback({ error: 'access_denied', error_description: 'user said no', state: 's1' }, 's1'))
-      .toThrow(/access_denied — user said no/)
-  })
-  it('names no bank in its errors — this parser serves BOTH providers', () => {
-    // Substring assertions elsewhere in this file pass on any prefix, so nothing caught the real
-    // cost of the old wording: a Priorbank connect failed with `[bank-connect] callback rejected:
-    // Alfa OAuth callback error: invalid_request_object`, and the log sent the reader off into the
-    // wrong integration for a while. Both banks land on one callback route, told apart by the
-    // verified state, so the shared parser must stay provider-neutral.
-    expect(() => parseOAuthCallback({ error: 'access_denied', state: 's1' }, 's1')).toThrow(/^Bank OAuth/)
-    expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/^Bank OAuth/)
-    expect(() => parseOAuthCallback({ state: 's1' }, 's1')).toThrow(/^Bank OAuth/)
-  })
-
-  it('throws on state mismatch (CSRF guard)', () => {
-    expect(() => parseOAuthCallback({ code: 'abc', state: 'x' }, 's1')).toThrow(/state mismatch/i)
-  })
-  it('throws on missing code', () => {
-    expect(() => parseOAuthCallback({ state: 's1' }, 's1')).toThrow(/missing authorization code/i)
-  })
-  it('throws on an error callback', () => {
-    expect(() => parseOAuthCallback({ error: 'access_denied', state: 's1' }, 's1')).toThrow(/access_denied/)
-  })
-})
-
 describe('token request bodies', () => {
-  it('builds the authorization_code exchange body', () => {
-    const body = buildTokenExchangeBody(config, 'CODE', 'SECRET')
-    expect(body.get('grant_type')).toBe('authorization_code')
-    expect(body.get('code')).toBe('CODE')
-    expect(body.get('redirect_uri')).toBe(config.redirectUri)
+  it('собирает тело Password Grant: ключ API в username, scope по умолчанию accounts', () => {
+    const body = buildPasswordGrantBody(config, 'API-KEY', 'SECRET')
+    expect(body.get('grant_type')).toBe('password')
+    expect(body.get('username')).toBe('API-KEY')
     expect(body.get('client_id')).toBe('CID')
     expect(body.get('client_secret')).toBe('SECRET')
+    expect(body.get('scope')).toBe('accounts')
+    // ⚠ Ни кода, ни адреса возврата: это не authorize-поток, и лишние поля банк вправе отвергнуть.
+    expect(body.has('code')).toBe(false)
+    expect(body.has('redirect_uri')).toBe(false)
+  })
+
+  it('scope можно сузить, но по умолчанию просим МИНИМУМ', () => {
+    // Пример банка перечисляет десяток прав, включая подпись документов. Нам нужна выписка.
+    expect(buildPasswordGrantBody({ ...config, scope: 'accounts profile' }, 'K', 'S').get('scope'))
+      .toBe('accounts profile')
   })
   it('builds the refresh_token body', () => {
     const body = buildRefreshBody(config, 'RT', 'SECRET')

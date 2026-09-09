@@ -9,14 +9,6 @@ import { Buffer } from 'node:buffer'
 
 const SECRET = 'cb-secret'
 const now = 1_700_000_000_000
-const CONFIG = { baseUrl: 'https://alfa:8273', clientId: 'CID', redirectUri: 'https://app/cb' }
-
-const goodState = signConnectState(
-  { memberId: 'M1', provider: 'alfa-by', accountKey: 'BY13ALFA', nonce: 'n1', exp: now + 600_000 },
-  SECRET
-)
-
-const tokenJson = { access_token: 'AT', refresh_token: 'RT', token_type: 'Bearer', expires_in: 3600 }
 
 /** Prior's connect config (multi-step, carries its own secrets — A5b). */
 const PRIOR_CONFIG = {
@@ -35,7 +27,14 @@ const PRIOR_CONFIG = {
   kid: 'k1'
 }
 
-const priorState = signConnectState(
+const tokenJson = { access_token: 'AT', refresh_token: 'RT', token_type: 'Bearer', expires_in: 3600 }
+
+// ⚠ СОСТОЯНИЕ ПО УМОЛЧАНИЮ — ПРИОРОВСКОЕ (#488). Этот колбэк обслуживает только его: у Альфы
+// authorize-поток убран (измерено дважды — цепочка refresh её Code Grant живёт ровно 10 часов от
+// авторизации и не продлевается ничем), она подключается ключом API. Пока умолчанием была Альфа,
+// общее поведение колбэка — страницы, автозакрытие, проводка даты согласия, временный ключ —
+// проверялось на пути, которого больше нет.
+const goodState = signConnectState(
   { memberId: 'M1', provider: 'prior-by', accountKey: 'BY13PRIOR', nonce: 'n1', exp: now + 600_000 },
   SECRET
 )
@@ -44,10 +43,7 @@ function deps(over: Partial<CallbackDeps> & { saved?: BankToken[] } = {}) {
   const saved: BankToken[] = over.saved ?? []
   const d: CallbackDeps = {
     secret: SECRET,
-    config: () => CONFIG,
-    clientSecret: () => 'CSECRET',
-    exchangeToken: async () => tokenJson,
-    priorConfig: () => null, // Prior unconfigured by default; the Prior tests opt in
+    priorConfig: () => PRIOR_CONFIG,
     exchangePriorToken: async () => tokenJson,
     // Default to the sandbox method; the private_key_jwt case overrides it.
     priorTokenAuth: c => ({ method: 'client_secret_basic', clientId: c.clientId, clientSecret: c.clientSecret }),
@@ -69,16 +65,16 @@ describe('sanitizeForLog', () => {
 
 describe('handleBankConnectCallback', () => {
   it('happy path: verifies state → exchanges code → saves token under the state account', async () => {
-    const { deps: d, saved } = deps()
-    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
-    const r = await handleBankConnectCallback({ ...d, exchangeToken }, { query: { code: 'C', state: goodState }, nowMs: now })
+    const exchangePriorToken = vi.fn(async () => tokenJson)
+    const { deps: d, saved } = deps({ exchangePriorToken })
+    const r = await handleBankConnectCallback(d, { query: { code: 'C', state: goodState }, nowMs: now })
     expect(r.status).toBe(200)
     expect(r.html).toContain('подключён')
-    expect(exchangeToken).toHaveBeenCalledTimes(1)
+    expect(exchangePriorToken).toHaveBeenCalledTimes(1)
     expect(saved).toEqual([{
-      memberId: 'M1', provider: 'alfa-by', accountKey: 'BY13ALFA',
+      memberId: 'M1', provider: 'prior-by', accountKey: 'BY13PRIOR',
       accessToken: 'AT', refreshToken: 'RT', expiresAt: now + 3600 * 1000,
-      // Альфа согласий не выдаёт ⇒ 0 = «неизвестно» (#503). Не «истекло»: иначе подключение
+      // Банк не назвал срок согласия ⇒ 0 = «неизвестно» (#503). Не «истекло»: иначе подключение
       // хоронилось бы прямо в момент создания.
       consentExpiresAt: 0,
       // ГРАНТ — nonce из проверенного state (#23): одно прохождение OAuth = одно согласие банка, а
@@ -93,11 +89,8 @@ describe('handleBankConnectCallback', () => {
     // state единственный канал. Потеряйся дата здесь, вся цепочка снова жила бы догадкой.
     const at = 1_800_000_000_000
     const { deps: d, saved } = deps()
-    // Провайдер здесь `alfa-by` не по смыслу, а по механике: у Приора обмен кода идёт своей
-    // веткой с отдельной конфигурацией, а проверяется тут именно ПРОВОДКА даты из state в стор —
-    // она общая для обоих банков и от провайдера не зависит.
     const state = signConnectState(
-      { memberId: 'M1', provider: 'alfa-by', accountKey: 'BY13', nonce: 'n1', exp: now + 60_000, consentExpiresAt: at },
+      { memberId: 'M1', provider: 'prior-by', accountKey: 'BY13', nonce: 'n1', exp: now + 60_000, consentExpiresAt: at },
       SECRET
     )
     await handleBankConnectCallback(d, { query: { code: 'C', state }, nowMs: now })
@@ -105,50 +98,45 @@ describe('handleBankConnectCallback', () => {
   })
 
   it('400 + no exchange when the state is missing/invalid/expired', async () => {
-    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
-    const bad = ['', 'garbage', signConnectState({ memberId: 'M', provider: 'alfa-by', accountKey: 'A', nonce: 'n', exp: now - 1 }, SECRET)]
+    const exchangePriorToken = vi.fn(async () => tokenJson)
+    const bad = ['', 'garbage', signConnectState({ memberId: 'M', provider: 'prior-by', accountKey: 'A', nonce: 'n', exp: now - 1 }, SECRET)]
     for (const state of bad) {
-      const r = await handleBankConnectCallback({ ...deps().deps, exchangeToken }, { query: { code: 'C', state }, nowMs: now })
+      const r = await handleBankConnectCallback({ ...deps().deps, exchangePriorToken }, { query: { code: 'C', state }, nowMs: now })
       expect(r.status).toBe(400)
     }
-    expect(exchangeToken).not.toHaveBeenCalled()
+    expect(exchangePriorToken).not.toHaveBeenCalled()
   })
 
   it('400 when the bank returned an error (text NOT rendered; logged sanitized)', async () => {
     const log = vi.fn()
-    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
+    const exchangePriorToken = vi.fn(async () => tokenJson)
     const r = await handleBankConnectCallback(
-      { ...deps().deps, exchangeToken, log },
+      { ...deps().deps, exchangePriorToken, log },
       { query: { error: 'access_denied', error_description: 'nope\r\ninjected', state: goodState }, nowMs: now }
     )
     expect(r.status).toBe(400)
     expect(r.html).not.toContain('access_denied') // provider text never on the page
     expect(r.html).not.toContain('injected')
-    expect(exchangeToken).not.toHaveBeenCalled()
+    expect(exchangePriorToken).not.toHaveBeenCalled()
     // logged, but sanitized (no CRLF)
     expect(log.mock.calls.some(c => /access_denied/.test(String(c[0])) && !/\r|\n/.test(String(c[0])))).toBe(true)
   })
 
   it('502 when the token exchange throws (bank rejected the code)', async () => {
-    const exchangeToken = async () => {
+    const exchangePriorToken = async () => {
       throw new Error('token endpoint 400')
     }
-    const { deps: d, saved } = deps()
-    const r = await handleBankConnectCallback({ ...d, exchangeToken }, { query: { code: 'C', state: goodState }, nowMs: now })
+    const { deps: d, saved } = deps({ exchangePriorToken })
+    const r = await handleBankConnectCallback(d, { query: { code: 'C', state: goodState }, nowMs: now })
     expect(r.status).toBe(502)
     expect(saved).toEqual([]) // nothing persisted on failure
-  })
-
-  it('400 when the provider is not configured for exchange (no client secret)', async () => {
-    const r = await handleBankConnectCallback({ ...deps().deps, clientSecret: () => '' }, { query: { code: 'C', state: goodState }, nowMs: now })
-    expect(r.status).toBe(400)
   })
 
   it('state без счёта (#407) → токен сохраняется под ВРЕМЕННЫМ ключом, а не отвергается', async () => {
     // Порядок «сначала банк, потом счёт»: подключение стартует без IBAN, и счёт выбирается уже
     // после возврата. Уникальность временного ключа даёт nonce — два параллельных подключения
     // одного админа иначе затёрли бы друг друга.
-    const noAcct = signConnectState({ memberId: 'M1', provider: 'alfa-by', nonce: 'n1', exp: now + 600_000 } as never, SECRET)
+    const noAcct = signConnectState({ memberId: 'M1', provider: 'prior-by', nonce: 'n1', exp: now + 600_000 } as never, SECRET)
     const { deps: d, saved } = deps()
     const r = await handleBankConnectCallback(d, { query: { code: 'C', state: noAcct }, nowMs: now })
     expect(r.status).toBe(200)
@@ -174,7 +162,7 @@ describe('handleBankConnectCallback', () => {
     // успешных, а 502 («банк отклонил») — вообще самая больная, её видит человек, уже введший
     // пароль от своего банка. `defer`+внешний файл — не деталь стиля: inline упёрся бы в CSP
     // `script-src 'self'`, а статичный текст держит страницу правдивой без JS.
-    const noAcct = signConnectState({ memberId: 'M1', provider: 'alfa-by', nonce: 'n1', exp: now + 600_000 } as never, SECRET)
+    const noAcct = signConnectState({ memberId: 'M1', provider: 'prior-by', nonce: 'n1', exp: now + 600_000 } as never, SECRET)
     const boom = async () => {
       throw new Error('upstream down')
     }
@@ -182,7 +170,7 @@ describe('handleBankConnectCallback', () => {
       handleBankConnectCallback(deps().deps, { query: { code: 'C', state: goodState }, nowMs: now }), // 200 со счётом
       handleBankConnectCallback(deps().deps, { query: { code: 'C', state: noAcct }, nowMs: now }), // 200 без счёта
       handleBankConnectCallback(deps().deps, { query: { state: 'garbage' }, nowMs: now }), // 400
-      handleBankConnectCallback({ ...deps().deps, exchangeToken: boom }, { query: { code: 'C', state: goodState }, nowMs: now }) // 502
+      handleBankConnectCallback({ ...deps().deps, exchangePriorToken: boom }, { query: { code: 'C', state: goodState }, nowMs: now }) // 502
     ])
     expect(rendered.map(r => r.status)).toEqual([200, 200, 400, 502])
     for (const r of rendered) {
@@ -195,34 +183,57 @@ describe('handleBankConnectCallback', () => {
 
   it('502 + nothing saved + sanitized log when the token endpoint returns an error PAYLOAD', async () => {
     const log = vi.fn()
-    const { deps: d, saved } = deps()
-    const exchangeToken = async () => ({ error: 'invalid_grant', error_description: 'bad\r\ncode' })
-    const r = await handleBankConnectCallback({ ...d, exchangeToken, log }, { query: { code: 'C', state: goodState }, nowMs: now })
+    const exchangePriorToken = async () => ({ error: 'invalid_grant', error_description: 'bad\r\ncode' })
+    const { deps: d, saved } = deps({ exchangePriorToken, log })
+    const r = await handleBankConnectCallback(d, { query: { code: 'C', state: goodState }, nowMs: now })
     expect(r.status).toBe(502)
     expect(saved).toEqual([])
     expect(log.mock.calls.some(c => /invalid_grant/.test(String(c[0])) && !/\r|\n/.test(String(c[0])))).toBe(true)
   })
+})
 
-  it('502 + nothing saved when the token response omits refresh_token (half-token)', async () => {
-    const { deps: d, saved } = deps()
-    const exchangeToken = async () => ({ access_token: 'AT', token_type: 'Bearer', expires_in: 3600 })
-    const r = await handleBankConnectCallback({ ...d, exchangeToken }, { query: { code: 'C', state: goodState }, nowMs: now })
-    expect(r.status).toBe(502)
+// ⚠ У АЛЬФЫ ЭТОГО ПУТИ БОЛЬШЕ НЕТ (#488), но подписанное ДО выката состояние ещё живёт: окно
+// state — 15 минут. То есть админ, нажавший «подключить» перед самым выкатом, вернётся из банка
+// СЮДА. Это не гипотетика, а обычное окно любого выката.
+describe('handleBankConnectCallback — состояние Альфы (пережившее выкат)', () => {
+  const alfaState = signConnectState(
+    { memberId: 'M1', provider: 'alfa-by', accountKey: 'BY13ALFA', nonce: 'n1', exp: now + 600_000 },
+    SECRET
+  )
+
+  it('400 + НИЧЕГО не сохраняем и НИЧЕГО не обмениваем', async () => {
+    const exchangePriorToken = vi.fn(async () => tokenJson)
+    const { deps: d, saved } = deps({ exchangePriorToken })
+    const r = await handleBankConnectCallback(d, { query: { code: 'C', state: alfaState }, nowMs: now })
+    expect(r.status).toBe(400)
     expect(saved).toEqual([])
+    // ⚠ Обменять код всё равно было бы НЕЛЬЗЯ: конфигурации Альфы у колбэка больше нет вовсе, а
+    // отправить её код в приоровский эндпоинт — послать секреты одного банка другому.
+    expect(exchangePriorToken).not.toHaveBeenCalled()
+  })
+
+  it('человеку показывается СТРАНИЦА отказа, а не пустота — он только что вошёл в банк', async () => {
+    const r = await handleBankConnectCallback(deps().deps, { query: { code: 'C', state: alfaState }, nowMs: now })
+    expect(r.html).toContain('Не удалось подключить')
+    expect(r.html).toContain('id="close-hint"')
+  })
+
+  it('причина попадает в журнал: иначе отказ неотличим от протухшего state', async () => {
+    const log = vi.fn()
+    await handleBankConnectCallback(deps({ log }).deps, { query: { code: 'C', state: alfaState }, nowMs: now })
+    expect(log.mock.calls.some(c => /alfa-by/.test(String(c[0])))).toBe(true)
   })
 })
 
 describe('handleBankConnectCallback — Prior (A5b)', () => {
-  const q = { code: 'C', state: priorState }
+  const q = { code: 'C', state: goodState }
 
   it('exchanges via the Prior endpoint with client_secret_basic creds (never in the body)', async () => {
     const exchangePriorToken = vi.fn(async (_url: string, _body: string, _headers: Record<string, string>) => tokenJson)
-    const exchangeToken = vi.fn(async (_baseUrl: string, _body: URLSearchParams) => tokenJson)
-    const { deps: d, saved } = deps({ priorConfig: () => PRIOR_CONFIG, exchangePriorToken, exchangeToken })
+    const { deps: d, saved } = deps({ exchangePriorToken })
     const r = await handleBankConnectCallback(d, { query: q, nowMs: now })
 
     expect(r.status).toBe(200)
-    expect(exchangeToken).not.toHaveBeenCalled() // the Alfa path is NOT used for a Prior state
     expect(exchangePriorToken).toHaveBeenCalledOnce()
 
     const [url, body, headers] = exchangePriorToken.mock.calls[0]!
@@ -248,7 +259,6 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
   it('private_key_jwt: assertion in the BODY, no Authorization header (#444)', async () => {
     const exchangePriorToken = vi.fn(async (_url: string, _body: string, _headers: Record<string, string>) => tokenJson)
     const { deps: d, saved } = deps({
-      priorConfig: () => PRIOR_CONFIG,
       exchangePriorToken,
       priorTokenAuth: () => ({ method: 'private_key_jwt', assertion: 'HEAD.PAY.SIG' })
     })
@@ -267,7 +277,7 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
 
   it('tolerates an omitted refresh_token (Prior may not rotate one) — stores empty, still connects', async () => {
     const exchangePriorToken = async () => ({ access_token: 'AT', token_type: 'Bearer', expires_in: 3600 })
-    const { deps: d, saved } = deps({ priorConfig: () => PRIOR_CONFIG, exchangePriorToken })
+    const { deps: d, saved } = deps({ exchangePriorToken })
     const r = await handleBankConnectCallback(d, { query: q, nowMs: now })
     expect(r.status).toBe(200)
     expect(saved[0]!.refreshToken).toBe('')
@@ -285,7 +295,7 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
   it('502 + nothing saved + sanitized log on a Prior OAuth error payload', async () => {
     const log = vi.fn()
     const exchangePriorToken = async () => ({ error: 'invalid_grant', error_description: 'bad\r\ncode' })
-    const { deps: d, saved } = deps({ priorConfig: () => PRIOR_CONFIG, exchangePriorToken, log })
+    const { deps: d, saved } = deps({ exchangePriorToken, log })
     const r = await handleBankConnectCallback(d, { query: q, nowMs: now })
     expect(r.status).toBe(502)
     expect(saved).toEqual([])

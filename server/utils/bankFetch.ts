@@ -54,7 +54,9 @@ export function isoToAlfaDate(iso: string): string {
 }
 
 /** Build the Alfa `/accounts/statement` query (pure): account number + DD.MM.YYYY window +
- *  all-transactions, single page. Mirrors scripts/alfa-oauth-test.mjs. */
+ *  all-transactions, single page. ⚠ Прежний разведочный двойник `scripts/alfa-oauth-test.mjs`
+ *  удалён вместе с authorize-потоком Альфы (#488) — сверять эту сборку теперь не с чем, кроме
+ *  документации банка (`docs/ALFA_API.md`) и живого ответа. */
 export function alfaStatementQuery(account: string, dateFrom: string, dateTo: string, pageNo: number = 0): URLSearchParams {
   return new URLSearchParams({
     number: account,

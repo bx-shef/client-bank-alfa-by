@@ -2,6 +2,7 @@
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
+        bank-connect-log \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -260,6 +261,15 @@ offline-snapshot:
 poll-check:
 	@t=$$(mktemp /tmp/poll-check.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-poll-check.sh" \
+	  && bash "$$t" "$${SINCE:-}"
+
+## Почему не подключился банк: ответ банка из лога (#488)
+#
+#   make bank-connect-log             # за 6 часов
+#   SINCE=24h make bank-connect-log
+bank-connect-log:
+	@t=$$(mktemp /tmp/connect-log.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-connect-log.sh" \
 	  && bash "$$t" "$${SINCE:-}"
 
 ## Кого приложение не опознало и каким счётом это чинится (#501)
