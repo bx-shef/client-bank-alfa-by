@@ -119,6 +119,62 @@ export function isValidAccountKey(v: string): boolean {
   return /^[A-Za-z0-9]{1,64}$/.test(v)
 }
 
+/** Исход общих проверок подключения: либо портал опознан, либо готовый ответ с отказом. */
+export type ConnectAdminGate
+  = | { ok: true, memberId: string }
+    | { ok: false, res: ConnectStartResult }
+
+/**
+ * Общие проверки для ЛЮБОГО способа подключить банк: портал установлен → фрейм-токен доказан для
+ * ЭТОГО домена → человек администратор → у портала есть «моя компания» с расчётным счётом.
+ *
+ * ⚠ Вынесено потому, что способов подключения стало два (authorize-редирект у Приора и ключ API у
+ * Альфы), а проверки у них одни. Вторая копия этой последовательности — это второй список того,
+ * кому можно привязать банковские креды ко всему порталу, и разошёлся бы он молча.
+ *
+ * ⚠ Порядок значим: сперва дешёвые проверки нашей базы, потом REST в портал. И «моя компания»
+ * стоит ПОСЛЕДНЕЙ, но ДО обращения к банку — дальше идёт либо ввод пароля от интернет-банка, либо
+ * трата ключа API, и уткнуться после этого в ненастроенный портал дороже всего.
+ */
+export async function gateConnectAdmin(
+  deps: Pick<ConnectStartDeps, 'memberIdByDomain' | 'validateFrame' | 'myCompanyGate' | 'log'>,
+  input: { accessToken: string, domain: string }
+): Promise<ConnectAdminGate> {
+  const { accessToken, domain } = input
+
+  // Portal key check — do we hold tokens for this domain's portal?
+  const memberId = await deps.memberIdByDomain(domain)
+  if (!memberId) return { ok: false, res: { status: 409, body: { error: 'portal not installed (no key)' } } }
+
+  // Prove the frame token belongs to THIS portal (blocks X-B24-Domain spoofing) AND read admin.
+  let frame: { userId: string, isAdmin: boolean }
+  try {
+    frame = await deps.validateFrame(domain, accessToken)
+  } catch {
+    return { ok: false, res: { status: 403, body: { error: 'invalid frame token for this portal' } } }
+  }
+  // Admin-only: connecting a bank binds credentials to the whole portal.
+  if (!frame.isAdmin) {
+    return { ok: false, res: { status: 403, body: { error: 'bank connect requires a portal administrator' } } }
+  }
+
+  // «Моя компания» с расчётным счётом — предусловие, а не настройка (#493).
+  if (deps.myCompanyGate) {
+    let gate: MyCompanyGate = 'ok'
+    try {
+      gate = await deps.myCompanyGate(domain, accessToken)
+    } catch (e) {
+      // Спросить не смогли — пропускаем (см. контракт депа) и говорим об этом вслух.
+      deps.log?.(`my-company precheck failed, allowing: ${(e as Error)?.message ?? ''}`)
+    }
+    if (gate !== 'ok') {
+      return { ok: false, res: { status: 409, body: { error: MY_COMPANY_GATE_MESSAGE[gate], reason: gate } } }
+    }
+  }
+
+  return { ok: true, memberId }
+}
+
 /**
  * Build the bank authorize URL (with a signed connect state) for the in-portal admin to open.
  * Returns 200 + `{ authorizeUrl }`, or a 4xx/5xx `{ error }`. Does NOT itself redirect — the route
@@ -150,37 +206,9 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
   // No signing secret ⇒ the callback could never verify the state (fail-closed) — refuse to start.
   if (!deps.secret) return { status: 503, body: { error: 'connect unavailable (no session secret configured)' } }
 
-  // Portal key check — do we hold tokens for this domain's portal?
-  const memberId = await deps.memberIdByDomain(domain)
-  if (!memberId) return { status: 409, body: { error: 'portal not installed (no key)' } }
-
-  // Prove the frame token belongs to THIS portal (blocks X-B24-Domain spoofing) AND read admin.
-  let frame: { userId: string, isAdmin: boolean }
-  try {
-    frame = await deps.validateFrame(domain, accessToken)
-  } catch {
-    return { status: 403, body: { error: 'invalid frame token for this portal' } }
-  }
-  // Admin-only: connecting a bank binds credentials to the whole portal. Enforce here — the callback
-  // trusts the signed state blindly, so the authorization to START the flow must be gated now.
-  if (!frame.isAdmin) return { status: 403, body: { error: 'bank connect requires a portal administrator' } }
-
-  // «Моя компания» с расчётным счётом — предусловие, а не настройка (#493). Проверяем ЗДЕСЬ,
-  // до построения authorize-URL: дальше человек введёт пароль от интернет-банка и подтвердит
-  // доступ к деньгам компании, и потратить это на настройку, которая не может создать ни одной
-  // записи, — самая дорогая из возможных ошибок, а вовсе не неудобство.
-  if (deps.myCompanyGate) {
-    let gate: MyCompanyGate = 'ok'
-    try {
-      gate = await deps.myCompanyGate(domain, accessToken)
-    } catch (e) {
-      // Спросить не смогли — пропускаем (см. контракт депа) и говорим об этом вслух.
-      deps.log?.(`my-company precheck failed, allowing: ${(e as Error)?.message ?? ''}`)
-    }
-    if (gate !== 'ok') {
-      return { status: 409, body: { error: MY_COMPANY_GATE_MESSAGE[gate], reason: gate } }
-    }
-  }
+  const gate = await gateConnectAdmin(deps, { accessToken, domain })
+  if (!gate.ok) return gate.res
+  const memberId = gate.memberId
 
   // memberId comes from OUR resolved portal (not the client) → the callback can trust state.memberId.
   // (There is no `memberId` in ConnectStartInput — the client cannot supply/override it; invariant 1.)

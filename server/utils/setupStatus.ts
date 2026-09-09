@@ -21,6 +21,15 @@ export interface SetupStatusDeps {
   validateFrame: (domain: string, accessToken: string) => Promise<{ userId: string, isAdmin: boolean }>
   /** Счета портала: подключённые (с выбранным номером) и ожидающие выбора (#407). */
   countAccounts: (memberId: string) => Promise<{ connected: number, pending: number, unhealthy?: number, paused?: number }>
+  /**
+   * Наш `client_id` у Альфы — его владелец счёта вписывает в кабинете банка, генерируя ключ API
+   * (#488, Настройки → Open API → «Сгенерировать ключ API» → поле CLIENT ID).
+   *
+   * ⚠ Не секрет: он и так уходит в каждом запросе к банку, а без него ключ не выпустить вовсе.
+   * Взять его бухгалтеру больше неоткуда — он живёт в переменных окружения нашего сервера.
+   * Пусто ⇒ провайдер на этом стенде не настроен, и подсказку показывать не о чем.
+   */
+  alfaClientId?: string
   /** Server gate `CRON_REAL_POLL` — automatic polling runs at all. */
   pollEnabled: boolean
   /** Cron period in minutes (`CRON_INTERVAL_MIN`). */
@@ -91,6 +100,9 @@ export async function handleSetupStatus(
       pausedAccounts: counts.paused ?? 0,
       pollEnabled: deps.pollEnabled,
       pollIntervalMin: deps.pollIntervalMin,
+      // Ключ появляется только когда он есть: пустая строка на экране читалась бы как «вот ваш
+      // client_id», и человек вписал бы в банк пустоту.
+      ...(deps.alfaClientId ? { alfaClientId: deps.alfaClientId } : {}),
       lastRunMs,
       // Ключ появляется только когда мы действительно спросили и получили ответ: пустая галочка
       // на экране готовности честнее выдуманной, а выдуманная тут особенно дорога — именно этот

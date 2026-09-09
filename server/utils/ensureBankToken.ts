@@ -13,7 +13,7 @@
 // (`token → $fetch → normalizeAlfa/normalizePrior`), not this token refresh.
 
 import { randomUUID } from 'node:crypto'
-import { buildRefreshBody, parseTokenResponse } from '../../app/utils/alfaOauth'
+import { buildPasswordGrantBody, buildRefreshBody, parseTokenResponse } from '../../app/utils/alfaOauth'
 import { buildPriorRefreshBody, parsePriorTokenResponse, priorTokenRequest } from '../../app/utils/priorOauth'
 import type { PriorTokenAuth } from '../../app/utils/priorOauth'
 import { priorAuthMethodFromEnv, resolvePriorTokenAuth } from './priorTokenAuth'
@@ -125,6 +125,16 @@ export interface BankRefreshDeps {
    * что диагностирует.
    */
   markAttempt?: (token: BankToken, nowMs: number) => Promise<void>
+  /**
+   * Переиздать пару токенов КЛЮЧОМ API (Password Grant у Альфы, #488). Отсутствует ⇒ переиздания
+   * нет, поведение прежнее.
+   *
+   * ⚠ Ради этого всё и затевалось. У Code Grant цепочка refresh живёт ровно 10 часов от
+   * авторизации и не продлевается ничем — ни своевременным обновлением, ни обращениями к API
+   * (замерено дважды, граница совпала до минуты). Значит смерть цепочки была НЕОБРАТИМА и лечилась
+   * только живым входом владельца счёта в интернет-банк. С сохранённым ключом она лечится здесь.
+   */
+  reissueWithKey?: (url: string, body: string) => Promise<unknown>
 }
 
 /** Resolve a provider's OAuth creds from env. Alfa: `ALFA_OAUTH_*`; Prior: `PRIOR_OAUTH_*`.
@@ -195,6 +205,20 @@ const liveDeps: BankRefreshDeps = {
   // внутри транзакции, откатилась бы вместе с ним, и колонка не стала бы ненулевой НИКОГДА —
   // ровно тот мёртвый механизм, который уже ловили замером в #574.
   markAttempt: (token, nowMs) => markBankRefreshAttempt(dbQuery, token, nowMs),
+  // Переиздание пары ключом API (#488). Тот же транспорт и тот же потолок, что у обновления —
+  // это тот же эндпоинт банка, отличается только тело.
+  reissueWithKey: (url, body) => {
+    const fetchJson = $fetch as unknown as (
+      url: string,
+      opts: { method: string, body: string, headers: Record<string, string>, timeout: number }
+    ) => Promise<unknown>
+    return fetchJson(url, {
+      method: 'POST',
+      body,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      timeout: 15_000
+    })
+  },
   postRefresh: (url, body, headers) => {
     // Cast $fetch to a plain signature (dynamic URL → opt out of Nitro route-type
     // inference; same guard as ensureAccessToken/callRest). Bounded so a hung OAuth call
@@ -312,6 +336,42 @@ export async function ensureBankToken(
     // disconnected account); hand back the passed token, the fetch will fail cleanly.
     const stored = await deps.loadToken(q, token.memberId, token.provider, token.accountKey)
     if (!stored) return token
+
+    /**
+     * Выпустить пару заново ключом API. `null` — переиздание невозможно или не удалось.
+     *
+     * ⚠ Живёт ВНУТРИ лока и пишет тем же UPDATE-only, что и обновление: переиздание не имеет права
+     * воскресить отключённое подключение (#505). Строки уже нет — значит счёт отключили, пока мы
+     * ходили в банк, и записывать свежую пару некуда.
+     */
+    const reissue = async (row: BankToken, why: string): Promise<BankToken | null> => {
+      if (!deps.reissueWithKey || !row.apiKey || row.provider !== 'alfa-by') return null
+      let raw: unknown
+      try {
+        raw = await deps.reissueWithKey(
+          creds.tokenUrl,
+          buildPasswordGrantBody({ clientId: creds.clientId }, row.apiKey, creds.clientSecret).toString()
+        )
+      } catch {
+        // ⚠ Текст банка НЕ логируем: в ответ на негодный ключ он повторяет присланные параметры,
+        // среди которых сам ключ и `client_secret`.
+        log.warning(`ensureBankToken: ${row.provider} переиздание ключом не удалось (${why}) — RECONNECT REQUIRED`)
+        return null
+      }
+      const t = parseBankRefresh(row.provider, raw)
+      const next: BankToken = {
+        ...row,
+        accessToken: t.accessToken,
+        refreshToken: t.refreshToken || '',
+        expiresAt: deps.now() + t.expiresIn * 1000
+      }
+      if (!await deps.saveToken(q, next)) {
+        log.warning(`ensureBankToken: ${row.provider} account was disconnected mid-reissue — token NOT stored`)
+        return null
+      }
+      log.info(`ensureBankToken: ${row.provider} пара выпущена заново ключом API (${why}) — человек не потребовался`)
+      return next
+    }
     const shouldRefresh = opts.force ? stored.accessToken === token.accessToken : needsBankRefresh(stored, deps.now())
     if (!shouldRefresh) return stored
 
@@ -320,6 +380,9 @@ export async function ensureBankToken(
     // forever; skip the doomed round-trip and log an ACTIONABLE line instead. The caller's fetch
     // then fails on the expired access token, which is the honest state: reconnect required.
     if (!stored.refreshToken) {
+      // ⚠ При сохранённом ключе API это НЕ тупик: пару можно выпустить заново, человек не нужен.
+      const fresh = await reissue(stored, 'нет refresh-токена')
+      if (fresh) return fresh
       log.warning(`ensureBankToken: ${stored.provider} account has no refresh_token — RECONNECT REQUIRED (re-run the bank connect for this account)`)
       return stored
     }
@@ -359,6 +422,16 @@ export async function ensureBankToken(
       // наоборот. Мутация `message` сохраняет объект целиком; ofetch создал его для нас и больше
       // никому не отдал.
       if (detail && e instanceof Error) e.message = `${e.message} — банк ответил: ${detail}`
+      // ⚠ ПЕРЕИЗДАНИЕ — ПОСЛЕ отказа, а не вместо обновления. Обмен refresh дешевле и ротирует пару
+      // штатно; ключ это запасной путь. Пробуй мы его первым, каждый тик тратил бы лишний запрос из
+      // общего лимита банка, а ключ светился бы в сети чаще, чем нужно.
+      //
+      // ⚠ Не разбираем, ПОЧЕМУ отказали. Причина бывает и транзиентной (сеть), и окончательной
+      // (цепочка истекла, грант отозван) — но действие одно и то же, а разбор чужого текста ошибки
+      // мы уже признали негодным способом принимать решения. Не вышло переиздать — бросаем
+      // ИСХОДНОЕ исключение, с его `name`/`status`, по которым метится спан.
+      const fresh = await reissue(stored, 'банк отверг обновление')
+      if (fresh) return fresh
       throw e
     }
     const r = parseBankRefresh(stored.provider, raw)

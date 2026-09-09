@@ -62,5 +62,41 @@ export function useBankConnect() {
     }
   }
 
-  return { start, syncEnabled, connecting, error, enabled }
+  /**
+   * Подключить банк КЛЮЧОМ API (Password Grant у Альфы, #488). Возврат: `true` — подключение
+   * создано, `false` — причина в `error`.
+   *
+   * ⚠ Отличие от `start` не косметическое: тот ОТДАЁТ адрес, по которому человеку идти в банк, а
+   * этот ЗАВЕРШАЕТ подключение здесь же. Поэтому и маршрут другой, и возврат другой.
+   *
+   * ⚠ Ключ уходит ТОЛЬКО в теле POST. В строке запроса он осел бы в логе nginx, в истории браузера
+   * и в заголовке Referer — а он бессрочный и не ротируется сам.
+   */
+  async function connectWithKey(provider: BankProviderId, apiKey: string): Promise<boolean> {
+    const a = frameAuth()
+    enabled.value = a !== null
+    error.value = ''
+    if (!a) {
+      error.value = 'Подключение доступно только внутри портала Bitrix24'
+      return false
+    }
+    connecting.value = true
+    try {
+      const res = await $fetch<{ connected?: boolean, error?: string }>('/api/bank/connect-key', {
+        method: 'POST',
+        headers: authHeaders(a),
+        body: { provider, apiKey }
+      })
+      if (res?.connected) return true
+      error.value = res?.error || 'Не удалось подключить банк'
+      return false
+    } catch (e) {
+      error.value = frameFetchError(e, 'Не удалось подключить банк')
+      return false
+    } finally {
+      connecting.value = false
+    }
+  }
+
+  return { start, connectWithKey, syncEnabled, connecting, error, enabled }
 }

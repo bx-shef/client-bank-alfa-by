@@ -27,6 +27,10 @@ const ADMIN_ONLY = [
   // подключение: оно расширяет банковский доступ портала на ещё один счёт, не спрашивая банк.
   'bank/add-account.post.ts',
   'bank/connect.post.ts',
+  // ⚠ Подключение КЛЮЧОМ API (#488) — админское по тому же доводу, что и подключение по OAuth, и
+  // даже сильнее: ключ БЕССРОЧНЫЙ и не ротируется сам, то есть привязывает доступ ко всем счетам
+  // клиента ко всему порталу до тех пор, пока владелец счёта не отзовёт его в своём кабинете.
+  'bank/connect-key.post.ts',
   'bank/disconnect.post.ts',
   'bank/matrix.get.ts',
   // ⚠ Пауза автоопроса — админская (#576) по тому же доводу, что подключение и отключение: банк
@@ -114,6 +118,7 @@ describe('кто может звать маршруты приложения (#5
       'bank/accounts.get.ts': 'bankAccounts',
       'bank/add-account.post.ts': 'bankAccounts',
       'bank/connect.post.ts': 'bankConnectStart',
+      'bank/connect-key.post.ts': 'bankConnectKey',
       'bank/disconnect.post.ts': 'bankAccounts',
       'bank/matrix.get.ts': 'bankMatrix',
       'bank/pause.post.ts': 'bankAccounts',

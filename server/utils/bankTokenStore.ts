@@ -58,6 +58,15 @@ export interface BankToken {
    * грант и разослало бы им чужие токены. Всякое сравнение обязано нести `<> ''`.
    */
   grantId?: string
+  /**
+   * Ключ API клиента для Password Grant у Альфы (#488). Пусто — подключение живёт на прежнем
+   * OAuth-гранте либо это не Альфа.
+   *
+   * ⚠ Секрет наравне с `client_secret`, и ОПАСНЕЕ refresh: тот ротируется при каждом обмене, то
+   * есть утёкший стареет сам, а ключ бессрочен и годен, пока клиент не отзовёт его в своём
+   * кабинете. Наружу не отдаётся никогда — ни в списке подключений, ни в логе, ни в тексте ошибки.
+   */
+  apiKey?: string
 }
 
 /**
@@ -74,8 +83,8 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
   await query(
     `INSERT INTO bank_tokens
        (member_id, provider, account_key, access_token, refresh_token_enc, expires_at,
-      consent_expires_at, grant_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+      consent_expires_at, grant_id, api_key_enc, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
      ON CONFLICT (member_id, provider, account_key) DO UPDATE SET
        access_token       = EXCLUDED.access_token,
        refresh_token_enc  = EXCLUDED.refresh_token_enc,
@@ -93,6 +102,13 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
        grant_id           = CASE WHEN EXCLUDED.grant_id <> ''
                                  THEN EXCLUDED.grant_id
                                  ELSE bank_tokens.grant_id END,
+       -- Тем же правилом: пустой ключ НЕ затирает сохранённый. Подключение по ключу и добавление
+       -- счёта к нему идут одним upsert'ом, а второе ключа не несёт — присваивай мы его прямо,
+       -- добавление счёта стирало бы ключ, и переиздание пары становилось бы невозможным ровно у
+       -- того подключения, которое только что расширили.
+       api_key_enc        = CASE WHEN EXCLUDED.api_key_enc <> ''
+                                 THEN EXCLUDED.api_key_enc
+                                 ELSE bank_tokens.api_key_enc END,
        updated_at         = now()`,
     // ⚠ An EMPTY refresh token is stored as a LITERAL empty string — NOT encrypted, and NOT SQL
     // NULL. Encrypting '' yields a perfectly non-empty blob (`iv:tag:` with an empty ciphertext
@@ -111,7 +127,11 @@ export async function saveBankToken(query: QueryFn, token: BankToken): Promise<v
     // EXISTING column's nullability on a live table is a different and far riskier operation.)
     [token.memberId, token.provider, token.accountKey, token.accessToken,
       token.refreshToken ? encryptSecret(token.refreshToken) : '', token.expiresAt,
-      token.consentExpiresAt ?? 0, token.grantId ?? '']
+      token.consentExpiresAt ?? 0, token.grantId ?? '',
+      // ⚠ Пустой ключ — ЛИТЕРАЛЬНАЯ пустая строка, а не шифротекст: шифрование '' даёт непустой
+      // блоб, и проверка «есть ли ключ» отвечала бы «да» подключению, у которого его нет. Ровно на
+      // этом уже обожглись с refresh — разбор в комментарии ниже.
+      token.apiKey ? encryptSecret(token.apiKey) : '']
   )
 }
 
@@ -248,12 +268,25 @@ function rowToBankToken(row: Record<string, unknown>): BankToken {
       throw new Error(`bankTokenStore: failed to decrypt refresh for memberId=${String(row.member_id)} provider=${String(row.provider)}`)
     }
   }
+  // ⚠ Ключ API — тем же правилом, что и refresh: пустое значение это ВАЛИДНОЕ состояние (все
+  // подключения, заведённые до Password Grant, и весь Приор), а не порченая строка. Расшифровка ''
+  // бросила бы, превратив обычное подключение в вечную ошибку про ключ шифрования.
+  const encKey = row.api_key_enc
+  let apiKey = ''
+  if (encKey !== null && encKey !== undefined && encKey !== '') {
+    try {
+      apiKey = decryptSecret(String(encKey))
+    } catch {
+      throw new Error(`bankTokenStore: failed to decrypt api key for memberId=${String(row.member_id)} provider=${String(row.provider)}`)
+    }
+  }
   return {
     memberId: String(row.member_id),
     provider: String(row.provider) as BankProviderId,
     accountKey: String(row.account_key),
     accessToken: String(row.access_token),
     refreshToken,
+    apiKey,
     expiresAt: Number(row.expires_at),
     // ⚠ Читать ОБЯЗАТЕЛЬНО, хотя SELECT колонку и так тянет: без этой строки `getBankToken` молча
     // отдавал бы токен без срока согласия, а `saveBankToken` при переподключении получил бы
@@ -309,8 +342,11 @@ export async function getBankGrantId(
 /** Load one connected account's tokens (decrypting refresh), or `null` if not connected. */
 export async function getBankToken(query: QueryFn, memberId: string, provider: BankProviderId, accountKey: string): Promise<BankToken | null> {
   const rows = await query(
+    // ⚠ `api_key_enc` выбирается ЗДЕСЬ и больше нигде: этот читатель кормит продление, которому
+    // ключ нужен для переиздания пары. Списки подключений (`listBankAccountInfoForPortal` и
+    // соседи) его не выбирают намеренно — они уходят на экран и в операторскую консоль.
     `SELECT member_id, provider, account_key, access_token, refresh_token_enc, expires_at, consent_expires_at,
-            grant_id
+            grant_id, api_key_enc
        FROM bank_tokens WHERE member_id = $1 AND provider = $2 AND account_key = $3`,
     [memberId, provider, accountKey]
   )
