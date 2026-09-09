@@ -21,6 +21,38 @@ COMPOSE=docker-compose.prod.yml
 echo "== Подключение банка: что ответил банк (за $SINCE) =="
 echo
 
+# WHICH STAND ARE WE TALKING TO. The top suspect when a freshly issued API key is refused is a
+# mismatched environment: a key minted in the production cabinet cannot work against the sandbox
+# host, and the bank's answer for that ("invalid_client") reads exactly like a wrong client_id.
+# Checking it used to mean opening `.env` by hand next to the client secret, so nobody did.
+#
+# ⚠ ONLY non-secret values. `CLIENT_ID` travels in every request to the bank and is printed on the
+# settings screen anyway; the token URL and API base are addresses. `CLIENT_SECRET` is never read.
+if [ -f .env ]; then
+  echo "── чем настроена Альфа (секретов здесь нет) ────────────────"
+  url=$(grep -E '^ALFA_OAUTH_TOKEN_URL=' .env | cut -d= -f2-)
+  api=$(grep -E '^ALFA_OAUTH_API_BASE=' .env | cut -d= -f2-)
+  cid=$(grep -E '^ALFA_OAUTH_CLIENT_ID=' .env | cut -d= -f2-)
+  echo "  token_url : ${url:-НЕ ЗАДАН}"
+  echo "  api_base  : ${api:-не задан (берётся из token_url)}"
+  echo "  client_id : ${cid:-НЕ ЗАДАН}"
+  case "${url:-}" in
+    *developerhub.alfabank.by*)
+      echo "  ⚠ ЭТО ПЕСОЧНИЦА. Ключ из боевого кабинета здесь не примут никогда."
+      echo "    В песочнице вместо ключа API подставляется буквальное значение «API»."
+      ;;
+    *ibapi2.alfabank.by*) echo "  ✓ боевой хост" ;;
+    '') echo "  ⚠ без token_url подключение по ключу не заработает вовсе" ;;
+    *) echo "  ⚠ хост незнакомый — сверьте с docs/ALFA_API.md" ;;
+  esac
+  # ⚠ Секрет НЕ печатаем, но его ОТСУТСТВИЕ назвать обязаны: без него роут отвечает 503, а не
+  # «банк не принял ключ», — то есть симптом другой, и путать их нельзя.
+  grep -qE '^ALFA_OAUTH_CLIENT_SECRET=.+' .env \
+    && echo "  client_secret : задан (значение не печатаем)" \
+    || echo "  ⚠ client_secret НЕ ЗАДАН — обмен невозможен, роут ответит 503"
+  echo
+fi
+
 # Both roles can serve the route, so read the backend service. `--since` is docker's own filter —
 # grepping a full log on a mobile terminal is what this script exists to avoid.
 log=$(docker compose -f "$COMPOSE" logs --since "$SINCE" --no-log-prefix backend 2>/dev/null)
