@@ -191,7 +191,9 @@ describe('getBankToken', () => {
     const row = await storedRow()
     const { query, calls } = fakeQuery([row])
     const got = await getBankToken(query, 'm1', 'alfa-by', 'MC_7')
-    expect(got).toEqual(token) // refresh decrypted back to plaintext
+    // ⚠ `apiKey: ''` — ВАЛИДНОЕ состояние, а не пропуск: ключ Password Grant есть только у
+    // подключений Альфы, заведённых после #488, и никогда у Приора.
+    expect(got).toEqual({ ...token, apiKey: '' })
     // scoped by all three key parts
     expect(calls[0]!.params).toEqual(['m1', 'alfa-by', 'MC_7'])
     expect(calls[0]!.sql).toMatch(/WHERE member_id = \$1 AND provider = \$2 AND account_key = \$3/)
@@ -512,7 +514,7 @@ describe('bankTokenStore — behavioral (in-memory table model)', () => {
     await saveBankToken(q, token)
     await saveBankToken(q, { ...token, accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000 })
     const got = await getBankToken(q, 'm1', 'alfa-by', 'MC_7')
-    expect(got).toEqual({ ...token, accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000 })
+    expect(got).toEqual({ ...token, apiKey: '', accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000 })
     // still exactly one row for the portal (upsert, not insert)
     expect(await listBankTokensForPortal(q, 'm1')).toHaveLength(1)
   })
@@ -669,7 +671,7 @@ describe('updateBankTokenSecrets — UPDATE-only (#505)', () => {
     })
     expect(ok).toBe(true)
     expect(await getBankToken(q, 'm1', 'alfa-by', 'MC_7')).toEqual({
-      ...token, accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000
+      ...token, apiKey: '', accessToken: 'ACCESS2', refreshToken: 'REFRESH2', expiresAt: 1_800_000_000_000
     })
   })
 

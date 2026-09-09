@@ -61,6 +61,8 @@ function liveDeps(): SetupStatusDeps {
     // without Redis (`queueEnabled`), so reporting the flag alone would show a confident green
     // «опрос включён» while nothing polls at all — the exact silent gap this screen exists to
     // expose, and the worst possible thing for it to get wrong.
+    // Наш client_id у Альфы — его вписывают в кабинете банка при выпуске ключа API (#488).
+    alfaClientId: (process.env.ALFA_OAUTH_CLIENT_ID || '').trim(),
     pollEnabled: (process.env.CRON_REAL_POLL ?? '0') === '1' && queueEnabled(),
     pollIntervalMin: Number.isFinite(interval) && interval > 0 ? Math.floor(interval) : 5,
     // «Моя компания» с расчётным счётом (#493) — тем же фрейм-токеном админа. Отказ проглатывает

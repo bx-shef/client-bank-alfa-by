@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useBankConnect } from '~/composables/useBankConnect'
+import { useSetupStatus } from '~/composables/useSetupStatus'
 import { PREVIEW_BANK_MATRIX, useBankMatrix } from '~/composables/useBankMatrix'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import { BANK_LABELS } from '~/utils/bankLabels'
@@ -25,7 +26,10 @@ import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 // path entirely and keeps working regardless. The copy below says so, because "подключить" reads
 // like a single exclusive choice otherwise.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
-const { start, syncEnabled, connecting, error, enabled } = useBankConnect()
+const { start, connectWithKey, syncEnabled, connecting, error, enabled } = useBankConnect()
+// ⚠ Тот же синглтон, что кормит экран готовности: `client_id` уже приезжает с ним, и второй
+// запрос за одним значением был бы лишним обращением в портал на каждом открытии настроек.
+const setup = useSetupStatus()
 
 // The list is a child component; after a connect finishes we ask it to re-read. Without this the
 // admin returns from the bank tab to a list that still says «пока ничего не подключено» — the exact
@@ -78,6 +82,10 @@ async function reloadMatrix(): Promise<void> {
 }
 
 onMounted(reloadMatrix)
+// Синглтон: повторный `load` на уже загруженном статусе — не второй запрос, а переиспользование.
+onMounted(() => {
+  void setup.load()
+})
 
 const adminChecked = ref(false)
 const started = ref(false)
@@ -131,6 +139,45 @@ onMounted(async () => {
   syncEnabled() // resolve frame presence now so the preview note is correct before any click
   adminChecked.value = true
 })
+
+/**
+ * Альфа подключается КЛЮЧОМ API, Приор — прежним походом в банк (#488).
+ *
+ * ⚠ Разные механики, а не разные кнопки одного действия: у Альфы Code Grant измеренно непригоден
+ * без человека — цепочка refresh живёт 10 часов от авторизации и не продлевается ничем, то есть
+ * владельцу счёта пришлось бы входить в интернет-банк дважды в сутки. У Приора Open Banking, и
+ * другого пути там нет.
+ */
+const KEY_PROVIDERS: ConnectableProvider[] = ['alfa-by']
+const isKeyProvider = computed(() => KEY_PROVIDERS.includes(provider.value))
+const apiKey = ref('')
+const keyConnected = ref(false)
+
+/** Наш `client_id` — его вписывают в кабинете банка при выпуске ключа. Пусто ⇒ не показываем. */
+const alfaClientId = computed(() => String(setup.status.value?.alfaClientId ?? ''))
+const clientIdCopied = ref(false)
+
+async function copyClientId() {
+  if (!alfaClientId.value) return
+  try {
+    await navigator.clipboard.writeText(alfaClientId.value)
+    clientIdCopied.value = true
+  } catch {
+    // Буфер обмена недоступен по http и может быть запрещён политикой во фрейме — поле рядом
+    // остаётся выделяемым, поэтому молчим, а не пугаем ошибкой.
+  }
+}
+
+async function onConnectKey() {
+  keyConnected.value = false
+  const ok = await connectWithKey(provider.value, apiKey.value)
+  if (!ok) return
+  keyConnected.value = true
+  // ⚠ Ключ стираем из поля СРАЗУ: он бессрочный, а форма живёт в открытой вкладке портала.
+  apiKey.value = ''
+  await connectedList.value?.reload()
+  await reloadMatrix()
+}
 
 async function onConnect() {
   started.value = false
@@ -248,6 +295,74 @@ async function onConnect() {
         data-testid="preview-note"
       />
 
+      <!-- ПОДКЛЮЧЕНИЕ КЛЮЧОМ API (#488, Альфа). Инструкция дословно повторяет надписи кабинета
+           банка: человек сверяет глазами то, что видит на экране, а пересказ своими словами
+           («сгенерируйте токен») заставил бы искать несуществующий пункт меню. -->
+      <template v-if="isKeyProvider">
+        <div class="rounded-md bg-(--ui-color-base-8) p-3 text-sm text-(--ui-color-base-2)">
+          <p class="mb-2 font-semibold">
+            Как получить ключ API
+          </p>
+          <ol class="ml-4 list-decimal space-y-1">
+            <li>Владелец счёта входит в <b>Альфа Бизнес Онлайн</b>.</li>
+            <li><b>Настройки</b> → вкладка <b>Open API</b> → кнопка <b>«Сгенерировать ключ API»</b>.</li>
+            <li>
+              <b>НАЗВАНИЕ</b> — любое понятное (например, «Подключение к Б24»),
+              <b>CLIENT ID</b> — значение ниже, <b>ТИП КЛЮЧА</b> — <b>Постоянный ключ</b>.
+            </li>
+            <li>Согласиться с условиями и нажать <b>«Сгенерировать ключ»</b>.</li>
+            <li>Раскрыть строку ключа и нажать <b>«Скопировать ключ»</b> — вставить его в поле ниже.</li>
+          </ol>
+          <p class="mt-2">
+            Ключ бессрочный. Владелец счёта может в любой момент <b>заблокировать</b> или
+            <b>отозвать</b> его там же, в кабинете банка.
+          </p>
+        </div>
+
+        <!-- ⚠ CLIENT ID показываем ЗДЕСЬ, потому что взять его больше неоткуда: диалог банка его
+             спрашивает, а живёт он в переменных окружения нашего сервера. Не секрет — он уходит в
+             каждом запросе к банку. -->
+        <B24FormField
+          v-if="alfaClientId"
+          label="Client ID для кабинета банка"
+          description="Скопируйте и вставьте в поле CLIENT ID при генерации ключа."
+          data-testid="alfa-client-id-field"
+        >
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <B24Input
+              :model-value="alfaClientId"
+              readonly
+              class="w-full font-mono text-xs"
+              data-testid="alfa-client-id"
+              @focus="(e: FocusEvent) => (e.target as HTMLInputElement)?.select()"
+            />
+            <B24Button
+              color="air-secondary-accent"
+              class="shrink-0"
+              data-testid="copy-client-id"
+              @click="copyClientId"
+            >
+              {{ clientIdCopied ? 'Скопировано' : 'Скопировать' }}
+            </B24Button>
+          </div>
+        </B24FormField>
+
+        <B24FormField
+          label="Ключ API"
+          description="Вставьте ключ, скопированный в кабинете банка. Мы храним его в зашифрованном виде и используем только для получения выписки."
+          data-testid="api-key-field"
+        >
+          <B24Input
+            v-model="apiKey"
+            type="password"
+            placeholder="Вставьте ключ API"
+            class="w-full font-mono text-xs"
+            autocomplete="off"
+            data-testid="api-key-input"
+          />
+        </B24FormField>
+      </template>
+
       <!-- Status region: announced to screen readers on change (error = assertive, success = polite). -->
       <div
         role="alert"
@@ -264,6 +379,12 @@ async function onConnect() {
         role="status"
         aria-live="polite"
       >
+        <B24Alert
+          v-if="!error && keyConnected"
+          color="air-primary-success"
+          description="Банк подключён. Осталось выбрать счёт в списке выше."
+          data-testid="key-connected"
+        />
         <B24Alert
           v-if="!error && started"
           color="air-primary-success"
@@ -308,6 +429,18 @@ async function onConnect() {
       </B24FormField>
 
       <B24Button
+        v-if="isKeyProvider"
+        :loading="connecting"
+        :disabled="connecting || !apiKey.trim()"
+        :aria-busy="connecting"
+        color="air-primary"
+        data-testid="connect-key-button"
+        @click="onConnectKey"
+      >
+        Подключить {{ providerLabel }}
+      </B24Button>
+      <B24Button
+        v-else
         :loading="connecting"
         :disabled="connecting"
         :aria-busy="connecting"

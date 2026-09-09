@@ -18,6 +18,9 @@ export interface SetupStatus {
   unhealthyAccounts?: number
   /** Подключения с приостановленным автоопросом (#576). */
   pausedAccounts?: number
+  /** Наш `client_id` у Альфы — его вписывают в кабинете банка при выпуске ключа API (#488).
+   *  Отсутствует ⇒ провайдер на этом стенде не настроен, подсказку показывать не о чем. */
+  alfaClientId?: string
   pollEnabled: boolean
   pollIntervalMin: number
   lastRunMs: number | null
@@ -101,6 +104,9 @@ export function useSetupStatus() {
         pollIntervalMin: Number(res?.pollIntervalMin) || DEFAULTS.pollIntervalMin,
         lastRunMs: typeof res?.lastRunMs === 'number' ? res.lastRunMs : null,
         ...(res?.myCompany ? { myCompany: res.myCompany } : {}),
+        // ⚠ Переносим ТОЛЬКО непустое: пустая строка на экране читалась бы как «вот ваш client_id»,
+        // и человек вписал бы в кабинет банка пустоту.
+        ...(typeof res?.alfaClientId === 'string' && res.alfaClientId ? { alfaClientId: res.alfaClientId } : {}),
         // Признак misconfig карты распознавания (#595): переносим только валидный слот-объект,
         // иначе кривой ответ сервера зажёг бы красную строку на исправном портале.
         // ⚠ Ключ переносим ТОЛЬКО когда сервер его прислал (#46): отсутствие означает «не

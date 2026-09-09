@@ -101,6 +101,43 @@ export function buildTokenExchangeBody(
   })
 }
 
+/**
+ * Тело запроса Password Grant — обмен КЛЮЧА API на пару токенов (#488).
+ *
+ * ⚠ Название типа авторизации вводит в заблуждение: пароля здесь нет. В `username` едет ключ API,
+ * который ВЛАДЕЛЕЦ СЧЁТА генерирует у себя в кабинете Альфа Бизнес Онлайн под наш `client_id`
+ * (Настройки → Open API), и он же может его заблокировать или отозвать. Логин от банка клиент нам
+ * не отдаёт.
+ *
+ * ⚠ ЗАЧЕМ ЭТО ВМЕСТО OAUTH. Замерено дважды: у Code Grant цепочка refresh живёт РОВНО 10 часов от
+ * авторизации, и продлить её нельзя ничем — ни своевременным обновлением (19 обменов по полчаса
+ * прошли, 20-й на 10 ч 03 мин отвергнут), ни использованием токена (те же 19 ступеней делали
+ * успешный запрос к API — граница не сдвинулась ни на минуту). То есть серверное приложение на
+ * Code Grant требует живого входа владельца счёта в интернет-банк дважды в сутки, навсегда.
+ * С постоянным ключом мёртвая цепочка лечится переизданием пары, без человека.
+ *
+ * ⚠ `scope` — только `accounts`: нам нужна выписка, а в документации банка список на десяток прав,
+ * включая подпись документов. Просить больше, чем используешь, здесь стоило бы ровно ничего и
+ * означало бы держать у себя доступ к чужим платежам.
+ *
+ * ⚠ Ключ API — секрет наравне с `client_secret` и БЕССРОЧНЫЙ, в отличие от refresh: он не
+ * ротируется сам, поэтому утёкший однажды остаётся годным, пока клиент его не отзовёт. В логи,
+ * в текст ошибки и в вывод не попадает никогда.
+ */
+export function buildPasswordGrantBody(
+  config: Pick<AlfaOAuthConfig, 'clientId' | 'scope'>,
+  apiKey: string,
+  clientSecret: string
+): URLSearchParams {
+  return new URLSearchParams({
+    grant_type: 'password',
+    username: apiKey,
+    client_id: config.clientId,
+    client_secret: clientSecret,
+    scope: config.scope || DEFAULT_SCOPE
+  })
+}
+
 /** Form body for refreshing tokens. Caller POSTs it to `${baseUrl}/token`.
  * Per RFC 6749 §6, `redirect_uri`/`scope` are omitted; if the Alfa sandbox
  * rejects refresh without them, add them here (verify on the BY server).

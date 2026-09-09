@@ -647,3 +647,107 @@ describe('ensureBankToken: ожидание лока выбирает ВЫЗЫВ
     expect(withLock.mock.calls[0]![2]).toEqual({ lockWait: undefined })
   })
 })
+
+describe('#488 переиздание пары ключом API', () => {
+  // ⚠ Ради этого весь переход. У Code Grant цепочка refresh живёт ровно 10 часов от авторизации и
+  // не продлевается ничем — замерено дважды (9:33 проходит, 10:03 отказ; второй прогон делал
+  // успешный вызов API на каждой ступени, граница не сдвинулась). Значит смерть цепочки была
+  // НЕОБРАТИМА и лечилась только живым входом владельца счёта в интернет-банк.
+
+  const KEY = 'API-KEY-SECRET-VALUE'
+  const reissued = { access_token: 'A9', refresh_token: 'R9', expires_in: 3600 }
+
+  it('банк отверг обновление, есть ключ — выпускаем пару заново, человек не нужен', async () => {
+    const seen: string[] = []
+    const { deps, saved } = fakeDeps({
+      stored: tok({ apiKey: KEY, expiresAt: NOW - 1 }),
+      postRefresh: async () => { throw new Error('invalid_grant: Refresh token expired') },
+      reissueWithKey: async (_url, body) => {
+        seen.push(body)
+        return reissued
+      }
+    })
+    const out = await ensureBankToken(tok({ expiresAt: NOW - 1 }), deps)
+    expect(out.accessToken).toBe('A9')
+    expect(saved).toHaveLength(1)
+    // ⚠ Именно Password Grant, а не повторный refresh: ключ едет в `username`.
+    expect(seen[0]).toContain('grant_type=password')
+    expect(seen[0]).toContain(encodeURIComponent(KEY))
+  })
+
+  it('нет refresh-токена вовсе, но есть ключ — тоже не тупик', async () => {
+    const { deps, saved } = fakeDeps({
+      stored: tok({ apiKey: KEY, refreshToken: '', expiresAt: NOW - 1 }),
+      reissueWithKey: async () => reissued
+    })
+    const out = await ensureBankToken(tok({ expiresAt: NOW - 1 }), deps)
+    expect(out.accessToken).toBe('A9')
+    expect(saved).toHaveLength(1)
+  })
+
+  it('переиздание идёт ПОСЛЕ обмена refresh, а не вместо него', async () => {
+    // Иначе каждый тик тратил бы лишний запрос из общего лимита банка, а ключ светился бы в сети
+    // чаще, чем нужно. Удачный обмен ключа не касается вовсе.
+    let reissues = 0
+    const { deps, posts } = fakeDeps({
+      stored: tok({ apiKey: KEY, expiresAt: NOW - 1 }),
+      reissueWithKey: async () => {
+        reissues++
+        return reissued
+      }
+    })
+    const out = await ensureBankToken(tok({ expiresAt: NOW - 1 }), deps)
+    expect(out.accessToken).toBe('A2')
+    expect(posts).toHaveLength(1)
+    expect(reissues).toBe(0)
+  })
+
+  it('ключа нет — поведение прежнее, исходное исключение банка', async () => {
+    const { deps } = fakeDeps({
+      stored: tok({ expiresAt: NOW - 1 }),
+      postRefresh: async () => { throw new Error('invalid_grant: Refresh token expired') },
+      reissueWithKey: async () => reissued
+    })
+    await expect(ensureBankToken(tok({ expiresAt: NOW - 1 }), deps))
+      .rejects.toThrow(/Refresh token expired/)
+  })
+
+  it('переиздание не удалось — бросаем ИСХОДНОЕ исключение, а не своё', async () => {
+    // По исходному метится спан (`name`/`status`); подмена своим стёрла бы вид отказа.
+    const { deps } = fakeDeps({
+      stored: tok({ apiKey: KEY, expiresAt: NOW - 1 }),
+      postRefresh: async () => { throw new Error('invalid_grant: Refresh token expired') },
+      reissueWithKey: async () => { throw new Error('ключ отозван') }
+    })
+    await expect(ensureBankToken(tok({ expiresAt: NOW - 1 }), deps))
+      .rejects.toThrow(/Refresh token expired/)
+  })
+
+  it('счёт отключили, пока переиздавали — пару НЕ записываем', async () => {
+    // UPDATE-only (#505): переиздание не имеет права воскресить отключённое подключение.
+    const { deps } = fakeDeps({
+      stored: tok({ apiKey: KEY, expiresAt: NOW - 1 }),
+      postRefresh: async () => { throw new Error('invalid_grant') },
+      reissueWithKey: async () => reissued,
+      saveToken: async () => false
+    })
+    await expect(ensureBankToken(tok({ expiresAt: NOW - 1 }), deps))
+      .rejects.toThrow(/invalid_grant/)
+  })
+
+  it('у Приора ключа не бывает — переиздание не пробуется даже при заполненном поле', async () => {
+    // Поле общее на все банки, а Password Grant есть только у Альфы: чужой провайдер обязан идти
+    // прежним путём, иначе мы отправили бы в Приор запрос, которого он не понимает.
+    let reissues = 0
+    const { deps } = fakeDeps({
+      stored: tok({ provider: 'prior-by', apiKey: KEY, expiresAt: NOW - 1 }),
+      postRefresh: async () => { throw new Error('invalid_grant') },
+      reissueWithKey: async () => {
+        reissues++
+        return reissued
+      }
+    })
+    await expect(ensureBankToken(tok({ provider: 'prior-by', expiresAt: NOW - 1 }), deps)).rejects.toThrow()
+    expect(reissues).toBe(0)
+  })
+})
