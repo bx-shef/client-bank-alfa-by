@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, KEEP_ALIVE_BAND, expiredCause } from '../app/utils/bankTokenLifetime'
@@ -129,14 +130,56 @@ describe('сроки в SQL совпадают с `bankTokenLifetime` (#488)', (
     expect(SQL).toContain('CASE provider WHEN \'alfa-by\' THEN \'expired\' ELSE \'due\' END')
   })
 
-  it('причина произносится ТОЛЬКО у истёкшего подключения', () => {
-    // ⚠ Живой прогон 2026-09-06: первая редакция посоветовала переподключить Приора, у которого
-    // последняя удачная пара была два часа назад. В коде причину спрашивают под `h === 'expired'`.
+  it('ветки здорового состояния существуют — без них «ok» падал бы в общий совет', () => {
     const verdict = SQL.slice(SQL.indexOf('case "$health" in'))
     expect(verdict).toMatch(/expired\)[\s\S]*bank-refused/)
     expect(SQL).toContain('Живо, продление в срок')
-    // Ветки здорового состояния обязаны существовать — без них «ok» падал бы в общий совет.
     for (const branch of ['no-refresh)', 'due)', 'ok)']) expect(verdict).toContain(branch)
+  })
+
+  /**
+   * Прогнать НАСТОЯЩИЙ блок вердикта с подставленными значениями.
+   *
+   * ⚠ Поведением, а не грепом: правило «что произносим» успело смениться дважды, и текстовая
+   * проверка обоих раз оставалась зелёной — она смотрела на наличие строк, а не на то, какая из
+   * них выводится. `continue` внутри блока требует цикла, поэтому оборачиваем в `for`.
+   */
+  function verdict(cause: string, health: string): string {
+    const from = SCRIPT.indexOf('  # ⚠ ЗАМЕРЕННЫЙ ОТКАЗ БАНКА')
+    const to = SCRIPT.indexOf('  esac', from)
+    expect(from, 'блок вердикта не найден — его переписали').toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    const block = SCRIPT.slice(from, to + '  esac'.length)
+    return execFileSync('bash', ['-c',
+      `cause=${JSON.stringify(cause)}\nhealth=${JSON.stringify(health)}\nfor _ in 1; do\n${block}\ndone`],
+    { encoding: 'utf8' })
+  }
+
+  // ⚠ ЖИВОЙ ПРОГОН 2026-09-10. Подключение Приора падало FINAL каждые пять минут
+  // (`invalid_grant: Persisted access token data not found`), а секция печатала «Живо, продление в
+  // срок. Действий не требуется»: `health` у Приора считается по сроку СОГЛАСИЯ (до конца ноября)
+  // и по догадке о TTL, отказ банка в него не входит. Оператор спросил «какое подключение умерло»
+  // и получил «все живы» — при том, что свидетельство стояло строкой выше.
+  it('⚠ ОТКАЗ БАНКА произносится и у НЕ истёкшего подключения', () => {
+    const out = verdict('bank-refused', 'ok')
+    expect(out, 'замеренный отказ снова замолчали').toContain('ПАРЫ НЕ ПРИНЕСЛО')
+    expect(out, 'мёртвое подключение объявлено живым').not.toContain('Живо, продление в срок')
+    expect(out, 'не сказано, что старую строку надо отключить').toMatch(/ОТКЛЮЧЕНИЕМ ЭТОЙ СТРОКИ/)
+  })
+
+  // ⚠ Обратная сторона — правило от 2026-09-06, и отменять его нельзя. Тогда совет «переподключите»
+  // получил ЗДОРОВЫЙ Приор: продление просто ещё не бралось за строку. У не-истёкшего подключения
+  // это норма, а не диагноз, и произносить тут нечего.
+  it('«продление не ходило» у здорового подключения МОЛЧИТ', () => {
+    const out = verdict('never-tried', 'ok')
+    expect(out).toContain('Живо, продление в срок')
+    expect(out, 'ложная тревога 2026-09-06 вернулась').not.toContain('ПАРЫ НЕ ПРИНЕСЛО')
+    expect(out).not.toContain('НЕ ХОДИЛО')
+  })
+
+  it('у истёкшего подключения разбор причины остался прежним', () => {
+    expect(verdict('bank-refused', 'expired')).toContain('ИСТЕКЛО. Продление ХОДИЛО в банк')
+    expect(verdict('never-tried', 'expired')).toContain('НЕ ХОДИЛО в банк ни разу')
   })
 
   it('согласие банка перекрывает оценки по возрасту токена', () => {
