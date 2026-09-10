@@ -238,6 +238,54 @@ describe('вердикт «КТО продлевает банк-токен» (#4
     return { runs: out[0]!, selected: out[1]!, refreshed: out[2]!, total: out[3]! }
   }
 
+  /**
+   * НАСТОЯЩИЙ разбор «спорного счёта» из скрипта — по той же причине, что и у сводки выше: копия
+   * здесь разошлась бы молча, а расхождение читалось бы как «спорных счетов нет», то есть как
+   * «всё в порядке» ровно в том случае, ради которого секция написана.
+   */
+  function sharedAccounts(logLines: string[]): string[] {
+    const from = SCRIPT.indexOf('shared="$(')
+    const to = SCRIPT.indexOf('if [ -n "${shared:-}" ]', from)
+    expect(from, 'разбор спорного счёта не найден — его переписали').toBeGreaterThan(0)
+    const block = SCRIPT.slice(from, to).replaceAll('$DC logs --since "$SINCE" worker 2>&1', 'cat')
+    return execFileSync('bash', ['-c', block + '\nprintf "%s" "$shared"'],
+      { input: logLines.join('\n'), encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+  }
+
+  // ⚠ ЖИВОЙ ЗАМЕР 2026-09-10: один счёт `BY09ALFA…` опрашивали ДВА портала, и перед каждым забором
+  // стояло «банк отверг токен» — война обновлений (ключ API у Альфы один на приложение, второй на
+  // тот же `client_id` банк не выдаёт). Секция существует, чтобы это было видно словами, а не
+  // вычитывалось из чередования строк глазами.
+  it('спорный счёт находится в НАСТОЯЩИХ строках [fetch], а не в выдуманных', () => {
+    const line = (portal: string, account: string, provider = 'alfa-by'): string =>
+      // Форма — ровно та, что печатает воркер (`worker.ts`): провайдер, портал, счёт, окно, число.
+      `worker-1 | [fetch] INFO: ${provider} portal ${portal}, account ${account} 2026-09-07..2026-09-10: 9 ops`
+    expect(sharedAccounts([
+      line('f44eefa0', 'BY09ALFA3013212016013027'),
+      line('f4b324c5', 'BY09ALFA3013212016013027')
+    ])).toEqual(['alfa-by|BY09ALFA3013212016013027'])
+  })
+
+  it('один портал на счёт спорным НЕ объявляется — иначе секция кричала бы на обычном флоте', () => {
+    const line = (portal: string, account: string): string =>
+      `worker-1 | [fetch] INFO: alfa-by portal ${portal}, account ${account} 2026-09-07..2026-09-10: 9 ops`
+    // Тот же портал дважды (два тика) — не спор. Разные счета у разных порталов — тоже не спор.
+    expect(sharedAccounts([
+      line('f44eefa0', 'BY09ALFA0001'),
+      line('f44eefa0', 'BY09ALFA0001'),
+      line('f4b324c5', 'BY62ALFA0002')
+    ])).toEqual([])
+  })
+
+  // ⚠ Банк — ЧАСТЬ ключа: один и тот же номер у разных банков это разные счета, и склеить их
+  // значило бы объявить спор там, где его нет.
+  it('одинаковый номер у РАЗНЫХ банков спором не считается', () => {
+    expect(sharedAccounts([
+      `worker-1 | [fetch] INFO: alfa-by portal p1, account BY00SAME0001 2026-09-07..2026-09-10: 1 ops`,
+      `worker-1 | [fetch] INFO: prior-by portal p2, account BY00SAME0001 2026-09-07..2026-09-10: 1 ops`
+    ])).toEqual([])
+  })
+
   it('разбирает НАСТОЯЩУЮ строку сводки, а не выдуманную', async () => {
     // Строку берём у самого `runBankKeepAlive`: если он завтра переставит поля, тест упадёт здесь,
     // а не на проде тишиной в диагностике.
