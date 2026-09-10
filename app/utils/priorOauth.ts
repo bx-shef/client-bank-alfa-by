@@ -383,8 +383,19 @@ export function buildRegistrationMetadata(input: PriorRegistrationInput): Record
 
 /** Inputs for a `/accountConsents` request. */
 export interface PriorConsentInput {
-  /** Consent validity — must be in the FUTURE. Distinct from the statement window. */
-  expirationDate: string
+  /**
+   * Срок согласия (`yyyy-MM-dd`, в БУДУЩЕМ) — не путать с окном выписки.
+   *
+   * ⚠ НЕОБЯЗАТЕЛЕН, и не слать его ЛУЧШЕ. Замерено на боевом банке 2026-09-10: запрос без этого
+   * поля отвечает `201`, а банк проставляет СВОЙ срок — **три года**. Наши прежние 90 дней были
+   * числом агента, а не банка, и стоили владельцу счёта похода в интернет-банк каждый квартал.
+   *
+   * ⚠ Формат строгий: на полной метке времени банк отвечает `BY.NBRB.Field.Invalid: must match
+   * yyyy-MM-dd`. Поле оставлено ради проб и на случай, если однажды понадобится срок КОРОЧЕ
+   * банковского (например, разовое подключение) — просить БОЛЬШЕ смысла нет, умолчание и так
+   * длиннее всего, что мы бы придумали.
+   */
+  expirationDate?: string
   /** Optional statement window bounds (`yyyy-MM-dd`); may be in the past. */
   transactionFromDate?: string
   transactionToDate?: string
@@ -393,11 +404,11 @@ export interface PriorConsentInput {
 }
 
 /** Body for `POST /accountConsents` — wrapped in `{ data: … }` as the API expects. */
-export function buildConsentRequest(input: PriorConsentInput): { data: Record<string, unknown> } {
+export function buildConsentRequest(input: PriorConsentInput = {}): { data: Record<string, unknown> } {
   return {
     data: {
       permissions: input.permissions ?? CONSENT_PERMISSIONS,
-      expirationDate: input.expirationDate,
+      ...(input.expirationDate ? { expirationDate: input.expirationDate } : {}),
       ...(input.transactionFromDate ? { transactionFromDate: input.transactionFromDate } : {}),
       ...(input.transactionToDate ? { transactionToDate: input.transactionToDate } : {})
     }
@@ -650,7 +661,7 @@ export function extractIntentId(response: unknown): string | null {
 /**
  * Pull the consent's `expirationDate` out of a `/accountConsents` response, as epoch ms.
  *
- * ⚠ WHY READ IT BACK AT ALL — we are the ones who asked for it (`priorConsentExpiry`, 90 days). The
+ * ⚠ WHY READ IT BACK AT ALL — we do NOT ask for a term at all any more (measured 2026-09-10: the
  * bank is free to CLAMP that request (a shorter maximum, a policy change), and it answers with what
  * it actually granted. Trusting our own request would then put a date in the UI that the bank does
  * not honour — the very class of lie this whole area keeps producing: a calm green row over a
