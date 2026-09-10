@@ -5,7 +5,8 @@ import { bankRefreshLockKey } from '../server/utils/bankRefreshLock'
 import { selectBankAccountsNearExpiry } from '../server/utils/bankTokenKeepAlive'
 import type { BankAccountInfo } from '../server/utils/bankTokenStore'
 import { updateBankTokenSecrets } from '../server/utils/bankTokenStore'
-import { pickAccountPollers, statementRecipients } from '../app/utils/accountSharing'
+import { accountsForPolling } from '../server/queue/cron'
+import { handleFetchJob, type HandlerDeps } from '../server/queue/handlers'
 
 // ОДИН СЧЁТ БАНКА, ПОДКЛЮЧЁННЫЙ ИЗ ДВУХ РАЗНЫХ ПОРТАЛОВ Б24 (#659).
 //
@@ -44,7 +45,6 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     id: 1,
     lastAttemptAt: 0,
     consentExpiresAt: 0,
-    accountConfirmedAt: 0,
     ...over
   }
 }
@@ -133,31 +133,39 @@ describe('что делает крон продления: замер, а не �
   })
 })
 
-describe('асимметрия с опросом: там та же форма УЖЕ закрыта (#615)', () => {
-  it('опрашивает счёт ОДИН портал, а не оба', () => {
-    const pollers = pickAccountPollers(
-      [fromPortal('A', { accountConfirmedAt: NOW }), fromPortal('B', { accountConfirmedAt: NOW })], NOW)
-    expect(pollers).toHaveLength(1)
+describe('опрос устроен ТАК ЖЕ, как продление: каждый портал забирает СВОЮ выписку', () => {
+  // ⚠ Здесь стояла свёртка «один счёт — один опрос» (#615), и она снята 2026-09-10 решением
+  // владельца. Довод не в том, что она была не нужна: она берегла лимит банка и снимала гонку за
+  // токеном, — а в том, что раздавать выписку соседу можно было ТОЛЬКО по счёту, который назвал
+  // сам банк (введённый руками номер доказательством не является: вписав чужой IBAN, админ
+  // получал бы чужие деньги в свою CRM — это граница приватности, а не оптимизация). Боевая Альфа
+  // полученный счёт среди своих не называла, поэтому свёртка не включилась НИ РАЗУ, и весь её
+  // механизм существовал вхолостую.
+  //
+  // Цена принята явно: два портала переиздают пару по очереди. Альфа это переживает сама —
+  // переспрашивание токена на 401 плюс СЛУЧАЙНАЯ пауза перед повтором, которая их разводит.
+
+  it('оба портала попадают в план опроса — счёт у них общий, а подключения разные', () => {
+    const plan = accountsForPolling([fromPortal('A'), fromPortal('B')])
+    expect(plan.map(p => p.memberId).sort()).toEqual(['A', 'B'])
+    for (const p of plan) expect(p.accounts).toEqual([ACCOUNT])
   })
 
-  it('выписка достаётся соседу только по ПОДТВЕРЖДЁННОМУ банком счёту', () => {
-    // Введённый руками номер доказательством не является: вписав чужой IBAN, админ иначе получал
-    // бы чужие деньги в свою CRM. Это граница приватности, а не оптимизация.
-    const confirmed = statementRecipients(
-      [fromPortal('A', { accountConfirmedAt: NOW }), fromPortal('B', { accountConfirmedAt: NOW })],
-      'alfa-by', ACCOUNT, 'A')
-    expect(confirmed).toEqual(['A', 'B'])
-
-    const unconfirmed = statementRecipients(
-      [fromPortal('A', { accountConfirmedAt: NOW }), fromPortal('B', { accountConfirmedAt: 0 })],
-      'alfa-by', ACCOUNT, 'A')
-    expect(unconfirmed, 'неподтверждённому соседу отдали чужую выписку').toEqual(['A'])
-  })
-
-  it('опросивший портал получает выписку ВСЕГДА, даже без подтверждения', () => {
-    // Он сходил в банк своим грантом, и банк отдал ему её — сильнее доказательства не бывает.
-    // Гейт подтверждения существует для СОСЕДЕЙ.
-    expect(statementRecipients([fromPortal('A', { accountConfirmedAt: 0 })], 'alfa-by', ACCOUNT, 'A'))
-      .toEqual(['A'])
+  it('выписка достаётся ТОЛЬКО тому порталу, который за ней сходил', async () => {
+    // ⚠ Не косметика, а та самая граница приватности: раздача по совпадению НОМЕРА — способ
+    // увести чужую выписку в свою CRM, а номер мы нигде не проверяем.
+    const enqueued: string[] = []
+    const deps = {
+      fetchStatement: async () => [{ account: ACCOUNT, docId: 'd1' }],
+      enqueueCrmSync: async (j: { memberId: string }) => {
+        enqueued.push(j.memberId)
+        return true
+      }
+    } as unknown as HandlerDeps
+    await handleFetchJob(
+      { memberId: 'A', providerId: 'alfa-by', account: ACCOUNT, dateFrom: '2026-09-01', dateTo: '2026-09-02' } as never,
+      deps
+    )
+    expect(enqueued, 'выписку отдали не только опросившему порталу').toEqual(['A'])
   })
 })
