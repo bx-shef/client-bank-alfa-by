@@ -155,14 +155,15 @@ describe('сроки в SQL совпадают с `bankTokenLifetime` (#488)', (
    * проверка обоих раз оставалась зелёной — она смотрела на наличие строк, а не на то, какая из
    * них выводится. `continue` внутри блока требует цикла, поэтому оборачиваем в `for`.
    */
-  function verdict(cause: string, health: string): string {
-    const from = SCRIPT.indexOf('  # ⚠ ЗАМЕРЕННЫЙ ОТКАЗ БАНКА')
+  function verdict(cause: string, health: string, selfheal = ''): string {
+    const from = SCRIPT.indexOf('  # ⚠ САМОЛЕЧЕНИЕ СИЛЬНЕЕ ОТКАЗА ПРОДЛЕНИЯ')
     const to = SCRIPT.indexOf('  esac', from)
     expect(from, 'блок вердикта не найден — его переписали').toBeGreaterThan(0)
     expect(to).toBeGreaterThan(from)
     const block = SCRIPT.slice(from, to + '  esac'.length)
     return execFileSync('bash', ['-c',
-      `cause=${JSON.stringify(cause)}\nhealth=${JSON.stringify(health)}\nfor _ in 1; do\n${block}\ndone`],
+      `cause=${JSON.stringify(cause)}\nhealth=${JSON.stringify(health)}\nselfheal=${JSON.stringify(selfheal)}\n`
+      + `for _ in 1; do\n${block}\ndone`],
     { encoding: 'utf8' })
   }
 
@@ -176,6 +177,24 @@ describe('сроки в SQL совпадают с `bankTokenLifetime` (#488)', (
     expect(out, 'замеренный отказ снова замолчали').toContain('ПАРЫ НЕ ПРИНЕСЛО')
     expect(out, 'мёртвое подключение объявлено живым').not.toContain('Живо, продление в срок')
     expect(out, 'не сказано, что старую строку надо отключить').toMatch(/ОТКЛЮЧЕНИЕМ ЭТОЙ СТРОКИ/)
+  })
+
+  // ⚠ ЖИВОЙ ПРОГОН 2026-09-10, второй за день и в ДРУГУЮ сторону. Обе строки Альфы получили
+  // «идите в интернет-банк и отключите строку» — при том что в ту же минуту лог печатал «пара
+  // выпущена заново ключом API — человек не потребовался», а забор возвращал операции. Выполнив
+  // совет, владелец сломал бы работающее подключение и сходил бы в банк зря.
+  it('⚠ у строки с КЛЮЧОМ API отказ продления НЕ зовёт человека в банк', () => {
+    const out = verdict('bank-refused', 'ok', 'key')
+    expect(out, 'совет идти в банк остался').not.toMatch(/ОТКЛЮЧЕНИЕМ ЭТОЙ СТРОКИ/)
+    expect(out, 'про переиздание ключом не сказано').toContain('КЛЮЧ API')
+    // ⚠ И не молчит: отказ продления был, читатель обязан узнать, ЧЕМ это проверяется.
+    expect(out, 'не названа следующая проверка').toContain('make poll-check')
+  })
+
+  // ⚠ Ключ смотрим у СТРОКИ, а не у провайдера: подключение Альфы старше перехода на ключ (#488)
+  // запаса не имеет, и совет ему нужен прежний. Пустое значение — именно такая строка.
+  it('без ключа совет прежний — строка сама себя не чинит', () => {
+    expect(verdict('bank-refused', 'ok', '')).toMatch(/ОТКЛЮЧЕНИЕМ ЭТОЙ СТРОКИ/)
   })
 
   // ⚠ Обратная сторона — правило от 2026-09-06, и отменять его нельзя. Тогда совет «переподключите»

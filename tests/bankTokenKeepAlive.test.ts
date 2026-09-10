@@ -7,7 +7,7 @@ import {
   selectBankAccountsNearExpiry, type BankKeepAliveDeps,
   EXPIRED_RETRY_INTERVAL_MS,
   expiredRetryDue,
-  KEEP_ALIVE_BAND, accountsOnManyPortals } from '../server/utils/bankTokenKeepAlive'
+  KEEP_ALIVE_BAND, accountsOnManyPortals, sharedAccountNotices } from '../server/utils/bankTokenKeepAlive'
 import { connectionHealth } from '../app/utils/bankTokenLifetime'
 
 // Мотив, а не только предмет: подключение Альфы, давшее первые 208 боевых операций, умерло за
@@ -703,7 +703,7 @@ describe('счёт, подключённый с НЕСКОЛЬКИХ порта�
       .toMatch(/[0-9a-f]{6,}:alfa-by\/BY09[\s\S]*[0-9a-f]{6,}:alfa-by\/BY09/)
   })
 
-  it('о совместном подключении говорится ОТДЕЛЬНО и с лекарством', async () => {
+  it('о совместном подключении говорится ОТДЕЛЬНО', async () => {
     const logged: string[] = []
     await runBankKeepAlive({
       now: () => NOW,
@@ -713,8 +713,35 @@ describe('счёт, подключённый с НЕСКОЛЬКИХ порта�
       log: (m: string) => logged.push(m),
       warn: (m: string) => logged.push(m)
     })
-    const text = logged.join('\n')
-    expect(text).toMatch(/MORE THAN ONE portal/)
-    expect(text, 'не сказано, что переподключение лечит лишь до следующего обновления').toMatch(/until the next refresh/)
+    expect(logged.join('\n')).toMatch(/shared across portals/)
+  })
+
+  // ⚠ ЖИВОЙ ПРОГОН 2026-09-10. Прежняя строка шла ПРЕДУПРЕЖДЕНИЕМ и советовала «disconnect the
+  // account on the portal that should not have it» — то есть звала оборвать РАБОТАЮЩЕЕ подключение
+  // и отправить владельца счёта в интернет-банк без причины. К тому дню оба утверждения были
+  // опровергнуты: Альфа переиздаёт пару ключом API сама, а у Приора общего токена нет вовсе.
+  it('⚠ общий счёт больше НЕ зовёт отключать портал', () => {
+    const alfa = sharedAccountNotices([row('A', 'BY09'), row('B', 'BY09')])
+    expect(alfa).toHaveLength(1)
+    expect(alfa[0]?.text, 'совет отключить портал вернулся').not.toMatch(/disconnect/i)
+    expect(alfa[0]?.text, 'не сказано про переиздание ключом').toMatch(/API key/)
+    // Действия нет ⇒ и предупреждения нет: `warn` без действия приучает не читать канал.
+    expect(alfa[0]?.level, 'снова предупреждение о штатной схеме').toBe('info')
+  })
+
+  // ⚠ Текст РАЗНЫЙ по банкам, и это несущее: у Приора каждый портал держит СВОЙ грант, поэтому
+  // «сжигают пару друг другу» — про Альфу и только про неё. Общая строка на оба банка описывала
+  // бы Приору механику, которой у него нет.
+  it('у Приора говорится про РАЗНЫЕ гранты, а не про общую пару', () => {
+    const prior = { ...row('A', 'BY26'), provider: 'prior-by' as const }
+    const other = { ...row('B', 'BY26'), provider: 'prior-by' as const }
+    const notices = sharedAccountNotices([prior, other])
+    expect(notices).toHaveLength(1)
+    expect(notices[0]?.text).toMatch(/OWN grant/)
+    expect(notices[0]?.text, 'Приору приписали ключ API').not.toMatch(/API key/)
+  })
+
+  it('счёт на одном портале строки не порождает', () => {
+    expect(sharedAccountNotices([row('A', 'BY09')])).toEqual([])
   })
 })
