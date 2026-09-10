@@ -303,14 +303,14 @@ function nameRefs(refs: readonly BankAccountRef[]): string {
 /**
  * Счета, подключённые СРАЗУ С НЕСКОЛЬКИХ порталов.
  *
- * ⚠ Это не учёт, а диагноз. Лок обновления берётся по `bankRefreshLockKey(memberId, …)`, то есть
- * ПЕР-ПОРТАЛЬНО: два портала с одним счётом берут РАЗНЫЕ локи и идут в банк параллельно. Альфа
- * ротирует refresh при каждом обновлении, поэтому второй предъявляет уже сожжённый токен. Внутри
- * одного портала эту гонку закрывает лок по гранту (#23); между порталами координации нет и быть
- * не может — это разные согласия.
+ * ⚠ Лок обновления берётся по `bankRefreshLockKey(memberId, …)`, то есть ПЕР-ПОРТАЛЬНО: два
+ * портала с одним счётом берут РАЗНЫЕ локи и идут в банк параллельно. Внутри одного портала гонку
+ * закрывает лок по гранту (#23); между порталами координации нет и быть не может — это разные
+ * согласия.
  *
- * ⚠ Симптом снаружи — «подключение умирает каждую ночь без причины», и переподключение лечит его
- * ровно до следующего обновления. Заметить это по логу было нельзя, пока в нём не было портала.
+ * ⚠ Само по себе это НЕ диагноз — с 2026-09-10 такова схема (решение владельца: каждый портал
+ * опрашивает СВОЁ подключение). Что из этого следует, зависит от банка, и текст выбирает
+ * `sharedAccountNotices` — здесь только счёт.
  */
 export function accountsOnManyPortals(rows: readonly BankAccountInfo[]): string[] {
   const byAccount = new Map<string, Set<string>>()
@@ -321,6 +321,50 @@ export function accountsOnManyPortals(rows: readonly BankAccountInfo[]): string[
     byAccount.set(key, set)
   }
   return [...byAccount.entries()].filter(([, portals]) => portals.size > 1).map(([key]) => key)
+}
+
+/** Строка лога про общий счёт: уровень выбирается вместе с текстом, а не вызывающим. */
+export interface SharedAccountNotice {
+  level: 'info' | 'warn'
+  text: string
+}
+
+/**
+ * Что сказать про счета, подключённые с нескольких порталов — ОТДЕЛЬНО ПО БАНКАМ.
+ *
+ * ⚠ Прежняя строка была ОДНА на всех, шла предупреждением и советовала «disconnect the account on
+ * the portal that should not have it». Живой прогон 2026-09-10 опроверг её дважды:
+ *  • у Альфы пара действительно обесценивается соседом — но выпускается ЗАНОВО ключом API, и
+ *    человек не нужен (`[bank-keepalive] пара выпущена заново ключом API`), а забор проходит;
+ *  • у Приора общего токена НЕТ вовсе: у каждого портала свой грант от своей авторизации. Замерено
+ *    в тот же день: два портала на одном счёте Приора опрашивали банк по очереди, оба забрали
+ *    выписку, отказов продления ноль.
+ * То есть строка звала владельца оборвать РАБОТАЮЩЕЕ подключение и отправить владельца счёта в
+ * интернет-банк без причины — и противоречила решению владельца от 2026-09-10 («каждый портал
+ * опрашивает своё подключение, лишнее переключение не проблема»).
+ *
+ * ⚠ Поэтому уровень теперь `info`, а не `warn`: действия нет ни в одной ветке, а предупреждение
+ * без действия приучает не читать канал. Строку не убираем совсем — она объясняет переиздания
+ * пары в логе Альфы, иначе их читают как сбой.
+ *
+ * ⚠ Про ОДНОВРЕМЕННОЕ продление Приора двумя порталами не утверждаем ничего: на замере продление
+ * не бралось за эти строки ни разу (`selected=0`). Знаем структуру (гранты разные), не знаем
+ * поведение банка — и молчим о том, чего не мерили.
+ */
+export function sharedAccountNotices(rows: readonly BankAccountInfo[]): SharedAccountNotice[] {
+  const byProvider = new Map<string, string[]>()
+  for (const key of accountsOnManyPortals(rows)) {
+    const provider = key.slice(0, key.indexOf('/'))
+    byProvider.set(provider, [...(byProvider.get(provider) ?? []), key])
+  }
+  return [...byProvider.entries()].map(([provider, keys]) => ({
+    level: 'info' as const,
+    text: `${keys.length} account(s) shared across portals (${provider}): ${keys.map(logSafeKey).join(', ')} — `
+      + (provider === 'alfa-by'
+        ? 'each portal issues its own pair from its own API key, so they invalidate each other and the '
+        + 'app re-issues automatically ("пара выпущена заново ключом API"). No human needed.'
+        : 'each portal holds its OWN grant, so there is no shared refresh token to burn.')
+  }))
 }
 
 /** Account keys can carry an IBAN; clamp + strip before logging (defence-in-depth, PRIVACY §Логи). */
@@ -393,13 +437,10 @@ export async function runBankKeepAlive(deps: BankKeepAliveDeps): Promise<BankKee
   if (expired.length > 0) {
     deps.warn?.(`${expired.length} connection(s) past their assumed refresh lifetime — retried rarely, the bank has the final say; if the retry keeps failing, reconnect: ${nameRefs(expired)}`)
   }
-  // ⚠ Отдельной строкой и ГРОМЧЕ остальных: пока счёт подключён с двух порталов, переподключение
-  // лечит симптом до следующего обновления, и владелец ходит в интернет-банк по кругу.
-  const shared = accountsOnManyPortals(rows)
-  if (shared.length > 0) {
-    deps.warn?.(`${shared.length} account(s) connected from MORE THAN ONE portal: ${shared.map(logSafeKey).join(', ')} — `
-      + `refresh is locked per portal, so they refresh in parallel and burn each other's rotated token. `
-      + `Reconnecting only helps until the next refresh: disconnect the account on the portal that should not have it.`)
+  // ⚠ Отдельной строкой, но НЕ предупреждением: с 2026-09-10 общий счёт — это схема, а не поломка,
+  // и что из неё следует, зависит от банка. Разбор и замер — у `sharedAccountNotices`.
+  for (const notice of sharedAccountNotices(rows)) {
+    (notice.level === 'warn' ? deps.warn : deps.log)?.(notice.text)
   }
   // ⚠ `total` — по факту потерянных дней (#488). Сводка из одних нулей читалась одинаково в двух
   // РАЗНЫХ мирах: «подключений нет вовсе» и «все подключения свежие, обновлять нечего». Первое —
