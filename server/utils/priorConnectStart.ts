@@ -153,15 +153,24 @@ export interface PriorConnectDeps {
 /** Consent scope for token Б (the client_credentials token that creates the consent). */
 export const PRIOR_CONSENT_SCOPE = 'accounts'
 
-/** How long the created consent stays valid. The bank requires `expirationDate` to be in the
- *  FUTURE (it is the consent's lifetime, NOT the statement window) — 90 days keeps the connected
- *  account polling without re-consent for a quarter. */
-export const PRIOR_CONSENT_DAYS = 90
-
-/** Build the consent `expirationDate` (`yyyy-MM-dd`) `days` ahead of `nowMs`. Pure. */
-export function priorConsentExpiry(nowMs: number, days = PRIOR_CONSENT_DAYS): string {
-  return new Date(nowMs + days * 864e5).toISOString().slice(0, 10)
-}
+/**
+ * Срок согласия МЫ НЕ ПРОСИМ — его ставит банк, и его умолчание длиннее всего, что мы бы выбрали.
+ *
+ * ⚠ ЗАМЕР 2026-09-10 на боевом контуре: запрос `/accountConsents` БЕЗ поля `expirationDate`
+ * отвечает `201`, и банк проставляет **три года** (`2029-09-10` на запрос от 2026-09-10).
+ *
+ * ⚠ До этого здесь стояло `PRIOR_CONSENT_DAYS = 90` — число, выбранное агентом, а не банком, и
+ * выданное в документации за «свойство модели Open Banking». Ценой была повторная авторизация
+ * владельцем счёта каждый квартал: подключение молча переставало приносить операции, и лечилось
+ * только его походом в интернет-банк. Двенадцатикратная разница держалась на невыясненном
+ * умолчании.
+ *
+ * ⚠ Просить БОЛЬШЕ трёх лет не пробуем: умолчание банка и так длиннее любого разумного запроса, а
+ * запрос сверх него рискует отказом — а отказ здесь ломает подключение в тот момент, когда
+ * владелец счёта стоит у экрана банка. Спросить, если понадобится, можно пробой:
+ * `make prior-probe CONSENT=1 DAYS=<N>`.
+ */
+export const PRIOR_CONSENT_DAYS_FROM_BANK = 'без запроса — срок ставит банк'
 
 /**
  * Run the Prior connect preamble and return the authorize URL the admin must open.
@@ -180,8 +189,7 @@ export async function buildPriorConnectUrl(
    * и подписанный state — единственное, чему колбэк вправе верить.
    */
   signState: (extra: { consentExpiresAt: number | null }) => string,
-  deps: PriorConnectDeps,
-  nowMs: number
+  deps: PriorConnectDeps
 ): Promise<string> {
   // Token endpoint from config (may be a DIFFERENT origin than the resource API — see the field
   // docs); the consent lives on the Open-banking resource API, hence `baseUrl`.
@@ -202,13 +210,13 @@ export async function buildPriorConnectUrl(
   const consentRaw = await deps.postConsent(
     consentUrl,
     tokenB.accessToken,
-    buildConsentRequest({ expirationDate: priorConsentExpiry(nowMs) })
+    buildConsentRequest()
   )
   const intentId = extractIntentId(consentRaw)
   if (!intentId) throw new Error('priorConnect: consent response carried no intent id')
-  // Срок согласия берём ИЗ ОТВЕТА банка: просили мы своё (`priorConsentExpiry`), но банк волен
-  // урезать запрошенное и отвечает тем, что реально выдал. `null` — поля не было; выдумывать дату
-  // нельзя, «неизвестно» честнее (#503).
+  // Срок согласия берём ИЗ ОТВЕТА банка — теперь это ЕДИНСТВЕННЫЙ источник: мы его не просим
+  // вовсе (см. `PRIOR_CONSENT_DAYS_FROM_BANK`). `null` — поля не было; выдумывать дату нельзя,
+  // «неизвестно» честнее (#503).
   const consentExpiresAt = extractConsentExpiry(consentRaw)
   const state = signState({ consentExpiresAt })
 

@@ -42,7 +42,7 @@ function liveConnectDeps(): ConnectStartDeps {
     // `priorTokenRequest` (#444) — this transport just sends what it is given: under
     // client_secret_basic `headers` carries the Authorization header, under private_key_jwt the
     // signed assertion rides in `body`. Neither is ever logged or put in the URL.
-    buildPriorUrl: (config, state, nowMs) => buildPriorConnectUrl(config, state, {
+    buildPriorUrl: (config, state) => buildPriorConnectUrl(config, state, {
       postToken: (url, body, headers) => {
         const fetchJson = $fetch as unknown as (
           url: string,
@@ -70,7 +70,7 @@ function liveConnectDeps(): ConnectStartDeps {
       signJwt: signPriorJwt,
       nowSec: () => Math.floor(Date.now() / 1000),
       newId: () => randomUUID()
-    }, nowMs),
+    }),
     secret: resolveAuthConfig(process.env).secret,
     // «Моя компания» с расчётным счётом (#493): проверяем ДО того, как человек пойдёт в банк
     // вводить пароль. Тем же фрейм-токеном администратора, который уже проверен выше.
