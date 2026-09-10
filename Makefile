@@ -301,6 +301,8 @@ prior-switch:
 #   make prior-probe                       # проба https://api.priorbank.by:9344
 #   make prior-probe HOST=https://хост:порт
 #   make prior-probe CONSENT=1             # + создать пробное согласие (ЗАПИСЬ в банк)
+#   make prior-probe CONSENT=1 DAYS=3650   # сколько банк даёт на самом деле (наши 90 — НАШЕ число)
+#   make prior-probe CONSENT=1 DAYS=open   # а без поля срока — примет?
 #
 # Креды берутся из ./.env и в вывод не попадают. Нужны только curl и openssl.
 prior-probe:
@@ -309,7 +311,13 @@ prior-probe:
 	  && curl -fsSL -o "$$t" "$(RAW)/prior-host-probe.sh" \
 	  && { h="$${HOST:-}"; [ -n "$$h" ] || h="https://api.priorbank.by:9344"; \
 	       c=""; [ "$${CONSENT:-}" = "1" ] && c="--with-consent"; \
-	       bash "$$t" "$$h" $$c; }
+	       d=""; case "$${DAYS:-}" in \
+	         "") ;; \
+	         open) d="--consent-open" ;; \
+	         *[!0-9]*) echo "DAYS: число дней или open"; exit 2 ;; \
+	         *) d="--consent-days $${DAYS}" ;; \
+	       esac; \
+	       bash "$$t" "$$h" $$c $$d; }
 
 ## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
 doctor:
