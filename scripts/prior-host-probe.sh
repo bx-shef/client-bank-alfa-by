@@ -20,18 +20,34 @@
 #   bash prior-host-probe.sh                       # проба https://api.priorbank.by:9344
 #   bash prior-host-probe.sh https://ДРУГОЙ:ПОРТ   # другой адрес
 #   bash prior-host-probe.sh --with-consent        # + создать пробное согласие (ЗАПИСЬ в банк)
+#   bash prior-host-probe.sh --with-consent --consent-days 3650   # сколько банк даёт на самом деле
+#   bash prior-host-probe.sh --with-consent --consent-open        # а без поля срока — примет?
 
 set -u
 
 TARGET="https://api.priorbank.by:9344"
 WITH_CONSENT=0
-for a in "$@"; do
-  case "$a" in
+# Сколько дней просим у согласия. ⚠ Наши боевые 90 дней (`PRIOR_CONSENT_DAYS`) — это НАШЕ число, а
+# не потолок банка: банк требует лишь, чтобы дата была в будущем, а свой предел он нигде не назвал.
+# Проверяется это одним запросом — просим много и смотрим, что вернулось: то же самое (значит
+# терпит), урезанное (значит вот его потолок) или отказ (значит предел назван в тексте ошибки).
+CONSENT_DAYS=1
+# Отдельный случай: не слать поле вовсе. В Open Banking это форма «бессрочного» согласия, и принимает
+# ли её ЭТОТ банк — тоже неизвестно. Наш боевой код поле шлёт всегда, поэтому спросить можно только здесь.
+CONSENT_OPEN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
     --with-consent) WITH_CONSENT=1 ;;
-    https://*) TARGET="${a%/}" ;;
-    *) echo "не понял аргумент: $a"; exit 2 ;;
+    --consent-days) shift; CONSENT_DAYS="${1:-1}" ;;
+    --consent-open) CONSENT_OPEN=1 ;;
+    https://*) TARGET="${1%/}" ;;
+    *) echo "не понял аргумент: $1"; exit 2 ;;
   esac
+  shift
 done
+case "$CONSENT_DAYS" in
+  ''|*[!0-9]*) echo "--consent-days: нужно целое число дней"; exit 2 ;;
+esac
 
 AUTH_PREFIX="/open-banking-authorize/v1.0"
 DCR_PREFIX="/open-banking-dcr/v1.0"
@@ -305,7 +321,16 @@ if [ -z "$ACCESS" ]; then
 elif [ "$WITH_CONSENT" != "1" ]; then
   echo "  пропускаю: это ЗАПИСЬ в банк. Повторите с --with-consent, если нужно."
 else
-  EXP="$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)"
+  EXP="$(date -u -d "+$CONSENT_DAYS day" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+"$CONSENT_DAYS"d +%Y-%m-%dT%H:%M:%SZ)"
+  # ⚠ Печатаем, ЧТО просим: без этой строки ответ банка не с чем сравнить, и «вернул дату» читается
+  # как «дал сколько просили» независимо от того, урезал он её или нет.
+  if [ "$CONSENT_OPEN" = "1" ]; then
+    CONS_DATA='{"data":{"permissions":["ReadAccountsDetail","ReadStatementsDetail","ReadTransactionsDetail","ReadTransactionsCredits","ReadTransactionsDebits"]}}'
+    echo "  просим согласие БЕЗ срока (поля expirationDate нет)"
+  else
+    CONS_DATA="{\"data\":{\"permissions\":[\"ReadAccountsDetail\",\"ReadStatementsDetail\",\"ReadTransactionsDetail\",\"ReadTransactionsCredits\",\"ReadTransactionsDebits\"],\"expirationDate\":\"$EXP\"}}"
+    echo "  просим срок: $CONSENT_DAYS дн. (до $EXP)"
+  fi
   CONS_FILE="$(mktemp /tmp/prior-cons.XXXXXX)"
   # ⚠ Банк проверяет эти два заголовка ДО тела: `x-fapi-interaction-id` на любом вызове,
   # `x-idempotency-key` на записи (#461). Без них — 400 про заголовок, а не про суть.
@@ -315,11 +340,26 @@ else
     -H "$FAPI_HEADER: $(openssl rand -hex 16)" \
     -H "$IDEMPOTENCY_HEADER: $(openssl rand -hex 16)" \
     -H 'content-type: application/json' \
-    --data "{\"data\":{\"permissions\":[\"ReadAccountsDetail\",\"ReadStatementsDetail\",\"ReadTransactionsDetail\",\"ReadTransactionsCredits\",\"ReadTransactionsDebits\"],\"expirationDate\":\"$EXP\"}}" \
+    --data "$CONS_DATA" \
     2>/dev/null || echo 000)"
   echo "  HTTP $CONS_CODE  POST $TARGET$OB_PREFIX/accountConsents"
   if [ "$CONS_CODE" = "201" ] || [ "$CONS_CODE" = "200" ]; then
     ok "РЕСУРСНЫЙ API РАБОТАЕТ ПОЛНОСТЬЮ (создано пробное согласие — оно не используется и истечёт)"
+    # ⚠ ВЕСЬ смысл замера в этой строке: банк волен урезать срок молча, и узнать это можно только
+    # из его собственного ответа. Совпало с запрошенным — терпит; короче — вот его настоящий потолок.
+    GOT_EXP="$(sed -n 's/.*"expirationDate"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONS_FILE" | head -1)"
+    if [ -n "$GOT_EXP" ]; then
+      echo "  банк вернул срок: $GOT_EXP"
+      if [ "$CONSENT_OPEN" = "1" ]; then
+        echo "  ⚠ срок мы НЕ просили — значит банк подставил свой по умолчанию, и это его предел без нашего участия."
+      elif [ "${GOT_EXP%%T*}" = "${EXP%%T*}" ]; then
+        ok "срок принят как есть — банк терпит запрошенную длительность"
+      else
+        echo "  ⚠ банк УРЕЗАЛ срок: просили ${EXP%%T*}, дал ${GOT_EXP%%T*} — это и есть его потолок."
+      fi
+    else
+      echo "  ⚠ срока в ответе нет — сравнить не с чем; смотреть тело ответа руками."
+    fi
   else
     bad "запись не прошла"
     show_body "$CONS_FILE"
