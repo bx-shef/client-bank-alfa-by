@@ -306,6 +306,31 @@ export function isBankUnauthorized(e: unknown): boolean {
   return false
 }
 
+/** Границы паузы перед повтором после переиздания пары (мс). */
+export const REAUTH_PAUSE_MIN_MS = 1000
+export const REAUTH_PAUSE_MAX_MS = 2000
+
+/**
+ * Сколько ждать между переизданием пары и повтором запроса — СЛУЧАЙНО в [1..2] с.
+ *
+ * ⚠ Пауза здесь не «дать банку подумать», а РАЗВЕСТИ ДВА ПОРТАЛА. Ключ API у Альфы один на
+ * `client_id` (второй банк не выдаёт), поэтому два Bitrix24 на одном счёте выпускают пары по
+ * очереди и обесценивают токен друг друга: измерено 2026-09-10 — восемь переизданий за сутки,
+ * чередующихся ровно как «портал A → 9 операций → портал B → 9 операций».
+ *
+ * ⚠ Разброс НЕСУЩИЙ, фиксированная задержка не годится: тики крона у обоих порталов идут по
+ * одному расписанию, и одинаковая пауза сохранила бы их синхронность — оба повторили бы запрос в
+ * один и тот же момент, снова отобрав токен друг у друга. Случайная сдвигает их относительно
+ * друг друга с первого же раза.
+ *
+ * ⚠ Верх ограничен двумя секундами: пауза стоит внутри задачи опроса, которая держит слот воркера
+ * и бюджет запросов; платить за расхождение больше нечем.
+ */
+export function reauthPauseMs(rand: number): number {
+  const r = Number.isFinite(rand) ? Math.min(1, Math.max(0, rand)) : 0
+  return Math.round(REAUTH_PAUSE_MIN_MS + r * (REAUTH_PAUSE_MAX_MS - REAUTH_PAUSE_MIN_MS))
+}
+
 export function bankFetchError(e: unknown): Error {
   const status = (e as { status?: number })?.status
   const message = (e as Error)?.message ?? 'error'
@@ -331,6 +356,10 @@ export interface BankFetchDeps {
   /** Спокойный канал того же обхода: сколько страниц собрали. ⚠ Отдельный от `warn` потому, что
    *  на живом проде эта строка печаталась предупреждением на КАЖДОМ тике исправной работы. */
   log?: (message: string) => void
+  /** Пауза перед повтором после переиздания пары (`reauthPauseMs`). Необязательна, чтобы наборы
+   *  зависимостей в тестах не ждали по-настоящему; живая проводка обязана её давать, и это
+   *  проверяется тестом — без паузы правка молча перестала бы разводить порталы. */
+  pause?: (ms: number) => Promise<void>
 }
 
 const liveDeps: BankFetchDeps = {
@@ -340,6 +369,7 @@ const liveDeps: BankFetchDeps = {
   fetchPrior: (query, stored) => fetchPriorStatement(query, stored),
   warn: message => log.warning(message),
   log: message => log.info(message),
+  pause: ms => new Promise(resolve => setTimeout(resolve, ms)),
   getJson: async (url, accessToken) => {
     const fetchJson = $fetch as unknown as (
       url: string,
@@ -392,9 +422,26 @@ export async function fetchBankStatement(query: BankFetchQuery, deps: BankFetchD
       } catch (e) {
         if (reauthed || !isBankUnauthorized(e)) throw e
         reauthed = true
-        deps.warn?.(`alfa ${logSafe(query.account)}: банк отверг токен — переспрашиваем и повторяем`)
+        // ⚠ Место читается по логу целиком, поэтому у всех трёх строк общая «шапка»: счёт и номер
+        // страницы. Без страницы нельзя отличить «отказали на первом же запросе» от «отказали на
+        // середине обхода», а это разные истории — во второй часть окна уже собрана.
+        const where = `alfa ${logSafe(query.account)} стр. ${pageNo}`
+        deps.warn?.(`${where}: банк отверг токен — выпускаем пару заново и повторяем один раз`)
         token = await deps.ensureFresh(token, { force: true })
-        return await deps.getJson(url, token.accessToken) as AlfaStatementResponse
+        const waitMs = reauthPauseMs(Math.random())
+        deps.log?.(`${where}: пара выпущена, ждём ${(waitMs / 1000).toFixed(1)} с и повторяем`)
+        await deps.pause?.(waitMs)
+        try {
+          const page = await deps.getJson(url, token.accessToken) as AlfaStatementResponse
+          deps.log?.(`${where}: повтор прошёл`)
+          return page
+        } catch (retryError) {
+          // ⚠ Отдельная строка, хотя исключение и так уедет наверх: в логе воркера видно ПАДЕНИЕ
+          // задачи, но не то, что мы уже пробовали переиздать пару. Без неё разбор начинается с
+          // вопроса «а переспрашивали ли токен вообще», на который ответа в логе нет.
+          deps.warn?.(`${where}: повтор после переиздания снова отвергнут банком`)
+          throw retryError
+        }
       }
     }
     return fetchAlfaStatementPages(

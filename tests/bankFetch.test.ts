@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ALFA_PAGE_DELAY_MS,
@@ -10,6 +11,9 @@ import {
   fetchBankStatement,
   isBankUnauthorized,
   isoToAlfaDate,
+  REAUTH_PAUSE_MAX_MS,
+  REAUTH_PAUSE_MIN_MS,
+  reauthPauseMs,
   MAX_ALFA_STATEMENT_PAGES,
   type BankFetchDeps,
   type BankFetchQuery
@@ -546,5 +550,76 @@ describe('isBankUnauthorized', () => {
   // лимита банка. Мутация «искать /401/ в message» валит этот тест.
   it('текст сообщения статусом НЕ считается', () => {
     expect(isBankUnauthorized(new Error('банк ответил: код 401 в теле документа'))).toBe(false)
+  })
+})
+
+// ── Пауза между переизданием пары и повтором (#615-scheme) ────────────────────────────────────
+// Ключ API у Альфы ОДИН на client_id, поэтому два портала Bitrix24 на одном счёте выпускают пары
+// по очереди и обесценивают токен друг друга (измерено 2026-09-10: восемь переизданий за сутки,
+// чередующихся через ровно 9 операций). Пауза перед повтором разводит их во времени.
+describe('пауза перед повтором после переиздания', () => {
+  it('всегда в границах [1..2] с', () => {
+    for (const r of [0, 0.25, 0.5, 0.999, 1]) {
+      const ms = reauthPauseMs(r)
+      expect(ms).toBeGreaterThanOrEqual(REAUTH_PAUSE_MIN_MS)
+      expect(ms).toBeLessThanOrEqual(REAUTH_PAUSE_MAX_MS)
+    }
+  })
+
+  // ⚠ Мутационная: верни функция константу — порталы остались бы синхронными, а тик крона у них
+  // общий. Разброс и есть вся ценность правки, поэтому он проверяется отдельно от границ.
+  it('РАЗНЫЕ значения на разных бросках — иначе порталы остаются синхронными', () => {
+    expect(reauthPauseMs(0)).not.toBe(reauthPauseMs(1))
+    expect(reauthPauseMs(0)).toBe(REAUTH_PAUSE_MIN_MS)
+    expect(reauthPauseMs(1)).toBe(REAUTH_PAUSE_MAX_MS)
+  })
+
+  it('кривой бросок не выносит паузу за границы', () => {
+    expect(reauthPauseMs(Number.NaN)).toBe(REAUTH_PAUSE_MIN_MS)
+    expect(reauthPauseMs(-5)).toBe(REAUTH_PAUSE_MIN_MS)
+    expect(reauthPauseMs(42)).toBe(REAUTH_PAUSE_MAX_MS)
+  })
+
+  it('на 401 ждём ПОСЛЕ переиздания и ДО повтора', async () => {
+    const order: string[] = []
+    let first = true
+    const { deps } = fakeDeps({
+      ensureFresh: async (t, opts) => {
+        if (opts?.force) order.push('reissue')
+        return { ...t, accessToken: opts?.force ? 'REISSUED' : 'FRESH' }
+      },
+      getJson: async (_url, accessToken) => {
+        order.push(`get:${accessToken}`)
+        if (first) {
+          first = false
+          throw bankFetchError(Object.assign(new Error('401 Unauthorized'), { status: 401 }))
+        }
+        return demoAlfaResponse()
+      },
+      pause: async (ms) => { order.push(`pause:${ms}`) }
+    })
+    await fetchBankStatement(query, deps)
+    expect(order[0]).toBe('get:FRESH')
+    expect(order[1]).toBe('reissue')
+    expect(order[2]).toMatch(/^pause:\d+$/)
+    expect(Number(order[2]!.split(':')[1])).toBeGreaterThanOrEqual(REAUTH_PAUSE_MIN_MS)
+    expect(Number(order[2]!.split(':')[1])).toBeLessThanOrEqual(REAUTH_PAUSE_MAX_MS)
+    expect(order[3]).toBe('get:REISSUED')
+  })
+
+  it('на успешном заборе не ждём вовсе', async () => {
+    const paused: number[] = []
+    const { deps } = fakeDeps({ pause: async (ms) => { paused.push(ms) } })
+    await fetchBankStatement(query, deps)
+    expect(paused).toEqual([])
+  })
+
+  // ⚠ Живая проводка ОБЯЗАНА давать `pause`: зависимость необязательная (иначе каждый тестовый
+  // набор ждал бы по-настоящему), поэтому забытая строка в `liveDeps` не сломала бы ни одного
+  // теста — правка молча перестала бы разводить порталы, а лог продолжал бы обещать паузу.
+  it('liveDeps несут pause', async () => {
+    const src = await readFile(new URL('../server/utils/bankFetch.ts', import.meta.url), 'utf8')
+    const live = src.slice(src.indexOf('const liveDeps: BankFetchDeps = {'))
+    expect(live.slice(0, live.indexOf('\n}'))).toMatch(/\n {2}pause: /)
   })
 })
