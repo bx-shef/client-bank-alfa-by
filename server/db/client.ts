@@ -110,12 +110,6 @@ CREATE TABLE IF NOT EXISTS portal_app_rating (
 -- before this change have no stored date. Reading 0 as expiry would declare every one of them dead
 -- and send people into their internet bank for something that works.
 ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS consent_expires_at BIGINT NOT NULL DEFAULT 0;
--- Счёт ПОДТВЕРЖДЁН банком для этого гранта (#615): банк перечислил его среди счетов гранта.
--- 0 -- не спрашивали или не нашли. Нужен потому, что номер счёта админ вписывает РУКАМИ и нигде
--- не проверяется: пока каждый портал опрашивает банк сам, вписанный чужой номер безвреден -- его
--- задача просто падает. А раздавать по нему выписку нельзя, иначе админ чужого портала впишет ваш
--- IBAN и получит вашу выписку себе в CRM.
-ALTER TABLE bank_tokens ADD COLUMN IF NOT EXISTS account_confirmed_at BIGINT NOT NULL DEFAULT 0;
 
 -- КЛЮЧ API клиента для Password Grant (#488), зашифрован тем же ключом, что и refresh.
 -- Пусто -- подключение живёт на прежнем OAuth-гранте либо это не Альфа.

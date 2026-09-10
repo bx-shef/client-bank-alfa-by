@@ -553,7 +553,7 @@ describe('isBankUnauthorized', () => {
   })
 })
 
-// ── Пауза между переизданием пары и повтором (#615-scheme) ────────────────────────────────────
+// ── Пауза между переизданием пары и повтором ──────────────────────────────────────────────────
 // Ключ API у Альфы ОДИН на client_id, поэтому два портала Bitrix24 на одном счёте выпускают пары
 // по очереди и обесценивают токен друг друга (измерено 2026-09-10: восемь переизданий за сутки,
 // чередующихся через ровно 9 операций). Пауза перед повтором разводит их во времени.
@@ -596,7 +596,9 @@ describe('пауза перед повтором после переиздани
         }
         return demoAlfaResponse()
       },
-      pause: async (ms) => { order.push(`pause:${ms}`) }
+      pause: async (ms) => {
+        order.push(`pause:${ms}`)
+      }
     })
     await fetchBankStatement(query, deps)
     expect(order[0]).toBe('get:FRESH')
@@ -609,7 +611,11 @@ describe('пауза перед повтором после переиздани
 
   it('на успешном заборе не ждём вовсе', async () => {
     const paused: number[] = []
-    const { deps } = fakeDeps({ pause: async (ms) => { paused.push(ms) } })
+    const { deps } = fakeDeps({
+      pause: async (ms) => {
+        paused.push(ms)
+      }
+    })
     await fetchBankStatement(query, deps)
     expect(paused).toEqual([])
   })
