@@ -155,16 +155,15 @@ describe('сроки в SQL совпадают с `bankTokenLifetime` (#488)', (
    * проверка обоих раз оставалась зелёной — она смотрела на наличие строк, а не на то, какая из
    * них выводится. `continue` внутри блока требует цикла, поэтому оборачиваем в `for`.
    */
-  function verdict(cause: string, health: string, selfheal = ''): string {
+  function verdict(cause: string, health: string, selfheal = '', prov = 'alfa-by', shared = ''): string {
     const from = SCRIPT.indexOf('  # ⚠ САМОЛЕЧЕНИЕ СИЛЬНЕЕ ОТКАЗА ПРОДЛЕНИЯ')
     const to = SCRIPT.indexOf('  esac', from)
     expect(from, 'блок вердикта не найден — его переписали').toBeGreaterThan(0)
     expect(to).toBeGreaterThan(from)
     const block = SCRIPT.slice(from, to + '  esac'.length)
-    return execFileSync('bash', ['-c',
-      `cause=${JSON.stringify(cause)}\nhealth=${JSON.stringify(health)}\nselfheal=${JSON.stringify(selfheal)}\n`
-      + `for _ in 1; do\n${block}\ndone`],
-    { encoding: 'utf8' })
+    const env = { cause, health, selfheal, prov, shared }
+    const preamble = Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join('\n')
+    return execFileSync('bash', ['-c', `${preamble}\nfor _ in 1; do\n${block}\ndone`], { encoding: 'utf8' })
   }
 
   // ⚠ ЖИВОЙ ПРОГОН 2026-09-10. Подключение Приора падало FINAL каждые пять минут
@@ -195,6 +194,41 @@ describe('сроки в SQL совпадают с `bankTokenLifetime` (#488)', (
   // запаса не имеет, и совет ему нужен прежний. Пустое значение — именно такая строка.
   it('без ключа совет прежний — строка сама себя не чинит', () => {
     expect(verdict('bank-refused', 'ok', '')).toMatch(/ОТКЛЮЧЕНИЕМ ЭТОЙ СТРОКИ/)
+  })
+
+  // ⚠ ЗАМЕР НОЧИ 2026-09-11: у Приора выживает ПОСЛЕДНИЙ авторизовавшийся. Соседство называем —
+  // оно объясняет, почему подключение умерло «само» ночью.
+  it('⚠ Приор + счёт ещё с другого портала — соседство НАЗЫВАЕТСЯ', () => {
+    const out = verdict('bank-refused', 'ok', '', 'prior-by', 'shared')
+    expect(out, 'не сказано про второй портал').toMatch(/С ДРУГОГО ПОРТАЛА/)
+    expect(out, 'не названо безопасное действие').toMatch(/на каком портале этот счёт остаётся/)
+    expect(out, 'переподключение вслепую не запрещено').toMatch(/НЕ надо/)
+  })
+
+  // ⚠ НО ПРИЧИНУ НЕ УТВЕРЖДАЕМ, и это замечание владельца по первой редакции ветки. `shared`
+  // говорит ровно одно: одинаковая строка счёта встречается у двух `member_id` в НАШЕЙ базе.
+  // Тот же текст ошибки даёт отозванное в банке согласие — на флоте («пятеро с одним Приором,
+  // один с двумя, отзывает третий») по нашим колонкам виден только факт совпадения.
+  it('⚠ причина отказа из совпадения НЕ выводится', () => {
+    const out = verdict('bank-refused', 'ok', '', 'prior-by', 'shared')
+    expect(out, 'вернулось утверждение причины').not.toMatch(/и это причина отказа/)
+    expect(out, 'не названа альтернатива — отозванное согласие').toMatch(/отозванное|отозвано/)
+    expect(out, 'не сказано, что различить нельзя').toMatch(/не доказана|различить/)
+  })
+
+  // ⚠ Живой сосед предупреждается, но вердикт ему не портим: он работает. Обратное было бы
+  // повторением ошибки 2026-09-10 в другую сторону — объявить сломанным исправное подключение.
+  it('живой Приор с общим счётом предупреждается, но не объявляется мёртвым', () => {
+    const out = verdict('never-tried', 'ok', '', 'prior-by', 'shared')
+    expect(out).toMatch(/счёт подключён ещё с другого портала/)
+    expect(out, 'здоровое подключение объявлено сломанным').toContain('Живо, продление в срок')
+  })
+
+  // ⚠ У Альфы два портала работают (переиздание ключом), поэтому эта ветка — Приорова и только.
+  it('Альфе про «выживает последний» НЕ говорится', () => {
+    const out = verdict('bank-refused', 'ok', 'key', 'alfa-by', 'shared')
+    expect(out).not.toMatch(/ПОДКЛЮЧЁН ЕЩЁ С ДРУГОГО ПОРТАЛА/)
+    expect(out).toContain('КЛЮЧ API')
   })
 
   // ⚠ Обратная сторона — правило от 2026-09-06, и отменять его нельзя. Тогда совет «переподключите»

@@ -332,24 +332,32 @@ export interface SharedAccountNotice {
 /**
  * Что сказать про счета, подключённые с нескольких порталов — ОТДЕЛЬНО ПО БАНКАМ.
  *
- * ⚠ Прежняя строка была ОДНА на всех, шла предупреждением и советовала «disconnect the account on
- * the portal that should not have it». Живой прогон 2026-09-10 опроверг её дважды:
- *  • у Альфы пара действительно обесценивается соседом — но выпускается ЗАНОВО ключом API, и
- *    человек не нужен (`[bank-keepalive] пара выпущена заново ключом API`), а забор проходит;
- *  • у Приора общего токена НЕТ вовсе: у каждого портала свой грант от своей авторизации. Замерено
- *    в тот же день: два портала на одном счёте Приора опрашивали банк по очереди, оба забрали
- *    выписку, отказов продления ноль.
- * То есть строка звала владельца оборвать РАБОТАЮЩЕЕ подключение и отправить владельца счёта в
- * интернет-банк без причины — и противоречила решению владельца от 2026-09-10 («каждый портал
- * опрашивает своё подключение, лишнее переключение не проблема»).
+ * ⚠ Правило переписывалось ТРИЖДЫ, и каждый раз по живому замеру. Историю держим здесь целиком,
+ * потому что каждая прежняя редакция выглядела разумной и каждая врала в свою сторону.
  *
- * ⚠ Поэтому уровень теперь `info`, а не `warn`: действия нет ни в одной ветке, а предупреждение
- * без действия приучает не читать канал. Строку не убираем совсем — она объясняет переиздания
- * пары в логе Альфы, иначе их читают как сбой.
+ * 1. Сперва строка была ОДНА на всех и советовала «disconnect the account on the portal that
+ *    should not have it». У Альфы это звало оборвать РАБОТАЮЩЕЕ подключение: пара там правда
+ *    обесценивается соседом, но выпускается заново ключом API, человек не нужен.
+ * 2. Потом обе ветки стали `info`, и про Приора было сказано «у каждого портала свой грант, жечь
+ *    нечего». Основание — прогон 2026-09-10: оба портала забрали выписку, отказов продления ноль.
+ *    ⚠ Вывод не следовал из замера, и это было записано прямо там же: продление за эти строки не
+ *    бралось НИ РАЗУ (`selected=0`), то есть проверено было всё, кроме той единственной операции,
+ *    на которой всё и ломается.
+ * 3. Ночь 2026-09-11 показала ЧТО ИМЕННО ломается. Портал, авторизовавшийся ПЕРВЫМ, к утру мёртв:
+ *    последняя удачная пара 11:23, попытка в 03:04 — `invalid_grant: Persisted access token data
+ *    not found`, заборов за 12 часов ноль. Сосед, авторизовавшийся минутой позже, работает.
+ *    Значит у Приора выживает ПОСЛЕДНИЙ авторизовавшийся, а прежние умирают на первом же
+ *    продлении — с задержкой в часы, поэтому короткое наблюдение и показывало «уживаются».
  *
- * ⚠ Про ОДНОВРЕМЕННОЕ продление Приора двумя порталами не утверждаем ничего: на замере продление
- * не бралось за эти строки ни разу (`selected=0`). Знаем структуру (гранты разные), не знаем
- * поведение банка — и молчим о том, чего не мерили.
+ * ⚠ Версия «у Приора свой потолок refresh, сосед ни при чём» ОТВЕРГНУТА фактом владельца: до
+ * появления второго портала подключение продлевалось кроном месяц.
+ *
+ * ⚠ Отсюда РАЗНЫЕ уровни, и это не косметика. У Альфы действия нет — предупреждение без действия
+ * приучает не читать канал. У Приора действие есть и оно единственное: оставить один портал.
+ * Молчать об этом «для единообразия» значило бы прятать причину ночной смерти.
+ *
+ * ⚠ Строку не убираем и для Альфы: она объясняет переиздания пары в логе (252 за 12 часов на
+ * замере), иначе их читают как сбой.
  */
 export function sharedAccountNotices(rows: readonly BankAccountInfo[]): SharedAccountNotice[] {
   const byProvider = new Map<string, string[]>()
@@ -357,14 +365,18 @@ export function sharedAccountNotices(rows: readonly BankAccountInfo[]): SharedAc
     const provider = key.slice(0, key.indexOf('/'))
     byProvider.set(provider, [...(byProvider.get(provider) ?? []), key])
   }
-  return [...byProvider.entries()].map(([provider, keys]) => ({
-    level: 'info' as const,
-    text: `${keys.length} account(s) shared across portals (${provider}): ${keys.map(logSafeKey).join(', ')} — `
-      + (provider === 'alfa-by'
-        ? 'each portal issues its own pair from its own API key, so they invalidate each other and the '
-        + 'app re-issues automatically ("пара выпущена заново ключом API"). No human needed.'
-        : 'each portal holds its OWN grant, so there is no shared refresh token to burn.')
-  }))
+  return [...byProvider.entries()].map(([provider, keys]) => {
+    const alfa = provider === 'alfa-by'
+    return {
+      level: (alfa ? 'info' : 'warn') as SharedAccountNotice['level'],
+      text: `${keys.length} account(s) shared across portals (${provider}): ${keys.map(logSafeKey).join(', ')} — `
+        + (alfa
+          ? 'each portal issues its own pair from its own API key, so they invalidate each other and the '
+          + 'app re-issues automatically ("пара выпущена заново ключом API"). No human needed.'
+          : 'ONLY THE LAST AUTHORISED ONE SURVIVES: the bank drops the older grant, and it dies at its '
+            + 'next refresh ("Persisted access token data not found"). Leave this account on ONE portal.')
+    }
+  })
 }
 
 /** Account keys can carry an IBAN; clamp + strip before logging (defence-in-depth, PRIVACY §Логи). */
