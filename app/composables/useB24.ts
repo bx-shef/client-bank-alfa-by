@@ -1,6 +1,7 @@
 import { B24Frame, Result, initializeB24Frame } from '@bitrix24/b24jssdk'
 import { B24_REQUIRED_SCOPES } from '~/config/b24'
 import { placeFromOptions, placeFromQuery } from '~/utils/placementOptions'
+import { useFrameTokenPulse } from '~/composables/useFrameTokenPulse'
 import { useLogger } from '~/utils/logger'
 
 // Module-level singleton: the SDK keeps one B24Frame per page (the portal opens
@@ -25,12 +26,20 @@ export const useB24 = () => {
     if (newValue instanceof B24Frame) {
       if (!$b24) {
         $b24 = newValue
+        // ⚠ Продление токена фрейма запускается ЗДЕСЬ, а не в layout'е или странице, и это не
+        // вкусовщина: срок жизни принадлежит `B24Frame`, а не экрану. Из layout'а пришлось бы
+        // ждать окончания рукопожатия (в момент его монтирования `isInit()` ещё false), а забыть
+        // строку на одной из четырёх портальных страниц — ровно тот класс промаха, который виден
+        // только через час на живом портале.
+        useFrameTokenPulse().start(newValue.auth)
         nextTick(() => {
           type.value = 'B24Frame'
         })
       }
     } else {
       $b24 = undefined
+      // Фрейм ушёл — продлевать нечего; таймер иначе жил бы до конца жизни страницы.
+      useFrameTokenPulse().stop()
       nextTick(() => {
         type.value = 'undefined'
       })
