@@ -69,6 +69,10 @@ export default defineNuxtConfig({
       // «оцените приложение». BUILD-TIME: запекается в статику, поэтому задаётся build-arg
       // NUXT_PUBLIC_LOCAL_MODE=1 (Dockerfile/CI форка). Пустое/0 → обычный режим.
       localMode: process.env.NUXT_PUBLIC_LOCAL_MODE || '',
+      // Репозиторий ЭТОЙ сборки — для подписи «сборка <sha>» и для `/api/health`. Пусто ⇒ апстрим
+      // (`REPO_URL` в `app/utils/build.ts`). Задаётся у КЛОНА (docs/DEPLOY_BITRIXVM.md): иначе
+      // ссылка ведёт в наш репозиторий, куда у клиента доступа нет.
+      repoUrl: process.env.NUXT_PUBLIC_REPO_URL || '',
       // Яндекс.Метрика — id счётчика (только цифры, отфильтрован выше).
       metrikaId,
       // Bitrix24 Market listing code override for the «оцените приложение» modal. Empty → the
