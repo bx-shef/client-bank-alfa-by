@@ -18,7 +18,7 @@ import { join } from 'node:path'
 const PAGES = join(process.cwd(), 'app/pages')
 
 /** Страницы внутри портала Bitrix24: iframe, фрейм-токен, слайдеры. */
-const PORTAL = ['app.vue', 'import.vue', 'install.vue', 'settings.vue']
+const PORTAL = ['app.vue', 'import.vue', 'install.vue', 'open.vue', 'settings.vue']
 /** Служебные экраны оператора: обычная вкладка, наша сессионная кука. */
 const OPERATOR = ['login.vue', 'queues.vue']
 /** Публичные страницы лендинга. */
