@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  bankSideIncomplete, matrixIsClean, matrixProblems, matrixStateLabel, uncheckedNumbers,
-  type MatrixRow
+  bankSideIncomplete, matrixIsClean, matrixProblems, matrixStateLabel, providerErrorDescription,
+  uncheckedNumbers, type MatrixRow
 } from '~/utils/bankAccountMatrix'
 import type { MatrixProviderStatus } from '~/composables/useBankMatrix'
 import { BANK_LABELS } from '~/utils/bankLabels'
@@ -151,7 +151,7 @@ function stateColor(state: MatrixRow['state']) {
       v-for="p in providerErrors"
       :key="p.provider"
       color="air-primary-warning"
-      :description="`${providerLabel(p.provider)}: ${p.error}. Список счетов этого банка сейчас неизвестен — строки ниже показывают только сторону CRM.`"
+      :description="providerErrorDescription(providerLabel(p.provider), { error: p.error!, asked: p.asked, failed: p.failed })"
       :data-testid="`matrix-provider-error-${p.provider}`"
     />
 

@@ -7,7 +7,7 @@ function deps(over: Partial<BankMatrixDeps> = {}): BankMatrixDeps {
     memberIdByDomain: async () => 'M1',
     validateFrame: async () => ({ userId: '1', isAdmin: true }),
     myCompanies: async () => [{ companyId: '7', accounts: ['BY11ALFA0001'] }],
-    bankSide: async () => [{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001', currency: 'BYN' }] }],
+    bankSide: async () => [{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001', currency: 'BYN' }], asked: 1, failed: 0 }],
     connected: async () => ['BY11ALFA0001'],
     ...over
   }
@@ -94,8 +94,8 @@ describe('handleBankMatrix result', () => {
     const res = await handleBankMatrix(deps({
       myCompanies: async () => [{ companyId: '7', accounts: ['BY11ALFA0001', 'BY11PJCB0002'] }],
       bankSide: async () => [
-        { provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001' }] },
-        { provider: 'prior-by', accounts: [{ number: 'BY11PJCB0002' }] }
+        { provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001' }], asked: 1, failed: 0 },
+        { provider: 'prior-by', accounts: [{ number: 'BY11PJCB0002' }], asked: 1, failed: 0 }
       ]
     }), input)
     const rows = res.body.rows as MatrixRow[]
@@ -105,10 +105,15 @@ describe('handleBankMatrix result', () => {
 
   it('reports a per-provider bank error SEPARATELY from the rows', async () => {
     const res = await handleBankMatrix(deps({
-      bankSide: async () => [{ provider: 'alfa-by', accounts: [], error: 'банк не ответил (503)' }]
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [], error: 'банк не ответил (503)', asked: 1, failed: 1 }]
     }), input)
     expect(res.status).toBe(200)
-    expect(res.body.providers).toEqual([{ provider: 'alfa-by', count: 0, error: 'банк не ответил (503)' }])
+    // ⚠ `asked`/`failed` едут наружу намеренно: по ним интерфейс решает, можно ли сказать «список
+    // счетов этого банка сейчас неизвестен». При нескольких подключениях к одному банку это
+    // утверждение о ПОЛНОТЕ бывает ложным — ответило одно, промолчало другое.
+    expect(res.body.providers).toEqual([
+      { provider: 'alfa-by', count: 0, error: 'банк не ответил (503)', asked: 1, failed: 1 }
+    ])
   })
   // ⚠ The row-state assertion that used to sit here is gone on purpose. It read
   // `toBe('crm-only')`, i.e. it PINNED the defect; weakening it to `.not.toBe('matched')` (the
@@ -126,7 +131,9 @@ describe('handleBankMatrix result', () => {
       bankSide: async () => [{
         provider: 'alfa-by',
         accounts: [],
-        error: 'подключение сейчас обновляется — повторите через несколько секунд'
+        error: 'подключение сейчас обновляется — повторите через несколько секунд',
+        asked: 1,
+        failed: 1
       }]
     }), input)
     const rows = res.body.rows as MatrixRow[]
@@ -136,7 +143,7 @@ describe('handleBankMatrix result', () => {
   it('an answering bank still yields `crm-only` — the honest «банк о нём не знает»', async () => {
     // Mutation guard: wire the flag unconditionally and this real state disappears entirely.
     const res = await handleBankMatrix(deps({
-      bankSide: async () => [{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA7777' }] }]
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA7777' }], asked: 1, failed: 0 }]
     }), input)
     const rows = res.body.rows as MatrixRow[]
     expect(rows.find(r => r.crm)?.state).toBe('crm-only')
@@ -148,8 +155,8 @@ describe('handleBankMatrix result', () => {
     const res = await handleBankMatrix(deps({
       myCompanies: async () => [{ companyId: '7', accounts: ['BY11ALFA0001', 'BY11PJCB0002'] }],
       bankSide: async () => [
-        { provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001' }] },
-        { provider: 'prior-by', accounts: [], error: 'банк не ответил (503)' }
+        { provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001' }], asked: 1, failed: 0 },
+        { provider: 'prior-by', accounts: [], error: 'банк не ответил (503)', asked: 1, failed: 1 }
       ]
     }), input)
     const rows = res.body.rows as MatrixRow[]
@@ -160,7 +167,7 @@ describe('handleBankMatrix result', () => {
     // ⚠ `accounts: []` without an `error` means the bank replied and covers nothing. Treating that
     // as unknown would hide the genuinely broken portal this screen exists for.
     const res = await handleBankMatrix(deps({
-      bankSide: async () => [{ provider: 'alfa-by', accounts: [] }]
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [], asked: 1, failed: 0 }]
     }), input)
     const rows = res.body.rows as MatrixRow[]
     expect(rows[0]?.state).toBe('crm-only')
@@ -170,7 +177,7 @@ describe('handleBankMatrix result', () => {
     // `error: ''` is what a sloppy transport produces; `Boolean(p.error)` must read it as «no error»
     // rather than clouding every row on a healthy portal.
     const res = await handleBankMatrix(deps({
-      bankSide: async () => [{ provider: 'alfa-by', accounts: [], error: '' }]
+      bankSide: async () => [{ provider: 'alfa-by', accounts: [], error: '', asked: 1, failed: 0 }]
     }), input)
     const rows = res.body.rows as MatrixRow[]
     expect(rows[0]?.state).toBe('crm-only')
@@ -189,7 +196,9 @@ describe('handleBankMatrix result', () => {
       myCompanies: async () => [{ companyId: '7', accounts: ['BY11ALFA0001'] }],
       bankSide: async () => [{
         provider: 'alfa-by',
-        accounts: [{ number: 'BY11ALFA0001' }, { number: 'BY11ALFA9999' }]
+        accounts: [{ number: 'BY11ALFA0001' }, { number: 'BY11ALFA9999' }],
+        asked: 1,
+        failed: 0
       }]
     }), input)
     const rows = res.body.rows as MatrixRow[]
