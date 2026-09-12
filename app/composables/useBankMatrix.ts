@@ -15,6 +15,11 @@ export interface MatrixProviderStatus {
   provider: BankProviderId
   count: number
   error: string | null
+  /** Сколько ПОДКЛЮЧЕНИЙ к этому банку спросили и сколько промолчали (несколько юрлиц клиента —
+   *  несколько независимых подключений). Необязательны: в окне скоса выката статика может быть
+   *  новее backend, и тогда полей просто нет — надпись возвращается к прежней формулировке. */
+  asked?: number
+  failed?: number
 }
 
 /**
@@ -58,9 +63,12 @@ export const PREVIEW_BANK_MATRIX: { rows: MatrixRow[], providers: MatrixProvider
     }
   ],
   providers: [
-    { provider: 'alfa-by', count: 3, error: null },
+    { provider: 'alfa-by', count: 3, error: null, asked: 1, failed: 0 },
     // This refusal is what makes the row above `unchecked` — together they are the screen under test.
-    { provider: 'prior-by', count: 0, error: 'подключение сейчас обновляется — повторите через несколько секунд' }
+    // ⚠ Подключение ОДНО и оно же молчит, поэтому надпись остаётся прежней («список неизвестен»).
+    // Делать здесь частичный отказ нельзя: `bankSideIncomplete` увёл бы в `unchecked` ВСЕ строки
+    // Альфы, и фикстура перестала бы показывать четыре состояния, ради которых заведена.
+    { provider: 'prior-by', count: 0, error: 'подключение сейчас обновляется — повторите через несколько секунд', asked: 1, failed: 1 }
   ]
 }
 

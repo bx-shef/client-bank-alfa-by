@@ -9,7 +9,8 @@ import {
   hasConnection,
   listBankSideAccounts,
   LISTABLE_PROVIDERS,
-  pickToken,
+  mergeGrantAnswers,
+  pickGrantTokens,
   type BankSideListDeps
 } from '../server/utils/bankAccountList'
 import type { BankToken } from '../server/utils/bankTokenStore'
@@ -99,20 +100,85 @@ describe('accountsUrl', () => {
   })
 })
 
-describe('pickToken', () => {
-  it('returns null when the provider has no connection', () => {
-    expect(pickToken([token({ provider: 'alfa-by' })], 'prior-by')).toBeNull()
+describe('pickGrantTokens', () => {
+  it('returns nothing when the provider has no connection', () => {
+    expect(pickGrantTokens([token({ provider: 'alfa-by' })], 'prior-by')).toEqual([])
   })
 
-  it('takes the freshest token of the provider', () => {
-    const old = token({ accountKey: 'A', expiresAt: 10 })
-    const fresh = token({ accountKey: 'B', expiresAt: 99 })
-    expect(pickToken([old, fresh], 'alfa-by')?.accountKey).toBe('B')
+  it('takes the freshest token WITHIN a grant — its rows share one pair', () => {
+    const old = token({ accountKey: 'A', grantId: 'G1', expiresAt: 10 })
+    const fresh = token({ accountKey: 'B', grantId: 'G1', expiresAt: 99 })
+    expect(pickGrantTokens([old, fresh], 'alfa-by').map(t => t.accountKey)).toEqual(['B'])
+  })
+
+  // ⚠ Главный случай правки: два юрлица клиента — два ключа API Альфы (или два согласия Приора).
+  // Прежний `pickToken` спрашивал банк ОДНИМ токеном, и счета второго подключения не появлялись
+  // в сверке никогда — уходили в `crm-only` с советом подключить уже подключённый банк.
+  it('asks EVERY grant of the provider, not just the freshest connection', () => {
+    const g1 = token({ accountKey: 'A', grantId: 'G1', expiresAt: 10 })
+    const g2 = token({ accountKey: 'B', grantId: 'G2', expiresAt: 99 })
+    expect(pickGrantTokens([g1, g2], 'alfa-by').map(t => t.accountKey).sort()).toEqual(['A', 'B'])
+  })
+
+  // ⚠ Пустой грант — «не размечено», а НЕ «общий»: склеив такие строки, мы спросили бы банк одним
+  // токеном за все старые подключения портала (тот же довод, что в `bankTokenStore`).
+  it('treats UNMARKED rows as separate grants, never as one shared grant', () => {
+    const a = token({ accountKey: 'A', expiresAt: 10 })
+    const b = token({ accountKey: 'B', expiresAt: 99 })
+    expect(pickGrantTokens([a, b], 'alfa-by').map(t => t.accountKey).sort()).toEqual(['A', 'B'])
+    expect(pickGrantTokens([a, b, token({ accountKey: 'C', grantId: '' })], 'alfa-by')).toHaveLength(3)
   })
 
   it('is willing to use a PENDING connection — that is the common case for this screen', () => {
     const pending = token({ accountKey: '~pending:abc', expiresAt: 50 })
-    expect(pickToken([pending], 'alfa-by')?.accountKey).toBe('~pending:abc')
+    expect(pickGrantTokens([pending], 'alfa-by').map(t => t.accountKey)).toEqual(['~pending:abc'])
+  })
+})
+
+describe('mergeGrantAnswers', () => {
+  it('joins the accounts of several connections to one bank and counts them', () => {
+    const out = mergeGrantAnswers([
+      { provider: 'alfa-by', accounts: [{ number: 'BY1', provider: 'alfa-by' }] },
+      { provider: 'alfa-by', accounts: [{ number: 'BY2', provider: 'alfa-by' }] }
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0]!.accounts.map(a => a.number)).toEqual(['BY1', 'BY2'])
+    expect(out[0]!.asked).toBe(2)
+    expect(out[0]!.failed).toBe(0)
+    expect(out[0]!.error).toBeUndefined()
+  })
+
+  // ⚠ Положительное знание отказ соседа НЕ отменяет: счёт, названный живым подключением, остаётся.
+  // Но `error` выставляется — иначе `bankSideIncomplete` объявил бы картину полной, и реквизит,
+  // который никто не проверял, получил бы уверенное «банк его не отдаёт».
+  it('keeps what one connection answered while marking the side incomplete', () => {
+    const out = mergeGrantAnswers([
+      { provider: 'alfa-by', accounts: [{ number: 'BY1', provider: 'alfa-by' }] },
+      { provider: 'alfa-by', accounts: [], error: 'банк не ответил' }
+    ])
+    expect(out[0]!.accounts.map(a => a.number)).toEqual(['BY1'])
+    expect(out[0]!.error).toBe('банк не ответил')
+    expect(out[0]!.asked).toBe(2)
+    expect(out[0]!.failed).toBe(1)
+  })
+
+  it('dedupes a number both connections named — one account, one row', () => {
+    const out = mergeGrantAnswers([
+      { provider: 'alfa-by', accounts: [{ number: 'BY1', provider: 'alfa-by' }] },
+      { provider: 'alfa-by', accounts: [{ number: 'BY1', provider: 'alfa-by' }] }
+    ])
+    expect(out[0]!.accounts).toHaveLength(1)
+  })
+
+  it('keeps the banks apart and in order', () => {
+    const out = mergeGrantAnswers([
+      { provider: 'alfa-by', accounts: [] },
+      { provider: 'prior-by', accounts: [] },
+      { provider: 'alfa-by', accounts: [] }
+    ])
+    expect(out.map(p => p.provider)).toEqual(['alfa-by', 'prior-by'])
+    expect(out[0]!.asked).toBe(2)
+    expect(out[1]!.asked).toBe(1)
   })
 })
 
@@ -138,7 +204,12 @@ describe('listBankSideAccounts', () => {
     const out = await listBankSideAccounts('M1', deps({
       getJson: async () => ({ accounts: [{ number: 'BY11ALFA0001', currIso: 'BYN' }] })
     }))
-    expect(out).toEqual([{ provider: 'alfa-by', accounts: [{ number: 'BY11ALFA0001', currency: 'BYN', provider: 'alfa-by' }] }])
+    expect(out).toEqual([{
+      provider: 'alfa-by',
+      accounts: [{ number: 'BY11ALFA0001', currency: 'BYN', provider: 'alfa-by' }],
+      asked: 1,
+      failed: 0
+    }])
   })
 
   it('maps Prior rows through `identification`, dropping ones without an IBAN', async () => {
@@ -153,7 +224,12 @@ describe('listBankSideAccounts', () => {
         }
       })
     }))
-    expect(out).toEqual([{ provider: 'prior-by', accounts: [{ number: 'BY11PJCB0001', currency: 'BYN', provider: 'prior-by' }] }])
+    expect(out).toEqual([{
+      provider: 'prior-by',
+      accounts: [{ number: 'BY11PJCB0001', currency: 'BYN', provider: 'prior-by' }],
+      asked: 1,
+      failed: 0
+    }])
   })
 
   it('fails SOFT per provider: a bank error does not blank the other bank', async () => {
@@ -168,7 +244,7 @@ describe('listBankSideAccounts', () => {
     }))
     // Оба банка спрошены; порядок в `calls` не утверждаем — запросы идут параллельно.
     expect([...calls].sort()).toEqual(['alfa-by', 'prior-by'])
-    expect(out[0]).toEqual({ provider: 'alfa-by', accounts: [], error: 'банк не ответил (503)' })
+    expect(out[0]).toEqual({ provider: 'alfa-by', accounts: [], error: 'банк не ответил (503)', asked: 1, failed: 1 })
     expect(out[1]?.accounts).toEqual([{ number: 'BY11PJCB0001', currency: undefined, provider: 'prior-by' }])
   })
 
@@ -205,16 +281,40 @@ describe('listBankSideAccounts', () => {
     expect(seen).toEqual(['FRESH'])
   })
 
-  it('asks each listable provider at most once even with many stored accounts', async () => {
+  // ⚠ ОДИН запрос на ПОДКЛЮЧЕНИЕ, а не на счёт. Согласие банк выдаёт на набор счетов клиента, и
+  // все строки одного гранта живут на общей паре токенов — спрашивать по строке значило бы задать
+  // один и тот же вопрос столько раз, сколько у клиента счетов.
+  it('asks ONCE per grant, however many accounts that grant covers', async () => {
     let n = 0
     await listBankSideAccounts('M1', deps({
-      tokens: async () => [token({ accountKey: 'A' }), token({ accountKey: 'B' }), token({ accountKey: 'C' })],
+      tokens: async () => [
+        token({ accountKey: 'A', grantId: 'G1' }),
+        token({ accountKey: 'B', grantId: 'G1' }),
+        token({ accountKey: 'C', grantId: 'G1' })
+      ],
       getJson: async () => {
         n += 1
         return { accounts: [] }
       }
     }))
     expect(n).toBe(1)
+  })
+
+  // ⚠ А вот РАЗНЫЕ подключения к одному банку (два юрлица клиента — два ключа API Альфы) обязаны
+  // быть спрошены каждое: их счета знает только их собственный токен. Прежний код спрашивал один
+  // раз, и счета второго подключения не появлялись в сверке никогда.
+  it('asks EVERY connection of the same bank and merges what they answered', async () => {
+    const out = await listBankSideAccounts('M1', deps({
+      tokens: async () => [
+        token({ accountKey: 'A', grantId: 'G1', accessToken: 'AT1' }),
+        token({ accountKey: 'B', grantId: 'G2', accessToken: 'AT2' })
+      ],
+      // Каждое подключение отвечает СВОИМ счётом — так видно, что спрошены оба токена, а не один.
+      getJson: async (_p, _url, at) => ({ accounts: [{ number: at === 'AT1' ? 'BY1' : 'BY2' }] })
+    }))
+    expect(out).toHaveLength(1)
+    expect(out[0]!.accounts.map(a => a.number).sort()).toEqual(['BY1', 'BY2'])
+    expect(out[0]!.asked).toBe(2)
   })
 
   it('never lists `manual` — it has no API', () => {

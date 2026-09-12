@@ -22,7 +22,7 @@ export const PUBLIC_ROUTES = ['/', '/partners', '/help'] as const
  * «недоступна». Настоящая граница доступа — фрейм-токен на сервере и сессия оператора; `noindex`
  * лишь убирает их из выдачи, где они были бы дублями сниппета лендинга.
  */
-export const SERVICE_ROUTES = ['/app', '/install', '/import', '/settings', '/queues', '/login'] as const
+export const SERVICE_ROUTES = ['/app', '/install', '/import', '/settings', '/queues', '/login', '/open'] as const
 
 /**
  * Что перечислить в `nitro.prerender.routes`.

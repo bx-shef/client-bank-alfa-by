@@ -7,6 +7,6 @@
 import { healthInfo } from '../../app/utils/build'
 
 export default defineEventHandler(() => {
-  const commit = useRuntimeConfig().public.commitSha as string | undefined
-  return healthInfo(commit, new Date().toISOString())
+  const { commitSha, repoUrl } = useRuntimeConfig().public
+  return healthInfo(commitSha as string | undefined, new Date().toISOString(), repoUrl as string)
 })

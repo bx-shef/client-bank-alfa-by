@@ -46,10 +46,21 @@ export interface BankSideProviderResult {
   accounts: BankSideAccount[]
   /** Human-readable reason the bank side is unknown. Sanitised — it reaches an admin's screen. */
   error?: string
+  /**
+   * Сколько ПОДКЛЮЧЕНИЙ этого банка мы спросили и сколько из них не ответили.
+   *
+   * ⚠ Нужны ровно для честной формулировки, и это не украшение. У портала может быть несколько
+   * независимых подключений к одному банку (два ключа API Альфы, два согласия Приора — разные
+   * юрлица клиента). Когда одно ответило, а другое нет, старый текст «список счетов этого банка
+   * сейчас неизвестен» становится ЛОЖНЫМ: часть счетов мы как раз знаем. Одного поля `error` для
+   * различения мало — оно одинаково и когда молчат все, и когда молчит один из трёх.
+   */
+  asked: number
+  failed: number
 }
 
 export interface BankSideListDeps {
-  /** Every stored token of the portal (pending ones included — see the note in `pickToken`). */
+  /** Every stored token of the portal (pending ones included — see the note in `pickGrantTokens`). */
   tokens: (memberId: string) => Promise<BankToken[]>
   /** Свежий токен подключения. `force` — РЕАКТИВНО, после отказа банка: обновить, а при
    *  сохранённом ключе API выпустить пару заново, даже если по часам токен ещё жив. */
@@ -114,16 +125,69 @@ export function accountsUrl(provider: BankProviderId, base: string): string {
 }
 
 /**
- * Choose which stored token to ask with. Any token of the provider works — the consent covers the
- * whole set of accounts, not one row — so we take the one whose access token lives longest, i.e.
- * the most recently obtained. PENDING connections (#407) are explicitly eligible and in fact the
- * common case: the admin has just authorised in the bank and has not picked an account yet, which
- * is exactly when this list is needed.
+ * Выбрать, какими токенами спрашивать банк — ПО ОДНОМУ НА КАЖДОЕ ПОДКЛЮЧЕНИЕ (грант).
+ *
+ * ⚠ Здесь стоял `pickToken` — ОДИН токен на банк, самый свежий по `expiresAt`. Он молча
+ * предполагал, что подключение к банку у портала не больше одного, а это неверно: Альфа
+ * подключается КЛЮЧОМ API, и у двух юрлиц клиента два разных ключа; у Приора два юрлица — два
+ * разных согласия. Хранилище такое держит (ключ `(member_id, provider, account_key)`), опрос тоже
+ * (`loadToken` берёт токен ИМЕННО ЭТОГО счёта), а сверка спрашивала банк один раз — то есть
+ * видела счета только одного подключения. Счета остальных уходили в `crm-only` — «банк его не
+ * отдаёт», с инструкцией подключить банк: экран, заведённый чинить опечатки в реквизитах, на
+ * такой конфигурации уверенно указывал не на ту сторону.
+ *
+ * ⚠ Группируем по ГРАНТУ, а не по строке. Согласие банк выдаёт на НАБОР счетов клиента, и все
+ * строки одного гранта живут на общей паре токенов (#23-#25) — спросив по строке, мы задали бы
+ * один и тот же вопрос столько раз, сколько у клиента счетов, и сожгли бы лимит банка впустую.
+ *
+ * ⚠ Пустой `grantId` — «не размечено», а НЕ «общий грант» (подключения до #23-#25). Такая строка
+ * считается СВОИМ грантом: склеив их по пустому значению, мы спросили бы банк ОДНИМ токеном за все
+ * старые подключения портала — ровно та ошибка, от которой предостерегает `bankTokenStore`.
+ *
+ * Внутри гранта берём токен с самым долгим сроком, то есть полученный последним. PENDING-строки
+ * (#407) годятся намеренно и в самом деле частый случай: админ только что авторизовался в банке и
+ * ещё не выбрал счёт — ровно тогда список и нужен.
  */
-export function pickToken(tokens: readonly BankToken[], provider: BankProviderId): BankToken | null {
-  const mine = tokens.filter(t => t.provider === provider)
-  if (!mine.length) return null
-  return mine.reduce((best, t) => (t.expiresAt > best.expiresAt ? t : best))
+export function pickGrantTokens(tokens: readonly BankToken[], provider: BankProviderId): BankToken[] {
+  const byGrant = new Map<string, BankToken>()
+  for (const t of tokens) {
+    if (t.provider !== provider) continue
+    const grant = (t.grantId ?? '') !== '' ? `g:${t.grantId}` : `r:${t.accountKey}`
+    const best = byGrant.get(grant)
+    if (!best || t.expiresAt > best.expiresAt) byGrant.set(grant, t)
+  }
+  return [...byGrant.values()]
+}
+
+/**
+ * Свести ответы подключений в один результат на банк.
+ *
+ * ⚠ Счёт, названный ХОТЯ БЫ ОДНИМ подключением, остаётся в списке: положительное знание отказ
+ * соседа не отменяет. Дедуп по номеру — два подключения одного клиента могут назвать общий счёт,
+ * и вторая строка в матрице выглядела бы как второй счёт.
+ *
+ * ⚠ `error` берём ПЕРВЫЙ — тексты разных подключений различаются, а показать можно один; сколько
+ * их было, говорят `asked`/`failed`, и по ним интерфейс выбирает формулировку. Порядок банков
+ * сохраняется (`LISTABLE_PROVIDERS`), иначе экран переставлялся бы от открытия к открытию.
+ */
+export function mergeGrantAnswers(answers: readonly GrantAnswer[]): BankSideProviderResult[] {
+  const out: BankSideProviderResult[] = []
+  for (const a of answers) {
+    let acc = out.find(p => p.provider === a.provider)
+    if (!acc) {
+      acc = { provider: a.provider, accounts: [], asked: 0, failed: 0 }
+      out.push(acc)
+    }
+    acc.asked++
+    if (a.error) {
+      acc.failed++
+      if (!acc.error) acc.error = a.error
+    }
+    for (const one of a.accounts) {
+      if (!acc.accounts.some(x => x.number === one.number)) acc.accounts.push(one)
+    }
+  }
+  return out
 }
 
 /** Whether the portal has any connection at all to this provider (pending included). */
@@ -131,12 +195,19 @@ export function hasConnection(tokens: readonly BankToken[], provider: BankProvid
   return tokens.some(t => t.provider === provider)
 }
 
-/** Ask ONE bank for its account list. Never throws — the failure is the result. */
+/** Ответ ОДНОГО подключения (гранта). Провайдер-широкий результат собирает `mergeGrantAnswers`. */
+interface GrantAnswer {
+  provider: BankProviderId
+  accounts: BankSideAccount[]
+  error?: string
+}
+
+/** Ask ONE bank connection for its account list. Never throws — the failure is the result. */
 async function askProvider(
   provider: BankProviderId,
   stored: BankToken,
   deps: BankSideListDeps
-): Promise<BankSideProviderResult> {
+): Promise<GrantAnswer> {
   const base = deps.apiBase(provider)
   if (!base) return { provider, accounts: [], error: 'банк не настроен на этом сервере' }
   try {
@@ -220,11 +291,13 @@ async function askProvider(
  */
 export async function listBankSideAccounts(memberId: string, deps: BankSideListDeps): Promise<BankSideProviderResult[]> {
   const tokens = await deps.tokens(memberId)
-  const asks = LISTABLE_PROVIDERS
-    .map(provider => ({ provider, stored: pickToken(tokens, provider) }))
-    .filter((x): x is { provider: BankProviderId, stored: BankToken } => x.stored !== null)
-    .map(({ provider, stored }) => askProvider(provider, stored, deps))
-  return Promise.all(asks)
+  // ⚠ Параллельно теперь по ПОДКЛЮЧЕНИЯМ, а не по банкам, и довод про таймаут от этого только
+  // весомее: у портала с тремя подключениями Альфы последовательный обход упёрся бы в потолок
+  // nginx втрое быстрее. Худший случай остаётся одним таймаутом при любом их числе.
+  const asks = LISTABLE_PROVIDERS.flatMap(provider =>
+    pickGrantTokens(tokens, provider).map(stored => askProvider(provider, stored, deps))
+  )
+  return mergeGrantAnswers(await Promise.all(asks))
 }
 
 /** Account keys the portal currently holds a token for, EXCLUDING pending ones — a pending row is

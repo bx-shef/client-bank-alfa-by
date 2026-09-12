@@ -9,7 +9,7 @@ const licensesUrl = '/THIRD_PARTY_NOTICES.txt'
 
 // Реквизиты ИП. Ссылки на реквизиты/политику ведут на основной сайт
 // offer.bx-shef.by (у этого лендинга нет своих /legal, /privacy).
-const { public: { commitSha } } = useRuntimeConfig()
+const { public: { commitSha, repoUrl } } = useRuntimeConfig()
 
 const legal = {
   short: 'ИП Шевчик И. С.',
@@ -31,7 +31,7 @@ const tools: ToolLink[] = [
 ]
 
 const sha = computed(() => shortSha(commitSha as string))
-const shaHref = computed(() => commitUrl(commitSha as string))
+const shaHref = computed(() => commitUrl(commitSha as string, repoUrl as string))
 </script>
 
 <template>

@@ -3,10 +3,12 @@ import { computed } from 'vue'
 import { commitUrl, shortSha } from '~/utils/build'
 
 // Ссылка на КОММИТ сборки: по ней с любого экрана видно, какой именно код сейчас работает.
-const { public: { commitSha } } = useRuntimeConfig()
+const { public: { commitSha, repoUrl } } = useRuntimeConfig()
 
 const sha = computed(() => shortSha(commitSha as string))
-const href = computed(() => commitUrl(commitSha as string))
+// ⚠ Репозиторий — из конфигурации, а не зашитый: у клиентского клона он свой, и без этого подпись
+// вела бы в репозиторий апстрима, куда у клиента доступа нет (docs/DEPLOY_BITRIXVM.md).
+const href = computed(() => commitUrl(commitSha as string, repoUrl as string))
 </script>
 
 <template>
