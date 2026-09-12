@@ -5,3 +5,10 @@ tests/fixtures/client-bank/*.txt binary
 
 # 1C exchange fixtures are CP1251 too (see above).
 tests/fixtures/1c-exchange/*.txt binary
+
+# Звёздочные выписки (Паритетбанк) — CP866, и это ЕЩЁ ОДНА кодировка, не CP1251 (#700).
+# По той же причине binary: конвертация EOL/кодировки сломала бы байты, на которых держится
+# тест определения кодировки, и он бы проверял не то, о чём говорит.
+tests/fixtures/paritet/*.txt binary
+# Публичный пример звёздочного формата — тоже CP866 (его читает демо на лендинге).
+public/samples/vypiska-paritet.txt binary

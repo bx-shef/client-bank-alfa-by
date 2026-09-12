@@ -9,7 +9,7 @@
 // then enqueue a file-parse packet carrying the file. The worker parses + hands off
 // to crm-sync. See docs/PROCESSING.md §0.
 
-import { validateUploadFile } from '../../app/utils/importUpload'
+import { decodeUploadText, validateUploadFile } from '../../app/utils/importUpload'
 import { normalizeManualStatement } from '../../app/utils/manualImport'
 import type { StatementItem } from '../../app/types/statement'
 import type { ParseJob } from '../queue/topology'
@@ -119,11 +119,13 @@ export async function handleImportUpload(deps: IngestDeps, input: IngestInput): 
   return { status: 202, body: { accepted: true, batchId: fileHash } }
 }
 
-/** Decode a base64 windows-1251 statement (carried in the parse packet) and parse it
- *  into operations. Used by the worker's `parseFile` transport; pure + testable. */
+/** Decode a base64 statement (carried in the parse packet) and parse it into operations.
+ *  Used by the worker's `parseFile` transport; pure + testable.
+ *  ⚠ Декодирует ТЕМ ЖЕ `decodeUploadText`, что и браузер (#700): вторая копия правила «какая тут
+ *  кодировка» разошлась бы молча — превью на экране показывало бы верный текст, а в CRM уезжал бы
+ *  мусор (или наоборот), и списали бы это на банк. */
 export function parseManualFileBase64(contentBase64: string): StatementItem[] {
-  const bytes = base64ToBytes(contentBase64)
-  const text = new TextDecoder('windows-1251').decode(bytes)
+  const text = decodeUploadText(base64ToBytes(contentBase64))
   return normalizeManualStatement(text, { account: '' })
 }
 

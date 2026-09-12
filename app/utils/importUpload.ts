@@ -1,20 +1,21 @@
-// Pure core for the manual statement-upload UI (P4). Validation, windows-1251
-// decode + parse, and cross-file de-dup — no DOM. The reactive dropzone lives in
+// Pure core for the manual statement-upload UI (P4). Validation, decode (кодировка
+// ОПРЕДЕЛЯЕТСЯ, см. `statementEncoding.ts`) + parse, and cross-file de-dup — no DOM. The reactive dropzone lives in
 // `app/components/StatementUpload.vue`; the parsing itself is the already-tested
 // `normalizeManualStatement` (manualImport.ts). Slice 1 is parse + preview only —
 // writing the parsed batch to CRM (file-parse → crm-sync queue) is a later slice.
 //
-// Files are windows-1251 (Приор/Альфа/1С exports); decode BEFORE parsing. A file
+// Files come in several encodings (см. `statementEncoding.ts`); decode BEFORE parsing. A file
 // gate (size + extension) runs before decode as the first line of defence; the
 // parser has its own char cap (MAX_CLIENT_BANK_CHARS, #19).
 
-import { normalizeManualStatement } from '~/utils/manualImport'
+import { normalizeManualStatement, parseManualStatement } from '~/utils/manualImport'
+import { detectStatementEncoding } from '~/utils/statementEncoding'
 import { dedupKey } from '~/utils/statement'
 import type { StatementItem } from '~/types/statement'
 
 /** Max accepted file size — statement text exports are small (KBs, rarely a couple
  *  hundred KB); cap well above a real file but far below anything that would freeze
- *  the browser during the synchronous windows-1251 decode + parse. */
+ *  the browser during the synchronous decode + parse. */
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 /** Max files per drop (mirrors the sibling upload UI's batch cap). */
 export const MAX_UPLOAD_FILES = 10
@@ -27,6 +28,10 @@ export interface UploadItemResult {
   ok: boolean
   /** Parsed operations (empty on error). */
   items: StatementItem[]
+  /** Строки файла, которые НЕ стали операциями (см. `ManualParseResult`). Без них «разобрано: 9»
+   *  на файле из 44 строк читается как потеря данных. */
+  nonPayment?: number
+  unreadable?: number
   /** Human message on failure. */
   error?: string
 }
@@ -73,8 +78,14 @@ export async function processUploadBatch(
       continue
     }
     try {
-      const items = decodeAndParse(await file.arrayBuffer())
-      results.push({ name: file.name, ok: true, items })
+      const parsed = parseManualStatement(decodeUploadText(await file.arrayBuffer()), { account: '' })
+      results.push({
+        name: file.name,
+        ok: true,
+        items: parsed.items,
+        nonPayment: parsed.nonPayment,
+        unreadable: parsed.unreadable
+      })
     } catch (e) {
       results.push({ name: file.name, ok: false, items: [], error: uploadErrorMessage(e) })
     }
@@ -97,15 +108,26 @@ export function validateUploadFile(name: string, size: number): string | null {
   return null
 }
 
-/** Decode a windows-1251 statement buffer to text. TextDecoder is available in both the
- *  browser and Node, so this is unit-testable on fixtures. Shared by {@link decodeAndParse}
- *  (parse path) and the feedback file-attach (the raw statement text embedded in the issue). */
+/**
+ * Decode a statement buffer to text, PICKING the encoding (#700) rather than assuming one.
+ * `TextDecoder` is available in both the browser and Node, so this is unit-testable on fixtures.
+ * Shared by {@link decodeAndParse} (parse path), the worker's parse transport and the feedback
+ * file-attach (the raw statement text embedded in the issue).
+ *
+ * ⚠ Кодировок ТРИ: windows-1251 у форматов 1С и client-bank, CP866 у звёздочного (Паритетбанк),
+ * плюс UTF-8 — его приносит человек, открывший выписку в «Блокноте» и нажавший «Сохранить».
+ * Разбор их не различает — структура формата лежит в ASCII, — поэтому неверно угаданная кодировка
+ * даёт не отказ, а мусор в назначении платежа, уехавший в CRM клиента (см. `statementEncoding.ts`).
+ * ⚠ Это ЕДИНСТВЕННАЯ точка декода на всё приложение: браузерное превью и серверный разбор обязаны
+ * читать файл одинаково, иначе человек видит на экране одно, а в CRM попадает другое.
+ */
 export function decodeUploadText(buffer: ArrayBuffer | Uint8Array): string {
-  return new TextDecoder('windows-1251').decode(buffer)
+  return new TextDecoder(detectStatementEncoding(buffer)).decode(buffer)
 }
 
-/** Decode a windows-1251 statement buffer and parse it into operations. `account`
- *  empty ⇒ use the file's own account (the parser reads it). */
+/** Decode a statement buffer and parse it into operations. `account` empty ⇒ use the file's own
+ *  account (the parser reads it). ⚠ Отброшенные строки здесь ТЕРЯЮТСЯ — для них
+ *  `parseManualStatement`; эта форма осталась для вызывающих, которым нужны только операции. */
 export function decodeAndParse(buffer: ArrayBuffer | Uint8Array, account = ''): StatementItem[] {
   return normalizeManualStatement(decodeUploadText(buffer), { account })
 }

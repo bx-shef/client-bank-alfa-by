@@ -136,7 +136,7 @@ export const LANDING_DEMO = {
   /** CTA label for the custom-dev message (scrolls to the brief form). */
   customDevCta: 'Обсудить доработку',
   /** Shown when a file could not be parsed at all. */
-  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка (формат 1CClientBankExchange или «***** ^Type=», кодировка windows-1251).',
+  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка: 1CClientBankExchange, «***** ^Type=» или звёздочный «*0*…» (Паритетбанк).',
   /** Shown when a file parsed but held no operations. */
   noOperations: 'В файле не найдено операций.'
 } as const
@@ -166,7 +166,8 @@ export const LANDING_BANK_CONNECT: readonly BankConnect[] = [
 ]
 
 /** Downloadable sample statements for the demo — the user grabs one and uploads it
- *  (or loads it in one click). Served from public/samples/ (windows-1251, as-is). */
+ *  (or loads it in one click). Served from public/samples/ as-is — ⚠ кодировка у примеров РАЗНАЯ
+ *  (звёздочный пример в CP866), поэтому файл читается байтами, а не как текст. */
 export interface DemoSample {
   label: string
   url: string
@@ -176,6 +177,7 @@ export interface DemoSample {
 export const LANDING_DEMO_SAMPLES: readonly DemoSample[] = [
   { label: 'Альфа-Банк', url: '/samples/vypiska-alfa.txt', name: 'vypiska-alfa.txt' },
   { label: 'Приорбанк', url: '/samples/vypiska-prior.txt', name: 'vypiska-prior.txt' },
+  { label: 'Паритетбанк', url: '/samples/vypiska-paritet.txt', name: 'vypiska-paritet.txt' },
   { label: '1С', url: '/samples/vypiska-1c.txt', name: 'vypiska-1c.txt' }
 ]
 
@@ -187,6 +189,7 @@ export const LANDING_INTEGRATORS
 export const LANDING_FORMATS: readonly string[] = [
   'Альфа-Банк Беларусь',
   'Приорбанк',
+  'Паритетбанк',
   'клиент-банк',
   '1С',
   'ваш формат — по запросу'

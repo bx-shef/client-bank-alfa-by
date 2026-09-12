@@ -78,9 +78,22 @@ export interface CrmCompanyRef {
   assignedById?: number
 }
 
-/** One-line activity title, e.g. "Приход 1 840,00 BYN от ООО Ромашка". */
+/**
+ * One-line activity title, e.g. "Приход 1 840,00 BYN от ООО Ромашка".
+ *
+ * ⚠ БЕЗ ИМЕНИ КОНТРАГЕНТА предлог НЕ ставится: `.trim()` снимал только внешние пробелы, и
+ * заголовок оканчивался висящим «от»/«на» — «Приход 4 800,00 BYN от». В списке дел это читается
+ * как обрезанная строка, то есть как поломка приложения, а не как «банк имени не прислал».
+ * ⚠ Случай перестал быть краевым со звёздочным форматом (#700): имени контрагента в нём НЕТ
+ * ВООБЩЕ, поэтому так выглядела бы КАЖДАЯ операция такой выписки, а не редкая строка с пустым
+ * `KorName`. Подставлять вместо имени счёт или УНП нельзя — в карточке компании номер читался бы
+ * как её название.
+ */
 export function buildActivityTitle(item: StatementItem): string {
   const verb = item.direction === 'credit' ? 'Приход' : 'Расход'
+  const head = `${verb} ${formatMoney(item.amount)} ${item.currency}`
+  const name = item.counterparty.name.trim()
+  if (!name) return head
   const prep = item.direction === 'credit' ? 'от' : 'на'
-  return `${verb} ${formatMoney(item.amount)} ${item.currency} ${prep} ${item.counterparty.name}`.trim()
+  return `${head} ${prep} ${name}`
 }
