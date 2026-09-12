@@ -59,5 +59,9 @@ export const VISUAL_ROUTES: readonly VisualRoute[] = [
   { slug: 'settings', path: '/settings?preview=1', themes: ['light', 'dark'], unrolls: true },
   { slug: 'install', path: '/install?preview=1', themes: ['light', 'dark'], unrolls: false },
   { slug: 'queues', path: '/queues?preview=1', themes: ['light', 'dark'], unrolls: false },
-  { slug: 'login', path: '/login', themes: ['light', 'dark'], unrolls: false }
+  { slug: 'login', path: '/login', themes: ['light', 'dark'], unrolls: false },
+  // ⚠ Обработчик ссылки `REST_APP_URI` (#19) — транзитный экран: под `?preview=1` он никуда не
+  // уводит (вне портала переходить некуда) и показывает одну строку объяснения. Снимок ровно за
+  // этим: страница закрыта `InPortalGate`, и без эталона её вёрстку не проверял бы никто.
+  { slug: 'open', path: '/open?preview=1', themes: ['light', 'dark'], unrolls: false }
 ]

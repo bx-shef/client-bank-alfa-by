@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useB24 } from '~/composables/useB24'
-import { B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER } from '~/config/b24'
+import {
+  APP_SLIDER_PLACE_IMPORT, APP_URI_HANDLER_PATH, APP_URI_PLACE_PARAM,
+  B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER
+} from '~/config/b24'
+import { buildAppUriLink } from '~/utils/appUriLink'
+import { buildPlacementBindCall, isPlacementAlreadyBound } from '~/utils/b24PlacementRegister'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
 import { buildBotRegisterCall } from '~/utils/b24BotRegister'
@@ -31,6 +36,9 @@ const appUrl = isDev && typeof window !== 'undefined'
   ? stripTrailing(`${window.location.origin}${window.location.pathname.replace(/\/install\/?$/, '')}`)
   : configuredSiteUrl
 const eventHandlerUrl = computed(() => `${appUrl}${B24_EVENT_HANDLER_PATH}`)
+// Обработчик ССЫЛКИ на экраны приложения (`REST_APP_URI`, #19) — второй, параллельный вход, не
+// имеющий отношения ни к событиям выше, ни к кнопкам внутри приложения. Разбор — docs/APP_LINKS.md.
+const appUriHandlerUrl = computed(() => `${appUrl}${APP_URI_HANDLER_PATH}`)
 
 // Служебная страница: пререндерится в статику и отдаётся публично, но в выдаче ей делать нечего —
 // без `noindex` она уходила в индекс с мета-данными ЛЕНДИНГА (#425). Закрываем именно мета-тегом, а
@@ -61,6 +69,14 @@ const checkingBackend = ref(false)
 const triggerRegistered = ref('')
 // Best-effort chat-bot registration outcome (#496), same shape as the trigger above.
 const botRegistered = ref('')
+/** Регистрация точки `REST_APP_URI` (#19): '' — не пытались, 'ok', 'уже зарегистрирован' или текст
+ *  ошибки. ⚠ «Уже зарегистрирован» — ШТАТНЫЙ исход переустановки, а не отказ: у точки одна
+ *  регистрация, и повтор `placement.bind` всегда отвечает `ERROR_PLACEMENT_MAX_COUNT`. */
+const placementBound = ref('')
+/** Готовая ссылка «открыть ручную загрузку», собранная из кода приложения, который назвал САМ
+ *  портал (`app.info` → `CODE`). ⚠ Зашить её нельзя: у тиражного приложения это символьный код из
+ *  кабинета разработчика, у локального — `client_id`, и он свой на каждой установке. */
+const appImportLink = ref('')
 /**
  * Смарт-процессы приложения: '' — не пытались, 'ok' — на месте, иначе текст ошибки.
  *
@@ -79,6 +95,14 @@ interface InitData {
   eventList?: EventBinding[]
 }
 const initData = ref<InitData>({})
+
+/** Домен портала из рукопожатия SDK (вне фрейма — пусто). Нужен ссылке `REST_APP_URI` (#19):
+ *  она живёт ВНУТРИ Битрикс24 и открывается его слайдером, поэтому хост у неё портальный, а не наш. */
+function portalDomain(): string {
+  if (!isUseB24.value) return ''
+  const auth = b24Instance.getOrThrow().auth.getAuthData()
+  return auth === false ? '' : (auth.domain || '')
+}
 
 const diagnostics = computed(() => {
   const granted = initData.value.scope ?? []
@@ -109,7 +133,10 @@ const diagnostics = computed(() => {
     trigger: triggerRegistered.value,
     smartProcess: spProvisioned.value,
     // Best-effort chat-bot registration (#496): '' hides the row.
-    bot: botRegistered.value
+    bot: botRegistered.value,
+    // Ссылка на экраны приложения (#19). Обе строки прячутся пустым значением, как соседние.
+    appUri: placementBound.value,
+    appImportLink: appImportLink.value
   }
 })
 
@@ -194,6 +221,59 @@ async function registerTrigger(): Promise<void> {
     log.warning('триггер автоматизации не зарегистрировался', { error: String(error) })
     triggerRegistered.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
   }
+}
+
+/**
+ * Зарегистрировать точку `REST_APP_URI` и собрать готовую ссылку на ручную загрузку (#19).
+ *
+ * BEST-EFFORT, как триггер и бот: ссылка — ВТОРОЙ вход в экраны приложения, первый (кнопки внутри
+ * приложения) работает независимо и от этой регистрации не зависит вовсе. Значит её отказ не имеет
+ * права ронять установку, которая уже доставила токен.
+ *
+ * ⚠ `ERROR_PLACEMENT_MAX_COUNT` — НЕ ОШИБКА, а «уже зарегистрировано»: у точки ровно одна
+ * регистрация, поэтому на каждой переустановке повтор отвечает именно так. Показывать это красным
+ * значило бы красить исправный портал в жёлтое на каждом переустановлении.
+ *
+ * ⚠ Метод НЕЛЬЗЯ класть в батч (`ERROR_BATCH_METHOD_NOT_ALLOWED`) и он требует контекста
+ * приложения — оба ограничения те же, что у триггера, поэтому вызов standalone и только отсюда,
+ * из iframe установки.
+ */
+async function registerAppUriPlacement(): Promise<void> {
+  const call = buildPlacementBindCall(appUriHandlerUrl.value, 'Импорт выписки: экраны приложения')
+  if (!call) {
+    // Тот же fail-safe, что у привязки событий: без абсолютного адреса регистрировать нечего —
+    // портал принял бы относительный и открывал бы СВОЮ страницу вместо нашей.
+    placementBound.value = 'ошибка: не задан публичный адрес приложения'
+    return
+  }
+  try {
+    const $b24 = b24Instance.getOrThrow()
+    const res = await $b24.actions.v2.call.make({ method: call.method, params: call.params })
+    placementBound.value = res.isSuccess
+      ? 'ok'
+      : isPlacementAlreadyBound(res.getErrorMessages().join('; '))
+        ? 'уже зарегистрирован'
+        : `ошибка: ${res.getErrorMessages().join('; ')}`
+  } catch (error: unknown) {
+    if (isPlacementAlreadyBound(error)) {
+      placementBound.value = 'уже зарегистрирован'
+    } else {
+      log.warning('обработчик ссылки не зарегистрировался', { error: String(error) })
+      placementBound.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+  // Код приложения и домен портала УЖЕ прочитаны: `app.info` едет в init-батче выше, домен даёт
+  // рукопожатие SDK. Отдельного вызова не делаем — ссылка это удобство, а не повод тратить ещё
+  // один запрос в портал на каждой установке.
+  //
+  // ⚠ Зашить код нельзя: у тиражного приложения это символьный код из кабинета разработчика, у
+  // локального — `client_id`, и он СВОЙ на каждой установке. Пустой код ⇒ пустая ссылка (билдер
+  // отдаёт `null`), и строка в диагностике просто не показывается — это честнее ссылки в никуда.
+  appImportLink.value = buildAppUriLink(
+    portalDomain(),
+    initData.value.appInfo?.CODE ?? '',
+    { [APP_URI_PLACE_PARAM]: APP_SLIDER_PLACE_IMPORT }
+  ) ?? ''
 }
 
 /** Register the app's chat bot (#496) so messages arrive from the APP rather than from whoever
@@ -293,6 +373,12 @@ async function runInstall() {
     // чем от случайного сотрудника, но ради них не стоит валить установку, которая уже удалась.
     caption.value = 'Регистрация чат-бота…'
     await registerChatBot()
+
+    // Обработчик ССЫЛКИ на экраны приложения (#19). Стоит последним из best-effort шагов: он
+    // ничего не доставляет и ничего не открывает сам — лишь позволяет открыть приложение ссылкой
+    // из чата, задачи или ленты. Подробности и ловушка со сменой адреса — docs/APP_LINKS.md.
+    caption.value = 'Регистрация ссылки на экраны…'
+    await registerAppUriPlacement()
 
     caption.value = 'Завершение установки…'
     progressColor.value = 'air-primary-success'
@@ -449,6 +535,21 @@ onMounted(runInstall)
                 <template v-if="diagnostics.smartProcess">
                   <span class="text-(--ui-color-base-3)">Смарт-процессы:</span>
                   <span class="break-all">{{ diagnostics.smartProcess }}</span>
+                </template>
+                <!-- Второй, параллельный вход в экраны приложения (#19): ссылка, которую можно
+                     положить в чат, задачу или ленту. Показываем ЗДЕСЬ, в диагностике, а не на
+                     рабочих экранах — это инструмент проверки, а не часть ручной загрузки: её
+                     поведение не меняется от того, есть эта ссылка или нет. -->
+                <template v-if="diagnostics.appUri">
+                  <span class="text-(--ui-color-base-3)">Обработчик ссылки:</span>
+                  <span class="break-all">{{ diagnostics.appUri }}</span>
+                </template>
+                <template v-if="diagnostics.appImportLink">
+                  <span class="text-(--ui-color-base-3)">Ссылка «Загрузить выписку»:</span>
+                  <span
+                    class="break-all"
+                    data-testid="install-app-import-link"
+                  >{{ diagnostics.appImportLink }}</span>
                 </template>
                 <template v-if="diagnostics.appInfo">
                   <span class="text-(--ui-color-base-3)">App:</span>
