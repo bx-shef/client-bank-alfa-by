@@ -102,7 +102,16 @@ export async function handleBankMatrix(deps: BankMatrixDeps, input: BankMatrixIn
       // Per-provider errors are reported separately from the rows: an empty bank side caused by a
       // failed request must not read as «банк не отдаёт ни одного счёта», which would send the
       // admin to fix requisites that are perfectly fine.
-      providers: providers.map(p => ({ provider: p.provider, count: p.accounts.length, error: p.error ?? null }))
+      // `asked`/`failed` — сколько ПОДКЛЮЧЕНИЙ этого банка спросили и сколько промолчали. Без них
+      // интерфейс не может отличить «молчит единственное подключение» от «молчит одно из трёх», и
+      // говорит «список счетов этого банка сейчас неизвестен» там, где часть счетов уже известна.
+      providers: providers.map(p => ({
+        provider: p.provider,
+        count: p.accounts.length,
+        error: p.error ?? null,
+        asked: p.asked,
+        failed: p.failed
+      }))
     }
   }
 }

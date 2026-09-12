@@ -17,6 +17,7 @@
 // state, never folded into `matched`.
 
 import type { BankProviderId } from '~/types/statement'
+import { pluralRu } from '~/utils/importStatus'
 
 /** How the statement side is normalised before the CRM search — the SAME rule as
  *  `normalizeAccount` in `server/utils/companyLookup.ts`, duplicated here because this module must
@@ -255,6 +256,37 @@ export const MAX_UNCHECKED_SHOWN = 3
  */
 export function bankSideIncomplete(providers: readonly { error?: string | null }[]): boolean {
   return providers.some(p => Boolean(p.error))
+}
+
+/** Столько мы знаем об отказе банка: текст и сколько ПОДКЛЮЧЕНИЙ к нему спрашивали. */
+export interface ProviderErrorInfo {
+  error: string
+  asked?: number
+  failed?: number
+}
+
+/**
+ * Надпись об отказе банка над строками сверки.
+ *
+ * ⚠ «Список счетов этого банка сейчас неизвестен» — утверждение о ПОЛНОТЕ, и при нескольких
+ * подключениях к одному банку (два юрлица клиента — два ключа API Альфы или два согласия Приора)
+ * оно бывает прямой ложью: одно подключение ответило, другое нет, и часть счетов мы как раз знаем.
+ * Ровно та же болезнь, которую у СТРОК лечит состояние `unchecked`, — только уровнем выше, в
+ * надписи над ними; разъехавшись, они опять описывали бы разные миры.
+ *
+ * ⚠ `asked`/`failed` НЕОБЯЗАТЕЛЬНЫ, и это не небрежность: статика и backend выкатываются разными
+ * образами, поэтому в окне скоса полей может не быть вовсе. Без них возвращаем прежний текст — для
+ * единственного подключения он верен, а это подавляющий случай.
+ */
+export function providerErrorDescription(label: string, p: ProviderErrorInfo): string {
+  const asked = Number.isFinite(p.asked) ? Number(p.asked) : 0
+  const failed = Number.isFinite(p.failed) ? Number(p.failed) : 0
+  const answered = asked - failed
+  if (asked > 1 && failed > 0 && answered > 0) {
+    const word = pluralRu(answered, ['подключение', 'подключения', 'подключений'])
+    return `${label}: ${p.error}. Ответило ${answered} ${word} из ${asked} — счета остальных сейчас неизвестны.`
+  }
+  return `${label}: ${p.error}. Список счетов этого банка сейчас неизвестен — строки ниже показывают только сторону CRM.`
 }
 
 /**

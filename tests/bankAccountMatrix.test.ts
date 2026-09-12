@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   MATRIX_ROW_ACTIONABLE, MATRIX_STATE_LABEL, bankSideIncomplete, buildAccountMatrix, matrixIsClean,
-  matrixProblems, matrixStateLabel, normalizeForCompare, uncheckedNumbers, type MatrixRowState
+  matrixProblems, matrixStateLabel, normalizeForCompare, providerErrorDescription, uncheckedNumbers,
+  type MatrixRowState
 } from '../app/utils/bankAccountMatrix'
 import { normalizeAccount } from '../server/utils/companyLookup'
 
@@ -300,5 +301,44 @@ describe('⚠ непроверенный счёт НЕ должен исчезн
     expect(hint).not.toContain('через несколько секунд')
     expect(hint, 'должна отправлять к предупреждению, если повторяется').toContain('повторяется')
     expect(hint).toContain('непроверенными')
+  })
+})
+
+describe('providerErrorDescription — надпись не ручается за то, чего не знает', () => {
+  // ⚠ Один банк, одно подключение, оно же и молчит: знание о его счетах нулевое, прежний текст
+  // верен целиком.
+  it('единственное молчащее подключение ⇒ «список счетов этого банка сейчас неизвестен»', () => {
+    const text = providerErrorDescription('Альфа-Банк', { error: 'банк не ответил (503)', asked: 1, failed: 1 })
+    expect(text).toContain('Альфа-Банк: банк не ответил (503).')
+    expect(text).toContain('Список счетов этого банка сейчас неизвестен')
+  })
+
+  // ⚠ Главное, ради чего заведено: одно подключение ответило, другое нет. «Список неизвестен» —
+  // утверждение о ПОЛНОТЕ, и здесь оно ложно: часть счетов мы знаем и показываем строками.
+  it('часть подключений ответила ⇒ говорим СКОЛЬКО, а не «неизвестен»', () => {
+    const text = providerErrorDescription('Альфа-Банк', { error: 'банк не ответил (503)', asked: 3, failed: 2 })
+    expect(text).toContain('Ответило 1 подключение из 3')
+    expect(text).not.toContain('Список счетов этого банка сейчас неизвестен')
+  })
+
+  it('склоняет по числу ответивших, а не приписывает окончание', () => {
+    expect(providerErrorDescription('Альфа-Банк', { error: 'e', asked: 3, failed: 1 }))
+      .toContain('Ответило 2 подключения из 3')
+    expect(providerErrorDescription('Альфа-Банк', { error: 'e', asked: 6, failed: 1 }))
+      .toContain('Ответило 5 подключений из 6')
+  })
+
+  // ⚠ Молчат ВСЕ — знание снова нулевое, сколько бы подключений ни было.
+  it('молчат все подключения ⇒ прежний текст, а не «ответило 0 из 3»', () => {
+    const text = providerErrorDescription('Приорбанк', { error: 'e', asked: 3, failed: 3 })
+    expect(text).toContain('Список счетов этого банка сейчас неизвестен')
+    expect(text).not.toContain('Ответило')
+  })
+
+  // ⚠ Скос выката: статика новее backend ⇒ полей нет вовсе. Прежний текст верен для единственного
+  // подключения, а это подавляющий случай — молчание тут лучше выдуманного числа.
+  it('без счётчиков (старый backend) ⇒ прежний текст', () => {
+    const text = providerErrorDescription('Приорбанк', { error: 'банк не ответил' })
+    expect(text).toBe('Приорбанк: банк не ответил. Список счетов этого банка сейчас неизвестен — строки ниже показывают только сторону CRM.')
   })
 })
