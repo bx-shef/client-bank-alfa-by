@@ -194,7 +194,7 @@ export function buildProgramFeedbackIssue(input: { memberId: string, commitSha?:
       return finish(`Не разобрана выписка (формат?) — портал ${member}`, [
         '**Разбор выписки упал** (обычно — новый / нераспознанный формат банка).',
         `- **Провайдер:** \`${safeProvider(input.signal.providerId)}\``,
-        '- Ожидались форматы 1CClientBankExchange / client-bank `***** ^Type=` (windows-1251).',
+        '- Ожидались форматы 1CClientBankExchange / client-bank `***** ^Type=` / звёздочный `*0*…`.',
         ...fileEmbedLines(input.signal.fileText, '**Файл, который не разобрался** (для воспроизведения):')
       ])
     }

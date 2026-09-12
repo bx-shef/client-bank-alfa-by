@@ -91,6 +91,26 @@ describe('handleImportUpload', () => {
   })
 })
 
+// ⚠ ЦЕНТРАЛЬНОЕ УТВЕРЖДЕНИЕ #700 И ЕГО ЕДИНСТВЕННЫЙ ЗАМОК. Воркер обязан декодировать файл ТЕМ ЖЕ
+// правилом, что и браузер; вернуть здесь жёсткий `windows-1251` — и разбор CP866-выписки останется
+// структурно верным (звёздочки, цифры и счета лежат в ASCII), а назначение платежа уедет мусором в
+// CRM клиента. Замерено: до этого теста такая мутация проходила ВЕСЬ юнит-прогон зелёной — то есть
+// инвариант был заявлен в комментариях и коммите, но не держался ничем.
+describe('parseManualFileBase64: воркер декодирует ТЕМ ЖЕ правилом, что и браузер (#700)', () => {
+  it('CP866-выписка доезжает до воркера с читаемым назначением', () => {
+    const items = parseManualFileBase64(fixtureB64('paritet/settlement-byn.txt'))
+    expect(items).toHaveLength(2)
+    expect(items[0]!.purpose).toContain('Комиссионное вознаграждение')
+    expect(items[0]!.currency).toBe('BYN')
+  })
+
+  it('CP1251-выписка по-прежнему читается верно — правило не сломало прежние форматы', () => {
+    const items = parseManualFileBase64(fixtureB64('client-bank/demo-prior-byn.txt'))
+    expect(items.length).toBeGreaterThan(0)
+    expect(items.some(i => /[А-Яа-я]/.test(i.purpose))).toBe(true)
+  })
+})
+
 describe('parseManualFileBase64 (real fixtures, windows-1251)', () => {
   it('parses a client-bank text export carried as base64', () => {
     const items = parseManualFileBase64(fixtureB64('client-bank/demo-prior-byn.txt'))

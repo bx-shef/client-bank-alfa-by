@@ -97,3 +97,40 @@ describe('OperationList — отзыв о КОНКРЕТНОМ платеже (#
     expect(context.operation).not.toHaveProperty('kind')
   })
 })
+
+// ── Контрагент без имени (#700) ─────────────────────────────────────────────────────────────────
+// ⚠ Имя контрагента есть НЕ во всех форматах выписки: у звёздочного (Паритетбанк) его нет вовсе.
+// Без фолбэка главная (жирная) строка была бы пустой у КАЖДОГО платежа такой выписки — и в
+// предпросмотре `/import`, и в «Последних операциях» на `/app`, — то есть экран читался бы как
+// «приложение не дотянуло данные», а не как «банк имени не прислал».
+describe('OperationList: контрагент без имени', () => {
+  const noName: StatementItem = {
+    account: 'BY10DEMO30120000000000933001',
+    docId: '2026-08-04|4504691',
+    direction: 'debit',
+    amount: 18.28,
+    currency: 'BYN',
+    purpose: 'Комиссионное вознаграждение',
+    acceptDate: '2026-08-04',
+    counterparty: { name: '', unp: '190000001', account: 'BY80DEMO81010000000000933008' }
+  }
+
+  it('называет контрагента его счётом — по нему приложение и ищет компанию', async () => {
+    const w = await mountSuspended(OperationList, { props: { items: [noName] } })
+    expect(w.text()).toContain('BY80DEMO81010000000000933008')
+    expect(w.text()).not.toContain('Контрагент не указан')
+  })
+
+  it('без имени и без счёта говорит прямо, а не показывает пустую строку', async () => {
+    const bare = { ...noName, counterparty: { ...noName.counterparty, account: '' } }
+    const w = await mountSuspended(OperationList, { props: { items: [bare] } })
+    expect(w.text()).toContain('Контрагент не указан')
+  })
+
+  it('имя, если оно есть, по-прежнему главнее счёта', async () => {
+    const named = { ...noName, counterparty: { ...noName.counterparty, name: 'ООО «Ромашка»' } }
+    const w = await mountSuspended(OperationList, { props: { items: [named] } })
+    expect(w.text()).toContain('ООО «Ромашка»')
+    expect(w.text()).not.toContain('BY80DEMO81010000000000933008')
+  })
+})

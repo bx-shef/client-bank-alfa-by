@@ -79,7 +79,11 @@ function toRow(item: StatementItem) {
       ? 'bg-(--ui-color-design-tinted-success-bg) text-(--ui-color-green-95) dark:text-(--ui-color-accent-main-success)'
       : 'bg-(--ui-color-design-tinted-alert-bg) text-(--ui-color-red-80) dark:text-(--ui-color-red-50)',
     amount: `${credit ? '+' : '−'}${money.format(item.amount)} ${item.currency}`,
-    name: item.counterparty.name,
+    // ⚠ Имя контрагента есть НЕ ВО ВСЕХ форматах: у звёздочного (#700) его нет вовсе, и без
+    // фолбэка главная строка операции была бы пустой у КАЖДОГО платежа такой выписки — экран
+    // читался бы как «приложение не дотянуло данные». Падаем на счёт (по нему приложение и ищет
+    // компанию), и лишь затем на честное «не указан». Тот же фолбэк — в демо на лендинге.
+    name: item.counterparty.name || item.counterparty.account || 'Контрагент не указан',
     purpose: item.purpose,
     requisites: requisites(item),
     // Отзыв о КОНКРЕТНОМ платеже (#499). Форму строит ТОТ ЖЕ `makeProgramSample`, что и программный

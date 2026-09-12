@@ -1,6 +1,6 @@
 # Указатель документации
 
-> Last reviewed: 2026-09-06
+> Last reviewed: 2026-09-12
 
 Что где лежит и когда это читать. Документов много, и без такой таблицы половина из них
 недостижима: раньше на `APP_RATING.md`, `DEPENDABOT.md`, `REPORTING_KIT.md` и
@@ -27,6 +27,7 @@
 | [`REST_METHODS.md`](REST_METHODS.md) | учёт **исходящих** вызовов REST Bitrix24 — правится при добавлении метода |
 | [`BACKEND_MAP.md`](BACKEND_MAP.md) | реестр серверных модулей разнесения + живые находки по полям REST |
 | [`ALFA_API.md`](ALFA_API.md) · [`PRIOR_API.md`](PRIOR_API.md) | API банков, OAuth, живые находки |
+| [`PARITET_FORMAT.md`](PARITET_FORMAT.md) | Звёздочный формат выписки (CP866): поля, направление, дедуп, замеры |
 | [`AUTH.md`](AUTH.md) | вход оператора в служебную зону (`/queues`) |
 | [`PERMISSIONS.md`](PERMISSIONS.md) | права сотрудников ВНУТРИ портала клиента: что есть, чего нет, чем закрыть (#531) |
 | [`APP_RATING.md`](APP_RATING.md) | попап «оцените приложение» в Маркете |

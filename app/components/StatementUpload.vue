@@ -40,7 +40,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const ratingTrigger = ref(false)
 // Decoded text + name of the first successfully-parsed file — offered (opt-in) to the feedback
 // widget so an employee can attach the statement to a 👎 issue for reproduction (#198). Recomputed
-// on each batch; empty when nothing parsed. Decode matches the parser (windows-1251).
+// on each batch; empty when nothing parsed. Decode matches the parser (кодировка определяется).
 const feedbackFileName = ref('')
 const feedbackFileText = ref('')
 // Monotonic token so a superseded batch's async decode can't clobber a newer batch's state.
@@ -161,10 +161,13 @@ function clearAll() {
       @dragleave.prevent="dragOver = false"
       @drop.prevent="onDrop"
     >
+      <!-- ⚠ Форматы перечислены ВСЕ: человек с выпиской третьего формата иначе прочитает, что его
+           банк не поддерживается, и не станет пробовать. -->
       <p class="text-sm text-(--ui-color-base-3)">
         Перетащите сюда файл выписки ({{ ACCEPTED_EXTENSIONS.join(', ') }}) — формат
-        <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">1CClientBankExchange</code>
-        или client-bank <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">***** ^Type=</code>
+        <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">1CClientBankExchange</code>,
+        client-bank <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">***** ^Type=</code>
+        или звёздочный <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">*0*…</code>
       </p>
       <div class="mt-4 flex items-center justify-center gap-3">
         <B24Button
@@ -228,6 +231,24 @@ function clearAll() {
             v-if="r.ok"
             :label="`разобрано: ${r.items.length}`"
             color="air-primary-success"
+            size="sm"
+            class="mt-0.5 shrink-0"
+          />
+          <!-- ⚠ Строки, которые НЕ стали операциями, обязаны быть названы: без этого выписка из
+               44 строк показывает «разобрано: 9», и это читается как потеря данных. Причины
+               разведены — служебные записи банка это норма, а «не смогли прочитать» повод нам
+               сообщить. -->
+          <B24Badge
+            v-if="r.ok && r.nonPayment"
+            :label="`не платежи: ${r.nonPayment}`"
+            color="air-primary-copilot"
+            size="sm"
+            class="mt-0.5 shrink-0"
+          />
+          <B24Badge
+            v-if="r.ok && r.unreadable"
+            :label="`не распознано: ${r.unreadable}`"
+            color="air-primary-alert"
             size="sm"
             class="mt-0.5 shrink-0"
           />
@@ -301,7 +322,7 @@ function clearAll() {
         v-else-if="results.length"
         color="air-primary-warning"
         title="Не удалось разобрать"
-        description="Проверьте формат файла: ожидается 1CClientBankExchange или client-bank «***** ^Type=» в кодировке windows-1251."
+        description="Проверьте формат файла: ожидается 1CClientBankExchange, client-bank «***** ^Type=» или звёздочный «*0*…»."
         data-testid="all-failed"
       />
       <!-- Реальный исход обработки (#417). НЕ под гейтом предпросмотра: после перезагрузки вкладки
