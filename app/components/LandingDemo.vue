@@ -35,6 +35,13 @@ const MAX_RENDERED_OPS = 100
 const MAX_RECOGNIZED_IDS_PER_ROW = 12
 
 const extraction = ref<DemoExtraction | null>(null)
+
+// ⚠ Подписи плиток СКЛОНЯЮТСЯ. Зашитые формы множественного числа давали «1 контрагентов» на
+// любой выписке с одним плательщиком — а это первое, что видит человек, принёсший свой файл.
+const opsLabel = computed(() => pluralRu(extraction.value?.operationCount ?? 0, ['операция', 'операции', 'операций']))
+const creditsLabel = computed(() => pluralRu(extraction.value?.creditCount ?? 0, ['приход', 'прихода', 'приходов']))
+const debitsLabel = computed(() => pluralRu(extraction.value?.debitCount ?? 0, ['расход', 'расхода', 'расходов']))
+const partiesLabel = computed(() => pluralRu(extraction.value?.counterpartyCount ?? 0, ['контрагент', 'контрагента', 'контрагентов']))
 const sourceLabel = ref('')
 const busy = ref(false)
 const error = ref('')
@@ -56,6 +63,11 @@ const visibleRecognized = computed(() => extraction.value?.recognized.slice(0, M
 const hiddenRecognizedCount = computed(() =>
   Math.max(0, (extraction.value?.recognized.length ?? 0) - MAX_RENDERED_OPS)
 )
+// ⚠ Хвост тоже склоняется: при 101 операции в выписке (кап — 100) строка говорила «и ещё
+// 1 операций», и это ровно тот же дефект, что в плитках, только на менее заметном месте.
+const hiddenOpsLabel = computed(() => pluralRu(hiddenOpsCount.value, ['операция', 'операции', 'операций']))
+const hiddenRecognizedLabel = computed(() =>
+  pluralRu(hiddenRecognizedCount.value, ['распознанная строка', 'распознанные строки', 'распознанных строк']))
 
 // Human labels for the recognized identifier kinds (§4). Demo set only needs a few.
 const KIND_LABEL: Record<IdentifierKind, string> = {
@@ -300,32 +312,32 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.operationCount }}
               </div>
-              <div class="text-xs text-white/50">
-                операций
+              <div class="text-xs text-white/50" data-testid="demo-tile-ops">
+                {{ opsLabel }}
               </div>
             </div>
             <div class="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
               <div class="text-2xl font-bold text-[rgb(var(--color-accent-success-ch))]">
                 {{ extraction.creditCount }}
               </div>
-              <div class="text-xs text-white/50">
-                приходов
+              <div class="text-xs text-white/50" data-testid="demo-tile-credits">
+                {{ creditsLabel }}
               </div>
             </div>
             <div class="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
               <div class="text-2xl font-bold text-white">
                 {{ extraction.debitCount }}
               </div>
-              <div class="text-xs text-white/50">
-                расходов
+              <div class="text-xs text-white/50" data-testid="demo-tile-debits">
+                {{ debitsLabel }}
               </div>
             </div>
             <div class="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
               <div class="text-2xl font-bold text-white">
                 {{ extraction.counterpartyCount }}
               </div>
-              <div class="text-xs text-white/50">
-                контрагентов
+              <div class="text-xs text-white/50" data-testid="demo-tile-parties">
+                {{ partiesLabel }}
               </div>
             </div>
           </div>
@@ -378,7 +390,7 @@ function reset() {
             class="mt-2 text-xs text-white/40"
             data-testid="demo-recognized-overflow"
           >
-            …и ещё {{ hiddenRecognizedCount }} распознанных
+            …и ещё {{ hiddenRecognizedCount }} {{ hiddenRecognizedLabel }}
           </p>
         </div>
 
@@ -435,7 +447,7 @@ function reset() {
             class="text-xs text-white/40"
             data-testid="demo-ops-overflow"
           >
-            …и ещё {{ hiddenOpsCount }} операций
+            …и ещё {{ hiddenOpsCount }} {{ hiddenOpsLabel }}
           </p>
         </div>
       </template>
