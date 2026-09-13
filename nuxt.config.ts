@@ -75,17 +75,16 @@ export default defineNuxtConfig({
       repoUrl: process.env.NUXT_PUBLIC_REPO_URL || '',
       // Яндекс.Метрика — id счётчика (только цифры, отфильтрован выше).
       metrikaId,
-      // Bitrix24 Market listing code override for the «оцените приложение» modal. Empty → the
-      // composable falls back to the app's real slug (LANDING_MARKET_CODE in landing.ts). Set
-      // NUXT_PUBLIC_B24_MARKET_CODE only to point at a different listing (e.g. a re-publish).
-      b24MarketCode: '',
       // КОД ПРИЛОЖЕНИЯ НА ПОРТАЛЕ — им портал открывает наши экраны по ссылке
       // `/marketplace/view/<код>/` (#19) и им же помечен канал pull-синхронизации настроек.
       // У тиражного это символьный код Маркета (`shef.bankimport`), у ЛОКАЛЬНОГО приложения —
       // `client_id` (`local.…`), то есть значение СВОЁ у каждой установки-клона.
-      // ⚠ Это НЕ то же самое, что `b24MarketCode`: тот отвечает на вопрос «какой у нас листинг в
-      // Маркете» (попап «оцените приложение»), а клон на своём сервере листинга не имеет вовсе.
-      // Пусто ⇒ берётся `b24MarketCode`, затем `LANDING_MARKET_CODE` — см. `useAppCode`.
+      // Пусто ⇒ `LANDING_MARKET_CODE` — см. `useAppCode`.
+      //
+      // ⚠ Переменной «код нашего ЛИСТИНГА в Маркете» здесь НЕТ намеренно (решение владельца,
+      // 2026-09-13): у клона листинга не существует ни нашего, ни своего, а нам код листинга
+      // задаёт константа `LANDING_MARKET_CODE` — она же строит публичный адрес карточки на
+      // лендинге. Переменная давала бы ВТОРОЙ ответ на вопрос с одним ответом.
       b24AppCode: '',
       // Битрикс24 CRM веб-форма (embed) — публичные идентификаторы, не секреты.
       // По умолчанию вшита форма Игоря Шевчика (портал b37817748). Смена — через

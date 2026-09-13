@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest'
 // и в `.env.example`, но не в `Dockerfile` — и не делала НИЧЕГО. Симптом тихий вдвойне: сборка
 // зелёная, переменная «задана», а у клона подпись «сборка <sha>» по-прежнему вела в чужой
 // репозиторий. Ни один тест этого не видел, потому что все они смотрят на код, а не на то, доехало
-// ли значение до `nuxt generate`. Тем же способом молча не работали `b24MarketCode`, `metrikaId` и
-// `b24Form*` — то есть промах был не единичным, а классом.
+// ли значение до `nuxt generate`. Тем же способом молча не работали `metrikaId` и `b24Form*` —
+// то есть промах был не единичным, а классом.
 //
 // Правило одностороннее: объявлено больше, чем читается (`NUXT_PUBLIC_BUILD_DATE` нужен
 // `seo-files.mjs`, а не `runtimeConfig`) — это нормально. Нельзя обратное: ключ есть, а передать
@@ -37,7 +37,7 @@ function publicKeys(): string[] {
 
 /**
  * Имя переменной окружения, которым Nuxt задаёт ключ `runtimeConfig.public`.
- * `b24MarketCode` → `NUXT_PUBLIC_B24_MARKET_CODE` (camelCase → SCREAMING_SNAKE).
+ * `b24AppCode` → `NUXT_PUBLIC_B24_APP_CODE` (camelCase → SCREAMING_SNAKE).
  */
 function envNameFor(key: string): string {
   return `NUXT_PUBLIC_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
@@ -104,7 +104,7 @@ describe('переменные NUXT_PUBLIC_* доезжают до сборки'
 describe('имя переменной выводится по правилу Nuxt', () => {
   it('camelCase раскладывается в SCREAMING_SNAKE', () => {
     expect(envNameFor('siteUrl')).toBe('NUXT_PUBLIC_SITE_URL')
-    expect(envNameFor('b24MarketCode')).toBe('NUXT_PUBLIC_B24_MARKET_CODE')
+    expect(envNameFor('b24AppCode')).toBe('NUXT_PUBLIC_B24_APP_CODE')
     expect(envNameFor('b24FormScriptUrl')).toBe('NUXT_PUBLIC_B24_FORM_SCRIPT_URL')
     expect(envNameFor('metrikaId')).toBe('NUXT_PUBLIC_METRIKA_ID')
   })

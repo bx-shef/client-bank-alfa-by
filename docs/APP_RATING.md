@@ -52,7 +52,8 @@
   попап и клиент. Инертны вне портала (нет фрейм-токена) и при пустом коде листинга. По
   «Оценить» открывают детальную страницу Маркета через `frame.slider.openPath`
   (`marketDetailPath` в `app/config/b24.ts`, код по умолчанию — `LANDING_MARKET_CODE`
-  `shef.bankimport`; override — `NUXT_PUBLIC_B24_MARKET_CODE`).
+  `shef.bankimport` — КОНСТАНТА, переменной окружения для неё нет: у клона на своём сервере
+  карточки в Маркете не существует ни нашей, ни его, а попап там скрыт локальным режимом).
 - Триггер показа — успешная запись в CRM в `StatementUpload.vue` (`ratingTrigger`).
 - Карточка «Оценки приложения» на `/queues` (`app/composables/useAppRatingOps.ts`) — владелец
   ведёт жизненный цикл кнопками, а не SQL.

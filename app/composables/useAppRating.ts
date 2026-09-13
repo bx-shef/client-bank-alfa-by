@@ -1,5 +1,4 @@
 import { ref } from 'vue'
-import { useRuntimeConfig } from '#imports'
 import { useB24 } from '~/composables/useB24'
 import { frameAuth, frameAuthHeaders } from '~/composables/useFrameAuth'
 import { marketDetailPath } from '~/config/b24'
@@ -10,13 +9,15 @@ import { LANDING_MARKET_CODE } from '~/utils/landing'
 //   • probes GET /api/app-rating for the show decision (throttled + verification-aware server-side),
 //   • stamps the lifecycle (prompted / opened) back via POST,
 //   • opens the app's Market detail page through the frame SDK's slider.openPath so the user can rate.
-// Inert outside a portal (no frame auth) and when no Market code is configured (b24MarketCode empty).
+// Inert outside a portal (no frame auth) and when the Market code is empty.
 
 export function useAppRating() {
   const b24 = useB24()
-  // Default to the app's real Market slug (single source of truth in landing.ts); an env override
-  // (NUXT_PUBLIC_B24_MARKET_CODE) can point at a different listing if the app is ever re-published.
-  const marketCode = String(useRuntimeConfig().public.b24MarketCode || LANDING_MARKET_CODE)
+  // ⚠ Код листинга — КОНСТАНТА, переменной окружения для него нет (решение владельца, 2026-09-13):
+  // у клона на своём сервере карточки в Маркете не существует ни нашей, ни его собственной, а сам
+  // попап там и так скрыт локальным режимом (#39). Из той же константы строится публичный адрес
+  // карточки на лендинге, то есть ответ на вопрос «какой у нас листинг» ровно один.
+  const marketCode = LANDING_MARKET_CODE
   const path = marketDetailPath(marketCode)
 
   // Instance-local (not module-level) so there is no shared singleton across SSR requests or across
