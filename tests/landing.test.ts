@@ -8,7 +8,8 @@ import { LANDING_FEATURES, LANDING_STEPS, LANDING_PAIN_RESULT, LANDING_INTEGRATO
 /** УНП, которые встречаются в синтетических примерах. Список ЗАКРЫТЫЙ: новый номер обязан
  *  попасть сюда осознанно (см. проверку ниже). */
 const DEMO_UNPS = new Set([
-  '100000001', '100000002', '100000003', '100000004', '100777001',
+  '100000000', '100000001', '100000002', '100000003', '100000004', '100777001',
+  '190000000',
   '190000001', '190000002', '190000004', '190000005',
   '191009988', '191234567', '191667788',
   '200000001', '200000002', '200000003', '200000004'
@@ -79,7 +80,10 @@ describe('LANDING_DEMO_SAMPLES (demo download samples)', () => {
    */
   it('every file in public/samples/ is synthetic — не только зарегистрированные', () => {
     const dir = 'public/samples'
-    const files = readdirSync(dir).filter(f => f.endsWith('.txt'))
+    // ⚠ Расширений ДВА (#707): CSV-выгрузки банков лежат рядом как `.csv`, и фильтр по `.txt`
+    // смотрел бы мимо них — то есть гард приватности молча перестал бы покрывать новые примеры
+    // ровно в тот момент, когда их добавили.
+    const files = readdirSync(dir).filter(f => f.endsWith('.txt') || f.endsWith('.csv'))
     expect(files.length).toBeGreaterThanOrEqual(LANDING_DEMO_SAMPLES.length)
     for (const f of files) {
       const text = decodeUploadText(readFileSync(join(dir, f)))

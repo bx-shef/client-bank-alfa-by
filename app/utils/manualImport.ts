@@ -2,11 +2,14 @@
 // right parser + normalizer, producing the unified StatementItem[]. This is what
 // the `manual` provider (UI file upload / backend) calls after decoding the file
 // to a string — ⚠ КОДИРОВОК НЕСКОЛЬКО, и определяет её `decodeUploadText`
-// (`importUpload.ts` → `statementEncoding.ts`) ДО разбора. Три формата (issue #19/#21/#700):
+// (`importUpload.ts` → `statementEncoding.ts`) ДО разбора. Пять форматов (issue #19/#21/#700/#707):
 //   - `1CClientBankExchange` — the 1C accounting exchange format;
 //   - `***** ^Type=` — the client-bank text export (Приорбанк / Альфа `Type=4`);
 //   - `*0*…` — звёздочный построчный экспорт (Паритетбанк, #700). ⚠ Он В ДРУГОЙ КОДИРОВКЕ (CP866),
 //     и различает их `detectStatementEncoding` ДО разбора — сюда текст приходит уже декодированным.
+//   - CSV Приорбанка (`;`, колонки дебет/кредит) и CSV Альфа-Банка (`;`, СЕКЦИИ ДЕБЕТ/КРЕДИТ) —
+//     #707. ⚠ Разделитель у них общий, а семантика РАЗНАЯ, поэтому и парсера два: см. преамбулу
+//     `alfaCsvStatement.ts`.
 //
 // The client-bank parser now caps its decoded input (`MAX_CLIENT_BANK_CHARS`,
 // DoS guard #19); a real file-upload path (UI/backend) should ALSO cap the raw
@@ -18,9 +21,17 @@ import { normalizeOneC } from '~/utils/oneCStatement'
 import { parseClientBankText } from '~/utils/clientBankText'
 import { normalizeClientBank } from '~/utils/clientBankStatement'
 import { isParitetText, parseParitetText, normalizeParitetRows } from '~/utils/paritetStatement'
+import { isPriorCsv, parsePriorCsv, normalizePriorCsvRows } from '~/utils/priorCsvStatement'
+import { isAlfaCsv, parseAlfaCsv, normalizeAlfaCsvRows } from '~/utils/alfaCsvStatement'
 
 /** Supported manual-upload formats. */
-export type ManualFormat = '1c-exchange' | 'client-bank-text' | 'paritet-text' | 'unknown'
+export type ManualFormat
+  = | '1c-exchange'
+    | 'client-bank-text'
+    | 'paritet-text'
+    | 'prior-csv'
+    | 'alfa-csv'
+    | 'unknown'
 
 /** Разбор файла: операции плюс строки, которые операциями НЕ стали, с разбивкой по причине. */
 export interface ManualParseResult {
@@ -40,11 +51,18 @@ const CLIENT_BANK_MARKER = '***** ^Type='
  * проверка звёздочного формата, поставленная раньше, перехватила бы его. Звёздочный требует
  * ровно `*0*` — то есть цифру сразу за первой звёздочкой, — поэтому пересечения нет; но порядок
  * оставлен прежним и закреплён тестом, чтобы перестановка «для красоты» не сломала старый формат.
+ *
+ * ⚠ У двух CSV разделитель ОДИН (`;`), поэтому и опознаются они по СВОИМ именам колонок, а не по
+ * разделителю: «Дата док.» + «Номинал.Дебет» у Приорбанка против «Дата операции» + «Сумма
+ * операции» у Альфы. Общего признака «это CSV» здесь нет намеренно — он выбрал бы парсер монеткой,
+ * а у этих форматов РАЗНАЯ семантика направления (колонки против секций).
  */
 export function detectManualFormat(text: string): ManualFormat {
   if (isOneCExchange(text)) return '1c-exchange'
   if (text.slice(0, 64).trimStart().startsWith(CLIENT_BANK_MARKER)) return 'client-bank-text'
   if (isParitetText(text)) return 'paritet-text'
+  if (isPriorCsv(text)) return 'prior-csv'
+  if (isAlfaCsv(text)) return 'alfa-csv'
   return 'unknown'
 }
 
@@ -75,10 +93,14 @@ export function parseManualStatement(text: string, ctx: NormalizeContext): Manua
       return { items: normalizeClientBank(parseClientBankText(text), ctx), nonPayment: 0, unreadable: 0 }
     case 'paritet-text':
       return normalizeParitetRows(parseParitetText(text), ctx)
+    case 'prior-csv':
+      return normalizePriorCsvRows(parsePriorCsv(text), ctx)
+    case 'alfa-csv':
+      return normalizeAlfaCsvRows(parseAlfaCsv(text), ctx)
     default:
       throw new Error(
-        'Неизвестный формат выписки (ожидается 1CClientBankExchange, client-bank «***** ^Type=» '
-        + 'или звёздочный «*0*…»)'
+        'Неизвестный формат выписки (ожидается 1CClientBankExchange, client-bank «***** ^Type=», '
+        + 'звёздочный «*0*…» или CSV-выгрузка Приорбанка / Альфа-Банка)'
       )
   }
 }

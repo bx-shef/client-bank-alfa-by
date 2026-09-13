@@ -62,7 +62,7 @@ export async function handleImportUpload(deps: IngestDeps, input: IngestInput): 
   if (!accessToken || !domain) {
     return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   }
-  // File gate first (cheapest): extension allowlist + size cap (windows-1251 .txt, ≤2МБ).
+  // File gate first (cheapest): extension allowlist + size cap (.txt/.csv, ≤2МБ).
   const invalid = validateUploadFile(fileName, bytes.byteLength)
   if (invalid) return { status: 400, body: { error: invalid } }
 

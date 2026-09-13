@@ -10,5 +10,9 @@ tests/fixtures/1c-exchange/*.txt binary
 # По той же причине binary: конвертация EOL/кодировки сломала бы байты, на которых держится
 # тест определения кодировки, и он бы проверял не то, о чём говорит.
 tests/fixtures/paritet/*.txt binary
+# CSV-выгрузки банков — windows-1251, не UTF-8 (#707).
+tests/fixtures/bank-csv/*.csv binary
 # Публичный пример звёздочного формата — тоже CP866 (его читает демо на лендинге).
 public/samples/vypiska-paritet.txt binary
+# Публичные примеры CSV — windows-1251.
+public/samples/*.csv binary
