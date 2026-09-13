@@ -175,13 +175,15 @@ export interface DemoSample {
 }
 
 export const LANDING_DEMO_SAMPLES: readonly DemoSample[] = [
-  { label: 'Альфа-Банк', url: '/samples/vypiska-alfa.txt', name: 'vypiska-alfa.txt' },
-  { label: 'Приорбанк', url: '/samples/vypiska-prior.txt', name: 'vypiska-prior.txt' },
+  // ⚠ Формат назван у ОБОИХ чипов банка, и пара стоит рядом (находка ревью). «Альфа-Банк» против
+  // «Альфа-Банк CSV» выбрать нельзя: про свой файл человек слова «CSV» чаще всего не знает (в
+  // интернет-банке кнопка называется «Выгрузить»), а у второго чипа формат не назван вовсе — и
+  // два чипа одного банка, разнесённые по краям списка, читаются как разные банки.
+  { label: 'Альфа-Банк (текст)', url: '/samples/vypiska-alfa.txt', name: 'vypiska-alfa.txt' },
+  { label: 'Альфа-Банк (CSV)', url: '/samples/vypiska-alfa-csv.csv', name: 'vypiska-alfa-csv.csv' },
+  { label: 'Приорбанк (текст)', url: '/samples/vypiska-prior.txt', name: 'vypiska-prior.txt' },
+  { label: 'Приорбанк (CSV)', url: '/samples/vypiska-prior-csv.csv', name: 'vypiska-prior-csv.csv' },
   { label: 'Паритетбанк', url: '/samples/vypiska-paritet.txt', name: 'vypiska-paritet.txt' },
-  // ⚠ CSV-выгрузки стоят ОТДЕЛЬНЫМИ примерами, хотя банк тот же: формат у них другой, и человек,
-  // у которого выписка выгрузилась в CSV, должен найти на экране именно её (#707).
-  { label: 'Приорбанк CSV', url: '/samples/vypiska-prior-csv.csv', name: 'vypiska-prior-csv.csv' },
-  { label: 'Альфа-Банк CSV', url: '/samples/vypiska-alfa-csv.csv', name: 'vypiska-alfa-csv.csv' },
   { label: '1С', url: '/samples/vypiska-1c.txt', name: 'vypiska-1c.txt' }
 ]
 

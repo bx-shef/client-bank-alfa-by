@@ -312,7 +312,10 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.operationCount }}
               </div>
-              <div class="text-xs text-white/50" data-testid="demo-tile-ops">
+              <div
+                class="text-xs text-white/50"
+                data-testid="demo-tile-ops"
+              >
                 {{ opsLabel }}
               </div>
             </div>
@@ -320,7 +323,10 @@ function reset() {
               <div class="text-2xl font-bold text-[rgb(var(--color-accent-success-ch))]">
                 {{ extraction.creditCount }}
               </div>
-              <div class="text-xs text-white/50" data-testid="demo-tile-credits">
+              <div
+                class="text-xs text-white/50"
+                data-testid="demo-tile-credits"
+              >
                 {{ creditsLabel }}
               </div>
             </div>
@@ -328,7 +334,10 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.debitCount }}
               </div>
-              <div class="text-xs text-white/50" data-testid="demo-tile-debits">
+              <div
+                class="text-xs text-white/50"
+                data-testid="demo-tile-debits"
+              >
                 {{ debitsLabel }}
               </div>
             </div>
@@ -336,7 +345,10 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.counterpartyCount }}
               </div>
-              <div class="text-xs text-white/50" data-testid="demo-tile-parties">
+              <div
+                class="text-xs text-white/50"
+                data-testid="demo-tile-parties"
+              >
                 {{ partiesLabel }}
               </div>
             </div>

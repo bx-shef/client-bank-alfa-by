@@ -24,6 +24,7 @@
 
 import type { NormalizeContext, StatementItem, OperationDirection } from '~/types/statement'
 import { currencyFromNumericCode } from '~/utils/clientBankStatement'
+import { splitCsvLine, tailCell } from '~/utils/csvLine'
 import { parseBankAmount, round2 } from '~/utils/money'
 import { IBAN_BY, isoFromDotted } from '~/utils/priorCsvStatement'
 
@@ -114,7 +115,7 @@ export function parseAlfaCsv(content: string, maxChars = MAX_ALFA_CSV_CHARS): Al
     throw new Error('Файл не похож на CSV-выписку Альфа-Банка (нет строки заголовков колонок)')
   }
 
-  const header = lines[headerAt]!.split(SEP).map(c => c.trim())
+  const header = splitCsvLine(lines[headerAt]!, SEP).map(c => c.trim())
   const idx: Record<keyof typeof COL, number> = {} as Record<keyof typeof COL, number>
   for (const [key, title] of Object.entries(COL) as [keyof typeof COL, string][]) {
     const at = header.indexOf(title)
@@ -135,7 +136,10 @@ export function parseAlfaCsv(content: string, maxChars = MAX_ALFA_CSV_CHARS): Al
 
   for (const line of lines.slice(headerAt + 1)) {
     if (!line.trim()) continue
-    const cells = line.split(SEP).map(c => c.trim())
+    // ⚠ Держим и СЫРЫЕ ячейки: назначение склеивается из хвоста, а по обрезанным копиям пробел
+    // после разделителя терялся бы — текст плательщика менялся бы молча.
+    const raw = splitCsvLine(line, SEP)
+    const cells = raw.map(c => c.trim())
     const date = isoFromDotted(cells[0] ?? '')
 
     if (date === '') {
@@ -149,6 +153,10 @@ export function parseAlfaCsv(content: string, maxChars = MAX_ALFA_CSV_CHARS): Al
       // и операция под ним обязана получить отказ, а не молча стать расходом.
       const upper = line.toUpperCase()
       if (upper.includes('ИТОГО ОБОРОТ')) {
+        // ⚠ У Альфы итог стоит РОВНО в колонке суммы (замерено), в отличие от Приорбанка, где
+        // строка оборотов по колонкам не выровнена вовсе. Поэтому здесь индекс, а там — числа;
+        // расхождение не случайно, и обобщать его в «одно правило» значило бы подогнать один из
+        // двух форматов под другой без замера.
         const total = parseBankAmount(cells[idx.amount] ?? '')
         if (Number.isFinite(total)) {
           if (upper.includes(DEBIT_MARK)) debitTotal = total
@@ -183,7 +191,8 @@ export function parseAlfaCsv(content: string, maxChars = MAX_ALFA_CSV_CHARS): Al
       counterpartyAccount: (cells[idx.account] ?? '').replace(/\s+/g, ''),
       name: cells[idx.name] ?? '',
       amount: cells[idx.amount] ?? '',
-      purpose: cells[idx.purpose] ?? '',
+      // ⚠ Хвостом, а не одной ячейкой: `;` в назначении иначе отрезает его молча (csvLine.ts).
+      purpose: tailCell(raw, idx.purpose, SEP),
       direction: section
     })
   }
@@ -210,9 +219,11 @@ function assertTurnovers(rows: AlfaCsvRow[], debitTotal: number | null, creditTo
   }
   if (round2(debit) !== round2(debitTotal) || round2(credit) !== round2(creditTotal)) {
     throw new Error(
-      `Выписка неполная: банк указал обороты ${round2(debitTotal)} / ${round2(creditTotal)}, `
-      + `а сумма операций в файле — ${round2(debit)} / ${round2(credit)}. Скорее всего файл `
-      + 'выгрузился не до конца, выгрузите его заново.'
+      'Сумма операций не сошлась с оборотами, которые указал банк: по списаниям '
+      + `${round2(debitTotal).toFixed(2)} против ${round2(debit).toFixed(2)}, по поступлениям `
+      + `${round2(creditTotal).toFixed(2)} против ${round2(credit).toFixed(2)}. Чаще всего это `
+      + 'значит, что файл выгрузился не до конца — выгрузите его заново; если повторяется, '
+      + 'пришлите файл нам кнопкой отзыва.'
     )
   }
 }

@@ -93,7 +93,7 @@ const argv = process.argv.slice(2)
 const account = readAccountFlag(argv)
 const files = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--account')
 if (!files.length) {
-  console.log('Использование: pnpm parse:statement [--account <счёт>] <файл-выписки.txt> [ещё.txt …]')
+  console.log('Использование: pnpm parse:statement [--account <счёт>] <файл-выписки.txt|.csv> [ещё …]')
   console.log('Пример:        pnpm parse:statement tests/fixtures/client-bank/demo-prior-byn.txt')
   console.log('               pnpm parse:statement tests/fixtures/1c-exchange/demo-1c.txt')
   process.exit(1)

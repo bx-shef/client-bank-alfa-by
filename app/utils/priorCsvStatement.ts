@@ -17,12 +17,13 @@
 // добавит колонку в середину, и разбор по индексам молча начнёт брать УНП из поля суммы. Имя
 // расходится громко: колонка не нашлась — отказ с текстом.
 //
-// ⚠ СЧЁТ КОНТРАГЕНТА ПРИХОДИТ С ПРОБЕЛАМИ (`BY69 PJCB3012 0822301000000933`). Поиску компании
+// ⚠ СЧЁТ КОНТРАГЕНТА ПРИХОДИТ С ПРОБЕЛАМИ (`BY69 DEMO3012 0000000000000933`). Поиску компании
 // это не мешает (`findCompanyByAccount` нормализует номер сам), а вот «Исключения» сравнивают
 // ТОЧНО: счёт, скопированный админом из выписки, не совпал бы со счётом из карточки, и правило
 // молча не работало бы. Поэтому пробелы снимаем ЗДЕСЬ, на входе.
 
 import type { NormalizeContext, StatementItem, OperationDirection } from '~/types/statement'
+import { splitCsvLine, tailCell } from '~/utils/csvLine'
 import { parseBankAmount, round2 } from '~/utils/money'
 
 /** Тот же потолок ввода, что у соседних текстовых форматов (DoS-гард #19). */
@@ -143,7 +144,7 @@ export function parsePriorCsv(content: string, maxChars = MAX_PRIOR_CSV_CHARS): 
     throw new Error('Файл не похож на CSV-выписку Приорбанка (нет строки заголовков колонок)')
   }
 
-  const header = lines[headerAt]!.split(SEP).map(c => c.trim())
+  const header = splitCsvLine(lines[headerAt]!, SEP).map(c => c.trim())
   const idx: Record<keyof typeof COL, number> = {} as Record<keyof typeof COL, number>
   for (const [key, title] of Object.entries(COL) as [keyof typeof COL, string][]) {
     const at = header.indexOf(title)
@@ -163,7 +164,18 @@ export function parsePriorCsv(content: string, maxChars = MAX_PRIOR_CSV_CHARS): 
 
   for (const line of lines.slice(headerAt + 1)) {
     if (!line.trim()) continue
-    const cells = line.split(SEP).map(c => c.trim())
+    // ⚠ Держим и СЫРЫЕ ячейки: назначение склеивается из хвоста, а по обрезанным копиям пробел
+    // после разделителя терялся бы — текст плательщика менялся бы молча.
+    const raw = splitCsvLine(line, SEP)
+    const cells = raw.map(c => c.trim())
+    // ⚠ Сальдо отсеиваем ПО СЛОВУ, а не полагаясь на «в первой ячейке текст»: последнее — свойство
+    // одного замеренного файла, а цена промаха велика. Попади строка сальдо в операции, её суммы
+    // ушли бы в сверку оборотов, та не сошлась бы, и весь файл был бы отвергнут с ЛОЖНОЙ причиной
+    // «выгрузился не до конца» — то есть бухгалтер пошёл бы перевыгружать исправный файл.
+    // ⚠ Ищем только ЛЕВЕЕ колонок с суммами, а не по всей строке: «сальдо» встречается и в
+    // назначении платежа («оплата сальдо по договору»), и проверка по всей строке выбрасывала бы
+    // настоящие операции — то есть чинила бы одну тихую потерю, заводя другую.
+    if (cells.slice(0, idx.debit).some(c => /сальдо/i.test(c))) continue
     if (isOperationLine(cells)) {
       rows.push({
         date: isoFromDotted(cells[idx.date] ?? ''),
@@ -175,7 +187,8 @@ export function parsePriorCsv(content: string, maxChars = MAX_PRIOR_CSV_CHARS): 
         name: cells[idx.name] ?? '',
         debit: cells[idx.debit] ?? '',
         credit: cells[idx.credit] ?? '',
-        purpose: cells[idx.purpose] ?? ''
+        // ⚠ Хвостом, а не одной ячейкой: `;` в назначении иначе отрезает его молча (csvLine.ts).
+        purpose: tailCell(raw, idx.purpose, SEP)
       })
       continue
     }
@@ -186,10 +199,18 @@ export function parsePriorCsv(content: string, maxChars = MAX_PRIOR_CSV_CHARS): 
     // в строке их ровно два, в порядке «дебет, кредит».
     if (/^Обороты/i.test(cells[0] ?? '')) {
       const numbers = cells.map(parseBankAmount).filter(Number.isFinite)
-      if (numbers.length === 2) {
-        debitTotal = numbers[0]!
-        creditTotal = numbers[1]!
+      // ⚠ Ровно два числа — свойство ЗАМЕРЕННОЙ выгрузки (дебет и кредит). Третье число (например
+      // эквивалент в BYN у валютного счёта) — не «файл обрезан», а другая раскладка, и валить её
+      // прежним текстом «выгрузите заново» значило бы дать совет, который не поможет НИКОГДА.
+      if (numbers.length !== 2) {
+        throw new Error(
+          `В строке «Обороты» ожидались две суммы (дебет и кредит), а найдено ${numbers.length}. `
+          + 'Похоже, банк изменил формат выгрузки — пришлите файл нам кнопкой отзыва, мы поправим '
+          + 'разбор.'
+        )
       }
+      debitTotal = numbers[0]!
+      creditTotal = numbers[1]!
     }
   }
 
@@ -224,11 +245,20 @@ function assertTurnovers(rows: PriorCsvRow[], debitTotal: number | null, creditT
   }
   if (round2(debit) !== round2(debitTotal) || round2(credit) !== round2(creditTotal)) {
     throw new Error(
-      `Выписка неполная: банк указал обороты ${round2(debitTotal)} / ${round2(creditTotal)}, `
-      + `а сумма операций в файле — ${round2(debit)} / ${round2(credit)}. Скорее всего файл `
-      + 'выгрузился не до конца, выгрузите его заново.'
+      'Сумма операций не сошлась с оборотами, которые указал банк: по списаниям '
+      + `${money(debitTotal)} против ${money(debit)}, по поступлениям ${money(creditTotal)} `
+      + `против ${money(credit)}. Чаще всего это значит, что файл выгрузился не до конца — `
+      + 'выгрузите его заново; если повторяется, пришлите файл нам кнопкой отзыва.'
     )
   }
+}
+
+/** Сумма для ЧЕЛОВЕКА: две цифры после запятой и запятая, как в самом файле.
+ *
+ * ⚠ `round2(2830)` печатает «2830», а бухгалтер сверяет это глазами со строкой «2 830,00» в своей
+ * выписке — и видит разный текст ровно в том сообщении, которое просит его сверить. */
+function money(n: number): string {
+  return round2(n).toFixed(2).replace('.', ',')
 }
 
 /**
