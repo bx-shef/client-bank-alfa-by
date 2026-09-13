@@ -63,6 +63,11 @@ const visibleRecognized = computed(() => extraction.value?.recognized.slice(0, M
 const hiddenRecognizedCount = computed(() =>
   Math.max(0, (extraction.value?.recognized.length ?? 0) - MAX_RENDERED_OPS)
 )
+// ⚠ Хвост тоже склоняется: при 101 операции в выписке (кап — 100) строка говорила «и ещё
+// 1 операций», и это ровно тот же дефект, что в плитках, только на менее заметном месте.
+const hiddenOpsLabel = computed(() => pluralRu(hiddenOpsCount.value, ['операция', 'операции', 'операций']))
+const hiddenRecognizedLabel = computed(() =>
+  pluralRu(hiddenRecognizedCount.value, ['распознанная строка', 'распознанные строки', 'распознанных строк']))
 
 // Human labels for the recognized identifier kinds (§4). Demo set only needs a few.
 const KIND_LABEL: Record<IdentifierKind, string> = {
@@ -307,7 +312,7 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.operationCount }}
               </div>
-              <div class="text-xs text-white/50">
+              <div class="text-xs text-white/50" data-testid="demo-tile-ops">
                 {{ opsLabel }}
               </div>
             </div>
@@ -315,7 +320,7 @@ function reset() {
               <div class="text-2xl font-bold text-[rgb(var(--color-accent-success-ch))]">
                 {{ extraction.creditCount }}
               </div>
-              <div class="text-xs text-white/50">
+              <div class="text-xs text-white/50" data-testid="demo-tile-credits">
                 {{ creditsLabel }}
               </div>
             </div>
@@ -323,7 +328,7 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.debitCount }}
               </div>
-              <div class="text-xs text-white/50">
+              <div class="text-xs text-white/50" data-testid="demo-tile-debits">
                 {{ debitsLabel }}
               </div>
             </div>
@@ -331,7 +336,7 @@ function reset() {
               <div class="text-2xl font-bold text-white">
                 {{ extraction.counterpartyCount }}
               </div>
-              <div class="text-xs text-white/50">
+              <div class="text-xs text-white/50" data-testid="demo-tile-parties">
                 {{ partiesLabel }}
               </div>
             </div>
@@ -385,7 +390,7 @@ function reset() {
             class="mt-2 text-xs text-white/40"
             data-testid="demo-recognized-overflow"
           >
-            …и ещё {{ hiddenRecognizedCount }} распознанных
+            …и ещё {{ hiddenRecognizedCount }} {{ hiddenRecognizedLabel }}
           </p>
         </div>
 
@@ -442,7 +447,7 @@ function reset() {
             class="text-xs text-white/40"
             data-testid="demo-ops-overflow"
           >
-            …и ещё {{ hiddenOpsCount }} операций
+            …и ещё {{ hiddenOpsCount }} {{ hiddenOpsLabel }}
           </p>
         </div>
       </template>

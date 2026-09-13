@@ -91,12 +91,36 @@ describe('StatementUpload', () => {
       const wrapper = await mountSuspended(StatementUpload)
       await drop(wrapper, 'debits.txt', readFileSync(fixture('paritet/settlement-byn.txt')))
 
-      expect(wrapper.find('[data-testid="skipped-by-direction"]').exists(), 'пропуск по настройке обязан быть назван').toBe(true)
+      // ⚠ Отсекло ВСЁ — значит это не примечание мелким шрифтом, а единственное объяснение пустого
+      // экрана, и подано оно должно быть заметно (иначе «приложение молча съело файл»).
+      const skipped = wrapper.find('[data-testid="skipped-by-direction"]')
+      expect(skipped.exists(), 'пропуск по настройке обязан быть назван').toBe(true)
+      expect(skipped.text(), 'случай «не поедет ничего» обязан звучать громче примечания').toContain('Записывать нечего')
+      expect(skipped.text(), 'человеку надо сказать, ГДЕ это чинится').toContain('Уведомления в чат')
+
       expect(wrapper.find('[data-testid="all-failed"]').exists(), 'разобранный файл не «не удалось разобрать»').toBe(false)
+      // ⚠ И не вторым сообщением рядом: «платежей в файле нет» здесь ЛОЖЬ — они есть, их отсекла
+      // настройка, и два объяснения одного экрана спорили бы друг с другом.
+      expect(wrapper.find('[data-testid="parsed-but-empty"]').exists(), 'причина одна и она уже названа').toBe(false)
     } finally {
       singleton.settings.chat.rules.directions = before
       spy.mockRestore()
     }
+  })
+
+  /**
+   * ⚠ Правка развела «не разобрали» и «нечего показать», но между ними осталась третья дыра
+   * (находка ревью): файл ПРОЧИТАН, операций в нём ноль, настройка ни при чём — и экран молчал,
+   * оставляя один бейдж «разобрано: 0». Это то же прочтение «файл пропал», полученное с другой
+   * стороны, поэтому случай назван вслух отдельной веткой.
+   */
+  it('прочитали, а платежей нет — говорим об этом, а не молчим', async () => {
+    const wrapper = await mountSuspended(StatementUpload)
+    const empty = '1CClientBankExchange\r\nВерсияФормата=1.03\r\nКодировка=Windows\r\nКонецФайла\r\n'
+    await drop(wrapper, 'empty.txt', Buffer.from(empty, 'latin1'))
+
+    expect(wrapper.find('[data-testid="parsed-but-empty"]').exists(), 'пустая выписка обязана объясниться').toBe(true)
+    expect(wrapper.find('[data-testid="all-failed"]').exists(), 'формат-то как раз понят').toBe(false)
   })
 
   it('а вот нераспознанный формат предупреждение показывает', async () => {
