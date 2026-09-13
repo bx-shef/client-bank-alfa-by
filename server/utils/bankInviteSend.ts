@@ -98,7 +98,7 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
     if (built.status !== 200) return built
     const link = String((built.body as { authorizeUrl?: unknown }).authorizeUrl ?? '')
     ttlMin = Math.round(ttlMs / 60_000) || CONNECT_STATE_TTL_MIN
-    text = buildPriorInvite({ link, expiresAtMs: nowMs + ttlMs, ttlMin })
+    text = buildPriorInvite({ link, ttlMin })
   } else {
     text = buildAlfaInvite({ clientId: deps.alfaClientId() })
     if (!text) {

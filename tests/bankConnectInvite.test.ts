@@ -1,36 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { buildAlfaInvite, buildBankInvite, buildPriorInvite, minskHhMm } from '../app/utils/bankConnectInvite'
+import { buildAlfaInvite, buildBankInvite, buildPriorInvite } from '../app/utils/bankConnectInvite'
 
 // Сообщение, которым администратор передаёт подключение банка ВЛАДЕЛЬЦУ СЧЁТА (#19).
 
 const LINK = 'https://api.priorbank.by:9344/authorize?request=eyJ0eXAiOi'
 
-describe('срок по Минску', () => {
-  // ⚠ Считаем арифметикой, а не `toLocaleString`: прогон идёт на UTC-машине, и зависимость от
-  // часового пояса раннера сделала бы тест то зелёным, то красным в зависимости от того, где он идёт.
-  it('переводит метку времени в HH:MM UTC+3', () => {
-    expect(minskHhMm(Date.UTC(2026, 8, 13, 5, 7))).toBe('08:07')
-    expect(minskHhMm(Date.UTC(2026, 8, 13, 22, 30))).toBe('01:30') // переход через полночь
-  })
-
-  it('нечисло ⇒ пусто, а не «NaN:NaN» в сообщении человеку', () => {
-    expect(minskHhMm(Number.NaN)).toBe('')
-  })
-})
-
 describe('приглашение Приорбанка', () => {
-  const at = Date.UTC(2026, 8, 13, 5, 0)
-  const msg = buildPriorInvite({ link: LINK, expiresAtMs: at + 900_000, ttlMin: 15 })!
+  const msg = buildPriorInvite({ link: LINK, ttlMin: 15 })!
 
   it('несёт саму ссылку', () => {
     expect(msg).toContain(LINK)
   })
 
-  // ⚠ Срок назван ДВАЖДЫ и по-разному: «около N минут» не зависит от пояса получателя, стенное
-  // время — удобство. Одно лишь стенное читалось бы неверно на портале в другом поясе.
-  it('называет срок и минутами, и временем', () => {
-    expect(msg).toContain('около 15 мин.')
-    expect(msg).toContain('08:15 по Минску') // 05:00 UTC + 15 мин = 08:15 в Минске
+  // ⚠ СРОК — ТОЛЬКО ДЛИТЕЛЬНОСТЬ, и стенного времени в сообщении быть не должно (решение
+  // владельца): получатель — сотрудник портала, он может сидеть в любом поясе и прочитает время
+  // чужого пояса как своё. Инвариант закреплён отрицанием, иначе «удобную» подсказку вернут.
+  it('называет срок длительностью и НЕ называет стенным временем', () => {
+    expect(msg).toContain('около 15 минут с момента отправки')
+    expect(msg).not.toMatch(/\d{1,2}:\d{2}/)
+    expect(msg).not.toContain('Минск')
   })
 
   // Главное предупреждение: приложение не просит и не видит пароль от интернет-банка.
@@ -42,13 +30,13 @@ describe('приглашение Приорбанка', () => {
   // выглядит как наша поломка.
   it('негодная ссылка ⇒ null', () => {
     for (const bad of ['', 'http://insecure.test/x', 'не ссылка', 'https://host']) {
-      expect(buildPriorInvite({ link: bad, expiresAtMs: at, ttlMin: 15 }), bad).toBeNull()
+      expect(buildPriorInvite({ link: bad, ttlMin: 15 }), bad).toBeNull()
     }
   })
 
   // Строка срока условна, а пустые строки-разделители — нет: без них инструкция слипается в абзац.
   it('без срока сообщение всё равно собирается и остаётся разбитым на блоки', () => {
-    const noTtl = buildPriorInvite({ link: LINK, expiresAtMs: Number.NaN, ttlMin: 0 })!
+    const noTtl = buildPriorInvite({ link: LINK, ttlMin: 0 })!
     expect(noTtl).toContain(LINK)
     expect(noTtl).toContain('\n\n')
   })
@@ -84,7 +72,7 @@ describe('приглашение Альфа-Банка', () => {
 
 describe('выбор сообщения по банку', () => {
   it('каждому банку своё', () => {
-    const prior = buildBankInvite('prior-by', { prior: { link: LINK, expiresAtMs: Date.now(), ttlMin: 15 } })
+    const prior = buildBankInvite('prior-by', { prior: { link: LINK, ttlMin: 15 } })
     const alfa = buildBankInvite('alfa-by', { alfa: { clientId: 'x' } })
     expect(prior).toContain(LINK)
     expect(alfa).toContain('Open API')
