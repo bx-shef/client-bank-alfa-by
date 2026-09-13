@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { signKeyGrant, verifyKeyGrant } from '../server/utils/bankKeyGrant'
 import { signConnectState, verifyConnectState } from '../server/utils/bankConnectState'
@@ -38,8 +39,7 @@ describe('круговой рейс', () => {
       .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     // тело без userId, подписанное ВЕРНО — проверка обязана смотреть не только на подпись
     const body = b64({ memberId: 'M1', provider: 'alfa-by', exp: NOW + 1000 })
-    const crypto = require('node:crypto') as typeof import('node:crypto')
-    const sig = crypto.createHmac('sha256', SECRET).update(`cba.bankkey.v1|${body}`).digest('base64')
+    const sig = createHmac('sha256', SECRET).update(`cba.bankkey.v1|${body}`).digest('base64')
       .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     expect(verifyKeyGrant(`${body}.${sig}`, SECRET, NOW)).toBeNull()
   })
