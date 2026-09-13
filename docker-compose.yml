@@ -6,8 +6,19 @@ services:
       args:
         NUXT_PUBLIC_AUTHOR_NAME: ${NUXT_PUBLIC_AUTHOR_NAME:-}
         NUXT_PUBLIC_AUTHOR_URL: ${NUXT_PUBLIC_AUTHOR_URL:-}
+        NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-}
+        NUXT_PUBLIC_COMMIT_SHA: ${NUXT_PUBLIC_COMMIT_SHA:-}
         # Локальный режим форка/white-label (#39): 1 скрывает наши промо/брендинг-баннеры.
         NUXT_PUBLIC_LOCAL_MODE: ${NUXT_PUBLIC_LOCAL_MODE:-}
+        # ⚠ Все `NUXT_PUBLIC_*` — BUILD-TIME (запекаются в артефакт), поэтому идут сюда, а не в
+        # `environment`. Подробности и гард — Dockerfile + tests/publicEnvBuildArgs.test.ts.
+        NUXT_PUBLIC_REPO_URL: ${NUXT_PUBLIC_REPO_URL:-}
+        NUXT_PUBLIC_B24_APP_CODE: ${NUXT_PUBLIC_B24_APP_CODE:-}
+        NUXT_PUBLIC_B24_MARKET_CODE: ${NUXT_PUBLIC_B24_MARKET_CODE:-}
+        NUXT_PUBLIC_METRIKA_ID: ${NUXT_PUBLIC_METRIKA_ID:-}
+        NUXT_PUBLIC_B24_FORM_ID: ${NUXT_PUBLIC_B24_FORM_ID:-}
+        NUXT_PUBLIC_B24_FORM_SECRET: ${NUXT_PUBLIC_B24_FORM_SECRET:-}
+        NUXT_PUBLIC_B24_FORM_SCRIPT_URL: ${NUXT_PUBLIC_B24_FORM_SCRIPT_URL:-}
     # Host port 8081 (not 80) so this can run alongside currency-converter's local
     # compose on the same dev machine. Prod uses `expose` behind nginx-proxy (no clash).
     ports:
@@ -27,8 +38,21 @@ services:
       context: .
       target: backend
       args:
+        NUXT_PUBLIC_AUTHOR_NAME: ${NUXT_PUBLIC_AUTHOR_NAME:-}
+        NUXT_PUBLIC_AUTHOR_URL: ${NUXT_PUBLIC_AUTHOR_URL:-}
+        NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-}
+        NUXT_PUBLIC_COMMIT_SHA: ${NUXT_PUBLIC_COMMIT_SHA:-}
         # Локальный режим (#39) — симметрично статике: Nitro пререндерит те же страницы.
         NUXT_PUBLIC_LOCAL_MODE: ${NUXT_PUBLIC_LOCAL_MODE:-}
+        # ⚠ Все `NUXT_PUBLIC_*` — BUILD-TIME (запекаются в артефакт), поэтому идут сюда, а не в
+        # `environment`. Подробности и гард — Dockerfile + tests/publicEnvBuildArgs.test.ts.
+        NUXT_PUBLIC_REPO_URL: ${NUXT_PUBLIC_REPO_URL:-}
+        NUXT_PUBLIC_B24_APP_CODE: ${NUXT_PUBLIC_B24_APP_CODE:-}
+        NUXT_PUBLIC_B24_MARKET_CODE: ${NUXT_PUBLIC_B24_MARKET_CODE:-}
+        NUXT_PUBLIC_METRIKA_ID: ${NUXT_PUBLIC_METRIKA_ID:-}
+        NUXT_PUBLIC_B24_FORM_ID: ${NUXT_PUBLIC_B24_FORM_ID:-}
+        NUXT_PUBLIC_B24_FORM_SECRET: ${NUXT_PUBLIC_B24_FORM_SECRET:-}
+        NUXT_PUBLIC_B24_FORM_SCRIPT_URL: ${NUXT_PUBLIC_B24_FORM_SCRIPT_URL:-}
     environment:
       DATABASE_URL: postgres://app:app@db:5432/app
       # application_token of the registered B24 app. REQUIRED IN PROD — without it

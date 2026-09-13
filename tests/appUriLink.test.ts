@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_URI_PLACEMENT, buildAppUriLink, buildAppUriPath, isValidAppCode } from '../app/utils/appUriLink'
+import { APP_URI_PLACEMENT, buildAppUriLink, buildAppUriPath, isValidAppCode, pickAppCode } from '../app/utils/appUriLink'
 import {
   buildPlacementBindCall, buildPlacementUnbindCall, isPlacementAlreadyBound, PLACEMENT_ALREADY_BOUND
 } from '../app/utils/b24PlacementRegister'
@@ -111,5 +111,31 @@ describe('«уже зарегистрирован» — не отказ', () => 
     expect(isPlacementAlreadyBound(null)).toBe(false)
     expect(isPlacementAlreadyBound(undefined)).toBe(false)
     expect(isPlacementAlreadyBound({})).toBe(false)
+  })
+})
+
+describe('pickAppCode — код приложения задаётся конфигурацией', () => {
+  // ⚠ Порядок значим: явный код клона перебивает код нашего листинга в Маркете, а тот — зашитый
+  // слаг. Перепутать местами первые два — значит открыть клиенту НАШЕ приложение.
+  it('берёт первый годный кандидат', () => {
+    expect(pickAppCode(['local.66ba434d853c87.18550109', 'shef.bankimport'])).toBe('local.66ba434d853c87.18550109')
+    expect(pickAppCode(['', 'shef.bankimport'])).toBe('shef.bankimport')
+  })
+
+  // ⚠ Негодный кандидат ПРОПУСКАЕТСЯ, а не чинится и не останавливает перебор: полуверный код в
+  // пути ссылки — это ссылка не туда, а зависший на нём перебор потерял бы рабочий запасной.
+  it('негодный кандидат пропускается целиком', () => {
+    expect(pickAppCode(['../evil', 'shef.bankimport'])).toBe('shef.bankimport')
+    expect(pickAppCode(['  ', undefined, null, 'x'])).toBe('x')
+  })
+
+  it('нечего взять ⇒ null, а не пустая строка', () => {
+    expect(pickAppCode([])).toBeNull()
+    expect(pickAppCode(['', undefined, 'a/b'])).toBeNull()
+  })
+
+  // Пробелы по краям человек не видит, а в путь они попали бы процентной кодировкой.
+  it('срезает пробелы', () => {
+    expect(pickAppCode([' shef.bankimport '])).toBe('shef.bankimport')
   })
 })

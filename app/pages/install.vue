@@ -6,6 +6,7 @@ import {
   B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER
 } from '~/config/b24'
 import { buildAppUriLink } from '~/utils/appUriLink'
+import { useAppCode } from '~/composables/useAppCode'
 import { buildPlacementBindCall, isPlacementAlreadyBound } from '~/utils/b24PlacementRegister'
 import { buildEventBindCalls, isBindableHandlerUrl, type EventBinding } from '~/utils/b24EventBind'
 import { buildTriggerRegisterCall } from '~/utils/b24TriggerRegister'
@@ -262,16 +263,19 @@ async function registerAppUriPlacement(): Promise<void> {
       placementBound.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
     }
   }
-  // Код приложения и домен портала УЖЕ прочитаны: `app.info` едет в init-батче выше, домен даёт
-  // рукопожатие SDK. Отдельного вызова не делаем — ссылка это удобство, а не повод тратить ещё
-  // один запрос в портал на каждой установке.
+  // Код приложения берётся из КОНФИГУРАЦИИ СБОРКИ (`useAppCode` → `NUXT_PUBLIC_B24_APP_CODE`), а не
+  // из `app.info` → `CODE`: у тиражного приложения это символьный код Маркета, у локального —
+  // `client_id`, и равенство второго полю `CODE` документация не обещает, а мы не замеряли. Цена
+  // ошибки тихая — ссылка открывает ПУСТОЙ СЛАЙДЕР. Домен даёт рукопожатие SDK, лишнего вызова в
+  // портал ссылка не стоит.
   //
-  // ⚠ Зашить код нельзя: у тиражного приложения это символьный код из кабинета разработчика, у
-  // локального — `client_id`, и он СВОЙ на каждой установке. Пустой код ⇒ пустая ссылка (билдер
-  // отдаёт `null`), и строка в диагностике просто не показывается — это честнее ссылки в никуда.
+  // ⚠ Что назвал САМ портал, видно рядом: строка «App:» в этой же диагностике печатает
+  // `app.info` → `CODE`. Расхождение с кодом в ссылке — признак, что на клоне забыли переменную.
+  // Предупреждения по этому расхождению НЕТ намеренно: у локального приложения `CODE` может
+  // законно отличаться от `client_id`, и тревога срабатывала бы на исправной установке.
   appImportLink.value = buildAppUriLink(
     portalDomain(),
-    initData.value.appInfo?.CODE ?? '',
+    useAppCode() ?? '',
     { [APP_URI_PLACE_PARAM]: APP_SLIDER_PLACE_IMPORT }
   ) ?? ''
 }

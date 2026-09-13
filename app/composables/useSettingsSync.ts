@@ -1,7 +1,7 @@
 import { onScopeDispose } from 'vue'
 import { B24PullClientManager } from '@bitrix24/b24jssdk'
 import { useB24 } from './useB24'
-import { LANDING_MARKET_CODE } from '~/utils/landing'
+import { useAppCode } from './useAppCode'
 import { SETTINGS_RELOAD_COMMAND, buildSettingsReloadEvent } from '~/utils/settingsSync'
 
 // Cross-instance settings sync (pattern from bitrix24/b24-ai-starter). After an admin saves settings,
@@ -12,9 +12,12 @@ import { SETTINGS_RELOAD_COMMAND, buildSettingsReloadEvent } from '~/utils/setti
 // no-op. Our settings still autosave locally; this only keeps *other* open instances fresh.
 // ⚠ Pull channel semantics (module id / command routing) are portal-specific — verify on a live portal.
 
-/** App code as registered on the portal = the pull `MODULE_ID` / subscribe `moduleId`. */
+/** App code as registered on the portal = the pull `MODULE_ID` / subscribe `moduleId`.
+ *  ⚠ Общий источник с ссылкой на экраны (`useAppCode`): это один и тот же вопрос «как портал зовёт
+ *  это приложение», и два ответа на него разъехались бы молча. Сегодняшнее значение не меняется —
+ *  `useAppCode` падает на `b24MarketCode` и `LANDING_MARKET_CODE`, как было здесь. */
 function appModuleId(): string {
-  return String(useRuntimeConfig().public.b24MarketCode || LANDING_MARKET_CODE)
+  return useAppCode() ?? ''
 }
 
 export function useSettingsSync() {

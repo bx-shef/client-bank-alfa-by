@@ -36,6 +36,30 @@ ENV NUXT_PUBLIC_BUILD_DATE=$NUXT_PUBLIC_BUILD_DATE
 # наши промо/брендинг-баннеры. Суть приложения не меняется. Пусто → обычный режим.
 ARG NUXT_PUBLIC_LOCAL_MODE
 ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
+# ⚠ ВСЕ переменные `NUXT_PUBLIC_*` — BUILD-TIME, и добираться они обязаны СЮДА. Статику пишет
+# `nuxt generate`, то есть значение запекается в артефакт; переменная, заданная только в `.env` на
+# сервере, до сборки не доезжает и молча не делает НИЧЕГО. Ровно так и вышло с
+# `NUXT_PUBLIC_REPO_URL`: она появилась в `nuxt.config.ts` и `.env.example`, но не здесь, поэтому
+# «сборка <sha>» у клона по-прежнему вела в наш репозиторий. Каждый ключ `runtimeConfig.public`
+# обязан иметь пару ARG/ENV в ОБОИХ builder-стадиях — это сторожит `tests/publicEnvBuildArgs.test.ts`.
+# Незаданная переменная = пустая строка = умолчание из `nuxt.config.ts`, поэтому объявлять безопасно.
+ARG NUXT_PUBLIC_REPO_URL
+ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
+# Код приложения НА ПОРТАЛЕ (#19): тиражное — символьный код Маркета, локальное — `client_id`.
+# Им портал открывает наши экраны по ссылке `/marketplace/view/<код>/`; неверный код открывает
+# пустой слайдер и ничего больше не сообщает.
+ARG NUXT_PUBLIC_B24_APP_CODE
+ENV NUXT_PUBLIC_B24_APP_CODE=$NUXT_PUBLIC_B24_APP_CODE
+ARG NUXT_PUBLIC_B24_MARKET_CODE
+ENV NUXT_PUBLIC_B24_MARKET_CODE=$NUXT_PUBLIC_B24_MARKET_CODE
+ARG NUXT_PUBLIC_METRIKA_ID
+ENV NUXT_PUBLIC_METRIKA_ID=$NUXT_PUBLIC_METRIKA_ID
+ARG NUXT_PUBLIC_B24_FORM_ID
+ENV NUXT_PUBLIC_B24_FORM_ID=$NUXT_PUBLIC_B24_FORM_ID
+ARG NUXT_PUBLIC_B24_FORM_SECRET
+ENV NUXT_PUBLIC_B24_FORM_SECRET=$NUXT_PUBLIC_B24_FORM_SECRET
+ARG NUXT_PUBLIC_B24_FORM_SCRIPT_URL
+ENV NUXT_PUBLIC_B24_FORM_SCRIPT_URL=$NUXT_PUBLIC_B24_FORM_SCRIPT_URL
 RUN pnpm generate
 
 # --- SEO guards on the ACTUAL built HTML (#425) -------------------------------------------------
@@ -116,6 +140,32 @@ ENV NUXT_PUBLIC_BUILD_DATE=$NUXT_PUBLIC_BUILD_DATE
 # запечься одинаково в оба образа, иначе один показал бы промо, другой нет.
 ARG NUXT_PUBLIC_LOCAL_MODE
 ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
+# Симметрично статике — по той же причине, что и `NUXT_PUBLIC_LOCAL_MODE` выше: Nitro пререндерит
+# те же страницы, и разъехавшиеся значения дали бы два образа с разным содержимым одной страницы.
+# ⚠ ВСЕ переменные `NUXT_PUBLIC_*` — BUILD-TIME, и добираться они обязаны СЮДА. Статику пишет
+# `nuxt generate`, то есть значение запекается в артефакт; переменная, заданная только в `.env` на
+# сервере, до сборки не доезжает и молча не делает НИЧЕГО. Ровно так и вышло с
+# `NUXT_PUBLIC_REPO_URL`: она появилась в `nuxt.config.ts` и `.env.example`, но не здесь, поэтому
+# «сборка <sha>» у клона по-прежнему вела в наш репозиторий. Каждый ключ `runtimeConfig.public`
+# обязан иметь пару ARG/ENV в ОБОИХ builder-стадиях — это сторожит `tests/publicEnvBuildArgs.test.ts`.
+# Незаданная переменная = пустая строка = умолчание из `nuxt.config.ts`, поэтому объявлять безопасно.
+ARG NUXT_PUBLIC_REPO_URL
+ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
+# Код приложения НА ПОРТАЛЕ (#19): тиражное — символьный код Маркета, локальное — `client_id`.
+# Им портал открывает наши экраны по ссылке `/marketplace/view/<код>/`; неверный код открывает
+# пустой слайдер и ничего больше не сообщает.
+ARG NUXT_PUBLIC_B24_APP_CODE
+ENV NUXT_PUBLIC_B24_APP_CODE=$NUXT_PUBLIC_B24_APP_CODE
+ARG NUXT_PUBLIC_B24_MARKET_CODE
+ENV NUXT_PUBLIC_B24_MARKET_CODE=$NUXT_PUBLIC_B24_MARKET_CODE
+ARG NUXT_PUBLIC_METRIKA_ID
+ENV NUXT_PUBLIC_METRIKA_ID=$NUXT_PUBLIC_METRIKA_ID
+ARG NUXT_PUBLIC_B24_FORM_ID
+ENV NUXT_PUBLIC_B24_FORM_ID=$NUXT_PUBLIC_B24_FORM_ID
+ARG NUXT_PUBLIC_B24_FORM_SECRET
+ENV NUXT_PUBLIC_B24_FORM_SECRET=$NUXT_PUBLIC_B24_FORM_SECRET
+ARG NUXT_PUBLIC_B24_FORM_SCRIPT_URL
+ENV NUXT_PUBLIC_B24_FORM_SCRIPT_URL=$NUXT_PUBLIC_B24_FORM_SCRIPT_URL
 RUN pnpm build
 
 FROM node:22-alpine AS backend
@@ -128,6 +178,10 @@ ENV PORT=3000
 # fall back to 'dev' (#76). The build-arg already reaches this target from CI.
 ARG NUXT_PUBLIC_COMMIT_SHA
 ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
+# По той же причине и репозиторий сборки: `/api/health` отдаёт `commitUrl`, а Nitro читает
+# `runtimeConfig.public` из окружения в РАНТАЙМЕ.
+ARG NUXT_PUBLIC_REPO_URL
+ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 # Nitro's node-server output is self-contained (deps bundled) — copy only .output.
 COPY --from=builder-server /app/.output ./.output
 # OTel bootstrap (#78): loaded via NODE_OPTIONS=--import BEFORE the app so auto-instrumentation
