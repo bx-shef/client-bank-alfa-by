@@ -260,5 +260,12 @@ jobs:
             NUXT_PUBLIC_BUILD_DATE=${{ steps.builddate.outputs.date }}
             B24_PORTAL_ORIGINS=${{ vars.B24_PORTAL_ORIGINS }}
             NUXT_PUBLIC_LOCAL_MODE=${{ vars.NUXT_PUBLIC_LOCAL_MODE }}
+            NUXT_PUBLIC_REPO_URL=${{ vars.NUXT_PUBLIC_REPO_URL }}
+            NUXT_PUBLIC_B24_APP_CODE=${{ vars.NUXT_PUBLIC_B24_APP_CODE }}
+            NUXT_PUBLIC_B24_MARKET_CODE=${{ vars.NUXT_PUBLIC_B24_MARKET_CODE }}
+            NUXT_PUBLIC_METRIKA_ID=${{ vars.NUXT_PUBLIC_METRIKA_ID }}
+            NUXT_PUBLIC_B24_FORM_ID=${{ vars.NUXT_PUBLIC_B24_FORM_ID }}
+            NUXT_PUBLIC_B24_FORM_SECRET=${{ vars.NUXT_PUBLIC_B24_FORM_SECRET }}
+            NUXT_PUBLIC_B24_FORM_SCRIPT_URL=${{ vars.NUXT_PUBLIC_B24_FORM_SCRIPT_URL }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
