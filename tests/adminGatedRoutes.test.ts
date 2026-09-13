@@ -31,6 +31,12 @@ const ADMIN_ONLY = [
   // даже сильнее: ключ БЕССРОЧНЫЙ и не ротируется сам, то есть привязывает доступ ко всем счетам
   // клиента ко всему порталу до тех пор, пока владелец счёта не отзовёт его в своём кабинете.
   'bank/connect-key.post.ts',
+  // ⚠ Передача подключения владельцу счёта (#19) — админская по тому же доводу, что и само
+  // подключение: сообщение приглашает привязать банковские креды ко ВСЕМУ порталу, просто чужими
+  // руками. Послабление здесь означало бы, что любой сотрудник рассылает такие приглашения.
+  'bank/send-link.post.ts',
+  // ⚠ Чтение адресата тоже админское: значение называет конкретного сотрудника портала.
+  'bank/contact.get.ts',
   'bank/disconnect.post.ts',
   'bank/matrix.get.ts',
   // ⚠ Пауза автоопроса — админская (#576) по тому же доводу, что подключение и отключение: банк
@@ -119,6 +125,8 @@ describe('кто может звать маршруты приложения (#5
       'bank/add-account.post.ts': 'bankAccounts',
       'bank/connect.post.ts': 'bankConnectStart',
       'bank/connect-key.post.ts': 'bankConnectKey',
+      'bank/send-link.post.ts': 'bankInviteSend',
+      'bank/contact.get.ts': 'bankContactHandler',
       'bank/disconnect.post.ts': 'bankAccounts',
       'bank/matrix.get.ts': 'bankMatrix',
       'bank/pause.post.ts': 'bankAccounts',
