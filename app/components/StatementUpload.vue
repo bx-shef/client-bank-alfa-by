@@ -66,6 +66,24 @@ const skippedDirectionLabel = computed(() => {
   return names.join(' и ')
 })
 const okCount = computed(() => results.value.filter(r => r.ok).length)
+// Строки, которые разобрались, но платежами не являются или не прочитались (#700): по ним экран
+// обязан объясниться — иначе «разобрано: 0» остаётся единственным, что человек видит.
+const nonPaymentCount = computed(() => results.value.reduce((n, r) => n + (r.nonPayment ?? 0), 0))
+const unreadableCount = computed(() => results.value.reduce((n, r) => n + (r.unreadable ?? 0), 0))
+/** Файлы прочитаны, но показывать нечего И настройка тут ни при чём. */
+const parsedButEmpty = computed(() =>
+  okCount.value > 0 && !allItems.value.length && !skippedByDirection.value.length)
+const emptyReason = computed(() => {
+  if (unreadableCount.value) {
+    return `Строки в файле есть, но прочитать их не удалось: ${unreadableCount.value}. `
+      + 'Похоже, формат выгрузки отличается — пришлите файл нам, разберём.'
+  }
+  if (nonPaymentCount.value) {
+    return `Все строки файла — служебные (${nonPaymentCount.value}): переоценка, сальдо и подобное. `
+      + 'Платёжных операций в нём нет.'
+  }
+  return 'Файл прочитан, но платёжных операций в нём нет — возможно, выгрузка сделана за период без движений.'
+})
 const errCount = computed(() => results.value.filter(r => !r.ok).length)
 const totals = computed(() => splitByDirection(allItems.value))
 // Files that parsed OK (aligned with results) — those we send to CRM.
@@ -261,14 +279,38 @@ function clearAll() {
            (находка ревью). Внутри него она не показалась бы в самом важном случае: выписка целиком
            из выключенного направления даёт пустой `allItems`, и файл исчезал бы МОЛЧА — ровно то
            прочтение «приложение потеряло операции», ради которого объяснение и написано. -->
+      <!-- ⚠ Когда настройка отсекла ВСЁ, это не примечание, а единственное объяснение пустого
+           экрана: предпросмотра и кнопки записи под ним не будет. Мелкая серая строка на этом
+           месте читается как «приложение молча съело файл», поэтому случай разведён по подаче. -->
+      <B24Alert
+        v-if="skippedByDirection.length && !allItems.length"
+        color="air-primary-warning"
+        title="Записывать нечего"
+        :description="`Все операции файла (${skippedByDirection.length}) — ${skippedDirectionLabel}, `
+          + 'а они выключены в настройках, раздел «Уведомления в чат».'"
+        data-testid="skipped-by-direction"
+      />
       <p
-        v-if="skippedByDirection.length"
+        v-else-if="skippedByDirection.length"
         class="text-sm text-(--ui-color-base-3)"
         data-testid="skipped-by-direction"
       >
-        Не будут загружены: {{ skippedByDirection.length }} —
-        в настройках выключены {{ skippedDirectionLabel }}.
+        Не попадут в CRM: {{ skippedByDirection.length }}
+        {{ pluralRu(skippedByDirection.length, ['операция', 'операции', 'операций']) }} —
+        в настройках выключены {{ skippedDirectionLabel }} (раздел «Уведомления в чат»).
       </p>
+
+      <!-- ⚠ Разобрали, но показать нечего, и настройка ни при чём (#700). Без этой ветки экран
+           оставался с одним бейджем «разобрано: 0» и молчал — то же прочтение «файл пропал»,
+           только полученное с другой стороны. Вернуть сюда `allItems` нельзя: ровно это и было
+           исходным дефектом. -->
+      <B24Alert
+        v-if="parsedButEmpty"
+        color="air-primary-copilot"
+        title="Платежей в файле нет"
+        :description="emptyReason"
+        data-testid="parsed-but-empty"
+      />
 
       <template v-if="allItems.length">
         <p
@@ -317,9 +359,14 @@ function clearAll() {
         </div>
       </template>
 
-      <!-- All files failed -->
+      <!-- ⚠ Условие — «НИ ОДИН файл не разобрался», а не «нечего показать в предпросмотре».
+           Раньше блок висел `v-else-if` на предпросмотре, поэтому выписка, целиком состоящая из
+           выключенного настройкой направления (#44), давала пустой `allItems` — и приложение
+           показывало «Не удалось разобрать» прямо под зелёным бейджем «разобрано: 2» и под
+           строкой «не будут загружены — выключены расходы». То есть отправляло человека проверять
+           формат файла, с которым всё в порядке, вместо настройки, которая и отсекла операции. -->
       <B24Alert
-        v-else-if="results.length"
+        v-if="results.length && !okCount"
         color="air-primary-warning"
         title="Не удалось разобрать"
         description="Проверьте формат файла: ожидается 1CClientBankExchange, client-bank «***** ^Type=» или звёздочный «*0*…»."

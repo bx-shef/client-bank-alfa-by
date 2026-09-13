@@ -65,6 +65,28 @@ describe('LandingDemo', () => {
     expect(wrapper.findAll('[data-testid="demo-operation"]').length).toBeGreaterThan(0)
   })
 
+  /**
+   * ⚠ Подписи плиток были зашиты во множественном числе, и на выписке с одним плательщиком демо
+   * встречало человека надписью «1 контрагентов». Замечено владельцем на своём файле.
+   *
+   * ⚠ Проверяем КАЖДУЮ плитку ОТДЕЛЬНО и по СЛОВУ, а не негативной регуляркой по всему блоку
+   * (находка ревью): подписи и числа лежат в соседних узлах, Vue схлопывает пробел между ними, и
+   * прежняя маска `1\s+контрагентов` совпадала только с ЛИТЕРАЛОМ — то есть краснела от возврата
+   * статического текста, но зелёной проходила и подстановка заведомо неверных форм во все три
+   * слота, и откат трёх плиток из четырёх (у них в фикстуре не единица, а якорем была единица).
+   *
+   * Фикстура даёт 2 операции / 0 приходов / 2 расхода / 1 контрагент — то есть разом накрывает
+   * все три ветки `pluralRu`: единицу, форму 2-4 и ноль.
+   */
+  it('подписи плиток склоняются под число (#700)', async () => {
+    const wrapper = await mountSuspended(LandingDemo)
+    await upload(wrapper, fixtureFile('paritet/settlement-byn.txt', 'demo.txt'))
+    expect(wrapper.find('[data-testid="demo-tile-ops"]').text()).toBe('операции')
+    expect(wrapper.find('[data-testid="demo-tile-credits"]').text()).toBe('приходов')
+    expect(wrapper.find('[data-testid="demo-tile-debits"]').text()).toBe('расхода')
+    expect(wrapper.find('[data-testid="demo-tile-parties"]').text()).toBe('контрагент')
+  })
+
   it('the reset button clears the results', async () => {
     const wrapper = await mountSuspended(LandingDemo)
     await upload(wrapper, fixtureFile('client-bank/demo-type4-alfa.txt', 'demo.txt'))
