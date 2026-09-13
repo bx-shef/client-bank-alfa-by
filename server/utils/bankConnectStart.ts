@@ -192,6 +192,30 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
     return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   }
   if (!provider) return { status: 400, body: { error: 'provider required' } }
+  const pre = precheckConnect(deps, provider, accountKey)
+  if (pre) return pre
+
+  const gate = await gateConnectAdmin(deps, { accessToken, domain })
+  if (!gate.ok) return gate.res
+  return buildConnectAuthorizeUrl(deps, { memberId: gate.memberId, provider, accountKey, nonce, nowMs, ttlMs: input.ttlMs })
+}
+
+/**
+ * Проверки, которые можно сделать ДО единственного похода в портал: форма счёта, поддерживает ли
+ * банк этот способ, настроен ли он, есть ли чем подписать state.
+ *
+ * ⚠ Вынесены отдельно потому, что вызывающих у них теперь ДВА — кнопка «Подключить» и отправка
+ * приглашения владельцу счёта (`bankInviteSend.ts`). Вторая копия этой последовательности молча
+ * разошлась бы с первой, и расхождение вылезло бы там, где его труднее всего заметить: один путь
+ * отказывает заранее, другой уводит человека в банк и падает на возврате.
+ *
+ * `null` ⇒ можно идти дальше.
+ */
+export function precheckConnect(
+  deps: Pick<ConnectStartDeps, 'priorConfig' | 'secret'>,
+  provider: BankProviderId,
+  accountKey: string
+): ConnectStartResult | null {
   // Счёт НЕОБЯЗАТЕЛЕН (#407): до авторизации админ не обязан помнить IBAN наизусть, а после неё
   // счёт можно выбрать из того, что отдал сам банк. Пустой ⇒ подключение уйдёт под временный ключ
   // (см. `provisionalAccountKey`), и UI попросит выбрать счёт уже по возвращении. Непустой, но
@@ -211,20 +235,32 @@ export async function handleBankConnectStart(deps: ConnectStartDeps, input: Conn
       body: { error: `${provider}: этот банк подключается ключом API, а не переходом в банк` }
     }
   }
-  const priorConfig = deps.priorConfig()
-  if (!priorConfig) {
+  if (!deps.priorConfig()) {
     return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
   }
 
   // No signing secret ⇒ the callback could never verify the state (fail-closed) — refuse to start.
   if (!deps.secret) return { status: 503, body: { error: 'connect unavailable (no session secret configured)' } }
+  return null
+}
 
-  const gate = await gateConnectAdmin(deps, { accessToken, domain })
-  if (!gate.ok) return gate.res
-  const memberId = gate.memberId
-
-  // memberId comes from OUR resolved portal (not the client) → the callback can trust state.memberId.
-  // (There is no `memberId` in ConnectStartInput — the client cannot supply/override it; invariant 1.)
+/**
+ * Собственно сборка authorize-URL для УЖЕ опознанного портала: подписанный state → живая
+ * преамбула банка. Гейт сюда не входит намеренно — его проходят ровно один раз, у вызывающего.
+ *
+ * ⚠ `memberId` приходит из НАШЕЙ базы (по домену), а не от клиента, — на этом держится доверие
+ * колбэка к `state.memberId` (инвариант 1). Параметр назван явно, чтобы случайный вызов с
+ * клиентским значением бросался в глаза на ревью.
+ */
+export async function buildConnectAuthorizeUrl(
+  deps: Pick<ConnectStartDeps, 'priorConfig' | 'secret' | 'buildPriorUrl' | 'log'>,
+  input: { memberId: string, provider: BankProviderId, accountKey: string, nonce: string, nowMs: number, ttlMs?: number }
+): Promise<ConnectStartResult> {
+  const { memberId, provider, accountKey, nonce, nowMs } = input
+  const priorConfig = deps.priorConfig()
+  if (!priorConfig) {
+    return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
+  }
   const state: BankConnectState = {
     memberId,
     provider,

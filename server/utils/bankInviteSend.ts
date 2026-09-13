@@ -1,0 +1,136 @@
+// «Передать владельцу счёта» — отправка подключения банка сотруднику портала сообщением в чат
+// (#19). Чистое ядро с DI; транспорты (портал, чат, хранение адресата) живут в маршруте.
+//
+// ⚠ ЗАЧЕМ. Подключение банка админское, а пароль от интернет-банка знает не администратор.
+// Раньше единственным способом передать ссылку было скопировать её из поля и переслать вручную —
+// то есть САМЫЙ ЧАСТЫЙ сценарий подключения приложением не поддерживался. Теперь администратор
+// выбирает сотрудника штатным диалогом портала, а сообщение уходит от имени приложения.
+//
+// ⚠ ГЕЙТ ТОТ ЖЕ, что у «Подключить», и проходится РОВНО ОДИН РАЗ: `gateConnectAdmin` (портал
+// установлен → фрейм-токен доказан для ЭТОГО домена → человек администратор → есть «моя компания»
+// со счётом). Отправка ссылки — это то же самое действие, что подключение, просто чужими руками:
+// послабление здесь означало бы, что любой сотрудник рассылает коллегам приглашения привязать
+// банковские креды ко всему порталу.
+//
+// ⚠ ССЫЛКА ВЫПУСКАЕТСЯ ЗДЕСЬ ЖЕ, а не берётся с экрана. Её срок (`CONNECT_STATE_TTL_MS`) идёт с
+// момента выпуска, и переслать уже показанную означало бы отдать получателю остаток чужого
+// отсчёта — иногда секунды. Выпуск при отправке делает названный в сообщении срок правдой.
+//
+// ⚠ У АЛЬФЫ ССЫЛКИ НЕТ ВОВСЕ (#488): она подключается ключом API, который владелец счёта выпускает
+// у себя в кабинете. Поэтому «передать» для неё — это инструкция, а не ссылка, и `precheckConnect`
+// (он отвергает всё, кроме Приора) к этому пути не применяется.
+
+import { CONNECT_STATE_TTL_MIN, CONNECT_STATE_TTL_MS } from '../../app/utils/bankConnectTtl'
+import { buildAlfaInvite, buildPriorInvite } from '../../app/utils/bankConnectInvite'
+import { isValidPortalUserId, type BankContact } from '../../app/utils/bankContact'
+import { buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
+import { describeUpstreamError } from './logSanitize'
+import type { BankProviderId } from '../../app/types/statement'
+
+/** Банки, которым есть что передать. `manual` — файловая загрузка, приглашать некуда. */
+const INVITABLE: readonly BankProviderId[] = ['alfa-by', 'prior-by']
+
+export interface InviteSendDeps extends Pick<
+  ConnectStartDeps,
+  'memberIdByDomain' | 'validateFrame' | 'myCompanyGate' | 'priorConfig' | 'buildPriorUrl' | 'secret' | 'log'
+> {
+  /** Отправить сообщение сотруднику (`dialogId` личного чата = его id). Бросает при отказе. */
+  sendMessage: (memberId: string, dialogId: string, text: string) => Promise<void>
+  /** Запомнить адресата на портале. Best-effort у вызывающего — исход влияет только на удобство. */
+  rememberContact: (accessToken: string, domain: string, contact: BankContact) => Promise<void>
+  /** Наш `client_id` для кабинета Альфы (из env). Пусто ⇒ инструкцию не собрать. */
+  alfaClientId: () => string
+}
+
+export interface InviteSendInput {
+  accessToken: string
+  domain: string
+  provider: BankProviderId
+  /** Кому отправляем — id сотрудника портала из штатного диалога выбора. */
+  userId: string
+  /** Имя на момент выбора; только для подписи в интерфейсе. */
+  userName?: string
+  /** Случайный nonce для state (как у «Подключить»). */
+  nonce: string
+  nowMs: number
+  ttlMs?: number
+}
+
+/**
+ * Собрать ссылку/инструкцию и отправить её выбранному сотруднику.
+ *
+ * Порядок проверок — от дешёвых к дорогим, и «моя компания» (внутри гейта) стоит до любого
+ * обращения к банку: уткнуться в ненастроенный портал ПОСЛЕ того, как человек сходил в
+ * интернет-банк, дороже всего.
+ */
+export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSendInput): Promise<ConnectStartResult> {
+  const { accessToken, domain, provider, userId, nonce, nowMs } = input
+  if (!accessToken || !domain) {
+    return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
+  }
+  if (!INVITABLE.includes(provider)) {
+    return { status: 400, body: { error: 'provider required' } }
+  }
+  // ⚠ Проверяем ДО похода в портал: опечатка в идентификаторе не должна стоить REST-вызова, а
+  // главное — сообщение ушло бы не тому человеку, и узнать об этом было бы неоткуда.
+  if (!isValidPortalUserId(userId)) {
+    return { status: 400, body: { error: 'valid portal user id required' } }
+  }
+  // Только приоровский путь умеет отвечать «этот банк подключается ключом API» — у Альфы здесь
+  // проверять нечего, её инструкция не зависит ни от state, ни от конфигурации OAuth.
+  if (provider === 'prior-by') {
+    const pre = precheckConnect(deps, provider, '')
+    if (pre) return pre
+  }
+
+  const gate = await gateConnectAdmin(deps, { accessToken, domain })
+  if (!gate.ok) return gate.res
+
+  let text: string | null
+  let ttlMin: number | undefined
+  if (provider === 'prior-by') {
+    const ttlMs = input.ttlMs ?? CONNECT_STATE_TTL_MS
+    const built = await buildConnectAuthorizeUrl(deps, {
+      memberId: gate.memberId, provider, accountKey: '', nonce, nowMs, ttlMs
+    })
+    // Отказ банка/конфигурации отдаём КАК ЕСТЬ: он уже описан словами того пути, и второй слой
+    // формулировок («не удалось отправить») скрыл бы, что дело не в чате, а в подключении.
+    if (built.status !== 200) return built
+    const link = String((built.body as { authorizeUrl?: unknown }).authorizeUrl ?? '')
+    ttlMin = Math.round(ttlMs / 60_000) || CONNECT_STATE_TTL_MIN
+    text = buildPriorInvite({ link, expiresAtMs: nowMs + ttlMs, ttlMin })
+  } else {
+    text = buildAlfaInvite({ clientId: deps.alfaClientId() })
+    if (!text) {
+      // Отсутствие `client_id` — состояние СЕРВЕРА, а не ошибка нажавшего: инструкция без него
+      // приводит владельца счёта к обязательному полю, которое нечем заполнить.
+      return { status: 503, body: { error: 'bank client id is not configured on this server' } }
+    }
+  }
+  if (!text) {
+    // Сюда попадаем, только если ссылка не прошла проверку билдера — то есть мы собрали бы
+    // сообщение с нерабочим адресом. Молчать нельзя: получатель сходил бы в банк зря.
+    return { status: 502, body: { error: 'connect link is malformed (nothing was sent)' } }
+  }
+
+  try {
+    await deps.sendMessage(gate.memberId, userId, text)
+  } catch (e) {
+    deps.log?.(`bank invite: chat delivery failed: ${describeUpstreamError(e)}`)
+    return { status: 502, body: { error: 'portal did not accept the message' } }
+  }
+
+  // ⚠ ПОСЛЕ отправки и best-effort: адресат — удобство следующего раза, и его отказ не отменяет
+  // того, что сообщение уже доставлено. Обратный порядок означал бы «не смогли записать в
+  // настройки ⇒ не отправили», то есть отказ от главного ради второстепенного.
+  try {
+    await deps.rememberContact(accessToken, domain, {
+      userId,
+      ...(input.userName?.trim() ? { name: input.userName.trim() } : {})
+    })
+  } catch (e) {
+    deps.log?.(`bank invite: contact not remembered: ${describeUpstreamError(e)}`)
+  }
+
+  return { status: 200, body: { sent: true, provider, userId, ...(ttlMin ? { ttlMin } : {}) } }
+}

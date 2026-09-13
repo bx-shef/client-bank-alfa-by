@@ -10,6 +10,8 @@ import { isPreviewQuery } from '~/utils/inPortalGate'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 import { copyToClipboard } from '~/utils/clipboard'
+import { useBankInvite } from '~/composables/useBankInvite'
+import { contactLabel } from '~/utils/bankContact'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank and starts the OAuth connect:
 // POST /api/bank/connect (frame token) → the backend returns the bank authorize
@@ -138,6 +140,9 @@ onMounted(async () => {
   checkAdmin()
   syncEnabled() // resolve frame presence now so the preview note is correct before any click
   adminChecked.value = true
+  // Запомненного адресата читаем ПОСЛЕ гейта админа: маршрут админский, и не-админу этот запрос
+  // вернул бы 403 — шум в консоли на экране, где ему и так показано предупреждение.
+  if (isAdmin.value) await invite.loadContact()
 })
 
 /**
@@ -169,6 +174,27 @@ watch(provider, () => {
 
 /** Наш `client_id` — его вписывают в кабинете банка при выпуске ключа. Пусто ⇒ не показываем. */
 const alfaClientId = computed(() => String(setup.status.value?.alfaClientId ?? ''))
+
+// «Передать владельцу счёта» (#19) — второй, равноправный путь подключения, а не запасной.
+// Администратор знает пароль от интернет-банка ДАЛЕКО НЕ ВСЕГДА: у Приора подтверждает доступ сам
+// владелец счёта, у Альфы он же выпускает ключ API в своём кабинете. Раньше на это был только
+// ручной обход — скопировать ссылку из поля и переслать мессенджером.
+const invite = useBankInvite()
+/** Подпись «в прошлый раз отправляли …» — пусто, если ещё никому. */
+const lastContact = computed(() => contactLabel(invite.contact.value))
+
+async function onHandOver() {
+  const user = await invite.pickUser()
+  // Закрыли диалог, ничего не выбрав — штатный исход, молчим.
+  if (!user) return
+  await invite.send(provider.value, user)
+}
+
+async function onHandOverAgain() {
+  const c = invite.contact.value
+  if (!c) return
+  await invite.send(provider.value, { id: c.userId, name: c.name ?? '' })
+}
 const clientIdCopied = ref(false)
 
 async function copyClientId() {
@@ -473,6 +499,55 @@ async function onConnect() {
       >
         Подключить {{ providerLabel }}
       </B24Button>
+
+      <!-- ВТОРОЙ ПУТЬ: передать подключение владельцу счёта (#19).
+           ⚠ Он не «запасной» и не «для продвинутых»: пароль от интернет-банка администратор знает
+           далеко не всегда, а у Альфы ключ API вообще выпускает владелец счёта в своём кабинете.
+           Поэтому блок стоит рядом с основной кнопкой, а не спрятан.
+           ⚠ Ссылку здесь НЕ показываем: сервер выпускает её и сразу отправляет, иначе её короткий
+           срок начал бы течь на экране администратора, а получателю достался бы остаток. -->
+      <div
+        v-if="enabled && isAdmin"
+        class="flex flex-col gap-2 border-t border-(--ui-color-base-6) pt-3"
+        data-testid="hand-over-block"
+      >
+        <p class="text-sm text-(--ui-color-base-3)">
+          Пароль от интернет-банка знает владелец счёта? Отправьте ему инструкцию в чат — сообщение
+          придёт от имени приложения.
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <B24Button
+            :loading="invite.sending.value"
+            :disabled="invite.sending.value"
+            color="air-secondary-accent"
+            data-testid="hand-over-button"
+            @click="onHandOver"
+          >
+            Передать владельцу счёта
+          </B24Button>
+          <B24Button
+            v-if="lastContact"
+            :disabled="invite.sending.value"
+            color="air-tertiary"
+            data-testid="hand-over-again"
+            @click="onHandOverAgain"
+          >
+            Ещё раз: {{ lastContact }}
+          </B24Button>
+        </div>
+        <B24Alert
+          v-if="invite.sentTo.value"
+          color="air-primary-success"
+          :description="`Отправили: ${invite.sentTo.value}. Инструкция и ссылка ушли в чат портала.`"
+          data-testid="hand-over-sent"
+        />
+        <B24Alert
+          v-if="invite.error.value"
+          color="air-primary-alert"
+          :description="invite.error.value"
+          data-testid="hand-over-error"
+        />
+      </div>
     </div>
   </B24Card>
 </template>

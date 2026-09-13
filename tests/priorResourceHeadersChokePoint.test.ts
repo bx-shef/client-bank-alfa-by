@@ -13,7 +13,7 @@ import { join } from 'node:path'
 // unbuildable without an idempotency key — but types CANNOT stop a call site from bypassing the
 // helpers and hand-rolling the headers again, and that is exactly the failure mode. Unit tests of
 // the helpers don't see it either: verified by mutation — stripping the headers out of the live
-// transports in `priorFetch.ts` / `connect.post.ts` leaves the whole suite green.
+// transports in `priorFetch.ts` / `bankConnectDeps.ts` leaves the whole suite green.
 //
 // So this scans the sources instead: any file that talks to Prior's resource API must obtain its
 // headers from the choke point rather than писать their names itself.
@@ -53,7 +53,7 @@ describe('Prior resource headers have a single choke point (#461)', () => {
   // set fails on the mutation that matters — a transport quietly dropping the helper disappears
   // from this list — and equally on a NEW transport appearing without review.
   const EXPECTED_USERS = [
-    join('server', 'api', 'bank', 'connect.post.ts'), // consent, in the connect preamble
+    join('server', 'utils', 'bankConnectDeps.ts'), // consent, in the connect preamble
     // ⚠ Сверка счетов (#20). Раньше её транспорт слал ОДИН `Authorization`, а банк проверяет
     // заголовок взаимодействия на любом вызове и делает это ДО тела — значит счета Приора не
     // появлялись в сверке никогда. Отказ там fail-soft по провайдеру, поэтому симптом читался как
