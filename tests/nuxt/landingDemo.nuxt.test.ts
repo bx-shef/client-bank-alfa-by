@@ -65,6 +65,17 @@ describe('LandingDemo', () => {
     expect(wrapper.findAll('[data-testid="demo-operation"]').length).toBeGreaterThan(0)
   })
 
+  /**
+   * ⚠ Подписи плиток были зашиты во множественном числе, и на выписке с одним плательщиком демо
+   * встречало человека надписью «1 контрагентов». Замечено владельцем на своём файле.
+   */
+  it('подписи плиток склоняются под число (#700)', async () => {
+    const wrapper = await mountSuspended(LandingDemo)
+    await upload(wrapper, fixtureFile('paritet/settlement-byn.txt', 'demo.txt'))
+    const text = wrapper.find('[data-testid="demo-summary"]').text()
+    expect(text).not.toMatch(/\b1\s+(операций|приходов|расходов|контрагентов)/)
+  })
+
   it('the reset button clears the results', async () => {
     const wrapper = await mountSuspended(LandingDemo)
     await upload(wrapper, fixtureFile('client-bank/demo-type4-alfa.txt', 'demo.txt'))

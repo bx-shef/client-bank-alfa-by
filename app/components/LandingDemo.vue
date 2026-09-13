@@ -35,6 +35,13 @@ const MAX_RENDERED_OPS = 100
 const MAX_RECOGNIZED_IDS_PER_ROW = 12
 
 const extraction = ref<DemoExtraction | null>(null)
+
+// ⚠ Подписи плиток СКЛОНЯЮТСЯ. Зашитые формы множественного числа давали «1 контрагентов» на
+// любой выписке с одним плательщиком — а это первое, что видит человек, принёсший свой файл.
+const opsLabel = computed(() => pluralRu(extraction.value?.operationCount ?? 0, ['операция', 'операции', 'операций']))
+const creditsLabel = computed(() => pluralRu(extraction.value?.creditCount ?? 0, ['приход', 'прихода', 'приходов']))
+const debitsLabel = computed(() => pluralRu(extraction.value?.debitCount ?? 0, ['расход', 'расхода', 'расходов']))
+const partiesLabel = computed(() => pluralRu(extraction.value?.counterpartyCount ?? 0, ['контрагент', 'контрагента', 'контрагентов']))
 const sourceLabel = ref('')
 const busy = ref(false)
 const error = ref('')
@@ -301,7 +308,7 @@ function reset() {
                 {{ extraction.operationCount }}
               </div>
               <div class="text-xs text-white/50">
-                операций
+                {{ opsLabel }}
               </div>
             </div>
             <div class="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
@@ -309,7 +316,7 @@ function reset() {
                 {{ extraction.creditCount }}
               </div>
               <div class="text-xs text-white/50">
-                приходов
+                {{ creditsLabel }}
               </div>
             </div>
             <div class="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
@@ -317,7 +324,7 @@ function reset() {
                 {{ extraction.debitCount }}
               </div>
               <div class="text-xs text-white/50">
-                расходов
+                {{ debitsLabel }}
               </div>
             </div>
             <div class="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
@@ -325,7 +332,7 @@ function reset() {
                 {{ extraction.counterpartyCount }}
               </div>
               <div class="text-xs text-white/50">
-                контрагентов
+                {{ partiesLabel }}
               </div>
             </div>
           </div>

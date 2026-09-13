@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { ref } from 'vue'
 import StatementUpload from '~/components/StatementUpload.vue'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const fixture = (rel: string) => join(import.meta.dirname, '..', 'fixtures', rel)
+
+/** Уронить файл в дропзону: компонент читает `dataTransfer.files`, другого входа у него нет. */
+async function drop(wrapper: Awaited<ReturnType<typeof mountSuspended>>, name: string, bytes: Buffer) {
+  const file = new File([new Uint8Array(bytes)], name, { type: 'text/plain' })
+  await wrapper.find('[data-testid="dropzone"]').trigger('drop', { dataTransfer: { files: [file] } })
+  // Разбор пакета уходит в макрозадачи (между файлами стоит yield) — даём им отработать.
+  for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r))
+  await wrapper.vm.$nextTick()
+}
 
 // Канал отзывов серверный — включаем мокой, иначе виджеты не рисуются и проверять нечего.
 vi.mock('~/composables/useFeedback', () => ({
@@ -59,6 +72,37 @@ describe('StatementUpload', () => {
     sessionStorage.setItem('cba.import.batches', '{"не":"массив"}')
     const wrapper = await mountSuspended(StatementUpload)
     expect(wrapper.find('[data-testid="batch-results"]').exists()).toBe(false)
+  })
+
+  /**
+   * ⚠ «Не удалось разобрать» обязано означать РОВНО «ни один файл не разобрался». Блок висел
+   * `v-else-if` на предпросмотре, поэтому выписка целиком из выключенного настройкой направления
+   * (#44) давала пустой предпросмотр — и приложение показывало предупреждение о формате рядом с
+   * зелёным «разобрано: 2» и строкой «выключены расходы», отправляя человека чинить исправный
+   * файл вместо настройки. Найдено владельцем на боевом портале.
+   */
+  it('выключенное направление — это не «не удалось разобрать» (#44)', async () => {
+    const { useChatSettings } = await import('~/composables/useChatSettings')
+    const singleton = useChatSettings()
+    const spy = vi.spyOn(singleton, 'load').mockResolvedValue(undefined)
+    const before = singleton.settings.chat.rules.directions
+    singleton.settings.chat.rules.directions = ['credit'] // расходы выключены
+    try {
+      const wrapper = await mountSuspended(StatementUpload)
+      await drop(wrapper, 'debits.txt', readFileSync(fixture('paritet/settlement-byn.txt')))
+
+      expect(wrapper.find('[data-testid="skipped-by-direction"]').exists(), 'пропуск по настройке обязан быть назван').toBe(true)
+      expect(wrapper.find('[data-testid="all-failed"]').exists(), 'разобранный файл не «не удалось разобрать»').toBe(false)
+    } finally {
+      singleton.settings.chat.rules.directions = before
+      spy.mockRestore()
+    }
+  })
+
+  it('а вот нераспознанный формат предупреждение показывает', async () => {
+    const wrapper = await mountSuspended(StatementUpload)
+    await drop(wrapper, 'garbage.txt', Buffer.from('это не выписка\nвообще\n', 'utf8'))
+    expect(wrapper.find('[data-testid="all-failed"]').exists()).toBe(true)
   })
 
   it('без разбора и без итога виджетов отзыва нет — спрашивать не о чем (#499)', async () => {
