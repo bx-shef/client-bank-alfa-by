@@ -1,6 +1,6 @@
 import { B24Frame, Result, initializeB24Frame } from '@bitrix24/b24jssdk'
 import { B24_REQUIRED_SCOPES } from '~/config/b24'
-import { placeFromOptions, placeFromQuery } from '~/utils/placementOptions'
+import { placeFromOptions, placeFromQuery, placementOption } from '~/utils/placementOptions'
 import { useFrameTokenPulse } from '~/composables/useFrameTokenPulse'
 import { useLogger } from '~/utils/logger'
 
@@ -106,6 +106,13 @@ export const useB24 = () => {
       ?? (typeof window !== 'undefined' ? placeFromQuery(window.location.search) : undefined)
   }
 
+  /** Произвольный параметр ссылки, с которой открыт фрейм (`params[<key>]=…`, #19). Те же два
+   *  источника, что у `placementPlace`: PLACEMENT_OPTIONS, затем строка запроса. */
+  function placementParam(key: string): string | undefined {
+    const search = typeof window !== 'undefined' ? window.location.search : ''
+    return placementOption(get()?.placement?.options, search, key)
+  }
+
   /**
    * Открыты ли МЫ САМИ в слайдере — по признаку SDK (`placement.isSliderMode`), а не по адресу (#15).
    *
@@ -168,6 +175,7 @@ export const useB24 = () => {
     targetOrigin,
     getRequiredRights,
     placementPlace,
+    placementParam,
     isSliderMode,
     openAppSlider,
     closeSlider

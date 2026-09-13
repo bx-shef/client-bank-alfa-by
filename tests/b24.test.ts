@@ -5,13 +5,16 @@ import { FAQ } from '~/utils/faq'
 import { APP_SLIDER_PLACE_IMPORT, APP_SLIDER_PLACE_MAIN, APP_SLIDER_PLACE_SETTINGS, B24_ALL_BOUND_EVENTS, B24_BOUND_EVENTS, B24_DELETION_EVENTS, B24_REQUIRED_SCOPES, helpSliderPlace, marketDetailPath, sliderRouteForPlace } from '~/config/b24'
 
 describe('B24_REQUIRED_SCOPES', () => {
-  it('lists crm, sale, im, imbot, documentgenerator, userfieldconfig, user_brief and placement', () => {
+  it('lists crm, sale, im, imbot, documentgenerator, userfieldconfig, user_brief, placement and pull', () => {
     // `sale` — resolve an order-id → its payments (sale.payment.list, #172).
     // `documentgenerator` — the via-document bridge (crm.documentgenerator.document.list, #109).
     // `userfieldconfig` — distribution SP provisioning creates its custom fields (#408); the code
     // called `userfieldconfig.add` while the scope was NOT requested, so provisioning failed on
     // every portal that hadn't been granted it by hand.
-    expect([...B24_REQUIRED_SCOPES]).toEqual(['crm', 'sale', 'im', 'imbot', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'])
+    // `pull` — канал живых событий приложения (#19): по нему открытый экран администратора узнаёт,
+    // что владелец счёта ввёл ключ. ⚠ Добавление — РЕ-CONSENT: порталы, установленные раньше,
+    // живут со старым грантом до переустановки, и там подписка молча не работает.
+    expect([...B24_REQUIRED_SCOPES]).toEqual(['crm', 'sale', 'im', 'imbot', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement', 'pull'])
   })
 
   it('has no duplicate scopes', () => {

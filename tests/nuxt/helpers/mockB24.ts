@@ -88,6 +88,11 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
       const p = (opts.placementOptions ?? {}).place
       return typeof p === 'string' && p ? p : undefined
     },
+    // Произвольный параметр ссылки (#19) — из того же набора PLACEMENT_OPTIONS, что и `place`.
+    placementParam: (key: string) => {
+      const v = (opts.placementOptions ?? {})[key]
+      return typeof v === 'string' && v ? v : undefined
+    },
     // ⚠ По умолчанию НЕ слайдер: тесты, которым это неважно, должны видеть обычный фрейм. Тест
     // пусковой страницы (#15) задаёт признак явно — иначе ветка лаунчера не проверялась бы.
     isSliderMode: () => opts.sliderMode === true,

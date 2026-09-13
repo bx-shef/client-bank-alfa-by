@@ -38,7 +38,12 @@ import { FAQ } from '~/utils/faq'
 // «provisioning failed» (#408) — the live run only worked because the test webhook had been granted
 // the scope by hand. ⚠ Adding it (like `sale`/`documentgenerator` before) requires RE-CONSENT on
 // already-installed portals.
-export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'imbot', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement'] as const
+// ⚠ `pull` добавлен 2026-09-13 (решение владельца) и это РЕ-CONSENT: порталы, установленные
+// раньше, живут со старым грантом до переустановки. Без него `pull.application.event.add`
+// отвечает `insufficient_scope`, то есть живая синхронизация между открытыми вкладками (и
+// обновление экрана админа, когда владелец счёта ввёл ключ) МОЛЧА не работает — отказ там
+// проглатывается по построению, потому что это удобство, а не корректность.
+export const B24_REQUIRED_SCOPES = ['crm', 'sale', 'im', 'imbot', 'documentgenerator', 'userfieldconfig', 'user_brief', 'placement', 'pull'] as const
 
 /**
  * Backend path that receives Bitrix24 server events. Same origin as the app (the
@@ -78,6 +83,10 @@ export const APP_SLIDER_PLACE_MAIN = 'app-main'
 
 export const APP_SLIDER_PLACE_SETTINGS = 'app-options'
 export const APP_SLIDER_PLACE_IMPORT = 'app-import'
+/** Экран ввода ключа API для ВЛАДЕЛЬЦА СЧЁТА (#19) — открывается внутренней ссылкой из чата.
+ *  ⚠ Единственный экран приложения, который открывает НЕ администратор: он адресован сотруднику,
+ *  которому админ передал подключение, и авторизуется подписанным грантом в `params[t]`. */
+export const APP_SLIDER_PLACE_BANK_KEY = 'app-bank-key'
 
 /**
  * Адрес обработчика ссылки `REST_APP_URI` — страницы, которую портал открывает по внутренней
@@ -107,7 +116,8 @@ export const APP_SLIDER_ROUTES: Record<string, string> = {
   // лишь ОТЛИЧАЕТ слайдер от лаунчера. Строка нужна, чтобы мидлвар не счёл `place` неизвестным.
   [APP_SLIDER_PLACE_MAIN]: '/app',
   [APP_SLIDER_PLACE_SETTINGS]: '/settings',
-  [APP_SLIDER_PLACE_IMPORT]: '/import'
+  [APP_SLIDER_PLACE_IMPORT]: '/import',
+  [APP_SLIDER_PLACE_BANK_KEY]: '/bank-key'
 }
 
 /**

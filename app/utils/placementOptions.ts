@@ -64,3 +64,36 @@ export function placeFromQuery(search: string): string | undefined {
   }
   return undefined
 }
+
+/**
+ * Произвольный параметр ссылки, с которой открыт фрейм (#19): `params[t]=…` приезжает в
+ * PLACEMENT_OPTIONS рядом с `place`.
+ *
+ * ⚠ Источников ДВА по той же причине, что у `place`: на живом портале фрейм слайдера приходил с
+ * ПУСТЫМ PLACEMENT_OPTIONS целиком. Читать оттуда там нечего, и единственный оставшийся носитель —
+ * строка запроса. Порядок тот же: сперва то, что прислал портал, потом адрес.
+ *
+ * ⚠ Ключ ищем без учёта регистра — по той же причине, что и `place`: регистр ключей init-данных
+ * задаёт портал, а не мы.
+ */
+export function placementOption(raw: unknown, search: string, key: string): string | undefined {
+  const want = key.toLowerCase()
+  const opts = parsePlacementOptions(raw)
+  for (const [k, value] of Object.entries(opts)) {
+    if (k.toLowerCase() !== want) continue
+    const v = typeof value === 'string' ? value.trim() : ''
+    if (v) return v
+  }
+  let params: URLSearchParams
+  try {
+    params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  } catch {
+    return undefined
+  }
+  for (const [k, value] of params.entries()) {
+    if (k.toLowerCase() !== want) continue
+    const v = value.trim()
+    if (v) return v
+  }
+  return undefined
+}

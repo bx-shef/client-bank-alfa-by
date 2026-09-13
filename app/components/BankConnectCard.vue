@@ -11,6 +11,8 @@ import { BANK_LABELS } from '~/utils/bankLabels'
 import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
 import { copyToClipboard } from '~/utils/clipboard'
 import { useBankInvite } from '~/composables/useBankInvite'
+import { useSettingsSync } from '~/composables/useSettingsSync'
+import { BANK_CONNECTED_COMMAND } from '~/utils/settingsSync'
 import { contactLabel } from '~/utils/bankContact'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank and starts the OAuth connect:
@@ -143,6 +145,21 @@ onMounted(async () => {
   // Запомненного адресата читаем ПОСЛЕ гейта админа: маршрут админский, и не-админу этот запрос
   // вернул бы 403 — шум в консоли на экране, где ему и так показано предупреждение.
   if (isAdmin.value) await invite.loadContact()
+
+  // ⚠ ЖИВОЕ ОБНОВЛЕНИЕ, а не «обновите страницу»: владелец счёта вводит ключ на СВОЁМ экране, в
+  // своём браузере, и у администратора здесь нет ни одного события, из которого он узнал бы об
+  // этом. Сервер шлёт `bank.connected` в канал приложения сразу после записи подключения, и
+  // открытая карточка перечитывает списки сама.
+  // ⚠ Best-effort по построению: канал pull требует скоупа `pull`, и порталы, установленные до
+  // его появления, живут со старым грантом до переустановки. Там подписка молча не сработает, а
+  // подключение всё равно появится — при следующем открытии настроек.
+  if (isAdmin.value) {
+    useSettingsSync().subscribeCommand(BANK_CONNECTED_COMMAND, () => {
+      void connectedList.value?.reload()
+      void reloadMatrix()
+      void setup.load()
+    })
+  }
 })
 
 /**

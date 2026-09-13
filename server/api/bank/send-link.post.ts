@@ -15,6 +15,11 @@ import { frameRestCall, livePortalSdkCall } from '../../utils/liveDeps'
 import { postChatMessage } from '../../utils/chatNotifyWrite'
 import { bearerToken, handleWriteSetting } from '../../utils/settingsHandler'
 import { BANK_CONTACT_KEY, serializeBankContact } from '../../../app/utils/bankContact'
+import { buildAppUriLink } from '../../../app/utils/appUriLink'
+import { APP_SLIDER_PLACE_BANK_KEY, APP_URI_PLACE_PARAM } from '../../../app/config/b24'
+import { appModuleIdFromEnv } from '../../utils/bankKeyDeps'
+import { signKeyGrant } from '../../utils/bankKeyGrant'
+import { resolveAuthConfig } from '../../utils/session'
 import { withFrameRouteSpan } from '../../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../../utils/telemetryAttributes'
 import type { BankProviderId } from '../../../app/types/statement'
@@ -49,7 +54,20 @@ export default defineEventHandler(async (event) => {
           const res = await handleWriteSetting({ callRest: frameRestCall }, accessToken, dom, value, BANK_CONTACT_KEY)
           if (res.status !== 200) throw new Error(`app.option.set failed: ${res.status}`)
         },
-        alfaClientId: () => (process.env.ALFA_OAUTH_CLIENT_ID || '').trim()
+        alfaClientId: () => (process.env.ALFA_OAUTH_CLIENT_ID || '').trim(),
+        // ⚠ ВНУТРЕННЯЯ ссылка портала (#19) — та же механика, что у ссылок на экраны приложения:
+        // `/marketplace/view/<код>/?params[place]=…`. Значит бухгалтера аутентифицирует САМ
+        // Битрикс24, а подписанный грант лишь именует, кому она выдана; сервер сверит одно с
+        // другим. Внешней ссылки с секретом внутри здесь нет по построению.
+        keyScreenLink: ({ memberId, domain, provider, userId, expMs }) => {
+          const secret = resolveAuthConfig(process.env).secret
+          const t = signKeyGrant({ memberId, provider, userId, exp: expMs }, secret)
+          if (!t) return null // нет секрета ⇒ грант не подписать ⇒ ссылка была бы мёртвой
+          return buildAppUriLink(domain, appModuleIdFromEnv(), {
+            [APP_URI_PLACE_PARAM]: APP_SLIDER_PLACE_BANK_KEY,
+            t
+          })
+        }
       }, {
         accessToken: token,
         domain,

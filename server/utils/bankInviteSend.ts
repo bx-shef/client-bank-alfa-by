@@ -20,7 +20,9 @@
 // у себя в кабинете. Поэтому «передать» для неё — это инструкция, а не ссылка, и `precheckConnect`
 // (он отвергает всё, кроме Приора) к этому пути не применяется.
 
-import { CONNECT_STATE_TTL_MIN, CONNECT_STATE_TTL_MS } from '../../app/utils/bankConnectTtl'
+import {
+  BANK_KEY_GRANT_TTL_HOURS, BANK_KEY_GRANT_TTL_MS, CONNECT_STATE_TTL_MIN, CONNECT_STATE_TTL_MS
+} from '../../app/utils/bankConnectTtl'
 import { buildAlfaInvite, buildPriorInvite } from '../../app/utils/bankConnectInvite'
 import { isValidPortalUserId, type BankContact } from '../../app/utils/bankContact'
 import { buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
@@ -40,6 +42,9 @@ export interface InviteSendDeps extends Pick<
   rememberContact: (accessToken: string, domain: string, contact: BankContact) => Promise<void>
   /** Наш `client_id` для кабинета Альфы (из env). Пусто ⇒ инструкцию не собрать. */
   alfaClientId: () => string
+  /** ВНУТРЕННЯЯ ссылка портала на экран ввода ключа для этого сотрудника (#19). `null` ⇒ собрать
+   *  её нечем (не настроен секрет подписи или код приложения) — сообщение не отправляем. */
+  keyScreenLink: (input: { memberId: string, domain: string, provider: BankProviderId, userId: string, expMs: number }) => string | null
 }
 
 export interface InviteSendInput {
@@ -100,12 +105,22 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
     ttlMin = Math.round(ttlMs / 60_000) || CONNECT_STATE_TTL_MIN
     text = buildPriorInvite({ link, ttlMin })
   } else {
-    text = buildAlfaInvite({ clientId: deps.alfaClientId() })
+    // ⚠ ССЫЛКА ВНУТРЕННЯЯ, а не на банк: она открывает НАШ экран внутри портала, где владелец
+    // счёта сам вставит ключ. Тем самым ключ вообще не попадает в чат — а он бессрочен и
+    // отзывается только в кабинете банка.
+    const link = deps.keyScreenLink({
+      memberId: gate.memberId, domain, provider, userId, expMs: nowMs + BANK_KEY_GRANT_TTL_MS
+    })
+    if (!link) {
+      return { status: 503, body: { error: 'key screen is not configured on this server' } }
+    }
+    text = buildAlfaInvite({ clientId: deps.alfaClientId(), link, ttlHours: BANK_KEY_GRANT_TTL_HOURS })
     if (!text) {
       // Отсутствие `client_id` — состояние СЕРВЕРА, а не ошибка нажавшего: инструкция без него
       // приводит владельца счёта к обязательному полю, которое нечем заполнить.
       return { status: 503, body: { error: 'bank client id is not configured on this server' } }
     }
+    ttlMin = BANK_KEY_GRANT_TTL_HOURS * 60
   }
   if (!text) {
     // Сюда попадаем, только если ссылка не прошла проверку билдера — то есть мы собрали бы

@@ -41,6 +41,18 @@ export function useSettingsSync() {
    * client can't start, this is a silent no-op.
    */
   function subscribeReload(onReload: () => void): () => void {
+    return subscribeCommand(SETTINGS_RELOAD_COMMAND, onReload)
+  }
+
+  /**
+   * Подписка на КОНКРЕТНУЮ команду канала приложения.
+   *
+   * ⚠ Обобщено (#19) потому, что команд стало две и реакции у них разные: «перечитать настройки»
+   * и «банк подключился». Вторая копия этой машинерии (создать клиента, подписаться, дождаться
+   * старта, аккуратно снести при размонтировании) разошлась бы с первой в обработке краёв —
+   * а края здесь и есть вся сложность.
+   */
+  function subscribeCommand(command: string, onEvent: () => void): () => void {
     let disposed = false
     let dispose: (() => void) | null = null
     let pull: InstanceType<typeof B24PullClientManager> | null = null
@@ -62,9 +74,9 @@ export function useSettingsSync() {
         if (!frame) return
         const moduleId = appModuleId()
         pull = new B24PullClientManager({ b24: frame, restApplication: moduleId })
-        // The SDK dispatches this callback ONLY for the subscribed command bucket (reload.options),
-        // so react unconditionally; there's no {command} arg to re-check.
-        dispose = pull.subscribe({ moduleId, command: SETTINGS_RELOAD_COMMAND, callback: () => onReload() })
+        // The SDK dispatches this callback ONLY for the subscribed command bucket, so react
+        // unconditionally; there's no {command} arg to re-check.
+        dispose = pull.subscribe({ moduleId, command, callback: () => onEvent() })
         // disposed mid-await → drop the just-built client
         if (disposed) {
           teardown()
@@ -85,5 +97,5 @@ export function useSettingsSync() {
     return unsubscribe
   }
 
-  return { notifyReload, subscribeReload }
+  return { notifyReload, subscribeReload, subscribeCommand }
 }
