@@ -4,6 +4,7 @@ import { buildAlfaInvite, buildBankInvite, buildPriorInvite } from '../app/utils
 // Сообщение, которым администратор передаёт подключение банка ВЛАДЕЛЬЦУ СЧЁТА (#19).
 
 const LINK = 'https://api.priorbank.by:9344/authorize?request=eyJ0eXAiOi'
+const KEY_LINK = 'https://client.bitrix24.by/marketplace/view/shef.bankimport/?params[place]=app-bank-key&params[t]=sig'
 
 describe('приглашение Приорбанка', () => {
   const msg = buildPriorInvite({ link: LINK, ttlMin: 15 })!
@@ -43,7 +44,7 @@ describe('приглашение Приорбанка', () => {
 })
 
 describe('приглашение Альфа-Банка', () => {
-  const msg = buildAlfaInvite({ clientId: 'shef-bank-import' })!
+  const msg = buildAlfaInvite({ clientId: 'shef-bank-import', link: KEY_LINK, ttlHours: 24 })!
 
   // ⚠ Шаги дословно повторяют надписи кабинета банка — пересказ своими словами заставляет искать
   // несуществующий пункт меню.
@@ -55,32 +56,41 @@ describe('приглашение Альфа-Банка', () => {
   })
 
   it('предупреждает, что ключ — это доступ к счёту', () => {
-    expect(msg).toContain('не пересылайте его посторонним')
+    expect(msg).toContain('открывает доступ к выписке по счёту')
   })
 
   // ⚠ Без `client_id` инструкция доводит человека до обязательного поля, которое нечем заполнить.
   it('без client_id сообщение не собирается', () => {
-    expect(buildAlfaInvite({ clientId: '' })).toBeNull()
-    expect(buildAlfaInvite({ clientId: 'с пробелом' })).toBeNull()
+    expect(buildAlfaInvite({ clientId: '', link: KEY_LINK, ttlHours: 24 })).toBeNull()
+    expect(buildAlfaInvite({ clientId: 'с пробелом', link: KEY_LINK, ttlHours: 24 })).toBeNull()
   })
 
-  // Ссылки у Альфы нет вовсе: она подключается ключом API (#488).
-  it('ссылки в нём нет', () => {
-    expect(msg).not.toContain('http')
+  // ⚠ Без ссылки на экран ввода ключ некуда девать, кроме как переслать в чат — ровно то, от чего
+  // экран и заведён. Полуинструкция здесь хуже отсутствующей.
+  it('без ссылки на экран ввода сообщение не собирается', () => {
+    expect(buildAlfaInvite({ clientId: 'x', link: '', ttlHours: 24 })).toBeNull()
+    expect(buildAlfaInvite({ clientId: 'x', link: 'не ссылка', ttlHours: 24 })).toBeNull()
+  })
+
+  // ⚠ Ссылка ведёт на НАШ экран внутри портала, а не на сайт банка: ключ вводится там, где выпущен.
+  it('несёт внутреннюю ссылку портала и запрещает пересылать ключ', () => {
+    expect(msg).toContain(KEY_LINK)
+    expect(msg).toContain('Ключ никому не пересылайте')
+    expect(msg).not.toContain('передайте его администратору')
   })
 })
 
 describe('выбор сообщения по банку', () => {
   it('каждому банку своё', () => {
     const prior = buildBankInvite('prior-by', { prior: { link: LINK, ttlMin: 15 } })
-    const alfa = buildBankInvite('alfa-by', { alfa: { clientId: 'x' } })
+    const alfa = buildBankInvite('alfa-by', { alfa: { clientId: 'x', link: KEY_LINK, ttlHours: 24 } })
     expect(prior).toContain(LINK)
     expect(alfa).toContain('Open API')
   })
 
   // Ручная загрузка файла — банка нет, приглашать некуда.
   it('manual ⇒ null', () => {
-    expect(buildBankInvite('manual', { alfa: { clientId: 'x' } })).toBeNull()
+    expect(buildBankInvite('manual', { alfa: { clientId: 'x', link: KEY_LINK, ttlHours: 24 } })).toBeNull()
   })
 
   it('нет входных данных для банка ⇒ null, а не полусообщение', () => {

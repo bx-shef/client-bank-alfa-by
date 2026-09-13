@@ -73,22 +73,61 @@ export async function handleBankConnectKey(
   if (!accessToken || !domain) {
     return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   }
+  const pre = precheckKeyConnect(deps, provider, apiKey)
+  if (pre) return pre
+
+  const gate = await gateConnectAdmin(deps, { accessToken, domain })
+  if (!gate.ok) return gate.res
+  return exchangeAndSaveKey(deps, { memberId: gate.memberId, provider, apiKey, nonce, nowMs })
+}
+
+/**
+ * Проверки, возможные ДО похода в портал: непустой ключ в разумных границах, настроен ли банк,
+ * есть ли чем подписать обмен.
+ *
+ * ⚠ Вынесены потому, что вызывающих стало ДВА: админ вводит ключ у себя, а владелец счёта — на
+ * своём экране по ссылке из чата (#19). Вторая копия молча разошлась бы с первой, и один из путей
+ * начал бы принимать то, что отвергает другой.
+ */
+export function precheckKeyConnect(
+  deps: Pick<ConnectKeyDeps, 'config' | 'clientSecret'>,
+  provider: BankProviderId,
+  apiKey: string
+): ConnectKeyResult | null {
   const key = apiKey.trim()
   if (!key) return { status: 400, body: { error: 'ключ API обязателен' } }
   if (key.length > MAX_API_KEY_CHARS) return { status: 400, body: { error: 'ключ API слишком длинный' } }
 
   // ⚠ Провайдер проверяем ДО гейтов: на «этот банк так не подключается» портал спрашивать незачем.
-  const config = deps.config(provider)
-  if (!config) {
+  if (!deps.config(provider)) {
     return { status: 400, body: { error: `provider ${provider} not available for key connect` } }
   }
-  const clientSecret = deps.clientSecret()
-  if (!clientSecret) {
+  if (!deps.clientSecret()) {
     return { status: 503, body: { error: 'connect unavailable (no client secret configured)' } }
   }
+  return null
+}
 
-  const gate = await gateConnectAdmin(deps, { accessToken, domain })
-  if (!gate.ok) return gate.res
+/**
+ * Обмен ключа на пару токенов и сохранение подключения для УЖЕ опознанного портала.
+ *
+ * ⚠ Гейт сюда не входит намеренно — он у вызывающего, и вызывающих два с РАЗНЫМИ гейтами:
+ * `profile.ADMIN` у админского маршрута и подписанный грант + совпадение личности у экрана
+ * владельца счёта. Общей была бы только сама механика обмена, и дублировать её значило бы
+ * заводить второе место, где ключ клиента превращается в подключение.
+ */
+export async function exchangeAndSaveKey(
+  deps: Pick<ConnectKeyDeps, 'config' | 'clientSecret' | 'exchange' | 'save' | 'log'>,
+  input: { memberId: string, provider: BankProviderId, apiKey: string, nonce: string, nowMs: number }
+): Promise<ConnectKeyResult> {
+  const { memberId, provider, nonce, nowMs } = input
+  const key = input.apiKey.trim()
+  const config = deps.config(provider)
+  const clientSecret = deps.clientSecret()
+  if (!config || !clientSecret) {
+    // Сюда не попасть после `precheckKeyConnect`; ветка оставлена fail-closed, а не как «не бывает».
+    return { status: 503, body: { error: 'connect unavailable (provider is not configured)' } }
+  }
 
   let tokens
   try {
@@ -124,7 +163,7 @@ export async function handleBankConnectKey(
   }
 
   await deps.save({
-    memberId: gate.memberId,
+    memberId,
     provider,
     accountKey,
     accessToken: tokens.accessToken,

@@ -6,6 +6,7 @@ import { handleSendBankInvite, type InviteSendDeps } from '../server/utils/bankI
 const TOKEN = 'frame-token'
 const DOMAIN = 'client.bitrix24.by'
 const LINK = 'https://api.priorbank.by:9344/authorize?request=eyJ'
+const KEY_LINK = 'https://client.bitrix24.by/marketplace/view/shef.bankimport/?params[place]=app-bank-key&params[t]=sig'
 
 function deps(over: Partial<InviteSendDeps> = {}): InviteSendDeps {
   return {
@@ -17,6 +18,7 @@ function deps(over: Partial<InviteSendDeps> = {}): InviteSendDeps {
     sendMessage: vi.fn(async () => {}),
     rememberContact: vi.fn(async () => {}),
     alfaClientId: () => 'shef-bank-import',
+    keyScreenLink: vi.fn(() => KEY_LINK),
     ...over
   }
 }
