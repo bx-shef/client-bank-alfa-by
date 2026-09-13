@@ -10,7 +10,7 @@ import { useAppRating } from '~/composables/useAppRating'
 //
 // Flow: trigger → check() (GET /api/app-rating) → if show, render + stamp prompted_at (throttles the
 // next prompt for RATING_REPROMPT_DAYS) → «Оценить» opens the Market detail page (stamps opened_at)
-// or «Не сейчас» hides it. Inert outside a portal / when b24MarketCode is unset.
+// or «Не сейчас» hides it. Inert outside a portal.
 const props = defineProps<{
   /** Flip to true once the user has clearly benefited (a completed import). Triggers the check. */
   trigger?: boolean

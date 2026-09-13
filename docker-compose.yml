@@ -14,7 +14,6 @@ services:
         # `environment`. Подробности и гард — Dockerfile + tests/publicEnvBuildArgs.test.ts.
         NUXT_PUBLIC_REPO_URL: ${NUXT_PUBLIC_REPO_URL:-}
         NUXT_PUBLIC_B24_APP_CODE: ${NUXT_PUBLIC_B24_APP_CODE:-}
-        NUXT_PUBLIC_B24_MARKET_CODE: ${NUXT_PUBLIC_B24_MARKET_CODE:-}
         NUXT_PUBLIC_METRIKA_ID: ${NUXT_PUBLIC_METRIKA_ID:-}
         NUXT_PUBLIC_B24_FORM_ID: ${NUXT_PUBLIC_B24_FORM_ID:-}
         NUXT_PUBLIC_B24_FORM_SECRET: ${NUXT_PUBLIC_B24_FORM_SECRET:-}
@@ -48,7 +47,6 @@ services:
         # `environment`. Подробности и гард — Dockerfile + tests/publicEnvBuildArgs.test.ts.
         NUXT_PUBLIC_REPO_URL: ${NUXT_PUBLIC_REPO_URL:-}
         NUXT_PUBLIC_B24_APP_CODE: ${NUXT_PUBLIC_B24_APP_CODE:-}
-        NUXT_PUBLIC_B24_MARKET_CODE: ${NUXT_PUBLIC_B24_MARKET_CODE:-}
         NUXT_PUBLIC_METRIKA_ID: ${NUXT_PUBLIC_METRIKA_ID:-}
         NUXT_PUBLIC_B24_FORM_ID: ${NUXT_PUBLIC_B24_FORM_ID:-}
         NUXT_PUBLIC_B24_FORM_SECRET: ${NUXT_PUBLIC_B24_FORM_SECRET:-}

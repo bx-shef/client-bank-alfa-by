@@ -193,7 +193,7 @@ export const B24_CHAT_BOT = {
  * Build the portal-relative path to this app's Bitrix24 Market detail page. Passed to the frame
  * SDK's `slider.openPath` so the user lands on the listing where they can leave a rating/review
  * (the «оцените приложение» modal). The path shape is fixed by Bitrix24; `code` is the app's Market
- * listing code (see nuxt.config `b24MarketCode`, defaulting to `LANDING_MARKET_CODE`). Returns null
+ * listing code (`LANDING_MARKET_CODE` — константа, не env). Returns null
  * for an empty code (feature off).
  */
 export function marketDetailPath(code: string): string | null {

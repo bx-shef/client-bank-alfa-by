@@ -15,7 +15,7 @@ import { SETTINGS_RELOAD_COMMAND, buildSettingsReloadEvent } from '~/utils/setti
 /** App code as registered on the portal = the pull `MODULE_ID` / subscribe `moduleId`.
  *  ⚠ Общий источник с ссылкой на экраны (`useAppCode`): это один и тот же вопрос «как портал зовёт
  *  это приложение», и два ответа на него разъехались бы молча. Сегодняшнее значение не меняется —
- *  `useAppCode` падает на `b24MarketCode` и `LANDING_MARKET_CODE`, как было здесь. */
+ *  `useAppCode` падает на `LANDING_MARKET_CODE`, как было здесь. */
 function appModuleId(): string {
   return useAppCode() ?? ''
 }
