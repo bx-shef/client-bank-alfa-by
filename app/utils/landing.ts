@@ -136,7 +136,7 @@ export const LANDING_DEMO = {
   /** CTA label for the custom-dev message (scrolls to the brief form). */
   customDevCta: 'Обсудить доработку',
   /** Shown when a file could not be parsed at all. */
-  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка: 1CClientBankExchange, «***** ^Type=» или звёздочный «*0*…» (Паритетбанк).',
+  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка: 1CClientBankExchange, «***** ^Type=», звёздочный «*0*…» (Паритетбанк) или CSV-выгрузка Приорбанка / Альфа-Банка.',
   /** Shown when a file parsed but held no operations. */
   noOperations: 'В файле не найдено операций.'
 } as const
@@ -175,8 +175,14 @@ export interface DemoSample {
 }
 
 export const LANDING_DEMO_SAMPLES: readonly DemoSample[] = [
-  { label: 'Альфа-Банк', url: '/samples/vypiska-alfa.txt', name: 'vypiska-alfa.txt' },
-  { label: 'Приорбанк', url: '/samples/vypiska-prior.txt', name: 'vypiska-prior.txt' },
+  // ⚠ Формат назван у ОБОИХ чипов банка, и пара стоит рядом (находка ревью). «Альфа-Банк» против
+  // «Альфа-Банк CSV» выбрать нельзя: про свой файл человек слова «CSV» чаще всего не знает (в
+  // интернет-банке кнопка называется «Выгрузить»), а у второго чипа формат не назван вовсе — и
+  // два чипа одного банка, разнесённые по краям списка, читаются как разные банки.
+  { label: 'Альфа-Банк (текст)', url: '/samples/vypiska-alfa.txt', name: 'vypiska-alfa.txt' },
+  { label: 'Альфа-Банк (CSV)', url: '/samples/vypiska-alfa-csv.csv', name: 'vypiska-alfa-csv.csv' },
+  { label: 'Приорбанк (текст)', url: '/samples/vypiska-prior.txt', name: 'vypiska-prior.txt' },
+  { label: 'Приорбанк (CSV)', url: '/samples/vypiska-prior-csv.csv', name: 'vypiska-prior-csv.csv' },
   { label: 'Паритетбанк', url: '/samples/vypiska-paritet.txt', name: 'vypiska-paritet.txt' },
   { label: '1С', url: '/samples/vypiska-1c.txt', name: 'vypiska-1c.txt' }
 ]

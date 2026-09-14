@@ -184,8 +184,9 @@ function clearAll() {
       <p class="text-sm text-(--ui-color-base-3)">
         Перетащите сюда файл выписки ({{ ACCEPTED_EXTENSIONS.join(', ') }}) — формат
         <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">1CClientBankExchange</code>,
-        client-bank <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">***** ^Type=</code>
-        или звёздочный <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">*0*…</code>
+        client-bank <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">***** ^Type=</code>,
+        звёздочный <code class="rounded bg-(--ui-color-design-tinted-na-bg) px-1 py-0.5">*0*…</code>
+        или CSV-выгрузка Приорбанка / Альфа-Банка
       </p>
       <div class="mt-4 flex items-center justify-center gap-3">
         <B24Button

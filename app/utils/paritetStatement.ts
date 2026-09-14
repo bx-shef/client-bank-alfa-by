@@ -25,7 +25,7 @@
 
 import type { NormalizeContext, StatementItem, OperationDirection } from '~/types/statement'
 import { currencyFromNumericCode } from '~/utils/clientBankStatement'
-import { round2 } from '~/utils/money'
+import { parseBankAmount, round2 } from '~/utils/money'
 
 /** Тот же потолок ввода, что у соседнего текстового формата (DoS-гард #19). */
 export const MAX_PARITET_CHARS = 20_000_000
@@ -105,13 +105,6 @@ function isoDate(yymmdd: string): string {
   const dt = new Date(Date.UTC(y, Number(m) - 1, Number(d)))
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== Number(m) - 1 || dt.getUTCDate() !== Number(d)) return ''
   return `${y}-${m}-${d}`
-}
-
-/** Число из банковской записи `1054,89`. Мусор/пусто ⇒ `NaN` (вызывающий решает, что это значит). */
-function money(raw: string): number {
-  const t = (raw ?? '').trim().replace(/\s/g, '').replace(/,/g, '.')
-  if (!/^-?\d+(\.\d+)?$/.test(t)) return Number.NaN
-  return Number(t)
 }
 
 /**
@@ -263,7 +256,7 @@ export function normalizeParitetRows(
 
   for (const row of parsed.rows) {
     const direction = paritetDirection(row.directionCode)
-    const raw = money(row.amount)
+    const raw = parseBankAmount(row.amount)
     // ⚠ Округляем ДО сравнения с нулём: при обратном порядке сумма 0,004 проходила проверку
     // «> 0» и превращалась в дело «Приход 0,00 BYN» — то самое нулевое дело, которого правило
     // этого модуля не допускает.

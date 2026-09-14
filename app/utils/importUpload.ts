@@ -19,8 +19,17 @@ import type { StatementItem } from '~/types/statement'
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 /** Max files per drop (mirrors the sibling upload UI's batch cap). */
 export const MAX_UPLOAD_FILES = 10
-/** Accepted extensions — both supported formats are plain text. */
-export const ACCEPTED_EXTENSIONS = ['.txt'] as const
+/**
+ * Расширения, которые принимаем.
+ *
+ * ⚠ `.csv` добавлен вместе с CSV-выгрузками банков (#707), и без него формат был бы НЕДОСТУПЕН:
+ * банк отдаёт такой файл именно с этим расширением, а гейт отверг бы его ещё до разбора — то есть
+ * парсер существовал бы, а человек видел бы «неподдерживаемый тип файла».
+ * ⚠ Содержимое расширением НЕ определяется: формат выбирает `detectManualFormat` по маркерам
+ * внутри файла, поэтому `.csv` со звёздочным содержимым разберётся правильно, а `.txt` с CSV —
+ * тоже. Расширение здесь — только дешёвый фильтр «это вообще текстовый экспорт».
+ */
+export const ACCEPTED_EXTENSIONS = ['.txt', '.csv'] as const
 
 /** Per-file parse outcome shown in the upload list. */
 export interface UploadItemResult {
