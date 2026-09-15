@@ -36,6 +36,14 @@ export interface ConnectedBankAccount {
    */
   lastAttemptAt?: number
   /**
+   * Epoch ms, когда банк ОПРЕДЕЛЁННО отверг продление гранта (#713). `0`/отсутствует — не отвергал.
+   *
+   * ⚠ Ответ БАНКА, а не наша оценка по часам, поэтому он хоронит подключение и там, где срок жизни
+   * refresh у нас не измерен. Именно этого поля не хватало, чтобы мёртвый Приор перестал выглядеть
+   * здоровым во всех трёх поверхностях сразу.
+   */
+  refreshRejectedAt?: number
+  /**
    * Epoch ms, когда истекает СОГЛАСИЕ банка (#503). `0`/отсутствует — банк согласий не выдаёт
    * (Альфа) или подключение сделано до появления поля: тогда о согласии не говорим ничего.
    *
@@ -92,6 +100,7 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     hasRefresh: true,
     consentExpiresAt: 0,
     lastAttemptAt: 0,
+    refreshRejectedAt: 0,
     pollPaused: false,
     // Грант размечен — строка показывает кнопку «Добавить счёт» (#23), иначе визуальный эталон
     // не документировал бы её вовсе.
@@ -106,6 +115,7 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     hasRefresh: true,
     consentExpiresAt: 0,
     lastAttemptAt: 0,
+    refreshRejectedAt: 0,
     pollPaused: true,
     grantId: 'preview-grant-2'
   },
@@ -118,6 +128,7 @@ export const PREVIEW_BANK_ACCOUNTS: ConnectedBankAccount[] = [
     hasRefresh: false,
     consentExpiresAt: 0,
     lastAttemptAt: 0,
+    refreshRejectedAt: 0,
     pollPaused: false,
     // Незавершённое подключение гранта тоже несёт, но кнопки «Добавить счёт» у него нет: счёт
     // самого подключения ещё не выбран (см. `canAddAccount`).

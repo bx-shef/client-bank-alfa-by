@@ -3,6 +3,7 @@ import { decryptSecret } from '../server/utils/secretCrypto'
 import {
   addBankAccountToGrant,
   markBankRefreshAttempt,
+  markBankRefreshRejected,
   deleteBankTokenById,
   deleteBankTokensForPortal,
   renameBankTokenAccount,
@@ -101,7 +102,7 @@ describe('listBankAccountInfoForPortal — проекция для экрана 
       hasRefresh: true, consentExpiresAt: 1_800_000_000_000,
       // ⚠ 0 = «не пробовали ни разу», а не «пробовали давно». Различие несущее: первое даёт шанс
       // немедленно — ровно тот случай, когда подключение пережило простой сервиса (#489).
-      lastAttemptAt: 0,
+      lastAttemptAt: 0, refreshRejectedAt: 0,
       // ⚠ Отсутствие колонки в ответе БД читается как «не на паузе», а не как `undefined`: строка,
       // записанная до #576, обязана опрашиваться, а не выпасть из плана молча.
       pollPaused: false,
@@ -561,7 +562,7 @@ describe('listAllBankAccountInfo — проекция скана keep-alive', ()
       consentExpiresAt: 0,
       // Колонки `last_attempt_at` в строке тоже нет ⇒ 0 = «не пробовали», и подключение получит
       // шанс на первом же тике (#489).
-      lastAttemptAt: 0,
+      lastAttemptAt: 0, refreshRejectedAt: 0,
       // Колонки `poll_paused` нет ⇒ `false`: подключение, заведённое до #576, опрашивается.
       pollPaused: false,
       // Колонки `grant_id` нет ⇒ `''`: подключение, заведённое до #23, гранта не несёт.
@@ -963,6 +964,40 @@ describe('SQL-контракт: метка попытки адресуется �
     expect(sql).toMatch(/\$5 <> ''/)
     expect(sql).not.toMatch(/updated_at/)
     expect(calls[0]!.params).toContain('G1')
+  })
+})
+
+describe('SQL-контракт: отметка ОТКАЗА банка (#713)', () => {
+  it('UPDATE-only, адресуется грантом, пишет РОВНО ОДНУ колонку', async () => {
+    const { query, calls } = fakeQuery()
+    await markBankRefreshRejected(query, {
+      memberId: 'm1', provider: 'prior-by', accountKey: 'BY01', grantId: 'G1'
+    }, 1_700_000_000_000)
+    const sql = calls[0]!.sql
+    // ⚠ UPDATE, а не upsert: воскресить отключённое подключение отметка не вправе (#505).
+    expect(sql).toMatch(/^\s*UPDATE bank_tokens/)
+    expect(sql).not.toMatch(/INSERT/i)
+    // ⚠ Портал в WHERE — иначе чужую строку можно было бы пометить, подделав provider/account.
+    expect(sql).toMatch(/WHERE\s+member_id = \$1 AND provider = \$2/)
+    // ⚠ Якорь — ГРАНТ: refresh общий на все счета подключения, значит и отказ по нему общий.
+    // Пометив одну строку, мы оставили бы сёстрам вид здоровых при том же мёртвом гранте.
+    expect(sql).toMatch(/grant_id = \$5/)
+    expect(sql).toMatch(/\$5 <> ''/)
+    // ⚠ `updated_at` не трогаем: он означает «когда мы держали свежую пару». Штамп при ОТКАЗЕ
+    // сбросил бы возраст — подключение выглядело бы свежим ровно тогда, когда оно сломано.
+    expect(sql).not.toMatch(/updated_at/)
+    // Ровно одно присваивание в SET.
+    expect(sql.match(/=/g)?.filter(x => x).length).toBeGreaterThan(0)
+    expect(sql).toMatch(/SET\s+refresh_rejected_at = \$4/)
+    expect(sql).not.toMatch(/access_token|refresh_token_enc|expires_at|poll_paused|last_attempt_at/)
+  })
+
+  it('успешное обновление СБРАСЫВАЕТ отметку тем же оператором, что пишет пару', async () => {
+    // ⚠ Несущее: иначе самолечение Альфы ключом API чинило бы подключение, а карточка продолжала
+    // бы звать человека переподключать то, что уже работает.
+    const { query, calls } = fakeQuery([{ member_id: 'm1' }])
+    await updateBankTokenSecrets(query, { ...token, grantId: 'G1' })
+    expect(calls[0]!.sql).toMatch(/refresh_rejected_at\s*=\s*0/)
   })
 })
 

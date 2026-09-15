@@ -182,10 +182,14 @@ export async function updateBankTokenSecrets(query: QueryFn, token: BankToken): 
     // ⚠ `<> ''` обязательна: пустой грант это «не размечено», а не «общий» (см. `grantId`), и такое
     // подключение по-прежнему адресуется своим номером счёта.
     `UPDATE bank_tokens
-        SET access_token      = $4,
-            refresh_token_enc = $5,
-            expires_at        = $6,
-            updated_at        = now()
+        SET access_token        = $4,
+            refresh_token_enc   = $5,
+            expires_at          = $6,
+            -- ⚠ Успех СБРАСЫВАЕТ отметку отказа банка (#713), и делает это ТЕМ ЖЕ оператором, что
+            -- пишет свежую пару: иначе самолечение Альфы ключом API чинило бы подключение, а
+            -- карточка продолжала бы звать человека переподключать то, что уже работает.
+            refresh_rejected_at = 0,
+            updated_at          = now()
       WHERE member_id = $1 AND provider = $2
         AND CASE WHEN $7 <> '' THEN grant_id = $7 ELSE account_key = $3 END
       RETURNING member_id`,
@@ -244,6 +248,32 @@ export async function markBankRefreshAttempt(
     // отключить между отбором и штампом, и тогда метка не легла бы никуда.
     `UPDATE bank_tokens
         SET last_attempt_at = $4
+      WHERE member_id = $1 AND provider = $2
+        AND CASE WHEN $5 <> '' THEN grant_id = $5 ELSE account_key = $3 END`,
+    [ref.memberId, ref.provider, ref.accountKey, nowMs, ref.grantId ?? '']
+  )
+}
+
+/**
+ * Отметить ОПРЕДЕЛЁННЫЙ отказ банка в продлении (#713). UPDATE-only, пишет РОВНО ОДНУ колонку.
+ *
+ * ⚠ Зовётся НЕ на всякую неудачу, а только когда банк назвал грант негодным (`invalid_grant` и
+ * родня). Сетевой обрыв, 5xx и таймаут сюда НЕ попадают: по ним нельзя отличить «грант мёртв» от
+ * «мы не дозвонились», а цена ошибки несимметрична — ложное «истекло» отправляет ВЛАДЕЛЬЦА СЧЁТА в
+ * интернет-банк за тем, что не ломалось.
+ *
+ * ⚠ Якорь — ГРАНТ, по тому же доводу, что у `updateBankTokenSecrets` и `markBankRefreshAttempt`:
+ * refresh общий на все счета подключения, значит и отказ по нему общий. Пометить одну строку
+ * значило бы оставить сёстрам вид здоровых при том же мёртвом гранте.
+ */
+export async function markBankRefreshRejected(
+  query: QueryFn,
+  ref: BankAttemptRef,
+  nowMs: number
+): Promise<void> {
+  await query(
+    `UPDATE bank_tokens
+        SET refresh_rejected_at = $4
       WHERE member_id = $1 AND provider = $2
         AND CASE WHEN $5 <> '' THEN grant_id = $5 ELSE account_key = $3 END`,
     [ref.memberId, ref.provider, ref.accountKey, nowMs, ref.grantId ?? '']
@@ -461,6 +491,14 @@ export interface BankAccountInfo extends BankAccountRef {
    * попытки — а из этих двух состояний следуют противоположные решения.
    */
   lastAttemptAt: number
+  /**
+   * Epoch ms, когда банк ОПРЕДЕЛЁННО отверг продление этого гранта (#713). `0` — не отвергал.
+   *
+   * ⚠ Авторитет тот же, что у `consentExpiresAt`: это ответ БАНКА, а не наша оценка по часам.
+   * Поэтому он объявляет подключение мёртвым даже там, где срок жизни refresh у нас не измерен, —
+   * то есть у Приора, где иначе мёртвая строка вечно числилась бы «пора обновить».
+   */
+  refreshRejectedAt: number
   /** Epoch ms the BANK'S CONSENT lapses (#503). `0` — unknown (Alfa grants none), not expired. */
   consentExpiresAt: number
   /** Грант банка, общий для счетов одного подключения (#23). `''` — подключение не размечено
@@ -477,7 +515,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // so an encrypted empty secret ends with a bare colon. Without this clause every pre-existing
     // «no refresh token» row would keep claiming it has one until the account is reconnected — and
     // the badge exists exactly to tell the admin that reconnecting is needed.
-    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at, refresh_rejected_at,
             poll_paused, grant_id,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
@@ -495,6 +533,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
     // ⚠ `0` = не пробовали ни разу. Отличать это от «пробовали и не вышло» обязательно: первое
     // значит «дай шанс немедленно», второе — «подожди, прежде чем снова тратить лимит банка».
     lastAttemptAt: Number(r.last_attempt_at ?? 0),
+    refreshRejectedAt: Number(r.refresh_rejected_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
@@ -512,7 +551,7 @@ export async function listBankAccountInfoForPortal(query: QueryFn, memberId: str
  */
 export async function getBankAccountInfoById(query: QueryFn, id: number): Promise<BankAccountInfo | null> {
   const rows = await query(
-    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at, refresh_rejected_at,
             poll_paused, grant_id,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
@@ -528,6 +567,7 @@ export async function getBankAccountInfoById(query: QueryFn, id: number): Promis
     accountKey: String(r.account_key),
     connectedAt: r.updated_at instanceof Date ? r.updated_at.getTime() : Date.parse(String(r.updated_at)),
     lastAttemptAt: Number(r.last_attempt_at ?? 0),
+    refreshRejectedAt: Number(r.refresh_rejected_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),
@@ -548,7 +588,7 @@ export async function getBankAccountInfoById(query: QueryFn, id: number): Promis
 
 export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccountInfo[]> {
   const rows = await query(
-    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at,
+    `SELECT id, member_id, provider, account_key, expires_at, updated_at, consent_expires_at, last_attempt_at, refresh_rejected_at,
             poll_paused, grant_id,
             (refresh_token_enc IS NOT NULL AND refresh_token_enc <> ''
              AND refresh_token_enc NOT LIKE '%:') AS has_refresh
@@ -569,6 +609,7 @@ export async function listAllBankAccountInfo(query: QueryFn): Promise<BankAccoun
     // ⚠ `0` = не пробовали ни разу. Отличать это от «пробовали и не вышло» обязательно: первое
     // значит «дай шанс немедленно», второе — «подожди, прежде чем снова тратить лимит банка».
     lastAttemptAt: Number(r.last_attempt_at ?? 0),
+    refreshRejectedAt: Number(r.refresh_rejected_at ?? 0),
     expiresAt: Number(r.expires_at),
     hasRefresh: r.has_refresh === true,
     consentExpiresAt: Number(r.consent_expires_at ?? 0),

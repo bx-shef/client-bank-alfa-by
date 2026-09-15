@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   bankCredsFromEnv,
+  bankGrantRejected,
   bankOAuthErrorDetail,
   bankRefreshRequest,
   ensureBankToken,
@@ -749,5 +750,107 @@ describe('#488 переиздание пары ключом API', () => {
     })
     await expect(ensureBankToken(tok({ provider: 'prior-by', expiresAt: NOW - 1 }), deps)).rejects.toThrow()
     expect(reissues).toBe(0)
+  })
+})
+
+// ⚠ Класс ошибки, ради которого всё это писалось (#713): мёртвый грант Приора выглядел здоровым,
+// потому что «истекло» мы произносили только про ИЗМЕРЕННЫЙ срок жизни refresh, а у Приора он не
+// измерен. Отказ банка — не наша оценка по часам, а его ответ, и он обязан хоронить подключение
+// независимо от того, знаем ли мы срок.
+describe('bankGrantRejected — ОПРЕДЕЛЁННЫЙ отказ гранта против «мы не дозвонились» (#713)', () => {
+  const err = (status: number, data: unknown) => Object.assign(new Error('x'), { status, data })
+
+  it('400 + машинный код invalid_grant — отказ (ровно то, что ответил Приор в живом замере)', () => {
+    expect(bankGrantRejected(err(400, {
+      error: 'invalid_grant',
+      error_description: 'Persisted access token data not found'
+    }))).toBe(true)
+  })
+
+  it('читает код и из response.status — форма ofetch отличается у разных транспортов', () => {
+    expect(bankGrantRejected({ response: { status: 400 }, data: { error: 'invalid_grant' } })).toBe(true)
+  })
+
+  // ⚠ Мутационно проверено: снять условие на 4xx — и этот тест краснеет. Без него ЛЮБОЙ отказ
+  // банка (500, шлюз лёг, сеть моргнула) объявлял бы грант мёртвым и звал ВЛАДЕЛЬЦА СЧЁТА в
+  // интернет-банк переподключать то, что не ломалось. В живом логе 2026-09-15 такие 500 от
+  // Приора есть — вперемешку с настоящими отказами.
+  it('5xx — НЕ отказ: банк не ответил, а не отверг', () => {
+    expect(bankGrantRejected(err(500, { error: 'invalid_grant' }))).toBe(false)
+  })
+
+  it('сеть/таймаут (ни статуса, ни тела) — НЕ отказ', () => {
+    expect(bankGrantRejected(new Error('fetch failed'))).toBe(false)
+    expect(bankGrantRejected(err(400, undefined))).toBe(false)
+  })
+
+  // ⚠ Несущее различение, а не придирка: `invalid_client` значит «неверен НАШ client_secret» —
+  // состояние всего сервиса. Пометив по нему, мы при ротации своего секрета объявили бы мёртвыми
+  // ВСЕ подключения флота разом и разослали бы клиентам приглашение идти в банк.
+  it('invalid_client — НЕ отказ гранта: это про наш секрет, а не про это подключение', () => {
+    expect(bankGrantRejected(err(401, { error: 'invalid_client' }))).toBe(false)
+  })
+
+  // ⚠ Осознанный недобор: конверты не по RFC (шлюз Альфы `{fault:…}`, Приор `{Code, Errors:[…]}`)
+  // метки не ставят — лучше промолчать, чем угадать по чужой строке.
+  it('конверт не по RFC — молчим, поведение прежнее', () => {
+    expect(bankGrantRejected(err(400, { fault: { code: 900901, message: 'Invalid Credentials' } }))).toBe(false)
+    expect(bankGrantRejected(err(400, 'invalid_grant'))).toBe(false) // строка, а не объект
+  })
+})
+
+describe('ensureBankToken: отметка отказа банка (#713)', () => {
+  const rejection = Object.assign(new Error('400'), {
+    status: 400, data: { error: 'invalid_grant', error_description: 'Persisted access token data not found' }
+  })
+
+  it('отмечает отказ ОДИН раз и пробрасывает исходную ошибку', async () => {
+    const marked: { token: BankToken, at: number }[] = []
+    const { deps } = fakeDeps({
+      stored: tok({ provider: 'prior-by', expiresAt: NOW - 1 }),
+      postRefresh: async () => {
+        throw rejection
+      },
+      markRejected: async (token, at) => {
+        marked.push({ token, at })
+      }
+    })
+    await expect(ensureBankToken(tok({ provider: 'prior-by', expiresAt: NOW - 1 }), deps)).rejects.toThrow('400')
+    expect(marked).toHaveLength(1)
+    expect(marked[0]!.token.accountKey).toBe('MC_7')
+    expect(marked[0]!.at).toBe(NOW)
+  })
+
+  // ⚠ Мутационно проверено: убрать гейт `bankGrantRejected` в `ensureBankToken` — и этот тест
+  // краснеет. Он и есть граница между «зовём человека» и «молчим»: сетевой сбой обязан оставить
+  // подключение здоровым, иначе один обрыв связи у НАС отправляет клиента в его банк.
+  it('НЕ отмечает, когда банк просто не ответил', async () => {
+    const marked: unknown[] = []
+    const { deps } = fakeDeps({
+      stored: tok({ provider: 'prior-by', expiresAt: NOW - 1 }),
+      postRefresh: async () => {
+        throw Object.assign(new Error('500'), { status: 500, data: { error: 'server_error' } })
+      },
+      markRejected: async () => {
+        marked.push(1)
+      }
+    })
+    await expect(ensureBankToken(tok({ provider: 'prior-by', expiresAt: NOW - 1 }), deps)).rejects.toThrow('500')
+    expect(marked).toEqual([])
+  })
+
+  // ⚠ Отметка — ЛУЧШИЕ УСИЛИЯ: диагностика не смеет отменить продление. Иначе упавшая колонка
+  // ломала бы ровно то, что она описывает.
+  it('падение отметки не меняет исход продления', async () => {
+    const { deps } = fakeDeps({
+      stored: tok({ provider: 'prior-by', expiresAt: NOW - 1 }),
+      postRefresh: async () => {
+        throw rejection
+      },
+      markRejected: async () => {
+        throw new Error('БД недоступна')
+      }
+    })
+    await expect(ensureBankToken(tok({ provider: 'prior-by', expiresAt: NOW - 1 }), deps)).rejects.toThrow('400')
   })
 })
