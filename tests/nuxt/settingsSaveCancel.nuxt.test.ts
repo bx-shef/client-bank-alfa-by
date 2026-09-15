@@ -20,6 +20,7 @@ const cs = {
   saving: ref(false),
   savedOk: ref(false),
   loaded: ref(true),
+  loadFailed: ref(false),
   error: ref(''),
   notifyOption: ref(undefined),
   errorOption: ref(undefined),

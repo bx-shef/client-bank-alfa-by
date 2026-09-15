@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import SettingsIcon from '@bitrix24/b24icons-vue/outline/SettingsIcon'
 import UploadFileIcon from '@bitrix24/b24icons-vue/outline/UploadFileIcon'
 import { splitByDirection } from '~/utils/statement'
+import { SETTINGS_LOAD_FAILED_TITLE } from '~/utils/settingsLoadFailure'
 import type { OperationDirection, StatementItem } from '~/types/statement'
 import { useB24 } from '~/composables/useB24'
 import { useImportStatus } from '~/composables/useImportStatus'
@@ -684,8 +685,16 @@ const configured = computed(() => chatSettings.settings.chat.dialogId !== '')
 const settingsReady = computed(() => !isLauncher.value && (!inPortal.value || chatSettings.loaded.value))
 // Show the setup banner only inside the portal, after settings loaded, when not configured.
 // Standalone/dev (no frame) is neither blocked nor nagged — it renders the empty operations view.
+// ⚠ Провал ЧТЕНИЯ настроек — не «не настроено» (#705). `loaded` поднимается и на отказе
+// запроса, а настройки остаются дефолтными, поэтому настроенный портал получал вердикт
+// «Приложение не настроено» (админу) / «Администратор завершает настройку» (остальным), и
+// вдобавок `v-else-if="settingsReady"` прятал весь рабочий экран — операции, сводку, полосу
+// статуса. Тот же принцип уже записан для полосы статуса при 403 от `/api/setup-status`:
+// «нам не дали посмотреть» и «настраивать нечего» — разные вещи.
+const settingsFailed = computed(() => inPortal.value && chatSettings.loadFailed.value)
 const showSetupBanner = computed(() =>
-  !isLauncher.value && inPortal.value && chatSettings.loaded.value && !configured.value)
+  !isLauncher.value && inPortal.value && chatSettings.loaded.value
+  && !settingsFailed.value && !configured.value)
 
 // Полоса статуса импорта. «Ещё не запускалась» — правда, но пока банк не подключён и файл не
 // загружали, она сообщает не о состоянии импорта, а о том, что настройка не закончена: про это
@@ -920,6 +929,18 @@ watch(() => items.value.length, async () => {
           label="Загрузить выписку"
           block
           @click="openImport"
+        />
+
+        <!-- Настройки прочитать не удалось: говорим именно это и рабочий экран НЕ прячем (#705).
+             Отдельная строка, а не ветка `v-if`/`v-else-if` с вердиктом: она сообщает о нашем
+             незнании, а список операций и полоса статуса от настроек не зависят вовсе. -->
+        <B24Alert
+          v-if="settingsFailed"
+          color="air-primary-alert"
+          :title="SETTINGS_LOAD_FAILED_TITLE"
+          description="Показаны значения по умолчанию. Обновите страницу — если не помогает, попробуйте позже."
+          class="mb-5"
+          data-testid="settings-load-failed"
         />
 
         <!-- App not configured yet (no notification chat chosen). Admins get a call-to-action
