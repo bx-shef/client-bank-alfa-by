@@ -90,7 +90,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], unmatchedClaim: [], unmatchedSummary: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -211,6 +211,16 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     },
     notifyUnmatched: async (it, dialogId, recordedToMyCompany, memberId) => {
       calls.unmatchedNotify.push([it.docId, recordedToMyCompany, dialogId, memberId])
+    },
+    // ⚠ Умолчание фикстуры — «про эту операцию ещё не говорили» (#696): так поведение совпадает с
+    // тем, что было до свёртки, и старые ожидания остаются осмысленными. Тесты про саму память
+    // подменяют эту функцию своей.
+    claimUnmatchedNotice: async (memberId, key) => {
+      calls.unmatchedClaim.push([memberId, key])
+      return true
+    },
+    notifyUnmatchedSummary: async (summary, dialogId, memberId, account) => {
+      calls.unmatchedSummary.push([summary, dialogId, memberId, account])
     },
     getActivityId: async (_memberId, key) => written.get(key) ?? null,
     savePortal: async (job) => {
@@ -671,6 +681,71 @@ describe('handleCrmSyncJob', () => {
     expect(r).toMatchObject({ created: 1, unmatched: 1 })
     expect(calls.activity).toEqual([['d1', 'MY', 'M', 'act-1']])
     expect(calls.unmatchedNotify).toEqual([]) // notice gated by errorChat.dialogId
+  })
+
+  // ─── Свёртка потока «клиент не определён» (#696) ───────────────────────────────────────────────
+
+  /** Неопознанные операции с РАЗНЫМИ счетами контрагентов — список счетов в итоге и есть его смысл. */
+  function unmatchedOps(n: number): StatementItem[] {
+    return Array.from({ length: n }, (_, i) => ({
+      ...item(`d${i + 1}`, 'credit'),
+      counterparty: { name: 'C', unp: '1', account: `BY${i + 1}` }
+    }))
+  }
+
+  it('больше пяти неопознанных за прогон → пять поштучно и ОДИН итог со счетами остальных', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    const r = await handleCrmSyncJob(job(unmatchedOps(8)), deps)
+    // ⚠ Счётчик `unmatched` капом НЕ ограничен — метрика обязана остаться честной.
+    expect(r).toMatchObject({ processed: 8, unmatched: 8 })
+    expect(calls.unmatchedNotify).toHaveLength(5)
+    expect(calls.unmatchedSummary).toHaveLength(1)
+    const [summary, dialogId, memberId, account] = calls.unmatchedSummary[0] as [
+      { hidden: number, hiddenUnrecorded: number, accounts: string[] }, string, string, string
+    ]
+    expect(summary).toEqual({ hidden: 3, hiddenUnrecorded: 0, accounts: ['BY6', 'BY7', 'BY8'] })
+    expect([dialogId, memberId, account]).toEqual(['err', 'M', 'A'])
+  })
+
+  it('ровно пять неопознанных → итог НЕ шлётся (прятать было нечего)', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    await handleCrmSyncJob(job(unmatchedOps(5)), deps)
+    expect(calls.unmatchedNotify).toHaveLength(5)
+    expect(calls.unmatchedSummary).toEqual([])
+  })
+
+  it('про операцию уже говорили в прошлом прогоне → молчим совсем: ни поштучно, ни итогом', async () => {
+    // ⚠ Это ГЛАВНЫЙ дефект #696: у операции без владельца нет маркера дела, поэтому верхний дедуп
+    // её не отсекает и она приходит в чат снова при каждом изменении пачки.
+    // ⚠ `myCompany: null` — именно у таких операций нет маркера, и только им нужна память.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
+    deps.claimUnmatchedNotice = async () => false
+    const r = await handleCrmSyncJob(job(unmatchedOps(8)), deps)
+    expect(r).toMatchObject({ unmatched: 8 }) // метрика по-прежнему честная
+    expect(calls.unmatchedNotify).toEqual([])
+    expect(calls.unmatchedSummary).toEqual([])
+  })
+
+  it('«моя компания» не найдена → итог сообщает, что скрытые НЕ записаны в CRM', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
+    await handleCrmSyncJob(job(unmatchedOps(7)), deps)
+    const [summary] = calls.unmatchedSummary[0] as [{ hidden: number, hiddenUnrecorded: number }]
+    expect(summary).toMatchObject({ hidden: 2, hiddenUnrecorded: 2 })
+  })
+
+  it('заявка берётся по КЛЮЧУ ДЕДУПА операции, а не по порталу', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
+    await handleCrmSyncJob(job(unmatchedOps(3)), deps)
+    expect(calls.unmatchedClaim).toEqual([['M', 'A|d1'], ['M', 'A|d2'], ['M', 'A|d3']])
+  })
+
+  it('операция ЛЕГЛА в «мою компанию» → памяти не берём вовсе: её отсечёт маркер дела', async () => {
+    // ⚠ Лишний ключ здесь не просто мусор: админу советуют завести контрагента и УДАЛИТЬ дело,
+    // чтобы операция переписалась, — и заявка заставила бы нас молчать ровно на этом повторе.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    await handleCrmSyncJob(job(unmatchedOps(3)), deps)
+    expect(calls.unmatchedNotify).toHaveLength(3)
+    expect(calls.unmatchedClaim).toEqual([])
   })
 
   it('handles a mixed batch: one skipped, one new, one unmatched (counters do not leak)', async () => {
