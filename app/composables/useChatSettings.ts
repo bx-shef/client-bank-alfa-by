@@ -2,6 +2,7 @@ import { reactive, ref, watch, type Ref } from 'vue'
 import { frameAuth, frameAuthHeaders, frameFetchError } from '~/composables/useFrameAuth'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { defaultPortalSettings, type PortalSettings } from '~/utils/settings'
+import { SAVE_BLOCKED_MESSAGE } from '~/utils/settingsLoadFailure'
 import type { RemoteSearchPage } from '~/utils/remoteSearch'
 
 // Per-portal chat settings (notification chat + rules + error chat), persisted
@@ -34,6 +35,13 @@ function create() {
   const saving = ref(false)
   const savedOk = ref(false) // last save succeeded (cleared when a new save starts)
   const loaded = ref(false)
+  // ⚠ «Загружено» и «загружено УСПЕШНО» — разные вещи (#705). `loaded` поднимается в `finally`,
+  // то есть и на провале чтения: настройки при этом остаются ДЕФОЛТНЫМИ (чат не выбран,
+  // исключения пусты, авто-проведение выключено, карта распознавания дефолтная) — и внешне это
+  // неотличимо от ненастроенного портала. Отсюда отдельный признак: он гасит вердикт о
+  // настроенности на `/app` и ЗАПРЕЩАЕТ сохранение (записывать то, чего мы не читали, нельзя —
+  // «Сохранить» затёрло бы реальные настройки клиента дефолтами, необратимо).
+  const loadFailed = ref(false)
   const error = ref('')
   // Seed labels for the pickers so the saved chat shows its name (not a raw id)
   // before the menu is opened. Resolved from the recent-chats list on load.
@@ -107,6 +115,8 @@ function create() {
     const a = frameAuth()
     enabled.value = a !== null
     if (!a) {
+      // Вне портала читать нечего — это не отказ чтения, а отсутствие источника.
+      loadFailed.value = false
       loaded.value = true
       return
     }
@@ -115,6 +125,9 @@ function create() {
     try {
       const res = await $fetch<PortalSettings>('/api/chat-settings', { headers: frameAuthHeaders(a) })
       Object.assign(settings, res)
+      // Снимаем признак только ПОСЛЕ того, как серверная копия применена: повторное чтение,
+      // упавшее после удачного, обязано вернуть запрет, а удачное — снять его.
+      loadFailed.value = false
       // Best-effort label seeding from recent chats (one extra call, settings page
       // is cold path). A failure here must not break loading the settings.
       let recent: ChatOption[] = []
@@ -132,6 +145,7 @@ function create() {
         adoptTitle('errorChat', errorOption)
       ])
     } catch (e) {
+      loadFailed.value = true
       error.value = frameFetchError(e, 'Не удалось загрузить настройки')
     } finally {
       loading.value = false
@@ -142,6 +156,13 @@ function create() {
   async function save() {
     const a = frameAuth()
     if (!a) return
+    // ⚠ НЕСУЩИЙ ЗАПРЕТ, а не подсказка интерфейсу (#705). Кнопка тоже заблокирована, но она —
+    // подача: сохранение зовут и другие пути (горячая клавиша, повтор после ошибки, чужой
+    // вызывающий), а цена промаха — затёртые настройки портала, которые не восстановить.
+    if (loadFailed.value) {
+      error.value = SAVE_BLOCKED_MESSAGE
+      return
+    }
     saving.value = true
     savedOk.value = false
     error.value = ''
@@ -158,5 +179,5 @@ function create() {
     }
   }
 
-  return { settings, enabled, loading, saving, savedOk, loaded, error, notifyOption, errorOption, chatFetcher, load, save }
+  return { settings, enabled, loading, saving, savedOk, loaded, loadFailed, error, notifyOption, errorOption, chatFetcher, load, save }
 }

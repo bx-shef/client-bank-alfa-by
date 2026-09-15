@@ -4,6 +4,7 @@ import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
 import { useChatSettings } from '~/composables/useChatSettings'
 import { SETTINGS_SECTIONS, showsChatPreview, type SettingsSectionId } from '~/utils/settingsSections'
+import { SAVE_BLOCKED_MESSAGE, SETTINGS_LOAD_FAILED_TITLE } from '~/utils/settingsLoadFailure'
 import LoaderWaitIcon from '@bitrix24/b24icons-vue/animated/LoaderWaitIcon'
 import SignIcon from '@bitrix24/b24icons-vue/main/SignIcon'
 
@@ -31,7 +32,7 @@ const currentSection = computed(() => SETTINGS_SECTIONS.find(s => s.id === props
 
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
 const cs = useChatSettings()
-const { settings, enabled, saving, loaded, error } = cs
+const { settings, enabled, saving, loaded, loadFailed, error } = cs
 // Исход сохранения — тостом, а не строкой в подвале формы (см. `saveAndClose`).
 const toast = useToast()
 
@@ -57,6 +58,11 @@ onMounted(async () => {
 // if embedded in one; keep the form open on error so the admin can retry.
 async function saveAndClose(): Promise<void> {
   if (!enabled.value) return
+  // ⚠ Третьей проверки «настройки не прочитаны» здесь НЕТ намеренно (#705). Слоёв два, и оба
+  // проверяются мутацией: отказ в самом `cs.save()` (несущий — он ловит любого вызывающего) и
+  // `:disabled` у кнопки (подача). Проверка посередине НЕДОСТИЖИМА при заблокированной кнопке,
+  // то есть мутация «снять её» не роняет ничего — а гард, который нельзя проверить, обещает
+  // защиту, которой в этом месте не существует.
   await cs.save()
   if (error.value) {
     // Ошибку показываем ТОСТОМ и форму не закрываем: строка под кнопками жила в самом низу
@@ -155,6 +161,19 @@ async function cancel(): Promise<void> {
         description="Работа формы возможна только в Bitrix24."
       />
 
+      <!-- ⚠ Отказ ЧТЕНИЯ, а не вердикт о настроенности (#705). Без этой строки форма выглядела
+           полностью правдоподобной: дефолты неотличимы от ненастроенного портала, и «Сохранить»
+           затирало реальные настройки клиента — чат уведомлений, чат ошибок, исключения, карту
+           распознавания. Алерт стоит ПЕРВЫМ и над всеми разделами: состояние относится ко всей
+           форме, а не к тому разделу, в котором человек случайно оказался. -->
+      <B24Alert
+        v-if="loadFailed"
+        color="air-primary-alert"
+        :title="SETTINGS_LOAD_FAILED_TITLE"
+        :description="SAVE_BLOCKED_MESSAGE"
+        data-testid="settings-load-failed"
+      />
+
       <div class="flex flex-col lg:flex-row items-start justify-between gap-4">
         <div class="w-full min-w-0 space-y-3">
           <!-- ⚠ `KeepAlive` здесь несущий, а не «для скорости»: раздел «Подключение банка» при
@@ -229,7 +248,7 @@ async function cancel(): Promise<void> {
           size="lg"
           color="air-primary"
           :loading="saving"
-          :disabled="saving || !isAdmin"
+          :disabled="saving || !isAdmin || loadFailed"
           label="Сохранить"
           data-testid="settings-save"
           @click="saveAndClose"
