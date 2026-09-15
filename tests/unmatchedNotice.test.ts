@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StatementItem } from '~/types/statement'
-import { buildUnmatchedMessage, unmatchedClientNote } from '~/utils/unmatchedNotice'
+import { buildUnmatchedMessage, buildUnmatchedSummaryMessage, MAX_SUMMARY_ACCOUNTS, unmatchedClientNote, type UnmatchedSummary } from '~/utils/unmatchedNotice'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   return {
@@ -88,5 +88,78 @@ describe('buildUnmatchedMessage', () => {
 
   it('falls back to «—» when the counterparty account is empty', () => {
     expect(buildUnmatchedMessage(makeItem({ counterparty: { name: 'x', unp: '1', account: '' } }), true)).toContain('счёт контрагента —')
+  })
+})
+
+// ─── Итог по свёрнутым операциям (#696) ─────────────────────────────────────────────────────────
+
+describe('buildUnmatchedSummaryMessage', () => {
+  const S = (p: Partial<UnmatchedSummary> = {}): UnmatchedSummary =>
+    ({ hidden: 0, hiddenUnrecorded: 0, accounts: [], ...p })
+
+  it('прятать нечего → null (пустой итог читался бы как «было что-то ещё»)', () => {
+    expect(buildUnmatchedSummaryMessage(S())).toBeNull()
+    expect(buildUnmatchedSummaryMessage(S({ hidden: -1 }))).toBeNull()
+  })
+
+  it('все скрытые записаны в мою компанию → так и сказано', () => {
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 3, accounts: ['BY1'] }))!
+    expect(t).toContain('Все записаны в вашу компанию.')
+    expect(t).not.toContain('не записана')
+  })
+
+  it('не записана ни одна → отдельная формулировка, а не число', () => {
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 3, hiddenUnrecorded: 3 }))!
+    expect(t).toContain('Ни одна из них не записана в CRM.')
+  })
+
+  it('записана часть → называется именно число', () => {
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 5, hiddenUnrecorded: 2 }))!
+    expect(t).toContain('Из них 2 не записаны в CRM.')
+  })
+
+  it('счетов меньше капа → перечислены все, без «остальные»', () => {
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 2, accounts: ['BY1', 'BY2'] }))!
+    expect(t).toContain('Уникальных счетов контрагентов — 2: BY1, BY2.')
+    expect(t).not.toContain('не показаны')
+  })
+
+  it('счетов больше капа → показаны первые, а НЕПОКАЗАННЫЕ названы числом', () => {
+    const accounts = Array.from({ length: MAX_SUMMARY_ACCOUNTS + 7 }, (_, i) => `BY${i + 1}`)
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 99, accounts }))!
+    // ⚠ Общее число — ПОЛНОЕ, а не длина показанного куска: иначе обрезанный список читается как
+    // полный, и человек решит, что завёл всех.
+    expect(t).toContain(`Уникальных счетов контрагентов — ${accounts.length}`)
+    expect(t).toContain(`первые ${MAX_SUMMARY_ACCOUNTS}`)
+    expect(t).toContain('(остальные 7 не показаны)')
+    expect(t).not.toContain(`BY${MAX_SUMMARY_ACCOUNTS + 1},`)
+  })
+
+  it('непоказанный ровно ОДИН → форма согласована («остальные 1 не показан»)', () => {
+    // ⚠ Достижимый край: 21 уникальный счёт у неотстроенного портала — обычное дело, а рядом стоят
+    // уже склоняемые формы, поэтому рассогласование читается как брак (находка панели ревью).
+    const accounts = Array.from({ length: MAX_SUMMARY_ACCOUNTS + 1 }, (_, i) => `BY${i + 1}`)
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 30, accounts }))!
+    expect(t).toContain('(остальные 1 не показан)')
+    expect(t).not.toContain('остальные 1 не показаны')
+  })
+
+  it('счетов нет вовсе → ни перечисления, ни совета «заведите их»', () => {
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 4, hiddenUnrecorded: 4 }))!
+    expect(t).not.toContain('Уникальных счетов')
+    expect(t).not.toContain('Заведите')
+  })
+
+  it('счёт контрагента пишет ПЛАТЕЛЬЩИК → BB-скобки нейтрализуются', () => {
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 1, accounts: ['[URL=http://evil]BY1[/URL]'] }))!
+    expect(t).not.toContain('[URL=')
+    expect(t).not.toContain('[/URL]')
+    expect(t).toContain('BY1')
+  })
+
+  it('число операций склоняется', () => {
+    expect(buildUnmatchedSummaryMessage(S({ hidden: 1 }))!).toContain('1 операция')
+    expect(buildUnmatchedSummaryMessage(S({ hidden: 3 }))!).toContain('3 операции')
+    expect(buildUnmatchedSummaryMessage(S({ hidden: 11 }))!).toContain('11 операций')
   })
 })

@@ -6,7 +6,7 @@
 // fallback — #496).
 
 import type { StatementItem } from '../../app/types/statement'
-import { buildUnmatchedMessage } from '../../app/utils/unmatchedNotice'
+import { buildUnmatchedMessage, buildUnmatchedSummaryMessage, type UnmatchedSummary } from '../../app/utils/unmatchedNotice'
 import { postChatMessage } from './chatNotifyWrite'
 import type { RestCall } from './companyLookup'
 
@@ -25,4 +25,22 @@ export async function notifyUnmatchedViaRest(
   memberId?: string
 ): Promise<string | null> {
   return postChatMessage(dialogId, buildUnmatchedMessage(item, recordedToMyCompany), call, memberId)
+}
+
+/**
+ * Send the END-OF-RUN summary about the operations that were folded away (#696) and return the new
+ * message id, or null when the API returned none — or when there was nothing to fold (the builder
+ * answers `null` and we send nothing: an empty summary would read as «there was more, but we won't
+ * say what»). The caller guarantees a non-empty `dialogId`; a transport error propagates and the
+ * worker swallows+logs it, exactly like the per-operation notice above.
+ */
+export async function notifyUnmatchedSummaryViaRest(
+  summary: UnmatchedSummary,
+  dialogId: string,
+  call: RestCall,
+  memberId?: string
+): Promise<string | null> {
+  const text = buildUnmatchedSummaryMessage(summary)
+  if (!text) return null
+  return postChatMessage(dialogId, text, call, memberId)
 }

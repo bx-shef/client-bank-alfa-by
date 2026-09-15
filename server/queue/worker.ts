@@ -60,8 +60,9 @@ import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLo
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { writePaymentRegistryViaRest, backfillPaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { bindActivityViaRest } from '../utils/activityBindingsWrite'
-import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
+import { notifyUnmatchedSummaryViaRest, notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
+import { UNMATCHED_NOTICE_TTL_SEC, unmatchedNoticeKey } from '../utils/unmatchedNoticeClaim'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
@@ -615,7 +616,39 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call, memberId)
       } catch (e) {
-        crmLog.error(`unmatched notify failed, portal ${memberId}: ${(e as Error)?.message}`)
+        // ⚠ `logSafe` и здесь, хотя строка старше этого PR: текст ошибки приходит извне, и
+        // оставлять новый код зеркалить прежний пробел — значит закрепить его (находка панели).
+        crmLog.error(`unmatched notify failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
+      }
+    },
+    // Cross-run memory for the notice above (#696): claim the right to speak about THIS operation.
+    // `true` — nobody claimed it yet, send; `false` — a previous run already did, stay quiet.
+    //
+    // ⚠ A Redis failure answers TRUE, not false. Losing a warning is worse than repeating one, and
+    // the whole mechanism is a courtesy: without it the behaviour is exactly what shipped before.
+    claimUnmatchedNotice: async (memberId, key, account) => {
+      // ⚠ Демо-гейт тот же, что у соседей: синтетическая нагрузка доходит до ветки «клиент не
+      // определён» (демо-компании не существует) и писала бы ключи под НАСТОЯЩИМ member_id. Утечки
+      // нет — значение заглушка, — но это чужой Redis-трафик и разрыв единообразия файла.
+      // `true` = «про эту операцию ещё не говорили», то есть демо ведёт себя как чистый прогон.
+      if (isDemoAccount(account)) return true
+      try {
+        return await claimCooldownSlot(unmatchedNoticeKey(memberId, key), UNMATCHED_NOTICE_TTL_SEC)
+      } catch (e) {
+        crmLog.warning(`unmatched claim failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
+        return true
+      }
+    },
+    // End-of-run summary for the folded-away operations (#696). Same guarantees as the per-op
+    // notice; the demo gate reads `account` because no `item` reaches here (see the dep's doc).
+    notifyUnmatchedSummary: async (summary, dialogId, memberId, account) => {
+      if (isDemoAccount(account)) return
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return
+        await notifyUnmatchedSummaryViaRest(summary, dialogId, call, memberId)
+      } catch (e) {
+        crmLog.error(`unmatched summary notify failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
       }
     },
     // Read-before-write dedup guard (#259): search Bitrix24 for our marker
