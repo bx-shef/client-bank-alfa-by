@@ -38,6 +38,7 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     provider: 'alfa-by',
     accountKey: ACCOUNT,
     grantId: '',
+    refreshRejectedAt: 0,
     connectedAt: NOW - HOUR,
     expiresAt: NOW + HOUR,
     hasRefresh: true,
