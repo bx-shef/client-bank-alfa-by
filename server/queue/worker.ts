@@ -616,7 +616,9 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call, memberId)
       } catch (e) {
-        crmLog.error(`unmatched notify failed, portal ${memberId}: ${(e as Error)?.message}`)
+        // ⚠ `logSafe` и здесь, хотя строка старше этого PR: текст ошибки приходит извне, и
+        // оставлять новый код зеркалить прежний пробел — значит закрепить его (находка панели).
+        crmLog.error(`unmatched notify failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
       }
     },
     // Cross-run memory for the notice above (#696): claim the right to speak about THIS operation.
@@ -624,11 +626,16 @@ export function liveHandlerDeps(): HandlerDeps {
     //
     // ⚠ A Redis failure answers TRUE, not false. Losing a warning is worse than repeating one, and
     // the whole mechanism is a courtesy: without it the behaviour is exactly what shipped before.
-    claimUnmatchedNotice: async (memberId, key) => {
+    claimUnmatchedNotice: async (memberId, key, account) => {
+      // ⚠ Демо-гейт тот же, что у соседей: синтетическая нагрузка доходит до ветки «клиент не
+      // определён» (демо-компании не существует) и писала бы ключи под НАСТОЯЩИМ member_id. Утечки
+      // нет — значение заглушка, — но это чужой Redis-трафик и разрыв единообразия файла.
+      // `true` = «про эту операцию ещё не говорили», то есть демо ведёт себя как чистый прогон.
+      if (isDemoAccount(account)) return true
       try {
         return await claimCooldownSlot(unmatchedNoticeKey(memberId, key), UNMATCHED_NOTICE_TTL_SEC)
       } catch (e) {
-        crmLog.warning(`unmatched claim failed, portal ${memberId}: ${(e as Error)?.message}`)
+        crmLog.warning(`unmatched claim failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
         return true
       }
     },
@@ -641,7 +648,7 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyUnmatchedSummaryViaRest(summary, dialogId, call, memberId)
       } catch (e) {
-        crmLog.error(`unmatched summary notify failed, portal ${memberId}: ${(e as Error)?.message}`)
+        crmLog.error(`unmatched summary notify failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
       }
     },
     // Read-before-write dedup guard (#259): search Bitrix24 for our marker

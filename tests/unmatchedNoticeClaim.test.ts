@@ -4,6 +4,7 @@
 // сломать незаметно: ключ операции не должен попадать в Redis открытым текстом (в нём номер нашего
 // расчётного счёта), и два разных портала не должны делить одну отметку.
 
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { UNMATCHED_NOTICE_TTL_SEC, unmatchedNoticeKey } from '../server/utils/unmatchedNoticeClaim'
 
@@ -27,6 +28,13 @@ describe('unmatchedNoticeKey', () => {
 
   it('один и тот же платёж у РАЗНЫХ порталов — разные ключи (отметку они не делят)', () => {
     expect(unmatchedNoticeKey('M1', KEY)).not.toBe(unmatchedNoticeKey('M2', KEY))
+  })
+
+  it('хвост — именно SHA-256, а не обратимая кодировка', () => {
+    // ⚠ Проверка «нет подстроки» слабее, чем кажется: base64 номера счёта её тоже проходит, а он
+    // разворачивается обратно в одну строку (находка панели ревью). Поэтому алгоритм закреплён.
+    const digest = createHash('sha256').update(KEY).digest('hex').slice(0, 16)
+    expect(unmatchedNoticeKey('M1', KEY)).toBe(`unmatched-notice:M1:${digest}`)
   })
 
   it('пространство имён отделено от соседних ключей Redis', () => {

@@ -135,6 +135,15 @@ describe('buildUnmatchedSummaryMessage', () => {
     expect(t).not.toContain(`BY${MAX_SUMMARY_ACCOUNTS + 1},`)
   })
 
+  it('непоказанный ровно ОДИН → форма согласована («остальные 1 не показан»)', () => {
+    // ⚠ Достижимый край: 21 уникальный счёт у неотстроенного портала — обычное дело, а рядом стоят
+    // уже склоняемые формы, поэтому рассогласование читается как брак (находка панели ревью).
+    const accounts = Array.from({ length: MAX_SUMMARY_ACCOUNTS + 1 }, (_, i) => `BY${i + 1}`)
+    const t = buildUnmatchedSummaryMessage(S({ hidden: 30, accounts }))!
+    expect(t).toContain('(остальные 1 не показан)')
+    expect(t).not.toContain('остальные 1 не показаны')
+  })
+
   it('счетов нет вовсе → ни перечисления, ни совета «заведите их»', () => {
     const t = buildUnmatchedSummaryMessage(S({ hidden: 4, hiddenUnrecorded: 4 }))!
     expect(t).not.toContain('Уникальных счетов')

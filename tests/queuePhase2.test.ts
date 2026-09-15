@@ -215,8 +215,8 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     // ⚠ Умолчание фикстуры — «про эту операцию ещё не говорили» (#696): так поведение совпадает с
     // тем, что было до свёртки, и старые ожидания остаются осмысленными. Тесты про саму память
     // подменяют эту функцию своей.
-    claimUnmatchedNotice: async (memberId, key) => {
-      calls.unmatchedClaim.push([memberId, key])
+    claimUnmatchedNotice: async (memberId, key, account) => {
+      calls.unmatchedClaim.push([memberId, key, account])
       return true
     },
     notifyUnmatchedSummary: async (summary, dialogId, memberId, account) => {
@@ -736,7 +736,7 @@ describe('handleCrmSyncJob', () => {
   it('заявка берётся по КЛЮЧУ ДЕДУПА операции, а не по порталу', async () => {
     const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
     await handleCrmSyncJob(job(unmatchedOps(3)), deps)
-    expect(calls.unmatchedClaim).toEqual([['M', 'A|d1'], ['M', 'A|d2'], ['M', 'A|d3']])
+    expect(calls.unmatchedClaim).toEqual([['M', 'A|d1', 'A'], ['M', 'A|d2', 'A'], ['M', 'A|d3', 'A']])
   })
 
   it('операция ЛЕГЛА в «мою компанию» → памяти не берём вовсе: её отсечёт маркер дела', async () => {
@@ -746,6 +746,76 @@ describe('handleCrmSyncJob', () => {
     await handleCrmSyncJob(job(unmatchedOps(3)), deps)
     expect(calls.unmatchedNotify).toHaveLength(3)
     expect(calls.unmatchedClaim).toEqual([])
+  })
+
+  it('пачка упала ПОСЛЕ свёртки → заявки на свёрнутых не сожжены, и повтор объявляет их', async () => {
+    // ⚠ Находка панели ревью (2026-09-15). Итог отправляется ПОСЛЕ цикла, поэтому заявка, взятая на
+    // свёрнутую операцию внутри цикла, пережила бы падение любой СЛЕДУЮЩЕЙ операции пачки: джоба
+    // падает, итог не уходит, а на повторе те же операции получают `false` — и о них не сказано бы
+    // НИКОГДА. Поэтому свёрнутые заявляются вплотную к отправке.
+    const claimed = new Set<string>()
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
+    deps.claimUnmatchedNotice = async (memberId, key, account) => {
+      calls.unmatchedClaim.push([memberId, key, account])
+      if (claimed.has(key)) return false
+      claimed.add(key)
+      return true
+    }
+    const ops = [...unmatchedOps(8), item('d9', 'credit')]
+    const writeActivity = deps.writeActivity
+    deps.writeActivity = async (it, companyId, memberId, note) => {
+      if (it.docId === 'd9') throw new Error('поздняя операция пачки упала')
+      return writeActivity(it, companyId, memberId, note)
+    }
+
+    await expect(handleCrmSyncJob(job(ops), deps)).rejects.toThrow('поздняя операция')
+    expect(calls.unmatchedNotify).toHaveLength(5) // поштучные ушли и заявлены
+    expect(calls.unmatchedSummary).toEqual([]) // итог не ушёл — джоба упала раньше
+    // ⚠ Несущее: заявок ровно пять, на свёрнутые d6..d8 их не брали.
+    expect(calls.unmatchedClaim).toHaveLength(5)
+
+    // Повтор той же джобы (BullMQ), теперь без падения.
+    deps.writeActivity = writeActivity
+    await handleCrmSyncJob(job(ops), deps)
+    // ⚠ Несущее — НИ ОДНА операция не потеряна. Форма при этом меняется, и это нормально: заявки
+    // d1..d5 сожжены, поэтому на повторе они молчат, кап освобождается, и прежде свёрнутые d6..d8
+    // получают место в нём и уходят ПОШТУЧНО, а не итогом.
+    const announced = calls.unmatchedNotify.map(c => (c as [string])[0])
+    expect(announced).toEqual(['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8', 'd9'])
+  })
+
+  it('чат ошибок ВЫКЛЮЧЕН → ни поштучно, ни итогом, ни заявок — даже когда операций много', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null }) // errorChat по умолчанию off
+    const r = await handleCrmSyncJob(job(unmatchedOps(8)), deps)
+    expect(r).toMatchObject({ unmatched: 8 }) // метрика честная и без чата
+    expect(calls.unmatchedNotify).toEqual([])
+    expect(calls.unmatchedSummary).toEqual([])
+    expect(calls.unmatchedClaim).toEqual([])
+  })
+
+  it('у скрытой операции пустой счёт контрагента → в список он не попадает', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null, errorChat: { dialogId: 'err' } })
+    const ops = unmatchedOps(8).map((it, i) => (
+      i >= 5 && i !== 6 ? { ...it, counterparty: { ...it.counterparty, account: '  ' } } : it
+    ))
+    await handleCrmSyncJob(job(ops), deps)
+    const [summary] = calls.unmatchedSummary[0] as [{ hidden: number, accounts: string[] }]
+    // Скрыты три (d6..d8), но счёт есть только у d7 — пустые в список не идут, а СЧИТАЮТСЯ.
+    expect(summary).toMatchObject({ hidden: 3, accounts: ['BY7'] })
+  })
+
+  it('часть скрытых записана в «мою компанию», часть нет → в итоге оба числа', async () => {
+    // ⚠ Смешанный случай `0 < hiddenUnrecorded < hidden` до сих пор проверялся только на чистом
+    // билдере: фикстура отдаёт одну «мою компанию» на всю пачку, и сборка счётчика по операциям
+    // не проверялась вовсе (находка панели ревью).
+    // ⚠ «Моя компания» кэшируется ПО НАШЕМУ СЧЁТУ на прогон, поэтому разводить операции надо
+    // счётом, а не docId — иначе первый же ответ достаётся всей пачке и смешанного случая не выйдет.
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', errorChat: { dialogId: 'err' } })
+    deps.findMyCompany = async it => (it.account === 'B' ? null : 'MY')
+    const ops = unmatchedOps(8).map((it, i) => (i === 6 ? { ...it, account: 'B' } : it))
+    await handleCrmSyncJob(job(ops), deps)
+    const [summary] = calls.unmatchedSummary[0] as [{ hidden: number, hiddenUnrecorded: number }]
+    expect(summary).toMatchObject({ hidden: 3, hiddenUnrecorded: 1 })
   })
 
   it('handles a mixed batch: one skipped, one new, one unmatched (counters do not leak)', async () => {
