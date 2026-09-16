@@ -34,6 +34,15 @@ export interface SetupStatusDeps {
   pollEnabled: boolean
   /** Cron period in minutes (`CRON_INTERVAL_MIN`). */
   pollIntervalMin: number
+  /**
+   * Через сколько суток после СОЗДАНИЯ автоудаление снимает дело (#722).
+   *
+   * ⚠ Отдаётся сервером, потому что браузер этого знать не может: порог выводится из окна опроса
+   * (`CRON_LOOKBACK_DAYS`), а это переменная НАШЕГО окружения. Зашей интерфейс своё число — и он
+   * называл бы срок, не имеющий отношения к тому, что делает автомат, ровно в разделе, где
+   * человек решает, стирать ли свои данные.
+   */
+  autoEraseDays: number
   /** Epoch ms the last import run finished, or null if it never ran. */
   lastRunMs: (memberId: string) => Promise<number | null>
   /** Есть ли компания «моя» с расчётным счётом (#493). Отсутствует ⇒ строку не показываем.
@@ -100,6 +109,7 @@ export async function handleSetupStatus(
       pausedAccounts: counts.paused ?? 0,
       pollEnabled: deps.pollEnabled,
       pollIntervalMin: deps.pollIntervalMin,
+      autoEraseDays: deps.autoEraseDays,
       // Ключ появляется только когда он есть: пустая строка на экране читалась бы как «вот ваш
       // client_id», и человек вписал бы в банк пустоту.
       ...(deps.alfaClientId ? { alfaClientId: deps.alfaClientId } : {}),

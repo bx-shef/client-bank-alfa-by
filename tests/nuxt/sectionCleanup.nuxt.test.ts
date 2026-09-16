@@ -17,7 +17,10 @@ vi.mock('~/composables/useIsAdmin', () => ({
 }))
 // Состояние опроса читается живьём (#576, находка ревью): предупреждение обязано различать
 // «опрос идёт» и «опрос стоит», иначе оно одинаково в опасном и безопасном случае.
-const pollState = { pollEnabled: true, connectedAccounts: 1, pausedAccounts: 0 }
+// ⚠ `autoEraseDays` приходит С СЕРВЕРА (#722): порог выводится из окна опроса, то есть из нашей
+// env, и компонент обязан показывать именно его. Фикстура намеренно НЕ равна полу (5), иначе
+// зашитое в компоненте число прошло бы тест незамеченным.
+const pollState = { pollEnabled: true, connectedAccounts: 1, pausedAccounts: 0, autoEraseDays: 12 }
 vi.mock('~/composables/useSetupStatus', () => ({
   useSetupStatus: () => ({
     status: { value: pollState },
@@ -39,7 +42,7 @@ vi.stubGlobal('$fetch', fetchMock)
 afterEach(() => {
   fetchMock.mockClear()
   counted.value = { count: 7, capped: false }
-  Object.assign(pollState, { pollEnabled: true, connectedAccounts: 1, pausedAccounts: 0 })
+  Object.assign(pollState, { pollEnabled: true, connectedAccounts: 1, pausedAccounts: 0, autoEraseDays: 12 })
 })
 
 async function mountReady() {
@@ -163,5 +166,24 @@ describe('раздел «Очистка» (#576 п.4)', () => {
     // ⚠ Текст рядом перечисляет, чего мы не трогаем у клиента; молчание про наш же смарт-процесс
     // на этом фоне читалось бы как «его тоже стёрли». А выходит наоборот.
     expect((await mountReady()).text()).toContain('Элементы смарт-процесса')
+  })
+})
+
+describe('SectionCleanup — автоудаление (#722)', () => {
+  it('срок берётся С СЕРВЕРА, а не зашит в компоненте', async () => {
+    // ⚠ Порог выводится из окна опроса (`CRON_LOOKBACK_DAYS`), которого браузер знать не может.
+    // Зашей компонент своё число — и он называл бы человеку срок, не имеющий отношения к тому,
+    // что делает автомат, ровно в разделе, где решают судьбу своих данных.
+    const w = await mountReady()
+    const toggle = w.find('[data-testid="auto-erase"]')
+    expect(toggle.exists()).toBe(true)
+    expect(w.text()).toContain('12 суток')
+  })
+
+  it('предупреждение появляется ТОЛЬКО при включённой настройке', async () => {
+    // Постоянный красный блок рядом с выключенной настройкой перестают читать — то же правило,
+    // что у авто-проведения.
+    const w = await mountReady()
+    expect(w.find('[data-testid="auto-erase-warning"]').exists()).toBe(false)
   })
 })
