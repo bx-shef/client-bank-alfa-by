@@ -22,7 +22,7 @@ import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 import type { BankProviderId } from '../../app/types/statement'
 import { withAdvisoryLock } from './dbLock'
 import { bankRefreshLockKey } from './bankRefreshLock'
-import { getBankToken, markBankRefreshAttempt, updateBankTokenSecrets } from './bankTokenStore'
+import { getBankToken, markBankRefreshAttempt, markBankRefreshRejected, updateBankTokenSecrets } from './bankTokenStore'
 import { dbQuery } from '../db/client'
 import type { BankToken } from './bankTokenStore'
 import type { QueryFn } from './tokenStore'
@@ -126,6 +126,14 @@ export interface BankRefreshDeps {
    */
   markAttempt?: (token: BankToken, nowMs: number) => Promise<void>
   /**
+   * Отметить ОПРЕДЕЛЁННЫЙ отказ банка в гранте (#713). Необязательна: движок обязан работать и без
+   * диагностики.
+   *
+   * ⚠ ЛУЧШИЕ УСИЛИЯ, как и `markAttempt`: отказ отметки не смеет отменить продление — иначе
+   * диагностика ломала бы то, что диагностирует.
+   */
+  markRejected?: (token: BankToken, nowMs: number) => Promise<void>
+  /**
    * Переиздать пару токенов КЛЮЧОМ API (Password Grant у Альфы, #488). Отсутствует ⇒ переиздания
    * нет, поведение прежнее.
    *
@@ -205,6 +213,7 @@ const liveDeps: BankRefreshDeps = {
   // внутри транзакции, откатилась бы вместе с ним, и колонка не стала бы ненулевой НИКОГДА —
   // ровно тот мёртвый механизм, который уже ловили замером в #574.
   markAttempt: (token, nowMs) => markBankRefreshAttempt(dbQuery, token, nowMs),
+  markRejected: (token, nowMs) => markBankRefreshRejected(dbQuery, token, nowMs),
   // Переиздание пары ключом API (#488). Тот же транспорт и тот же потолок, что у обновления —
   // это тот же эндпоинт банка, отличается только тело.
   reissueWithKey: (url, body) => {
@@ -294,6 +303,42 @@ export function bankOAuthErrorDetail(e: unknown, secrets: readonly string[] = []
   // `refresh_token`, а его апстрим цитирует ЗНАЧЕНИЕМ («refresh token 'AbCd…' already used»), под
   // шаблон не попадающим. Поэтому вторым проходом вырезаем то, что реально отправили.
   return logSafe(redactValues(redactCredentials(detail), secrets), 200)
+}
+
+/**
+ * ОПРЕДЕЛЁННО ли банк отверг сам грант (#713) — в отличие от «мы не дозвонились».
+ *
+ * ⚠ Это ЕДИНСТВЕННОЕ место, где мы разбираем ответ банка ради РЕШЕНИЯ, и рядом стоит прямо
+ * противоположное правило: решать, переиздавать ли пару, по тексту ошибки нельзя. Противоречия
+ * нет, потому что вопросы разные. Там решается ДЕЙСТВИЕ против банка, и оно одно и то же при любой
+ * причине. Здесь записывается СОСТОЯНИЕ, и разница между «грант мёртв» и «сеть моргнула»
+ * несимметрична по цене: первое обязано позвать человека, второе обязано промолчать.
+ *
+ * Три сужения, каждое — против ложного «истекло»:
+ *
+ *  1. **Только 4xx.** 5xx, таймаут и обрыв — это «банк не ответил», а не «банк отказал».
+ *  2. **Только машинный код `error` из тела**, а НЕ человеческое описание. `invalid_grant`
+ *     определён RFC 6749, его шлёт сам сервер, и он не меняется от локали и настроения вендора.
+ *     Разбор `error_description` регуляркой был бы ровно тем «чтением чужой строки», которое
+ *     репозиторий уже признал негодным (#614 держится на нём только потому, что машинного кода
+ *     Bitrix24 на тот отказ не даёт вовсе — и платит за это предохранителем по доле флота).
+ *  3. **`invalid_client` НЕ считается.** Это «неверен НАШ client_secret» — состояние всего
+ *     сервиса, а не этого подключения. Пометив по нему, мы при ротации своего секрета объявили бы
+ *     мёртвыми ВСЕ подключения флота разом и разослали бы клиентам приглашение идти в банк.
+ *     Замерено на живом `oauth.bitrix.info` (#574): сервер разводит эти два кода именно так.
+ *
+ * ⚠ Конверт не по RFC (`{fault:…}` у шлюза Альфы, `{Code, Errors:[…]}` у Приора) сюда НЕ попадает
+ * и метки не ставит: поведение остаётся прежним. Это осознанный недобор, а не упущение — лучше
+ * промолчать, чем угадать. Замеренный случай Приора (#713) приходит именно в форме RFC.
+ */
+export function bankGrantRejected(e: unknown): boolean {
+  const status = Number((e as { status?: unknown })?.status
+    ?? (e as { response?: { status?: unknown } })?.response?.status ?? 0)
+  if (!(status >= 400 && status < 500)) return false
+  const data = (e as { data?: unknown })?.data
+  if (data == null || typeof data !== 'object') return false
+  const code = (data as Record<string, unknown>).error
+  return typeof code === 'string' && code.trim().toLowerCase() === 'invalid_grant'
 }
 
 /**
@@ -422,6 +467,22 @@ export async function ensureBankToken(
       // наоборот. Мутация `message` сохраняет объект целиком; ofetch создал его для нас и больше
       // никому не отдал.
       if (detail && e instanceof Error) e.message = `${e.message} — банк ответил: ${detail}`
+      // ⚠ ОТМЕТКА ОТКАЗА — ЗДЕСЬ ЖЕ, в единственной точке, где известен ответ банка (#713). У
+      // вызывающих её ставить нельзя по тому же доводу, что и обогащение сообщения: путей четверо,
+      // и обогатить пришлось бы каждый — ровно так `markBankRefreshAttempt` однажды и оказался
+      // только на одном из них (#488).
+      //
+      // ⚠ Порядок с переизданием ниже значения не имеет: успешное переиздание пишет свежую пару
+      // тем же оператором, который метку СБРАСЫВАЕТ (`updateBankTokenSecrets`), поэтому
+      // самолечение Альфы гасит её само, а у Приора переиздавать нечем — метка остаётся, и
+      // подключение наконец перестаёт выглядеть здоровым.
+      if (bankGrantRejected(e)) {
+        try {
+          await deps.markRejected?.(stored, deps.now())
+        } catch {
+          // Лучшие усилия: продление важнее собственной диагностики.
+        }
+      }
       // ⚠ ПЕРЕИЗДАНИЕ — ПОСЛЕ отказа, а не вместо обновления. Обмен refresh дешевле и ротирует пару
       // штатно; ключ это запасной путь. Пробуй мы его первым, каждый тик тратил бы лишний запрос из
       // общего лимита банка, а ключ светился бы в сети чаще, чем нужно.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   BANK_REFRESH_TTL_MEASURED,
+  abandonedPending,
   BANK_REFRESH_TTL_SEC,
   CONSENT_WARN_DAYS,
   EXPIRED_NEVER_TRIED_HINT,
@@ -10,6 +11,8 @@ import {
   consentExpiringSoon,
   expiredCause,
   refreshAtAgeMs,
+  NEEDS_HUMAN_HEALTH,
+  refreshRejectedByBank,
   type ConnectionLike
 } from '../app/utils/bankTokenLifetime'
 
@@ -260,5 +263,76 @@ describe('ПОЧЕМУ истекло: банк отказал или мы не 
     const due: ConnectionLike = { ...ok, connectedAt: NOW - TTL * 0.75 }
     expect(connectionHealth(due, NOW)).toBe('due')
     expect(connectionHint(due, NOW)).toContain('Действий не требуется')
+  })
+})
+
+// ⚠ ДЕФЕКТ, РАДИ КОТОРОГО ЭТО НАПИСАНО (#713). Подключение Приора было мертво больше суток —
+// каждый опрос падал на `invalid_grant`, — а все три поверхности разом говорили «в порядке»:
+// тревога оператору, консоль `/queues` и экран готовности портала. Причина одна и та же: срок
+// жизни refresh у Приора НЕ ИЗМЕРЕН, поэтому строка любого возраста получала `'due'`, а `'due'`
+// не входит в `NEEDS_HUMAN_HEALTH`.
+describe('отказ БАНКА хоронит подключение независимо от измеренного срока (#713)', () => {
+  const prior = (over: Partial<ConnectionLike> = {}): ConnectionLike =>
+    ({ provider: 'prior-by', connectedAt: NOW - HOUR, hasRefresh: true, ...over })
+
+  it('мёртвый грант Приора теперь «истекло», а не «скоро обновим»', () => {
+    // Свежая пара час назад, срок жизни не измерен — раньше это давало 'ok'/'due' ВСЕГДА.
+    expect(connectionHealth(prior(), NOW)).not.toBe('expired')
+    expect(connectionHealth(prior({ refreshRejectedAt: NOW - 60_000 }), NOW)).toBe('expired')
+  })
+
+  // ⚠ Мутационно проверено: убрать ветку `refreshRejectedByBank` из `connectionHealth` — и этот
+  // тест краснеет. Он и есть весь смысл задачи; без него состояние опять становится невидимым.
+  it('и это доходит до списка «требует человека» — иначе молчали бы все три поверхности', () => {
+    expect(NEEDS_HUMAN_HEALTH.includes(connectionHealth(prior({ refreshRejectedAt: NOW - 60_000 }), NOW))).toBe(true)
+  })
+
+  // ⚠ Отметка СТАРШЕ последней удачной пары ничего не значит: успех сбрасывает её тем же
+  // оператором, которым пишет пару, но человек мог и переподключиться заново. Без этого сравнения
+  // однажды отвергнутое подключение осталось бы красным навсегда, сколько бы раз его ни чинили, —
+  // то есть мы получили бы зеркальную копию исходного дефекта.
+  it('переподключение гасит старую отметку: она старше новой пары', () => {
+    expect(refreshRejectedByBank(prior({ connectedAt: NOW - HOUR, refreshRejectedAt: NOW - 2 * HOUR })))
+      .toBe(false)
+    expect(connectionHealth(prior({ connectedAt: NOW - HOUR, refreshRejectedAt: NOW - 2 * HOUR }), NOW))
+      .not.toBe('expired')
+  })
+
+  it('пустая/нулевая отметка — «не отвергал», а не «отверг в эпоху»', () => {
+    expect(refreshRejectedByBank(prior())).toBe(false)
+    expect(refreshRejectedByBank(prior({ refreshRejectedAt: 0 }))).toBe(false)
+    expect(refreshRejectedByBank(prior({ refreshRejectedAt: Number.NaN }))).toBe(false)
+  })
+
+  // ⚠ Отказ отвечает на вопрос «почему истекло» САМ: раз банк назвал грант негодным, «никто не
+  // пробовал» ложно по построению — даже если отметки попытки нет вовсе (её могли не успеть
+  // записать, она лучшие усилия). Совет «переподключите» здесь верен.
+  it('причина — «банк отказал», даже когда отметки попытки нет', () => {
+    expect(expiredCause(prior({ refreshRejectedAt: NOW - 60_000, lastAttemptAt: 0 }), NOW)).toBe('bank-refused')
+  })
+
+  // ⚠ СЛЕДСТВИЕ, КОТОРОЕ НАДО ЗНАТЬ, А НЕ ОБНАРУЖИТЬ ПОТОМ: `abandonedPending` сносит
+  // `~pending:`-строку сразу, как только она «истекла». Значит отвергнутое банком ожидающее
+  // подключение теперь удаляется свипом, не дожидаясь потолка возраста в двое суток (#715).
+  //
+  // Это желаемое поведение: счёт не выбран, опрос по такой строке не идёт, грант мёртв — довести
+  // её до рабочей нельзя ничем, а до сих пор она ходила в банк на каждом прогоне продления и жгла
+  // его лимит. ⚠ Живого подключения с ВЫБРАННЫМ счётом это не касается: его удаляет только
+  // `bankReaper`, а он выводит смерть из согласия банка либо ИЗМЕРЕННОГО срока — про эту отметку
+  // он не знает вовсе (проверено чтением `bankDeathSinceMs`).
+  it('отвергнутое ОЖИДАЮЩЕЕ подключение свип сносит сразу, а не через двое суток (#715)', () => {
+    const pending = (over: Partial<ConnectionLike> = {}) => ({
+      provider: 'prior-by' as const,
+      accountKey: '~pending:n1',
+      connectedAt: NOW - HOUR,
+      hasRefresh: true,
+      ...over
+    })
+    expect(abandonedPending(pending(), NOW)).toBe(false)
+    expect(abandonedPending(pending({ refreshRejectedAt: NOW - 60_000 }), NOW)).toBe(true)
+  })
+
+  it('у Альфы работает так же — правило не про провайдера, а про ответ банка', () => {
+    expect(connectionHealth(c({ refreshRejectedAt: NOW - 60_000 }), NOW)).toBe('expired')
   })
 })

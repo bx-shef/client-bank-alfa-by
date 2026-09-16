@@ -316,7 +316,7 @@ describe('раздел «подписка не отвечает» (#614)', () =>
     return {
       id: 1, memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01',
       connectedAt: NOW_S - 60_000, expiresAt: NOW_S + 3_600_000, hasRefresh: true,
-      lastAttemptAt: 0, consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
+      lastAttemptAt: 0, refreshRejectedAt: 0, consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
     } as BankHealthRow
   }
   const hash = (m: string) => `h-${m}`

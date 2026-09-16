@@ -172,6 +172,32 @@ export interface ConnectionLike {
    * вывода, а не более уверенного.
    */
   lastAttemptAt?: number
+  /**
+   * Epoch ms, когда банк ОПРЕДЕЛЁННО отверг продление этого гранта (#713). `0`/отсутствует — не
+   * отвергал.
+   *
+   * ⚠ Авторитет тот же, что у `consentExpiresAt`: это ответ БАНКА, а не наша оценка по часам.
+   * Поэтому он хоронит подключение и там, где срок жизни refresh у нас не измерен.
+   *
+   * ⚠ Необязательное намеренно, как и `lastAttemptAt`: часть вызывающих строит `ConnectionLike` из
+   * данных, где колонки нет вовсе. Отсутствие читается как «не отвергал» — в сторону осторожного
+   * вывода, а не уверенного.
+   */
+  refreshRejectedAt?: number
+}
+
+/**
+ * Отверг ли БАНК продление этого гранта после последней удачной пары (#713).
+ *
+ * ⚠ Сравнение с `connectedAt` обязательно, а не просто «метка непустая»: успешное обновление
+ * сбрасывает её тем же оператором, которым пишет пару, но подключение могли и переподключить
+ * заново — тогда `connectedAt` уходит вперёд, а старая метка (если её почему-то не сбросили)
+ * обязана перестать значить что-либо. Иначе однажды отвергнутое подключение осталось бы мёртвым
+ * на экране навсегда, сколько бы раз человек его ни чинил.
+ */
+export function refreshRejectedByBank(c: ConnectionLike): boolean {
+  const rejected = Number(c.refreshRejectedAt ?? 0)
+  return Number.isFinite(rejected) && rejected > 0 && rejected > c.connectedAt
 }
 
 /**
@@ -189,6 +215,12 @@ export function connectionHealth(c: ConnectionLike, nowMs: number): BankConnecti
   // ровно тот разрыв между «выглядит» и «работает», ради которого написан весь модуль.
   if (consentExpired(c, nowMs)) return 'expired'
   if (!c.hasRefresh) return 'no-refresh'
+  // ⚠ ОТКАЗ БАНКА — ЕГО ОТВЕТ, и он сильнее любых наших часов (#713). До этой ветки подключение
+  // Приора, чей грант банк уже отверг, получало `'due'` ЛЮБОГО возраста: срок жизни его refresh у
+  // нас не измерен, а «истекло» мы произносим только про измеренный. Довод правильный, но он
+  // отвечал не на тот вопрос — здесь не догадка о сроке, а прямой отказ, и прятать его значило
+  // держать мёртвое подключение зелёным во ВСЕХ трёх поверхностях сразу (замер #713).
+  if (refreshRejectedByBank(c)) return 'expired'
   const ttlMs = (BANK_REFRESH_TTL_SEC[c.provider] ?? 0) * 1000
   if (ttlMs <= 0) return 'unknown'
   const age = nowMs - c.connectedAt
@@ -237,6 +269,10 @@ export type ExpiredCause = 'bank-refused' | 'never-tried'
 
 export function expiredCause(c: ConnectionLike, nowMs: number): ExpiredCause {
   void nowMs
+  // ⚠ Прямой отказ банка отвечает на этот вопрос САМ и не нуждается в выводе по двум меткам (#713):
+  // раз банк назвал грант негодным, «никто не пробовал» ложно по построению. Ветка стоит первой,
+  // потому что отметка попытки — наша, а эта — банка, и спорить с ней нечем.
+  if (refreshRejectedByBank(c)) return 'bank-refused'
   const attempt = Number(c.lastAttemptAt ?? 0)
   const success = Number(c.connectedAt)
   if (!Number.isFinite(attempt) || attempt <= 0) return 'never-tried'

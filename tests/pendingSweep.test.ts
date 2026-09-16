@@ -22,6 +22,7 @@ function row(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     provider: 'alfa-by',
     accountKey: provisionalAccountKey('n1'),
     connectedAt: NOW - DAY * 3,
+    refreshRejectedAt: 0,
     expiresAt: NOW + 3600_000,
     hasRefresh: true,
     pollPaused: false,
