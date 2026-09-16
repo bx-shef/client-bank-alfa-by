@@ -95,7 +95,9 @@ export interface HandlerDeps {
    *  atomically). Returns the created activity id, or `null` if nothing was written (e.g.
    *  no company matched, so there's no owner). Optional `note` prepends a reason block —
    *  used for the UNMATCHED-client fallback written to my company (#91). */
-  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string) => Promise<string | null>
+  /** ⚠ `providerId` едет сюда ради блока «Источник» на карточке (#729): в `StatementItem` его нет,
+   *  он свойство ПАЧКИ, а не операции. */
+  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string, providerId?: BankProviderId) => Promise<string | null>
   /**
    * Registry write (#575): ensure the payment SP carries an element for THIS operation.
    *
@@ -886,7 +888,7 @@ export async function handleCrmSyncJob(
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
     }
-    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
+    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note, job.providerId)
     // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including
     // the ones that matched nothing — those are exactly the ones no other callback reports.
     const opOutcome = {

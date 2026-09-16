@@ -78,6 +78,20 @@ function line(label: string, value: string): string {
 }
 
 /**
+ * Насколько подробно расписывать операцию в ОПИСАНИИ дела (#729).
+ *
+ * `slim` — реквизиты ушли в блоки карточки (`activityBlocks.ts`), в тексте остаётся только то, что
+ * читают абзацем: причина и назначение платежа.
+ * `full` — прежние семь подписанных строк.
+ *
+ * ⚠ Режима ДВА не ради настройки, а потому что блоки ложатся НЕ ВЕЗДЕ: запасной носитель (#722,
+ * системное `crm.activity.add` на старом портале) их не принимает — замерено. Там описание
+ * остаётся единственным местом, где вообще есть сумма, контрагент и счёт, и урезать его значило бы
+ * оставить такой портал с одним заголовком.
+ */
+export type DescriptionMode = 'slim' | 'full'
+
+/**
  * The BB description of one operation.
  *
  * Empty payer-controlled fields are DROPPED rather than rendered as an empty label — a физлицо
@@ -86,12 +100,30 @@ function line(label: string, value: string): string {
  *
  * `note` (the unmatched-client reason, #91) leads the text: it explains why the operation is
  * sitting on THIS card, which is the first question its reader will have.
+ *
+ * ⚠ В режиме `slim` СЧЁТА КОНТРАГЕНТА В ОПИСАНИИ НЕТ (решение владельца 2026-09-16) — он показан
+ * блоком. Это ломает ОДНУ существующую возможность: «Очистка» умеет стирать дела по счёту
+ * плательщика (#591) и берёт этот счёт РАЗБОРОМ строки `[B]Счёт:[/B]` из описания, потому что в
+ * маркере лежит НАШ счёт, а не его. Для дел, записанных до этой правки, фильтр продолжает работать;
+ * для новых он совпадений не найдёт. Осознанный хвост, а не недосмотр — см. `eraseActivities.ts`.
  */
-export function buildActivityDescription(item: StatementItem, note?: string): string {
+export function buildActivityDescription(item: StatementItem, note?: string, mode: DescriptionMode = 'full'): string {
   const cp = item.counterparty
   const kind = item.direction === 'credit' ? 'Приход' : 'Расход'
   const parts: string[] = []
   if (note && note.trim()) parts.push(neutralizeBb(note.trim()), '')
+  if (mode === 'slim') {
+    // ⚠ БЕЗ подписи «Назначение:» (решение владельца 2026-09-16): текст назначения идёт абзацем,
+    // и подписывать его нечем не от чего отличать — слово только съедало строку.
+    const only = neutralizeBb(item.purpose)
+    if (only) parts.push(only)
+    // ⚠ Счёт плательщика — СРАЗУ под назначением, как его основание (решение владельца), и подпись
+    // у него ОБЯЗАНА быть: по строке `[B]Счёт:[/B]` «Очистка» отбирает дела по счёту плательщика
+    // (#591). В маркере лежит НАШ счёт, а не его, и другого машиночитаемого места у него нет.
+    const account = neutralizeBb(cp.account)
+    if (account) parts.push(line('Счёт', account))
+    return parts.join('\n')
+  }
   parts.push(line(kind, `${formatMoney(item.amount)} ${item.currency}`))
   parts.push(line('Документ', item.docNum
     ? `#${neutralizeBb(item.docNum)} от ${formatIsoDate(item.acceptDate)}`
@@ -136,7 +168,8 @@ export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef, n
     ownerId: company.id,
     deadline: toPortalDeadline(item.acceptDate),
     title: neutralizeBb(buildActivityTitle(item)).slice(0, MAX_TITLE_CHARS),
-    description: buildActivityDescription(item, note),
+    // slim: реквизиты показывает таблица блоков (#729), в тексте — причина и назначение.
+    description: buildActivityDescription(item, note, 'slim'),
     colorId: item.direction === 'credit' ? TODO_COLOR_CREDIT : TODO_COLOR_DEBIT,
     ...(company.assignedById ? { responsibleId: company.assignedById } : {})
   }

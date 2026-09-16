@@ -4,7 +4,7 @@ import {
   LEGACY_ACTIVITY_ADD_METHOD, LEGACY_ACTIVITY_TYPE_MEETING,
   buildLegacyActivity, extractLegacyActivityId
 } from '../app/utils/legacyActivity'
-import { ACTIVITY_ORIGINATOR_ID, activityOriginId, buildActivityMarkerUpdate, buildTodoActivity } from '../app/utils/todoActivity'
+import { ACTIVITY_ORIGINATOR_ID, activityOriginId, buildActivityDescription, buildActivityMarkerUpdate, buildTodoActivity } from '../app/utils/todoActivity'
 import { ACTIVITY_ORIGIN } from '../app/utils/activity'
 import { counterpartyAccountOf } from '../app/utils/eraseActivities'
 
@@ -64,12 +64,21 @@ describe('запасное системное дело (#722)', () => {
     expect('colorId' in credit).toBe(false)
   })
 
-  it('описание — ТО ЖЕ, что у основного носителя (две копии разошлись бы молча)', () => {
+  it('описание собирает ТОТ ЖЕ билдер, только в полном режиме (#729)', () => {
+    // ⚠ Прежде тут стояло `legacy.DESCRIPTION === todo.description`, и это перестало быть верным
+    // осознанно: основной носитель ушёл на slim (реквизиты показывает таблица блоков), а системное
+    // дело блоков НЕ ПРИНИМАЕТ — замерено. Инвариант поэтому сменился, но не исчез: копии билдера
+    // по-прежнему нет, запасной путь зовёт ту же функцию с 'full'.
     const legacy = buildLegacyActivity(ITEM, COMPANY, 7).fields
-    const todo = buildTodoActivity(ITEM, COMPANY)
-    expect(legacy.DESCRIPTION).toBe(todo.description)
-    expect(legacy.SUBJECT).toBe(todo.title)
+    expect(legacy.DESCRIPTION).toBe(buildActivityDescription(ITEM, undefined, 'full'))
+    expect(legacy.SUBJECT).toBe(buildTodoActivity(ITEM, COMPANY).title)
     expect(legacy.DESCRIPTION_TYPE).toBe(3) // BB, иначе разметка читается буквально
+  })
+
+  it('системное дело несёт ПОЛНОЕ описание — блоков на нём не будет никогда', () => {
+    // Урезать его значило бы оставить старый портал с одним заголовком: ни суммы, ни счёта.
+    const { DESCRIPTION } = buildLegacyActivity(ITEM, COMPANY, 7).fields
+    for (const kept of ['Контрагент', 'УНП', 'Счёт', 'Назначение']) expect(DESCRIPTION).toContain(kept)
   })
 
   it('обязательные поля системного дела заполнены', () => {

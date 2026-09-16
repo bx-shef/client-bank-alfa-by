@@ -3,6 +3,7 @@ import type { StatementItem } from '../app/types/statement'
 import {
   ACTIVITY_DELETE_METHOD, ACTIVITY_UPDATE_METHOD, TODO_ACTIVITY_ADD_METHOD
 } from '../app/utils/todoActivity'
+import { ACTIVITY_BLOCKS_SET_METHOD } from '../app/utils/activityBlocks'
 import { ACTIVITY_LIST_METHOD } from '../server/utils/activityMarkerLookup'
 import { extractTodoActivityId, resetMarkerProof, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
 
@@ -36,14 +37,26 @@ describe('extractTodoActivityId', () => {
 })
 
 describe('writeTodoActivityViaRest', () => {
-  it('создаёт дело и СРАЗУ ставит маркер — ровно два вызова', async () => {
+  it('создаёт дело, СРАЗУ ставит маркер и вешает блоки карточки', async () => {
     const calls: string[] = []
     const call = vi.fn(async (method: string) => {
       calls.push(method)
       return method === TODO_ACTIVITY_ADD_METHOD ? { result: { id: 7 } } : { result: true }
     })
     await expect(writeTodoActivityViaRest(item(), '42', call)).resolves.toBe('7')
-    expect(calls).toEqual([TODO_ACTIVITY_ADD_METHOD, ACTIVITY_UPDATE_METHOD])
+    // ⚠ Блоки (#729) — ТРЕТЬИМ и строго ПОСЛЕ маркера: до него дело ещё может быть удалено
+    // компенсацией, и оформлять нечего.
+    expect(calls).toEqual([TODO_ACTIVITY_ADD_METHOD, ACTIVITY_UPDATE_METHOD, ACTIVITY_BLOCKS_SET_METHOD])
+  })
+
+  it('отказ блоков НЕ роняет запись — операция уже зачтена дедупом', async () => {
+    // ⚠ Проброс отменил бы обработку всей оставшейся пачки, ничего не починив: повтор упрётся
+    // в маркер и до блоков не дойдёт. Тот же довод, что у привязок дела (#579).
+    const call = vi.fn(async (method: string) => {
+      if (method === ACTIVITY_BLOCKS_SET_METHOD) throw new Error('blocks refused')
+      return method === TODO_ACTIVITY_ADD_METHOD ? { result: { id: 7 } } : { result: true }
+    })
+    await expect(writeTodoActivityViaRest(item(), '42', call)).resolves.toBe('7')
   })
 
   it('маркер ставится на СОЗДАННОЕ дело и несёт тип описания', async () => {
