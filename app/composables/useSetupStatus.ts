@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/composables/useFrameAuth'
+import { AUTO_ERASE_MIN_DAYS } from '~/utils/autoEraseActivities'
 
 // Server-side half of the setup checklist (#409/#405) — what the browser cannot know: connected
 // bank accounts, the poll gate + period, and when the last run finished. The other half (chat,
@@ -23,6 +24,8 @@ export interface SetupStatus {
   alfaClientId?: string
   pollEnabled: boolean
   pollIntervalMin: number
+  /** Через сколько суток автоудаление снимает дело (#722). Считает сервер — см. `setupStatus.ts`. */
+  autoEraseDays: number
   lastRunMs: number | null
   /** Компания «моя» с расчётным счётом (#493). `undefined` — сервер не ответил на этот вопрос
    *  (старая сборка или отказ REST); строка тогда не рисуется вовсе. */
@@ -39,6 +42,9 @@ const DEFAULTS: SetupStatus = {
   pendingAccounts: 0,
   pollEnabled: false,
   pollIntervalMin: 5,
+  // ⚠ Умолчание — ПОЛ порога, а не выдуманное число: `autoEraseThresholdDays` меньше него не
+  // возвращает никогда, поэтому подпись на экране остаётся правдой и до ответа сервера.
+  autoEraseDays: AUTO_ERASE_MIN_DAYS,
   lastRunMs: null
 }
 
@@ -102,6 +108,7 @@ export function useSetupStatus() {
         pausedAccounts: Number(res?.pausedAccounts) || 0,
         pollEnabled: res?.pollEnabled === true,
         pollIntervalMin: Number(res?.pollIntervalMin) || DEFAULTS.pollIntervalMin,
+        autoEraseDays: Number(res?.autoEraseDays) || DEFAULTS.autoEraseDays,
         lastRunMs: typeof res?.lastRunMs === 'number' ? res.lastRunMs : null,
         ...(res?.myCompany ? { myCompany: res.myCompany } : {}),
         // ⚠ Переносим ТОЛЬКО непустое: пустая строка на экране читалась бы как «вот ваш client_id»,

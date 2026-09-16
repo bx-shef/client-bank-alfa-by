@@ -158,3 +158,31 @@ export async function saveImportResult(query: QueryFn, memberId: string, summary
 export async function deleteImportResultForPortal(query: QueryFn, memberId: string): Promise<void> {
   await query(`DELETE FROM import_result WHERE member_id = $1`, [memberId])
 }
+
+/**
+ * Порталы-кандидаты на автоудаление дел (#722): те, у кого есть след импорта И живая регистрация.
+ *
+ * ⚠ Это ОПТИМИЗАЦИЯ ПО ВЫЗОВАМ В ЧУЖОЙ ПОРТАЛ, а не по нашим запросам. У портала, который ни разу
+ * не импортировал, наших дел не существует в принципе — спрашивать его настройку значило бы
+ * тратить REST-вызов, чтобы узнать «удалять нечего». `JOIN portal_tokens` отсекает вторую такую
+ * трату: без токена вызов всё равно невозможен.
+ *
+ * ⚠ Отбора по `activities_created > 0` НЕТ намеренно: колонка описывает ПОСЛЕДНИЙ прогон, а дела
+ * копились предыдущими. Портал, чей вчерашний прогон записал ноль дел, вполне может держать сотню
+ * позавчерашних — и именно их автоудаление и существует, чтобы убрать.
+ *
+ * ⚠ Порядок стабильный (`member_id`), потому что прогон капится: остаток обязан достаться
+ * следующему прогону, а не тасоваться между ними.
+ */
+export async function selectAutoErasePortals(query: QueryFn, limit: number): Promise<string[]> {
+  const rows = await query(
+    `SELECT r.member_id FROM import_result r
+       JOIN portal_tokens t ON t.member_id = r.member_id
+      ORDER BY r.member_id ASC
+      LIMIT $1`,
+    [Math.max(1, Math.floor(limit))]
+  )
+  return rows
+    .map(r => String((r as { member_id?: unknown }).member_id ?? ''))
+    .filter(id => id !== '')
+}

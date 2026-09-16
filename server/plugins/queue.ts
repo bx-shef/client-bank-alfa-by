@@ -33,9 +33,15 @@ import { resolveBankReapDays } from '../../app/utils/bankReaper'
 import { runBankReaper } from '../utils/bankReaperRun'
 import { claimBankReapSlot } from '../utils/bankReaperSchedule'
 import { claimSubscriptionCutoffSlot } from '../utils/subscriptionCutoffSchedule'
+import { claimAutoEraseSlot } from '../utils/autoEraseSchedule'
+import { runAutoErase, type AutoEraseVerdict } from '../utils/autoEraseRun'
+import { autoEraseForPortal } from '../utils/autoEraseWrite'
+import { MAX_AUTO_ERASE_PORTALS } from '../../app/utils/autoEraseActivities'
+import { readAppSettingVia } from '../utils/appSettings'
+import { SETTINGS_KEY, parsePortalSettings } from '../../app/utils/settings'
 import { runSubscriptionCutoff } from '../utils/subscriptionCutoffRun'
 import { probeSubscriptionVia } from '../utils/subscriptionProbe'
-import { livePortalSdkCall } from '../utils/liveDeps'
+import { livePortalSdk, livePortalSdkCall } from '../utils/liveDeps'
 import { SUBSCRIPTION_CUTOFF_DAYS } from '../../app/utils/portalSubscription'
 import { claimReapSlot } from '../utils/portalReaperSchedule'
 import {
@@ -43,6 +49,7 @@ import {
   selectReapablePortals, selectSubscriptionCutoff, getToken
 } from '../utils/tokenStore'
 import { sweepOldBatches } from '../utils/importBatchStore'
+import { selectAutoErasePortals } from '../utils/importResultStore'
 import { resolvePendingMaxAgeDays, sweepAbandonedPending } from '../utils/pendingSweep'
 import { ensureAccessToken } from '../utils/ensureAccessToken'
 import { dbQuery } from '../db/client'
@@ -169,6 +176,11 @@ export default defineNitroPlugin((nitroApp) => {
   // duplicate fetch jobs (demo uses per-tick ids that don't dedup). The SINGLE `b24-events`
   // worker rides here too, so install/uninstall stay ordered even when `worker` is scaled.
   if (role.cron && deps) {
+    // ⚠ Окно опроса читается ОДИН раз и делится двумя потребителями: планом опроса и порогом
+    // автоудаления дел (#722). Вторая копия `process.env.CRON_LOOKBACK_DAYS` разошлась бы молча —
+    // и разошлась бы в самую опасную сторону: автомат считал бы порог по одному окну, а импорт
+    // возвращал бы удалённое по другому.
+    const lookback = Number(process.env.CRON_LOOKBACK_DAYS || 1)
     workers.push(startEventWorker(deps))
     // Deletion-reconcile worker (§9.2) rides the primary instance too — concurrency 1, per-portal
     // ledger reconciles stay ordered even when `worker` is scaled (same rationale as the event worker).
@@ -224,7 +236,6 @@ export default defineNitroPlugin((nitroApp) => {
     // so connecting the first account (A7) can't silently start polling.
     if ((process.env.CRON_REAL_POLL ?? '0') === '1') {
       const pollMs = cronIntervalMs(Number(process.env.CRON_INTERVAL_MIN || 5))
-      const lookback = Number(process.env.CRON_LOOKBACK_DAYS || 1)
       // A8 saturation signal: the live Alfa poll is capped by a global BullMQ limiter, so a
       // plan that outruns the cap DEFERS fetch jobs (waiting/delayed pile-up) — invisible in
       // the default counters. After each poll, check the bank-fetch backlog and log it
@@ -493,6 +504,47 @@ export default defineNitroPlugin((nitroApp) => {
                 }, SUBSCRIPTION_CUTOFF_DAYS)
               } catch (e) {
                 retention.error(`subscription cutoff failed: ${(e as Error)?.message}`)
+              }
+            }
+            // Автоудаление дел, созданных приложением (#722). Включает КЛИЕНТ галкой в настройках;
+            // здесь только исполнение. Своя аренда — отдельный ключ от уборщиков и автоотключения.
+            //
+            // ⚠ Порядок вызовов в чужой портал выбран так, чтобы отказавшийся стоил РОВНО ОДНОГО:
+            // сперва читаем настройку, и только у согласившихся идёт список дел и удаление. Клиент
+            // портала поднимается ОДИН на оба шага (`livePortalSdk`) — иначе это два независимых
+            // ведра лимитера и две загрузки токена на один портал.
+            //
+            // ⚠ Порог НЕ зашит: он выводится из окна опроса (`CRON_LOOKBACK_DAYS`), потому что
+            // удаление уносит и маркер дедупа (#259) — дело, стёртое внутри окна, вернулось бы
+            // следующим опросом, и автомат воевал бы с импортом вечно.
+            if (await claimAutoEraseSlot(dbQuery, REAP_MIN_INTERVAL_MS / 1000, randomUUID())) {
+              try {
+                await runAutoErase({
+                  now: Date.now,
+                  // ⚠ Берём на ОДИН больше потолка: так `runAutoErase` видит, что флот в прогон не
+                  // влез, и говорит об этом в итоге. Ровно `MAX` означало бы «влезли впритык»,
+                  // неотличимо от «столько и есть».
+                  listCandidates: () => selectAutoErasePortals(dbQuery, MAX_AUTO_ERASE_PORTALS + 1),
+                  isEnabled: async (memberId): Promise<AutoEraseVerdict> => {
+                    const portal = await livePortalSdk(memberId)
+                    // ⚠ Нет токена — это «спросить не у кого», а НЕ «выключено»: различать их
+                    // обязательно, иначе мёртвая регистрация читалась бы как согласие.
+                    if (!portal) return 'unknown'
+                    const raw = await readAppSettingVia(portal.call, SETTINGS_KEY)
+                    return parsePortalSettings(raw).autoEraseActivities ? 'on' : 'off'
+                  },
+                  erase: async (memberId, cutoff) => {
+                    const portal = await livePortalSdk(memberId)
+                    // ⚠ БРОСАЕМ, а не возвращаем нули: тихий выход дал бы в итоге «портал
+                    // обработан, удалять было нечего» о портале, которого никто не спрашивал.
+                    if (!portal) throw new Error('auto-erase: portal token unavailable')
+                    return autoEraseForPortal(cutoff, portal.call, portal.batch)
+                  },
+                  log: (m: string) => retention.info(`[auto-erase] ${m}`),
+                  warn: (m: string) => retention.warning(`[auto-erase] ${m}`)
+                }, lookback)
+              } catch (e) {
+                retention.error(`auto-erase failed: ${(e as Error)?.message}`)
               }
             }
             // ⚠ Как и тумбстоуны, свип висит на флаге `STATEMENT_SWEEP` — то есть `=0` гасит и

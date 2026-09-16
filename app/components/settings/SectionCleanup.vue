@@ -4,6 +4,8 @@ import { useBankAccounts, PREVIEW_BANK_ACCOUNTS } from '~/composables/useBankAcc
 import { useEraseActivities } from '~/composables/useEraseActivities'
 import { useSetupStatus } from '~/composables/useSetupStatus'
 import { useIsAdmin } from '~/composables/useIsAdmin'
+import { useChatSettings } from '~/composables/useChatSettings'
+import { pluralRu } from '~/utils/importStatus'
 import { isPendingAccountKey } from '~/utils/bankAccountKey'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import { useRoute } from 'vue-router'
@@ -28,6 +30,15 @@ const { accounts, load: loadAccounts } = useBankAccounts()
 const route = useRoute()
 const { status: setup, loadedOk: setupKnown, load: loadSetup } = useSetupStatus()
 const { counting, erasing, error, pending, result, count, erase } = useEraseActivities()
+const { settings } = useChatSettings()
+
+// Срок автоудаления. ⚠ Берётся С СЕРВЕРА (`autoEraseDays`), а не зашит в компоненте: порог
+// выводится из окна опроса, то есть из НАШЕЙ env. Зашитое число называло бы человеку срок, не
+// имеющий отношения к тому, что делает автомат, — в разделе, где он решает судьбу своих данных.
+const autoEraseDaysLabel = computed(() => {
+  const d = setup.value.autoEraseDays
+  return `${d} ${pluralRu(d, ['сутки', 'суток', 'суток'])}`
+})
 
 const from = ref('')
 const to = ref('')
@@ -166,6 +177,30 @@ async function onErase(): Promise<void> {
       description="Действие необратимо и затрагивает CRM всего портала."
     />
     <template v-else>
+      <!-- Автоудаление (#722). Стоит ПЕРВЫМ и отделено: это настройка «включил и забыл», а всё
+           остальное в разделе — разовое действие руками. Смешай их в один поток — и человек,
+           пришедший стереть сегодняшний мусор, случайно включил бы постоянное удаление. -->
+      <B24Switch
+        v-model="settings.autoEraseActivities"
+        label="Автоматически удалять дела с движением денег"
+        :description="`Приложение само удалит созданные им дела через ${autoEraseDaysLabel} после появления — и выполненные, и невыполненные. Срок считается от момента, когда дело появилось в CRM, а не от даты платежа: загруженная задним числом выписка тоже проживёт полный срок.`"
+        data-testid="auto-erase"
+      />
+      <!-- ⚠ Предупреждение показываем ТОЛЬКО когда включено, как у авто-проведения: постоянный
+           красный блок рядом с выключенной настройкой перестают читать. -->
+      <B24Alert
+        v-if="settings.autoEraseActivities"
+        color="air-primary-warning"
+        title="Приложение будет удалять дела без подтверждения"
+        :description="`Удаляются только дела, созданные приложением. Записи в смарт-процессе «Платежи» остаются — если он не создан, дело было единственным следом операции, и после удаления её в CRM не останется. Срок (${autoEraseDaysLabel}) выбран так, чтобы удалённое не вернулось следующим опросом.`"
+        data-testid="auto-erase-warning"
+      />
+      <HelpLink
+        anchor="auto-erase"
+        label="Что именно удаляется и когда?"
+      />
+      <hr class="border-(--ui-color-base-5)">
+
       <HelpLink
         anchor="erased-returned"
         label="Почему стёртые дела возвращаются?"

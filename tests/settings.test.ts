@@ -23,7 +23,7 @@ describe('defaults', () => {
       dialogId: '', rules: { directions: ['credit', 'debit'], excludePurposePatterns: [], excludeCounterpartyAccounts: [] }
     })
     expect(defaultPortalSettings()).toEqual({
-      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false
+      chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false, autoEraseActivities: false
     })
   })
 
@@ -62,7 +62,8 @@ describe('parsePortalSettings — defensive', () => {
         configFields: { 'deal:1': 'UF_CRM_1' }
       },
       allocation: { invoicePaidStageId: 'DT31_11:P' },
-      autoDistribute: true
+      autoDistribute: true,
+      autoEraseActivities: true
     }
     expect(parsePortalSettings(serializePortalSettings(s))).toEqual(s)
   })
@@ -74,7 +75,8 @@ describe('parsePortalSettings — defensive', () => {
       errorChat: { dialogId: '' },
       recognition: defaultRecognitionSettings(),
       allocation: {},
-      autoDistribute: false
+      autoDistribute: false,
+      autoEraseActivities: false
     })
   })
 
