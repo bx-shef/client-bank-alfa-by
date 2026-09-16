@@ -21,12 +21,19 @@ import type { PortalToken } from '../server/utils/tokenStore.ts'
 import { B24_REQUIRED_SCOPES } from '../app/config/b24.ts'
 import type { StatementItem } from '../app/types/statement.ts'
 import { buildTodoActivity, ACTIVITY_ORIGINATOR_ID, activityOriginId } from '../app/utils/todoActivity.ts'
-import { writeTodoActivityViaRest } from '../server/utils/todoActivityWrite.ts'
+import { buildLegacyActivity } from '../app/utils/legacyActivity.ts'
+import { writeTodoActivityViaRest, writeLegacyActivityViaRest } from '../server/utils/todoActivityWrite.ts'
 import { findActivityByMarker } from '../server/utils/activityMarkerLookup.ts'
 
 loadDotEnv(['.env.b24oauth', '.env.b24test'], { explicit: false })
 
 const apply = process.argv.includes('--apply')
+// --legacy exercises the #722 FALLBACK carrier (`crm.activity.add`) instead of `todo.add`.
+// ⚠ This flag exists because unit tests cannot cover this class of defect at all: they check the
+// SHAPE of the params, while «is this activity type supported» is known only to the portal. The
+// first edition of `legacyActivity.ts` was dead on every portal (every TYPE_ID rejected) and the
+// whole suite stayed green. Run this before shipping any change to the fallback builder.
+const legacy = process.argv.includes('--legacy')
 const companyArg = process.argv[process.argv.indexOf('--company') + 1]
 const companyId = /^\d+$/.test(companyArg ?? '') ? companyArg! : ''
 
@@ -75,8 +82,12 @@ const deps: SdkPortalDeps = {
 }
 
 async function main() {
-  head(`todo.add (#495, дедуп #259) · портал ${domain} · ${apply ? 'APPLY' : 'DRY-RUN'}`)
-  const params = buildTodoActivity(item, { id: Number(companyId || 0) })
+  head(`${legacy ? 'crm.activity.add (#722, запасной носитель)' : 'todo.add (#495, дедуп #259)'} · портал ${domain} · ${apply ? 'APPLY' : 'DRY-RUN'}`)
+  // ⚠ DRY-RUN must print the params of the carrier it would ACTUALLY use — printing todo params
+  // under --legacy would show a call we are not making, which is worse than printing nothing.
+  const params = legacy
+    ? buildLegacyActivity(item, { id: Number(companyId || 0) }, 0)
+    : buildTodoActivity(item, { id: Number(companyId || 0) })
   const originId = activityOriginId(item)
   console.log(`${C.dim}маркер: ORIGINATOR_ID=${ACTIVITY_ORIGINATOR_ID} · ORIGIN_ID=${originId}${C.reset}`)
   console.log(`${C.dim}params:${C.reset} ${JSON.stringify(params, null, 2)}`)
@@ -103,7 +114,9 @@ async function main() {
   // 2) write (unless dedup already found it — mirrors crm-sync's read-before-write).
   let createdId = before
   if (!before) {
-    createdId = await writeTodoActivityViaRest(item, companyId, call)
+    createdId = legacy
+      ? await writeLegacyActivityViaRest(item, companyId, call, undefined, memberId)
+      : await writeTodoActivityViaRest(item, companyId, call)
     if (!createdId) {
       err('todo.add не вернул id (проверь права/контекст приложения)')
       process.exit(1)
@@ -120,7 +133,7 @@ async function main() {
     process.exit(1)
   }
 
-  console.log(`\n${C.green}✓ todo.add + B24-дедуп по маркеру работают вживую.${C.reset}\n`)
+  console.log(`\n${C.green}✓ ${legacy ? 'crm.activity.add' : 'todo.add'} + B24-дедуп по маркеру работают вживую.${C.reset}\n`)
 }
 
 main().catch((e) => {
