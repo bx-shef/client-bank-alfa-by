@@ -27,7 +27,8 @@
 //      scan and counted separately — that count is the thing worth showing an admin.
 
 import type { BankProviderId } from '../../app/types/statement'
-import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs } from '../../app/utils/bankTokenLifetime'
+import { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs, refreshRejectedByBank } from '../../app/utils/bankTokenLifetime'
+import { isPendingAccountKey } from '../../app/utils/bankAccountKey'
 import type { BankAccountInfo, BankAccountRef, BankToken } from './bankTokenStore'
 import { sanitizeForLog } from './logSanitize'
 import { portalHash } from './telemetryAttributes'
@@ -37,7 +38,7 @@ const HOUR_MS = 3_600_000
 // ⚠ Lifetimes and the renew band live in `app/utils/bankTokenLifetime.ts`, not here: the settings
 // UI decides what to show an admin from the SAME numbers. Let them drift and you get exactly the
 // failure this module was written for — a calm green row on a connection the server already buried.
-export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs }
+export { BANK_REFRESH_TTL_MEASURED, BANK_REFRESH_TTL_SEC, consentExpired, EXPIRED_RETRY_INTERVAL_MS, expiredRetryDue, KEEP_ALIVE_BAND, refreshAtAgeMs, refreshRejectedByBank }
 
 /** Max accounts refreshed per run — bounds the burst against the bank's OAuth endpoint the same
  *  way the portal keep-alive bounds Bitrix. Deliberately generous relative to `bank_tokens`
@@ -192,6 +193,23 @@ export function selectBankAccountsNearExpiry(
     // значило бы тратить лимит банка на запрос, который не может удаться, — то самое, ради чего
     // ниже заведён пол по измеренному сроку, только здесь мы знаем это ТОЧНО.
     if (consentExpired(row, nowMs)) {
+      expired.push(ref)
+      continue
+    }
+    // ⚠ БАНК ОТВЕРГ ГРАНТ ОЖИДАЮЩЕГО ПОДКЛЮЧЕНИЯ — продлевать нечего (#715). Замерено на живом
+    // прогоне: строка `~pending:` Приора получала `invalid_grant: Persisted access token data not
+    // found` КАЖДЫЙ ЧАС и оставалась — ~24 бесполезных обращения в сутки к лимиту банка, который у
+    // нас общий на ВСЁ приложение, а не на портал. Ловушка в том, что путь в `expired` ниже открыт
+    // только ИЗМЕРЕННОМУ сроку (`BANK_REFRESH_TTL_MEASURED`), а у Приора срок — догадка, поэтому
+    // мёртвая по прямому ответу банка строка честно проходила как «пора обновить».
+    //
+    // ⚠ Правило НАМЕРЕННО узкое — только `~pending:`, и только по метке `refreshRejectedByBank`
+    // (#713: 4xx И машинный `invalid_grant`, а не сеть и не 5xx). У РАБОЧЕЙ строки цена поспешного
+    // вывода — поход ВЛАДЕЛЬЦА СЧЁТА в интернет-банк за тем, что не ломалось, плюс у Альфы отказ
+    // лечится переизданием пары ключом API прямо в `ensureBankToken`; у ожидающей терять нечего:
+    // счёт не выбран, выписка по ней не забирается вовсе (`accountsForPolling` её отсеивает), и
+    // свип #485 всё равно снесёт её — эта ветка лишь перестаёт жечь лимит до его тика.
+    if (isPendingAccountKey(row.accountKey) && refreshRejectedByBank(row)) {
       expired.push(ref)
       continue
     }
