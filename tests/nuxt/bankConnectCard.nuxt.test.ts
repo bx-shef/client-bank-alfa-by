@@ -20,9 +20,22 @@ vi.mock('vue-router', async orig => ({
   useRoute: () => ({ query: routeQuery })
 }))
 
+// Спаи кнопки «Открыть чат». СТАБИЛЬНЫЕ (объявлены здесь, а не внутри фабрики): `useB24()` зовётся
+// на каждый вызов, и спай, созданный внутри, был бы новым при каждом обращении — тест ничего не
+// увидел бы и остался бы зелёным.
+const openMessengerSpy = vi.fn(async () => true)
+const openPathSpy = vi.fn(async () => ({}))
+
 vi.mock('~/composables/useB24', async () => {
   const { makeMockB24 } = await import('./helpers/mockB24')
-  return { useB24: () => makeMockB24({ isInit: () => mockState.isInit, isAdmin: mockState.isAdmin }) }
+  return {
+    useB24: () => makeMockB24({
+      isInit: () => mockState.isInit,
+      isAdmin: mockState.isAdmin,
+      openMessenger: openMessengerSpy,
+      openPath: openPathSpy
+    })
+  }
 })
 
 // In-portal ⇒ a frame token exists (enabled=true, no preview note); standalone ⇒ null.
@@ -70,6 +83,8 @@ beforeEach(() => {
 afterEach(() => {
   delete routeQuery.preview
   fetchMock.mockClear()
+  openMessengerSpy.mockClear()
+  openPathSpy.mockClear()
   matrixReply.value = { rows: [], providers: [] }
   mockState.isInit = true
   mockState.isAdmin = true
@@ -122,6 +137,30 @@ describe('BankConnectCard admin gate', () => {
     expect(wrapper.find('[data-testid="admin-gate"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="bank-connect"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="preview-note"]').exists()).toBe(true)
+  })
+})
+
+describe('«Открыть чат»', () => {
+  it('зовёт штатный метод SDK, а не портальный путь слайдером', async () => {
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="open-chat"]').trigger('click')
+    await flushPromises()
+    expect(openMessengerSpy).toHaveBeenCalledTimes(1)
+    // ⚠ ОТРИЦАНИЕ — несущая половина теста. Раньше кнопка открывала портальный ПУТЬ `/online/`
+    // слайдером, то есть самоделку вместо готового метода (замечание владельца 2026-09-17), и без
+    // этой строки возврат к ней прошёл бы зелёным: положительная проверка ловит только «что-то
+    // позвали», а адрес мессенджера — деталь портала, менять которую он вправе без предупреждения.
+    expect(openPathSpy).not.toHaveBeenCalled()
+  })
+
+  it('портал не принял команду ⇒ говорим об этом, а не молчим', async () => {
+    openMessengerSpy.mockResolvedValueOnce(false)
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="open-chat-failed"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="open-chat"]').trigger('click')
+    await flushPromises()
+    // Молчащая кнопка неотличима от сломанной — ровно та жалоба, что уже была на «Скопировать».
+    expect(wrapper.find('[data-testid="open-chat-failed"]').exists()).toBe(true)
   })
 })
 

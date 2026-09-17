@@ -9,7 +9,6 @@ import { PREVIEW_BANK_MATRIX, useBankMatrix } from '~/composables/useBankMatrix'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import { BANK_LABELS } from '~/utils/bankLabels'
 import { useBankInvite } from '~/composables/useBankInvite'
-import { usePortalSlider } from '~/composables/usePortalSlider'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { BANK_CONNECTED_COMMAND } from '~/utils/settingsSync'
 import { contactLabel } from '~/utils/bankContact'
@@ -151,16 +150,16 @@ async function onHandOver() {
   await invite.send(provider.value, user)
 }
 
-/** Путь мессенджера портала. Константой — чтобы адрес не расползался по шаблону. */
-const PORTAL_MESSENGER_PATH = '/online/'
 const chatOpenFailed = ref(false)
 
 async function openChat() {
   chatOpenFailed.value = false
-  // ⚠ Отказ ГОВОРИТ О СЕБЕ: `openPath` возвращает `false` вне фрейма и на устройствах без
-  // слайдера, и молчание здесь неотличимо от сломанной кнопки — ровно та жалоба, что уже была на
-  // «Скопировать».
-  if (!await usePortalSlider().openPath(PORTAL_MESSENGER_PATH)) chatOpenFailed.value = true
+  // ⚠ Штатный метод SDK, а не слайдер по портальному пути `/online/` (замечание владельца
+  // 2026-09-17). Адрес мессенджера — деталь портала, а не наш контракт; метод описывает намерение
+  // и переживает его смену.
+  // ⚠ Отказ ГОВОРИТ О СЕБЕ: вне фрейма просить некого, и молчание здесь неотличимо от сломанной
+  // кнопки — ровно та жалоба, что уже была на «Скопировать».
+  if (!await useB24().openMessenger()) chatOpenFailed.value = true
 }
 
 async function onHandOverAgain() {
