@@ -33,6 +33,7 @@
 // потому что оно ломало карточку компании.
 
 import type { StatementItem } from '~/types/statement'
+import type { PortalCurrencyFormats } from '~/utils/currencyFormat'
 import {
   CRM_OWNER_TYPE_COMPANY, buildActivityTitle, neutralizeBb, toPortalDeadline, type CrmCompanyRef
 } from '~/utils/activity'
@@ -46,15 +47,31 @@ import {
 export const LEGACY_ACTIVITY_ADD_METHOD = 'crm.activity.add'
 
 /**
- * `TYPE_ID = 3` — «Задача» (перечисление `crm.enum.activitytype`: 1 встреча, 2 звонок, 3 задача,
+ * `TYPE_ID = 1` — «Встреча» (перечисление `crm.enum.activitytype`: 1 встреча, 2 звонок, 3 задача,
  * 4 письмо, 5 действие, 6 пользовательское действие).
  *
- * ⚠ Поле ОБЯЗАТЕЛЬНОЕ (портал отвечает «The field TYPE_ID is not defined or invalid»), поэтому
- * выбор всё равно пришлось бы сделать. Взята «Задача», потому что платёж — это то, с чем человек
- * ещё должен что-то сделать; «Звонок» и «Письмо» вдобавок требуют описания коммуникации, а
- * «Пользовательское действие» — регистрации провайдера, которого у нас нет.
+ * ⚠ ЗАМЕР НА ЖИВОМ ПОРТАЛЕ (2026-09-16, `b24-3t9wn1.bitrix24.by`) ОТВЕРГ ВСЕ ШЕСТЬ типов подряд,
+ * и первая редакция этого модуля была из-за этого МЕРТВА ЦЕЛИКОМ — выбранная по документации
+ * «Задача» отвечает `The activity type "Задача is not supported in current context"`. Замеренная
+ * таблица: 3 и 5 — «not supported in current context»; 1, 2 и 4 — `The field COMMUNICATIONS is
+ * not defined or invalid`; 6 — «custom activity without provider is not supported». То есть
+ * запасной путь, написанный ради портала, который не записывал НИЧЕГО, сам не записывал ничего —
+ * и хуже исходного: он БРОСАЕТ, значит джоба уходила бы в бесконечный ретрай вместо тихого
+ * пропуска. Ни один юнит-тест этого не ловил и не мог: они проверяют ФОРМУ параметров, а
+ * поддерживается ли тип — знает только портал.
+ *
+ * ⚠ Годных типов оказалось ДВА — 1 и 2, оба с непустым `COMMUNICATIONS` (см. ниже). Взята
+ * «Встреча»: нейтрального типа в перечислении нет вовсе, и «Звонок» о платеже — такая же
+ * неправда, но вдобавок обещает запись разговора, которой нет. «Письмо» не принимает
+ * `COMMUNICATIONS` даже с привязкой, «Пользовательское действие» требует провайдера.
  */
-export const LEGACY_ACTIVITY_TYPE_TASK = 3
+export const LEGACY_ACTIVITY_TYPE_MEETING = 1
+
+/** Описание коммуникации — ТОЛЬКО привязка, без телефона и почты (см. `buildLegacyActivity`). */
+export interface LegacyCommunication {
+  ENTITY_ID: number
+  ENTITY_TYPE_ID: number
+}
 
 /** Поля системного дела, которые мы заполняем. */
 export interface LegacyActivityFields {
@@ -64,6 +81,7 @@ export interface LegacyActivityFields {
   SUBJECT: string
   DESCRIPTION: string
   DESCRIPTION_TYPE: number
+  COMMUNICATIONS: LegacyCommunication[]
   COMPLETED: 'N'
   RESPONSIBLE_ID: number
   START_TIME: string
@@ -82,6 +100,17 @@ export interface LegacyActivityFields {
  * который портал отвергнет, — на том самом портале, ради которого весь этот путь и написан.
  * Откуда берётся значение, решает транспорт.
  *
+ * ⚠ `COMMUNICATIONS` — ОБЯЗАТЕЛЬНОЕ и непустое, но БЕЗ телефона и почты. Замерено: пустой массив
+ * отвергается («The field COMMUNICATIONS is not defined or invalid») наравне с отсутствующим
+ * полем, а вот одна голая привязка `{ENTITY_ID, ENTITY_TYPE_ID}` принимается. Это несущее, а не
+ * мелочь: очевидная форма — подставить телефон — записала бы в CRM клиента ВЫДУМАННЫЙ контакт,
+ * которого у нас нет и быть не может (в выписке телефона плательщика нет). Портал такое дело
+ * создаёт и в ответе `crm.activity.get` возвращает `COMMUNICATIONS: null`, то есть привязка
+ * служит пропуском валидации и никакого контакта не заводит.
+ *
+ * ⚠ Привязка — та же компания, что и владелец дела. Второй сущности здесь взяться неоткуда, а
+ * подстановка чужого id означала бы платёж в карточке того, кто его не делал.
+ *
  * ⚠ Дело НЕ закрывается (`COMPLETED: 'N'`) — то же решение, что у основного носителя: закрытое
  * дело читается как «сделано, смотреть незачем», а платёж ждёт действия человека.
  *
@@ -94,17 +123,22 @@ export function buildLegacyActivity(
   item: StatementItem,
   company: CrmCompanyRef,
   responsibleId: number,
-  note?: string
+  note?: string,
+  /** Справочник валют портала: блоков здесь не будет никогда (#722/#729), но сумма в заголовке
+   *  обязана выглядеть так же, как на любом другом портале. */
+  currencies?: PortalCurrencyFormats
 ): { fields: LegacyActivityFields } {
   const at = toPortalDeadline(item.acceptDate)
   return {
     fields: {
       OWNER_TYPE_ID: CRM_OWNER_TYPE_COMPANY,
       OWNER_ID: company.id,
-      TYPE_ID: LEGACY_ACTIVITY_TYPE_TASK,
-      SUBJECT: neutralizeBb(buildActivityTitle(item)).slice(0, MAX_TITLE_CHARS),
+      TYPE_ID: LEGACY_ACTIVITY_TYPE_MEETING,
+      SUBJECT: neutralizeBb(buildActivityTitle(item, currencies)).slice(0, MAX_TITLE_CHARS),
       DESCRIPTION: buildActivityDescription(item, note),
       DESCRIPTION_TYPE: DESCRIPTION_TYPE_BB,
+      // ⚠ Только привязка к компании — ни телефона, ни почты (см. доводы над функцией).
+      COMMUNICATIONS: [{ ENTITY_ID: company.id, ENTITY_TYPE_ID: CRM_OWNER_TYPE_COMPANY }],
       COMPLETED: 'N',
       RESPONSIBLE_ID: responsibleId,
       START_TIME: at,

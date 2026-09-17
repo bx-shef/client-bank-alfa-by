@@ -3,8 +3,9 @@ import type { StatementItem } from '../app/types/statement'
 import {
   ACTIVITY_DELETE_METHOD, ACTIVITY_UPDATE_METHOD, TODO_ACTIVITY_ADD_METHOD
 } from '../app/utils/todoActivity'
+import { ACTIVITY_BLOCKS_SET_METHOD } from '../app/utils/activityBlocks'
 import { ACTIVITY_LIST_METHOD } from '../server/utils/activityMarkerLookup'
-import { extractTodoActivityId, resetMarkerProof, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
+import { extractTodoActivityId, resetCurrencyCache, resetMarkerProof, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
 
 // Универсальное дело не принимает маркер в том же вызове, которым создаётся (#495) — маркер и
 // тип описания живут только в `crm.activity.update`. Значит между вызовами есть окно, в котором
@@ -36,14 +37,51 @@ describe('extractTodoActivityId', () => {
 })
 
 describe('writeTodoActivityViaRest', () => {
-  it('создаёт дело и СРАЗУ ставит маркер — ровно два вызова', async () => {
+  it('создаёт дело, СРАЗУ ставит маркер и вешает блоки карточки', async () => {
     const calls: string[] = []
     const call = vi.fn(async (method: string) => {
       calls.push(method)
       return method === TODO_ACTIVITY_ADD_METHOD ? { result: { id: 7 } } : { result: true }
     })
     await expect(writeTodoActivityViaRest(item(), '42', call)).resolves.toBe('7')
-    expect(calls).toEqual([TODO_ACTIVITY_ADD_METHOD, ACTIVITY_UPDATE_METHOD])
+    // ⚠ Блоки (#729) — ТРЕТЬИМ и строго ПОСЛЕ маркера: до него дело ещё может быть удалено
+    // компенсацией, и оформлять нечего.
+    expect(calls).toEqual([TODO_ACTIVITY_ADD_METHOD, ACTIVITY_UPDATE_METHOD, ACTIVITY_BLOCKS_SET_METHOD])
+  })
+
+  it('ЗАГОЛОВОК дела подписывает сумму справочником ПОРТАЛА, а не своим (#729)', async () => {
+    // ⚠ Мутационно проверено: без этого случая «уронить справочник по дороге до заголовка»
+    // проходило зелёным — блоки-то формат получали, и расхождение было видно только на живой
+    // карточке, где заголовок печатал «10,00 BYN» над таблицей с «10,00 руб.».
+    resetCurrencyCache()
+    let title = ''
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.currency.list') {
+        return { result: [{ CURRENCY: 'BYN', FORMAT_STRING: '# руб.', DECIMALS: 2 }] }
+      }
+      if (method === TODO_ACTIVITY_ADD_METHOD) {
+        title = String((params as { title?: unknown }).title ?? '')
+        return { result: { id: 7 } }
+      }
+      // Маркер обязан находиться: иначе самопроверка снесёт дело и до заголовка дело не дойдёт.
+      if (method === ACTIVITY_LIST_METHOD) return { result: [{ ID: 7 }] }
+      return { result: true }
+    })
+    resetMarkerProof()
+    await writeTodoActivityViaRest(item(), '42', call, undefined, 'M')
+    expect(title).toContain('10,00 руб.')
+    expect(title).not.toContain('BYN')
+    resetCurrencyCache()
+  })
+
+  it('отказ блоков НЕ роняет запись — операция уже зачтена дедупом', async () => {
+    // ⚠ Проброс отменил бы обработку всей оставшейся пачки, ничего не починив: повтор упрётся
+    // в маркер и до блоков не дойдёт. Тот же довод, что у привязок дела (#579).
+    const call = vi.fn(async (method: string) => {
+      if (method === ACTIVITY_BLOCKS_SET_METHOD) throw new Error('blocks refused')
+      return method === TODO_ACTIVITY_ADD_METHOD ? { result: { id: 7 } } : { result: true }
+    })
+    await expect(writeTodoActivityViaRest(item(), '42', call)).resolves.toBe('7')
   })
 
   it('маркер ставится на СОЗДАННОЕ дело и несёт тип описания', async () => {

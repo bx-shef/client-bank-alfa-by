@@ -23,7 +23,7 @@
 // this activity type. It is the accepted cost of a card that works, and it is bounded: one
 // duplicate per crash, not per operation.
 
-import type { StatementItem } from '../../app/types/statement'
+import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import {
   ACTIVITY_DELETE_METHOD, ACTIVITY_ORIGINATOR_ID, ACTIVITY_UPDATE_METHOD, TODO_ACTIVITY_ADD_METHOD,
   buildActivityMarkerUpdate, buildTodoActivity
@@ -31,6 +31,9 @@ import {
 import {
   LEGACY_ACTIVITY_ADD_METHOD, buildLegacyActivity, extractLegacyActivityId
 } from '../../app/utils/legacyActivity'
+import { buildActivityBlocks, buildActivityBlocksCall } from '../../app/utils/activityBlocks'
+import type { PortalCurrencyFormats } from '../../app/utils/currencyFormat'
+import { CRM_OWNER_TYPE_COMPANY } from '../../app/utils/activity'
 import { dedupKey } from '../../app/utils/statement'
 import { findActivityByMarker } from './activityMarkerLookup'
 import type { RestCall } from './companyLookup'
@@ -198,14 +201,20 @@ export async function writeTodoActivityViaRest(
    *  Omitted ⇒ no verification (keeps the smoke script and older callers working unchanged). */
   memberId?: string,
   /** Injected only by tests, so the retry loop does not spend real seconds. */
-  sleep?: (ms: number) => Promise<void>
+  sleep?: (ms: number) => Promise<void>,
+  /** Откуда приехала операция — показывается блоком «Источник» (#729). Необязателен: без него
+   *  блок honest-fallback'ом говорит «Импорт выписки», а не выдумывает банк. */
+  providerId?: BankProviderId
 ): Promise<string | null> {
   // Портал уже показал, что нового метода у него нет — второй раз не спрашиваем (#722).
   if (memberId && legacyPortals.has(memberId)) {
     return writeLegacyActivityViaRest(item, companyId, call, note, memberId, sleep)
   }
 
-  const params = buildTodoActivity(item, { id: Number(companyId) }, note)
+  // ⚠ Справочник валют берётся ДО создания дела, а не только для блоков: заголовок обязан
+  // подписывать сумму так же, как таблица под ним (#729). Вызов кэширован на портал и не бросает.
+  const currencies = await loadPortalCurrencies(call, memberId)
+  const params = buildTodoActivity(item, { id: Number(companyId) }, note, currencies)
   let added: Record<string, unknown>
   try {
     added = await call(TODO_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
@@ -249,7 +258,42 @@ export async function writeTodoActivityViaRest(
       throw verifyError
     }
   }
+
+  await attachBlocks(item, id, companyId, call, providerId, currencies)
   return id
+}
+
+/**
+ * Повесить на дело нашу таблицу блоков (#729).
+ *
+ * ⚠ ЛУЧШИЕ УСИЛИЯ И НИКОГДА НЕ БРОСАЕТ, и это не «на всякий случай». Вызов идёт ПОСЛЕ маркера,
+ * то есть операция уже записана и уже зачтена дедупом: проброс отменил бы обработку всей оставшейся
+ * пачки, ничего не починив — повтор упрётся в маркер и до этой строки не дойдёт. Ровно тот же довод,
+ * по которому не бросают привязки дела (#579).
+ *
+ * ⚠ Цена отказа названа и она мала: блоки не несут НИЧЕГО, чего нет больше нигде — сумма,
+ * направление и контрагент дублируются заголовком дела, назначение лежит в описании. Карточка
+ * станет беднее, сведения не потеряются.
+ *
+ * ⚠ Ошибка пишется в лог, но НЕ в чат ошибок клиента: это оформление карточки, а не платёж,
+ * требующий человека, и звать бухгалтера сюда значило бы приучить его не читать тот канал.
+ */
+async function attachBlocks(
+  item: StatementItem,
+  activityId: string,
+  companyId: string,
+  call: RestCall,
+  providerId?: BankProviderId,
+  currencies?: PortalCurrencyFormats
+): Promise<void> {
+  try {
+    const { method, params } = buildActivityBlocksCall(
+      activityId, CRM_OWNER_TYPE_COMPANY, Number(companyId), buildActivityBlocks(item, providerId, currencies)
+    )
+    await call(method, params)
+  } catch (blocksError) {
+    log.warning(`дело ${activityId}: блоки карточки не поставлены — ${(blocksError as Error).message}`)
+  }
 }
 
 /**
@@ -276,7 +320,8 @@ export async function writeLegacyActivityViaRest(
   sleep?: (ms: number) => Promise<void>
 ): Promise<string | null> {
   const responsibleId = await resolveResponsibleId(call, memberId)
-  const params = buildLegacyActivity(item, { id: Number(companyId) }, responsibleId, note)
+  const currencies = await loadPortalCurrencies(call, memberId)
+  const params = buildLegacyActivity(item, { id: Number(companyId) }, responsibleId, note, currencies)
   const added = await call(LEGACY_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
   const id = extractLegacyActivityId(added)
   if (!id) return null
@@ -314,6 +359,48 @@ const responsibleByPortal = new Map<string, number>()
 /** Для тестов: модульный кэш иначе протекает между случаями. */
 export function resetResponsibleCache(): void {
   responsibleByPortal.clear()
+}
+
+/**
+ * Справочник валют портала для блока суммы (#729) — ОДИН вызов на портал на процесс.
+ *
+ * ⚠ Ходим в портал, потому что формат валюты — его настройка, а не мировая константа: замерено,
+ * что BYN там подписан «руб.», RUB отдаётся HTML-сущностью, а у USD символ стоит ПЕРЕД суммой.
+ * Штатный `Intl` про это не знает и печатал «1 840,50 BYN» рядом с «29,00 ₽».
+ *
+ * ⚠ ОТКАЗ НЕ БРОСАЕТ, и это несущее: справочник нужен для ОФОРМЛЕНИЯ, а не для записи. Пустой
+ * ответ кэшируется наравне с удачным — иначе портал, у которого метод закрыт правами, спрашивался
+ * бы на КАЖДОЙ операции выписки в сотни строк.
+ */
+const currenciesByPortal = new Map<string, PortalCurrencyFormats>()
+
+/** Для тестов: модульный кэш иначе протекает между случаями. */
+export function resetCurrencyCache(): void {
+  currenciesByPortal.clear()
+}
+
+async function loadPortalCurrencies(call: RestCall, memberId?: string): Promise<PortalCurrencyFormats> {
+  if (!memberId) return {}
+  const cached = currenciesByPortal.get(memberId)
+  if (cached) return cached
+  const formats: PortalCurrencyFormats = {}
+  try {
+    const resp = await call('crm.currency.list', {})
+    const rows = (resp as Record<string, unknown>)?.result
+    if (Array.isArray(rows)) {
+      for (const raw of rows as Record<string, unknown>[]) {
+        const code = String(raw?.CURRENCY ?? '').trim().toUpperCase()
+        const formatString = String(raw?.FORMAT_STRING ?? '').trim()
+        if (!code || !formatString) continue
+        const decimals = Number(raw?.DECIMALS)
+        formats[code] = { formatString, decimals: Number.isInteger(decimals) && decimals >= 0 ? decimals : 2 }
+      }
+    }
+  } catch (currencyError) {
+    log.warning(`справочник валют портала недоступен, сумма покажется кодом — ${(currencyError as Error).message}`)
+  }
+  currenciesByPortal.set(memberId, formats)
+  return formats
 }
 
 async function resolveResponsibleId(call: RestCall, memberId?: string): Promise<number> {
