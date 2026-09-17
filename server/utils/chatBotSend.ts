@@ -14,6 +14,7 @@
 // rather than a launch-week crutch.
 
 import { buildBotRegisterCall, extractBotId, isPermanentBotError } from '../../app/utils/b24BotRegister'
+import { hasAttachBlocks, type ChatAttach } from '../../app/utils/chatAttach'
 import { B24_CHAT_BOT } from '../../app/config/b24'
 import type { RestCall } from './companyLookup'
 import { useServerLogger } from './serverLogger'
@@ -91,27 +92,35 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
  * Post `text` to `dialogId` as the bot; returns the message id, or `null` when the bot route was
  * unavailable and the caller should fall back.
  *
- * ⚠ `URL_PREVIEW: 'N'` for the same reason as the non-bot path: the text carries payer-controlled
- * content, and a pasted URL must not expand into a rich card in the operator's chat.
+ * ⚠ ЭТО МЕТОД ВТОРОГО ПОКОЛЕНИЯ, И ФОРМА У НЕГО СВОЯ. Он принимает `botId`/`dialogId`, а само
+ * содержимое — во ВЛОЖЕННОМ `fields` со строчными именами (`message`, `attach`, `urlPreview`).
+ * Первая редакция слала сюда форму `im.message.add` (`BOT_ID`/`DIALOG_ID`/`MESSAGE`/`ATTACH`
+ * верхним уровнем), и это был отказ ХУДШЕГО вида: текст доходил (портал разобрал его по
+ * совместимости), а вложение и запрет превью — нет, молча. Снаружи «картинки не работают».
  *
- * ⚠ `ATTACH` is OMITTED, not sent empty, when there is nothing to attach: `im`/`imbot` validate the
- * block collection and answer `ATTACH_ERROR` for a shape they dislike, and an empty one is exactly
- * such a shape. Whether the pictures survive is the caller's problem (`postChatMessage` retries
- * without them) — this function only has to avoid inventing an attachment nobody asked for.
+ * ⚠ `urlPreview: false` — по той же причине, что и на втором маршруте: в тексте бывает содержимое,
+ * которое пишет плательщик, и вставленная ссылка не должна разворачиваться в карточку.
+ *
+ * ⚠ `attach` ОПУСКАЕТСЯ, а не шлётся пустым, когда прикладывать нечего: портал проверяет коллекцию
+ * блоков и на негодную форму отвечает `ATTACH_ERROR`, а пустая — ровно такая. Переживут ли картинки
+ * дорогу — забота вызывающего (`postChatMessage` повторяет без них); здесь задача одна: не
+ * выдумывать вложение, которого никто не просил.
  */
 export async function sendAsBot(
   botId: string,
   dialogId: string,
   text: string,
   call: RestCall,
-  attach?: unknown
+  attach?: ChatAttach | null
 ): Promise<string | null> {
   const resp = await call(BOT_MESSAGE_METHOD, {
-    BOT_ID: Number(botId),
-    DIALOG_ID: dialogId,
-    MESSAGE: text,
-    URL_PREVIEW: 'N',
-    ...(attach ? { ATTACH: attach } : {})
+    botId: Number(botId),
+    dialogId,
+    fields: {
+      message: text,
+      urlPreview: false,
+      ...(hasAttachBlocks(attach) ? { attach } : {})
+    }
   })
   return extractBotMessageId(resp)
 }

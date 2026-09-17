@@ -168,8 +168,8 @@ describe('картинки шагов в приглашении (#19)', () => {
     const d = deps()
     await handleSendBankInvite(d, alfa)
     const attach = vi.mocked(d.sendMessage).mock.calls[0]![3]
-    expect(attach?.IMAGE.length).toBeGreaterThan(0)
-    expect(attach!.IMAGE[0]!.LINK.startsWith('https://bank-import.example/guide/')).toBe(true)
+    expect(attach?.[0]?.IMAGE.length).toBeGreaterThan(0)
+    expect(attach![0]!.IMAGE[0]!.LINK.startsWith('https://bank-import.example/guide/')).toBe(true)
   })
 
   it('у Приора картинок НЕТ — там нечего снимать', async () => {
@@ -188,5 +188,49 @@ describe('картинки шагов в приглашении (#19)', () => {
     expect(res.status).toBe(200)
     expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
     expect(String(vi.mocked(d.sendMessage).mock.calls[0]![2])).toContain('Open API')
+  })
+})
+
+describe('предусловие «моя компания» (#493)', () => {
+  // ⚠ Эти проверки ПЕРЕЕХАЛИ сюда из тестов самостоятельного подключения: тот путь снят, а гейт
+  // остался — и это единственная админская точка входа, где он теперь срабатывает. Не перенеси мы
+  // их, удаление кнопки «Подключить» молча унесло бы и проверку предусловия.
+  it('нет «моей компании» → 409, и в банк мы даже не собираемся', async () => {
+    const buildPriorUrl = vi.fn(async () => LINK)
+    const d = deps({ myCompanyGate: async () => 'no-company', buildPriorUrl })
+    const r = await handleSendBankInvite(d, input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-company')
+    expect(buildPriorUrl).not.toHaveBeenCalled()
+    expect(d.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('нет счёта в реквизитах → своя причина', async () => {
+    const r = await handleSendBankInvite(deps({ myCompanyGate: async () => 'no-account' }), input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-account')
+  })
+
+  it('CRM не ответила → отправка ПРОХОДИТ (fail-open)', async () => {
+    // «Не смогли спросить» не равно «не настроено»: молчащая CRM не должна останавливать настройку.
+    const r = await handleSendBankInvite(deps({
+      myCompanyGate: async () => {
+        throw new Error('rest down')
+      }
+    }), input)
+    expect(r.status).toBe(200)
+  })
+
+  it('не-админа отшивает admin-гейт, а не гейт компании — порядок проверок не переставлен', async () => {
+    let asked = false
+    const r = await handleSendBankInvite(deps({
+      validateFrame: vi.fn(async () => ({ userId: 'U', isAdmin: false })),
+      myCompanyGate: async () => {
+        asked = true
+        return 'ok'
+      }
+    }), input)
+    expect(r.status).toBe(403)
+    expect(asked).toBe(false)
   })
 })

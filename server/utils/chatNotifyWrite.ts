@@ -14,6 +14,7 @@
 import type { StatementItem } from '../../app/types/statement'
 import { buildChatMessage } from '../../app/utils/chatMessage'
 import { resolveBotId, sendAsBot } from './chatBotSend'
+import { hasAttachBlocks, type ChatAttach } from '../../app/utils/chatAttach'
 import type { RestCall } from './companyLookup'
 
 /** REST method that posts a message as the TOKEN OWNER. The fallback route — see `postChatMessage`. */
@@ -53,9 +54,9 @@ export async function postChatMessage(
   text: string,
   call: RestCall,
   memberId?: string,
-  attach?: unknown
+  attach?: ChatAttach | null
 ): Promise<string | null> {
-  if (!attach) return deliver(dialogId, text, call, memberId)
+  if (!hasAttachBlocks(attach)) return deliver(dialogId, text, call, memberId)
   try {
     return await deliver(dialogId, text, call, memberId, attach)
   } catch {
@@ -74,7 +75,7 @@ async function deliver(
   text: string,
   call: RestCall,
   memberId?: string,
-  attach?: unknown
+  attach?: ChatAttach | null
 ): Promise<string | null> {
   if (memberId) {
     const botId = await resolveBotId(memberId, call)
@@ -101,11 +102,14 @@ async function deliver(
   }
   // URL_PREVIEW=N: the message carries external (payer-controlled) text — don't let
   // a pasted URL expand into a rich preview card in the operator chat.
+  // ⚠ Здесь вложение — параметр ВЕРХНЕГО уровня и заглавными: у `im.message.*` форма своя, не та,
+  //   что у методов чат-бота (там оно лежит в `fields.attach`). Общего хелпера на две формы нет
+  //   намеренно — он бы прятал ровно то различие, на котором картинки и потерялись.
   const resp = await call(CHAT_MESSAGE_METHOD, {
     DIALOG_ID: dialogId,
     MESSAGE: text,
     URL_PREVIEW: 'N',
-    ...(attach ? { ATTACH: attach } : {})
+    ...(hasAttachBlocks(attach) ? { ATTACH: attach } : {})
   })
   return extractMessageId(resp)
 }
