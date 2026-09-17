@@ -6,6 +6,9 @@ import { notifyAllocationErrorViaRest, notifyUnresolvedViaRest } from '../server
 import { notifyDeletionErrorViaRest } from '../server/utils/deletionErrorNotify'
 import type { StatementItem } from '../app/types/statement'
 
+/** Профиль бота (имя + аватар) — отдельный вызов после регистрации, см. `pushBotProfile`. */
+const BOT_PROFILE_METHOD = 'imbot.v2.Bot.update'
+
 // Отправка от имени приложения с ОБЯЗАТЕЛЬНЫМ откатом (#496).
 //
 // Два документированных отказа решают, заработает ли бот на конкретном портале: `ACCESS_DENIED`
@@ -38,7 +41,7 @@ describe('postChatMessage — маршрут по умолчанию', () => {
   it('с memberId регистрирует бота и шлёт от него', async () => {
     const { call, seen } = fake()
     expect(await postChatMessage('chat1', 'привет', call, 'M1')).toBe('100')
-    expect(seen).toEqual(['imbot.v2.Bot.register', BOT_MESSAGE_METHOD])
+    expect(seen).toEqual(['imbot.v2.Bot.register', BOT_PROFILE_METHOD, BOT_MESSAGE_METHOD])
   })
 
   it('регистрация — один раз на портал, а не на сообщение', async () => {
@@ -342,8 +345,8 @@ describe('вложение с картинками и маршрут бота (#
     // у всех порталов, где всё работает, и заметили бы только у тех, где бот недоступен.
     const { call, calls } = spy()
     await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
-    expect(calls.map(c => c.method)).toEqual(['imbot.v2.Bot.register', BOT_MESSAGE_METHOD])
-    expect((calls[1]!.params.fields as { attach?: unknown }).attach).toBe(ATTACH)
+    expect(calls.map(c => c.method)).toEqual(['imbot.v2.Bot.register', BOT_PROFILE_METHOD, BOT_MESSAGE_METHOD])
+    expect((calls[2]!.params.fields as Record<string, unknown>).attach).toBe(ATTACH)
   })
 
   it('оба маршрута отвергли вложение ⇒ ровно ОДНО сообщение, без картинок', async () => {
@@ -352,8 +355,103 @@ describe('вложение с картинками и маршрут бота (#
     const id = await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
     expect(id).toBe('100')
     expect(calls.map(c => c.method)).toEqual([
-      'imbot.v2.Bot.register', BOT_MESSAGE_METHOD, CHAT_MESSAGE_METHOD, BOT_MESSAGE_METHOD
+      'imbot.v2.Bot.register', BOT_PROFILE_METHOD, BOT_MESSAGE_METHOD, CHAT_MESSAGE_METHOD, BOT_MESSAGE_METHOD
     ])
-    expect(calls.filter(c => c.method !== 'imbot.v2.Bot.register' && !attachOf(c.params))).toHaveLength(1)
+    const delivered = calls.filter(c => c.method === BOT_MESSAGE_METHOD || c.method === CHAT_MESSAGE_METHOD)
+    expect(delivered.filter(c => !attachOf(c.params))).toHaveLength(1)
+  })
+})
+
+describe('бот пишет только в тот чат, где состоит (#496, замерено 2026-09-17)', () => {
+  /** Портал, который отвергает отправку в группу, пока бот не вступил. */
+  function portal() {
+    const seen: string[] = []
+    let joined = false
+    const call = async (method: string) => {
+      seen.push(method)
+      if (method === 'imbot.v2.Bot.register') return { result: { users: [{ id: 7 }] } }
+      if (method === 'im.chat.user.add') {
+        joined = true
+        return { result: true }
+      }
+      if (method === BOT_MESSAGE_METHOD && !joined) {
+        throw Object.assign(new Error('Access denied'), { code: 'ACCESS_DENIED' })
+      }
+      return { result: { id: 100 } }
+    }
+    return { call, seen }
+  }
+
+  it('отказ доступа лечится вступлением, а не откатом на подпись сотрудника', async () => {
+    // ⚠ Несущий случай. Без вступления КАЖДОЕ сообщение молча уходило на `im.message.add`, то есть
+    // бот был зарегистрирован, виден в портале — и не написал ни строчки.
+    const { call, seen } = portal()
+    expect(await postChatMessage('chat15', 'привет', call, 'M-JOIN')).toBe('100')
+    expect(seen).toContain('im.chat.user.add')
+    expect(seen).not.toContain(CHAT_MESSAGE_METHOD)
+  })
+
+  it('в ЛИЧНЫЙ чат не вступают — там нет членства', async () => {
+    // Так уходит ссылка на подключение банка (#19): `dialogId` это голый id пользователя.
+    // Замерено: личное сообщение бот отправляет без всякого вступления.
+    const { call, seen } = portal()
+    await postChatMessage('42', 'привет', call, 'M-DM')
+    expect(seen).not.toContain('im.chat.user.add')
+  })
+
+  it('вступление НЕ пробуется на отказах другого рода', async () => {
+    // Иначе каждый отвергнутый портал-вложением вызов стоил бы двух лишних обращений.
+    const seen: string[] = []
+    const call = async (method: string) => {
+      seen.push(method)
+      if (method === 'imbot.v2.Bot.register') return { result: { users: [{ id: 7 }] } }
+      if (method === BOT_MESSAGE_METHOD) throw Object.assign(new Error('bad attach'), { code: 'ATTACH_ERROR' })
+      return { result: { id: 100 } }
+    }
+    await postChatMessage('chat15', 'привет', call, 'M-ATT')
+    expect(seen).not.toContain('im.chat.user.add')
+    expect(seen).toContain(CHAT_MESSAGE_METHOD)
+  })
+})
+
+describe('аватар бота — иконка приложения (#496)', () => {
+  it('профиль толкается отдельным вызовом: регистрация ничего не перезаписывает', async () => {
+    const calls: { method: string, params: Record<string, unknown> }[] = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      return method === 'imbot.v2.Bot.register' ? { result: { users: [{ id: 7 }] } } : { result: { id: 100 } }
+    }
+    await postChatMessage('chat1', 'привет', call, 'M-AV')
+    const update = calls.find(c => c.method === BOT_PROFILE_METHOD)
+    const props = ((update?.params.fields as Record<string, unknown>).properties) as Record<string, unknown>
+    expect(String(props.avatar ?? '').length).toBeGreaterThan(1000)
+    expect(props.name).toBeTruthy()
+  })
+
+  it('портал отверг картинку ⇒ повтор БЕЗ неё, иначе бот остался бы безымянным', async () => {
+    // ⚠ Имя и аватар едут одним вызовом: отвергнув картинку, портал не применяет НИЧЕГО.
+    const calls: { method: string, params: Record<string, unknown> }[] = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      if (method === 'imbot.v2.Bot.register') return { result: { users: [{ id: 7 }] } }
+      const props = (params.fields as Record<string, unknown> | undefined)?.properties as Record<string, unknown> | undefined
+      if (method === BOT_PROFILE_METHOD && props?.avatar) throw new Error('BOT_AVATAR_INCORRECT_SIZE')
+      return { result: { id: 100 } }
+    }
+    await postChatMessage('chat1', 'привет', call, 'M-AV2')
+    const updates = calls.filter(c => c.method === BOT_PROFILE_METHOD)
+    expect(updates).toHaveLength(2)
+    const second = ((updates[1]!.params.fields as Record<string, unknown>).properties) as Record<string, unknown>
+    expect(second.avatar).toBeUndefined()
+    expect(second.name).toBeTruthy()
+  })
+
+  it('отказ профиля НЕ мешает доставке — это оформление, а не сообщение', async () => {
+    const call = async (method: string) => {
+      if (method === 'imbot.v2.Bot.register') return { result: { users: [{ id: 7 }] } }
+      if (method === BOT_PROFILE_METHOD) throw new Error('refused')
+      return { result: { id: 100 } }
+    }
+    expect(await postChatMessage('chat1', 'привет', call, 'M-AV3')).toBe('100')
   })
 })
