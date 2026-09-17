@@ -97,6 +97,9 @@ export function formatAmountWithPortal(
     return applyFormatString(known.formatString, formatNumber(amount, known.decimals))
   }
   const number = formatNumber(amount, 2)
-  // \u00A0 экранированием, а не литералом: неразрывный пробел в исходнике неотличим от обычного.
-  return code ? `${number}\u00A0${code}` : number
+  // ⚠ Между числом и КОДОМ — обычный пробел, хотя разряды внутри числа ru-RU делит неразрывным.
+  // Это не забывчивость: запасной вид обязан совпасть с прежним заголовком дела символ в символ,
+  // потому что тот же заголовок печатают чат и сообщения об ошибках разнесения, где справочника
+  // портала нет. Разойдись они — один платёж выглядел бы на двух поверхностях двумя разными.
+  return code ? `${number} ${code}` : number
 }

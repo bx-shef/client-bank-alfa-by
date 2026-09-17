@@ -211,7 +211,10 @@ export async function writeTodoActivityViaRest(
     return writeLegacyActivityViaRest(item, companyId, call, note, memberId, sleep)
   }
 
-  const params = buildTodoActivity(item, { id: Number(companyId) }, note)
+  // ⚠ Справочник валют берётся ДО создания дела, а не только для блоков: заголовок обязан
+  // подписывать сумму так же, как таблица под ним (#729). Вызов кэширован на портал и не бросает.
+  const currencies = await loadPortalCurrencies(call, memberId)
+  const params = buildTodoActivity(item, { id: Number(companyId) }, note, currencies)
   let added: Record<string, unknown>
   try {
     added = await call(TODO_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
@@ -256,7 +259,7 @@ export async function writeTodoActivityViaRest(
     }
   }
 
-  await attachBlocks(item, id, companyId, call, providerId, memberId)
+  await attachBlocks(item, id, companyId, call, providerId, currencies)
   return id
 }
 
@@ -281,12 +284,11 @@ async function attachBlocks(
   companyId: string,
   call: RestCall,
   providerId?: BankProviderId,
-  memberId?: string
+  currencies?: PortalCurrencyFormats
 ): Promise<void> {
   try {
-    const formats = await loadPortalCurrencies(call, memberId)
     const { method, params } = buildActivityBlocksCall(
-      activityId, CRM_OWNER_TYPE_COMPANY, Number(companyId), buildActivityBlocks(item, providerId, formats)
+      activityId, CRM_OWNER_TYPE_COMPANY, Number(companyId), buildActivityBlocks(item, providerId, currencies)
     )
     await call(method, params)
   } catch (blocksError) {
@@ -318,7 +320,8 @@ export async function writeLegacyActivityViaRest(
   sleep?: (ms: number) => Promise<void>
 ): Promise<string | null> {
   const responsibleId = await resolveResponsibleId(call, memberId)
-  const params = buildLegacyActivity(item, { id: Number(companyId) }, responsibleId, note)
+  const currencies = await loadPortalCurrencies(call, memberId)
+  const params = buildLegacyActivity(item, { id: Number(companyId) }, responsibleId, note, currencies)
   const added = await call(LEGACY_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
   const id = extractLegacyActivityId(added)
   if (!id) return null

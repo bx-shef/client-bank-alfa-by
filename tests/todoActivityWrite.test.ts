@@ -5,7 +5,7 @@ import {
 } from '../app/utils/todoActivity'
 import { ACTIVITY_BLOCKS_SET_METHOD } from '../app/utils/activityBlocks'
 import { ACTIVITY_LIST_METHOD } from '../server/utils/activityMarkerLookup'
-import { extractTodoActivityId, resetMarkerProof, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
+import { extractTodoActivityId, resetCurrencyCache, resetMarkerProof, writeTodoActivityViaRest } from '../server/utils/todoActivityWrite'
 
 // Универсальное дело не принимает маркер в том же вызове, которым создаётся (#495) — маркер и
 // тип описания живут только в `crm.activity.update`. Значит между вызовами есть окно, в котором
@@ -47,6 +47,31 @@ describe('writeTodoActivityViaRest', () => {
     // ⚠ Блоки (#729) — ТРЕТЬИМ и строго ПОСЛЕ маркера: до него дело ещё может быть удалено
     // компенсацией, и оформлять нечего.
     expect(calls).toEqual([TODO_ACTIVITY_ADD_METHOD, ACTIVITY_UPDATE_METHOD, ACTIVITY_BLOCKS_SET_METHOD])
+  })
+
+  it('ЗАГОЛОВОК дела подписывает сумму справочником ПОРТАЛА, а не своим (#729)', async () => {
+    // ⚠ Мутационно проверено: без этого случая «уронить справочник по дороге до заголовка»
+    // проходило зелёным — блоки-то формат получали, и расхождение было видно только на живой
+    // карточке, где заголовок печатал «10,00 BYN» над таблицей с «10,00 руб.».
+    resetCurrencyCache()
+    let title = ''
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.currency.list') {
+        return { result: [{ CURRENCY: 'BYN', FORMAT_STRING: '# руб.', DECIMALS: 2 }] }
+      }
+      if (method === TODO_ACTIVITY_ADD_METHOD) {
+        title = String((params as { title?: unknown }).title ?? '')
+        return { result: { id: 7 } }
+      }
+      // Маркер обязан находиться: иначе самопроверка снесёт дело и до заголовка дело не дойдёт.
+      if (method === ACTIVITY_LIST_METHOD) return { result: [{ ID: 7 }] }
+      return { result: true }
+    })
+    resetMarkerProof()
+    await writeTodoActivityViaRest(item(), '42', call, undefined, 'M')
+    expect(title).toContain('10,00 руб.')
+    expect(title).not.toContain('BYN')
+    resetCurrencyCache()
   })
 
   it('отказ блоков НЕ роняет запись — операция уже зачтена дедупом', async () => {

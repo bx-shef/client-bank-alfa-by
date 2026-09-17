@@ -4,7 +4,8 @@ import {
   ACTIVITY_BLOCKS_SET_METHOD, MAX_LAYOUT_BLOCKS, SOURCE_LABEL,
   buildActivityBlocks, buildActivityBlocksCall, sourceLabel
 } from '../app/utils/activityBlocks'
-import { buildActivityDescription } from '../app/utils/todoActivity'
+import { buildActivityDescription, buildTodoActivity } from '../app/utils/todoActivity'
+import { buildActivityTitle } from '../app/utils/activity'
 import { counterpartyAccountOf } from '../app/utils/eraseActivities'
 import { type PortalCurrencyFormats, applyFormatString, decodeEntities, formatAmountWithPortal } from '../app/utils/currencyFormat'
 
@@ -192,5 +193,35 @@ describe('сумма в формате ПОРТАЛА (#729)', () => {
 
   it('шаблон без плейсхолдера не теряет СУММУ', () => {
     expect(applyFormatString('руб.', '1\u00A0840,50')).toContain('1\u00A0840,50')
+  })
+})
+
+describe('заголовок дела и блок показывают ОДНУ сумму (#729)', () => {
+  const PORTAL: PortalCurrencyFormats = { BYN: { formatString: '# руб.', decimals: 2 } }
+
+  /** Значение блока суммы — первая строка таблицы. */
+  function blockAmount(currencies?: PortalCurrencyFormats): string {
+    const [first] = buildActivityBlocks(ITEM, 'alfa-by', currencies)
+    const inner = (first!.properties as Record<string, unknown>).block as { properties: Record<string, unknown> }
+    return String(inner.properties.value)
+  }
+
+  it('заголовок подписывает валюту так же, как таблица под ним', () => {
+    // ⚠ Замечание владельца: заголовок печатал «1 840,50 BYN» голым Intl, а блок — «1 840,50 руб.»,
+    // и один платёж выглядел на одном экране двумя разными.
+    expect(buildActivityTitle(ITEM, PORTAL)).toContain(blockAmount(PORTAL))
+    expect(buildActivityTitle(ITEM, PORTAL)).toContain('1\u00A0840,50 руб.')
+  })
+
+  it('дело собирается с тем же справочником, а не со своим', () => {
+    const { title } = buildTodoActivity(ITEM, { id: 1 }, undefined, PORTAL)
+    expect(title).toContain(blockAmount(PORTAL))
+  })
+
+  it('без справочника запасной вид СОВПАДАЕТ с прежним заголовком', () => {
+    // ⚠ Тот же заголовок печатают чат и сообщения об ошибках разнесения, где справочника нет:
+    // разойдись запасной вид с прежним, и один платёж выглядел бы на двух поверхностях разным.
+    expect(buildActivityTitle(ITEM)).toBe('Приход 1\u00A0840,50 BYN от ООО «Ромашка»')
+    expect(buildActivityTitle(ITEM)).toContain(blockAmount(undefined))
   })
 })

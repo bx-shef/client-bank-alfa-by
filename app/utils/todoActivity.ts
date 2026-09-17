@@ -21,6 +21,7 @@
 // `[URL=…]` in a payment purpose would become a real link inside the client's CRM card.
 
 import type { StatementItem } from '~/types/statement'
+import type { PortalCurrencyFormats } from '~/utils/currencyFormat'
 import { dedupKey } from '~/utils/statement'
 import {
   ACTIVITY_ORIGIN, CRM_OWNER_TYPE_COMPANY, buildActivityTitle,
@@ -162,12 +163,19 @@ export interface TodoActivityParams {
  * on a busy portal. `todo.add` creates an open activity by default, so this is a decision NOT to
  * add a completion flag — recorded here because its absence is otherwise invisible.
  */
-export function buildTodoActivity(item: StatementItem, company: CrmCompanyRef, note?: string): TodoActivityParams {
+export function buildTodoActivity(
+  item: StatementItem,
+  company: CrmCompanyRef,
+  note?: string,
+  /** Справочник валют портала — тот же, что у блоков (#729): заголовок и таблица под ним обязаны
+   *  показывать сумму ОДИНАКОВО. Без него запасной вид «1 840,50 BYN». */
+  currencies?: PortalCurrencyFormats
+): TodoActivityParams {
   return {
     ownerTypeId: CRM_OWNER_TYPE_COMPANY,
     ownerId: company.id,
     deadline: toPortalDeadline(item.acceptDate),
-    title: neutralizeBb(buildActivityTitle(item)).slice(0, MAX_TITLE_CHARS),
+    title: neutralizeBb(buildActivityTitle(item, currencies)).slice(0, MAX_TITLE_CHARS),
     // slim: реквизиты показывает таблица блоков (#729), в тексте — причина и назначение.
     description: buildActivityDescription(item, note, 'slim'),
     colorId: item.direction === 'credit' ? TODO_COLOR_CREDIT : TODO_COLOR_DEBIT,

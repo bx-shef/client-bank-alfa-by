@@ -33,6 +33,7 @@
 // потому что оно ломало карточку компании.
 
 import type { StatementItem } from '~/types/statement'
+import type { PortalCurrencyFormats } from '~/utils/currencyFormat'
 import {
   CRM_OWNER_TYPE_COMPANY, buildActivityTitle, neutralizeBb, toPortalDeadline, type CrmCompanyRef
 } from '~/utils/activity'
@@ -122,7 +123,10 @@ export function buildLegacyActivity(
   item: StatementItem,
   company: CrmCompanyRef,
   responsibleId: number,
-  note?: string
+  note?: string,
+  /** Справочник валют портала: блоков здесь не будет никогда (#722/#729), но сумма в заголовке
+   *  обязана выглядеть так же, как на любом другом портале. */
+  currencies?: PortalCurrencyFormats
 ): { fields: LegacyActivityFields } {
   const at = toPortalDeadline(item.acceptDate)
   return {
@@ -130,7 +134,7 @@ export function buildLegacyActivity(
       OWNER_TYPE_ID: CRM_OWNER_TYPE_COMPANY,
       OWNER_ID: company.id,
       TYPE_ID: LEGACY_ACTIVITY_TYPE_MEETING,
-      SUBJECT: neutralizeBb(buildActivityTitle(item)).slice(0, MAX_TITLE_CHARS),
+      SUBJECT: neutralizeBb(buildActivityTitle(item, currencies)).slice(0, MAX_TITLE_CHARS),
       DESCRIPTION: buildActivityDescription(item, note),
       DESCRIPTION_TYPE: DESCRIPTION_TYPE_BB,
       // ⚠ Только привязка к компании — ни телефона, ни почты (см. доводы над функцией).

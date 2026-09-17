@@ -116,7 +116,9 @@ async function main() {
   if (!before) {
     createdId = legacy
       ? await writeLegacyActivityViaRest(item, companyId, call, undefined, memberId)
-      : await writeTodoActivityViaRest(item, companyId, call)
+      // memberId is passed on purpose: it enables BOTH the marker self-check and the portal
+      // currency dictionary (#729) — without it the smoke would exercise a path crm-sync never takes.
+      : await writeTodoActivityViaRest(item, companyId, call, undefined, memberId)
     if (!createdId) {
       err('todo.add не вернул id (проверь права/контекст приложения)')
       process.exit(1)
