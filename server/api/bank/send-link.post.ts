@@ -40,10 +40,10 @@ export default defineEventHandler(async (event) => {
         // токеном нажавшего: иначе инструкция по доступу к деньгам компании приходила бы как
         // записка от коллеги, и спрашивали бы потом с него. Откат на `im.message.add` внутри
         // `postChatMessage` — там же, где он нужен остальным пяти видам сообщений.
-        sendMessage: async (memberId, dialogId, text) => {
+        sendMessage: async (memberId, dialogId, text, attach) => {
           const call = await livePortalSdkCall(memberId)
           if (!call) throw new Error('portal token is not available')
-          await postChatMessage(dialogId, text, call, memberId)
+          await postChatMessage(dialogId, text, call, memberId, attach)
         },
         // ⚠ Через ЕДИНСТВЕННЫЙ choke point записи `app.option` (#182), а не своим вызовом:
         // он же проверяет `profile.ADMIN`. Лишний `profile` на редкое ручное действие дешевле
@@ -55,6 +55,10 @@ export default defineEventHandler(async (event) => {
           if (res.status !== 200) throw new Error(`app.option.set failed: ${res.status}`)
         },
         alfaClientId: () => (process.env.ALFA_OAUTH_CLIENT_ID || '').trim(),
+        // ⚠ Через `useRuntimeConfig()`, а не `process.env`: `NUXT_PUBLIC_SITE_URL` — BUILD-TIME
+        // переменная, она запекается в сборку, и в окружении РАБОТАЮЩЕГО контейнера её может не
+        // быть вовсе. Чтение из env дало бы пусто и молча убрало картинки из сообщения.
+        siteUrl: () => String(useRuntimeConfig().public.siteUrl || '').trim(),
         // ⚠ ВНУТРЕННЯЯ ссылка портала (#19) — та же механика, что у ссылок на экраны приложения:
         // `/marketplace/view/<код>/?params[place]=…`. Значит бухгалтера аутентифицирует САМ
         // Битрикс24, а подписанный грант лишь именует, кому она выдана; сервер сверит одно с

@@ -18,6 +18,7 @@ function deps(over: Partial<InviteSendDeps> = {}): InviteSendDeps {
     sendMessage: vi.fn(async () => {}),
     rememberContact: vi.fn(async () => {}),
     alfaClientId: () => 'shef-bank-import',
+    siteUrl: () => 'https://bank-import.example',
     keyScreenLink: vi.fn(() => KEY_LINK),
     ...over
   }
@@ -157,5 +158,35 @@ describe('доставка и запоминание', () => {
     const d = deps()
     await handleSendBankInvite(d, { ...input, userName: '  ' })
     expect(d.rememberContact).toHaveBeenCalledWith(TOKEN, DOMAIN, { userId: '7' })
+  })
+})
+
+describe('картинки шагов в приглашении (#19)', () => {
+  const alfa = { ...input, provider: 'alfa-by' as const }
+
+  it('у Альфы к сообщению прикладываются картинки шагов', async () => {
+    const d = deps()
+    await handleSendBankInvite(d, alfa)
+    const attach = vi.mocked(d.sendMessage).mock.calls[0]![3]
+    expect(attach?.IMAGE.length).toBeGreaterThan(0)
+    expect(attach!.IMAGE[0]!.LINK.startsWith('https://bank-import.example/guide/')).toBe(true)
+  })
+
+  it('у Приора картинок НЕТ — там нечего снимать', async () => {
+    // Владелец счёта у Приора ничего не выпускает руками: открыл присланную ссылку и подтвердил
+    // согласие на сайте банка. Картинки шагов Альфы там были бы прямой дезинформацией.
+    const d = deps()
+    await handleSendBankInvite(d, input)
+    expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
+  })
+
+  it('сборка без NUXT_PUBLIC_SITE_URL всё равно ОТПРАВЛЯЕТ инструкцию, просто без картинок', async () => {
+    // ⚠ Отсутствие картинок — не повод молчать: текст инструкции самодостаточен, и отказ здесь
+    // означал бы, что подключение банка нельзя передать владельцу счёта из-за косметики.
+    const d = deps({ siteUrl: () => '' })
+    const res = await handleSendBankInvite(d, alfa)
+    expect(res.status).toBe(200)
+    expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
+    expect(String(vi.mocked(d.sendMessage).mock.calls[0]![2])).toContain('Open API')
   })
 })

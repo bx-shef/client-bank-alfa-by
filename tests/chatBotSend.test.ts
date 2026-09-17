@@ -288,3 +288,39 @@ describe('memberId доезжает до маршрутизатора из ВС�
     })
   }
 })
+
+describe('вложение с картинками и маршрут бота (#19)', () => {
+  const ATTACH = { IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }
+
+  /** Фейк, который ПОМНИТ параметры: весь смысл этих проверок в том, что именно ушло в портал. */
+  function spy(reject: (method: string, params: Record<string, unknown>) => boolean = () => false) {
+    const calls: { method: string, params: Record<string, unknown> }[] = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      if (method === 'imbot.v2.Bot.register') return { result: 7 }
+      if (reject(method, params)) throw new Error('ATTACH_ERROR')
+      return { result: 100 }
+    }
+    return { call, calls }
+  }
+
+  it('бот несёт картинки — иначе их не увидел бы никто на исправном портале', async () => {
+    // ⚠ Бот — ОСНОВНОЙ маршрут (#496), а не запасной: потеряв вложение здесь, мы потеряли бы его
+    // у всех порталов, где всё работает, и заметили бы только у тех, где бот недоступен.
+    const { call, calls } = spy()
+    await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
+    expect(calls.map(c => c.method)).toEqual(['imbot.v2.Bot.register', BOT_MESSAGE_METHOD])
+    expect(calls[1]!.params.ATTACH).toBe(ATTACH)
+  })
+
+  it('оба маршрута отвергли вложение ⇒ ровно ОДНО сообщение, без картинок', async () => {
+    // Лестница повторяется целиком, поэтому текст снова уходит ботом — доставка одна, дубля нет.
+    const { call, calls } = spy((_m, p) => Boolean(p.ATTACH))
+    const id = await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
+    expect(id).toBe('100')
+    expect(calls.map(c => c.method)).toEqual([
+      'imbot.v2.Bot.register', BOT_MESSAGE_METHOD, CHAT_MESSAGE_METHOD, BOT_MESSAGE_METHOD
+    ])
+    expect(calls.filter(c => !(c.method === 'imbot.v2.Bot.register') && !c.params.ATTACH)).toHaveLength(1)
+  })
+})
