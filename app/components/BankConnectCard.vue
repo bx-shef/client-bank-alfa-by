@@ -11,7 +11,7 @@ import { BANK_LABELS } from '~/utils/bankLabels'
 import { useBankInvite } from '~/composables/useBankInvite'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { BANK_CONNECTED_COMMAND } from '~/utils/settingsSync'
-import { contactLabel } from '~/utils/bankContact'
+import { contactDialogId, contactLabel } from '~/utils/bankContact'
 
 // Online bank connect (stage 5, A7c). Admin picks the bank and starts the OAuth connect:
 // POST /api/bank/connect (frame token) → the backend returns the bank authorize
@@ -151,15 +151,25 @@ async function onHandOver() {
 }
 
 const chatOpenFailed = ref(false)
+/** Кого открывать. ⚠ Пусто, пока никому не отправляли — открывать тогда нечего, и кнопка гаснет. */
+const chatDialogId = computed(() => contactDialogId(invite.contact.value))
 
 async function openChat() {
   chatOpenFailed.value = false
+  const id = chatDialogId.value
+  // Сужение типа. Достижимо только если снять `disabled` у кнопки — гардом это не называем.
+  if (!id) {
+    chatOpenFailed.value = true
+    return
+  }
   // ⚠ Штатный метод SDK, а не слайдер по портальному пути `/online/` (замечание владельца
   // 2026-09-17). Адрес мессенджера — деталь портала, а не наш контракт; метод описывает намерение
   // и переживает его смену.
+  // ⚠ И АДРЕСАТ ПЕРЕДАЁТСЯ: без него метод открывает СПИСОК чатов (так сказано в документации), то
+  // есть ровно то, от чего кнопка должна была избавить (замечание владельца 2026-09-17).
   // ⚠ Отказ ГОВОРИТ О СЕБЕ: вне фрейма просить некого, и молчание здесь неотличимо от сломанной
   // кнопки — ровно та жалоба, что уже была на «Скопировать».
-  if (!await useB24().openMessenger()) chatOpenFailed.value = true
+  if (!await useB24().openMessenger(id)) chatOpenFailed.value = true
 }
 
 async function onHandOverAgain() {
@@ -298,14 +308,15 @@ async function onHandOverAgain() {
           >
             Ещё раз: {{ lastContact }}
           </B24Button>
-          <!-- ⚠ Открывает МЕССЕНДЖЕР портала, а не конкретную переписку, и это осознанно. Сообщение
-               пишет БОТ приложения получателю, то есть переписка идёт между ботом и им: у
-               администратора, отправившего инструкцию другому сотруднику, доступа к ней нет в
-               принципе. Глубокая ссылка возможна только в случае «отправил самому себе», и её адрес
-               (`IM_DIALOG` с идентификатором бота) мы живьём не проверяли — а кнопка, ведущая не
-               туда, хуже кнопки, ведущей в список чатов, где нужное сообщение лежит сверху. -->
+          <!-- ⚠ Открывает переписку С АДРЕСАТОМ, а не список чатов: `imOpenMessenger` без параметра
+               показывает список (документация метода), и первая редакция делала именно это.
+               ⚠ Гаснет, пока никому не отправляли: открывать тогда нечего, и кнопка, ведущая в
+               пустоту, хуже отсутствующей.
+               ⚠ Честная граница: откроется переписка ТЕКУЩЕГО пользователя с адресатом. Доставил
+               инструкцию бот — само сообщение лежит в переписке бота с ним, и её администратор не
+               откроет никак; человек при этом будет верный. -->
           <B24Button
-            :disabled="!enabled"
+            :disabled="!enabled || !chatDialogId"
             color="air-tertiary"
             data-testid="open-chat"
             @click="openChat"

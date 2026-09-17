@@ -123,7 +123,7 @@ _Новые REST-методы добавляем сюда до внедрени�
 | `installFinish` | SDK frame | `app/pages/install.vue` | Завершение установки. |
 | `parent.setTitle` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/import.vue` | Заголовок окна приложения в портале. |
 | `parent.fitWindow` | SDK frame | `app/pages/install.vue`, `app/pages/app.vue`, `app/pages/import.vue` | Подгонка высоты iframe под контент. |
-| `parent.imOpenMessenger` | SDK frame | `app/composables/useB24.ts` (`openMessenger`), кнопка «Открыть чат» в `app/components/BankConnectCard.vue` | Открыть мессенджер портала. Диалог НЕ адресуем: инструкцию пишет бот приложения получателю, и переписки админа с ним не существует. |
+| `parent.imOpenMessenger` | SDK frame | `app/composables/useB24.ts` (`openMessenger`), кнопка «Открыть чат» в `app/components/BankConnectCard.vue` | Открыть мессенджер портала НА ПЕРЕПИСКЕ С АДРЕСАТОМ. ⚠ `dialogId` обязателен: без него портал открывает список чатов. |
 
 > `placement.bind` пока **не** вызываем — плейсменты финализируем на тестовом портале (см.
 > `docs/REFACTOR_PLAN.md`). Когда добавим — строка сюда.

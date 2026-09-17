@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BANK_CONTACT_KEY, contactLabel, isValidPortalUserId, parseBankContact, serializeBankContact
+  BANK_CONTACT_KEY, contactDialogId, contactLabel, isValidPortalUserId, parseBankContact,
+  serializeBankContact
 } from '../app/utils/bankContact'
 
 // Адресат подключения банка (#19) — кому администратор передаёт ссылку/инструкцию.
@@ -58,6 +59,35 @@ describe('contactLabel', () => {
     expect(contactLabel({ userId: '7', name: 'Иванова А.' })).toBe('Иванова А.')
     expect(contactLabel({ userId: '7' })).toBe('сотрудник #7')
     expect(contactLabel(null)).toBe('')
+  })
+})
+
+describe('contactDialogId', () => {
+  // ⚠ Адресат ОБЯЗАН доехать до `imOpenMessenger`: без параметра метод открывает СПИСОК чатов
+  // (документация), то есть ровно то, от чего кнопка «Открыть чат» должна избавлять.
+  it('годный адресат превращается в число для SDK', () => {
+    expect(contactDialogId({ userId: '12', name: 'Бухгалтер' })).toBe(12)
+    expect(contactDialogId({ userId: '7' })).toBe(7)
+  })
+
+  it('адресата нет — открывать нечего', () => {
+    expect(contactDialogId(null)).toBeNull()
+  })
+
+  // ⚠ Маска допускает 18 цифр, а `Number` за пределами 2^53 ОКРУГЛЯЕТ — то есть открыл бы
+  // переписку с ДРУГИМ сотрудником, и выглядело бы это как исправно сработавшая кнопка.
+  it('идентификатор, не влезающий в безопасное целое, отвергается', () => {
+    const huge = '123456789012345678'
+    // Сам факт округления — замер, а не допущение: без него проверка ниже читалась бы как
+    // перестраховка.
+    expect(Number.isSafeInteger(Number(huge))).toBe(false)
+    expect(isValidPortalUserId(huge)).toBe(true) // маску он проходит — отвергает именно эта проверка
+    expect(contactDialogId({ userId: huge })).toBeNull()
+  })
+
+  it('мусор в id не доезжает до портала', () => {
+    expect(contactDialogId({ userId: '0' } as never)).toBeNull()
+    expect(contactDialogId({ userId: '12 ' } as never)).toBeNull()
   })
 })
 

@@ -68,6 +68,21 @@ export function serializeBankContact(contact: BankContact | null): string | null
   return JSON.stringify(name ? { userId: contact.userId, name } : { userId: contact.userId })
 }
 
+/**
+ * Идентификатор личного чата с адресатом для `parent.imOpenMessenger` — ЧИСЛОМ, как просит SDK
+ * (документация метода: `dialogId` это `userId` либо `chatXXX`; без параметра открывается список
+ * чатов — ровно то, на что пожаловался владелец 2026-09-17).
+ *
+ * ⚠ Проверка на БЕЗОПАСНОЕ целое — не формальность: маска допускает 18 цифр, а `Number` за
+ * пределами 2^53 округляет, то есть открыл бы переписку с ДРУГИМ сотрудником — и выглядело бы это
+ * как исправно работающая кнопка. Не влезло ⇒ `null`, и вызывающий честно говорит, что не смог.
+ */
+export function contactDialogId(contact: BankContact | null): number | null {
+  if (!contact || !isValidPortalUserId(contact.userId)) return null
+  const n = Number(contact.userId)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
 /** Подпись адресата для интерфейса и логов: имя, иначе честное «сотрудник #id». */
 export function contactLabel(contact: BankContact | null): string {
   if (!contact) return ''

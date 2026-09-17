@@ -63,6 +63,9 @@ const defaultFetchImpl = (url: string, _opts?: Record<string, unknown>) => {
   if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
   if (url === '/api/bank/matrix') return Promise.resolve(matrixReply.value)
   if (url === '/api/setup-status') return Promise.resolve({ alfaClientId: 'CID-FOR-CABINET' })
+  // Запомненный адресат: кнопка «Открыть чат» открывает переписку ИМЕННО с ним, поэтому без него
+  // проверять в ней нечего.
+  if (url === '/api/bank/contact') return Promise.resolve({ contact: { userId: '12', name: 'Бухгалтер' } })
   // ⚠ Маршрутов самостоятельного подключения больше нет (решение владельца 2026-09-17), поэтому
   // умолчание пустое: любой неучтённый адрес — это запрос, которого карточка делать не должна.
   return Promise.resolve({})
@@ -151,6 +154,27 @@ describe('«Открыть чат»', () => {
     // этой строки возврат к ней прошёл бы зелёным: положительная проверка ловит только «что-то
     // позвали», а адрес мессенджера — деталь портала, менять которую он вправе без предупреждения.
     expect(openPathSpy).not.toHaveBeenCalled()
+  })
+
+  // ⚠ ГЛАВНАЯ проверка этого блока (замер владельца 2026-09-17): первая редакция звала метод БЕЗ
+  // аргумента, а без него портал открывает СПИСОК чатов — то есть кнопка делала ровно то, от чего
+  // должна была избавить. Поэтому проверяется не «позвали», а ЧТО передали.
+  it('передаёт адресата, а не открывает список чатов', async () => {
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="open-chat"]').trigger('click')
+    await flushPromises()
+    expect(openMessengerSpy).toHaveBeenCalledWith(12)
+    expect(openMessengerSpy).not.toHaveBeenCalledWith(undefined)
+  })
+
+  // Никому не отправляли ⇒ открывать нечего: кнопка гаснет, а не ведёт в пустоту.
+  it('без запомненного адресата кнопка недоступна', async () => {
+    fetchMock.mockImplementation((url: string) => (
+      url === '/api/bank/contact' ? Promise.resolve({ contact: null }) : defaultFetchImpl(url)
+    ))
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="open-chat"]').attributes('disabled')).toBeDefined()
+    fetchMock.mockImplementation(defaultFetchImpl)
   })
 
   it('портал не принял команду ⇒ говорим об этом, а не молчим', async () => {
