@@ -19,6 +19,7 @@
 // любом поясе, а отсчитывать её есть от чего: рядом стоит время сообщения в чате.
 
 import { BANK_LABELS } from './bankLabels'
+import type { ChatAttach } from './chatAttach'
 import type { BankProviderId } from '../types/statement'
 
 /** Ссылка годна к отправке: абсолютная https и без пробелов (перенос строки в мессенджере ломает
@@ -141,11 +142,6 @@ export const ALFA_KEY_SHOTS: readonly GuideShot[] = [
   { file: 'guide/alfa-key-3.png', width: 960, height: 440, name: 'Шаг 3 — Скопировать ключ' }
 ]
 
-/** Вложение сообщения Битрикс24 (`ATTACH`) — ровно тот кусок формата, который мы используем. */
-export interface ChatImageAttach {
-  IMAGE: { NAME: string, LINK: string, PREVIEW: string, WIDTH: number, HEIGHT: number }[]
-}
-
 /**
  * Вложение с картинками шагов для инструкции Альфы.
  *
@@ -160,15 +156,18 @@ export interface ChatImageAttach {
  * ⚠ `PREVIEW` = `LINK` осознанно: уменьшенных копий мы не держим, а поле рекомендовано заполнять —
  * без него часть клиентов берёт `LINK` сама, часть не показывает превью вовсе.
  */
-export function buildAlfaInviteAttach(siteUrl: string): ChatImageAttach | null {
+export function buildAlfaInviteAttach(siteUrl: string): ChatAttach | null {
   const base = (siteUrl ?? '').trim().replace(/\/+$/, '')
   if (!/^https:\/\/[^\s/]+(\/[^\s]*)?$/i.test(base)) return null
-  return {
+  // ⚠ ОДИН блок `IMAGE` на все шаги, а не три блока по картинке: блок и задуман как коллекция
+  // («выводит одно или несколько изображений»), а три отдельных блока портал рисует тремя
+  // карточками подряд — в чате это три экрана прокрутки вместо одной галереи.
+  return [{
     IMAGE: ALFA_KEY_SHOTS.map((shot) => {
       const link = `${base}/${shot.file}`
       return { NAME: shot.name, LINK: link, PREVIEW: link, WIDTH: shot.width, HEIGHT: shot.height }
     })
-  }
+  }]
 }
 
 /** Что отправляем по конкретному банку. Исчерпывающий разбор: новый подключаемый банк не

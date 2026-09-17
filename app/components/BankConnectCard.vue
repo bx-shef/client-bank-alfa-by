@@ -3,14 +3,13 @@ import { computed, nextTick, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useB24 } from '~/composables/useB24'
 import { useIsAdmin } from '~/composables/useIsAdmin'
-import { useBankConnect } from '~/composables/useBankConnect'
+import { frameAuth } from '~/composables/useFrameAuth'
 import { useSetupStatus } from '~/composables/useSetupStatus'
 import { PREVIEW_BANK_MATRIX, useBankMatrix } from '~/composables/useBankMatrix'
 import { isPreviewQuery } from '~/utils/inPortalGate'
 import { BANK_LABELS } from '~/utils/bankLabels'
-import { CONNECT_STATE_TTL_MIN } from '~/utils/bankConnectTtl'
-import { copyToClipboard } from '~/utils/clipboard'
 import { useBankInvite } from '~/composables/useBankInvite'
+import { usePortalSlider } from '~/composables/usePortalSlider'
 import { useSettingsSync } from '~/composables/useSettingsSync'
 import { BANK_CONNECTED_COMMAND } from '~/utils/settingsSync'
 import { contactLabel } from '~/utils/bankContact'
@@ -31,7 +30,14 @@ import { contactLabel } from '~/utils/bankContact'
 // path entirely and keeps working regardless. The copy below says so, because "подключить" reads
 // like a single exclusive choice otherwise.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
-const { start, connectWithKey, syncEnabled, connecting, error, enabled } = useBankConnect()
+// ⚠ Своим `ref`, а не композаблом: от прежнего `useBankConnect` после снятия самостоятельного
+// подключения оставался ровно этот однострочник, и композабл с именем «подключение банка», который
+// ничего не подключает, вводил бы в заблуждение вернее, чем его отсутствие.
+// Признак один: есть ли фрейм-токен. Нет — карточка это предпросмотр вне портала.
+const enabled = ref(false)
+function syncEnabled(): void {
+  enabled.value = frameAuth() !== null
+}
 // ⚠ Тот же синглтон, что кормит экран готовности: `client_id` уже приезжает с ним, и второй
 // запрос за одним значением был бы лишним обращением в портал на каждом открытии настроек.
 const setup = useSetupStatus()
@@ -93,37 +99,6 @@ onMounted(() => {
 })
 
 const adminChecked = ref(false)
-const started = ref(false)
-
-// The authorize URL is kept so the admin can HAND IT OVER. The account often belongs to a client,
-// not to the admin: only the account holder knows the internet-bank password, so the person who
-// presses the button and the person who authorises are different people. Until now the URL only
-// ever went into `window.location` of a new tab — the sole way to pass it on was copying it out of
-// the address bar, and it is long (a signed request-JWT plus state) so messengers wrap and break it.
-const authorizeUrl = ref('')
-const copied = ref(false)
-
-// ⚠ THE LINK IS SHORT-LIVED — both the signed connect state (CONNECT_STATE_TTL_MS) and Prior's
-// request-JWT expire ~10 minutes after the button press, and the clock starts HERE, not when the
-// client opens it. A client hunting for their bank password past that gets «Ссылка недействительна»,
-// which reads as a breakage rather than as an expiry. Nothing in the UI said so; now it does, so the
-// admin coordinates first and presses second.
-const LINK_TTL_MIN = CONNECT_STATE_TTL_MIN
-
-async function copyLink() {
-  if (!authorizeUrl.value) return
-  // Тот же общий помощник, что и у Client ID: во фрейме портала Clipboard API закрыт политикой,
-  // а фолбэк `execCommand` работает. Здесь ветка отказа была и раньше — она и подсказала, что
-  // соседняя кнопка молчала зря.
-  if (await copyToClipboard(authorizeUrl.value)) {
-    copied.value = true
-    setTimeout(() => {
-      copied.value = false
-    }, 2500)
-    return
-  }
-  error.value = 'Не удалось скопировать — выделите ссылку в поле ниже и скопируйте вручную'
-}
 
 /** The banks that have an online (OAuth) connect path. `manual` is file upload — not connectable,
  *  so the picker's type is the NARROWED union (a `manual` value can't be selected or sent). */
@@ -133,7 +108,6 @@ const PROVIDERS = [
 ]
 type ConnectableProvider = (typeof PROVIDERS)[number]['value']
 const provider = ref<ConnectableProvider>('alfa-by')
-const providerLabel = computed(() => PROVIDERS.find(p => p.value === provider.value)?.label ?? '')
 
 onMounted(async () => {
   await useB24().init().catch(() => {})
@@ -162,36 +136,6 @@ onMounted(async () => {
   }
 })
 
-/**
- * Альфа подключается КЛЮЧОМ API, Приор — прежним походом в банк (#488).
- *
- * ⚠ Разные механики, а не разные кнопки одного действия: у Альфы Code Grant измеренно непригоден
- * без человека — цепочка refresh живёт 10 часов от авторизации и не продлевается ничем, то есть
- * владельцу счёта пришлось бы входить в интернет-банк дважды в сутки. У Приора Open Banking, и
- * другого пути там нет.
- */
-const KEY_PROVIDERS: ConnectableProvider[] = ['alfa-by']
-const isKeyProvider = computed(() => KEY_PROVIDERS.includes(provider.value))
-const apiKey = ref('')
-const keyConnected = ref(false)
-
-// ⚠ СМЕНА БАНКА СБРАСЫВАЕТ ИСХОД ПРЕДЫДУЩЕГО. Живая находка 2026-09-09: админ получил отказ на
-// ключе Альфы, переключился на Приорбанк — и над кнопкой «Подключить Приорбанк» осталась висеть
-// красная плашка «банк не принял ключ API», то есть приложение приписало Приору ошибку, которой у
-// него не было и быть не могло (он ключами не подключается вовсе). Успех симметрично: «подключено»
-// от одного банка над формой другого читалось бы ещё хуже.
-// ⚠ Ключ из поля тоже стираем: он выпущен ПОД КОНКРЕТНЫЙ банк, и отправить его второму — послать
-// чужой секрет постороннему получателю.
-watch(provider, () => {
-  error.value = ''
-  keyConnected.value = false
-  started.value = false
-  apiKey.value = ''
-})
-
-/** Наш `client_id` — его вписывают в кабинете банка при выпуске ключа. Пусто ⇒ не показываем. */
-const alfaClientId = computed(() => String(setup.status.value?.alfaClientId ?? ''))
-
 // «Передать владельцу счёта» (#19) — второй, равноправный путь подключения, а не запасной.
 // Администратор знает пароль от интернет-банка ДАЛЕКО НЕ ВСЕГДА: у Приора подтверждает доступ сам
 // владелец счёта, у Альфы он же выпускает ключ API в своём кабинете. Раньше на это был только
@@ -207,68 +151,22 @@ async function onHandOver() {
   await invite.send(provider.value, user)
 }
 
+/** Путь мессенджера портала. Константой — чтобы адрес не расползался по шаблону. */
+const PORTAL_MESSENGER_PATH = '/online/'
+const chatOpenFailed = ref(false)
+
+async function openChat() {
+  chatOpenFailed.value = false
+  // ⚠ Отказ ГОВОРИТ О СЕБЕ: `openPath` возвращает `false` вне фрейма и на устройствах без
+  // слайдера, и молчание здесь неотличимо от сломанной кнопки — ровно та жалоба, что уже была на
+  // «Скопировать».
+  if (!await usePortalSlider().openPath(PORTAL_MESSENGER_PATH)) chatOpenFailed.value = true
+}
+
 async function onHandOverAgain() {
   const c = invite.contact.value
   if (!c) return
   await invite.send(provider.value, { id: c.userId, name: c.name ?? '' })
-}
-const clientIdCopied = ref(false)
-
-async function copyClientId() {
-  if (!alfaClientId.value) return
-  // ⚠ Через общий `copyToClipboard`, а НЕ голым `navigator.clipboard` (живая находка 2026-09-09:
-  // «кнопка скопировать не работает»). Мы внутри КРОСС-ДОМЕННОГО фрейма портала, а там Clipboard
-  // API закрыт разрешительной политикой, пока родитель не выдал `clipboard-write` — выдавать её
-  // порталу незачем и он этого не делает. У помощника есть фолбэк через `execCommand`, который во
-  // фрейме работает.
-  // ⚠ И провал теперь ГОВОРИТ О СЕБЕ. Прежняя ветка молчала «поле рядом остаётся выделяемым» —
-  // рассуждение верное, поведение неверное: снаружи это неотличимо от сломанной кнопки, человек
-  // жмёт её ещё раз и ждёт. Ровно это и произошло.
-  if (await copyToClipboard(alfaClientId.value)) {
-    clientIdCopied.value = true
-    setTimeout(() => {
-      clientIdCopied.value = false
-    }, 2500)
-    return
-  }
-  error.value = 'Не удалось скопировать — выделите значение в поле и скопируйте вручную'
-}
-
-async function onConnectKey() {
-  keyConnected.value = false
-  const ok = await connectWithKey(provider.value, apiKey.value)
-  if (!ok) return
-  keyConnected.value = true
-  // ⚠ Ключ стираем из поля СРАЗУ: он бессрочный, а форма живёт в открытой вкладке портала.
-  apiKey.value = ''
-  await connectedList.value?.reload()
-  await reloadMatrix()
-}
-
-async function onConnect() {
-  started.value = false
-  authorizeUrl.value = ''
-  copied.value = false
-  // Open the tab SYNCHRONOUSLY inside the click gesture — a window.open after the awaited fetch
-  // would be blocked. We navigate it to the authorize URL once we have it (or close it on failure).
-  const win = window.open('', '_blank')
-  const url = await start(provider.value)
-  if (url && win) {
-    win.opener = null // sever the opener before navigating to the bank (anti-tabnabbing)
-    win.location.href = url
-    authorizeUrl.value = url
-    started.value = true
-    // The bank tab is top-level and never notifies us, so poll-free: refresh when the admin comes
-    // back to this tab. Once is enough — a second connect re-arms it.
-    window.addEventListener('focus', () => {
-      void connectedList.value?.reload()
-      void reloadMatrix()
-    }, { once: true })
-  } else if (url && !win) {
-    error.value = 'Разрешите всплывающие окна для этого сайта и повторите'
-  } else {
-    win?.close() // start() failed (error is set) — drop the blank tab
-  }
 }
 </script>
 
@@ -328,15 +226,17 @@ async function onConnect() {
 
       <hr class="border-(--ui-color-design-tinted-na-stroke)">
 
-      <!-- ⚠ The copy states the order of operations, and that order is «bank first, account
-           after». An account-number field used to sit above the button, and it misled: the admin
-           typed a number, went to the bank — and the bank's page never asked about an account. The
-           field read as if it steered the bank's consent when it only ever labelled OUR row. The
-           number is picked after returning, from the list above, where it is already visible. -->
+      <!-- ⚠ ПОДКЛЮЧАЕТ ТОЛЬКО ВЛАДЕЛЕЦ СЧЁТА (решение владельца 2026-09-17). Кнопка «Подключить»,
+           поле ключа API и ссылка для ручной пересылки убраны отсюда ЦЕЛИКОМ, у ОБОИХ банков.
+           Причина не косметическая: администратор пароля от интернет-банка обычно не знает, а у
+           Альфы ключ вдобавок бессрочен и не ротируется — введённый администратором, он навсегда
+           оседает у того, кто к счёту отношения не имеет. Оставленные «на всякий случай» кнопки
+           сохраняли ровно тот обходной путь, ради закрытия которого всё и делалось. -->
       <p class="text-sm text-(--ui-color-base-2)">
-        Подключите банк — приложение будет автоматически забирать выписку и заносить операции
-        в CRM. Откроется окно банка для входа и согласия; после подтверждения вернётесь сюда
-        и укажете, какой счёт забирать, в списке выше.
+        Подключение делает <b>владелец счёта</b>: приложение отправит ему в чат инструкцию со
+        ссылкой. У Приорбанка он подтверждает доступ в интернет-банке, у Альфа-Банка — выпускает
+        ключ API в своём кабинете и вставляет его на своём экране. Ключ администратор не видит.
+        После подключения останется выбрать счёт в списке выше.
       </p>
 
       <p class="text-sm text-(--ui-color-base-3)">
@@ -361,181 +261,29 @@ async function onConnect() {
         data-testid="preview-note"
       />
 
-      <!-- ПОДКЛЮЧЕНИЕ КЛЮЧОМ API (#488, Альфа). Инструкция дословно повторяет надписи кабинета
-           банка: человек сверяет глазами то, что видит на экране, а пересказ своими словами
-           («сгенерируйте токен») заставил бы искать несуществующий пункт меню. -->
-      <template v-if="isKeyProvider">
-        <div class="rounded-md bg-(--ui-color-base-8) p-3 text-sm text-(--ui-color-base-2)">
-          <p class="mb-2 font-semibold">
-            Как получить ключ API
-          </p>
-          <ol class="ml-4 list-decimal space-y-1">
-            <li>Владелец счёта входит в <b>Альфа Бизнес Онлайн</b>.</li>
-            <li><b>Настройки</b> → вкладка <b>Open API</b> → кнопка <b>«Сгенерировать ключ API»</b>.</li>
-            <li>
-              <b>НАЗВАНИЕ</b> — любое понятное (например, «Подключение к Б24»),
-              <b>CLIENT ID</b> — значение ниже, <b>ТИП КЛЮЧА</b> — <b>Постоянный ключ</b>.
-            </li>
-            <li>Согласиться с условиями и нажать <b>«Сгенерировать ключ»</b>.</li>
-            <li>Раскрыть строку ключа и нажать <b>«Скопировать ключ»</b> — вставить его в поле ниже.</li>
-          </ol>
-          <p class="mt-2">
-            Ключ бессрочный. Владелец счёта может в любой момент <b>заблокировать</b> или
-            <b>отозвать</b> его там же, в кабинете банка.
-          </p>
-        </div>
-
-        <!-- ⚠ CLIENT ID показываем ЗДЕСЬ, потому что взять его больше неоткуда: диалог банка его
-             спрашивает, а живёт он в переменных окружения нашего сервера. Не секрет — он уходит в
-             каждом запросе к банку. -->
-        <B24FormField
-          v-if="alfaClientId"
-          label="Client ID для кабинета банка"
-          description="Скопируйте и вставьте в поле CLIENT ID при генерации ключа."
-          data-testid="alfa-client-id-field"
-        >
-          <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <B24Input
-              :model-value="alfaClientId"
-              readonly
-              class="w-full font-mono text-xs"
-              data-testid="alfa-client-id"
-              @focus="(e: FocusEvent) => (e.target as HTMLInputElement)?.select()"
-            />
-            <B24Button
-              color="air-secondary-accent"
-              class="shrink-0"
-              data-testid="copy-client-id"
-              @click="copyClientId"
-            >
-              {{ clientIdCopied ? 'Скопировано' : 'Скопировать' }}
-            </B24Button>
-          </div>
-        </B24FormField>
-
-        <B24FormField
-          label="Ключ API"
-          description="Вставьте ключ, скопированный в кабинете банка. Мы храним его в зашифрованном виде и используем только для получения выписки."
-          data-testid="api-key-field"
-        >
-          <B24Input
-            v-model="apiKey"
-            type="password"
-            placeholder="Вставьте ключ API"
-            class="w-full font-mono text-xs"
-            autocomplete="off"
-            data-testid="api-key-input"
-          />
-        </B24FormField>
-      </template>
-
-      <!-- Status region: announced to screen readers on change (error = assertive, success = polite). -->
-      <div
-        role="alert"
-        aria-live="assertive"
-      >
-        <B24Alert
-          v-if="error"
-          color="air-primary-alert"
-          :description="error"
-          data-testid="connect-error"
-        />
-      </div>
-      <div
-        role="status"
-        aria-live="polite"
-      >
-        <B24Alert
-          v-if="!error && keyConnected"
-          color="air-primary-success"
-          description="Банк подключён. Осталось выбрать счёт в списке выше."
-          data-testid="key-connected"
-        />
-        <B24Alert
-          v-if="!error && started"
-          color="air-primary-success"
-          :description="`Открыли окно банка в новой вкладке. Войдите и подтвердите доступ, затем вернитесь на эту страницу. Если счёт не ваш — передайте ссылку ниже владельцу счёта: она действует около ${LINK_TTL_MIN} минут.`"
-          data-testid="connect-started"
-        />
-      </div>
-
-      <!-- Hand-over block. Shown once a link exists, because before that there is nothing to hand
-           over. The URL sits in a read-only input as well as behind the button: the Clipboard API
-           is unavailable over plain http and can be blocked by permissions policy in an iframe, and
-           a copy button that silently does nothing is worse than no button.
-           ⚠ Deliberately NOT gated on `!error`. The two failures that set `error` after a link
-           exists are «clipboard blocked» and «popup blocked» — and both are answered by handing the
-           link over manually. Hiding the field on error unmounted the very input the error text
-           tells the admin to select, leaving the page with an instruction and nothing to act on,
-           and nothing clears `error` except pressing «Подключить» again, which mints a DIFFERENT
-           link and invalidates the one already sent. -->
-      <B24FormField
-        v-if="started && authorizeUrl"
-        label="Ссылка для владельца счёта"
-        :description="`Действует около ${LINK_TTL_MIN} минут с момента нажатия «Подключить» — отсчёт уже идёт. Если владелец счёта не готов прямо сейчас, дождитесь его и нажмите «Подключить» заново: ссылка обновится.`"
-        data-testid="authorize-link-field"
-      >
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <B24Input
-            :model-value="authorizeUrl"
-            readonly
-            class="w-full font-mono text-xs"
-            data-testid="authorize-link"
-            @focus="(e: FocusEvent) => (e.target as HTMLInputElement)?.select()"
-          />
-          <B24Button
-            color="air-secondary-accent"
-            class="shrink-0"
-            data-testid="copy-link"
-            @click="copyLink"
-          >
-            {{ copied ? 'Скопировано' : 'Скопировать' }}
-          </B24Button>
-        </div>
-      </B24FormField>
-
-      <B24Button
-        v-if="isKeyProvider"
-        :loading="connecting"
-        :disabled="connecting || !apiKey.trim()"
-        :aria-busy="connecting"
-        color="air-primary"
-        data-testid="connect-key-button"
-        @click="onConnectKey"
-      >
-        Подключить {{ providerLabel }}
-      </B24Button>
-      <B24Button
-        v-else
-        :loading="connecting"
-        :disabled="connecting"
-        :aria-busy="connecting"
-        color="air-primary"
-        data-testid="connect-button"
-        @click="onConnect"
-      >
-        Подключить {{ providerLabel }}
-      </B24Button>
-
-      <!-- ВТОРОЙ ПУТЬ: передать подключение владельцу счёта (#19).
-           ⚠ Он не «запасной» и не «для продвинутых»: пароль от интернет-банка администратор знает
-           далеко не всегда, а у Альфы ключ API вообще выпускает владелец счёта в своём кабинете.
-           Поэтому блок стоит рядом с основной кнопкой, а не спрятан.
+      <!-- ЕДИНСТВЕННЫЙ ПУТЬ ПОДКЛЮЧЕНИЯ: передать его владельцу счёта (#19).
+           ⚠ Был «вторым, равноправным» и стоял рядом с кнопкой «Подключить»; кнопку сняли
+           (решение владельца 2026-09-17), потому что «равноправный» на практике значило «можно
+           и в обход».
            ⚠ Ссылку здесь НЕ показываем: сервер выпускает её и сразу отправляет, иначе её короткий
            срок начал бы течь на экране администратора, а получателю достался бы остаток. -->
+      <!-- ⚠ ВИДЕН И ВНЕ ПОРТАЛА, инертным — тот же приём, что у соседней «Опросить сейчас». Пока
+           рядом стояла кнопка «Подключить» (она гейта не имела), предпросмотр показывал хоть
+           что-то; после её снятия карточка в предпросмотре осталась БЕЗ единственного действия —
+           то есть ни на скриншоте, ни в визуальном эталоне проверять стало нечего. -->
       <div
-        v-if="enabled && isAdmin"
+        v-if="isAdmin || !inPortal"
         class="flex flex-col gap-2 border-t border-(--ui-color-base-6) pt-3"
         data-testid="hand-over-block"
       >
         <p class="text-sm text-(--ui-color-base-3)">
-          Пароль от интернет-банка знает владелец счёта? Отправьте ему инструкцию в чат — сообщение
-          придёт от имени приложения.
+          Выберите сотрудника — владельца счёта, и приложение отправит ему инструкцию в чат от
+          своего имени. Если счёт ваш, выберите себя.
         </p>
         <div class="flex flex-wrap items-center gap-2">
           <B24Button
             :loading="invite.sending.value"
-            :disabled="invite.sending.value"
+            :disabled="!enabled || invite.sending.value"
             color="air-secondary-accent"
             data-testid="hand-over-button"
             @click="onHandOver"
@@ -544,12 +292,26 @@ async function onConnect() {
           </B24Button>
           <B24Button
             v-if="lastContact"
-            :disabled="invite.sending.value"
+            :disabled="!enabled || invite.sending.value"
             color="air-tertiary"
             data-testid="hand-over-again"
             @click="onHandOverAgain"
           >
             Ещё раз: {{ lastContact }}
+          </B24Button>
+          <!-- ⚠ Открывает МЕССЕНДЖЕР портала, а не конкретную переписку, и это осознанно. Сообщение
+               пишет БОТ приложения получателю, то есть переписка идёт между ботом и им: у
+               администратора, отправившего инструкцию другому сотруднику, доступа к ней нет в
+               принципе. Глубокая ссылка возможна только в случае «отправил самому себе», и её адрес
+               (`IM_DIALOG` с идентификатором бота) мы живьём не проверяли — а кнопка, ведущая не
+               туда, хуже кнопки, ведущей в список чатов, где нужное сообщение лежит сверху. -->
+          <B24Button
+            :disabled="!enabled"
+            color="air-tertiary"
+            data-testid="open-chat"
+            @click="openChat"
+          >
+            Открыть чат
           </B24Button>
         </div>
         <B24Alert
@@ -563,6 +325,12 @@ async function onConnect() {
           color="air-primary-alert"
           :description="invite.error.value"
           data-testid="hand-over-error"
+        />
+        <B24Alert
+          v-if="chatOpenFailed"
+          color="air-primary-warning"
+          description="Не удалось открыть чат отсюда — откройте мессенджер портала вручную."
+          data-testid="open-chat-failed"
         />
       </div>
     </div>

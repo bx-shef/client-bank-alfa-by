@@ -8,7 +8,7 @@ import { pausePollErrorMessage } from '~/utils/pausePollError'
 
 // Connected bank accounts for the settings UI (#404): read the list and disconnect one. Both hit
 // admin-gated frame-token routes (/api/bank/accounts, /api/bank/disconnect) — same auth model as
-// useBankConnect, and inert outside the portal frame (no token ⇒ nothing to show).
+// useBankInvite, and inert outside the portal frame (no token ⇒ nothing to show).
 //
 // The payload carries identity + freshness only; token material never reaches the browser.
 

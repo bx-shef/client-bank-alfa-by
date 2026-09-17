@@ -1,25 +1,26 @@
-import { describe, expect, it, vi } from 'vitest'
-import { handleBankConnectKey, type ConnectKeyDeps } from '../server/utils/bankConnectKey'
+import { describe, expect, it } from 'vitest'
+import { exchangeAndSaveKey, precheckKeyConnect, type ConnectKeyDeps } from '../server/utils/bankConnectKey'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
-// Подключение Альфы КЛЮЧОМ API (#488). Проверяется три вещи: те же гейты, что у authorize-пути;
-// форма запроса к банку; и то, что ключ не вытекает наружу ни на одной ветке.
+// Обмен ключа API Альфы на пару токенов (#488). Проверяется три вещи: форма запроса к банку, то,
+// что ключ не вытекает наружу ни на одной ветке, и что именно мы сохраняем.
+//
+// ⚠ Тесты бьют по `precheckKeyConnect`/`exchangeAndSaveKey` НАПРЯМУЮ, а не через обёртку-маршрут.
+// Прежде такой обёрткой был админский `handleBankConnectKey` — он снят вместе с самостоятельным
+// подключением (решение владельца 2026-09-17), и ключ теперь вводит ТОЛЬКО владелец счёта на
+// `/bank-key`. Гейт того пути (подписанный грант + совпадение личности) живёт в
+// `bankKeySubmit.test.ts`; здесь — механика обмена, общая и неизменная.
 
 const KEY = 'SUPER-SECRET-API-KEY-VALUE-0123456789'
 const SECRET = 'client-secret-value'
 
-function deps(over: Partial<ConnectKeyDeps> = {}): {
-  d: ConnectKeyDeps
-  saved: BankToken[]
-  logs: string[]
-  sent: URLSearchParams[]
-} {
+type Deps = Pick<ConnectKeyDeps, 'config' | 'clientSecret' | 'exchange' | 'save' | 'log'>
+
+function deps(over: Partial<Deps> = {}): { d: Deps, saved: BankToken[], logs: string[], sent: URLSearchParams[] } {
   const saved: BankToken[] = []
   const logs: string[] = []
   const sent: URLSearchParams[] = []
-  const d: ConnectKeyDeps = {
-    memberIdByDomain: async () => 'M1',
-    validateFrame: async () => ({ userId: '1', isAdmin: true }),
+  const d: Deps = {
     config: () => ({ baseUrl: 'https://bank.test:8273', clientId: 'CID', redirectUri: 'https://app/cb' }),
     clientSecret: () => SECRET,
     exchange: async (_base, body) => {
@@ -34,50 +35,20 @@ function deps(over: Partial<ConnectKeyDeps> = {}): {
 }
 
 const input = {
-  accessToken: 'frame-token', domain: 'p.bitrix24.by', provider: 'alfa-by' as const,
+  memberId: 'M1', provider: 'alfa-by' as const,
   apiKey: KEY, nonce: 'n-1', nowMs: 1_700_000_000_000
 }
 
-describe('#488 подключение ключом: гейты те же, что у authorize-пути', () => {
-  it('без фрейм-авторизации — 400, портал не спрашиваем', async () => {
-    const { d } = deps({ memberIdByDomain: vi.fn(async () => 'M1') })
-    expect((await handleBankConnectKey(d, { ...input, accessToken: '' })).status).toBe(400)
-    expect(d.memberIdByDomain).not.toHaveBeenCalled()
-  })
+/** Тот же порядок, что у живого вызывающего: сперва дешёвые проверки, потом поход в банк. */
+async function connect(d: Deps, over: Partial<typeof input> = {}) {
+  const i = { ...input, ...over }
+  return precheckKeyConnect(d, i.provider, i.apiKey) ?? await exchangeAndSaveKey(d, i)
+}
 
-  it('портал не установлен — 409', async () => {
-    const { d } = deps({ memberIdByDomain: async () => null })
-    expect((await handleBankConnectKey(d, input)).status).toBe(409)
-  })
-
-  it('фрейм-токен не от этого портала — 403', async () => {
-    const boom = async (): Promise<never> => {
-      throw new Error('nope')
-    }
-    const { d } = deps({ validateFrame: boom })
-    expect((await handleBankConnectKey(d, input)).status).toBe(403)
-  })
-
-  it('не администратор — 403, банк не трогаем', async () => {
-    const { d, sent } = deps({ validateFrame: async () => ({ userId: '2', isAdmin: false }) })
-    expect((await handleBankConnectKey(d, input)).status).toBe(403)
-    expect(sent).toHaveLength(0)
-  })
-
-  it('нет «моей компании» — 409 с причиной', async () => {
-    const { d, sent } = deps({ myCompanyGate: async () => 'no-account' })
-    const r = await handleBankConnectKey(d, input)
-    expect(r.status).toBe(409)
-    expect(r.body.reason).toBe('no-account')
-    // ⚠ Ключ не потрачен: обмен не состоялся. Иначе человек отдал бы ключ ради отказа.
-    expect(sent).toHaveLength(0)
-  })
-})
-
-describe('#488 подключение ключом: что уходит в банк', () => {
+describe('что уходит в банк', () => {
   it('grant_type=password, ключ в username, scope только accounts', async () => {
     const { d, sent } = deps()
-    expect((await handleBankConnectKey(d, input)).status).toBe(200)
+    expect((await connect(d)).status).toBe(200)
     const body = sent[0]!
     expect(body.get('grant_type')).toBe('password')
     expect(body.get('username')).toBe(KEY)
@@ -89,27 +60,26 @@ describe('#488 подключение ключом: что уходит в ба�
     expect(body.get('redirect_uri')).toBeNull()
   })
 
-  it('провайдер не настроен — 400 БЕЗ обращения к порталу и банку', async () => {
-    const { d, sent } = deps({ config: () => null, memberIdByDomain: vi.fn(async () => 'M1') })
-    expect((await handleBankConnectKey(d, input)).status).toBe(400)
-    expect(d.memberIdByDomain).not.toHaveBeenCalled()
+  it('провайдер не настроен — 400 БЕЗ обращения к банку', async () => {
+    const { d, sent } = deps({ config: () => null })
+    expect((await connect(d)).status).toBe(400)
     expect(sent).toHaveLength(0)
   })
 
   it('нет client_secret — 503 fail-closed', async () => {
     const { d, sent } = deps({ clientSecret: () => '' })
-    expect((await handleBankConnectKey(d, input)).status).toBe(503)
+    expect((await connect(d)).status).toBe(503)
     expect(sent).toHaveLength(0)
   })
 
   it.each([['пустой', '   '], ['гигантский', 'x'.repeat(5000)]])('%s ключ — 400', async (_n, k) => {
     const { d, sent } = deps()
-    expect((await handleBankConnectKey(d, { ...input, apiKey: k })).status).toBe(400)
+    expect((await connect(d, { apiKey: k })).status).toBe(400)
     expect(sent).toHaveLength(0)
   })
 })
 
-describe('#488 подключение ключом: секреты не вытекают', () => {
+describe('секреты не вытекают', () => {
   it('банк отверг — 502, и ни ключа, ни секрета, ни текста банка наружу', async () => {
     // ⚠ Банк в ответе на негодный ключ повторяет присланные параметры — то есть в тексте ошибки
     // лежит и сам ключ, и client_secret. Отдать его человеку значило бы положить их в переписку,
@@ -117,7 +87,7 @@ describe('#488 подключение ключом: секреты не выте
     const { d, logs } = deps({
       exchange: async () => { throw new Error(`invalid_grant: username=${KEY} client_secret=${SECRET}`) }
     })
-    const r = await handleBankConnectKey(d, input)
+    const r = await connect(d)
     expect(r.status).toBe(502)
     const out = JSON.stringify(r.body) + logs.join('\n')
     expect(out).not.toContain(KEY)
@@ -140,7 +110,7 @@ describe('#488 подключение ключом: секреты не выте
         })
       }
     })
-    await handleBankConnectKey(d, input)
+    await connect(d)
     const line = logs.join('\n')
     // Код ошибки банка — то единственное, что различает причины.
     expect(line).toContain('invalid_client')
@@ -156,21 +126,21 @@ describe('#488 подключение ключом: секреты не выте
         throw new Error('invalid_grant\r\n[bank-connect] INFO: подключено')
       }
     })
-    await handleBankConnectKey(d, input)
+    await connect(d)
     expect(logs.join('')).not.toMatch(/[\r\n]/)
   })
 
   it('успех — ключа нет и в ответе тоже', async () => {
     const { d } = deps()
-    const r = await handleBankConnectKey(d, input)
+    const r = await connect(d)
     expect(JSON.stringify(r.body)).not.toContain(KEY)
   })
 })
 
-describe('#488 подключение ключом: что сохраняем', () => {
+describe('что сохраняем', () => {
   it('ключ, пара токенов, грант из nonce и временный ключ счёта', async () => {
     const { d, saved } = deps()
-    await handleBankConnectKey(d, input)
+    await connect(d)
     const t = saved[0]!
     expect(t.memberId).toBe('M1')
     expect(t.apiKey).toBe(KEY)
@@ -186,7 +156,7 @@ describe('#488 подключение ключом: что сохраняем', 
 
   it('ключ сохраняется ОБРЕЗАННЫМ по краям — вставка из буфера тащит пробел', async () => {
     const { d, saved, sent } = deps()
-    await handleBankConnectKey(d, { ...input, apiKey: `  ${KEY}\n` })
+    await connect(d, { apiKey: `  ${KEY}\n` })
     expect(saved[0]!.apiKey).toBe(KEY)
     expect(sent[0]!.get('username')).toBe(KEY)
   })

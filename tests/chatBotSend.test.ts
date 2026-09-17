@@ -181,16 +181,43 @@ describe('resolveBotId', () => {
 })
 
 describe('внешний текст остаётся обезврежен на обоих маршрутах', () => {
-  it('URL_PREVIEW выключен и у бота тоже', async () => {
+  it('превью ссылок выключено и у бота тоже — В ЕГО СОБСТВЕННОЙ форме', async () => {
     // Назначение платежа пишет плательщик; ссылка не должна разворачиваться в карточку.
+    //
+    // ⚠ Прежняя редакция этого теста требовала `URL_PREVIEW: 'N'` верхним уровнем — и была
+    // ЗЕЛЁНОЙ на сломанном коде: у метода второго поколения такого параметра нет вовсе, портал
+    // его игнорировал, и превью на самом деле оставалось включённым. Тест закреплял форму
+    // соседнего метода, а не поведение портала. Проверяем то, что метод действительно читает.
     const params: Record<string, unknown>[] = []
     const call = async (method: string, p: Record<string, unknown>) => {
       params.push({ method, ...p })
       return method === 'imbot.v2.Bot.register' ? { result: 7 } : { result: 100 }
     }
     await postChatMessage('chat1', 'см. http://evil.test', call, 'M1')
-    const sent = params.find(p => p.method === BOT_MESSAGE_METHOD)
-    expect(sent?.URL_PREVIEW).toBe('N')
+    const sent = params.find(p => p.method === BOT_MESSAGE_METHOD)!
+    expect((sent.fields as { urlPreview?: unknown }).urlPreview).toBe(false)
+    expect(sent.URL_PREVIEW).toBeUndefined()
+  })
+
+  it('бот получает СВОЮ форму вызова: botId/dialogId и содержимое во вложенном fields', async () => {
+    // ⚠ Регрессия, из-за которой картинки не доходили: сюда слали форму `im.message.add`
+    // (`BOT_ID`/`DIALOG_ID`/`MESSAGE`/`ATTACH` верхним уровнем). Отказ был худшего вида — текст
+    // портал разбирал по совместимости и доставлял, а вложение и запрет превью терял МОЛЧА.
+    const params: Record<string, unknown>[] = []
+    const call = async (method: string, p: Record<string, unknown>) => {
+      params.push({ method, ...p })
+      return method === 'imbot.v2.Bot.register' ? { result: 7 } : { result: 100 }
+    }
+    const attach = [{ IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
+    await postChatMessage('7', 'текст', call, 'M1', attach)
+    const sent = params.find(p => p.method === BOT_MESSAGE_METHOD)!
+    expect(sent.botId).toBe(7)
+    expect(sent.dialogId).toBe('7')
+    expect(sent.fields).toEqual({ message: 'текст', urlPreview: false, attach })
+    // Отрицание: ни одного поля старой формы — иначе «поправили, добавив рядом» прошло бы зелёным.
+    for (const legacy of ['BOT_ID', 'DIALOG_ID', 'MESSAGE', 'ATTACH', 'URL_PREVIEW']) {
+      expect(sent[legacy], legacy).toBeUndefined()
+    }
   })
 })
 
@@ -290,7 +317,13 @@ describe('memberId доезжает до маршрутизатора из ВС�
 })
 
 describe('вложение с картинками и маршрут бота (#19)', () => {
-  const ATTACH = { IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }
+  const ATTACH = [{ IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
+
+  /** Где лежит вложение, зависит от МЕТОДА: у `im.message.*` — верхним уровнем и заглавными, у
+   *  чат-бота — внутри `fields`. Проверки обязаны смотреть в оба места, иначе они зеленеют на той
+   *  самой ошибке, из-за которой картинки не доходили. */
+  const attachOf = (p: Record<string, unknown>) =>
+    p.ATTACH ?? (p.fields as { attach?: unknown } | undefined)?.attach
 
   /** Фейк, который ПОМНИТ параметры: весь смысл этих проверок в том, что именно ушло в портал. */
   function spy(reject: (method: string, params: Record<string, unknown>) => boolean = () => false) {
@@ -310,17 +343,17 @@ describe('вложение с картинками и маршрут бота (#
     const { call, calls } = spy()
     await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
     expect(calls.map(c => c.method)).toEqual(['imbot.v2.Bot.register', BOT_MESSAGE_METHOD])
-    expect(calls[1]!.params.ATTACH).toBe(ATTACH)
+    expect((calls[1]!.params.fields as { attach?: unknown }).attach).toBe(ATTACH)
   })
 
   it('оба маршрута отвергли вложение ⇒ ровно ОДНО сообщение, без картинок', async () => {
     // Лестница повторяется целиком, поэтому текст снова уходит ботом — доставка одна, дубля нет.
-    const { call, calls } = spy((_m, p) => Boolean(p.ATTACH))
+    const { call, calls } = spy((_m, p) => Boolean(attachOf(p)))
     const id = await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
     expect(id).toBe('100')
     expect(calls.map(c => c.method)).toEqual([
       'imbot.v2.Bot.register', BOT_MESSAGE_METHOD, CHAT_MESSAGE_METHOD, BOT_MESSAGE_METHOD
     ])
-    expect(calls.filter(c => !(c.method === 'imbot.v2.Bot.register') && !c.params.ATTACH)).toHaveLength(1)
+    expect(calls.filter(c => c.method !== 'imbot.v2.Bot.register' && !attachOf(c.params))).toHaveLength(1)
   })
 })

@@ -61,9 +61,15 @@ describe('цель 1, наша половина: два подключения �
     // он однажды станет производным от портала, банка или счёта, два подключения ОДНОГО счёта
     // получат один грант — и всё, что доказано ниже про разделение, рухнет молча: обновление
     // одного портала начнёт писать в строки другого (ветка `grant_id = $7` в WHERE).
-    const start = readFileSync(resolve(import.meta.dirname, '../server/api/bank/connect.post.ts'), 'utf8')
-    expect(start, 'nonce перестал быть случайным — гранты двух подключений могут совпасть')
-      .toMatch(/nonce:\s*randomBytes\(\d+\)/)
+    //
+    // ⚠ Чеканящих маршрутов теперь ДВА, и проверяются ОБА: самостоятельное подключение снято
+    // (решение владельца 2026-09-17), а его место заняли приглашение владельцу счёта (Приор) и
+    // экран ввода ключа (Альфа). Проверь мы один — второй молча уехал бы на производный nonce.
+    for (const route of ['send-link', 'submit-key']) {
+      const src = readFileSync(resolve(import.meta.dirname, `../server/api/bank/${route}.post.ts`), 'utf8')
+      expect(src, `${route}: nonce перестал быть случайным — гранты двух подключений могут совпасть`)
+        .toMatch(/nonce:\s*randomBytes\(\d+\)/)
+    }
     const cb = readFileSync(resolve(import.meta.dirname, '../server/utils/bankConnectCallback.ts'), 'utf8')
     expect(cb, 'грант строки больше не берётся из nonce').toMatch(/grantId:\s*state\.nonce/)
   })

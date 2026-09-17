@@ -23,7 +23,8 @@
 import {
   BANK_KEY_GRANT_TTL_HOURS, BANK_KEY_GRANT_TTL_MS, CONNECT_STATE_TTL_MIN, CONNECT_STATE_TTL_MS
 } from '../../app/utils/bankConnectTtl'
-import { buildAlfaInvite, buildAlfaInviteAttach, buildPriorInvite, type ChatImageAttach } from '../../app/utils/bankConnectInvite'
+import { buildAlfaInvite, buildAlfaInviteAttach, buildPriorInvite } from '../../app/utils/bankConnectInvite'
+import type { ChatAttach } from '../../app/utils/chatAttach'
 import { isValidPortalUserId, type BankContact } from '../../app/utils/bankContact'
 import { buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
 import { describeUpstreamError } from './logSanitize'
@@ -39,7 +40,7 @@ export interface InviteSendDeps extends Pick<
   /** Отправить сообщение сотруднику (`dialogId` личного чата = его id). Бросает при отказе.
    *  `attach` — картинки шагов (только у Альфы); транспорт обязан пережить их непринятие
    *  порталом, не потеряв текст (`postChatMessage`). */
-  sendMessage: (memberId: string, dialogId: string, text: string, attach?: ChatImageAttach | null) => Promise<void>
+  sendMessage: (memberId: string, dialogId: string, text: string, attach?: ChatAttach | null) => Promise<void>
   /** Запомнить адресата на портале. Best-effort у вызывающего — исход влияет только на удобство. */
   rememberContact: (accessToken: string, domain: string, contact: BankContact) => Promise<void>
   /** Наш `client_id` для кабинета Альфы (из env). Пусто ⇒ инструкцию не собрать. */
@@ -100,7 +101,7 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
   let ttlMin: number | undefined
   // ⚠ Картинки ТОЛЬКО у Альфы: у Приора владелец счёта ничего не выпускает руками — он открывает
   // присланную ссылку и подтверждает согласие на сайте банка, и снимать там нечего.
-  let attach: ChatImageAttach | null = null
+  let attach: ChatAttach | null = null
   if (provider === 'prior-by') {
     const ttlMs = input.ttlMs ?? CONNECT_STATE_TTL_MS
     const built = await buildConnectAuthorizeUrl(deps, {

@@ -23,7 +23,7 @@
 import type { BankProviderId } from '../../app/types/statement'
 import { buildPasswordGrantBody, parseTokenResponse, type AlfaOAuthConfig } from '../../app/utils/alfaOauth'
 import { isPendingAccountKey, provisionalAccountKey } from '../../app/utils/bankAccountKey'
-import { gateConnectAdmin, type ConnectStartDeps } from './bankConnectStart'
+import type { ConnectStartDeps } from './bankConnectStart'
 import { describeUpstreamError, redactValues } from './logSanitize'
 import type { BankToken } from './bankTokenStore'
 
@@ -63,23 +63,6 @@ export interface ConnectKeyInput {
  * в поле вставили файл), а годность решает сам банк — его ответ и есть проверка.
  */
 const MAX_API_KEY_CHARS = 4096
-
-/** Подключить банк по ключу API: обменять ключ на пару токенов и сохранить подключение. */
-export async function handleBankConnectKey(
-  deps: ConnectKeyDeps, input: ConnectKeyInput
-): Promise<ConnectKeyResult> {
-  const { accessToken, domain, provider, apiKey, nonce, nowMs } = input
-
-  if (!accessToken || !domain) {
-    return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
-  }
-  const pre = precheckKeyConnect(deps, provider, apiKey)
-  if (pre) return pre
-
-  const gate = await gateConnectAdmin(deps, { accessToken, domain })
-  if (!gate.ok) return gate.res
-  return exchangeAndSaveKey(deps, { memberId: gate.memberId, provider, apiKey, nonce, nowMs })
-}
 
 /**
  * Проверки, возможные ДО похода в портал: непустой ключ в разумных границах, настроен ли банк,

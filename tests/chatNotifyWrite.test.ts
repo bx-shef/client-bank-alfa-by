@@ -61,7 +61,7 @@ describe('notifyChatViaRest', () => {
 })
 
 describe('вложение с картинками (#19)', () => {
-  const ATTACH = { IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }
+  const ATTACH = [{ IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
 
   it('без вложения параметр ATTACH не отправляется вовсе', async () => {
     // ⚠ Не «пустой ATTACH», а ОТСУТСТВУЮЩИЙ: портал валидирует коллекцию блоков и на форму,

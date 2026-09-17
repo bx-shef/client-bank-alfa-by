@@ -130,8 +130,8 @@ describe('картинки шагов к инструкции Альфы', () =>
   })
 
   it('строит абсолютные https-ссылки на все шаги', () => {
-    expect(attach.IMAGE).toHaveLength(ALFA_KEY_SHOTS.length)
-    for (const img of attach.IMAGE) {
+    expect(attach[0]!.IMAGE).toHaveLength(ALFA_KEY_SHOTS.length)
+    for (const img of attach[0]!.IMAGE) {
       expect(img.LINK.startsWith(`${BASE}/guide/`)).toBe(true)
       // PREVIEW обязателен для части клиентов; своей уменьшенной копии у нас нет — тот же файл.
       expect(img.PREVIEW).toBe(img.LINK)
@@ -140,8 +140,17 @@ describe('картинки шагов к инструкции Альфы', () =>
     }
   })
 
+  it('вложение — МАССИВ блоков, а не голый объект', () => {
+    // ⚠ Ровно на этом картинки и потерялись. Портал знает две формы: полную (`{ID, BLOCKS:[…]}`)
+    // и краткую — массив блоков. Прежний `{IMAGE:[…]}` не подходил ни под одну, и портал принимал
+    // его МОЛЧА: сообщение доходило текстом, без картинок и без ошибки.
+    expect(Array.isArray(attach)).toBe(true)
+    expect(attach).toHaveLength(1)
+    expect(Object.keys(attach[0]!)).toEqual(['IMAGE'])
+  })
+
   it('лишняя косая черта в базе не даёт двойного слеша', () => {
-    const img = buildAlfaInviteAttach('https://bank-import.example//')!.IMAGE[0]!
+    const img = buildAlfaInviteAttach('https://bank-import.example//')![0]!.IMAGE[0]!
     expect(img.LINK).toBe(`${BASE}/guide/${ALFA_KEY_SHOTS[0]!.file.split('/').pop()}`)
   })
 

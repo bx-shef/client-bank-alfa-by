@@ -5,7 +5,7 @@ import { frameAuth, frameAuthHeaders as authHeaders, frameFetchError } from '~/c
 // from the in-portal admin UI. POSTs to /api/poll-now with the FRAME token (Bearer + X-B24-Domain) —
 // the backend gates on the feature flag + admin + a per-portal cooldown, then enqueues the fetch
 // jobs. Outside a portal frame there is no token → inert. Frame-auth helpers are shared (useFrameAuth),
-// same as useBankConnect. UI показывает ответ сервера (кулдаун / поставлено N), а не прячет кнопку.
+// same as useBankInvite. UI показывает ответ сервера (кулдаун / поставлено N), а не прячет кнопку.
 
 export interface PollNowResponse {
   enqueued?: number

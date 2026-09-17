@@ -101,30 +101,41 @@ describe('myCompanyGate', () => {
 })
 
 describe('гейт в точках входа (#493)', () => {
-  it('подключение банка отклоняется ДО похода в банк', async () => {
-    // Смысл именно в порядке: дальше человек введёт пароль от интернет-банка и подтвердит доступ
-    // к деньгам компании. Потратить это на настройку, которая не создаст ни одной записи, —
+  it('отправка приглашения отклоняется ДО похода в банк', async () => {
+    // Смысл именно в порядке: дальше владелец счёта введёт пароль от интернет-банка и подтвердит
+    // доступ к деньгам компании. Потратить это на настройку, которая не создаст ни одной записи, —
     // самая дорогая ошибка, а не неудобство.
-    const { handleBankConnectStart } = await import('../server/utils/bankConnectStart')
+    //
+    // ⚠ Точка входа сменилась: самостоятельное подключение администратором снято (решение
+    // владельца 2026-09-17), и единственный путь теперь — приглашение владельцу счёта. Гейт тот
+    // же самый, проверяем его там, где он остался.
+    const { handleSendBankInvite } = await import('../server/utils/bankInviteSend')
     const called: string[] = []
-    const r = await handleBankConnectStart({
+    const r = await handleSendBankInvite({
       memberIdByDomain: async () => 'M1',
       validateFrame: async () => ({ userId: '1', isAdmin: true }),
-      // ⚠ Провайдер сменён на Приора (#488): у Альфы authorize-потока больше нет, она подключается
-      // ключом API. Смысл теста не изменился — гейт «моей компании» обязан сработать ДО похода в
-      // банк, — но проверять его на банке, который туда не ходит, значило бы не проверять ничего.
       priorConfig: () => ({ tokenUrl: 'https://prior/token' }) as never,
       buildPriorUrl: async () => {
         called.push('prior')
         return 'x'
       },
       secret: 'a'.repeat(32),
-      myCompanyGate: async () => 'no-company'
-    }, { accessToken: 't', domain: 'p.bitrix24.by', provider: 'prior-by', accountKey: '', nonce: 'n', nowMs: 1 })
+      myCompanyGate: async () => 'no-company',
+      sendMessage: async () => {
+        called.push('chat')
+      },
+      rememberContact: async () => {},
+      alfaClientId: () => 'CID',
+      siteUrl: () => '',
+      keyScreenLink: () => 'https://p.bitrix24.by/marketplace/view/x/?params[place]=app-bank-key'
+    }, {
+      accessToken: 't', domain: 'p.bitrix24.by', provider: 'prior-by',
+      userId: '7', nonce: 'n', nowMs: 1
+    })
     expect(r.status).toBe(409)
     expect(String(r.body.error)).toContain('Моя компания')
     expect(r.body.reason).toBe('no-company')
-    expect(called).toEqual([]) // до банка не дошли
+    expect(called).toEqual([]) // ни в банк, ни в чат не дошли
   })
 
   it('ручная загрузка отклоняется, а НЕ принимается молча', async () => {
