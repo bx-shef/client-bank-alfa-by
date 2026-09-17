@@ -1,5 +1,12 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { buildAlfaInvite, buildBankInvite, buildPriorInvite } from '../app/utils/bankConnectInvite'
+import {
+  ALFA_KEY_SHOTS, buildAlfaInvite, buildAlfaInviteAttach, buildBankInvite, buildPriorInvite
+} from '../app/utils/bankConnectInvite'
+
+const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url))
 
 // Сообщение, которым администратор передаёт подключение банка ВЛАДЕЛЬЦУ СЧЁТА (#19).
 
@@ -96,5 +103,54 @@ describe('выбор сообщения по банку', () => {
   it('нет входных данных для банка ⇒ null, а не полусообщение', () => {
     expect(buildBankInvite('prior-by', {})).toBeNull()
     expect(buildBankInvite('alfa-by', {})).toBeNull()
+  })
+})
+
+describe('картинки шагов к инструкции Альфы', () => {
+  const BASE = 'https://bank-import.example'
+  const attach = buildAlfaInviteAttach(BASE)!
+
+  it('каждый файл манифеста ЛЕЖИТ в public/', () => {
+    // ⚠ Главный гард этого блока. Ссылка уезжает в чат ЧУЖОГО портала, и сообщение задним числом
+    // не правится: промахнувшись файлом, мы оставляем клиенту битую картинку НАВСЕГДА. Проверяем
+    // существование на диске, а не совпадение строк, — переименование файла ловится только так.
+    for (const shot of ALFA_KEY_SHOTS) {
+      expect(existsSync(join(PUBLIC, shot.file)), shot.file).toBe(true)
+    }
+  })
+
+  it('размеры в манифесте совпадают с самим PNG', () => {
+    // ⚠ Битрикс24 рисует место под картинку ПО ЗАЯВЛЕННЫМ размерам, поэтому разошедшееся число —
+    // это не «неточность», а рамка не по картинке у получателя. Генератор менять размеры волен
+    // (`pnpm guide:shots`), манифест — отдельный файл, и синхронность их держит только этот тест.
+    for (const shot of ALFA_KEY_SHOTS) {
+      const head = readFileSync(join(PUBLIC, shot.file)).subarray(16, 24)
+      expect([head.readUInt32BE(0), head.readUInt32BE(4)], shot.file).toEqual([shot.width, shot.height])
+    }
+  })
+
+  it('строит абсолютные https-ссылки на все шаги', () => {
+    expect(attach.IMAGE).toHaveLength(ALFA_KEY_SHOTS.length)
+    for (const img of attach.IMAGE) {
+      expect(img.LINK.startsWith(`${BASE}/guide/`)).toBe(true)
+      // PREVIEW обязателен для части клиентов; своей уменьшенной копии у нас нет — тот же файл.
+      expect(img.PREVIEW).toBe(img.LINK)
+      expect(img.WIDTH).toBeGreaterThan(0)
+      expect(img.NAME).not.toBe('')
+    }
+  })
+
+  it('лишняя косая черта в базе не даёт двойного слеша', () => {
+    const img = buildAlfaInviteAttach('https://bank-import.example//')!.IMAGE[0]!
+    expect(img.LINK).toBe(`${BASE}/guide/${ALFA_KEY_SHOTS[0]!.file.split('/').pop()}`)
+  })
+
+  it('негодная база ⇒ null, а не «почти ссылка»', () => {
+    // ⚠ Картинку тянет САМ Битрикс24: по относительному или http-адресу получатель увидит пустое
+    // место — молча. Отсутствие вложения честнее: текст инструкции самодостаточен.
+    for (const bad of ['', '   ', '/guide', 'bank-import.example', 'http://bank-import.example',
+      'https://bank import.example', 'ftp://bank-import.example']) {
+      expect(buildAlfaInviteAttach(bad), bad).toBeNull()
+    }
   })
 })

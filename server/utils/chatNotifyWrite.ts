@@ -44,12 +44,37 @@ export function extractMessageId(resp: Record<string, unknown>): string | null {
  *
  * A failure of the FALLBACK still propagates — that one is a real transport error, and the caller
  * (a job) should see it.
+ *
+ * `attach` (#19, картинки шагов к инструкции банка) — НЕОБЯЗАТЕЛЬНОЕ вложение: если портал его не
+ * принял, сообщение уходит повторно БЕЗ него, потому что текст самодостаточен, а картинки нет.
  */
 export async function postChatMessage(
   dialogId: string,
   text: string,
   call: RestCall,
-  memberId?: string
+  memberId?: string,
+  attach?: unknown
+): Promise<string | null> {
+  if (!attach) return deliver(dialogId, text, call, memberId)
+  try {
+    return await deliver(dialogId, text, call, memberId, attach)
+  } catch {
+    // ⚠ КАРТИНКИ — БОНУС, ТЕКСТ — ОБЯЗАННОСТЬ. Вложение валидирует ПОРТАЛ (`ATTACH_ERROR`,
+    // `ATTACH_OVERSIZE`), и его отказ одинаково заворачивает оба маршрута — то есть инструкция,
+    // ради которой всё и затевалось, не дошла бы вовсе. Повтор без вложения дубля не создаёт:
+    // сюда попадаем только когда бросил ПОСЛЕДНИЙ маршрут лестницы, то есть не доставлено ничего.
+    return await deliver(dialogId, text, call, memberId)
+  }
+}
+
+/** Лестница доставки: бот, затем владелец токена. Отделена от `postChatMessage`, чтобы «повторить
+ *  без картинок» означало повтор ВСЕЙ лестницы, а не только её последней ступени. */
+async function deliver(
+  dialogId: string,
+  text: string,
+  call: RestCall,
+  memberId?: string,
+  attach?: unknown
 ): Promise<string | null> {
   if (memberId) {
     const botId = await resolveBotId(memberId, call)
@@ -67,7 +92,7 @@ export async function postChatMessage(
         // а детерминированно, во все чаты. Дублировать сообщения бухгалтеру хуже, чем не знать их id.
         //
         // Сам id никому не нужен для правильности — все вызывающие его игнорируют; он информационный.
-        return await sendAsBot(botId, dialogId, text, call)
+        return await sendAsBot(botId, dialogId, text, call, attach)
       } catch {
         // Настоящий отказ бота — вот здесь. Шлём как раньше: молчащий чат ошибок хуже, чем
         // сообщение с чужой подписью.
@@ -76,7 +101,12 @@ export async function postChatMessage(
   }
   // URL_PREVIEW=N: the message carries external (payer-controlled) text — don't let
   // a pasted URL expand into a rich preview card in the operator chat.
-  const resp = await call(CHAT_MESSAGE_METHOD, { DIALOG_ID: dialogId, MESSAGE: text, URL_PREVIEW: 'N' })
+  const resp = await call(CHAT_MESSAGE_METHOD, {
+    DIALOG_ID: dialogId,
+    MESSAGE: text,
+    URL_PREVIEW: 'N',
+    ...(attach ? { ATTACH: attach } : {})
+  })
   return extractMessageId(resp)
 }
 

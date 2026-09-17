@@ -93,18 +93,25 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
  *
  * ⚠ `URL_PREVIEW: 'N'` for the same reason as the non-bot path: the text carries payer-controlled
  * content, and a pasted URL must not expand into a rich card in the operator's chat.
+ *
+ * ⚠ `ATTACH` is OMITTED, not sent empty, when there is nothing to attach: `im`/`imbot` validate the
+ * block collection and answer `ATTACH_ERROR` for a shape they dislike, and an empty one is exactly
+ * such a shape. Whether the pictures survive is the caller's problem (`postChatMessage` retries
+ * without them) — this function only has to avoid inventing an attachment nobody asked for.
  */
 export async function sendAsBot(
   botId: string,
   dialogId: string,
   text: string,
-  call: RestCall
+  call: RestCall,
+  attach?: unknown
 ): Promise<string | null> {
   const resp = await call(BOT_MESSAGE_METHOD, {
     BOT_ID: Number(botId),
     DIALOG_ID: dialogId,
     MESSAGE: text,
-    URL_PREVIEW: 'N'
+    URL_PREVIEW: 'N',
+    ...(attach ? { ATTACH: attach } : {})
   })
   return extractBotMessageId(resp)
 }
