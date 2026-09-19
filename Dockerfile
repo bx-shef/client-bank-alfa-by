@@ -178,6 +178,13 @@ ENV NUXT_PUBLIC_COMMIT_SHA=$NUXT_PUBLIC_COMMIT_SHA
 # `runtimeConfig.public` из окружения в РАНТАЙМЕ.
 ARG NUXT_PUBLIC_REPO_URL
 ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
+# И адрес приложения: по нему backend строит ссылки на КАРТИНКИ шагов в инструкции Альфы (#19).
+# ⚠ Замерено 2026-09-19: `nuxt build` с `NUXT_PUBLIC_SITE_URL` в окружении кладёт в серверный
+# бандл `"siteUrl": ""` — build-time значение в Nitro НЕ запекается (в отличие от статики, где
+# оно уезжает в `__NUXT__.config`). Строка отсутствовала, и приглашение уходило без картинок,
+# сообщая в лог «адрес приложения непригоден для ссылки», — при верно заданной переменной CI.
+ARG NUXT_PUBLIC_SITE_URL
+ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
 # Nitro's node-server output is self-contained (deps bundled) — copy only .output.
 COPY --from=builder-server /app/.output ./.output
 # OTel bootstrap (#78): loaded via NODE_OPTIONS=--import BEFORE the app so auto-instrumentation
