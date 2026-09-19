@@ -36,9 +36,19 @@ nginx -t >/dev/null 2>&1 && ok "nginx -t проходит" || bad "nginx -t па
 # ⚠ `grep | wc` под `set -e` + `pipefail` умирает, когда grep ничего не нашёл (код 1) или
 # каталога нет (код 2) — то есть ровно в тех случаях, ради которых диагностику и запускают:
 # домена ещё нет, каталог не создан. Поэтому неудача grep гасится ЯВНО, до конвейера.
-dupes=$({ grep -rl "server_name .*\b$DOMAIN\b" /etc/nginx/bx/site_enabled/ /etc/nginx/bx/site_ext_enabled/ 2>/dev/null || true; } | wc -l)
-[ "$dupes" -le 2 ] && ok "server-блоков с этим именем: $dupes (ожидаемо 2 — http и https)" \
-  || bad "server-блоков с этим именем: $dupes — есть лишний, домен может уйти не туда"
+# ⚠ `grep -R`, а НЕ `-r`: в site_enabled лежат СИМВОЛИЧЕСКИЕ ССЫЛКИ на site_avaliable, а `-r`
+# их не разыменовывает. С `-r` проверка находила ноль блоков на исправном стенде и печатала
+# «0 (ожидаемо 2)» со значком OK — то есть молчала бы и при настоящем дубле. Замерено на живой ВМ.
+dupes=$({ grep -Rl "server_name .*\b$DOMAIN\b" /etc/nginx/bx/site_enabled/ /etc/nginx/bx/site_ext_enabled/ 2>/dev/null || true; } | wc -l)
+# Ноль — это НЕ «дублей нет», а «сайт не найден вовсе»: либо домен опечатан, либо конфиги не
+# включены. Разводим три исхода, потому что чинятся они по-разному.
+if [ "$dupes" -eq 0 ]; then
+  bad "конфигов сайта с этим именем не найдено — проверь домен и содержимое site_enabled"
+elif [ "$dupes" -le 2 ]; then
+  ok "server-блоков с этим именем: $dupes (ожидаемо 2 — http и https)"
+else
+  bad "server-блоков с этим именем: $dupes — есть лишний, домен может уйти не туда"
+fi
 
 echo "== контейнер напрямую =="
 code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PORT/api/health" || echo 000)
