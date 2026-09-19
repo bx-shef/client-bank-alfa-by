@@ -17,9 +17,12 @@ describe('buildBotRegisterCall', () => {
   it('несёт код, имя и должность', () => {
     const call = buildBotRegisterCall({ code: 'c', name: 'Имя', position: 'Должность' })
     expect(call?.params).toMatchObject({
-      CODE: 'c',
-      TYPE: 'B',
-      PROPERTIES: { NAME: 'Имя', WORK_POSITION: 'Должность' }
+      fields: {
+        code: 'c',
+        type: 'bot',
+        eventMode: 'fetch',
+        properties: { name: 'Имя', workPosition: 'Должность' }
+      }
     })
   })
 
@@ -28,9 +31,18 @@ describe('buildBotRegisterCall', () => {
     expect(JSON.stringify(call)).not.toMatch(/botToken/i)
   })
 
-  it('не задаёт eventMode: умолчание `fetch` и есть то, что нужно шлющему боту', () => {
+  it('ФОРМА ПАРАМЕТРОВ v2 — camelCase во вложенном fields (замерено 2026-09-17)', () => {
+    // ⚠ Несущий случай. Прежняя версия слала форму УСТАРЕВШЕГО `imbot.register`
+    // (`CODE`/`TYPE`/`PROPERTIES`), и живой портал отвечал `BOT_CODE_REQUIRED` — то есть бот не
+    // регистрировался НИ НА ОДНОМ портале, а все сообщения молча уходили от имени сотрудника.
+    // Юнит-тест этого не ловил и не мог: он сверял форму с самим собой.
+    const call = buildBotRegisterCall(B24_CHAT_BOT)!
+    expect(JSON.stringify(call.params)).not.toMatch(/"(CODE|TYPE|PROPERTIES|NAME|WORK_POSITION)"/)
+  })
+
+  it('eventMode задан явно: шлющему боту колбэки не нужны', () => {
     // Указать его значило бы намекнуть на обработку колбэков, для которых мы не регистрируем URL.
-    expect(JSON.stringify(buildBotRegisterCall(B24_CHAT_BOT))).not.toMatch(/eventMode/i)
+    expect((buildBotRegisterCall(B24_CHAT_BOT)!.params as { fields: { eventMode: string } }).fields.eventMode).toBe('fetch')
   })
 
   it('пустой код или имя → null, а не кривая регистрация', () => {
