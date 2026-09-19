@@ -19,7 +19,7 @@ import type { NormalizeContext, StatementItem } from '~/types/statement'
 import { isOneCExchange, parseOneCExchange } from '~/utils/oneCExchange'
 import { normalizeOneC } from '~/utils/oneCStatement'
 import { parseClientBankText } from '~/utils/clientBankText'
-import { normalizeClientBank } from '~/utils/clientBankStatement'
+import { normalizeClientBankRows } from '~/utils/clientBankStatement'
 import { isParitetText, parseParitetText, normalizeParitetRows } from '~/utils/paritetStatement'
 import { isPriorCsv, parsePriorCsv, normalizePriorCsvRows } from '~/utils/priorCsvStatement'
 import { isAlfaCsv, parseAlfaCsv, normalizeAlfaCsvRows } from '~/utils/alfaCsvStatement'
@@ -90,7 +90,7 @@ export function parseManualStatement(text: string, ctx: NormalizeContext): Manua
     case '1c-exchange':
       return { items: normalizeOneC(parseOneCExchange(text), ctx), nonPayment: 0, unreadable: 0 }
     case 'client-bank-text':
-      return { items: normalizeClientBank(parseClientBankText(text), ctx), nonPayment: 0, unreadable: 0 }
+      return normalizeClientBankRows(parseClientBankText(text), ctx)
     case 'paritet-text':
       return normalizeParitetRows(parseParitetText(text), ctx)
     case 'prior-csv':

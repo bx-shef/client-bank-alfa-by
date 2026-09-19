@@ -8,6 +8,8 @@ import {
   detectStatementCurrency,
   isBelarusianAccount,
   normalizeClientBank,
+  normalizeClientBankRows,
+  plainFieldHoldsAccountCurrency,
   normalizeClientBankRow,
   normalizeClientBankStatement,
   rowDocId
@@ -111,27 +113,77 @@ describe('normalizeClientBank — BYN statement (Type=400)', () => {
   })
 })
 
+describe('валютная выписка Альфы (Type=6): валюта счёта в ОБЫЧНОМ поле, а не в …Q', () => {
+  // Замерено 2026-09-19 на боевой выписке. У Приорбанка/ВПСК `…Q` несёт валюту счёта (#169), у
+  // Альфы — РОВНО НАОБОРОТ: `Deb=560.00` USD при `DebQ=1619.86` BYN, и шапка подтверждает это
+  // прямым текстом (`RestIn=3300.00` против `RestInQ=9591.78`). Фикстура повторяет структуру
+  // боевого файла синтетическими реквизитами.
+  const parsed = parseClientBankText(loadFixture('demo-type6-alfa-usd.txt'))
+  const { items, nonPayment } = normalizeClientBankRows(parsed, { account: '' })
+
+  it('признак срабатывает только при СОВПАДЕНИИ обоих условий: Type=6 и отсутствие I3', () => {
+    expect(plainFieldHoldsAccountCurrency(parsed)).toBe(true)
+    // ⚠ Одного типа НЕ ХВАТАЕТ, и это решение владельца: `Type` — стандарт формата, общий на
+    // многие банки, и завтра тот же номер выпустит кто-то со своей семантикой. Добавь такому
+    // файлу `I3` — и правило обязано выключиться.
+    const withI3 = { ...parsed, OUT_PARAM: { ...parsed.OUT_PARAM, unrouted: { ...parsed.OUT_PARAM.unrouted, I3: 'USD' } } }
+    expect(plainFieldHoldsAccountCurrency(withI3)).toBe(false)
+    // ⚠ И наоборот: чужой тип без `I3` остаётся на прежнем, замеренном поведении.
+    expect(plainFieldHoldsAccountCurrency({ ...parsed, GENERAL: { ...parsed.GENERAL, TYPE: '600' } })).toBe(false)
+  })
+
+  it('сумма платежа — в валюте счёта, а не BYN-эквивалент', () => {
+    expect(items).toHaveLength(1)
+    expect(items[0]!.currency).toBe('USD')
+    expect(items[0]!.direction).toBe('debit')
+    // ⚠ Прежде здесь было 1619.86 «USD» — втрое завышено и в неверной валюте, причём в CRM такое
+    // число выглядит достоверным. Сходится с оборотом самого банка: `DebV=560.00`.
+    expect(items[0]!.amount).toBe(560)
+  })
+
+  it('строки переоценки отброшены и посчитаны', () => {
+    // На боевом файле это 22 строки из 23 за месяц по ОДНОМУ счёту — столько же дел и сообщений
+    // в чат. Оба обычных поля у такой строки нулевые, то есть направления у неё нет по смыслу.
+    expect(nonPayment).toBe(3)
+  })
+
+  it('нет поля в валюте счёта ⇒ сумма 0, а НЕ откат на BYN-эквивалент', () => {
+    // Отката с `Deb` на `DebQ` здесь нет намеренно: он подставил бы BYN-эквивалент под ярлыком
+    // валюты счёта — ровно ту ошибку, ради которой цепочка и заведена. Пустая сумма отбрасывает
+    // строку и видна в счётчике; неверная уезжает в CRM и выглядит достоверной.
+    const row = normalizeClientBankRow({ DebQ: '1619.86', DocID: 'x' }, 'BY00X', 'USD', true)
+    expect(row.amount).toBe(0)
+  })
+
+  it('на BYN-выписке признак не срабатывает НИКОГДА', () => {
+    expect(plainFieldHoldsAccountCurrency(parseClientBankText(loadFixture('demo-prior-byn.txt')))).toBe(false)
+  })
+})
+
 describe('normalizeClientBank — foreign-currency statement (Type=600, CNY)', () => {
-  const items = normalizeClientBank(parseClientBankText(loadFixture('demo-prior-cny.txt')), { account: '' })
+  const parsed = parseClientBankText(loadFixture('demo-prior-cny.txt'))
+  const { items, nonPayment } = normalizeClientBankRows(parsed, { account: '' })
 
-  it('yields two credit operations in CNY with per-row DocIDs', () => {
-    expect(items).toHaveLength(2)
-    expect(items.every(i => i.direction === 'credit')).toBe(true)
-    expect(items.every(i => i.currency === 'CNY')).toBe(true)
-    expect(items.map(i => i.docId)).toEqual(['100000002', '100000003'])
+  it('строка переоценки НЕ становится операцией, но СЧИТАЕТСЯ', () => {
+    // Строка `Num=40` — переоценка: `CreQ=0.00` (ноль юаней) при `Cre=534.61` (BYN-эквивалент).
+    // Денег по счёту не двигалось; прежде она приезжала в CRM делом «Приход 0,00 CNY».
+    // ⚠ Число обязано быть названо: «разобрано 1 из 2» без объяснения читается как потеря строки.
+    expect(items).toHaveLength(1)
+    expect(nonPayment).toBe(1)
   })
 
-  it('reports the account-currency (foreign, …Q) amount, not the BYN equivalent', () => {
-    // Row 0 (Num=40) is a revaluation: CreQ=0.00 (0 CNY) though Cre=534.61 (BYN equiv).
-    expect(items[0]!.amount).toBe(0)
-    // Row 1 (Num=8) is a conversion: CreQ=76762.00 CNY (Cre=34362.51 is the BYN equiv).
-    expect(items[1]!.amount).toBe(76762)
+  it('у оставшейся операции валюта счёта и её сумма из …Q, а не BYN-эквивалент', () => {
+    // Строка `Num=8` — конверсия: `CreQ=76762.00` CNY (`Cre=34362.51` это BYN-эквивалент).
+    expect(items[0]!.direction).toBe('credit')
+    expect(items[0]!.currency).toBe('CNY')
+    expect(items[0]!.amount).toBe(76762)
+    expect(items[0]!.docId).toBe('100000003')
   })
 
-  it('keeps operDate when the operation day differs from the acceptance day', () => {
-    // Row 0: OpDate 27.09, DocDate 28.09 → distinct, operDate present.
-    expect(items[0]!.acceptDate).toBe('2023-09-27T23:12:03')
-    expect(items[0]!.operDate).toBe('2023-09-28')
+  it('operDate остаётся, когда день операции отличается от дня зачисления', () => {
+    const revaluation = normalizeClientBankRow(parsed.OUT_PARAM.items[0]!, '', 'CNY', false)
+    expect(revaluation.acceptDate).toBe('2023-09-27T23:12:03')
+    expect(revaluation.operDate).toBe('2023-09-28')
   })
 })
 
@@ -142,40 +194,40 @@ describe('normalizeClientBank — behavior', () => {
   })
 
   it('direction rule: a positive plain debit → debit, else credit', () => {
-    expect(normalizeClientBankRow({ Db: '10.00', DocID: 'd1' }, 'A', 'BYN').direction).toBe('debit')
-    expect(normalizeClientBankRow({ Cre: '10.00', DocID: 'c1' }, 'A', 'BYN').direction).toBe('credit')
-    expect(normalizeClientBankRow({ DocID: 'z' }, 'A', 'BYN').direction).toBe('credit')
+    expect(normalizeClientBankRow({ Db: '10.00', DocID: 'd1' }, 'A', 'BYN', false).direction).toBe('debit')
+    expect(normalizeClientBankRow({ Cre: '10.00', DocID: 'c1' }, 'A', 'BYN', false).direction).toBe('credit')
+    expect(normalizeClientBankRow({ DocID: 'z' }, 'A', 'BYN', false).direction).toBe('credit')
   })
 
   it('a per-row I2 alpha-3 marker overrides the statement currency', () => {
-    const op = normalizeClientBankRow({ Cre: '5.00', I2: 'USD', DocID: 'x' }, 'A', 'BYN')
+    const op = normalizeClientBankRow({ Cre: '5.00', I2: 'USD', DocID: 'x' }, 'A', 'BYN', false)
     expect(op.currency).toBe('USD')
   })
 
   it('foreign debit takes the account-currency …Q amount, never the BYN equivalent', () => {
     // Db=1000 (BYN equiv) but DebQ=500 (USD) — the reported amount must be 500 USD.
-    const op = normalizeClientBankRow({ Db: '1000.00', DebQ: '500.00', I2: 'USD', DocID: 'x' }, 'A', 'BYN')
+    const op = normalizeClientBankRow({ Db: '1000.00', DebQ: '500.00', I2: 'USD', DocID: 'x' }, 'A', 'BYN', false)
     expect(op.direction).toBe('debit')
     expect(op.amount).toBe(500)
     expect(op.currency).toBe('USD')
   })
 
   it('foreign row without a …Q field yields 0, not a mislabeled BYN value', () => {
-    const op = normalizeClientBankRow({ Cre: '100.50', I2: 'USD', DocID: 'x' }, 'A', 'BYN')
+    const op = normalizeClientBankRow({ Cre: '100.50', I2: 'USD', DocID: 'x' }, 'A', 'BYN', false)
     expect(op.amount).toBe(0)
     expect(op.currency).toBe('USD')
   })
 
   it('strips a non-digit УНП prefix (e.g. УНП191234567 → 191234567)', () => {
-    expect(normalizeClientBankRow({ Cre: '1', UNNRec: 'УНП191234567', DocID: 'x' }, 'A', 'BYN').counterparty.unp).toBe('191234567')
+    expect(normalizeClientBankRow({ Cre: '1', UNNRec: 'УНП191234567', DocID: 'x' }, 'A', 'BYN', false).counterparty.unp).toBe('191234567')
   })
 
   it('empty DocID yields an empty docId (dedup key collapses — handled on backend)', () => {
-    expect(normalizeClientBankRow({ Cre: '1' }, 'A', 'BYN').docId).toBe('')
+    expect(normalizeClientBankRow({ Cre: '1' }, 'A', 'BYN', false).docId).toBe('')
   })
 
   it('never emits NaN for a malformed amount', () => {
-    expect(normalizeClientBankRow({ Db: 'not-a-number', DocID: 'x' }, 'A', 'BYN').amount).toBe(0)
+    expect(normalizeClientBankRow({ Db: 'not-a-number', DocID: 'x' }, 'A', 'BYN', false).amount).toBe(0)
   })
 
   it('an empty statement (no OUT_PARAM rows) normalizes to []', () => {
@@ -305,19 +357,19 @@ describe('real client-bank formats (Type 3 / Type 4 / Type 5 fixtures)', () => {
 describe('normalizeClientBankRow — foreign amount field selection (…Q vs plain)', () => {
   const base = { KorName: 'X', DocDate: '06.02.2026', Num: '1' }
   it('credit: takes CreQ (account currency), not the Cre BYN equivalent', () => {
-    const op = normalizeClientBankRow({ ...base, Deb: '0.00', DebQ: '0.00', Cre: '6384.35', CreQ: '170595.00' }, 'BY00X', 'RUB')
+    const op = normalizeClientBankRow({ ...base, Deb: '0.00', DebQ: '0.00', Cre: '6384.35', CreQ: '170595.00' }, 'BY00X', 'RUB', false)
     expect(op.direction).toBe('credit')
     expect(op.currency).toBe('RUB')
     expect(op.amount).toBeCloseTo(170595.00, 2)
   })
   it('debit: takes DebQ (account currency), not the Deb BYN equivalent', () => {
-    const op = normalizeClientBankRow({ ...base, Deb: '6384.35', DebQ: '170595.00', Cre: '0.00', CreQ: '0.00' }, 'BY00X', 'RUB')
+    const op = normalizeClientBankRow({ ...base, Deb: '6384.35', DebQ: '170595.00', Cre: '0.00', CreQ: '0.00' }, 'BY00X', 'RUB', false)
     expect(op.direction).toBe('debit') // Deb>0 (direction reads the plain field)
     expect(op.currency).toBe('RUB')
     expect(op.amount).toBeCloseTo(170595.00, 2)
   })
   it('a BYN statement keeps taking the plain field', () => {
-    const op = normalizeClientBankRow({ ...base, Deb: '50.00', DebQ: '0.00', Cre: '0.00' }, 'BY00X', 'BYN')
+    const op = normalizeClientBankRow({ ...base, Deb: '50.00', DebQ: '0.00', Cre: '0.00' }, 'BY00X', 'BYN', false)
     expect(op.direction).toBe('debit')
     expect(op.amount).toBeCloseTo(50, 2)
   })
@@ -349,7 +401,7 @@ describe('currencyFromNumericCode (ISO 4217 numeric → alpha, #73 building bloc
 
 describe('counterparty BIC (Cod / Code, shape-guarded, #75)', () => {
   const base = { KorName: 'X', Db: '1.00', Credit: '0.00', DocDate: '01.01.2026', Num: '1' }
-  const bicOf = (row: Record<string, string>) => normalizeClientBankRow(row, 'BY00X', 'BYN').counterparty.bic
+  const bicOf = (row: Record<string, string>) => normalizeClientBankRow(row, 'BY00X', 'BYN', false).counterparty.bic
 
   it('takes Cod (classic) and Code (Type=4) when BIC-shaped', () => {
     expect(bicOf({ ...base, Cod: 'PJCBBY2X' })).toBe('PJCBBY2X')
