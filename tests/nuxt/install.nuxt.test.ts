@@ -154,7 +154,9 @@ describe('install.vue — inside a B24 frame', () => {
     })
     expect(regIndex).toBeGreaterThanOrEqual(0)
     const regArg = (callSpy.mock.calls[regIndex]![0]) as CallArg
-    expect(regArg.params.CODE).toBe('cba_statement_bot')
+    // ⚠ Форма v2 (замерено 2026-09-17): старая `CODE`/`TYPE`/`PROPERTIES` отвечала
+    // `BOT_CODE_REQUIRED`, то есть бот не заводился ни на одном портале — молча.
+    expect((regArg.params.fields as { code?: string })?.code).toBe('cba_statement_bot')
     expect(JSON.stringify(regArg)).not.toMatch(/botToken/i) // под OAuth его быть не должно
     const regOrder = callSpy.mock.invocationCallOrder[regIndex]!
     expect(regOrder).toBeLessThan(finishSpy.mock.invocationCallOrder[0]!)
