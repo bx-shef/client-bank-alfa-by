@@ -1,6 +1,6 @@
 # Деплой на виртуальную машину Битрикс24 (третий таргет)
 
-> Last reviewed: 2026-09-13
+> Last reviewed: 2026-09-19
 
 Развёртывание приложения **рядом с боевым порталом** на виртуальной машине Битрикс24
 (bitrix-env): домен третьего уровня, nginx машины терминирует TLS и проксирует всё в
@@ -47,7 +47,58 @@ docker-стек на loopback, обновления сервер забирае�
   `/home/bitrix/ext_www/<домен>`, пару конфигов nginx и каталог для наших настроек);
 - сертификат, выпущенный тем же меню (его же оно и продлевает);
 - docker и compose-плагин;
-- клиентский репозиторий с настроенным CI.
+- клиентский репозиторий с настроенным CI (раздел ниже).
+
+## Клиентский репозиторий: что создать и что записать
+
+Заводится ОДИН раз на клиента, до первого выката. Делается на машине разработчика.
+
+```bash
+git clone https://github.com/bx-shef/client-bank-alfa-by.git <клиент>
+cd <клиент>
+git remote rename origin upstream                       # апстрим — источник обновлений
+git remote add origin git@github.com:<владелец>/<репо>.git
+git remote -v                                           # origin = клиентский, upstream = наш
+git push -u origin main
+```
+
+⚠ **Проверь вывод `git remote -v` глазами.** Перепутанные местами remote'ы — ошибка, которая
+не мешает работать до первого `git push`: он уйдёт в АПСТРИМ, то есть клиентский код попадёт в
+общий репозиторий. Такое уже случалось.
+
+⚠ Если GitHub создал репозиторий с `README`/`LICENSE`, первый push отвергнется. Тогда
+`git push -u origin main --force-with-lease` — затирается только автосозданный коммит.
+
+**Repo-переменные** — `Settings → Secrets and variables → Actions → **Variables**` (не Secrets).
+**Полный список и цена каждой пропущенной — шаг 5 «Переменные»**, здесь не дублируется: две
+копии такого списка разъезжаются молча, а неполная копия читается как полная.
+
+⚠ Все они **build-time**: запекаются в образ на сборке, задать их в `.env` на сервере НЕЛЬЗЯ —
+это будет молчаливый no-op.
+
+⚠ **Заводятся ДО первого прогона CI.** Сборка без них зелёная, а образ несёт наш домен, наши
+промо и ссылки на НАШЕ приложение — по цвету джобы это не отличить. Опоздал — `Actions` →
+последний прогон → **Re-run all jobs**.
+
+⚠ Клону обязательна **`NUXT_PUBLIC_B24_APP_CODE`** (у локального приложения это его
+`client_id`): с умолчанием ссылки на экраны ведут на наше приложение, которого на портале
+клиента нет, и открывается пустой слайдер. И **`NUXT_PUBLIC_REPO_URL`** — иначе подпись
+«сборка &lt;sha&gt;» ведёт в апстрим, куда у клиента доступа нет.
+
+**Deploy key** (сервер читает им git): генерируется НА СЕРВЕРЕ (см. шаг 6), публичная половина
+добавляется в `Settings → Deploy keys` **клиентского** репозитория, **без** галки
+`Allow write access`. Приватная половина сервер не покидает.
+
+**Токен реестра** (сервер тянет им образы): `Settings → Tokens (classic)` → право **только**
+`read:packages`. Приватный репозиторий ⇒ приватные пакеты ⇒ без токена `docker pull` вернёт
+`denied`. Публичный ⇒ токен не нужен.
+
+⚠ Классический токен, а не fine-grained: с последними GHCR ведёт себя непредсказуемо, а
+«docker молча не пускает» — плохой способ это выяснить.
+
+⚠ **Dependabot в клиентском репозитории выключить** (`Settings → Code security`) и его PR
+закрыть. Обновления зависимостей приходят merge'ем из апстрима — уже собранные и проверенные;
+принятые здесь, они станут конфликтом при каждом следующем вливании.
 
 ## Три каталога, которые нельзя путать
 
@@ -66,6 +117,18 @@ docker-стек на loopback, обновления сервер забирае�
 
 ## Порядок
 
+⚠ **На сервере НЕТ репозитория** — там только каталог стека, `Makefile` и `.env`. Поэтому все
+файлы тянутся по HTTPS из `main`; команды ниже вставляются как есть. Переменные шага:
+
+```bash
+DOMAIN=<домен>                 # например bank-app.example.by
+RAW=https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main
+OWNER=<владелец-клиентского-репо>
+REPO=<имя-клиентского-репо>
+```
+
+Кто что делает: шаги 1 и 8 — владелец портала, 2–3 — root, 4–7 — `bitrix`.
+
 ### 1. Сайт и сертификат — только через меню
 
 Меню создаёт `bx_ext_<домен>.conf` и `bx_ext_ssl_<домен>.conf`, каталог
@@ -74,11 +137,17 @@ docker-стек на loopback, обновления сервер забирае�
 
 ### 2. Проксирование
 
+Под **root**:
+
 ```bash
-install -m 644 -o root -g root deploy/bitrixvm/nginx/00-app-proxy.conf \
-  /etc/nginx/bx/site_settings/<домен>/00-app-proxy.conf
-nginx -t && systemctl reload nginx
+curl -fsSL "$RAW/deploy/bitrixvm/nginx/00-app-proxy.conf" -o /tmp/00-app-proxy.conf \
+  && install -m 644 -o root -g root /tmp/00-app-proxy.conf \
+     "/etc/nginx/bx/site_settings/$DOMAIN/00-app-proxy.conf" \
+  && nginx -t && systemctl reload nginx
 ```
+
+⚠ `nginx -t` **до** перезапуска и в одной цепочке через `&&`: битый конфиг иначе уронит nginx
+вместе с боевым порталом клиента, который живёт на этой же машине.
 
 Механика и её обоснование — в шапке самого файла. Коротко о трёх решениях, которые легко
 принять неправильно:
@@ -99,11 +168,15 @@ nginx -t && systemctl reload nginx
 
 ### 3. Docroot
 
+Под **root**:
+
 ```bash
-D=/home/bitrix/ext_www/<домен>
+D=/home/bitrix/ext_www/$DOMAIN
 cp -a "$D/index.php" "$D/index.php.orig-$(date +%F)"
-cp deploy/bitrixvm/docroot/index.php deploy/bitrixvm/docroot/.htaccess "$D/"
+curl -fsSL "$RAW/deploy/bitrixvm/docroot/index.php" -o "$D/index.php"
+curl -fsSL "$RAW/deploy/bitrixvm/docroot/.htaccess"  -o "$D/.htaccess"
 chown bitrix:bitrix "$D/index.php" "$D/.htaccess"
+chmod 644 "$D/index.php" "$D/.htaccess"
 ```
 
 Каталоги `bitrix/`, `upload/`, `local/` не трогаем. `index.php` меню кладёт боевой,
@@ -116,16 +189,96 @@ HTTP→HTTPS включается штатным для bitrix-env способ�
 
 ```bash
 touch "$D/.htsecure" && chown bitrix:bitrix "$D/.htsecure"
+curl -sSI "http://$DOMAIN/" | head -3        # ожидаем 301 на https
 ```
+
+⚠ **Только ПОСЛЕ того, как сертификат выпущен и работает.** Созданный раньше, он уводит на
+https, которого ещё нет: сайт становится недоступен целиком — включая ACME-проверку, то есть
+выпустить сертификат становится труднее, чем было.
 
 ### 4. Стек
 
+**4.1. Один раз от root** — доступ к docker и владение каталогом стека:
+
 ```bash
-mkdir -p /home/bitrix/bank-import   # сюда: оба compose-файла и .env
-cp docker-compose.prod.yml deploy/bitrixvm/docker-compose.bitrixvm.yml /home/bitrix/bank-import/
-cp deploy/bitrixvm/.env.example /home/bitrix/bank-import/.env   # заполнить, chmod 600
-cd /home/bitrix/bank-import && docker compose up -d
+usermod -aG docker bitrix
+install -d -o bitrix -g bitrix -m 755 /home/bitrix/bank-import
 ```
+
+⚠ Членство в группе `docker` **равносильно root на этой машине** (любой её член монтирует
+корень хоста в контейнер). Это не «облегчённые права», а осознанный размен: взамен стек и
+обновления живут под одним пользователем и не требуют root на каждый чих.
+
+**4.2. Дальше под `bitrix`** (нужен НОВЫЙ вход в систему — группа применяется при логине):
+
+```bash
+su - bitrix
+id -nG | tr ' ' '\n' | grep -x docker && echo "доступ к docker есть"
+```
+
+**4.3. Токен реестра и логин** (приватные пакеты):
+
+```bash
+mkdir -p ~/bank-app-deploy && chmod 700 ~/bank-app-deploy
+printf '%s' '<ТОКЕН read:packages>' > ~/bank-app-deploy/registry_token
+chmod 600 ~/bank-app-deploy/registry_token
+docker login ghcr.io -u <github-логин> --password-stdin < ~/bank-app-deploy/registry_token
+```
+
+⚠ **Логинится ТОТ пользователь, от которого потом идут обновления.** `docker login` кладёт
+токен в `~/.docker/config.json` того, кто его выполнил; логин под одним пользователем при
+обновлении от другого даёт `unauthorized` на каждом тике — молча, при исправном всём остальном.
+
+⚠ Токен читается ИЗ ФАЙЛА, а не передаётся аргументом: аргументы видны в `ps` любому
+пользователю машины.
+
+**4.4. Файлы стека и `.env`:**
+
+```bash
+cd /home/bitrix/bank-import
+curl -fsSL "$RAW/docker-compose.prod.yml" -o docker-compose.prod.yml
+curl -fsSL "$RAW/deploy/bitrixvm/docker-compose.bitrixvm.yml" -o docker-compose.bitrixvm.yml
+docker network create proxy-net 2>/dev/null || true
+
+cat > .env <<EOF
+COMPOSE_FILE=docker-compose.prod.yml:docker-compose.bitrixvm.yml
+APP_IMAGE=ghcr.io/$OWNER/$REPO:latest
+BACKEND_IMAGE=ghcr.io/$OWNER/$REPO-backend:latest
+APP_BIND_PORT=8080
+DOMAIN=$DOMAIN
+LETSENCRYPT_EMAIL=
+B24_TOKEN_ENC_KEY=$(openssl rand -hex 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+SESSION_SECRET=$(openssl rand -hex 32)
+PUBLIC_PAGE_BASIC_AUTH_PASS=$(openssl rand -hex 16)
+B24_SELFHOSTED_HOSTS=<домен портала>
+B24_CLIENT_ID=
+B24_CLIENT_SECRET=
+B24_APPLICATION_TOKEN=
+CRON_REAL_POLL=0
+EOF
+chmod 600 .env
+
+docker compose pull && docker compose up -d
+```
+
+⚠ Секреты генерируются НА МЕСТЕ через `openssl` — в переписку и в историю команд попадает
+только строка `$(openssl rand …)`, а не значение.
+
+⚠ `B24_CLIENT_ID`/`B24_CLIENT_SECRET`/`B24_APPLICATION_TOKEN` на этом шаге ПУСТЫЕ: их даёт
+регистрация приложения (шаг 8). Стек поднимется и лендинг отдаст, но обновление токенов и
+запись в CRM работать не будут — это ожидаемо, а не поломка.
+
+**4.5. Проверка тракта** (работает и до появления домена — по `Host` на loopback):
+
+```bash
+curl -sS -o /dev/null -w 'health=%{http_code}\n' http://127.0.0.1:8080/api/health
+curl -sS http://127.0.0.1:8080/api/ready; echo
+curl -sS "http://127.0.0.1:8080/" | grep -c "$DOMAIN"
+```
+
+Последнее число >0 означает, что образ собран с ВАШИМ доменом; `0` — переменные не доехали до
+сборки, нужен `Re-run all jobs` (см. раздел про клиентский репозиторий).
 
 ⚠ Сеть `proxy-net` базовый файл объявляет `external` — её надо создать пустой
 (`docker network create proxy-net`). Убрать её оверлеем нельзя: списки сетей при слиянии
@@ -212,13 +365,26 @@ NUXT_PUBLIC_AUTHOR_URL=https://offer.bx-shef.by/?ref=bank-import
 
 ### 6. Автообновление
 
+Вариант для root-схемы (альтернатива — cron под `bitrix`, шаг 6b). Под **root**:
+
 ```bash
-install -m 755 deploy/bitrixvm/git-poll-deploy.sh /usr/local/sbin/bank-app-deploy
-mkdir -p /etc/bank-app-deploy && chmod 700 /etc/bank-app-deploy
-cp deploy/bitrixvm/deploy.env.client.example /etc/bank-app-deploy/deploy.env  # заполнить
-chmod 600 /etc/bank-app-deploy/deploy.env
-cp deploy/bitrixvm/systemd/bank-app-deploy.* /etc/systemd/system/
+curl -fsSL "$RAW/deploy/bitrixvm/git-poll-deploy.sh" -o /usr/local/sbin/bank-app-deploy
+chmod 755 /usr/local/sbin/bank-app-deploy
+install -d -m 700 /etc/bank-app-deploy
+curl -fsSL "$RAW/deploy/bitrixvm/deploy.env.client.example" -o /etc/bank-app-deploy/deploy.env
+chmod 600 /etc/bank-app-deploy/deploy.env   # заполнить: GIT_URL, ключ, образы, токен, STACK_DIR
+ssh-keygen -t ed25519 -N '' -C "bank-app deploy ($(hostname -s))" -f /etc/bank-app-deploy/deploy_key
+cat /etc/bank-app-deploy/deploy_key.pub     # → Deploy keys клиентского репо, БЕЗ права записи
+curl -fsSL "$RAW/deploy/bitrixvm/systemd/bank-app-deploy.service" -o /etc/systemd/system/bank-app-deploy.service
+curl -fsSL "$RAW/deploy/bitrixvm/systemd/bank-app-deploy.timer"   -o /etc/systemd/system/bank-app-deploy.timer
 systemctl daemon-reload && systemctl enable --now bank-app-deploy.timer
+```
+
+⚠ **Первый прогон — руками**, до постановки в расписание: отказ доступа к git, опечатку в
+имени образа и незалогиненный реестр видно сразу, а не через пять минут в журнале.
+
+```bash
+BANK_APP_DEPLOY_CONFIG=/etc/bank-app-deploy/deploy.env /usr/local/sbin/bank-app-deploy
 ```
 
 Ключ и токен кладём файлами с правами `600`, а не в юнит: содержимое юнита видно любому
@@ -296,6 +462,104 @@ make offline-snapshot     # в cron раз в неделю
 
 Скрипт обновления образы не удаляет вовсе — ни висячие, ни какие-либо ещё; в основном
 таргете `make prod-redeploy` шаг прунинга есть, здесь его нет намеренно.
+
+### 8. Приложение в портале
+
+Владельческий шаг, и он последний по порядку, а не первый: адрес обработчика событий должен
+уже отвечать по HTTPS.
+
+1. В портале завести **локальное приложение**: адрес `https://<домен>`, обработчик установки
+   `https://<домен>/install`, права `crm`, `sale`, `im`, `documentgenerator`,
+   `userfieldconfig`, `user_brief`, `placement`, `imbot`, `pull`.
+2. Полученные `B24_CLIENT_ID`/`B24_CLIENT_SECRET` и `B24_APPLICATION_TOKEN` внести в
+   `/home/bitrix/bank-import/.env`, затем `docker compose up -d`.
+3. Открыть приложение в портале и пройти `/install`.
+
+⚠ `B24_APPLICATION_TOKEN` на **одном** портале (не Маркет) — задать ОБЯЗАТЕЛЬНО: без него
+установка идёт в режиме доверия первому токену, и знающий адрес вебхука может «установить»
+произвольный портал. Подробности — [`B24_EVENTS.md`](B24_EVENTS.md).
+
+⚠ Приложение обязано открыться **внутри фрейма** портала. Пустой фрейм означает, что
+`B24_PORTAL_ORIGINS` не доехала до сборки (CSP режет и вложение, и вызовы к порталу), а не что
+портал сломан.
+
+## Обновление клиентского репозитория от апстрима
+
+Руками, на машине разработчика — сервер ничего не решает, он лишь исполняет уже принятое.
+
+```bash
+cd <клиент>
+git fetch upstream
+git log --oneline HEAD..upstream/main      # что приедет
+git merge upstream/main                    # merge, НЕ rebase
+pnpm install && pnpm check                 # прогнать проверки ДО push
+git push                                   # → CI клиента → образы в его GHCR
+```
+
+⚠ **Merge, а не rebase:** у клиентской ветки своя история (правки под клиента), и rebase
+перепишет её — сломает всем, кто её клонировал, и превратит следующий merge в кашу.
+
+⚠ **Конфликты ждут ровно в двух местах** и оба ожидаемы: файлы, которые вы правили под клиента,
+и `pnpm-lock.yaml`. Лок не разрешают руками — берут апстримный (`git checkout --theirs
+pnpm-lock.yaml && pnpm install`).
+
+⚠ **Удалённый `.github/dependabot.yml`** конфликтует, только когда его правят в апстриме:
+ответ — снова `git rm`.
+
+⚠ `pnpm check` **до** push, а не после: CI клиентского репозитория — последний рубеж, но
+образы он собирает из того, что уже влито.
+
+## Как выпускать деплой
+
+Выпуск — это **push в `main` клиентского репозитория**. Дальше цепочка идёт сама:
+
+1. CI собирает два образа и публикует их в GHCR клиента с тегами `latest` и `sha-<коммит>`;
+2. сервер на очередном тике (5 минут) спрашивает `git ls-remote`, видит новый коммит;
+3. тянет образы **по тегу коммита**, поднимает стек, проверяет `/api/health` **и** `/api/ready`;
+4. не прошло — откатывается на прежние образы по их идентификаторам.
+
+Ничего вручную выкладывать не нужно и не следует.
+
+**Выпустить прямо сейчас, не дожидаясь тика:**
+
+```bash
+systemctl start bank-app-deploy.service && journalctl -u bank-app-deploy -n 30 --no-pager
+# в cron-схеме — тот же скрипт руками, см. шаг 6b
+```
+
+**Посмотреть, что развёрнуто:**
+
+```bash
+make deploy-status          # systemd-схема
+cat ~/bank-app-deploy/state/deployed_sha
+```
+
+**Приостановить выпуски** (перед ручной отладкой на стенде):
+
+```bash
+make deploy-pause     # вернуть: make deploy-resume
+```
+
+**Откатиться на предыдущую версию.** Отдельной команды нет намеренно: сломанную версию чинит
+НОВЫЙ коммит, и сервер подхватит его сам — это быстрее и оставляет след в истории. Если
+починка не готова, а работать надо сейчас:
+
+```bash
+cd <клиент>
+git revert <плохой коммит> && git push      # CI соберёт новый sha, сервер подхватит
+```
+
+⚠ Правка тега `:latest` руками или `docker compose up` с другим образом **не** решение: тик
+таймера вернёт то, что стоит в git, и выглядеть это будет как «откат не удержался».
+
+⚠ **Обновлять `docker-compose.prod.yml` и `Makefile` на сервере** скрипт обновления не умеет —
+он работает с образами. Оба файла обновляются осознанно:
+
+```bash
+make self-update                       # сам Makefile (новые цели появляются только так)
+make compose-update                    # показать, что изменится
+make compose-update CONFIRM=1          # применить, затем make prod-redeploy
+```
 
 ## Операторские цели
 
