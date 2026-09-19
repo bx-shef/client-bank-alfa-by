@@ -154,6 +154,49 @@ const DEBIT_PLAIN = ['Db', 'Deb', 'DebQ'] as const
 const CREDIT_PLAIN = ['Cre', 'Credit', 'CreQ'] as const
 const DEBIT_FOREIGN = ['DebQ'] as const
 const CREDIT_FOREIGN = ['CreQ'] as const
+// Цепочки для выписки, где валюта счёта лежит в ОБЫЧНОМ поле (Альфа `Type=6`). Отката на `…Q`
+// здесь НЕТ намеренно — он подставил бы BYN-эквивалент под ярлыком валюты счёта, то есть ровно
+// ту ошибку, ради которой эти цепочки и заведены. Нет поля ⇒ сумма 0 ⇒ строка отбрасывается и
+// видна в счётчике, а не уезжает в CRM неверным числом.
+const DEBIT_ACCOUNT = ['Db', 'Deb'] as const
+const CREDIT_ACCOUNT = ['Cre', 'Credit'] as const
+
+/**
+ * Где у ВАЛЮТНОЙ выписки лежит сумма В ВАЛЮТЕ СЧЁТА — в `…Q` или в обычном поле.
+ *
+ * ⚠ ОТВЕТ ЗАВИСИТ ОТ БАНКА, И ОН ПРОТИВОПОЛОЖНЫЙ. Замерено 2026-09-19 на боевых выписках:
+ *   • Приорбанк/ВПСК (`Type=600`, `Type=5`): `DebQ=55200.00` INR при `Deb=1729.20` BYN —
+ *     то есть `…Q` это валюта счёта, а обычное поле BYN-эквивалент (#169);
+ *   • Альфа-Банк (`Type=6`): `Deb=560.00` USD при `DebQ=1619.86` BYN, и шапка говорит то же
+ *     прямым текстом — `RestIn=3300.00` (остаток в USD) против `RestInQ=9591.78` (он же в BYN).
+ *     Здесь всё наоборот.
+ *
+ * ⚠ ЦЕНА ПРОМАХА НЕСИММЕТРИЧНА И МОЛЧАЛИВА: до этой правки единственный настоящий платёж той
+ * выписки записывался как «1619.86 USD» вместо «560.00 USD» — втрое завышено, в CRM выглядит
+ * достоверным числом, и опровергнуть его человеку нечем, кроме похода в банк.
+ *
+ * ⚠ ПРИЗНАКА ДВА, И ТРЕБУЮТСЯ ОБА (решение владельца 2026-09-19). `Type` — это СТАНДАРТ формата,
+ * общий на многие банки: завтра `Type=6` выпустит кто-то ещё со своей семантикой, и правило,
+ * стоящее на одном номере типа, молча начнёт врать про чужой файл. Поэтому к нему добавлен
+ * СТРУКТУРНЫЙ признак — отсутствие `I3`: у обоих замеренных «Q = валюта счёта» файлов он есть
+ * (`I3=INR`, `I3=643`), у альфовского нет вовсе.
+ *
+ * ⚠ Правило НАРОЧНО УЗКОЕ и выключено по умолчанию: «обычное поле» требует СОВПАДЕНИЯ обоих
+ * признаков, всё остальное — включая незнакомый тип и незнакомый банк — остаётся на прежнем,
+ * замеренном поведении. Ошибиться в эту сторону дёшево (сумма 0 ⇒ строка отбрасывается и видна
+ * в счётчике), в обратную — нет.
+ */
+export function plainFieldHoldsAccountCurrency(parsed: ClientBankParsed): boolean {
+  const type = (parsed.GENERAL.TYPE ?? '').trim()
+  if (type !== ALFA_CURRENCY_TYPE) return false
+  const out = parsed.OUT_PARAM
+  const inp = parsed.IN_PARAM
+  const hasI3 = Boolean(out.unrouted.I3 ?? out.header.I3 ?? inp.unrouted.I3 ?? inp.header.I3)
+  return !hasI3
+}
+
+/** Тип валютной выписки Альфа-Банка. Сам по себе НИЧЕГО не решает — см. `plainFieldHoldsAccountCurrency`. */
+const ALFA_CURRENCY_TYPE = '6'
 
 /**
  * Map one parsed operation row to a StatementItem. `account` is our own account
@@ -161,15 +204,27 @@ const CREDIT_FOREIGN = ['CreQ'] as const
  * detected file currency. Income/expense: a positive debit → расход (`debit`),
  * otherwise приход (`credit`) — the reference importer's rule.
  */
-export function normalizeClientBankRow(row: ClientBankRow, account: string, statementCurrency: string): StatementItem {
+export function normalizeClientBankRow(
+  row: ClientBankRow,
+  account: string,
+  statementCurrency: string,
+  plainIsAccountCurrency: boolean
+): StatementItem {
   const rowCurrency = ALPHA3.test((row.I2 ?? '').trim()) ? row.I2!.trim() : statementCurrency
-  const isForeign = rowCurrency !== '' && rowCurrency !== 'BYN'
+  // ⚠ `plainIsAccountCurrency` — ОБЯЗАТЕЛЬНЫЙ параметр, а не необязательный со значением `false`:
+  // забытая проводка обязана не собираться, а не тихо вернуть прежний уверенно-неверный ответ.
+  const takeQ = rowCurrency !== '' && rowCurrency !== 'BYN' && !plainIsAccountCurrency
 
+  // ⚠ НАПРАВЛЕНИЕ по-прежнему читается из ОБЫЧНЫХ полей, и на альфовской выписке это несущее:
+  // у строки переоценки обычные поля нулевые ОБА, то есть направления у неё нет по смыслу —
+  // она и не должна становиться операцией (её отсеивает нулевая сумма ниже).
   const debitPlain = money(firstOf(row, DEBIT_PLAIN))
   const direction: OperationDirection = debitPlain > 0 ? 'debit' : 'credit'
+  const debitChain = takeQ ? DEBIT_FOREIGN : plainIsAccountCurrency ? DEBIT_ACCOUNT : DEBIT_PLAIN
+  const creditChain = takeQ ? CREDIT_FOREIGN : plainIsAccountCurrency ? CREDIT_ACCOUNT : CREDIT_PLAIN
   const amount = direction === 'debit'
-    ? money(firstOf(row, isForeign ? DEBIT_FOREIGN : DEBIT_PLAIN))
-    : money(firstOf(row, isForeign ? CREDIT_FOREIGN : CREDIT_PLAIN))
+    ? money(firstOf(row, debitChain))
+    : money(firstOf(row, creditChain))
 
   // Payment purpose is split across Nazn/Nazn2 (a long value continues into the
   // second field mid-word) — concatenate verbatim, no separator, matching the
@@ -216,9 +271,42 @@ export function normalizeClientBankRow(row: ClientBankRow, account: string, stat
  * operations (`IN_PARAM` is the request echo).
  */
 export function normalizeClientBankStatement(parsed: ClientBankParsed, ctx: NormalizeContext): StatementItem[] {
+  return normalizeClientBankRows(parsed, ctx).items
+}
+
+/**
+ * То же, но с РАЗБИВКОЙ отброшенных строк — форма `parseManualStatement`, как у звёздочного
+ * формата.
+ *
+ * ⚠ Строки с НУЛЕВОЙ суммой в валюте счёта отбрасываются и считаются в `nonPayment`. Замерено на
+ * боевой валютной выписке Альфы: 22 строки из 23 — «Переоценка входящего остатка», то есть
+ * пересчёт BYN-эквивалента валютного остатка. Денег по счёту не двигалось, направления у такой
+ * записи нет (оба обычных поля нулевые), привязать её к счёту или сделке нельзя (разнесение
+ * сверяет СУММУ) — а в CRM это 22 дела и 22 сообщения в чат за месяц по ОДНОМУ счёту. То же
+ * решение и по той же причине уже принято для Паритетбанка, см. `normalizeParitetRows`.
+ * ⚠ Считаем, а не молчим: «разобрано 1 из 23» без объяснения читается как потеря выписки.
+ * ⚠ `unreadable` здесь всегда 0 — у этого формата нет строки, которую мы отвергали бы как
+ * нечитаемую (направление выводится всегда, дата необязательна). Поле есть ради ОДНОЙ формы
+ * результата у всех форматов, а не потому, что случай возможен.
+ */
+export function normalizeClientBankRows(
+  parsed: ClientBankParsed,
+  ctx: NormalizeContext
+): { items: StatementItem[], nonPayment: number, unreadable: number } {
   const account = ctx.account || parsed.GENERAL.ACC || ''
   const currency = detectStatementCurrency(parsed, ctx.currency)
-  return parsed.OUT_PARAM.items.map(row => normalizeClientBankRow(row, account, currency))
+  const plainIsAccountCurrency = plainFieldHoldsAccountCurrency(parsed)
+  const items: StatementItem[] = []
+  let nonPayment = 0
+  for (const row of parsed.OUT_PARAM.items) {
+    const item = normalizeClientBankRow(row, account, currency, plainIsAccountCurrency)
+    if (item.amount === 0) {
+      nonPayment += 1
+      continue
+    }
+    items.push(item)
+  }
+  return { items, nonPayment, unreadable: 0 }
 }
 
 /** The `manual` / client-bank-text implementation of the unified
