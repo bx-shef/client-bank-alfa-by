@@ -191,7 +191,7 @@ export function liveHandlerDeps(): HandlerDeps {
       await markFetchOutcome(job, items.length)
       return items
     },
-    // Manual import: decode the windows-1251 file carried in the packet and parse it
+    // Manual import: decode the file carried in the packet (encoding is DETECTED, #700) and parse it
     // to operations (server is the single parse authority). Demo/fetch path is
     // unaffected — parseFile only runs for file-parse jobs (real uploads). Log the
     // attribution (file + initiating user + portal) so the resolved userId/fileName

@@ -19,24 +19,23 @@
 // (account numbers ARE masked). Do NOT run on real client statements in a
 // logged/shared environment. The fixtures under tests/fixtures are anonymized.
 //
-// The source files are windows-1251 (needs a full-ICU Node — the default for
-// official builds).
+// The ENCODING IS DETECTED, not assumed (#700): statement exports are windows-1251,
+// CP866 (Паритетбанк) or UTF-8, and the app picks between them in ONE place —
+// `decodeUploadText`. This script MUST go through that same point. It used to hardcode
+// windows-1251, and the failure was silent in the worst direction: a CP866 file still
+// parses STRUCTURALLY (stars, digits, accounts and amounts are ASCII), only the Cyrillic
+// comes out as mojibake — so the diagnostic tool showed garbage where the app shows clean
+// text, i.e. it lied AGAINST us. Needs a full-ICU Node (the default for official builds).
 
 import { readFileSync, statSync } from 'node:fs'
+import { decodeUploadText } from '../app/utils/importUpload.ts'
+import { detectStatementEncoding } from '../app/utils/statementEncoding.ts'
 import { detectManualFormat, normalizeManualStatement } from '../app/utils/manualImport.ts'
 import { parseClientBankText } from '../app/utils/clientBankText.ts'
 import { formatItems, formatParsed } from './lib/statement-format.ts'
 
 /** Refuse absurdly large files — a thin DoS guard the parser itself lacks (#19). */
 const MAX_BYTES = 25 * 1024 * 1024
-
-function decodeCp1251(bytes: Buffer): string {
-  try {
-    return new TextDecoder('windows-1251').decode(bytes)
-  } catch {
-    throw new Error('windows-1251 decoding unavailable — run on a full-ICU Node build')
-  }
-}
 
 /** `--account <acc>` overrides our own account (seeds 1C direction + dedup). */
 function readAccountFlag(argv: string[]): string {
@@ -58,15 +57,21 @@ function parseFile(file: string, account: string): void {
   }
 
   let text: string
+  let encoding: string
   try {
-    text = decodeCp1251(readFileSync(file))
+    const bytes = readFileSync(file)
+    encoding = detectStatementEncoding(bytes)
+    text = decodeUploadText(bytes)
   } catch (e) {
-    console.error(`✗ ${file}: ${(e as Error).message}`)
+    console.error(`✗ ${file}: не декодировать — ${(e as Error).message}`)
     return
   }
 
   const format = detectManualFormat(text)
   console.log(`\n=== ${file} ===`)
+  // The encoding is PRINTED because it is a guess made from byte statistics: when the
+  // Cyrillic looks wrong, the reader needs to know which way the guess went.
+  console.log(`кодировка: ${encoding}`)
   console.log(`формат: ${format}`)
   if (format === 'unknown') {
     console.error('✗ неизвестный формат (ожидается 1CClientBankExchange или client-bank «***** ^Type=»)')
