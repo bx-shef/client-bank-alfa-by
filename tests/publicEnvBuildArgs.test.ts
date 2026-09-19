@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // Гард: КАЖДЫЙ ключ `runtimeConfig.public` должен доезжать до сборки.
@@ -53,6 +54,39 @@ function stageBody(stage: string): string {
   return dockerfile.slice(from, next === -1 ? undefined : next)
 }
 
+/** Все файлы `server/**` с расширением `.ts`. */
+function serverSources(dir = 'server'): string[] {
+  const out: string[] = []
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) out.push(...serverSources(p))
+    else if (e.name.endsWith('.ts')) out.push(p)
+  }
+  return out
+}
+
+/**
+ * Ключи `runtimeConfig.public`, которые читает СЕРВЕРНЫЙ код.
+ *
+ * Форм чтения две, и обе живые: точечная (`useRuntimeConfig().public.siteUrl`) и разбором
+ * (`const { commitSha, repoUrl } = useRuntimeConfig().public`). Ищем обе — иначе гард молчал бы
+ * ровно о том файле, который написан второй формой.
+ */
+function serverReadPublicKeys(): string[] {
+  const keys = new Set<string>()
+  for (const file of serverSources()) {
+    const src = readFileSync(file, 'utf8')
+    for (const m of src.matchAll(/useRuntimeConfig\(\)\.public\.(\w+)/g)) keys.add(m[1]!)
+    for (const m of src.matchAll(/\{([^{}]*)\}\s*=\s*useRuntimeConfig\(\)\.public\b/g)) {
+      for (const part of m[1]!.split(',')) {
+        const name = part.split(':')[0]!.trim()
+        if (/^\w+$/.test(name)) keys.add(name)
+      }
+    }
+  }
+  return [...keys]
+}
+
 /** Блок `build-args:` джобы деплоя (та, что пушит образы в GHCR). */
 function deployBuildArgs(): string {
   const start = ci.indexOf('build-args: |')
@@ -97,6 +131,39 @@ describe('переменные NUXT_PUBLIC_* доезжают до сборки'
     const args = deployBuildArgs()
     for (const key of keys) {
       expect(args, `ci.yml: нет ${envNameFor(key)}`).toContain(`${envNameFor(key)}=`)
+    }
+  })
+})
+
+// ⚠ ВТОРАЯ ПОЛОВИНА ПРАВИЛА, и без неё первая проходила зелёной при мёртвой переменной (#19).
+//
+// Замерено 2026-09-19: `nuxt build` с `NUXT_PUBLIC_SITE_URL` в окружении кладёт в серверный бандл
+// `"siteUrl": ""` — то есть build-time значение в Nitro НЕ запекается. Запекаются только ключи,
+// которые `nuxt.config.ts` читает из `process.env` ЯВНО; остальные Nitro берёт из окружения
+// работающего контейнера (`envPrefix: "NUXT_"`, проверено в собранном `nitro.mjs`). Статика при
+// этом работает всегда — `nuxt generate` уносит значение в `__NUXT__.config`, — поэтому одна и та
+// же переменная МОЛЧА живёт в одном образе и мертва в другом.
+//
+// Цена промаха названа в Dockerfile у `NUXT_PUBLIC_COMMIT_SHA` (#76) и повторилась у
+// `NUXT_PUBLIC_SITE_URL` (#19): приглашение владельцу счёта уходило без картинок шагов при верно
+// заданной переменной CI, а лог честно говорил «адрес приложения непригоден для ссылки».
+describe('серверные чтения runtimeConfig.public доезжают до РАНТАЙМА backend-образа', () => {
+  const serverKeys = serverReadPublicKeys()
+
+  // Разбор ищет чужой код, поэтому сам список — первая проверка: пустой набор прошёл бы всё
+  // остальное зелёным, ничего не проверив.
+  it('чтения найдены в server/**', () => {
+    expect(serverKeys.length).toBeGreaterThanOrEqual(3)
+    expect(serverKeys, 'точечное чтение не распознано').toContain('siteUrl')
+    expect(serverKeys, 'чтение разбором не распознано').toContain('commitSha')
+  })
+
+  it('финальная стадия backend объявляет ARG и ENV для каждого прочитанного ключа', () => {
+    const body = stageBody('backend')
+    for (const key of serverKeys) {
+      const env = envNameFor(key)
+      expect(body, `backend: нет ARG ${env} — сервер прочитает пустую строку`).toContain(`ARG ${env}\n`)
+      expect(body, `backend: нет ENV ${env} — сервер прочитает пустую строку`).toContain(`ENV ${env}=$${env}\n`)
     }
   })
 })
