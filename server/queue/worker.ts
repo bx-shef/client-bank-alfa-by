@@ -1129,7 +1129,7 @@ async function persistImportResult(
  *  Gated to real (non-demo) portals; swallows errors so metrics can't fail a job. */
 async function bumpMetrics(
   job: CrmSyncJob,
-  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number, bindingsFailed: number, misconfigured: number, nonPayment: number, unreadableAmount: number }
+  summary: { processed: number, created: number, notified: number, unmatched: number, unresolved: number, recognized: number, resolved: number, allocated: number, distributed: number, ambiguous: number, manual: number, registryFailed: number, bindingsFailed: number, misconfigured: number }
 ): Promise<void> {
   const account = job.items[0]?.account ?? ''
   if (!account || isDemoAccount(account)) return
