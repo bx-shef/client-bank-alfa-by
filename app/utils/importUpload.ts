@@ -8,7 +8,10 @@
 // gate (size + extension) runs before decode as the first line of defence; the
 // parser has its own char cap (MAX_CLIENT_BANK_CHARS, #19).
 
-import { normalizeManualStatement, parseManualStatement } from '~/utils/manualImport'
+import type { ManualParseResult } from '~/utils/manualImport'
+import { normalizeManualStatement, parseManualPdf, parseManualStatement } from '~/utils/manualImport'
+import type { PdfLoader } from '~/utils/pdfExtract'
+import { extractPdfPages, looksLikePdf } from '~/utils/pdfExtract'
 import { detectStatementEncoding } from '~/utils/statementEncoding'
 import { dedupKey } from '~/utils/statement'
 import type { StatementItem } from '~/types/statement'
@@ -25,11 +28,15 @@ export const MAX_UPLOAD_FILES = 10
  * ⚠ `.csv` добавлен вместе с CSV-выгрузками банков (#707), и без него формат был бы НЕДОСТУПЕН:
  * банк отдаёт такой файл именно с этим расширением, а гейт отверг бы его ещё до разбора — то есть
  * парсер существовал бы, а человек видел бы «неподдерживаемый тип файла».
+ * ⚠ `.pdf` добавлен вместе с выписками МБАНКа и Бакай Банка (#737) по той же причине — банк
+ * отдаёт их только так. ⚠ Но PDF это ДРУГОЙ путь разбора, а не ещё один текстовый формат: он
+ * бинарный, читается асинхронно и требует pdf.js, поэтому опознаётся по первым байтам
+ * (`looksLikePdf`), а не по расширению.
  * ⚠ Содержимое расширением НЕ определяется: формат выбирает `detectManualFormat` по маркерам
  * внутри файла, поэтому `.csv` со звёздочным содержимым разберётся правильно, а `.txt` с CSV —
- * тоже. Расширение здесь — только дешёвый фильтр «это вообще текстовый экспорт».
+ * тоже. Расширение здесь — только дешёвый фильтр «это вообще выгрузка выписки».
  */
-export const ACCEPTED_EXTENSIONS = ['.txt', '.csv'] as const
+export const ACCEPTED_EXTENSIONS = ['.txt', '.csv', '.pdf'] as const
 
 /** Per-file parse outcome shown in the upload list. */
 export interface UploadItemResult {
@@ -75,7 +82,8 @@ export function deferToEventLoop(): Promise<void> {
  *  keeps tests synchronous/deterministic). */
 export async function processUploadBatch(
   files: UploadFileLike[],
-  defer: () => Promise<void> = () => Promise.resolve()
+  defer: () => Promise<void> = () => Promise.resolve(),
+  loadPdf?: PdfLoader
 ): Promise<UploadBatchResult> {
   const batch = files.slice(0, MAX_UPLOAD_FILES)
   const truncated = files.length - batch.length
@@ -87,7 +95,10 @@ export async function processUploadBatch(
       continue
     }
     try {
-      const parsed = parseManualStatement(decodeUploadText(await file.arrayBuffer()), { account: '' })
+      const buffer = await file.arrayBuffer()
+      const parsed = looksLikePdf(buffer)
+        ? await parseUploadedPdf(buffer, loadPdf)
+        : parseManualStatement(decodeUploadText(buffer), { account: '' })
       results.push({
         name: file.name,
         ok: true,
@@ -132,6 +143,22 @@ export function validateUploadFile(name: string, size: number): string | null {
  */
 export function decodeUploadText(buffer: ArrayBuffer | Uint8Array): string {
   return new TextDecoder(detectStatementEncoding(buffer)).decode(buffer)
+}
+
+/**
+ * Разобрать PDF-выписку: извлечь позиционированный текст и отдать его парсеру банка.
+ *
+ * ⚠ Без загрузчика — ЧЕСТНЫЙ ОТКАЗ с объяснением, а не тихий пропуск файла. Загрузчик приносит
+ * вызывающий (в браузере и в воркере это разные сборки pdf.js), и забытая проводка обязана быть
+ * видна человеку сразу, а не превратиться в «разобрано 0 операций» на файле с платежами.
+ */
+export async function parseUploadedPdf(
+  buffer: ArrayBuffer | Uint8Array,
+  loadPdf?: PdfLoader
+): Promise<ManualParseResult> {
+  if (!loadPdf) throw new Error('Разбор PDF здесь недоступен — загрузите выписку в текстовом виде')
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  return parseManualPdf(await extractPdfPages(bytes, loadPdf), { account: '' })
 }
 
 /** Decode a statement buffer and parse it into operations. `account` empty ⇒ use the file's own

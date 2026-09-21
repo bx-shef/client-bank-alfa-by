@@ -10,7 +10,9 @@
 // to crm-sync. See docs/PROCESSING.md §0.
 
 import { decodeUploadText, validateUploadFile } from '../../app/utils/importUpload'
-import { normalizeManualStatement } from '../../app/utils/manualImport'
+import { normalizeManualStatement, parseManualPdf } from '../../app/utils/manualImport'
+import type { PdfLoader } from '../../app/utils/pdfExtract'
+import { extractPdfPages, looksLikePdf } from '../../app/utils/pdfExtract'
 import type { StatementItem } from '../../app/types/statement'
 import type { ParseJob } from '../queue/topology'
 import { MY_COMPANY_GATE_MESSAGE, type MyCompanyGate } from './myCompanyRequisites'
@@ -123,10 +125,23 @@ export async function handleImportUpload(deps: IngestDeps, input: IngestInput): 
  *  Used by the worker's `parseFile` transport; pure + testable.
  *  ⚠ Декодирует ТЕМ ЖЕ `decodeUploadText`, что и браузер (#700): вторая копия правила «какая тут
  *  кодировка» разошлась бы молча — превью на экране показывало бы верный текст, а в CRM уезжал бы
- *  мусор (или наоборот), и списали бы это на банк. */
-export function parseManualFileBase64(contentBase64: string): StatementItem[] {
-  const text = decodeUploadText(base64ToBytes(contentBase64))
-  return normalizeManualStatement(text, { account: '' })
+ *  мусор (или наоборот), и списали бы это на банк.
+ *  ⚠ PDF (#737) идёт ДРУГОЙ веткой — он бинарный, и декодировать его текстом нечем. Загрузчик
+ *  pdf.js инъектируется (в воркере это `loadPdfOnServer`): без него разбор PDF честно отказывает,
+ *  а не отдаёт пустой список операций на файле с платежами. */
+export async function parseManualFileBase64(
+  contentBase64: string,
+  loadPdf?: PdfLoader
+): Promise<StatementItem[]> {
+  const bytes = base64ToBytes(contentBase64)
+  // ⚠ PDF опознаётся по ПЕРВЫМ БАЙТАМ, а не по имени файла: имя приходит от человека, а попытка
+  // прочитать бинарный PDF как текст даёт «формат не распознан» — то есть отказ, указывающий не
+  // на ту причину.
+  if (looksLikePdf(bytes)) {
+    if (!loadPdf) throw new Error('Разбор PDF на сервере не настроен')
+    return parseManualPdf(await extractPdfPages(bytes, loadPdf), { account: '' }).items
+  }
+  return normalizeManualStatement(decodeUploadText(bytes), { account: '' })
 }
 
 /** base64 ↔ bytes without assuming a browser/Node global beyond what both provide.

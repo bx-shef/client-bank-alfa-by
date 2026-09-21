@@ -75,6 +75,7 @@ import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { readAppSettingVia } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
+import { loadPdfOnServer } from '../utils/pdfjsServer'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById, findCandidateByField } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
@@ -197,7 +198,7 @@ export function liveHandlerDeps(): HandlerDeps {
     // attribution (file + initiating user + portal) so the resolved userId/fileName
     // have a real consumer, not just the payload.
     parseFile: async (job) => {
-      const items = parseManualFileBase64(job.contentBase64)
+      const items = await parseManualFileBase64(job.contentBase64, loadPdfOnServer)
       // fileName is the operator-supplied upload name (untrusted) → logSafe it like
       // account/docId elsewhere, so a crafted name can't inject forged log lines.
       importLog.info(`parsed ${items.length} ops from "${logSafe(job.fileName)}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)

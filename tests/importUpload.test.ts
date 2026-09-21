@@ -30,7 +30,10 @@ describe('validateUploadFile', () => {
     expect(validateUploadFile('EXPORT.TXT', 1024)).toBeNull() // case-insensitive
   })
   it('rejects wrong extension, empty, and oversize', () => {
-    expect(validateUploadFile('scan.pdf', 1024)).toMatch(/Неподдерживаемый тип/)
+    expect(validateUploadFile('scan.xlsx', 1024)).toMatch(/Неподдерживаемый тип/)
+    // ⚠ `.pdf` с некоторых пор ПРИНИМАЕТСЯ (#737) — его брали примером «чужого файла», и после
+    // появления PDF-выписок этот тест проверял бы обратное тому, что делает приложение.
+    expect(validateUploadFile('statement.pdf', 1024)).toBeNull()
     expect(validateUploadFile('export.txt', 0)).toMatch(/Пустой/)
     expect(validateUploadFile('export.txt', MAX_UPLOAD_BYTES + 1)).toMatch(/слишком большой/)
   })
@@ -118,7 +121,7 @@ describe('processUploadBatch', () => {
 
   it('surfaces per-file validation errors without decoding', async () => {
     const { results } = await processUploadBatch([
-      fileLike('scan.pdf', good),
+      fileLike('scan.xlsx', good),
       fileLike('empty.txt', new Uint8Array(0))
     ])
     expect(results[0]!.error).toMatch(/Неподдерживаемый тип/)
