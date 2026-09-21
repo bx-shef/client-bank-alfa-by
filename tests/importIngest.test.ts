@@ -56,7 +56,7 @@ describe('handleImportUpload', () => {
   it('rejects a bad extension / empty / oversize before any I/O → 400, no enqueue', async () => {
     const memberIdByDomain = vi.fn()
     const { deps, enqueued } = fakeDeps({ memberIdByDomain })
-    expect((await handleImportUpload(deps, { ...input, fileName: 'scan.pdf' })).status).toBe(400)
+    expect((await handleImportUpload(deps, { ...input, fileName: 'scan.xlsx' })).status).toBe(400)
     expect((await handleImportUpload(deps, { ...input, bytes: new Uint8Array(0) })).status).toBe(400)
     // Oversize is checked on the RAW bytes, BEFORE base64 / portal lookup / REST.
     const big = await handleImportUpload(deps, { ...input, bytes: new Uint8Array(MAX_UPLOAD_BYTES + 1) })
@@ -97,41 +97,48 @@ describe('handleImportUpload', () => {
 // CRM клиента. Замерено: до этого теста такая мутация проходила ВЕСЬ юнит-прогон зелёной — то есть
 // инвариант был заявлен в комментариях и коммите, но не держался ничем.
 describe('parseManualFileBase64: воркер декодирует ТЕМ ЖЕ правилом, что и браузер (#700)', () => {
-  it('CP866-выписка доезжает до воркера с читаемым назначением', () => {
-    const items = parseManualFileBase64(fixtureB64('paritet/settlement-byn.txt'))
+  it('CP866-выписка доезжает до воркера с читаемым назначением', async () => {
+    const items = await parseManualFileBase64(fixtureB64('paritet/settlement-byn.txt'))
     expect(items).toHaveLength(2)
     expect(items[0]!.purpose).toContain('Комиссионное вознаграждение')
     expect(items[0]!.currency).toBe('BYN')
   })
 
-  it('CP1251-выписка по-прежнему читается верно — правило не сломало прежние форматы', () => {
-    const items = parseManualFileBase64(fixtureB64('client-bank/demo-prior-byn.txt'))
+  it('CP1251-выписка по-прежнему читается верно — правило не сломало прежние форматы', async () => {
+    const items = await parseManualFileBase64(fixtureB64('client-bank/demo-prior-byn.txt'))
     expect(items.length).toBeGreaterThan(0)
     expect(items.some(i => /[А-Яа-я]/.test(i.purpose))).toBe(true)
   })
 })
 
 describe('parseManualFileBase64 (real fixtures, windows-1251)', () => {
-  it('parses a client-bank text export carried as base64', () => {
-    const items = parseManualFileBase64(fixtureB64('client-bank/demo-prior-byn.txt'))
+  it('parses a client-bank text export carried as base64', async () => {
+    const items = await parseManualFileBase64(fixtureB64('client-bank/demo-prior-byn.txt'))
     expect(items.length).toBeGreaterThan(0)
     expect(items[0]).toHaveProperty('direction')
   })
 
-  it('parses a 1CClientBankExchange export carried as base64', () => {
-    const items = parseManualFileBase64(fixtureB64('1c-exchange/demo-1c.txt'))
+  it('parses a 1CClientBankExchange export carried as base64', async () => {
+    const items = await parseManualFileBase64(fixtureB64('1c-exchange/demo-1c.txt'))
     expect(items.length).toBeGreaterThan(0)
   })
 
-  it('parses a Type=4 «за период» Альфа export through the base64 round-trip (no mojibake)', () => {
-    const items = parseManualFileBase64(fixtureB64('client-bank/demo-type4-alfa.txt'))
+  it('parses a Type=4 «за период» Альфа export through the base64 round-trip (no mojibake)', async () => {
+    const items = await parseManualFileBase64(fixtureB64('client-bank/demo-type4-alfa.txt'))
     expect(items.length).toBeGreaterThan(1)
     expect(JSON.stringify(items)).not.toContain('�')
   })
 
-  it('throws on an unrecognized format', () => {
+  it('throws on an unrecognized format', async () => {
     const b64 = Buffer.from('not a statement').toString('base64')
-    expect(() => parseManualFileBase64(b64)).toThrow(/Неизвестный формат/)
+    await expect(parseManualFileBase64(b64)).rejects.toThrow(/Неизвестный формат/)
+  })
+
+  // ⚠ PDF без загрузчика обязан ОТКАЗАТЬ, а не отдать пустой список: воркер — единственный
+  // авторитет разбора, и «0 операций» на файле с платежами выглядит как пустая выписка банка.
+  it('PDF без загрузчика pdf.js — честный отказ, а не пустой разбор (#737)', async () => {
+    const b64 = Buffer.from('%PDF-1.4\n%fake').toString('base64')
+    await expect(parseManualFileBase64(b64)).rejects.toThrow(/Разбор PDF/)
   })
 
   it('отметка «принято» ставится ПОСЛЕ постановки в очередь', async () => {

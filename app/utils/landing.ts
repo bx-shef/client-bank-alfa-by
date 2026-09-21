@@ -136,7 +136,7 @@ export const LANDING_DEMO = {
   /** CTA label for the custom-dev message (scrolls to the brief form). */
   customDevCta: 'Обсудить доработку',
   /** Shown when a file could not be parsed at all. */
-  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка: 1CClientBankExchange, «***** ^Type=», звёздочный «*0*…» (Паритетбанк) или CSV-выгрузка Приорбанка / Альфа-Банка.',
+  parseError: 'Не удалось разобрать файл. Ожидается стандартная выписка клиент-банка: 1CClientBankExchange, «***** ^Type=», звёздочный «*0*…» (Паритетбанк), CSV-выгрузка Приорбанка / Альфа-Банка или PDF МБАНКа / Бакай Банка.',
   /** Shown when a file parsed but held no operations. */
   noOperations: 'В файле не найдено операций.'
 } as const

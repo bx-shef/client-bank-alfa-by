@@ -13,6 +13,7 @@ import {
   processUploadBatch,
   type UploadItemResult
 } from '~/utils/importUpload'
+import { loadPdfInBrowser } from '~/utils/pdfjsClient'
 import { isDirectionEnabled, splitByDirection } from '~/utils/statement'
 import { MAX_FILE_EMBED } from '~/utils/feedback'
 import { useImport, type ImportOutcome } from '~/composables/useImport'
@@ -113,7 +114,7 @@ async function processFiles(files: File[]) {
   submitResult.value = null
   // Pass RAW files so processUploadBatch computes `truncated` (files beyond the cap).
   // batchFiles slices to the same cap → stays index-aligned with out.results.
-  const out = await processUploadBatch(files, deferToEventLoop)
+  const out = await processUploadBatch(files, deferToEventLoop, loadPdfInBrowser)
   if (seq !== procSeq) return // a newer drop superseded this batch — don't clobber its state
   results.value = out.results
   batchFiles.value = files.slice(0, MAX_UPLOAD_FILES)
