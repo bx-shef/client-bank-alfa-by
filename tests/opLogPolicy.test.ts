@@ -193,3 +193,28 @@ describe('runSummaryLine', () => {
     expect(line).not.toContain('опущено 8')
   })
 })
+
+describe('итог прогона называет операции без движения денег и нечитаемые суммы (#735)', () => {
+  const base = {
+    processed: 23, landed: 1, created: 1, unmatched: 0, unresolved: 0, recognized: 0,
+    skipped: 0, excluded: 0
+  }
+
+  it('«без движения денег» стоит среди ТИХИХ причин — это норма банка', () => {
+    const line = runSummaryLine('M1', { ...base, nonPayment: 22 }, 'notable')
+    expect(line).toContain('22 без движения денег')
+    // ⚠ Без этого числа «23 обработано, 1 создано» читается как потеря выписки.
+    expect(line).not.toContain('⚠ 22')
+  })
+
+  it('нечитаемая сумма стоит в ОСНОВНОЙ части со знаком ⚠ — это наш дефект', () => {
+    const line = runSummaryLine('M1', { ...base, unreadableAmount: 3 }, 'notable')
+    expect(line).toContain('⚠ 3 с нечитаемой суммой')
+  })
+
+  it('ноль не печатается ни тем, ни другим', () => {
+    const line = runSummaryLine('M1', { ...base, nonPayment: 0, unreadableAmount: 0 }, 'notable')
+    expect(line).not.toContain('без движения денег')
+    expect(line).not.toContain('нечитаемой суммой')
+  })
+})

@@ -1,4 +1,5 @@
 import type { OperationDirection, StatementItem } from '~/types/statement'
+import { round2 } from '~/utils/money'
 
 // Pure statement logic — income/expense classification, idempotency key, and
 // the chat-notification filter. No I/O; fully unit-tested and reusable by the
@@ -183,4 +184,34 @@ export function shouldImportOperation(item: StatementItem, rules: ChatNotifyRule
  */
 export function shouldNotifyChat(item: StatementItem, rules: ChatNotifyRules = {}): boolean {
   return shouldImportOperation(item, rules)
+}
+
+/**
+ * Исход проверки суммы операции — ПОСЛЕДНИЙ рубеж перед записью в CRM (#735).
+ *
+ * ⚠ ИСХОДА ТРИ, а не два, и это решение владельца 2026-09-21: нулевая сумма и отрицательная
+ * означают РАЗНОЕ и чинятся в разных местах.
+ *   • `non-payment` — денег по счёту не двигалось. Это ШТАТНАЯ запись банка: на боевой валютной
+ *     выписке Альфы таких было 22 строки из 23 («Переоценка входящего остатка»). Дела из них
+ *     («Приход 0,00 USD») бухгалтеру нужно закрывать руками, привязать их не к чему — разнесение
+ *     сверяет СУММУ, — а направления у такой записи нет по смыслу.
+ *   • `unreadable` — отрицательная либо нечитаемая сумма. Денежной операции с такой суммой не
+ *     бывает: направление у нас отдельным полем, поэтому минус означает, что МЫ неверно прочли
+ *     файл или ответ банка. Смешать её с первой значило бы записать наш дефект в «штатные записи
+ *     банка» и никогда его не увидеть.
+ *
+ * ⚠ Округляем ДО сравнения с нулём (та же ловушка, что в `normalizeParitetRows`): сумма 0,004
+ * проходит проверку «> 0» и становится делом «Приход 0,00», то есть ровно тем нулевым делом,
+ * которого правило не допускает.
+ * ⚠ Проверка финитности идёт по СЫРОМУ числу: `round2` приводит нечитаемое к нулю, и `NaN`
+ * попал бы в «служебные записи банка» вместо «мы не поняли строку».
+ */
+export type AmountVerdict = 'ok' | 'non-payment' | 'unreadable'
+
+export function amountVerdict(item: StatementItem): AmountVerdict {
+  const raw = item.amount
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 'unreadable'
+  const amount = round2(raw)
+  if (amount < 0) return 'unreadable'
+  return amount === 0 ? 'non-payment' : 'ok'
 }
