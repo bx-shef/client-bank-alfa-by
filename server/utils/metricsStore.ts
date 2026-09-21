@@ -48,7 +48,14 @@ export const METRICS = {
   // ставятся ПОСЛЕ маркера дела, поэтому непоставленная связь не появится уже никогда — повтор
   // опроса до этого места не дойдёт. Отдельным счётчиком, а не слитым с реестром: «элемента нет»
   // и «элемент есть, но из дела до него не дойти» чинятся в разных местах.
-  bindingsFailed: 'bindingsFailed'
+  bindingsFailed: 'bindingsFailed',
+  // ⚠ Пожизненные, и это не «на всякий случай»: по ним видно ОТВЕТ на открытый вопрос #735 —
+  // приносит ли автоопрос банка строки без движения денег и сколько. Строка прогона уезжает с
+  // ротацией лога, а этот счётчик отвечает «за всё время N» без похода к банку за кредами.
+  nonPayment: 'nonPayment',
+  // ⚠ Отдельно от предыдущего: ненулевое значение здесь означает, что МЫ неверно читаем банк, —
+  // это повод чинить код, а не настройку портала.
+  unreadableAmount: 'unreadableAmount'
 } as const
 
 export type MetricName = typeof METRICS[keyof typeof METRICS]
@@ -85,7 +92,9 @@ export function metricsFromSummary(
     [METRICS.ambiguous]: summary.ambiguous,
     [METRICS.manual]: summary.manual,
     [METRICS.registryFailed]: summary.registryFailed,
-    [METRICS.bindingsFailed]: summary.bindingsFailed
+    [METRICS.bindingsFailed]: summary.bindingsFailed,
+    [METRICS.nonPayment]: summary.nonPayment,
+    [METRICS.unreadableAmount]: summary.unreadableAmount
   }
 }
 

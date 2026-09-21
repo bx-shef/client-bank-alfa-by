@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { StatementItem } from '~/types/statement'
 import {
-  dedupKey, directionFromOperType, isDirectionEnabled, isExcludedOperation, parseRuleLines,
+  amountVerdict, dedupKey, directionFromOperType, isDirectionEnabled, isExcludedOperation, parseRuleLines,
   shouldImportOperation, shouldNotifyChat, splitByDirection
 } from '~/utils/statement'
 
@@ -219,5 +219,40 @@ describe('isExcludedOperation (processing exclusion, PROCESSING §2 A2)', () => 
     const rules = { excludeCounterpartyAccounts: ['BY-TAX'] }
     const fromTax = makeItem({ counterparty: { name: 'ИМНС', unp: '100000000', account: 'BY-TAX' } })
     expect(shouldNotifyChat(fromTax, rules)).toBe(false)
+  })
+})
+
+describe('amountVerdict — последний рубеж по сумме (#735)', () => {
+  const op = (amount: number): StatementItem => ({
+    account: 'BY00X', docId: 'd1', direction: 'credit', amount, currency: 'USD',
+    purpose: '', counterparty: { name: '', unp: '', account: '' }, acceptDate: '2026-07-01T00:00:00'
+  })
+
+  it('обычная сумма проходит', () => {
+    expect(amountVerdict(op(560))).toBe('ok')
+    expect(amountVerdict(op(0.01))).toBe('ok')
+  })
+
+  it('ноль — штатная запись банка, а не дефект', () => {
+    // Переоценка остатка: денег по счёту не двигалось.
+    expect(amountVerdict(op(0))).toBe('non-payment')
+  })
+
+  it('копейки ниже цента — тоже «без движения денег», а не «ok»', () => {
+    // ⚠ Округление ДО сравнения: иначе 0,004 проходит «> 0» и даёт дело «Приход 0,00».
+    expect(amountVerdict(op(0.004))).toBe('non-payment')
+  })
+
+  it('отрицательная — НАШ дефект разбора, отдельный исход', () => {
+    // Направление лежит отдельным полем, поэтому минус означает, что мы неверно прочли источник.
+    expect(amountVerdict(op(-1))).toBe('unreadable')
+  })
+
+  it('нечитаемая сумма не выдаётся за штатную запись банка', () => {
+    // ⚠ Финитность проверяется по СЫРОМУ числу: `round2` приводит NaN к нулю, и он уехал бы в
+    // «без движения денег», то есть наш дефект выглядел бы нормой.
+    expect(amountVerdict(op(Number.NaN))).toBe('unreadable')
+    expect(amountVerdict(op(Number.POSITIVE_INFINITY))).toBe('unreadable')
+    expect(amountVerdict({ ...op(0), amount: undefined as unknown as number })).toBe('unreadable')
   })
 })

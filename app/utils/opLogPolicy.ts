@@ -124,6 +124,13 @@ export interface RunSummaryLike {
    *  вызывающих поля нет, а печатается оно только при ненулевом значении. */
   /** Операции, не перенесённые из-за выключенного направления (#44) — своя причина, свой счётчик. */
   directionSkipped?: number
+  /** Операции без движения денег — штатные записи банка (переоценка остатка), #735. Своя причина,
+   *  свой счётчик: она объясняет расхождение «в выписке строк больше, чем операций». */
+  nonPayment?: number
+  /** Операции с отрицательной или нечитаемой суммой (#735). ⚠ ОТДЕЛЬНО от `nonPayment`: там
+   *  штатная запись банка, здесь НАШ дефект разбора, и печатается он в основной части строки со
+   *  знаком ⚠, а не рядом с тихими причинами. */
+  unreadableAmount?: number
   registryFailed?: number
   /** Сколько операций дозаполнено колонками реестра при повторной загрузке (#45). */
   registryBackfilled?: number
@@ -157,7 +164,7 @@ export function runSummaryLine(memberId: string, s: RunSummaryLike, mode: OpLogM
   // канал и маркер это одна и та же строка, и совпадение стережёт `tests/serverLogChannels.test.ts`.
   return `portal ${memberId}: ${s.processed} обработано, ${s.created} создано, `
     + `${s.landed} приземлилось, ${s.unmatched} без клиента, ${s.unresolved} без цели, `
-    + `${s.recognized} с распознанным номером${misconfiguredPart(s)}${registryPart(s)}${bindingsPart(s)}${backfillPart(s)}${quietPart(s)}${opLogTail(s, mode)}`
+    + `${s.recognized} с распознанным номером${unreadableAmountPart(s)}${misconfiguredPart(s)}${registryPart(s)}${bindingsPart(s)}${backfillPart(s)}${quietPart(s)}${opLogTail(s, mode)}`
 }
 
 /**
@@ -171,6 +178,13 @@ export function runSummaryLine(memberId: string, s: RunSummaryLike, mode: OpLogM
  *
  * ⚠ При нуле не печатается — то же правило, что у двух соседей ниже.
  */
+/** ⚠ В ОСНОВНОЙ части строки и со знаком ⚠ — как «неверная карта распознавания» и отказы записи:
+ *  это про НАШУ ошибку чтения банка, а не про штатную причину не переносить операцию. Рядом с
+ *  «уже было записано» её прочли бы как норму. */
+function unreadableAmountPart(s: RunSummaryLike): string {
+  const n = s.unreadableAmount ?? 0
+  return n > 0 ? `, ⚠ ${n} с нечитаемой суммой` : ''
+}
 function misconfiguredPart(s: RunSummaryLike): string {
   const n = s.misconfigured ?? 0
   return n > 0 ? `, ⚠ ${n} из-за неверной карты распознавания` : ''
@@ -259,6 +273,10 @@ function quietPart(s: RunSummaryLike): string {
   // понять, куда идти.
   const dir = s.directionSkipped ?? 0
   if (dir > 0) parts.push(`${dir} не перенесено по настройке направлений`)
+  // ⚠ Здесь, среди тихих причин: денег по счёту не двигалось, и это норма банка, а не поломка.
+  // Но молчать нельзя — без числа «обработано 23, создано 1» читается как потеря выписки.
+  const nonPay = s.nonPayment ?? 0
+  if (nonPay > 0) parts.push(`${nonPay} без движения денег`)
   return parts.length > 0 ? `, ${parts.join(', ')}` : ''
 }
 

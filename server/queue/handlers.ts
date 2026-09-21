@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import { landedCleanly } from '../../app/utils/opLogPolicy'
-import { dedupKey, isDirectionEnabled, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
+import { amountVerdict, dedupKey, isDirectionEnabled, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
 import { MAX_UNMATCHED_NOTICES, unmatchedClientNote, type UnmatchedSummary } from '../../app/utils/unmatchedNotice'
 import { makeProgramSample, type ProgramSample } from '../../app/utils/programFeedback'
 import type { PortalSettings } from '../../app/utils/settings'
@@ -415,7 +415,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, directionSkipped: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, directionSkipped: number, nonPayment: number, unreadableAmount: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -464,6 +464,8 @@ export async function handleCrmSyncJob(
   /** Operations whose registry element could not be written (#575) — see the call site. */
   /** Операции, не перенесённые из-за выключенного направления (#44) — своя причина, свой счётчик. */
   let directionSkipped = 0
+  let nonPayment = 0
+  let unreadableAmount = 0
   let registryFailed = 0
   /** Сколько операций дозаполнили колонками реестра при повторной загрузке (#45). */
   let registryBackfilled = 0
@@ -575,6 +577,26 @@ export async function handleCrmSyncJob(
     // chat block); absent ⇒ nothing excluded.
     if (isExcludedOperation(item, chat?.rules)) {
       excluded++
+      continue
+    }
+    // ПОСЛЕДНИЙ РУБЕЖ ПО СУММЕ (#735). Операция без денег делом не становится — откуда бы она ни
+    // пришла.
+    //
+    // ⚠ Заведён потому, что файловые пути отсеивают такие строки у себя, а путь АВТООПРОСА не
+    // отсеивал их НИГДЕ: гейт `item.amount > 0` ниже стоит только перед разнесением, а
+    // `writeActivity` вызывается безусловно. На боевой валютной выписке Альфы строк переоценки
+    // было 22 из 23 за месяц по ОДНОМУ счёту — столько же дел «Приход 0,00 USD» и сообщений в чат.
+    // Приходят ли они через API банка, НЕ ЗАМЕРЕНО (#735) — этот гейт закрывает симптом, а не
+    // отвечает на тот вопрос.
+    // ⚠ Стоит ДО распознавания и до любого REST: нулевая строка не должна стоить ни одного вызова
+    // в портал, как и операция выключенного направления.
+    // ⚠ Счётчика ДВА, и это решение владельца: «денег не двигалось» — штатная запись банка,
+    // отрицательная сумма — НАШ дефект разбора. Одним числом их не свести: первое объясняет
+    // расхождение с выпиской, второе требует чинить код.
+    const verdict = amountVerdict(item)
+    if (verdict !== 'ok') {
+      if (verdict === 'unreadable') unreadableAmount++
+      else nonPayment++
       continue
     }
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
@@ -1117,5 +1139,5 @@ export async function handleCrmSyncJob(
   }
 
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, directionSkipped, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, directionSkipped, nonPayment, unreadableAmount, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
 }
