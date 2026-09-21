@@ -19,10 +19,13 @@ import type { NormalizeContext, StatementItem } from '~/types/statement'
 import { isOneCExchange, parseOneCExchange } from '~/utils/oneCExchange'
 import { normalizeOneC } from '~/utils/oneCStatement'
 import { parseClientBankText } from '~/utils/clientBankText'
-import { normalizeClientBank } from '~/utils/clientBankStatement'
+import { normalizeClientBankRows } from '~/utils/clientBankStatement'
 import { isParitetText, parseParitetText, normalizeParitetRows } from '~/utils/paritetStatement'
 import { isPriorCsv, parsePriorCsv, normalizePriorCsvRows } from '~/utils/priorCsvStatement'
 import { isAlfaCsv, parseAlfaCsv, normalizeAlfaCsvRows } from '~/utils/alfaCsvStatement'
+import type { PdfPage } from '~/utils/pdfTextLayout'
+import { isMbankPdf, parseMbankPdf, normalizeMbankPdfRows } from '~/utils/mbankPdfStatement'
+import { isBakaiPdf, parseBakaiPdf, normalizeBakaiPdfRows } from '~/utils/bakaiPdfStatement'
 
 /** Supported manual-upload formats. */
 export type ManualFormat
@@ -32,6 +35,15 @@ export type ManualFormat
     | 'prior-csv'
     | 'alfa-csv'
     | 'unknown'
+
+/**
+ * Форматы PDF-выписок (#737).
+ *
+ * ⚠ Они НЕ входят в {@link ManualFormat} намеренно: у текстовых форматов вход — строка, у этих —
+ * страницы с координатами, и общая функция разбора принимала бы то одно, то другое. Разводит их
+ * не имя типа, а вызывающий: PDF опознаётся по первым байтам ещё до всякого декодирования.
+ */
+export type ManualPdfFormat = 'mbank-pdf' | 'bakai-pdf' | 'unknown'
 
 /** Разбор файла: операции плюс строки, которые операциями НЕ стали, с разбивкой по причине. */
 export interface ManualParseResult {
@@ -67,6 +79,35 @@ export function detectManualFormat(text: string): ManualFormat {
 }
 
 /**
+ * Какой банк прислал этот PDF.
+ *
+ * ⚠ Опознаём по СОДЕРЖИМОМУ (подпись банка плюс заголовок его таблицы), как и все остальные
+ * форматы. Общего признака «это выписка в PDF» здесь нет и быть не должно: раскладки у двух
+ * банков разные, и выбор парсера по такому признаку был бы выбором монеткой — ровно то, чего мы
+ * избегали у двух CSV с общим разделителем (#707).
+ */
+export function detectManualPdfFormat(pages: PdfPage[]): ManualPdfFormat {
+  if (isMbankPdf(pages)) return 'mbank-pdf'
+  if (isBakaiPdf(pages)) return 'bakai-pdf'
+  return 'unknown'
+}
+
+/**
+ * Разбор PDF-выписки: страницы с координатами → операции, с той же разбивкой отброшенных строк,
+ * что и у текстовых форматов.
+ */
+export function parseManualPdf(pages: PdfPage[], ctx: NormalizeContext): ManualParseResult {
+  switch (detectManualPdfFormat(pages)) {
+    case 'mbank-pdf':
+      return normalizeMbankPdfRows(parseMbankPdf(pages), ctx)
+    case 'bakai-pdf':
+      return normalizeBakaiPdfRows(parseBakaiPdf(pages), ctx)
+    default:
+      throw new Error('Неизвестный формат PDF-выписки (поддерживаются МБАНК и Бакай Банк)')
+  }
+}
+
+/**
  * Parse + normalize a manually-uploaded statement (already decoded to a string)
  * into StatementItem[]. Throws on an unrecognized format. `ctx.account` overrides
  * the file's own account; `ctx.currency` seeds currency detection.
@@ -90,7 +131,7 @@ export function parseManualStatement(text: string, ctx: NormalizeContext): Manua
     case '1c-exchange':
       return { items: normalizeOneC(parseOneCExchange(text), ctx), nonPayment: 0, unreadable: 0 }
     case 'client-bank-text':
-      return { items: normalizeClientBank(parseClientBankText(text), ctx), nonPayment: 0, unreadable: 0 }
+      return normalizeClientBankRows(parseClientBankText(text), ctx)
     case 'paritet-text':
       return normalizeParitetRows(parseParitetText(text), ctx)
     case 'prior-csv':
@@ -100,7 +141,7 @@ export function parseManualStatement(text: string, ctx: NormalizeContext): Manua
     default:
       throw new Error(
         'Неизвестный формат выписки (ожидается 1CClientBankExchange, client-bank «***** ^Type=», '
-        + 'звёздочный «*0*…» или CSV-выгрузка Приорбанка / Альфа-Банка)'
+        + 'звёздочный «*0*…», CSV-выгрузка Приорбанка / Альфа-Банка или PDF МБАНКа / Бакай Банка)'
       )
   }
 }

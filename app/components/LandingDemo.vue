@@ -17,6 +17,7 @@ import {
   deferToEventLoop,
   processUploadBatch
 } from '~/utils/importUpload'
+import { loadPdfInBrowser } from '~/utils/pdfjsClient'
 import { summarizeExtraction, type DemoExtraction } from '~/utils/demoExtract'
 import { formatMoney } from '~/utils/activity'
 import { LANDING_DEMO, LANDING_DEMO_SAMPLES, type DemoSample } from '~/utils/landing'
@@ -103,7 +104,7 @@ async function runFiles(files: File[]) {
   busy.value = true
   clearFeedback()
   try {
-    const out = await processUploadBatch(files, deferToEventLoop)
+    const out = await processUploadBatch(files, deferToEventLoop, loadPdfInBrowser)
     if (seq !== runSeq) return // superseded by a newer source action — discard
     const okItems = dedupItems(out.results.flatMap(r => r.items))
     fileErrors.value = out.results.filter(r => !r.ok).map(r => `${r.name}: ${r.error}`)

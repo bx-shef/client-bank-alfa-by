@@ -11,8 +11,8 @@
 import { createHash } from 'node:crypto'
 import type { StatementItem, BankProviderId } from '../../app/types/statement'
 import { landedCleanly } from '../../app/utils/opLogPolicy'
-import { dedupKey, isDirectionEnabled, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
-import { unmatchedClientNote } from '../../app/utils/unmatchedNotice'
+import { amountVerdict, dedupKey, isDirectionEnabled, isExcludedOperation, shouldNotifyChat, splitByDirection } from '../../app/utils/statement'
+import { MAX_UNMATCHED_NOTICES, unmatchedClientNote, type UnmatchedSummary } from '../../app/utils/unmatchedNotice'
 import { makeProgramSample, type ProgramSample } from '../../app/utils/programFeedback'
 import type { PortalSettings } from '../../app/utils/settings'
 import { recognizePurposeIntents, type RecognitionIntent } from '../../app/utils/recognitionIntent'
@@ -95,7 +95,9 @@ export interface HandlerDeps {
    *  atomically). Returns the created activity id, or `null` if nothing was written (e.g.
    *  no company matched, so there's no owner). Optional `note` prepends a reason block —
    *  used for the UNMATCHED-client fallback written to my company (#91). */
-  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string) => Promise<string | null>
+  /** ⚠ `providerId` едет сюда ради блока «Источник» на карточке (#729): в `StatementItem` его нет,
+   *  он свойство ПАЧКИ, а не операции. */
+  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string, providerId?: BankProviderId) => Promise<string | null>
   /**
    * Registry write (#575): ensure the payment SP carries an element for THIS operation.
    *
@@ -244,6 +246,20 @@ export interface HandlerDeps {
    *  wasn't found by its account. `recordedToMyCompany` picks the wording (recorded on my company
    *  vs not recorded at all). MUST NOT throw — like notifyError, a chat failure never fails the job. */
   notifyUnmatched: (item: StatementItem, dialogId: string, recordedToMyCompany: boolean, memberId: string) => Promise<void>
+  /** Заявить право сказать в чат про ЭТУ операцию (#696): `true` — про неё ещё не говорили, шлём;
+   *  `false` — говорили в прошлом прогоне, молчим. Кросс-прогонная память нужна именно здесь,
+   *  потому что операция без владельца не оставляет маркера дела и верхний дедуп её не отсекает
+   *  (подробный разбор — `server/utils/unmatchedNoticeClaim.ts`). MUST NOT throw: отказ памяти
+   *  не повод ронять пачку, и «не знаем» трактуется как «скажем» — потерять предупреждение хуже,
+   *  чем повторить его.
+   *  ⚠ `account` — наш счёт операции, и нужен он ТОЛЬКО для демо-гейта, как у `notifySettingsError`:
+   *  из ключа дедупа его пришлось бы выковыривать разбором формата, а демо-нагрузка иначе писала бы
+   *  ключи под НАСТОЯЩИМ `member_id` (находка панели ревью, 2026-09-15). */
+  claimUnmatchedNotice: (memberId: string, dedupKey: string, account: string) => Promise<boolean>
+  /** Итог по свёрнутым операциям — ОДНО сообщение в конце прогона (#696). `account` — наш счёт
+   *  операции, на которой свёртка началась; нужен ТОЛЬКО для демо-гейта, как у `notifySettingsError`
+   *  (сюда item не приходит по построению). MUST NOT throw. */
+  notifyUnmatchedSummary: (summary: UnmatchedSummary, dialogId: string, memberId: string, account: string) => Promise<void>
   /** Post a chat message about one operation to `dialogId` (stage 6). The decision
    *  (target set + rules) is made by the handler; this is pure transport. MUST NOT
    *  throw — it runs AFTER the activity (and its marker) is written, so a propagated error
@@ -399,7 +415,7 @@ async function queueDeferredWrite(work: (() => Promise<void>) | undefined | fals
 export async function handleCrmSyncJob(
   job: CrmSyncJob,
   deps: HandlerDeps
-): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, directionSkipped: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
+): Promise<{ processed: number, landed: number, created: number, notified: number, skipped: number, excluded: number, directionSkipped: number, nonPayment: number, unreadableAmount: number, registryFailed: number, registryBackfilled: number, registryBackfillFailed: number, registryBackfillSkipped: number, bindingsFailed: number, unmatched: number, unresolved: number, misconfigured: number, recognized: number, resolved: number, allocatable: number, ambiguous: number, manual: number, allocated: number, distributed: number, ledgerWritten: number, credits: number, debits: number, misconfigReason?: string, sample?: ProgramSample }> {
   // Dedupe WITHIN this batch (account|docId) first — cheap, no I/O.
   const seen = new Set<string>()
   const unique = job.items.filter((it) => {
@@ -448,6 +464,8 @@ export async function handleCrmSyncJob(
   /** Operations whose registry element could not be written (#575) — see the call site. */
   /** Операции, не перенесённые из-за выключенного направления (#44) — своя причина, свой счётчик. */
   let directionSkipped = 0
+  let nonPayment = 0
+  let unreadableAmount = 0
   let registryFailed = 0
   /** Сколько операций дозаполнили колонками реестра при повторной загрузке (#45). */
   let registryBackfilled = 0
@@ -502,6 +520,13 @@ export async function handleCrmSyncJob(
   // ради редких случаев «нужен человек» — его просто перестали бы читать. Счётчик `unresolved`
   // капом НЕ ограничен: метрика обязана остаться честной.
   let unresolvedNotices = 0
+  // ─── Свёртка «клиент не определён» (#696) ─────────────────────────────────────────────────────
+  // Первые `MAX_UNMATCHED_NOTICES` операций уходят поштучно, остальные копятся сюда и уезжают одним
+  // итогом в конце прогона. ⚠ Счётчик `unmatched` этим НЕ ограничивается — метрика обязана остаться
+  // честной, ровно как у `unresolved`.
+  let unmatchedNotices = 0
+  // ⚠ Свёрнутые операции копятся СЫРЫМИ и заявляются уже у отправки итога — см. довод там же.
+  const unmatchedPending: { key: string, recorded: boolean, ourAccount: string, counterpartyAccount: string }[] = []
   // ⚠ Причина ОДНА на прогон, а не список: отказ портала «такого поля нет» одинаков для каждой
   // операции, и накопление дало бы сотню одинаковых строк. Храним первую увиденную.
   let misconfigured = 0
@@ -552,6 +577,26 @@ export async function handleCrmSyncJob(
     // chat block); absent ⇒ nothing excluded.
     if (isExcludedOperation(item, chat?.rules)) {
       excluded++
+      continue
+    }
+    // ПОСЛЕДНИЙ РУБЕЖ ПО СУММЕ (#735). Операция без денег делом не становится — откуда бы она ни
+    // пришла.
+    //
+    // ⚠ Заведён потому, что файловые пути отсеивают такие строки у себя, а путь АВТООПРОСА не
+    // отсеивал их НИГДЕ: гейт `item.amount > 0` ниже стоит только перед разнесением, а
+    // `writeActivity` вызывается безусловно. На боевой валютной выписке Альфы строк переоценки
+    // было 22 из 23 за месяц по ОДНОМУ счёту — столько же дел «Приход 0,00 USD» и сообщений в чат.
+    // Приходят ли они через API банка, НЕ ЗАМЕРЕНО (#735) — этот гейт закрывает симптом, а не
+    // отвечает на тот вопрос.
+    // ⚠ Стоит ДО распознавания и до любого REST: нулевая строка не должна стоить ни одного вызова
+    // в портал, как и операция выключенного направления.
+    // ⚠ Счётчика ДВА, и это решение владельца: «денег не двигалось» — штатная запись банка,
+    // отрицательная сумма — НАШ дефект разбора. Одним числом их не свести: первое объясняет
+    // расхождение с выпиской, второе требует чинить код.
+    const verdict = amountVerdict(item)
+    if (verdict !== 'ok') {
+      if (verdict === 'unreadable') unreadableAmount++
+      else nonPayment++
       continue
     }
     // Recognition intent (§4, #109): recognize identifiers in the purpose by the
@@ -865,7 +910,7 @@ export async function handleCrmSyncJob(
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
     }
-    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note)
+    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note, job.providerId)
     // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including
     // the ones that matched nothing — those are exactly the ones no other callback reports.
     const opOutcome = {
@@ -884,7 +929,38 @@ export async function handleCrmSyncJob(
       // actually created (a thrown write fails the job BEFORE this — a retry then notifies once it
       // succeeds — instead of claiming "записано" on a write that didn't land). Best-effort (the
       // dep swallows transport errors). recorded=false ⇒ my company also missing → nothing written.
-      await deps.notifyUnmatched(item, errorChat.dialogId, activityId !== null, job.memberId)
+      //
+      // ⚠ ПАМЯТЬ НУЖНА НЕ ВСЕМ. Операция, легшая делом в «мою компанию», получила МАРКЕР — на
+      // следующем прогоне её отсечёт верхний дедуп, до чата она не дойдёт, и ключ в Redis пролежал
+      // бы весь свой срок, ни разу никем не прочитанный. Хуже: мы сами советуем админу завести
+      // контрагента и УДАЛИТЬ дело, чтобы операция переписалась, — и тогда лишний ключ заставил бы
+      // нас молчать ровно в тот момент, когда человек ждёт ответа. Память берут только те, кого
+      // записать было некуда: у них маркера нет и не будет.
+      //
+      // ⚠ ЗАЯВКА СТОИТ ПЕРЕД ОТПРАВКОЙ, но только ЗДЕСЬ, на поштучном пути, где отправка происходит
+      // тут же, в этой итерации. Причина не в сбое чата (транспорт глотает свои ошибки и не бросает
+      // вовсе): бросить может ЛЮБАЯ СЛЕДУЮЩАЯ операция пачки — тогда падает вся джоба, BullMQ
+      // доставляет её заново, и без заявки это сообщение ушло бы повторно.
+      //
+      // ⚠ А СВЁРНУТЫЕ операции здесь НЕ заявляются, и это находка панели ревью (2026-09-15). Их
+      // сообщение — один итог ПОСЛЕ цикла, то есть между заявкой и отправкой лежал бы весь остаток
+      // пачки. Упади там что-нибудь — заявки сожжены, а итог не ушёл; на повторе те же операции
+      // получают `false`, счётчик скрытых равен нулю, и итог не уходит НИКОГДА. Полная тишина на
+      // срок ключа ровно по тем операциям, ради которых всё написано. Поэтому здесь копим сырое, а
+      // заявляем там же, где отправляем.
+      if (unmatchedNotices < MAX_UNMATCHED_NOTICES) {
+        if (activityId !== null || await deps.claimUnmatchedNotice(job.memberId, key, item.account)) {
+          await deps.notifyUnmatched(item, errorChat.dialogId, activityId !== null, job.memberId)
+          unmatchedNotices++
+        }
+      } else {
+        unmatchedPending.push({
+          key,
+          recorded: activityId !== null,
+          ourAccount: item.account,
+          counterpartyAccount: item.counterparty.account.trim()
+        })
+      }
     }
     if (!activityId) {
       // Nothing written: no owner company at all (client AND my company missing), or a demo/no-token
@@ -1032,6 +1108,36 @@ export async function handleCrmSyncJob(
     created++
   }
 
+  // ⚠ ЗАЯВКА НА СВЁРНУТЫЕ БЕРЁТСЯ ЗДЕСЬ, вплотную к отправке (находка панели ревью, 2026-09-15):
+  // между ней и сообщением больше не лежит ничего, что могло бы бросить, поэтому упавшая пачка не
+  // сжигает память и повтор объявляет эти операции заново.
+  //
+  // ⚠ Итог шлётся ТОЛЬКО когда после заявок что-то осталось: пустой итог читался бы как «было
+  // что-то ещё, но мы не скажем». Сам текст собирает и обрезает чистый билдер.
+  if (unmatchedPending.length > 0 && errorChat?.dialogId) {
+    // ⚠ Set, а не массив: список отвечает на вопрос «кого завести», а один контрагент платит много
+    // раз. Порядок вставки Set сохраняет — первыми показываются встретившиеся раньше.
+    const accounts = new Set<string>()
+    let hidden = 0
+    let hiddenUnrecorded = 0
+    let summaryAccount = ''
+    for (const pending of unmatchedPending) {
+      if (!(pending.recorded || await deps.claimUnmatchedNotice(job.memberId, pending.key, pending.ourAccount))) continue
+      hidden++
+      if (!pending.recorded) hiddenUnrecorded++
+      if (pending.counterpartyAccount) accounts.add(pending.counterpartyAccount)
+      if (!summaryAccount) summaryAccount = pending.ourAccount
+    }
+    if (hidden > 0) {
+      await deps.notifyUnmatchedSummary(
+        { hidden, hiddenUnrecorded, accounts: [...accounts] },
+        errorChat.dialogId,
+        job.memberId,
+        summaryAccount
+      )
+    }
+  }
+
   const { credits, debits } = splitByDirection(unique)
-  return { processed: unique.length, landed, created, notified, skipped, excluded, directionSkipped, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
+  return { processed: unique.length, landed, created, notified, skipped, excluded, directionSkipped, nonPayment, unreadableAmount, registryFailed, registryBackfilled, registryBackfillFailed, registryBackfillSkipped, bindingsFailed, unmatched, unresolved, misconfigured, recognized, resolved, allocatable, ambiguous, manual, allocated, distributed, ledgerWritten, credits: credits.length, debits: debits.length, ...(misconfigReason !== undefined ? { misconfigReason } : {}), ...(sample ? { sample } : {}) }
 }

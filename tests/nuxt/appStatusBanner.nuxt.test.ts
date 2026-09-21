@@ -14,6 +14,7 @@ const DEFAULTS: SetupStatus = {
   pendingAccounts: 0,
   pollEnabled: false,
   pollIntervalMin: 5,
+  autoEraseDays: 5,
   lastRunMs: null
 }
 

@@ -14,7 +14,12 @@
 import type { StatementItem } from '../../app/types/statement'
 import { buildChatMessage } from '../../app/utils/chatMessage'
 import { resolveBotId, sendAsBot } from './chatBotSend'
+import { hasAttachBlocks, type ChatAttach } from '../../app/utils/chatAttach'
+import { describeUpstreamError } from './logSanitize'
+import { useServerLogger } from './serverLogger'
 import type { RestCall } from './companyLookup'
+
+const log = useServerLogger('chat')
 
 /** REST method that posts a message as the TOKEN OWNER. The fallback route — see `postChatMessage`. */
 export const CHAT_MESSAGE_METHOD = 'im.message.add'
@@ -44,12 +49,45 @@ export function extractMessageId(resp: Record<string, unknown>): string | null {
  *
  * A failure of the FALLBACK still propagates — that one is a real transport error, and the caller
  * (a job) should see it.
+ *
+ * `attach` (#19, картинки шагов к инструкции банка) — НЕОБЯЗАТЕЛЬНОЕ вложение: если портал его не
+ * принял, сообщение уходит повторно БЕЗ него, потому что текст самодостаточен, а картинки нет.
  */
 export async function postChatMessage(
   dialogId: string,
   text: string,
   call: RestCall,
-  memberId?: string
+  memberId?: string,
+  attach?: ChatAttach | null
+): Promise<string | null> {
+  if (!hasAttachBlocks(attach)) return deliver(dialogId, text, call, memberId)
+  try {
+    return await deliver(dialogId, text, call, memberId, attach)
+  } catch (e) {
+    // ⚠ КАРТИНКИ — БОНУС, ТЕКСТ — ОБЯЗАННОСТЬ. Вложение валидирует ПОРТАЛ (`ATTACH_ERROR`,
+    // `ATTACH_OVERSIZE`), и его отказ одинаково заворачивает оба маршрута — то есть инструкция,
+    // ради которой всё и затевалось, не дошла бы вовсе. Повтор без вложения дубля не создаёт:
+    // сюда попадаем только когда бросил ПОСЛЕДНИЙ маршрут лестницы, то есть не доставлено ничего.
+    //
+    // ⚠ НО МОЛЧА ЭТОГО ДЕЛАТЬ НЕЛЬЗЯ (замер владельца 2026-09-17). Первая редакция глотала отказ
+    // целиком, и снаружи он выглядел как «картинки не работают»: текст доходил, ошибок не было,
+    // причины не было НИГДЕ — ни на экране, ни в логе. То есть деградация, задуманная как
+    // страховка, отняла единственный способ узнать, что именно не понравилось порталу. Пишем
+    // ответ банка… то есть портала, дословно: по нему видно `ATTACH_ERROR` (форма), `ATTACH_OVERSIZE`
+    // (60 000 символов) и всё прочее, что мы бы иначе гадали.
+    log.warning(`портал не принял вложение, сообщение уходит без картинок: ${describeUpstreamError(e)}`)
+    return await deliver(dialogId, text, call, memberId)
+  }
+}
+
+/** Лестница доставки: бот, затем владелец токена. Отделена от `postChatMessage`, чтобы «повторить
+ *  без картинок» означало повтор ВСЕЙ лестницы, а не только её последней ступени. */
+async function deliver(
+  dialogId: string,
+  text: string,
+  call: RestCall,
+  memberId?: string,
+  attach?: ChatAttach | null
 ): Promise<string | null> {
   if (memberId) {
     const botId = await resolveBotId(memberId, call)
@@ -67,16 +105,33 @@ export async function postChatMessage(
         // а детерминированно, во все чаты. Дублировать сообщения бухгалтеру хуже, чем не знать их id.
         //
         // Сам id никому не нужен для правильности — все вызывающие его игнорируют; он информационный.
-        return await sendAsBot(botId, dialogId, text, call)
-      } catch {
+        return await sendAsBot(botId, dialogId, text, call, attach)
+      } catch (e) {
         // Настоящий отказ бота — вот здесь. Шлём как раньше: молчащий чат ошибок хуже, чем
         // сообщение с чужой подписью.
+        //
+        // ⚠ Говорим об этом ТОЛЬКО когда есть вложение, и это не лень: без него отказ бота —
+        // штатная деградация подписи, а сообщений в чат на живом портале сотни в день, то есть
+        // безусловная строка забила бы лог ровно тем, что чинить не нужно. С вложением всё
+        // наоборот: действие редкое, ручное, и без этой строки неизвестно даже, КАКАЯ ступень
+        // лестницы отвергла картинки — бот или владелец токена.
+        if (hasAttachBlocks(attach)) {
+          log.info(`бот не принял сообщение с вложением, пробуем от имени владельца токена: ${describeUpstreamError(e)}`)
+        }
       }
     }
   }
   // URL_PREVIEW=N: the message carries external (payer-controlled) text — don't let
   // a pasted URL expand into a rich preview card in the operator chat.
-  const resp = await call(CHAT_MESSAGE_METHOD, { DIALOG_ID: dialogId, MESSAGE: text, URL_PREVIEW: 'N' })
+  // ⚠ Здесь вложение — параметр ВЕРХНЕГО уровня и заглавными: у `im.message.*` форма своя, не та,
+  //   что у методов чат-бота (там оно лежит в `fields.attach`). Общего хелпера на две формы нет
+  //   намеренно — он бы прятал ровно то различие, на котором картинки и потерялись.
+  const resp = await call(CHAT_MESSAGE_METHOD, {
+    DIALOG_ID: dialogId,
+    MESSAGE: text,
+    URL_PREVIEW: 'N',
+    ...(hasAttachBlocks(attach) ? { ATTACH: attach } : {})
+  })
   return extractMessageId(resp)
 }
 

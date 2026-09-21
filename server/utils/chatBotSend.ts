@@ -13,7 +13,12 @@
 // forever — which is exactly the case the fallback covers, and the reason it must be permanent
 // rather than a launch-week crutch.
 
-import { buildBotRegisterCall, extractBotId, isPermanentBotError } from '../../app/utils/b24BotRegister'
+import {
+  buildBotProfileUpdateCall, buildBotRegisterCall, buildBotSendCall, buildChatJoinCall,
+  extractBotId, isPermanentBotError
+} from '../../app/utils/b24BotRegister'
+import { hasAttachBlocks, type ChatAttach } from '../../app/utils/chatAttach'
+import { BOT_AVATAR_BASE64 } from './botAvatar'
 import { B24_CHAT_BOT } from '../../app/config/b24'
 import type { RestCall } from './companyLookup'
 import { useServerLogger } from './serverLogger'
@@ -32,6 +37,21 @@ export const BOT_MESSAGE_METHOD = 'imbot.v2.Chat.Message.send'
  * that is a fair price for keeping a schema out of a purely operational cache.
  */
 const botIdByPortal = new Map<string, string | null>()
+
+/**
+ * «Боту не дали писать в этот чат» — ровно тот отказ, который лечится вступлением.
+ *
+ * ⚠ Тот же код `ACCESS_DENIED` означает и «REST только на коммерческих тарифах», но тот приходит на
+ * РЕГИСТРАЦИЮ и до отправки дело не доходит вовсе. Здесь мы уже в ветке отправки существующим
+ * ботом, поэтому единственная цена ошибочного вывода — один отвергнутый `im.chat.user.add`, после
+ * которого мы всё равно откатываемся на прежний маршрут.
+ */
+function isAccessDenied(error: unknown): boolean {
+  const code = `${(error as { code?: unknown })?.code ?? ''}`.toUpperCase()
+  if (code) return code === 'ACCESS_DENIED'
+  // Конверт без машинного кода — смотрим текст: у SDK он иногда единственное, что доезжает.
+  return `${(error as Error)?.message ?? ''}`.toLowerCase().includes('access_denied')
+}
 
 /** Exposed for tests — a module-level cache would otherwise leak between cases. */
 export function resetBotCache(): void {
@@ -71,7 +91,10 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
     // никогда не будет бота», а «мы не разобрали форму»: имена полей конверта мы угадываем, и один
     // нетипичный ответ навсегда (до рестарта) отключал бы бота на портале, не оставив ни симптома.
     // Отрицательный вывод делает только ветка `catch` ниже, и только по документированному отказу.
-    if (id) botIdByPortal.set(memberId, id)
+    if (id) {
+      botIdByPortal.set(memberId, id)
+      await pushBotProfile(id, call)
+    }
     return id
   } catch (error) {
     if (isPermanentBotError(error)) {
@@ -88,25 +111,82 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
 }
 
 /**
+ * Толкнуть на портал имя, должность и АВАТАР бота (#496).
+ *
+ * ⚠ Отдельным вызовом, потому что регистрация идемпотентна и ничего не перезаписывает: портал, у
+ * которого бот уже есть, иначе навсегда остался бы с прежним профилем и без картинки.
+ *
+ * ⚠ ЛУЧШИЕ УСИЛИЯ И НИКОГДА НЕ БРОСАЕТ: это оформление, а не доставка. Но отказ ПОВТОРЯЕТСЯ БЕЗ
+ * АВАТАРА — имя и картинка едут одним вызовом, и портал, отвергший картинку, не применил бы
+ * НИЧЕГО, то есть бот остался бы с именем по умолчанию. Повтор безусловный, а не по кодам ошибок
+ * картинки: исход «потеряли имя» одинаков при любом отказе первого вызова, а лишний вызов раз на
+ * портал на процесс не стоит ничего.
+ */
+export async function pushBotProfile(botId: string, call: RestCall): Promise<void> {
+  const withAvatar = buildBotProfileUpdateCall(botId, B24_CHAT_BOT, BOT_AVATAR_BASE64)
+  if (!withAvatar) return
+  try {
+    await call(withAvatar.method, withAvatar.params)
+    return
+  } catch (error) {
+    log.info(`профиль бота не применён, повторяю без аватара: ${(error as Error)?.message ?? 'без описания'}`)
+  }
+  const plain = buildBotProfileUpdateCall(botId, B24_CHAT_BOT)
+  if (!plain) return
+  try {
+    await call(plain.method, plain.params)
+  } catch (error) {
+    log.info(`профиль бота не применён и без аватара: ${(error as Error)?.message ?? 'без описания'}`)
+  }
+}
+
+/**
  * Post `text` to `dialogId` as the bot; returns the message id, or `null` when the bot route was
  * unavailable and the caller should fall back.
  *
- * ⚠ `URL_PREVIEW: 'N'` for the same reason as the non-bot path: the text carries payer-controlled
- * content, and a pasted URL must not expand into a rich card in the operator's chat.
+ * ⚠ ЭТО МЕТОД ВТОРОГО ПОКОЛЕНИЯ, И ФОРМА У НЕГО СВОЯ. Он принимает `botId`/`dialogId`, а само
+ * содержимое — во ВЛОЖЕННОМ `fields` со строчными именами (`message`, `attach`, `urlPreview`).
+ * Первая редакция слала сюда форму `im.message.add` (`BOT_ID`/`DIALOG_ID`/`MESSAGE`/`ATTACH`
+ * верхним уровнем), и это был отказ ХУДШЕГО вида: текст доходил (портал разобрал его по
+ * совместимости), а вложение и запрет превью — нет, молча. Снаружи «картинки не работают».
+ *
+ * ⚠ `urlPreview: false` — по той же причине, что и на втором маршруте: в тексте бывает содержимое,
+ * которое пишет плательщик, и вставленная ссылка не должна разворачиваться в карточку.
+ *
+ * ⚠ `attach` ОПУСКАЕТСЯ, а не шлётся пустым, когда прикладывать нечего: портал проверяет коллекцию
+ * блоков и на негодную форму отвечает `ATTACH_ERROR`, а пустая — ровно такая. Переживут ли картинки
+ * дорогу — забота вызывающего (`postChatMessage` повторяет без них); здесь задача одна: не
+ * выдумывать вложение, которого никто не просил.
  */
 export async function sendAsBot(
   botId: string,
   dialogId: string,
   text: string,
-  call: RestCall
+  call: RestCall,
+  attach?: ChatAttach | null
 ): Promise<string | null> {
-  const resp = await call(BOT_MESSAGE_METHOD, {
-    BOT_ID: Number(botId),
-    DIALOG_ID: dialogId,
-    MESSAGE: text,
-    URL_PREVIEW: 'N'
-  })
-  return extractBotMessageId(resp)
+  const send = buildBotSendCall(botId, dialogId, text, hasAttachBlocks(attach) ? attach : null)
+  if (!send) return null
+  try {
+    return extractBotMessageId(await call(send.method, send.params))
+  } catch (error) {
+    // ⚠ ЕДИНСТВЕННАЯ ветка, где отказ ЛЕЧИТСЯ, а не откатывается: бот пишет только в тот групповой
+    // чат, участником которого он является. Замерено на живом портале — до вступления
+    // `ACCESS_DENIED`, после `im.chat.user.add` сообщение проходит.
+    //
+    // ⚠ Вступаем ПО ОТКАЗУ, а не заранее на каждом сообщении: вступление нужно один раз на чат за
+    // всю жизнь портала, а проактивный вызов стоил бы лишнего REST на КАЖДОЕ сообщение — на выписке
+    // в сотни строк это сотни вызовов из общего лимита портала ради состояния, которое уже верное.
+    // ⚠ Вступаем ТОЛЬКО на отказ доступа, а не на любой. Поймано собственным тестом: отказ портала
+    // по ВЛОЖЕНИЮ (`ATTACH_ERROR`, #19) шёл сюда же, и мы добавляли бота в чат и слали повтор — два
+    // лишних вызова в портал на каждую картинку, которую он не принял, и всё это до отката, который
+    // и есть лекарство от той беды. Признак — машинный код ответа, а не текст описания.
+    if (!isAccessDenied(error)) throw error
+    const join = buildChatJoinCall(dialogId, botId)
+    if (!join) throw error
+    await call(join.method, join.params)
+    return extractBotMessageId(await call(send.method, send.params))
+  }
 }
 
 /**

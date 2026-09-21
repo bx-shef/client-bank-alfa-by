@@ -18,6 +18,7 @@ function deps(over: Partial<InviteSendDeps> = {}): InviteSendDeps {
     sendMessage: vi.fn(async () => {}),
     rememberContact: vi.fn(async () => {}),
     alfaClientId: () => 'shef-bank-import',
+    siteUrl: () => 'https://bank-import.example',
     keyScreenLink: vi.fn(() => KEY_LINK),
     ...over
   }
@@ -157,5 +158,79 @@ describe('доставка и запоминание', () => {
     const d = deps()
     await handleSendBankInvite(d, { ...input, userName: '  ' })
     expect(d.rememberContact).toHaveBeenCalledWith(TOKEN, DOMAIN, { userId: '7' })
+  })
+})
+
+describe('картинки шагов в приглашении (#19)', () => {
+  const alfa = { ...input, provider: 'alfa-by' as const }
+
+  it('у Альфы к сообщению прикладываются картинки шагов', async () => {
+    const d = deps()
+    await handleSendBankInvite(d, alfa)
+    const attach = vi.mocked(d.sendMessage).mock.calls[0]![3]
+    expect(attach?.[0]?.IMAGE.length).toBeGreaterThan(0)
+    expect(attach![0]!.IMAGE[0]!.LINK.startsWith('https://bank-import.example/guide/')).toBe(true)
+  })
+
+  it('у Приора картинок НЕТ — там нечего снимать', async () => {
+    // Владелец счёта у Приора ничего не выпускает руками: открыл присланную ссылку и подтвердил
+    // согласие на сайте банка. Картинки шагов Альфы там были бы прямой дезинформацией.
+    const d = deps()
+    await handleSendBankInvite(d, input)
+    expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
+  })
+
+  it('сборка без NUXT_PUBLIC_SITE_URL всё равно ОТПРАВЛЯЕТ инструкцию, просто без картинок', async () => {
+    // ⚠ Отсутствие картинок — не повод молчать: текст инструкции самодостаточен, и отказ здесь
+    // означал бы, что подключение банка нельзя передать владельцу счёта из-за косметики.
+    const d = deps({ siteUrl: () => '' })
+    const res = await handleSendBankInvite(d, alfa)
+    expect(res.status).toBe(200)
+    expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
+    expect(String(vi.mocked(d.sendMessage).mock.calls[0]![2])).toContain('Open API')
+  })
+})
+
+describe('предусловие «моя компания» (#493)', () => {
+  // ⚠ Эти проверки ПЕРЕЕХАЛИ сюда из тестов самостоятельного подключения: тот путь снят, а гейт
+  // остался — и это единственная админская точка входа, где он теперь срабатывает. Не перенеси мы
+  // их, удаление кнопки «Подключить» молча унесло бы и проверку предусловия.
+  it('нет «моей компании» → 409, и в банк мы даже не собираемся', async () => {
+    const buildPriorUrl = vi.fn(async () => LINK)
+    const d = deps({ myCompanyGate: async () => 'no-company', buildPriorUrl })
+    const r = await handleSendBankInvite(d, input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-company')
+    expect(buildPriorUrl).not.toHaveBeenCalled()
+    expect(d.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('нет счёта в реквизитах → своя причина', async () => {
+    const r = await handleSendBankInvite(deps({ myCompanyGate: async () => 'no-account' }), input)
+    expect(r.status).toBe(409)
+    expect(r.body.reason).toBe('no-account')
+  })
+
+  it('CRM не ответила → отправка ПРОХОДИТ (fail-open)', async () => {
+    // «Не смогли спросить» не равно «не настроено»: молчащая CRM не должна останавливать настройку.
+    const r = await handleSendBankInvite(deps({
+      myCompanyGate: async () => {
+        throw new Error('rest down')
+      }
+    }), input)
+    expect(r.status).toBe(200)
+  })
+
+  it('не-админа отшивает admin-гейт, а не гейт компании — порядок проверок не переставлен', async () => {
+    let asked = false
+    const r = await handleSendBankInvite(deps({
+      validateFrame: vi.fn(async () => ({ userId: 'U', isAdmin: false })),
+      myCompanyGate: async () => {
+        asked = true
+        return 'ok'
+      }
+    }), input)
+    expect(r.status).toBe(403)
+    expect(asked).toBe(false)
   })
 })

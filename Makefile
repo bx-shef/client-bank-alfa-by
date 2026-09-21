@@ -2,7 +2,7 @@
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
-        bank-connect-log \
+        bank-connect-log chat-log \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -270,6 +270,15 @@ poll-check:
 bank-connect-log:
 	@t=$$(mktemp /tmp/connect-log.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-connect-log.sh" \
+	  && bash "$$t" "$${SINCE:-}"
+
+## Почему в чат не дошли картинки: что ответил портал (#19)
+#
+#   make chat-log             # за 6 часов
+#   SINCE=24h make chat-log
+chat-log:
+	@t=$$(mktemp /tmp/chat-log.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-chat-log.sh" \
 	  && bash "$$t" "$${SINCE:-}"
 
 ## Кого приложение не опознало и каким счётом это чинится (#501)

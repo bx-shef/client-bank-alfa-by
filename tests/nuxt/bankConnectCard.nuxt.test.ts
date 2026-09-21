@@ -20,9 +20,22 @@ vi.mock('vue-router', async orig => ({
   useRoute: () => ({ query: routeQuery })
 }))
 
+// Спаи кнопки «Открыть чат». СТАБИЛЬНЫЕ (объявлены здесь, а не внутри фабрики): `useB24()` зовётся
+// на каждый вызов, и спай, созданный внутри, был бы новым при каждом обращении — тест ничего не
+// увидел бы и остался бы зелёным.
+const openMessengerSpy = vi.fn(async () => true)
+const openPathSpy = vi.fn(async () => ({}))
+
 vi.mock('~/composables/useB24', async () => {
   const { makeMockB24 } = await import('./helpers/mockB24')
-  return { useB24: () => makeMockB24({ isInit: () => mockState.isInit, isAdmin: mockState.isAdmin }) }
+  return {
+    useB24: () => makeMockB24({
+      isInit: () => mockState.isInit,
+      isAdmin: mockState.isAdmin,
+      openMessenger: openMessengerSpy,
+      openPath: openPathSpy
+    })
+  }
 })
 
 // In-portal ⇒ a frame token exists (enabled=true, no preview note); standalone ⇒ null.
@@ -35,11 +48,9 @@ vi.mock('~/composables/useFrameAuth', () => ({
 // The card now also loads the connected-accounts list on mount (#404), so the $fetch mock must
 // route BY URL rather than by call order — an order-based mock would hand the accounts request the
 // connect response (and vice versa) depending on which fired first.
-const connectReply = { value: {} as Record<string, unknown> }
 // Сверка счетов (#494) грузится тем же монтированием и ходит В БАНК, поэтому у неё свой ответ:
 // иначе composable молча получал бы connect-ответ и тест был бы зелёным при любом поведении.
 const matrixReply = { value: { rows: [] as unknown[], providers: [] as unknown[] } }
-const keyReply = { value: { connected: true } as Record<string, unknown> }
 /**
  * Реализация мока ПО УМОЛЧАНИЮ, вынесенная в именованную функцию.
  *
@@ -51,27 +62,16 @@ const keyReply = { value: { connected: true } as Record<string, unknown> }
 const defaultFetchImpl = (url: string, _opts?: Record<string, unknown>) => {
   if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
   if (url === '/api/bank/matrix') return Promise.resolve(matrixReply.value)
-  if (url === '/api/bank/connect-key') return Promise.resolve(keyReply.value)
   if (url === '/api/setup-status') return Promise.resolve({ alfaClientId: 'CID-FOR-CABINET' })
-  return Promise.resolve(connectReply.value)
+  // Запомненный адресат: кнопка «Открыть чат» открывает переписку ИМЕННО с ним, поэтому без него
+  // проверять в ней нечего.
+  if (url === '/api/bank/contact') return Promise.resolve({ contact: { userId: '12', name: 'Бухгалтер' } })
+  // ⚠ Маршрутов самостоятельного подключения больше нет (решение владельца 2026-09-17), поэтому
+  // умолчание пустое: любой неучтённый адрес — это запрос, которого карточка делать не должна.
+  return Promise.resolve({})
 }
 const fetchMock = vi.fn(defaultFetchImpl)
 vi.stubGlobal('$fetch', fetchMock)
-
-/** The reply /api/bank/connect should give for this test. */
-function replyConnect(reply: Record<string, unknown>) {
-  connectReply.value = reply
-}
-
-/** Calls the component made to /api/bank/connect (ignoring the accounts load). */
-function connectCalls() {
-  return fetchMock.mock.calls.filter(c => c[0] === '/api/bank/connect')
-}
-
-/** Вызовы подключения КЛЮЧОМ (#488) — отдельный маршрут, отдельная механика. */
-function keyCalls() {
-  return fetchMock.mock.calls.filter(c => c[0] === '/api/bank/connect-key')
-}
 
 // ⚠ ФАЙЛОВЫЙ, а не точечный. Часть тестов зовёт `vi.unstubAllGlobals()` (им нужен свой `window.open`),
 // и вместе с ним отваливается стаб `$fetch`. Дальше происходило худшее, что может сделать тест: он
@@ -86,7 +86,8 @@ beforeEach(() => {
 afterEach(() => {
   delete routeQuery.preview
   fetchMock.mockClear()
-  connectReply.value = {}
+  openMessengerSpy.mockClear()
+  openPathSpy.mockClear()
   matrixReply.value = { rows: [], providers: [] }
   mockState.isInit = true
   mockState.isAdmin = true
@@ -97,14 +98,6 @@ async function mountReady() {
   await flushPromises()
   await nextTick()
   return wrapper
-}
-
-/** Выбрать Приора: поход в банк остался только у него (#488), у Альфы — ключ API. */
-async function pickPrior(wrapper: Awaited<ReturnType<typeof mountReady>>) {
-  const radios = wrapper.findAll('[role="radio"]')
-  expect(radios).toHaveLength(2)
-  await radios[1]!.trigger('click')
-  await nextTick()
 }
 
 describe('BankConnectCard admin gate', () => {
@@ -127,11 +120,15 @@ describe('BankConnectCard admin gate', () => {
     // the bank's consent when it only ever labelled our row. The account is chosen after
     // returning, from the connected list.
     expect(wrapper.find('[data-testid="account-input"]').exists()).toBe(false)
-    // ⚠ У Альфы теперь КЛЮЧ API, а не поход в банк (#488): Code Grant измеренно непригоден без
-    // человека — цепочка refresh живёт 10 часов от авторизации и не продлевается ничем.
-    expect(wrapper.find('[data-testid="connect-key-button"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="api-key-input"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="connect-button"]').exists()).toBe(false)
+    // ⚠ ЕДИНСТВЕННЫЙ ПУТЬ — передать подключение владельцу счёта (решение владельца 2026-09-17).
+    expect(wrapper.find('[data-testid="hand-over-button"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="open-chat"]').exists()).toBe(true)
+    // ⚠ И ОТРИЦАНИЕ по всем трём снятым элементам сразу: кнопка подключения у обоих банков и поле
+    // ключа API. Проверять только один из них значило бы разрешить вернуть остальные — а вернуть
+    // их «для удобства администратора» и есть самое естественное движение следующего автора.
+    for (const gone of ['connect-key-button', 'connect-button', 'api-key-input', 'authorize-link']) {
+      expect(wrapper.find(`[data-testid="${gone}"]`).exists(), gone).toBe(false)
+    }
     // In a real portal frame there IS a token → no "preview only" note.
     expect(wrapper.find('[data-testid="preview-note"]').exists()).toBe(false)
   })
@@ -146,89 +143,60 @@ describe('BankConnectCard admin gate', () => {
   })
 })
 
-describe('BankConnectCard connect interaction', () => {
-  it('clicking connect opens the bank tab synchronously and points it at the authorize URL', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    // ⚠ Поход в банк остался только у Приора: у него Open Banking, и другого пути нет (#488).
-    replyConnect({ authorizeUrl: 'https://prior/authorize?s=1' })
-    // Fake window the component navigates after the fetch resolves.
-    const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
-    const openSpy = vi.fn(() => fakeWin as unknown as Window)
-    vi.stubGlobal('open', openSpy)
-
+describe('«Открыть чат»', () => {
+  it('зовёт штатный метод SDK, а не портальный путь слайдером', async () => {
     const wrapper = await mountReady()
-    await pickPrior(wrapper)
-    await wrapper.find('[data-testid="connect-button"]').trigger('click')
+    await wrapper.find('[data-testid="open-chat"]').trigger('click')
     await flushPromises()
-    await nextTick()
-
-    // Opened synchronously as a blank tab (popup-blocker safe), then navigated to the URL.
-    expect(openSpy).toHaveBeenCalledWith('', '_blank')
-    expect(fakeWin.location.href).toBe('https://prior/authorize?s=1')
-    expect(fakeWin.opener).toBeNull() // opener severed (anti-tabnabbing)
-    expect(wrapper.find('[data-testid="connect-started"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(false)
-    vi.unstubAllGlobals()
+    expect(openMessengerSpy).toHaveBeenCalledTimes(1)
+    // ⚠ ОТРИЦАНИЕ — несущая половина теста. Раньше кнопка открывала портальный ПУТЬ `/online/`
+    // слайдером, то есть самоделку вместо готового метода (замечание владельца 2026-09-17), и без
+    // этой строки возврат к ней прошёл бы зелёным: положительная проверка ловит только «что-то
+    // позвали», а адрес мессенджера — деталь портала, менять которую он вправе без предупреждения.
+    expect(openPathSpy).not.toHaveBeenCalled()
   })
 
-  it('shows an error and closes the blank tab when the backend rejects', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    replyConnect({ error: 'provider not available' })
-    const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
-    vi.stubGlobal('open', vi.fn(() => fakeWin as unknown as Window))
-
+  // ⚠ ГЛАВНАЯ проверка этого блока (замер владельца 2026-09-17): первая редакция звала метод БЕЗ
+  // аргумента, а без него портал открывает СПИСОК чатов — то есть кнопка делала ровно то, от чего
+  // должна была избавить. Поэтому проверяется не «позвали», а ЧТО передали.
+  it('передаёт адресата, а не открывает список чатов', async () => {
     const wrapper = await mountReady()
-    await pickPrior(wrapper)
-    await wrapper.find('[data-testid="connect-button"]').trigger('click')
+    await wrapper.find('[data-testid="open-chat"]').trigger('click')
     await flushPromises()
-    await nextTick()
-
-    // ⚠ Проверяем, что дошли ДО сервера и показали ЕГО причину. Раньше здесь стоял голый
-    // «ошибка есть» — и он был зелёным ровно потому, что стаб `$fetch` отвалился этажом выше:
-    // запроса не было вовсе, компонент рисовал общее «Не удалось начать подключение», а тест
-    // рапортовал об успехе. Assert, который нельзя провалить, охраняет не код, а сам себя.
-    expect(connectCalls()).toHaveLength(1)
-    expect(wrapper.find('[data-testid="connect-error"]').text()).toContain('provider not available')
-    expect(wrapper.find('[data-testid="connect-started"]').exists()).toBe(false)
-    expect(fakeWin.close).toHaveBeenCalled() // blank tab dropped on failure
-    vi.unstubAllGlobals()
+    expect(openMessengerSpy).toHaveBeenCalledWith(12)
+    expect(openMessengerSpy).not.toHaveBeenCalledWith(undefined)
   })
 
-  it('offers both banks and sends the SELECTED provider (Prior) to the backend', async () => {
+  // Никому не отправляли ⇒ открывать нечего: кнопка гаснет, а не ведёт в пустоту.
+  it('без запомненного адресата кнопка недоступна', async () => {
+    fetchMock.mockImplementation((url: string) => (
+      url === '/api/bank/contact' ? Promise.resolve({ contact: null }) : defaultFetchImpl(url)
+    ))
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="open-chat"]').attributes('disabled')).toBeDefined()
+    fetchMock.mockImplementation(defaultFetchImpl)
+  })
+
+  it('портал не принял команду ⇒ говорим об этом, а не молчим', async () => {
+    openMessengerSpy.mockResolvedValueOnce(false)
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="open-chat-failed"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="open-chat"]').trigger('click')
+    await flushPromises()
+    // Молчащая кнопка неотличима от сломанной — ровно та жалоба, что уже была на «Скопировать».
+    expect(wrapper.find('[data-testid="open-chat-failed"]').exists()).toBe(true)
+  })
+})
+
+describe('выбор банка (пикер остался — он выбирает, ЧЬЮ инструкцию отправить)', () => {
+  it('предлагает оба банка', async () => {
     mockState.isInit = true
     mockState.isAdmin = true
-    replyConnect({ authorizeUrl: 'https://prior/authorize?s=1' })
-    const fakeWin = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
-    vi.stubGlobal('open', vi.fn(() => fakeWin as unknown as Window))
-    vi.stubGlobal('$fetch', fetchMock) // earlier tests unstubAllGlobals(), which drops the $fetch stub
-
-    const wrapper = await mountReady()
-    // Both online-connectable banks are offered; the button follows the choice.
-    expect(wrapper.find('[data-testid="provider-picker"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('Приорбанк')
-    // ⚠ По умолчанию выбрана Альфа, и у неё СВОЯ кнопка — ключ API, а не поход в банк.
-    expect(wrapper.find('[data-testid="connect-key-button"]').text()).toContain('Альфа-Банк')
-    expect(wrapper.find('[data-testid="connect-button"]').exists()).toBe(false)
-
-    // Pick Prior (b24ui RadioGroup renders reka-ui role=radio controls, one per item).
-    await pickPrior(wrapper)
-    expect(wrapper.find('[data-testid="connect-button"]').text()).toContain('Приорбанк')
-    expect(wrapper.find('[data-testid="api-key-input"]').exists()).toBe(false)
-
-    await wrapper.find('[data-testid="connect-button"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    // The backend got prior-by (not the alfa-by default).
-    const body = (connectCalls()[0]![1] as { body: { provider: string, accountKey: string } }).body
-    expect(body.provider).toBe('prior-by')
-    // The account number goes out EMPTY — the server lands the connection under a provisional
-    // key and the account is picked from the list, where it is already visible. The route's
-    // contract did not change.
-    expect(body.accountKey).toBe('')
-    vi.unstubAllGlobals()
+    const w = await mountReady()
+    const picker = w.find('[data-testid="provider-picker"]')
+    expect(picker.exists()).toBe(true)
+    expect(picker.text()).toContain('Альфа')
+    expect(picker.text()).toContain('Приор')
   })
 })
 
@@ -263,7 +231,7 @@ describe('BankConnectCard — сверка счетов внутри карто�
     expect(w.find('[data-testid="matrix-provider-error-alfa-by"]').exists()).toBe(true)
   })
 
-  it('сбой запроса сверки не роняет карточку — форма подключения остаётся рабочей', async () => {
+  it('сбой запроса сверки не роняет карточку — она остаётся на экране', async () => {
     fetchMock.mockImplementationOnce((url: string) => {
       if (url === '/api/bank/matrix') return Promise.reject(new Error('boom'))
       return Promise.resolve({ accounts: [] })
@@ -296,7 +264,7 @@ describe('BankConnectCard: синтетическая сверка под ?previ
     fetchMock.mockImplementation((url: string) => {
       if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
       if (url === '/api/bank/matrix') return pending
-      return Promise.resolve(connectReply.value)
+      return Promise.resolve({})
     })
     const w = await mountReady()
     routeQuery.preview = '1'
@@ -315,7 +283,7 @@ describe('BankConnectCard: синтетическая сверка под ?previ
     fetchMock.mockImplementation((url: string) => {
       if (url === '/api/bank/accounts') return Promise.resolve({ accounts: [] })
       if (url === '/api/bank/matrix') return pending
-      return Promise.resolve(connectReply.value)
+      return Promise.resolve({})
     })
     const w = await mountReady()
     routeQuery.preview = '1'
@@ -324,108 +292,5 @@ describe('BankConnectCard: синтетическая сверка под ?previ
     await nextTick()
     expect(w.find('[data-testid="matrix-error"]').exists()).toBe(false)
     expect(w.text()).toContain('BY00ALFA00000000000000000009')
-  })
-})
-
-describe('#488 подключение Альфы ключом API', () => {
-  // ⚠ Пере-стабливаем `$fetch` на КАЖДЫЙ тест: соседние зовут `vi.unstubAllGlobals()` ради своего
-  // `window.open`, и вместе с ним отваливается стаб. Без этого тесты оставались бы ЗЕЛЁНЫМИ,
-  // проверяя не то, — ровно тот случай, о котором предупреждает комментарий у самого мока.
-  beforeEach(() => {
-    vi.stubGlobal('$fetch', fetchMock)
-    fetchMock.mockClear()
-    fetchMock.mockImplementation(defaultFetchImpl)
-  })
-
-  it('ключ уходит В ТЕЛЕ POST и стирается из поля после успеха', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    keyReply.value = { connected: true }
-    const wrapper = await mountReady()
-
-    const input = wrapper.find('[data-testid="api-key-input"]')
-    await input.setValue('  SECRET-KEY-123  ')
-    await wrapper.find('[data-testid="connect-key-button"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(keyCalls()).toHaveLength(1)
-    const opts = keyCalls()[0]![1] as { method: string, body: { provider: string, apiKey: string } }
-    expect(opts.method).toBe('POST')
-    expect(opts.body.provider).toBe('alfa-by')
-    expect(opts.body.apiKey).toBe('  SECRET-KEY-123  ')
-    // ⚠ Ключ бессрочный, а форма живёт в открытой вкладке портала — после успеха поле обязано
-    // опустеть, иначе он остаётся на экране до закрытия настроек.
-    expect((wrapper.find('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe('')
-    expect(wrapper.find('[data-testid="key-connected"]').exists()).toBe(true)
-  })
-
-  it('кнопка не нажимается, пока поле пустое', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    const wrapper = await mountReady()
-    const btn = wrapper.find('[data-testid="connect-key-button"]')
-    expect(btn.attributes('disabled')).toBeDefined()
-  })
-
-  it('поле ключа — типа password: он бессрочный и виден через плечо', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    const wrapper = await mountReady()
-    expect(wrapper.find('[data-testid="api-key-input"]').attributes('type')).toBe('password')
-  })
-
-  it('показан наш client_id — вписать его в кабинете банка больше неоткуда', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    const wrapper = await mountReady()
-    expect((wrapper.find('[data-testid="alfa-client-id"]').element as HTMLInputElement).value)
-      .toBe('CID-FOR-CABINET')
-    // Инструкция говорит словами кабинета, а не пересказом: человек сверяет её глазами с экраном.
-    expect(wrapper.text()).toContain('Open API')
-    expect(wrapper.text()).toContain('Постоянный ключ')
-  })
-
-  it('банк не принял ключ — ошибка на экране, поле НЕ очищено', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    keyReply.value = { error: 'банк не принял ключ API' }
-    const wrapper = await mountReady()
-    await wrapper.find('[data-testid="api-key-input"]').setValue('BAD')
-    await wrapper.find('[data-testid="connect-key-button"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="connect-error"]').text()).toContain('не принял ключ')
-    // ⚠ Поле не трогаем: очистив его, мы заставили бы снова идти в кабинет банка за тем же ключом.
-    expect((wrapper.find('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe('BAD')
-    expect(wrapper.find('[data-testid="key-connected"]').exists()).toBe(false)
-    keyReply.value = { connected: true }
-  })
-
-  // ⚠ ЖИВАЯ НАХОДКА 2026-09-09. Админ получил отказ на ключе Альфы, переключился на Приорбанк — и
-  // над кнопкой «Подключить Приорбанк» осталась висеть та же красная плашка «банк не принял ключ
-  // API». То есть приложение приписало Приору ошибку, которой у него не было и быть не могло: он
-  // ключами не подключается вовсе. Со стороны это читается как «второй банк тоже сломан».
-  it('смена банка ГАСИТ чужой отказ и стирает ключ из поля', async () => {
-    mockState.isInit = true
-    mockState.isAdmin = true
-    keyReply.value = { error: 'банк не принял ключ API' }
-    const wrapper = await mountReady()
-    await wrapper.find('[data-testid="api-key-input"]').setValue('BAD')
-    await wrapper.find('[data-testid="connect-key-button"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(true)
-
-    await pickPrior(wrapper)
-    expect(wrapper.find('[data-testid="connect-error"]').exists()).toBe(false)
-    // Поле ключа у Приора не рендерится вовсе; вернувшись к Альфе, находим его пустым — ключ
-    // выпущен ПОД КОНКРЕТНЫЙ банк, и держать его наготове для другого нельзя.
-    const radios = wrapper.findAll('[role="radio"]')
-    await radios[0]!.trigger('click')
-    await nextTick()
-    expect((wrapper.find('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe('')
-    keyReply.value = { connected: true }
   })
 })

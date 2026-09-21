@@ -11,7 +11,7 @@ const ALFA_TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
 function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
   return {
     id: 1, memberId: 'M1', provider: 'alfa-by', accountKey: 'BY01',
-    connectedAt: NOW - 60_000, expiresAt: NOW, hasRefresh: true, lastAttemptAt: 0,
+    connectedAt: NOW - 60_000, expiresAt: NOW, hasRefresh: true, lastAttemptAt: 0, refreshRejectedAt: 0,
     consentExpiresAt: 0, pollPaused: false, grantId: '', ...over
   }
 }

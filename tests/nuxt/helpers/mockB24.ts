@@ -28,6 +28,9 @@ export interface MockB24Options {
   openAppSlider?: ReturnType<typeof vi.fn>
   /** Стабильный спай для `closeSlider()` — чем вторичный экран закрывает себя. */
   closeSlider?: ReturnType<typeof vi.fn>
+  /** Стабильный спай для `openMessenger()` — чем карточка банка открывает мессенджер портала.
+   *  По умолчанию «портал команду принял»; тест отказа подменяет на `false`. */
+  openMessenger?: ReturnType<typeof vi.fn>
   /** Права, которые приложение ЗАПРАШИВАЕТ (`getRequiredRights`). Нужны тесту вердикта установки:
    *  «недовыданное право» вычисляется как запрошенное минус выданное порталом. */
   requiredRights?: string[]
@@ -98,6 +101,7 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
     isSliderMode: () => opts.sliderMode === true,
     openAppSlider: (opts.openAppSlider ?? vi.fn(async () => true)) as unknown as ReturnType<typeof useB24>['openAppSlider'],
     closeSlider: (opts.closeSlider ?? vi.fn(async () => {})) as unknown as ReturnType<typeof useB24>['closeSlider'],
+    openMessenger: (opts.openMessenger ?? vi.fn(async () => true)) as unknown as ReturnType<typeof useB24>['openMessenger'],
     set: () => ok,
     isInit: inFrame,
     targetOrigin: () => 'https://example.bitrix24.by',

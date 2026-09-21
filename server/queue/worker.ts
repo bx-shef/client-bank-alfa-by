@@ -60,8 +60,9 @@ import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLo
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { writePaymentRegistryViaRest, backfillPaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { bindActivityViaRest } from '../utils/activityBindingsWrite'
-import { notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
+import { notifyUnmatchedSummaryViaRest, notifyUnmatchedViaRest } from '../utils/unmatchedNotify'
 import { findActivityByMarker } from '../utils/activityMarkerLookup'
+import { UNMATCHED_NOTICE_TTL_SEC, unmatchedNoticeKey } from '../utils/unmatchedNoticeClaim'
 import { ACTIVITY_ORIGINATOR_ID } from '../../app/utils/todoActivity'
 import { notifyChatViaRest } from '../utils/chatNotifyWrite'
 import { forgetBot } from '../utils/chatBotSend'
@@ -74,6 +75,7 @@ import { makeApplyTrigger } from '../utils/applyTriggerDep'
 import { buildAllocationMutation } from '../../app/utils/allocationMutation'
 import { readAppSettingVia } from '../utils/appSettings'
 import { parseManualFileBase64 } from '../utils/importIngest'
+import { loadPdfOnServer } from '../utils/pdfjsServer'
 import { findInvoicesByNumber } from '../utils/invoiceLookup'
 import { findCandidateById, findCandidateByField } from '../utils/itemByIdLookup'
 import { findCompanyDealPayments } from '../utils/paymentLookup'
@@ -190,13 +192,13 @@ export function liveHandlerDeps(): HandlerDeps {
       await markFetchOutcome(job, items.length)
       return items
     },
-    // Manual import: decode the windows-1251 file carried in the packet and parse it
+    // Manual import: decode the file carried in the packet (encoding is DETECTED, #700) and parse it
     // to operations (server is the single parse authority). Demo/fetch path is
     // unaffected — parseFile only runs for file-parse jobs (real uploads). Log the
     // attribution (file + initiating user + portal) so the resolved userId/fileName
     // have a real consumer, not just the payload.
     parseFile: async (job) => {
-      const items = parseManualFileBase64(job.contentBase64)
+      const items = await parseManualFileBase64(job.contentBase64, loadPdfOnServer)
       // fileName is the operator-supplied upload name (untrusted) → logSafe it like
       // account/docId elsewhere, so a crafted name can't inject forged log lines.
       importLog.info(`parsed ${items.length} ops from "${logSafe(job.fileName)}" — portal ${job.memberId}, user ${job.userId ?? '—'}`)
@@ -237,11 +239,11 @@ export function liveHandlerDeps(): HandlerDeps {
     // no company → no owner / unknown portal). The activity carries the ORIGINATOR_ID/ORIGIN_ID
     // dedup marker (#259), so idempotency lives in B24 (getActivityId searches it) — no store.
     // `note` prepends a reason block (UNMATCHED-client fallback to my company, #91).
-    writeActivity: async (item, companyId, memberId, note) => {
+    writeActivity: async (item, companyId, memberId, note, providerId) => {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return writeTodoActivityViaRest(item, companyId, call, note, memberId)
+      return writeTodoActivityViaRest(item, companyId, call, note, memberId, undefined, providerId)
     },
     // Привязки дела к сущностям CRM (#579). ЛУЧШИЕ УСИЛИЯ и НИКОГДА не бросает — контракт зепа.
     //
@@ -615,7 +617,39 @@ export function liveHandlerDeps(): HandlerDeps {
         if (!call) return
         await notifyUnmatchedViaRest(item, dialogId, recordedToMyCompany, call, memberId)
       } catch (e) {
-        crmLog.error(`unmatched notify failed, portal ${memberId}: ${(e as Error)?.message}`)
+        // ⚠ `logSafe` и здесь, хотя строка старше этого PR: текст ошибки приходит извне, и
+        // оставлять новый код зеркалить прежний пробел — значит закрепить его (находка панели).
+        crmLog.error(`unmatched notify failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
+      }
+    },
+    // Cross-run memory for the notice above (#696): claim the right to speak about THIS operation.
+    // `true` — nobody claimed it yet, send; `false` — a previous run already did, stay quiet.
+    //
+    // ⚠ A Redis failure answers TRUE, not false. Losing a warning is worse than repeating one, and
+    // the whole mechanism is a courtesy: without it the behaviour is exactly what shipped before.
+    claimUnmatchedNotice: async (memberId, key, account) => {
+      // ⚠ Демо-гейт тот же, что у соседей: синтетическая нагрузка доходит до ветки «клиент не
+      // определён» (демо-компании не существует) и писала бы ключи под НАСТОЯЩИМ member_id. Утечки
+      // нет — значение заглушка, — но это чужой Redis-трафик и разрыв единообразия файла.
+      // `true` = «про эту операцию ещё не говорили», то есть демо ведёт себя как чистый прогон.
+      if (isDemoAccount(account)) return true
+      try {
+        return await claimCooldownSlot(unmatchedNoticeKey(memberId, key), UNMATCHED_NOTICE_TTL_SEC)
+      } catch (e) {
+        crmLog.warning(`unmatched claim failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
+        return true
+      }
+    },
+    // End-of-run summary for the folded-away operations (#696). Same guarantees as the per-op
+    // notice; the demo gate reads `account` because no `item` reaches here (see the dep's doc).
+    notifyUnmatchedSummary: async (summary, dialogId, memberId, account) => {
+      if (isDemoAccount(account)) return
+      try {
+        const call = await resolvePortalCall(memberId)
+        if (!call) return
+        await notifyUnmatchedSummaryViaRest(summary, dialogId, call, memberId)
+      } catch (e) {
+        crmLog.error(`unmatched summary notify failed, portal ${memberId}: ${logSafe(String((e as Error)?.message ?? e))}`)
       }
     },
     // Read-before-write dedup guard (#259): search Bitrix24 for our marker

@@ -12,7 +12,8 @@
 //
 // Outputs (committed static assets):
 //   icon-market-512.png    512×512, OPAQUE — the Marketplace listing icon
-//   icons.stamp.json       sha256 of the SOURCE svg + of the produced icon
+//   server/utils/botAvatar.ts  192×192 OPAQUE, base64 — the chat bot's face (#496)
+//   icons.stamp.json       sha256 of the SOURCE svg + of the produced icons
 //
 // The stamp hashes the SOURCE, not just the output: hashing only the output would compare two files
 // this same script writes, so editing favicon.svg and forgetting `pnpm icons` would leave them both
@@ -59,13 +60,34 @@ try {
   const market = await render(page, svg, 512, { background: PLATE })
   await writeFile(join(PUB, 'icon-market-512.png'), market)
 
+  // The chat bot's avatar (#496). Inlined as base64 into a TS module rather than written to
+  // `public/`: the profile push happens SERVER-SIDE over REST (`imbot.v2.Bot.update`), so the bytes
+  // must exist in the worker process — a URL would have to be fetched by the client's portal, and
+  // that is one more thing to be blocked by a firewall we do not control.
+  // OPAQUE for the same reason as the listing icon: a transparent plate shows as ragged corners on
+  // the messenger's own background, which is not always white.
+  const avatar = await render(page, svg, 192, { background: PLATE })
+  await writeFile(join(ROOT, 'server/utils/botAvatar.ts'), [
+    '// Сгенерирован `pnpm icons` из public/favicon.svg — РУКАМИ НЕ ПРАВИТЬ.',
+    '//',
+    '// Лицо чат-бота (#496): та же иконка, что у приложения, 192×192, непрозрачная. Bitrix24 ждёт',
+    '// base64 БЕЗ префикса `data:`; ограничения — «должно быть изображением», не больше 5000×5000.',
+    '//',
+    '// ⚠ Здесь, а не в `public/`: аватар уезжает в портал клиента серверным REST-вызовом, то есть',
+    '// байты обязаны быть в процессе воркера. Ссылку портал стал бы забирать сам, а это ещё одна',
+    '// зависимость от чужой сети.',
+    `export const BOT_AVATAR_BASE64 = '${avatar.toString('base64')}'`,
+    ''
+  ].join('\n'))
+
   const sha = b => createHash('sha256').update(b).digest('hex')
   await writeFile(join(PUB, 'icons.stamp.json'), `${JSON.stringify({
     source: sha(svg),
-    iconMarket512: sha(market)
+    iconMarket512: sha(market),
+    botAvatar192: sha(avatar)
   }, null, 2)}\n`)
 
-  console.log('✓ icon-market-512.png, icons.stamp.json')
+  console.log('✓ icon-market-512.png, server/utils/botAvatar.ts, icons.stamp.json')
 } finally {
   await browser.close()
 }

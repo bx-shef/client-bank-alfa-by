@@ -1,4 +1,5 @@
 import type { StatementItem } from '~/types/statement'
+import { type PortalCurrencyFormats, formatAmountWithPortal } from '~/utils/currencyFormat'
 
 // Shared, pure helpers for building a CRM activity for a statement operation: the
 // one-line title, money/date formatting, the portal-TZ deadline stamp, and the
@@ -88,10 +89,19 @@ export interface CrmCompanyRef {
  * ВООБЩЕ, поэтому так выглядела бы КАЖДАЯ операция такой выписки, а не редкая строка с пустым
  * `KorName`. Подставлять вместо имени счёт или УНП нельзя — в карточке компании номер читался бы
  * как её название.
+ *
+ * ⚠ СУММА ПОДПИСЫВАЕТСЯ ТОЙ ЖЕ ФУНКЦИЕЙ, ЧТО И В БЛОКЕ КАРТОЧКИ (#729, замечание владельца). Иначе
+ * один и тот же платёж на одном экране выглядит двумя разными: заголовок печатал «1 840,50 BYN»
+ * голым `Intl`, а таблица под ним — «1 840,50 руб.», как подписывает валюту сам портал. Читатель
+ * не знает, что это одна сумма в двух форматах, — он видит несогласованность приложения.
+ *
+ * ⚠ Справочник НЕОБЯЗАТЕЛЕН, и запасной вид совпадает с прежним («1 840,50 BYN»): заголовок строят
+ * и пути, у которых портального справочника нет под рукой — чат, сообщения об ошибках разнесения.
+ * Лучше одинаковый запасной вид на всех поверхностях, чем асинхронный поход в портал ради подписи.
  */
-export function buildActivityTitle(item: StatementItem): string {
+export function buildActivityTitle(item: StatementItem, currencies?: PortalCurrencyFormats): string {
   const verb = item.direction === 'credit' ? 'Приход' : 'Расход'
-  const head = `${verb} ${formatMoney(item.amount)} ${item.currency}`
+  const head = `${verb} ${formatAmountWithPortal(item.amount, item.currency, currencies)}`
   const name = item.counterparty.name.trim()
   if (!name) return head
   const prep = item.direction === 'credit' ? 'от' : 'на'

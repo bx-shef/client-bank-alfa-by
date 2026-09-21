@@ -23,7 +23,8 @@
 import {
   BANK_KEY_GRANT_TTL_HOURS, BANK_KEY_GRANT_TTL_MS, CONNECT_STATE_TTL_MIN, CONNECT_STATE_TTL_MS
 } from '../../app/utils/bankConnectTtl'
-import { buildAlfaInvite, buildPriorInvite } from '../../app/utils/bankConnectInvite'
+import { buildAlfaInvite, buildAlfaInviteAttach, buildPriorInvite } from '../../app/utils/bankConnectInvite'
+import type { ChatAttach } from '../../app/utils/chatAttach'
 import { isValidPortalUserId, type BankContact } from '../../app/utils/bankContact'
 import { buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
 import { describeUpstreamError } from './logSanitize'
@@ -36,12 +37,17 @@ export interface InviteSendDeps extends Pick<
   ConnectStartDeps,
   'memberIdByDomain' | 'validateFrame' | 'myCompanyGate' | 'priorConfig' | 'buildPriorUrl' | 'secret' | 'log'
 > {
-  /** Отправить сообщение сотруднику (`dialogId` личного чата = его id). Бросает при отказе. */
-  sendMessage: (memberId: string, dialogId: string, text: string) => Promise<void>
+  /** Отправить сообщение сотруднику (`dialogId` личного чата = его id). Бросает при отказе.
+   *  `attach` — картинки шагов (только у Альфы); транспорт обязан пережить их непринятие
+   *  порталом, не потеряв текст (`postChatMessage`). */
+  sendMessage: (memberId: string, dialogId: string, text: string, attach?: ChatAttach | null) => Promise<void>
   /** Запомнить адресата на портале. Best-effort у вызывающего — исход влияет только на удобство. */
   rememberContact: (accessToken: string, domain: string, contact: BankContact) => Promise<void>
   /** Наш `client_id` для кабинета Альфы (из env). Пусто ⇒ инструкцию не собрать. */
   alfaClientId: () => string
+  /** Публичный адрес статики (`NUXT_PUBLIC_SITE_URL`) — из него строятся ссылки на картинки шагов.
+   *  Пусто ⇒ картинок не будет, текст уйдёт как прежде: инструкция самодостаточна и без них. */
+  siteUrl: () => string
   /** ВНУТРЕННЯЯ ссылка портала на экран ввода ключа для этого сотрудника (#19). `null` ⇒ собрать
    *  её нечем (не настроен секрет подписи или код приложения) — сообщение не отправляем. */
   keyScreenLink: (input: { memberId: string, domain: string, provider: BankProviderId, userId: string, expMs: number }) => string | null
@@ -93,6 +99,9 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
 
   let text: string | null
   let ttlMin: number | undefined
+  // ⚠ Картинки ТОЛЬКО у Альфы: у Приора владелец счёта ничего не выпускает руками — он открывает
+  // присланную ссылку и подтверждает согласие на сайте банка, и снимать там нечего.
+  let attach: ChatAttach | null = null
   if (provider === 'prior-by') {
     const ttlMs = input.ttlMs ?? CONNECT_STATE_TTL_MS
     const built = await buildConnectAuthorizeUrl(deps, {
@@ -121,6 +130,13 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
       return { status: 503, body: { error: 'bank client id is not configured on this server' } }
     }
     ttlMin = BANK_KEY_GRANT_TTL_HOURS * 60
+    attach = buildAlfaInviteAttach(deps.siteUrl())
+    // ⚠ Отсутствие картинок отправку НЕ отменяет (текст инструкции самодостаточен), но и молчать
+    // о нём нельзя: причина здесь ровно одна — адрес приложения непригоден для ссылки на картинку
+    // (`NUXT_PUBLIC_SITE_URL` — BUILD-TIME переменная, и не доехав до сборки, она даёт пусто).
+    // Снаружи это неотличимо от «портал не принял вложение», а чинится в совершенно другом месте,
+    // поэтому две причины обязаны различаться в логе.
+    if (!attach) deps.log?.('bank invite: картинки шагов не приложены — адрес приложения непригоден для ссылки')
   }
   if (!text) {
     // Сюда попадаем, только если ссылка не прошла проверку билдера — то есть мы собрали бы
@@ -129,7 +145,7 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
   }
 
   try {
-    await deps.sendMessage(gate.memberId, userId, text)
+    await deps.sendMessage(gate.memberId, userId, text, attach)
   } catch (e) {
     deps.log?.(`bank invite: chat delivery failed: ${describeUpstreamError(e)}`)
     return { status: 502, body: { error: 'portal did not accept the message' } }

@@ -11,6 +11,7 @@ function deps(over: Partial<SetupStatusDeps> = {}): SetupStatusDeps {
     countAccounts: async () => ({ connected: 2, pending: 0 }),
     pollEnabled: true,
     pollIntervalMin: 5,
+    autoEraseDays: 5,
     lastRunMs: async () => 1_700_000_000_000,
     ...over
   }
@@ -34,6 +35,7 @@ describe('handleSetupStatus', () => {
       pausedAccounts: 0,
       pollEnabled: true,
       pollIntervalMin: 5,
+      autoEraseDays: 5,
       lastRunMs: 1_700_000_000_000
     })
     // Portal settings stay with the client — a server copy could disagree with the open form.

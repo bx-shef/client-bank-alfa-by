@@ -125,6 +125,16 @@ export interface PortalSettings {
    *  (`crm.item.payment.pay` for a deal payment; `crm.item.update` to the configured
    *  paid stage `allocation.invoicePaidStageId` for an invoice). Opt-in, fail-safe default. */
   autoDistribute: boolean
+  /**
+   * Автоудаление дел, созданных приложением (#722).
+   *
+   * ⚠ Флаг УДАЛЯЕТ данные в CRM клиента без участия человека, поэтому default OFF и коэрс тот же
+   * строгий, что у `autoDistribute`: включает ТОЛЬКО литеральный `true`. Через сколько суток
+   * удалять — НЕ настройка: порог выводится из окна опроса (`autoEraseThresholdDays`), потому что
+   * слишком короткое значение возвращало бы удалённые дела следующим опросом (маркер дедупа живёт
+   * на самом деле, #259). Человеку остаётся один вопрос — да или нет.
+   */
+  autoEraseActivities: boolean
 }
 
 /** The single `app.option` key holding the JSON settings blob (versioned name). */
@@ -139,7 +149,7 @@ export function defaultRecognitionSettings(): RecognitionSettings {
 }
 
 export function defaultPortalSettings(): PortalSettings {
-  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false }
+  return { chat: defaultChatSettings(), errorChat: { dialogId: '' }, recognition: defaultRecognitionSettings(), allocation: {}, autoDistribute: false, autoEraseActivities: false }
 }
 
 /** Normalise the allocation-mutation config: keep only a non-blank, length-clamped
@@ -268,7 +278,10 @@ export function parsePortalSettings(raw: string | null | undefined): PortalSetti
     // Only a literal `true` enables auto-distribution — any other value (missing,
     // string, 1, …) is coerced to OFF, so a corrupt/partial blob never silently
     // arms a portal mutation (fail-safe default).
-    autoDistribute: obj.autoDistribute === true
+    autoDistribute: obj.autoDistribute === true,
+    // Тот же строгий литерал, и по той же причине: битый/частичный блоб не имеет права включить
+    // удаление дел в CRM клиента (#722).
+    autoEraseActivities: obj.autoEraseActivities === true
   }
 }
 

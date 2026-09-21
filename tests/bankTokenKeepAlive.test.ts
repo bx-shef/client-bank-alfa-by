@@ -8,7 +8,7 @@ import {
   EXPIRED_RETRY_INTERVAL_MS,
   expiredRetryDue,
   KEEP_ALIVE_BAND, accountsOnManyPortals, sharedAccountNotices } from '../server/utils/bankTokenKeepAlive'
-import { connectionHealth } from '../app/utils/bankTokenLifetime'
+import { abandonedPending, connectionHealth } from '../app/utils/bankTokenLifetime'
 
 // Мотив, а не только предмет: подключение Альфы, давшее первые 208 боевых операций, умерло за
 // ~16 часов — refresh банка живёт ~10 ч, а обновлял его только сам опрос по дороге (#488).
@@ -33,7 +33,7 @@ function acc(over: Partial<BankAccountInfo> = {}): BankAccountInfo {
     // ниже это закрепляет — но базовая фикстура описывает обычное подключение.
     pollPaused: false,
     id: 1,
-    lastAttemptAt: 0,
+    lastAttemptAt: 0, refreshRejectedAt: 0,
     consentExpiresAt: 0,
     ...over
   }
@@ -408,7 +408,7 @@ describe('угаданный срок жизни не хоронит подкл�
   const row = (provider: 'alfa-by' | 'prior-by', ageMs: number) => ({
     memberId: 'M', provider, accountKey: 'BY1',
     connectedAt: NOW - ageMs, expiresAt: NOW, hasRefresh: true, pollPaused: false,
-    id: 1, lastAttemptAt: 0, consentExpiresAt: 0, grantId: ''
+    id: 1, lastAttemptAt: 0, refreshRejectedAt: 0, consentExpiresAt: 0, grantId: ''
   })
 
   it('Приор старше своего УГАДАННОГО срока — остаётся в очереди на обновление, не в «истекло»', () => {
@@ -448,7 +448,7 @@ describe('истёкшее согласие не тратит запросы б�
   const row = (over: Record<string, unknown> = {}) => ({
     memberId: 'm1', provider: 'prior-by' as const, accountKey: 'BY01',
     connectedAt: T - 60_000, expiresAt: T + 600_000, hasRefresh: true, consentExpiresAt: 0,
-    id: 1, lastAttemptAt: 0, pollPaused: false, grantId: '', ...over
+    id: 1, lastAttemptAt: 0, refreshRejectedAt: 0, pollPaused: false, grantId: '', ...over
   })
 
   it('согласие истекло — в «expired», а не в «due», даже у свежего токена', () => {
@@ -493,7 +493,7 @@ describe('#576 пауза опроса НЕ останавливает прод�
 describe('подключение не хоронится без вопроса к банку (#489, живой прогон 2026-08-20)', () => {
   const row = (over: Partial<BankAccountInfo> = {}): BankAccountInfo => ({
     id: 1, memberId: 'M', provider: 'alfa-by', accountKey: 'BY09ALFA1',
-    connectedAt: 0, lastAttemptAt: 0, expiresAt: 0, hasRefresh: true, consentExpiresAt: 0,
+    connectedAt: 0, lastAttemptAt: 0, refreshRejectedAt: 0, expiresAt: 0, hasRefresh: true, consentExpiresAt: 0,
     pollPaused: false, grantId: '', ...over
   })
   const TTL = BANK_REFRESH_TTL_SEC['alfa-by'] * 1000
@@ -749,5 +749,46 @@ describe('счёт, подключённый с НЕСКОЛЬКИХ порта�
 
   it('счёт на одном портале строки не порождает', () => {
     expect(sharedAccountNotices([row('A', 'BY09')])).toEqual([])
+  })
+})
+
+// Ожидающее подключение, чей грант банк уже отверг, больше не долбит банк каждый час (#715).
+//
+// Замерено на живом прогоне: строка `~pending:` Приора получала `invalid_grant` на КАЖДОМ тике
+// продления и оставалась — свип #485 сносит её только по потолку возраста (двое суток), потому
+// что путь в `expired` открыт лишь ИЗМЕРЕННОМУ сроку, а у Приора срок — догадка.
+describe('#715 ожидающее подключение, отвергнутое банком', () => {
+  const rejected = { accountKey: '~pending:abc', provider: 'prior-by' as const, connectedAt: NOW - 9 * HOUR, refreshRejectedAt: NOW - HOUR }
+
+  it('в банк не ходим — обновлять нечего', () => {
+    const r = selectBankAccountsNearExpiry([acc(rejected)], NOW)
+    expect(r.due, 'отвергнутая ожидающая строка попала в план продления').toEqual([])
+    expect(r.expired).toHaveLength(1)
+  })
+
+  it('ГАРД: правило узкое — РАБОЧУЮ строку с тем же отказом продлевать продолжаем', () => {
+    // Цена поспешного вывода у рабочей строки — поход владельца счёта в интернет-банк, а у Альфы
+    // отказ вдобавок лечится переизданием пары ключом API. Мутация «снять проверку `~pending:`»
+    // обязана ронять этот тест.
+    const r = selectBankAccountsNearExpiry([acc({ ...rejected, accountKey: 'BY00BANK00000000000000000009' })], NOW)
+    expect(r.due).toHaveLength(1)
+  })
+
+  it('ГАРД: ожидающая строка БЕЗ отказа банка продлевается как прежде', () => {
+    // Иначе починка молча похоронила бы подключение, которое админ вот-вот доведёт до рабочего:
+    // «банк отверг» и «счёт ещё не выбран» — разные вещи.
+    const r = selectBankAccountsNearExpiry([acc({ ...rejected, refreshRejectedAt: 0 })], NOW)
+    expect(r.due).toHaveLength(1)
+  })
+
+  it('устаревшая метка (отказ ДО последней удачной пары) продление не блокирует', () => {
+    const r = selectBankAccountsNearExpiry([acc({ ...rejected, refreshRejectedAt: NOW - 20 * HOUR })], NOW)
+    expect(r.due).toHaveLength(1)
+  })
+
+  it('свип сносит такую строку сразу, не дожидаясь потолка возраста', () => {
+    // Вторая половина #715: продление её больше не трогает, а свип обязан её убрать — иначе она
+    // просто висела бы в базе. Работает через `connectionHealth` → `expired` (#713).
+    expect(abandonedPending(acc(rejected), NOW)).toBe(true)
   })
 })

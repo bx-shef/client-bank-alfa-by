@@ -40,10 +40,10 @@ export default defineEventHandler(async (event) => {
         // токеном нажавшего: иначе инструкция по доступу к деньгам компании приходила бы как
         // записка от коллеги, и спрашивали бы потом с него. Откат на `im.message.add` внутри
         // `postChatMessage` — там же, где он нужен остальным пяти видам сообщений.
-        sendMessage: async (memberId, dialogId, text) => {
+        sendMessage: async (memberId, dialogId, text, attach) => {
           const call = await livePortalSdkCall(memberId)
           if (!call) throw new Error('portal token is not available')
-          await postChatMessage(dialogId, text, call, memberId)
+          await postChatMessage(dialogId, text, call, memberId, attach)
         },
         // ⚠ Через ЕДИНСТВЕННЫЙ choke point записи `app.option` (#182), а не своим вызовом:
         // он же проверяет `profile.ADMIN`. Лишний `profile` на редкое ручное действие дешевле
@@ -55,6 +55,15 @@ export default defineEventHandler(async (event) => {
           if (res.status !== 200) throw new Error(`app.option.set failed: ${res.status}`)
         },
         alfaClientId: () => (process.env.ALFA_OAUTH_CLIENT_ID || '').trim(),
+        // ⚠ ПРЕЖНЕЕ ОБОСНОВАНИЕ ЗДЕСЬ БЫЛО НЕВЕРНЫМ и стоило двух заходов вслепую (#19). Оно
+        // гласило: «`NUXT_PUBLIC_SITE_URL` запекается в сборку, в окружении работающего
+        // контейнера её может не быть». Замерено 2026-09-19 — ровно наоборот: `nuxt build`
+        // кладёт в серверный бандл `"siteUrl": ""`, а настоящее значение Nitro берёт из
+        // ОКРУЖЕНИЯ на старте (`envPrefix: "NUXT_"`). Запекаются только ключи, которые
+        // `nuxt.config.ts` читает из `process.env` явно, — `siteUrl` к ним не относится.
+        // Поэтому `useRuntimeConfig()` и `process.env` здесь дали бы ОДНО И ТО ЖЕ, а пусто было
+        // потому, что переменной не было в финальной стадии `backend` образа (см. Dockerfile).
+        siteUrl: () => String(useRuntimeConfig().public.siteUrl || '').trim(),
         // ⚠ ВНУТРЕННЯЯ ссылка портала (#19) — та же механика, что у ссылок на экраны приложения:
         // `/marketplace/view/<код>/?params[place]=…`. Значит бухгалтера аутентифицирует САМ
         // Битрикс24, а подписанный грант лишь именует, кому она выдана; сервер сверит одно с

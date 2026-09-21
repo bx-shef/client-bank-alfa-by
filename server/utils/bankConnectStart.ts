@@ -97,24 +97,6 @@ export interface ConnectStartDeps {
   log?: (msg: string) => void
 }
 
-export interface ConnectStartInput {
-  accessToken: string
-  domain: string
-  provider: BankProviderId
-  /** The bank account number the admin is connecting — carried through the signed state to the
-   *  callback, which saves the token under it (bank_tokens.account_key), so the poller fetches that
-   *  exact account (it's also the Alfa `number=` statement param). ⚠ OPTIONAL, and the UI no longer
-   *  sends one at all (#482): asking up front misled, since the number never reached the bank. An
-   *  empty value lands the connection under a provisional key, to be named from the list later. */
-  accountKey: string
-  /** Random per-request nonce (correlation id in the state). */
-  nonce: string
-  /** Now, epoch ms (for the state expiry). */
-  nowMs: number
-  /** State lifetime (ms) — the OAuth round-trip window. */
-  ttlMs?: number
-}
-
 // Re-exported from the shared module so the UI can quote the SAME window without importing server
 // code — the number is user-facing copy on one side and a signature claim on the other (#461).
 export { CONNECT_STATE_TTL_MS }
@@ -182,32 +164,14 @@ export async function gateConnectAdmin(
 }
 
 /**
- * Build the bank authorize URL (with a signed connect state) for the in-portal admin to open.
- * Returns 200 + `{ authorizeUrl }`, or a 4xx/5xx `{ error }`. Does NOT itself redirect — the route
- * returns the URL as JSON and the frontend navigates the top window.
- */
-export async function handleBankConnectStart(deps: ConnectStartDeps, input: ConnectStartInput): Promise<ConnectStartResult> {
-  const { accessToken, domain, provider, accountKey, nonce, nowMs } = input
-  if (!accessToken || !domain) {
-    return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
-  }
-  if (!provider) return { status: 400, body: { error: 'provider required' } }
-  const pre = precheckConnect(deps, provider, accountKey)
-  if (pre) return pre
-
-  const gate = await gateConnectAdmin(deps, { accessToken, domain })
-  if (!gate.ok) return gate.res
-  return buildConnectAuthorizeUrl(deps, { memberId: gate.memberId, provider, accountKey, nonce, nowMs, ttlMs: input.ttlMs })
-}
-
-/**
  * Проверки, которые можно сделать ДО единственного похода в портал: форма счёта, поддерживает ли
  * банк этот способ, настроен ли он, есть ли чем подписать state.
  *
- * ⚠ Вынесены отдельно потому, что вызывающих у них теперь ДВА — кнопка «Подключить» и отправка
- * приглашения владельцу счёта (`bankInviteSend.ts`). Вторая копия этой последовательности молча
- * разошлась бы с первой, и расхождение вылезло бы там, где его труднее всего заметить: один путь
- * отказывает заранее, другой уводит человека в банк и падает на возврате.
+ * ⚠ Вызывающий теперь ОДИН — отправка приглашения владельцу счёта (`bankInviteSend.ts`): кнопка
+ * «Подключить» снята вместе с самостоятельным подключением (решение владельца 2026-09-17).
+ * Отдельной функцией проверки остаются потому, что порядок в них несущий: они идут ДО
+ * единственного похода в портал, и слияние их обратно в вызывающего вернуло бы поход за данными
+ * ради запроса, который всё равно будет отвергнут.
  *
  * `null` ⇒ можно идти дальше.
  */

@@ -15,6 +15,7 @@ import { listBankAccountInfoForPortal } from '../utils/bankTokenStore'
 import { getImportResult, getRecognitionMisconfig } from '../utils/importResultStore'
 import { summarizeBankHealth, unhealthyConnections } from '../../app/utils/bankHealthOverview'
 import { queueEnabled } from '../queue/connection'
+import { autoEraseThresholdDays } from '../../app/utils/autoEraseActivities'
 import { withFrameRouteSpan } from '../utils/frameRouteSpan'
 import { httpOutcomeForStatus } from '../utils/telemetryAttributes'
 import { dbQuery } from '../db/client'
@@ -65,6 +66,9 @@ function liveDeps(): SetupStatusDeps {
     alfaClientId: (process.env.ALFA_OAUTH_CLIENT_ID || '').trim(),
     pollEnabled: (process.env.CRON_REAL_POLL ?? '0') === '1' && queueEnabled(),
     pollIntervalMin: Number.isFinite(interval) && interval > 0 ? Math.floor(interval) : 5,
+    // Порог автоудаления дел (#722) — тем же правилом, что им пользуется крон. Считается ЗДЕСЬ, а
+    // не в браузере: он выводится из окна опроса, то есть из нашей env.
+    autoEraseDays: autoEraseThresholdDays(Number(process.env.CRON_LOOKBACK_DAYS || 1)),
     // «Моя компания» с расчётным счётом (#493) — тем же фрейм-токеном админа. Отказ проглатывает
     // сам хендлер: строка тогда не рисуется, а остальной экран остаётся полезным.
     myCompany: async (domain, accessToken) =>

@@ -101,14 +101,15 @@ export interface FetchJob {
 /** Parse one uploaded client-bank file (manual import). `fileHash` dedups reuploads.
  *  The file rides IN the packet as base64 (`contentBase64`) — statement exports are
  *  small (≤ MAX_UPLOAD_BYTES, 2 МБ), so we don't need a separate file store; the
- *  worker decodes windows-1251 and parses. `userId` is the B24 user who uploaded
+ *  worker decodes it (encoding detected, #700) and parses. `userId` is the B24 user who uploaded
  *  (attribution / logging). */
 export interface ParseJob {
   memberId: string
   providerId: BankProviderId
   /** Original file name (logging / result display). */
   fileName: string
-  /** File bytes (windows-1251), base64-encoded — rides in the packet, no file store. */
+  /** Raw file bytes, base64-encoded — rides in the packet, no file store. Encoding is
+   *  detected on decode (#700): windows-1251, CP866 or UTF-8 depending on the bank. */
   contentBase64: string
   /** Content hash — same file re-uploaded → same job id → no duplicate parse. */
   fileHash: string

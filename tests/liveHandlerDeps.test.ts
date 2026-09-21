@@ -217,3 +217,59 @@ describe('liveHandlerDeps — parseFile (manual-import parse authority)', () => 
     expect(items[0]).toHaveProperty('amount')
   })
 })
+
+// Кросс-прогонная память «клиент не определён» (#696). Проверяем ТРИ свойства живой проводки,
+// которых не видит ни один чистый тест: демо-гейт, форму ключа и НАПРАВЛЕНИЕ ОТКАЗА при сбое Redis.
+//
+// ⚠ Последнее — не косметика: разверни кто-то `catch → true` в `false`, и при любом сбое Redis все
+// предупреждения о неопознанных операциях замолчали бы молча и навсегда, а прежние тесты этого не
+// заметили бы (находка панели ревью, 2026-09-15).
+//
+// ⚠ Тест обязан быть НЕ-ВАКУУМНЫМ: без подмены `claimCooldownSlot` настоящий вызов и так упал бы
+// (Redis в прогоне нет) и вернул `true` — то есть «зелено» не доказывало бы ничего. Поэтому в каждом
+// случае проверяется, что подмена ДЕЙСТВИТЕЛЬНО перехватила вызов. И подменять надо ДО импорта
+// воркера: он забирает `claimCooldownSlot` именованным импортом, и `spyOn` по уже загруженному
+// модулю не перехватывает (замерено — тест на этом честно краснел).
+async function withClaimSlot(impl: (key: string, ttl: number) => Promise<boolean>) {
+  const seen: string[] = []
+  vi.resetModules()
+  vi.doMock('../server/queue/connection', async importOriginal => ({
+    ...(await importOriginal<typeof import('../server/queue/connection')>()),
+    claimCooldownSlot: async (key: string, ttl: number) => {
+      seen.push(key)
+      return impl(key, ttl)
+    }
+  }))
+  const { liveHandlerDeps } = await import('../server/queue/worker')
+  return { claim: liveHandlerDeps().claimUnmatchedNotice, seen }
+}
+
+describe('liveHandlerDeps — claimUnmatchedNotice (#696)', () => {
+  afterEach(() => {
+    vi.doUnmock('../server/queue/connection')
+    vi.resetModules()
+  })
+
+  it('сбой Redis → true (шлём), и это видно в логе', async () => {
+    const { claim, seen } = await withClaimSlot(async () => {
+      throw new Error('redis down')
+    })
+    const read = captureLog()
+    expect(await claim('M1', 'BY55OUR|d1', 'BY55OUR')).toBe(true)
+    expect(seen).toHaveLength(1) // подмена сработала — тест не вакуумный
+    expect(read()).toContain('unmatched claim failed')
+  })
+
+  it('Redis ответил «уже занято» → false (молчим), ключ уходит хешированным', async () => {
+    const { claim, seen } = await withClaimSlot(async () => false)
+    expect(await claim('M1', 'BY55OUR|d1', 'BY55OUR')).toBe(false)
+    expect(seen[0]).toMatch(/^unmatched-notice:M1:[0-9a-f]{16}$/)
+    expect(seen[0]).not.toContain('BY55OUR')
+  })
+
+  it('демо-операция до Redis не доходит вовсе', async () => {
+    const { claim, seen } = await withClaimSlot(async () => true)
+    expect(await claim('M1', `${DEMO_ACCOUNT_PREFIX}1|d1`, `${DEMO_ACCOUNT_PREFIX}1`)).toBe(true)
+    expect(seen).toEqual([])
+  })
+})
