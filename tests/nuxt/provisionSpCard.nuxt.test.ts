@@ -89,6 +89,22 @@ describe('ProvisionSpCard interaction', () => {
     expect(wrapper.find('[data-testid="provision-error"]').exists()).toBe(false)
   })
 
+  // ⚠ Об успехе сообщаем родителю — по нему перечитывается журнал распределения под карточкой (#19).
+  // Без этого до перезагрузки страницы рядом стояли «настроены» и «ещё не настроены».
+  it('успех → событие provisioned, отказ → никакого события', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true })
+    const ok = await mountReady()
+    await ok.find('[data-testid="provision-button"]').trigger('click')
+    await flushPromises()
+    expect(ok.emitted('provisioned')).toHaveLength(1)
+
+    fetchMock.mockRejectedValueOnce({ statusCode: 502 })
+    const failed = await mountReady()
+    await failed.find('[data-testid="provision-button"]').trigger('click')
+    await flushPromises()
+    expect(failed.emitted('provisioned')).toBeUndefined()
+  })
+
   it('already provisioned (created:false) → "на месте" message', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: false, addedFields: 0, storedChanged: false })
     const wrapper = await mountReady()

@@ -18,9 +18,14 @@ import {
   paymentSpEtid,
   planMissingUserFields,
   withSpProvision,
+  withStoredSpIds,
+  keepStoredSpIds,
+  mergeFormSettings,
   PAYMENT_SP_ID_CONFIG_KEY,
-  DISTRIBUTION_SP_ID_CONFIG_KEY
+  DISTRIBUTION_SP_ID_CONFIG_KEY,
+  PROVISIONED_SP_KEYS
 } from '~/config/distributionSp'
+import { defaultPortalSettings, parsePortalSettings, serializePortalSettings } from '~/utils/settings'
 
 // Pure SP-structure builders (#109 §9.1). Assert the crm.type.add shape + field codes so the
 // provisioning transport (and reviewers) have one source of truth for the SP shape.
@@ -242,5 +247,92 @@ describe('withSpProvision / hasSpEtids', () => {
     expect(hasSpEtids({})).toBe(false)
     // entityTypeIds present but type ids missing → incomplete → false
     expect(hasSpEtids({ [PAYMENT_SP_CONFIG_KEY]: '1044', [DISTRIBUTION_SP_CONFIG_KEY]: '1046' })).toBe(false)
+  })
+})
+
+// ⚠ Форма настроек держит блок, прочитанный при открытии, и «Сохранить» пишет его целиком (#19).
+// Id смарт-процессов пишет провижининг в обход формы, поэтому при записи формы они берутся из
+// ХРАНИМОГО блока: иначе смарт-процессы в CRM есть, а приложение их «не видит».
+describe('keepStoredSpIds / withStoredSpIds', () => {
+  const STORED = withSpProvision({}, { entityTypeId: 1042, id: 16 }, { entityTypeId: 1044, id: 17 })
+
+  it('форма без id (открыта до провижининга) не затирает записанные провижинингом', () => {
+    const out = keepStoredSpIds({ 'smart-entity': '1030' }, STORED)
+    expect(out['smart-entity']).toBe('1030')
+    expect(out[PAYMENT_SP_CONFIG_KEY]).toBe('1042')
+    expect(out[PAYMENT_SP_ID_CONFIG_KEY]).toBe('16')
+    expect(out[DISTRIBUTION_SP_CONFIG_KEY]).toBe('1044')
+    expect(out[DISTRIBUTION_SP_ID_CONFIG_KEY]).toBe('17')
+  })
+
+  it('устаревшие id из формы не побеждают хранимые — и не воскрешаются, если хранимых нет', () => {
+    const stale = withSpProvision({}, { entityTypeId: 1038, id: 14 }, { entityTypeId: 1040, id: 15 })
+    expect(keepStoredSpIds(stale, STORED)[PAYMENT_SP_CONFIG_KEY]).toBe('1042')
+    const none = keepStoredSpIds(stale, {})
+    for (const k of [PAYMENT_SP_CONFIG_KEY, PAYMENT_SP_ID_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY, DISTRIBUTION_SP_ID_CONFIG_KEY]) {
+      expect(none[k], k).toBeUndefined()
+    }
+  })
+
+  it('прочие поля карты — из формы: их редактирует человек', () => {
+    const out = keepStoredSpIds({ 'deal-field': 'UF_NEW' }, { ...STORED, 'deal-field': 'UF_OLD' })
+    expect(out['deal-field']).toBe('UF_NEW')
+  })
+
+  it('провижининг пишет ТОЛЬКО ключи из списка: новый серверный ключ обязан попасть в список', () => {
+    // Иначе форма молча затирала бы его своей старой копией — ровно исходный дефект, с новым ключом.
+    const written = Object.keys(withSpProvision({}, { entityTypeId: 1, id: 2 }, { entityTypeId: 3, id: 4 }))
+    expect(written.sort()).toEqual([...PROVISIONED_SP_KEYS].sort())
+  })
+
+  it('на уровне блока настроек трогает только карту, вход не мутирует', () => {
+    const incoming = defaultPortalSettings()
+    incoming.autoDistribute = true
+    const stored = defaultPortalSettings()
+    stored.recognition.configFields = STORED
+    const out = withStoredSpIds(incoming, stored)
+    expect(out.autoDistribute).toBe(true)
+    expect(out.recognition.configFields[PAYMENT_SP_CONFIG_KEY]).toBe('1042')
+    expect(incoming.recognition.configFields[PAYMENT_SP_CONFIG_KEY]).toBeUndefined()
+  })
+})
+
+// Слияние маршрута проверяется ВЫЗОВОМ: регулярка по тексту маршрута пропускала перепутанные
+// аргументы, то есть ровно исходный дефект (находка ревью QA).
+describe('mergeFormSettings', () => {
+  const formWith = (configFields: Record<string, string>) => {
+    const s = defaultPortalSettings()
+    s.chat.dialogId = 'chat7'
+    s.recognition.configFields = configFields
+    return s
+  }
+  const storedWith = (configFields: Record<string, string>): string => {
+    const s = defaultPortalSettings()
+    s.recognition.configFields = configFields
+    return serializePortalSettings(s)
+  }
+  const STORED_IDS = withSpProvision({}, { entityTypeId: 1042, id: 16 }, { entityTypeId: 1044, id: 17 })
+
+  it('форма без id + хранимые id ⇒ пишутся id из хранимого и остальное из формы', () => {
+    const out = parsePortalSettings(mergeFormSettings(formWith({ 'smart-entity': '1030' }))(storedWith(STORED_IDS)))
+    expect(out.chat.dialogId).toBe('chat7')
+    expect(out.recognition.configFields['smart-entity']).toBe('1030')
+    expect(out.recognition.configFields[PAYMENT_SP_CONFIG_KEY]).toBe('1042')
+    expect(out.recognition.configFields[DISTRIBUTION_SP_ID_CONFIG_KEY]).toBe('17')
+  })
+
+  it('устаревшие id из формы не пишутся, если в хранимом их нет', () => {
+    const stale = withSpProvision({}, { entityTypeId: 1038, id: 14 }, { entityTypeId: 1040, id: 15 })
+    const out = parsePortalSettings(mergeFormSettings(formWith(stale))(storedWith({})))
+    expect(out.recognition.configFields[PAYMENT_SP_CONFIG_KEY]).toBeUndefined()
+  })
+
+  it('первое сохранение (хранимого нет) и битое хранимое — форма пишется, id не выдумываются', () => {
+    for (const stored of [null, '{не json']) {
+      const out = parsePortalSettings(mergeFormSettings(formWith({ 'smart-entity': '1030' }))(stored))
+      expect(out.chat.dialogId, String(stored)).toBe('chat7')
+      expect(out.recognition.configFields['smart-entity'], String(stored)).toBe('1030')
+      expect(out.recognition.configFields[PAYMENT_SP_CONFIG_KEY], String(stored)).toBeUndefined()
+    }
   })
 })

@@ -97,10 +97,22 @@ describe('Приорбанк: ссылка выпускается ЗДЕСЬ', (
     expect(d.sendMessage).not.toHaveBeenCalled()
   })
 
-  it('нет секрета подписи ⇒ 503 до всего остального', async () => {
+  it('нет секрета подписи ⇒ 503 до всего остального, текст называет переменную', async () => {
     const d = deps({ secret: '' })
-    expect((await handleSendBankInvite(d, input)).status).toBe(503)
+    const res = await handleSendBankInvite(d, input)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('SESSION_SECRET')
     expect(d.memberIdByDomain).not.toHaveBeenCalled()
+  })
+
+  // ⚠ У Альфы тот же класс отказов уже был по-русски, а Приор на том же экране отвечал
+  // по-английски — разница была бы видна сразу (находка ревью, #19).
+  it('Приор не настроен на сервере ⇒ 400 с текстом, называющим переменные', async () => {
+    const d = deps({ priorConfig: () => null })
+    const res = await handleSendBankInvite(d, input)
+    expect(res.status).toBe(400)
+    expect(String(res.body.error)).toContain('PRIOR_OAUTH_')
+    expect(d.sendMessage).not.toHaveBeenCalled()
   })
 })
 
@@ -123,8 +135,20 @@ describe('Альфа-Банк: инструкция вместо ссылки', 
   // приводит владельца счёта к обязательному полю, которое нечем заполнить.
   it('без client_id ⇒ 503 и ничего не отправлено', async () => {
     const d = deps({ alfaClientId: () => '' })
-    expect((await handleSendBankInvite(d, alfa)).status).toBe(503)
+    const res = await handleSendBankInvite(d, alfa)
+    expect(res.status).toBe(503)
     expect(d.sendMessage).not.toHaveBeenCalled()
+    // ⚠ Текст доходит до экрана администратора КАК ЕСТЬ (находка владельца 2026-09-26): он обязан
+    // быть по-русски и называть переменную — иначе непонятно ни что не так, ни кто это чинит.
+    expect(String(res.body.error)).toContain('ALFA_OAUTH_CLIENT_ID')
+    expect(String(res.body.error)).toMatch(/[а-я]/)
+  })
+
+  it('без секрета подписи ⇒ 503 с русским текстом, называющим переменную', async () => {
+    const d = deps({ keyScreenLink: vi.fn(() => null) })
+    const res = await handleSendBankInvite(d, alfa)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('SESSION_SECRET')
   })
 
   // У Альфы authorize-потока нет вовсе, значит и проверка «этот банк подключается ключом» к

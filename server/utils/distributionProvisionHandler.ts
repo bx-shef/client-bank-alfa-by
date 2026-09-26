@@ -55,18 +55,26 @@ export interface ProvisionDistributionOutcome extends ProvisionResult {
  * Idempotent: a re-run after both ids are stored short-circuits provisioning to the `known` path
  * and writes nothing (`storedChanged=false`). A transport/persist error propagates (the caller —
  * install/route — surfaces it for retry). Never mutates the loaded settings object in place.
+ *
+ * ⚠ The blob is RE-READ right before the write (#19). Provisioning takes tens of seconds, and the
+ * settings form writes the same `app.option` blob: a «Сохранить» landing in between would be rolled
+ * back by the copy read at the start — the chat, the exclusions, the recognition map silently
+ * returning to their old values. Only the SP keys are ours to write; everything else comes from the
+ * fresh read. The mirror image of `withStoredSpIds` on the form's side: each writer owns its keys and
+ * takes the rest from what is stored NOW, which narrows the race to the gap between two calls.
  */
 export async function handleProvisionDistribution(deps: ProvisionDistributionDeps): Promise<ProvisionDistributionOutcome> {
   return deps.withLock(async () => {
     const settings = await deps.loadSettings()
-    const configFields = settings.recognition.configFields
     const known: KnownSpIds = {
-      payment: paymentSpRef(configFields),
-      distribution: distributionSpRef(configFields)
+      payment: paymentSpRef(settings.recognition.configFields),
+      distribution: distributionSpRef(settings.recognition.configFields)
     }
 
     const result = await deps.provision(known)
 
+    const fresh = await deps.loadSettings()
+    const configFields = fresh.recognition.configFields
     const merged = withSpProvision(configFields, result.payment, result.distribution)
     const storedChanged
       = merged[PAYMENT_SP_CONFIG_KEY] !== configFields[PAYMENT_SP_CONFIG_KEY]
@@ -76,8 +84,8 @@ export async function handleProvisionDistribution(deps: ProvisionDistributionDep
 
     if (storedChanged) {
       await deps.saveSettings({
-        ...settings,
-        recognition: { ...settings.recognition, configFields: merged }
+        ...fresh,
+        recognition: { ...fresh.recognition, configFields: merged }
       })
     }
 

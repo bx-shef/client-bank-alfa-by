@@ -60,15 +60,21 @@ describe('что уходит в банк', () => {
     expect(body.get('redirect_uri')).toBeNull()
   })
 
-  it('провайдер не настроен — 400 БЕЗ обращения к банку', async () => {
+  // ⚠ Оба отказа — настройка СЕРВЕРА, и текст доходит до экрана владельца счёта как есть (#19):
+  // по-английски он не говорил ни что не так, ни кто это чинит.
+  it('провайдер не настроен — 400 БЕЗ обращения к банку, текст называет переменные', async () => {
     const { d, sent } = deps({ config: () => null })
-    expect((await connect(d)).status).toBe(400)
+    const res = await connect(d)
+    expect(res.status).toBe(400)
+    expect(String(res.body.error)).toContain('ALFA_OAUTH_TOKEN_URL')
     expect(sent).toHaveLength(0)
   })
 
-  it('нет client_secret — 503 fail-closed', async () => {
+  it('нет client_secret — 503 fail-closed, текст называет переменную', async () => {
     const { d, sent } = deps({ clientSecret: () => '' })
-    expect((await connect(d)).status).toBe(503)
+    const res = await connect(d)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('ALFA_OAUTH_CLIENT_SECRET')
     expect(sent).toHaveLength(0)
   })
 

@@ -92,6 +92,16 @@ describe('приём ключа', () => {
     expect(saved.apiKey).toBe('k'.repeat(64))
   })
 
+  // Провайдер берётся ИЗ ГРАНТА: грант, выданный другому банку, ключ Альфы не подключает.
+  it('грант другого банка ⇒ 400 по-русски, в банк не ходим', async () => {
+    const d = deps()
+    const token = signKeyGrant({ ...GRANT, provider: 'prior-by' }, SECRET)
+    const res = await handleSubmitBankKey(d, { ...sub, token })
+    expect(res.status).toBe(400)
+    expect(String(res.body.error)).toMatch(/другого банка/)
+    expect(d.exchange).not.toHaveBeenCalled()
+  })
+
   // ⚠ Форму ключа проверяем ДО гейта: пустое поле — самый частый исход, и он не должен стоить
   // ни обращения в портал, ни разбора подписи.
   it('пустой ключ ⇒ 400 без проверки гранта', async () => {
@@ -139,8 +149,10 @@ describe('уведомление открытых экранов', () => {
 })
 
 describe('состояние сервера', () => {
-  it('без client_id экран не показываем ⇒ 503', async () => {
-    expect((await handleKeyRequestInfo(deps({ clientId: () => '' }), req)).status).toBe(503)
+  it('без client_id экран не показываем ⇒ 503, и текст называет переменную по-русски', async () => {
+    const res = await handleKeyRequestInfo(deps({ clientId: () => '' }), req)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('ALFA_OAUTH_CLIENT_ID')
   })
 
   it('без секрета подписи любой грант негоден ⇒ 403', async () => {

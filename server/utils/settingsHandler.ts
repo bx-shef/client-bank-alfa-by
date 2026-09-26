@@ -54,14 +54,28 @@ export async function verifyFrameAdmin(io: SettingsIO, accessToken: string, doma
  * form from non-admins (`useIsAdmin`), but that is cosmetic — this route is the real authority, so a
  * non-admin (or anyone replaying a frame token) must be rejected HERE. Gate is at the single write
  * choke point, so every write route (chat-settings) is covered and a new one can't forget it.
+ *
+ * `merge` builds the final value from the STORED one (#19): part of the settings blob is written by
+ * provisioning, not by the form, and a blind form write would overwrite it with the form's stale copy
+ * (see `keepStoredSpIds`). The stored value is read AFTER the admin check, so a non-admin costs the
+ * portal no extra call. A failed read ⇒ 502 and NOTHING is written: writing blind is exactly the
+ * failure this guards against.
  */
-export async function handleWriteSetting(io: SettingsIO, accessToken: string, domain: string, value: string, key: string): Promise<HandlerResult> {
+export async function handleWriteSetting(
+  io: SettingsIO,
+  accessToken: string,
+  domain: string,
+  value: string,
+  key: string,
+  merge?: (stored: string | null) => string
+): Promise<HandlerResult> {
   if (!accessToken || !domain) return { status: 400, body: { error: 'frame auth (Bearer token + domain) required' } }
   const admin = await verifyFrameAdmin(io, accessToken, domain)
   if (!admin.ok) return { status: admin.status ?? 502, body: { error: 'upstream error' } }
   if (!admin.isAdmin) return { status: 403, body: { error: 'settings write requires a portal administrator' } }
   try {
-    await io.callRest(domain, accessToken, 'app.option.set', { options: { [key]: value } })
+    const final = merge ? merge(pickAppOption(await io.callRest(domain, accessToken, 'app.option.get', {}), key)) : value
+    await io.callRest(domain, accessToken, 'app.option.set', { options: { [key]: final } })
     return { status: 200, body: { ok: true } }
   } catch {
     return { status: 502, body: { error: 'upstream error' } }
