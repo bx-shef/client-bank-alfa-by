@@ -9,7 +9,7 @@ import { bearerToken, handleWriteSetting } from '../utils/settingsHandler'
 import { withSpan } from '../utils/telemetrySpan'
 import { httpOutcomeForStatus, portalHash } from '../utils/telemetryAttributes'
 import { SETTINGS_KEY, parsePortalSettings, serializePortalSettings, type PortalSettings } from '../../app/utils/settings'
-import { withStoredSpIds } from '../../app/config/distributionSp'
+import { mergeFormSettings } from '../../app/config/distributionSp'
 
 // Wrapped in a manual OTel span (телеметрия, DEFAULT OFF): latency + PII-safe outcome (incl. the
 // admin-gate `forbidden`) + hashed portal id. The settings body is NEVER attached to the span.
@@ -36,7 +36,7 @@ export default defineEventHandler(async (event) => {
       // would otherwise wipe them on «Сохранить» — the SPs exist in the CRM, the app no longer sees them.
       const res = await handleWriteSetting(
         { callRest: frameRestCall }, token, domain, serializePortalSettings(incoming), SETTINGS_KEY,
-        stored => serializePortalSettings(withStoredSpIds(incoming, parsePortalSettings(stored)))
+        mergeFormSettings(incoming)
       )
       status = res.status
       setResponseStatus(event, status)

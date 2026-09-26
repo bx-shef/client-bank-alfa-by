@@ -116,7 +116,7 @@ export async function handleSubmitBankKey(deps: KeySubmitDeps, input: KeySubmitI
   if (!gate.ok) return gate.res
   // ⚠ Провайдер берём ИЗ ГРАНТА, а не из тела запроса: тело пишет клиент, грант подписан нами.
   if (gate.grant.provider !== provider) {
-    return { status: 400, body: { error: `provider ${gate.grant.provider} not available for key connect` } }
+    return { status: 400, body: { error: 'эта ссылка выдана для подключения другого банка — попросите администратора прислать новую' } }
   }
 
   const res = await exchangeAndSaveKey(deps, {

@@ -97,10 +97,22 @@ describe('Приорбанк: ссылка выпускается ЗДЕСЬ', (
     expect(d.sendMessage).not.toHaveBeenCalled()
   })
 
-  it('нет секрета подписи ⇒ 503 до всего остального', async () => {
+  it('нет секрета подписи ⇒ 503 до всего остального, текст называет переменную', async () => {
     const d = deps({ secret: '' })
-    expect((await handleSendBankInvite(d, input)).status).toBe(503)
+    const res = await handleSendBankInvite(d, input)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('SESSION_SECRET')
     expect(d.memberIdByDomain).not.toHaveBeenCalled()
+  })
+
+  // ⚠ У Альфы тот же класс отказов уже был по-русски, а Приор на том же экране отвечал
+  // по-английски — разница была бы видна сразу (находка ревью, #19).
+  it('Приор не настроен на сервере ⇒ 400 с текстом, называющим переменные', async () => {
+    const d = deps({ priorConfig: () => null })
+    const res = await handleSendBankInvite(d, input)
+    expect(res.status).toBe(400)
+    expect(String(res.body.error)).toContain('PRIOR_OAUTH_')
+    expect(d.sendMessage).not.toHaveBeenCalled()
   })
 })
 

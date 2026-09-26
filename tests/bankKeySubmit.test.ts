@@ -92,6 +92,16 @@ describe('приём ключа', () => {
     expect(saved.apiKey).toBe('k'.repeat(64))
   })
 
+  // Провайдер берётся ИЗ ГРАНТА: грант, выданный другому банку, ключ Альфы не подключает.
+  it('грант другого банка ⇒ 400 по-русски, в банк не ходим', async () => {
+    const d = deps()
+    const token = signKeyGrant({ ...GRANT, provider: 'prior-by' }, SECRET)
+    const res = await handleSubmitBankKey(d, { ...sub, token })
+    expect(res.status).toBe(400)
+    expect(String(res.body.error)).toMatch(/другого банка/)
+    expect(d.exchange).not.toHaveBeenCalled()
+  })
+
   // ⚠ Форму ключа проверяем ДО гейта: пустое поле — самый частый исход, и он не должен стоить
   // ни обращения в портал, ни разбора подписи.
   it('пустой ключ ⇒ 400 без проверки гранта', async () => {

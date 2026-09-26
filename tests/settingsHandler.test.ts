@@ -199,11 +199,13 @@ describe('handleWriteSetting — слияние с хранимым', () => {
 
 // ⚠ Маршрут формы ОБЯЗАН собирать запись через хранимые id смарт-процессов: поведенческие тесты
 // выше проверяют механизм, а забытый аргумент в маршруте они не увидят (роут — `defineEventHandler`
-// поверх живого транспорта).
+// поверх живого транспорта). Само слияние вынесено в `mergeFormSettings` и проверяется ВЫЗОВОМ
+// (`distributionSp.test.ts`): прежняя регулярка по телу замыкания пропускала перепутанные
+// аргументы. Здесь остаётся только проводка — ровно то, чего вызовом не проверить.
 describe('маршрут сохранения настроек', () => {
-  it('chat-settings.post передаёт в запись слияние с хранимыми id смарт-процессов', () => {
+  it('chat-settings.post передаёт в запись слияние присланного с хранимым', () => {
     const src = readFileSync('server/api/chat-settings.post.ts', 'utf8')
-    expect(src).toMatch(/handleWriteSetting\([\s\S]*SETTINGS_KEY,\s*stored\s*=>[\s\S]*withStoredSpIds\(/)
+    expect(src).toMatch(/handleWriteSetting\([\s\S]*SETTINGS_KEY,\s*mergeFormSettings\(incoming\)\s*\)/)
   })
 })
 

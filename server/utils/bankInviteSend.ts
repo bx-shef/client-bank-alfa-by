@@ -26,7 +26,7 @@ import {
 import { buildAlfaInvite, buildAlfaInviteGuide, buildPriorInvite } from '../../app/utils/bankConnectInvite'
 import type { ChatAttachment } from '../../app/utils/chatAttach'
 import { isValidPortalUserId, type BankContact } from '../../app/utils/bankContact'
-import { buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
+import { SESSION_SECRET_MISSING, buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
 import { describeUpstreamError } from './logSanitize'
 import { ALFA_CLIENT_ID_MISSING } from './bankConnectKey'
 import type { BankProviderId } from '../../app/types/statement'
@@ -124,7 +124,7 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
     if (!link) {
       // Тот же класс, что у `client_id` ниже: настройка СЕРВЕРА, и сказать это надо по-русски —
       // английский текст доезжает до экрана администратора как есть.
-      return { status: 503, body: { error: 'на сервере приложения не задан секрет подписи ссылок (переменная SESSION_SECRET) — это настройка сервера приложения, а не портала' } }
+      return { status: 503, body: { error: SESSION_SECRET_MISSING } }
     }
     const alfa = { clientId: deps.alfaClientId(), link, ttlHours: BANK_KEY_GRANT_TTL_HOURS }
     text = buildAlfaInvite(alfa)

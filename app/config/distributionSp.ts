@@ -10,7 +10,7 @@
 //  - DISTRIBUTIONS ledger: one child element per allocation. NO stages, minimal — it is an
 //    accounting row (amount = `opportunity`, links to the payment + target, marker for idempotency).
 
-import type { PortalSettings } from '~/utils/settings'
+import { parsePortalSettings, serializePortalSettings, type PortalSettings } from '~/utils/settings'
 
 /** Stable titles — used both as the created SP title AND as the fallback marker to recover the
  *  entityTypeId (`findSmartProcessByTitle`) when the stored per-portal config is missing. */
@@ -457,6 +457,22 @@ export function withStoredSpIds(incoming: PortalSettings, stored: PortalSettings
       configFields: keepStoredSpIds(incoming.recognition.configFields, stored.recognition.configFields)
     }
   }
+}
+
+/**
+ * Слияние для маршрута сохранения формы: хранимая строка `app.option` → итоговая строка к записи
+ * (передаётся в `handleWriteSetting(…, merge)`).
+ *
+ * ⚠ Вынесено из маршрута, чтобы проверять ВЫЗОВОМ, а не текстом: маршрут — `defineEventHandler`
+ * поверх живого транспорта, и проверка регуляркой ловила только забытый аргумент. Перепутанные
+ * аргументы или игнорируемое хранимое (`withStoredSpIds(incoming, incoming)`) она пропускала
+ * зелёными — то есть ровно исходный дефект.
+ * ⚠ Пустое или битое хранимое — это первое сохранение портала или блок другой версии:
+ * `parsePortalSettings` отдаёт умолчания, и id смарт-процессов просто не восстанавливаются — взять
+ * их неоткуда, а из формы они не берутся никогда.
+ */
+export function mergeFormSettings(incoming: PortalSettings): (stored: string | null) => string {
+  return stored => serializePortalSettings(withStoredSpIds(incoming, parsePortalSettings(stored)))
 }
 
 /** Whether `configFields` already stores BOTH provisioned SP refs COMPLETELY (entityTypeId AND type
