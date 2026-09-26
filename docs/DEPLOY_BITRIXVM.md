@@ -143,7 +143,14 @@ REPO=<имя-клиентского-репо>
 
 ### 1b. Копия клиентского репозитория на сервере
 
-Под **`bitrix`**. Ключ доступа — сперва ключ, потом копия:
+Сперва под **root** — `make`: на bitrix-env его нет из коробки (замерено на боевой ВМ:
+`make: command not found`), а все операции со стеком идут через него.
+
+```bash
+yum install -y make
+```
+
+Дальше под **`bitrix`**. Ключ доступа — сперва ключ, потом копия:
 
 ```bash
 su - bitrix
@@ -153,7 +160,15 @@ cat ~/bank-app-deploy/deploy_key.pub
 ```
 
 Строку `ssh-ed25519 …` — в клиентский репозиторий: `Settings → Deploy keys → Add deploy key`,
-**без** галки `Allow write access`. Затем:
+**без** галки `Allow write access`.
+
+⚠ `ssh-keygen` **повторно не запускать.** На вопрос `Overwrite (y/n)?` отвечать `n`: `y`
+молча заменит ключ, и тот, что уже добавлен в GitHub, перестанет подходить — клонирование,
+сделанное старым, пройдёт, а `make self-update` и автообновление получат отказ доступа.
+Если ключ всё же перезаписан — удалить старый в `Deploy keys` и добавить новый
+(`cat ~/bank-app-deploy/deploy_key.pub`).
+
+Затем:
 
 ```bash
 mkdir -p /home/bitrix/bank-import && cd /home/bitrix/bank-import
