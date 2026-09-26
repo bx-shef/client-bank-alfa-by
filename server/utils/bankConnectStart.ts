@@ -31,6 +31,19 @@ import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 import { MY_COMPANY_GATE_MESSAGE, type MyCompanyGate } from './myCompanyRequisites'
 
+/**
+ * Отказы из-за настройки СЕРВЕРА приложения — не портала и не нажавшего (#19).
+ *
+ * ⚠ Тексты по-русски и называют переменные: они доходят до экрана администратора как есть
+ * («Не удалось отправить: …»), и прежние английские «connect unavailable (no session secret
+ * configured)» не говорили ни что не так, ни кто это чинит. Начинаются со строчной — префикс
+ * ставит интерфейс.
+ */
+export const SESSION_SECRET_MISSING
+  = 'на сервере приложения не задан секрет подписи ссылок (переменная SESSION_SECRET) — это настройка сервера приложения, а не портала'
+export const PRIOR_CONNECT_NOT_CONFIGURED
+  = 'на сервере приложения не настроено подключение к Приорбанку (переменные PRIOR_OAUTH_*) — это настройка сервера приложения, а не портала'
+
 /** Non-secret token-endpoint config for Alfa, from env. `null` when the provider isn't configured
  *  (feature off) or isn't Alfa (Prior uses its own multi-step config — `priorConnectConfigFromEnv`;
  *  `manual` has no bank at all). Pure. The host is DERIVED from `ALFA_OAUTH_TOKEN_URL` (strip the
@@ -200,11 +213,11 @@ export function precheckConnect(
     }
   }
   if (!deps.priorConfig()) {
-    return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
+    return { status: 400, body: { error: PRIOR_CONNECT_NOT_CONFIGURED } }
   }
 
   // No signing secret ⇒ the callback could never verify the state (fail-closed) — refuse to start.
-  if (!deps.secret) return { status: 503, body: { error: 'connect unavailable (no session secret configured)' } }
+  if (!deps.secret) return { status: 503, body: { error: SESSION_SECRET_MISSING } }
   return null
 }
 
@@ -223,7 +236,7 @@ export async function buildConnectAuthorizeUrl(
   const { memberId, provider, accountKey, nonce, nowMs } = input
   const priorConfig = deps.priorConfig()
   if (!priorConfig) {
-    return { status: 400, body: { error: `provider ${provider} not available for online connect` } }
+    return { status: 400, body: { error: PRIOR_CONNECT_NOT_CONFIGURED } }
   }
   const state: BankConnectState = {
     memberId,

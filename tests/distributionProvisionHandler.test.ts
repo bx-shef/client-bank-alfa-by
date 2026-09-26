@@ -119,6 +119,37 @@ describe('handleProvisionDistribution', () => {
     expect(cf[PAYMENT_SP_CONFIG_KEY]).toBe('1044')
   })
 
+  it('re-reads settings before writing: a form save landing during provisioning survives (#19)', async () => {
+    // Provisioning takes tens of seconds, and the settings form writes the same blob meanwhile.
+    // Writing the copy read at the start would silently roll that save back.
+    const cell = { current: settingsWith({ 'smart-entity': '1030' }) }
+    const saved: PortalSettings[] = []
+    const deps: ProvisionDistributionDeps = {
+      loadSettings: async () => cell.current,
+      saveSettings: async (s) => {
+        saved.push(s)
+        cell.current = s
+      },
+      provision: async () => {
+        // The admin presses «Сохранить» while the SPs are being created.
+        const s = cell.current
+        cell.current = {
+          ...s,
+          chat: { ...s.chat, dialogId: 'chat42' },
+          recognition: { ...s.recognition, configFields: { 'smart-entity': '2040' } }
+        }
+        return RESULT()
+      },
+      withLock: async fn => fn()
+    }
+    await handleProvisionDistribution(deps)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.chat.dialogId).toBe('chat42')
+    expect(saved[0]!.recognition.configFields['smart-entity']).toBe('2040')
+    expect(saved[0]!.recognition.configFields[PAYMENT_SP_CONFIG_KEY]).toBe('1044')
+    expect(saved[0]!.recognition.configFields[DISTRIBUTION_SP_CONFIG_KEY]).toBe('1046')
+  })
+
   it('runs the whole op under the single-flight lock', async () => {
     const order: string[] = []
     const settings = settingsWith({})
@@ -140,7 +171,8 @@ describe('handleProvisionDistribution', () => {
       return r
     }
     await handleProvisionDistribution({ loadSettings: load, saveSettings: save, provision, withLock })
-    expect(order).toEqual(['lock:enter', 'load', 'provision', 'save', 'lock:exit'])
+    // The second `load` is the re-read right before the write — inside the lock, like the rest.
+    expect(order).toEqual(['lock:enter', 'load', 'provision', 'load', 'save', 'lock:exit'])
   })
 
   it('propagates a provisioning error (no settings write)', async () => {

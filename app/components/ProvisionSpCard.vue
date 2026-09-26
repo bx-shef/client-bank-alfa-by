@@ -20,6 +20,17 @@ const { provision, syncEnabled, provisioning, error, message, enabled, paymentSp
 const chatSettings = useChatSettings()
 const slider = usePortalSlider()
 
+// ⚠ Сообщаем родителю об УСПЕХЕ, чтобы журнал распределения под карточкой перечитался (#19): без
+// этого он продолжал говорить «ещё не настроены» рядом с только что созданными смарт-процессами —
+// два противоречащих ответа на одном экране, и до перезагрузки страницы не было видно, что всё
+// получилось.
+const emit = defineEmits<{ provisioned: [] }>()
+
+async function runProvision() {
+  await provision()
+  if (!error.value && message.value) emit('provisioned')
+}
+
 const adminChecked = ref(false)
 
 /** id из настроек портала; сразу после провижининга — из его же ответа (настройки перечитываются
@@ -133,7 +144,7 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
           :aria-busy="provisioning"
           color="air-primary"
           data-testid="provision-button"
-          @click="provision"
+          @click="runProvision"
         >
           Настроить смарт-процессы
         </B24Button>

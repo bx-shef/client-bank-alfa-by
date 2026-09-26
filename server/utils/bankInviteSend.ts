@@ -26,8 +26,9 @@ import {
 import { buildAlfaInvite, buildAlfaInviteGuide, buildPriorInvite } from '../../app/utils/bankConnectInvite'
 import type { ChatAttachment } from '../../app/utils/chatAttach'
 import { isValidPortalUserId, type BankContact } from '../../app/utils/bankContact'
-import { buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
+import { SESSION_SECRET_MISSING, buildConnectAuthorizeUrl, gateConnectAdmin, precheckConnect, type ConnectStartDeps, type ConnectStartResult } from './bankConnectStart'
 import { describeUpstreamError } from './logSanitize'
+import { ALFA_CLIENT_ID_MISSING } from './bankConnectKey'
 import type { BankProviderId } from '../../app/types/statement'
 
 /** Банки, которым есть что передать. `manual` — файловая загрузка, приглашать некуда. */
@@ -121,14 +122,16 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
       memberId: gate.memberId, domain, provider, userId, expMs: nowMs + BANK_KEY_GRANT_TTL_MS
     })
     if (!link) {
-      return { status: 503, body: { error: 'key screen is not configured on this server' } }
+      // Тот же класс, что у `client_id` ниже: настройка СЕРВЕРА, и сказать это надо по-русски —
+      // английский текст доезжает до экрана администратора как есть.
+      return { status: 503, body: { error: SESSION_SECRET_MISSING } }
     }
     const alfa = { clientId: deps.alfaClientId(), link, ttlHours: BANK_KEY_GRANT_TTL_HOURS }
     text = buildAlfaInvite(alfa)
     if (!text) {
       // Отсутствие `client_id` — состояние СЕРВЕРА, а не ошибка нажавшего: инструкция без него
       // приводит владельца счёта к обязательному полю, которое нечем заполнить.
-      return { status: 503, body: { error: 'bank client id is not configured on this server' } }
+      return { status: 503, body: { error: ALFA_CLIENT_ID_MISSING } }
     }
     ttlMin = BANK_KEY_GRANT_TTL_HOURS * 60
     // Шаги со снимками уходят вложением, а в тексте остаются вступление, ссылка и предупреждения;
