@@ -21,24 +21,30 @@ docker-стек на loopback, обновления сервер забирае�
 
 ## Схема работы с клиентами
 
-Приложение разворачивается из **клона** апстрима в отдельный клиентский репозиторий:
-там живут правки под этого клиента, его CI собирает образы в его GHCR. Обновления
-апстрима приходят merge'ем — то есть решение «принять новую версию» принимает человек,
-а сервер лишь исполняет уже принятое.
+Приложение разворачивается из **клона** нашего репозитория (апстрима) в отдельный
+**клиентский** репозиторий: там живут правки под этого клиента, его CI собирает образы в его
+GHCR.
 
-Доступ к апстриму выдаётся **deploy key**: ключ привязан к одному репозиторию, отзывается
-одним действием, и GitHub показывает дату последнего использования — это и есть аудит.
-Образы тянутся отдельным токеном с правом `read:packages`, то есть доступ к исходникам и
-доступ к сборкам разведены.
+⚠ **Клиент и его сервер работают ТОЛЬКО со своим репозиторием.** С нашим репозиторием сервер
+клиента не соединяется никогда — ни за кодом, ни за образами, ни за `Makefile` и скриптами:
+- образы — из GHCR клиента (токен `read:packages`);
+- служебные файлы (`Makefile`, compose, скрипты, конфиги nginx) — из копии клиентского
+  репозитория, которая лежит на сервере рядом со стеком (шаг 1b);
+- опрос «появился ли новый коммит» — тоже клиентского репозитория.
 
-При прекращении отношений отзыв ключа **не трогает** ни развёрнутое приложение, ни код у
-клиента: прекращается только поток обновлений.
+Доступ сервера к клиентскому репозиторию — **deploy key** этого репозитория, только на чтение:
+привязан к одному репозиторию, отзывается одним действием, и GitHub показывает дату последнего
+использования.
 
-⚠ У клона нет автоудаления, которое GitHub применяет к приватным **форкам** при отзыве
-доступа. Если такой рычаг нужен, это осознанный выбор в пользу форка — и тогда апстрим
-обязан быть приватным **до** создания форка: форк публичного репозитория остаётся
-публичным навсегда и отцепляется в самостоятельный репозиторий, то есть ни рычага, ни
-штатной синхронизации не будет.
+Обновления из апстрима попадают в клиентский репозиторий **руками исполнителя** — merge'ем на
+его машине (раздел «Обновление клиентского репозитория от апстрима»). Решение «принять новую
+версию» принимает человек, а сервер лишь исполняет уже принятое.
+
+При прекращении отношений исполнитель просто перестаёт вливать апстрим: развёрнутое приложение
+и код у клиента остаются как есть, прекращается только поток обновлений.
+
+⚠ Вариант «сервер следит прямо за апстримом» (`deploy.env.upstream.example`) — только для
+нашего стенда, у клиента не применяется.
 
 ## Что понадобится заранее
 
@@ -84,7 +90,7 @@ git push -u origin main
 `NUXT_PUBLIC_B24_FORM_*` — задавать **нельзя**: это наша аналитика и наша форма заявок. Что
 именно ломается в каждом случае — в таблице шага 5.
 
-**Deploy key** (сервер читает им git): генерируется НА СЕРВЕРЕ (см. шаг 6), публичная половина
+**Deploy key** (сервер читает им клиентский репозиторий): генерируется НА СЕРВЕРЕ (шаг 1b), публичная половина
 добавляется в `Settings → Deploy keys` **клиентского** репозитория, **без** галки
 `Allow write access`. Приватная половина сервер не покидает.
 
@@ -104,7 +110,7 @@ git push -u origin main
 | каталог | что внутри | кто читает |
 |---|---|---|
 | `/home/bitrix/ext_www/<домен>` | заглушка `index.php`, `500.html`, `.htaccess`, `.htsecure` | веб-сервер |
-| `/home/bitrix/bank-import` | оба compose-файла и `.env` | docker и оператор |
+| `/home/bitrix/bank-import` | оба compose-файла, `.env`, `Makefile` и `src/` — копия клиентского репозитория | docker и оператор |
 | `/home/bitrix/bank-app-deploy` (или `/etc/bank-app-deploy`) | ключ git, токен реестра, настройки и состояние обновления | скрипт обновления |
 
 ⚠ **Стек НИКОГДА не кладётся в docroot.** В `.env` лежат пароль Postgres, ключ шифрования
@@ -116,17 +122,18 @@ git push -u origin main
 
 ## Порядок
 
-⚠ **На сервере НЕТ репозитория** — там только каталог стека, `Makefile` и `.env`. Поэтому все
-файлы тянутся по HTTPS из `main`; команды ниже вставляются как есть. Переменные шага:
+⚠ **Всё берётся из КЛИЕНТСКОГО репозитория.** На сервере лежит его копия
+(`/home/bitrix/bank-import/src`, шаг 1b), и все файлы ниже копируются из неё; из нашего
+репозитория сервер не берёт ничего. Переменные шага:
 
 ```bash
 DOMAIN=<домен>                 # например bank-app.example.by
-RAW=https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main
+S=/home/bitrix/bank-import/src # копия клиентского репозитория
 OWNER=<владелец-клиентского-репо>
 REPO=<имя-клиентского-репо>
 ```
 
-Кто что делает: шаги 1 и 8 — владелец портала, 2–3 — root, 4–7 — `bitrix`.
+Кто что делает: шаги 1 и 8 — владелец портала, 1b — `bitrix`, 2–3 — root, 4–7 — `bitrix`.
 
 ### 1. Сайт и сертификат — только через меню
 
@@ -134,13 +141,45 @@ REPO=<имя-клиентского-репо>
 `/etc/nginx/bx/site_settings/<домен>/` и docroot. Дальше мы правим **только** каталог
 `site_settings`; сгенерированные конфиги не трогаем вовсе.
 
+### 1b. Копия клиентского репозитория на сервере
+
+Под **`bitrix`**. Ключ доступа — сперва ключ, потом копия:
+
+```bash
+su - bitrix
+mkdir -p ~/bank-app-deploy && chmod 700 ~/bank-app-deploy
+ssh-keygen -t ed25519 -N '' -C "bank-app deploy ($(hostname -s))" -f ~/bank-app-deploy/deploy_key
+cat ~/bank-app-deploy/deploy_key.pub
+```
+
+Строку `ssh-ed25519 …` — в клиентский репозиторий: `Settings → Deploy keys → Add deploy key`,
+**без** галки `Allow write access`. Затем:
+
+```bash
+mkdir -p /home/bitrix/bank-import && cd /home/bitrix/bank-import
+GIT_SSH_COMMAND="ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+  git clone --depth 1 "git@github.com:$OWNER/$REPO.git" src
+git -C src config core.sshCommand "ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes"
+cp src/Makefile ./Makefile
+make help
+```
+
+⚠ Копия — **только для чтения**: править в ней ничего нельзя, её перезаписывает
+`make self-update` (`git pull --ff-only`, локальная правка его остановит). Правки под клиента
+живут в клиентском репозитории, а не на сервере.
+
+⚠ `Makefile`, увидев `./src`, сам берёт скрипты целей и обновления из неё
+(`make self-update` = обновить копию + `Makefile`). Нет копии — он пошёл бы в наш репозиторий;
+на сервере клиента так быть не должно.
+
+⚠ Тот же ключ потом использует автообновление (шаг 6/6b): один ключ на сервер.
+
 ### 2. Проксирование
 
 Под **root**:
 
 ```bash
-curl -fsSL "$RAW/deploy/bitrixvm/nginx/00-app-proxy.conf" -o /tmp/00-app-proxy.conf \
-  && install -m 644 -o root -g root /tmp/00-app-proxy.conf \
+install -m 644 -o root -g root "$S/deploy/bitrixvm/nginx/00-app-proxy.conf" \
      "/etc/nginx/bx/site_settings/$DOMAIN/00-app-proxy.conf" \
   && nginx -t && systemctl reload nginx
 ```
@@ -172,8 +211,8 @@ curl -fsSL "$RAW/deploy/bitrixvm/nginx/00-app-proxy.conf" -o /tmp/00-app-proxy.c
 ```bash
 D=/home/bitrix/ext_www/$DOMAIN
 cp -a "$D/index.php" "$D/index.php.orig-$(date +%F)"
-curl -fsSL "$RAW/deploy/bitrixvm/docroot/index.php" -o "$D/index.php"
-curl -fsSL "$RAW/deploy/bitrixvm/docroot/.htaccess"  -o "$D/.htaccess"
+cp "$S/deploy/bitrixvm/docroot/index.php" "$D/index.php"
+cp "$S/deploy/bitrixvm/docroot/.htaccess"  "$D/.htaccess"
 chown bitrix:bitrix "$D/index.php" "$D/.htaccess"
 chmod 644 "$D/index.php" "$D/.htaccess"
 ```
@@ -197,11 +236,10 @@ https, которого ещё нет: сайт становится недос�
 
 ### 4. Стек
 
-**4.1. Один раз от root** — доступ к docker и владение каталогом стека:
+**4.1. Один раз от root** — доступ к docker:
 
 ```bash
 usermod -aG docker bitrix
-install -d -o bitrix -g bitrix -m 755 /home/bitrix/bank-import
 ```
 
 ⚠ Членство в группе `docker` **равносильно root на этой машине** (любой её член монтирует
@@ -235,8 +273,7 @@ docker login ghcr.io -u <github-логин> --password-stdin < ~/bank-app-deploy
 
 ```bash
 cd /home/bitrix/bank-import
-curl -fsSL "$RAW/docker-compose.prod.yml" -o docker-compose.prod.yml
-curl -fsSL "$RAW/deploy/bitrixvm/docker-compose.bitrixvm.yml" -o docker-compose.bitrixvm.yml
+cp src/docker-compose.prod.yml src/deploy/bitrixvm/docker-compose.bitrixvm.yml .
 docker network create proxy-net 2>/dev/null || true
 
 cat > .env <<EOF
@@ -381,15 +418,13 @@ NUXT_PUBLIC_AUTHOR_URL=https://offer.bx-shef.by/?ref=bank-import
 Вариант для root-схемы (альтернатива — cron под `bitrix`, шаг 6b). Под **root**:
 
 ```bash
-curl -fsSL "$RAW/deploy/bitrixvm/git-poll-deploy.sh" -o /usr/local/sbin/bank-app-deploy
-chmod 755 /usr/local/sbin/bank-app-deploy
+install -m 755 "$S/deploy/bitrixvm/git-poll-deploy.sh" /usr/local/sbin/bank-app-deploy
 install -d -m 700 /etc/bank-app-deploy
-curl -fsSL "$RAW/deploy/bitrixvm/deploy.env.client.example" -o /etc/bank-app-deploy/deploy.env
-chmod 600 /etc/bank-app-deploy/deploy.env   # заполнить: GIT_URL, ключ, образы, токен, STACK_DIR
-ssh-keygen -t ed25519 -N '' -C "bank-app deploy ($(hostname -s))" -f /etc/bank-app-deploy/deploy_key
-cat /etc/bank-app-deploy/deploy_key.pub     # → Deploy keys клиентского репо, БЕЗ права записи
-curl -fsSL "$RAW/deploy/bitrixvm/systemd/bank-app-deploy.service" -o /etc/systemd/system/bank-app-deploy.service
-curl -fsSL "$RAW/deploy/bitrixvm/systemd/bank-app-deploy.timer"   -o /etc/systemd/system/bank-app-deploy.timer
+install -m 600 "$S/deploy/bitrixvm/deploy.env.client.example" /etc/bank-app-deploy/deploy.env
+# заполнить: GIT_URL, образы, токен, STACK_DIR; GIT_SSH_KEY — ключ из шага 1b
+# (/home/bitrix/bank-app-deploy/deploy_key: root его читает, второй ключ не нужен)
+install -m 644 "$S/deploy/bitrixvm/systemd/bank-app-deploy.service" /etc/systemd/system/
+install -m 644 "$S/deploy/bitrixvm/systemd/bank-app-deploy.timer"   /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now bank-app-deploy.timer
 ```
 
@@ -436,12 +471,53 @@ BANK_APP_DEPLOY_CONFIG=/etc/bank-app-deploy/deploy.env /usr/local/sbin/bank-app-
 обновлении от root (и наоборот) даёт `unauthorized` на каждом тике — молча, при исправном
 всём остальном.
 
-Каталоги переезжают в домашний (`/home/bitrix/bank-app-deploy`, права 700), пути в
-`deploy.env` — полные. Расписание:
+Всё под **`bitrix`**, из `/home/bitrix/bank-import`. Ключ git (шаг 1b) и токен реестра
+(шаг 4.3) уже лежат в `~/bank-app-deploy`.
 
+**Скрипт обновления** — из копии клиентского репозитория:
+
+```bash
+cd /home/bitrix/bank-import
+mkdir -p ~/bin ~/bank-app-deploy/state
+install -m 755 src/deploy/bitrixvm/git-poll-deploy.sh ~/bin/bank-app-deploy
 ```
-*/5 * * * * BANK_APP_DEPLOY_CONFIG=/home/bitrix/bank-app-deploy/deploy.env BANK_APP_DEPLOY_STATE=/home/bitrix/bank-app-deploy/state /home/bitrix/bin/bank-app-deploy >> /home/bitrix/bank-app-deploy/deploy.log 2>&1
-7 4 * * 0 find /home/bitrix/bank-app-deploy/deploy.log -size +20M -delete
+
+**Настройки** — пути полные (тильда в cron не раскрывается):
+
+```bash
+cat > ~/bank-app-deploy/deploy.env <<CONF
+GIT_URL=git@github.com:$OWNER/$REPO.git
+GIT_BRANCH=main
+GIT_SSH_KEY=/home/bitrix/bank-app-deploy/deploy_key
+IMAGE_APP=ghcr.io/$OWNER/$REPO
+IMAGE_BACKEND=ghcr.io/$OWNER/$REPO-backend
+REGISTRY_HOST=ghcr.io
+REGISTRY_USER=<github-логин из шага 4.3>
+REGISTRY_TOKEN_FILE=/home/bitrix/bank-app-deploy/registry_token
+STACK_DIR=/home/bitrix/bank-import
+APP_BIND_PORT=8080
+CONF
+chmod 600 ~/bank-app-deploy/deploy.env
+```
+
+**Первый прогон — руками**, до расписания: отказ доступа к git, опечатку в имени образа и
+незалогиненный реестр видно сразу, а не через пять минут в логе.
+
+```bash
+make deploy-now
+```
+
+Ждём `готово: развёрнут <sha>`. Первый прогон переразворачивает текущий коммит — у скрипта
+ещё нет записи о развёрнутом.
+
+**Расписание** — добавляется к существующему crontab, не затирая его:
+
+```bash
+(crontab -l 2>/dev/null; \
+ echo '*/5 * * * * BANK_APP_DEPLOY_CONFIG=/home/bitrix/bank-app-deploy/deploy.env BANK_APP_DEPLOY_STATE=/home/bitrix/bank-app-deploy/state /home/bitrix/bin/bank-app-deploy >> /home/bitrix/bank-app-deploy/deploy.log 2>&1'; \
+ echo '7 4 * * 0 find /home/bitrix/bank-app-deploy/deploy.log -size +20M -delete') | crontab -
+crontab -l
+make deploy-status
 ```
 
 ⚠ Вторая строка обязательна: у systemd ротация лога встроена, у cron её нет вовсе — файл растёт,
@@ -458,9 +534,9 @@ BANK_APP_DEPLOY_CONFIG=/etc/bank-app-deploy/deploy.env /usr/local/sbin/bank-app-
 Пауза здесь — файл `~/bank-app-deploy/state/paused`, который проверяет сам скрипт обновления;
 crontab при этом не правится.
 
-⚠ Для паузы скрипт в `~/bin/bank-app-deploy` должен быть не старше этой правки — обновите его
-той же командой, которой ставили: `curl -fsSL "$RAW/deploy/bitrixvm/git-poll-deploy.sh" -o
-~/bin/bank-app-deploy`.
+⚠ Скрипт обновления в `~/bin/bank-app-deploy` сам себя не обновляет. Когда он меняется в
+репозитории: `make self-update` (обновит копию), затем
+`install -m 755 src/deploy/bitrixvm/git-poll-deploy.sh ~/bin/bank-app-deploy`.
 
 `make bitrix-check` и `make offline-snapshot` работают в обоих вариантах.
 
@@ -585,13 +661,20 @@ git revert <плохой коммит> && git push      # CI соберёт но
 таймера вернёт то, что стоит в git, и выглядеть это будет как «откат не удержался».
 
 ⚠ **Обновлять `docker-compose.prod.yml` и `Makefile` на сервере** скрипт обновления не умеет —
-он работает с образами. Оба файла обновляются осознанно:
+он работает с образами. Оба файла берутся из копии КЛИЕНТСКОГО репозитория (`./src`) и
+обновляются осознанно:
 
 ```bash
-make self-update                       # сам Makefile (новые цели появляются только так)
-make compose-update                    # показать, что изменится
+make self-update                       # обновить копию репозитория и сам Makefile
+make compose-update                    # показать, что изменится в docker-compose.prod.yml
 make compose-update CONFIRM=1          # применить, затем make prod-redeploy
 ```
+
+⚠ Оверлей `docker-compose.bitrixvm.yml` `compose-update` не трогает — меняется он редко, и при
+изменении копируется руками: `cp src/deploy/bitrixvm/docker-compose.bitrixvm.yml .`
+
+⚠ Изменения апстрима доходят до сервера ТОЛЬКО через клиентский репозиторий: сперва merge
+(раздел выше), затем `make self-update` на сервере.
 
 ## Операторские цели
 
