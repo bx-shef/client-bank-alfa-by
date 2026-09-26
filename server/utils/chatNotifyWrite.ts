@@ -14,7 +14,7 @@
 import type { StatementItem } from '../../app/types/statement'
 import { buildChatMessage } from '../../app/utils/chatMessage'
 import { resolveBotId, sendAsBot } from './chatBotSend'
-import { hasAttachBlocks, type ChatAttach } from '../../app/utils/chatAttach'
+import { hasAttachBlocks, type ChatAttach, type ChatAttachment } from '../../app/utils/chatAttach'
 import { describeUpstreamError } from './logSanitize'
 import { useServerLogger } from './serverLogger'
 import type { RestCall } from './companyLookup'
@@ -50,24 +50,30 @@ export function extractMessageId(resp: Record<string, unknown>): string | null {
  * A failure of the FALLBACK still propagates — that one is a real transport error, and the caller
  * (a job) should see it.
  *
- * `attach` (#19, картинки шагов к инструкции банка) — НЕОБЯЗАТЕЛЬНОЕ вложение: если портал его не
- * принял, сообщение уходит повторно БЕЗ него, потому что текст самодостаточен, а картинки нет.
+ * `attachment` (#19, шаги инструкции банка со снимками) — НЕОБЯЗАТЕЛЬНОЕ вложение В ПАРЕ с полным
+ * текстом: если портал вложение не принял, уходит `fallbackText` без него. Повторять `text` нельзя —
+ * в нём нет того, что лежало во вложении (см. `ChatAttachment`).
  */
 export async function postChatMessage(
   dialogId: string,
   text: string,
   call: RestCall,
   memberId?: string,
-  attach?: ChatAttach | null
+  attachment?: ChatAttachment | null
 ): Promise<string | null> {
-  if (!hasAttachBlocks(attach)) return deliver(dialogId, text, call, memberId)
+  if (!attachment) return deliver(dialogId, text, call, memberId)
+  // ⚠ Вложение передали, а блоков в нём нет ⇒ `text` рассчитан на вложение, которого не будет, и
+  // уходит полный текст. Пустой `ATTACH` в портал не шлём никогда (см. `hasAttachBlocks`).
+  if (!hasAttachBlocks(attachment.attach)) return deliver(dialogId, attachment.fallbackText, call, memberId)
   try {
-    return await deliver(dialogId, text, call, memberId, attach)
+    return await deliver(dialogId, text, call, memberId, attachment.attach)
   } catch (e) {
-    // ⚠ КАРТИНКИ — БОНУС, ТЕКСТ — ОБЯЗАННОСТЬ. Вложение валидирует ПОРТАЛ (`ATTACH_ERROR`,
+    // ⚠ ВЛОЖЕНИЕ МОЖЕТ НЕ ДОЙТИ, ТЕКСТ — ОБЯЗАН. Вложение валидирует ПОРТАЛ (`ATTACH_ERROR`,
     // `ATTACH_OVERSIZE`), и его отказ одинаково заворачивает оба маршрута — то есть инструкция,
     // ради которой всё и затевалось, не дошла бы вовсе. Повтор без вложения дубля не создаёт:
     // сюда попадаем только когда бросил ПОСЛЕДНИЙ маршрут лестницы, то есть не доставлено ничего.
+    // ⚠ Повторяется ПОЛНЫЙ текст, а не `text`: шаги инструкции живут во вложении, и `text` без
+    // него дошёл бы ссылкой без единого шага.
     //
     // ⚠ НО МОЛЧА ЭТОГО ДЕЛАТЬ НЕЛЬЗЯ (замер владельца 2026-09-17). Первая редакция глотала отказ
     // целиком, и снаружи он выглядел как «картинки не работают»: текст доходил, ошибок не было,
@@ -75,8 +81,8 @@ export async function postChatMessage(
     // страховка, отняла единственный способ узнать, что именно не понравилось порталу. Пишем
     // ответ банка… то есть портала, дословно: по нему видно `ATTACH_ERROR` (форма), `ATTACH_OVERSIZE`
     // (60 000 символов) и всё прочее, что мы бы иначе гадали.
-    log.warning(`портал не принял вложение, сообщение уходит без картинок: ${describeUpstreamError(e)}`)
-    return await deliver(dialogId, text, call, memberId)
+    log.warning(`портал не принял вложение, уходит полный текст без него: ${describeUpstreamError(e)}`)
+    return await deliver(dialogId, attachment.fallbackText, call, memberId)
   }
 }
 

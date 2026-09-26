@@ -60,8 +60,9 @@ describe('notifyChatViaRest', () => {
   })
 })
 
-describe('вложение с картинками (#19)', () => {
-  const ATTACH = [{ IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
+describe('вложение с шагами и снимками (#19)', () => {
+  const ATTACH = [{ MESSAGE: '1. Шаг' }, { IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
+  const ATTACHMENT = { attach: ATTACH, fallbackText: 'полный текст со всеми шагами' }
 
   it('без вложения параметр ATTACH не отправляется вовсе', async () => {
     // ⚠ Не «пустой ATTACH», а ОТСУТСТВУЮЩИЙ: портал валидирует коллекцию блоков и на форму,
@@ -76,44 +77,59 @@ describe('вложение с картинками (#19)', () => {
     expect('ATTACH' in calls[0]!).toBe(false)
   })
 
-  it('вложение доезжает до портала', async () => {
+  it('вложение доезжает до портала вместе с КОРОТКИМ текстом', async () => {
     const calls: Record<string, unknown>[] = []
     const call = async (_m: string, params: Record<string, unknown>) => {
       calls.push(params)
       return { result: 1 }
     }
-    await postChatMessage('7', 'текст', call, undefined, ATTACH)
+    await postChatMessage('7', 'текст', call, undefined, ATTACHMENT)
     expect(calls[0]!.ATTACH).toBe(ATTACH)
+    expect(calls[0]!.MESSAGE).toBe('текст')
   })
 
-  it('ПОРТАЛ ОТВЕРГ ВЛОЖЕНИЕ ⇒ текст уходит повторно БЕЗ него', async () => {
-    // ⚠ Несущий инвариант: картинки — бонус, текст — обязанность. Инструкция по выпуску ключа
-    // самодостаточна словами, а вот её неотправка означает, что владелец счёта не узнал вообще
-    // ничего. Мутация «убрать повтор» роняет именно этот тест.
+  it('ПОРТАЛ ОТВЕРГ ВЛОЖЕНИЕ ⇒ уходит ПОЛНЫЙ текст, без вложения', async () => {
+    // ⚠ Несущий инвариант. Шаги инструкции живут во вложении, и повтор КОРОТКОГО текста без него
+    // доставил бы владельцу счёта ссылку без единого шага. Мутации «убрать повтор» и «повторить
+    // короткий текст» роняют именно этот тест.
     const calls: Record<string, unknown>[] = []
     const call = async (_m: string, params: Record<string, unknown>) => {
       calls.push(params)
       if (params.ATTACH) throw new Error('ATTACH_ERROR')
       return { result: 42 }
     }
-    const id = await postChatMessage('7', 'текст', call, undefined, ATTACH)
+    const id = await postChatMessage('7', 'текст', call, undefined, ATTACHMENT)
     expect(id).toBe('42')
     expect(calls).toHaveLength(2)
     expect('ATTACH' in calls[1]!).toBe(false)
+    expect(calls[1]!.MESSAGE).toBe('полный текст со всеми шагами')
   })
 
-  it('удачная отправка с картинками НЕ повторяется — дубля у получателя нет', async () => {
+  it('вложение без блоков ⇒ сразу полный текст, и пустой ATTACH в портал не уходит', async () => {
+    // Короткий текст рассчитан на вложение, которого не будет, — отправлять его одного нельзя.
+    const calls: Record<string, unknown>[] = []
+    const call = async (_m: string, params: Record<string, unknown>) => {
+      calls.push(params)
+      return { result: 3 }
+    }
+    await postChatMessage('7', 'текст', call, undefined, { attach: [], fallbackText: 'полный' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.MESSAGE).toBe('полный')
+    expect('ATTACH' in calls[0]!).toBe(false)
+  })
+
+  it('удачная отправка с вложением НЕ повторяется — дубля у получателя нет', async () => {
     let n = 0
     const call = async () => {
       n++
       return { result: 5 }
     }
-    await postChatMessage('7', 'текст', call, undefined, ATTACH)
+    await postChatMessage('7', 'текст', call, undefined, ATTACHMENT)
     expect(n).toBe(1)
   })
 
   it('отказ БЕЗ вложения по-прежнему пробрасывается вызывающему', async () => {
-    // Настоящая поломка транспорта не должна прятаться за «повторим без картинок»: у неё другой
+    // Настоящая поломка транспорта не должна прятаться за «повторим без вложения»: у неё другой
     // адресат — джоба, которую перезапустит очередь.
     const call = async () => {
       throw new Error('portal down')

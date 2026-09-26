@@ -4,7 +4,8 @@
 #
 # WHY THIS EXISTS. The step-by-step pictures attached to the Alfa API-key invite did not show up in
 # the chat, twice, and there was nothing to read: an attachment the portal refuses is dropped and the
-# text is re-sent WITHOUT it, deliberately (the instruction must arrive even if the images cannot).
+# FULL text (every step, no pictures) is sent instead, deliberately — the steps themselves now live in
+# the attachment, so the instruction must arrive even if the attachment cannot.
 # That safety net swallowed the only evidence — no error on screen, no line in the log — so each
 # round of diagnosis was a guess. The refusal is now logged; this script surfaces those lines.
 #
@@ -70,7 +71,7 @@ if [ -n "${attach:-}" ]; then
   echo "ACCESS_DENIED    — REST-бот недоступен на тарифе портала (сообщение уйдёт от сотрудника)"
   echo "BOT_LIMIT_...    — на портале исчерпан лимит чат-ботов"
   echo "«бот не принял»  — завернул БОТ, дальше пробовали от имени владельца токена"
-  echo "«портал не принял вложение» — завернули ОБА маршрута, текст ушёл без картинок"
+  echo "«портал не принял вложение» — завернули ОБА маршрута, ушёл полный текст инструкции без картинок"
   echo
 fi
 

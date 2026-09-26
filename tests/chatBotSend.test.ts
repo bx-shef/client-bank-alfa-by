@@ -212,7 +212,7 @@ describe('внешний текст остаётся обезврежен на �
       return method === 'imbot.v2.Bot.register' ? { result: 7 } : { result: 100 }
     }
     const attach = [{ IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
-    await postChatMessage('7', 'текст', call, 'M1', attach)
+    await postChatMessage('7', 'текст', call, 'M1', { attach, fallbackText: 'полный текст' })
     const sent = params.find(p => p.method === BOT_MESSAGE_METHOD)!
     expect(sent.botId).toBe(7)
     expect(sent.dialogId).toBe('7')
@@ -321,6 +321,7 @@ describe('memberId доезжает до маршрутизатора из ВС�
 
 describe('вложение с картинками и маршрут бота (#19)', () => {
   const ATTACH = [{ IMAGE: [{ NAME: 'Шаг 1', LINK: 'https://x/1.png', PREVIEW: 'https://x/1.png', WIDTH: 960, HEIGHT: 460 }] }]
+  const ATTACHMENT = { attach: ATTACH, fallbackText: 'полный текст' }
 
   /** Где лежит вложение, зависит от МЕТОДА: у `im.message.*` — верхним уровнем и заглавными, у
    *  чат-бота — внутри `fields`. Проверки обязаны смотреть в оба места, иначе они зеленеют на той
@@ -344,21 +345,24 @@ describe('вложение с картинками и маршрут бота (#
     // ⚠ Бот — ОСНОВНОЙ маршрут (#496), а не запасной: потеряв вложение здесь, мы потеряли бы его
     // у всех порталов, где всё работает, и заметили бы только у тех, где бот недоступен.
     const { call, calls } = spy()
-    await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
+    await postChatMessage('chat1', 'привет', call, 'M1', ATTACHMENT)
     expect(calls.map(c => c.method)).toEqual(['imbot.v2.Bot.register', BOT_PROFILE_METHOD, BOT_MESSAGE_METHOD])
     expect((calls[2]!.params.fields as Record<string, unknown>).attach).toBe(ATTACH)
   })
 
-  it('оба маршрута отвергли вложение ⇒ ровно ОДНО сообщение, без картинок', async () => {
+  it('оба маршрута отвергли вложение ⇒ ровно ОДНО сообщение, без картинок и с ПОЛНЫМ текстом', async () => {
     // Лестница повторяется целиком, поэтому текст снова уходит ботом — доставка одна, дубля нет.
     const { call, calls } = spy((_m, p) => Boolean(attachOf(p)))
-    const id = await postChatMessage('chat1', 'привет', call, 'M1', ATTACH)
+    const id = await postChatMessage('chat1', 'привет', call, 'M1', ATTACHMENT)
     expect(id).toBe('100')
     expect(calls.map(c => c.method)).toEqual([
       'imbot.v2.Bot.register', BOT_PROFILE_METHOD, BOT_MESSAGE_METHOD, CHAT_MESSAGE_METHOD, BOT_MESSAGE_METHOD
     ])
     const delivered = calls.filter(c => c.method === BOT_MESSAGE_METHOD || c.method === CHAT_MESSAGE_METHOD)
-    expect(delivered.filter(c => !attachOf(c.params))).toHaveLength(1)
+    const plain = delivered.filter(c => !attachOf(c.params))
+    expect(plain).toHaveLength(1)
+    // Повтор идёт ботом, а у бота текст лежит во вложенном `fields.message`.
+    expect((plain[0]!.params.fields as { message?: unknown }).message).toBe('полный текст')
   })
 })
 
