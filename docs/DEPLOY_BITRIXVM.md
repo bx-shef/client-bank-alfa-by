@@ -1,6 +1,6 @@
 # Деплой на виртуальную машину Битрикс24 (третий таргет)
 
-> Last reviewed: 2026-09-19
+> Last reviewed: 2026-09-26
 
 Развёртывание приложения **рядом с боевым порталом** на виртуальной машине Битрикс24
 (bitrix-env): домен третьего уровня, nginx машины терминирует TLS и проксирует всё в
@@ -449,14 +449,18 @@ BANK_APP_DEPLOY_CONFIG=/etc/bank-app-deploy/deploy.env /usr/local/sbin/bank-app-
 причина «руками работает, по расписанию нет».
 
 Что теряется по сравнению с systemd — и это цена, а не придирки: журнал с ротацией
-(`journalctl -u bank-app-deploy`), разброс запуска (`RandomizedDelaySec` — без него все машины
-стучатся в GitHub в одну и ту же минуту) и четыре операторские цели. Замены:
+(`journalctl -u bank-app-deploy`) и разброс запуска (`RandomizedDelaySec` — без него все машины
+стучатся в GitHub в одну и ту же минуту).
 
-| systemd | cron |
-|---|---|
-| `make deploy-status` | `tail -30 ~/bank-app-deploy/deploy.log` + `cat ~/bank-app-deploy/state/deployed_sha` |
-| `make deploy-now` | запустить скрипт руками с теми же двумя переменными |
-| `make deploy-pause` / `deploy-resume` | закомментировать/вернуть строку в `crontab -e` |
+Операторские цели `deploy-status` / `deploy-now` / `deploy-pause` / `deploy-resume` работают в
+**обоих** вариантах — сами определяют, какой стоит. Запускать их в cron-варианте нужно из-под
+`bitrix`: признак варианта — `~/bank-app-deploy/deploy.env`, а у root домашний каталог другой.
+Пауза здесь — файл `~/bank-app-deploy/state/paused`, который проверяет сам скрипт обновления;
+crontab при этом не правится.
+
+⚠ Для паузы скрипт в `~/bin/bank-app-deploy` должен быть не старше этой правки — обновите его
+той же командой, которой ставили: `curl -fsSL "$RAW/deploy/bitrixvm/git-poll-deploy.sh" -o
+~/bin/bank-app-deploy`.
 
 `make bitrix-check` и `make offline-snapshot` работают в обоих вариантах.
 
@@ -536,16 +540,31 @@ pnpm-lock.yaml && pnpm install`).
 **Выпустить прямо сейчас, не дожидаясь тика:**
 
 ```bash
-systemctl start bank-app-deploy.service && journalctl -u bank-app-deploy -n 30 --no-pager
-# в cron-схеме — тот же скрипт руками, см. шаг 6b
+make deploy-now
 ```
 
 **Посмотреть, что развёрнуто:**
 
 ```bash
-make deploy-status          # systemd-схема
-cat ~/bank-app-deploy/state/deployed_sha
+make deploy-status
 ```
+
+**Автообновление ещё не включено** (стек только поднят, шаг 6/6b впереди) — выпуск руками,
+тоже целью:
+
+```bash
+make prod-redeploy
+curl -sS http://127.0.0.1:8080/api/health; echo     # поле commit — развёрнутый коммит
+```
+
+⚠ `make prod-redeploy` тянет `:latest` из `.env`, а автообновление — тег коммита. Когда
+автообновление включено, выпускайте через `make deploy-now`: иначе развёрнутое разойдётся с
+тем, что скрипт считает развёрнутым.
+
+⚠ До правки цели `prod-*`, `logs`, `ps` жёстко передавали `-f docker-compose.prod.yml` и
+**отбрасывали оверлей**: `make prod-redeploy` на ВМ поднял бы приложение без порта на
+127.0.0.1 (домен — 502) и backend из образа апстрима вместо клиентского. Теперь `-f` ставится,
+только если в `.env` нет `COMPOSE_FILE`. Старый `Makefile` на сервере — `make self-update`.
 
 **Приостановить выпуски** (перед ручной отладкой на стенде):
 
@@ -581,9 +600,11 @@ make compose-update CONFIRM=1          # применить, затем make pro
 | цель | что делает |
 |---|---|
 | `make bitrix-check` | доедет ли запрос с домена до приложения: конфиг, контейнер, **статика**, таймер. Работает и до появления домена — ходит по `Host` на 127.0.0.1 |
-| `make deploy-status` | включён ли таймер, какой коммит развёрнут, последний прогон |
-| `make deploy-now` | проверить обновления сейчас, не дожидаясь тика |
+| `make deploy-status` | включено ли автообновление (systemd или cron), на паузе ли, какой коммит развёрнут, последний прогон |
+| `make deploy-now` | проверить обновления сейчас, не дожидаясь тика; паузу обходит — это явное действие |
 | `make deploy-pause` / `deploy-resume` | приостановить и вернуть автообновление (пауза переживает перезагрузку — «само включилось ночью» было бы худшим поведением) |
+| `make prod-redeploy` | выпуск руками, пока автообновление не включено; берёт оверлей из `COMPOSE_FILE` |
+| `make ps` / `make logs` | состояние контейнеров / живой лог — тоже с оверлеем |
 | `make offline-snapshot` | копия образов работающих контейнеров |
 
 ## После каждой операции в меню bitrix-env
