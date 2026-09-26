@@ -584,7 +584,7 @@ make offline-snapshot     # в cron раз в неделю
 cd <клиент>
 git fetch upstream
 git log --oneline HEAD..upstream/main      # что приедет
-git merge upstream/main                    # merge, НЕ rebase
+git merge --no-edit upstream/main          # merge, НЕ rebase; --no-edit — иначе git ждёт редактор
 pnpm install && pnpm check                 # прогнать проверки ДО push
 git push                                   # → CI клиента → образы в его GHCR
 ```
