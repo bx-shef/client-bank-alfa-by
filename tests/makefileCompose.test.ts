@@ -141,3 +141,42 @@ describe('скрипт обновления уважает паузу', () => {
     expect(pollerEnv(false, false).stdout).toContain('опрашиваю')
   })
 })
+
+// Сервер КЛИЕНТА работает только со своим репозиторием (docs/DEPLOY_BITRIXVM.md, шаг 1b): его
+// копия лежит рядом со стеком в `./src`, и служебные файлы берутся из неё, а не из нашего
+// репозитория. ⚠ Проверяется напечатанной командой настоящего make: источник выбирается при
+// разборе файла, и текстовый гард подтвердил бы строку, которая не срабатывает.
+describe('источник служебных файлов — копия клиентского репозитория, если она есть', () => {
+  const curlOf = (dir: string, target: string, args: string[] = []) =>
+    execFileSync('make', ['--no-print-directory', '-n', target, ...args], { cwd: dir, encoding: 'utf8' })
+      .split('\n').find(l => l.includes('curl -fsSL')) ?? ''
+
+  it('копии нет — наш репозиторий (наш сервер, как было)', () => {
+    expect(curlOf(stackDir(null), 'poll-check')).toContain('https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/main/scripts/prod-poll-check.sh')
+  })
+
+  it('копия есть — только она, наш репозиторий не упоминается вовсе', () => {
+    const dir = stackDir(null)
+    mkdirSync(join(dir, 'src', '.git'), { recursive: true })
+    for (const t of ['poll-check', 'self-update', 'compose-update']) {
+      const line = curlOf(dir, t)
+      expect(line, t).toContain(`file://${dir}/src/`)
+      expect(line, t).not.toContain('bx-shef')
+    }
+  })
+
+  it('self-update и compose-update сперва обновляют копию', () => {
+    const dir = stackDir(null)
+    mkdirSync(join(dir, 'src', '.git'), { recursive: true })
+    for (const t of ['self-update', 'compose-update']) {
+      const out = execFileSync('make', ['--no-print-directory', '-n', t], { cwd: dir, encoding: 'utf8' })
+      expect(out, t).toContain('git -C ./src pull -q --ff-only')
+    }
+  })
+
+  it('источник НЕ задаётся из командной строки', () => {
+    const dir = stackDir(null)
+    const line = curlOf(dir, 'poll-check', ['SRC=https://evil.example', 'RAW=https://evil.example'])
+    expect(line).not.toContain('evil')
+  })
+})

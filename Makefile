@@ -108,7 +108,23 @@ override REF := main
 # Умолчания параметров диагностических целей. ⚠ Именно `?=`: пустая строка, доехавшая до скрипта
 # вместо значения, читается им как аргумент и ломает разбор — а выглядит это как ошибка скрипта.
 SINCE ?= 3h
-RAW = https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/scripts
+# Откуда брать служебные файлы — сам `Makefile`, compose-файл и скрипты целей.
+#
+# ⚠ Сервер КЛИЕНТА работает ТОЛЬКО со своим репозиторием (docs/DEPLOY_BITRIXVM.md, шаг 1b): его
+# копия лежит рядом со стеком в `./src` и обновляется по deploy key этого репозитория. С нашим
+# репозиторием такой сервер не соединяется никогда — обновления из апстрима в клиентский вливает
+# человек, и только после этого они доходят до сервера. Копии нет ⇒ это наш сервер, и источник —
+# наш публичный репозиторий, как было всегда.
+#
+# ⚠ `override`, как и у `REF`: значение параметра `make` раскрывается ДО всякого шелла, и
+# `make … SRC=…` иначе увёл бы скачивание куда угодно. Решает наличие копии на диске, а не
+# командная строка.
+SRC_DIR := src
+override SRC := $(if $(wildcard $(CURDIR)/$(SRC_DIR)/.git),file://$(CURDIR)/$(SRC_DIR),https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF))
+override RAW := $(SRC)/scripts
+# Обновить копию клиентского репозитория, если она есть. Без копии — пусто (наш сервер).
+SRC_PULL = if [ -d ./$(SRC_DIR)/.git ]; then git -C ./$(SRC_DIR) pull -q --ff-only \
+	    || { echo "[make] не удалось обновить копию репозитория ./$(SRC_DIR) — см. docs/DEPLOY_BITRIXVM.md, шаг 1b"; exit 1; }; fi
 
 # Прочитать ОДНО значение из ./.env, не исполняя файл.
 #
@@ -144,10 +160,13 @@ env-value = $$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$(
 
 ## Обновить САМ этот Makefile из репозитория (новые цели появляются только так)
 #
-# ⚠ Без этой цели остальные бесполезны. Репозитория на сервере нет, `Makefile` кладётся туда
-# один раз при развёртывании и дальше живёт своей жизнью — поэтому цель, добавленная в репо,
-# на сервере просто не существует, и оператору приходится набирать сырые `docker compose` и
-# `curl … | bash`. Ровно это и происходило.
+# ⚠ Без этой цели остальные бесполезны. `Makefile` кладётся на сервер один раз при развёртывании и
+# дальше живёт своей жизнью — поэтому цель, добавленная в репо, на сервере просто не существует, и
+# оператору приходится набирать сырые `docker compose` и `curl … | bash`. Ровно это и происходило.
+#
+# ⚠ Источник — `$(SRC)`: на сервере клиента это его собственный репозиторий (копия в `./src`
+# сперва обновляется), на нашем — наш. Скрипты целей берутся оттуда же, поэтому одна эта команда
+# обновляет всё служебное разом.
 #
 # ⚠ Скачанное проверяется по признаку, который есть в ЛЮБОЙ версии файла (`.PHONY` + давняя цель
 # `prod-redeploy`), а не по свежей. Первая попытка проверяла `help` — цель, добавленную этой же
@@ -155,13 +174,14 @@ env-value = $$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$(
 # требовалась новая цель. Проверка обязана переживать любую версию, иначе она блокирует ровно то
 # обновление, ради которого написана.
 self-update:
-	@t=$$(mktemp /tmp/Makefile.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/Makefile" \
+	@$(SRC_PULL); \
+	 t=$$(mktemp /tmp/Makefile.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(SRC)/Makefile" \
 	  && grep -q '^\.PHONY:' "$$t" \
 	  && make -n -f "$$t" prod-redeploy >/dev/null 2>&1 \
 	  && { b="./Makefile.bak-$$(date +%Y%m%d-%H%M%S)"; \
 	       cp ./Makefile "$$b" && cp "$$t" ./Makefile \
-	       && echo "[make] Makefile обновлён из $(REF), копия прежнего: $$b"; \
+	       && echo "[make] Makefile обновлён из $(SRC), копия прежнего: $$b"; \
 	       echo "[make] новые цели:"; make help; }
 
 ## Остановить крипто-шлюз (не нужен, пока Приор ходит напрямую на :9344)
@@ -192,12 +212,13 @@ gw-start:
 # терял ровно ту правку, ради защиты от которой диф и показывают. Обрезанная страховка хуже
 # отсутствующей: она создаёт уверенность. Длинный вывод на мобильном терминале — приемлемая цена.
 compose-update:
-	@t=$$(mktemp /tmp/compose.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF)/docker-compose.prod.yml" \
+	@$(SRC_PULL); \
+	 t=$$(mktemp /tmp/compose.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(SRC)/docker-compose.prod.yml" \
 	  && docker compose --project-directory . -f "$$t" config -q \
 	  && { d=$$(diff -u ./docker-compose.prod.yml "$$t" | tail -n +3); \
 	       n=$$(printf '%s\n' "$$d" | grep -c . || true); \
-	       echo "[make] отличия текущего файла от $(REF) — $$n строк (- сервер, + репозиторий):"; \
+	       echo "[make] отличия текущего файла от $(SRC) — $$n строк (- сервер, + репозиторий):"; \
 	       printf '%s\n' "$$d"; \
 	       if [ "$${CONFIRM:-}" = "1" ]; then \
 	         b="./docker-compose.prod.yml.bak-$$(date +%Y%m%d-%H%M%S)"; \
@@ -370,7 +391,7 @@ prior-switch:
 #
 # Креды берутся из ./.env и в вывод не попадают. Нужны только curl и openssl.
 prior-probe:
-	@echo "[make] скачиваю prior-host-probe.sh из $(REF)"
+	@echo "[make] скачиваю prior-host-probe.sh из $(SRC)"
 	@t=$$(mktemp /tmp/prior-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prior-host-probe.sh" \
 	  && { h="$${HOST:-}"; [ -n "$$h" ] || h="https://api.priorbank.by:9344"; \
@@ -385,7 +406,7 @@ prior-probe:
 
 ## Диагностика боевого стенда одним прогоном: `make doctor` (домен берётся из ./.env)
 doctor:
-	@echo "[make] скачиваю prod-doctor.sh из $(REF)"
+	@echo "[make] скачиваю prod-doctor.sh из $(SRC)"
 	@t=$$(mktemp /tmp/prod-doctor.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-doctor.sh" \
 	  && { d="$${DOMAIN:-}"; [ -n "$$d" ] || d="$(call env-value,DOMAIN)"; \
@@ -401,7 +422,7 @@ doctor:
 # прочитался (и что его не порезал разбор `.env`), надо — иначе 403 от backend читается как
 # «токен неверный», хотя на деле его тут просто не нашли.
 queue-stats:
-	@echo "[make] скачиваю queue-stats.sh из $(REF)"
+	@echo "[make] скачиваю queue-stats.sh из $(SRC)"
 	@t=$$(mktemp /tmp/queue-stats.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/queue-stats.sh" \
 	  && { tok="$(call env-value,B24_APPLICATION_TOKEN)"; \
@@ -426,7 +447,7 @@ queue-stats:
 # ⚠ Read-only и refresh-токен НЕ трогает: банк ротирует его при обновлении, и ручной рефреш
 # рассинхронизировал бы базу с банком (#505/#509). Ходит уже сохранённым access-токеном.
 alfa-page-probe:
-	@echo "[make] скачиваю prod-alfa-page-probe.sh из $(REF)"
+	@echo "[make] скачиваю prod-alfa-page-probe.sh из $(SRC)"
 	@t=$$(mktemp /tmp/alfa-page-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-alfa-page-probe.sh" \
 	  && B24="$${B24:-}" bash "$$t" "$${DAY:-}"
@@ -439,7 +460,7 @@ alfa-page-probe:
 # и это осознанно: «сухой прогон» флагом означал бы, что один неверный булев превращает показ в
 # необратимое стирание.
 reap-status:
-	@echo "[make] скачиваю prod-reap-status.sh из $(REF)"
+	@echo "[make] скачиваю prod-reap-status.sh из $(SRC)"
 	@t=$$(mktemp /tmp/reap-status.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-reap-status.sh" \
 	  && bash "$$t" docker-compose.prod.yml
@@ -456,7 +477,7 @@ reap-status:
 # ⚠ ПИШЕТ в базу: все трое ротируют refresh при обмене, и не сохранив новую пару, проба убила бы
 # подключение. Секреты и токены в вывод не попадают.
 refresh-now:
-	@echo "[make] скачиваю oauth-refresh-probe.sh из $(REF)"
+	@echo "[make] скачиваю oauth-refresh-probe.sh из $(SRC)"
 	@t=$$(mktemp /tmp/orp.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/oauth-refresh-probe.sh" \
 	  && bash "$$t" "$${P:-alfa}" docker-compose.prod.yml
@@ -472,7 +493,7 @@ refresh-now:
 # ⚠ Журнал и pid — свои на поставщика, три лестницы идут параллельно.
 # ⚠ Свой набор: GAPS="1m 30m 1h" P=prior make refresh-ladder
 refresh-ladder:
-	@echo "[make] скачиваю oauth-refresh-ladder.sh из $(REF)"
+	@echo "[make] скачиваю oauth-refresh-ladder.sh из $(SRC)"
 	@t=$$(mktemp /tmp/orl.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/oauth-refresh-ladder.sh" \
 	  && RAW_URL="$(RAW)" P="$${P:-alfa}" GAPS="$${GAPS:-}" bash "$$t"
@@ -498,7 +519,7 @@ refresh-ladder-stop:
 # «продление ходило, банк отказал» (лечится переподключением) и «продление не ходило вовсе»
 # (наша поломка — переподключение купит один срок и повторится).
 bank-history:
-	@echo "[make] скачиваю prod-bank-history.sh из $(REF)"
+	@echo "[make] скачиваю prod-bank-history.sh из $(SRC)"
 	@t=$$(mktemp /tmp/bank-history.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-bank-history.sh" \
 	  && bash "$$t" docker-compose.prod.yml
