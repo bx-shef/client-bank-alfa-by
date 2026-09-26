@@ -4,6 +4,7 @@ import { sanitizeForLog } from '../server/utils/logSanitize'
 import { signConnectState } from '../server/utils/bankConnectState'
 import { provisionalAccountKey } from '../app/utils/bankAccountKey'
 import { PRIOR_CLIENT_ASSERTION_TYPE } from '../app/utils/priorOauth'
+import { buildPriorInvite } from '../app/utils/bankConnectInvite'
 import type { BankToken } from '../server/utils/bankTokenStore'
 import { Buffer } from 'node:buffer'
 
@@ -300,5 +301,28 @@ describe('handleBankConnectCallback — Prior (A5b)', () => {
     expect(r.status).toBe(502)
     expect(saved).toEqual([])
     expect(log.mock.calls.some(c => /invalid_grant/.test(String(c[0])) && !/\r|\n/.test(String(c[0])))).toBe(true)
+  })
+})
+
+describe('страницы возврата названы в приглашении владельцу счёта дословно (#19)', () => {
+  // ⚠ Приглашение (`buildPriorInvite`) говорит человеку, какую страницу он увидит в конце пути, и
+  // называет её по заголовку. Переименуй страницу здесь — и инструкция станет неправдой молча.
+  // Поэтому сверка идёт с ОТРИСОВАННЫМ заголовком, а не с константой рядом с ним.
+  const title = (html: string) => /<h1[^>]*>([^<]+)<\/h1>/.exec(html)?.[1] ?? ''
+  const invite = buildPriorInvite({ link: 'https://api.priorbank.by:9344/x', ttlMin: 15 })!
+
+  it('успех: приглашение шлёт пустой счёт, значит путь кончается страницей «без счёта»', async () => {
+    const viaInvite = signConnectState({ memberId: 'M1', provider: 'prior-by', accountKey: '', nonce: 'n1', exp: now + 600_000 }, SECRET)
+    const r = await handleBankConnectCallback(deps().deps, { query: { code: 'C', state: viaInvite }, nowMs: now })
+    expect(r.status).toBe(200)
+    expect(title(r.html)).not.toBe('')
+    expect(invite).toContain(`«${title(r.html)}»`)
+  })
+
+  it('провал: ссылка истекла или банк отказал', async () => {
+    const r = await handleBankConnectCallback(deps().deps, { query: { code: 'C', state: 'garbage' }, nowMs: now })
+    expect(r.status).toBe(400)
+    expect(title(r.html)).not.toBe('')
+    expect(invite).toContain(`«${title(r.html)}»`)
   })
 })
