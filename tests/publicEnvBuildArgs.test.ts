@@ -66,33 +66,51 @@ function serverSources(dir = 'server'): string[] {
 }
 
 /**
- * Переменные `NUXT_PUBLIC_*`, которые читает СЕРВЕРНЫЙ код.
- *
- * Форм чтения три, и все живые: точечная (`useRuntimeConfig().public.siteUrl`), разбором
- * (`const { commitSha, repoUrl } = useRuntimeConfig().public`) и СЫРАЯ
- * (`process.env.NUXT_PUBLIC_B24_APP_CODE`). Ищем все — иначе гард молчал бы ровно о том файле,
- * который написан пропущенной формой.
- *
- * ⚠ Так и вышло с третьей (#19): гард искал только `useRuntimeConfig()`, а код приложения сервер
- * читает сырым `process.env`. Замерено сборкой: такое чтение остаётся в бандле как есть, то есть
- * это такое же чтение в РАНТАЙМЕ, — но гард его не видел, строки в финальной стадии не было, и на
- * клоне с локальным приложением ссылка владельцу счёта уходила с запасным кодом Маркета
- * `shef.bankimport`, которого портал клиента не знает.
+ * Файлы, которые финальная стадия backend копирует из контекста сборки мимо бандла
+ * (`COPY <файл> …` без `--from`) и которые исполняются. Это такой же рантайм backend, как
+ * `server/**`, только лежит вне него: сейчас — загрузчик телеметрии `otel.instrument.mjs`,
+ * он читает `NUXT_PUBLIC_COMMIT_SHA` при старте процесса.
  */
-function serverReadPublicEnv(): string[] {
-  const names = new Set<string>()
-  for (const file of serverSources()) {
+function backendStageRuntimeFiles(): string[] {
+  return [...stageBody('backend').matchAll(/^COPY (?!--from)(\S+)\s/gm)]
+    .map(m => m[1]!)
+    .filter(file => /\.(?:mjs|cjs|js|ts)$/.test(file))
+}
+
+/**
+ * Переменные `NUXT_PUBLIC_*`, которые читает код backend-контейнера, — раздельно по форме чтения.
+ *
+ * ⚠ Множества раздельные намеренно: одна и та же переменная читается в коде разными формами
+ * (`SITE_URL` — и через `useRuntimeConfig()`, и по имени), и в общем наборе сломанный разбор одной
+ * формы маскировался бы другой. Замерено ревью: с общим набором выключенный разбор точечной формы
+ * оставлял гард зелёным.
+ *
+ * `named` ловит имя переменной целиком, где бы оно ни стояло: `process.env.X`, `env.X` (объект
+ * окружения передан параметром, как в `envCheck`), `process.env['X']`. Прежний разбор требовал
+ * буквального `process.env.` и чтение через параметр не видел. Упоминание имени в комментарии
+ * тоже попадёт сюда — это ошибка в безопасную сторону: гард потребует лишнюю строку, но не
+ * пропустит нужную.
+ */
+function backendPublicEnvReads(): { dotted: Set<string>, destructured: Set<string>, named: Set<string> } {
+  const reads = { dotted: new Set<string>(), destructured: new Set<string>(), named: new Set<string>() }
+  for (const file of [...serverSources(), ...backendStageRuntimeFiles()]) {
     const src = readFileSync(file, 'utf8')
-    for (const m of src.matchAll(/useRuntimeConfig\(\)\.public\.(\w+)/g)) names.add(envNameFor(m[1]!))
+    for (const m of src.matchAll(/useRuntimeConfig\(\)\.public\.(\w+)/g)) reads.dotted.add(envNameFor(m[1]!))
     for (const m of src.matchAll(/\{([^{}]*)\}\s*=\s*useRuntimeConfig\(\)\.public\b/g)) {
       for (const part of m[1]!.split(',')) {
         const name = part.split(':')[0]!.trim()
-        if (/^\w+$/.test(name)) names.add(envNameFor(name))
+        if (/^\w+$/.test(name)) reads.destructured.add(envNameFor(name))
       }
     }
-    for (const m of src.matchAll(/process\.env\.(NUXT_PUBLIC_\w+)/g)) names.add(m[1]!)
+    for (const m of src.matchAll(/\bNUXT_PUBLIC_[A-Z0-9_]+\b/g)) reads.named.add(m[0])
   }
-  return [...names]
+  return reads
+}
+
+/** Build-args сервиса `backend` в локальном `docker-compose.yml`. */
+function composeBackendArgs(): string {
+  const from = compose.indexOf('  backend:')
+  return compose.slice(from, compose.indexOf('environment:', from))
 }
 
 /** Блок `build-args:` джобы деплоя (та, что пушит образы в GHCR). */
@@ -127,7 +145,7 @@ describe('переменные NUXT_PUBLIC_* доезжают до сборки'
   // переданная только одному, дала бы два образа с разным содержимым одной страницы.
   it('docker-compose передаёт каждую переменную обоим сервисам', () => {
     const appArgs = compose.slice(compose.indexOf('  app:'), compose.indexOf('  backend:'))
-    const backendArgs = compose.slice(compose.indexOf('  backend:'), compose.indexOf('environment:', compose.indexOf('  backend:')))
+    const backendArgs = composeBackendArgs()
     for (const key of keys) {
       const env = envNameFor(key)
       expect(appArgs, `app: нет ${env}`).toContain(`${env}: \${${env}:-}`)
@@ -156,23 +174,39 @@ describe('переменные NUXT_PUBLIC_* доезжают до сборки'
 // `NUXT_PUBLIC_SITE_URL` (#19): приглашение владельцу счёта уходило без картинок шагов при верно
 // заданной переменной CI, а лог честно говорил «адрес приложения непригоден для ссылки».
 describe('серверные чтения NUXT_PUBLIC_* доезжают до РАНТАЙМА backend-образа', () => {
-  const serverEnv = serverReadPublicEnv()
+  const reads = backendPublicEnvReads()
+  const all = [...new Set([...reads.dotted, ...reads.destructured, ...reads.named])]
 
-  // Разбор ищет чужой код, поэтому сам список — первая проверка: пустой набор прошёл бы всё
-  // остальное зелёным, ничего не проверив. По живому чтению на КАЖДУЮ форму — иначе сломанный
-  // разбор одной из них молчал бы.
-  it('чтения найдены в server/**', () => {
-    expect(serverEnv.length).toBeGreaterThanOrEqual(3)
-    expect(serverEnv, 'точечное чтение не распознано').toContain('NUXT_PUBLIC_SITE_URL')
-    expect(serverEnv, 'чтение разбором не распознано').toContain('NUXT_PUBLIC_REPO_URL')
-    expect(serverEnv, 'сырое чтение process.env не распознано').toContain('NUXT_PUBLIC_B24_APP_CODE')
+  // Разбор ищет чужой код, поэтому первая проверка — что каждая форма находит своё живое чтение
+  // в СВОЁМ множестве: пустой или куцый набор прошёл бы всё остальное зелёным, ничего не проверив.
+  it('разбор каждой формы находит своё живое чтение', () => {
+    expect(reads.dotted, 'точечное чтение не распознано').toContain('NUXT_PUBLIC_SITE_URL')
+    expect(reads.destructured, 'чтение разбором не распознано').toContain('NUXT_PUBLIC_REPO_URL')
+    expect(reads.named, 'чтение по имени не распознано').toContain('NUXT_PUBLIC_B24_APP_CODE')
+    expect(reads.named, 'чтение через переданный объект окружения не распознано').toContain('NUXT_PUBLIC_LOCAL_MODE')
+  })
+
+  it('исполняемые файлы стадии backend вне server/** тоже сканируются', () => {
+    expect(backendStageRuntimeFiles()).toContain('otel.instrument.mjs')
   })
 
   it('финальная стадия backend объявляет ARG и ENV для каждой прочитанной переменной', () => {
     const body = stageBody('backend')
-    for (const env of serverEnv) {
+    for (const env of all) {
       expect(body, `backend: нет ARG ${env} — сервер прочитает пустую строку`).toContain(`ARG ${env}\n`)
       expect(body, `backend: нет ENV ${env} — сервер прочитает пустую строку`).toContain(`ENV ${env}=$${env}\n`)
+    }
+  })
+
+  // ⚠ ENV в стадии без значения на входе — та же пустая строка. Первая часть файла проверяет
+  // передачу только для ключей `runtimeConfig.public`, а сервер может прочитать и переменную вне
+  // этого блока — поэтому источник значения сверяется для всего, что сервер читает.
+  it('каждой прочитанной переменной есть откуда взяться: build-args CI и docker-compose', () => {
+    const ciArgs = deployBuildArgs()
+    const backendArgs = composeBackendArgs()
+    for (const env of all) {
+      expect(ciArgs, `ci.yml: нет ${env} в build-args`).toContain(`${env}=`)
+      expect(backendArgs, `docker-compose backend: нет ${env}`).toContain(`${env}: \${${env}:-}`)
     }
   })
 })

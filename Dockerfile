@@ -186,12 +186,14 @@ ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 ARG NUXT_PUBLIC_SITE_URL
 ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
 # И код приложения на портале: из него backend строит ссылку владельцу счёта на экран ключа
-# (`/marketplace/view/<код>/…`, #19). Читается сырым `process.env` — замерено сборкой, что такое
-# чтение остаётся в бандле как есть, то есть это то же чтение в РАНТАЙМЕ. Строки не было, и на
-# клоне с локальным приложением ссылка уходила с запасным кодом Маркета `shef.bankimport` при
-# верно заданной переменной CI: портал клиента такого приложения не знает, ссылка не открывалась.
+# (#19). Без строки на клоне ссылка уходила с запасным `shef.bankimport`, и экран ключа по ней
+# не открывался.
 ARG NUXT_PUBLIC_B24_APP_CODE
 ENV NUXT_PUBLIC_B24_APP_CODE=$NUXT_PUBLIC_B24_APP_CODE
+# И флаг локального режима: backend его не применяет, но `envCheck` на старте предупреждает о
+# значении, которое режим не включает. Без строки backend видел пустоту и не предупреждал никогда.
+ARG NUXT_PUBLIC_LOCAL_MODE
+ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 # Nitro's node-server output is self-contained (deps bundled) — copy only .output.
 COPY --from=builder-server /app/.output ./.output
 # OTel bootstrap (#78): loaded via NODE_OPTIONS=--import BEFORE the app so auto-instrumentation
