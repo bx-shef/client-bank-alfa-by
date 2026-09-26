@@ -139,8 +139,10 @@ describe('уведомление открытых экранов', () => {
 })
 
 describe('состояние сервера', () => {
-  it('без client_id экран не показываем ⇒ 503', async () => {
-    expect((await handleKeyRequestInfo(deps({ clientId: () => '' }), req)).status).toBe(503)
+  it('без client_id экран не показываем ⇒ 503, и текст называет переменную по-русски', async () => {
+    const res = await handleKeyRequestInfo(deps({ clientId: () => '' }), req)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('ALFA_OAUTH_CLIENT_ID')
   })
 
   it('без секрета подписи любой грант негоден ⇒ 403', async () => {

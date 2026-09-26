@@ -27,6 +27,17 @@ import type { ConnectStartDeps } from './bankConnectStart'
 import { describeUpstreamError, redactValues } from './logSanitize'
 import type { BankToken } from './bankTokenStore'
 
+/**
+ * Сервер не знает `client_id` Альфы — состояние СЕРВЕРА приложения, а не портала и не нажавшего.
+ *
+ * ⚠ Текст ПО-РУССКИ и называет переменную (#19, находка владельца 2026-09-26 на установке, где
+ * переменную не задали): прежний английский «bank client id is not configured on this server»
+ * доходил до экрана как есть и не говорил ни что не так, ни кто это чинит. Начинается со строчной:
+ * интерфейс ставит перед ним «Не удалось отправить: » или «Не удалось проверить ссылку: ».
+ */
+export const ALFA_CLIENT_ID_MISSING
+  = 'на сервере приложения не задан Client ID Альфа-Банка (переменная ALFA_OAUTH_CLIENT_ID) — это настройка сервера приложения, а не портала'
+
 /** Ответ роута: 200 + что подключили, либо 4xx/5xx + причина. */
 export interface ConnectKeyResult {
   status: number

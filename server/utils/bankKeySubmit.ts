@@ -18,7 +18,7 @@
 // НЕ администратор. Право на действие даёт не должность, а то, что администратор явно выбрал этого
 // человека и подписал грант — то есть решение всё равно принимает админ, просто заранее.
 
-import { exchangeAndSaveKey, precheckKeyConnect, type ConnectKeyDeps, type ConnectKeyResult } from './bankConnectKey'
+import { ALFA_CLIENT_ID_MISSING, exchangeAndSaveKey, precheckKeyConnect, type ConnectKeyDeps, type ConnectKeyResult } from './bankConnectKey'
 import { verifyKeyGrant, type BankKeyGrant } from './bankKeyGrant'
 import type { BankProviderId } from '../../app/types/statement'
 
@@ -93,7 +93,7 @@ export async function handleKeyRequestInfo(deps: KeySubmitDeps, input: KeyReques
   const clientId = deps.clientId().trim()
   if (!clientId) {
     // То же, что у приглашения: без `client_id` человек упрётся в обязательное поле кабинета.
-    return { status: 503, body: { error: 'bank client id is not configured on this server' } }
+    return { status: 503, body: { error: ALFA_CLIENT_ID_MISSING } }
   }
   return { status: 200, body: { ok: true, provider: gate.grant.provider, clientId } }
 }

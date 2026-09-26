@@ -123,8 +123,20 @@ describe('Альфа-Банк: инструкция вместо ссылки', 
   // приводит владельца счёта к обязательному полю, которое нечем заполнить.
   it('без client_id ⇒ 503 и ничего не отправлено', async () => {
     const d = deps({ alfaClientId: () => '' })
-    expect((await handleSendBankInvite(d, alfa)).status).toBe(503)
+    const res = await handleSendBankInvite(d, alfa)
+    expect(res.status).toBe(503)
     expect(d.sendMessage).not.toHaveBeenCalled()
+    // ⚠ Текст доходит до экрана администратора КАК ЕСТЬ (находка владельца 2026-09-26): он обязан
+    // быть по-русски и называть переменную — иначе непонятно ни что не так, ни кто это чинит.
+    expect(String(res.body.error)).toContain('ALFA_OAUTH_CLIENT_ID')
+    expect(String(res.body.error)).toMatch(/[а-я]/)
+  })
+
+  it('без секрета подписи ⇒ 503 с русским текстом, называющим переменную', async () => {
+    const d = deps({ keyScreenLink: vi.fn(() => null) })
+    const res = await handleSendBankInvite(d, alfa)
+    expect(res.status).toBe(503)
+    expect(String(res.body.error)).toContain('SESSION_SECRET')
   })
 
   // У Альфы authorize-потока нет вовсе, значит и проверка «этот банк подключается ключом» к

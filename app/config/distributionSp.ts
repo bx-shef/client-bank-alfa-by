@@ -10,6 +10,8 @@
 //  - DISTRIBUTIONS ledger: one child element per allocation. NO stages, minimal — it is an
 //    accounting row (amount = `opportunity`, links to the payment + target, marker for idempotency).
 
+import type { PortalSettings } from '~/utils/settings'
+
 /** Stable titles — used both as the created SP title AND as the fallback marker to recover the
  *  entityTypeId (`findSmartProcessByTitle`) when the stored per-portal config is missing. */
 export const PAYMENT_SP_TITLE = 'Импорт выписки: платежи'
@@ -410,6 +412,50 @@ export function withSpProvision(
     [PAYMENT_SP_ID_CONFIG_KEY]: String(payment.id),
     [DISTRIBUTION_SP_CONFIG_KEY]: String(distribution.entityTypeId),
     [DISTRIBUTION_SP_ID_CONFIG_KEY]: String(distribution.id)
+  }
+}
+
+/** Ключи, которые пишет ТОЛЬКО провижининг (`withSpProvision`). */
+export const PROVISIONED_SP_KEYS = [
+  PAYMENT_SP_CONFIG_KEY, PAYMENT_SP_ID_CONFIG_KEY, DISTRIBUTION_SP_CONFIG_KEY, DISTRIBUTION_SP_ID_CONFIG_KEY
+] as const
+
+/**
+ * Id служебных смарт-процессов при сохранении формы настроек берутся из ХРАНИМОГО блока, а не из
+ * присланного (#19, живая находка владельца 2026-09-26).
+ *
+ * ⚠ Форма держит настройки, прочитанные при открытии, и «Сохранить» пишет их ЦЕЛИКОМ. Провижининг
+ * пишет эти ключи в тот же блок в обход формы, поэтому форма, открытая ДО нажатия «Настроить
+ * смарт-процессы», затирала только что записанные id своей старой копией: смарт-процессы в CRM
+ * есть, а приложение их «не видит» и после перезагрузки страницы.
+ * ⚠ Форма эти ключи не редактирует вовсе, значит её копия — всегда только старая версия хранимой.
+ * Поэтому хранимое побеждает в ОБЕ стороны: и восстанавливает стёртое, и не даёт вернуть
+ * устаревшее, которого в хранимом уже нет. Новый объект, вход не мутируется.
+ */
+export function keepStoredSpIds(
+  incoming: Record<string, string>,
+  stored: Record<string, string>
+): Record<string, string> {
+  const managed = new Set<string>(PROVISIONED_SP_KEYS)
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!managed.has(key)) out[key] = value
+  }
+  for (const key of PROVISIONED_SP_KEYS) {
+    const value = stored[key]
+    if (value) out[key] = value
+  }
+  return out
+}
+
+/** То же на уровне всего блока настроек: форма → к записи, id смарт-процессов — из хранимого. */
+export function withStoredSpIds(incoming: PortalSettings, stored: PortalSettings): PortalSettings {
+  return {
+    ...incoming,
+    recognition: {
+      ...incoming.recognition,
+      configFields: keepStoredSpIds(incoming.recognition.configFields, stored.recognition.configFields)
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { bearerToken, handleReadSetting, handleWriteSetting, verifyFrameAdmin, type SettingsIO } from '../server/utils/settingsHandler'
 
@@ -156,6 +157,53 @@ describe('verifyFrameAdmin', () => {
     expect(r.ok).toBe(false)
     expect(r.status).toBe(502)
     expect(r.isAdmin).toBe(false)
+  })
+})
+
+// `merge` (#19): часть блока пишет провижининг в обход формы, поэтому итоговое значение собирается
+// из ХРАНИМОГО. Читать его — только после проверки админа, и при отказе чтения не писать вовсе.
+describe('handleWriteSetting — слияние с хранимым', () => {
+  it('merge получает хранимое значение, и пишется результат merge', async () => {
+    const { io, byHost } = makeIO()
+    byHost['a.bitrix24.by'] = { [KEY]: 'stored' }
+    const seen: (string | null)[] = []
+    const res = await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'form', KEY, (stored) => {
+      seen.push(stored)
+      return `merged:${stored}`
+    })
+    expect(res.status).toBe(200)
+    expect(seen).toEqual(['stored'])
+    expect(byHost['a.bitrix24.by']?.[KEY]).toBe('merged:stored')
+  })
+
+  it('не-админ не стоит порталу чтения: отказ раньше', async () => {
+    const { io, calls } = makeIO(false)
+    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY, s => s ?? '')).status).toBe(403)
+    expect(calls.some(c => c.method === 'app.option.get')).toBe(false)
+  })
+
+  it('не удалось прочитать хранимое ⇒ 502 и НИЧЕГО не пишем', async () => {
+    const calls: string[] = []
+    const io: SettingsIO = {
+      callRest: async (_h, _t, method) => {
+        calls.push(method)
+        if (method === 'profile') return { result: { ADMIN: true } }
+        if (method === 'app.option.get') throw new Error('portal down')
+        return { result: true }
+      }
+    }
+    expect((await handleWriteSetting(io, 'AT', 'a.bitrix24.by', 'v', KEY, s => s ?? '')).status).toBe(502)
+    expect(calls).not.toContain('app.option.set')
+  })
+})
+
+// ⚠ Маршрут формы ОБЯЗАН собирать запись через хранимые id смарт-процессов: поведенческие тесты
+// выше проверяют механизм, а забытый аргумент в маршруте они не увидят (роут — `defineEventHandler`
+// поверх живого транспорта).
+describe('маршрут сохранения настроек', () => {
+  it('chat-settings.post передаёт в запись слияние с хранимыми id смарт-процессов', () => {
+    const src = readFileSync('server/api/chat-settings.post.ts', 'utf8')
+    expect(src).toMatch(/handleWriteSetting\([\s\S]*SETTINGS_KEY,\s*stored\s*=>[\s\S]*withStoredSpIds\(/)
   })
 })
 
