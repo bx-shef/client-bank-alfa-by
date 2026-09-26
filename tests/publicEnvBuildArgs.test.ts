@@ -66,25 +66,33 @@ function serverSources(dir = 'server'): string[] {
 }
 
 /**
- * Ключи `runtimeConfig.public`, которые читает СЕРВЕРНЫЙ код.
+ * Переменные `NUXT_PUBLIC_*`, которые читает СЕРВЕРНЫЙ код.
  *
- * Форм чтения две, и обе живые: точечная (`useRuntimeConfig().public.siteUrl`) и разбором
- * (`const { commitSha, repoUrl } = useRuntimeConfig().public`). Ищем обе — иначе гард молчал бы
- * ровно о том файле, который написан второй формой.
+ * Форм чтения три, и все живые: точечная (`useRuntimeConfig().public.siteUrl`), разбором
+ * (`const { commitSha, repoUrl } = useRuntimeConfig().public`) и СЫРАЯ
+ * (`process.env.NUXT_PUBLIC_B24_APP_CODE`). Ищем все — иначе гард молчал бы ровно о том файле,
+ * который написан пропущенной формой.
+ *
+ * ⚠ Так и вышло с третьей (#19): гард искал только `useRuntimeConfig()`, а код приложения сервер
+ * читает сырым `process.env`. Замерено сборкой: такое чтение остаётся в бандле как есть, то есть
+ * это такое же чтение в РАНТАЙМЕ, — но гард его не видел, строки в финальной стадии не было, и на
+ * клоне с локальным приложением ссылка владельцу счёта уходила с запасным кодом Маркета
+ * `shef.bankimport`, которого портал клиента не знает.
  */
-function serverReadPublicKeys(): string[] {
-  const keys = new Set<string>()
+function serverReadPublicEnv(): string[] {
+  const names = new Set<string>()
   for (const file of serverSources()) {
     const src = readFileSync(file, 'utf8')
-    for (const m of src.matchAll(/useRuntimeConfig\(\)\.public\.(\w+)/g)) keys.add(m[1]!)
+    for (const m of src.matchAll(/useRuntimeConfig\(\)\.public\.(\w+)/g)) names.add(envNameFor(m[1]!))
     for (const m of src.matchAll(/\{([^{}]*)\}\s*=\s*useRuntimeConfig\(\)\.public\b/g)) {
       for (const part of m[1]!.split(',')) {
         const name = part.split(':')[0]!.trim()
-        if (/^\w+$/.test(name)) keys.add(name)
+        if (/^\w+$/.test(name)) names.add(envNameFor(name))
       }
     }
+    for (const m of src.matchAll(/process\.env\.(NUXT_PUBLIC_\w+)/g)) names.add(m[1]!)
   }
-  return [...keys]
+  return [...names]
 }
 
 /** Блок `build-args:` джобы деплоя (та, что пушит образы в GHCR). */
@@ -147,21 +155,22 @@ describe('переменные NUXT_PUBLIC_* доезжают до сборки'
 // Цена промаха названа в Dockerfile у `NUXT_PUBLIC_COMMIT_SHA` (#76) и повторилась у
 // `NUXT_PUBLIC_SITE_URL` (#19): приглашение владельцу счёта уходило без картинок шагов при верно
 // заданной переменной CI, а лог честно говорил «адрес приложения непригоден для ссылки».
-describe('серверные чтения runtimeConfig.public доезжают до РАНТАЙМА backend-образа', () => {
-  const serverKeys = serverReadPublicKeys()
+describe('серверные чтения NUXT_PUBLIC_* доезжают до РАНТАЙМА backend-образа', () => {
+  const serverEnv = serverReadPublicEnv()
 
   // Разбор ищет чужой код, поэтому сам список — первая проверка: пустой набор прошёл бы всё
-  // остальное зелёным, ничего не проверив.
+  // остальное зелёным, ничего не проверив. По живому чтению на КАЖДУЮ форму — иначе сломанный
+  // разбор одной из них молчал бы.
   it('чтения найдены в server/**', () => {
-    expect(serverKeys.length).toBeGreaterThanOrEqual(3)
-    expect(serverKeys, 'точечное чтение не распознано').toContain('siteUrl')
-    expect(serverKeys, 'чтение разбором не распознано').toContain('commitSha')
+    expect(serverEnv.length).toBeGreaterThanOrEqual(3)
+    expect(serverEnv, 'точечное чтение не распознано').toContain('NUXT_PUBLIC_SITE_URL')
+    expect(serverEnv, 'чтение разбором не распознано').toContain('NUXT_PUBLIC_REPO_URL')
+    expect(serverEnv, 'сырое чтение process.env не распознано').toContain('NUXT_PUBLIC_B24_APP_CODE')
   })
 
-  it('финальная стадия backend объявляет ARG и ENV для каждого прочитанного ключа', () => {
+  it('финальная стадия backend объявляет ARG и ENV для каждой прочитанной переменной', () => {
     const body = stageBody('backend')
-    for (const key of serverKeys) {
-      const env = envNameFor(key)
+    for (const env of serverEnv) {
       expect(body, `backend: нет ARG ${env} — сервер прочитает пустую строку`).toContain(`ARG ${env}\n`)
       expect(body, `backend: нет ENV ${env} — сервер прочитает пустую строку`).toContain(`ENV ${env}=$${env}\n`)
     }
