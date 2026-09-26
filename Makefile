@@ -8,6 +8,18 @@
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
 
+# Какими файлами compose собирать прод-стек.
+#
+# ⚠ Площадок две, и файлы у них РАЗНЫЕ. На классическом сервере — один `docker-compose.prod.yml`.
+# На ВМ Битрикс24 к нему добавляется оверлей (публикация порта на 127.0.0.1, образы КЛИЕНТА), и
+# оба файла перечислены в `COMPOSE_FILE` внутри `./.env`. Compose читает эту переменную САМ — но
+# только когда `-f` не передан: явный `-f docker-compose.prod.yml` молча отбрасывает оверлей.
+# Так и было во всех целях ниже: `make prod-redeploy` на ВМ поднимал приложение без порта на
+# loopback (домен отдавал 502) и backend из НАШЕГО образа вместо клиентского.
+# Поэтому `-f` ставим только там, где `COMPOSE_FILE` не задан. Правило то же, что у
+# `deploy/bitrixvm/git-poll-deploy.sh`: все команды из каталога стека, файлы — из `.env`.
+DC = docker compose$(if $(shell grep -qs '^[[:space:]]*COMPOSE_FILE[[:space:]]*=' ./.env && echo y),, -f docker-compose.prod.yml)
+
 # ─── Локальная разработка ────────────────────────────────────────────
 
 dev:
@@ -24,29 +36,29 @@ build-local:
 
 ## Запустить / обновить app-контейнер
 prod-up:
-	docker compose -f docker-compose.prod.yml up -d
+	$(DC) up -d
 
 ## Остановить стек
 prod-down:
-	docker compose -f docker-compose.prod.yml down
+	$(DC) down
 
 ## Скачать свежий образ (без перезапуска контейнера)
 prod-pull:
-	docker compose -f docker-compose.prod.yml pull
+	$(DC) pull
 
 ## Принудительно обновить прямо сейчас (без ожидания Watchtower)
 prod-redeploy:
-	docker compose -f docker-compose.prod.yml pull && \
-	docker compose -f docker-compose.prod.yml up -d && \
+	$(DC) pull && \
+	$(DC) up -d && \
 	docker image prune -f
 
 ## Живой лог app-контейнера (Ctrl+C чтобы выйти)
 logs:
-	docker compose -f docker-compose.prod.yml logs -f app
+	$(DC) logs -f app
 
 ## Состояние контейнеров стека
 ps:
-	docker compose -f docker-compose.prod.yml ps
+	$(DC) ps
 
 # ─── Диагностика на сервере ──────────────────────────────────────────
 # ⚠ РЕПОЗИТОРИЯ НА СЕРВЕРЕ НЕТ — там только `docker-compose.prod.yml`, этот `Makefile` и `.env`
@@ -158,12 +170,12 @@ self-update:
 # `docker-compose.prod.yml`. Насовсем — `make compose-update` (в репозитории он выключен по
 # умолчанию) либо закомментировать вручную. Цель нужна ровно для «выключить прямо сейчас».
 gw-stop:
-	@docker compose -f docker-compose.prod.yml stop crypto-gw \
+	@$(DC) stop crypto-gw \
 	  && echo "[make] crypto-gw остановлен. ⚠ prod-redeploy поднимет его снова — см. compose-update"
 
 ## Поднять крипто-шлюз обратно (понадобится при сертификации СКЗИ)
 gw-start:
-	@docker compose -f docker-compose.prod.yml up -d crypto-gw \
+	@$(DC) up -d crypto-gw \
 	  && echo "[make] crypto-gw поднят. Переключить банк обратно: make prior-switch TO=gateway"
 
 ## Обновить docker-compose.prod.yml из репозитория (ЗАТРЁТ локальные правки — сперва покажет их)
@@ -459,5 +471,5 @@ reap-off:
 	  && cp .env .env.bak.$$(date +%Y%m%d%H%M%S) \
 	  && sed -i '/^PORTAL_REAP_ENABLED=/d' .env \
 	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
-	  && docker compose -f docker-compose.prod.yml up -d backend \
+	  && $(DC) up -d backend \
 	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
