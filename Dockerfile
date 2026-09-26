@@ -185,6 +185,15 @@ ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 # сообщая в лог «адрес приложения непригоден для ссылки», — при верно заданной переменной CI.
 ARG NUXT_PUBLIC_SITE_URL
 ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
+# И код приложения на портале: из него backend строит ссылку владельцу счёта на экран ключа
+# (#19). Без строки на клоне ссылка уходила с запасным `shef.bankimport`, и экран ключа по ней
+# не открывался.
+ARG NUXT_PUBLIC_B24_APP_CODE
+ENV NUXT_PUBLIC_B24_APP_CODE=$NUXT_PUBLIC_B24_APP_CODE
+# И флаг локального режима: backend его не применяет, но `envCheck` на старте предупреждает о
+# значении, которое режим не включает. Без строки backend видел пустоту и не предупреждал никогда.
+ARG NUXT_PUBLIC_LOCAL_MODE
+ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 # Nitro's node-server output is self-contained (deps bundled) — copy only .output.
 COPY --from=builder-server /app/.output ./.output
 # OTel bootstrap (#78): loaded via NODE_OPTIONS=--import BEFORE the app so auto-instrumentation

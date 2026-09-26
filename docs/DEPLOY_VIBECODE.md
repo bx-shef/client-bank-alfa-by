@@ -1,6 +1,6 @@
 # Деплой в Битрикс24 Вайбкод Black Hole (альтернативный таргет)
 
-> Last reviewed: 2026-08-12
+> Last reviewed: 2026-09-26
 
 Как выгрузить это приложение в **Битрикс24 Vibecode Black Hole** — закрытый Bitrix-Cloud VM,
 управляемый по REST (без SSH), приложение слушает `:3000` и отдаётся по HTTPS
@@ -117,6 +117,7 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
   "PUBLIC_PAGE_BASIC_AUTH_PASS": "<пароль оператора — ОБЯЗАТЕЛЬНО под PUBLIC>",
   "SECURITY_HEADERS_ENABLED": "1",
   "NUXT_PUBLIC_SITE_URL": "https://app-XXXX.vibecode.bitrix24.tech",
+  "NUXT_PUBLIC_B24_APP_CODE": "<код приложения на портале>",
   "B24_APPLICATION_TOKEN": ""
 }
 ```
@@ -138,6 +139,11 @@ write-once) — `process.env` остаётся пустым, это нормал
 сохранённому в БД токену). `NUXT_PUBLIC_SITE_URL` подставь после первого деплоя (когда узнаешь
 `appUrl`) и передеплой — из него строится абсолютный URL хендлера событий `/api/b24/events`
 (иначе `/install` откажется биндить).
+
+`NUXT_PUBLIC_B24_APP_CODE` — код, которым портал зовёт приложение ([`APP_LINKS.md`](APP_LINKS.md)).
+У локального приложения это его `client_id` вида `local.…` — то же значение, что в `B24_CLIENT_ID`.
+Без него backend строит ссылку владельцу счёта на экран ключа с кодом нашего приложения из Маркета,
+и экран по ней не открывается. Тиражному приложению ключ не нужен: умолчание и есть его код.
 
 ## Первый деплой (проверить вручную)
 
