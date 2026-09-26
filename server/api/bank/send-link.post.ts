@@ -40,10 +40,10 @@ export default defineEventHandler(async (event) => {
         // токеном нажавшего: иначе инструкция по доступу к деньгам компании приходила бы как
         // записка от коллеги, и спрашивали бы потом с него. Откат на `im.message.add` внутри
         // `postChatMessage` — там же, где он нужен остальным пяти видам сообщений.
-        sendMessage: async (memberId, dialogId, text, attach) => {
+        sendMessage: async (memberId, dialogId, text, attachment) => {
           const call = await livePortalSdkCall(memberId)
           if (!call) throw new Error('portal token is not available')
-          await postChatMessage(dialogId, text, call, memberId, attach)
+          await postChatMessage(dialogId, text, call, memberId, attachment)
         },
         // ⚠ Через ЕДИНСТВЕННЫЙ choke point записи `app.option` (#182), а не своим вызовом:
         // он же проверяет `profile.ADMIN`. Лишний `profile` на редкое ручное действие дешевле

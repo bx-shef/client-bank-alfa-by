@@ -112,9 +112,11 @@ describe('Альфа-Банк: инструкция вместо ссылки', 
     const res = await handleSendBankInvite(d, alfa)
     expect(res.status).toBe(200)
     expect(d.buildPriorUrl).not.toHaveBeenCalled()
-    const text = (d.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![2] as string
-    expect(text).toContain('Open API')
-    expect(text).toContain('shef-bank-import')
+    const [, , text, attachment] = vi.mocked(d.sendMessage).mock.calls[0]!
+    expect(text).toContain(KEY_LINK)
+    // Шаги уехали во вложение; полный текст со всеми шагами едет рядом — на случай отказа портала.
+    expect(attachment!.fallbackText).toContain('Open API')
+    expect(attachment!.fallbackText).toContain('shef-bank-import')
   })
 
   // ⚠ Отсутствие `client_id` — состояние СЕРВЕРА, а не ошибка нажавшего: инструкция без него
@@ -164,12 +166,17 @@ describe('доставка и запоминание', () => {
 describe('картинки шагов в приглашении (#19)', () => {
   const alfa = { ...input, provider: 'alfa-by' as const }
 
-  it('у Альфы к сообщению прикладываются картинки шагов', async () => {
+  it('у Альфы шаги со снимками уходят вложением, а полный текст — запасным', async () => {
     const d = deps()
     await handleSendBankInvite(d, alfa)
-    const attach = vi.mocked(d.sendMessage).mock.calls[0]![3]
-    expect(attach?.[0]?.IMAGE.length).toBeGreaterThan(0)
-    expect(attach![0]!.IMAGE[0]!.LINK.startsWith('https://bank-import.example/guide/')).toBe(true)
+    const [, , text, attachment] = vi.mocked(d.sendMessage).mock.calls[0]!
+    const links = attachment!.attach.flatMap(b => ('IMAGE' in b ? b.IMAGE.map(i => i.LINK) : []))
+    expect(links.length).toBeGreaterThan(0)
+    for (const link of links) expect(link.startsWith('https://bank-import.example/guide/')).toBe(true)
+    // ⚠ Короткий текст без шагов, полный — с ними: перепутать их значит на отказе портала отправить
+    // ссылку без инструкции.
+    expect(text).not.toContain('Open API')
+    expect(attachment!.fallbackText).toContain('Open API')
   })
 
   it('у Приора картинок НЕТ — там нечего снимать', async () => {
@@ -180,14 +187,17 @@ describe('картинки шагов в приглашении (#19)', () => {
     expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
   })
 
-  it('сборка без NUXT_PUBLIC_SITE_URL всё равно ОТПРАВЛЯЕТ инструкцию, просто без картинок', async () => {
-    // ⚠ Отсутствие картинок — не повод молчать: текст инструкции самодостаточен, и отказ здесь
-    // означал бы, что подключение банка нельзя передать владельцу счёта из-за косметики.
-    const d = deps({ siteUrl: () => '' })
+  it('сборка без NUXT_PUBLIC_SITE_URL всё равно ОТПРАВЛЯЕТ полную инструкцию, просто без картинок', async () => {
+    // ⚠ Отсутствие картинок — не повод молчать: полный текст самодостаточен, и отказ здесь означал
+    // бы, что подключение банка нельзя передать владельцу счёта из-за косметики. Но и молча нельзя:
+    // фразу ищет `make chat-log`.
+    const log = vi.fn()
+    const d = deps({ siteUrl: () => '', log })
     const res = await handleSendBankInvite(d, alfa)
     expect(res.status).toBe(200)
     expect(vi.mocked(d.sendMessage).mock.calls[0]![3]).toBeNull()
     expect(String(vi.mocked(d.sendMessage).mock.calls[0]![2])).toContain('Open API')
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('картинки шагов не приложены'))
   })
 })
 
