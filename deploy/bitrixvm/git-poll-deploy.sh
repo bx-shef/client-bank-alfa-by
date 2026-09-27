@@ -19,8 +19,8 @@
 
 set -Eeuo pipefail
 
-CONFIG="${BANK_APP_DEPLOY_CONFIG:-/etc/bank-app-deploy/deploy.env}"
-STATE_DIR="${BANK_APP_DEPLOY_STATE:-/var/lib/bank-app-deploy}"
+CONFIG="${BANK_APP_DEPLOY_CONFIG:-/home/bitrix/bank-app-deploy/deploy.env}"
+STATE_DIR="${BANK_APP_DEPLOY_STATE:-/home/bitrix/bank-app-deploy/state}"
 LOCK_FILE="$STATE_DIR/deploy.lock"
 
 log() { printf '[deploy] %s\n' "$*"; }
@@ -46,11 +46,10 @@ die() { printf '[deploy] ОШИБКА: %s\n' "$*" >&2; exit 1; }
 mkdir -p "$STATE_DIR"
 
 # ⚠ Пауза — ФАЙЛ в каталоге состояния, а не правка расписания. Так её ставит и снимает
-# `make deploy-pause`/`deploy-resume` в варианте с cron (шаг 6b): редактировать crontab
+# `make deploy-pause`/`deploy-resume` (шаг 6): редактировать crontab
 # программно значило бы рисковать чужими строками в нём. Файл переживает перезагрузку —
 # «само включилось ночью» было бы худшим поведением.
-# Ручной запуск (`make deploy-now`) паузу обходит намеренно: это явное действие человека,
-# ровно как `systemctl start` в systemd-варианте при выключенном таймере.
+# Ручной запуск (`make deploy-now`) паузу обходит намеренно: это явное действие человека.
 if [ -e "$STATE_DIR/paused" ] && [ "${BANK_APP_DEPLOY_IGNORE_PAUSE:-0}" != 1 ]; then
   log "автообновление на паузе ($STATE_DIR/paused) — пропускаю тик"
   exit 0

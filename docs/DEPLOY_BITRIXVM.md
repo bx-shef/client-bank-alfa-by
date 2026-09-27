@@ -1,6 +1,6 @@
 # Деплой на виртуальную машину Битрикс24 (третий таргет)
 
-> Last reviewed: 2026-09-26
+> Last reviewed: 2026-09-27
 
 Развёртывание приложения **рядом с боевым порталом** на виртуальной машине Битрикс24
 (bitrix-env): домен третьего уровня, nginx машины терминирует TLS и проксирует всё в
@@ -111,7 +111,7 @@ git push -u origin main
 |---|---|---|
 | `/home/bitrix/ext_www/<домен>` | заглушка `index.php`, `500.html`, `.htaccess`, `.htsecure` | веб-сервер |
 | `/home/bitrix/bank-import` | оба compose-файла, `.env`, `Makefile` и `src/` — копия клиентского репозитория | docker и оператор |
-| `/home/bitrix/bank-app-deploy` (или `/etc/bank-app-deploy`) | ключ git, токен реестра, настройки и состояние обновления | скрипт обновления |
+| `/home/bitrix/bank-app-deploy` | ключ git, токен реестра, настройки и состояние обновления | скрипт обновления |
 
 ⚠ **Стек НИКОГДА не кладётся в docroot.** В `.env` лежат пароль Postgres, ключ шифрования
 токенов Битрикс24, секрет сессий и креды банков. Сегодня их прикрывают две вещи — `.htaccess`
@@ -122,16 +122,16 @@ git push -u origin main
 
 ## Порядок
 
-⚠ **Всё берётся из КЛИЕНТСКОГО репозитория.** На сервере лежит его копия
-(`/home/bitrix/bank-import/src`, шаг 1b), и все файлы ниже копируются из неё; из нашего
-репозитория сервер не берёт ничего. Переменные шага:
+⚠ **Всё берётся из КЛИЕНТСКОГО репозитория — и только то, что нужно серверу.** Шаг 1b кладёт в
+`/home/bitrix/bank-import/src` около 25 служебных файлов по списку
+[`deploy/bitrixvm/server-files.txt`](../deploy/bitrixvm/server-files.txt): `Makefile`, compose,
+`deploy/bitrixvm/` и скрипты операторских целей. Исходников приложения на сервере нет — оно
+приходит готовыми образами из GHCR клиента. Из нашего репозитория сервер не берёт ничего.
 
-```bash
-DOMAIN=<домен>                 # например bank-app.example.by
-S=/home/bitrix/bank-import/src # копия клиентского репозитория
-OWNER=<владелец-клиентского-репо>
-REPO=<имя-клиентского-репо>
-```
+⚠ **Переменные задаются в начале КАЖДОГО блока команд**, где они нужны, а не один раз наверху:
+блоки выполняются под разными пользователями (`root`, `bitrix`) и в разных сессиях, и
+переменная из прошлого блока в новой сессии пуста — `$DOMAIN` превратился бы в пустую строку
+молча. Строки с `←` замените своими значениями.
 
 Кто что делает: шаги 1 и 8 — владелец портала, 1b — `bitrix`, 2–3 — root, 4–7 — `bitrix`.
 
@@ -171,13 +171,31 @@ cat ~/bank-app-deploy/deploy_key.pub
 Затем:
 
 ```bash
+OWNER=acme                        # ← владелец клиентского репозитория на GitHub
+REPO=bank                         # ← имя клиентского репозитория
 mkdir -p /home/bitrix/bank-import && cd /home/bitrix/bank-import
-GIT_SSH_COMMAND="ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-  git clone --depth 1 "git@github.com:$OWNER/$REPO.git" src
-git -C src config core.sshCommand "ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes"
+git clone --depth 1 --filter=blob:none --no-checkout \
+  -c core.sshCommand="ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+  "git@github.com:$OWNER/$REPO.git" src
+git -C src sparse-checkout set --no-cone /deploy/bitrixvm/server-files.txt
+git -C src checkout -q
+git -C src sparse-checkout set --no-cone --stdin < src/deploy/bitrixvm/server-files.txt
+find src -type f -not -path 'src/.git/*' | wc -l      # ожидаем ~25 файлов, не тысячу
 cp src/Makefile ./Makefile
 make help
 ```
+
+⚠ **Копия выборочная.** `--filter=blob:none` + `sparse-checkout` означают: git скачивает
+содержимое ТОЛЬКО файлов из списка `deploy/bitrixvm/server-files.txt`. Сначала берётся сам
+список, затем по нему — всё остальное. Нужен git не старше 2.27 (`git --version`).
+
+⚠ Список применяется заново при каждом `make self-update`: файл, который новая версия добавила в
+список (скрипт новой make-цели), доезжает на сервер сам.
+
+⚠ **Сервер, где `src` склонирован целиком** (до 2026-09-27): удалить копию и повторить блок выше —
+`cd /home/bitrix/bank-import && rm -rf src`. Стек, `.env`, ключ и `deploy.env` это не трогает;
+`make self-update` на такой копии тоже сузил бы рабочие файлы, но скачанная история осталась бы
+в `src/.git`.
 
 ⚠ Копия — **только для чтения**: править в ней ничего нельзя, её перезаписывает
 `make self-update` (`git pull --ff-only`, локальная правка его остановит). Правки под клиента
@@ -187,14 +205,15 @@ make help
 (`make self-update` = обновить копию + `Makefile`). Нет копии — он пошёл бы в наш репозиторий;
 на сервере клиента так быть не должно.
 
-⚠ Тот же ключ потом использует автообновление (шаг 6/6b): один ключ на сервер.
+⚠ Тот же ключ потом использует автообновление (шаг 6): один ключ на сервер.
 
 ### 2. Проксирование
 
 Под **root**:
 
 ```bash
-install -m 644 -o root -g root "$S/deploy/bitrixvm/nginx/00-app-proxy.conf" \
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+install -m 644 -o root -g root /home/bitrix/bank-import/src/deploy/bitrixvm/nginx/00-app-proxy.conf \
      "/etc/nginx/bx/site_settings/$DOMAIN/00-app-proxy.conf" \
   && nginx -t && systemctl reload nginx
 ```
@@ -224,10 +243,11 @@ install -m 644 -o root -g root "$S/deploy/bitrixvm/nginx/00-app-proxy.conf" \
 Под **root**:
 
 ```bash
-D=/home/bitrix/ext_www/$DOMAIN
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+D=/home/bitrix/ext_www/$DOMAIN                 # docroot сайта, созданный меню
 cp -a "$D/index.php" "$D/index.php.orig-$(date +%F)"
-cp "$S/deploy/bitrixvm/docroot/index.php" "$D/index.php"
-cp "$S/deploy/bitrixvm/docroot/.htaccess"  "$D/.htaccess"
+cp /home/bitrix/bank-import/src/deploy/bitrixvm/docroot/index.php "$D/index.php"
+cp /home/bitrix/bank-import/src/deploy/bitrixvm/docroot/.htaccess "$D/.htaccess"
 chown bitrix:bitrix "$D/index.php" "$D/.htaccess"
 chmod 644 "$D/index.php" "$D/.htaccess"
 ```
@@ -241,6 +261,8 @@ chmod 644 "$D/index.php" "$D/.htaccess"
 HTTP→HTTPS включается штатным для bitrix-env способом — файлом `.htsecure` в docroot:
 
 ```bash
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+D=/home/bitrix/ext_www/$DOMAIN
 touch "$D/.htsecure" && chown bitrix:bitrix "$D/.htsecure"
 curl -sSI "http://$DOMAIN/" | head -3        # ожидаем 301 на https
 ```
@@ -287,6 +309,9 @@ docker login ghcr.io -u <github-логин> --password-stdin < ~/bank-app-deploy
 **4.4. Файлы стека и `.env`:**
 
 ```bash
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+OWNER=acme                        # ← владелец клиентского репозитория на GitHub
+REPO=bank                         # ← имя клиентского репозитория
 cd /home/bitrix/bank-import
 cp src/docker-compose.prod.yml src/deploy/bitrixvm/docker-compose.bitrixvm.yml .
 docker network create proxy-net 2>/dev/null || true
@@ -323,6 +348,7 @@ docker compose pull && docker compose up -d
 **4.5. Проверка тракта** (работает и до появления домена — по `Host` на loopback):
 
 ```bash
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
 curl -sS -o /dev/null -w 'health=%{http_code}\n' http://127.0.0.1:8080/api/health
 curl -sS http://127.0.0.1:8080/api/ready; echo
 curl -sS "http://127.0.0.1:8080/" | grep -c "$DOMAIN"
@@ -428,63 +454,17 @@ NUXT_PUBLIC_AUTHOR_URL=https://offer.bx-shef.by/?ref=bank-import
 но нераспознанное значение backend помечает предупреждением на старте (`envCheck`) — то есть
 проверять надо не «переменная задана», а лог запуска.
 
-### 6. Автообновление
+### 6. Автообновление: cron под `bitrix`
 
-Вариант для root-схемы (альтернатива — cron под `bitrix`, шаг 6b). Под **root**:
+Путь один: скрипт опроса git запускается из crontab пользователя `bitrix`, все его файлы — в
+`/home/bitrix/bank-app-deploy`. Root здесь не нужен.
 
-```bash
-install -m 755 "$S/deploy/bitrixvm/git-poll-deploy.sh" /usr/local/sbin/bank-app-deploy
-install -d -m 700 /etc/bank-app-deploy
-install -m 600 "$S/deploy/bitrixvm/deploy.env.client.example" /etc/bank-app-deploy/deploy.env
-# заполнить: GIT_URL, образы, токен, STACK_DIR; GIT_SSH_KEY — ключ из шага 1b
-# (/home/bitrix/bank-app-deploy/deploy_key: root его читает, второй ключ не нужен)
-install -m 644 "$S/deploy/bitrixvm/systemd/bank-app-deploy.service" /etc/systemd/system/
-install -m 644 "$S/deploy/bitrixvm/systemd/bank-app-deploy.timer"   /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now bank-app-deploy.timer
-```
+⚠ Работает он потому, что `bitrix` состоит в группе `docker` (шаг 4.1). Членство в этой группе
+равносильно root на машине — это цена, названная в шаге 4.1, а не новая.
 
-⚠ **Первый прогон — руками**, до постановки в расписание: отказ доступа к git, опечатку в
-имени образа и незалогиненный реестр видно сразу, а не через пять минут в журнале.
-
-```bash
-BANK_APP_DEPLOY_CONFIG=/etc/bank-app-deploy/deploy.env /usr/local/sbin/bank-app-deploy
-```
-
-Ключ и токен кладём файлами с правами `600`, а не в юнит: содержимое юнита видно любому
-пользователю через `systemctl cat` и попадает в бэкап конфигурации.
-
-Два варианта источника опроса — `deploy.env.client.example` (клиентский репозиторий,
-штатный) и `deploy.env.upstream.example` (апстрим напрямую; годится для стенда, в бою нет —
-домен запечён в образы апстрима под его домен).
-
-⚠ Разворачивается образ **по тегу коммита** (`sha-<короткий>`), а не `:latest`: движущийся
-тег между двумя `pull` может сдвинуться, и получится половина одной версии и половина
-другой. Отсюда же проверяемость: «развёрнут коммит X» — утверждение, которое можно
-проверить, а откат сводится к «развернуть предыдущий X».
-
-⚠ Проверяются **два** адреса: `/api/health` остаётся зелёным при мёртвых Postgres и Redis,
-то есть по нему одному успешным признавалось бы ровно то, что новая версия и ломает —
-несовместимая миграция и отвалившаяся очередь. Не прошло — откат на прежние образы **по их
-идентификаторам**, а не по тегу: тег к этому моменту уже переписан.
-
-⚠ Состояние после отката **не** обновляется: следующий тик попробует тот же коммит снова.
-Сломанную версию чинит новый коммит, и сервер подхватит его сам.
-
-### 6b. Вариант без systemd: cron под `bitrix`
-
-Поддерживаемая альтернатива, если не хочется вешать обновление на root.
-
-⚠ **Одно действие от root неизбежно:** `usermod -aG docker bitrix`. Без него `bitrix` не
-обращается к docker вовсе — сокет принадлежит root и группе `docker`.
-
-⚠ И оговорка, которую надо услышать ДО выбора: членство в группе `docker` равносильно root на
-этой машине (любой её член монтирует корень хоста в контейнер). То есть выигрыш в правах здесь
-нулевой; выбор между вариантами — про удобство эксплуатации, а не про безопасность.
-
-⚠ **Логинится в реестр тот же пользователь, от которого работает обновление.** `docker login`
-кладёт токен в `~/.docker/config.json` ТОГО, кто его выполнил, поэтому логин под `bitrix` при
-обновлении от root (и наоборот) даёт `unauthorized` на каждом тике — молча, при исправном
-всём остальном.
+⚠ **Логинится в реестр тот же `bitrix`** (шаг 4.3): `docker login` кладёт токен в
+`~/.docker/config.json` того, кто его выполнил, и логин под другим пользователем дал бы
+`unauthorized` на каждом тике — молча.
 
 Всё под **`bitrix`**, из `/home/bitrix/bank-import`. Ключ git (шаг 1b) и токен реестра
 (шаг 4.3) уже лежат в `~/bank-app-deploy`.
@@ -500,6 +480,8 @@ install -m 755 src/deploy/bitrixvm/git-poll-deploy.sh ~/bin/bank-app-deploy
 **Настройки** — пути полные (тильда в cron не раскрывается):
 
 ```bash
+OWNER=acme                        # ← владелец клиентского репозитория на GitHub
+REPO=bank                         # ← имя клиентского репозитория
 cat > ~/bank-app-deploy/deploy.env <<CONF
 GIT_URL=git@github.com:$OWNER/$REPO.git
 GIT_BRANCH=main
@@ -518,6 +500,9 @@ chmod 600 ~/bank-app-deploy/deploy.env
 **Первый прогон — руками**, до расписания: отказ доступа к git, опечатку в имени образа и
 незалогиненный реестр видно сразу, а не через пять минут в логе.
 
+⚠ Пока образов нужного коммита в реестре нет (CI клиента ещё собирает), скрипт молча выходит —
+это не ошибка, он попробует на следующем тике.
+
 ```bash
 make deploy-now
 ```
@@ -535,25 +520,31 @@ crontab -l
 make deploy-status
 ```
 
-⚠ Вторая строка обязательна: у systemd ротация лога встроена, у cron её нет вовсе — файл растёт,
-пока не кончится диск. ⚠ В cron **тильда не раскрывается**, только полные пути; это самая частая
+⚠ Вторая строка обязательна: у cron ротации лога нет вовсе — без неё файл растёт, пока не
+кончится диск. ⚠ В cron **тильда не раскрывается**, только полные пути; это самая частая
 причина «руками работает, по расписанию нет».
 
-Что теряется по сравнению с systemd — и это цена, а не придирки: журнал с ротацией
-(`journalctl -u bank-app-deploy`) и разброс запуска (`RandomizedDelaySec` — без него все машины
-стучатся в GitHub в одну и ту же минуту).
+Цели `deploy-status` / `deploy-now` / `deploy-pause` / `deploy-resume` запускать **из-под
+`bitrix`**: признак настройки — `~/bank-app-deploy/deploy.env`, а у root домашний каталог
+другой, и он ответит «не настроено». Пауза — файл `~/bank-app-deploy/state/paused`, который
+проверяет сам скрипт обновления; crontab при этом не правится.
 
-Операторские цели `deploy-status` / `deploy-now` / `deploy-pause` / `deploy-resume` работают в
-**обоих** вариантах — сами определяют, какой стоит. Запускать их в cron-варианте нужно из-под
-`bitrix`: признак варианта — `~/bank-app-deploy/deploy.env`, а у root домашний каталог другой.
-Пауза здесь — файл `~/bank-app-deploy/state/paused`, который проверяет сам скрипт обновления;
-crontab при этом не правится.
+⚠ Разворачивается образ **по тегу коммита** (`sha-<короткий>`), а не `:latest`: движущийся
+тег между двумя `pull` может сдвинуться, и получится половина одной версии и половина
+другой. Отсюда же проверяемость: «развёрнут коммит X» — утверждение, которое можно
+проверить, а откат сводится к «развернуть предыдущий X».
+
+⚠ Проверяются **два** адреса: `/api/health` остаётся зелёным при мёртвых Postgres и Redis,
+то есть по нему одному успешным признавалось бы ровно то, что новая версия и ломает —
+несовместимая миграция и отвалившаяся очередь. Не прошло — откат на прежние образы **по их
+идентификаторам**, а не по тегу: тег к этому моменту уже переписан.
+
+⚠ Состояние после отката **не** обновляется: следующий тик попробует тот же коммит снова.
+Сломанную версию чинит новый коммит, и сервер подхватит его сам.
 
 ⚠ Скрипт обновления в `~/bin/bank-app-deploy` сам себя не обновляет. Когда он меняется в
 репозитории: `make self-update` (обновит копию), затем
 `install -m 755 src/deploy/bitrixvm/git-poll-deploy.sh ~/bin/bank-app-deploy`.
-
-`make bitrix-check` и `make offline-snapshot` работают в обоих вариантах.
 
 ### 7. Оффлайн-копия
 
@@ -640,7 +631,7 @@ make deploy-now
 make deploy-status
 ```
 
-**Автообновление ещё не включено** (стек только поднят, шаг 6/6b впереди) — выпуск руками,
+**Автообновление ещё не включено** (стек только поднят, шаг 6 впереди) — выпуск руками,
 тоже целью:
 
 ```bash
@@ -697,8 +688,8 @@ make compose-update CONFIRM=1          # применить, затем make pro
 
 | цель | что делает |
 |---|---|
-| `make bitrix-check` | доедет ли запрос с домена до приложения: конфиг, контейнер, **статика**, таймер. Работает и до появления домена — ходит по `Host` на 127.0.0.1 |
-| `make deploy-status` | включено ли автообновление (systemd или cron), на паузе ли, какой коммит развёрнут, последний прогон |
+| `make bitrix-check` | доедет ли запрос с домена до приложения: конфиг, контейнер, **статика**, автообновление. Работает и до появления домена — ходит по `Host` на 127.0.0.1 |
+| `make deploy-status` | есть ли строка в crontab, на паузе ли, какой коммит развёрнут, последний прогон |
 | `make deploy-now` | проверить обновления сейчас, не дожидаясь тика; паузу обходит — это явное действие |
 | `make deploy-pause` / `deploy-resume` | приостановить и вернуть автообновление (пауза переживает перезагрузку — «само включилось ночью» было бы худшим поведением) |
 | `make prod-redeploy` | выпуск руками, пока автообновление не включено; берёт оверлей из `COMPOSE_FILE` |
@@ -726,4 +717,4 @@ grep -r 'proxyserver' /etc/nginx/bx/site_settings/<домен>/ && nginx -t \
 | 502 на домене | контейнер не слушает `127.0.0.1:8080` — забыт оверлей (`COMPOSE_FILE`) |
 | 504 на подключении банка | таймаут внешнего nginx меньше 65 с |
 | `/api/ready` = 503 | Postgres или Redis; `docker compose ps`, логи backend |
-| обновления не приходят | `systemctl status bank-app-deploy.timer`, `journalctl -u bank-app-deploy` |
+| обновления не приходят | `make deploy-status` из-под `bitrix`; полный лог — `~/bank-app-deploy/deploy.log` |
