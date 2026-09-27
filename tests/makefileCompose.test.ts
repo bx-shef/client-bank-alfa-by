@@ -85,7 +85,7 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     mkdirSync(join(home, 'bin'))
     writeFileSync(join(home, 'bank-app-deploy', 'deploy.env'), '')
     const fake = join(home, 'bin', 'bank-app-deploy')
-    writeFileSync(fake, '#!/bin/sh\necho "RUN ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE cfg=$BANK_APP_DEPLOY_CONFIG state=$BANK_APP_DEPLOY_STATE"\n')
+    writeFileSync(fake, '#!/bin/sh\necho "RUN ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE wait=$BANK_APP_DEPLOY_LOCK_WAIT cfg=$BANK_APP_DEPLOY_CONFIG state=$BANK_APP_DEPLOY_STATE"\n')
     chmodSync(fake, 0o755)
     return { dir, home }
   }
@@ -110,13 +110,22 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(run(dir, home, 'deploy-status').stdout).not.toContain('на паузе')
   })
 
-  it('deploy-now зовёт скрипт с путями шага 6, в обход паузы, и пишет в лог расписания', () => {
+  it('deploy-now зовёт скрипт с путями шага 6, в обход паузы, дожидаясь идущего прогона, и пишет в лог расписания', () => {
     const { dir, home } = cronHome()
     const r = run(dir, home, 'deploy-now')
     expect(r.status).toBe(0)
     const cfg = join(home, 'bank-app-deploy')
-    expect(r.stdout).toContain(`RUN ignore=1 cfg=${cfg}/deploy.env state=${cfg}/state`)
+    expect(r.stdout).toContain(`RUN ignore=1 wait=900 cfg=${cfg}/deploy.env state=${cfg}/state`)
     expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('RUN ignore=1')
+  })
+
+  it('упавший прогон — make тоже падает: код выхода скрипта, а не tee', () => {
+    const { dir, home } = cronHome()
+    writeFileSync(join(home, 'bin', 'bank-app-deploy'), '#!/bin/sh\necho "[deploy] ОШИБКА: откачено"\nexit 3\n')
+    const r = run(dir, home, 'deploy-now')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('откачено')
+    expect(readFileSync(join(home, 'bank-app-deploy', 'deploy.log'), 'utf8')).toContain('откачено')
   })
 
   // #766: скрипт сам себя не обновляет, а старый не держит `:latest` на развёрнутой версии.
@@ -133,6 +142,16 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('NEW ignore=')
   })
 
+  it('deploy-install: новый скрипт упал — make сообщает отказом, а не «установлен» и успехом', () => {
+    const { dir, home } = cronHome()
+    const src = join(dir, 'src', 'deploy', 'bitrixvm')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho broken\nexit 2\n')
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('broken')
+  })
+
   it('deploy-install без копии репозитория — отказ с указанием на self-update, установленный скрипт цел', () => {
     const { dir, home } = cronHome()
     const r = run(dir, home, 'deploy-install')
@@ -145,27 +164,43 @@ describe('deploy-*: автообновление cron под bitrix', () => {
 // #766: на ВМ с автообновлением `prod-pull`/`prod-redeploy` тянули бы `:latest` из реестра — в том
 // числе версию, которую автообновление откатило по проверке здоровья. ⚠ Проверяется ВЫЗОВОМ: под
 // `make -n` отказ не исполняется, и текстовая проверка подтвердила бы строку, которая не срабатывает.
-describe('prod-pull и prod-redeploy на ВМ с автообновлением отказывают', () => {
-  function withDocker(configured: boolean) {
-    const dir = stackDir(null)
-    const home = join(dir, 'home')
-    mkdirSync(join(home, 'bin'), { recursive: true })
-    if (configured) {
-      mkdirSync(join(home, 'bank-app-deploy'))
-      writeFileSync(join(home, 'bank-app-deploy', 'deploy.env'), '')
+// ⚠ Стек кладётся в `<база>/bank-import`, а автообновление — рядом, в `<база>/bank-app-deploy`, как
+// на ВМ (`/home/bitrix/…`). База своя у каждого теста: соседний каталог общей `/tmp` задел бы
+// чужие прогоны.
+describe('на ВМ с автообновлением prod-pull/prod-redeploy отказывают, а prod-up идёт под замком', () => {
+  type Where = 'none' | 'home' | 'sibling'
+  function vm(where: Where, busy = false, ran = true) {
+    const base = mkdtempSync(join(tmpdir(), 'mk-vm-'))
+    const dir = join(base, 'bank-import')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'Makefile'), MAKEFILE)
+    const home = join(base, 'home')
+    const bin = join(base, 'bin')
+    mkdirSync(home)
+    mkdirSync(bin)
+    const deploy = where === 'home' ? join(home, 'bank-app-deploy') : join(base, 'bank-app-deploy')
+    if (where !== 'none') {
+      mkdirSync(join(deploy, 'state'), { recursive: true })
+      writeFileSync(join(deploy, 'deploy.env'), '')
+      // Файл замка создаёт сам скрипт обновления при первом запуске.
+      if (ran) writeFileSync(join(deploy, 'state', 'deploy.lock'), '')
     }
-    const log = join(dir, 'docker.log')
-    writeFileSync(join(home, 'bin', 'docker'), `#!/bin/sh\necho "$*" >> "${log}"\n`)
-    chmodSync(join(home, 'bin', 'docker'), 0o755)
+    const log = join(base, 'calls.log')
+    writeFileSync(join(bin, 'docker'), `#!/bin/sh\necho "docker $*" >> "${log}"\n`)
+    // `flock -n замок true` — проверка занятости; `flock -w N замок команда…` — выполнить под замком.
+    writeFileSync(join(bin, 'flock'), `#!/bin/sh\necho "flock $*" >> "${log}"\n`
+    + `if [ "$1" = -n ]; then ${busy ? 'exit 1' : 'exit 0'}; fi\nshift 3\nexec "$@"\n`)
+    chmodSync(join(bin, 'docker'), 0o755)
+    chmodSync(join(bin, 'flock'), 0o755)
     const call = (t: string) => spawnSync('make', ['--no-print-directory', t], {
-      cwd: dir, encoding: 'utf8', env: { ...process.env, HOME: home, PATH: `${join(home, 'bin')}:${process.env.PATH}` }
+      cwd: dir, encoding: 'utf8', env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }
     })
     const calls = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
-    return { call, calls }
+    return { call, calls, deploy }
   }
 
   it.each(['prod-pull', 'prod-redeploy'])('%s: автообновление настроено — отказ до реестра, с верным путём', (t) => {
-    const { call, calls } = withDocker(true)
+    const { call, calls } = vm('home')
     const r = call(t)
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('make deploy-now')
@@ -173,10 +208,55 @@ describe('prod-pull и prod-redeploy на ВМ с автообновлением
     expect(calls()).toEqual([])
   })
 
+  it.each(['prod-pull', 'prod-redeploy'])('%s: запущено не из-под bitrix (другой HOME) — отказ всё равно, по каталогу рядом со стеком', (t) => {
+    const { call, calls } = vm('sibling')
+    expect(call(t).status).not.toBe(0)
+    expect(calls()).toEqual([])
+  })
+
   it.each(['prod-pull', 'prod-redeploy'])('%s: автообновления нет — работает как прежде', (t) => {
-    const { call, calls } = withDocker(false)
+    const { call, calls } = vm('none')
     expect(call(t).status).toBe(0)
-    expect(calls()[0]).toBe('compose -f docker-compose.prod.yml pull')
+    expect(calls()[0]).toBe('docker compose -f docker-compose.prod.yml pull')
+  })
+
+  it('prod-up без автообновления — прежняя команда, без замка', () => {
+    const { call, calls } = vm('none')
+    expect(call('prod-up').status).toBe(0)
+    expect(calls()).toEqual(['docker compose -f docker-compose.prod.yml up -d'])
+  })
+
+  it.each(['home', 'sibling'] as const)('prod-up с автообновлением (%s) — под замком скрипта обновления', (where) => {
+    const { call, calls, deploy } = vm(where)
+    const r = call('prod-up')
+    expect(r.status, r.stdout + r.stderr).toBe(0)
+    expect(calls()).toContain(`flock -w 900 ${deploy}/state/deploy.lock docker compose -f docker-compose.prod.yml up -d`)
+    expect(calls()).toContain('docker compose -f docker-compose.prod.yml up -d')
+    expect(r.stdout).not.toContain('жду')
+  })
+
+  it('prod-up, когда скрипт ещё не запускался (замка нет) — без замка и без его создания', () => {
+    const { call, calls, deploy } = vm('sibling', false, false)
+    expect(call('prod-up').status).toBe(0)
+    expect(calls()).toEqual(['docker compose -f docker-compose.prod.yml up -d'])
+    expect(existsSync(join(deploy, 'state', 'deploy.lock'))).toBe(false)
+  })
+
+  // Поведение замка проверено на prod-up выше; здесь — что ни один ручной подъём стека его не
+  // обходит. Исключения названы: шлюз не несёт образов приложения, а prod-redeploy на такой ВМ
+  // отказывает раньше.
+  it('каждый ручной up -d стека идёт через замок — кроме названных исключений', () => {
+    const ups = MAKEFILE.split('\n').filter(l => l.startsWith('\t') && l.includes('$(DC) up -d'))
+    expect(ups.filter(l => !l.includes('$(DEPLOY_LOCKED)')).map(l => l.trim()))
+      .toEqual(['$(DC) up -d && \\', '@$(DC) up -d crypto-gw \\'])
+    expect(ups.filter(l => l.includes('$(DEPLOY_LOCKED)')).length).toBe(3)
+  })
+
+  it('prod-up при идущем прогоне — говорит, что ждёт, и всё равно идёт под замком', () => {
+    const { call, calls } = vm('home', true)
+    const r = call('prod-up')
+    expect(r.stdout).toContain('идёт прогон автообновления — жду его окончания')
+    expect(calls().some(l => l.startsWith('flock -w 900 '))).toBe(true)
   })
 })
 
@@ -255,6 +335,17 @@ describe('источник служебных файлов — копия кли
     const dir = stackDir(null)
     const line = curlOf(dir, 'poll-check', ['SRC=https://evil.example', 'RAW=https://evil.example'])
     expect(line).not.toContain('evil')
+  })
+
+  // `deploy-install` ставит скрипт, который cron запускает каждые пять минут, из `./$(SRC_DIR)`:
+  // заданный из командной строки каталог подменил бы его, а `$(shell …)` исполнился бы даже под `-n`.
+  it('каталог копии (SRC_DIR) тоже НЕ задаётся из командной строки', () => {
+    const dir = stackDir(null)
+    const out = spawnSync('make', ['--no-print-directory', '-n', 'deploy-install', 'SRC_DIR=../evil'], { cwd: dir, encoding: 'utf8' })
+    expect(out.stdout).toContain('./src/deploy/bitrixvm/git-poll-deploy.sh')
+    expect(out.stdout).not.toContain('evil')
+    const shell = spawnSync('make', ['--no-print-directory', '-n', 'deploy-install', 'SRC_DIR=$(shell echo PWNED >&2; echo src)'], { cwd: dir, encoding: 'utf8' })
+    expect(shell.stderr).not.toContain('PWNED')
   })
 })
 

@@ -10,6 +10,10 @@
 // задаёт FAKE_GW, адреса Приорбанка — FAKE_API/FAKE_TOKEN: подставной `exec` исполняет НАСТОЯЩИЙ
 // разбор адресов из доктора обычным node, только с этими значениями в окружении. Остальные
 // проверки скрипта при этом краснеют — нам нужны только строки про шлюз.
+// ⚠ Подставной `exec` ведёт себя как настоящий образ backend: тот предзагружает телеметрию через
+// NODE_OPTIONS, и она печатает строку в stdout на каждом старте node. Если доктор её не глушит
+// (`-e NODE_OPTIONS=`), строка попадает в разбор — ровно так на живом образе сломались бы и
+// вердикт по адресам, и пробы самого шлюза.
 import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -33,13 +37,21 @@ if [ "$1" = compose ]; then
       esac
       exit 0 ;;
     exec)
-      case "$*" in
+      args="$*"
+      case "$args" in
+        *" node "*)
+          case "$args" in
+            *"-e NODE_OPTIONS= "*) ;;
+            *) echo '[otel] disabled (no OTEL_EXPORTER_OTLP_ENDPOINT) — telemetry off' ;;
+          esac ;;
+      esac
+      case "$args" in
         *PRIOR_OAUTH_API_BASE*)
           # Шум, который настоящий docker печатает в stderr, — оператору его видеть незачем.
           echo 'OCI-NOISE: connection refused' >&2
           [ "\${FAKE_EXEC_RC:-0}" = 0 ] || exit "$FAKE_EXEC_RC"
-          while [ $# -gt 0 ] && [ "$1" != -e ]; do shift; done
-          PRIOR_OAUTH_API_BASE="\${FAKE_API-}" PRIOR_OAUTH_TOKEN_URL="\${FAKE_TOKEN-}" exec node -e "$2" ;;
+          while [ $# -gt 0 ] && [ "$1" != node ]; do shift; done
+          PRIOR_OAUTH_API_BASE="\${FAKE_API-}" PRIOR_OAUTH_TOKEN_URL="\${FAKE_TOKEN-}" exec node -e "$3" ;;
         *crypto-gw:1080/open-banking*) echo 401; exit 0 ;;
         *crypto-gw:1080/no-such-route*) echo 404; exit 0 ;;
       esac
@@ -128,13 +140,30 @@ describe('шлюза нет или он остановлен — вердикт 
 
   it('адрес не разбирается — авария с объяснением, а не «напрямую»', () => {
     const { out } = doctor({ FAKE_API: 'api.priorbank.by:9344', FAKE_TOKEN: DIRECT_TOKEN })
-    expect(out).toMatch(/ПЛОХО.*адрес Приорбанка не разбирается/)
-    expect(out).toContain('API_BASE — не разбирается как адрес')
+    expect(out).toMatch(/ПЛОХО.*адрес Приорбанка приложение не примет/)
+    expect(out).toContain('API_BASE — приложение не примет')
+  })
+
+  it('открытый http на публичный хост — не шлюз, а адрес, который приложение не примет', () => {
+    // Опечатка `http://` вместо `https://` при переезде на прямой адрес: «нужен шлюз» отправило бы
+    // оператора поднимать шлюз, а лечится это одной буквой.
+    const { out } = doctor({ FAKE_API: 'http://api.priorbank.by:9344', FAKE_TOKEN: DIRECT_TOKEN })
+    expect(out).toMatch(/ПЛОХО.*адрес Приорбанка приложение не примет/)
+    expect(out).not.toContain('через шлюз')
+  })
+
+  it('внутренний адрес по IP — шлюз; публичный домен, похожий на частную сеть, — нет', () => {
+    expect(doctor({ FAKE_API: 'http://10.0.0.5:1080', FAKE_TOKEN: DIRECT_TOKEN }).out)
+      .toMatch(/ПЛОХО.*через шлюз, а crypto-gw не развёрнут/)
+    expect(doctor({ FAKE_API: 'http://10.attacker.example:1080', FAKE_TOKEN: DIRECT_TOKEN }).out)
+      .toMatch(/ПЛОХО.*адрес Приорбанка приложение не примет/)
   })
 
   it('Приорбанк не настроен — так и сказано, это норма', () => {
     const { out } = doctor({ FAKE_API: '', FAKE_TOKEN: '' })
     expect(out).toMatch(/OK.*crypto-gw не используется — Приорбанк на этом сервере не настроен/)
+    // Строка телеметрии в разбор не попала: иначе вышло бы «настроен наполовину».
+    expect(out).not.toContain('[otel]')
   })
 
   it('задан только один адрес — предупреждение о половинчатой настройке', () => {

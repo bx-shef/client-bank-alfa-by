@@ -34,9 +34,26 @@ build-local:
 # currency-converter) и docker-сеть proxy-net. Свой Watchtower НЕ поднимаем —
 # хостовый подхватывает контейнер по метке (см. docs/DEPLOY.md).
 
+# Автообновление по git этого стека (docs/DEPLOY_BITRIXVM.md, шаг 6): каталог с `deploy.env` у
+# того, кто запустил make (как у целей `deploy-*`), либо рядом со стеком —
+# `/home/bitrix/bank-app-deploy` для `/home/bitrix/bank-import`. Второе — чтобы root, запустивший
+# make в каталоге стека, упирался в запрет и замок ниже, а не обходил их молча.
+FIND_AUTODEPLOY = ad=""; for d in "$(CRON_DEPLOY)" "$(abspath $(CURDIR)/../bank-app-deploy)"; do \
+	  if [ -e "$$d/deploy.env" ]; then ad="$$d"; break; fi; done
+# ⚠ Ручной `up -d` на ВМ с автообновлением идёт ПОД ЗАМКОМ скрипта обновления (#766). Иначе он мог
+# вклиниться между подъёмом новой версии и её перетегированием: контейнеры пересоздались бы из
+# прежнего `:latest`, проверка здоровья прошла бы на СТАРОЙ версии, и скрипт записал бы новую
+# развёрнутой — сервер молча остался бы на старой. Идущий прогон дожидаемся, а не пропускаем.
+# Файла замка нет — скрипт не запускался ни разу, и ждать некого. Создавать его отсюда нельзя:
+# запусти make root — и чужой каталог состояния получил бы файл, в который скрипт не сможет писать.
+# Использование: `$(DEPLOY_LOCKED) "$$@" <команда>` — без автообновления "$$@" пуст.
+DEPLOY_LOCKED = $(FIND_AUTODEPLOY); if [ -n "$$ad" ] && [ -e "$$ad/state/deploy.lock" ]; then \
+	  flock -n "$$ad/state/deploy.lock" true || echo "[make] идёт прогон автообновления — жду его окончания"; \
+	  set -- flock -w 900 "$$ad/state/deploy.lock"; else set --; fi;
+
 ## Запустить / обновить app-контейнер
 prod-up:
-	$(DC) up -d
+	@$(DEPLOY_LOCKED) "$$@" $(DC) up -d
 
 ## Остановить стек
 prod-down:
@@ -46,8 +63,7 @@ prod-down:
 # ниже ОТКАЗЫВАЮТ: они тянут `:latest` ИЗ РЕЕСТРА, а CI публикует его на каждом мёрже — в том числе
 # версию, которую автообновление только что откатило по проверке здоровья. `prod-redeploy` поднял
 # бы её мимо всякой проверки, `prod-pull` подложил бы её под следующий ручной `prod-up` (#766).
-# Признак настройки тот же, что у целей `deploy-*`, и та же оговорка: запускать из-под `bitrix`.
-AUTODEPLOY_GUARD = if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+AUTODEPLOY_GUARD = $(FIND_AUTODEPLOY); if [ -n "$$ad" ]; then \
 	echo "[make] здесь работает автообновление по git, а эта цель скачала бы :latest из реестра мимо проверки здоровья. Выпуск — make deploy-now, применить правку .env — make prod-up"; exit 1; fi
 
 ## Скачать свежий образ (без перезапуска контейнера)
@@ -129,7 +145,7 @@ SINCE ?= 3h
 # ⚠ `override`, как и у `REF`: значение параметра `make` раскрывается ДО всякого шелла, и
 # `make … SRC=…` иначе увёл бы скачивание куда угодно. Решает наличие копии на диске, а не
 # командная строка.
-SRC_DIR := src
+override SRC_DIR := src
 override SRC := $(if $(wildcard $(CURDIR)/$(SRC_DIR)/.git),file://$(CURDIR)/$(SRC_DIR),https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF))
 override RAW := $(SRC)/scripts
 # Обновить копию клиентского репозитория, если она есть. Без копии — пусто (наш сервер).
@@ -282,9 +298,15 @@ CRON_DEPLOY = $$HOME/bank-app-deploy
 NO_AUTODEPLOY = echo "[make] автообновление не настроено: нет $(CRON_DEPLOY)/deploy.env (запускайте из-под bitrix) — docs/DEPLOY_BITRIXVM.md, шаг 6"; exit 1
 # Один прогон скрипта обновления с путями строки crontab из шага 6. Вывод идёт и на экран, и в тот
 # же лог, что пишет расписание: иначе ручной прогон не оставлял бы следа, и `deploy-status`
-# показывал бы картину без него.
-DEPLOY_RUN = BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
-	     "$$HOME/bin/bank-app-deploy" 2>&1 | tee -a "$(CRON_DEPLOY)/deploy.log"
+# показывал бы картину без него. Идущий прогон расписания ручной дожидается (до 15 минут), а не
+# пропускает.
+# ⚠ Код выхода — скрипта, а не `tee`: у конвейера он последней команды, и упавший прогон
+# отчитывался бы успехом. `pipefail` в `sh` не везде, поэтому код уносит файл.
+# Использование: `$(call DEPLOY_RUN,<доп. переменные окружения>)`.
+DEPLOY_RUN = ( rc=$$(mktemp) && { $(1) BANK_APP_DEPLOY_LOCK_WAIT=900 \
+	     BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
+	     "$$HOME/bin/bank-app-deploy" 2>&1; echo $$? > "$$rc"; } | tee -a "$(CRON_DEPLOY)/deploy.log"; \
+	     code=$$(cat "$$rc"); rm -f "$$rc"; exit "$$code" )
 
 ## Состояние автообновления: включено ли, какой коммит развёрнут, последний прогон
 deploy-status:
@@ -302,7 +324,7 @@ deploy-status:
 ## Проверить обновления ПРЯМО СЕЙЧАС, не дожидаясь тика (паузу обходит — это явное действие)
 deploy-now:
 	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
-	   BANK_APP_DEPLOY_IGNORE_PAUSE=1 $(DEPLOY_RUN); \
+	   $(call DEPLOY_RUN,BANK_APP_DEPLOY_IGNORE_PAUSE=1); \
 	 else $(NO_AUTODEPLOY); fi
 
 ## Переустановить скрипт автообновления из копии репозитория и сразу прогнать его (после self-update)
@@ -318,7 +340,7 @@ deploy-install:
 	   mkdir -p "$$HOME/bin" "$(CRON_DEPLOY)/state" \
 	   && install -m 755 "$$s" "$$HOME/bin/bank-app-deploy" \
 	   && echo "[make] скрипт автообновления установлен из $$s" \
-	   && $(DEPLOY_RUN); \
+	   && $(call DEPLOY_RUN,); \
 	 else $(NO_AUTODEPLOY); fi
 
 ## Приостановить автообновление (работающее приложение не трогает)
@@ -565,7 +587,7 @@ reap-off:
 	  && cp .env .env.bak.$$(date +%Y%m%d%H%M%S) \
 	  && sed -i '/^PORTAL_REAP_ENABLED=/d' .env \
 	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
-	  && $(DC) up -d backend \
+	  && { $(DEPLOY_LOCKED) "$$@" $(DC) up -d backend; } \
 	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
 
 ## Включить обратную связь: спросит репозиторий и токен, проверит права, перезапустит (#499)
@@ -586,5 +608,5 @@ feedback-on:
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-feedback-on.sh" \
 	  && bash "$$t" \
 	  && n=$$($(DC) ps -q worker 2>/dev/null | wc -l) \
-	  && $(DC) up -d --scale worker=$$(( n > 0 ? n : 1 )) backend worker \
+	  && { $(DEPLOY_LOCKED) "$$@" $(DC) up -d --scale worker=$$(( n > 0 ? n : 1 )) backend worker; } \
 	  && bash "$$t" --verify "$(DC)"

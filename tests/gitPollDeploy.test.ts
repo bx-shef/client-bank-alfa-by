@@ -6,9 +6,8 @@
 // то есть тихо откатывал версию, а автообновление, сравнивая коммиты, видело «изменений нет».
 //
 // Тест гоняет настоящий `deploy/bitrixvm/git-poll-deploy.sh` с подставными `git`, `docker`, `curl`
-// и `flock` в PATH. Подставной `docker` пишет каждый вызов в журнал — по нему видно, что и в каком
-// порядке сделал скрипт. `flock` подставной, потому что у macOS его нет, а блокировку этот тест не
-// проверяет.
+// и `flock` в PATH. Подставные `docker`, `git` и `flock` пишут каждый вызов в журнал — по нему
+// видно, что и в каком порядке сделал скрипт. `flock` подставной ещё и потому, что у macOS его нет.
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -24,6 +23,7 @@ const BACKEND = 'ghcr.io/o/r-backend'
 let dir = ''
 
 const FAKE_GIT = `#!/usr/bin/env bash
+echo "git $1" >> "$FAKE_LOG"
 [ -z "\${FAKE_GIT_RC:-}" ] || { echo 'fatal: unable to access' >&2; exit "$FAKE_GIT_RC"; }
 printf '%s\\trefs/heads/main\\n' "$FAKE_SHA"
 `
@@ -81,7 +81,15 @@ const FAKE_CURL = `#!/usr/bin/env bash
 exit 22
 `
 
+// FAKE_FLOCK_BUSY — замок держит другой прогон: `-n` отказывает, `-w` ждёт и отвечает
+// FAKE_FLOCK_WAIT_RC (0 — дождался, 1 — не дождался).
 const FAKE_FLOCK = `#!/usr/bin/env bash
+echo "flock $*" >> "$FAKE_LOG"
+[ -n "\${FAKE_FLOCK_BUSY:-}" ] || exit 0
+case "$1" in
+  -n) exit 1 ;;
+  -w) exit "\${FAKE_FLOCK_WAIT_RC:-0}" ;;
+esac
 exit 0
 `
 
@@ -252,6 +260,18 @@ describe('каждый тик возвращает :latest на развёрну
     expect(tags(r.log)).toEqual([`tag ${APP}:${TAG} ${APP}:latest`])
   })
 
+  it('на паузе — сверка идёт, остальное нет: пауза не консервирует устаревший :latest', () => {
+    alreadyDeployed()
+    writeFileSync(join(dir, 'state', 'paused'), '')
+    const r = deploy({
+      FAKE_IDS: `${APP}:${TAG}=sha256:a ${APP}:latest=sha256:stale ${BACKEND}:${TAG}=sha256:b ${BACKEND}:latest=sha256:b`
+    })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('на паузе')
+    expect(tags(r.log)).toEqual([`tag ${APP}:${TAG} ${APP}:latest`])
+    expect(r.log.filter(l => l.startsWith('git '))).toEqual([])
+  })
+
   it('перетегирование отказало — тик не падает, отказ назван', () => {
     alreadyDeployed()
     const r = deploy({
@@ -260,5 +280,39 @@ describe('каждый тик возвращает :latest на развёрну
     })
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain(`не удалось перетегировать ${APP}:latest — следующий тик попробует снова`)
+  })
+})
+
+describe('идущий прогон: расписание пропускает, ручной запуск дожидается', () => {
+  it('тик по расписанию (без ожидания) — «пропускаю тик», ничего не трогает', () => {
+    alreadyDeployed()
+    const r = deploy({ FAKE_FLOCK_BUSY: '1' })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('обновление уже идёт, пропускаю тик')
+    expect(r.log.filter(l => !l.startsWith('flock '))).toEqual([])
+  })
+
+  it('ручной запуск ждёт окончания и делает своё дело', () => {
+    alreadyDeployed()
+    const r = deploy({ FAKE_FLOCK_BUSY: '1', BANK_APP_DEPLOY_LOCK_WAIT: '900' })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('обновление уже идёт — жду его окончания (до 900 с)')
+    expect(r.log).toContain('flock -w 900 9')
+    expect(r.out).toContain('изменений нет')
+  })
+
+  it('не дождался — отказ, а не молчаливый успех', () => {
+    alreadyDeployed()
+    const r = deploy({ FAKE_FLOCK_BUSY: '1', BANK_APP_DEPLOY_LOCK_WAIT: '900', FAKE_FLOCK_WAIT_RC: '1' })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('не дождался окончания идущего обновления')
+    expect(r.log.filter(l => l.startsWith('git '))).toEqual([])
+  })
+
+  it('кривое значение ожидания — как у расписания: пропуск, а не падение', () => {
+    alreadyDeployed()
+    const r = deploy({ FAKE_FLOCK_BUSY: '1', BANK_APP_DEPLOY_LOCK_WAIT: '15m' })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('пропускаю тик')
   })
 })
