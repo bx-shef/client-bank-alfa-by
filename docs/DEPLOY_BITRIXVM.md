@@ -122,16 +122,16 @@ git push -u origin main
 
 ## Порядок
 
-⚠ **Всё берётся из КЛИЕНТСКОГО репозитория.** На сервере лежит его копия
-(`/home/bitrix/bank-import/src`, шаг 1b), и все файлы ниже копируются из неё; из нашего
-репозитория сервер не берёт ничего. Переменные шага:
+⚠ **Всё берётся из КЛИЕНТСКОГО репозитория — и только то, что нужно серверу.** Шаг 1b кладёт в
+`/home/bitrix/bank-import/src` около 25 служебных файлов по списку
+[`deploy/bitrixvm/server-files.txt`](../deploy/bitrixvm/server-files.txt): `Makefile`, compose,
+`deploy/bitrixvm/` и скрипты операторских целей. Исходников приложения на сервере нет — оно
+приходит готовыми образами из GHCR клиента. Из нашего репозитория сервер не берёт ничего.
 
-```bash
-DOMAIN=<домен>                 # например bank-app.example.by
-S=/home/bitrix/bank-import/src # копия клиентского репозитория
-OWNER=<владелец-клиентского-репо>
-REPO=<имя-клиентского-репо>
-```
+⚠ **Переменные задаются в начале КАЖДОГО блока команд**, где они нужны, а не один раз наверху:
+блоки выполняются под разными пользователями (`root`, `bitrix`) и в разных сессиях, и
+переменная из прошлого блока в новой сессии пуста — `$DOMAIN` превратился бы в пустую строку
+молча. Строки с `←` замените своими значениями.
 
 Кто что делает: шаги 1 и 8 — владелец портала, 1b — `bitrix`, 2–3 — root, 4–7 — `bitrix`.
 
@@ -171,13 +171,31 @@ cat ~/bank-app-deploy/deploy_key.pub
 Затем:
 
 ```bash
+OWNER=acme                        # ← владелец клиентского репозитория на GitHub
+REPO=bank                         # ← имя клиентского репозитория
 mkdir -p /home/bitrix/bank-import && cd /home/bitrix/bank-import
-GIT_SSH_COMMAND="ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-  git clone --depth 1 "git@github.com:$OWNER/$REPO.git" src
-git -C src config core.sshCommand "ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes"
+git clone --depth 1 --filter=blob:none --no-checkout \
+  -c core.sshCommand="ssh -i /home/bitrix/bank-app-deploy/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+  "git@github.com:$OWNER/$REPO.git" src
+git -C src sparse-checkout set --no-cone /deploy/bitrixvm/server-files.txt
+git -C src checkout -q
+git -C src sparse-checkout set --no-cone --stdin < src/deploy/bitrixvm/server-files.txt
+find src -type f -not -path 'src/.git/*' | wc -l      # ожидаем ~25 файлов, не тысячу
 cp src/Makefile ./Makefile
 make help
 ```
+
+⚠ **Копия выборочная.** `--filter=blob:none` + `sparse-checkout` означают: git скачивает
+содержимое ТОЛЬКО файлов из списка `deploy/bitrixvm/server-files.txt`. Сначала берётся сам
+список, затем по нему — всё остальное. Нужен git не старше 2.27 (`git --version`).
+
+⚠ Список применяется заново при каждом `make self-update`: файл, который новая версия добавила в
+список (скрипт новой make-цели), доезжает на сервер сам.
+
+⚠ **Сервер, где `src` склонирован целиком** (до 2026-09-27): удалить копию и повторить блок выше —
+`cd /home/bitrix/bank-import && rm -rf src`. Стек, `.env`, ключ и `deploy.env` это не трогает;
+`make self-update` на такой копии тоже сузил бы рабочие файлы, но скачанная история осталась бы
+в `src/.git`.
 
 ⚠ Копия — **только для чтения**: править в ней ничего нельзя, её перезаписывает
 `make self-update` (`git pull --ff-only`, локальная правка его остановит). Правки под клиента
@@ -194,7 +212,8 @@ make help
 Под **root**:
 
 ```bash
-install -m 644 -o root -g root "$S/deploy/bitrixvm/nginx/00-app-proxy.conf" \
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+install -m 644 -o root -g root /home/bitrix/bank-import/src/deploy/bitrixvm/nginx/00-app-proxy.conf \
      "/etc/nginx/bx/site_settings/$DOMAIN/00-app-proxy.conf" \
   && nginx -t && systemctl reload nginx
 ```
@@ -224,10 +243,11 @@ install -m 644 -o root -g root "$S/deploy/bitrixvm/nginx/00-app-proxy.conf" \
 Под **root**:
 
 ```bash
-D=/home/bitrix/ext_www/$DOMAIN
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+D=/home/bitrix/ext_www/$DOMAIN                 # docroot сайта, созданный меню
 cp -a "$D/index.php" "$D/index.php.orig-$(date +%F)"
-cp "$S/deploy/bitrixvm/docroot/index.php" "$D/index.php"
-cp "$S/deploy/bitrixvm/docroot/.htaccess"  "$D/.htaccess"
+cp /home/bitrix/bank-import/src/deploy/bitrixvm/docroot/index.php "$D/index.php"
+cp /home/bitrix/bank-import/src/deploy/bitrixvm/docroot/.htaccess "$D/.htaccess"
 chown bitrix:bitrix "$D/index.php" "$D/.htaccess"
 chmod 644 "$D/index.php" "$D/.htaccess"
 ```
@@ -241,6 +261,8 @@ chmod 644 "$D/index.php" "$D/.htaccess"
 HTTP→HTTPS включается штатным для bitrix-env способом — файлом `.htsecure` в docroot:
 
 ```bash
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+D=/home/bitrix/ext_www/$DOMAIN
 touch "$D/.htsecure" && chown bitrix:bitrix "$D/.htsecure"
 curl -sSI "http://$DOMAIN/" | head -3        # ожидаем 301 на https
 ```
@@ -287,6 +309,9 @@ docker login ghcr.io -u <github-логин> --password-stdin < ~/bank-app-deploy
 **4.4. Файлы стека и `.env`:**
 
 ```bash
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
+OWNER=acme                        # ← владелец клиентского репозитория на GitHub
+REPO=bank                         # ← имя клиентского репозитория
 cd /home/bitrix/bank-import
 cp src/docker-compose.prod.yml src/deploy/bitrixvm/docker-compose.bitrixvm.yml .
 docker network create proxy-net 2>/dev/null || true
@@ -323,6 +348,7 @@ docker compose pull && docker compose up -d
 **4.5. Проверка тракта** (работает и до появления домена — по `Host` на loopback):
 
 ```bash
+DOMAIN=bank-app.example.by        # ← домен приложения (сайт из шага 1)
 curl -sS -o /dev/null -w 'health=%{http_code}\n' http://127.0.0.1:8080/api/health
 curl -sS http://127.0.0.1:8080/api/ready; echo
 curl -sS "http://127.0.0.1:8080/" | grep -c "$DOMAIN"
@@ -454,6 +480,8 @@ install -m 755 src/deploy/bitrixvm/git-poll-deploy.sh ~/bin/bank-app-deploy
 **Настройки** — пути полные (тильда в cron не раскрывается):
 
 ```bash
+OWNER=acme                        # ← владелец клиентского репозитория на GitHub
+REPO=bank                         # ← имя клиентского репозитория
 cat > ~/bank-app-deploy/deploy.env <<CONF
 GIT_URL=git@github.com:$OWNER/$REPO.git
 GIT_BRANCH=main

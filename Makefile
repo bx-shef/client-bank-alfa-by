@@ -123,7 +123,13 @@ SRC_DIR := src
 override SRC := $(if $(wildcard $(CURDIR)/$(SRC_DIR)/.git),file://$(CURDIR)/$(SRC_DIR),https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF))
 override RAW := $(SRC)/scripts
 # Обновить копию клиентского репозитория, если она есть. Без копии — пусто (наш сервер).
+#
+# ⚠ Копия ВЫБОРОЧНАЯ: на сервере лежат только файлы из списка `deploy/bitrixvm/server-files.txt`,
+# без исходников приложения. Список применяется заново после каждого pull — так файл, добавленный
+# в список новой версией (скрипт новой make-цели), доезжает сам, без ручных правок на сервере.
+SRC_LIST := deploy/bitrixvm/server-files.txt
 SRC_PULL = if [ -d ./$(SRC_DIR)/.git ]; then git -C ./$(SRC_DIR) pull -q --ff-only \
+	    && git -C ./$(SRC_DIR) sparse-checkout set --no-cone --stdin < ./$(SRC_DIR)/$(SRC_LIST) \
 	    || { echo "[make] не удалось обновить копию репозитория ./$(SRC_DIR) — см. docs/DEPLOY_BITRIXVM.md, шаг 1b"; exit 1; }; fi
 
 # Прочитать ОДНО значение из ./.env, не исполняя файл.
