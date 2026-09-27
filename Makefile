@@ -3,7 +3,7 @@
         gw-stop gw-start compose-update alfa-page-probe alfa-currency-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
         bank-connect-log chat-log feedback-on \
-        bitrix-check deploy-status deploy-now deploy-pause deploy-resume
+        bitrix-check deploy-status deploy-now deploy-pause deploy-resume deploy-install
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -42,12 +42,22 @@ prod-up:
 prod-down:
 	$(DC) down
 
+# ⚠ На ВМ с автообновлением по git (есть `deploy.env`, docs/DEPLOY_BITRIXVM.md, шаг 6) две цели
+# ниже ОТКАЗЫВАЮТ: они тянут `:latest` ИЗ РЕЕСТРА, а CI публикует его на каждом мёрже — в том числе
+# версию, которую автообновление только что откатило по проверке здоровья. `prod-redeploy` поднял
+# бы её мимо всякой проверки, `prod-pull` подложил бы её под следующий ручной `prod-up` (#766).
+# Признак настройки тот же, что у целей `deploy-*`, и та же оговорка: запускать из-под `bitrix`.
+AUTODEPLOY_GUARD = if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	echo "[make] здесь работает автообновление по git, а эта цель скачала бы :latest из реестра мимо проверки здоровья. Выпуск — make deploy-now, применить правку .env — make prod-up"; exit 1; fi
+
 ## Скачать свежий образ (без перезапуска контейнера)
 prod-pull:
+	@$(AUTODEPLOY_GUARD)
 	$(DC) pull
 
 ## Принудительно обновить прямо сейчас (без ожидания Watchtower)
 prod-redeploy:
+	@$(AUTODEPLOY_GUARD)
 	$(DC) pull && \
 	$(DC) up -d && \
 	docker image prune -f
@@ -192,12 +202,12 @@ self-update:
 
 ## Остановить крипто-шлюз (не нужен, пока Приор ходит напрямую на :9344)
 #
-# ⚠ Это ВРЕМЕННО: `prod-redeploy` поднимет его снова, пока сервис не закомментирован в
+# ⚠ Это ВРЕМЕННО: `prod-up` и `prod-redeploy` поднимут его снова, пока сервис не закомментирован в
 # `docker-compose.prod.yml`. Насовсем — `make compose-update` (в репозитории он выключен по
 # умолчанию) либо закомментировать вручную. Цель нужна ровно для «выключить прямо сейчас».
 gw-stop:
 	@$(DC) stop crypto-gw \
-	  && echo "[make] crypto-gw остановлен. ⚠ prod-redeploy поднимет его снова — см. compose-update"
+	  && echo "[make] crypto-gw остановлен. ⚠ prod-up и prod-redeploy поднимут его снова — см. compose-update"
 
 ## Поднять крипто-шлюз обратно (понадобится при сертификации СКЗИ)
 gw-start:
@@ -207,7 +217,7 @@ gw-start:
 ## Обновить docker-compose.prod.yml из репозитория (ЗАТРЁТ локальные правки — сперва покажет их)
 #
 #   make compose-update              # только показать, что изменится
-#   make compose-update CONFIRM=1    # применить
+#   CONFIRM=1 make compose-update    # применить
 #
 # ⚠ Файл на сервере правят руками (так включали крипто-шлюз), поэтому слепая замена уничтожила бы
 # настройку, о которой никто не помнит. Отсюда два шага и обязательный CONFIRM.
@@ -229,8 +239,8 @@ compose-update:
 	       if [ "$${CONFIRM:-}" = "1" ]; then \
 	         b="./docker-compose.prod.yml.bak-$$(date +%Y%m%d-%H%M%S)"; \
 	         cp ./docker-compose.prod.yml "$$b" && cp "$$t" ./docker-compose.prod.yml \
-	         && echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy"; \
-	       else echo "[make] это был показ. Применить: make compose-update CONFIRM=1"; fi; }
+	         && echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy, на ВМ с автообновлением — make prod-up"; \
+	       else echo "[make] это был показ. Применить: CONFIRM=1 make compose-update"; fi; }
 
 ## Список целей с описаниями
 #
@@ -270,6 +280,11 @@ bitrix-check:
 # же, что в строке crontab из шага 6.
 CRON_DEPLOY = $$HOME/bank-app-deploy
 NO_AUTODEPLOY = echo "[make] автообновление не настроено: нет $(CRON_DEPLOY)/deploy.env (запускайте из-под bitrix) — docs/DEPLOY_BITRIXVM.md, шаг 6"; exit 1
+# Один прогон скрипта обновления с путями строки crontab из шага 6. Вывод идёт и на экран, и в тот
+# же лог, что пишет расписание: иначе ручной прогон не оставлял бы следа, и `deploy-status`
+# показывал бы картину без него.
+DEPLOY_RUN = BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
+	     "$$HOME/bin/bank-app-deploy" 2>&1 | tee -a "$(CRON_DEPLOY)/deploy.log"
 
 ## Состояние автообновления: включено ли, какой коммит развёрнут, последний прогон
 deploy-status:
@@ -285,15 +300,25 @@ deploy-status:
 	 else $(NO_AUTODEPLOY); fi
 
 ## Проверить обновления ПРЯМО СЕЙЧАС, не дожидаясь тика (паузу обходит — это явное действие)
-#
-# ⚠ Вывод идёт и на экран, и в тот же лог, что пишет расписание: иначе ручной
-# прогон не оставлял бы следа, и `deploy-status` показывал бы картину без него.
 deploy-now:
 	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
-	   BANK_APP_DEPLOY_IGNORE_PAUSE=1 \
-	   BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" \
-	   BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
-	     "$$HOME/bin/bank-app-deploy" 2>&1 | tee -a "$(CRON_DEPLOY)/deploy.log"; \
+	   BANK_APP_DEPLOY_IGNORE_PAUSE=1 $(DEPLOY_RUN); \
+	 else $(NO_AUTODEPLOY); fi
+
+## Переустановить скрипт автообновления из копии репозитория и сразу прогнать его (после self-update)
+#
+# ⚠ Скрипт сам себя не обновляет: `make self-update` приносит свежую копию в `./src`, а работает
+# установленная в `~/bin`. Прогон сразу после установки — обычный тик, паузу он соблюдает: в начале
+# тика новый скрипт возвращает локальный `:latest` на развёрнутую версию (#766), и ждать расписания
+# незачем.
+deploy-install:
+	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	   s="./$(SRC_DIR)/deploy/bitrixvm/git-poll-deploy.sh"; \
+	   if [ ! -r "$$s" ]; then echo "[make] нет $$s — сперва make self-update (docs/DEPLOY_BITRIXVM.md, шаг 1b)"; exit 1; fi; \
+	   mkdir -p "$$HOME/bin" "$(CRON_DEPLOY)/state" \
+	   && install -m 755 "$$s" "$$HOME/bin/bank-app-deploy" \
+	   && echo "[make] скрипт автообновления установлен из $$s" \
+	   && $(DEPLOY_RUN); \
 	 else $(NO_AUTODEPLOY); fi
 
 ## Приостановить автообновление (работающее приложение не трогает)

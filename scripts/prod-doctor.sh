@@ -86,11 +86,20 @@ say "Крипто-шлюз Приорбанка (если включён)"
 GW_ROUTES_BASELINE="${GW_ROUTES_BASELINE:-2}"
 # Секция целиком необязательная: у большинства развёртываний шлюза нет, и его отсутствие — не
 # авария. Но если он поднят, проверить надо ТРИ вещи, и каждая однажды стоила часа.
-# ⚠ `-a` не украшение: без него `ps` показывает ТОЛЬКО запущенные, и контейнер в restart-loop
-# (у `crypto-gw` стоит `restart: unless-stopped`, а сорванный монтаж корней роняет его в цикл —
-# это описано в OPERATIONS.md как типовой сбой) сюда просто не попадёт. Мы ушли бы в ветку «шлюз
-# не развёрнут, для песочницы это нормально» — то есть объявили бы аварию нормой.
-if $DC ps -a --format '{{.Service}}' 2>/dev/null | grep -q '^crypto-gw$'; then
+# ⚠ Смотрим на СОСТОЯНИЕ контейнера, а не на его наличие в списке. `-a` не украшение: без него
+# `ps` показывает ТОЛЬКО запущенные, и контейнер в restart-loop (у `crypto-gw` стоит
+# `restart: unless-stopped`, а сорванный монтаж корней роняет его в цикл — это описано в
+# OPERATIONS.md как типовой сбой) сюда просто не попадёт: мы объявили бы аварию нормой. Но с `-a`
+# в списке и остановленный руками шлюз (`make gw-stop` — штатное выключение с #522), и пробы через
+# него дали бы сетевую ошибку и ложное «ПЛОХО» про allowlist на исправном сервере, который ходит
+# напрямую (#767). Поэтому остановленный — `exited`/`created`/`dead` — идёт в ветку «шлюза нет».
+gw_state=$($DC ps -a --format '{{.Service}} {{.State}}' 2>/dev/null | awk '$1 == "crypto-gw" { print $2; exit }')
+case "$gw_state" in
+  '') gw_up=0; gw_word="не развёрнут" ;;
+  exited|created|dead) gw_up=0; gw_word="остановлен ($gw_state)" ;;
+  *) gw_up=1 ;;
+esac
+if [ "$gw_up" = 1 ]; then
   gw_log=$($DC logs --tail 40 crypto-gw 2>/dev/null)
 
   # 1. Понимает ли образ GW_ALLOW вообще. Старый образ переменную ИГНОРИРУЕТ молча: контейнер
@@ -142,17 +151,51 @@ else
   # (#522). Авария — только если backend настроен ходить ЧЕРЕЗ шлюз: внутренний http://-адрес
   # (правило — bankGatewayUrl.ts), за которым никто не слушает. Прежнее безусловное «прод
   # Приорбанка недоступен» было ложью на каждом сервере без шлюза (#767).
-  # ⚠ Читаем внутри backend, а не из .env: важно, что получил работающий процесс. Упавший exec
-  # (backend лежит) — «не проверить», а не «Приорбанк не настроен».
-  if prior_base=$($DC exec -T backend sh -c 'printf %s "${PRIOR_OAUTH_API_BASE-}"' 2>/dev/null); then
-    case "$prior_base" in
-      '')      ok "crypto-gw не используется — Приорбанк на этом сервере не настроен" ;;
-      http://*) bad "PRIOR_OAUTH_API_BASE ведёт на шлюз ($prior_base), а crypto-gw не запущен — Приорбанк стоит" ;;
-      *)       ok "crypto-gw не используется — Приорбанк напрямую (${prior_base#https://})" ;;
+  # ⚠ Адресов ДВА — API_BASE (опрос, согласие, счета) и TOKEN_URL (продление токена), и переезд
+  # между шлюзом и прямым адресом бывает половинчатым: по одному API_BASE мы объявили бы «напрямую»,
+  # а продление через час упёрлось бы в остановленный шлюз.
+  # ⚠ Адрес разбирает `URL` внутри backend, а печатаются только схема и хост: значение целиком
+  # унесло бы в терминал учётные данные, если их вписали в адрес, и управляющие последовательности.
+  # Разбор — тот же `URL`, что у приложения (`normalizeBankApiBase`): пробелы по краям снимаются,
+  # `HTTP://` равен `http://`, а не разобранный адрес приложение не примет. Любой `http://` здесь
+  # считается шлюзом: открытый HTTP приложение пускает только на внутренний хост, а внутри стека
+  # это и есть шлюз.
+  # ⚠ Читаем у работающего процесса, а не в .env: важно, что получил он. Упавший exec (backend
+  # лежит) — «не проверить», а не «Приорбанк не настроен».
+  prior_route=$($DC exec -T backend node -e '
+const route = v => {
+  v = (v || "").trim()
+  if (!v) return "none"
+  let u
+  try { u = new URL(v) } catch { return "bad" }
+  if (u.protocol === "https:") return "direct " + u.host
+  if (u.protocol === "http:") return "gw " + u.host
+  return "bad"
+}
+process.stdout.write(route(process.env.PRIOR_OAUTH_API_BASE) + "|" + route(process.env.PRIOR_OAUTH_TOKEN_URL))
+' 2>/dev/null) || prior_route=""
+  describe_route() {
+    case "$1" in
+      none) printf 'не задан' ;;
+      bad) printf 'не разбирается как адрес' ;;
+      'direct '*) printf 'напрямую %s' "${1#direct }" ;;
+      'gw '*) printf 'через шлюз %s' "${1#gw }" ;;
     esac
-  else
-    warn "crypto-gw не запущен; нужен ли он, не проверить — backend не ответил на exec"
-  fi
+  }
+  case "$prior_route" in
+    *'|'*)
+      prior_api="${prior_route%%|*}"
+      prior_token="${prior_route#*|}"
+      routes="API_BASE — $(describe_route "$prior_api"), TOKEN_URL — $(describe_route "$prior_token")"
+      case "$prior_api|$prior_token" in
+        'gw '*|*'|gw '*) bad "Приорбанк настроен через шлюз, а crypto-gw $gw_word — Приорбанк стоит ($routes)" ;;
+        bad'|'*|*'|bad') bad "адрес Приорбанка не разбирается — приложение его не примет ($routes)" ;;
+        'none|none') ok "crypto-gw не используется — Приорбанк на этом сервере не настроен" ;;
+        none'|'*|*'|none') warn "Приорбанк настроен наполовину ($routes)" ;;
+        *) ok "crypto-gw не используется — Приорбанк напрямую (${prior_api#direct })" ;;
+      esac ;;
+    *) warn "crypto-gw $gw_word; нужен ли он, не проверить — backend не ответил на exec" ;;
+  esac
 fi
 
 say "Жалобы в логах (последний час)"

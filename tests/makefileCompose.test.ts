@@ -118,6 +118,66 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(r.stdout).toContain(`RUN ignore=1 cfg=${cfg}/deploy.env state=${cfg}/state`)
     expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('RUN ignore=1')
   })
+
+  // #766: скрипт сам себя не обновляет, а старый не держит `:latest` на развёрнутой версии.
+  it('deploy-install ставит скрипт из копии репозитория и прогоняет его обычным тиком — паузу соблюдает', () => {
+    const { dir, home } = cronHome()
+    const src = join(dir, 'src', 'deploy', 'bitrixvm')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho "NEW ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE cfg=$BANK_APP_DEPLOY_CONFIG"\n')
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status, r.stdout + r.stderr).toBe(0)
+    const cfg = join(home, 'bank-app-deploy')
+    expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "NEW')
+    expect(r.stdout).toContain(`NEW ignore= cfg=${cfg}/deploy.env`)
+    expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('NEW ignore=')
+  })
+
+  it('deploy-install без копии репозитория — отказ с указанием на self-update, установленный скрипт цел', () => {
+    const { dir, home } = cronHome()
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('сперва make self-update')
+    expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "RUN')
+  })
+})
+
+// #766: на ВМ с автообновлением `prod-pull`/`prod-redeploy` тянули бы `:latest` из реестра — в том
+// числе версию, которую автообновление откатило по проверке здоровья. ⚠ Проверяется ВЫЗОВОМ: под
+// `make -n` отказ не исполняется, и текстовая проверка подтвердила бы строку, которая не срабатывает.
+describe('prod-pull и prod-redeploy на ВМ с автообновлением отказывают', () => {
+  function withDocker(configured: boolean) {
+    const dir = stackDir(null)
+    const home = join(dir, 'home')
+    mkdirSync(join(home, 'bin'), { recursive: true })
+    if (configured) {
+      mkdirSync(join(home, 'bank-app-deploy'))
+      writeFileSync(join(home, 'bank-app-deploy', 'deploy.env'), '')
+    }
+    const log = join(dir, 'docker.log')
+    writeFileSync(join(home, 'bin', 'docker'), `#!/bin/sh\necho "$*" >> "${log}"\n`)
+    chmodSync(join(home, 'bin', 'docker'), 0o755)
+    const call = (t: string) => spawnSync('make', ['--no-print-directory', t], {
+      cwd: dir, encoding: 'utf8', env: { ...process.env, HOME: home, PATH: `${join(home, 'bin')}:${process.env.PATH}` }
+    })
+    const calls = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
+    return { call, calls }
+  }
+
+  it.each(['prod-pull', 'prod-redeploy'])('%s: автообновление настроено — отказ до реестра, с верным путём', (t) => {
+    const { call, calls } = withDocker(true)
+    const r = call(t)
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('make deploy-now')
+    expect(r.stdout).toContain('make prod-up')
+    expect(calls()).toEqual([])
+  })
+
+  it.each(['prod-pull', 'prod-redeploy'])('%s: автообновления нет — работает как прежде', (t) => {
+    const { call, calls } = withDocker(false)
+    expect(call(t).status).toBe(0)
+    expect(calls()[0]).toBe('compose -f docker-compose.prod.yml pull')
+  })
 })
 
 describe('скрипт обновления уважает паузу', () => {
