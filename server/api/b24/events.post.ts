@@ -23,7 +23,6 @@ const log = useServerLogger('b24-events')
 const bankConnectLog = useServerLogger('bank-connect')
 
 export default defineEventHandler(async (event) => {
-  const envToken = process.env.B24_APPLICATION_TOKEN?.trim() || ''
   // #162: bind the install member_id to the OAuth grant. Needs the app's OAuth creds to refresh; if
   // they're unset, refresh is impossible anyway (crm-sync/keep-alive are dead too) → binding degrades
   // off and install behaves as before (application_token-only). Fixed OAuth host → no SSRF.
@@ -39,7 +38,6 @@ export default defineEventHandler(async (event) => {
     const payload = parseBracketForm(raw)
 
     const result = await handleEventRequest(payload, {
-      envToken,
       loadStoredToken: memberId => getApplicationToken(dbQuery, memberId),
       enqueue: enqueueEvent,
       enqueueDeletion,

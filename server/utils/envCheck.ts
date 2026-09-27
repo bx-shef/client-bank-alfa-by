@@ -2,11 +2,10 @@
 // plugin (server/plugins/envCheck.ts) logs the result at boot so a misconfigured
 // deploy is obvious immediately, instead of failing deep inside a request handler.
 //
-// Motivated by two real prod traps:
-//   - B24_TOKEN_ENC_KEY the wrong length (e.g. a truncated paste → 31 bytes) →
-//     refresh-token encryption throws and the install can't store its token;
-//   - B24_APPLICATION_TOKEN left as a placeholder (CHANGE_ME) → the real token
-//     from ONAPPINSTALL never matches it → the verdict is 403 → install rejected.
+// Motivated by a real prod trap: B24_TOKEN_ENC_KEY the wrong length (e.g. a truncated
+// paste → 31 bytes) → refresh-token encryption throws and the install can't store its token.
+// (The other historical trap — a CHANGE_ME B24_APPLICATION_TOKEN rejecting every install — went
+// away with the variable itself, #757.)
 
 import { resolveOpLogMode } from '../../app/utils/opLogPolicy'
 import { isLocalMode } from '../../app/utils/localMode'
@@ -26,11 +25,6 @@ function sameKeyBytes(a: string, b: string): boolean {
     return false
   }
 }
-
-/** Obvious non-secret placeholders that must never be a live application_token. */
-const PLACEHOLDER_TOKENS = new Set([
-  'change_me', 'changeme', 'change-me', 'xxx', 'placeholder', 'todo', 'your-token', 'your_token', 'secret'
-])
 
 /** Injected probes for the few checks that need more than `env`. Keeps `checkBackendEnv` pure. */
 export interface EnvProbes {
@@ -83,13 +77,6 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
     } else if (sameKeyBytes(oldKey, key)) {
       warnings.push('B24_TOKEN_ENC_KEY_OLD совпадает с B24_TOKEN_ENC_KEY — ротация не начата, переменную можно убрать')
     }
-  }
-
-  // --- Application token: optional (per-portal bootstrap), but a placeholder
-  //     value silently breaks every install (real token != placeholder → 403). ---
-  const appTok = (env.B24_APPLICATION_TOKEN ?? '').trim()
-  if (appTok && PLACEHOLDER_TOKENS.has(appTok.toLowerCase())) {
-    errors.push(`B24_APPLICATION_TOKEN="${appTok}" похоже на плейсхолдер — реальный токен из ONAPPINSTALL с ним не совпадёт, и установка получит 403. Оставьте переменную пустой (мультитенант-bootstrap) или впишите реальный shared-guard токен.`)
   }
 
   // --- Postgres: the token store needs it. ---

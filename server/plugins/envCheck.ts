@@ -1,6 +1,5 @@
 // Nitro startup plugin: validate the backend env and log the result at boot, so a
-// misconfigured deploy (bad B24_TOKEN_ENC_KEY, a CHANGE_ME B24_APPLICATION_TOKEN,
-// missing DATABASE_URL) is obvious immediately instead of failing deep in a request.
+// misconfigured deploy (bad B24_TOKEN_ENC_KEY, missing DATABASE_URL) is obvious immediately instead of failing deep in a request.
 //
 // Follows the codebase convention (see authGuard.ts / migrate.ts): log, never
 // crash — a thrown boot error would crash-loop the container and break `nuxt

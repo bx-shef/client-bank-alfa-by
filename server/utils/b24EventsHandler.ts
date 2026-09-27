@@ -38,8 +38,6 @@ export interface DeletionEntityFields {
  * single writer. `loadStoredToken` is a read used to authenticate an uninstall.
  */
 export interface B24EventDeps {
-  /** application_token configured via env (`B24_APPLICATION_TOKEN`), or '' if unset. */
-  envToken: string
   /** Stored application_token for a portal, or '' if unknown. */
   loadStoredToken: (memberId: string) => Promise<string>
 }
@@ -82,7 +80,7 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     } catch {
       return { status: 400, body: { error: 'malformed ONAPPINSTALL' } }
     }
-    const verdict = appTokenVerdict({ isInstall: true, incoming: event.auth.application_token, envToken: deps.envToken })
+    const verdict = appTokenVerdict({ isInstall: true, incoming: event.auth.application_token })
     if (verdict !== 'accept') return deny(verdict)
     return {
       status: 200,
@@ -102,7 +100,6 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     const verdict = appTokenVerdict({
       isInstall: false,
       incoming: event.auth.application_token,
-      envToken: deps.envToken,
       storedToken
     })
     if (verdict !== 'accept') return deny(verdict)
@@ -116,7 +113,7 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
   }
 
   // CRM deletion events (§9.2) — verify application_token (fail-closed, same as uninstall: no OAuth
-  // in the payload, so authenticity is the stored/env token) and hand the raw entity fields to the
+  // in the payload, so authenticity is the stored token) and hand the raw entity fields to the
   // consumer, which classifies them with the portal's SP config and reconciles the ledger.
   if ((B24_DELETION_EVENTS as readonly string[]).includes((code || '').toUpperCase())) {
     const auth = (payload as { auth?: Record<string, unknown> } | null)?.auth ?? {}
@@ -125,7 +122,6 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     const verdict = appTokenVerdict({
       isInstall: false,
       incoming: String(auth.application_token ?? ''),
-      envToken: deps.envToken,
       storedToken: await deps.loadStoredToken(memberId)
     })
     if (verdict !== 'accept') return deny(verdict)
@@ -207,7 +203,7 @@ function tsOf(payload: unknown): string {
  * the install forever). Returns the HTTP result plus how it was applied.
  */
 export async function handleEventRequest(payload: unknown, deps: B24RequestDeps): Promise<B24RequestResult> {
-  const result = await processB24Event(payload, { envToken: deps.envToken, loadStoredToken: deps.loadStoredToken })
+  const result = await processB24Event(payload, { loadStoredToken: deps.loadStoredToken })
   if (result.status !== 200 || !result.action) return { ...result, outcome: 'none' }
 
   const action = result.action

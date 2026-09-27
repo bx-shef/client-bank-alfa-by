@@ -107,14 +107,17 @@ export function verifyApplicationToken(received: string | undefined, stored: str
 
 /**
  * Fail-closed authenticity gate for the event broker (mirrors bx-synapse).
- * The expected token may come from env (`B24_APPLICATION_TOKEN`, set once the
- * app is registered) or from the per-portal value stored at install time.
+ * The expected token is the per-portal value stored at install time.
  *
- *  - On install: env token, if configured, is enforced; otherwise the first
- *    non-empty incoming token bootstraps trust (an empty one is a probe → reject).
- *  - On other events: an expected token (env or stored) is required —
- *    `unconfigured` when neither exists (portal unknown / not installed), so the
- *    caller fails closed (e.g. HTTP 503) instead of trusting the call.
+ *  - On install: the first non-empty incoming token bootstraps trust (an empty one is a probe →
+ *    reject). What actually authenticates an install is the OAuth grant binding (#162,
+ *    `verifyInstallMember`): a forged ONAPPINSTALL has to carry a live refresh token of OUR
+ *    client_id for the member_id it claims.
+ *  - On other events: the stored token is required — `unconfigured` when there is none (portal
+ *    unknown / not installed), so the caller fails closed (e.g. HTTP 503) instead of trusting the call.
+ *
+ * ⚠ There is no env-configured token any more (#757): `B24_APPLICATION_TOKEN` duplicated the grant
+ * binding, and the deploy docs called it mandatory for a single portal, which it never was.
  *
  * The backend maps the verdict to a response: `accept` → handle, `forbidden`
  * → 403, `unconfigured` → 503.
@@ -122,22 +125,16 @@ export function verifyApplicationToken(received: string | undefined, stored: str
 export function appTokenVerdict(opts: {
   isInstall: boolean
   incoming: string
-  envToken?: string
   storedToken?: string
 }): B24AppTokenVerdict {
   const { isInstall, incoming } = opts
-  const envToken = opts.envToken ?? ''
   const storedToken = opts.storedToken ?? ''
 
-  if (isInstall) {
-    if (envToken) return safeEqual(incoming, envToken) ? 'accept' : 'forbidden'
-    // Bootstrap without env: accept the install but reject an empty token.
-    return incoming ? 'accept' : 'forbidden'
-  }
+  // Bootstrap: accept the install but reject an empty token.
+  if (isInstall) return incoming ? 'accept' : 'forbidden'
 
-  const expected = envToken || storedToken
-  if (!expected) return 'unconfigured'
-  return safeEqual(incoming, expected) ? 'accept' : 'forbidden'
+  if (!storedToken) return 'unconfigured'
+  return safeEqual(incoming, storedToken) ? 'accept' : 'forbidden'
 }
 
 /** Validate and return the `auth` block, asserting the fields every event has

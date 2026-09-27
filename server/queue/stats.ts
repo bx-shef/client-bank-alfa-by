@@ -1,12 +1,11 @@
 // Shared queue observability read: per-queue BullMQ job counts (waiting/active/
 // completed/failed/delayed). ⚠ bullmq 6 убрал состояние `paused` из `getJobCounts()`: джобы
 // приостановленной очереди считаются как `waiting`, поэтому отдельного счётчика больше нет.
-// Used by both guarded endpoints —
-// GET /api/queues (B24_APPLICATION_TOKEN, console/diagnostics) and
-// GET /api/ops/queues (operator session, the /queues monitor). DI over the queue
+// Used by GET /api/ops/queues (operator session, the /queues monitor). The console
+// counterpart is `make queue-stats`, which reads the same counts with redis-cli inside the
+// redis container (#757 — the token-guarded GET /api/queues is gone). DI over the queue
 // accessors so it is unit-testable without Redis.
 
-import { safeEqual } from '../../app/utils/b24Events'
 import { getQueue, queueEnabled } from './connection'
 import { QUEUE_NAMES, type QueueName } from './topology'
 
@@ -18,15 +17,6 @@ export interface QueuesSnapshot {
   enabled: boolean
   /** Per-queue job counts, keyed by queue name. Empty when disabled. */
   queues: Record<string, unknown>
-}
-
-/**
- * Constant-time check of the diagnostics token for GET /api/queues. Header-only
- * (`X-Check-Token`) — no `?token=` fallback (a token in a URL leaks into access
- * logs / browser history). Empty expected token ⇒ always denied (fail-closed).
- */
-export function checkQueueToken(expected: string, provided: string): boolean {
-  return expected.length > 0 && safeEqual(provided, expected)
 }
 
 /**

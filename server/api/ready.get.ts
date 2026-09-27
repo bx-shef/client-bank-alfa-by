@@ -4,7 +4,8 @@
 // PROBES the backend's hard dependencies: a Postgres `SELECT 1` and, when queues are enabled,
 // a Redis PING. Returns 200 `{ready:true,…}` when the app can actually work, else 503
 // `{ready:false,…}` so an uptime monitor / on-call responder can tell "process up" from "app
-// unable to serve". Booleans only — NO secrets, NO queue depth (that's token-gated /api/queues).
+// unable to serve". Booleans only — NO secrets, NO queue depth (that's the
+// session-gated /api/ops/queues and `make queue-stats`).
 // Reachable at https://<domain>/api/ready (nginx proxies /api/* to the backend).
 
 import { evaluateReadiness, gatewayProbeBase } from '../utils/readiness'

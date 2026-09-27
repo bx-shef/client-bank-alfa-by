@@ -4,8 +4,7 @@
 #     см. currency-converter/docker-compose.nginxproxy.yml);
 #   - запущенный Watchtower на хосте (тоже из currency-converter) — он один на
 #     сервер и сам подхватит контейнеры по метке watchtower.enable ниже.
-#   - .env с DOMAIN, LETSENCRYPT_EMAIL, POSTGRES_PASSWORD, B24_TOKEN_ENC_KEY
-#     (B24_APPLICATION_TOKEN — опционален: см. .env.example и комментарий у сервиса backend).
+#   - .env с DOMAIN, LETSENCRYPT_EMAIL, POSTGRES_PASSWORD, B24_TOKEN_ENC_KEY.
 # Свой Watchtower здесь НЕ поднимаем: второй экземпляр конфликтует по
 # container_name и плодит двойные перезапуски (см. docs/DEPLOY.md).
 #
@@ -88,12 +87,6 @@ services:
       # Прежний ключ — только на время ротации (docs/OPERATIONS.md). Без проброса ротация
       # невозможна: смена ключа осиротила бы все сохранённые refresh-токены.
       B24_TOKEN_ENC_KEY_OLD: ${B24_TOKEN_ENC_KEY_OLD:-}
-      # application_token is delivered INSIDE ONAPPINSTALL (per portal) and stored
-      # write-once; later events are verified against that stored value. So leave
-      # this EMPTY for multi-tenant — the first install bootstraps trust. It's used
-      # here only as the guard token for the server-only diagnostic
-      # (/api/queues); set it to enable that.
-      B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:-}
       # App OAuth creds — refresh portal access token for server-side REST (optional
       # for a just-installed portal, required for long-lived operation).
       B24_CLIENT_ID: ${B24_CLIENT_ID:-}

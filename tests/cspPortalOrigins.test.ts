@@ -5,7 +5,7 @@ import { TOKEN, buildOriginList, injectOrigins, normalizeOrigin } from '../scrip
 
 describe('normalizeOrigin', () => {
   it('дописывает схему к голому хосту', () => {
-    expect(normalizeOrigin('portal.standartno.by')).toBe('https://portal.standartno.by')
+    expect(normalizeOrigin('portal.example.by')).toBe('https://portal.example.by')
   })
 
   it('принимает одну wildcard-метку и приводит хост к нижнему регистру', () => {
@@ -19,7 +19,7 @@ describe('normalizeOrigin', () => {
     ['точка с запятой дописывает свою директиву', 'evil.by; script-src *'],
     ['перенос строки рвёт заголовок', 'evil.by\nX-Foo: bar'],
     ['путь — уже не источник', 'https://evil.by/path'],
-    ['http вместо https', 'http://portal.standartno.by'],
+    ['http вместо https', 'http://portal.example.by'],
     ['без точки — не хост', 'localhost'],
     ['звёздочка целиком', '*']
   ])('отвергает: %s', (_name, value) => {
@@ -51,8 +51,8 @@ describe('buildOriginList', () => {
 describe('injectOrigins', () => {
   it('заменяет ВСЕ вхождения токена', () => {
     const conf = `connect-src 'self'${TOKEN}; frame-ancestors 'self'${TOKEN};`
-    expect(injectOrigins(conf, 'portal.standartno.by'))
-      .toBe('connect-src \'self\' https://portal.standartno.by; frame-ancestors \'self\' https://portal.standartno.by;')
+    expect(injectOrigins(conf, 'portal.example.by'))
+      .toBe('connect-src \'self\' https://portal.example.by; frame-ancestors \'self\' https://portal.example.by;')
   })
 })
 

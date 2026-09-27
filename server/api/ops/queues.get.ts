@@ -1,9 +1,9 @@
 // GET /api/ops/queues — queue counts for the operator monitor (/queues page).
 // Gated by the OPERATOR SESSION cookie (cba_sess), so a logged-in employee's
-// browser can read it (unlike /api/queues, which needs the B24_APPLICATION_TOKEN
-// and is nginx-denied). When auth is not configured (no password) the zone is open,
-// matching the client route guard. Read-only GET — no CSRF header needed. Same
-// payload shape as /api/queues. See docs/AUTH.md, docs/QUEUES.md.
+// browser can read it. When auth is not configured (no password) the zone is open,
+// matching the client route guard. Read-only GET — no CSRF header needed. The console
+// counterpart is `make queue-stats` (redis-cli inside the redis container, #757).
+// See docs/AUTH.md, docs/QUEUES.md.
 
 import { SESSION_COOKIE, operatorAllowed, resolveAuthConfig } from '../../utils/session'
 import { readQueueCounts } from '../../queue/stats'

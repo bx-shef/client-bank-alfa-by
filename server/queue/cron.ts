@@ -7,8 +7,8 @@
 // account for a rolling window; the plugin runs it every CRON_INTERVAL_MIN. It is INERT
 // until accounts are connected (A7) — an empty registry enqueues nothing. Meanwhile the
 // DEMO path below exercises the pipeline: each tick enqueues N synthetic fetch jobs whose
-// handler emits demo operations, so you can watch load flow bank-fetch → crm-sync via
-// GET /api/queues.
+// handler emits demo operations, so you can watch load flow bank-fetch → crm-sync on the
+// /queues page or with `make queue-stats`.
 
 import type { BankProviderId, StatementItem } from '../../app/types/statement'
 import type { FetchJob } from './topology'

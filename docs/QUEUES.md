@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-08-24
+> Last reviewed: 2026-09-27
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -76,7 +76,7 @@ flowchart LR
   WC --> WA[универсальное дело<br/>crm.activity.todo.add]
   WC --> NC[сообщение в чат<br/>по правилам]
 
-  OBS[GET /api/queues<br/>waiting / active / completed / failed] -. читает .-> Q
+  OBS[make queue-stats / GET /api/ops/queues<br/>waiting / active / completed / failed] -. читает .-> Q
 ```
 
 ## Как это работает
@@ -492,11 +492,13 @@ DI, покрыт тестами); по каждой из четырёх очер
 приостановленной очереди считаются как `waiting`. Пауза видна не отдельным числом, а тем, что
 `waiting` растёт при нулевом `active`.
 
-Два эндпоинта с разными guard'ами:
+Два пути к одним и тем же счётчикам:
 
-- **`GET /api/queues`** ([`server/api/queues.get.ts`](../server/api/queues.get.ts)) — для консоли/диагностики.
-  Guard — `B24_APPLICATION_TOKEN` **только заголовком** `X-Check-Token` (constant-time); `?token=` убран
-  (утекал бы в логи/историю). Снаружи закрыт (nginx `deny all`). Из консоли на сервере — `make queue-stats`.
+- **`make queue-stats`** (скрипт `scripts/queue-stats.sh`) — для консоли на сервере.
+  redis-cli внутри контейнера `redis` считает ключи BullMQ так же, как его собственный `getCounts`
+  (`LLEN` для `wait`/`active`, `ZCARD` для остальных). Токена нет: доступ к серверу и есть
+  авторизация. ⚠ До #757 здесь был `GET /api/queues` под `B24_APPLICATION_TOKEN`; переменная из
+  окружения убрана, а с ней и маршрут.
 - **`GET /api/ops/queues`** ([`server/api/ops/queues.get.ts`](../server/api/ops/queues.get.ts)) — **путь
   для браузера оператора**: guard по **сессии** (`operatorAllowed`, cookie `cba_sess`; когда пароль не
   задан — зона открыта, как и клиентский гвард). Именно его опрашивает страница `/queues`.
@@ -626,7 +628,6 @@ Runbook по ним — [`OPERATIONS.md`](OPERATIONS.md).
 | `DEMO_LOAD_N` | Сколько синтетических fetch-джобов класть за демо-тик; `0` = выключено |
 | `DEMO_TICK_SEC` | Каденция демо-тика в **секундах** (по умолчанию 5) — как часто вбрасывать демо-поток |
 | `DEMO_DELAY_MS` | Искусственная пауза обработки демо-джоба, мс (по умолчанию 600) — чтобы очереди были видны на графике; `0` = мгновенный разгреб |
-| `B24_APPLICATION_TOKEN` | Guard эндпоинта `GET /api/queues` (и служебных проверок) |
 | `TELEGRAM_ALERT_BOT_TOKEN` / `TELEGRAM_ALERT_CHAT_ID` | Канал push-оповещений оператору о простое/падениях/нечитаемости очередей (#426). Fail-closed: не заданы **обе** ⇒ канал выключен (аварии только в лог и на `/queues`). Ставить **только на cron-инстансе** — иначе каждая реплика воркера пришлёт свою копию. Порядок работы — [`OPERATIONS.md`](OPERATIONS.md) «Оповещения оператору» |
 
 ## Смежное

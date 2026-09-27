@@ -1619,8 +1619,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   - `server/utils/secretCrypto.ts` — AES-256-GCM шифрование `refresh_token` (ключ `B24_TOKEN_ENC_KEY`).
   - `server/utils/envCheck.ts` (+ плагин `server/plugins/envCheck.ts`) — валидация env на старте
     (чистая `checkBackendEnv`, тесты): `B24_TOKEN_ENC_KEY` есть и декодируется в 32 байта; `DATABASE_URL`
-    задан; `B24_APPLICATION_TOKEN` не плейсхолдер (`CHANGE_ME` и т.п. → реальный токен не совпадёт → 403);
-    отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
+    задан; отсутствие `B24_CLIENT_ID/SECRET` — warning (приём событий работает, refresh/`app.option` — нет).
     Логирует, **не роняет** процесс (конвенция как `authGuard.ts`); no-op при prerender.
   - `server/db/client.ts` — ленивый pg-Pool (`DATABASE_URL`) + схема (⚠ помимо `CREATE TABLE IF NOT EXISTS` скрипт несёт и **идемпотентный `ALTER TABLE … ADD COLUMN IF NOT EXISTS`** — так добавлен `consent_expires_at`, #503: таблица создаётся только если её нет, поэтому новое поле внутри `CREATE` на существующей установке не появилось бы никогда; `portal_tokens`, `portal_tombstone`,
     `import_result`, `import_batch` (итог конкретной ручной загрузки, #417; свип 3 дня), `metrics_counter`, `bank_tokens`, `portal_app_rating`; дедуп дел — маркер в B24, таблицы нет — #259;

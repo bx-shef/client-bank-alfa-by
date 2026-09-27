@@ -397,22 +397,18 @@ doctor:
 	  && { d="$${DOMAIN:-}"; [ -n "$$d" ] || d="$(call env-value,DOMAIN)"; \
 	       echo "[make] домен: $${d:-<не задан, внешние проверки пропущу>}"; bash "$$t" "$$d"; }
 
-## Счётчики очередей из работающего backend. Нужен B24_APPLICATION_TOKEN (берётся из ./.env)
+## Счётчики очередей: сколько задач ждёт, выполняется, упало — прямо из Redis
 #
-# ⚠ Токен НЕ принимается из командной строки (в отличие от `DOMAIN` у `doctor`) — намеренно:
-# `make queue-stats B24_APPLICATION_TOKEN=…` уехал бы в history оболочки и в `ps`. Единственный
-# источник — `./.env`, он на сервере и так рядом. Не «чинить» эту асимметрию.
-#
-# ⚠ Печатается ДЛИНА, а не токен: значение показывать нельзя, но убедиться, что он вообще
-# прочитался (и что его не порезал разбор `.env`), надо — иначе 403 от backend читается как
-# «токен неверный», хотя на деле его тут просто не нашли.
+# ⚠ Токен больше не нужен (#757): скрипт читает счётчики redis-cli ВНУТРИ контейнера redis, и
+# доступ к серверу — единственная нужная авторизация. Прежний путь через GET /api/queues требовал
+# B24_APPLICATION_TOKEN — эта переменная из окружения убрана.
+# ⚠ `$(DC)`, а не голый `-f docker-compose.prod.yml`: на ВМ Битрикс24 файлы стека заданы
+# COMPOSE_FILE в `.env`, и явный `-f` их отбросил бы.
 queue-stats:
 	@echo "[make] скачиваю queue-stats.sh из $(SRC)"
 	@t=$$(mktemp /tmp/queue-stats.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/queue-stats.sh" \
-	  && { tok="$(call env-value,B24_APPLICATION_TOKEN)"; \
-	       echo "[make] B24_APPLICATION_TOKEN из ./.env: длина $${#tok}"; \
-	       B24_APPLICATION_TOKEN="$$tok" bash "$$t" docker-compose.prod.yml; }
+	  && bash "$$t" "$(DC)"
 
 ## Правда ли `pageRowCount=0` у Альфы значит «все» — разовая проба (#561)
 #
