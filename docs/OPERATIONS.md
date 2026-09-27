@@ -1,6 +1,6 @@
 # Операции: пост-запускной runbook (#246)
 
-> Last reviewed: 2026-09-15
+> Last reviewed: 2026-09-27
 
 Как понять, что приложение живо, где смотреть диагностику, что делать при типовых сбоях,
 как откатиться и куда эскалировать. Дополняет [`DEPLOY.md`](DEPLOY.md) (как деплоить) и
@@ -64,6 +64,7 @@ cd /home/bitrix/bank-import && make gw-stop
 | проба хоста Приорбанка | `make prior-probe` |
 | переключить Приор | `make prior-switch TO=direct` / `TO=gateway` |
 | правда ли `pageRowCount=0` у Альфы значит «все» (#561) | `B24=xxx.bitrix24.by DAY=2026-08-18 make alfa-page-probe` |
+| включить обратную связь (#499) | `make feedback-on` (серверу клиента — свой репозиторий: `REPO=bx-shef/client-bank-feedback-имя make feedback-on`) |
 
 ⚠ **Порталов на сервере больше одного ⇒ адрес портала ОБЯЗАТЕЛЕН** (`B24=xxx.bitrix24.by`, перед
 `make`). Без него проба брала бы счёт Альфы того портала, чей токен обновлялся последним, а какой
@@ -808,7 +809,7 @@ docker compose -f docker-compose.prod.yml exec -T db \
 > - **Приватный feedback-репо.** Когда прогон «запутался» (`unmatched`/`ambiguous`/`manual`),
 >   воркер сам заводит issue с редактированным сэмплом операции ([`FEEDBACK.md`](FEEDBACK.md),
 >   канал 2). Молчит — значит не заданы `GITHUB_FEEDBACK_TOKEN`/`GITHUB_FEEDBACK_REPO`
->   (fail-closed по умолчанию).
+>   (fail-closed по умолчанию); включается `make feedback-on`.
 >
 > Лог нужен там, где эти два не помогают: банк не ответил, ответил пусто, или нужно увидеть
 > НАЗНАЧЕНИЯ платежей для настройки матриц.

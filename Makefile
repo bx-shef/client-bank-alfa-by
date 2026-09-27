@@ -2,7 +2,7 @@
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
-        bank-connect-log chat-log \
+        bank-connect-log chat-log feedback-on \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -537,3 +537,21 @@ reap-off:
 	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
 	  && $(DC) up -d backend \
 	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
+
+## Включить обратную связь: спросит токен, проверит репозиторий и права, перезапустит (#499)
+#
+#   make feedback-on                                   # репозиторий bx-shef/client-bank-feedback
+#   REPO=bx-shef/client-bank-feedback-имя make feedback-on   # серверу клиента — СВОЙ репозиторий
+#
+# ⚠ Токен НЕ принимается ни из командной строки, ни из переменной — только с клавиатуры: иначе он
+# осел бы в истории оболочки. Скрипт сперва проверяет, что с этим токеном канал работает
+# (репозиторий приватный, задачи заводятся), и только потом пишет `.env`.
+# ⚠ Перезапуск — `up -d`, а не `restart`: `restart` не перечитывает `.env`. И ОБА контейнера:
+# backend принимает отзывы сотрудников, worker заводит задачи от программы.
+feedback-on:
+	@echo "[make] скачиваю prod-feedback-on.sh из $(SRC)"
+	@t=$$(mktemp /tmp/feedback-on.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-feedback-on.sh" \
+	  && REPO="$${REPO:-}" bash "$$t" \
+	  && $(DC) up -d backend worker \
+	  && bash "$$t" --verify "$(DC)"
