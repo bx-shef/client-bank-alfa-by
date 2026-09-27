@@ -18,12 +18,69 @@ export const REPO_URL = 'https://github.com/bx-shef/client-bank-alfa-by'
  *
  * ⚠ Проверяем, а не подставляем как есть: значение приходит переменной сборки, попадает в `href`
  * подписи на КАЖДОМ экране, и пустое/кривое дало бы битую ссылку в подвале вместо честной нашей.
- * Требуем `https` и непустой хост; `javascript:` и прочее до `href` не доедет по построению.
+ * Требуем `https`, хост без логина (`httpsHref`) и путь к репозиторию; `javascript:` и прочее до
+ * `href` не доедет по построению. Прежняя регулярка пропускала `https://github.com@чужой.сайт/…`
+ * — адрес, который ведёт на `чужой.сайт`.
  */
-export function resolveRepoUrl(value: string | undefined | null): string {
-  const v = (value ?? '').trim().replace(/\/+$/, '')
-  if (!/^https:\/\/[^\s/]+\/\S+$/.test(v)) return REPO_URL
+export function resolveRepoUrl(value: unknown): string {
+  const v = String(value ?? '').trim().replace(/\/+$/, '')
+  const href = /\s/.test(v) ? '' : httpsHref(v)
+  if (!href || new URL(href).pathname.length < 2) return REPO_URL
   return v
+}
+
+/**
+ * Автор в подвале по умолчанию (#758, решение владельца 2026-09-27; прежнее умолчание
+ * `bx-shef` / `https://bx-shef.by` снято). Имя — то же, что `LANDING_PUBLISHER` в `seo.ts`: это
+ * один и тот же человек, и эти две копии строки уже успели разойтись («И.С.» против «И. С.»),
+ * поэтому `seo.ts` берёт его отсюда. Направление такое, потому что этот модуль без зависимостей
+ * и его грузит сервер ради `/api/health`, а `seo.ts` тянет за собой таблицу маршрутов.
+ * ⚠ Логотип (`AppLogo.vue`) пишет «Шевчик И.С.» слитно и сюда не привязан: это начертание знака,
+ * а не подпись.
+ */
+export const DEFAULT_AUTHOR_NAME = 'ИП Шевчик И. С.'
+export const DEFAULT_AUTHOR_URL = 'https://offer.bx-shef.by/?ref=bank-import'
+
+/**
+ * Адрес для `href`, если это `https` без логина в адресе; иначе пусто.
+ *
+ * ⚠ Через `new URL`, а не регуляркой: `https://свой.сайт@чужой.сайт` — валидный адрес, который
+ * ведёт на `чужой.сайт`, и регулярка вида «https, потом хост» его пропускала.
+ */
+function httpsHref(value: string): string {
+  try {
+    const u = new URL(value)
+    if (u.protocol !== 'https:' || u.username || u.password || !u.hostname) return ''
+    return u.href
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Автор для подвала: заданное значение или умолчание.
+ *
+ * ⚠ Умолчание применяется ЗДЕСЬ, а в `nuxt.config.ts` у ключей пусто: пустая переменная сборки
+ * перекрывает любое умолчание конфига (замерено: `NUXT_PUBLIC_AUTHOR_NAME=` при `nuxt generate`
+ * даёт `authorName:""`), а `Dockerfile` выставляет её пустой всякий раз, когда переменная
+ * репозитория не задана. У клона без переменных подвал выходил ПУСТЫМ.
+ *
+ * ⚠ Имя и ссылка идут ПАРОЙ, в обе стороны:
+ * - имени нет ⇒ наше имя и наша ссылка, даже если задан адрес: наше имя не должно вести на чужой
+ *   сайт;
+ * - имя своё ⇒ ссылка только своя: своё имя без адреса выходит подписью без ссылки, а не
+ *   ссылкой на наш оффер;
+ * - имя совпало с нашим ⇒ без адреса подставляется наш.
+ *
+ * Значения приходят через `destr` и бывают числом или булевым (`2026` → число), поэтому
+ * приводим к строке, а не зовём `.trim()` у чего попало.
+ */
+export function resolveAuthor(name: unknown, url: unknown): { name: string, url: string } {
+  const n = String(name ?? '').trim()
+  const u = httpsHref(String(url ?? '').trim())
+  if (!n) return { name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL }
+  if (n === DEFAULT_AUTHOR_NAME) return { name: n, url: u || DEFAULT_AUTHOR_URL }
+  return { name: n, url: u }
 }
 
 /** Short (7-char) commit for display; '' when the SHA is unknown (dev builds). */

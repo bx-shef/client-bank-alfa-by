@@ -29,6 +29,14 @@ describe('checkBackendEnv', () => {
     expect(bad.warnings.some(w => /NUXT_PUBLIC_LOCAL_MODE/.test(w) && /не распознан/.test(w))).toBe(true)
   })
 
+  it('локальный режим: значение видится так же, как его видит сборка фронта (через destr)', () => {
+    // `"1"` в кавычках и `1.0` сборка кладёт в конфиг как «1» и 1 — локальный режим включён.
+    // Предупреждать о них значило бы спорить со статикой, которая уже локальная.
+    for (const v of ['"1"', '1.0']) {
+      expect(checkBackendEnv({ ...GOOD, NUXT_PUBLIC_LOCAL_MODE: v }).warnings.some(w => /LOCAL_MODE/.test(w)), v).toBe(false)
+    }
+  })
+
   it('warns on a HALF-configured bank (some but not all OAuth creds), silent when absent or complete', () => {
     // none set → no bank warning (feature simply off)
     expect(checkBackendEnv(GOOD).warnings.some(w => /Банк/.test(w))).toBe(false)

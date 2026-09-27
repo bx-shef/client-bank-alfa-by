@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildB24FormSrc, isAllowedB24FormHost } from '~/utils/b24Form'
+import { DEFAULT_B24_FORM, buildB24FormSrc, isAllowedB24FormHost, resolveB24Form } from '~/utils/b24Form'
 
 const SCRIPT = 'https://cdn-ru.bitrix24.by/b37817748/crm/form/loader_1.js'
 
@@ -39,5 +39,40 @@ describe('buildB24FormSrc', () => {
   it('returns null for an id/secret with unsafe characters', () => {
     expect(buildB24FormSrc(SCRIPT, '1/../x', '3c735r')).toBeNull()
     expect(buildB24FormSrc(SCRIPT, '1', 'a b')).toBeNull()
+  })
+})
+
+describe('resolveB24Form', () => {
+  const EMPTY = { scriptUrl: '', formId: '', formSecret: '' }
+
+  it('ничего не задано вне локального режима — наша форма', () => {
+    // Так выглядит прод: переменные репозитория не заданы, Dockerfile отдаёт пустые строки.
+    // С #701 здесь была заглушка вместо формы заявок (замерено 2026-09-27).
+    expect(resolveB24Form(EMPTY, false)).toEqual(DEFAULT_B24_FORM)
+    expect(resolveB24Form({ scriptUrl: undefined, formId: null, formSecret: ' ' }, false)).toEqual(DEFAULT_B24_FORM)
+    const f = resolveB24Form(EMPTY, false)
+    expect(buildB24FormSrc(f.scriptUrl, f.formId, f.formSecret)).toMatch(/^\/b24-form\.html\?/)
+  })
+
+  it('ничего не задано в локальном режиме — заглушка: заявки клона не уходят в нашу CRM', () => {
+    const f = resolveB24Form(EMPTY, true)
+    expect(f).toEqual(EMPTY)
+    expect(buildB24FormSrc(f.scriptUrl, f.formId, f.formSecret)).toBeNull()
+  })
+
+  it('заданная форма берётся как есть, и в локальном режиме тоже', () => {
+    const own = { scriptUrl: 'https://cdn.bitrix24.by/b1/crm/form/loader_7.js', formId: '7', formSecret: 'abc' }
+    expect(resolveB24Form(own, true)).toEqual(own)
+    expect(resolveB24Form(own, false)).toEqual(own)
+  })
+
+  it('неполная настройка не подменяется нашей — её отвергнет buildB24FormSrc', () => {
+    const f = resolveB24Form({ scriptUrl: '', formId: '7', formSecret: '' }, false)
+    expect(f).toEqual({ scriptUrl: '', formId: '7', formSecret: '' })
+    expect(buildB24FormSrc(f.scriptUrl, f.formId, f.formSecret)).toBeNull()
+  })
+
+  it('число из destr — строка', () => {
+    expect(resolveB24Form({ scriptUrl: 'https://x.bitrix24.by/l.js', formId: 7, formSecret: 'abc' }, false).formId).toBe('7')
   })
 })

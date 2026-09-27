@@ -14,8 +14,8 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 FROM deps AS builder
 WORKDIR /app
 COPY . .
-# Author shown in the landing footer (runtimeConfig.public.author*). Optional —
-# falls back to the defaults baked into nuxt.config.ts when unset.
+# Автор в подвале (runtimeConfig.public.author*). Необязательно: пусто ⇒ «ИП Шевчик И. С.» со
+# ссылкой на оффер. Умолчание — в `resolveAuthor` (app/utils/build.ts), а не в nuxt.config.ts (#758).
 ARG NUXT_PUBLIC_AUTHOR_NAME
 ENV NUXT_PUBLIC_AUTHOR_NAME=$NUXT_PUBLIC_AUTHOR_NAME
 ARG NUXT_PUBLIC_AUTHOR_URL
@@ -42,7 +42,10 @@ ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 # `NUXT_PUBLIC_REPO_URL`: она появилась в `nuxt.config.ts` и `.env.example`, но не здесь, поэтому
 # «сборка <sha>» у клона по-прежнему вела в наш репозиторий. Каждый ключ `runtimeConfig.public`
 # обязан иметь пару ARG/ENV в ОБОИХ builder-стадиях — это сторожит `tests/publicEnvBuildArgs.test.ts`.
-# Незаданная переменная = пустая строка = умолчание из `nuxt.config.ts`, поэтому объявлять безопасно.
+# Незаданная переменная = пустая строка, и она ПЕРЕКРЫВАЕТ умолчание `nuxt.config.ts`. Поэтому
+# умолчания там пустые, а запасные значения живут в функциях, которые конфиг читают (`resolveAuthor`,
+# `resolveMetrikaId`, `resolveB24Form`, …): так с #701 на проде пропали форма заявок и цели Метрики.
+# Непустое умолчание не пропустит `tests/nuxtConfigEnv.test.ts`.
 ARG NUXT_PUBLIC_REPO_URL
 ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 # Код приложения НА ПОРТАЛЕ (#19): тиражное — символьный код Маркета, локальное — `client_id`.
@@ -146,7 +149,10 @@ ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 # `NUXT_PUBLIC_REPO_URL`: она появилась в `nuxt.config.ts` и `.env.example`, но не здесь, поэтому
 # «сборка <sha>» у клона по-прежнему вела в наш репозиторий. Каждый ключ `runtimeConfig.public`
 # обязан иметь пару ARG/ENV в ОБОИХ builder-стадиях — это сторожит `tests/publicEnvBuildArgs.test.ts`.
-# Незаданная переменная = пустая строка = умолчание из `nuxt.config.ts`, поэтому объявлять безопасно.
+# Незаданная переменная = пустая строка, и она ПЕРЕКРЫВАЕТ умолчание `nuxt.config.ts`. Поэтому
+# умолчания там пустые, а запасные значения живут в функциях, которые конфиг читают (`resolveAuthor`,
+# `resolveMetrikaId`, `resolveB24Form`, …): так с #701 на проде пропали форма заявок и цели Метрики.
+# Непустое умолчание не пропустит `tests/nuxtConfigEnv.test.ts`.
 ARG NUXT_PUBLIC_REPO_URL
 ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 # Код приложения НА ПОРТАЛЕ (#19): тиражное — символьный код Маркета, локальное — `client_id`.

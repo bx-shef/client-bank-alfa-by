@@ -2,10 +2,22 @@
 // «закрыть от индексации». Копия списка здесь означала бы, что страница может попасть в пререндер,
 // но не в карту сайта (или наоборот), и заметить это можно только случайно.
 import { PRERENDER_ROUTES, SERVICE_ROUTES } from './app/config/routes'
+import { destr } from 'destr'
+import { isLocalMode } from './app/utils/localMode'
+import { resolveMetrikaId } from './app/utils/metrika'
 
-// Только цифры — защита от случайной опечатки или компрометации ENV в CI.
-const metrikaId = (process.env.NUXT_PUBLIC_METRIKA_ID || '109399587').replace(/\D/g, '')
-if (!metrikaId) {
+// Счётчик — по тому же правилу, по которому `useMetrikaGoal` шлёт цели (`resolveMetrikaId`):
+// заданный (только цифры — защита от опечатки или компрометации ENV в CI) или наш, но наш только
+// вне локального режима. Одна функция на оба места — иначе сниппет и цели разойдутся, как уже
+// разошлись с #701.
+// ⚠ И ОДНО представление значения: переменные разбираются тем же `destr`, которым Nitro кладёт
+// их в конфиг. Без этого одна функция видела бы разные входы: `1e5` здесь строка («15» после
+// отсева нецифр), а в конфиге число 100000; `"1"` в кавычках здесь не включение, а в конфиге — «1».
+const metrikaId = resolveMetrikaId(
+  destr(process.env.NUXT_PUBLIC_METRIKA_ID),
+  isLocalMode(destr(process.env.NUXT_PUBLIC_LOCAL_MODE))
+)
+if (process.env.NUXT_PUBLIC_METRIKA_ID?.trim() && !metrikaId) {
   console.warn('[nuxt.config] NUXT_PUBLIC_METRIKA_ID после фильтрации пустой — счётчик Яндекс.Метрики не будет вставлен')
 }
 
@@ -54,9 +66,18 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     public: {
-      // Author shown in the landing footer. Override via NUXT_PUBLIC_AUTHOR_*.
-      authorName: 'bx-shef',
-      authorUrl: 'https://bx-shef.by',
+      // ⚠ У КАЖДОГО ключа этого блока умолчание пустое, а запасное значение живёт в функции, которая
+      // конфиг читает (`resolveAuthor`, `resolveMetrikaId`, `resolveB24Form`, `useAppCode`,
+      // `resolveRepoUrl`). Причина: пустая переменная сборки ПЕРЕКРЫВАЕТ умолчание конфига, а
+      // `Dockerfile` выставляет её пустой всякий раз, когда переменная репозитория не задана. Так с
+      // #701 (2026-09-13) на проде пропали форма заявок и цели Метрики (замерено 2026-09-27), а у
+      // клонов — подпись в подвале. Непустое умолчание здесь запрещает
+      // `tests/nuxtConfigEnv.test.ts` — он загружает этот конфиг и проверяет вычисленные значения.
+      // ⚠ Значения приходят через `destr`: `1` становится числом, `true` — булевым.
+      //
+      // Автор в подвале (#758). Пусто ⇒ «ИП Шевчик И. С.» со ссылкой на оффер — см. `resolveAuthor`.
+      authorName: '',
+      authorUrl: '',
       // Public URL the app is served from. Used by the Bitrix24 install handler
       // to build absolute placement handler URLs once placement.bind lands.
       // Set via NUXT_PUBLIC_SITE_URL at build time (Dockerfile/CI).
@@ -73,8 +94,9 @@ export default defineNuxtConfig({
       // (`REPO_URL` в `app/utils/build.ts`). Задаётся у КЛОНА (docs/DEPLOY_BITRIXVM.md): иначе
       // ссылка ведёт в наш репозиторий, куда у клиента доступа нет.
       repoUrl: process.env.NUXT_PUBLIC_REPO_URL || '',
-      // Яндекс.Метрика — id счётчика (только цифры, отфильтрован выше).
-      metrikaId,
+      // Яндекс.Метрика — id счётчика для целей. Пусто ⇒ наш вне локального режима — см.
+      // `resolveMetrikaId` (сниппет выше строится той же функцией).
+      metrikaId: '',
       // КОД ПРИЛОЖЕНИЯ НА ПОРТАЛЕ — им портал открывает наши экраны по ссылке
       // `/marketplace/view/<код>/` (#19) и им же помечен канал pull-синхронизации настроек.
       // У тиражного это символьный код Маркета (`shef.bankimport`), у ЛОКАЛЬНОГО приложения —
@@ -86,12 +108,11 @@ export default defineNuxtConfig({
       // задаёт константа `LANDING_MARKET_CODE` — она же строит публичный адрес карточки на
       // лендинге. Переменная давала бы ВТОРОЙ ответ на вопрос с одним ответом.
       b24AppCode: '',
-      // Битрикс24 CRM веб-форма (embed) — публичные идентификаторы, не секреты.
-      // По умолчанию вшита форма Игоря Шевчика (портал b37817748). Смена — через
-      // ENV без перебилда; пустые значения → на лендинге показывается слот.
-      b24FormId: process.env.NUXT_PUBLIC_B24_FORM_ID || '1',
-      b24FormSecret: process.env.NUXT_PUBLIC_B24_FORM_SECRET || '3c735r',
-      b24FormScriptUrl: process.env.NUXT_PUBLIC_B24_FORM_SCRIPT_URL || 'https://cdn-ru.bitrix24.by/b37817748/crm/form/loader_1.js'
+      // Битрикс24 CRM веб-форма заявок (embed) — публичные идентификаторы, не секреты. Пусто ⇒
+      // наша форма вне локального режима, заглушка в локальном — см. `resolveB24Form`.
+      b24FormId: '',
+      b24FormSecret: '',
+      b24FormScriptUrl: ''
     }
   },
 

@@ -228,7 +228,8 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   same-origin документе `public/b24-form.html` (iframe), который nginx отдаёт со **своим**
   form-scoped CSP (`location = /b24-form.html`) — официальный B24-загрузчик (inline + cdn-скрипт)
   работает, а строгий CSP страницы не ослабляется. URL iframe строит чистый `app/utils/b24Form.ts`
-  (`buildB24FormSrc` — allowlist хостов Б24 + валидация id/secret, тесты); пустой конфиг ⇒ слот-плейсхолдер.
+  (`buildB24FormSrc` — allowlist хостов Б24 + валидация id/secret, тесты); какую форму встраивать, решает
+  `resolveB24Form`: пустой конфиг ⇒ наша форма вне локального режима, слот-плейсхолдер — в локальном (#758).
   Событие `b24:form:submit` iframe ретранслирует через `postMessage` → цель Метрики `brief_submit`.
   Контейнер тёмный (под брендовую оболочку лендинга); `app/utils/booking.ts` — общая ссылка онлайн-записи Б24.
 - `app/pages/app.vue` — in-portal просмотр выписки на **b24ui** (по образцу B24-списка «Последние
@@ -786,10 +787,21 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `tests/publicEnvBuildArgs.test.ts` требует пару ARG/ENV в ОБЕИХ builder-стадиях, строку в
   `docker-compose.yml` у ОБОИХ сервисов и строку в `build-args` CI для КАЖДОГО ключа
   `runtimeConfig.public` (имя выводится правилом Nuxt camelCase→SCREAMING_SNAKE).
+  ⚠ **Но доехав, ПУСТАЯ переменная ЗАТИРАЕТ умолчание конфига** (#758, замерено 2026-09-27).
+  `Dockerfile` отдаёт незаданную переменную репозитория пустой строкой, а у неё приоритет над
+  умолчанием `nuxt.config.ts`. Так с #701 (который эти переменные и довёл до сборки) на проде вместо
+  формы заявок висела заглушка «Слот под CRM-форму», а цели Метрики не уходили ни одной
+  (`b24FormId:""`, `metrikaId:""` в `__NUXT__.config`), у клонов пустел подвал. Поэтому умолчания
+  `runtimeConfig.public` ПУСТЫЕ, а запасные значения живут в функциях, которые конфиг читают
+  (`resolveAuthor`, `resolveMetrikaId`, `resolveB24Form`, `useAppCode`, `resolveRepoUrl`); непустое
+  умолчание не пропустит `tests/nuxtConfigEnv.test.ts` — он загружает сам конфиг, а не читает его текст. ⚠ И значения приходят через `destr`: `1` — ЧИСЛОМ, `true` —
+  булевым, поэтому читатель приводит к строке, а не зовёт `.trim()` у чего попало. А `nuxt.config.ts`,
+  строя сниппет Метрики, разбирает переменные ТЕМ ЖЕ `destr` (прямая зависимость): иначе сниппет и
+  цели видели бы разные значения — `1e5` там строка «15» после отсева нецифр, в конфиге число 100000.
   ⚠ **НО У BACKEND ПРАВИЛО ДРУГОЕ, и доехать до сборки ему МАЛО** (#19, замерено 2026-09-19).
   `nuxt build` с переменной в окружении кладёт в серверный бандл `"siteUrl": ""` — build-time
   значение в Nitro **не запекается**. Запекаются только ключи, которые `nuxt.config.ts` читает из
-  `process.env` ЯВНО (`metrikaId`, `b24Form*`, `repoUrl`, `localMode`); остальные Nitro берёт из
+  `process.env` ЯВНО (`repoUrl`, `localMode`); остальные Nitro берёт из
   окружения РАБОТАЮЩЕГО контейнера (`envPrefix: "NUXT_"`, прочитано в собранном `nitro.mjs`).
   Значит ключ, который читает `server/**`, обязан быть ARG+ENV ещё и в **финальной стадии
   `backend`** — там это уже сделано для `COMMIT_SHA` (#76) и `REPO_URL`.
@@ -955,7 +967,16 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   класс «оператор думал, что включил, а промо остались»). ⚠ До 2026-09-26 это предупреждение на backend не
   срабатывало: флага не было в финальной стадии образа (разбор — у `/install`, абзац «НО У
   BACKEND ПРАВИЛО ДРУГОЕ»). Контекст форка — свой CI + свой GHCR.
-  Тесты: `localMode` (ядро), `envCheck` (warning), `nuxt/localModeGate` (гейт мутационно проверен).
+  ⚠ **До 2026-09-27 флаг на клоне не делал НИЧЕГО** (#758, замерено сборкой): `destr` отдаёт
+  `NUXT_PUBLIC_LOCAL_MODE=1` в конфиг ЧИСЛОМ, а `isLocalMode` признавала только строки — карточка
+  Маркета и наш счётчик оставались на месте. Число `1` и булево `true` теперь включают. Гейт-тест
+  этого не видел, потому что подменял `useLocalMode` целиком; форму значения держит
+  `nuxt/metrikaGoal` — на настоящем конфиге. ⚠ В локальном режиме пустые `NUXT_PUBLIC_METRIKA_ID`
+  и `_B24_FORM_*` значат «нет», а вне его — «наши» (`resolveMetrikaId`, `resolveB24Form`): НАШ
+  счётчик и НАША форма заявок на установке клиента — это его трафик в нашей аналитике и его
+  посетители в нашей CRM.
+  Тесты: `localMode` (ядро), `envCheck` (warning), `nuxt/localModeGate` (гейт мутационно проверен),
+  `nuxt/metrikaGoal` (значения в форме сборки).
 - **Промо-компоненты (cross-sell), общие по экосистеме** — переносимы 1:1 из `currency-converter`
   (правим в одном месте, копируем без правок; каталог в `docs/PAGE_GUIDE.md` §6):
   - `app/components/HoldRevealQr.vue` — мобильная кнопка-«отпечаток» с QR (hold-to-reveal): кладётся
@@ -3416,10 +3437,12 @@ OG-картинка (`public/og.png`, 1200×630) генерируется из H
   `scripts/csp-hashes.mjs` считает из собранного HTML и подставляет в `nginx.conf` (плейсхолдер
   `__CSP_SCRIPT_HASHES__`) на этапе сборки. `frame-ancestors`/`connect-src` разрешают облачные
   домены Б24 (iframe-встройка `/app`,`/import`,`/install`); backend — **тот же origin** (`/api/*`, покрыт `'self'`).
-  Лендинг несёт **Яндекс.Метрику** (инлайн-счётчик из `nuxt.config.ts`, `NUXT_PUBLIC_METRIKA_ID`;
+  Лендинг несёт **Яндекс.Метрику** (инлайн-счётчик из `nuxt.config.ts`, `NUXT_PUBLIC_METRIKA_ID`,
+  пусто ⇒ наш вне локального режима — `resolveMetrikaId`, по нему же шлёт цели `useMetrikaGoal`;
   его sha256 подхватывает `csp-hashes.mjs`, CSP разрешает `mc.yandex.ru` в script/img/connect/frame-src)
   и **встроенную CRM-форму Б24** (iframe на `public/b24-form.html` со своим form-scoped CSP —
-  `location = /b24-form.html`; `NUXT_PUBLIC_B24_FORM_*`, пустые → слот).
+  `location = /b24-form.html`; `NUXT_PUBLIC_B24_FORM_*`, пустые → наша форма вне локального
+  режима, слот в локальном — `resolveB24Form`).
   Метрика-сниппет глушится по ДВУМ условиям: внутри iframe (`window.self !== window.top`) **и** на
   служебных маршрутах (список берётся из `SERVICE_ROUTES`, а не набирается руками) — иначе
   `/app?preview=1`, открытый обычной вкладкой, грузил счётчик: in-portal-страницы
