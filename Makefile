@@ -2,7 +2,7 @@
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
-        bank-connect-log chat-log \
+        bank-connect-log chat-log feedback-on \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -522,3 +522,24 @@ reap-off:
 	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
 	  && $(DC) up -d backend \
 	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
+
+## Включить обратную связь: спросит репозиторий и токен, проверит права, перезапустит (#499)
+#
+#   make feedback-on
+#
+# ⚠ Имя репозитория и токен вводятся с клавиатуры, а не параметром: иначе токен осел бы в истории
+# оболочки, а имя приватного репозитория-приёмника — в публичном коде. Скрипт сперва проверяет, что
+# с этим токеном канал работает (репозиторий приватный, задачи заводятся), и только потом пишет
+# `.env`. Серверу клиента — СВОЙ репозиторий и свой токен.
+# ⚠ Перезапуск — `up -d`, а не `restart`: `restart` не перечитывает `.env`. И ОБА контейнера:
+# backend принимает отзывы сотрудников, worker заводит задачи от программы.
+# ⚠ `--scale worker=<сколько сейчас>`: голый `up -d` вернул бы воркеров к одной реплике и молча
+# отменил бы `--scale worker=N`, сделанный раньше.
+feedback-on:
+	@echo "[make] скачиваю prod-feedback-on.sh из $(SRC)"
+	@t=$$(mktemp /tmp/feedback-on.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-feedback-on.sh" \
+	  && bash "$$t" \
+	  && n=$$($(DC) ps -q worker 2>/dev/null | wc -l) \
+	  && $(DC) up -d --scale worker=$$(( n > 0 ? n : 1 )) backend worker \
+	  && bash "$$t" --verify "$(DC)"

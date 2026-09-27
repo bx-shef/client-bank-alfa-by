@@ -18,6 +18,7 @@
 /scripts/prod-chat-log.sh
 /scripts/prod-connect-log.sh
 /scripts/prod-doctor.sh
+/scripts/prod-feedback-on.sh
 /scripts/prod-payers.sh
 /scripts/prod-poll-check.sh
 /scripts/prod-reap-status.sh
