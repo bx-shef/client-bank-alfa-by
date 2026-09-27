@@ -239,10 +239,10 @@ help:
 
 # ─── Таргет «виртуальная машина Битрикс24» (docs/DEPLOY_BITRIXVM.md) ─────────
 # Эти цели нужны только там, где приложение стоит РЯДОМ С ПОРТАЛОМ на ВМ клиента:
-# TLS терминирует nginx машины, обновления приносит systemd-таймер по опросу git.
+# TLS терминирует nginx машины, обновления приносит скрипт по опросу git из cron под `bitrix`.
 # На основном проде (nginx-proxy + Watchtower) они не применяются.
 
-## Доедет ли запрос с домена до приложения: конфиг, контейнер, статика, таймер
+## Доедет ли запрос с домена до приложения: конфиг, контейнер, статика, автообновление
 #
 #   make bitrix-check                       # домен и порт из ./.env
 #   make bitrix-check DOMAIN=bank-app.example.by
@@ -256,28 +256,22 @@ bitrix-check:
 	     p="$${PORT:-}"; [ -n "$$p" ] || p="$(call env-value,APP_BIND_PORT)"; \
 	     bash "$$t" "$$d" "$${p:-8080}"
 
-# Автообновление живёт в ОДНОМ из двух вариантов (docs/DEPLOY_BITRIXVM.md): systemd-таймер от
-# root (шаг 6) или cron под `bitrix` (шаг 6b). Цели ниже сами определяют, какой стоит, — раньше
-# они знали только systemd, и в cron-варианте оператор набирал команды руками.
+# Автообновление — ОДИН вариант: cron под `bitrix` (docs/DEPLOY_BITRIXVM.md, шаг 6). Вариант с
+# systemd-таймером от root снят (2026-09-27): два пути давали инструкцию с «или» на каждом шаге.
 #
-# ⚠ Признак systemd — файл таймера, признак cron — `deploy.env` в домашнем каталоге ТОГО, кто
-# запустил make. Поэтому cron-вариант смотрят из-под `bitrix`: у root `$HOME` другой, и он
-# честно ответит «не настроено». Пути те же, что в строке crontab из шага 6b.
-DEPLOY_TIMER = /etc/systemd/system/bank-app-deploy.timer
+# ⚠ Признак настройки — `deploy.env` в домашнем каталоге ТОГО, кто запустил make. Поэтому цели
+# запускают из-под `bitrix`: у root `$HOME` другой, и он честно ответит «не настроено». Пути те
+# же, что в строке crontab из шага 6.
 CRON_DEPLOY = $$HOME/bank-app-deploy
-NO_AUTODEPLOY = echo "[make] автообновление не настроено: нет ни $(DEPLOY_TIMER), ни $(CRON_DEPLOY)/deploy.env (cron-вариант смотрите из-под того пользователя, чей это crontab) — docs/DEPLOY_BITRIXVM.md, шаги 6/6b"; exit 1
+NO_AUTODEPLOY = echo "[make] автообновление не настроено: нет $(CRON_DEPLOY)/deploy.env (запускайте из-под bitrix) — docs/DEPLOY_BITRIXVM.md, шаг 6"; exit 1
 
 ## Состояние автообновления: включено ли, какой коммит развёрнут, последний прогон
 deploy-status:
-	@if [ -f $(DEPLOY_TIMER) ]; then \
-	   systemctl status bank-app-deploy.timer --no-pager -l | head -8; \
-	   echo "[make] развёрнутый коммит: $$(cat /var/lib/bank-app-deploy/deployed_sha 2>/dev/null || echo '—')"; \
-	   echo "[make] последние строки прогона:"; journalctl -u bank-app-deploy -n 15 --no-pager; \
-	 elif [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
-	   echo "[make] вариант: cron под $$(id -un)"; \
+	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	   echo "[make] автообновление: cron под $$(id -un)"; \
 	   if crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep -q 'bank-app-deploy'; then \
 	     echo "[make] строка в crontab: есть"; \
-	   else echo "[make] ⚠ строки в crontab НЕТ — обновления по расписанию не идут (шаг 6b)"; fi; \
+	   else echo "[make] ⚠ строки в crontab НЕТ — обновления по расписанию не идут (шаг 6)"; fi; \
 	   if [ -e "$(CRON_DEPLOY)/state/paused" ]; then echo "[make] ⚠ на паузе. Вернуть: make deploy-resume"; fi; \
 	   echo "[make] развёрнутый коммит: $$(cat $(CRON_DEPLOY)/state/deployed_sha 2>/dev/null || echo '—')"; \
 	   echo "[make] последние строки прогона:"; \
@@ -286,12 +280,10 @@ deploy-status:
 
 ## Проверить обновления ПРЯМО СЕЙЧАС, не дожидаясь тика (паузу обходит — это явное действие)
 #
-# ⚠ В cron-варианте вывод идёт и на экран, и в тот же лог, что пишет расписание: иначе ручной
+# ⚠ Вывод идёт и на экран, и в тот же лог, что пишет расписание: иначе ручной
 # прогон не оставлял бы следа, и `deploy-status` показывал бы картину без него.
 deploy-now:
-	@if [ -f $(DEPLOY_TIMER) ]; then \
-	   systemctl start bank-app-deploy.service && journalctl -u bank-app-deploy -n 30 --no-pager; \
-	 elif [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
 	   BANK_APP_DEPLOY_IGNORE_PAUSE=1 \
 	   BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" \
 	   BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
@@ -302,21 +294,17 @@ deploy-now:
 #
 # ⚠ Пауза переживает перезагрузку — это осознанно: её включают, когда обновляться сейчас
 # нельзя, и «само включилось ночью» было бы худшим поведением. Не забыть про `deploy-resume`.
-# ⚠ В cron-варианте пауза — файл `state/paused`, который проверяет сам скрипт обновления, а не
+# ⚠ Пауза — файл `state/paused`, который проверяет сам скрипт обновления, а не
 # правка crontab: программная правка чужого расписания рискует соседними строками.
 deploy-pause:
-	@if [ -f $(DEPLOY_TIMER) ]; then \
-	   systemctl disable --now bank-app-deploy.timer; \
-	 elif [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
 	   mkdir -p "$(CRON_DEPLOY)/state" && touch "$(CRON_DEPLOY)/state/paused"; \
 	 else $(NO_AUTODEPLOY); fi \
 	 && echo "[make] автообновление приостановлено. Вернуть: make deploy-resume"
 
 ## Вернуть автообновление после паузы
 deploy-resume:
-	@if [ -f $(DEPLOY_TIMER) ]; then \
-	   systemctl enable --now bank-app-deploy.timer; \
-	 elif [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
 	   rm -f "$(CRON_DEPLOY)/state/paused"; \
 	 else $(NO_AUTODEPLOY); fi \
 	 && echo "[make] автообновление включено"

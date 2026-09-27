@@ -9,8 +9,8 @@ import { join } from 'node:path'
 // ⚠ Две поломки, обе молчаливые. Первая: все прод-цели передавали `-f docker-compose.prod.yml`, а
 // явный `-f` отбрасывает `COMPOSE_FILE` из `.env`. На ВМ там перечислен оверлей (порт на
 // 127.0.0.1, образы КЛИЕНТА), и `make prod-redeploy` поднял бы приложение без порта на loopback и
-// backend из нашего образа. Вторая: `deploy-*` знали только systemd, и в варианте с cron под
-// `bitrix` оператору оставались сырые команды.
+// backend из нашего образа. Вторая: `deploy-*` не знали варианта с cron под `bitrix` (теперь
+// единственного — systemd-вариант снят), и оператору оставались сырые команды.
 //
 // ⚠ Проверяется ВЫЗОВОМ настоящего make, а не чтением текста: ветвление живёт в трёх слоях
 // раскрытия (make → sh → условие), и текстовый гард подтвердил бы строку, которая не срабатывает.
@@ -58,9 +58,7 @@ describe('прод-цели собирают стек файлами из COMPOS
   })
 })
 
-// ⚠ Ветка systemd проверяется только отсутствием таймера на машине прогона — её признак это файл в
-// /etc, подменять его ради теста значило бы открыть параметр, которого оператору давать нельзя.
-describe.skipIf(existsSync('/etc/systemd/system/bank-app-deploy.timer'))('deploy-*: вариант с cron под bitrix', () => {
+describe('deploy-*: автообновление cron под bitrix', () => {
   function cronHome(): { dir: string, home: string } {
     const dir = stackDir(null)
     const home = join(dir, 'home')
@@ -75,11 +73,11 @@ describe.skipIf(existsSync('/etc/systemd/system/bank-app-deploy.timer'))('deploy
   const run = (dir: string, home: string, t: string) =>
     spawnSync('make', ['--no-print-directory', t], { cwd: dir, encoding: 'utf8', env: { ...process.env, HOME: home } })
 
-  it('ничего не настроено — отказ с указанием на шаги 6/6b, а не тишина', () => {
+  it('ничего не настроено — отказ с указанием на шаг 6, а не тишина', () => {
     const dir = stackDir(null)
     const r = run(dir, join(dir, 'nohome'), 'deploy-status')
     expect(r.status).not.toBe(0)
-    expect(r.stdout).toContain('шаги 6/6b')
+    expect(r.stdout).toContain('шаг 6')
   })
 
   it('пауза — файл state/paused; resume его снимает; status о ней говорит', () => {
@@ -93,7 +91,7 @@ describe.skipIf(existsSync('/etc/systemd/system/bank-app-deploy.timer'))('deploy
     expect(run(dir, home, 'deploy-status').stdout).not.toContain('на паузе')
   })
 
-  it('deploy-now зовёт скрипт с путями шага 6b, в обход паузы, и пишет в лог расписания', () => {
+  it('deploy-now зовёт скрипт с путями шага 6, в обход паузы, и пишет в лог расписания', () => {
     const { dir, home } = cronHome()
     const r = run(dir, home, 'deploy-now')
     expect(r.status).toBe(0)
@@ -178,5 +176,20 @@ describe('источник служебных файлов — копия кли
     const dir = stackDir(null)
     const line = curlOf(dir, 'poll-check', ['SRC=https://evil.example', 'RAW=https://evil.example'])
     expect(line).not.toContain('evil')
+  })
+})
+
+// ⚠ Путь автообновления ОДИН (решение владельца 2026-09-27): systemd-вариант снят, потому что два
+// пути давали инструкцию с «или» на каждом шаге и путаницу, какой каталог настоящий. Вернуть его
+// «для полноты» — первое, что придёт в голову; гард делает это видимым решением.
+describe('автообновление — один путь, без systemd', () => {
+  it('ни Makefile, ни скрипт, ни примеры настроек не ссылаются на systemd и /etc/bank-app-deploy', () => {
+    const files = ['Makefile', 'deploy/bitrixvm/git-poll-deploy.sh', 'deploy/bitrixvm/deploy.env.client.example',
+      'deploy/bitrixvm/deploy.env.upstream.example', 'scripts/bitrixvm-check.sh', 'docs/DEPLOY_BITRIXVM.md']
+    for (const f of files) {
+      const text = readFileSync(join(ROOT, f), 'utf8')
+      expect(text, f).not.toMatch(/\/etc\/bank-app-deploy|\/var\/lib\/bank-app-deploy|bank-app-deploy\.(timer|service)|journalctl/)
+    }
+    expect(existsSync(join(ROOT, 'deploy/bitrixvm/systemd'))).toBe(false)
   })
 })

@@ -85,10 +85,14 @@ else
 fi
 
 echo "== автообновление =="
-if systemctl is-enabled --quiet bank-app-deploy.timer 2>/dev/null; then
-  ok "таймер включён; следующий запуск: $(systemctl show -p NextElapseUSecRealtime --value bank-app-deploy.timer 2>/dev/null)"
-  sha=$(cat /var/lib/bank-app-deploy/deployed_sha 2>/dev/null || echo '—')
-  note "развёрнутый коммит: ${sha:0:12}"
+# Один вариант — cron под bitrix (docs/DEPLOY_BITRIXVM.md, шаг 6); пути фиксированы.
+AD=/home/bitrix/bank-app-deploy
+if [ "$(id -un)" = bitrix ]; then ct=$(crontab -l 2>/dev/null); else ct=$(crontab -l -u bitrix 2>/dev/null); fi
+if printf '%s\n' "$ct" | grep -v '^[[:space:]]*#' | grep -q 'bank-app-deploy'; then
+  ok "строка в crontab bitrix есть"
 else
-  note "таймер не включён (ещё не настроен либо приостановлен)"
+  note "строки в crontab bitrix нет — автообновление не включено (шаг 6)"
 fi
+[ -e "$AD/state/paused" ] && note "автообновление на паузе (make deploy-resume)"
+sha=$(cat "$AD/state/deployed_sha" 2>/dev/null || echo '—')
+note "развёрнутый коммит: ${sha:0:12}"
