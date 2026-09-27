@@ -3,7 +3,7 @@
         gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
         bank-connect-log chat-log \
-        bitrix-check deploy-status deploy-now deploy-pause deploy-resume offline-snapshot
+        bitrix-check deploy-status deploy-now deploy-pause deploy-resume
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -314,15 +314,6 @@ deploy-resume:
 	   rm -f "$(CRON_DEPLOY)/state/paused"; \
 	 else $(NO_AUTODEPLOY); fi \
 	 && echo "[make] автообновление включено"
-
-## Оффлайн-копия образов работающих контейнеров (на случай пропажи реестра)
-#
-# ⚠ Копируются образы ЗАПУЩЕННЫХ контейнеров, а не то, что записано в .env: они доказали
-# работоспособность, а тег в файле мог уехать вперёд. Восстановление — docker load -i.
-offline-snapshot:
-	@t=$$(mktemp /tmp/snapshot.XXXXXX) && trap 'rm -f "$$t"' EXIT \
-	  && curl -fsSL -o "$$t" "$(RAW)/bank-offline-snapshot.sh" \
-	  && bash "$$t" "$$(pwd)"
 
 ## Что происходит с опросом банков: успехи, падения, продление токенов (#522)
 #

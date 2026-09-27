@@ -8,7 +8,6 @@
 /Makefile
 /docker-compose.prod.yml
 /deploy/bitrixvm/
-/scripts/bank-offline-snapshot.sh
 /scripts/bitrixvm-check.sh
 /scripts/oauth-refresh-ladder.sh
 /scripts/oauth-refresh-probe.sh

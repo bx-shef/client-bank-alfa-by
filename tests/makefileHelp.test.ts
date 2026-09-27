@@ -81,8 +81,7 @@ const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 
   // отличает «дело во времени» от «дело в составе запроса».
   // Таргет «виртуальная машина Битрикс24» (docs/DEPLOY_BITRIXVM.md): проверка тракта до
   // приложения и управление автообновлением по опросу git.
-  'bitrix-check', 'deploy-status', 'deploy-now', 'deploy-pause', 'deploy-resume',
-  'offline-snapshot']
+  'bitrix-check', 'deploy-status', 'deploy-now', 'deploy-pause', 'deploy-resume']
 
 /** Цели, которые запускают ИЗ РЕПОЗИТОРИЯ, а не с сервера — справка сервера их не касается. */
 const SERVICE = ['dev', 'build-local']
